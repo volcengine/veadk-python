@@ -111,6 +111,8 @@ function ApplicationsIcon(props: SVGProps<SVGSVGElement>) {
 export interface SidebarProps {
   branding: SiteBranding;
   cloudProvider: "volcengine" | "byteplus";
+  /** Collapse on entry, then restore the previous user state on exit. */
+  autoCollapse?: boolean;
   sessions: AdkSession[];
   currentSessionId: string;
   activePage: SidebarPage;
@@ -297,6 +299,7 @@ function SidebarUser({
 export function Sidebar({
   branding,
   cloudProvider,
+  autoCollapse = false,
   sessions,
   currentSessionId,
   activePage,
@@ -331,7 +334,11 @@ export function Sidebar({
     typeof window !== "undefined" &&
       window.matchMedia(SIDEBAR_AUTO_COLLAPSE_QUERY).matches,
   );
-  const [collapsed, setCollapsed] = useState(autoCollapsedRef.current);
+  const autoCollapseActiveRef = useRef(autoCollapse);
+  const collapsedBeforeAutoRef = useRef(autoCollapsedRef.current);
+  const [collapsed, setCollapsed] = useState(
+    autoCollapse || autoCollapsedRef.current,
+  );
   const combinedHistory: SidebarHistoryItem[] = [
     ...sessions.map((session) => ({
       kind: "agent" as const,
@@ -354,8 +361,20 @@ export function Sidebar({
     setMenuFor(null);
   };
   useEffect(() => {
+    if (autoCollapse && !autoCollapseActiveRef.current) {
+      setCollapsed((current) => {
+        collapsedBeforeAutoRef.current = current;
+        return true;
+      });
+    } else if (!autoCollapse && autoCollapseActiveRef.current) {
+      setCollapsed(collapsedBeforeAutoRef.current);
+    }
+    autoCollapseActiveRef.current = autoCollapse;
+  }, [autoCollapse]);
+  useEffect(() => {
     const query = window.matchMedia(SIDEBAR_AUTO_COLLAPSE_QUERY);
     const handleViewportChange = (event: MediaQueryListEvent) => {
+      if (autoCollapseActiveRef.current) return;
       if (event.matches) {
         setCollapsed((current) => {
           if (current) return current;

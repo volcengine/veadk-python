@@ -2,9 +2,7 @@ import { useState } from "react";
 import { Button, CopyButton } from "@openai/apps-sdk-ui/components/Button";
 import {
   ArrowRotateCcw,
-  Check,
   Collapse,
-  Copy,
   Expand,
 } from "@openai/apps-sdk-ui/components/Icon";
 
@@ -80,9 +78,7 @@ export function DeploymentErrorMessage({
           pill={false}
           title="复制完整错误信息"
           aria-label="复制完整错误信息"
-        >
-          {({ copied }) => copied ? <Check /> : <Copy />}
-        </CopyButton>
+        />
       </div>
     </div>
   );

@@ -112,7 +112,10 @@ test("applies configured branding to the UI, document title, and favicon", () =>
 
 test("global sidebar can collapse to a compact icon rail", () => {
   assert.match(sidebarSource, /const SIDEBAR_AUTO_COLLAPSE_QUERY = "\(max-width: 860px\)"/);
-  assert.match(sidebarSource, /const \[collapsed, setCollapsed\] = useState\(autoCollapsedRef\.current\)/);
+  assert.match(
+    sidebarSource,
+    /const \[collapsed, setCollapsed\] = useState\(\s*autoCollapse \|\| autoCollapsedRef\.current,?\s*\)/,
+  );
   assert.match(sidebarSource, /query\.addEventListener\("change", handleViewportChange\)/);
   assert.match(sidebarSource, /autoCollapsedRef\.current = false;\s*setCollapsed\(\(value\) => !value\)/);
   assert.match(sidebarSource, /aria-label=\{collapsed \? "展开侧边栏" : "收起侧边栏"\}/);

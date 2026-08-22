@@ -771,10 +771,6 @@ test("intelligent preparation acknowledges the goal and exposes cancellable prog
 
   const idle = render(null);
   assert.match(
-    appSource,
-    /描述目标，按你的意图构建、调试并验证 Agent。/,
-  );
-  assert.match(
     idle,
     /描述目标后，沙箱中的 Codex 会判断你的意图，完成构建、调试和临时云端验证。/,
   );

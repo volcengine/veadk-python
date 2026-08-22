@@ -1,0 +1,303 @@
+.create-workspace {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: 0;
+  color: #0c0d0e;
+  font-family: "PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.create-workspace:not(.create-workspace--debug) {
+  background-color: #f0f0f0;
+  background-image: radial-gradient(circle, #cfd2d6 0 1px, transparent 1.1px);
+  background-position: 8px 15px;
+  background-size: 18px 18px;
+}
+
+.create-workspace,
+.create-workspace__chat,
+.create-workspace__chat-toggle,
+.create-workspace__chat-header,
+.create-workspace__chat-mark,
+.create-workspace__collapse,
+.create-workspace__chat-content,
+.create-workspace__message,
+.create-workspace__assistant-status,
+.create-workspace__assistant-divider,
+.create-workspace__assistant-body,
+.create-workspace__composer-wrap,
+.create-workspace__composer,
+.create-workspace__composer-input,
+.create-workspace__send {
+  box-sizing: border-box;
+}
+
+.create-workspace__chat {
+  position: absolute;
+  z-index: 2;
+  top: 64px;
+  bottom: 8px;
+  left: 12px;
+  width: 420px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 16px;
+  background: #f9f9f9;
+  transform: translateX(0) scale(1);
+  transform-origin: 21px 7px;
+  transition:
+    opacity 200ms ease-out,
+    transform 200ms ease-out,
+    visibility 0s linear;
+}
+
+.create-workspace--chat-collapsed .create-workspace__chat {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-12px) scale(0.97);
+  transition:
+    opacity 160ms ease-out,
+    transform 200ms ease-out,
+    visibility 0s linear 200ms;
+}
+
+.create-workspace__chat-toggle {
+  position: absolute;
+  z-index: 3;
+  top: 71px;
+  left: 21px;
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: 14px;
+  border: 0;
+  border-radius: 58px;
+  background: transparent;
+  cursor: pointer;
+  transition:
+    background-color 160ms ease-out,
+    box-shadow 160ms ease-out;
+}
+
+.create-workspace--chat-collapsed .create-workspace__chat-toggle {
+  background: #fff;
+}
+
+.create-workspace__chat-header {
+  height: 58px;
+  flex: 0 0 58px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 19px 20px;
+}
+
+.create-workspace__chat-mark {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+.create-workspace__chat-mark img {
+  width: 15.58px;
+  height: 16.713px;
+}
+
+.create-workspace__collapse {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.create-workspace__collapse img {
+  width: 15px;
+  height: 12px;
+}
+
+.create-workspace__chat-content {
+  min-height: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 24px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 0 24px 24px;
+  scrollbar-gutter: stable;
+}
+
+.create-workspace__message {
+  flex: 0 0 auto;
+  font-family: inherit;
+  font-size: 14px;
+  font-style: normal;
+  font-weight: 400;
+  word-break: break-word;
+}
+
+.create-workspace__message--user {
+  width: fit-content;
+  max-width: 100%;
+  align-self: flex-end;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #f3f3f5;
+  color: #0c0d0e;
+  line-height: 22px;
+  letter-spacing: 0.042px;
+  white-space: pre-wrap;
+}
+
+.create-workspace__message--assistant {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 16px;
+}
+
+.create-workspace__assistant-status {
+  width: 100%;
+  min-height: 22px;
+  display: flex;
+  align-items: center;
+  color: #7a7880;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.create-workspace__assistant-divider {
+  width: 100%;
+  height: 1px;
+  flex: 0 0 1px;
+  background: #e5e6eb;
+}
+
+.create-workspace__assistant-body {
+  width: 100%;
+  margin: 0;
+  color: #101013;
+  font-size: 14px;
+  line-height: 28px;
+  white-space: pre-wrap;
+}
+
+.create-workspace__composer-wrap {
+  height: 140px;
+  flex: 0 0 140px;
+  display: flex;
+  align-items: flex-end;
+  padding: 0 20px 20px;
+}
+
+.create-workspace__composer {
+  position: relative;
+  width: 380px;
+  height: 120px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  justify-content: center;
+  overflow: hidden;
+  padding: 12px;
+  border: 1px solid rgba(31, 35, 41, 0.08);
+  border-radius: 16px;
+  background: #fff;
+  transition:
+    border-color 120ms ease-out,
+    box-shadow 120ms ease-out;
+}
+
+.create-workspace__composer:focus-within {
+  border-color: rgba(31, 35, 41, 0.16);
+  box-shadow: 0 0 0 2px rgba(31, 35, 41, 0.04);
+}
+
+.create-workspace__composer-input {
+  width: 100%;
+  min-height: 0;
+  flex: 1;
+  resize: none;
+  padding: 4px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #0c0d0e;
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 26px;
+}
+
+.create-workspace__composer-input::placeholder {
+  color: #7a7880;
+  opacity: 1;
+}
+
+.create-workspace__send {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: #101013;
+  cursor: pointer;
+}
+
+.create-workspace__send:disabled {
+  background: rgba(0, 0, 0, 0.2);
+  cursor: default;
+}
+
+.create-workspace__send img {
+  width: 20px;
+  height: 20px;
+}
+
+.create-workspace__composer-input:focus,
+.create-workspace__composer-input:focus-visible {
+  outline: none;
+}
+
+.create-workspace__collapse:focus-visible,
+.create-workspace__chat-toggle:focus-visible,
+.create-workspace__send:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+
+@media (max-width: 900px) {
+  .create-workspace__chat {
+    right: 8px;
+    left: 8px;
+    width: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .create-workspace__chat,
+  .create-workspace__chat-toggle {
+    transition-duration: 0.01ms;
+  }
+}

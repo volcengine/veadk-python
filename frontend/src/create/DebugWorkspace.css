@@ -1,0 +1,406 @@
+.create-workspace.create-workspace--debug {
+  background-color: #fff;
+  background-image: none;
+}
+
+.debug-workspace__panel,
+.debug-workspace__intro,
+.debug-workspace__title,
+.debug-workspace__title-icon,
+.debug-workspace__suggestions,
+.debug-workspace__suggestion-list,
+.debug-workspace__suggestion,
+.debug-workspace__comparison-columns,
+.debug-workspace__comparison-column,
+.debug-workspace__comparison-header,
+.debug-workspace__comparison-header-start,
+.debug-workspace__comparison-tag,
+.debug-workspace__comparison-settings,
+.debug-workspace__conversation,
+.debug-workspace__composer-wrap,
+.debug-workspace__composer {
+  box-sizing: border-box;
+}
+
+.debug-workspace__conversation {
+  position: absolute;
+  top: 48px;
+  right: 0;
+  bottom: 152px;
+  left: 0;
+  padding: 24px 24px 8px;
+}
+
+.debug-workspace__panel--comparison .debug-workspace__conversation {
+  top: 64px;
+  bottom: 0;
+}
+
+.debug-workspace__conversation .turn {
+  width: 100%;
+}
+
+.debug-workspace__conversation-error {
+  width: 100%;
+  color: hsl(var(--destructive));
+}
+
+.debug-workspace__panel {
+  position: absolute;
+  z-index: 2;
+  top: 60px;
+  right: 0;
+  bottom: 12px;
+  width: 480px;
+  overflow: hidden;
+  border-radius: 0 12px 12px 0;
+  background: #fff;
+}
+
+.debug-workspace__panel--comparison {
+  width: 942px;
+}
+
+.debug-workspace__comparison-columns {
+  position: absolute;
+  inset: 0 0 auto;
+  height: calc(100% - 152px);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.debug-workspace__comparison-columns::after {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 1px;
+  height: 100%;
+  background: linear-gradient(
+    180deg,
+    rgb(63 63 81 / 0%) 0%,
+    rgb(63 63 81 / 22%) 50%,
+    rgb(63 63 81 / 0%) 100%
+  );
+  content: "";
+}
+
+.debug-workspace__panel--comparison.is-configuring .debug-workspace__comparison-columns,
+.debug-workspace__panel--comparison.is-configuring .debug-workspace__comparison-column {
+  height: 100%;
+}
+
+.debug-workspace__panel--comparison.is-configuring .debug-workspace__comparison-columns::after {
+  height: 100%;
+}
+
+.debug-workspace__comparison-column {
+  position: relative;
+  min-width: 0;
+  height: 100%;
+}
+
+.debug-workspace__comparison-header {
+  position: absolute;
+  top: 24px;
+  right: 24px;
+  left: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.debug-workspace__comparison-header-start {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.debug-workspace__comparison-tag {
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 8px;
+  border-radius: 6px;
+  background: #ebebf5;
+  color: #383740;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 19.5px;
+  white-space: nowrap;
+}
+
+.debug-workspace__comparison-changes {
+  overflow: hidden;
+  color: #d79a00;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 19.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.debug-workspace__comparison-settings {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #3f3f51;
+  cursor: pointer;
+}
+
+.debug-workspace__comparison-settings svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.debug-workspace__intro {
+  position: absolute;
+  top: 186px;
+  left: 80px;
+  width: 320px;
+}
+
+.debug-workspace__panel--comparison .debug-workspace__intro {
+  top: 216px;
+  left: 80px;
+  width: 311px;
+}
+
+.debug-workspace__panel--comparison .debug-workspace__suggestion {
+  width: 311px;
+}
+
+.debug-workspace__title {
+  height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.debug-workspace__title-icon {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 40px;
+}
+
+.debug-workspace__title-icon svg {
+  width: 40px;
+  height: 40px;
+  fill: #050505;
+}
+
+.debug-workspace__title h2 {
+  margin: 0;
+  color: #0c0d0e;
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 31px;
+  letter-spacing: -0.24px;
+  white-space: nowrap;
+}
+
+.debug-workspace__suggestions {
+  margin-top: 44px;
+}
+
+.debug-workspace__suggestions > p {
+  margin: 0 0 12px;
+  color: #7a7880;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 22px;
+}
+
+.debug-workspace__suggestion-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.debug-workspace__suggestion {
+  width: 320px;
+  height: 54px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 16px;
+  border: 1px solid #eaedf1;
+  border-radius: 12px;
+  background: #fff;
+  color: #0c0d0e;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 22px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.debug-workspace__suggestion svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  fill: #2b2f36;
+}
+
+.debug-workspace__composer-wrap {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 152px;
+  padding: 20px 24px 12px;
+}
+
+.debug-workspace__composer {
+  position: relative;
+  width: 432px;
+  height: 120px;
+  overflow: hidden;
+  border: 1px solid rgba(31, 35, 41, 0.08);
+  border-radius: 24px;
+  background: #fff;
+}
+
+.debug-workspace__panel--comparison .debug-workspace__composer {
+  width: 100%;
+}
+
+.debug-workspace__composer textarea {
+  width: 100%;
+  height: 100%;
+  resize: none;
+  padding: 16px 16px 48px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #0c0d0e;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 22px;
+}
+
+.debug-workspace__composer textarea::placeholder {
+  color: #9b9aa1;
+  opacity: 1;
+}
+
+.debug-workspace__composer button {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: #101013;
+  cursor: pointer;
+}
+
+.debug-workspace__composer button:disabled {
+  background: #c9c9cb;
+  cursor: default;
+}
+
+.debug-workspace__composer button img {
+  width: 20px;
+  height: 20px;
+}
+
+.debug-workspace__suggestion:focus-visible,
+.debug-workspace__comparison-settings:focus-visible,
+.debug-workspace__composer textarea:focus-visible,
+.debug-workspace__composer button:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+
+@media (max-width: 900px) {
+  .debug-workspace__panel {
+    top: 64px;
+    width: 100%;
+  }
+
+  .debug-workspace__panel--comparison {
+    overflow: hidden;
+  }
+
+  .debug-workspace__comparison-columns {
+    height: calc(100% - 152px);
+    display: flex;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+  }
+
+  .debug-workspace__panel--comparison.is-configuring .debug-workspace__comparison-columns,
+  .debug-workspace__panel--comparison.is-configuring .debug-workspace__comparison-column {
+    height: 100%;
+  }
+
+  .debug-workspace__comparison-columns::after {
+    display: none;
+  }
+
+  .debug-workspace__comparison-column {
+    width: 100%;
+    height: 100%;
+    flex: 0 0 100%;
+    scroll-snap-align: start;
+  }
+
+  .debug-workspace__comparison-header {
+    top: 16px;
+  }
+
+  .debug-workspace__intro {
+    top: 72px;
+    left: 24px;
+    width: calc(100% - 48px);
+  }
+
+  .debug-workspace__panel--comparison .debug-workspace__intro {
+    top: 72px;
+    left: 24px;
+    width: calc(100% - 48px);
+  }
+
+  .debug-workspace__title h2 {
+    font-size: 21px;
+  }
+
+  .debug-workspace__suggestion {
+    width: 100%;
+  }
+
+  .debug-workspace__panel--comparison .debug-workspace__suggestion {
+    width: 100%;
+  }
+
+  .debug-workspace__composer-wrap {
+    padding-inline: 16px;
+  }
+
+  .debug-workspace__composer {
+    width: 100%;
+  }
+}

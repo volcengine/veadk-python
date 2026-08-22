@@ -18,6 +18,7 @@ import json
 import os
 import re
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -25,11 +26,15 @@ from pydantic import ValidationError
 
 from veadk.cli.generated_agent_codegen import AgentDraft, generate_project_from_draft
 from veadk.cli.generated_agent_planner import (
+    CONVERSATION_INSTRUCTION,
     DEFAULT_GENERATED_MODEL_NAME,
+    GENERATED_AGENT_RESULT_STATE_KEY,
     PLANNER_INSTRUCTION,
+    GeneratedAgentConversationRequest,
     GeneratedAgentDraftPlan,
     GeneratedAgentDraftRequest,
     _to_agent_draft,
+    generate_agent,
     generate_agent_draft,
 )
 
@@ -60,6 +65,51 @@ def test_generated_agent_draft_request_requires_at_least_four_characters() -> No
     request = GeneratedAgentDraftRequest(requirement="abcd")
 
     assert request.requirement == "abcd"
+
+
+def test_generated_agent_conversation_request_accepts_camel_case_session_id() -> None:
+    request = GeneratedAgentConversationRequest.model_validate(
+        {"sessionId": "studio-create-123", "message": "帮我创建一个销售助手"}
+    )
+
+    assert request.session_id == "studio-create-123"
+    assert request.message == "帮我创建一个销售助手"
+
+
+@pytest.mark.asyncio
+async def test_generate_agent_tool_calls_planner_and_persists_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected = {
+        "draft": {"name": "sales_agent"},
+        "summary": "销售助手",
+        "unresolvedItems": ["CRM 地址"],
+    }
+
+    async def fake_generate(requirement: str) -> dict[str, Any]:
+        assert requirement == "创建一个销售助手"
+        return expected
+
+    monkeypatch.setattr(
+        "veadk.cli.generated_agent_planner.generate_agent_draft",
+        fake_generate,
+    )
+    tool_context = SimpleNamespace(state={})
+
+    result = await generate_agent("创建一个销售助手", tool_context)  # type: ignore[arg-type]
+
+    assert result == expected
+    stored = tool_context.state[GENERATED_AGENT_RESULT_STATE_KEY]
+    assert stored["draft"] == expected["draft"]
+    assert stored["summary"] == expected["summary"]
+    assert stored["unresolvedItems"] == expected["unresolvedItems"]
+    assert stored["generationId"]
+
+
+def test_conversation_agent_only_generates_after_requirements_are_clear() -> None:
+    assert "正常回答问候、解释、讨论和澄清问题" in CONVERSATION_INSTRUCTION
+    assert "需求已经足够具体" in CONVERSATION_INSTRUCTION
+    assert "generate_agent" in CONVERSATION_INSTRUCTION
 
 
 def _leaf(

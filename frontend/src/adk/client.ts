@@ -3543,6 +3543,13 @@ export interface GeneratedAgentDraftResult {
   unresolvedItems: string[];
 }
 
+export interface GeneratedAgentConversationResult {
+  reply: string;
+  draft?: AgentDraft;
+  summary?: string;
+  unresolvedItems?: string[];
+}
+
 const GENERATED_AGENT_DRAFT_TIMEOUT_MS = 190_000;
 
 export async function generateAgentDraftFromRequirement(
@@ -3562,6 +3569,31 @@ export async function generateAgentDraftFromRequirement(
     throw new Error(await httpErrorMessage(res, "生成 Agent 配置失败"));
   }
   return parseJsonResponse<GeneratedAgentDraftResult>(res, "生成 Agent 配置失败");
+}
+
+export async function chatWithGeneratedAgent(
+  sessionId: string,
+  message: string,
+  signal?: AbortSignal,
+): Promise<GeneratedAgentConversationResult> {
+  const res = await apiFetch(
+    "/web/generated-agent-conversations",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId, message }),
+      signal,
+    },
+    {},
+    GENERATED_AGENT_DRAFT_TIMEOUT_MS + 60_000,
+  );
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, "创建助手回复失败"));
+  }
+  return parseJsonResponse<GeneratedAgentConversationResult>(
+    res,
+    "创建助手回复失败",
+  );
 }
 
 export async function createGeneratedAgentTestRun(
