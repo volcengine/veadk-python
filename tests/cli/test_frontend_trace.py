@@ -16,6 +16,8 @@
 from __future__ import annotations
 
 import json
+import sys
+from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -28,6 +30,20 @@ from opentelemetry.sdk.trace.export import SpanExportResult
 
 from veadk.cli.cli_frontend import _mount_session_trace_route
 from veadk.cli.frontend_trace import SessionTraceExporter
+
+
+@pytest.fixture(autouse=True)
+def _isolate_adk_agent_imports() -> Iterator[None]:
+    """Restore process-global import state changed by the ADK test server."""
+
+    original_path = list(sys.path)
+    original_modules = set(sys.modules)
+    try:
+        yield
+    finally:
+        sys.path[:] = original_path
+        for module_name in set(sys.modules) - original_modules:
+            sys.modules.pop(module_name, None)
 
 
 class _MemoryExporter:

@@ -47,6 +47,34 @@ from veadk.cli.studio_rbac import (
 )
 
 
+def _scenario_deployment_profile(
+    *,
+    runtime_id: str = "",
+    create_evaluation_sets: bool = False,
+) -> dict[str, Any]:
+    return {
+        "cloudProvider": "volcengine",
+        "region": "cn-beijing",
+        "runtimeId": runtime_id,
+        "runtimeName": "",
+        "sessionStorage": "persistent",
+        "minInstance": 1,
+        "maxInstance": 5,
+        "authentication": {"type": "existing"} if runtime_id else {},
+        "network": {"mode": "public"},
+        "resources": None
+        if runtime_id
+        else {
+            "tos": {"mode": "auto"},
+            "cr": {"mode": "auto"},
+            "codePipeline": {"mode": "auto"},
+        },
+        "harnessSidecar": None,
+        "environmentNames": [],
+        "createEvaluationSets": create_evaluation_sets,
+    }
+
+
 def _create_studio_app(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -58,6 +86,7 @@ def _create_studio_app(
     oauth2_user_pool_client_uid: str | None = None,
     oauth2_provider_label: str | None = None,
     provider: str = "volcengine",
+    studio: bool = True,
 ) -> FastAPI:
     captured: dict[str, Any] = {}
     monkeypatch.setattr("dotenv.find_dotenv", lambda *args, **kwargs: "")
@@ -89,9 +118,804 @@ def _create_studio_app(
         studio_developers=developers,
         open_browser=False,
         provider=provider,  # type: ignore[arg-type]
-        studio=True,
+        studio=studio,
     )
-    return captured["app"]
+    app = captured["app"]
+    app.state.scenario_evaluation.service._project_attestation_verifier = (
+        lambda _project, _owner, _proof: None
+    )
+
+    async def _trust_agent_identity(
+        _actor: Any,
+        _agent_id: str,
+        _profile: Any,
+        _proof: str,
+    ) -> None:
+        return None
+
+    app.state.scenario_evaluation.service._agent_identity_verifier = (
+        _trust_agent_identity
+    )
+
+    async def _trust_verified_agent_claim(
+        _agent_id: str,
+        _identifiers: Any,
+        _is_admin: bool,
+        verified_evidence: bool,
+    ) -> bool:
+        del verified_evidence
+        return True
+
+    app.state.scenario_evaluation.repository._agent_access_verifier = (  # type: ignore[attr-defined]
+        _trust_verified_agent_claim
+    )
+    return app
+
+
+def test_governed_deployment_records_started_and_succeeded_publish_audits(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        "agentkit.toolkit.sdk.launch",
+        lambda **_kwargs: SimpleNamespace(
+            success=True,
+            error=None,
+            deploy_result=SimpleNamespace(
+                endpoint_url="https://runtime.example.com",
+                metadata={
+                    "runtime_id": "runtime-governed-1",
+                    "runtime_name": "governed-agent",
+                    "runtime_apikey": "secret",
+                },
+            ),
+        ),
+    )
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        developers="developer-1",
+        studio=False,
+    )
+    headers = {"X-VeADK-Local-User": "developer-1"}
+
+    with TestClient(app) as client:
+        candidate = client.post(
+            "/web/scenario-evaluation/candidates",
+            headers=headers,
+            json={
+                "agentId": "agent-1",
+                "artifact": {
+                    "codeDigest": "sha256:code",
+                    "topologyDigest": "sha256:topology",
+                },
+                "runtimeProject": {
+                    "name": "governed_agent",
+                    "files": [
+                        {
+                            "path": "agents/governed_agent/agent.py",
+                            "content": "root_agent = object()\n",
+                        },
+                        {"path": "app.py", "content": "app = object()\n"},
+                    ],
+                    "deploymentProfile": _scenario_deployment_profile(),
+                },
+            },
+        ).json()
+        intent = client.post(
+            "/web/scenario-evaluation/publish-intents/prepare",
+            headers=headers,
+            json={
+                "agentId": "agent-1",
+                "candidateId": candidate["candidateId"],
+                "policyVersionId": None,
+                "environmentFingerprint": candidate["environmentFingerprint"],
+                "permissionFingerprint": "permission:v1",
+                "secondConfirmation": True,
+                "reason": "紧急修复，跳过正式评测",
+                "idempotencyKey": "governed-deploy-1",
+            },
+        ).json()
+        with client.stream(
+            "POST",
+            "/web/deploy-agentkit",
+            headers=headers,
+            json={
+                "name": "governed-agent",
+                "agentId": "agent-1",
+                "publishIntentId": intent["intentId"],
+                "permissionFingerprint": "permission:v1",
+                "createEvaluationSets": False,
+                "files": [
+                    {
+                        "path": "agents/governed_agent/agent.py",
+                        "content": "root_agent = object()\n",
+                    },
+                    {"path": "app.py", "content": "app = object()\n"},
+                ],
+                "config": {"region": "cn-beijing", "projectName": "default"},
+            },
+        ) as response:
+            frames = [
+                json.loads(line.removeprefix("data: "))
+                for line in response.iter_lines()
+                if line.startswith("data: ")
+            ]
+        workspace = client.get(
+            "/web/scenario-evaluation/workspace?agentId=agent-1",
+            headers=headers,
+        ).json()
+        audits = client.get(
+            "/web/scenario-evaluation/publish-audits?agentId=agent-1",
+            headers=headers,
+        ).json()
+
+    assert response.status_code == 200
+    assert frames[-1]["success"] is True
+    assert workspace["publishedVersion"]["candidateId"] == candidate["candidateId"]
+    assert [audit["event"] for audit in audits] == [
+        "prepared",
+        "started",
+        "succeeded",
+    ]
+
+
+def test_governed_github_delivery_records_candidate_commit_publish_audits(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project = {
+        "name": "governed_agent",
+        "files": [
+            {
+                "path": "agents/governed_agent/agent.py",
+                "content": "root_agent = object()\n",
+            },
+            {"path": "app.py", "content": "app = object()\n"},
+        ],
+    }
+    captured: dict[str, Any] = {}
+
+    monkeypatch.setattr(
+        "veadk.cli.github_cicd.get_github_cicd_runtime_binding",
+        lambda **_kwargs: {
+            "pipelineId": "github-acme-demo-main",
+            "runtimeId": "runtime-governed-1",
+            "cicd": {"enabled": True},
+        },
+    )
+
+    def _sync_github_cicd_runtime(**kwargs: Any) -> dict[str, Any]:
+        captured.update(kwargs)
+        return {
+            "pipelineId": "github-acme-demo-main",
+            "runtimeId": "runtime-governed-1",
+            "status": "submitted",
+            "github": {"commitSha": "commit-governed-1"},
+            "cicd": {"enabled": True},
+        }
+
+    monkeypatch.setattr(
+        "veadk.cli.github_cicd.sync_github_cicd_runtime",
+        _sync_github_cicd_runtime,
+    )
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+    monkeypatch.setattr(
+        AgentkitRuntimeClient,
+        "get_runtime",
+        lambda _self, _request: SimpleNamespace(
+            name="agent-1",
+            status="Ready",
+            current_version_number=1,
+            tags=[SimpleNamespace(key="veadk:owner", value="developer-1")],
+        ),
+    )
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        developers="developer-1",
+        studio=False,
+    )
+    headers = {"X-VeADK-Local-User": "developer-1"}
+
+    with TestClient(app) as client:
+        candidate = client.post(
+            "/web/scenario-evaluation/candidates",
+            headers=headers,
+            json={
+                "agentId": "agent-1",
+                "artifact": {
+                    "codeDigest": "sha256:code",
+                    "topologyDigest": "sha256:topology",
+                },
+                "runtimeProject": {
+                    **project,
+                    "deploymentProfile": _scenario_deployment_profile(
+                        runtime_id="runtime-governed-1",
+                        create_evaluation_sets=True,
+                    ),
+                },
+            },
+        ).json()
+        intent = client.post(
+            "/web/scenario-evaluation/publish-intents/prepare",
+            headers=headers,
+            json={
+                "agentId": "agent-1",
+                "candidateId": candidate["candidateId"],
+                "policyVersionId": None,
+                "environmentFingerprint": candidate["environmentFingerprint"],
+                "permissionFingerprint": "permission:v1",
+                "secondConfirmation": True,
+                "reason": "紧急修复，跳过正式评测",
+                "idempotencyKey": "governed-github-deploy-1",
+            },
+        ).json()
+        response = client.post(
+            "/web/github-cicd/runtime-sync",
+            headers=headers,
+            json={
+                "runtimeId": "runtime-governed-1",
+                "project": project,
+                "agentId": "agent-1",
+                "publishIntentId": intent["intentId"],
+                "permissionFingerprint": "permission:v1",
+                "deploymentProfile": _scenario_deployment_profile(
+                    runtime_id="runtime-governed-1",
+                    create_evaluation_sets=True,
+                ),
+            },
+        )
+        workspace = client.get(
+            "/web/scenario-evaluation/workspace?agentId=agent-1",
+            headers=headers,
+        ).json()
+        audits = client.get(
+            "/web/scenario-evaluation/publish-audits?agentId=agent-1",
+            headers=headers,
+        ).json()
+
+    assert response.status_code == 200
+    assert response.json()["publishIntentId"] == intent["intentId"]
+    assert response.json()["publishStatus"] == "submitted"
+    assert captured["project"] == project
+    assert workspace["publishedVersion"] is None
+    assert [audit["event"] for audit in audits] == [
+        "prepared",
+        "started",
+        "submitted",
+    ]
+
+
+def test_governed_deployment_rejects_files_outside_candidate_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    launch_called = False
+
+    def _launch(**_kwargs):  # type: ignore[no-untyped-def]
+        nonlocal launch_called
+        launch_called = True
+        return SimpleNamespace(success=True, error=None, deploy_result=None)
+
+    monkeypatch.setattr("agentkit.toolkit.sdk.launch", _launch)
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        developers="developer-1",
+        studio=False,
+    )
+    headers = {"X-VeADK-Local-User": "developer-1"}
+
+    with TestClient(app) as client:
+        candidate = client.post(
+            "/web/scenario-evaluation/candidates",
+            headers=headers,
+            json={
+                "agentId": "agent-1",
+                "artifact": {
+                    "codeDigest": "sha256:code",
+                    "topologyDigest": "sha256:topology",
+                },
+                "runtimeProject": {
+                    "name": "governed_agent",
+                    "files": [
+                        {
+                            "path": "agents/governed_agent/agent.py",
+                            "content": "root_agent = object()\n",
+                        },
+                        {"path": "app.py", "content": "app = expected\n"},
+                    ],
+                    "deploymentProfile": _scenario_deployment_profile(),
+                },
+            },
+        ).json()
+        intent = client.post(
+            "/web/scenario-evaluation/publish-intents/prepare",
+            headers=headers,
+            json={
+                "agentId": "agent-1",
+                "candidateId": candidate["candidateId"],
+                "policyVersionId": None,
+                "environmentFingerprint": candidate["environmentFingerprint"],
+                "permissionFingerprint": "permission:v1",
+                "secondConfirmation": True,
+                "reason": "紧急修复，跳过正式评测",
+                "idempotencyKey": "governed-deploy-mismatch-1",
+            },
+        ).json()
+        response = client.post(
+            "/web/deploy-agentkit",
+            headers=headers,
+            json={
+                "name": "governed-agent",
+                "agentId": "agent-1",
+                "publishIntentId": intent["intentId"],
+                "permissionFingerprint": "permission:v1",
+                "createEvaluationSets": False,
+                "files": [
+                    {
+                        "path": "agents/governed_agent/agent.py",
+                        "content": "root_agent = object()\n",
+                    },
+                    {"path": "app.py", "content": "app = changed\n"},
+                ],
+                "config": {"region": "cn-beijing", "projectName": "default"},
+            },
+        )
+        audits = client.get(
+            "/web/scenario-evaluation/publish-audits?agentId=agent-1",
+            headers=headers,
+        ).json()
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "conflict"
+    assert launch_called is False
+    assert [audit["event"] for audit in audits] == ["prepared"]
+
+
+def test_governed_deployment_records_failed_publish_audit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        "agentkit.toolkit.sdk.launch",
+        lambda **_kwargs: SimpleNamespace(
+            success=False,
+            error="build failed",
+            build_result=None,
+            deploy_result=None,
+        ),
+    )
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        developers="developer-1",
+        studio=False,
+    )
+    headers = {"X-VeADK-Local-User": "developer-1"}
+
+    with TestClient(app) as client:
+        candidate = client.post(
+            "/web/scenario-evaluation/candidates",
+            headers=headers,
+            json={
+                "agentId": "agent-1",
+                "artifact": {
+                    "codeDigest": "sha256:code",
+                    "topologyDigest": "sha256:topology",
+                },
+                "runtimeProject": {
+                    "name": "governed_agent",
+                    "files": [
+                        {
+                            "path": "agents/governed_agent/agent.py",
+                            "content": "root_agent = object()\n",
+                        },
+                        {"path": "app.py", "content": "app = object()\n"},
+                    ],
+                    "deploymentProfile": _scenario_deployment_profile(),
+                },
+            },
+        ).json()
+        intent = client.post(
+            "/web/scenario-evaluation/publish-intents/prepare",
+            headers=headers,
+            json={
+                "agentId": "agent-1",
+                "candidateId": candidate["candidateId"],
+                "policyVersionId": None,
+                "environmentFingerprint": candidate["environmentFingerprint"],
+                "permissionFingerprint": "permission:v1",
+                "secondConfirmation": True,
+                "reason": "紧急修复，跳过正式评测",
+                "idempotencyKey": "governed-deploy-failed-1",
+            },
+        ).json()
+        with client.stream(
+            "POST",
+            "/web/deploy-agentkit",
+            headers=headers,
+            json={
+                "name": "governed-agent",
+                "agentId": "agent-1",
+                "publishIntentId": intent["intentId"],
+                "permissionFingerprint": "permission:v1",
+                "createEvaluationSets": False,
+                "files": [
+                    {
+                        "path": "agents/governed_agent/agent.py",
+                        "content": "root_agent = object()\n",
+                    },
+                    {"path": "app.py", "content": "app = object()\n"},
+                ],
+                "config": {"region": "cn-beijing", "projectName": "default"},
+            },
+        ) as response:
+            frames = [
+                json.loads(line.removeprefix("data: "))
+                for line in response.iter_lines()
+                if line.startswith("data: ")
+            ]
+        workspace = client.get(
+            "/web/scenario-evaluation/workspace?agentId=agent-1",
+            headers=headers,
+        ).json()
+        audits = client.get(
+            "/web/scenario-evaluation/publish-audits?agentId=agent-1",
+            headers=headers,
+        ).json()
+
+    assert response.status_code == 200
+    assert frames[-1]["success"] is False
+    assert "build failed" in frames[-1]["error"]
+    assert workspace["publishedVersion"] is None
+    assert [audit["event"] for audit in audits] == [
+        "prepared",
+        "started",
+        "failed",
+    ]
+
+
+def test_scenario_evaluation_workspace_fails_closed_without_storage(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("VEADK_STUDIO_TOS_BUCKET", raising=False)
+    monkeypatch.delenv("VEADK_STUDIO_TOS_REGION", raising=False)
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        developers="developer-1",
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/scenario-evaluation/workspace?agentId=agent-1",
+            headers={"X-VeADK-Local-User": "developer-1"},
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == {
+        "code": "unavailable",
+        "message": "管理员未配置持久化存储",
+    }
+
+
+def test_scenario_evaluation_agent_acl_allows_owner_and_admin_only(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        admins="admin",
+        developers="developer-1,developer-2",
+        studio=False,
+    )
+    project = {
+        "name": "owned_agent",
+        "files": [
+            {
+                "path": "agents/owned_agent/agent.py",
+                "content": "root_agent = object()\n",
+            }
+        ],
+        "deploymentProfile": _scenario_deployment_profile(),
+    }
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/web/scenario-evaluation/candidates",
+            headers={"X-VeADK-Local-User": "developer-1"},
+            json={
+                "agentId": "agent-1",
+                "artifact": {
+                    "codeDigest": "sha256:code",
+                    "topologyDigest": "sha256:topology",
+                },
+                "runtimeProject": project,
+            },
+        )
+        other_owner = client.get(
+            "/web/scenario-evaluation/workspace?agentId=agent-1",
+            headers={"X-VeADK-Local-User": "developer-2"},
+        )
+        admin = client.get(
+            "/web/scenario-evaluation/workspace?agentId=agent-1",
+            headers={"X-VeADK-Local-User": "admin"},
+        )
+        ordinary_user = client.get(
+            "/web/scenario-evaluation/workspace?agentId=agent-1",
+            headers={"X-VeADK-Local-User": "user-1"},
+        )
+
+    assert created.status_code == 200
+    assert other_owner.status_code == 403
+    assert admin.status_code == 200
+    assert admin.json()["candidates"][0]["candidateId"] == created.json()["candidateId"]
+    assert ordinary_user.status_code == 403
+
+
+def test_existing_candidate_cannot_bypass_direct_deployment_gate(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    launch_called = False
+
+    def launch(**_kwargs: Any) -> SimpleNamespace:
+        nonlocal launch_called
+        launch_called = True
+        return SimpleNamespace(success=True, error=None, deploy_result=None)
+
+    monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        developers="developer-1",
+        studio=False,
+    )
+    headers = {"X-VeADK-Local-User": "developer-1"}
+    files = [
+        {
+            "path": "agents/governed_agent/agent.py",
+            "content": "root_agent = object()\n",
+        },
+        {"path": "app.py", "content": "app = object()\n"},
+    ]
+
+    with TestClient(app) as client:
+        candidate = client.post(
+            "/web/scenario-evaluation/candidates",
+            headers=headers,
+            json={
+                "agentId": "governed-agent",
+                "artifact": {
+                    "codeDigest": "sha256:code",
+                    "topologyDigest": "sha256:topology",
+                },
+                "runtimeProject": {
+                    "name": "governed_agent",
+                    "files": files,
+                    "deploymentProfile": _scenario_deployment_profile(),
+                },
+            },
+        )
+        response = client.post(
+            "/web/deploy-agentkit",
+            headers=headers,
+            json={
+                "name": "governed-agent",
+                "files": files,
+                "config": {"region": "cn-beijing", "projectName": "default"},
+            },
+        )
+
+    assert candidate.status_code == 200
+    assert response.status_code == 409
+    assert "不能绕过发布门禁" in response.json()["detail"]
+    assert launch_called is False
+
+
+def test_candidate_source_cannot_bypass_gate_by_using_a_new_runtime_name(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    launch_called = False
+
+    def launch(**_kwargs: Any) -> SimpleNamespace:
+        nonlocal launch_called
+        launch_called = True
+        return SimpleNamespace(success=True, error=None, deploy_result=None)
+
+    monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        developers="developer-1",
+        studio=False,
+    )
+    headers = {"X-VeADK-Local-User": "developer-1"}
+    files = [
+        {
+            "path": "agents/governed_agent/agent.py",
+            "content": "root_agent = object()\n",
+        },
+        {"path": "app.py", "content": "app = object()\n"},
+    ]
+
+    with TestClient(app) as client:
+        candidate = client.post(
+            "/web/scenario-evaluation/candidates",
+            headers=headers,
+            json={
+                "agentId": "original-runtime-name",
+                "artifact": {
+                    "codeDigest": "sha256:code",
+                    "topologyDigest": "sha256:topology",
+                },
+                "runtimeProject": {
+                    "name": "governed_agent",
+                    "files": files,
+                    "deploymentProfile": _scenario_deployment_profile(),
+                },
+            },
+        )
+        response = client.post(
+            "/web/deploy-agentkit",
+            headers=headers,
+            json={
+                "name": "renamed-runtime",
+                "runtimeName": "renamed-runtime",
+                "files": files,
+                "config": {"region": "cn-beijing", "projectName": "default"},
+            },
+        )
+
+    assert candidate.status_code == 200
+    assert response.status_code == 409
+    assert "不能绕过发布门禁" in response.json()["detail"]
+    assert launch_called is False
+
+
+def test_existing_runtime_name_is_resolved_before_direct_deployment_gate(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+    launch_called = False
+    runtime = _runtime_with_public_endpoint(
+        _runtime("runtime-1", "developer-1", managed=False)
+    )
+    runtime.name = "governed-agent"
+
+    monkeypatch.setattr(
+        AgentkitRuntimeClient,
+        "get_runtime",
+        lambda _self, _request: runtime,
+    )
+
+    class RuntimeAsyncClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> "RuntimeAsyncClient":
+            return self
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+        async def request(
+            self,
+            _method: str,
+            url: str,
+            **_kwargs: Any,
+        ) -> _RuntimeJsonResponse:
+            assert url.endswith("/list-apps")
+            return _RuntimeJsonResponse(["governed-agent"])
+
+    def launch(**_kwargs: Any) -> SimpleNamespace:
+        nonlocal launch_called
+        launch_called = True
+        return SimpleNamespace(success=True, error=None, deploy_result=None)
+
+    monkeypatch.setattr("httpx.AsyncClient", RuntimeAsyncClient)
+    monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        developers="developer-1",
+        studio=False,
+    )
+    headers = {"X-VeADK-Local-User": "developer-1"}
+    files = [
+        {
+            "path": "agents/governed_agent/agent.py",
+            "content": "root_agent = object()\n",
+        },
+        {"path": "app.py", "content": "app = object()\n"},
+    ]
+
+    with TestClient(app) as client:
+        candidate = client.post(
+            "/web/scenario-evaluation/candidates",
+            headers=headers,
+            json={
+                "agentId": "governed-agent",
+                "artifact": {
+                    "codeDigest": "sha256:code",
+                    "topologyDigest": "sha256:topology",
+                },
+                "runtimeProject": {
+                    "name": "governed_agent",
+                    "files": files,
+                    "deploymentProfile": _scenario_deployment_profile(
+                        runtime_id=runtime.runtime_id
+                    ),
+                },
+            },
+        )
+        response = client.post(
+            "/web/deploy-agentkit",
+            headers=headers,
+            json={
+                "name": "forged-name",
+                "runtimeName": "forged-name",
+                "runtimeId": runtime.runtime_id,
+                "appName": "governed-agent",
+                "files": files,
+                "config": {"region": "cn-beijing", "projectName": "default"},
+            },
+        )
+
+    assert candidate.status_code == 200
+    assert response.status_code == 409
+    assert "不能绕过发布门禁" in response.json()["detail"]
+    assert launch_called is False
+
+
+def test_enabled_github_delivery_cannot_bypass_publish_gate(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    sync_called = False
+
+    monkeypatch.setattr(
+        "veadk.cli.github_cicd.get_github_cicd_runtime_binding",
+        lambda **_kwargs: {
+            "runtimeId": "runtime-1",
+            "cicd": {"enabled": True},
+        },
+    )
+
+    def sync(**_kwargs: Any) -> dict[str, Any]:
+        nonlocal sync_called
+        sync_called = True
+        return {}
+
+    monkeypatch.setattr("veadk.cli.github_cicd.sync_github_cicd_runtime", sync)
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        developers="developer-1",
+        studio=False,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/github-cicd/runtime-sync",
+            headers={"X-VeADK-Local-User": "developer-1"},
+            json={
+                "runtimeId": "runtime-1",
+                "project": {"name": "demo", "files": []},
+            },
+        )
+
+    assert response.status_code == 409
+    assert "不能绕过发布门禁" in response.json()["detail"]
+    assert sync_called is False
 
 
 @pytest.mark.parametrize(
@@ -2254,7 +3078,9 @@ def test_runtime_name_availability_uses_an_exact_cloud_filter(
     assert existing.status_code == 200
     assert existing.json() == {"available": False}
     assert available.status_code == 200
-    assert available.json() == {"available": True}
+    available_payload = available.json()
+    assert available_payload["available"] is True
+    assert available_payload["identityAttestation"].startswith("i1.")
     assert [request.max_results for request in requests] == [1, 1]
     assert [request.filters[0].name for request in requests] == ["Name", "Name"]
     assert [request.filters[0].values for request in requests] == [

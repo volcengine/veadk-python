@@ -54,6 +54,7 @@ dependencies = [
     "httpx>=0.27,<1", # Secure server-side webpage fetching for Studio knowledge imports
     "jsonschema>=4.23,<5", # Validate Studio BFF dynamic-tool arguments
     "trafilatura>=2.0,<2.1", # Extract webpage main content as Markdown for knowledge imports
+    "regex>=2026.7.19,<2027",
 ]
 
 [project.scripts]
