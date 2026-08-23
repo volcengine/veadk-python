@@ -469,7 +469,11 @@ After automatic provisioning, the success summary lists every Sandbox type and
 Tool ID, the private Studio TOS address, and the resolved Identity user pool and
 client IDs. It also links to the matching Volcengine or BytePlus Identity
 console. Password sign-in remains disabled by default for security; configure
-an SSO identity provider before inviting users to the deployed Studio.
+an SSO identity provider before inviting users to the deployed Studio. Pass
+`--allow-dangerous-login` to explicitly enable local password, passwordless,
+sign-up, recovery, and unconfirmed-user login flows on a Studio-managed user
+pool. When `--user-pool-id` is provided, deployment preserves that existing
+user pool's login settings regardless of this flag.
 
 Studio checks `latest.json` every three minutes and lists newer releases with
 their changelog and Git SHA. An accepted update verifies the selected complete
