@@ -2849,6 +2849,43 @@ def test_runtime_detail_proxy_and_delete_enforce_role_and_owner(
     assert deleted == ["runtime-developer", "runtime-other"]
 
 
+def test_runtime_proxy_list_fallback_still_enforces_runtime_owner(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+    runtime = _runtime_with_public_endpoint(_runtime("runtime-other", "someone-else"))
+
+    def get_runtime(_self: Any, _request: Any) -> SimpleNamespace:
+        raise RuntimeError("InvalidAgentKitRuntime.NotFound: protected-detail")
+
+    def list_runtimes(_self: Any, _request: Any) -> SimpleNamespace:
+        return SimpleNamespace(
+            agent_kit_runtimes=[runtime],
+            next_token=None,
+        )
+
+    monkeypatch.setattr(AgentkitRuntimeClient, "get_runtime", get_runtime)
+    monkeypatch.setattr(AgentkitRuntimeClient, "list_runtimes", list_runtimes)
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        admins="admin",
+        developers="developer",
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/runtime-proxy/runtime-other/list-apps?region=cn-beijing",
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "runtime_access_denied"
+    assert "protected-detail" not in response.text
+
+
 def test_agent_usage_requires_management_role_and_runtime_ownership(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
