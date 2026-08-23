@@ -352,7 +352,14 @@ def test_studio_identity_resources_reject_client_without_pool() -> None:
 
 
 @pytest.mark.parametrize(
-    ("provider_args", "expected_region", "expected_provider", "dev_args"),
+    (
+        "provider_args",
+        "expected_region",
+        "expected_provider",
+        "dev_args",
+        "login_args",
+        "expected_login_mode",
+    ),
     [
         (
             [
@@ -366,6 +373,8 @@ def test_studio_identity_resources_reject_client_without_pool() -> None:
             "cn-beijing",
             "volcengine",
             ["--sandbox-dev-tool-id", "dev-tool"],
+            [],
+            "idp_only",
         ),
         (
             [
@@ -379,6 +388,8 @@ def test_studio_identity_resources_reject_client_without_pool() -> None:
             "cn-shanghai",
             "volcengine",
             ["--sandbox-dev-tool-id", "dev-tool"],
+            [],
+            "idp_only",
         ),
         (
             [
@@ -392,6 +403,23 @@ def test_studio_identity_resources_reject_client_without_pool() -> None:
             "ap-southeast-1",
             "byteplus",
             ["--sandbox-dev-tool-id", "dev-tool"],
+            [],
+            "idp_only",
+        ),
+        (
+            [
+                "--region",
+                "cn-beijing",
+                "--volcengine-access-key",
+                "ak",
+                "--volcengine-secret-key",
+                "sk",
+            ],
+            "cn-beijing",
+            "volcengine",
+            ["--sandbox-dev-tool-id", "dev-tool"],
+            ["--allow-dangerous-login"],
+            "local_login",
         ),
     ],
 )
@@ -401,6 +429,8 @@ def test_studio_deploy_auto_identity_is_injected_and_printed(
     expected_region: str,
     expected_provider: str,
     dev_args: list[str],
+    login_args: list[str],
+    expected_login_mode: str,
 ) -> None:
     captured: dict[str, object] = {}
     environments: dict[str, str] = {}
@@ -428,7 +458,10 @@ def test_studio_deploy_auto_identity_is_injected_and_printed(
             captured["callback"] = kwargs
 
         def configure_user_pool_for_idp_only(self, user_pool_uid: str) -> None:
-            captured["configured_user_pool"] = user_pool_uid
+            captured["configured_user_pool"] = ("idp_only", user_pool_uid)
+
+        def configure_user_pool_for_local_login(self, user_pool_uid: str) -> None:
+            captured["configured_user_pool"] = ("local_login", user_pool_uid)
 
     monkeypatch.setattr("veadk.config.veadk_environments", environments)
     monkeypatch.setattr(
@@ -461,6 +494,7 @@ def test_studio_deploy_auto_identity_is_injected_and_printed(
             "hermes-tool",
             *provider_args,
             *dev_args,
+            *login_args,
         ],
     )
 
@@ -478,8 +512,13 @@ def test_studio_deploy_auto_identity_is_injected_and_printed(
     assert "user pool id: pool-created" in result.output
     assert "user pool domain: identity.example.com" in result.output
     assert "client id: client-created" in result.output
-    assert captured["configured_user_pool"] == "pool-created"
-    assert "Configured the user pool for IdP-only sign-in." in result.output
+    assert captured["configured_user_pool"] == (expected_login_mode, "pool-created")
+    assert ("Configured the user pool for IdP-only sign-in." in result.output) == (
+        expected_login_mode == "idp_only"
+    )
+    assert ("WARNING: Enabled dangerous local account flows" in result.output) == (
+        expected_login_mode == "local_login"
+    )
     tos_domain = "bytepluses.com" if expected_provider == "byteplus" else "volces.com"
     identity_console = (
         "https://console.byteplus.com/identity"
@@ -497,8 +536,12 @@ def test_studio_deploy_auto_identity_is_injected_and_printed(
         in result.output
     )
     assert f"Identity console: {identity_console}" in result.output
-    assert "Password sign-in is disabled by default for security." in result.output
-    assert "Configure an SSO identity provider before inviting users." in result.output
+    assert (
+        "Password sign-in is disabled by default for security." in result.output
+    ) == (expected_login_mode == "idp_only")
+    assert ("Local account login flows are enabled." in result.output) == (
+        expected_login_mode == "local_login"
+    )
     callback_client = captured["callback_client"]
     assert isinstance(callback_client, dict)
     assert callback_client["enable_vefaas_iam_fallback"] is False
@@ -958,6 +1001,7 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
             "sk",
             "--volcengine-session-token",
             "sts-token",
+            "--allow-dangerous-login",
             *target_args,
         ],
     )
@@ -1019,6 +1063,8 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     assert isinstance(callback, dict)
     assert callback["dismiss_login_page_enabled"] is False
     assert callback["skip_consent_enabled"] is True
+    assert "configured_user_pool" not in captured
+    assert "Preserved the existing Identity user pool login settings." in result.output
 
 
 def test_studio_deploy_persists_studio_context_environment(
@@ -2113,6 +2159,28 @@ def test_configure_user_pool_for_idp_only_disables_local_account_flows() -> None
         "SignUpAutoVerificationEnabled": False,
         "SmsPasswordlessSignInEnabled": False,
         "UnconfirmedUserSignInEnabled": False,
+        "UserPoolUid": "pool-id",
+    }
+
+
+def test_configure_user_pool_for_local_login_enables_local_account_flows() -> None:
+    identity_client = IdentityClient(
+        access_key="test_access_key",
+        secret_key="test_secret_key",
+    )
+    identity_client._api_client = Mock()
+
+    identity_client.configure_user_pool_for_local_login("pool-id")
+
+    update_request = identity_client._api_client.update_user_pool.call_args.args[0]
+    assert sanitize_for_serialization(update_request) == {
+        "EmailPasswordlessSignInEnabled": True,
+        "PasswordSignInEnabled": True,
+        "SelfAccountRecoveryEnabled": True,
+        "SelfSignUpEnabled": True,
+        "SignUpAutoVerificationEnabled": True,
+        "SmsPasswordlessSignInEnabled": True,
+        "UnconfirmedUserSignInEnabled": True,
         "UserPoolUid": "pool-id",
     }
 

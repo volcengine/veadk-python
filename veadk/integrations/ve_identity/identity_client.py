@@ -819,6 +819,23 @@ class IdentityClient:
         self._api_client.update_user_pool(request)
 
     @refresh_credentials
+    def configure_user_pool_for_local_login(self, user_pool_uid: str) -> None:
+        """Enable local sign-up, recovery, and sign-in for a user pool."""
+        from volcenginesdkid import UpdateUserPoolRequest
+
+        request = UpdateUserPoolRequest(
+            email_passwordless_sign_in_enabled=True,
+            password_sign_in_enabled=True,
+            self_account_recovery_enabled=True,
+            self_sign_up_enabled=True,
+            sign_up_auto_verification_enabled=True,
+            sms_passwordless_sign_in_enabled=True,
+            unconfirmed_user_sign_in_enabled=True,
+            user_pool_uid=user_pool_uid,
+        )
+        self._api_client.update_user_pool(request)
+
+    @refresh_credentials
     def list_user_pools(self, *, page_size: int = 100) -> list[dict[str, str]]:
         """List all user pools available to the current account."""
         from volcenginesdkid import ListUserPoolsRequest, ListUserPoolsResponse
