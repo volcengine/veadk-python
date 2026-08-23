@@ -169,6 +169,21 @@ def test_evaluator_recommendation_and_trial_routes_return_persisted_evidence() -
                 "draftRevision": draft["revision"],
             },
         ).json()
+        invalid_regex = client.post(
+            "/web/scenario-evaluation/evaluator-drafts",
+            headers={"X-Test-Role": "developer"},
+            json={
+                "agentId": "agent-1",
+                "evaluatorId": "invalid-regex",
+                "expectedRevision": 0,
+                "name": "无效正则检查",
+                "sceneVersionId": scene["sceneVersionId"],
+                "kind": "deterministic",
+                "rule": "output_matches_regex",
+                "regexPattern": "[unclosed",
+                "hardFailure": False,
+            },
+        )
         dataset_draft = client.post(
             "/web/scenario-evaluation/dataset-drafts",
             headers={"X-Test-Role": "developer"},
@@ -233,6 +248,7 @@ def test_evaluator_recommendation_and_trial_routes_return_persisted_evidence() -
         )
 
     assert recommended.status_code == 200
+    assert invalid_regex.status_code == 422
     assert len(recommended.json()["drafts"]) == 2
     assert trial.status_code == 200
     assert trial.json()["results"][0]["outcome"] == "pass"

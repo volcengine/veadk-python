@@ -9,7 +9,10 @@ from frontend.server.scenario_evaluation.models import (
     CandidateArtifact,
     CandidateVersion,
     CredentialReference,
+    DeterministicRule,
     EvaluationDependencies,
+    EvaluatorDraft,
+    EvaluatorKind,
 )
 
 
@@ -92,3 +95,47 @@ def test_evaluation_dependencies_require_every_validity_dimension() -> None:
         "policyVersionId": "policy-1:v5",
         "environmentFingerprint": "sha256:runtime",
     }
+
+
+def test_regex_evaluator_requires_a_valid_bounded_pattern() -> None:
+    payload = {
+        "evaluatorId": "evaluator-regex",
+        "agentId": "agent-1",
+        "revision": 1,
+        "name": "订单号格式检查",
+        "sceneVersionId": "scene-1:v1",
+        "kind": EvaluatorKind.DETERMINISTIC,
+        "rule": DeterministicRule.OUTPUT_MATCHES_REGEX,
+        "regexPattern": r"订单号[:：]\s*[A-Z0-9]+",
+        "hardFailure": False,
+        "updatedAt": "2026-08-14T12:00:00Z",
+        "updatedBy": "developer-1",
+    }
+
+    draft = EvaluatorDraft.model_validate(payload)
+
+    assert draft.regex_pattern == r"订单号[:：]\s*[A-Z0-9]+"
+    with pytest.raises(ValidationError, match="valid regular expression"):
+        EvaluatorDraft.model_validate({**payload, "regexPattern": "[unclosed"})
+    with pytest.raises(ValidationError, match="requires a regular expression"):
+        EvaluatorDraft.model_validate({**payload, "regexPattern": ""})
+
+
+def test_llm_evaluator_can_rely_only_on_automatic_business_criteria() -> None:
+    draft = EvaluatorDraft.model_validate(
+        {
+            "evaluatorId": "evaluator-semantic",
+            "agentId": "agent-1",
+            "revision": 1,
+            "name": "业务标准检查",
+            "sceneVersionId": "scene-1:v1",
+            "kind": EvaluatorKind.LLM_RUBRIC,
+            "rule": None,
+            "rubric": "",
+            "hardFailure": False,
+            "updatedAt": "2026-08-14T12:00:00Z",
+            "updatedBy": "developer-1",
+        }
+    )
+
+    assert draft.rubric == ""

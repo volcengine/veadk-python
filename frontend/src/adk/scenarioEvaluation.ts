@@ -313,6 +313,7 @@ export function saveEvaluatorDraft(
     kind: "deterministic" | "llm_rubric";
     rule: string;
     rubric: string;
+    regexPattern: string;
     hardFailure: boolean;
   },
 ): Promise<EvaluatorDraft> {

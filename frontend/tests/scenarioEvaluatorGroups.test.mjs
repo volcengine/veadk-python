@@ -273,6 +273,19 @@ test("a failed severe check wins the combined scene-evaluator judgment", () => {
   );
 });
 
+test("a dynamic LLM hard failure is severe without a static checkbox", () => {
+  assert.ok(evaluatorGroups, "expected the evaluator-group module to compile");
+
+  const result = evaluatorGroups.combineSceneEvaluatorTrialResults("pass", [{
+    label: "语义标准检查",
+    hardFailure: false,
+    result: trialResult("fail", true),
+  }]);
+
+  assert.equal(result.hardFailure, true);
+  assert.equal(result.explanation, "语义标准检查：不符合标准");
+});
+
 test("an infrastructure failure leaves scene-evaluator accuracy unavailable", () => {
   assert.ok(evaluatorGroups, "expected the evaluator-group module to compile");
 

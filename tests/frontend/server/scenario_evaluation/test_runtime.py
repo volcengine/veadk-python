@@ -225,6 +225,8 @@ async def test_adapter_creates_runtime_session_and_returns_persistable_evidence(
             case_id="case-1",
             input="where is my order?",
             expected_output="answer with delivery status",
+            pass_criteria=("include the current delivery status",),
+            forbidden_output=("claim the order was delivered without evidence",),
         ),
         session_id="session-1",
         attempt_index=1,

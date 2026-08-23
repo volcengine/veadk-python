@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any, Literal, TypeVar
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from frontend.server.scenario_evaluation.errors import (
     ScenarioEvaluationRunning,
@@ -22,6 +22,7 @@ from frontend.server.scenario_evaluation.models import (
     DatasetCase,
     DatasetDraft,
     DatasetVersion,
+    DeterministicRule,
     EvaluationPolicyDraft,
     EvaluationPolicyVersion,
     EvaluationRequirement,
@@ -133,8 +134,9 @@ class _SaveEvaluatorRequest(_RequestModel):
     name: str = Field(min_length=1)
     scene_version_id: str = Field(min_length=1)
     kind: EvaluatorKind
-    rule: str = ""
+    rule: DeterministicRule | Literal[""] = ""
     rubric: str = ""
+    regex_pattern: str = Field(default="", max_length=512)
     hard_failure: bool = False
 
 
@@ -224,6 +226,8 @@ async def _domain_call(awaitable: Awaitable[_ResultT]) -> _ResultT:
         raise _http_error(409, "conflict", error) from error
     except ScenarioInvalidTransition as error:
         raise _http_error(422, "invalid_transition", error) from error
+    except ValidationError as error:
+        raise _http_error(422, "invalid_request", error) from error
     except ScenarioUnavailable as error:
         raise _http_error(503, "unavailable", error) from error
 
@@ -532,6 +536,7 @@ def mount_routes(
                     kind=body.kind,
                     rule=body.rule,
                     rubric=body.rubric,
+                    regex_pattern=body.regex_pattern,
                     hard_failure=body.hard_failure,
                 )
             )

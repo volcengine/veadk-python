@@ -30,6 +30,8 @@ const calibrationLabels: Record<SceneEvaluatorGroup["calibrationState"], string>
   unavailable: "校准未完成",
 };
 
+const regexRules = new Set(["output_matches_regex", "output_excludes_regex"]);
+
 function trialOutcomeLabel(outcome: EvaluatorTrialReport["results"][number]["outcome"]): string {
   return {
     pass: "通过",
@@ -84,6 +86,7 @@ export function GovernancePanel({
   const [evaluatorKind, setEvaluatorKind] = useState<"deterministic" | "llm_rubric">("deterministic");
   const [rule, setRule] = useState("output_contains_expected");
   const [rubric, setRubric] = useState("");
+  const [regexPattern, setRegexPattern] = useState("");
   const [hardFailure, setHardFailure] = useState(false);
   const [evaluatorSceneVersionId, setEvaluatorSceneVersionId] = useState("");
   const [activeGroupId, setActiveGroupId] = useState("");
@@ -98,6 +101,9 @@ export function GovernancePanel({
     evaluatorVersionIds: string[];
   }>>({});
   const activeGroup = groups.find((group) => group.sceneVersionId === activeGroupId) ?? null;
+  const activeScene = activeGroup
+    ? workspace.scenes.find((scene) => scene.sceneVersionId === activeGroup.sceneVersionId) ?? null
+    : null;
   const compatibleDatasets = activeGroup
     ? workspace.datasets.filter((item) => item.cases.some((sample) =>
         sample.sceneVersionId === activeGroup.sceneVersionId))
@@ -261,6 +267,17 @@ export function GovernancePanel({
               }}><option value="">选择已发布评测数据</option>{compatibleDatasets.map((item) => <option key={item.datasetVersionId} value={item.datasetVersionId}>{item.name} · v{item.version}</option>)}</select></label>
               <label><span>评测样本</span><select required value={trialCaseId} onChange={(event) => { setTrialCaseId(event.currentTarget.value); setTrialChecks([]); }}>{compatibleCases.map((item) => <option key={item.caseId} value={item.caseId}>{item.caseId} · {item.input}</option>)}</select></label>
             </div>
+            {activeScene && trialCase && (
+              <details className="se-evaluation-criteria">
+                <summary>查看本次自动判断依据</summary>
+                <div>
+                  <section><strong>业务场景标准</strong><p>{activeScene.userTask}</p><ul>{activeScene.passCriteria.map((item) => <li key={item}>{item}</li>)}</ul></section>
+                  <section><strong>场景硬失败条件</strong><ul>{activeScene.hardFailureConditions.map((item) => <li key={item}>{item}</li>)}</ul></section>
+                  <section><strong>评测样本标准</strong><p>期望输出：{trialCase.expectedOutput}</p><ul>{(trialCase.passCriteria ?? []).map((item) => <li key={item}>{item}</li>)}</ul></section>
+                  <section><strong>样本禁止输出</strong><ul>{trialCase.forbiddenOutput.map((item) => <li key={item}>{item}</li>)}</ul></section>
+                </div>
+              </details>
+            )}
             <section className="se-calibration-step">
               <header><span>1</span><div><strong>模拟 Agent 输出</strong><small>填写要交给场景评估器判断的完整输出。</small></div></header>
               <textarea aria-label="模拟 Agent 输出" required value={trialOutput} onChange={(event) => { setTrialOutput(event.currentTarget.value); setTrialChecks([]); }} placeholder="输入一段模拟的 Agent 输出" />
@@ -303,15 +320,20 @@ export function GovernancePanel({
               kind: evaluatorKind,
               rule: evaluatorKind === "deterministic" ? rule : "",
               rubric: evaluatorKind === "llm_rubric" ? rubric : "",
+              regexPattern: evaluatorKind === "deterministic" && regexRules.has(rule) ? regexPattern : "",
               hardFailure,
             }), () => "内部检查草稿已保存，可继续校准场景评估器");
           }}>
             <label><span>检查名称</span><input required value={evaluatorName} onChange={(event) => setEvaluatorName(event.currentTarget.value)} /></label>
             <label><span>适用业务场景版本</span><select required value={evaluatorSceneVersionId} onChange={(event) => setEvaluatorSceneVersionId(event.currentTarget.value)}><option value="">选择已发布业务场景</option>{activeScenes.map((scene) => <option key={scene.sceneVersionId} value={scene.sceneVersionId}>{scene.name} · v{scene.version}</option>)}</select></label>
+            <div className="se-auto-criteria-note"><strong>业务标准自动带入</strong><span>场景和评测样本中的业务标准会自动进入判断上下文，无需在检查中重复填写。</span></div>
             <label><span>检查类型</span><select value={evaluatorKind} onChange={(event) => setEvaluatorKind(event.currentTarget.value as typeof evaluatorKind)}><option value="deterministic">受控确定性规则</option><option value="llm_rubric">大模型评分标准</option></select></label>
-            {evaluatorKind === "deterministic" ? <label><span>确定性规则</span><select value={rule} onChange={(event) => setRule(event.currentTarget.value)}><option value="output_contains_expected">输出包含期望内容</option><option value="output_excludes_forbidden">输出不含禁止内容</option><option value="output_contains_tool_evidence">输出包含工具证据</option></select></label> : <label><span>评分标准</span><textarea required value={rubric} onChange={(event) => setRubric(event.currentTarget.value)} placeholder="逐项描述必须满足的业务标准" /></label>}
+            {evaluatorKind === "deterministic" ? <>
+              <label><span>确定性规则</span><select value={rule} onChange={(event) => setRule(event.currentTarget.value)}><option value="output_contains_expected">输出包含期望内容</option><option value="output_excludes_forbidden">输出不含禁止内容</option><option value="output_contains_tool_evidence">输出包含工具证据</option><option value="output_matches_regex">输出必须匹配正则</option><option value="output_excludes_regex">输出不得匹配正则</option></select></label>
+              {regexRules.has(rule) && <label><span>正则表达式</span><textarea required maxLength={512} value={regexPattern} onChange={(event) => setRegexPattern(event.currentTarget.value)} placeholder={rule === "output_matches_regex" ? "例如：订单号[:：]\\s*[A-Z]{2}\\d+" : "例如：保证.{0,8}到账|百分之百成功"} /><small>直接填写正则表达式，系统会在不调用大模型的情况下匹配完整 Agent 输出。</small></label>}
+            </> : <label><span>补充评分要求（可选）</span><textarea value={rubric} onChange={(event) => setRubric(event.currentTarget.value)} placeholder="只填写场景和样本标准之外的补充判断要求" /></label>}
             <label className="se-check"><input type="checkbox" checked={hardFailure} onChange={(event) => setHardFailure(event.currentTarget.checked)} /><span>命中时视为严重失败</span></label>
-            <button type="submit" className="is-primary" disabled={Boolean(mutationKey) || !evaluatorSceneVersionId}>保存内部检查草稿</button>
+            <button type="submit" className="is-primary" disabled={Boolean(mutationKey) || !evaluatorSceneVersionId || (evaluatorKind === "deterministic" && regexRules.has(rule) && !regexPattern.trim())}>保存内部检查草稿</button>
           </form>
         </details>
       </section>}

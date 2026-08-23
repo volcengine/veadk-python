@@ -167,11 +167,15 @@ export function combineSceneEvaluatorTrialResults(
     };
   }
   const failedChecks = checks.filter(({ result }) => result.outcome === "fail");
-  const hardFailure = failedChecks.some(({ hardFailure: severe }) => severe);
+  const isHardFailure = ({
+    hardFailure: severe,
+    result,
+  }: (typeof failedChecks)[number]) => severe || result.hardFailure;
+  const hardFailure = failedChecks.some(isHardFailure);
   const combinedOutcome = failedChecks.length > 0 ? "fail" : "pass";
   const matchesExpectation = combinedOutcome === expectedOutcome;
   const decisiveChecks = hardFailure
-    ? failedChecks.filter(({ hardFailure: severe }) => severe)
+    ? failedChecks.filter(isHardFailure)
     : failedChecks;
 
   return {

@@ -109,4 +109,7 @@ test("renders one scene evaluator for ordinary and severe internal checks", () =
     html,
     /<button[^>]*disabled=""[^>]*>发布场景评估器<\/button>/,
   );
+  assert.match(html, /输出必须匹配正则/);
+  assert.match(html, /输出不得匹配正则/);
+  assert.match(html, /场景和评测样本中的业务标准会自动进入判断上下文/);
 });

@@ -246,6 +246,18 @@
 .se-calibration-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .se-calibration-head p { margin: 4px 0 0; color: hsl(var(--muted-foreground)); line-height: 1.5; }
 .se-calibration-context { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.se-evaluation-criteria { border: 1px solid hsl(var(--border)); border-radius: 7px; background: hsl(var(--secondary) / .18); }
+.se-evaluation-criteria > summary { padding: 9px 10px; color: hsl(var(--muted-foreground)); cursor: pointer; }
+.se-evaluation-criteria > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 0 10px 10px; }
+.se-evaluation-criteria section { min-width: 0; padding: 9px; border-radius: 6px; background: hsl(var(--background)); }
+.se-evaluation-criteria strong { font-size: 12px; }
+.se-evaluation-criteria p,
+.se-evaluation-criteria ul { margin: 5px 0 0; color: hsl(var(--muted-foreground)); font-size: 12px; line-height: 1.5; }
+.se-evaluation-criteria ul { padding-left: 18px; }
+.se-auto-criteria-note { display: flex; align-items: flex-start; gap: 8px; padding: 9px 10px; border-radius: 6px; background: hsl(var(--primary) / .07); color: hsl(var(--foreground)); }
+.se-auto-criteria-note strong { flex: 0 0 auto; font-size: 12px; }
+.se-auto-criteria-note span { color: hsl(var(--muted-foreground)); font-size: 12px; line-height: 1.45; }
+.se-advanced-editor label > small { color: hsl(var(--muted-foreground)); font-size: 12px; line-height: 1.45; }
 .se-calibration-step,
 .se-calibration-result { display: grid; gap: 11px; margin: 0; padding: 12px; border: 1px solid hsl(var(--border)); border-radius: 8px; background: hsl(var(--background)); }
 .se-calibration-step > header,
@@ -357,6 +369,7 @@
   .se-version-list > div { align-items: flex-start; }
   .se-version-actions { flex-wrap: wrap; justify-content: flex-end; }
   .se-calibration-context,
+  .se-evaluation-criteria > div,
   .se-calibration-choices,
   .se-calibration-comparison { grid-template-columns: 1fr; }
   .se-calibration-run { grid-template-columns: 1fr; }

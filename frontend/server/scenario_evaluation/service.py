@@ -619,7 +619,8 @@ class ScenarioEvaluationService:
         kind: EvaluatorKind,
         rule: str,
         rubric: str,
-        hard_failure: bool,
+        regex_pattern: str = "",
+        hard_failure: bool = False,
     ) -> EvaluatorDraft:
         self._require_manager(actor)
         await self._record_model(
@@ -637,6 +638,7 @@ class ScenarioEvaluationService:
             kind=kind,
             rule=DeterministicRule(rule) if rule else None,
             rubric=rubric,
+            regex_pattern=regex_pattern,
             hard_failure=hard_failure,
             updated_at=self._now(),
             updated_by=actor.owner_id,
@@ -679,14 +681,8 @@ class ScenarioEvaluationService:
             kind=EvaluatorKind.DETERMINISTIC,
             rule=controlled_rule.value,
             rubric="",
+            regex_pattern="",
             hard_failure=True,
-        )
-        rubric_text = (
-            f"判断 Agent 输出是否完成场景“{scene.name}”。"
-            f"用户任务：{scene.user_task}。"
-            f"必须逐项满足：{'；'.join(scene.pass_criteria)}。"
-            f"命中任一硬失败条件时失败：{'；'.join(scene.hard_failure_conditions)}。"
-            "判断时引用输出或 Trace 证据，并说明对应标准。"
         )
         rubric = await self.save_evaluator_draft(
             actor,
@@ -697,7 +693,8 @@ class ScenarioEvaluationService:
             scene_version_id=scene.scene_version_id,
             kind=EvaluatorKind.LLM_RUBRIC,
             rule="",
-            rubric=rubric_text,
+            rubric="",
+            regex_pattern="",
             hard_failure=False,
         )
         return EvaluatorDraftRecommendation(
@@ -738,6 +735,12 @@ class ScenarioEvaluationService:
             revision=expected_revision,
             model_type=EvaluatorDraft,
         )
+        scene = await self._record_model(
+            agent_id=agent_id,
+            record_type=ScenarioRecordType.SCENE_VERSION,
+            record_id=draft.scene_version_id,
+            model_type=SceneVersion,
+        )
         dataset = await self._record_model(
             agent_id=agent_id,
             record_type=ScenarioRecordType.DATASET_VERSION,
@@ -774,18 +777,18 @@ class ScenarioEvaluationService:
             kind=draft.kind,
             rule=draft.rule,
             rubric=draft.rubric,
+            regex_pattern=draft.regex_pattern,
             hard_failure=draft.hard_failure,
+            scene_name=scene.name,
+            scene_user_task=scene.user_task,
+            scene_pass_criteria=scene.pass_criteria,
+            scene_hard_failure_conditions=scene.hard_failure_conditions,
             created_at=self._now(),
             created_by=actor.owner_id,
         )
         results: list[EvaluatorTrialResult] = []
         for index, sample in enumerate(samples, start=1):
-            case = DatasetCase(
-                case_id=sample.sample_id,
-                input=sample.input,
-                expected_output=sample.expected_output,
-                forbidden_output=sample.forbidden_output,
-            )
+            case = available_cases[sample.sample_id]
             try:
                 evidence = await evaluator.evaluate(
                     synthetic,
@@ -881,6 +884,12 @@ class ScenarioEvaluationService:
         version = await self._next_version(
             agent_id, ScenarioRecordType.EVALUATOR_VERSION, evaluator_id
         )
+        scene = await self._record_model(
+            agent_id=agent_id,
+            record_type=ScenarioRecordType.SCENE_VERSION,
+            record_id=draft.scene_version_id,
+            model_type=SceneVersion,
+        )
         model = EvaluatorVersion(
             evaluator_version_id=f"{evaluator_id}:v{version}",
             evaluator_id=evaluator_id,
@@ -892,7 +901,12 @@ class ScenarioEvaluationService:
             kind=draft.kind,
             rule=draft.rule,
             rubric=draft.rubric,
+            regex_pattern=draft.regex_pattern,
             hard_failure=draft.hard_failure,
+            scene_name=scene.name,
+            scene_user_task=scene.user_task,
+            scene_pass_criteria=scene.pass_criteria,
+            scene_hard_failure_conditions=scene.hard_failure_conditions,
             trial_report_id=trial.report_id,
             trial_dataset_version_id=trial.dataset_version_id,
             created_at=self._now(),
@@ -918,6 +932,12 @@ class ScenarioEvaluationService:
         draft_revisions: Mapping[str, int],
     ) -> EvaluatorGroupPublicationResult:
         self._require_admin(actor)
+        scene = await self._record_model(
+            agent_id=agent_id,
+            record_type=ScenarioRecordType.SCENE_VERSION,
+            record_id=scene_version_id,
+            model_type=SceneVersion,
+        )
         draft_records = await self._repository.list(
             agent_id=agent_id,
             record_type=ScenarioRecordType.EVALUATOR_DRAFT,
@@ -1044,7 +1064,12 @@ class ScenarioEvaluationService:
                 kind=draft.kind,
                 rule=draft.rule,
                 rubric=draft.rubric,
+                regex_pattern=draft.regex_pattern,
                 hard_failure=draft.hard_failure,
+                scene_name=scene.name,
+                scene_user_task=scene.user_task,
+                scene_pass_criteria=scene.pass_criteria,
+                scene_hard_failure_conditions=scene.hard_failure_conditions,
                 trial_report_id=trial.report_id,
                 trial_dataset_version_id=trial.dataset_version_id,
                 created_at=self._now(),
@@ -1502,11 +1527,23 @@ class ScenarioEvaluationService:
         agent_id: str,
         evaluator_version_id: str,
     ) -> EvaluatorVersion:
-        return await self._record_model(
+        evaluator = await self._record_model(
             agent_id=agent_id,
             record_type=ScenarioRecordType.EVALUATOR_VERSION,
             record_id=evaluator_version_id,
             model_type=EvaluatorVersion,
+        )
+        scene = await self.get_scene_version(
+            agent_id=agent_id,
+            scene_version_id=evaluator.scene_version_id,
+        )
+        return evaluator.model_copy(
+            update={
+                "scene_name": scene.name,
+                "scene_user_task": scene.user_task,
+                "scene_pass_criteria": scene.pass_criteria,
+                "scene_hard_failure_conditions": scene.hard_failure_conditions,
+            }
         )
 
     async def get_policy_version(
@@ -1616,7 +1653,10 @@ class ScenarioEvaluationService:
                         "Policy Evaluator belongs to another Scene."
                     )
                 evaluators.append(evaluator)
-            if not any(evaluator.hard_failure for evaluator in evaluators):
+            if not any(
+                evaluator.hard_failure or evaluator.kind is EvaluatorKind.LLM_RUBRIC
+                for evaluator in evaluators
+            ):
                 raise ScenarioInvalidTransition(
                     "Policy Scene requires an Evaluator for hard failure conditions."
                 )

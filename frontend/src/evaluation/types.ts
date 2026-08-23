@@ -11,7 +11,9 @@ export type EvaluatorKind = "deterministic" | "llm_rubric";
 export type DeterministicRule =
   | "output_contains_tool_evidence"
   | "output_contains_expected"
-  | "output_excludes_forbidden";
+  | "output_excludes_forbidden"
+  | "output_matches_regex"
+  | "output_excludes_regex";
 export type EvaluationRunStatus =
   | "queued"
   | "running"
@@ -127,6 +129,7 @@ export interface EvaluatorDraft {
   kind: EvaluatorKind;
   rule: DeterministicRule | null;
   rubric: string;
+  regexPattern: string;
   hardFailure: boolean;
   updatedAt: string;
   updatedBy: string;
@@ -136,6 +139,10 @@ export interface EvaluatorVersion extends Omit<EvaluatorDraft, "revision" | "upd
   evaluatorVersionId: string;
   version: number;
   sourceDraftRevision: number;
+  sceneName: string;
+  sceneUserTask: string;
+  scenePassCriteria: string[];
+  sceneHardFailureConditions: string[];
   trialReportId: string;
   trialDatasetVersionId: string;
   createdAt: string;

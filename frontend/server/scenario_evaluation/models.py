@@ -5,6 +5,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Literal, Self
 
+import regex as safe_regex
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from veadk.cli.studio_rbac import StudioRole
@@ -131,6 +132,8 @@ class DeterministicRule(str, Enum):
     OUTPUT_CONTAINS_TOOL_EVIDENCE = "output_contains_tool_evidence"
     OUTPUT_CONTAINS_EXPECTED = "output_contains_expected"
     OUTPUT_EXCLUDES_FORBIDDEN = "output_excludes_forbidden"
+    OUTPUT_MATCHES_REGEX = "output_matches_regex"
+    OUTPUT_EXCLUDES_REGEX = "output_excludes_regex"
 
 
 class DatasetCaseSource(str, Enum):
@@ -278,19 +281,19 @@ class EvaluatorDraft(ScenarioModel):
     kind: EvaluatorKind
     rule: DeterministicRule | None = None
     rubric: str = ""
+    regex_pattern: str = Field(default="", max_length=512)
     hard_failure: bool = False
     updated_at: datetime
     updated_by: str = Field(min_length=1)
 
     @model_validator(mode="after")
     def _validate_controlled_configuration(self) -> Self:
-        if self.kind is EvaluatorKind.DETERMINISTIC:
-            if self.rule is None or self.rubric.strip():
-                raise ValueError(
-                    "deterministic evaluator requires only a controlled rule"
-                )
-        elif self.rule is not None or not self.rubric.strip():
-            raise ValueError("LLM rubric evaluator requires only a non-empty rubric")
+        _validate_evaluator_configuration(
+            kind=self.kind,
+            rule=self.rule,
+            rubric=self.rubric,
+            regex_pattern=self.regex_pattern,
+        )
         return self
 
 
@@ -305,11 +308,70 @@ class EvaluatorVersion(ScenarioModel):
     kind: EvaluatorKind
     rule: DeterministicRule | None = None
     rubric: str = ""
+    regex_pattern: str = Field(default="", max_length=512)
     hard_failure: bool = False
+    scene_name: str = ""
+    scene_user_task: str = ""
+    scene_pass_criteria: tuple[str, ...] = ()
+    scene_hard_failure_conditions: tuple[str, ...] = ()
     trial_report_id: str = ""
     trial_dataset_version_id: str = ""
     created_at: datetime
     created_by: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _validate_controlled_configuration(self) -> Self:
+        _validate_evaluator_configuration(
+            kind=self.kind,
+            rule=self.rule,
+            rubric=self.rubric,
+            regex_pattern=self.regex_pattern,
+        )
+        return self
+
+
+class EvaluationCriteriaContext(ScenarioModel):
+    scene_version_id: str = ""
+    scene_name: str = ""
+    scene_user_task: str = ""
+    scene_pass_criteria: tuple[str, ...] = ()
+    scene_hard_failure_conditions: tuple[str, ...] = ()
+    case_id: str = Field(min_length=1)
+    user_input: str = Field(min_length=1)
+    expected_output: str = Field(min_length=1)
+    case_pass_criteria: tuple[str, ...] = ()
+    forbidden_output: tuple[str, ...] = ()
+
+
+def _validate_evaluator_configuration(
+    *,
+    kind: EvaluatorKind,
+    rule: DeterministicRule | None,
+    rubric: str,
+    regex_pattern: str,
+) -> None:
+    regex_rules = {
+        DeterministicRule.OUTPUT_MATCHES_REGEX,
+        DeterministicRule.OUTPUT_EXCLUDES_REGEX,
+    }
+    if kind is EvaluatorKind.LLM_RUBRIC:
+        if rule is not None or regex_pattern.strip():
+            raise ValueError(
+                "LLM rubric evaluator accepts only optional supplemental guidance"
+            )
+        return
+    if rule is None or rubric.strip():
+        raise ValueError("deterministic evaluator requires only a controlled rule")
+    if rule not in regex_rules:
+        if regex_pattern.strip():
+            raise ValueError("only a regular expression rule accepts regexPattern")
+        return
+    if not regex_pattern.strip():
+        raise ValueError("regular expression rule requires a regular expression")
+    try:
+        safe_regex.compile(regex_pattern)
+    except safe_regex.error as error:
+        raise ValueError("regexPattern must be a valid regular expression") from error
 
 
 class EvaluatorRecommendationItem(ScenarioModel):

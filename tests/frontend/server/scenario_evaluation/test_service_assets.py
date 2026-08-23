@@ -5,7 +5,10 @@ from datetime import datetime, timezone
 import pytest
 from pydantic import ValidationError
 
-from frontend.server.scenario_evaluation.evaluators import ControlledEvidenceEvaluator
+from frontend.server.scenario_evaluation.evaluators import (
+    ControlledEvidenceEvaluator,
+    RubricDecision,
+)
 from frontend.server.scenario_evaluation.errors import (
     ScenarioForbidden,
     ScenarioInvalidTransition,
@@ -43,6 +46,15 @@ class _Ids:
     def __call__(self, prefix: str) -> str:
         self._value += 1
         return f"{prefix}-{self._value}"
+
+
+class _PassRubricRunner:
+    async def evaluate(self, **_kwargs):  # type: ignore[no-untyped-def]
+        return RubricDecision(
+            passed=True,
+            hard_failure=False,
+            reason="满足业务标准且未命中硬失败条件",
+        )
 
 
 def _service() -> ScenarioEvaluationService:
@@ -463,10 +475,10 @@ async def test_admin_publishes_dataset_evaluator_and_complete_policy() -> None:
         expected_revision=0,
         name="事实依据检查",
         scene_version_id=scene.scene_version_id,
-        kind=EvaluatorKind.DETERMINISTIC,
-        rule="output_contains_tool_evidence",
+        kind=EvaluatorKind.LLM_RUBRIC,
+        rule="",
         rubric="",
-        hard_failure=True,
+        hard_failure=False,
     )
     await service.trial_evaluator_draft(
         developer,
@@ -484,7 +496,7 @@ async def test_admin_publishes_dataset_evaluator_and_complete_policy() -> None:
                 trace_json='[{"type":"tool_call"}]',
             ),
         ),
-        evaluator=ControlledEvidenceEvaluator(),
+        evaluator=ControlledEvidenceEvaluator(_PassRubricRunner()),
     )
     evaluator = await service.publish_evaluator_version(
         admin,
