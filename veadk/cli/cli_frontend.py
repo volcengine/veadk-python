@@ -7294,6 +7294,47 @@ def _run_frontend_server(
         )
         return client.get_runtime(_rt.GetRuntimeRequest(runtime_id=runtime_id))
 
+    def _list_runtime_for_connection(
+        runtime_id: str,
+        region: str,
+    ) -> Any | None:
+        """Resolve an exact visible Runtime for connection-only access.
+
+        A VeFaaS service role can list an authorized Runtime while GetRuntime
+        hides the same resource behind NotFound. List entries still contain the
+        endpoint, authorizer, and ownership tags needed by data-plane routes.
+        Keep this fallback bounded and connection-only; mutation and full-detail
+        routes continue to require GetRuntime.
+        """
+        from agentkit.sdk.runtime import types as _rt
+        from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+        ak, sk, token = _resolve_ve_credentials()
+        client = AgentkitRuntimeClient(
+            access_key=ak,
+            secret_key=sk,
+            session_token=token or "",
+            region=region,
+        )
+        matches: list[Any] = []
+        next_token = ""
+        for _ in range(20):
+            kwargs: dict[str, Any] = {"page_size": 100}
+            if next_token:
+                kwargs["next_token"] = next_token
+            response = client.list_runtimes(_rt.ListRuntimesRequest(**kwargs))
+            matches.extend(
+                runtime
+                for runtime in (response.agent_kit_runtimes or [])
+                if str(getattr(runtime, "runtime_id", "") or "") == runtime_id
+            )
+            if len(matches) > 1:
+                raise RuntimeError("duplicate Runtime identity in ListRuntimes")
+            next_token = str(getattr(response, "next_token", "") or "")
+            if not next_token:
+                break
+        return matches[0] if matches else None
+
     def _authorized_runtime(
         request: Request,
         runtime_id: str,
@@ -7317,6 +7358,43 @@ def _run_frontend_server(
             )
         if managed_only and tags.get("veadk:managed") != "true":
             raise HTTPException(status_code=404, detail="Runtime not found")
+        return runtime
+
+    def _authorized_runtime_for_connection(
+        request: Request,
+        runtime_id: str,
+        region: str,
+    ) -> Any:
+        try:
+            return _authorized_runtime(
+                request,
+                runtime_id,
+                region,
+                coded_access_error=True,
+            )
+        except HTTPException:
+            raise
+        except Exception as error:
+            if not is_agentkit_resource_not_found(error):
+                raise
+            runtime = _list_runtime_for_connection(runtime_id, region)
+            if runtime is None:
+                raise
+
+        principal = _current_principal(request)
+        role = _request_role(request)
+        tags = _runtime_tags(runtime)
+        if role != StudioRole.ADMIN and not runtime_belongs_to(tags, principal):
+            raise HTTPException(
+                status_code=404,
+                detail="runtime_access_denied",
+            )
+        logger.info(
+            "runtime connection metadata resolved through exact ListRuntimes "
+            "fallback runtime_id=%s region=%s",
+            runtime_id,
+            region,
+        )
         return runtime
 
     from frontend.server.cronjobs import (
@@ -8073,11 +8151,10 @@ def _run_frontend_server(
 
         region = _coerce_cloud_region(request.query_params.get("region"))
         try:
-            runtime = _authorized_runtime(
+            runtime = _authorized_runtime_for_connection(
                 request,
                 runtime_id,
                 region,
-                coded_access_error=True,
             )
             endpoint, apikey, auth_type, _ = _resolve_runtime_conn(
                 runtime_id,
@@ -8121,11 +8198,10 @@ def _run_frontend_server(
 
         region = _coerce_cloud_region(request.query_params.get("region"))
         try:
-            runtime = _authorized_runtime(
+            runtime = _authorized_runtime_for_connection(
                 request,
                 runtime_id,
                 region,
-                coded_access_error=True,
             )
             endpoint, apikey, auth_type, _ = _resolve_runtime_conn(
                 runtime_id,
@@ -8352,11 +8428,10 @@ def _run_frontend_server(
             proxy_region or request.query_params.get("region")
         )
         try:
-            runtime = _authorized_runtime(
+            runtime = _authorized_runtime_for_connection(
                 request,
                 runtime_id,
                 region,
-                coded_access_error=True,
             )
             endpoint, apikey, auth_type, endpoint_network_type = _resolve_runtime_conn(
                 runtime_id,
@@ -8365,9 +8440,27 @@ def _run_frontend_server(
             )
         except HTTPException:
             raise
-        except Exception as e:
-            logger.error(f"resolve runtime conn failed: {e}", exc_info=True)
-            raise HTTPException(status_code=502, detail=str(e))
+        except Exception as error:
+            if is_agentkit_resource_not_found(error):
+                logger.info(
+                    "runtime lookup not found runtime_id=%s region=%s",
+                    runtime_id,
+                    region,
+                )
+                raise HTTPException(
+                    status_code=404,
+                    detail="runtime_not_found",
+                ) from error
+            logger.error(
+                "resolve runtime conn failed runtime_id=%s region=%s",
+                runtime_id,
+                region,
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="runtime_lookup_failed",
+            ) from error
 
         # Drop Studio-only query params; keep any real API query params.
         studio_query_params = {"probe_retry", "_method", "_runtime_region"}

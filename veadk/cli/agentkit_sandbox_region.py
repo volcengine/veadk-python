@@ -24,7 +24,10 @@ from veadk.utils.cloud_provider import (
 
 _SANDBOX_REGIONS = ("cn-beijing", "cn-shanghai")
 _BYTEPLUS_SANDBOX_REGIONS = ("ap-southeast-1",)
-_RESOURCE_NOT_FOUND_CODE = "InvalidResource.NotFound"
+_RESOURCE_NOT_FOUND_CODES = (
+    "InvalidResource.NotFound",
+    "InvalidAgentKitRuntime.NotFound",
+)
 
 
 def sandbox_region_candidates(
@@ -66,4 +69,5 @@ def resolve_sandbox_client_region(region: str | None, *, provider: str) -> str:
 
 
 def is_agentkit_resource_not_found(error: object) -> bool:
-    return _RESOURCE_NOT_FOUND_CODE.lower() in str(error or "").lower()
+    message = str(error or "").lower()
+    return any(code.lower() in message for code in _RESOURCE_NOT_FOUND_CODES)
