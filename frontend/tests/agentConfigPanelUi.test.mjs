@@ -218,12 +218,72 @@ test("knowledge and memory capabilities use independent native switches", () => 
   );
 });
 
+test("storage capabilities use the requested order and defaults", () => {
+  const shortTermIndex = storageDialogSource.indexOf(
+    'shortTermMemory: { label: "短期记忆"',
+  );
+  const longTermIndex = storageDialogSource.indexOf(
+    'longTermMemory: { label: "长期记忆"',
+  );
+  const knowledgeIndex = storageDialogSource.indexOf(
+    'knowledgeBase: { label: "知识库"',
+  );
+
+  assert.ok(shortTermIndex >= 0);
+  assert.ok(longTermIndex > shortTermIndex);
+  assert.ok(knowledgeIndex > longTermIndex);
+  assert.match(
+    storageDialogSource,
+    /shortTermMemory:\s*\{ enabled: true, mode: "local", database: "" \}/,
+  );
+  assert.match(
+    storageDialogSource,
+    /longTermMemory:\s*\{ enabled: false, mode: "managed", database: "" \}/,
+  );
+  assert.match(
+    storageDialogSource,
+    /knowledgeBase:\s*\{ enabled: false, mode: "managed", database: "" \}/,
+  );
+});
+
+test("storage choices and icons follow each capability", () => {
+  assert.match(
+    storageDialogSource,
+    /knowledgeBase:\s*\[[\s\S]*?title:\s*"AgentKit 知识库"[\s\S]*?Icon:\s*CloudStorageIcon[\s\S]*?title:\s*"自定义"[\s\S]*?Icon:\s*EnterpriseStorageIcon[\s\S]*?\]/,
+  );
+  assert.match(
+    storageDialogSource,
+    /shortTermMemory:\s*\[[\s\S]*?title:\s*"本地存储"[\s\S]*?Icon:\s*LocalStorageIcon[\s\S]*?title:\s*"数据库"[\s\S]*?Icon:\s*CloudStorageIcon[\s\S]*?\]/,
+  );
+  assert.match(
+    storageDialogSource,
+    /longTermMemory:\s*\[[\s\S]*?title:\s*"AgentKit 记忆库"[\s\S]*?Icon:\s*CloudStorageIcon[\s\S]*?title:\s*"自定义"[\s\S]*?Icon:\s*EnterpriseStorageIcon[\s\S]*?\]/,
+  );
+  assert.match(
+    panelSource,
+    /<AgentStorageConfigCard[\s\S]*?capability=\{capabilityKey\}/,
+  );
+  assert.match(
+    panelSource,
+    /<AgentStorageConfigDialog[\s\S]*?capability=\{activeStorageCapability\}/,
+  );
+});
+
+test("storage option focus ring appears only for keyboard focus", () => {
+  assert.match(
+    storageDialogStyles,
+    /\.agent-storage-dialog__option:has\(input:focus-visible\)/,
+  );
+  assert.doesNotMatch(
+    storageDialogStyles,
+    /\.agent-storage-dialog__option:focus-within/,
+  );
+});
+
 test("storage dialog and configured card preserve the Figma geometry", () => {
   assert.match(storageDialogSource, /createPortal/);
   assert.match(storageDialogSource, /role="dialog"/);
   assert.match(storageDialogSource, /role="radiogroup"/);
-  assert.match(storageDialogSource, /平台托管存储/);
-  assert.match(storageDialogSource, /企业数据库/);
   assert.match(storageDialogSource, /本地存储/);
   assert.match(storageDialogSource, /<Select[\s\S]*?size="md"/);
   assert.match(
@@ -236,7 +296,19 @@ test("storage dialog and configured card preserve the Figma geometry", () => {
   );
   assert.match(
     storageDialogStyles,
+    /\.agent-storage-dialog__content\s*\{[\s\S]*?min-height:\s*240px/,
+  );
+  assert.match(
+    storageDialogStyles,
     /\.agent-storage-card\s*\{[\s\S]*?height:\s*70px[\s\S]*?padding:\s*12px[\s\S]*?border-radius:\s*12px/,
+  );
+  assert.match(
+    storageDialogSource,
+    /11\.3443 11\.2349 11\.375 11\.1607 11\.375 11\.0833V7/,
+  );
+  assert.doesNotMatch(
+    storageDialogSource,
+    /C11\.3443 11\.2349 11\.375 11\.0833V7/,
   );
 });
 

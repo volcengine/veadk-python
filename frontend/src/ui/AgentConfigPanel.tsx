@@ -439,6 +439,7 @@ export function AgentConfigPanel({
 
                     {capability.enabled ? (
                       <AgentStorageConfigCard
+                        capability={capabilityKey}
                         config={capability}
                         label={labels.label}
                         onEdit={() => setActiveStorageCapability(capabilityKey)}
@@ -455,6 +456,7 @@ export function AgentConfigPanel({
       {activeStorageCapability ? (
         <AgentStorageConfigDialog
           key={activeStorageCapability}
+          capability={activeStorageCapability}
           title={
             AGENT_STORAGE_CAPABILITY_LABELS[activeStorageCapability].dialogTitle
           }

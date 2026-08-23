@@ -31,16 +31,16 @@ export const AGENT_STORAGE_CAPABILITY_LABELS: Record<
   AgentStorageCapabilityKey,
   { label: string; dialogTitle: string }
 > = {
-  knowledgeBase: { label: "知识库", dialogTitle: "知识库配置" },
   shortTermMemory: { label: "短期记忆", dialogTitle: "短期记忆存储" },
   longTermMemory: { label: "长期记忆", dialogTitle: "长期记忆存储" },
+  knowledgeBase: { label: "知识库", dialogTitle: "知识库配置" },
 };
 
 export function createDefaultAgentStorageCapabilities(): AgentStorageCapabilities {
   return {
-    knowledgeBase: { enabled: false, mode: "enterprise", database: "" },
-    shortTermMemory: { enabled: false, mode: "enterprise", database: "" },
-    longTermMemory: { enabled: false, mode: "enterprise", database: "" },
+    shortTermMemory: { enabled: true, mode: "local", database: "" },
+    longTermMemory: { enabled: false, mode: "managed", database: "" },
+    knowledgeBase: { enabled: false, mode: "managed", database: "" },
   };
 }
 
@@ -49,31 +49,76 @@ const DATABASE_OPTIONS: Option[] = [
   { value: "shanghai", label: "上海" },
 ];
 
-const STORAGE_OPTIONS: Array<{
+type StorageOption = {
   mode: AgentStorageMode;
   title: string;
   description: string;
   Icon: (props: SVGProps<SVGSVGElement>) => ReactElement;
-}> = [
-  {
-    mode: "managed",
-    title: "平台托管存储",
-    description: "自动保存，会话结束 24 小时后清除",
-    Icon: CloudStorageIcon,
-  },
-  {
-    mode: "enterprise",
-    title: "企业数据库",
-    description: "自动保存，会话结束 24 小时后清楚",
-    Icon: EnterpriseStorageIcon,
-  },
-  {
-    mode: "local",
-    title: "本地存储",
-    description: "自动保存，会话结束 24 小时后清楚",
-    Icon: LocalStorageIcon,
-  },
-];
+};
+
+const STORAGE_OPTIONS_BY_CAPABILITY: Record<
+  AgentStorageCapabilityKey,
+  StorageOption[]
+> = {
+  knowledgeBase: [
+    {
+      mode: "managed",
+      title: "AgentKit 知识库",
+      description: "自动保存，会话结束 24 小时后清除",
+      Icon: CloudStorageIcon,
+    },
+    {
+      mode: "enterprise",
+      title: "自定义",
+      description: "自动保存，会话结束 24 小时后清楚",
+      Icon: EnterpriseStorageIcon,
+    },
+  ],
+  shortTermMemory: [
+    {
+      mode: "local",
+      title: "本地存储",
+      description: "自动保存，会话结束 24 小时后清除",
+      Icon: LocalStorageIcon,
+    },
+    {
+      mode: "enterprise",
+      title: "数据库",
+      description: "自动保存，会话结束 24 小时后清楚",
+      Icon: CloudStorageIcon,
+    },
+  ],
+  longTermMemory: [
+    {
+      mode: "managed",
+      title: "AgentKit 记忆库",
+      description: "自动保存，会话结束 24 小时后清除",
+      Icon: CloudStorageIcon,
+    },
+    {
+      mode: "enterprise",
+      title: "自定义",
+      description: "自动保存，会话结束 24 小时后清楚",
+      Icon: EnterpriseStorageIcon,
+    },
+  ],
+};
+
+function getStorageOptions(
+  capability: AgentStorageCapabilityKey,
+): StorageOption[] {
+  return STORAGE_OPTIONS_BY_CAPABILITY[capability];
+}
+
+function normalizeStorageConfig(
+  capability: AgentStorageCapabilityKey,
+  value: AgentStorageConfig,
+): AgentStorageConfig {
+  const options = getStorageOptions(capability);
+  return options.some(({ mode }) => mode === value.mode)
+    ? value
+    : { ...value, mode: options[0].mode };
+}
 
 function CloudStorageIcon(props: SVGProps<SVGSVGElement>) {
   return (
@@ -140,7 +185,7 @@ function EditIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="0 0 14 14" fill="none" aria-hidden="true" {...props}>
       <path
-        d="M6.70833 1.75C6.82437 1.75 6.93565 1.79609 7.01769 1.87814C7.09974 1.96019 7.14583 2.07147 7.14583 2.1875C7.14583 2.30353 7.09974 2.41481 7.01769 2.49686C6.93565 2.57891 6.82437 2.625 6.70833 2.625H2.91667C2.87836 2.625 2.84044 2.63254 2.80505 2.6472C2.76966 2.66186 2.73751 2.68334 2.71043 2.71043C2.68334 2.73751 2.66186 2.76966 2.6472 2.80505C2.63254 2.84044 2.625 2.87836 2.625 2.91667V11.0833C2.625 11.1216 2.63254 11.1596 2.6472 11.1949C2.66186 11.2303 2.68334 11.2625 2.71043 11.2896C2.73751 11.3167 2.76966 11.3381 2.80505 11.3528C2.84044 11.3675 2.87836 11.375 2.91667 11.375H11.0833C11.1607 11.375 11.2349 11.3443 11.2896 11.2896C11.3443 11.2349 11.375 11.0833V7L11.377 6.958C11.3879 6.84617 11.4413 6.7428 11.5263 6.6693C11.6113 6.59581 11.7213 6.55782 11.8335 6.56322C11.9458 6.56862 12.0516 6.61699 12.1291 6.6983C12.2067 6.77962 12.2499 6.88765 12.25 7V11.0833C12.25 11.3928 12.1271 11.6895 11.9083 11.9083C11.6895 12.1271 11.3928 12.25 11.0833 12.25H2.91667C2.60725 12.25 2.3105 12.1271 2.09171 11.9083C1.87292 11.6895 1.75 11.3928 1.75 11.0833V2.91667C1.75 2.60725 1.87292 2.3105 2.09171 2.09171C2.3105 1.87292 2.60725 1.75 2.91667 1.75H6.70833Z"
+        d="M6.70833 1.75C6.82437 1.75 6.93565 1.79609 7.01769 1.87814C7.09974 1.96019 7.14583 2.07147 7.14583 2.1875C7.14583 2.30353 7.09974 2.41481 7.01769 2.49686C6.93565 2.57891 6.82437 2.625 6.70833 2.625H2.91667C2.87836 2.625 2.84044 2.63254 2.80505 2.6472C2.76966 2.66186 2.73751 2.68334 2.71043 2.71043C2.68334 2.73751 2.66186 2.76966 2.6472 2.80505C2.63254 2.84044 2.625 2.87836 2.625 2.91667V11.0833C2.625 11.1216 2.63254 11.1596 2.6472 11.1949C2.66186 11.2303 2.68334 11.2625 2.71043 11.2896C2.73751 11.3167 2.76966 11.3381 2.80505 11.3528C2.84044 11.3675 2.87836 11.375 2.91667 11.375H11.0833C11.1607 11.375 11.2349 11.3443 11.2896 11.2896C11.3443 11.2349 11.375 11.1607 11.375 11.0833V7L11.377 6.958C11.3879 6.84617 11.4413 6.7428 11.5263 6.6693C11.6113 6.59581 11.7213 6.55782 11.8335 6.56322C11.9458 6.56862 12.0516 6.61699 12.1291 6.6983C12.2067 6.77962 12.2499 6.88765 12.25 7V11.0833C12.25 11.3928 12.1271 11.6895 11.9083 11.9083C11.6895 12.1271 11.3928 12.25 11.0833 12.25H2.91667C2.60725 12.25 2.3105 12.1271 2.09171 11.9083C1.87292 11.6895 1.75 11.3928 1.75 11.0833V2.91667C1.75 2.60725 1.87292 2.3105 2.09171 2.09171C2.3105 1.87292 2.60725 1.75 2.91667 1.75H6.70833Z"
         fill="currentColor"
       />
       <path
@@ -152,17 +197,19 @@ function EditIcon(props: SVGProps<SVGSVGElement>) {
 }
 
 export function AgentStorageConfigCard({
+  capability,
   config,
   label,
   onEdit,
 }: {
+  capability: AgentStorageCapabilityKey;
   config: AgentStorageConfig;
   label: string;
   onEdit: () => void;
 }) {
+  const options = getStorageOptions(capability);
   const option =
-    STORAGE_OPTIONS.find(({ mode }) => mode === config.mode) ??
-    STORAGE_OPTIONS[0];
+    options.find(({ mode }) => mode === config.mode) ?? options[0];
   const { Icon } = option;
 
   return (
@@ -185,11 +232,13 @@ export function AgentStorageConfigCard({
 }
 
 export function AgentStorageConfigDialog({
+  capability,
   title,
   value,
   onCancel,
   onConfirm,
 }: {
+  capability: AgentStorageCapabilityKey;
   title: string;
   value: AgentStorageConfig;
   onCancel: () => void;
@@ -198,7 +247,10 @@ export function AgentStorageConfigDialog({
   const titleId = useId();
   const dialogRef = useRef<HTMLElement>(null);
   const onCancelRef = useRef(onCancel);
-  const [draft, setDraft] = useState<AgentStorageConfig>(value);
+  const storageOptions = getStorageOptions(capability);
+  const [draft, setDraft] = useState<AgentStorageConfig>(() =>
+    normalizeStorageConfig(capability, value),
+  );
 
   useEffect(() => {
     onCancelRef.current = onCancel;
@@ -285,7 +337,7 @@ export function AgentStorageConfigDialog({
               role="radiogroup"
               aria-label="存储模式"
             >
-              {STORAGE_OPTIONS.map(
+              {storageOptions.map(
                 ({ mode, title: optionTitle, description, Icon }) => {
                   const selected = draft.mode === mode;
                   return (

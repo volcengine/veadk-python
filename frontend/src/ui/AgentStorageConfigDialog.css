@@ -82,7 +82,7 @@
 
 .agent-storage-dialog__content {
   width: 100%;
-  min-height: 322px;
+  min-height: 240px;
   display: flex;
   flex-direction: column;
   gap: 26px;
@@ -124,7 +124,7 @@
   white-space: nowrap;
 }
 
-.agent-storage-dialog__option:focus-within {
+.agent-storage-dialog__option:has(input:focus-visible) {
   outline: 2px solid hsl(var(--ring));
   outline-offset: 1px;
 }
