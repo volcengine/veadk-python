@@ -1960,6 +1960,7 @@ def test_studio_deploy_exposes_role_options() -> None:
     assert result.exit_code == 0
     assert "--admin" in result.output
     assert "--developer" in result.output
+    assert "--allow-dangerous-login" in result.output
     assert "Omit both role options to grant every user admin access" in " ".join(
         result.output.split()
     )

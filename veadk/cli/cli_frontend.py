@@ -10520,6 +10520,14 @@ def _resolve_studio_cloud_credentials(
     help="Client secret, if it cannot be read back from the client UID.",
 )
 @click.option(
+    "--allow-dangerous-login",
+    is_flag=True,
+    default=False,
+    help="Enable local password, passwordless, sign-up, recovery, and "
+    "unconfirmed-user login flows on a Studio-managed Identity user pool. "
+    "Ignored when --user-pool-id is provided.",
+)
+@click.option(
     "--vefaas-app-name",
     required=True,
     help="VeFaaS application/function name (4-64 chars, letters/digits/-, no underscore).",
@@ -10698,6 +10706,7 @@ def frontend_deploy(
     user_pool_id: str | None,
     allowed_client_id: str | None,
     client_secret: str,
+    allow_dangerous_login: bool,
     vefaas_app_name: str,
     provider: str,
     region: str | None,
@@ -10787,6 +10796,7 @@ def frontend_deploy(
         if session_token:
             os.environ["BYTEPLUS_SESSION_TOKEN"] = session_token
 
+    manage_user_pool_settings = not bool((user_pool_id or "").strip())
     auto_identity_resources = not (user_pool_id and allowed_client_id)
     auto_storage = not str(
         veadk_environments.get("VEADK_STUDIO_TOS_BUCKET") or ""
@@ -11444,10 +11454,20 @@ def frontend_deploy(
             f"worker_timer={scheduler_worker_timer_id}"
         )
 
-        # 6) Disable local account flows so Studio can only be entered through
-        #    the configured identity provider.
-        identity_client.configure_user_pool_for_idp_only(user_pool_id)
-        click.echo("Configured the user pool for IdP-only sign-in.")
+        # 6) Only configure login flows on a Studio-managed user pool. Explicit
+        #    --user-pool-id values are customer-managed and must be preserved.
+        if manage_user_pool_settings:
+            if allow_dangerous_login:
+                identity_client.configure_user_pool_for_local_login(user_pool_id)
+                click.echo(
+                    "WARNING: Enabled dangerous local account flows on the "
+                    "Studio-managed user pool."
+                )
+            else:
+                identity_client.configure_user_pool_for_idp_only(user_pool_id)
+                click.echo("Configured the user pool for IdP-only sign-in.")
+        else:
+            click.echo("Preserved the existing Identity user pool login settings.")
 
         click.echo("")
         click.echo(f"✅ Frontend deployed: {url}")
@@ -11471,8 +11491,13 @@ def frontend_deploy(
             click.echo(f"   user pool id: {user_pool_id}")
             click.echo(f"   client id: {allowed_client_id}")
             click.echo(f"   Identity console: {identity_console}")
-            click.echo("   Password sign-in is disabled by default for security.")
-            click.echo("   Configure an SSO identity provider before inviting users.")
+            if manage_user_pool_settings and allow_dangerous_login:
+                click.echo("   Local account login flows are enabled.")
+            elif manage_user_pool_settings:
+                click.echo("   Password sign-in is disabled by default for security.")
+                click.echo(
+                    "   Configure an SSO identity provider before inviting users."
+                )
         click.echo("   (open the URL — you'll be redirected through SSO login)")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
