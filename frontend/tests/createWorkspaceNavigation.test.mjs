@@ -18,6 +18,14 @@ const flowCanvasSource = readFileSync(
   new URL("../src/create/CreationFlowCanvas.tsx", import.meta.url),
   "utf8",
 );
+const agentDraftWorkflowSource = readFileSync(
+  new URL("../src/create/agentDraftWorkflow.ts", import.meta.url),
+  "utf8",
+);
+const normalizeDraftSource = readFileSync(
+  new URL("../src/create/normalizeDraft.ts", import.meta.url),
+  "utf8",
+);
 const clientSource = readFileSync(
   new URL("../src/adk/client.ts", import.meta.url),
   "utf8",
@@ -108,7 +116,7 @@ test("the create workspace opens and closes the Figma deployment workspace", () 
   );
   assert.match(
     workspaceSource,
-    /workspaceMode === "deploy"[\s\S]*?<DeploymentWorkspace onBack=\{\(\) => setWorkspaceMode\("create"\)\}/,
+    /workspaceMode === "deploy"[\s\S]*?<DeploymentWorkspace[\s\S]*?agentDraft=\{agentDraft\}[\s\S]*?onBack=\{\(\) => setWorkspaceMode\("create"\)\}/,
   );
   assert.match(workspaceSource, /onDeploy=\{\(\) => setWorkspaceMode\("deploy"\)\}/);
   assert.match(deploymentWorkspaceSource, /发布与集成/);
@@ -140,6 +148,8 @@ test("the create workspace sends messages to the stateful creation assistant", (
   assert.match(workspaceSource, /!event\.shiftKey/);
   assert.match(workspaceSource, /compositionRef\.current/);
   assert.match(clientSource, /"\/web\/generated-agent-conversations"/);
+  assert.match(clientSource, /JSON\.stringify\(\{ sessionId, message, currentDraft \}\)/);
+  assert.match(workspaceSource, /agentDraftForConversation\(agentDraft\)/);
 });
 
 test("agent names stay synchronized between canvas nodes and configuration", () => {
@@ -157,6 +167,7 @@ test("agent names stay synchronized between canvas nodes and configuration", () 
     workspaceSource,
     /setSelectedAgent\(\(currentAgent\)[\s\S]*?title: value/,
   );
+  assert.match(workspaceSource, /updateAgentDraftAtNodeId\(/);
 });
 
 test("the assistant status shows elapsed time without a chevron icon", () => {
@@ -169,13 +180,62 @@ test("the assistant status shows elapsed time without a chevron icon", () => {
 test("a generated draft replaces the canvas graph and hydrates agent fields", () => {
   assert.match(workspaceSource, /normalizeDraft\(\{ \.\.\.result\.draft, cloudProvider \}\)/);
   assert.match(workspaceSource, /sanitizeGeneratedDraftCapabilities/);
+  assert.match(
+    normalizeDraftSource,
+    /const cloudProvider = inheritedCloudProvider;[\s\S]*?cloudProvider,[\s\S]*?sanitizeGeneratedDraftCapabilities\(child, cloudProvider\)/,
+  );
   assert.match(workspaceSource, /setAgentDraft\(nextDraft\)/);
   assert.match(flowCanvasSource, /function graphFromDraft\(draft: AgentDraft\)/);
   assert.match(flowCanvasSource, /systemPrompt: agent\.instruction/);
-  assert.match(flowCanvasSource, /agentDraft \? graphFromDraft\(agentDraft\) : initialGraph\(\)/);
+  assert.match(flowCanvasSource, /function emptyGraph\(\): GraphState/);
+  assert.match(
+    flowCanvasSource,
+    /agentDraft \? graphFromDraft\(agentDraft\) : showEmptyGraph \? emptyGraph\(\) : initialGraph\(\)/,
+  );
 });
 
-test("agent cards show their direct sub-agent count with the Apps SDK Members icon", () => {
+test("sequential wrappers stay internal while their agents form one visible chain", () => {
+  assert.match(
+    agentDraftWorkflowSource,
+    /draft\.agentType === "sequential"[\s\S]*?draft\.subAgents\.map/,
+  );
+  assert.match(flowCanvasSource, /const visibleAgents = visibleAgentDrafts\(draft\)/);
+  assert.match(flowCanvasSource, /let previousId = "request"/);
+  assert.match(flowCanvasSource, /edges\.push\(makeEdge\(previousId, id, "straight"\)\)/);
+  assert.doesNotMatch(flowCanvasSource, /visit\(draft, \[\], "request", 1\)/);
+});
+
+test("configuration edits update the authoritative nested Agent draft", () => {
+  assert.match(agentDraftWorkflowSource, /function updateAgentDraftAtNodeId/);
+  assert.match(agentDraftWorkflowSource, /\^agent-root-\(\\d\+\)\$/);
+  assert.match(workspaceSource, /updateDraftFromConfigField\(agent, field, value\)/);
+  assert.match(workspaceSource, /updateDraftModelConfig\(agent, value\)/);
+  assert.match(workspaceSource, /selectedTools=\{selectedAgentConfig\.selectedTools\}/);
+  assert.match(workspaceSource, /selectedSkills: Array\.from/);
+});
+
+test("conversation context strips credentials before leaving the browser", () => {
+  assert.match(agentDraftWorkflowSource, /authToken: _authToken/);
+  assert.match(agentDraftWorkflowSource, /envValues: _envValues/);
+  assert.match(agentDraftWorkflowSource, /localFiles: \[\]/);
+});
+
+test("the blank create canvas uses the Figma agent placeholder", () => {
+  assert.match(flowCanvasSource, /type AgentPlaceholderFlowNode/);
+  assert.match(flowCanvasSource, /id: "agent-placeholder"/);
+  assert.match(flowCanvasSource, /makeEdge\("request", "agent-placeholder", "straight"\)/);
+  assert.match(flowCanvasSource, /makeEdge\("agent-placeholder", "response", "straight"\)/);
+  assert.match(
+    flowCanvasStyles,
+    /\.creation-flow__agent-placeholder\s*\{[\s\S]*?width: 214px;[\s\S]*?height: 137px;[\s\S]*?border: 1px dashed #c9cdd4;[\s\S]*?border-radius: 12px;/,
+  );
+  assert.match(
+    flowCanvasStyles,
+    /\.creation-flow__agent-placeholder-line\s*\{[\s\S]*?top: 23px;[\s\S]*?left: 41px;[\s\S]*?width: 91px;[\s\S]*?height: 6px;/,
+  );
+});
+
+test("only top-level agent cards expose the direct sub-agent count", () => {
   assert.match(
     flowCanvasSource,
     /import \{ Members \} from "@openai\/apps-sdk-ui\/components\/Icon"/,
@@ -184,6 +244,58 @@ test("agent cards show their direct sub-agent count with the Apps SDK Members ic
   assert.match(flowCanvasSource, /<Members aria-hidden="true" \/>/);
   assert.match(flowCanvasSource, /data\.subAgents/);
   assert.match(flowCanvasSource, /subAgents: agent\.subAgents\.length/);
+  assert.match(flowCanvasSource, /canExpandSubAgents \? \([\s\S]*?<Members aria-hidden="true" \/>[\s\S]*?\) : null/);
+});
+
+test("direct sub-agents are always rendered as full cards with an add placeholder", () => {
+  assert.match(flowCanvasSource, /function expandSubAgentGroups/);
+  assert.match(flowCanvasSource, /childAgents: agent\.subAgents\.map/);
+  assert.match(flowCanvasSource, /type: "subAgentPlaceholder"/);
+  assert.match(flowCanvasSource, /label: "添加子智能体"/);
+  assert.match(flowCanvasSource, /onSubAgentAdd\?\.\(parentAgentId\)/);
+  assert.match(workspaceSource, /onSubAgentAdd=\{handleSubAgentAdd\}/);
+  assert.match(
+    flowCanvasSource,
+    /const expandedSubAgentIds = useMemo\([\s\S]*?node\.data\.canExpandSubAgents === true[\s\S]*?map\(\(node\) => node\.id\)/,
+  );
+  assert.doesNotMatch(flowCanvasSource, /hoveredSubAgentIds/);
+  assert.doesNotMatch(flowCanvasSource, /SUB_AGENT_CLOSE_DELAY/);
+  assert.doesNotMatch(flowCanvasSource, /aria-haspopup="true"/);
+});
+
+test("expanded sub-agent groups use collision-aware centered orthogonal layout", () => {
+  assert.match(flowCanvasSource, /SUB_AGENT_GROUP_GAP = 24/);
+  assert.match(flowCanvasSource, /groupAnchorOffset/);
+  assert.match(flowCanvasSource, /previousBottom \+ SUB_AGENT_GROUP_GAP/);
+  assert.match(flowCanvasSource, /subAgentEdgeGeometry/);
+  assert.match(flowCanvasSource, /expandableAgentOrder\.get\(parent\.id\)/);
+  assert.match(flowCanvasSource, /sourceHandle: `sub-source-\$\{side\}`/);
+  assert.match(flowCanvasSource, /targetHandle: `sub-target-\$\{oppositeSide\}`/);
+  assert.match(
+    flowCanvasStyles,
+    /\.creation-flow__sub-edge-visible[\s\S]*?stroke-dasharray: 4 4/,
+  );
+  assert.match(
+    flowCanvasStyles,
+    /\.creation-flow__sub-agent-placeholder\s*\{[\s\S]*?width: 216px;[\s\S]*?height: 48px;[\s\S]*?border: 1px dashed #c9cdd4;/,
+  );
+});
+
+test("the sequential workflow binds solid edges to dedicated center handles", () => {
+  assert.match(flowCanvasSource, /const MAIN_TARGET_HANDLE_ID = "main-target"/);
+  assert.match(flowCanvasSource, /const MAIN_SOURCE_HANDLE_ID = "main-source"/);
+  assert.match(
+    flowCanvasSource,
+    /sourceHandle: MAIN_SOURCE_HANDLE_ID,[\s\S]*?targetHandle: MAIN_TARGET_HANDLE_ID/,
+  );
+  assert.match(
+    flowCanvasSource,
+    /id=\{MAIN_TARGET_HANDLE_ID\}[\s\S]*?position=\{Position\.Top\}/,
+  );
+  assert.match(
+    flowCanvasSource,
+    /id=\{MAIN_SOURCE_HANDLE_ID\}[\s\S]*?position=\{Position\.Bottom\}/,
+  );
 });
 
 test("the create workspace messages retain the Figma message geometry", () => {

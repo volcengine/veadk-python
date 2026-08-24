@@ -13,12 +13,16 @@
 .creation-flow,
 .creation-flow__terminal,
 .creation-flow__terminal-icon,
+.creation-flow__agent-placeholder,
+.creation-flow__agent-placeholder-icon,
 .creation-flow__agent,
 .creation-flow__agent-header,
 .creation-flow__agent-icon,
-.creation-flow__agent-meta,
-.creation-flow__agent-meta > span,
-.creation-flow__edge-tool,
+  .creation-flow__agent-meta,
+  .creation-flow__agent-meta > span,
+  .creation-flow__sub-agent-trigger,
+  .creation-flow__sub-agent-placeholder,
+  .creation-flow__edge-tool,
 .creation-flow__edge-add,
 .creation-flow__canvas-actions,
 .creation-flow__canvas-action {
@@ -84,6 +88,16 @@
   height: 141px;
 }
 
+.creation-flow .react-flow__node-placeholder {
+  width: 214px;
+  height: 137px;
+}
+
+.creation-flow .react-flow__node-subAgentPlaceholder {
+  width: 216px;
+  height: 48px;
+}
+
 .creation-flow--debug .react-flow__node-agent {
   width: 214px;
   height: 137px;
@@ -141,6 +155,47 @@
   font-weight: 500;
   line-height: 22px;
   white-space: nowrap;
+}
+
+.creation-flow__agent-placeholder {
+  position: relative;
+  width: 214px;
+  height: 137px;
+  border: 1px dashed #c9cdd4;
+  border-radius: 12px;
+  background: transparent;
+}
+
+.creation-flow__agent-placeholder-icon {
+  position: absolute;
+  top: 18px;
+  left: 16px;
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  color: #101013;
+}
+
+.creation-flow__agent-placeholder-icon svg {
+  width: 15px;
+  height: 15px;
+  overflow: visible;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.creation-flow__agent-placeholder-line {
+  position: absolute;
+  top: 23px;
+  left: 41px;
+  width: 91px;
+  height: 6px;
+  border-radius: 10px;
+  background: #d8d8d8;
 }
 
 .creation-flow__agent {
@@ -290,7 +345,8 @@
   padding: 0 4px;
 }
 
-.creation-flow__agent-meta > span {
+.creation-flow__agent-meta > span,
+.creation-flow__sub-agent-trigger {
   width: 36px;
   height: 20px;
   display: inline-flex;
@@ -305,6 +361,13 @@
   line-height: 18px;
 }
 
+.creation-flow__sub-agent-trigger {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font-family: "PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
 .creation-flow__agent-meta svg {
   width: 14px;
   height: 14px;
@@ -315,6 +378,41 @@
 .creation-flow__agent-meta-count {
   width: 8px;
   flex: 0 0 8px;
+}
+
+.creation-flow__sub-agent-placeholder {
+  position: relative;
+  width: 216px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 1px dashed #c9cdd4;
+  border-radius: 12px;
+  background: transparent;
+  color: #6f7680;
+  font-family: "PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 20px;
+  cursor: pointer;
+}
+
+.creation-flow__sub-agent-placeholder svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+}
+
+.creation-flow__sub-agent-placeholder:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
 }
 
 .creation-flow--debug .creation-flow__agent {
@@ -385,6 +483,20 @@
   stroke-width: 1px;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.creation-flow__sub-edge-visible,
+.creation-flow__sub-edge-arrow {
+  fill: none;
+  stroke: #c9cdd4;
+  stroke-width: 1px;
+  stroke-dasharray: 4 4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.creation-flow__sub-edge-arrow {
+  stroke-dasharray: none;
 }
 
 .creation-flow__edge-hit {

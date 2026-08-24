@@ -4113,6 +4113,7 @@ def _run_frontend_server(
                 message=payload.message,
                 user_id=principal.owner_id if principal else "local",
                 session_id=payload.session_id,
+                current_draft=payload.current_draft,
             )
         except TimeoutError as error:
             raise HTTPException(

@@ -30,7 +30,12 @@ import {
   normalizeDraft,
   sanitizeGeneratedDraftCapabilities,
 } from "./normalizeDraft";
-import type { AgentDraft } from "./types";
+import {
+  agentDraftAtNodeId,
+  agentDraftForConversation,
+  updateAgentDraftAtNodeId,
+} from "./agentDraftWorkflow";
+import { emptyDraft, type AgentDraft } from "./types";
 import "./CreateWorkspace.css";
 
 interface CreateWorkspaceProps {
@@ -53,6 +58,7 @@ interface AgentConfigDraft {
   agentDescription: string;
   systemPrompt: string;
   modelConfig: AgentModelConfigValue;
+  selectedTools: string[];
   selectedMcps: string[];
   selectedSkills: string[];
   storageCapabilities: AgentStorageCapabilities;
@@ -69,6 +75,134 @@ function modelConfigFromSelection(
     customApiKey: "",
     volcanoApiKey: "",
     volcanoModelName: agent.modelSource === "custom" ? "" : agent.model,
+  };
+}
+
+function storageCapabilitiesFromDraft(
+  agent: AgentDraft | null,
+): AgentStorageCapabilities {
+  if (!agent) return createDefaultAgentStorageCapabilities();
+  return {
+    shortTermMemory: {
+      enabled: agent.memory.shortTerm,
+      mode: agent.shortTermBackend === "local" ? "local" : "enterprise",
+      database: "",
+    },
+    longTermMemory: {
+      enabled: agent.memory.longTerm,
+      mode:
+        agent.longTermBackend === "local"
+          ? "local"
+          : agent.longTermBackend === "viking"
+            ? "managed"
+            : "enterprise",
+      database: agent.longTermMemoryIndex ?? "",
+    },
+    knowledgeBase: {
+      enabled: agent.knowledgebase,
+      mode:
+        agent.knowledgebaseBackend === "viking" ? "managed" : "enterprise",
+      database: agent.knowledgebaseIndex ?? "",
+    },
+  };
+}
+
+function configFromAgentSelection(
+  selection: CreationFlowAgentSelection,
+  draft: AgentDraft | null,
+): AgentConfigDraft {
+  return {
+    agentName: selection.title,
+    agentDescription: selection.description,
+    systemPrompt: selection.systemPrompt,
+    modelConfig: modelConfigFromSelection(selection),
+    selectedTools: [...(draft?.builtinTools ?? [])],
+    selectedMcps: Array.from(
+      new Set((draft?.mcpTools ?? []).map((tool) => tool.name).filter(Boolean)),
+    ),
+    selectedSkills: Array.from(
+      new Set([
+        ...(draft?.skills ?? []),
+        ...(draft?.selectedSkills ?? []).map(
+          (skill) => skill.slug || skill.name || skill.folder,
+        ),
+      ]),
+    ).filter(Boolean),
+    storageCapabilities: storageCapabilitiesFromDraft(draft),
+  };
+}
+
+function updateDraftFromConfigField(
+  agent: AgentDraft,
+  field: Exclude<keyof AgentConfigDraft, "modelConfig">,
+  value: AgentConfigDraft[Exclude<keyof AgentConfigDraft, "modelConfig">],
+): AgentDraft {
+  if (field === "agentName" && typeof value === "string") {
+    return { ...agent, name: value };
+  }
+  if (field === "agentDescription" && typeof value === "string") {
+    return { ...agent, description: value };
+  }
+  if (field === "systemPrompt" && typeof value === "string") {
+    return { ...agent, instruction: value };
+  }
+  if (field === "selectedTools" && Array.isArray(value)) {
+    return { ...agent, builtinTools: Array.from(new Set(value)) };
+  }
+  if (field === "selectedSkills" && Array.isArray(value)) {
+    const selected = new Set(value);
+    const selectedSkills = (agent.selectedSkills ?? []).filter((skill) =>
+      selected.has(skill.slug || skill.name || skill.folder),
+    );
+    const structuredSkillNames = new Set(
+      selectedSkills.map((skill) => skill.slug || skill.name || skill.folder),
+    );
+    return {
+      ...agent,
+      skills: Array.from(selected).filter(
+        (skill) => !structuredSkillNames.has(skill),
+      ),
+      selectedSkills,
+    };
+  }
+  if (field === "selectedMcps" && Array.isArray(value)) {
+    const selected = new Set(value);
+    return {
+      ...agent,
+      mcpTools: (agent.mcpTools ?? []).filter((tool) =>
+        selected.has(tool.name),
+      ),
+    };
+  }
+  if (field === "storageCapabilities" && !Array.isArray(value)) {
+    const storage = value as AgentStorageCapabilities;
+    return {
+      ...agent,
+      memory: {
+        shortTerm: storage.shortTermMemory.enabled,
+        longTerm: storage.longTermMemory.enabled,
+      },
+      knowledgebase: storage.knowledgeBase.enabled,
+      longTermMemoryIndex: storage.longTermMemory.database,
+      knowledgebaseIndex: storage.knowledgeBase.database,
+    };
+  }
+  return agent;
+}
+
+function updateDraftModelConfig(
+  agent: AgentDraft,
+  value: AgentModelConfigValue,
+): AgentDraft {
+  const modelName = activeAgentModelName(value);
+  const isCustom = value.category === "custom";
+  return {
+    ...agent,
+    model: modelName,
+    modelName,
+    modelSource: isCustom ? "custom" : "ark",
+    modelProvider: isCustom ? value.customProvider : "",
+    modelApiBase: isCustom ? value.customBaseUrl : "",
   };
 }
 
@@ -116,6 +250,7 @@ export function CreateWorkspace({
         agentDescription: selectedAgent.description,
         systemPrompt: selectedAgent.systemPrompt,
         modelConfig: modelConfigFromSelection(selectedAgent),
+        selectedTools: [],
         selectedMcps: [],
         selectedSkills: [],
         storageCapabilities: createDefaultAgentStorageCapabilities(),
@@ -191,6 +326,7 @@ export function CreateWorkspace({
       const result = await chatWithGeneratedAgent(
         conversationSessionIdRef.current,
         trimmedContent,
+        agentDraft ? agentDraftForConversation(agentDraft) : undefined,
         controller.signal,
       );
       if (controller.signal.aborted) return;
@@ -289,17 +425,12 @@ export function CreateWorkspace({
 
     setAgentConfigs((currentConfigs) => {
       if (currentConfigs[agent.id]) return currentConfigs;
+      const selectedDraft = agentDraft
+        ? agentDraftAtNodeId(agentDraft, agent.id)
+        : null;
       return {
         ...currentConfigs,
-        [agent.id]: {
-          agentName: agent.title,
-          agentDescription: agent.description,
-          systemPrompt: agent.systemPrompt,
-          modelConfig: modelConfigFromSelection(agent),
-          selectedMcps: [],
-          selectedSkills: [],
-          storageCapabilities: createDefaultAgentStorageCapabilities(),
-        },
+        [agent.id]: configFromAgentSelection(agent, selectedDraft),
       };
     });
   }
@@ -314,6 +445,13 @@ export function CreateWorkspace({
         modelConfig: value,
       },
     }));
+    setAgentDraft((currentDraft) =>
+      currentDraft
+        ? updateAgentDraftAtNodeId(currentDraft, selectedAgentId, (agent) =>
+            updateDraftModelConfig(agent, value),
+          )
+        : currentDraft,
+    );
     setSelectedAgent((currentAgent) =>
       currentAgent?.id === selectedAgentId
         ? { ...currentAgent, model: activeAgentModelName(value) }
@@ -334,6 +472,13 @@ export function CreateWorkspace({
         [field]: value,
       },
     }));
+    setAgentDraft((currentDraft) =>
+      currentDraft
+        ? updateAgentDraftAtNodeId(currentDraft, selectedAgentId, (agent) =>
+            updateDraftFromConfigField(agent, field, value),
+          )
+        : currentDraft,
+    );
 
     if (field === "agentName" && typeof value === "string") {
       setSelectedAgent((currentAgent) =>
@@ -347,7 +492,33 @@ export function CreateWorkspace({
           ? { ...currentAgent, description: value }
           : currentAgent,
       );
+    } else if (field === "systemPrompt" && typeof value === "string") {
+      setSelectedAgent((currentAgent) =>
+        currentAgent?.id === selectedAgentId
+          ? { ...currentAgent, systemPrompt: value }
+          : currentAgent,
+      );
     }
+  }
+
+  function handleSubAgentAdd(parentAgentId: string) {
+    setAgentDraft((currentDraft) =>
+      currentDraft
+        ? updateAgentDraftAtNodeId(currentDraft, parentAgentId, (parentAgent) => {
+            const subAgentNumber = parentAgent.subAgents.length + 1;
+            return {
+              ...parentAgent,
+              subAgents: [
+                ...parentAgent.subAgents,
+                {
+                  ...emptyDraft(cloudProvider),
+                  name: `SubAgent${subAgentNumber}`,
+                },
+              ],
+            };
+          })
+        : currentDraft,
+    );
   }
 
   if (workspaceMode === "debug") {
@@ -364,7 +535,12 @@ export function CreateWorkspace({
   }
 
   if (workspaceMode === "deploy") {
-    return <DeploymentWorkspace onBack={() => setWorkspaceMode("create")} />;
+    return (
+      <DeploymentWorkspace
+        agentDraft={agentDraft}
+        onBack={() => setWorkspaceMode("create")}
+      />
+    );
   }
 
   return (
@@ -497,6 +673,7 @@ export function CreateWorkspace({
           agentDescription={selectedAgentConfig.agentDescription}
           systemPrompt={selectedAgentConfig.systemPrompt}
           modelConfig={selectedAgentConfig.modelConfig}
+          selectedTools={selectedAgentConfig.selectedTools}
           selectedMcps={selectedAgentConfig.selectedMcps}
           selectedSkills={selectedAgentConfig.selectedSkills}
           storageCapabilities={selectedAgentConfig.storageCapabilities}
@@ -511,6 +688,9 @@ export function CreateWorkspace({
             updateSelectedAgentConfig("systemPrompt", value)
           }
           onModelConfigChange={updateSelectedAgentModelConfig}
+          onSelectedToolsChange={(value) =>
+            updateSelectedAgentConfig("selectedTools", value)
+          }
           onSelectedMcpsChange={(value) =>
             updateSelectedAgentConfig("selectedMcps", value)
           }
@@ -530,6 +710,7 @@ export function CreateWorkspace({
         onAgentSelect={handleAgentSelect}
         agentOverrides={agentOverrides}
         agentDraft={agentDraft}
+        onSubAgentAdd={handleSubAgentAdd}
       />
     </section>
   );

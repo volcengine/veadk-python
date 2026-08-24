@@ -3574,6 +3574,7 @@ export async function generateAgentDraftFromRequirement(
 export async function chatWithGeneratedAgent(
   sessionId: string,
   message: string,
+  currentDraft?: AgentDraft,
   signal?: AbortSignal,
 ): Promise<GeneratedAgentConversationResult> {
   const res = await apiFetch(
@@ -3581,7 +3582,7 @@ export async function chatWithGeneratedAgent(
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionId, message }),
+      body: JSON.stringify({ sessionId, message, currentDraft }),
       signal,
     },
     {},

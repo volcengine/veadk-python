@@ -28,6 +28,7 @@ import maximizeIcon from "./assets/create-workspace/maximize.svg";
 import zoomInIcon from "./assets/create-workspace/zoom-in.svg";
 import zoomOutIcon from "./assets/create-workspace/zoom-out.svg";
 import { resolvedModelSource } from "./modelSource";
+import { visibleAgentDrafts } from "./agentDraftWorkflow";
 import type { AgentDraft } from "./types";
 import "@xyflow/react/dist/style.css";
 import "./CreationFlowCanvas.css";
@@ -40,6 +41,13 @@ const DEBUG_AGENT_WIDTH = 214;
 const DEBUG_AGENT_HEIGHT = 137;
 const RANK_GAP = 56;
 const NODE_GAP = 32;
+const SUB_AGENT_COLUMN_GAP = 96;
+const SUB_AGENT_ROW_GAP = 16;
+const SUB_AGENT_GROUP_GAP = 24;
+const SUB_AGENT_PLACEHOLDER_WIDTH = 216;
+const SUB_AGENT_PLACEHOLDER_HEIGHT = 48;
+const MAIN_TARGET_HANDLE_ID = "main-target";
+const MAIN_SOURCE_HANDLE_ID = "main-source";
 const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 1;
 const VIEWPORT_TOP_SAFE_AREA = 24;
@@ -60,6 +68,12 @@ const CENTERED_VIEWPORT_PADDING = {
   bottom: `${VIEWPORT_SIDE_SAFE_AREA}px`,
   left: `${VIEWPORT_SIDE_SAFE_AREA}px`,
 } as const;
+const SUB_AGENT_VIEWPORT_PADDING = {
+  top: `${VIEWPORT_SIDE_SAFE_AREA}px`,
+  right: `${VIEWPORT_SIDE_SAFE_AREA}px`,
+  bottom: "104px",
+  left: `${VIEWPORT_SIDE_SAFE_AREA}px`,
+} as const;
 const DEBUG_COMPARISON_VIEWPORT_PADDING = {
   top: "0px",
   right: "13px",
@@ -74,7 +88,11 @@ type TerminalData = {
   title: string;
 };
 
-type AgentData = {
+type AgentPlaceholderData = {
+  label: string;
+};
+
+type AgentCardData = {
   title: string;
   description: string;
   systemPrompt: string;
@@ -87,6 +105,22 @@ type AgentData = {
   tools: number;
   subAgents: number;
   comparisonBadge?: string;
+};
+
+type ChildAgentData = {
+  id: string;
+  data: AgentCardData;
+};
+
+type AgentData = AgentCardData & {
+  childAgents?: ChildAgentData[];
+  parentAgentId?: string;
+  canExpandSubAgents?: boolean;
+};
+
+type SubAgentPlaceholderData = {
+  label: string;
+  parentAgentId: string;
 };
 
 export interface CreationFlowAgentSelection {
@@ -115,18 +149,33 @@ interface CreationFlowCanvasProps {
   centerViewport?: boolean;
   mode?: "create" | "debug";
   debugComparison?: boolean;
+  onSubAgentAdd?: (parentAgentId: string) => void;
 }
 
 type RequestFlowNode = Node<TerminalData, "request">;
+type AgentPlaceholderFlowNode = Node<AgentPlaceholderData, "placeholder">;
+type SubAgentPlaceholderFlowNode = Node<SubAgentPlaceholderData, "subAgentPlaceholder">;
 type AgentFlowNode = Node<AgentData, "agent">;
 type ResponseFlowNode = Node<TerminalData, "response">;
-type CreationFlowNode = RequestFlowNode | AgentFlowNode | ResponseFlowNode;
+type CreationFlowNode =
+  | RequestFlowNode
+  | AgentPlaceholderFlowNode
+  | SubAgentPlaceholderFlowNode
+  | AgentFlowNode
+  | ResponseFlowNode;
 
 type CreationEdgeData = {
   route: "straight" | "split" | "merge";
 };
 
-type CreationFlowEdge = Edge<CreationEdgeData, "insertable">;
+type SubAgentEdgeData = {
+  parentAgentId: string;
+  side: "left" | "right";
+};
+
+type InsertableFlowEdge = Edge<CreationEdgeData, "insertable">;
+type SubAgentFlowEdge = Edge<SubAgentEdgeData, "subAgent">;
+type CreationFlowEdge = InsertableFlowEdge | SubAgentFlowEdge;
 
 type GraphState = {
   nodes: CreationFlowNode[];
@@ -134,6 +183,12 @@ type GraphState = {
 };
 
 const InsertEdgeContext = createContext<(edgeId: string) => void>(() => {});
+type SubAgentInteractionContextValue = {
+  add: (parentAgentId: string) => void;
+};
+const SubAgentInteractionContext = createContext<SubAgentInteractionContextValue>({
+  add: () => {},
+});
 
 function RequestIcon() {
   return (
@@ -196,7 +251,7 @@ function RequestNode({ data }: NodeProps<RequestFlowNode>) {
     <div className="creation-flow__terminal creation-flow__terminal--request" role="group" aria-label={data.title}>
       <span className="creation-flow__terminal-icon"><RequestIcon /></span>
       <span className="creation-flow__terminal-title">{data.title}</span>
-      <Handle type="source" position={Position.Bottom} className="creation-flow__port" />
+      <Handle id={MAIN_SOURCE_HANDLE_ID} type="source" position={Position.Bottom} className="creation-flow__port" />
     </div>
   );
 }
@@ -204,21 +259,35 @@ function RequestNode({ data }: NodeProps<RequestFlowNode>) {
 function ResponseNode({ data }: NodeProps<ResponseFlowNode>) {
   return (
     <div className="creation-flow__terminal creation-flow__terminal--response" role="group" aria-label={data.title}>
-      <Handle type="target" position={Position.Top} className="creation-flow__port creation-flow__port--hidden" />
+      <Handle id={MAIN_TARGET_HANDLE_ID} type="target" position={Position.Top} className="creation-flow__port creation-flow__port--hidden" />
       <span className="creation-flow__terminal-icon"><ResponseIcon /></span>
       <span className="creation-flow__terminal-title">{data.title}</span>
     </div>
   );
 }
 
+function AgentPlaceholderNode({ data }: NodeProps<AgentPlaceholderFlowNode>) {
+  return (
+    <div className="creation-flow__agent-placeholder" role="group" aria-label={data.label}>
+      <Handle id={MAIN_TARGET_HANDLE_ID} type="target" position={Position.Top} className="creation-flow__port creation-flow__port--hidden" />
+      <span className="creation-flow__agent-placeholder-icon"><RootAgentIcon /></span>
+      <span className="creation-flow__agent-placeholder-line" aria-hidden="true" />
+      <Handle id={MAIN_SOURCE_HANDLE_ID} type="source" position={Position.Bottom} className="creation-flow__port creation-flow__port--hidden" />
+    </div>
+  );
+}
+
 function AgentNode({ data, selected }: NodeProps<AgentFlowNode>) {
   const AgentIcon = data.tone === "root" ? RootAgentIcon : SubAgentIcon;
+  const canExpandSubAgents = data.canExpandSubAgents === true;
   return (
     <article
       className={`creation-flow__agent creation-flow__agent--${data.tone}${selected ? " is-selected" : ""}`}
       aria-label={`${data.title} 智能体`}
     >
-      <Handle type="target" position={Position.Top} className="creation-flow__port creation-flow__port--hidden" />
+      <Handle id={MAIN_TARGET_HANDLE_ID} type="target" position={Position.Top} className="creation-flow__port creation-flow__port--hidden" />
+      <Handle id="sub-target-left" type="target" position={Position.Left} className="creation-flow__port creation-flow__port--hidden" />
+      <Handle id="sub-target-right" type="target" position={Position.Right} className="creation-flow__port creation-flow__port--hidden" />
       <header className="creation-flow__agent-header">
         <span className="creation-flow__agent-icon"><AgentIcon /></span>
         <span className="creation-flow__agent-title">{data.title}</span>
@@ -230,9 +299,20 @@ function AgentNode({ data, selected }: NodeProps<AgentFlowNode>) {
       <div className="creation-flow__agent-meta" aria-label="智能体能力数量">
         <span><PuzzleIcon /><span className="creation-flow__agent-meta-count">{data.skills}</span></span>
         <span><ToolIcon /><span className="creation-flow__agent-meta-count">{data.tools}</span></span>
-        <span><Members aria-hidden="true" /><span className="creation-flow__agent-meta-count">{data.subAgents}</span></span>
+        {canExpandSubAgents ? (
+          <span
+            className="creation-flow__sub-agent-trigger nodrag nopan"
+            aria-label={`${data.subAgents} 个子智能体`}
+          >
+            <Members aria-hidden="true" />
+            <span className="creation-flow__agent-meta-count">{data.subAgents}</span>
+          </span>
+        ) : null}
       </div>
+      <Handle id="sub-source-left" type="source" position={Position.Left} className="creation-flow__port creation-flow__port--hidden" />
+      <Handle id="sub-source-right" type="source" position={Position.Right} className="creation-flow__port creation-flow__port--hidden" />
       <Handle
+        id={MAIN_SOURCE_HANDLE_ID}
         type="source"
         position={Position.Bottom}
         className={`creation-flow__port${data.tone === "root" ? " creation-flow__port--hidden" : ""}`}
@@ -241,8 +321,29 @@ function AgentNode({ data, selected }: NodeProps<AgentFlowNode>) {
   );
 }
 
+function SubAgentPlaceholderNode({ data }: NodeProps<SubAgentPlaceholderFlowNode>) {
+  const subAgentInteraction = useContext(SubAgentInteractionContext);
+  return (
+    <button
+      type="button"
+      className="creation-flow__sub-agent-placeholder nodrag nopan"
+      onClick={(event) => {
+        event.stopPropagation();
+        subAgentInteraction.add(data.parentAgentId);
+      }}
+    >
+      <Handle id="sub-target-left" type="target" position={Position.Left} className="creation-flow__port creation-flow__port--hidden" />
+      <Handle id="sub-target-right" type="target" position={Position.Right} className="creation-flow__port creation-flow__port--hidden" />
+      <PlusIcon />
+      <span>{data.label}</span>
+    </button>
+  );
+}
+
 const nodeTypes = {
   request: RequestNode,
+  placeholder: AgentPlaceholderNode,
+  subAgentPlaceholder: SubAgentPlaceholderNode,
   agent: AgentNode,
   response: ResponseNode,
 };
@@ -282,6 +383,31 @@ function edgeGeometry(
   };
 }
 
+function subAgentEdgeGeometry(
+  sourceX: number,
+  sourceY: number,
+  targetX: number,
+  targetY: number,
+) {
+  if (Math.abs(sourceY - targetY) < 0.5) {
+    return `M ${sourceX} ${sourceY} H ${targetX - 1}`;
+  }
+
+  const directionX = targetX > sourceX ? 1 : -1;
+  const directionY = targetY > sourceY ? 1 : -1;
+  const middleX = sourceX
+    + directionX * Math.max(32, Math.abs(targetX - sourceX) * 0.48);
+  const radius = Math.min(12, Math.abs(targetY - sourceY) / 2, Math.abs(targetX - sourceX) / 5);
+  return [
+    `M ${sourceX} ${sourceY}`,
+    `H ${middleX - directionX * radius}`,
+    `Q ${middleX} ${sourceY} ${middleX} ${sourceY + directionY * radius}`,
+    `V ${targetY - directionY * radius}`,
+    `Q ${middleX} ${targetY} ${middleX + directionX * radius} ${targetY}`,
+    `H ${targetX - directionX}`,
+  ].join(" ");
+}
+
 function InsertableEdge({
   id,
   sourceX,
@@ -289,7 +415,7 @@ function InsertableEdge({
   targetX,
   targetY,
   data,
-}: EdgeProps<CreationFlowEdge>) {
+}: EdgeProps<InsertableFlowEdge>) {
   const onInsert = useContext(InsertEdgeContext);
   const [hovered, setHovered] = useState(false);
   const geometry = edgeGeometry(
@@ -338,9 +464,66 @@ function InsertableEdge({
   );
 }
 
+function SubAgentEdge({
+  id,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+}: EdgeProps<SubAgentFlowEdge>) {
+  const path = subAgentEdgeGeometry(sourceX, sourceY, targetX, targetY);
+  const directionX = targetX > sourceX ? 1 : -1;
+  const arrowPath = `M ${targetX - directionX * 5} ${targetY - 3.5} L ${targetX - directionX} ${targetY} L ${targetX - directionX * 5} ${targetY + 3.5}`;
+
+  return (
+    <>
+      <BaseEdge id={id} path={path} className="creation-flow__sub-edge-visible" />
+      <path d={arrowPath} className="creation-flow__sub-edge-arrow" />
+    </>
+  );
+}
+
 const edgeTypes = {
   insertable: InsertableEdge,
+  subAgent: SubAgentEdge,
 };
+
+function emptyGraph(): GraphState {
+  const nodes: CreationFlowNode[] = [
+    {
+      id: "request",
+      type: "request",
+      position: { x: 0, y: 0 },
+      data: { title: "用户请求" },
+      draggable: false,
+      selectable: false,
+    },
+    {
+      id: "agent-placeholder",
+      type: "placeholder",
+      position: { x: 0, y: 0 },
+      data: { label: "待创建的 Agent" },
+      draggable: false,
+      selectable: false,
+    },
+    {
+      id: "response",
+      type: "response",
+      position: { x: 0, y: 0 },
+      data: { title: "最终回复" },
+      draggable: false,
+      selectable: false,
+    },
+  ];
+
+  return {
+    nodes,
+    edges: [
+      makeEdge("request", "agent-placeholder", "straight"),
+      makeEdge("agent-placeholder", "response", "straight"),
+    ],
+  };
+}
 
 function initialGraph(): GraphState {
   const nodes: CreationFlowNode[] = [
@@ -428,6 +611,29 @@ function countAgentTools(agent: AgentDraft) {
   ]).size;
 }
 
+function agentCardData(
+  agent: AgentDraft,
+  cloudProvider: AgentDraft["cloudProvider"],
+  tone: AgentCardData["tone"],
+): AgentCardData {
+  return {
+    title: agent.name || "Agent",
+    description: agent.description,
+    systemPrompt: agent.instruction,
+    model: agent.modelName || agent.model || "doubao-seed-2.0-lite",
+    modelSource: resolvedModelSource(
+      agent,
+      agent.cloudProvider ?? cloudProvider ?? "volcengine",
+    ),
+    modelProvider: agent.modelProvider ?? "",
+    modelApiBase: agent.modelApiBase ?? "",
+    tone,
+    skills: countAgentSkills(agent),
+    tools: countAgentTools(agent),
+    subAgents: agent.subAgents.length,
+  };
+}
+
 function graphFromDraft(draft: AgentDraft): GraphState {
   const nodes: CreationFlowNode[] = [
     {
@@ -440,52 +646,30 @@ function graphFromDraft(draft: AgentDraft): GraphState {
     },
   ];
   const edges: CreationFlowEdge[] = [];
-  const leafIds: string[] = [];
+  const visibleAgents = visibleAgentDrafts(draft);
+  let previousId = "request";
 
-  const visit = (
-    agent: AgentDraft,
-    path: number[],
-    parentId: string,
-    siblingCount: number,
-  ) => {
-    const id = path.length === 0 ? "agent-root" : `agent-${path.join("-")}`;
+  visibleAgents.forEach(({ id, agent }) => {
+    const data = agentCardData(agent, draft.cloudProvider, "root");
     nodes.push({
       id,
       type: "agent",
       position: { x: 0, y: 0 },
       data: {
-        title: agent.name || (path.length === 0 ? "Agent" : "SubAgent"),
-        description: agent.description,
-        systemPrompt: agent.instruction,
-        model: agent.modelName || agent.model || "doubao-seed-2.0-lite",
-        modelSource: resolvedModelSource(
-          agent,
-          agent.cloudProvider ?? draft.cloudProvider ?? "volcengine",
-        ),
-        modelProvider: agent.modelProvider ?? "",
-        modelApiBase: agent.modelApiBase ?? "",
-        tone: path.length === 0 ? "root" : "sub",
-        skills: countAgentSkills(agent),
-        tools: countAgentTools(agent),
-        subAgents: agent.subAgents.length,
+        ...data,
+        parentAgentId: id,
+        canExpandSubAgents: true,
+        childAgents: agent.subAgents.map((childAgent, childIndex) => ({
+          id: `${id}-${childIndex}`,
+          data: agentCardData(childAgent, draft.cloudProvider, "sub"),
+        })),
       },
       draggable: false,
       selectable: true,
     });
-    edges.push(
-      makeEdge(parentId, id, siblingCount > 1 ? "split" : "straight"),
-    );
-
-    if (agent.subAgents.length === 0) {
-      leafIds.push(id);
-      return;
-    }
-    agent.subAgents.forEach((child, index) => {
-      visit(child, [...path, index], id, agent.subAgents.length);
-    });
-  };
-
-  visit(draft, [], "request", 1);
+    edges.push(makeEdge(previousId, id, "straight"));
+    previousId = id;
+  });
   nodes.push({
     id: "response",
     type: "response",
@@ -494,11 +678,7 @@ function graphFromDraft(draft: AgentDraft): GraphState {
     draggable: false,
     selectable: false,
   });
-  leafIds.forEach((leafId) => {
-    edges.push(
-      makeEdge(leafId, "response", leafIds.length > 1 ? "merge" : "straight"),
-    );
-  });
+  edges.push(makeEdge(previousId, "response", "straight"));
   return { nodes, edges };
 }
 
@@ -506,11 +686,13 @@ function makeEdge(
   source: string,
   target: string,
   route: CreationEdgeData["route"],
-): CreationFlowEdge {
+): InsertableFlowEdge {
   return {
     id: `${source}-${target}`,
     source,
+    sourceHandle: MAIN_SOURCE_HANDLE_ID,
     target,
+    targetHandle: MAIN_TARGET_HANDLE_ID,
     type: "insertable",
     data: { route },
     selectable: false,
@@ -519,6 +701,14 @@ function makeEdge(
 }
 
 function nodeSize(node: CreationFlowNode, mode: "create" | "debug") {
+  if (node.type === "subAgentPlaceholder") {
+    return { width: SUB_AGENT_PLACEHOLDER_WIDTH, height: SUB_AGENT_PLACEHOLDER_HEIGHT };
+  }
+
+  if (node.type === "placeholder") {
+    return { width: DEBUG_AGENT_WIDTH, height: DEBUG_AGENT_HEIGHT };
+  }
+
   return node.type === "agent"
     ? mode === "debug"
       ? { width: DEBUG_AGENT_WIDTH, height: DEBUG_AGENT_HEIGHT }
@@ -578,6 +768,182 @@ function layoutGraph(state: GraphState, mode: "create" | "debug"): GraphState {
   };
 }
 
+type SubAgentGroupLayout = {
+  parent: AgentFlowNode;
+  rows: Array<AgentFlowNode | SubAgentPlaceholderFlowNode>;
+  side: "left" | "right";
+  desiredTop: number;
+  top: number;
+  height: number;
+};
+
+function rowHeight(node: AgentFlowNode | SubAgentPlaceholderFlowNode, mode: "create" | "debug") {
+  return nodeSize(node, mode).height;
+}
+
+function groupAnchorOffset(
+  rows: Array<AgentFlowNode | SubAgentPlaceholderFlowNode>,
+  mode: "create" | "debug",
+) {
+  if (rows.length === 0) return 0;
+
+  const tops: number[] = [];
+  let cursor = 0;
+  rows.forEach((row) => {
+    tops.push(cursor);
+    cursor += rowHeight(row, mode) + SUB_AGENT_ROW_GAP;
+  });
+
+  if (rows.length % 2 === 1) {
+    const middle = Math.floor(rows.length / 2);
+    return tops[middle] + rowHeight(rows[middle], mode) / 2;
+  }
+
+  const upperMiddle = rows.length / 2 - 1;
+  const lowerMiddle = upperMiddle + 1;
+  const upperBottom = tops[upperMiddle] + rowHeight(rows[upperMiddle], mode);
+  return (upperBottom + tops[lowerMiddle]) / 2;
+}
+
+function makeSubAgentEdge(
+  parentAgentId: string,
+  targetId: string,
+  side: "left" | "right",
+): SubAgentFlowEdge {
+  const oppositeSide = side === "right" ? "left" : "right";
+  return {
+    id: `sub:${parentAgentId}>${targetId}`,
+    source: parentAgentId,
+    sourceHandle: `sub-source-${side}`,
+    target: targetId,
+    targetHandle: `sub-target-${oppositeSide}`,
+    type: "subAgent",
+    data: { parentAgentId, side },
+    selectable: false,
+    focusable: false,
+  };
+}
+
+function expandSubAgentGroups(
+  baseLayout: GraphState,
+  expandedAgentIds: ReadonlySet<string>,
+  mode: "create" | "debug",
+): GraphState {
+  if (expandedAgentIds.size === 0) return baseLayout;
+
+  const expandableAgentOrder = new Map(
+    baseLayout.nodes
+      .filter((node): node is AgentFlowNode =>
+        node.type === "agent" && node.data.canExpandSubAgents === true,
+      )
+      .map((node, index) => [node.id, index]),
+  );
+  const groups = baseLayout.nodes
+    .filter((node): node is AgentFlowNode =>
+      node.type === "agent"
+      && expandedAgentIds.has(node.id)
+      && node.data.canExpandSubAgents === true,
+    )
+    .map<SubAgentGroupLayout>((parent) => {
+      const rows: Array<AgentFlowNode | SubAgentPlaceholderFlowNode> = (
+        parent.data.childAgents ?? []
+      ).map(({ id, data }) => ({
+        id,
+        type: "agent",
+        position: { x: 0, y: 0 },
+        data: {
+          ...data,
+          parentAgentId: parent.id,
+          canExpandSubAgents: false,
+        },
+        draggable: false,
+        selectable: true,
+      }));
+
+      if (mode === "create") {
+        rows.push({
+          id: `sub-placeholder:${parent.id}`,
+          type: "subAgentPlaceholder",
+          position: { x: 0, y: 0 },
+          data: { label: "添加子智能体", parentAgentId: parent.id },
+          draggable: false,
+          selectable: false,
+        });
+      }
+
+      const height = rows.reduce(
+        (total, row, index) => total + rowHeight(row, mode) + (index > 0 ? SUB_AGENT_ROW_GAP : 0),
+        0,
+      );
+      const parentSize = nodeSize(parent, mode);
+      const parentCenterY = parent.position.y + parentSize.height / 2;
+      const desiredTop = parentCenterY - groupAnchorOffset(rows, mode);
+      return {
+        parent,
+        rows,
+        side: (expandableAgentOrder.get(parent.id) ?? 0) % 2 === 0
+          ? "right"
+          : "left",
+        desiredTop,
+        top: desiredTop,
+        height,
+      };
+    })
+    .filter((group) => group.rows.length > 0)
+    .sort((a, b) => a.desiredTop - b.desiredTop);
+
+  if (groups.length === 0) return baseLayout;
+
+  const groupsBySide = {
+    left: groups.filter((group) => group.side === "left"),
+    right: groups.filter((group) => group.side === "right"),
+  };
+  (Object.keys(groupsBySide) as Array<keyof typeof groupsBySide>).forEach((side) => {
+    const sideGroups = groupsBySide[side];
+    if (sideGroups.length === 0) return;
+
+    let previousBottom = Number.NEGATIVE_INFINITY;
+    sideGroups.forEach((group) => {
+      group.top = Math.max(group.desiredTop, previousBottom + SUB_AGENT_GROUP_GAP);
+      previousBottom = group.top + group.height;
+    });
+
+    const desiredCenter = sideGroups.reduce(
+      (sum, group) => sum + group.desiredTop + group.height / 2,
+      0,
+    ) / sideGroups.length;
+    const placedCenter = sideGroups.reduce(
+      (sum, group) => sum + group.top + group.height / 2,
+      0,
+    ) / sideGroups.length;
+    const centeringShift = desiredCenter - placedCenter;
+    sideGroups.forEach((group) => {
+      group.top += centeringShift;
+    });
+  });
+
+  const childNodes: CreationFlowNode[] = [];
+  const childEdges: CreationFlowEdge[] = [];
+  groups.forEach((group) => {
+    const parentSize = nodeSize(group.parent, mode);
+    let rowTop = group.top;
+    group.rows.forEach((row) => {
+      const rowSize = nodeSize(row, mode);
+      const childX = group.side === "right"
+        ? group.parent.position.x + parentSize.width + SUB_AGENT_COLUMN_GAP
+        : group.parent.position.x - rowSize.width - SUB_AGENT_COLUMN_GAP;
+      childNodes.push({ ...row, position: { x: childX, y: rowTop } });
+      childEdges.push(makeSubAgentEdge(group.parent.id, row.id, group.side));
+      rowTop += rowHeight(row, mode) + SUB_AGENT_ROW_GAP;
+    });
+  });
+
+  return {
+    nodes: [...baseLayout.nodes, ...childNodes],
+    edges: [...baseLayout.edges, ...childEdges],
+  };
+}
+
 function CreationFlowCanvasInner({
   selectedAgentId,
   configPanelOpen,
@@ -587,27 +953,45 @@ function CreationFlowCanvasInner({
   centerViewport = false,
   mode = "create",
   debugComparison = false,
+  onSubAgentAdd,
 }: CreationFlowCanvasProps) {
+  const showEmptyGraph = !agentDraft && mode === "create" && !centerViewport;
   const [graph, setGraph] = useState<GraphState>(() =>
-    agentDraft ? graphFromDraft(agentDraft) : initialGraph(),
+    agentDraft ? graphFromDraft(agentDraft) : showEmptyGraph ? emptyGraph() : initialGraph(),
   );
   const sequence = useRef(2);
   const canvasRef = useRef<HTMLDivElement>(null);
   const viewportWasAutoFit = useRef(true);
 
   useEffect(() => {
-    setGraph(agentDraft ? graphFromDraft(agentDraft) : initialGraph());
+    setGraph(agentDraft ? graphFromDraft(agentDraft) : showEmptyGraph ? emptyGraph() : initialGraph());
     viewportWasAutoFit.current = true;
-  }, [agentDraft]);
-  const layout = useMemo(() => layoutGraph(graph, mode), [graph, mode]);
+  }, [agentDraft, showEmptyGraph]);
+
+  const baseLayout = useMemo(() => layoutGraph(graph, mode), [graph, mode]);
+  const expandedSubAgentIds = useMemo(() => new Set(
+    baseLayout.nodes
+      .filter((node): node is AgentFlowNode =>
+        node.type === "agent" && node.data.canExpandSubAgents === true,
+      )
+      .map((node) => node.id),
+  ), [baseLayout.nodes]);
+  const layout = useMemo(
+    () => expandSubAgentGroups(baseLayout, expandedSubAgentIds, mode),
+    [baseLayout, expandedSubAgentIds, mode],
+  );
   const layoutBounds = useMemo(() => graphBounds(layout.nodes, mode), [layout.nodes, mode]);
   const layoutBoundsRef = useRef(layoutBounds);
   layoutBoundsRef.current = layoutBounds;
   const layoutSignature = useMemo(() => [
-    ...graph.nodes.map((node) => node.id),
-    ...graph.edges.map((edge) => `${edge.source}>${edge.target}`),
-  ].join("|"), [graph.edges, graph.nodes]);
-  const rootAgentId = agentDraft ? "agent-root" : "meeting-assistant";
+    ...layout.nodes.map((node) => node.id),
+    ...layout.edges.map((edge) => `${edge.source}>${edge.target}`),
+  ].join("|"), [layout.edges, layout.nodes]);
+  const rootAgentId = agentDraft
+    ? visibleAgentDrafts(agentDraft)[0]?.id ?? "agent-root"
+    : showEmptyGraph
+      ? "agent-placeholder"
+      : "meeting-assistant";
   const laidOutGraph = useMemo<GraphState>(() => {
     return {
       ...layout,
@@ -638,6 +1022,11 @@ function CreationFlowCanvasInner({
     zoomIn,
     zoomOut,
   } = useReactFlow<CreationFlowNode, CreationFlowEdge>();
+  const subAgentViewOpen = expandedSubAgentIds.size > 0;
+
+  const subAgentInteraction = useMemo<SubAgentInteractionContextValue>(() => ({
+    add: (parentAgentId) => onSubAgentAdd?.(parentAgentId),
+  }), [onSubAgentAdd]);
 
   const fitCanvas = useCallback(async (duration = 180) => {
     const canvas = canvasRef.current;
@@ -654,8 +1043,10 @@ function CreationFlowCanvasInner({
       MAX_ZOOM,
       debugComparison
         ? DEBUG_COMPARISON_VIEWPORT_PADDING
-        : centerViewport
-          ? CENTERED_VIEWPORT_PADDING
+        : subAgentViewOpen
+          ? SUB_AGENT_VIEWPORT_PADDING
+          : centerViewport
+            ? CENTERED_VIEWPORT_PADDING
           : VIEWPORT_PADDING,
     );
     if (debugComparison) {
@@ -669,7 +1060,7 @@ function CreationFlowCanvasInner({
     }
     viewportWasAutoFit.current = true;
     await setViewport(viewport, { duration });
-  }, [centerViewport, debugComparison, mode, setViewport]);
+  }, [centerViewport, debugComparison, mode, setViewport, subAgentViewOpen]);
 
   const graphIsInsideSafeArea = useCallback((width: number, height: number) => {
     const bounds = layoutBoundsRef.current;
@@ -687,7 +1078,10 @@ function CreationFlowCanvasInner({
 
   const insertAgent = useCallback((edgeId: string) => {
     setGraph((current) => {
-      const edge = current.edges.find((candidate) => candidate.id === edgeId);
+      const edge = current.edges.find(
+        (candidate): candidate is InsertableFlowEdge =>
+          candidate.id === edgeId && candidate.type === "insertable",
+      );
       if (!edge) return current;
       sequence.current += 1;
       const id = `sub-agent-${sequence.current}`;
@@ -771,8 +1165,9 @@ function CreationFlowCanvasInner({
   }, [fitCanvas, graphIsInsideSafeArea]);
 
   return (
-    <InsertEdgeContext.Provider value={mode === "debug" ? () => {} : insertAgent}>
-      <div
+    <SubAgentInteractionContext.Provider value={subAgentInteraction}>
+      <InsertEdgeContext.Provider value={mode === "debug" ? () => {} : insertAgent}>
+        <div
         ref={canvasRef}
         className={`creation-flow creation-flow--${mode}${debugComparison ? " creation-flow--debug-comparison" : ""}${configPanelOpen ? " creation-flow--config-open" : ""}`}
         aria-label="智能体结构画布"
@@ -847,8 +1242,9 @@ function CreationFlowCanvasInner({
             <img src={layoutIcon} alt="" />
           </button>
         </div>}
-      </div>
-    </InsertEdgeContext.Provider>
+        </div>
+      </InsertEdgeContext.Provider>
+    </SubAgentInteractionContext.Provider>
   );
 }
 

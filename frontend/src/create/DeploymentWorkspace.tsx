@@ -5,9 +5,11 @@ import wecomIcon from "./assets/create-workspace/wecom.svg";
 import slackIcon from "./assets/create-workspace/slack.svg";
 import { CreateNavbar } from "./CreateNavbar";
 import { CreationFlowCanvas } from "./CreationFlowCanvas";
+import type { AgentDraft } from "./types";
 import "./DeploymentWorkspace.css";
 
 interface DeploymentWorkspaceProps {
+  agentDraft: AgentDraft | null;
   onBack: () => void;
 }
 
@@ -95,7 +97,7 @@ function InvocationExample() {
   );
 }
 
-export function DeploymentWorkspace({ onBack }: DeploymentWorkspaceProps) {
+export function DeploymentWorkspace({ agentDraft, onBack }: DeploymentWorkspaceProps) {
   const [activeTab, setActiveTab] = useState<IntegrationTab>("api");
 
   return (
@@ -107,6 +109,7 @@ export function DeploymentWorkspace({ onBack }: DeploymentWorkspaceProps) {
         selectedAgentId={null}
         configPanelOpen
         onAgentSelect={() => {}}
+        agentDraft={agentDraft}
       />
 
       <aside className="deployment-panel" aria-labelledby="deployment-panel-title">

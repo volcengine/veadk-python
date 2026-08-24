@@ -375,12 +375,16 @@ export function sanitizeGeneratedDraftCapabilities(
   draft: AgentDraft,
   inheritedCloudProvider: CloudProvider = draft.cloudProvider ?? "volcengine",
 ): AgentDraft {
-  const cloudProvider = draft.cloudProvider ?? inheritedCloudProvider;
+  // The planner serializes its backend default onto every nested Agent. A
+  // generated tree must instead inherit the Studio environment selected by
+  // the user, including every direct sub-Agent.
+  const cloudProvider = inheritedCloudProvider;
   const generatedToolIds = new Set(
     createBuiltinToolsForProvider(cloudProvider).map((tool) => tool.id),
   );
   return {
     ...draft,
+    cloudProvider,
     builtinTools: (draft.builtinTools ?? []).filter((toolId) =>
       generatedToolIds.has(toolId),
     ),

@@ -46,6 +46,11 @@ server that `veadk frontend` launches — no separate backend.
   Deployable source can be sent to Runtime manually; an incomplete verification
   report requires an explicit confirmation. No separate “start verification”
   action is required.
+- **Conversational Agent workflow creation**: the creation chat can generate a
+  single Agent or an ordered workflow and refine it over multiple turns. Each
+  top-level Agent may own one level of direct LLM sub-agents for delegated work;
+  direct sub-agents are leaves, while ordered top-level steps remain represented
+  by an internal Sequential Agent wrapper.
 - **Reasoning & tool calls** shown inline (collapsible "thinking", tool blocks).
 - **Agent context rail** keeps the selected Agent's description, model, tools,
   skills, and optional live multi-Agent topology together in the conversation's

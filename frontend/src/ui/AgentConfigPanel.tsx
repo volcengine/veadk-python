@@ -23,14 +23,14 @@ type AgentConfigTab = "basic" | "capabilities";
 
 const AGENT_TOOL_COLUMNS = [
   [
-    { id: "left-parallel-web-search", label: "并行联网搜索" },
-    { id: "left-web-reader", label: "网页读取" },
-    { id: "left-image-generation", label: "图像生成" },
+    { id: "left-parallel-web-search", value: "parallel_web_search", label: "并行联网搜索" },
+    { id: "left-web-reader", value: "link_reader", label: "网页读取" },
+    { id: "left-image-generation", value: "image_generate", label: "图像生成" },
   ],
   [
-    { id: "right-parallel-web-search", label: "并行联网搜索" },
-    { id: "right-web-reader", label: "网页读取" },
-    { id: "right-image-generation", label: "图像生成" },
+    { id: "right-parallel-web-search", value: "parallel_web_search", label: "并行联网搜索" },
+    { id: "right-web-reader", value: "link_reader", label: "网页读取" },
+    { id: "right-image-generation", value: "image_generate", label: "图像生成" },
   ],
 ] as const;
 
@@ -46,6 +46,7 @@ export interface AgentConfigPanelProps {
   agentDescription: string;
   systemPrompt: string;
   modelConfig: AgentModelConfigValue;
+  selectedTools: string[];
   selectedMcps: string[];
   selectedSkills: string[];
   storageCapabilities: AgentStorageCapabilities;
@@ -54,6 +55,7 @@ export interface AgentConfigPanelProps {
   onAgentDescriptionChange: (value: string) => void;
   onSystemPromptChange: (value: string) => void;
   onModelConfigChange: (value: AgentModelConfigValue) => void;
+  onSelectedToolsChange: (value: string[]) => void;
   onSelectedMcpsChange: (value: string[]) => void;
   onSelectedSkillsChange: (value: string[]) => void;
   onStorageCapabilitiesChange: (value: AgentStorageCapabilities) => void;
@@ -140,6 +142,7 @@ export function AgentConfigPanel({
   agentDescription,
   systemPrompt,
   modelConfig,
+  selectedTools,
   selectedMcps,
   selectedSkills,
   storageCapabilities,
@@ -148,6 +151,7 @@ export function AgentConfigPanel({
   onAgentDescriptionChange,
   onSystemPromptChange,
   onModelConfigChange,
+  onSelectedToolsChange,
   onSelectedMcpsChange,
   onSelectedSkillsChange,
   onStorageCapabilitiesChange,
@@ -156,9 +160,6 @@ export function AgentConfigPanel({
   const [activeTab, setActiveTab] = useState<AgentConfigTab>("basic");
   const [activeStorageCapability, setActiveStorageCapability] =
     useState<AgentStorageCapabilityKey | null>(null);
-  const [selectedTools, setSelectedTools] = useState<Set<string>>(
-    () => new Set(),
-  );
   const AgentIcon = tone === "root" ? RootAgentPanelIcon : SubAgentPanelIcon;
 
   return (
@@ -310,17 +311,13 @@ export function AgentConfigPanel({
                           key={tool.id}
                           id={`agent-config-tool-${tool.id}`}
                           className="agent-config-panel__tool-checkbox"
-                          checked={selectedTools.has(tool.id)}
+                          checked={selectedTools.includes(tool.value)}
                           onCheckedChange={(checked) => {
-                            setSelectedTools((current) => {
-                              const next = new Set(current);
-                              if (checked) {
-                                next.add(tool.id);
-                              } else {
-                                next.delete(tool.id);
-                              }
-                              return next;
-                            });
+                            onSelectedToolsChange(
+                              checked
+                                ? Array.from(new Set([...selectedTools, tool.value]))
+                                : selectedTools.filter((value) => value !== tool.value),
+                            );
                           }}
                           label={tool.label}
                         />
