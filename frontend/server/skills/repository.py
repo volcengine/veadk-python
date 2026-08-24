@@ -30,14 +30,83 @@ from typing import Any
 from .archive import SkillArchive
 
 
+def _is_macos_metadata(path: PurePosixPath) -> bool:
+    return bool(path.parts) and (
+        path.parts[0] == "__MACOSX"
+        or path.name == ".DS_Store"
+        or path.name.startswith("._")
+    )
+
+
 class SkillRepositoryError(RuntimeError):
-    def __init__(self, code: str, message: str, *, status_code: int = 400) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        status_code: int = 400,
+        retryable: bool = False,
+        original_error: BaseException | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.status_code = status_code
+        self.retryable = retryable
+        self.original_error = original_error
 
     def detail(self) -> dict[str, object]:
-        return {"code": self.code, "message": str(self), "retryable": False}
+        detail: dict[str, object] = {
+            "code": self.code,
+            "message": str(self),
+            "retryable": self.retryable,
+        }
+        if self.original_error is not None:
+            detail["originalError"] = {
+                "type": (
+                    f"{type(self.original_error).__module__}."
+                    f"{type(self.original_error).__qualname__}"
+                ),
+                "message": str(self.original_error).strip()
+                or repr(self.original_error),
+                "repr": repr(self.original_error),
+            }
+        return detail
+
+
+def resolve_skill_response(
+    client: Any,
+    *,
+    space_id: str,
+    skill_id: str,
+    version: str | None,
+    skill_space_name: str | None = None,
+    skill_name: str | None = None,
+) -> Any:
+    """Read either a managed Skill version or a legacy SkillSpace Skill."""
+    from agentkit.sdk.skills import types as skills_types
+
+    try:
+        return client.get_skill_version(
+            skills_types.GetSkillVersionRequest(Id=skill_id, SkillVersion=version)
+        )
+    except Exception as version_error:
+        if (
+            "interface type not consistent with skill type"
+            not in str(version_error).casefold()
+            or not skill_space_name
+            or not skill_name
+        ):
+            raise
+        try:
+            return client.get_skill_info(
+                skills_types.GetSkillInfoRequest(
+                    SkillName=skill_name,
+                    SkillSpaceName=skill_space_name,
+                    SkillSpaceId=space_id,
+                )
+            )
+        except Exception as info_error:
+            raise info_error from version_error
 
 
 class AgentKitSkillRepository:
@@ -160,13 +229,23 @@ class AgentKitSkillRepository:
         space_id: str,
         skill_id: str,
         version: str | None,
+        skill_space_name: str | None = None,
+        skill_name: str | None = None,
     ) -> tuple[bytes, str]:
-        from agentkit.sdk.skills import types as skills_types
-
-        response = self._client_factory(region).get_skill_version(
-            skills_types.GetSkillVersionRequest(Id=skill_id, SkillVersion=version)
+        response = resolve_skill_response(
+            self._client_factory(region),
+            space_id=space_id,
+            skill_id=skill_id,
+            version=version,
+            skill_space_name=skill_space_name,
+            skill_name=skill_name,
         )
-        name = str(getattr(response, "name", "") or skill_id)
+        name = str(
+            getattr(response, "name", "")
+            or getattr(response, "skill_name", "")
+            or skill_name
+            or skill_id
+        )
         bucket = str(getattr(response, "bucket_name", "") or "")
         path = str(getattr(response, "tos_path", "") or "")
         if bucket and path:
@@ -184,11 +263,27 @@ class AgentKitSkillRepository:
             )
             with tempfile.TemporaryDirectory(prefix="veadk-skill-view-") as directory:
                 archive_path = Path(directory) / "skill.zip"
-                if not _download_legacy_skill_space_skill(remote, archive_path):
+                try:
+                    downloaded = _download_legacy_skill_space_skill(
+                        remote,
+                        archive_path,
+                        region=region,
+                        raise_on_error=True,
+                    )
+                except Exception as error:
                     raise SkillRepositoryError(
                         "SKILL_ARCHIVE_DOWNLOAD_FAILED",
                         "暂时无法下载 Skill 文件，请稍后重试。",
                         status_code=502,
+                        retryable=True,
+                        original_error=error,
+                    ) from error
+                if not downloaded:
+                    raise SkillRepositoryError(
+                        "SKILL_ARCHIVE_DOWNLOAD_FAILED",
+                        "暂时无法下载 Skill 文件，请稍后重试。",
+                        status_code=502,
+                        retryable=True,
                     )
                 content = archive_path.read_bytes()
         else:
@@ -218,19 +313,28 @@ class AgentKitSkillRepository:
         space_id: str,
         skill_id: str,
         version: str | None,
+        skill_space_name: str | None = None,
+        skill_name: str | None = None,
     ) -> dict[str, object]:
         content, filename = self.skill_archive(
             region=region,
             space_id=space_id,
             skill_id=skill_id,
             version=version,
+            skill_space_name=skill_space_name,
+            skill_name=skill_name,
         )
         files: list[dict[str, object]] = []
         total = 0
         seen: set[str] = set()
         try:
             with zipfile.ZipFile(io.BytesIO(content)) as archive:
-                infos = [item for item in archive.infolist() if not item.is_dir()]
+                infos = [
+                    item
+                    for item in archive.infolist()
+                    if not item.is_dir()
+                    and not _is_macos_metadata(PurePosixPath(item.filename))
+                ]
                 if len(infos) > 100:
                     raise SkillRepositoryError(
                         "SKILL_ARCHIVE_FILE_COUNT",

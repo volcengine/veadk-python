@@ -672,7 +672,7 @@ async def test_skillspace_materialization_normalizes_legacy_frontmatter() -> Non
     )
 
 
-def _skill_zip(files: dict[str, str]) -> bytes:
+def _skill_zip(files: dict[str, str | bytes]) -> bytes:
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w") as archive:
         for path, content in files.items():
@@ -704,6 +704,66 @@ def test_skillhub_zip_accepts_safe_files_without_metadata_validation() -> None:
             "demo-skill",
             "test skill",
         )
+
+
+def test_remote_skill_zip_ignores_macos_metadata() -> None:
+    skill_md = "---\nname: demo-skill\ndescription: Demo.\n---\n"
+    files = _files_from_zip(
+        _skill_zip(
+            {
+                "demo-skill/SKILL.md": skill_md,
+                "demo-skill/scripts/run.py": "print('ok')\n",
+                "__MACOSX/demo-skill/._SKILL.md": b"\x00\x05AppleDouble",
+                "demo-skill/.DS_Store": b"\x00\x01desktop",
+                "demo-skill/scripts/._run.py": b"\x00\x05AppleDouble",
+            }
+        ),
+        "demo-skill",
+        "SkillSpace skill s-123",
+    )
+
+    assert [file.path for file in files] == [
+        "skills/demo-skill/SKILL.md",
+        "skills/demo-skill/scripts/run.py",
+    ]
+
+
+def test_remote_skill_zip_rejects_binary_files_by_default() -> None:
+    skill_md = "---\nname: demo-skill\ndescription: Demo.\n---\n"
+
+    with pytest.raises(DebugPolicyError, match="must be UTF-8 or GB18030 text"):
+        _files_from_zip(
+            _skill_zip(
+                {
+                    "demo-skill/SKILL.md": skill_md,
+                    "demo-skill/assets/font.ttf": b"\x00\x01\x00\x00binary-font",
+                }
+            ),
+            "demo-skill",
+            "SkillSpace skill s-123",
+        )
+
+
+def test_remote_skill_zip_can_ignore_binary_files_for_text_detail() -> None:
+    skill_md = "---\nname: demo-skill\ndescription: Demo.\n---\n"
+    files = _files_from_zip(
+        _skill_zip(
+            {
+                "demo-skill/SKILL.md": skill_md,
+                "demo-skill/scripts/run.py": "print('ok')\n",
+                "demo-skill/assets/font.ttf": b"\x00\x01\x00\x00binary-font",
+                "demo-skill/assets/preview.png": b"\x89PNG\r\n\x1a\n\x00binary-image",
+            }
+        ),
+        "demo-skill",
+        "SkillSpace skill s-123",
+        ignore_binary=True,
+    )
+
+    assert [file.path for file in files] == [
+        "skills/demo-skill/SKILL.md",
+        "skills/demo-skill/scripts/run.py",
+    ]
 
 
 def test_remote_skill_zip_accepts_existing_skills_wrapper() -> None:

@@ -83,6 +83,27 @@ def test_ve_tos_database_region_wins_over_region_env(monkeypatch, fake_tos):
     assert client._client.init_kwargs["endpoint"] == "tos-cn-beijing.volces.com"
 
 
+def test_download_can_propagate_tos_error(monkeypatch, fake_tos, tmp_path) -> None:
+    client = VeTOS(bucket_name="test-bucket")
+
+    def fail_get_object(*_args, **_kwargs):
+        raise RuntimeError("upstream TOS failure")
+
+    monkeypatch.setattr(client._client, "get_object", fail_get_object, raising=False)
+
+    assert (
+        client.download("test-bucket", "skill.zip", str(tmp_path / "first.zip"))
+        is False
+    )
+    with pytest.raises(RuntimeError, match="upstream TOS failure"):
+        client.download(
+            "test-bucket",
+            "skill.zip",
+            str(tmp_path / "second.zip"),
+            raise_on_error=True,
+        )
+
+
 def test_tos_config_uses_region_env_fallback_and_updates_endpoint(monkeypatch):
     from veadk.configs.database_configs import TOSConfig
 

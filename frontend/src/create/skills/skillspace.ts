@@ -107,11 +107,15 @@ export async function getSkillDetail(
   version?: string,
   region?: string,
   project?: string,
+  skillName?: string,
+  skillSpaceName?: string,
 ): Promise<SkillDetail> {
   const params: string[] = [];
   if (version) params.push(`version=${encodeURIComponent(version)}`);
   if (region) params.push(`region=${encodeURIComponent(region)}`);
   if (project) params.push(`project=${encodeURIComponent(project)}`);
+  if (skillName) params.push(`skill_name=${encodeURIComponent(skillName)}`);
+  if (skillSpaceName) params.push(`skill_space_name=${encodeURIComponent(skillSpaceName)}`);
   const q = params.length > 0 ? `?${params.join("&")}` : "";
   return jfetch<SkillDetail>(
     `/web/skill-spaces/${encodeURIComponent(spaceId)}/skills/${encodeURIComponent(skillId)}${q}`,

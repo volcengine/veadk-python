@@ -711,7 +711,14 @@ class VeTOS:
             logger.error(f"Async upload directory failed: {str(e)}")
             raise
 
-    def download(self, bucket_name: str, object_key: str, save_path: str) -> bool:
+    def download(
+        self,
+        bucket_name: str,
+        object_key: str,
+        save_path: str,
+        *,
+        raise_on_error: bool = False,
+    ) -> bool:
         """download object from TOS"""
         bucket_name = self._check_bucket_name(bucket_name)
 
@@ -734,6 +741,8 @@ class VeTOS:
 
         except Exception as e:
             logger.error(f"Image download failed: {str(e)}")
+            if raise_on_error:
+                raise
             return False
 
     def download_directory(

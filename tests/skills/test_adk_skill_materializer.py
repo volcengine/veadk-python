@@ -141,6 +141,43 @@ def test_legacy_skillspace_skill_uses_tos_path_version(
     )
 
 
+def test_legacy_skillspace_download_uses_explicit_region(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    remote_skill = VeADKSkill(
+        name="regional-skill",
+        description="Regional skill.",
+        path="skills/s-123/v1/regional-skill.zip",
+        skill_space_id="space-1",
+        bucket_name="bucket",
+        id="s-123",
+    )
+    calls: list[dict[str, object]] = []
+
+    class FakeVeTOS:
+        def __init__(self, **kwargs: object) -> None:
+            calls.append(kwargs)
+
+        def download(self, **kwargs: object) -> bool:
+            calls.append(kwargs)
+            return True
+
+    monkeypatch.setattr(
+        materializer, "_get_cloud_credentials", lambda: ("ak", "sk", "")
+    )
+    monkeypatch.setattr("veadk.integrations.ve_tos.ve_tos.VeTOS", FakeVeTOS)
+
+    assert materializer._download_legacy_skill_space_skill(
+        remote_skill,
+        tmp_path / "skill.zip",
+        region="cn-shanghai",
+        raise_on_error=True,
+    )
+    assert calls[0]["region"] == "cn-shanghai"
+    assert calls[1]["raise_on_error"] is True
+
+
 def test_remote_skill_reuses_cache_when_version_is_unchanged(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -214,9 +214,13 @@ export async function getManagedSkillFiles(args: {
   skillId: string;
   version?: string;
   region: string;
+  skillSpaceName?: string;
+  skillName?: string;
 }): Promise<ManagedSkillFile[]> {
   const params = new URLSearchParams({ region: args.region });
   if (args.version) params.set("version", args.version);
+  if (args.skillSpaceName) params.set("skill_space_name", args.skillSpaceName);
+  if (args.skillName) params.set("skill_name", args.skillName);
   const result = await json<{ files: ManagedSkillFile[] }>(
     await request(`/spaces/${encodeURIComponent(args.spaceId)}/skills/${encodeURIComponent(args.skillId)}/files?${params}`),
     "读取 Skill 文件失败",
@@ -230,9 +234,13 @@ export async function downloadManagedSkillArchive(args: {
   version?: string;
   region: string;
   fallbackName: string;
+  skillSpaceName?: string;
+  skillName?: string;
 }): Promise<void> {
   const params = new URLSearchParams({ region: args.region });
   if (args.version) params.set("version", args.version);
+  if (args.skillSpaceName) params.set("skill_space_name", args.skillSpaceName);
+  if (args.skillName) params.set("skill_name", args.skillName);
   const response = await request(
     `/spaces/${encodeURIComponent(args.spaceId)}/skills/${encodeURIComponent(args.skillId)}/archive?${params}`,
     {},

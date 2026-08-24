@@ -44,6 +44,41 @@ MAX_SKILL_FILE_BYTES = 256 * 1024
 MAX_SKILL_TOTAL_BYTES = 2 * 1024 * 1024
 _SKILL_MD_RE = re.compile(r"(^|/)skill\.md$", re.IGNORECASE)
 _FOLDER_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+_BINARY_SKILL_FILE_SUFFIXES = {
+    ".avi",
+    ".bmp",
+    ".eot",
+    ".gif",
+    ".gz",
+    ".ico",
+    ".jpeg",
+    ".jpg",
+    ".mov",
+    ".mp3",
+    ".mp4",
+    ".otf",
+    ".pdf",
+    ".png",
+    ".tar",
+    ".ttf",
+    ".wav",
+    ".webm",
+    ".webp",
+    ".woff",
+    ".woff2",
+    ".zip",
+}
+
+
+def _is_macos_metadata(path: str) -> bool:
+    parts = PurePosixPath(path).parts
+    return bool(parts) and (
+        parts[0] == "__MACOSX" or parts[-1] == ".DS_Store" or parts[-1].startswith("._")
+    )
+
+
+def _is_binary_skill_file(path: str) -> bool:
+    return PurePosixPath(path).suffix.lower() in _BINARY_SKILL_FILE_SUFFIXES
 
 
 async def materialize_selected_skills(
@@ -221,23 +256,41 @@ def _materialize_local_skill(skill: SelectedSkill) -> list[GeneratedFile]:
     return out
 
 
-def _files_from_zip(content: bytes, folder: str, label: str) -> list[GeneratedFile]:
+def _files_from_zip(
+    content: bytes,
+    folder: str,
+    label: str,
+    *,
+    ignore_binary: bool = False,
+) -> list[GeneratedFile]:
     extracted: list[tuple[str, str]] = []
     total = 0
     with zipfile.ZipFile(io.BytesIO(content)) as archive:
-        infos = [info for info in archive.infolist() if not info.is_dir()]
-        if len(infos) > MAX_SKILL_FILES:
-            raise DebugPolicyError(f"{label} contains too many files")
         skill_md_candidates: list[tuple[str, str]] = []
-        for info in infos:
+        for info in archive.infolist():
+            if info.is_dir():
+                continue
+            rel = _normalize_relative_path(info.filename)
+            if _is_macos_metadata(rel):
+                continue
+            if ignore_binary and _is_binary_skill_file(rel):
+                continue
             if info.file_size > MAX_SKILL_FILE_BYTES:
                 raise DebugPolicyError(f"{label} file is too large: {info.filename}")
+            with archive.open(info) as fh:
+                try:
+                    text = _decode_skill_file(
+                        fh.read(), f"{label} file {info.filename}"
+                    )
+                except DebugPolicyError:
+                    if ignore_binary:
+                        continue
+                    raise
+            if len(extracted) >= MAX_SKILL_FILES:
+                raise DebugPolicyError(f"{label} contains too many files")
             total += info.file_size
             if total > MAX_SKILL_TOTAL_BYTES:
                 raise DebugPolicyError(f"{label} is too large")
-            rel = _normalize_relative_path(info.filename)
-            with archive.open(info) as fh:
-                text = _decode_skill_file(fh.read(), f"{label} file {info.filename}")
             if _SKILL_MD_RE.search(rel):
                 skill_md_candidates.append((rel, text))
             extracted.append((rel, text))
@@ -281,9 +334,11 @@ def _strip_skill_zip_prefix(
 def _decode_skill_file(content: bytes, label: str) -> str:
     for encoding in ("utf-8-sig", "gb18030"):
         try:
-            return content.decode(encoding)
+            text = content.decode(encoding)
         except UnicodeDecodeError:
-            pass
+            continue
+        if "\x00" not in text:
+            return text
     raise DebugPolicyError(f"{label} must be UTF-8 or GB18030 text")
 
 
