@@ -19,6 +19,36 @@ import click
 from veadk.version import VERSION
 
 TEMP_PATH = "/tmp"
+_DEPLOY_PROCESS_ENV_KEYS = (
+    "CLOUD_PROVIDER",
+    "AGENTKIT_CLOUD_PROVIDER",
+    "BYTEPLUS_REGION",
+    "BYTEPLUS_ACCESS_KEY",
+    "BYTEPLUS_SECRET_KEY",
+    "BYTEPLUS_SESSION_TOKEN",
+    "VOLCENGINE_ACCESS_KEY",
+    "VOLCENGINE_SECRET_KEY",
+    "VOLCENGINE_SESSION_TOKEN",
+    "VOLC_SESSIONTOKEN",
+    "REGION",
+    "IAM_ROLE",
+)
+
+
+def _restore_process_env_on_click_close(keys: tuple[str, ...]) -> None:
+    ctx = click.get_current_context(silent=True)
+    if ctx is None:
+        return
+    original = {key: os.environ.get(key) for key in keys}
+
+    def _restore() -> None:
+        for key, value in original.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    ctx.call_on_close(_restore)
 
 
 @click.command()
@@ -176,6 +206,7 @@ def deploy(
 
     logger = get_logger(__name__)
 
+    _restore_process_env_on_click_close(_DEPLOY_PROCESS_ENV_KEYS)
     provider_id = (
         normalize_cloud_provider(provider) if provider else cloud_provider_from_env()
     )

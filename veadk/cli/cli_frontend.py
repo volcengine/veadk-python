@@ -81,6 +81,15 @@ _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _BYTEPLUS_VEFAAS_APPLICATION_NAME_RE = re.compile(
     r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$"
 )
+_STUDIO_DEPLOY_PROCESS_ENV_KEYS = (
+    "CLOUD_PROVIDER",
+    "AGENTKIT_CLOUD_PROVIDER",
+    "BYTEPLUS_REGION",
+    "BYTEPLUS_ACCESS_KEY",
+    "BYTEPLUS_SECRET_KEY",
+    "BYTEPLUS_SESSION_TOKEN",
+    "IAM_ROLE",
+)
 _BUILD_ERROR_MARKERS = (
     "no solution found",
     "unsatisfiable",
@@ -94,6 +103,36 @@ _BUILD_ERROR_MARKERS = (
     "permission denied",
     "traceback (most recent call last)",
 )
+
+
+def _capture_process_env(keys: Iterable[str]) -> Callable[[], None]:
+    original = {key: os.environ.get(key) for key in keys}
+
+    def _restore() -> None:
+        for key, value in original.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    return _restore
+
+
+def _restore_process_env_on_click_close(keys: Iterable[str]) -> None:
+    ctx = click.get_current_context(silent=True)
+    if ctx is None:
+        return
+    _restore = _capture_process_env(keys)
+    ctx.call_on_close(_restore)
+
+
+def _click_param_from_commandline(name: str) -> bool:
+    ctx = click.get_current_context(silent=True)
+    if ctx is None:
+        return False
+    return ctx.get_parameter_source(name) == click.core.ParameterSource.COMMANDLINE
+
+
 _SENSITIVE_LOG_PATTERNS = (
     re.compile(r"authorization\s*[:=]", re.IGNORECASE),
     re.compile(r"\bbearer\s+\S+", re.IGNORECASE),
@@ -10894,9 +10933,31 @@ def frontend_deploy(
     )
     from veadk.config import veadk_environments
 
-    provider_id = (
-        normalize_cloud_provider(provider) if provider else cloud_provider_from_env()
+    _restore_process_env_on_click_close(_STUDIO_DEPLOY_PROCESS_ENV_KEYS)
+    explicit_volcengine_credentials = any(
+        _click_param_from_commandline(name)
+        for name in (
+            "volcengine_access_key",
+            "volcengine_secret_key",
+            "volcengine_session_token",
+        )
     )
+    explicit_byteplus_credentials = any(
+        _click_param_from_commandline(name)
+        for name in (
+            "byteplus_access_key",
+            "byteplus_secret_key",
+            "byteplus_session_token",
+        )
+    )
+    if provider:
+        provider_id = normalize_cloud_provider(provider)
+    elif explicit_volcengine_credentials and not explicit_byteplus_credentials:
+        provider_id = "volcengine"
+    elif explicit_byteplus_credentials and not explicit_volcengine_credentials:
+        provider_id = "byteplus"
+    else:
+        provider_id = cloud_provider_from_env()
     region = region or default_region(provider_id)
     os.environ["CLOUD_PROVIDER"] = provider_id
     os.environ["AGENTKIT_CLOUD_PROVIDER"] = provider_id

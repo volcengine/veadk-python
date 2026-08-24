@@ -88,6 +88,12 @@ _FULL_FRONTEND_GOLDEN = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _default_to_volcengine_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CLOUD_PROVIDER", raising=False)
+    monkeypatch.delenv("AGENTKIT_CLOUD_PROVIDER", raising=False)
+
+
 def _file_map(project: GeneratedProject) -> dict[str, str]:
     return {file.path: file.content for file in project.files}
 
