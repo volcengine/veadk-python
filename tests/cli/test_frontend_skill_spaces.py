@@ -17,13 +17,11 @@ from __future__ import annotations
 import asyncio
 import json
 import zipfile
-
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
-
 from fastapi import FastAPI
 from fastapi.responses import Response
 from fastapi.testclient import TestClient
@@ -577,6 +575,53 @@ def test_get_skill_detail_runs_sdk_call_off_event_loop(
     assert request.skill_version == "1.2.0"
 
 
+def test_get_skill_detail_falls_back_for_legacy_skill_type(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+    calls: list[tuple[str, Any]] = []
+
+    class _FakeSkillsClient:
+        def __init__(self, **kwargs: Any) -> None:
+            self.region = kwargs["region"]
+
+        def get_skill_version(self, request: Any) -> SimpleNamespace:
+            _assert_sdk_call_is_off_event_loop()
+            calls.append(("version", request))
+            raise RuntimeError("interface type not consistent with skill type")
+
+        def get_skill_info(self, request: Any) -> SimpleNamespace:
+            _assert_sdk_call_is_off_event_loop()
+            calls.append(("info", request))
+            return SimpleNamespace(
+                skill_name="cloud-migration-qa",
+                description="Migration checks",
+                skill_md="---\nname: cloud-migration-qa\n---\nBody.\n",
+                bucket_name="",
+                tos_path="",
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.skills.client.AgentkitSkillsClient", _FakeSkillsClient
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/skill-spaces/space-1/skills/skill-1",
+            params={
+                "region": "cn-beijing",
+                "version": "v1",
+                "skill_space_name": "migration-space",
+                "skill_name": "cloud-migration-qa",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["name"] == "cloud-migration-qa"
+    assert response.json()["skillMd"].endswith("Body.\n")
+    assert [name for name, _request in calls] == ["version", "info"]
+
+
 def test_get_skill_detail_falls_back_to_skillspace_package(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -597,9 +642,17 @@ def test_get_skill_detail_falls_back_to_skillspace_package(
                 tos_path="skills/ticket-classifier.zip",
             )
 
-    def _download_skill(skill: Any, zip_path: Path) -> bool:
+    def _download_skill(
+        skill: Any,
+        zip_path: Path,
+        *,
+        region: str | None = None,
+        raise_on_error: bool = False,
+    ) -> bool:
         assert skill.bucket_name == "skills-bucket"
         assert skill.path == "skills/ticket-classifier.zip"
+        assert region == "cn-shanghai"
+        assert raise_on_error is True
         with zipfile.ZipFile(zip_path, "w") as archive:
             archive.writestr(
                 "ticket-classifier/SKILL.md",
@@ -640,6 +693,78 @@ def test_get_skill_detail_falls_back_to_skillspace_package(
     ]
 
 
+def test_get_skill_detail_skips_binary_package_files(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    class _FakeSkillsClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def get_skill_version(self, request: Any) -> SimpleNamespace:
+            del request
+            return SimpleNamespace(
+                name="canvas-design",
+                description="Canvas design skill",
+                version="v1",
+                skill_md="",
+                bucket_name="skills-bucket",
+                tos_path="skills/canvas-design.zip",
+            )
+
+    def _download_skill(
+        skill: Any,
+        zip_path: Path,
+        *,
+        region: str | None = None,
+        raise_on_error: bool = False,
+    ) -> bool:
+        assert skill.name == "canvas-design"
+        assert region == "cn-beijing"
+        assert raise_on_error is True
+        with zipfile.ZipFile(zip_path, "w") as archive:
+            archive.writestr(
+                "canvas-design/SKILL.md",
+                "---\nname: canvas-design\ndescription: Canvas.\n---\nBody.\n",
+            )
+            archive.writestr(
+                "canvas-design/scripts/render.py",
+                "def render():\n    return 'ok'\n",
+            )
+            archive.writestr(
+                "canvas-design/assets/font.ttf",
+                b"\x00\x01\x00\x00binary-font",
+            )
+            archive.writestr(
+                "canvas-design/assets/preview.png",
+                b"\x89PNG\r\n\x1a\n\x00binary-image",
+            )
+        return True
+
+    monkeypatch.setattr(
+        "agentkit.sdk.skills.client.AgentkitSkillsClient", _FakeSkillsClient
+    )
+    monkeypatch.setattr(
+        "veadk.skills.materializer._download_legacy_skill_space_skill",
+        _download_skill,
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/skill-spaces/space-1/skills/skill-1",
+            params={"region": "cn-beijing", "version": "v1"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["skillMd"].endswith("Body.\n")
+    assert [file["path"] for file in body["files"]] == [
+        "skills/canvas-design/SKILL.md",
+        "skills/canvas-design/scripts/render.py",
+    ]
+
+
 def test_get_skill_detail_falls_back_to_skill_md_when_package_download_fails(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -660,8 +785,16 @@ def test_get_skill_detail_falls_back_to_skill_md_when_package_download_fails(
                 tos_path="skills/ticket-classifier.zip",
             )
 
-    def _download_skill(skill: Any, zip_path: Path) -> bool:
+    def _download_skill(
+        skill: Any,
+        zip_path: Path,
+        *,
+        region: str | None = None,
+        raise_on_error: bool = False,
+    ) -> bool:
         del skill, zip_path
+        assert region == "cn-shanghai"
+        assert raise_on_error is True
         return False
 
     monkeypatch.setattr(
@@ -682,6 +815,49 @@ def test_get_skill_detail_falls_back_to_skill_md_when_package_download_fails(
     body = response.json()
     assert body["skillMd"].endswith("Body.\n")
     assert body["files"] == []
+
+
+def test_get_skill_detail_preserves_package_download_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    class _FakeSkillsClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def get_skill_version(self, request: Any) -> SimpleNamespace:
+            del request
+            return SimpleNamespace(
+                name="ticket-classifier",
+                description="识别工单类型",
+                version="1.2.0",
+                skill_md="",
+                bucket_name="skills-bucket",
+                tos_path="skills/ticket-classifier.zip",
+            )
+
+    def _download_skill(*_args: Any, **_kwargs: Any) -> bool:
+        raise RuntimeError("TOS GetObject failed with request-id-3")
+
+    monkeypatch.setattr(
+        "agentkit.sdk.skills.client.AgentkitSkillsClient", _FakeSkillsClient
+    )
+    monkeypatch.setattr(
+        "veadk.skills.materializer._download_legacy_skill_space_skill",
+        _download_skill,
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/skill-spaces/space-1/skills/skill-1",
+            params={"region": "cn-shanghai", "version": "1.2.0"},
+        )
+
+    assert response.status_code == 502
+    assert response.json()["detail"]["originalError"]["message"] == (
+        "TOS GetObject failed with request-id-3"
+    )
 
 
 def test_skill_space_routes_keep_missing_credentials_status(

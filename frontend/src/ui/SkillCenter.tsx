@@ -786,12 +786,16 @@ export function SkillCenterView({
           skill.version,
           selectedRegion,
           selectedSpace.projectName,
+          skill.skillName,
+          selectedSpace.name,
         ),
         getManagedSkillFiles({
           spaceId: selectedSpace.id,
           skillId: skill.skillId,
           version: skill.version,
           region: selectedRegion,
+          skillSpaceName: selectedSpace.name,
+          skillName: skill.skillName,
         }),
       ]);
       if (detailRequest.current === request) {
@@ -1109,6 +1113,8 @@ export function SkillCenterView({
             version: detailSkill.version,
             region: selectedRegion,
             fallbackName: detailSkill.skillName,
+            skillSpaceName: selectedSpace.name,
+            skillName: detailSkill.skillName,
           }).catch((error: unknown) => setDetailError(normalizeSkillError(error, "下载 Skill 失败")))}
           onClose={closeDetail}
         />

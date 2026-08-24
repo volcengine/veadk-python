@@ -233,6 +233,149 @@ def test_unexpected_skill_service_error_preserves_original_error() -> None:
     }
 
 
+def test_repository_error_preserves_original_error() -> None:
+    error = SkillRepositoryError(
+        "SKILL_ARCHIVE_DOWNLOAD_FAILED",
+        "暂时无法下载 Skill 文件，请稍后重试。",
+        status_code=502,
+        retryable=True,
+        original_error=RuntimeError("TOS GetObject failed with request-id-1"),
+    )
+
+    assert error.detail() == {
+        "code": "SKILL_ARCHIVE_DOWNLOAD_FAILED",
+        "message": "暂时无法下载 Skill 文件，请稍后重试。",
+        "retryable": True,
+        "originalError": {
+            "type": "builtins.RuntimeError",
+            "message": "TOS GetObject failed with request-id-1",
+            "repr": "RuntimeError('TOS GetObject failed with request-id-1')",
+        },
+    }
+
+
+def test_repository_falls_back_to_legacy_skill_info_and_keeps_region(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    calls: list[tuple[str, object]] = []
+
+    class Client:
+        def get_skill_version(self, request: object) -> SimpleNamespace:
+            calls.append(("version", request))
+            raise RuntimeError("interface type not consistent with skill type")
+
+        def get_skill_info(self, request: object) -> SimpleNamespace:
+            calls.append(("info", request))
+            return SimpleNamespace(
+                skill_name="cloud-migration-qa",
+                description="Migration checks",
+                skill_md=SKILL_MD,
+                bucket_name="skills-bucket",
+                tos_path="skills/cloud-migration-qa.zip",
+            )
+
+    def download_skill(
+        skill: object,
+        path,
+        *,
+        region: str | None = None,
+        raise_on_error: bool = False,
+    ) -> bool:
+        assert skill.name == "cloud-migration-qa"
+        assert region == "cn-beijing"
+        assert raise_on_error is True
+        path.write_bytes(
+            archive(
+                {
+                    "cloud-migration-qa/SKILL.md": SKILL_MD.encode(),
+                    "__MACOSX/cloud-migration-qa/._SKILL.md": b"\x00\x05AppleDouble",
+                    "cloud-migration-qa/.DS_Store": b"\x00\x01desktop",
+                }
+            )
+        )
+        return True
+
+    monkeypatch.setattr(
+        "veadk.skills.materializer._download_legacy_skill_space_skill",
+        download_skill,
+    )
+    repository = AgentKitSkillRepository(lambda _region: Client())
+
+    result = repository.skill_files(
+        region="cn-beijing",
+        space_id="space-1",
+        skill_id="skill-1",
+        version="v1",
+        skill_space_name="migration-space",
+        skill_name="cloud-migration-qa",
+    )
+
+    assert [name for name, _request in calls] == ["version", "info"]
+    assert [file["path"] for file in result["files"]] == ["cloud-migration-qa/SKILL.md"]
+
+
+def test_repository_does_not_hide_unrelated_get_version_errors() -> None:
+    class Client:
+        def get_skill_version(self, _request: object) -> SimpleNamespace:
+            raise RuntimeError("AccessDenied")
+
+        def get_skill_info(self, _request: object) -> SimpleNamespace:
+            raise AssertionError("legacy fallback must not run")
+
+    repository = AgentKitSkillRepository(lambda _region: Client())
+
+    with pytest.raises(RuntimeError, match="AccessDenied"):
+        repository.skill_archive(
+            region="cn-beijing",
+            space_id="space-1",
+            skill_id="skill-1",
+            version="v1",
+            skill_space_name="migration-space",
+            skill_name="cloud-migration-qa",
+        )
+
+
+def test_repository_download_failure_preserves_cloud_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Client:
+        def get_skill_version(self, request: object) -> SimpleNamespace:
+            del request
+            return SimpleNamespace(
+                name="cloud-migration-qa",
+                description="Migration checks",
+                version="v1",
+                skill_md=SKILL_MD,
+                bucket_name="skills-bucket",
+                tos_path="skills/cloud-migration-qa.zip",
+            )
+
+    def download_skill(*_args, **_kwargs) -> bool:
+        raise RuntimeError("TOS GetObject failed with request-id-2")
+
+    monkeypatch.setattr(
+        "veadk.skills.materializer._download_legacy_skill_space_skill",
+        download_skill,
+    )
+    repository = AgentKitSkillRepository(lambda _region: Client())
+
+    with pytest.raises(SkillRepositoryError) as raised:
+        repository.skill_files(
+            region="cn-beijing",
+            space_id="space-1",
+            skill_id="skill-1",
+            version="v1",
+        )
+
+    assert raised.value.code == "SKILL_ARCHIVE_DOWNLOAD_FAILED"
+    assert raised.value.detail()["originalError"] == {
+        "type": "builtins.RuntimeError",
+        "message": "TOS GetObject failed with request-id-2",
+        "repr": "RuntimeError('TOS GetObject failed with request-id-2')",
+    }
+
+
 def test_skill_workbench_error_preserves_original_error() -> None:
     error = SkillWorkbenchError(
         "SKILL_WORKBENCH_INTERNAL",

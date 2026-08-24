@@ -136,6 +136,14 @@ test("skill details render external markdown with raw HTML disabled", () => {
   assert.match(skillCenterSource, /numeric \* 1000/);
   assert.match(skillCenterSource, /detailRequest\.current/);
   assert.match(skillCenterSource, /selectedSpace\?\.region \|\| defaultCloudRegion\(cloudProvider\)/);
+  assert.match(
+    skillStylesSource,
+    /@media \(max-width: 560px\)[\s\S]*?\.skill-detail-content--files \.skill-file-browser \{[\s\S]*?grid-template-columns: minmax\(0, 1fr\)/,
+  );
+  assert.match(
+    skillStylesSource,
+    /@media \(max-width: 560px\)[\s\S]*?\.skill-detail-content--files \.skill-file-tree \{[\s\S]*?border-bottom: 1px solid/,
+  );
 });
 
 test("Library navigation replaces Skills immediately below agents", () => {
@@ -245,6 +253,12 @@ test("managed Skill APIs cover space creation, archives, deletion, and full file
   assert.match(managementClientSource, /export async function deleteManagedSkill/);
   assert.match(managementClientSource, /export async function getManagedSkillFiles/);
   assert.match(managementClientSource, /export async function downloadManagedSkillArchive/);
+  assert.match(managementClientSource, /params\.set\("skill_space_name", args\.skillSpaceName\)/);
+  assert.match(managementClientSource, /params\.set\("skill_name", args\.skillName\)/);
+  assert.match(skillspaceSource, /skill_space_name=\$\{encodeURIComponent\(skillSpaceName\)\}/);
+  assert.match(skillspaceSource, /skill_name=\$\{encodeURIComponent\(skillName\)\}/);
+  assert.match(skillCenterSource, /skillSpaceName: selectedSpace\.name/);
+  assert.match(skillCenterSource, /skillName: skill\.skillName/);
   assert.match(managementDialogsSource, /await validateSkillArchive\(selected\)/);
   assert.match(managementDialogsSource, /export function EditSkillSpaceDialog/);
   assert.match(skillCenterSource, /label: "编辑空间"/);

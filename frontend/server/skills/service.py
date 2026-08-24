@@ -129,6 +129,8 @@ class SkillService:
         space_id: str,
         skill_id: str,
         version: str | None,
+        skill_space_name: str | None = None,
+        skill_name: str | None = None,
     ) -> dict[str, object]:
         del identity
         return self._repository.skill_files(
@@ -136,6 +138,8 @@ class SkillService:
             space_id=space_id,
             skill_id=skill_id,
             version=version,
+            skill_space_name=skill_space_name,
+            skill_name=skill_name,
         )
 
     def skill_archive(
@@ -146,6 +150,8 @@ class SkillService:
         space_id: str,
         skill_id: str,
         version: str | None,
+        skill_space_name: str | None = None,
+        skill_name: str | None = None,
     ) -> tuple[bytes, str]:
         del identity
         return self._repository.skill_archive(
@@ -153,6 +159,8 @@ class SkillService:
             space_id=space_id,
             skill_id=skill_id,
             version=version,
+            skill_space_name=skill_space_name,
+            skill_name=skill_name,
         )
 
 

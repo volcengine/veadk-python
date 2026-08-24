@@ -167,7 +167,7 @@ def _get_cloud_credentials() -> tuple[str, str, str]:
     return access_key, secret_key, session_token
 
 
-def _get_agentkit_endpoint() -> tuple[str, str, str]:
+def _get_agentkit_endpoint(region_override: str | None = None) -> tuple[str, str, str]:
     service = os.getenv("AGENTKIT_TOOL_SERVICE_CODE", "agentkit")
 
     provider = (os.getenv("CLOUD_PROVIDER") or "").lower()
@@ -179,7 +179,8 @@ def _get_agentkit_endpoint() -> tuple[str, str, str]:
         default_region = "cn-beijing"
 
     region = (
-        os.getenv("AGENTKIT_TOOL_REGION")
+        region_override
+        or os.getenv("AGENTKIT_TOOL_REGION")
         or (os.getenv("REGION") if provider != "byteplus" else None)
         or default_region
     )

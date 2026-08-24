@@ -677,6 +677,16 @@ button.skill-file-tree__row:hover { background: hsl(var(--foreground) / .045); c
 
 @media (max-width: 560px) {
   .skill-generation__groups { grid-template-columns: 1fr; }
+  .skill-detail-content--files .skill-file-browser {
+    height: auto;
+    min-height: 0;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(128px, 34%) minmax(0, 1fr);
+  }
+  .skill-detail-content--files .skill-file-tree {
+    border-right: 0;
+    border-bottom: 1px solid hsl(var(--border));
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
