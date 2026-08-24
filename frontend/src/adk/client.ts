@@ -2637,6 +2637,7 @@ export interface StudioTelemetryContext {
   project: string;
   version: string;
   accountId?: string;
+  accountIdResolutionError?: string;
 }
 
 export interface StudioTelemetryConfig {
@@ -2715,6 +2716,10 @@ function normalizeStudioTelemetryConfig(value: unknown): StudioTelemetryConfig {
       project: typeof studio.project === "string" ? studio.project : "",
       version: typeof studio.version === "string" ? studio.version : "",
       accountId: typeof studio.accountId === "string" ? studio.accountId : "",
+      accountIdResolutionError:
+        typeof studio.accountIdResolutionError === "string"
+          ? studio.accountIdResolutionError
+          : "",
     },
   };
 }

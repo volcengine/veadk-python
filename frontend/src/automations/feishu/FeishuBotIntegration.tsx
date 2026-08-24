@@ -15,6 +15,7 @@ import {
 import {
   beginAgentDeploy,
   classifyTelemetryError,
+  safeTelemetryErrorMessage,
   type AgentDeployFailedProps,
 } from "../../telemetry";
 import feishuLogo from "../../assets/feishu-logo.svg";
@@ -227,6 +228,7 @@ export function FeishuBotIntegration({ onBack }: FeishuBotIntegrationProps) {
         operation.fail({
           failedPhase: telemetryDeployPhase(latestPhaseRef.current),
           errorKind: "abort",
+          errorMessage: safeTelemetryErrorMessage("用户取消部署"),
         });
         return;
       }
@@ -242,6 +244,7 @@ export function FeishuBotIntegration({ onBack }: FeishuBotIntegrationProps) {
         ...(cancelledRef.current
           ? { errorKind: "abort" as const }
           : classifyTelemetryError(error, { phase: latestPhaseRef.current })),
+        errorMessage: safeTelemetryErrorMessage(error),
       });
       if (!mountedRef.current || cancelledRef.current) return;
       setDeploymentStatus("failed");
@@ -268,6 +271,7 @@ export function FeishuBotIntegration({ onBack }: FeishuBotIntegrationProps) {
       deploymentOperationRef.current?.fail({
         failedPhase: telemetryDeployPhase(latestPhaseRef.current),
         errorKind: "abort",
+        errorMessage: safeTelemetryErrorMessage("用户取消部署"),
       });
       if (mountedRef.current) setDeploymentStatus("cancelled");
     } catch (error) {

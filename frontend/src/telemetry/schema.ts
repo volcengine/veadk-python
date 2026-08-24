@@ -29,6 +29,7 @@ export interface StudioTelemetryContext {
   environment: TelemetryEnvironment;
   cloudProvider: "volcengine" | "byteplus";
   accountId?: string;
+  accountIdResolutionError?: string;
 }
 
 export interface TelemetryIdentity {
@@ -105,6 +106,7 @@ export interface AgentDeployFailedProps {
     | "unknown";
   errorKind: ErrorKind;
   errorCode?: string;
+  errorMessage?: string;
 }
 
 export type SandboxKind = "codex" | "deepseek-harness" | "openclaw" | "hermes";

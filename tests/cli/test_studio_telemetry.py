@@ -27,6 +27,7 @@ def test_studio_telemetry_config_builds_ui_payload_from_environment() -> None:
             "VEADK_STUDIO_DEPLOY_REGION": "cn-beijing",
             "VEADK_STUDIO_PROJECT": "default",
             "VEADK_STUDIO_ACCOUNT_ID": "2100123456",
+            "VEADK_STUDIO_ACCOUNT_ID_RESOLUTION_ERROR": "sts unavailable",
         },
     )
 
@@ -41,5 +42,6 @@ def test_studio_telemetry_config_builds_ui_payload_from_environment() -> None:
             "project": "default",
             "version": "20260805120000",
             "accountId": "2100123456",
+            "accountIdResolutionError": "sts unavailable",
         },
     }
