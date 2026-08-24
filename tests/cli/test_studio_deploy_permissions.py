@@ -202,8 +202,35 @@ def test_renderer_localizes_byteplus_purposes_and_summary(capsys) -> None:
     assert permissions.IAM_CONFIG_URLS["byteplus"] in output
 
 
-def test_cli_stops_before_cloud_writes_when_permission_is_missing(
-    monkeypatch,
+@pytest.mark.parametrize(
+    ("provider_args", "expected_prompt", "expected_message"),
+    [
+        (
+            [
+                "--volcengine-access-key",
+                "ak",
+                "--volcengine-secret-key",
+                "sk",
+            ],
+            "是否仍要继续部署？",
+            "缺少 Studio 部署所需的 IAM 权限",
+        ),
+        (
+            [
+                "--provider",
+                "byteplus",
+                "--byteplus-access-key",
+                "ak",
+                "--byteplus-secret-key",
+                "sk",
+            ],
+            "Continue deployment anyway?",
+            "required IAM Actions are missing",
+        ),
+    ],
+)
+def test_cli_stops_before_cloud_writes_when_missing_permission_is_declined(
+    monkeypatch, provider_args, expected_prompt, expected_message
 ) -> None:
     identity_called = False
 
@@ -234,16 +261,61 @@ def test_cli_stops_before_cloud_writes_when_permission_is_missing(
             "deploy",
             "--vefaas-app-name",
             "studio-test",
+            *provider_args,
+        ],
+        input="n\n",
+    )
+
+    assert result.exit_code != 0
+    assert expected_prompt in result.output
+    assert expected_message in result.output
+    assert identity_called is False
+
+
+def test_cli_continues_when_missing_permission_is_accepted(monkeypatch) -> None:
+    identity_called = False
+
+    def _precheck(*, specs, **_kwargs):
+        return [
+            permissions.PermissionResult(spec=spec, satisfied=index != 0)
+            for index, spec in enumerate(specs)
+        ]
+
+    def _identity(**_kwargs):
+        nonlocal identity_called
+        identity_called = True
+        raise RuntimeError("identity provisioning reached")
+
+    monkeypatch.setattr(
+        permissions,
+        "run_studio_deploy_permission_precheck",
+        _precheck,
+    )
+    monkeypatch.setattr(
+        "veadk.cli.cli_frontend._resolve_or_create_studio_identity_resources",
+        _identity,
+    )
+
+    result = CliRunner().invoke(
+        studio,
+        [
+            "deploy",
+            "--vefaas-app-name",
+            "studio-test",
             "--volcengine-access-key",
             "ak",
             "--volcengine-secret-key",
             "sk",
         ],
+        input="y\n",
     )
 
     assert result.exit_code != 0
-    assert "缺少 Studio 部署所需的 IAM 权限" in result.output
-    assert identity_called is False
+    assert "是否仍要继续部署？" in result.output
+    assert "已确认忽略缺失的 IAM 权限，继续部署。" in result.output
+    assert identity_called is True
+    assert isinstance(result.exception, RuntimeError)
+    assert str(result.exception) == "identity provisioning reached"
 
 
 def test_cli_precheck_only_exits_before_cloud_writes(monkeypatch) -> None:
