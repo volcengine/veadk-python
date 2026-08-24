@@ -26,11 +26,13 @@ _REQUIREMENT_NAME_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)")
 _REMOVED_DISTRIBUTIONS = {
     "agentkit-sdk-python",
     "agentkit-harness-sidecar-integration",
+    "google-adk",
     "mcp",
     "veadk-python",
 }
 _MANAGED_SDK_REQUIREMENT = "agentkit-sdk-python==0.8.1"
 _MANAGED_MCP_REQUIREMENT = "mcp==1.26.0"
+_MANAGED_ADK_REQUIREMENT = "google-adk>=1.34.0"
 _IGNORED_PARTS = {".git", "__pycache__", "webui"}
 _IGNORED_SUFFIXES = {".pyc", ".pyo"}
 _BLOCKED_SUFFIXES = {".key", ".p12", ".pem", ".pfx"}
@@ -68,7 +70,7 @@ def _canonical_requirement_name(line: str) -> str | None:
 
 
 def rewrite_managed_sidecar_requirements(requirements: str) -> str:
-    """Use in-snapshot VeADK and install the approved public SDK explicitly."""
+    """Use in-snapshot VeADK and install approved runtime dependencies."""
 
     lines: list[str] = []
     veadk_removed = False
@@ -84,6 +86,7 @@ def rewrite_managed_sidecar_requirements(requirements: str) -> str:
         "# veadk-python is provided by the Studio-managed public source snapshot.",
         _MANAGED_SDK_REQUIREMENT,
         _MANAGED_MCP_REQUIREMENT,
+        _MANAGED_ADK_REQUIREMENT,
         *lines,
     ]
     return "\n".join(lines).rstrip() + "\n"
