@@ -17,7 +17,10 @@
 import hashlib
 import io
 import json
+import sys
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -28,6 +31,7 @@ from veadk.cli.studio_dependencies import (
 )
 from veadk.cli.studio_package import build_frontend_assets, studio_run_script
 from veadk.cli.studio_release import (
+    BYTEPLUS_STUDIO_RELEASE_REGION,
     StudioReleaseError,
     StudioReleaseManifest,
     StudioReleaseStore,
@@ -36,7 +40,9 @@ from veadk.cli.studio_release import (
     latest_manifest_object_key,
     manifest_object_key,
     release_catalog_object_key,
+    studio_release_region,
 )
+from veadk.utils.cloud_provider import CloudProvider
 
 
 def _manifest(content: bytes = b"bundle") -> StudioReleaseManifest:
@@ -83,6 +89,44 @@ def _store(client: _FakeTosClient) -> StudioReleaseStore:
         secret_key="sk",
         client=client,
     )
+
+
+@pytest.mark.parametrize(
+    ("provider", "region", "expected_endpoint"),
+    [
+        ("volcengine", "cn-beijing", "tos-cn-beijing.volces.com"),
+        ("byteplus", "ap-southeast-1", "tos-ap-southeast-1.bytepluses.com"),
+    ],
+)
+def test_release_store_uses_provider_tos_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    provider: CloudProvider,
+    region: str,
+    expected_endpoint: str,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def _client(*args: object, **kwargs: object) -> object:
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return object()
+
+    monkeypatch.setitem(sys.modules, "tos", SimpleNamespace(TosClientV2=_client))
+
+    StudioReleaseStore(
+        bucket="studio-releases",
+        region=region,
+        provider=provider,
+        access_key="ak",
+        secret_key="sk",
+    )
+
+    assert captured["kwargs"]["endpoint"] == expected_endpoint
+
+
+def test_byteplus_release_region_is_provider_specific() -> None:
+    assert studio_release_region("volcengine") == "cn-beijing"
+    assert studio_release_region("byteplus") == BYTEPLUS_STUDIO_RELEASE_REGION
 
 
 def test_manifest_round_trip_uses_public_field_names() -> None:

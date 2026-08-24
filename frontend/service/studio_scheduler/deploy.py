@@ -22,6 +22,10 @@ import shutil
 import tempfile
 import time
 import urllib.request
+from collections.abc import Iterator
+from contextlib import contextmanager
+from functools import partial
+from inspect import Parameter, signature
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +34,60 @@ from .diagnostics import sanitize_diagnostic
 _SCAN_TIMER_NAME = "veadk-studio-cronjobs-minute"
 _WORKER_TIMER_NAME = "veadk-studio-cronjobs-worker-minute"
 _MINUTE_CRONTAB = "* * * * *"
+_VEFAAS_REQUEST_TIMEOUT_SECONDS = 600
+_VEFAAS_LONG_REQUEST_METHODS = (
+    "code_upload_callback",
+    "create_dependency_install_task",
+    "create_function",
+    "create_timer",
+    "get_code_upload_address",
+    "get_dependency_install_task_log_download_uri",
+    "get_dependency_install_task_status",
+    "get_function",
+    "get_release_status",
+    "list_functions",
+    "list_triggers",
+    "release",
+    "update_function",
+    "update_timer",
+)
+
+
+def _accepts_request_timeout(method: Any) -> bool:
+    try:
+        parameters = signature(method).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(
+        parameter.name == "_request_timeout" or parameter.kind is Parameter.VAR_KEYWORD
+        for parameter in parameters
+    )
+
+
+@contextmanager
+def _extended_vefaas_request_timeout(service: Any) -> Iterator[None]:
+    """Keep BytePlus/VeFaaS long mutations alive for the release window."""
+    client = getattr(service, "client", None)
+    originals: dict[str, Any] = {}
+    if client is not None:
+        for method_name in _VEFAAS_LONG_REQUEST_METHODS:
+            method = getattr(client, method_name, None)
+            if method is None or not _accepts_request_timeout(method):
+                continue
+            originals[method_name] = method
+            setattr(
+                client,
+                method_name,
+                partial(
+                    method,
+                    _request_timeout=_VEFAAS_REQUEST_TIMEOUT_SECONDS,
+                ),
+            )
+    try:
+        yield
+    finally:
+        for method_name, method in originals.items():
+            setattr(client, method_name, method)
 
 
 def scheduler_function_name(studio_application_name: str) -> str:
@@ -55,6 +113,24 @@ def deploy_scheduler(
     environment: dict[str, str],
 ) -> tuple[str, str, str, str]:
     """Create/update independent scan and async-worker Functions and timers."""
+    with _extended_vefaas_request_timeout(service):
+        return _deploy_scheduler(
+            service,
+            studio_application_name=studio_application_name,
+            package_root=package_root,
+            role_trn=role_trn,
+            environment=environment,
+        )
+
+
+def _deploy_scheduler(
+    service: Any,
+    *,
+    studio_application_name: str,
+    package_root: Path,
+    role_trn: str,
+    environment: dict[str, str],
+) -> tuple[str, str, str, str]:
     function_name = scheduler_function_name(studio_application_name)
     worker_name = scheduler_worker_function_name(studio_application_name)
     with tempfile.TemporaryDirectory(prefix="studio_cronjob_scheduler_") as tmp:
@@ -125,9 +201,10 @@ def deploy_scheduler_for_studio_update(
     """Update the scheduler from the same bundle used by Studio self-update."""
     from volcenginesdkvefaas import GetFunctionRequest
 
-    current_function = service.client.get_function(
-        GetFunctionRequest(id=studio_function_id)
-    )
+    with _extended_vefaas_request_timeout(service):
+        current_function = service.client.get_function(
+            GetFunctionRequest(id=studio_function_id)
+        )
     current_environment = {
         str(item.key): str(item.value)
         for item in (getattr(current_function, "envs", None) or [])

@@ -2840,6 +2840,15 @@ export interface StudioUpdateStatus {
   permissionConsoleUrl: string;
 }
 
+export interface StudioUpdatePermissionStatus {
+  ready: boolean;
+  missingActions: string[];
+  policyName: string;
+  authorizationUrl: string;
+  iamConsoleUrl: string;
+  principalName: string;
+}
+
 /** Check the configured immutable Studio main release channel. */
 export async function getStudioUpdateStatus(
   targetVersion?: string,
@@ -2852,6 +2861,22 @@ export async function getStudioUpdateStatus(
   const res = await apiFetch(`/web/studio-update${query}`);
   if (!res.ok) throw new Error(`检查 Studio 更新失败 (${res.status})`);
   return (await res.json()) as StudioUpdateStatus;
+}
+
+/** Verify every IAM Action needed by OTA before starting any cloud mutation. */
+export async function getStudioUpdatePermissions(): Promise<StudioUpdatePermissionStatus> {
+  const res = await apiFetch("/web/studio-update/permissions");
+  if (!res.ok) {
+    let detail = "";
+    try {
+      const payload = (await res.json()) as { detail?: unknown };
+      detail = typeof payload.detail === "string" ? payload.detail : "";
+    } catch {
+      detail = "";
+    }
+    throw new Error(detail || `Studio 更新权限预检失败 (${res.status})`);
+  }
+  return (await res.json()) as StudioUpdatePermissionStatus;
 }
 
 /** Stage the latest full Studio bundle and submit a VeFaaS release. */
