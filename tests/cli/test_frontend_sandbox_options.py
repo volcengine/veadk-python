@@ -34,13 +34,13 @@ def test_serve_provider_is_bootstrapped_before_command_modules_load(
 
     _bootstrap_serve_provider(["frontend"])
 
-    assert os.environ["AGENTKIT_CLOUD_PROVIDER"] == "volcengine"
-    assert os.environ["CLOUD_PROVIDER"] == "volcengine"
-
-    _bootstrap_serve_provider(["studio", "--provider", "byteplus"])
-
     assert os.environ["AGENTKIT_CLOUD_PROVIDER"] == "byteplus"
     assert os.environ["CLOUD_PROVIDER"] == "byteplus"
+
+    _bootstrap_serve_provider(["studio", "--provider", "volcengine"])
+
+    assert os.environ["AGENTKIT_CLOUD_PROVIDER"] == "volcengine"
+    assert os.environ["CLOUD_PROVIDER"] == "volcengine"
 
 
 @pytest.mark.parametrize("command", [frontend, studio])
@@ -162,7 +162,7 @@ def test_local_studio_mounts_snapshot_tools_into_sandbox_services() -> None:
 
 
 @pytest.mark.parametrize("command", [frontend, studio])
-def test_local_serve_commands_default_to_volcengine(
+def test_local_serve_commands_defer_provider_resolution_when_not_explicit(
     monkeypatch: pytest.MonkeyPatch,
     command: Command,
 ) -> None:
@@ -176,7 +176,7 @@ def test_local_serve_commands_default_to_volcengine(
     result = CliRunner().invoke(command)
 
     assert result.exit_code == 0, result.output
-    assert captured["provider"] == "volcengine"
+    assert captured["provider"] is None
 
 
 @pytest.mark.parametrize("command", [frontend, studio])

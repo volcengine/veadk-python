@@ -9,6 +9,8 @@
   "auth_method": "none",
   "veidentity_user_pool_name": "",
   "veidentity_client_name": "",
+  "provider": "volcengine",
+  "region": "cn-beijing",
   "veadk_version": "",
   "_copy_without_render": [
     "*.html",

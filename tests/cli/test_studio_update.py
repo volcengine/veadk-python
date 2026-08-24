@@ -38,6 +38,19 @@ from veadk.integrations.ve_faas.ve_faas import VeFaaS
 _PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 32
 
 
+@pytest.fixture(autouse=True)
+def _clear_provider_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AGENTKIT_CLOUD_PROVIDER", raising=False)
+    monkeypatch.delenv("CLOUD_PROVIDER", raising=False)
+    monkeypatch.delenv("REGION", raising=False)
+    monkeypatch.delenv("BYTEPLUS_REGION", raising=False)
+    monkeypatch.delenv("BYTEPLUS_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("BYTEPLUS_SECRET_KEY", raising=False)
+    monkeypatch.delenv("BYTEPLUS_SESSION_TOKEN", raising=False)
+    monkeypatch.delenv("VOLCENGINE_SESSION_TOKEN", raising=False)
+    monkeypatch.delenv("VOLC_SESSIONTOKEN", raising=False)
+
+
 @pytest.fixture
 def scheduler_deploy(
     monkeypatch: pytest.MonkeyPatch,

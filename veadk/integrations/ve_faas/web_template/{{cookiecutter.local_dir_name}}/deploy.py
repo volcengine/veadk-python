@@ -18,7 +18,10 @@ from pathlib import Path
 from veadk.cloud.cloud_agent_engine import CloudAgentEngine
 
 async def main():
-    engine = CloudAgentEngine()
+    engine = CloudAgentEngine(
+        provider="{{cookiecutter.provider}}",
+        region="{{cookiecutter.region}}",
+    )
 
     cloud_app = engine.deploy(
         path=str(Path(__file__).parent / "src"),

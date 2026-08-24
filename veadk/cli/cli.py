@@ -27,7 +27,11 @@ def _bootstrap_serve_provider(argv: list[str] | None = None) -> None:
     if not args or args[0] not in {"frontend", "studio"}:
         return
 
-    provider = "volcengine"
+    provider = (
+        os.environ.get("AGENTKIT_CLOUD_PROVIDER")
+        or os.environ.get("CLOUD_PROVIDER")
+        or "volcengine"
+    )
     for index, argument in enumerate(args[1:]):
         if argument.startswith("--provider="):
             provider = argument.partition("=")[2]
@@ -35,6 +39,9 @@ def _bootstrap_serve_provider(argv: list[str] | None = None) -> None:
         if argument == "--provider" and index + 2 < len(args):
             provider = args[index + 2]
             break
+    provider = provider.strip().lower()
+    if provider == "volces":
+        provider = "volcengine"
     if provider not in {"volcengine", "byteplus"}:
         return
     os.environ["AGENTKIT_CLOUD_PROVIDER"] = provider
