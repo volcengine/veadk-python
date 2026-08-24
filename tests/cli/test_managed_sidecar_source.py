@@ -46,14 +46,14 @@ def _package(root: Path) -> Path:
     return package
 
 
-def test_rewrite_uses_source_snapshot_and_pins_public_sdk() -> None:
+def test_rewrite_uses_source_snapshot_and_pins_runtime_dependencies() -> None:
     rewritten = rewrite_managed_sidecar_requirements(
         "\n".join(
             (
                 "veadk-python[harness-sidecar]>=1.1.1",
                 "agentkit_sdk_python>=0.8.0,<0.9.0",
                 "agentkit-harness-sidecar-integration==0.1.0",
-                "google-adk>=1.34.0",
+                "google_adk==1.23.0",
                 "mcp==1.20.0",
                 "",
             )
@@ -65,9 +65,10 @@ def test_rewrite_uses_source_snapshot_and_pins_public_sdk() -> None:
     assert "agentkit-harness-sidecar-integration" not in rewritten
     assert rewritten.splitlines()[1] == "agentkit-sdk-python==0.8.1"
     assert rewritten.splitlines().count("agentkit-sdk-python==0.8.1") == 1
-    assert "google-adk>=1.34.0" in rewritten
     assert rewritten.splitlines().count("mcp==1.26.0") == 1
     assert "mcp==1.20.0" not in rewritten
+    assert rewritten.splitlines().count("google-adk>=1.34.0") == 1
+    assert "google_adk==1.23.0" not in rewritten
 
 
 def test_rewrite_preserves_comments_and_rejects_missing_veadk() -> None:
@@ -118,6 +119,8 @@ def test_stage_copies_only_safe_runtime_source_and_rewrites_requirements(
     requirements = (project / "requirements.txt").read_text(encoding="utf-8")
     assert requirements.splitlines().count("agentkit-sdk-python==0.8.1") == 1
     assert requirements.splitlines().count("mcp==1.26.0") == 1
+    assert requirements.splitlines().count("google-adk>=1.34.0") == 1
+    assert "\ngoogle-adk\n" not in f"\n{requirements}"
     assert "veadk-python[" not in requirements
 
 
