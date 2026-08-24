@@ -398,9 +398,16 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   assert.match(projectPreviewSource, /const pendingBuildLog = \(\): DeployBuildLogSnapshot/);
   assert.match(projectPreviewSource, /s\.phase === "build" && !latestBuildLog[\s\S]*?latestBuildLog = pendingBuildLog\(\)/);
   assert.match(projectPreviewSource, /let latestPhase = initialTask\.phase \?\? "prepare"/);
-  assert.match(projectPreviewSource, /const mergeBuildFailureLog = \(message: string\): DeployBuildLogSnapshot \| undefined =>/);
-  assert.match(projectPreviewSource, /"----- 构建失败 -----"[\s\S]*?latestBuildLog = mergeDeployBuildLog\(latestBuildLog/);
-  assert.match(projectPreviewSource, /latestPhase = s\.phase/);
+  assert.match(projectPreviewSource, /function advanceDeploymentPhase\(\s*current: string \| undefined,\s*next: string \| undefined,\s*\): string/);
+  assert.match(projectPreviewSource, /const nextPhase = advanceDeploymentPhase\(latestPhase, s\.phase\)/);
+  assert.match(projectPreviewSource, /const finalizeBuildFailureLog = \(\): DeployBuildLogSnapshot \| undefined =>/);
+  assert.match(projectPreviewSource, /latestPhase !== "build" \|\| !latestBuildLog\?\.text/);
+  assert.doesNotMatch(projectPreviewSource, /"----- 构建失败 -----"/);
+  assert.match(projectPreviewSource, /const telemetryErrorMessage = \(error: unknown\): string \| undefined =>/);
+  assert.match(projectPreviewSource, /latestPhase === "build" && latestBuildLog\?\.text[\s\S]*?safeTelemetryErrorMessage\(latestBuildLog\.text, \{ preserveEnd: true \}\)/);
+  assert.match(projectPreviewSource, /errorMessage: telemetryErrorMessage\(err\)/);
+  assert.doesNotMatch(projectPreviewSource, /latestPhase = s\.phase/);
+  assert.match(projectPreviewSource, /setActivePhase\(latestPhase\)/);
   assert.match(
     projectPreviewSource,
     /label: "部署失败"[\s\S]*?message: failedInBuild[\s\S]*?\.\.\.\(buildLog/,

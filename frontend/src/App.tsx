@@ -2937,6 +2937,7 @@ export default function App() {
         environment,
         cloudProvider: cfg.provider,
         accountId: studio?.accountId ?? "",
+        accountIdResolutionError: studio?.accountIdResolutionError ?? "",
       });
       trackStudioEntryViewed({ authState: "anonymous" });
       setFeatures(cfg.features);

@@ -73,22 +73,22 @@ def test_reconcile_does_not_mutate_the_function_role_policy(
         "SANDBOX_CHAT_HERMES_SNAPSHOT": "hermes-tool",
     }
 
-    assert (
-        reconcile_studio_update_resources(
-            provider=provider,
-            region=region,
-            application_id="application-id",
-            function_id="function-id",
-            function_client=_client(
-                environment,
-                role="trn:iam::123:role/VeADKFrontendServiceRole",
-            ),
-            access_key="ak",
-            secret_key="sk",
-            session_token="token",
-        )
-        == {}
-    )
+    assert reconcile_studio_update_resources(
+        provider=provider,
+        region=region,
+        application_id="application-id",
+        function_id="function-id",
+        function_client=_client(
+            environment,
+            role="trn:iam::123:role/VeADKFrontendServiceRole",
+        ),
+        access_key="ak",
+        secret_key="sk",
+        session_token="token",
+    ) == {
+        "VEADK_STUDIO_ACCOUNT_ID": "123",
+        "VEADK_STUDIO_ACCOUNT_ID_RESOLUTION_ERROR": "",
+    }
 
 
 def test_reconcile_studio_update_resources_reuses_existing_resources(
@@ -111,19 +111,19 @@ def test_reconcile_studio_update_resources_reuses_existing_resources(
         lambda **_kwargs: pytest.fail("snapshot tools must not be reprovisioned"),
     )
 
-    assert (
-        reconcile_studio_update_resources(
-            provider="byteplus",
-            region="ap-southeast-1",
-            application_id="application-id",
-            function_id="function-id",
-            function_client=_client(environment),
-            access_key="ak",
-            secret_key="sk",
-            session_token="token",
-        )
-        == {}
-    )
+    assert reconcile_studio_update_resources(
+        provider="byteplus",
+        region="ap-southeast-1",
+        application_id="application-id",
+        function_id="function-id",
+        function_client=_client(environment),
+        access_key="ak",
+        secret_key="sk",
+        session_token="token",
+    ) == {
+        "VEADK_STUDIO_ACCOUNT_ID": "123",
+        "VEADK_STUDIO_ACCOUNT_ID_RESOLUTION_ERROR": "",
+    }
 
 
 def test_reconcile_studio_update_resources_provisions_missing_resources(
@@ -168,6 +168,8 @@ def test_reconcile_studio_update_resources_provisions_missing_resources(
         "VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY": "generated-key",
         "VEADK_STUDIO_TOS_BUCKET": "studio-bucket",
         "VEADK_STUDIO_TOS_REGION": "ap-southeast-1",
+        "VEADK_STUDIO_ACCOUNT_ID": "123",
+        "VEADK_STUDIO_ACCOUNT_ID_RESOLUTION_ERROR": "",
         "SANDBOX_CHAT_CODEX_SNAPSHOT": "codex-tool",
         "SANDBOX_CHAT_OPENCLAW_SNAPSHOT": "openclaw-tool",
         "SANDBOX_CHAT_HERMES_SNAPSHOT": "hermes-tool",
@@ -222,8 +224,51 @@ def test_reconcile_studio_update_resources_only_repairs_missing_items(
         session_token="",
     )
 
-    assert overrides == {"SANDBOX_CHAT_HERMES_SNAPSHOT": "hermes-tool"}
+    assert overrides == {
+        "VEADK_STUDIO_ACCOUNT_ID": "123",
+        "VEADK_STUDIO_ACCOUNT_ID_RESOLUTION_ERROR": "",
+        "SANDBOX_CHAT_HERMES_SNAPSHOT": "hermes-tool",
+    }
     assert tool_calls == ["hermes"]
+
+
+def test_reconcile_studio_update_resources_recovers_account_id_from_tos_bucket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "frontend.server.studio_update_resources.resolve_studio_storage_for_deploy",
+        lambda **_kwargs: pytest.fail("existing storage must be reused"),
+    )
+    monkeypatch.setattr(
+        "frontend.server.studio_update_resources._provision_snapshot_tool",
+        lambda **_kwargs: pytest.fail("snapshot tools must not be reprovisioned"),
+    )
+
+    overrides = reconcile_studio_update_resources(
+        provider="volcengine",
+        region="cn-beijing",
+        application_id="application-id",
+        function_id="function-id",
+        function_client=_client(
+            {
+                "VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY": "stable-key",
+                "VEADK_STUDIO_TOS_BUCKET": "veadk-studio-2100123456",
+                "VEADK_STUDIO_TOS_REGION": "cn-beijing",
+                "SANDBOX_CHAT_CODEX_SNAPSHOT": "codex-tool",
+                "SANDBOX_CHAT_OPENCLAW_SNAPSHOT": "openclaw-tool",
+                "SANDBOX_CHAT_HERMES_SNAPSHOT": "hermes-tool",
+            },
+            role="custom-role-without-account-id",
+        ),
+        access_key="",
+        secret_key="",
+        session_token="",
+    )
+
+    assert overrides == {
+        "VEADK_STUDIO_ACCOUNT_ID": "2100123456",
+        "VEADK_STUDIO_ACCOUNT_ID_RESOLUTION_ERROR": "",
+    }
 
 
 def test_provision_codex_snapshot_tool_binds_model_credential(

@@ -13,9 +13,12 @@
 # limitations under the License.
 
 from veadk.cli.cli_frontend import (
+    _advance_deploy_phase,
+    _build_log_tail_has_error_marker,
     _cp_metadata_from_reporter_message,
     _extract_build_error_excerpt,
     _sanitize_build_log_snapshot,
+    _wait_for_cp_build_error_log_snapshot,
 )
 
 
@@ -66,6 +69,90 @@ def test_extract_build_error_excerpt_ignores_successful_logs() -> None:
     ]
 
     assert _extract_build_error_excerpt(lines) == ""
+
+
+def test_advance_deploy_phase_classifies_runtime_initialization_failure() -> None:
+    message = (
+        "Deploy failed: Runtime status is Error. Initialization failed "
+        "ErrorCode.RUNTIME_NOT_READY"
+    )
+
+    assert _advance_deploy_phase("build", message) == "deploy"
+    assert _advance_deploy_phase("deploy", "Step 1/2: Building image") == "deploy"
+
+
+def test_build_log_tail_error_marker_checks_retained_tail() -> None:
+    text = "error: failed to solve\n" + ("progress line\n" * 20)
+
+    assert not _build_log_tail_has_error_marker(text, tail_chars=20)
+    assert _build_log_tail_has_error_marker(text, tail_chars=len(text))
+
+
+def test_wait_for_cp_build_error_log_snapshot_retries_until_tail_has_marker() -> None:
+    snapshots = iter(
+        [
+            {"text": "downloading base image"},
+            {"text": "extracting base image"},
+            {"text": "error: failed to solve: exit code: 1"},
+        ]
+    )
+    sleeps: list[float] = []
+
+    snapshot = _wait_for_cp_build_error_log_snapshot(
+        lambda: next(snapshots),
+        attempts=5,
+        interval_seconds=2.0,
+        sleep_fn=sleeps.append,
+    )
+
+    assert snapshot["text"].startswith("error: failed to solve")
+    assert sleeps == [2.0, 2.0]
+
+
+def test_wait_for_cp_build_error_log_snapshot_returns_last_snapshot_on_timeout() -> (
+    None
+):
+    snapshots = iter(
+        [
+            {"text": "downloading base image"},
+            {"text": "extracting base image"},
+        ]
+    )
+    sleeps: list[float] = []
+
+    snapshot = _wait_for_cp_build_error_log_snapshot(
+        lambda: next(snapshots),
+        attempts=2,
+        interval_seconds=0.5,
+        sleep_fn=sleeps.append,
+    )
+
+    assert snapshot == {"text": "extracting base image"}
+    assert sleeps == [0.5]
+
+
+def test_wait_for_cp_build_error_log_snapshot_keeps_last_success_on_later_error() -> (
+    None
+):
+    calls = 0
+    sleeps: list[float] = []
+
+    def read_snapshot() -> dict[str, str]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {"text": "extracting base image"}
+        raise RuntimeError("temporary log download failure")
+
+    snapshot = _wait_for_cp_build_error_log_snapshot(
+        read_snapshot,
+        attempts=2,
+        interval_seconds=0.5,
+        sleep_fn=sleeps.append,
+    )
+
+    assert snapshot == {"text": "extracting base image"}
+    assert sleeps == [0.5]
 
 
 def test_sanitize_build_log_snapshot_redacts_and_bounds_logs() -> None:

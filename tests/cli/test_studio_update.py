@@ -1055,6 +1055,7 @@ def test_volcengine_studio_update_repairs_missing_snapshot_tools_and_oauth_callb
         "VEADK_STUDIO_DEPLOY_REGION": "cn-beijing",
         "VEADK_STUDIO_PROJECT": "default",
         "VEADK_STUDIO_ACCOUNT_ID": "123",
+        "VEADK_STUDIO_ACCOUNT_ID_RESOLUTION_ERROR": "",
         "OAUTH2_REDIRECT_URI": "https://studio.example.com/oauth2/callback",
         "SANDBOX_CHAT_CODEX_SNAPSHOT": "codex-snapshot-tool",
         "SANDBOX_CHAT_OPENCLAW_SNAPSHOT": "openclaw-snapshot-tool",

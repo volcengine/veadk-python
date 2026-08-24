@@ -30,7 +30,9 @@ test("Studio access fails closed until the server-derived role is known", () => 
 
 test("Studio entry telemetry uses anonymous UI config metadata", () => {
   assert.match(clientSource, /accountId: typeof studio\.accountId === "string"/);
+  assert.match(clientSource, /accountIdResolutionError:[\s\S]*?typeof studio\.accountIdResolutionError === "string"/);
   assert.match(appSource, /accountId: studio\?\.accountId \?\? ""/);
+  assert.match(appSource, /accountIdResolutionError: studio\?\.accountIdResolutionError \?\? ""/);
   assert.match(appSource, /trackStudioEntryViewed\(\{ authState: "anonymous" \}\)/);
 });
 
