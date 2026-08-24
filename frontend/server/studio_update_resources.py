@@ -20,6 +20,10 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Literal
 
 from frontend.server.storage.provisioning import resolve_studio_storage_for_deploy
+from veadk.cli.studio_account_id import (
+    resolve_studio_account_id_metadata,
+    studio_account_id_environment,
+)
 from veadk.utils.cloud_provider import CloudProvider
 
 SnapshotKind = Literal["codex", "openclaw", "hermes"]
@@ -31,10 +35,10 @@ _SNAPSHOT_ENVIRONMENTS: tuple[tuple[str, SnapshotKind, str], ...] = (
 )
 
 
-def _function_config(
+def _function_state(
     function_client: Any,
     function_id: str,
-) -> dict[str, str]:
+) -> tuple[object, dict[str, str]]:
     import volcenginesdkvefaas
 
     function = function_client.get_function(
@@ -45,7 +49,7 @@ def _function_config(
         for item in (getattr(function, "envs", None) or [])
         if getattr(item, "key", None)
     }
-    return environment
+    return function, environment
 
 
 def _provision_snapshot_tool(
@@ -135,7 +139,7 @@ def reconcile_studio_update_resources(
     session_token: str,
 ) -> dict[str, str]:
     """Return environment overrides for resources missing from an older Studio."""
-    environment = _function_config(function_client, function_id)
+    function, environment = _function_state(function_client, function_id)
     overrides: dict[str, str] = {}
 
     from veadk.cli.studio_knowledge_signing import (
@@ -166,6 +170,22 @@ def reconcile_studio_update_resources(
                 "VEADK_STUDIO_TOS_REGION": storage.region,
             }
         )
+
+    account_resolution = resolve_studio_account_id_metadata(
+        environment={**environment, **overrides},
+        remote_function=function,
+        access_key=access_key,
+        secret_key=secret_key,
+        session_token=session_token,
+        region=region,
+        provider=provider,
+    )
+    overrides.update(
+        studio_account_id_environment(
+            account_resolution,
+            clear_error_on_success=True,
+        )
+    )
 
     missing_snapshot_tools = [
         item for item in _SNAPSHOT_ENVIRONMENTS if not environment.get(item[0])

@@ -103,6 +103,7 @@ function harness() {
     environment: "staging",
     cloudProvider: "volcengine",
     accountId: "2100123456",
+    accountIdResolutionError: "sts unavailable",
   });
   runtime.identify({
     userUniqueId: " user-1 ",
@@ -188,6 +189,7 @@ test("records one anonymous Studio page entry before login", () => {
   assert.equal(events[0].payload.auth_state, "anonymous");
   assert.equal(events[0].payload.cloud_provider, "volcengine");
   assert.equal(events[0].payload.account_id, "2100123456");
+  assert.equal(events[0].payload.account_id_resolution_error, "sts unavailable");
   assert.equal(events[0].payload.page_instance_id, "id-1");
   assert.equal("user_role" in events[0].payload, false);
   assert.equal("user_source" in events[0].payload, false);
@@ -207,6 +209,7 @@ test("records one authenticated page-ready Studio visit, not an Agent chat sessi
   assert.equal("auth_session_id" in events[0].payload, false);
   assert.equal(events[0].payload.cloud_provider, "volcengine");
   assert.equal(events[0].payload.account_id, "2100123456");
+  assert.equal(events[0].payload.account_id_resolution_error, "sts unavailable");
   assert.equal(events[0].payload.page_instance_id, "id-1");
   assert.equal("session_id" in events[0].payload, false);
 });

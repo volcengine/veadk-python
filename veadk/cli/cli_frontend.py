@@ -56,6 +56,10 @@ from veadk.cli.studio_model_catalog import (
     provider_allows_model,
     studio_agent_model_name,
 )
+from veadk.cli.studio_account_id import (
+    resolve_studio_account_id_metadata,
+    studio_account_id_environment,
+)
 from veadk.cli.studio_telemetry import studio_telemetry_config
 from veadk.utils.cloud_provider import (
     DEFAULT_BYTEPLUS_REGION,
@@ -76,8 +80,6 @@ _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _BYTEPLUS_VEFAAS_APPLICATION_NAME_RE = re.compile(
     r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$"
 )
-_CLOUD_ACCOUNT_ID_RE = re.compile(r"[0-9]+")
-_IAM_ACCOUNT_ID_RE = re.compile(r"\biam::(?P<account_id>[0-9]+):")
 _BUILD_ERROR_MARKERS = (
     "no solution found",
     "unsatisfiable",
@@ -374,24 +376,6 @@ def _normalize_runtime_description(value: object) -> str:
         normalized.append(character)
         byte_length += character_bytes
     return re.sub(r" +", " ", "".join(normalized)).rstrip()
-
-
-def _cloud_account_id_from_value(value: object) -> str:
-    normalized = str(value or "").strip()
-    return normalized if _CLOUD_ACCOUNT_ID_RE.fullmatch(normalized) else ""
-
-
-def _studio_account_id_from_remote_function(function: object) -> str:
-    for attribute in ("owner", "Owner"):
-        account_id = _cloud_account_id_from_value(getattr(function, attribute, ""))
-        if account_id:
-            return account_id
-    for attribute in ("role", "Role"):
-        role = str(getattr(function, attribute, "") or "")
-        match = _IAM_ACCOUNT_ID_RE.search(role)
-        if match:
-            return match.group("account_id")
-    return ""
 
 
 def _is_malformed_runtime_description_error(error: object) -> bool:
@@ -11094,27 +11078,26 @@ def frontend_deploy(
 
     from frontend.server.storage.provisioning import (
         StudioStorageProvisioningError,
-        resolve_studio_account_id_for_deploy,
         resolve_studio_storage_for_deploy,
     )
 
-    studio_account_id = ""
-    try:
-        studio_account_id = resolve_studio_account_id_for_deploy(
-            access_key=ak,
-            secret_key=sk,
-            session_token=session_token or "",
-            region=region,
-            provider=provider_id,
-        )
-    except StudioStorageProvisioningError as error:
-        detail = _safe_exception_detail(
+    account_resolution = resolve_studio_account_id_metadata(
+        access_key=ak,
+        secret_key=sk,
+        session_token=session_token or "",
+        region=region,
+        provider=provider_id,
+        error_formatter=lambda error: _safe_exception_detail(
             error,
             secrets=(ak, sk, session_token),
-        )
+        ),
+    )
+    studio_account_id = account_resolution.account_id
+    studio_account_id_resolution_error = account_resolution.error
+    if studio_account_id_resolution_error:
         click.echo(
             "Warning: Could not resolve Studio cloud account ID for telemetry: "
-            f"{detail}"
+            f"{studio_account_id_resolution_error}"
         )
 
     click.echo("Ensuring Studio persistent storage…")
@@ -11142,6 +11125,13 @@ def frontend_deploy(
             "VEADK_STUDIO_TOS_REGION": storage_config.region,
         }
     )
+    if not studio_account_id:
+        bucket_resolution = resolve_studio_account_id_metadata(
+            environment=studio_storage_environment,
+        )
+        if bucket_resolution.account_id:
+            studio_account_id = bucket_resolution.account_id
+            studio_account_id_resolution_error = ""
     click.echo(f"Studio persistent storage ready: {storage_config.object_host}")
 
     sandbox_tool_ids = {
@@ -11410,6 +11400,10 @@ def frontend_deploy(
     veadk_environments["VEADK_STUDIO_DEPLOY_REGION"] = region
     if studio_account_id:
         veadk_environments["VEADK_STUDIO_ACCOUNT_ID"] = studio_account_id
+    elif studio_account_id_resolution_error:
+        veadk_environments["VEADK_STUDIO_ACCOUNT_ID_RESOLUTION_ERROR"] = (
+            studio_account_id_resolution_error
+        )
     veadk_environments.update(studio_storage_environment)
     if client_secret:
         veadk_environments["OAUTH2_CLIENT_SECRET"] = client_secret
@@ -11562,6 +11556,10 @@ def frontend_deploy(
             }
             if studio_account_id:
                 release_environment["VEADK_STUDIO_ACCOUNT_ID"] = studio_account_id
+            elif studio_account_id_resolution_error:
+                release_environment["VEADK_STUDIO_ACCOUNT_ID_RESOLUTION_ERROR"] = (
+                    studio_account_id_resolution_error
+                )
             if studio_update_bucket:
                 release_environment.update(
                     {
@@ -11991,36 +11989,30 @@ def frontend_update(
                     f"{redirect_uri} to the user-pool client's allowed callback URLs manually."
                 )
 
-        studio_account_id = str(
-            current_env.get("VEADK_STUDIO_ACCOUNT_ID") or ""
-        ).strip()
-        if not studio_account_id and remote_function is not None:
-            studio_account_id = _studio_account_id_from_remote_function(remote_function)
-        if not studio_account_id and service_client is not None:
-            from frontend.server.storage.provisioning import (
-                StudioStorageProvisioningError,
-                resolve_studio_account_id_for_deploy,
+        account_resolution = resolve_studio_account_id_metadata(
+            environment=current_env,
+            remote_function=remote_function,
+            access_key=ak if service_client is not None else "",
+            secret_key=sk if service_client is not None else "",
+            session_token=session_token or "",
+            region=target.region,
+            provider=provider_id,
+            error_formatter=lambda error: _safe_exception_detail(
+                error,
+                secrets=(ak, sk, session_token),
+            ),
+        )
+        if account_resolution.error:
+            click.echo(
+                "Warning: Could not resolve Studio cloud account ID for telemetry: "
+                f"{account_resolution.error}"
             )
-
-            try:
-                studio_account_id = resolve_studio_account_id_for_deploy(
-                    access_key=ak,
-                    secret_key=sk,
-                    session_token=session_token or "",
-                    region=target.region,
-                    provider=provider_id,
-                )
-            except StudioStorageProvisioningError as error:
-                detail = _safe_exception_detail(
-                    error,
-                    secrets=(ak, sk, session_token),
-                )
-                click.echo(
-                    "Warning: Could not resolve Studio cloud account ID for telemetry: "
-                    f"{detail}"
-                )
-        if studio_account_id:
-            environment_overrides["VEADK_STUDIO_ACCOUNT_ID"] = studio_account_id
+        environment_overrides.update(
+            studio_account_id_environment(
+                account_resolution,
+                clear_error_on_success=True,
+            )
+        )
 
         snapshot_tool_ids = {
             "codex_snapshot": sandbox_chat_codex_snapshot_tool_id

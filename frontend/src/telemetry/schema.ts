@@ -29,6 +29,7 @@ export interface StudioTelemetryContext {
   environment: TelemetryEnvironment;
   cloudProvider: "volcengine" | "byteplus";
   accountId?: string;
+  accountIdResolutionError?: string;
 }
 
 export interface TelemetryIdentity {

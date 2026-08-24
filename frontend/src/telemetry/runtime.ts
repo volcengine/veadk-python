@@ -77,6 +77,7 @@ export class TelemetryRuntime {
     this.context = {
       ...context,
       accountId: context.accountId?.trim() ?? "",
+      accountIdResolutionError: context.accountIdResolutionError?.trim() ?? "",
     };
   }
 
@@ -124,6 +125,8 @@ export class TelemetryRuntime {
       environment: this.context.environment,
       cloud_provider: this.context.cloudProvider,
       account_id: this.context.accountId,
+      account_id_resolution_error:
+        this.context.accountIdResolutionError || undefined,
       page_instance_id: this.pageInstanceId,
       auth_state: props.authState,
     }));
@@ -290,6 +293,8 @@ export class TelemetryRuntime {
       environment: this.context.environment,
       cloud_provider: this.context.cloudProvider,
       account_id: this.identity.accountId,
+      account_id_resolution_error:
+        this.context.accountIdResolutionError || undefined,
       user_role: this.identity.userRole,
       user_source: this.identity.userSource,
       page_instance_id: this.pageInstanceId,

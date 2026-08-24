@@ -158,6 +158,7 @@ const COMMON_KEYS = [
   "environment",
   "cloud_provider",
   "account_id",
+  "account_id_resolution_error",
   "user_role",
   "user_source",
   "page_instance_id",
