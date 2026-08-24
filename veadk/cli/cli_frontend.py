@@ -1410,6 +1410,7 @@ def _run_frontend_server(
     provider_id = (
         normalize_cloud_provider(provider) if provider else cloud_provider_from_env()
     )
+    provider = provider_id
     os.environ["AGENTKIT_CLOUD_PROVIDER"] = provider_id
     os.environ["CLOUD_PROVIDER"] = provider_id
     from agentkit.platform.context import set_default_cloud_provider
