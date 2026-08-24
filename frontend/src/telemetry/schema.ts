@@ -105,6 +105,7 @@ export interface AgentDeployFailedProps {
     | "unknown";
   errorKind: ErrorKind;
   errorCode?: string;
+  errorMessage?: string;
 }
 
 export type SandboxKind = "codex" | "deepseek-harness" | "openclaw" | "hermes";

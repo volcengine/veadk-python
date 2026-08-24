@@ -146,6 +146,7 @@ export class TelemetryRuntime {
       failed_phase: result.failedPhase,
       error_kind: result.errorKind,
       error_code: result.errorCode,
+      error_message: result.errorMessage,
     }));
   }
 

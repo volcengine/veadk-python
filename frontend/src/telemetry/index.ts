@@ -1,6 +1,6 @@
 import { TeaClient, type TeaClientConfig } from "./client";
 import { TelemetryRuntime } from "./runtime";
-export { classifyTelemetryError } from "./privacy";
+export { classifyTelemetryError, safeTelemetryErrorMessage } from "./privacy";
 export type {
   ClassifiedTelemetryError,
   TelemetryErrorContext,

@@ -57,7 +57,10 @@ const privacyResult = await build({
   write: false,
 });
 const privacyModuleUrl = `data:text/javascript;base64,${Buffer.from(privacyResult.outputFiles[0].contents).toString("base64")}`;
-const { classifyTelemetryError } = await import(privacyModuleUrl);
+const {
+  classifyTelemetryError,
+  safeTelemetryErrorMessage,
+} = await import(privacyModuleUrl);
 
 const clientResult = await build({
   entryPoints: [
@@ -234,6 +237,66 @@ test("links started and terminal events while making the terminal idempotent", (
   assert.notEqual(events[0].payload.event_id, events[1].payload.event_id);
   assert.equal(events[1].payload.duration_ms, 75);
   assert.equal(events[1].payload.runtime_id, "runtime-1");
+});
+
+test("records compact redacted deploy failure messages", () => {
+  const { events, runtime, setNow } = harness();
+  const operation = runtime.beginAgentDeploy({
+    agentId: "agent-1",
+    deployAction: "create",
+    deploySource: "scratch",
+    createMode: "custom",
+    aiAssisted: 0,
+    deployRegion: "cn-beijing",
+    runtimeNetworkType: "public",
+    feishuEnabled: 0,
+  });
+  const error = new Error(
+    `Deploy failed
+Authorization: Bearer abc.def.ghi token=plain-secret password="quoted-secret" ${"x".repeat(1200)}`,
+  );
+  setNow(200);
+  operation.fail({
+    failedPhase: "deploy",
+    errorKind: "server",
+    errorCode: "500",
+    errorMessage: safeTelemetryErrorMessage(error),
+  });
+
+  assert.equal(events.length, 2);
+  const failed = events[1].payload;
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.error_kind, "server");
+  assert.equal(failed.error_code, "500");
+  assert.equal(failed.failed_phase, "deploy");
+  assert.equal(typeof failed.error_message, "string");
+  assert.ok(failed.error_message.length <= 1024);
+  assert.match(failed.error_message, /Deploy failed Authorization:/);
+  assert.match(failed.error_message, /Bearer \[REDACTED\]/);
+  assert.match(failed.error_message, /token=\[REDACTED\]/);
+  assert.match(failed.error_message, /password="\[REDACTED\]"/);
+  assert.match(failed.error_message, /\[truncated\]$/);
+  assert.doesNotMatch(failed.error_message, /abc\.def\.ghi/);
+  assert.doesNotMatch(failed.error_message, /plain-secret/);
+  assert.doesNotMatch(failed.error_message, /quoted-secret/);
+  assert.equal(safeTelemetryErrorMessage({ code: "E_UNKNOWN" }), undefined);
+});
+
+test("can preserve the tail of long build log telemetry messages", () => {
+  const message = safeTelemetryErrorMessage(
+    `${"installing dependency\n".repeat(200)}
+error: failed to solve: process "/bin/sh -c uv pip install -r requirements.txt" did not complete successfully: exit code: 1
+Authorization: Bearer build.secret.token`,
+    { preserveEnd: true },
+  );
+
+  assert.equal(typeof message, "string");
+  assert.ok(message.length <= 1024);
+  assert.match(message, /^\[truncated\] \.\.\./);
+  assert.match(message, /uv pip install -r requirements\.txt/);
+  assert.match(message, /exit code: 1/);
+  assert.match(message, /Bearer \[REDACTED\]/);
+  assert.doesNotMatch(message, /build\.secret\.token/);
 });
 
 test("provides all six typed operation event families", () => {

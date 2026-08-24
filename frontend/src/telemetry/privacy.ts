@@ -16,9 +16,18 @@ export interface TelemetryErrorContext {
 
 interface ErrorShape {
   code?: unknown;
+  message?: unknown;
   name?: unknown;
   status?: unknown;
 }
+
+interface TelemetryMessageOptions {
+  preserveEnd?: boolean;
+}
+
+const DEFAULT_STRING_MAX_LENGTH = 256;
+const ERROR_MESSAGE_MAX_LENGTH = 1024;
+const REDACTED = "[REDACTED]";
 
 function stableErrorCode(value: unknown): string | undefined {
   if (typeof value !== "string" && typeof value !== "number") return undefined;
@@ -31,6 +40,58 @@ function classifiedTelemetryError(
   errorCode?: string,
 ): ClassifiedTelemetryError {
   return errorCode === undefined ? { errorKind } : { errorKind, errorCode };
+}
+
+function truncateTelemetryString(
+  value: string,
+  maxLength: number,
+  options: TelemetryMessageOptions = {},
+): string {
+  if (value.length <= maxLength) return value;
+  if (options.preserveEnd) {
+    const prefix = "[truncated] ...";
+    return `${prefix}${value.slice(-Math.max(0, maxLength - prefix.length))}`;
+  }
+  const suffix = "... [truncated]";
+  return `${value.slice(0, Math.max(0, maxLength - suffix.length))}${suffix}`;
+}
+
+function redactTelemetryMessage(value: string): string {
+  return value
+    .replace(
+      /\b(Authorization\s*[:=]\s*)(Bearer\s+)?[^\s"',;&]+/gi,
+      (_match, prefix: string, bearer: string | undefined) =>
+        `${prefix}${bearer ?? ""}${REDACTED}`,
+    )
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, `Bearer ${REDACTED}`)
+    .replace(
+      /\b([\w.-]*(?:token|password|passwd|secret|api[_-]?key|access[_-]?key|secret[_-]?key|cookie)[\w.-]*\s*[:=]\s*)(["']?)[^\s"',;&]+/gi,
+      (_match, prefix: string, quote: string) => `${prefix}${quote}${REDACTED}`,
+    );
+}
+
+/** Returns a compact, redacted error message suitable for product telemetry. */
+export function safeTelemetryErrorMessage(
+  error: unknown,
+  options: TelemetryMessageOptions = {},
+): string | undefined {
+  const shape = error !== null && typeof error === "object"
+    ? error as ErrorShape
+    : {};
+  const raw = typeof shape.message === "string"
+    ? shape.message
+    : typeof error === "string" ||
+        typeof error === "number" ||
+        typeof error === "boolean"
+    ? String(error)
+    : "";
+  const normalized = raw.replace(/\s+/g, " ").trim();
+  if (!normalized) return undefined;
+  return truncateTelemetryString(
+    redactTelemetryMessage(normalized),
+    ERROR_MESSAGE_MAX_LENGTH,
+    options,
+  );
 }
 
 /** Converts an unknown failure to an approved category without reading its text. */
@@ -120,6 +181,7 @@ const EVENT_KEYS: Record<StudioTelemetryEventName, readonly string[]> = {
     "failed_phase",
     "error_kind",
     "error_code",
+    "error_message",
   ],
   studio_sandbox_create: [
     "status",
@@ -194,7 +256,16 @@ export function sanitizeTelemetryPayload(
   const payload: TelemetryPayload = {};
   for (const [key, value] of Object.entries(input)) {
     if (!allowed.has(key) || !isTelemetryValue(value)) continue;
-    payload[key] = typeof value === "string" ? value.slice(0, 256) : value;
+    if (typeof value === "string") {
+      payload[key] = truncateTelemetryString(
+        value,
+        key === "error_message"
+          ? ERROR_MESSAGE_MAX_LENGTH
+          : DEFAULT_STRING_MAX_LENGTH,
+      );
+    } else {
+      payload[key] = value;
+    }
   }
   return payload;
 }

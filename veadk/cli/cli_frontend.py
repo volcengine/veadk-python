@@ -32,7 +32,7 @@ import sys
 import tempfile
 import unicodedata
 import zipfile
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from time import monotonic, sleep
@@ -83,6 +83,8 @@ _BUILD_ERROR_MARKERS = (
     "unsatisfiable",
     "failed to solve",
     "did not complete successfully",
+    "exit code:",
+    "error:",
     "no matching distribution",
     "modulenotfounderror",
     "command not found",
@@ -110,8 +112,30 @@ _SENSITIVE_LOG_PATTERNS = (
         r"\beyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\." r"[A-Za-z0-9_-]{10,}\b"
     ),
 )
-_CP_BUILD_LOG_MAX_CHARS = 16000
-_CP_BUILD_LOG_MAX_LINES = 260
+_CP_BUILD_LOG_MAX_CHARS = 50000
+_CP_BUILD_LOG_MAX_LINES = 1000
+_CP_BUILD_LOG_FINAL_ERROR_RETRIES = 5
+_CP_BUILD_LOG_FINAL_ERROR_RETRY_INTERVAL_SECONDS = 2.0
+_CP_BUILD_LOG_ERROR_TAIL_CHECK_CHARS = 1024
+_DEPLOY_PHASE_ORDER = {"build": 0, "deploy": 1, "publish": 2, "update": 3}
+_DEPLOY_PHASE_MARKERS = (
+    "step 2/2",
+    "deploy failed",
+    "deploying service",
+    "creating runtime",
+    "create runtime",
+    "waiting for runtime",
+    "runtime status is error",
+    "runtime status: error",
+    "initialization failed",
+    "runtime_not_ready",
+)
+_PUBLISH_PHASE_MARKERS = (
+    "launch successful",
+    "service endpoint:",
+    "runtime status: ready",
+    "endpoint: http",
+)
 _SANDBOX_TOOL_CREATE_STAGGER_SECONDS = 0.5
 _CP_PIPELINE_CREATED_RE = re.compile(
     r"Pipeline created successfully:\s*(?P<name>.*?)\s*\(ID:\s*(?P<id>[^)]+)\)"
@@ -433,6 +457,67 @@ def _extract_build_error_excerpt(
         )
     return "\n".join(
         clean_lines[index] for index in sorted(selected_indexes)[:max_lines]
+    )
+
+
+def _build_log_tail_has_error_marker(
+    text: object,
+    *,
+    tail_chars: int = _CP_BUILD_LOG_ERROR_TAIL_CHECK_CHARS,
+) -> bool:
+    """Return whether the retained log tail contains a known build error marker."""
+    value = str(text or "").lower()
+    if tail_chars > 0:
+        value = value[-tail_chars:]
+    return any(marker in value for marker in _BUILD_ERROR_MARKERS)
+
+
+def _wait_for_cp_build_error_log_snapshot(
+    read_snapshot: Callable[[], dict[str, Any]],
+    *,
+    attempts: int = _CP_BUILD_LOG_FINAL_ERROR_RETRIES,
+    interval_seconds: float = _CP_BUILD_LOG_FINAL_ERROR_RETRY_INTERVAL_SECONDS,
+    sleep_fn: Callable[[float], None] = sleep,
+) -> dict[str, Any]:
+    """Read CodePipeline logs until the retained tail includes an error marker."""
+    max_attempts = max(1, attempts)
+    snapshot: dict[str, Any] = {}
+    last_error: Exception | None = None
+    for attempt in range(max_attempts):
+        try:
+            snapshot = read_snapshot()
+            last_error = None
+        except Exception as error:
+            last_error = error
+            if attempt >= max_attempts - 1 and not snapshot:
+                raise
+            if attempt < max_attempts - 1:
+                sleep_fn(interval_seconds)
+            continue
+        if _build_log_tail_has_error_marker(snapshot.get("text", "")):
+            return snapshot
+        if attempt < max_attempts - 1:
+            sleep_fn(interval_seconds)
+    if last_error is not None and not snapshot:
+        raise last_error
+    return snapshot
+
+
+def _advance_deploy_phase(current: str, message: object) -> str:
+    """Advance the deployment phase from textual AgentKit progress or errors."""
+    m = str(message or "").lower()
+    if any(marker in m for marker in _PUBLISH_PHASE_MARKERS):
+        candidate = "publish"
+    elif any(marker in m for marker in _DEPLOY_PHASE_MARKERS):
+        candidate = "deploy"
+    elif "step 1/2" in m:
+        candidate = "build"
+    else:
+        candidate = current
+    return (
+        candidate
+        if _DEPLOY_PHASE_ORDER.get(candidate, 0) >= _DEPLOY_PHASE_ORDER.get(current, 0)
+        else current
     )
 
 
@@ -5455,7 +5540,6 @@ def _run_frontend_server(
         cp_log_stop_event = _threading.Event()
         task_state["cp_log_stop_event"] = cp_log_stop_event
 
-        _PHASE_ORDER = {"build": 0, "deploy": 1, "publish": 2, "update": 3}
         _CP_WORKSPACE_NAME = str(
             deployment_resource_config.get("cp_workspace_name")
             or "agentkit-cli-workspace"
@@ -5512,32 +5596,12 @@ def _run_frontend_server(
         def _classify(message: str) -> str:
             """Map a reporter message to a deploy phase, monotonically.
 
-            The SDK prints two authoritative high-level markers — "Step 1/2:
-            Building image" and "Step 2/2: Deploying service" — so the phase
-            switches on those, and only advances to "publish" on a strong
-            readiness/endpoint signal. The phase never regresses: many
-            build/deploy sub-messages mention words like "endpoint", "ready",
-            or "create" (e.g. "Ensuring CR public endpoint access", "Waiting for
-            Runtime to be ready") that would otherwise flap the UI stepper
-            backward.
+            The SDK usually prints high-level markers such as "Step 1/2:
+            Building image" and "Step 2/2: Deploying service". Some failures
+            only surface in the final error, so deployment/runtime failure
+            markers also advance to the deploy phase. The phase never regresses.
             """
-            m = message.lower()
-            cur = state["phase"]
-            if "step 2/2" in m:
-                cand = "deploy"
-            elif "step 1/2" in m:
-                cand = "build"
-            elif (
-                "launch successful" in m
-                or "service endpoint:" in m
-                or "runtime status: ready" in m
-                or "endpoint: http" in m
-            ):
-                cand = "publish"
-            else:
-                cand = cur
-            # Phase only ever moves forward (build -> deploy -> publish).
-            return cand if _PHASE_ORDER[cand] >= _PHASE_ORDER[cur] else cur
+            return _advance_deploy_phase(state["phase"], message)
 
         from agentkit.toolkit.reporter import Reporter, TaskHandle
 
@@ -5704,44 +5768,89 @@ def _run_frontend_server(
                             )
             return "\n\n".join(parts)
 
+        def _new_cp_client():
+            from agentkit.toolkit.volcengine.code_pipeline import VeCodePipeline
+
+            ak, sk, token = _resolve_ve_credentials()
+            return VeCodePipeline(
+                access_key=ak,
+                secret_key=sk,
+                session_token=token or "",
+                region=region,
+                provider=provider,
+            )
+
+        def _read_cp_build_log_snapshot(cp_client) -> dict[str, Any]:
+            workspace_id = _resolve_cp_workspace_id(cp_client)
+            pipeline_id = _resolve_cp_pipeline_id(cp_client, workspace_id)
+            with _deploy_tasks_lock:
+                pipeline_run_id = str(task_state.get("cp_pipeline_run_id") or "")
+            if not pipeline_run_id:
+                raise RuntimeError("Code Pipeline run id is not available yet")
+
+            text = _download_cp_build_log_text(
+                cp_client,
+                workspace_id=workspace_id,
+                pipeline_id=pipeline_id,
+                pipeline_run_id=pipeline_run_id,
+            )
+            snapshot = _sanitize_build_log_snapshot(
+                _redact_managed_artifact_text(
+                    text,
+                    [sidecar_base_image],
+                )
+            )
+            current_text = str(snapshot.get("text") or "")
+            if current_text:
+                with _deploy_tasks_lock:
+                    task_state["cp_build_log"] = snapshot
+            return snapshot
+
+        def _refresh_cp_build_log_event(status: str) -> dict[str, Any] | None:
+            try:
+                cp_client = _new_cp_client()
+                if status == "error":
+                    snapshot = _wait_for_cp_build_error_log_snapshot(
+                        lambda: _read_cp_build_log_snapshot(cp_client)
+                    )
+                else:
+                    snapshot = _read_cp_build_log_snapshot(cp_client)
+            except Exception as log_error:
+                if cp_log_stop_event.is_set():
+                    logger.debug(
+                        "final Code Pipeline build log refresh skipped: %s",
+                        log_error,
+                    )
+                    return None
+                logger.warning(
+                    "final Code Pipeline build log refresh failed: %s",
+                    log_error,
+                    exc_info=True,
+                )
+                return _cp_log_event(
+                    status="error",
+                    message="暂时无法读取最终构建日志。",
+                    error=_safe_exception_detail(log_error),
+                )
+            if not str(snapshot.get("text") or ""):
+                return None
+            message = (
+                "构建镜像失败，已同步最终构建日志。"
+                if status == "error"
+                else "构建日志同步完成。"
+            )
+            return _cp_log_event(status=status, message=message, snapshot=snapshot)
+
         def _poll_cp_build_logs() -> None:
             last_text = ""
             try:
-                from agentkit.toolkit.volcengine.code_pipeline import VeCodePipeline
-
-                ak, sk, token = _resolve_ve_credentials()
-                cp_client = VeCodePipeline(
-                    access_key=ak,
-                    secret_key=sk,
-                    session_token=token or "",
-                    region=region,
-                    provider=provider,
-                )
-                workspace_id = _resolve_cp_workspace_id(cp_client)
-                pipeline_id = _resolve_cp_pipeline_id(cp_client, workspace_id)
-                with _deploy_tasks_lock:
-                    pipeline_run_id = str(task_state.get("cp_pipeline_run_id") or "")
-                if not pipeline_run_id:
-                    raise RuntimeError("Code Pipeline run id is not available yet")
+                cp_client = _new_cp_client()
 
                 while not cp_log_stop_event.is_set():
-                    text = _download_cp_build_log_text(
-                        cp_client,
-                        workspace_id=workspace_id,
-                        pipeline_id=pipeline_id,
-                        pipeline_run_id=pipeline_run_id,
-                    )
-                    snapshot = _sanitize_build_log_snapshot(
-                        _redact_managed_artifact_text(
-                            text,
-                            [sidecar_base_image],
-                        )
-                    )
+                    snapshot = _read_cp_build_log_snapshot(cp_client)
                     current_text = str(snapshot.get("text") or "")
                     if current_text and current_text != last_text:
                         last_text = current_text
-                        with _deploy_tasks_lock:
-                            task_state["cp_build_log"] = snapshot
                         events.put(
                             _cp_log_event(
                                 status="running",
@@ -5756,7 +5865,11 @@ def _run_frontend_server(
                         _cp_log_event(
                             status="complete",
                             message="构建日志同步完成。",
-                            snapshot=_sanitize_build_log_snapshot(last_text),
+                            snapshot={
+                                "text": last_text,
+                                "lineCount": len(last_text.splitlines()),
+                                "truncated": False,
+                            },
                         )
                     )
             except Exception as log_error:
@@ -6396,6 +6509,21 @@ def _run_frontend_server(
                     if ev is None:
                         break
                     yield f"data: {_json.dumps(ev, ensure_ascii=False)}\n\n"
+
+                if result_box.get("error"):
+                    state["phase"] = _classify(str(result_box["error"]))
+
+                if result_box.get("error") and state["phase"] == "build":
+                    cp_error_event = await loop.run_in_executor(
+                        None,
+                        _refresh_cp_build_log_event,
+                        "error",
+                    )
+                    if cp_error_event is not None:
+                        yield (
+                            f"data: "
+                            f"{_json.dumps(cp_error_event, ensure_ascii=False)}\n\n"
+                        )
 
                 final: dict[str, Any] = {"done": True}
                 if result_box.get("error"):

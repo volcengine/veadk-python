@@ -92,6 +92,7 @@ import {
   beginAgentDeploy,
   beginAgentSourceDownload,
   classifyTelemetryError,
+  safeTelemetryErrorMessage,
   type AgentDeployFailedProps,
   type AgentDeployStartedProps,
 } from "../telemetry";
@@ -143,6 +144,30 @@ function telemetryDeployPhase(
     default:
       return "unknown";
   }
+}
+
+const DEPLOY_PHASE_ORDER: Record<string, number> = {
+  prepare: 0,
+  upload: 1,
+  build: 2,
+  deploy: 3,
+  publish: 4,
+  update: 5,
+  evaluation: 6,
+  complete: 7,
+  github: 8,
+};
+
+function advanceDeploymentPhase(
+  current: string | undefined,
+  next: string | undefined,
+): string {
+  if (!next) return current ?? "prepare";
+  if (!current) return next;
+  const currentOrder = DEPLOY_PHASE_ORDER[current];
+  const nextOrder = DEPLOY_PHASE_ORDER[next];
+  if (currentOrder === undefined || nextOrder === undefined) return next;
+  return nextOrder >= currentOrder ? next : current;
 }
 
 const CodeEditor = lazy(() => import("./CodeEditor"));
@@ -1559,6 +1584,7 @@ export function ProjectPreview({
     let latestBuildLog: DeployBuildLogSnapshot | undefined;
     let latestGithubLog: DeployBuildLogSnapshot | undefined;
     let latestPhase = initialTask.phase ?? "prepare";
+    let latestMessage = initialTask.message;
     const terminalBuildLog = (
       status: DeployBuildLogSnapshot["status"],
     ): DeployBuildLogSnapshot | undefined => (
@@ -1598,22 +1624,20 @@ export function ProjectPreview({
       };
       return latestGithubLog;
     };
-    const mergeBuildFailureLog = (message: string): DeployBuildLogSnapshot | undefined => {
-      if (latestPhase !== "build") return undefined;
-      const failureText = [
-        "",
-        "----- 构建失败 -----",
-        message,
-      ].join("\n");
-      latestBuildLog = mergeDeployBuildLog(latestBuildLog, {
-        source: "code-pipeline",
+    const finalizeBuildFailureLog = (): DeployBuildLogSnapshot | undefined => {
+      if (latestPhase !== "build" || !latestBuildLog?.text) return undefined;
+      latestBuildLog = {
+        ...latestBuildLog,
         status: "error",
-        text: failureText,
-        lineCount: failureText.split("\n").length,
-        truncated: false,
         updatedAt: Date.now(),
-      });
+      };
       return latestBuildLog;
+    };
+    const telemetryErrorMessage = (error: unknown): string | undefined => {
+      if (latestPhase === "build" && latestBuildLog?.text) {
+        return safeTelemetryErrorMessage(latestBuildLog.text, { preserveEnd: true });
+      }
+      return safeTelemetryErrorMessage(error);
     };
     try {
       let activeGithubBinding = githubCicdBinding;
@@ -1689,15 +1713,19 @@ export function ProjectPreview({
         project,
         (s) => {
           if (s.runtimeName) taskRuntimeName = s.runtimeName;
-          latestPhase = s.phase;
+          const nextPhase = advanceDeploymentPhase(latestPhase, s.phase);
           if (s.buildLog) {
             latestBuildLog = mergeDeployBuildLog(latestBuildLog, s.buildLog);
           } else if (s.phase === "build" && !latestBuildLog) {
             latestBuildLog = pendingBuildLog();
           }
+          if (s.phase === nextPhase) {
+            latestMessage = s.message;
+          }
+          latestPhase = nextPhase;
           if (mountedRef.current) {
             setStageMap((prev) => ({ ...prev, [s.phase]: s }));
-            setActivePhase(s.phase);
+            setActivePhase(latestPhase);
           }
           onDeploymentTaskChange?.({
             id: taskId,
@@ -1707,11 +1735,11 @@ export function ProjectPreview({
             region: deployRegion,
             startedAt: taskStartedAt,
             status: "running",
-            phase: s.phase,
+            phase: latestPhase,
             label:
-              deploymentSteps.find((step) => step.phase === s.phase)?.label ??
-              s.phase,
-            message: s.message,
+              deploymentSteps.find((step) => step.phase === latestPhase)?.label ??
+              latestPhase,
+            message: latestMessage,
             pct: s.pct,
             ...(latestBuildLog ? { buildLog: latestBuildLog } : {}),
           });
@@ -1916,6 +1944,7 @@ export function ProjectPreview({
         operation.fail({
           failedPhase: telemetryDeployPhase(latestPhase),
           ...classifyTelemetryError(err, { phase: latestPhase }),
+          errorMessage: safeTelemetryErrorMessage(err),
         });
         if (mountedRef.current) {
           setDeployError(null);
@@ -1937,10 +1966,11 @@ export function ProjectPreview({
       }
       if (mountedRef.current) setDeployError(message);
       if (mountedRef.current) setDeployResult(null);
-      const buildLog = mergeBuildFailureLog(message);
+      const buildLog = finalizeBuildFailureLog();
       operation.fail({
         failedPhase: telemetryDeployPhase(latestPhase),
         ...classifyTelemetryError(err, { phase: latestPhase }),
+        errorMessage: telemetryErrorMessage(err),
       });
       const failedInBuild = Boolean(buildLog);
       const failedInGithub = latestPhase === "github" && Boolean(latestGithubLog);
