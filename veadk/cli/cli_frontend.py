@@ -10853,7 +10853,20 @@ def frontend_deploy(
             if provider_id == "byteplus"
             else "缺少 Studio 部署所需的 IAM 权限，已在创建云资源前终止。"
         )
-        raise click.ClickException(message)
+        if precheck_only:
+            raise click.ClickException(message)
+        prompt = (
+            "Some required IAM Actions are missing. Continue deployment anyway?"
+            if provider_id == "byteplus"
+            else "部分 Studio 部署所需的 IAM 权限未满足，是否仍要继续部署？"
+        )
+        if not click.confirm(prompt, default=False):
+            raise click.ClickException(message)
+        click.echo(
+            "Continuing deployment despite missing IAM Actions."
+            if provider_id == "byteplus"
+            else "已确认忽略缺失的 IAM 权限，继续部署。"
+        )
     if precheck_only:
         click.echo(
             "Pre-check only: no cloud resources were created."
