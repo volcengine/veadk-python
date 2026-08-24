@@ -963,6 +963,7 @@ immutable_fields = (
     "task_id",
     "source_file_name",
     "instruction",
+    "model_id",
     "session_ttl_seconds",
 )
 
@@ -2425,6 +2426,8 @@ class MigrationService:
             "instruction": body.instruction,
             "session_ttl_seconds": MIGRATION_SESSION_TTL_SECONDS,
         }
+        if body.model_id:
+            request["model_id"] = body.model_id
         try:
             session = self._gateway.create_session(
                 task_id=task_id,
@@ -2432,6 +2435,7 @@ class MigrationService:
                 creator_name=creator_name,
                 display_name="存量迁移",
                 ttl_seconds=MIGRATION_SESSION_TTL_SECONDS,
+                model_id=body.model_id,
             )
             self._validate_session_timing(session)
             existing_request = self._read_json(
@@ -2596,6 +2600,7 @@ class MigrationService:
         if (
             existing.get("source_file_name") != expected["source_file_name"]
             or existing.get("instruction") != expected["instruction"]
+            or existing.get("model_id") != expected.get("model_id")
             or existing.get("session_ttl_seconds") != expected["session_ttl_seconds"]
         ):
             raise MigrationError(
@@ -2786,6 +2791,8 @@ class MigrationService:
             "canStop": state in _STOPPABLE_STATES,
             "artifact": artifact_status,
         }
+        if request.get("model_id"):
+            payload["modelId"] = str(request["model_id"])
         if analysis is not None:
             payload["analysis"] = analysis
             payload["analysisRef"] = {
