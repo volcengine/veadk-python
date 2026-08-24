@@ -40,12 +40,38 @@ const moduleUrl = `data:text/javascript;base64,${Buffer.from(
   result.outputFiles[0].contents,
 ).toString("base64")}`;
 const {
+  createMigrationTask,
   getMigrationActivity,
   getMigrationArtifact,
   getMigrationCapabilities,
   getMigrationTask,
   MigrationApiError,
 } = await import(moduleUrl);
+
+function migrationTask(overrides = {}) {
+  return {
+    id: `migration-v1-${"1".repeat(32)}`,
+    state: "awaiting_upload",
+    message: "迁移环境已就绪",
+    sourceFileName: "source.zip",
+    instruction: "",
+    createdAt: "2026-08-14T08:00:00Z",
+    expiresAt: "2026-08-14T09:00:00Z",
+    sessionTtlSeconds: 3600,
+    canModify: true,
+    canUpload: true,
+    canAnswer: false,
+    canConfirm: false,
+    canStop: false,
+    artifact: {
+      state: "none",
+      previewReady: false,
+      downloadReady: false,
+      deployReady: false,
+    },
+    ...overrides,
+  };
+}
 
 function migrationArtifact(environment) {
   return {
@@ -115,6 +141,80 @@ test("surfaces FastAPI validation details without blaming the proxy", async (t) 
       return true;
     },
   );
+});
+
+test("sends an optional migration model without changing legacy requests", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+  });
+  const bodies = [];
+  globalThis.fetch = async (_url, init) => {
+    const body = JSON.parse(init.body);
+    bodies.push(body);
+    return new Response(
+      JSON.stringify(
+        migrationTask(body.modelId ? { modelId: body.modelId } : {}),
+      ),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+  };
+
+  const selected = await createMigrationTask({
+    taskId: `migration-v1-${"1".repeat(32)}`,
+    sourceFileName: "source.zip",
+    instruction: "",
+    modelId: "doubao-seed-2-1-pro-260628",
+  });
+  const legacy = await createMigrationTask({
+    taskId: `migration-v1-${"2".repeat(32)}`,
+    sourceFileName: "source.zip",
+    instruction: "",
+  });
+
+  assert.equal(selected.modelId, "doubao-seed-2-1-pro-260628");
+  assert.equal(legacy.modelId, undefined);
+  assert.equal(bodies[0].modelId, "doubao-seed-2-1-pro-260628");
+  assert.equal(Object.hasOwn(bodies[1], "modelId"), false);
+});
+
+test("accepts the migration default model while preserving legacy capabilities", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+  });
+  const base = {
+    enabled: true,
+    reason: "",
+    maxUploadBytes: 50 * 1024 * 1024,
+    sessionTtlSeconds: 3600,
+    frameworks: ["langchain", "dify", "any"],
+  };
+  const responses = [
+    {
+      ...base,
+      provider: "volcengine",
+      model: { configured: true, id: "doubao-seed-2-1-pro-260628" },
+    },
+    base,
+  ];
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify(responses.shift()), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+
+  const current = await getMigrationCapabilities();
+  const legacy = await getMigrationCapabilities();
+
+  assert.deepEqual(current.model, {
+    configured: true,
+    id: "doubao-seed-2-1-pro-260628",
+  });
+  assert.equal(legacy.model, undefined);
 });
 
 test("accepts an actionable unsupported analysis without a fake recommendation", async (t) => {

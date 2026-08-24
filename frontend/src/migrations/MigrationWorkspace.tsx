@@ -29,7 +29,9 @@ import {
 } from "../adk/migrations";
 import {
   deployAgentkitProject,
+  listModelOptions,
   type DeployStage,
+  type ModelOption,
 } from "../adk/client";
 import {
   defaultCloudRegion,
@@ -231,6 +233,10 @@ function shouldShowCodexActivity(task: MigrationTask): boolean {
 
 function sourceStem(name: string): string {
   return name.replace(/\.zip$/i, "");
+}
+
+function isSelectableMigrationModel(model: ModelOption): boolean {
+  return model.available || model.lifecycleStatus === "Retiring";
 }
 
 function defaultAppName(name: string): string {
@@ -638,6 +644,11 @@ export function MigrationWorkspace({
   const [tasks, setTasks] = useState<MigrationTask[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState("");
   const [sourceFile, setSourceFile] = useState<File | null>(null);
+  const [models, setModels] = useState<ModelOption[]>([]);
+  const [selectedModelId, setSelectedModelId] = useState("");
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState("");
+  const [modelsReloadKey, setModelsReloadKey] = useState(0);
   const [dragging, setDragging] = useState(false);
   const [loading, setLoading] = useState(true);
   const [action, setAction] = useState<
@@ -668,6 +679,38 @@ export function MigrationWorkspace({
     Record<string, string>
   >({});
   const task = selectedTask(tasks, selectedTaskId);
+  const selectableModels = useMemo(
+    () => models.filter(isSelectableMigrationModel),
+    [models],
+  );
+  const composerModelId = task?.modelId || selectedModelId;
+  const modelSelectOptions = useMemo(() => {
+    const options = selectableModels.map((model) => ({
+      value: model.id,
+      label: model.displayName,
+      description: [
+        model.id,
+        model.vendorName,
+        model.lifecycleStatus === "Retiring" ? "即将下线" : "",
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    }));
+    const fallbackId = (
+      task?.modelId ||
+      selectedModelId ||
+      capability?.model?.id ||
+      ""
+    ).trim();
+    if (fallbackId && !options.some((option) => option.value === fallbackId)) {
+      options.unshift({
+        value: fallbackId,
+        label: fallbackId,
+        description: "当前默认模型",
+      });
+    }
+    return options;
+  }, [capability?.model?.id, selectableModels, selectedModelId, task?.modelId]);
   const createElapsedSeconds = createStartedAt
     ? Math.max(0, Math.floor((now - createStartedAt) / 1_000))
     : 0;
@@ -748,6 +791,38 @@ export function MigrationWorkspace({
       });
     return () => controller.abort();
   }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setModelsLoading(true);
+    setModelsError("");
+    void listModelOptions({
+      signal: controller.signal,
+      refresh: modelsReloadKey > 0,
+    })
+      .then((response) => {
+        if (controller.signal.aborted) return;
+        setModels(response.models);
+      })
+      .catch((cause: unknown) => {
+        if (!controller.signal.aborted) {
+          setModelsError(
+            cause instanceof Error ? cause.message : "加载模型列表失败",
+          );
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setModelsLoading(false);
+      });
+    return () => controller.abort();
+  }, [cloudProvider, modelsReloadKey]);
+
+  useEffect(() => {
+    if (!capability || selectedModelId) return;
+    const defaultModelId =
+      capability?.model?.id.trim() || selectableModels[0]?.id || "";
+    if (defaultModelId) setSelectedModelId(defaultModelId);
+  }, [capability, selectableModels, selectedModelId]);
 
   useEffect(
     () => () => {
@@ -986,6 +1061,7 @@ export function MigrationWorkspace({
         taskId: createdTaskId,
         sourceFileName: sourceFile.name,
         instruction: "",
+        modelId: selectedModelId || undefined,
         signal: controller.signal,
       });
       if (!isCurrent()) return;
@@ -1189,6 +1265,9 @@ export function MigrationWorkspace({
     setArtifactErrorRetryable(false);
     setDeploymentOpen(false);
     setStopConfirmOpen(false);
+    setSelectedModelId(
+      capability?.model?.id.trim() || selectableModels[0]?.id || "",
+    );
   }
 
   const deploymentProject: AgentProject | null = artifact
@@ -1870,15 +1949,34 @@ export function MigrationWorkspace({
                 )}
               </div>
               <div className="migration-composer__actions">
-                <button
-                  type="button"
-                  className="migration-attach-button"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={composerBusy}
-                >
-                  <UploadIcon />
-                  <span>{sourceFile ? "重新选择" : "选择 ZIP"}</span>
-                </button>
+                <div className="migration-composer__tools">
+                  <button
+                    type="button"
+                    className="migration-attach-button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={composerBusy}
+                  >
+                    <UploadIcon />
+                    <span>{sourceFile ? "重新选择" : "选择 ZIP"}</span>
+                  </button>
+                  <div className="migration-composer__model-select">
+                    <NewChatCompactSelect
+                      label="模型"
+                      hideLabel
+                      value={composerModelId}
+                      options={modelSelectOptions}
+                      onChange={setSelectedModelId}
+                      placeholder="选择模型"
+                      searchable
+                      loading={modelsLoading}
+                      error={modelsError}
+                      disabled={composerBusy || Boolean(task)}
+                      onRetry={() =>
+                        setModelsReloadKey((current) => current + 1)
+                      }
+                    />
+                  </div>
+                </div>
                 <button
                   type="button"
                   className="migration-confirm-upload-button"

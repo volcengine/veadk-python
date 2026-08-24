@@ -23,6 +23,7 @@ from pathlib import PurePosixPath
 from .models import (
     MIGRATION_FRAMEWORKS,
     STRUCTURED_MIGRATION_FRAMEWORKS,
+    is_valid_model_id,
     is_valid_structured_entry,
 )
 
@@ -178,6 +179,7 @@ def validate_migration_request(
             "session_ttl_seconds",
             "created_at",
         },
+        optional={"model_id"},
     )
     if (
         value.get("schema_version") != 1
@@ -192,6 +194,8 @@ def validate_migration_request(
     ):
         raise MigrationContractError("invalid source file name")
     _text(value.get("instruction"), maximum=_MAX_TEXT_LENGTH)
+    if "model_id" in value and not is_valid_model_id(value.get("model_id")):
+        raise MigrationContractError("invalid model id")
     created_at = value.get("created_at")
     if isinstance(created_at, str):
         _timestamp_text(created_at)

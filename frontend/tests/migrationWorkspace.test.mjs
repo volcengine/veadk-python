@@ -208,6 +208,18 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
   assert.match(source, /any: "Any（通用迁移）"/);
   assert.match(source, /className="migration-confirm-upload-button"/);
   assert.match(source, /\{task \? "继续上传" : "开始迁移"\}/);
+  assert.match(source, /listModelOptions\(\{/);
+  assert.match(
+    source,
+    /<NewChatCompactSelect[\s\S]*?label="模型"[\s\S]*?searchable[\s\S]*?disabled=\{composerBusy \|\| Boolean\(task\)\}/,
+  );
+  assert.match(
+    source,
+    /createMigrationTask\(\{[\s\S]*?modelId: selectedModelId \|\| undefined/,
+  );
+  assert.match(source, /model\.available \|\| model\.lifecycleStatus === "Retiring"/);
+  assert.doesNotMatch(source, /listModelApiKeys|revealModelApiKey/);
+  assert.match(styles, /\.migration-composer__model-select/);
   assert.match(source, /function MigrationTransferProgress/);
   assert.match(source, /className="migration-transfer-progress__marker"/);
   assert.match(source, /创建迁移环境/);

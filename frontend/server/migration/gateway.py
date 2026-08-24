@@ -25,6 +25,7 @@ from typing import Any, Protocol
 
 import requests
 from agentkit.sdk.tools import types as tools_types
+from agentkit.toolkit.cli.sandbox.env_config import build_exec_session_envs
 from agentkit.toolkit.cli.sandbox.sandbox_client import (
     SANDBOX_FILE_DOWNLOAD_ROUTE,
     build_bash_exec_url,
@@ -59,6 +60,11 @@ MIGRATION_START_MARKER = "VEADK_MIGRATION_EXECUTION_STARTED_V1"
 _BACKGROUND_START_MARKERS = {
     "start_analysis": ANALYSIS_START_MARKER,
     "start_migration": MIGRATION_START_MARKER,
+}
+_SESSION_CREDENTIAL_ENV_KEYS = {
+    "ANTHROPIC_AUTH_TOKEN",
+    "CODEX_API_KEY",
+    "OPENCODE_API_KEY",
 }
 _RELEASED_SESSION_STATUSES = {
     "createfailed",
@@ -126,6 +132,7 @@ class MigrationGateway(Protocol):
         creator_name: str,
         display_name: str,
         ttl_seconds: int,
+        model_id: str | None = None,
     ) -> MigrationSandboxSession: ...
 
     def list_sessions(self, owner_id: str) -> list[MigrationSandboxSession]: ...
@@ -506,6 +513,7 @@ class MigrationSandboxGateway:
         creator_name: str,
         display_name: str,
         ttl_seconds: int,
+        model_id: str | None = None,
     ) -> MigrationSandboxSession:
         _, region = self._get_tool()
         existing = self._list_region(
@@ -539,6 +547,25 @@ class MigrationSandboxGateway:
             username=owner_id,
             creator_name=creator_name,
         )
+        if model_id:
+            model_provider, model_base_url = _sandbox_model_config(
+                cloud_provider_from_env()
+            )
+            session_envs = build_exec_session_envs(
+                model_name=model_id,
+                model_provider=model_provider,
+                model_base_url=model_base_url,
+                model_provider_was_provided=True,
+                model_base_url_was_provided=True,
+                include_codex_config=True,
+            )
+            safe_session_envs = [
+                item
+                for item in session_envs or []
+                if item.key not in _SESSION_CREDENTIAL_ENV_KEYS
+            ]
+            if safe_session_envs:
+                request = request.model_copy(update={"envs": safe_session_envs})
         try:
             response = self._client(region).create_session(request)
         except Exception as error:
