@@ -87,6 +87,66 @@ def test_selected_component_generates_extra_app_plugins_and_close_lifecycle(
     assert "HARNESS_SIDECAR_ENABLED=true" in files[".env.example"]
 
 
+def test_mcp_resilience_constructs_toolsets_after_sidecar_gateway_binding() -> None:
+    files = _files(
+        AgentDraft.model_validate(
+            {
+                "name": "sidecar-mcp-agent",
+                "mcpTools": [
+                    {
+                        "name": "orders",
+                        "transport": "http",
+                        "url": "https://mcp.example.test/orders/mcp",
+                        "authTokenEnv": "MCP_ORDERS_TOKEN",
+                    },
+                    {
+                        "name": "inventory",
+                        "transport": "http",
+                        "url": "https://mcp.example.test/inventory/mcp",
+                        "authTokenEnv": "MCP_INVENTORY_TOKEN",
+                    },
+                ],
+                "harnessSidecar": {
+                    "componentOverrides": {"mcp_resilience": True},
+                },
+            }
+        )
+    )
+
+    agent_py = files["agents/sidecar_mcp_agent/agent.py"]
+    assert agent_py.index("HarnessExtension.from_env()") < agent_py.index("MCPToolset(")
+    assert "def _managed_mcp_connection(index: int)" in agent_py
+    assert 'os.environ.get("MCP_URLS", "")' in agent_py
+    assert 'os.environ.get("MCP_API_KEY", "")' in agent_py
+    assert "connection_params=_managed_mcp_connection(0)" in agent_py
+    assert "connection_params=_managed_mcp_connection(1)" in agent_py
+    assert "MCP gateway endpoint count does not match" in agent_py
+    compile(agent_py, "agent.py", "exec")
+
+
+def test_plain_http_mcp_tool_keeps_direct_connection_without_sidecar_gateway() -> None:
+    files = _files(
+        AgentDraft.model_validate(
+            {
+                "name": "plain-mcp-agent",
+                "mcpTools": [
+                    {
+                        "name": "orders",
+                        "transport": "http",
+                        "url": "https://mcp.example.test/orders/mcp",
+                        "authTokenEnv": "MCP_ORDERS_TOKEN",
+                    }
+                ],
+            }
+        )
+    )
+
+    agent_py = files["agents/plain_mcp_agent/agent.py"]
+    assert "_managed_mcp_connection" not in agent_py
+    assert 'url="https://mcp.example.test/orders/mcp"' in agent_py
+    assert 'os.environ["MCP_ORDERS_TOKEN"]' in agent_py
+
+
 def test_ops_profile_is_preserved_in_generated_public_configuration() -> None:
     draft = AgentDraft.model_validate(
         {

@@ -203,7 +203,8 @@ def test_managed_sidecar_runtime_envs_fail_before_build_without_mcp_upstream() -
     )
 
     assert error == (
-        "已选择 MCP 稳定性治理，请在发布配置中填写 MCP_URLS 和 MCP_API_KEY。"
+        "已选择 MCP 稳定性治理，请在“添加 MCP 工具”中配置至少一个 HTTP MCP "
+        "服务地址和共享 Bearer Token 后重新发布。"
     )
     assert runtime_envs["MODEL_AGENT_NAME"]
     assert runtime_envs["MODEL_NAME"] == runtime_envs["MODEL_AGENT_NAME"]

@@ -249,7 +249,10 @@ def _prepare_managed_sidecar_runtime_envs(
     if effective_components & {"mcp_resilience", "sql_readonly"} and any(
         not runtime_envs.get(key, "").strip() for key in ("MCP_URLS", "MCP_API_KEY")
     ):
-        return "已选择 MCP 稳定性治理，请在发布配置中填写 MCP_URLS 和 MCP_API_KEY。"
+        return (
+            "已选择 MCP 稳定性治理，请在“添加 MCP 工具”中配置至少一个 HTTP MCP "
+            "服务地址和共享 Bearer Token 后重新发布。"
+        )
     return None
 
 

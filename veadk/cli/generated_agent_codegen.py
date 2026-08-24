@@ -305,8 +305,15 @@ class GeneratedAgentTestRunRequest(BaseModel):
 
 
 class _Acc:
-    def __init__(self, cloud_provider: str = "volcengine") -> None:
+    def __init__(
+        self,
+        cloud_provider: str = "volcengine",
+        *,
+        managed_mcp_gateway: bool = False,
+    ) -> None:
         self.cloud_provider = cloud_provider
+        self.managed_mcp_gateway = managed_mcp_gateway
+        self.managed_mcp_http_count = 0
         self.imports: list[str] = []
         self.pre_lines: list[str] = []
         self.env: list[EnvVar] = list(model_env_for_provider(cloud_provider))
@@ -631,6 +638,15 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
                 "StreamableHTTPConnectionParams",
             )
             v = _unique_ident(acc, f"{mcp_tool.name or 'mcp'}_mcp", "mcp_tool")
+            if acc.managed_mcp_gateway:
+                index = acc.managed_mcp_http_count
+                acc.managed_mcp_http_count += 1
+                acc.pre_lines.append(
+                    f"{v} = MCPToolset("
+                    f"connection_params=_managed_mcp_connection({index}))"
+                )
+                tool_exprs.append(v)
+                continue
             headers = ""
             if mcp_tool.authTokenEnv.strip():
                 _add_import(acc, "import os")
@@ -1767,7 +1783,18 @@ def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
     draft = _normalize_harness_sidecar_draft(draft)
     draft = prepare_mcp_auth(draft)
     pkg = ident(draft.name, "my_agent")
-    acc = _Acc(draft.cloudProvider)
+    harness_sidecar_enabled = bool(
+        draft.harnessSidecar and draft.harnessSidecar.enabled
+    )
+    managed_mcp_gateway = bool(
+        harness_sidecar_enabled
+        and draft.harnessSidecar
+        and draft.harnessSidecar.componentOverrides.get("mcp_resilience")
+    )
+    acc = _Acc(
+        draft.cloudProvider,
+        managed_mcp_gateway=managed_mcp_gateway,
+    )
     feishu_channel_enabled = bool(draft.deployment.feishuEnabled)
     if feishu_channel_enabled:
         acc.env.extend(
@@ -1786,9 +1813,6 @@ def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
                 ),
             ]
         )
-    harness_sidecar_enabled = bool(
-        draft.harnessSidecar and draft.harnessSidecar.enabled
-    )
     if harness_sidecar_enabled:
         acc.extras.add("harness-sidecar")
         for key, value in studio_harness_env_example(draft.harnessSidecar).items():
@@ -1805,12 +1829,52 @@ def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
     if harness_sidecar_enabled:
         _add_import(acc, "from google.adk.apps.app import App")
         _add_import(acc, "from veadk.extensions.harness import HarnessExtension")
+    if acc.managed_mcp_http_count:
+        _add_import(acc, "import os")
+        acc.env.extend(
+            [
+                EnvVar(
+                    "MCP_URLS",
+                    True,
+                    "https://example.com/mcp",
+                    "MCP upstream URLs, separated by commas",
+                ),
+                EnvVar(
+                    "MCP_API_KEY",
+                    True,
+                    "replace-with-your-mcp-api-key",
+                    "Shared MCP upstream API key",
+                ),
+            ]
+        )
 
     import_block = "\n".join(["from veadk import Agent", *_dedupe_imports(acc.imports)])
+    harness_bootstrap = ""
+    managed_mcp_bootstrap = ""
+    if harness_sidecar_enabled:
+        harness_bootstrap = "harness_extension = HarnessExtension.from_env()\n"
+    if acc.managed_mcp_http_count:
+        managed_mcp_bootstrap = (
+            "\n_managed_mcp_urls = [\n"
+            '    value.strip() for value in os.environ.get("MCP_URLS", "").split(",")\n'
+            "    if value.strip()\n"
+            "]\n"
+            f"if len(_managed_mcp_urls) != {acc.managed_mcp_http_count}:\n"
+            '    raise RuntimeError("Harness Sidecar MCP gateway endpoint count does not match configured HTTP MCP tools")\n'
+            '_managed_mcp_api_key = os.environ.get("MCP_API_KEY", "").strip()\n'
+            "if not _managed_mcp_api_key:\n"
+            '    raise RuntimeError("Harness Sidecar MCP gateway API key is missing")\n'
+            "\n"
+            "def _managed_mcp_connection(index: int):\n"
+            "    return StreamableHTTPConnectionParams(\n"
+            "        url=_managed_mcp_urls[index],\n"
+            '        headers={"Authorization": f"Bearer {_managed_mcp_api_key}"},\n'
+            "    )\n"
+        )
     harness_definition = ""
     if harness_sidecar_enabled:
         harness_definition = (
-            "\nharness_extension = HarnessExtension.from_env()\n"
+            "\n"
             "app = App(\n"
             '    name=__package__.split(".")[-1],\n'
             "    root_agent=root_agent,\n"
@@ -1818,7 +1882,10 @@ def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
             ")\n"
         )
     agent_definition = (
-        "\n\n".join(acc.pre_lines)
+        harness_bootstrap
+        + managed_mcp_bootstrap
+        + ("\n" if harness_bootstrap or managed_mcp_bootstrap else "")
+        + "\n\n".join(acc.pre_lines)
         + f"\n\nAGENT_DISPLAY_NAMES = {acc.agent_display_names!r}\n"
         + f"AGENT_DRAFT = {_safe_draft_payload(draft)!r}\n"
         + "\n# ADK 加载器要求：顶层 agent 必须命名为 root_agent\nroot_agent = agent\n"

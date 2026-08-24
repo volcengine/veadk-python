@@ -18,6 +18,8 @@ export interface RuntimeEnvSpec {
   hidden?: boolean;
   /** User-facing optimization names that require this Runtime setting. */
   requiredBy?: string[];
+  /** Actionable error shown when a derived required value cannot be produced. */
+  missingError?: string;
 }
 
 export interface RuntimeEnvSelection {
@@ -122,12 +124,16 @@ export function runtimeEnvRequirementHint(
   spec: RuntimeEnvSpec,
 ): string | undefined {
   const labels = runtimeEnvRequirementLabels(spec);
-  return labels.length
+  const requirement = labels.length
     ? `优化项「${labels.join("、")}」依赖此配置。`
-    : undefined;
+    : "";
+  return (
+    [requirement, spec.help?.trim()].filter(Boolean).join(" ") || undefined
+  );
 }
 
 export function runtimeEnvMissingError(spec: RuntimeEnvSpec): string {
+  if (spec.missingError?.trim()) return spec.missingError.trim();
   const labels = runtimeEnvRequirementLabels(spec);
   return labels.length
     ? `优化项「${labels.join("、")}」依赖此配置，请填写 ${spec.key}。`
