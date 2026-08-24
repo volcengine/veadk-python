@@ -193,6 +193,7 @@ class FakeMigrationGateway:
         self.commands: list[tuple[str, str, str]] = []
         self.command_timeouts: list[tuple[str, int]] = []
         self.created: list[str] = []
+        self.created_models: list[str | None] = []
         self.deleted: list[str] = []
 
     def capabilities(self) -> dict[str, object]:
@@ -211,11 +212,13 @@ class FakeMigrationGateway:
         creator_name: str,
         display_name: str,
         ttl_seconds: int,
+        model_id: str | None = None,
     ) -> MigrationSandboxSession:
         assert creator_name == "Owner"
         assert display_name == "存量迁移"
         assert ttl_seconds == MIGRATION_SESSION_TTL_SECONDS
         self.created.append(task_id)
+        self.created_models.append(model_id)
         existing = self.sessions.get(task_id)
         if existing is not None:
             return existing
@@ -629,7 +632,41 @@ def test_migration_capability_and_session_contract_are_bounded() -> None:
     assert request["source_file_name"] == "support-agent.zip"
     assert request["instruction"] == "保留原有行为。"
     assert request["session_ttl_seconds"] == 3600
+    assert "model_id" not in request
+    assert "modelId" not in created
+    assert gateway.created_models == [None]
     assert "owner-1" not in json.dumps(request)
+
+
+def test_selected_model_is_immutable_session_configuration() -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+
+    created = service.create_task(
+        CreateMigrationTaskBody(
+            sourceFileName="support-agent.zip",
+            modelId="doubao-seed-2-1-pro-260628",
+        ),
+        "owner-1",
+        "Owner",
+    )
+    task_id = str(created["id"])
+    request = json.loads(
+        gateway.files[(task_id, f"{MIGRATION_ROOT}/request/task.json")]
+    )
+
+    assert request["model_id"] == "doubao-seed-2-1-pro-260628"
+    assert created["modelId"] == "doubao-seed-2-1-pro-260628"
+    assert gateway.created_models == ["doubao-seed-2-1-pro-260628"]
+    assert service.get_task(task_id, "owner-1")["modelId"] == request["model_id"]
+
+
+def test_migration_model_rejects_an_invalid_identifier() -> None:
+    with pytest.raises(ValueError, match="模型 ID 格式无效"):
+        CreateMigrationTaskBody(
+            sourceFileName="support-agent.zip",
+            modelId="model; export SECRET=value",
+        )
 
 
 def test_agentic_activity_is_owner_scoped_and_redacts_codex_events() -> None:
@@ -1544,6 +1581,19 @@ def test_create_task_is_idempotent_for_a_caller_owned_task_id() -> None:
     assert task_id in gateway.sessions
     assert gateway.deleted == []
 
+    with pytest.raises(MigrationError) as model_conflict:
+        service.create_task(
+            CreateMigrationTaskBody(
+                taskId=task_id,
+                sourceFileName="support-agent.zip",
+                instruction="保留原有行为。",
+                modelId="doubao-seed-2-1-pro-260628",
+            ),
+            "owner-1",
+            "Owner",
+        )
+    assert model_conflict.value.code == "MIGRATION_REQUEST_CONFLICT"
+
 
 def test_service_rejects_a_malformed_request_state_file() -> None:
     gateway = FakeMigrationGateway()
@@ -1557,6 +1607,27 @@ def test_service_rejects_a_malformed_request_state_file() -> None:
     path = (task_id, f"{MIGRATION_ROOT}/request/task.json")
     request = json.loads(gateway.files[path])
     request["unexpected"] = True
+    gateway.files[path] = json.dumps(request).encode()
+
+    with pytest.raises(MigrationError) as raised:
+        service.get_task(task_id, "owner-1")
+
+    assert raised.value.code == "MIGRATION_REQUEST_INVALID"
+    assert raised.value.retryable is False
+
+
+def test_service_rejects_an_invalid_model_in_the_remote_request() -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    created = service.create_task(
+        CreateMigrationTaskBody(sourceFileName="support-agent.zip"),
+        "owner-1",
+        "Owner",
+    )
+    task_id = str(created["id"])
+    path = (task_id, f"{MIGRATION_ROOT}/request/task.json")
+    request = json.loads(gateway.files[path])
+    request["model_id"] = "model; export SECRET=value"
     gateway.files[path] = json.dumps(request).encode()
 
     with pytest.raises(MigrationError) as raised:
@@ -1757,6 +1828,85 @@ def test_agentkit_gateway_creates_one_dev_session_without_snapshots(
     assert request.user_session_id == "migration-v1-" + "1" * 32
     assert request.envs is None
     assert client.snapshot_calls == 0
+
+
+@pytest.mark.parametrize(
+    ("provider", "region", "model_id"),
+    [
+        ("volcengine", "cn-beijing", "doubao-seed-2-1-pro-260628"),
+        ("byteplus", "ap-southeast-1", "dola-seed-2-1-turbo-260628"),
+    ],
+)
+def test_agentkit_gateway_overrides_only_non_secret_session_model_config(
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+    region: str,
+    model_id: str,
+) -> None:
+    task_id = "migration-v1-" + "9" * 32
+    captured: list[object] = []
+
+    class ToolsClient:
+        def get_tool(self, request: object) -> SimpleNamespace:
+            del request
+            _, base_url = _sandbox_model_config(provider)
+            return SimpleNamespace(
+                tool_type="DevEnv",
+                status="Ready",
+                image_url="",
+                envs=[
+                    SimpleNamespace(key="CODEX_MODEL", value="default-model"),
+                    SimpleNamespace(key="CODEX_API_KEY", value="tool-secret"),
+                    SimpleNamespace(key="CODEX_BASE_URL", value=base_url),
+                ],
+            )
+
+        def list_sessions(self, request: object) -> SimpleNamespace:
+            del request
+            return SimpleNamespace(session_infos=[], next_token=None)
+
+        def create_session(self, request: object) -> SimpleNamespace:
+            captured.append(request)
+            return SimpleNamespace(
+                session_id="session-model",
+                user_session_id=task_id,
+                endpoint="https://sandbox.invalid",
+                status="Ready",
+                created_at="2026-08-11T08:00:00Z",
+                expire_at="2026-08-11T09:00:00Z",
+            )
+
+    monkeypatch.setenv("AGENTKIT_CLOUD_PROVIDER", provider)
+    monkeypatch.setenv("CLOUD_PROVIDER", provider)
+    gateway = MigrationSandboxGateway(
+        tool_id="tool-dev",
+        region=region,
+        tools_client_factory=lambda _region: ToolsClient(),
+    )
+
+    gateway.create_session(
+        task_id=task_id,
+        owner_id="owner-1",
+        creator_name="Owner",
+        display_name="存量迁移",
+        ttl_seconds=3600,
+        model_id=model_id,
+    )
+
+    assert len(captured) == 1
+    request = captured[0]
+    envs = {item.key: item.value for item in request.envs}
+    _, expected_base_url = _sandbox_model_config(provider)
+    assert envs["CODEX_MODEL"] == model_id
+    assert envs["CODEX_BASE_URL"] == expected_base_url
+    assert envs["OPENCODE_MODEL"] == model_id
+    assert envs["ANTHROPIC_MODEL"] == model_id
+    assert model_id in envs["CODEX_CONFIG_TOML"]
+    assert {
+        "ANTHROPIC_AUTH_TOKEN",
+        "CODEX_API_KEY",
+        "OPENCODE_API_KEY",
+    }.isdisjoint(envs)
 
 
 def test_agentkit_gateway_waits_for_the_created_session_endpoint(

@@ -36,6 +36,10 @@ export type MigrationTaskState =
 export interface MigrationCapabilities {
   enabled: boolean;
   reason: string;
+  model?: {
+    configured: boolean;
+    id: string;
+  };
   maxUploadBytes: number;
   sessionTtlSeconds: number;
   frameworks: MigrationFramework[];
@@ -87,6 +91,7 @@ export interface MigrationTask {
   message: string;
   sourceFileName: string;
   instruction: string;
+  modelId?: string;
   createdAt: string | number;
   expiresAt: string;
   sessionTtlSeconds: number;
@@ -432,6 +437,9 @@ function normalizeTask(value: unknown): MigrationTask {
       deployReady: artifact.deployReady === true,
     },
   };
+  if (typeof task.modelId === "string" && task.modelId.trim()) {
+    normalized.modelId = task.modelId;
+  }
   if (task.analysis !== undefined) normalized.analysis = normalizeAnalysis(task.analysis);
   if (task.analysisRef !== undefined) {
     const reference = record(task.analysisRef, "分析结果引用");
@@ -809,13 +817,21 @@ export async function getMigrationCapabilities(
   ) {
     throw new Error("迁移能力格式错误。");
   }
-  return {
+  const capability: MigrationCapabilities = {
     enabled: body.enabled,
     reason: body.reason,
     maxUploadBytes: body.maxUploadBytes,
     sessionTtlSeconds: body.sessionTtlSeconds,
     frameworks: body.frameworks.map((item) => framework(item, "迁移框架")),
   };
+  if (body.model !== undefined) {
+    const model = record(body.model, "迁移模型能力");
+    if (typeof model.configured !== "boolean" || typeof model.id !== "string") {
+      throw new Error("迁移模型能力格式错误。");
+    }
+    capability.model = { configured: model.configured, id: model.id };
+  }
+  return capability;
 }
 
 export async function listMigrationTasks(
@@ -833,6 +849,7 @@ export async function createMigrationTask(args: {
   taskId: string;
   sourceFileName: string;
   instruction: string;
+  modelId?: string;
   signal?: AbortSignal;
 }): Promise<MigrationTask> {
   return normalizeTask(
@@ -846,6 +863,7 @@ export async function createMigrationTask(args: {
             taskId: args.taskId,
             sourceFileName: args.sourceFileName,
             instruction: args.instruction,
+            ...(args.modelId ? { modelId: args.modelId } : {}),
           }),
           signal: args.signal,
         },

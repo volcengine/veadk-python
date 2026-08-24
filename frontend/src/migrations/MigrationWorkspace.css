@@ -1145,6 +1145,25 @@
   justify-content: space-between;
 }
 
+.migration-composer__tools {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.migration-composer__model-select,
+.migration-composer__model-select .new-chat-compact-select {
+  width: 220px;
+  max-width: 220px;
+}
+
+.migration-composer__model-select .new-chat-compact-select__menu {
+  top: auto;
+  bottom: calc(100% + 6px);
+  width: min(320px, calc(100vw - 32px));
+}
+
 .migration-attach-button {
   min-height: 36px;
   display: inline-flex;
