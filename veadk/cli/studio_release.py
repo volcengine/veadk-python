@@ -29,10 +29,18 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from veadk.utils.cloud_provider import (
+    DEFAULT_CLOUD_PROVIDER,
+    SUPPORTED_CLOUD_PROVIDERS,
+    CloudProvider,
+    normalize_cloud_provider,
+)
+
 _VERSION_PATTERN = re.compile(r"^\d{14}$")
 _GIT_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 STUDIO_RELEASE_REGION = "cn-beijing"
+BYTEPLUS_STUDIO_RELEASE_REGION = "ap-southeast-1"
 DEFAULT_RELEASE_PREFIX = "veadk/studio/main"
 MAX_STUDIO_BUNDLE_BYTES = 300 * 1024 * 1024
 MAX_STUDIO_RELEASES = 50
@@ -40,6 +48,18 @@ MAX_STUDIO_RELEASES = 50
 
 class StudioReleaseError(ValueError):
     """Raised when a Studio release is malformed or cannot be transferred."""
+
+
+def studio_release_region(provider: CloudProvider) -> str:
+    """Return the release bucket region for one cloud provider."""
+    if provider == "byteplus":
+        return BYTEPLUS_STUDIO_RELEASE_REGION
+    return STUDIO_RELEASE_REGION
+
+
+def _tos_endpoint(region: str, provider: CloudProvider) -> str:
+    domain = "bytepluses.com" if provider == "byteplus" else "volces.com"
+    return f"tos-{region}.{domain}"
 
 
 @dataclass(frozen=True)
@@ -162,6 +182,7 @@ class StudioReleaseStore:
         region: str,
         access_key: str,
         secret_key: str,
+        provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
         session_token: str = "",
         prefix: str = DEFAULT_RELEASE_PREFIX,
         client: Any | None = None,
@@ -174,6 +195,7 @@ class StudioReleaseStore:
             raise StudioReleaseError("Studio release TOS credentials are required.")
         self.bucket = bucket.strip()
         self.region = region.strip()
+        self.provider = normalize_cloud_provider(provider)
         self.prefix = normalize_release_prefix(prefix)
         if client is not None:
             self._client = client
@@ -184,7 +206,7 @@ class StudioReleaseStore:
             access_key,
             secret_key,
             security_token=session_token or None,
-            endpoint=f"tos-{self.region}.volces.com",
+            endpoint=_tos_endpoint(self.region, self.provider),
             region=self.region,
         )
 
@@ -446,6 +468,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--git-sha", required=True)
     parser.add_argument("--bucket", required=True)
     parser.add_argument("--region", default=STUDIO_RELEASE_REGION)
+    parser.add_argument(
+        "--provider",
+        choices=SUPPORTED_CLOUD_PROVIDERS,
+        default=DEFAULT_CLOUD_PROVIDER,
+    )
     parser.add_argument("--prefix", default=DEFAULT_RELEASE_PREFIX)
     parser.add_argument("--changelog", action="append", default=[])
     parser.add_argument("--frontend-assets", type=Path)
@@ -456,9 +483,10 @@ def _parser() -> argparse.ArgumentParser:
 def main() -> None:
     """Build and publish one Studio release using environment credentials."""
     args = _parser().parse_args()
-    access_key = os.getenv("VOLCENGINE_ACCESS_KEY", "")
-    secret_key = os.getenv("VOLCENGINE_SECRET_KEY", "")
-    session_token = os.getenv("VOLCENGINE_SESSION_TOKEN", "")
+    credential_prefix = "BYTEPLUS" if args.provider == "byteplus" else "VOLCENGINE"
+    access_key = os.getenv(f"{credential_prefix}_ACCESS_KEY", "")
+    secret_key = os.getenv(f"{credential_prefix}_SECRET_KEY", "")
+    session_token = os.getenv(f"{credential_prefix}_SESSION_TOKEN", "")
     bundle, manifest = build_studio_release(
         source_root=args.source_root,
         output_dir=args.output_dir,
@@ -473,6 +501,7 @@ def main() -> None:
         region=args.region,
         access_key=access_key,
         secret_key=secret_key,
+        provider=args.provider,
         session_token=session_token,
         prefix=args.prefix,
     )

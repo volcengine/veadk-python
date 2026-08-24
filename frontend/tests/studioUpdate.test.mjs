@@ -82,6 +82,8 @@ test("update submission is explicit and survives a revision switch", () => {
   assert.match(clientSource, /body: JSON\.stringify\(\{ version \}\)/);
   assert.match(controlSource, /RELEASE_POLL_INTERVAL_MS = 3_000/);
   assert.match(controlSource, /Replacing the current Revision may briefly interrupt/);
+  assert.match(controlSource, /error\.name === "TimeoutError"/);
+  assert.match(controlSource, /error\.name === "AbortError"/);
   assert.match(controlSource, /releaseReached\(next\.currentVersion, target\)/);
   assert.match(controlSource, /targetVersionRef\.current = result\.version/);
   assert.match(controlSource, /!target && !next\.available/);
@@ -131,6 +133,21 @@ test("Studio explains the update restart window", () => {
     /\.studio-update-changelog li\s*\{[\s\S]*?display:\s*list-item;/,
   );
   assert.match(controlStyleSource, /background: #1664ff/);
+});
+
+test("Studio prechecks every OTA permission before starting cloud changes", () => {
+  assert.match(clientSource, /StudioUpdatePermissionStatus/);
+  assert.match(clientSource, /\/web\/studio-update\/permissions/);
+  assert.match(
+    controlSource,
+    /const permissions = await getStudioUpdatePermissions\(\);[\s\S]*?startStudioUpdate\(targetVersion\)/,
+  );
+  assert.match(controlSource, /尚未执行任何云资源变更/);
+  assert.match(controlSource, /打开已预填的 IAM 授权页面/);
+  assert.match(controlSource, /点击页面中的“发起调试”/);
+  assert.match(controlSource, /我已授权，重新检查/);
+  assert.match(controlSource, /permissionStatus\.missingActions\.map/);
+  assert.match(controlStyleSource, /studio-update-authorization-panel/);
 });
 
 test("current and target release notes share semicolon bullet rendering", () => {

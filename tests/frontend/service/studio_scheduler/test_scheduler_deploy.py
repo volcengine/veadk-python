@@ -78,6 +78,60 @@ class _Service:
         assert Path(path, "run.sh").is_file()
 
 
+class _TimeoutClient(_Client):
+    def __init__(self) -> None:
+        super().__init__()
+        self.timeouts: list[int | None] = []
+
+    def _record(self, kwargs: dict[str, Any]) -> None:
+        self.timeouts.append(kwargs.get("_request_timeout"))
+
+    def list_functions(self, _request: Any, **kwargs: Any) -> Any:
+        self._record(kwargs)
+        return super().list_functions(_request)
+
+    def release(self, _request: Any, **kwargs: Any) -> None:
+        self._record(kwargs)
+        super().release(_request)
+
+    def get_release_status(self, _request: Any, **kwargs: Any) -> Any:
+        self._record(kwargs)
+        return super().get_release_status(_request)
+
+    def create_dependency_install_task(self, _request: Any, **kwargs: Any) -> None:
+        self._record(kwargs)
+        super().create_dependency_install_task(_request)
+
+    def get_dependency_install_task_status(self, _request: Any, **kwargs: Any) -> Any:
+        self._record(kwargs)
+        return super().get_dependency_install_task_status(_request)
+
+    def list_triggers(self, _request: Any, **kwargs: Any) -> Any:
+        self._record(kwargs)
+        return super().list_triggers(_request)
+
+    def create_timer(self, request: Any, **kwargs: Any) -> Any:
+        self._record(kwargs)
+        return super().create_timer(request)
+
+    def create_function(self, request: Any, **kwargs: Any) -> Any:
+        self._record(kwargs)
+        return super().create_function(request)
+
+
+class _TimeoutService(_Service):
+    def __init__(self) -> None:
+        super().__init__()
+        self.client = _TimeoutClient()
+
+    def _create_function(self, _name: str, path: str) -> tuple[str, str]:
+        bundle = Path(path)
+        assert (bundle / "requirements.txt").is_file()
+        self.created_bundle = bundle
+        response = self.client.create_function(SimpleNamespace())
+        return _name, str(response.id)
+
+
 def test_deploy_creates_separate_function_and_minute_timer(tmp_path: Path) -> None:
     (tmp_path / "requirements.txt").write_text("veadk-python\n", encoding="utf-8")
     service = _Service()
@@ -109,6 +163,24 @@ def test_deploy_creates_separate_function_and_minute_timer(tmp_path: Path) -> No
     assert service.client.created_worker.async_task_config.enable_async_task is True
     assert service.client.created_worker.async_task_config.max_retry == 0
     assert service.client.events == ["install", "release", "install", "release"]
+
+
+def test_deploy_extends_vefaas_sdk_request_timeout(tmp_path: Path) -> None:
+    (tmp_path / "requirements.txt").write_text("veadk-python\n", encoding="utf-8")
+    service = _TimeoutService()
+    original_list_functions = service.client.list_functions
+
+    deploy_scheduler(
+        service,
+        studio_application_name="studio_timeout",
+        package_root=tmp_path,
+        role_trn="trn:iam::role/studio",
+        environment={"VEADK_STUDIO_TOS_BUCKET": "studio"},
+    )
+
+    assert service.client.timeouts
+    assert set(service.client.timeouts) == {600}
+    assert service.client.list_functions == original_list_functions
 
 
 def test_scheduler_function_name_is_safe_and_bounded() -> None:

@@ -27,6 +27,7 @@ from fastapi.testclient import TestClient
 
 from veadk.cli.frontend_branding import SiteLogo
 from veadk.cli.studio_release import (
+    BYTEPLUS_STUDIO_RELEASE_REGION,
     STUDIO_RELEASE_REGION,
     StudioReleaseError,
     StudioReleaseManifest,
@@ -42,6 +43,26 @@ from veadk.cli.studio_self_update import (
     mount_studio_update_routes,
 )
 from veadk.utils.cloud_provider import CloudProvider
+
+
+@pytest.fixture(autouse=True)
+def _allow_studio_update_permissions(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        StudioSelfUpdater,
+        "_permission_report",
+        lambda _self, _credentials: SimpleNamespace(
+            ready=True,
+            missing_actions=(),
+            to_payload=lambda: {
+                "ready": True,
+                "missingActions": [],
+                "policyName": "",
+                "authorizationUrl": "",
+                "iamConsoleUrl": "https://console.volcengine.com/iam/policymanage",
+                "principalName": "",
+            },
+        ),
+    )
 
 
 def test_studio_release_version_defaults_to_bundled(
@@ -154,6 +175,31 @@ def test_studio_update_settings_keep_active_provider() -> None:
     settings = StudioUpdateSettings.from_env(provider="byteplus")
 
     assert settings.provider == "byteplus"
+
+
+def test_byteplus_studio_uses_byteplus_release_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class _Store:
+        def __init__(self, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr("veadk.cli.studio_self_update.StudioReleaseStore", _Store)
+    updater = StudioSelfUpdater(
+        settings=_settings(
+            deployment_region="ap-southeast-1",
+            provider="byteplus",
+        ),
+        credential_resolver=lambda: ("ak", "sk", "token"),
+        branding_logo=None,
+    )
+
+    updater._store("ak", "sk", "token")
+
+    assert captured["region"] == BYTEPLUS_STUDIO_RELEASE_REGION
+    assert captured["provider"] == "byteplus"
 
 
 def _bundle(
@@ -413,6 +459,37 @@ def test_submit_latest_reports_missing_vefaas_permissions(
         "https://console.volcengine.com/vefaas/"
         "region:vefaas+cn-beijing/function/detail/function-id"
     )
+
+
+def test_submit_latest_stops_before_bundle_reads_when_precheck_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    updater = StudioSelfUpdater(
+        settings=_settings(),
+        credential_resolver=lambda: ("sts-ak", "sts-sk", "sts-token"),
+        branding_logo=None,
+    )
+    monkeypatch.setattr(
+        updater,
+        "_permission_report",
+        lambda _credentials: SimpleNamespace(
+            ready=False,
+            missing_actions=("vefaas:CreateDependencyInstallTask",),
+        ),
+    )
+    monkeypatch.setattr(
+        updater,
+        "_store",
+        lambda *_args: pytest.fail(
+            "bundle store must not be read after failed precheck"
+        ),
+    )
+
+    with pytest.raises(StudioReleaseError, match="请先完成授权"):
+        updater.submit_latest()
+
+    assert updater._last_error == "Studio 更新缺少 1 项 IAM 权限，请先完成授权"
+    assert updater._error_stage == "permissions"
 
 
 def test_submit_latest_stops_before_upload_when_resource_migration_fails(
@@ -699,6 +776,14 @@ def test_update_routes_require_admin_and_custom_header() -> None:
                 "available": True,
             }
         ),
+        permission_precheck=lambda: {
+            "ready": False,
+            "missingActions": ["vefaas:CreateTimer"],
+            "policyName": "VeADKFrontendPolicy",
+            "authorizationUrl": "https://api.volcengine.com/api-explorer/",
+            "iamConsoleUrl": "https://console.volcengine.com/iam/policymanage",
+            "principalName": "VeADKFrontendServiceRole",
+        },
         submit_version=lambda version: submitted.append(version) or _manifest(),
     )
 
@@ -710,6 +795,12 @@ def test_update_routes_require_admin_and_custom_header() -> None:
     client = TestClient(app)
 
     assert client.get("/web/studio-update").status_code == 403
+    assert client.get("/web/studio-update/permissions").status_code == 403
+    permission_response = client.get(
+        "/web/studio-update/permissions", headers={"X-Admin": "1"}
+    )
+    assert permission_response.status_code == 200
+    assert permission_response.json()["missingActions"] == ["vefaas:CreateTimer"]
     assert (
         client.get(
             "/web/studio-update?targetVersion=20260724153045&startedAt=123456",
@@ -946,15 +1037,51 @@ def test_status_waits_during_cross_instance_submission_grace(
     )
     monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "20260724143045")
 
+    started_at = int(time.time() * 1000) - 5 * 60 * 1000
     status = updater.status(
         target_version=manifest.version,
-        started_at=int(time.time() * 1000),
+        started_at=started_at,
     )
 
     assert status["state"] == "updating"
     assert status["progressStage"] == "submitting"
     assert status["message"] == "正在等待 Function 更新提交"
     assert status["errorId"] == ""
+
+
+def test_status_rejects_target_after_cross_instance_submission_grace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = _manifest()
+
+    class _Store:
+        def latest_manifest(self) -> StudioReleaseManifest:
+            return manifest
+
+        def release_catalog(self) -> list[StudioReleaseManifest]:
+            return [manifest]
+
+    updater = StudioSelfUpdater(
+        settings=_settings(),
+        credential_resolver=lambda: ("sts-ak", "sts-sk", "sts-token"),
+        branding_logo=None,
+    )
+    monkeypatch.setattr(updater, "_store", lambda *_args: _Store())
+    monkeypatch.setattr(
+        updater,
+        "_application_status",
+        lambda: ("deploy_success", "20260724143045", 3, False),
+    )
+    monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "20260724143045")
+
+    status = updater.status(
+        target_version=manifest.version,
+        started_at=int(time.time() * 1000) - 11 * 60 * 1000,
+    )
+
+    assert status["state"] == "error"
+    assert status["errorStage"] == "submitting"
+    assert status["message"] == "目标版本未成功提交，请重新尝试更新"
 
 
 def test_status_treats_newer_release_as_completed_stale_target(

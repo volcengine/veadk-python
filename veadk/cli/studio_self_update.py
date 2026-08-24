@@ -40,10 +40,10 @@ from veadk.cli.frontend_branding import SiteLogo
 from veadk.cli.studio_package import studio_run_script
 from veadk.cli.studio_release import (
     DEFAULT_RELEASE_PREFIX,
-    STUDIO_RELEASE_REGION,
     StudioReleaseError,
     StudioReleaseManifest,
     StudioReleaseStore,
+    studio_release_region,
 )
 from veadk.utils.cloud_provider import DEFAULT_CLOUD_PROVIDER, CloudProvider
 from veadk.version import VERSION
@@ -57,7 +57,11 @@ _UPDATE_LOG_CACHE_SECONDS = 2
 _UPDATE_LOG_MAX_BYTES = 32 * 1024
 _UPDATE_LOG_MAX_LINES = 200
 _STAGED_RELEASE_GRACE_SECONDS = 60
-_SUBMIT_STATUS_GRACE_MILLISECONDS = 90 * 1000
+# Scheduler/worker reconciliation runs before the main Function update and can
+# legitimately take several minutes.  Cross-instance status requests must not
+# mistake the still-stable old revision for a failed submission while that
+# work is in progress.
+_SUBMIT_STATUS_GRACE_MILLISECONDS = 10 * 60 * 1000
 _UPDATE_HEADER = "X-VeADK-Studio-Update"
 
 Credentials = tuple[str, str, str | None]
@@ -78,6 +82,10 @@ def current_studio_display_version() -> str:
 
 class StudioUpdateConflict(StudioReleaseError):
     """Raised when an update is already being prepared by this instance."""
+
+
+class StudioUpdatePermissionRequired(StudioReleaseError):
+    """Raised when OTA cannot safely start with the current Function role."""
 
 
 @dataclass(frozen=True)
@@ -339,6 +347,33 @@ class StudioSelfUpdater:
         """Stage the latest bundle and submit a release for this Function."""
         return self.submit_version(None)
 
+    def permission_precheck(self) -> dict[str, Any]:
+        """Return the current Function role's complete OTA permission status."""
+        try:
+            credentials = self._credential_resolver()
+            return self._permission_report(credentials).to_payload()
+        except StudioReleaseError:
+            raise
+        except Exception as error:
+            logger.exception("Failed to pre-check Studio update permissions")
+            raise StudioReleaseError(
+                "Studio 更新权限预检失败，请管理员检查 Function 角色的 IAM 读取权限"
+            ) from error
+
+    def _permission_report(self, credentials: Credentials) -> Any:
+        """Evaluate OTA permissions with already-resolved credentials."""
+        from veadk.cli.studio_update_permissions import (
+            StudioUpdatePermissionService,
+        )
+
+        access_key, secret_key, session_token = credentials
+        return StudioUpdatePermissionService(
+            provider=self._settings.provider,
+            access_key=access_key,
+            secret_key=secret_key,
+            session_token=session_token or "",
+        ).check()
+
     def submit_version(self, version: str | None) -> StudioReleaseManifest:
         """Stage one selectable bundle and submit a release for this Function."""
         if not self._settings.enabled:
@@ -348,8 +383,16 @@ class StudioSelfUpdater:
         credentials: tuple[str, str, str] = ("", "", "")
         try:
             self._reset_diagnostics(version)
+            self._set_progress("permissions", "正在预检 Studio 更新权限")
+            resolved_credentials = self._credential_resolver()
+            report = self._permission_report(resolved_credentials)
+            if not report.ready:
+                raise StudioUpdatePermissionRequired(
+                    f"Studio 更新缺少 {len(report.missing_actions)} 项 IAM 权限，"
+                    "请先完成授权"
+                )
             self._set_progress("resolving", "正在读取目标版本信息")
-            access_key, secret_key, session_token = self._credential_resolver()
+            access_key, secret_key, session_token = resolved_credentials
             credentials = (access_key, secret_key, session_token or "")
             store = self._store(access_key, secret_key, session_token)
             manifest = store.manifest(version) if version else store.latest_manifest()
@@ -767,7 +810,8 @@ class StudioSelfUpdater:
     ) -> StudioReleaseStore:
         return StudioReleaseStore(
             bucket=self._settings.bucket,
-            region=STUDIO_RELEASE_REGION,
+            region=studio_release_region(self._settings.provider),
+            provider=self._settings.provider,
             prefix=self._settings.prefix,
             access_key=access_key,
             secret_key=secret_key,
@@ -956,6 +1000,14 @@ def mount_studio_update_routes(
             started_at=started_at,
         )
 
+    @app.get("/web/studio-update/permissions")
+    async def _studio_update_permissions(request: Request) -> dict[str, Any]:
+        require_admin(request)
+        try:
+            return await asyncio.to_thread(updater.permission_precheck)
+        except StudioReleaseError as error:
+            raise HTTPException(status_code=502, detail=str(error)) from error
+
     @app.post("/web/studio-update", status_code=202)
     async def _studio_update_start(request: Request) -> dict[str, Any]:
         require_admin(request)
@@ -975,6 +1027,8 @@ def mount_studio_update_routes(
                 version = raw_version
             manifest = await asyncio.to_thread(updater.submit_version, version)
         except StudioUpdateConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except StudioUpdatePermissionRequired as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except StudioReleaseError as error:
             raise HTTPException(status_code=502, detail=str(error)) from error
