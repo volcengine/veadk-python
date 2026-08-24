@@ -219,6 +219,8 @@ def mount_skill_routes(
         request: Request,
         region: str = Query(min_length=1, max_length=64),
         version: str | None = Query(default=None, max_length=128),
+        skill_space_name: str | None = Query(default=None, max_length=256),
+        skill_name: str | None = Query(default=None, max_length=256),
     ) -> dict[str, object]:
         identity = identity_resolver(request)
         return await invoke(
@@ -228,6 +230,8 @@ def mount_skill_routes(
                 space_id=space_id,
                 skill_id=skill_id,
                 version=(version or "").strip() or None,
+                skill_space_name=(skill_space_name or "").strip() or None,
+                skill_name=(skill_name or "").strip() or None,
             )
         )
 
@@ -238,6 +242,8 @@ def mount_skill_routes(
         request: Request,
         region: str = Query(min_length=1, max_length=64),
         version: str | None = Query(default=None, max_length=128),
+        skill_space_name: str | None = Query(default=None, max_length=256),
+        skill_name: str | None = Query(default=None, max_length=256),
     ) -> Response:
         identity = identity_resolver(request)
         content, filename = await invoke(
@@ -247,6 +253,8 @@ def mount_skill_routes(
                 space_id=space_id,
                 skill_id=skill_id,
                 version=(version or "").strip() or None,
+                skill_space_name=(skill_space_name or "").strip() or None,
+                skill_name=(skill_name or "").strip() or None,
             )
         )
         return Response(

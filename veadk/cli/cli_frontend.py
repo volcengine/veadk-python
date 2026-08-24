@@ -2999,6 +2999,7 @@ def _run_frontend_server(
     )
     from veadk.cli.generated_agent_skills import (
         _files_from_zip,
+        _is_macos_metadata,
         materialize_selected_skills,
     )
     from veadk.extensions.harness.sidecar import (
@@ -3352,6 +3353,7 @@ def _run_frontend_server(
                     for info in archive.infolist()
                     if (
                         not info.is_dir()
+                        and not _is_macos_metadata(info.filename)
                         and info.filename.lower().endswith("skill.md")
                         and not info.filename.startswith(("/", "\\"))
                         and ".." not in Path(info.filename).parts
@@ -3428,6 +3430,7 @@ def _run_frontend_server(
         version: str | None,
         resp: object,
         folder: str,
+        region: str | None = None,
     ) -> str | list[GeneratedFile]:
         skill_md = _skill_version_attr(resp, "skill_md", "skillMd")
         bucket_name = _skill_version_attr(resp, "bucket_name", "bucketName")
@@ -3452,7 +3455,12 @@ def _run_frontend_server(
         )
         with tempfile.TemporaryDirectory(prefix="veadk_skillspace_") as temp_dir:
             zip_path = Path(temp_dir) / "skill.zip"
-            if not _download_legacy_skill_space_skill(remote_skill, zip_path):
+            if not _download_legacy_skill_space_skill(
+                remote_skill,
+                zip_path,
+                region=region,
+                raise_on_error=True,
+            ):
                 if skill_md:
                     return skill_md
                 raise HTTPException(
@@ -3463,6 +3471,7 @@ def _run_frontend_server(
                 zip_path.read_bytes(),
                 folder,
                 f"SkillSpace skill {skill_id}",
+                ignore_binary=True,
             )
 
     async def _resolve_skillspace_skill_materialization(
@@ -3474,55 +3483,50 @@ def _run_frontend_server(
         skill_space_name: str | None = None,
         skill_name: str | None = None,
     ) -> str | list[GeneratedFile]:
-        from agentkit.sdk.skills.types import (
-            GetSkillInfoRequest,
-            GetSkillVersionRequest,
-        )
-
         resolved_region = _coerce_cloud_region(region)
         client = _skills_client(resolved_region)
         try:
-            resp = client.get_skill_version(
-                GetSkillVersionRequest(id=skill_id, skill_version=version)
+            resp = await asyncio.to_thread(
+                resolve_skill_response,
+                client,
+                space_id=space_id,
+                skill_id=skill_id,
+                version=version,
+                skill_space_name=skill_space_name,
+                skill_name=skill_name,
             )
-        except Exception as version_error:
-            if skill_space_name and skill_name:
-                try:
-                    resp = client.get_skill_info(
-                        GetSkillInfoRequest(
-                            SkillName=skill_name,
-                            SkillSpaceName=skill_space_name,
-                            SkillSpaceId=space_id,
-                        )
-                    )
-                except Exception:
-                    logger.error(
-                        f"GetSkillVersion({skill_id}@{version}) error for region "
-                        f"{resolved_region}: {version_error}",
-                        exc_info=True,
-                    )
-                    raise HTTPException(
-                        status_code=502,
-                        detail=f"SkillSpaces API error: {version_error}",
-                    ) from version_error
-            else:
-                logger.error(
-                    f"GetSkillVersion({skill_id}@{version}) error for region "
-                    f"{resolved_region}: {version_error}",
-                    exc_info=True,
-                )
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"SkillSpaces API error: {version_error}",
-                ) from version_error
-        return await asyncio.to_thread(
-            _skill_files_from_version_response,
-            space_id=space_id,
-            skill_id=skill_id,
-            version=version,
-            resp=resp,
-            folder=skill_name or skill_id,
-        )
+        except Exception as error:
+            logger.error(
+                f"Skill detail lookup ({skill_id}@{version}) error for region "
+                f"{resolved_region}: {error}",
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=f"SkillSpaces API error: {error}",
+            ) from error
+        try:
+            return await asyncio.to_thread(
+                _skill_files_from_version_response,
+                space_id=space_id,
+                skill_id=skill_id,
+                version=version,
+                resp=resp,
+                folder=skill_name or skill_id,
+                region=resolved_region,
+            )
+        except HTTPException:
+            raise
+        except Exception as error:
+            logger.error(
+                f"Skill package download ({skill_id}@{version}) error for region "
+                f"{resolved_region}: {error}",
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=f"SkillSpace package download error: {error}",
+            ) from error
 
     def _draft_for_debug_run(draft: AgentDraft) -> AgentDraft:
         """Return a debug-safe draft by omitting stdio MCP tools recursively."""
@@ -10031,7 +10035,10 @@ def _run_frontend_server(
             session_token=token or "",
         )
 
-    from frontend.server.skills.repository import AgentKitSkillRepository
+    from frontend.server.skills.repository import (
+        AgentKitSkillRepository,
+        resolve_skill_response,
+    )
     from frontend.server.skills.routes import _convert_error, mount_skill_routes
     from frontend.server.skills.service import SkillService
 
@@ -10165,16 +10172,21 @@ def _run_frontend_server(
         skill_id: str,
         version: str | None = None,
         region: str = "",
+        skill_space_name: str | None = None,
+        skill_name: str | None = None,
     ):
         """Fetch a specific skill version's SKILL.md content plus package files."""
-        from agentkit.sdk.skills.types import GetSkillVersionRequest
-
         region = _coerce_cloud_region(region)
         try:
             client = _skills_client(region)
             resp = await asyncio.to_thread(
-                client.get_skill_version,
-                GetSkillVersionRequest(Id=skill_id, SkillVersion=version),
+                resolve_skill_response,
+                client,
+                space_id=space_id,
+                skill_id=skill_id,
+                version=version,
+                skill_space_name=(skill_space_name or "").strip() or None,
+                skill_name=(skill_name or "").strip() or None,
             )
         except HTTPException:
             raise
@@ -10184,14 +10196,25 @@ def _run_frontend_server(
             )
             raise _convert_error(e) from e
 
-        resolved = await asyncio.to_thread(
-            _skill_files_from_version_response,
-            space_id=space_id,
-            skill_id=skill_id,
-            version=version,
-            resp=resp,
-            folder=resp.name or skill_id,
-        )
+        try:
+            resolved = await asyncio.to_thread(
+                _skill_files_from_version_response,
+                space_id=space_id,
+                skill_id=skill_id,
+                version=version,
+                resp=resp,
+                folder=_skill_version_attr(resp, "name", "skill_name") or skill_id,
+                region=region,
+            )
+        except HTTPException:
+            raise
+        except Exception as error:
+            logger.error(
+                f"Skill package download ({skill_id}@{version}) error for region "
+                f"{region}: {error}",
+                exc_info=True,
+            )
+            raise _convert_error(error) from error
         if isinstance(resolved, str):
             skill_md = resolved
             files = []
@@ -10209,13 +10232,13 @@ def _run_frontend_server(
         return {
             "skillId": skill_id,
             "skillSpaceId": space_id,
-            "name": resp.name or "",
-            "description": resp.description or "",
-            "version": resp.version or version or "",
+            "name": _skill_version_attr(resp, "name", "skill_name"),
+            "description": _skill_version_attr(resp, "description"),
+            "version": _skill_version_attr(resp, "version") or version or "",
             "skillMd": skill_md,
             "files": files,
-            "bucketName": resp.bucket_name or "",
-            "tosPath": resp.tos_path or "",
+            "bucketName": _skill_version_attr(resp, "bucket_name", "bucketName"),
+            "tosPath": _skill_version_attr(resp, "tos_path", "tosPath", "path"),
         }
 
     if vite:

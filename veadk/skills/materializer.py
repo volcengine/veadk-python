@@ -117,14 +117,20 @@ def _download_remote_skill(skill: Skill, zip_path: Path) -> None:
         )
 
 
-def _download_legacy_skill_space_skill(skill: Skill, zip_path: Path) -> bool:
+def _download_legacy_skill_space_skill(
+    skill: Skill,
+    zip_path: Path,
+    *,
+    region: str | None = None,
+    raise_on_error: bool = False,
+) -> bool:
     if not skill.bucket_name or not skill.path:
         raise SkillMaterializeError(
             f"Skill-space skill '{skill.name}' is missing bucket or TOS path."
         )
 
     access_key, secret_key, session_token = _get_cloud_credentials()
-    service, region, host = _get_agentkit_endpoint()
+    service, resolved_region, host = _get_agentkit_endpoint(region)
     scheme = os.getenv("AGENTKIT_TOP_SCHEME", "https").lower()
     cloud_provider = (os.getenv("CLOUD_PROVIDER") or "").lower()
 
@@ -135,7 +141,7 @@ def _download_legacy_skill_space_skill(skill: Skill, zip_path: Path) -> bool:
             secret_key=secret_key,
             session_token=session_token,
             service=service,
-            region=region,
+            region=resolved_region,
             host=host,
             scheme=scheme,
             zip_path=zip_path,
@@ -148,12 +154,13 @@ def _download_legacy_skill_space_skill(skill: Skill, zip_path: Path) -> bool:
         sk=secret_key,
         session_token=session_token,
         bucket_name=skill.bucket_name,
-        region=region,
+        region=resolved_region,
     )
     return tos_client.download(
         bucket_name=skill.bucket_name,
         object_key=skill.path,
         save_path=str(zip_path),
+        raise_on_error=raise_on_error,
     )
 
 
