@@ -18,6 +18,7 @@ import os
 import sys
 import types
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -552,6 +553,127 @@ class TestEnsureAgentkitSessionEndpoint(unittest.TestCase):
                         tool_user_session_id="user-session-1",
                         wait_until_ready=True,
                     )
+
+    def test_reuses_ready_session_with_enough_remaining_lifetime(self):
+        expires_at = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        reusable = types.SimpleNamespace(
+            session_id="session-existing",
+            user_session_id="user-session-1",
+            status="Ready",
+            created_at="2026-08-24T01:00:00+00:00",
+            expire_at=expires_at,
+        )
+
+        class FakeClient:
+            def list_sessions(self, request):
+                self.request = request
+                return types.SimpleNamespace(session_infos=[reusable], next_token=None)
+
+            def create_session(self, _request):
+                raise AssertionError("a reusable Session must not be replaced")
+
+        result = self.agentkit_module._get_or_create_agentkit_session(
+            client=FakeClient(),
+            tool_id="tool-1",
+            tool_user_session_id="user-session-1",
+            ttl=1800,
+            min_remaining_seconds=600,
+        )
+
+        self.assertIs(result, reusable)
+
+    def test_rotates_near_expiry_session_with_physical_user_session_id(self):
+        expires_at = (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat()
+        old_session = types.SimpleNamespace(
+            session_id="session-old",
+            user_session_id="user-session-1",
+            status="Ready",
+            created_at="2026-08-24T01:00:00+00:00",
+            expire_at=expires_at,
+        )
+        captured = {}
+
+        class FakeClient:
+            def list_sessions(self, _request):
+                return types.SimpleNamespace(
+                    session_infos=[old_session], next_token=None
+                )
+
+            def create_session(self, request):
+                captured["user_session_id"] = request.user_session_id
+                return types.SimpleNamespace(
+                    session_id="session-new",
+                    user_session_id=request.user_session_id,
+                )
+
+        result = self.agentkit_module._get_or_create_agentkit_session(
+            client=FakeClient(),
+            tool_id="tool-1",
+            tool_user_session_id="user-session-1",
+            ttl=1800,
+            min_remaining_seconds=600,
+        )
+
+        self.assertEqual(result.session_id, "session-new")
+        self.assertRegex(
+            captured["user_session_id"], r"^user-session-1_r_[0-9a-f]{12}$"
+        )
+
+    def test_list_sessions_follows_next_token(self):
+        requests = []
+        matching = types.SimpleNamespace(
+            session_id="session-2",
+            user_session_id="user-session-1_r_123456789abc",
+        )
+
+        class FakeClient:
+            def list_sessions(self, request):
+                requests.append(request)
+                if len(requests) == 1:
+                    return types.SimpleNamespace(session_infos=[], next_token="page-2")
+                return types.SimpleNamespace(session_infos=[matching], next_token=None)
+
+        result = self.agentkit_module._list_agentkit_sessions(
+            client=FakeClient(),
+            tool_id="tool-1",
+            physical_user_session_id_base="user-session-1",
+        )
+
+        self.assertEqual(result, [matching])
+        self.assertEqual(len(requests), 2)
+        self.assertIsNone(requests[0].next_token)
+        self.assertEqual(requests[1].next_token, "page-2")
+
+    def test_recovers_session_after_ambiguous_create_failure(self):
+        list_calls = 0
+        recovered = types.SimpleNamespace(
+            session_id="session-created",
+            user_session_id="user-session-1",
+            status="Starting",
+            created_at="2026-08-24T01:00:00+00:00",
+            expire_at=(datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat(),
+        )
+
+        class FakeClient:
+            def list_sessions(self, _request):
+                nonlocal list_calls
+                list_calls += 1
+                sessions = [] if list_calls == 1 else [recovered]
+                return types.SimpleNamespace(session_infos=sessions, next_token=None)
+
+            def create_session(self, _request):
+                raise TimeoutError("CreateSession response was lost")
+
+        result = self.agentkit_module._get_or_create_agentkit_session(
+            client=FakeClient(),
+            tool_id="tool-1",
+            tool_user_session_id="user-session-1",
+            ttl=1800,
+            min_remaining_seconds=600,
+        )
+
+        self.assertIs(result, recovered)
+        self.assertEqual(list_calls, 2)
 
 
 if __name__ == "__main__":
