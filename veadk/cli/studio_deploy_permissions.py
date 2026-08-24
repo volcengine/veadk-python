@@ -52,6 +52,24 @@ class PermissionResult:
     satisfied: bool
 
 
+@dataclass(frozen=True)
+class AttachedPolicyDocument:
+    """One policy attached to the current IAM principal."""
+
+    name: str
+    policy_type: str
+    document: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class PrincipalPolicySet:
+    """Resolved IAM principal and the policies used to authorize it."""
+
+    kind: Literal["role", "user", "root"]
+    name: str
+    policies: tuple[AttachedPolicyDocument, ...]
+
+
 def _permission(action: str, purpose_zh: str, purpose_en: str) -> PermissionSpec:
     return PermissionSpec(action, purpose_zh, purpose_en)
 
@@ -480,9 +498,9 @@ class StudioDeployPermissionService:
             return str(user.get("UserName") or "").strip()
         return ""
 
-    def _attached_policy_documents(
+    def _attached_policies(
         self, service: Any, principal_kind: str, principal_name: str
-    ) -> list[dict[str, Any]]:
+    ) -> list[AttachedPolicyDocument]:
         if principal_kind == "role":
             response = service.list_attached_role_policies({"RoleName": principal_name})
         else:
@@ -491,7 +509,7 @@ class StudioDeployPermissionService:
                 raise RuntimeError("Could not resolve the current IAM user")
             response = service.list_attached_user_policies({"UserName": user_name})
         result = _iam_result(response)
-        documents: list[dict[str, Any]] = []
+        policies: list[AttachedPolicyDocument] = []
         for policy in _as_list(result.get("AttachedPolicyMetadata", [])):
             if not isinstance(policy, Mapping):
                 continue
@@ -507,19 +525,39 @@ class StudioDeployPermissionService:
             policy_data = policy_result.get("Policy", policy_result)
             if not isinstance(policy_data, Mapping):
                 raise TypeError(f"IAM policy {policy_name} is unreadable")
-            documents.append(_policy_document(policy_data.get("PolicyDocument")))
-        return documents
+            policies.append(
+                AttachedPolicyDocument(
+                    name=policy_name,
+                    policy_type=policy_type,
+                    document=_policy_document(policy_data.get("PolicyDocument")),
+                )
+            )
+        return policies
+
+    def principal_policies(self) -> PrincipalPolicySet:
+        """Return the current principal and its attached policy documents."""
+        principal_kind, principal_name = self._caller_identity()
+        if principal_kind == "root":
+            return PrincipalPolicySet(kind="root", name="", policies=())
+        policies = self._attached_policies(
+            self._iam_service(), principal_kind, principal_name
+        )
+        return PrincipalPolicySet(
+            kind=cast(Literal["role", "user"], principal_kind),
+            name=principal_name,
+            policies=tuple(policies),
+        )
 
     def check(self, specs: Iterable[PermissionSpec]) -> list[PermissionResult]:
         required = list(specs)
-        principal_kind, principal_name = self._caller_identity()
-        if principal_kind == "root":
+        principal = self.principal_policies()
+        if principal.kind == "root":
             satisfied = {spec.action: True for spec in required}
         else:
-            documents = self._attached_policy_documents(
-                self._iam_service(), principal_kind, principal_name
+            satisfied = evaluate_actions(
+                (spec.action for spec in required),
+                (policy.document for policy in principal.policies),
             )
-            satisfied = evaluate_actions((spec.action for spec in required), documents)
         return [
             PermissionResult(spec=spec, satisfied=satisfied.get(spec.action, False))
             for spec in required
@@ -630,8 +668,10 @@ def run_studio_deploy_permission_precheck(
 
 __all__ = [
     "IAM_CONFIG_URLS",
+    "AttachedPolicyDocument",
     "PermissionResult",
     "PermissionSpec",
+    "PrincipalPolicySet",
     "StudioDeployPermissionService",
     "evaluate_actions",
     "render_permission_results",

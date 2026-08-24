@@ -610,6 +610,132 @@
   text-underline-offset: 2px;
 }
 
+.studio-update-permission-checking {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 9px;
+  background: hsl(var(--canvas) / 0.5);
+}
+
+.studio-update-permission-checking p {
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.studio-update-authorization-panel {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.studio-update-authorization-panel .confirm-text {
+  margin-bottom: 0;
+}
+
+.studio-update-authorization-principal {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--canvas) / 0.5);
+}
+
+.studio-update-authorization-principal div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.studio-update-authorization-principal dt,
+.studio-update-missing-actions > span {
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+}
+
+.studio-update-authorization-principal dd {
+  overflow: hidden;
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-size: 12px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.studio-update-authorization-steps {
+  margin: 0;
+  padding-left: 20px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.studio-update-missing-actions {
+  display: grid;
+  gap: 7px;
+}
+
+.studio-update-missing-actions ul {
+  display: grid;
+  gap: 4px;
+  max-height: 204px;
+  margin: 0;
+  padding: 9px 12px;
+  overflow-y: auto;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--muted) / 0.22);
+  list-style: none;
+}
+
+.studio-update-missing-actions code {
+  color: hsl(var(--foreground));
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.studio-update-authorization-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: fit-content;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 7px;
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  font-size: 12px;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.studio-update-authorization-link:hover {
+  background: hsl(var(--primary) / 0.88);
+}
+
+.studio-update-authorization-link svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.studio-update-authorization-note {
+  margin: -4px 0 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  line-height: 1.55;
+}
+
 .studio-update-progress-summary {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

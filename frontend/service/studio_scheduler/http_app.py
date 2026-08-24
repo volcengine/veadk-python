@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 
 from fastapi import FastAPI
@@ -52,9 +53,32 @@ async def execute_ready_runs() -> dict[str, int]:
     return _summary(summary)
 
 
+def _timer_event(value: dict[str, object] | str | None) -> dict[str, object]:
+    """Normalize provider-specific timer payload shapes.
+
+    Volcengine sends the configured JSON payload as an object, while BytePlus
+    currently delivers the same value as a JSON-encoded string.
+    """
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError as error:
+        raise ValueError("Scheduler timer payload is not valid JSON") from error
+    if not isinstance(decoded, dict):
+        raise ValueError(  # noqa: TRY004 - invalid external payload, not API misuse
+            "Scheduler timer payload must be a JSON object"
+        )
+    return decoded
+
+
 @app.post("/")
-async def handle_timer(event: dict[str, object] | None = None) -> dict[str, int]:
-    phase = str((event or {}).get("phase") or "scan")
+async def handle_timer(
+    event: dict[str, object] | str | None = None,
+) -> dict[str, int]:
+    phase = str(_timer_event(event).get("phase") or "scan")
     if phase == "scan":
         return await dispatch_current_minute()
     if phase == "execute":

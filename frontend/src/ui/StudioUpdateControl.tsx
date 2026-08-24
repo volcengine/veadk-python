@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   getStudioUpdateStatus,
+  getStudioUpdatePermissions,
   startStudioUpdate,
+  type StudioUpdatePermissionStatus,
   type StudioUpdateStatus,
 } from "../adk/client";
 import { splitReleaseNotes } from "./releaseNotes";
@@ -16,11 +18,19 @@ const COMPLETION_LOG_SETTLE_TIMEOUT_MS = 45_000;
 const STUDIO_UPDATE_STORAGE_KEY = "veadk.studio.pending-update";
 const STUDIO_UPDATE_HANDOFF_KEY = "veadk.studio.update-handoff";
 
-type UpdatePhase = "idle" | "confirm" | "submitting" | "published" | "error";
+type UpdatePhase =
+  | "idle"
+  | "confirm"
+  | "checking-permissions"
+  | "permission"
+  | "submitting"
+  | "published"
+  | "error";
 type PendingStudioUpdate = { targetVersion: string; startedAt: number };
 type LogCopyState = "idle" | "copied" | "error";
 
 const UPDATE_STEPS = [
+  { id: "permissions", label: "预检 OTA 所需权限" },
   { id: "resolving", label: "读取目标版本信息" },
   { id: "downloading", label: "下载并校验完整更新包" },
   { id: "preparing", label: "准备 VeFaaS Function 代码" },
@@ -30,6 +40,7 @@ const UPDATE_STEPS = [
 ] as const;
 
 const UPDATE_STAGE_LABELS: Record<string, string> = {
+  permissions: "预检 OTA 权限",
   resolving: "读取版本信息",
   downloading: "下载更新包",
   preparing: "准备 Function 代码",
@@ -240,6 +251,8 @@ export function StudioUpdateControl({
   );
   const [dialogOpen, setDialogOpen] = useState(Boolean(initialPending));
   const [message, setMessage] = useState("");
+  const [permissionStatus, setPermissionStatus] =
+    useState<StudioUpdatePermissionStatus | null>(null);
   const [selectedVersion, setSelectedVersion] = useState(
     initialPending?.targetVersion ?? "",
   );
@@ -394,17 +407,30 @@ export function StudioUpdateControl({
     handoffTargetRef.current = "";
     targetVersionRef.current = targetVersion;
     startedAtRef.current = Date.now();
-    persistPendingUpdate(targetVersion, startedAtRef.current);
-    setPhase("submitting");
+    setPhase("checking-permissions");
     setMessage("");
     setLogCopyState("idle");
     try {
+      const permissions = await getStudioUpdatePermissions();
+      setPermissionStatus(permissions);
+      if (!permissions.ready) {
+        clearPendingUpdate();
+        setPhase("permission");
+        return;
+      }
+      setPermissionStatus(null);
+      persistPendingUpdate(targetVersion, startedAtRef.current);
+      setPhase("submitting");
       const result = await startStudioUpdate(targetVersion);
       targetVersionRef.current = result.version;
       persistPendingUpdate(result.version, startedAtRef.current);
       setMessage("更新已提交，正在等待 VeFaaS 发布新版本");
     } catch (error) {
-      if (error instanceof TypeError) {
+      if (
+        error instanceof TypeError ||
+        (error instanceof Error &&
+          (error.name === "TimeoutError" || error.name === "AbortError"))
+      ) {
         setMessage("连接已切换，正在确认新版本状态");
         return;
       }
@@ -439,6 +465,7 @@ export function StudioUpdateControl({
     setVersionMenuOpen(false);
     setLogCopyState("idle");
     setMessage("");
+    setPermissionStatus(null);
     setSelectedVersion(targetVersionRef.current || releases[0]?.version || "");
     setPhase("confirm");
   };
@@ -453,7 +480,11 @@ export function StudioUpdateControl({
             : `studio-update-trigger is-${phase}`
         }
         title={
-          phase === "submitting"
+          phase === "checking-permissions"
+            ? "正在检查 OTA 权限"
+            : phase === "permission"
+              ? "需要 IAM 授权"
+              : phase === "submitting"
             ? "正在更新 Studio"
             : phase === "published"
               ? "Studio 已更新"
@@ -462,7 +493,12 @@ export function StudioUpdateControl({
         onClick={() => {
           if (phase === "published") {
             window.location.reload();
-          } else if (phase === "submitting" || phase === "error") {
+          } else if (
+            phase === "checking-permissions" ||
+            phase === "permission" ||
+            phase === "submitting" ||
+            phase === "error"
+          ) {
             setDialogOpen(true);
           } else {
             setSelectedVersion(releases[0]?.version || status.latestVersion);
@@ -474,7 +510,11 @@ export function StudioUpdateControl({
         {variant !== "feature-link" && (
           <StudioUpdateIcon className="studio-update-icon" />
         )}
-        {phase === "submitting" ? (
+        {phase === "checking-permissions" ? (
+          <TextShimmer as="span">检查更新权限</TextShimmer>
+        ) : phase === "permission" ? (
+          <span>需要授权</span>
+        ) : phase === "submitting" ? (
           <TextShimmer as="span">正在更新</TextShimmer>
         ) : phase === "published" ? (
           <span>刷新使用新版</span>
@@ -492,7 +532,9 @@ export function StudioUpdateControl({
         <div className="confirm-scrim" role="presentation">
           <section
             className={`confirm-box studio-update-dialog${
-              phase === "confirm" ? "" : " is-progress"
+              phase === "submitting" || phase === "published" || phase === "error"
+                ? " is-progress"
+                : ""
             }`}
             role="dialog"
             aria-modal="true"
@@ -504,13 +546,70 @@ export function StudioUpdateControl({
             <div id="studio-update-title" className="confirm-title">
               {phase === "error"
                 ? "Studio 更新失败"
+                : phase === "checking-permissions"
+                  ? "正在检查更新权限"
+                  : phase === "permission"
+                    ? "需要 IAM 授权"
                 : phase === "submitting"
                   ? "正在更新 Studio"
                   : phase === "published"
                     ? "Studio 更新完成"
                     : "发现新版本"}
             </div>
-            {phase === "error" ? (
+            {phase === "checking-permissions" ? (
+              <div className="studio-update-permission-checking" role="status">
+                <TextShimmer as="p">正在核对 OTA 与定时任务所需的全部 IAM 权限…</TextShimmer>
+                <p>权限全部满足后才会开始下载、更新或发布云资源。</p>
+              </div>
+            ) : phase === "permission" && permissionStatus ? (
+              <div className="studio-update-authorization-panel">
+                <p className="confirm-text">
+                  当前 Function 角色缺少 {permissionStatus.missingActions.length} 项
+                  OTA 更新权限，尚未执行任何云资源变更。
+                </p>
+                <dl className="studio-update-authorization-principal">
+                  <div>
+                    <dt>Function 角色</dt>
+                    <dd>{permissionStatus.principalName || "当前运行角色"}</dd>
+                  </div>
+                  {permissionStatus.policyName && (
+                    <div>
+                      <dt>将更新策略</dt>
+                      <dd>{permissionStatus.policyName}</dd>
+                    </div>
+                  )}
+                </dl>
+                <ol className="studio-update-authorization-steps">
+                  <li>打开授权页面，确认已预填的策略名称和完整策略内容。</li>
+                  <li>点击页面中的“发起调试”，完成策略更新。</li>
+                  <li>返回此窗口，点击“我已授权，重新检查”。</li>
+                </ol>
+                <div className="studio-update-missing-actions">
+                  <span>缺少的权限</span>
+                  <ul>
+                    {permissionStatus.missingActions.map((action) => (
+                      <li key={action}><code>{action}</code></li>
+                    ))}
+                  </ul>
+                </div>
+                <a
+                  className="studio-update-authorization-link"
+                  href={permissionStatus.authorizationUrl || permissionStatus.iamConsoleUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {permissionStatus.authorizationUrl
+                    ? "打开已预填的 IAM 授权页面"
+                    : "前往 IAM 控制台手动配置"}
+                  <ExternalLinkIcon />
+                </a>
+                {!permissionStatus.authorizationUrl && (
+                  <p className="studio-update-authorization-note">
+                    当前角色没有唯一可安全更新的自定义策略，请由管理员将上述权限加入该角色。
+                  </p>
+                )}
+              </div>
+            ) : phase === "error" ? (
               <div className="studio-update-error-panel">
                 <p className="confirm-text studio-update-error">{message}</p>
                 <dl className="studio-update-error-meta">
@@ -705,7 +804,11 @@ export function StudioUpdateControl({
                   }
                 }}
               >
-                {phase === "submitting" ? "后台运行" : phase === "confirm" ? "取消" : "关闭"}
+                {phase === "submitting"
+                  ? "后台运行"
+                  : phase === "confirm"
+                    ? "取消"
+                    : "关闭"}
               </button>
               {phase === "confirm" && (
                 <button
@@ -714,6 +817,15 @@ export function StudioUpdateControl({
                   onClick={() => void beginUpdate()}
                 >
                   立即更新
+                </button>
+              )}
+              {phase === "permission" && (
+                <button
+                  type="button"
+                  className="confirm-btn studio-update-confirm"
+                  onClick={() => void beginUpdate()}
+                >
+                  我已授权，重新检查
                 </button>
               )}
               {phase === "error" && (
