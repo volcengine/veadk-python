@@ -11504,6 +11504,7 @@ def frontend_deploy(
             auth_method="none",
             enable_mcp_session=False,
             keep_failed_deploy=keep_failed_deploy,
+            disable_gateway_cors=True,
         )
         url = (app.vefaas_endpoint or "").rstrip("/")
         redirect_uri = f"{url}/oauth2/callback"
@@ -12464,6 +12465,7 @@ def frontend_update(
                 function_id=target.function_id,
                 path=str(package_dir),
                 environment_overrides=environment_overrides or None,
+                disable_gateway_cors=True,
             )
         except Exception as error:
             if _is_retryable_cloud_read_error(error):

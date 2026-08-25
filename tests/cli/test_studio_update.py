@@ -17,7 +17,7 @@ import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import ANY
+from unittest.mock import ANY, Mock
 
 import httpx
 import pytest
@@ -482,6 +482,7 @@ def test_studio_update_preserves_branding_and_updates_existing_ids(
     assert isinstance(update, dict)
     assert update["application_id"] == "app-id"
     assert update["function_id"] == "function-app-id"
+    assert update["disable_gateway_cors"] is True
     assert update["environment_overrides"] == {
         "AGENTKIT_SANDBOX_REGION": "cn-beijing",
         "VEADK_STUDIO_CRONJOB_SCHEDULER_BASE": "studio-app",
@@ -1231,12 +1232,15 @@ def test_update_application_code_bundle_merges_only_explicit_environment(
     )
     monkeypatch.setattr(service, "_upload_and_mount_code", lambda *_: None)
     monkeypatch.setattr(service, "_release_application", lambda _: "https://same")
+    ensure_route = Mock()
+    monkeypatch.setattr(service, "ensure_application_route_methods", ensure_route)
 
     url = service.update_application_code_bundle(
         application_id="app-id",
         function_id="function-id",
         path=str(tmp_path),
         environment_overrides={"VEADK_SITE_TITLE": "新标题"},
+        disable_gateway_cors=True,
     )
 
     assert url == "https://same"
@@ -1246,6 +1250,7 @@ def test_update_application_code_bundle_merges_only_explicit_environment(
         "EXISTING": "kept",
         "VEADK_SITE_TITLE": "新标题",
     }
+    ensure_route.assert_called_once_with("app-id", disable_cors=True)
 
 
 def test_application_operations_use_deployment_region(
