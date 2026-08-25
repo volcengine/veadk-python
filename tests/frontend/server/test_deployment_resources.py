@@ -97,6 +97,34 @@ def test_deployment_resource_route_passes_provider_region_and_parents(
     ]
 
 
+@pytest.mark.parametrize(
+    "provider,region,expected_host",
+    [
+        ("volcengine", "cn-beijing", "open.volcengineapi.com"),
+        (
+            "byteplus",
+            "ap-southeast-1",
+            "cp.ap-southeast-1.byteplusapi.com",
+        ),
+    ],
+)
+def test_code_pipeline_client_uses_provider_specific_product_endpoint(
+    provider: str,
+    region: str,
+    expected_host: str,
+) -> None:
+    service = deployment_resources.DeploymentResourceService(
+        provider,
+        region,
+        ("access-key", "secret-key", "session-token"),
+    )
+
+    client = service._cp_client()
+
+    assert client.host == expected_host
+    assert client.region == region
+
+
 def test_deployment_resource_route_preserves_exception_chain_and_redacts_credentials(
     monkeypatch,
 ) -> None:

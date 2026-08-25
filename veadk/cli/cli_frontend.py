@@ -201,6 +201,11 @@ _RUNTIME_DESCRIPTION_MAX_BYTES = 255
 _RUNTIME_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _RUNTIME_NAME_MIN_LENGTH = 4
 _RUNTIME_NAME_MAX_LENGTH = 64
+_RUNTIME_ENVIRONMENT_ID_TAG = "veadk:environment-id"
+_RUNTIME_ENVIRONMENT_VERSION_TAG = "veadk:environment-version"
+_RUNTIME_ENVIRONMENT_ID_ENV = "VEADK_STUDIO_ENVIRONMENT_ID"
+_RUNTIME_ENVIRONMENT_VERSION_ENV = "VEADK_STUDIO_ENVIRONMENT_VERSION_ID"
+_DEFAULT_RUNTIME_ENVIRONMENT = "default"
 _STUDIO_STORAGE_ENV_KEYS = (
     "VEADK_STUDIO_TOS_BUCKET",
     "VEADK_STUDIO_TOS_REGION",
@@ -216,6 +221,178 @@ _STUDIO_STORAGE_ENV_KEYS = (
     "DATABASE_TOS_REGION",
     "DATABASE_TOS_ENDPOINT",
 )
+STUDIO_ENVIRONMENT_CP_WORKSPACE_ENV = "VEADK_STUDIO_ENVIRONMENT_CP_WORKSPACE"
+STUDIO_ENVIRONMENT_CR_REPOSITORY_ENV = "VEADK_STUDIO_ENVIRONMENT_CR_REPOSITORY"
+
+
+def _runtime_environment_tags(
+    environment_id: str,
+    environment_version_id: str,
+) -> dict[str, str]:
+    """Encode a pinned Studio environment as stable Runtime tags."""
+    normalized_id = environment_id.strip()
+    if not normalized_id:
+        return {_RUNTIME_ENVIRONMENT_ID_TAG: _DEFAULT_RUNTIME_ENVIRONMENT}
+    tags = {_RUNTIME_ENVIRONMENT_ID_TAG: normalized_id}
+    normalized_version_id = environment_version_id.strip()
+    if normalized_version_id:
+        tags[_RUNTIME_ENVIRONMENT_VERSION_TAG] = normalized_version_id
+    return tags
+
+
+def _runtime_environment_from_tags(tags: Mapping[str, str]) -> dict[str, str]:
+    """Decode Runtime tags, treating pre-environment Runtimes as default."""
+    environment_id = tags.get(_RUNTIME_ENVIRONMENT_ID_TAG, "").strip()
+    if not environment_id or environment_id == _DEFAULT_RUNTIME_ENVIRONMENT:
+        return {"environmentId": "", "environmentVersionId": ""}
+    return {
+        "environmentId": environment_id,
+        "environmentVersionId": tags.get(_RUNTIME_ENVIRONMENT_VERSION_TAG, "").strip(),
+    }
+
+
+def _runtime_environment_from_runtime(runtime: Any) -> dict[str, str]:
+    """Decode the selected environment with update-safe metadata fallback.
+
+    AgentKit currently accepts ``Tags`` on UpdateRuntime but does not persist
+    them. Runtime environment variables are mutable on every version, so keep
+    an internal mirror there and prefer it when reading an existing Runtime.
+    Runtimes created before this metadata existed still resolve to the default.
+    """
+    envs = {
+        str(getattr(item, "key", "") or ""): str(getattr(item, "value", "") or "")
+        for item in (getattr(runtime, "envs", None) or [])
+        if getattr(item, "key", None)
+    }
+    environment_id = envs.get(_RUNTIME_ENVIRONMENT_ID_ENV, "").strip()
+    if environment_id:
+        if environment_id == _DEFAULT_RUNTIME_ENVIRONMENT:
+            return {"environmentId": "", "environmentVersionId": ""}
+        return {
+            "environmentId": environment_id,
+            "environmentVersionId": envs.get(
+                _RUNTIME_ENVIRONMENT_VERSION_ENV, ""
+            ).strip(),
+        }
+    tags = {
+        str(getattr(item, "key", "") or ""): str(getattr(item, "value", "") or "")
+        for item in (getattr(runtime, "tags", None) or [])
+        if getattr(item, "key", None)
+    }
+    return _runtime_environment_from_tags(tags)
+
+
+def _sync_volcengine_runtime_tags(
+    *,
+    access_key: str,
+    secret_key: str,
+    session_token: str | None,
+    account_id: str,
+    region: str,
+    runtime_id: str,
+    tags: Mapping[str, str],
+) -> None:
+    """Persist mutable Runtime tags through the resource-tagging service."""
+    import volcenginesdkcore
+    import volcenginesdktag
+
+    normalized_account_id = account_id.strip()
+    if not normalized_account_id:
+        logger.warning("Skip Runtime tag sync because Studio account ID is unavailable")
+        return
+    resource_trn = f"trn:agentkit:{region}:{normalized_account_id}:runtime/{runtime_id}"
+    configuration = volcenginesdkcore.Configuration()
+    configuration.ak = access_key
+    configuration.sk = secret_key
+    configuration.session_token = session_token or ""
+    configuration.region = region
+    configuration.client_side_validation = True
+    client = volcenginesdktag.TAGApi(volcenginesdkcore.ApiClient(configuration))
+
+    custom_tags = {
+        str(key): str(value)
+        for key, value in tags.items()
+        if str(key).startswith("veadk:")
+    }
+    response = client.tag_resources(
+        volcenginesdktag.TagResourcesRequest(
+            resource_trn_list=[resource_trn],
+            tags=[
+                volcenginesdktag.TagForTagResourcesInput(key=key, value=value)
+                for key, value in custom_tags.items()
+            ],
+        )
+    )
+    failed_resources = list(getattr(response, "failed_resources", None) or [])
+    if failed_resources:
+        detail = str(getattr(failed_resources[0], "message", "") or "")
+        raise RuntimeError(detail or "Failed to update Runtime tags")
+
+    if _RUNTIME_ENVIRONMENT_VERSION_TAG not in custom_tags:
+        response = client.untag_resources(
+            volcenginesdktag.UntagResourcesRequest(
+                resource_trn_list=[resource_trn],
+                tag_keys=[_RUNTIME_ENVIRONMENT_VERSION_TAG],
+            )
+        )
+        failed_resources = list(getattr(response, "failed_resources", None) or [])
+        if failed_resources:
+            detail = str(getattr(failed_resources[0], "message", "") or "")
+            raise RuntimeError(detail or "Failed to remove stale Runtime tags")
+
+
+def _anchor_environment_registry(
+    deployment_config: dict[str, str],
+    deployment_tags: dict[str, str],
+    *,
+    registry: str,
+    namespace: str,
+    repository: str,
+) -> None:
+    """Keep a private environment base image and Agent output in one CR scope."""
+    deployment_config.update(
+        {
+            "cr_instance_name": registry,
+            "cr_namespace_name": namespace,
+            "cr_repo_name": repository,
+        }
+    )
+    deployment_tags.update(
+        {
+            "veadk:build-resource:cr-mode": "create",
+            "veadk:build-resource:cr-instance": registry,
+            "veadk:build-resource:cr-namespace": namespace,
+            "veadk:build-resource:cr-repository": repository,
+        }
+    )
+
+
+def _studio_environment_resource_environment(
+    *,
+    cp_workspace: str | None,
+    cr_repository: str | None,
+) -> dict[str, str]:
+    """Build the allow-listed runtime environment for Environment resources."""
+    environment: dict[str, str] = {}
+    normalized_cp_workspace = (cp_workspace or "").strip()
+    normalized_cr_repository = (cr_repository or "").strip()
+    if normalized_cr_repository:
+        repository_parts = normalized_cr_repository.split("/")
+        if len(repository_parts) != 3 or any(
+            not part.strip()
+            or part.strip() in {".", ".."}
+            or any(character.isspace() for character in part)
+            for part in repository_parts
+        ):
+            raise click.BadParameter(
+                "must use registry/namespace/repository format",
+                param_hint="--environment-cr-repository",
+            )
+    if normalized_cp_workspace:
+        environment[STUDIO_ENVIRONMENT_CP_WORKSPACE_ENV] = normalized_cp_workspace
+    if normalized_cr_repository:
+        environment[STUDIO_ENVIRONMENT_CR_REPOSITORY_ENV] = normalized_cr_repository
+    return environment
 
 
 def _adapt_migration_model_envs(
@@ -1548,13 +1725,14 @@ def _run_frontend_server(
 
     app.router.lifespan_context = _studio_route_channel_lifespan
 
-    # Studio's production bundle includes large CSS assets. Compress them at
-    # the application boundary so cloud API gateways do not have to stream the
-    # uncompressed response to every browser. Starlette automatically skips
-    # responses that must not be buffered, including server-sent events.
-    from starlette.middleware.gzip import GZipMiddleware
+    # Studio's production bundle includes large static assets. Compress them
+    # for Volcengine, but keep BytePlus responses uncompressed: BytePlus VeFaaS
+    # streams Starlette's gzip response without the terminating frame, which
+    # leaves browsers waiting indefinitely for the main JavaScript bundle.
+    if provider == "volcengine":
+        from starlette.middleware.gzip import GZipMiddleware
 
-    app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
+        app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
 
     adk_server = None
     for route in app.routes:
@@ -2144,6 +2322,21 @@ def _run_frontend_server(
         if access_policy.enabled and principal is None:
             raise HTTPException(status_code=401, detail="Studio identity is required")
         return principal.owner_id if principal is not None else "local"
+
+    from frontend.server.environments import (
+        create_environment_service,
+        mount_environment_routes,
+    )
+
+    def _environment_owner(request: Request) -> str:
+        principal = _require_agent_management(request)
+        return principal.owner_id if principal is not None else "local"
+
+    environment_service = create_environment_service(
+        provider=provider,
+        resolve_credentials=_resolve_ve_credentials,
+    )
+    mount_environment_routes(app, environment_service, _environment_owner)
 
     mount_video_routes(
         app,
@@ -3212,6 +3405,7 @@ def _run_frontend_server(
 
     from veadk.cli.generated_agent_codegen import (
         AgentDraft,
+        EnvironmentSkillManifestEntry as GeneratedEnvironmentSkillManifestEntry,
         GeneratedAgentProjectRequest,
         GeneratedAgentTestRunRequest,
         GeneratedFile,
@@ -3765,6 +3959,36 @@ def _run_frontend_server(
                 detail=f"SkillSpace package download error: {error}",
             ) from error
 
+    environment_service.set_skillspace_resolver(
+        _resolve_skillspace_skill_materialization
+    )
+
+    async def _resolve_draft_environment(
+        draft: AgentDraft,
+        owner_id: str,
+    ) -> AgentDraft:
+        environment_id = draft.cloudEnvironment.environmentId.strip()
+        if not environment_id:
+            return draft
+        resolved = await environment_service.resolve_for_agent(
+            owner_id or "local",
+            environment_id,
+            draft.cloudEnvironment.environmentVersionId,
+        )
+        cloud_environment = draft.cloudEnvironment.model_copy(
+            update={
+                "environmentVersionId": resolved.version_id,
+                "resolvedImage": resolved.image,
+                "environmentSkills": [
+                    GeneratedEnvironmentSkillManifestEntry.model_validate(
+                        item.model_dump()
+                    )
+                    for item in resolved.skills
+                ],
+            }
+        )
+        return draft.model_copy(update={"cloudEnvironment": cloud_environment})
+
     def _draft_for_debug_run(draft: AgentDraft) -> AgentDraft:
         """Return a debug-safe draft by omitting stdio MCP tools recursively."""
         return draft.model_copy(
@@ -3783,6 +4007,7 @@ def _run_frontend_server(
         data: dict,
         *,
         debug: bool,
+        owner_id: str = "local",
     ) -> tuple[GeneratedProject, AgentDraft]:
         try:
             if debug:
@@ -3790,6 +4015,7 @@ def _run_frontend_server(
             else:
                 req = GeneratedAgentProjectRequest.model_validate(data)
             draft = normalize_and_validate_draft(req.draft)
+            draft = await _resolve_draft_environment(draft, owner_id)
             if debug:
                 draft = _draft_for_debug_run(draft)
                 validate_debug_policy(
@@ -3820,10 +4046,12 @@ def _run_frontend_server(
         data: dict,
         *,
         debug: bool,
+        owner_id: str = "local",
     ) -> GeneratedProject:
         project, _ = await _generate_project_and_draft_from_request(
             data,
             debug=debug,
+            owner_id=owner_id,
         )
         return project
 
@@ -4034,9 +4262,13 @@ def _run_frontend_server(
 
     @app.post("/web/generated-agent-projects")
     async def _generate_agent_project(request: Request):
-        _require_agent_management(request)
+        principal = _require_agent_management(request)
         data = await request.json()
-        project = await _generate_project_from_request(data, debug=False)
+        project = await _generate_project_from_request(
+            data,
+            debug=False,
+            owner_id=principal.owner_id if principal else "local",
+        )
         return project.model_dump()
 
     @app.post("/web/github-delivery/source-sync")
@@ -4355,6 +4587,7 @@ def _run_frontend_server(
             project, draft = await _generate_project_and_draft_from_request(
                 data,
                 debug=True,
+                owner_id=owner_id or "local",
             )
             sidecar_env: dict[str, str] = {}
             sidecar_plan: dict[str, Any] | None = None
@@ -4412,6 +4645,15 @@ def _run_frontend_server(
                 }
             temp_dir = tempfile.mkdtemp(prefix="veadk_generated_agent_test_")
             app_name = _write_generated_project(project, temp_dir)
+            staged_environment_skills = ""
+            if draft.cloudEnvironment.environmentId:
+                skill_root = await environment_service.stage_skill_files_for_agent(
+                    owner_id or "local",
+                    draft.cloudEnvironment.environmentId,
+                    draft.cloudEnvironment.environmentVersionId,
+                    PathlibPath(temp_dir) / ".veadk-environment" / "skills",
+                )
+                staged_environment_skills = str(skill_root)
             port = _free_local_port()
             base_url = f"http://127.0.0.1:{port}"
             stdout_path = PathlibPath(temp_dir) / "runner.stdout.log"
@@ -4428,6 +4670,8 @@ def _run_frontend_server(
                 str(port),
             ]
             runner_env = _safe_runner_env()
+            if staged_environment_skills:
+                runner_env["VEADK_ENVIRONMENT_SKILLS_DIR"] = staged_environment_skills
             runner_env.update(runtime_envs)
             for key in list(runner_env):
                 if key.startswith("HARNESS_"):
@@ -5003,6 +5247,27 @@ def _run_frontend_server(
         create_evaluation_sets = data.get("createEvaluationSets", True)
         author = principal.display_name if principal else ""
         owner_id = principal.owner_id if principal else ""
+        environment_ref = (
+            data.get("environment") if isinstance(data.get("environment"), dict) else {}
+        )
+        environment_id = str(
+            environment_ref.get("environmentId") or data.get("environmentId") or ""
+        ).strip()
+        environment_version_id = str(
+            environment_ref.get("environmentVersionId")
+            or data.get("environmentVersionId")
+            or ""
+        ).strip()
+        resolved_environment = None
+        if environment_id:
+            try:
+                resolved_environment = await environment_service.resolve_for_agent(
+                    owner_id or "local",
+                    environment_id,
+                    environment_version_id,
+                )
+            except (LookupError, ValueError) as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
         if not agent_name:
             raise HTTPException(status_code=400, detail="Agent name is required")
         if trusted_intelligent_source and (
@@ -5030,6 +5295,29 @@ def _run_frontend_server(
                 )
         elif not files:
             raise HTTPException(status_code=400, detail="No files provided")
+        if resolved_environment is not None:
+            dockerfile = next(
+                (
+                    str(item.get("content") or "")
+                    for item in files
+                    if isinstance(item, dict)
+                    and str(item.get("path") or "").strip() == "Dockerfile"
+                ),
+                "",
+            )
+            first_from = next(
+                (
+                    line.split(None, 1)[1].strip()
+                    for line in dockerfile.splitlines()
+                    if line.strip().upper().startswith("FROM ")
+                ),
+                "",
+            )
+            if first_from != resolved_environment.image:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Agent 构建文件与所选环境版本不匹配，请重新生成项目。",
+                )
         if not isinstance(create_evaluation_sets, bool):
             raise HTTPException(
                 status_code=400,
@@ -5134,6 +5422,35 @@ def _run_frontend_server(
                 deployment_resource_tag_values = deployment_resource_tags(
                     data.get("resources")
                 )
+                if resolved_environment is not None:
+                    environment_resources = resolved_environment.resources
+                    registry_resource = getattr(
+                        environment_resources, "container_registry", None
+                    )
+                    if registry_resource is None:
+                        raise ValueError("所选环境版本缺少容器镜像仓库信息。")
+                    configured_registry = str(
+                        deployment_resource_config.get("cr_instance_name") or ""
+                    ).strip()
+                    configured_namespace = str(
+                        deployment_resource_config.get("cr_namespace_name") or ""
+                    ).strip()
+                    if (
+                        configured_registry
+                        and configured_registry != registry_resource.registry
+                    ):
+                        raise ValueError("所选部署 CR 与环境镜像所在 CR 不一致。")
+                    if (
+                        configured_namespace
+                        and configured_namespace != registry_resource.namespace
+                    ):
+                        raise ValueError("所选部署 CR 命名空间与环境镜像不一致。")
+                    deployment_resource_config["cr_instance_name"] = (
+                        registry_resource.registry
+                    )
+                    deployment_resource_config["cr_namespace_name"] = (
+                        registry_resource.namespace
+                    )
         except (TypeError, ValueError) as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         except Exception as e:
@@ -5169,6 +5486,61 @@ def _run_frontend_server(
             except Exception as e:
                 logger.error("resolve update runtime failed: %s", e, exc_info=True)
                 raise HTTPException(status_code=502, detail=str(e)) from e
+
+        if resolved_environment is not None:
+            environment_resources = resolved_environment.resources
+            registry_resource = getattr(
+                environment_resources, "container_registry", None
+            )
+            if registry_resource is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="所选环境版本缺少容器镜像仓库信息。",
+                )
+
+            # CodePipeline receives one temporary CR credential for the target
+            # repository. Build the Agent image in the same registry/namespace
+            # as its private environment base image so that credential can pull
+            # the base layer as well as push the resulting Agent image. This is
+            # especially important for Runtime updates, whose persisted build
+            # resources may still point at the Runtime's previous registry.
+            agent_repository = str(
+                deployment_resource_config.get("cr_repo_name")
+                or requested_runtime_name
+                or agent_name
+            ).strip()
+            _anchor_environment_registry(
+                deployment_resource_config,
+                deployment_resource_tag_values,
+                registry=registry_resource.registry,
+                namespace=registry_resource.namespace,
+                repository=agent_repository,
+            )
+
+        # Persist the exact environment image selection on the Runtime itself.
+        # A missing tag is intentionally interpreted as the AgentKit default so
+        # Runtimes created before environment support remain editable.
+        runtime_tag_values = (
+            _runtime_tags(existing_runtime) if existing_runtime is not None else {}
+        )
+        runtime_tag_values.pop(_RUNTIME_ENVIRONMENT_ID_TAG, None)
+        runtime_tag_values.pop(_RUNTIME_ENVIRONMENT_VERSION_TAG, None)
+        runtime_tag_values.update(
+            {
+                "veadk:managed": "true",
+                **({"veadk:author": author} if author else {}),
+                **({"veadk:owner": owner_id} if owner_id else {}),
+                **deployment_resource_tag_values,
+            }
+        )
+        runtime_tag_values.update(
+            _runtime_environment_tags(
+                environment_id,
+                resolved_environment.version_id
+                if resolved_environment is not None
+                else "",
+            )
+        )
         if sidecar_enabled:
             try:
                 deployment_resource_config = await asyncio.to_thread(
@@ -5461,6 +5833,15 @@ def _run_frontend_server(
             runtime_envs["DATABASE_VIKING_REGION"] = (
                 DEFAULT_BYTEPLUS_VIKING_MEMORY_REGION
             )
+        runtime_envs[_RUNTIME_ENVIRONMENT_ID_ENV] = (
+            environment_id or _DEFAULT_RUNTIME_ENVIRONMENT
+        )
+        if resolved_environment is not None:
+            runtime_envs[_RUNTIME_ENVIRONMENT_VERSION_ENV] = (
+                resolved_environment.version_id
+            )
+        else:
+            runtime_envs.pop(_RUNTIME_ENVIRONMENT_VERSION_ENV, None)
         # Harness settings are platform-owned. Always remove a previous
         # Sidecar deployment's values before either deployment path materializes
         # the next Runtime environment. The CLI adds the authoritative resolved
@@ -5554,19 +5935,13 @@ def _run_frontend_server(
                 placeholder = f"VEADK_STUDIO_RUNTIME_ENV_{index:04d}"
                 sidecar_yaml_envs[key] = "${" + placeholder + "}"
                 sidecar_cli_runtime_env[placeholder] = value
-            runtime_tags = {
-                "veadk:managed": "true",
-                **({"veadk:author": author} if author else {}),
-                **({"veadk:owner": owner_id} if owner_id else {}),
-                **deployment_resource_tag_values,
-            }
             sidecar_runtime: dict[str, Any] = {
                 "region": region,
                 "project": project_name,
                 "min_instance": 1,
                 "max_instance": 1,
                 "max_concurrency": 20,
-                "tags": runtime_tags,
+                "tags": runtime_tag_values,
             }
             if runtime_network:
                 mode = str(runtime_network.get("mode") or "public").lower()
@@ -6375,48 +6750,38 @@ def _run_frontend_server(
 
                     orig_create = rt_client.create_runtime
                     orig_update = rt_client.update_runtime
-                    extra = [
-                        _rt.TagsItemForCreateRuntime.model_validate(
-                            {"Key": "veadk:managed", "Value": "true"}
-                        )
-                    ]
-                    if author:
-                        extra.append(
-                            _rt.TagsItemForCreateRuntime.model_validate(
-                                {"Key": "veadk:author", "Value": author}
-                            )
-                        )
-                    if owner_id:
-                        extra.append(
-                            _rt.TagsItemForCreateRuntime.model_validate(
-                                {"Key": "veadk:owner", "Value": owner_id}
-                            )
-                        )
-                    extra.extend(
-                        _rt.TagsItemForCreateRuntime.model_validate(
-                            {"Key": key, "Value": value}
-                        )
-                        for key, value in deployment_resource_tag_values.items()
-                    )
                     if trusted_intelligent_source:
-                        extra.extend(
-                            _rt.TagsItemForCreateRuntime.model_validate(
-                                {"Key": key, "Value": value}
-                            )
-                            for key, value in {
+                        runtime_tag_values.update(
+                            {
                                 "veadk:lifecycle": "production",
                                 "veadk:source": "intelligent-development",
                                 "veadk:artifact": str(source["artifactSha256"]),
                                 "veadk:validation-report": str(
                                     source["validationReportSha256"]
                                 ),
-                            }.items()
+                            }
                         )
 
-                    def _tagged_create(self, req, _orig=orig_create, _extra=extra):
+                    def _merged_runtime_tags(req_tags: Any) -> dict[str, str]:
+                        merged = {
+                            str(getattr(tag, "key", "")): str(
+                                getattr(tag, "value", "") or ""
+                            )
+                            for tag in (req_tags or [])
+                            if getattr(tag, "key", None)
+                        }
+                        merged.update(runtime_tag_values)
+                        return merged
+
+                    def _tagged_create(self, req, _orig=orig_create):
                         if task_state["cancel_event"].is_set():
                             raise RuntimeError("Deployment cancelled")
-                        req.tags = [*(req.tags or []), *_extra]
+                        req.tags = [
+                            _rt.TagsItemForCreateRuntime.model_validate(
+                                {"Key": key, "Value": value}
+                            )
+                            for key, value in _merged_runtime_tags(req.tags).items()
+                        ]
                         req.apmplus_enable = True
                         created = _create_runtime_with_description_fallback(
                             _orig, self, req
@@ -6437,12 +6802,18 @@ def _run_frontend_server(
                             raise RuntimeError("Deployment cancelled")
                         return created
 
-                    def _apmplus_update(self, req, _orig=orig_update):
+                    def _tagged_update(self, req, _orig=orig_update):
                         req.apmplus_enable = True
+                        req.tags = [
+                            _rt.TagsItemForUpdateRuntime.model_validate(
+                                {"Key": key, "Value": value}
+                            )
+                            for key, value in _merged_runtime_tags(req.tags).items()
+                        ]
                         return _orig(self, req)
 
                     rt_client.create_runtime = _tagged_create
-                    rt_client.update_runtime = _apmplus_update
+                    rt_client.update_runtime = _tagged_update
                 except Exception as e:
                     logger.error("Could not prepare Runtime ownership tags: %s", e)
                     result_box["error"] = _safe_exception_detail(e)
@@ -6616,6 +6987,29 @@ def _run_frontend_server(
                         )
                     if result is not None and getattr(result, "success", False):
                         _verify_sdk_sidecar_release(result)
+                        if existing_runtime is not None and provider != "byteplus":
+                            try:
+                                access_key, secret_key, session_token = (
+                                    _resolve_ve_credentials()
+                                )
+                                _sync_volcengine_runtime_tags(
+                                    access_key=access_key,
+                                    secret_key=secret_key,
+                                    session_token=session_token,
+                                    account_id=os.getenv("VEADK_STUDIO_ACCOUNT_ID", ""),
+                                    region=region,
+                                    runtime_id=runtime_id,
+                                    tags=runtime_tag_values,
+                                )
+                            except Exception as e:
+                                logger.warning(
+                                    "Runtime environment tag sync failed: %s", e
+                                )
+                                _emit(
+                                    "warning",
+                                    "Runtime 已更新；环境标签将在权限生效后同步。",
+                                    100,
+                                )
                     result_box["result"] = result
                 except Exception as e:
                     safe_error = _redact_managed_artifact_text(
@@ -8834,6 +9228,7 @@ def _run_frontend_server(
             "region": region,
             "currentVersion": getattr(runtime, "current_version_number", None),
             "managed": tags.get("veadk:managed") == "true",
+            "environment": _runtime_environment_from_runtime(runtime),
             "envs": [
                 {
                     "key": str(getattr(item, "key", "") or ""),
@@ -8841,7 +9236,12 @@ def _run_frontend_server(
                 }
                 for item in (getattr(runtime, "envs", None) or [])
                 if getattr(item, "key", None)
-                and str(getattr(item, "key", "") or "") != "MODEL_AGENT_API_KEY"
+                and str(getattr(item, "key", "") or "")
+                not in {
+                    "MODEL_AGENT_API_KEY",
+                    _RUNTIME_ENVIRONMENT_ID_ENV,
+                    _RUNTIME_ENVIRONMENT_VERSION_ENV,
+                }
             ],
             "network": _runtime_network_payload(runtime),
         }
@@ -10867,6 +11267,18 @@ def _resolve_studio_cloud_credentials(
     "is auto-created with the frontend deploy policy.",
 )
 @click.option(
+    "--environment-cp-workspace",
+    default=None,
+    help="Existing CP workspace ID or name for Studio Environment image builds. "
+    "When omitted, Studio creates or reuses a managed workspace.",
+)
+@click.option(
+    "--environment-cr-repository",
+    default=None,
+    help="Existing CR repository as registry/namespace/repository for Studio "
+    "Environment images. When omitted, Studio creates or reuses managed CR resources.",
+)
+@click.option(
     "--vefaas-application-template-id",
     "--application-template-id",
     default=None,
@@ -11021,6 +11433,8 @@ def frontend_deploy(
     region: str | None,
     project: str,
     iam_role: str | None,
+    environment_cp_workspace: str | None,
+    environment_cr_repository: str | None,
     vefaas_application_template_id: str | None,
     gateway_name: str,
     gateway_service_name: str,
@@ -11090,6 +11504,10 @@ def frontend_deploy(
         provider_id = "byteplus"
     else:
         provider_id = cloud_provider_from_env()
+    studio_environment_resource_environment = _studio_environment_resource_environment(
+        cp_workspace=environment_cp_workspace,
+        cr_repository=environment_cr_repository,
+    )
     region = region or default_region(provider_id)
     os.environ["CLOUD_PROVIDER"] = provider_id
     os.environ["AGENTKIT_CLOUD_PROVIDER"] = provider_id
@@ -11600,6 +12018,7 @@ def frontend_deploy(
             studio_account_id_resolution_error
         )
     veadk_environments.update(studio_storage_environment)
+    veadk_environments.update(studio_environment_resource_environment)
     if client_secret:
         veadk_environments["OAUTH2_CLIENT_SECRET"] = client_secret
 

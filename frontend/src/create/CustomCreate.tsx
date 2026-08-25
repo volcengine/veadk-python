@@ -1,6 +1,5 @@
 import {
   type CSSProperties,
-  type ComponentType,
   Fragment,
   lazy,
   type ReactNode,
@@ -23,8 +22,6 @@ import {
   Cpu,
   Database,
   ExternalLink,
-  FolderUp,
-  Globe,
   Info,
   Layers,
   Loader2,
@@ -35,17 +32,14 @@ import {
   Sparkles,
   Trash2,
   Wrench,
-  X,
 } from "lucide-react";
 import {
   type CreateModeProps,
   type AgentDraft,
   type CloudEnvironmentConfig,
-  MAX_CLOUD_DOCKERFILE_LENGTH,
   type HarnessSidecarOptionId,
   type HarnessSidecarProfileId,
   type McpTool,
-  type SelectedSkill,
   emptyDraft,
 } from "./types";
 import {
@@ -90,7 +84,6 @@ import {
   isA2aType,
   isOrchestratorType,
 } from "./agentTypeMeta";
-import { displayDescription } from "./displayText";
 import { localPickerMatches } from "./localPickerSearch";
 import { draftToYaml } from "./configYaml";
 import {
@@ -112,14 +105,8 @@ import {
 import { resolveRuntimeName } from "./runtimeName";
 import type { AgentProject } from "./project";
 import { AgentBuildCanvas } from "./AgentBuildCanvas";
-import type { SkillSource } from "./skills/types";
-import { SkillHubPicker } from "./SkillHubPicker";
-import { LocalPicker } from "./LocalPicker";
-import { SkillSpacePicker } from "./SkillSpacePicker";
-import {
-  CloudEnvironmentAdvancedTrigger,
-  CloudEnvironmentConfigurator,
-} from "../ui/CloudEnvironmentConfigurator";
+import { CloudEnvironmentConfigurator } from "../ui/CloudEnvironmentConfigurator";
+import { SkillSourcePicker } from "../ui/SkillSourcePicker";
 import { listA2aSpaces, type A2aSpaceRef } from "./a2aSpaces";
 import {
   listVikingKnowledgebases,
@@ -2020,247 +2007,6 @@ function McpToolEditor({
 }
 
 /* ---------------------------------------------------------------- *
- * Multi-source skill picker: tab bar switching between Skill Hub
- * (public marketplace), local folder/.zip upload, and account-scoped
- * AgentKit SkillSpaces. Selected skills from all sources share one
- * list rendered below the tabs.
- * ---------------------------------------------------------------- */
-function AgentKitSkillsIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.7"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-    >
-      <path d="M5.5 7.5h10.75a2 2 0 0 1 2 2v7.75a2 2 0 0 1-2 2H5.5a2 2 0 0 1-2-2V9.5a2 2 0 0 1 2-2Z" />
-      <path d="M7 4.75h9.5a2 2 0 0 1 2 2" opacity=".58" />
-      <path d="m11 10.25.72 1.48 1.63.24-1.18 1.15.28 1.62-1.45-.77-1.45.77.28-1.62-1.18-1.15 1.63-.24.72-1.48Z" />
-      <path d="M19.25 11.25h1.5M20 10.5V12" opacity=".72" />
-    </svg>
-  );
-}
-
-function SelectedSkillRow({
-  s,
-  onRemove,
-}: {
-  s: SelectedSkill;
-  onRemove: () => void;
-}) {
-  let Icon: ComponentType<{ className?: string }> = Sparkles;
-  let label = "火山 Find Skill 技能广场";
-  if (s.source === "local") {
-    Icon = FolderUp;
-    label = "本地";
-  } else if (s.source === "skillspace") {
-    Icon = AgentKitSkillsIcon;
-    label = "AgentKit Skills 中心";
-  }
-  return (
-    <motion.div
-      key={`${s.source}:${s.folder}:${s.skillId || s.slug || ""}:${s.version || ""}`}
-      className="cw-selected-skill-row"
-      layout
-      initial={{ opacity: 0, y: -4 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -4 }}
-      transition={{ duration: 0.16 }}
-    >
-      <span className="cw-selected-skill-icon" aria-hidden>
-        <Icon className="cw-i cw-i-sm" />
-      </span>
-      <span className="cw-selected-skill-meta">
-        <span className="cw-selected-skill-name">{s.name}</span>
-        <span className="cw-selected-skill-detail">
-          {label}
-          {s.description ? ` · ${displayDescription(s.description)}` : ""}
-        </span>
-      </span>
-      <button
-        type="button"
-        className="cw-selected-skill-remove"
-        onClick={onRemove}
-        aria-label={`移除 ${s.name}`}
-        title={`移除 ${s.name}`}
-      >
-        <X className="cw-i cw-i-sm" />
-      </button>
-    </motion.div>
-  );
-}
-
-const SKILL_SOURCES: {
-  id: SkillSource;
-  label: string;
-  icon: ComponentType<{ className?: string }>;
-}[] = [
-  { id: "local", label: "本地文件", icon: FolderUp },
-  { id: "skillspace", label: "AgentKit Skills 中心", icon: AgentKitSkillsIcon },
-  { id: "skillhub", label: "火山 Find Skill 技能广场", icon: Globe },
-];
-
-function SkillsSourceTabs({
-  selected,
-  onChange,
-  cloudProvider,
-}: {
-  selected: SelectedSkill[];
-  onChange: (next: SelectedSkill[]) => void;
-  cloudProvider: CloudProvider;
-}) {
-  const [active, setActive] = useState<SkillSource>("local");
-  const [open, setOpen] = useState(false);
-  const activeIndex = SKILL_SOURCES.findIndex((source) => source.id === active);
-  const remove = (key: string) =>
-    onChange(selected.filter((s) => skillKey(s) !== key));
-
-  useEffect(() => {
-    if (!open) return;
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [open]);
-
-  return (
-    <div className="cw-skillspane">
-      <button
-        type="button"
-        className="cw-skill-add"
-        aria-haspopup="dialog"
-        onClick={() => setOpen(true)}
-      >
-        <span className="cw-skill-add-icon" aria-hidden>
-          <Plus className="cw-i" />
-        </span>
-        <span>添加 Skill</span>
-      </button>
-
-      {selected.length > 0 && (
-        <div className="cw-skill-selected">
-          <span className="cw-skill-selected-label">
-            已加入技能 · {selected.length}
-          </span>
-          <div className="cw-selected-skill-list">
-            <AnimatePresence initial={false}>
-              {selected.map((s) => (
-                <SelectedSkillRow
-                  key={skillKey(s)}
-                  s={s}
-                  onRemove={() => remove(skillKey(s))}
-                />
-              ))}
-            </AnimatePresence>
-          </div>
-        </div>
-      )}
-
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            className="cw-skill-dialog-backdrop"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.16 }}
-            onMouseDown={(event) => {
-              if (event.target === event.currentTarget) setOpen(false);
-            }}
-          >
-            <motion.div
-              className="cw-skill-dialog"
-              role="dialog"
-              aria-modal="true"
-              aria-labelledby="cw-skill-dialog-title"
-              initial={{ opacity: 0, y: 10, scale: 0.985 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: 6, scale: 0.99 }}
-              transition={{ duration: 0.18, ease: "easeOut" }}
-            >
-              <div className="cw-skill-dialog-head">
-                <h3 id="cw-skill-dialog-title">添加 Skill</h3>
-                <button
-                  type="button"
-                  className="cw-skill-dialog-close"
-                  aria-label="关闭添加 Skill"
-                  onClick={() => setOpen(false)}
-                >
-                  <X className="cw-i" />
-                </button>
-              </div>
-              <div className="cw-skill-dialog-body">
-                <div
-                  className="cw-skill-sourcetabs"
-                  role="tablist"
-                  style={
-                    {
-                      "--cw-skill-tab-slider-width": `calc((100% - 16px) / ${SKILL_SOURCES.length})`,
-                      "--cw-active-skill-tab-offset": `calc(${activeIndex * 100}% + ${
-                        activeIndex * 4
-                      }px)`,
-                    } as CSSProperties
-                  }
-                >
-                  <span className="cw-skill-tab-slider" aria-hidden />
-                  {SKILL_SOURCES.map(({ id, label, icon: Icon }) => (
-                    <button
-                      key={id}
-                      type="button"
-                      role="tab"
-                      id={`cw-skill-tab-${id}`}
-                      aria-controls="cw-skill-tabpanel"
-                      aria-selected={active === id}
-                      className={`cw-skill-pickertab ${active === id ? "is-on" : ""}`}
-                      onClick={() => setActive(id)}
-                    >
-                      <Icon className="cw-i cw-i-sm" />
-                      {label}
-                    </button>
-                  ))}
-                </div>
-
-                <div
-                  id="cw-skill-tabpanel"
-                  className="cw-skill-tabbody"
-                  role="tabpanel"
-                  aria-labelledby={`cw-skill-tab-${active}`}
-                >
-                  {active === "skillhub" && (
-                    <SkillHubPicker selected={selected} onChange={onChange} />
-                  )}
-                  {active === "local" && (
-                    <LocalPicker selected={selected} onChange={onChange} />
-                  )}
-                  {active === "skillspace" && (
-                    <SkillSpacePicker
-                      selected={selected}
-                      onChange={onChange}
-                      cloudProvider={cloudProvider}
-                    />
-                  )}
-                </div>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
-
-function skillKey(s: SelectedSkill): string {
-  if (s.source === "skillhub") return `hub:${s.namespace}/${s.slug}`;
-  if (s.source === "local") return `local:${s.folder}`;
-  return `ss:${s.skillSpaceId}/${s.skillId}/${s.version || ""}`;
-}
-
-/* ---------------------------------------------------------------- *
  * Toggle switch row.
  * ---------------------------------------------------------------- */
 function Toggle({
@@ -3772,8 +3518,6 @@ export function CustomCreate({
   const [validationPulse, setValidationPulse] = useState(0);
   const [project, setProject] = useState<AgentProject | null>(null);
   const [building, setBuilding] = useState(false);
-  const [cloudEnvironmentEditorOpen, setCloudEnvironmentEditorOpen] =
-    useState(false);
   const [deployRegion, setDeployRegion] = useState<string>(
     deploymentTarget?.region ?? initialDeployRegion,
   );
@@ -4292,22 +4036,6 @@ export function CustomCreate({
       setWorkspaceMode("optimize");
       return;
     }
-    if (
-      providerDraft.cloudEnvironment?.dockerfile !== undefined &&
-      !providerDraft.cloudEnvironment.dockerfile.trim()
-    ) {
-      setBuildErr("Dockerfile 不能为空。请输入有效内容，或恢复自动生成。");
-      setWorkspaceMode("environment");
-      return;
-    }
-    if (
-      (providerDraft.cloudEnvironment?.dockerfile?.length ?? 0) >
-      MAX_CLOUD_DOCKERFILE_LENGTH
-    ) {
-      setBuildErr("Dockerfile 不能超过 64 KiB。请精简内容后重试。");
-      setWorkspaceMode("environment");
-      return;
-    }
     const invalidEnv = firstInvalidRuntimeEnv(
       deploymentEnv.specs,
       providerDraft.deployment?.envValues ?? {},
@@ -4692,6 +4420,13 @@ export function CustomCreate({
         appName: deploymentTarget?.appName,
         description: draft.description,
         harnessSidecar: draft.harnessSidecar,
+        environment: draft.cloudEnvironment?.environmentId
+          ? {
+              environmentId: draft.cloudEnvironment.environmentId,
+              environmentVersionId:
+                draft.cloudEnvironment.environmentVersionId,
+            }
+          : undefined,
       },
     );
   };
@@ -5413,7 +5148,7 @@ export function CustomCreate({
 
                             <Section meta={metaOf("skills")}>
                               <div className="cw-form">
-                                <SkillsSourceTabs
+                                <SkillSourcePicker
                                   selected={selectedSkills}
                                   onChange={(next) =>
                                     patch({ selectedSkills: next })
@@ -5723,11 +5458,8 @@ export function CustomCreate({
         {workspaceMode === "environment" && (
           <div className="cw-environment-workspace">
             <CloudEnvironmentConfigurator
-              cloudProvider={cloudProvider}
-              value={draft.cloudEnvironment ?? { cliTools: [] }}
+              value={draft.cloudEnvironment ?? { environmentId: "", environmentVersionId: "" }}
               onChange={updateCloudEnvironment}
-              editorOpen={cloudEnvironmentEditorOpen}
-              onEditorOpenChange={setCloudEnvironmentEditorOpen}
               disabled={building}
             />
           </div>
@@ -5848,15 +5580,6 @@ export function CustomCreate({
         busy={building}
         onChange={handleWorkspaceChange}
         assistant={workspaceMode === "build" ? aiComposer : undefined}
-        accessory={
-          workspaceMode === "environment" ? (
-            <CloudEnvironmentAdvancedTrigger
-              customized={draft.cloudEnvironment?.dockerfile !== undefined}
-              disabled={building}
-              onClick={() => setCloudEnvironmentEditorOpen(true)}
-            />
-          ) : undefined
-        }
       />
       {debugTraceTarget && (
         <TraceDrawer

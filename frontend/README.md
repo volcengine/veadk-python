@@ -449,6 +449,34 @@ Supported logo formats are PNG, JPEG, GIF, WebP, AVIF, and ICO, up to 5 MB.
 configuration. `veadk studio deploy` accepts the same flags and copies either a
 local image or a downloaded network image into the VeFaaS deployment package.
 
+## Environment image builds
+
+The Studio `环境` page stores each environment definition, generated Dockerfile,
+build version, log metadata, and resulting image reference in the private Studio
+TOS bucket. Creating or saving an environment starts an asynchronous
+CodePipeline build and pushes the resulting image to Container Registry.
+Volcengine builds use the Aliyun PyPI mirror, Huawei Cloud Python source mirror,
+and npmmirror for Playwright browsers; BytePlus builds use the corresponding
+official sources. Cross-version Python combinations are compiled from pinned
+source releases instead of depending on GitHub-hosted binaries.
+
+By default, Studio creates or reuses managed CodePipeline and Container Registry
+resources on the first environment build. With the account-stable default TOS
+bucket, Studio reuses the account's `agentkit-cli-<account-id>` CR instance and
+creates the `runtime-environments/base-images` repository inside it. Existing
+resources can be selected at deployment time with flags only:
+
+```bash
+veadk studio deploy \
+  --vefaas-app-name <app-name> \
+  --environment-cp-workspace <workspace-id-or-name> \
+  --environment-cr-repository <registry/namespace/repository>
+```
+
+Either flag can be supplied independently. The System Information page shows
+the resolved workspace, pipeline, repository, ownership mode, and provider
+console links. These values are resource identifiers, not credentials.
+
 ## In-app Studio updates
 
 Studio deployments use the centrally maintained `veadk-studio` TOS bucket in

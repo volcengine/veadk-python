@@ -85,9 +85,12 @@ export type CloudCliToolId = "lark-cli" | "github-cli" | "pandoc";
 export const MAX_CLOUD_DOCKERFILE_LENGTH = 65_536;
 
 export interface CloudEnvironmentConfig {
-  /** Official command-line tools baked into the deployment image. */
-  cliTools: CloudCliToolId[];
-  /** User-edited Dockerfile. Omitted while Studio should generate it. */
+  /** User-owned environment selected for this Agent. */
+  environmentId: string;
+  /** Immutable build version selected with the environment. */
+  environmentVersionId: string;
+  /** Legacy inline environment fields kept for draft migration only. */
+  cliTools?: CloudCliToolId[];
   dockerfile?: string;
 }
 
@@ -233,7 +236,7 @@ export function emptyDraft(cloudProvider: CloudProvider = "volcengine"): AgentDr
     knowledgebaseIndex: "",
     tracingExporters: [],
     selectedSkills: [],
-    cloudEnvironment: { cliTools: [] },
+    cloudEnvironment: { environmentId: "", environmentVersionId: "" },
     deployment: {
       feishuEnabled: false,
       modelApiKeyId: "",

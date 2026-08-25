@@ -360,6 +360,8 @@ export function normalizeDraft(raw: unknown): AgentDraft {
         : {}),
     },
     cloudEnvironment: {
+      environmentId: asString(cloudEnvironment.environmentId),
+      environmentVersionId: asString(cloudEnvironment.environmentVersionId),
       cliTools: asCloudCliTools(cloudEnvironment.cliTools),
       ...(typeof cloudEnvironment.dockerfile === "string"
         ? { dockerfile: cloudEnvironment.dockerfile }

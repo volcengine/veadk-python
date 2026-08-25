@@ -90,11 +90,17 @@ function toConfig(draft: AgentDraft, root = true): Record<string, unknown> {
     };
   }
   if (
-    draft.cloudEnvironment?.cliTools.length ||
+    draft.cloudEnvironment?.environmentId ||
+    draft.cloudEnvironment?.environmentVersionId ||
+    draft.cloudEnvironment?.cliTools?.length ||
     draft.cloudEnvironment?.dockerfile !== undefined
   ) {
     o.cloudEnvironment = {
-      cliTools: [...draft.cloudEnvironment.cliTools],
+      environmentId: draft.cloudEnvironment.environmentId,
+      environmentVersionId: draft.cloudEnvironment.environmentVersionId,
+      ...(draft.cloudEnvironment.cliTools?.length
+        ? { cliTools: [...draft.cloudEnvironment.cliTools] }
+        : {}),
       ...(draft.cloudEnvironment.dockerfile !== undefined
         ? { dockerfile: draft.cloudEnvironment.dockerfile }
         : {}),

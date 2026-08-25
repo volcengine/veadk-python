@@ -31,6 +31,7 @@ FRONTEND_DEPLOY_SYSTEM_POLICIES: tuple[str, ...] = (
     "TorchlightApiFullAccess",
     "Mem0ReadOnlyAccess",
     "IDReadOnlyAccess",
+    "TagFullAccess",
 )
 
 # The trust relationship that lets a VeFaaS function assume the role.
@@ -62,6 +63,8 @@ FRONTEND_DEPLOY_POLICY: dict = {
                 "tls:Get*",
                 "tls:Describe*",
                 "tls:List*",
+                "tag:TagResources",
+                "tag:UntagResources",
                 "apig:ConvertMcpConfig",
                 "apmplus_server:CreateOrder",
                 "ark:CreateApiKey",

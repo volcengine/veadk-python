@@ -193,13 +193,29 @@ class DeploymentConfig(BaseModel):
     envValues: dict[str, str] = Field(default_factory=dict)
 
 
+class EnvironmentSkillManifestEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = ""
+    folder: str = ""
+    source: Literal["skillhub", "local", "skillspace"] = "local"
+    version: str = ""
+    digest: str = ""
+
+
 class CloudEnvironmentConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    environmentId: str = ""
+    environmentVersionId: str = ""
     cliTools: list[Literal["lark-cli", "github-cli", "pandoc"]] = Field(
         default_factory=list
     )
     dockerfile: str | None = Field(default=None, max_length=65_536)
+    resolvedImage: str = Field(default="", exclude=True)
+    environmentSkills: list[EnvironmentSkillManifestEntry] = Field(
+        default_factory=list, exclude=True
+    )
 
     @field_validator("cliTools")
     @classmethod
@@ -321,6 +337,7 @@ class _Acc:
         self.used_names: set[str] = set()
         self.used_env_names: set[str] = set()
         self.agent_display_names: dict[str, str] = {}
+        self.environment_skills: list[EnvironmentSkillManifestEntry] = []
 
 
 def normalize_and_validate_draft(raw: Any) -> AgentDraft:
@@ -710,7 +727,10 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
     skill_folders = [
         skill.folder for skill in draft.selectedSkills if skill.folder.strip()
     ]
-    if skill_folders:
+    environment_skill_folders = [
+        skill.folder for skill in acc.environment_skills if skill.folder.strip()
+    ]
+    if skill_folders or environment_skill_folders:
         _add_import(acc, "from pathlib import Path as _Path")
         _add_import(
             acc,
@@ -724,13 +744,60 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
             f'_Path(__file__).parent.parent.parent / "skills" / {_py_str(folder)})'
             for folder in skill_folders
         ]
-        joined_loaders = ",\n".join(loaders)
-        acc.pre_lines.append(
-            f"{v} = SkillToolset(\n"
-            f"    skills=[\n{joined_loaders},\n    ],\n"
-            "    code_executor=UnsafeLocalCodeExecutor(),\n"
-            ")"
-        )
+        if not environment_skill_folders:
+            joined_loaders = ",\n".join(loaders)
+            acc.pre_lines.append(
+                f"{v} = SkillToolset(\n"
+                f"    skills=[\n{joined_loaders},\n    ],\n"
+                "    code_executor=UnsafeLocalCodeExecutor(),\n"
+                ")"
+            )
+        else:
+            _add_import(acc, "import os as _os")
+            project_skills_var = _unique_ident(
+                acc, f"project_skills_{var_name}", "project_skills"
+            )
+            environment_skills_var = _unique_ident(
+                acc, f"environment_skills_{var_name}", "environment_skills"
+            )
+            project_names_var = _unique_ident(
+                acc, f"project_skill_names_{var_name}", "project_skill_names"
+            )
+            environment_root_var = _unique_ident(
+                acc, f"environment_skill_root_{var_name}", "environment_skill_root"
+            )
+            joined_loaders = ",\n".join(loaders)
+            environment_loaders = ",\n".join(
+                "        load_skill_from_dir("
+                f"{environment_root_var} / {_py_str(folder)})"
+                for folder in environment_skill_folders
+            )
+            acc.pre_lines.extend(
+                [
+                    f"{project_skills_var} = [\n{joined_loaders}\n    ]",
+                    (
+                        f"{project_names_var} = "
+                        f"{{skill.name.casefold() for skill in {project_skills_var}}}"
+                    ),
+                    (
+                        f"{environment_root_var} = _Path(_os.environ.get("
+                        '"VEADK_ENVIRONMENT_SKILLS_DIR", '
+                        '"/opt/veadk/environment/skills"))'
+                    ),
+                    f"{environment_skills_var} = [\n{environment_loaders}\n    ]",
+                    (
+                        f"{environment_skills_var} = [environment_skill for "
+                        f"environment_skill in {environment_skills_var} if "
+                        f"environment_skill.name.casefold() not in {project_names_var}]"
+                    ),
+                    (
+                        f"{v} = SkillToolset(\n"
+                        f"    skills=[*{project_skills_var}, *{environment_skills_var}],\n"
+                        "    code_executor=UnsafeLocalCodeExecutor(),\n"
+                        ")"
+                    ),
+                ]
+            )
         tool_exprs.append(v)
 
     kwargs = [
@@ -1696,6 +1763,20 @@ def _github_release_urls(cloud_provider: str, repository: str) -> list[str]:
 
 def render_cloud_environment_dockerfile(draft: AgentDraft) -> str | None:
     """Render the custom image or an AgentKit-compatible image for selected CLIs."""
+    if draft.cloudEnvironment.resolvedImage:
+        return "\n".join(
+            [
+                f"FROM {draft.cloudEnvironment.resolvedImage}",
+                "",
+                "# The selected environment already contains VeADK and runtime dependencies.",
+                "# Keep the application layer limited to user-authored Agent code.",
+                "WORKDIR /app",
+                "COPY . .",
+                "EXPOSE 8000",
+                'CMD ["python", "-m", "app"]',
+                "",
+            ]
+        )
     if draft.cloudEnvironment.dockerfile is not None:
         return draft.cloudEnvironment.dockerfile
 
@@ -1802,6 +1883,7 @@ def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
         draft.cloudProvider,
         managed_mcp_gateway=managed_mcp_gateway,
     )
+    acc.environment_skills = list(draft.cloudEnvironment.environmentSkills)
     feishu_channel_enabled = bool(draft.deployment.feishuEnabled)
     if feishu_channel_enabled:
         acc.env.extend(

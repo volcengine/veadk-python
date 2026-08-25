@@ -29,6 +29,8 @@ from volcenginesdkcore.interceptor.interceptors.build_request_interceptor import
 from volcenginesdkcore.rest import ApiException
 
 from veadk.cli.cli_frontend import (
+    STUDIO_ENVIRONMENT_CP_WORKSPACE_ENV,
+    STUDIO_ENVIRONMENT_CR_REPOSITORY_ENV,
     _resolve_or_create_studio_identity_resources,
     _resolve_studio_cloud_credentials,
     _resolve_studio_identity_region,
@@ -1140,6 +1142,10 @@ def test_studio_deploy_persists_studio_context_environment(
             "hermes-tool-id",
             "--iam-role",
             "trn:iam::role/test",
+            "--environment-cp-workspace",
+            "cp-workspace-id",
+            "--environment-cr-repository",
+            "registry/namespace/environment-images",
             "--gateway-name",
             "gateway",
             "--volcengine-access-key",
@@ -1154,6 +1160,11 @@ def test_studio_deploy_persists_studio_context_environment(
     assert deploy_id.startswith("stddep_")
     assert veadk_environments["VEADK_STUDIO_USER_POOL_ID"] == "pool-id"
     assert veadk_environments["VEADK_STUDIO_DEPLOY_REGION"] == "cn-beijing"
+    assert veadk_environments[STUDIO_ENVIRONMENT_CP_WORKSPACE_ENV] == "cp-workspace-id"
+    assert (
+        veadk_environments[STUDIO_ENVIRONMENT_CR_REPOSITORY_ENV]
+        == "registry/namespace/environment-images"
+    )
 
     assert captured["release_function_id"] == "function-id"
     release_environment = captured["release_environment"]
@@ -1272,6 +1283,10 @@ def test_studio_deploy_byteplus_wires_provider_to_cloud_engine_and_package(
             "dev-env-id",
             "--iam-role",
             "trn:iam::role/test",
+            "--environment-cp-workspace",
+            "byteplus-cp-workspace",
+            "--environment-cr-repository",
+            "bp-registry/studio/environment-images",
             "--gateway-name",
             "gateway",
             "--byteplus-access-key",
@@ -1325,6 +1340,14 @@ def test_studio_deploy_byteplus_wires_provider_to_cloud_engine_and_package(
     assert veadk_environments["VEIDENTITY_REGION"] == "ap-southeast-1"
     assert veadk_environments["AGENTKIT_SANDBOX_REGION"] == "ap-southeast-1"
     assert veadk_environments["VEADK_STUDIO_ACCOUNT_ID"] == "3001037806"
+    assert (
+        veadk_environments[STUDIO_ENVIRONMENT_CP_WORKSPACE_ENV]
+        == "byteplus-cp-workspace"
+    )
+    assert (
+        veadk_environments[STUDIO_ENVIRONMENT_CR_REPOSITORY_ENV]
+        == "bp-registry/studio/environment-images"
+    )
     assert sorted(credential_tool_ids) == [
         "chat-code-env-id",
         "chat-code-env-snapshot-id",

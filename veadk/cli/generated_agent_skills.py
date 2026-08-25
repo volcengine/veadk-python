@@ -34,7 +34,6 @@ from veadk.cli.generated_agent_codegen import (
 )
 from veadk.cli.generated_agent_security import DebugPolicyError
 
-
 SkillSpaceResolverResult = str | list[GeneratedFile]
 SkillSpaceResolver = Callable[..., Awaitable[SkillSpaceResolverResult]]
 
@@ -413,6 +412,11 @@ def _skill_md_folder_name(text: str) -> str | None:
     if _FOLDER_RE.fullmatch(name) and name not in {".", ".."}:
         return name
     return None
+
+
+def skill_name_from_markdown(text: str) -> str | None:
+    """Return the normalized ADK skill name declared by a SKILL.md document."""
+    return _skill_md_folder_name(text)
 
 
 def _folder_from_generated_files(files: list[GeneratedFile]) -> str | None:
