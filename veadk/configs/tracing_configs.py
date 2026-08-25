@@ -20,7 +20,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from veadk.auth.veauth.apmplus_veauth import get_apmplus_token
 from veadk.consts import (
-    DEFAULT_APMPLUS_OTEL_EXPORTER_ENDPOINT,
     DEFAULT_APMPLUS_OTEL_EXPORTER_SERVICE_NAME,
     DEFAULT_COZELOOP_OTEL_EXPORTER_ENDPOINT,
     DEFAULT_COZELOOP_SPACE_NAME,
@@ -29,6 +28,16 @@ from veadk.consts import (
 )
 from veadk.integrations.ve_cozeloop.ve_cozeloop import VeCozeloop
 from veadk.integrations.ve_tls.ve_tls import VeTLS
+from veadk.utils.cloud_provider import (
+    apmplus_otlp_endpoint,
+    cloud_provider_from_env,
+    default_region,
+)
+
+
+def _default_apmplus_otel_exporter_endpoint() -> str:
+    provider = cloud_provider_from_env()
+    return apmplus_otlp_endpoint(default_region(provider))
 
 
 class OpenTelemetryConfig(BaseSettings):
@@ -40,7 +49,7 @@ class OpenTelemetryConfig(BaseSettings):
 
 class APMPlusConfig(BaseSettings):
     otel_exporter_endpoint: str = Field(
-        default=DEFAULT_APMPLUS_OTEL_EXPORTER_ENDPOINT,
+        default_factory=_default_apmplus_otel_exporter_endpoint,
         alias="OBSERVABILITY_OPENTELEMETRY_APMPLUS_ENDPOINT",
     )
 
