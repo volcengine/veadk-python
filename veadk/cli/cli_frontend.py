@@ -9441,11 +9441,13 @@ def _run_frontend_server(
 
     @app.get("/web/a2a-spaces")
     async def _web_list_a2a_spaces(
+        request: Request,
         region: str = "",
         page_size: int = Query(default=100, ge=1, le=100),
         project: str | None = None,
     ):
         """List all AgentKit A2A Spaces visible to server credentials."""
+        _require_agent_management(request)
         region = _coerce_cloud_region(region)
         try:
             _resolve_ve_credentials()
@@ -9992,10 +9994,12 @@ def _run_frontend_server(
 
     @app.get("/web/viking-knowledgebases")
     async def _web_list_viking_knowledgebases(
+        request: Request,
         region: str = "",
         project: str = "",
     ):
         """List VikingDB KnowledgeBase collections visible to server creds."""
+        _require_agent_management(request)
         from volcengine.viking_knowledgebase import VikingKnowledgeBaseService
 
         region = _coerce_cloud_region(region)

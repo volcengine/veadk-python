@@ -523,6 +523,8 @@ def _create_frontend_app(
     site_title: str | None = None,
     studio: bool = False,
     provider: str = "volcengine",
+    admins: str | None = None,
+    developers: str | None = None,
 ) -> FastAPI:
     captured: dict[str, Any] = {}
     monkeypatch.setattr("dotenv.find_dotenv", lambda *args, **kwargs: "")
@@ -551,6 +553,8 @@ def _create_frontend_app(
         oauth2_provider_label=None,
         auth_mode="frontend",
         generated_agent_test_run_ttl=60,
+        studio_admins=admins,
+        studio_developers=developers,
         open_browser=False,
         provider=provider,  # type: ignore[arg-type]
         studio=studio,
@@ -1186,7 +1190,7 @@ def test_runtime_list_surfaces_all_regional_failures(
 def test_viking_knowledgebases_include_agentkit_imported_bases(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    app = _create_frontend_app(monkeypatch, tmp_path)
+    app = _create_frontend_app(monkeypatch, tmp_path, admins="admin")
     requests: list[tuple[str, int]] = []
 
     class _FakeKnowledgeClient:
@@ -1254,7 +1258,10 @@ def test_viking_knowledgebases_include_agentkit_imported_bases(
     monkeypatch.setattr("volcenginesdkvikingdb.VIKINGDBApi", _FakeVikingDbApi)
 
     with TestClient(app) as client:
-        response = client.get("/web/viking-knowledgebases")
+        response = client.get(
+            "/web/viking-knowledgebases",
+            headers={"X-VeADK-Local-User": "admin"},
+        )
 
     assert response.status_code == 200
     data = response.json()
