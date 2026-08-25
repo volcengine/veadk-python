@@ -12,12 +12,43 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 
 import click
 
 from veadk.version import VERSION
 
 TEMP_PATH = "/tmp"
+_DEPLOY_PROCESS_ENV_KEYS = (
+    "CLOUD_PROVIDER",
+    "AGENTKIT_CLOUD_PROVIDER",
+    "BYTEPLUS_REGION",
+    "BYTEPLUS_ACCESS_KEY",
+    "BYTEPLUS_SECRET_KEY",
+    "BYTEPLUS_SESSION_TOKEN",
+    "VOLCENGINE_ACCESS_KEY",
+    "VOLCENGINE_SECRET_KEY",
+    "VOLCENGINE_SESSION_TOKEN",
+    "VOLC_SESSIONTOKEN",
+    "REGION",
+    "IAM_ROLE",
+)
+
+
+def _restore_process_env_on_click_close(keys: tuple[str, ...]) -> None:
+    ctx = click.get_current_context(silent=True)
+    if ctx is None:
+        return
+    original = {key: os.environ.get(key) for key in keys}
+
+    def _restore() -> None:
+        for key, value in original.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    ctx.call_on_close(_restore)
 
 
 @click.command()
@@ -30,6 +61,28 @@ TEMP_PATH = "/tmp"
     "--volcengine-secret-key",
     default=None,
     help="Volcengine secret key",
+)
+@click.option(
+    "--volcengine-session-token",
+    default=None,
+    help="Volcengine session token",
+)
+@click.option("--byteplus-access-key", default=None, envvar="BYTEPLUS_ACCESS_KEY")
+@click.option("--byteplus-secret-key", default=None, envvar="BYTEPLUS_SECRET_KEY")
+@click.option("--byteplus-session-token", default=None, envvar="BYTEPLUS_SESSION_TOKEN")
+@click.option(
+    "--provider",
+    type=click.Choice(["volcengine", "byteplus"]),
+    default=None,
+    help="Cloud provider. Defaults to AGENTKIT_CLOUD_PROVIDER/CLOUD_PROVIDER, then volcengine.",
+)
+@click.option(
+    "--region",
+    default=None,
+    help=(
+        "Cloud region. Defaults to BYTEPLUS_REGION for BytePlus, or "
+        "REGION/cn-beijing for Volcengine."
+    ),
 )
 @click.option(
     "--vefaas-app-name", required=True, help="Expected Volcengine FaaS application name"
@@ -71,6 +124,12 @@ TEMP_PATH = "/tmp"
 def deploy(
     volcengine_access_key: str,
     volcengine_secret_key: str,
+    volcengine_session_token: str,
+    byteplus_access_key: str,
+    byteplus_secret_key: str,
+    byteplus_session_token: str,
+    provider: str | None,
+    region: str | None,
     vefaas_app_name: str,
     veapig_instance_name: str,
     veapig_service_name: str,
@@ -102,6 +161,12 @@ def deploy(
             will use VOLCENGINE_ACCESS_KEY environment variable
         volcengine_secret_key: Volcengine secret key for API authentication. If not provided,
             will use VOLCENGINE_SECRET_KEY environment variable
+        volcengine_session_token: Volcengine session token for API authentication.
+        byteplus_access_key: BytePlus access key for API authentication.
+        byteplus_secret_key: BytePlus secret key for API authentication.
+        byteplus_session_token: BytePlus session token for API authentication.
+        provider: Cloud provider for the deployment.
+        region: Cloud region for the deployment.
         vefaas_app_name: Name of the target Volcengine FaaS application where the
             project will be deployed
         veapig_instance_name: Optional Volcengine API Gateway instance name for
@@ -130,18 +195,73 @@ def deploy(
     from cookiecutter.main import cookiecutter
 
     import veadk.integrations.ve_faas as vefaas
-    from veadk.config import getenv
+    from veadk.config import getenv, veadk_environments
     from veadk.utils.logger import get_logger
     from veadk.utils.misc import formatted_timestamp, load_module_from_file
-    import os
-    from veadk.config import veadk_environments
+    from veadk.utils.cloud_provider import (
+        cloud_provider_from_env,
+        default_region,
+        normalize_cloud_provider,
+    )
 
     logger = get_logger(__name__)
 
-    if not volcengine_access_key:
-        volcengine_access_key = getenv("VOLCENGINE_ACCESS_KEY")
-    if not volcengine_secret_key:
-        volcengine_secret_key = getenv("VOLCENGINE_SECRET_KEY")
+    _restore_process_env_on_click_close(_DEPLOY_PROCESS_ENV_KEYS)
+    provider_id = (
+        normalize_cloud_provider(provider) if provider else cloud_provider_from_env()
+    )
+    resolved_region = region or default_region(provider_id)
+    os.environ["CLOUD_PROVIDER"] = provider_id
+    os.environ["AGENTKIT_CLOUD_PROVIDER"] = provider_id
+    veadk_environments["CLOUD_PROVIDER"] = provider_id
+    veadk_environments["AGENTKIT_CLOUD_PROVIDER"] = provider_id
+
+    if provider_id == "byteplus":
+        if not byteplus_access_key:
+            byteplus_access_key = getenv(
+                "BYTEPLUS_ACCESS_KEY", "", allow_false_values=True
+            )
+        if not byteplus_secret_key:
+            byteplus_secret_key = getenv(
+                "BYTEPLUS_SECRET_KEY", "", allow_false_values=True
+            )
+        if not byteplus_access_key or not byteplus_secret_key:
+            raise click.ClickException(
+                "BytePlus credentials required: pass --byteplus-access-key/"
+                "--byteplus-secret-key, or set BYTEPLUS_ACCESS_KEY/"
+                "BYTEPLUS_SECRET_KEY."
+            )
+        byteplus_session_token = byteplus_session_token or getenv(
+            "BYTEPLUS_SESSION_TOKEN", "", allow_false_values=True
+        )
+        volcengine_access_key = byteplus_access_key
+        volcengine_secret_key = byteplus_secret_key
+        volcengine_session_token = byteplus_session_token
+        os.environ["BYTEPLUS_ACCESS_KEY"] = byteplus_access_key
+        os.environ["BYTEPLUS_SECRET_KEY"] = byteplus_secret_key
+        os.environ["BYTEPLUS_REGION"] = resolved_region
+        veadk_environments["BYTEPLUS_REGION"] = resolved_region
+        if byteplus_session_token:
+            os.environ["BYTEPLUS_SESSION_TOKEN"] = byteplus_session_token
+    else:
+        if not volcengine_access_key:
+            volcengine_access_key = getenv("VOLCENGINE_ACCESS_KEY")
+        if not volcengine_secret_key:
+            volcengine_secret_key = getenv("VOLCENGINE_SECRET_KEY")
+        volcengine_session_token = (
+            volcengine_session_token
+            or getenv("VOLCENGINE_SESSION_TOKEN", "", allow_false_values=True)
+            or getenv("VOLC_SESSIONTOKEN", "", allow_false_values=True)
+        )
+
+    os.environ["VOLCENGINE_ACCESS_KEY"] = volcengine_access_key
+    os.environ["VOLCENGINE_SECRET_KEY"] = volcengine_secret_key
+    if volcengine_session_token:
+        os.environ["VOLCENGINE_SESSION_TOKEN"] = volcengine_session_token
+    else:
+        os.environ.pop("VOLCENGINE_SESSION_TOKEN", None)
+    os.environ["REGION"] = resolved_region
+
     if not iam_role:
         iam_role = getenv("IAM_ROLE", None, allow_false_values=True)
     else:
@@ -152,9 +272,11 @@ def deploy(
     template_dir_path = Path(vefaas.__file__).parent / "template"
 
     tmp_dir_name = f"{user_proj_abs_path.name}_{formatted_timestamp()}"
+    rendered_tmp_dir_name = tmp_dir_name.replace("-", "_")
+    tmp_dir_path = Path(TEMP_PATH) / rendered_tmp_dir_name
 
     settings = {
-        "local_dir_name": tmp_dir_name.replace("-", "_"),
+        "local_dir_name": rendered_tmp_dir_name,
         "app_name": user_proj_abs_path.name.replace("-", "_"),
         "agent_module_name": user_proj_abs_path.name,
         "short_term_memory_backend": short_term_memory_backend,
@@ -166,6 +288,8 @@ def deploy(
         "auth_method": auth_method,
         "veidentity_user_pool_name": user_pool_name,
         "veidentity_client_name": client_name,
+        "provider": provider_id,
+        "region": resolved_region,
         "veadk_version": VERSION,
     }
 
@@ -175,14 +299,9 @@ def deploy(
         no_input=True,
         extra_context=settings,
     )
-    logger.debug(f"Create a template project at {TEMP_PATH}/{tmp_dir_name}")
+    logger.debug(f"Create a template project at {tmp_dir_path}")
 
-    agent_dir = (
-        Path(TEMP_PATH)
-        / tmp_dir_name
-        / "src"
-        / user_proj_abs_path.name.replace("-", "_")
-    )
+    agent_dir = tmp_dir_path / "src" / user_proj_abs_path.name.replace("-", "_")
 
     # remove /tmp/tmp_dir_name/src/user_proj_abs_path.name
     shutil.rmtree(agent_dir)
@@ -199,7 +318,7 @@ def deploy(
         )
         shutil.copy(
             user_proj_abs_path / "requirements.txt",
-            Path(TEMP_PATH) / tmp_dir_name / "src" / "requirements.txt",
+            tmp_dir_path / "src" / "requirements.txt",
         )
     else:
         logger.warning(
@@ -211,23 +330,21 @@ def deploy(
         logger.warning(
             f"Find a config.yaml in {user_proj_abs_path}/config.yaml, we will not upload it by default."
         )
-        shutil.move(agent_dir / "config.yaml", Path(TEMP_PATH) / tmp_dir_name)
+        shutil.move(agent_dir / "config.yaml", tmp_dir_path)
     else:
         logger.info(
             "No config.yaml found in the user project. Some environment variables may not be set."
         )
 
     # load
-    logger.debug(
-        f"Load deploy module from {Path(TEMP_PATH) / tmp_dir_name / 'deploy.py'}"
-    )
+    logger.debug(f"Load deploy module from {tmp_dir_path / 'deploy.py'}")
     deploy_module = load_module_from_file(
         module_name="deploy_module",
-        file_path=str(Path(TEMP_PATH) / tmp_dir_name / "deploy.py"),
+        file_path=str(tmp_dir_path / "deploy.py"),
     )
-    logger.info(f"Begin deploy from {Path(TEMP_PATH) / tmp_dir_name / 'src'}")
+    logger.info(f"Begin deploy from {tmp_dir_path / 'src'}")
     asyncio.run(deploy_module.main())
 
     # remove tmp file
     logger.info("Deploy done. Delete temp dir.")
-    shutil.rmtree(Path(TEMP_PATH) / tmp_dir_name)
+    shutil.rmtree(tmp_dir_path)

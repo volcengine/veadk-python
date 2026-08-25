@@ -47,6 +47,13 @@ from veadk.integrations.ve_identity.identity_client import IdentityClient
 
 @pytest.fixture(autouse=True)
 def _skip_serverless_role_setup(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AGENTKIT_CLOUD_PROVIDER", raising=False)
+    monkeypatch.delenv("CLOUD_PROVIDER", raising=False)
+    monkeypatch.delenv("REGION", raising=False)
+    monkeypatch.delenv("BYTEPLUS_REGION", raising=False)
+    monkeypatch.delenv("BYTEPLUS_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("BYTEPLUS_SECRET_KEY", raising=False)
+    monkeypatch.delenv("BYTEPLUS_SESSION_TOKEN", raising=False)
     monkeypatch.delenv("VOLCENGINE_SESSION_TOKEN", raising=False)
     monkeypatch.delenv("VOLC_SESSIONTOKEN", raising=False)
     monkeypatch.delenv("SANDBOX_CHAT_CODEX", raising=False)
@@ -683,6 +690,8 @@ def test_studio_deploy_surfaces_redacted_provisioning_error_chain(
         studio,
         [
             "deploy",
+            "--provider",
+            "volcengine",
             "--user-pool-id",
             "pool-id",
             "--allowed-client-id",
@@ -820,6 +829,8 @@ def test_studio_deploy_surfaces_tool_id_from_provisioning_failure(
         studio,
         [
             "deploy",
+            "--provider",
+            "volcengine",
             "--user-pool-id",
             "pool-id",
             "--allowed-client-id",
@@ -971,6 +982,8 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
         studio,
         [
             "deploy",
+            "--provider",
+            "volcengine",
             "--user-pool-id",
             "pool-id",
             "--allowed-client-id",
@@ -1111,6 +1124,8 @@ def test_studio_deploy_persists_studio_context_environment(
         studio,
         [
             "deploy",
+            "--provider",
+            "volcengine",
             "--user-pool-id",
             "pool-id",
             "--allowed-client-id",
@@ -1158,7 +1173,7 @@ def test_studio_deploy_byteplus_wires_provider_to_cloud_engine_and_package(
 ) -> None:
     captured: dict[str, object] = {}
     credential_tool_ids: list[str] = []
-    monkeypatch.setenv("BYTEPLUS_REGION", "cn-beijing")
+    monkeypatch.setenv("BYTEPLUS_REGION", "ap-southeast-1")
     monkeypatch.setenv("BYTEPLUS_WEB_SEARCH_API_KEY", "bp-search-key")
 
     class _FakeCloudAgentEngine:

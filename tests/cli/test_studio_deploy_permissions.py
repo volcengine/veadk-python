@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 from click.testing import CliRunner
 
@@ -355,6 +357,55 @@ def test_cli_precheck_only_exits_before_cloud_writes(monkeypatch) -> None:
     assert result.exit_code == 0, result.output
     assert f"All {required_count} required IAM Actions are satisfied." in result.output
     assert "Pre-check only: no cloud resources were created." in result.output
+
+
+def test_cli_restores_provider_process_env_after_byteplus_deploy(
+    monkeypatch,
+) -> None:
+    for key in (
+        "CLOUD_PROVIDER",
+        "AGENTKIT_CLOUD_PROVIDER",
+        "BYTEPLUS_REGION",
+        "BYTEPLUS_ACCESS_KEY",
+        "BYTEPLUS_SECRET_KEY",
+        "BYTEPLUS_SESSION_TOKEN",
+        "IAM_ROLE",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    def _precheck(*, specs, **_kwargs):
+        return [
+            permissions.PermissionResult(spec=spec, satisfied=True) for spec in specs
+        ]
+
+    monkeypatch.setattr(
+        permissions,
+        "run_studio_deploy_permission_precheck",
+        _precheck,
+    )
+
+    result = CliRunner().invoke(
+        studio,
+        [
+            "deploy",
+            "--vefaas-app-name",
+            "studio-test",
+            "--provider",
+            "byteplus",
+            "--byteplus-access-key",
+            "ak",
+            "--byteplus-secret-key",
+            "sk",
+            "--precheck-only",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert os.environ.get("CLOUD_PROVIDER") is None
+    assert os.environ.get("AGENTKIT_CLOUD_PROVIDER") is None
+    assert os.environ.get("BYTEPLUS_REGION") is None
+    assert os.environ.get("BYTEPLUS_ACCESS_KEY") is None
+    assert os.environ.get("BYTEPLUS_SECRET_KEY") is None
 
 
 def test_cli_precheck_only_rejects_overlong_site_title_before_iam(monkeypatch) -> None:

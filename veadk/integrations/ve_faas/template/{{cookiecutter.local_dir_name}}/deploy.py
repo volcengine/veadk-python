@@ -75,7 +75,10 @@ async def _send_msg_with_mcp(cloud_app: CloudApp, message: str) -> None:
 
 
 async def main():
-    engine = CloudAgentEngine()
+    engine = CloudAgentEngine(
+        provider="{{cookiecutter.provider}}",
+        region="{{cookiecutter.region}}",
+    )
 
     cloud_app = engine.deploy(
         path=str(Path(__file__).parent / "src"),
