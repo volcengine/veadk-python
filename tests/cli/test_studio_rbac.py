@@ -32,11 +32,13 @@ from fastapi.testclient import TestClient
 
 from veadk.cli.cli_frontend import (
     _adapt_migration_model_envs,
+    _anchor_environment_registry,
     _create_runtime_with_description_fallback,
     _is_malformed_runtime_description_error,
     _normalize_runtime_description,
     _prepare_managed_sidecar_runtime_envs,
     _run_frontend_server,
+    _runtime_environment_from_runtime,
     _runtime_environment_from_tags,
     _runtime_environment_tags,
     studio,
@@ -73,6 +75,63 @@ def test_runtime_environment_tags_round_trip_and_default_legacy_compatibility() 
             "veadk:environment-version": "stale-version",
         }
     ) == {"environmentId": "", "environmentVersionId": ""}
+
+
+def test_runtime_environment_metadata_prefers_update_safe_env_mirror() -> None:
+    runtime = SimpleNamespace(
+        tags=[SimpleNamespace(key="veadk:environment-id", value="default")],
+        envs=[
+            SimpleNamespace(key="VEADK_STUDIO_ENVIRONMENT_ID", value="environment-123"),
+            SimpleNamespace(
+                key="VEADK_STUDIO_ENVIRONMENT_VERSION_ID", value="version-456"
+            ),
+        ],
+    )
+
+    assert _runtime_environment_from_runtime(runtime) == {
+        "environmentId": "environment-123",
+        "environmentVersionId": "version-456",
+    }
+    assert _runtime_environment_from_runtime(SimpleNamespace(tags=[], envs=[])) == {
+        "environmentId": "",
+        "environmentVersionId": "",
+    }
+
+
+def test_environment_registry_overrides_legacy_runtime_build_registry() -> None:
+    config = {
+        "cr_instance_name": "legacy-registry",
+        "cr_namespace_name": "legacy-namespace",
+        "cr_repo_name": "agent-output",
+        "cp_workspace_name": "existing-workspace",
+    }
+    tags = {
+        "veadk:build-resource:cr-mode": "auto",
+        "veadk:build-resource:cr-instance": "legacy-registry",
+        "veadk:build-resource:cr-namespace": "legacy-namespace",
+        "veadk:build-resource:cr-repository": "agent-output",
+    }
+
+    _anchor_environment_registry(
+        config,
+        tags,
+        registry="environment-registry",
+        namespace="runtime-environments",
+        repository="agent-output",
+    )
+
+    assert config == {
+        "cr_instance_name": "environment-registry",
+        "cr_namespace_name": "runtime-environments",
+        "cr_repo_name": "agent-output",
+        "cp_workspace_name": "existing-workspace",
+    }
+    assert tags == {
+        "veadk:build-resource:cr-mode": "create",
+        "veadk:build-resource:cr-instance": "environment-registry",
+        "veadk:build-resource:cr-namespace": "runtime-environments",
+        "veadk:build-resource:cr-repository": "agent-output",
+    }
 
 
 def _create_studio_app(
@@ -3477,6 +3536,13 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
     get_calls = 0
     evaluation_set_calls: list[dict[str, Any]] = []
     resolved_model_keys: list[dict[str, Any]] = []
+    runtime_tag_sync_calls: list[dict[str, Any]] = []
+
+    monkeypatch.setenv("VEADK_STUDIO_ACCOUNT_ID", "test-account")
+    monkeypatch.setattr(
+        "veadk.cli.cli_frontend._sync_volcengine_runtime_tags",
+        lambda **kwargs: runtime_tag_sync_calls.append(kwargs),
+    )
 
     def get_runtime(_self: Any, _request: Any) -> SimpleNamespace:
         nonlocal get_calls
@@ -3686,6 +3752,8 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
     assert "VEADK_DISABLE_EXPIRE_AT" not in cloud["runtime_envs"]
     assert not any(key.startswith("HARNESS_") for key in cloud["runtime_envs"])
     assert "VEADK_DISABLE_EXPIRE_AT" not in cloud["runtime_envs"]
+    assert cloud["runtime_envs"]["VEADK_STUDIO_ENVIRONMENT_ID"] == "default"
+    assert "VEADK_STUDIO_ENVIRONMENT_VERSION_ID" not in cloud["runtime_envs"]
     assert "runtime_network" not in cloud
     if has_resource_tags:
         assert cloud["tos_bucket"] == "tagged-bucket"
@@ -3710,6 +3778,12 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
     assert updated_tags["veadk:environment-id"] == "default"
     assert "veadk:environment-version" not in updated_tags
     assert updated_tags["veadk:owner"] == "developer"
+    if provider == "volcengine":
+        assert len(runtime_tag_sync_calls) == 1
+        assert runtime_tag_sync_calls[0]["runtime_id"] == runtime.runtime_id
+        assert runtime_tag_sync_calls[0]["tags"]["veadk:environment-id"] == ("default")
+    else:
+        assert runtime_tag_sync_calls == []
 
 
 @pytest.mark.parametrize(

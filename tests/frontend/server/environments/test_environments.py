@@ -316,6 +316,10 @@ def test_all_os_language_combinations_generate_buildable_commented_dockerfiles(
     assert "PIP_INDEX_URL=https://pypi.org/simple" in dockerfile
     assert "PYTHON_SOURCE_BASE_URL=https://www.python.org/ftp/python" in dockerfile
     assert "PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.playwright.dev" in dockerfile
+    assert "https://archive.ubuntu.com" in dockerfile
+    assert "https://security.ubuntu.com" in dockerfile
+    assert 'Acquire::Retries "5"' in dockerfile
+    assert 'Acquire::ForceIPv4 "true"' in dockerfile
     assert "# VeADK:" in dockerfile
     assert "# lxml-html-clean:" in dockerfile
     assert (
@@ -849,6 +853,15 @@ def test_build_start_error_is_redacted_and_persisted():
     assert response.json()["status"] == "failed"
     assert "secret-value" not in response.json()["error"]
     assert "***" in response.json()["error"]
+
+    detail = client.get(
+        "/web/environments/"
+        f"{environment_id}/builds/{response.json()['versionId']}?includeLogs=true"
+    )
+
+    assert detail.status_code == 200
+    assert detail.json()["error"] == response.json()["error"]
+    assert "缺少 CodePipeline 运行信息" not in detail.json()["error"]
 
 
 def test_build_log_redaction_removes_pipeline_temporary_credentials():

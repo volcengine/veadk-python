@@ -203,6 +203,8 @@ _RUNTIME_NAME_MIN_LENGTH = 4
 _RUNTIME_NAME_MAX_LENGTH = 64
 _RUNTIME_ENVIRONMENT_ID_TAG = "veadk:environment-id"
 _RUNTIME_ENVIRONMENT_VERSION_TAG = "veadk:environment-version"
+_RUNTIME_ENVIRONMENT_ID_ENV = "VEADK_STUDIO_ENVIRONMENT_ID"
+_RUNTIME_ENVIRONMENT_VERSION_ENV = "VEADK_STUDIO_ENVIRONMENT_VERSION_ID"
 _DEFAULT_RUNTIME_ENVIRONMENT = "default"
 _STUDIO_STORAGE_ENV_KEYS = (
     "VEADK_STUDIO_TOS_BUCKET",
@@ -247,6 +249,122 @@ def _runtime_environment_from_tags(tags: Mapping[str, str]) -> dict[str, str]:
         "environmentId": environment_id,
         "environmentVersionId": tags.get(_RUNTIME_ENVIRONMENT_VERSION_TAG, "").strip(),
     }
+
+
+def _runtime_environment_from_runtime(runtime: Any) -> dict[str, str]:
+    """Decode the selected environment with update-safe metadata fallback.
+
+    AgentKit currently accepts ``Tags`` on UpdateRuntime but does not persist
+    them. Runtime environment variables are mutable on every version, so keep
+    an internal mirror there and prefer it when reading an existing Runtime.
+    Runtimes created before this metadata existed still resolve to the default.
+    """
+    envs = {
+        str(getattr(item, "key", "") or ""): str(getattr(item, "value", "") or "")
+        for item in (getattr(runtime, "envs", None) or [])
+        if getattr(item, "key", None)
+    }
+    environment_id = envs.get(_RUNTIME_ENVIRONMENT_ID_ENV, "").strip()
+    if environment_id:
+        if environment_id == _DEFAULT_RUNTIME_ENVIRONMENT:
+            return {"environmentId": "", "environmentVersionId": ""}
+        return {
+            "environmentId": environment_id,
+            "environmentVersionId": envs.get(
+                _RUNTIME_ENVIRONMENT_VERSION_ENV, ""
+            ).strip(),
+        }
+    tags = {
+        str(getattr(item, "key", "") or ""): str(getattr(item, "value", "") or "")
+        for item in (getattr(runtime, "tags", None) or [])
+        if getattr(item, "key", None)
+    }
+    return _runtime_environment_from_tags(tags)
+
+
+def _sync_volcengine_runtime_tags(
+    *,
+    access_key: str,
+    secret_key: str,
+    session_token: str | None,
+    account_id: str,
+    region: str,
+    runtime_id: str,
+    tags: Mapping[str, str],
+) -> None:
+    """Persist mutable Runtime tags through the resource-tagging service."""
+    import volcenginesdkcore
+    import volcenginesdktag
+
+    normalized_account_id = account_id.strip()
+    if not normalized_account_id:
+        logger.warning("Skip Runtime tag sync because Studio account ID is unavailable")
+        return
+    resource_trn = f"trn:agentkit:{region}:{normalized_account_id}:runtime/{runtime_id}"
+    configuration = volcenginesdkcore.Configuration()
+    configuration.ak = access_key
+    configuration.sk = secret_key
+    configuration.session_token = session_token or ""
+    configuration.region = region
+    configuration.client_side_validation = True
+    client = volcenginesdktag.TAGApi(volcenginesdkcore.ApiClient(configuration))
+
+    custom_tags = {
+        str(key): str(value)
+        for key, value in tags.items()
+        if str(key).startswith("veadk:")
+    }
+    response = client.tag_resources(
+        volcenginesdktag.TagResourcesRequest(
+            resource_trn_list=[resource_trn],
+            tags=[
+                volcenginesdktag.TagForTagResourcesInput(key=key, value=value)
+                for key, value in custom_tags.items()
+            ],
+        )
+    )
+    failed_resources = list(getattr(response, "failed_resources", None) or [])
+    if failed_resources:
+        detail = str(getattr(failed_resources[0], "message", "") or "")
+        raise RuntimeError(detail or "Failed to update Runtime tags")
+
+    if _RUNTIME_ENVIRONMENT_VERSION_TAG not in custom_tags:
+        response = client.untag_resources(
+            volcenginesdktag.UntagResourcesRequest(
+                resource_trn_list=[resource_trn],
+                tag_keys=[_RUNTIME_ENVIRONMENT_VERSION_TAG],
+            )
+        )
+        failed_resources = list(getattr(response, "failed_resources", None) or [])
+        if failed_resources:
+            detail = str(getattr(failed_resources[0], "message", "") or "")
+            raise RuntimeError(detail or "Failed to remove stale Runtime tags")
+
+
+def _anchor_environment_registry(
+    deployment_config: dict[str, str],
+    deployment_tags: dict[str, str],
+    *,
+    registry: str,
+    namespace: str,
+    repository: str,
+) -> None:
+    """Keep a private environment base image and Agent output in one CR scope."""
+    deployment_config.update(
+        {
+            "cr_instance_name": registry,
+            "cr_namespace_name": namespace,
+            "cr_repo_name": repository,
+        }
+    )
+    deployment_tags.update(
+        {
+            "veadk:build-resource:cr-mode": "create",
+            "veadk:build-resource:cr-instance": registry,
+            "veadk:build-resource:cr-namespace": namespace,
+            "veadk:build-resource:cr-repository": repository,
+        }
+    )
 
 
 def _studio_environment_resource_environment(
@@ -1607,13 +1725,14 @@ def _run_frontend_server(
 
     app.router.lifespan_context = _studio_route_channel_lifespan
 
-    # Studio's production bundle includes large CSS assets. Compress them at
-    # the application boundary so cloud API gateways do not have to stream the
-    # uncompressed response to every browser. Starlette automatically skips
-    # responses that must not be buffered, including server-sent events.
-    from starlette.middleware.gzip import GZipMiddleware
+    # Studio's production bundle includes large static assets. Compress them
+    # for Volcengine, but keep BytePlus responses uncompressed: BytePlus VeFaaS
+    # streams Starlette's gzip response without the terminating frame, which
+    # leaves browsers waiting indefinitely for the main JavaScript bundle.
+    if provider == "volcengine":
+        from starlette.middleware.gzip import GZipMiddleware
 
-    app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
+        app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
 
     adk_server = None
     for route in app.routes:
@@ -5368,6 +5487,36 @@ def _run_frontend_server(
                 logger.error("resolve update runtime failed: %s", e, exc_info=True)
                 raise HTTPException(status_code=502, detail=str(e)) from e
 
+        if resolved_environment is not None:
+            environment_resources = resolved_environment.resources
+            registry_resource = getattr(
+                environment_resources, "container_registry", None
+            )
+            if registry_resource is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="所选环境版本缺少容器镜像仓库信息。",
+                )
+
+            # CodePipeline receives one temporary CR credential for the target
+            # repository. Build the Agent image in the same registry/namespace
+            # as its private environment base image so that credential can pull
+            # the base layer as well as push the resulting Agent image. This is
+            # especially important for Runtime updates, whose persisted build
+            # resources may still point at the Runtime's previous registry.
+            agent_repository = str(
+                deployment_resource_config.get("cr_repo_name")
+                or requested_runtime_name
+                or agent_name
+            ).strip()
+            _anchor_environment_registry(
+                deployment_resource_config,
+                deployment_resource_tag_values,
+                registry=registry_resource.registry,
+                namespace=registry_resource.namespace,
+                repository=agent_repository,
+            )
+
         # Persist the exact environment image selection on the Runtime itself.
         # A missing tag is intentionally interpreted as the AgentKit default so
         # Runtimes created before environment support remain editable.
@@ -5684,6 +5833,15 @@ def _run_frontend_server(
             runtime_envs["DATABASE_VIKING_REGION"] = (
                 DEFAULT_BYTEPLUS_VIKING_MEMORY_REGION
             )
+        runtime_envs[_RUNTIME_ENVIRONMENT_ID_ENV] = (
+            environment_id or _DEFAULT_RUNTIME_ENVIRONMENT
+        )
+        if resolved_environment is not None:
+            runtime_envs[_RUNTIME_ENVIRONMENT_VERSION_ENV] = (
+                resolved_environment.version_id
+            )
+        else:
+            runtime_envs.pop(_RUNTIME_ENVIRONMENT_VERSION_ENV, None)
         # Harness settings are platform-owned. Always remove a previous
         # Sidecar deployment's values before either deployment path materializes
         # the next Runtime environment. The CLI adds the authoritative resolved
@@ -6829,6 +6987,29 @@ def _run_frontend_server(
                         )
                     if result is not None and getattr(result, "success", False):
                         _verify_sdk_sidecar_release(result)
+                        if existing_runtime is not None and provider != "byteplus":
+                            try:
+                                access_key, secret_key, session_token = (
+                                    _resolve_ve_credentials()
+                                )
+                                _sync_volcengine_runtime_tags(
+                                    access_key=access_key,
+                                    secret_key=secret_key,
+                                    session_token=session_token,
+                                    account_id=os.getenv("VEADK_STUDIO_ACCOUNT_ID", ""),
+                                    region=region,
+                                    runtime_id=runtime_id,
+                                    tags=runtime_tag_values,
+                                )
+                            except Exception as e:
+                                logger.warning(
+                                    "Runtime environment tag sync failed: %s", e
+                                )
+                                _emit(
+                                    "warning",
+                                    "Runtime 已更新；环境标签将在权限生效后同步。",
+                                    100,
+                                )
                     result_box["result"] = result
                 except Exception as e:
                     safe_error = _redact_managed_artifact_text(
@@ -9047,7 +9228,7 @@ def _run_frontend_server(
             "region": region,
             "currentVersion": getattr(runtime, "current_version_number", None),
             "managed": tags.get("veadk:managed") == "true",
-            "environment": _runtime_environment_from_tags(tags),
+            "environment": _runtime_environment_from_runtime(runtime),
             "envs": [
                 {
                     "key": str(getattr(item, "key", "") or ""),
@@ -9055,7 +9236,12 @@ def _run_frontend_server(
                 }
                 for item in (getattr(runtime, "envs", None) or [])
                 if getattr(item, "key", None)
-                and str(getattr(item, "key", "") or "") != "MODEL_AGENT_API_KEY"
+                and str(getattr(item, "key", "") or "")
+                not in {
+                    "MODEL_AGENT_API_KEY",
+                    _RUNTIME_ENVIRONMENT_ID_ENV,
+                    _RUNTIME_ENVIRONMENT_VERSION_ENV,
+                }
             ],
             "network": _runtime_network_payload(runtime),
         }

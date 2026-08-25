@@ -142,6 +142,10 @@ test("generates a Dockerfile from language and selected tools", async () => {
     assert.match(dockerfile, /PIP_INDEX_URL=https:\/\/pypi\.org\/simple/);
     assert.match(dockerfile, /PYTHON_SOURCE_BASE_URL=https:\/\/www\.python\.org\/ftp\/python/);
     assert.match(dockerfile, /PLAYWRIGHT_DOWNLOAD_HOST=https:\/\/cdn\.playwright\.dev/);
+    assert.match(dockerfile, /https:\/\/archive\.ubuntu\.com/);
+    assert.match(dockerfile, /https:\/\/security\.ubuntu\.com/);
+    assert.match(dockerfile, /Acquire::Retries \"5\"/);
+    assert.match(dockerfile, /Acquire::ForceIPv4 \"true\"/);
     assert.match(dockerfile, /Python-3\.12\.11\.tgz/);
     assert.match(dockerfile, /\.\/configure --prefix=\/opt\/python/);
     assert.doesNotMatch(dockerfile, /astral\.sh|github\.com\/astral-sh/);

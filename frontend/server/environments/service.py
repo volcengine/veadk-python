@@ -236,6 +236,15 @@ class EnvironmentService:
             )
             if persisted_log:
                 return _with_log_snapshot(build, persisted_log)
+            # A failure while resolving CP/CR resources happens before a
+            # pipeline run exists. Preserve that actionable startup error when
+            # the detail view asks for logs instead of replacing it with a
+            # secondary "missing run information" message.
+            if (
+                not isinstance(build.resources, EnvironmentResources)
+                or not build.run_id
+            ):
+                return build
 
         if not isinstance(build.resources, EnvironmentResources) or not build.run_id:
             failed = build.model_copy(
