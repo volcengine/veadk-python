@@ -1118,6 +1118,7 @@ body {
   color: hsl(var(--destructive));
   font-size: 13px;
   overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .case-return-bar {
@@ -2643,6 +2644,13 @@ body {
 }
 .drawer-loading { flex: 1; justify-content: center; padding: 24px; }
 .drawer-empty { padding: 20px 0; }
+.trace-state {
+  flex: 1;
+  justify-content: center;
+  padding: 24px 18px;
+  text-align: center;
+  flex-wrap: wrap;
+}
 
 /* ---------- trace viewer: span tree (left) + detail (right) ---------- */
 .drawer--trace { width: min(1080px, 96vw); }
@@ -5918,6 +5926,12 @@ a.search-result { text-decoration: none; color: inherit; }
 @media (min-width: 1280px) {
   .agent-info-trigger { display: none; }
   .topo:not(.is-drawer) .topo-module-scroll { max-height: none; }
+  .main:has(> .topo) > .error {
+    align-self: flex-start;
+    width: calc(100% - 354px);
+    margin-right: 0;
+    margin-left: max(16px, calc((100% - 322px - 768px) / 2));
+  }
   .main:has(> .topo) > .transcript { padding-right: 322px; }
   .main:has(> .topo) > .conversation-composer-slot {
     padding-right: 322px;

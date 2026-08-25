@@ -1,4 +1,4 @@
-veadk-python>=1.0.5
-agentkit-sdk-python
-google-adk>=1.34.0
-starlette<1.0.0
+veadk-python==1.1.5
+agentkit-sdk-python==0.8.4
+google-adk==2.1.0
+starlette==0.52.1

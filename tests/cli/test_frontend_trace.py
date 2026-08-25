@@ -121,6 +121,38 @@ def test_session_trace_exporter_groups_spans_without_google_adk_internals() -> N
     assert exporter.get_finished_spans("unknown") == []
 
 
+def test_session_trace_exporter_indexes_failed_trace_before_first_llm_token() -> None:
+    exporter = SessionTraceExporter()
+    failed_llm = SimpleNamespace(
+        name="call_llm",
+        context=SimpleNamespace(trace_id=44),
+        attributes={},
+    )
+    failed_inference = SimpleNamespace(
+        name="generate_content test-model",
+        context=SimpleNamespace(trace_id=44),
+        attributes={"gen_ai.conversation.id": "session-failed"},
+    )
+    failed_agent = SimpleNamespace(
+        name="invoke_agent demo",
+        context=SimpleNamespace(trace_id=44),
+        attributes={"gen_ai.conversation.id": "session-failed"},
+    )
+
+    exporter.export(
+        cast(
+            list[ReadableSpan],
+            [failed_llm, failed_inference, failed_agent],
+        )
+    )
+
+    assert exporter.get_finished_spans("session-failed") == [
+        failed_llm,
+        failed_inference,
+        failed_agent,
+    ]
+
+
 @pytest.mark.filterwarnings("ignore::UserWarning")
 def test_build_graph_serializes_veadk_agent_model(tmp_path: Path) -> None:
     _write_agent_app(

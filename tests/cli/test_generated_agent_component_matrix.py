@@ -66,7 +66,7 @@ def _assert_python_files_compile(project: GeneratedProject) -> None:
 
 def _veadk_requirement(extras: set[str]) -> str:
     extras_str = f"[{','.join(sorted(extras))}]" if extras else ""
-    return f"veadk-python{extras_str}>=1.0.5"
+    return f"veadk-python{extras_str}==1.1.5"
 
 
 EXPECTED_LTM_EXTRAS = {
@@ -740,5 +740,5 @@ def test_deeply_nested_agent_types_generate_complete_component_project() -> None
     assert 'KnowledgeBase(backend="context_search"' in agent_py
     assert "OpentelemetryTracer()" in agent_py
     assert _env_keys(files[".env.example"]) == expected_env
-    assert "veadk-python[extensions]>=1.0.5" in files["requirements.txt"]
+    assert "veadk-python[extensions]==1.1.5" in files["requirements.txt"]
     _assert_python_files_compile(project)

@@ -73,12 +73,12 @@ root_agent = Agent(
     tools=[get_city_weather],
 )
 `,
-    "requirements.txt": `veadk-python>=1.0.5
-agentkit-sdk-python
-google-adk
-lark-channel-sdk
-lark-oapi
-starlette<1.0.0
+    "requirements.txt": `veadk-python==1.1.5
+agentkit-sdk-python==0.8.4
+google-adk==2.1.0
+lark-channel-sdk==1.2.0
+lark-oapi==1.7.3
+starlette==0.52.1
 `,
     Dockerfile: `FROM agentkit-prod-public-cn-beijing.cr.volces.com/base/py-simple:python3.12-bookworm-slim-latest
 

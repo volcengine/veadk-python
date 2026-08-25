@@ -72,7 +72,7 @@ _MINIMAL_FRONTEND_GOLDEN = {
     "agents/demo_agent/__init__.py": "ba3abbb199bbae74dc75151a44ba53a557e5f47d509835950ca756346c5a9582",
     "agents/demo_agent/dynamic_a2a.py": "d136f27d6a77439708c415686a3d167f2ad2fb9a96a5f8a0751916b09d46e364",
     ".env.example": "ec3258da9bef4e74333376d8554c265ccb12a4a1e5d4e1e1b0acdf5c9ae93ab6",
-    "requirements.txt": "d04dddbe531e1d4315ea5ea6349bd9eff73815d9e3b4e996448e6c3db96caf15",
+    "requirements.txt": "8086dbc4f7507660b7b0390b8f3fc42d67f67161a83561ec45446cca8ce6fa54",
     "README.md": "a34208314cf9061c02662028d7a9dd97448e6b73c1d732cb4aeaa8f70dbbc684",
 }
 
@@ -83,7 +83,7 @@ _FULL_FRONTEND_GOLDEN = {
     "agents/full_agent/__init__.py": "ba3abbb199bbae74dc75151a44ba53a557e5f47d509835950ca756346c5a9582",
     "agents/full_agent/dynamic_a2a.py": "d136f27d6a77439708c415686a3d167f2ad2fb9a96a5f8a0751916b09d46e364",
     ".env.example": "2bfd3afda4e661fbb71588ec5f0d584ce6682363cacc81b0394f8da09f7977e8",
-    "requirements.txt": "35f70f219bbb2c5f0f22cbc0774d9d8e50d9162727579476ca006604ec0da7e2",
+    "requirements.txt": "f64c2633da7b8f9621c201327f6cbe78ca64fba94718652f5832f8f0cc45ee43",
     "README.md": "1bf4dc889c7d1076f50784d253b53412ba7c49bcb69a5d948f9092dbbecb18ac",
 }
 
@@ -278,6 +278,8 @@ def test_codegen_enables_feishu_without_exposing_lifecycle_code() -> None:
     assert "FeishuChannelExtension" not in app_py
     assert "asynccontextmanager" not in app_py
     assert "veadk-python[extensions]" in files["requirements.txt"]
+    assert "lark-channel-sdk==1.2.0" in files["requirements.txt"]
+    assert "lark-oapi==1.7.3" in files["requirements.txt"]
     assert "FEISHU_APP_ID=" in files[".env.example"]
     assert "FEISHU_APP_SECRET=" in files[".env.example"]
 

@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Button } from "@openai/apps-sdk-ui/components/Button";
 import { ChevronRight, Loader2, X } from "lucide-react";
 import {
   getGeneratedAgentTestTrace,
@@ -31,6 +32,33 @@ interface TNode {
 }
 
 type SpanId = TraceSpan["span_id"];
+type TraceLoadState = "loading" | "ready" | "collecting" | "disabled" | "forbidden" | "error";
+
+const TRACE_COLLECTING_RETRIES = 2;
+const TRACE_COLLECTING_RETRY_MS = 1_500;
+
+function traceErrorState(message: string): Exclude<TraceLoadState, "loading" | "ready"> {
+  if (message.includes("HTTP 425") || message.includes("仍在采集中")) return "collecting";
+  if (message.includes("HTTP 404") || message.includes("未开启链路观测")) return "disabled";
+  if (/HTTP 40[13]/.test(message) || message.includes("无权限读取 APMPlus")) return "forbidden";
+  return "error";
+}
+
+const TRACE_ERROR_MESSAGES: Record<Exclude<TraceLoadState, "loading" | "ready">, string> = {
+  collecting: "调用链路仍在采集中，请稍候。",
+  disabled: "该 Agent 未开启链路观测，请到控制台开启后重试。",
+  forbidden: "当前账号无权读取 APMPlus 调用链路，请联系管理员补充只读权限。",
+  error: "调用链路加载失败，请稍后重试。",
+};
+
+const TRACE_STATUS_LABELS: Record<TraceLoadState, string> = {
+  loading: "加载中",
+  ready: "",
+  collecting: "采集中",
+  disabled: "未开启",
+  forbidden: "权限不足",
+  error: "加载失败",
+};
 
 function buildTree(spans: TraceSpan[]) {
   const byId = new Map<SpanId, TraceSpan>();
@@ -109,29 +137,61 @@ export function TraceDrawer({
   title = "调用链路观测",
 }: TraceDrawerProps) {
   const [spans, setSpans] = useState<TraceSpan[] | null>(null);
-  const [err, setErr] = useState("");
+  const [loadState, setLoadState] = useState<TraceLoadState>("loading");
+  const [loadRevision, setLoadRevision] = useState(0);
   const [collapsed, setCollapsed] = useState<Set<SpanId>>(new Set());
   const [selectedId, setSelectedId] = useState<SpanId | null>(null);
+  const collectingRetries = useRef(0);
+  const sourceKey = `${appName ?? ""}:${testRunId ?? ""}:${sessionId}:${endTimeMs ?? ""}`;
+  const previousSourceKey = useRef(sourceKey);
 
   useEffect(() => {
+    if (previousSourceKey.current !== sourceKey) {
+      previousSourceKey.current = sourceKey;
+      collectingRetries.current = 0;
+    }
     setSpans(null);
-    setErr("");
+    setLoadState("loading");
+    let cancelled = false;
+    let retryTimer: number | undefined;
     let request: Promise<TraceSpan[]>;
     if (testRunId) {
       request = getGeneratedAgentTestTrace(testRunId, sessionId);
     } else if (appName) {
       request = getSessionTrace(appName, sessionId, endTimeMs);
     } else {
-      setErr("缺少调用链路来源");
+      setLoadState("error");
       return;
     }
     request
       .then((s) => {
+        if (cancelled) return;
         setSpans(s);
+        setLoadState("ready");
         setSelectedId(s.length ? s.reduce((a, b) => (a.start_time <= b.start_time ? a : b)).span_id : null);
       })
-      .catch((e) => setErr(e instanceof Error ? e.message : String(e)));
-  }, [appName, endTimeMs, sessionId, testRunId]);
+      .catch((e) => {
+        if (cancelled) return;
+        const state = traceErrorState(e instanceof Error ? e.message : String(e));
+        setLoadState(state);
+        if (state === "collecting" && collectingRetries.current < TRACE_COLLECTING_RETRIES) {
+          collectingRetries.current += 1;
+          retryTimer = window.setTimeout(
+            () => setLoadRevision((value) => value + 1),
+            TRACE_COLLECTING_RETRY_MS,
+          );
+        }
+      });
+    return () => {
+      cancelled = true;
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+    };
+  }, [appName, endTimeMs, loadRevision, sessionId, sourceKey, testRunId]);
+
+  const retry = () => {
+    collectingRetries.current = 0;
+    setLoadRevision((value) => value + 1);
+  };
 
   const { rootNodes, min, total } = useMemo(() => buildTree(spans ?? []), [spans]);
   const rows = useMemo(() => flatten(rootNodes, collapsed), [rootNodes, collapsed]);
@@ -153,7 +213,9 @@ export function TraceDrawer({
           <div>
             <div className="drawer-title">{title}</div>
             <div className="drawer-sub">
-              {spans ? `${spans.length} 个调用 · ${totalMs.toFixed(1)} ms` : "加载中"}
+              {loadState === "ready" && spans
+                ? `${spans.length} 个调用 · ${totalMs.toFixed(1)} ms`
+                : TRACE_STATUS_LABELS[loadState]}
             </div>
           </div>
           <button className="drawer-close" onClick={onClose} aria-label="关闭">
@@ -161,13 +223,31 @@ export function TraceDrawer({
           </button>
         </header>
 
-        {spans == null && !err && (
+        {loadState === "loading" && (
           <div className="drawer-loading">
             <Loader2 className="icon spin" /> 加载调用链路…
           </div>
         )}
-        {err && <div className="error">{err}</div>}
-        {spans && spans.length === 0 && (
+        {loadState === "collecting" && (
+          <div className="drawer-loading" role="status" aria-live="polite">
+            <Loader2 className="icon spin" />
+            <span>{TRACE_ERROR_MESSAGES.collecting}</span>
+            <Button type="button" color="secondary" variant="outline" size="sm" pill={false} onClick={retry}>
+              立即重试
+            </Button>
+          </div>
+        )}
+        {(loadState === "disabled" || loadState === "forbidden" || loadState === "error") && (
+          <div className="drawer-empty trace-state" role="alert">
+            <span>{TRACE_ERROR_MESSAGES[loadState]}</span>
+            {loadState === "error" && (
+              <Button type="button" color="secondary" variant="outline" size="sm" pill={false} onClick={retry}>
+                重新加载
+              </Button>
+            )}
+          </div>
+        )}
+        {loadState === "ready" && spans && spans.length === 0 && (
           <div className="drawer-empty">该会话暂无调用链路（可能尚未产生调用）。</div>
         )}
 

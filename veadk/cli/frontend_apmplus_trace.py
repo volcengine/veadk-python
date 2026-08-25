@@ -49,6 +49,33 @@ _MAX_PAGES = 5
 _TRACE_CANDIDATE_WINDOW_MS = 2 * 60 * 1000
 _TRACE_END_BUFFER_MS = 60 * 1000
 _MAX_TRACE_CANDIDATES = 20
+_QUERY_RETRY_DELAYS_SECONDS = (0.5, 1.0)
+
+
+class APMPlusTracePermissionError(RuntimeError):
+    """Raised when the Studio identity cannot read APMPlus spans."""
+
+
+def _is_permission_error(error: Exception) -> bool:
+    status = getattr(error, "status", None) or getattr(error, "status_code", None)
+    if status in (401, 403, "401", "403"):
+        return True
+    code = str(getattr(error, "code", "") or "").lower()
+    message = str(error).lower()
+    markers = ("accessdenied", "access denied", "forbidden", "unauthorized")
+    return any(marker in code or marker in message for marker in markers)
+
+
+def _list_spans(api: Any, request: ListSpanRequest) -> list[object]:
+    try:
+        response = cast(Any, api.list_span(request))
+    except Exception as error:
+        if _is_permission_error(error):
+            raise APMPlusTracePermissionError(
+                "Studio identity is not allowed to read APMPlus spans"
+            ) from error
+        raise
+    return list(response.span_list or [])
 
 
 def _span_dict(span: object) -> dict[str, Any]:
@@ -116,6 +143,7 @@ def load_apmplus_trace(
     session_id: str,
     invocation_id: str = "",
     now_ms: int | None = None,
+    retry_delays: tuple[float, ...] = _QUERY_RETRY_DELAYS_SECONDS,
 ) -> list[dict[str, Any]]:
     """Return recent APMPlus spans associated with one Studio session."""
     if not session_id:
@@ -159,31 +187,78 @@ def load_apmplus_trace(
             ]
         return session_spans
 
-    if now_ms is not None:
-        candidates = cast(
-            Any,
-            api.list_span(
+    def scan_session_spans(start_time: int, end_time: int) -> list[dict[str, Any]]:
+        session_spans: list[dict[str, Any]] = []
+        for page in range(_MAX_PAGES):
+            rows = _list_spans(
+                api,
                 ListSpanRequest(
                     project_name=project_name or "default",
-                    start_time=end_time - _TRACE_CANDIDATE_WINDOW_MS,
-                    end_time=query_end_time,
+                    start_time=start_time,
+                    end_time=end_time,
                     limit=_PAGE_SIZE,
-                    offset=0,
+                    offset=page * _PAGE_SIZE,
                     min_call_cost_millisecond=0,
                     max_call_cost_millisecond=86_400_000,
                     order="desc",
                     order_by="start_time",
-                    filters=[
-                        FilterForListSpanInput(
-                            key="operation_name",
-                            op="in",
-                            values=["POST /run_sse"],
-                        )
-                    ],
+                ),
+            )
+            session_spans.extend(matching_spans(rows))
+            if len(rows) < _PAGE_SIZE:
+                break
+        return session_spans
+
+    def nearest_trace(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Select the single trace nearest to the requested message end time."""
+        traces: dict[str, list[dict[str, Any]]] = {}
+        for span in spans:
+            trace_id = str(span.get("trace_id") or "")
+            if trace_id:
+                traces.setdefault(trace_id, []).append(span)
+        if not traces:
+            return []
+
+        def distance(trace_spans: list[dict[str, Any]]) -> int:
+            return min(
+                abs(
+                    int(
+                        span.get("start_time_millisecond")
+                        or int(span.get("start_time_microsecond") or 0) // 1_000
+                    )
+                    - end_time
                 )
+                for span in trace_spans
+            )
+
+        return min(traces.values(), key=distance)
+
+    def load_once() -> list[dict[str, Any]]:
+        if now_ms is None:
+            return scan_session_spans(end_time - _QUERY_WINDOW_MS, query_end_time)
+
+        candidates = _list_spans(
+            api,
+            ListSpanRequest(
+                project_name=project_name or "default",
+                start_time=end_time - _TRACE_CANDIDATE_WINDOW_MS,
+                end_time=query_end_time,
+                limit=_PAGE_SIZE,
+                offset=0,
+                min_call_cost_millisecond=0,
+                max_call_cost_millisecond=86_400_000,
+                order="desc",
+                order_by="start_time",
+                filters=[
+                    FilterForListSpanInput(
+                        key="operation_name",
+                        op="in",
+                        values=["POST /run_sse"],
+                    )
+                ],
             ),
         )
-        candidate_spans = [_span_dict(row) for row in candidates.span_list or []]
+        candidate_spans = [_span_dict(row) for row in candidates]
         candidate_spans.sort(
             key=lambda span: abs(
                 int(span.get("start_time_millisecond") or end_time) - end_time
@@ -197,54 +272,41 @@ def load_apmplus_trace(
             )
         )[:_MAX_TRACE_CANDIDATES]
         for trace_id in trace_ids:
-            response = cast(
-                Any,
-                api.list_span(
-                    ListSpanRequest(
-                        project_name=project_name or "default",
-                        start_time=end_time - _QUERY_WINDOW_MS,
-                        end_time=query_end_time,
-                        limit=_PAGE_SIZE,
-                        offset=0,
-                        min_call_cost_millisecond=0,
-                        max_call_cost_millisecond=86_400_000,
-                        order="desc",
-                        order_by="start_time",
-                        filters=[
-                            FilterForListSpanInput(
-                                key="trace_id",
-                                op="in",
-                                values=[trace_id],
-                            )
-                        ],
-                    )
-                ),
-            )
-            session_spans = matching_spans(list(response.span_list or []))
-            if session_spans:
-                return session_spans
-        return []
-
-    session_spans: list[dict[str, Any]] = []
-    for page in range(_MAX_PAGES):
-        response = cast(
-            Any,
-            api.list_span(
+            rows = _list_spans(
+                api,
                 ListSpanRequest(
                     project_name=project_name or "default",
                     start_time=end_time - _QUERY_WINDOW_MS,
                     end_time=query_end_time,
                     limit=_PAGE_SIZE,
-                    offset=page * _PAGE_SIZE,
+                    offset=0,
                     min_call_cost_millisecond=0,
                     max_call_cost_millisecond=86_400_000,
                     order="desc",
                     order_by="start_time",
-                )
-            ),
+                    filters=[
+                        FilterForListSpanInput(
+                            key="trace_id",
+                            op="in",
+                            values=[trace_id],
+                        )
+                    ],
+                ),
+            )
+            session_spans = matching_spans(rows)
+            if session_spans:
+                return session_spans
+
+        # Gateways can rename their HTTP server span. Use a bounded broad scan
+        # before concluding that this session has not arrived in APMPlus.
+        return nearest_trace(
+            scan_session_spans(end_time - _QUERY_WINDOW_MS, query_end_time)
         )
-        rows = list(response.span_list or [])
-        session_spans.extend(matching_spans(rows))
-        if len(rows) < _PAGE_SIZE:
-            break
-    return session_spans
+
+    for attempt in range(len(retry_delays) + 1):
+        spans = load_once()
+        if spans:
+            return spans
+        if attempt < len(retry_delays):
+            time.sleep(retry_delays[attempt])
+    return []

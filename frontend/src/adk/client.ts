@@ -1636,6 +1636,12 @@ export interface RunArgs {
   signal?: AbortSignal;
 }
 
+export const RUN_SSE_EMPTY_RESPONSE_ERROR =
+  formatRunSseError("HTTP 200，SSE 响应体为空。");
+
+export const RUN_SSE_INCOMPLETE_RESPONSE_ERROR =
+  formatRunSseError("HTTP 200，SSE 响应中没有可展示的模型回复。");
+
 /** Stream agent events for one user turn. */
 export async function* runSSE({
   appName,
@@ -1691,46 +1697,60 @@ export async function* runSSE({
       },
     };
   }
-  const res = await apiFetch(
-    "/run_sse",
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        app_name: app,
-        user_id: userId,
-        session_id: sessionId,
-        new_message: { role: "user", parts },
-        streaming: true,
-        ...(platformTools !== undefined
-          ? { platform_tools: [...platformTools] }
-          : {}),
-        custom_metadata: invocationMetadata
-          ? { veadkInvocation: invocationMetadata }
-          : undefined,
-      }),
-      signal,
-    },
-    ep,
-    0,
-  );
+  let res: Response;
+  try {
+    res = await apiFetch(
+      "/run_sse",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          app_name: app,
+          user_id: userId,
+          session_id: sessionId,
+          new_message: { role: "user", parts },
+          streaming: true,
+          ...(platformTools !== undefined
+            ? { platform_tools: [...platformTools] }
+            : {}),
+          custom_metadata: invocationMetadata
+            ? { veadkInvocation: invocationMetadata }
+            : undefined,
+        }),
+        signal,
+      },
+      ep,
+      0,
+    );
+  } catch (error) {
+    if (signal?.aborted || (error as Error)?.name === "AbortError") throw error;
+    throw new Error(formatRunSseError(error));
+  }
   if (!res.ok) {
     const detail = await httpErrorMessage(res, "运行会话失败");
     throw new Error(
       formatRunSseError(`run_sse failed: ${res.status}：${detail}`),
     );
   }
-  for await (const evt of parseSSE(res)) {
-    const event = evt as AdkEvent;
-    if (typeof event.error === "string") event.error = formatRunSseError(event.error);
-    if (typeof event.errorMessage === "string") {
-      event.errorMessage = formatRunSseError(event.errorMessage);
+  let receivedEvent = false;
+  try {
+    for await (const evt of parseSSE(res)) {
+      receivedEvent = true;
+      const event = evt as AdkEvent;
+      if (typeof event.error === "string") event.error = formatRunSseError(event.error);
+      if (typeof event.errorMessage === "string") {
+        event.errorMessage = formatRunSseError(event.errorMessage);
+      }
+      if (typeof event.error_message === "string") {
+        event.error_message = formatRunSseError(event.error_message);
+      }
+      yield event;
     }
-    if (typeof event.error_message === "string") {
-      event.error_message = formatRunSseError(event.error_message);
-    }
-    yield event;
+  } catch (error) {
+    if (signal?.aborted || (error as Error)?.name === "AbortError") throw error;
+    throw new Error(formatRunSseError(error));
   }
+  if (!receivedEvent) throw new Error(RUN_SSE_EMPTY_RESPONSE_ERROR);
 }
 
 export interface DeployAgentkitResult {

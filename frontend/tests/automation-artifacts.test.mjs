@@ -37,7 +37,18 @@ test("generates the basic Studio project and Runtime delivery workflow in fronte
   assert.match(files["app.py"], /run_agentkit_app\(app\)/);
   assert.doesNotMatch(files["app.py"], /AgentkitAgentServerApp/);
   assert.match(files["assistant/agent.py"], /root_agent = Agent\(/);
-  assert.match(files["requirements.txt"], /lark-channel-sdk/);
+  assert.equal(
+    files["requirements.txt"],
+    [
+      "veadk-python==1.1.5",
+      "agentkit-sdk-python==0.8.4",
+      "google-adk==2.1.0",
+      "lark-channel-sdk==1.2.0",
+      "lark-oapi==1.7.3",
+      "starlette==0.52.1",
+      "",
+    ].join("\n"),
+  );
   assert.match(files["README.md"], /python app\.py/);
 
   const workflow = buildRuntimeDeliveryWorkflow({
