@@ -27,7 +27,18 @@ from veadk.cloud.cloud_agent_engine import CloudAgentEngine
 from veadk.integrations.ve_apig.ve_apig import APIGateway
 from veadk.integrations.ve_code_pipeline.ve_code_pipeline import VeCodePipeline
 from veadk.integrations.ve_faas.ve_faas import VeFaaS
-from veadk.utils.cloud_provider import cp_openapi_host, default_region
+from veadk.utils.cloud_provider import (
+    apmplus_otlp_endpoint,
+    cp_openapi_host,
+    default_region,
+)
+
+
+def test_apmplus_otlp_endpoint_uses_region() -> None:
+    assert (
+        apmplus_otlp_endpoint("ap-southeast-1")
+        == "http://apmplus-ap-southeast-1.volces.com:4317"
+    )
 
 
 def test_vefaas_create_function_uses_configured_project() -> None:

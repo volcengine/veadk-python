@@ -113,6 +113,11 @@ def apmplus_openapi_host(provider: CloudProvider) -> str:
     return "open.volcengineapi.com"
 
 
+def apmplus_otlp_endpoint(region: str) -> str:
+    """Return the regional APMPlus OTLP/gRPC endpoint."""
+    return f"http://apmplus-{region}.volces.com:4317"
+
+
 def agentkit_openapi_base(region: str, provider: CloudProvider) -> str:
     """Return the AgentKit OpenAPI base URL used by Studio proxy helpers."""
     if provider == "byteplus":

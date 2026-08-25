@@ -15,19 +15,42 @@
 import os
 
 from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
+from veadk.utils.cloud_provider import (
+    apmplus_openapi_host,
+    cloud_provider_from_env,
+    default_region,
+    normalize_cloud_provider,
+)
 from veadk.utils.logger import get_logger
 from veadk.utils.volcengine_sign import ve_request
 
 logger = get_logger(__name__)
 
 
-def get_apmplus_token(region: str = "") -> str:
+def get_apmplus_token(
+    region: str = "",
+    *,
+    cloud_provider: str | None = None,
+    access_key: str | None = None,
+    secret_key: str | None = None,
+    session_token: str | None = None,
+) -> str:
     logger.info("Fetching APMPlus token...")
-    region = region or os.getenv("REGION") or "cn-beijing"
+    provider = (
+        normalize_cloud_provider(cloud_provider)
+        if cloud_provider is not None
+        else cloud_provider_from_env()
+    )
+    region = region or default_region(provider)
+    host = apmplus_openapi_host(provider)
 
-    access_key = os.getenv("VOLCENGINE_ACCESS_KEY")
-    secret_key = os.getenv("VOLCENGINE_SECRET_KEY")
-    session_token = ""
+    access_key = access_key or os.getenv("VOLCENGINE_ACCESS_KEY")
+    secret_key = secret_key or os.getenv("VOLCENGINE_SECRET_KEY")
+    session_token = (
+        session_token
+        or os.getenv("VOLCENGINE_SESSION_TOKEN")
+        or os.getenv("VOLC_SESSIONTOKEN", "")
+    )
 
     if not (access_key and secret_key):
         # try to get from vefaas iam
@@ -49,7 +72,7 @@ def get_apmplus_token(region: str = "") -> str:
         service="apmplus_server",
         version="2024-07-30",
         region=region,
-        host="open.volcengineapi.com",
+        host=host,
     )
     try:
         api_key = res["data"]["app_key"]
