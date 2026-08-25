@@ -298,3 +298,14 @@ test("system information page lists sandbox tools and the current identity user 
     /\.system-info-loading\s*\{[^}]*(?:background|border|border-radius):/,
   );
 });
+
+test("system information shows environment CodePipeline and Container Registry resources", () => {
+  assert.match(clientSource, /getEnvironmentResources/);
+  assert.match(clientSource, /\/web\/environment-resources/);
+  assert.match(systemInfoSource, /环境构建/);
+  assert.match(systemInfoSource, /CodePipeline Workspace/);
+  assert.match(systemInfoSource, /Container Registry 仓库/);
+  assert.match(systemInfoSource, /environmentResources\.codePipeline\.consoleUrl/);
+  assert.match(systemInfoSource, /environmentResources\.containerRegistry\.consoleUrl/);
+  assert.match(systemInfoSource, /environmentResourcesError/);
+});

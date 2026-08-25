@@ -41,12 +41,8 @@ const environmentStyles = readFileSync(
   new URL("../src/ui/CloudEnvironmentConfigurator.css", import.meta.url),
   "utf8",
 );
-const codeEditorSource = readFileSync(
-  new URL("../src/ui/CodeEditor.tsx", import.meta.url),
-  "utf8",
-);
-const globalStyles = readFileSync(
-  new URL("../src/styles.css", import.meta.url),
+const clientSource = readFileSync(
+  new URL("../src/adk/client.ts", import.meta.url),
   "utf8",
 );
 
@@ -80,6 +76,8 @@ test("normalizes cloud CLI selections with a strict allowlist", () => {
     }),
   );
   assert.deepEqual(normalized.cloudEnvironment, {
+    environmentId: "",
+    environmentVersionId: "",
     cliTools: ["github-cli", "pandoc", "lark-cli"],
   });
 });
@@ -94,6 +92,8 @@ test("preserves a custom Dockerfile while normalizing cloud environment settings
     }),
   );
   assert.deepEqual(normalized.cloudEnvironment, {
+    environmentId: "",
+    environmentVersionId: "",
     cliTools: ["lark-cli"],
     dockerfile: "FROM example.invalid/custom\nRUN echo ready\n",
   });
@@ -137,9 +137,9 @@ test("builds an editable provider-specific Dockerfile preview", () => {
 test("exports cloud environment selections through YAML", () => {
   assert.match(
     configYamlSource,
-    /draft\.cloudEnvironment\?\.cliTools\.length[\s\S]*?o\.cloudEnvironment\s*=\s*\{[\s\S]*?cliTools:/,
+    /draft\.cloudEnvironment\?\.environmentId[\s\S]*?o\.cloudEnvironment\s*=\s*\{[\s\S]*?environmentId:[\s\S]*?environmentVersionId:/,
   );
-  assert.match(configYamlSource, /dockerfile:/);
+  assert.match(configYamlSource, /cliTools:/);
   assert.match(configYamlSource, /return normalizeDraft\(obj\)/);
 });
 
@@ -154,45 +154,24 @@ test("adds an Apps SDK UI environment step before publishing", () => {
     createSource,
     /workspaceMode === "environment"[\s\S]*?<CloudEnvironmentConfigurator/,
   );
-  assert.match(environmentSource, /@openai\/apps-sdk-ui\/components\/Button/);
-  assert.match(environmentSource, /aria-pressed=\{checked\}/);
-  assert.match(environmentSource, /label: "效率"/);
-  assert.match(environmentSource, /label: "研发"/);
-  assert.match(environmentSource, /@openai\/apps-sdk-ui\/components\/Icon/);
-  assert.match(environmentSource, /PlusSm12px/);
-  assert.match(environmentSource, /feishuLogo/);
-  assert.match(environmentSource, /GitHubLogo/);
-  assert.match(environmentSource, /pandocLogo/);
-  assert.match(environmentSource, /CloudEnvironmentAdvancedTrigger/);
-  assert.match(environmentSource, /role="dialog"/);
-  assert.match(environmentSource, /编辑 Dockerfile/);
-  assert.doesNotMatch(environmentSource, /DisclosureChevronIcon/);
-  assert.doesNotMatch(environmentSource, /command:/);
-  assert.doesNotMatch(environmentSource, /可选/);
-  assert.match(environmentSource, /<CodeEditor[\s\S]*?path="Dockerfile"/);
-  assert.match(environmentSource, /高阶配置/);
-  assert.match(environmentSource, /EditCloudEnvironmentIcon/);
-  assert.match(environmentSource, /关闭 Dockerfile 编辑器/);
-  assert.match(environmentSource, /恢复自动生成/);
-  assert.match(environmentSource, /Lark CLI/);
-  assert.match(environmentSource, /GitHub CLI/);
-  assert.match(environmentSource, /Pandoc/);
+  assert.match(environmentSource, /@openai\/apps-sdk-ui\/components\/Select/);
+  assert.match(environmentSource, /listEnvironments\(controller\.signal\)/);
+  assert.match(environmentSource, /disabled: environment\.latestVersion\?\.status !== "available"/);
+  assert.match(environmentSource, /environmentVersionId: versionId/);
+  assert.match(environmentSource, /正在加载环境/);
+  assert.match(environmentSource, /环境加载失败/);
+  assert.match(environmentSource, /暂无可用环境/);
+  assert.match(environmentSource, /selectedEnvironment\.selectedSkills/);
+  assert.doesNotMatch(environmentSource, /CloudEnvironmentAdvancedTrigger/);
+  assert.doesNotMatch(environmentSource, /CodeEditor/);
+  assert.match(createSource, /environment: draft\.cloudEnvironment\?\.environmentId/);
+  assert.match(clientSource, /environment: opts\?\.environment/);
 });
 
-test("keeps confirmation dialogs above the Dockerfile editor", () => {
-  assert.match(
-    environmentStyles,
-    /\.cloud-env-dialog-backdrop\s*\{[\s\S]*?z-index:\s*1250/,
-  );
-  assert.match(
-    globalStyles,
-    /\.studio-confirm-backdrop\s*\{[\s\S]*?z-index:\s*1300/,
-  );
-});
-
-test("uses Dockerfile syntax highlighting in generated and custom editors", () => {
-  assert.match(codeEditorSource, /dockerFile.*legacy-modes\/mode\/dockerfile/);
-  assert.match(codeEditorSource, /file === "dockerfile"/);
-  assert.match(codeEditorSource, /StreamLanguage\.define\(dockerFile\)/);
-  assert.match(environmentSource, /<CodeEditor[\s\S]*?path="Dockerfile"/);
+test("keeps selected environment details responsive", () => {
+  assert.match(environmentStyles, /\.cloud-env-details[\s\S]*?grid-template-columns: repeat\(2/);
+  assert.match(environmentStyles, /@media \(max-width: 700px\)/);
+  assert.match(environmentStyles, /grid-template-columns: minmax\(0, 1fr\)/);
+  assert.match(environmentSource, /searchPlaceholder="搜索环境"/);
+  assert.match(environmentSource, /searchEmptyMessage="没有匹配的环境"/);
 });

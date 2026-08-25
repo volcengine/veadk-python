@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import {
+  getEnvironmentResources,
   getSystemInfo,
   listIdentityUserPools,
   updateCodexSandboxToolModelEnv,
   type CodexSandboxToolKind,
   type IdentityUserPool,
+  type EnvironmentResourcesResponse,
   type SandboxToolInfo,
   type SandboxToolKind,
   type StudioRole,
@@ -88,12 +90,17 @@ export function SystemInfo({
   const [tosAddress, setTosAddress] = useState("");
   const [sandboxTools, setSandboxTools] = useState<SandboxToolInfo[]>([]);
   const [userPools, setUserPools] = useState<IdentityUserPool[]>([]);
+  const [environmentResources, setEnvironmentResources] =
+    useState<EnvironmentResourcesResponse | null>(null);
   const [sandboxLoading, setSandboxLoading] = useState(true);
   const [sandboxError, setSandboxError] = useState("");
   const [userPoolsLoading, setUserPoolsLoading] = useState(true);
   const [userPoolsError, setUserPoolsError] = useState("");
+  const [environmentResourcesLoading, setEnvironmentResourcesLoading] = useState(true);
+  const [environmentResourcesError, setEnvironmentResourcesError] = useState("");
   const [sandboxReloadKey, setSandboxReloadKey] = useState(0);
   const [userPoolsReloadKey, setUserPoolsReloadKey] = useState(0);
+  const [environmentResourcesReloadKey, setEnvironmentResourcesReloadKey] = useState(0);
   const mountedRef = useRef(false);
   const [sandboxToolUpdates, setSandboxToolUpdates] = useState<
     Partial<Record<CodexSandboxToolKind, SandboxToolUpdateState>>
@@ -211,6 +218,28 @@ export function SystemInfo({
     return () => controller.abort();
   }, [isAdmin, localMode, userPoolsReloadKey]);
 
+  useEffect(() => {
+    if (!isAdmin) {
+      setEnvironmentResources(null);
+      setEnvironmentResourcesLoading(false);
+      setEnvironmentResourcesError("");
+      return;
+    }
+    const controller = new AbortController();
+    setEnvironmentResourcesLoading(true);
+    setEnvironmentResourcesError("");
+    void getEnvironmentResources(controller.signal)
+      .then(setEnvironmentResources)
+      .catch((cause) => {
+        if ((cause as Error)?.name === "AbortError") return;
+        setEnvironmentResourcesError(cause instanceof Error ? cause.message : String(cause));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setEnvironmentResourcesLoading(false);
+      });
+    return () => controller.abort();
+  }, [isAdmin, environmentResourcesReloadKey]);
+
   return (
     <div className="system-info-page">
       <header className="system-info-page-header">
@@ -277,6 +306,69 @@ export function SystemInfo({
                   </div>
                 </dl>
               )}
+            </section>
+
+            <section
+              className="system-info-section"
+              aria-labelledby="environment-build-info-title"
+            >
+              <h2 id="environment-build-info-title">环境构建</h2>
+              {environmentResourcesLoading ? (
+                <div className="system-info-loading" role="status" aria-live="polite">
+                  <TextShimmer as="span">正在加载环境构建资源</TextShimmer>
+                </div>
+              ) : environmentResourcesError ? (
+                <div className="system-info-error" role="alert">
+                  <p>{environmentResourcesError}</p>
+                  <button
+                    type="button"
+                    onClick={() => setEnvironmentResourcesReloadKey((key) => key + 1)}
+                  >
+                    重新加载
+                  </button>
+                </div>
+              ) : environmentResources ? (
+                <dl className="system-info-summary">
+                  <div className="system-info-resource-row">
+                    <dt>CodePipeline Workspace</dt>
+                    <dd className="system-info-resource-value">
+                      <ConsoleLink
+                        href={environmentResources.codePipeline.consoleUrl || null}
+                        label="在云控制台中打开 CodePipeline Workspace"
+                      >
+                        {environmentResources.codePipeline.workspaceName ||
+                          environmentResources.codePipeline.workspaceId ||
+                          "首次构建时自动创建"}
+                      </ConsoleLink>
+                    </dd>
+                  </div>
+                  <div className="system-info-resource-row">
+                    <dt>CodePipeline Pipeline</dt>
+                    <dd className="system-info-resource-value">
+                      {environmentResources.codePipeline.pipelineName ||
+                        environmentResources.codePipeline.pipelineId ||
+                        "首次构建时自动创建"}
+                    </dd>
+                  </div>
+                  <div className="system-info-resource-row">
+                    <dt>Container Registry 仓库</dt>
+                    <dd className="system-info-resource-value">
+                      <ConsoleLink
+                        href={environmentResources.containerRegistry.consoleUrl || null}
+                        label="在云控制台中打开 Container Registry 仓库"
+                      >
+                        {environmentResources.containerRegistry.imageRepository ||
+                          [
+                            environmentResources.containerRegistry.registry,
+                            environmentResources.containerRegistry.namespace,
+                            environmentResources.containerRegistry.repository,
+                          ].filter(Boolean).join("/") ||
+                          "首次构建时自动创建"}
+                      </ConsoleLink>
+                    </dd>
+                  </div>
+                </dl>
+              ) : null}
             </section>
 
             <section

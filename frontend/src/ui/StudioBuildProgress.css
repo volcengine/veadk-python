@@ -1,0 +1,148 @@
+.studio-build-progress {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(180px, 0.34fr) minmax(0, 1fr);
+  gap: 20px;
+}
+
+.studio-build-progress__steps {
+  display: grid;
+  align-content: start;
+  gap: 0;
+  margin: 0;
+  padding: 2px 0;
+  list-style: none;
+}
+
+.studio-build-progress__steps li {
+  position: relative;
+  min-height: 42px;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: start;
+  gap: 9px;
+  color: hsl(var(--muted-foreground));
+  font-size: 13px;
+  line-height: 22px;
+}
+
+.studio-build-progress__steps li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 22px;
+  bottom: 0;
+  left: 10px;
+  width: 1px;
+  background: hsl(var(--border));
+}
+
+.studio-build-progress__steps li.is-running,
+.studio-build-progress__steps li.is-succeeded {
+  color: hsl(var(--foreground));
+}
+
+.studio-build-progress__steps li.is-failed { color: hsl(var(--destructive)); }
+
+.studio-build-progress__step-icon {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  color: hsl(var(--muted-foreground));
+}
+
+.studio-build-progress__step-icon svg { width: 15px; height: 15px; }
+.is-succeeded > .studio-build-progress__step-icon { color: hsl(142 60% 34%); }
+.is-running > .studio-build-progress__step-icon { color: hsl(var(--foreground)); }
+.is-failed > .studio-build-progress__step-icon { color: hsl(var(--destructive)); }
+
+.studio-build-progress__spinner { animation: studio-build-spin 900ms linear infinite; }
+
+.studio-build-progress__log {
+  min-width: 0;
+  min-height: 300px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid hsl(var(--border));
+  border-radius: 10px;
+  background: hsl(var(--panel));
+}
+
+.studio-build-progress__log > header {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 10px 7px 14px;
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+.studio-build-progress__log > header > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.studio-build-progress__log strong {
+  color: hsl(var(--foreground));
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 18px;
+}
+
+.studio-build-progress__log header span {
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.studio-build-progress__log header button svg { width: 14px; height: 14px; }
+
+.studio-build-progress__log pre,
+.studio-build-progress__log-empty {
+  min-height: 0;
+  flex: 1;
+  margin: 0;
+  padding: 14px;
+  overflow: auto;
+  color: hsl(var(--foreground));
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.studio-build-progress__log-empty {
+  display: grid;
+  place-items: center;
+  color: hsl(var(--muted-foreground));
+  font-family: inherit;
+  font-size: 12px;
+  text-align: center;
+}
+
+.studio-build-progress__log-empty.is-error { color: hsl(var(--destructive)); }
+
+@keyframes studio-build-spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 640px) {
+  .studio-build-progress { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .studio-build-progress__steps { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .studio-build-progress__steps li {
+    min-height: auto;
+    grid-template-columns: 18px minmax(0, 1fr);
+    gap: 6px;
+    font-size: 11.5px;
+    line-height: 18px;
+  }
+  .studio-build-progress__steps li:not(:last-child)::after { display: none; }
+  .studio-build-progress__step-icon { width: 18px; height: 18px; }
+  .studio-build-progress__log { min-height: 280px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .studio-build-progress__spinner { animation: none; }
+}

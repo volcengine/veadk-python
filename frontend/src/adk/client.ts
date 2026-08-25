@@ -21,6 +21,7 @@ import type { AgentProject } from "../create/project";
 import type {
   AgentDraft,
   NetworkConfig,
+  SelectedSkill,
 } from "../create/types";
 import type { IssueFeedbackReport } from "./issueFeedback";
 import {
@@ -2015,6 +2016,95 @@ export interface SystemInfoResponse {
   sandboxTools: SandboxToolInfo[];
 }
 
+export type EnvironmentOperatingSystem = "ubuntu-22.04" | "ubuntu-24.04";
+export type EnvironmentLanguage = "python-3.10" | "python-3.12";
+export type EnvironmentBuildStatus =
+  | "preparing"
+  | "queued"
+  | "building"
+  | "scanning"
+  | "available"
+  | "failed";
+
+export interface EnvironmentBuildResource {
+  source: "provided" | "managed";
+  workspaceId?: string;
+  workspaceName?: string;
+  pipelineId?: string;
+  pipelineName?: string;
+  registry?: string;
+  namespace?: string;
+  repository?: string;
+  imageRepository?: string;
+  consoleUrl: string;
+}
+
+export type EnvironmentBuildStepStatus =
+  | "pending"
+  | "running"
+  | "succeeded"
+  | "failed";
+
+export interface EnvironmentBuildStep {
+  key: string;
+  label: string;
+  status: EnvironmentBuildStepStatus;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+export interface EnvironmentBuildVersion {
+  versionId: string;
+  status: EnvironmentBuildStatus;
+  image: string;
+  error: string;
+  runId: string;
+  currentStep: string;
+  steps: EnvironmentBuildStep[];
+  progressError: string;
+  logTail: string;
+  logTruncated: boolean;
+  logUpdatedAt: string | null;
+  logError: string;
+  createdAt: string;
+  updatedAt: string;
+  resources: {
+    codePipeline?: EnvironmentBuildResource;
+    containerRegistry?: EnvironmentBuildResource;
+  } | null;
+}
+
+export interface StudioEnvironment {
+  id: string;
+  name: string;
+  description: string;
+  operatingSystem: EnvironmentOperatingSystem;
+  language: EnvironmentLanguage;
+  optionIds: string[];
+  selectedSkills: SelectedSkill[];
+  dockerfile: string;
+  createdAt: string;
+  updatedAt: string;
+  latestVersion: EnvironmentBuildVersion | null;
+}
+
+export interface EnvironmentInput {
+  name: string;
+  description: string;
+  operatingSystem: EnvironmentOperatingSystem;
+  language: EnvironmentLanguage;
+  optionIds: string[];
+  selectedSkills: SelectedSkill[];
+  dockerfile: string;
+}
+
+export interface EnvironmentResourcesResponse {
+  provider: CloudProvider;
+  region: string;
+  codePipeline: EnvironmentBuildResource;
+  containerRegistry: EnvironmentBuildResource;
+}
+
 export interface SandboxToolModelEnvUpdateResponse {
   kind: CodexSandboxToolKind;
   toolId: string;
@@ -2075,6 +2165,220 @@ export async function getSystemInfo(
   return {
     storage: { tosAddress: payload.storage.tosAddress },
     sandboxTools,
+  };
+}
+
+const ENVIRONMENT_BUILD_STATUSES = new Set<EnvironmentBuildStatus>([
+  "preparing",
+  "queued",
+  "building",
+  "scanning",
+  "available",
+  "failed",
+]);
+
+function environmentBuildVersion(value: unknown): EnvironmentBuildVersion | null {
+  if (value === null) return null;
+  if (!value || typeof value !== "object") {
+    throw new Error("环境构建响应格式无效");
+  }
+  const candidate = value as EnvironmentBuildVersion;
+  if (
+    typeof candidate.versionId !== "string" ||
+    !ENVIRONMENT_BUILD_STATUSES.has(candidate.status) ||
+    typeof candidate.image !== "string" ||
+    typeof candidate.error !== "string" ||
+    typeof candidate.createdAt !== "string" ||
+    typeof candidate.updatedAt !== "string" ||
+    (candidate.resources !== null && typeof candidate.resources !== "object")
+  ) {
+    throw new Error("环境构建响应格式无效");
+  }
+  const steps = Array.isArray(candidate.steps)
+    ? candidate.steps.map((step) => {
+      if (
+        !step ||
+        typeof step !== "object" ||
+        typeof step.key !== "string" ||
+        typeof step.label !== "string" ||
+        !["pending", "running", "succeeded", "failed"].includes(step.status) ||
+        (step.startedAt !== null && typeof step.startedAt !== "string") ||
+        (step.finishedAt !== null && typeof step.finishedAt !== "string")
+      ) {
+        throw new Error("环境构建步骤响应格式无效");
+      }
+      return step;
+    })
+    : [];
+  return {
+    ...candidate,
+    runId: typeof candidate.runId === "string" ? candidate.runId : "",
+    currentStep: typeof candidate.currentStep === "string" ? candidate.currentStep : "",
+    steps,
+    progressError: typeof candidate.progressError === "string" ? candidate.progressError : "",
+    logTail: typeof candidate.logTail === "string" ? candidate.logTail : "",
+    logTruncated: candidate.logTruncated === true,
+    logUpdatedAt: typeof candidate.logUpdatedAt === "string" ? candidate.logUpdatedAt : null,
+    logError: typeof candidate.logError === "string" ? candidate.logError : "",
+  };
+}
+
+function studioEnvironment(value: unknown): StudioEnvironment {
+  if (!value || typeof value !== "object") {
+    throw new Error("环境响应格式无效");
+  }
+  const candidate = value as StudioEnvironment;
+  if (
+    typeof candidate.id !== "string" ||
+    typeof candidate.name !== "string" ||
+    typeof candidate.description !== "string" ||
+    (candidate.operatingSystem !== "ubuntu-22.04" &&
+      candidate.operatingSystem !== "ubuntu-24.04") ||
+    (candidate.language !== "python-3.10" && candidate.language !== "python-3.12") ||
+    !Array.isArray(candidate.optionIds) ||
+    !candidate.optionIds.every((item) => typeof item === "string") ||
+    (candidate.selectedSkills !== undefined && !Array.isArray(candidate.selectedSkills)) ||
+    typeof candidate.dockerfile !== "string" ||
+    typeof candidate.createdAt !== "string" ||
+    typeof candidate.updatedAt !== "string"
+  ) {
+    throw new Error("环境响应格式无效");
+  }
+  return {
+    ...candidate,
+    selectedSkills: candidate.selectedSkills ?? [],
+    latestVersion: environmentBuildVersion(candidate.latestVersion),
+  };
+}
+
+export async function listEnvironments(signal?: AbortSignal): Promise<StudioEnvironment[]> {
+  const response = await apiFetch("/web/environments", { signal });
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, "加载环境失败"));
+  }
+  const payload = (await response.json()) as { items?: unknown };
+  if (!Array.isArray(payload.items)) throw new Error("环境列表响应格式无效");
+  return payload.items.map(studioEnvironment);
+}
+
+async function writeEnvironment(
+  path: string,
+  method: "POST" | "PATCH",
+  input: EnvironmentInput,
+  signal?: AbortSignal,
+): Promise<StudioEnvironment> {
+  const response = await apiFetch(path, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, "保存环境失败"));
+  }
+  return studioEnvironment(await response.json());
+}
+
+export function createEnvironment(
+  input: EnvironmentInput,
+  signal?: AbortSignal,
+): Promise<StudioEnvironment> {
+  return writeEnvironment("/web/environments", "POST", input, signal);
+}
+
+export function updateEnvironment(
+  environmentId: string,
+  input: EnvironmentInput,
+  signal?: AbortSignal,
+): Promise<StudioEnvironment> {
+  return writeEnvironment(
+    `/web/environments/${encodeURIComponent(environmentId)}`,
+    "PATCH",
+    input,
+    signal,
+  );
+}
+
+export async function deleteEnvironment(
+  environmentId: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await apiFetch(
+    `/web/environments/${encodeURIComponent(environmentId)}`,
+    { method: "DELETE", signal },
+  );
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, "删除环境失败"));
+  }
+}
+
+export async function buildEnvironment(
+  environmentId: string,
+  signal?: AbortSignal,
+): Promise<EnvironmentBuildVersion> {
+  const response = await apiFetch(
+    `/web/environments/${encodeURIComponent(environmentId)}/build`,
+    { method: "POST", signal },
+  );
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, "启动环境构建失败"));
+  }
+  const result = environmentBuildVersion(await response.json());
+  if (!result) throw new Error("环境构建响应格式无效");
+  return result;
+}
+
+export async function getEnvironmentBuild(
+  environmentId: string,
+  versionId: string,
+  options: { includeLogs?: boolean; signal?: AbortSignal } = {},
+): Promise<EnvironmentBuildVersion> {
+  const query = options.includeLogs ? "?includeLogs=true" : "";
+  const response = await apiFetch(
+    `/web/environments/${encodeURIComponent(environmentId)}/builds/${encodeURIComponent(versionId)}${query}`,
+    { signal: options.signal },
+  );
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, "读取环境构建详情失败"));
+  }
+  const result = environmentBuildVersion(await response.json());
+  if (!result) throw new Error("环境构建响应格式无效");
+  return result;
+}
+
+function environmentBuildResource(value: unknown): EnvironmentBuildResource {
+  if (!value || typeof value !== "object") {
+    throw new Error("环境资源响应格式无效");
+  }
+  const candidate = value as EnvironmentBuildResource;
+  if (
+    (candidate.source !== "provided" && candidate.source !== "managed") ||
+    typeof candidate.consoleUrl !== "string"
+  ) {
+    throw new Error("环境资源响应格式无效");
+  }
+  return candidate;
+}
+
+export async function getEnvironmentResources(
+  signal?: AbortSignal,
+): Promise<EnvironmentResourcesResponse> {
+  const response = await apiFetch("/web/environment-resources", { signal });
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, "加载环境构建资源失败"));
+  }
+  const payload = (await response.json()) as Partial<EnvironmentResourcesResponse>;
+  if (
+    (payload.provider !== "volcengine" && payload.provider !== "byteplus") ||
+    typeof payload.region !== "string"
+  ) {
+    throw new Error("环境资源响应格式无效");
+  }
+  return {
+    provider: payload.provider,
+    region: payload.region,
+    codePipeline: environmentBuildResource(payload.codePipeline),
+    containerRegistry: environmentBuildResource(payload.containerRegistry),
   };
 }
 
@@ -2537,6 +2841,10 @@ export async function deployAgentkitProject(
     resources?: DeployResources;
     source?: DeploymentSource;
     harnessSidecar?: AgentDraft["harnessSidecar"];
+    environment?: {
+      environmentId: string;
+      environmentVersionId: string;
+    };
   },
 ): Promise<DeployAgentkitResult> {
   const taskId = opts?.taskId;
@@ -2587,6 +2895,7 @@ export async function deployAgentkitProject(
               : { kind: "inlineFiles" }
           ),
           harnessSidecar: opts?.harnessSidecar,
+          environment: opts?.environment,
         }),
       },
       {},

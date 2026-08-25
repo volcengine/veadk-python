@@ -97,6 +97,7 @@ import {
   type AgentType,
   type MyAgentCardData,
 } from "./ui/MyAgents";
+import { EnvironmentCenter } from "./ui/EnvironmentCenter";
 import { Applications, type ApplicationId } from "./ui/Applications";
 import { CronJobs } from "./cronjobs/CronJobs";
 import { getAutomation } from "./automations/registry";
@@ -352,6 +353,7 @@ type StudioPageId =
   | "applications"
   | "cronjobs"
   | "agents"
+  | "environments"
   | "agent-detail"
   | "sandbox-agent-detail"
   | "sandbox-agent-workspace"
@@ -1980,6 +1982,7 @@ export default function App() {
   const [feedbackCasePreview, setFeedbackCasePreview] =
     useState<AgentFeedbackCase | null>(null);
   const [myAgents, setMyAgents] = useState(false);
+  const [environmentView, setEnvironmentView] = useState(false);
   const [pageStack, setPageStack] = useState<StudioPageStackEntry[]>([]);
   const activeStackEntry = pageStack[pageStack.length - 1];
   const activeStackPage = activeStackEntry?.page;
@@ -4540,6 +4543,7 @@ export default function App() {
     setSandboxAgentDetailTarget(null);
     setSandboxAgentWorkspace(null);
     setMyAgents(false);
+    setEnvironmentView(false);
     setPageStack([]);
     setApplicationsView(null);
     setCronJobsView(false);
@@ -5690,6 +5694,7 @@ export default function App() {
     setAddMenu(false);
     setSearchView(false);
     setIntelligentDeployment(null);
+    setEnvironmentView(false);
     startNewChat();
   };
 
@@ -5825,6 +5830,31 @@ export default function App() {
     setFocusedDeploymentTaskId("");
     setFocusedWorkspaceAgentId("");
     setMyAgents(true);
+    setEnvironmentView(false);
+    setPageStack([]);
+    setApplicationsView(null);
+    setCronJobsView(false);
+    setError("");
+  };
+
+  const openEnvironmentPage = () => {
+    setPlatformFeedbackOrigin(null);
+    if (sandboxSession) exitSandboxSession();
+    viewSidRef.current = "";
+    setSessionId("");
+    setCreateView(null);
+    setSkillCenter(false);
+    setAddAgent(false);
+    setAddMenu(false);
+    setSearchView(false);
+    setManageAgents(false);
+    setAgentDetailTarget(null);
+    setSandboxAgentDetailTarget(null);
+    setSandboxAgentWorkspace(null);
+    setFocusedDeploymentTaskId("");
+    setFocusedWorkspaceAgentId("");
+    setMyAgents(false);
+    setEnvironmentView(true);
     setPageStack([]);
     setApplicationsView(null);
     setCronJobsView(false);
@@ -5846,6 +5876,7 @@ export default function App() {
     setSandboxAgentDetailTarget(null);
     setSandboxAgentWorkspace(null);
     setMyAgents(false);
+    setEnvironmentView(false);
     setPageStack([]);
     setCronJobsView(false);
     setApplicationsView("catalog");
@@ -5867,6 +5898,7 @@ export default function App() {
     setSandboxAgentDetailTarget(null);
     setSandboxAgentWorkspace(null);
     setMyAgents(false);
+    setEnvironmentView(false);
     setPageStack([]);
     setApplicationsView(null);
     setCronJobsView(true);
@@ -5928,6 +5960,8 @@ export default function App() {
       ? activeStackPage
       : platformFeedbackOrigin !== null
         ? "feedback"
+        : environmentView
+          ? "environments"
         : skillCenter
           ? "library"
           : cronJobsView
@@ -5952,6 +5986,8 @@ export default function App() {
     ? null
     : platformFeedbackOrigin !== null
       ? "feedback"
+      : environmentView
+        ? "environments"
       : skillCenter
         ? "library"
         : cronJobsView
@@ -6022,6 +6058,7 @@ export default function App() {
           setSandboxAgentDetailTarget(null);
           setSandboxAgentWorkspace(null);
           setMyAgents(false);
+          setEnvironmentView(false);
           setPageStack([]);
           setApplicationsView(null);
           setCronJobsView(false);
@@ -6045,6 +6082,7 @@ export default function App() {
           setSandboxAgentDetailTarget(null);
           setSandboxAgentWorkspace(null);
           setMyAgents(false);
+          setEnvironmentView(false);
           setPageStack([]);
           setApplicationsView(null);
           setCronJobsView(false);
@@ -6065,6 +6103,7 @@ export default function App() {
           setSandboxAgentDetailTarget(null);
           setSandboxAgentWorkspace(null);
           setMyAgents(false);
+          setEnvironmentView(false);
           setPageStack([]);
           setApplicationsView(null);
           setCronJobsView(false);
@@ -6089,6 +6128,7 @@ export default function App() {
           setSandboxAgentDetailTarget(null);
           setSandboxAgentWorkspace(null);
           setMyAgents(false);
+          setEnvironmentView(false);
           setPageStack([]);
           setApplicationsView(null);
           setCronJobsView(false);
@@ -6098,6 +6138,7 @@ export default function App() {
           setError("");
         })}
         onMyAgents={() => requestIntelligentNavigation(openMyAgentsPage)}
+        onEnvironment={() => requestIntelligentNavigation(openEnvironmentPage)}
         onApplications={() => requestIntelligentNavigation(openApplicationsPage)}
         onCronJobs={() => requestIntelligentNavigation(openCronJobsPage)}
         onSystemInfo={() => requestIntelligentNavigation(() => {
@@ -6132,6 +6173,7 @@ export default function App() {
           setSandboxAgentDetailTarget(null);
           setSandboxAgentWorkspace(null);
           setMyAgents(false);
+          setEnvironmentView(false);
           setPageStack([]);
           setApplicationsView(null);
           setCronJobsView(false);
@@ -6494,6 +6536,8 @@ export default function App() {
                 initialModule={issueFeedbackModuleForPage(platformFeedbackOrigin)}
                 onSubmit={submitPlatformIssueFeedback}
               />
+            ) : environmentView ? (
+              <EnvironmentCenter cloudProvider={cloudProvider} />
             ) : cronJobsView ? (
               <CronJobs cloudProvider={cloudProvider} />
             ) : applicationsView === "coding-agents" ? (

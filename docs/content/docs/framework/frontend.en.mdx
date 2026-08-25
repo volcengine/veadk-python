@@ -267,6 +267,34 @@ resources use the selected deployment region. The deployed Function records the
 selected AgentKit Sandbox region so temporary chat and Skill-creation sessions
 query the same region as their CodeEnv Tools.
 
+### Environment image builds
+
+The Studio Environment page stores environment definitions, Dockerfiles, build
+versions, log metadata, and image references in the private Studio TOS bucket.
+Creating or saving an environment starts a CodePipeline image build and pushes
+the result to Container Registry. The first build creates or reuses managed
+workspace, pipeline, and repository resources by default. Volcengine builds use
+the Aliyun PyPI mirror, Huawei Cloud Python source mirror, and npmmirror for
+Playwright browsers; BytePlus builds use the corresponding official sources.
+Cross-version Python combinations compile pinned source releases instead of
+depending on GitHub-hosted binaries.
+With the account-stable default TOS bucket, Studio reuses the account's
+`agentkit-cli-<account-id>` CR instance and creates the
+`runtime-environments/base-images` repository inside it.
+
+Existing resources can be supplied independently when deploying Studio:
+
+```bash
+veadk studio deploy \
+  --vefaas-app-name <app-name> \
+  --environment-cp-workspace <workspace-id-or-name> \
+  --environment-cr-repository <registry/namespace/repository>
+```
+
+These settings are accepted only as CLI flags, not as user environment-variable
+inputs. The deployed System Information page shows the resolved CodePipeline and
+Container Registry names, ownership mode, and provider console links.
+
 To update an existing Studio deployment, run this command from a VeADK source
 checkout:
 

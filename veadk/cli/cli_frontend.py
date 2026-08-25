@@ -216,6 +216,36 @@ _STUDIO_STORAGE_ENV_KEYS = (
     "DATABASE_TOS_REGION",
     "DATABASE_TOS_ENDPOINT",
 )
+STUDIO_ENVIRONMENT_CP_WORKSPACE_ENV = "VEADK_STUDIO_ENVIRONMENT_CP_WORKSPACE"
+STUDIO_ENVIRONMENT_CR_REPOSITORY_ENV = "VEADK_STUDIO_ENVIRONMENT_CR_REPOSITORY"
+
+
+def _studio_environment_resource_environment(
+    *,
+    cp_workspace: str | None,
+    cr_repository: str | None,
+) -> dict[str, str]:
+    """Build the allow-listed runtime environment for Environment resources."""
+    environment: dict[str, str] = {}
+    normalized_cp_workspace = (cp_workspace or "").strip()
+    normalized_cr_repository = (cr_repository or "").strip()
+    if normalized_cr_repository:
+        repository_parts = normalized_cr_repository.split("/")
+        if len(repository_parts) != 3 or any(
+            not part.strip()
+            or part.strip() in {".", ".."}
+            or any(character.isspace() for character in part)
+            for part in repository_parts
+        ):
+            raise click.BadParameter(
+                "must use registry/namespace/repository format",
+                param_hint="--environment-cr-repository",
+            )
+    if normalized_cp_workspace:
+        environment[STUDIO_ENVIRONMENT_CP_WORKSPACE_ENV] = normalized_cp_workspace
+    if normalized_cr_repository:
+        environment[STUDIO_ENVIRONMENT_CR_REPOSITORY_ENV] = normalized_cr_repository
+    return environment
 
 
 def _adapt_migration_model_envs(
@@ -2145,6 +2175,21 @@ def _run_frontend_server(
             raise HTTPException(status_code=401, detail="Studio identity is required")
         return principal.owner_id if principal is not None else "local"
 
+    from frontend.server.environments import (
+        create_environment_service,
+        mount_environment_routes,
+    )
+
+    def _environment_owner(request: Request) -> str:
+        principal = _require_agent_management(request)
+        return principal.owner_id if principal is not None else "local"
+
+    environment_service = create_environment_service(
+        provider=provider,
+        resolve_credentials=_resolve_ve_credentials,
+    )
+    mount_environment_routes(app, environment_service, _environment_owner)
+
     mount_video_routes(
         app,
         service=build_video_service(
@@ -3212,6 +3257,7 @@ def _run_frontend_server(
 
     from veadk.cli.generated_agent_codegen import (
         AgentDraft,
+        EnvironmentSkillManifestEntry as GeneratedEnvironmentSkillManifestEntry,
         GeneratedAgentProjectRequest,
         GeneratedAgentTestRunRequest,
         GeneratedFile,
@@ -3765,6 +3811,36 @@ def _run_frontend_server(
                 detail=f"SkillSpace package download error: {error}",
             ) from error
 
+    environment_service.set_skillspace_resolver(
+        _resolve_skillspace_skill_materialization
+    )
+
+    async def _resolve_draft_environment(
+        draft: AgentDraft,
+        owner_id: str,
+    ) -> AgentDraft:
+        environment_id = draft.cloudEnvironment.environmentId.strip()
+        if not environment_id:
+            return draft
+        resolved = await environment_service.resolve_for_agent(
+            owner_id or "local",
+            environment_id,
+            draft.cloudEnvironment.environmentVersionId,
+        )
+        cloud_environment = draft.cloudEnvironment.model_copy(
+            update={
+                "environmentVersionId": resolved.version_id,
+                "resolvedImage": resolved.image,
+                "environmentSkills": [
+                    GeneratedEnvironmentSkillManifestEntry.model_validate(
+                        item.model_dump()
+                    )
+                    for item in resolved.skills
+                ],
+            }
+        )
+        return draft.model_copy(update={"cloudEnvironment": cloud_environment})
+
     def _draft_for_debug_run(draft: AgentDraft) -> AgentDraft:
         """Return a debug-safe draft by omitting stdio MCP tools recursively."""
         return draft.model_copy(
@@ -3783,6 +3859,7 @@ def _run_frontend_server(
         data: dict,
         *,
         debug: bool,
+        owner_id: str = "local",
     ) -> tuple[GeneratedProject, AgentDraft]:
         try:
             if debug:
@@ -3790,6 +3867,7 @@ def _run_frontend_server(
             else:
                 req = GeneratedAgentProjectRequest.model_validate(data)
             draft = normalize_and_validate_draft(req.draft)
+            draft = await _resolve_draft_environment(draft, owner_id)
             if debug:
                 draft = _draft_for_debug_run(draft)
                 validate_debug_policy(
@@ -3820,10 +3898,12 @@ def _run_frontend_server(
         data: dict,
         *,
         debug: bool,
+        owner_id: str = "local",
     ) -> GeneratedProject:
         project, _ = await _generate_project_and_draft_from_request(
             data,
             debug=debug,
+            owner_id=owner_id,
         )
         return project
 
@@ -4034,9 +4114,13 @@ def _run_frontend_server(
 
     @app.post("/web/generated-agent-projects")
     async def _generate_agent_project(request: Request):
-        _require_agent_management(request)
+        principal = _require_agent_management(request)
         data = await request.json()
-        project = await _generate_project_from_request(data, debug=False)
+        project = await _generate_project_from_request(
+            data,
+            debug=False,
+            owner_id=principal.owner_id if principal else "local",
+        )
         return project.model_dump()
 
     @app.post("/web/github-delivery/source-sync")
@@ -4355,6 +4439,7 @@ def _run_frontend_server(
             project, draft = await _generate_project_and_draft_from_request(
                 data,
                 debug=True,
+                owner_id=owner_id or "local",
             )
             sidecar_env: dict[str, str] = {}
             sidecar_plan: dict[str, Any] | None = None
@@ -4412,6 +4497,15 @@ def _run_frontend_server(
                 }
             temp_dir = tempfile.mkdtemp(prefix="veadk_generated_agent_test_")
             app_name = _write_generated_project(project, temp_dir)
+            staged_environment_skills = ""
+            if draft.cloudEnvironment.environmentId:
+                skill_root = await environment_service.stage_skill_files_for_agent(
+                    owner_id or "local",
+                    draft.cloudEnvironment.environmentId,
+                    draft.cloudEnvironment.environmentVersionId,
+                    PathlibPath(temp_dir) / ".veadk-environment" / "skills",
+                )
+                staged_environment_skills = str(skill_root)
             port = _free_local_port()
             base_url = f"http://127.0.0.1:{port}"
             stdout_path = PathlibPath(temp_dir) / "runner.stdout.log"
@@ -4428,6 +4522,8 @@ def _run_frontend_server(
                 str(port),
             ]
             runner_env = _safe_runner_env()
+            if staged_environment_skills:
+                runner_env["VEADK_ENVIRONMENT_SKILLS_DIR"] = staged_environment_skills
             runner_env.update(runtime_envs)
             for key in list(runner_env):
                 if key.startswith("HARNESS_"):
@@ -5003,6 +5099,27 @@ def _run_frontend_server(
         create_evaluation_sets = data.get("createEvaluationSets", True)
         author = principal.display_name if principal else ""
         owner_id = principal.owner_id if principal else ""
+        environment_ref = (
+            data.get("environment") if isinstance(data.get("environment"), dict) else {}
+        )
+        environment_id = str(
+            environment_ref.get("environmentId") or data.get("environmentId") or ""
+        ).strip()
+        environment_version_id = str(
+            environment_ref.get("environmentVersionId")
+            or data.get("environmentVersionId")
+            or ""
+        ).strip()
+        resolved_environment = None
+        if environment_id:
+            try:
+                resolved_environment = await environment_service.resolve_for_agent(
+                    owner_id or "local",
+                    environment_id,
+                    environment_version_id,
+                )
+            except (LookupError, ValueError) as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
         if not agent_name:
             raise HTTPException(status_code=400, detail="Agent name is required")
         if trusted_intelligent_source and (
@@ -5030,6 +5147,29 @@ def _run_frontend_server(
                 )
         elif not files:
             raise HTTPException(status_code=400, detail="No files provided")
+        if resolved_environment is not None:
+            dockerfile = next(
+                (
+                    str(item.get("content") or "")
+                    for item in files
+                    if isinstance(item, dict)
+                    and str(item.get("path") or "").strip() == "Dockerfile"
+                ),
+                "",
+            )
+            first_from = next(
+                (
+                    line.split(None, 1)[1].strip()
+                    for line in dockerfile.splitlines()
+                    if line.strip().upper().startswith("FROM ")
+                ),
+                "",
+            )
+            if first_from != resolved_environment.image:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Agent 构建文件与所选环境版本不匹配，请重新生成项目。",
+                )
         if not isinstance(create_evaluation_sets, bool):
             raise HTTPException(
                 status_code=400,
@@ -5134,6 +5274,35 @@ def _run_frontend_server(
                 deployment_resource_tag_values = deployment_resource_tags(
                     data.get("resources")
                 )
+                if resolved_environment is not None:
+                    environment_resources = resolved_environment.resources
+                    registry_resource = getattr(
+                        environment_resources, "container_registry", None
+                    )
+                    if registry_resource is None:
+                        raise ValueError("所选环境版本缺少容器镜像仓库信息。")
+                    configured_registry = str(
+                        deployment_resource_config.get("cr_instance_name") or ""
+                    ).strip()
+                    configured_namespace = str(
+                        deployment_resource_config.get("cr_namespace_name") or ""
+                    ).strip()
+                    if (
+                        configured_registry
+                        and configured_registry != registry_resource.registry
+                    ):
+                        raise ValueError("所选部署 CR 与环境镜像所在 CR 不一致。")
+                    if (
+                        configured_namespace
+                        and configured_namespace != registry_resource.namespace
+                    ):
+                        raise ValueError("所选部署 CR 命名空间与环境镜像不一致。")
+                    deployment_resource_config["cr_instance_name"] = (
+                        registry_resource.registry
+                    )
+                    deployment_resource_config["cr_namespace_name"] = (
+                        registry_resource.namespace
+                    )
         except (TypeError, ValueError) as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         except Exception as e:
@@ -10867,6 +11036,18 @@ def _resolve_studio_cloud_credentials(
     "is auto-created with the frontend deploy policy.",
 )
 @click.option(
+    "--environment-cp-workspace",
+    default=None,
+    help="Existing CP workspace ID or name for Studio Environment image builds. "
+    "When omitted, Studio creates or reuses a managed workspace.",
+)
+@click.option(
+    "--environment-cr-repository",
+    default=None,
+    help="Existing CR repository as registry/namespace/repository for Studio "
+    "Environment images. When omitted, Studio creates or reuses managed CR resources.",
+)
+@click.option(
     "--vefaas-application-template-id",
     "--application-template-id",
     default=None,
@@ -11021,6 +11202,8 @@ def frontend_deploy(
     region: str | None,
     project: str,
     iam_role: str | None,
+    environment_cp_workspace: str | None,
+    environment_cr_repository: str | None,
     vefaas_application_template_id: str | None,
     gateway_name: str,
     gateway_service_name: str,
@@ -11090,6 +11273,10 @@ def frontend_deploy(
         provider_id = "byteplus"
     else:
         provider_id = cloud_provider_from_env()
+    studio_environment_resource_environment = _studio_environment_resource_environment(
+        cp_workspace=environment_cp_workspace,
+        cr_repository=environment_cr_repository,
+    )
     region = region or default_region(provider_id)
     os.environ["CLOUD_PROVIDER"] = provider_id
     os.environ["AGENTKIT_CLOUD_PROVIDER"] = provider_id
@@ -11600,6 +11787,7 @@ def frontend_deploy(
             studio_account_id_resolution_error
         )
     veadk_environments.update(studio_storage_environment)
+    veadk_environments.update(studio_environment_resource_environment)
     if client_secret:
         veadk_environments["OAUTH2_CLIENT_SECRET"] = client_secret
 

@@ -14,6 +14,10 @@ const createStyles = readFileSync(
   new URL("../src/create/CustomCreate.css", import.meta.url),
   "utf8",
 );
+const skillSourcePickerSource = readFileSync(
+  new URL("../src/ui/SkillSourcePicker.tsx", import.meta.url),
+  "utf8",
+);
 const catalogSource = readFileSync(
   new URL("../src/create/veadkCatalog.ts", import.meta.url),
   "utf8",
@@ -720,38 +724,38 @@ test("skill sources open in a fixed-height dialog above a six-row selected list"
     createSource,
     /从 Skill Hub、本地文件或 AgentKit SkillSpace 添加技能/,
   );
-  assert.match(createSource, /label: "AgentKit Skills 中心"/);
-  assert.doesNotMatch(createSource, /label: "SkillSpace"/);
-  assert.match(createSource, /label: "火山 Find Skill 技能广场"/);
+  assert.match(skillSourcePickerSource, /label: "AgentKit Skills 中心"/);
+  assert.doesNotMatch(skillSourcePickerSource, /label: "SkillSpace"/);
+  assert.match(skillSourcePickerSource, /label: "火山 Find Skill 技能广场"/);
   assert.match(skillHubSource, /const SEARCH_BASE = "\/harness\/skills\/findskill"/);
   assert.match(skillHubSource, /const DOWNLOAD_BASE = "\/skillhub\/v1\/skills"/);
-  assert.match(createSource, /function AgentKitSkillsIcon/);
+  assert.match(skillSourcePickerSource, /function AgentKitSkillsIcon/);
   assert.match(
-    createSource,
-    /id: "skillspace", label: "AgentKit Skills 中心", icon: AgentKitSkillsIcon/,
+    skillSourcePickerSource,
+    /id: "skillspace",[\s\S]*?label: "AgentKit Skills 中心",[\s\S]*?icon: AgentKitSkillsIcon/,
   );
   assert.match(
-    createSource,
-    /\{ id: "local", label: "本地文件"[\s\S]*?\{ id: "skillspace", label: "AgentKit Skills 中心"[\s\S]*?\{ id: "skillhub", label: "火山 Find Skill 技能广场"/,
+    skillSourcePickerSource,
+    /id: "local", label: "本地文件"[\s\S]*?id: "skillspace"[\s\S]*?label: "AgentKit Skills 中心"[\s\S]*?id: "skillhub"[\s\S]*?label: "火山 Find Skill 技能广场"/,
   );
-  assert.match(createSource, /useState<SkillSource>\("local"\)/);
+  assert.match(skillSourcePickerSource, /useState<SkillSource>\("local"\)/);
   assert.match(
-    createSource,
-    /className="cw-skill-add"[\s\S]*?<span>添加 Skill<\/span>/,
+    skillSourcePickerSource,
+    /className="cw-skill-add"[\s\S]*?<span>\{addLabel\}<\/span>/,
   );
-  assert.match(createSource, /role="dialog"[\s\S]*?aria-modal="true"/);
-  assert.match(createSource, /id="cw-skill-dialog-title">添加 Skill<\/h3>/);
+  assert.match(skillSourcePickerSource, /role="dialog"[\s\S]*?aria-modal="true"/);
+  assert.match(skillSourcePickerSource, /<h3 id=\{titleId\}>\{addLabel\}<\/h3>/);
   assert.match(
-    createSource,
+    skillSourcePickerSource,
     /className="cw-skill-sourcetabs"[\s\S]*?role="tablist"/,
   );
-  assert.match(createSource, /className="cw-skill-tab-slider" aria-hidden/);
-  assert.match(createSource, /role="tabpanel"/);
+  assert.match(skillSourcePickerSource, /className="cw-skill-tab-slider" aria-hidden/);
+  assert.match(skillSourcePickerSource, /role="tabpanel"/);
   assert.match(
-    createSource,
+    skillSourcePickerSource,
     /\{selected\.length > 0 && \([\s\S]*?className="cw-selected-skill-list"[\s\S]*?role="dialog"/,
   );
-  assert.doesNotMatch(createSource, /function SkillPill/);
+  assert.doesNotMatch(skillSourcePickerSource, /function SkillPill/);
   assert.match(
     createStyles,
     /\.cw-skill-results\s*\{[\s\S]*?max-height:\s*472px;[\s\S]*?overflow-y:\s*auto;/,

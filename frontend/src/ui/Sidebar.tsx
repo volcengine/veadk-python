@@ -6,6 +6,7 @@ import {
   useState,
 } from "react";
 import {
+  Box,
   Info,
   LogOut,
   MoreHorizontal,
@@ -42,6 +43,7 @@ const SIDEBAR_AUTO_COLLAPSE_QUERY = "(max-width: 860px)";
 export type SidebarPage =
   | "new-chat"
   | "agents"
+  | "environments"
   | "library"
   | "applications"
   | "cronjobs"
@@ -130,6 +132,7 @@ export interface SidebarProps {
   onLibrary: () => void;
   onAddAgent: () => void;
   onMyAgents: () => void;
+  onEnvironment: () => void;
   onApplications: () => void;
   onCronJobs: () => void;
   onSystemInfo: () => void;
@@ -312,6 +315,7 @@ export function Sidebar({
   onLibrary,
   onAddAgent,
   onMyAgents,
+  onEnvironment,
   onApplications,
   onCronJobs,
   onSystemInfo,
@@ -436,6 +440,18 @@ export function Sidebar({
           >
             <SidebarAgentIcon className="icon" />
             <span className="sidebar-nav-label">智能体</span>
+          </button>
+          <button
+            className={`new-chat new-chat--environments${
+              activePage === "environments" ? " is-active" : ""
+            }`}
+            onClick={onEnvironment}
+            aria-label="环境"
+            aria-current={activePage === "environments" ? "page" : undefined}
+            title="环境"
+          >
+            <Box className="icon" />
+            <span className="sidebar-nav-label">环境</span>
           </button>
           <button
             className={`new-chat new-chat--library${

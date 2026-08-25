@@ -20,6 +20,7 @@ import socket
 import pytest
 from pydantic import ValidationError
 
+from frontend.server.environments.models import EnvironmentSkillManifestEntry
 from veadk.cli.generated_agent_codegen import (
     AgentDraft,
     DeploymentConfig,
@@ -29,6 +30,9 @@ from veadk.cli.generated_agent_codegen import (
     GeneratedProject,
     SelectedSkill,
     generate_project_from_draft,
+)
+from veadk.cli.generated_agent_codegen import (
+    EnvironmentSkillManifestEntry as GeneratedEnvironmentSkillManifestEntry,
 )
 from veadk.cli.generated_agent_security import (
     DebugPolicyError,
@@ -82,6 +86,122 @@ def test_minimal_codegen_agent_py_compiles(tmp_path) -> None:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(file.content, encoding="utf-8")
             py_compile.compile(str(target), doraise=True)
+
+
+def test_codegen_environment_image_adds_skills_without_replacing_agent_skills() -> None:
+    project = generate_project_from_draft(
+        AgentDraft.model_validate(
+            {
+                "name": "layered-skills",
+                "instruction": "Use skills.",
+                "selectedSkills": [
+                    {
+                        "source": "local",
+                        "folder": "release-notes",
+                        "name": "release-notes",
+                        "localFiles": [
+                            {
+                                "path": "skills/release-notes/SKILL.md",
+                                "content": "---\nname: release-notes\ndescription: Agent copy.\n---\n",
+                            }
+                        ],
+                    }
+                ],
+                "cloudEnvironment": {
+                    "environmentId": "a" * 32,
+                    "environmentVersionId": "20260825T010203Z-1234abcd",
+                    "resolvedImage": "registry.example/environment/base:v1",
+                    "environmentSkills": [
+                        {
+                            "name": "release-notes",
+                            "folder": "release-notes",
+                            "source": "local",
+                            "version": "",
+                            "digest": "a" * 64,
+                        },
+                        {
+                            "name": "ops-helper",
+                            "folder": "ops-helper",
+                            "source": "skillhub",
+                            "version": "v1",
+                            "digest": "b" * 64,
+                        },
+                    ],
+                },
+                "subAgents": [
+                    {
+                        "name": "child-agent",
+                        "instruction": "Use inherited environment skills.",
+                    }
+                ],
+            }
+        )
+    )
+    files = {file.path: file.content for file in project.files}
+    agent_py = files["agents/layered_skills/agent.py"]
+
+    assert files["Dockerfile"].startswith("FROM registry.example/environment/base:v1\n")
+    assert "COPY requirements.txt" not in files["Dockerfile"]
+    assert "pip install" not in files["Dockerfile"]
+    assert files["Dockerfile"].count("COPY . .") == 1
+    assert (
+        '_Path(__file__).parent.parent.parent / "skills" / "release-notes"' in agent_py
+    )
+    assert "VEADK_ENVIRONMENT_SKILLS_DIR" in agent_py
+    assert '"ops-helper"' in agent_py
+    assert "environment_skill.name.casefold() not in project_skill_names" in agent_py
+    assert agent_py.count("SkillToolset(") == 2
+    assert agent_py.count("VEADK_ENVIRONMENT_SKILLS_DIR") == 2
+    assert agent_py.count('"ops-helper"') == 2
+
+
+def test_resolved_environment_skill_models_are_validated_before_codegen() -> None:
+    draft = AgentDraft.model_validate(
+        {
+            "name": "resolved-environment",
+            "selectedSkills": [
+                {
+                    "source": "local",
+                    "folder": "agent-skill",
+                    "name": "agent-skill",
+                    "localFiles": [
+                        {
+                            "path": "skills/agent-skill/SKILL.md",
+                            "content": "---\nname: agent-skill\ndescription: Agent.\n---\n",
+                        }
+                    ],
+                }
+            ],
+            "cloudEnvironment": {"environmentId": "a" * 32},
+        }
+    )
+    resolved_skill = EnvironmentSkillManifestEntry(
+        name="environment-skill",
+        folder="environment-skill",
+        source="skillspace",
+        version="v1",
+        digest="b" * 64,
+    )
+
+    cloud_environment = draft.cloudEnvironment.model_copy(
+        update={
+            "environmentVersionId": "20260825T010203Z-1234abcd",
+            "resolvedImage": "registry.example/environment/base:v1",
+            "environmentSkills": [
+                GeneratedEnvironmentSkillManifestEntry.model_validate(
+                    resolved_skill.model_dump()
+                )
+            ],
+        }
+    )
+    resolved_draft = draft.model_copy(update={"cloudEnvironment": cloud_environment})
+    project = generate_project_from_draft(resolved_draft)
+    agent_py = next(
+        file.content for file in project.files if file.path.endswith("/agent.py")
+    )
+
+    assert ' / "skills" / "agent-skill")' in agent_py
+    assert 'environment_skill_root_agent / "environment-skill")' in agent_py
 
 
 @pytest.mark.parametrize(
