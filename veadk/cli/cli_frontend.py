@@ -1575,7 +1575,6 @@ def _run_frontend_server(
     from veadk.multimodal.transport import resolve_runtime_media
 
     _agent_loader = AgentLoader(agents_dir)
-    mount_media_routes(app, media_service)
 
     # Generated-agent debug is intentionally feature-complete in both local and
     # remote Studio deployments: the backend receives AgentDraft JSON, generates
@@ -1622,6 +1621,46 @@ def _run_frontend_server(
         if access_policy.enabled and principal is None:
             raise HTTPException(status_code=401, detail="Studio identity is required")
         return access_policy.role_for(principal)
+
+    def _authorize_media_user(request: Request, requested_user_id: str) -> None:
+        principal = _current_principal(request)
+        authentication_enabled = (
+            auth_mode == "gateway"
+            or getattr(app.state, "oauth2_handler", None) is not None
+            or access_policy.enabled
+        )
+        if principal is None:
+            if authentication_enabled:
+                raise HTTPException(
+                    status_code=401,
+                    detail="Studio identity is required",
+                )
+            return
+        if requested_user_id.casefold() in principal.identifiers:
+            return
+        if (
+            access_policy.enabled
+            and access_policy.role_for(principal) == StudioRole.ADMIN
+        ):
+            logger.info(
+                "studio media cross-user access actor=%r target_user_id=%r "
+                "method=%s path=%r",
+                principal.owner_id,
+                requested_user_id,
+                request.method,
+                request.url.path,
+            )
+            return
+        raise HTTPException(
+            status_code=403,
+            detail="Media access is limited to the current user",
+        )
+
+    mount_media_routes(
+        app,
+        media_service,
+        authorize_user=_authorize_media_user,
+    )
 
     from veadk.cli.frontend_issue_feedback import mount_issue_feedback_route
 

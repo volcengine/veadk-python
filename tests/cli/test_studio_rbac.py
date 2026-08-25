@@ -17,6 +17,7 @@
 import base64
 import itertools
 import json
+import logging
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -2007,6 +2008,100 @@ def test_access_endpoint_resolves_local_roles_and_blocks_user_management(
     assert user.json()["telemetry"]["accountId"] == "2100123456"
     assert forbidden.status_code == 403
     assert legacy_skill_creator.status_code == 404
+
+
+@pytest.mark.parametrize("provider", ["volcengine", "byteplus"])
+def test_media_routes_enforce_user_ownership_and_allow_explicit_admin(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    provider: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv("VEADK_MEDIA_LOCAL_DIR", str(tmp_path / "media"))
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        admins="admin@example.com",
+        developers="owner@example.com",
+        provider=provider,
+    )
+
+    identities = {
+        "owner": {"sub": "owner-sub", "email": "owner@example.com"},
+        "reader": {"sub": "reader-sub", "email": "reader@example.com"},
+        "admin": {"sub": "admin-sub", "email": "admin@example.com"},
+    }
+
+    class _FakeOAuth2Handler:
+        def get_session_from_request(self, request: Request) -> object | None:
+            user_info = identities.get(request.headers.get("X-Test-Identity", ""))
+            return SimpleNamespace(user_info=user_info) if user_info else None
+
+    app.state.oauth2_handler = _FakeOAuth2Handler()
+    owner_headers = {"X-Test-Identity": "owner"}
+    reader_headers = {
+        "X-Test-Identity": "reader",
+        "X-VeADK-Local-User": "owner@example.com",
+    }
+    admin_headers = {"X-Test-Identity": "admin"}
+    with TestClient(app) as client:
+        upload = client.post(
+            "/web/media",
+            headers=owner_headers,
+            data={
+                "app_name": "demo",
+                "user_id": "owner@example.com",
+                "session_id": "session",
+            },
+            files={"file": ("private.txt", b"private", "text/plain")},
+        )
+        assert upload.status_code == 200
+        media_id = upload.json()["id"]
+        media_path = f"/web/media/demo/owner@example.com/session/{media_id}"
+
+        assert client.get(media_path).status_code == 401
+        blocked_upload = client.post(
+            "/web/media",
+            headers=reader_headers,
+            data={
+                "app_name": "demo",
+                "user_id": "owner@example.com",
+                "session_id": "session",
+            },
+            files={"file": ("blocked.txt", b"blocked", "text/plain")},
+        )
+        assert blocked_upload.status_code == 403
+        assert client.get(media_path, headers=reader_headers).status_code == 403
+        assert (
+            client.get(f"{media_path}/content", headers=reader_headers).status_code
+            == 403
+        )
+        assert (
+            client.post(f"{media_path}/delete", headers=reader_headers).status_code
+            == 403
+        )
+        assert (
+            client.post(
+                "/web/media/demo/owner@example.com/session/delete",
+                headers=reader_headers,
+            ).status_code
+            == 403
+        )
+
+        assert client.get(f"{media_path}/content", headers=owner_headers).content == (
+            b"private"
+        )
+        with caplog.at_level(logging.INFO, logger="veadk.cli.cli_frontend"):
+            assert (
+                client.get(f"{media_path}/content", headers=admin_headers).content
+                == b"private"
+            )
+
+    assert any(
+        "studio media cross-user access actor='admin-sub' "
+        "target_user_id='owner@example.com'" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 @pytest.mark.parametrize("provider", ["volcengine", "byteplus"])

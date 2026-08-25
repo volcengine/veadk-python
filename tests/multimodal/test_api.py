@@ -15,7 +15,7 @@
 
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 
 from veadk.multimodal.api import mount_media_routes
@@ -75,3 +75,48 @@ def test_upload_rejects_unsupported_file(tmp_path: Path) -> None:
 
     assert response.status_code == 400
     assert "Unsupported media type" in response.json()["detail"]
+
+
+def test_authorizer_protects_every_user_scoped_media_route(tmp_path: Path) -> None:
+    app = FastAPI()
+    authorized_requests: list[tuple[str, str, str]] = []
+
+    def authorize_user(request: Request, user_id: str) -> None:
+        authorized_requests.append((request.method, request.url.path, user_id))
+        if user_id != "owner":
+            raise HTTPException(status_code=403, detail="forbidden")
+
+    mount_media_routes(
+        app,
+        MediaService(LocalMediaStorage(tmp_path)),
+        authorize_user=authorize_user,
+    )
+    client = TestClient(app)
+
+    upload = client.post(
+        "/web/media",
+        data={"app_name": "demo", "user_id": "owner", "session_id": "session"},
+        files={"file": ("guide.md", b"# Private", "text/markdown")},
+    )
+    assert upload.status_code == 200
+    media_id = upload.json()["id"]
+    media_path = f"/web/media/demo/reader/session/{media_id}"
+
+    blocked_upload = client.post(
+        "/web/media",
+        data={"app_name": "demo", "user_id": "reader", "session_id": "session"},
+        files={"file": ("blocked.md", b"# Blocked", "text/markdown")},
+    )
+    assert blocked_upload.status_code == 403
+
+    assert client.get(media_path).status_code == 403
+    assert client.get(f"{media_path}/content").status_code == 403
+    assert client.delete(media_path).status_code == 403
+    assert client.post(f"{media_path}/delete").status_code == 403
+    assert client.delete("/web/media/demo/reader/session").status_code == 403
+    assert client.post("/web/media/demo/reader/session/delete").status_code == 403
+
+    owner_content_path = f"/web/media/demo/owner/session/{media_id}/content"
+    assert client.get(owner_content_path).content == b"# Private"
+    assert client.get("/web/media/capabilities").status_code == 200
+    assert len(authorized_requests) == 9
