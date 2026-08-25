@@ -95,6 +95,41 @@ def _create_studio_app(
 
 
 @pytest.mark.parametrize(
+    ("provider", "path"),
+    [
+        (provider, path)
+        for provider in ("volcengine", "byteplus")
+        for path in (
+            "/web/a2a-spaces",
+            "/web/viking-knowledgebases",
+        )
+    ],
+)
+def test_server_credential_resource_lists_require_agent_management_role(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    provider: str,
+    path: str,
+) -> None:
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        admins="admin",
+        developers="developer",
+        provider=provider,
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            path,
+            headers={"X-VeADK-Local-User": "reader"},
+        )
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "Agent management is not allowed"}
+
+
+@pytest.mark.parametrize(
     (
         "provider",
         "inherited_name",
