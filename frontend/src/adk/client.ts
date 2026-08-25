@@ -1642,6 +1642,60 @@ export const RUN_SSE_EMPTY_RESPONSE_ERROR =
 export const RUN_SSE_INCOMPLETE_RESPONSE_ERROR =
   formatRunSseError("HTTP 200，SSE 响应中没有可展示的模型回复。");
 
+const RUN_SSE_FIRST_EVENT_TIMEOUT_MS = 30_000;
+export const RUN_SSE_FIRST_EVENT_TIMEOUT_ERROR =
+  formatRunSseError("30 秒内未收到首个 SSE 事件。");
+
+interface RunSseFirstEventDeadline {
+  signal?: AbortSignal;
+  clearDeadline: () => void;
+  cleanup: () => void;
+  timedOut: () => boolean;
+}
+
+function runSseFirstEventDeadline(
+  signal: AbortSignal | undefined,
+): RunSseFirstEventDeadline {
+  if (signal?.aborted) {
+    return {
+      signal,
+      clearDeadline: () => {},
+      cleanup: () => {},
+      timedOut: () => false,
+    };
+  }
+
+  const controller = new AbortController();
+  let didTimeout = false;
+  let deadlineCleared = false;
+  const clearDeadline = () => {
+    if (deadlineCleared) return;
+    deadlineCleared = true;
+    clearTimeout(timer);
+  };
+  const onAbort = () => {
+    if (controller.signal.aborted) return;
+    controller.abort(signal?.reason ?? new DOMException("Aborted", "AbortError"));
+  };
+  const timer = setTimeout(() => {
+    if (deadlineCleared || controller.signal.aborted) return;
+    didTimeout = true;
+    deadlineCleared = true;
+    controller.abort(new Error(RUN_SSE_FIRST_EVENT_TIMEOUT_ERROR));
+  }, RUN_SSE_FIRST_EVENT_TIMEOUT_MS);
+  signal?.addEventListener("abort", onAbort, { once: true });
+
+  return {
+    signal: controller.signal,
+    clearDeadline,
+    cleanup: () => {
+      clearDeadline();
+      signal?.removeEventListener("abort", onAbort);
+    },
+    timedOut: () => didTimeout,
+  };
+}
+
 /** Stream agent events for one user turn. */
 export async function* runSSE({
   appName,
@@ -1698,6 +1752,7 @@ export async function* runSSE({
     };
   }
   let res: Response;
+  const firstEventDeadline = runSseFirstEventDeadline(signal);
   try {
     res = await apiFetch(
       "/run_sse",
@@ -1717,16 +1772,19 @@ export async function* runSSE({
             ? { veadkInvocation: invocationMetadata }
             : undefined,
         }),
-        signal,
+        signal: firstEventDeadline.signal,
       },
       ep,
       0,
     );
   } catch (error) {
+    firstEventDeadline.cleanup();
+    if (firstEventDeadline.timedOut()) throw new Error(RUN_SSE_FIRST_EVENT_TIMEOUT_ERROR);
     if (signal?.aborted || (error as Error)?.name === "AbortError") throw error;
     throw new Error(formatRunSseError(error));
   }
   if (!res.ok) {
+    firstEventDeadline.cleanup();
     const detail = await httpErrorMessage(res, "运行会话失败");
     throw new Error(
       formatRunSseError(`run_sse failed: ${res.status}：${detail}`),
@@ -1736,6 +1794,7 @@ export async function* runSSE({
   try {
     for await (const evt of parseSSE(res)) {
       receivedEvent = true;
+      firstEventDeadline.clearDeadline();
       const event = evt as AdkEvent;
       if (typeof event.error === "string") event.error = formatRunSseError(event.error);
       if (typeof event.errorMessage === "string") {
@@ -1747,8 +1806,11 @@ export async function* runSSE({
       yield event;
     }
   } catch (error) {
+    if (firstEventDeadline.timedOut()) throw new Error(RUN_SSE_FIRST_EVENT_TIMEOUT_ERROR);
     if (signal?.aborted || (error as Error)?.name === "AbortError") throw error;
     throw new Error(formatRunSseError(error));
+  } finally {
+    firstEventDeadline.cleanup();
   }
   if (!receivedEvent) throw new Error(RUN_SSE_EMPTY_RESPONSE_ERROR);
 }
@@ -3678,25 +3740,44 @@ export async function* runGeneratedAgentTestSSE({
   signal?: AbortSignal;
 }): AsyncGenerator<AdkEvent, void, unknown> {
   const parts: Record<string, unknown>[] = text.trim() ? [{ text }] : [];
-  const res = await apiFetch(
-    `/web/generated-agent-test-runs/${runId}/run_sse`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        user_id: userId,
-        session_id: sessionId,
-        new_message: { role: "user", parts },
-        streaming: true,
-      }),
-      signal,
-    },
-    {},
-    0,
-  );
-  if (!res.ok) throw new Error(await httpErrorMessage(res, "调试运行失败"));
-  for await (const evt of parseSSE(res)) {
-    yield evt as AdkEvent;
+  const firstEventDeadline = runSseFirstEventDeadline(signal);
+  let res: Response;
+  try {
+    res = await apiFetch(
+      `/web/generated-agent-test-runs/${runId}/run_sse`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: userId,
+          session_id: sessionId,
+          new_message: { role: "user", parts },
+          streaming: true,
+        }),
+        signal: firstEventDeadline.signal,
+      },
+      {},
+      0,
+    );
+  } catch (error) {
+    firstEventDeadline.cleanup();
+    if (firstEventDeadline.timedOut()) throw new Error(RUN_SSE_FIRST_EVENT_TIMEOUT_ERROR);
+    throw error;
+  }
+  if (!res.ok) {
+    firstEventDeadline.cleanup();
+    throw new Error(await httpErrorMessage(res, "调试运行失败"));
+  }
+  try {
+    for await (const evt of parseSSE(res)) {
+      firstEventDeadline.clearDeadline();
+      yield evt as AdkEvent;
+    }
+  } catch (error) {
+    if (firstEventDeadline.timedOut()) throw new Error(RUN_SSE_FIRST_EVENT_TIMEOUT_ERROR);
+    throw error;
+  } finally {
+    firstEventDeadline.cleanup();
   }
 }
 

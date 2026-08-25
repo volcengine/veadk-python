@@ -39,7 +39,7 @@ const result = await build({
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(
   result.outputFiles[0].contents,
 ).toString("base64")}`;
-const { runSSE } = await import(moduleUrl);
+const { RUN_SSE_FIRST_EVENT_TIMEOUT_ERROR, runSSE } = await import(moduleUrl);
 
 test("runSSE forwards cancellation after yielding partial output", async (t) => {
   const previousFetch = globalThis.fetch;
@@ -87,7 +87,8 @@ test("runSSE forwards cancellation after yielding partial output", async (t) => 
   assert.equal(first.done, false);
   assert.equal(first.value.partial, true);
   assert.equal(first.value.content.parts[0].text, "part");
-  assert.equal(requestSignal, abortController.signal);
+  assert.ok(requestSignal instanceof AbortSignal);
+  assert.equal(requestSignal.aborted, false);
 
   const next = events.next();
   abortController.abort(new DOMException("Stopped by user", "AbortError"));
@@ -96,6 +97,102 @@ test("runSSE forwards cancellation after yielding partial output", async (t) => 
     assert.equal(error.name, "AbortError");
     return true;
   });
+});
+
+test("runSSE aborts when no first event arrives before the deadline", async (t) => {
+  const previousFetch = globalThis.fetch;
+  const previousSetTimeout = globalThis.setTimeout;
+  const previousClearTimeout = globalThis.clearTimeout;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+    globalThis.setTimeout = previousSetTimeout;
+    globalThis.clearTimeout = previousClearTimeout;
+  });
+
+  let timeoutCallback;
+  let timeoutMs;
+  globalThis.setTimeout = (callback, ms, ...args) => {
+    timeoutMs = ms;
+    timeoutCallback = () => callback(...args);
+    return 1;
+  };
+  globalThis.clearTimeout = () => {};
+  globalThis.fetch = async (_url, init) => {
+    return new Promise((_resolve, reject) => {
+      init.signal.addEventListener(
+        "abort",
+        () => reject(init.signal.reason ?? new DOMException("Aborted", "AbortError")),
+        { once: true },
+      );
+    });
+  };
+
+  const events = runSSE({
+    appName: "agent",
+    userId: "user",
+    sessionId: "session",
+    text: "hello",
+  });
+
+  const next = events.next();
+  assert.equal(timeoutMs, 30_000);
+  timeoutCallback();
+
+  await assert.rejects(next, (error) => {
+    assert.equal(error.message, RUN_SSE_FIRST_EVENT_TIMEOUT_ERROR);
+    assert.match(error.message, /30 秒内未收到首个 SSE 事件/);
+    assert.match(error.message, /请检查共享公网出口等网络配置，然后重试/);
+    return true;
+  });
+});
+
+test("runSSE clears the first-event deadline after yielding the first event", async (t) => {
+  const previousFetch = globalThis.fetch;
+  const previousSetTimeout = globalThis.setTimeout;
+  const previousClearTimeout = globalThis.clearTimeout;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+    globalThis.setTimeout = previousSetTimeout;
+    globalThis.clearTimeout = previousClearTimeout;
+  });
+
+  let requestSignal;
+  let timeoutCallback;
+  let clearedTimer;
+  globalThis.setTimeout = (callback, ms, ...args) => {
+    assert.equal(ms, 30_000);
+    timeoutCallback = () => callback(...args);
+    return 7;
+  };
+  globalThis.clearTimeout = (timer) => {
+    clearedTimer = timer;
+  };
+  globalThis.fetch = async (_url, init) => {
+    requestSignal = init.signal;
+    return new Response(
+      'data: {"partial":true,"content":{"parts":[{"text":"part"}]}}\n\n',
+      {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      },
+    );
+  };
+
+  const events = runSSE({
+    appName: "agent",
+    userId: "user",
+    sessionId: "session",
+    text: "hello",
+  });
+
+  const first = await events.next();
+  assert.equal(first.done, false);
+  assert.equal(first.value.content.parts[0].text, "part");
+  assert.equal(clearedTimer, 7);
+  timeoutCallback();
+  assert.equal(requestSignal.aborted, false);
+
+  await events.return();
 });
 
 test("runSSE formats a fetch rejection before any response arrives", async (t) => {
