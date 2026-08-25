@@ -15,6 +15,7 @@
 import os
 import tempfile
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -120,7 +121,9 @@ def test_vefaas_passes_session_token_to_apig() -> None:
     )
 
 
-def test_vefaas_application_route_adds_patch_without_losing_configuration() -> None:
+def _vefaas_with_application_route(
+    *, methods: list[str], cors_enabled: bool
+) -> tuple[VeFaaS, Mock]:
     service = object.__new__(VeFaaS)
     service.get_application_route = Mock(
         return_value=("gateway-id", "service-id", "route-id")
@@ -131,7 +134,7 @@ def test_vefaas_application_route_adds_patch_without_losing_configuration() -> N
         enable=True,
         priority=100,
         match_rule=SimpleNamespace(
-            method=["GET", "POST"],
+            method=methods,
             path=SimpleNamespace(match_content="/", match_type="Prefix"),
         ),
         upstream_list=[
@@ -148,7 +151,7 @@ def test_vefaas_application_route_adds_patch_without_losing_configuration() -> N
                 allow_headers=["*"],
                 allow_methods=["GET", "POST"],
                 allow_origins=[SimpleNamespace(match_type="regex", value=".*")],
-                enable=True,
+                enable=cors_enabled,
                 expose_headers=None,
                 max_age=None,
             ),
@@ -159,11 +162,18 @@ def test_vefaas_application_route_adds_patch_without_losing_configuration() -> N
     get_route.return_value.get.return_value = SimpleNamespace(route=route)
     update_route = Mock()
     update_route.return_value.get.return_value = None
-    service.apig_client = SimpleNamespace(
+    cast(Any, service).apig_client = SimpleNamespace(
         apig_20221112_client=SimpleNamespace(
             get_route=get_route,
             update_route=update_route,
         )
+    )
+    return service, update_route
+
+
+def test_vefaas_application_route_adds_patch_without_losing_configuration() -> None:
+    service, update_route = _vefaas_with_application_route(
+        methods=["GET", "POST"], cors_enabled=True
     )
 
     assert service.ensure_application_route_methods("application-id") is True
@@ -176,6 +186,63 @@ def test_vefaas_application_route_adds_patch_without_losing_configuration() -> N
         "POST",
         "PATCH",
     ]
+    assert request.advanced_setting.cors_policy_setting.allow_origins[0].value == ".*"
+    assert request.advanced_setting.cors_policy_setting.allow_credentials is True
+    assert request.advanced_setting.cors_policy_setting.enable is True
+
+
+def test_vefaas_application_route_disables_cors_when_methods_are_present() -> None:
+    service, update_route = _vefaas_with_application_route(
+        methods=["GET", "POST", "PATCH"], cors_enabled=True
+    )
+
+    assert (
+        service.ensure_application_route_methods("application-id", disable_cors=True)
+        is True
+    )
+
+    request = update_route.call_args.args[0]
+    assert request.match_rule.method == ["GET", "POST", "PATCH"]
+    assert request.advanced_setting.cors_policy_setting.allow_origins is None
+    assert request.advanced_setting.cors_policy_setting.allow_credentials is None
+    assert request.advanced_setting.cors_policy_setting.enable is False
+
+
+def test_vefaas_application_route_skips_safe_configuration() -> None:
+    service, update_route = _vefaas_with_application_route(
+        methods=["GET", "POST", "PATCH"], cors_enabled=False
+    )
+
+    assert (
+        service.ensure_application_route_methods("application-id", disable_cors=True)
+        is False
+    )
+    update_route.assert_not_called()
+
+
+def test_vefaas_deploy_can_disable_gateway_cors() -> None:
+    service = object.__new__(VeFaaS)
+    cast(Any, service).apig_client = SimpleNamespace(
+        list_gateways=Mock(return_value=SimpleNamespace(items=[]))
+    )
+    service._create_function = Mock(return_value=("studio-app-fn", "function-id"))
+    service._create_application = Mock(return_value="application-id")
+    service._release_application = Mock(return_value="https://studio.example.com")
+    service.ensure_application_route_methods = Mock()
+
+    service.deploy(
+        "studio-app",
+        ".",
+        gateway_name="gateway",
+        gateway_service_name="service",
+        gateway_upstream_name="upstream",
+        disable_gateway_cors=True,
+    )
+
+    service.ensure_application_route_methods.assert_called_once_with(
+        "application-id",
+        disable_cors=True,
+    )
 
 
 def test_vefaas_code_upload_callback_uses_configured_region() -> None:
@@ -493,6 +560,11 @@ async def test_cloud():
 
                 # Test deploy operation
                 cloud_app = engine.deploy(application_name=app_name, path=temp_dir)
+
+                assert (
+                    mock_vefaas_service.deploy.call_args.kwargs["disable_gateway_cors"]
+                    is False
+                )
 
                 # Verify deployment result contains expected values
                 assert cloud_app.vefaas_application_name == app_name
