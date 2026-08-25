@@ -45,6 +45,10 @@ const clientSource = readFileSync(
   new URL("../src/adk/client.ts", import.meta.url),
   "utf8",
 );
+const appSource = readFileSync(
+  new URL("../src/App.tsx", import.meta.url),
+  "utf8",
+);
 
 function draft(overrides = {}) {
   return {
@@ -156,16 +160,34 @@ test("adds an Apps SDK UI environment step before publishing", () => {
   );
   assert.match(environmentSource, /@openai\/apps-sdk-ui\/components\/Select/);
   assert.match(environmentSource, /listEnvironments\(controller\.signal\)/);
+  assert.match(environmentSource, /label: "默认环境"/);
+  assert.match(environmentSource, /使用 AgentKit 默认运行环境/);
+  assert.match(
+    environmentSource,
+    /onChange\(\{ environmentId: "", environmentVersionId: "" \}\)/,
+  );
+  assert.match(
+    environmentSource,
+    /value=\{value\.environmentId \|\| DEFAULT_ENVIRONMENT_VALUE\}/,
+  );
   assert.match(environmentSource, /disabled: environment\.latestVersion\?\.status !== "available"/);
   assert.match(environmentSource, /environmentVersionId: versionId/);
   assert.match(environmentSource, /正在加载环境/);
   assert.match(environmentSource, /环境加载失败/);
-  assert.match(environmentSource, /暂无可用环境/);
+  assert.match(environmentSource, /暂无自定义环境/);
   assert.match(environmentSource, /selectedEnvironment\.selectedSkills/);
   assert.doesNotMatch(environmentSource, /CloudEnvironmentAdvancedTrigger/);
   assert.doesNotMatch(environmentSource, /CodeEditor/);
   assert.match(createSource, /environment: draft\.cloudEnvironment\?\.environmentId/);
   assert.match(clientSource, /environment: opts\?\.environment/);
+  assert.match(
+    clientSource,
+    /environment\?:\s*\{[\s\S]*?environmentId: string;[\s\S]*?environmentVersionId: string;/,
+  );
+  assert.match(
+    appSource,
+    /cloudEnvironment: capability\.runtime\.environment \?\? \{[\s\S]*?environmentId: ""/,
+  );
 });
 
 test("keeps selected environment details responsive", () => {

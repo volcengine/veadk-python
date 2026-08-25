@@ -1,7 +1,6 @@
 import { useEffect, useId, useMemo, useState } from "react";
 import { Badge } from "@openai/apps-sdk-ui/components/Badge";
 import { Button } from "@openai/apps-sdk-ui/components/Button";
-import { EmptyMessage } from "@openai/apps-sdk-ui/components/EmptyMessage";
 import { Select, type Option } from "@openai/apps-sdk-ui/components/Select";
 
 import { listEnvironments, type StudioEnvironment } from "../adk/client";
@@ -19,6 +18,15 @@ interface CloudEnvironmentConfiguratorProps {
   onChange: (value: CloudEnvironmentConfig) => void;
   disabled?: boolean;
 }
+
+type EnvironmentOption = Option & { environment?: StudioEnvironment };
+
+const DEFAULT_ENVIRONMENT_VALUE = "__default_environment__";
+const DEFAULT_ENVIRONMENT_OPTION: EnvironmentOption = {
+  value: DEFAULT_ENVIRONMENT_VALUE,
+  label: "默认环境",
+  description: "使用 AgentKit 默认运行环境",
+};
 
 const STATUS_LABELS = {
   preparing: "准备中",
@@ -72,14 +80,17 @@ export function CloudEnvironmentConfigurator({
     return () => controller.abort();
   }, [reloadKey]);
 
-  const options = useMemo<Array<Option & { environment: StudioEnvironment }>>(
-    () => environments.map((environment) => ({
-      value: environment.id,
-      label: environment.name,
-      description: `${environmentOperatingSystemLabel(environment.operatingSystem)} · ${environmentLanguageLabel(environment.language)} · ${environmentStatus(environment)}`,
-      disabled: environment.latestVersion?.status !== "available",
-      environment,
-    })),
+  const options = useMemo<EnvironmentOption[]>(
+    () => [
+      DEFAULT_ENVIRONMENT_OPTION,
+      ...environments.map((environment) => ({
+        value: environment.id,
+        label: environment.name,
+        description: `${environmentOperatingSystemLabel(environment.operatingSystem)} · ${environmentLanguageLabel(environment.language)} · ${environmentStatus(environment)}`,
+        disabled: environment.latestVersion?.status !== "available",
+        environment,
+      })),
+    ],
     [environments],
   );
   const selectedEnvironment = environments.find(
@@ -94,7 +105,11 @@ export function CloudEnvironmentConfigurator({
         .map((option) => option.label)
     : [];
 
-  const selectEnvironment = (option: Option & { environment: StudioEnvironment }) => {
+  const selectEnvironment = (option: EnvironmentOption) => {
+    if (option.value === DEFAULT_ENVIRONMENT_VALUE || !option.environment) {
+      onChange({ environmentId: "", environmentVersionId: "" });
+      return;
+    }
     const versionId = option.environment.latestVersion?.versionId ?? "";
     onChange({ environmentId: option.value, environmentVersionId: versionId });
   };
@@ -121,27 +136,13 @@ export function CloudEnvironmentConfigurator({
     );
   }
 
-  if (environments.length === 0) {
-    return (
-      <div className="cloud-env-empty">
-        <EmptyMessage>
-          <EmptyMessage.Title>暂无可用环境</EmptyMessage.Title>
-          <EmptyMessage.Description>请先前往侧边栏的“环境”创建并完成构建。</EmptyMessage.Description>
-        </EmptyMessage>
-        <Button color="secondary" variant="soft" size="sm" onClick={() => setReloadKey((key) => key + 1)}>
-          刷新
-        </Button>
-      </div>
-    );
-  }
-
   return (
     <section className="cloud-env-config" aria-labelledby={`${selectId}-title`}>
       <label className="cloud-env-field" id={`${selectId}-title`} htmlFor={selectId}>
         <span>环境</span>
         <Select
           id={selectId}
-          value={value.environmentId}
+          value={value.environmentId || DEFAULT_ENVIRONMENT_VALUE}
           options={options}
           size="lg"
           pill={false}
@@ -204,7 +205,11 @@ export function CloudEnvironmentConfigurator({
           已选择的环境不存在或无权访问，请重新选择。
         </div>
       ) : (
-        <p className="cloud-env-guidance">选择环境后，这个 Agent 会基于该环境镜像构建，并同时加载环境内的技能。</p>
+        <p className="cloud-env-guidance">
+          {environments.length === 0
+            ? "暂无自定义环境，将使用 AgentKit 默认运行环境。"
+            : "当前使用 AgentKit 默认运行环境；选择自定义环境后，会基于对应镜像构建并加载环境技能。"}
+        </p>
       )}
     </section>
   );

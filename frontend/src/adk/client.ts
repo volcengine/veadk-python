@@ -3783,6 +3783,10 @@ export interface RuntimeUpdateCapability {
     name: string;
     region: string;
     currentVersion?: number | null;
+    environment?: {
+      environmentId: string;
+      environmentVersionId: string;
+    };
     envs: { key: string; value: string }[];
     network: NetworkConfig;
   };

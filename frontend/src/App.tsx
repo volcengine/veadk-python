@@ -6715,6 +6715,10 @@ export default function App() {
                         network: capability.runtime.network,
                         envValues: runtimeEnvValues,
                       },
+                      cloudEnvironment: capability.runtime.environment ?? {
+                        environmentId: "",
+                        environmentVersionId: "",
+                      },
                     },
                     capability.runtime.envs,
                   );

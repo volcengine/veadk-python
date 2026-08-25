@@ -37,6 +37,8 @@ from veadk.cli.cli_frontend import (
     _normalize_runtime_description,
     _prepare_managed_sidecar_runtime_envs,
     _run_frontend_server,
+    _runtime_environment_from_tags,
+    _runtime_environment_tags,
     studio,
 )
 from veadk.cli.studio_rbac import (
@@ -46,6 +48,31 @@ from veadk.cli.studio_rbac import (
     parse_role_members,
     runtime_belongs_to,
 )
+
+
+def test_runtime_environment_tags_round_trip_and_default_legacy_compatibility() -> None:
+    selected = _runtime_environment_tags("environment-123", "version-456")
+    assert selected == {
+        "veadk:environment-id": "environment-123",
+        "veadk:environment-version": "version-456",
+    }
+    assert _runtime_environment_from_tags(selected) == {
+        "environmentId": "environment-123",
+        "environmentVersionId": "version-456",
+    }
+    assert _runtime_environment_tags("", "stale-version") == {
+        "veadk:environment-id": "default"
+    }
+    assert _runtime_environment_from_tags({}) == {
+        "environmentId": "",
+        "environmentVersionId": "",
+    }
+    assert _runtime_environment_from_tags(
+        {
+            "veadk:environment-id": "default",
+            "veadk:environment-version": "stale-version",
+        }
+    ) == {"environmentId": "", "environmentVersionId": ""}
 
 
 def _create_studio_app(
@@ -2974,6 +3001,12 @@ def test_runtime_update_capability_supports_owned_unmanaged_runtime(
         _runtime("runtime-unmanaged", "developer", managed=False)
     )
     runtime.current_version_number = 7
+    runtime.tags.extend(
+        [
+            SimpleNamespace(key="veadk:environment-id", value="environment-123"),
+            SimpleNamespace(key="veadk:environment-version", value="version-456"),
+        ]
+    )
     runtime.envs = [
         SimpleNamespace(key="MODEL_AGENT_API_KEY", value="must-not-reach-browser"),
         SimpleNamespace(key="MODEL_AGENT_API_KEY_ID", value="ark-key-id"),
@@ -3113,6 +3146,10 @@ def test_runtime_update_capability_supports_owned_unmanaged_runtime(
             "region": "cn-beijing",
             "currentVersion": 7,
             "managed": False,
+            "environment": {
+                "environmentId": "environment-123",
+                "environmentVersionId": "version-456",
+            },
             "envs": [
                 {"key": "MODEL_AGENT_API_KEY_ID", "value": "ark-key-id"},
                 {"key": "MODEL_AGENT_API_KEY_NAME", "value": "ark-key-name"},
@@ -3141,6 +3178,10 @@ def test_runtime_update_capability_supports_owned_unmanaged_runtime(
     assert missing_app.json()["agent"] == {"appName": "missing-agent"}
     assert legacy.status_code == 200
     legacy_envs = legacy.json()["runtime"]["envs"]
+    assert legacy.json()["runtime"]["environment"] == {
+        "environmentId": "",
+        "environmentVersionId": "",
+    }
     assert legacy_envs == [
         {"key": "MODEL_AGENT_NAME", "value": "legacy-model"},
         {"key": "MODEL_AGENT_PROVIDER", "value": "openai"},
@@ -3393,6 +3434,12 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
     )
     runtime.role_name = "runtime-role"
     runtime.current_version_number = 3
+    runtime.tags.extend(
+        [
+            SimpleNamespace(key="veadk:environment-id", value="old-environment"),
+            SimpleNamespace(key="veadk:environment-version", value="old-version"),
+        ]
+    )
     tagged_resources = {
         "tos": {"mode": "create", "bucket": "tagged-bucket"},
         "cr": {
@@ -3426,6 +3473,7 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
         SimpleNamespace(key="HARNESS_SIDECAR_EXPECTED_PLAN_HASH", value="sha256:old"),
     ]
     captured_config: dict[str, Any] = {}
+    update_requests: list[Any] = []
     get_calls = 0
     evaluation_set_calls: list[dict[str, Any]] = []
     resolved_model_keys: list[dict[str, Any]] = []
@@ -3438,6 +3486,10 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
 
     def launch(*, config_file: str, **_kwargs: Any) -> SimpleNamespace:
         captured_config.update(yaml.safe_load(Path(config_file).read_text()))
+        AgentkitRuntimeClient.update_runtime(
+            object(),
+            SimpleNamespace(tags=[], apmplus_enable=False),
+        )
         return SimpleNamespace(
             success=True,
             error=None,
@@ -3453,6 +3505,12 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
         )
 
     monkeypatch.setattr(AgentkitRuntimeClient, "get_runtime", get_runtime)
+
+    def update_runtime(_self: Any, request: Any) -> SimpleNamespace:
+        update_requests.append(request)
+        return SimpleNamespace(runtime_id=runtime.runtime_id)
+
+    monkeypatch.setattr(AgentkitRuntimeClient, "update_runtime", update_runtime)
 
     class RuntimeAsyncClient:
         def __init__(self, **_kwargs: Any) -> None:
@@ -3648,6 +3706,10 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
         assert "cp_workspace_name" not in cloud
         assert "cp_pipeline_name" not in cloud
     assert captured_config["common"]["description"] == "Updated description"
+    updated_tags = {tag.key: tag.value for tag in update_requests[-1].tags}
+    assert updated_tags["veadk:environment-id"] == "default"
+    assert "veadk:environment-version" not in updated_tags
+    assert updated_tags["veadk:owner"] == "developer"
 
 
 @pytest.mark.parametrize(
@@ -3734,6 +3796,8 @@ def test_new_deployment_only_updates_non_default_instance_range(
     assert frames[-1]["success"] is True
     assert frames[-1]["agentName"] == "demo-agent"
     assert frames[-1]["runtimeName"] == "generated-runtime-name"
+    created_tags = {tag.key: tag.value for tag in create_requests[-1].tags}
+    assert created_tags["veadk:environment-id"] == "default"
     assert captured_config["launch_types"]["cloud"]["runtime_name"] == (
         "stable-runtime-name"
     )

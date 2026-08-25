@@ -201,6 +201,9 @@ _RUNTIME_DESCRIPTION_MAX_BYTES = 255
 _RUNTIME_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _RUNTIME_NAME_MIN_LENGTH = 4
 _RUNTIME_NAME_MAX_LENGTH = 64
+_RUNTIME_ENVIRONMENT_ID_TAG = "veadk:environment-id"
+_RUNTIME_ENVIRONMENT_VERSION_TAG = "veadk:environment-version"
+_DEFAULT_RUNTIME_ENVIRONMENT = "default"
 _STUDIO_STORAGE_ENV_KEYS = (
     "VEADK_STUDIO_TOS_BUCKET",
     "VEADK_STUDIO_TOS_REGION",
@@ -218,6 +221,32 @@ _STUDIO_STORAGE_ENV_KEYS = (
 )
 STUDIO_ENVIRONMENT_CP_WORKSPACE_ENV = "VEADK_STUDIO_ENVIRONMENT_CP_WORKSPACE"
 STUDIO_ENVIRONMENT_CR_REPOSITORY_ENV = "VEADK_STUDIO_ENVIRONMENT_CR_REPOSITORY"
+
+
+def _runtime_environment_tags(
+    environment_id: str,
+    environment_version_id: str,
+) -> dict[str, str]:
+    """Encode a pinned Studio environment as stable Runtime tags."""
+    normalized_id = environment_id.strip()
+    if not normalized_id:
+        return {_RUNTIME_ENVIRONMENT_ID_TAG: _DEFAULT_RUNTIME_ENVIRONMENT}
+    tags = {_RUNTIME_ENVIRONMENT_ID_TAG: normalized_id}
+    normalized_version_id = environment_version_id.strip()
+    if normalized_version_id:
+        tags[_RUNTIME_ENVIRONMENT_VERSION_TAG] = normalized_version_id
+    return tags
+
+
+def _runtime_environment_from_tags(tags: Mapping[str, str]) -> dict[str, str]:
+    """Decode Runtime tags, treating pre-environment Runtimes as default."""
+    environment_id = tags.get(_RUNTIME_ENVIRONMENT_ID_TAG, "").strip()
+    if not environment_id or environment_id == _DEFAULT_RUNTIME_ENVIRONMENT:
+        return {"environmentId": "", "environmentVersionId": ""}
+    return {
+        "environmentId": environment_id,
+        "environmentVersionId": tags.get(_RUNTIME_ENVIRONMENT_VERSION_TAG, "").strip(),
+    }
 
 
 def _studio_environment_resource_environment(
@@ -5338,6 +5367,31 @@ def _run_frontend_server(
             except Exception as e:
                 logger.error("resolve update runtime failed: %s", e, exc_info=True)
                 raise HTTPException(status_code=502, detail=str(e)) from e
+
+        # Persist the exact environment image selection on the Runtime itself.
+        # A missing tag is intentionally interpreted as the AgentKit default so
+        # Runtimes created before environment support remain editable.
+        runtime_tag_values = (
+            _runtime_tags(existing_runtime) if existing_runtime is not None else {}
+        )
+        runtime_tag_values.pop(_RUNTIME_ENVIRONMENT_ID_TAG, None)
+        runtime_tag_values.pop(_RUNTIME_ENVIRONMENT_VERSION_TAG, None)
+        runtime_tag_values.update(
+            {
+                "veadk:managed": "true",
+                **({"veadk:author": author} if author else {}),
+                **({"veadk:owner": owner_id} if owner_id else {}),
+                **deployment_resource_tag_values,
+            }
+        )
+        runtime_tag_values.update(
+            _runtime_environment_tags(
+                environment_id,
+                resolved_environment.version_id
+                if resolved_environment is not None
+                else "",
+            )
+        )
         if sidecar_enabled:
             try:
                 deployment_resource_config = await asyncio.to_thread(
@@ -5723,19 +5777,13 @@ def _run_frontend_server(
                 placeholder = f"VEADK_STUDIO_RUNTIME_ENV_{index:04d}"
                 sidecar_yaml_envs[key] = "${" + placeholder + "}"
                 sidecar_cli_runtime_env[placeholder] = value
-            runtime_tags = {
-                "veadk:managed": "true",
-                **({"veadk:author": author} if author else {}),
-                **({"veadk:owner": owner_id} if owner_id else {}),
-                **deployment_resource_tag_values,
-            }
             sidecar_runtime: dict[str, Any] = {
                 "region": region,
                 "project": project_name,
                 "min_instance": 1,
                 "max_instance": 1,
                 "max_concurrency": 20,
-                "tags": runtime_tags,
+                "tags": runtime_tag_values,
             }
             if runtime_network:
                 mode = str(runtime_network.get("mode") or "public").lower()
@@ -6544,48 +6592,38 @@ def _run_frontend_server(
 
                     orig_create = rt_client.create_runtime
                     orig_update = rt_client.update_runtime
-                    extra = [
-                        _rt.TagsItemForCreateRuntime.model_validate(
-                            {"Key": "veadk:managed", "Value": "true"}
-                        )
-                    ]
-                    if author:
-                        extra.append(
-                            _rt.TagsItemForCreateRuntime.model_validate(
-                                {"Key": "veadk:author", "Value": author}
-                            )
-                        )
-                    if owner_id:
-                        extra.append(
-                            _rt.TagsItemForCreateRuntime.model_validate(
-                                {"Key": "veadk:owner", "Value": owner_id}
-                            )
-                        )
-                    extra.extend(
-                        _rt.TagsItemForCreateRuntime.model_validate(
-                            {"Key": key, "Value": value}
-                        )
-                        for key, value in deployment_resource_tag_values.items()
-                    )
                     if trusted_intelligent_source:
-                        extra.extend(
-                            _rt.TagsItemForCreateRuntime.model_validate(
-                                {"Key": key, "Value": value}
-                            )
-                            for key, value in {
+                        runtime_tag_values.update(
+                            {
                                 "veadk:lifecycle": "production",
                                 "veadk:source": "intelligent-development",
                                 "veadk:artifact": str(source["artifactSha256"]),
                                 "veadk:validation-report": str(
                                     source["validationReportSha256"]
                                 ),
-                            }.items()
+                            }
                         )
 
-                    def _tagged_create(self, req, _orig=orig_create, _extra=extra):
+                    def _merged_runtime_tags(req_tags: Any) -> dict[str, str]:
+                        merged = {
+                            str(getattr(tag, "key", "")): str(
+                                getattr(tag, "value", "") or ""
+                            )
+                            for tag in (req_tags or [])
+                            if getattr(tag, "key", None)
+                        }
+                        merged.update(runtime_tag_values)
+                        return merged
+
+                    def _tagged_create(self, req, _orig=orig_create):
                         if task_state["cancel_event"].is_set():
                             raise RuntimeError("Deployment cancelled")
-                        req.tags = [*(req.tags or []), *_extra]
+                        req.tags = [
+                            _rt.TagsItemForCreateRuntime.model_validate(
+                                {"Key": key, "Value": value}
+                            )
+                            for key, value in _merged_runtime_tags(req.tags).items()
+                        ]
                         req.apmplus_enable = True
                         created = _create_runtime_with_description_fallback(
                             _orig, self, req
@@ -6606,12 +6644,18 @@ def _run_frontend_server(
                             raise RuntimeError("Deployment cancelled")
                         return created
 
-                    def _apmplus_update(self, req, _orig=orig_update):
+                    def _tagged_update(self, req, _orig=orig_update):
                         req.apmplus_enable = True
+                        req.tags = [
+                            _rt.TagsItemForUpdateRuntime.model_validate(
+                                {"Key": key, "Value": value}
+                            )
+                            for key, value in _merged_runtime_tags(req.tags).items()
+                        ]
                         return _orig(self, req)
 
                     rt_client.create_runtime = _tagged_create
-                    rt_client.update_runtime = _apmplus_update
+                    rt_client.update_runtime = _tagged_update
                 except Exception as e:
                     logger.error("Could not prepare Runtime ownership tags: %s", e)
                     result_box["error"] = _safe_exception_detail(e)
@@ -9003,6 +9047,7 @@ def _run_frontend_server(
             "region": region,
             "currentVersion": getattr(runtime, "current_version_number", None),
             "managed": tags.get("veadk:managed") == "true",
+            "environment": _runtime_environment_from_tags(tags),
             "envs": [
                 {
                     "key": str(getattr(item, "key", "") or ""),
