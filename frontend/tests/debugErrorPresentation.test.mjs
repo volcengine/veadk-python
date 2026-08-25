@@ -72,11 +72,33 @@ test("creation and deployment keep friendly context and the original error", () 
   assert.match(clientSource, /原始响应：\\n\$\{text\}/);
   assert.match(
     projectPreviewSource,
-    /label: "部署失败"[\s\S]*?message: failedInBuild[\s\S]*?\.\.\.\(buildLog/,
+    /label: buildStatusUnconfirmed[\s\S]*?"构建状态待确认"[\s\S]*?"部署失败"[\s\S]*?message: buildStatusUnconfirmed[\s\S]*?failedInBuild[\s\S]*?\.\.\.\(buildLog/,
   );
   assert.match(
     projectPreviewSource,
     /failedInBuild[\s\S]*?"构建镜像失败，详见构建日志。"[\s\S]*?failedInGithub[\s\S]*?"挂载 GitHub 持续交付失败，详见 GitHub 日志。"[\s\S]*?: message/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /isBuildStatusConfirmationError[\s\S]*?RunPipeline result could not be reconciled[\s\S]*?Polling build status failed/,
+  );
+  assert.doesNotMatch(
+    projectPreviewSource.match(
+      /export function isBuildStatusConfirmationError[\s\S]*?\n}/,
+    )?.[0] ?? "",
+    /network error|fetch failed|Volcengine request timed out/i,
+  );
+  assert.match(
+    projectPreviewSource,
+    /buildStatusUnconfirmed[\s\S]*?BUILD_STATUS_CONFIRMATION_ERROR_MESSAGE[\s\S]*?failedInBuild/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /deployError === BUILD_STATUS_CONFIRMATION_ERROR_MESSAGE[\s\S]*?undefined[\s\S]*?: requestDeploymentConfirmation/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /deployError === BUILD_STATUS_CONFIRMATION_ERROR_MESSAGE[\s\S]*?`构建状态待确认：\$\{deployError\}`/,
   );
 });
 

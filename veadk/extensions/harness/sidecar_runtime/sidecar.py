@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any
 
 from .failover_proxy import StableHttpRelay
+from .mcp_loopback_proxy import SidecarMcpHttpRelay
 from .runtime_gateway_proxy import RuntimeGatewayHttpRelay
 from .sidecar_config import (
     HarnessSidecarConfig,
@@ -67,8 +68,8 @@ class SidecarBinding:
     stderr_lines: list[str] = field(default_factory=list)
     _environ: MutableMapping[str, str] | None = field(default=None, repr=False)
     _previous_env: dict[str, str | None] = field(default_factory=dict, repr=False)
-    _relays: list[StableHttpRelay | RuntimeGatewayHttpRelay] = field(
-        default_factory=list, repr=False
+    _relays: list[StableHttpRelay | RuntimeGatewayHttpRelay | SidecarMcpHttpRelay] = (
+        field(default_factory=list, repr=False)
     )
     _relay_env_keys: set[str] = field(default_factory=set, repr=False)
     _state_lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
@@ -170,42 +171,45 @@ class SidecarBinding:
             raise HarnessSidecarError("Runtime Gateway endpoint is not configured")
         if not api_key:
             raise HarnessSidecarError("Runtime Gateway API key is not configured")
-        if not self.spec.model_proxy_url:
-            raise HarnessSidecarError("Sidecar model proxy discovery is missing")
-        source_path = urllib.parse.urlsplit(self.spec.model_proxy_url).path
-        relay = RuntimeGatewayHttpRelay(
-            endpoint,
-            source_path=source_path,
-            api_key=api_key,
-            target_port=self.config.model_proxy.port,
-            timeout_seconds=self.config.runtime_gateway_timeout_seconds,
-        )
-        self._relays.append(relay)
-        self.spec.model_proxy_url = relay.url
-        if "MODEL_AGENT_API_BASE" in self.spec.env:
-            self.spec.env["MODEL_AGENT_API_BASE"] = relay.url
-            self._relay_env_keys.add("MODEL_AGENT_API_BASE")
+        if self.config.model_proxy.enabled:
+            if not self.spec.model_proxy_url:
+                raise HarnessSidecarError("Sidecar model proxy discovery is missing")
+            source_path = urllib.parse.urlsplit(self.spec.model_proxy_url).path
+            relay = RuntimeGatewayHttpRelay(
+                endpoint,
+                source_path=source_path,
+                api_key=api_key,
+                target_port=self.config.model_proxy.port,
+                timeout_seconds=self.config.runtime_gateway_timeout_seconds,
+            )
+            self._relays.append(relay)
+            self.spec.model_proxy_url = relay.url
+            if "MODEL_AGENT_API_BASE" in self.spec.env:
+                self.spec.env["MODEL_AGENT_API_BASE"] = relay.url
+                self._relay_env_keys.add("MODEL_AGENT_API_BASE")
 
         if not self.config.mcp_gateway.enabled:
             return
         if not self.spec.mcp_urls:
             raise HarnessSidecarError("Sidecar MCP gateway discovery is missing")
+        sidecar_urls = [
+            _in_process_sidecar_url(sidecar_url) for sidecar_url in self.spec.mcp_urls
+        ]
         relay_urls: list[str] = []
-        for sidecar_url in self.spec.mcp_urls:
-            source_path = urllib.parse.urlsplit(sidecar_url).path
-            mcp_relay = RuntimeGatewayHttpRelay(
-                endpoint,
-                source_path=source_path,
-                api_key=api_key,
-                target_port=self.config.mcp_gateway.port,
+        for sidecar_url in sidecar_urls:
+            relay = SidecarMcpHttpRelay(
+                sidecar_url,
                 timeout_seconds=self.config.runtime_gateway_timeout_seconds,
             )
-            self._relays.append(mcp_relay)
-            relay_urls.append(mcp_relay.url)
+            self._relays.append(relay)
+            relay_urls.append(relay.url)
         self.spec.mcp_urls = relay_urls
-        # Keep the Toolset URL/key as Sidecar-only upstream credentials. The
-        # application must call the local Runtime Gateway relay with the
-        # Runtime key instead of receiving the Toolset key or bypassing APIG.
+        # The application and Sidecar run in the same managed container. Calling
+        # the Runtime's own public APIG endpoint from inside an active request is
+        # a hairpin and can fail before MCP session initialization. A small
+        # proxy-free loopback relay buffers legacy Sidecar HTTP framing and
+        # preserves its actual session-header dialect for ADK. External
+        # fixed-port verification may continue through Runtime Gateway.
         self.spec.env["MCP_URLS"] = ",".join(relay_urls)
         self.spec.env["MCP_API_KEY"] = api_key
         self._relay_env_keys.update(("MCP_URLS", "MCP_API_KEY"))
@@ -344,6 +348,26 @@ def start_harness_sidecar(
         if isinstance(error, HarnessSidecarError):
             raise
         raise HarnessSidecarError(f"Harness Sidecar startup failed: {error}") from error
+
+
+def _in_process_sidecar_url(value: str) -> str:
+    parsed = urllib.parse.urlsplit(str(value).strip())
+    if (
+        parsed.scheme != "http"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+    ):
+        raise HarnessSidecarError("Sidecar discovery URL is invalid")
+    host = parsed.hostname
+    if host in {"0.0.0.0", "::"}:
+        host = "127.0.0.1"
+    netloc = host
+    if parsed.port is not None:
+        netloc = f"{host}:{parsed.port}"
+    return urllib.parse.urlunsplit(
+        (parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)
+    )
 
 
 def export_sidecar_env(

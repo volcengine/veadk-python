@@ -99,6 +99,7 @@ import {
   prepareMcpAuth,
   updateMcpAuthTokenInput,
 } from "./mcpAuth";
+import { resolveMcpGatewayEnv } from "./mcpGatewayEnv";
 import {
   normalizeDraft,
   sanitizeGeneratedDraftCapabilities,
@@ -2606,24 +2607,40 @@ function collectDeploymentEnv(root: AgentDraft): RuntimeEnvConfiguration {
   if (
     selectedHarnessOptimizations(prepared.draft).includes("mcp_resilience")
   ) {
+    const gatewayEnv = resolveMcpGatewayEnv(
+      prepared.draft,
+      prepared.envValues,
+    );
+    const gatewayError = gatewayEnv.ok ? undefined : gatewayEnv.message;
     selections.push({
       env: [
         {
           key: "MCP_URLS",
           required: true,
-          comment: "MCP 统一网关地址",
-          placeholder: "https://example.com/mcp",
+          comment: "由已添加的 MCP 工具注入",
+          placeholder: "由已添加的 HTTP MCP 工具自动生成",
+          help: "由已添加的 HTTP MCP 工具自动注入。",
+          readOnly: true,
           requiredBy: [harnessSidecarOptionLabel("mcp_resilience")],
+          missingError: gatewayError,
         },
         {
           key: "MCP_API_KEY",
           required: true,
-          comment: "MCP 统一网关 API Key",
+          comment: "由已添加的 MCP 工具注入",
+          placeholder: "由已添加的 HTTP MCP 工具自动生成",
+          help: "由已添加的 HTTP MCP 工具自动注入。",
           secret: true,
+          readOnly: true,
           requiredBy: [harnessSidecarOptionLabel("mcp_resilience")],
+          missingError: gatewayError,
         },
       ],
     });
+    if (gatewayEnv.ok) {
+      fixedValues.MCP_URLS = gatewayEnv.urls.join(",");
+      fixedValues.MCP_API_KEY = gatewayEnv.apiKey;
+    }
   }
   const config = runtimeEnvConfiguration(selections);
   return {

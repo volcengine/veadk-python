@@ -99,18 +99,21 @@ class HarnessSidecarConfig(SidecarConfigModel):
             return self
         if self.fail_open:
             raise ValueError("apig_runtime_port requires fail_open=false")
-        if not self.model_proxy.enabled:
-            raise ValueError("apig_runtime_port requires model_proxy.enabled=true")
-        if self.model_proxy.host not in {"0.0.0.0", "::"}:
+        if not self.model_proxy.enabled and not self.mcp_gateway.enabled:
             raise ValueError(
-                "apig_runtime_port requires an externally reachable model proxy host"
+                "apig_runtime_port requires at least one enabled Sidecar gateway"
             )
-        if not 1 <= self.model_proxy.port <= 65535:
-            raise ValueError("apig_runtime_port requires a fixed model proxy port")
-        if not self.model_proxy.prefer_configured_upstream_api_key:
-            raise ValueError(
-                "apig_runtime_port requires configured model-upstream authorization"
-            )
+        if self.model_proxy.enabled:
+            if self.model_proxy.host not in {"0.0.0.0", "::"}:
+                raise ValueError(
+                    "apig_runtime_port requires an externally reachable model proxy host"
+                )
+            if not 1 <= self.model_proxy.port <= 65535:
+                raise ValueError("apig_runtime_port requires a fixed model proxy port")
+            if not self.model_proxy.prefer_configured_upstream_api_key:
+                raise ValueError(
+                    "apig_runtime_port requires configured model-upstream authorization"
+                )
         if self.mcp_gateway.enabled:
             if self.mcp_gateway.host not in {"0.0.0.0", "::"}:
                 raise ValueError(
