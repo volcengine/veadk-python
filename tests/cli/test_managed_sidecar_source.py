@@ -30,6 +30,8 @@ _REQUIRED_FILES = (
     "__init__.py",
     "extensions/harness/__init__.py",
     "extensions/harness/sidecar.py",
+    "extensions/harness/sidecar_runtime/mcp_client.py",
+    "extensions/harness/sidecar_runtime/mcp_loopback_proxy.py",
     "extensions/harness/sidecar_runtime/sidecar.py",
     "integrations/agentkit/app.py",
 )
@@ -52,6 +54,7 @@ def test_rewrite_uses_source_snapshot_and_pins_public_sdk() -> None:
                 "agentkit_sdk_python>=0.8.0,<0.9.0",
                 "agentkit-harness-sidecar-integration==0.1.0",
                 "google-adk>=1.34.0",
+                "mcp==1.20.0",
                 "",
             )
         )
@@ -60,9 +63,11 @@ def test_rewrite_uses_source_snapshot_and_pins_public_sdk() -> None:
     assert "veadk-python" in rewritten.splitlines()[0]
     assert "veadk-python[" not in rewritten
     assert "agentkit-harness-sidecar-integration" not in rewritten
-    assert rewritten.splitlines()[1] == "agentkit-sdk-python==0.8.4"
-    assert rewritten.splitlines().count("agentkit-sdk-python==0.8.4") == 1
+    assert rewritten.splitlines()[1] == "agentkit-sdk-python==0.8.1"
+    assert rewritten.splitlines().count("agentkit-sdk-python==0.8.1") == 1
     assert "google-adk>=1.34.0" in rewritten
+    assert rewritten.splitlines().count("mcp==1.26.0") == 1
+    assert "mcp==1.20.0" not in rewritten
 
 
 def test_rewrite_preserves_comments_and_rejects_missing_veadk() -> None:
@@ -76,7 +81,8 @@ def test_rewrite_preserves_comments_and_rejects_missing_veadk() -> None:
         "agentkit-sdk-python>=0.8\nagentkit_sdk_python==0.8.4\n"
     )
     assert "# keep" in rewritten
-    assert rewritten.splitlines().count("agentkit-sdk-python==0.8.4") == 1
+    assert rewritten.splitlines().count("agentkit-sdk-python==0.8.1") == 1
+    assert "agentkit-sdk-python==0.8.4" not in rewritten
 
 
 def test_stage_copies_only_safe_runtime_source_and_rewrites_requirements(
@@ -110,7 +116,8 @@ def test_stage_copies_only_safe_runtime_source_and_rewrites_requirements(
     assert not (project / "veadk/webui").exists()
     assert not (project / "veadk/.env.local").exists()
     requirements = (project / "requirements.txt").read_text(encoding="utf-8")
-    assert requirements.splitlines().count("agentkit-sdk-python==0.8.4") == 1
+    assert requirements.splitlines().count("agentkit-sdk-python==0.8.1") == 1
+    assert requirements.splitlines().count("mcp==1.26.0") == 1
     assert "veadk-python[" not in requirements
 
 

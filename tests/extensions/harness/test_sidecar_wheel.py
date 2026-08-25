@@ -74,6 +74,8 @@ def test_wheel_owns_sidecar_runtime_without_sdk_namespace_overlap(
         "component_catalog.py",
         "deploy.py",
         "failover_proxy.py",
+        "mcp_client.py",
+        "mcp_loopback_proxy.py",
         "profiles.py",
         "runtime_components.py",
         "runtime_gateway_proxy.py",

@@ -936,12 +936,14 @@ def render_requirements(extras: set[str], include_feishu_channel: bool) -> str:
         all_extras.add("extensions")
     unique_extras = sorted(all_extras)
     extras_str = f"[{','.join(unique_extras)}]" if unique_extras else ""
+    managed_sidecar = "harness-sidecar" in all_extras
     pkg = f"veadk-python{extras_str}==1.1.5"
-    packages = [
-        pkg,
-        "agentkit-sdk-python==0.8.4",
-        "google-adk==2.1.0",
-    ]
+    agentkit_sdk = (
+        "agentkit-sdk-python==0.8.1"
+        if managed_sidecar
+        else "agentkit-sdk-python==0.8.4"
+    )
+    packages = [pkg, agentkit_sdk, "google-adk==2.1.0"]
     if include_feishu_channel:
         packages.extend(
             [
@@ -949,6 +951,11 @@ def render_requirements(extras: set[str], include_feishu_channel: bool) -> str:
                 "lark-oapi==1.7.3",
             ]
         )
+    if managed_sidecar:
+        # Managed source staging copies VeADK without installing its project
+        # metadata, so declare the MCP transport version that VeADK itself
+        # requires instead of inheriting an arbitrary version from the base.
+        packages.append("mcp==1.26.0")
     packages.append("starlette==0.52.1")
     return "\n".join(packages) + "\n"
 
@@ -1831,6 +1838,11 @@ def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
         _add_import(acc, "from veadk.extensions.harness import HarnessExtension")
     if acc.managed_mcp_http_count:
         _add_import(acc, "import os")
+        _add_import(
+            acc,
+            "from veadk.extensions.harness.sidecar_runtime.mcp_client import "
+            "managed_mcp_http_client_factory",
+        )
         acc.env.extend(
             [
                 EnvVar(
@@ -1869,6 +1881,9 @@ def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
             "    return StreamableHTTPConnectionParams(\n"
             "        url=_managed_mcp_urls[index],\n"
             '        headers={"Authorization": f"Bearer {_managed_mcp_api_key}"},\n'
+            "        timeout=30.0,\n"
+            "        sse_read_timeout=300.0,\n"
+            "        httpx_client_factory=managed_mcp_http_client_factory,\n"
             "    )\n"
         )
     harness_definition = ""

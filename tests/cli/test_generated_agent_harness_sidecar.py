@@ -43,6 +43,10 @@ def test_disabled_draft_keeps_the_standard_generated_project(
     files = _files(AgentDraft(name="plain-agent"))
 
     assert "harness-sidecar" not in files["requirements.txt"]
+    assert "agentkit-sdk-python==0.8.4" in files["requirements.txt"]
+    assert "agentkit-sdk-python==0.8.1" not in files["requirements.txt"]
+    assert "google-adk==2.1.0" in files["requirements.txt"]
+    assert "mcp==1.26.0" not in files["requirements.txt"]
     assert "main.py" not in files
     assert "HarnessExtension" not in files["app.py"]
     assert "HarnessExtension" not in files["agents/plain_agent/agent.py"]
@@ -74,7 +78,10 @@ def test_selected_component_generates_extra_app_plugins_and_close_lifecycle(
     main_py = files["main.py"]
     agent_py = files["agents/sidecar_agent/agent.py"]
     assert "veadk-python[harness-sidecar]" in requirements
-    assert "agentkit-sdk-python==0.8.4" in requirements
+    assert "agentkit-sdk-python==0.8.1" in requirements
+    assert "agentkit-sdk-python==0.8.4" not in requirements
+    assert "google-adk==2.1.0" in requirements
+    assert requirements.splitlines().count("mcp==1.26.0") == 1
     assert "bytedance-agentkit-harness-sidecar" not in requirements
     assert "HarnessExtension.from_env()" in agent_py
     assert "plugins=harness_extension.plugins()" in agent_py
@@ -118,6 +125,9 @@ def test_mcp_resilience_constructs_toolsets_after_sidecar_gateway_binding() -> N
     assert "def _managed_mcp_connection(index: int)" in agent_py
     assert 'os.environ.get("MCP_URLS", "")' in agent_py
     assert 'os.environ.get("MCP_API_KEY", "")' in agent_py
+    assert "httpx_client_factory=managed_mcp_http_client_factory" in agent_py
+    assert "timeout=30.0" in agent_py
+    assert "sse_read_timeout=300.0" in agent_py
     assert "connection_params=_managed_mcp_connection(0)" in agent_py
     assert "connection_params=_managed_mcp_connection(1)" in agent_py
     assert "MCP gateway endpoint count does not match" in agent_py
@@ -143,6 +153,9 @@ def test_plain_http_mcp_tool_keeps_direct_connection_without_sidecar_gateway() -
 
     agent_py = files["agents/plain_mcp_agent/agent.py"]
     assert "_managed_mcp_connection" not in agent_py
+    assert "managed_mcp_http_client_factory" not in agent_py
+    assert "timeout=30.0" not in agent_py
+    assert "sse_read_timeout=300.0" not in agent_py
     assert 'url="https://mcp.example.test/orders/mcp"' in agent_py
     assert 'os.environ["MCP_ORDERS_TOKEN"]' in agent_py
 

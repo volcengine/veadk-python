@@ -71,20 +71,36 @@ def fake_runtime(tmp_path: Path) -> Path:
                 )
                 values = {key: __import__("os").environ.get(key) for key in keys}
                 open(env_capture, "w", encoding="utf-8").write(json.dumps(values))
+            model_enabled = config["model_proxy"]["enabled"]
+            mcp_enabled = config["mcp_gateway"]["enabled"]
+            mcp_url = __import__("os").environ.get(
+                "FAKE_RUNTIME_MCP_URL",
+                "http://127.0.0.1:18899/metrics",
+            )
             discovery = {
                 "schema_version": "1",
                 "status": "ok",
                 "profile": config["profile"],
-                "model_proxy": {"url": "http://127.0.0.1:18787/api/v3"},
-                "mcp_gateway": {"urls": ["http://127.0.0.1:18899/metrics"]},
+                "model_proxy": (
+                    {"url": "http://127.0.0.1:18787/api/v3"}
+                    if model_enabled else {}
+                ),
+                "mcp_gateway": (
+                    {"urls": [mcp_url]}
+                    if mcp_enabled else {}
+                ),
                 "env": {
-                    "MODEL_AGENT_API_BASE": "http://127.0.0.1:18787/api/v3",
-                    "MCP_URLS": "http://127.0.0.1:18899/metrics",
                     "HARNESS_SIDECAR_ENABLED": "true",
                     "HARNESS_PROFILE": config["profile"],
                 },
                 "diagnostics": [],
             }
+            if model_enabled:
+                discovery["env"]["MODEL_AGENT_API_BASE"] = (
+                    "http://127.0.0.1:18787/api/v3"
+                )
+            if mcp_enabled:
+                discovery["env"]["MCP_URLS"] = mcp_url
             print(json.dumps(discovery), flush=True)
             if __import__("os").environ.get("FAKE_RUNTIME_EXIT_AFTER_DISCOVERY"):
                 time.sleep(0.1)
@@ -257,12 +273,26 @@ def test_apig_runtime_port_relay_replaces_gateway_authorization(
     assert environ["MODEL_AGENT_API_BASE"] == original_model_url
 
 
-def test_apig_runtime_port_rewrites_managed_toolset_through_mcp_gateway(
+def test_apig_runtime_port_uses_stable_proxy_free_mcp_loopback(
     fake_runtime: Path,
 ) -> None:
-    observed: dict[str, str] = {}
+    gateway_requests: list[str] = []
+    sidecar_requests: list[dict[str, str]] = []
 
     class GatewayHandler(BaseHTTPRequestHandler):
+        def log_message(self, *_args: object) -> None:
+            return
+
+        def do_POST(self) -> None:
+            gateway_requests.append(self.path)
+            payload = b'{"error":"application must not hairpin through APIG"}'
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+    class SidecarHandler(BaseHTTPRequestHandler):
         def log_message(self, *_args: object) -> None:
             return
 
@@ -270,9 +300,12 @@ def test_apig_runtime_port_rewrites_managed_toolset_through_mcp_gateway(
             length = int(self.headers.get("Content-Length", "0") or 0)
             if length:
                 self.rfile.read(length)
-            observed["authorization"] = self.headers.get("Authorization", "")
-            observed["port"] = self.headers.get("X-Faas-Proxy-Port", "")
-            observed["path"] = self.path
+            sidecar_requests.append(
+                {
+                    "authorization": self.headers.get("Authorization", ""),
+                    "path": self.path,
+                }
+            )
             payload = b'{"jsonrpc":"2.0","id":1,"result":{"tools":[]}}'
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -284,11 +317,15 @@ def test_apig_runtime_port_rewrites_managed_toolset_through_mcp_gateway(
     gateway_thread = threading.Thread(target=gateway.serve_forever, daemon=True)
     gateway_thread.start()
     host, port = gateway.server_address[:2]
+    sidecar = ThreadingHTTPServer(("127.0.0.1", 0), SidecarHandler)
+    sidecar_thread = threading.Thread(target=sidecar.serve_forever, daemon=True)
+    sidecar_thread.start()
+    _, sidecar_port = sidecar.server_address[:2]
     original_toolset_url = "https://toolset.example/metrics"
     toolset_marker = token_urlsafe(24)
     gateway_marker = token_urlsafe(24)
     environ = {
-        "MODEL_AGENT_API_BASE": "https://model.example/api/v3",
+        "FAKE_RUNTIME_MCP_URL": f"http://0.0.0.0:{sidecar_port}/metrics",
         "TOOL_MCP_ROUTER_URL": original_toolset_url,
         "TOOL_MCP_ROUTER_API_KEY": toolset_marker,
         "HARNESS_SIDECAR_APIG_ENDPOINT": f"http://{host}:{port}",
@@ -300,11 +337,7 @@ def test_apig_runtime_port_rewrites_managed_toolset_through_mcp_gateway(
         transport="apig_runtime_port",
         runtime_command=[sys.executable, str(fake_runtime)],
         model_proxy={
-            "enabled": True,
-            "host": "0.0.0.0",
-            "port": 18787,
-            "upstream_base_url": environ["MODEL_AGENT_API_BASE"],
-            "prefer_configured_upstream_api_key": True,
+            "enabled": False,
         },
         mcp_gateway={
             "enabled": True,
@@ -323,33 +356,42 @@ def test_apig_runtime_port_rewrites_managed_toolset_through_mcp_gateway(
         process_env=environ,
     )
     try:
-        relay_url = environ["MCP_URLS"]
-        assert relay_url.startswith("http://127.0.0.1:")
-        assert relay_url.endswith("/metrics")
+        sidecar_url = environ["MCP_URLS"]
+        assert sidecar_url.startswith("http://127.0.0.1:")
+        assert sidecar_url.endswith("/metrics")
+        assert sidecar_url != f"http://127.0.0.1:{sidecar_port}/metrics"
+        assert len(binding._relays) == 1
+        assert type(binding._relays[0]).__name__ == "SidecarMcpHttpRelay"
         assert environ["MCP_API_KEY"] == gateway_marker
         assert environ["TOOL_MCP_ROUTER_URL"] == original_toolset_url
         assert environ["TOOL_MCP_ROUTER_API_KEY"] == toolset_marker
         request = urllib.request.Request(
-            relay_url,
+            sidecar_url,
             data=b'{"jsonrpc":"2.0","id":1,"method":"tools/list"}',
             headers={"Authorization": f"Bearer {environ['MCP_API_KEY']}"},
             method="POST",
         )
         with urllib.request.urlopen(request, timeout=5) as response:
             assert response.status == 200
-        assert observed == {
-            "authorization": f"Bearer {gateway_marker}",
-            "port": "18788",
-            "path": "/metrics",
-        }
+        assert sidecar_requests == [
+            {
+                "authorization": f"Bearer {gateway_marker}",
+                "path": "/metrics",
+            }
+        ]
+        assert gateway_requests == []
     finally:
         binding.stop()
+        sidecar.shutdown()
+        sidecar.server_close()
+        sidecar_thread.join(timeout=5)
         gateway.shutdown()
         gateway.server_close()
         gateway_thread.join(timeout=5)
 
     assert environ["TOOL_MCP_ROUTER_URL"] == original_toolset_url
     assert environ["TOOL_MCP_ROUTER_API_KEY"] == toolset_marker
+    assert "MODEL_AGENT_API_BASE" not in environ
     assert "MCP_URLS" not in environ
     assert "MCP_API_KEY" not in environ
 

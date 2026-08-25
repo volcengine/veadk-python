@@ -253,6 +253,15 @@ def _prepare_managed_sidecar_runtime_envs(
             "已选择 MCP 稳定性治理，请在“添加 MCP 工具”中配置至少一个 HTTP MCP "
             "服务地址和共享 Bearer Token 后重新发布。"
         )
+    from veadk.extensions.harness.sidecar import (
+        MANAGED_HARNESS_SIDECAR_RUNTIME_COMMAND,
+    )
+
+    # Runtime control-plane env replaces image defaults. Keep the managed
+    # wrapper explicit for every Sidecar plan, including MCP-only/noop plans.
+    runtime_envs["AGENTKIT_HARNESS_RUNTIME_COMMAND"] = (
+        MANAGED_HARNESS_SIDECAR_RUNTIME_COMMAND
+    )
     return None
 
 
