@@ -84,7 +84,7 @@ _INCOMPATIBLE_IMAGE_MESSAGE = (
 _AGENTKIT_CLI_ENV = "VEADK_AGENTKIT_CLI"
 _SIDECAR_COMPRESSION_PROVIDER = "headroom"
 _SIDECAR_NO_COMPRESSION_PROVIDER = "noop"
-_SIDECAR_HEADROOM_RUNTIME_COMMAND = (
+MANAGED_HARNESS_SIDECAR_RUNTIME_COMMAND = (
     "/opt/agentkit-headroom/bin/agentkit-harness-sidecar-runtime"
 )
 
@@ -290,6 +290,8 @@ def studio_harness_deployment_config(
         raise ValueError("; ".join(plan.get("errors") or []))
     if intent.plan_hash and intent.plan_hash != plan.get("plan_hash"):
         raise ValueError("Harness Sidecar plan has changed; resolve it again")
+    activation_targets = dict(plan.get("activation_targets") or {})
+    model_proxy = dict(activation_targets.get("model_proxy") or {})
     return (
         {
             "enabled": True,
@@ -297,6 +299,7 @@ def studio_harness_deployment_config(
             "catalog_version": plan.get("catalog_version"),
             "component_overrides": dict(intent.component_overrides),
             "model_proxy": {
+                "enabled": bool(model_proxy.get("enabled", False)),
                 "compression_provider": _sidecar_compression_provider(plan),
             },
         },
@@ -372,7 +375,7 @@ def studio_harness_runtime_env(
         "fail_open": False,
         "transport": transport,
         "model_proxy": {
-            "enabled": True,
+            "enabled": bool(model_proxy.get("enabled", False)),
             "components": model_components,
             "compression_provider": _sidecar_compression_provider(plan),
             "fail_open": False,
@@ -401,11 +404,12 @@ def studio_harness_runtime_env(
         config,
         profile=intent.profile,
     )
-    if config["model_proxy"]["compression_provider"] == "headroom":
-        # Runtime control-plane environment can supersede the image's inherited
-        # ENV. Select the managed wrapper explicitly so direct local Headroom
-        # never falls back to the application interpreter or to noop.
-        env["AGENTKIT_HARNESS_RUNTIME_COMMAND"] = _SIDECAR_HEADROOM_RUNTIME_COMMAND
+    # Runtime control-plane environment can supersede the image's inherited
+    # ENV and PATH. Every managed Sidecar plan therefore selects the immutable
+    # image's isolated Runtime wrapper explicitly. The compression provider is
+    # independent: ``headroom`` enables compression while ``noop`` keeps the
+    # same wrapper for MCP-only and other non-compression plans.
+    env["AGENTKIT_HARNESS_RUNTIME_COMMAND"] = MANAGED_HARNESS_SIDECAR_RUNTIME_COMMAND
     env["HARNESS_SIDECAR_EXPECTED_PLAN_HASH"] = str(plan.get("plan_hash") or "")
     return env, _studio_plan_payload(intent, plan)
 
@@ -656,6 +660,7 @@ def _truthy(value: str | None) -> bool:
 
 
 __all__ = [
+    "MANAGED_HARNESS_SIDECAR_RUNTIME_COMMAND",
     "STUDIO_HARNESS_COMPONENT_IDS",
     "HarnessSidecarDependencyError",
     "ManagedHarnessSidecar",

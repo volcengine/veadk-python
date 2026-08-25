@@ -203,7 +203,8 @@ def test_managed_sidecar_runtime_envs_fail_before_build_without_mcp_upstream() -
     )
 
     assert error == (
-        "已选择 MCP 稳定性治理，请在发布配置中填写 MCP_URLS 和 MCP_API_KEY。"
+        "已选择 MCP 稳定性治理，请在“添加 MCP 工具”中配置至少一个 HTTP MCP "
+        "服务地址和共享 Bearer Token 后重新发布。"
     )
     assert runtime_envs["MODEL_AGENT_NAME"]
     assert runtime_envs["MODEL_NAME"] == runtime_envs["MODEL_AGENT_NAME"]
@@ -3857,11 +3858,15 @@ def test_sidecar_deployment_uses_agentkit_cli_structured_release(
                 "profile": "default",
                 "catalog_version": "2026.07.1",
                 "component_overrides": {
-                    "context_engine": True,
+                    "context_engine": False,
                     "compressor": False,
                     "verifier": False,
                     "long_run_control": False,
                     "mcp_resilience": True,
+                },
+                "model_proxy": {
+                    "enabled": False,
+                    "compression_provider": "noop",
                 },
             },
             {"planHash": "sha256:test-plan"},
@@ -3989,7 +3994,7 @@ def test_sidecar_deployment_uses_agentkit_cli_structured_release(
                     {"key": "MODEL_AGENT_NAME", "value": "test-model"},
                 ],
                 "harnessSidecar": {
-                    "componentOverrides": {"context_engine": True},
+                    "componentOverrides": {"mcp_resilience": True},
                     "planHash": "sha256:test-plan",
                 },
                 "files": [
@@ -4032,14 +4037,20 @@ def test_sidecar_deployment_uses_agentkit_cli_structured_release(
     assert captured["create_only"] is True
     assert captured["managed_source_present"] is True
     assert "veadk-python[" not in captured["requirements"]
-    assert "agentkit-sdk-python==0.8.4" in captured["requirements"]
+    assert "agentkit-sdk-python==0.8.1" in captured["requirements"]
+    assert "agentkit-sdk-python==0.8.4" not in captured["requirements"]
+    assert captured["requirements"].splitlines().count("mcp==1.26.0") == 1
     assert captured["config"]["name"] == runtime_name
     assert captured["config"]["harness_sidecar"]["component_overrides"] == {
-        "context_engine": True,
+        "context_engine": False,
         "compressor": False,
         "verifier": False,
         "long_run_control": False,
         "mcp_resilience": True,
+    }
+    assert captured["config"]["harness_sidecar"]["model_proxy"] == {
+        "enabled": False,
+        "compression_provider": "noop",
     }
     assert captured["config"]["runtime"]["min_instance"] == 1
     assert captured["config"]["runtime"]["max_instance"] == 1
@@ -4059,6 +4070,10 @@ def test_sidecar_deployment_uses_agentkit_cli_structured_release(
     for key, expected in (
         ("MCP_URLS", "https://mcp.example.test/v1"),
         ("MCP_API_KEY", "platform-mcp-key-test-fixture"),
+        (
+            "AGENTKIT_HARNESS_RUNTIME_COMMAND",
+            "/opt/agentkit-headroom/bin/agentkit-harness-sidecar-runtime",
+        ),
     ):
         persisted_value = captured["config"]["envs"][key]
         assert persisted_value.startswith("${VEADK_STUDIO_RUNTIME_ENV_")
@@ -4066,6 +4081,10 @@ def test_sidecar_deployment_uses_agentkit_cli_structured_release(
         assert captured["cli_env"][placeholder] == expected
     assert "runtime-only-value" not in json.dumps(captured["config"])
     assert "platform-mcp-key-test-fixture" not in json.dumps(captured["config"])
+    assert (
+        "/opt/agentkit-headroom/bin/agentkit-harness-sidecar-runtime"
+        not in json.dumps(captured["config"])
+    )
 
 
 def test_sidecar_deployment_rejects_cr_conflict_before_build(

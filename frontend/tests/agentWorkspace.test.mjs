@@ -410,7 +410,7 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   assert.match(projectPreviewSource, /setActivePhase\(latestPhase\)/);
   assert.match(
     projectPreviewSource,
-    /label: "部署失败"[\s\S]*?message: failedInBuild[\s\S]*?\.\.\.\(buildLog/,
+    /label: buildStatusUnconfirmed[\s\S]*?"构建状态待确认"[\s\S]*?"部署失败"[\s\S]*?message: buildStatusUnconfirmed[\s\S]*?failedInBuild[\s\S]*?\.\.\.\(buildLog/,
   );
   assert.match(projectPreviewSource, /const failedInGithub = latestPhase === "github" && Boolean\(latestGithubLog\)/);
   assert.match(projectPreviewSource, /failedInBuild[\s\S]*?"构建镜像失败，详见构建日志。"[\s\S]*?failedInGithub[\s\S]*?"挂载 GitHub 持续交付失败，详见 GitHub 日志。"/);

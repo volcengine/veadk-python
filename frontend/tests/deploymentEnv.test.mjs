@@ -352,6 +352,23 @@ test("explains optimization dependencies and reports every missing runtime setti
     }),
     [],
   );
+
+  const derivedSpec = {
+    key: "MCP_URLS",
+    required: true,
+    readOnly: true,
+    requiredBy: ["MCP 稳定性治理"],
+    help: "由已添加的 HTTP MCP 工具自动注入。",
+    missingError: "请返回“添加 MCP 工具”补充配置。",
+  };
+  assert.equal(
+    runtimeEnvRequirementHint(derivedSpec),
+    "优化项「MCP 稳定性治理」依赖此配置。 由已添加的 HTTP MCP 工具自动注入。",
+  );
+  assert.equal(
+    runtimeEnvMissingError(derivedSpec),
+    "请返回“添加 MCP 工具”补充配置。",
+  );
 });
 
 test("marks missing optimization env inputs invalid and focuses the first error", () => {
@@ -363,7 +380,21 @@ test("marks missing optimization env inputs invalid and focuses the first error"
     customCreateSource,
     /requiredBy:\s*\[harnessSidecarOptionLabel\("mcp_resilience"\)\]/,
   );
+  assert.match(customCreateSource, /resolveMcpGatewayEnv\(/);
+  assert.match(
+    customCreateSource,
+    /fixedValues\.MCP_URLS = gatewayEnv\.urls\.join\(","\)/,
+  );
+  assert.match(
+    customCreateSource,
+    /fixedValues\.MCP_API_KEY = gatewayEnv\.apiKey/,
+  );
+  assert.match(
+    customCreateSource,
+    /key: "MCP_API_KEY",[\s\S]*?secret: true,[\s\S]*?readOnly: true/,
+  );
   assert.match(projectPreviewSource, /missingRuntimeEnvs\(/);
+  assert.match(projectPreviewSource, /row\.placeholder \|\|/);
   assert.match(projectPreviewSource, /setDeploymentEnvErrors\(/);
   assert.match(projectPreviewSource, /focusDeploymentEnv\(/);
   assert.match(

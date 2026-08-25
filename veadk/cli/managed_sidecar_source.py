@@ -26,9 +26,11 @@ _REQUIREMENT_NAME_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)")
 _REMOVED_DISTRIBUTIONS = {
     "agentkit-sdk-python",
     "agentkit-harness-sidecar-integration",
+    "mcp",
     "veadk-python",
 }
-_MANAGED_SDK_REQUIREMENT = "agentkit-sdk-python==0.8.4"
+_MANAGED_SDK_REQUIREMENT = "agentkit-sdk-python==0.8.1"
+_MANAGED_MCP_REQUIREMENT = "mcp==1.26.0"
 _IGNORED_PARTS = {".git", "__pycache__", "webui"}
 _IGNORED_SUFFIXES = {".pyc", ".pyo"}
 _BLOCKED_SUFFIXES = {".key", ".p12", ".pem", ".pfx"}
@@ -36,6 +38,8 @@ _REQUIRED_SOURCE_FILES = (
     "__init__.py",
     "extensions/harness/__init__.py",
     "extensions/harness/sidecar.py",
+    "extensions/harness/sidecar_runtime/mcp_client.py",
+    "extensions/harness/sidecar_runtime/mcp_loopback_proxy.py",
     "extensions/harness/sidecar_runtime/sidecar.py",
     "integrations/agentkit/app.py",
 )
@@ -76,14 +80,12 @@ def rewrite_managed_sidecar_requirements(requirements: str) -> str:
         lines.append(line)
     if not veadk_removed:
         raise ManagedSidecarSourceError("veadk_requirement_missing")
-    lines.insert(
-        0,
-        _MANAGED_SDK_REQUIREMENT,
-    )
-    lines.insert(
-        0,
+    lines = [
         "# veadk-python is provided by the Studio-managed public source snapshot.",
-    )
+        _MANAGED_SDK_REQUIREMENT,
+        _MANAGED_MCP_REQUIREMENT,
+        *lines,
+    ]
     return "\n".join(lines).rstrip() + "\n"
 
 

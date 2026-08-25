@@ -259,7 +259,9 @@ def test_runtime_env_uses_resolved_plan_without_private_artifact_data(
     assert captured["component_overrides"]["sql_readonly"] is False
     assert captured["profile_arg"] == "default"
     assert env["HARNESS_SIDECAR_EXPECTED_PLAN_HASH"] == "sha256:runtime-plan"
-    assert "AGENTKIT_HARNESS_RUNTIME_COMMAND" not in env
+    assert env["AGENTKIT_HARNESS_RUNTIME_COMMAND"] == (
+        "/opt/agentkit-headroom/bin/agentkit-harness-sidecar-runtime"
+    )
     assert plan["planHash"] == "sha256:runtime-plan"
     assert "artifact" not in str(env).lower()
 
@@ -294,7 +296,7 @@ def test_deployment_config_keeps_only_public_intent_and_checks_plan_hash(
             "long_run_control": False,
             "mcp_resilience": True,
         },
-        "model_proxy": {"compression_provider": "noop"},
+        "model_proxy": {"enabled": False, "compression_provider": "noop"},
     }
     assert plan["planHash"] == "sha256:runtime-plan"
     assert "artifact" not in str(config).lower()
@@ -306,6 +308,48 @@ def test_deployment_config_keeps_only_public_intent_and_checks_plan_hash(
                 "planHash": "sha256:stale",
             }
         )
+
+
+def test_mcp_only_runtime_env_keeps_model_proxy_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def to_env(config: dict[str, Any], *, profile: str) -> dict[str, str]:
+        captured.update(config)
+        captured["profile_arg"] = profile
+        return {
+            "HARNESS_MODEL_PROXY_ENABLED": str(
+                config["model_proxy"]["enabled"]
+            ).lower(),
+            "HARNESS_MCP_GATEWAY_ENABLED": str(
+                config["mcp_gateway"]["enabled"]
+            ).lower(),
+        }
+
+    class RuntimeApi:
+        sidecar_config_to_env = staticmethod(to_env)
+
+    monkeypatch.setattr(sidecar, "_sidecar_runtime_api", RuntimeApi)
+    monkeypatch.setattr(
+        sidecar,
+        "_run_agentkit_cli_json",
+        lambda _arguments: _plan(
+            effective=["mcp_resilience", "sql_readonly"],
+            mcp_enabled=True,
+        ),
+    )
+
+    env, plan = sidecar.studio_harness_runtime_env(
+        {"componentOverrides": {"mcp_resilience": True}},
+        transport="apig_runtime_port",
+    )
+
+    assert captured["model_proxy"]["enabled"] is False
+    assert captured["mcp_gateway"]["enabled"] is True
+    assert env["HARNESS_MODEL_PROXY_ENABLED"] == "false"
+    assert env["HARNESS_MCP_GATEWAY_ENABLED"] == "true"
+    assert plan["effectiveComponents"] == ["mcp_resilience", "sql_readonly"]
 
 
 def test_compressor_selection_uses_sidecar_headroom_provider(
@@ -338,7 +382,10 @@ def test_compressor_selection_uses_sidecar_headroom_provider(
         transport="local",
     )
 
-    assert deployment["model_proxy"] == {"compression_provider": "headroom"}
+    assert deployment["model_proxy"] == {
+        "enabled": True,
+        "compression_provider": "headroom",
+    }
     assert captured["model_proxy"]["compression_provider"] == "headroom"
     assert runtime_env["HARNESS_MODEL_COMPRESSION_PROVIDER"] == "headroom"
     assert runtime_env["AGENTKIT_HARNESS_RUNTIME_COMMAND"] == (

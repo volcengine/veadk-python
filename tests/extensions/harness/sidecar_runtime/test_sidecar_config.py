@@ -163,6 +163,42 @@ def test_apig_runtime_port_env_round_trip_and_runtime_payload() -> None:
     assert "runtime_gateway_api_key_env" not in payload
 
 
+def test_apig_runtime_port_supports_mcp_only_plan() -> None:
+    config = HarnessSidecarConfig.model_validate(
+        {
+            "profile": "default",
+            "component_overrides": {
+                "context_engine": False,
+                "compressor": False,
+                "verifier": False,
+                "long_run_control": False,
+                "mcp_resilience": True,
+                "sql_readonly": True,
+            },
+            "fail_open": False,
+            "transport": "apig_runtime_port",
+            "model_proxy": {"enabled": False},
+            "mcp_gateway": {
+                "enabled": True,
+                "host": "0.0.0.0",
+                "port": 18788,
+                "upstreams": ["https://toolset.example/mcp"],
+                "prefer_configured_upstream_api_key": True,
+                "fail_open": False,
+            },
+        }
+    )
+
+    payload = config.runtime_payload()
+
+    assert payload["model_proxy"]["enabled"] is False
+    assert payload["mcp_gateway"]["enabled"] is True
+    assert payload["runtime_components"] == ["harness_core", "mcp_gateway"]
+    assert payload["runtime_components"] == (
+        config.resolved_plan.activation_targets.runtime_components
+    )
+
+
 @pytest.mark.parametrize(
     ("override", "message"),
     [

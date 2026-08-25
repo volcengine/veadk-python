@@ -158,6 +158,16 @@ const DEPLOY_PHASE_ORDER: Record<string, number> = {
   github: 8,
 };
 
+export const BUILD_STATUS_CONFIRMATION_ERROR_MESSAGE =
+  "构建任务已经提交，但暂时无法确认最终状态。请稍后在 Code Pipeline 查看构建结果，避免重复部署。";
+
+export function isBuildStatusConfirmationError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /RunPipeline result could not be reconciled|Polling build status failed/i.test(
+    message,
+  );
+}
+
 function advanceDeploymentPhase(
   current: string | undefined,
   next: string | undefined,
@@ -1964,7 +1974,12 @@ export function ProjectPreview({
         });
         return;
       }
-      if (mountedRef.current) setDeployError(message);
+      const buildStatusUnconfirmed =
+        latestPhase === "build" && isBuildStatusConfirmationError(err);
+      const displayMessage = buildStatusUnconfirmed
+        ? BUILD_STATUS_CONFIRMATION_ERROR_MESSAGE
+        : message;
+      if (mountedRef.current) setDeployError(displayMessage);
       if (mountedRef.current) setDeployResult(null);
       const buildLog = finalizeBuildFailureLog();
       operation.fail({
@@ -1983,17 +1998,21 @@ export function ProjectPreview({
         startedAt: taskStartedAt,
         status: "error",
         phase: latestPhase,
-        label: "部署失败",
-        message: failedInBuild
-          ? "构建镜像失败，详见构建日志。"
-          : failedInGithub
-            ? "挂载 GitHub 持续交付失败，详见 GitHub 日志。"
-            : message,
+        label: buildStatusUnconfirmed ? "构建状态待确认" : "部署失败",
+        message: buildStatusUnconfirmed
+          ? BUILD_STATUS_CONFIRMATION_ERROR_MESSAGE
+          : failedInBuild
+            ? "构建镜像失败，详见构建日志。"
+            : failedInGithub
+              ? "挂载 GitHub 持续交付失败，详见 GitHub 日志。"
+              : message,
         ...(buildLog ? { buildLog } : terminalBuildLogUpdate("complete")),
         ...(failedInGithub
           ? { githubDelivery: true, githubLog: latestGithubLog }
           : {}),
-        retry: requestDeploymentConfirmation,
+        ...(buildStatusUnconfirmed
+          ? {}
+          : { retry: requestDeploymentConfirmation }),
       });
     } finally {
       if (mountedRef.current) setDeploying(false);
@@ -2893,7 +2912,10 @@ export function ProjectPreview({
                                     className="pp-env-value pp-env-json-value"
                                     value={row.value}
                                     placeholder={
-                                      row.required ? "必填，尚未填写" : "可选，尚未填写"
+                                      row.placeholder ||
+                                      (row.required
+                                        ? "必填，尚未填写"
+                                        : "可选，尚未填写")
                                     }
                                     readOnly={fixed}
                                     disabled={
@@ -2949,9 +2971,10 @@ export function ProjectPreview({
                                       }
                                       value={displayedValue}
                                       placeholder={
-                                        row.required
+                                        row.placeholder ||
+                                        (row.required
                                           ? "必填，尚未填写"
-                                          : "可选，尚未填写"
+                                          : "可选，尚未填写")
                                       }
                                       readOnly={fixed}
                                       disabled={
@@ -3199,13 +3222,22 @@ export function ProjectPreview({
               {deployError && (
                 <DeploymentErrorMessage
                   className="pp-error"
-                  message={`${activePhase
-                    ? `${isRuntimeUpdate ? "更新" : "部署"}失败（${
-                        deploymentSteps.find((step) => step.phase === activePhase)?.label ??
-                        activePhase
-                      }阶段）：`
-                    : ""}${deployError}`}
-                  onRetry={requestDeploymentConfirmation}
+                  message={
+                    deployError === BUILD_STATUS_CONFIRMATION_ERROR_MESSAGE
+                      ? `构建状态待确认：${deployError}`
+                      : `${activePhase
+                          ? `${isRuntimeUpdate ? "更新" : "部署"}失败（${
+                              deploymentSteps.find(
+                                (step) => step.phase === activePhase,
+                              )?.label ?? activePhase
+                            }阶段）：`
+                          : ""}${deployError}`
+                  }
+                  onRetry={
+                    deployError === BUILD_STATUS_CONFIRMATION_ERROR_MESSAGE
+                      ? undefined
+                      : requestDeploymentConfirmation
+                  }
                   retryLabel={
                     isRuntimeUpdate ? "重试更新" : "重试部署"
                   }
