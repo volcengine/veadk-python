@@ -4,6 +4,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type ChangeEvent,
   type MouseEventHandler,
   type WheelEvent,
 } from "react";
@@ -136,6 +137,7 @@ import { CustomCreate } from "./create/CustomCreate";
 import { CodePackageCreate } from "./create/CodePackageCreate";
 import { MigrationWorkspace } from "./migrations/MigrationWorkspace";
 import type { AgentDraft } from "./create/types";
+import { yamlToDraft } from "./create/configYaml";
 import {
   hydrateRuntimeModelSelection,
   isRuntimeModelSelectionEnv,
@@ -585,6 +587,27 @@ function PackageIcon({ className }: { className?: string }) {
     >
       <rect x="3.5" y="5" width="17" height="14.75" rx="2.25" />
       <path d="M3.5 9h17M9.25 12.25 7.1 14.4l2.15 2.15M14.75 12.25l2.15 2.15-2.15 2.15M12.8 11.85l-1.6 5.1" />
+    </svg>
+  );
+}
+
+/** Hand-drawn YAML import mark: a structured config file flowing into Studio. */
+function YamlImportIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.45"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M6.25 3.75h8.1l3.4 3.4v13.1h-11.5a2 2 0 0 1-2-2V5.75a2 2 0 0 1 2-2Z" />
+      <path d="M14.25 3.95V7.4h3.45" />
+      <path d="M7.5 10.25h4.25M7.5 13h6.5M7.5 15.75h3.75" />
+      <path d="M16.25 12.25v5.25m0 0-2-2m2 2 2-2" />
     </svg>
   );
 }
@@ -1401,6 +1424,7 @@ export default function App() {
   // banner (per-session transcripts/topology don't need it).
   const viewSidRef = useRef("");
   const [error, setError] = useState("");
+  const yamlImportInputRef = useRef<HTMLInputElement | null>(null);
 
   function commitVideoTask(
     localId: string,
@@ -5720,6 +5744,39 @@ export default function App() {
     setError("");
   };
 
+  const openYamlImportPicker = () => {
+    yamlImportInputRef.current?.click();
+  };
+
+  const handleYamlImportFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file) return;
+    const filename = file.name.toLowerCase();
+    if (!filename.endsWith(".yaml") && !filename.endsWith(".yml")) {
+      setError("请选择 .yaml 或 .yml 格式的 Agent 结构配置文件。");
+      return;
+    }
+    try {
+      const text = await file.text();
+      const imported = yamlToDraft(text);
+      setAddMenu(false);
+      setImportedDraft(imported);
+      setCustomCreateMode("yaml_import");
+      setRuntimeUpdateTarget(null);
+      setFocusedDeploymentTaskId("");
+      setFocusedWorkspaceAgentId("");
+      setEditingDraftId(`yaml-${Date.now().toString(36)}`);
+      editingDraftBaselineRef.current = null;
+      setCreateView("custom");
+      setError("");
+    } catch (cause) {
+      setError(
+        `YAML 解析失败：${cause instanceof Error ? cause.message : String(cause)}`,
+      );
+    }
+  };
+
   const connectRuntimeForUser = async (
     agent: MyAgentCardData,
     source: AgentConnectSource,
@@ -6795,6 +6852,13 @@ export default function App() {
                     },
                   },
                   {
+                    key: "yaml-import",
+                    icon: YamlImportIcon,
+                    title: "导入 YAML",
+                    desc: "上传已导出的 Agent 结构配置，回到创建页继续编辑和部署。",
+                    onClick: openYamlImportPicker,
+                  },
+                  {
                     key: "intelligent",
                     icon: ScratchIcon,
                     title: "智能模式",
@@ -6843,6 +6907,16 @@ export default function App() {
                     },
                   },
                 ]}
+                footer={
+                  <input
+                    ref={yamlImportInputRef}
+                    type="file"
+                    accept=".yaml,.yml,text/yaml,application/x-yaml"
+                    aria-label="导入 YAML 配置"
+                    style={{ display: "none" }}
+                    onChange={(event) => void handleYamlImportFile(event)}
+                  />
+                }
               />
             ) : searchView ? (
               <SearchView
