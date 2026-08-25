@@ -68,6 +68,7 @@ from veadk.utils.cloud_provider import (
     DEFAULT_CLOUD_PROVIDER,
     CloudProvider,
     agentkit_openapi_base,
+    cloud_provider_from_env,
     default_region,
     default_vefaas_application_template_id,
     normalize_cloud_provider,
@@ -79,6 +80,15 @@ logger = get_logger(__name__)
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _BYTEPLUS_VEFAAS_APPLICATION_NAME_RE = re.compile(
     r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$"
+)
+_STUDIO_DEPLOY_PROCESS_ENV_KEYS = (
+    "CLOUD_PROVIDER",
+    "AGENTKIT_CLOUD_PROVIDER",
+    "BYTEPLUS_REGION",
+    "BYTEPLUS_ACCESS_KEY",
+    "BYTEPLUS_SECRET_KEY",
+    "BYTEPLUS_SESSION_TOKEN",
+    "IAM_ROLE",
 )
 _BUILD_ERROR_MARKERS = (
     "no solution found",
@@ -93,6 +103,36 @@ _BUILD_ERROR_MARKERS = (
     "permission denied",
     "traceback (most recent call last)",
 )
+
+
+def _capture_process_env(keys: Iterable[str]) -> Callable[[], None]:
+    original = {key: os.environ.get(key) for key in keys}
+
+    def _restore() -> None:
+        for key, value in original.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    return _restore
+
+
+def _restore_process_env_on_click_close(keys: Iterable[str]) -> None:
+    ctx = click.get_current_context(silent=True)
+    if ctx is None:
+        return
+    _restore = _capture_process_env(keys)
+    ctx.call_on_close(_restore)
+
+
+def _click_param_from_commandline(name: str) -> bool:
+    ctx = click.get_current_context(silent=True)
+    if ctx is None:
+        return False
+    return ctx.get_parameter_source(name) == click.core.ParameterSource.COMMANDLINE
+
+
 _SENSITIVE_LOG_PATTERNS = (
     re.compile(r"authorization\s*[:=]", re.IGNORECASE),
     re.compile(r"\bbearer\s+\S+", re.IGNORECASE),
@@ -1049,11 +1089,10 @@ def _serve_options(f):
         click.option(
             "--provider",
             type=click.Choice(["volcengine", "byteplus"]),
-            default="volcengine",
-            show_default=True,
+            default=None,
             help=(
-                "Cloud provider for AgentKit services. BytePlus is used only "
-                "when explicitly selected."
+                "Cloud provider for AgentKit services. Defaults to "
+                "AGENTKIT_CLOUD_PROVIDER/CLOUD_PROVIDER, then volcengine."
             ),
         ),
         click.option(
@@ -1387,7 +1426,7 @@ def _run_frontend_server(
     studio_admins: str | None = None,
     studio_developers: str | None = None,
     open_browser: bool,
-    provider: Literal["volcengine", "byteplus"] = "volcengine",
+    provider: Literal["volcengine", "byteplus"] | None = None,
     studio: bool = False,
 ) -> None:
     """Launch the A2UI web UI backed by the ADK agent API server."""
@@ -1409,14 +1448,15 @@ def _run_frontend_server(
     else:
         logger.warning("No .env file found in current directory or parent directories")
 
-    # The local CLI is Volcengine-first even when a shell or global AgentKit
-    # config previously selected BytePlus. BytePlus requires the explicit
-    # ``--provider byteplus`` opt-in.
-    os.environ["AGENTKIT_CLOUD_PROVIDER"] = provider
-    os.environ["CLOUD_PROVIDER"] = provider
+    provider_id = (
+        normalize_cloud_provider(provider) if provider else cloud_provider_from_env()
+    )
+    provider = provider_id
+    os.environ["AGENTKIT_CLOUD_PROVIDER"] = provider_id
+    os.environ["CLOUD_PROVIDER"] = provider_id
     from agentkit.platform.context import set_default_cloud_provider
 
-    set_default_cloud_provider(provider)
+    set_default_cloud_provider(provider_id)
 
     if sandbox_chat_codex_tool_id:
         os.environ["SANDBOX_CHAT_CODEX"] = sandbox_chat_codex_tool_id
@@ -1470,7 +1510,7 @@ def _run_frontend_server(
             studio_tool_registry.revision,
         )
 
-    studio_route_registry = build_studio_route_registry(provider=provider)
+    studio_route_registry = build_studio_route_registry(provider=provider_id)
     studio_route_channels = StudioRouteChannelManager(studio_route_registry)
     app.state.studio_route_registry = studio_route_registry
     app.state.studio_route_channels = studio_route_channels
@@ -10790,9 +10830,11 @@ def _resolve_studio_cloud_credentials(
 @click.option(
     "--provider",
     type=click.Choice(["volcengine", "byteplus"]),
-    default="volcengine",
-    show_default=True,
-    help="Cloud provider for Studio deployment.",
+    default=None,
+    help=(
+        "Cloud provider for Studio deployment. Defaults to "
+        "AGENTKIT_CLOUD_PROVIDER/CLOUD_PROVIDER, then volcengine."
+    ),
 )
 @click.option(
     "--region",
@@ -10963,7 +11005,7 @@ def frontend_deploy(
     client_secret: str,
     allow_dangerous_login: bool,
     vefaas_app_name: str,
-    provider: str,
+    provider: str | None,
     region: str | None,
     project: str,
     iam_role: str | None,
@@ -11011,11 +11053,32 @@ def frontend_deploy(
     )
     from veadk.config import veadk_environments
 
-    provider_id = normalize_cloud_provider(provider)
-    if provider_id == "byteplus":
-        region = region or DEFAULT_BYTEPLUS_REGION
+    _restore_process_env_on_click_close(_STUDIO_DEPLOY_PROCESS_ENV_KEYS)
+    explicit_volcengine_credentials = any(
+        _click_param_from_commandline(name)
+        for name in (
+            "volcengine_access_key",
+            "volcengine_secret_key",
+            "volcengine_session_token",
+        )
+    )
+    explicit_byteplus_credentials = any(
+        _click_param_from_commandline(name)
+        for name in (
+            "byteplus_access_key",
+            "byteplus_secret_key",
+            "byteplus_session_token",
+        )
+    )
+    if provider:
+        provider_id = normalize_cloud_provider(provider)
+    elif explicit_volcengine_credentials and not explicit_byteplus_credentials:
+        provider_id = "volcengine"
+    elif explicit_byteplus_credentials and not explicit_volcengine_credentials:
+        provider_id = "byteplus"
     else:
-        region = region or default_region(provider_id)
+        provider_id = cloud_provider_from_env()
+    region = region or default_region(provider_id)
     os.environ["CLOUD_PROVIDER"] = provider_id
     os.environ["AGENTKIT_CLOUD_PROVIDER"] = provider_id
     if provider_id == "byteplus":
@@ -11789,10 +11852,12 @@ def frontend_deploy(
 @studio.command("update")
 @click.option(
     "--provider",
-    default=DEFAULT_CLOUD_PROVIDER,
+    default=None,
     type=click.Choice(["volcengine", "byteplus"]),
-    show_default=True,
-    help="Cloud provider for the existing Studio deployment.",
+    help=(
+        "Cloud provider for the existing Studio deployment. Defaults to "
+        "AGENTKIT_CLOUD_PROVIDER/CLOUD_PROVIDER, then volcengine."
+    ),
 )
 @click.option(
     "--vefaas-app-name",
@@ -11876,7 +11941,7 @@ def frontend_deploy(
 @click.option("--byteplus-secret-key", default=None, envvar="BYTEPLUS_SECRET_KEY")
 @click.option("--byteplus-session-token", default=None, envvar="BYTEPLUS_SESSION_TOKEN")
 def frontend_update(
-    provider: str,
+    provider: str | None,
     vefaas_app_name: str,
     region: str | None,
     project: str | None,
@@ -11918,14 +11983,16 @@ def frontend_update(
     )
     from veadk.integrations.ve_faas.ve_faas import VeFaaS
 
-    provider_id = normalize_cloud_provider(provider)
+    provider_id = (
+        normalize_cloud_provider(provider) if provider else cloud_provider_from_env()
+    )
     if provider_id == "byteplus":
-        if region is not None and region != DEFAULT_BYTEPLUS_REGION:
+        region = region or default_region(provider_id)
+        if region != DEFAULT_BYTEPLUS_REGION:
             raise click.ClickException(
                 "BytePlus Studio update currently supports only "
                 f"{DEFAULT_BYTEPLUS_REGION}; got {region}."
             )
-        region = region or DEFAULT_BYTEPLUS_REGION
     elif region == DEFAULT_BYTEPLUS_REGION:
         raise click.ClickException(
             f"{DEFAULT_BYTEPLUS_REGION} is a BytePlus region. Use "
