@@ -475,6 +475,7 @@ class VeFaaS:
         function_id: str,
         path: str,
         environment_overrides: dict[str, str] | None = None,
+        disable_gateway_cors: bool = False,
     ) -> str:
         """Replace an application's function bundle and release it.
 
@@ -487,6 +488,7 @@ class VeFaaS:
             function_id: Function ID referenced by the Application.
             path: Prepared function bundle directory.
             environment_overrides: Environment values to explicitly replace.
+            disable_gateway_cors: Disable route-wide APIG CORS after release.
 
         Returns:
             The existing Application URL after the new revision is released.
@@ -496,7 +498,13 @@ class VeFaaS:
             path=path,
             environment_overrides=environment_overrides,
         )
-        return self._release_application(application_id)
+        url = self._release_application(application_id)
+        if disable_gateway_cors:
+            self.ensure_application_route_methods(
+                application_id,
+                disable_cors=True,
+            )
+        return url
 
     def submit_application_code_bundle_update(
         self,
@@ -685,8 +693,10 @@ class VeFaaS:
         self,
         app_id: str,
         required_methods: tuple[str, ...] = ("PATCH",),
+        *,
+        disable_cors: bool = False,
     ) -> bool:
-        """Add missing HTTP methods to an application's generated APIG route."""
+        """Reconcile required HTTP methods and optional APIG CORS hardening."""
         from volcenginesdkapig20221112 import (
             AdvancedSettingForUpdateRouteInput,
             AllowOriginForUpdateRouteInput,
@@ -710,16 +720,20 @@ class VeFaaS:
         route = response.route
         methods = list(route.match_rule.method or [])
         missing = [method for method in required_methods if method not in methods]
-        if not missing:
+        advanced_setting = getattr(route, "advanced_setting", None)
+        cors = getattr(advanced_setting, "cors_policy_setting", None)
+        cors_enabled = bool(getattr(cors, "enable", False))
+        if not missing and not (disable_cors and cors_enabled):
             return False
         methods.extend(missing)
 
         path = route.match_rule.path
-        cors = getattr(route.advanced_setting, "cors_policy_setting", None)
         cors_methods = list(getattr(cors, "allow_methods", None) or [])
         cors_methods.extend(method for method in missing if method not in cors_methods)
         cors_update = None
-        if cors is not None:
+        if disable_cors:
+            cors_update = CorsPolicySettingForUpdateRouteInput(enable=False)
+        elif cors is not None:
             cors_update = CorsPolicySettingForUpdateRouteInput(
                 allow_credentials=cors.allow_credentials,
                 allow_headers=cors.allow_headers,
@@ -735,7 +749,7 @@ class VeFaaS:
                 expose_headers=cors.expose_headers,
                 max_age=cors.max_age,
             )
-        timeout = getattr(route.advanced_setting, "timeout_setting", None)
+        timeout = getattr(advanced_setting, "timeout_setting", None)
         timeout_update = (
             TimeoutSettingForUpdateRouteInput(
                 enable=timeout.enable,
@@ -856,6 +870,7 @@ class VeFaaS:
         enable_key_auth: bool = False,
         enable_mcp_session: bool = True,
         keep_failed_deploy: bool = False,
+        disable_gateway_cors: bool = False,
     ) -> tuple[str, str, str]:
         """Deploy an agent project to VeFaaS service.
 
@@ -866,6 +881,7 @@ class VeFaaS:
             gateway_service_name (str, optional): Gateway service name. Defaults to "".
             gateway_upstream_name (str, optional): Gateway upstream name. Defaults to "".
             enable_key_auth (bool, optional): Enable key auth. Defaults to False.
+            disable_gateway_cors (bool, optional): Disable route-wide APIG CORS.
 
         Returns:
             tuple[str, str, str]: (url, app_id, function_id)
@@ -922,7 +938,10 @@ class VeFaaS:
             logger.info(f"VeFaaS application {name} with ID {app_id} created.")
             logger.info(f"Start to release VeFaaS application {app_id}.")
             url = self._release_application(app_id)
-            self.ensure_application_route_methods(app_id)
+            self.ensure_application_route_methods(
+                app_id,
+                disable_cors=disable_gateway_cors,
+            )
             logger.info(f"VeFaaS application {name} with ID {app_id} released.")
         except Exception:
             if keep_failed_deploy:
