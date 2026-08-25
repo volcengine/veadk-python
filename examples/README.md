@@ -22,6 +22,7 @@ and a bilingual README (English + 中文).
 | 10 | [Agent routing](./10_agent_routing/) | Complex | A coordinator that delegates to specialists dynamically |
 | 11 | [Tracing](./11_tracing/) | Complex | Observe LLM/tool calls; dump or export spans |
 | 13 | [OpenViking](./13_openviking/) | Complex | Use OpenViking for knowledge retrieval and long-term memory |
+| - | [ClickZetta data agent](./clickzetta_data_agent/) | Complex | Expose ClickZetta through typed, read-only data tools |
 
 There are also frontend-focused demos that run with
 `veadk frontend --agents-dir examples`:
@@ -35,7 +36,7 @@ Volcengine AgentKit via `veadk agentkit`), see [`basic-app/`](./basic-app/).
 
 The examples are grouped by concept: 01–02 basics, 03 & 09 memory, 04–05 tools &
 knowledge, 06 & 10 multi-agent, 07–08 model behavior, 11 observability, and 13
-OpenViking-backed knowledge and memory.
+OpenViking-backed knowledge and memory, plus the ClickZetta data-agent example.
 
 ## Common setup
 
