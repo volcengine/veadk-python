@@ -118,6 +118,8 @@ _CP_BUILD_LOG_MAX_CHARS = 50000
 _CP_BUILD_LOG_MAX_LINES = 1000
 _CP_BUILD_LOG_FINAL_ERROR_RETRIES = 5
 _CP_BUILD_LOG_FINAL_ERROR_RETRY_INTERVAL_SECONDS = 2.0
+_LOCAL_ADK_SESSION_PATH_RE = re.compile(r"^/apps/[^/]+/users/([^/]+)/sessions(?:/|$)")
+_LOCAL_ADK_RUN_PATHS = frozenset({"/run", "/run_sse"})
 _CP_BUILD_LOG_ERROR_TAIL_CHECK_CHARS = 1024
 _DEPLOY_PHASE_ORDER = {"build": 0, "deploy": 1, "publish": 2, "update": 3}
 _DEPLOY_PHASE_MARKERS = (
@@ -1543,7 +1545,7 @@ def _run_frontend_server(
     # Agent introspection for the UI's agent picker (name, model, tools). Reuses
     # ADK's AgentLoader, which caches each loaded `root_agent`.
     from fastapi import HTTPException, Query, Request
-    from fastapi.responses import Response
+    from fastapi.responses import JSONResponse, Response
     from google.adk.cli.utils.agent_loader import AgentLoader
     import httpx
 
@@ -1661,6 +1663,61 @@ def _run_frontend_server(
         media_service,
         authorize_user=_authorize_media_user,
     )
+
+    if studio:
+
+        @app.middleware("http")
+        async def _authorize_local_adk_session(request: Request, call_next):
+            """Bind local ADK session operations to the authenticated principal."""
+            requested_user_id: str | None = None
+            path_match = _LOCAL_ADK_SESSION_PATH_RE.match(request.url.path)
+            if path_match is not None:
+                requested_user_id = path_match.group(1)
+            elif request.method == "POST" and request.url.path in _LOCAL_ADK_RUN_PATHS:
+                try:
+                    payload = await request.json()
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    payload = None
+                if isinstance(payload, dict) and isinstance(
+                    payload.get("user_id"), str
+                ):
+                    requested_user_id = payload["user_id"]
+
+            if requested_user_id is None:
+                return await call_next(request)
+
+            principal = _current_principal(request)
+            if principal is None:
+                return JSONResponse(
+                    {"detail": "Studio identity is required"},
+                    status_code=401,
+                )
+
+            if requested_user_id.casefold() in principal.identifiers:
+                return await call_next(request)
+
+            # ``role_for`` intentionally grants legacy admin capabilities when
+            # RBAC is unconfigured. Cross-user data access is more sensitive and
+            # therefore requires an explicit administrator-list match.
+            if principal.identifiers & access_policy.admins:
+                logger.info(
+                    "Studio admin cross-user session access %s",
+                    json.dumps(
+                        {
+                            "actor": principal.owner_id,
+                            "target_user": requested_user_id,
+                            "method": request.method,
+                            "path": request.url.path,
+                        },
+                        ensure_ascii=True,
+                    ),
+                )
+                return await call_next(request)
+
+            return JSONResponse(
+                {"detail": "Cross-user session access is not allowed"},
+                status_code=403,
+            )
 
     from veadk.cli.frontend_issue_feedback import mount_issue_feedback_route
 
