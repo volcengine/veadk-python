@@ -230,6 +230,29 @@ veadk studio deploy \
 用户池；跨地域命中时会显示 warning 并继续。`--project` 指定 VeFaaS 函数
 所属项目，默认为 `default`。
 
+### 环境镜像构建
+
+Studio 的“环境”页面会把环境配置、Dockerfile、构建版本、日志元数据和镜像地址保存到
+私有 TOS。创建或保存环境后，Studio 使用 CodePipeline 构建镜像，并推送到
+Container Registry。首次构建默认自动创建或复用托管的 Workspace、Pipeline 和镜像仓库。
+火山引擎构建会使用阿里云 PyPI 镜像、华为云 Python 源码镜像和 npmmirror 的
+Playwright 浏览器镜像；BytePlus 构建使用对应的官方源。跨版本 Python 组合使用固定
+补丁版本的源码构建，不依赖 GitHub 托管的二进制。
+使用账号级默认 TOS 桶时，CR 会复用 `agentkit-cli-<account-id>` 实例，并在其中创建
+`runtime-environments/base-images` 仓库。
+
+也可以在部署 Studio 时通过 Flag 指定已有资源，两项可以独立使用：
+
+```bash
+veadk studio deploy \
+  --vefaas-app-name <app-name> \
+  --environment-cp-workspace <workspace-id-or-name> \
+  --environment-cr-repository <registry/namespace/repository>
+```
+
+这些配置不从用户环境变量读取。部署后的“系统信息”页面会显示最终使用的
+CodePipeline 和 Container Registry 名称、来源及控制台链接。
+
 更新已部署的 Studio 时，在 VeADK 源码目录执行：
 
 ```bash

@@ -82,10 +82,17 @@ def _assert_sdk_call_is_off_event_loop() -> None:
         asyncio.get_running_loop()
 
 
-def test_frontend_server_compresses_large_static_responses(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize(
+    "provider,expected_encoding",
+    [("volcengine", "gzip"), ("byteplus", None)],
+)
+def test_frontend_server_uses_provider_compatible_static_response_encoding(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    provider: str,
+    expected_encoding: str | None,
 ) -> None:
-    app = _create_frontend_app(monkeypatch, tmp_path)
+    app = _create_frontend_app(monkeypatch, tmp_path, provider=provider)
 
     @app.get("/compression-probe")
     def compression_probe() -> Response:
@@ -97,8 +104,9 @@ def test_frontend_server_compresses_large_static_responses(
     )
 
     assert response.status_code == 200
-    assert response.headers["content-encoding"] == "gzip"
-    assert "Accept-Encoding" in response.headers["vary"]
+    assert response.headers.get("content-encoding") == expected_encoding
+    if expected_encoding:
+        assert "Accept-Encoding" in response.headers["vary"]
 
 
 def test_list_a2a_spaces_paginates_and_maps_names(

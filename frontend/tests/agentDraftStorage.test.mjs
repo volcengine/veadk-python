@@ -133,8 +133,8 @@ test("writes a versioned user-scoped payload with runtime environment values", (
 test("preserves cloud environment selections in local drafts", () => {
   const storage = memoryStorage();
   const cloudEnvironment = {
-    cliTools: ["lark-cli", "github-cli"],
-    dockerfile: "FROM example.invalid/custom\nRUN echo ready\n",
+    environmentId: "environment-123",
+    environmentVersionId: "version-456",
   };
   writeWorkspaceDrafts(storage, "cloud-builder", [
     {
