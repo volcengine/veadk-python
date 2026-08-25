@@ -37,6 +37,7 @@ import {
   listApps,
   listModelOptions,
   listSessions,
+  RUN_SSE_INCOMPLETE_RESPONSE_ERROR,
   runSSE,
   refreshAgentFeedbackCases,
   submitIssueFeedback,
@@ -4935,6 +4936,8 @@ export default function App() {
     setSeenAgentsBySession((m) => ({ ...m, [sid]: new Set() }));
     setExecPathBySession((m) => ({ ...m, [sid]: [] }));
 
+    let streamFailed = false;
+    let streamError: unknown = null;
     try {
       let acc = emptyAcc();
       let currentStreamAuthor = "";
@@ -4942,8 +4945,7 @@ export default function App() {
       let ts = Date.now() / 1000;
       let eventId = "";
       let invocationId = "";
-      let streamFailed = false;
-      let streamError: unknown = null;
+      let hasCompletedReply = false;
       for await (const event of runSSE({
         appName,
         userId,
@@ -4980,6 +4982,12 @@ export default function App() {
         const nextInvocationId = event.invocationId ?? event.invocation_id;
         if (nextInvocationId) invocationId = nextInvocationId;
         const blocks = acc.blocks;
+        if (
+          event.partial !== true &&
+          turnHasVisibleContent({ role: "assistant", blocks })
+        ) {
+          hasCompletedReply = true;
+        }
         const meta = {
           author: currentStreamAuthor || undefined,
           tokens: tokens || undefined,
@@ -5000,6 +5008,13 @@ export default function App() {
           }
           return next;
         });
+      }
+      if (!ctrl.signal.aborted && !streamFailed && !hasCompletedReply) {
+        streamFailed = true;
+        streamError = RUN_SSE_INCOMPLETE_RESPONSE_ERROR;
+        if (viewSidRef.current === sid) {
+          setError(RUN_SSE_INCOMPLETE_RESPONSE_ERROR);
+        }
       }
       void refreshSessions(appName);
       if (trackRuntimeMessage && ctrl.signal.aborted) {
@@ -5023,6 +5038,8 @@ export default function App() {
         automaticEvaluationStatusRefreshRef.current();
       }
     } catch (e) {
+      streamFailed = true;
+      streamError = e;
       if (trackRuntimeMessage) {
         messageOperation?.fail({
           sessionId: String(sid),
@@ -5037,9 +5054,17 @@ export default function App() {
         !ctrl.signal.aborted &&
         viewSidRef.current === sid
       ) {
-        setError(String(e));
+        setError(e instanceof Error ? e.message : String(e));
       }
     } finally {
+      if (
+        !ctrl.signal.aborted &&
+        streamFailed &&
+        viewSidRef.current === sid &&
+        text.trim()
+      ) {
+        setInput((current) => current.trim() ? current : text);
+      }
       if (streamAbortsRef.current.get(sid) === ctrl) streamAbortsRef.current.delete(sid);
       setStreaming(sid, false);
       finishStreamPresentation(sid);
@@ -5100,6 +5125,7 @@ export default function App() {
     streamAbortsRef.current.set(sid, ctrl);
     setStreaming(sid, true);
     startStreamPresentation(sid);
+    let streamFailed = false;
     try {
       let acc = emptyAcc();
       let currentStreamAuthor = lastTurn?.meta?.author ?? "";
@@ -5108,7 +5134,7 @@ export default function App() {
       let ts = Date.now() / 1000;
       let eventId = lastTurn?.meta?.eventId ?? "";
       let invocationId = lastTurn?.meta?.invocationId ?? "";
-      let streamFailed = false;
+      let hasCompletedReply = false;
       for await (const event of runSSE({
         appName,
         userId,
@@ -5145,6 +5171,12 @@ export default function App() {
         const nextInvocationId = event.invocationId ?? event.invocation_id;
         if (nextInvocationId) invocationId = nextInvocationId;
         const blocks = [...currentBase, ...acc.blocks];
+        if (
+          event.partial !== true &&
+          turnHasVisibleContent({ role: "assistant", blocks: acc.blocks })
+        ) {
+          hasCompletedReply = true;
+        }
         setTurnsFor(sid, (t) => {
           const next = t.slice();
           const last = next[next.length - 1];
@@ -5170,17 +5202,24 @@ export default function App() {
           return next;
         });
       }
+      if (!ctrl.signal.aborted && !streamFailed && !hasCompletedReply) {
+        streamFailed = true;
+        if (viewSidRef.current === sid) {
+          setError(RUN_SSE_INCOMPLETE_RESPONSE_ERROR);
+        }
+      }
       void refreshSessions(appName);
       if (!ctrl.signal.aborted && !streamFailed && eventId) {
         automaticEvaluationStatusRefreshRef.current();
       }
     } catch (e) {
+      streamFailed = true;
       if (
         (e as Error)?.name !== "AbortError" &&
         !ctrl.signal.aborted &&
         viewSidRef.current === sid
       ) {
-        setError(String(e));
+        setError(e instanceof Error ? e.message : String(e));
       }
     } finally {
       if (streamAbortsRef.current.get(sid) === ctrl) streamAbortsRef.current.delete(sid);

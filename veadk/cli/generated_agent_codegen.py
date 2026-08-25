@@ -912,17 +912,28 @@ def render_env_example(env: list[EnvVar]) -> str:
 
 
 def render_requirements(extras: set[str], include_feishu_channel: bool) -> str:
-    # Pin minimum versions so the Docker image upgrades past pre-installed
-    # older veadk releases that lack the newer tools and use Starlette 1.x
-    # which removed Router.on_startup (breaks AgentkitAgentServer.lifespan).
+    # Keep Studio-generated projects reproducible. google-adk 2.2+ requires
+    # Starlette 1.x, while AgentKit SDK 0.8.4 still relies on APIs removed in
+    # Starlette 1.x, so these versions must be upgraded together.
     all_extras = set(extras)
     if include_feishu_channel:
         all_extras.add("extensions")
     unique_extras = sorted(all_extras)
     extras_str = f"[{','.join(unique_extras)}]" if unique_extras else ""
-    minimum_version = "1.1.1" if "harness-sidecar" in all_extras else "1.0.5"
-    pkg = f"veadk-python{extras_str}>={minimum_version}"
-    packages = [pkg, "agentkit-sdk-python==0.8.4", "google-adk", "starlette<1.0.0"]
+    pkg = f"veadk-python{extras_str}==1.1.5"
+    packages = [
+        pkg,
+        "agentkit-sdk-python==0.8.4",
+        "google-adk==2.1.0",
+    ]
+    if include_feishu_channel:
+        packages.extend(
+            [
+                "lark-channel-sdk==1.2.0",
+                "lark-oapi==1.7.3",
+            ]
+        )
+    packages.append("starlette==0.52.1")
     return "\n".join(packages) + "\n"
 
 
