@@ -76,6 +76,7 @@ export type Block =
       response?: unknown;
       done: boolean;
       status?: "running" | "completed" | "failed";
+      defaultOpen?: boolean;
     }
   | {
       kind: "plan";

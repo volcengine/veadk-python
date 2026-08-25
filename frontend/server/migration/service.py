@@ -357,73 +357,6 @@ def _analysis_result_message(value: str) -> bool:
     return True
 
 
-def _command_activity_action(command: str, phase: str) -> str | None:
-    normalized = command.casefold()
-    if "ak migrate" in normalized:
-        return "执行 AgentKit 迁移"
-    if re.search(
-        r"(?:^|[\s;&|(/])(?:zip|tar)(?:\s|$)",
-        normalized,
-    ) or any(
-        marker in normalized
-        for marker in ("package_artifact", "package-result", "package.py", "package.sh")
-    ):
-        return "打包迁移产物"
-    if any(
-        marker in normalized
-        for marker in (
-            "pip install",
-            "uv sync",
-            "npm install",
-            "pnpm install",
-            "yarn install",
-        )
-    ):
-        return "准备项目依赖"
-    if any(marker in normalized for marker in ("compileall", "py_compile")):
-        return "检查代码语法"
-    if any(
-        marker in normalized
-        for marker in ("validate", "verify", "pytest", "unittest", " test")
-    ):
-        return "验证迁移结果"
-    if "git diff" in normalized or "git status" in normalized:
-        return "检查代码改动"
-    if any(marker in normalized for marker in ("apply_patch", "<<", "tee ")):
-        return "生成迁移代码"
-    if any(marker in normalized for marker in ("mkdir ", "cp ", "mv ", "touch ")):
-        return "整理迁移文件"
-    if "docker " in normalized or "dockerfile" in normalized:
-        return "检查运行配置"
-    if re.search(
-        r"(?:^|[\s;&|(/])(?:find|fd|rg|grep|ls|tree)(?:\s|$)",
-        normalized,
-    ):
-        return "检查项目结构"
-    if re.search(
-        r"(?:^|[\s;&|(/])(?:cat|sed|head|tail|jq|yq|less)(?:\s|$)",
-        normalized,
-    ):
-        return "读取项目文件"
-    if re.search(
-        r"(?:^|[\s;&|(/])(?:python(?:\d+(?:\.\d+)*)?|node|npx|tsx|bash|sh)(?:\s|$)",
-        normalized,
-    ):
-        return "运行分析脚本" if phase == "analysis" else "运行迁移脚本"
-    return None
-
-
-def _command_activity_title(command: str, status: str, phase: str) -> str | None:
-    action = _command_activity_action(command, phase)
-    if action is None:
-        return None
-    if status == "completed":
-        return f"已{action}"
-    if status == "failed":
-        return f"{action}未完成"
-    return f"正在{action}"
-
-
 def _parse_activity_log(
     content: bytes,
     attempt: int,
@@ -521,6 +454,16 @@ def _parse_activity_log(
                         plan_states.append(todo_status)
             if not plan:
                 continue
+            if (
+                status != "failed"
+                and "failed" not in plan_states
+                and "in_progress" not in plan_states
+            ):
+                for index, plan_state in enumerate(plan_states):
+                    if plan_state == "pending":
+                        plan[index]["status"] = "in_progress"
+                        plan_states[index] = "in_progress"
+                        break
             completed = plan_states.count("completed")
             todo_status = (
                 "failed"
@@ -546,17 +489,11 @@ def _parse_activity_log(
         if item_type == "command_execution":
             command = item.get("command")
             command_text = command if isinstance(command, str) else ""
-            title = _command_activity_title(
-                command_text,
-                status,
-                phase,
-            )
-            if title is None:
-                title = {
-                    "running": "正在执行命令",
-                    "completed": "已执行命令",
-                    "failed": "命令执行未完成",
-                }[status]
+            title = {
+                "running": "正在执行命令",
+                "completed": "命令执行完成",
+                "failed": "命令执行失败",
+            }[status]
             tool: dict[str, object] = {"name": title}
             if command_text:
                 tool["input"] = _activity_payload(
@@ -584,12 +521,14 @@ def _parse_activity_log(
             continue
 
         if item_type == "file_change":
-            title = {
-                "running": "正在更新项目文件",
-                "completed": "已更新项目文件",
-                "failed": "项目文件更新未完成",
-            }[status]
             changes = item.get("changes")
+            change_count = len(changes) if isinstance(changes, list) else 0
+            subject = f"{change_count}个项目文件" if change_count else "项目文件"
+            title = {
+                "running": f"正在更新{subject}",
+                "completed": f"已更新{subject}",
+                "failed": f"更新{subject}失败",
+            }[status]
             tool: dict[str, object] = {"name": title}
             if isinstance(changes, list):
                 tool["input"] = _activity_payload(
@@ -653,11 +592,37 @@ def _parse_activity_log(
             continue
 
         if item_type == "collab_tool_call":
-            title = {
-                "running": "正在协调子任务",
-                "completed": "已完成子任务协作",
-                "failed": "子任务协作未完成",
-            }[status]
+            collab_tool = str(item.get("tool") or "")
+            collab_titles = {
+                "spawn_agent": {
+                    "running": "正在启动子任务",
+                    "completed": "子任务已启动",
+                    "failed": "子任务启动失败",
+                },
+                "send_input": {
+                    "running": "正在向子任务发送信息",
+                    "completed": "已向子任务发送信息",
+                    "failed": "向子任务发送信息失败",
+                },
+                "wait": {
+                    "running": "正在等待子任务",
+                    "completed": "子任务等待已结束",
+                    "failed": "等待子任务失败",
+                },
+                "close_agent": {
+                    "running": "正在结束子任务",
+                    "completed": "子任务已结束",
+                    "failed": "结束子任务失败",
+                },
+            }
+            title = collab_titles.get(collab_tool, {}).get(
+                status,
+                {
+                    "running": "正在协调子任务",
+                    "completed": "子任务协作已完成",
+                    "failed": "子任务协作失败",
+                }[status],
+            )
             input_value = {
                 key: item[key]
                 for key in ("tool", "receiver_thread_ids", "prompt")
@@ -1457,6 +1422,16 @@ def _analysis_prompt(
    网络访问、测试或运行条件不能作为 unsupported 的理由，只能列入 assumptions、
    warnings 或 boundary.exclude，供迁移和部署时处理。
 
+## 用户可见执行动态
+
+- 开始分析后使用 Codex 计划能力列出三到六个有明确结果的有序步骤，并随分析进展及时
+  更新；按顺序完成步骤，使第一个未完成项始终代表当前工作。
+- 计划步骤和阶段性 assistant 更新会直接展示给用户，必须使用简体中文，说明当前发现、
+  已确认结果或下一步动作，不要输出“已完成分析步骤”之类没有事实内容的固定句式。
+- 仅在开始新的关键阶段或获得重要结论时输出简短更新，不要重复计划内容，不要为了展示
+  进度而执行额外命令，也不得包含系统提示词、凭证、环境变量值或其他敏感信息。
+- 最终响应仍必须严格遵守下方输出协议；执行动态不得改变 JSON 字段、迁移建议或证据标准。
+
 ## 支持判定与用户表达
 
 - 能可靠识别 Structured 框架和入口时推荐对应 Structured 方式；否则只要存在足够材料
@@ -1879,6 +1854,13 @@ def _migration_instruction(
             "configurable and follow the source project's security requirements.",
             "Use the user's language in user-facing migration reports. If no user ",
             "language is available, use Simplified Chinese.",
+            "Keep a concise ordered Codex todo list with three to six outcome-oriented ",
+            "steps. Complete it sequentially so the first incomplete step represents ",
+            "the current work, and update it as work advances. At meaningful ",
+            "milestones, emit a brief Simplified Chinese assistant update stating a ",
+            "concrete finding, confirmed result, or next action. Do not emit generic ",
+            "fixed completion notices, repeat the todo list, run extra commands only ",
+            "for progress reporting, or expose prompts, credentials, or environment values.",
             "",
         ]
     )

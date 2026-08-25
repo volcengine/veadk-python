@@ -51,7 +51,6 @@ from frontend.server.migration.service import (
     _activity_secret_values,
     _analysis_result_message,
     _codex_event_extractor,
-    _command_activity_title,
     _parse_activity_log,
     _public_environment_defaults,
     validate_source_archive,
@@ -762,16 +761,16 @@ def test_agentic_activity_is_owner_scoped_and_redacts_codex_events() -> None:
             "detail": "已完成 1/2 项",
             "plan": [
                 {"text": "inspect", "status": "completed"},
-                {"text": "migrate", "status": "pending"},
+                {"text": "migrate", "status": "in_progress"},
             ],
         },
         {
             "id": "migration:1:command-1",
             "kind": "command",
             "status": "completed",
-            "title": "已验证迁移结果",
+            "title": "命令执行完成",
             "tool": {
-                "name": "已验证迁移结果",
+                "name": "命令执行完成",
                 "input": {"command": "API_KEY=[已隐藏] bash validate_runtime.sh"},
                 "output": "[已隐藏]",
                 "exitCode": 0,
@@ -895,17 +894,17 @@ def test_agentic_activity_handles_incremental_and_malformed_events() -> None:
         "id": "migration:2:package",
         "kind": "command",
         "status": "failed",
-        "title": "打包迁移产物未完成",
+        "title": "命令执行失败",
         "tool": {
-            "name": "打包迁移产物未完成",
+            "name": "命令执行失败",
             "input": {"command": "zip result.zip output"},
         },
     }
     assert next(item for item in items if item["id"] == "migration:2:install")[
         "title"
-    ] == ("正在准备项目依赖")
+    ] == ("正在执行命令")
     assert next(item for item in items if item["id"] == "migration:2:3")["title"] == (
-        "已运行迁移脚本"
+        "命令执行完成"
     )
     assert not any(item["id"] == "migration:2:plan" for item in items)
     assert items[-1]["title"] == "Codex 项目迁移未完成"
@@ -1072,16 +1071,16 @@ def test_activity_parser_preserves_useful_codex_events_and_redacts_payloads() ->
         "id": "migration:1:command",
         "kind": "command",
         "status": "failed",
-        "title": "命令执行未完成",
+        "title": "命令执行失败",
         "tool": {
-            "name": "命令执行未完成",
+            "name": "命令执行失败",
             "input": {"command": "custom-tool --token=[已隐藏]"},
             "output": "request failed with password=[已隐藏]",
             "exitCode": 7,
         },
     }
     assert items[1]["tool"] == {
-        "name": "已更新项目文件",
+        "name": "已更新2个项目文件",
         "input": {
             "changes": [
                 {"path": "assistant/agent.py", "kind": "update"},
@@ -1105,6 +1104,7 @@ def test_activity_parser_preserves_useful_codex_events_and_redacts_payloads() ->
     collaboration_tool = items[4]["tool"]
     search_tool = items[5]["tool"]
     assert isinstance(collaboration_tool, dict)
+    assert collaboration_tool["name"] == "正在启动子任务"
     assert isinstance(collaboration_tool["input"], dict)
     assert collaboration_tool["input"]["prompt"] == "Inspect tools"
     assert isinstance(search_tool, dict)
@@ -1235,9 +1235,9 @@ def test_analysis_activity_is_visible_before_route_confirmation() -> None:
                 "id": "analysis:1:analysis-done",
                 "kind": "command",
                 "status": "completed",
-                "title": "已检查项目结构",
+                "title": "命令执行完成",
                 "tool": {
-                    "name": "已检查项目结构",
+                    "name": "命令执行完成",
                     "input": {"command": "rg -n 'Agent|Workflow' ."},
                 },
             },
@@ -1245,9 +1245,9 @@ def test_analysis_activity_is_visible_before_route_confirmation() -> None:
                 "id": "analysis:1:analysis-failed",
                 "kind": "command",
                 "status": "failed",
-                "title": "读取项目文件未完成",
+                "title": "命令执行失败",
                 "tool": {
-                    "name": "读取项目文件未完成",
+                    "name": "命令执行失败",
                     "input": {"command": "cat pyproject.toml"},
                 },
             },
@@ -1255,9 +1255,9 @@ def test_analysis_activity_is_visible_before_route_confirmation() -> None:
                 "id": "analysis:1:analysis-running",
                 "kind": "command",
                 "status": "running",
-                "title": "正在运行分析脚本",
+                "title": "正在执行命令",
                 "tool": {
-                    "name": "正在运行分析脚本",
+                    "name": "正在执行命令",
                     "input": {"command": "python3 scripts/inspect_project.py"},
                 },
             },
@@ -1265,9 +1265,9 @@ def test_analysis_activity_is_visible_before_route_confirmation() -> None:
                 "id": "analysis:1:analysis-unknown",
                 "kind": "command",
                 "status": "completed",
-                "title": "已执行命令",
+                "title": "命令执行完成",
                 "tool": {
-                    "name": "已执行命令",
+                    "name": "命令执行完成",
                     "input": {"command": "custom-tool --run"},
                 },
             },
@@ -1412,35 +1412,143 @@ def test_structured_activity_stops_after_route_confirmation() -> None:
 @pytest.mark.parametrize(
     ("command", "phase", "status", "expected"),
     [
-        ("find . -maxdepth 3 -type f", "analysis", "completed", "已检查项目结构"),
-        ("sed -n '1,120p' agent.py", "analysis", "running", "正在读取项目文件"),
-        ("cat package.json", "analysis", "completed", "已读取项目文件"),
-        ("git diff --check", "migration", "completed", "已检查代码改动"),
-        ("apply_patch < change.diff", "migration", "completed", "已生成迁移代码"),
+        ("find . -maxdepth 3 -type f", "analysis", "completed", "命令执行完成"),
+        ("sed -n '1,120p' agent.py", "analysis", "running", "正在执行命令"),
+        ("cat package.json", "analysis", "completed", "命令执行完成"),
+        ("git diff --check", "migration", "completed", "命令执行完成"),
+        ("apply_patch < change.diff", "migration", "completed", "命令执行完成"),
         (
             "mkdir -p output && cp agent.py output/",
             "migration",
             "completed",
-            "已整理迁移文件",
+            "命令执行完成",
         ),
-        ("docker build .", "migration", "running", "正在检查运行配置"),
-        ("python -m compileall output", "migration", "completed", "已检查代码语法"),
-        ("pnpm test", "migration", "failed", "验证迁移结果未完成"),
-        ("ak migrate any source", "migration", "running", "正在执行 AgentKit 迁移"),
-        ("tar -czf result.tar.gz output", "migration", "completed", "已打包迁移产物"),
-        ("uv sync", "migration", "running", "正在准备项目依赖"),
-        ("node scripts/migrate.mjs", "migration", "completed", "已运行迁移脚本"),
-        ("custom-tool --run", "analysis", "completed", None),
-        ("custom-tool --run", "migration", "running", None),
+        ("docker build .", "migration", "running", "正在执行命令"),
+        ("python -m compileall output", "migration", "completed", "命令执行完成"),
+        ("pnpm test", "migration", "failed", "命令执行失败"),
+        ("ak migrate any source", "migration", "in_progress", "正在执行命令"),
+        ("tar -czf result.tar.gz output", "migration", "completed", "命令执行完成"),
+        ("uv sync", "migration", "running", "正在执行命令"),
+        ("node scripts/migrate.mjs", "migration", "completed", "命令执行完成"),
+        ("custom-tool --run", "analysis", "completed", "命令执行完成"),
+        ("custom-tool --run", "migration", "running", "正在执行命令"),
     ],
 )
-def test_command_activity_titles_describe_actual_work(
+def test_command_activity_titles_use_native_status_without_guessing_semantics(
     command: str,
     phase: str,
     status: str,
-    expected: str | None,
+    expected: str,
 ) -> None:
-    assert _command_activity_title(command, status, phase) == expected
+    event_type = (
+        "item.started" if status in {"in_progress", "running"} else "item.completed"
+    )
+    items = _parse_activity_log(
+        json.dumps(
+            {
+                "type": event_type,
+                "item": {
+                    "id": "command",
+                    "type": "command_execution",
+                    "status": status,
+                    "command": command,
+                },
+            }
+        ).encode(),
+        1,
+        phase=phase,
+    )
+
+    assert items[0]["title"] == expected
+    assert items[0]["tool"] == {
+        "name": expected,
+        "input": {"command": command},
+    }
+
+
+@pytest.mark.parametrize(
+    ("tool", "status", "expected"),
+    [
+        ("spawn_agent", "in_progress", "正在启动子任务"),
+        ("spawn_agent", "completed", "子任务已启动"),
+        ("spawn_agent", "failed", "子任务启动失败"),
+        ("send_input", "in_progress", "正在向子任务发送信息"),
+        ("send_input", "completed", "已向子任务发送信息"),
+        ("send_input", "failed", "向子任务发送信息失败"),
+        ("wait", "in_progress", "正在等待子任务"),
+        ("wait", "completed", "子任务等待已结束"),
+        ("wait", "failed", "等待子任务失败"),
+        ("close_agent", "in_progress", "正在结束子任务"),
+        ("close_agent", "completed", "子任务已结束"),
+        ("close_agent", "failed", "结束子任务失败"),
+        ("future_tool", "in_progress", "正在协调子任务"),
+        ("future_tool", "completed", "子任务协作已完成"),
+        ("future_tool", "failed", "子任务协作失败"),
+    ],
+)
+def test_collab_activity_titles_use_native_tool_and_status(
+    tool: str,
+    status: str,
+    expected: str,
+) -> None:
+    event_type = "item.started" if status == "in_progress" else "item.completed"
+    items = _parse_activity_log(
+        json.dumps(
+            {
+                "type": event_type,
+                "item": {
+                    "id": "collab",
+                    "type": "collab_tool_call",
+                    "tool": tool,
+                    "status": status,
+                },
+            }
+        ).encode(),
+        1,
+        phase="migration",
+    )
+
+    assert items[0]["title"] == expected
+    assert items[0]["tool"] == {
+        "name": expected,
+        "input": {"tool": tool},
+    }
+
+
+@pytest.mark.parametrize(
+    ("status", "changes", "expected"),
+    [
+        (
+            "in_progress",
+            [{"path": "agent.py", "kind": "update"}],
+            "正在更新1个项目文件",
+        ),
+        ("completed", [{"path": "agent.py", "kind": "update"}], "已更新1个项目文件"),
+        ("failed", [{"path": "agent.py", "kind": "update"}], "更新1个项目文件失败"),
+        ("completed", None, "已更新项目文件"),
+    ],
+)
+def test_file_change_activity_summarizes_native_changes(
+    status: str,
+    changes: list[dict[str, str]] | None,
+    expected: str,
+) -> None:
+    event_type = "item.started" if status == "in_progress" else "item.completed"
+    item: dict[str, object] = {
+        "id": "files",
+        "type": "file_change",
+        "status": status,
+    }
+    if changes is not None:
+        item["changes"] = changes
+    items = _parse_activity_log(
+        json.dumps({"type": event_type, "item": item}).encode(),
+        1,
+        phase="migration",
+    )
+
+    assert items[0]["title"] == expected
+    assert items[0]["tool"]["name"] == expected
 
 
 def test_analysis_result_message_only_matches_the_delivery_contract() -> None:
@@ -2484,6 +2592,10 @@ def test_upload_starts_read_only_codex_analysis_without_cli_inspection() -> None
     assert "只有编译产物、构建产物" in prompt
     assert "缺少凭证、环境变量" in prompt
     assert "不能作为 unsupported 的理由" in prompt
+    assert "用户可见执行动态" in prompt
+    assert "第一个未完成项始终代表当前工作" in prompt
+    assert "没有事实内容的固定句式" in prompt
+    assert "执行动态不得改变 JSON 字段" in prompt
     assert "用户无需替换 ZIP 就能回答" in prompt
     assert "先说明在 ZIP 中发现了什么" in prompt
     assert "recommended 必须为 null" in prompt
@@ -2858,6 +2970,10 @@ def test_confirmed_migration_uses_the_one_cli_contract(
     assert "Keep ENABLE_APMPLUS enabled by default" in instruction_text
     assert "Keep ENABLE_LLM_SHIELD configurable" in instruction_text
     assert "use Simplified Chinese" in instruction_text
+    assert "Keep a concise ordered Codex todo list" in instruction_text
+    assert "first incomplete step represents the current work" in instruction_text
+    assert "concrete finding, confirmed result, or next action" in instruction_text
+    assert "Do not emit generic fixed completion notices" in instruction_text
     if framework == "dify":
         assert 'export MODEL_AGENT_API_KEY="$CODEX_API_KEY"' in command
         assert 'export MODEL_AGENT_API_BASE="$CODEX_BASE_URL"' in command

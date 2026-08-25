@@ -101,6 +101,7 @@ test("maps ordered Codex activity into the shared block contract", () => {
       response: { output: "trace", error: "exit failed", exitCode: 1 },
       done: true,
       status: "failed",
+      defaultOpen: true,
     },
     {
       kind: "tool",
@@ -108,6 +109,7 @@ test("maps ordered Codex activity into the shared block contract", () => {
       response: "connection closed",
       done: true,
       status: "failed",
+      defaultOpen: true,
     },
   ]);
 });
