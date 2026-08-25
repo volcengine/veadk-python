@@ -35,6 +35,8 @@ def _create_frontend_app(
     tmp_path: Path,
     *,
     provider: str = "volcengine",
+    admins: str | None = None,
+    developers: str | None = None,
 ) -> FastAPI:
     captured: dict[str, Any] = {}
     monkeypatch.setattr("dotenv.find_dotenv", lambda *args, **kwargs: "")
@@ -67,6 +69,8 @@ def _create_frontend_app(
         oauth2_provider_label=None,
         auth_mode="frontend",
         generated_agent_test_run_ttl=60,
+        studio_admins=admins,
+        studio_developers=developers,
         open_browser=False,
         provider=provider,
     )
@@ -100,7 +104,7 @@ def test_frontend_server_compresses_large_static_responses(
 def test_list_a2a_spaces_paginates_and_maps_names(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    app = _create_frontend_app(monkeypatch, tmp_path)
+    app = _create_frontend_app(monkeypatch, tmp_path, developers="developer")
     calls: list[dict[str, Any]] = []
 
     class _FakeResponse:
@@ -169,6 +173,7 @@ def test_list_a2a_spaces_paginates_and_maps_names(
         response = client.get(
             "/web/a2a-spaces",
             params={"region": "cn-beijing", "page_size": 2, "project": "default"},
+            headers={"X-VeADK-Local-User": "developer"},
         )
 
     assert response.status_code == 200
