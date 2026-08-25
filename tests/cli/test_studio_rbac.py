@@ -2140,6 +2140,181 @@ def test_media_routes_enforce_user_ownership_and_allow_explicit_admin(
 
 
 @pytest.mark.parametrize("provider", ["volcengine", "byteplus"])
+def test_non_admin_cannot_access_another_users_local_adk_session(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    provider: str,
+) -> None:
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        auth_mode="gateway",
+        admins="admin",
+        developers="developer",
+        provider=provider,
+    )
+    requests = [
+        ("GET", "/apps/demo/users/owner/sessions", None),
+        ("POST", "/apps/demo/users/owner/sessions", {}),
+        ("GET", "/apps/demo/users/owner/sessions/session-1", None),
+        ("PATCH", "/apps/demo/users/owner/sessions/session-1", {"state_delta": {}}),
+        ("DELETE", "/apps/demo/users/owner/sessions/session-1", None),
+        (
+            "POST",
+            "/run",
+            {"app_name": "demo", "user_id": "owner", "session_id": "session-1"},
+        ),
+        (
+            "POST",
+            "/run_sse",
+            {"app_name": "demo", "user_id": "owner", "session_id": "session-1"},
+        ),
+    ]
+
+    with TestClient(app) as client:
+        for actor in ("reader", "developer"):
+            authorization = f"Bearer {_unsigned_jwt({'sub': actor})}"
+            for method, path, payload in requests:
+                response = client.request(
+                    method,
+                    path,
+                    headers={"Authorization": authorization},
+                    json=payload,
+                )
+
+                assert response.status_code == 403, (actor, method, path)
+                assert response.json() == {
+                    "detail": "Cross-user session access is not allowed"
+                }
+
+
+def test_local_adk_session_access_requires_a_trusted_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        auth_mode="gateway",
+        admins="admin",
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/apps/demo/users/owner/sessions")
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Studio identity is required"}
+
+
+def test_legacy_full_access_does_not_imply_cross_user_session_access(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        auth_mode="gateway",
+    )
+    authorization = f"Bearer {_unsigned_jwt({'sub': 'reader'})}"
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/apps/demo/users/owner/sessions",
+            headers={"Authorization": authorization},
+        )
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "Cross-user session access is not allowed"}
+
+
+def test_local_adk_session_access_accepts_a_trusted_identity_alias(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        auth_mode="gateway",
+        admins="admin",
+    )
+    authorization = "Bearer " + _unsigned_jwt(
+        {"sub": "stable-id", "email": "Owner@Example.com"}
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/apps/demo/users/owner@example.com/sessions",
+            headers={"Authorization": authorization},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_admin_can_manage_another_users_local_adk_session_with_audit_log(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    audit_logs: list[str] = []
+    original_info = __import__(
+        "veadk.cli.cli_frontend", fromlist=["logger"]
+    ).logger.info
+
+    def _capture_info(message: str, *args: object) -> None:
+        rendered = message % args if args else message
+        if rendered.startswith("Studio admin cross-user session access "):
+            audit_logs.append(rendered)
+        original_info(message, *args)
+
+    monkeypatch.setattr("veadk.cli.cli_frontend.logger.info", _capture_info)
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        auth_mode="gateway",
+        admins="admin",
+        developers="developer",
+    )
+    authorization = f"Bearer {_unsigned_jwt({'sub': 'admin'})}"
+    collection_path = "/apps/demo/users/owner/sessions"
+
+    with TestClient(app) as client:
+        created = client.post(
+            collection_path,
+            headers={"Authorization": authorization},
+            json={"session_id": "session-1", "state": {"status": "created"}},
+        )
+        listed = client.get(
+            collection_path,
+            headers={"Authorization": authorization},
+        )
+        fetched = client.get(
+            f"{collection_path}/session-1",
+            headers={"Authorization": authorization},
+        )
+        updated = client.patch(
+            f"{collection_path}/session-1",
+            headers={"Authorization": authorization},
+            json={"state_delta": {"status": "updated"}},
+        )
+        deleted = client.delete(
+            f"{collection_path}/session-1",
+            headers={"Authorization": authorization},
+        )
+
+    assert created.status_code == 200
+    assert listed.status_code == 200
+    assert [session["id"] for session in listed.json()] == ["session-1"]
+    assert fetched.status_code == 200
+    assert fetched.json()["state"]["status"] == "created"
+    assert updated.status_code == 200
+    assert updated.json()["state"]["status"] == "updated"
+    assert deleted.status_code == 200
+    assert len(audit_logs) == 5
+    assert all('"actor": "admin"' in entry for entry in audit_logs)
+    assert all('"target_user": "owner"' in entry for entry in audit_logs)
+
+
+@pytest.mark.parametrize("provider", ["volcengine", "byteplus"])
 def test_model_api_key_value_requires_agent_management_role(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
