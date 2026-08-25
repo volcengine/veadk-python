@@ -10,27 +10,28 @@ const UNSUPPORTED_ROUTE_HINT =
   "提示：该 Runtime 未提供会话能力运行接口，可能是 Runtime 版本与当前 Studio 不兼容。";
 const TOOL_ARGUMENT_JSON_HINT =
   "提示：模型生成的工具参数格式不完整，请重新发送一次。";
+export const RUN_SSE_NETWORK_CONFIGURATION_HINT =
+  "提示：请检查共享公网出口等网络配置，然后重试。";
+const RAW_RESPONSE_LABEL = "原始响应：";
 
-/** Preserve the upstream error and add guidance only when its cause is known. */
+function appendHint(message: string, hint: string): string {
+  return message.includes(hint) ? message : `${message}\n\n${hint}`;
+}
+
+/** Preserve the upstream error before appending diagnosis and recovery guidance. */
 export function formatRunSseError(error: unknown): string {
   const message = String(error);
+  let formatted = message.includes(RAW_RESPONSE_LABEL)
+    ? message
+    : `${RAW_RESPONSE_LABEL}${message}`;
   if (TOOL_ARGUMENT_JSON_PATTERN.test(message)) {
-    return message.includes(TOOL_ARGUMENT_JSON_HINT)
-      ? message
-      : `${message}\n\n${TOOL_ARGUMENT_JSON_HINT}`;
+    formatted = appendHint(formatted, TOOL_ARGUMENT_JSON_HINT);
+  } else if (SESSION_NOT_FOUND_PATTERN.test(message)) {
+    if (SESSION_DETAIL_PATTERN.test(message)) {
+      formatted = appendHint(formatted, PERSISTENT_MEMORY_HINT);
+    } else if (ROUTE_NOT_FOUND_PATTERN.test(message)) {
+      formatted = appendHint(formatted, UNSUPPORTED_ROUTE_HINT);
+    }
   }
-  if (!SESSION_NOT_FOUND_PATTERN.test(message)) {
-    return message;
-  }
-  if (SESSION_DETAIL_PATTERN.test(message)) {
-    return message.includes(PERSISTENT_MEMORY_HINT)
-      ? message
-      : `${message}\n\n${PERSISTENT_MEMORY_HINT}`;
-  }
-  if (ROUTE_NOT_FOUND_PATTERN.test(message)) {
-    return message.includes(UNSUPPORTED_ROUTE_HINT)
-      ? message
-      : `${message}\n\n${UNSUPPORTED_ROUTE_HINT}`;
-  }
-  return message;
+  return appendHint(formatted, RUN_SSE_NETWORK_CONFIGURATION_HINT);
 }

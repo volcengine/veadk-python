@@ -1789,6 +1789,13 @@ def _run_frontend_server(
             region,
             coded_access_error=True,
         )
+        if getattr(runtime, "apmplus_enable", None) is False:
+            raise HTTPException(
+                status_code=404,
+                detail="该 Agent 未开启链路观测，请到控制台开启后重试。",
+            )
+        from veadk.cli.frontend_apmplus_trace import APMPlusTracePermissionError
+
         try:
             spans = await _load_runtime_apmplus_trace(
                 runtime,
@@ -1797,6 +1804,19 @@ def _run_frontend_server(
                 session_id=sessionId,
                 end_time_ms=endTimeMs,
             )
+        except APMPlusTracePermissionError as error:
+            logger.warning(
+                "APMPlus Studio trace query denied runtime_id=%s: %s",
+                runtimeId,
+                _redact_debug_text(str(error)),
+            )
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "无权限读取 APMPlus 调用链路，请检查 Studio 运行角色的 "
+                    "APMPlus 只读权限。"
+                ),
+            ) from error
         except Exception as error:
             logger.warning(
                 "APMPlus Studio trace query failed runtime_id=%s: %s",
@@ -1809,8 +1829,8 @@ def _run_frontend_server(
             ) from error
         if not spans:
             raise HTTPException(
-                status_code=404,
-                detail="该 Agent 暂未开启链路观测，请到控制台打开后使用。",
+                status_code=425,
+                detail="调用链路仍在采集中，请稍后重试。",
             )
         from veadk.cli.frontend_apmplus_trace import normalize_apmplus_trace
 

@@ -66,6 +66,15 @@ def test_minimal_codegen_agent_py_compiles(tmp_path) -> None:
     assert ".env.example" in paths
     assert "requirements.txt" in paths
     assert "Dockerfile" not in paths
+    requirements = next(
+        file.content for file in project.files if file.path == "requirements.txt"
+    )
+    assert requirements == (
+        "veadk-python==1.1.5\n"
+        "agentkit-sdk-python==0.8.4\n"
+        "google-adk==2.1.0\n"
+        "starlette==0.52.1\n"
+    )
 
     for file in project.files:
         if file.path.endswith(".py"):

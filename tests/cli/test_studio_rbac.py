@@ -2852,6 +2852,8 @@ def test_runtime_trace_reads_apmplus_and_explains_missing_observability(
 ) -> None:
     from agentkit.sdk.runtime.client import AgentkitRuntimeClient
 
+    from veadk.cli.frontend_apmplus_trace import APMPlusTracePermissionError
+
     runtime = _runtime("runtime-developer", "developer")
     runtime.project_name = "default"
     calls: list[dict[str, Any]] = []
@@ -2866,6 +2868,10 @@ def test_runtime_trace_reads_apmplus_and_explains_missing_observability(
         calls.append(kwargs)
         if kwargs["session_id"] == "session-without-trace":
             return []
+        if kwargs["session_id"] == "session-forbidden":
+            raise APMPlusTracePermissionError("AccessDenied")
+        if kwargs["session_id"] == "session-query-failed":
+            raise RuntimeError("upstream unavailable")
         return [
             {
                 "operation_name": "invocation",
@@ -2909,6 +2915,34 @@ def test_runtime_trace_reads_apmplus_and_explains_missing_observability(
             },
             headers=headers,
         )
+        forbidden = client.get(
+            "/web/runtime-trace",
+            params={
+                "runtimeId": "runtime-developer",
+                "sessionId": "session-forbidden",
+                "region": "cn-beijing",
+            },
+            headers=headers,
+        )
+        query_failed = client.get(
+            "/web/runtime-trace",
+            params={
+                "runtimeId": "runtime-developer",
+                "sessionId": "session-query-failed",
+                "region": "cn-beijing",
+            },
+            headers=headers,
+        )
+        runtime.apmplus_enable = False
+        disabled = client.get(
+            "/web/runtime-trace",
+            params={
+                "runtimeId": "runtime-developer",
+                "sessionId": "session-disabled",
+                "region": "cn-beijing",
+            },
+            headers=headers,
+        )
 
     assert response.status_code == 200
     assert response.json()[0]["name"] == "invocation"
@@ -2917,9 +2951,15 @@ def test_runtime_trace_reads_apmplus_and_explains_missing_observability(
     assert calls[0]["session_id"] == "session-1"
     assert calls[0]["project_name"] == "default"
     assert calls[0]["now_ms"] == 1_800_000_000_000
-    assert missing.status_code == 404
-    assert missing.json()["detail"] == (
-        "该 Agent 暂未开启链路观测，请到控制台打开后使用。"
+    assert missing.status_code == 425
+    assert missing.json()["detail"] == ("调用链路仍在采集中，请稍后重试。")
+    assert forbidden.status_code == 403
+    assert "APMPlus 只读权限" in forbidden.json()["detail"]
+    assert query_failed.status_code == 502
+    assert query_failed.json()["detail"] == "加载调用链路失败，请稍后重试。"
+    assert disabled.status_code == 404
+    assert disabled.json()["detail"] == (
+        "该 Agent 未开启链路观测，请到控制台开启后重试。"
     )
 
 
