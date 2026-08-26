@@ -2546,6 +2546,12 @@ def _run_frontend_server(
         IntelligentDevelopmentGateway,
         mount_intelligent_development_routes,
     )
+    from frontend.server.intelligent_development_projects import (
+        IntelligentDevelopmentProjectService,
+        TosIntelligentDevelopmentProjectRepository,
+    )
+    from frontend.server.storage import StudioStorageConfig
+    from frontend.server.storage.tos import create_tos_client_factory
 
     intelligent_development_tool_id = (os.getenv("SANDBOX_DEV") or "").strip()
     intelligent_development_service = SandboxConversationService(
@@ -2619,12 +2625,26 @@ def _run_frontend_server(
         access_key, secret_key, session_token = _resolve_ve_credentials()
         return StudioCredentials(access_key, secret_key, session_token)
 
+    intelligent_project_service = None
+    intelligent_project_storage = StudioStorageConfig.from_env(provider)
+    if intelligent_project_storage.configured:
+        intelligent_project_service = IntelligentDevelopmentProjectService(
+            TosIntelligentDevelopmentProjectRepository(
+                bucket=intelligent_project_storage.bucket,
+                client_factory=create_tos_client_factory(
+                    intelligent_project_storage,
+                    _resolve_ve_credentials,
+                ),
+            )
+        )
+
     mount_intelligent_development_routes(
         app,
         intelligent_development_service,
         _intelligent_development_owner,
         _sandbox_creator,
         _intelligent_development_credentials,
+        project_service=intelligent_project_service,
         configured=bool(intelligent_development_tool_id),
         validation_region=(
             os.getenv("VEADK_STUDIO_DEPLOY_REGION")
@@ -5742,6 +5762,9 @@ def _run_frontend_server(
             IntelligentDevelopmentSourceNotFound,
             IntelligentDevelopmentSourceStale,
         )
+        from frontend.server.intelligent_development_projects import (
+            IntelligentDevelopmentProjectStorageUnavailable,
+        )
 
         temp_dir = tempfile.mkdtemp(prefix=f"agentkit_deploy_{agent_name}_")
         base = PathlibPath(temp_dir).resolve()
@@ -5764,6 +5787,7 @@ def _run_frontend_server(
                     source,
                     owner_id=owner_id,
                     service=intelligent_development_service,
+                    project_service=intelligent_project_service,
                 )
                 entry_point = materialized.entry_point
                 trusted_agent_name = materialized.agent_name
@@ -5790,6 +5814,9 @@ def _run_frontend_server(
         except IntelligentDevelopmentSourceIntegrityError as error:
             shutil.rmtree(temp_dir, ignore_errors=True)
             raise HTTPException(status_code=502, detail=str(error)) from error
+        except IntelligentDevelopmentProjectStorageUnavailable as error:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise HTTPException(status_code=503, detail=str(error)) from error
         except DeploymentSourceError as error:
             shutil.rmtree(temp_dir, ignore_errors=True)
             raise HTTPException(status_code=400, detail=str(error)) from error

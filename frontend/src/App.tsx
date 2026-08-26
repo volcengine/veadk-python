@@ -185,6 +185,7 @@ import {
 import {
   downloadIntelligentDevelopmentRelease,
   fetchIntelligentDevelopmentRelease,
+  fetchIntelligentDevelopmentProjectRelease,
 } from "./adk/intelligentDevelopment";
 import {
   getSandboxAgentCapability,
@@ -1195,6 +1196,13 @@ export default function App() {
           "validationReportSha256",
           delivery.validationReportSha256,
         );
+        if (delivery.projectId && delivery.versionId) {
+          url.searchParams.set("projectId", delivery.projectId);
+          url.searchParams.set("versionId", delivery.versionId);
+        } else {
+          url.searchParams.delete("projectId");
+          url.searchParams.delete("versionId");
+        }
       } else {
         for (const key of [
           "view",
@@ -1202,6 +1210,8 @@ export default function App() {
           "sessionId",
           "artifactSha256",
           "validationReportSha256",
+          "projectId",
+          "versionId",
         ]) url.searchParams.delete(key);
       }
       window.history.replaceState(null, "", url);
@@ -1209,12 +1219,19 @@ export default function App() {
     [],
   );
   const resolveIntelligentDelivery = useCallback(
-    (delivery: IntelligentDevelopmentReleaseRef) =>
-      fetchIntelligentDevelopmentRelease(
-        delivery.sessionId,
-        delivery.artifactSha256,
-        delivery.validationReportSha256,
-      ),
+    (delivery: IntelligentDevelopmentReleaseRef) => delivery.projectId && delivery.versionId
+      ? fetchIntelligentDevelopmentProjectRelease(
+          delivery.projectId,
+          delivery.versionId,
+          delivery.sessionId,
+          delivery.artifactSha256,
+          delivery.validationReportSha256,
+        )
+      : fetchIntelligentDevelopmentRelease(
+          delivery.sessionId,
+          delivery.artifactSha256,
+          delivery.validationReportSha256,
+        ),
     [],
   );
   const downloadIntelligentDelivery = useCallback(
@@ -2695,14 +2712,26 @@ export default function App() {
     const sessionId = query.get("sessionId") ?? "";
     const artifactSha256 = query.get("artifactSha256") ?? "";
     const validationReportSha256 = query.get("validationReportSha256") ?? "";
+    const projectId = query.get("projectId") ?? "";
+    const versionId = query.get("versionId") ?? "";
     if (!sessionId || !artifactSha256 || !validationReportSha256) return;
     const controller = new AbortController();
-    void fetchIntelligentDevelopmentRelease(
-      sessionId,
-      artifactSha256,
-      validationReportSha256,
-      controller.signal,
-    )
+    const load = projectId && versionId
+      ? fetchIntelligentDevelopmentProjectRelease(
+          projectId,
+          versionId,
+          sessionId,
+          artifactSha256,
+          validationReportSha256,
+          controller.signal,
+        )
+      : fetchIntelligentDevelopmentRelease(
+          sessionId,
+          artifactSha256,
+          validationReportSha256,
+          controller.signal,
+        );
+    void load
       .then((delivery) => {
         if (controller.signal.aborted) return;
         if (!delivery.deployable) {
@@ -2748,6 +2777,8 @@ export default function App() {
           enabled?: unknown;
           reason?: unknown;
           model?: unknown;
+          projectStorageEnabled?: unknown;
+          projectStorageReason?: unknown;
         }>;
       })
       .then((value) => {
@@ -2755,6 +2786,10 @@ export default function App() {
         const capability: IntelligentDevelopmentCapabilities = {
           enabled: value.enabled === true,
           reason: typeof value.reason === "string" ? value.reason : "",
+          projectStorageEnabled: value.projectStorageEnabled === true,
+          projectStorageReason: typeof value.projectStorageReason === "string"
+            ? value.projectStorageReason
+            : "",
         };
         if (value.model !== undefined) {
           if (typeof value.model !== "object" || value.model === null) {
@@ -6781,12 +6816,14 @@ export default function App() {
                 preparationStage={intelligentPreparationStage}
                 error={intelligentCapabilitiesError}
                 onCancel={cancelIntelligentPreparation}
+                onDownload={downloadIntelligentDelivery}
+                onDeploy={setIntelligentDeployment}
                 onBack={() => {
                   cancelIntelligentPreparation();
                   setCreateView(null);
                   setAddMenu(true);
                 }}
-                onCreate={async (goal, modelId) => {
+                onCreate={async (goal, modelId, baseVersion) => {
                   if (intelligentPreparationStage) return;
                   intelligentCreateAbortRef.current?.abort();
                   const controller = new AbortController();
@@ -6795,8 +6832,14 @@ export default function App() {
                   setIntelligentCapabilitiesError("");
                   try {
                     const created = await intelligentDevelopmentClient.startSession({
-                      displayName: goal.slice(0, 40),
+                      displayName: baseVersion?.projectName ?? goal.slice(0, 40),
                       modelId,
+                      ...(baseVersion
+                        ? {
+                            projectId: baseVersion.projectId,
+                            baseVersionId: baseVersion.versionId,
+                          }
+                        : {}),
                       signal: controller.signal,
                     });
                     if (

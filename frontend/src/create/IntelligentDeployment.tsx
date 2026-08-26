@@ -71,6 +71,9 @@ export function IntelligentDeployment({
   const source: IntelligentDevelopmentDeploymentSource = {
     kind: "intelligentDevelopment",
     sessionId: delivery.sessionId,
+    ...(delivery.projectId && delivery.versionId
+      ? { projectId: delivery.projectId, versionId: delivery.versionId }
+      : {}),
     artifactSha256: delivery.artifactSha256,
     validationReportSha256: delivery.validationReportSha256,
     ...(delivery.verified ? {} : { acknowledgeUnverified: true }),
