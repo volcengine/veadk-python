@@ -61,6 +61,13 @@ from veadk.cli.studio_account_id import (
     studio_account_id_environment,
 )
 from veadk.cli.studio_telemetry import studio_telemetry_config
+from veadk.cli.studio_vpc_network import (
+    IpNetwork,
+    StudioVpcDiscoveryError,
+    discover_studio_vpc_networks,
+    is_vefaas_runtime,
+    studio_function_id,
+)
 from veadk.utils.cloud_provider import (
     DEFAULT_BYTEPLUS_REGION,
     DEFAULT_BYTEPLUS_VIKING_MEMORY_HOST,
@@ -1808,11 +1815,13 @@ def _run_frontend_server(
 
     _agent_loader = AgentLoader(agents_dir)
 
-    # Generated-agent debug is intentionally feature-complete in both local and
-    # remote Studio deployments: the backend receives AgentDraft JSON, generates
-    # the same project content as "Generate project", writes it to a temp dir,
-    # and starts a runner for the debug session.
-    generated_agent_test_run_allows_local_resources = True
+    # Local Studio remains convenient for developer-owned MCP/A2A services.
+    # VeFaaS Studio limits private endpoints to the VPC attached to this function.
+    generated_agent_test_run_allows_local_resources = not is_vefaas_runtime()
+    generated_agent_vpc_cache: dict[str, object] = {
+        "loaded_at": 0.0,
+        "networks": None,
+    }
 
     generated_agent_test_run_ttl = max(60, generated_agent_test_run_ttl)
     access_policy = StudioAccessPolicy.from_csv(
@@ -2209,6 +2218,37 @@ def _run_frontend_server(
             detail="Volcengine credentials not found (set VOLCENGINE_ACCESS_KEY/"
             "SECRET_KEY, or run inside a VeFaaS function with an IAM role)",
         )
+
+    def _cloud_studio_private_networks() -> tuple[IpNetwork, ...]:
+        cached = generated_agent_vpc_cache["networks"]
+        loaded_at = float(generated_agent_vpc_cache["loaded_at"] or 0.0)
+        if isinstance(cached, tuple) and monotonic() - loaded_at < 300:
+            return cached
+
+        try:
+            access_key, secret_key, session_token = _resolve_ve_credentials()
+            networks = discover_studio_vpc_networks(
+                provider=provider,
+                region=(
+                    os.getenv("VEADK_STUDIO_DEPLOY_REGION")
+                    or os.getenv("APP_REGION")
+                    or default_region(provider)
+                ),
+                access_key=access_key,
+                secret_key=secret_key,
+                session_token=session_token,
+                function_id=studio_function_id(),
+            )
+        except (HTTPException, StudioVpcDiscoveryError) as exc:
+            logger.warning("Unable to resolve Studio VPC ranges: %s", exc)
+            raise DebugPolicyError(
+                "无法确认当前云上 Studio 的 VPC 网段，已停止连接私网 MCP/A2A。"
+                "请检查 VeFaaS VPC 配置和函数角色的 VPC 只读权限。"
+            ) from exc
+
+        generated_agent_vpc_cache["loaded_at"] = monotonic()
+        generated_agent_vpc_cache["networks"] = networks
+        return networks
 
     def _default_cloud_region() -> str:
         return default_region(provider)
@@ -4024,6 +4064,11 @@ def _run_frontend_server(
                         generated_agent_test_run_allows_local_resources
                     ),
                     managed_cloud_provider=provider,
+                    private_network_resolver=(
+                        None
+                        if generated_agent_test_run_allows_local_resources
+                        else _cloud_studio_private_networks
+                    ),
                 )
                 draft = await resolve_debug_mcp_endpoints(draft)
             else:
