@@ -27,9 +27,12 @@ import asyncio
 import hashlib
 import json
 import os
+import queue
 import re
+import shutil
 import sys
 import tempfile
+import threading
 import unicodedata
 import zipfile
 from collections.abc import Callable, Iterable, Mapping
@@ -168,6 +171,9 @@ _CP_BUILD_LOG_FINAL_ERROR_RETRY_INTERVAL_SECONDS = 2.0
 _LOCAL_ADK_SESSION_PATH_RE = re.compile(r"^/apps/[^/]+/users/([^/]+)/sessions(?:/|$)")
 _LOCAL_ADK_RUN_PATHS = frozenset({"/run", "/run_sse"})
 _CP_BUILD_LOG_ERROR_TAIL_CHECK_CHARS = 1024
+_DEPLOY_STREAM_HEARTBEAT_SECONDS = 15.0
+_DEPLOY_STREAM_POLL_SECONDS = 0.1
+_AGENTKIT_RUNTIME_READY_TIMEOUT_MS = "900000"
 _DEPLOY_PHASE_ORDER = {"build": 0, "deploy": 1, "publish": 2, "update": 3}
 _DEPLOY_PHASE_MARKERS = (
     "step 2/2",
@@ -180,6 +186,7 @@ _DEPLOY_PHASE_MARKERS = (
     "runtime status: error",
     "initialization failed",
     "runtime_not_ready",
+    "last status: releasing",
 )
 _PUBLISH_PHASE_MARKERS = (
     "launch successful",
@@ -728,9 +735,10 @@ def _wait_for_cp_build_error_log_snapshot(
 def _advance_deploy_phase(current: str, message: object) -> str:
     """Advance the deployment phase from textual AgentKit progress or errors."""
     m = str(message or "").lower()
+    runtime_ready_timeout = "timed out waiting for" in m and "to reach ready" in m
     if any(marker in m for marker in _PUBLISH_PHASE_MARKERS):
         candidate = "publish"
-    elif any(marker in m for marker in _DEPLOY_PHASE_MARKERS):
+    elif runtime_ready_timeout or any(marker in m for marker in _DEPLOY_PHASE_MARKERS):
         candidate = "deploy"
     elif "step 1/2" in m:
         candidate = "build"
@@ -741,6 +749,77 @@ def _advance_deploy_phase(current: str, message: object) -> str:
         if _DEPLOY_PHASE_ORDER.get(candidate, 0) >= _DEPLOY_PHASE_ORDER.get(current, 0)
         else current
     )
+
+
+async def _next_deploy_stream_event(
+    events: queue.Queue[Any],
+    *,
+    heartbeat_seconds: float = _DEPLOY_STREAM_HEARTBEAT_SECONDS,
+    poll_seconds: float = _DEPLOY_STREAM_POLL_SECONDS,
+) -> tuple[bool, Any]:
+    """Return the next worker event without leaving a blocked executor future.
+
+    The boolean is false when the heartbeat deadline expires. Polling a thread-safe
+    queue keeps cancellation immediate when the browser disconnects, unlike an
+    executor-backed blocking ``Queue.get`` call.
+    """
+    deadline = asyncio.get_running_loop().time() + max(0.0, heartbeat_seconds)
+    while True:
+        try:
+            return True, events.get_nowait()
+        except queue.Empty:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                return False, None
+            await asyncio.sleep(min(max(0.001, poll_seconds), remaining))
+
+
+def _deployment_target_key(
+    owner_id: str,
+    runtime_name: str,
+    region: str,
+) -> tuple[str, str, str]:
+    """Build the stable identity used to reject duplicate active deployments."""
+    return (
+        owner_id.strip() or "local",
+        runtime_name.strip(),
+        region.strip(),
+    )
+
+
+def _has_active_deployment_target(
+    tasks: Mapping[str, Mapping[str, Any]],
+    target_key: tuple[str, str, str],
+) -> bool:
+    """Return whether an active deployment already owns the exact target."""
+    return any(task.get("target_key") == target_key for task in tasks.values())
+
+
+def _finalize_deploy_task(
+    *,
+    task_id: str,
+    task_state: dict[str, Any],
+    tasks: dict[str, dict[str, Any]],
+    tasks_lock: Any,
+    events: queue.Queue[Any],
+    temp_dir: str,
+) -> None:
+    """Release worker-owned resources even when the browser stream disconnects."""
+    stop_event = task_state.get("cp_log_stop_event")
+    if stop_event is not None:
+        stop_event.set()
+    cp_log_thread = task_state.get("cp_log_thread")
+    if (
+        cp_log_thread is not None
+        and cp_log_thread.is_alive()
+        and cp_log_thread is not threading.current_thread()
+    ):
+        cp_log_thread.join(timeout=1.0)
+    with tasks_lock:
+        if tasks.get(task_id) is task_state:
+            tasks.pop(task_id, None)
+    shutil.rmtree(temp_dir, ignore_errors=True)
+    events.put(None)
 
 
 def _sanitize_build_log_snapshot(
@@ -6092,6 +6171,11 @@ def _run_frontend_server(
             "destroying": False,
             "destroy_on_cancel": not bool(runtime_id) and not sidecar_enabled,
             "owner_id": owner_id,
+            "target_key": _deployment_target_key(
+                owner_id,
+                deployment_runtime_name,
+                region,
+            ),
             "cp_workspace_id": str(
                 (
                     ((data.get("resources") or {}).get("codePipeline") or {}).get(
@@ -6542,17 +6626,14 @@ def _run_frontend_server(
         result_box: dict = {}
 
         def _finish_deploy_thread() -> None:
-            cp_log_stop_event.set()
-            cp_log_thread = task_state.get("cp_log_thread")
-            if (
-                cp_log_thread is not None
-                and cp_log_thread.is_alive()
-                and cp_log_thread is not _threading.current_thread()
-            ):
-                cp_log_thread.join(timeout=1.0)
-            with _deploy_tasks_lock:
-                _deploy_tasks.pop(task_id, None)
-            events.put(None)
+            _finalize_deploy_task(
+                task_id=task_id,
+                task_state=task_state,
+                tasks=_deploy_tasks,
+                tasks_lock=_deploy_tasks_lock,
+                events=events,
+                temp_dir=temp_dir,
+            )
 
         def _run_cli() -> None:
             """Run the authorized AgentKit CLI MR structured release once."""
@@ -6569,6 +6650,10 @@ def _run_frontend_server(
                     else:
                         cli_env.pop("VOLCENGINE_SESSION_TOKEN", None)
                     cli_env["AGENTKIT_HARNESS_SIDECAR_BASE_IMAGE"] = sidecar_base_image
+                    cli_env.setdefault(
+                        "AGENTKIT_RUNTIME_READY_TIMEOUT_MS",
+                        _AGENTKIT_RUNTIME_READY_TIMEOUT_MS,
+                    )
                     if not runtime_id:
                         cli_env["AGENTKIT_HARNESS_SIDECAR_REQUIRE_ABSENT"] = "true"
                     cli_env.update(sidecar_cli_runtime_env)
@@ -7085,6 +7170,15 @@ def _run_frontend_server(
                 raise HTTPException(
                     status_code=409, detail="Deployment task already exists"
                 )
+            if _has_active_deployment_target(
+                _deploy_tasks,
+                task_state["target_key"],
+            ):
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                raise HTTPException(
+                    status_code=409,
+                    detail="该智能体正在部署中，请等待当前任务完成后再重试。",
+                )
             _deploy_tasks[task_id] = task_state
 
         _threading.Thread(
@@ -7096,7 +7190,10 @@ def _run_frontend_server(
             loop = asyncio.get_event_loop()
             try:
                 while True:
-                    ev = await loop.run_in_executor(None, events.get)
+                    has_event, ev = await _next_deploy_stream_event(events)
+                    if not has_event:
+                        yield ": keepalive\n\n"
+                        continue
                     if ev is None:
                         break
                     yield f"data: {_json.dumps(ev, ensure_ascii=False)}\n\n"
@@ -7314,11 +7411,20 @@ def _run_frontend_server(
                             )
                 yield f"data: {_json.dumps(final, ensure_ascii=False)}\n\n"
             finally:
-                shutil.rmtree(temp_dir, ignore_errors=True)
+                # The worker owns cleanup. A browser disconnect must not remove
+                # files while the build/release thread is still using them.
+                pass
 
         from fastapi.responses import StreamingResponse
 
-        return StreamingResponse(_stream(), media_type="text/event-stream")
+        return StreamingResponse(
+            _stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     def _runtime_tags(runtime: Any) -> dict[str, str]:
         return {
