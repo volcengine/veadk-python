@@ -40,6 +40,16 @@ python main.py
 
 会话 #2 的推荐应当尊重会话 #1 中提到的花生过敏与素食偏好。
 
+## 自动保存策略预览
+
+如果只想查看 `auto_save_memory_policy` 会保存哪些 event，而不调用模型或真实记忆服务，可以运行：
+
+```bash
+python auto_save_memory_policy.py
+```
+
+这个预览会对比 `"default"`、`"all"` 和一个自定义 `MemoryAutoSavePolicy`。
+
 ## 下一步
 
 - 短期 vs 长期：会话内的记忆见 [03](../03_short_term_memory/)。
