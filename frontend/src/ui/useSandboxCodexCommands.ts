@@ -49,6 +49,7 @@ export function useSandboxCodexCommands({
 }: UseSandboxCodexCommandsOptions) {
   const sessionIdRef = useRef(session?.id ?? "");
   const threadsRequestRef = useRef(0);
+  const threadsAbortRef = useRef<AbortController | null>(null);
   sessionIdRef.current = session?.id ?? "";
   const [commandBusy, setCommandBusy] = useState(false);
   const [models, setModels] = useState<SandboxModel[]>([]);
@@ -66,6 +67,8 @@ export function useSandboxCodexCommands({
   const [threadActionId, setThreadActionId] = useState("");
 
   useEffect(() => {
+    threadsAbortRef.current?.abort();
+    threadsAbortRef.current = null;
     threadsRequestRef.current += 1;
     setCommandBusy(false);
     setModels([]);
@@ -134,6 +137,9 @@ export function useSandboxCodexCommands({
   ) => {
     const activeSessionId = sessionIdRef.current;
     if (!activeSessionId) return;
+    threadsAbortRef.current?.abort();
+    const controller = new AbortController();
+    threadsAbortRef.current = controller;
     const requestId = ++threadsRequestRef.current;
     setThreadsLoading(true);
     setThreadsError("");
@@ -141,6 +147,7 @@ export function useSandboxCodexCommands({
       const page = await client.listThreads(
         activeSessionId,
         cursor ? { cursor } : {},
+        { signal: controller.signal },
       );
       if (
         sessionIdRef.current === activeSessionId &&
@@ -155,6 +162,7 @@ export function useSandboxCodexCommands({
         setThreadsNextCursor(page.nextCursor ?? "");
       }
     } catch (error) {
+      if ((error as Error)?.name === "AbortError") return;
       if (
         sessionIdRef.current === activeSessionId &&
         threadsRequestRef.current === requestId
@@ -162,6 +170,9 @@ export function useSandboxCodexCommands({
         setThreadsError(error instanceof Error ? error.message : String(error));
       }
     } finally {
+      if (threadsAbortRef.current === controller) {
+        threadsAbortRef.current = null;
+      }
       if (
         sessionIdRef.current === activeSessionId &&
         threadsRequestRef.current === requestId
@@ -189,6 +200,11 @@ export function useSandboxCodexCommands({
   useEffect(() => {
     if (!allowThreadManagement || !session?.id) return;
     void refreshThreads();
+    return () => {
+      threadsAbortRef.current?.abort();
+      threadsAbortRef.current = null;
+      threadsRequestRef.current += 1;
+    };
   }, [allowThreadManagement, refreshThreads, session?.id]);
 
   function applySnapshot(snapshot: SandboxThreadSnapshot) {

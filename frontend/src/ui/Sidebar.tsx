@@ -21,7 +21,7 @@ import type {
   StudioAccess,
   UiFeatures,
 } from "../adk/client";
-import type { SandboxSession, SandboxThreadSummary } from "../adk/sandbox";
+import type { SandboxThreadSummary } from "../adk/sandbox";
 import { sessionTitle } from "../blocks";
 import { displayName, profilePictureUrl } from "../adk/identity";
 import { SearchButton } from "./Search";
@@ -65,33 +65,6 @@ export interface SidebarSandboxHistory {
   onDelete: (thread: SandboxThreadSummary) => void;
 }
 
-export interface SidebarIntelligentHistory {
-  sessions: SandboxSession[];
-  currentSessionId: string;
-  loading: boolean;
-  error: string;
-  busySessionId: string;
-  openingSessionId: string;
-  onSelect: (session: SandboxSession) => void;
-  onDelete: (session: SandboxSession) => void;
-}
-
-type SidebarHistoryItem =
-  | {
-      kind: "agent";
-      id: string;
-      title: string;
-      createdAt: number;
-      session: AdkSession;
-    }
-  | {
-      kind: "intelligent";
-      id: string;
-      title: string;
-      createdAt: number;
-      session: SandboxSession;
-    };
-
 function ApplicationsIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <svg
@@ -125,7 +98,6 @@ export interface SidebarProps {
   /** Session ids whose latest reply is currently being evaluated. */
   evaluatingSids?: Set<string>;
   sandboxHistory?: SidebarSandboxHistory;
-  intelligentHistory?: SidebarIntelligentHistory;
   onNewChat: () => void;
   onSearch: () => void;
   onQuickCreate: () => void;
@@ -308,7 +280,6 @@ export function Sidebar({
   streamingSids,
   evaluatingSids,
   sandboxHistory,
-  intelligentHistory,
   onNewChat,
   onSearch,
   onQuickCreate,
@@ -336,22 +307,11 @@ export function Sidebar({
       window.matchMedia(SIDEBAR_AUTO_COLLAPSE_QUERY).matches,
   );
   const [collapsed, setCollapsed] = useState(autoCollapsedRef.current);
-  const combinedHistory: SidebarHistoryItem[] = [
-    ...sessions.map((session) => ({
-      kind: "agent" as const,
-      id: session.id,
-      title: sessionTitle(session.events),
-      createdAt: (session.lastUpdateTime ?? 0) * 1_000,
-      session,
-    })),
-    ...(intelligentHistory?.sessions ?? []).map((session) => ({
-      kind: "intelligent" as const,
-      id: session.id,
-      title: session.displayName || "智能构建",
-      createdAt: Date.parse(session.createdAt) || 0,
-      session,
-    })),
-  ].sort((left, right) => right.createdAt - left.createdAt);
+  const combinedHistory = sessions.map((session) => ({
+    id: session.id,
+    title: sessionTitle(session.events),
+    createdAt: (session.lastUpdateTime ?? 0) * 1_000,
+  })).sort((left, right) => right.createdAt - left.createdAt);
   const toggleCollapsed = () => {
     autoCollapsedRef.current = false;
     setCollapsed((value) => !value);
@@ -611,53 +571,30 @@ export function Sidebar({
               </>
             ) : (
               <>
-                {intelligentHistory?.loading && combinedHistory.length === 0 ? (
-                  <div className="history-empty" role="status">
-                    正在加载历史会话…
-                  </div>
-                ) : null}
-                {intelligentHistory?.error ? (
-                  <div className="history-error" role="alert">
-                    {intelligentHistory.error}
-                  </div>
-                ) : null}
-                {!intelligentHistory?.loading &&
-                !intelligentHistory?.error &&
-                combinedHistory.length === 0 ? (
+                {combinedHistory.length === 0 ? (
                   <div className="history-empty">暂无会话</div>
                 ) : null}
                 {combinedHistory.map((item) => {
-                  const key = `${item.kind}:${item.id}`;
-                  const intelligent = item.kind === "intelligent";
-                  const active = intelligent
-                    ? item.id === intelligentHistory?.currentSessionId
-                    : item.id === currentSessionId;
-                  const streaming = intelligent
-                    ? item.id === intelligentHistory?.busySessionId
-                    : streamingSids?.has(item.id) === true;
-                  const evaluating = !intelligent && !streaming
+                  const active = item.id === currentSessionId;
+                  const streaming = streamingSids?.has(item.id) === true;
+                  const evaluating = !streaming
                     && evaluatingSids?.has(item.id) === true;
-                  const opening = intelligent
-                    && item.id === intelligentHistory?.openingSessionId;
                   return (
                     <div
-                      key={key}
+                      key={item.id}
                       className={`history-item ${active ? "active" : ""}`}
                     >
                       <button
                         className="history-item-btn"
-                        onClick={() => item.kind === "intelligent"
-                          ? intelligentHistory?.onSelect(item.session)
-                          : onPickSession(item.id)}
+                        onClick={() => onPickSession(item.id)}
                         aria-current={active ? "page" : undefined}
                         title={item.title}
-                        disabled={opening}
                       >
                         {streaming && (
                           <span
                             className="history-streaming"
-                            title={intelligent ? "正在构建…" : "正在生成…"}
-                            aria-label={intelligent ? "正在构建" : "正在生成"}
+                            title="正在生成…"
+                            aria-label="正在生成"
                           />
                         )}
                         <span className="history-title">{item.title}</span>
@@ -679,14 +616,15 @@ export function Sidebar({
                         className="history-more"
                         aria-label={`管理历史会话：${item.title}`}
                         title="更多"
-                        disabled={opening || (intelligent && streaming)}
                         onClick={() =>
-                          setMenuFor((current) => current === key ? null : key)
+                          setMenuFor((current) =>
+                            current === item.id ? null : item.id
+                          )
                         }
                       >
                         <MoreHorizontal className="icon" />
                       </button>
-                      {menuFor === key && (
+                      {menuFor === item.id && (
                         <>
                           <div
                             className="menu-scrim"
@@ -698,11 +636,7 @@ export function Sidebar({
                               className="menu-item menu-item--danger"
                               onClick={() => {
                                 setMenuFor(null);
-                                if (item.kind === "intelligent") {
-                                  intelligentHistory?.onDelete(item.session);
-                                } else {
-                                  onDeleteSession(item.id);
-                                }
+                                onDeleteSession(item.id);
                               }}
                             >
                               <Trash2 className="icon" /> 删除

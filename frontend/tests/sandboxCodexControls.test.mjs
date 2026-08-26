@@ -72,6 +72,11 @@ test("active Codex Sandbox threads replace normal history in the Sidebar", () =>
   assert.match(commandHookSource, /deleteThread/);
   assert.match(commandHookSource, /client\.deleteThread/);
   assert.match(commandHookSource, /threadsRequestRef\.current \+= 1/);
+  assert.match(commandHookSource, /threadsAbortRef\.current\?\.abort\(\)/);
+  assert.match(
+    commandHookSource,
+    /client\.listThreads\([\s\S]*?signal: controller\.signal/,
+  );
   assert.match(appSource, /void sandboxCommands\.refreshThreads\(\)/);
   assert.match(appSource, /sandboxHistory=\{sandboxSession/);
   assert.match(appSource, /onNew: \(\) => void sandboxCommands\.newThread\(\)/);

@@ -864,47 +864,15 @@ test("intelligent conversation keeps the Studio visual language and stable contr
   );
 });
 
-test("intelligent builds join history and restore conversation plus delivery", () => {
-  assert.match(appSource, /const \[intelligentSessions, setIntelligentSessions\]/);
-  assert.match(
-    appSource,
-    /intelligentDevelopmentClient\.listSessions\([\s\S]*?setIntelligentSessions/,
-  );
-  assert.match(
-    appSource,
-    /setIntelligentSessions\(\(current\) =>[\s\S]*?created/,
-  );
-  assert.match(sidebarSource, /intelligentHistory\?: SidebarIntelligentHistory/);
-  assert.match(
-    sidebarSource,
-    /kind: "intelligent"[\s\S]*?createdAt[\s\S]*?sort/,
-  );
-  assert.match(
-    appSource,
-    /async function openIntelligentDevelopmentSession[\s\S]*?connectSession\([\s\S]*?restoredConversation[\s\S]*?sandboxSnapshotTurns/,
-  );
-  assert.match(
-    appSource,
-    /intelligentOpenAbortRef\.current\?\.abort\(\)[\s\S]*?connectSession\([\s\S]*?signal: controller\.signal/,
-  );
-  assert.match(
-    appSource,
-    /fetchCurrentIntelligentDevelopmentRelease\([\s\S]*?appendIntelligentDelivery/,
-  );
+test("authentication does not load Codex sessions into the global Sidebar", () => {
+  assert.doesNotMatch(appSource, /intelligentDevelopmentClient\.listSessions/);
+  assert.doesNotMatch(appSource, /intelligentHistory=/);
+  assert.doesNotMatch(sidebarSource, /SidebarIntelligentHistory|intelligentHistory/);
   assert.match(
     appSource,
     /function requestIntelligentNavigation[\s\S]*?sandboxSession\?\.intelligentDevelopment && sandboxBusy[\s\S]*?setIntelligentLeaveOpen\(true\)/,
   );
-  assert.match(appSource, /离开将停止本轮构建；当前会话仍会保留，可稍后从历史会话重新进入。/);
-  assert.match(appSource, /title="删除构建会话"[\s\S]*?删除后无法恢复/);
-  assert.match(
-    appSource,
-    /deleteSession\(session\.id\)[\s\S]*?exitSandboxSession\(false\)/,
-  );
-  assert.match(
-    sidebarSource,
-    /!intelligentHistory\?\.error[\s\S]*?combinedHistory\.length === 0/,
-  );
+  assert.match(appSource, /离开将停止本轮构建；当前会话仍会保留/);
 });
 
 test("verified delivery uses repository-owned visuals and user-facing copy", () => {

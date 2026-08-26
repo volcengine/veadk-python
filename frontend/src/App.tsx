@@ -182,7 +182,6 @@ import {
 } from "./adk/sandbox";
 import {
   downloadIntelligentDevelopmentRelease,
-  fetchCurrentIntelligentDevelopmentRelease,
   fetchIntelligentDevelopmentRelease,
 } from "./adk/intelligentDevelopment";
 import {
@@ -986,49 +985,6 @@ function sessionUsageKey(app: string, session: string): string {
   return `${app}\u0001${session}`;
 }
 
-function appendIntelligentDelivery(
-  turns: Turn[],
-  delivery: IntelligentDevelopmentReleaseRef,
-): Turn[] {
-  const deliveryBlock: Block = { kind: "delivery", value: delivery };
-  let existingIndex = -1;
-  let assistantIndex = -1;
-  for (let index = turns.length - 1; index >= 0; index -= 1) {
-    const turn = turns[index];
-    if (assistantIndex < 0 && turn.role === "assistant") assistantIndex = index;
-    if (turn.blocks.some((block) =>
-      block.kind === "delivery" && block.value.sessionId === delivery.sessionId
-    )) {
-      existingIndex = index;
-      break;
-    }
-  }
-  if (existingIndex >= 0) {
-    return turns.map((turn, index) => index !== existingIndex
-      ? turn
-      : {
-          ...turn,
-          blocks: [
-            ...turn.blocks.filter((block) => block.kind !== "delivery"),
-            deliveryBlock,
-          ],
-        });
-  }
-  if (assistantIndex >= 0) {
-    return turns.map((turn, index) => index !== assistantIndex
-      ? turn
-      : { ...turn, blocks: [...turn.blocks, deliveryBlock] });
-  }
-  return [
-    ...turns,
-    {
-      role: "assistant",
-      blocks: [deliveryBlock],
-      meta: { localId: crypto.randomUUID(), ts: Date.now() / 1_000 },
-    },
-  ];
-}
-
 export default function App() {
   const [apps, setApps] = useState<string[]>([]);
   const [appName, setAppName] = useState("");
@@ -1042,13 +998,6 @@ export default function App() {
   const [pendingTurns, setPendingTurns] = useState<Turn[]>([]);
   const [sandboxSession, setSandboxSession] =
     useState<SandboxSessionInfo | null>(null);
-  const [intelligentSessions, setIntelligentSessions] =
-    useState<SandboxSessionInfo[]>([]);
-  const [intelligentSessionsLoading, setIntelligentSessionsLoading] =
-    useState(false);
-  const [intelligentSessionsError, setIntelligentSessionsError] = useState("");
-  const [intelligentSessionOpeningId, setIntelligentSessionOpeningId] =
-    useState("");
   const [sandboxTurns, setSandboxTurns] = useState<Turn[]>([]);
   const [sandboxBusy, setSandboxBusy] = useState(false);
   const [sandboxSettingsBusy, setSandboxSettingsBusy] = useState(false);
@@ -1086,13 +1035,10 @@ export default function App() {
     useState<SandboxThreadSummary | null>(null);
   const sandboxLaunchAbortRef = useRef<AbortController | null>(null);
   const intelligentCreateAbortRef = useRef<AbortController | null>(null);
-  const intelligentOpenAbortRef = useRef<AbortController | null>(null);
   const sandboxMessageAbortRef = useRef<AbortController | null>(null);
   const pendingIntelligentNavigationRef = useRef<(() => void) | null>(null);
   const [intelligentLeaveOpen, setIntelligentLeaveOpen] = useState(false);
   const [intelligentLeaveBusy, setIntelligentLeaveBusy] = useState(false);
-  const [intelligentSessionDeleteTarget, setIntelligentSessionDeleteTarget] =
-    useState<SandboxSessionInfo | null>(null);
   const sandboxStopWaitRef = useRef<{
     controller: AbortController;
     promise: Promise<boolean>;
@@ -2738,43 +2684,6 @@ export default function App() {
   }, [localMode, userId]);
 
   useEffect(() => {
-    if (authStatus !== "authenticated" || !userId) {
-      setIntelligentSessions([]);
-      setIntelligentSessionsError("");
-      setIntelligentSessionsLoading(false);
-      return;
-    }
-    const controller = new AbortController();
-    setIntelligentSessionsLoading(true);
-    setIntelligentSessionsError("");
-    void intelligentDevelopmentClient.listSessions({ signal: controller.signal })
-      .then((resources) => {
-        if (controller.signal.aborted) return;
-        const now = Date.now();
-        setIntelligentSessions(resources.filter(
-          (resource): resource is SandboxSessionInfo => {
-            if (resource.resourceType !== "session") return false;
-            const expiry = Date.parse(resource.expireAt);
-            return resource.intelligentDevelopment
-              && (!Number.isFinite(expiry) || expiry > now)
-              && resource.status.toLowerCase() === "ready";
-          },
-        ));
-      })
-      .catch((cause) => {
-        if (!controller.signal.aborted) {
-          setIntelligentSessionsError(
-            cause instanceof Error ? cause.message : String(cause),
-          );
-        }
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setIntelligentSessionsLoading(false);
-      });
-    return () => controller.abort();
-  }, [authStatus, userId]);
-
-  useEffect(() => {
     if (authStatus !== "authenticated" || !userId || intelligentDeployment) return;
     const query = new URLSearchParams(window.location.search);
     if (
@@ -3368,7 +3277,6 @@ export default function App() {
     () => () => {
       sandboxLaunchAbortRef.current?.abort();
       intelligentCreateAbortRef.current?.abort();
-      intelligentOpenAbortRef.current?.abort();
       sandboxMessageAbortRef.current?.abort();
     },
     [],
@@ -3626,84 +3534,6 @@ export default function App() {
     setCronJobsView(false);
     setSandboxAgentDetailTarget(null);
     setSandboxAgentWorkspace(null);
-  }
-
-  async function openIntelligentDevelopmentSession(
-    session: SandboxSessionInfo,
-  ) {
-    if (sandboxSession?.id === session.id) return;
-    intelligentOpenAbortRef.current?.abort();
-    const controller = new AbortController();
-    intelligentOpenAbortRef.current = controller;
-    setIntelligentSessionOpeningId(session.id);
-    setIntelligentSessionsError("");
-    setError("");
-    try {
-      if (sandboxSession) exitSandboxSession();
-      const connected = await intelligentDevelopmentClient.connectSession(
-        session.id,
-        { signal: controller.signal },
-      );
-      if (controller.signal.aborted) return;
-      const restoredTurns = connected.restoredConversation
-        ? sandboxSnapshotTurns(connected.restoredConversation)
-        : [];
-      activateIntelligentDevelopmentSession(connected, restoredTurns);
-      try {
-        const delivery = await fetchCurrentIntelligentDevelopmentRelease(
-          connected.id,
-          controller.signal,
-        );
-        if (delivery && sandboxSessionIdRef.current === connected.id) {
-          setSandboxTurns((current) =>
-            appendIntelligentDelivery(current, delivery)
-          );
-        }
-      } catch (cause) {
-        if (
-          !controller.signal.aborted &&
-          sandboxSessionIdRef.current === connected.id
-        ) {
-          setError(
-            cause instanceof Error ? cause.message : String(cause),
-          );
-        }
-      }
-    } catch (cause) {
-      if (!controller.signal.aborted) {
-        setError(cause instanceof Error ? cause.message : String(cause));
-      }
-    } finally {
-      if (intelligentOpenAbortRef.current === controller) {
-        intelligentOpenAbortRef.current = null;
-        setIntelligentSessionOpeningId("");
-      }
-    }
-  }
-
-  async function deleteIntelligentDevelopmentSession(
-    session: SandboxSessionInfo,
-  ) {
-    if (sandboxBusy && sandboxSession?.id === session.id) {
-      setError("当前构建仍在进行，请先停止后再删除会话。");
-      return;
-    }
-    setIntelligentSessionOpeningId(session.id);
-    setError("");
-    try {
-      await intelligentDevelopmentClient.deleteSession(session.id);
-      setIntelligentSessions((current) =>
-        current.filter((item) => item.id !== session.id)
-      );
-      if (sandboxSession?.id === session.id) exitSandboxSession(false);
-      setIntelligentSessionDeleteTarget(null);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setIntelligentSessionOpeningId((current) =>
-        current === session.id ? "" : current
-      );
-    }
   }
 
   async function openSandboxAgent(
@@ -4185,7 +4015,6 @@ export default function App() {
       setIntelligentLeaveOpen(true);
       return;
     }
-    intelligentOpenAbortRef.current?.abort();
     action();
   }
 
@@ -4204,7 +4033,6 @@ export default function App() {
       sandboxMessageAbortRef.current?.abort();
       pendingIntelligentNavigationRef.current = null;
       setIntelligentLeaveOpen(false);
-      intelligentOpenAbortRef.current?.abort();
       action();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -6029,22 +5857,6 @@ export default function App() {
               onDelete: setSandboxThreadDeleteTarget,
           }
           : undefined}
-        intelligentHistory={{
-          sessions: intelligentSessions,
-          currentSessionId: sandboxSession?.intelligentDevelopment
-            ? sandboxSession.id
-            : "",
-          loading: intelligentSessionsLoading,
-          error: intelligentSessionsError,
-          busySessionId: sandboxSession?.intelligentDevelopment && sandboxBusy
-            ? sandboxSession.id
-            : "",
-          openingSessionId: intelligentSessionOpeningId,
-          onSelect: (session) => requestIntelligentNavigation(
-            () => void openIntelligentDevelopmentSession(session),
-          ),
-          onDelete: setIntelligentSessionDeleteTarget,
-        }}
         onNewChat={() => requestIntelligentNavigation(openNewChat)}
         onSearch={() => requestIntelligentNavigation(() => {
           setPlatformFeedbackOrigin(null);
@@ -6962,10 +6774,6 @@ export default function App() {
                       controller.signal.aborted ||
                       intelligentCreateAbortRef.current !== controller
                     ) return;
-                    setIntelligentSessions((current) => [
-                      created,
-                      ...current.filter((session) => session.id !== created.id),
-                    ]);
                     setIntelligentPreparationStage("starting");
                     const connected = await intelligentDevelopmentClient.connectSession(
                       created.id,
@@ -6975,10 +6783,6 @@ export default function App() {
                       controller.signal.aborted ||
                       intelligentCreateAbortRef.current !== controller
                     ) return;
-                    setIntelligentSessions((current) => [
-                      connected,
-                      ...current.filter((session) => session.id !== connected.id),
-                    ]);
                     activateIntelligentDevelopmentSession(connected, []);
                     intelligentCreateAbortRef.current = null;
                     setIntelligentPreparationStage(null);
@@ -7455,29 +7259,6 @@ export default function App() {
             setIntelligentLeaveOpen(false);
           }}
           onConfirm={() => void confirmIntelligentNavigation()}
-        />
-      ) : null}
-
-      {intelligentSessionDeleteTarget ? (
-        <StudioConfirmDialog
-          title="删除构建会话"
-          description={`将删除“${
-            intelligentSessionDeleteTarget.displayName || "智能构建"
-          }”及其中的对话和文件，删除后无法恢复。`}
-          confirmLabel="确认删除"
-          variant="danger"
-          busy={
-            intelligentSessionOpeningId === intelligentSessionDeleteTarget.id
-          }
-          onCancel={() => {
-            if (intelligentSessionOpeningId) return;
-            setIntelligentSessionDeleteTarget(null);
-          }}
-          onConfirm={() =>
-            void deleteIntelligentDevelopmentSession(
-              intelligentSessionDeleteTarget,
-            )
-          }
         />
       ) : null}
 
