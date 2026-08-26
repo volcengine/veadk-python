@@ -40,6 +40,7 @@ export interface MigrationCapabilities {
     configured: boolean;
     id: string;
   };
+  unsupportedModelIds?: string[];
   maxUploadBytes: number;
   sessionTtlSeconds: number;
   frameworks: MigrationFramework[];

@@ -561,14 +561,24 @@ function ToolBlock({
   response,
   done,
   status,
+  defaultOpen = false,
 }: {
   name: string;
   args?: unknown;
   response?: unknown;
   done: boolean;
   status?: "running" | "completed" | "failed";
+  defaultOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
+  const touched = useRef(false);
+  useEffect(() => {
+    if (!touched.current && defaultOpen) setOpen(true);
+  }, [defaultOpen]);
+  const toggle = () => {
+    touched.current = true;
+    setOpen((value) => !value);
+  };
   const label = name === A2UI_TOOL ? "渲染 UI" : name;
   const toolStatus = status ?? (done ? "completed" : "running");
   const builtinTool = toolStatus === "failed" ? undefined : getBuiltinToolDefinition(name);
@@ -595,12 +605,12 @@ function ToolBlock({
           label={loadSkillLabel(name, args)}
           done={done}
           open={open}
-          onToggle={() => setOpen((value) => !value)}
+          onToggle={toggle}
         />
       ) : (
         <button
           className="tool-head tool-head--generic"
-          onClick={() => setOpen((o) => !o)}
+          onClick={toggle}
           type="button"
           aria-expanded={open}
         >
@@ -966,6 +976,7 @@ export function Blocks({
                 response={b.response}
                 done={b.done}
                 status={b.status}
+                defaultOpen={b.defaultOpen}
               />
             );
           case "agent-transfer":
