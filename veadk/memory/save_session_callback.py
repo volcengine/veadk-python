@@ -56,6 +56,7 @@ async def save_session_to_long_term_memory(
                 "Long-term memory is not initialized in agent, cannot save session to memory."
             )
             return None
+        auto_save_memory_policy = getattr(agent, "auto_save_memory_policy", "default")
 
         app_name = callback_context._invocation_context.app_name
         user_id = callback_context._invocation_context.user_id
@@ -82,7 +83,10 @@ async def save_session_to_long_term_memory(
             if old_session:
                 old_events = getattr(old_session, "events", [])
                 old_event_count = len(old_events)
-                await long_term_memory.add_session_to_memory(old_session)
+                await long_term_memory.add_session_to_memory(
+                    old_session,
+                    auto_save_memory_policy=auto_save_memory_policy,
+                )
                 old_cache_key = (app_name, user_id, previous_session_id)
 
                 _session_save_cache[old_cache_key] = {
@@ -139,7 +143,10 @@ async def save_session_to_long_term_memory(
             logger.info(f"First save for session {session_id}.")
 
         # Save to long-term memory
-        await long_term_memory.add_session_to_memory(session)
+        await long_term_memory.add_session_to_memory(
+            session,
+            auto_save_memory_policy=auto_save_memory_policy,
+        )
 
         # Update cache
         _session_save_cache[cache_key] = {

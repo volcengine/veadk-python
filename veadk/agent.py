@@ -41,7 +41,10 @@ from typing_extensions import Any
 from veadk.config import settings
 from veadk.consts import DEFAULT_AGENT_NAME, DEFAULT_MODEL_EXTRA_CONFIG
 from veadk.knowledgebase import KnowledgeBase
-from veadk.memory.long_term_memory import LongTermMemory
+from veadk.memory.long_term_memory import (
+    LongTermMemory,
+    MemoryAutoSavePolicyInput,
+)
 from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.processors import BaseRunProcessor, NoOpRunProcessor
 from veadk.prompts.agent_default_prompt import (
@@ -94,6 +97,8 @@ class Agent(LlmAgent):
         tracers (list[BaseTracer]): List of tracers used for telemetry and monitoring.
         enable_authz (bool): Whether to enable agent authorization checks.
         auto_save_session (bool): Whether to automatically save sessions to long-term memory.
+        auto_save_memory_policy (MemoryAutoSavePolicyInput): Event filtering policy
+            for automatically saved long-term memory.
         skills (list[str]): List of skills that equip the agent with specific capabilities.
         example_store (Optional[BaseExampleProvider]): Example store for providing example Q/A.
         enable_shadowchar (bool): Whether to enable shadow character for the agent.
@@ -164,6 +169,7 @@ class Agent(LlmAgent):
     enable_authz: bool = False
 
     auto_save_session: bool = False
+    auto_save_memory_policy: MemoryAutoSavePolicyInput = "default"
 
     skills: list[str] = Field(default_factory=list)
 
