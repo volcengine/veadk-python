@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import ipaddress
 import socket
+from collections.abc import Callable, Sequence
 from urllib.parse import urlparse
 
 from veadk.cli.generated_agent_catalog import (
@@ -62,6 +63,9 @@ _METADATA_IPS = {
     ipaddress.ip_address("169.254.169.254"),
 }
 
+IpNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
+PrivateNetworkResolver = Callable[[], Sequence[IpNetwork]]
+
 
 def validate_project_policy(draft: AgentDraft) -> None:
     total = _validate_node(
@@ -79,16 +83,28 @@ def validate_debug_policy(
     *,
     allow_local_runtime_resources: bool = False,
     managed_cloud_provider: str | None = None,
+    private_network_resolver: PrivateNetworkResolver | None = None,
 ) -> None:
     trusted_debug_model_api_base(
         draft,
         managed_cloud_provider=managed_cloud_provider,
     )
+    private_networks: tuple[IpNetwork, ...] | None = None
+
+    def resolve_private_networks() -> tuple[IpNetwork, ...]:
+        nonlocal private_networks
+        if private_networks is None:
+            private_networks = tuple(
+                private_network_resolver() if private_network_resolver else ()
+            )
+        return private_networks
+
     total = _validate_node(
         draft,
         depth=0,
         allow_local_runtime_resources=allow_local_runtime_resources,
         allow_stdio_mcp=False,
+        private_network_resolver=resolve_private_networks,
     )
     if total > MAX_SUBAGENTS + 1:
         raise DebugPolicyError(f"Too many agents: {total}")
@@ -136,6 +152,7 @@ def _validate_node(
     depth: int,
     allow_local_runtime_resources: bool,
     allow_stdio_mcp: bool,
+    private_network_resolver: PrivateNetworkResolver | None = None,
 ) -> int:
     if depth > MAX_DEPTH:
         raise DebugPolicyError(f"Agent tree is too deep (>{MAX_DEPTH})")
@@ -152,7 +169,11 @@ def _validate_node(
         if not registry_backed_remote and not draft.a2aUrl.strip():
             raise DebugPolicyError("A2A URL is required")
         if not registry_backed_remote and not allow_local_runtime_resources:
-            validate_url_not_private(draft.a2aUrl, field_name="a2aUrl")
+            validate_url_not_private(
+                draft.a2aUrl,
+                field_name="a2aUrl",
+                private_network_resolver=private_network_resolver,
+            )
     if draft.a2aRegistry.enabled and not draft.a2aRegistry.registrySpaceId.strip():
         raise DebugPolicyError("A2A registry space id is required")
 
@@ -195,7 +216,11 @@ def _validate_node(
         if tool.transport == "stdio" and not allow_stdio_mcp:
             raise DebugPolicyError("MCP stdio transport is disabled for debug runs")
         if tool.transport == "http" and not allow_local_runtime_resources:
-            validate_url_not_private(tool.url, field_name="mcpTools.url")
+            validate_url_not_private(
+                tool.url,
+                field_name="mcpTools.url",
+                private_network_resolver=private_network_resolver,
+            )
         for arg in tool.args:
             _check_len("MCP arg", arg, MAX_MCP_ARG_LEN)
 
@@ -206,6 +231,7 @@ def _validate_node(
             depth=depth + 1,
             allow_local_runtime_resources=allow_local_runtime_resources,
             allow_stdio_mcp=allow_stdio_mcp,
+            private_network_resolver=private_network_resolver,
         )
     return total
 
@@ -215,6 +241,7 @@ def validate_url_not_private(
     *,
     field_name: str,
     resolve_dns: bool = True,
+    private_network_resolver: PrivateNetworkResolver | None = None,
 ) -> None:
     raw = (raw_url or "").strip()
     if not raw:
@@ -229,10 +256,16 @@ def validate_url_not_private(
         raise DebugPolicyError(f"{field_name} points to a forbidden host")
 
     try:
-        _reject_private_ip(ipaddress.ip_address(host), field_name=field_name)
-        return
+        literal_ip = ipaddress.ip_address(host)
     except ValueError:
-        pass
+        literal_ip = None
+    if literal_ip is not None:
+        _validate_target_ip(
+            literal_ip,
+            field_name=field_name,
+            private_network_resolver=private_network_resolver,
+        )
+        return
 
     if not resolve_dns:
         return
@@ -251,26 +284,57 @@ def validate_url_not_private(
             continue
         seen.add(ip_raw)
         try:
-            _reject_private_ip(ipaddress.ip_address(ip_raw), field_name=field_name)
+            resolved_ip = ipaddress.ip_address(ip_raw)
         except ValueError as exc:
             raise DebugPolicyError(f"{field_name} resolved to an invalid IP") from exc
+        _validate_target_ip(
+            resolved_ip,
+            field_name=field_name,
+            private_network_resolver=private_network_resolver,
+        )
 
 
 def _default_port(scheme: str) -> int:
     return 443 if scheme == "https" else 80
 
 
-def _reject_private_ip(ip: ipaddress._BaseAddress, *, field_name: str) -> None:
+def _endpoint_label(field_name: str) -> str:
+    return "MCP 地址" if field_name == "mcpTools.url" else "A2A 地址"
+
+
+def _validate_target_ip(
+    ip: ipaddress._BaseAddress,
+    *,
+    field_name: str,
+    private_network_resolver: PrivateNetworkResolver | None,
+) -> None:
     if (
         ip in _METADATA_IPS
-        or ip.is_private
         or ip.is_loopback
         or ip.is_link_local
         or ip.is_multicast
         or ip.is_reserved
         or ip.is_unspecified
     ):
-        raise DebugPolicyError(f"{field_name} points to a private or reserved address")
+        raise DebugPolicyError(
+            f"{_endpoint_label(field_name)}解析到禁止访问的系统地址 {ip}。"
+            "云上 Studio 不允许访问环回、链路本地、云元数据或保留地址。"
+        )
+    if ip.is_global:
+        return
+
+    allowed_networks = tuple(
+        private_network_resolver() if private_network_resolver else ()
+    )
+    if any(
+        ip.version == network.version and ip in network for network in allowed_networks
+    ):
+        return
+    raise DebugPolicyError(
+        f"{_endpoint_label(field_name)}解析到私网地址 {ip}，"
+        "但该地址不属于当前云上 Studio 所连接的 VPC 网段。"
+        "请确认 Studio 与服务位于同一 VPC，或已通过 PrivateLink 连通。"
+    )
 
 
 def _validate_catalog_ids(
