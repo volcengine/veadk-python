@@ -235,8 +235,14 @@ function sourceStem(name: string): string {
   return name.replace(/\.zip$/i, "");
 }
 
-function isSelectableMigrationModel(model: ModelOption): boolean {
-  return model.available || model.lifecycleStatus === "Retiring";
+function isSelectableMigrationModel(
+  model: ModelOption,
+  unsupportedModelIds: ReadonlySet<string>,
+): boolean {
+  return (
+    !unsupportedModelIds.has(model.id) &&
+    (model.available || model.lifecycleStatus === "Retiring")
+  );
 }
 
 function defaultAppName(name: string): string {
@@ -679,9 +685,16 @@ export function MigrationWorkspace({
     Record<string, string>
   >({});
   const task = selectedTask(tasks, selectedTaskId);
+  const unsupportedMigrationModelIds = useMemo(
+    () => new Set(capability?.unsupportedModelIds ?? []),
+    [capability?.unsupportedModelIds],
+  );
   const selectableModels = useMemo(
-    () => models.filter(isSelectableMigrationModel),
-    [models],
+    () =>
+      models.filter((model) =>
+        isSelectableMigrationModel(model, unsupportedMigrationModelIds),
+      ),
+    [models, unsupportedMigrationModelIds],
   );
   const composerModelId = task?.modelId || selectedModelId;
   const modelSelectOptions = useMemo(() => {
@@ -702,7 +715,13 @@ export function MigrationWorkspace({
       capability?.model?.id ||
       ""
     ).trim();
-    if (fallbackId && !options.some((option) => option.value === fallbackId)) {
+    const preservesExistingTaskModel = task?.modelId === fallbackId;
+    if (
+      fallbackId &&
+      (preservesExistingTaskModel ||
+        !unsupportedMigrationModelIds.has(fallbackId)) &&
+      !options.some((option) => option.value === fallbackId)
+    ) {
       options.unshift({
         value: fallbackId,
         label: fallbackId,
@@ -710,7 +729,13 @@ export function MigrationWorkspace({
       });
     }
     return options;
-  }, [capability?.model?.id, selectableModels, selectedModelId, task?.modelId]);
+  }, [
+    capability?.model?.id,
+    selectableModels,
+    selectedModelId,
+    task?.modelId,
+    unsupportedMigrationModelIds,
+  ]);
   const createElapsedSeconds = createStartedAt
     ? Math.max(0, Math.floor((now - createStartedAt) / 1_000))
     : 0;
@@ -819,10 +844,19 @@ export function MigrationWorkspace({
 
   useEffect(() => {
     if (!capability || selectedModelId) return;
+    const configuredModelId = capability.model?.id.trim() || "";
     const defaultModelId =
-      capability?.model?.id.trim() || selectableModels[0]?.id || "";
+      configuredModelId &&
+      !unsupportedMigrationModelIds.has(configuredModelId)
+        ? configuredModelId
+        : selectableModels[0]?.id || "";
     if (defaultModelId) setSelectedModelId(defaultModelId);
-  }, [capability, selectableModels, selectedModelId]);
+  }, [
+    capability,
+    selectableModels,
+    selectedModelId,
+    unsupportedMigrationModelIds,
+  ]);
 
   useEffect(
     () => () => {

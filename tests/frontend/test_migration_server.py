@@ -44,6 +44,7 @@ from frontend.server.migration.routes import mount_migration_routes
 from frontend.server.migration.service import (
     MIGRATION_ROOT,
     MIGRATION_SESSION_TTL_SECONDS,
+    MIGRATION_UNSUPPORTED_MODEL_IDS,
     MIGRATION_UPLOAD_MAX_BYTES,
     MigrationError,
     MigrationService,
@@ -595,6 +596,7 @@ def test_migration_capability_and_session_contract_are_bounded() -> None:
         "reason": "",
         "provider": "volcengine",
         "model": {"configured": True, "id": "doubao-test"},
+        "unsupportedModelIds": ["deepseek-v4-pro-260425"],
         "maxUploadBytes": 50 * 1024 * 1024,
         "sessionTtlSeconds": 3600,
         "frameworks": [
@@ -658,6 +660,25 @@ def test_selected_model_is_immutable_session_configuration() -> None:
     assert created["modelId"] == "doubao-seed-2-1-pro-260628"
     assert gateway.created_models == ["doubao-seed-2-1-pro-260628"]
     assert service.get_task(task_id, "owner-1")["modelId"] == request["model_id"]
+
+
+def test_migration_rejects_a_known_incompatible_codex_model() -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+
+    with pytest.raises(MigrationError) as unsupported:
+        service.create_task(
+            CreateMigrationTaskBody(
+                sourceFileName="support-agent.zip",
+                modelId="deepseek-v4-pro-260425",
+            ),
+            "owner-1",
+            "Owner",
+        )
+
+    assert unsupported.value.code == "MIGRATION_MODEL_UNSUPPORTED"
+    assert unsupported.value.status_code == 400
+    assert gateway.created_models == []
 
 
 def test_migration_model_rejects_an_invalid_identifier() -> None:
@@ -1606,6 +1627,9 @@ def test_capabilities_expose_provider_model_and_per_session_runtime_checks() -> 
 
     assert capability["provider"] == "volcengine"
     assert capability["model"] == {"configured": True, "id": "doubao-test"}
+    assert capability["unsupportedModelIds"] == sorted(
+        MIGRATION_UNSUPPORTED_MODEL_IDS
+    )
     assert capability["cli"] == {
         "minimumVersion": "0.52.1",
         "check": "per_session",

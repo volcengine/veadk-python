@@ -72,6 +72,7 @@ MIGRATION_ROOT = "/home/gem/.studio/migration/v1"
 MIGRATION_SESSION_TTL_SECONDS = 60 * 60
 MIGRATION_UPLOAD_MAX_BYTES = 50 * 1024 * 1024
 MIGRATION_CLI_MIN_VERSION = "0.52.1"
+MIGRATION_UNSUPPORTED_MODEL_IDS = frozenset({"deepseek-v4-pro-260425"})
 _MAX_EXPANDED_BYTES = 1024 * 1024 * 1024
 _MAX_ARCHIVE_FILES = 20_000
 _MAX_ARCHIVE_PATH_BYTES = 4 * 1024
@@ -2145,6 +2146,7 @@ class MigrationService:
                 "configured": model.get("configured") is True,
                 "id": str(model.get("id") or ""),
             },
+            "unsupportedModelIds": sorted(MIGRATION_UNSUPPORTED_MODEL_IDS),
             "maxUploadBytes": MIGRATION_UPLOAD_MAX_BYTES,
             "sessionTtlSeconds": MIGRATION_SESSION_TTL_SECONDS,
             "frameworks": list(MIGRATION_FRAMEWORKS),
@@ -2393,6 +2395,13 @@ class MigrationService:
         owner_id: str,
         creator_name: str,
     ) -> dict[str, object]:
+        if body.model_id in MIGRATION_UNSUPPORTED_MODEL_IDS:
+            raise MigrationError(
+                "MIGRATION_MODEL_UNSUPPORTED",
+                "所选模型暂不兼容项目迁移，请选择其他模型。",
+                status_code=400,
+                retryable=False,
+            )
         capability = self.capabilities()
         if not capability["enabled"]:
             raise MigrationError(
