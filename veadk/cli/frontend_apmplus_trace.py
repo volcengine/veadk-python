@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from typing import Any, cast
 
@@ -93,6 +94,37 @@ def _matches_tag(tags: dict[str, Any], keys: tuple[str, ...], value: str) -> boo
     return any(str(tags.get(key) or "") == value for key in keys)
 
 
+def _compact_apmplus_output_parts(value: Any) -> Any:
+    """Remove sparse placeholders from APMPlus streamed choice output."""
+    if not isinstance(value, str):
+        return value
+    try:
+        payload = json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return value
+    if not isinstance(payload, dict) or not isinstance(payload.get("choices"), list):
+        return value
+
+    changed = False
+    for choice in payload["choices"]:
+        if not isinstance(choice, dict):
+            continue
+        message = choice.get("message")
+        if not isinstance(message, dict):
+            continue
+        parts = message.get("parts")
+        if not isinstance(parts, list):
+            continue
+        compact_parts = [part for part in parts if part is not None]
+        if len(compact_parts) != len(parts):
+            message["parts"] = compact_parts
+            changed = True
+
+    if not changed:
+        return value
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
 def normalize_apmplus_trace(
     spans: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -114,6 +146,10 @@ def normalize_apmplus_trace(
             value = span.get(source)
             if value not in (None, ""):
                 attributes[target] = value
+        if "gen_ai.output" in attributes:
+            attributes["gen_ai.output"] = _compact_apmplus_output_parts(
+                attributes["gen_ai.output"]
+            )
         parent_span_id = str(span.get("parent_span_id") or "") or None
         normalized.append(
             {
