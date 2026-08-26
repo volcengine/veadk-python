@@ -12,6 +12,8 @@ const LOCAL_QUERY_KEYS = new Set([
   "sessionId",
   "artifactSha256",
   "validationReportSha256",
+  "projectId",
+  "versionId",
 ]);
 
 let cached: string | null = null;

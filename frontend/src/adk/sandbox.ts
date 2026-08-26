@@ -231,6 +231,8 @@ export interface SandboxStartOptions extends SandboxRequestOptions {
   displayName?: string;
   modelId?: string;
   persistent?: boolean;
+  projectId?: string;
+  baseVersionId?: string;
 }
 
 export interface SandboxSession {
@@ -1013,6 +1015,13 @@ async function parseSandboxStream(
           kind: "delivery",
           value: {
             sessionId: eventData.sessionId,
+            ...(typeof eventData.projectId === "string"
+              && typeof eventData.versionId === "string"
+              ? {
+                  projectId: eventData.projectId,
+                  versionId: eventData.versionId,
+                }
+              : {}),
             artifactSha256: eventData.artifactSha256,
             validationReportSha256: eventData.validationReportSha256,
             agentName: eventData.agentName,
@@ -1164,6 +1173,14 @@ function createSandboxClient(
         body: JSON.stringify({
           displayName: options.displayName?.trim() ?? "",
           ...(options.modelId?.trim() ? { modelId: options.modelId.trim() } : {}),
+          ...(config.textOnly && options.projectId
+            ? {
+                projectId: options.projectId,
+                ...(options.baseVersionId
+                  ? { baseVersionId: options.baseVersionId }
+                  : {}),
+                }
+              : {}),
           ...(config.textOnly ? {} : { persistent: options.persistent ?? true }),
         }),
         signal: options.signal,

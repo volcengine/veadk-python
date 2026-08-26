@@ -1,14 +1,16 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   listModelOptions,
   type ModelOption,
 } from "../adk/client";
+import type { IntelligentDevelopmentReleaseRef } from "../blocks";
 import { isImeCompositionEvent } from "../ui/composerKeyboard";
 import {
   NewChatCompactSelect,
   type NewChatCompactSelectOption,
 } from "../ui/new-chat-modes/NewChatCompactSelect";
 import { TextShimmer } from "../ui/text-shimmer/TextShimmer";
+import { IntelligentProjectLibrary } from "./IntelligentProjectLibrary";
 import "./IntelligentCreate.css";
 
 function IntelligentCreateIcon() {
@@ -36,6 +38,15 @@ export interface IntelligentDevelopmentCapabilities {
     configured: boolean;
     id: string;
   };
+  projectStorageEnabled?: boolean;
+  projectStorageReason?: string;
+}
+
+export interface IntelligentCreateBaseVersion {
+  projectId: string;
+  versionId: string;
+  projectName: string;
+  versionLabel: string;
 }
 
 export type IntelligentPreparationStage = "preparing" | "starting";
@@ -92,7 +103,13 @@ export interface IntelligentCreateProps {
   error: string;
   onBack: () => void;
   onCancel: () => void;
-  onCreate: (goal: string, modelId: string) => Promise<void>;
+  onCreate: (
+    goal: string,
+    modelId: string,
+    baseVersion?: IntelligentCreateBaseVersion,
+  ) => Promise<void>;
+  onDownload: (delivery: IntelligentDevelopmentReleaseRef) => Promise<void>;
+  onDeploy: (delivery: IntelligentDevelopmentReleaseRef) => void;
 }
 
 export function IntelligentCreate({
@@ -103,14 +120,18 @@ export function IntelligentCreate({
   onBack,
   onCancel,
   onCreate,
+  onDownload,
+  onDeploy,
 }: IntelligentCreateProps) {
   const [goal, setGoal] = useState("");
+  const [baseVersion, setBaseVersion] = useState<IntelligentCreateBaseVersion>();
   const [models, setModels] = useState<ModelOption[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState("");
   const [modelsReloadKey, setModelsReloadKey] = useState(0);
-  const defaultModelId = capabilities?.model?.id.trim() ?? "";
   const [selectedModelId, setSelectedModelId] = useState("");
+  const goalInputRef = useRef<HTMLTextAreaElement>(null);
+  const defaultModelId = capabilities?.model?.id.trim() ?? "";
   const displayModelId = selectedModelId || defaultModelId;
   const creating = preparationStage !== null;
   const unavailable = capabilities?.enabled !== true;
@@ -131,8 +152,8 @@ export function IntelligentCreate({
         .join(" · "),
     }));
     if (
-      displayModelId &&
-      !options.some((option) => option.value === displayModelId)
+      displayModelId
+      && !options.some((option) => option.value === displayModelId)
     ) {
       options.unshift({
         value: displayModelId,
@@ -147,11 +168,7 @@ export function IntelligentCreate({
     : capabilities?.enabled
       ? ""
       : capabilities?.reason || (error ? "" : "当前无法使用智能模式，请返回后重试。");
-  const submitDisabled =
-    loading ||
-    creating ||
-    unavailable ||
-    !goal.trim();
+  const submitDisabled = loading || creating || unavailable || !goal.trim();
 
   useEffect(() => {
     const controller = new AbortController();
@@ -180,10 +197,9 @@ export function IntelligentCreate({
 
   useEffect(() => {
     if (
-      !selectedModelId ||
-      selectedModelId === defaultModelId ||
-      (selectedModelId &&
-        selectableModels.some((model) => model.id === selectedModelId))
+      !selectedModelId
+      || selectedModelId === defaultModelId
+      || selectableModels.some((model) => model.id === selectedModelId)
     ) {
       return;
     }
@@ -202,26 +218,30 @@ export function IntelligentCreate({
       selectedModelId && selectedModelId !== defaultModelId
         ? selectedModelId
         : "";
-    await onCreate(value, modelOverride);
+    await onCreate(value, modelOverride, baseVersion);
   }
 
   function onKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (
-      event.key === "Enter" &&
-      !event.shiftKey &&
-      !isImeCompositionEvent(event.nativeEvent)
+      event.key === "Enter"
+      && !event.shiftKey
+      && !isImeCompositionEvent(event.nativeEvent)
     ) {
       event.preventDefault();
       void submit();
     }
   }
 
+  function selectBaseVersion(value: IntelligentCreateBaseVersion) {
+    setBaseVersion(value);
+    setGoal("");
+    window.requestAnimationFrame(() => goalInputRef.current?.focus());
+  }
+
   return (
     <section className="ic-root" aria-labelledby="intelligent-create-title">
       <header className="ic-header">
-        <button type="button" className="ic-back" onClick={onBack}>
-          返回
-        </button>
+        <button type="button" className="ic-back" onClick={onBack}>返回</button>
         <div>
           <h1 id="intelligent-create-title">智能模式</h1>
           <p>描述目标后，沙箱中的 Codex 会判断你的意图，完成构建、调试和临时云端验证。</p>
@@ -229,84 +249,120 @@ export function IntelligentCreate({
       </header>
 
       <div className="ic-main">
-        <section className="ic-panel ic-goal-panel" aria-busy={creating}>
-          <div className="ic-goal-heading">
-            <span className="ic-create-icon-wrap"><IntelligentCreateIcon /></span>
-            <div>
-              <h2>从目标开始</h2>
-            </div>
-          </div>
-          <p className="ic-goal-hint">只需说明 Agent 要解决的问题；如有影响结果的关键信息，会在开始前向你确认。</p>
-          <label className="ic-goal-label" htmlFor="intelligent-goal">目标描述</label>
-          <div className="ic-composer">
-            <textarea
-              id="intelligent-goal"
-              className="ic-goal-input"
-              value={goal}
-              onChange={(event) => setGoal(event.target.value)}
-              onKeyDown={onKeyDown}
-              placeholder="例如：创建一个能读取销售数据、生成周报并校验输出格式的 Agent"
-              rows={6}
-              disabled={loading || creating || unavailable}
-              autoFocus
-            />
-            <div className="ic-actions">
-              <div className="ic-composer-tools">
-                <div className="ic-model-select">
-                  <IntelligentModelSelect
-                    value={displayModelId}
-                    options={modelSelectOptions}
-                    onChange={changeModel}
-                    loading={modelsLoading}
-                    error={modelsError}
-                    disabled={loading || creating || unavailable}
-                    onRetry={() => setModelsReloadKey((current) => current + 1)}
-                  />
-                </div>
+        <div className="ic-content">
+          <section className="ic-panel ic-goal-panel" aria-busy={creating}>
+            <div className="ic-goal-heading">
+              <span className="ic-create-icon-wrap"><IntelligentCreateIcon /></span>
+              <div>
+                <h2>{baseVersion ? "继续优化项目" : "从目标开始"}</h2>
               </div>
-              <div className="ic-action-buttons">
-                {creating ? (
-                  <button type="button" className="ic-secondary" onClick={onCancel}>
-                    取消
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  className="ic-primary"
-                  onClick={() => void submit()}
-                  disabled={submitDisabled}
-                  aria-busy={creating}
-                >
-                  {creating ? "准备中…" : "开始构建"}
+            </div>
+            <p className="ic-goal-hint">
+              {baseVersion
+                ? "说明这次要调整的内容，完成后会保存为新版本。"
+                : "只需说明 Agent 要解决的问题；如有影响结果的关键信息，会在开始前向你确认。"}
+            </p>
+            {baseVersion ? (
+              <div className="ic-selected-base">
+                <span>基于</span>
+                <strong title={`${baseVersion.projectName} · ${baseVersion.versionLabel}`}>
+                  {baseVersion.projectName} · {baseVersion.versionLabel}
+                </strong>
+                <button type="button" onClick={() => setBaseVersion(undefined)}>
+                  取消选择
                 </button>
               </div>
-            </div>
-          </div>
-          {preparationStage ? (
-            <div
-              className="ic-preparation"
-              role="status"
-              aria-live="polite"
-              aria-atomic="true"
-            >
-              <div>
-                <strong>目标已收到，马上开始实现</strong>
-                <TextShimmer as="p" duration={2.4} spread={18}>
-                  {PREPARATION_MESSAGES[preparationStage]}
-                </TextShimmer>
-                <p className="ic-preparation-next">
-                  接下来会先梳理目标和实现方式，再编写、运行和验证 Agent。
-                </p>
+            ) : null}
+            <label className="ic-goal-label" htmlFor="intelligent-goal">
+              {baseVersion ? "优化目标" : "目标描述"}
+            </label>
+            <div className="ic-composer">
+              <textarea
+                ref={goalInputRef}
+                id="intelligent-goal"
+                className="ic-goal-input"
+                value={goal}
+                onChange={(event) => setGoal(event.target.value)}
+                onKeyDown={onKeyDown}
+                placeholder={baseVersion
+                  ? "例如：增加数据来源标注，并在信息不足时先向用户确认"
+                  : "例如：创建一个能读取销售数据、生成周报并校验输出格式的 Agent"}
+                rows={6}
+                disabled={loading || creating || unavailable}
+                autoFocus
+              />
+              <div className="ic-actions">
+                <div className="ic-composer-tools">
+                  <div className="ic-model-select">
+                    <IntelligentModelSelect
+                      value={displayModelId}
+                      options={modelSelectOptions}
+                      onChange={changeModel}
+                      loading={modelsLoading}
+                      error={modelsError}
+                      disabled={loading || creating || unavailable}
+                      onRetry={() => setModelsReloadKey((current) => current + 1)}
+                    />
+                  </div>
+                </div>
+                <div className="ic-action-buttons">
+                  {creating ? (
+                    <button type="button" className="ic-secondary" onClick={onCancel}>
+                      取消
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="ic-primary"
+                    onClick={() => void submit()}
+                    disabled={submitDisabled}
+                    aria-busy={creating}
+                  >
+                    {creating ? "准备中…" : baseVersion ? "开始优化" : "开始构建"}
+                  </button>
+                </div>
               </div>
             </div>
-          ) : null}
-          {unavailableReason ? (
-            <p className={loading ? "ic-state" : "ic-error"} role={loading ? "status" : "alert"}>
-              {unavailableReason}
-            </p>
-          ) : null}
-          {error ? <p className="ic-error" role="alert">{error}</p> : null}
-        </section>
+            {preparationStage ? (
+              <div
+                className="ic-preparation"
+                role="status"
+                aria-live="polite"
+                aria-atomic="true"
+              >
+                <div>
+                  <strong>目标已收到，马上开始实现</strong>
+                  <TextShimmer as="p" duration={2.4} spread={18}>
+                    {PREPARATION_MESSAGES[preparationStage]}
+                  </TextShimmer>
+                  <p className="ic-preparation-next">
+                    接下来会先梳理目标和实现方式，再编写、运行和验证 Agent。
+                  </p>
+                </div>
+              </div>
+            ) : null}
+            {unavailableReason ? (
+              <p
+                className={loading ? "ic-state" : "ic-error"}
+                role={loading ? "status" : "alert"}
+              >
+                {unavailableReason}
+              </p>
+            ) : null}
+            {error ? <p className="ic-error" role="alert">{error}</p> : null}
+          </section>
+
+          <IntelligentProjectLibrary
+            capabilities={capabilities}
+            capabilitiesLoading={loading}
+            creating={creating}
+            selectedBaseVersionId={baseVersion?.versionId}
+            onSelectBaseVersion={selectBaseVersion}
+            onClearBaseVersion={() => setBaseVersion(undefined)}
+            onDownload={onDownload}
+            onDeploy={onDeploy}
+          />
+        </div>
       </div>
     </section>
   );

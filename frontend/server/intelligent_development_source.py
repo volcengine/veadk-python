@@ -30,6 +30,11 @@ from frontend.server.deployment_source import (
     extract_migration_source,
 )
 from frontend.server.intelligent_development import release_path
+from frontend.server.intelligent_development_projects import (
+    IntelligentDevelopmentProjectService,
+    IntelligentDevelopmentVersionIntegrityError,
+    IntelligentDevelopmentVersionNotFound,
+)
 from frontend.server.sandbox_remote import SandboxRemoteTransport
 from veadk.cli.frontend_sandbox import (
     SandboxConversationService,
@@ -88,6 +93,8 @@ class TrustedDeploymentSource:
     verified: bool
     validation_summary: str
     files: tuple[TrustedSourceFile, ...]
+    project_id: str = ""
+    version_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -147,7 +154,8 @@ async def _materialize_intelligent_development_source(
     source: Mapping[str, object],
     *,
     owner_id: str,
-    service: SandboxConversationService,
+    service: SandboxConversationService | None,
+    project_service: IntelligentDevelopmentProjectService | None,
     require_verified: bool,
 ) -> _MaterializedDevelopmentRelease:
     """Authorize, verify both digests, and safely materialize one immutable snapshot."""
@@ -155,17 +163,20 @@ async def _materialize_intelligent_development_source(
         resolve_intelligent_development_session,
     )
 
-    required_fields = {
+    live_fields = {
         "kind",
         "sessionId",
         "artifactSha256",
         "validationReportSha256",
     }
+    stored_fields = {*live_fields, "projectId", "versionId"}
     if (
         set(source)
         not in {
-            frozenset(required_fields),
-            frozenset({*required_fields, "acknowledgeUnverified"}),
+            frozenset(live_fields),
+            frozenset({*live_fields, "acknowledgeUnverified"}),
+            frozenset(stored_fields),
+            frozenset({*stored_fields, "acknowledgeUnverified"}),
         }
         or source.get("kind") != "intelligentDevelopment"
     ):
@@ -178,52 +189,96 @@ async def _materialize_intelligent_development_source(
         raise DeploymentSourceError("sessionId 格式无效。")
     artifact_digest = _request_digest(source, "artifactSha256")
     report_digest = _request_digest(source, "validationReportSha256")
-    try:
-        cloud = await resolve_intelligent_development_session(
-            service, session_id, owner_id
+    project_id = source.get("projectId")
+    version_id = source.get("versionId")
+    stored = isinstance(project_id, str) or isinstance(version_id, str)
+    if stored:
+        if (
+            not isinstance(project_id, str)
+            or not project_id
+            or not isinstance(version_id, str)
+            or not version_id
+        ):
+            raise DeploymentSourceError("智能开发项目版本格式无效。")
+        if project_service is None:
+            raise IntelligentDevelopmentSourceNotFound("项目存储尚未配置。")
+        try:
+            bundle = await project_service.load_version(
+                owner_id, project_id, version_id
+            )
+        except IntelligentDevelopmentVersionNotFound as error:
+            raise IntelligentDevelopmentSourceNotFound(str(error)) from error
+        except IntelligentDevelopmentVersionIntegrityError as error:
+            raise IntelligentDevelopmentSourceIntegrityError(str(error)) from error
+        metadata = bundle.metadata
+        if (
+            metadata.source_session_id != session_id
+            or metadata.artifact_sha256 != artifact_digest
+            or metadata.validation_report_sha256 != report_digest
+        ):
+            raise IntelligentDevelopmentSourceStale("项目版本与请求不一致。")
+        descriptor = {
+            "sessionId": session_id,
+            "artifactSha256": artifact_digest,
+            "validationReportSha256": report_digest,
+            "agentName": metadata.agent_name,
+            "entryPoint": metadata.entry_point,
+            "fileCount": metadata.file_count,
+            "artifactSize": metadata.artifact_size,
+        }
+        artifact = bundle.artifact
+        report = bundle.validation_report
+    else:
+        if service is None:
+            raise IntelligentDevelopmentSourceNotFound("开发环境已结束或不可用。")
+        try:
+            cloud = await resolve_intelligent_development_session(
+                service, session_id, owner_id
+            )
+        except (SandboxSessionNotFoundError, SandboxSessionUnavailableError) as error:
+            raise IntelligentDevelopmentSourceNotFound(str(error)) from error
+        transport = SandboxRemoteTransport(cloud.endpoint)
+        release = release_path(artifact_digest, report_digest)
+        pointer = _object(
+            await transport.download(
+                "/home/gem/.intelligent-development/published.json",
+                max_bytes=_MAX_DESCRIPTOR_BYTES,
+            ),
+            "published.json",
         )
-    except (SandboxSessionNotFoundError, SandboxSessionUnavailableError) as error:
-        raise IntelligentDevelopmentSourceNotFound(str(error)) from error
-    transport = SandboxRemoteTransport(cloud.endpoint)
-    release = release_path(artifact_digest, report_digest)
-    pointer = _object(
-        await transport.download(
-            "/home/gem/.intelligent-development/published.json",
+        if (
+            pointer.get("artifactSha256") != artifact_digest
+            or pointer.get("validationReportSha256") != report_digest
+            or pointer.get("releasePath") != release
+        ):
+            raise IntelligentDevelopmentSourceStale("交付物已不是当前发布版本。")
+        descriptor_bytes = await transport.download(
+            f"{release}/descriptor.json",
             max_bytes=_MAX_DESCRIPTOR_BYTES,
-        ),
-        "published.json",
-    )
-    if (
-        pointer.get("artifactSha256") != artifact_digest
-        or pointer.get("validationReportSha256") != report_digest
-        or pointer.get("releasePath") != release
-    ):
-        raise IntelligentDevelopmentSourceStale("交付物已不是当前发布版本。")
-    descriptor_bytes = await transport.download(
-        f"{release}/descriptor.json",
-        max_bytes=_MAX_DESCRIPTOR_BYTES,
-    )
-    descriptor = _object(descriptor_bytes, "descriptor.json")
-    artifact = await transport.download(
-        f"{release}/artifact.zip",
-        max_bytes=_MAX_ARTIFACT_BYTES,
-    )
-    report = await transport.download(
-        f"{release}/validation/{report_digest}.json",
-        max_bytes=_MAX_REPORT_BYTES,
-    )
+        )
+        descriptor = _object(descriptor_bytes, "descriptor.json")
+        artifact = await transport.download(
+            f"{release}/artifact.zip",
+            max_bytes=_MAX_ARTIFACT_BYTES,
+        )
+        report = await transport.download(
+            f"{release}/validation/{report_digest}.json",
+            max_bytes=_MAX_REPORT_BYTES,
+        )
     if _digest(artifact) != artifact_digest or _digest(report) != report_digest:
         raise IntelligentDevelopmentSourceIntegrityError("交付物完整性校验失败。")
-    expected_paths = {
-        "artifactSha256": artifact_digest,
-        "validationReportSha256": report_digest,
-        "releasePath": release,
-        "artifactPath": f"{release}/artifact.zip",
-        "descriptorPath": f"{release}/descriptor.json",
-        "validationReportPath": f"{release}/validation/{report_digest}.json",
-    }
-    if any(descriptor.get(key) != value for key, value in expected_paths.items()):
-        raise IntelligentDevelopmentSourceStale("交付物描述与请求不一致。")
+    if not stored:
+        release = release_path(artifact_digest, report_digest)
+        expected_paths = {
+            "artifactSha256": artifact_digest,
+            "validationReportSha256": report_digest,
+            "releasePath": release,
+            "artifactPath": f"{release}/artifact.zip",
+            "descriptorPath": f"{release}/descriptor.json",
+            "validationReportPath": f"{release}/validation/{report_digest}.json",
+        }
+        if any(descriptor.get(key) != value for key, value in expected_paths.items()):
+            raise IntelligentDevelopmentSourceStale("交付物描述与请求不一致。")
     report_value = _object(report, "validation report")
     steps = report_value.get("steps")
     passed = (
@@ -311,6 +366,8 @@ async def _materialize_intelligent_development_source(
             verified,
             validation_summary.strip(),
             source_files,
+            project_id if isinstance(project_id, str) else "",
+            version_id if isinstance(version_id, str) else "",
         ),
         artifact,
     )
@@ -321,7 +378,8 @@ async def materialize_intelligent_development_source(
     source: Mapping[str, object],
     *,
     owner_id: str,
-    service: SandboxConversationService,
+    service: SandboxConversationService | None,
+    project_service: IntelligentDevelopmentProjectService | None = None,
 ) -> TrustedDeploymentSource:
     """Materialize a verified snapshot or an explicitly acknowledged one."""
     release = await _materialize_intelligent_development_source(
@@ -329,6 +387,7 @@ async def materialize_intelligent_development_source(
         source,
         owner_id=owner_id,
         service=service,
+        project_service=project_service,
         require_verified=True,
     )
     return release.source
@@ -339,7 +398,8 @@ async def materialize_intelligent_development_preview(
     source: Mapping[str, object],
     *,
     owner_id: str,
-    service: SandboxConversationService,
+    service: SandboxConversationService | None,
+    project_service: IntelligentDevelopmentProjectService | None = None,
 ) -> TrustedDeploymentSource:
     """Materialize a digest-bound snapshot without authorizing deployment."""
     release = await _materialize_intelligent_development_source(
@@ -347,6 +407,7 @@ async def materialize_intelligent_development_preview(
         source,
         owner_id=owner_id,
         service=service,
+        project_service=project_service,
         require_verified=False,
     )
     return release.source
@@ -412,6 +473,7 @@ async def materialize_current_intelligent_development_preview(
         },
         owner_id=owner_id,
         service=service,
+        project_service=None,
     )
 
 
@@ -420,7 +482,8 @@ async def load_intelligent_development_artifact(
     source: Mapping[str, object],
     *,
     owner_id: str,
-    service: SandboxConversationService,
+    service: SandboxConversationService | None,
+    project_service: IntelligentDevelopmentProjectService | None = None,
 ) -> TrustedDevelopmentArtifact:
     """Load an exact archive only after the preview trust checks succeed."""
     release = await _materialize_intelligent_development_source(
@@ -428,6 +491,7 @@ async def load_intelligent_development_artifact(
         source,
         owner_id=owner_id,
         service=service,
+        project_service=project_service,
         require_verified=False,
     )
     trusted = release.source

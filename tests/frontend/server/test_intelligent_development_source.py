@@ -21,14 +21,22 @@ import stat
 import struct
 import zipfile
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
+from unittest.mock import AsyncMock
 
 import pytest
 
 from frontend.server import intelligent_development_source as source_module
 from frontend.server.deployment_source import DeploymentSourceError
 from frontend.server.intelligent_development import release_path
+from frontend.server.intelligent_development_projects import (
+    IntelligentDevelopmentProjectService,
+    IntelligentDevelopmentVersion,
+    StoredDevelopmentVersion,
+)
 from frontend.server.intelligent_development_source import (
     IntelligentDevelopmentSourceNotFound,
     load_intelligent_development_artifact,
@@ -382,6 +390,64 @@ async def test_download_keeps_exact_artifact_including_binary_files(
     assert result.artifact_sha256 == request["artifactSha256"]
     assert result.file_count == 3
     assert result.artifact_size == len(artifact)
+
+
+@pytest.mark.asyncio
+async def test_materializes_stored_version_without_live_sandbox(
+    tmp_path: Path,
+) -> None:
+    request, downloads = _release_files()
+    artifact = next(
+        value for key, value in downloads.items() if key.endswith("artifact.zip")
+    )
+    report = next(value for key, value in downloads.items() if "/validation/" in key)
+    artifact_sha256 = request["artifactSha256"]
+    validation_report_sha256 = request[REPORT_DIGEST_FIELD]
+    assert isinstance(artifact_sha256, str)
+    assert isinstance(validation_report_sha256, str)
+    version = IntelligentDevelopmentVersion(
+        projectId="a" * 32,
+        versionId="b" * 32,
+        sourceSessionId=SESSION_ID,
+        createdAt=datetime(2026, 8, 26, tzinfo=timezone.utc),
+        intentSummary="构建可信 Agent",
+        acceptanceCriteria=["真实调用通过"],
+        artifactSha256=artifact_sha256,
+        validationReportSha256=validation_report_sha256,
+        artifactSize=len(artifact),
+        fileCount=3,
+        agentName="trusted-agent",
+        entryPoint="app.py",
+        verified=True,
+        validationSummary="验证通过",
+        gateSummary=list(REQUIRED_GATES),
+        validatedAt="2026-08-26T00:00:00Z",
+    )
+    project_service = cast(
+        IntelligentDevelopmentProjectService,
+        SimpleNamespace(
+            load_version=AsyncMock(
+                return_value=StoredDevelopmentVersion(version, artifact, report)
+            )
+        ),
+    )
+
+    result = await materialize_intelligent_development_source(
+        tmp_path,
+        {
+            **request,
+            "projectId": "a" * 32,
+            "versionId": "b" * 32,
+        },
+        owner_id=OWNER_ID,
+        service=None,
+        project_service=project_service,
+    )
+
+    assert result.project_id == "a" * 32
+    assert result.version_id == "b" * 32
+    assert (tmp_path / "app.py").is_file()
+    assert FakeTransport.instances == []
 
 
 @pytest.mark.asyncio
