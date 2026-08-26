@@ -5,6 +5,7 @@ import {
   sandboxStatusLabel,
   type SandboxAgentWorkspace as SandboxAgentWorkspaceData,
 } from "../adk/sandbox";
+import { formatResourceSource } from "./resourceMetadata";
 import "./SandboxAgentWorkspace.css";
 
 export function SandboxAgentWorkspace({
@@ -65,7 +66,7 @@ export function SandboxAgentWorkspace({
           <div>
             <h1>{workspace.session.displayName || `${label} 智能体`}</h1>
             <p>
-              <span>创建人 {workspace.session.createdBy || "未知"}</span>
+              <span>创建人 {formatResourceSource(workspace.session.createdBy)}</span>
               <span
                 className="sandbox-agent-workspace-status"
                 data-ready={

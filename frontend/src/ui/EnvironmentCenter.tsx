@@ -30,6 +30,15 @@ import imagemagickLogo from "../assets/imagemagick-logo.svg";
 import veadkLogo from "../assets/logo.svg";
 import { GitHubLogo } from "./GitHubLogo";
 import { LibraryResourceCard } from "./LibraryResourceCard";
+import {
+  ResourceCreateCard,
+  ResourceGrid,
+  ResourcePageHeader,
+  ResourcePageShell,
+  ResourceResults,
+  ResourceSearch,
+  ResourceToolbar,
+} from "./ResourceCollection";
 import { StudioConfirmDialog } from "./StudioConfirmDialog";
 import { StudioBuildProgress } from "./StudioBuildProgress";
 import { StudioPackageOption } from "./StudioPackageOption";
@@ -79,15 +88,6 @@ const TOOL_LOGOS: Readonly<Record<string, string>> = {
   ffmpeg: ffmpegLogo,
   imagemagick: imagemagickLogo,
 };
-
-function SearchIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
-      <circle cx="10.8" cy="10.8" r="6.2" stroke="currentColor" strokeWidth="1.75" />
-      <path d="m15.4 15.4 4 4" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
-    </svg>
-  );
-}
 
 function BackIcon(props: SVGProps<SVGSVGElement>) {
   return (
@@ -721,33 +721,28 @@ export function EnvironmentCenter({ cloudProvider = "volcengine" }: { cloudProvi
   }
 
   return (
-    <section className="environment-center" aria-labelledby="environment-center-title">
-      <header className="environment-center__header">
-        <div className="environment-center__heading">
-          <h1 id="environment-center-title">环境</h1>
-          <p>创建和配置 Agent 的基础运行环境</p>
-        </div>
-        <label className="environment-search">
-          <SearchIcon />
-          <input
-            type="search"
+    <ResourcePageShell className="environment-center" aria-label="环境">
+      <ResourcePageHeader
+        title="环境"
+      />
+
+      <ResourceToolbar className="environment-toolbar">
+        <div className="resource-toolbar__actions">
+          {statusMessage ? (
+            <span className={`environment-status${statusError ? " is-error" : ""}`} role={statusError ? "alert" : "status"} aria-live="polite">
+              {statusMessage}
+            </span>
+          ) : null}
+          <ResourceSearch
             aria-label="搜索环境"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="搜索环境"
           />
-        </label>
-      </header>
+        </div>
+      </ResourceToolbar>
 
-      <div className="environment-toolbar">
-        <span className={`environment-status${statusError ? " is-error" : ""}`} role={statusError ? "alert" : "status"} aria-live="polite">{statusMessage}</span>
-        <button type="button" className="environment-create" onClick={() => setView({ kind: "editor", environmentId: null })}>
-          <AddIcon />
-          <span>新建环境</span>
-        </button>
-      </div>
-
-      <div className="environment-center__results">
+      <ResourceResults aria-live="polite">
         {loading ? (
           <div className="environment-loading" role="status" aria-live="polite">
             <TextShimmer as="span">正在加载环境</TextShimmer>
@@ -759,8 +754,25 @@ export function EnvironmentCenter({ cloudProvider = "volcengine" }: { cloudProvi
               重新加载
             </Button>
           </div>
-        ) : visibleEnvironments.length > 0 ? (
-          <div className="environment-grid">
+        ) : visibleEnvironments.length === 0 && query.trim() ? (
+          <div className="environment-empty">
+            <EmptyMessage fill="none">
+              <EmptyMessage.Icon><EnvironmentEmptyIcon /></EmptyMessage.Icon>
+              <EmptyMessage.Title>没有匹配的环境</EmptyMessage.Title>
+              <EmptyMessage.Description>请尝试搜索其他名称</EmptyMessage.Description>
+            </EmptyMessage>
+          </div>
+        ) : (
+          <ResourceGrid>
+            {!query.trim() ? (
+              <ResourceCreateCard
+                aria-label="新建环境"
+                icon={<AddIcon />}
+                onClick={() => setView({ kind: "editor", environmentId: null })}
+              >
+                新建环境
+              </ResourceCreateCard>
+            ) : null}
             {visibleEnvironments.map((environment) => {
               const status = environmentStatus(environment);
               const buildActive = Boolean(
@@ -784,40 +796,22 @@ export function EnvironmentCenter({ cloudProvider = "volcengine" }: { cloudProvi
                     { label: "语言", value: environmentLanguageLabel(environment.language) },
                     { label: "更新", value: environmentUpdatedAt(environment.updatedAt) },
                   ]}
-                  secondaryAction={{
+                  action={{
                     label: environment.latestVersion ? "构建详情" : rebuilding ? "正在启动" : "开始构建",
+                    icon: "play",
+                    title: "构建",
                     disabled: rebuilding,
                     onClick: () => environment.latestVersion
                       ? setBuildDetailsId(environment.id)
                       : void rebuildEnvironment(environment),
                   }}
-                  primaryAction={{ label: "配置", onClick: () => setView({ kind: "editor", environmentId: environment.id }) }}
-                  menuLabel="更多"
-                  menuAriaLabel={`${environment.name}环境操作`}
-                  menuActions={[
-                    {
-                      label: buildActive || rebuilding ? "构建进行中" : "重新构建",
-                      disabled: buildActive || rebuilding,
-                      onClick: () => void rebuildEnvironment(environment),
-                    },
-                    { label: "删除环境", danger: true, onClick: () => setDeleteTarget(environment) },
-                  ]}
+                  detailAction={{ label: "配置", onClick: () => setView({ kind: "editor", environmentId: environment.id }) }}
                 />
               );
             })}
-          </div>
-        ) : (
-          <div className="environment-empty">
-            <EmptyMessage fill="none">
-              <EmptyMessage.Icon><EnvironmentEmptyIcon /></EmptyMessage.Icon>
-              <EmptyMessage.Title>{query.trim() ? "没有匹配的环境" : "暂无环境"}</EmptyMessage.Title>
-              <EmptyMessage.Description>
-                {query.trim() ? "请尝试搜索其他名称" : "新建一个环境，配置操作系统、语言和常用工具"}
-              </EmptyMessage.Description>
-            </EmptyMessage>
-          </div>
+          </ResourceGrid>
         )}
-      </div>
+      </ResourceResults>
 
       {buildDetailsId ? (() => {
         const environment = environments.find((item) => item.id === buildDetailsId);
@@ -859,6 +853,6 @@ export function EnvironmentCenter({ cloudProvider = "volcengine" }: { cloudProvi
           }}
         />
       ) : null}
-    </section>
+    </ResourcePageShell>
   );
 }

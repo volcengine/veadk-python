@@ -11,6 +11,22 @@ const pageStyles = readFileSync(
   new URL("../src/ui/MyAgents.css", import.meta.url),
   "utf8",
 );
+const resourceSource = readFileSync(
+  new URL("../src/ui/ResourceCollection.tsx", import.meta.url),
+  "utf8",
+);
+const resourceStyles = readFileSync(
+  new URL("../src/ui/ResourceCollection.css", import.meta.url),
+  "utf8",
+);
+const relativeTimeSource = readFileSync(
+  new URL("../src/ui/relativeTime.ts", import.meta.url),
+  "utf8",
+);
+const resourceMetadataSource = readFileSync(
+  new URL("../src/ui/resourceMetadata.ts", import.meta.url),
+  "utf8",
+);
 const globalStyles = readFileSync(
   new URL("../src/styles.css", import.meta.url),
   "utf8",
@@ -28,6 +44,11 @@ const sidebarSource = readFileSync(
 );
 const appSource = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
 const authSource = readFileSync(new URL("../src/adk/auth.ts", import.meta.url), "utf8");
+const sandboxSource = readFileSync(new URL("../src/adk/sandbox.ts", import.meta.url), "utf8");
+const sandboxServerSource = readFileSync(
+  new URL("../../veadk/cli/frontend_sandbox.py", import.meta.url),
+  "utf8",
+);
 
 test("shows only the Agent navigation in the sidebar", () => {
   assert.match(sidebarSource, /onMyAgents: \(\) => void/);
@@ -50,26 +71,73 @@ test("keeps Agent creation out of the sidebar navigation", () => {
   assert.doesNotMatch(sidebarSource, /aria-label="添加智能体"/);
 });
 
-test("shows the requested title, search, and agent type pills", () => {
-  assert.match(pageSource, /<h1>智能体<\/h1>/);
-  assert.doesNotMatch(pageSource, /Runtime 地域|regionMenuOpen/);
-  assert.doesNotMatch(pageStyles, /\.my-agents-region/);
-  assert.match(pageSource, /在此处浏览您的所有智能体/);
-  assert.match(pageSource, /placeholder="搜索所有类型智能体名称"/);
+test("shows the requested title and Figma-aligned Agent toolbar", () => {
+  assert.match(pageSource, /<ResourcePageHeader title="智能体"/);
+  assert.doesNotMatch(pageSource, /在此处浏览(?:所有|您的所有)智能体/);
+  assert.match(pageSource, /className="my-agent-toolbar"/);
+  assert.match(pageSource, /placeholder="搜索"/);
   assert.match(pageSource, /aria-label="搜索智能体"/);
-  assert.doesNotMatch(pageSource, /<span className="sr-only">搜索智能体<\/span>/);
+  assert.match(resourceSource, /function ResourceSearchIcon[\s\S]*?viewBox="0 0 14 14"[\s\S]*?translate\(0\.875 0\.875\)/);
+  assert.match(resourceSource, /@openai\/apps-sdk-ui\/components\/Select/);
   for (const title of [
     "通用智能体",
-    "Codex 智能体",
-    "DeepSeek Harness",
-    "OpenClaw 智能体",
-    "Hermes 智能体",
+    "Codex",
+    "DeepSeek",
+    "OpenClaw",
+    "Hermes",
   ]) {
     assert.match(pageSource, new RegExp(`label: "${title}"`));
   }
-  assert.match(pageSource, /className="my-agent-type-pill/);
-  assert.match(pageSource, /aria-pressed=\{activeType === type\.id\}/);
-  assert.match(pageSource, /onClick=\{\(\) => selectAgentType\(type\.id\)\}/);
+  assert.match(
+    pageSource,
+    /<ResourceTabs[\s\S]*?idPrefix="my-agent-ownership"[\s\S]*?<div className="resource-toolbar__actions">/,
+  );
+  assert.match(
+    pageSource,
+    /<ResourceFilterSelect[\s\S]*?id="my-agent-type-filter"[\s\S]*?value=\{activeType\}[\s\S]*?options=\{AGENT_TYPE_OPTIONS\}[\s\S]*?onChange=\{selectAgentType\}/,
+  );
+  assert.match(
+    pageSource,
+    /id="my-agent-type-filter"[\s\S]*?id="my-agent-region-filter"[\s\S]*?className="my-agent-search"/,
+  );
+  assert.doesNotMatch(pageSource, /my-agent-type-tabs|my-agent-type-tab/);
+  assert.match(resourceStyles, /\.resource-page__header h1\s*\{[\s\S]*?font-size: 24px;[\s\S]*?line-height: normal;/);
+  assert.match(resourceStyles, /\.resource-toolbar\s*\{[\s\S]*?gap: 12px;[\s\S]*?margin-top: 20px;/);
+  assert.match(
+    resourceStyles,
+    /\.resource-search\s*\{[\s\S]*?width: 248px;[\s\S]*?height: 32px;[\s\S]*?gap: 4px;[\s\S]*?padding: 0 8px;[\s\S]*?border: 0\.5px solid #b8b7c3;[\s\S]*?border-radius: 8px;/,
+  );
+  assert.match(
+    resourceStyles,
+    /\.resource-search input\s*\{[\s\S]*?font-size: 13px;[\s\S]*?line-height: 22px;[\s\S]*?letter-spacing: 0\.039px;/,
+  );
+  assert.match(
+    resourceStyles,
+    /\.resource-filter-select\s*\{[\s\S]*?width: fit-content;/,
+  );
+  assert.match(
+    resourceStyles,
+    /\.resource-filter-select__trigger\s*\{[\s\S]*?--select-control-font-size: 14px;[\s\S]*?--select-control-font-weight: 400;[\s\S]*?--select-control-gutter: 8px;[\s\S]*?font-family: inherit;/,
+  );
+  assert.match(
+    resourceStyles,
+    /\.resource-results\s*\{[\s\S]*?margin: 4px -8px 0;[\s\S]*?padding: 8px 8px 56px;/,
+  );
+});
+
+test("resets runtime pagination before changing ownership or region filters", () => {
+  assert.match(
+    pageSource,
+    /function resetRuntimePagination\(\)[\s\S]*?runtimeRequestRef\.current \+= 1[\s\S]*?setRuntimeAgents\(\[\]\)[\s\S]*?setRuntimeNextToken\(""\)[\s\S]*?setRuntimeError\(""\)/,
+  );
+  assert.match(
+    pageSource,
+    /function selectOwnership\(nextOwnership: RuntimeScope\)[\s\S]*?resetRuntimePagination\(\)[\s\S]*?setOwnership\(nextOwnership\)/,
+  );
+  assert.match(
+    pageSource,
+    /function selectRegion\(nextRegion: CloudRegion\)[\s\S]*?resetRuntimePagination\(\)[\s\S]*?setRegion\(nextRegion\)/,
+  );
 });
 
 test("preserves the selected sandbox type across details and refreshes it after deletion", () => {
@@ -134,13 +202,13 @@ test("renders only account-backed Runtime and Sandbox agents", () => {
   assert.match(pageSource, /sessions\.map\(sandboxToAgent\)/);
 });
 
-test("keeps a primary create action visible above the scrolling results", () => {
+test("renders Agent creation as the first dashed card instead of a toolbar button", () => {
   assert.match(pageSource, /canCreate: boolean/);
   assert.match(pageSource, /cloudProvider: CloudProvider/);
-  assert.match(pageSource, /activeType === "general"[\s\S]*?onCreateAgent\(defaultCloudRegion\(cloudProvider\)\)[\s\S]*?onCreateSandboxAgent\(activeType\)/);
-  assert.match(pageSource, /onCreateAgent\(defaultCloudRegion\(cloudProvider\)\)/);
+  assert.match(pageSource, /activeType === "general"[\s\S]*?onCreateAgent\(region\)[\s\S]*?onCreateSandboxAgent\(activeType\)/);
   assert.match(pageSource, /onCreateSandboxAgent: \(kind: "codex" \| SandboxAgentKind\) => void/);
-  assert.match(pageSource, /className="my-agent-create-primary"[\s\S]*?disabled=\{!createAgent\}[\s\S]*?<span>创建智能体<\/span>/);
+  assert.match(pageSource, /<ResourceGrid className="my-agent-grid">[\s\S]*?createAgent \? \([\s\S]*?<ResourceCreateCard[\s\S]*?className="my-agent-create-card"[\s\S]*?创建智能体[\s\S]*?visibleAgents\.map/);
+  assert.doesNotMatch(pageSource, /my-agent-create-primary/);
   assert.match(
     pageSource,
     /className="my-agent-create-secondary"[\s\S]*?<HandoffIcon \/>[\s\S]*?<span>接力<\/span>/,
@@ -160,33 +228,47 @@ test("keeps a primary create action visible above the scrolling results", () => 
   );
   assert.match(
     pageStyles,
-    /\.my-agent-create-secondary svg,[\s\S]*?\.my-agent-create-primary svg\s*\{[\s\S]*?width: 14px;[\s\S]*?height: 14px;/,
+    /\.my-agent-create-secondary svg\s*\{[\s\S]*?width: 14px;[\s\S]*?height: 14px;/,
   );
   assert.doesNotMatch(pageSource, /本地迁移/);
-  assert.ok(pageSource.indexOf('className="my-agent-create-primary"') < pageSource.indexOf('className="my-agent-results"'));
-  assert.match(pageSource, /当前账号没有创建智能体权限/);
-  assert.match(pageStyles, /\.my-agent-create-primary\s*\{[\s\S]*?background: hsl\(var\(--foreground\)\);[\s\S]*?color: hsl\(var\(--background\)\)/);
-  assert.match(pageStyles, /\.my-agent-create-primary:disabled\s*\{[\s\S]*?cursor: not-allowed/);
+  assert.match(resourceStyles, /\.resource-create-card\s*\{[\s\S]*?height: 152px;[\s\S]*?border: 1px dashed #d2d1e0[\s\S]*?border-radius: 16px/);
+  assert.match(resourceStyles, /\.resource-create-card:hover:not\(:disabled\)\s*\{/);
 });
 
-test("agent cards show the archived metadata hierarchy and two-action footer", () => {
-  assert.match(pageSource, /<h3>\{agent\.name\}<\/h3>/);
-  assert.match(pageSource, /<dt>\{agent\.draft \? "更新时间" : "创建时间"\}<\/dt>/);
-  assert.match(pageSource, /<dt>\{agent\.specificationLabel\}<\/dt>[\s\S]*?<dd>\{agent\.specification\}<\/dd>/);
+test("agent cards reproduce the compact Figma hierarchy with card details and one chat action", () => {
+  assert.match(pageSource, /<ResourceIdentityMark seed=\{agent\.name\} \/>/);
+  assert.match(pageSource, /<ResourceCardHeader[\s\S]*?title=\{agent\.name\}/);
+  assert.match(pageSource, /formatCardUpdateLabel\(agent\.createdAt, nowMs\)/);
+  assert.match(pageSource, /label: agent\.specificationLabel,[\s\S]*?value: agent\.specification,[\s\S]*?hideLabel: true/);
   assert.match(pageSource, /const sandboxResourceId = agent\.sandbox\?\.resourceType === "snapshot"[\s\S]*?agent\.sandbox\.sourceSessionId \|\| agent\.sandbox\.snapshotId[\s\S]*?: agent\.sandbox\?\.id/);
   assert.match(pageSource, /className="my-agent-session-id"[\s\S]*?\{sandboxResourceId\}/);
   assert.doesNotMatch(pageSource, /Session ID：/);
   assert.match(pageSource, /className="my-agent-status-label"[\s\S]*?\{agent\.description\}/);
   assert.doesNotMatch(pageSource, /<dt>工具<\/dt>|<dt>技能<\/dt>/);
-  assert.match(pageSource, /className="my-agent-description">\{agent\.description\}/);
-  assert.match(pageSource, /className="my-agent-actions"/);
-  assert.match(pageSource, /aria-label=\{connected[\s\S]*?\? `\$\{agent\.name\} 已连接`[\s\S]*?: wakeable[\s\S]*?\? `唤醒 \$\{agent\.name\}`[\s\S]*?: `使用 \$\{agent\.name\}`\}/);
-  assert.match(pageSource, /: onViewDetails\?\.\(agent\)/);
-  assert.match(pageSource, /deploymentTask \? "查看进度" : "查看详情"/);
-  assert.match(pageSource, /connected \? "已连接" : wakeable \? "唤醒" : "使用"/);
-  assert.ok(pageSource.indexOf("my-agent-details") < pageSource.indexOf("my-agent-use"));
+  assert.match(pageSource, /<ResourceCardDescription>\{agent\.description\}<\/ResourceCardDescription>/);
+  assert.match(pageSource, /actions=\{agent\.draft \? \(/);
+  assert.match(pageSource, /activateLabel=\{cardTargetEnabled \? cardTargetLabel : undefined\}[\s\S]*?onActivate=\{cardTargetEnabled \? openCard : undefined\}/);
+  assert.match(pageSource, /else onViewDetails\?\.\(agent\)/);
+  assert.match(pageSource, /label=\{connected[\s\S]*?\? `\$\{agent\.name\} 已连接`[\s\S]*?: wakeable[\s\S]*?\? `唤醒 \$\{agent\.name\} 并开始对话`[\s\S]*?: `与 \$\{agent\.name\} 对话`\}/);
+  assert.doesNotMatch(pageSource, /function AgentDetailsIcon/);
+  assert.match(pageSource, /<AgentUseIcon \/>/);
   assert.doesNotMatch(pageSource, /<small|<code/);
-  assert.doesNotMatch(pageStyles, /font-family/);
+  assert.match(
+    resourceStyles,
+    /\.resource-page\s*\{[\s\S]*?background: #fafafa;[\s\S]*?font-family: "PingFang SC"/,
+  );
+  assert.match(
+    resourceStyles,
+    /\.resource-page__header h1\s*\{[\s\S]*?color: #0c0d0e;[\s\S]*?font-size: 24px;[\s\S]*?font-weight: 500;[\s\S]*?line-height: normal;/,
+  );
+  assert.match(resourceStyles, /\.resource-grid\s*\{[\s\S]*?gap: 16px;/);
+  assert.match(resourceStyles, /\.resource-card\s*\{[\s\S]*?height: 152px;[\s\S]*?border-radius: 16px;/);
+  assert.match(resourceStyles, /\.resource-card\s*\{[\s\S]*?gap: 16px;[\s\S]*?padding: 18px 20px;/);
+  assert.match(resourceStyles, /\.resource-card__identity-mark\s*\{[\s\S]*?width: 20px;[\s\S]*?height: 20px;[\s\S]*?border-radius: 50%;/);
+  assert.match(resourceStyles, /\.resource-card__identity-mark\s*\{[\s\S]*?--resource-identity-glow[\s\S]*?--resource-identity-accent[\s\S]*?linear-gradient\(/);
+  assert.match(resourceStyles, /\.resource-card__actions\s*\{[\s\S]*?opacity: 0;[\s\S]*?pointer-events: none;/);
+  assert.match(resourceStyles, /\.resource-card__target\s*\{[\s\S]*?position: absolute;[\s\S]*?inset: 0;[\s\S]*?z-index: 1;/);
+  assert.match(resourceStyles, /@media \(hover: none\), \(pointer: coarse\)[\s\S]*?\.resource-card__actions\s*\{[\s\S]*?opacity: 1;/);
 });
 
 test("shows browser-local drafts with edit and confirmed delete actions", () => {
@@ -194,17 +276,22 @@ test("shows browser-local drafts with edit and confirmed delete actions", () => 
   assert.match(pageSource, /function draftToAgent\(item: WorkspaceAgentDraft\)/);
   assert.match(pageSource, /specification: "当前浏览器"/);
   assert.match(pageSource, /\? \[\.\.\.draftAgents, \.\.\.runtimeAgents\]/);
-  assert.match(
-    pageSource,
-    /className="my-agent-draft-badge">[\s\S]*?deploymentTask \? "部署中" : "草稿"/,
-  );
+  assert.match(pageSource, /className="my-agent-draft-badge">草稿<\/span>/);
+  assert.match(pageSource, /deploymentTask \? \([\s\S]*?className="my-agent-deploying-badge">部署中<\/span>/);
   assert.match(pageSource, /: `编辑草稿 \$\{agent\.name\}`/);
   assert.match(pageSource, /aria-label=\{`删除草稿 \$\{agent\.name\}`\}/);
   assert.match(pageSource, /title="删除草稿？"[\s\S]*?confirmLabel="删除草稿"/);
   assert.match(appSource, /<MyAgents[\s\S]*?drafts=\{savedAgentDrafts\}/);
   assert.match(appSource, /onDeleteDraft=\{\(item\) => deleteWorkspaceDrafts\(\[item\]\)\}/);
-  assert.match(pageStyles, /\.my-agent-draft-badge,[\s\S]*?\.my-agent-deploying-badge\s*\{/);
-  assert.match(pageStyles, /\.my-agent-actions \.my-agent-delete\s*\{/);
+  assert.match(
+    pageStyles,
+    /\.my-agent-draft-badge\s*\{[\s\S]*?color: #dd6800;[\s\S]*?font-size: 12px;[\s\S]*?font-weight: 400;[\s\S]*?line-height: 18px;/,
+  );
+  assert.doesNotMatch(
+    pageStyles.match(/\.my-agent-draft-badge\s*\{[\s\S]*?\n\}/)?.[0] ?? "",
+    /background:|border:/,
+  );
+  assert.match(pageSource, /<ResourceCardAction[\s\S]*?tone="danger"[\s\S]*?删除/);
 });
 
 test("reopens running deployment progress from draft and Runtime cards", () => {
@@ -213,39 +300,56 @@ test("reopens running deployment progress from draft and Runtime cards", () => {
   assert.match(pageSource, /task\.status !== "running"/);
   assert.match(pageSource, /draftDeploymentTaskIds\[agent\.draft\.id\]/);
   assert.match(pageSource, /activeDeploymentTasks\.byRuntimeId\.get\(runtimeId\)/);
-  assert.match(pageSource, /\{deploymentTask \? "部署中" : "草稿"\}/);
+  assert.match(pageSource, /className="my-agent-draft-badge">草稿<\/span>/);
   assert.match(pageSource, /deploymentTask \? "查看进度" : "编辑"/);
-  assert.match(pageSource, /deploymentTask \? "查看进度" : "查看详情"/);
+  assert.match(pageSource, /\? `查看 \$\{agent\.name\} 部署进度`[\s\S]*?: `查看 \$\{agent\.name\} 详情`/);
   assert.match(appSource, /const \[draftDeploymentTaskIds, setDraftDeploymentTaskIds\]/);
   assert.match(appSource, /\[editingDraftId\]: task\.id/);
   assert.match(appSource, /deploymentTasks=\{deploymentTasks\}/);
   assert.match(appSource, /onViewDeploymentTask=\{openDeploymentDetail\}/);
 });
 
-test("uses a responsive two-layer card layout without an empty fixed-height gap", () => {
+test("uses a responsive four-column card layout without an empty fixed-height gap", () => {
   assert.match(
-    pageStyles,
-    /\.my-agent-grid\s*\{[\s\S]*?grid-template-columns: repeat\(auto-fill, minmax\(min\(280px, 100%\), 1fr\)\);[\s\S]*?align-items: start;[\s\S]*?gap: 12px;/,
+    resourceStyles,
+    /\.resource-grid\s*\{[\s\S]*?grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);[\s\S]*?align-items: start;[\s\S]*?gap: 16px;/,
   );
+  assert.match(resourceStyles, /@media \(min-width: 1181px\) and \(max-width: 1599px\)[\s\S]*?grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/);
+  assert.match(resourceStyles, /@media \(min-width: 721px\) and \(max-width: 1180px\)[\s\S]*?grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
+  assert.match(resourceStyles, /@media \(max-width: 720px\)[\s\S]*?grid-template-columns: 1fr/);
   assert.match(
-    pageStyles,
-    /\.my-agent-card\s*\{[\s\S]*?height: auto;[\s\S]*?background: hsl\(var\(--secondary\) \/ 0\.82\)/,
+    resourceStyles,
+    /\.resource-card\s*\{[\s\S]*?height: 152px;[\s\S]*?border: 1px solid rgba\(229, 230, 235, 0\.7\);[\s\S]*?background: #fff/,
   );
-  assert.match(pageStyles, /\.my-agent-card-content\s*\{[\s\S]*?background: hsl\(var\(--panel\)\);/);
   assert.doesNotMatch(
     pageStyles,
     /\.my-agent-card-content\s*\{[^}]*box-shadow:/,
   );
   assert.doesNotMatch(pageStyles, /\.my-agent-card:hover \.my-agent-card-content/);
-  assert.match(pageStyles, /\.my-agent-description\s*\{[\s\S]*?-webkit-line-clamp: 2/);
-  assert.match(pageStyles, /\.my-agent-actions\s*\{[\s\S]*?gap: 8px;[\s\S]*?padding: 6px 8px 7px;[\s\S]*?background: hsl\(var\(--secondary\) \/ 0\.82\)/);
-  assert.match(pageStyles, /\.my-agent-actions button\s*\{[\s\S]*?background: transparent/);
+  assert.match(resourceStyles, /\.resource-card__description\s*\{[\s\S]*?-webkit-line-clamp: 2/);
+  assert.match(resourceStyles, /\.resource-card__footer\s*\{[\s\S]*?height: 28px;[\s\S]*?justify-content: space-between/);
+  assert.match(resourceStyles, /\.resource-card__action\.is-icon-only\s*\{[\s\S]*?width: 28px;[\s\S]*?border-radius: 50%/);
+  assert.match(resourceStyles, /\.resource-card__actions\s*\{[\s\S]*?gap: 8px/);
+  assert.match(resourceStyles, /\.resource-card:hover,[\s\S]*?box-shadow: 0 0 0 4px rgba\(229, 230, 235, 0\.6\)/);
 });
 
-test("aligns sandbox names with status and formats creation time to seconds", () => {
-  assert.match(pageStyles, /\.my-agent-card-title\s*\{[\s\S]*?justify-content: space-between/);
+test("aligns sandbox names with status and formats card time relatively", async () => {
+  assert.match(resourceStyles, /\.resource-card__header\s*\{[\s\S]*?justify-content: space-between/);
   assert.match(pageStyles, /\.my-agent-session-id\s*\{/);
-  assert.match(pageSource, /hour: "2-digit"[\s\S]*?minute: "2-digit"[\s\S]*?second: "2-digit"/);
+  assert.match(pageSource, /return formatRelativeTimeLabel\(value, nowMs\)/);
+  const { outputText } = ts.transpileModule(relativeTimeSource, {
+    compilerOptions: {
+      module: ts.ModuleKind.ES2022,
+      target: ts.ScriptTarget.ES2022,
+    },
+  });
+  const moduleUrl = `data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`;
+  const { formatRelativeTimeLabel } = await import(moduleUrl);
+  const now = Date.parse("2026-08-11T03:00:00.000Z");
+  assert.equal(formatRelativeTimeLabel("2026-08-11T02:59:40.000Z", now), "20 秒前");
+  assert.equal(formatRelativeTimeLabel("2026-08-11T02:57:00.000Z", now), "3 分钟前");
+  assert.equal(formatRelativeTimeLabel("2026-08-11T01:00:00.000Z", now), "2 小时前");
+  assert.equal(formatRelativeTimeLabel("2026-08-07T03:00:00.000Z", now), "4 天前");
   assert.match(pageSource, /agent\.sandbox \? \([\s\S]*?\{sandboxResourceId\}/);
 });
 
@@ -277,37 +381,51 @@ test("shows aligned lifetime metadata for persistent and non-persistent Sandbox 
 
   assert.match(
     pageSource,
-    /className=\{`my-agent-expiry\$\{[\s\S]*?agent\.sandbox\.persistent[\s\S]*?`\}[\s\S]*?<dt>剩余时间<\/dt>[\s\S]*?agent\.sandbox\.persistent[\s\S]*?"永不过期"[\s\S]*?agent\.sandbox\.expireAt/,
+    /label: "剩余时间",[\s\S]*?agent\.sandbox\.persistent[\s\S]*?"永不过期"[\s\S]*?agent\.sandbox\.expireAt[\s\S]*?className: `my-agent-expiry/,
   );
   assert.doesNotMatch(
     pageSource,
     /<span className="my-agent-expiry"/,
   );
-  assert.match(pageSource, /window\.setInterval\([\s\S]*?60_000/);
+  assert.match(pageSource, /window\.setInterval\([\s\S]*?1_000/);
   assert.match(pageSource, /return \(\) => window\.clearInterval\(timer\)/);
   assert.match(pageStyles, /\.my-agent-expiry\.is-expiring dd\s*\{[\s\S]*?color: hsl\(38 78% 36%\)/);
 });
 
 test("metadata remains compact without adding data-plane requests", () => {
   assert.doesNotMatch(pageStyles, /\.my-agent-label/);
-  assert.match(pageStyles, /\.my-agent-created-at dt,[\s\S]*?\.my-agent-region dt,[\s\S]*?\.my-agent-expiry dt\s*\{[\s\S]*?font-weight: 600/);
-  assert.match(pageStyles, /\.my-agent-created-at dd,[\s\S]*?\.my-agent-region dd,[\s\S]*?\.my-agent-expiry dd\s*\{[\s\S]*?color: hsl\(var\(--muted-foreground\)\)/);
+  assert.match(pageSource, /label: agent\.specificationLabel,[\s\S]*?hideLabel: true/);
+  assert.match(pageSource, /label: "时间",[\s\S]*?hideLabel: true/);
+  assert.doesNotMatch(pageSource, /label: "更新时间"/);
+  assert.match(relativeTimeSource, /return `\$\{elapsedSeconds\} 秒前`/);
+  assert.match(relativeTimeSource, /return `\$\{elapsedMinutes\} 分钟前`/);
+  assert.match(relativeTimeSource, /return `\$\{elapsedHours\} 小时前`/);
+  assert.match(relativeTimeSource, /return `\$\{elapsedDays\} 天前`/);
+  assert.doesNotMatch(pageSource, /\$\{match\[1\]\}-\$\{match\[2\]\} 更新/);
+  assert.match(resourceStyles, /\.resource-card__metadata dd\s*\{[\s\S]*?color: #7a7880/);
+  assert.match(resourceStyles, /\.resource-card__metadata > div \+ div::before\s*\{[\s\S]*?height: 12px/);
   assert.doesNotMatch(pageSource, /getRuntimeAgentInfo/);
   assert.doesNotMatch(pageSource, /Promise\.all\([\s\S]*?page\.runtimes\.map/);
   assert.doesNotMatch(pageSource, /appName: info\.appName/);
 });
 
-test("loads all Runtime regions and shows the creator in card metadata", () => {
+test("loads Runtime pages by the selected ownership and region", () => {
   assert.match(pageSource, /getRuntimes/);
   assert.match(pageSource, /runtimeScope: RuntimeScope/);
-  assert.match(pageSource, /scope: runtimeScope/);
-  assert.doesNotMatch(pageSource, /const \[region, setRegion\]/);
-  assert.match(pageSource, /region: "all",\s*pageSize: RUNTIME_PAGE_SIZE/);
+  assert.match(pageSource, /studioRegion: string/);
+  assert.match(pageSource, /const \[ownership, setOwnership\] = useState<RuntimeScope>/);
+  assert.match(pageSource, /const \[region, setRegion\] = useState<CloudRegion>\(configuredRegion\)/);
+  assert.match(pageSource, /function resolveAgentRegion\([\s\S]*?isSupportedCloudRegion\(studioRegion\)[\s\S]*?defaultCloudRegion\(cloudProvider\)/);
+  assert.doesNotMatch(pageSource, /label: "全部区域"/);
+  assert.match(pageSource, /scope: runtimeScope,[\s\S]*?region,[\s\S]*?pageSize: RUNTIME_PAGE_SIZE/);
+  assert.match(pageSource, /ariaLabel="创建人筛选"/);
+  assert.match(pageSource, /id="my-agent-region-filter"[\s\S]*?ariaLabel="区域"[\s\S]*?onChange=\{selectRegion\}/);
+  assert.match(pageSource, /cloudRegionOptions\(cloudProvider\)/);
   assert.match(pageSource, /id: runtime\.runtimeId/);
   assert.match(pageSource, /name: runtime\.name/);
   assert.match(pageSource, /description: runtime\.description\?\.trim\(\) \|\| "暂无描述"/);
   assert.match(pageSource, /specificationLabel: "创建人"/);
-  assert.match(pageSource, /specification: runtime\.author \|\| "—"/);
+  assert.match(pageSource, /specification: formatResourceSource\(runtime\.author\)/);
   assert.match(pageSource, /runtimeId: runtime\.runtimeId/);
   assert.match(pageSource, /region: runtime\.region/);
   assert.match(pageSource, /<AgentCard[\s\S]*?key=\{agent\.id\}/);
@@ -315,44 +433,57 @@ test("loads all Runtime regions and shows the creator in card metadata", () => {
   assert.match(pageSource, /onList\(page\.runtimes\.map\(runtimeToAgent\)\)/);
   assert.match(pageSource, /runtimeRequestRef\.current !== requestId/);
   assert.match(pageSource, /const runtimePageRequests = new Map/);
-  assert.match(pageSource, /const requestKey = `\$\{runtimeScope\}:all:\$\{nextToken\}`/);
+  assert.match(pageSource, /const requestKey = `\$\{runtimeScope\}:\$\{region\}:\$\{nextToken\}`/);
   assert.match(pageSource, /runtimePageRequests\.get\(requestKey\)/);
   assert.match(pageSource, /runtimePageRequests\.set\(requestKey, request\)/);
   assert.match(pageSource, /const RUNTIME_PAGE_CACHE_TTL_MS = 30_000/);
   assert.match(pageSource, /runtimePageCache\.get\(requestKey\)/);
   assert.match(pageSource, /runtimePageCache\.set\(requestKey/);
   assert.match(pageSource, /setRuntimeAgents\(\(current\) => reset \? agents : \[\.\.\.current, \.\.\.agents\]\)/);
-  assert.match(appSource, /<MyAgents[\s\S]*?runtimeScope=\{access\.capabilities\.runtimeScope\}/);
+  assert.match(appSource, /<MyAgents[\s\S]*?studioRegion=\{agentsSource === "local" \? "cn-beijing" : studioRegion\}[\s\S]*?runtimeScope=\{access\.capabilities\.runtimeScope\}/);
   assert.match(appSource, /const grantedRuntimeScope = access\?\.capabilities\.runtimeScope \?\? "mine"/);
   assert.match(appSource, /const refreshAgentLibrary[\s\S]*?scope: grantedRuntimeScope/);
 });
 
-test("marks runtimes created by the administrator", () => {
+test("uses one shared fallback for missing resource authors", async () => {
+  const { outputText } = ts.transpileModule(resourceMetadataSource, {
+    compilerOptions: {
+      module: ts.ModuleKind.ES2022,
+      target: ts.ScriptTarget.ES2022,
+    },
+  });
+  const moduleUrl = `data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`;
+  const { formatResourceSource } = await import(moduleUrl);
+  assert.equal(formatResourceSource(undefined), "未知来源");
+  assert.equal(formatResourceSource(null), "未知来源");
+  assert.equal(formatResourceSource("   "), "未知来源");
+  assert.equal(formatResourceSource(" Alice "), "Alice");
+  assert.match(pageSource, /specification: formatResourceSource\(session\.createdBy\)/);
+});
+
+test("uses authoritative Sandbox ownership and region metadata for shared filters", () => {
+  assert.match(sandboxSource, /region: string;/);
+  assert.match(sandboxSource, /isMine: boolean;/);
+  assert.match(sandboxSource, /region: data\.region \?\? ""/);
+  assert.match(sandboxSource, /isMine: data\.isMine === true/);
+  assert.match(sandboxServerSource, /"region": session\.region/);
+  assert.match(sandboxServerSource, /"isMine": bool\(owner_id and session\.created_by == owner_id\)/);
+  assert.match(pageSource, /isMine: session\.isMine/);
+  assert.match(pageSource, /region: session\.region/);
+});
+
+test("keeps ownership filtering in the toolbar without duplicating it on cards", () => {
   assert.match(pageSource, /isMine\?: boolean/);
   assert.match(pageSource, /isMine: runtime\.isMine/);
-  assert.match(pageSource, /showOwnership=\{runtimeScope === "all"\}/);
-  assert.match(pageSource, /showOwnership && agent\.isMine/);
-  assert.match(pageSource, /className="runtime-owner-badge"[\s\S]*?>我创建的</);
+  assert.doesNotMatch(pageSource, /showOwnership=\{runtimeScope === "all"\}/);
+  assert.doesNotMatch(pageSource, /className="runtime-owner-badge"/);
   assert.match(appSource, /canCreate=\{canCreateAgents\}/);
 });
 
-test("shows the Runtime region before the ownership badge in the card title", () => {
-  assert.match(
-    pageSource,
-    /formatCloudRegion\(agent\.runtime\.region, cloudProvider\)/,
-  );
-  assert.match(
-    pageSource,
-    /className="my-agent-card-badges"[\s\S]*?className="my-agent-region-badge"[\s\S]*?formatCloudRegion\(agent\.runtime\.region, cloudProvider\)[\s\S]*?className="runtime-owner-badge"[\s\S]*?>我创建的</,
-  );
-  assert.match(
-    pageStyles,
-    /\.my-agent-card-badges\s*\{[\s\S]*?display: flex;[\s\S]*?gap: 6px/,
-  );
-  assert.match(
-    pageStyles,
-    /\.my-agent-region-badge\s*\{[\s\S]*?display: inline-flex;[\s\S]*?border-radius: 999px/,
-  );
+test("keeps Runtime title rows clear of redundant region badges", () => {
+  assert.doesNotMatch(pageSource, /formatCloudRegion\(agent\.runtime\.region, cloudProvider\)/);
+  assert.doesNotMatch(pageSource, /className="my-agent-region-badge"/);
+  assert.doesNotMatch(pageStyles, /\.my-agent-region-badge\s*\{/);
 });
 
 test("hides deleted Runtime cards and invalidates stale Runtime pages", () => {
@@ -384,8 +515,8 @@ test("loads subsequent Runtime pages as the results are scrolled", () => {
   assert.match(pageSource, /className="my-agent-load-more" ref=\{loadMoreRef\}/);
   assert.match(pageSource, /visibleAgents\.length > 0 \|\| Boolean\(runtimeNextToken\)/);
   assert.doesNotMatch(pageSource, /my-agent-pagination|PageChevronIcon|ResizeObserver|MAX_CARD_ROWS/);
-  assert.match(pageStyles, /@keyframes my-agent-card-enter/);
-  assert.match(pageStyles, /\.my-agent-card\s*\{[\s\S]*?animation: my-agent-card-enter/);
+  assert.match(resourceStyles, /@keyframes resource-card-enter/);
+  assert.match(resourceStyles, /\.resource-card\s*\{[\s\S]*?animation: resource-card-enter/);
   assert.match(pageStyles, /\.my-agent-load-more\s*\{[\s\S]*?min-height: 54px/);
   assert.doesNotMatch(pageStyles, /\.my-agent-pagination/);
   assert.match(pageStyles, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?animation: none/);
@@ -393,11 +524,15 @@ test("loads subsequent Runtime pages as the results are scrolled", () => {
 
 test("keeps the page controls fixed while only the Agent results scroll", () => {
   assert.match(pageSource, /const resultsRef = useRef<HTMLElement>\(null\)/);
-  assert.match(pageSource, /className="my-agent-results"[\s\S]*?ref=\{resultsRef\}/);
-  assert.match(pageStyles, /\.my-agents-page\s*\{[\s\S]*?overflow: hidden/);
+  assert.match(pageSource, /<ResourceResults[\s\S]*?className="my-agent-results"[\s\S]*?ref=\{resultsRef\}/);
+  assert.match(resourceStyles, /\.resource-page\s*\{[\s\S]*?overflow: hidden/);
   assert.match(
-    pageStyles,
-    /\.my-agent-results\s*\{[\s\S]*?flex: 1;[\s\S]*?min-height: 0;[\s\S]*?overflow-y: auto/,
+    resourceStyles,
+    /\.resource-page\s*\{[\s\S]*?padding: 80px 80px 0;/,
+  );
+  assert.match(
+    resourceStyles,
+    /\.resource-results\s*\{[\s\S]*?flex: 1;[\s\S]*?min-height: 0;[\s\S]*?overflow-y: auto/,
   );
 });
 
@@ -446,7 +581,8 @@ test("defers conversation data-plane requests until leaving the Agent list", () 
 
 test("wires card details and connect actions into App navigation", () => {
   assert.match(pageSource, /onClick=\{\(\) => void onUse\?\.\(agent\)\}/);
-  assert.match(pageSource, /: onViewDetails\?\.\(agent\)/);
+  assert.match(pageSource, /onActivate=\{cardTargetEnabled \? openCard : undefined\}/);
+  assert.match(pageSource, /else onViewDetails\?\.\(agent\)/);
   assert.match(
     appSource,
     /const connectMyAgent[\s\S]*?connectRuntime[\s\S]*?await refreshCurrentAgentAndStartNewChat\(agentId\)/,
@@ -471,10 +607,10 @@ test("keeps all requested type filters without nested category sections", () => 
   assert.match(pageSource, /onCreateSandboxAgent/);
   assert.match(appSource, /onCreateSandboxAgent=\{openSandboxAgentCreate\}/);
   assert.match(pageSource, /AGENT_TYPES\.map/);
-  assert.match(pageSource, /label: "Codex 智能体"/);
-  assert.match(pageSource, /label: "DeepSeek Harness"/);
-  assert.match(pageSource, /label: "OpenClaw 智能体"/);
-  assert.match(pageSource, /label: "Hermes 智能体"/);
+  assert.match(pageSource, /label: "Codex"/);
+  assert.match(pageSource, /label: "DeepSeek"/);
+  assert.match(pageSource, /label: "OpenClaw"/);
+  assert.match(pageSource, /label: "Hermes"/);
   assert.doesNotMatch(pageSource, /AgentSection|my-agents-section|comingSoon/);
   assert.match(pageSource, /<EmptyMessage\.Title className="my-agent-sandbox-empty-title">[\s\S]*?暂无 \{activeLabel\}[\s\S]*?<\/EmptyMessage\.Title>/);
   assert.match(pageStyles, /\.my-agent-sandbox-empty-title\s*\{[\s\S]*?max-width: none;[\s\S]*?white-space: nowrap;[\s\S]*?text-wrap: nowrap;/);
@@ -486,24 +622,20 @@ test("keeps all requested type filters without nested category sections", () => 
   assert.match(pageSource, /type === "general"\) return <AgentFaceIcon \/>/);
   assert.match(pageSource, /return <SandboxAgentIcon kind=\{type\} \/>/);
   assert.doesNotMatch(pageSource, /开始使用 AgentKit Session/);
-  assert.match(pageSource, /onClick=\{\(\) => onCreateSandboxAgent\(activeType\)\}/);
+  assert.match(pageSource, /: \(\) => onCreateSandboxAgent\(activeType\)/);
 });
 
-test("uses the official EmptyMessage and offers a real create action for an empty Runtime list", () => {
+test("uses the official EmptyMessage when creation is unavailable", () => {
   assert.match(
     pageSource,
     /from "@openai\/apps-sdk-ui\/components\/EmptyMessage"/,
   );
-  assert.match(pageSource, /from "@openai\/apps-sdk-ui\/components\/Button"/);
   assert.match(pageSource, /from "@openai\/apps-sdk-ui\/components\/Icon"/);
   assert.match(
     pageSource,
     /<EmptyMessage\.Title>暂无通用智能体<\/EmptyMessage\.Title>/,
   );
-  assert.match(
-    pageSource,
-    /canCreate \? \([\s\S]*?<EmptyMessage\.ActionRow>[\s\S]*?<Button[\s\S]*?color="primary"[\s\S]*?onClick=\{\(\) => onCreateAgent\(defaultCloudRegion\(cloudProvider\)\)\}[\s\S]*?创建智能体/,
-  );
+  assert.doesNotMatch(pageSource, /<EmptyMessage\.ActionRow>/);
   assert.match(pageSource, /query\.trim\(\)[\s\S]*?<EmptyMessage\.Title>没有匹配的智能体<\/EmptyMessage\.Title>/);
   assert.match(pageSource, /className="my-agent-empty-message"[\s\S]*?<EmptyMessage fill="none">/);
   assert.doesNotMatch(pageSource, /<EmptyMessage fill="static">/);
@@ -528,7 +660,7 @@ test("keeps Runtime failures distinct from successful empty states", () => {
   assert.match(pageSource, />\s*重新加载\s*<\/button>/);
   const errorBranch = pageSource.slice(
     pageSource.indexOf('(activeType === "general" ? runtimeError : sandboxError)'),
-    pageSource.indexOf(": showEmpty ?"),
+    pageSource.indexOf(": showEmpty && !createAgent ?"),
   );
   assert.doesNotMatch(errorBranch, /<EmptyMessage/);
   assert.match(errorBranch, /fetchSandboxAgents\(activeType\)/);
@@ -547,7 +679,7 @@ test("shows connecting progress and preserves the connected Runtime state", () =
   assert.match(pageSource, /aria-busy=\{connecting \|\| undefined\}/);
   assert.match(pageSource, /my-agent-use-spinner/);
   assert.match(pageSource, /const wakeable = agent\.sandbox\?\.resourceType === "snapshot"/);
-  assert.match(pageSource, /<span>\{wakeable \? "唤醒中" : "连接中"\}<\/span>/);
+  assert.match(pageSource, /<span className="sr-only">\{wakeable \? "唤醒中" : "连接中"\}<\/span>/);
   assert.doesNotMatch(pageSource, /ConnectIcon/);
   assert.match(pageSource, /const actionable = Boolean\([\s\S]*?agent\.runtime \|\| sandboxStatus === "ready" \|\| sandboxStatus === "wakeable"/);
   assert.match(pageSource, /disabled=\{!actionable \|\| connecting \|\| connected\}/);
@@ -555,7 +687,7 @@ test("shows connecting progress and preserves the connected Runtime state", () =
   assert.match(pageStyles, /\.my-agent-loading-mark[\s\S]*?border-right-color: transparent/);
   assert.match(
     pageStyles,
-    /\.my-agent-actions \.my-agent-use\.is-connected,[\s\S]*?background: transparent[\s\S]*?color: hsl\(142 62% 30%\)/,
+    /\.resource-card__action\.my-agent-use\.is-connected,[\s\S]*?background: transparent[\s\S]*?color: hsl\(142 62% 30%\)/,
   );
 });
 

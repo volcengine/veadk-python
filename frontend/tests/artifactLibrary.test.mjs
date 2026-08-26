@@ -14,6 +14,10 @@ const pageStyles = readFileSync(
   new URL("../src/ui/ArtifactLibrary.css", import.meta.url),
   "utf8",
 );
+const resourceStyles = readFileSync(
+  new URL("../src/ui/ResourceCollection.css", import.meta.url),
+  "utf8",
+);
 const iconSource = readFileSync(
   new URL("../src/ui/icons/LibraryIcons.tsx", import.meta.url),
   "utf8",
@@ -57,14 +61,14 @@ test("keeps one type-filtered view with search, preview and download", () => {
   assert.doesNotMatch(pageSource, /role="tablist"|role="tabpanel"/);
   assert.match(pageSource, /placeholder="搜索产物或会话"/);
   assert.match(pageSource, /artifact-library-toolbar library-resource-toolbar/);
-  assert.match(pageSource, /artifact-library-toolbar library-resource-toolbar"[\s\S]*?<nav className="artifact-type-pills"[\s\S]*?<label className="artifact-library-search"/);
+  assert.match(pageSource, /<ResourceToolbar className="artifact-library-toolbar library-resource-toolbar">[\s\S]*?<ResourceFilterSelect[\s\S]*?id="artifact-type-filter"[\s\S]*?\{toolbarFilters\}[\s\S]*?<ResourceSearch/);
   assert.doesNotMatch(pageSource, /artifact-library-toolbar__main/);
   assert.doesNotMatch(pageSource, /artifact-library-heading/);
-  assert.doesNotMatch(pageSource, /label: "全部"/);
-  for (const label of ["文档", "图片", "视频"]) {
+  for (const label of ["全部类型", "文档", "图片", "视频"]) {
     assert.match(pageSource, new RegExp(`label: "${label}"`));
   }
-  assert.match(pageSource, /setActiveType\(\(current\) => current === type\.id \? null : type\.id\)/);
+  assert.match(pageSource, /onChange=\{setActiveType\}/);
+  assert.doesNotMatch(pageSource, /artifact-type-pills|artifact-type-pill/);
   assert.doesNotMatch(pageSource, /artifact-type-badge/);
   assert.match(pageSource, /<table className="artifact-library-table">/);
   for (const heading of ["名称", "来源", "修改时间", "操作"]) {
@@ -135,8 +139,9 @@ test("uses repository icons and responsive reduced-motion styles", () => {
   assert.doesNotMatch(iconSource, /SessionViewIcon|TypeViewIcon/);
   assert.match(iconSource, /export function PreviewArtifactIcon/);
   assert.doesNotMatch(iconSource, /lucide-react/);
-  assert.match(pageStyles, /\.artifact-library-results\s*\{[\s\S]*?overflow-y: auto/);
-  assert.match(pageStyles, /\.artifact-library-toolbar\.library-resource-toolbar\s*\{[^}]*align-items:\s*center;[^}]*justify-content:\s*space-between;/);
+  assert.match(pageSource, /<ResourceResults[\s\S]*?className="artifact-library-results"/);
+  assert.match(resourceStyles, /\.resource-results\s*\{[\s\S]*?overflow-y: auto/);
+  assert.doesNotMatch(pageStyles, /\.artifact-library-toolbar\.library-resource-toolbar\s*\{[^}]*justify-content:/);
   assert.doesNotMatch(pageStyles, /artifact-view-tabs|artifact-session-/);
   assert.match(pageStyles, /@media \(max-width: 720px\)/);
   assert.match(pageStyles, /@media \(prefers-reduced-motion: reduce\)/);

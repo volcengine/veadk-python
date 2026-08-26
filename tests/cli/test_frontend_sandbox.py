@@ -920,6 +920,8 @@ def test_sandbox_routes_list_create_connect_and_disconnect() -> None:
                 "expireAt": "2026-07-30T16:00:00Z",
                 "toolType": "CodeEnv",
                 "createdBy": "alice",
+                "region": "cn-beijing",
+                "isMine": True,
                 "displayName": "",
                 "persistent": False,
             }
