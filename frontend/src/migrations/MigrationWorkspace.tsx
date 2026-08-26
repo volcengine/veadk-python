@@ -911,6 +911,9 @@ export function MigrationWorkspace({
     setActivity(null);
     setActivityError("");
     setActivityLoading(false);
+  }, [task?.id]);
+
+  useEffect(() => {
     if (!task || !shouldShowCodexActivity(task)) {
       return;
     }
