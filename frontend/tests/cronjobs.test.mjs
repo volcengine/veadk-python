@@ -10,6 +10,10 @@ const cronJobsStyles = readFileSync(
   new URL("../src/cronjobs/CronJobs.css", import.meta.url),
   "utf8",
 );
+const resourceStyles = readFileSync(
+  new URL("../src/ui/ResourceCollection.css", import.meta.url),
+  "utf8",
+);
 const modelSource = readFileSync(
   new URL("../src/cronjobs/model.ts", import.meta.url),
   "utf8",
@@ -49,10 +53,14 @@ test("places Automation below scheduled tasks with a scheduled-task beta badge",
   assert.match(appSource, /cronJobsView \? \(\s*<CronJobs cloudProvider=\{cloudProvider\}/);
 });
 
-test("renders dense list, independent-session form, details, and full execution lifecycle states", () => {
-  assert.match(cronJobsSource, /<h1>定时任务<\/h1>/);
-  assert.match(cronJobsSource, /className="cronjobs-table"/);
-  assert.match(cronJobsSource, /任务名称<\/th><th>Runtime Agent<\/th><th>执行计划/);
+test("renders the shared resource card list, independent-session form, details, and full execution lifecycle states", () => {
+  assert.match(cronJobsSource, /<ResourcePageHeader[\s\S]*?title="定时任务"/);
+  assert.match(cronJobsSource, /<ResourceTabs[\s\S]*?idPrefix="cronjobs-filter"/);
+  assert.match(cronJobsSource, /<ResourceGrid>[\s\S]*?<ResourceCreateCard[\s\S]*?<LibraryResourceCard/);
+  assert.match(cronJobsSource, /<LibraryResourceCard[\s\S]*?title=\{job\.name\}/);
+  assert.match(cronJobsSource, /metadata=\{\[/);
+  assert.match(cronJobsSource, /action=\{\{/);
+  assert.match(cronJobsSource, /detailAction=\{\{ label: "查看详情"/);
   assert.match(cronJobsSource, /每次触发都会为 Runtime Agent 创建独立 Session/);
   assert.match(cronJobsSource, /type="datetime-local"/);
   assert.match(cronJobsSource, /type="time"/);
@@ -68,7 +76,7 @@ test("renders dense list, independent-session form, details, and full execution 
   assert.match(modelSource, /cancelled: "已取消"/);
   assert.match(modelSource, /skipped: "已跳过"/);
   assert.match(cronJobsSource, /无法加载定时任务/);
-  assert.match(cronJobsSource, /还没有定时任务/);
+  assert.match(cronJobsSource, />\s*创建定时任务\s*<\/ResourceCreateCard>/);
   assert.match(cronJobsSource, /暂无执行记录/);
   assert.match(cronJobsSource, /终止本次执行/);
   assert.match(cronJobsSource, /CRONJOB_ACTIVE_REFRESH_MS/);
@@ -98,14 +106,15 @@ test("renders dense list, independent-session form, details, and full execution 
 });
 
 test("uses Apps SDK controls while keeping only domain layout and responsive styling", () => {
-  assert.match(cronJobsStyles, /\.cronjobs-table\s*\{/);
-  assert.match(cronJobsStyles, /\.cronjobs-toolbar\s*\{[\s\S]*?justify-content: flex-end/);
-  assert.match(cronJobsStyles, /min-width: 940px/);
+  assert.doesNotMatch(cronJobsStyles, /\.cronjobs-table|\.cronjobs-toolbar|\.cronjobs-row-actions/);
+  assert.match(resourceStyles, /\.resource-card\s*\{/);
+  assert.match(resourceStyles, /\.resource-grid\s*\{/);
+  assert.match(resourceStyles, /\.resource-card__actions\s*\{/);
   assert.match(cronJobsStyles, /\.cronjobs-drawer\s*\{[\s\S]*?width: min\(520px, 100vw\)/);
   assert.match(cronJobsStyles, /@media \(max-width: 900px\)/);
   assert.match(cronJobsStyles, /@media \(max-width: 520px\)/);
-  assert.match(cronJobsSource, /data-label="下次执行"/);
-  assert.match(cronJobsStyles, /\.cronjobs-table tbody \{ display: flex; flex-direction: column/);
+  assert.match(cronJobsSource, /label: "下次执行"/);
+  assert.match(resourceStyles, /@media \(max-width: 720px\)[\s\S]*?\.resource-grid\s*\{[\s\S]*?grid-template-columns: 1fr/);
   assert.match(cronJobsStyles, /@media \(prefers-reduced-motion: reduce\)/);
   assert.doesNotMatch(cronJobsStyles, /#[0-9a-f]{3,8}/i);
   assert.doesNotMatch(cronJobsStyles, /font-family:\s*(?:monospace|[^;]*Mono)/i);

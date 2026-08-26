@@ -6576,6 +6576,7 @@ export default function App() {
             ) : myAgents && !showManageAgents ? (
               <MyAgents
                 cloudProvider={cloudProvider}
+                studioRegion={agentsSource === "local" ? "cn-beijing" : studioRegion}
                 canCreate={canCreateAgents}
                 runtimeScope={access.capabilities.runtimeScope}
                 onCreateAgent={openAgentCreateFromMyAgents}
@@ -6865,6 +6866,7 @@ export default function App() {
             ) : skillCenter ? (
               <LibraryView
                 cloudProvider={cloudProvider}
+                studioRegion={studioRegion || defaultCloudRegion(cloudProvider)}
                 activeTab={libraryTab}
                 onTabChange={setLibraryTab}
                 onPageTitleChange={setLibraryPageTitle}

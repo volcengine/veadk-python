@@ -324,7 +324,8 @@ test("the Codex project handoff entry remains in the toolbar only", () => {
     /\.my-agent-create-secondary\s*\{[\s\S]*?height:\s*32px[\s\S]*?display:\s*inline-flex/,
   );
   assert.match(
-    myAgentsStyles,
-    /\.my-agent-create-primary\s*\{[\s\S]*?height:\s*32px[\s\S]*?display:\s*inline-flex/,
+    myAgentsSource,
+    /<ResourceCreateCard[\s\S]*?className="my-agent-create-card"/,
   );
+  assert.doesNotMatch(myAgentsStyles, /\.my-agent-create-card\s*\{/);
 });

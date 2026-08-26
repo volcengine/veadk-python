@@ -2702,6 +2702,7 @@ class SandboxAgentSessionService:
 def _public_snapshot(
     snapshot: SandboxCloudSnapshot,
     tool_name: str,
+    owner_id: str | None = None,
 ) -> dict[str, object]:
     status = (
         "Wakeable"
@@ -2717,6 +2718,8 @@ def _public_snapshot(
         "reason": snapshot.reason,
         "createdAt": snapshot.created_at,
         "createdBy": snapshot.created_by,
+        "region": snapshot.region,
+        "isMine": bool(owner_id and snapshot.created_by == owner_id),
         "displayName": snapshot.display_name,
         "toolName": tool_name,
     }
@@ -2769,7 +2772,11 @@ def mount_sandbox_agent_routes(
             },
         )
 
-    def _public_session(session: SandboxCloudSession, kind: str) -> dict[str, object]:
+    def _public_session(
+        session: SandboxCloudSession,
+        kind: str,
+        owner_id: str | None = None,
+    ) -> dict[str, object]:
         return {
             "sessionId": session.instance_id,
             "userSessionId": session.user_session_id,
@@ -2778,6 +2785,8 @@ def mount_sandbox_agent_routes(
             "expireAt": session.expire_at,
             "toolType": session.tool_type,
             "createdBy": session.creator_name or session.created_by,
+            "region": session.region,
+            "isMine": bool(owner_id and session.created_by == owner_id),
             "displayName": session.display_name,
             "toolName": kind,
             "persistent": session.persistent,
@@ -2797,8 +2806,9 @@ def mount_sandbox_agent_routes(
         request: Request,
     ) -> dict[str, object]:
         try:
+            owner_id = owner_resolver(request)
             sessions, snapshots = await _service(kind).list_resources(
-                owner_resolver(request),
+                owner_id,
                 is_admin=_is_admin(request),
                 auto_resume_snapshots=_request_auto_resume_snapshots(
                     request,
@@ -2808,11 +2818,13 @@ def mount_sandbox_agent_routes(
         except SandboxError as error:
             raise _http_error(error) from error
         result: dict[str, object] = {
-            "sessions": [_public_session(session, kind) for session in sessions]
+            "sessions": [
+                _public_session(session, kind, owner_id) for session in sessions
+            ]
         }
         if snapshots:
             result["snapshots"] = [
-                _public_snapshot(snapshot, kind) for snapshot in snapshots
+                _public_snapshot(snapshot, kind, owner_id) for snapshot in snapshots
             ]
         return result
 
@@ -2843,7 +2855,7 @@ def mount_sandbox_agent_routes(
             )
         except SandboxError as error:
             raise _http_error(error) from error
-        return _public_session(session, kind)
+        return _public_session(session, kind, owner_id)
 
     @app.post("/web/{kind}/snapshots/{snapshot_id}/resume")
     async def _resume_sandbox_agent_snapshot(
@@ -2851,15 +2863,16 @@ def mount_sandbox_agent_routes(
         snapshot_id: str,
         request: Request,
     ) -> dict[str, object]:
+        owner_id = owner_resolver(request)
         try:
             session = await _service(kind).resume_snapshot(
                 snapshot_id,
-                owner_resolver(request),
+                owner_id,
                 is_admin=_is_admin(request),
             )
         except SandboxError as error:
             raise _http_error(error) from error
-        return _public_session(session, kind)
+        return _public_session(session, kind, owner_id)
 
     @app.delete("/web/{kind}/snapshots/{snapshot_id}")
     async def _delete_sandbox_agent_snapshot(
@@ -2884,17 +2897,18 @@ def mount_sandbox_agent_routes(
         request: Request,
     ) -> dict[str, object]:
         service = _service(kind)
+        owner_id = owner_resolver(request)
         try:
             session, token = await service.open(
                 session_id,
-                owner_resolver(request),
+                owner_id,
                 is_admin=_is_admin(request),
             )
         except SandboxError as error:
             raise _http_error(error) from error
         prefix = agent_surface_prefix(kind, session_id, token)
         return {
-            **_public_session(session, kind),
+            **_public_session(session, kind, owner_id),
             "webuiUrl": f"{prefix}{service.surface_path}",
         }
 
@@ -2992,7 +3006,10 @@ def mount_sandbox_routes(
     def _is_admin(request: Request) -> bool:
         return bool(admin_resolver and admin_resolver(request))
 
-    def _public_session(session: SandboxCloudSession) -> dict[str, object]:
+    def _public_session(
+        session: SandboxCloudSession,
+        owner_id: str | None = None,
+    ) -> dict[str, object]:
         return {
             "sessionId": session.instance_id,
             "userSessionId": session.user_session_id,
@@ -3001,6 +3018,8 @@ def mount_sandbox_routes(
             "expireAt": session.expire_at,
             "toolType": session.tool_type,
             "createdBy": session.creator_name or session.created_by,
+            "region": session.region,
+            "isMine": bool(owner_id and session.created_by == owner_id),
             "displayName": session.display_name,
             "persistent": session.persistent,
         }
@@ -3325,8 +3344,9 @@ def mount_sandbox_routes(
     @app.get("/web/sandbox/sessions")
     async def _list_sandbox_sessions(request: Request) -> dict[str, object]:
         try:
+            owner_id = owner_resolver(request)
             sessions, snapshots = await service.list_resources(
-                owner_resolver(request),
+                owner_id,
                 is_admin=_is_admin(request),
                 auto_resume_snapshots=_request_auto_resume_snapshots(
                     request,
@@ -3336,11 +3356,11 @@ def mount_sandbox_routes(
         except SandboxError as error:
             raise _http_error(error) from error
         result: dict[str, object] = {
-            "sessions": [_public_session(session) for session in sessions]
+            "sessions": [_public_session(session, owner_id) for session in sessions]
         }
         if snapshots:
             result["snapshots"] = [
-                _public_snapshot(snapshot, STUDIO_SANDBOX_TOOL_NAME)
+                _public_snapshot(snapshot, STUDIO_SANDBOX_TOOL_NAME, owner_id)
                 for snapshot in snapshots
             ]
         return result
@@ -3370,7 +3390,7 @@ def mount_sandbox_routes(
         except SandboxError as error:
             raise _http_error(error) from error
         return {
-            **_public_session(session),
+            **_public_session(session, owner_id),
             "toolName": STUDIO_SANDBOX_TOOL_NAME,
         }
 
@@ -3379,16 +3399,17 @@ def mount_sandbox_routes(
         snapshot_id: str,
         request: Request,
     ) -> dict[str, object]:
+        owner_id = owner_resolver(request)
         try:
             session = await service.resume_snapshot(
                 snapshot_id,
-                owner_resolver(request),
+                owner_id,
                 is_admin=_is_admin(request),
             )
         except SandboxError as error:
             raise _http_error(error) from error
         return {
-            **_public_session(session),
+            **_public_session(session, owner_id),
             "toolName": STUDIO_SANDBOX_TOOL_NAME,
         }
 

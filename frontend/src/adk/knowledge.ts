@@ -84,6 +84,7 @@ export interface KnowledgeDocumentPreviewPage {
 export interface CreateKnowledgeBaseInput {
   name: string;
   description?: string;
+  region?: string;
 }
 
 export interface CreateKnowledgeDocumentInput {
