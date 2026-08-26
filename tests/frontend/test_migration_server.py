@@ -1627,9 +1627,7 @@ def test_capabilities_expose_provider_model_and_per_session_runtime_checks() -> 
 
     assert capability["provider"] == "volcengine"
     assert capability["model"] == {"configured": True, "id": "doubao-test"}
-    assert capability["unsupportedModelIds"] == sorted(
-        MIGRATION_UNSUPPORTED_MODEL_IDS
-    )
+    assert capability["unsupportedModelIds"] == sorted(MIGRATION_UNSUPPORTED_MODEL_IDS)
     assert capability["cli"] == {
         "minimumVersion": "0.52.1",
         "check": "per_session",
