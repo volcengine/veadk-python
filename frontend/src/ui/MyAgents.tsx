@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SVGProps } from "react";
-import { Button } from "@openai/apps-sdk-ui/components/Button";
 import { EmptyMessage } from "@openai/apps-sdk-ui/components/EmptyMessage";
 import { Explore } from "@openai/apps-sdk-ui/components/Icon";
 
@@ -10,8 +9,10 @@ import {
   type RuntimeScope,
 } from "../adk/client";
 import {
+  cloudRegionOptions,
   defaultCloudRegion,
-  formatCloudRegion,
+  isSupportedCloudRegion,
+  type CloudRegion,
   type CloudProvider,
 } from "../adk/cloudProvider";
 import {
@@ -25,7 +26,28 @@ import type { WorkspaceAgentDraft } from "../create/agentDraftStorage";
 import { AgentFaceIcon } from "./AgentFaceIcon";
 import { SandboxAgentIcon } from "./icons/SandboxAgentIcons";
 import type { DeploymentTaskUpdate } from "./ProjectPreview";
+import {
+  ResourceCard,
+  ResourceCardAction,
+  ResourceCardDescription,
+  ResourceCardHeader,
+  ResourceCardMetadata,
+  ResourceCardRevealAction,
+  ResourceCreateCard,
+  ResourceGrid,
+  ResourceIdentityMark,
+  ResourceFilterSelect,
+  type ResourceFilterOption,
+  ResourcePageHeader,
+  ResourcePageShell,
+  ResourceResults,
+  ResourceSearch,
+  ResourceTabs,
+  ResourceToolbar,
+} from "./ResourceCollection";
+import { formatResourceSource } from "./resourceMetadata";
 import { StudioConfirmDialog } from "./StudioConfirmDialog";
+import { formatRelativeTimeLabel } from "./relativeTime";
 import "./MyAgents.css";
 
 export interface MyAgentCardData {
@@ -37,6 +59,7 @@ export interface MyAgentCardData {
   specificationLabel: string;
   specification: string;
   isMine?: boolean;
+  region?: string;
   runtime?: {
     runtimeId: string;
     region: string;
@@ -56,11 +79,15 @@ export type AgentType =
 
 const AGENT_TYPES: Array<{ id: AgentType; label: string }> = [
   { id: "general", label: "通用智能体" },
-  { id: "codex", label: "Codex 智能体" },
-  { id: "deepseek-harness", label: "DeepSeek Harness" },
-  { id: "openclaw", label: "OpenClaw 智能体" },
-  { id: "hermes", label: "Hermes 智能体" },
+  { id: "codex", label: "Codex" },
+  { id: "deepseek-harness", label: "DeepSeek" },
+  { id: "openclaw", label: "OpenClaw" },
+  { id: "hermes", label: "Hermes" },
 ];
+const AGENT_TYPE_OPTIONS: Array<ResourceFilterOption<AgentType>> = AGENT_TYPES.map(({ id, label }) => ({
+  value: id,
+  label,
+}));
 const RUNTIME_PAGE_SIZE = 24;
 const RUNTIME_PAGE_CACHE_TTL_MS = 30_000;
 const runtimePageRequests = new Map<
@@ -89,19 +116,21 @@ export function invalidateRuntimeAgentCache(runtimeIds?: Iterable<string>) {
   runtimePageRequests.clear();
 }
 
-function SearchIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
-      <circle cx="10.8" cy="10.8" r="6.2" stroke="currentColor" strokeWidth="1.7" />
-      <path d="m15.4 15.4 4 4" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 function AddIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="0 0 16 16" fill="none" aria-hidden="true" {...props}>
       <path d="M8 3.25v9.5M3.25 8h9.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function AgentUseIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true" {...props}>
+      <path
+        d="M8.313 3.646a.5.5 0 0 1 .707 0l4 4a.5.5 0 0 1 0 .708l-4 4a.5.5 0 1 1-.707-.708L11.46 8.5H3.333a.5.5 0 0 1 0-1h8.127L8.313 4.354a.5.5 0 0 1 0-.708Z"
+        fill="currentColor"
+      />
     </svg>
   );
 }
@@ -125,19 +154,8 @@ function AgentTypeIcon({ type }: { type: AgentType }) {
   return <SandboxAgentIcon kind={type} />;
 }
 
-function formatCreatedAt(value: string): string {
-  if (!value) return "—";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value.slice(0, 10);
-  return new Intl.DateTimeFormat("zh-CN", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  }).format(date).replace(/\//g, "-");
+export function formatCardUpdateLabel(value: string, nowMs = Date.now()): string {
+  return formatRelativeTimeLabel(value, nowMs);
 }
 
 export function formatSandboxRemainingTime(
@@ -159,9 +177,9 @@ function runtimeToAgent(runtime: CloudRuntime): MyAgentCardData {
     id: runtime.runtimeId,
     name: runtime.name,
     description: runtime.description?.trim() || "暂无描述",
-    createdAt: formatCreatedAt(runtime.createdAt ?? ""),
+    createdAt: runtime.createdAt ?? "",
     specificationLabel: "创建人",
-    specification: runtime.author || "—",
+    specification: formatResourceSource(runtime.author),
     isMine: runtime.isMine,
     runtime: {
       runtimeId: runtime.runtimeId,
@@ -177,9 +195,11 @@ function sandboxToAgent(session: SandboxAgentResource): MyAgentCardData {
     id: session.id,
     name: session.displayName || `${session.toolName} 智能体`,
     description: sandboxStatusLabel(session.status),
-    createdAt: formatCreatedAt(session.createdAt),
+    createdAt: session.createdAt,
     specificationLabel: "创建人",
-    specification: session.createdBy || "—",
+    specification: formatResourceSource(session.createdBy),
+    isMine: session.isMine,
+    region: session.region,
     sandbox: session,
   };
 }
@@ -189,19 +209,36 @@ function draftToAgent(item: WorkspaceAgentDraft): MyAgentCardData {
     id: item.id,
     name: item.draft.name || "未命名 Agent",
     description: item.draft.description?.trim() || "暂无描述",
-    createdAt: formatCreatedAt(new Date(item.updatedAt).toISOString()),
+    createdAt: new Date(item.updatedAt).toISOString(),
     specificationLabel: "存储位置",
     specification: "当前浏览器",
+    isMine: true,
+    region: item.deploymentTarget?.region,
     draft: item,
   };
 }
 
+function resolveAgentRegion(
+  studioRegion: string,
+  cloudProvider: CloudProvider,
+): CloudRegion {
+  const providerRegions = cloudRegionOptions(cloudProvider);
+  if (
+    isSupportedCloudRegion(studioRegion) &&
+    providerRegions.some((option) => option.value === studioRegion)
+  ) {
+    return studioRegion;
+  }
+  return defaultCloudRegion(cloudProvider);
+}
+
 async function loadRuntimeAgents(
   runtimeScope: RuntimeScope,
+  region: CloudRegion,
   nextToken: string,
   onList: (agents: MyAgentCardData[]) => void,
 ): Promise<string> {
-  const requestKey = `${runtimeScope}:all:${nextToken}`;
+  const requestKey = `${runtimeScope}:${region}:${nextToken}`;
   const cached = runtimePageCache.get(requestKey);
   if (cached && cached.expiresAt > Date.now()) {
     onList(cached.page.runtimes.map(runtimeToAgent));
@@ -212,7 +249,7 @@ async function loadRuntimeAgents(
   if (!request) {
     request = getRuntimes({
       scope: runtimeScope,
-      region: "all",
+      region,
       pageSize: RUNTIME_PAGE_SIZE,
       nextToken,
     });
@@ -233,12 +270,10 @@ async function loadRuntimeAgents(
 
 function AgentCard({
   agent,
-  cloudProvider,
   onUse,
   onViewDetails,
   connecting,
   connected,
-  showOwnership,
   deploymentTask,
   nowMs,
   onViewDeploymentTask,
@@ -246,12 +281,10 @@ function AgentCard({
   onDeleteDraft,
 }: {
   agent: MyAgentCardData;
-  cloudProvider: CloudProvider;
   onUse?: (agent: MyAgentCardData) => Promise<void>;
   onViewDetails?: (agent: MyAgentCardData) => void;
   connecting?: boolean;
   connected?: boolean;
-  showOwnership?: boolean;
   deploymentTask?: DeploymentTaskUpdate;
   nowMs: number;
   onViewDeploymentTask?: (task: DeploymentTaskUpdate) => void;
@@ -266,22 +299,122 @@ function AgentCard({
   const sandboxResourceId = agent.sandbox?.resourceType === "snapshot"
     ? agent.sandbox.sourceSessionId || agent.sandbox.snapshotId
     : agent.sandbox?.id;
+  const openCard = () => {
+    if (agent.draft) {
+      if (deploymentTask) onViewDeploymentTask?.(deploymentTask);
+      else onEditDraft?.(agent.draft);
+      return;
+    }
+    if (!actionable) return;
+    if (deploymentTask) onViewDeploymentTask?.(deploymentTask);
+    else onViewDetails?.(agent);
+  };
+  const cardTargetEnabled = agent.draft
+    ? Boolean(deploymentTask ? onViewDeploymentTask : onEditDraft)
+    : actionable && Boolean(deploymentTask ? onViewDeploymentTask : onViewDetails);
+  const cardTargetLabel = agent.draft
+    ? deploymentTask
+      ? `查看 ${agent.name} 部署进度`
+      : `编辑草稿 ${agent.name}`
+    : deploymentTask
+      ? `查看 ${agent.name} 部署进度`
+      : `查看 ${agent.name} 详情`;
   return (
-    <article className="my-agent-card">
-      <div className="my-agent-card-content">
-        <div className="my-agent-card-title">
-          <div className="my-agent-card-title-copy">
-            <h3>{agent.name}</h3>
-            {agent.sandbox ? (
-              <span className="my-agent-session-id" title={sandboxResourceId}>
-                {sandboxResourceId}
-              </span>
-            ) : null}
-          </div>
-          {agent.draft ? (
-            <span className="my-agent-draft-badge">
-              {deploymentTask ? "部署中" : "草稿"}
-            </span>
+    <ResourceCard
+      className="my-agent-card"
+      activateLabel={cardTargetEnabled ? cardTargetLabel : undefined}
+      onActivate={cardTargetEnabled ? openCard : undefined}
+      footer={(
+        <ResourceCardMetadata
+          className="my-agent-meta"
+          items={[
+            {
+              label: agent.specificationLabel,
+              value: agent.specification,
+              hideLabel: true,
+              className: "my-agent-region",
+            },
+            {
+              label: "时间",
+              value: formatCardUpdateLabel(agent.createdAt, nowMs),
+              hideLabel: true,
+              className: "my-agent-created-at",
+            },
+            ...(agent.sandbox ? [{
+              label: "剩余时间",
+              value: agent.sandbox.resourceType === "snapshot"
+                ? "可唤醒"
+                : agent.sandbox.persistent
+                  ? "永不过期"
+                  : formatSandboxRemainingTime(agent.sandbox.expireAt, nowMs),
+              className: `my-agent-expiry${
+                agent.sandbox.resourceType === "session" && agent.sandbox.persistent
+                  ? ""
+                  : " is-expiring"
+              }`,
+            }] : []),
+          ]}
+        />
+      )}
+      actions={agent.draft ? (
+        <>
+          <ResourceCardAction
+            aria-label={deploymentTask
+              ? `查看 ${agent.name} 部署进度`
+              : `编辑草稿 ${agent.name}`}
+            onClick={() => deploymentTask
+              ? onViewDeploymentTask?.(deploymentTask)
+              : onEditDraft?.(agent.draft!)}
+          >
+            {deploymentTask ? "查看进度" : "编辑"}
+          </ResourceCardAction>
+          <ResourceCardAction
+            tone="danger"
+            aria-label={`删除草稿 ${agent.name}`}
+            onClick={() => onDeleteDraft?.(agent.draft!)}
+          >
+            删除
+          </ResourceCardAction>
+        </>
+      ) : (
+        <ResourceCardRevealAction
+          className={connected ? "my-agent-use is-connected" : "my-agent-use"}
+          disabled={!actionable || connecting || connected}
+          aria-busy={connecting || undefined}
+          label={connected
+            ? `${agent.name} 已连接`
+            : wakeable
+              ? `唤醒 ${agent.name} 并开始对话`
+              : `与 ${agent.name} 对话`}
+          onClick={() => void onUse?.(agent)}
+        >
+          {connecting ? (
+            <>
+              <span className="my-agent-use-spinner" aria-hidden="true" />
+              <span className="sr-only">{wakeable ? "唤醒中" : "连接中"}</span>
+            </>
+          ) : (
+            <AgentUseIcon />
+          )}
+        </ResourceCardRevealAction>
+      )}
+    >
+      <ResourceCardHeader
+        leading={(
+          <ResourceIdentityMark seed={agent.name} />
+        )}
+        title={agent.name}
+        subtitle={agent.sandbox ? (
+          <span className="my-agent-session-id" title={sandboxResourceId}>
+            {sandboxResourceId}
+          </span>
+        ) : undefined}
+        status={agent.draft ? (
+          deploymentTask ? (
+            <span className="my-agent-deploying-badge">部署中</span>
+          ) : (
+            <span className="my-agent-draft-badge">草稿</span>
+          )
           ) : agent.sandbox ? (
             <span
               className="my-agent-status-label"
@@ -290,119 +423,20 @@ function AgentCard({
             >
               {agent.description}
             </span>
-          ) : agent.runtime ? (
-            <div className="my-agent-card-badges">
-              {deploymentTask ? (
-                <span className="my-agent-deploying-badge">部署中</span>
-              ) : null}
-              <span className="my-agent-region-badge">
-                {formatCloudRegion(agent.runtime.region, cloudProvider)}
-              </span>
-              {showOwnership && agent.isMine ? (
-                <span className="runtime-owner-badge">我创建的</span>
-              ) : null}
-            </div>
+          ) : agent.runtime && deploymentTask ? (
+            <span className="my-agent-deploying-badge">部署中</span>
           ) : null}
-        </div>
-        {!agent.sandbox ? (
-          <p className="my-agent-description">{agent.description}</p>
-        ) : null}
-        <dl className="my-agent-meta">
-          <div className="my-agent-created-at">
-            <dt>{agent.draft ? "更新时间" : "创建时间"}</dt>
-            <dd>{agent.createdAt}</dd>
-          </div>
-          <div className="my-agent-region">
-            <dt>{agent.specificationLabel}</dt>
-            <dd>{agent.specification}</dd>
-          </div>
-          {agent.sandbox ? (
-            <div
-              className={`my-agent-expiry${
-                agent.sandbox.resourceType === "session" && agent.sandbox.persistent
-                  ? ""
-                  : " is-expiring"
-              }`}
-            >
-              <dt>剩余时间</dt>
-              <dd>
-                {agent.sandbox.resourceType === "snapshot"
-                  ? "可唤醒"
-                  : agent.sandbox.persistent
-                  ? "永不过期"
-                  : formatSandboxRemainingTime(agent.sandbox.expireAt, nowMs)}
-              </dd>
-            </div>
-          ) : null}
-        </dl>
-      </div>
-      <footer className="my-agent-actions">
-        {agent.draft ? (
-          <>
-            <button
-              type="button"
-              className="my-agent-details"
-              aria-label={deploymentTask
-                ? `查看 ${agent.name} 部署进度`
-                : `编辑草稿 ${agent.name}`}
-              onClick={() => deploymentTask
-                ? onViewDeploymentTask?.(deploymentTask)
-                : onEditDraft?.(agent.draft!)}
-            >
-              {deploymentTask ? "查看进度" : "编辑"}
-            </button>
-            <button
-              type="button"
-              className="my-agent-delete"
-              aria-label={`删除草稿 ${agent.name}`}
-              onClick={() => onDeleteDraft?.(agent.draft!)}
-            >
-              删除
-            </button>
-          </>
-        ) : (
-          <>
-            <button
-              type="button"
-              className="my-agent-details"
-              disabled={!actionable}
-              aria-label={deploymentTask
-                ? `查看 ${agent.name} 部署进度`
-                : `查看 ${agent.name} 详情`}
-              onClick={() => deploymentTask
-                ? onViewDeploymentTask?.(deploymentTask)
-                : onViewDetails?.(agent)}
-            >
-              {deploymentTask ? "查看进度" : "查看详情"}
-            </button>
-            <button
-              type="button"
-              className={`my-agent-use${connected ? " is-connected" : ""}`}
-              disabled={!actionable || connecting || connected}
-              aria-busy={connecting || undefined}
-              aria-label={connected
-                ? `${agent.name} 已连接`
-                : wakeable
-                  ? `唤醒 ${agent.name}`
-                  : `使用 ${agent.name}`}
-              onClick={() => void onUse?.(agent)}
-            >
-              {connecting ? (
-                <>
-                  <span className="my-agent-use-spinner" aria-hidden="true" />
-                  <span>{wakeable ? "唤醒中" : "连接中"}</span>
-                </>
-              ) : connected ? "已连接" : wakeable ? "唤醒" : "使用"}
-            </button>
-          </>
-        )}
-      </footer>
-    </article>
+      />
+      {!agent.sandbox ? (
+        <ResourceCardDescription>{agent.description}</ResourceCardDescription>
+      ) : null}
+    </ResourceCard>
   );
 }
 
 export interface MyAgentsProps {
   cloudProvider: CloudProvider;
+  studioRegion: string;
   canCreate: boolean;
   runtimeScope: RuntimeScope;
   onCreateAgent: (region: string) => void;
@@ -427,6 +461,7 @@ export interface MyAgentsProps {
 
 export function MyAgents({
   cloudProvider,
+  studioRegion,
   canCreate,
   runtimeScope,
   onCreateAgent,
@@ -453,7 +488,12 @@ export function MyAgents({
   const runtimeRequestRef = useRef(0);
   const sandboxRequestRef = useRef(0);
   const sandboxAbortRef = useRef<AbortController | null>(null);
+  const configuredRegion = resolveAgentRegion(studioRegion, cloudProvider);
   const [query, setQuery] = useState("");
+  const [ownership, setOwnership] = useState<RuntimeScope>(
+    runtimeScope === "mine" ? "mine" : "all",
+  );
+  const [region, setRegion] = useState<CloudRegion>(configuredRegion);
   const [runtimeAgents, setRuntimeAgents] = useState<MyAgentCardData[]>([]);
   const [runtimeNextToken, setRuntimeNextToken] = useState("");
   const [loadingRuntimes, setLoadingRuntimes] = useState(true);
@@ -464,17 +504,24 @@ export function MyAgents({
   const [connectingAgentId, setConnectingAgentId] = useState("");
   const [draftToDelete, setDraftToDelete] = useState<WorkspaceAgentDraft | null>(null);
   const [remainingTimeNow, setRemainingTimeNow] = useState(() => Date.now());
-  const hasExpiringSandboxAgents = sandboxAgents.some(
-    (agent) =>
-      agent.sandbox?.resourceType === "session" && agent.sandbox.persistent === false,
+  const regionFilterOptions = useMemo<Array<ResourceFilterOption<CloudRegion>>>(
+    () => cloudRegionOptions(cloudProvider),
+    [cloudProvider],
   );
 
   useEffect(() => {
-    if (!hasExpiringSandboxAgents) return;
+    if (runtimeScope === "mine") setOwnership("mine");
+  }, [runtimeScope]);
+
+  useEffect(() => {
+    setRegion(configuredRegion);
+  }, [configuredRegion]);
+
+  useEffect(() => {
     setRemainingTimeNow(Date.now());
-    const timer = window.setInterval(() => setRemainingTimeNow(Date.now()), 60_000);
+    const timer = window.setInterval(() => setRemainingTimeNow(Date.now()), 1_000);
     return () => window.clearInterval(timer);
-  }, [hasExpiringSandboxAgents]);
+  }, []);
 
   const draftAgents = useMemo(() => drafts.map(draftToAgent), [drafts]);
   const activeDeploymentTasks = useMemo(() => {
@@ -507,7 +554,7 @@ export function MyAgents({
     const requestId = ++runtimeRequestRef.current;
     setLoadingRuntimes(true);
     setRuntimeError("");
-    return loadRuntimeAgents(runtimeScope, token, (agents) => {
+    return loadRuntimeAgents(ownership, region, token, (agents) => {
       if (runtimeRequestRef.current !== requestId) return;
       setRuntimeAgents((current) => reset ? agents : [...current, ...agents]);
     })
@@ -521,7 +568,7 @@ export function MyAgents({
       .finally(() => {
         if (runtimeRequestRef.current === requestId) setLoadingRuntimes(false);
       });
-  }, [runtimeScope]);
+  }, [ownership, region]);
 
   useEffect(() => {
     if (activeType !== "general") return;
@@ -588,6 +635,27 @@ export function MyAgents({
     onActiveTypeChange(type);
   }
 
+  function resetRuntimePagination() {
+    if (activeType !== "general") return;
+    runtimeRequestRef.current += 1;
+    setRuntimeAgents([]);
+    setRuntimeNextToken("");
+    setRuntimeError("");
+    setLoadingRuntimes(true);
+  }
+
+  function selectOwnership(nextOwnership: RuntimeScope) {
+    if (nextOwnership === ownership) return;
+    resetRuntimePagination();
+    setOwnership(nextOwnership);
+  }
+
+  function selectRegion(nextRegion: CloudRegion) {
+    if (nextRegion === region) return;
+    resetRuntimePagination();
+    setRegion(nextRegion);
+  }
+
   useEffect(() => {
     if (activeType === "general") {
       sandboxAbortRef.current?.abort();
@@ -639,11 +707,18 @@ export function MyAgents({
     const source = activeType === "general"
       ? [...draftAgents, ...runtimeAgents]
       : sandboxAgents;
+    const matchingOwnership = ownership === "mine"
+      ? source.filter((agent) => agent.isMine)
+      : source;
+    const matchingRegion = matchingOwnership.filter((agent) => {
+      const agentRegion = agent.runtime?.region ?? agent.region;
+      return !agentRegion || agentRegion === region;
+    });
     const matchingAgents = normalizedQuery
-      ? source.filter((agent) =>
+      ? matchingRegion.filter((agent) =>
           agent.name.toLocaleLowerCase().includes(normalizedQuery),
         )
-      : source;
+      : matchingRegion;
     if (activeType !== "general") return matchingAgents;
     const availableAgents = hiddenRuntimeIds.size > 0
       ? matchingAgents.filter((agent) =>
@@ -665,6 +740,8 @@ export function MyAgents({
     draftAgents,
     hiddenRuntimeIds,
     query,
+    ownership,
+    region,
     runtimeAgents,
     sandboxAgents,
   ]);
@@ -677,55 +754,49 @@ export function MyAgents({
   const showEmpty = !showInitialLoading && visibleAgents.length === 0;
   const createAgent = canCreate
     ? activeType === "general"
-      ? () => onCreateAgent(defaultCloudRegion(cloudProvider))
+      ? () => onCreateAgent(region)
       : () => onCreateSandboxAgent(activeType)
     : undefined;
   const showCodexProjectUpload =
     activeType === "codex" && canCreate && Boolean(onOpenCodexProjectUpload);
-  const createDisabledReason = !canCreate
-    ? "当前账号没有创建智能体权限"
-    : undefined;
 
   return (
-    <div className="my-agents-page">
-      <header className="my-agents-header">
-        <div className="my-agents-heading">
-          <div className="my-agents-title-row">
-            <h1>智能体</h1>
-          </div>
-          <p>
-            {runtimeScope === "all"
-              ? "在此处浏览所有智能体"
-              : "在此处浏览您的所有智能体"}
-          </p>
-        </div>
-        <label className="my-agent-search">
-          <SearchIcon />
-          <input
-            type="search"
+    <ResourcePageShell className="my-agents-page" aria-label="智能体">
+      <ResourcePageHeader title="智能体" className="my-agents-header" />
+
+      <ResourceToolbar className="my-agent-toolbar">
+        <ResourceTabs
+          idPrefix="my-agent-ownership"
+          ariaLabel="创建人筛选"
+          value={ownership}
+          items={[
+            { id: "all", label: "全部", disabled: runtimeScope === "mine" },
+            { id: "mine", label: "我创建的" },
+          ]}
+          onChange={selectOwnership}
+        />
+        <div className="resource-toolbar__actions">
+          <ResourceFilterSelect
+            id="my-agent-type-filter"
+            ariaLabel="智能体类型"
+            value={activeType}
+            options={AGENT_TYPE_OPTIONS}
+            onChange={selectAgentType}
+          />
+          <ResourceFilterSelect
+            id="my-agent-region-filter"
+            ariaLabel="区域"
+            value={region}
+            options={regionFilterOptions}
+            onChange={selectRegion}
+          />
+          <ResourceSearch
+            className="my-agent-search"
             aria-label="搜索智能体"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="搜索所有类型智能体名称"
+            placeholder="搜索"
           />
-        </label>
-      </header>
-
-      <div className="my-agent-type-bar">
-        <nav className="my-agent-type-pills" aria-label="智能体类型">
-          {AGENT_TYPES.map((type) => (
-            <button
-              type="button"
-              key={type.id}
-              className={`my-agent-type-pill${activeType === type.id ? " is-active" : ""}`}
-              aria-pressed={activeType === type.id}
-              onClick={() => selectAgentType(type.id)}
-            >
-              {type.label}
-            </button>
-          ))}
-        </nav>
-        <div className="my-agent-type-actions">
           {showCodexProjectUpload ? (
             <button
               type="button"
@@ -736,20 +807,10 @@ export function MyAgents({
               <span>接力</span>
             </button>
           ) : null}
-          <button
-            type="button"
-            className="my-agent-create-primary"
-            disabled={!createAgent}
-            title={createDisabledReason}
-            onClick={() => createAgent?.()}
-          >
-            <AddIcon />
-            <span>创建智能体</span>
-          </button>
         </div>
-      </div>
+      </ResourceToolbar>
 
-      <section
+      <ResourceResults
         className="my-agent-results"
         ref={resultsRef}
         aria-label={`${activeLabel}列表`}
@@ -775,15 +836,15 @@ export function MyAgents({
               重新加载
             </button>
           </div>
-        ) : showEmpty ? (
-          query.trim() ? (
+        ) : showEmpty && !createAgent ? (
+          query.trim() || ownership === "mine" || region !== configuredRegion ? (
             <div className="my-agent-empty-message">
               <EmptyMessage fill="none">
                 <EmptyMessage.Icon>
                   <Explore />
                 </EmptyMessage.Icon>
                 <EmptyMessage.Title>没有匹配的智能体</EmptyMessage.Title>
-                <EmptyMessage.Description>请尝试搜索其他名称</EmptyMessage.Description>
+                <EmptyMessage.Description>请尝试调整搜索或筛选条件</EmptyMessage.Description>
               </EmptyMessage>
             </div>
           ) : activeType !== "general" ? (
@@ -795,18 +856,6 @@ export function MyAgents({
                 <EmptyMessage.Title className="my-agent-sandbox-empty-title">
                   暂无 {activeLabel}
                 </EmptyMessage.Title>
-                {canCreate ? (
-                  <EmptyMessage.ActionRow>
-                    <Button
-                      color="primary"
-                      size="lg"
-                      onClick={() => onCreateSandboxAgent(activeType)}
-                    >
-                      <AddIcon />
-                      创建智能体
-                    </Button>
-                  </EmptyMessage.ActionRow>
-                ) : null}
               </EmptyMessage>
             </div>
           ) : (
@@ -819,18 +868,6 @@ export function MyAgents({
                 <EmptyMessage.Description>
                   创建一个通用智能体，开始构建和对话
                 </EmptyMessage.Description>
-                {canCreate ? (
-                  <EmptyMessage.ActionRow>
-                    <Button
-                      color="primary"
-                      size="lg"
-                      onClick={() => onCreateAgent(defaultCloudRegion(cloudProvider))}
-                    >
-                      <AddIcon />
-                      创建智能体
-                    </Button>
-                  </EmptyMessage.ActionRow>
-                ) : null}
               </EmptyMessage>
             </div>
           )
@@ -844,12 +881,21 @@ export function MyAgents({
                 </button>
               </div>
             ) : null}
-            <div className="my-agent-grid">
+            <ResourceGrid className="my-agent-grid">
+              {createAgent ? (
+                <ResourceCreateCard
+                  className="my-agent-create-card"
+                  aria-label={`创建${activeLabel}`}
+                  onClick={createAgent}
+                  icon={<AddIcon />}
+                >
+                  创建智能体
+                </ResourceCreateCard>
+              ) : null}
               {visibleAgents.map((agent) => (
                 <AgentCard
                   key={agent.id}
                   agent={agent}
-                  cloudProvider={cloudProvider}
                   deploymentTask={deploymentTaskForAgent(agent)}
                   nowMs={remainingTimeNow}
                   onViewDeploymentTask={onViewDeploymentTask}
@@ -863,12 +909,11 @@ export function MyAgents({
                   }}
                   connecting={agent.id === connectingAgentId}
                   connected={agent.runtime?.runtimeId === connectedRuntimeId}
-                  showOwnership={runtimeScope === "all"}
                   onEditDraft={onEditDraft}
                   onDeleteDraft={setDraftToDelete}
                 />
               ))}
-            </div>
+            </ResourceGrid>
           </>
         )}
 
@@ -887,7 +932,7 @@ export function MyAgents({
             )}
           </div>
         )}
-      </section>
+      </ResourceResults>
       {draftToDelete ? (
         <StudioConfirmDialog
           title="删除草稿？"
@@ -901,6 +946,6 @@ export function MyAgents({
           }}
         />
       ) : null}
-    </div>
+    </ResourcePageShell>
   );
 }

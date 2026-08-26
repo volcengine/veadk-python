@@ -245,6 +245,8 @@ export interface SandboxSession {
   toolType: string;
   intelligentDevelopment: boolean;
   createdBy: string;
+  region: string;
+  isMine: boolean;
   threadId: string;
   cwd: string;
   workspaceLocked: boolean;
@@ -267,6 +269,8 @@ export interface SandboxSnapshot {
   reason: string;
   createdAt: string;
   createdBy: string;
+  region: string;
+  isMine: boolean;
 }
 
 export type SandboxAgentResource = SandboxSession | SandboxSnapshot;
@@ -475,6 +479,8 @@ interface SessionResponse {
   persistent?: boolean;
   toolType?: string;
   createdBy?: string;
+  region?: string;
+  isMine?: boolean;
   threadId?: string;
   cwd?: string;
   workspaceLocked?: boolean;
@@ -499,6 +505,8 @@ interface SnapshotResponse {
   reason?: string;
   createdAt?: string;
   createdBy?: string;
+  region?: string;
+  isMine?: boolean;
 }
 
 interface SandboxErrorPayload {
@@ -594,6 +602,8 @@ function parseSession(
     toolType: data.toolType ?? "",
     intelligentDevelopment: data.toolName === "intelligent-development",
     createdBy: data.createdBy ?? "",
+    region: data.region ?? "",
+    isMine: data.isMine === true,
     threadId: data.threadId ?? "",
     cwd: data.cwd ?? "",
     workspaceLocked: data.workspaceLocked === true,
@@ -626,6 +636,8 @@ function parseSnapshot(
     reason: data.reason ?? "",
     createdAt: data.createdAt ?? "",
     createdBy: data.createdBy ?? "",
+    region: data.region ?? "",
+    isMine: data.isMine === true,
   };
 }
 

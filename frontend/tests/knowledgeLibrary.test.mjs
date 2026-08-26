@@ -19,8 +19,12 @@ const resourceCardSource = readFileSync(
   new URL("../src/ui/LibraryResourceCard.tsx", import.meta.url),
   "utf8",
 );
-const resourceCardStylesSource = readFileSync(
-  new URL("../src/ui/LibraryResourceCard.css", import.meta.url),
+const resourceCollectionSource = readFileSync(
+  new URL("../src/ui/ResourceCollection.tsx", import.meta.url),
+  "utf8",
+);
+const resourceCollectionStyles = readFileSync(
+  new URL("../src/ui/ResourceCollection.css", import.meta.url),
   "utf8",
 );
 const actionMenuSource = readFileSync(
@@ -521,31 +525,42 @@ test("renders server-authorized ownership and management capabilities", () => {
 
 test("provides a responsive card overview and a focused detail view", () => {
   assert.match(pageSource, /正在加载知识库/);
-  assert.match(pageSource, /您还没有任何知识库/);
+  assert.match(pageSource, /<ResourceCreateCard[\s\S]*?新建知识库/);
   assert.match(pageSource, /role="alert"/);
   assert.match(pageSource, />重试</);
-  assert.match(pageSource, /className="knowledge-library__grid my-agent-grid"/);
-  assert.match(pageSource, /knowledge-library__toolbar my-agent-type-bar library-resource-toolbar/);
+  assert.match(pageSource, /<ResourceGrid>/);
+  assert.match(pageSource, /knowledge-library__toolbar library-resource-toolbar/);
   assert.doesNotMatch(pageSource, /<h1>知识库<\/h1>/);
   assert.match(pageSource, /import \{ LibraryResourceCard \} from "\.\/LibraryResourceCard"/);
   assert.match(pageSource, /<LibraryResourceCard[\s\S]*?className="knowledge-card"/);
-  assert.match(resourceCardSource, /<article className=\{`my-agent-card library-resource-card/);
-  assert.match(resourceCardSource, /function LibraryResourceCardActions/);
-  assert.match(resourceCardSource, /className="library-resource-card__actions"/);
+  assert.doesNotMatch(pageSource, /status=\{<span className=\{`knowledge-status/);
+  assert.match(resourceCardSource, /status\?: ReactNode/);
+  assert.match(resourceCardSource, /<ResourceCard[\s\S]*?className=\{`library-resource-card/);
+  assert.match(resourceCardSource, /<ResourceCardRevealAction/);
+  assert.match(resourceCardSource, /actions=\{\(/);
   assert.match(pageSource, /\? "关联已失效" : "添加数据"/);
   assert.match(pageSource, /setCreateDocumentBase\(item\)/);
   assert.match(pageSource, /label: "创建者"/);
   assert.match(pageSource, /label: "项目"/);
-  assert.match(pageSource, /label: "编辑知识库"/);
-  assert.match(pageSource, /label: "删除知识库"/);
-  assert.match(pageSource, /menuLabel=\{`更多知识库操作：\$\{item\.name\}`\}/);
-  assert.match(resourceCardStylesSource, /grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\) 28px/);
-  assert.match(resourceCardStylesSource, /\.library-resource-card \.library-resource-card__action\s*\{[^}]*font-size:\s*12px;[^}]*font-weight:\s*500;[^}]*line-height:\s*18px;/);
+  assert.match(pageSource, /detailAction=\{\{ label: "查看详情"/);
+  assert.doesNotMatch(pageSource, /menuLabel=\{`更多知识库操作：\$\{item\.name\}`\}/);
+  assert.match(resourceCollectionStyles, /\.resource-card__actions\s*\{[^}]*display:\s*flex;/);
+  assert.match(resourceCollectionStyles, /\.resource-card__action\s*\{[^}]*font-size:\s*12px;[^}]*font-weight:\s*500;[^}]*line-height:\s*18px;/);
   assert.doesNotMatch(pageSource, /RefreshIcon|刷新知识库/);
   assert.match(pageSource, /className="my-agent-loading-mark"/);
   assert.doesNotMatch(pageSource, /项目 \/ 地域/);
-  assert.doesNotMatch(pageSource, /knowledge-detail-head__icon/);
-  assert.match(pageSource, /aria-label="返回知识库列表"/);
+  for (const component of [
+    "ResourceDetail",
+    "ResourceDetailHeader",
+    "ResourceDetailHeading",
+    "ResourceDetailActions",
+    "ResourceDetailBody",
+    "ResourceDetailSummary",
+    "ResourceDetailSectionHeader",
+  ]) {
+    assert.match(pageSource, new RegExp(`<${component}`));
+  }
+  assert.match(pageSource, /<ResourceDetailHeading[\s\S]*?title=\{selected\.name\}[\s\S]*?backLabel="返回知识库列表"/);
   assert.doesNotMatch(pageSource, /\{documents\.length\} 项/);
   assert.match(pageSource, /<table className="knowledge-document-table">/);
   assert.match(pageSource, /<th scope="col">名称<\/th>/);
@@ -557,10 +572,10 @@ test("provides a responsive card overview and a focused detail view", () => {
   assert.match(stylesSource, /\.knowledge-document-table-wrap\s*\{[^}]*overflow:\s*auto;/);
   assert.match(stylesSource, /\.knowledge-documents__body\.is-table\s*\{[^}]*flex:\s*1;[^}]*border:\s*0;/);
   assert.match(stylesSource, /\.knowledge-library \.knowledge-primary-button span\s*\{[^}]*color:\s*inherit;/);
-  assert.match(stylesSource, /\.knowledge-back-button\s*\{[^}]*border:\s*1px solid transparent;[^}]*background:\s*transparent;/);
-  assert.match(stylesSource, /\.knowledge-detail-meta\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1\.25fr\)[^}]*width:\s*calc\(100% - 64px\);[^}]*border-radius:\s*12px;[^}]*background:\s*hsl\(var\(--panel\)\);/);
-  assert.match(stylesSource, /\.knowledge-detail-meta dt\s*\{[^}]*font-size:\s*12px;/);
-  assert.match(stylesSource, /\.knowledge-detail-meta dd\s*\{[^}]*font-size:\s*13\.5px;[^}]*text-overflow:\s*ellipsis;[^}]*white-space:\s*nowrap;/);
+  assert.match(resourceCollectionStyles, /\.resource-detail__back\s*\{/);
+  assert.match(resourceCollectionStyles, /\.resource-detail__summary\s*\{[^}]*display:\s*grid;/);
+  assert.match(resourceCollectionStyles, /\.resource-detail__summary dt\s*\{[^}]*font-size:/);
+  assert.match(resourceCollectionStyles, /\.resource-detail__summary dd\s*\{[^}]*text-overflow:\s*ellipsis;[^}]*white-space:\s*nowrap;/);
   assert.match(pageSource, /setSelectedKey\(baseKey\(item\)\)/);
   assert.match(pageSource, /event\.key === "Escape"/);
   assert.match(pageSource, /event\.key !== "Tab"/);
@@ -575,9 +590,6 @@ test("provides a responsive card overview and a focused detail view", () => {
   assert.doesNotMatch(stylesSource, /\.knowledge-library__toolbar \.knowledge-primary-button/);
   assert.match(stylesSource, /\.knowledge-region-warning\s*\{/);
   assert.match(stylesSource, /@media \(max-width: 760px\)/);
-  assert.match(stylesSource, /\.knowledge-detail-meta\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1\.25fr\)[^}]*minmax\(0, 1\.1fr\)/);
-  assert.match(stylesSource, /@media \(max-width: 760px\)[\s\S]*?\.knowledge-detail-meta\s*\{[^}]*grid-template-columns:\s*repeat\(2,/);
-  assert.match(stylesSource, /@media \(max-width: 560px\)[\s\S]*?\.knowledge-detail-meta\s*\{[^}]*grid-template-columns:\s*1fr/);
   assert.match(stylesSource, /@media \(prefers-reduced-motion: reduce\)/);
   assert.doesNotMatch(stylesSource, /#[0-9a-f]{3,8}/i);
 });
@@ -661,11 +673,9 @@ test("auto loads document pages inside an independent table scroller", () => {
 });
 
 test("uses one shared resource card for knowledge actions and overflow management", () => {
-  assert.match(resourceCardSource, /secondaryAction: LibraryResourceCardAction/);
-  assert.match(resourceCardSource, /primaryAction: LibraryResourceCardAction/);
-  assert.match(resourceCardSource, /menuActions: readonly LibraryResourceCardMenuAction\[\]/);
-  assert.match(resourceCardSource, /<LibraryResourceCardActions/);
-  assert.match(resourceCardSource, /<StudioActionMenu/);
+  assert.match(resourceCardSource, /action: LibraryResourceCardAction/);
+  assert.match(resourceCardSource, /detailAction: LibraryResourceCardAction/);
+  assert.match(resourceCardSource, /<ResourceCardRevealAction/);
   assert.match(actionMenuSource, /role="menu"/);
   assert.match(actionMenuSource, /role="menuitem"/);
   assert.match(
@@ -679,13 +689,21 @@ test("uses one shared resource card for knowledge actions and overflow managemen
   assert.doesNotMatch(resourceCardSource, /<article[^>]*onClick=/);
 });
 
-test("loads every provider region without exposing a region selector", () => {
+test("uses the shared unknown-source fallback for knowledge creators", () => {
+  assert.match(pageSource, /formatResourceSource\(item\.ownerLabel\)/);
+  assert.match(pageSource, /<dt>创建者<\/dt><dd>\{formatResourceSource\(selected\.ownerLabel\)\}<\/dd>/);
+  assert.doesNotMatch(pageSource, /item\.ownerLabel \|\| "—"/);
+});
+
+test("loads the selected shared resource region and uses it for creation", () => {
   assert.match(clientSource, /export async function listKnowledgeBasesAcrossRegions/);
   assert.match(clientSource, /Promise\.allSettled\(requestedRegions\.map/);
-  assert.match(pageSource, /cloudRegionOptions\(cloudProvider\)\.map/);
+  assert.match(pageSource, /const regions = useMemo\([\s\S]*?\(\) => \[region\]/);
   assert.match(pageSource, /nextTokens: append \? nextTokensRef\.current : undefined/);
   assert.match(pageSource, /page\.failures\.map/);
-  assert.doesNotMatch(pageSource, /知识库地域|<CreateKnowledgeBaseDialog region=|<span>地域<\/span>/);
+  assert.match(pageSource, /\{toolbarFilters\}[\s\S]*?<ResourceSearch/);
+  assert.match(pageSource, /<CreateKnowledgeBaseDialog region=\{region\}/);
+  assert.match(pageSource, /description: description\.trim\(\) \|\| undefined,[\s\S]*?region,/);
   assert.doesNotMatch(pageSource, /部分地域暂时不可用/);
   assert.match(pageSource, /maxLength=\{80\}/);
   assert.doesNotMatch(pageSource, /maxLength=\{1000\}/);

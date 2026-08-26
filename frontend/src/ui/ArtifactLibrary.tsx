@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
 
 import {
@@ -14,7 +15,6 @@ import {
   CloseLibraryIcon,
   DownloadArtifactIcon,
   EditArtifactIcon,
-  SearchLibraryIcon,
   SourceArtifactIcon,
   VideoArtifactIcon,
 } from "./icons/LibraryIcons";
@@ -25,6 +25,14 @@ import {
 import { StudioActionMenu } from "./StudioActionMenu";
 import { StudioConfirmDialog } from "./StudioConfirmDialog";
 import { TextShimmer } from "./text-shimmer/TextShimmer";
+import {
+  ResourceFilterSelect,
+  ResourceResults,
+  ResourceSearch,
+  ResourceToolbar,
+  type ResourceFilterOption,
+} from "./ResourceCollection";
+import type { CloudRegion } from "../adk/cloudProvider";
 import {
   collectArtifactLibraryItems,
   formatArtifactSize,
@@ -51,6 +59,9 @@ export interface ArtifactLibraryProps {
   onDelete?: (artifact: ArtifactLibraryItem) => Promise<void>;
   onDownload?: (artifact: ArtifactLibraryItem) => Promise<void>;
   onOpenSource?: (artifact: ArtifactLibraryItem) => void;
+  region: CloudRegion;
+  toolbarLeading?: ReactNode;
+  toolbarFilters?: ReactNode;
 }
 
 const ARTIFACT_BATCH_SIZE = 40;
@@ -59,6 +70,13 @@ const ARTIFACT_TYPES: Array<{ id: ArtifactType; label: string }> = [
   { id: "document", label: "文档" },
   { id: "image", label: "图片" },
   { id: "video", label: "视频" },
+];
+
+type ArtifactTypeFilter = "all" | ArtifactType;
+
+const ARTIFACT_TYPE_OPTIONS: Array<ResourceFilterOption<ArtifactTypeFilter>> = [
+  { value: "all", label: "全部类型" },
+  ...ARTIFACT_TYPES.map(({ id, label }) => ({ value: id, label })),
 ];
 
 const ARTIFACT_LABELS: Record<ArtifactType, string> = {
@@ -231,8 +249,11 @@ export function ArtifactLibrary({
   onDelete,
   onDownload,
   onOpenSource,
+  region,
+  toolbarLeading,
+  toolbarFilters,
 }: ArtifactLibraryProps) {
-  const [activeType, setActiveType] = useState<ArtifactType | null>(null);
+  const [activeType, setActiveType] = useState<ArtifactTypeFilter>("all");
   const [query, setQuery] = useState("");
   const [previewArtifact, setPreviewArtifact] = useState<ArtifactLibraryItem | null>(null);
   const [previewUrl, setPreviewUrl] = useState("");
@@ -415,14 +436,17 @@ export function ArtifactLibrary({
   const visibleArtifacts = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase();
     return artifacts.filter((artifact) => {
-      if (activeType && artifact.type !== activeType) {
+      if (artifact.origin?.region && artifact.origin.region !== region) {
+        return false;
+      }
+      if (activeType !== "all" && artifact.type !== activeType) {
         return false;
       }
       if (!normalizedQuery) return true;
       return [artifact.name, artifact.sessionTitle, artifact.agentName]
         .some((value) => value.toLocaleLowerCase().includes(normalizedQuery));
     });
-  }, [activeType, artifacts, query]);
+  }, [activeType, artifacts, query, region]);
 
   const displayedArtifacts = useMemo(
     () => visibleArtifacts.slice(0, visibleCount),
@@ -466,35 +490,31 @@ export function ArtifactLibrary({
     }
   };
 
-  const hasSearchOrFilter = Boolean(query.trim()) || activeType !== null;
+  const hasSearchOrFilter = Boolean(query.trim())
+    || activeType !== "all"
+    || artifacts.some((artifact) => artifact.origin?.region && artifact.origin.region !== region);
 
   return (
-    <div className="artifact-library-page">
-      <div className="artifact-library-toolbar library-resource-toolbar">
-        <nav className="artifact-type-pills" aria-label="产物类型">
-          {ARTIFACT_TYPES.map((type) => (
-            <button
-              key={type.id}
-              type="button"
-              className={`artifact-type-pill${activeType === type.id ? " is-active" : ""}`}
-              aria-pressed={activeType === type.id}
-              onClick={() => setActiveType((current) => current === type.id ? null : type.id)}
-            >
-              {type.label}
-            </button>
-          ))}
-        </nav>
-        <label className="artifact-library-search">
-          <SearchLibraryIcon />
-          <input
-            type="search"
+    <div className="artifact-library-page resource-collection">
+      <ResourceToolbar className="artifact-library-toolbar library-resource-toolbar">
+        {toolbarLeading}
+        <div className="resource-toolbar__actions">
+          <ResourceFilterSelect
+            id="artifact-type-filter"
+            ariaLabel="产物类型"
+            value={activeType}
+            options={ARTIFACT_TYPE_OPTIONS}
+            onChange={setActiveType}
+          />
+          {toolbarFilters}
+          <ResourceSearch
             aria-label="搜索产物"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="搜索产物或会话"
           />
-        </label>
-      </div>
+        </div>
+      </ResourceToolbar>
 
       {error && artifacts.length > 0 ? (
         <div className="artifact-library-banner" role="alert">
@@ -509,7 +529,7 @@ export function ArtifactLibrary({
         </div>
       ) : null}
 
-      <section
+      <ResourceResults
         ref={resultsRef}
         className="artifact-library-results"
         aria-label="产物列表"
@@ -584,7 +604,7 @@ export function ArtifactLibrary({
             </div>
           ) : null}
         </div>
-      </section>
+      </ResourceResults>
 
       <p className="artifact-library-status" aria-live="polite">{status}</p>
 

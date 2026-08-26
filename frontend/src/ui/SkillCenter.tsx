@@ -21,6 +21,7 @@ import {
   defaultCloudRegion,
   formatCloudRegion,
   type CloudProvider,
+  type CloudRegion,
 } from "../adk/cloudProvider";
 import { getSkillWorkbenchCapability } from "./skill-workbench/api";
 import type {
@@ -32,11 +33,25 @@ import { normalizeSkillError, SkillErrorDetails } from "./skills/SkillErrorDetai
 import { SkillFileTree } from "./skills/SkillFileTree";
 import { LibraryResourceCard } from "./LibraryResourceCard";
 import {
+  ResourceCreateCard,
+  ResourceDetail,
+  ResourceDetailActions,
+  ResourceDetailBody,
+  ResourceDetailHeader,
+  ResourceDetailHeading,
+  ResourceDetailSectionHeader,
+  ResourceDetailSummary,
+  ResourceGrid,
+  ResourceResults,
+  ResourceSearch,
+  ResourceToolbar,
+} from "./ResourceCollection";
+import {
   CreateSkillSpaceDialog,
   EditSkillSpaceDialog,
   UploadSkillDialog,
 } from "./skills/SkillManagementDialogs";
-import "./MyAgents.css";
+import { formatRelativeTimeLabel } from "./relativeTime";
 import "./skills/skills.css";
 
 const SPACE_PAGE_SIZE = 12;
@@ -174,27 +189,10 @@ function CloseIcon() {
   );
 }
 
-function SearchIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
-      <circle cx="10.8" cy="10.8" r="6.2" stroke="currentColor" strokeWidth="1.7" />
-      <path d="m15.4 15.4 4 4" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 function AddIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
       <path d="M12 5.5v13M5.5 12h13" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function BackIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
-      <path d="m14.5 6-6 6 6 6" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -462,22 +460,28 @@ export interface SkillCenterWorkspaceLaunch {
 /** Native AgentKit Skill space browser. */
 export function SkillCenterView({
   cloudProvider = "volcengine",
+  region,
   active = true,
   activationRevision = 0,
   initialWorkspace = null,
   onInitialWorkspaceConsumed,
   onPageTitleChange,
+  toolbarLeading,
+  toolbarFilters,
 }: {
   cloudProvider?: CloudProvider;
+  region: CloudRegion;
   active?: boolean;
   activationRevision?: number;
   initialWorkspace?: SkillCenterWorkspaceLaunch | null;
   onInitialWorkspaceConsumed?: () => void;
   onPageTitleChange?: (title: string) => void;
+  toolbarLeading?: ReactNode;
+  toolbarFilters?: ReactNode;
 }) {
   const spaceRegions = useMemo(
-    () => cloudRegionOptions(cloudProvider).map((option) => option.value),
-    [cloudProvider],
+    () => [region],
+    [region],
   );
   const [spaces, setSpaces] = useState<SkillSpaceRef[]>([]);
   const [spaceRegionState, setSpaceRegionState] = useState<Record<string, SpaceRegionLoadState>>({});
@@ -891,37 +895,32 @@ export function SkillCenterView({
   }
 
   return (
-    <section className={`skillcenter${selectedSpace ? " is-space" : " my-agents-page"}`}>
+    <section className={`skillcenter${selectedSpace ? " is-space" : " resource-collection"}`}>
       {selectedSpace ? (
-        <>
-          <header className="skillcenter-page-header">
-            <div className="skillcenter-page-heading skillcenter-page-heading--back">
-              <button type="button" className="skillcenter-back" onClick={closeSpace} aria-label="返回技能空间">
-                <BackIcon />
+        <ResourceDetail className="skillcenter-detail">
+          <ResourceDetailHeader>
+            <ResourceDetailHeading
+              title={selectedSpace.name}
+              description={selectedSpace.description || "管理空间中的技能并创建新的版本"}
+              backLabel="返回技能空间列表"
+              onBack={closeSpace}
+            />
+            <ResourceDetailActions className="skillcenter-toolbar-actions">
+              <button
+                type="button"
+                className="skillcenter-secondary-action"
+                onClick={() => setEditingSpace(selectedSpace)}
+              >
+                编辑空间
               </button>
-              <div>
-                <h1 title={selectedSpace.name}>{selectedSpace.name}</h1>
-                <p>{selectedSpace.description || "管理空间中的技能并创建新的版本"}</p>
-              </div>
-            </div>
-            <label className="skillcenter-search">
-              <SearchIcon />
-              <input
-                type="search"
-                aria-label="搜索技能"
-                value={skillQuery}
-                onChange={(event) => setSkillQuery(event.target.value)}
-                placeholder="搜索技能"
-              />
-            </label>
-          </header>
-
-          <div className="skillcenter-toolbar">
-            <div className="skillcenter-detail-facts">
-              <div><span>技能数量</span><strong>{skillTotal}</strong></div>
-              <div><span>更新时间</span><strong>{selectedSpace.updatedAt ? updatedAtLabel(selectedSpace.updatedAt) : "—"}</strong></div>
-            </div>
-            <div className="skillcenter-toolbar-actions">
+              <button
+                type="button"
+                className="skillcenter-secondary-action is-danger"
+                disabled={deletingSpaceId === skillSpaceKey(selectedSpace)}
+                onClick={() => void removeSpace(selectedSpace)}
+              >
+                {deletingSpaceId === skillSpaceKey(selectedSpace) ? "删除中…" : "删除空间"}
+              </button>
               <button type="button" className="skillcenter-secondary-action" onClick={() => setUploadSpace(selectedSpace)}>本地上传</button>
               <SandboxDisabledAction disabled={!capability?.enabled}>
                 <button
@@ -934,12 +933,30 @@ export function SkillCenterView({
                   <span>创建技能</span>
                 </button>
               </SandboxDisabledAction>
-            </div>
-          </div>
+            </ResourceDetailActions>
+          </ResourceDetailHeader>
 
-          {actionError ? <div className="skillcenter-inline-error" role="alert"><SkillErrorDetails error={actionError} /></div> : null}
+          <ResourceDetailBody>
+            <ResourceDetailSummary className="skillcenter-detail-facts">
+              <div><dt>技能数量</dt><dd>{skillTotal}</dd></div>
+              <div><dt>更新时间</dt><dd>{selectedSpace.updatedAt ? updatedAtLabel(selectedSpace.updatedAt) : "—"}</dd></div>
+            </ResourceDetailSummary>
 
-          <section className="skillcenter-results" aria-label={`${selectedSpace.name}中的技能`}>
+            {actionError ? <div className="skillcenter-inline-error" role="alert"><SkillErrorDetails error={actionError} /></div> : null}
+
+            <section className="skillcenter-results" aria-label={`${selectedSpace.name}中的技能`}>
+              <ResourceDetailSectionHeader
+                title="技能"
+                description={`共 ${skillTotal} 项`}
+                actions={(
+                  <ResourceSearch
+                    aria-label="搜索技能"
+                    value={skillQuery}
+                    onChange={(event) => setSkillQuery(event.target.value)}
+                    placeholder="搜索技能"
+                  />
+                )}
+              />
             {skillsLoading && skills.length === 0 ? (
               <div className="skillcenter-loading"><LoadingMark />正在加载技能</div>
             ) : skillsError && skills.length === 0 ? (
@@ -989,31 +1006,28 @@ export function SkillCenterView({
             {!skillQuery.trim() && !skillsLoading && !skillsError && skillTotal > 0 ? (
               <Pager page={skillPage} total={skillTotal} pageSize={SKILL_PAGE_SIZE} onPage={setSkillPage} />
             ) : null}
-          </section>
-        </>
+            </section>
+          </ResourceDetailBody>
+        </ResourceDetail>
       ) : (
         <>
-          <div className="my-agent-type-bar skillcenter-list-toolbar library-resource-toolbar">
-            <button type="button" className="my-agent-create-primary" onClick={() => setCreateSpaceOpen(true)}>
-              <AddIcon />
-              <span>新建空间</span>
-            </button>
-            <label className="my-agent-search">
-              <SearchIcon />
-              <input
-                type="search"
+          <ResourceToolbar className="skillcenter-list-toolbar library-resource-toolbar">
+            {toolbarLeading}
+            <div className="resource-toolbar__actions">
+              {toolbarFilters}
+              <ResourceSearch
                 aria-label="搜索技能空间"
                 value={spaceQuery}
                 onChange={(event) => setSpaceQuery(event.target.value)}
                 placeholder="搜索技能空间"
               />
-            </label>
-          </div>
+            </div>
+          </ResourceToolbar>
 
           {actionError ? <div className="skillcenter-inline-error" role="alert"><SkillErrorDetails error={actionError} /></div> : null}
 
-          <section
-            className="my-agent-results"
+          <ResourceResults
+            className="skillcenter-list-results"
             ref={spaceResultsRef}
             aria-label="技能空间列表"
             onScroll={handleSpaceResultsScroll}
@@ -1037,16 +1051,23 @@ export function SkillCenterView({
                 fullPage
                 onRetry={() => setSpaceRevision((value) => value + 1)}
               />
-            ) : visibleSpaces.length === 0 ? (
+            ) : visibleSpaces.length === 0 && spaceQuery.trim() ? (
               <PageState
                 kind="empty"
-                title={spaceQuery.trim() ? "没有匹配的技能空间" : "暂无技能空间"}
-                description={spaceQuery.trim() ? "请尝试搜索其他名称" : "新建一个空间，开始管理和创建技能"}
-                action={!spaceQuery.trim() ? { label: "新建空间", onClick: () => setCreateSpaceOpen(true) } : undefined}
+                title="没有匹配的技能空间"
+                description="请尝试搜索其他名称"
               />
             ) : (
-              <>
-                <div className="my-agent-grid">
+              <ResourceGrid>
+                {!spaceQuery.trim() ? (
+                  <ResourceCreateCard
+                    aria-label="新建技能空间"
+                    icon={<AddIcon />}
+                    onClick={() => setCreateSpaceOpen(true)}
+                  >
+                    新建空间
+                  </ResourceCreateCard>
+                ) : null}
                   {visibleSpaces.map((space) => {
                     const spaceKey = skillSpaceKey(space);
                     return (
@@ -1054,26 +1075,17 @@ export function SkillCenterView({
                     key={spaceKey}
                     className="skillcenter-space-card"
                     title={space.name}
-                    status={<span className={`skillcenter-status ${statusTone(space.status)}`}>{statusLabel(space.status)}</span>}
                     description={space.description || "暂无描述"}
                     metadata={[
-                      { label: "地域", value: formatCloudRegion(space.region || defaultCloudRegion(cloudProvider), cloudProvider) },
-                      { label: "技能数量", value: space.skillCount ?? 0 },
-                      { label: "更新时间", value: space.updatedAt ? updatedAtLabel(space.updatedAt) : "—" },
+                      { label: "技能数量", value: `${space.skillCount ?? 0} 技能` },
+                      { label: "更新时间", value: formatRelativeTimeLabel(space.updatedAt) },
                     ]}
-                    secondaryAction={{ label: "添加技能", onClick: () => setAddingSpace(space) }}
-                    primaryAction={{ label: "查看详情", onClick: () => selectSpace(space) }}
-                    menuLabel={`更多空间操作：${space.name}`}
-                    menuAriaLabel={`${space.name}空间操作`}
-                    menuActions={[
-                      { label: "编辑空间", onClick: () => setEditingSpace(space) },
-                      { label: "删除空间", danger: true, disabled: deletingSpaceId === spaceKey, onClick: () => void removeSpace(space) },
-                    ]}
+                    action={{ label: "添加技能", icon: "plus", onClick: () => setAddingSpace(space) }}
+                    detailAction={{ label: "查看详情", onClick: () => selectSpace(space) }}
                   />
                     );
                   })}
-                </div>
-              </>
+              </ResourceGrid>
             )}
             {!allSpaceRegionsFailed && spaces.length > 0 ? (
               <div className="my-agent-load-more" ref={spaceLoadMoreRef} aria-live="polite">
@@ -1091,7 +1103,7 @@ export function SkillCenterView({
                 )}
               </div>
             ) : null}
-          </section>
+          </ResourceResults>
         </>
       )}
 
@@ -1121,7 +1133,7 @@ export function SkillCenterView({
       )}
       {createSpaceOpen ? (
         <CreateSkillSpaceDialog
-          region={defaultCloudRegion(cloudProvider)}
+          region={region}
           regionOptions={cloudRegionOptions(cloudProvider)}
           onClose={() => setCreateSpaceOpen(false)}
           onCreated={(space) => {
@@ -1129,7 +1141,7 @@ export function SkillCenterView({
             setSpaceRevision((value) => value + 1);
             setSelectedSpace({
               ...space,
-              region: space.region || defaultCloudRegion(cloudProvider),
+              region: space.region || region,
             });
           }}
         />

@@ -266,6 +266,10 @@ export function collectArtifactLibraryItems(
           version: record.version,
           type: artifactTypeFor(record.filename),
           createdAt: record.createdAt || sessionUpdatedAt,
+          origin: {
+            runtimeId: source.runtimeId,
+            region: source.region,
+          },
           preview: {
             filename: previewRecord.filename,
             version: previewRecord.version,

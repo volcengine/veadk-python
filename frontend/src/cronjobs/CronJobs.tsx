@@ -12,7 +12,6 @@ import { Button } from "@openai/apps-sdk-ui/components/Button";
 import { EmptyMessage } from "@openai/apps-sdk-ui/components/EmptyMessage";
 import { LoadingIndicator } from "@openai/apps-sdk-ui/components/Indicator";
 import {
-  Agent,
   ArrowLeft,
   ArrowRotateCw,
   Clock,
@@ -54,6 +53,16 @@ import type { CloudProvider } from "../adk/cloudProvider";
 import { formatCloudRegion } from "../adk/cloudProvider";
 import { StudioConfirmDialog } from "../ui/StudioConfirmDialog";
 import { DeploymentErrorMessage } from "../ui/DeploymentErrorMessage";
+import { LibraryResourceCard } from "../ui/LibraryResourceCard";
+import {
+  ResourceCreateCard,
+  ResourceGrid,
+  ResourcePageHeader,
+  ResourcePageShell,
+  ResourceResults,
+  ResourceTabs,
+  ResourceToolbar,
+} from "../ui/ResourceCollection";
 import {
   CRONJOB_STATUS_LABELS,
   WEEKDAY_LABELS,
@@ -425,53 +434,55 @@ function Drawer({
 function JobList({
   jobs,
   busyAction,
+  canCreate,
+  onCreate,
   onSelect,
-  onEdit,
-  onToggle,
   onRun,
 }: {
   jobs: CronJob[];
   busyAction: string;
+  canCreate: boolean;
+  onCreate: () => void;
   onSelect: (job: CronJob) => void;
-  onEdit: (job: CronJob) => void;
-  onToggle: (job: CronJob) => void;
   onRun: (job: CronJob) => void;
 }) {
   return (
-    <div className="cronjobs-table-wrap">
-      <table className="cronjobs-table">
-        <thead><tr><th>任务名称</th><th>Runtime Agent</th><th>执行计划</th><th>状态</th><th>下次执行</th><th>最近结果</th><th><span className="sr-only">操作</span></th></tr></thead>
-        <tbody>
-          {jobs.map((job) => {
-            const running = cronJobIsRunning(job);
-            const busy = busyAction.includes(job.jobId);
-            return (
-              <tr key={job.jobId}>
-                <td><Button type="button" className="cronjobs-name-button" color="secondary" variant="ghost" size="md" pill={false} opticallyAlign="start" onClick={() => onSelect(job)} title={job.name}>{job.name}</Button></td>
-                <td data-label="Runtime Agent"><span className="cronjobs-agent" title={`${job.runtimeName} / ${job.agentName}`}><Agent />{job.runtimeName || job.agentName}</span></td>
-                <td data-label="执行计划" title={describeCronJobSchedule(job.schedule)}>{describeCronJobSchedule(job.schedule)}</td>
-                <td data-label="状态"><Badge color={job.enabled ? "success" : "secondary"} variant="soft" size="sm" pill>{job.enabled ? "已启用" : "已暂停"}</Badge></td>
-                <td data-label="下次执行">{job.enabled ? formatCronJobDate(job.nextRunAt) : "-"}</td>
-                <td data-label="最近结果"><StatusBadge run={job.latestRun} /></td>
-                <td className="cronjobs-actions-cell">
-                  <div className="cronjobs-row-actions">
-                    <Tooltip compact content={running ? "已有执行正在进行" : !job.enabled ? "请先启用任务" : "立即执行"}>
-                      <Button type="button" color="secondary" variant="ghost" size="md" uniform pill={false} onClick={() => onRun(job)} disabled={busy || running || !job.enabled} aria-label={`立即执行 ${job.name}`}><Play /></Button>
-                    </Tooltip>
-                    <Tooltip compact content={job.enabled ? "暂停" : "启用"}>
-                      <Button type="button" color="secondary" variant="ghost" size="md" uniform pill={false} onClick={() => onToggle(job)} disabled={busy} aria-label={`${job.enabled ? "暂停" : "启用"} ${job.name}`}>{job.enabled ? <Pause /> : <Play />}</Button>
-                    </Tooltip>
-                    <Tooltip compact content="编辑">
-                      <Button type="button" color="secondary" variant="ghost" size="md" uniform pill={false} onClick={() => onEdit(job)} disabled={busy} aria-label={`编辑 ${job.name}`}><Edit /></Button>
-                    </Tooltip>
-                  </div>
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+    <ResourceGrid>
+      <ResourceCreateCard
+        icon={<Plus />}
+        onClick={onCreate}
+        disabled={!canCreate}
+        title={canCreate ? "创建定时任务" : "暂无可用的 Runtime Agent"}
+      >
+        创建定时任务
+      </ResourceCreateCard>
+      {jobs.map((job) => {
+        const running = cronJobIsRunning(job);
+        const busy = busyAction.includes(job.jobId);
+        const schedule = describeCronJobSchedule(job.schedule);
+        return (
+          <LibraryResourceCard
+            key={job.jobId}
+            className="cronjobs-card"
+            title={job.name}
+            status={<Badge color={job.enabled ? "success" : "secondary"} variant="soft" size="sm" pill>{job.enabled ? "已启用" : "已暂停"}</Badge>}
+            description={job.prompt}
+            metadata={[
+              { label: "Runtime", value: job.runtimeName || job.agentName, title: `${job.runtimeName} / ${job.agentName}` },
+              { label: "执行计划", value: schedule, title: schedule },
+              { label: "下次执行", value: job.enabled ? formatCronJobDate(job.nextRunAt) : "已暂停" },
+            ]}
+            action={{
+              label: "立即执行",
+              disabled: busy || running || !job.enabled,
+              title: running ? "已有执行正在进行" : !job.enabled ? "请先启用任务" : "立即执行",
+              onClick: () => onRun(job),
+            }}
+            detailAction={{ label: "查看详情", onClick: () => onSelect(job) }}
+          />
+        );
+      })}
+    </ResourceGrid>
   );
 }
 
@@ -557,10 +568,14 @@ export function CronJobs({ cloudProvider }: CronJobsProps) {
   const [runsLoading, setRunsLoading] = useState(false);
   const [runsError, setRunsError] = useState("");
   const [busyAction, setBusyAction] = useState("");
+  const [listFilter, setListFilter] = useState<"all" | "enabled" | "paused">("all");
   const [notice, setNotice] = useState("");
   const [confirmTarget, setConfirmTarget] = useState<ConfirmTarget | null>(null);
   const [confirmError, setConfirmError] = useState("");
   const selectedJob = jobs.find((job) => job.jobId === selectedId);
+  const visibleJobs = listFilter === "all"
+    ? jobs
+    : jobs.filter((job) => listFilter === "enabled" ? job.enabled : !job.enabled);
 
   const load = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
@@ -712,22 +727,33 @@ export function CronJobs({ cloudProvider }: CronJobsProps) {
   };
 
   if (selectedJob) {
-    return <div className="cronjobs-page"><JobDetail job={selectedJob} runs={runs} runsLoading={runsLoading} runsError={runsError} busyAction={busyAction} onBack={() => setSelectedId("")} onEdit={() => setDrawerJob(selectedJob)} onToggle={() => toggle(selectedJob)} onRun={() => runNow(selectedJob)} onDelete={() => { setConfirmError(""); setConfirmTarget({ kind: "delete", job: selectedJob }); }} onCancel={(run) => { setConfirmError(""); setConfirmTarget({ kind: "cancel", job: selectedJob, run }); }} onRetryRun={() => queueRun(selectedJob, "任务已重新排队，将在一分钟内开始执行。")} onRetryRuns={() => void loadRuns(selectedJob.jobId)} />{notice ? <div className="cronjobs-notice" role="status"><Alert color="info" variant="soft" description={notice} /></div> : null}{drawerJob !== undefined ? <Drawer job={drawerJob} runtimes={runtimes} cloudProvider={cloudProvider} busy={busyAction.endsWith(":save")} onClose={() => setDrawerJob(undefined)} onSubmit={submitDrawer} /> : null}{confirmTarget ? <StudioConfirmDialog title={confirmTarget.kind === "delete" ? "删除定时任务？" : "终止本次执行？"} description={confirmTarget.kind === "delete" ? `“${confirmTarget.job.name}”及其全部执行历史将被永久删除。` : "本次 Session 将被取消，后续计划不会暂停。"} error={confirmError} confirmLabel={confirmTarget.kind === "delete" ? "删除任务" : "终止执行"} variant="danger" busy={busyAction.endsWith(confirmTarget.kind)} onCancel={() => { setConfirmError(""); setConfirmTarget(null); }} onConfirm={confirmAction} /> : null}</div>;
+    return <ResourcePageShell className="cronjobs-page" aria-label="定时任务详情"><JobDetail job={selectedJob} runs={runs} runsLoading={runsLoading} runsError={runsError} busyAction={busyAction} onBack={() => setSelectedId("")} onEdit={() => setDrawerJob(selectedJob)} onToggle={() => toggle(selectedJob)} onRun={() => runNow(selectedJob)} onDelete={() => { setConfirmError(""); setConfirmTarget({ kind: "delete", job: selectedJob }); }} onCancel={(run) => { setConfirmError(""); setConfirmTarget({ kind: "cancel", job: selectedJob, run }); }} onRetryRun={() => queueRun(selectedJob, "任务已重新排队，将在一分钟内开始执行。")} onRetryRuns={() => void loadRuns(selectedJob.jobId)} />{notice ? <div className="cronjobs-notice" role="status"><Alert color="info" variant="soft" description={notice} /></div> : null}{drawerJob !== undefined ? <Drawer job={drawerJob} runtimes={runtimes} cloudProvider={cloudProvider} busy={busyAction.endsWith(":save")} onClose={() => setDrawerJob(undefined)} onSubmit={submitDrawer} /> : null}{confirmTarget ? <StudioConfirmDialog title={confirmTarget.kind === "delete" ? "删除定时任务？" : "终止本次执行？"} description={confirmTarget.kind === "delete" ? `“${confirmTarget.job.name}”及其全部执行历史将被永久删除。` : "本次 Session 将被取消，后续计划不会暂停。"} error={confirmError} confirmLabel={confirmTarget.kind === "delete" ? "删除任务" : "终止执行"} variant="danger" busy={busyAction.endsWith(confirmTarget.kind)} onCancel={() => { setConfirmError(""); setConfirmTarget(null); }} onConfirm={confirmAction} /> : null}</ResourcePageShell>;
   }
 
   return (
-    <div className="cronjobs-page">
-      <header className="cronjobs-page-head"><div><h1>定时任务</h1><p>按计划调用 Runtime Agent，每次执行使用独立 Session。</p></div></header>
-      {jobs.length > 0 ? (
-        <div className="cronjobs-toolbar">
-          <Button type="button" color="primary" size="lg" pill={false} onClick={() => setDrawerJob(null)} disabled={loading || runtimes.length === 0} title={runtimes.length === 0 ? "暂无可用的 Runtime Agent" : "创建定时任务"}><Plus />创建任务</Button>
-        </div>
-      ) : null}
+    <ResourcePageShell className="cronjobs-page" aria-label="定时任务">
+      <ResourcePageHeader
+        className="cronjobs-page-head"
+        title="定时任务"
+      />
+      <ResourceToolbar>
+        <ResourceTabs
+          idPrefix="cronjobs-filter"
+          ariaLabel="定时任务状态筛选"
+          value={listFilter}
+          items={[
+            { id: "all", label: "全部" },
+            { id: "enabled", label: "已启用" },
+            { id: "paused", label: "已暂停" },
+          ]}
+          onChange={setListFilter}
+        />
+      </ResourceToolbar>
       {notice ? <div className="cronjobs-banner" role="status"><Alert color="info" variant="soft" description={notice} /></div> : null}
-      <section className="cronjobs-content">
-        {loading && jobs.length === 0 ? <div className="cronjobs-loading" role="status" aria-live="polite"><LoadingIndicator size={20} /><span>正在加载定时任务…</span></div> : error ? <EmptyMessage className="cronjobs-state" fill="none"><EmptyMessage.Icon color="danger"><Clock /></EmptyMessage.Icon><EmptyMessage.Title color="danger">无法加载定时任务</EmptyMessage.Title><EmptyMessage.Description>{error}</EmptyMessage.Description><EmptyMessage.ActionRow><Button type="button" color="secondary" variant="outline" size="lg" pill={false} onClick={() => void load()}><ArrowRotateCw />重试</Button></EmptyMessage.ActionRow></EmptyMessage> : jobs.length === 0 ? <EmptyMessage className="cronjobs-state" fill="none"><EmptyMessage.Icon><Clock /></EmptyMessage.Icon><EmptyMessage.Title>还没有定时任务</EmptyMessage.Title><EmptyMessage.Description>创建任务后，系统会按计划调用选定的 Runtime Agent。</EmptyMessage.Description><EmptyMessage.ActionRow><Button type="button" color="primary" size="lg" pill={false} onClick={() => setDrawerJob(null)} disabled={runtimes.length === 0}><Plus />创建第一个任务</Button></EmptyMessage.ActionRow>{runtimes.length === 0 ? <EmptyMessage.Description>暂无可用的 Runtime Agent，请先部署并等待 Runtime 就绪。</EmptyMessage.Description> : null}</EmptyMessage> : <JobList jobs={jobs} busyAction={busyAction} onSelect={(job) => setSelectedId(job.jobId)} onEdit={(job) => setDrawerJob(job)} onToggle={toggle} onRun={runNow} />}
-      </section>
+      <ResourceResults aria-label="定时任务列表">
+        {loading && jobs.length === 0 ? <div className="cronjobs-loading" role="status" aria-live="polite"><LoadingIndicator size={20} /><span>正在加载定时任务…</span></div> : error ? <EmptyMessage className="cronjobs-state" fill="none"><EmptyMessage.Icon color="danger"><Clock /></EmptyMessage.Icon><EmptyMessage.Title color="danger">无法加载定时任务</EmptyMessage.Title><EmptyMessage.Description>{error}</EmptyMessage.Description><EmptyMessage.ActionRow><Button type="button" color="secondary" variant="outline" size="lg" pill={false} onClick={() => void load()}><ArrowRotateCw />重试</Button></EmptyMessage.ActionRow></EmptyMessage> : <JobList jobs={visibleJobs} busyAction={busyAction} canCreate={!loading && runtimes.length > 0} onCreate={() => setDrawerJob(null)} onSelect={(job) => setSelectedId(job.jobId)} onRun={runNow} />}
+      </ResourceResults>
       {drawerJob !== undefined ? <Drawer job={drawerJob} runtimes={runtimes} cloudProvider={cloudProvider} busy={busyAction.endsWith(":save")} onClose={() => setDrawerJob(undefined)} onSubmit={submitDrawer} /> : null}
-    </div>
+    </ResourcePageShell>
   );
 }

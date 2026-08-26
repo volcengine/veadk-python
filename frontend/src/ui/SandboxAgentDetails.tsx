@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { sandboxStatusLabel, type SandboxAgentResource } from "../adk/sandbox";
 import { PageBackButton } from "./PageBackButton";
+import { formatResourceSource } from "./resourceMetadata";
 import "./SandboxAgentDetails.css";
 
 const AGENT_LABELS = {
@@ -89,7 +90,7 @@ export function SandboxAgentDetails({
         <dl>
           <div><dt>智能体类型</dt><dd>{label}</dd></div>
           <div><dt>状态</dt><dd>{sandboxStatusLabel(session.status)}</dd></div>
-          <div><dt>创建人</dt><dd>{session.createdBy || "—"}</dd></div>
+          <div><dt>创建人</dt><dd>{formatResourceSource(session.createdBy)}</dd></div>
           <div>
             <dt>{wakeable ? "快照状态" : "工具类型"}</dt>
             <dd>{wakeable ? session.snapshotStatus || "—" : session.toolType || "—"}</dd>

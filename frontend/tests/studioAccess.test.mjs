@@ -67,7 +67,7 @@ test("runtime selection obeys the server-granted scope", () => {
   assert.match(selectorSource, /setMineOnly\(runtimeScope === "mine"\)/);
   assert.match(selectorSource, /\{runtimeScope === "all" && \(/);
   assert.match(selectorSource, /getRuntimes\(\{[\s\S]*?scope: "mine"/);
-  assert.match(myAgentsSource, /getRuntimes\(\{[\s\S]*?scope: runtimeScope/);
+  assert.match(myAgentsSource, /getRuntimes\(\{[\s\S]*?scope: runtimeScope,[\s\S]*?region/);
   assert.match(appSource, /<MyAgents[\s\S]*?runtimeScope=\{access\.capabilities\.runtimeScope\}/);
   assert.doesNotMatch(clientSource, /new URLSearchParams\(\{\s*author,/);
 });
@@ -82,12 +82,9 @@ test("only administrators and developers receive Agent deployment controls", () 
   assert.match(appSource, /<MyAgents[\s\S]*?canCreate=\{canCreateAgents\}/);
   assert.match(
     myAgentsSource,
-    /className="my-agent-create-primary"[\s\S]*?disabled=\{!createAgent\}/,
+    /\{createAgent \? \([\s\S]*?className="my-agent-create-card"/,
   );
-  assert.match(
-    myAgentsSource,
-    /\{canCreate \? \([\s\S]*?<EmptyMessage\.ActionRow>[\s\S]*?<Button/,
-  );
+  assert.match(myAgentsSource, /const createAgent = canCreate/);
 });
 
 test("runtime authorization failures are not reported as unsupported", () => {
