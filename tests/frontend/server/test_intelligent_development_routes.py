@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from threading import Event, Thread
 from types import SimpleNamespace
@@ -191,10 +191,29 @@ class _FakeCodex:
 
 
 class _FakeGateway:
-    def __init__(self) -> None:
+    def __init__(self, tool_envs: Mapping[str, str] | None = None) -> None:
         self.sessions: dict[str, SandboxCloudSession] = {}
         self.codex = _FakeCodex()
         self.created = 0
+        self.envs: list[dict[str, str] | None] = []
+        self.tool_envs = (
+            dict(tool_envs)
+            if tool_envs is not None
+            else {
+                "CODEX_MODEL": "doubao-seed-1-8-251228",
+                "CODEX_API_KEY": "codex-api-key",
+                "CODEX_BASE_URL": "https://ark.cn-beijing.volces.com/api/v3",
+            }
+        )
+
+    async def get_tool(self, tool_id: str) -> SimpleNamespace:
+        del tool_id
+        return SimpleNamespace(
+            envs=[
+                SimpleNamespace(key=key, value=value)
+                for key, value in self.tool_envs.items()
+            ]
+        )
 
     async def create_session(
         self,
@@ -203,8 +222,10 @@ class _FakeGateway:
         username: str = "",
         creator_name: str = "",
         agent_kind: str = "",
+        envs: Mapping[str, str] | None = None,
     ) -> SandboxCloudSession:
         self.created += 1
+        self.envs.append(dict(envs) if envs is not None else None)
         session = _cloud(
             session_id=f"session-{self.created}",
             owner=username,
@@ -324,6 +345,46 @@ def test_list_is_empty_when_intelligent_development_is_not_configured() -> None:
     assert response.json() == {"sessions": []}
 
 
+def test_capabilities_requires_sandbox_dev_model_credentials() -> None:
+    gateway = _FakeGateway(
+        tool_envs={
+            "CODEX_MODEL": "doubao-seed-1-8-251228",
+            "CODEX_BASE_URL": "https://ark.cn-beijing.volces.com/api/v3",
+        }
+    )
+    with TestClient(_app(gateway)) as client:
+        response = client.get(
+            "/web/intelligent-development/capabilities",
+            headers={"X-Test-User": "alice"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "enabled": False,
+        "reason": "SANDBOX_DEV 模型配置不可用，请重新部署 Studio。",
+        "model": {"configured": False, "id": "doubao-seed-1-8-251228"},
+    }
+
+
+def test_create_requires_sandbox_dev_model_credentials() -> None:
+    gateway = _FakeGateway(
+        tool_envs={
+            "CODEX_MODEL": "doubao-seed-1-8-251228",
+            "CODEX_BASE_URL": "https://ark.cn-beijing.volces.com/api/v3",
+        }
+    )
+    with TestClient(_app(gateway)) as client:
+        response = client.post(
+            "/web/intelligent-development/sessions",
+            headers={"X-Test-User": "alice"},
+            json={"displayName": "天气 Agent"},
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "SANDBOX_NOT_CONFIGURED"
+    assert gateway.created == 0
+
+
 def test_create_is_transient_and_public_contract_includes_expiry() -> None:
     gateway = _FakeGateway()
     with TestClient(_app(gateway)) as client:
@@ -336,6 +397,92 @@ def test_create_is_transient_and_public_contract_includes_expiry() -> None:
     assert response.json()["persistent"] is False
     assert response.json()["toolName"] == "intelligent-development"
     assert response.json()["expireAt"]
+    assert gateway.envs == [None]
+
+
+def test_create_accepts_selected_model_as_session_env() -> None:
+    gateway = _FakeGateway()
+    model_id = "doubao-seed-2-1-pro-260628"
+    with TestClient(_app(gateway)) as client:
+        response = client.post(
+            "/web/intelligent-development/sessions",
+            headers={"X-Test-User": "alice"},
+            json={
+                "displayName": "天气 Agent",
+                "modelId": model_id,
+            },
+        )
+
+    assert response.status_code == 200
+    assert len(gateway.envs) == 1
+    envs = gateway.envs[0] or {}
+    assert envs["CODEX_MODEL"] == model_id
+    assert envs["OPENCODE_MODEL"] == model_id
+    assert envs["ANTHROPIC_MODEL"] == model_id
+    assert envs["CODEX_BASE_URL"] == "https://ark.cn-beijing.volces.com/api/v3"
+    assert model_id in envs["CODEX_CONFIG_TOML"]
+    assert f'model = "{model_id}"' in envs["CODEX_CONFIG_TOML"]
+    assert f'review_model = "{model_id}"' in envs["CODEX_CONFIG_TOML"]
+    assert {
+        "ANTHROPIC_AUTH_TOKEN",
+        "CODEX_API_KEY",
+        "OPENCODE_API_KEY",
+    }.isdisjoint(envs)
+
+
+def test_create_treats_blank_selected_model_as_default() -> None:
+    gateway = _FakeGateway()
+    with TestClient(_app(gateway)) as client:
+        response = client.post(
+            "/web/intelligent-development/sessions",
+            headers={"X-Test-User": "alice"},
+            json={"displayName": "天气 Agent", "modelId": "   "},
+        )
+
+    assert response.status_code == 200
+    assert gateway.envs == [None]
+
+
+def test_create_rejects_non_text_selected_model() -> None:
+    gateway = _FakeGateway()
+    with TestClient(_app(gateway)) as client:
+        response = client.post(
+            "/web/intelligent-development/sessions",
+            headers={"X-Test-User": "alice"},
+            json={"displayName": "天气 Agent", "modelId": 42},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "SANDBOX_INVALID_REQUEST"
+    assert gateway.created == 0
+
+
+def test_create_rejects_invalid_selected_model() -> None:
+    gateway = _FakeGateway()
+    with TestClient(_app(gateway)) as client:
+        response = client.post(
+            "/web/intelligent-development/sessions",
+            headers={"X-Test-User": "alice"},
+            json={"displayName": "天气 Agent", "modelId": "bad; export SECRET=value"},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "SANDBOX_INVALID_REQUEST"
+    assert gateway.created == 0
+
+
+def test_create_rejects_unknown_fields() -> None:
+    gateway = _FakeGateway()
+    with TestClient(_app(gateway)) as client:
+        response = client.post(
+            "/web/intelligent-development/sessions",
+            headers={"X-Test-User": "alice"},
+            json={"displayName": "天气 Agent", "modelId": "doubao-test", "extra": True},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "SANDBOX_INVALID_REQUEST"
+    assert gateway.created == 0
 
 
 def test_connect_locks_fixed_workspace_and_enables_autonomous_builder() -> None:
