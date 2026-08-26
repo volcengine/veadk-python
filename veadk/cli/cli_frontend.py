@@ -187,6 +187,7 @@ _DEPLOY_PHASE_MARKERS = (
     "initialization failed",
     "runtime_not_ready",
     "last status: releasing",
+    "stuck in a status that cannot be updated",
 )
 _PUBLISH_PHASE_MARKERS = (
     "launch successful",

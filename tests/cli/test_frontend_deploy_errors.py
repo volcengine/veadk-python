@@ -95,6 +95,15 @@ def test_advance_deploy_phase_classifies_slow_runtime_ready_timeout() -> None:
     assert _advance_deploy_phase("build", message) == "deploy"
 
 
+def test_advance_deploy_phase_classifies_stuck_runtime_reconciliation() -> None:
+    message = (
+        "Harness Sidecar runtime is stuck in a status that cannot be updated; "
+        "explicit reconciliation is required before any delete or recreate"
+    )
+
+    assert _advance_deploy_phase("build", message) == "deploy"
+
+
 def test_next_deploy_stream_event_emits_heartbeat_without_blocking_executor() -> None:
     events: queue.Queue[object] = queue.Queue()
 
