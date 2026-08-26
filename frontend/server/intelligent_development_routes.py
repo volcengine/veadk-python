@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
+from agentkit.toolkit.cli.sandbox.env_config import build_exec_session_envs
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.types import Receive, Scope, Send
@@ -67,6 +68,8 @@ from veadk.cli.frontend_sandbox import (
     SandboxValidationError,
     mount_sandbox_routes,
 )
+from veadk.cli.frontend_skill_creator import _sandbox_model_config
+from veadk.utils.cloud_provider import cloud_provider_from_env
 
 INTELLIGENT_DEVELOPMENT_PREFIX = "/web/intelligent-development"
 INTELLIGENT_DEVELOPMENT_TOOL_NAME = "intelligent-development"
@@ -75,6 +78,17 @@ INTELLIGENT_DEVELOPMENT_WORKLOAD = INTELLIGENT_DEVELOPMENT_AGENT_KIND
 INTELLIGENT_DEVELOPMENT_SCHEMA_VERSION = "1"
 _PROJECT_ROOT = "/home/gem/workspace"
 _SAFE_WORKSPACE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
+_SESSION_CREDENTIAL_ENV_KEYS = frozenset(
+    {
+        "ANTHROPIC_AUTH_TOKEN",
+        "CODEX_API_KEY",
+        "OPENCODE_API_KEY",
+    }
+)
+_MODEL_CONFIGURATION_UNAVAILABLE_REASON = (
+    "SANDBOX_DEV 模型配置不可用，请重新部署 Studio。"
+)
 _INTENT_GATE_PROMPT_PREFIX = (
     "You are the read-only intent gate for a VeADK Agent development task."
 )
@@ -134,6 +148,9 @@ class IntelligentDevelopmentGateway:
 
     async def create_session(self, *args: Any, **kwargs: Any) -> SandboxCloudSession:
         return await self._gateway.create_session(*args, **kwargs)
+
+    async def get_tool(self, *args: Any, **kwargs: Any) -> Any:
+        return await self._gateway.get_tool(*args, **kwargs)
 
     async def list_sessions(self, *args: Any, **kwargs: Any) -> Any:
         return await self._gateway.list_sessions(*args, **kwargs)
@@ -368,6 +385,67 @@ def _project_user_facing_messages(
                         projected.append(messages[index])
                     index += 1
     return tuple(projected)
+
+
+def _selected_model_session_envs(model_id: str) -> dict[str, str] | None:
+    model_provider, model_base_url = _sandbox_model_config(cloud_provider_from_env())
+    session_envs = build_exec_session_envs(
+        model_name=model_id,
+        model_provider=model_provider,
+        model_base_url=model_base_url,
+        model_provider_was_provided=True,
+        model_base_url_was_provided=True,
+        include_codex_config=True,
+    )
+    safe_envs = {
+        str(item.key): str(item.value)
+        for item in session_envs or []
+        if item.key and item.value and item.key not in _SESSION_CREDENTIAL_ENV_KEYS
+    }
+    return safe_envs or None
+
+
+def _tool_envs(tool: Any) -> dict[str, str]:
+    envs: dict[str, str] = {}
+    for item in getattr(tool, "envs", None) or []:
+        key = str(getattr(item, "key", "") or "").strip()
+        if not key and isinstance(item, dict):
+            key = str(item.get("Key") or item.get("key") or "").strip()
+        if not key:
+            continue
+        value = str(getattr(item, "value", "") or "").strip()
+        if not value and isinstance(item, dict):
+            value = str(item.get("Value") or item.get("value") or "").strip()
+        envs[key] = value
+    return envs
+
+
+def _tool_model_capability(tool: Any) -> dict[str, object]:
+    envs = _tool_envs(tool)
+    _, expected_base_url = _sandbox_model_config(cloud_provider_from_env())
+    return {
+        "configured": bool(
+            envs.get("CODEX_MODEL")
+            and envs.get("CODEX_API_KEY")
+            and envs.get("CODEX_BASE_URL", "").rstrip("/")
+            == expected_base_url.rstrip("/")
+        ),
+        "id": envs.get("CODEX_MODEL", ""),
+    }
+
+
+async def _sandbox_dev_model_capability(
+    service: SandboxConversationService,
+) -> dict[str, object]:
+    return _tool_model_capability(await service.get_tool(persistent=False))
+
+
+async def _require_sandbox_dev_model_configured(
+    service: SandboxConversationService,
+) -> None:
+    model = await _sandbox_dev_model_capability(service)
+    if not model["configured"]:
+        raise SandboxConfigurationError(_MODEL_CONFIGURATION_UNAVAILABLE_REASON)
 
 
 async def _request_object(request: Request, maximum: int) -> dict[str, object]:
@@ -672,7 +750,21 @@ def mount_intelligent_development_routes(
         owner_resolver(request)
         if not configured:
             return {"enabled": False, "reason": "管理员未配置 SANDBOX_DEV"}
-        return {"enabled": True, "reason": ""}
+        try:
+            model = await _sandbox_dev_model_capability(service)
+        except SandboxError:
+            return {
+                "enabled": False,
+                "reason": "SANDBOX_DEV 暂不可用，请联系管理员检查配置。",
+                "model": {"configured": False, "id": ""},
+            }
+        if not model["configured"]:
+            return {
+                "enabled": False,
+                "reason": _MODEL_CONFIGURATION_UNAVAILABLE_REASON,
+                "model": model,
+            }
+        return {"enabled": True, "reason": "", "model": model}
 
     @app.get(f"{INTELLIGENT_DEVELOPMENT_PREFIX}/sessions")
     async def _list(request: Request) -> dict[str, object]:
@@ -698,13 +790,29 @@ def mount_intelligent_development_routes(
             raise HTTPException(status_code=503, detail="管理员未配置 SANDBOX_DEV")
         try:
             data = await _request_object(request, 64 * 1024)
-            if set(data) - {"displayName"}:
-                raise SandboxValidationError("智能开发会话只接受 displayName。")
+            if set(data) - {"displayName", "modelId"}:
+                raise SandboxValidationError(
+                    "智能开发会话只接受 displayName 和 modelId。"
+                )
+            model_id = data.get("modelId")
+            if model_id is None:
+                session_envs = None
+            elif not isinstance(model_id, str):
+                raise SandboxValidationError("模型 ID 必须是文本。")
+            else:
+                model_id = model_id.strip()
+                if model_id and _MODEL_ID_RE.fullmatch(model_id) is None:
+                    raise SandboxValidationError("模型 ID 格式无效。")
+                session_envs = (
+                    _selected_model_session_envs(model_id) if model_id else None
+                )
+            await _require_sandbox_dev_model_configured(service)
             session = await service.create(
                 owner,
                 data.get("displayName", ""),
                 creator_resolver(request),
                 False,
+                envs=session_envs,
             )
         except SandboxError as error:
             raise _http_error(error) from error
@@ -764,6 +872,7 @@ def mount_intelligent_development_routes(
         import shutil
         import tempfile
         from pathlib import Path
+
         from frontend.server.deployment_source import DeploymentSourceError
         from frontend.server.intelligent_development_source import (
             materialize_current_intelligent_development_preview,
@@ -805,6 +914,7 @@ def mount_intelligent_development_routes(
         import shutil
         import tempfile
         from pathlib import Path
+
         from frontend.server.deployment_source import DeploymentSourceError
         from frontend.server.intelligent_development_source import (
             materialize_intelligent_development_preview,
@@ -849,6 +959,7 @@ def mount_intelligent_development_routes(
         import shutil
         import tempfile
         from pathlib import Path
+
         from frontend.server.deployment_source import DeploymentSourceError
         from frontend.server.intelligent_development_source import (
             IntelligentDevelopmentSourceIntegrityError,
@@ -963,18 +1074,18 @@ def mount_intelligent_development_routes(
                             SandboxRemoteTransport(cloud.endpoint), completion_path
                         )
                         completion_path = ""
-                    except Exception as error:
+                    except Exception as error:  # noqa: BLE001
                         completion_error = error
                 if lease is not None:
                     try:
                         await lease.cleanup()
                         lease = None
-                    except Exception as error:
+                    except Exception as error:  # noqa: BLE001
                         credential_error = error
                 if credential_error is not None:
                     try:
                         await service.delete(session_id, owner)
-                    except Exception:
+                    except Exception:  # noqa: BLE001
                         logger.error(
                             "Credential cleanup and environment termination failed for intelligent development session %s",
                             session_id,
@@ -1101,7 +1212,7 @@ def mount_intelligent_development_routes(
                         session_id,
                         type(error).__name__,
                     )
-                except Exception as error:
+                except Exception as error:  # noqa: BLE001
                     completion = None
                     logger.warning(
                         "Intelligent development completion contract was unavailable for %s: %s",
@@ -1168,19 +1279,19 @@ def mount_intelligent_development_routes(
                     await cleanup_task_files()
                 except SandboxError as cleanup_error:
                     failure = cleanup_error
-                except Exception:
+                except Exception:  # noqa: BLE001
                     failure = SandboxError(
                         "智能开发任务未能安全清理，请勿继续使用当前会话。"
                     )
                 payload = _stream_error_payload(failure)
                 yield f"event: error\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
                 yield 'event: done\ndata: {"reason":"failed"}\n\n'
-            except Exception:
+            except Exception:  # noqa: BLE001
                 try:
                     await cleanup_task_files()
                 except SandboxError as cleanup_error:
                     payload = _stream_error_payload(cleanup_error)
-                except Exception:
+                except Exception:  # noqa: BLE001
                     payload = {
                         "code": "INTELLIGENT_DEVELOPMENT_CLEANUP_FAILED",
                         "message": "智能开发任务未能安全清理，请勿继续使用当前会话。",
@@ -1198,7 +1309,7 @@ def mount_intelligent_development_routes(
                 if completion_path or lease is not None:
                     try:
                         await cleanup_task_files()
-                    except Exception:
+                    except Exception:  # noqa: BLE001
                         logger.error(
                             "Final intelligent development cleanup failed for session %s",
                             session_id,

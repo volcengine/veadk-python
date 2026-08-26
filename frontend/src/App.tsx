@@ -129,6 +129,7 @@ import { MediaGroup } from "./ui/Media";
 import { StackCards } from "./ui/AddAgentMenu";
 import {
   IntelligentCreate,
+  type IntelligentDevelopmentCapabilities,
   type IntelligentPreparationStage,
 } from "./create/IntelligentCreate";
 import { IntelligentDeployment } from "./create/IntelligentDeployment";
@@ -1169,10 +1170,8 @@ export default function App() {
   const [newChatSkillTarget, setNewChatSkillTarget] =
     useState<NewChatSkillTarget | null>(null);
   const [newChatTask, setNewChatTask] = useState<NewChatTask | null>(null);
-  const [intelligentCapabilities, setIntelligentCapabilities] = useState<{
-    enabled: boolean;
-    reason: string;
-  } | null>(null);
+  const [intelligentCapabilities, setIntelligentCapabilities] =
+    useState<IntelligentDevelopmentCapabilities | null>(null);
   const [intelligentCapabilitiesLoading, setIntelligentCapabilitiesLoading] =
     useState(true);
   const [intelligentCapabilitiesError, setIntelligentCapabilitiesError] =
@@ -2742,14 +2741,33 @@ export default function App() {
     })
       .then(async (response) => {
         if (!response.ok) throw new Error(`智能开发能力检查失败（HTTP ${response.status}）`);
-        return response.json() as Promise<{ enabled?: unknown; reason?: unknown }>;
+        return response.json() as Promise<{
+          enabled?: unknown;
+          reason?: unknown;
+          model?: unknown;
+        }>;
       })
       .then((value) => {
         if (controller.signal.aborted) return;
-        setIntelligentCapabilities({
+        const capability: IntelligentDevelopmentCapabilities = {
           enabled: value.enabled === true,
           reason: typeof value.reason === "string" ? value.reason : "",
-        });
+        };
+        if (value.model !== undefined) {
+          if (typeof value.model !== "object" || value.model === null) {
+            throw new Error("智能开发模型能力格式错误。");
+          }
+          const model = value.model as { configured?: unknown; id?: unknown };
+          if (typeof model.configured === "boolean" && typeof model.id === "string") {
+            capability.model = {
+              configured: model.configured,
+              id: model.id,
+            };
+          } else {
+            throw new Error("智能开发模型能力格式错误。");
+          }
+        }
+        setIntelligentCapabilities(capability);
       })
       .catch((cause) => {
         if (!controller.signal.aborted) {
@@ -6611,17 +6629,7 @@ export default function App() {
                     key: "intelligent",
                     icon: ScratchIcon,
                     title: "智能模式",
-                    desc: intelligentCapabilitiesError
-                      || intelligentCapabilities?.reason
-                      || "描述目标，按你的意图构建、调试并验证 Agent。",
-                    status: intelligentCapabilitiesLoading
-                      ? "能力检查中"
-                      : intelligentCapabilities?.enabled
-                        ? undefined
-                        : "暂不可用",
-                    disabled:
-                      intelligentCapabilitiesLoading ||
-                      intelligentCapabilities?.enabled !== true,
+                    desc: "描述目标，按你的意图构建、调试并验证 Agent。",
                     onClick: () => {
                       setAddMenu(false);
                       setImportedDraft(null);
@@ -6758,7 +6766,7 @@ export default function App() {
                   setCreateView(null);
                   setAddMenu(true);
                 }}
-                onCreate={async (goal) => {
+                onCreate={async (goal, modelId) => {
                   if (intelligentPreparationStage) return;
                   intelligentCreateAbortRef.current?.abort();
                   const controller = new AbortController();
@@ -6768,6 +6776,7 @@ export default function App() {
                   try {
                     const created = await intelligentDevelopmentClient.startSession({
                       displayName: goal.slice(0, 40),
+                      modelId,
                       signal: controller.signal,
                     });
                     if (
