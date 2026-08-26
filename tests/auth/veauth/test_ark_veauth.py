@@ -27,6 +27,22 @@ def _raw(api_key):
     return {"Result": {"ApiKey": api_key}}
 
 
+def _raw_error(code, message, code_number=None):
+    error = {"Code": code, "Message": message}
+    if code_number is not None:
+        error["CodeN"] = code_number
+    return {
+        "ResponseMetadata": {
+            "RequestId": "request-id",
+            "Action": "GetRawApiKey",
+            "Version": "2024-01-01",
+            "Service": "ark",
+            "Region": "cn-beijing",
+            "Error": error,
+        }
+    }
+
+
 def _key(id_, name):
     return {"Id": id_, "Name": name}
 
@@ -125,6 +141,47 @@ def test_numeric_id_is_sent_as_control_plane_integer():
         "Id": 4028965,
         "ProjectName": "default",
     }
+
+
+def test_raw_api_key_retries_internal_service_timeout():
+    with (
+        patch("veadk.auth.veauth.ark_veauth.ve_request") as request,
+        patch("veadk.auth.veauth.ark_veauth.time.sleep") as sleep,
+    ):
+        request.side_effect = [
+            _raw_error(
+                "InternalServiceTimeout",
+                "Internal Service is timeout. Pls Contact With Admin",
+                code_number=100016,
+            ),
+            _raw_error(
+                "InternalServiceTimeout",
+                "Internal Service is timeout. Pls Contact With Admin",
+                code_number=100016,
+            ),
+            _raw("sk-SELECTED"),
+        ]
+
+        assert get_ark_token(api_key_id="4028965") == "sk-SELECTED"
+
+    assert request.call_count == 3
+    assert sleep.call_count == 2
+
+
+def test_raw_api_key_does_not_retry_non_transient_error():
+    with (
+        patch("veadk.auth.veauth.ark_veauth.ve_request") as request,
+        patch("veadk.auth.veauth.ark_veauth.time.sleep") as sleep,
+    ):
+        request.return_value = _raw_error(
+            "AccessDenied", "No permission to call GetRawApiKey."
+        )
+
+        with pytest.raises(ValueError, match="AccessDenied"):
+            get_ark_token(api_key_id="4028965")
+
+    assert request.call_count == 1
+    sleep.assert_not_called()
 
 
 def test_environment_sts_token_is_used_for_signed_requests(monkeypatch):

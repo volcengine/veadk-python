@@ -13,6 +13,10 @@
 # limitations under the License.
 
 import os
+import random
+import time
+
+import requests
 
 from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
 from veadk.utils.logger import get_logger
@@ -25,6 +29,40 @@ logger = get_logger(__name__)
 # name or exhaust the list.
 _ARK_PROJECT_NAME = "default"
 _ARK_PAGE_SIZE = 100
+_RAW_API_KEY_MAX_ATTEMPTS = 3
+_RAW_API_KEY_RETRY_DELAYS_SECONDS = (0.2, 0.5)
+_RAW_API_KEY_RETRYABLE_ERROR_CODES = {
+    "InternalError",
+    "InternalServiceTimeout",
+    "RequestTimeout",
+    "ServiceUnavailable",
+    "Throttling",
+    "TooManyRequests",
+}
+_RAW_API_KEY_RETRYABLE_ERROR_CODE_NUMBERS = {100016}
+
+
+def _response_error(res: dict) -> dict:
+    metadata = res.get("ResponseMetadata", {})
+    if not isinstance(metadata, dict):
+        return {}
+    error = metadata.get("Error", {})
+    return error if isinstance(error, dict) else {}
+
+
+def _is_retryable_raw_api_key_response(res: dict) -> bool:
+    error = _response_error(res)
+    return (
+        error.get("Code") in _RAW_API_KEY_RETRYABLE_ERROR_CODES
+        or error.get("CodeN") in _RAW_API_KEY_RETRYABLE_ERROR_CODE_NUMBERS
+    )
+
+
+def _sleep_before_raw_api_key_retry(attempt: int) -> None:
+    delay = _RAW_API_KEY_RETRY_DELAYS_SECONDS[
+        min(attempt - 1, len(_RAW_API_KEY_RETRY_DELAYS_SECONDS) - 1)
+    ]
+    time.sleep(delay + random.uniform(0, delay / 5))
 
 
 def get_ark_token(
@@ -142,20 +180,46 @@ def get_ark_token(
         if isinstance(target_id, str) and target_id.isdigit()
         else target_id
     )
-    res = ve_request(
-        request_body={"Id": request_key_id, "ProjectName": _ARK_PROJECT_NAME},
-        header={"X-Security-Token": session_token},
-        action="GetRawApiKey",
-        ak=access_key,
-        sk=secret_key,
-        service="ark",
-        version="2024-01-01",
-        region=region,
-        host=host,
-    )
-    try:
-        api_key = res["Result"]["ApiKey"]
-        logger.info("Successfully fetched ARK API Key.")
-        return api_key
-    except KeyError as error:
-        raise ValueError("Failed to get ARK API key.") from error
+    request_body = {"Id": request_key_id, "ProjectName": _ARK_PROJECT_NAME}
+    for attempt in range(1, _RAW_API_KEY_MAX_ATTEMPTS + 1):
+        try:
+            res = ve_request(
+                request_body=request_body,
+                header={"X-Security-Token": session_token},
+                action="GetRawApiKey",
+                ak=access_key,
+                sk=secret_key,
+                service="ark",
+                version="2024-01-01",
+                region=region,
+                host=host,
+            )
+        except requests.exceptions.RequestException as error:
+            if attempt >= _RAW_API_KEY_MAX_ATTEMPTS:
+                raise ValueError("Failed to get ARK api key.") from error
+            logger.warning(
+                "GetRawApiKey request failed; retrying "
+                f"({attempt}/{_RAW_API_KEY_MAX_ATTEMPTS}): {error}"
+            )
+            _sleep_before_raw_api_key_retry(attempt)
+            continue
+
+        try:
+            api_key = res["Result"]["ApiKey"]
+            logger.info("Successfully fetched ARK API Key.")
+            return api_key
+        except KeyError as error:
+            if (
+                attempt < _RAW_API_KEY_MAX_ATTEMPTS
+                and _is_retryable_raw_api_key_response(res)
+            ):
+                logger.warning(
+                    "GetRawApiKey returned a retryable error; retrying "
+                    f"({attempt}/{_RAW_API_KEY_MAX_ATTEMPTS}): "
+                    f"{_response_error(res)}"
+                )
+                _sleep_before_raw_api_key_retry(attempt)
+                continue
+            raise ValueError(f"Failed to get ARK api key: {res}") from error
+
+    raise ValueError("Failed to get ARK api key.")
