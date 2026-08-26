@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from typing import Any
 
@@ -149,6 +150,91 @@ def test_normalize_apmplus_trace_converts_span_shape_for_frontend() -> None:
             },
         }
     ]
+
+
+def test_normalize_apmplus_trace_compacts_sparse_stream_output() -> None:
+    sparse_output = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "parts": [{"type": "text", "text": "有"}],
+                }
+            },
+            {
+                "message": {
+                    "role": "assistant",
+                    "parts": [None, {"type": "text", "text": "的"}],
+                }
+            },
+            {
+                "message": {
+                    "role": "assistant",
+                    "parts": [None, None, {"type": "text", "text": "。"}],
+                }
+            },
+        ]
+    }
+
+    spans = normalize_apmplus_trace(
+        [
+            {
+                "operation_name": "invoke_agent demo",
+                "span_id": "span-1",
+                "trace_id": "trace-1",
+                "gen_ai_output": json.dumps(sparse_output),
+            }
+        ]
+    )
+
+    output = spans[0]["attributes"]["gen_ai.output"]
+    assert json.loads(output) == {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "parts": [{"type": "text", "text": "有"}],
+                }
+            },
+            {
+                "message": {
+                    "role": "assistant",
+                    "parts": [{"type": "text", "text": "的"}],
+                }
+            },
+            {
+                "message": {
+                    "role": "assistant",
+                    "parts": [{"type": "text", "text": "。"}],
+                }
+            },
+        ]
+    }
+    assert "null" not in output
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "plain text",
+        "{not json",
+        "null",
+        '{ "choices": [{"message": {"parts": [{"text": "ok"}]}}] }',
+    ],
+)
+def test_normalize_apmplus_trace_preserves_non_sparse_output(output: str) -> None:
+    spans = normalize_apmplus_trace(
+        [
+            {
+                "operation_name": "invoke_agent demo",
+                "span_id": "span-1",
+                "trace_id": "trace-1",
+                "gen_ai_output": output,
+            }
+        ]
+    )
+
+    assert spans[0]["attributes"]["gen_ai.output"] == output
 
 
 def test_apmplus_trace_falls_back_when_run_sse_candidate_is_missing(
