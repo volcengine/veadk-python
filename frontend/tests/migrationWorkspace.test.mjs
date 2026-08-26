@@ -33,6 +33,7 @@ test("exposes a typed migration API with bounded transfer requests", () => {
   const source = readFileSync(apiUrl, "utf8");
 
   assert.match(source, /const API_ROOT = "\/web\/agent-migrations"/);
+  assert.match(source, /unsupportedModelIds\?: string\[\]/);
   assert.match(source, /export type MigrationFramework/);
   assert.match(source, /export interface MigrationTask/);
   assert.match(source, /export async function getMigrationCapabilities/);
@@ -218,6 +219,7 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
     /createMigrationTask\(\{[\s\S]*?modelId: selectedModelId \|\| undefined/,
   );
   assert.match(source, /model\.available \|\| model\.lifecycleStatus === "Retiring"/);
+  assert.match(source, /!unsupportedModelIds\.has\(model\.id\)/);
   assert.doesNotMatch(source, /listModelApiKeys|revealModelApiKey/);
   assert.match(styles, /\.migration-composer__model-select/);
   assert.match(source, /function MigrationTransferProgress/);
@@ -280,4 +282,19 @@ test("renders Codex migration events through one shared block stream", () => {
   assert.match(source, /<Blocks[\s\S]*?blocks=\{blocks\}/);
   assert.doesNotMatch(source, /migration-activity__status/);
   assert.doesNotMatch(styles, /\.migration-activity__status/);
+});
+
+test("preserves Codex activity while the same migration advances", () => {
+  const source = readFileSync(workspaceUrl, "utf8");
+
+  assert.match(
+    source,
+    /useEffect\(\(\) => \{\s*setActivity\(null\);\s*setActivityError\(""\);\s*setActivityLoading\(false\);\s*\}, \[task\?\.id\]\);/,
+  );
+
+  const pollingEffect = source.slice(
+    source.indexOf("if (!task || !shouldShowCodexActivity(task))"),
+    source.indexOf("const analysisKey ="),
+  );
+  assert.doesNotMatch(pollingEffect, /setActivity\(null\)/);
 });

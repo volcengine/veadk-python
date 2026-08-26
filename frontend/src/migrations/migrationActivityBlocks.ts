@@ -40,6 +40,7 @@ export function migrationActivityBlocks(items: MigrationActivityItem[]): Block[]
         response,
         done: item.status !== "running",
         status: item.status,
+        ...(item.status === "failed" ? { defaultOpen: true } : {}),
       }];
     }
     if (item.kind === "status" && item.status !== "completed") {
@@ -49,6 +50,7 @@ export function migrationActivityBlocks(items: MigrationActivityItem[]): Block[]
         response: item.detail,
         done: item.status !== "running",
         status: item.status,
+        ...(item.status === "failed" ? { defaultOpen: true } : {}),
       }];
     }
     return [];

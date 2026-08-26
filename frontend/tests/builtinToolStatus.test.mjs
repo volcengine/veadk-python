@@ -137,11 +137,14 @@ test("additively supports tool outcomes and plans in the shared block renderer",
     blockTypesSource,
     /kind: "tool"[\s\S]*?status\?: "running" \| "completed" \| "failed"/,
   );
+  assert.match(blockTypesSource, /defaultOpen\?: boolean/);
   assert.match(blockTypesSource, /kind: "plan"/);
   assert.match(blockTypesSource, /status: "pending" \| "in_progress" \| "completed" \| "failed"/);
   assert.match(blocksSource, /function PlanBlock/);
   assert.match(blocksSource, /case "plan"/);
   assert.match(blocksSource, /data-status=\{toolStatus\}/);
+  assert.match(blocksSource, /useState\(defaultOpen\)/);
+  assert.match(blocksSource, /if \(!touched\.current && defaultOpen\) setOpen\(true\)/);
 });
 
 test("uses repository-owned current-color SVG icons for every special tool", () => {
