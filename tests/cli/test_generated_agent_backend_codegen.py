@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import py_compile
 import socket
 
@@ -731,8 +732,88 @@ def test_url_policy_rejects_dns_to_private_ip(monkeypatch) -> None:
         ]
 
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
-    with pytest.raises(DebugPolicyError):
+    with pytest.raises(DebugPolicyError, match="不属于当前云上 Studio"):
         validate_url_not_private("https://example.com", field_name="url")
+
+
+def test_url_policy_allows_dns_inside_studio_vpc(monkeypatch) -> None:
+    def fake_getaddrinfo(*args, **kwargs):
+        return [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                6,
+                "",
+                ("10.20.8.35", 443),
+            )
+        ]
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    validate_url_not_private(
+        "https://mcp.customer.internal/mcp",
+        field_name="mcpTools.url",
+        private_network_resolver=lambda: (ipaddress.ip_network("10.20.0.0/16"),),
+    )
+
+
+def test_url_policy_rejects_metadata_even_inside_allowed_range() -> None:
+    with pytest.raises(DebugPolicyError, match="禁止访问的系统地址"):
+        validate_url_not_private(
+            "http://169.254.169.254/latest/meta-data",
+            field_name="mcpTools.url",
+            private_network_resolver=lambda: (ipaddress.ip_network("0.0.0.0/0"),),
+        )
+
+
+def test_debug_policy_resolves_vpc_networks_once_for_mcp_and_a2a(
+    monkeypatch,
+) -> None:
+    resolutions = {
+        "mcp.customer.internal": "10.20.8.35",
+        "agent.customer.internal": "10.20.9.40",
+    }
+
+    def fake_getaddrinfo(host, port, *args, **kwargs):
+        return [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                6,
+                "",
+                (resolutions[host], port),
+            )
+        ]
+
+    calls = 0
+
+    def private_networks():
+        nonlocal calls
+        calls += 1
+        return (ipaddress.ip_network("10.20.0.0/16"),)
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    draft = AgentDraft(
+        name="demo",
+        instruction="Use private services.",
+        mcpTools=[
+            {
+                "name": "private-mcp",
+                "transport": "http",
+                "url": "https://mcp.customer.internal/mcp",
+            }
+        ],
+        subAgents=[
+            AgentDraft(
+                name="private-a2a",
+                agentType="a2a",
+                a2aUrl="https://agent.customer.internal",
+            )
+        ],
+    )
+
+    validate_debug_policy(draft, private_network_resolver=private_networks)
+
+    assert calls == 1
 
 
 @pytest.mark.asyncio

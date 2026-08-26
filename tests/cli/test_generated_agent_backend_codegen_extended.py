@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import io
 import json
 import secrets
@@ -30,6 +31,7 @@ import yaml
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
+from veadk.cli import cli_frontend
 from veadk.cli.cli_frontend import (
     _redact_debug_text,
     _run_frontend_server,
@@ -985,6 +987,168 @@ class _FakeSocket:
 
     def getsockname(self) -> tuple[str, int]:
         return ("127.0.0.1", 54321)
+
+
+def _generated_debug_app(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> Any:
+    captured: dict[str, Any] = {}
+    monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "test-ak")
+    monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "test-sk")
+    monkeypatch.setattr("dotenv.find_dotenv", lambda *args, **kwargs: "")
+    monkeypatch.setattr(
+        "uvicorn.run",
+        lambda app, **kwargs: captured.setdefault("app", app),
+    )
+    _run_frontend_server(
+        agents_dir=str(tmp_path),
+        frontend_dir=None,
+        site_logo=None,
+        site_title=None,
+        host="127.0.0.1",
+        port=8765,
+        dev=True,
+        vite=True,
+        oauth2_user_pool=None,
+        oauth2_user_pool_client=None,
+        oauth2_user_pool_uid=None,
+        oauth2_user_pool_client_uid=None,
+        oauth2_redirect_uri=None,
+        oauth2_provider=None,
+        oauth2_provider_label=None,
+        auth_mode="frontend",
+        generated_agent_test_run_ttl=60,
+        open_browser=False,
+    )
+    return captured["app"]
+
+
+def test_local_generated_debug_allows_private_mcp(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("VEADK_STUDIO_FUNCTION_ID", raising=False)
+    monkeypatch.delenv("_FAAS_FUNC_ID", raising=False)
+
+    async def keep_mcp_endpoints(draft):
+        return draft
+
+    monkeypatch.setattr(
+        "veadk.cli.generated_agent_mcp.resolve_debug_mcp_endpoints",
+        keep_mcp_endpoints,
+    )
+    app = _generated_debug_app(monkeypatch, tmp_path)
+    _FakeProcess.created.clear()
+    monkeypatch.setattr(_FakeAsyncClient, "listed_apps", ["private_mcp_agent"])
+    monkeypatch.setattr("subprocess.Popen", _FakeProcess)
+    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
+    real_socket = socket.socket
+    monkeypatch.setattr(
+        "socket.socket",
+        lambda *args, **kwargs: (
+            real_socket(*args, **kwargs)
+            if len(args) >= 4 or "fileno" in kwargs
+            else _FakeSocket(*args, **kwargs)
+        ),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/generated-agent-test-runs",
+            json={
+                "draft": {
+                    "name": "private-mcp-agent",
+                    "instruction": "Use MCP.",
+                    "mcpTools": [
+                        {
+                            "name": "private",
+                            "transport": "http",
+                            "url": "http://10.1.2.3/mcp",
+                        }
+                    ],
+                }
+            },
+        )
+
+    assert response.status_code == 200
+    assert _FakeProcess.created
+
+
+def test_cloud_generated_debug_rejects_private_mcp_outside_vpc(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("_FAAS_FUNC_ID", "function-test")
+    monkeypatch.setattr(
+        cli_frontend,
+        "discover_studio_vpc_networks",
+        lambda **kwargs: (ipaddress.ip_network("10.20.0.0/16"),),
+    )
+    app = _generated_debug_app(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/generated-agent-test-runs",
+            json={
+                "draft": {
+                    "name": "private-mcp-agent",
+                    "instruction": "Use MCP.",
+                    "mcpTools": [
+                        {
+                            "name": "private",
+                            "transport": "http",
+                            "url": "http://10.30.1.8/mcp",
+                        }
+                    ],
+                }
+            },
+        )
+
+    assert response.status_code == 400
+    assert "不属于当前云上 Studio 所连接的 VPC 网段" in response.json()["detail"]
+    assert "PrivateLink" in response.json()["detail"]
+
+
+def test_cloud_generated_debug_preserves_mcp_connection_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from veadk.cli.generated_agent_mcp import McpDebugConnectionError
+
+    monkeypatch.setenv("_FAAS_FUNC_ID", "function-test")
+    original_detail = "MCP 工具 `offline` 连接失败：原始连接错误"
+
+    async def fail_mcp_discovery(draft):
+        del draft
+        raise McpDebugConnectionError(original_detail)
+
+    monkeypatch.setattr(
+        "veadk.cli.generated_agent_mcp.resolve_debug_mcp_endpoints",
+        fail_mcp_discovery,
+    )
+    app = _generated_debug_app(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/generated-agent-test-runs",
+            json={
+                "draft": {
+                    "name": "offline-mcp-agent",
+                    "instruction": "Use MCP.",
+                    "mcpTools": [
+                        {
+                            "name": "offline",
+                            "transport": "http",
+                            "url": "https://8.8.8.8/mcp",
+                        }
+                    ],
+                }
+            },
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == original_detail
 
 
 def test_debug_text_redacts_environment_and_inline_markers(
