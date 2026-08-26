@@ -125,12 +125,13 @@ dev = [
 [tool.setuptools.packages.find]
 include = [
     "veadk*",
-    "frontend",
-    "frontend.server*",
-    "frontend.service",
-    "frontend.service.studio_scheduler*",
+    "frontend*",
 ]
-exclude = ["assets*", "ide*", "tests*"]
+exclude = [
+    "assets*",
+    "ide*",
+    "tests*",
+]
 
 [tool.setuptools]
 include-package-data = true

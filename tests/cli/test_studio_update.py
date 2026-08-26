@@ -142,6 +142,10 @@ def test_stage_wheel_source_includes_studio_python_backend(tmp_path: Path) -> No
     source_root = tmp_path / "source"
     (source_root / "veadk").mkdir(parents=True)
     (source_root / "veadk" / "__init__.py").write_text("", encoding="utf-8")
+    (source_root / "veadk" / "future_runtime").mkdir()
+    (source_root / "veadk" / "future_runtime" / "handler.py").write_text(
+        "HANDLER = True\n", encoding="utf-8"
+    )
     (source_root / "frontend" / "server").mkdir(parents=True)
     (source_root / "frontend" / "__init__.py").write_text("", encoding="utf-8")
     (source_root / "frontend" / "server" / "__init__.py").write_text(
@@ -150,10 +154,20 @@ def test_stage_wheel_source_includes_studio_python_backend(tmp_path: Path) -> No
     (source_root / "frontend" / "server" / "routes.py").write_text(
         "ROUTES = []\n", encoding="utf-8"
     )
+    (source_root / "frontend" / "future_runtime").mkdir(parents=True)
+    (source_root / "frontend" / "future_runtime" / "__init__.py").write_text(
+        "", encoding="utf-8"
+    )
+    (source_root / "frontend" / "future_runtime" / "handler.py").write_text(
+        "HANDLER = True\n", encoding="utf-8"
+    )
     (source_root / "frontend" / "service" / "studio_scheduler").mkdir(parents=True)
     (source_root / "frontend" / "service" / "__init__.py").write_text(
         "", encoding="utf-8"
     )
+    release_server = source_root / "frontend" / "service" / "studio_release_server"
+    release_server.mkdir()
+    (release_server / "__init__.py").write_text("", encoding="utf-8")
     (
         source_root / "frontend" / "service" / "studio_scheduler" / "__init__.py"
     ).write_text("", encoding="utf-8")
@@ -175,6 +189,14 @@ def test_stage_wheel_source_includes_studio_python_backend(tmp_path: Path) -> No
     )
     assert (
         wheel_source / "frontend" / "service" / "studio_scheduler" / "app.py"
+    ).read_text() == "HANDLER = True\n"
+    assert (
+        wheel_source / "frontend" / "future_runtime" / "handler.py"
+    ).read_text() == "HANDLER = True\n"
+    assert not (wheel_source / "frontend" / "src").exists()
+    assert (wheel_source / "frontend" / "service" / "studio_release_server").is_dir()
+    assert (
+        wheel_source / "veadk" / "future_runtime" / "handler.py"
     ).read_text() == "HANDLER = True\n"
 
 
