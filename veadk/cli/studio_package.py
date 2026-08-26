@@ -23,6 +23,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from frontend.service.studio_release_server.publisher import stage_studio_wheel_source
+
 from veadk.cli.frontend_branding import SiteLogo
 from veadk.cli.studio_dependencies import stage_studio_dependency_wheels
 from veadk.utils.cloud_provider import DEFAULT_CLOUD_PROVIDER, CloudProvider
@@ -201,38 +203,4 @@ def _stage_wheel_source(
     source_root: Path, frontend_assets: Path, wheel_source: Path
 ) -> None:
     """Copy package sources and substitute freshly built frontend assets."""
-    wheel_source.mkdir(parents=True)
-    for filename in ("pyproject.toml", "README.md", "LICENSE"):
-        shutil.copy2(source_root / filename, wheel_source / filename)
-    git_metadata = source_root / ".git"
-    if git_metadata.is_file():
-        shutil.copy2(git_metadata, wheel_source / ".git")
-    elif git_metadata.is_dir():
-        (wheel_source / ".git").write_text(
-            f"gitdir: {git_metadata.resolve()}\n", encoding="utf-8"
-        )
-    shutil.copytree(
-        source_root / "veadk",
-        wheel_source / "veadk",
-        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "webui"),
-    )
-    frontend_package = wheel_source / "frontend"
-    frontend_package.mkdir()
-    shutil.copy2(source_root / "frontend" / "__init__.py", frontend_package)
-    shutil.copytree(
-        source_root / "frontend" / "server",
-        frontend_package / "server",
-        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
-    )
-    service_package = frontend_package / "service"
-    service_package.mkdir()
-    shutil.copy2(
-        source_root / "frontend" / "service" / "__init__.py",
-        service_package,
-    )
-    shutil.copytree(
-        source_root / "frontend" / "service" / "studio_scheduler",
-        service_package / "studio_scheduler",
-        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
-    )
-    shutil.copytree(frontend_assets, wheel_source / "veadk" / "webui")
+    stage_studio_wheel_source(source_root, frontend_assets, wheel_source)

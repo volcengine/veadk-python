@@ -311,7 +311,7 @@ def _build_frontend_assets(
         raise StudioPublisherError("Studio frontend build produced no index.html.")
 
 
-def _stage_wheel_source(
+def stage_studio_wheel_source(
     source_root: Path,
     frontend_assets: Path,
     wheel_source: Path,
@@ -331,15 +331,77 @@ def _stage_wheel_source(
         wheel_source / "veadk",
         ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "webui"),
     )
-    frontend_package = wheel_source / "frontend"
-    frontend_package.mkdir()
-    shutil.copy2(source_root / "frontend" / "__init__.py", frontend_package)
+    frontend_root = source_root / "frontend"
+
+    def ignore_frontend_build_inputs(directory: str, names: list[str]) -> set[str]:
+        current = Path(directory)
+        ignored = {
+            name
+            for name in names
+            if name == "__pycache__"
+            or name.endswith(".pyc")
+            or name == ".vite"
+            or name == ".env"
+            or name.startswith(".env.")
+        }
+        if current == frontend_root:
+            ignored.update(
+                {
+                    "README.md",
+                    "SPEC.md",
+                    "dist",
+                    "index.html",
+                    "node_modules",
+                    "package-lock.json",
+                    "package.json",
+                    "public",
+                    "scripts",
+                    "skills",
+                    "src",
+                    "tests",
+                    "tsconfig.json",
+                    "vite.config.ts",
+                    "vite.website-integration.config.ts",
+                    "vitest.harness-sidecar.config.ts",
+                }.intersection(names)
+            )
+        return ignored
+
     shutil.copytree(
-        source_root / "frontend" / "server",
-        frontend_package / "server",
-        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        frontend_root,
+        wheel_source / "frontend",
+        ignore=ignore_frontend_build_inputs,
     )
     shutil.copytree(frontend_assets, wheel_source / "veadk" / "webui")
+
+
+def _studio_runtime_modules(source_root: Path) -> set[str]:
+    """List every importable frontend Python module intended for Studio runtime."""
+    frontend_root = source_root / "frontend"
+    modules: set[str] = set()
+    for source in frontend_root.rglob("*.py"):
+        parent = source.parent
+        while parent != source_root and (parent / "__init__.py").is_file():
+            if parent == frontend_root:
+                modules.add(source.relative_to(source_root).as_posix())
+                break
+            parent = parent.parent
+    return modules
+
+
+def _validate_studio_wheel(wheel: Path, source_root: Path) -> None:
+    """Reject release wheels missing any importable Studio runtime module."""
+    required_modules = _studio_runtime_modules(source_root)
+    try:
+        with zipfile.ZipFile(wheel) as archive:
+            missing = required_modules.difference(archive.namelist())
+    except (OSError, zipfile.BadZipFile) as error:
+        raise StudioPublisherError("Built VeADK wheel is invalid.") from error
+    if missing:
+        raise StudioPublisherError(
+            "Built VeADK wheel is missing Studio runtime modules: "
+            + ", ".join(sorted(missing))
+        )
 
 
 def _build_local_requirements(
@@ -350,7 +412,7 @@ def _build_local_requirements(
     env: Mapping[str, str],
 ) -> str:
     wheel_source = package_dir / "wheel-source"
-    _stage_wheel_source(source_root, frontend_assets, wheel_source)
+    stage_studio_wheel_source(source_root, frontend_assets, wheel_source)
     uv = shutil.which("uv", path=env.get("PATH"))
     if uv is None:
         raise StudioPublisherError("uv is required to build the VeADK wheel.")
@@ -369,6 +431,7 @@ def _build_local_requirements(
         raise StudioPublisherError(
             "Local source build did not produce one VeADK wheel."
         )
+    _validate_studio_wheel(built_wheels[0], wheel_source)
     dependencies: list[Path] = []
     for source in sorted(dependency_wheels.glob("*.whl")):
         target = package_dir / source.name

@@ -576,7 +576,13 @@ def test_standalone_publisher_builds_bundle_from_source_files(
 
     def _run(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[Any]:
         output_dir = Path(command[command.index("-o") + 1])
-        (output_dir / "veadk_python-1.0.0-py3-none-any.whl").write_bytes(b"veadk")
+        with zipfile.ZipFile(
+            output_dir / "veadk_python-1.0.0-py3-none-any.whl", "w"
+        ) as wheel:
+            for name in release_publisher._studio_runtime_modules(
+                Path(__file__).parents[1]
+            ):
+                wheel.writestr(name, "")
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(release_publisher.subprocess, "run", _run)
@@ -603,6 +609,59 @@ def test_standalone_publisher_builds_bundle_from_source_files(
         )
     assert manifest.git_sha == "a" * 40
     assert manifest.sha256 == hashlib.sha256(bundle.read_bytes()).hexdigest()
+
+
+def test_standalone_publisher_stages_scheduler_backend(tmp_path: Path) -> None:
+    source_root = tmp_path / "source"
+    (source_root / "veadk").mkdir(parents=True)
+    (source_root / "veadk" / "__init__.py").write_text("", encoding="utf-8")
+    for filename in ("pyproject.toml", "README.md", "LICENSE"):
+        (source_root / filename).write_text("", encoding="utf-8")
+    (source_root / "frontend" / "server").mkdir(parents=True)
+    (source_root / "frontend" / "server" / "__init__.py").write_text(
+        "", encoding="utf-8"
+    )
+    future_runtime = source_root / "frontend" / "future_runtime"
+    future_runtime.mkdir()
+    (future_runtime / "__init__.py").write_text("", encoding="utf-8")
+    (future_runtime / "handler.py").write_text("HANDLER = True\n", encoding="utf-8")
+    (source_root / "frontend" / "__init__.py").write_text("", encoding="utf-8")
+    scheduler = source_root / "frontend" / "service" / "studio_scheduler"
+    scheduler.mkdir(parents=True)
+    (scheduler.parent / "__init__.py").write_text("", encoding="utf-8")
+    release_server = scheduler.parent / "studio_release_server"
+    release_server.mkdir()
+    (release_server / "__init__.py").write_text("", encoding="utf-8")
+    (scheduler / "__init__.py").write_text("", encoding="utf-8")
+    (scheduler / "models.py").write_text("MODEL = True\n", encoding="utf-8")
+    frontend_assets = tmp_path / "frontend-assets"
+    frontend_assets.mkdir()
+    (frontend_assets / "index.html").write_text("studio", encoding="utf-8")
+
+    wheel_source = tmp_path / "wheel-source"
+    release_publisher.stage_studio_wheel_source(
+        source_root, frontend_assets, wheel_source
+    )
+
+    assert (
+        wheel_source / "frontend" / "service" / "studio_scheduler" / "models.py"
+    ).read_text(encoding="utf-8") == "MODEL = True\n"
+    assert (wheel_source / "frontend" / "future_runtime" / "handler.py").read_text(
+        encoding="utf-8"
+    ) == "HANDLER = True\n"
+    assert (wheel_source / "frontend" / "service" / "studio_release_server").is_dir()
+
+
+def test_standalone_publisher_rejects_wheel_without_scheduler(tmp_path: Path) -> None:
+    wheel = tmp_path / "veadk.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr("frontend/server/cronjobs/service.py", "")
+
+    with pytest.raises(
+        release_publisher.StudioPublisherError,
+        match="missing Studio runtime modules",
+    ):
+        release_publisher._validate_studio_wheel(wheel, Path(__file__).parents[1])
 
 
 def test_builder_shallow_clones_only_main_build_files(
