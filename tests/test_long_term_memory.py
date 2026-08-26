@@ -66,6 +66,16 @@ def _session_with_events(events: list[Event]) -> Session:
     )
 
 
+def _user_text_event(text: str) -> Event:
+    return Event(
+        author="user",
+        content=types.Content(
+            role="user",
+            parts=[types.Part(text=text)],
+        ),
+    )
+
+
 def _saved_messages(backend: _RecordingBackend) -> list[dict[str, Any]]:
     return [json.loads(item) for item in backend.saved_call["event_strings"]]
 
@@ -510,7 +520,7 @@ async def test_auto_save_memory_policy_strips_thought_but_keeps_final_text():
 async def test_auto_save_callback_passes_agent_memory_policy():
     save_session_callback._session_save_cache.clear()
     save_session_callback._active_sessions.clear()
-    session = _session_with_events([])
+    session = _session_with_events([_user_text_event("remember this")])
 
     class Memory:
         def __init__(self):
@@ -551,9 +561,9 @@ async def test_auto_save_callback_passes_agent_memory_policy():
 async def test_auto_save_callback_passes_policy_when_session_switches():
     save_session_callback._session_save_cache.clear()
     save_session_callback._active_sessions.clear()
-    old_session = _session_with_events([])
+    old_session = _session_with_events([_user_text_event("old message")])
     old_session.id = "old_session"
-    new_session = _session_with_events([])
+    new_session = _session_with_events([_user_text_event("new message")])
     new_session.id = "new_session"
     save_session_callback._active_sessions[
         (new_session.app_name, new_session.user_id)
@@ -595,4 +605,123 @@ async def test_auto_save_callback_passes_policy_when_session_switches():
             "session_id": "new_session",
             "kwargs": {"auto_save_memory_policy": {"preset": "all"}},
         },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_auto_save_callback_saves_only_new_events_when_resaving_session(
+    monkeypatch,
+):
+    save_session_callback._session_save_cache.clear()
+    save_session_callback._active_sessions.clear()
+    monkeypatch.setattr(save_session_callback, "MIN_TIME_THRESHOLD", 0)
+    monkeypatch.setattr(save_session_callback, "MIN_MESSAGES_THRESHOLD", 10)
+    session = _session_with_events([_user_text_event("first message")])
+
+    class Memory:
+        def __init__(self):
+            self.calls = []
+
+        async def add_session_to_memory(self, session: Session, **kwargs):
+            self.calls.append(
+                [
+                    part.text
+                    for event in session.events
+                    for part in event.content.parts
+                    if part.text
+                ]
+            )
+
+    class SessionService:
+        async def get_session(self, **kwargs):
+            return session
+
+    memory = Memory()
+    callback_context = SimpleNamespace(
+        _invocation_context=SimpleNamespace(
+            agent=SimpleNamespace(
+                long_term_memory=memory,
+                auto_save_memory_policy="all",
+            ),
+            app_name="support_app",
+            user_id="alice",
+            session=session,
+            session_service=SessionService(),
+        )
+    )
+
+    await save_session_callback.save_session_to_long_term_memory(callback_context)
+    session.events.append(_user_text_event("second message"))
+    await save_session_callback.save_session_to_long_term_memory(callback_context)
+
+    assert memory.calls == [["first message"], ["second message"]]
+
+
+@pytest.mark.asyncio
+async def test_auto_save_callback_does_not_resave_old_events_on_session_switch(
+    monkeypatch,
+):
+    save_session_callback._session_save_cache.clear()
+    save_session_callback._active_sessions.clear()
+    monkeypatch.setattr(save_session_callback, "MIN_TIME_THRESHOLD", 0)
+    monkeypatch.setattr(save_session_callback, "MIN_MESSAGES_THRESHOLD", 10)
+    old_session = _session_with_events([_user_text_event("old message")])
+    old_session.id = "old_session"
+    new_session = _session_with_events([_user_text_event("new message")])
+    new_session.id = "new_session"
+
+    class Memory:
+        def __init__(self):
+            self.calls = []
+
+        async def add_session_to_memory(self, session: Session, **kwargs):
+            self.calls.append(
+                (
+                    session.id,
+                    [
+                        part.text
+                        for event in session.events
+                        for part in event.content.parts
+                        if part.text
+                    ],
+                )
+            )
+
+    class SessionService:
+        async def get_session(self, *, session_id: str, **kwargs):
+            return old_session if session_id == old_session.id else new_session
+
+    memory = Memory()
+
+    old_context = SimpleNamespace(
+        _invocation_context=SimpleNamespace(
+            agent=SimpleNamespace(
+                long_term_memory=memory,
+                auto_save_memory_policy="all",
+            ),
+            app_name="support_app",
+            user_id="alice",
+            session=old_session,
+            session_service=SessionService(),
+        )
+    )
+    new_context = SimpleNamespace(
+        _invocation_context=SimpleNamespace(
+            agent=SimpleNamespace(
+                long_term_memory=memory,
+                auto_save_memory_policy="all",
+            ),
+            app_name="support_app",
+            user_id="alice",
+            session=new_session,
+            session_service=SessionService(),
+        )
+    )
+
+    await save_session_callback.save_session_to_long_term_memory(old_context)
+    await save_session_callback.save_session_to_long_term_memory(new_context)
+
+    assert memory.calls == [
+        ("old_session", ["old message"]),
+        ("new_session", ["new message"]),
     ]

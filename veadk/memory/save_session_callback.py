@@ -36,6 +36,10 @@ MIN_TIME_THRESHOLD = getenv(
 )  # Minimum seconds between saves (1 minute)
 
 
+def _copy_session_with_events(session, events):
+    return session.model_copy(update={"events": events})
+
+
 async def save_session_to_long_term_memory(
     callback_context: CallbackContext,
 ) -> None:
@@ -81,21 +85,41 @@ async def save_session_to_long_term_memory(
                 session_id=previous_session_id,
             )
             if old_session:
+                old_cache_key = (app_name, user_id, previous_session_id)
+                old_cache_info = _session_save_cache.get(old_cache_key, {})
+                old_last_event_count = old_cache_info.get("last_event_count", 0)
                 old_events = getattr(old_session, "events", [])
                 old_event_count = len(old_events)
-                await long_term_memory.add_session_to_memory(
-                    old_session,
-                    auto_save_memory_policy=auto_save_memory_policy,
-                )
-                old_cache_key = (app_name, user_id, previous_session_id)
 
-                _session_save_cache[old_cache_key] = {
-                    "last_save_time": current_time,
-                    "last_event_count": old_event_count,
-                }
-                logger.info(
-                    f"Previous session `{old_session.id}` saved to long term memory due to session switch."
-                )
+                if old_last_event_count > old_event_count:
+                    logger.warning(
+                        f"Saved event cursor for previous session `{old_session.id}` "
+                        f"({old_last_event_count}) is greater than current event count "
+                        f"({old_event_count}); resetting cursor to 0."
+                    )
+                    old_last_event_count = 0
+
+                old_new_events = old_events[old_last_event_count:]
+                if old_new_events:
+                    incremental_old_session = _copy_session_with_events(
+                        old_session, old_new_events
+                    )
+                    await long_term_memory.add_session_to_memory(
+                        incremental_old_session,
+                        auto_save_memory_policy=auto_save_memory_policy,
+                    )
+
+                    _session_save_cache[old_cache_key] = {
+                        "last_save_time": current_time,
+                        "last_event_count": old_event_count,
+                    }
+                    logger.info(
+                        f"Previous session `{old_session.id}` saved to long term memory due to session switch."
+                    )
+                else:
+                    logger.info(
+                        f"Skipping save for previous session `{old_session.id}`: no new events."
+                    )
 
         # Update active session
         _active_sessions[user_key] = session_id
@@ -120,10 +144,19 @@ async def save_session_to_long_term_memory(
         cache_key = (app_name, user_id, session_id)
 
         cache_info = _session_save_cache.get(cache_key)
+        last_event_count = 0
 
         if cache_info:
             last_save_time = cache_info.get("last_save_time", 0)
             last_event_count = cache_info.get("last_event_count", 0)
+
+            if last_event_count > current_event_count:
+                logger.warning(
+                    f"Saved event cursor for session `{session_id}` "
+                    f"({last_event_count}) is greater than current event count "
+                    f"({current_event_count}); resetting cursor to 0."
+                )
+                last_event_count = 0
 
             time_elapsed = current_time - last_save_time
             new_events_count = current_event_count - last_event_count
@@ -142,9 +175,15 @@ async def save_session_to_long_term_memory(
         else:
             logger.info(f"First save for session {session_id}.")
 
+        new_events = current_events[last_event_count:]
+        if not new_events:
+            logger.info(f"Skipping save for session {session_id}: no new events.")
+            return None
+
         # Save to long-term memory
+        incremental_session = _copy_session_with_events(session, new_events)
         await long_term_memory.add_session_to_memory(
-            session,
+            incremental_session,
             auto_save_memory_policy=auto_save_memory_policy,
         )
 
