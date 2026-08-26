@@ -23,8 +23,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from frontend.service.studio_release_server.publisher import stage_studio_wheel_source
-
+from frontend.service.studio_release_server.publisher import (
+    stage_studio_wheel_source,
+    validate_studio_wheel,
+)
 from veadk.cli.frontend_branding import SiteLogo
 from veadk.cli.studio_dependencies import stage_studio_dependency_wheels
 from veadk.utils.cloud_provider import DEFAULT_CLOUD_PROVIDER, CloudProvider
@@ -166,6 +168,7 @@ def build_local_studio_requirements(
     wheels = list(package_dir.glob("veadk*.whl"))
     if not wheels:
         raise ValueError("Local source build produced no veadk wheel.")
+    validate_studio_wheel(wheels[0], wheel_source)
 
     dependencies = stage_studio_dependency_wheels(
         package_dir,

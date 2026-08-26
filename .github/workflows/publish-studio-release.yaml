@@ -119,6 +119,99 @@ jobs:
           test "${#manifests[@]}" -eq 1
           unzip -t "${bundles[0]}"
 
+      - name: Simulate customer update and smoke-test Studio
+        env:
+          BYTEPLUS_ACCESS_KEY: smoke
+          BYTEPLUS_SECRET_KEY: smoke
+          PIP_INDEX_URL: https://mirrors.aliyun.com/pypi/simple/
+          UV_DEFAULT_INDEX: https://mirrors.aliyun.com/pypi/simple/
+          VOLCENGINE_ACCESS_KEY: smoke
+          VOLCENGINE_SECRET_KEY: smoke
+        run: |
+          set -euo pipefail
+          package_dir="$RUNNER_TEMP/studio-release-package"
+          runtime_venv="$RUNNER_TEMP/studio-release-runtime"
+          export package_dir runtime_venv
+
+          uv run --group dev python - <<'PY'
+          import os
+          from pathlib import Path
+
+          from veadk.cli.studio_self_update import extract_studio_bundle
+
+          output_dir = Path(os.environ["RUNNER_TEMP"]) / "studio-release-output"
+          bundle = next(output_dir.glob("studio-bundle-*.zip"))
+          extract_studio_bundle(bundle, Path(os.environ["package_dir"]))
+          PY
+
+          uv venv "$runtime_venv"
+          (
+            cd "$package_dir"
+            uv pip install --python "$runtime_venv/bin/python" -r requirements.txt
+          )
+
+          (
+            cd "$package_dir"
+            "$runtime_venv/bin/python" - <<'PY'
+          from pathlib import Path
+
+          import frontend
+          import veadk
+          import frontend.server.cronjobs
+          import frontend.service.studio_release_server
+          import frontend.service.studio_scheduler
+
+          runtime_root = Path(veadk.__file__).resolve().parents[1]
+          assert Path(frontend.__file__).resolve().is_relative_to(runtime_root)
+          webui = Path(veadk.__file__).resolve().parent / "webui" / "index.html"
+          assert webui.is_file()
+          print(f"Validated installed Studio packages from {runtime_root}")
+          PY
+          )
+
+          smoke_studio() {
+            provider="$1"
+            port="$2"
+            log="$RUNNER_TEMP/studio-${provider}.log"
+            response="$RUNNER_TEMP/studio-${provider}-ui-config.json"
+            (
+              cd "$package_dir"
+              PATH="$runtime_venv/bin:$PATH" \
+                CLOUD_PROVIDER="$provider" \
+                AGENTKIT_CLOUD_PROVIDER="$provider" \
+                _FAAS_RUNTIME_PORT="$port" \
+                ./run.sh
+            ) >"$log" 2>&1 &
+            pid=$!
+            for _ in {1..60}; do
+              if ! kill -0 "$pid" 2>/dev/null; then
+                cat "$log"
+                return 1
+              fi
+              if curl --fail --silent \
+                "http://127.0.0.1:${port}/web/ui-config" >"$response"; then
+                if ! curl --fail --silent --show-error \
+                  "http://127.0.0.1:${port}/" >/dev/null; then
+                  kill "$pid" 2>/dev/null || true
+                  wait "$pid" 2>/dev/null || true
+                  cat "$log"
+                  return 1
+                fi
+                kill "$pid" 2>/dev/null || true
+                wait "$pid" || true
+                return 0
+              fi
+              sleep 1
+            done
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+            cat "$log"
+            return 1
+          }
+
+          smoke_studio byteplus 18877
+          smoke_studio volcengine 18878
+
   publish:
     if: >-
       github.event_name == 'workflow_dispatch' &&

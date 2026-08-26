@@ -579,7 +579,7 @@ def test_standalone_publisher_builds_bundle_from_source_files(
         with zipfile.ZipFile(
             output_dir / "veadk_python-1.0.0-py3-none-any.whl", "w"
         ) as wheel:
-            for name in release_publisher._studio_runtime_modules(
+            for name in release_publisher.studio_runtime_modules(
                 Path(__file__).parents[1]
             ):
                 wheel.writestr(name, "")
@@ -652,16 +652,29 @@ def test_standalone_publisher_stages_scheduler_backend(tmp_path: Path) -> None:
     assert (wheel_source / "frontend" / "service" / "studio_release_server").is_dir()
 
 
-def test_standalone_publisher_rejects_wheel_without_scheduler(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "missing_module",
+    (
+        "frontend/service/studio_scheduler/models.py",
+        "veadk/cli/studio_update.py",
+    ),
+)
+def test_standalone_publisher_rejects_wheel_without_runtime_module(
+    tmp_path: Path,
+    missing_module: str,
+) -> None:
     wheel = tmp_path / "veadk.whl"
+    source_root = Path(__file__).parents[1]
     with zipfile.ZipFile(wheel, "w") as archive:
-        archive.writestr("frontend/server/cronjobs/service.py", "")
+        for name in release_publisher.studio_runtime_modules(source_root):
+            if name != missing_module:
+                archive.writestr(name, "")
 
     with pytest.raises(
         release_publisher.StudioPublisherError,
-        match="missing Studio runtime modules",
+        match=missing_module,
     ):
-        release_publisher._validate_studio_wheel(wheel, Path(__file__).parents[1])
+        release_publisher.validate_studio_wheel(wheel, source_root)
 
 
 def test_builder_shallow_clones_only_main_build_files(

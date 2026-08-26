@@ -2318,6 +2318,10 @@ def test_studio_deploy_from_source_bundles_unmirrored_dependencies(
     monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/uv")
     monkeypatch.setattr("subprocess.run", _fake_build)
     monkeypatch.setattr(
+        "veadk.cli.studio_package.validate_studio_wheel",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
         "urllib.request.urlopen", lambda *_args, **_kwargs: _FakeWheelResponse()
     )
     wheel_hashes = iter(
@@ -2408,6 +2412,10 @@ def test_studio_deploy_from_source_writes_lf_run_script(
     )
     monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/uv")
     monkeypatch.setattr("subprocess.run", _fake_build)
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.validate_studio_wheel",
+        lambda *_args: None,
+    )
 
     result = CliRunner().invoke(
         studio,

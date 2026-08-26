@@ -375,23 +375,18 @@ def stage_studio_wheel_source(
     shutil.copytree(frontend_assets, wheel_source / "veadk" / "webui")
 
 
-def _studio_runtime_modules(source_root: Path) -> set[str]:
-    """List every importable frontend Python module intended for Studio runtime."""
-    frontend_root = source_root / "frontend"
-    modules: set[str] = set()
-    for source in frontend_root.rglob("*.py"):
-        parent = source.parent
-        while parent != source_root and (parent / "__init__.py").is_file():
-            if parent == frontend_root:
-                modules.add(source.relative_to(source_root).as_posix())
-                break
-            parent = parent.parent
-    return modules
+def studio_runtime_modules(source_root: Path) -> set[str]:
+    """List every importable Python module shipped in the Studio wheel."""
+    return {
+        source.relative_to(source_root).as_posix()
+        for package_name in ("veadk", "frontend")
+        for source in (source_root / package_name).rglob("*.py")
+    }
 
 
-def _validate_studio_wheel(wheel: Path, source_root: Path) -> None:
+def validate_studio_wheel(wheel: Path, source_root: Path) -> None:
     """Reject release wheels missing any importable Studio runtime module."""
-    required_modules = _studio_runtime_modules(source_root)
+    required_modules = studio_runtime_modules(source_root)
     try:
         with zipfile.ZipFile(wheel) as archive:
             missing = required_modules.difference(archive.namelist())
@@ -431,7 +426,7 @@ def _build_local_requirements(
         raise StudioPublisherError(
             "Local source build did not produce one VeADK wheel."
         )
-    _validate_studio_wheel(built_wheels[0], wheel_source)
+    validate_studio_wheel(built_wheels[0], wheel_source)
     dependencies: list[Path] = []
     for source in sorted(dependency_wheels.glob("*.whl")):
         target = package_dir / source.name
