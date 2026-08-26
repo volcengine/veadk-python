@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from agentkit.sdk.tools import types as tools_types
@@ -36,8 +37,22 @@ class _SessionMetadata(tools_types.ToolsBaseModel):
     value: str = Field(alias="Value")
 
 
+class _SessionEnv(tools_types.ToolsBaseModel):
+    key: str = Field(alias="Key")
+    value: str = Field(alias="Value")
+
+
 class _CreateSessionRequestCompat(tools_types.CreateSessionRequest):
     metadata: list[_SessionMetadata] | None = Field(default=None, alias="Metadata")
+
+
+class _CreateSessionRequestFullCompat(tools_types.ToolsBaseModel):
+    tool_id: str = Field(alias="ToolId")
+    ttl: int | None = Field(default=None, alias="Ttl")
+    ttl_unit: str | None = Field(default=None, alias="TtlUnit")
+    user_session_id: str | None = Field(default=None, alias="UserSessionId")
+    metadata: list[_SessionMetadata] | None = Field(default=None, alias="Metadata")
+    envs: list[_SessionEnv] | None = Field(default=None, alias="Envs")
 
 
 class _ListSessionsRequestCompat(tools_types.ListSessionsRequest):
@@ -99,6 +114,7 @@ def build_create_session_request(
     username: str = "",
     creator_name: str = "",
     agent_kind: str = "",
+    envs: Mapping[str, str] | None = None,
 ) -> Any:
     """Build a native or compatibility CreateSession request."""
     metadata = []
@@ -136,8 +152,12 @@ def build_create_session_request(
             )
         )
     request_type: Any = tools_types.CreateSessionRequest
-    if metadata and not _model_supports_alias(request_type, "Metadata"):
+    supports_metadata = _model_supports_alias(request_type, "Metadata")
+    supports_envs = _model_supports_alias(request_type, "Envs")
+    if metadata and not supports_metadata:
         request_type = _CreateSessionRequestCompat
+    if envs and not supports_envs:
+        request_type = _CreateSessionRequestFullCompat
     request_data: dict[str, Any] = {
         "ToolId": tool_id,
         "Ttl": ttl_seconds,
@@ -146,6 +166,13 @@ def build_create_session_request(
     }
     if metadata:
         request_data["Metadata"] = metadata
+    if envs:
+        env_type = getattr(tools_types, "EnvsItemForCreateSession", _SessionEnv)
+        request_data["Envs"] = [
+            env_type(Key=key, Value=value)
+            for key, value in envs.items()
+            if key and value
+        ]
     return request_type(**request_data)
 
 

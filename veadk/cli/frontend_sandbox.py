@@ -27,7 +27,7 @@ import re
 import secrets
 import time
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import Annotated, Any, Protocol
 
@@ -138,6 +138,28 @@ _CODEX_PROJECT_HANDOFF_PERMISSIONS = CodexPermissionSettings(
     sandbox_mode="danger-full-access",
     network_access=True,
 )
+_SESSION_CREATE_ENV_ALLOWLIST = frozenset(
+    {
+        "AGENTKIT_SANDBOX_MODEL_PROVIDER",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_MODEL",
+        "CODEX_BASE_URL",
+        "CODEX_CONFIG_TOML",
+        "CODEX_MODEL",
+        "CODEX_MODEL_CATALOG_JSON",
+        "MODEL_BASE_URL",
+        "OPENCODE_BASE_URL",
+        "OPENCODE_MODEL",
+    }
+)
+_SESSION_MODEL_ENV_KEYS = frozenset(
+    {
+        "ANTHROPIC_MODEL",
+        "CODEX_MODEL",
+        "OPENCODE_MODEL",
+    }
+)
+_SESSION_CODEX_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 
 
 class SandboxError(RuntimeError):
@@ -682,7 +704,7 @@ async def _auto_resume_snapshot_batch(
         async with semaphore:
             try:
                 await resume(snapshot)
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001
                 logger.warning(
                     "Failed to auto-resume Sandbox snapshot snapshot_id=%s "
                     "session_id=%s error_type=%s",
@@ -895,6 +917,10 @@ class SandboxCodexConnection(Protocol):
 class SandboxCloudGateway(Protocol):
     """AgentKit operations needed by the Studio Session service."""
 
+    async def get_tool(self, tool_id: str) -> Any:
+        """Read one configured Sandbox Tool."""
+        raise NotImplementedError
+
     async def list_sessions(
         self, tool_id: str, username: str | None = None
     ) -> list[SandboxCloudSession]:
@@ -916,6 +942,7 @@ class SandboxCloudGateway(Protocol):
         username: str = "",
         creator_name: str = "",
         agent_kind: str = "",
+        envs: Mapping[str, str] | None = None,
     ) -> SandboxCloudSession:
         """Create a fresh remote Sandbox session."""
         raise NotImplementedError
@@ -1070,6 +1097,29 @@ class AgentkitSandboxGateway:
             created_by="",
         )
 
+    async def get_tool(self, tool_id: str) -> Any:
+        from agentkit.sdk.tools import types as tools_types
+
+        regions = self._region_candidates or ("",)
+        for index, region in enumerate(regions):
+            try:
+                return await self._call(
+                    "get_tool",
+                    tools_types.GetToolRequest(ToolId=tool_id),
+                    region=region,
+                )
+            except SandboxError:
+                raise
+            except Exception as error:
+                if is_agentkit_resource_not_found(error) and index + 1 < len(regions):
+                    continue
+                if is_agentkit_resource_not_found(error):
+                    _raise_tool_configuration_error(error)
+                raise SandboxProvisioningError(
+                    f"读取 AgentKit Tool 失败：{_safe_error_message(error)}"
+                ) from error
+        raise SandboxProvisioningError("无法在支持的地域读取 AgentKit Tool。")
+
     async def list_sessions(
         self, tool_id: str, username: str | None = None
     ) -> list[SandboxCloudSession]:
@@ -1212,6 +1262,7 @@ class AgentkitSandboxGateway:
         username: str = "",
         creator_name: str = "",
         agent_kind: str = "",
+        envs: Mapping[str, str] | None = None,
     ) -> SandboxCloudSession:
         user_session_id = _build_studio_user_session_id()
         display_name = session_display_name_metadata_value(display_name)
@@ -1225,6 +1276,7 @@ class AgentkitSandboxGateway:
                 username=username,
                 creator_name=creator_name,
                 agent_kind=agent_kind,
+                envs=envs,
             )
             create_task = asyncio.create_task(
                 self._call("create_session", request, region=region)
@@ -1521,6 +1573,10 @@ class SandboxConversationService:
             raise SandboxConfigurationError(f"管理员未配置{detail}Sandbox Tool。")
         return tool_id
 
+    async def get_tool(self, *, persistent: bool = False) -> Any:
+        """Read the configured transient or snapshot Sandbox Tool."""
+        return await self._gateway.get_tool(self._tool_id(persistent=persistent))
+
     async def _cloud_session(self, session_id: str) -> SandboxCloudSession:
         """Find a Session across the configured transient and snapshot Tools."""
         tools = self._tools()
@@ -1649,6 +1705,7 @@ class SandboxConversationService:
         display_name: object = "",
         creator_name: str = "",
         persistent: object = True,
+        envs: Mapping[str, str] | None = None,
     ) -> SandboxCloudSession:
         """Create a cloud Session without opening a conversation connection."""
         if not isinstance(display_name, str):
@@ -1660,6 +1717,26 @@ class SandboxConversationService:
             )
         if not isinstance(persistent, bool):
             raise SandboxValidationError("persistent 必须是布尔值。")
+        session_envs: dict[str, str] | None = None
+        if envs is not None:
+            if not isinstance(envs, Mapping):
+                raise SandboxValidationError("Session 环境变量格式无效。")
+            session_envs = {}
+            for key, value in envs.items():
+                if key not in _SESSION_CREATE_ENV_ALLOWLIST:
+                    raise SandboxValidationError("Session 环境变量不支持该键。")
+                if not isinstance(value, str):
+                    raise SandboxValidationError("Session 环境变量值必须是文本。")
+                normalized = value.strip()
+                if not normalized:
+                    continue
+                if key in _SESSION_MODEL_ENV_KEYS and not (
+                    _SESSION_CODEX_MODEL_RE.fullmatch(normalized)
+                ):
+                    raise SandboxValidationError("模型 ID 格式无效。")
+                session_envs[key] = normalized
+            if not session_envs:
+                session_envs = None
         tool_id = self._tool_id(persistent=persistent)
         await self.cleanup_expired()
         async with self._registry_lock:
@@ -1675,6 +1752,7 @@ class SandboxConversationService:
                 owner_id,
                 creator_name,
                 self._agent_kind,
+                **({"envs": session_envs} if session_envs else {}),
             )
             authoritative = await self._gateway.get_session(
                 tool_id, created.instance_id

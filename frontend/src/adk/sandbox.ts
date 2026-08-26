@@ -229,6 +229,7 @@ export interface SandboxListOptions extends SandboxRequestOptions {
 
 export interface SandboxStartOptions extends SandboxRequestOptions {
   displayName?: string;
+  modelId?: string;
   persistent?: boolean;
 }
 
@@ -1162,6 +1163,7 @@ function createSandboxClient(
         headers: sandboxHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           displayName: options.displayName?.trim() ?? "",
+          ...(options.modelId?.trim() ? { modelId: options.modelId.trim() } : {}),
           ...(config.textOnly ? {} : { persistent: options.persistent ?? true }),
         }),
         signal: options.signal,

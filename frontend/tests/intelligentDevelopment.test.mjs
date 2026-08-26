@@ -181,6 +181,7 @@ test("text-only intelligent client uses its fixed endpoint and omits skills", as
 
   await intelligentDevelopmentClient.startSession({
     displayName: "Build an agent",
+    modelId: "doubao-test",
     persistent: true,
   });
   await intelligentDevelopmentClient.sendMessage({
@@ -193,7 +194,7 @@ test("text-only intelligent client uses its fixed endpoint and omits skills", as
     {
       url: "/web/intelligent-development/sessions",
       method: "POST",
-      body: { displayName: "Build an agent" },
+      body: { displayName: "Build an agent", modelId: "doubao-test" },
     },
     {
       url: "/web/intelligent-development/sessions/dev%2F1/messages",
@@ -732,6 +733,56 @@ test("trusted deployment previews verified files but never deploys browser file 
 
 test("intelligent goal input shares IME handling and semantic responsive styles", () => {
   assert.match(createSource, /isImeCompositionEvent\(event\.nativeEvent\)/);
+  assert.match(createSource, /listModelOptions\(\{/);
+  assert.match(
+    createSource,
+    /function IntelligentModelSelect\([\s\S]*?<NewChatCompactSelect[\s\S]*?label="模型"[\s\S]*?hideLabel[\s\S]*?searchable/,
+  );
+  assert.match(
+    createSource,
+    /options=\{options\}/,
+  );
+  assert.match(
+    createSource,
+    /<IntelligentModelSelect[\s\S]*?onRetry=\{\(\) => setModelsReloadKey/,
+  );
+  assert.match(createSource, /model\.available \|\| model\.lifecycleStatus === "Retiring"/);
+  assert.match(
+    createSource,
+    /const defaultModelId = capabilities\?\.model\?\.id\.trim\(\) \?\? ""/,
+  );
+  assert.match(
+    createSource,
+    /const \[selectedModelId, setSelectedModelId\] = useState\(""\)/,
+  );
+  assert.match(
+    createSource,
+    /const displayModelId = selectedModelId \|\| defaultModelId/,
+  );
+  assert.match(
+    createSource,
+    /value: displayModelId,[\s\S]*?label: displayModelId,[\s\S]*?description: "当前配置"/,
+  );
+  assert.doesNotMatch(
+    createSource,
+    /DEFAULT_MODEL_ID|__default__|label: "默认模型"|当前默认模型/,
+  );
+  assert.match(
+    createSource,
+    /<div className="ic-composer">[\s\S]*?<textarea[\s\S]*?<div className="ic-actions">[\s\S]*?<div className="ic-composer-tools">[\s\S]*?<div className="ic-model-select">[\s\S]*?<div className="ic-action-buttons">/,
+  );
+  assert.doesNotMatch(createSource, /开发环境最多保留 8 小时/);
+  assert.match(
+    createSource,
+    /const modelOverride =[\s\S]*?selectedModelId && selectedModelId !== defaultModelId[\s\S]*?\? selectedModelId[\s\S]*?: ""/,
+  );
+  assert.match(
+    createSource,
+    /await onCreate\(value, modelOverride\)/,
+  );
+  const submitDisabledBlock = createSource.match(/const submitDisabled =([\s\S]*?);/)?.[1] ?? "";
+  assert.doesNotMatch(submitDisabledBlock, /modelsLoading/);
+  assert.doesNotMatch(submitDisabledBlock, /selectedModelId/);
   assert.match(createSource, /event\.key === "Enter"[\s\S]*?!event\.shiftKey/);
   assert.match(createStyles, /background: hsl\(var\(--canvas\)\)/);
   assert.match(createStyles, /background: hsl\(var\(--panel\)\)/);
@@ -748,7 +799,25 @@ test("intelligent goal input shares IME handling and semantic responsive styles"
   assert.match(createSource, /className="ic-primary"[\s\S]*?aria-busy=\{creating\}/);
   assert.match(createStyles, /\.ic-root \{[\s\S]*?overflow: hidden/);
   assert.match(createStyles, /\.ic-main \{[\s\S]*?flex: 1[\s\S]*?min-height: 0/);
-  assert.match(createStyles, /\.ic-actions > span \{[^}]*font-size: 12px/);
+  assert.match(createStyles, /\.ic-composer \{[\s\S]*?grid-template-rows: minmax\(104px, auto\) 36px/);
+  assert.match(createStyles, /\.ic-composer:focus-within \{[\s\S]*?border-color: hsl\(var\(--ring\)\)/);
+  assert.match(createStyles, /\.ic-goal-input \{[\s\S]*?border: 0/);
+  assert.match(createStyles, /\.ic-goal-input \{[\s\S]*?resize: none/);
+  assert.match(createStyles, /\.ic-model-select \.new-chat-compact-select \{[\s\S]*?width: 220px/);
+  assert.match(createStyles, /\.ic-model-select \.new-chat-compact-select__menu \{[\s\S]*?bottom: calc\(100% \+ 6px\)[\s\S]*?width: min\(320px, calc\(100vw - 48px\)\)/);
+  assert.match(createStyles, /\.ic-actions \{[\s\S]*?align-items: center/);
+  assert.match(
+    appSource,
+    /useState<IntelligentDevelopmentCapabilities \| null>\(null\)/,
+  );
+  assert.match(
+    appSource,
+    /model\?: unknown/,
+  );
+  assert.match(
+    appSource,
+    /capability\.model = \{[\s\S]*?configured: model\.configured,[\s\S]*?id: model\.id/,
+  );
 });
 
 test("intelligent preparation acknowledges the goal and exposes cancellable progress", async () => {
@@ -759,7 +828,11 @@ test("intelligent preparation acknowledges the goal and exposes cancellable prog
   );
   const render = (preparationStage) => renderToStaticMarkup(
     React.createElement(IntelligentCreate, {
-      capabilities: { enabled: true, reason: "" },
+      capabilities: {
+        enabled: true,
+        reason: "",
+        model: { configured: true, id: "doubao-default-model" },
+      },
       loading: false,
       preparationStage,
       error: "",
@@ -782,11 +855,14 @@ test("intelligent preparation acknowledges the goal and exposes cancellable prog
     idle,
     /只需说明 Agent 要解决的问题；如有影响结果的关键信息，会在开始前向你确认。/,
   );
-  assert.match(idle, /开发环境最多保留 8 小时，可在当前任务中持续优化。/);
+  assert.doesNotMatch(idle, /开发环境最多保留 8 小时/);
+  assert.doesNotMatch(idle, /可在当前任务中持续优化/);
   assert.match(
     idle,
     /placeholder="例如：创建一个能读取销售数据、生成周报并校验输出格式的 Agent"/,
   );
+  assert.match(idle, /aria-label="模型：doubao-default-model"/);
+  assert.match(idle, />doubao-default-model</);
   assert.doesNotMatch(
     createSource,
     /描述目标后，AI|VeADK Agent|开发会话|同一 Thread/,
@@ -827,7 +903,14 @@ test("intelligent preparation ends before the first build turn and resets on nav
     /setSandboxSession\(connected\)[\s\S]*?setIntelligentPreparationStage\(null\)[\s\S]*?await sendSandboxMessage\(goal, \[\], \[\], connected\)/,
   );
   assert.doesNotMatch(appSource, /function sendIntelligentInitialMessage\(/);
-  assert.match(createSource, /const submitDisabled = loading \|\| creating \|\| unavailable \|\| !goal\.trim\(\)/);
+  const submitDisabledBlock = createSource.match(/const submitDisabled =([\s\S]*?);/)?.[1] ?? "";
+  assert.doesNotMatch(submitDisabledBlock, /modelsLoading/);
+  assert.doesNotMatch(submitDisabledBlock, /selectedModelId/);
+  assert.match(submitDisabledBlock, /!goal\.trim\(\)/);
+  assert.match(
+    appSource,
+    /startSession\(\{[\s\S]*?displayName: goal\.slice\(0, 40\),[\s\S]*?modelId,[\s\S]*?signal:/,
+  );
   assert.match(appSource, /onCancel=\{cancelIntelligentPreparation\}/);
 });
 

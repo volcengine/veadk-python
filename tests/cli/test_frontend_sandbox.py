@@ -20,7 +20,7 @@ import asyncio
 import json
 import re
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -58,6 +58,7 @@ from veadk.cli.frontend_sandbox import (
     SandboxConversationService,
     SandboxProvisioningError,
     SandboxSessionNotFoundError,
+    SandboxValidationError,
     mount_sandbox_agent_routes,
     mount_sandbox_routes,
 )
@@ -308,6 +309,7 @@ class _FakeGateway:
         self.usernames: list[str | None] = []
         self.creator_names: list[str] = []
         self.agent_kinds: list[str] = []
+        self.envs: list[dict[str, str] | None] = []
         self.deleted: list[SandboxCloudSession] = []
         self.deleted_snapshots: list[SandboxCloudSnapshot] = []
         self.thread_ids: list[str] = []
@@ -327,6 +329,10 @@ class _FakeGateway:
             )
         }
         self.snapshots: dict[str, SandboxCloudSnapshot] = {}
+
+    async def get_tool(self, tool_id: str) -> SimpleNamespace:
+        self.tool_ids.append(tool_id)
+        return SimpleNamespace(envs=[])
 
     async def list_sessions(
         self, tool_id: str, username: str | None = None
@@ -363,12 +369,14 @@ class _FakeGateway:
         username: str = "",
         creator_name: str = "",
         agent_kind: str = "",
+        envs: Mapping[str, str] | None = None,
     ) -> SandboxCloudSession:
         self.created += 1
         self.tool_ids.append(tool_id)
         self.display_names.append(display_name)
         self.creator_names.append(creator_name)
         self.agent_kinds.append(agent_kind)
+        self.envs.append(dict(envs) if envs is not None else None)
         session = SandboxCloudSession(
             tool_id=tool_id,
             instance_id=f"remote-{self.created}",
@@ -1533,8 +1541,9 @@ def test_codex_project_handoff_creation_retry_preserves_original_error() -> None
             username: str = "",
             creator_name: str = "",
             agent_kind: str = "",
+            envs: Mapping[str, str] | None = None,
         ) -> SandboxCloudSession:
-            del tool_id, display_name, username, creator_name, agent_kind
+            del tool_id, display_name, username, creator_name, agent_kind, envs
             self.created += 1
             raise SandboxProvisioningError("AgentKit Tool 已失效。")
 
@@ -2400,6 +2409,73 @@ async def test_service_allows_multiple_sessions_for_the_same_owner() -> None:
 
 
 @pytest.mark.asyncio
+async def test_service_passes_allowed_session_environment_to_gateway() -> None:
+    gateway = _FakeGateway()
+    service = SandboxConversationService(gateway, tool_id="tool-studio")
+    envs = {
+        "AGENTKIT_SANDBOX_MODEL_PROVIDER": "volcengine",
+        "OPENCODE_MODEL": "doubao-seed-2-1-pro-260628",
+        "CODEX_MODEL": "doubao-seed-2-1-pro-260628",
+        "ANTHROPIC_MODEL": "doubao-seed-2-1-pro-260628",
+        "OPENCODE_BASE_URL": "https://ark.cn-beijing.volces.com/api/v3",
+        "CODEX_BASE_URL": "https://ark.cn-beijing.volces.com/api/v3",
+        "MODEL_BASE_URL": "https://ark.cn-beijing.volces.com/api/v3",
+        "ANTHROPIC_BASE_URL": "https://ark.cn-beijing.volces.com/api/v3",
+        "CODEX_CONFIG_TOML": 'model = "doubao-seed-2-1-pro-260628"',
+    }
+
+    await service.create(
+        "alice",
+        display_name="智能构建",
+        persistent=False,
+        envs=envs,
+    )
+
+    assert gateway.envs == [envs]
+
+
+@pytest.mark.asyncio
+async def test_service_omits_blank_session_environment_values() -> None:
+    gateway = _FakeGateway()
+    service = SandboxConversationService(gateway, tool_id="tool-studio")
+
+    await service.create(
+        "alice",
+        display_name="智能构建",
+        persistent=False,
+        envs={"CODEX_MODEL": "   "},
+    )
+
+    assert gateway.envs == [None]
+
+
+@pytest.mark.asyncio
+async def test_service_rejects_unsupported_session_environment() -> None:
+    service = SandboxConversationService(_FakeGateway(), tool_id="tool-studio")
+
+    with pytest.raises(SandboxValidationError, match="不支持该键"):
+        await service.create(
+            "alice",
+            display_name="智能构建",
+            persistent=False,
+            envs={"CODEX_API_KEY": "secret"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_service_rejects_invalid_session_model_environment() -> None:
+    service = SandboxConversationService(_FakeGateway(), tool_id="tool-studio")
+
+    with pytest.raises(SandboxValidationError, match="模型 ID 格式无效"):
+        await service.create(
+            "alice",
+            display_name="智能构建",
+            persistent=False,
+            envs={"CODEX_MODEL": "model; export SECRET=value"},
+        )
+
+
+@pytest.mark.asyncio
 async def test_gateway_accepts_a_lazy_client_factory() -> None:
     class _Client:
         def list_tools(self, request: object) -> str:
@@ -2616,6 +2692,37 @@ async def test_gateway_creates_session_with_username_metadata() -> None:
     assert session.created_by == "alice"
     assert session.creator_name == "alice@example.com"
     assert session.agent_kind == "deepseek-harness"
+
+
+@pytest.mark.asyncio
+async def test_gateway_creates_session_with_session_environment() -> None:
+    requests: list[dict[str, object]] = []
+
+    class _Client:
+        def create_session(self, request: object) -> SimpleNamespace:
+            requests.append(request.model_dump(by_alias=True, exclude_none=True))
+            return SimpleNamespace(
+                session_id="remote-model",
+                user_session_id="model-agent",
+                endpoint="https://sandbox.example",
+            )
+
+    await AgentkitSandboxGateway(_Client()).create_session(
+        "tool-sdk",
+        "智能构建",
+        "alice",
+        "alice@example.com",
+        "intelligent-development",
+        envs={
+            "CODEX_MODEL": "doubao-seed-2-1-pro-260628",
+            "CODEX_CONFIG_TOML": 'model = "doubao-seed-2-1-pro-260628"',
+        },
+    )
+
+    envs = {item["Key"]: item["Value"] for item in requests[0]["Envs"]}
+    assert envs["CODEX_MODEL"] == "doubao-seed-2-1-pro-260628"
+    assert "doubao-seed-2-1-pro-260628" in envs["CODEX_CONFIG_TOML"]
+    assert "CODEX_API_KEY" not in str(requests[0])
 
 
 @pytest.mark.asyncio
