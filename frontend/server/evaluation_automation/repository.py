@@ -159,6 +159,8 @@ class AgentKitAutoEvaluationRepository:
         page_size: int = 100,
     ) -> list[AutoEvaluationCase]:
         workspace_id = await self._resolve_workspace_id()
+        if workspace_id is None:
+            return []
         result: list[AutoEvaluationCase] = []
         for kind in ("good", "bad"):
             name = auto_set_name(agent_name, kind)
@@ -214,6 +216,17 @@ class AgentKitAutoEvaluationRepository:
     async def _ensure_set(self, agent_name: str, kind: str) -> _SetRef:
         workspace_id = await self._resolve_workspace_id()
         name = auto_set_name(agent_name, kind)
+        if workspace_id is None:
+            try:
+                return await self._create_set(name, workspace_id=None)
+            except AgentKitOpenApiError as error:
+                if error.code != _DUPLICATE_DATASET_ERROR_CODE:
+                    raise
+                existing = await self._wait_for_set(name, workspace_id=None)
+                if existing is not None:
+                    return existing
+                raise
+
         fallback = self._fallback_name(name, workspace_id)
         for candidate in (name, fallback):
             existing = await self._find_set(candidate, workspace_id=workspace_id)
@@ -229,10 +242,13 @@ class AgentKitAutoEvaluationRepository:
                 return existing
         return await self._create_set(fallback, workspace_id=workspace_id)
 
-    async def _create_set(self, name: str, *, workspace_id: str) -> _SetRef:
+    async def _create_set(self, name: str, *, workspace_id: str | None) -> _SetRef:
+        query = dict(self._project_query)
+        if workspace_id:
+            query["WorkspaceId"] = workspace_id
         response = await self._post(
             action="CreateEvaluationSet",
-            query={**self._project_query, "WorkspaceId": workspace_id},
+            query=query,
             payload={
                 "Name": name,
                 "Description": "AgentKit Studio 会话静默自动评测集",
@@ -262,7 +278,7 @@ class AgentKitAutoEvaluationRepository:
             raise RuntimeError("AgentKit automatic evaluation set is not visible")
         return visible
 
-    async def _resolve_workspace_id(self) -> str:
+    async def _resolve_workspace_id(self) -> str | None:
         if self._workspace_id:
             return self._workspace_id
         response = await self._post(
@@ -278,12 +294,15 @@ class AgentKitAutoEvaluationRepository:
             if workspace_id:
                 self._workspace_id = workspace_id
                 return workspace_id
-        raise RuntimeError("AgentKit account does not expose an evaluation workspace")
+        return None
 
-    async def _find_set(self, name: str, *, workspace_id: str) -> _SetRef | None:
+    async def _find_set(self, name: str, *, workspace_id: str | None) -> _SetRef | None:
+        query = dict(self._project_query)
+        if workspace_id:
+            query["WorkspaceId"] = workspace_id
         response = await self._post(
             action="ListEvaluationSets",
-            query={**self._project_query, "WorkspaceId": workspace_id},
+            query=query,
             payload={"Name": name, "PageNumber": 1, "PageSize": 100},
         )
         for item in (response.get("Result") or {}).get("EvaluationSets") or []:
@@ -296,10 +315,13 @@ class AgentKitAutoEvaluationRepository:
             item_id = str(item.get("Id") or "")
             if not item_id or not resolved_workspace_id:
                 raise RuntimeError("AgentKit evaluation set has invalid identifiers")
+            self._workspace_id = resolved_workspace_id
             return _SetRef(item_id, resolved_workspace_id, name)
         return None
 
-    async def _wait_for_set(self, name: str, *, workspace_id: str) -> _SetRef | None:
+    async def _wait_for_set(
+        self, name: str, *, workspace_id: str | None
+    ) -> _SetRef | None:
         for delay in _LOOKUP_DELAYS:
             await asyncio.sleep(delay)
             existing = await self._find_set(name, workspace_id=workspace_id)

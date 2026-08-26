@@ -21,6 +21,7 @@ import pytest
 from veadk.integrations.agentkit.evaluation.client import (
     AgentKitEvaluationDatasetsClient,
     AgentKitOpenApiError,
+    EvaluationSetRef,
     feedback_set_name,
 )
 
@@ -159,6 +160,62 @@ async def test_ensure_set_creates_and_resolves_workspace() -> None:
         field["Key"] for field in create_payload["EvaluationSetSchema"]["FieldSchemas"]
     }
     assert {"input", "output", "session_id", "message_id"} <= field_keys
+
+
+@pytest.mark.asyncio
+async def test_ensure_set_creates_first_dataset_without_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+    created = False
+
+    async def post(
+        *,
+        action: str,
+        payload: dict[str, Any],
+        query: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        nonlocal created
+        calls.append({"action": action, "payload": payload, "query": query})
+        if action == "ListEvaluationSets":
+            if created and payload.get("Name") == "客服助手_good_case":
+                return {
+                    "Result": {
+                        "EvaluationSets": [
+                            {
+                                "Id": "set-1",
+                                "Name": "客服助手_good_case",
+                                "WorkspaceId": "workspace-1",
+                            }
+                        ]
+                    }
+                }
+            return {"Result": {"EvaluationSets": []}}
+        if action == "CreateEvaluationSet":
+            created = True
+            return {"Result": {"EvaluationSetId": "set-1"}}
+        raise AssertionError(action)
+
+    monkeypatch.setattr(
+        "veadk.integrations.agentkit.evaluation.client.asyncio.sleep",
+        _no_sleep,
+    )
+    client = AgentKitEvaluationDatasetsClient(post, project_name="support")
+
+    evaluation_set = await client.ensure_feedback_set("客服助手", "good")
+
+    assert evaluation_set == EvaluationSetRef(
+        id="set-1",
+        workspace_id="workspace-1",
+        name="客服助手_good_case",
+    )
+    assert [call["action"] for call in calls] == [
+        "ListEvaluationSets",
+        "CreateEvaluationSet",
+        "ListEvaluationSets",
+    ]
+    assert calls[1]["query"] == {"ProjectName": "support"}
+    assert calls[2]["query"] == {"ProjectName": "support"}
 
 
 @pytest.mark.asyncio

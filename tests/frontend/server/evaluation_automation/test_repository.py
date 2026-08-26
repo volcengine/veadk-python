@@ -270,3 +270,82 @@ async def test_agentkit_repository_creates_and_lists_an_auto_dataset() -> None:
         for field in create_call["payload"]["EvaluationSetSchema"]["FieldSchemas"]
     }
     assert {"source", "score", "reason", "evaluator_version"} <= field_keys
+
+
+@pytest.mark.asyncio
+async def test_agentkit_repository_creates_first_dataset_without_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+    created = False
+
+    async def post(
+        *, action: str, payload: dict[str, Any], query: dict[str, str] | None = None
+    ) -> dict[str, Any]:
+        nonlocal created
+        calls.append({"action": action, "payload": payload, "query": query})
+        if action == "ListEvaluationSets":
+            if created and payload.get("Name") == "客服助手_auto_good_case":
+                return {
+                    "Result": {
+                        "EvaluationSets": [
+                            {
+                                "Id": "auto-good",
+                                "Name": "客服助手_auto_good_case",
+                                "WorkspaceId": "workspace-1",
+                            }
+                        ]
+                    }
+                }
+            return {"Result": {"EvaluationSets": []}}
+        if action == "CreateEvaluationSet":
+            created = True
+            return {"Result": {"EvaluationSetId": "auto-good"}}
+        if action == "BatchCreateEvaluationSetItems":
+            return {
+                "Result": {
+                    "ItemOutputs": [
+                        {"ItemId": "item-1", "ItemKey": "key-1", "IsNewItem": True}
+                    ]
+                }
+            }
+        raise AssertionError(action)
+
+    async def no_sleep(delay: float) -> None:
+        del delay
+
+    monkeypatch.setattr(
+        "frontend.server.evaluation_automation.repository.asyncio.sleep",
+        no_sleep,
+    )
+    repository = AgentKitAutoEvaluationRepository(post, project_name="support")
+    case = AutoEvaluationCase(
+        id="",
+        itemKey="key-1",
+        kind="good",
+        input="问题",
+        output="回答",
+        agentName="客服助手",
+        sessionId="session",
+        messageId="message",
+        runtimeId="runtime",
+        invocationId="invocation",
+        userId="user",
+        createdAt="2026-08-05T10:00:00+08:00",
+        score=0.92,
+        reason="回答完整。",
+        evaluatorVersion="v1",
+    )
+
+    stored = await repository.upsert(case)
+
+    assert stored.id == "item-1"
+    assert stored.workspace_id == "workspace-1"
+    assert [call["action"] for call in calls] == [
+        "ListEvaluationSets",
+        "CreateEvaluationSet",
+        "ListEvaluationSets",
+        "BatchCreateEvaluationSetItems",
+    ]
+    assert calls[1]["query"] == {"ProjectName": "support"}
+    assert calls[2]["query"] == {"ProjectName": "support"}
