@@ -40,11 +40,11 @@ test("renders an accessible evaluation status with streaming priority", () => {
   assert.match(sidebarSource, /evaluatingSids\?: Set<string>/);
   assert.match(
     sidebarSource,
-    /const streaming = intelligent[\s\S]*?: streamingSids\?\.has\(item\.id\) === true/,
+    /const streaming = streamingSids\?\.has\(item\.id\) === true/,
   );
   assert.match(
     sidebarSource,
-    /const evaluating = !intelligent && !streaming[\s\S]*?evaluatingSids\?\.has\(item\.id\) === true/,
+    /const evaluating = !streaming[\s\S]*?evaluatingSids\?\.has\(item\.id\) === true/,
   );
   assert.match(sidebarSource, /className="history-evaluating-status"[\s\S]*?评测中/);
   assert.match(stylesSource, /\.history-evaluating\s*\{[\s\S]*?animation: history-evaluation-pulse/);
