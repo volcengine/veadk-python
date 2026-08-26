@@ -122,20 +122,26 @@ def test_studio_findskill_route_uses_studio_skill_catalog(
 
 
 @pytest.mark.parametrize(
-    ("agent_info_status", "expected_agent_name"),
-    [(200, "客服助手"), (404, "agent")],
-    ids=["agent-info", "legacy-runtime-fallback"],
+    ("agent_info_status", "expected_agent_name", "initially_empty"),
+    [
+        (200, "客服助手", False),
+        (404, "agent", False),
+        (200, "客服助手", True),
+    ],
+    ids=["agent-info", "legacy-runtime-fallback", "first-feedback-dataset"],
 )
 def test_message_feedback_writes_dataset_and_session_state(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     agent_info_status: int,
     expected_agent_name: str,
+    initially_empty: bool,
 ) -> None:
     app = _create_frontend_app(monkeypatch, tmp_path)
     openapi_calls: list[dict[str, Any]] = []
     session_patches: list[dict[str, Any]] = []
     annotation_comment = "选中片段：回答\n\n批注：事实错误"
+    created = False
 
     class _FakeRuntimeClient:
         def __init__(self, **kwargs: Any) -> None:
@@ -200,6 +206,7 @@ def test_message_feedback_writes_dataset_and_session_state(
             raise AssertionError((method, url))
 
         async def post(self, url: str, **kwargs: Any) -> _FakeResponse:
+            nonlocal created
             del url
             action = kwargs["params"]["Action"]
             openapi_calls.append(
@@ -210,6 +217,8 @@ def test_message_feedback_writes_dataset_and_session_state(
                 }
             )
             if action == "ListEvaluationSets":
+                if initially_empty and not created:
+                    return _FakeResponse({"Result": {"EvaluationSets": []}})
                 return _FakeResponse(
                     {
                         "Result": {
@@ -223,6 +232,9 @@ def test_message_feedback_writes_dataset_and_session_state(
                         }
                     }
                 )
+            if action == "CreateEvaluationSet":
+                created = True
+                return _FakeResponse({"Result": {"EvaluationSetId": "set-1"}})
             if action == "BatchCreateEvaluationSetItems":
                 return _FakeResponse(
                     {
@@ -267,15 +279,22 @@ def test_message_feedback_writes_dataset_and_session_state(
     assert response.json()["evaluationItemId"] == "item-1"
     assert response.json()["evaluationSetName"] == (f"{expected_agent_name}_good_case")
     assert response.json()["statePersistence"] == "browser"
-    assert [call["action"] for call in openapi_calls] == [
+    expected_actions = [
         "ListEvaluationSets",
         "ListEvaluationSets",
         "BatchCreateEvaluationSetItems",
         "ListEvaluationSets",
         "ListEvaluationSets",
     ]
+    if initially_empty:
+        expected_actions.insert(1, "CreateEvaluationSet")
+    assert [call["action"] for call in openapi_calls] == expected_actions
     assert openapi_calls[0]["params"]["ProjectName"] == "support"
-    assert openapi_calls[1]["params"]["WorkspaceId"] == "workspace-1"
+    if initially_empty:
+        assert "WorkspaceId" not in openapi_calls[1]["params"]
+        assert "WorkspaceId" not in openapi_calls[2]["params"]
+    else:
+        assert openapi_calls[1]["params"]["WorkspaceId"] == "workspace-1"
     state = session_patches[0]["state_delta"]["veadk_feedback:assistant-event"]
     assert state["rating"] == "good"
     assert state["comment"] == annotation_comment
