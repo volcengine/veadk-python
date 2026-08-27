@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator, Mapping
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from threading import Event, Thread
 from types import SimpleNamespace
@@ -29,8 +30,21 @@ from httpx import Response
 
 from frontend.server import intelligent_development_routes as routes
 from frontend.server import intelligent_development_source as source_module
+from frontend.server.intelligent_development_projects import routes as project_routes
 from frontend.server.deployment_source import DeploymentSourceError
 from frontend.server.intelligent_development import StudioCredentials
+from frontend.server.intelligent_development_projects import (
+    IntelligentDevelopmentProject,
+    IntelligentDevelopmentProjectStorageUnavailable,
+    IntelligentDevelopmentSessionBinding,
+    IntelligentDevelopmentVersion,
+    IntelligentDevelopmentVersionIntegrityError,
+)
+from frontend.server.intelligent_development_source import (
+    TrustedDevelopmentArtifact,
+    TrustedDeploymentSource,
+    TrustedSourceFile,
+)
 from frontend.server.intelligent_development_task import (
     CompletionContract,
     IntentDecision,
@@ -295,7 +309,12 @@ class _Remote:
         return ""
 
 
-def _app(gateway: _FakeGateway, *, configured: bool = True) -> FastAPI:
+def _app(
+    gateway: _FakeGateway,
+    *,
+    configured: bool = True,
+    project_service=None,
+) -> FastAPI:
     app = FastAPI()
     service = SandboxConversationService(
         routes.IntelligentDevelopmentGateway(gateway),
@@ -315,6 +334,7 @@ def _app(gateway: _FakeGateway, *, configured: bool = True) -> FastAPI:
         owner,
         owner,
         lambda: StudioCredentials("access", "secret", "token"),
+        project_service=project_service,
         configured=configured,
     )
     return app
@@ -363,6 +383,8 @@ def test_capabilities_requires_sandbox_dev_model_credentials() -> None:
         "enabled": False,
         "reason": "SANDBOX_DEV 模型配置不可用，请重新部署 Studio。",
         "model": {"configured": False, "id": "doubao-seed-1-8-251228"},
+        "projectStorageEnabled": False,
+        "projectStorageReason": "管理员未配置项目存储",
     }
 
 
@@ -485,6 +507,238 @@ def test_create_rejects_unknown_fields() -> None:
     assert gateway.created == 0
 
 
+def test_create_binds_selected_project_version() -> None:
+    gateway = _FakeGateway()
+    now = datetime(2026, 8, 26, tzinfo=timezone.utc)
+    binding = IntelligentDevelopmentSessionBinding(
+        ownerId="alice",
+        sessionId="session-1",
+        projectId="a" * 32,
+        projectName="天气 Agent",
+        baseVersionId="b" * 32,
+        createdAt=now,
+        updatedAt=now,
+    )
+    project_service = SimpleNamespace(create_binding=AsyncMock(return_value=binding))
+    with TestClient(_app(gateway, project_service=project_service)) as client:
+        response = client.post(
+            "/web/intelligent-development/sessions",
+            headers={"X-Test-User": "alice"},
+            json={
+                "displayName": "继续优化天气 Agent",
+                "projectId": "a" * 32,
+                "baseVersionId": "b" * 32,
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["projectId"] == "a" * 32
+    assert response.json()["baseVersionId"] == "b" * 32
+    project_service.create_binding.assert_awaited_once_with(
+        owner_id="alice",
+        session_id="session-1",
+        display_name="继续优化天气 Agent",
+        project_id="a" * 32,
+        base_version_id="b" * 32,
+    )
+
+
+def test_project_list_exposes_storage_failure_as_retryable() -> None:
+    gateway = _FakeGateway()
+    project_service = SimpleNamespace(
+        list_projects=AsyncMock(
+            side_effect=IntelligentDevelopmentProjectStorageUnavailable(
+                "项目存储暂时不可用，请稍后重试。"
+            )
+        )
+    )
+    with TestClient(_app(gateway, project_service=project_service)) as client:
+        response = client.get(
+            "/web/intelligent-development/projects",
+            headers={"X-Test-User": "alice"},
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == {
+        "code": "INTELLIGENT_DEVELOPMENT_STORAGE_UNAVAILABLE",
+        "message": "项目存储暂时不可用，请稍后重试。",
+        "retryable": True,
+    }
+
+
+def test_project_list_returns_owner_scoped_summaries() -> None:
+    gateway = _FakeGateway()
+    now = datetime(2026, 8, 26, tzinfo=timezone.utc)
+    project = IntelligentDevelopmentProject(
+        projectId="a" * 32,
+        ownerId="alice",
+        name="天气 Agent",
+        createdAt=now,
+        updatedAt=now,
+        latestVersionId="b" * 32,
+        latestVersionCreatedAt=now,
+        latestVersionVerified=True,
+        latestAgentName="weather_agent",
+        versionCount=1,
+    )
+    project_service = SimpleNamespace(list_projects=AsyncMock(return_value=[project]))
+    with TestClient(_app(gateway, project_service=project_service)) as client:
+        response = client.get(
+            "/web/intelligent-development/projects",
+            headers={"X-Test-User": "alice"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["projects"][0]["projectId"] == "a" * 32
+    assert response.json()["projects"][0]["versionCount"] == 1
+    assert "ownerId" not in response.json()["projects"][0]
+
+
+def test_project_versions_keep_integrity_failures_distinct_from_empty_data() -> None:
+    gateway = _FakeGateway()
+    project_service = SimpleNamespace(
+        list_versions=AsyncMock(
+            side_effect=IntelligentDevelopmentVersionIntegrityError(
+                "项目版本记录格式无效。"
+            )
+        )
+    )
+    with TestClient(_app(gateway, project_service=project_service)) as client:
+        response = client.get(
+            f"/web/intelligent-development/projects/{'a' * 32}/versions",
+            headers={"X-Test-User": "alice"},
+        )
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == {
+        "code": "INTELLIGENT_DEVELOPMENT_VERSION_INVALID",
+        "message": "项目版本记录格式无效。",
+        "retryable": False,
+    }
+
+
+def test_project_source_reads_tos_without_resolving_a_live_sandbox(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _FakeGateway()
+    now = datetime(2026, 8, 26, tzinfo=timezone.utc)
+    version = IntelligentDevelopmentVersion(
+        projectId="a" * 32,
+        versionId="b" * 32,
+        parentVersionId="e" * 32,
+        sourceSessionId="expired-session",
+        createdAt=now,
+        intentSummary="构建天气 Agent",
+        acceptanceCriteria=["返回天气"],
+        artifactSha256="c" * 64,
+        validationReportSha256="d" * 64,
+        artifactSize=4,
+        fileCount=1,
+        agentName="weather_agent",
+        entryPoint="app.py",
+        verified=True,
+        validationSummary="验证通过",
+        gateSummary=["local-checks"],
+        validatedAt=now.isoformat(),
+    )
+    trusted = TrustedDeploymentSource(
+        entry_point="app.py",
+        agent_name="weather_agent",
+        artifact_sha256="c" * 64,
+        validation_report_sha256="d" * 64,
+        file_count=1,
+        artifact_size=4,
+        validated_at=now.isoformat(),
+        gate_summary=("local-checks",),
+        verified=True,
+        validation_summary="验证通过",
+        files=(TrustedSourceFile("app.py", "root_agent = object()\n"),),
+        project_id="a" * 32,
+        version_id="b" * 32,
+    )
+    materialize = AsyncMock(return_value=trusted)
+    monkeypatch.setattr(
+        project_routes,
+        "materialize_intelligent_development_preview",
+        materialize,
+    )
+    project_service = SimpleNamespace(get_version=AsyncMock(return_value=version))
+
+    with TestClient(_app(gateway, project_service=project_service)) as client:
+        response = client.get(
+            f"/web/intelligent-development/projects/{'a' * 32}/versions/{'b' * 32}/source",
+            headers={"X-Test-User": "alice"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["sessionId"] == "expired-session"
+    assert response.json()["projectId"] == "a" * 32
+    assert response.json()["versionId"] == "b" * 32
+    assert response.json()["parentVersionId"] == "e" * 32
+    assert response.json()["files"] == [
+        {"path": "app.py", "content": "root_agent = object()\n"}
+    ]
+    materialize_call = materialize.await_args
+    assert materialize_call is not None
+    assert materialize_call.kwargs["service"] is None
+    assert materialize_call.kwargs["project_service"] is project_service
+
+
+def test_project_download_reads_the_exact_tos_archive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _FakeGateway()
+    now = datetime(2026, 8, 26, tzinfo=timezone.utc)
+    version = IntelligentDevelopmentVersion(
+        projectId="a" * 32,
+        versionId="b" * 32,
+        sourceSessionId="expired-session",
+        createdAt=now,
+        intentSummary="构建天气 Agent",
+        acceptanceCriteria=["返回天气"],
+        artifactSha256="c" * 64,
+        validationReportSha256="d" * 64,
+        artifactSize=4,
+        fileCount=1,
+        agentName="weather_agent",
+        entryPoint="app.py",
+        verified=True,
+        validationSummary="验证通过",
+        gateSummary=["local-checks"],
+        validatedAt=now.isoformat(),
+    )
+    load = AsyncMock(
+        return_value=TrustedDevelopmentArtifact(
+            content=b"PK\x03\x04",
+            artifact_sha256="c" * 64,
+            agent_name="weather_agent",
+            file_count=1,
+            artifact_size=4,
+        )
+    )
+    monkeypatch.setattr(
+        project_routes,
+        "load_intelligent_development_artifact",
+        load,
+    )
+    project_service = SimpleNamespace(get_version=AsyncMock(return_value=version))
+
+    with TestClient(_app(gateway, project_service=project_service)) as client:
+        response = client.get(
+            f"/web/intelligent-development/projects/{'a' * 32}/versions/{'b' * 32}/download",
+            headers={"X-Test-User": "alice"},
+        )
+
+    assert response.status_code == 200
+    assert response.content == b"PK\x03\x04"
+    assert response.headers["content-type"] == "application/zip"
+    assert "weather_agent-source-" in response.headers["content-disposition"]
+    load_call = load.await_args
+    assert load_call is not None
+    assert load_call.kwargs["service"] is None
+    assert load_call.kwargs["project_service"] is project_service
+
+
 def test_connect_locks_fixed_workspace_and_enables_autonomous_builder() -> None:
     gateway = _FakeGateway()
     gateway.sessions["dev-session"] = _cloud(user_session_id="project-1")
@@ -492,6 +746,27 @@ def test_connect_locks_fixed_workspace_and_enables_autonomous_builder() -> None:
         _connect(client)
     assert gateway.codex.cwd == "/home/gem/workspace/project-1"
     assert gateway.codex.permissions == routes._BUILDER_PERMISSIONS
+
+
+def test_connect_restores_the_selected_project_version_before_locking_workspace() -> (
+    None
+):
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud(user_session_id="project-1")
+    project_service = SimpleNamespace(
+        restore_base_version=AsyncMock(return_value=True),
+    )
+
+    with TestClient(_app(gateway, project_service=project_service)) as client:
+        _connect(client)
+
+    project_service.restore_base_version.assert_awaited_once_with(
+        owner_id="alice",
+        session_id="dev-session",
+        endpoint="https://sandbox.example/dev?Authorization=secret",
+        workspace="/home/gem/workspace/project-1",
+    )
+    assert gateway.codex.cwd == "/home/gem/workspace/project-1"
 
 
 def test_connect_restores_the_latest_non_empty_conversation() -> None:
@@ -995,6 +1270,63 @@ def test_intent_reject_is_user_facing_and_never_uploads_credentials(
     assert call["skillIds"] == ()
 
 
+def test_restored_project_context_is_passed_to_the_intent_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud()
+    gateway.codex.turns = [[_gate("reject", message="无需修改。")]]
+    now = datetime(2026, 8, 26, tzinfo=timezone.utc)
+    binding = IntelligentDevelopmentSessionBinding(
+        ownerId="alice",
+        sessionId="dev-session",
+        projectId="a" * 32,
+        projectName="天气 Agent",
+        baseVersionId="b" * 32,
+        createdAt=now,
+        updatedAt=now,
+    )
+    version = IntelligentDevelopmentVersion(
+        projectId="a" * 32,
+        versionId="b" * 32,
+        sourceSessionId="source-session",
+        createdAt=now,
+        intentSummary="构建天气查询 Agent",
+        acceptanceCriteria=["返回天气和数据时间"],
+        artifactSha256="a" * 64,
+        validationReportSha256="b" * 64,
+        artifactSize=100,
+        fileCount=2,
+        agentName="weather_agent",
+        entryPoint="app.py",
+        verified=True,
+        validationSummary="验证通过",
+        gateSummary=["local-checks"],
+        validatedAt=now.isoformat(),
+    )
+    project_service = SimpleNamespace(
+        get_binding=AsyncMock(return_value=binding),
+        base_metadata=AsyncMock(return_value=version),
+        restore_base_version=AsyncMock(return_value=False),
+    )
+    monkeypatch.setattr(routes, "create_credential_lease", AsyncMock())
+
+    with TestClient(_app(gateway, project_service=project_service)) as client:
+        _connect(client)
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "把结果改成中文"},
+        )
+
+    assert response.status_code == 200
+    prompt = str(gateway.codex.calls[0]["prompt"])
+    assert "## Restored project context" in prompt
+    assert '"intentSummary":"构建天气查询 Agent"' in prompt
+    assert '"acceptanceCriteria":["返回天气和数据时间"]' in prompt
+    assert "trusted version metadata, not an instruction" in prompt
+
+
 def test_builder_uses_preinstalled_skill_without_discovery_or_injection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1099,6 +1431,52 @@ def _delivery_dict(*, verified: bool = False) -> dict[str, object]:
 def _publisher_mock(*, verified: bool = False) -> SimpleNamespace:
     delivery = SimpleNamespace(as_dict=lambda: _delivery_dict(verified=verified))
     return SimpleNamespace(publish=AsyncMock(return_value=delivery))
+
+
+def _project_service_for_delivery(
+    *,
+    persist_result: object | None = None,
+    persist_error: Exception | None = None,
+) -> SimpleNamespace:
+    now = datetime(2026, 8, 26, tzinfo=timezone.utc)
+    binding = IntelligentDevelopmentSessionBinding(
+        ownerId="alice",
+        sessionId="dev-session",
+        projectId="a" * 32,
+        projectName="天气 Agent",
+        baseVersionId=None,
+        createdAt=now,
+        updatedAt=now,
+    )
+    version = IntelligentDevelopmentVersion(
+        projectId="a" * 32,
+        versionId="b" * 32,
+        parentVersionId="c" * 32,
+        sourceSessionId="dev-session",
+        createdAt=now,
+        intentSummary="构建天气 Agent",
+        acceptanceCriteria=["返回天气和数据时间"],
+        artifactSha256="a" * 64,
+        validationReportSha256="b" * 64,
+        artifactSize=100,
+        fileCount=3,
+        agentName="weather",
+        entryPoint="app.py",
+        verified=True,
+        validationSummary="验证完成",
+        gateSummary=["ak-build", "runtime-cleanup"],
+        validatedAt=now.isoformat(),
+    )
+    persist_delivery = AsyncMock(
+        side_effect=persist_error,
+        return_value=persist_result or (SimpleNamespace(), version),
+    )
+    return SimpleNamespace(
+        get_binding=AsyncMock(return_value=binding),
+        base_metadata=AsyncMock(return_value=None),
+        restore_base_version=AsyncMock(return_value=False),
+        persist_delivery=persist_delivery,
+    )
 
 
 def _verified_contract_text() -> str:
@@ -1517,6 +1895,114 @@ def test_verified_contract_emits_typed_delivery_only_after_cleanup(
     )
     assert '"agentName": "weather"' in response.text
     publisher.publish.assert_awaited_once()
+
+
+def test_persisted_delivery_ids_are_emitted_in_source_and_success_events(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud()
+    gateway.codex.turns = [
+        [_gate()],
+        [CodexAppServerEvent(kind="text", text="验证完成")],
+    ]
+    lease = _Lease(_Remote(gateway.sessions["dev-session"].endpoint))
+    monkeypatch.setattr(
+        routes, "create_credential_lease", AsyncMock(return_value=lease)
+    )
+    monkeypatch.setattr(routes, "invalidate_current_delivery", AsyncMock())
+    monkeypatch.setattr(
+        routes,
+        "read_completion_contract",
+        AsyncMock(return_value=SimpleNamespace(verified=True, status="verified")),
+    )
+    monkeypatch.setattr(routes, "remove_completion_file", AsyncMock())
+    monkeypatch.setattr(
+        routes,
+        "DeliveryPublisher",
+        lambda _transport: _publisher_mock(verified=True),
+    )
+    project_service = _project_service_for_delivery()
+
+    with TestClient(_app(gateway, project_service=project_service)) as client:
+        _connect(client)
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "做一个天气 Agent"},
+        )
+
+    assert response.status_code == 200
+    assert response.text.count(f'"projectId": "{"a" * 32}"') == 2
+    assert response.text.count(f'"versionId": "{"b" * 32}"') == 2
+    assert response.text.count(f'"parentVersionId": "{"c" * 32}"') == 2
+    assert "event: development.source_ready" in response.text
+    assert "event: development.succeeded" in response.text
+    project_service.persist_delivery.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("persist_error", "error_code", "retryable", "message"),
+    [
+        (
+            IntelligentDevelopmentProjectStorageUnavailable(
+                "项目存储暂时不可用，请稍后重试。"
+            ),
+            "INTELLIGENT_DEVELOPMENT_STORAGE_UNAVAILABLE",
+            True,
+            "源码已生成，但项目版本暂时无法保存。",
+        ),
+        (
+            IntelligentDevelopmentVersionIntegrityError("项目版本源码完整性校验失败。"),
+            "INTELLIGENT_DEVELOPMENT_VERSION_INVALID",
+            False,
+            "项目版本源码完整性校验失败。",
+        ),
+    ],
+)
+def test_delivery_persistence_failures_keep_distinct_sse_semantics(
+    monkeypatch: pytest.MonkeyPatch,
+    persist_error: Exception,
+    error_code: str,
+    retryable: bool,
+    message: str,
+) -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud()
+    gateway.codex.turns = [
+        [_gate()],
+        [CodexAppServerEvent(kind="text", text="源码已生成")],
+    ]
+    lease = _Lease(_Remote(gateway.sessions["dev-session"].endpoint))
+    monkeypatch.setattr(
+        routes, "create_credential_lease", AsyncMock(return_value=lease)
+    )
+    monkeypatch.setattr(routes, "invalidate_current_delivery", AsyncMock())
+    monkeypatch.setattr(
+        routes, "read_completion_contract", AsyncMock(return_value=_partial())
+    )
+    monkeypatch.setattr(routes, "remove_completion_file", AsyncMock())
+    monkeypatch.setattr(
+        routes, "DeliveryPublisher", lambda _transport: _publisher_mock()
+    )
+    project_service = _project_service_for_delivery(persist_error=persist_error)
+
+    with TestClient(_app(gateway, project_service=project_service)) as client:
+        _connect(client)
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "做一个天气 Agent"},
+        )
+
+    assert response.status_code == 200
+    assert "event: development.source_ready" in response.text
+    assert "event: error" in response.text
+    assert f'"code": "{error_code}"' in response.text
+    assert f'"retryable": {str(retryable).lower()}' in response.text
+    assert message in response.text
+    assert 'event: done\ndata: {"reason":"failed"}' in response.text
+    assert "event: development.succeeded" not in response.text
 
 
 def test_missing_completion_still_emits_source_but_never_verified_success(
