@@ -11,6 +11,10 @@ const pageStyles = readFileSync(
   new URL("../src/ui/MyAgents.css", import.meta.url),
   "utf8",
 );
+const runtimeDiscoverySource = readFileSync(
+  new URL("../src/adk/runtimeDiscovery.ts", import.meta.url),
+  "utf8",
+);
 const resourceSource = readFileSync(
   new URL("../src/ui/ResourceCollection.tsx", import.meta.url),
   "utf8",
@@ -302,7 +306,15 @@ test("reopens running deployment progress from draft and Runtime cards", () => {
   assert.match(pageSource, /activeDeploymentTasks\.byRuntimeId\.get\(runtimeId\)/);
   assert.match(pageSource, /className="my-agent-draft-badge">草稿<\/span>/);
   assert.match(pageSource, /deploymentTask \? "查看进度" : "编辑"/);
-  assert.match(pageSource, /\? `查看 \$\{agent\.name\} 部署进度`[\s\S]*?: `查看 \$\{agent\.name\} 详情`/);
+  assert.match(pageSource, /\? `查看 \$\{agent\.name\} 部署进度`[\s\S]*?: `查看 \$\{agent\.name\} Runtime 详情`/);
+  assert.match(pageSource, /function runtimeDetailTargetForCard\(/);
+  assert.match(pageSource, /const target = agent\.draft\.deploymentTarget;[\s\S]*?if \(!target\) return null/);
+  assert.match(pageSource, /runtimeAgent\.runtime\?\.runtimeId === target\.runtimeId/);
+  assert.match(pageSource, /if \(agent\.draft\) \{[\s\S]*?else onViewDetails\?\.\(agent\)/);
+  assert.doesNotMatch(
+    pageSource,
+    /if \(agent\.draft\) \{[\s\S]*?else onEditDraft\?\.\(agent\.draft\)/,
+  );
   assert.match(appSource, /const \[draftDeploymentTaskIds, setDraftDeploymentTaskIds\]/);
   assert.match(appSource, /\[editingDraftId\]: task\.id/);
   assert.match(appSource, /deploymentTasks=\{deploymentTasks\}/);
@@ -670,6 +682,23 @@ test("keeps Runtime failures distinct from successful empty states", () => {
   assert.match(pageStyles, /\.my-agent-empty p\s*\{[\s\S]*?white-space: pre-wrap;[\s\S]*?overflow-wrap: anywhere;/);
 });
 
+test("retries the Runtime list once after a timeout without leaving the loading state", () => {
+  assert.match(runtimeDiscoverySource, /const RUNTIME_LIST_RETRY_DELAY_MS = 5_000/);
+  assert.match(
+    runtimeDiscoverySource,
+    /function isTimeoutError\(error: unknown\)[\s\S]*?error instanceof Error && error\.name === "TimeoutError"/,
+  );
+  assert.match(
+    runtimeDiscoverySource,
+    /async function getRuntimesWithTimeoutRetry[\s\S]*?await request\(options\)[\s\S]*?if \(!shouldRetryRuntimeList\(error\)\) throw error;[\s\S]*?RUNTIME_LIST_RETRY_DELAY_MS[\s\S]*?return request\(options\)/,
+  );
+  assert.match(pageSource, /request = getRuntimesWithTimeoutRetry\(\{/);
+  assert.match(
+    pageSource,
+    /setLoadingRuntimes\(true\)[\s\S]*?loadRuntimeAgents[\s\S]*?\.finally\(\(\) => \{[\s\S]*?setLoadingRuntimes\(false\)/,
+  );
+});
+
 test("shows connecting progress and preserves the connected Runtime state", () => {
   assert.match(pageSource, /const \[connectingAgentId, setConnectingAgentId\] = useState\(""\)/);
   assert.match(
@@ -682,13 +711,49 @@ test("shows connecting progress and preserves the connected Runtime state", () =
   assert.match(pageSource, /<span className="sr-only">\{wakeable \? "唤醒中" : "连接中"\}<\/span>/);
   assert.doesNotMatch(pageSource, /ConnectIcon/);
   assert.match(pageSource, /const actionable = Boolean\([\s\S]*?agent\.runtime \|\| sandboxStatus === "ready" \|\| sandboxStatus === "wakeable"/);
-  assert.match(pageSource, /disabled=\{!actionable \|\| connecting \|\| connected\}/);
+  assert.match(
+    pageSource,
+    /disabled=\{!actionable \|\| checkingCompatibility \|\| incompatible \|\| connecting \|\| connected\}/,
+  );
   assert.match(appSource, /connectedRuntimeId=\{connectedRuntimeId\}/);
   assert.match(pageStyles, /\.my-agent-loading-mark[\s\S]*?border-right-color: transparent/);
   assert.match(
     pageStyles,
     /\.resource-card__action\.my-agent-use\.is-connected,[\s\S]*?background: transparent[\s\S]*?color: hsl\(142 62% 30%\)/,
   );
+  assert.match(
+    pageSource,
+    /className=\{connecting \? "my-agent-card is-connecting" : "my-agent-card"\}/,
+  );
+  assert.match(
+    pageStyles,
+    /\.my-agent-card\.is-connecting \.resource-card__actions\s*\{[\s\S]*?opacity: 1;[\s\S]*?pointer-events: auto;/,
+  );
+});
+
+test("checks Runtime chat compatibility before enabling the connect action", () => {
+  assert.match(pageSource, /probeRuntimeApps/);
+  assert.match(runtimeDiscoverySource, /const RUNTIME_COMPATIBILITY_CONCURRENCY = 4/);
+  assert.match(pageSource, /const RUNTIME_COMPATIBILITY_TIMEOUT_MS = 7_000/);
+  assert.match(pageSource, /const RUNTIME_COMPATIBILITY_RETRY_TIMEOUT_MS = 20_000/);
+  assert.match(
+    pageSource,
+    /type RuntimeCompatibilityStatus = "checking" \| "compatible" \| "unsupported" \| "error"/,
+  );
+  assert.match(pageSource, /runRuntimeCompatibilityChecks/);
+  assert.match(pageSource, /signal: controller\.signal/);
+  assert.match(pageSource, /const checkingCompatibility = compatibility\?\.status === "checking"/);
+  assert.match(pageSource, /const incompatible = compatibility\?\.status === "unsupported"/);
+  assert.match(pageSource, /const compatibilityFailed = compatibility\?\.status === "error"/);
+  assert.match(pageSource, /disabled=\{!actionable \|\| checkingCompatibility \|\| incompatible \|\| connecting \|\| connected\}/);
+  assert.match(pageSource, />检测中<\/span>/);
+  assert.match(pageSource, /onRetryCompatibility\?\.\(agent\)/);
+  assert.match(pageSource, /import \{ Badge \} from "@openai\/apps-sdk-ui\/components\/Badge"/);
+  assert.match(pageSource, /import \{ Tooltip \} from "@openai\/apps-sdk-ui\/components\/Tooltip"/);
+  assert.match(pageSource, /content=\{compatibility\?\.message\}/);
+  assert.match(pageSource, /contentClassName="my-agent-compatibility-tooltip"/);
+  assert.match(pageSource, /color="warning"[\s\S]*?>[\s\S]*?不支持对话[\s\S]*?<\/Badge>/);
+  assert.match(pageSource, /color="danger"[\s\S]*?>[\s\S]*?检测失败[\s\S]*?<\/Badge>/);
 });
 
 test("uses connected Runtime state only for the card action", () => {

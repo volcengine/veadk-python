@@ -355,6 +355,7 @@ export interface AdkEndpoint {
   apiKey?: string;
   runtimeId?: string;
   region?: string;
+  runtimeVersion?: number | null;
   retryProbe?: boolean;
 }
 
@@ -405,6 +406,7 @@ async function apiFetch(
   ep: AdkEndpoint = {},
   timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS,
 ): Promise<Response> {
+  const operationSignal = requestSignal(init.signal, timeoutMs);
   const runtimeMethodOverride =
     Boolean(ep.runtimeId) && String(init.method ?? "GET").toUpperCase() === "DELETE";
   const baseOpts = {
@@ -415,7 +417,7 @@ async function apiFetch(
   const send = () => {
     const opts = {
       ...baseOpts,
-      signal: requestSignal(init.signal, timeoutMs),
+      signal: operationSignal,
     };
     if (ep.runtimeId) {
       const runtimeParams = new URLSearchParams();
@@ -457,7 +459,7 @@ async function apiFetch(
 
   let response = await send();
   while (await requiresLogin(response)) {
-    await waitForAuthentication(init.signal);
+    await waitForAuthentication(operationSignal);
     response = await send();
   }
   return response;
@@ -611,8 +613,12 @@ const runtimeDetailCache = new Map<string, ClientCacheEntry<RuntimeDetail>>();
 const feedbackCasesCache =
   new Map<string, ClientCacheEntry<AgentFeedbackCasesResponse>>();
 
-function runtimeAppsCacheKey(runtimeId: string, region: string): string {
-  return `${region}:${runtimeId}`;
+function runtimeAppsCacheKey(
+  runtimeId: string,
+  region: string,
+  runtimeVersion?: number | null,
+): string {
+  return `${region}:${runtimeId}:${runtimeVersion ?? ""}`;
 }
 
 export function setClientCloudProvider(provider: CloudProvider): void {
@@ -686,8 +692,15 @@ export async function fetchRemoteApps(
   base: string,
   apiKey: string,
   ep?: AdkEndpoint,
+  signal?: AbortSignal,
+  timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS,
 ): Promise<string[]> {
-  const res = await apiFetch(`/list-apps`, {}, ep ?? { base, apiKey });
+  const res = await apiFetch(
+    `/list-apps`,
+    { signal },
+    ep ?? { base, apiKey },
+    timeoutMs,
+  );
   const runtimeErrorCode = ep?.runtimeId
     ? await runtimeProxyErrorCode(res)
     : "";
@@ -726,12 +739,31 @@ export async function fetchRemoteApps(
   if (!res.ok) {
     throw new Error(await httpErrorMessage(res, "读取 Agent 列表失败"));
   }
-  const apps = (await res.json()) as string[];
+  let payload: unknown;
+  try {
+    payload = await res.json();
+  } catch {
+    throw new RuntimeProbeError(
+      "Runtime /list-apps 返回了无法解析的 JSON 响应。",
+    );
+  }
+  if (
+    !Array.isArray(payload) ||
+    payload.some((app) => typeof app !== "string" || !app.trim())
+  ) {
+    throw new RuntimeProbeError(
+      "Runtime /list-apps 返回格式无效，应为非空字符串数组。",
+    );
+  }
+  const apps = payload.map((app) => app.trim());
   if (ep?.runtimeId) {
-    runtimeAppsCache.set(runtimeAppsCacheKey(ep.runtimeId, ep.region ?? ""), {
-      apps,
-      expiresAt: Date.now() + RUNTIME_APPS_CACHE_TTL_MS,
-    });
+    runtimeAppsCache.set(
+      runtimeAppsCacheKey(ep.runtimeId, ep.region ?? "", ep.runtimeVersion),
+      {
+        apps,
+        expiresAt: Date.now() + RUNTIME_APPS_CACHE_TTL_MS,
+      },
+    );
   }
   return apps;
 }
@@ -3670,6 +3702,16 @@ export interface RuntimePage {
   nextToken: string;
 }
 
+export class RuntimeListError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "RuntimeListError";
+  }
+}
+
 /** List one authorized page of AgentKit runtimes. `nextToken` from a prior
  *  page continues pagination; the server derives ownership from identity. */
 export async function getRuntimes(
@@ -3678,6 +3720,7 @@ export async function getRuntimes(
     pageSize?: number;
     region?: string;
     scope?: "all" | "mine";
+    signal?: AbortSignal;
   } = {},
 ): Promise<RuntimePage> {
   const p = new URLSearchParams({
@@ -3686,10 +3729,12 @@ export async function getRuntimes(
     region: opts.region ?? "all",
   });
   if (opts.nextToken) p.set("next_token", opts.nextToken);
-  const res = await apiFetch(`/web/runtimes?${p.toString()}`);
+  const res = await apiFetch(`/web/runtimes?${p.toString()}`, {
+    signal: opts.signal,
+  });
   if (!res.ok) {
     const detail = await httpErrorMessage(res, "加载 Runtime 失败");
-    throw new Error(detail);
+    throw new RuntimeListError(detail, res.status);
   }
   const d = (await res.json()) as Partial<RuntimePage>;
   return { runtimes: d.runtimes ?? [], nextToken: d.nextToken ?? "" };
@@ -3701,12 +3746,34 @@ export async function getRuntimes(
 export async function probeRuntimeApps(
   runtimeId: string,
   region: string,
-  options: { retryProbe?: boolean } = {},
+  options: {
+    retryProbe?: boolean;
+    signal?: AbortSignal;
+    preferCached?: boolean;
+    timeoutMs?: number;
+    currentVersion?: number | null;
+  } = {},
 ): Promise<string[] | null> {
+  if (options.preferCached) {
+    const key = runtimeAppsCacheKey(runtimeId, region, options.currentVersion);
+    const cached = runtimeAppsCache.get(key);
+    if (cached && cached.expiresAt > Date.now()) return [...cached.apps];
+    if (cached) runtimeAppsCache.delete(key);
+  }
   try {
-    const endpoint: AdkEndpoint = { runtimeId, region };
+    const endpoint: AdkEndpoint = {
+      runtimeId,
+      region,
+      runtimeVersion: options.currentVersion,
+    };
     if (options.retryProbe) endpoint.retryProbe = true;
-    const res = await fetchRemoteApps("", "", endpoint);
+    const res = await fetchRemoteApps(
+      "",
+      "",
+      endpoint,
+      options.signal,
+      options.timeoutMs,
+    );
     return res;
   } catch (error) {
     if (
@@ -3715,6 +3782,7 @@ export async function probeRuntimeApps(
     ) {
       throw error;
     }
+    if (error instanceof Error) throw error;
     return null;
   }
 }

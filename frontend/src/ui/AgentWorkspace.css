@@ -987,6 +987,12 @@
   overflow-wrap: anywhere;
 }
 
+.aw-detail-fetch-error {
+  min-height: 0;
+  align-items: flex-start;
+  text-align: left;
+}
+
 .aw-usage-state button,
 .aw-usage-pagination button {
   min-height: 32px;
@@ -2981,6 +2987,17 @@
     gap: 18px;
     margin-inline: 16px;
     overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    scrollbar-width: none;
+  }
+
+  .aw-agent-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .aw-agent-tabs button {
+    flex: 0 0 auto;
+    white-space: nowrap;
   }
 
   .aw-agent-head {

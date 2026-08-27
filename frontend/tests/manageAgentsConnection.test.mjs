@@ -89,6 +89,15 @@ test("fresh deployments wait for the Runtime network to become reachable", () =>
   );
 });
 
+test("a successful compatibility probe is reused by the connect flow", () => {
+  assert.match(clientSource, /preferCached\?: boolean/);
+  assert.match(clientSource, /if \(options\.preferCached\)[\s\S]*?runtimeAppsCache\.get/);
+  assert.match(
+    connectionsSource,
+    /probeRuntimeApps\(runtimeId, candidate,[\s\S]*?retryProbe: true,[\s\S]*?preferCached: true/,
+  );
+});
+
 test("management defaults to the active provider region without trailing list whitespace", () => {
   assert.match(manageSource, /defaultCloudRegion\(cloudProvider\)/);
   assert.match(manageSource, /cloudRegionOptions\(cloudProvider\)/);

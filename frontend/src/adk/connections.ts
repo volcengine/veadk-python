@@ -145,6 +145,8 @@ async function connectRuntimeOnce(
     try {
       const probedApps = await probeRuntimeApps(runtimeId, candidate, {
         retryProbe: true,
+        preferCached: true,
+        currentVersion,
       });
       if (probedApps && probedApps.length > 0) {
         await ensureRuntimeRouteChannel(runtimeId, candidate);
