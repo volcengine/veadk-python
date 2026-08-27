@@ -54,6 +54,22 @@ function ChevronIcon({ expanded }: { expanded: boolean }) {
   );
 }
 
+function CompareCheckIcon() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="m3.5 8.2 2.7 2.7 6.3-6.1" />
+    </svg>
+  );
+}
+
 function formatVersionTime(value: string): string {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return "时间未知";
@@ -465,6 +481,38 @@ export function IntelligentProjectLibrary({
                         </span>
                       </span>
                     </button>
+                    {expanded && projectVersions.length >= 2 ? (
+                      <div className="ic-project-compare-actions">
+                        {projectComparison ? (
+                          <>
+                            <span aria-live="polite">
+                              已选择 {projectComparison.versionIds.length}/2
+                            </span>
+                            <button
+                              type="button"
+                              className="ic-version-action"
+                              onClick={() => setCompareSelection(null)}
+                              disabled={Boolean(busyAction)}
+                            >取消</button>
+                            <button
+                              type="button"
+                              className="ic-version-compare-primary"
+                              onClick={() => void viewVersionComparison(project, projectVersions)}
+                              disabled={projectComparison.versionIds.length !== 2 || Boolean(busyAction)}
+                            >
+                              {busyAction === `compare:${project.projectId}` ? "读取中…" : "查看对比"}
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            type="button"
+                            className="ic-version-compare-trigger"
+                            onClick={() => startVersionComparison(project, projectVersions)}
+                            disabled={Boolean(busyAction)}
+                          >对比版本</button>
+                        )}
+                      </div>
+                    ) : null}
                   </div>
 
                   {expanded ? (
@@ -473,40 +521,6 @@ export function IntelligentProjectLibrary({
                       id={`versions-${project.projectId}`}
                       aria-busy={versionsLoading === project.projectId || undefined}
                     >
-                      {projectVersions.length >= 2 ? (
-                        <div className="ic-version-compare-toolbar">
-                          {projectComparison ? (
-                            <>
-                              <span>
-                                已选择 {projectComparison.versionIds.length}/2 个版本
-                              </span>
-                              <div>
-                                <button
-                                  type="button"
-                                  className="ic-version-action"
-                                  onClick={() => setCompareSelection(null)}
-                                  disabled={Boolean(busyAction)}
-                                >取消</button>
-                                <button
-                                  type="button"
-                                  className="ic-version-compare-primary"
-                                  onClick={() => void viewVersionComparison(project, projectVersions)}
-                                  disabled={projectComparison.versionIds.length !== 2 || Boolean(busyAction)}
-                                >
-                                  {busyAction === `compare:${project.projectId}` ? "读取中…" : "查看对比"}
-                                </button>
-                              </div>
-                            </>
-                          ) : (
-                            <button
-                              type="button"
-                              className="ic-version-action"
-                              onClick={() => startVersionComparison(project, projectVersions)}
-                              disabled={Boolean(busyAction)}
-                            >对比版本</button>
-                          )}
-                        </div>
-                      ) : null}
                       {versionError && projectVersions.length > 0 ? (
                         <div className="ic-version-error" role="alert">
                           <span>{versionError}</span>
@@ -537,24 +551,33 @@ export function IntelligentProjectLibrary({
                               const versionSummary = version.intentSummary
                                 || version.validationSummary
                                 || "暂无版本描述";
+                              const isCompareSelected = projectComparison
+                                ?.versionIds.includes(version.versionId) === true;
+                              const isCompareDisabled = Boolean(busyAction)
+                                || (!isCompareSelected
+                                  && (projectComparison?.versionIds.length ?? 0) >= 2);
                               return (
                                 <li
                                   key={version.versionId}
-                                  className={projectComparison ? "is-comparing" : undefined}
+                                  className={[
+                                    projectComparison ? "is-comparing" : "",
+                                    isCompareSelected ? "is-compare-selected" : "",
+                                  ].filter(Boolean).join(" ") || undefined}
                                 >
                                   {projectComparison ? (
-                                    <label className="ic-version-compare-check">
+                                    <label className={`ic-version-compare-check${
+                                      isCompareSelected ? " is-selected" : ""
+                                    }${isCompareDisabled ? " is-disabled" : ""}`}>
                                       <input
                                         type="checkbox"
-                                        checked={projectComparison.versionIds.includes(version.versionId)}
+                                        checked={isCompareSelected}
                                         onChange={() => toggleCompareVersion(project.projectId, version.versionId)}
-                                        disabled={
-                                          Boolean(busyAction)
-                                          || (!projectComparison.versionIds.includes(version.versionId)
-                                            && projectComparison.versionIds.length >= 2)
-                                        }
+                                        disabled={isCompareDisabled}
                                       />
-                                      <span>选择此版本</span>
+                                      <span className="ic-version-compare-box" aria-hidden="true">
+                                        {isCompareSelected ? <CompareCheckIcon /> : null}
+                                      </span>
+                                      <span>{isCompareSelected ? "已选择" : "选择"}</span>
                                     </label>
                                   ) : null}
                                   <div className="ic-version-copy">
