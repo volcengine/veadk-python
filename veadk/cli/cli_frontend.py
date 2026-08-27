@@ -9117,10 +9117,17 @@ def _run_frontend_server(
             region,
             runtime,
         )
-        headers = _runtime_request_headers(
-            request,
-            apikey=apikey,
-            auth_type=auth_type,
+        # Starlette exposes incoming header names in lowercase. Wrap the
+        # forwarded mapping before overriding JSON headers so httpx replaces
+        # them case-insensitively instead of emitting duplicate values such as
+        # ``application/json, application/json``. FastAPI treats that combined
+        # media type as non-JSON and passes the body to Pydantic as a string.
+        headers = httpx.Headers(
+            _runtime_request_headers(
+                request,
+                apikey=apikey,
+                auth_type=auth_type,
+            )
         )
         headers["Accept"] = "application/json"
         if payload is not None:
