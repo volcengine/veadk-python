@@ -153,9 +153,12 @@ export function buildEnvironmentDockerfile(environment: EnvironmentDraft): strin
     "ARG PIP_DEFAULT_TIMEOUT=300",
     "ARG PIP_RETRIES=10",
     "",
-    "# Ubuntu repositories: keep the official hosts, use HTTPS, and tolerate transient builder egress failures.",
+    "# Ubuntu repositories: bootstrap CA certificates before switching the official hosts to HTTPS.",
     "RUN printf 'Acquire::Retries \"5\";\\nAcquire::ForceIPv4 \"true\";\\nAcquire::http::Timeout \"60\";\\nAcquire::https::Timeout \"60\";\\n' > /etc/apt/apt.conf.d/80-veadk-network \\",
-    "    && sed -i 's|http://archive.ubuntu.com|https://archive.ubuntu.com|g; s|http://security.ubuntu.com|https://security.ubuntu.com|g' /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true",
+    "    && apt-get update \\",
+    "    && apt-get install -y --no-install-recommends ca-certificates \\",
+    "    && { sed -i 's|http://archive.ubuntu.com|https://archive.ubuntu.com|g; s|http://security.ubuntu.com|https://security.ubuntu.com|g' /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true; } \\",
+    "    && rm -rf /var/lib/apt/lists/*",
     "",
     "ENV PYTHONDONTWRITEBYTECODE=1 \\",
     "    PYTHONUNBUFFERED=1 \\",
@@ -166,13 +169,13 @@ export function buildEnvironmentDockerfile(environment: EnvironmentDraft): strin
   ];
   if (usesUbuntuPython) {
     lines.push(
-      `    && apt-get install -y --no-install-recommends ca-certificates python${pythonVersion} python${pythonVersion}-venv \\`,
+      `    && apt-get install -y --no-install-recommends python${pythonVersion} python${pythonVersion}-venv \\`,
       `    && python${pythonVersion} -m venv /opt/venv \\`,
       "    && rm -rf /var/lib/apt/lists/*",
     );
   } else {
     lines.push(
-      "    && apt-get install -y --no-install-recommends build-essential ca-certificates curl libbz2-dev libffi-dev libgdbm-dev liblzma-dev libncursesw5-dev libreadline-dev libsqlite3-dev libssl-dev tk-dev uuid-dev zlib1g-dev \\",
+      "    && apt-get install -y --no-install-recommends build-essential curl libbz2-dev libffi-dev libgdbm-dev liblzma-dev libncursesw5-dev libreadline-dev libsqlite3-dev libssl-dev tk-dev uuid-dev zlib1g-dev \\",
       `    && curl --retry 5 --retry-all-errors --connect-timeout 30 -fsSL "\${PYTHON_SOURCE_BASE_URL}/${pythonPatchVersion}/Python-${pythonPatchVersion}.tgz" -o /tmp/python.tgz \\`,
       "    && mkdir -p /tmp/python-source \\",
       "    && tar -xzf /tmp/python.tgz --strip-components=1 -C /tmp/python-source \\",

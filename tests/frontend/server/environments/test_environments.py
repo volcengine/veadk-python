@@ -320,6 +320,9 @@ def test_all_os_language_combinations_generate_buildable_commented_dockerfiles(
     assert "https://security.ubuntu.com" in dockerfile
     assert 'Acquire::Retries "5"' in dockerfile
     assert 'Acquire::ForceIPv4 "true"' in dockerfile
+    assert dockerfile.index(
+        "apt-get install -y --no-install-recommends ca-certificates"
+    ) < dockerfile.index("https://archive.ubuntu.com")
     assert "# VeADK:" in dockerfile
     assert "# lxml-html-clean:" in dockerfile
     assert (
