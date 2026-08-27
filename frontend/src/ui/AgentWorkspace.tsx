@@ -71,6 +71,7 @@ import type { AgentDraft } from "../create/types";
 import type { WorkspaceAgentDraft } from "../create/agentDraftStorage";
 import { BUILTIN_TOOLS } from "../create/veadkCatalog";
 import type { DeploymentTaskUpdate } from "./ProjectPreview";
+import { DeploymentErrorMessage } from "./DeploymentErrorMessage";
 import { Markdown } from "./Markdown";
 import { PageBackButton } from "./PageBackButton";
 import { StudioConfirmDialog } from "./StudioConfirmDialog";
@@ -1080,6 +1081,9 @@ export function AgentWorkspace({
   const [updateCapabilityError, setUpdateCapabilityError] = useState("");
   const [detailAgentInfo, setDetailAgentInfo] = useState<AgentInfo | null>(null);
   const [detailAgentInfoResolved, setDetailAgentInfoResolved] = useState(false);
+  const [detailAgentInfoError, setDetailAgentInfoError] = useState("");
+  const [runtimeDetailError, setRuntimeDetailError] = useState("");
+  const [detailReloadToken, setDetailReloadToken] = useState(0);
   const [query, setQuery] = useState("");
   const [caseFilter, setCaseFilter] = useState<CaseKind>("good");
   const [caseQuery, setCaseQuery] = useState("");
@@ -1555,6 +1559,7 @@ export function AgentWorkspace({
       ? getCachedRuntimeAgentInfo(runtimeId, region, knownApp)
       : null;
     setDetailAgentInfo(cached);
+    setDetailAgentInfoError("");
     setDetailAgentInfoResolved(Boolean(cached) || !detailOnly || !runtimeId);
     if (!detailOnly || !runtimeId) return;
     void getRuntimeAgentInfo(
@@ -1566,8 +1571,13 @@ export function AgentWorkspace({
       .then((info) => {
         if (!cancelled) setDetailAgentInfo(info);
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (!cancelled && !cached) setDetailAgentInfo(null);
+        if (!cancelled) {
+          setDetailAgentInfoError(
+            error instanceof Error ? error.message : "加载 Agent 信息失败。",
+          );
+        }
       })
       .finally(() => {
         if (!cancelled) setDetailAgentInfoResolved(true);
@@ -1577,6 +1587,7 @@ export function AgentWorkspace({
     };
   }, [
     detailOnly,
+    detailReloadToken,
     selectedAgent?.currentVersion,
     selectedAgent?.region,
     selectedAgent?.runtimeApp,
@@ -1760,6 +1771,7 @@ export function AgentWorkspace({
       ? getCachedRuntimeDetail(runtimeId, region)
       : null;
     setRuntimeDetail(cached);
+    setRuntimeDetailError("");
     if (!runtimeId) return;
     void getRuntimeDetail(
       runtimeId,
@@ -1769,13 +1781,19 @@ export function AgentWorkspace({
       .then((detail) => {
         if (!cancelled) setRuntimeDetail(detail);
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (!cancelled && !cached) setRuntimeDetail(null);
+        if (!cancelled) {
+          setRuntimeDetailError(
+            error instanceof Error ? error.message : "加载 Runtime 详情失败。",
+          );
+        }
       });
     return () => {
       cancelled = true;
     };
   }, [
+    detailReloadToken,
     selectedAgent?.currentVersion,
     selectedAgent?.region,
     selectedAgent?.runtimeId,
@@ -2828,6 +2846,20 @@ export function AgentWorkspace({
             >
               {section === "basic" && (
                 <div className="aw-basic-stack">
+                  {(detailAgentInfoError || runtimeDetailError) && (
+                    <DeploymentErrorMessage
+                      className="aw-usage-state aw-detail-fetch-error is-error"
+                      message={[...new Set([
+                        detailAgentInfoError,
+                        runtimeDetailError,
+                      ].filter(Boolean))].join("\n")}
+                      defaultExpanded={false}
+                      retryLabel="重试"
+                      onRetry={async () => {
+                        setDetailReloadToken((value) => value + 1);
+                      }}
+                    />
+                  )}
                   <section className="aw-deployment-panel aw-settings-card">
                     <div className="aw-section-head">
                       <div><h3>部署配置</h3><p>配置目标环境与网络访问方式。</p></div>

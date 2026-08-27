@@ -30,5 +30,6 @@ test("API requests recover only after a confirmed authentication failure", () =>
   assert.match(clientSource, /isAuthenticationRedirect\(response\)/);
   assert.match(clientSource, /response\.status !== 401/);
   assert.match(clientSource, /isOAuthLoginRequired\(\)/);
-  assert.match(clientSource, /waitForAuthentication\(init\.signal\)/);
+  assert.match(clientSource, /const operationSignal = requestSignal\(init\.signal, timeoutMs\)/);
+  assert.match(clientSource, /waitForAuthentication\(operationSignal\)/);
 });

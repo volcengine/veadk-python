@@ -105,6 +105,37 @@ test("focused agent details place the shared back icon beside the title", () => 
   assert.match(appSource, /<AgentWorkspace[\s\S]*?detailOnly[\s\S]*?onBack=\{closeAgentDetailPage\}/);
 });
 
+test("agent detail tabs remain readable in the mobile horizontal scroller", () => {
+  assert.match(
+    workspaceStyles,
+    /@media \(max-width: 720px\)[\s\S]*?\.aw-agent-tabs\s*\{[\s\S]*?overflow-x:\s*auto;[\s\S]*?scrollbar-width:\s*none;/,
+  );
+  assert.match(
+    workspaceStyles,
+    /@media \(max-width: 720px\)[\s\S]*?\.aw-agent-tabs button\s*\{[\s\S]*?flex:\s*0 0 auto;[\s\S]*?white-space:\s*nowrap;/,
+  );
+});
+
+test("runtime detail failures remain visible and retryable", () => {
+  assert.match(workspaceSource, /const \[detailAgentInfoError, setDetailAgentInfoError\] = useState\(""\)/);
+  assert.match(workspaceSource, /const \[runtimeDetailError, setRuntimeDetailError\] = useState\(""\)/);
+  assert.match(
+    workspaceSource,
+    /getRuntimeAgentInfo[\s\S]*?\.catch\(\(error: unknown\)[\s\S]*?setDetailAgentInfoError/,
+  );
+  assert.match(
+    workspaceSource,
+    /getRuntimeDetail[\s\S]*?\.catch\(\(error: unknown\)[\s\S]*?setRuntimeDetailError/,
+  );
+  assert.match(workspaceSource, /className="aw-usage-state aw-detail-fetch-error is-error"/);
+  assert.match(
+    workspaceSource,
+    /<DeploymentErrorMessage[\s\S]*?defaultExpanded=\{false\}[\s\S]*?retryLabel="重试"/,
+  );
+  assert.match(workspaceSource, /message=\{\[\.\.\.new Set\(\[/);
+  assert.match(workspaceSource, /setDetailReloadToken\(\(value\) => value \+ 1\)/);
+});
+
 test("agent details show capability badges and deployment state before the flow", () => {
   assert.match(workspaceSource, /const toolNames = useMemo/);
   assert.match(workspaceSource, /const skillNames = useMemo/);

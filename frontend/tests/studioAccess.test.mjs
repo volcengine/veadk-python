@@ -67,7 +67,10 @@ test("runtime selection obeys the server-granted scope", () => {
   assert.match(selectorSource, /setMineOnly\(runtimeScope === "mine"\)/);
   assert.match(selectorSource, /\{runtimeScope === "all" && \(/);
   assert.match(selectorSource, /getRuntimes\(\{[\s\S]*?scope: "mine"/);
-  assert.match(myAgentsSource, /getRuntimes\(\{[\s\S]*?scope: runtimeScope,[\s\S]*?region/);
+  assert.match(
+    myAgentsSource,
+    /getRuntimesWithTimeoutRetry\(\{[\s\S]*?scope: runtimeScope,[\s\S]*?region/,
+  );
   assert.match(appSource, /<MyAgents[\s\S]*?runtimeScope=\{access\.capabilities\.runtimeScope\}/);
   assert.doesNotMatch(clientSource, /new URLSearchParams\(\{\s*author,/);
 });
