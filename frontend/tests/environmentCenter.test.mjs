@@ -194,6 +194,11 @@ test("generates a Dockerfile from language and selected tools", async () => {
     assert.match(dockerfile, /https:\/\/security\.ubuntu\.com/);
     assert.match(dockerfile, /Acquire::Retries \"5\"/);
     assert.match(dockerfile, /Acquire::ForceIPv4 \"true\"/);
+    assert.ok(
+      dockerfile.indexOf("apt-get install -y --no-install-recommends ca-certificates")
+        < dockerfile.indexOf("https://archive.ubuntu.com"),
+      "CA certificates must be installed before Ubuntu mirrors switch to HTTPS",
+    );
     assert.match(dockerfile, /Python-3\.12\.11\.tgz/);
     assert.match(dockerfile, /\.\/configure --prefix=\/opt\/python/);
     assert.doesNotMatch(dockerfile, /astral\.sh|github\.com\/astral-sh/);
