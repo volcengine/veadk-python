@@ -1445,6 +1445,7 @@ def mount_intelligent_development_routes(
                             {
                                 "projectId": stored_version.project_id,
                                 "versionId": stored_version.version_id,
+                                "parentVersionId": stored_version.parent_version_id,
                             }
                         )
                     source_delivery["verified"] = False
@@ -1473,6 +1474,7 @@ def mount_intelligent_development_routes(
                             {
                                 "projectId": stored_version.project_id,
                                 "versionId": stored_version.version_id,
+                                "parentVersionId": stored_version.parent_version_id,
                             }
                         )
                     event = {

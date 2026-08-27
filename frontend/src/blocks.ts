@@ -53,6 +53,7 @@ export interface IntelligentDevelopmentReleaseRef {
   sessionId: string;
   projectId?: string;
   versionId?: string;
+  parentVersionId?: string | null;
   artifactSha256: string;
   validationReportSha256: string;
   agentName: string;

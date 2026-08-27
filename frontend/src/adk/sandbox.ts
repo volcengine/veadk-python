@@ -1020,6 +1020,10 @@ async function parseSandboxStream(
               ? {
                   projectId: eventData.projectId,
                   versionId: eventData.versionId,
+                  ...(eventData.parentVersionId === null
+                    || typeof eventData.parentVersionId === "string"
+                    ? { parentVersionId: eventData.parentVersionId }
+                    : {}),
                 }
               : {}),
             artifactSha256: eventData.artifactSha256,

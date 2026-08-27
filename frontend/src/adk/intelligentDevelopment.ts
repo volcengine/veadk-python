@@ -106,6 +106,11 @@ function parseRelease(
     )
     || ((value.projectId !== undefined || value.versionId !== undefined)
       && (typeof value.projectId !== "string" || typeof value.versionId !== "string"))
+    || !(
+      value.parentVersionId === undefined
+      || value.parentVersionId === null
+      || typeof value.parentVersionId === "string"
+    )
   ) {
     throw new Error("源码快照的响应格式无效。");
   }

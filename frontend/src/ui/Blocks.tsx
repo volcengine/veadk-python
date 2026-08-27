@@ -240,6 +240,7 @@ function BuildProgressBlock({ text }: { text: string }) {
 function DeliveryCard({
   value,
   onResolve,
+  onResolveComparison,
   onDownload,
   onDeploy,
 }: {
@@ -247,6 +248,12 @@ function DeliveryCard({
   onResolve?: (
     value: Extract<Block, { kind: "delivery" }>["value"],
   ) => Promise<Extract<Block, { kind: "delivery" }>["value"]>;
+  onResolveComparison?: (
+    value: Extract<Block, { kind: "delivery" }>["value"],
+  ) => Promise<{
+    base: Extract<Block, { kind: "delivery" }>["value"];
+    target: Extract<Block, { kind: "delivery" }>["value"];
+  }>;
   onDownload?: (
     value: Extract<Block, { kind: "delivery" }>["value"],
   ) => Promise<void>;
@@ -256,8 +263,13 @@ function DeliveryCard({
     Extract<Block, { kind: "delivery" }>["value"] | null
   >(value.files ? value : null);
   const [codeOpen, setCodeOpen] = useState(false);
+  const [comparisonOpen, setComparisonOpen] = useState(false);
+  const [comparison, setComparison] = useState<{
+    base: Extract<Block, { kind: "delivery" }>["value"];
+    target: Extract<Block, { kind: "delivery" }>["value"];
+  } | null>(null);
   const [busyAction, setBusyAction] = useState<
-    "source" | "download" | "deploy" | null
+    "source" | "compare" | "download" | "deploy" | null
   >(null);
   const [error, setError] = useState("");
   const [downloadStatus, setDownloadStatus] = useState<{
@@ -309,6 +321,22 @@ function DeliveryCard({
     try {
       await onDownload(value);
       setDownloadStatus({ message: "已开始下载" });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function openComparison() {
+    if (!onResolveComparison) return;
+    setBusyAction("compare");
+    setError("");
+    setDownloadStatus(null);
+    try {
+      const result = comparison ?? await onResolveComparison(value);
+      setComparison(result);
+      setComparisonOpen(true);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -385,6 +413,19 @@ function DeliveryCard({
             ) : null}
             查看源码
           </button>
+          {value.projectId && value.versionId && value.parentVersionId ? (
+            <button
+              type="button"
+              className="delivery-card-secondary"
+              onClick={() => void openComparison()}
+              disabled={!onResolveComparison || busyAction !== null}
+            >
+              {busyAction === "compare" ? (
+                <Loader2 className="spin" aria-hidden="true" />
+              ) : null}
+              {busyAction === "compare" ? "正在准备…" : "查看本次变更"}
+            </button>
+          ) : null}
           <button
             type="button"
             className="delivery-card-secondary"
@@ -422,6 +463,24 @@ function DeliveryCard({
         project={{ name: value.agentName, files: resolved?.files ?? [] }}
         open={codeOpen}
         onClose={() => setCodeOpen(false)}
+        onChange={() => {}}
+        readOnly
+      />
+      <CodeBrowserDialog
+        project={{
+          name: comparison?.target.agentName ?? value.agentName,
+          files: comparison?.target.files ?? [],
+        }}
+        comparison={comparison ? {
+          baseProject: {
+            name: comparison.base.agentName,
+            files: comparison.base.files ?? [],
+          },
+          baseLabel: "优化前",
+          targetLabel: "优化后",
+        } : undefined}
+        open={comparisonOpen}
+        onClose={() => setComparisonOpen(false)}
         onChange={() => {}}
         readOnly
       />
@@ -881,6 +940,12 @@ export interface BlocksProps {
   onResolveDelivery?: (
     delivery: Extract<Block, { kind: "delivery" }>["value"],
   ) => Promise<Extract<Block, { kind: "delivery" }>["value"]>;
+  onResolveDeliveryComparison?: (
+    delivery: Extract<Block, { kind: "delivery" }>["value"],
+  ) => Promise<{
+    base: Extract<Block, { kind: "delivery" }>["value"];
+    target: Extract<Block, { kind: "delivery" }>["value"];
+  }>;
   onDownloadDelivery?: (
     delivery: Extract<Block, { kind: "delivery" }>["value"],
   ) => Promise<void>;
@@ -898,6 +963,7 @@ export function Blocks({
   onArtifactDownload,
   onArtifactPreview,
   onResolveDelivery,
+  onResolveDeliveryComparison,
   onDownloadDelivery,
   onDeployDelivery,
 }: BlocksProps) {
@@ -960,6 +1026,7 @@ export function Blocks({
                 key={i}
                 value={b.value}
                 onResolve={onResolveDelivery}
+                onResolveComparison={onResolveDeliveryComparison}
                 onDownload={onDownloadDelivery}
                 onDeploy={onDeployDelivery}
               />

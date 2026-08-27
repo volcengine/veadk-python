@@ -46,7 +46,11 @@ server that `veadk frontend` launches — no separate backend.
   Each completed build or optimization is also saved as an immutable project
   version in the private Studio TOS bucket. Users can reopen any saved version,
   view, download, deploy, delete, or restore it into a new Sandbox for another
-  intent-driven iteration after the original Sandbox expires.
+  intent-driven iteration after the original Sandbox expires. The source
+  workspace provides an IDE-style file tree with persistent light and dark
+  themes. Optimizations expose their before/after changes directly, and any two
+  saved versions of the same project can be compared on demand without storing
+  another artifact.
   Deployable source can be sent to Runtime manually; an incomplete verification
   report requires an explicit confirmation. No separate “start verification”
   action is required.
