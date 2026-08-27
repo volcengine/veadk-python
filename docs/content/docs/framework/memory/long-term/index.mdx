@@ -131,7 +131,7 @@ runner = Runner(agent=root_agent, app_name=APP_NAME)
 
 ### 写入：`add_session_to_memory`
 
-会话结束或达到某个节点时，调用异步方法 `add_session_to_memory` 把会话持久化。`LongTermMemory` 会先过滤事件（只保留用户文本事件以提升检索质量），再交给后端写入。
+会话结束或达到某个节点时，调用异步方法 `add_session_to_memory` 把会话持久化。`LongTermMemory` 会先按默认策略过滤事件（普通后端只保留用户文本事件，OpenViking 后端保留用户与助手文本事件），再交给后端写入。
 
 ```python
 completed_session = await runner.session_service.get_session(
@@ -173,7 +173,59 @@ agent = Agent(
 ```
 
 为避免索引被频繁初始化，VeADK 提供 `MIN_MESSAGES_THRESHOLD` 与 `MIN_TIME_THRESHOLD` 两个环境变量自定义保存周期：默认在累计 10 条 event 或间隔 60 秒时触发保存；此外，当切换 `session_id` 并发起新问答时，VeADK 会自动把上一个会话写入长期记忆。
-
+## 自动保存记忆策略
+开发者在 `Agent` 上配置 `auto_save_memory_policy` 来控制自动保存长期记忆时哪些 event 会被写入；不配置时等价于 `"default"`。
+```python
+from veadk import Agent
+from veadk.memory import MemoryAutoSavePolicy
+from veadk.memory.long_term_memory import LongTermMemory
+agent = Agent(
+    name="ltm_agent",
+    auto_save_session=True,
+    long_term_memory=LongTermMemory(backend="viking", app_name="ltm_demo"),
+    auto_save_memory_policy="default",
+)
+agent_all = Agent(
+    name="ltm_agent_all",
+    auto_save_session=True,
+    long_term_memory=LongTermMemory(backend="viking", app_name="ltm_demo"),
+    auto_save_memory_policy="all",
+)
+agent_custom = Agent(
+    name="ltm_agent_custom",
+    auto_save_session=True,
+    long_term_memory=LongTermMemory(backend="viking", app_name="ltm_demo"),
+    auto_save_memory_policy=MemoryAutoSavePolicy(
+        preset="custom",
+        include_roles=["user", "assistant"],
+        include_event_types=["text", "function_call", "function_response"],
+        exclude_authors=["memory_optimizer"],
+        include_thought=False,
+    ),
+)
+```
+策略字段只影响自动保存长期记忆的事件筛选，不改变短期记忆、`load_memory` 检索或后端 `save_memory` 的参数契约；手动调用 `add_session_to_memory` 时仍默认使用兼容旧版本的默认策略，只有显式传入 `auto_save_memory_policy` 才会应用自定义筛选。
+### 预置策略
+`"default"`：兼容旧行为。普通后端只保存 `role=user` 的文本事件；OpenViking 后端保存 `role=user` 与 `role=assistant` 的文本事件；默认不保存工具调用、工具返回、媒体、代码执行结果和 thought。
+`"all"`：保存 `role=user`、`role=assistant`、`role=system` 的所有可序列化事件类型，包括文本、thought、function/tool 调用与返回、媒体元信息、代码执行、转写和错误。为避免把原始二进制写入记忆，`inline_data.data` 会被替换为 `data_size` 与 `data_omitted`。
+`"custom"`：从保守默认值开始，由开发者通过 include/exclude 字段精确选择要保存或排除的事件。
+### 策略字段
+`include_roles` / `exclude_roles`：按归一化后的角色筛选，角色枚举为 `"user"`、`"assistant"`、`"system"`；ADK/GenAI 的 `content.role="model"` 会归一化为 `"assistant"`，`event.author=="user"` 或 `content.role=="user"` 会归一化为 `"user"`。
+`include_authors` / `exclude_authors`：按 `event.author` 精确匹配筛选；`author` 不是固定枚举，可能是 `"user"`、agent name、运行时桥接组件或内部处理器名称。
+`include_event_types` / `exclude_event_types`：按 event 中包含的内容类型筛选；显式设置 `include_event_types` 时以该字段为准，可直接保存非文本类型。
+`text_only`：当 `include_event_types` 未显式设置时，只允许文本类 part 通过；默认 `True`。
+`include_thought`：是否保存 `part.thought=True` 的思考文本；默认 `False`，混合事件中会移除 thought part 但保留最终文本。
+`include_empty_text`：是否允许没有文本 part 的事件通过；`"all"` 会开启它以支持错误、转写等非普通文本事件，但如果事件类型被 `exclude_event_types` 全部排除，仍不会写入空事件。
+### Event 类型推断
+`event_type` 不是 ADK Event 的原生字段，VeADK 会从 `event.content.parts` 与事件元数据推断。
+`text`：part 有 `text` 且不是 thought。
+`thought`：part 有 `text` 且 `thought=True`。
+`function_call` / `function_response`：part 含 `function_call` 或 `function_response`，这是 ADK 常用的工具调用与工具返回形态。
+`tool_call` / `tool_response`：part 含 GenAI 底层 `tool_call` 或 `tool_response`。
+`media`：part 含 `inline_data` 或 `file_data`。
+`executable_code` / `code_execution_result`：part 含代码执行请求或执行结果。
+`transcription`：event 含 `input_transcription` 或 `output_transcription`。
+`error`：event 含 `error_code` 或 `error_message`。
 ## 跨会话示例
 
 下面是端到端流程：会话 #1 告诉智能体一个事实并自动归档，然后在**全新的**会话 #2 提问——智能体通过检索长期记忆（而非上下文窗口）回忆起该事实。这里用 `local` 后端，需要 `pip install "veadk-python[extensions]"`。

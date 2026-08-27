@@ -30,6 +30,7 @@ _EXPECTED_DEFAULTS = {
     "enable_responses_cache": True,
     "enable_authz": False,
     "auto_save_session": False,
+    "auto_save_memory_policy": "default",
     "enable_supervisor": False,
     "enable_ghostchar": False,
     "enable_dataset_gen": False,

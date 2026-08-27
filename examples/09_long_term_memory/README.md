@@ -45,6 +45,18 @@ python main.py
 Session #2's recommendation should respect the peanut allergy and vegetarian
 preference from session #1.
 
+## Auto-save policy preview
+
+To inspect what `auto_save_memory_policy` persists without calling a model or a
+real memory service, run:
+
+```bash
+python auto_save_memory_policy.py
+```
+
+The preview compares `"default"`, `"all"`, and a custom
+`MemoryAutoSavePolicy`.
+
 ## What to try next
 
 - Short-term vs long-term: see [03](../03_short_term_memory/) for the
