@@ -4,6 +4,7 @@ import {
   getStudioUpdateStatus,
   getStudioUpdatePermissions,
   startStudioUpdate,
+  type StudioUpdateProgressStage,
   type StudioUpdatePermissionStatus,
   type StudioUpdateStatus,
 } from "../adk/client";
@@ -28,18 +29,28 @@ type UpdatePhase =
   | "error";
 type PendingStudioUpdate = { targetVersion: string; startedAt: number };
 type LogCopyState = "idle" | "copied" | "error";
+type VisibleUpdateStage = Exclude<
+  StudioUpdateProgressStage,
+  "idle" | "complete" | "error"
+>;
 
-const UPDATE_STEPS = [
-  { id: "permissions", label: "预检 OTA 所需权限" },
-  { id: "resolving", label: "读取目标版本信息" },
-  { id: "downloading", label: "下载并校验完整更新包" },
-  { id: "preparing", label: "准备 VeFaaS Function 代码" },
-  { id: "provisioning", label: "检查并补齐 Studio 云资源" },
-  { id: "submitting", label: "提交 Function 更新" },
-  { id: "publishing", label: "发布新 Revision 并重启服务" },
-] as const;
+const UPDATE_STEP_LABELS = {
+  permissions: "预检 OTA 所需权限",
+  resolving: "读取目标版本信息",
+  downloading: "下载并校验完整更新包",
+  preparing: "准备 VeFaaS Function 代码",
+  provisioning: "检查并补齐 Studio 云资源",
+  scheduler: "更新定时任务调度服务",
+  submitting: "提交 Function 更新",
+  publishing: "发布新 Revision 并重启服务",
+} satisfies Record<VisibleUpdateStage, string>;
+
+const UPDATE_STEPS = (
+  Object.entries(UPDATE_STEP_LABELS) as Array<[VisibleUpdateStage, string]>
+).map(([id, label]) => ({ id, label }));
 
 const UPDATE_STAGE_LABELS: Record<string, string> = {
+  ...UPDATE_STEP_LABELS,
   permissions: "预检 OTA 权限",
   resolving: "读取版本信息",
   downloading: "下载更新包",
@@ -451,6 +462,13 @@ export function StudioUpdateControl({
     : (status.errorLog || status.progressMessage || message)
         .split("\n")
         .filter(Boolean);
+  const currentUpdateStepIndex = UPDATE_STEPS.findIndex(
+    (item) => item.id === status.progressStage,
+  );
+  const unknownProgressStage =
+    phase === "submitting" &&
+    status.progressStage !== "idle" &&
+    currentUpdateStepIndex < 0;
 
   const copyUpdateLog = async (lines: string[]) => {
     try {
@@ -666,17 +684,29 @@ export function StudioUpdateControl({
                   </div>
                 </div>
                 <ol className="studio-update-progress" aria-label="Studio 更新进度">
+                  {unknownProgressStage && (
+                    <li className="is-active" aria-current="step">
+                      <span className="studio-update-progress-dot" aria-hidden />
+                      <div>
+                        <span>
+                          {UPDATE_STAGE_LABELS[status.progressStage] || "正在处理更新"}
+                        </span>
+                        <TextShimmer as="small">
+                          {status.progressMessage || message || "正在处理"}
+                        </TextShimmer>
+                      </div>
+                    </li>
+                  )}
                   {UPDATE_STEPS.map((step, index) => {
-                    const currentIndex = UPDATE_STEPS.findIndex(
-                      (item) => item.id === status.progressStage,
-                    );
-                    const completed = phase === "published" || index < currentIndex;
+                    const completed =
+                      phase === "published" || index < currentUpdateStepIndex;
                     const active =
                       phase === "submitting" && step.id === status.progressStage;
                     return (
                       <li
                         key={step.id}
                         className={completed ? "is-complete" : active ? "is-active" : ""}
+                        aria-current={active ? "step" : undefined}
                       >
                         <span className="studio-update-progress-dot" aria-hidden />
                         <div>

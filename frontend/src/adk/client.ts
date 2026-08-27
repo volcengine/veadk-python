@@ -3335,6 +3335,19 @@ export interface StudioReleaseOption {
   changelog: string[];
 }
 
+export type StudioUpdateProgressStage =
+  | "idle"
+  | "permissions"
+  | "resolving"
+  | "downloading"
+  | "preparing"
+  | "provisioning"
+  | "scheduler"
+  | "submitting"
+  | "publishing"
+  | "complete"
+  | "error";
+
 export interface StudioUpdateStatus {
   enabled: boolean;
   currentVersion: string;
@@ -3344,15 +3357,7 @@ export interface StudioUpdateStatus {
   available: boolean;
   state: "disabled" | "idle" | "updating" | "error";
   message: string;
-  progressStage:
-    | "idle"
-    | "resolving"
-    | "downloading"
-    | "preparing"
-    | "submitting"
-    | "publishing"
-    | "complete"
-    | "error";
+  progressStage: StudioUpdateProgressStage;
   progressMessage: string;
   targetVersion: string;
   startedAt: number;
