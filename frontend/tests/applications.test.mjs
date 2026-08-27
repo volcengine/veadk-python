@@ -92,7 +92,7 @@ const sidebarSource = readFileSync(
 );
 const appSource = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
 
-test("places Automation below scheduled tasks and scopes the beta badge to scheduled tasks", () => {
+test("places Automation below scheduled tasks without a beta badge", () => {
   assert.match(
     sidebarSource,
     /SidebarPage\s*=\s*[\s\S]*?"new-chat"[\s\S]*?"agents"[\s\S]*?"applications"[\s\S]*?"search"[\s\S]*?"feedback"/,
@@ -102,14 +102,7 @@ test("places Automation below scheduled tasks and scopes the beta badge to sched
   assert.equal((sidebarSource.match(/<circle /g) ?? []).length >= 4, true);
   assert.match(sidebarSource, /aria-label="自动化"/);
   assert.match(sidebarSource, /<span className="sidebar-nav-label">自动化<\/span>/);
-  assert.match(
-    sidebarSource,
-    /aria-label="定时任务"[\s\S]*?<Badge[\s\S]*?className="sidebar-cronjobs-beta"[\s\S]*?color="discovery"[\s\S]*?variant="soft"[\s\S]*?>[\s\S]*?Beta[\s\S]*?<\/Badge>/,
-  );
-  assert.doesNotMatch(
-    sidebarSource,
-    /aria-label="自动化"[\s\S]*?sidebar-cronjobs-beta/,
-  );
+  assert.doesNotMatch(sidebarSource, /sidebar-cronjobs-beta|>\s*Beta\s*</);
   const searchIndex = sidebarSource.indexOf("<SearchButton");
   const cronJobsIndex = sidebarSource.indexOf('aria-label="定时任务"');
   const applicationsIndex = sidebarSource.indexOf('aria-label="自动化"');

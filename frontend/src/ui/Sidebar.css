@@ -6,12 +6,3 @@
 .new-chat--cronjobs.is-active > .icon {
   color: hsl(var(--foreground));
 }
-
-.sidebar-cronjobs-beta {
-  flex: 0 0 auto;
-  margin-left: auto;
-}
-
-.sidebar.is-collapsed .sidebar-cronjobs-beta {
-  display: none;
-}
