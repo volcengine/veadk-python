@@ -136,6 +136,7 @@ import { MediaGroup } from "./ui/Media";
 import { StackCards } from "./ui/AddAgentMenu";
 import {
   IntelligentCreate,
+  type IntelligentCreateBaseVersion,
   type IntelligentDevelopmentCapabilities,
   type IntelligentPreparationStage,
 } from "./create/IntelligentCreate";
@@ -1202,6 +1203,11 @@ export default function App() {
     useState("");
   const [intelligentPreparationStage, setIntelligentPreparationStage] =
     useState<IntelligentPreparationStage | null>(null);
+  const [intelligentInitialBaseVersion, setIntelligentInitialBaseVersion] =
+    useState<IntelligentCreateBaseVersion>();
+  const [migrationProjectReturn, setMigrationProjectReturn] = useState<{
+    projectId: string;
+  }>();
   const [intelligentDeployment, setIntelligentDeploymentState] =
     useState<IntelligentDevelopmentReleaseRef | null>(null);
   const setIntelligentDeployment = useCallback(
@@ -2828,7 +2834,7 @@ export default function App() {
   }, [authStatus, intelligentDeployment, userId]);
 
   useEffect(() => {
-    if (!addMenu && createView !== "intelligent") return;
+    if (!addMenu && !["intelligent", "migration"].includes(createView ?? "")) return;
     if (authStatus !== "authenticated" || !userId) {
       setIntelligentCapabilities(null);
       setIntelligentCapabilitiesError("");
@@ -6979,6 +6985,8 @@ export default function App() {
                       setFocusedWorkspaceAgentId("");
                       setEditingDraftId("");
                       editingDraftBaselineRef.current = null;
+                      setIntelligentInitialBaseVersion(undefined);
+                      setMigrationProjectReturn(undefined);
                       setCreateView("intelligent");
                     },
                   },
@@ -7001,6 +7009,7 @@ export default function App() {
                     onClick: () => {
                       setAddMenu(false);
                       setImportedDraft(null);
+                      setMigrationProjectReturn(undefined);
                       setCreateView("migration");
                     },
                   },
@@ -7104,8 +7113,14 @@ export default function App() {
                 onCancel={cancelIntelligentPreparation}
                 onDownload={downloadIntelligentDelivery}
                 onDeploy={setIntelligentDeployment}
+                initialBaseVersion={intelligentInitialBaseVersion}
                 onBack={() => {
                   cancelIntelligentPreparation();
+                  setIntelligentInitialBaseVersion(undefined);
+                  if (migrationProjectReturn) {
+                    setCreateView("migration");
+                    return;
+                  }
                   setCreateView(null);
                   setAddMenuSurface("traditional");
                   setAddMenu(true);
@@ -7231,6 +7246,7 @@ export default function App() {
               <MigrationWorkspace
                 cloudProvider={cloudProvider}
                 onBack={() => {
+                  setMigrationProjectReturn(undefined);
                   setCreateView(null);
                   setAddMenuSurface("traditional");
                   setAddMenu(true);
@@ -7240,6 +7256,22 @@ export default function App() {
                 onDeploymentStarted={startDeployment}
                 onDeploymentComplete={finishDeployment}
                 initialDeployRegion={newRuntimeRegion}
+                projectCapabilities={intelligentCapabilities}
+                projectCapabilitiesLoading={intelligentCapabilitiesLoading}
+                initialPage={migrationProjectReturn ? "projects" : "new"}
+                initialProjectId={migrationProjectReturn?.projectId}
+                onOptimizeVersion={(base) => {
+                  setMigrationProjectReturn({ projectId: base.projectId });
+                  setIntelligentInitialBaseVersion(base);
+                  setCreateView("intelligent");
+                }}
+                onDownloadSavedVersion={downloadIntelligentDelivery}
+                onDeploySavedVersion={(delivery) => {
+                  setMigrationProjectReturn({
+                    projectId: delivery.projectId ?? "",
+                  });
+                  setIntelligentDeployment(delivery);
+                }}
               />
             ) : turns.length === 0 && !newChatCapabilitiesReady ? (
               <div className="session-loading">

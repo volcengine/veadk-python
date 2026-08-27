@@ -18,6 +18,9 @@ from .models import (
     IntelligentDevelopmentProject,
     IntelligentDevelopmentSessionBinding,
     IntelligentDevelopmentVersion,
+    SourceProjectOrigin,
+    SourceVersionEnvironment,
+    SourceVersionProducer,
     StoredDevelopmentVersion,
 )
 from .repository import (
@@ -40,6 +43,9 @@ __all__ = [
     "IntelligentDevelopmentVersion",
     "IntelligentDevelopmentVersionIntegrityError",
     "IntelligentDevelopmentVersionNotFound",
+    "SourceProjectOrigin",
+    "SourceVersionEnvironment",
+    "SourceVersionProducer",
     "StoredDevelopmentVersion",
     "TosIntelligentDevelopmentProjectRepository",
 ]

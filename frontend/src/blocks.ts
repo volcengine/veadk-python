@@ -65,6 +65,11 @@ export interface IntelligentDevelopmentReleaseRef {
   deployable: boolean;
   verified: boolean;
   validationSummary: string;
+  environment?: {
+    required: string[];
+    optional: string[];
+    defaults: Record<string, string>;
+  };
   files?: ProjectFile[];
 }
 

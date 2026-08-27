@@ -795,9 +795,11 @@ test("durable project APIs parse lists, versions, deletion, and exact source ide
     validationSummary: "验证通过",
     files: [{ path: "app.py", content: "agent = object()" }],
   };
+  const projectOrigins = [];
   globalThis.fetch = async (url, options = {}) => {
     const request = new URL(String(url), "http://localhost");
     if (request.pathname.endsWith("/projects")) {
+      projectOrigins.push(request.searchParams.get("origin"));
       return Response.json({ projects: [project] });
     }
     if (request.pathname.endsWith("/versions")) {
@@ -811,6 +813,11 @@ test("durable project APIs parse lists, versions, deletion, and exact source ide
   };
   try {
     assert.deepEqual(await fetchIntelligentDevelopmentProjects(), [project]);
+    assert.deepEqual(
+      await fetchIntelligentDevelopmentProjects(undefined, "migration"),
+      [project],
+    );
+    assert.deepEqual(projectOrigins, ["intelligent-development", "migration"]);
     assert.deepEqual(
       await fetchIntelligentDevelopmentVersions("project-1"),
       [version],

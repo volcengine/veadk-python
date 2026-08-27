@@ -32,6 +32,7 @@ from frontend.server.deployment_source import (
 from frontend.server.intelligent_development import release_path
 from frontend.server.intelligent_development_projects import (
     IntelligentDevelopmentProjectService,
+    IntelligentDevelopmentVersion,
     IntelligentDevelopmentVersionIntegrityError,
     IntelligentDevelopmentVersionNotFound,
 )
@@ -49,6 +50,9 @@ _MAX_FILE_COUNT = 2_000
 _MAX_REPORT_BYTES = 2 * 1024 * 1024
 _MAX_DESCRIPTOR_BYTES = 256 * 1024
 _CURRENT_POINTER_BYTES = 4 * 1024
+_MAX_PREVIEW_FILE_BYTES = 2 * 1024 * 1024
+_MAX_PREVIEW_TOTAL_BYTES = 20 * 1024 * 1024
+_MAX_PREVIEW_FILES = 2_000
 _REQUIRED_GATES = {
     "local-checks",
     "service-probe",
@@ -95,6 +99,9 @@ class TrustedDeploymentSource:
     files: tuple[TrustedSourceFile, ...]
     project_id: str = ""
     version_id: str = ""
+    environment_required: tuple[str, ...] = ()
+    environment_optional: tuple[str, ...] = ()
+    environment_defaults: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -112,10 +119,24 @@ class _MaterializedDevelopmentRelease:
     artifact: bytes
 
 
-def _text_source_files(destination: Path) -> tuple[TrustedSourceFile, ...]:
+def _text_source_files(
+    destination: Path,
+    *,
+    max_file_bytes: int | None = None,
+    max_total_bytes: int | None = None,
+    max_files: int | None = None,
+) -> tuple[TrustedSourceFile, ...]:
     files: list[TrustedSourceFile] = []
+    total_bytes = 0
     for path in sorted(destination.rglob("*")):
         if path.is_symlink() or not path.is_file():
+            continue
+        if max_files is not None and len(files) >= max_files:
+            break
+        size = path.stat().st_size
+        if (max_file_bytes is not None and size > max_file_bytes) or (
+            max_total_bytes is not None and total_bytes + size > max_total_bytes
+        ):
             continue
         content = path.read_bytes()
         if b"\x00" in content:
@@ -125,6 +146,7 @@ def _text_source_files(destination: Path) -> tuple[TrustedSourceFile, ...]:
         except UnicodeDecodeError:
             continue
         files.append(TrustedSourceFile(path.relative_to(destination).as_posix(), text))
+        total_bytes += len(content)
     return tuple(files)
 
 
@@ -192,6 +214,7 @@ async def _materialize_intelligent_development_source(
     project_id = source.get("projectId")
     version_id = source.get("versionId")
     stored = isinstance(project_id, str) or isinstance(version_id, str)
+    metadata: IntelligentDevelopmentVersion | None = None
     if stored:
         if (
             not isinstance(project_id, str)
@@ -267,6 +290,76 @@ async def _materialize_intelligent_development_source(
         )
     if _digest(artifact) != artifact_digest or _digest(report) != report_digest:
         raise IntelligentDevelopmentSourceIntegrityError("交付物完整性校验失败。")
+    stored_metadata = metadata if stored else None
+    if stored_metadata is not None and stored_metadata.producer == "migration":
+        from frontend.server.migration.contracts import (
+            MigrationContractError,
+            validate_delivery_result,
+        )
+
+        migration_report = _object(report, "migration result")
+        try:
+            migration_result = validate_delivery_result(
+                migration_report,
+                expected_run_id=session_id,
+                expected_status=str(migration_report.get("status") or ""),
+            )
+        except MigrationContractError as error:
+            raise IntelligentDevelopmentSourceIntegrityError(
+                "已保存迁移版本的交付清单无效。"
+            ) from error
+        artifact_descriptor = migration_result.get("artifact")
+        files_descriptor = migration_result.get("files")
+        startup = migration_result.get("startup")
+        if (
+            not isinstance(artifact_descriptor, dict)
+            or artifact_descriptor.get("sha256") != artifact_digest
+            or artifact_descriptor.get("size") != len(artifact)
+            or not isinstance(files_descriptor, list)
+            or len(files_descriptor) != stored_metadata.file_count
+            or not isinstance(startup, dict)
+            or startup.get("module") != stored_metadata.entry_point
+        ):
+            raise IntelligentDevelopmentSourceIntegrityError(
+                "已保存迁移版本与交付清单不一致。"
+            )
+        if (
+            require_verified
+            and not stored_metadata.verified
+            and not acknowledge_unverified
+        ):
+            raise DeploymentSourceError("迁移版本的校验结果尚未确认。")
+        resolved_entry = extract_migration_source(
+            destination,
+            artifact,
+            migration_result,
+        )
+        return _MaterializedDevelopmentRelease(
+            TrustedDeploymentSource(
+                resolved_entry,
+                stored_metadata.agent_name,
+                artifact_digest,
+                report_digest,
+                stored_metadata.file_count,
+                stored_metadata.artifact_size,
+                stored_metadata.validated_at,
+                tuple(stored_metadata.gate_summary),
+                stored_metadata.verified,
+                stored_metadata.validation_summary,
+                _text_source_files(
+                    destination,
+                    max_file_bytes=_MAX_PREVIEW_FILE_BYTES,
+                    max_total_bytes=_MAX_PREVIEW_TOTAL_BYTES,
+                    max_files=_MAX_PREVIEW_FILES,
+                ),
+                project_id if isinstance(project_id, str) else "",
+                version_id if isinstance(version_id, str) else "",
+                tuple(stored_metadata.environment.required),
+                tuple(stored_metadata.environment.optional),
+                tuple(sorted(stored_metadata.environment.defaults.items())),
+            ),
+            artifact,
+        )
     if not stored:
         release = release_path(artifact_digest, report_digest)
         expected_paths = {
@@ -508,8 +601,8 @@ __all__ = [
     "IntelligentDevelopmentSourceIntegrityError",
     "IntelligentDevelopmentSourceNotFound",
     "IntelligentDevelopmentSourceStale",
-    "TrustedDevelopmentArtifact",
     "TrustedDeploymentSource",
+    "TrustedDevelopmentArtifact",
     "TrustedSourceFile",
     "load_intelligent_development_artifact",
     "materialize_current_intelligent_development_preview",

@@ -32,6 +32,7 @@ from .models import (
     IntelligentDevelopmentProject,
     IntelligentDevelopmentSessionBinding,
     IntelligentDevelopmentVersion,
+    SourceProjectOrigin,
     StoredDevelopmentVersion,
 )
 
@@ -40,8 +41,8 @@ _VERSION_MARKER_RE = re.compile(
     r"/projects/(?P<project>[0-9a-f]{32})/versions/[0-9a-f]{32}/version\.json$"
 )
 _MAX_JSON_BYTES = 256 * 1024
-_MAX_ARTIFACT_BYTES = 20 * 1024 * 1024
-_MAX_REPORT_BYTES = 2 * 1024 * 1024
+_MAX_ARTIFACT_BYTES = 512 * 1024 * 1024
+_MAX_REPORT_BYTES = 16 * 1024 * 1024
 T = TypeVar("T")
 logger = logging.getLogger(__name__)
 
@@ -112,6 +113,8 @@ class TosIntelligentDevelopmentProjectRepository:
         metadata: IntelligentDevelopmentVersion,
         artifact: bytes,
         validation_report: bytes,
+        *,
+        project_origin: SourceProjectOrigin = "intelligent-development",
     ) -> IntelligentDevelopmentProject:
         return await self._run(
             self._commit_version,
@@ -120,6 +123,7 @@ class TosIntelligentDevelopmentProjectRepository:
             metadata,
             artifact,
             validation_report,
+            project_origin,
         )
 
     async def delete_version(
@@ -324,6 +328,7 @@ class TosIntelligentDevelopmentProjectRepository:
         metadata: IntelligentDevelopmentVersion,
         artifact: bytes,
         validation_report: bytes,
+        project_origin: SourceProjectOrigin,
     ) -> IntelligentDevelopmentProject:
         self._validate_id(metadata.project_id, project=True)
         self._validate_id(metadata.version_id, project=False)
@@ -400,6 +405,7 @@ class TosIntelligentDevelopmentProjectRepository:
         project = IntelligentDevelopmentProject(
             projectId=metadata.project_id,
             ownerId=owner_id,
+            origin=previous.origin if previous is not None else project_origin,
             name=(
                 previous.name
                 if previous is not None

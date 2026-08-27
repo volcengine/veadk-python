@@ -11,6 +11,11 @@ import { ProjectPreview, type DeployResult, type DeploymentTaskUpdate } from "..
 import { generateRuntimeName, runtimeNameProblem } from "./runtimeName";
 import type { AgentProject } from "./project";
 import type { NetworkConfig } from "./types";
+import type { EnvVar } from "./veadkCatalog";
+import {
+  isMigrationRuntimeEnvironmentKey,
+  isSecretEnvironmentKey,
+} from "../migrations/deploymentEnvironment";
 
 export interface IntelligentDeploymentProps {
   delivery: IntelligentDevelopmentReleaseRef;
@@ -43,6 +48,37 @@ export function IntelligentDeployment({
     name: generateRuntimeName(delivery.agentName),
     files: delivery.files ?? [],
   }));
+  const environment = delivery.environment ?? {
+    required: [],
+    optional: [],
+    defaults: {},
+  };
+  const [deploymentEnvValues, setDeploymentEnvValues] = useState<
+    Record<string, string>
+  >(() => ({ ...environment.defaults }));
+  const deploymentSecretEnv = environment.required
+    .filter(isMigrationRuntimeEnvironmentKey)
+    .filter(isSecretEnvironmentKey)
+    .map((key) => ({ key, label: key }));
+  const deploymentEnv: EnvVar[] = [
+    ...environment.required
+      .filter(isMigrationRuntimeEnvironmentKey)
+      .filter((key) => !isSecretEnvironmentKey(key))
+      .map((key) => ({
+        key,
+        required: true,
+        comment: key,
+        placeholder: `请输入 ${key}`,
+      })),
+    ...environment.optional
+      .filter(isMigrationRuntimeEnvironmentKey)
+      .map((key) => ({
+        key,
+        required: false,
+        comment: key,
+        placeholder: `可选：${key}`,
+      })),
+  ];
   const runtimeNameError = runtimeNameProblem(project.name);
   useEffect(() => {
     if (runtimeNameError) {
@@ -114,6 +150,12 @@ export function IntelligentDeployment({
       onNetworkChange={setNetwork}
       deployRegion={deployRegion}
       onDeployRegionChange={setDeployRegion}
+      deploymentEnv={deploymentEnv}
+      requiredSecretEnv={deploymentSecretEnv}
+      deploymentEnvValues={deploymentEnvValues}
+      onDeploymentEnvChange={(key, value) =>
+        setDeploymentEnvValues((current) => ({ ...current, [key]: value }))
+      }
       deploymentActionLabel="部署"
       deployDisabled={Boolean(runtimeNameError) || runtimeNameAvailable === false || runtimeNameChecking}
       deployDisabledReason={
