@@ -1333,6 +1333,17 @@ test("intelligent conversation keeps the Studio visual language and stable contr
   );
 });
 
+test("only intelligent development exits back to the intelligent build start page", () => {
+  assert.match(
+    appSource,
+    /function returnToIntelligentCreate\(\) \{[\s\S]*?startNewChat\(\);[\s\S]*?setIntelligentDeployment\(null\);[\s\S]*?setAddMenu\(false\);[\s\S]*?setCreateView\("intelligent"\);[\s\S]*?\}/,
+  );
+  assert.match(
+    appSource,
+    /onExit=\{\(\) => requestIntelligentNavigation\([\s\S]*?sandboxSession\.intelligentDevelopment[\s\S]*?\? returnToIntelligentCreate[\s\S]*?: startNewChat[\s\S]*?\)\}/,
+  );
+});
+
 test("authentication does not load Codex sessions into the global Sidebar", () => {
   assert.doesNotMatch(appSource, /intelligentDevelopmentClient\.listSessions/);
   assert.doesNotMatch(appSource, /intelligentHistory=/);

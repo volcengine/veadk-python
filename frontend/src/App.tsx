@@ -4426,6 +4426,13 @@ export default function App() {
     if (abandonedSession) void abandonDraftSession(abandonedSession);
   }
 
+  function returnToIntelligentCreate() {
+    startNewChat();
+    setIntelligentDeployment(null);
+    setAddMenu(false);
+    setCreateView("intelligent");
+  }
+
   function clearSelectedAgentAfterRemoval() {
     agentSelectionClearedRef.current = true;
     localStorage.removeItem(LS.app);
@@ -6121,7 +6128,11 @@ export default function App() {
                     ? "退出开发环境"
                     : undefined
                 }
-                onExit={() => requestIntelligentNavigation(startNewChat)}
+                onExit={() => requestIntelligentNavigation(
+                  sandboxSession.intelligentDevelopment
+                    ? returnToIntelligentCreate
+                    : startNewChat
+                )}
               />
             )}
             {sandboxSession ? (
