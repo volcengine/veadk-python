@@ -14,9 +14,12 @@ interface CodeEditorProps {
   path: string;
   onChange: (value: string) => void;
   readOnly?: boolean;
+  theme?: CodeWorkspaceTheme;
 }
 
-function languageFor(path: string): Extension[] {
+export type CodeWorkspaceTheme = "light" | "dark";
+
+export function languageFor(path: string): Extension[] {
   const lower = path.toLowerCase();
   const file = lower.split("/").pop() ?? lower;
   const extension = file.includes(".") ? file.split(".").pop() : "";
@@ -41,14 +44,20 @@ function languageFor(path: string): Extension[] {
   return [];
 }
 
-export default function CodeEditor({ value, path, onChange, readOnly = false }: CodeEditorProps) {
+export default function CodeEditor({
+  value,
+  path,
+  onChange,
+  readOnly = false,
+  theme = "light",
+}: CodeEditorProps) {
   const extensions = useMemo(() => languageFor(path), [path]);
 
   return (
     <CodeMirror
       value={value}
       height="100%"
-      theme="light"
+      theme={theme}
       extensions={extensions}
       editable={!readOnly}
       onChange={onChange}

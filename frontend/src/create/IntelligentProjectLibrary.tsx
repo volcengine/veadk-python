@@ -11,6 +11,7 @@ import {
   type IntelligentDevelopmentVersion,
 } from "../adk/intelligentDevelopment";
 import { CodeBrowserDialog } from "../ui/CodeBrowserDialog";
+import { SourceRefreshIcon } from "../ui/icons/SourceWorkspaceIcons";
 import { StudioConfirmDialog } from "../ui/StudioConfirmDialog";
 import { TextShimmer } from "../ui/text-shimmer/TextShimmer";
 import type {
@@ -32,23 +33,6 @@ function ProjectArchiveIcon() {
     >
       <path d="M4.5 7.5h15v11h-15z" />
       <path d="M7 7.5V5h10v2.5M9 11h6" />
-    </svg>
-  );
-}
-
-function RefreshProjectIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.75"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M19 8.5V4.75l-1.7 1.7A7.5 7.5 0 1 0 19.5 12" />
-      <path d="M19 4.75h-3.75" />
     </svg>
   );
 }
@@ -89,6 +73,7 @@ function releaseFromVersion(
     sessionId: version.sourceSessionId,
     projectId: version.projectId,
     versionId: version.versionId,
+    parentVersionId: version.parentVersionId,
     artifactSha256: version.artifactSha256,
     validationReportSha256: version.validationReportSha256,
     agentName: version.agentName,
@@ -147,6 +132,15 @@ export function IntelligentProjectLibrary({
   const [deleteError, setDeleteError] = useState("");
   const [browserDelivery, setBrowserDelivery] =
     useState<IntelligentDevelopmentReleaseRef | null>(null);
+  const [browserComparison, setBrowserComparison] = useState<{
+    base: IntelligentDevelopmentReleaseRef;
+    baseLabel: string;
+    targetLabel: string;
+  } | null>(null);
+  const [compareSelection, setCompareSelection] = useState<{
+    projectId: string;
+    versionIds: string[];
+  } | null>(null);
   const storageEnabled = capabilities?.projectStorageEnabled === true;
 
   useEffect(() => {
@@ -223,11 +217,80 @@ export function IntelligentProjectLibrary({
     setBusyAction(action);
     setFeedback(null);
     try {
+      setBrowserComparison(null);
       setBrowserDelivery(await fetchIntelligentDevelopmentVersionSource(version));
     } catch (cause) {
       setFeedback({
         kind: "error",
         text: cause instanceof Error ? cause.message : "无法读取项目源码。",
+      });
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  function startVersionComparison(
+    project: IntelligentDevelopmentProject,
+    projectVersions: IntelligentDevelopmentVersion[],
+  ) {
+    const target = projectVersions.find(
+      (version) => version.versionId === project.latestVersionId,
+    ) ?? projectVersions[0];
+    const base = projectVersions.find(
+      (version) => version.versionId === target?.parentVersionId,
+    ) ?? projectVersions.find((version) => version.versionId !== target?.versionId);
+    setCompareSelection({
+      projectId: project.projectId,
+      versionIds: base && target ? [base.versionId, target.versionId] : [],
+    });
+    setFeedback(null);
+  }
+
+  function toggleCompareVersion(projectId: string, versionId: string) {
+    setCompareSelection((current) => {
+      if (!current || current.projectId !== projectId) return current;
+      const selected = current.versionIds.includes(versionId);
+      return {
+        ...current,
+        versionIds: selected
+          ? current.versionIds.filter((item) => item !== versionId)
+          : current.versionIds.length < 2
+            ? [...current.versionIds, versionId]
+            : current.versionIds,
+      };
+    });
+  }
+
+  async function viewVersionComparison(
+    project: IntelligentDevelopmentProject,
+    projectVersions: IntelligentDevelopmentVersion[],
+  ) {
+    if (busyAction || compareSelection?.projectId !== project.projectId) return;
+    const selected = projectVersions
+      .filter((version) => compareSelection.versionIds.includes(version.versionId))
+      .sort((left, right) => (
+        new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
+        || left.versionId.localeCompare(right.versionId)
+      ));
+    if (selected.length !== 2) return;
+    const action = `compare:${project.projectId}`;
+    setBusyAction(action);
+    setFeedback(null);
+    try {
+      const [base, target] = await Promise.all([
+        fetchIntelligentDevelopmentVersionSource(selected[0]),
+        fetchIntelligentDevelopmentVersionSource(selected[1]),
+      ]);
+      setBrowserComparison({
+        base,
+        baseLabel: formatVersionTime(selected[0].createdAt),
+        targetLabel: formatVersionTime(selected[1].createdAt),
+      });
+      setBrowserDelivery(target);
+    } catch (cause) {
+      setFeedback({
+        kind: "error",
+        text: cause instanceof Error ? cause.message : "无法读取项目版本。",
       });
     } finally {
       setBusyAction("");
@@ -274,17 +337,16 @@ export function IntelligentProjectLibrary({
     setBusyAction(`delete:${version.versionId}`);
     setDeleteError("");
     try {
-      const result = await deleteIntelligentDevelopmentVersion(
+      const { projectDeleted } = await deleteIntelligentDevelopmentVersion(
         project.projectId,
         version.versionId,
       );
       if (selectedBaseVersionId === version.versionId) onClearBaseVersion();
       setDeleteTarget(null);
-      setFeedback({
-        kind: "status",
-        text: result.projectDeleted ? "项目已删除。" : "版本已删除。",
-      });
-      if (result.projectDeleted) setSelectedProjectId("");
+      if (compareSelection?.versionIds.includes(version.versionId)) {
+        setCompareSelection(null);
+      }
+      if (projectDeleted) setSelectedProjectId("");
       setProjectsRefresh((value) => value + 1);
       setVersionsRefresh((value) => value + 1);
     } catch (cause) {
@@ -307,20 +369,16 @@ export function IntelligentProjectLibrary({
           </div>
           {projects.length > 0 ? (
             <Tooltip compact content="刷新项目列表">
-              <Button
+              <button
                 type="button"
-                className="ic-refresh"
-                color="secondary"
-                variant="ghost"
-                size="md"
-                uniform
-                pill={false}
+                className={`ic-refresh ic-icon-button${projectsLoading ? " is-loading" : ""}`}
                 onClick={() => setProjectsRefresh((value) => value + 1)}
                 disabled={projectsLoading}
                 aria-label="刷新项目列表"
+                aria-busy={projectsLoading}
               >
-                <RefreshProjectIcon />
-              </Button>
+                <SourceRefreshIcon />
+              </button>
             </Tooltip>
           ) : null}
         </div>
@@ -381,6 +439,9 @@ export function IntelligentProjectLibrary({
               const expanded = selectedProjectId === project.projectId;
               const projectVersions = versions[project.projectId] ?? [];
               const versionError = versionsError[project.projectId] ?? "";
+              const projectComparison = compareSelection?.projectId === project.projectId
+                ? compareSelection
+                : null;
               return (
                 <article
                   className={`ic-project${expanded ? " is-expanded" : ""}`}
@@ -412,6 +473,40 @@ export function IntelligentProjectLibrary({
                       id={`versions-${project.projectId}`}
                       aria-busy={versionsLoading === project.projectId || undefined}
                     >
+                      {projectVersions.length >= 2 ? (
+                        <div className="ic-version-compare-toolbar">
+                          {projectComparison ? (
+                            <>
+                              <span>
+                                已选择 {projectComparison.versionIds.length}/2 个版本
+                              </span>
+                              <div>
+                                <button
+                                  type="button"
+                                  className="ic-version-action"
+                                  onClick={() => setCompareSelection(null)}
+                                  disabled={Boolean(busyAction)}
+                                >取消</button>
+                                <button
+                                  type="button"
+                                  className="ic-version-compare-primary"
+                                  onClick={() => void viewVersionComparison(project, projectVersions)}
+                                  disabled={projectComparison.versionIds.length !== 2 || Boolean(busyAction)}
+                                >
+                                  {busyAction === `compare:${project.projectId}` ? "读取中…" : "查看对比"}
+                                </button>
+                              </div>
+                            </>
+                          ) : (
+                            <button
+                              type="button"
+                              className="ic-version-action"
+                              onClick={() => startVersionComparison(project, projectVersions)}
+                              disabled={Boolean(busyAction)}
+                            >对比版本</button>
+                          )}
+                        </div>
+                      ) : null}
                       {versionError && projectVersions.length > 0 ? (
                         <div className="ic-version-error" role="alert">
                           <span>{versionError}</span>
@@ -443,7 +538,25 @@ export function IntelligentProjectLibrary({
                                 || version.validationSummary
                                 || "暂无版本描述";
                               return (
-                                <li key={version.versionId}>
+                                <li
+                                  key={version.versionId}
+                                  className={projectComparison ? "is-comparing" : undefined}
+                                >
+                                  {projectComparison ? (
+                                    <label className="ic-version-compare-check">
+                                      <input
+                                        type="checkbox"
+                                        checked={projectComparison.versionIds.includes(version.versionId)}
+                                        onChange={() => toggleCompareVersion(project.projectId, version.versionId)}
+                                        disabled={
+                                          Boolean(busyAction)
+                                          || (!projectComparison.versionIds.includes(version.versionId)
+                                            && projectComparison.versionIds.length >= 2)
+                                        }
+                                      />
+                                      <span>选择此版本</span>
+                                    </label>
+                                  ) : null}
                                   <div className="ic-version-copy">
                                     <div>
                                       <strong>
@@ -557,7 +670,18 @@ export function IntelligentProjectLibrary({
       <CodeBrowserDialog
         project={browserProject}
         open={browserDelivery !== null}
-        onClose={() => setBrowserDelivery(null)}
+        comparison={browserComparison ? {
+          baseProject: {
+            name: browserComparison.base.agentName,
+            files: browserComparison.base.files ?? [],
+          },
+          baseLabel: browserComparison.baseLabel,
+          targetLabel: browserComparison.targetLabel,
+        } : undefined}
+        onClose={() => {
+          setBrowserDelivery(null);
+          setBrowserComparison(null);
+        }}
         onChange={() => undefined}
         readOnly
       />

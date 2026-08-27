@@ -186,6 +186,8 @@ import {
   downloadIntelligentDevelopmentRelease,
   fetchIntelligentDevelopmentRelease,
   fetchIntelligentDevelopmentProjectRelease,
+  fetchIntelligentDevelopmentVersions,
+  fetchIntelligentDevelopmentVersionSource,
 } from "./adk/intelligentDevelopment";
 import {
   getSandboxAgentCapability,
@@ -1232,6 +1234,29 @@ export default function App() {
           delivery.artifactSha256,
           delivery.validationReportSha256,
         ),
+    [],
+  );
+  const resolveIntelligentDeliveryComparison = useCallback(
+    async (delivery: IntelligentDevelopmentReleaseRef) => {
+      if (!delivery.projectId || !delivery.versionId || !delivery.parentVersionId) {
+        throw new Error("当前版本没有可对比的优化前版本。");
+      }
+      const versions = await fetchIntelligentDevelopmentVersions(delivery.projectId);
+      const targetVersion = versions.find(
+        (version) => version.versionId === delivery.versionId,
+      );
+      const baseVersion = versions.find(
+        (version) => version.versionId === delivery.parentVersionId,
+      );
+      if (!targetVersion || !baseVersion) {
+        throw new Error("无法找到本次优化对应的项目版本，可能已被删除。");
+      }
+      const [base, target] = await Promise.all([
+        fetchIntelligentDevelopmentVersionSource(baseVersion),
+        fetchIntelligentDevelopmentVersionSource(targetVersion),
+      ]);
+      return { base, target };
+    },
     [],
   );
   const downloadIntelligentDelivery = useCallback(
@@ -7120,6 +7145,7 @@ export default function App() {
                         previewArtifact(appName, userId, sessionId, filename, version)
                       }
                       onResolveDelivery={resolveIntelligentDelivery}
+                      onResolveDeliveryComparison={resolveIntelligentDeliveryComparison}
                       onDownloadDelivery={downloadIntelligentDelivery}
                       onDeployDelivery={setIntelligentDeployment}
                     />

@@ -625,6 +625,7 @@ def test_project_source_reads_tos_without_resolving_a_live_sandbox(
     version = IntelligentDevelopmentVersion(
         projectId="a" * 32,
         versionId="b" * 32,
+        parentVersionId="e" * 32,
         sourceSessionId="expired-session",
         createdAt=now,
         intentSummary="构建天气 Agent",
@@ -673,6 +674,7 @@ def test_project_source_reads_tos_without_resolving_a_live_sandbox(
     assert response.json()["sessionId"] == "expired-session"
     assert response.json()["projectId"] == "a" * 32
     assert response.json()["versionId"] == "b" * 32
+    assert response.json()["parentVersionId"] == "e" * 32
     assert response.json()["files"] == [
         {"path": "app.py", "content": "root_agent = object()\n"}
     ]
@@ -1449,6 +1451,7 @@ def _project_service_for_delivery(
     version = IntelligentDevelopmentVersion(
         projectId="a" * 32,
         versionId="b" * 32,
+        parentVersionId="c" * 32,
         sourceSessionId="dev-session",
         createdAt=now,
         intentSummary="构建天气 Agent",
@@ -1932,6 +1935,7 @@ def test_persisted_delivery_ids_are_emitted_in_source_and_success_events(
     assert response.status_code == 200
     assert response.text.count(f'"projectId": "{"a" * 32}"') == 2
     assert response.text.count(f'"versionId": "{"b" * 32}"') == 2
+    assert response.text.count(f'"parentVersionId": "{"c" * 32}"') == 2
     assert "event: development.source_ready" in response.text
     assert "event: development.succeeded" in response.text
     project_service.persist_delivery.assert_awaited_once()

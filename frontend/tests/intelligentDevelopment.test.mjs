@@ -131,6 +131,10 @@ const codeBrowserSource = readFileSync(
   new URL("../src/ui/CodeBrowserDialog.tsx", import.meta.url),
   "utf8",
 );
+const codeBrowserStyles = readFileSync(
+  new URL("../src/ui/CodeBrowserDialog.css", import.meta.url),
+  "utf8",
+);
 const sidebarSource = readFileSync(
   new URL("../src/ui/Sidebar.tsx", import.meta.url),
   "utf8",
@@ -372,6 +376,30 @@ test("source-ready delivery is upgraded in place only by the verified event", as
   assert.equal("releasePath" in reply.blocks[1].value, false);
   assert.equal("validationReportPath" in reply.blocks[1].value, false);
   assert.deepEqual(writes, []);
+});
+
+test("persisted delivery events preserve their parent version", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+  });
+  const persistedDelivery = {
+    ...delivery,
+    projectId: "project-1",
+    versionId: "version-2",
+    parentVersionId: "version-1",
+  };
+  globalThis.fetch = async () => sseResponse([
+    deliveryEvent(persistedDelivery),
+    "event: done\ndata: {}",
+  ]);
+
+  const reply = await intelligentDevelopmentClient.sendMessage({
+    sessionId: "dev-1",
+    text: "continue",
+  });
+
+  assert.deepEqual(reply.blocks, [{ kind: "delivery", value: persistedDelivery }]);
 });
 
 test("missing completion still exposes source while deployment stays unverified", async (t) => {
@@ -753,6 +781,7 @@ test("durable project APIs parse lists, versions, deletion, and exact source ide
     sessionId: "session-1",
     projectId: "project-1",
     versionId: "version-1",
+    parentVersionId: null,
     artifactSha256: version.artifactSha256,
     validationReportSha256: version.validationReportSha256,
     agentName: version.agentName,
@@ -803,6 +832,45 @@ test("durable project APIs parse lists, versions, deletion, and exact source ide
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("code comparison classifies changed files without including unchanged files", async () => {
+  const { compareProjectFiles } = await importTsxBundle(
+    "../src/ui/codeComparison.ts",
+  );
+  const result = compareProjectFiles(
+    [
+      { path: "agent.py", content: "before\n" },
+      { path: "deleted.txt", content: "removed\n" },
+      { path: "same.md", content: "same\n" },
+    ],
+    [
+      { path: "agent.py", content: "after\n" },
+      { path: "added.txt", content: "new\n" },
+      { path: "same.md", content: "same\n" },
+    ],
+  );
+
+  assert.deepEqual(result, [
+    {
+      path: "added.txt",
+      status: "added",
+      before: "",
+      after: "new\n",
+    },
+    {
+      path: "agent.py",
+      status: "modified",
+      before: "before\n",
+      after: "after\n",
+    },
+    {
+      path: "deleted.txt",
+      status: "deleted",
+      before: "removed\n",
+      after: "",
+    },
+  ]);
 });
 
 test("durable project source rejects a mismatched stored identity", async () => {
@@ -1130,7 +1198,7 @@ test("intelligent project versions preserve existing style and cover async state
 test("saved project actions stay compact, destructive, and resilient to long content", () => {
   assert.match(
     projectLibrarySource,
-    /aria-label="刷新项目列表"[\s\S]*?<RefreshProjectIcon \/>/,
+    /aria-label="刷新项目列表"[\s\S]*?<SourceRefreshIcon \/>/,
   );
   assert.doesNotMatch(projectLibrarySource, />刷新<\/button>/);
   assert.match(
@@ -1147,6 +1215,7 @@ test("saved project actions stay compact, destructive, and resilient to long con
   );
   assert.match(projectLibrarySource, />去优化<\/button>/);
   assert.doesNotMatch(projectLibrarySource, />继续优化<\/button>/);
+  assert.doesNotMatch(projectLibrarySource, /版本已删除|项目已删除/);
   assert.doesNotMatch(projectLibrarySource, /已选择“\$\{project\.name\}”/);
   assert.match(appSource, /displayName: baseVersion\?\.projectName \?\? goal\.slice\(0, 40\)/);
   assert.match(
@@ -1157,6 +1226,16 @@ test("saved project actions stay compact, destructive, and resilient to long con
     createStyles,
     /\.ic-version-description \{[\s\S]*?-webkit-line-clamp: 2;[\s\S]*?overflow-wrap: anywhere;/,
   );
+});
+
+test("source workspace exposes version comparison and scoped light and dark themes", () => {
+  assert.match(codeBrowserSource, /compareProjectFiles/);
+  assert.match(codeBrowserSource, /aria-label="切换源码主题"/);
+  assert.match(codeBrowserSource, /CodeDiffEditor/);
+  assert.match(codeBrowserStyles, /\.code-browser-dialog\.is-dark/);
+  assert.match(projectLibrarySource, /对比版本/);
+  assert.match(projectLibrarySource, /查看对比/);
+  assert.match(blocksUiSource, /查看本次变更/);
 });
 
 test("intelligent preparation ends before the first build turn and resets on navigation", () => {

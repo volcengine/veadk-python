@@ -91,11 +91,13 @@ def project_http_error(error: Exception) -> HTTPException:
 def _release_payload(
     session_id: str,
     trusted: TrustedDeploymentSource,
+    parent_version_id: str | None,
 ) -> dict[str, object]:
     return {
         "sessionId": session_id,
         "projectId": trusted.project_id,
         "versionId": trusted.version_id,
+        "parentVersionId": parent_version_id,
         "artifactSha256": trusted.artifact_sha256,
         "validationReportSha256": trusted.validation_report_sha256,
         "agentName": trusted.agent_name,
@@ -249,7 +251,11 @@ def mount_intelligent_development_project_routes(
                 service=None,
                 project_service=service,
             )
-            return _release_payload(metadata.source_session_id, trusted)
+            return _release_payload(
+                metadata.source_session_id,
+                trusted,
+                metadata.parent_version_id,
+            )
         except PROJECT_MATERIALIZATION_EXCEPTIONS as error:
             raise _materialization_http_error(error) from error
         finally:
