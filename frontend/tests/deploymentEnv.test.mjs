@@ -947,6 +947,6 @@ test("opens generated source in an editable code browser dialog", () => {
   assert.match(codeBrowserSource, /document\.body\.style\.overflow = "hidden"/);
   assert.match(
     codeBrowserStyles,
-    /\.code-browser-dialog\s*\{[\s\S]*?height:\s*min\(720px, 84vh\);/,
+    /\.code-browser-dialog\s*\{[\s\S]*?height:\s*min\(800px, 88vh\);/,
   );
 });

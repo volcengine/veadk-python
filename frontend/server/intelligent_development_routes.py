@@ -46,6 +46,16 @@ from frontend.server.intelligent_development_task import (
     read_only_prompt,
     remove_completion_file,
 )
+from frontend.server.intelligent_development_projects import (
+    IntelligentDevelopmentProjectNotFound,
+    IntelligentDevelopmentProjectService,
+)
+from frontend.server.intelligent_development_projects.routes import (
+    PROJECT_EXCEPTIONS,
+    mount_intelligent_development_project_routes,
+    project_error_detail,
+    project_http_error,
+)
 from frontend.server.sandbox_remote import SandboxRemoteTransport
 from veadk.cli.codex_app_server import (
     CodexAppServerError,
@@ -257,7 +267,7 @@ def _public_session(session: SandboxCloudSession) -> dict[str, object]:
 
 
 def _release_payload(session_id: str, trusted: Any) -> dict[str, object]:
-    return {
+    payload: dict[str, object] = {
         "sessionId": session_id,
         "artifactSha256": trusted.artifact_sha256,
         "validationReportSha256": trusted.validation_report_sha256,
@@ -274,6 +284,16 @@ def _release_payload(session_id: str, trusted: Any) -> dict[str, object]:
             {"path": item.path, "content": item.content} for item in trusted.files
         ],
     }
+    project_id = str(getattr(trusted, "project_id", "") or "")
+    version_id = str(getattr(trusted, "version_id", "") or "")
+    if project_id and version_id:
+        payload.update(
+            {
+                "projectId": project_id,
+                "versionId": version_id,
+            }
+        )
+    return payload
 
 
 async def _restore_latest_conversation(
@@ -728,6 +748,7 @@ def mount_intelligent_development_routes(
     owner_resolver: Callable[[Request], str],
     creator_resolver: Callable[[Request], str],
     credential_resolver: CredentialResolver | None = None,
+    project_service: IntelligentDevelopmentProjectService | None = None,
     configured: bool = True,
     validation_region: str = "cn-beijing",
     validation_project: str = "default",
@@ -748,8 +769,18 @@ def mount_intelligent_development_routes(
     @app.get(f"{INTELLIGENT_DEVELOPMENT_PREFIX}/capabilities")
     async def _capabilities(request: Request) -> dict[str, object]:
         owner_resolver(request)
+        storage_capability = {
+            "projectStorageEnabled": project_service is not None,
+            "projectStorageReason": (
+                "" if project_service is not None else "管理员未配置项目存储"
+            ),
+        }
         if not configured:
-            return {"enabled": False, "reason": "管理员未配置 SANDBOX_DEV"}
+            return {
+                "enabled": False,
+                "reason": "管理员未配置 SANDBOX_DEV",
+                **storage_capability,
+            }
         try:
             model = await _sandbox_dev_model_capability(service)
         except SandboxError:
@@ -757,14 +788,28 @@ def mount_intelligent_development_routes(
                 "enabled": False,
                 "reason": "SANDBOX_DEV 暂不可用，请联系管理员检查配置。",
                 "model": {"configured": False, "id": ""},
+                **storage_capability,
             }
         if not model["configured"]:
             return {
                 "enabled": False,
                 "reason": _MODEL_CONFIGURATION_UNAVAILABLE_REASON,
                 "model": model,
+                **storage_capability,
             }
-        return {"enabled": True, "reason": "", "model": model}
+        return {
+            "enabled": True,
+            "reason": "",
+            "model": model,
+            **storage_capability,
+        }
+
+    mount_intelligent_development_project_routes(
+        app,
+        prefix=INTELLIGENT_DEVELOPMENT_PREFIX,
+        owner_resolver=owner_resolver,
+        project_service=project_service,
+    )
 
     @app.get(f"{INTELLIGENT_DEVELOPMENT_PREFIX}/sessions")
     async def _list(request: Request) -> dict[str, object]:
@@ -790,11 +835,17 @@ def mount_intelligent_development_routes(
             raise HTTPException(status_code=503, detail="管理员未配置 SANDBOX_DEV")
         try:
             data = await _request_object(request, 64 * 1024)
-            if set(data) - {"displayName", "modelId"}:
-                raise SandboxValidationError(
-                    "智能开发会话只接受 displayName 和 modelId。"
-                )
+            allowed = {"displayName", "modelId"}
+            if project_service is not None:
+                allowed.update({"projectId", "baseVersionId"})
+            if set(data) - allowed:
+                raise SandboxValidationError("智能开发会话包含不支持的字段。")
+            display_name = data.get("displayName", "")
             model_id = data.get("modelId")
+            project_id = data.get("projectId")
+            base_version_id = data.get("baseVersionId")
+            if not isinstance(display_name, str):
+                raise SandboxValidationError("displayName 格式无效。")
             if model_id is None:
                 session_envs = None
             elif not isinstance(model_id, str):
@@ -806,18 +857,52 @@ def mount_intelligent_development_routes(
                 session_envs = (
                     _selected_model_session_envs(model_id) if model_id else None
                 )
+            if project_id is not None and not isinstance(project_id, str):
+                raise SandboxValidationError("projectId 格式无效。")
+            if base_version_id is not None and not isinstance(base_version_id, str):
+                raise SandboxValidationError("baseVersionId 格式无效。")
+            if base_version_id is not None and project_id is None:
+                raise SandboxValidationError(
+                    "baseVersionId 必须与 projectId 一起使用。"
+                )
             await _require_sandbox_dev_model_configured(service)
             session = await service.create(
                 owner,
-                data.get("displayName", ""),
+                display_name,
                 creator_resolver(request),
                 False,
                 envs=session_envs,
             )
+            binding = None
+            if project_service is not None:
+                try:
+                    binding = await project_service.create_binding(
+                        owner_id=owner,
+                        session_id=session.instance_id,
+                        display_name=display_name,
+                        project_id=project_id,
+                        base_version_id=base_version_id,
+                    )
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        await service.delete(session.instance_id, owner, is_admin=False)
+                    raise
         except SandboxError as error:
             raise _http_error(error) from error
+        except PROJECT_EXCEPTIONS as error:
+            raise project_http_error(error) from error
         _require_development_session(session)
-        return _public_session(session)
+        return {
+            **_public_session(session),
+            **(
+                {
+                    "projectId": binding.project_id,
+                    "baseVersionId": binding.base_version_id,
+                }
+                if binding is not None
+                else {}
+            ),
+        }
 
     @app.delete(f"{INTELLIGENT_DEVELOPMENT_PREFIX}/sessions/{{session_id}}")
     async def _delete(session_id: str, request: Request) -> dict[str, bool]:
@@ -827,6 +912,14 @@ def mount_intelligent_development_routes(
             await service.delete(session_id, owner, is_admin=False)
         except SandboxError as error:
             raise _http_error(error) from error
+        if project_service is not None:
+            try:
+                await project_service.delete_binding(owner, session_id)
+            except Exception:
+                logger.warning(
+                    "Failed to remove intelligent-development Session binding for %s",
+                    session_id,
+                )
         return {"deleted": True}
 
     @app.post(f"{INTELLIGENT_DEVELOPMENT_PREFIX}/sessions/{{session_id}}/connect")
@@ -841,6 +934,17 @@ def mount_intelligent_development_routes(
             _require_development_session(conversation.cloud)
             if not conversation.codex.workspace_locked:
                 await _prepare_workspace(conversation.cloud)
+                if project_service is not None:
+                    try:
+                        await project_service.restore_base_version(
+                            owner_id=owner,
+                            session_id=session_id,
+                            endpoint=conversation.cloud.endpoint,
+                            workspace=workspace,
+                        )
+                    except IntelligentDevelopmentProjectNotFound:
+                        # Sessions created before project persistence have no binding.
+                        pass
                 await service.update_workspace(session_id, owner, workspace)
             elif conversation.codex.cwd != workspace:
                 raise SandboxSessionUnavailableError("开发会话已在非预期工作空间启动。")
@@ -858,6 +962,8 @@ def mount_intelligent_development_routes(
             )
         except SandboxError as error:
             raise _http_error(error) from error
+        except PROJECT_EXCEPTIONS as error:
+            raise project_http_error(error) from error
         return {
             **_public_session(conversation.cloud),
             **service.settings(session_id, owner),
@@ -1031,6 +1137,7 @@ def mount_intelligent_development_routes(
     @app.post(f"{INTELLIGENT_DEVELOPMENT_PREFIX}/sessions/{{session_id}}/messages")
     async def _message(session_id: str, request: Request) -> StreamingResponse:
         owner = owner_resolver(request)
+        project_context = ""
         try:
             data = await _request_object(request, 128 * 1024)
             if set(data) != {"message"}:
@@ -1045,8 +1152,31 @@ def mount_intelligent_development_routes(
                 service, session_id, owner
             )
             project_root = _workspace(cloud)
+            if project_service is not None:
+                try:
+                    await project_service.get_binding(owner, session_id)
+                except IntelligentDevelopmentProjectNotFound:
+                    await project_service.create_binding(
+                        owner_id=owner,
+                        session_id=session_id,
+                        display_name=cloud.display_name,
+                    )
+                base = await project_service.base_metadata(owner, session_id)
+                if base is not None:
+                    project_context = json.dumps(
+                        {
+                            "intentSummary": base.intent_summary,
+                            "acceptanceCriteria": base.acceptance_criteria,
+                            "agentName": base.agent_name,
+                            "entryPoint": base.entry_point,
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
         except SandboxError as error:
             raise _http_error(error) from error
+        except PROJECT_EXCEPTIONS as error:
+            raise project_http_error(error) from error
 
         lock_key = (owner, session_id)
         async with task_locks_guard:
@@ -1111,7 +1241,11 @@ def mount_intelligent_development_routes(
                 async for event in service.stream_message(
                     session_id,
                     owner,
-                    intent_gate_prompt(prompt.strip(), expire_at=cloud.expire_at),
+                    intent_gate_prompt(
+                        prompt.strip(),
+                        expire_at=cloud.expire_at,
+                        project_context=project_context,
+                    ),
                     turn_permissions=_INTENT_PERMISSIONS,
                     turn_timeout_seconds=_INTENT_TURN_TIMEOUT_SECONDS,
                 ):
@@ -1247,11 +1381,73 @@ def mount_intelligent_development_routes(
                     exact_secrets=lease.exact_secrets,
                     acceptance_criteria=decision.acceptance_criteria,
                 )
+                stored_version = None
+                persistence_error: dict[str, object] | None = None
+                if project_service is not None:
+                    yield _progress_sse("正在保存项目版本。")
+                    try:
+                        _, stored_version = await project_service.persist_delivery(
+                            owner_id=owner,
+                            session_id=session_id,
+                            transport=transport,
+                            delivery=delivery,
+                            decision=decision,
+                        )
+                    except PROJECT_EXCEPTIONS as error:
+                        _, persistence_error = project_error_detail(error)
+                        if persistence_error["code"] == (
+                            "INTELLIGENT_DEVELOPMENT_STORAGE_UNAVAILABLE"
+                        ):
+                            persistence_error["message"] = (
+                                "源码已生成，但项目版本暂时无法保存。"
+                                "请保留当前开发环境并稍后重试。"
+                            )
+                        logger.warning(
+                            "Failed to persist intelligent-development version for %s: %s",
+                            session_id,
+                            type(error).__name__,
+                        )
+                    except SandboxError as error:
+                        persistence_error = _stream_error_payload(error)
+                        logger.warning(
+                            "Failed to read intelligent-development delivery for %s: %s",
+                            session_id,
+                            type(error).__name__,
+                        )
+                    except ValueError as error:
+                        persistence_error = {
+                            "code": "INTELLIGENT_DEVELOPMENT_VERSION_INVALID",
+                            "message": "源码已生成，但未通过项目版本完整性校验。",
+                            "retryable": False,
+                        }
+                        logger.warning(
+                            "Rejected intelligent-development version for %s: %s",
+                            session_id,
+                            type(error).__name__,
+                        )
+                    except Exception:  # noqa: BLE001 - terminal SSE boundary
+                        persistence_error = {
+                            "code": "INTELLIGENT_DEVELOPMENT_VERSION_SAVE_FAILED",
+                            "message": "源码已生成，但项目版本保存失败。请稍后重试。",
+                            "retryable": True,
+                        }
+                        logger.exception(
+                            "Unexpected intelligent-development persistence failure for %s",
+                            session_id,
+                        )
 
                 await cleanup_task_files()
 
                 if delivery is not None:
                     source_delivery = delivery.as_dict()
+                    if stored_version is not None:
+                        source_delivery.update(
+                            {
+                                "projectId": stored_version.project_id,
+                                "versionId": stored_version.version_id,
+                                "parentVersionId": stored_version.parent_version_id,
+                            }
+                        )
                     source_delivery["verified"] = False
                     if completion is not None and completion.verified:
                         source_delivery["validationSummary"] = "正在确认验证状态"
@@ -1260,13 +1456,29 @@ def mount_intelligent_development_routes(
                         "event: development.source_ready\n"
                         f"data: {json.dumps(source_event, ensure_ascii=False)}\n\n"
                     )
+                if persistence_error is not None:
+                    yield (
+                        "event: error\n"
+                        f"data: {json.dumps(persistence_error, ensure_ascii=False)}\n\n"
+                    )
+                    yield 'event: done\ndata: {"reason":"failed"}\n\n'
+                    return
                 if (
                     delivery is not None
                     and completion is not None
                     and completion.verified
                 ):
+                    succeeded_delivery = delivery.as_dict()
+                    if stored_version is not None:
+                        succeeded_delivery.update(
+                            {
+                                "projectId": stored_version.project_id,
+                                "versionId": stored_version.version_id,
+                                "parentVersionId": stored_version.parent_version_id,
+                            }
+                        )
                     event = {
-                        "payload": {"delivery": delivery.as_dict()},
+                        "payload": {"delivery": succeeded_delivery},
                     }
                     yield (
                         "event: development.succeeded\n"

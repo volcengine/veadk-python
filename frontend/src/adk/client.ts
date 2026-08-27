@@ -1886,6 +1886,8 @@ export async function checkRuntimeNameAvailability(
 export interface IntelligentDevelopmentDeploymentSource {
   kind: "intelligentDevelopment";
   sessionId: string;
+  projectId?: string;
+  versionId?: string;
   artifactSha256: string;
   validationReportSha256: string;
   acknowledgeUnverified?: true;

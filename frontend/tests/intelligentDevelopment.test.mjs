@@ -17,10 +17,13 @@ async function importTsxBundle(relativePath) {
     format: "cjs",
     loader: { ".css": "empty" },
     platform: "node",
+    outdir: "out",
     write: false,
   });
+  const javascript = bundled.outputFiles.find((file) => file.path.endsWith(".js"));
+  assert.ok(javascript, "component bundle should contain JavaScript output");
   const module = { exports: {} };
-  Function("require", "module", "exports", bundled.outputFiles[0].text)(
+  Function("require", "module", "exports", javascript.text)(
     require,
     module,
     module.exports,
@@ -100,6 +103,10 @@ const createSource = readFileSync(
   new URL("../src/create/IntelligentCreate.tsx", import.meta.url),
   "utf8",
 );
+const projectLibrarySource = readFileSync(
+  new URL("../src/create/IntelligentProjectLibrary.tsx", import.meta.url),
+  "utf8",
+);
 const createStyles = readFileSync(
   new URL("../src/create/IntelligentCreate.css", import.meta.url),
   "utf8",
@@ -122,6 +129,10 @@ const deliveryIconSource = readFileSync(
 );
 const codeBrowserSource = readFileSync(
   new URL("../src/ui/CodeBrowserDialog.tsx", import.meta.url),
+  "utf8",
+);
+const codeBrowserStyles = readFileSync(
+  new URL("../src/ui/CodeBrowserDialog.css", import.meta.url),
   "utf8",
 );
 const sidebarSource = readFileSync(
@@ -183,6 +194,8 @@ test("text-only intelligent client uses its fixed endpoint and omits skills", as
     displayName: "Build an agent",
     modelId: "doubao-test",
     persistent: true,
+    projectId: "project-1",
+    baseVersionId: "version-1",
   });
   await intelligentDevelopmentClient.sendMessage({
     sessionId: "dev/1",
@@ -194,7 +207,12 @@ test("text-only intelligent client uses its fixed endpoint and omits skills", as
     {
       url: "/web/intelligent-development/sessions",
       method: "POST",
-      body: { displayName: "Build an agent", modelId: "doubao-test" },
+      body: {
+        displayName: "Build an agent",
+        modelId: "doubao-test",
+        projectId: "project-1",
+        baseVersionId: "version-1",
+      },
     },
     {
       url: "/web/intelligent-development/sessions/dev%2F1/messages",
@@ -358,6 +376,30 @@ test("source-ready delivery is upgraded in place only by the verified event", as
   assert.equal("releasePath" in reply.blocks[1].value, false);
   assert.equal("validationReportPath" in reply.blocks[1].value, false);
   assert.deepEqual(writes, []);
+});
+
+test("persisted delivery events preserve their parent version", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+  });
+  const persistedDelivery = {
+    ...delivery,
+    projectId: "project-1",
+    versionId: "version-2",
+    parentVersionId: "version-1",
+  };
+  globalThis.fetch = async () => sseResponse([
+    deliveryEvent(persistedDelivery),
+    "event: done\ndata: {}",
+  ]);
+
+  const reply = await intelligentDevelopmentClient.sendMessage({
+    sessionId: "dev-1",
+    text: "continue",
+  });
+
+  assert.deepEqual(reply.blocks, [{ kind: "delivery", value: persistedDelivery }]);
 });
 
 test("missing completion still exposes source while deployment stays unverified", async (t) => {
@@ -653,15 +695,250 @@ test("intelligent release client downloads the exact server archive", async () =
   }
 });
 
+test("durable project downloads do not depend on a live Sandbox", async () => {
+  const { downloadIntelligentDevelopmentRelease } = await importTsxBundle(
+    "../src/adk/intelligentDevelopment.ts",
+  );
+  const originalFetch = globalThis.fetch;
+  const archive = Uint8Array.from([0x50, 0x4b, 0x03, 0x04]);
+  globalThis.fetch = async (url) => {
+    const request = new URL(String(url), "http://localhost");
+    assert.equal(
+      request.pathname,
+      "/web/intelligent-development/projects/project-1/versions/version-1/download",
+    );
+    return new Response(archive, {
+      headers: {
+        "Content-Type": "application/zip",
+        "Content-Disposition": 'attachment; filename="weather-source.zip"',
+      },
+    });
+  };
+  try {
+    const result = await downloadIntelligentDevelopmentRelease({
+      sessionId: "expired-session",
+      projectId: "project-1",
+      versionId: "version-1",
+      artifactSha256: "a".repeat(64),
+      validationReportSha256: "b".repeat(64),
+      agentName: "weather",
+      entryPoint: "app.py",
+      fileCount: 2,
+      artifactSize: archive.byteLength,
+      validatedAt: "",
+      gateSummary: [],
+      deployable: true,
+      verified: true,
+      validationSummary: "验证通过",
+    });
+    assert.equal(result.filename, "weather-source.zip");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("durable project APIs parse lists, versions, deletion, and exact source identity", async () => {
+  const {
+    deleteIntelligentDevelopmentVersion,
+    fetchIntelligentDevelopmentProjectRelease,
+    fetchIntelligentDevelopmentProjects,
+    fetchIntelligentDevelopmentVersions,
+  } = await importTsxBundle("../src/adk/intelligentDevelopment.ts");
+  const originalFetch = globalThis.fetch;
+  const project = {
+    schemaVersion: "1",
+    projectId: "project-1",
+    name: "天气 Agent",
+    createdAt: "2026-08-26T00:00:00Z",
+    updatedAt: "2026-08-26T01:00:00Z",
+    latestVersionId: "version-1",
+    latestVersionCreatedAt: "2026-08-26T01:00:00Z",
+    latestVersionVerified: true,
+    latestAgentName: "weather_agent",
+    versionCount: 1,
+  };
+  const version = {
+    schemaVersion: "1",
+    projectId: "project-1",
+    versionId: "version-1",
+    parentVersionId: null,
+    sourceSessionId: "session-1",
+    createdAt: "2026-08-26T01:00:00Z",
+    intentSummary: "构建天气 Agent",
+    acceptanceCriteria: ["返回天气"],
+    artifactSha256: "a".repeat(64),
+    validationReportSha256: "b".repeat(64),
+    artifactSize: 4,
+    fileCount: 1,
+    agentName: "weather_agent",
+    entryPoint: "app.py",
+    verified: true,
+    validationSummary: "验证通过",
+    gateSummary: ["local-checks"],
+    validatedAt: "2026-08-26T01:00:00Z",
+  };
+  const release = {
+    sessionId: "session-1",
+    projectId: "project-1",
+    versionId: "version-1",
+    parentVersionId: null,
+    artifactSha256: version.artifactSha256,
+    validationReportSha256: version.validationReportSha256,
+    agentName: version.agentName,
+    entryPoint: version.entryPoint,
+    fileCount: version.fileCount,
+    artifactSize: version.artifactSize,
+    validatedAt: version.validatedAt,
+    gateSummary: version.gateSummary,
+    deployable: true,
+    verified: true,
+    validationSummary: "验证通过",
+    files: [{ path: "app.py", content: "agent = object()" }],
+  };
+  globalThis.fetch = async (url, options = {}) => {
+    const request = new URL(String(url), "http://localhost");
+    if (request.pathname.endsWith("/projects")) {
+      return Response.json({ projects: [project] });
+    }
+    if (request.pathname.endsWith("/versions")) {
+      return Response.json({ versions: [version] });
+    }
+    if (request.pathname.endsWith("/source")) {
+      return Response.json(release);
+    }
+    assert.equal(options.method, "DELETE");
+    return Response.json({ deleted: true, projectDeleted: true });
+  };
+  try {
+    assert.deepEqual(await fetchIntelligentDevelopmentProjects(), [project]);
+    assert.deepEqual(
+      await fetchIntelligentDevelopmentVersions("project-1"),
+      [version],
+    );
+    assert.deepEqual(
+      await deleteIntelligentDevelopmentVersion("project-1", "version-1"),
+      { projectDeleted: true },
+    );
+    assert.deepEqual(
+      await fetchIntelligentDevelopmentProjectRelease(
+        "project-1",
+        "version-1",
+        "session-1",
+        version.artifactSha256,
+        version.validationReportSha256,
+      ),
+      release,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("code comparison classifies changed files without including unchanged files", async () => {
+  const { compareProjectFiles } = await importTsxBundle(
+    "../src/ui/codeComparison.ts",
+  );
+  const result = compareProjectFiles(
+    [
+      { path: "agent.py", content: "before\n" },
+      { path: "deleted.txt", content: "removed\n" },
+      { path: "same.md", content: "same\n" },
+    ],
+    [
+      { path: "agent.py", content: "after\n" },
+      { path: "added.txt", content: "new\n" },
+      { path: "same.md", content: "same\n" },
+    ],
+  );
+
+  assert.deepEqual(result, [
+    {
+      path: "added.txt",
+      status: "added",
+      before: "",
+      after: "new\n",
+    },
+    {
+      path: "agent.py",
+      status: "modified",
+      before: "before\n",
+      after: "after\n",
+    },
+    {
+      path: "deleted.txt",
+      status: "deleted",
+      before: "removed\n",
+      after: "",
+    },
+  ]);
+});
+
+test("durable project source rejects a mismatched stored identity", async () => {
+  const { fetchIntelligentDevelopmentProjectRelease } = await importTsxBundle(
+    "../src/adk/intelligentDevelopment.ts",
+  );
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({
+    sessionId: "session-1",
+    projectId: "other-project",
+    versionId: "version-1",
+    artifactSha256: "a".repeat(64),
+    validationReportSha256: "b".repeat(64),
+    agentName: "weather_agent",
+    entryPoint: "app.py",
+    fileCount: 1,
+    artifactSize: 4,
+    validatedAt: "2026-08-26T01:00:00Z",
+    gateSummary: [],
+    deployable: true,
+    verified: true,
+    validationSummary: "验证通过",
+    files: [],
+  });
+  try {
+    await assert.rejects(
+      fetchIntelligentDevelopmentProjectRelease(
+        "project-1",
+        "version-1",
+        "session-1",
+        "a".repeat(64),
+        "b".repeat(64),
+      ),
+      /源码快照的响应格式无效/,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("durable project APIs preserve actionable TOS errors", async () => {
+  const { fetchIntelligentDevelopmentProjects } = await importTsxBundle(
+    "../src/adk/intelligentDevelopment.ts",
+  );
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({
+    detail: {
+      code: "INTELLIGENT_DEVELOPMENT_STORAGE_UNAVAILABLE",
+      message: "项目存储暂时不可用，请稍后重试。",
+      retryable: true,
+    },
+  }, { status: 503 });
+  try {
+    await assert.rejects(
+      fetchIntelligentDevelopmentProjects(),
+      /项目存储暂时不可用，请稍后重试/,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("intelligent release requests recover an expired Studio login", () => {
   assert.match(
     intelligentReleaseClientSource,
     /import \{ studioFetch \} from "\.\/client"/,
   );
-  assert.equal(
-    intelligentReleaseClientSource.match(/await studioFetch\(/g)?.length,
-    3,
-  );
+  assert.doesNotMatch(intelligentReleaseClientSource, /\bfetch\(/);
   assert.doesNotMatch(
     intelligentReleaseClientSource,
     /fetch\(\s*withAuth\(\/web\/intelligent-development\/releases/,
@@ -778,7 +1055,7 @@ test("intelligent goal input shares IME handling and semantic responsive styles"
   );
   assert.match(
     createSource,
-    /await onCreate\(value, modelOverride\)/,
+    /await onCreate\(value, modelOverride, baseVersion\)/,
   );
   const submitDisabledBlock = createSource.match(/const submitDisabled =([\s\S]*?);/)?.[1] ?? "";
   assert.doesNotMatch(submitDisabledBlock, /modelsLoading/);
@@ -832,6 +1109,8 @@ test("intelligent preparation acknowledges the goal and exposes cancellable prog
         enabled: true,
         reason: "",
         model: { configured: true, id: "doubao-default-model" },
+        projectStorageEnabled: true,
+        projectStorageReason: "",
       },
       loading: false,
       preparationStage,
@@ -881,6 +1160,113 @@ test("intelligent preparation acknowledges the goal and exposes cancellable prog
   assert.match(starting, /环境已就绪，正在启动 Codex/);
 });
 
+test("intelligent project versions preserve existing style and cover async states", () => {
+  assert.match(appSource, /projectStorageEnabled: value\.projectStorageEnabled === true/);
+  assert.match(
+    projectLibrarySource,
+    /const storageEnabled = capabilities\?\.projectStorageEnabled === true/,
+  );
+  assert.doesNotMatch(
+    projectLibrarySource,
+    /storageEnabled = capabilities\?\.enabled === true/,
+  );
+  assert.match(projectLibrarySource, /useState\(true\)/);
+  assert.match(projectLibrarySource, /fetchIntelligentDevelopmentProjects\(controller\.signal\)/);
+  assert.match(projectLibrarySource, /return \(\) => controller\.abort\(\)/);
+  assert.match(projectLibrarySource, /已保存项目/);
+  assert.match(projectLibrarySource, /正在检查项目存储/);
+  assert.match(projectLibrarySource, /还没有已保存的项目/);
+  assert.match(projectLibrarySource, /无法读取已保存项目/);
+  assert.match(projectLibrarySource, /完成首次构建后，源码会自动保存在这里/);
+  assert.match(
+    projectLibrarySource,
+    /versionError && projectVersions\.length > 0[\s\S]*?className="ic-version-error"[\s\S]*?>重试</,
+  );
+  assert.match(
+    projectLibrarySource,
+    /aria-busy=\{versionsLoading === project\.projectId \|\| undefined\}/,
+  );
+  assert.match(projectLibrarySource, /StudioConfirmDialog[\s\S]*?title="删除这个版本？"/);
+  assert.match(projectLibrarySource, /CodeBrowserDialog[\s\S]*?readOnly/);
+  assert.match(projectLibrarySource, /aria-expanded=\{expanded\}/);
+  assert.match(projectLibrarySource, /feedback\.kind === "error" \? "alert" : "status"/);
+  assert.match(projectLibrarySource, /key=\{version\.versionId\}/);
+  assert.match(createStyles, /\.ic-version-list > li \{[\s\S]*?grid-template-columns: minmax\(0, 1fr\) auto/);
+  assert.match(createStyles, /@media \(max-width: 640px\)[\s\S]*?\.ic-version-list > li \{ grid-template-columns: 1fr/);
+});
+
+test("saved project actions stay compact, destructive, and resilient to long content", () => {
+  assert.match(
+    projectLibrarySource,
+    /aria-label="刷新项目列表"[\s\S]*?<SourceRefreshIcon \/>/,
+  );
+  assert.doesNotMatch(projectLibrarySource, />刷新<\/button>/);
+  assert.match(
+    projectLibrarySource,
+    /<Button\s+type="button"\s+className="ic-version-delete"\s+color="danger"\s+variant="ghost"[\s\S]*?>[\s\S]*?删除[\s\S]*?<\/Button>/,
+  );
+  assert.match(
+    projectLibrarySource,
+    /StudioConfirmDialog[\s\S]*?title="删除这个版本？"[\s\S]*?variant="danger"/,
+  );
+  assert.match(
+    projectLibrarySource,
+    /<Tooltip[\s\S]*?content=\{versionSummary\}[\s\S]*?className="ic-version-description"/,
+  );
+  assert.match(projectLibrarySource, />去优化<\/button>/);
+  assert.doesNotMatch(projectLibrarySource, />继续优化<\/button>/);
+  assert.doesNotMatch(projectLibrarySource, /版本已删除|项目已删除/);
+  assert.doesNotMatch(projectLibrarySource, /已选择“\$\{project\.name\}”/);
+  assert.match(appSource, /displayName: baseVersion\?\.projectName \?\? goal\.slice\(0, 40\)/);
+  assert.match(
+    createStyles,
+    /\.ic-project-copy strong \{[\s\S]*?text-overflow: ellipsis;[\s\S]*?white-space: nowrap;/,
+  );
+  assert.match(
+    createStyles,
+    /\.ic-version-description \{[\s\S]*?-webkit-line-clamp: 2;[\s\S]*?overflow-wrap: anywhere;/,
+  );
+});
+
+test("version comparison controls align with project titles and expose clear selection", () => {
+  const projectSummary = projectLibrarySource.match(
+    /<div className="ic-project-summary">([\s\S]*?)\{expanded \? \(/,
+  )?.[1] ?? "";
+  assert.match(projectSummary, /className="ic-project-compare-actions"/);
+  assert.match(projectSummary, />对比版本<\/button>/);
+  assert.doesNotMatch(projectLibrarySource, /className="ic-version-compare-toolbar"/);
+  assert.match(projectLibrarySource, /is-compare-selected/);
+  assert.match(projectLibrarySource, /className="ic-version-compare-box"/);
+  assert.match(projectLibrarySource, /<CompareCheckIcon \/>/);
+  assert.match(projectLibrarySource, /isCompareSelected \? "已选择" : "选择"/);
+  assert.match(
+    createStyles,
+    /\.ic-project-compare-actions \{[\s\S]*?display: flex;[\s\S]*?flex-shrink: 0;/,
+  );
+  assert.match(
+    createStyles,
+    /\.ic-version-list > li\.is-compare-selected \{[\s\S]*?background:[\s\S]*?box-shadow:/,
+  );
+  assert.match(
+    createStyles,
+    /\.ic-version-compare-check\.is-selected \{[\s\S]*?border-color:[\s\S]*?background:/,
+  );
+  assert.match(
+    createStyles,
+    /\.ic-version-compare-check\.is-selected \.ic-version-compare-box \{[\s\S]*?background: hsl\(var\(--primary\)\)/,
+  );
+});
+
+test("source workspace exposes version comparison and scoped light and dark themes", () => {
+  assert.match(codeBrowserSource, /compareProjectFiles/);
+  assert.match(codeBrowserSource, /aria-label="切换源码主题"/);
+  assert.match(codeBrowserSource, /CodeDiffEditor/);
+  assert.match(codeBrowserStyles, /\.code-browser-dialog\.is-dark/);
+  assert.match(projectLibrarySource, /对比版本/);
+  assert.match(projectLibrarySource, /查看对比/);
+  assert.match(blocksUiSource, /查看本次变更/);
+});
+
 test("intelligent preparation ends before the first build turn and resets on navigation", () => {
   assert.match(
     appSource,
@@ -909,7 +1295,7 @@ test("intelligent preparation ends before the first build turn and resets on nav
   assert.match(submitDisabledBlock, /!goal\.trim\(\)/);
   assert.match(
     appSource,
-    /startSession\(\{[\s\S]*?displayName: goal\.slice\(0, 40\),[\s\S]*?modelId,[\s\S]*?signal:/,
+    /startSession\(\{[\s\S]*?displayName: baseVersion\?\.projectName \?\? goal\.slice\(0, 40\),[\s\S]*?modelId,[\s\S]*?projectId: baseVersion\.projectId,[\s\S]*?baseVersionId: baseVersion\.versionId,[\s\S]*?signal:/,
   );
   assert.match(appSource, /onCancel=\{cancelIntelligentPreparation\}/);
 });
@@ -944,6 +1330,17 @@ test("intelligent conversation keeps the Studio visual language and stable contr
   assert.match(
     appSource,
     /exitLabel=\{[\s\S]*?sandboxSession\.intelligentDevelopment[\s\S]*?\? "退出开发环境"[\s\S]*?: undefined[\s\S]*?\}/,
+  );
+});
+
+test("only intelligent development exits back to the intelligent build start page", () => {
+  assert.match(
+    appSource,
+    /function returnToIntelligentCreate\(\) \{[\s\S]*?startNewChat\(\);[\s\S]*?setIntelligentDeployment\(null\);[\s\S]*?setAddMenu\(false\);[\s\S]*?setCreateView\("intelligent"\);[\s\S]*?\}/,
+  );
+  assert.match(
+    appSource,
+    /onExit=\{\(\) => requestIntelligentNavigation\([\s\S]*?sandboxSession\.intelligentDevelopment[\s\S]*?\? returnToIntelligentCreate[\s\S]*?: startNewChat[\s\S]*?\)\}/,
   );
 });
 

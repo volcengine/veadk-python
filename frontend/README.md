@@ -43,6 +43,14 @@ server that `veadk frontend` launches — no separate backend.
   Stopping preserves received output and blocks the next submission until
   cleanup finishes. Users can inspect generated text files and download the
   complete ZIP (including binary assets) as soon as the source is ready.
+  Each completed build or optimization is also saved as an immutable project
+  version in the private Studio TOS bucket. Users can reopen any saved version,
+  view, download, deploy, delete, or restore it into a new Sandbox for another
+  intent-driven iteration after the original Sandbox expires. The source
+  workspace provides an IDE-style file tree with persistent light and dark
+  themes. Optimizations expose their before/after changes directly, and any two
+  saved versions of the same project can be compared on demand without storing
+  another artifact.
   Deployable source can be sent to Runtime manually; an incomplete verification
   report requires an explicit confirmation. No separate “start verification”
   action is required.
@@ -620,6 +628,16 @@ layout
 `veadk-studio/v1/users/<encoded-user-id>/<namespace>/<scope>/<resource-id>/`.
 Video reference assets currently use the `video/<asset-role>/<asset-id>/`
 namespace and store `content` plus `metadata.json` below it.
+
+Intelligent-development projects use
+`intelligent-development/projects/<project-id>/versions/<version-id>/` below
+the signed-in user's prefix. A version contains an immutable source ZIP,
+validation report, and commit marker; the mutable project summary is only an
+index. Viewing, downloading, and deploying a committed version do not depend on
+the original Sandbox. TOS configuration, integrity, and availability failures
+are returned as distinct errors and are never rendered as an empty project
+list. If persistence fails after a Sandbox delivery is generated, the current
+Sandbox delivery remains usable until that environment expires.
 
 Local Studio still accepts `VEADK_STUDIO_TOS_BUCKET` together with
 `VEADK_STUDIO_TOS_REGION`. When local storage is not configured,
