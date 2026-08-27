@@ -38,15 +38,12 @@ const buildProgressStyles = readFileSync(
   "utf8",
 );
 
-test("adds Environment as a standalone Studio page", () => {
-  assert.match(sidebarSource, /\| "environments"/);
-  assert.match(sidebarSource, /onEnvironment: \(\) => void/);
-  assert.match(sidebarSource, /onClick=\{onEnvironment\}/);
-  assert.match(sidebarSource, /aria-label="环境"/);
-  assert.match(sidebarSource, />环境<\/span>/);
+test("keeps Environment available without a standalone sidebar item", () => {
+  assert.doesNotMatch(sidebarSource, /onEnvironment: \(\) => void/);
+  assert.doesNotMatch(sidebarSource, /onClick=\{onEnvironment\}/);
+  assert.doesNotMatch(sidebarSource, /aria-label="环境"/);
   assert.match(appSource, /import \{ EnvironmentCenter \}/);
   assert.match(appSource, /environmentView\s*\? "environments"/);
-  assert.match(appSource, /onEnvironment=\{\(\) => requestIntelligentNavigation\(openEnvironmentPage\)\}/);
   assert.match(appSource, /environmentView \? \([\s\S]*?<EnvironmentCenter cloudProvider=\{cloudProvider\} \/>/);
 });
 

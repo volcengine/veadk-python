@@ -13,7 +13,6 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
-import { Badge } from "@openai/apps-sdk-ui/components/Badge";
 import { Clock } from "@openai/apps-sdk-ui/components/Icon";
 import type {
   AdkSession,
@@ -43,6 +42,7 @@ const SIDEBAR_AUTO_COLLAPSE_QUERY = "(max-width: 860px)";
 export type SidebarPage =
   | "new-chat"
   | "agents"
+  | "workspaces"
   | "environments"
   | "library"
   | "applications"
@@ -104,7 +104,7 @@ export interface SidebarProps {
   onLibrary: () => void;
   onAddAgent: () => void;
   onMyAgents: () => void;
-  onEnvironment: () => void;
+  onWorkspace: () => void;
   onApplications: () => void;
   onCronJobs: () => void;
   onSystemInfo: () => void;
@@ -286,7 +286,7 @@ export function Sidebar({
   onLibrary,
   onAddAgent,
   onMyAgents,
-  onEnvironment,
+  onWorkspace,
   onApplications,
   onCronJobs,
   onSystemInfo,
@@ -402,16 +402,16 @@ export function Sidebar({
             <span className="sidebar-nav-label">智能体</span>
           </button>
           <button
-            className={`new-chat new-chat--environments${
-              activePage === "environments" ? " is-active" : ""
+            className={`new-chat new-chat--workspaces${
+              activePage === "workspaces" ? " is-active" : ""
             }`}
-            onClick={onEnvironment}
-            aria-label="环境"
-            aria-current={activePage === "environments" ? "page" : undefined}
-            title="环境"
+            onClick={onWorkspace}
+            aria-label="工作区"
+            aria-current={activePage === "workspaces" ? "page" : undefined}
+            title="工作区"
           >
             <Box className="icon" />
-            <span className="sidebar-nav-label">环境</span>
+            <span className="sidebar-nav-label">工作区</span>
           </button>
           <button
             className={`new-chat new-chat--library${
@@ -436,15 +436,6 @@ export function Sidebar({
           >
             <Clock className="icon" />
             <span className="sidebar-nav-label">定时任务</span>
-            <Badge
-              className="sidebar-cronjobs-beta"
-              color="discovery"
-              variant="soft"
-              size="sm"
-              pill
-            >
-              Beta
-            </Badge>
           </button>
           <button
             className={`new-chat new-chat--applications${

@@ -27,7 +27,7 @@ from veadk.utils.cloud_provider import default_region
 from .repository import TosEnvironmentRepository
 from .resources import EnvironmentResourceSettings, StudioEnvironmentCloudGateway
 from .routes import mount_environment_routes
-from .service import EnvironmentService
+from .service import EnvironmentService, WorkspaceReferenceLookup
 
 
 def create_environment_service(
@@ -36,17 +36,22 @@ def create_environment_service(
     resolve_credentials: CredentialResolver | None = None,
     client_factory: Callable[[], Any] | None = None,
     environment: Mapping[str, str] | None = None,
+    workspace_references: WorkspaceReferenceLookup | None = None,
 ) -> EnvironmentService:
     storage = StudioStorageConfig.from_env(provider, environment)
     if not storage.configured:
         return EnvironmentService(
-            None, None, unavailable_reason=storage.unavailable_reason
+            None,
+            None,
+            workspace_references=workspace_references,
+            unavailable_reason=storage.unavailable_reason,
         )
     if client_factory is None:
         if resolve_credentials is None:
             return EnvironmentService(
                 None,
                 None,
+                workspace_references=workspace_references,
                 unavailable_reason="管理员未配置环境存储与构建凭据。",
             )
         client_factory = create_tos_client_factory(storage, resolve_credentials)
@@ -67,6 +72,7 @@ def create_environment_service(
             settings,
             resolve_credentials=resolve_credentials,
         ),
+        workspace_references=workspace_references,
     )
 
 

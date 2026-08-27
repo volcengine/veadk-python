@@ -22,6 +22,7 @@ import json
 import tarfile
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
+from typing import Protocol
 from uuid import uuid4
 
 from veadk.cli.generated_agent_codegen import (
@@ -53,8 +54,18 @@ from .models import (
     EnvironmentView,
     ResolvedEnvironment,
 )
-from .repository import EnvironmentStorageUnavailable, TosEnvironmentRepository
+from .repository import (
+    EnvironmentConflict,
+    EnvironmentStorageUnavailable,
+    TosEnvironmentRepository,
+)
 from .resources import EnvironmentCloudGateway
+
+
+class WorkspaceReferenceLookup(Protocol):
+    async def workspace_names_for_environment(
+        self, owner_id: str, environment_id: str
+    ) -> list[str]: ...
 
 
 class EnvironmentService:
@@ -63,10 +74,12 @@ class EnvironmentService:
         repository: TosEnvironmentRepository | None,
         cloud: EnvironmentCloudGateway | None,
         *,
+        workspace_references: WorkspaceReferenceLookup | None = None,
         unavailable_reason: str = "管理员未配置环境持久化存储。",
     ) -> None:
         self._repository = repository
         self._cloud = cloud
+        self._workspace_references = workspace_references
         self._unavailable_reason = unavailable_reason
         self._skillspace_resolver: SkillSpaceResolver | None = None
 
@@ -151,6 +164,18 @@ class EnvironmentService:
         return await self._view(repository, owner_id, saved)
 
     async def delete(self, owner_id: str, environment_id: str) -> None:
+        if self._workspace_references is not None:
+            workspace_names = (
+                await self._workspace_references.workspace_names_for_environment(
+                    owner_id, environment_id
+                )
+            )
+            if workspace_names:
+                names = "、".join(workspace_names[:3])
+                suffix = "等工作区" if len(workspace_names) > 3 else "工作区"
+                raise EnvironmentConflict(
+                    f"该环境正在被 {names}{suffix} 使用，请先从工作区中移除。"
+                )
         await self._require_repository().delete(owner_id, environment_id)
 
     async def start_build(self, owner_id: str, environment_id: str) -> EnvironmentBuild:

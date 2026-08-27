@@ -2367,16 +2367,26 @@ def _run_frontend_server(
         create_environment_service,
         mount_environment_routes,
     )
+    from frontend.server.workspaces import (
+        create_workspace_service,
+        mount_workspace_routes,
+    )
 
     def _environment_owner(request: Request) -> str:
         principal = _require_agent_management(request)
         return principal.owner_id if principal is not None else "local"
 
-    environment_service = create_environment_service(
+    workspace_service = create_workspace_service(
         provider=provider,
         resolve_credentials=_resolve_ve_credentials,
     )
+    environment_service = create_environment_service(
+        provider=provider,
+        resolve_credentials=_resolve_ve_credentials,
+        workspace_references=workspace_service,
+    )
     mount_environment_routes(app, environment_service, _environment_owner)
+    mount_workspace_routes(app, workspace_service, _environment_owner)
 
     mount_video_routes(
         app,
