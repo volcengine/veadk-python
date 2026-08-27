@@ -130,12 +130,14 @@ def test_studio_findskill_route_uses_studio_skill_catalog(
     ],
     ids=["agent-info", "legacy-runtime-fallback", "first-feedback-dataset"],
 )
+@pytest.mark.parametrize("rating", ["good", "bad"])
 def test_message_feedback_writes_dataset_and_session_state(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     agent_info_status: int,
     expected_agent_name: str,
     initially_empty: bool,
+    rating: str,
 ) -> None:
     app = _create_frontend_app(monkeypatch, tmp_path)
     openapi_calls: list[dict[str, Any]] = []
@@ -201,6 +203,15 @@ def test_message_feedback_writes_dataset_and_session_state(
                     status_code=agent_info_status,
                 )
             if method == "PATCH" and "/sessions/session-1" in url:
+                json_headers = [
+                    (name.lower(), value)
+                    for name, value in kwargs["headers"].items()
+                    if name.lower() in {"accept", "content-type"}
+                ]
+                assert json_headers == [
+                    ("accept", "application/json"),
+                    ("content-type", "application/json"),
+                ]
                 session_patches.append(kwargs["json"])
                 return _FakeResponse({}, status_code=404)
             raise AssertionError((method, url))
@@ -225,7 +236,7 @@ def test_message_feedback_writes_dataset_and_session_state(
                             "EvaluationSets": [
                                 {
                                     "Id": "set-1",
-                                    "Name": f"{expected_agent_name}_good_case",
+                                    "Name": f"{expected_agent_name}_{rating}_case",
                                     "WorkspaceId": "workspace-1",
                                 }
                             ]
@@ -268,16 +279,18 @@ def test_message_feedback_writes_dataset_and_session_state(
                 "userId": "user-1",
                 "sessionId": "session-1",
                 "eventId": "assistant-event",
-                "rating": "good",
+                "rating": rating,
                 "comment": annotation_comment,
             },
         )
 
     assert response.status_code == 200
-    assert response.json()["rating"] == "good"
+    assert response.json()["rating"] == rating
     assert response.json()["comment"] == annotation_comment
     assert response.json()["evaluationItemId"] == "item-1"
-    assert response.json()["evaluationSetName"] == (f"{expected_agent_name}_good_case")
+    assert response.json()["evaluationSetName"] == (
+        f"{expected_agent_name}_{rating}_case"
+    )
     assert response.json()["statePersistence"] == "browser"
     expected_actions = [
         "ListEvaluationSets",
@@ -296,7 +309,7 @@ def test_message_feedback_writes_dataset_and_session_state(
     else:
         assert openapi_calls[1]["params"]["WorkspaceId"] == "workspace-1"
     state = session_patches[0]["state_delta"]["veadk_feedback:assistant-event"]
-    assert state["rating"] == "good"
+    assert state["rating"] == rating
     assert state["comment"] == annotation_comment
     assert state["evaluationItemId"] == "item-1"
     create_item_call = next(
@@ -310,8 +323,9 @@ def test_message_feedback_writes_dataset_and_session_state(
     assert fields["feedback_comment"] == annotation_comment
 
 
+@pytest.mark.parametrize("rating", ["good", "bad"])
 def test_message_feedback_byteplus_is_noop(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, rating: str
 ) -> None:
     app = _create_frontend_app(
         monkeypatch,
@@ -363,7 +377,7 @@ def test_message_feedback_byteplus_is_noop(
                 "userId": "user-1",
                 "sessionId": "session-1",
                 "eventId": "assistant-event",
-                "rating": "good",
+                "rating": rating,
             },
         )
 
