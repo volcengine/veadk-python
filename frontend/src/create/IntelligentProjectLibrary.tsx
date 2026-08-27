@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
+import { Button } from "@openai/apps-sdk-ui/components/Button";
+import { Tooltip } from "@openai/apps-sdk-ui/components/Tooltip";
 import type { IntelligentDevelopmentReleaseRef } from "../blocks";
 import {
   deleteIntelligentDevelopmentVersion,
@@ -30,6 +32,23 @@ function ProjectArchiveIcon() {
     >
       <path d="M4.5 7.5h15v11h-15z" />
       <path d="M7 7.5V5h10v2.5M9 11h6" />
+    </svg>
+  );
+}
+
+function RefreshProjectIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M19 8.5V4.75l-1.7 1.7A7.5 7.5 0 1 0 19.5 12" />
+      <path d="M19 4.75h-3.75" />
     </svg>
   );
 }
@@ -195,10 +214,7 @@ export function IntelligentProjectLibrary({
       projectName: project.name,
       versionLabel,
     });
-    setFeedback({
-      kind: "status",
-      text: `已选择“${project.name}”的${versionLabel}，请描述这次要优化的内容。`,
-    });
+    setFeedback(null);
   }
 
   async function viewVersion(version: IntelligentDevelopmentVersion) {
@@ -290,12 +306,22 @@ export function IntelligentProjectLibrary({
             <p>选择已有版本继续优化，或查看、下载和部署源码。</p>
           </div>
           {projects.length > 0 ? (
-            <button
-              type="button"
-              className="ic-text-action"
-              onClick={() => setProjectsRefresh((value) => value + 1)}
-              disabled={projectsLoading}
-            >刷新</button>
+            <Tooltip compact content="刷新项目列表">
+              <Button
+                type="button"
+                className="ic-refresh"
+                color="secondary"
+                variant="ghost"
+                size="md"
+                uniform
+                pill={false}
+                onClick={() => setProjectsRefresh((value) => value + 1)}
+                disabled={projectsLoading}
+                aria-label="刷新项目列表"
+              >
+                <RefreshProjectIcon />
+              </Button>
+            </Tooltip>
           ) : null}
         </div>
 
@@ -378,16 +404,6 @@ export function IntelligentProjectLibrary({
                         </span>
                       </span>
                     </button>
-                    <button
-                      type="button"
-                      className="ic-secondary ic-continue"
-                      onClick={() => selectBaseVersion(
-                        project,
-                        project.latestVersionId,
-                        "最新版本",
-                      )}
-                      disabled={creating}
-                    >继续优化</button>
                   </div>
 
                   {expanded ? (
@@ -422,77 +438,102 @@ export function IntelligentProjectLibrary({
                           <p className="ic-version-empty">这个项目还没有可用版本。</p>
                         ) : (
                           <ul className="ic-version-list">
-                            {projectVersions.map((version, index) => (
-                              <li key={version.versionId}>
-                                <div className="ic-version-copy">
-                                  <div>
-                                    <strong>
-                                      {index === 0
-                                        ? "最新版本"
-                                        : formatVersionTime(version.createdAt)}
-                                    </strong>
-                                    <span className={`ic-version-status${version.verified ? " is-verified" : ""}`}>
-                                      {version.verified ? "已验证" : "待确认"}
+                            {projectVersions.map((version, index) => {
+                              const versionSummary = version.intentSummary
+                                || version.validationSummary
+                                || "暂无版本描述";
+                              return (
+                                <li key={version.versionId}>
+                                  <div className="ic-version-copy">
+                                    <div>
+                                      <strong>
+                                        {index === 0
+                                          ? "最新版本"
+                                          : formatVersionTime(version.createdAt)}
+                                      </strong>
+                                      <span className={`ic-version-status${version.verified ? " is-verified" : ""}`}>
+                                        {version.verified ? "已验证" : "待确认"}
+                                      </span>
+                                    </div>
+                                    <Tooltip
+                                      content={versionSummary}
+                                      contentClassName="ic-version-tooltip"
+                                      maxWidth={420}
+                                      interactive
+                                    >
+                                      <p
+                                        className="ic-version-description"
+                                        tabIndex={0}
+                                      >
+                                        {versionSummary}
+                                      </p>
+                                    </Tooltip>
+                                    <span>
+                                      {formatVersionTime(version.createdAt)} · {version.fileCount} 个文件
                                     </span>
                                   </div>
-                                  <p title={version.intentSummary || version.validationSummary}>
-                                    {version.intentSummary || version.validationSummary}
-                                  </p>
-                                  <span>
-                                    {formatVersionTime(version.createdAt)} · {version.fileCount} 个文件
-                                  </span>
-                                </div>
-                                <div className="ic-version-actions">
-                                  <button
-                                    type="button"
-                                    onClick={() => void viewVersion(version)}
-                                    disabled={Boolean(busyAction)}
-                                  >
-                                    {busyAction === `view:${version.versionId}`
-                                      ? "读取中…"
-                                      : "查看源码"}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => void downloadVersion(version)}
-                                    disabled={Boolean(busyAction)}
-                                  >
-                                    {busyAction === `download:${version.versionId}`
-                                      ? "下载中…"
-                                      : "下载"}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => void deployVersion(version)}
-                                    disabled={Boolean(busyAction)}
-                                  >
-                                    {busyAction === `deploy:${version.versionId}`
-                                      ? "准备中…"
-                                      : "部署"}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => selectBaseVersion(
-                                      project,
-                                      version.versionId,
-                                      version.versionId === project.latestVersionId
-                                        ? "最新版本"
-                                        : formatVersionTime(version.createdAt),
-                                    )}
-                                    disabled={creating || Boolean(busyAction)}
-                                  >以此版本继续</button>
-                                  <button
-                                    type="button"
-                                    className="is-danger"
-                                    onClick={() => {
-                                      setDeleteError("");
-                                      setDeleteTarget({ project, version });
-                                    }}
-                                    disabled={Boolean(busyAction)}
-                                  >删除</button>
-                                </div>
-                              </li>
-                            ))}
+                                  <div className="ic-version-actions">
+                                    <button
+                                      type="button"
+                                      className="ic-version-action"
+                                      onClick={() => void viewVersion(version)}
+                                      disabled={Boolean(busyAction)}
+                                    >
+                                      {busyAction === `view:${version.versionId}`
+                                        ? "读取中…"
+                                        : "查看源码"}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="ic-version-action"
+                                      onClick={() => void downloadVersion(version)}
+                                      disabled={Boolean(busyAction)}
+                                    >
+                                      {busyAction === `download:${version.versionId}`
+                                        ? "下载中…"
+                                        : "下载"}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="ic-version-action"
+                                      onClick={() => void deployVersion(version)}
+                                      disabled={Boolean(busyAction)}
+                                    >
+                                      {busyAction === `deploy:${version.versionId}`
+                                        ? "准备中…"
+                                        : "部署"}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="ic-version-action"
+                                      onClick={() => selectBaseVersion(
+                                        project,
+                                        version.versionId,
+                                        version.versionId === project.latestVersionId
+                                          ? "最新版本"
+                                          : formatVersionTime(version.createdAt),
+                                      )}
+                                      disabled={creating || Boolean(busyAction)}
+                                    >去优化</button>
+                                    <Button
+                                      type="button"
+                                      className="ic-version-delete"
+                                      color="danger"
+                                      variant="ghost"
+                                      size="sm"
+                                      pill={false}
+                                      onClick={() => {
+                                        setDeleteError("");
+                                        setDeleteTarget({ project, version });
+                                      }}
+                                      disabled={Boolean(busyAction)}
+                                    >
+                                      删除
+                                    </Button>
+                                  </div>
+                                </li>
+                              );
+                            })}
                           </ul>
                         )}
                     </div>
