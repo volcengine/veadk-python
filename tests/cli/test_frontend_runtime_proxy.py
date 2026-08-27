@@ -1612,18 +1612,53 @@ def test_runtime_proxy_accepts_post_delete_override(
         "request_method",
         "proxy_path",
         "query",
+        "provider",
+        "expected_region",
         "expected_attempts",
         "succeeds_on_attempt",
         "expected_status",
     ),
     [
-        ("private", "GET", "list-apps", "?region=cn-beijing", 1, None, 502),
-        ("public", "GET", "list-apps", "?region=cn-beijing", 3, None, 502),
+        (
+            "private",
+            "GET",
+            "list-apps",
+            "?region=cn-beijing",
+            "volcengine",
+            "cn-beijing",
+            1,
+            None,
+            502,
+        ),
+        (
+            "public",
+            "GET",
+            "list-apps",
+            "?region=cn-beijing",
+            "volcengine",
+            "cn-beijing",
+            1,
+            None,
+            502,
+        ),
+        (
+            "public",
+            "GET",
+            "list-apps",
+            "?_runtime_region=ap-southeast-1&probe_retry=connect",
+            "byteplus",
+            "ap-southeast-1",
+            2,
+            2,
+            200,
+        ),
         (
             "public",
             "GET",
             "apps/demo/users/user/sessions",
             "?region=cn-beijing",
+            "volcengine",
+            "cn-beijing",
             3,
             3,
             200,
@@ -1633,6 +1668,8 @@ def test_runtime_proxy_accepts_post_delete_override(
             "HEAD",
             "apps/demo/users/user/sessions",
             "?region=cn-beijing",
+            "volcengine",
+            "cn-beijing",
             3,
             None,
             502,
@@ -1642,6 +1679,8 @@ def test_runtime_proxy_accepts_post_delete_override(
             "POST",
             "apps/demo/users/user/sessions",
             "?region=cn-beijing",
+            "volcengine",
+            "cn-beijing",
             1,
             None,
             502,
@@ -1655,11 +1694,18 @@ def test_runtime_proxy_retry_policy(
     request_method: str,
     proxy_path: str,
     query: str,
+    provider: str,
+    expected_region: str,
     expected_attempts: int,
     succeeds_on_attempt: int | None,
     expected_status: int,
 ) -> None:
-    app = _create_frontend_app(monkeypatch, tmp_path)
+    if provider == "byteplus":
+        monkeypatch.setenv("BYTEPLUS_ACCESS_KEY", "bp-ak")
+        monkeypatch.setenv("BYTEPLUS_SECRET_KEY", "bp-sk")
+        monkeypatch.setenv("BYTEPLUS_REGION", expected_region)
+    app = _create_frontend_app(monkeypatch, tmp_path, provider=provider)
+    runtime_client_regions: list[str] = []
 
     async def _noop_sleep(delay: float) -> None:
         pass
@@ -1668,7 +1714,7 @@ def test_runtime_proxy_retry_policy(
 
     class _FakeRuntimeClient:
         def __init__(self, **kwargs: Any) -> None:
-            pass
+            runtime_client_regions.append(kwargs["region"])
 
         def get_runtime(self, request: Any) -> SimpleNamespace:
             return SimpleNamespace(
@@ -1738,6 +1784,7 @@ def test_runtime_proxy_retry_policy(
         )
 
     assert response.status_code == expected_status
+    assert runtime_client_regions == [expected_region]
     assert attempts == expected_attempts
     assert forwarded_params == [{}] * expected_attempts
     if expected_status == 200:

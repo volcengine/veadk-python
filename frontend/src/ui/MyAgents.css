@@ -164,6 +164,55 @@
   color: hsl(38 78% 36%);
 }
 
+.my-agent-compatibility-trigger {
+  flex: 0 0 auto;
+  display: inline-flex;
+  position: relative;
+  z-index: 2;
+  border-radius: 999px;
+  outline: none;
+}
+
+.my-agent-compatibility-trigger:focus-visible {
+  box-shadow: 0 0 0 2px hsl(var(--ring));
+}
+
+.my-agent-compatibility-status {
+  gap: 5px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.my-agent-compatibility-tooltip {
+  max-height: min(240px, calc(100vh - 24px));
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.my-agent-compatibility-spinner {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 10px;
+  box-sizing: border-box;
+  border: 1.25px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: loading-gap-spin 0.72s linear infinite;
+}
+
+.my-agent-compatibility-retry {
+  min-width: 48px;
+}
+
+.my-agent-card.is-connecting .resource-card__actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 .my-agent-created-at,
 .my-agent-region,
 .my-agent-expiry {
@@ -320,7 +369,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .my-agent-loading-mark {
+  .my-agent-loading-mark,
+  .my-agent-compatibility-spinner {
     animation: none;
   }
 

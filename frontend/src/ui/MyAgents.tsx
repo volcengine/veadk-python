@@ -2,12 +2,21 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SVGProps } from "react";
 import { EmptyMessage } from "@openai/apps-sdk-ui/components/EmptyMessage";
 import { Explore } from "@openai/apps-sdk-ui/components/Icon";
+import { Badge } from "@openai/apps-sdk-ui/components/Badge";
+import { Tooltip } from "@openai/apps-sdk-ui/components/Tooltip";
 
 import {
-  getRuntimes,
+  probeRuntimeApps,
+  RuntimeProbeError,
   type CloudRuntime,
   type RuntimeScope,
 } from "../adk/client";
+import {
+  getRuntimesWithTimeoutRetry,
+  isAbortError,
+  runRuntimeCompatibilityChecks,
+  withRuntimeCompatibilitySlot,
+} from "../adk/runtimeDiscovery";
 import {
   cloudRegionOptions,
   defaultCloudRegion,
@@ -90,6 +99,17 @@ const AGENT_TYPE_OPTIONS: Array<ResourceFilterOption<AgentType>> = AGENT_TYPES.m
 }));
 const RUNTIME_PAGE_SIZE = 24;
 const RUNTIME_PAGE_CACHE_TTL_MS = 30_000;
+const RUNTIME_COMPATIBILITY_TIMEOUT_MS = 7_000;
+const RUNTIME_COMPATIBILITY_RETRY_TIMEOUT_MS = 20_000;
+type RuntimeCompatibilityStatus = "checking" | "compatible" | "unsupported" | "error";
+interface RuntimeCompatibility {
+  status: RuntimeCompatibilityStatus;
+  message: string;
+}
+const RUNTIME_COMPATIBILITY_CHECKING_MESSAGE =
+  "正在请求 Runtime /list-apps，以确认该智能体是否支持 Studio 对话。";
+const RUNTIME_COMPATIBILITY_EMPTY_MESSAGE =
+  "Runtime /list-apps 未返回可用的 Agent，暂时无法连接对话。";
 const runtimePageRequests = new Map<
   string,
   Promise<{ runtimes: CloudRuntime[]; nextToken: string }>
@@ -99,6 +119,25 @@ const runtimePageCache = new Map<
   { page: { runtimes: CloudRuntime[]; nextToken: string }; expiresAt: number }
 >();
 const EMPTY_RUNTIME_IDS = new Set<string>();
+
+function runtimeCompatibilityKey(agent: MyAgentCardData): string {
+  const runtime = agent.runtime;
+  return runtime
+    ? `${runtime.region}:${runtime.runtimeId}:${runtime.currentVersion ?? ""}`
+    : "";
+}
+
+function runtimeCompatibilityFailure(error: unknown): RuntimeCompatibility {
+  const message = error instanceof Error && error.message.trim()
+    ? error.message.trim()
+    : "Runtime /list-apps 请求失败，未返回可识别的错误信息。";
+  return {
+    status: error instanceof RuntimeProbeError && error.unsupported
+      ? "unsupported"
+      : "error",
+    message,
+  };
+}
 
 export function invalidateRuntimeAgentCache(runtimeIds?: Iterable<string>) {
   if (!runtimeIds) {
@@ -218,6 +257,34 @@ function draftToAgent(item: WorkspaceAgentDraft): MyAgentCardData {
   };
 }
 
+function runtimeDetailTargetForCard(
+  agent: MyAgentCardData,
+  runtimeAgents: MyAgentCardData[],
+): MyAgentCardData | null {
+  if (!agent.draft) return agent;
+  const target = agent.draft.deploymentTarget;
+  if (!target) return null;
+  return runtimeAgents.find((runtimeAgent) =>
+    runtimeAgent.runtime?.runtimeId === target.runtimeId &&
+    runtimeAgent.runtime.region === target.region,
+  ) ?? {
+    id: target.runtimeId,
+    appName: target.appName,
+    name: target.name || agent.name,
+    description: agent.description,
+    createdAt: agent.createdAt,
+    specificationLabel: "地域",
+    specification: target.region,
+    isMine: true,
+    runtime: {
+      runtimeId: target.runtimeId,
+      region: target.region,
+      currentVersion: target.currentVersion,
+      canDelete: false,
+    },
+  };
+}
+
 function resolveAgentRegion(
   studioRegion: string,
   cloudProvider: CloudProvider,
@@ -237,6 +304,7 @@ async function loadRuntimeAgents(
   region: CloudRegion,
   nextToken: string,
   onList: (agents: MyAgentCardData[]) => void,
+  signal?: AbortSignal,
 ): Promise<string> {
   const requestKey = `${runtimeScope}:${region}:${nextToken}`;
   const cached = runtimePageCache.get(requestKey);
@@ -247,11 +315,12 @@ async function loadRuntimeAgents(
   if (cached) runtimePageCache.delete(requestKey);
   let request = runtimePageRequests.get(requestKey);
   if (!request) {
-    request = getRuntimes({
+    request = getRuntimesWithTimeoutRetry({
       scope: runtimeScope,
       region,
       pageSize: RUNTIME_PAGE_SIZE,
       nextToken,
+      signal,
     });
     runtimePageRequests.set(requestKey, request);
     void request.then(
@@ -272,6 +341,8 @@ function AgentCard({
   agent,
   onUse,
   onViewDetails,
+  compatibility,
+  onRetryCompatibility,
   connecting,
   connected,
   deploymentTask,
@@ -283,6 +354,8 @@ function AgentCard({
   agent: MyAgentCardData;
   onUse?: (agent: MyAgentCardData) => Promise<void>;
   onViewDetails?: (agent: MyAgentCardData) => void;
+  compatibility?: RuntimeCompatibility;
+  onRetryCompatibility?: (agent: MyAgentCardData) => void;
   connecting?: boolean;
   connected?: boolean;
   deploymentTask?: DeploymentTaskUpdate;
@@ -296,13 +369,16 @@ function AgentCard({
   const actionable = Boolean(
     agent.runtime || sandboxStatus === "ready" || sandboxStatus === "wakeable",
   );
+  const checkingCompatibility = compatibility?.status === "checking";
+  const incompatible = compatibility?.status === "unsupported";
+  const compatibilityFailed = compatibility?.status === "error";
   const sandboxResourceId = agent.sandbox?.resourceType === "snapshot"
     ? agent.sandbox.sourceSessionId || agent.sandbox.snapshotId
     : agent.sandbox?.id;
   const openCard = () => {
     if (agent.draft) {
       if (deploymentTask) onViewDeploymentTask?.(deploymentTask);
-      else onEditDraft?.(agent.draft);
+      else onViewDetails?.(agent);
       return;
     }
     if (!actionable) return;
@@ -310,18 +386,18 @@ function AgentCard({
     else onViewDetails?.(agent);
   };
   const cardTargetEnabled = agent.draft
-    ? Boolean(deploymentTask ? onViewDeploymentTask : onEditDraft)
+    ? Boolean(deploymentTask ? onViewDeploymentTask : onViewDetails)
     : actionable && Boolean(deploymentTask ? onViewDeploymentTask : onViewDetails);
   const cardTargetLabel = agent.draft
     ? deploymentTask
       ? `查看 ${agent.name} 部署进度`
-      : `编辑草稿 ${agent.name}`
+      : `查看 ${agent.name} Runtime 详情`
     : deploymentTask
       ? `查看 ${agent.name} 部署进度`
       : `查看 ${agent.name} 详情`;
   return (
     <ResourceCard
-      className="my-agent-card"
+      className={connecting ? "my-agent-card is-connecting" : "my-agent-card"}
       activateLabel={cardTargetEnabled ? cardTargetLabel : undefined}
       onActivate={cardTargetEnabled ? openCard : undefined}
       footer={(
@@ -376,10 +452,18 @@ function AgentCard({
             删除
           </ResourceCardAction>
         </>
+      ) : compatibilityFailed || incompatible ? (
+        <ResourceCardAction
+          className="my-agent-compatibility-retry"
+          aria-label={`重新检测 ${agent.name} 的对话兼容性`}
+          onClick={() => onRetryCompatibility?.(agent)}
+        >
+          重试
+        </ResourceCardAction>
       ) : (
         <ResourceCardRevealAction
           className={connected ? "my-agent-use is-connected" : "my-agent-use"}
-          disabled={!actionable || connecting || connected}
+          disabled={!actionable || checkingCompatibility || incompatible || connecting || connected}
           aria-busy={connecting || undefined}
           label={connected
             ? `${agent.name} 已连接`
@@ -425,6 +509,70 @@ function AgentCard({
             </span>
           ) : agent.runtime && deploymentTask ? (
             <span className="my-agent-deploying-badge">部署中</span>
+          ) : checkingCompatibility ? (
+            <Tooltip
+              content={compatibility?.message}
+              contentClassName="my-agent-compatibility-tooltip"
+              maxWidth={360}
+              align="end"
+              interactive
+              preventUnintentionalClickToClose
+            >
+              <span className="my-agent-compatibility-trigger" tabIndex={0}>
+                <Badge
+                  className="my-agent-compatibility-status"
+                  color="secondary"
+                  variant="soft"
+                  size="sm"
+                  pill
+                >
+                  <span className="my-agent-compatibility-spinner" aria-hidden="true" />
+                  <span>检测中</span>
+                </Badge>
+              </span>
+            </Tooltip>
+          ) : incompatible ? (
+            <Tooltip
+              content={compatibility?.message}
+              contentClassName="my-agent-compatibility-tooltip"
+              maxWidth={360}
+              align="end"
+              interactive
+              preventUnintentionalClickToClose
+            >
+              <span className="my-agent-compatibility-trigger" tabIndex={0}>
+                <Badge
+                  className="my-agent-compatibility-status"
+                  color="warning"
+                  variant="soft"
+                  size="sm"
+                  pill
+                >
+                  不支持对话
+                </Badge>
+              </span>
+            </Tooltip>
+          ) : compatibilityFailed ? (
+            <Tooltip
+              content={compatibility?.message}
+              contentClassName="my-agent-compatibility-tooltip"
+              maxWidth={360}
+              align="end"
+              interactive
+              preventUnintentionalClickToClose
+            >
+              <span className="my-agent-compatibility-trigger" tabIndex={0}>
+                <Badge
+                  className="my-agent-compatibility-status"
+                  color="danger"
+                  variant="soft"
+                  size="sm"
+                  pill
+                >
+                  检测失败
+                </Badge>
+              </span>
+            </Tooltip>
           ) : null}
       />
       {!agent.sandbox ? (
@@ -486,8 +634,10 @@ export function MyAgents({
   const resultsRef = useRef<HTMLElement>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const runtimeRequestRef = useRef(0);
+  const runtimeListAbortRef = useRef<AbortController | null>(null);
   const sandboxRequestRef = useRef(0);
   const sandboxAbortRef = useRef<AbortController | null>(null);
+  const runtimeCompatibilityAbortRef = useRef<Map<string, AbortController>>(new Map());
   const configuredRegion = resolveAgentRegion(studioRegion, cloudProvider);
   const [query, setQuery] = useState("");
   const [ownership, setOwnership] = useState<RuntimeScope>(
@@ -502,6 +652,9 @@ export function MyAgents({
   const [loadingSandboxAgents, setLoadingSandboxAgents] = useState(false);
   const [sandboxError, setSandboxError] = useState("");
   const [connectingAgentId, setConnectingAgentId] = useState("");
+  const [runtimeCompatibility, setRuntimeCompatibility] = useState<
+    Record<string, RuntimeCompatibility>
+  >({});
   const [draftToDelete, setDraftToDelete] = useState<WorkspaceAgentDraft | null>(null);
   const [remainingTimeNow, setRemainingTimeNow] = useState(() => Date.now());
   const regionFilterOptions = useMemo<Array<ResourceFilterOption<CloudRegion>>>(
@@ -551,22 +704,30 @@ export function MyAgents({
   }, [activeDeploymentTasks, draftDeploymentTaskIds]);
 
   const fetchRuntimePage = useCallback((token: string, reset: boolean) => {
+    runtimeListAbortRef.current?.abort();
+    runtimePageRequests.clear();
+    const controller = new AbortController();
+    runtimeListAbortRef.current = controller;
     const requestId = ++runtimeRequestRef.current;
     setLoadingRuntimes(true);
     setRuntimeError("");
     return loadRuntimeAgents(ownership, region, token, (agents) => {
       if (runtimeRequestRef.current !== requestId) return;
       setRuntimeAgents((current) => reset ? agents : [...current, ...agents]);
-    })
+    }, controller.signal)
       .then((nextToken) => {
         if (runtimeRequestRef.current === requestId) setRuntimeNextToken(nextToken);
       })
       .catch((cause) => {
         if (runtimeRequestRef.current !== requestId) return;
+        if (isAbortError(cause)) return;
         setRuntimeError(formatRequestError(cause, "加载通用智能体", "GET /web/runtimes"));
       })
       .finally(() => {
         if (runtimeRequestRef.current === requestId) setLoadingRuntimes(false);
+        if (runtimeListAbortRef.current === controller) {
+          runtimeListAbortRef.current = null;
+        }
       });
   }, [ownership, region]);
 
@@ -576,9 +737,117 @@ export function MyAgents({
     setRuntimeNextToken("");
     void fetchRuntimePage("", true);
     return () => {
+      runtimeListAbortRef.current?.abort();
+      runtimeListAbortRef.current = null;
+      runtimePageRequests.clear();
       runtimeRequestRef.current += 1;
     };
   }, [activeType, fetchRuntimePage]);
+
+  useEffect(() => {
+    if (activeType !== "general") {
+      for (const controller of runtimeCompatibilityAbortRef.current.values()) {
+        controller.abort();
+      }
+      runtimeCompatibilityAbortRef.current.clear();
+      return;
+    }
+
+    const liveKeys = new Set(runtimeAgents
+      .filter((agent) =>
+        agent.runtime?.runtimeId !== connectedRuntimeId &&
+        agent.runtime?.region === region,
+      )
+      .map(runtimeCompatibilityKey)
+      .filter(Boolean));
+    for (const [key, controller] of runtimeCompatibilityAbortRef.current) {
+      if (!liveKeys.has(key)) {
+        controller.abort();
+        runtimeCompatibilityAbortRef.current.delete(key);
+      }
+    }
+    const pendingAgents = runtimeAgents.filter((agent) => {
+      const runtimeId = agent.runtime?.runtimeId;
+      if (
+        !runtimeId ||
+        runtimeId === connectedRuntimeId ||
+        agent.runtime?.region !== region
+      ) return false;
+      const key = runtimeCompatibilityKey(agent);
+      const status = runtimeCompatibility[key]?.status;
+      return !runtimeCompatibilityAbortRef.current.has(key) &&
+        (!status || status === "checking");
+    });
+
+    for (const agent of pendingAgents) {
+      runtimeCompatibilityAbortRef.current.set(
+        runtimeCompatibilityKey(agent),
+        new AbortController(),
+      );
+    }
+
+    setRuntimeCompatibility((current) => {
+      let changed = false;
+      const next = { ...current };
+      for (const agent of runtimeAgents) {
+        const key = runtimeCompatibilityKey(agent);
+        if (!key) continue;
+        const connected = agent.runtime?.runtimeId === connectedRuntimeId;
+        if (connected && next[key]?.status !== "compatible") {
+          next[key] = { status: "compatible", message: "Runtime 支持 Studio 对话。" };
+          changed = true;
+        } else if (!connected && !next[key]) {
+          next[key] = {
+            status: "checking",
+            message: RUNTIME_COMPATIBILITY_CHECKING_MESSAGE,
+          };
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+
+    void runRuntimeCompatibilityChecks(pendingAgents, async (agent) => {
+      const runtime = agent.runtime;
+      if (!runtime) return;
+      const key = runtimeCompatibilityKey(agent);
+      const controller = runtimeCompatibilityAbortRef.current.get(key);
+      if (!controller) return;
+      try {
+        const apps = await probeRuntimeApps(runtime.runtimeId, runtime.region, {
+          signal: controller.signal,
+          preferCached: true,
+          timeoutMs: RUNTIME_COMPATIBILITY_TIMEOUT_MS,
+          currentVersion: runtime.currentVersion,
+        });
+        if (controller.signal.aborted) return;
+        setRuntimeCompatibility((current) => ({
+          ...current,
+          [key]: apps && apps.length > 0
+            ? { status: "compatible", message: "Runtime 支持 Studio 对话。" }
+            : { status: "unsupported", message: RUNTIME_COMPATIBILITY_EMPTY_MESSAGE },
+        }));
+      } catch (error) {
+        if (controller.signal.aborted || (error as Error)?.name === "AbortError") return;
+        setRuntimeCompatibility((current) => ({
+          ...current,
+          [key]: runtimeCompatibilityFailure(error),
+        }));
+      } finally {
+        if (runtimeCompatibilityAbortRef.current.get(key) === controller) {
+          runtimeCompatibilityAbortRef.current.delete(key);
+        }
+      }
+    });
+  }, [activeType, connectedRuntimeId, region, runtimeAgents]);
+
+  useEffect(() => () => {
+    runtimeListAbortRef.current?.abort();
+    for (const controller of runtimeCompatibilityAbortRef.current.values()) {
+      controller.abort();
+    }
+    runtimeCompatibilityAbortRef.current.clear();
+  }, []);
 
   const fetchSandboxAgents = useCallback(async (type: Exclude<AgentType, "general">) => {
     sandboxAbortRef.current?.abort();
@@ -701,6 +970,49 @@ export function MyAgents({
       setConnectingAgentId("");
     }
   }, [connectingAgentId, onUseAgent, onUseSandboxAgent]);
+
+  const retryRuntimeCompatibility = useCallback(async (agent: MyAgentCardData) => {
+    const runtime = agent.runtime;
+    if (!runtime) return;
+    const key = runtimeCompatibilityKey(agent);
+    setRuntimeCompatibility((current) => ({
+      ...current,
+      [key]: {
+        status: "checking",
+        message: RUNTIME_COMPATIBILITY_CHECKING_MESSAGE,
+      },
+    }));
+    runtimeCompatibilityAbortRef.current.get(key)?.abort();
+    const controller = new AbortController();
+    runtimeCompatibilityAbortRef.current.set(key, controller);
+    try {
+      const apps = await withRuntimeCompatibilitySlot(() =>
+        probeRuntimeApps(runtime.runtimeId, runtime.region, {
+          retryProbe: true,
+          signal: controller.signal,
+          timeoutMs: RUNTIME_COMPATIBILITY_RETRY_TIMEOUT_MS,
+          currentVersion: runtime.currentVersion,
+        }),
+      );
+      if (controller.signal.aborted) return;
+      setRuntimeCompatibility((current) => ({
+        ...current,
+        [key]: apps && apps.length > 0
+          ? { status: "compatible", message: "Runtime 支持 Studio 对话。" }
+          : { status: "unsupported", message: RUNTIME_COMPATIBILITY_EMPTY_MESSAGE },
+      }));
+    } catch (error) {
+      if (controller.signal.aborted || isAbortError(error)) return;
+      setRuntimeCompatibility((current) => ({
+        ...current,
+        [key]: runtimeCompatibilityFailure(error),
+      }));
+    } finally {
+      if (runtimeCompatibilityAbortRef.current.get(key) === controller) {
+        runtimeCompatibilityAbortRef.current.delete(key);
+      }
+    }
+  }, []);
 
   const visibleAgents = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase();
@@ -892,27 +1204,37 @@ export function MyAgents({
                   创建智能体
                 </ResourceCreateCard>
               ) : null}
-              {visibleAgents.map((agent) => (
-                <AgentCard
-                  key={agent.id}
-                  agent={agent}
-                  deploymentTask={deploymentTaskForAgent(agent)}
-                  nowMs={remainingTimeNow}
-                  onViewDeploymentTask={onViewDeploymentTask}
-                  onUse={useAgent}
-                  onViewDetails={(agent) => {
-                    if (agent.sandbox) {
-                      onViewSandboxAgentDetails(agent.sandbox);
-                    } else {
-                      onViewAgentDetails(agent);
-                    }
-                  }}
-                  connecting={agent.id === connectingAgentId}
-                  connected={agent.runtime?.runtimeId === connectedRuntimeId}
-                  onEditDraft={onEditDraft}
-                  onDeleteDraft={setDraftToDelete}
-                />
-              ))}
+              {visibleAgents.map((agent) => {
+                const detailTarget = runtimeDetailTargetForCard(agent, runtimeAgents);
+                return (
+                  <AgentCard
+                    key={agent.id}
+                    agent={agent}
+                    deploymentTask={deploymentTaskForAgent(agent)}
+                    nowMs={remainingTimeNow}
+                    onViewDeploymentTask={onViewDeploymentTask}
+                    onUse={useAgent}
+                    compatibility={agent.runtime
+                      ? runtimeCompatibility[runtimeCompatibilityKey(agent)] ?? {
+                          status: "checking",
+                          message: RUNTIME_COMPATIBILITY_CHECKING_MESSAGE,
+                        }
+                      : undefined}
+                    onRetryCompatibility={retryRuntimeCompatibility}
+                    onViewDetails={detailTarget ? () => {
+                      if (detailTarget.sandbox) {
+                        onViewSandboxAgentDetails(detailTarget.sandbox);
+                      } else {
+                        onViewAgentDetails(detailTarget);
+                      }
+                    } : undefined}
+                    connecting={agent.id === connectingAgentId}
+                    connected={agent.runtime?.runtimeId === connectedRuntimeId}
+                    onEditDraft={onEditDraft}
+                    onDeleteDraft={setDraftToDelete}
+                  />
+                );
+              })}
             </ResourceGrid>
           </>
         )}

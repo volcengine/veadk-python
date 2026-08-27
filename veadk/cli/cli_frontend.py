@@ -8398,6 +8398,7 @@ def _run_frontend_server(
         ):
             raise HTTPException(status_code=400, detail="invalid method override")
         upstream_method = method_override or request.method
+        probe_retry_mode = request.query_params.get("probe_retry", "")
         # `_runtime_region` selects the Runtime and is never forwarded. Keep
         # accepting `region` for older Studio bundles, where it was a proxy-only
         # parameter. New bundles leave `region` available to upstream APIs such
@@ -8659,7 +8660,19 @@ def _run_frontend_server(
             upstream_method,
             endpoint_network_type,
         )
-        timeout = httpx.Timeout(10.0, connect=5.0) if is_retryable_read else None
+        if path == "list-apps" and endpoint_network_type != "private":
+            max_attempts = 2 if probe_retry_mode == "connect" else 1
+        if is_retryable_read:
+            request_timeout = (
+                8.0
+                if path == "list-apps" and probe_retry_mode == "connect"
+                else 5.0
+                if path == "list-apps"
+                else 10.0
+            )
+            timeout = httpx.Timeout(request_timeout, connect=min(4.0, request_timeout))
+        else:
+            timeout = None
 
         # Open the upstream stream so we can forward status + body incrementally.
         client = httpx.AsyncClient(timeout=timeout)
