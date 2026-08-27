@@ -5,11 +5,13 @@ import {
   useMemo,
   useRef,
   useState,
+  type ChangeEvent,
+  type DragEvent,
   type FormEvent,
   type SVGProps,
 } from "react";
 import { createPortal } from "react-dom";
-import { ExternalLink, X } from "lucide-react";
+import { ExternalLink, FileUp, SlidersHorizontal, X } from "lucide-react";
 import { Badge } from "@openai/apps-sdk-ui/components/Badge";
 import { Button } from "@openai/apps-sdk-ui/components/Button";
 import { EmptyMessage } from "@openai/apps-sdk-ui/components/EmptyMessage";
@@ -72,6 +74,11 @@ import {
 } from "./environmentModel";
 import { TextShimmer } from "./text-shimmer/TextShimmer";
 import { SkillSourcePicker } from "./SkillSourcePicker";
+import {
+  dockerfileByteSize,
+  readDockerfileUpload,
+  validateDockerfileUpload,
+} from "./environmentDockerfileUpload";
 import type { CloudProvider } from "../adk/cloudProvider";
 import "./EnvironmentCenter.css";
 
@@ -80,6 +87,7 @@ type EnvironmentView =
   | { kind: "editor"; environmentId: string | null };
 
 type EnvironmentEditorTab = "configuration" | "dockerfile";
+type EnvironmentCreationMethod = "custom" | "dockerfile";
 
 const TOOL_LOGOS: Readonly<Record<string, string>> = {
   opencli: opencliLogo,
@@ -384,17 +392,45 @@ function EnvironmentEditor({
   onCancel: () => void;
   onSave: (draft: EnvironmentDraft) => Promise<void>;
 }) {
-  const [draft, setDraft] = useState<EnvironmentDraft>(() => environmentDraft(environment));
+  const initialEnvironmentDraft = environmentDraft(environment);
+  const hasCustomDockerfile = initialEnvironmentDraft.dockerfile !== undefined;
+  const [draft, setDraft] = useState<EnvironmentDraft>(() => ({
+    ...initialEnvironmentDraft,
+    dockerfile: hasCustomDockerfile ? undefined : initialEnvironmentDraft.dockerfile,
+  }));
+  const [creationMethod, setCreationMethod] = useState<EnvironmentCreationMethod>(
+    hasCustomDockerfile ? "dockerfile" : "custom",
+  );
   const [activeTab, setActiveTab] = useState<EnvironmentEditorTab>("configuration");
+  const [uploadedDockerfile, setUploadedDockerfile] = useState(
+    hasCustomDockerfile ? environment?.dockerfile ?? "" : "",
+  );
+  const [uploadedFileName, setUploadedFileName] = useState(
+    hasCustomDockerfile ? "已保存的 Dockerfile" : "",
+  );
+  const [uploadError, setUploadError] = useState("");
+  const [readingFile, setReadingFile] = useState(false);
+  const [draggingFile, setDraggingFile] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const fileReadSequence = useRef(0);
   const generatedDockerfile = useMemo(
     () => buildEnvironmentDockerfile(draft),
     [draft.operatingSystem, draft.language, draft.optionIds],
   );
-  const dockerfile = draft.dockerfile ?? generatedDockerfile;
+  const customDockerfile = draft.dockerfile ?? generatedDockerfile;
   const isEditing = Boolean(environment);
   const formId = "environment-editor-form";
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const uploadIsValid = Boolean(uploadedDockerfile.trim()) && !uploadError;
+  const canSubmit = Boolean(draft.name.trim())
+    && !saving
+    && !readingFile
+    && (creationMethod === "custom" || uploadIsValid);
+
+  useEffect(() => () => {
+    fileReadSequence.current += 1;
+  }, []);
 
   const toggleOption = (optionId: string, selected: boolean) => {
     setDraft((current) => ({
@@ -405,9 +441,62 @@ function EnvironmentEditor({
     }));
   };
 
+  const loadDockerfile = async (file: File) => {
+    const sequence = fileReadSequence.current + 1;
+    fileReadSequence.current = sequence;
+    setReadingFile(true);
+    setUploadError("");
+    try {
+      const result = await readDockerfileUpload(file);
+      if (fileReadSequence.current !== sequence) return;
+      setUploadedDockerfile(result.content);
+      setUploadedFileName(file.name || "Dockerfile");
+      setUploadError(result.error);
+    } catch (cause) {
+      if (fileReadSequence.current !== sequence) return;
+      setUploadedDockerfile("");
+      setUploadedFileName(file.name || "Dockerfile");
+      setUploadError(`无法读取 Dockerfile：${cause instanceof Error ? cause.message : String(cause)}`);
+    } finally {
+      if (fileReadSequence.current === sequence) setReadingFile(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const handleDockerfileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) void loadDockerfile(file);
+  };
+
+  const handleDockerfileDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setDraggingFile(false);
+    if (saving || readingFile) return;
+    if (event.dataTransfer.files.length !== 1) {
+      setUploadError("请一次只上传一个 Dockerfile。");
+      return;
+    }
+    const file = event.dataTransfer.files[0];
+    if (file) void loadDockerfile(file);
+  };
+
+  const updateUploadedDockerfile = (value: string) => {
+    setUploadedDockerfile(value);
+    setUploadError(validateDockerfileUpload(value));
+  };
+
+  const clearUploadedDockerfile = () => {
+    fileReadSequence.current += 1;
+    setReadingFile(false);
+    setUploadedDockerfile("");
+    setUploadedFileName("");
+    setUploadError("");
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!draft.name.trim() || saving) return;
+    if (!canSubmit) return;
     setSaving(true);
     setSaveError("");
     try {
@@ -415,7 +504,9 @@ function EnvironmentEditor({
         ...draft,
         name: draft.name.trim(),
         description: draft.description.trim(),
-        dockerfile,
+        optionIds: creationMethod === "dockerfile" ? [] : draft.optionIds,
+        selectedSkills: creationMethod === "dockerfile" ? [] : draft.selectedSkills,
+        dockerfile: creationMethod === "dockerfile" ? uploadedDockerfile : customDockerfile,
       });
     } catch (cause) {
       setSaveError(cause instanceof Error ? cause.message : String(cause));
@@ -432,12 +523,12 @@ function EnvironmentEditor({
           </button>
           <div>
             <h1 id="environment-editor-title">{isEditing ? "配置环境" : "新建环境"}</h1>
-            <p>选择操作系统、语言、工具和技能，生成可编辑的 Dockerfile</p>
+            <p>上传 Dockerfile，或通过可视化配置生成运行环境</p>
           </div>
         </div>
         <div className="environment-editor__actions">
           <Button color="secondary" variant="soft" size="sm" onClick={onCancel} disabled={saving}>取消</Button>
-          <Button color="info" size="sm" type="submit" form={formId} disabled={!draft.name.trim() || saving}>
+          <Button color="info" size="sm" type="submit" form={formId} disabled={!canSubmit}>
             {saving ? "正在保存" : isEditing ? "保存并构建" : "创建并构建"}
           </Button>
         </div>
@@ -471,20 +562,57 @@ function EnvironmentEditor({
           </label>
         </div>
 
-        <SegmentedControl
-          className="environment-tabs"
-          value={activeTab}
-          aria-label="环境编辑方式"
-          onChange={(value) => setActiveTab(value as EnvironmentEditorTab)}
-        >
-          <SegmentedControl.Option value="configuration">配置</SegmentedControl.Option>
-          <SegmentedControl.Option value="dockerfile">描述文件</SegmentedControl.Option>
-        </SegmentedControl>
+        <fieldset className="environment-creation-method">
+          <legend>创建方式</legend>
+          <RadioGroup<EnvironmentCreationMethod>
+            className="environment-creation-options"
+            value={creationMethod}
+            aria-label="环境创建方式"
+            onChange={(value) => {
+              setCreationMethod(value);
+              setSaveError("");
+            }}
+          >
+            <RadioGroup.Item
+              value="custom"
+              block
+              className={creationMethod === "custom" ? "is-selected" : ""}
+            >
+              <span className="environment-creation-option__icon"><SlidersHorizontal aria-hidden /></span>
+              <span className="environment-creation-option__copy">
+                <strong>自定义配置</strong>
+                <span>选择系统、Python、工具和技能</span>
+              </span>
+            </RadioGroup.Item>
+            <RadioGroup.Item
+              value="dockerfile"
+              block
+              className={creationMethod === "dockerfile" ? "is-selected" : ""}
+            >
+              <span className="environment-creation-option__icon"><FileUp aria-hidden /></span>
+              <span className="environment-creation-option__copy">
+                <strong>上传 Dockerfile</strong>
+                <span>直接使用已有构建描述文件</span>
+              </span>
+            </RadioGroup.Item>
+          </RadioGroup>
+        </fieldset>
 
         {saveError ? <p className="environment-form-error" role="alert">{saveError}</p> : null}
 
-        {activeTab === "configuration" ? (
-          <div className="environment-configuration">
+        {creationMethod === "custom" ? (
+          <>
+            <SegmentedControl
+              className="environment-tabs"
+              value={activeTab}
+              aria-label="自定义环境编辑内容"
+              onChange={(value) => setActiveTab(value as EnvironmentEditorTab)}
+            >
+              <SegmentedControl.Option value="configuration">配置</SegmentedControl.Option>
+              <SegmentedControl.Option value="dockerfile">描述文件</SegmentedControl.Option>
+            </SegmentedControl>
+            {activeTab === "configuration" ? (
+              <div className="environment-configuration">
             <section className="environment-section" aria-labelledby="environment-operating-system-title">
               <h2 id="environment-operating-system-title">操作系统</h2>
               <RadioGroup<EnvironmentOperatingSystem>
@@ -572,33 +700,96 @@ function EnvironmentEditor({
                 </div>
               </section>
             ))}
-          </div>
-        ) : (
-          <section className="environment-dockerfile" aria-labelledby="environment-dockerfile-title">
-            <div className="environment-dockerfile__header">
-              <div>
-                <h2 id="environment-dockerfile-title">Dockerfile</h2>
-                <p>可直接编辑；配置页中的软件变更不会覆盖自定义内容。</p>
               </div>
-              {draft.dockerfile !== undefined ? (
-                <Button
-                  type="button"
-                  color="secondary"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setDraft((current) => ({ ...current, dockerfile: undefined }))}
-                >
-                  恢复生成内容
+            ) : (
+              <section className="environment-dockerfile" aria-labelledby="environment-dockerfile-title">
+                <div className="environment-dockerfile__header">
+                  <div>
+                    <h2 id="environment-dockerfile-title">Dockerfile</h2>
+                    <p>可直接编辑；配置页中的软件变更不会覆盖自定义内容。</p>
+                  </div>
+                  {draft.dockerfile !== undefined ? (
+                    <Button
+                      type="button"
+                      color="secondary"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setDraft((current) => ({ ...current, dockerfile: undefined }))}
+                    >
+                      恢复生成内容
+                    </Button>
+                  ) : null}
+                </div>
+                <Textarea
+                  className="environment-dockerfile__editor"
+                  value={customDockerfile}
+                  aria-label="Dockerfile 内容"
+                  spellCheck={false}
+                  onChange={(event) => setDraft((current) => ({ ...current, dockerfile: event.target.value }))}
+                />
+              </section>
+            )}
+          </>
+        ) : (
+          <section className="environment-upload" aria-labelledby="environment-upload-title">
+            <div className="environment-upload__header">
+              <div>
+                <h2 id="environment-upload-title">上传 Dockerfile</h2>
+                <p id="environment-upload-help">支持任意文件名，文件上限 128 KiB。上传后可继续编辑内容。</p>
+              </div>
+              {uploadedDockerfile ? (
+                <Button type="button" color="secondary" variant="ghost" size="sm" onClick={clearUploadedDockerfile} disabled={saving}>
+                  移除文件
                 </Button>
               ) : null}
             </div>
-            <Textarea
-              className="environment-dockerfile__editor"
-              value={dockerfile}
-              aria-label="Dockerfile 内容"
-              spellCheck={false}
-              onChange={(event) => setDraft((current) => ({ ...current, dockerfile: event.target.value }))}
-            />
+            <div
+              className={`environment-upload-dropzone${draggingFile ? " is-dragging" : ""}${uploadedDockerfile ? " is-ready" : ""}`}
+              onDragEnter={(event) => {
+                event.preventDefault();
+                if (!saving && !readingFile) setDraggingFile(true);
+              }}
+              onDragOver={(event) => event.preventDefault()}
+              onDragLeave={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDraggingFile(false);
+              }}
+              onDrop={handleDockerfileDrop}
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                aria-label="Dockerfile 文件"
+                aria-describedby="environment-upload-help"
+                disabled={saving || readingFile}
+                onChange={handleDockerfileChange}
+              />
+              <span className="environment-upload-dropzone__icon"><FileUp aria-hidden /></span>
+              <span className="environment-upload-dropzone__copy">
+                <strong>{readingFile ? "正在读取 Dockerfile" : uploadedFileName || "选择 Dockerfile 或拖拽到这里"}</strong>
+                <span>
+                  {uploadedDockerfile
+                    ? `${dockerfileByteSize(uploadedDockerfile).toLocaleString("zh-CN")} 字节，点击可替换`
+                    : "Dockerfile 通常无扩展名"}
+                </span>
+              </span>
+            </div>
+            {uploadError ? <p className="environment-upload__error" role="alert">{uploadError}</p> : null}
+            {uploadedDockerfile ? (
+              <div className="environment-upload__preview">
+                <div>
+                  <h3>内容预览</h3>
+                  <span>{dockerfileByteSize(uploadedDockerfile).toLocaleString("zh-CN")} / 131,072 字节</span>
+                </div>
+                <Textarea
+                  className="environment-dockerfile__editor environment-upload__editor"
+                  value={uploadedDockerfile}
+                  aria-label="上传的 Dockerfile 内容"
+                  aria-invalid={Boolean(uploadError)}
+                  spellCheck={false}
+                  onChange={(event) => updateUploadedDockerfile(event.target.value)}
+                />
+              </div>
+            ) : null}
           </section>
         )}
       </form>

@@ -13,6 +13,10 @@ const environmentStyles = readFileSync(
   new URL("../src/ui/EnvironmentCenter.css", import.meta.url),
   "utf8",
 );
+const dockerfileUploadSource = readFileSync(
+  new URL("../src/ui/environmentDockerfileUpload.ts", import.meta.url),
+  "utf8",
+);
 const clientSource = readFileSync(
   new URL("../src/adk/client.ts", import.meta.url),
   "utf8",
@@ -89,6 +93,46 @@ test("covers environment categories, editor feedback, and responsive layout", ()
   assert.match(environmentStyles, /\.environment-editor__header\s*\{\s*align-items: center;/);
   assert.match(environmentStyles, /\.environment-form[\s\S]*?height: 100%/);
   assert.match(environmentStyles, /\.environment-dockerfile__editor > textarea[\s\S]*?min-height: inherit/);
+});
+
+test("offers Dockerfile upload and custom configuration as explicit creation methods", () => {
+  assert.match(environmentSource, /type EnvironmentCreationMethod = "custom" \| "dockerfile"/);
+  assert.match(environmentSource, /aria-label="环境创建方式"/);
+  assert.match(environmentSource, /value="custom"[\s\S]*?自定义配置/);
+  assert.match(environmentSource, /value="dockerfile"[\s\S]*?上传 Dockerfile/);
+  assert.match(environmentSource, /type="file"/);
+  assert.match(environmentSource, /onDrop=\{handleDockerfileDrop\}/);
+  assert.match(environmentSource, /aria-label="Dockerfile 文件"/);
+  assert.match(environmentSource, /上传后可继续编辑内容/);
+  assert.match(environmentStyles, /\.environment-creation-options/);
+  assert.match(environmentStyles, /\.environment-upload-dropzone\.is-dragging/);
+  assert.match(environmentStyles, /\.environment-upload-dropzone:focus-within/);
+});
+
+test("validates Dockerfile uploads before the environment is created", async () => {
+  const server = await createServer({
+    appType: "custom",
+    logLevel: "silent",
+    optimizeDeps: { noDiscovery: true },
+    server: { middlewareMode: true },
+  });
+  try {
+    const upload = await server.ssrLoadModule("/src/ui/environmentDockerfileUpload.ts");
+    assert.equal(upload.validateDockerfileUpload("", 0), "Dockerfile 内容不能为空。");
+    assert.equal(
+      upload.validateDockerfileUpload("RUN echo hello", 14),
+      "Dockerfile 缺少 FROM 指令。",
+    );
+    assert.equal(
+      upload.validateDockerfileUpload("FROM ubuntu:24.04", upload.MAX_DOCKERFILE_BYTES + 1),
+      "Dockerfile 不能超过 128 KiB。",
+    );
+    assert.equal(upload.validateDockerfileUpload("# syntax=docker/dockerfile:1\nFROM ubuntu:24.04"), "");
+    assert.equal(upload.normalizeDockerfileContent("\uFEFFFROM ubuntu:24.04\r\n"), "FROM ubuntu:24.04\n");
+    assert.match(dockerfileUploadSource, /file\.text\(\)/);
+  } finally {
+    await server.close();
+  }
 });
 
 test("persists environments and starts image builds through the Studio API", () => {
