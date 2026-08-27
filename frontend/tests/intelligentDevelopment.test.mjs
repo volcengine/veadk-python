@@ -1228,6 +1228,35 @@ test("saved project actions stay compact, destructive, and resilient to long con
   );
 });
 
+test("version comparison controls align with project titles and expose clear selection", () => {
+  const projectSummary = projectLibrarySource.match(
+    /<div className="ic-project-summary">([\s\S]*?)\{expanded \? \(/,
+  )?.[1] ?? "";
+  assert.match(projectSummary, /className="ic-project-compare-actions"/);
+  assert.match(projectSummary, />对比版本<\/button>/);
+  assert.doesNotMatch(projectLibrarySource, /className="ic-version-compare-toolbar"/);
+  assert.match(projectLibrarySource, /is-compare-selected/);
+  assert.match(projectLibrarySource, /className="ic-version-compare-box"/);
+  assert.match(projectLibrarySource, /<CompareCheckIcon \/>/);
+  assert.match(projectLibrarySource, /isCompareSelected \? "已选择" : "选择"/);
+  assert.match(
+    createStyles,
+    /\.ic-project-compare-actions \{[\s\S]*?display: flex;[\s\S]*?flex-shrink: 0;/,
+  );
+  assert.match(
+    createStyles,
+    /\.ic-version-list > li\.is-compare-selected \{[\s\S]*?background:[\s\S]*?box-shadow:/,
+  );
+  assert.match(
+    createStyles,
+    /\.ic-version-compare-check\.is-selected \{[\s\S]*?border-color:[\s\S]*?background:/,
+  );
+  assert.match(
+    createStyles,
+    /\.ic-version-compare-check\.is-selected \.ic-version-compare-box \{[\s\S]*?background: hsl\(var\(--primary\)\)/,
+  );
+});
+
 test("source workspace exposes version comparison and scoped light and dark themes", () => {
   assert.match(codeBrowserSource, /compareProjectFiles/);
   assert.match(codeBrowserSource, /aria-label="切换源码主题"/);
