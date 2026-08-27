@@ -1127,6 +1127,38 @@ test("intelligent project versions preserve existing style and cover async state
   assert.match(createStyles, /@media \(max-width: 640px\)[\s\S]*?\.ic-version-list > li \{ grid-template-columns: 1fr/);
 });
 
+test("saved project actions stay compact, destructive, and resilient to long content", () => {
+  assert.match(
+    projectLibrarySource,
+    /aria-label="刷新项目列表"[\s\S]*?<RefreshProjectIcon \/>/,
+  );
+  assert.doesNotMatch(projectLibrarySource, />刷新<\/button>/);
+  assert.match(
+    projectLibrarySource,
+    /<Button\s+type="button"\s+className="ic-version-delete"\s+color="danger"\s+variant="ghost"[\s\S]*?>[\s\S]*?删除[\s\S]*?<\/Button>/,
+  );
+  assert.match(
+    projectLibrarySource,
+    /StudioConfirmDialog[\s\S]*?title="删除这个版本？"[\s\S]*?variant="danger"/,
+  );
+  assert.match(
+    projectLibrarySource,
+    /<Tooltip[\s\S]*?content=\{versionSummary\}[\s\S]*?className="ic-version-description"/,
+  );
+  assert.match(projectLibrarySource, />去优化<\/button>/);
+  assert.doesNotMatch(projectLibrarySource, />继续优化<\/button>/);
+  assert.doesNotMatch(projectLibrarySource, /已选择“\$\{project\.name\}”/);
+  assert.match(appSource, /displayName: baseVersion\?\.projectName \?\? goal\.slice\(0, 40\)/);
+  assert.match(
+    createStyles,
+    /\.ic-project-copy strong \{[\s\S]*?text-overflow: ellipsis;[\s\S]*?white-space: nowrap;/,
+  );
+  assert.match(
+    createStyles,
+    /\.ic-version-description \{[\s\S]*?-webkit-line-clamp: 2;[\s\S]*?overflow-wrap: anywhere;/,
+  );
+});
+
 test("intelligent preparation ends before the first build turn and resets on navigation", () => {
   assert.match(
     appSource,
