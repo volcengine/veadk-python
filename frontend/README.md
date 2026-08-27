@@ -451,6 +451,10 @@ local image or a downloaded network image into the VeFaaS deployment package.
 
 ## Environment image builds
 
+Studio 的“工作区”用于组织一组可复用环境。一个工作区可以包含多个环境，同一个环境也可以加入多个工作区；删除工作区只会删除组合关系，不会删除环境。侧边栏只展示“工作区”入口，工作区页面内可在“工作区”和“环境”两个视图之间切换。Agent 的创建与部署仍直接选择具体环境及其构建版本。
+
+工作区元数据保存在与环境相同的 Studio TOS 桶中，路径为 `veadk-studio/v1/workspaces/<owner>/<workspace-id>/summary.json`。接口包括 `/web/workspaces` CRUD，以及 `/web/workspaces/{workspaceId}/environments/{environmentId}` 的添加和移除操作。被工作区引用的环境不能直接删除。
+
 The Studio `环境` page stores each environment definition, generated Dockerfile,
 build version, log metadata, and resulting image reference in the private Studio
 TOS bucket. Creating or saving an environment starts an asynchronous

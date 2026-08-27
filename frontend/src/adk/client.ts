@@ -2088,6 +2088,21 @@ export interface StudioEnvironment {
   latestVersion: EnvironmentBuildVersion | null;
 }
 
+export interface StudioWorkspace {
+  id: string;
+  name: string;
+  description: string;
+  environmentIds: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorkspaceInput {
+  name: string;
+  description: string;
+  environmentIds: string[];
+}
+
 export interface EnvironmentInput {
   name: string;
   description: string;
@@ -2249,6 +2264,86 @@ function studioEnvironment(value: unknown): StudioEnvironment {
     selectedSkills: candidate.selectedSkills ?? [],
     latestVersion: environmentBuildVersion(candidate.latestVersion),
   };
+}
+
+function studioWorkspace(value: unknown): StudioWorkspace {
+  if (!value || typeof value !== "object") {
+    throw new Error("工作区响应格式无效");
+  }
+  const candidate = value as StudioWorkspace;
+  if (
+    typeof candidate.id !== "string" ||
+    typeof candidate.name !== "string" ||
+    typeof candidate.description !== "string" ||
+    !Array.isArray(candidate.environmentIds) ||
+    !candidate.environmentIds.every((item) => typeof item === "string") ||
+    typeof candidate.createdAt !== "string" ||
+    typeof candidate.updatedAt !== "string"
+  ) {
+    throw new Error("工作区响应格式无效");
+  }
+  return candidate;
+}
+
+export async function listWorkspaces(signal?: AbortSignal): Promise<StudioWorkspace[]> {
+  const response = await apiFetch("/web/workspaces", { signal });
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, "加载工作区失败"));
+  }
+  const payload = (await response.json()) as { items?: unknown };
+  if (!Array.isArray(payload.items)) throw new Error("工作区列表响应格式无效");
+  return payload.items.map(studioWorkspace);
+}
+
+async function writeWorkspace(
+  path: string,
+  method: "POST" | "PATCH",
+  input: WorkspaceInput,
+  signal?: AbortSignal,
+): Promise<StudioWorkspace> {
+  const response = await apiFetch(path, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, "保存工作区失败"));
+  }
+  return studioWorkspace(await response.json());
+}
+
+export function createWorkspace(
+  input: WorkspaceInput,
+  signal?: AbortSignal,
+): Promise<StudioWorkspace> {
+  return writeWorkspace("/web/workspaces", "POST", input, signal);
+}
+
+export function updateWorkspace(
+  workspaceId: string,
+  input: WorkspaceInput,
+  signal?: AbortSignal,
+): Promise<StudioWorkspace> {
+  return writeWorkspace(
+    `/web/workspaces/${encodeURIComponent(workspaceId)}`,
+    "PATCH",
+    input,
+    signal,
+  );
+}
+
+export async function deleteWorkspace(
+  workspaceId: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await apiFetch(
+    `/web/workspaces/${encodeURIComponent(workspaceId)}`,
+    { method: "DELETE", signal },
+  );
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, "删除工作区失败"));
+  }
 }
 
 export async function listEnvironments(signal?: AbortSignal): Promise<StudioEnvironment[]> {

@@ -37,6 +37,7 @@ import {
   ResourcePageShell,
   ResourceResults,
   ResourceSearch,
+  ResourceTabs,
   ResourceToolbar,
 } from "./ResourceCollection";
 import { StudioConfirmDialog } from "./StudioConfirmDialog";
@@ -48,11 +49,13 @@ import {
   deleteEnvironment,
   getEnvironmentBuild,
   listEnvironments,
+  listWorkspaces,
   updateEnvironment,
   type EnvironmentBuildStatus,
   type EnvironmentBuildVersion,
   type EnvironmentInput,
   type StudioEnvironment,
+  type StudioWorkspace,
 } from "../adk/client";
 import {
   buildEnvironmentDockerfile,
@@ -603,8 +606,15 @@ function EnvironmentEditor({
   );
 }
 
-export function EnvironmentCenter({ cloudProvider = "volcengine" }: { cloudProvider?: CloudProvider }) {
+export function EnvironmentCenter({
+  cloudProvider = "volcengine",
+  onWorkspace,
+}: {
+  cloudProvider?: CloudProvider;
+  onWorkspace?: () => void;
+}) {
   const [environments, setEnvironments] = useState<StudioEnvironment[]>([]);
+  const [workspaces, setWorkspaces] = useState<StudioWorkspace[]>([]);
   const [view, setView] = useState<EnvironmentView>({ kind: "list" });
   const [query, setQuery] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<StudioEnvironment | null>(null);
@@ -630,8 +640,11 @@ export function EnvironmentCenter({ cloudProvider = "volcengine" }: { cloudProvi
     const controller = new AbortController();
     if (environments.length === 0) setLoading(true);
     setLoadError("");
-    void listEnvironments(controller.signal)
-      .then(setEnvironments)
+    void Promise.all([listEnvironments(controller.signal), listWorkspaces(controller.signal)])
+      .then(([nextEnvironments, nextWorkspaces]) => {
+        setEnvironments(nextEnvironments);
+        setWorkspaces(nextWorkspaces);
+      })
       .catch((cause) => {
         if ((cause as Error)?.name !== "AbortError") {
           setLoadError(cause instanceof Error ? cause.message : String(cause));
@@ -727,6 +740,20 @@ export function EnvironmentCenter({ cloudProvider = "volcengine" }: { cloudProvi
       />
 
       <ResourceToolbar className="environment-toolbar">
+        {onWorkspace ? (
+          <ResourceTabs
+            items={[
+              { id: "workspaces", label: "工作区" },
+              { id: "environments", label: "环境" },
+            ]}
+            value="environments"
+            onChange={(value) => {
+              if (value === "workspaces") onWorkspace();
+            }}
+            ariaLabel="工作区资源类型"
+            idPrefix="environment-center"
+          />
+        ) : null}
         <div className="resource-toolbar__actions">
           {statusMessage ? (
             <span className={`environment-status${statusError ? " is-error" : ""}`} role={statusError ? "alert" : "status"} aria-live="polite">
@@ -774,6 +801,7 @@ export function EnvironmentCenter({ cloudProvider = "volcengine" }: { cloudProvi
               </ResourceCreateCard>
             ) : null}
             {visibleEnvironments.map((environment) => {
+              const referenceCount = workspaces.filter((workspace) => workspace.environmentIds.includes(environment.id)).length;
               const status = environmentStatus(environment);
               const buildActive = Boolean(
                 environment.latestVersion && ACTIVE_BUILD_STATUSES.has(environment.latestVersion.status),
@@ -794,6 +822,7 @@ export function EnvironmentCenter({ cloudProvider = "volcengine" }: { cloudProvi
                   metadata={[
                     { label: "系统", value: environmentOperatingSystemLabel(environment.operatingSystem) },
                     { label: "语言", value: environmentLanguageLabel(environment.language) },
+                    { label: "工作区", value: `${referenceCount} 个工作区` },
                     { label: "更新", value: environmentUpdatedAt(environment.updatedAt) },
                   ]}
                   action={{
