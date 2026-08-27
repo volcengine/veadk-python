@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+import time
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -123,6 +125,18 @@ def app_for(service: Any) -> FastAPI:
     return app
 
 
+def app_for_with_projects(service: Any, project_service: Any) -> FastAPI:
+    app = FastAPI()
+    mount_migration_routes(
+        app,
+        service,
+        owner_resolver=lambda _request: "owner-1",
+        creator_resolver=lambda _request: "Owner",
+        project_service=project_service,
+    )
+    return app
+
+
 def test_all_migration_routes_delegate_with_owner_and_return_artifacts() -> None:
     service = RouteService()
     client = TestClient(app_for(service))
@@ -209,6 +223,64 @@ def test_all_migration_routes_delegate_with_owner_and_return_artifacts() -> None
         "preview_file",
         "delete",
     ]
+
+
+def test_terminal_task_saves_source_without_blocking_the_status_response() -> None:
+    class TerminalService(RouteService):
+        state = "succeeded"
+
+        def get_task(self, task_id: str, owner_id: str) -> dict[str, object]:
+            self.calls.append(("get_task", (task_id, owner_id)))
+            return {
+                "id": task_id,
+                "state": self.state,
+                "artifact": {"downloadReady": True},
+            }
+
+        def persistence_bundle(self, task_id: str, owner_id: str):
+            self.calls.append(("persistence_bundle", (task_id, owner_id)))
+            return SimpleNamespace(
+                task_id=task_id,
+                project_name="travel-agent",
+                artifact=b"zip",
+                result={},
+                result_bytes=b"{}",
+                environment_defaults={},
+            )
+
+    class ProjectService:
+        async def persist_migration(self, **_kwargs):
+            return (
+                SimpleNamespace(project_id="a" * 32),
+                SimpleNamespace(version_id="b" * 32),
+            )
+
+    service = TerminalService()
+    with TestClient(app_for_with_projects(service, ProjectService())) as client:
+        first = client.get(f"/web/agent-migrations/tasks/{TASK_ID}")
+        assert first.status_code == 200
+        assert first.json()["persistence"]["state"] == "saving"
+
+        saved = None
+        for _ in range(20):
+            response = client.get(f"/web/agent-migrations/tasks/{TASK_ID}")
+            if response.json()["persistence"]["state"] == "saved":
+                saved = response.json()["persistence"]
+                break
+            time.sleep(0.01)
+
+        service.state = "expired"
+        expired = client.get(f"/web/agent-migrations/tasks/{TASK_ID}")
+
+    assert saved == {
+        "state": "saved",
+        "projectId": "a" * 32,
+        "versionId": "b" * 32,
+        "message": "源码已保存到已迁移项目。",
+    }
+    assert expired.status_code == 200
+    assert expired.json()["persistence"] == saved
+    assert [name for name, _ in service.calls].count("persistence_bundle") == 1
 
 
 @pytest.mark.parametrize(

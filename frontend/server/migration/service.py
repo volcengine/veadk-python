@@ -772,6 +772,16 @@ class SourceArchiveSummary:
     expanded_bytes: int
 
 
+@dataclass(frozen=True)
+class MigrationPersistenceBundle:
+    task_id: str
+    project_name: str
+    artifact: bytes
+    result: dict[str, object]
+    result_bytes: bytes
+    environment_defaults: dict[str, str]
+
+
 def _has_control_character(value: str) -> bool:
     return any(ord(character) < 32 or ord(character) == 127 for character in value)
 
@@ -3706,6 +3716,69 @@ class MigrationService:
         safe_stem = re.sub(r"[^A-Za-z0-9._-]+", "-", stem).strip(".-") or "project"
         return content, f"{safe_stem}-migrated.zip"
 
+    def persistence_bundle(
+        self,
+        task_id: str,
+        owner_id: str,
+    ) -> MigrationPersistenceBundle:
+        """Return the same integrity-checked bytes used for download and deployment."""
+        session = self._session(task_id, owner_id)
+        task = self._task_from_session(session)
+        result = self._artifact_result(session, task, readiness="downloadReady")
+        artifact = self._verified_artifact_content(session, result)
+        result_bytes = self._read(
+            session,
+            _DELIVERY_RESULT_PATH,
+            max_bytes=_MAX_JSON_BYTES,
+        )
+        if result_bytes is None:
+            raise MigrationError(
+                "MIGRATION_ARTIFACT_MISSING",
+                "迁移产物清单不存在。",
+                status_code=502,
+            )
+        try:
+            raw_result = json.loads(result_bytes)
+        except (UnicodeDecodeError, ValueError) as error:
+            raise MigrationError(
+                "MIGRATION_ARTIFACT_INVALID",
+                "AgentKit CLI 产物清单格式无效。",
+                status_code=502,
+            ) from error
+        if raw_result != result:
+            raise MigrationError(
+                "MIGRATION_ARTIFACT_INTEGRITY_FAILED",
+                "迁移产物清单在保存前发生变化。",
+                status_code=409,
+                retryable=True,
+            )
+        confirmation = task.get("confirmation")
+        request = self._read_json(session, _REQUEST_PATH)
+        project_name = (
+            str(confirmation.get("app_name") or "")
+            if isinstance(confirmation, dict)
+            else ""
+        ).strip()
+        if not project_name and isinstance(request, dict):
+            source_name = str(request.get("source_file_name") or "project.zip")
+            project_name = (
+                source_name[:-4]
+                if source_name.casefold().endswith(".zip")
+                else source_name
+            )
+        return MigrationPersistenceBundle(
+            task_id=task_id,
+            project_name=project_name[:128] or "已迁移项目",
+            artifact=artifact,
+            result=result,
+            result_bytes=result_bytes,
+            environment_defaults=_public_environment_defaults(
+                session,
+                result,
+                self._read,
+            ),
+        )
+
     def _verified_artifact_content(
         self,
         session: MigrationSandboxSession,
@@ -3779,6 +3852,7 @@ __all__ = [
     "MIGRATION_SESSION_TTL_SECONDS",
     "MIGRATION_UPLOAD_MAX_BYTES",
     "MigrationError",
+    "MigrationPersistenceBundle",
     "MigrationService",
     "SourceArchiveSummary",
     "validate_source_archive",

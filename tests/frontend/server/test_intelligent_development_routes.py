@@ -574,6 +574,7 @@ def test_project_list_returns_owner_scoped_summaries() -> None:
     project = IntelligentDevelopmentProject(
         projectId="a" * 32,
         ownerId="alice",
+        origin="migration",
         name="天气 Agent",
         createdAt=now,
         updatedAt=now,
@@ -586,14 +587,36 @@ def test_project_list_returns_owner_scoped_summaries() -> None:
     project_service = SimpleNamespace(list_projects=AsyncMock(return_value=[project]))
     with TestClient(_app(gateway, project_service=project_service)) as client:
         response = client.get(
-            "/web/intelligent-development/projects",
+            "/web/intelligent-development/projects?origin=migration",
             headers={"X-Test-User": "alice"},
         )
 
     assert response.status_code == 200
     assert response.json()["projects"][0]["projectId"] == "a" * 32
     assert response.json()["projects"][0]["versionCount"] == 1
+    assert response.json()["projects"][0]["origin"] == "migration"
     assert "ownerId" not in response.json()["projects"][0]
+    project_service.list_projects.assert_awaited_once_with(
+        "alice",
+        origin="migration",
+    )
+
+
+def test_project_list_defaults_to_intelligent_development_origin() -> None:
+    gateway = _FakeGateway()
+    project_service = SimpleNamespace(list_projects=AsyncMock(return_value=[]))
+    with TestClient(_app(gateway, project_service=project_service)) as client:
+        response = client.get(
+            "/web/intelligent-development/projects",
+            headers={"X-Test-User": "alice"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"projects": []}
+    project_service.list_projects.assert_awaited_once_with(
+        "alice",
+        origin="intelligent-development",
+    )
 
 
 def test_project_versions_keep_integrity_failures_distinct_from_empty_data() -> None:

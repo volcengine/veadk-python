@@ -110,6 +110,7 @@ export interface IntelligentCreateProps {
   ) => Promise<void>;
   onDownload: (delivery: IntelligentDevelopmentReleaseRef) => Promise<void>;
   onDeploy: (delivery: IntelligentDevelopmentReleaseRef) => void;
+  initialBaseVersion?: IntelligentCreateBaseVersion;
 }
 
 export function IntelligentCreate({
@@ -122,9 +123,12 @@ export function IntelligentCreate({
   onCreate,
   onDownload,
   onDeploy,
+  initialBaseVersion,
 }: IntelligentCreateProps) {
   const [goal, setGoal] = useState("");
-  const [baseVersion, setBaseVersion] = useState<IntelligentCreateBaseVersion>();
+  const [baseVersion, setBaseVersion] = useState<IntelligentCreateBaseVersion | undefined>(
+    initialBaseVersion,
+  );
   const [models, setModels] = useState<ModelOption[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState("");
