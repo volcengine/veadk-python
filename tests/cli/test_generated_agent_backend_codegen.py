@@ -75,7 +75,7 @@ def test_minimal_codegen_agent_py_compiles(tmp_path) -> None:
         file.content for file in project.files if file.path == "requirements.txt"
     )
     assert requirements == (
-        "veadk-python==1.1.5\n"
+        "veadk-python==1.1.6\n"
         "agentkit-sdk-python==0.8.4\n"
         "google-adk==2.1.0\n"
         "starlette==0.52.1\n"
