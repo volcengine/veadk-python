@@ -74,7 +74,7 @@ _MINIMAL_FRONTEND_GOLDEN = {
     "agents/demo_agent/__init__.py": "ba3abbb199bbae74dc75151a44ba53a557e5f47d509835950ca756346c5a9582",
     "agents/demo_agent/dynamic_a2a.py": "d136f27d6a77439708c415686a3d167f2ad2fb9a96a5f8a0751916b09d46e364",
     ".env.example": "ec3258da9bef4e74333376d8554c265ccb12a4a1e5d4e1e1b0acdf5c9ae93ab6",
-    "requirements.txt": "8086dbc4f7507660b7b0390b8f3fc42d67f67161a83561ec45446cca8ce6fa54",
+    "requirements.txt": "fea27bc474621fc022228f49419a9a0af681e23af6f1623af989b42a4a5c0d1b",
     "README.md": "a34208314cf9061c02662028d7a9dd97448e6b73c1d732cb4aeaa8f70dbbc684",
 }
 
@@ -85,7 +85,7 @@ _FULL_FRONTEND_GOLDEN = {
     "agents/full_agent/__init__.py": "ba3abbb199bbae74dc75151a44ba53a557e5f47d509835950ca756346c5a9582",
     "agents/full_agent/dynamic_a2a.py": "d136f27d6a77439708c415686a3d167f2ad2fb9a96a5f8a0751916b09d46e364",
     ".env.example": "2bfd3afda4e661fbb71588ec5f0d584ce6682363cacc81b0394f8da09f7977e8",
-    "requirements.txt": "f64c2633da7b8f9621c201327f6cbe78ca64fba94718652f5832f8f0cc45ee43",
+    "requirements.txt": "fc62c57faf21b608d4611273a97905c19024979aa80fe021e343a51886445d16",
     "README.md": "1bf4dc889c7d1076f50784d253b53412ba7c49bcb69a5d948f9092dbbecb18ac",
 }
 

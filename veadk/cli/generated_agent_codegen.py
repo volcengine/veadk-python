@@ -1004,7 +1004,7 @@ def render_requirements(extras: set[str], include_feishu_channel: bool) -> str:
     unique_extras = sorted(all_extras)
     extras_str = f"[{','.join(unique_extras)}]" if unique_extras else ""
     managed_sidecar = "harness-sidecar" in all_extras
-    pkg = f"veadk-python{extras_str}==1.1.5"
+    pkg = f"veadk-python{extras_str}==1.1.6"
     agentkit_sdk = (
         "agentkit-sdk-python==0.8.1"
         if managed_sidecar
