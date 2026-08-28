@@ -893,9 +893,27 @@ def test_safe_exception_detail_preserves_real_agentkit_api_error_shape() -> None
         "expected_project",
         "expected_update_bucket",
         "update_bucket_env",
+        "provider",
     ),
     [
-        ([], "cn-beijing", "cn-beijing", "default", "veadk-studio", None),
+        (
+            [],
+            "cn-beijing",
+            "cn-beijing",
+            "default",
+            "veadk-studio",
+            None,
+            "volcengine",
+        ),
+        (
+            [],
+            "ap-southeast-1",
+            "ap-southeast-1",
+            "default",
+            "veadk-studio-byteplus",
+            None,
+            "byteplus",
+        ),
         (
             [
                 "--region",
@@ -910,6 +928,7 @@ def test_safe_exception_detail_preserves_real_agentkit_api_error_shape() -> None
             "studio-project",
             "custom-studio-releases",
             "environment-studio-releases",
+            "volcengine",
         ),
         (
             [],
@@ -918,6 +937,7 @@ def test_safe_exception_detail_preserves_real_agentkit_api_error_shape() -> None
             "default",
             "environment-studio-releases",
             "environment-studio-releases",
+            "volcengine",
         ),
     ],
 )
@@ -929,6 +949,7 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     expected_project: str,
     expected_update_bucket: str,
     update_bucket_env: str | None,
+    provider: str,
 ) -> None:
     captured: dict[str, object] = {}
     credential_tool_ids: list[str] = []
@@ -985,7 +1006,7 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
         [
             "deploy",
             "--provider",
-            "volcengine",
+            provider,
             "--user-pool-id",
             "pool-id",
             "--allowed-client-id",
@@ -1016,6 +1037,12 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
             "sk",
             "--volcengine-session-token",
             "sts-token",
+            "--byteplus-access-key",
+            "ak",
+            "--byteplus-secret-key",
+            "sk",
+            "--byteplus-session-token",
+            "sts-token",
             "--allow-dangerous-login",
             *target_args,
         ],
@@ -1030,12 +1057,12 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
         "secret_key": "sk",
         "session_token": "sts-token",
         "region": expected_identity_region,
-        "provider": "volcengine",
+        "provider": provider,
         "enable_vefaas_iam_fallback": False,
     }
-    assert captured["provider"] == "volcengine"
-    assert veadk_environments["CLOUD_PROVIDER"] == "volcengine"
-    assert veadk_environments["AGENTKIT_CLOUD_PROVIDER"] == "volcengine"
+    assert captured["provider"] == provider
+    assert veadk_environments["CLOUD_PROVIDER"] == provider
+    assert veadk_environments["AGENTKIT_CLOUD_PROVIDER"] == provider
     assert veadk_environments["VEIDENTITY_REGION"] == expected_identity_region
     assert "VEADK_STUDIO_ADMINS" not in veadk_environments
     assert "VEADK_STUDIO_DEVELOPERS" not in veadk_environments

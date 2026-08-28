@@ -11513,10 +11513,12 @@ def _resolve_studio_cloud_credentials(
 )
 @click.option(
     "--studio-update-bucket",
-    default="veadk-studio",
-    show_default=True,
+    default=None,
     envvar="VEADK_STUDIO_UPDATE_BUCKET",
-    help="TOS bucket containing immutable Studio release bundles.",
+    help=(
+        "TOS bucket containing immutable Studio release bundles. Defaults to "
+        "veadk-studio-byteplus on BytePlus and veadk-studio on Volcengine."
+    ),
 )
 @click.option(
     "--studio-update-prefix",
@@ -11562,7 +11564,7 @@ def frontend_deploy(
     sandbox_chat_codex_snapshot_tool_id: str | None,
     sandbox_chat_openclaw_snapshot_tool_id: str | None,
     sandbox_chat_hermes_snapshot_tool_id: str | None,
-    studio_update_bucket: str,
+    studio_update_bucket: str | None,
     studio_update_prefix: str,
 ) -> None:
     """Deploy the SSO web frontend to VeFaaS.
@@ -11606,6 +11608,9 @@ def frontend_deploy(
         provider_id = "byteplus"
     else:
         provider_id = cloud_provider_from_env()
+    studio_update_bucket = studio_update_bucket or (
+        "veadk-studio-byteplus" if provider_id == "byteplus" else "veadk-studio"
+    )
     studio_environment_resource_environment = _studio_environment_resource_environment(
         cp_workspace=environment_cp_workspace,
         cr_repository=environment_cr_repository,
