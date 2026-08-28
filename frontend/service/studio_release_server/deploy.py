@@ -454,6 +454,20 @@ def _https_endpoint(gateway_service: Any) -> str:
     return ""
 
 
+def _find_reusable_serverless_gateway(gateways: list[Any]) -> Any | None:
+    """Return an existing running serverless gateway when quota blocks a new one."""
+    return next(
+        (
+            gateway
+            for gateway in gateways
+            if getattr(gateway, "type", None) == "serverless"
+            and (getattr(gateway, "status", None) or getattr(gateway, "message", None))
+            == "Running"
+        ),
+        None,
+    )
+
+
 def _create_serverless_gateway(apig: Any) -> str:
     from volcenginesdkapig import (
         CreateGatewayRequest,
@@ -567,7 +581,11 @@ def _ensure_gateway_binding(service: Any, function_id: str) -> str:
     gateways = list(getattr(gateway_response, "items", []) or [])
     gateway = _find_named(gateways, _GATEWAY_NAME)
     if gateway is None:
-        gateway_id = _create_serverless_gateway(apig)
+        gateway = _find_reusable_serverless_gateway(gateways)
+        if gateway is None:
+            gateway_id = _create_serverless_gateway(apig)
+        else:
+            gateway_id = str(gateway.id)
     else:
         if getattr(gateway, "type", None) != "serverless":
             raise RuntimeError(f"Gateway {_GATEWAY_NAME} is not serverless.")
