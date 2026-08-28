@@ -253,6 +253,38 @@ class IntelligentDevelopmentProjectService:
         decision: IntentDecision,
     ) -> tuple[IntelligentDevelopmentProject, IntelligentDevelopmentVersion]:
         binding = await self._resolved_binding(owner_id, session_id)
+        base_version = (
+            await self.repository.get_version(
+                owner_id,
+                binding.project_id,
+                binding.base_version_id,
+            )
+            if binding.base_version_id is not None
+            else None
+        )
+        migration_framework = (
+            base_version.migration_framework if base_version is not None else ""
+        )
+        migration_engine = (
+            base_version.migration_engine if base_version is not None else ""
+        )
+        if base_version is not None and not (migration_framework and migration_engine):
+            versions = await self.repository.list_versions(
+                owner_id,
+                binding.project_id,
+            )
+            migration_framework = migration_framework or next(
+                (
+                    item.migration_framework
+                    for item in versions
+                    if item.migration_framework
+                ),
+                "",
+            )
+            migration_engine = migration_engine or next(
+                (item.migration_engine for item in versions if item.migration_engine),
+                "",
+            )
         release = release_path(
             delivery.artifact_sha256, delivery.validation_report_sha256
         )
@@ -298,6 +330,8 @@ class IntelligentDevelopmentProjectService:
             validationSummary=delivery.validation_summary,
             gateSummary=list(delivery.gate_summary),
             validatedAt=delivery.validated_at,
+            migrationFramework=migration_framework,
+            migrationEngine=migration_engine,
         )
         project = await self.repository.commit_version(
             owner_id,

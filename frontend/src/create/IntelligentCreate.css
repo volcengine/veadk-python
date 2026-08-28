@@ -565,6 +565,14 @@
 }
 .ic-version-actions .ic-version-action:hover:not(:disabled) { background: hsl(var(--muted)); color: hsl(var(--foreground)); }
 .ic-version-actions .ic-version-action:disabled { opacity: .45; cursor: not-allowed; }
+.ic-disabled-action-tooltip {
+  display: inline-flex;
+  border-radius: 5px;
+}
+.ic-disabled-action-tooltip:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 1px;
+}
 .ic-version-actions .ic-version-delete { flex-shrink: 0; font-size: 11.5px; }
 .ic-notice {
   margin: 10px 0 0 !important;

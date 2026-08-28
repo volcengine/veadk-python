@@ -1235,6 +1235,50 @@ test("saved project actions stay compact, destructive, and resilient to long con
   );
 });
 
+test("migration optimization only enables Any and Dify project lineages", async () => {
+  const { migrationOptimizationUnavailableReason } = await importTsxBundle(
+    "../src/create/IntelligentProjectLibrary.tsx",
+  );
+  const version = (migrationFramework) => ({ migrationFramework });
+
+  assert.equal(
+    migrationOptimizationUnavailableReason("intelligent-development", []),
+    "",
+  );
+  assert.equal(
+    migrationOptimizationUnavailableReason("migration", [version("any")]),
+    "",
+  );
+  assert.equal(
+    migrationOptimizationUnavailableReason("migration", [version("DIFY")]),
+    "",
+  );
+  assert.equal(
+    migrationOptimizationUnavailableReason("migration", [
+      version(undefined),
+      version("any"),
+    ]),
+    "",
+  );
+  assert.equal(
+    migrationOptimizationUnavailableReason("migration", [version("langchain")]),
+    "暂不支持",
+  );
+  assert.equal(
+    migrationOptimizationUnavailableReason("migration", []),
+    "暂不支持",
+  );
+  assert.match(
+    projectLibrarySource,
+    /<Tooltip[\s\S]*?content=\{optimizationUnavailableReason\}[\s\S]*?暂不支持/,
+  );
+  assert.match(
+    projectLibrarySource,
+    /className="ic-disabled-action-tooltip"[\s\S]*?tabIndex=\{0\}/,
+  );
+  assert.doesNotMatch(projectLibrarySource, /目前仅 Any 和 Dify 类型可优化/);
+});
+
 test("version comparison controls align with project titles and expose clear selection", () => {
   const projectSummary = projectLibrarySource.match(
     /<div className="ic-project-summary">([\s\S]*?)\{expanded \? \(/,

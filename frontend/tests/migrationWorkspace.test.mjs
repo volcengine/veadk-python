@@ -95,7 +95,9 @@ test("keeps new migration and migrated projects as parallel workspace pages", ()
   assert.match(source, />查看已迁移项目</);
   assert.match(projects, /origin="migration"/);
   assert.match(projects, /title="项目与版本"/);
-  assert.match(projects, /onSelectBaseVersion=\{onOptimize\}/);
+  assert.match(projects, /onSelectBaseVersion=\{setOptimizationBase\}/);
+  assert.match(projects, /<IntelligentOptimizationDialog/);
+  assert.match(projects, /onCreate=\{onOptimize\}/);
   assert.match(projects, /onDownload=\{onDownload\}/);
   assert.match(projects, /onDeploy=\{onDeploy\}/);
   assert.match(
@@ -104,11 +106,15 @@ test("keeps new migration and migrated projects as parallel workspace pages", ()
   );
   assert.match(
     appSource,
-    /onOptimizeVersion=\{\(base\) => \{[\s\S]*?setMigrationProjectReturn\(\{ projectId: base\.projectId \}\)[\s\S]*?setCreateView\("intelligent"\)/,
+    /onOptimizeVersion=\{\(goal, modelId, base\) =>[\s\S]*?startIntelligentDevelopment\([\s\S]*?goal,[\s\S]*?modelId,[\s\S]*?base,[\s\S]*?\{ projectId: base\.projectId \}/,
   );
+  const migrationWorkspaceBlock = appSource.match(
+    /visibleCreateView === "migration" \? \(([\s\S]*?)\) : turns\.length === 0/,
+  )?.[1] ?? "";
+  assert.doesNotMatch(migrationWorkspaceBlock, /setCreateView\("intelligent"\)/);
   assert.match(
     appSource,
-    /if \(migrationProjectReturn\) \{[\s\S]*?setCreateView\("migration"\)[\s\S]*?return/,
+    /function returnToIntelligentCreate\(\)[\s\S]*?migrationProjectReturn[\s\S]*?setCreateView\("migration"\)/,
   );
 });
 

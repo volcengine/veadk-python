@@ -1203,8 +1203,6 @@ export default function App() {
     useState("");
   const [intelligentPreparationStage, setIntelligentPreparationStage] =
     useState<IntelligentPreparationStage | null>(null);
-  const [intelligentInitialBaseVersion, setIntelligentInitialBaseVersion] =
-    useState<IntelligentCreateBaseVersion>();
   const [migrationProjectReturn, setMigrationProjectReturn] = useState<{
     projectId: string;
   }>();
@@ -4482,6 +4480,10 @@ export default function App() {
     startNewChat();
     setIntelligentDeployment(null);
     setAddMenu(false);
+    if (migrationProjectReturn) {
+      setCreateView("migration");
+      return;
+    }
     setCreateView("intelligent");
   }
 
@@ -4523,6 +4525,62 @@ export default function App() {
     intelligentCreateAbortRef.current?.abort();
     intelligentCreateAbortRef.current = null;
     setIntelligentPreparationStage(null);
+  }
+
+  async function startIntelligentDevelopment(
+    goal: string,
+    modelId: string,
+    baseVersion?: IntelligentCreateBaseVersion,
+    returnTarget?: { projectId: string },
+  ) {
+    if (intelligentPreparationStage) return;
+    intelligentCreateAbortRef.current?.abort();
+    const controller = new AbortController();
+    intelligentCreateAbortRef.current = controller;
+    setIntelligentPreparationStage("preparing");
+    setIntelligentCapabilitiesError("");
+    try {
+      const created = await intelligentDevelopmentClient.startSession({
+        displayName: baseVersion?.projectName ?? goal.slice(0, 40),
+        modelId,
+        ...(baseVersion
+          ? {
+              projectId: baseVersion.projectId,
+              baseVersionId: baseVersion.versionId,
+            }
+          : {}),
+        signal: controller.signal,
+      });
+      if (
+        controller.signal.aborted ||
+        intelligentCreateAbortRef.current !== controller
+      ) return;
+      setIntelligentPreparationStage("starting");
+      const connected = await intelligentDevelopmentClient.connectSession(
+        created.id,
+        { signal: controller.signal },
+      );
+      if (
+        controller.signal.aborted ||
+        intelligentCreateAbortRef.current !== controller
+      ) return;
+      if (returnTarget) setMigrationProjectReturn(returnTarget);
+      activateIntelligentDevelopmentSession(connected, []);
+      intelligentCreateAbortRef.current = null;
+      setIntelligentPreparationStage(null);
+      await sendSandboxMessage(goal, [], [], connected);
+    } catch (cause) {
+      if ((cause as Error)?.name !== "AbortError") {
+        setIntelligentCapabilitiesError(
+          cause instanceof Error ? cause.message : "智能开发会话创建失败",
+        );
+      }
+    } finally {
+      if (intelligentCreateAbortRef.current === controller) {
+        intelligentCreateAbortRef.current = null;
+        setIntelligentPreparationStage(null);
+      }
+    }
   }
 
   async function removeSession(id: string) {
@@ -6985,7 +7043,6 @@ export default function App() {
                       setFocusedWorkspaceAgentId("");
                       setEditingDraftId("");
                       editingDraftBaselineRef.current = null;
-                      setIntelligentInitialBaseVersion(undefined);
                       setMigrationProjectReturn(undefined);
                       setCreateView("intelligent");
                     },
@@ -7113,67 +7170,13 @@ export default function App() {
                 onCancel={cancelIntelligentPreparation}
                 onDownload={downloadIntelligentDelivery}
                 onDeploy={setIntelligentDeployment}
-                initialBaseVersion={intelligentInitialBaseVersion}
                 onBack={() => {
                   cancelIntelligentPreparation();
-                  setIntelligentInitialBaseVersion(undefined);
-                  if (migrationProjectReturn) {
-                    setCreateView("migration");
-                    return;
-                  }
                   setCreateView(null);
                   setAddMenuSurface("traditional");
                   setAddMenu(true);
                 }}
-                onCreate={async (goal, modelId, baseVersion) => {
-                  if (intelligentPreparationStage) return;
-                  intelligentCreateAbortRef.current?.abort();
-                  const controller = new AbortController();
-                  intelligentCreateAbortRef.current = controller;
-                  setIntelligentPreparationStage("preparing");
-                  setIntelligentCapabilitiesError("");
-                  try {
-                    const created = await intelligentDevelopmentClient.startSession({
-                      displayName: baseVersion?.projectName ?? goal.slice(0, 40),
-                      modelId,
-                      ...(baseVersion
-                        ? {
-                            projectId: baseVersion.projectId,
-                            baseVersionId: baseVersion.versionId,
-                          }
-                        : {}),
-                      signal: controller.signal,
-                    });
-                    if (
-                      controller.signal.aborted ||
-                      intelligentCreateAbortRef.current !== controller
-                    ) return;
-                    setIntelligentPreparationStage("starting");
-                    const connected = await intelligentDevelopmentClient.connectSession(
-                      created.id,
-                      { signal: controller.signal },
-                    );
-                    if (
-                      controller.signal.aborted ||
-                      intelligentCreateAbortRef.current !== controller
-                    ) return;
-                    activateIntelligentDevelopmentSession(connected, []);
-                    intelligentCreateAbortRef.current = null;
-                    setIntelligentPreparationStage(null);
-                    await sendSandboxMessage(goal, [], [], connected);
-                  } catch (cause) {
-                    if ((cause as Error)?.name !== "AbortError") {
-                      setIntelligentCapabilitiesError(
-                        cause instanceof Error ? cause.message : "智能开发会话创建失败",
-                      );
-                    }
-                  } finally {
-                    if (intelligentCreateAbortRef.current === controller) {
-                      intelligentCreateAbortRef.current = null;
-                      setIntelligentPreparationStage(null);
-                    }
-                  }
-                }}
+                onCreate={startIntelligentDevelopment}
               />
             ) : visibleCreateView === "custom" ? (
               <CustomCreate
@@ -7258,13 +7261,18 @@ export default function App() {
                 initialDeployRegion={newRuntimeRegion}
                 projectCapabilities={intelligentCapabilities}
                 projectCapabilitiesLoading={intelligentCapabilitiesLoading}
+                optimizationPreparationStage={intelligentPreparationStage}
+                optimizationError={intelligentCapabilitiesError}
                 initialPage={migrationProjectReturn ? "projects" : "new"}
                 initialProjectId={migrationProjectReturn?.projectId}
-                onOptimizeVersion={(base) => {
-                  setMigrationProjectReturn({ projectId: base.projectId });
-                  setIntelligentInitialBaseVersion(base);
-                  setCreateView("intelligent");
-                }}
+                onOptimizeVersion={(goal, modelId, base) =>
+                  startIntelligentDevelopment(
+                    goal,
+                    modelId,
+                    base,
+                    { projectId: base.projectId },
+                  )}
+                onCancelOptimization={cancelIntelligentPreparation}
                 onDownloadSavedVersion={downloadIntelligentDelivery}
                 onDeploySavedVersion={(delivery) => {
                   setMigrationProjectReturn({
