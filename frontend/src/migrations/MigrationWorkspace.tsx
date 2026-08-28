@@ -41,6 +41,7 @@ import type { AgentProject } from "../create/project";
 import type {
   IntelligentCreateBaseVersion,
   IntelligentDevelopmentCapabilities,
+  IntelligentPreparationStage,
 } from "../create/IntelligentCreate";
 import type { IntelligentDevelopmentReleaseRef } from "../blocks";
 import type { NetworkConfig } from "../create/types";
@@ -110,7 +111,14 @@ interface MigrationWorkspaceProps {
   initialDeployRegion?: string;
   projectCapabilities: IntelligentDevelopmentCapabilities | null;
   projectCapabilitiesLoading: boolean;
-  onOptimizeVersion: (base: IntelligentCreateBaseVersion) => void;
+  optimizationPreparationStage: IntelligentPreparationStage | null;
+  optimizationError: string;
+  onOptimizeVersion: (
+    goal: string,
+    modelId: string,
+    base: IntelligentCreateBaseVersion,
+  ) => Promise<void>;
+  onCancelOptimization: () => void;
   onDownloadSavedVersion: (
     delivery: IntelligentDevelopmentReleaseRef,
   ) => Promise<void>;
@@ -670,7 +678,10 @@ export function MigrationWorkspace({
   initialDeployRegion = defaultCloudRegion(cloudProvider),
   projectCapabilities,
   projectCapabilitiesLoading,
+  optimizationPreparationStage,
+  optimizationError,
   onOptimizeVersion,
+  onCancelOptimization,
   onDownloadSavedVersion,
   onDeploySavedVersion,
   initialPage = "new",
@@ -1559,8 +1570,11 @@ export function MigrationWorkspace({
           <MigratedProjectsPage
             capabilities={projectCapabilities}
             capabilitiesLoading={projectCapabilitiesLoading}
+            preparationStage={optimizationPreparationStage}
+            optimizationError={optimizationError}
             initialProjectId={focusedProjectId}
             onOptimize={onOptimizeVersion}
+            onCancelOptimization={onCancelOptimization}
             onDownload={onDownloadSavedVersion}
             onDeploy={onDeploySavedVersion}
           />

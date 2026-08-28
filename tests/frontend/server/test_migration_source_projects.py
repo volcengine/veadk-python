@@ -248,6 +248,8 @@ async def test_migration_version_is_idempotent_filterable_and_reusable(
     assert next_project.version_count == 2
     assert next_version.parent_version_id == first_version.version_id
     assert next_version.producer == "intelligent-development"
+    assert next_version.migration_framework == "any"
+    assert next_version.migration_engine == "agentic"
     assert [
         version.version_id
         for version in await service.list_versions("owner", first_project.project_id)

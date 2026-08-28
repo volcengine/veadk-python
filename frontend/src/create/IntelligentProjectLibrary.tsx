@@ -105,6 +105,17 @@ function releaseFromVersion(
   };
 }
 
+export function migrationOptimizationUnavailableReason(
+  origin: IntelligentDevelopmentProject["origin"],
+  versions: Pick<IntelligentDevelopmentVersion, "migrationFramework">[],
+): string {
+  if (origin !== "migration") return "";
+  const framework = versions
+    .map((version) => version.migrationFramework?.trim().toLowerCase() ?? "")
+    .find(Boolean);
+  return framework === "any" || framework === "dify" ? "" : "暂不支持";
+}
+
 interface IntelligentProjectLibraryProps {
   capabilities: IntelligentDevelopmentCapabilities | null;
   capabilitiesLoading: boolean;
@@ -501,6 +512,8 @@ export function IntelligentProjectLibrary({
               const projectComparison = compareSelection?.projectId === project.projectId
                 ? compareSelection
                 : null;
+              const optimizationUnavailableReason =
+                migrationOptimizationUnavailableReason(origin, projectVersions);
               return (
                 <article
                   className={`ic-project${expanded ? " is-expanded" : ""}`}
@@ -682,18 +695,37 @@ export function IntelligentProjectLibrary({
                                         ? "准备中…"
                                         : "部署"}
                                     </button>
-                                    <button
-                                      type="button"
-                                      className="ic-version-action"
-                                      onClick={() => selectBaseVersion(
-                                        project,
-                                        version.versionId,
-                                        version.versionId === project.latestVersionId
-                                          ? "最新版本"
-                                          : formatVersionTime(version.createdAt),
-                                      )}
-                                      disabled={creating || Boolean(busyAction)}
-                                    >去优化</button>
+                                    {optimizationUnavailableReason ? (
+                                      <Tooltip
+                                        compact
+                                        content={optimizationUnavailableReason}
+                                      >
+                                        <span
+                                          className="ic-disabled-action-tooltip"
+                                          tabIndex={0}
+                                          aria-label="去优化，暂不支持"
+                                        >
+                                          <button
+                                            type="button"
+                                            className="ic-version-action"
+                                            disabled
+                                          >去优化</button>
+                                        </span>
+                                      </Tooltip>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        className="ic-version-action"
+                                        onClick={() => selectBaseVersion(
+                                          project,
+                                          version.versionId,
+                                          version.versionId === project.latestVersionId
+                                            ? "最新版本"
+                                            : formatVersionTime(version.createdAt),
+                                        )}
+                                        disabled={creating || Boolean(busyAction)}
+                                      >去优化</button>
+                                    )}
                                     <Button
                                       type="button"
                                       className="ic-version-delete"
