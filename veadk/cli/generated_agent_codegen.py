@@ -137,7 +137,7 @@ class A2ARegistryConfig(BaseModel):
 class SelectedSkill(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    source: Literal["skillhub", "local", "skillspace"] = "skillhub"
+    source: Literal["skillhub", "local", "skillspace", "runtime"] = "skillhub"
     folder: str = ""
     name: str = ""
     description: str = ""
@@ -726,7 +726,9 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
             tool_exprs.append(_emit_tool_stub(acc, name, ""))
 
     skill_folders = [
-        skill.folder for skill in draft.selectedSkills if skill.folder.strip()
+        skill.folder
+        for skill in draft.selectedSkills
+        if skill.source != "runtime" and skill.folder.strip()
     ]
     environment_skill_folders = [
         skill.folder for skill in acc.environment_skills if skill.folder.strip()

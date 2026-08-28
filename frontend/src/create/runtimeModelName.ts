@@ -1,5 +1,6 @@
 import type { CloudProvider } from "../adk/cloudProvider";
 import { emptyDraft, type AgentDraft } from "./types";
+import { normalizeHarnessSidecarIntent } from "./harnessSidecarOptions";
 import { BUILTIN_TOOLS } from "./veadkCatalog";
 
 export interface RuntimeModelConfiguration {
@@ -27,6 +28,34 @@ export interface RuntimeCloudAgent extends RuntimeAgentIntrospection {
 export interface RuntimeEnvironmentValue {
   key: string;
   value: string;
+}
+
+function applyConfiguredMcpCredentials(
+  draft: AgentDraft,
+  configuredEnvKeys: ReadonlySet<string>,
+): AgentDraft {
+  const apply = (node: AgentDraft): AgentDraft => ({
+    ...node,
+    mcpTools: (node.mcpTools ?? []).map((tool) => ({
+      ...tool,
+      credentialConfigured: Boolean(
+        tool.authTokenEnv && configuredEnvKeys.has(tool.authTokenEnv),
+      ),
+    })),
+    subAgents: node.subAgents.map(apply),
+    ...(node.workflow
+      ? {
+          workflow: {
+            ...node.workflow,
+            nodes: node.workflow.nodes.map((workflowNode) => ({
+              ...workflowNode,
+              agent: apply(workflowNode.agent),
+            })),
+          },
+        }
+      : {}),
+  });
+  return apply(draft);
 }
 
 /** Split the provider-qualified identifier exposed by older runtimes at its
@@ -172,6 +201,7 @@ function cloudDraftWithDefaults(
     skills: [...(draft.skills ?? [])],
     knowledgebase: draft.knowledgebase ?? defaults.knowledgebase,
     tracing: draft.tracing ?? defaults.tracing,
+    harnessSidecar: normalizeHarnessSidecarIntent(draft.harnessSidecar),
     subAgents: (draft.subAgents ?? []).map((child) =>
       cloudDraftWithDefaults(child, provider),
     ),
@@ -280,6 +310,7 @@ function cloudGraphToDraft(
 export function runtimeAgentDraftFromCloud(
   agent: RuntimeCloudAgent,
   cloudProvider: CloudProvider,
+  configuredEnvKeys: readonly string[] = [],
 ): AgentDraft {
   const provider = agent.draft?.cloudProvider ?? cloudProvider;
   const runtimeModel = modelConfigurationFromRuntime(agent.model);
@@ -300,10 +331,13 @@ export function runtimeAgentDraftFromCloud(
           skills: agent.skills?.map((skill) => skill.name) ?? [],
         };
 
-  return applyRuntimeAgentIntrospection(cloudDraft, agent.graph, {
-    name: agent.name?.trim() || agent.appName.trim(),
-    model: agent.model,
-  });
+  return applyConfiguredMcpCredentials(
+    applyRuntimeAgentIntrospection(cloudDraft, agent.graph, {
+      name: agent.name?.trim() || agent.appName.trim(),
+      model: agent.model,
+    }),
+    new Set(configuredEnvKeys),
+  );
 }
 
 /** Classify live Runtime models against the ModelArk catalog selected for the

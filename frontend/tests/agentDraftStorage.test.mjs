@@ -55,7 +55,7 @@ function memoryStorage(initial = {}) {
   };
 }
 
-test("persists runtime credentials while converting MCP tokens to environment values", () => {
+test("keeps MCP credentials ephemeral while preserving non-MCP deployment values", () => {
   const sourceDraft = draft({
     mcpTools: [{ name: "root", transport: "http", authToken: "root-secret" }],
     deployment: { feishuEnabled: true, envValues: { FEISHU_APP_SECRET: "secret" } },
@@ -86,26 +86,28 @@ test("persists runtime credentials while converting MCP tokens to environment va
   const sanitized = sanitizeAgentDraftForStorage(sourceDraft);
 
   assert.equal(sanitized.mcpTools[0].authToken, undefined);
-  assert.equal(sanitized.mcpTools[0].authTokenEnv, "MCP_DRAFT_AGENT_ROOT_AUTH_TOKEN");
+  assert.equal(sanitized.mcpTools[0].authTokenEnv, undefined);
   assert.deepEqual(sanitized.deployment.envValues, {
     FEISHU_APP_SECRET: "secret",
-    MCP_DRAFT_AGENT_ROOT_AUTH_TOKEN: "root-secret",
-    MCP_CHILD_CHILD_AUTH_TOKEN: "child-secret",
-    MCP_WORKFLOW_AGENT_WORKFLOW_AUTH_TOKEN: "workflow-secret",
   });
   assert.equal(sanitized.subAgents[0].mcpTools[0].authToken, undefined);
-  assert.equal(
-    sanitized.subAgents[0].mcpTools[0].authTokenEnv,
-    "MCP_CHILD_CHILD_AUTH_TOKEN",
-  );
+  assert.equal(sanitized.subAgents[0].mcpTools[0].authTokenEnv, undefined);
   assert.deepEqual(sanitized.subAgents[0].deployment.envValues, {
     API_KEY: "child-key",
   });
   assert.equal(sanitized.workflow.nodes[0].agent.mcpTools[0].authToken, undefined);
+  assert.equal(
+    sanitized.workflow.nodes[0].agent.mcpTools[0].authTokenEnv,
+    undefined,
+  );
   assert.equal(sourceDraft.mcpTools[0].authToken, "root-secret");
+  assert.doesNotMatch(
+    JSON.stringify(sanitized),
+    /root-secret|child-secret|workflow-secret/,
+  );
 });
 
-test("writes a versioned user-scoped payload with runtime environment values", () => {
+test("writes a versioned user-scoped payload without transient MCP values", () => {
   const storage = memoryStorage();
   writeWorkspaceDrafts(storage, "alice@example.com", [
     {
@@ -121,13 +123,69 @@ test("writes a versioned user-scoped payload with runtime environment values", (
   assert.equal(payload.version, 1);
   assert.equal(payload.drafts[0].id, "draft-1");
   assert.equal(payload.drafts[0].draft.mcpTools[0].authToken, undefined);
+  assert.equal(payload.drafts[0].draft.mcpTools[0].authTokenEnv, undefined);
+  assert.equal(payload.drafts[0].draft.deployment, undefined);
   assert.equal(
-    payload.drafts[0].draft.mcpTools[0].authTokenEnv,
-    "MCP_DRAFT_AGENT_SERVER_AUTH_TOKEN",
+    storage.value(workspaceDraftsKey("alice@example.com")).includes("secret"),
+    false,
   );
-  assert.deepEqual(payload.drafts[0].draft.deployment.envValues, {
-    MCP_DRAFT_AGENT_SERVER_AUTH_TOKEN: "secret",
+});
+
+test("persists recovered configured state without inventing an old MCP value", () => {
+  const storage = memoryStorage();
+  const configuredDraft = draft({
+    mcpTools: [
+      {
+        name: "server",
+        transport: "http",
+        authTokenEnv: "MCP_SERVER_TOKEN",
+        credentialConfigured: true,
+      },
+    ],
   });
+
+  writeWorkspaceDrafts(storage, "alice", [
+    { id: "configured", updatedAt: 123, draft: configuredDraft },
+  ]);
+
+  const serialized = storage.value(workspaceDraftsKey("alice"));
+  const persisted = JSON.parse(serialized).drafts[0].draft;
+  assert.equal(persisted.mcpTools[0].credentialConfigured, true);
+  assert.equal(persisted.mcpTools[0].authTokenEnv, "MCP_SERVER_TOKEN");
+  assert.equal(persisted.mcpTools[0].authToken, undefined);
+  assert.equal(persisted.deployment?.envValues?.MCP_SERVER_TOKEN, undefined);
+  assert.equal(serialized.includes("old-secret"), false);
+
+  const loaded = loadWorkspaceDrafts(storage, "alice");
+  assert.equal(loaded[0].draft.mcpTools[0].credentialConfigured, true);
+});
+
+test("keeps an explicit MCP environment reference but never its browser value", () => {
+  const storage = memoryStorage();
+  const referencedDraft = draft({
+    mcpTools: [
+      {
+        name: "server",
+        transport: "http",
+        authToken: "${MCP_SERVER_TOKEN}",
+      },
+    ],
+    deployment: {
+      feishuEnabled: false,
+      envValues: { MCP_SERVER_TOKEN: "must-stay-ephemeral" },
+    },
+  });
+
+  writeWorkspaceDrafts(storage, "alice", [
+    { id: "referenced", updatedAt: 123, draft: referencedDraft },
+  ]);
+
+  const serialized = storage.value(workspaceDraftsKey("alice"));
+  const persisted = JSON.parse(serialized).drafts[0].draft;
+  assert.equal(persisted.mcpTools[0].authTokenEnv, "MCP_SERVER_TOKEN");
+  assert.equal(persisted.mcpTools[0].authToken, undefined);
+  assert.equal(persisted.deployment.envValues.MCP_SERVER_TOKEN, undefined);
+  assert.equal(serialized.includes("must-stay-ephemeral"), false);
 });
 
 test("preserves cloud environment selections in local drafts", () => {
@@ -146,6 +204,32 @@ test("preserves cloud environment selections in local drafts", () => {
 
   const loaded = loadWorkspaceDrafts(storage, "cloud-builder");
   assert.deepEqual(loaded[0].draft.cloudEnvironment, cloudEnvironment);
+});
+
+test("persists the published MCP key baseline with a Runtime update target", () => {
+  const storage = memoryStorage();
+  const deploymentTarget = {
+    runtimeId: "runtime-1",
+    name: "published-agent",
+    region: "cn-beijing",
+    appName: "published-agent",
+    currentVersion: 7,
+    etag: "opaque-etag",
+    editMode: "source-preserving",
+    configuredMcpEnvKeys: ["MCP_ROOT_TOKEN", "MCP_CHILD_TOKEN"],
+  };
+
+  writeWorkspaceDrafts(storage, "alice", [
+    {
+      id: "runtime-runtime-1",
+      updatedAt: 456,
+      draft: draft(),
+      deploymentTarget,
+    },
+  ]);
+
+  const loaded = loadWorkspaceDrafts(storage, "alice");
+  assert.deepEqual(loaded[0].deploymentTarget, deploymentTarget);
 });
 
 test("never persists server-managed Ark API key values while retaining selection metadata", () => {

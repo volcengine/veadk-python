@@ -88,9 +88,12 @@ import {
 import { localPickerMatches } from "./localPickerSearch";
 import { draftToYaml } from "./configYaml";
 import {
+  clearMcpConfiguredAuth,
   mcpAuthTokenInputValue,
   mcpUrlNeedsPathWarning,
   prepareMcpAuth,
+  removedConfiguredMcpEnvKeys,
+  sourcePreservingMcpSecretValues,
   updateMcpAuthTokenInput,
 } from "./mcpAuth";
 import { resolveMcpGatewayEnv } from "./mcpGatewayEnv";
@@ -1966,7 +1969,11 @@ function McpToolEditor({
                     <input
                       className="cw-input"
                       value={mcpAuthTokenInputValue(t)}
-                      placeholder="Bearer Token（可选）"
+                      placeholder={
+                        t.credentialConfigured
+                          ? "认证已配置；留空继续使用"
+                          : "Bearer Token（可选）"
+                      }
                       onChange={(e) =>
                         onChange(
                           tools.map((tool, index) =>
@@ -1977,6 +1984,23 @@ function McpToolEditor({
                         )
                       }
                     />
+                    {t.credentialConfigured && (
+                      <div className="cw-mcp-auth-state" role="status">
+                        <span>认证已配置，旧值不会显示在页面中。</span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onChange(
+                              tools.map((tool, index) =>
+                                index === i ? clearMcpConfiguredAuth(tool) : tool,
+                              ),
+                            )
+                          }
+                        >
+                          移除认证
+                        </button>
+                      </div>
+                    )}
                   </>
                 ) : (
                   <>
@@ -2223,7 +2247,10 @@ function countDraftAgents(root: AgentDraft): number {
 }
 
 /** Collect only settings used by active components across the Agent tree. */
-function collectDeploymentEnv(root: AgentDraft): RuntimeEnvConfiguration {
+function collectDeploymentEnv(
+  root: AgentDraft,
+  sourcePreserving = false,
+): RuntimeEnvConfiguration {
   const prepared = prepareMcpAuth(root);
   const selections: RuntimeEnvSelection[] = [];
   const fixedValues: Record<string, string> = { ...prepared.envValues };
@@ -2369,6 +2396,28 @@ function collectDeploymentEnv(root: AgentDraft): RuntimeEnvConfiguration {
   if (
     selectedHarnessOptimizations(prepared.draft).includes("mcp_resilience")
   ) {
+    if (sourcePreserving) {
+      selections.push({
+        env: [
+          {
+            key: "MCP_SERVERS_JSON",
+            required: true,
+            comment: "由已添加的 MCP 工具注入",
+            placeholder: "由 Studio 服务端安全恢复",
+            help: "更新时由 Studio 服务端合并 MCP 地址与认证，不向浏览器返回旧密钥。",
+            readOnly: true,
+            serverManaged: true,
+            hidden: true,
+            requiredBy: [harnessSidecarOptionLabel("mcp_resilience")],
+          },
+        ],
+      });
+      const config = runtimeEnvConfiguration(selections);
+      return {
+        specs: config.specs,
+        fixedValues: { ...config.fixedValues, ...fixedValues },
+      };
+    }
     const gatewayEnv = resolveMcpGatewayEnv(
       prepared.draft,
       prepared.envValues,
@@ -3446,6 +3495,9 @@ interface CustomCreateProps extends CreateModeProps {
     region: string;
     appName?: string;
     currentVersion?: number | null;
+    etag?: string;
+    editMode?: "source-preserving" | "regenerate";
+    configuredMcpEnvKeys?: string[];
   };
   /** Region selected before entering the create flow. */
   initialDeployRegion?: string;
@@ -3884,8 +3936,12 @@ export function CustomCreate({
     debugVariants.find((variant) => variant.id === selectedVariantId) ??
     debugVariants[0];
   const deploymentEnv = useMemo(
-    () => collectDeploymentEnv(providerDraft),
-    [providerDraft],
+    () =>
+      collectDeploymentEnv(
+        providerDraft,
+        deploymentTarget?.editMode === "source-preserving",
+      ),
+    [deploymentTarget?.editMode, providerDraft],
   );
   const customModelCredentials = useMemo(
     () =>
@@ -4341,11 +4397,13 @@ export function CustomCreate({
     const optimizations = selected
       ? [...new Set([...harnessOptimizations, optionId])]
       : harnessOptimizations.filter((item) => item !== optionId);
+    const profile =
+      harnessOptimizationProfile === "ops" ? "default" : harnessOptimizationProfile;
     setDraft((current) => ({
       ...current,
       harnessSidecar: harnessIntentFromOptimizations(
         optimizations,
-        harnessOptimizationProfile,
+        profile,
       ),
     }));
     setBuildErr("");
@@ -4411,6 +4469,8 @@ export function CustomCreate({
     onStage?: (s: DeployStage) => void,
     options?: Parameters<typeof deployAgentkitProject>[3],
   ) => {
+    const sourcePreserving =
+      deploymentTarget?.editMode === "source-preserving";
     const net = draft.deployment?.network;
     const network =
       net && net.mode && net.mode !== "public"
@@ -4435,6 +4495,20 @@ export function CustomCreate({
         runtimeId: deploymentTarget?.runtimeId,
         runtimeName: options?.runtimeName ?? deploymentRuntimeName,
         appName: deploymentTarget?.appName,
+        editMode: deploymentTarget?.editMode,
+        draft: deploymentTarget ? codegenDraft(draft) : undefined,
+        updateEtag: deploymentTarget?.etag,
+        baseRuntimeVersion: deploymentTarget?.currentVersion,
+        envs: sourcePreserving ? [] : options?.envs,
+        mcpSecretValues: sourcePreserving
+          ? sourcePreservingMcpSecretValues(draft)
+          : undefined,
+        removeRuntimeEnvKeys: deploymentTarget
+          ? removedConfiguredMcpEnvKeys(
+              deploymentTarget.configuredMcpEnvKeys ?? [],
+              draft,
+            )
+          : undefined,
         description: draft.description,
         harnessSidecar: draft.harnessSidecar,
         environment: draft.cloudEnvironment?.environmentId

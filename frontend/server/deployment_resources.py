@@ -875,7 +875,15 @@ class DeploymentResourceService:
         base_image: str,
         config: Mapping[str, str],
     ) -> dict[str, str]:
-        """Bind a managed Sidecar build to the CR that owns its base image."""
+        """Bind account-owned bases while leaving external public bases unbound.
+
+        A managed base can live in a platform-owned public registry. Such a
+        registry is intentionally absent from the customer's ``ListRegistries``
+        result, and the application image must still be pushed to a CR owned by
+        the customer. Only anchor when the base host belongs to exactly one CR
+        in the current account; a successful lookup with no match therefore
+        means that the immutable base is external to the account.
+        """
         if self.provider != "volcengine":
             raise ManagedSidecarRegistryError(
                 "Harness Sidecar 当前无法定位所需的客户 CR。"
@@ -912,6 +920,8 @@ class DeploymentResourceService:
                 "无法从当前账号唯一定位受控 Harness Sidecar 基础镜像所在的 CR。"
             ) from error
 
+        if not matches:
+            return dict(config)
         if len(matches) != 1:
             raise ManagedSidecarRegistryError(
                 "无法从当前账号唯一定位受控 Harness Sidecar 基础镜像所在的 CR。"

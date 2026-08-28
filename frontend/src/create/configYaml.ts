@@ -150,7 +150,7 @@ function toConfig(draft: AgentDraft, root = true): Record<string, unknown> {
         base.namespace = s.namespace ?? "public";
       } else if (s.source === "local") {
         base.localFiles = s.localFiles ?? [];
-      } else {
+      } else if (s.source === "skillspace") {
         base.skillSpaceId = s.skillSpaceId;
         base.skillSpaceName = s.skillSpaceName;
         base.skillId = s.skillId;

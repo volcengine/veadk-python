@@ -39,12 +39,16 @@ function AgentKitSkillsIcon({ className }: { className?: string }) {
 }
 
 function skillKey(skill: SelectedSkill): string {
+  if (skill.source === "runtime") return `runtime:${skill.folder}`;
   if (skill.source === "skillhub") return `hub:${skill.namespace}/${skill.slug}`;
   if (skill.source === "local") return `local:${skill.folder}`;
   return `ss:${skill.skillSpaceId}/${skill.skillId}/${skill.version || ""}`;
 }
 
 function skillSourceLabel(skill: SelectedSkill): string {
+  if (skill.source === "runtime") {
+    return "运行中来源 · 原样保留，可移除或用同名 Skill 替换";
+  }
   if (skill.source === "local") return "本地";
   if (skill.source === "skillspace") return "AgentKit Skills 中心";
   return "火山 Find Skill 技能广场";
@@ -60,7 +64,7 @@ function SelectedSkillRow({
   disabled: boolean;
 }) {
   let Icon: ComponentType<{ className?: string }> = Sparkles;
-  if (skill.source === "local") Icon = FolderUp;
+  if (skill.source === "local" || skill.source === "runtime") Icon = FolderUp;
   else if (skill.source === "skillspace") Icon = AgentKitSkillsIcon;
   return (
     <motion.div
@@ -95,8 +99,10 @@ function SelectedSkillRow({
   );
 }
 
+type SelectableSkillSource = Exclude<SkillSource, "runtime">;
+
 const SKILL_SOURCES: Array<{
-  id: SkillSource;
+  id: SelectableSkillSource;
   label: string;
   shortLabel: string;
   icon: ComponentType<{ className?: string }>;
@@ -129,7 +135,7 @@ export function SkillSourcePicker({
   disabled?: boolean;
   addLabel?: string;
 }) {
-  const [active, setActive] = useState<SkillSource>("local");
+  const [active, setActive] = useState<SelectableSkillSource>("local");
   const [open, setOpen] = useState(false);
   const titleId = useId();
   const panelId = useId();
@@ -155,8 +161,28 @@ export function SkillSourcePicker({
     };
   }, [open]);
 
-  const remove = (key: string) => {
+  const remove = (key: string, skill: SelectedSkill) => {
+    if (
+      skill.source === "runtime" &&
+      !window.confirm(`从新版本中移除运行中的 Skill「${skill.name}」？`)
+    ) {
+      return;
+    }
     onChange(selected.filter((skill) => skillKey(skill) !== key));
+  };
+
+  const replaceRuntimeSkill = (next: SelectedSkill[]) => {
+    const replacementFolders = new Set(
+      next
+        .filter((skill) => skill.source !== "runtime")
+        .map((skill) => skill.folder),
+    );
+    onChange(
+      next.filter(
+        (skill) =>
+          skill.source !== "runtime" || !replacementFolders.has(skill.folder),
+      ),
+    );
   };
 
   return (
@@ -184,7 +210,7 @@ export function SkillSourcePicker({
                   key={skillKey(skill)}
                   skill={skill}
                   disabled={disabled}
-                  onRemove={() => remove(skillKey(skill))}
+                  onRemove={() => remove(skillKey(skill), skill)}
                 />
               ))}
             </AnimatePresence>
@@ -262,15 +288,21 @@ export function SkillSourcePicker({
                     aria-labelledby={`${panelId}-${active}`}
                   >
                     {active === "skillhub" && (
-                      <SkillHubPicker selected={selected} onChange={onChange} />
+                      <SkillHubPicker
+                        selected={selected}
+                        onChange={replaceRuntimeSkill}
+                      />
                     )}
                     {active === "local" && (
-                      <LocalPicker selected={selected} onChange={onChange} />
+                      <LocalPicker
+                        selected={selected}
+                        onChange={replaceRuntimeSkill}
+                      />
                     )}
                     {active === "skillspace" && (
                       <SkillSpacePicker
                         selected={selected}
-                        onChange={onChange}
+                        onChange={replaceRuntimeSkill}
                         cloudProvider={cloudProvider}
                       />
                     )}

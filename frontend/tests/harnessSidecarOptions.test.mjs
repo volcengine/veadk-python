@@ -100,19 +100,29 @@ test("normalizes and round-trips the ops profile", () => {
     harnessSidecar: {
       profile: "ops",
       componentOverrides: {
-        context_engine: true,
+        context_engine: false,
         compressor: true,
-        verifier: true,
-        long_run_control: true,
+        verifier: false,
+        long_run_control: false,
         mcp_resilience: true,
       },
     },
   });
 
   assert.equal(draft.harnessSidecar.profile, "ops");
+  assert.deepEqual(draft.harnessSidecar.componentOverrides, {
+    context_engine: true,
+    compressor: false,
+    verifier: true,
+    long_run_control: true,
+    mcp_resilience: true,
+  });
   const restored = yamlToDraft(draftToYaml(draft));
   assert.equal(restored.harnessSidecar.profile, "ops");
-  assert.equal(restored.harnessSidecar.componentOverrides.mcp_resilience, true);
+  assert.deepEqual(
+    restored.harnessSidecar.componentOverrides,
+    draft.harnessSidecar.componentOverrides,
+  );
 });
 
 test("round-trips selected options in YAML and omits the unselected default", () => {
@@ -333,6 +343,10 @@ test("applies scenario defaults while allowing an empty custom selection", () =>
   assert.match(harnessOptionsSource, /不勾选时不启动 Sidecar/);
   assert.match(customCreateSource, /优化场景：\$\{harnessSidecarProfileLabel/);
   assert.match(customCreateSource, /harnessOptimizations\.map\(harnessSidecarOptionLabel\)/);
+  assert.match(
+    customCreateSource,
+    /harnessOptimizationProfile === "ops" \? "default" : harnessOptimizationProfile/,
+  );
 });
 
 test("treats checkbox changes as metadata and defers checks to runtime actions", () => {

@@ -23,6 +23,8 @@ export interface McpTool {
   authToken?: string;
   /** Environment variable used by generated code for the bearer token. */
   authTokenEnv?: string;
+  /** Server-confirmed configured state. The previous value is never exposed. */
+  credentialConfigured?: boolean;
   /** stdio transport: the command to launch (e.g. "npx"). */
   command?: string;
   /** stdio transport: command args (e.g. ["-y", "@playwright/mcp@latest"]). */

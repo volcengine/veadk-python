@@ -139,10 +139,24 @@ server that `veadk frontend` launches — no separate backend.
   the info action opens a tabbed Agent/Runtime panel. The Agent directory loads
   one selected region at a time, defaults to Beijing, and carries the Runtime's
   region through details, connection, update, evaluation, and deletion. Studio
-  enables in-place updates for any authorized single-Agent Runtime that exposes
-  compatible `list-apps` and `web/agent-info` endpoints, regardless of whether
-  Studio originally deployed it; multi-Agent Runtimes are rejected because an
-  AgentKit update replaces the whole Runtime package. Studio distinguishes its
+  enables in-place updates for an authorized single-Agent Runtime when its
+  `web/agent-info` response, or the compatible `web/agent-draft` fallback,
+  contains a validated Studio publishing snapshot. For an older Runtime without
+  that snapshot, Studio can instead recover public MCP metadata server-side and
+  extract bounded local Skill files from its exact digest-pinned Volcengine CR
+  image. That legacy path keeps the existing application image and overlays only
+  confirmed Skill/MCP changes. If the image, Skill roots, MCP identity, or
+  authentication state is missing or ambiguous, the Runtime remains visible but
+  its update action is blocked, preventing an empty generated project from
+  replacing custom source. The Agent directory prepares update capability for a
+  bounded set of likely targets with at most two background requests, then
+  reuses the version-keyed in-memory result or in-flight request when details
+  open. Capability failures are not cached, and no recovered configuration is
+  written to browser storage.
+  Multi-Agent Runtimes are rejected because an AgentKit update replaces the
+  whole Runtime package. Every accepted update carries the recovered snapshot
+  etag and base Runtime version so a stale page cannot overwrite a newer
+  release. Studio distinguishes its
   own ownership checks from Agent Server compatibility and authentication
   failures when a connection cannot be established. Each Agent detail page also
   probes and lists confirmed API Server and A2A integration endpoints; protocols
@@ -175,9 +189,10 @@ server that `veadk frontend` launches — no separate backend.
   to the signed-in user. MCP tokens are converted to Runtime environment
   variables: generated source retains only the `${ENV_NAME}` reference, while
   YAML and browser drafts preserve the corresponding environment value.
-  Runtime updates reload existing values, and the deployment form keeps all
-  environment values visible to users who can view the Agent. Entering a
-  replacement Token overrides the previous value. Long descriptions and prompts
+  Runtime updates restore only explicitly public environment values. Existing
+  MCP authentication is represented as “configured” without returning its old
+  value to the browser; leaving it unchanged preserves the server-side Runtime
+  value, while entering a replacement Token overrides it. Long descriptions and prompts
   scroll within bounded editors, while the sidebar stays pinned to the
   viewport. On narrow desktop windows, the structure, configuration, and debug
   panels stack vertically instead of squeezing the form. The deployment page

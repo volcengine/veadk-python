@@ -138,6 +138,7 @@ import { CustomCreate } from "./create/CustomCreate";
 import { CodePackageCreate } from "./create/CodePackageCreate";
 import { MigrationWorkspace } from "./migrations/MigrationWorkspace";
 import type { AgentDraft } from "./create/types";
+import { configuredMcpEnvKeys } from "./create/mcpAuth";
 import {
   hydrateRuntimeModelSelection,
   isRuntimeModelSelectionEnv,
@@ -2023,6 +2024,9 @@ export default function App() {
     region: string;
     appName?: string;
     currentVersion?: number | null;
+    etag?: string;
+    editMode?: "source-preserving" | "regenerate";
+    configuredMcpEnvKeys?: string[];
   } | null>(null);
   const [newRuntimeRegion, setNewRuntimeRegion] = useState<string>(
     defaultCloudRegion(cloudProvider),
@@ -6500,6 +6504,7 @@ export default function App() {
                 cloudProvider={cloudProvider}
                 studioRegion={agentsSource === "local" ? "cn-beijing" : studioRegion}
                 canCreate={canCreateAgents}
+                canUpdate={canCreateAgents || canManageAgents}
                 runtimeScope={access.capabilities.runtimeScope}
                 onCreateAgent={openAgentCreateFromMyAgents}
                 onOpenCodexProjectUpload={() => setSandboxProjectUploadOpen(true)}
@@ -6592,6 +6597,16 @@ export default function App() {
                     setError(capability.reason || "当前 Runtime 不支持原地更新。");
                     return;
                   }
+                  if (
+                    capability.recoveryStatus !== "complete" &&
+                    capability.recoveryStatus !== "draft-only"
+                  ) {
+                    setError(
+                      capability.reason ||
+                        "该 Runtime 的原发布配置不可恢复，无法安全更新。",
+                    );
+                    return;
+                  }
                   if (!capability.runtime.runtimeId) {
                     setError("仅支持更新已部署的云端智能体。");
                     return;
@@ -6619,6 +6634,7 @@ export default function App() {
                   const runtimeDraft = runtimeAgentDraftFromCloud(
                     runtimeAgent,
                     cloudProvider,
+                    capability.runtime.configuredEnvKeys,
                   );
                   const runtimeModel = modelConfigurationFromRuntime(
                     runtimeAgent.model,
@@ -6683,6 +6699,12 @@ export default function App() {
                     region: capability.runtime.region,
                     appName: capability.agent.appName,
                     currentVersion: capability.runtime.currentVersion,
+                    etag: capability.etag,
+                    editMode:
+                      capability.editMode === "source-preserving"
+                        ? "source-preserving"
+                        : "regenerate",
+                    configuredMcpEnvKeys: configuredMcpEnvKeys(classifiedDraft),
                   });
                   setCreateView("custom");
                   setError("");

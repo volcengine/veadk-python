@@ -1388,6 +1388,26 @@
   line-height: 1.55;
 }
 
+.aw-update-recovery-notice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid hsl(42 72% 74% / 0.45);
+  border-radius: 8px;
+  background: hsl(42 92% 96%);
+  color: hsl(42 72% 32%);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.aw-update-recovery-notice strong {
+  color: inherit;
+  font-size: 13px;
+  font-weight: 650;
+}
+
 .aw-canvas-card,
 .aw-details-card {
   min-width: 0;

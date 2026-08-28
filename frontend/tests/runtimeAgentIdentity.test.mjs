@@ -23,6 +23,9 @@ const {
   hydrateA2aRegistryFromRuntime,
   runtimeAgentDraftFromCloud,
 } = await loadTypeScriptModule("../src/create/runtimeModelName.ts");
+const { normalizeDraft } = await loadTypeScriptModule(
+  "../src/create/normalizeDraft.ts",
+);
 const appSource = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
 const workspaceSource = readFileSync(
   new URL("../src/ui/AgentWorkspace.tsx", import.meta.url),
@@ -98,6 +101,93 @@ test("deployed Runtime configuration is rebuilt only from cloud data", () => {
   assert.equal(restored.knowledgebaseIndex, "cloud-index");
   assert.equal(restored.tracing, true);
   assert.deepEqual(restored.tracingExporters, ["tls"]);
+});
+
+test("legacy partial ops metadata is restored as the complete ops preset", () => {
+  const restored = runtimeAgentDraftFromCloud(
+    {
+      appName: "legacy_ops_app",
+      name: "legacy_ops_agent",
+      draft: {
+        ...cachedRuntimeDraft("legacy_ops_agent"),
+        harnessSidecar: {
+          enabled: true,
+          profile: "ops",
+          componentOverrides: {
+            context_engine: false,
+            compressor: false,
+            verifier: false,
+            long_run_control: false,
+            mcp_resilience: true,
+          },
+        },
+      },
+    },
+    "volcengine",
+  );
+
+  assert.deepEqual(restored.harnessSidecar.componentOverrides, {
+    context_engine: true,
+    compressor: false,
+    verifier: true,
+    long_run_control: true,
+    mcp_resilience: true,
+  });
+});
+
+test("runtime-preserved skills survive update draft normalization without fake files", () => {
+  const normalized = normalizeDraft({
+    ...cachedRuntimeDraft("legacy_agent"),
+    selectedSkills: [
+      {
+        source: "runtime",
+        folder: "serial-inspector",
+        name: "serial-inspector",
+        description: "Running version",
+      },
+    ],
+  });
+
+  assert.deepEqual(normalized.selectedSkills, [
+    {
+      source: "runtime",
+      folder: "serial-inspector",
+      name: "serial-inspector",
+      description: "Running version",
+    },
+  ]);
+});
+
+test("recovered MCP authentication exposes configured state without a secret value", () => {
+  const restored = runtimeAgentDraftFromCloud(
+    {
+      appName: "cloud_app",
+      name: "cloud_agent",
+      draft: {
+        ...cachedRuntimeDraft("cloud_agent"),
+        mcpTools: [
+          {
+            name: "orders",
+            transport: "http",
+            url: "https://mcp.example.com/mcp",
+            authTokenEnv: "MCP_ORDERS_TOKEN",
+          },
+          {
+            name: "public",
+            transport: "http",
+            url: "https://mcp.example.com/public/mcp",
+          },
+        ],
+      },
+    },
+    "volcengine",
+    ["MCP_ORDERS_TOKEN"],
+  );
+
+  assert.equal(restored.mcpTools[0].credentialConfigured, true);
+  assert.equal(restored.mcpTools[0].authToken, undefined);
+  assert.equal(restored.mcpTools[1].credentialConfigured, false);
+  assert.doesNotMatch(JSON.stringify(restored), /secret|bearer/i);
 });
 
 test("Agent name uses only cloud graph, metadata, then app name", () => {

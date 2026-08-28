@@ -11,6 +11,10 @@ import {
 } from "./types";
 import { createBuiltinToolsForProvider, DEFAULT_KB_BACKEND } from "./veadkCatalog";
 import type { CloudProvider } from "../adk/cloudProvider";
+import {
+  HARNESS_SIDECAR_OPTION_IDS,
+  normalizeHarnessSidecarIntent,
+} from "./harnessSidecarOptions";
 
 const STM_IDS = new Set(["local", "sqlite", "mysql", "postgresql"]);
 const LTM_IDS = new Set([
@@ -41,13 +45,6 @@ const CLOUD_CLI_TOOL_IDS = new Set<CloudCliToolId>([
   "github-cli",
   "pandoc",
 ]);
-const HARNESS_SIDECAR_OPTION_IDS: HarnessSidecarOptionId[] = [
-  "context_engine",
-  "compressor",
-  "verifier",
-  "long_run_control",
-  "mcp_resilience",
-];
 const HARNESS_SIDECAR_PROFILE_IDS = new Set<HarnessSidecarProfileId>([
   "default",
   "ops",
@@ -154,7 +151,7 @@ function asHarnessSidecarIntent(v: unknown): HarnessSidecarIntent | undefined {
   const planHash = asString(raw.planHash).trim();
   if (catalogVersion) intent.catalogVersion = catalogVersion;
   if (planHash) intent.planHash = planHash;
-  return intent;
+  return normalizeHarnessSidecarIntent(intent);
 }
 
 function parseSubAgents(
@@ -221,7 +218,12 @@ function parseSelectedSkills(o: Record<string, unknown>): SelectedSkill[] {
     const so = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
     const src = asString(so.source);
     const source: SelectedSkill["source"] =
-      src === "local" || src === "skillspace" || src === "skillhub" ? src : "skillhub";
+      src === "local" ||
+      src === "skillspace" ||
+      src === "skillhub" ||
+      src === "runtime"
+        ? src
+        : "skillhub";
     const name =
       asString(so.name) ||
       asString(so.slug) ||
@@ -230,6 +232,11 @@ function parseSelectedSkills(o: Record<string, unknown>): SelectedSkill[] {
       "skill";
     const folder = asString(so.folder) || name;
     const description = asString(so.description);
+    if (source === "runtime") {
+      if (!name || folder !== name) continue;
+      out.push({ source, folder, name, description });
+      continue;
+    }
     if (source === "skillhub") {
       const slug = asString(so.slug);
       if (!slug) continue;
@@ -307,6 +314,7 @@ export function normalizeDraft(raw: unknown): AgentDraft {
             url: asString(mo.url),
             authToken: asString(mo.authToken),
             authTokenEnv: asString(mo.authTokenEnv),
+            credentialConfigured: mo.credentialConfigured === true,
             command: asString(mo.command),
             args: asStringArray(mo.args),
           };
