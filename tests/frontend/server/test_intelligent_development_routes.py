@@ -1053,6 +1053,88 @@ def test_connect_projects_read_only_history_to_user_facing_exchange() -> None:
     ]
 
 
+def test_connect_collapses_protocol_retry_into_one_user_exchange() -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud(user_session_id="project-1")
+    gateway.codex.threads = [
+        CodexThreadSummary(
+            id="thread-restored",
+            preview="internal intent gate",
+            cwd="/home/gem/workspace/project-1",
+            updated_at=20,
+        )
+    ]
+    request = "检查当前 Agent，不修改源码"
+    answer = "当前 Agent 已保留现有能力。"
+    decision = IntentDecision(
+        "accept",
+        "",
+        "检查当前 Agent",
+        ("说明当前实现状态",),
+        False,
+    )
+    gateway.codex.thread_messages = (
+        CodexThreadMessage(
+            id="gate-user-1",
+            role="user",
+            content=intent_gate_prompt(request, expire_at="later"),
+            timestamp=1_000,
+        ),
+        CodexThreadMessage(
+            id="gate-assistant-1",
+            role="assistant",
+            content="not-json",
+            timestamp=2_000,
+        ),
+        CodexThreadMessage(
+            id="gate-user-2",
+            role="user",
+            content=intent_gate_prompt(request, expire_at="later", protocol_retry=True),
+            timestamp=3_000,
+        ),
+        CodexThreadMessage(
+            id="gate-assistant-2",
+            role="assistant",
+            content=json.dumps(
+                {
+                    "decision": "accept",
+                    "message": "",
+                    "intentSummary": decision.intent_summary,
+                    "acceptanceCriteria": list(decision.acceptance_criteria),
+                    "changesDelivery": False,
+                },
+                ensure_ascii=False,
+            ),
+            timestamp=4_000,
+        ),
+        CodexThreadMessage(
+            id="read-only-user",
+            role="user",
+            content=read_only_prompt(request, decision, expire_at="later"),
+            timestamp=5_000,
+        ),
+        CodexThreadMessage(
+            id="read-only-assistant",
+            role="assistant",
+            content=answer,
+            timestamp=6_000,
+        ),
+    )
+
+    with TestClient(_app(gateway)) as client:
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/connect",
+            headers={"X-Test-User": "alice"},
+        )
+
+    assert response.status_code == 200
+    restored = response.json()["conversation"]["messages"]
+    assert [(message["role"], message["content"]) for message in restored] == [
+        ("user", request),
+        ("assistant", answer),
+    ]
+
+
 def test_connect_does_not_switch_threads_while_a_build_is_active() -> None:
     gateway = _FakeGateway()
     gateway.sessions["dev-session"] = _cloud(user_session_id="project-1")
@@ -1295,10 +1377,17 @@ def test_intent_reject_is_user_facing_and_never_uploads_credentials(
     assert call["skillIds"] == ()
 
 
-def test_invalid_intent_response_has_a_specific_recoverable_error() -> None:
+def test_invalid_intent_response_has_a_specific_recoverable_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     gateway = _FakeGateway()
     gateway.sessions["dev-session"] = _cloud()
-    gateway.codex.turns = [[CodexAppServerEvent(kind="text", text="not-json")]]
+    gateway.codex.turns = [
+        [CodexAppServerEvent(kind="text", text="not-json")],
+        [CodexAppServerEvent(kind="text", text="still-not-json")],
+    ]
+    credentials = AsyncMock()
+    monkeypatch.setattr(routes, "create_credential_lease", credentials)
 
     with TestClient(_app(gateway)) as client:
         _connect(client)
@@ -1316,6 +1405,87 @@ def test_invalid_intent_response_has_a_specific_recoverable_error() -> None:
         "未能确认本次优化目标，开发尚未开始。请重新发送，已有项目和版本不受影响。"
         in response.text
     )
+    assert len(gateway.codex.calls) == 2
+    credentials.assert_not_awaited()
+
+
+def test_invalid_intent_response_is_retried_before_development_stops() -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud()
+    gateway.codex.turns = [
+        [CodexAppServerEvent(kind="text", text="not-json")],
+        [_gate(changes=False)],
+        [CodexAppServerEvent(kind="text", text="当前 Agent 已保留现有能力。")],
+    ]
+
+    with TestClient(_app(gateway)) as client:
+        _connect(client)
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "检查当前 Agent，不修改源码"},
+        )
+
+    assert response.status_code == 200
+    assert "Codex 正在重新确认本次目标" in response.text
+    assert "当前 Agent 已保留现有能力" in response.text
+    assert "event: error" not in response.text
+    assert len(gateway.codex.calls) == 3
+
+
+def test_fragmented_intent_json_does_not_trigger_protocol_retry() -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud()
+    gate_json = _gate(changes=False).text
+    midpoint = len(gate_json) // 2
+    gateway.codex.turns = [
+        [
+            CodexAppServerEvent(kind="text", text=gate_json[:midpoint]),
+            CodexAppServerEvent(kind="text", text=gate_json[midpoint:]),
+        ],
+        [CodexAppServerEvent(kind="text", text="当前 Agent 状态正常。")],
+    ]
+
+    with TestClient(_app(gateway)) as client:
+        _connect(client)
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "检查当前 Agent，不修改源码"},
+        )
+
+    assert response.status_code == 200
+    assert "当前 Agent 状态正常" in response.text
+    assert "重新确认本次目标" not in response.text
+    assert "event: error" not in response.text
+    assert len(gateway.codex.calls) == 2
+
+
+def test_protocol_retry_can_return_a_safe_rejection_without_side_effects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud()
+    gateway.codex.turns = [
+        [CodexAppServerEvent(kind="text", text="not-json")],
+        [_gate("reject", message="该请求与创建 Agent 无关。")],
+    ]
+    credentials = AsyncMock()
+    monkeypatch.setattr(routes, "create_credential_lease", credentials)
+
+    with TestClient(_app(gateway)) as client:
+        _connect(client)
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "帮我处理一项无关任务"},
+        )
+
+    assert response.status_code == 200
+    assert "该请求与创建 Agent 无关" in response.text
+    assert "event: error" not in response.text
+    assert len(gateway.codex.calls) == 2
+    credentials.assert_not_awaited()
 
 
 def test_restored_project_context_is_passed_to_the_intent_gate(

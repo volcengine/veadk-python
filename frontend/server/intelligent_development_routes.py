@@ -383,7 +383,13 @@ def _project_user_facing_messages(
             continue
 
         user_message = _intent_gate_user_message(gate_message.content)
-        if user_message is not None:
+        repeated_protocol_retry = (
+            user_message is not None
+            and bool(projected)
+            and projected[-1].role == "user"
+            and projected[-1].content == user_message
+        )
+        if user_message is not None and not repeated_protocol_retry:
             projected.append(
                 replace(
                     gate_message,
@@ -1274,31 +1280,50 @@ def mount_intelligent_development_routes(
 
             try:
                 yield _progress_sse("Codex 正在分析本次请求并确认预期结果。")
-                gate_text = ""
-                async for event in service.stream_message(
-                    session_id,
-                    owner,
-                    intent_gate_prompt(
-                        prompt.strip(),
-                        expire_at=cloud.expire_at,
-                        project_context=project_context,
-                    ),
-                    turn_permissions=_INTENT_PERMISSIONS,
-                    turn_timeout_seconds=_INTENT_TURN_TIMEOUT_SECONDS,
-                ):
-                    if event.kind == "text":
-                        gate_text += event.text
-                    else:
-                        public_event = _conversation_event_sse(event)
-                        if public_event is not None:
-                            yield public_event
-                failure_stage = "intent_parse"
-                try:
-                    decision = parse_intent_decision(gate_text)
-                except ValueError as error:
+                decision = None
+                for intent_attempt in range(2):
+                    gate_text = ""
+                    async for event in service.stream_message(
+                        session_id,
+                        owner,
+                        intent_gate_prompt(
+                            prompt.strip(),
+                            expire_at=cloud.expire_at,
+                            project_context=project_context,
+                            protocol_retry=intent_attempt > 0,
+                        ),
+                        turn_permissions=_INTENT_PERMISSIONS,
+                        turn_timeout_seconds=_INTENT_TURN_TIMEOUT_SECONDS,
+                    ):
+                        if event.kind == "text":
+                            gate_text += event.text
+                        else:
+                            public_event = _conversation_event_sse(event)
+                            if public_event is not None:
+                                yield public_event
+                    failure_stage = "intent_parse"
+                    try:
+                        decision = parse_intent_decision(gate_text)
+                        break
+                    except ValueError as error:
+                        logger.warning(
+                            "Intent decision rejected attempt=%s reason=%s session_id=%s",
+                            intent_attempt + 1,
+                            str(error),
+                            session_id,
+                        )
+                        if intent_attempt == 0:
+                            yield _progress_sse(
+                                "Codex 正在重新确认本次目标和预期结果。"
+                            )
+                            continue
+                        raise IntelligentDevelopmentIntentError(
+                            "意图识别未返回有效结果，请重试。"
+                        ) from error
+                if decision is None:
                     raise IntelligentDevelopmentIntentError(
                         "意图识别未返回有效结果，请重试。"
-                    ) from error
+                    )
                 if decision.decision != "accept":
                     payload = {"text": decision.message}
                     yield (

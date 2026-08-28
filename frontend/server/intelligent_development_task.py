@@ -53,13 +53,10 @@ _TASK_ROOT = "/home/gem/.intelligent-development/tasks"
 _MAX_COMPLETION_BYTES = 256 * 1024
 _MAX_MANIFEST_BYTES = 256 * 1024
 _MAX_ARTIFACT_BYTES = 20 * 1024 * 1024
+_MAX_INTENT_RESPONSE_CHARS = 128 * 1024
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _RUNTIME_NAME = re.compile(r"^idv-[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$")
 _DELIVERY_AGENT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,255}$")
-_JSON_CODE_FENCE = re.compile(
-    r"\A```(?:json)?[ \t]*\r?\n(?P<body>.*)\r?\n```[ \t]*\Z",
-    re.IGNORECASE | re.DOTALL,
-)
 _REQUIRED_GATES = (
     "local-checks",
     "service-probe",
@@ -155,6 +152,7 @@ def intent_gate_prompt(
     *,
     expire_at: str,
     project_context: str = "",
+    protocol_retry: bool = False,
 ) -> str:
     """Build the non-mutating stage-one request for the same Codex Thread."""
     decision_contract = json.dumps(
@@ -174,6 +172,14 @@ def intent_gate_prompt(
         "to resolve natural follow-up references and preserve non-conflicting requirements:\n"
         f"{project_context}\n"
         if project_context
+        else ""
+    )
+    retry_context = (
+        "\n## Protocol retry\n"
+        "The preceding response could not be read as one valid decision. Re-evaluate the latest "
+        "request and return the required JSON object only. Do not mention the retry or add "
+        "Markdown fences or explanatory text.\n"
+        if protocol_retry
         else ""
     )
     return f"""You are the read-only intent gate for a VeADK Agent development task.
@@ -211,6 +217,7 @@ is to steal credentials through phishing is harmful.
 Ask exactly one concise question when legitimate purpose, authority, or another missing answer
 materially changes the product result, architecture, or safety. Otherwise make a reversible
 assumption.
+{retry_context}
 
 ## Output contract
 Return one JSON object and nothing else with exactly these fields:
@@ -375,25 +382,30 @@ steps."""
 
 
 def _json_object(value: str) -> dict[str, object]:
+    if len(value) > _MAX_INTENT_RESPONSE_CHARS:
+        raise ValueError("Codex intent response is too large")
     decoder = json.JSONDecoder()
     stripped = value.strip()
-    fenced = _JSON_CODE_FENCE.fullmatch(stripped)
-    if fenced is not None:
-        stripped = fenced.group("body").strip()
     try:
         parsed = json.loads(stripped)
     except json.JSONDecodeError:
-        parsed = None
+        candidates: list[dict[str, object]] = []
         for index, character in enumerate(stripped):
             if character != "{":
                 continue
             try:
-                candidate, end = decoder.raw_decode(stripped[index:])
+                candidate, _ = decoder.raw_decode(stripped[index:])
             except json.JSONDecodeError:
                 continue
-            if not stripped[index + end :].strip() and isinstance(candidate, dict):
-                parsed = candidate
-                break
+            if isinstance(candidate, dict) and "decision" in candidate:
+                candidates.append(candidate)
+        unique_candidates = {
+            json.dumps(candidate, ensure_ascii=False, sort_keys=True): candidate
+            for candidate in candidates
+        }
+        if len(unique_candidates) > 1:
+            raise ValueError("Codex returned multiple intent JSON objects")
+        parsed = next(iter(unique_candidates.values()), None)
     if not isinstance(parsed, dict):
         raise ValueError("Codex did not return a JSON object")
     return parsed
@@ -401,22 +413,19 @@ def _json_object(value: str) -> dict[str, object]:
 
 def parse_intent_decision(value: str) -> IntentDecision:
     parsed = _json_object(value)
-    required = {
-        "decision",
-        "message",
-        "intentSummary",
-        "acceptanceCriteria",
-        "changesDelivery",
-    }
-    if set(parsed) != required:
-        raise ValueError("Intent decision fields are invalid")
-    decision = parsed["decision"]
-    message = parsed["message"]
-    summary = parsed["intentSummary"]
-    criteria = parsed["acceptanceCriteria"]
-    changes = parsed["changesDelivery"]
+    decision = parsed.get("decision")
     if decision not in {"accept", "clarify", "reject"}:
         raise ValueError("Intent decision is invalid")
+    if decision == "accept":
+        message = ""
+        summary = parsed.get("intentSummary", "")
+        criteria = parsed.get("acceptanceCriteria", [])
+        changes = parsed.get("changesDelivery")
+    else:
+        message = parsed.get("message", "")
+        summary = ""
+        criteria = []
+        changes = False
     if not isinstance(message, str) or len(message) > 2_000:
         raise ValueError("Intent message is invalid")
     if not isinstance(summary, str) or len(summary) > 4_000:
