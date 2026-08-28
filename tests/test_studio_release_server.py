@@ -1247,6 +1247,26 @@ def test_release_server_retries_transient_code_upload(
     assert attempts == 3
 
 
+def test_release_server_reuses_running_serverless_gateway() -> None:
+    gateways = [
+        SimpleNamespace(
+            id="provisioning-serverless",
+            type="serverless",
+            status="Creating",
+        ),
+        SimpleNamespace(id="running-dedicated", type="dedicated", status="Running"),
+        SimpleNamespace(
+            id="running-serverless",
+            type="serverless",
+            status="Running",
+        ),
+    ]
+
+    gateway = release_deploy._find_reusable_serverless_gateway(gateways)
+
+    assert gateway.id == "running-serverless"
+
+
 def test_release_bucket_is_private_and_tagged_do_not_delete(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
