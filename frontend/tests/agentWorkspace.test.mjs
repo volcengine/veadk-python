@@ -35,6 +35,10 @@ const connectionsSource = readFileSync(
   new URL("../src/adk/connections.ts", import.meta.url),
   "utf8",
 );
+const skillSourcePickerSource = readFileSync(
+  new URL("../src/ui/SkillSourcePicker.tsx", import.meta.url),
+  "utf8",
+);
 
 test("Agent navigation uses the card page and keeps only detail workspace routes", () => {
   assert.match(appSource, /import \{[\s\S]*?AgentWorkspace[\s\S]*?\} from "\.\/ui\/AgentWorkspace"/);
@@ -345,6 +349,9 @@ test("workspace uses cached runtime data and prefetches likely next views", () =
   assert.match(clientSource, /export function getCachedAgentFeedbackCases/);
   assert.match(clientSource, /export function prefetchRuntimeAgentInfo/);
   assert.match(clientSource, /export function prefetchRuntimeDetail/);
+  assert.match(clientSource, /export function getCachedRuntimeUpdateCapability/);
+  assert.match(clientSource, /export function prefetchRuntimeUpdateCapability/);
+  assert.match(clientSource, /export function invalidateRuntimeUpdateCapabilityCache/);
   assert.match(clientSource, /export function prefetchAgentFeedbackCases/);
   assert.match(clientSource, /export function refreshAgentFeedbackCases/);
   assert.match(clientSource, /export function upsertCachedAgentFeedbackCase/);
@@ -627,32 +634,61 @@ test("runtime refresh preserves agent order and detail loading uses an overlay",
   );
   assert.match(workspaceSource, /正在加载智能体/);
   assert.match(workspaceSource, /const updateBlockedReason = selectedDraft/);
-  assert.match(workspaceSource, /updateCapabilityLoading[\s\S]*?正在检查 Runtime 更新能力/);
+  assert.match(workspaceSource, /updateCapabilityLoading[\s\S]*?正在检查 Runtime 更新配置/);
   assert.match(workspaceStyles, /\.aw-detail-loading\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?inset:\s*0;/);
 });
 
 test("runtime updates use the Agent selected in management instead of the active chat connection", () => {
   assert.match(clientSource, /export interface RuntimeUpdateCapability/);
+  assert.match(clientSource, /recoveryStatus: RuntimeUpdateRecoveryStatus/);
+  assert.match(clientSource, /editMode: "source-preserving" \| "regenerate" \| "blocked"/);
+  assert.match(clientSource, /configuredEnvKeys: string\[\]/);
+  assert.match(clientSource, /etag: string/);
   assert.match(clientSource, /envs: \{ key: string; value: string \}\[\]/);
   assert.match(clientSource, /network: NetworkConfig/);
   assert.match(clientSource, /agent\?:\s*\{[\s\S]*?\}\s*\| null/);
-  assert.match(clientSource, /export async function getRuntimeUpdateCapability/);
+  assert.match(clientSource, /export function getRuntimeUpdateCapability/);
   assert.match(clientSource, /\/web\/runtime-update-capability\?\$\{params\.toString\(\)\}/);
   assert.match(clientSource, /new URLSearchParams\(\{ runtimeId, region \}\)/);
   assert.match(clientSource, /if \(appName\) params\.set\("appName", appName\)/);
+  assert.match(clientSource, /params\.set\("currentVersion", String\(currentVersion\)\)/);
   assert.match(clientSource, /runtimeUpdateCapabilityErrorMessage/);
+  assert.match(clientSource, /runtimeUpdateCapabilityCacheKey/);
+  assert.match(clientSource, /runtimeUpdateCapabilityCache\.get\(key\)\?\.promise/);
+  assert.match(clientSource, /waitForSharedRequest\(promise, signal\)/);
   const capabilityCallStart = workspaceSource.indexOf("getRuntimeUpdateCapability({");
   const capabilityCallEnd = workspaceSource.indexOf("}).then", capabilityCallStart);
   assert.ok(capabilityCallStart >= 0 && capabilityCallEnd > capabilityCallStart);
   const capabilityCall = workspaceSource.slice(capabilityCallStart, capabilityCallEnd);
   assert.match(
     capabilityCall,
-    /runtimeId,[\s\S]*?region,[\s\S]*?appName: selectedAgentAppName,[\s\S]*?signal/,
+    /runtimeId,[\s\S]*?region,[\s\S]*?appName: capabilityRuntimeAppName,[\s\S]*?currentVersion:[\s\S]*?signal/,
   );
   assert.match(workspaceSource, /onUpdateAgent: \(capability: RuntimeUpdateCapability\) => void/);
   assert.match(workspaceSource, /onUpdateAgent\(selectedUpdateCapability\)/);
   assert.match(clientSource, /appName:\s*opts\?\.appName/);
+  assert.match(clientSource, /editMode:\s*opts\?\.editMode/);
+  assert.match(clientSource, /draft:\s*opts\?\.draft/);
   assert.match(customCreateSource, /appName:\s*deploymentTarget\?\.appName/);
+  assert.match(customCreateSource, /editMode:\s*deploymentTarget\?\.editMode/);
+  assert.match(
+    customCreateSource,
+    /draft:\s*deploymentTarget\s*\?\s*codegenDraft\(draft\)\s*:\s*undefined/,
+  );
+  assert.match(customCreateSource, /updateEtag:\s*deploymentTarget\?\.etag/);
+  assert.match(customCreateSource, /baseRuntimeVersion:\s*deploymentTarget\?\.currentVersion/);
+  assert.match(
+    customCreateSource,
+    /removeRuntimeEnvKeys:\s*deploymentTarget[\s\S]*?removedConfiguredMcpEnvKeys\([\s\S]*?deploymentTarget\.configuredMcpEnvKeys[\s\S]*?draft/,
+  );
+  assert.match(
+    customCreateSource,
+    /onClick=\{\(\) =>[\s\S]*?onChange\([\s\S]*?tools\.map\([\s\S]*?clearMcpConfiguredAuth\(tool\)/,
+  );
+  assert.doesNotMatch(
+    customCreateSource,
+    /update\(i,\s*clearMcpConfiguredAuth\(/,
+  );
 
   const handlerStart = appSource.indexOf("onUpdateAgent={async (capability) =>");
   const handlerEnd = appSource.indexOf("onEditDraft=", handlerStart);
@@ -664,16 +700,50 @@ test("runtime updates use the Agent selected in management instead of the active
   assert.match(handler, /capability\.runtime\.currentVersion/);
   assert.match(
     handler,
+    /runtimeAgentDraftFromCloud\([\s\S]*?runtimeAgent,[\s\S]*?cloudProvider,[\s\S]*?capability\.runtime\.configuredEnvKeys/,
+  );
+  assert.match(
+    handler,
     /capability\.runtime\.envs[\s\S]*?filter\(\(\{ key \}\) => !isRuntimeModelSelectionEnv\(key\)\)[\s\S]*?\.map/,
   );
   assert.match(handler, /envValues:\s*runtimeEnvValues/);
   assert.doesNotMatch(handler, /draftEnvValues|selectedAgentUpdateDraft\?\.draft/);
   assert.match(handler, /hydrateRuntimeModelSelection\(/);
   assert.match(handler, /network:\s*capability\.runtime\.network/);
+  assert.match(handler, /etag:\s*capability\.etag/);
+  assert.match(handler, /editMode:\s*capability\.editMode/);
   assert.match(
     handler,
     /exitAgentDetailContext\(\)[\s\S]*?setCreateView\("custom"\)/,
   );
+});
+
+test("introspection-only runtime updates are visibly blocked without treating empty lists as deletions", () => {
+  assert.match(
+    workspaceSource,
+    /selectedUpdateCapability\.recoveryStatus !== "complete"[\s\S]*?selectedUpdateCapability\.recoveryStatus !== "draft-only"/,
+  );
+  assert.match(workspaceSource, /原发布配置不可恢复/);
+  assert.match(workspaceSource, /aw-update-recovery-notice/);
+  assert.match(
+    workspaceSource,
+    /selectedUpdateCapability\s*&&\s*!selectedUpdateCapability\.canUpdate\s*&&/,
+  );
+  assert.doesNotMatch(workspaceSource, /更新配置说明/);
+  assert.match(workspaceSource, /selectedUpdateCapability\.warnings\.map/);
+  assert.match(workspaceStyles, /\.aw-update-recovery-notice\s*\{/);
+  assert.match(workspaceStyles, /hsl\(42 92% 96%\)/);
+  assert.doesNotMatch(
+    workspaceSource,
+    /recoveryStatus === "introspection-only"[\s\S]{0,300}runtimeAgentDraftFromCloud/,
+  );
+});
+
+test("runtime-preserved skills are explained and can be removed or replaced", () => {
+  assert.match(skillSourcePickerSource, /skill\.source === "runtime"/);
+  assert.match(skillSourcePickerSource, /运行中来源/);
+  assert.match(skillSourcePickerSource, /原样保留/);
+  assert.match(skillSourcePickerSource, /replaceRuntimeSkill/);
 });
 
 test("agent detail actions clear the detail stack before opening another view", () => {
@@ -703,25 +773,45 @@ test("runtime update capability checks ignore aborted and stale selections", () 
   assert.match(workspaceSource, /const updateCapabilityRequestRef = useRef\(0\)/);
   assert.match(workspaceSource, /const controller = new AbortController\(\)/);
   assert.match(workspaceSource, /requestId !== updateCapabilityRequestRef\.current/);
-  assert.match(workspaceSource, /return \(\) => controller\.abort\(\)/);
+  assert.match(workspaceSource, /controller\.abort\(\)[\s\S]*?window\.clearTimeout\(pollTimer\)/);
   assert.match(workspaceSource, /const updateCapabilityRequestKey = JSON\.stringify\(\[[\s\S]*?selectedAgent\?\.runtimeId[\s\S]*?selectedAgent\?\.region[\s\S]*?\]\)/);
   assert.match(
     workspaceSource,
-    /const updateCapabilityRequestKey = JSON\.stringify\(\[[\s\S]*?selectedAgentAppName[\s\S]*?\]\)/,
+    /const updateCapabilityRequestKey = JSON\.stringify\(\[[\s\S]*?selectedAgent\?\.currentVersion[\s\S]*?capabilityRuntimeAppName[\s\S]*?\]\)/,
   );
+  assert.match(workspaceSource, /getCachedRuntimeUpdateCapability\(\{/);
   assert.match(workspaceSource, /updateCapability\?\.requestKey === updateCapabilityRequestKey/);
   assert.match(workspaceSource, /value\.runtime\.region !== region/);
   assert.match(
     workspaceSource,
-    /selectedAgentAppName &&[\s\S]*?value\.agent\?\.appName !== selectedAgentAppName/,
+    /capabilityRuntimeAppName &&[\s\S]*?value\.agent\?\.appName !== capabilityRuntimeAppName/,
   );
   assert.match(workspaceSource, /value\.canUpdate && !value\.agent\?\.appName/);
   assert.match(workspaceSource, /selectedUpdateCapability\.agent\?\.appName/);
-  assert.match(workspaceSource, /updateCapabilityLoading[\s\S]*?loading-gap-spinner[\s\S]*?检测中/);
+  assert.match(workspaceSource, /updateCapabilityLoading[\s\S]*?loading-gap-spinner[\s\S]*?准备中/);
   assert.match(workspaceSource, /aria-describedby=\{updateBlockedReason \? updateReasonId : undefined\}/);
   assert.match(workspaceSource, /className="aw-update-disabled-reason"[\s\S]*?role="tooltip"/);
   assert.match(workspaceStyles, /\.aw-update-wrap\.is-disabled:hover \.aw-update-disabled-reason/);
   assert.match(workspaceStyles, /\.aw-update-wrap\.is-disabled:focus-visible \.aw-update-disabled-reason/);
+});
+
+test("preparing recovery stops the button spinner and polls safely in the background", () => {
+  assert.match(clientSource, /\| "preparing"/);
+  assert.match(
+    clientSource,
+    /value\.recoveryStatus === "preparing"[\s\S]*?runtimeUpdateCapabilityCache\.delete\(key\)/,
+  );
+  assert.match(workspaceSource, /const maxPollAttempts = 60/);
+  assert.match(workspaceSource, /const preparing = value\.recoveryStatus === "preparing"/);
+  assert.match(
+    workspaceSource,
+    /setUpdateCapability\([\s\S]*?setUpdateCapabilityLoading\(false\)[\s\S]*?window\.setTimeout\(\(\) => loadCapability\(false\), 1_000\)/,
+  );
+  assert.match(workspaceSource, /正在后台恢复更新配置/);
+  assert.match(
+    workspaceSource,
+    /selectedUpdateCapability\.recoveryStatus === "preparing"[\s\S]*?\? "status"/,
+  );
 });
 
 test("workspace keeps agent deletion in selection mode and the floating detail actions", () => {

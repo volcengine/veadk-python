@@ -12,11 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
+import queue
+import threading
+
 from veadk.cli.cli_frontend import (
     _advance_deploy_phase,
     _build_log_tail_has_error_marker,
     _cp_metadata_from_reporter_message,
+    _deployment_target_key,
     _extract_build_error_excerpt,
+    _finalize_deploy_task,
+    _has_active_deployment_target,
+    _next_deploy_stream_event,
     _sanitize_build_log_snapshot,
     _wait_for_cp_build_error_log_snapshot,
 )
@@ -79,6 +87,85 @@ def test_advance_deploy_phase_classifies_runtime_initialization_failure() -> Non
 
     assert _advance_deploy_phase("build", message) == "deploy"
     assert _advance_deploy_phase("deploy", "Step 1/2: Building image") == "deploy"
+
+
+def test_advance_deploy_phase_classifies_slow_runtime_ready_timeout() -> None:
+    message = "Timed out waiting for Runtime to reach Ready (last status: Releasing)."
+
+    assert _advance_deploy_phase("build", message) == "deploy"
+
+
+def test_advance_deploy_phase_classifies_stuck_runtime_reconciliation() -> None:
+    message = (
+        "Harness Sidecar runtime is stuck in a status that cannot be updated; "
+        "explicit reconciliation is required before any delete or recreate"
+    )
+
+    assert _advance_deploy_phase("build", message) == "deploy"
+
+
+def test_next_deploy_stream_event_emits_heartbeat_without_blocking_executor() -> None:
+    events: queue.Queue[object] = queue.Queue()
+
+    has_event, event = asyncio.run(
+        _next_deploy_stream_event(
+            events,
+            heartbeat_seconds=0.01,
+            poll_seconds=0.001,
+        )
+    )
+
+    assert not has_event
+    assert event is None
+    events.put({"phase": "deploy"})
+    has_event, event = asyncio.run(
+        _next_deploy_stream_event(
+            events,
+            heartbeat_seconds=0.01,
+            poll_seconds=0.001,
+        )
+    )
+    assert has_event
+    assert event == {"phase": "deploy"}
+
+
+def test_active_deployment_target_is_scoped_by_owner_runtime_and_region() -> None:
+    target = _deployment_target_key("owner-a", "agent-a", "cn-shanghai")
+    tasks = {"task-a": {"target_key": target}}
+
+    assert _has_active_deployment_target(tasks, target)
+    assert not _has_active_deployment_target(
+        tasks,
+        _deployment_target_key("owner-b", "agent-a", "cn-shanghai"),
+    )
+    assert not _has_active_deployment_target(
+        tasks,
+        _deployment_target_key("owner-a", "agent-a", "cn-beijing"),
+    )
+
+
+def test_worker_finalizer_cleans_source_without_stream_consumer(tmp_path) -> None:
+    work_dir = tmp_path / "deployment-source"
+    work_dir.mkdir()
+    (work_dir / "main.py").write_text("app = object()\n", encoding="utf-8")
+    stop_event = threading.Event()
+    task_state = {"cp_log_stop_event": stop_event}
+    tasks = {"task-a": task_state}
+    events: queue.Queue[object] = queue.Queue()
+
+    _finalize_deploy_task(
+        task_id="task-a",
+        task_state=task_state,
+        tasks=tasks,
+        tasks_lock=threading.Lock(),
+        events=events,
+        temp_dir=str(work_dir),
+    )
+
+    assert stop_event.is_set()
+    assert tasks == {}
+    assert not work_dir.exists()
+    assert events.get_nowait() is None
 
 
 def test_build_log_tail_error_marker_checks_retained_tail() -> None:

@@ -404,7 +404,7 @@ test("shows aligned lifetime metadata for persistent and non-persistent Sandbox 
   assert.match(pageStyles, /\.my-agent-expiry\.is-expiring dd\s*\{[\s\S]*?color: hsl\(38 78% 36%\)/);
 });
 
-test("metadata remains compact without adding data-plane requests", () => {
+test("metadata stays compact without expanding every card into Agent metadata", () => {
   assert.doesNotMatch(pageStyles, /\.my-agent-label/);
   assert.match(pageSource, /label: agent\.specificationLabel,[\s\S]*?hideLabel: true/);
   assert.match(pageSource, /label: "时间",[\s\S]*?hideLabel: true/);
@@ -568,7 +568,7 @@ test("refreshes Runtime permissions without connecting to the data plane", () =>
   );
 });
 
-test("defers conversation data-plane requests until leaving the Agent list", () => {
+test("defers conversation and session requests while update preparation stays bounded", () => {
   assert.match(
     appSource,
     /if \(authStatus !== "authenticated"\) return;[\s\S]*?if \(agentsSource === "cloud"\) \{[\s\S]*?return;[\s\S]*?listApps\(\)/,
@@ -754,6 +754,23 @@ test("checks Runtime chat compatibility before enabling the connect action", () 
   assert.match(pageSource, /contentClassName="my-agent-compatibility-tooltip"/);
   assert.match(pageSource, /color="warning"[\s\S]*?>[\s\S]*?不支持对话[\s\S]*?<\/Badge>/);
   assert.match(pageSource, /color="danger"[\s\S]*?>[\s\S]*?检测失败[\s\S]*?<\/Badge>/);
+});
+
+test("prepares Runtime update capability before opening details without unbounded work", () => {
+  assert.match(pageSource, /prefetchRuntimeUpdateCapability/);
+  assert.match(pageSource, /invalidateRuntimeUpdateCapabilityCache/);
+  assert.match(pageSource, /const UPDATE_CAPABILITY_PREFETCH_LIMIT = 6/);
+  assert.match(pageSource, /const UPDATE_CAPABILITY_PREFETCH_CONCURRENCY = 2/);
+  assert.match(
+    pageSource,
+    /visibleAgents[\s\S]*?\.filter\(\(agent\) => Boolean\(agent\.runtime\)\)[\s\S]*?\.slice\(0, UPDATE_CAPABILITY_PREFETCH_LIMIT\)/,
+  );
+  assert.match(pageSource, /for \(let index = 0; index < UPDATE_CAPABILITY_PREFETCH_CONCURRENCY; index \+= 1\)/);
+  assert.match(pageSource, /if \(cancelled\) return/);
+  assert.match(pageSource, /onPointerEnter=\{\(\) => onPrepareUpdate\?\.\(agent\)\}/);
+  assert.match(pageSource, /onFocusCapture=\{\(\) => onPrepareUpdate\?\.\(agent\)\}/);
+  assert.match(pageSource, /canUpdate: boolean/);
+  assert.match(appSource, /<MyAgents[\s\S]*?canUpdate=\{canCreateAgents \|\| canManageAgents\}/);
 });
 
 test("uses connected Runtime state only for the card action", () => {

@@ -612,6 +612,8 @@ const runtimeAgentInfoCache = new Map<string, ClientCacheEntry<AgentInfo>>();
 const runtimeDetailCache = new Map<string, ClientCacheEntry<RuntimeDetail>>();
 const feedbackCasesCache =
   new Map<string, ClientCacheEntry<AgentFeedbackCasesResponse>>();
+const runtimeUpdateCapabilityCache =
+  new Map<string, ClientCacheEntry<RuntimeUpdateCapability>>();
 
 function runtimeAppsCacheKey(
   runtimeId: string,
@@ -622,6 +624,7 @@ function runtimeAppsCacheKey(
 }
 
 export function setClientCloudProvider(provider: CloudProvider): void {
+  if (provider !== activeCloudProvider) runtimeUpdateCapabilityCache.clear();
   activeCloudProvider = provider;
 }
 
@@ -673,6 +676,32 @@ function rememberClientCache<T>(
 ): T {
   cache.set(key, { value, updatedAt: Date.now() });
   return value;
+}
+
+function waitForSharedRequest<T>(
+  promise: Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) {
+    return Promise.reject(new DOMException("The operation was aborted.", "AbortError"));
+  }
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => {
+      reject(new DOMException("The operation was aborted.", "AbortError"));
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    void promise.then(
+      (value) => {
+        signal.removeEventListener("abort", abort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", abort);
+        reject(error);
+      },
+    );
+  });
 }
 
 async function runtimeProxyErrorCode(response: Response): Promise<string> {
@@ -2954,6 +2983,17 @@ export async function deployAgentkitProject(
     runtimeId?: string;
     runtimeName?: string;
     appName?: string;
+    editMode?: "source-preserving" | "regenerate";
+    draft?: AgentDraft;
+    updateEtag?: string;
+    baseRuntimeVersion?: number | null;
+    removeRuntimeEnvKeys?: string[];
+    mcpSecretValues?: Array<{
+      agentName: string;
+      name: string;
+      url: string;
+      value: string;
+    }>;
     sessionStorage?: "in-memory" | "persistent";
     minInstance?: number;
     maxInstance?: number;
@@ -3009,6 +3049,12 @@ export async function deployAgentkitProject(
           runtimeId: opts?.runtimeId,
           runtimeName: opts?.runtimeName,
           appName: opts?.appName,
+          editMode: opts?.editMode,
+          draft: opts?.draft,
+          updateEtag: opts?.updateEtag,
+          baseRuntimeVersion: opts?.baseRuntimeVersion,
+          removeRuntimeEnvKeys: opts?.removeRuntimeEnvKeys,
+          mcpSecretValues: opts?.mcpSecretValues,
           sessionStorage: opts?.sessionStorage,
           minInstance: opts?.minInstance,
           maxInstance: opts?.maxInstance,
@@ -3943,11 +3989,30 @@ export async function deleteRuntime(
   }
 }
 
+/** Server-authorized recovery state for one concrete Runtime app. */
+export type RuntimeUpdateRecoveryStatus =
+  | "preparing"
+  | "complete"
+  | "draft-only"
+  | "introspection-only"
+  | "missing-source"
+  | "incompatible";
+
 /** Server-authorized update compatibility for one concrete Runtime app. */
 export interface RuntimeUpdateCapability {
   canUpdate: boolean;
   reason: string;
   reasonCode?: string;
+  recoveryStatus: RuntimeUpdateRecoveryStatus;
+  editMode: "source-preserving" | "regenerate" | "blocked";
+  recoverySource:
+    | "editable-spec"
+    | "agent-info"
+    | "agent-draft"
+    | "legacy-runtime"
+    | "none";
+  warnings: string[];
+  etag: string;
   runtime: {
     runtimeId: string;
     name: string;
@@ -3958,6 +4023,7 @@ export interface RuntimeUpdateCapability {
       environmentVersionId: string;
     };
     envs: { key: string; value: string }[];
+    configuredEnvKeys: string[];
     network: NetworkConfig;
   };
   agent?: {
@@ -3971,30 +4037,208 @@ export interface RuntimeUpdateCapability {
     skills?: AgentSkill[];
     graph?: AgentNode;
     draft?: AgentDraft;
+    sourceImage?: string;
   } | null;
 }
 
-export async function getRuntimeUpdateCapability({
-  runtimeId,
-  region,
-  appName,
-  signal,
-}: {
+interface RuntimeUpdateCapabilityRequest {
   runtimeId: string;
   region: string;
   appName?: string;
+  currentVersion?: number | null;
   signal?: AbortSignal;
-}): Promise<RuntimeUpdateCapability> {
+  force?: boolean;
+}
+
+function runtimeUpdateCapabilityCacheKey({
+  runtimeId,
+  region,
+  appName,
+  currentVersion,
+}: Omit<RuntimeUpdateCapabilityRequest, "signal" | "force">): string {
+  return cacheKey(
+    activeCloudProvider,
+    region,
+    runtimeId,
+    currentVersion ?? "",
+    appName?.trim() ?? "",
+  );
+}
+
+async function fetchRuntimeUpdateCapability({
+  runtimeId,
+  region,
+  appName,
+  currentVersion,
+  force = false,
+}: Omit<RuntimeUpdateCapabilityRequest, "signal">): Promise<RuntimeUpdateCapability> {
   const params = new URLSearchParams({ runtimeId, region });
   if (appName) params.set("appName", appName);
-  const res = await apiFetch(
-    `/web/runtime-update-capability?${params.toString()}`,
-    { signal },
-  );
+  if (currentVersion != null) params.set("currentVersion", String(currentVersion));
+  if (force) params.set("refresh", "true");
+  const res = await apiFetch(`/web/runtime-update-capability?${params.toString()}`);
   if (!res.ok) {
     throw new Error(await runtimeUpdateCapabilityErrorMessage(res));
   }
   return (await res.json()) as RuntimeUpdateCapability;
+}
+
+export function getRuntimeUpdateCapability({
+  runtimeId,
+  region,
+  appName,
+  currentVersion,
+  signal,
+  force = false,
+}: RuntimeUpdateCapabilityRequest): Promise<RuntimeUpdateCapability> {
+  const request = { runtimeId, region, appName, currentVersion };
+  const key = runtimeUpdateCapabilityCacheKey(request);
+  if (force) runtimeUpdateCapabilityCache.delete(key);
+  if (!force) {
+    const cached = freshCacheValue(
+      runtimeUpdateCapabilityCache,
+      key,
+      RUNTIME_METADATA_CACHE_TTL_MS,
+    );
+    if (cached) return waitForSharedRequest(Promise.resolve(cached), signal);
+    const inFlight = runtimeUpdateCapabilityCache.get(key)?.promise;
+    if (inFlight) return waitForSharedRequest(inFlight, signal);
+    if (appName) {
+      const baseKey = runtimeUpdateCapabilityCacheKey({
+        ...request,
+        appName: "",
+      });
+      const baseInFlight = runtimeUpdateCapabilityCache.get(baseKey)?.promise;
+      if (baseInFlight) {
+        let aliasPromise: Promise<RuntimeUpdateCapability>;
+        aliasPromise = baseInFlight.then(
+          (value) => {
+            if (value.recoveryStatus === "preparing") {
+              if (runtimeUpdateCapabilityCache.get(key)?.promise === aliasPromise) {
+                runtimeUpdateCapabilityCache.delete(key);
+              }
+              return value;
+            }
+            const resolvedAppName = value.agent?.appName?.trim() ?? "";
+            if (resolvedAppName && resolvedAppName !== appName.trim()) {
+              if (runtimeUpdateCapabilityCache.get(key)?.promise === aliasPromise) {
+                runtimeUpdateCapabilityCache.delete(key);
+              }
+              return getRuntimeUpdateCapability(request);
+            }
+            if (runtimeUpdateCapabilityCache.get(key)?.promise === aliasPromise) {
+              runtimeUpdateCapabilityCache.set(key, {
+                value,
+                updatedAt: Date.now(),
+              });
+            }
+            return value;
+          },
+          (error: unknown) => {
+            if (runtimeUpdateCapabilityCache.get(key)?.promise === aliasPromise) {
+              runtimeUpdateCapabilityCache.delete(key);
+            }
+            throw error;
+          },
+        );
+        runtimeUpdateCapabilityCache.set(key, {
+          promise: aliasPromise,
+          updatedAt: 0,
+        });
+        return waitForSharedRequest(aliasPromise, signal);
+      }
+    }
+  }
+
+  let promise: Promise<RuntimeUpdateCapability>;
+  promise = fetchRuntimeUpdateCapability({ ...request, force }).then(
+    (value) => {
+      if (value.recoveryStatus === "preparing") {
+        if (runtimeUpdateCapabilityCache.get(key)?.promise === promise) {
+          runtimeUpdateCapabilityCache.delete(key);
+        }
+        return value;
+      }
+      if (runtimeUpdateCapabilityCache.get(key)?.promise === promise) {
+        runtimeUpdateCapabilityCache.set(key, {
+          value,
+          updatedAt: Date.now(),
+        });
+        const aliasNames = new Set(["", value.agent?.appName?.trim() ?? ""]);
+        for (const aliasName of aliasNames) {
+          const aliasKey = runtimeUpdateCapabilityCacheKey({
+            ...request,
+            appName: aliasName,
+          });
+          if (
+            aliasKey !== key &&
+            !runtimeUpdateCapabilityCache.get(aliasKey)?.promise
+          ) {
+            runtimeUpdateCapabilityCache.set(aliasKey, {
+              value,
+              updatedAt: Date.now(),
+            });
+          }
+        }
+      }
+      return value;
+    },
+    (error: unknown) => {
+      if (runtimeUpdateCapabilityCache.get(key)?.promise === promise) {
+        runtimeUpdateCapabilityCache.delete(key);
+      }
+      throw error;
+    },
+  );
+  runtimeUpdateCapabilityCache.set(key, { promise, updatedAt: 0 });
+  return waitForSharedRequest(promise, signal);
+}
+
+export function getCachedRuntimeUpdateCapability({
+  runtimeId,
+  region,
+  appName,
+  currentVersion,
+}: Omit<RuntimeUpdateCapabilityRequest, "signal" | "force">): RuntimeUpdateCapability | null {
+  return freshCacheValue(
+    runtimeUpdateCapabilityCache,
+    runtimeUpdateCapabilityCacheKey({
+      runtimeId,
+      region,
+      appName,
+      currentVersion,
+    }),
+    RUNTIME_METADATA_CACHE_TTL_MS,
+  );
+}
+
+export function prefetchRuntimeUpdateCapability(
+  request: Omit<RuntimeUpdateCapabilityRequest, "signal" | "force">,
+): Promise<void> {
+  return getRuntimeUpdateCapability(request).then(
+    () => undefined,
+    () => undefined,
+  );
+}
+
+export function invalidateRuntimeUpdateCapabilityCache(
+  runtimeId?: string,
+  region?: string,
+): void {
+  if (!runtimeId) {
+    runtimeUpdateCapabilityCache.clear();
+    return;
+  }
+  for (const key of runtimeUpdateCapabilityCache.keys()) {
+    const [provider, keyRegion, keyRuntimeId] = key.split("\u0001");
+    if (
+      provider === activeCloudProvider &&
+      keyRuntimeId === runtimeId &&
+      (!region || keyRegion === region)
+    ) {
+      runtimeUpdateCapabilityCache.delete(key);
+    }
+  }
 }
 
 async function runtimeUpdateCapabilityErrorMessage(res: Response): Promise<string> {

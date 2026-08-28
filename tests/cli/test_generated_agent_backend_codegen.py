@@ -41,7 +41,10 @@ from veadk.cli.generated_agent_security import (
     validate_project_policy,
     validate_url_not_private,
 )
-from veadk.cli.generated_agent_skills import materialize_selected_skills
+from veadk.cli.generated_agent_skills import (
+    materialize_selected_skills,
+    materialize_source_preserving_skills,
+)
 
 
 def test_old_files_request_shape_is_rejected() -> None:
@@ -843,6 +846,100 @@ async def test_local_skill_materialization_accepts_safe_skill() -> None:
     assert project.files == [
         GeneratedFile(path="skills/local-skill/SKILL.md", content=skill_md)
     ]
+
+
+@pytest.mark.asyncio
+async def test_source_preserving_skill_materialization_returns_canonical_snapshot() -> (
+    None
+):
+    skill_md = "---\nname: local-skill\ndescription: Local skill.\n---\n\n# Local\n"
+    draft = AgentDraft(
+        name="demo",
+        instruction="You are helpful.",
+        selectedSkills=[
+            SelectedSkill(
+                source="local",
+                folder="local-skill",
+                name="local-skill",
+                localFiles=[
+                    GeneratedFile(
+                        path="skills/local-skill/SKILL.md",
+                        content=skill_md,
+                    ),
+                    GeneratedFile(
+                        path="skills/local-skill/references/runbook.md",
+                        content="steps\n",
+                    ),
+                ],
+            )
+        ],
+    )
+
+    canonical_draft, snapshots = await materialize_source_preserving_skills(draft)
+
+    assert canonical_draft.selectedSkills[0].source == "local"
+    assert canonical_draft.selectedSkills[0].folder == "local-skill"
+    assert canonical_draft.selectedSkills[0].name == "local-skill"
+    assert snapshots[0].name == "local-skill"
+    assert snapshots[0].content_digest
+    assert [file.path for file in snapshots[0].files] == [
+        "skills/local-skill/SKILL.md",
+        "skills/local-skill/references/runbook.md",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_source_preserving_skill_materialization_rejects_name_mismatch() -> None:
+    draft = AgentDraft(
+        name="demo",
+        instruction="You are helpful.",
+        selectedSkills=[
+            SelectedSkill(
+                source="local",
+                folder="replacement",
+                name="replacement",
+                localFiles=[
+                    GeneratedFile(
+                        path="skills/replacement/SKILL.md",
+                        content="---\nname: different-skill\n---\n",
+                    )
+                ],
+            )
+        ],
+    )
+
+    with pytest.raises(DebugPolicyError, match="canonical name"):
+        await materialize_source_preserving_skills(draft)
+
+
+@pytest.mark.asyncio
+async def test_source_preserving_skill_materialization_rejects_nested_manifest() -> (
+    None
+):
+    draft = AgentDraft(
+        name="demo",
+        instruction="You are helpful.",
+        selectedSkills=[
+            SelectedSkill(
+                source="local",
+                folder="replacement",
+                name="replacement",
+                localFiles=[
+                    GeneratedFile(
+                        path="skills/replacement/SKILL.md",
+                        content="---\nname: replacement\n---\n",
+                    ),
+                    GeneratedFile(
+                        path="skills/replacement/nested/SKILL.md",
+                        content="---\nname: nested\n---\n",
+                    ),
+                ],
+            )
+        ],
+    )
+
+    with pytest.raises(DebugPolicyError, match="exactly one root SKILL.md"):
+        await materialize_source_preserving_skills(draft)
 
 
 @pytest.mark.asyncio

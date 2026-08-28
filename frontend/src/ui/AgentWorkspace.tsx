@@ -26,6 +26,7 @@ import {
   getCachedAgentFeedbackCases,
   getCachedRuntimeAgentInfo,
   getCachedRuntimeDetail,
+  getCachedRuntimeUpdateCapability,
   getAgentUsage,
   getAgentFeedbackCases,
   getAgentOptimizations,
@@ -1262,15 +1263,28 @@ export function AgentWorkspace({
     selectedIntegrationProbe?.a2a?.endpoint ?? "",
     runtimeEndpoint,
   );
+  const capabilityRuntimeAppName = selectedAgent?.runtimeApp || "";
   const updateCapabilityRequestKey = JSON.stringify([
     selectedAgent?.runtimeId ?? "",
     selectedAgent?.region ?? "",
-    selectedAgentAppName,
+    selectedAgent?.currentVersion ?? null,
+    capabilityRuntimeAppName,
   ]);
+  const cachedUpdateCapability = canUpdate &&
+    selectedAgent?.runtimeId &&
+    selectedAgent.region &&
+    detailReloadToken === 0
+    ? getCachedRuntimeUpdateCapability({
+        runtimeId: selectedAgent.runtimeId,
+        region: selectedAgent.region,
+        appName: capabilityRuntimeAppName,
+        currentVersion: selectedAgent.currentVersion,
+      })
+    : null;
   const selectedUpdateCapability =
     updateCapability?.requestKey === updateCapabilityRequestKey
       ? updateCapability.value
-      : null;
+      : cachedUpdateCapability;
   useEffect(() => {
     const requestId = updateCapabilityRequestRef.current + 1;
     updateCapabilityRequestRef.current = requestId;
@@ -1284,48 +1298,86 @@ export function AgentWorkspace({
       return;
     }
 
+    const cached = detailReloadToken === 0
+      ? getCachedRuntimeUpdateCapability({
+          runtimeId,
+          region,
+          appName: capabilityRuntimeAppName,
+          currentVersion: selectedAgent?.currentVersion,
+        })
+      : null;
+    if (cached) {
+      setUpdateCapability({ requestKey: updateCapabilityRequestKey, value: cached });
+      setUpdateCapabilityLoading(false);
+      return;
+    }
+
     const controller = new AbortController();
+    let pollTimer: number | undefined;
+    let pollAttempts = 0;
+    const maxPollAttempts = 60;
     setUpdateCapabilityLoading(true);
-    void getRuntimeUpdateCapability({
-      runtimeId,
-      region,
-      appName: selectedAgentAppName,
-      signal: controller.signal,
-    }).then((value) => {
-      if (requestId !== updateCapabilityRequestRef.current) return;
-      if (
-        value.runtime.runtimeId !== runtimeId ||
-        value.runtime.region !== region ||
-        (selectedAgentAppName &&
-          value.agent?.appName !== selectedAgentAppName) ||
-        (value.canUpdate && !value.agent?.appName)
-      ) {
-        setUpdateCapabilityError("Runtime 更新能力响应与当前选择不匹配。");
-        return;
-      }
-      setUpdateCapability({ requestKey: updateCapabilityRequestKey, value });
-    }).catch((error: unknown) => {
-      if (
-        requestId !== updateCapabilityRequestRef.current ||
-        controller.signal.aborted
-      ) return;
-      setUpdateCapabilityError(
-        error instanceof Error ? error.message : "检查 Runtime 更新能力失败。",
-      );
-    }).finally(() => {
-      if (
-        requestId === updateCapabilityRequestRef.current &&
-        !controller.signal.aborted
-      ) {
+    const loadCapability = (initial: boolean) => {
+      void getRuntimeUpdateCapability({
+        runtimeId,
+        region,
+        appName: capabilityRuntimeAppName,
+        currentVersion: selectedAgent?.currentVersion,
+        signal: controller.signal,
+        force: initial && detailReloadToken > 0,
+      }).then((value) => {
+        if (requestId !== updateCapabilityRequestRef.current) return;
+        const preparing = value.recoveryStatus === "preparing";
+        if (
+          value.runtime.runtimeId !== runtimeId ||
+          value.runtime.region !== region ||
+          (!preparing && capabilityRuntimeAppName &&
+            value.agent?.appName !== capabilityRuntimeAppName) ||
+          (value.canUpdate && !value.agent?.appName)
+        ) {
+          setUpdateCapabilityError("Runtime 更新能力响应与当前选择不匹配。");
+          return;
+        }
+        setUpdateCapability({ requestKey: updateCapabilityRequestKey, value });
         setUpdateCapabilityLoading(false);
-      }
-    });
-    return () => controller.abort();
+        if (!preparing) return;
+        pollAttempts += 1;
+        if (pollAttempts >= maxPollAttempts) {
+          setUpdateCapabilityError(
+            "更新配置仍在后台恢复，请稍后点击重试。",
+          );
+          return;
+        }
+        pollTimer = window.setTimeout(() => loadCapability(false), 1_000);
+      }).catch((error: unknown) => {
+        if (
+          requestId !== updateCapabilityRequestRef.current ||
+          controller.signal.aborted
+        ) return;
+        setUpdateCapabilityError(
+          error instanceof Error ? error.message : "检查 Runtime 更新能力失败。",
+        );
+      }).finally(() => {
+        if (
+          requestId === updateCapabilityRequestRef.current &&
+          !controller.signal.aborted
+        ) {
+          setUpdateCapabilityLoading(false);
+        }
+      });
+    };
+    loadCapability(true);
+    return () => {
+      controller.abort();
+      if (pollTimer != null) window.clearTimeout(pollTimer);
+    };
   }, [
     canUpdate,
+    capabilityRuntimeAppName,
+    detailReloadToken,
+    selectedAgent?.currentVersion,
     selectedAgent?.region,
     selectedAgent?.runtimeId,
-    selectedAgentAppName,
     updateCapabilityRequestKey,
   ]);
   const listedAgents = useMemo(() => {
@@ -1375,10 +1427,15 @@ export function AgentWorkspace({
     const cloudProvider = selectedAgent?.region?.startsWith("ap-")
       ? "byteplus"
       : "volcengine";
-    if (selectedUpdateCapability?.agent) {
+    if (
+      selectedUpdateCapability?.agent &&
+      (selectedUpdateCapability.recoveryStatus === "complete" ||
+        selectedUpdateCapability.recoveryStatus === "draft-only")
+    ) {
       return runtimeAgentDraftFromCloud(
         selectedUpdateCapability.agent,
         cloudProvider,
+        selectedUpdateCapability.runtime.configuredEnvKeys,
       );
     }
     return infoToDraft(
@@ -1394,7 +1451,7 @@ export function AgentWorkspace({
       selectedAgent?.region,
       selectedDraft?.draft,
       selectedPendingTask?.agentDraft,
-      selectedUpdateCapability?.agent,
+      selectedUpdateCapability,
     ],
   );
   const publishedHarnessSidecar =
@@ -1414,11 +1471,15 @@ export function AgentWorkspace({
         : !selectedAgent.region
           ? "Runtime 缺少地域信息，无法更新。"
           : updateCapabilityLoading
-            ? "正在检查 Runtime 更新能力…"
+            ? "正在检查 Runtime 更新配置。"
             : updateCapabilityError
               ? updateCapabilityError
               : !selectedUpdateCapability
                 ? "尚未完成 Runtime 更新能力检查。"
+                : selectedUpdateCapability.recoveryStatus !== "complete" &&
+                    selectedUpdateCapability.recoveryStatus !== "draft-only"
+                  ? selectedUpdateCapability.reason ||
+                    "该 Runtime 的原发布配置不可恢复，无法安全更新。"
                 : !selectedUpdateCapability.canUpdate
                   ? selectedUpdateCapability.reason || "当前 Runtime 不支持原地更新。"
                   : selectedUpdateCapability.agent?.appName
@@ -2860,6 +2921,30 @@ export function AgentWorkspace({
                       }}
                     />
                   )}
+                  {selectedAgent &&
+                    selectedUpdateCapability &&
+                    !selectedUpdateCapability.canUpdate && (
+                      <div
+                        className="aw-update-recovery-notice"
+                        role={
+                          selectedUpdateCapability.recoveryStatus === "preparing"
+                            ? "status"
+                            : "alert"
+                        }
+                      >
+                        <strong>
+                          {selectedUpdateCapability.recoveryStatus === "preparing"
+                            ? "正在后台恢复更新配置"
+                            : "已检测到运行中的智能体，但原发布配置不可恢复"}
+                        </strong>
+                        {selectedUpdateCapability.reason && (
+                          <span>{selectedUpdateCapability.reason}</span>
+                        )}
+                        {selectedUpdateCapability.warnings.map((warning) => (
+                          <span key={warning}>{warning}</span>
+                        ))}
+                      </div>
+                    )}
                   <section className="aw-deployment-panel aw-settings-card">
                     <div className="aw-section-head">
                       <div><h3>部署配置</h3><p>配置目标环境与网络访问方式。</p></div>
@@ -3634,7 +3719,7 @@ export function AgentWorkspace({
                           className="loading-gap-spinner aw-update-spinner"
                           aria-hidden="true"
                         />
-                        <span>检测中</span>
+                        <span>准备中</span>
                       </>
                     ) : selectedDraft || selectedAgentUpdateDraft ? (
                       "继续编辑"

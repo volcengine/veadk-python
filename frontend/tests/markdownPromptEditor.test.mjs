@@ -738,7 +738,14 @@ test("skill sources open in a fixed-height dialog above a six-row selected list"
     skillSourcePickerSource,
     /id: "local", label: "本地文件"[\s\S]*?id: "skillspace"[\s\S]*?label: "AgentKit Skills 中心"[\s\S]*?id: "skillhub"[\s\S]*?label: "火山 Find Skill 技能广场"/,
   );
-  assert.match(skillSourcePickerSource, /useState<SkillSource>\("local"\)/);
+  assert.match(
+    skillSourcePickerSource,
+    /type SelectableSkillSource = Exclude<SkillSource, "runtime">/,
+  );
+  assert.match(
+    skillSourcePickerSource,
+    /useState<SelectableSkillSource>\("local"\)/,
+  );
   assert.match(
     skillSourcePickerSource,
     /className="cw-skill-add"[\s\S]*?<span>\{addLabel\}<\/span>/,
