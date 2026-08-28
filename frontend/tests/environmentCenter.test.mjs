@@ -41,6 +41,10 @@ const buildProgressStyles = readFileSync(
   new URL("../src/ui/StudioBuildProgress.css", import.meta.url),
   "utf8",
 );
+const buildLogSource = readFileSync(
+  new URL("../src/ui/studioBuildLog.ts", import.meta.url),
+  "utf8",
+);
 
 test("keeps Environment available without a standalone sidebar item", () => {
   assert.doesNotMatch(sidebarSource, /onEnvironment: \(\) => void/);
@@ -152,16 +156,49 @@ test("persists environments and starts image builds through the Studio API", () 
 test("shows live build steps and redacted log snapshots in a responsive detail dialog", () => {
   assert.match(environmentSource, /getEnvironmentBuild/);
   assert.match(environmentSource, /includeLogs: true/);
-  assert.match(environmentSource, /window\.setTimeout\(refresh, 5000\)/);
+  assert.match(environmentSource, /BUILD_LOG_REFRESH_INTERVAL_MS = 3_000/);
+  assert.match(environmentSource, /window\.setTimeout\(refresh, BUILD_LOG_REFRESH_INTERVAL_MS\)/);
   assert.match(environmentSource, /<StudioBuildProgress/);
   assert.match(environmentSource, /构建详情/);
   assert.match(environmentSource, /已用时/);
   assert.match(environmentSource, /在 CodePipeline 中查看/);
   assert.match(clientSource, /\?includeLogs=true/);
   assert.match(buildProgressSource, /navigator\.clipboard\.writeText\(log\)/);
+  assert.match(buildProgressSource, /highlightBashLog\(log\)/);
+  assert.match(buildProgressSource, /shouldFollowBuildLog\(event\.currentTarget\)/);
+  assert.match(buildProgressSource, /dangerouslySetInnerHTML/);
   assert.match(buildProgressSource, /正在等待 CodePipeline 输出日志/);
+  assert.match(buildLogSource, /highlight\.js\/lib\/languages\/bash/);
+  assert.match(buildProgressStyles, /overflow: auto/);
+  assert.match(environmentStyles, /\.environment-build-dialog__body[\s\S]*?overflow: hidden/);
   assert.match(buildProgressStyles, /@media \(max-width: 640px\)/);
   assert.match(environmentStyles, /max-height: 92dvh/);
+});
+
+test("highlights Bash logs and follows only while the reader stays near the bottom", async () => {
+  const server = await createServer({
+    appType: "custom",
+    logLevel: "silent",
+    optimizeDeps: { noDiscovery: true },
+    server: { middlewareMode: true },
+  });
+  try {
+    const buildLog = await server.ssrLoadModule("/src/ui/studioBuildLog.ts");
+    assert.equal(buildLog.shouldFollowBuildLog({
+      scrollHeight: 1000,
+      scrollTop: 730,
+      clientHeight: 240,
+    }), true);
+    assert.equal(buildLog.shouldFollowBuildLog({
+      scrollHeight: 1000,
+      scrollTop: 600,
+      clientHeight: 240,
+    }), false);
+    assert.match(buildLog.highlightBashLog("apt-get update && echo ready"), /hljs-built_in/);
+    assert.match(buildLog.highlightBashLog("echo '<script>'"), /&lt;script&gt;/);
+  } finally {
+    await server.close();
+  }
 });
 
 test("generates a Dockerfile from language and selected tools", async () => {
