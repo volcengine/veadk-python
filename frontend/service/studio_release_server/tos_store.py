@@ -49,17 +49,20 @@ class VolcengineCredentials:
     session_token: str
 
 
-def resolve_credentials() -> VolcengineCredentials:
+def resolve_credentials(provider: str = "volcengine") -> VolcengineCredentials:
     """Prefer explicit credentials locally, otherwise use VeFaaS IAM."""
-    access_key = os.getenv("VOLCENGINE_ACCESS_KEY", "").strip()
-    secret_key = os.getenv("VOLCENGINE_SECRET_KEY", "").strip()
+    if provider not in {"volcengine", "byteplus"}:
+        raise ValueError(f"Unsupported Studio release provider: {provider}")
+    prefix = "BYTEPLUS" if provider == "byteplus" else "VOLCENGINE"
+    access_key = os.getenv(f"{prefix}_ACCESS_KEY", "").strip()
+    secret_key = os.getenv(f"{prefix}_SECRET_KEY", "").strip()
     if bool(access_key) != bool(secret_key):
-        raise ValueError("VOLCENGINE_ACCESS_KEY and VOLCENGINE_SECRET_KEY must match.")
+        raise ValueError(f"{prefix}_ACCESS_KEY and {prefix}_SECRET_KEY must match.")
     if access_key and secret_key:
         return VolcengineCredentials(
             access_key=access_key,
             secret_key=secret_key,
-            session_token=os.getenv("VOLCENGINE_SESSION_TOKEN", "").strip(),
+            session_token=os.getenv(f"{prefix}_SESSION_TOKEN", "").strip(),
         )
     if not _IAM_CREDENTIAL_PATH.is_file():
         raise FileNotFoundError(
@@ -71,6 +74,12 @@ def resolve_credentials() -> VolcengineCredentials:
         secret_key=str(payload["secret_access_key"]),
         session_token=str(payload["session_token"]),
     )
+
+
+def tos_endpoint(region: str, provider: str) -> str:
+    """Return the provider-specific TOS endpoint for a release bucket."""
+    domain = "bytepluses.com" if provider == "byteplus" else "volces.com"
+    return f"tos-{region}.{domain}"
 
 
 class JobStore(Protocol):
@@ -168,12 +177,12 @@ class TosJobStore:
     def _new_client(self) -> Any:
         import tos
 
-        credentials = resolve_credentials()
+        credentials = resolve_credentials(self._settings.provider)
         return tos.TosClientV2(
             credentials.access_key,
             credentials.secret_key,
             security_token=credentials.session_token or None,
-            endpoint=f"tos-{self._settings.region}.volces.com",
+            endpoint=tos_endpoint(self._settings.region, self._settings.provider),
             region=self._settings.region,
         )
 
@@ -239,12 +248,12 @@ class TosSourceStore:
     def _new_client(self) -> Any:
         import tos
 
-        credentials = resolve_credentials()
+        credentials = resolve_credentials(self._settings.provider)
         return tos.TosClientV2(
             credentials.access_key,
             credentials.secret_key,
             security_token=credentials.session_token or None,
-            endpoint=f"tos-{self._settings.region}.volces.com",
+            endpoint=tos_endpoint(self._settings.region, self._settings.provider),
             region=self._settings.region,
         )
 
@@ -368,12 +377,12 @@ class TosDependencyStore:
     def _new_client(self) -> Any:
         import tos
 
-        credentials = resolve_credentials()
+        credentials = resolve_credentials(self._settings.provider)
         return tos.TosClientV2(
             credentials.access_key,
             credentials.secret_key,
             security_token=credentials.session_token or None,
-            endpoint=f"tos-{self._settings.region}.volces.com",
+            endpoint=tos_endpoint(self._settings.region, self._settings.provider),
             region=self._settings.region,
         )
 
@@ -387,4 +396,5 @@ __all__ = [
     "TosSourceStore",
     "VolcengineCredentials",
     "resolve_credentials",
+    "tos_endpoint",
 ]

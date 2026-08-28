@@ -50,7 +50,10 @@ from frontend.service.studio_release_server import app as release_app
 from frontend.service.studio_release_server import builder as release_builder
 from frontend.service.studio_release_server import deploy as release_deploy
 from frontend.service.studio_release_server import publisher as release_publisher
-from frontend.service.studio_release_server.tos_store import TosDependencyStore
+from frontend.service.studio_release_server.tos_store import (
+    TosDependencyStore,
+    TosJobStore,
+)
 
 
 class _InlineExecutor(Executor):
@@ -172,14 +175,15 @@ class _MemoryDependencyStore:
         return (wheel,)
 
 
-def _settings() -> ReleaseServerSettings:
+def _settings(*, provider: str = "volcengine") -> ReleaseServerSettings:
     return ReleaseServerSettings(
         api_key="release-key-with-at-least-thirty-two-characters",
         bucket="veadk-studio",
-        region="cn-beijing",
+        region="ap-southeast-1" if provider == "byteplus" else "cn-beijing",
         release_prefix="veadk/studio/main",
         job_prefix="veadk/studio/release-server/jobs",
         repository="volcengine/veadk-python",
+        provider=provider,  # type: ignore[arg-type]
     )
 
 
@@ -190,6 +194,38 @@ def _request(request_id: str = "12345-1") -> ReleaseRequest:
         requestId=request_id,
         changelog=("发布 Studio 更新",),
     )
+
+
+def test_release_request_accepts_one_shared_version_for_all_providers() -> None:
+    request = ReleaseRequest(
+        repository="volcengine/veadk-python",
+        gitSha="a" * 40,
+        requestId="shared-version",
+        version="20260828123045",
+    )
+
+    assert request.version == "20260828123045"
+    with pytest.raises(ValueError, match="YYYYMMDDHHMMSS"):
+        ReleaseRequest(
+            repository="volcengine/veadk-python",
+            gitSha="a" * 40,
+            requestId="invalid-version",
+            version="latest",
+        )
+
+
+def test_release_server_settings_load_byteplus_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STUDIO_RELEASE_SERVER_API_KEY", "x" * 32)
+    monkeypatch.setenv("STUDIO_RELEASE_BUCKET", "veadk-studio")
+    monkeypatch.setenv("STUDIO_RELEASE_REGION", "ap-southeast-1")
+    monkeypatch.setenv("STUDIO_RELEASE_PROVIDER", "byteplus")
+
+    settings = ReleaseServerSettings.from_env()
+
+    assert settings.provider == "byteplus"
+    assert settings.region == "ap-southeast-1"
 
 
 def _service() -> ReleaseService:
@@ -436,7 +472,7 @@ def test_builder_passes_only_publisher_runtime_environment(
     monkeypatch.setattr(
         release_builder,
         "resolve_credentials",
-        lambda: SimpleNamespace(
+        lambda _provider: SimpleNamespace(
             access_key="release-ak",
             secret_key="release-sk",
             session_token="release-sts",
@@ -476,6 +512,95 @@ def test_builder_passes_only_publisher_runtime_environment(
     assert captured["command"][1].endswith("studio_release_server/publisher.py")
     assert "veadk.cli.studio_release" not in captured["command"]
     assert str(tmp_path) not in captured["env"].get("PYTHONPATH", "").split(os.pathsep)
+
+
+def test_byteplus_builder_uses_local_tos_endpoint_and_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(
+        release_builder,
+        "resolve_credentials",
+        lambda provider: SimpleNamespace(
+            access_key=f"{provider}-ak",
+            secret_key=f"{provider}-sk",
+            session_token="",
+        ),
+    )
+
+    def _run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[Any]:
+        captured["command"] = command
+        captured["env"] = kwargs["env"]
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(release_builder.subprocess, "run", _run)
+    builder = StudioReleaseBuilder(_settings(provider="byteplus"))
+    builder._run_publisher(
+        request=_request(),
+        source_root=tmp_path,
+        output_dir=tmp_path / "dist",
+        version="20260828123045",
+        node_bin=None,
+        uv=Path("/bin/uv"),
+        frontend_assets=None,
+        dependency_wheels=tmp_path,
+    )
+
+    assert captured["command"][captured["command"].index("--provider") + 1] == (
+        "byteplus"
+    )
+    assert captured["env"]["BYTEPLUS_ACCESS_KEY"] == "byteplus-ak"
+    assert captured["env"]["BYTEPLUS_SECRET_KEY"] == "byteplus-sk"
+
+
+def test_byteplus_runtime_store_uses_byteplus_tos_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(
+        "frontend.service.studio_release_server.tos_store.resolve_credentials",
+        lambda provider: SimpleNamespace(
+            access_key=f"{provider}-ak",
+            secret_key=f"{provider}-sk",
+            session_token="",
+        ),
+    )
+
+    def _client(*args: Any, **kwargs: Any) -> object:
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return object()
+
+    monkeypatch.setattr("tos.TosClientV2", _client)
+
+    TosJobStore(_settings(provider="byteplus"))._new_client()
+
+    assert captured["args"][:2] == ("byteplus-ak", "byteplus-sk")
+    assert captured["kwargs"]["endpoint"] == ("tos-ap-southeast-1.bytepluses.com")
+
+
+def test_standalone_publisher_uses_byteplus_tos_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def _client(*args: Any, **kwargs: Any) -> object:
+        captured["kwargs"] = kwargs
+        return object()
+
+    monkeypatch.setattr("tos.TosClientV2", _client)
+
+    release_publisher.StudioReleaseStore(
+        bucket="veadk-studio",
+        region="ap-southeast-1",
+        provider="byteplus",
+        access_key="ak",
+        secret_key="sk",
+        session_token="",
+        prefix="veadk/studio/main",
+    )
+
+    assert captured["kwargs"]["endpoint"] == ("tos-ap-southeast-1.bytepluses.com")
 
 
 def test_builder_sizes_node_heap_from_cgroup_memory(tmp_path: Path) -> None:
@@ -1059,3 +1184,102 @@ def test_release_server_readiness_uses_rotated_api_key(
 
     assert requests[0].full_url == "https://release.example.com/readyz"
     assert dict(requests[0].header_items())["X-api-key"] == "rotated-key"
+
+
+def test_release_server_runtime_environment_records_provider() -> None:
+    environment = release_deploy._runtime_environment(
+        "x" * 32,
+        bucket="veadk-studio-byteplus",
+        provider="byteplus",
+        region="ap-southeast-1",
+    )
+
+    assert environment["STUDIO_RELEASE_PROVIDER"] == "byteplus"
+    assert environment["STUDIO_RELEASE_REGION"] == "ap-southeast-1"
+    assert environment["STUDIO_RELEASE_BUCKET"] == "veadk-studio-byteplus"
+
+
+def test_release_server_function_matches_production_resources(tmp_path: Path) -> None:
+    captured: dict[str, Any] = {}
+
+    class _Client:
+        def create_function(self, request: Any) -> Any:
+            captured["request"] = request
+            return SimpleNamespace(id="release-function-id")
+
+    class _Service:
+        client = _Client()
+
+        def _upload_and_mount_code(self, function_id: str, path: str) -> None:
+            captured["upload"] = (function_id, path)
+
+    function_id = release_deploy._create_release_function(
+        _Service(),
+        tmp_path,
+        {"STUDIO_RELEASE_PROVIDER": "byteplus"},
+        "trn:role",
+    )
+
+    request = captured["request"]
+    assert function_id == "release-function-id"
+    assert request.cpu_milli == 16_000
+    assert request.memory_mb == 32_768
+    assert request.request_timeout == 1800
+    assert "勿删" in request.description
+    assert captured["upload"] == ("release-function-id", str(tmp_path))
+
+
+def test_release_server_retries_transient_code_upload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = 0
+
+    def _upload() -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise ValueError("Function code upload request failed.")
+
+    monkeypatch.setattr(release_deploy.time, "sleep", lambda _seconds: None)
+
+    release_deploy._retry_code_upload(_upload)
+
+    assert attempts == 3
+
+
+def test_release_bucket_is_private_and_tagged_do_not_delete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class _Client:
+        def list_buckets(self) -> Any:
+            return SimpleNamespace(buckets=[])
+
+        def create_bucket(self, **kwargs: Any) -> None:
+            captured["create"] = kwargs
+
+        def put_bucket_tagging(self, **kwargs: Any) -> None:
+            captured["tags"] = kwargs
+
+    release_deploy._ensure_release_bucket(_Client(), "veadk-studio-byteplus")
+
+    assert captured["create"] == {"bucket": "veadk-studio-byteplus"}
+    assert captured["tags"]["tag_set"][0].to_dict() == {
+        "Key": "note",
+        "Value": "勿删",
+    }
+
+
+def test_release_workflow_publishes_one_version_to_both_providers() -> None:
+    workflow = (
+        Path(__file__).parents[1]
+        / ".github"
+        / "workflows"
+        / "publish-studio-release.yaml"
+    ).read_text(encoding="utf-8")
+
+    assert "provider: volcengine" in workflow
+    assert "provider: byteplus" in workflow
+    assert "BYTEPLUS_STUDIO_RELEASE_SERVER_URL" in workflow
+    assert '"version": os.environ["RELEASE_VERSION"]' in workflow

@@ -28,12 +28,17 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import veadk.config
-from veadk.cli.studio_release import STUDIO_RELEASE_REGION
 from veadk.cloud.cloud_agent_engine import CloudAgentEngine
+from veadk.utils.cloud_provider import (
+    CloudProvider,
+    default_region,
+    iam_openapi_host,
+    normalize_cloud_provider,
+)
 
 _APPLICATION_NAME = "veadk-studio-release-server"
 _FUNCTION_NAME = f"{_APPLICATION_NAME}-fn"
@@ -42,8 +47,8 @@ _GATEWAY_SERVICE_NAME = "veadk-studio-release-server"
 _GATEWAY_UPSTREAM_NAME = "veadk-studio-release-server"
 _GATEWAY_ROUTE_NAME = "veadk-studio-release-server"
 _GATEWAY_TIMEOUT_MILLISECONDS = 30 * 60 * 1000
-_BUCKET = "veadk-studio"
-_REGION = STUDIO_RELEASE_REGION
+_VOLCENGINE_BUCKET = "veadk-studio"
+_BYTEPLUS_BUCKET = "veadk-studio-byteplus"
 _RELEASE_PREFIX = "veadk/studio/main"
 _JOB_PREFIX = "veadk/studio/release-server/jobs"
 _REPOSITORY = "volcengine/veadk-python"
@@ -59,6 +64,9 @@ _NODE_ARCHIVE_SHA256 = (
     "325c0f1261e0c61bcae369a1274028e9cfb7ab7949c05512c5b1e630f7e80e12"
 )
 _MAX_NODE_ARCHIVE_BYTES = 128 * 1024 * 1024
+_FUNCTION_CPU_MILLI = 16_000
+_FUNCTION_MEMORY_MB = 32_768
+_RESOURCE_NOTE = "【fyz勿删！】VeADK Studio 发布使用"
 
 _TRUST_POLICY = {
     "Statement": [
@@ -100,13 +108,24 @@ def _role_trn(result: dict[str, Any]) -> str:
     return str(role.get("Trn") or role.get("trn") or "")
 
 
-def _ensure_runtime_role(access_key: str, secret_key: str) -> str:
+def _ensure_runtime_role(
+    access_key: str,
+    secret_key: str,
+    *,
+    provider: CloudProvider,
+    session_token: str = "",
+) -> str:
     """Create or refresh the minimal VeFaaS role used for TOS publishing."""
     from volcengine.iam.IamService import IamService
 
     iam = IamService()
     iam.set_ak(access_key)
     iam.set_sk(secret_key)
+    iam.set_host(iam_openapi_host(provider))
+    if provider == "byteplus":
+        iam.set_scheme("https")
+    if session_token:
+        iam.set_session_token(session_token)
     policy_document = json.dumps(_TOS_POLICY)
     try:
         _result(
@@ -124,7 +143,7 @@ def _ensure_runtime_role(access_key: str, secret_key: str) -> str:
                     {
                         "PolicyName": _POLICY_NAME,
                         "PolicyDocument": policy_document,
-                        "Description": "Publish AgentKit Studio releases to TOS",
+                        "Description": _RESOURCE_NOTE,
                     }
                 )
             )
@@ -141,7 +160,7 @@ def _ensure_runtime_role(access_key: str, secret_key: str) -> str:
                 {
                     "RoleName": _ROLE_NAME,
                     "TrustPolicyDocument": json.dumps(_TRUST_POLICY),
-                    "Description": "AgentKit Studio release server runtime role",
+                    "Description": _RESOURCE_NOTE,
                 }
             )
         )
@@ -253,11 +272,18 @@ def _stage_node_archive(service_destination: Path) -> None:
     (service_destination / _NODE_ARCHIVE_NAME).write_bytes(content)
 
 
-def _runtime_environment(api_key: str) -> dict[str, str]:
+def _runtime_environment(
+    api_key: str,
+    *,
+    bucket: str,
+    provider: CloudProvider,
+    region: str,
+) -> dict[str, str]:
     return {
         "STUDIO_RELEASE_SERVER_API_KEY": api_key,
-        "STUDIO_RELEASE_BUCKET": _BUCKET,
-        "STUDIO_RELEASE_REGION": _REGION,
+        "STUDIO_RELEASE_BUCKET": bucket,
+        "STUDIO_RELEASE_REGION": region,
+        "STUDIO_RELEASE_PROVIDER": provider,
         "STUDIO_RELEASE_PREFIX": _RELEASE_PREFIX,
         "STUDIO_RELEASE_JOB_PREFIX": _JOB_PREFIX,
         "STUDIO_RELEASE_REPOSITORY": _REPOSITORY,
@@ -271,7 +297,7 @@ def _find_named(items: list[Any], name: str) -> Any | None:
     return matches[0] if matches else None
 
 
-def _find_function_id(service: Any) -> str:
+def _find_function(service: Any) -> Any | None:
     from volcenginesdkvefaas import ListFunctionsRequest
 
     page_number = 1
@@ -286,8 +312,117 @@ def _find_function_id(service: Any) -> str:
         if page_number * page_size >= total:
             break
         page_number += 1
-    function = _find_named(functions, _FUNCTION_NAME)
+    return _find_named(functions, _FUNCTION_NAME)
+
+
+def _find_function_id(service: Any) -> str:
+    function = _find_function(service)
     return str(getattr(function, "id", "") or "")
+
+
+def _create_release_function(
+    service: Any,
+    deployment_root: Path,
+    runtime_environment: dict[str, str],
+    role_trn: str,
+) -> str:
+    """Create the build worker with the same resources as the production server."""
+    from volcenginesdkvefaas import CreateFunctionRequest
+    from volcenginesdkvefaas.models.env_for_create_function_input import (
+        EnvForCreateFunctionInput,
+    )
+    from volcenginesdkvefaas.models.tag_for_create_function_input import (
+        TagForCreateFunctionInput,
+    )
+
+    response = service.client.create_function(
+        CreateFunctionRequest(
+            command="./run.sh",
+            cpu_milli=_FUNCTION_CPU_MILLI,
+            description=_RESOURCE_NOTE,
+            envs=[
+                EnvForCreateFunctionInput(key=key, value=value)
+                for key, value in runtime_environment.items()
+            ],
+            initializer_sec=120,
+            max_concurrency=100,
+            memory_mb=_FUNCTION_MEMORY_MB,
+            name=_FUNCTION_NAME,
+            port=8000,
+            project_name="default",
+            request_timeout=1800,
+            role=role_trn,
+            runtime="native-python3.12/v1",
+            tags=[
+                TagForCreateFunctionInput(key="provider", value="veadk"),
+                TagForCreateFunctionInput(key="note", value="勿删"),
+            ],
+        )
+    )
+    function_id = str(response.id)
+    _retry_code_upload(
+        lambda: service._upload_and_mount_code(function_id, str(deployment_root))
+    )
+    return function_id
+
+
+def _retry_code_upload(operation: Callable[[], None]) -> None:
+    """Retry transient presigned-URL failures without masking other errors."""
+    for attempt in range(1, 4):
+        try:
+            operation()
+            return
+        except ValueError as error:
+            if "Function code upload request failed" not in str(error) or attempt == 3:
+                raise
+            time.sleep(2**attempt)
+
+
+def _verify_function_resources(function: Any) -> None:
+    cpu = int(getattr(function, "cpu", 0) or 0)
+    memory = int(getattr(function, "memory_mb", 0) or 0)
+    if (cpu, memory) != (_FUNCTION_CPU_MILLI, _FUNCTION_MEMORY_MB):
+        raise RuntimeError(
+            f"Release Function resources are {cpu}m/{memory}MiB; expected "
+            f"{_FUNCTION_CPU_MILLI}m/{_FUNCTION_MEMORY_MB}MiB."
+        )
+
+
+def _tos_client(
+    access_key: str,
+    secret_key: str,
+    session_token: str,
+    *,
+    provider: CloudProvider,
+    region: str,
+) -> Any:
+    import tos
+
+    domain = "bytepluses.com" if provider == "byteplus" else "volces.com"
+    return tos.TosClientV2(
+        access_key,
+        secret_key,
+        security_token=session_token or None,
+        endpoint=f"tos-{region}.{domain}",
+        region=region,
+    )
+
+
+def _release_bucket(provider: CloudProvider) -> str:
+    return _BYTEPLUS_BUCKET if provider == "byteplus" else _VOLCENGINE_BUCKET
+
+
+def _ensure_release_bucket(client: Any, bucket: str) -> None:
+    """Create the private release bucket and apply a do-not-delete marker."""
+    import tos
+
+    buckets = list(getattr(client.list_buckets(), "buckets", []) or [])
+    if not any(getattr(item, "name", "") == bucket for item in buckets):
+        client.create_bucket(bucket=bucket)
+    client.put_bucket_tagging(
+        bucket=bucket,
+        tag_set=[tos.models2.Tag(key="note", value="勿删")],
+    )
 
 
 def _release_function(service: Any, function_id: str) -> None:
@@ -319,6 +454,95 @@ def _https_endpoint(gateway_service: Any) -> str:
     return ""
 
 
+def _create_serverless_gateway(apig: Any) -> str:
+    from volcenginesdkapig import (
+        CreateGatewayRequest,
+        ListGatewaysRequest,
+        ResourceSpecForCreateGatewayInput,
+    )
+
+    response = apig.apig_client.create_gateway(
+        CreateGatewayRequest(
+            comments=_RESOURCE_NOTE,
+            name=_GATEWAY_NAME,
+            region=apig.region,
+            type="serverless",
+            resource_spec=ResourceSpecForCreateGatewayInput(
+                replicas=2,
+                instance_spec_code="1c2g",
+                clb_spec_code="small_1",
+                public_network_billing_type="traffic",
+                network_type={
+                    "EnablePublicNetwork": True,
+                    "EnablePrivateNetwork": False,
+                },
+            ),
+        ),
+        async_req=True,
+    ).get()
+    gateway_id = str(response.id)
+    for _ in range(120):
+        gateways = apig.apig_client.list_gateways(
+            ListGatewaysRequest(page_number=1, page_size=100),
+            async_req=True,
+        ).get()
+        gateway = _find_named(
+            list(getattr(gateways, "items", []) or []),
+            _GATEWAY_NAME,
+        )
+        if gateway is not None:
+            state = getattr(gateway, "status", None) or getattr(
+                gateway, "message", None
+            )
+            if state == "Running":
+                return gateway_id
+            if state in {"Failed", "Error"}:
+                raise RuntimeError(f"Gateway creation failed: {state}")
+        time.sleep(5)
+    raise RuntimeError("API gateway did not become ready in 10 minutes.")
+
+
+def _create_gateway_service(apig: Any, gateway_id: str) -> str:
+    from volcenginesdkapig import (
+        AuthSpecForCreateGatewayServiceInput,
+        CreateGatewayServiceRequest,
+    )
+
+    response = apig.apig_client.create_gateway_service(
+        CreateGatewayServiceRequest(
+            auth_spec=AuthSpecForCreateGatewayServiceInput(enable=False),
+            comments=_RESOURCE_NOTE,
+            gateway_id=gateway_id,
+            protocol=["HTTP", "HTTPS"],
+            service_name=_GATEWAY_SERVICE_NAME,
+        ),
+        async_req=True,
+    ).get()
+    return str(response.id)
+
+
+def _create_gateway_upstream(apig: Any, function_id: str, gateway_id: str) -> str:
+    from volcenginesdkapig import (
+        CreateUpstreamRequest,
+        UpstreamSpecForCreateUpstreamInput,
+        VeFaasForCreateUpstreamInput,
+    )
+
+    response = apig.apig_client.create_upstream(
+        CreateUpstreamRequest(
+            comments=_RESOURCE_NOTE,
+            gateway_id=gateway_id,
+            name=_GATEWAY_UPSTREAM_NAME,
+            source_type="VeFaas",
+            upstream_spec=UpstreamSpecForCreateUpstreamInput(
+                ve_faas=VeFaasForCreateUpstreamInput(function_id=function_id)
+            ),
+        ),
+        async_req=True,
+    ).get()
+    return str(response.id)
+
+
 def _ensure_gateway_binding(service: Any, function_id: str) -> str:
     """Expose one Function through a service on the fixed serverless gateway."""
     from volcenginesdkapig import (
@@ -343,15 +567,16 @@ def _ensure_gateway_binding(service: Any, function_id: str) -> str:
     gateways = list(getattr(gateway_response, "items", []) or [])
     gateway = _find_named(gateways, _GATEWAY_NAME)
     if gateway is None:
-        raise RuntimeError(f"Serverless gateway {_GATEWAY_NAME} does not exist.")
-    if getattr(gateway, "type", None) != "serverless":
-        raise RuntimeError(f"Gateway {_GATEWAY_NAME} is not serverless.")
-    gateway_state = getattr(gateway, "status", None) or getattr(
-        gateway, "message", None
-    )
-    if gateway_state != "Running":
-        raise RuntimeError(f"Gateway {_GATEWAY_NAME} is not running.")
-    gateway_id = str(gateway.id)
+        gateway_id = _create_serverless_gateway(apig)
+    else:
+        if getattr(gateway, "type", None) != "serverless":
+            raise RuntimeError(f"Gateway {_GATEWAY_NAME} is not serverless.")
+        gateway_state = getattr(gateway, "status", None) or getattr(
+            gateway, "message", None
+        )
+        if gateway_state != "Running":
+            raise RuntimeError(f"Gateway {_GATEWAY_NAME} is not running.")
+        gateway_id = str(gateway.id)
 
     service_response = apig.apig_client.list_gateway_services(
         ListGatewayServicesRequest(
@@ -366,7 +591,7 @@ def _ensure_gateway_binding(service: Any, function_id: str) -> str:
         _GATEWAY_SERVICE_NAME,
     )
     if gateway_service is None:
-        service_id = apig.create_gateway_service(gateway_id, _GATEWAY_SERVICE_NAME)
+        service_id = _create_gateway_service(apig, gateway_id)
     else:
         service_id = str(gateway_service.id)
 
@@ -383,9 +608,7 @@ def _ensure_gateway_binding(service: Any, function_id: str) -> str:
         _GATEWAY_UPSTREAM_NAME,
     )
     if upstream is None:
-        upstream_id = apig.create_vefaas_upstream(
-            function_id, gateway_id, _GATEWAY_UPSTREAM_NAME
-        )
+        upstream_id = _create_gateway_upstream(apig, function_id, gateway_id)
     else:
         upstream_payload = upstream.to_dict()
         if function_id not in json.dumps(upstream_payload):
@@ -475,39 +698,54 @@ def _ensure_gateway_binding(service: Any, function_id: str) -> str:
     raise RuntimeError("API gateway service did not become ready in 5 minutes.")
 
 
-def _deploy(source_root: Path, api_key: str, role_trn: str) -> tuple[str, str, str]:
+def _deploy(
+    source_root: Path,
+    api_key: str,
+    role_trn: str,
+    *,
+    provider: CloudProvider,
+    region: str,
+    access_key: str,
+    secret_key: str,
+    session_token: str,
+) -> tuple[str, str, str]:
     """Create or update the Function and bind it to an existing gateway."""
-    engine = CloudAgentEngine(region=_REGION)
+    engine = CloudAgentEngine(
+        volcengine_access_key=access_key,
+        volcengine_secret_key=secret_key,
+        volcengine_session_token=session_token,
+        region=region,
+        provider=provider,
+    )
     service = engine._vefaas_service
-    runtime_environment = _runtime_environment(api_key)
+    runtime_environment = _runtime_environment(
+        api_key,
+        bucket=_release_bucket(provider),
+        provider=provider,
+        region=region,
+    )
     with tempfile.TemporaryDirectory(prefix="studio_release_server_") as tmp:
         deployment_root = Path(tmp)
         _stage_deployment(source_root, deployment_root)
         app_id = service.find_app_id_by_name(_APPLICATION_NAME)
-        function_id = _find_function_id(service)
+        function = _find_function(service)
+        function_id = str(getattr(function, "id", "") or "")
         if function_id:
-            service._replace_application_code_bundle(
-                function_id=function_id,
-                path=str(deployment_root),
-                environment_overrides=runtime_environment,
+            _verify_function_resources(function)
+            _retry_code_upload(
+                lambda: service._replace_application_code_bundle(
+                    function_id=function_id,
+                    path=str(deployment_root),
+                    environment_overrides=runtime_environment,
+                )
             )
         else:
-            original_environment = dict(veadk.config.veadk_environments)
-            original_role = os.environ.get("IAM_ROLE")
-            try:
-                veadk.config.veadk_environments.clear()
-                veadk.config.veadk_environments.update(runtime_environment)
-                os.environ["IAM_ROLE"] = role_trn
-                _, function_id = service._create_function(
-                    _FUNCTION_NAME, str(deployment_root)
-                )
-            finally:
-                veadk.config.veadk_environments.clear()
-                veadk.config.veadk_environments.update(original_environment)
-                if original_role is None:
-                    os.environ.pop("IAM_ROLE", None)
-                else:
-                    os.environ["IAM_ROLE"] = original_role
+            function_id = _create_release_function(
+                service,
+                deployment_root,
+                runtime_environment,
+                role_trn,
+            )
         _release_function(service, function_id)
         endpoint = _ensure_gateway_binding(service, function_id)
         return endpoint, app_id or "", function_id
@@ -564,6 +802,11 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-root", type=Path, default=Path.cwd())
     parser.add_argument(
+        "--provider",
+        choices=("volcengine", "byteplus"),
+        default="volcengine",
+    )
+    parser.add_argument(
         "--skip-github-secrets",
         action="store_true",
         help="Deploy without changing repository secrets.",
@@ -574,25 +817,57 @@ def _parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = _parser().parse_args()
     source_root = args.source_root.resolve()
-    access_key = os.getenv("VOLCENGINE_ACCESS_KEY", "").strip()
-    secret_key = os.getenv("VOLCENGINE_SECRET_KEY", "").strip()
+    provider = normalize_cloud_provider(args.provider)
+    region = default_region(provider)
+    credential_prefix = "BYTEPLUS" if provider == "byteplus" else "VOLCENGINE"
+    access_key = os.getenv(f"{credential_prefix}_ACCESS_KEY", "").strip()
+    secret_key = os.getenv(f"{credential_prefix}_SECRET_KEY", "").strip()
+    session_token = os.getenv(f"{credential_prefix}_SESSION_TOKEN", "").strip()
     if not access_key or not secret_key:
         raise ValueError(
-            "VOLCENGINE_ACCESS_KEY and VOLCENGINE_SECRET_KEY are required."
+            f"{credential_prefix}_ACCESS_KEY and {credential_prefix}_SECRET_KEY "
+            "are required."
         )
     if not args.skip_github_secrets:
         _validate_github_secret_access()
-    role_trn = _ensure_runtime_role(access_key, secret_key)
+    _ensure_release_bucket(
+        _tos_client(
+            access_key,
+            secret_key,
+            session_token,
+            provider=provider,
+            region=region,
+        ),
+        _release_bucket(provider),
+    )
+    role_trn = _ensure_runtime_role(
+        access_key,
+        secret_key,
+        provider=provider,
+        session_token=session_token,
+    )
     api_key = secrets.token_urlsafe(48)
-    endpoint, app_id, function_id = _deploy(source_root, api_key, role_trn)
+    endpoint, app_id, function_id = _deploy(
+        source_root,
+        api_key,
+        role_trn,
+        provider=provider,
+        region=region,
+        access_key=access_key,
+        secret_key=secret_key,
+        session_token=session_token,
+    )
     _wait_for_health(endpoint, api_key)
     if not args.skip_github_secrets:
-        _set_github_secret("STUDIO_RELEASE_SERVER_URL", endpoint)
-        _set_github_secret("STUDIO_RELEASE_SERVER_API_KEY", api_key)
+        secret_prefix = "BYTEPLUS_" if provider == "byteplus" else ""
+        _set_github_secret(f"{secret_prefix}STUDIO_RELEASE_SERVER_URL", endpoint)
+        _set_github_secret(f"{secret_prefix}STUDIO_RELEASE_SERVER_API_KEY", api_key)
     print(
         json.dumps(
             {
                 "applicationName": _APPLICATION_NAME,
+                "provider": provider,
+                "region": region,
                 "applicationId": app_id,
                 "functionId": function_id,
                 "endpoint": endpoint,

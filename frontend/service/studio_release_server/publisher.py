@@ -160,6 +160,7 @@ class StudioReleaseStore:
         secret_key: str,
         session_token: str,
         prefix: str,
+        provider: str = "volcengine",
     ) -> None:
         import tos
 
@@ -169,7 +170,11 @@ class StudioReleaseStore:
             access_key,
             secret_key,
             security_token=session_token or None,
-            endpoint=f"tos-{region}.volces.com",
+            endpoint=(
+                f"tos-{region}.bytepluses.com"
+                if provider == "byteplus"
+                else f"tos-{region}.volces.com"
+            ),
             region=region,
         )
 
@@ -531,6 +536,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--git-sha", required=True)
     parser.add_argument("--bucket", required=True)
     parser.add_argument("--region", required=True)
+    parser.add_argument(
+        "--provider",
+        choices=("volcengine", "byteplus"),
+        default="volcengine",
+    )
     parser.add_argument("--prefix", required=True)
     parser.add_argument("--changelog", action="append", default=[])
     parser.add_argument("--frontend-assets", type=Path)
@@ -550,13 +560,15 @@ def main() -> None:
         dependency_wheels=args.dependency_wheels,
         env=os.environ,
     )
+    credential_prefix = "BYTEPLUS" if args.provider == "byteplus" else "VOLCENGINE"
     store = StudioReleaseStore(
         bucket=args.bucket,
         region=args.region,
-        access_key=os.getenv("VOLCENGINE_ACCESS_KEY", ""),
-        secret_key=os.getenv("VOLCENGINE_SECRET_KEY", ""),
-        session_token=os.getenv("VOLCENGINE_SESSION_TOKEN", ""),
+        access_key=os.getenv(f"{credential_prefix}_ACCESS_KEY", ""),
+        secret_key=os.getenv(f"{credential_prefix}_SECRET_KEY", ""),
+        session_token=os.getenv(f"{credential_prefix}_SESSION_TOKEN", ""),
         prefix=args.prefix,
+        provider=args.provider,
     )
     store.publish(bundle, manifest)
     print(

@@ -212,18 +212,45 @@ jobs:
           smoke_studio byteplus 18877
           smoke_studio volcengine 18878
 
-  publish:
+  release-context:
     if: >-
       github.event_name == 'workflow_dispatch' &&
       github.repository == 'volcengine/veadk-python' &&
       github.ref == 'refs/heads/main'
     needs: verify
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - id: release
+        name: Allocate shared release version
+        run: echo "version=$(TZ=Asia/Shanghai date +%Y%m%d%H%M%S)" >> "$GITHUB_OUTPUT"
+
+  publish:
+    name: Publish Studio Release (${{ matrix.provider }})
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.repository == 'volcengine/veadk-python' &&
+      github.ref == 'refs/heads/main'
+    needs: [verify, release-context]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - provider: volcengine
+            url_secret: STUDIO_RELEASE_SERVER_URL
+            key_secret: STUDIO_RELEASE_SERVER_API_KEY
+          - provider: byteplus
+            url_secret: BYTEPLUS_STUDIO_RELEASE_SERVER_URL
+            key_secret: BYTEPLUS_STUDIO_RELEASE_SERVER_API_KEY
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: studio-release
     env:
-      RELEASE_SERVER_URL: ${{ secrets.STUDIO_RELEASE_SERVER_URL }}
-      RELEASE_SERVER_API_KEY: ${{ secrets.STUDIO_RELEASE_SERVER_API_KEY }}
+      RELEASE_PROVIDER: ${{ matrix.provider }}
+      RELEASE_SERVER_URL: ${{ secrets[matrix.url_secret] }}
+      RELEASE_SERVER_API_KEY: ${{ secrets[matrix.key_secret] }}
+      RELEASE_VERSION: ${{ needs.release-context.outputs.version }}
 
     steps:
       - name: Validate release server configuration
@@ -264,12 +291,14 @@ jobs:
 
           job_id = (
               f"{os.environ['GITHUB_RUN_ID']}-"
-              f"{os.environ['GITHUB_RUN_ATTEMPT']}"
+              f"{os.environ['GITHUB_RUN_ATTEMPT']}-"
+              f"{os.environ['RELEASE_PROVIDER']}"
           )
           payload_data = {
               "repository": os.environ["GITHUB_REPOSITORY"],
               "gitSha": os.environ["GITHUB_SHA"],
               "requestId": job_id,
+              "version": os.environ["RELEASE_VERSION"],
               "changelog": [os.environ["STUDIO_CHANGELOG"]],
           }
           payload = json.dumps(payload_data).encode()

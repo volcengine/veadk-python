@@ -19,7 +19,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -28,6 +28,7 @@ _JOB_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,100}$")
 _REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 ReleaseState = Literal["queued", "running", "succeeded", "failed"]
+ReleaseProvider = Literal["volcengine", "byteplus"]
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,7 @@ class ReleaseServerSettings:
     release_prefix: str
     job_prefix: str
     repository: str
+    provider: ReleaseProvider = "volcengine"
 
     def __post_init__(self) -> None:
         if len(self.api_key) < 32:
@@ -48,6 +50,8 @@ class ReleaseServerSettings:
             raise ValueError("STUDIO_RELEASE_BUCKET is required.")
         if not self.region:
             raise ValueError("STUDIO_RELEASE_REGION is required.")
+        if self.provider not in {"volcengine", "byteplus"}:
+            raise ValueError("STUDIO_RELEASE_PROVIDER is invalid.")
         for value, name in (
             (self.release_prefix, "STUDIO_RELEASE_PREFIX"),
             (self.job_prefix, "STUDIO_RELEASE_JOB_PREFIX"),
@@ -76,6 +80,10 @@ class ReleaseServerSettings:
             repository=os.getenv(
                 "STUDIO_RELEASE_REPOSITORY", "volcengine/veadk-python"
             ).strip(),
+            provider=cast(
+                ReleaseProvider,
+                os.getenv("STUDIO_RELEASE_PROVIDER", "volcengine").strip(),
+            ),
         )
 
 
@@ -89,6 +97,7 @@ class ReleaseRequest(BaseModel):
     request_id: str = Field(alias="requestId")
     changelog: tuple[str, ...] = ()
     source_key: str = Field(default="", alias="sourceKey")
+    version: str = ""
 
     @field_validator("repository")
     @classmethod
@@ -131,6 +140,14 @@ class ReleaseRequest(BaseModel):
             or any(part in {"", ".", ".."} for part in value.split("/"))
         ):
             raise ValueError("sourceKey is invalid")
+        return value
+
+    @field_validator("version")
+    @classmethod
+    def _validate_version(cls, value: str) -> str:
+        value = value.strip()
+        if value and not re.fullmatch(r"\d{14}", value):
+            raise ValueError("version must use YYYYMMDDHHMMSS format")
         return value
 
 
