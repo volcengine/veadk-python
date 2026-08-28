@@ -144,6 +144,7 @@ import {
 } from "./create/modelSource";
 import {
   classifyRuntimeModelSources,
+  hydrateA2aRegistryFromRuntime,
   modelConfigurationFromRuntime,
   modelNameFromRuntime,
   runtimeAgentDraftFromCloud,
@@ -6622,26 +6623,31 @@ export default function App() {
                   const runtimeModel = modelConfigurationFromRuntime(
                     runtimeAgent.model,
                   );
-                  const hydratedDraft = hydrateRuntimeModelSelection(
-                    {
-                      ...runtimeDraft,
-                      modelProvider:
-                        runtimeModel.modelProvider ||
-                        runtimeEnv.get("MODEL_AGENT_PROVIDER") ||
-                        runtimeDraft.modelProvider,
-                      modelApiBase:
-                        runtimeEnv.get("MODEL_AGENT_API_BASE") ||
-                        runtimeDraft.modelApiBase,
-                      deployment: {
-                        ...(runtimeDraft.deployment ?? { feishuEnabled: false }),
-                        network: capability.runtime.network,
-                        envValues: runtimeEnvValues,
+                  const hydratedDraft = hydrateA2aRegistryFromRuntime(
+                    hydrateRuntimeModelSelection(
+                      {
+                        ...runtimeDraft,
+                        modelProvider:
+                          runtimeModel.modelProvider ||
+                          runtimeEnv.get("MODEL_AGENT_PROVIDER") ||
+                          runtimeDraft.modelProvider,
+                        modelApiBase:
+                          runtimeEnv.get("MODEL_AGENT_API_BASE") ||
+                          runtimeDraft.modelApiBase,
+                        deployment: {
+                          ...(runtimeDraft.deployment ?? {
+                            feishuEnabled: false,
+                          }),
+                          network: capability.runtime.network,
+                          envValues: runtimeEnvValues,
+                        },
+                        cloudEnvironment: capability.runtime.environment ?? {
+                          environmentId: "",
+                          environmentVersionId: "",
+                        },
                       },
-                      cloudEnvironment: capability.runtime.environment ?? {
-                        environmentId: "",
-                        environmentVersionId: "",
-                      },
-                    },
+                      capability.runtime.envs,
+                    ),
                     capability.runtime.envs,
                   );
                   const apiKeyId =

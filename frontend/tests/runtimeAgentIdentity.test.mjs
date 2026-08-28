@@ -20,6 +20,7 @@ async function loadTypeScriptModule(relativePath) {
 
 const {
   applyRuntimeAgentIntrospection,
+  hydrateA2aRegistryFromRuntime,
   runtimeAgentDraftFromCloud,
 } = await loadTypeScriptModule("../src/create/runtimeModelName.ts");
 const appSource = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
@@ -182,6 +183,56 @@ test("legacy Runtime graph uses cloud values and defaults for unavailable fields
   assert.equal(restored.tracing, false);
 });
 
+test("Runtime update preserves and hydrates a registry-backed remote child Agent", () => {
+  const restored = runtimeAgentDraftFromCloud(
+    {
+      appName: "registry_parent",
+      graph: {
+        name: "registry_parent",
+        type: "llm",
+        children: [{ name: "remote_child", type: "llm", children: [] }],
+      },
+      draft: {
+        ...cachedRuntimeDraft("registry_parent"),
+        cloudProvider: "byteplus",
+        subAgents: [
+          {
+            ...cachedRuntimeDraft("remote_child"),
+            cloudProvider: "byteplus",
+            agentType: "a2a",
+            a2aRegistry: {
+              enabled: true,
+              registrySpaceId: "stale-space",
+              registryTopK: "2",
+              registryRegion: "stale-region",
+              registryEndpoint: "https://stale.example.com/",
+            },
+          },
+        ],
+      },
+    },
+    "byteplus",
+  );
+  const hydrated = hydrateA2aRegistryFromRuntime(restored, [
+    { key: "REGISTRY_SPACE_ID", value: "bp-space" },
+    { key: "REGISTRY_TOP_K", value: "6" },
+    { key: "REGISTRY_REGION", value: "ap-southeast-1" },
+    {
+      key: "REGISTRY_ENDPOINT",
+      value: "https://agentkit.ap-southeast-1.byteplusapi.com/",
+    },
+  ]);
+
+  assert.equal(hydrated.subAgents[0].agentType, "a2a");
+  assert.deepEqual(hydrated.subAgents[0].a2aRegistry, {
+    enabled: true,
+    registrySpaceId: "bp-space",
+    registryTopK: "6",
+    registryRegion: "ap-southeast-1",
+    registryEndpoint: "https://agentkit.ap-southeast-1.byteplusapi.com/",
+  });
+});
+
 test("Runtime update entry passes only cloud capability to the update handler", () => {
   const clickStart = workspaceSource.indexOf("onClick={() =>\n                      selectedDraft");
   const clickEnd = workspaceSource.indexOf("                    }\n                  >", clickStart);
@@ -202,6 +253,10 @@ test("Runtime update hydration starts from cloud configuration without local dra
   const handler = appSource.slice(handlerStart, handlerEnd);
 
   assert.match(handler, /runtimeAgentDraftFromCloud\([\s\S]*?capability\.agent/);
+  assert.match(
+    handler,
+    /hydrateA2aRegistryFromRuntime\([\s\S]*?capability\.runtime\.envs/,
+  );
   assert.doesNotMatch(handler, /\bnextDraft\b|draftEnvValues/);
   assert.match(handler, /setImportedDraft\(classifiedDraft\)/);
 });
