@@ -636,10 +636,15 @@ export VEADK_STUDIO_TOS_BUCKET=teststudio
 ```
 
 The server derives the provider-specific endpoint, such as
-`tos-cn-beijing.volces.com`, and never sends TOS credentials to the
-browser. Local Studio uses the configured Volcengine or BytePlus AK/SK; VeFaaS
-uses its IAM role credentials. Studio objects use the versioned, user-first
-layout
+`tos-cn-beijing.volces.com`, and never sends TOS credentials to the browser.
+For Volcengine, Studio probes the public endpoint once and automatically uses
+the matching `tos-<region>.ivolces.com` intranet endpoint when the public
+endpoint has a transport-level connection failure. Authentication, permission,
+and other TOS service errors do not trigger fallback. Browser-facing signed URLs
+continue to use the public endpoint. BytePlus and custom endpoints are left
+unchanged. Local Studio uses the configured Volcengine or BytePlus AK/SK;
+VeFaaS uses its IAM role credentials. Studio objects use the versioned,
+user-first layout
 `veadk-studio/v1/users/<encoded-user-id>/<namespace>/<scope>/<resource-id>/`.
 Video reference assets currently use the `video/<asset-role>/<asset-id>/`
 namespace and store `content` plus `metadata.json` below it.

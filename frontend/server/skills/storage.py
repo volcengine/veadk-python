@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from frontend.server.storage import StudioProvider, StudioStorageConfig
+from frontend.server.storage.tos import create_tos_client_factory
 from veadk.utils.cloud_provider import cloud_provider_from_env
 
 _IAM_CREDENTIAL_PATH = Path("/var/run/secrets/iam/credential")
@@ -206,15 +207,20 @@ def _create_tos_client(
     storage: SkillPublishStorage,
     credentials: SkillPublishCredentials,
 ) -> Any:
-    import tos
-
-    return tos.TosClientV2(
-        ak=credentials.access_key,
-        sk=credentials.secret_key,
-        security_token=credentials.session_token,
-        endpoint=storage.endpoint,
+    config = StudioStorageConfig(
+        provider=storage.provider,
+        bucket=storage.bucket,
         region=storage.region,
+        endpoint=storage.endpoint,
     )
+    return create_tos_client_factory(
+        config,
+        lambda: (
+            credentials.access_key,
+            credentials.secret_key,
+            credentials.session_token,
+        ),
+    )()
 
 
 def _listed_buckets(client: Any) -> dict[str, str]:

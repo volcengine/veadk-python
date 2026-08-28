@@ -22,6 +22,7 @@ from typing import Any
 import httpx
 
 from frontend.server.storage import StudioProvider, StudioStorageConfig
+from frontend.server.storage.tos import create_tos_client_factory
 from veadk.utils.logger import get_logger
 
 from .datasets import ensure_feedback_sets
@@ -51,22 +52,9 @@ def create_service(
     models = StructuredEvaluationModels()
     storage = StudioStorageConfig.from_env(provider)
     if storage.configured and resolve_credentials is not None:
-
-        def tos_client() -> Any:
-            import tos
-
-            access_key, secret_key, session_token = resolve_credentials()
-            return tos.TosClientV2(
-                ak=access_key,
-                sk=secret_key,
-                security_token=session_token,
-                endpoint=storage.endpoint,
-                region=storage.region,
-            )
-
         optimizations = TosOptimizationRepository(
             bucket=storage.bucket,
-            client_factory=tos_client,
+            client_factory=create_tos_client_factory(storage, resolve_credentials),
         )
     else:
         logger.warning(
