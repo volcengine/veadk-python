@@ -28,6 +28,8 @@ import veadk.cli.codex_app_server as codex_app_server
 from veadk.cli.codex_app_server import (
     CodexAppServerError,
     CodexAppServerSession,
+    CodexAppServerTransportError,
+    CodexAppServerTurnTimeoutError,
     CodexImportedImage,
     CodexImportedMessage,
     CodexPermissionSettings,
@@ -351,6 +353,39 @@ class _SlowActiveWebSocket(_FakeWebSocket):
         asyncio.create_task(_emit_progress())
 
 
+class _CustomTurnTimeoutWebSocket(_FakeWebSocket):
+    """Pause beyond the default timeout but within the requested timeout."""
+
+    async def send(self, raw: str) -> None:
+        message = json.loads(raw)
+        if message.get("method") != "turn/start":
+            await super().send(raw)
+            return
+        self.messages.append(message)
+        request_id = message["id"]
+        await self.queue.put(
+            json.dumps({"id": request_id, "result": {"turn": {"id": "slow-turn"}}})
+        )
+
+        async def _emit_progress() -> None:
+            await asyncio.sleep(0.01)
+            await self._notification(
+                "item/agentMessage/delta",
+                {"itemId": "slow-message", "delta": "1"},
+            )
+            await asyncio.sleep(0.08)
+            await self._notification(
+                "item/agentMessage/delta",
+                {"itemId": "slow-message", "delta": "2"},
+            )
+            await self._notification(
+                "turn/completed",
+                {"turn": {"id": "slow-turn", "status": "completed"}},
+            )
+
+        asyncio.create_task(_emit_progress())
+
+
 class _MissingRolloutWebSocket(_FakeWebSocket):
     async def send(self, raw: str) -> None:
         message = json.loads(raw)
@@ -607,6 +642,76 @@ async def test_turn_timeout_resets_when_progress_events_arrive(
 
 
 @pytest.mark.asyncio
+async def test_custom_turn_timeout_remains_active_after_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(codex_app_server, "_TURN_TIMEOUT_SECONDS", 0.05)
+    websocket = _CustomTurnTimeoutWebSocket()
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    await session.connect()
+
+    events = [
+        event
+        async for event in session.stream_turn(
+            "long-running",
+            timeout_seconds=0.2,
+        )
+    ]
+
+    assert "".join(event.text for event in events if event.kind == "text") == "12"
+    assert not any(
+        message.get("method") == "turn/interrupt" for message in websocket.messages
+    )
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_custom_turn_timeout_controls_transport_preflight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    websocket = _FakeWebSocket()
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    await session.connect()
+    original = session.ensure_connected
+    lifetimes: list[float] = []
+
+    async def _record_lifetime(*, minimum_lifetime_seconds: float = 60) -> None:
+        lifetimes.append(minimum_lifetime_seconds)
+        await original(minimum_lifetime_seconds=minimum_lifetime_seconds)
+
+    monkeypatch.setattr(session, "ensure_connected", _record_lifetime)
+
+    _ = [event async for event in session.stream_turn("hello", timeout_seconds=1_200)]
+
+    assert lifetimes[0] == 1_200
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_turn_inactivity_raises_specific_timeout_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(codex_app_server, "_TURN_TIMEOUT_SECONDS", 0.01)
+    websocket = _CustomTurnTimeoutWebSocket()
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    await session.connect()
+
+    with pytest.raises(CodexAppServerTurnTimeoutError):
+        _ = [event async for event in session.stream_turn("long-running")]
+
+    await session.close()
+
+
+@pytest.mark.asyncio
 async def test_workspace_directory_browsing_and_user_approval() -> None:
     websocket = _FakeWebSocket()
     session = CodexAppServerSession(
@@ -838,7 +943,7 @@ async def test_send_failure_preserves_transport_error_as_cause() -> None:
     )
     await session.connect()
 
-    with pytest.raises(CodexAppServerError, match="发送请求失败") as captured:
+    with pytest.raises(CodexAppServerTransportError, match="发送请求失败") as captured:
         await session.list_models()
 
     assert isinstance(captured.value.__cause__, ConnectionError)

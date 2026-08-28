@@ -52,6 +52,8 @@ from veadk.cli.codex_app_server import (
     CodexAppServerError,
     CodexAppServerEvent,
     CodexAppServerSession,
+    CodexAppServerTransportError,
+    CodexAppServerTurnTimeoutError,
     CodexDirectoryListing,
     CodexImportedImage,
     CodexImportedMessage,
@@ -220,6 +222,18 @@ class SandboxInvocationError(SandboxError):
     retryable = True
 
 
+class SandboxTransportError(SandboxInvocationError):
+    """The connection to the coding agent ended unexpectedly."""
+
+    code = "SANDBOX_TRANSPORT_FAILED"
+
+
+class SandboxTurnTimeoutError(SandboxInvocationError):
+    """The coding agent exceeded the configured inactivity timeout."""
+
+    code = "SANDBOX_TURN_TIMEOUT"
+
+
 class SandboxCapacityError(SandboxError):
     """Studio has reached its local conversation-bridge limit."""
 
@@ -263,6 +277,16 @@ def _safe_error_message(error: object) -> str:
     raw_message = "\n".join(parts) if parts else str(error).strip()
     message = _redact_public_text(raw_message, maximum=20_000)
     return message or type(error).__name__
+
+
+def _sandbox_invocation_error(error: CodexAppServerError) -> SandboxInvocationError:
+    """Preserve actionable Codex failure categories at the Sandbox boundary."""
+    message = _safe_error_message(error)
+    if isinstance(error, CodexAppServerTurnTimeoutError):
+        return SandboxTurnTimeoutError(message)
+    if isinstance(error, CodexAppServerTransportError):
+        return SandboxTransportError(message)
+    return SandboxInvocationError(message)
 
 
 def _is_agentkit_tool_quota_error(error: BaseException) -> bool:
@@ -1905,7 +1929,7 @@ class SandboxConversationService:
                         session.pending_prompt_timestamp = 0
             except CodexAppServerError as error:
                 if listening:
-                    queue.put_nowait(SandboxInvocationError(_safe_error_message(error)))
+                    queue.put_nowait(_sandbox_invocation_error(error))
             except asyncio.CancelledError:
                 raise
             except Exception as error:  # noqa: BLE001 - background task boundary

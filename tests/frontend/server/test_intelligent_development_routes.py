@@ -2437,10 +2437,42 @@ def test_builder_failure_still_cleans_credentials(
         )
     assert "event: error" in response.text
     assert '"code": "SANDBOX_INVOCATION_FAILED"' in response.text
-    assert "Codex 暂时无法响应，开发环境已保留。请在当前会话重试。" in response.text
+    assert "Codex 执行本轮任务失败。开发环境已保留，请在当前会话重试。" in response.text
     assert internal_error not in response.text
     assert "upstream-secret" not in response.text
     assert lease.cleaned is True
+
+
+@pytest.mark.parametrize(
+    ("error", "code", "message"),
+    [
+        (
+            routes.SandboxTurnTimeoutError("turn inactive"),
+            "SANDBOX_TURN_TIMEOUT",
+            "本轮任务长时间未产生新进度，已停止。开发环境已保留，请在当前会话重试。",
+        ),
+        (
+            routes.SandboxTransportError("connection closed"),
+            "SANDBOX_TRANSPORT_FAILED",
+            "开发环境连接中断，本轮任务未能继续。开发环境已保留，请在当前会话重试。",
+        ),
+        (
+            routes.SandboxInvocationError("turn failed"),
+            "SANDBOX_INVOCATION_FAILED",
+            "Codex 执行本轮任务失败。开发环境已保留，请在当前会话重试。",
+        ),
+    ],
+)
+def test_stream_error_payload_distinguishes_codex_failures(
+    error: routes.SandboxError,
+    code: str,
+    message: str,
+) -> None:
+    assert routes._stream_error_payload(error) == {
+        "code": code,
+        "message": message,
+        "retryable": True,
+    }
 
 
 def test_cleanup_failure_terminates_session_and_is_not_suppressed(
