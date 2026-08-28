@@ -581,8 +581,15 @@
 .environment-build-dialog__body {
   min-height: 0;
   flex: 1;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   padding: 20px 22px;
+}
+
+.environment-build-dialog__body > .studio-build-progress {
+  min-height: 0;
+  flex: 1;
 }
 
 .environment-build-dialog__error,
@@ -653,7 +660,7 @@
     padding: 11px 16px;
   }
   .environment-build-dialog__summary a { grid-column: 1 / -1; margin-left: 0; }
-  .environment-build-dialog__body { padding: 16px; }
+  .environment-build-dialog__body { overflow-y: auto; padding: 16px; }
   .environment-build-dialog__actions { padding: 9px 16px max(9px, env(safe-area-inset-bottom)); }
 }
 

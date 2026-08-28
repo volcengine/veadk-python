@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Circle, CircleX, Copy, Loader2 } from "lucide-react";
 import { Button } from "@openai/apps-sdk-ui/components/Button";
 import type { EnvironmentBuildStep } from "../adk/client";
+import { highlightBashLog, shouldFollowBuildLog } from "./studioBuildLog";
 import "./StudioBuildProgress.css";
 
 export interface StudioBuildProgressProps {
@@ -41,11 +42,13 @@ export function StudioBuildProgress({
   loading = false,
 }: StudioBuildProgressProps) {
   const logRef = useRef<HTMLPreElement>(null);
+  const followLogRef = useRef(true);
   const [copied, setCopied] = useState(false);
+  const highlightedLog = useMemo(() => highlightBashLog(log), [log]);
 
   useEffect(() => {
     const node = logRef.current;
-    if (node && log) node.scrollTop = node.scrollHeight;
+    if (node && log && followLogRef.current) node.scrollTop = node.scrollHeight;
   }, [log]);
 
   const copyLog = async () => {
@@ -93,7 +96,19 @@ export function StudioBuildProgress({
           </Button>
         </header>
         {log ? (
-          <pre ref={logRef}>{log}</pre>
+          <pre
+            ref={logRef}
+            tabIndex={0}
+            aria-label="构建日志内容"
+            onScroll={(event) => {
+              followLogRef.current = shouldFollowBuildLog(event.currentTarget);
+            }}
+          >
+            <code
+              className="hljs language-bash"
+              dangerouslySetInnerHTML={{ __html: highlightedLog }}
+            />
+          </pre>
         ) : (
           <div className={`studio-build-progress__log-empty${logError ? " is-error" : ""}`}>
             {logError || (loading ? "正在等待 CodePipeline 输出日志…" : "暂无构建日志")}
