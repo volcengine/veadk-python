@@ -302,13 +302,20 @@ def _require_space_id(config: AgentKitA2ARegistryConfig) -> None:
         )
 
 
-def _resolve_credentials() -> _RegistryCredentials:
+def _resolve_credentials(endpoint: str = "") -> _RegistryCredentials:
+    endpoint_host = (urlparse(endpoint).hostname or "").lower()
+    byteplus = "byteplus" in endpoint_host
+    provider_access_key = "BYTEPLUS_ACCESS_KEY" if byteplus else "VOLCENGINE_ACCESS_KEY"
+    provider_secret_key = "BYTEPLUS_SECRET_KEY" if byteplus else "VOLCENGINE_SECRET_KEY"
+    provider_session_token = (
+        "BYTEPLUS_SESSION_TOKEN" if byteplus else "VOLCENGINE_SESSION_TOKEN"
+    )
     access_key = _first_env(
         [
             "AGENTKIT_ACCESS_KEY",
             "A2A_REGISTRY_ACCESS_KEY",
             "ACCESS_KEY",
-            "VOLCENGINE_ACCESS_KEY",
+            provider_access_key,
         ]
     )
     secret_key = _first_env(
@@ -316,14 +323,14 @@ def _resolve_credentials() -> _RegistryCredentials:
             "AGENTKIT_SECRET_KEY",
             "A2A_REGISTRY_SECRET_KEY",
             "SECRET_KEY",
-            "VOLCENGINE_SECRET_KEY",
+            provider_secret_key,
         ]
     )
     session_token = _first_env(
         [
             "AGENTKIT_SESSION_TOKEN",
             "A2A_REGISTRY_SESSION_TOKEN",
-            "VOLCENGINE_SESSION_TOKEN",
+            provider_session_token,
         ]
     )
 
@@ -411,7 +418,7 @@ def _signed_openapi_post(
     body: dict[str, Any],
 ) -> tuple[dict[str, Any], int]:
     _require_space_id(config)
-    credentials = _resolve_credentials()
+    credentials = _resolve_credentials(endpoint)
     started = time.monotonic()
     body_str = json.dumps(body, ensure_ascii=False)
     body_bytes = body_str.encode("utf-8")

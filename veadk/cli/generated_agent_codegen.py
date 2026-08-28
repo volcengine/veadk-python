@@ -29,6 +29,7 @@ from veadk.cli.generated_agent_catalog import (
     STM_BY_ID,
     TOOL_BY_ID,
     EnvVar,
+    a2a_registry_env_for_provider,
     env_for_provider,
     model_env_for_provider,
 )
@@ -1570,17 +1571,25 @@ def enable_dynamic_a2a_tools(app: FastAPI, root_agent: BaseAgent) -> None:
 
 
 def _a2a_registry_env_values(draft: AgentDraft) -> dict[str, str]:
+    defaults = {
+        item.key: item.placeholder
+        for item in a2a_registry_env_for_provider(draft.cloudProvider)
+    }
     if draft.a2aRegistry.enabled:
         registry = draft.a2aRegistry
         return {
             "REGISTRY_SPACE_ID": registry.registrySpaceId.strip(),
-            "REGISTRY_TOP_K": registry.registryTopK.strip() or "3",
-            "REGISTRY_REGION": registry.registryRegion.strip() or "cn-beijing",
+            "REGISTRY_TOP_K": registry.registryTopK.strip()
+            or defaults["REGISTRY_TOP_K"],
+            "REGISTRY_REGION": registry.registryRegion.strip()
+            or defaults["REGISTRY_REGION"],
             "REGISTRY_ENDPOINT": registry.registryEndpoint.strip()
-            or "https://open.volcengineapi.com/",
+            or defaults["REGISTRY_ENDPOINT"],
         }
     for sub_agent in draft.subAgents:
-        values = _a2a_registry_env_values(sub_agent)
+        values = _a2a_registry_env_values(
+            sub_agent.model_copy(update={"cloudProvider": draft.cloudProvider})
+        )
         if values:
             return values
     return {}
@@ -1641,13 +1650,19 @@ def debug_runtime_env_from_draft(draft: AgentDraft) -> dict[str, str]:
                 allowed_keys.add(mcp_tool.authTokenEnv)
         if node.a2aRegistry.enabled:
             registry = node.a2aRegistry
+            defaults = {
+                item.key: item.placeholder
+                for item in a2a_registry_env_for_provider(draft.cloudProvider)
+            }
             fixed_values.update(
                 {
                     "REGISTRY_SPACE_ID": registry.registrySpaceId.strip(),
-                    "REGISTRY_TOP_K": registry.registryTopK.strip() or "3",
-                    "REGISTRY_REGION": registry.registryRegion.strip() or "cn-beijing",
+                    "REGISTRY_TOP_K": registry.registryTopK.strip()
+                    or defaults["REGISTRY_TOP_K"],
+                    "REGISTRY_REGION": registry.registryRegion.strip()
+                    or defaults["REGISTRY_REGION"],
                     "REGISTRY_ENDPOINT": registry.registryEndpoint.strip()
-                    or "https://open.volcengineapi.com/",
+                    or defaults["REGISTRY_ENDPOINT"],
                 }
             )
         if node.memory.shortTerm:

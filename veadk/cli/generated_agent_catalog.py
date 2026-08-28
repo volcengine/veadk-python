@@ -184,6 +184,28 @@ A2A_REGISTRY_ENV = (
     ),
 )
 
+
+def a2a_registry_env_for_provider(provider: str) -> tuple[EnvVar, ...]:
+    """Return provider-native AgentKit A2A registry placeholders."""
+    if provider.strip().lower() != "byteplus":
+        return A2A_REGISTRY_ENV
+    region = "ap-southeast-1"
+    replacements = {
+        "REGISTRY_REGION": region,
+        "REGISTRY_ENDPOINT": f"https://agentkit.{region}.byteplusapi.com/",
+    }
+    return tuple(
+        EnvVar(
+            item.key,
+            item.required,
+            replacements.get(item.key, item.placeholder),
+            item.comment,
+            item.hidden,
+        )
+        for item in A2A_REGISTRY_ENV
+    )
+
+
 BUILTIN_TOOLS = (
     ToolOption(
         id="web_search",

@@ -29,6 +29,7 @@ from veadk.cli.generated_agent_catalog import (
     BackendOption,
     EnvVar,
     ExporterOption,
+    model_env_for_provider,
 )
 from veadk.cli.generated_agent_codegen import (
     A2ARegistryConfig,
@@ -92,6 +93,12 @@ DEFAULT_ARK_DEBUG_ENV = {
     if item.key in {"MODEL_AGENT_PROVIDER", "MODEL_AGENT_API_BASE", "MODEL_AGENT_NAME"}
 }
 DEFAULT_ARK_DEBUG_ENV["MODEL_NAME"] = DEFAULT_ARK_DEBUG_ENV["MODEL_AGENT_NAME"]
+BYTEPLUS_ARK_DEBUG_ENV = {
+    item.key: item.placeholder
+    for item in model_env_for_provider("byteplus")
+    if item.key in {"MODEL_AGENT_PROVIDER", "MODEL_AGENT_API_BASE", "MODEL_AGENT_NAME"}
+}
+BYTEPLUS_ARK_DEBUG_ENV["MODEL_NAME"] = BYTEPLUS_ARK_DEBUG_ENV["MODEL_AGENT_NAME"]
 
 
 def test_component_catalog_does_not_request_auto_resolved_credentials() -> None:
@@ -236,6 +243,37 @@ def test_debug_runtime_materializes_nested_a2a_registry_defaults() -> None:
         "REGISTRY_REGION": "cn-beijing",
         "REGISTRY_ENDPOINT": "https://open.volcengineapi.com/",
     }
+
+
+def test_byteplus_a2a_registry_uses_provider_native_defaults() -> None:
+    draft = AgentDraft(
+        name="byteplus-a2a-env",
+        cloudProvider="byteplus",
+        subAgents=[
+            AgentDraft(
+                name="remote-agent",
+                agentType="a2a",
+                a2aRegistry=A2ARegistryConfig(
+                    enabled=True,
+                    registrySpaceId="space-byteplus",
+                ),
+            )
+        ],
+    )
+
+    expected = {
+        "REGISTRY_SPACE_ID": "space-byteplus",
+        "REGISTRY_TOP_K": "3",
+        "REGISTRY_REGION": "ap-southeast-1",
+        "REGISTRY_ENDPOINT": ("https://agentkit.ap-southeast-1.byteplusapi.com/"),
+    }
+    assert debug_runtime_env_from_draft(draft) == {
+        **BYTEPLUS_ARK_DEBUG_ENV,
+        **expected,
+    }
+    env_example = _files(generate_project_from_draft(draft))[".env.example"]
+    for key, value in expected.items():
+        assert f"{key}={value}" in env_example
 
 
 def test_managed_components_keep_only_component_specific_env() -> None:

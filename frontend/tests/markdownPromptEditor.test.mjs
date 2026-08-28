@@ -937,19 +937,19 @@ test("memory is a directly visible configuration section", () => {
 test("A2A registry YAML export materializes default optional settings", () => {
   assert.match(
     configYamlSource,
-    /import \{ A2A_REGISTRY_DEFAULTS \} from "\.\/veadkCatalog";/,
+    /import \{ a2aRegistryDefaults \} from "\.\/veadkCatalog";/,
   );
   assert.match(
     configYamlSource,
-    /registry\.registryTopK\s*=\s*draft\.a2aRegistry\.registryTopK\?\.trim\(\) \|\| A2A_REGISTRY_DEFAULTS\.topK;/,
+    /registry\.registryTopK\s*=\s*draft\.a2aRegistry\.registryTopK\?\.trim\(\) \|\| defaults\.topK;/,
   );
   assert.match(
     configYamlSource,
-    /registry\.registryRegion\s*=\s*draft\.a2aRegistry\.registryRegion\?\.trim\(\) \|\| A2A_REGISTRY_DEFAULTS\.region;/,
+    /registry\.registryRegion\s*=\s*draft\.a2aRegistry\.registryRegion\?\.trim\(\) \|\| defaults\.region;/,
   );
   assert.match(
     configYamlSource,
-    /registry\.registryEndpoint\s*=\s*draft\.a2aRegistry\.registryEndpoint\?\.trim\(\) \|\|\s*A2A_REGISTRY_DEFAULTS\.endpoint;/,
+    /registry\.registryEndpoint\s*=\s*draft\.a2aRegistry\.registryEndpoint\?\.trim\(\) \|\|\s*defaults\.endpoint;/,
   );
   assert.match(
     configYamlSource,

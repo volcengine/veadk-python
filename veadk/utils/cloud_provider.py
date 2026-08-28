@@ -121,5 +121,5 @@ def apmplus_otlp_endpoint(region: str) -> str:
 def agentkit_openapi_base(region: str, provider: CloudProvider) -> str:
     """Return the AgentKit OpenAPI base URL used by Studio proxy helpers."""
     if provider == "byteplus":
-        return f"https://agentkit.{region}.bytepluses.com"
+        return f"https://agentkit.{region}.byteplusapi.com"
     return f"https://agentkit.{region}.volcengineapi.com"

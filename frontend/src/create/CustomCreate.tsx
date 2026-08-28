@@ -59,6 +59,7 @@ import {
 import {
   A2A_REGISTRY_DEFAULTS,
   A2A_REGISTRY_ENV,
+  a2aRegistryDefaults,
   BUILTIN_TOOLS,
   createBuiltinToolsForProvider,
   STM_BACKENDS,
@@ -398,18 +399,20 @@ const A2A_REGISTRY_RUNTIME_ENV = A2A_REGISTRY_ENV.filter(
 function a2aRegistryEnvValues(
   registry: AgentDraft["a2aRegistry"] | undefined,
   options: { includeDefaults: boolean },
+  cloudProvider: CloudProvider = "volcengine",
 ): Record<string, string> {
   if (!registry?.enabled) return {};
+  const defaults = a2aRegistryDefaults(cloudProvider);
   const values: Record<string, string> = {
     REGISTRY_SPACE_ID: registry.registrySpaceId ?? "",
   };
   if (options.includeDefaults) {
     values.REGISTRY_TOP_K =
-      registry.registryTopK?.trim() || A2A_REGISTRY_DEFAULTS.topK;
+      registry.registryTopK?.trim() || defaults.topK;
     values.REGISTRY_REGION =
-      registry.registryRegion?.trim() || A2A_REGISTRY_DEFAULTS.region;
+      registry.registryRegion?.trim() || defaults.region;
     values.REGISTRY_ENDPOINT =
-      registry.registryEndpoint?.trim() || A2A_REGISTRY_DEFAULTS.endpoint;
+      registry.registryEndpoint?.trim() || defaults.endpoint;
   } else {
     values.REGISTRY_TOP_K = registry.registryTopK ?? "";
     values.REGISTRY_REGION = registry.registryRegion ?? "";
@@ -423,7 +426,14 @@ function providerRuntimeEnv(
   cloudProvider: CloudProvider,
 ): EnvVar[] {
   if (cloudProvider !== "byteplus") return env;
+  const a2aDefaults = a2aRegistryDefaults(cloudProvider);
   return env.map((item) => {
+    if (item.key === "REGISTRY_REGION") {
+      return { ...item, placeholder: a2aDefaults.region };
+    }
+    if (item.key === "REGISTRY_ENDPOINT") {
+      return { ...item, placeholder: a2aDefaults.endpoint };
+    }
     if (item.key === "MODEL_EMBEDDING_NAME") {
       return { ...item, placeholder: defaultEmbeddingModelName(cloudProvider) };
     }
@@ -2274,10 +2284,16 @@ function collectDeploymentEnv(root: AgentDraft): RuntimeEnvConfiguration {
       }
     }
     if (node.a2aRegistry?.enabled) {
-      selections.push({ env: A2A_REGISTRY_ENV });
+      selections.push({
+        env: providerRuntimeEnv(A2A_REGISTRY_ENV, cloudProvider),
+      });
       Object.assign(
         fixedValues,
-        a2aRegistryEnvValues(node.a2aRegistry, { includeDefaults: true }),
+        a2aRegistryEnvValues(
+          node.a2aRegistry,
+          { includeDefaults: true },
+          cloudProvider,
+        ),
       );
     }
     if (node.memory.shortTerm) {
@@ -3814,6 +3830,7 @@ export function CustomCreate({
   // Detail-pane branching is driven by the SELECTED node's type.
   const orchestrator = isOrchestratorType(node.agentType);
   const a2a = isA2aType(node.agentType);
+  const a2aDefaults = a2aRegistryDefaults(cloudProvider);
   const modelSource = resolvedModelSource(node, cloudProvider);
   const selectModelSource = (source: ModelSource) => {
     const nextModelName =
@@ -4804,7 +4821,7 @@ export function CustomCreate({
                                   }
                                   region={
                                     node.a2aRegistry?.registryRegion ||
-                                    A2A_REGISTRY_DEFAULTS.region
+                                    a2aDefaults.region
                                   }
                                   invalid={
                                     showErrors && a2aRegistrySpaceMissing
@@ -4847,10 +4864,14 @@ export function CustomCreate({
                                       }}
                                     >
                                       <RuntimeEnvFields
-                                        env={A2A_REGISTRY_RUNTIME_ENV}
+                                        env={providerRuntimeEnv(
+                                          A2A_REGISTRY_RUNTIME_ENV,
+                                          cloudProvider,
+                                        )}
                                         values={a2aRegistryEnvValues(
                                           node.a2aRegistry,
                                           { includeDefaults: false },
+                                          cloudProvider,
                                         )}
                                         onChange={patchA2aRegistryEnv}
                                       />
