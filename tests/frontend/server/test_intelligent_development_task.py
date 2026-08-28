@@ -72,6 +72,26 @@ def test_intent_parser_accepts_only_bounded_typed_decisions() -> None:
         )
 
 
+def test_intent_parser_accepts_one_json_markdown_block() -> None:
+    decision = parse_intent_decision(
+        """```json
+{"decision":"accept","message":"","intentSummary":"继续优化天气 Agent","acceptanceCriteria":["保留现有能力"],"changesDelivery":true}
+```"""
+    )
+
+    assert decision.intent_summary == "继续优化天气 Agent"
+    assert decision.acceptance_criteria == ("保留现有能力",)
+
+
+def test_intent_parser_rejects_json_followed_by_unstructured_output() -> None:
+    with pytest.raises(ValueError, match="JSON object"):
+        parse_intent_decision(
+            '{"decision":"accept","message":"","intentSummary":"继续优化",'
+            '"acceptanceCriteria":["保留现有能力"],"changesDelivery":true}'
+            "\n额外说明"
+        )
+
+
 def test_intent_gate_preserves_normal_agent_work_and_narrowly_blocks_abuse() -> None:
     prompt = intent_gate_prompt("继续优化安全检测能力", expire_at="later")
 

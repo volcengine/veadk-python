@@ -56,6 +56,10 @@ _MAX_ARTIFACT_BYTES = 20 * 1024 * 1024
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _RUNTIME_NAME = re.compile(r"^idv-[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$")
 _DELIVERY_AGENT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,255}$")
+_JSON_CODE_FENCE = re.compile(
+    r"\A```(?:json)?[ \t]*\r?\n(?P<body>.*)\r?\n```[ \t]*\Z",
+    re.IGNORECASE | re.DOTALL,
+)
 _REQUIRED_GATES = (
     "local-checks",
     "service-probe",
@@ -373,6 +377,9 @@ steps."""
 def _json_object(value: str) -> dict[str, object]:
     decoder = json.JSONDecoder()
     stripped = value.strip()
+    fenced = _JSON_CODE_FENCE.fullmatch(stripped)
+    if fenced is not None:
+        stripped = fenced.group("body").strip()
     try:
         parsed = json.loads(stripped)
     except json.JSONDecodeError:
