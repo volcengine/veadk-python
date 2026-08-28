@@ -23,6 +23,7 @@ from google.genai import types
 
 if TYPE_CHECKING:
     from google.adk.agents.invocation_context import InvocationContext
+    from google.adk.models.llm_request import LlmRequest
 
 _USER_PREFIX = "User"
 _ASSISTANT_PREFIX = "Assistant"
@@ -60,12 +61,59 @@ def build_prompt(ctx: "InvocationContext") -> str:
     return "\n".join(lines)
 
 
+def build_prompt_from_llm_request(llm_request: "LlmRequest") -> str:
+    """Render callback-mutated LlmRequest contents into a Pi prompt."""
+
+    lines: list[str] = []
+    for content in llm_request.contents:
+        text = _content_text(content)
+        if not text:
+            continue
+        prefix = (
+            _USER_PREFIX
+            if getattr(content, "role", None) == "user"
+            else _ASSISTANT_PREFIX
+        )
+        lines.append(f"{prefix}: {text}")
+
+    conversation = ""
+    if len(lines) == 1 and lines[0].startswith(f"{_USER_PREFIX}: "):
+        conversation = lines[0][len(_USER_PREFIX) + 2 :]
+    else:
+        conversation = "\n".join(lines)
+
+    system_instruction = _system_instruction_text(
+        getattr(llm_request.config, "system_instruction", None)
+    )
+    if system_instruction:
+        if conversation:
+            return (
+                f"# System instructions\n\n{system_instruction}\n\n"
+                f"# Conversation\n\n{conversation}"
+            )
+        return f"# System instructions\n\n{system_instruction}"
+    return conversation
+
+
 def _content_text(content: Any) -> str:
     if content is None or not getattr(content, "parts", None):
         return ""
     return "".join(
         part.text for part in content.parts if part.text and not part.thought
     ).strip()
+
+
+def _system_instruction_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    parts = getattr(value, "parts", None)
+    if parts is not None:
+        return "\n".join(
+            part.text for part in parts if getattr(part, "text", None)
+        ).strip()
+    return str(value).strip()
 
 
 def make_text_event(

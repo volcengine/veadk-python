@@ -60,7 +60,7 @@ from openai_codex.generated.v2_all import (  # type: ignore[import-not-found]
     TurnCompletedNotification,
 )
 
-from veadk.runtime.base_runtime import BaseRuntime, resolve_system_append
+from veadk.runtime.base_runtime import BaseRuntime
 from veadk.runtime.codex.config import CodexRuntimeConfig
 from veadk.runtime.codex.config import codex_subprocess_env
 from veadk.runtime.codex.config import toml_string
@@ -73,15 +73,27 @@ from veadk.runtime.codex.tools_bridge import (
     resume_confirmed_tools,
 )
 from veadk.runtime.codex.translate import (
-    build_input_attachments,
-    build_prompt,
+    build_input_attachments_from_llm_request,
+    build_prompt_from_llm_request,
     notification_to_events,
+)
+from veadk.runtime.model_callbacks import (
+    build_runtime_llm_request,
+    final_events_to_llm_response,
+    has_after_model_callbacks,
+    is_final_model_text_event,
+    llm_response_to_event,
+    run_after_model_callbacks,
+    run_before_model_callbacks,
+    run_on_model_error_callbacks,
+    system_instruction_to_text,
 )
 from veadk.utils.logger import get_logger
 
 if TYPE_CHECKING:
     from google.adk.agents.invocation_context import InvocationContext
     from google.adk.events.event import Event
+    from google.adk.models.llm_request import LlmRequest
 
     from veadk.agent import Agent
 
@@ -171,13 +183,42 @@ class CodexRuntime(BaseRuntime):
             for event in resumed_events:
                 yield event
 
+            runtime_call = await build_runtime_llm_request(
+                agent,
+                ctx,
+                model=model,
+                tools_dict=tool_bundle.tools,
+            )
+            short_circuit = await run_before_model_callbacks(
+                agent,
+                ctx,
+                runtime_call.llm_request,
+                runtime_call.model_response_event,
+            )
+            if short_circuit is not None:
+                event = llm_response_to_event(
+                    runtime_call.llm_request,
+                    short_circuit,
+                    runtime_call.model_response_event,
+                )
+                _scope_event(event, ctx)
+                shim.unregister_turn(turn_token)
+                await close_toolsets(tool_bundle.opened_toolsets)
+                shutil.rmtree(codex_home, ignore_errors=True)
+                if cleanup_workspace:
+                    shutil.rmtree(workspace, ignore_errors=True)
+                yield event
+                return
+
             # Keep privileged instructions out of the user transcript. The SDK
             # exposes native base/developer instruction channels.
-            prompt = build_prompt(ctx)
-            base_instructions, developer_instructions = await resolve_system_append(
-                agent, ctx
+            prompt = build_prompt_from_llm_request(runtime_call.llm_request)
+            developer_instructions = system_instruction_to_text(
+                runtime_call.llm_request.config.system_instruction
             )
-            input_items = _build_codex_input(prompt, ctx, workspace)
+            input_items = _build_codex_input(
+                prompt, runtime_call.llm_request, workspace
+            )
             logger.info(
                 "codex_runtime_start invocation_id=%s agent=%s model=%s "
                 "sandbox=%s approval_mode=%s network_access=%s tool_count=%d",
@@ -217,7 +258,7 @@ class CodexRuntime(BaseRuntime):
                 thread = await codex.thread_start(
                     model=model,
                     model_provider=_PROVIDER_ID,
-                    base_instructions=base_instructions or None,
+                    base_instructions=runtime_call.base_instructions or None,
                     developer_instructions=developer_instructions or None,
                     cwd=workspace,
                     ephemeral=True,
@@ -271,14 +312,37 @@ class CodexRuntime(BaseRuntime):
                         await event_queue.put(_QUEUE_DONE)
 
                 pump = asyncio.create_task(_pump_codex())
+                buffer_final_text = has_after_model_callbacks(agent, ctx)
+                final_text_events: list[Event] = []
                 while True:
                     queued = await event_queue.get()
                     if queued is _QUEUE_DONE:
                         break
                     if isinstance(queued, BaseException):
                         raise queued
-                    yield queued  # type: ignore[misc]
+                    event = queued  # type: ignore[assignment]
+                    if buffer_final_text and is_final_model_text_event(
+                        event, agent.name
+                    ):
+                        final_text_events.append(event)
+                        continue
+                    yield event
                 await pump
+                if final_text_events:
+                    llm_response = final_events_to_llm_response(final_text_events)
+                    llm_response = await run_after_model_callbacks(
+                        agent,
+                        ctx,
+                        llm_response,
+                        runtime_call.model_response_event,
+                    )
+                    event = llm_response_to_event(
+                        runtime_call.llm_request,
+                        llm_response,
+                        runtime_call.model_response_event,
+                    )
+                    _scope_event(event, ctx)
+                    yield event
                 run_status = "completed"
         except asyncio.CancelledError:
             run_status = "cancelled"
@@ -297,6 +361,24 @@ class CodexRuntime(BaseRuntime):
                 ctx.invocation_id,
                 type(e).__name__,
             )
+            if isinstance(e, Exception) and "runtime_call" in locals():
+                fallback = await run_on_model_error_callbacks(
+                    agent,
+                    ctx,
+                    e,
+                    runtime_call.llm_request,
+                    runtime_call.model_response_event,
+                )
+                if fallback is not None:
+                    event = llm_response_to_event(
+                        runtime_call.llm_request,
+                        fallback,
+                        runtime_call.model_response_event,
+                    )
+                    _scope_event(event, ctx)
+                    yield event
+                    run_status = "completed"
+                    return
             raise
         finally:
             if pump is not None and not pump.done():
@@ -413,10 +495,10 @@ def _sandbox(config: CodexRuntimeConfig) -> Sandbox:
 
 
 def _build_codex_input(
-    prompt: str, ctx: "InvocationContext", workspace: str
+    prompt: str, llm_request: "LlmRequest", workspace: str
 ) -> list[object]:
     items: list[object] = [TextInput(prompt)]
-    for attachment in build_input_attachments(ctx, workspace):
+    for attachment in build_input_attachments_from_llm_request(llm_request, workspace):
         kind = attachment["kind"]
         value = attachment["value"]
         if kind == "local_image":
