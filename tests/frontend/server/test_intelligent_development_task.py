@@ -83,13 +83,96 @@ def test_intent_parser_accepts_one_json_markdown_block() -> None:
     assert decision.acceptance_criteria == ("保留现有能力",)
 
 
-def test_intent_parser_rejects_json_followed_by_unstructured_output() -> None:
-    with pytest.raises(ValueError, match="JSON object"):
-        parse_intent_decision(
-            '{"decision":"accept","message":"","intentSummary":"继续优化",'
-            '"acceptanceCriteria":["保留现有能力"],"changesDelivery":true}'
-            "\n额外说明"
+def test_intent_parser_accepts_one_json_object_with_surrounding_text() -> None:
+    decision = parse_intent_decision(
+        "以下是识别结果：\n"
+        "```json\n"
+        '{"decision":"accept","message":"","intentSummary":"继续优化",'
+        '"acceptanceCriteria":["保留现有能力"],"changesDelivery":true}'
+        "\n```\n"
+        "请按以上结果执行。"
+    )
+
+    assert decision.decision == "accept"
+    assert decision.intent_summary == "继续优化"
+
+
+def test_intent_parser_accepts_optional_irrelevant_and_extension_fields() -> None:
+    accepted = parse_intent_decision(
+        json.dumps(
+            {
+                "decision": "accept",
+                "intentSummary": "继续优化天气 Agent",
+                "acceptanceCriteria": ["保留现有能力"],
+                "changesDelivery": True,
+                "reason": "这是现有 Agent 的正常迭代",
+            },
+            ensure_ascii=False,
         )
+    )
+    rejected = parse_intent_decision(
+        json.dumps(
+            {"decision": "reject", "message": "该请求与创建 Agent 无关。"},
+            ensure_ascii=False,
+        )
+    )
+
+    assert accepted.message == ""
+    assert accepted.changes_delivery is True
+    assert rejected.intent_summary == ""
+    assert rejected.acceptance_criteria == ()
+    assert rejected.changes_delivery is False
+
+
+def test_intent_parser_rejects_multiple_json_decisions() -> None:
+    with pytest.raises(ValueError, match="multiple"):
+        parse_intent_decision(
+            '{"decision":"reject","message":"拒绝。"}\n'
+            '{"decision":"accept","intentSummary":"继续优化",'
+            '"acceptanceCriteria":["保留现有能力"],"changesDelivery":true}'
+        )
+
+
+def test_intent_parser_ignores_unrelated_json_around_one_decision() -> None:
+    decision = parse_intent_decision(
+        '诊断信息：{"attempt":1}\n'
+        '{"decision":"accept","intentSummary":"继续优化",'
+        '"acceptanceCriteria":["保留现有能力"],"changesDelivery":true}\n'
+        '附加信息：{"format":"json"}'
+    )
+
+    assert decision.decision == "accept"
+
+
+@pytest.mark.parametrize(
+    "invalid_field",
+    [
+        {"intentSummary": "", "acceptanceCriteria": ["保留现有能力"]},
+        {"intentSummary": "继续优化", "acceptanceCriteria": []},
+        {"intentSummary": "继续优化", "acceptanceCriteria": "保留现有能力"},
+        {
+            "intentSummary": "继续优化",
+            "acceptanceCriteria": ["保留现有能力"],
+            "changesDelivery": "true",
+        },
+    ],
+)
+def test_intent_parser_rejects_incomplete_or_mistyped_accepted_decision(
+    invalid_field: dict[str, object],
+) -> None:
+    payload: dict[str, object] = {
+        "decision": "accept",
+        "changesDelivery": True,
+        **invalid_field,
+    }
+
+    with pytest.raises(ValueError):
+        parse_intent_decision(json.dumps(payload, ensure_ascii=False))
+
+
+def test_intent_parser_rejects_oversized_response() -> None:
+    with pytest.raises(ValueError, match="too large"):
+        parse_intent_decision("x" * (128 * 1024 + 1))
 
 
 def test_intent_gate_preserves_normal_agent_work_and_narrowly_blocks_abuse() -> None:
