@@ -73,7 +73,7 @@ root_agent = Agent(
     tools=[get_city_weather],
 )
 `,
-    "requirements.txt": `veadk-python==1.1.5
+    "requirements.txt": `veadk-python==1.1.6
 agentkit-sdk-python==0.8.4
 google-adk==2.1.0
 lark-channel-sdk==1.2.0
