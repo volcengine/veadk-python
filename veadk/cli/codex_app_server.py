@@ -74,6 +74,14 @@ class CodexAppServerError(RuntimeError):
     """The Sandbox Codex app-server rejected or interrupted an operation."""
 
 
+class CodexAppServerTransportError(CodexAppServerError):
+    """The Codex app-server transport could not continue an operation."""
+
+
+class CodexAppServerTurnTimeoutError(CodexAppServerError):
+    """A Codex turn exceeded its configured inactivity timeout."""
+
+
 def _app_server_error_detail(error: object) -> str:
     """Preserve the complete JSON-RPC error payload for upstream diagnostics."""
     if isinstance(error, (dict, list)):
@@ -470,7 +478,7 @@ class CodexAppServerSession:
         if self.healthy:
             return
         if self._closed:
-            raise CodexAppServerError("Codex app-server connection is closed.")
+            raise CodexAppServerTransportError("Codex app-server connection is closed.")
         async with self._connection_lock:
             if self.healthy:
                 return
@@ -507,14 +515,14 @@ class CodexAppServerSession:
     ) -> None:
         """Refresh a closed or aging transport without replacing its thread."""
         if self._closed:
-            raise CodexAppServerError("Codex app-server 连接已关闭。")
+            raise CodexAppServerTransportError("Codex app-server 连接已关闭。")
         if not self.thread_id:
-            raise CodexAppServerError("Codex app-server 尚未连接。")
+            raise CodexAppServerTransportError("Codex app-server 尚未连接。")
         if not self._transport_needs_refresh(minimum_lifetime_seconds):
             return
         if self.active:
             if not self.healthy:
-                raise self._connection_failure or CodexAppServerError(
+                raise self._connection_failure or CodexAppServerTransportError(
                     "Codex app-server 连接已断开。"
                 )
             return
@@ -523,14 +531,14 @@ class CodexAppServerSession:
                 return
             if self.active:
                 if not self.healthy:
-                    raise self._connection_failure or CodexAppServerError(
+                    raise self._connection_failure or CodexAppServerTransportError(
                         "Codex app-server 连接已断开。"
                     )
                 return
             if any(not future.done() for future in self._pending_requests.values()):
                 if self.healthy:
                     return
-                raise self._connection_failure or CodexAppServerError(
+                raise self._connection_failure or CodexAppServerTransportError(
                     "Codex app-server 连接已断开。"
                 )
             await self._reconnect_transport()
@@ -552,7 +560,7 @@ class CodexAppServerSession:
                     max_size=_APP_SERVER_MAX_MESSAGE_BYTES,
                 )
         except Exception as error:
-            raise CodexAppServerError(
+            raise CodexAppServerTransportError(
                 "无法连接 AgentKit Session 中的 Codex 服务。"
             ) from error
         self._connected_at = time.monotonic()
@@ -700,11 +708,16 @@ class CodexAppServerSession:
         """Start one Codex turn and stream its public events."""
         if self.active:
             raise CodexAppServerError("当前 Codex 任务仍在运行。")
+        turn_timeout = (
+            _TURN_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+        )
+        if turn_timeout <= 0 or not math.isfinite(turn_timeout):
+            raise CodexAppServerError("Codex Turn 超时时间无效。")
         if not self.thread_id:
             await self.connect()
         else:
             await self.ensure_connected(
-                minimum_lifetime_seconds=_TURN_TIMEOUT_SECONDS,
+                minimum_lifetime_seconds=turn_timeout,
             )
         if not self.thread_id:
             raise CodexAppServerError("Codex Thread 尚未初始化。")
@@ -713,11 +726,6 @@ class CodexAppServerSession:
             raise CodexAppServerError("消息内容不能为空。")
         skills = await self._resolve_skills(prompt, skill_ids)
         turn_permissions = permissions or self.permissions
-        turn_timeout = (
-            _TURN_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
-        )
-        if turn_timeout <= 0 or not math.isfinite(turn_timeout):
-            raise CodexAppServerError("Codex Turn 超时时间无效。")
 
         queue: asyncio.Queue[CodexAppServerEvent] = asyncio.Queue()
         completion: asyncio.Future[dict[str, object]] = (
@@ -779,16 +787,14 @@ class CodexAppServerSession:
                         # absolute wall-clock limit. Long coding tasks can run
                         # well beyond ten minutes while continuing to emit
                         # reasoning, tool, and progress events.
-                        deadline = (
-                            asyncio.get_running_loop().time() + _TURN_TIMEOUT_SECONDS
-                        )
+                        deadline = asyncio.get_running_loop().time() + turn_timeout
                     else:
                         event_task.cancel()
                         with contextlib.suppress(asyncio.CancelledError):
                             await event_task
             except TimeoutError as error:
                 await self.interrupt()
-                raise CodexAppServerError(
+                raise CodexAppServerTurnTimeoutError(
                     "Codex 智能体长时间没有新进度，已停止本次任务，请重试。"
                 ) from error
 
@@ -1467,12 +1473,14 @@ class CodexAppServerSession:
 
     async def _send(self, message: dict[str, object]) -> None:
         if self._websocket is None or self._closed:
-            raise CodexAppServerError("Codex app-server 连接已关闭。")
+            raise CodexAppServerTransportError("Codex app-server 连接已关闭。")
         async with self._send_lock:
             try:
                 await self._websocket.send(json.dumps(message, ensure_ascii=False))
             except Exception as error:
-                failure = CodexAppServerError("向 Codex app-server 发送请求失败。")
+                failure = CodexAppServerTransportError(
+                    "向 Codex app-server 发送请求失败。"
+                )
                 failure.__cause__ = error
                 self._connection_failure = failure
                 raise failure
@@ -1511,14 +1519,14 @@ class CodexAppServerSession:
         except asyncio.CancelledError:
             raise
         except Exception as error:  # noqa: BLE001 - transport boundary
-            if isinstance(error, CodexAppServerError):
+            if isinstance(error, CodexAppServerTransportError):
                 failure = error
             else:
-                failure = CodexAppServerError("Codex app-server 连接异常。")
+                failure = CodexAppServerTransportError("Codex app-server 连接异常。")
                 failure.__cause__ = error
         else:
             if not self._closed:
-                failure = CodexAppServerError("Codex app-server 连接已断开。")
+                failure = CodexAppServerTransportError("Codex app-server 连接已断开。")
         if failure is not None:
             self._connection_failure = failure
             for future in self._pending_requests.values():
@@ -2585,6 +2593,8 @@ __all__ = [
     "CodexAppServerError",
     "CodexAppServerEvent",
     "CodexAppServerSession",
+    "CodexAppServerTransportError",
+    "CodexAppServerTurnTimeoutError",
     "CodexApproval",
     "CodexDirectoryListing",
     "CodexImportedImage",

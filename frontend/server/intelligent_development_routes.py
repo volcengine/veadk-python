@@ -75,6 +75,8 @@ from veadk.cli.frontend_sandbox import (
     SandboxSessionUnavailableError,
     SandboxStreamEvent,
     SandboxToolQuotaError,
+    SandboxTransportError,
+    SandboxTurnTimeoutError,
     SandboxValidationError,
     mount_sandbox_routes,
 )
@@ -750,9 +752,21 @@ def _stream_error_payload(error: SandboxError) -> dict[str, object]:
             SandboxProvisioningError.retryable,
         ),
         (
+            SandboxTurnTimeoutError,
+            SandboxTurnTimeoutError.code,
+            "本轮任务长时间未产生新进度，已停止。开发环境已保留，请在当前会话重试。",
+            SandboxTurnTimeoutError.retryable,
+        ),
+        (
+            SandboxTransportError,
+            SandboxTransportError.code,
+            "开发环境连接中断，本轮任务未能继续。开发环境已保留，请在当前会话重试。",
+            SandboxTransportError.retryable,
+        ),
+        (
             SandboxInvocationError,
             SandboxInvocationError.code,
-            "Codex 暂时无法响应，开发环境已保留。请在当前会话重试。",
+            "Codex 执行本轮任务失败。开发环境已保留，请在当前会话重试。",
             SandboxInvocationError.retryable,
         ),
     )
