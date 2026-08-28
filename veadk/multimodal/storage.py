@@ -19,13 +19,12 @@ import asyncio
 import hashlib
 import json
 import os
-from pathlib import Path
 import shutil
-from typing import Protocol
+from pathlib import Path
+from typing import Any, Protocol
 from urllib.parse import quote
 
-from .models import MediaRecord
-from .models import MediaRef
+from .models import MediaRecord, MediaRef
 
 _DEFAULT_LOCAL_MEDIA_DIR = Path("/tmp/veadk-media")
 
@@ -217,8 +216,10 @@ class TosMediaStorage:
         secret_key: str,
         session_token: str = "",
         key_prefix: str = "veadk-media",
+        client: Any | None = None,
+        signed_url_endpoint: str = "",
     ) -> None:
-        if not bucket or not access_key or not secret_key:
+        if not bucket or (client is None and (not access_key or not secret_key)):
             raise ValueError(
                 "TOS media storage requires bucket, access key, and secret key."
             )
@@ -227,7 +228,8 @@ class TosMediaStorage:
         self._tos = tos
         self._bucket = bucket
         self._key_prefix = key_prefix.strip("/")
-        self._client = tos.TosClientV2(
+        self._signed_url_endpoint = signed_url_endpoint.strip() or endpoint
+        self._client = client or tos.TosClientV2(
             ak=access_key,
             sk=secret_key,
             security_token=session_token,
@@ -314,6 +316,7 @@ class TosMediaStorage:
             bucket=self._bucket,
             key=self._key(ref, "content"),
             expires=900,
+            alternative_endpoint=self._signed_url_endpoint,
         )
         return output.signed_url
 

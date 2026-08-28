@@ -21,6 +21,9 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, cast
 
+from frontend.server.storage import StudioStorageConfig
+from frontend.server.storage.tos import create_tos_client_factory
+
 from .dispatcher import Dispatcher
 from .entrypoint import make_handler
 from .executor import ProviderRuntimeExecutor
@@ -130,19 +133,22 @@ def create_dispatcher(
 
 
 def _tos_client_factory(settings: SchedulerSettings) -> Callable[[], Any]:
-    def create() -> Any:
-        import tos
+    config = StudioStorageConfig(
+        provider=settings.provider,
+        bucket=settings.bucket,
+        region=settings.storage_region,
+        endpoint=settings.storage_endpoint,
+    )
 
+    def credentials() -> tuple[str, str, str | None]:
         credentials = resolve_service_credentials(settings.provider)
-        return tos.TosClientV2(
-            ak=credentials.access_key,
-            sk=credentials.secret_key,
-            security_token=credentials.session_token or None,
-            endpoint=settings.storage_endpoint,
-            region=settings.storage_region,
+        return (
+            credentials.access_key,
+            credentials.secret_key,
+            credentials.session_token or None,
         )
 
-    return create
+    return create_tos_client_factory(config, credentials)
 
 
 def handler(event: Any, context: Any) -> dict[str, int]:

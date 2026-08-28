@@ -92,7 +92,7 @@ def _delete_objects(client: Any, *, bucket: str, keys: tuple[str, ...]) -> None:
     for key in keys:
         try:
             client.delete_object(bucket=bucket, key=key)
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - collect every failed delete
             errors.append(error)
     if not errors:
         return
@@ -297,6 +297,7 @@ class TosKnowledgeUploadStore:
         if self.max_file_bytes <= 0:
             raise ValueError("VEADK_KNOWLEDGE_MAX_FILE_BYTES must be positive")
         self._prepared_targets: set[tuple[str, str]] = set()
+        self._client_factories: dict[tuple[str, str, str], Callable[[], Any]] = {}
         self._lock = RLock()
         configured_account_id = str(
             environment.get("VEADK_STUDIO_ACCOUNT_ID") or ""
@@ -680,13 +681,22 @@ class TosKnowledgeUploadStore:
             return account_id
 
     def _client(self, target: _UploadTarget) -> Any:
-        config = StudioStorageConfig(
-            provider=self._provider,
-            bucket=target.bucket,
-            region=target.region,
-            endpoint=target.endpoint,
-        )
-        return create_tos_client_factory(config, self._resolve_credentials)()
+        cache_key = (target.bucket, target.region, target.endpoint)
+        with self._lock:
+            factory = self._client_factories.get(cache_key)
+            if factory is None:
+                config = StudioStorageConfig(
+                    provider=self._provider,
+                    bucket=target.bucket,
+                    region=target.region,
+                    endpoint=target.endpoint,
+                )
+                factory = create_tos_client_factory(
+                    config,
+                    self._resolve_credentials,
+                )
+                self._client_factories[cache_key] = factory
+        return factory()
 
     def _prepare_target(self, client: Any, target: _UploadTarget) -> None:
         cache_key = (target.bucket, target.region)
