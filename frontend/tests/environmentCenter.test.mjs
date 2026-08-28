@@ -41,6 +41,10 @@ const buildProgressStyles = readFileSync(
   new URL("../src/ui/StudioBuildProgress.css", import.meta.url),
   "utf8",
 );
+const buildLogSource = readFileSync(
+  new URL("../src/ui/studioBuildLog.ts", import.meta.url),
+  "utf8",
+);
 
 test("keeps Environment available without a standalone sidebar item", () => {
   assert.doesNotMatch(sidebarSource, /onEnvironment: \(\) => void/);
@@ -152,16 +156,49 @@ test("persists environments and starts image builds through the Studio API", () 
 test("shows live build steps and redacted log snapshots in a responsive detail dialog", () => {
   assert.match(environmentSource, /getEnvironmentBuild/);
   assert.match(environmentSource, /includeLogs: true/);
-  assert.match(environmentSource, /window\.setTimeout\(refresh, 5000\)/);
+  assert.match(environmentSource, /BUILD_LOG_REFRESH_INTERVAL_MS = 3_000/);
+  assert.match(environmentSource, /window\.setTimeout\(refresh, BUILD_LOG_REFRESH_INTERVAL_MS\)/);
   assert.match(environmentSource, /<StudioBuildProgress/);
   assert.match(environmentSource, /构建详情/);
   assert.match(environmentSource, /已用时/);
   assert.match(environmentSource, /在 CodePipeline 中查看/);
   assert.match(clientSource, /\?includeLogs=true/);
   assert.match(buildProgressSource, /navigator\.clipboard\.writeText\(log\)/);
+  assert.match(buildProgressSource, /highlightBashLog\(log\)/);
+  assert.match(buildProgressSource, /shouldFollowBuildLog\(event\.currentTarget\)/);
+  assert.match(buildProgressSource, /dangerouslySetInnerHTML/);
   assert.match(buildProgressSource, /正在等待 CodePipeline 输出日志/);
+  assert.match(buildLogSource, /highlight\.js\/lib\/languages\/bash/);
+  assert.match(buildProgressStyles, /overflow: auto/);
+  assert.match(environmentStyles, /\.environment-build-dialog__body[\s\S]*?overflow: hidden/);
   assert.match(buildProgressStyles, /@media \(max-width: 640px\)/);
   assert.match(environmentStyles, /max-height: 92dvh/);
+});
+
+test("highlights Bash logs and follows only while the reader stays near the bottom", async () => {
+  const server = await createServer({
+    appType: "custom",
+    logLevel: "silent",
+    optimizeDeps: { noDiscovery: true },
+    server: { middlewareMode: true },
+  });
+  try {
+    const buildLog = await server.ssrLoadModule("/src/ui/studioBuildLog.ts");
+    assert.equal(buildLog.shouldFollowBuildLog({
+      scrollHeight: 1000,
+      scrollTop: 730,
+      clientHeight: 240,
+    }), true);
+    assert.equal(buildLog.shouldFollowBuildLog({
+      scrollHeight: 1000,
+      scrollTop: 600,
+      clientHeight: 240,
+    }), false);
+    assert.match(buildLog.highlightBashLog("apt-get update && echo ready"), /hljs-built_in/);
+    assert.match(buildLog.highlightBashLog("echo '<script>'"), /&lt;script&gt;/);
+  } finally {
+    await server.close();
+  }
 });
 
 test("generates a Dockerfile from language and selected tools", async () => {
@@ -190,22 +227,19 @@ test("generates a Dockerfile from language and selected tools", async () => {
     assert.match(dockerfile, /PIP_INDEX_URL=https:\/\/pypi\.org\/simple/);
     assert.match(dockerfile, /PYTHON_SOURCE_BASE_URL=https:\/\/www\.python\.org\/ftp\/python/);
     assert.match(dockerfile, /PLAYWRIGHT_DOWNLOAD_HOST=https:\/\/cdn\.playwright\.dev/);
-    assert.match(dockerfile, /https:\/\/archive\.ubuntu\.com/);
-    assert.match(dockerfile, /https:\/\/security\.ubuntu\.com/);
+    assert.match(dockerfile, /ARG APT_MIRROR_URL=http:\/\/archive\.ubuntu\.com\/ubuntu/);
     assert.match(dockerfile, /Acquire::Retries \"5\"/);
     assert.match(dockerfile, /Acquire::ForceIPv4 \"true\"/);
-    assert.ok(
-      dockerfile.indexOf("apt-get install -y --no-install-recommends ca-certificates")
-        < dockerfile.indexOf("https://archive.ubuntu.com"),
-      "CA certificates must be installed before Ubuntu mirrors switch to HTTPS",
-    );
+    assert.equal(dockerfile.match(/apt-get update/g)?.length, 1);
+    assert.equal(dockerfile.match(/apt-get install -y --no-install-recommends/g)?.length, 1);
     assert.match(dockerfile, /Python-3\.12\.11\.tgz/);
     assert.match(dockerfile, /\.\/configure --prefix=\/opt\/python/);
     assert.doesNotMatch(dockerfile, /astral\.sh|github\.com\/astral-sh/);
     assert.match(dockerfile, /pandoc/);
     assert.match(dockerfile, /chromium/);
     assert.match(dockerfile, /lark-cli/);
-    assert.match(dockerfile, /python -m playwright install --with-deps chromium/);
+    assert.match(dockerfile, /python -m playwright install chromium/);
+    assert.doesNotMatch(dockerfile, /playwright install --with-deps/);
     assert.match(dockerfile, /# lark-cli: 飞书开放平台命令行工具/);
     assert.match(dockerfile, /# Playwright: 浏览器自动化与端到端测试/);
   } finally {
@@ -253,17 +287,19 @@ test("uses reliable GitHub CLI and browser recipes without duplicate Chromium in
       language: "python-3.12",
       optionIds: ["opencli", "github-cli", "playwright", "chromium"],
     });
-    assert.match(dockerfile, /githubcli-archive-keyring\.gpg/);
-    assert.match(dockerfile, /https:\/\/cli\.github\.com\/packages stable main/);
+    assert.match(dockerfile, /^    gh \\$/m);
     assert.match(dockerfile, /ENV PLAYWRIGHT_BROWSERS_PATH=\/ms-playwright/);
     assert.equal(
       dockerfile.match(/python -m pip install --upgrade playwright/g)?.length,
       1,
     );
     assert.equal(
-      dockerfile.match(/python -m playwright install --with-deps chromium/g)?.length,
+      dockerfile.match(/python -m playwright install chromium/g)?.length,
       1,
     );
+    assert.equal(dockerfile.match(/apt-get update/g)?.length, 1);
+    assert.equal(dockerfile.match(/apt-get install -y --no-install-recommends/g)?.length, 1);
+    assert.match(dockerfile, /^    libasound2t64 \\$/m);
     assert.match(dockerfile, /npm install --global @jackwener\/opencli@1\.8\.7/);
   } finally {
     await server.close();
@@ -293,6 +329,8 @@ test("generates every supported OS and Python combination with per-tool comments
         });
         assert.match(dockerfile, new RegExp(`^FROM ${operatingSystem.image.replace(".", "\\.")}$`, "m"));
         assert.match(dockerfile, new RegExp(`^# Python ${language.id.replace("python-", "").replace(".", "\\.")}$`, "m"));
+        assert.equal(dockerfile.match(/apt-get update/g)?.length, 1);
+        assert.equal(dockerfile.match(/apt-get install -y --no-install-recommends/g)?.length, 1);
         for (const category of model.ENVIRONMENT_CATEGORIES) {
           for (const option of category.options) {
             assert.match(dockerfile, new RegExp(`^# ${option.label.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}:`, "m"));

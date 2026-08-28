@@ -167,6 +167,8 @@ const ACTIVE_BUILD_STATUSES = new Set<EnvironmentBuildStatus>([
   "scanning",
 ]);
 
+const BUILD_LOG_REFRESH_INTERVAL_MS = 3_000;
+
 const BUILD_STATUS_LABELS: Record<EnvironmentBuildStatus, string> = {
   preparing: "准备中",
   queued: "排队中",
@@ -285,12 +287,12 @@ function EnvironmentBuildDetailsDialog({
         setError("");
         onBuildUpdateRef.current(next);
         if (ACTIVE_BUILD_STATUSES.has(next.status)) {
-          timer = window.setTimeout(refresh, 5000);
+          timer = window.setTimeout(refresh, BUILD_LOG_REFRESH_INTERVAL_MS);
         }
       } catch (cause) {
         if ((cause as Error)?.name === "AbortError") return;
         setError(cause instanceof Error ? cause.message : String(cause));
-        timer = window.setTimeout(refresh, 5000);
+        timer = window.setTimeout(refresh, BUILD_LOG_REFRESH_INTERVAL_MS);
       } finally {
         if (!controller.signal.aborted) setLoading(false);
       }

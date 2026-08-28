@@ -19,10 +19,12 @@ from __future__ import annotations
 import os
 import re
 import tempfile
+import threading
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeVar
 from urllib.parse import urlsplit
 
 from frontend.server.deployment_resources import (
@@ -46,10 +48,13 @@ CP_WORKSPACE_ENV = "VEADK_STUDIO_ENVIRONMENT_CP_WORKSPACE"
 CR_REPOSITORY_ENV = "VEADK_STUDIO_ENVIRONMENT_CR_REPOSITORY"
 
 _MANAGED_CP_WORKSPACE = "veadk-studio-environments"
-_MANAGED_CP_PIPELINE = "veadk-studio-environment-build-v7"
+_MANAGED_CP_PIPELINE = "veadk-studio-environment-build-v8"
 _MANAGED_CR_REGISTRY = "veadk-studio-environments"
 _MANAGED_CR_NAMESPACE = "runtime-environments"
 _MANAGED_CR_REPOSITORY = "base-images"
+_RESOURCE_RESOLUTION_RETRY_DELAYS = (0.5, 1.0)
+
+_ResourceT = TypeVar("_ResourceT")
 
 _PIPELINE_PARAMETERS = [
     {
@@ -75,6 +80,12 @@ _PIPELINE_PARAMETERS = [
     {"Key": "CR_OCI", "Value": "", "Dynamic": True, "Env": True},
     {"Key": "CR_TAG", "Value": "", "Dynamic": True, "Env": True},
     {"Key": "CR_REGION", "Value": "", "Dynamic": True, "Env": True},
+    {
+        "Key": "APT_MIRROR_URL",
+        "Value": "http://archive.ubuntu.com/ubuntu",
+        "Dynamic": True,
+        "Env": True,
+    },
     {
         "Key": "PIP_INDEX_URL",
         "Value": "https://pypi.org/simple",
@@ -125,7 +136,7 @@ stages:
             displayName: Build and push image
             component: build@2.0.0/buildkit-cr@5.0.0
             inputs:
-              buildParams: "--build-arg PIP_INDEX_URL=$PIP_INDEX_URL --build-arg PYTHON_SOURCE_BASE_URL=$PYTHON_SOURCE_BASE_URL --build-arg PLAYWRIGHT_DOWNLOAD_HOST=$PLAYWRIGHT_DOWNLOAD_HOST"
+              buildParams: "--build-arg APT_MIRROR_URL=$APT_MIRROR_URL --build-arg PIP_INDEX_URL=$PIP_INDEX_URL --build-arg PYTHON_SOURCE_BASE_URL=$PYTHON_SOURCE_BASE_URL --build-arg PLAYWRIGHT_DOWNLOAD_HOST=$PLAYWRIGHT_DOWNLOAD_HOST"
               compression: gzip
               contextPath: $PROJECT_ROOT_DIR
               crDomain: $CR_DOMAIN
@@ -229,6 +240,10 @@ class StudioEnvironmentCloudGateway:
         self.credentials = credentials
         self._resolve_credentials = resolve_credentials
         self._resources = resource_service
+        self._cp_resource: CodePipelineResource | None = None
+        self._cr_resource: ContainerRegistryResource | None = None
+        self._cp_resource_lock = threading.Lock()
+        self._cr_resource_lock = threading.Lock()
 
     def describe(self) -> EnvironmentResourceInfo:
         registry, namespace, repository = self._configured_cr()
@@ -260,8 +275,8 @@ class StudioEnvironmentCloudGateway:
         image_tag: str,
     ) -> tuple[EnvironmentResources, str, str]:
         try:
-            cp = self._resolve_code_pipeline()
-            cr = self._resolve_container_registry()
+            cp = self._cached_code_pipeline()
+            cr = self._cached_container_registry()
             image_repository = f"{cr.domain}/{cr.namespace}/{cr.repository}"
             cr = cr.model_copy(update={"image_repository": image_repository})
             resources = EnvironmentResources(
@@ -287,6 +302,7 @@ class StudioEnvironmentCloudGateway:
                 {"Key": "CR_OCI", "Value": cr.repository},
                 {"Key": "CR_TAG", "Value": image_tag},
                 {"Key": "CR_REGION", "Value": self.settings.region},
+                {"Key": "APT_MIRROR_URL", "Value": self._apt_mirror_url()},
                 {"Key": "PIP_INDEX_URL", "Value": self._pip_index_url()},
                 {
                     "Key": "PYTHON_SOURCE_BASE_URL",
@@ -315,6 +331,11 @@ class StudioEnvironmentCloudGateway:
                 f"启动环境镜像构建失败：{_safe_error(error, self.credentials)}"
             ) from error
 
+    def _apt_mirror_url(self) -> str:
+        if self.settings.provider == "volcengine":
+            return "http://mirrors.volces.com/ubuntu"
+        return "http://mirror.sg.gs/ubuntu"
+
     def _pip_index_url(self) -> str:
         if self.settings.provider == "volcengine":
             return "https://mirrors.aliyun.com/pypi/simple/"
@@ -329,6 +350,38 @@ class StudioEnvironmentCloudGateway:
         if self.settings.provider == "volcengine":
             return "https://npmmirror.com/mirrors/playwright"
         return "https://cdn.playwright.dev"
+
+    def _cached_code_pipeline(self) -> CodePipelineResource:
+        if self._cp_resource is not None:
+            return self._cp_resource
+        with self._cp_resource_lock:
+            if self._cp_resource is None:
+                self._cp_resource = self._resolve_with_retry(
+                    self._resolve_code_pipeline
+                )
+            return self._cp_resource
+
+    def _cached_container_registry(self) -> ContainerRegistryResource:
+        if self._cr_resource is not None:
+            return self._cr_resource
+        with self._cr_resource_lock:
+            if self._cr_resource is None:
+                self._cr_resource = self._resolve_with_retry(
+                    self._resolve_container_registry
+                )
+            return self._cr_resource
+
+    def _resolve_with_retry(self, operation: Callable[[], _ResourceT]) -> _ResourceT:
+        for attempt in range(len(_RESOURCE_RESOLUTION_RETRY_DELAYS) + 1):
+            try:
+                return operation()
+            except Exception as error:
+                if attempt >= len(
+                    _RESOURCE_RESOLUTION_RETRY_DELAYS
+                ) or not _is_transient_network_error(error):
+                    raise
+                time.sleep(_RESOURCE_RESOLUTION_RETRY_DELAYS[attempt])
+        raise AssertionError("resource resolution retry loop exhausted")
 
     def build_status(
         self,
@@ -720,6 +773,44 @@ def _step_label(name: str, display_name: str) -> str:
         "build": "构建并推送镜像",
     }
     return labels.get(normalized, display_name or name)
+
+
+def _is_transient_network_error(error: BaseException) -> bool:
+    """Recognize SDK and stdlib network failures without retrying API errors."""
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, (TimeoutError, ConnectionError)):
+            return True
+        error_name = type(current).__name__.casefold()
+        if any(
+            marker in error_name
+            for marker in (
+                "connectionerror",
+                "connecttimeout",
+                "networkerror",
+                "readtimeout",
+            )
+        ):
+            return True
+        detail = str(current).casefold()
+        if any(
+            marker in detail
+            for marker in (
+                "connection aborted",
+                "connection reset",
+                "connection timed out",
+                "connect timeout",
+                "read timed out",
+                "read timeout",
+                "remote disconnected",
+                "temporarily unavailable",
+            )
+        ):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 def _safe_error(error: BaseException, credentials: CloudCredentials | None) -> str:

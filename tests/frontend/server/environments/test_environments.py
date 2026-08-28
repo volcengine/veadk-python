@@ -17,6 +17,9 @@ from __future__ import annotations
 import io
 import json
 import tarfile
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import pytest
@@ -26,6 +29,7 @@ from fastapi.testclient import TestClient
 from frontend.server.deployment_resources import DeploymentResourceService
 from frontend.server.environments.dockerfile import build_dockerfile
 from frontend.server.environments.models import (
+    SUPPORTED_OPTION_IDS,
     CodePipelineResource,
     ContainerRegistryResource,
     EnvironmentInput,
@@ -316,13 +320,11 @@ def test_all_os_language_combinations_generate_buildable_commented_dockerfiles(
     assert "PIP_INDEX_URL=https://pypi.org/simple" in dockerfile
     assert "PYTHON_SOURCE_BASE_URL=https://www.python.org/ftp/python" in dockerfile
     assert "PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.playwright.dev" in dockerfile
-    assert "https://archive.ubuntu.com" in dockerfile
-    assert "https://security.ubuntu.com" in dockerfile
+    assert "ARG APT_MIRROR_URL=http://archive.ubuntu.com/ubuntu" in dockerfile
     assert 'Acquire::Retries "5"' in dockerfile
     assert 'Acquire::ForceIPv4 "true"' in dockerfile
-    assert dockerfile.index(
-        "apt-get install -y --no-install-recommends ca-certificates"
-    ) < dockerfile.index("https://archive.ubuntu.com")
+    assert dockerfile.count("apt-get update") == 1
+    assert dockerfile.count("apt-get install -y --no-install-recommends") == 1
     assert "# VeADK:" in dockerfile
     assert "# lxml-html-clean:" in dockerfile
     assert (
@@ -336,7 +338,8 @@ def test_all_os_language_combinations_generate_buildable_commented_dockerfiles(
     assert "# lark-cli:" in dockerfile
     assert "# pandoc:" in dockerfile
     assert "# Playwright:" in dockerfile
-    assert "python -m playwright install --with-deps chromium" in dockerfile
+    assert "python -m playwright install chromium" in dockerfile
+    assert "playwright install --with-deps" not in dockerfile
     uses_ubuntu_python = (
         operating_system == "ubuntu-22.04" and language == "python-3.10"
     ) or (operating_system == "ubuntu-24.04" and language == "python-3.12")
@@ -361,9 +364,8 @@ def test_all_os_language_combinations_generate_buildable_commented_dockerfiles(
         (
             ["github-cli"],
             [
-                "githubcli-archive-keyring.gpg",
-                "https://cli.github.com/packages stable main",
-                "apt-get install -y --no-install-recommends gh",
+                "# GitHub CLI: 在终端中管理 GitHub 工作流",
+                "    gh \\",
             ],
         ),
         (
@@ -378,7 +380,7 @@ def test_all_os_language_combinations_generate_buildable_commented_dockerfiles(
             [
                 "ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright",
                 "python -m pip install --upgrade playwright",
-                "python -m playwright install --with-deps chromium",
+                "python -m playwright install chromium",
             ],
         ),
         (
@@ -386,7 +388,7 @@ def test_all_os_language_combinations_generate_buildable_commented_dockerfiles(
             [
                 "ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright",
                 "python -m pip install --upgrade playwright",
-                "python -m playwright install --with-deps chromium",
+                "python -m playwright install chromium",
             ],
         ),
     ],
@@ -400,15 +402,57 @@ def test_special_tool_recipes_include_reliable_installers(option_ids, expected):
         assert fragment in dockerfile
 
 
-def test_playwright_and_chromium_share_one_browser_install():
+@pytest.mark.parametrize(
+    "option_ids",
+    (["playwright", "chromium"], ["chromium", "playwright"]),
+)
+def test_playwright_and_chromium_share_one_browser_install(option_ids):
     dockerfile = build_dockerfile(
-        EnvironmentInput.model_validate(_payload(optionIds=["playwright", "chromium"]))
+        EnvironmentInput.model_validate(_payload(optionIds=option_ids))
     )
 
     assert dockerfile.count("python -m pip install --upgrade playwright") == 1
-    assert dockerfile.count("python -m playwright install --with-deps chromium") == 1
+    assert dockerfile.count("python -m playwright install chromium") == 1
+    assert dockerfile.index(
+        "python -m pip install --upgrade playwright"
+    ) < dockerfile.index("python -m playwright install chromium")
+    assert dockerfile.count("apt-get update") == 1
     assert "# Playwright:" in dockerfile
     assert "# Chromium:" in dockerfile
+
+
+@pytest.mark.parametrize(
+    "operating_system,expected_browser_package",
+    [
+        ("ubuntu-22.04", "libasound2"),
+        ("ubuntu-24.04", "libasound2t64"),
+    ],
+)
+def test_selected_apt_packages_are_installed_in_one_batch(
+    operating_system, expected_browser_package
+):
+    dockerfile = build_dockerfile(
+        EnvironmentInput.model_validate(
+            _payload(
+                operatingSystem=operating_system,
+                optionIds=sorted(SUPPORTED_OPTION_IDS),
+            )
+        )
+    )
+
+    assert dockerfile.count("apt-get update") == 1
+    assert dockerfile.count("apt-get install -y --no-install-recommends") == 1
+    for package in (
+        "ca-certificates",
+        "xz-utils",
+        "pandoc",
+        "ripgrep",
+        "gh",
+        "git",
+        "ffmpeg",
+        expected_browser_package,
+    ):
+        assert f"    {package} \\" in dockerfile
 
 
 def test_environment_crud_build_and_tos_version_layout():
@@ -698,9 +742,9 @@ def test_resource_matrix_supports_managed_and_provided_combinations(
     parameter_keys = {item["Key"] for item in cp.run_parameters}
     assert {"TOS_PROJECT_FILE_PATH", "DOCKERFILE_PATH", "CR_TAG"} <= parameter_keys
     created_pipeline = next(iter(cp.pipelines[resolved.code_pipeline.workspace_id]))
-    assert created_pipeline["Name"] == "veadk-studio-environment-build-v7"
+    assert created_pipeline["Name"] == "veadk-studio-environment-build-v8"
     assert (
-        'buildParams: "--build-arg PIP_INDEX_URL=$PIP_INDEX_URL --build-arg PYTHON_SOURCE_BASE_URL=$PYTHON_SOURCE_BASE_URL --build-arg PLAYWRIGHT_DOWNLOAD_HOST=$PLAYWRIGHT_DOWNLOAD_HOST"'
+        'buildParams: "--build-arg APT_MIRROR_URL=$APT_MIRROR_URL --build-arg PIP_INDEX_URL=$PIP_INDEX_URL --build-arg PYTHON_SOURCE_BASE_URL=$PYTHON_SOURCE_BASE_URL --build-arg PLAYWRIGHT_DOWNLOAD_HOST=$PLAYWRIGHT_DOWNLOAD_HOST"'
         in created_pipeline["Spec"]
     )
     assert "compression: gzip" in created_pipeline["Spec"]
@@ -710,6 +754,11 @@ def test_resource_matrix_supports_managed_and_provided_combinations(
     assert "cacheType: default" in created_pipeline["Spec"]
     assert 'cacheUrl: ""' in created_pipeline["Spec"]
     run_parameters = {item["Key"]: item["Value"] for item in cp.run_parameters}
+    assert run_parameters["APT_MIRROR_URL"] == (
+        "http://mirrors.volces.com/ubuntu"
+        if provider == "volcengine"
+        else "http://mirror.sg.gs/ubuntu"
+    )
     assert run_parameters["PIP_INDEX_URL"] == (
         "https://mirrors.aliyun.com/pypi/simple/"
         if provider == "volcengine"
@@ -784,6 +833,179 @@ def test_managed_cr_creation_is_idempotent():
             "base-images",
         ),
     ]
+
+
+def test_environment_resources_are_resolved_once_and_reused(monkeypatch):
+    cp = FakeCP()
+    cr = FakeCR()
+    resources = DeploymentResourceService("byteplus", "ap-southeast-1")
+    resources._cp = cp
+    resources._cr = cr
+    gateway = StudioEnvironmentCloudGateway(
+        EnvironmentResourceSettings(
+            provider="byteplus",
+            region="ap-southeast-1",
+            bucket="studio",
+        ),
+        resource_service=resources,
+    )
+    resolve_counts = {"cp": 0, "cr": 0}
+    resolve_cp = gateway._resolve_code_pipeline
+    resolve_cr = gateway._resolve_container_registry
+
+    def counted_cp():
+        resolve_counts["cp"] += 1
+        return resolve_cp()
+
+    def counted_cr():
+        resolve_counts["cr"] += 1
+        return resolve_cr()
+
+    monkeypatch.setattr(gateway, "_resolve_code_pipeline", counted_cp)
+    monkeypatch.setattr(gateway, "_resolve_container_registry", counted_cr)
+
+    gateway.start_build(context_key="one/context.tar.gz", image_tag="v1")
+    gateway.start_build(context_key="two/context.tar.gz", image_tag="v2")
+
+    assert resolve_counts == {"cp": 1, "cr": 1}
+
+
+def test_concurrent_builds_do_not_duplicate_resource_resolution(monkeypatch):
+    cp = FakeCP()
+    cr = FakeCR()
+    resources = DeploymentResourceService("volcengine", "cn-beijing")
+    resources._cp = cp
+    resources._cr = cr
+    gateway = StudioEnvironmentCloudGateway(
+        EnvironmentResourceSettings(
+            provider="volcengine",
+            region="cn-beijing",
+            bucket="studio",
+        ),
+        resource_service=resources,
+    )
+    resolve_counts = {"cp": 0, "cr": 0}
+    count_lock = threading.Lock()
+    resolve_cp = gateway._resolve_code_pipeline
+    resolve_cr = gateway._resolve_container_registry
+
+    def counted_cp():
+        with count_lock:
+            resolve_counts["cp"] += 1
+        time.sleep(0.02)
+        return resolve_cp()
+
+    def counted_cr():
+        with count_lock:
+            resolve_counts["cr"] += 1
+        time.sleep(0.02)
+        return resolve_cr()
+
+    monkeypatch.setattr(gateway, "_resolve_code_pipeline", counted_cp)
+    monkeypatch.setattr(gateway, "_resolve_container_registry", counted_cr)
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = [
+            executor.submit(
+                gateway.start_build,
+                context_key=f"{index}/context.tar.gz",
+                image_tag=f"v{index}",
+            )
+            for index in range(4)
+        ]
+        for future in futures:
+            future.result()
+
+    assert resolve_counts == {"cp": 1, "cr": 1}
+    assert cr.created == [
+        ("registry", "veadk-studio-environments"),
+        ("namespace", "veadk-studio-environments", "runtime-environments"),
+        (
+            "repository",
+            "veadk-studio-environments",
+            "runtime-environments",
+            "base-images",
+        ),
+    ]
+
+
+def test_transient_cr_timeout_is_retried_without_resolving_cp_again(monkeypatch):
+    class ReadTimeout(Exception):
+        pass
+
+    cp = FakeCP()
+    cr = FakeCR()
+    resources = DeploymentResourceService("byteplus", "ap-southeast-1")
+    resources._cp = cp
+    resources._cr = cr
+    list_resources = resources.list_resources
+    repository_calls = 0
+
+    def flaky_list_resources(kind, **kwargs):
+        nonlocal repository_calls
+        if kind == "cr-repository":
+            repository_calls += 1
+            if repository_calls == 1:
+                raise ReadTimeout("CR API read timed out")
+        return list_resources(kind, **kwargs)
+
+    monkeypatch.setattr(resources, "list_resources", flaky_list_resources)
+    monkeypatch.setattr(
+        "frontend.server.environments.resources.time.sleep", lambda _delay: None
+    )
+    gateway = StudioEnvironmentCloudGateway(
+        EnvironmentResourceSettings(
+            provider="byteplus",
+            region="ap-southeast-1",
+            bucket="studio",
+        ),
+        resource_service=resources,
+    )
+    resolve_cp = gateway._resolve_code_pipeline
+    cp_calls = 0
+
+    def counted_cp():
+        nonlocal cp_calls
+        cp_calls += 1
+        return resolve_cp()
+
+    monkeypatch.setattr(gateway, "_resolve_code_pipeline", counted_cp)
+
+    gateway.start_build(context_key="context.tar.gz", image_tag="v1")
+
+    assert repository_calls == 2
+    assert cp_calls == 1
+
+
+def test_non_network_resource_error_is_not_retried(monkeypatch):
+    cp = FakeCP()
+    cr = FakeCR()
+    resources = DeploymentResourceService("byteplus", "ap-southeast-1")
+    resources._cp = cp
+    resources._cr = cr
+    repository_calls = 0
+
+    def denied_list_resources(kind, **_kwargs):
+        nonlocal repository_calls
+        if kind == "cr-repository":
+            repository_calls += 1
+            raise PermissionError("ListRepositories denied")
+        return {"items": []}
+
+    monkeypatch.setattr(resources, "list_resources", denied_list_resources)
+    gateway = StudioEnvironmentCloudGateway(
+        EnvironmentResourceSettings(
+            provider="byteplus",
+            region="ap-southeast-1",
+            bucket="studio",
+        ),
+        resource_service=resources,
+    )
+
+    with pytest.raises(EnvironmentResourceError, match="ListRepositories denied"):
+        gateway.start_build(context_key="context.tar.gz", image_tag="v1")
+
+    assert repository_calls == 1
 
 
 def test_resource_settings_use_deploy_flags_only():
