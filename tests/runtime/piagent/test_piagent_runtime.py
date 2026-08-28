@@ -24,6 +24,7 @@ from types import SimpleNamespace
 
 import pytest
 from google.adk.events.event import Event
+from google.adk.models.llm_response import LlmResponse
 from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.base_toolset import BaseToolset
 from google.adk.tools.function_tool import FunctionTool
@@ -193,6 +194,40 @@ for raw in sys.stdin:
     )
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
     return path, argv_path
+
+
+def _make_fake_pi_with_prompt_capture(tmp_path):
+    path = tmp_path / "pi"
+    prompt_path = tmp_path / "prompt.txt"
+    path.write_text(
+        f"""#!/usr/bin/env python3
+import json
+import sys
+
+for raw in sys.stdin:
+    command = json.loads(raw)
+    if command.get("type") == "prompt":
+        open({str(prompt_path)!r}, "w", encoding="utf-8").write(command.get("message") or "")
+        print(json.dumps({{
+            "id": command.get("id"),
+            "type": "response",
+            "command": "prompt",
+            "success": True,
+        }}), flush=True)
+        print(json.dumps({{
+            "type": "message_update",
+            "assistantMessageEvent": {{
+                "type": "text_delta",
+                "delta": "runtime answer",
+            }},
+        }}), flush=True)
+        print(json.dumps({{"type": "agent_settled"}}), flush=True)
+        break
+""",
+        encoding="utf-8",
+    )
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+    return path, prompt_path
 
 
 def _write_skill(path: Path, *, name: str, body: str = "Skill body.") -> None:
@@ -1201,6 +1236,77 @@ async def test_piagent_runtime_closes_opened_toolsets(tmp_path, monkeypatch):
     assert events[2].partial is not True
     assert [part.text for part in events[2].content.parts] == ["checking", "pong"]
     assert toolset.closed is True
+
+
+@pytest.mark.asyncio
+async def test_piagent_runtime_uses_before_model_mutated_prompt(
+    tmp_path,
+    monkeypatch,
+):
+    def before_model_callback(callback_context, llm_request):
+        llm_request.contents[-1].parts[0].text = "mutated by callback"
+
+    binary, prompt_path = _make_fake_pi_with_prompt_capture(tmp_path)
+    agent_dir = tmp_path / "agent-home"
+    monkeypatch.setenv("PIAGENT_BINARY", str(binary))
+    monkeypatch.setenv("PIAGENT_AGENT_DIR", str(agent_dir))
+
+    agent = Agent(
+        name="assistant",
+        instruction="Answer briefly.",
+        model_name="model-a",
+        model_api_base="https://ark.example.com/api/v3/",
+        model_api_key="test-key",
+        model_api_key_name="",
+        runtime="piagent",
+        before_model_callback=before_model_callback,
+    )
+    ctx = _fake_ctx(_user_event("original prompt"))
+
+    _events = [event async for event in PiAgentRuntime().run_async(agent, ctx)]
+
+    prompt = prompt_path.read_text(encoding="utf-8")
+    assert "mutated by callback" in prompt
+    assert "original prompt" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_piagent_runtime_after_model_replaces_final_event(
+    tmp_path,
+    monkeypatch,
+):
+    def after_model_callback(callback_context, llm_response):
+        return LlmResponse(
+            content=types.Content(
+                role="model",
+                parts=[types.Part(text="after replacement")],
+            )
+        )
+
+    binary, _prompt_path = _make_fake_pi_with_prompt_capture(tmp_path)
+    agent_dir = tmp_path / "agent-home"
+    monkeypatch.setenv("PIAGENT_BINARY", str(binary))
+    monkeypatch.setenv("PIAGENT_AGENT_DIR", str(agent_dir))
+
+    agent = Agent(
+        name="assistant",
+        instruction="Answer briefly.",
+        model_name="model-a",
+        model_api_base="https://ark.example.com/api/v3/",
+        model_api_key="test-key",
+        model_api_key_name="",
+        runtime="piagent",
+        after_model_callback=after_model_callback,
+    )
+    ctx = _fake_ctx(_user_event("ping"))
+
+    events = [event async for event in PiAgentRuntime().run_async(agent, ctx)]
+
+    assert events[0].partial is True
+    assert events[0].content.parts[0].text == "runtime answer"
+    assert events[-1].partial is not True
+    assert events[-1].is_final_response()
+    assert events[-1].content.parts[0].text == "after replacement"
 
 
 @pytest.mark.asyncio

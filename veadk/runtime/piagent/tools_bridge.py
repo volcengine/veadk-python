@@ -63,6 +63,7 @@ class PiToolBundle:
 
     specs: list[PiToolSpec] = field(default_factory=list)
     executors: dict[str, Executor] = field(default_factory=dict)
+    tools: dict[str, Any] = field(default_factory=dict)
     skipped: list[SkippedTool] = field(default_factory=list)
     opened_toolsets: list["BaseToolset"] = field(default_factory=list)
 
@@ -124,6 +125,7 @@ async def build_executable_tools(
             original_name=original_name,
         )
         bundle.specs.append(spec)
+        bundle.tools[original_name] = tool
         bundle.executors[name] = _make_executor(tool, ctx, ToolContext)
         seen.add(name)
 
