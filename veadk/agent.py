@@ -739,8 +739,10 @@ class Agent(LlmAgent):
             return
 
         from veadk.runtime import get_runtime
+        from veadk.runtime.output_state import maybe_save_output_to_state
 
         async for event in get_runtime(self.runtime).run_async(self, ctx):
+            maybe_save_output_to_state(self, event)
             yield event
 
     if not is_adk_gte("2.0.0"):
