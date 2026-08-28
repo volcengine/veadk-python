@@ -179,6 +179,7 @@ import {
   NEW_CHAT_TASK_TOOLS,
 } from "./ui/new-chat-modes/taskTools";
 import {
+  intelligentDevelopmentErrorMessage,
   intelligentDevelopmentClient,
   sandboxClient,
   type SandboxApproval,
@@ -4391,11 +4392,13 @@ export default function App() {
       setAttachments(messageAttachments);
       sandboxCommands.setSelectedSkills(selectedSkills);
       setError(
-        `内置智能体发送失败：${
-          messageError instanceof Error
-            ? messageError.message
-            : String(messageError)
-          }`,
+        activeSession.intelligentDevelopment
+          ? intelligentDevelopmentErrorMessage(messageError)
+          : `内置智能体发送失败：${
+              messageError instanceof Error
+                ? messageError.message
+                : String(messageError)
+            }`,
       );
       try {
         const settings = await activeClient.getSettings(activeSession.id);

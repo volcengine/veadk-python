@@ -65,7 +65,11 @@ const result = await build({
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(
   result.outputFiles[0].contents,
 ).toString("base64")}`;
-const { intelligentDevelopmentClient, sandboxClient } = await import(moduleUrl);
+const {
+  intelligentDevelopmentClient,
+  intelligentDevelopmentErrorMessage,
+  sandboxClient,
+} = await import(moduleUrl);
 
 const sandboxSource = readFileSync(
   new URL("../src/adk/sandbox.ts", import.meta.url),
@@ -329,6 +333,71 @@ test("normal sandbox client keeps the existing endpoint and skill payload", asyn
     url: "/web/sandbox/sessions/sandbox%2F1/messages",
     body: { message: "use it", skillIds: ["skill-1"] },
   });
+});
+
+test("intelligent development errors preserve specific recovery guidance", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+  });
+  globalThis.fetch = async () => sseResponse([
+    `event: error\ndata: ${JSON.stringify({
+      code: "INTELLIGENT_DEVELOPMENT_INTENT_INVALID",
+      message: "未能确认本次优化目标，开发尚未开始。请重新发送，已有项目和版本不受影响。",
+      retryable: true,
+    })}`,
+  ]);
+
+  await assert.rejects(
+    intelligentDevelopmentClient.sendMessage({
+      sessionId: "dev-1",
+      text: "继续优化",
+    }),
+    (error) => {
+      assert.equal(error.code, "INTELLIGENT_DEVELOPMENT_INTENT_INVALID");
+      assert.equal(error.retryable, true);
+      assert.equal(
+        intelligentDevelopmentErrorMessage(error),
+        "未能确认本次优化目标，开发尚未开始。请重新发送，已有项目和版本不受影响。",
+      );
+      return true;
+    },
+  );
+
+  globalThis.fetch = async () => Response.json({
+    detail: {
+      code: "INTELLIGENT_DEVELOPMENT_TASK_IN_PROGRESS",
+      message: "上一条任务仍在处理，请稍后再试。",
+      retryable: true,
+    },
+  }, { status: 409 });
+  await assert.rejects(
+    intelligentDevelopmentClient.sendMessage({
+      sessionId: "dev-1",
+      text: "再次发送",
+    }),
+    (error) => {
+      assert.equal(error.code, "INTELLIGENT_DEVELOPMENT_TASK_IN_PROGRESS");
+      assert.equal(
+        intelligentDevelopmentErrorMessage(error),
+        "上一条任务仍在处理，请稍后再试。",
+      );
+      return true;
+    },
+  );
+
+  assert.equal(
+    intelligentDevelopmentErrorMessage(new DOMException("timed out", "TimeoutError")),
+    "等待开发环境响应超时。任务可能仍在运行，请稍后重新进入当前会话查看状态。",
+  );
+  assert.equal(
+    intelligentDevelopmentErrorMessage(new TypeError("Failed to fetch")),
+    "与开发环境的连接已中断。任务可能仍在运行，请稍后重新进入当前会话查看状态。",
+  );
+  assert.match(
+    appSource,
+    /activeSession\.intelligentDevelopment\s*\?\s*intelligentDevelopmentErrorMessage\(messageError\)/,
+  );
 });
 
 test("source-ready delivery is upgraded in place only by the verified event", async (t) => {

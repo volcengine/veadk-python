@@ -1295,6 +1295,29 @@ def test_intent_reject_is_user_facing_and_never_uploads_credentials(
     assert call["skillIds"] == ()
 
 
+def test_invalid_intent_response_has_a_specific_recoverable_error() -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud()
+    gateway.codex.turns = [[CodexAppServerEvent(kind="text", text="not-json")]]
+
+    with TestClient(_app(gateway)) as client:
+        _connect(client)
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "继续优化天气 Agent"},
+        )
+
+    assert response.status_code == 200
+    assert "event: error" in response.text
+    assert '"code": "INTELLIGENT_DEVELOPMENT_INTENT_INVALID"' in response.text
+    assert '"retryable": true' in response.text
+    assert (
+        "未能确认本次优化目标，开发尚未开始。请重新发送，已有项目和版本不受影响。"
+        in response.text
+    )
+
+
 def test_restored_project_context_is_passed_to_the_intent_gate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2170,7 +2193,8 @@ def test_builder_failure_still_cleans_credentials(
             json={"message": "做一个天气 Agent"},
         )
     assert "event: error" in response.text
-    assert "智能开发任务未能安全完成，请在当前会话重试" in response.text
+    assert '"code": "SANDBOX_INVOCATION_FAILED"' in response.text
+    assert "Codex 暂时无法响应，开发环境已保留。请在当前会话重试。" in response.text
     assert internal_error not in response.text
     assert "upstream-secret" not in response.text
     assert lease.cleaned is True
