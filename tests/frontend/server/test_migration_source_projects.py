@@ -159,9 +159,7 @@ async def test_migration_version_is_idempotent_filterable_and_reusable(
     assert repeated_version.version_id == first_version.version_id
     assert repeated_version.producer == "migration"
     assert repeated_version.environment.defaults == {"TZ": "Asia/Shanghai"}
-    assert await service.list_projects(
-        "owner", origin="intelligent-development"
-    ) == []
+    assert await service.list_projects("owner", origin="intelligent-development") == []
     assert [
         project.project_id
         for project in await service.list_projects("owner", origin="migration")
@@ -254,6 +252,4 @@ async def test_migration_version_is_idempotent_filterable_and_reusable(
         version.version_id
         for version in await service.list_versions("owner", first_project.project_id)
     ] == [next_version.version_id, first_version.version_id]
-    assert await service.list_projects(
-        "owner", origin="intelligent-development"
-    ) == []
+    assert await service.list_projects("owner", origin="intelligent-development") == []
