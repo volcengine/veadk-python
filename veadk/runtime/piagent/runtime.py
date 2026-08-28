@@ -18,7 +18,17 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, AsyncGenerator
 
-from veadk.runtime.base_runtime import BaseRuntime, build_system_append
+from veadk.runtime.base_runtime import BaseRuntime
+from veadk.runtime.model_callbacks import (
+    build_runtime_llm_request,
+    final_events_to_llm_response,
+    has_after_model_callbacks,
+    is_final_model_text_event,
+    llm_response_to_event,
+    run_after_model_callbacks,
+    run_before_model_callbacks,
+    run_on_model_error_callbacks,
+)
 from veadk.runtime.piagent.client import PiAgentRpcClient
 from veadk.runtime.piagent.config import PiAgentConfig, prepare_piagent_home
 from veadk.runtime.piagent.installer import resolve_or_install_piagent_binary
@@ -28,7 +38,10 @@ from veadk.runtime.piagent.tools_bridge import (
     build_executable_tools,
     close_toolsets,
 )
-from veadk.runtime.piagent.translate import PiEventTranslator, build_prompt
+from veadk.runtime.piagent.translate import (
+    PiEventTranslator,
+    build_prompt_from_llm_request,
+)
 from veadk.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -56,13 +69,27 @@ class PiAgentRuntime(BaseRuntime):
         try:
             tool_bundle = await build_executable_tools(agent, ctx)
 
-            prompt = build_prompt(ctx)
-            append_text = build_system_append(agent)
-            if append_text:
-                prompt = (
-                    f"# System instructions\n\n{append_text}\n\n"
-                    f"# Conversation\n\n{prompt}"
+            runtime_call = await build_runtime_llm_request(
+                agent,
+                ctx,
+                model=config.model.model,
+                tools_dict=tool_bundle.tools,
+            )
+            short_circuit = await run_before_model_callbacks(
+                agent,
+                ctx,
+                runtime_call.llm_request,
+                runtime_call.model_response_event,
+            )
+            if short_circuit is not None:
+                yield llm_response_to_event(
+                    runtime_call.llm_request,
+                    short_circuit,
+                    runtime_call.model_response_event,
                 )
+                return
+
+            prompt = build_prompt_from_llm_request(runtime_call.llm_request)
 
             logger.info(
                 "piagent runtime: "
@@ -72,6 +99,8 @@ class PiAgentRuntime(BaseRuntime):
                 author=agent.name,
                 invocation_id=ctx.invocation_id,
             )
+            buffer_final_text = has_after_model_callbacks(agent, ctx)
+            final_text_events: list[Event] = []
             async with PiToolRuntime(tool_bundle) as tools:
                 run_config = (
                     config.with_skills(skill_paths=list(skill_bundle.paths))
@@ -84,9 +113,44 @@ class PiAgentRuntime(BaseRuntime):
                     else run_config
                 )
                 async with PiAgentRpcClient(run_config) as client:
-                    async for pi_event in client.prompt(prompt):
-                        for event in translator.event_to_adk_events(pi_event):
-                            yield event
+                    try:
+                        async for pi_event in client.prompt(prompt):
+                            for event in translator.event_to_adk_events(pi_event):
+                                if buffer_final_text and is_final_model_text_event(
+                                    event, agent.name
+                                ):
+                                    final_text_events.append(event)
+                                    continue
+                                yield event
+                    except Exception as e:
+                        fallback = await run_on_model_error_callbacks(
+                            agent,
+                            ctx,
+                            e,
+                            runtime_call.llm_request,
+                            runtime_call.model_response_event,
+                        )
+                        if fallback is None:
+                            raise
+                        yield llm_response_to_event(
+                            runtime_call.llm_request,
+                            fallback,
+                            runtime_call.model_response_event,
+                        )
+                        return
+            if final_text_events:
+                llm_response = final_events_to_llm_response(final_text_events)
+                llm_response = await run_after_model_callbacks(
+                    agent,
+                    ctx,
+                    llm_response,
+                    runtime_call.model_response_event,
+                )
+                yield llm_response_to_event(
+                    runtime_call.llm_request,
+                    llm_response,
+                    runtime_call.model_response_event,
+                )
         finally:
             if tool_bundle is not None:
                 await close_toolsets(tool_bundle.opened_toolsets)
