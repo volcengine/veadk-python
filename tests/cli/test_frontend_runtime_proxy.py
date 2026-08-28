@@ -378,26 +378,35 @@ def test_runtime_route_channel_connects_after_runtime_probe(
     )
     app = _create_frontend_app(monkeypatch, tmp_path)
 
+    runtime = SimpleNamespace(
+        runtime_id="runtime-1",
+        project_name="default",
+        network_configurations=[
+            SimpleNamespace(
+                endpoint="https://runtime.example",
+                network_type="public",
+            )
+        ],
+        authorizer_configuration=SimpleNamespace(
+            key_auth=SimpleNamespace(api_key="runtime-api-key"),
+            custom_jwt_authorizer=None,
+        ),
+        tags=[],
+    )
+
     class _FakeRuntimeClient:
         def __init__(self, **kwargs: Any) -> None:
             del kwargs
 
         def get_runtime(self, request: Any) -> SimpleNamespace:
             del request
+            raise RuntimeError("InvalidAgentKitRuntime.NotFound: hidden")
+
+        def list_runtimes(self, request: Any) -> SimpleNamespace:
+            del request
             return SimpleNamespace(
-                runtime_id="runtime-1",
-                project_name="default",
-                network_configurations=[
-                    SimpleNamespace(
-                        endpoint="https://runtime.example",
-                        network_type="public",
-                    )
-                ],
-                authorizer_configuration=SimpleNamespace(
-                    key_auth=SimpleNamespace(api_key="runtime-api-key"),
-                    custom_jwt_authorizer=None,
-                ),
-                tags=[],
+                agent_kit_runtimes=[runtime],
+                next_token=None,
             )
 
     monkeypatch.setattr(
@@ -419,6 +428,67 @@ def test_runtime_route_channel_connects_after_runtime_probe(
         "endpoint": "https://runtime.example",
         "authorization": "Bearer runtime-api-key",
     }
+
+
+def test_runtime_tool_capabilities_use_list_fallback_when_get_is_hidden(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+    runtime = SimpleNamespace(
+        runtime_id="runtime-1",
+        network_configurations=[
+            SimpleNamespace(
+                endpoint="https://runtime.example",
+                network_type="public",
+            )
+        ],
+        authorizer_configuration=SimpleNamespace(
+            key_auth=SimpleNamespace(api_key="runtime-api-key"),
+            custom_jwt_authorizer=None,
+        ),
+        tags=[],
+    )
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            del request
+            raise RuntimeError("InvalidAgentKitRuntime.NotFound: hidden")
+
+        def list_runtimes(self, request: Any) -> SimpleNamespace:
+            del request
+            return SimpleNamespace(
+                agent_kit_runtimes=[runtime],
+                next_token=None,
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        _FakeRuntimeClient,
+    )
+
+    async def fake_runtime_supports_bff_tools(**kwargs: Any) -> bool:
+        assert kwargs == {
+            "endpoint": "https://runtime.example",
+            "authorization": "Bearer runtime-api-key",
+        }
+        return True
+
+    monkeypatch.setattr(
+        "frontend.server.studio_tools.runtime_supports_bff_tools",
+        fake_runtime_supports_bff_tools,
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/runtime-tool-channel/runtime-1/capabilities?region=cn-beijing"
+        )
+
+    assert response.status_code == 200
+    assert response.json()["supported"] is True
 
 
 def test_runtime_proxy_uses_plain_run_sse_when_runtime_lacks_bff_tool_host(
@@ -1441,6 +1511,11 @@ def test_runtime_proxy_uses_authorizer_credential(
 
     monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
 
+    async def _unexpected_get_body(_request: Request) -> bytes:
+        raise AssertionError("GET proxy requests must not read the client body")
+
+    monkeypatch.setattr(Request, "body", _unexpected_get_body)
+
     with TestClient(app) as client:
         response = client.get(
             "/web/runtime-proxy/runtime-1/dev/apps/demo_agent/debug/trace/"
@@ -1795,6 +1870,150 @@ def test_runtime_proxy_retry_policy(
             if network_type == "private"
             else "runtime_proxy_connect_error"
         )
+
+
+@pytest.mark.parametrize(
+    "error_code",
+    ["InvalidResource.NotFound", "InvalidAgentKitRuntime.NotFound"],
+)
+def test_runtime_proxy_classifies_runtime_lookup_not_found_without_raw_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    error_code: str,
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            del request
+            raise RuntimeError(f"{error_code}: protected-upstream-detail")
+
+        def list_runtimes(self, request: Any) -> SimpleNamespace:
+            del request
+            return SimpleNamespace(
+                agent_kit_runtimes=[],
+                next_token=None,
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        _FakeRuntimeClient,
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/runtime-proxy/runtime-1/list-apps?_runtime_region=cn-shanghai"
+        )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "runtime_not_found"}
+    assert "protected-upstream-detail" not in response.text
+
+
+def test_runtime_proxy_uses_exact_list_item_when_role_get_runtime_is_hidden(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+    list_requests: list[Any] = []
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            assert kwargs["region"] == "cn-shanghai"
+
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            del request
+            raise RuntimeError(
+                "InvalidAgentKitRuntime.NotFound: protected-upstream-detail"
+            )
+
+        def list_runtimes(self, request: Any) -> SimpleNamespace:
+            list_requests.append(request)
+            return SimpleNamespace(
+                agent_kit_runtimes=[
+                    SimpleNamespace(
+                        runtime_id="runtime-1",
+                        name="runtime-name",
+                        status="Ready",
+                        current_version_number=2,
+                        network_configurations=[
+                            SimpleNamespace(
+                                endpoint="https://runtime.example",
+                                network_type="public",
+                            )
+                        ],
+                        authorizer_configuration=SimpleNamespace(
+                            key_auth=SimpleNamespace(api_key="runtime-api-key"),
+                            custom_jwt_authorizer=None,
+                        ),
+                        tags=[],
+                    )
+                ],
+                next_token=None,
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        _FakeRuntimeClient,
+    )
+
+    class _FakeUpstreamResponse:
+        status_code = 200
+        headers: ClassVar[dict[str, str]] = {"content-type": "application/json"}
+
+        async def aiter_raw(self):
+            yield b'["demo_agent"]'
+
+        async def aclose(self) -> None:
+            pass
+
+    class _FakeAsyncClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def build_request(
+            self,
+            method: str,
+            url: str,
+            *,
+            params: dict[str, str],
+            headers: dict[str, str],
+            content: bytes,
+        ) -> object:
+            assert method == "GET"
+            assert url == "https://runtime.example/list-apps"
+            assert params == {}
+            assert headers["Authorization"] == "Bearer runtime-api-key"
+            assert content == b""
+            return object()
+
+        async def send(
+            self,
+            request: object,
+            *,
+            stream: bool,
+        ) -> _FakeUpstreamResponse:
+            del request
+            assert stream is True
+            return _FakeUpstreamResponse()
+
+        async def aclose(self) -> None:
+            pass
+
+    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/runtime-proxy/runtime-1/list-apps"
+            "?_runtime_region=cn-shanghai&probe_retry=connect"
+        )
+
+    assert response.status_code == 200
+    assert response.json() == ["demo_agent"]
+    assert len(list_requests) == 1
 
 
 def test_runtime_proxy_resolves_studio_media_before_forwarding(

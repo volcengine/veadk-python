@@ -147,6 +147,29 @@ export function harnessIntentFromOptimizations(
   return intent;
 }
 
+/** Keep named profiles deterministic across new drafts, YAML imports and
+ * legacy Runtime snapshots. A named profile describes a fixed preset; once a
+ * user changes an individual option the editor switches the draft to the
+ * custom profile instead. */
+export function normalizeHarnessSidecarIntent(
+  intent: HarnessSidecarIntent | undefined,
+): HarnessSidecarIntent | undefined {
+  if (!intent) return undefined;
+  const profile: HarnessSidecarProfileId =
+    intent.profile === "ops" ? "ops" : "default";
+  const optimizations =
+    profile === "ops"
+      ? harnessProfileDefaultOptimizations(profile)
+      : HARNESS_SIDECAR_OPTION_IDS.filter(
+          (id) => intent.componentOverrides?.[id] === true,
+        );
+  return {
+    ...harnessIntentFromOptimizations(optimizations, profile),
+    ...(intent.catalogVersion ? { catalogVersion: intent.catalogVersion } : {}),
+    ...(intent.planHash ? { planHash: intent.planHash } : {}),
+  };
+}
+
 function runtimeEnvEnabled(value: string | undefined): boolean {
   return ENABLED_RUNTIME_ENV_VALUES.has(value?.trim().toLowerCase() ?? "");
 }
@@ -179,13 +202,16 @@ export function harnessIntentFromRuntimeEnvs(
     values.get("HARNESS_SIDECAR_COMPONENT_OVERRIDES"),
   );
   if (exactOverrides) {
-    return {
+    const restored = {
       ...harnessIntentFromOptimizations(
         HARNESS_SIDECAR_OPTION_IDS.filter((id) => exactOverrides[id] === true),
         profile,
       ),
       enabled: true,
     };
+    return profile === "ops"
+      ? normalizeHarnessSidecarIntent(restored) ?? restored
+      : restored;
   }
   if (profile === "ops") {
     return harnessIntentFromOptimizations(

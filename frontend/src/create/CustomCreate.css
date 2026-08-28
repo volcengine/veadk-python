@@ -3752,6 +3752,38 @@
   line-height: 1.5;
   color: hsl(var(--muted-foreground));
 }
+.cw-mcp-auth-state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 32px;
+  padding: 7px 10px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.45;
+}
+.cw-mcp-auth-state button {
+  flex: 0 0 auto;
+  min-height: 28px;
+  padding: 0 9px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  background: hsl(var(--panel));
+  color: hsl(var(--foreground));
+  cursor: pointer;
+  font: inherit;
+}
+.cw-mcp-auth-state button:hover {
+  background: hsl(var(--accent));
+}
+.cw-mcp-auth-state button:focus-visible {
+  outline: 2px solid hsl(var(--primary));
+  outline-offset: 1px;
+}
 .cw-mcp-warning {
   display: flex;
   align-items: flex-start;

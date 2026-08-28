@@ -6,6 +6,8 @@ import { Badge } from "@openai/apps-sdk-ui/components/Badge";
 import { Tooltip } from "@openai/apps-sdk-ui/components/Tooltip";
 
 import {
+  invalidateRuntimeUpdateCapabilityCache,
+  prefetchRuntimeUpdateCapability,
   probeRuntimeApps,
   RuntimeProbeError,
   type CloudRuntime,
@@ -101,6 +103,9 @@ const RUNTIME_PAGE_SIZE = 24;
 const RUNTIME_PAGE_CACHE_TTL_MS = 30_000;
 const RUNTIME_COMPATIBILITY_TIMEOUT_MS = 7_000;
 const RUNTIME_COMPATIBILITY_RETRY_TIMEOUT_MS = 20_000;
+const UPDATE_CAPABILITY_PREFETCH_LIMIT = 6;
+const UPDATE_CAPABILITY_PREFETCH_CONCURRENCY = 2;
+const UPDATE_CAPABILITY_PREFETCH_DELAY_MS = 250;
 type RuntimeCompatibilityStatus = "checking" | "compatible" | "unsupported" | "error";
 interface RuntimeCompatibility {
   status: RuntimeCompatibilityStatus;
@@ -143,6 +148,7 @@ export function invalidateRuntimeAgentCache(runtimeIds?: Iterable<string>) {
   if (!runtimeIds) {
     runtimePageRequests.clear();
     runtimePageCache.clear();
+    invalidateRuntimeUpdateCapabilityCache();
     return;
   }
   const targetRuntimeIds = new Set(runtimeIds);
@@ -151,6 +157,9 @@ export function invalidateRuntimeAgentCache(runtimeIds?: Iterable<string>) {
     if (cached.page.runtimes.some((runtime) => targetRuntimeIds.has(runtime.runtimeId))) {
       runtimePageCache.delete(key);
     }
+  }
+  for (const runtimeId of targetRuntimeIds) {
+    invalidateRuntimeUpdateCapabilityCache(runtimeId);
   }
   runtimePageRequests.clear();
 }
@@ -341,6 +350,7 @@ function AgentCard({
   agent,
   onUse,
   onViewDetails,
+  onPrepareUpdate,
   compatibility,
   onRetryCompatibility,
   connecting,
@@ -354,6 +364,7 @@ function AgentCard({
   agent: MyAgentCardData;
   onUse?: (agent: MyAgentCardData) => Promise<void>;
   onViewDetails?: (agent: MyAgentCardData) => void;
+  onPrepareUpdate?: (agent: MyAgentCardData) => void;
   compatibility?: RuntimeCompatibility;
   onRetryCompatibility?: (agent: MyAgentCardData) => void;
   connecting?: boolean;
@@ -400,6 +411,8 @@ function AgentCard({
       className={connecting ? "my-agent-card is-connecting" : "my-agent-card"}
       activateLabel={cardTargetEnabled ? cardTargetLabel : undefined}
       onActivate={cardTargetEnabled ? openCard : undefined}
+      onPointerEnter={() => onPrepareUpdate?.(agent)}
+      onFocusCapture={() => onPrepareUpdate?.(agent)}
       footer={(
         <ResourceCardMetadata
           className="my-agent-meta"
@@ -586,6 +599,7 @@ export interface MyAgentsProps {
   cloudProvider: CloudProvider;
   studioRegion: string;
   canCreate: boolean;
+  canUpdate: boolean;
   runtimeScope: RuntimeScope;
   onCreateAgent: (region: string) => void;
   onOpenCodexProjectUpload?: () => void;
@@ -611,6 +625,7 @@ export function MyAgents({
   cloudProvider,
   studioRegion,
   canCreate,
+  canUpdate,
   runtimeScope,
   onCreateAgent,
   onOpenCodexProjectUpload,
@@ -1014,6 +1029,17 @@ export function MyAgents({
     }
   }, []);
 
+  const prepareRuntimeUpdate = useCallback((agent: MyAgentCardData) => {
+    const runtime = agent.runtime;
+    if (!canUpdate || !runtime || deploymentTaskForAgent(agent)) return;
+    void prefetchRuntimeUpdateCapability({
+      runtimeId: runtime.runtimeId,
+      region: runtime.region,
+      appName: agent.appName,
+      currentVersion: runtime.currentVersion,
+    });
+  }, [canUpdate, deploymentTaskForAgent]);
+
   const visibleAgents = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase();
     const source = activeType === "general"
@@ -1057,6 +1083,41 @@ export function MyAgents({
     runtimeAgents,
     sandboxAgents,
   ]);
+
+  useEffect(() => {
+    if (!canUpdate || activeType !== "general") return;
+    const targets = visibleAgents
+      .filter((agent) => Boolean(agent.runtime))
+      .filter((agent) => !deploymentTaskForAgent(agent))
+      .slice(0, UPDATE_CAPABILITY_PREFETCH_LIMIT);
+    if (targets.length === 0) return;
+
+    let cancelled = false;
+    let nextIndex = 0;
+    const runWorker = async () => {
+      while (!cancelled) {
+        const target = targets[nextIndex];
+        nextIndex += 1;
+        if (!target?.runtime) return;
+        await prefetchRuntimeUpdateCapability({
+          runtimeId: target.runtime.runtimeId,
+          region: target.runtime.region,
+          appName: target.appName,
+          currentVersion: target.runtime.currentVersion,
+        });
+        if (cancelled) return;
+      }
+    };
+    const timer = window.setTimeout(() => {
+      for (let index = 0; index < UPDATE_CAPABILITY_PREFETCH_CONCURRENCY; index += 1) {
+        void runWorker();
+      }
+    }, UPDATE_CAPABILITY_PREFETCH_DELAY_MS);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [activeType, canUpdate, deploymentTaskForAgent, visibleAgents]);
 
   const activeTypeInfo = AGENT_TYPES.find((type) => type.id === activeType);
   const activeLabel = activeTypeInfo?.label ?? "智能体";
@@ -1221,6 +1282,7 @@ export function MyAgents({
                         }
                       : undefined}
                     onRetryCompatibility={retryRuntimeCompatibility}
+                    onPrepareUpdate={prepareRuntimeUpdate}
                     onViewDetails={detailTarget ? () => {
                       if (detailTarget.sandbox) {
                         onViewSandboxAgentDetails(detailTarget.sandbox);

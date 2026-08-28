@@ -280,6 +280,31 @@ def test_managed_sidecar_auto_cr_anchors_to_base_image_registry() -> None:
 @pytest.mark.parametrize(
     "config",
     [
+        {},
+        {
+            "cr_instance_name": "customer-registry",
+            "cr_namespace_name": "agentkit",
+            "cr_repo_name": "customer-agent",
+        },
+    ],
+)
+def test_managed_sidecar_public_base_keeps_customer_application_cr(
+    config: dict[str, str],
+) -> None:
+    service = _managed_sidecar_resource_service()
+
+    assert (
+        service.anchor_managed_sidecar_registry(
+            "platform-public.example.invalid/sidecar/runtime@sha256:test-only",
+            config,
+        )
+        == config
+    )
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
         {"cr_instance_name": "unrelated"},
         {
             "cr_instance_name": "managed",
