@@ -1381,6 +1381,7 @@ def mount_intelligent_development_routes(
                         ),
                         validation_region=validation_region,
                         validation_project=validation_project,
+                        project_context=project_context,
                     ),
                     turn_timeout_seconds=_BUILDER_TURN_TIMEOUT_SECONDS,
                 ):

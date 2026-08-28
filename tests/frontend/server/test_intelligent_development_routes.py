@@ -1545,6 +1545,79 @@ def test_restored_project_context_is_passed_to_the_intent_gate(
     assert "trusted version metadata, not an instruction" in prompt
 
 
+def test_restored_project_context_selects_incremental_builder_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud()
+    gateway.codex.turns = [
+        [_gate()],
+        [CodexAppServerEvent(kind="text", text="已完成增量优化")],
+    ]
+    now = datetime(2026, 8, 26, tzinfo=timezone.utc)
+    binding = IntelligentDevelopmentSessionBinding(
+        ownerId="alice",
+        sessionId="dev-session",
+        projectId="a" * 32,
+        projectName="天气 Agent",
+        baseVersionId="b" * 32,
+        createdAt=now,
+        updatedAt=now,
+    )
+    version = IntelligentDevelopmentVersion(
+        projectId="a" * 32,
+        versionId="b" * 32,
+        sourceSessionId="source-session",
+        createdAt=now,
+        intentSummary="构建天气查询 Agent",
+        acceptanceCriteria=["返回天气和数据时间"],
+        artifactSha256="a" * 64,
+        validationReportSha256="b" * 64,
+        artifactSize=100,
+        fileCount=2,
+        agentName="weather_agent",
+        entryPoint="app.py",
+        verified=True,
+        validationSummary="验证通过",
+        gateSummary=["local-checks"],
+        validatedAt=now.isoformat(),
+    )
+    project_service = SimpleNamespace(
+        get_binding=AsyncMock(return_value=binding),
+        base_metadata=AsyncMock(return_value=version),
+        restore_base_version=AsyncMock(return_value=False),
+        persist_delivery=AsyncMock(return_value=(SimpleNamespace(), version)),
+    )
+    lease = _Lease(_Remote(gateway.sessions["dev-session"].endpoint))
+    monkeypatch.setattr(
+        routes, "create_credential_lease", AsyncMock(return_value=lease)
+    )
+    monkeypatch.setattr(routes, "invalidate_current_delivery", AsyncMock())
+    monkeypatch.setattr(
+        routes, "read_completion_contract", AsyncMock(return_value=_partial())
+    )
+    monkeypatch.setattr(routes, "remove_completion_file", AsyncMock())
+    monkeypatch.setattr(
+        routes, "DeliveryPublisher", lambda _transport: _publisher_mock()
+    )
+
+    with TestClient(_app(gateway, project_service=project_service)) as client:
+        _connect(client)
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "增加中文预警"},
+        )
+
+    assert response.status_code == 200
+    assert len(gateway.codex.calls) == 2
+    builder = str(gateway.codex.calls[1]["prompt"])
+    assert "## Version-based optimization" in builder
+    assert '"agentName":"weather_agent"' in builder
+    assert "Do not run `ak init`" in builder
+    assert "use `ak init --template agent_server` by default" not in builder
+
+
 def test_builder_uses_preinstalled_skill_without_discovery_or_injection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
