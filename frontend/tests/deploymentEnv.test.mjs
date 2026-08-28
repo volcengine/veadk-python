@@ -30,6 +30,7 @@ const {
 const {
   A2A_REGISTRY_DEFAULTS,
   A2A_REGISTRY_ENV,
+  a2aRegistryDefaults,
   BUILTIN_TOOLS,
   DEFAULT_KB_BACKEND,
   KB_BACKENDS,
@@ -847,7 +848,7 @@ test("materializes A2A registry defaults for deployment env", () => {
   );
   assert.match(
     customCreateSource,
-    /a2aRegistryEnvValues\(node\.a2aRegistry, \{ includeDefaults: true \}\)/,
+    /a2aRegistryEnvValues\([\s\S]*?node\.a2aRegistry,[\s\S]*?\{ includeDefaults: true \},[\s\S]*?cloudProvider,[\s\S]*?\)/,
   );
   assert.match(
     customCreateSource,
@@ -856,6 +857,18 @@ test("materializes A2A registry defaults for deployment env", () => {
   assert.match(
     customCreateSource,
     /deploymentEnvValues=\{\{[\s\S]*?\.\.\.providerDraft\.deployment\?\.envValues,[\s\S]*?\.\.\.deploymentEnv\.fixedValues,/,
+  );
+});
+
+test("uses BytePlus defaults for an A2A registry child agent", () => {
+  assert.deepEqual(a2aRegistryDefaults("byteplus"), {
+    topK: "3",
+    region: "ap-southeast-1",
+    endpoint: "https://agentkit.ap-southeast-1.byteplusapi.com/",
+  });
+  assert.match(
+    customCreateSource,
+    /region=\{[\s\S]*?node\.a2aRegistry\?\.registryRegion \|\|[\s\S]*?a2aDefaults\.region[\s\S]*?\}/,
   );
 });
 

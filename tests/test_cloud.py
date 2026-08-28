@@ -28,10 +28,17 @@ from veadk.integrations.ve_apig.ve_apig import APIGateway
 from veadk.integrations.ve_code_pipeline.ve_code_pipeline import VeCodePipeline
 from veadk.integrations.ve_faas.ve_faas import VeFaaS
 from veadk.utils.cloud_provider import (
+    agentkit_openapi_base,
     apmplus_otlp_endpoint,
     cp_openapi_host,
     default_region,
 )
+
+
+def test_agentkit_openapi_base_uses_byteplus_control_plane_domain() -> None:
+    assert agentkit_openapi_base("ap-southeast-1", "byteplus") == (
+        "https://agentkit.ap-southeast-1.byteplusapi.com"
+    )
 
 
 def test_apmplus_otlp_endpoint_uses_region() -> None:
