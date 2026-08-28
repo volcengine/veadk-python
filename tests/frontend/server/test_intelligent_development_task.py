@@ -320,6 +320,60 @@ def test_builder_context_uses_launcher_without_secret_values() -> None:
     assert "Sandbox" not in prompt
 
 
+def test_version_optimization_prompts_preserve_base_and_forbid_reinitialization() -> (
+    None
+):
+    project_context = json.dumps(
+        {
+            "intentSummary": "构建天气查询 Agent",
+            "acceptanceCriteria": ["返回天气和数据时间"],
+            "agentName": "weather_agent",
+            "entryPoint": "app.py",
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    decision = IntentDecision(
+        "accept",
+        "",
+        "在现有天气 Agent 中增加中文预警",
+        ("保留天气查询并返回中文预警",),
+        True,
+    )
+
+    gate = intent_gate_prompt(
+        "增加中文预警",
+        expire_at="later",
+        project_context=project_context,
+    )
+    builder = builder_prompt(
+        "增加中文预警",
+        decision,
+        launcher_path="/secure/task/launcher",
+        completion_path="/workspace/completion.json",
+        expire_at="later",
+        remaining_lifetime_minutes=60,
+        validation_region="cn-beijing",
+        validation_project="default",
+        project_context=project_context,
+    )
+
+    assert "version-based optimization" in gate
+    assert "change to the selected version" in gate
+    assert "even when the requested change is broad" in gate
+    assert '"acceptanceCriteria":["返回天气和数据时间"]' in gate
+    assert "## Version-based optimization" in builder
+    assert "authoritative baseline" in builder
+    assert "Do not run `ak init`" in builder
+    assert "clear or recreate the project directory" in builder
+    assert "complete deployable project, not only a patch" in builder
+    assert '"agentName":"weather_agent"' in builder
+    assert "use `ak init --template agent_server` by default" not in builder
+    assert "Do not default to the `basic` template" not in builder
+    assert "Studio" not in builder
+    assert "Sandbox" not in builder
+
+
 def test_read_only_prompt_forbids_changes_credentials_and_cloud_validation() -> None:
     decision = parse_intent_decision(
         json.dumps(

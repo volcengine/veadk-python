@@ -1475,6 +1475,29 @@ test("authentication does not load Codex sessions into the global Sidebar", () =
   assert.match(appSource, /离开将停止本轮构建；当前会话仍会保留/);
 });
 
+test("leaving an active intelligent build does not wait for remote cleanup", () => {
+  const handler = appSource.match(
+    /function confirmIntelligentNavigation\(\) \{[\s\S]*?\n  \}/,
+  )?.[0] ?? "";
+
+  assert.ok(handler, "intelligent navigation confirmation handler should exist");
+  assert.doesNotMatch(handler, /async function/);
+  assert.doesNotMatch(handler, /await intelligentDevelopmentClient\.interruptSession/);
+  assert.match(
+    handler,
+    /const interrupt = intelligentDevelopmentClient\.interruptSession\(activeSession\.id\)/,
+  );
+  assert.ok(
+    handler.indexOf("const interrupt =") < handler.indexOf("action();"),
+    "the stop request must start before navigation",
+  );
+  assert.ok(
+    handler.indexOf("action();") < handler.indexOf("void interrupt.catch"),
+    "navigation must not wait for remote cleanup",
+  );
+  assert.doesNotMatch(appSource, /intelligentLeaveBusy/);
+});
+
 test("verified delivery uses repository-owned visuals and user-facing copy", () => {
   assert.match(deliveryIconSource, /export function DeliveryVerifiedIcon/);
   assert.match(deliveryIconSource, /viewBox="0 0 24 24"/);

@@ -1065,7 +1065,6 @@ export default function App() {
   const sandboxMessageAbortRef = useRef<AbortController | null>(null);
   const pendingIntelligentNavigationRef = useRef<(() => void) | null>(null);
   const [intelligentLeaveOpen, setIntelligentLeaveOpen] = useState(false);
-  const [intelligentLeaveBusy, setIntelligentLeaveBusy] = useState(false);
   const sandboxStopWaitRef = useRef<{
     controller: AbortController;
     promise: Promise<boolean>;
@@ -4150,7 +4149,7 @@ export default function App() {
     action();
   }
 
-  async function confirmIntelligentNavigation() {
+  function confirmIntelligentNavigation() {
     const activeSession = sandboxSession;
     const action = pendingIntelligentNavigationRef.current;
     if (!activeSession?.intelligentDevelopment || !action) {
@@ -4158,19 +4157,19 @@ export default function App() {
       pendingIntelligentNavigationRef.current = null;
       return;
     }
-    setIntelligentLeaveBusy(true);
     setError("");
-    try {
-      await intelligentDevelopmentClient.interruptSession(activeSession.id);
-      sandboxMessageAbortRef.current?.abort();
-      pendingIntelligentNavigationRef.current = null;
-      setIntelligentLeaveOpen(false);
-      action();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setIntelligentLeaveBusy(false);
-    }
+    const interrupt = intelligentDevelopmentClient.interruptSession(activeSession.id);
+    sandboxMessageAbortRef.current?.abort();
+    pendingIntelligentNavigationRef.current = null;
+    setIntelligentLeaveOpen(false);
+    action();
+    void interrupt.catch(() => {
+      if (!sandboxSessionIdRef.current) {
+        setError(
+          "已离开开发环境，但未能确认本轮构建已停止。任务可能仍在运行，请稍后从历史会话检查状态。",
+        );
+      }
+    });
   }
 
   async function sendSandboxMessage(
@@ -7681,13 +7680,11 @@ export default function App() {
           description="离开将停止本轮构建；当前会话仍会保留，可稍后从历史会话重新进入。"
           confirmLabel="停止并离开"
           variant="warning"
-          busy={intelligentLeaveBusy}
           onCancel={() => {
-            if (intelligentLeaveBusy) return;
             pendingIntelligentNavigationRef.current = null;
             setIntelligentLeaveOpen(false);
           }}
-          onConfirm={() => void confirmIntelligentNavigation()}
+          onConfirm={confirmIntelligentNavigation}
         />
       ) : null}
 
