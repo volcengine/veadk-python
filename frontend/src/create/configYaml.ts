@@ -3,7 +3,7 @@
 // can be imported back into the custom-mode wizard.
 
 import { parse, stringify } from "yaml";
-import { A2A_REGISTRY_DEFAULTS } from "./veadkCatalog";
+import { a2aRegistryDefaults } from "./veadkCatalog";
 import { normalizeDraft } from "./normalizeDraft";
 import { prepareMcpAuth } from "./mcpAuth";
 import type { AgentDraft } from "./types";
@@ -15,15 +15,18 @@ function toConfig(draft: AgentDraft, root = true): Record<string, unknown> {
   };
   if (draft.agentType === "a2a") {
     if (draft.a2aRegistry?.enabled) {
+      const defaults = a2aRegistryDefaults(
+        draft.cloudProvider ?? "volcengine",
+      );
       const registry: Record<string, unknown> = { enabled: true };
       if (draft.a2aRegistry.registrySpaceId?.trim())
         registry.registrySpaceId = draft.a2aRegistry.registrySpaceId.trim();
       registry.registryTopK =
-        draft.a2aRegistry.registryTopK?.trim() || A2A_REGISTRY_DEFAULTS.topK;
+        draft.a2aRegistry.registryTopK?.trim() || defaults.topK;
       registry.registryRegion =
-        draft.a2aRegistry.registryRegion?.trim() || A2A_REGISTRY_DEFAULTS.region;
+        draft.a2aRegistry.registryRegion?.trim() || defaults.region;
       registry.registryEndpoint =
-        draft.a2aRegistry.registryEndpoint?.trim() || A2A_REGISTRY_DEFAULTS.endpoint;
+        draft.a2aRegistry.registryEndpoint?.trim() || defaults.endpoint;
       o.a2aRegistry = registry;
     }
     return o;

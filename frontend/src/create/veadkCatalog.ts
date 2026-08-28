@@ -141,6 +141,18 @@ export const A2A_REGISTRY_DEFAULTS = {
   endpoint: "https://open.volcengineapi.com/",
 } as const;
 
+export function a2aRegistryDefaults(cloudProvider: CloudProvider) {
+  if (cloudProvider === "byteplus") {
+    const region = "ap-southeast-1";
+    return {
+      topK: A2A_REGISTRY_DEFAULTS.topK,
+      region,
+      endpoint: `https://agentkit.${region}.byteplusapi.com/`,
+    };
+  }
+  return A2A_REGISTRY_DEFAULTS;
+}
+
 /** AgentKit A2A registry center runtime configuration. */
 export const A2A_REGISTRY_ENV: EnvVar[] = [
   {
