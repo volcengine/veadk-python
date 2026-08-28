@@ -24,6 +24,11 @@ export interface RuntimeCloudAgent extends RuntimeAgentIntrospection {
   draft?: AgentDraft;
 }
 
+export interface RuntimeEnvironmentValue {
+  key: string;
+  value: string;
+}
+
 /** Split the provider-qualified identifier exposed by older runtimes at its
  * first slash, preserving any remaining slashes as part of the model name. */
 export function modelConfigurationFromRuntime(
@@ -56,6 +61,13 @@ export function applyRuntimeAgentIntrospection(
     runtimeNode?.model || fallbackRoot?.model,
   );
   const runtimeChildren = runtimeNode?.children ?? [];
+  const runtimeAgentType = runtimeNode?.type;
+  const agentType =
+    editableDraft.agentType === "a2a" &&
+    editableDraft.a2aRegistry?.enabled &&
+    runtimeAgentType === "llm"
+      ? "a2a"
+      : runtimeAgentType ?? editableDraft.agentType;
 
   return {
     ...editableDraft,
@@ -65,7 +77,7 @@ export function applyRuntimeAgentIntrospection(
       editableDraft.name,
     description: runtimeNode?.description ?? editableDraft.description,
     instruction: runtimeNode?.instruction ?? editableDraft.instruction,
-    agentType: runtimeNode?.type ?? editableDraft.agentType,
+    agentType,
     modelName: runtimeModel.modelName || editableDraft.modelName,
     modelProvider: runtimeModel.modelProvider || editableDraft.modelProvider,
     skills: runtimeNode?.skills?.map((skill) => skill.name) ?? editableDraft.skills,
@@ -73,6 +85,55 @@ export function applyRuntimeAgentIntrospection(
       applyRuntimeAgentIntrospection(child, runtimeChildren[index]),
     ),
   };
+}
+
+/** Restore the effective registry values exposed by the deployed Runtime.
+ * Registry-backed remote Agents execute as LLM nodes with dynamic tools, so
+ * their editable A2A configuration must be hydrated separately. */
+export function hydrateA2aRegistryFromRuntime(
+  draft: AgentDraft,
+  runtimeEnvs: readonly RuntimeEnvironmentValue[],
+): AgentDraft {
+  const values = new Map(runtimeEnvs.map(({ key, value }) => [key, value]));
+  const hasRegistryValues = [
+    "REGISTRY_SPACE_ID",
+    "REGISTRY_TOP_K",
+    "REGISTRY_REGION",
+    "REGISTRY_ENDPOINT",
+  ].some((key) => values.has(key));
+  if (!hasRegistryValues) return draft;
+
+  const runtimeValue = (key: string, current: string | undefined) =>
+    values.has(key) ? (values.get(key) ?? "") : (current ?? "");
+  const hydrateNode = (node: AgentDraft): AgentDraft => ({
+    ...node,
+    ...(node.a2aRegistry?.enabled
+      ? {
+          a2aRegistry: {
+            ...node.a2aRegistry,
+            registrySpaceId: runtimeValue(
+              "REGISTRY_SPACE_ID",
+              node.a2aRegistry.registrySpaceId,
+            ),
+            registryTopK: runtimeValue(
+              "REGISTRY_TOP_K",
+              node.a2aRegistry.registryTopK,
+            ),
+            registryRegion: runtimeValue(
+              "REGISTRY_REGION",
+              node.a2aRegistry.registryRegion,
+            ),
+            registryEndpoint: runtimeValue(
+              "REGISTRY_ENDPOINT",
+              node.a2aRegistry.registryEndpoint,
+            ),
+          },
+        }
+      : {}),
+    subAgents: node.subAgents.map(hydrateNode),
+  });
+
+  return hydrateNode(draft);
 }
 
 function cloudDraftWithDefaults(
