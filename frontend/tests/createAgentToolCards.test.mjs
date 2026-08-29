@@ -1,8 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { build } from "esbuild";
+
+const cardSource = readFileSync(new URL(
+  "../src/ui/builtin-tools/CreateAgentToolCards.tsx",
+  import.meta.url,
+), "utf8");
 
 async function loadCardData() {
   const result = await build({
@@ -21,7 +27,7 @@ async function loadCardData() {
 }
 
 test("normalizes collected resources and separates every resource source", async () => {
-  const { parseCollectedResources } = await loadCardData();
+  const { filterCollectedResourcesByCategory, parseCollectedResources } = await loadCardData();
   const parsed = parseCollectedResources({
     result: {
       collection_id: "collection-1",
@@ -72,7 +78,29 @@ test("normalizes collected resources and separates every resource source", async
     parsed.resources.map((resource) => resource.category),
     ["skill_hub", "skill_space", "knowledge_base"],
   );
+  assert.deepEqual(
+    parsed.sources.map((source) => source.category),
+    ["skill_hub", "skill_space", "knowledge_base"],
+  );
   assert.equal(parsed.sources[2].status, "skipped");
+  assert.deepEqual(
+    filterCollectedResourcesByCategory(parsed, "skill_space"),
+    {
+      resources: [parsed.resources[1]],
+      sources: [parsed.sources[1]],
+    },
+  );
+});
+
+test("uses a single-category accordion and keeps implementation hints private", () => {
+  assert.match(cardSource, /import \{ Accordion \} from "@base-ui\/react\/accordion"/);
+  assert.match(cardSource, /<Accordion\.Root[\s\S]*?defaultValue=\{\[defaultCategory\]\}/);
+  assert.match(cardSource, /<Accordion\.Panel/);
+  assert.match(cardSource, /filterCollectedResourcesByCategory\(data, item\.value\)/);
+  assert.match(cardSource, /AgentKit 技能中心/);
+  assert.doesNotMatch(cardSource, /<SegmentedControl/);
+  assert.doesNotMatch(cardSource, /Google ADK \$\{data\.capabilities\.googleAdkVersion\}/);
+  assert.doesNotMatch(cardSource, /最多嵌套/);
 });
 
 test("combines create_agents input blueprints with partial execution results", async () => {

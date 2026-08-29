@@ -13,6 +13,7 @@ export interface CollectedResourceView {
 
 export interface ResourceSourceView {
   source: string;
+  category: ResourceCategory;
   label: string;
   status: "ok" | "skipped" | "error";
   count: number;
@@ -97,8 +98,14 @@ function resourceCategory(resource: Record<string, unknown>): ResourceCategory {
 function sourceLabel(source: string): string {
   if (source === "agentkit_knowledge") return "AgentKit 知识库";
   if (source.startsWith("skill_hub:")) return `Skill Hub ${source.slice(10)}`;
-  if (source.startsWith("skill_space:")) return `私域 Skill ${source.slice(12)}`;
+  if (source.startsWith("skill_space:")) return `AgentKit 技能中心 ${source.slice(12)}`;
   return source || "未知来源";
+}
+
+function sourceCategory(source: string): ResourceCategory {
+  if (source === "agentkit_knowledge") return "knowledge_base";
+  if (source.startsWith("skill_hub:")) return "skill_hub";
+  return "skill_space";
 }
 
 export function parseCollectedResources(response: unknown): CollectedResourcesView {
@@ -128,6 +135,7 @@ export function parseCollectedResources(response: unknown): CollectedResourcesVi
       : rawStatus === "skipped" ? "skipped" : "ok";
     return [{
       source: name,
+      category: sourceCategory(name),
       label: sourceLabel(name),
       status,
       count: asNumber(source.count),
@@ -150,6 +158,16 @@ export function parseCollectedResources(response: unknown): CollectedResourcesVi
       skill_space: resources.filter((resource) => resource.category === "skill_space").length,
       knowledge_base: resources.filter((resource) => resource.category === "knowledge_base").length,
     },
+  };
+}
+
+export function filterCollectedResourcesByCategory(
+  data: CollectedResourcesView,
+  category: ResourceCategory,
+) {
+  return {
+    resources: data.resources.filter((resource) => resource.category === category),
+    sources: data.sources.filter((source) => source.category === category),
   };
 }
 
