@@ -43,7 +43,7 @@ def test_harness_dockerfile_uses_accelerated_source_with_official_fallback() -> 
         in cli_harness._DOCKERFILE
     )
     assert "https://github.com/volcengine/veadk-python.git" in cli_harness._DOCKERFILE
-    assert '"./src[harness]"' in cli_harness._DOCKERFILE
+    assert '"./src[database,extensions,harness]"' in cli_harness._DOCKERFILE
     old_package_path = "packages/" + "agentkit" + "-harness-python"
     assert old_package_path not in cli_harness._DOCKERFILE
 
