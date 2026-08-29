@@ -1,5 +1,12 @@
 import type { ComponentType, SVGProps } from "react";
 import {
+  CollectResourcesCard,
+  CreateAgentsCard,
+  type CreateAgentToolCardProps,
+} from "./CreateAgentToolCards";
+import {
+  CollectResourcesIcon,
+  CreateAgentsIcon,
   ImageGenerateIcon,
   LoadKnowledgebaseIcon,
   LoadMemoryIcon,
@@ -18,14 +25,18 @@ export type BuiltinToolTone =
   | "memory"
   | "knowledge"
   | "skill"
-  | "sandbox";
+  | "sandbox"
+  | "resources"
+  | "agent";
 
 export interface BuiltinToolDefinition {
   name: string;
   runningLabel: string;
   doneLabel: string;
+  failedLabel?: string;
   tone: BuiltinToolTone;
   icon: ComponentType<SVGProps<SVGSVGElement>>;
+  detailRenderer?: ComponentType<CreateAgentToolCardProps>;
 }
 
 const BUILTIN_TOOLS: Readonly<Record<string, BuiltinToolDefinition>> = {
@@ -84,6 +95,24 @@ const BUILTIN_TOOLS: Readonly<Record<string, BuiltinToolDefinition>> = {
     doneLabel: "已加载技能",
     tone: "skill",
     icon: LoadSkillIcon,
+  },
+  collect_resources: {
+    name: "collect_resources",
+    runningLabel: "正在收集可用资源",
+    doneLabel: "已完成资源收集",
+    failedLabel: "资源收集失败",
+    tone: "resources",
+    icon: CollectResourcesIcon,
+    detailRenderer: CollectResourcesCard,
+  },
+  create_agents: {
+    name: "create_agents",
+    runningLabel: "正在创建并运行 Agent",
+    doneLabel: "已完成 Agent 创建",
+    failedLabel: "Agent 创建失败",
+    tone: "agent",
+    icon: CreateAgentsIcon,
+    detailRenderer: CreateAgentsCard,
   },
 };
 
