@@ -6319,7 +6319,10 @@ export default function App() {
               }
               agentPickerDisabled={!userId || conversationBusy}
               selectedRuntimeId={studioToolRuntime?.runtimeId}
+              agentsSource={agentsSource}
+              localApps={apps}
               runtimeScope={access.capabilities.runtimeScope}
+              onSelectLocalApp={refreshCurrentAgentAndStartNewChat}
               onSelectRuntime={async (runtime) => {
                 try {
                   await connectMyAgent(
