@@ -78,7 +78,7 @@ def test_minimal_codegen_agent_py_compiles(tmp_path) -> None:
         file.content for file in project.files if file.path == "requirements.txt"
     )
     assert requirements == (
-        "veadk-python==1.1.6\n"
+        "veadk-python==1.1.7\n"
         "agentkit-sdk-python==0.8.4\n"
         "google-adk==2.1.0\n"
         "starlette==0.52.1\n"
@@ -122,11 +122,8 @@ def test_quick_mode_codegen_adds_dynamic_agent_toolset_and_managed_rules() -> No
     assert "create_agents" in agent_py
     assert "handoff_to" in agent_py
     assert "'dynamicAgentDelegation': True" in agent_py
-    assert (
-        "veadk-python @ https://github.com/volcengine/veadk-python/archive/"
-        "3d2b0d4c41a459310fba1f20116e989d6cc7f1ac.zip\n" in requirements
-    )
-    assert "veadk-python==1.1.6" not in requirements
+    assert "veadk-python==1.1.7\n" in requirements
+    assert "github.com/volcengine/veadk-python" not in requirements
 
 
 def test_traditional_codegen_does_not_add_dynamic_agent_capability() -> None:
@@ -145,7 +142,7 @@ def test_traditional_codegen_does_not_add_dynamic_agent_capability() -> None:
     assert "CreateAgentToolset" not in agent_py
     assert "动态子智能体协作规则" not in agent_py
     assert "dynamicAgentDelegation" not in agent_py
-    assert "veadk-python==1.1.6" in requirements
+    assert "veadk-python==1.1.7" in requirements
 
 
 def test_codegen_environment_image_adds_skills_without_replacing_agent_skills() -> None:

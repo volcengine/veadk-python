@@ -1021,12 +1021,6 @@ def render_env_example(env: list[EnvVar]) -> str:
     return "\n".join(lines) + "\n"
 
 
-_DYNAMIC_AGENT_VEADK_SOURCE = (
-    "https://github.com/volcengine/veadk-python/archive/"
-    "3d2b0d4c41a459310fba1f20116e989d6cc7f1ac.zip"
-)
-
-
 def render_requirements(
     extras: set[str],
     include_feishu_channel: bool,
@@ -1042,11 +1036,7 @@ def render_requirements(
     unique_extras = sorted(all_extras)
     extras_str = f"[{','.join(unique_extras)}]" if unique_extras else ""
     managed_sidecar = "harness-sidecar" in all_extras
-    pkg = (
-        f"veadk-python{extras_str} @ {_DYNAMIC_AGENT_VEADK_SOURCE}"
-        if dynamic_agent_delegation
-        else f"veadk-python{extras_str}==1.1.6"
-    )
+    pkg = f"veadk-python{extras_str}==1.1.7"
     agentkit_sdk = (
         "agentkit-sdk-python==0.8.1"
         if managed_sidecar
