@@ -303,6 +303,9 @@ test("combines create_agents input blueprints with partial execution results", a
 test("renders compact bounded agent cards with resource popovers and separated tool types", () => {
   assert.match(cardSource, /<ResourceCard className="create-agent-card__agent-card"/);
   assert.match(cardSource, /<ResourceIdentityMark seed=\{agent\.name\}/);
+  assert.match(cardSource, /import \{ ResourceLibraryIcon \} from "\.\.\/icons\/SidebarIcons"/);
+  assert.match(cardSource, /icon=\{<ResourceLibraryIcon aria-hidden="true" \/>\}/);
+  assert.doesNotMatch(cardSource, /InternalKnowledge/);
   assert.match(cardSource, /status=\{\([\s\S]*?AGENT_TYPE_LABELS\[agent\.rootType\]/);
   assert.match(cardSource, /import \{ Popover \} from "@openai\/apps-sdk-ui\/components\/Popover"/);
   assert.match(cardSource, /<Popover showOnHover hoverOpenDelay=\{120\}>/);

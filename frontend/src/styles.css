@@ -1995,7 +1995,11 @@ body {
 .turn--user .md pre { background: hsl(var(--background) / 0.55); }
 
 /* ---------- thinking / tool blocks (lightweight, like the generating line) ---------- */
-.block-thinking, .block-progress, .block-tool, .block-plan { width: 100%; }
+.block-thinking, .block-progress, .block-tool, .block-plan {
+  width: 100%;
+  min-width: 0;
+  align-self: stretch;
+}
 .think-head, .tool-head {
   display: inline-flex;
   align-items: center;
@@ -2223,8 +2227,14 @@ body {
   transition: grid-template-rows 0.28s ease;
 }
 .think-collapse.open { grid-template-rows: 1fr; }
-.think-collapse-inner { overflow: hidden; }
+.think-collapse-inner {
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
 .think-body {
+  width: 100%;
+  min-width: 0;
   margin: 0;
   padding: 0;
   border-left: 0;

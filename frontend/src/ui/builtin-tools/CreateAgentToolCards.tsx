@@ -2,7 +2,6 @@ import { useMemo, type ReactNode, type SVGProps } from "react";
 import { Accordion } from "@base-ui/react/accordion";
 import { Badge } from "@openai/apps-sdk-ui/components/Badge";
 import {
-  InternalKnowledge,
   Tools,
   ToolsSkills,
   Users,
@@ -24,6 +23,7 @@ import {
   ResourceCardHeader,
   ResourceIdentityMark,
 } from "../ResourceCollection";
+import { ResourceLibraryIcon } from "../icons/SidebarIcons";
 import "./create-agent-tool-cards.css";
 
 export interface CreateAgentToolCardProps {
@@ -402,7 +402,7 @@ export function CreateAgentsCard({ args, response, status }: CreateAgentToolCard
                   <ResourceMetric
                     label="知识库"
                     count={agent.knowledgeBases.length}
-                    icon={<InternalKnowledge aria-hidden="true" />}
+                    icon={<ResourceLibraryIcon aria-hidden="true" />}
                   >
                     <AgentResourceList label="知识库" resources={agent.knowledgeBases} />
                   </ResourceMetric>

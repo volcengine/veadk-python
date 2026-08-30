@@ -69,5 +69,10 @@ test("groups child Agent work in an identified muted execution card", () => {
   );
   assert.match(stylesSource, /\.subagent-run-description\s*\{[^}]*font-size:\s*13\.5px/s);
   assert.doesNotMatch(stylesSource, /\.subagent-run-description\s*\{[^}]*border-bottom/s);
+  assert.match(
+    stylesSource,
+    /\.block-thinking, \.block-progress, \.block-tool, \.block-plan\s*\{[^}]*min-width:\s*0;[^}]*align-self:\s*stretch;/s,
+  );
+  assert.match(stylesSource, /\.think-body\s*\{[^}]*width:\s*100%;[^}]*min-width:\s*0;/s);
   assert.match(stylesSource, /@media \(max-width: 700px\)[\s\S]*?\.turn--subagent/);
 });
