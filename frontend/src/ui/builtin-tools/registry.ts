@@ -37,6 +37,7 @@ export interface BuiltinToolDefinition {
   tone: BuiltinToolTone;
   icon: ComponentType<SVGProps<SVGSVGElement>>;
   detailRenderer?: ComponentType<CreateAgentToolCardProps>;
+  showRunningIndicator?: boolean;
 }
 
 const BUILTIN_TOOLS: Readonly<Record<string, BuiltinToolDefinition>> = {
@@ -104,6 +105,7 @@ const BUILTIN_TOOLS: Readonly<Record<string, BuiltinToolDefinition>> = {
     tone: "resources",
     icon: CollectResourcesIcon,
     detailRenderer: CollectResourcesCard,
+    showRunningIndicator: true,
   },
   create_agents: {
     name: "create_agents",
@@ -113,6 +115,7 @@ const BUILTIN_TOOLS: Readonly<Record<string, BuiltinToolDefinition>> = {
     tone: "agent",
     icon: CreateAgentsIcon,
     detailRenderer: CreateAgentsCard,
+    showRunningIndicator: true,
   },
 };
 

@@ -667,6 +667,7 @@ function ToolBlock({
             ? builtinTool.failedLabel
             : loadSkillLabel(name, args)}
           done={done}
+          status={toolStatus}
           open={open}
           onToggle={toggle}
         />

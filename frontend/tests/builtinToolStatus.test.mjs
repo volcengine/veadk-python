@@ -150,9 +150,11 @@ test("additively supports tool outcomes and plans in the shared block renderer",
 });
 
 test("registers create-agent tools with dedicated detail renderers", () => {
-  assert.match(registrySource, /collect_resources:[\s\S]*?detailRenderer: CollectResourcesCard/);
-  assert.match(registrySource, /create_agents:[\s\S]*?detailRenderer: CreateAgentsCard/);
-  assert.match(blocksSource, /<DetailRenderer args=\{args\} response=\{response\} status=\{toolStatus\} \/>/);
+  assert.match(registrySource, /collect_resources:[\s\S]*?detailRenderer: CollectResourcesCard,[\s\S]*?showRunningIndicator: true/);
+  assert.match(registrySource, /create_agents:[\s\S]*?detailRenderer: CreateAgentsCard,[\s\S]*?showRunningIndicator: true/);
+  assert.match(blocksSource, /status=\{toolStatus\}[\s\S]*?<DetailRenderer args=\{args\} response=\{response\} status=\{toolStatus\} \/>/);
+  assert.match(headerSource, /LoadingIndicator[\s\S]*?aria-label="进行中"/);
+  assert.doesNotMatch(headerSource, /aria-label="已完成"/);
   assert.match(toolStylesSource, /data-tool-tone="resources"/);
   assert.match(toolStylesSource, /data-tool-tone="agent"/);
 });

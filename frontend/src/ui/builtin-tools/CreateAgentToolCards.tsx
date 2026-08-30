@@ -1,6 +1,8 @@
 import { useMemo, type SVGProps } from "react";
 import { Accordion } from "@base-ui/react/accordion";
 import { Badge } from "@openai/apps-sdk-ui/components/Badge";
+import { LoadingIndicator } from "@openai/apps-sdk-ui/components/Indicator";
+import { Check } from "@openai/apps-sdk-ui/components/Icon";
 import {
   filterCollectedResourcesByCategory,
   parseCollectedResources,
@@ -30,23 +32,25 @@ const AGENT_TYPE_LABELS: Record<string, string> = {
   workflow: "Workflow",
 };
 
-function statusBadge(status: ToolExecutionStatus | "ok" | "skipped") {
-  if (status === "completed" || status === "ok") {
-    return <Badge color="success" size="sm" variant="soft">已完成</Badge>;
+function statusIndicator(status: ToolExecutionStatus) {
+  if (status === "completed") {
+    return (
+      <Check
+        className="create-agent-card__status-icon is-success"
+        aria-label="已完成"
+      />
+    );
   }
   if (status === "failed") {
     return <Badge color="danger" size="sm" variant="soft">失败</Badge>;
   }
-  if (status === "skipped") {
-    return <Badge color="warning" size="sm" variant="soft">已跳过</Badge>;
-  }
-  return <Badge color="secondary" size="sm" variant="soft">进行中</Badge>;
-}
-
-function sourceStatusBadge(status: "ok" | "skipped" | "error") {
-  if (status === "ok") return statusBadge("ok");
-  if (status === "skipped") return statusBadge("skipped");
-  return statusBadge("failed");
+  return (
+    <LoadingIndicator
+      className="create-agent-card__status-icon"
+      size={16}
+      aria-label="进行中"
+    />
+  );
 }
 
 function AccordionChevron(props: SVGProps<SVGSVGElement>) {
@@ -98,23 +102,16 @@ export function CollectResourcesCard({ response, status }: CreateAgentToolCardPr
   const data = useMemo(() => parseCollectedResources(response), [response]);
   const groups = useMemo(() => RESOURCE_CATEGORIES.map((item) => ({
     ...item,
-    ...filterCollectedResourcesByCategory(data, item.value),
+    resources: filterCollectedResourcesByCategory(data, item.value).resources,
   })), [data]);
   const defaultCategory = groups.find(
-    (group) => group.resources.length > 0 || group.sources.length > 0,
+    (group) => group.resources.length > 0,
   )?.value ?? "skill_hub";
   const failed = status === "failed";
   const error = failed ? responseError(response) : "";
 
   return (
     <section className="create-agent-tool-card" aria-label="召回资源信息">
-      <div className="create-agent-card__summary">
-        <span className="create-agent-card__summary-title">
-          {status === "running" ? "正在并行检索资源" : `召回 ${data.resources.length} 项资源`}
-        </span>
-        {statusBadge(status)}
-      </div>
-
       {status === "running" ? (
         <LoadingRows label="正在检索资源" />
       ) : failed ? (
@@ -146,43 +143,42 @@ export function CollectResourcesCard({ response, status }: CreateAgentToolCardPr
                 </Accordion.Trigger>
               </Accordion.Header>
               <Accordion.Panel className="create-agent-card__accordion-content">
-                {group.resources.length > 0 ? (
-                  <div className="create-agent-card__resource-list">
-                    {group.resources.map((resource) => (
-                      <div className="create-agent-card__resource" key={resource.ref}>
-                        <div className="create-agent-card__resource-main">
-                          <div className="create-agent-card__resource-title">
-                            <span className="create-agent-card__resource-name">{resource.name}</span>
-                            {resource.version ? <span>版本 {resource.version}</span> : null}
+                <div
+                  className="create-agent-card__accordion-scroll"
+                  role="region"
+                  aria-label={`${group.label}资源列表`}
+                  tabIndex={0}
+                >
+                  {group.resources.length > 0 ? (
+                    <div className="create-agent-card__resource-list">
+                      {group.resources.map((resource) => (
+                        <div className="create-agent-card__resource" key={resource.ref}>
+                          <div className="create-agent-card__resource-main">
+                            <div className="create-agent-card__resource-title">
+                              <span className="create-agent-card__resource-name">{resource.name}</span>
+                              {resource.version ? (
+                                <Badge
+                                  className="create-agent-card__resource-version"
+                                  color="secondary"
+                                  size="sm"
+                                  variant="soft"
+                                >
+                                  {resource.version}
+                                </Badge>
+                              ) : null}
+                            </div>
+                            {resource.description ? <p>{resource.description}</p> : null}
                           </div>
-                          {resource.description ? <p>{resource.description}</p> : null}
-                          <span className="create-agent-card__resource-ref">{resource.ref}</span>
                         </div>
-                        <Badge color="secondary" size="sm" variant="outline">
-                          {group.label}
-                        </Badge>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="create-agent-card__message">
-                    <span className="create-agent-card__message-title">当前类别没有资源</span>
-                    <span>本次检索未返回该类别的资源。</span>
-                  </div>
-                )}
-                {group.sources.length > 0 ? (
-                  <div className="create-agent-card__sources" aria-label={`${group.label}来源状态`}>
-                    {group.sources.map((source) => (
-                      <div className="create-agent-card__source" key={source.source}>
-                        <span className="create-agent-card__source-name">{source.label}</span>
-                        <span className="create-agent-card__source-meta">
-                          {source.status === "ok" ? `${source.count} 项` : source.message}
-                        </span>
-                        {sourceStatusBadge(source.status)}
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="create-agent-card__message">
+                      <span className="create-agent-card__message-title">当前类别没有资源</span>
+                      <span>本次检索未返回该类别的资源。</span>
+                    </div>
+                  )}
+                </div>
               </Accordion.Panel>
             </Accordion.Item>
           ))}
@@ -198,15 +194,6 @@ export function CreateAgentsCard({ args, response, status }: CreateAgentToolCard
 
   return (
     <section className="create-agent-tool-card" aria-label="创建 Agent 结果">
-      <div className="create-agent-card__summary">
-        <span className="create-agent-card__summary-title">
-          {status === "running"
-            ? `正在创建 ${data.agents.length} 个 Agent`
-            : `${data.completedCount} 个成功，${data.failedCount} 个失败`}
-        </span>
-        {statusBadge(status)}
-      </div>
-
       {topLevelError ? (
         <div className="create-agent-card__message is-error" role="alert">
           <span className="create-agent-card__message-title">Agent 创建未完成</span>
@@ -225,7 +212,7 @@ export function CreateAgentsCard({ args, response, status }: CreateAgentToolCard
                     <span className="create-agent-card__agent-name">{agent.name}</span>
                     <span>{AGENT_TYPE_LABELS[agent.rootType] ?? agent.rootType}</span>
                   </div>
-                  {statusBadge(agentStatus)}
+                  {statusIndicator(agentStatus)}
                 </div>
                 {agent.task ? <p>{agent.task}</p> : null}
                 <div className="create-agent-card__agent-metrics" aria-label={`${agent.name} 配置摘要`}>

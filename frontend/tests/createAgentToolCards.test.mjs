@@ -9,6 +9,10 @@ const cardSource = readFileSync(new URL(
   "../src/ui/builtin-tools/CreateAgentToolCards.tsx",
   import.meta.url,
 ), "utf8");
+const cardStyles = readFileSync(new URL(
+  "../src/ui/builtin-tools/create-agent-tool-cards.css",
+  import.meta.url,
+), "utf8");
 
 async function loadCardData() {
   const result = await build({
@@ -101,6 +105,51 @@ test("uses a single-category accordion and keeps implementation hints private", 
   assert.doesNotMatch(cardSource, /<SegmentedControl/);
   assert.doesNotMatch(cardSource, /Google ADK \$\{data\.capabilities\.googleAdkVersion\}/);
   assert.doesNotMatch(cardSource, /最多嵌套/);
+});
+
+test("uses native status indicators instead of text badges for active and completed states", () => {
+  assert.match(
+    cardSource,
+    /import \{ LoadingIndicator \} from "@openai\/apps-sdk-ui\/components\/Indicator"/,
+  );
+  assert.match(
+    cardSource,
+    /import \{ Check \} from "@openai\/apps-sdk-ui\/components\/Icon"/,
+  );
+  assert.match(cardSource, /<LoadingIndicator[\s\S]*?aria-label="进行中"/);
+  assert.match(cardSource, /<Check[\s\S]*?aria-label="已完成"/);
+  assert.doesNotMatch(cardSource, /<Badge[^>]*>进行中<\/Badge>/);
+  assert.doesNotMatch(cardSource, /<Badge[^>]*>已完成<\/Badge>/);
+  assert.doesNotMatch(cardSource, /create-agent-card__summary/);
+  assert.doesNotMatch(cardSource, /已完成资源收集/);
+  assert.doesNotMatch(cardSource, /来源状态|sourceStatusIndicator/);
+  assert.doesNotMatch(cardSource, /create-agent-card__resource-ref/);
+  assert.doesNotMatch(cardSource, /<Badge[^>]*>[\s\S]{0,80}\{group\.label\}/);
+  assert.match(cardSource, /<Badge[\s\S]*?className="create-agent-card__resource-version"[\s\S]*?>[\s\S]*?\{resource\.version\}/);
+  assert.doesNotMatch(cardSource, /版本 \{resource\.version\}/);
+  assert.match(cardStyles, /\.create-agent-card__resource-version\s*\{[\s\S]*?font-weight:\s*var\(--font-weight-normal, 400\);/);
+  assert.match(cardStyles, /\.create-agent-card__resource-title\s*\{[\s\S]*?align-items:\s*center;/);
+  assert.match(cardStyles, /border-bottom:\s*1px dashed hsl\(var\(--border\)/);
+  assert.match(cardStyles, /\.create-agent-card__resource p,[\s\S]*?overflow-wrap:\s*anywhere;/);
+});
+
+test("bounds expanded resource details in a keyboard-scrollable region", () => {
+  assert.match(
+    cardSource,
+    /className="create-agent-card__accordion-scroll"[\s\S]*?role="region"[\s\S]*?tabIndex=\{0\}/,
+  );
+  assert.match(
+    cardStyles,
+    /\.create-agent-card__accordion-scroll\s*\{[\s\S]*?max-height:\s*min\(360px, 52dvh\);[\s\S]*?overflow-y:\s*auto;/,
+  );
+  assert.match(
+    cardStyles,
+    /\.create-agent-card__accordion-content\s*\{[\s\S]*?height:\s*var\(--accordion-panel-height\);[\s\S]*?transition:/,
+  );
+  assert.match(
+    cardStyles,
+    /\.create-agent-card__accordion-content\[data-starting-style\][\s\S]*?height:\s*0;/,
+  );
 });
 
 test("combines create_agents input blueprints with partial execution results", async () => {

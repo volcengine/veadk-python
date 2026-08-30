@@ -83,6 +83,12 @@
   color: hsl(var(--muted-foreground));
 }
 
+.builtin-tool-status {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+}
+
 .builtin-tool-chevron {
   width: 13px;
   height: 13px;
