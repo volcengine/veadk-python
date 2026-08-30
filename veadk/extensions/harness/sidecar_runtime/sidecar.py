@@ -20,6 +20,7 @@ import atexit
 import json
 import os
 import queue
+import re
 import shlex
 import shutil
 import subprocess
@@ -30,10 +31,12 @@ import warnings
 from collections.abc import Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from secrets import token_urlsafe
 from typing import Any
 
 from .failover_proxy import StableHttpRelay
 from .mcp_loopback_proxy import SidecarMcpHttpRelay
+from .mcp_upstream_proxy import ManagedMcpUpstreamRelay
 from .runtime_gateway_proxy import RuntimeGatewayHttpRelay
 from .sidecar_config import (
     HarnessSidecarConfig,
@@ -49,6 +52,16 @@ _SIDECAR_TELEMETRY_ENV = {
     "ENABLE_TLS": "false",
     "OTEL_SDK_DISABLED": "true",
 }
+_MCP_SERVERS_JSON_ENV = "MCP_SERVERS_JSON"
+_MCP_RELAY_API_KEY_ENV = "VEADK_HARNESS_MCP_RELAY_API_KEY"
+_MCP_SERVER_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}")
+
+
+@dataclass(frozen=True)
+class _ManagedMcpServer:
+    name: str
+    url: str
+    authorization: str | None
 
 
 class HarnessSidecarError(RuntimeError):
@@ -72,6 +85,9 @@ class SidecarBinding:
         field(default_factory=list, repr=False)
     )
     _relay_env_keys: set[str] = field(default_factory=set, repr=False)
+    _upstream_relays: list[ManagedMcpUpstreamRelay] = field(
+        default_factory=list, repr=False
+    )
     _state_lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     _monitor_thread: threading.Thread | None = field(default=None, repr=False)
     _runtime_exit_code: int | None = field(default=None, init=False, repr=False)
@@ -109,6 +125,9 @@ class SidecarBinding:
         for relay in self._relays:
             relay.close()
         self._relays.clear()
+        for relay in self._upstream_relays:
+            relay.close()
+        self._upstream_relays.clear()
         if self._environ is not None:
             for key, previous in self._previous_env.items():
                 if self._environ.get(key) != self.spec.env.get(key):
@@ -215,11 +234,12 @@ class SidecarBinding:
         self._relay_env_keys.update(("MCP_URLS", "MCP_API_KEY"))
 
     def _start_runtime_monitor(self) -> None:
-        if self.process is None:
+        process = self.process
+        if process is None:
             return
 
         def monitor() -> None:
-            exit_code = self.process.wait()
+            exit_code = process.wait()
             with self._state_lock:
                 if self._stopped:
                     return
@@ -291,6 +311,10 @@ def start_harness_sidecar(
         if process_env is not None
         else (environ if environ is not None else os.environ)
     )
+    upstream_relays: list[ManagedMcpUpstreamRelay] = []
+    resolved, upstream_relays = _configure_structured_mcp_upstreams(
+        resolved, runtime_env
+    )
     # The managed application owns its telemetry exporters. Reusing those
     # process-wide flags in the Sidecar child starts a second exporter against
     # the Runtime-local collector and can make Sidecar discovery fail before
@@ -330,6 +354,7 @@ def start_harness_sidecar(
             process=process,
             config_path=config_path,
             stderr_lines=stderr_lines,
+            _upstream_relays=upstream_relays,
         )
         binding._configure_failover_relays(runtime_env)
         if apply_env:
@@ -345,6 +370,8 @@ def start_harness_sidecar(
                 config_path.unlink(missing_ok=True)
             if process is not None:
                 _terminate_process(process)
+            for relay in upstream_relays:
+                relay.close()
         if isinstance(error, HarnessSidecarError):
             raise
         raise HarnessSidecarError(f"Harness Sidecar startup failed: {error}") from error
@@ -484,6 +511,83 @@ def _csv_urls(value: str | None) -> list[str]:
     return [item.strip() for item in (value or "").split(",") if item.strip()]
 
 
+def _configure_structured_mcp_upstreams(
+    config: HarnessSidecarConfig,
+    runtime_env: MutableMapping[str, str],
+) -> tuple[HarnessSidecarConfig, list[ManagedMcpUpstreamRelay]]:
+    raw = str(runtime_env.get(_MCP_SERVERS_JSON_ENV) or "").strip()
+    if not raw or not config.mcp_gateway.enabled:
+        return config, []
+    servers = _parse_structured_mcp_servers(raw)
+    internal_api_key = token_urlsafe(32)
+    relays: list[ManagedMcpUpstreamRelay] = []
+    try:
+        for index, server in enumerate(servers, start=1):
+            slug = re.sub(r"[^a-z0-9]+", "-", server.name.lower()).strip("-")
+            route = f"mcp-{(slug or 'tool')[:40]}-{index}"
+            relays.append(
+                ManagedMcpUpstreamRelay(
+                    server.url,
+                    route=route,
+                    upstream_authorization=server.authorization,
+                    internal_api_key=internal_api_key,
+                )
+            )
+    except Exception:
+        for relay in relays:
+            relay.close()
+        raise
+
+    runtime_env[_MCP_RELAY_API_KEY_ENV] = internal_api_key
+    runtime_env.pop(_MCP_SERVERS_JSON_ENV, None)
+    runtime_env.pop("MCP_URLS", None)
+    runtime_env.pop("MCP_API_KEY", None)
+    mcp_gateway = config.mcp_gateway.model_copy(
+        update={
+            "upstreams": [relay.url for relay in relays],
+            "upstream_api_key_env": _MCP_RELAY_API_KEY_ENV,
+            "prefer_configured_upstream_api_key": True,
+        }
+    )
+    return config.model_copy(update={"mcp_gateway": mcp_gateway}), relays
+
+
+def _parse_structured_mcp_servers(raw: str) -> list[_ManagedMcpServer]:
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError) as error:
+        raise HarnessSidecarError(
+            "Managed MCP server configuration is invalid"
+        ) from error
+    if not isinstance(payload, list) or not 1 <= len(payload) <= 32:
+        raise HarnessSidecarError("Managed MCP server configuration is invalid")
+    servers: list[_ManagedMcpServer] = []
+    seen_names: set[str] = set()
+    for item in payload:
+        if not isinstance(item, Mapping):
+            raise HarnessSidecarError("Managed MCP server configuration is invalid")
+        name = str(item.get("name") or "").strip()
+        url = str(item.get("url") or "").strip()
+        if _MCP_SERVER_NAME_RE.fullmatch(name) is None or name in seen_names:
+            raise HarnessSidecarError("Managed MCP server configuration is invalid")
+        headers = item.get("headers") or {}
+        if not isinstance(headers, Mapping) or any(
+            str(key).lower() != "authorization" for key in headers
+        ):
+            raise HarnessSidecarError("Managed MCP server configuration is invalid")
+        authorization = next(
+            (
+                str(value)
+                for key, value in headers.items()
+                if str(key).lower() == "authorization"
+            ),
+            None,
+        )
+        servers.append(_ManagedMcpServer(name, url, authorization))
+        seen_names.add(name)
+    return servers
+
+
 def _write_runtime_config(config: HarnessSidecarConfig) -> Path:
     descriptor, name = tempfile.mkstemp(
         prefix="agentkit-harness-sidecar-", suffix=".json"
@@ -525,12 +629,13 @@ def _terminate_process(process: subprocess.Popen[str]) -> None:
 
 
 def _read_startup_line(process: subprocess.Popen[str], timeout: float) -> str:
-    if process.stdout is None:
+    stdout = process.stdout
+    if stdout is None:
         raise HarnessSidecarError("runtime stdout is unavailable")
     lines: queue.Queue[str] = queue.Queue(maxsize=1)
 
     def read() -> None:
-        lines.put(process.stdout.readline())
+        lines.put(stdout.readline())
 
     threading.Thread(target=read, name="harness-sidecar-discovery", daemon=True).start()
     try:

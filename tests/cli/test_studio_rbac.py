@@ -293,7 +293,7 @@ def test_managed_sidecar_runtime_envs_fail_before_build_without_mcp_upstream() -
 
     assert error == (
         "已选择 MCP 稳定性治理，请在“添加 MCP 工具”中配置至少一个 HTTP MCP "
-        "服务地址和共享 Bearer Token 后重新发布。"
+        "服务地址后重新发布；Bearer Token 仅在该服务需要认证时配置。"
     )
     assert runtime_envs["MODEL_AGENT_NAME"]
     assert runtime_envs["MODEL_NAME"] == runtime_envs["MODEL_AGENT_NAME"]
@@ -3134,7 +3134,10 @@ def test_runtime_update_capability_supports_owned_unmanaged_runtime(
         SimpleNamespace(key="MCP_API_KEY", value="mcp-secret"),
         SimpleNamespace(
             key="MCP_SERVERS_JSON",
-            value='[{"headers":{"Authorization":"Bearer embedded-secret"}}]',
+            value=(
+                '[{"name":"inventory","url":"https://mcp.example.com/inventory",'
+                '"headers":{"Authorization":"Bearer structured-secret"}}]'
+            ),
         ),
         SimpleNamespace(key="CUSTOM_TOKEN", value="custom-secret"),
     ]
@@ -3222,7 +3225,13 @@ def test_runtime_update_capability_supports_owned_unmanaged_runtime(
                                 "transport": "http",
                                 "url": "https://mcp.example.com/mcp",
                                 "authTokenEnv": "MCP_API_KEY",
-                            }
+                            },
+                            {
+                                "name": "inventory",
+                                "transport": "http",
+                                "url": "https://mcp.example.com/inventory",
+                                "authTokenEnv": "PUBLISHED_INVENTORY_TOKEN",
+                            },
                         ],
                         "selectedSkills": [
                             {
@@ -3258,6 +3267,24 @@ def test_runtime_update_capability_supports_owned_unmanaged_runtime(
             params={
                 "runtimeId": runtime.runtime_id,
                 "region": "cn-beijing",
+                "currentVersion": 7,
+            },
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+        runtime.envs = [
+            *[
+                item
+                for item in runtime.envs
+                if getattr(item, "key", "") != "MCP_API_KEY"
+            ],
+            SimpleNamespace(key="MCP_API_KEY", value="mcp-secret-rotated"),
+        ]
+        cached_response = client.get(
+            "/web/runtime-update-capability",
+            params={
+                "runtimeId": runtime.runtime_id,
+                "region": "cn-beijing",
+                "currentVersion": 7,
             },
             headers={"X-VeADK-Local-User": "developer"},
         )
@@ -3315,6 +3342,12 @@ def test_runtime_update_capability_supports_owned_unmanaged_runtime(
         )
 
     assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert cached_response.status_code == 200
+    assert (
+        cached_response.json()["agent"]["draft"]["mcpTools"][0]["authToken"]
+        == "mcp-secret-rotated"
+    )
     payload = response.json()
     assert payload["canUpdate"] is True
     assert payload["recoveryStatus"] == "draft-only"
@@ -3336,7 +3369,7 @@ def test_runtime_update_capability_supports_owned_unmanaged_runtime(
             {"key": "MODEL_AGENT_API_KEY_ID", "value": "ark-key-id"},
             {"key": "MODEL_AGENT_API_KEY_NAME", "value": "ark-key-name"},
         ],
-        "configuredEnvKeys": ["MCP_API_KEY"],
+        "configuredEnvKeys": ["MCP_API_KEY", "PUBLISHED_INVENTORY_TOKEN"],
         "network": {
             "mode": "both",
             "vpcId": "vpc-existing",
@@ -3346,11 +3379,13 @@ def test_runtime_update_capability_supports_owned_unmanaged_runtime(
     }
     assert payload["agent"]["appName"] == "selected-agent"
     assert payload["agent"]["draft"]["mcpTools"][0]["name"] == "orders"
+    assert [item["authToken"] for item in payload["agent"]["draft"]["mcpTools"]] == [
+        "mcp-secret",
+        "structured-secret",
+    ]
     assert payload["agent"]["draft"]["selectedSkills"][0]["name"] == ("ops-skill")
     for protected in (
         "must-not-reach-browser",
-        "mcp-secret",
-        "embedded-secret",
         "custom-secret",
     ):
         assert protected not in response.text
@@ -4216,6 +4251,8 @@ def test_legacy_runtime_capability_recovers_environment_and_agentkit_toolset(
             headers={"X-VeADK-Local-User": "developer"},
         )
         platform_draft = json.loads(json.dumps(response.json()["agent"]["draft"]))
+        for tool in platform_draft["mcpTools"]:
+            tool.pop("authToken", None)
         platform_draft["mcpTools"][0]["url"] = "https://mcp.example.com/orders-changed"
         platform_mcp_change = client.post(
             "/web/deploy-agentkit",
@@ -4261,9 +4298,11 @@ def test_legacy_runtime_capability_recovers_environment_and_agentkit_toolset(
         "orders",
         "inventory",
     ]
+    assert [item["authToken"] for item in payload["agent"]["draft"]["mcpTools"]] == [
+        "environment-secret",
+        "toolset-secret",
+    ]
     assert len(payload["runtime"]["configuredEnvKeys"]) == 2
-    assert "environment-secret" not in response.text
-    assert "toolset-secret" not in response.text
     assert control_plane_fallback.status_code == 200
     fallback_payload = control_plane_fallback.json()
     assert fallback_payload["canUpdate"] is True
@@ -4287,8 +4326,9 @@ def test_legacy_runtime_capability_recovers_environment_and_agentkit_toolset(
         }
     ]
     assert any("原样保留" in item for item in fallback_payload["warnings"])
-    assert "environment-secret" not in control_plane_fallback.text
-    assert "toolset-secret" not in control_plane_fallback.text
+    assert [
+        item["authToken"] for item in fallback_payload["agent"]["draft"]["mcpTools"]
+    ] == ["environment-secret", "toolset-secret"]
 
 
 def test_update_deployment_rejects_missing_stale_or_wrong_base_snapshot(
@@ -4646,6 +4686,8 @@ def test_source_preserving_update_ignores_browser_source_and_keeps_secrets_out_o
         )
         assert capability.status_code == 200
         draft = capability.json()["agent"]["draft"]
+        assert draft["mcpTools"][0]["authToken"] == "retained-secret"
+        draft["mcpTools"][0].pop("authToken")
         draft["instruction"] = "browser-overwrite-must-be-ignored"
         draft["selectedSkills"] = [
             {
@@ -4961,6 +5003,8 @@ def test_source_preserving_sidecar_update_reuses_exact_image_via_sdk(
             "long_run_control": False,
             "mcp_resilience": True,
         }
+        assert draft["mcpTools"][0]["authToken"] == "sidecar-test-secret"
+        draft["mcpTools"][0].pop("authToken")
         with client.stream(
             "POST",
             "/web/deploy-agentkit",
@@ -5216,6 +5260,9 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
         )
         assert capability.status_code == 200
         assert capability.json()["canUpdate"] is True
+        recovered_mcp = capability.json()["agent"]["draft"]["mcpTools"][0]
+        assert recovered_mcp["authToken"] == "preserved-secret"
+        assert recovered_mcp["authTokenEnv"] == ("MCP_UPDATED_AGENT_ORDERS_AUTH_TOKEN")
         remove_mcp_credential = (
             provider == "volcengine" and has_resource_tags and evaluation_error is None
         )
@@ -5462,7 +5509,22 @@ def test_new_deployment_only_updates_non_default_instance_range(
                 "createEvaluationSets": False,
                 "draft": {"dynamicAgentDelegation": quick_mode},
                 "files": [{"path": "app.py", "content": "app = object()\n"}],
-                "config": {"region": "cn-beijing", "projectName": "default"},
+                "config": {
+                    "region": "cn-beijing",
+                    "projectName": "default",
+                    **(
+                        {
+                            "network": {
+                                "mode": "both",
+                                "vpc_id": "vpc-matrix",
+                                "subnet_ids": "subnet-matrix",
+                                "enable_shared_internet_access": True,
+                            }
+                        }
+                        if session_storage == "in-memory"
+                        else {}
+                    ),
+                },
             },
         ) as response:
             frames = [
@@ -5493,6 +5555,15 @@ def test_new_deployment_only_updates_non_default_instance_range(
         "veadk:build-resource:cp-mode": "auto",
     }
     assert captured_config["launch_types"]["cloud"]["runtime_auth_type"] == ("key_auth")
+    if session_storage == "in-memory":
+        assert captured_config["launch_types"]["cloud"]["runtime_network"] == {
+            "mode": "both",
+            "vpc_id": "vpc-matrix",
+            "subnet_ids": "subnet-matrix",
+            "enable_shared_internet_access": True,
+        }
+    else:
+        assert "runtime_network" not in captured_config["launch_types"]["cloud"]
     runtime_envs = captured_config["launch_types"]["cloud"]["runtime_envs"]
     assert "VEADK_DISABLE_EXPIRE_AT" not in runtime_envs
     assert "OTEL_SDK_DISABLED" not in runtime_envs
@@ -5590,24 +5661,18 @@ def test_sidecar_deployment_uses_agentkit_cli_structured_release(
     tmp_path: Path,
 ) -> None:
     from agentkit.sdk.runtime.client import AgentkitRuntimeClient
-    from veadk.config import veadk_environments
+    from veadk.cli.studio_sidecar_prerequisites import DEFAULT_SIDECAR_BASE_IMAGE
     from veadk.extensions.harness import sidecar
 
-    managed_base = "internal.invalid/managed/sidecar:test-only"
+    managed_base = DEFAULT_SIDECAR_BASE_IMAGE
     agent_name = "ve_jvm_sidecar_prd_v1"
     runtime_name = "ve-jvm-sidecar-prd-v1"
     captured: dict[str, Any] = {}
     runtime = _runtime_with_public_endpoint(_runtime("runtime-sidecar", "developer"))
     runtime.current_version_number = 3
 
-    monkeypatch.setenv(
-        "VEADK_STUDIO_HARNESS_SIDECAR_REGIONS",
-        "cn-shanghai",
-    )
-    monkeypatch.setenv(
-        "VEADK_STUDIO_HARNESS_SIDECAR_BASE_IMAGE",
-        managed_base,
-    )
+    monkeypatch.delenv("VEADK_STUDIO_HARNESS_SIDECAR_REGIONS", raising=False)
+    monkeypatch.delenv("VEADK_STUDIO_HARNESS_SIDECAR_BASE_IMAGE", raising=False)
     monkeypatch.setattr(sidecar, "agentkit_cli_executable", lambda: "/fake/agentkit")
     monkeypatch.setattr(
         sidecar,
@@ -5629,18 +5694,11 @@ def test_sidecar_deployment_uses_agentkit_cli_structured_release(
                     "compression_provider": "noop",
                 },
             },
-            {"planHash": "sha256:test-plan"},
+            {
+                "planHash": "sha256:test-plan",
+                "effectiveComponents": ["mcp_resilience"],
+            },
         ),
-    )
-    monkeypatch.setitem(
-        veadk_environments,
-        "MCP_URLS",
-        "https://mcp.example.test/v1",
-    )
-    monkeypatch.setitem(
-        veadk_environments,
-        "MCP_API_KEY",
-        "platform-mcp-key-test-fixture",
     )
     monkeypatch.setattr(
         AgentkitRuntimeClient,
@@ -5757,6 +5815,38 @@ def test_sidecar_deployment_uses_agentkit_cli_structured_release(
                     "componentOverrides": {"mcp_resilience": True},
                     "planHash": "sha256:test-plan",
                 },
+                "draft": {
+                    "name": agent_name,
+                    "description": "Sidecar MCP deployment",
+                    "instruction": "Use the configured MCP tools.",
+                    "mcpTools": [
+                        {
+                            "name": "public",
+                            "transport": "http",
+                            "url": "https://mcp.example.test/public/mcp",
+                        },
+                        {
+                            # Legacy snapshots may omit the MCP display name;
+                            # the server derives a stable name from the URL.
+                            "name": "",
+                            "transport": "http",
+                            "url": "https://mcp.example.test/orders/mcp",
+                            "authTokenEnv": "MCP_ORDERS_AUTH_TOKEN",
+                        },
+                    ],
+                    "harnessSidecar": {
+                        "componentOverrides": {"mcp_resilience": True},
+                        "planHash": "sha256:test-plan",
+                    },
+                },
+                "mcpSecretValues": [
+                    {
+                        "agentName": agent_name,
+                        "name": "",
+                        "url": "https://mcp.example.test/orders/mcp",
+                        "value": "orders-secret-from-test-fixture",
+                    }
+                ],
                 "files": [
                     {
                         "path": "requirements.txt",
@@ -5778,7 +5868,16 @@ def test_sidecar_deployment_uses_agentkit_cli_structured_release(
                         ),
                     },
                 ],
-                "config": {"region": "cn-shanghai", "projectName": "default"},
+                "config": {
+                    "region": "cn-shanghai",
+                    "projectName": "default",
+                    "network": {
+                        "mode": "both",
+                        "vpc_id": "vpc-sidecar-matrix",
+                        "subnet_ids": "subnet-sidecar-matrix",
+                        "enable_shared_internet_access": True,
+                    },
+                },
             },
         ) as response:
             frames = [
@@ -5815,6 +5914,13 @@ def test_sidecar_deployment_uses_agentkit_cli_structured_release(
     }
     assert captured["config"]["runtime"]["min_instance"] == 1
     assert captured["config"]["runtime"]["max_instance"] == 1
+    assert captured["config"]["runtime"]["network"] == {
+        "enable_public_network": True,
+        "enable_private_network": True,
+        "vpc_id": "vpc-sidecar-matrix",
+        "subnet_ids": ["subnet-sidecar-matrix"],
+        "enable_shared_internet_access": True,
+    }
     assert captured["config"]["runtime"]["tags"]["veadk:managed"] == "true"
     assert captured["config"]["infrastructure"]["container_registry"] == {
         "region": "cn-shanghai",
@@ -5829,8 +5935,6 @@ def test_sidecar_deployment_uses_agentkit_cli_structured_release(
     placeholder = persisted_runtime_value.removeprefix("${").removesuffix("}")
     assert captured["cli_env"][placeholder] == "runtime-only-value"
     for key, expected in (
-        ("MCP_URLS", "https://mcp.example.test/v1"),
-        ("MCP_API_KEY", "platform-mcp-key-test-fixture"),
         (
             "AGENTKIT_HARNESS_RUNTIME_COMMAND",
             "/opt/agentkit-headroom/bin/agentkit-harness-sidecar-runtime",
@@ -5840,12 +5944,293 @@ def test_sidecar_deployment_uses_agentkit_cli_structured_release(
         assert persisted_value.startswith("${VEADK_STUDIO_RUNTIME_ENV_")
         placeholder = persisted_value.removeprefix("${").removesuffix("}")
         assert captured["cli_env"][placeholder] == expected
+    structured_value = captured["config"]["envs"]["MCP_SERVERS_JSON"]
+    assert structured_value.startswith("${VEADK_STUDIO_RUNTIME_ENV_")
+    structured_placeholder = structured_value.removeprefix("${").removesuffix("}")
+    assert json.loads(captured["cli_env"][structured_placeholder]) == [
+        {
+            "name": "public",
+            "url": "https://mcp.example.test/public/mcp",
+        },
+        {
+            "name": "mcp",
+            "url": "https://mcp.example.test/orders/mcp",
+            "headers": {"Authorization": "Bearer orders-secret-from-test-fixture"},
+        },
+    ]
+    assert "MCP_URLS" not in captured["config"]["envs"]
+    assert "MCP_API_KEY" not in captured["config"]["envs"]
+    assert "MCP_ORDERS_AUTH_TOKEN" not in captured["config"]["envs"]
     assert "runtime-only-value" not in json.dumps(captured["config"])
-    assert "platform-mcp-key-test-fixture" not in json.dumps(captured["config"])
+    assert "orders-secret-from-test-fixture" not in json.dumps(captured["config"])
     assert (
         "/opt/agentkit-headroom/bin/agentkit-harness-sidecar-runtime"
         not in json.dumps(captured["config"])
     )
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_url", "expected_status"),
+    [
+        ("unchanged-reference", "https://mcp.example.test/orders/mcp", 200),
+        ("changed-explicit-reuse", "https://new-mcp.example.test/orders/mcp", 200),
+        ("changed-without-decision", "https://new-mcp.example.test/orders/mcp", 409),
+    ],
+)
+def test_sidecar_update_resolves_or_explicitly_reuses_stored_mcp_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    mode: str,
+    expected_url: str,
+    expected_status: int,
+) -> None:
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+    from veadk.extensions.harness import sidecar
+
+    agent_name = "stored_mcp_agent"
+    runtime = _runtime_with_public_endpoint(_runtime("stored-mcp-runtime", "developer"))
+    runtime.current_version_number = 3
+    runtime.status = "Ready"
+    runtime.min_instance = 1
+    runtime.max_instance = 1
+    runtime.role_name = "runtime-role"
+    runtime.artifact_url = "registry.example.com/agentkit/stored-mcp:v3"
+    runtime.mcp_toolset_id = ""
+    runtime.envs = [
+        SimpleNamespace(key="HARNESS_SIDECAR_ENABLED", value="true"),
+        SimpleNamespace(key="HARNESS_PROFILE", value="default"),
+        SimpleNamespace(
+            key="HARNESS_SIDECAR_COMPONENT_OVERRIDES",
+            value=json.dumps({"mcp_resilience": True, "sql_readonly": True}),
+        ),
+        SimpleNamespace(
+            key="HARNESS_SIDECAR_EXPECTED_PLAN_HASH",
+            value="sha256:test-plan",
+        ),
+        SimpleNamespace(
+            key="MCP_SERVERS_JSON",
+            value=json.dumps(
+                [
+                    {
+                        "name": "orders",
+                        "url": "https://mcp.example.test/orders/mcp",
+                        "headers": {"Authorization": "Bearer stored-test-credential"},
+                    }
+                ]
+            ),
+        ),
+        SimpleNamespace(
+            key="MODEL_AGENT_API_BASE",
+            value="https://ark.cn-beijing.volces.com/api/v3",
+        ),
+        SimpleNamespace(key="MODEL_AGENT_API_KEY", value="model-test-secret"),
+        SimpleNamespace(key="MODEL_AGENT_NAME", value="test-model"),
+    ]
+    published_draft = {
+        "name": agent_name,
+        "description": "Stored MCP update",
+        "instruction": "Use orders MCP.",
+        "mcpTools": [
+            {
+                "name": "orders",
+                "transport": "http",
+                "url": "https://mcp.example.test/orders/mcp",
+                "authTokenEnv": "MCP_STORED_MCP_AGENT_ORDERS_AUTH_TOKEN",
+            }
+        ],
+        "harnessSidecar": {
+            "enabled": True,
+            "profile": "default",
+            "componentOverrides": {"mcp_resilience": True},
+            "planHash": "sha256:test-plan",
+        },
+    }
+    captured: dict[str, Any] = {}
+
+    monkeypatch.setattr(
+        sidecar,
+        "studio_harness_deployment_config",
+        lambda _intent: (
+            {"enabled": True, "profile": "default"},
+            {
+                "planHash": "sha256:test-plan",
+                "effectiveComponents": ["mcp_resilience"],
+            },
+        ),
+    )
+    monkeypatch.setattr(sidecar, "agentkit_cli_executable", lambda: "/fake/agentkit")
+    monkeypatch.setattr(
+        AgentkitRuntimeClient,
+        "get_runtime",
+        lambda _self, _request: runtime,
+    )
+    monkeypatch.setattr(
+        "frontend.server.deployment_resources.DeploymentResourceService.anchor_managed_sidecar_registry",
+        lambda _self, _base_image, config: {
+            **config,
+            "cr_instance_name": "managed-registry",
+            "cr_namespace_name": "managed",
+        },
+    )
+
+    class RuntimeAsyncClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> "RuntimeAsyncClient":
+            return self
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+        async def request(
+            self,
+            _method: str,
+            url: str,
+            **_kwargs: Any,
+        ) -> _RuntimeJsonResponse:
+            if url.endswith("/list-apps"):
+                return _RuntimeJsonResponse([agent_name])
+            assert url.endswith(f"/web/agent-info/{agent_name}")
+            return _RuntimeJsonResponse(
+                {
+                    "name": agent_name,
+                    "instruction": published_draft["instruction"],
+                    "draft": published_draft,
+                }
+            )
+
+    class FakeProcess:
+        def __init__(self, _command: list[str], **kwargs: Any) -> None:
+            deployment_root = Path(kwargs["cwd"])
+            captured["config"] = yaml.safe_load(
+                (deployment_root / ".agentkit" / "agentkit.yaml").read_text()
+            )
+            captured["env"] = kwargs["env"]
+            runtime.current_version_number = 4
+            self.returncode: int | None = None
+            self.stdout = iter(
+                [
+                    json.dumps(
+                        {
+                            "type": "result",
+                            "success": True,
+                            "runtimeId": runtime.runtime_id,
+                            "runtimeName": runtime.name,
+                            "endpoint": "https://runtime.example.com",
+                            "version": 4,
+                        }
+                    )
+                    + "\n"
+                ]
+            )
+
+        def wait(self, timeout: float | None = None) -> int:
+            self.returncode = 0
+            return 0
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+        def terminate(self) -> None:
+            self.returncode = -15
+
+        def kill(self) -> None:
+            self.returncode = -9
+
+    monkeypatch.setattr("httpx.AsyncClient", RuntimeAsyncClient)
+    monkeypatch.setattr(
+        "agentkit.toolkit.sdk.launch",
+        lambda **_kwargs: pytest.fail("Sidecar update must use AgentKit CLI"),
+    )
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+    monkeypatch.setattr("subprocess.Popen", FakeProcess)
+    headers = {"X-VeADK-Local-User": "developer"}
+
+    with TestClient(app) as client:
+        capability = client.get(
+            "/web/runtime-update-capability",
+            params={
+                "runtimeId": runtime.runtime_id,
+                "region": "cn-shanghai",
+                "appName": agent_name,
+            },
+            headers=headers,
+        )
+        assert capability.status_code == 200
+        assert capability.json()["canUpdate"] is True
+        draft = capability.json()["agent"]["draft"]
+        assert draft["mcpTools"][0]["authToken"] == "stored-test-credential"
+        draft["mcpTools"][0].pop("authToken")
+        draft["mcpTools"][0]["url"] = expected_url
+        payload = {
+            "name": agent_name,
+            "runtimeId": runtime.runtime_id,
+            "runtimeName": runtime.name,
+            "appName": agent_name,
+            "editMode": capability.json()["editMode"],
+            "draft": draft,
+            "harnessSidecar": draft["harnessSidecar"],
+            "updateEtag": capability.json()["etag"],
+            "baseRuntimeVersion": 3,
+            "minInstance": 1,
+            "maxInstance": 1,
+            "createEvaluationSets": False,
+            "files": [
+                {
+                    "path": "requirements.txt",
+                    "content": "veadk-python[harness-sidecar]\n",
+                },
+                {
+                    "path": f"agents/{agent_name}/agent.py",
+                    "content": (
+                        "harness_extension = HarnessExtension.from_env()\n"
+                        "plugins=harness_extension.plugins()\n"
+                    ),
+                },
+                {
+                    "path": "app.py",
+                    "content": "app = create_agentkit_app(harness_extension=harness_extension)\n",
+                },
+            ],
+            "config": {"region": "cn-shanghai", "projectName": "default"},
+        }
+        if mode == "changed-explicit-reuse":
+            payload["mcpCredentialReuses"] = [
+                {
+                    "agentName": agent_name,
+                    "name": "orders",
+                    "url": expected_url,
+                    "sourceAuthTokenEnv": ("MCP_STORED_MCP_AGENT_ORDERS_AUTH_TOKEN"),
+                }
+            ]
+        response = client.post(
+            "/web/deploy-agentkit",
+            headers=headers,
+            json=payload,
+        )
+
+    assert response.status_code == expected_status
+    if expected_status == 409:
+        assert "重新填写 Key 或确认沿用原凭证" in response.json()["detail"]
+        assert captured == {}
+        return
+    frames = [
+        json.loads(line.removeprefix("data: "))
+        for line in response.iter_lines()
+        if line.startswith("data: ")
+    ]
+    assert frames[-1].get("error") is None
+    assert frames[-1]["success"] is True
+    structured_value = captured["config"]["envs"]["MCP_SERVERS_JSON"]
+    structured_key = structured_value.removeprefix("${").removesuffix("}")
+    assert json.loads(captured["env"][structured_key]) == [
+        {
+            "name": "orders",
+            "url": expected_url,
+            "headers": {"Authorization": "Bearer stored-test-credential"},
+        }
+    ]
 
 
 def test_sidecar_deployment_rejects_cr_conflict_before_build(
@@ -5861,7 +6246,7 @@ def test_sidecar_deployment_rejects_cr_conflict_before_build(
     )
     monkeypatch.setenv(
         "VEADK_STUDIO_HARNESS_SIDECAR_BASE_IMAGE",
-        "private.invalid/sidecar/runtime:test-only",
+        "private.invalid/sidecar/runtime@sha256:" + "a" * 64,
     )
     monkeypatch.setattr(sidecar, "agentkit_cli_executable", lambda: "/fake/agentkit")
     monkeypatch.setattr(

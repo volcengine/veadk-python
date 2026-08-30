@@ -856,6 +856,14 @@ def extract_studio_bundle(archive: Path, destination: Path) -> None:
     required = (destination / "run.sh", destination / "requirements.txt")
     if not all(path.is_file() for path in required):
         raise StudioReleaseError("Studio release bundle is missing its entrypoint.")
+    from frontend.service.studio_release_server.publisher import (
+        validate_studio_bundle_dependencies,
+    )
+
+    try:
+        validate_studio_bundle_dependencies(destination)
+    except ValueError as error:
+        raise StudioReleaseError(str(error)) from error
     (destination / "run.sh").chmod(0o755)
 
 
