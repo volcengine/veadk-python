@@ -122,13 +122,8 @@ def test_quick_mode_codegen_adds_dynamic_agent_toolset_and_managed_rules() -> No
         file.content for file in project.files if file.path == "Dockerfile"
     )
 
-    assert (
-        "from .quick_mode_compat import RuntimeCompatibleCreateAgentToolset" in agent_py
-    )
-    assert (
-        "dynamic_agent_toolset_agent = RuntimeCompatibleCreateAgentToolset()"
-        in agent_py
-    )
+    assert "from .quick_mode_compat import CreateAgentToolset" in agent_py
+    assert "dynamic_agent_toolset_agent = CreateAgentToolset()" in agent_py
     assert "tools=[dynamic_agent_toolset_agent]" in agent_py
     assert agent_py.index(user_instruction) < agent_py.index("动态子智能体协作规则")
     assert "collect_resources" in agent_py
@@ -149,7 +144,7 @@ def test_quick_mode_codegen_adds_dynamic_agent_toolset_and_managed_rules() -> No
         for file in project.files
         if file.path == "agents/quick_agent/quick_mode_compat.py"
     )
-    assert "class RuntimeCompatibleCreateAgentToolset" in compat_py
+    assert "class CreateAgentToolset(_BaseCreateAgentToolset)" in compat_py
     assert (
         "Current delegated task (runtime context, not reusable identity)" in compat_py
     )
@@ -190,7 +185,7 @@ def test_quick_mode_compat_backports_offline_snapshot_and_task_context(
         "veadk.tools.builtin_tools.create_agent.CreateAgentToolset.create_agents",
         fake_create_agents,
     )
-    toolset = module.RuntimeCompatibleCreateAgentToolset(resource_sources=[])
+    toolset = module.CreateAgentToolset(resource_sources=[])
     blueprint = {
         "name": "analysis_agent",
         "task": "比较用户指定的两个候选项并给出结论",
@@ -264,7 +259,7 @@ def test_quick_mode_compat_does_not_duplicate_native_task_context(
         "veadk.tools.builtin_tools.create_agent.CreateAgentToolset.create_agents",
         fake_create_agents,
     )
-    toolset = module.RuntimeCompatibleCreateAgentToolset(resource_sources=[])
+    toolset = module.CreateAgentToolset(resource_sources=[])
     instruction = "Complete the delegated task."
     asyncio.run(
         toolset.create_agents(
@@ -311,7 +306,7 @@ def test_quick_mode_compat_rejects_resources_without_collection(
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    toolset = module.RuntimeCompatibleCreateAgentToolset(resource_sources=[])
+    toolset = module.CreateAgentToolset(resource_sources=[])
 
     with pytest.raises(ValueError, match="requires empty resources"):
         asyncio.run(
@@ -355,7 +350,7 @@ def test_quick_mode_compat_uses_legacy_schema_without_workflow(tmp_path) -> None
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    toolset = module.RuntimeCompatibleCreateAgentToolset(
+    toolset = module.CreateAgentToolset(
         resource_sources=[],
         capabilities=AgentCapabilities(
             google_adk_version="1.34.0",

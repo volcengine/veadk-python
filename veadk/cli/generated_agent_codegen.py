@@ -663,16 +663,14 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
     if draft.dynamicAgentDelegation:
         _add_import(
             acc,
-            "from .quick_mode_compat import RuntimeCompatibleCreateAgentToolset",
+            "from .quick_mode_compat import CreateAgentToolset",
         )
         dynamic_agent_toolset = _unique_ident(
             acc,
             f"dynamic_agent_toolset_{var_name}",
             "dynamic_agent_toolset",
         )
-        acc.pre_lines.append(
-            f"{dynamic_agent_toolset} = RuntimeCompatibleCreateAgentToolset()"
-        )
+        acc.pre_lines.append(f"{dynamic_agent_toolset} = CreateAgentToolset()")
         tool_exprs.append(dynamic_agent_toolset)
 
     for tool_id in draft.builtinTools:
@@ -1238,7 +1236,9 @@ from google.adk.tools import FunctionTool, ToolContext
 from google.genai import types
 from typing_extensions import override
 
-from veadk.tools.builtin_tools.create_agent import CreateAgentToolset
+from veadk.tools.builtin_tools.create_agent import (
+    CreateAgentToolset as _BaseCreateAgentToolset,
+)
 from veadk.tools.builtin_tools.create_agent import orchestrator as _orchestrator_module
 
 
@@ -1326,7 +1326,7 @@ class _RuntimeCompatibleCreateAgentsTool(FunctionTool):
         )
 
 
-class RuntimeCompatibleCreateAgentToolset(CreateAgentToolset):
+class CreateAgentToolset(_BaseCreateAgentToolset):
     """Keep quick-mode semantics available in the pinned 1.1.7 runtime."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
