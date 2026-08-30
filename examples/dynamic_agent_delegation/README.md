@@ -4,11 +4,28 @@
 Google ADK 的 `transfer_to_agent` 事件把当前任务移交给指定 Sub Agent。Sub Agent
 继续使用同一会话上下文，并直接输出最终答案。
 
+## 主要流程
+
+1. Main Agent 判断当前任务是否需要专门的 Sub Agent；简单任务仍由 Main Agent
+   直接完成。
+2. 需要委派时，Main Agent 先调用 `collect_resources`。公共 Skill Hub 按任务关键词
+   检索；AgentKit 技能中心会枚举当前凭证可访问的全部 Skill Space；知识库和 VeADK
+   内置工具同时并行收集。
+3. Main Agent 根据召回结果设计一个或多个 Agent 配置，明确每个 Agent 的职责、模型、
+   指令以及需要绑定的 Skill、知识库和工具。
+4. Main Agent 调用 `create_agents`。工具只对最终选中的 AgentKit Skill 动态下载并挂载，
+   同时解析内置工具、自定义 Python Tool 和嵌套 Sub Agent。
+5. 创建成功后，Main Agent 通过 `transfer_to_agent` 把原任务移交给目标 Sub Agent。
+   Sub Agent 在同一会话中执行任务，结果直接返回给用户。
+
+`collect_resources` 和 `create_agents` 属于同一个 `CreateAgentToolset`。创建 Agent 前必须
+先收集资源，并使用本次资源集合返回的 `collection_id` 和资源 `ref`。
+
 在仓库根目录启动：
 
 ```bash
 set -a
-source /Users/bytedance/Projects/veadk-python/.env
+source .env
 set +a
 uv run veadk frontend \
   --agents-dir examples \
@@ -16,11 +33,10 @@ uv run veadk frontend \
   --host 127.0.0.1 \
   --port 8000 \
   --provider volcengine \
-  --oauth2-user-pool-uid 21b042ae-2980-45d0-9ef8-1add2bccb29b \
-  --oauth2-user-pool-client-uid 81798d0b-c8c1-407f-a359-fd8ec99295cc \
-  --oauth2-redirect-uri http://127.0.0.1:5174/oauth2/callback \
   --no-open
 ```
+
+本地示例默认不启用 OAuth2 用户池，不需要传入用户池或客户端 UID。
 
 打开 `http://127.0.0.1:5174/`，选择 `dynamic_agent_delegation`。
 
