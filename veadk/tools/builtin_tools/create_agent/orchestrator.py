@@ -170,9 +170,13 @@ class AgentOrchestrator:
                     raise ValueError(f"Cyclic agent nesting detected at '{node_id}'.")
                 building.add(node_id)
                 node = nodes[node_id]
-                runtime_node = node.model_copy(
-                    update={"id": runtime_node_names[node_id]}
-                )
+                runtime_update = {"id": runtime_node_names[node_id]}
+                if node.type == "llm":
+                    runtime_update["instruction"] = _with_delegated_task_context(
+                        node.instruction,
+                        blueprint.task,
+                    )
+                runtime_node = node.model_copy(update=runtime_update)
 
                 if node.type == "llm":
                     llm_node = cast(LlmAgentNode, runtime_node)
@@ -646,6 +650,19 @@ def _default_leaf_factory(
     from veadk.agent import Agent
 
     return Agent(**kwargs)
+
+
+def _with_delegated_task_context(instruction: str, task: str) -> str:
+    """Attach one invocation's task without changing the reusable blueprint."""
+
+    delegated_task = task.strip()
+    if not delegated_task:
+        return instruction
+    return (
+        f"{instruction.rstrip()}\n\n"
+        "Current delegated task (runtime context, not reusable identity):\n"
+        f"{delegated_task}"
+    )
 
 
 def _parent_agent(tool_context: Any) -> Any:

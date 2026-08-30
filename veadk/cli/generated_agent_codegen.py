@@ -73,7 +73,8 @@ _GITHUB_CLI_SHA256 = {
 
 _DYNAMIC_AGENT_DELEGATION_RULES = """动态子智能体协作规则：
 - 对于问候、身份介绍、能力说明或可以直接完成的简单任务，直接回答，不要创建子智能体。
-- 对于需要专业技能、知识库、工具调用、资料检索或临时 Python 工具的复杂任务，必须先调用 collect_resources。根据用户任务提炼 2 到 5 个简短检索关键词，通过 skill_hub_keywords 传入。
+- 对于需要专业技能、知识库、工具调用、资料检索或临时 Python 工具的复杂任务，通常必须先调用 collect_resources。根据用户任务提炼 2 到 5 个简短检索关键词，通过 skill_hub_keywords 传入。
+- 如果用户明确禁止联网、知识库或任何外部资源，跳过 collect_resources，直接调用 create_agents，传入 collection_id=""，并确保每个 LLM 节点的 resources=[]。不得发起 Skill Hub 关键词检索或其他资源源调用；子智能体仍使用自身模型能力完成当前任务。
 - collect_resources 返回的是候选资源，不会自动挂载。只创建完成任务所需的最少数量子智能体，并把实际需要的 Skill、知识库和内置工具完整 ref 显式写入对应 LLM 节点的 resources。存在相关 Skill 时至少绑定一个；确实没有匹配 Skill 时才允许不绑定 Skill。
 - 调用 create_agents 前，必须把“当前一次性任务”和“可复用能力身份”分开：agents[*].task 完整保留当前用户的具体目标、对象、输入和交付要求；agents[*].name 以及所有 nodes[*] 的 id、description、instruction 只描述可重复使用的稳定能力域。
 - 人物或虚构角色、品牌、产品、组织、平台或渠道、行业或赛道、细分领域、业务领域、内容类别、研究主题、源语言或目标语言、地点、日期、活动名称、具体题材、一次性问题或事件、文档标题、文件名、URL 等请求特有信息只能出现在 agents[*].task 中，不得出现在 name、id、description 或 instruction 中。即使这些信息会影响执行方法，也只能通过“用户指定的平台/产品/行业/主题/语言/问题”等参数化表达写入 instruction。禁止通过音译、拼音、翻译、首字母缩写、行业简称、拼接或轻微改写把这些特有信息写入名称。

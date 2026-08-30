@@ -337,7 +337,13 @@ class AgentBlueprint(BaseModel):
 class CreateAgentsInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    collection_id: str
+    collection_id: str = Field(
+        description=(
+            "ID returned by collect_resources. Use an empty string only when the "
+            "user explicitly prohibits network, knowledge-base, and external-resource "
+            "access; every LLM node must then have empty resources."
+        )
+    )
     agents: list[AgentBlueprint] = Field(min_length=1)
     handoff_to: str = Field(
         description=(
@@ -355,7 +361,13 @@ class CreateAgentsInput(BaseModel):
 class LegacyCreateAgentsInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    collection_id: str
+    collection_id: str = Field(
+        description=(
+            "ID returned by collect_resources. Use an empty string only when the "
+            "user explicitly prohibits network, knowledge-base, and external-resource "
+            "access; every LLM node must then have empty resources."
+        )
+    )
     agents: list[LegacyAgentBlueprint] = Field(min_length=1)
     handoff_to: str = Field(
         description=(

@@ -178,6 +178,10 @@ async def test_toolset_exposes_exactly_two_tools_and_dynamic_schema() -> None:
     assert '"const": "workflow"' not in legacy_schema
     assert "Resources are not mounted automatically" in modern_schema
     assert "include each relevant Skill ref explicitly" in modern_schema
+    assert "Use an empty string only when" in modern_schema
+    assert modern_declaration.description is not None
+    assert "pass an empty collection_id" in modern_declaration.description
+    assert "explicitly prohibits network" in modern_declaration.description
     assert "when relevant Skills were returned, bind at least one" in (
         modern_declaration.description or ""
     )
@@ -342,6 +346,94 @@ async def test_collect_then_create_nested_agents_through_function_tools() -> Non
     assert result["handoff_to"] == created["runtime_name"]
     assert context.actions.transfer_to_agent == created["runtime_name"]
     assert context._invocation_context.agent.find_agent(created["runtime_name"])
+
+
+@pytest.mark.asyncio
+async def test_delegated_task_is_injected_into_each_runtime_leaf_instruction() -> None:
+    captured_instructions: list[str] = []
+
+    def capture_leaf(node, tools, workflow_member, parent_agent):
+        del tools, workflow_member, parent_agent
+        captured_instructions.append(node.instruction)
+        return _TextAgent(name=node.id, marker=node.id)
+
+    toolset = CreateAgentToolset(resource_sources=[], leaf_factory=capture_leaf)
+    context = _context()
+    collected = await toolset.collect_resources(tool_context=context)
+    task = "Compare the three user-provided options and return a decision matrix."
+    reusable_instruction = "Analyze user-specified candidates using requested criteria."
+    blueprint = {
+        "name": "comparison_agent",
+        "task": task,
+        "root_node": "comparison_flow",
+        "nodes": [
+            {
+                "id": "researcher",
+                "type": "llm",
+                "instruction": reusable_instruction,
+            },
+            {
+                "id": "writer",
+                "type": "llm",
+                "instruction": "Write the requested structured result.",
+            },
+            {
+                "id": "comparison_flow",
+                "type": "sequential",
+                "children": ["researcher", "writer"],
+            },
+        ],
+    }
+
+    result = await toolset.create_agents(
+        collection_id=collected["collection_id"],
+        agents=[blueprint],
+        handoff_to="comparison_agent",
+        tool_context=context,
+    )
+
+    assert result["results"][0]["status"] == "completed"
+    assert len(captured_instructions) == 2
+    assert all(
+        "Current delegated task (runtime context, not reusable identity):" in value
+        for value in captured_instructions
+    )
+    assert all(task in value for value in captured_instructions)
+    assert captured_instructions[0].startswith(reusable_instruction)
+    assert blueprint["nodes"][0]["instruction"] == reusable_instruction
+
+
+@pytest.mark.asyncio
+async def test_create_agents_accepts_empty_collection_without_querying_sources() -> (
+    None
+):
+    class UnexpectedSource:
+        name = "unexpected"
+        called = False
+
+        async def collect(self, tool_context=None):
+            del tool_context
+            self.called = True
+            raise AssertionError("resource source must not be queried")
+
+    source = UnexpectedSource()
+    toolset = CreateAgentToolset(
+        resource_sources=[source],
+        leaf_factory=_leaf_factory,
+    )
+    context = _context()
+
+    result = await toolset.create_agents(
+        collection_id="",
+        agents=[_blueprint("offline_worker")],
+        handoff_to="offline_worker",
+        tool_context=context,
+    )
+
+    assert not source.called
+    assert result["collection_id"].startswith("resources_")
+    assert result["results"][0]["status"] == "completed"
+    assert result["handoff_to"] == result["results"][0]["runtime_name"]
 
 
 @pytest.mark.asyncio

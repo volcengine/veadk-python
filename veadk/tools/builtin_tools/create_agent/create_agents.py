@@ -35,9 +35,12 @@ class CreateAgentsTool(FunctionTool):
             name=self.name,
             description=(
                 "Create one or more sub-agents and transfer the current task to "
-                "the agent named by handoff_to. You must call collect_resources "
+                "the agent named by handoff_to. Normally call collect_resources "
                 "first, use its collection_id, and select only resource refs "
-                "returned by that call. Collected resources are candidates only "
+                "returned by that call. If the user explicitly prohibits network, "
+                "knowledge-base, and external-resource access, skip collection, "
+                "pass an empty collection_id, and leave every node's resources "
+                "empty. Collected resources are candidates only "
                 "and are not mounted automatically. For every LLM node, explicitly "
                 "include each relevant Skill, knowledge base, and built-in tool in "
                 "resources; when relevant Skills were returned, bind at least one. "

@@ -160,6 +160,16 @@ def test_quick_mode_dynamic_agent_prompt_separates_task_from_identity() -> None:
     assert all(contract in normalized_rules for contract in contracts)
 
 
+def test_quick_mode_dynamic_agent_prompt_respects_offline_requests() -> None:
+    normalized_rules = " ".join(_DYNAMIC_AGENT_DELEGATION_RULES.split())
+
+    assert "用户明确禁止联网、知识库或任何外部资源" in normalized_rules
+    assert "跳过 collect_resources" in normalized_rules
+    assert 'collection_id=""' in normalized_rules
+    assert "resources=[]" in normalized_rules
+    assert "不得发起 Skill Hub 关键词检索或其他资源源调用" in normalized_rules
+
+
 def test_quick_mode_dynamic_agent_prompt_generalizes_specific_video_request() -> None:
     assert "给我生成葫芦娃大战钢铁侠的视频" in _DYNAMIC_AGENT_DELEGATION_RULES
     assert "video_creation_agent" in _DYNAMIC_AGENT_DELEGATION_RULES

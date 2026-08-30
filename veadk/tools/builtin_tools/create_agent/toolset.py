@@ -158,9 +158,21 @@ class CreateAgentToolset(BaseToolset):
                 "transfer_to_agent."
             )
         owner = _context_owner(tool_context)
-        snapshot = self._store.consume(collection_id=collection_id, owner=owner)
+        if collection_id:
+            snapshot = self._store.consume(collection_id=collection_id, owner=owner)
+        else:
+            empty_snapshot = self._store.put(
+                owner=owner,
+                capabilities=self.capabilities,
+                resources=[],
+            )
+            snapshot = self._store.consume(
+                collection_id=empty_snapshot.collection_id,
+                owner=owner,
+            )
+        effective_collection_id = snapshot.collection_id
         runtime_names = [
-            _runtime_name(agent.name, collection_id, index)
+            _runtime_name(agent.name, effective_collection_id, index)
             for index, agent in enumerate(parsed_agents)
         ]
         built_agents = await self._orchestrator.create(
@@ -179,7 +191,7 @@ class CreateAgentToolset(BaseToolset):
             for built in built_agents:
                 await built.close()
             return CreateAgentsResponse(
-                collection_id=collection_id,
+                collection_id=effective_collection_id,
                 results=[built.result for built in built_agents],
             ).model_dump(mode="json")
 
@@ -211,7 +223,7 @@ class CreateAgentToolset(BaseToolset):
             raise ValueError("Handoff target is missing its runtime name.")
         actions.transfer_to_agent = handoff_runtime_name
         return CreateAgentsResponse(
-            collection_id=collection_id,
+            collection_id=effective_collection_id,
             handoff_to=handoff_runtime_name,
             results=[built.result for built in built_agents],
         ).model_dump(mode="json")
