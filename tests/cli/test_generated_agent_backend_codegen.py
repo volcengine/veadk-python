@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import importlib.util
 import ipaddress
 import py_compile
 import socket
@@ -48,6 +50,7 @@ from veadk.cli.generated_agent_skills import (
 )
 from veadk.tools.builtin_tools.create_agent.models import (
     AgentBlueprint,
+    AgentCapabilities,
     LegacyAgentBlueprint,
 )
 
@@ -120,10 +123,12 @@ def test_quick_mode_codegen_adds_dynamic_agent_toolset_and_managed_rules() -> No
     )
 
     assert (
-        "from veadk.tools.builtin_tools.create_agent import CreateAgentToolset"
+        "from .quick_mode_compat import RuntimeCompatibleCreateAgentToolset" in agent_py
+    )
+    assert (
+        "dynamic_agent_toolset_agent = RuntimeCompatibleCreateAgentToolset()"
         in agent_py
     )
-    assert "dynamic_agent_toolset_agent = CreateAgentToolset()" in agent_py
     assert "tools=[dynamic_agent_toolset_agent]" in agent_py
     assert agent_py.index(user_instruction) < agent_py.index("动态子智能体协作规则")
     assert "collect_resources" in agent_py
@@ -138,6 +143,236 @@ def test_quick_mode_codegen_adds_dynamic_agent_toolset_and_managed_rules() -> No
         "https://repo.huaweicloud.com/repository/pypi/simple -r requirements.txt"
         in dockerfile
     )
+
+    compat_py = next(
+        file.content
+        for file in project.files
+        if file.path == "agents/quick_agent/quick_mode_compat.py"
+    )
+    assert "class RuntimeCompatibleCreateAgentToolset" in compat_py
+    assert (
+        "Current delegated task (runtime context, not reusable identity)" in compat_py
+    )
+    assert "resources=[]" in compat_py
+    assert "request-specific entities" in compat_py
+
+
+def test_quick_mode_compat_backports_offline_snapshot_and_task_context(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    project = generate_project_from_draft(
+        AgentDraft(name="quick-agent", dynamicAgentDelegation=True)
+    )
+    compat_py = next(
+        file.content
+        for file in project.files
+        if file.path == "agents/quick_agent/quick_mode_compat.py"
+    )
+    compat_path = tmp_path / "quick_mode_compat.py"
+    compat_path.write_text(compat_py, encoding="utf-8")
+    spec = importlib.util.spec_from_file_location(
+        "quick_mode_compat_test",
+        compat_path,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module._NATIVE_TASK_CONTEXT = False
+
+    captured: dict[str, object] = {}
+
+    async def fake_create_agents(self, **kwargs):
+        captured.update(kwargs)
+        return {"ok": True}
+
+    monkeypatch.setattr(
+        "veadk.tools.builtin_tools.create_agent.CreateAgentToolset.create_agents",
+        fake_create_agents,
+    )
+    toolset = module.RuntimeCompatibleCreateAgentToolset(resource_sources=[])
+    blueprint = {
+        "name": "analysis_agent",
+        "task": "比较用户指定的两个候选项并给出结论",
+        "root_node": "analyst",
+        "nodes": [
+            {
+                "id": "analyst",
+                "type": "llm",
+                "description": "分析用户指定的候选项",
+                "instruction": "完成结构化比较",
+                "resources": [],
+            }
+        ],
+    }
+
+    result = asyncio.run(
+        toolset.create_agents(
+            collection_id="",
+            agents=[blueprint],
+            handoff_to="analysis_agent",
+        )
+    )
+
+    assert result == {"ok": True}
+    assert str(captured["collection_id"]).startswith("resources_")
+    compatible_blueprint = captured["agents"][0]
+    instruction = compatible_blueprint.nodes[0].instruction
+    assert "完成结构化比较" in instruction
+    assert blueprint["task"] in instruction
+    assert blueprint["nodes"][0]["instruction"] == "完成结构化比较"
+
+    tools = asyncio.run(toolset.get_tools())
+    declaration = tools[1]._get_declaration()
+    assert declaration is not None
+    schema_text = str(declaration.parameters_json_schema)
+    assert "request-specific entities" in schema_text
+    assert "user-specified language" in schema_text
+    assert "empty string" in schema_text
+
+
+def test_quick_mode_compat_does_not_duplicate_native_task_context(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    project = generate_project_from_draft(
+        AgentDraft(name="quick-agent", dynamicAgentDelegation=True)
+    )
+    compat_py = next(
+        file.content
+        for file in project.files
+        if file.path == "agents/quick_agent/quick_mode_compat.py"
+    )
+    compat_path = tmp_path / "quick_mode_compat.py"
+    compat_path.write_text(compat_py, encoding="utf-8")
+    spec = importlib.util.spec_from_file_location(
+        "quick_mode_compat_native_test",
+        compat_path,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module._NATIVE_TASK_CONTEXT is True
+
+    captured: dict[str, object] = {}
+
+    async def fake_create_agents(self, **kwargs):
+        captured.update(kwargs)
+        return {"ok": True}
+
+    monkeypatch.setattr(
+        "veadk.tools.builtin_tools.create_agent.CreateAgentToolset.create_agents",
+        fake_create_agents,
+    )
+    toolset = module.RuntimeCompatibleCreateAgentToolset(resource_sources=[])
+    instruction = "Complete the delegated task."
+    asyncio.run(
+        toolset.create_agents(
+            collection_id="existing-collection",
+            agents=[
+                {
+                    "name": "worker_agent",
+                    "task": "One-off task",
+                    "root_node": "worker",
+                    "nodes": [
+                        {
+                            "id": "worker",
+                            "type": "llm",
+                            "instruction": instruction,
+                        }
+                    ],
+                }
+            ],
+            handoff_to="worker_agent",
+        )
+    )
+
+    assert captured["collection_id"] == "existing-collection"
+    assert captured["agents"][0].nodes[0].instruction == instruction
+
+
+def test_quick_mode_compat_rejects_resources_without_collection(
+    tmp_path,
+) -> None:
+    project = generate_project_from_draft(
+        AgentDraft(name="quick-agent", dynamicAgentDelegation=True)
+    )
+    compat_py = next(
+        file.content
+        for file in project.files
+        if file.path == "agents/quick_agent/quick_mode_compat.py"
+    )
+    compat_path = tmp_path / "quick_mode_compat.py"
+    compat_path.write_text(compat_py, encoding="utf-8")
+    spec = importlib.util.spec_from_file_location(
+        "quick_mode_compat_invalid_resources_test",
+        compat_path,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    toolset = module.RuntimeCompatibleCreateAgentToolset(resource_sources=[])
+
+    with pytest.raises(ValueError, match="requires empty resources"):
+        asyncio.run(
+            toolset.create_agents(
+                collection_id="",
+                agents=[
+                    {
+                        "name": "worker_agent",
+                        "task": "Offline task",
+                        "root_node": "worker",
+                        "nodes": [
+                            {
+                                "id": "worker",
+                                "type": "llm",
+                                "instruction": "Work offline.",
+                                "resources": ["veadk_tool:web_search"],
+                            }
+                        ],
+                    }
+                ],
+                handoff_to="worker_agent",
+            )
+        )
+
+
+def test_quick_mode_compat_uses_legacy_schema_without_workflow(tmp_path) -> None:
+    project = generate_project_from_draft(
+        AgentDraft(name="quick-agent", dynamicAgentDelegation=True)
+    )
+    compat_py = next(
+        file.content
+        for file in project.files
+        if file.path == "agents/quick_agent/quick_mode_compat.py"
+    )
+    compat_path = tmp_path / "quick_mode_compat.py"
+    compat_path.write_text(compat_py, encoding="utf-8")
+    spec = importlib.util.spec_from_file_location(
+        "quick_mode_compat_legacy_test",
+        compat_path,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    toolset = module.RuntimeCompatibleCreateAgentToolset(
+        resource_sources=[],
+        capabilities=AgentCapabilities(
+            google_adk_version="1.34.0",
+            agent_types=["llm", "sequential", "parallel", "loop"],
+        ),
+    )
+
+    tools = asyncio.run(toolset.get_tools())
+    declaration = tools[1]._get_declaration()
+    assert declaration is not None
+    assert "WorkflowAgentNode" not in str(declaration.parameters_json_schema)
+
+
+def test_traditional_mode_does_not_generate_quick_mode_compatibility_module() -> None:
+    project = generate_project_from_draft(AgentDraft(name="traditional-agent"))
+
+    assert all(not file.path.endswith("quick_mode_compat.py") for file in project.files)
 
 
 def test_quick_mode_dynamic_agent_prompt_separates_task_from_identity() -> None:

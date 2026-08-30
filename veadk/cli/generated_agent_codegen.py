@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import re
+from pprint import pformat
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -38,6 +39,10 @@ from veadk.extensions.harness.sidecar import (
     normalize_studio_harness_intent,
     studio_harness_env_example,
     studio_harness_intent_payload,
+)
+from veadk.tools.builtin_tools.create_agent.models import (
+    CreateAgentsInput,
+    LegacyCreateAgentsInput,
 )
 
 _PYTHON_LICENSE_HEADER = """# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
@@ -657,14 +662,16 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
     if draft.dynamicAgentDelegation:
         _add_import(
             acc,
-            "from veadk.tools.builtin_tools.create_agent import CreateAgentToolset",
+            "from .quick_mode_compat import RuntimeCompatibleCreateAgentToolset",
         )
         dynamic_agent_toolset = _unique_ident(
             acc,
             f"dynamic_agent_toolset_{var_name}",
             "dynamic_agent_toolset",
         )
-        acc.pre_lines.append(f"{dynamic_agent_toolset} = CreateAgentToolset()")
+        acc.pre_lines.append(
+            f"{dynamic_agent_toolset} = RuntimeCompatibleCreateAgentToolset()"
+        )
         tool_exprs.append(dynamic_agent_toolset)
 
     for tool_id in draft.builtinTools:
@@ -1203,6 +1210,181 @@ def _render_managed_main_py() -> str:
             "    run_agentkit_app(app)",
             "",
         ]
+    )
+
+
+def _render_quick_mode_compat_py() -> str:
+    """Backport quick-mode runtime behavior while deployments stay on 1.1.7."""
+
+    create_agents_schema = pformat(
+        CreateAgentsInput.model_json_schema(by_alias=True),
+        sort_dicts=False,
+        width=88,
+    )
+    legacy_create_agents_schema = pformat(
+        LegacyCreateAgentsInput.model_json_schema(by_alias=True),
+        sort_dicts=False,
+        width=88,
+    )
+    return (
+        _PYTHON_LICENSE_HEADER
+        + f'''\
+from __future__ import annotations
+
+from typing import Any
+
+from google.adk.tools import FunctionTool, ToolContext
+from google.genai import types
+from typing_extensions import override
+
+from veadk.tools.builtin_tools.create_agent import CreateAgentToolset
+from veadk.tools.builtin_tools.create_agent import orchestrator as _orchestrator_module
+
+
+_CREATE_AGENTS_DESCRIPTION = (
+    "Create one or more sub-agents and transfer the current task to the agent "
+    "named by handoff_to. Normally call collect_resources first, use its "
+    "collection_id, and select only resource refs returned by that call. If the "
+    "user explicitly prohibits network, knowledge-base, and external-resource "
+    "access, skip collection, pass an empty collection_id, and leave every "
+    "node's resources empty. Collected resources are candidates only and are "
+    "not mounted automatically. For every LLM node, explicitly include each "
+    "relevant Skill, knowledge base, and built-in tool in resources; when "
+    "relevant Skills were returned, bind at least one. Keep the one-off user "
+    "objective in agents[*].task and keep reusable identity fields free of "
+    "request-specific entities. The selected sub-agent, not the main agent, "
+    "produces the final answer."
+)
+_CREATE_AGENTS_SCHEMA = {create_agents_schema}
+_LEGACY_CREATE_AGENTS_SCHEMA = {legacy_create_agents_schema}
+_NATIVE_TASK_CONTEXT = hasattr(
+    _orchestrator_module,
+    "_with_delegated_task_context",
+)
+
+
+def _runtime_owner(tool_context: ToolContext | None) -> str:
+    if tool_context is None:
+        return "local"
+    invocation = getattr(tool_context, "_invocation_context", None)
+    session = getattr(invocation, "session", None)
+    return ":".join(
+        str(value or "")
+        for value in (
+            getattr(session, "app_name", None)
+            or getattr(session, "appName", None),
+            getattr(invocation, "user_id", None)
+            or getattr(session, "user_id", None),
+            getattr(session, "id", None),
+            getattr(invocation, "invocation_id", None),
+        )
+    )
+
+
+def _with_delegated_task(instruction: str, task: str) -> str:
+    delegated_task = task.strip()
+    if not delegated_task:
+        return instruction
+    return (
+        f"{{instruction.rstrip()}}\\n\\n"
+        "Current delegated task (runtime context, not reusable identity):\\n"
+        f"{{delegated_task}}"
+    )
+
+
+def _inject_delegated_task(blueprint: Any) -> Any:
+    if _NATIVE_TASK_CONTEXT:
+        return blueprint
+    nodes = [
+        node.model_copy(
+            update={{
+                "instruction": _with_delegated_task(
+                    node.instruction,
+                    blueprint.task,
+                )
+            }}
+        )
+        if node.type == "llm"
+        else node
+        for node in blueprint.nodes
+    ]
+    return blueprint.model_copy(update={{"nodes": nodes}})
+
+
+class _RuntimeCompatibleCreateAgentsTool(FunctionTool):
+    def __init__(self, function: Any, *, parameters_json_schema: dict[str, Any]):
+        self._parameters_json_schema = parameters_json_schema
+        super().__init__(function)
+
+    @override
+    def _get_declaration(self) -> types.FunctionDeclaration | None:
+        return types.FunctionDeclaration(
+            name=self.name,
+            description=_CREATE_AGENTS_DESCRIPTION,
+            parameters_json_schema=self._parameters_json_schema,
+        )
+
+
+class RuntimeCompatibleCreateAgentToolset(CreateAgentToolset):
+    """Keep quick-mode semantics available in the pinned 1.1.7 runtime."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        schema = (
+            _CREATE_AGENTS_SCHEMA
+            if self._input_model.__name__ == "CreateAgentsInput"
+            else _LEGACY_CREATE_AGENTS_SCHEMA
+        )
+        self._tools[1] = _RuntimeCompatibleCreateAgentsTool(
+            self.create_agents,
+            parameters_json_schema=schema,
+        )
+
+    @override
+    async def create_agents(
+        self,
+        collection_id: str,
+        agents: list[Any],
+        handoff_to: str,
+        tool_context: ToolContext | None = None,
+    ) -> dict[str, Any]:
+        request = self._input_model.model_validate(
+            {{
+                "collection_id": collection_id,
+                "agents": agents,
+                "handoff_to": handoff_to,
+            }}
+        )
+        parsed_agents = list(request.agents)
+        if not collection_id:
+            invalid_nodes = [
+                f"{{blueprint.name}}.{{node.id}}"
+                for blueprint in parsed_agents
+                for node in blueprint.nodes
+                if node.type == "llm" and node.resources
+            ]
+            if invalid_nodes:
+                raise ValueError(
+                    "Offline agent creation requires empty resources for every "
+                    f"LLM node: {{', '.join(invalid_nodes)}}."
+                )
+            snapshot = self._store.put(
+                owner=_runtime_owner(tool_context),
+                capabilities=self.capabilities,
+                resources=[],
+            )
+            collection_id = snapshot.collection_id
+
+        compatible_agents = [
+            _inject_delegated_task(blueprint) for blueprint in parsed_agents
+        ]
+        return await super().create_agents(
+            collection_id=collection_id,
+            agents=compatible_agents,
+            handoff_to=handoff_to,
+            tool_context=tool_context,
+        )
+'''
     )
 
 
@@ -2093,6 +2275,14 @@ def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
         ),
         GeneratedFile(path="README.md", content=render_readme(pkg, draft)),
     ]
+    if draft.dynamicAgentDelegation:
+        files.insert(
+            4,
+            GeneratedFile(
+                path=f"agents/{pkg}/quick_mode_compat.py",
+                content=_render_quick_mode_compat_py(),
+            ),
+        )
     dockerfile = render_cloud_environment_dockerfile(draft)
     if dockerfile is not None:
         files.append(GeneratedFile(path="Dockerfile", content=dockerfile))
