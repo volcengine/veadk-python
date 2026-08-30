@@ -33,8 +33,8 @@ from google.adk.runners import InMemoryRunner
 from google.genai import types
 
 from veadk import Agent
-from veadk.skills.skill import Skill
 from veadk.knowledgebase.entry import KnowledgebaseEntry
+from veadk.skills.skill import Skill
 from veadk.tools.builtin_tools.create_agent import CreateAgentToolset
 from veadk.tools.builtin_tools.create_agent.capabilities import (
     detect_agent_capabilities,
@@ -47,10 +47,10 @@ from veadk.tools.builtin_tools.create_agent.models import (
 )
 from veadk.tools.builtin_tools.create_agent.python_tools import compile_python_tool
 from veadk.tools.builtin_tools.create_agent.resource_store import StoredResource
-from veadk.tools.builtin_tools.create_agent.sources import SourceCollection
 from veadk.tools.builtin_tools.create_agent.sources import (
     AgentKitKnowledgePayload,
     CloudCredentials,
+    SourceCollection,
 )
 
 
@@ -203,7 +203,7 @@ async def test_collect_resources_queries_all_sources_concurrently() -> None:
     ]
 
 
-def test_default_sources_include_public_and_private_skill_spaces(monkeypatch) -> None:
+def test_default_sources_include_public_and_agentkit_skill_spaces(monkeypatch) -> None:
     monkeypatch.setenv("SKILL_HUB_SPACE_ID", "sp-public")
     monkeypatch.setenv("SKILL_SPACE_ID", "ss-private")
 
@@ -211,10 +211,25 @@ def test_default_sources_include_public_and_private_skill_spaces(monkeypatch) ->
 
     assert [source.name for source in toolset._collector._sources] == [
         "skill_hub:sp-public",
-        "skill_space:ss-private",
+        "skill_space:agentkit",
         "agentkit_knowledge",
         "veadk_builtin_tools",
     ]
+    assert toolset._collector._sources[1].space_ids == ("ss-private",)
+
+
+def test_default_sources_search_all_agentkit_skill_spaces(monkeypatch) -> None:
+    monkeypatch.delenv("SKILL_HUB_SPACE_ID", raising=False)
+    monkeypatch.delenv("SKILL_SPACE_ID", raising=False)
+
+    toolset = CreateAgentToolset()
+
+    assert [source.name for source in toolset._collector._sources] == [
+        "skill_space:agentkit",
+        "agentkit_knowledge",
+        "veadk_builtin_tools",
+    ]
+    assert toolset._collector._sources[0].space_ids == ()
 
 
 @pytest.mark.asyncio
@@ -710,6 +725,115 @@ async def test_skill_is_materialized_only_during_create(
 
 
 @pytest.mark.asyncio
+async def test_agentkit_skill_is_hydrated_only_when_selected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    skill = Skill(
+        name="private-writer",
+        description="Write private reports",
+        path="skill-private",
+        id="skill-private",
+        skill_space_id="ss-private",
+        source_type="skillspace",
+        version_id="v7",
+    )
+    resource = StoredResource(
+        descriptor=ResourceDescriptor(
+            ref="ss-private:skill-private",
+            kind="skill",
+            name="private-writer",
+            description="Write private reports",
+            source="skill_space:ss-private",
+            version="v7",
+            metadata={
+                "region": "cn-beijing",
+                "space_name": "Private Team",
+            },
+        ),
+        payload=skill,
+    )
+    version_requests = []
+
+    class Client:
+        def get_skill_version(self, request):
+            version_requests.append(request)
+            return SimpleNamespace(
+                name="private-writer",
+                description="Write private reports",
+                version="v7",
+                bucket_name="private-skills",
+                tos_path="skills/skill-private/v7/archive.zip",
+            )
+
+    monkeypatch.setattr(
+        "veadk.tools.builtin_tools.create_agent.sources.skills._default_agentkit_client_factory",
+        lambda credentials, region: Client(),
+    )
+    skill_dir = tmp_path / "private-writer"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: private-writer\ndescription: Demo\n---\nUse this skill.",
+        encoding="utf-8",
+    )
+    materialized: list[Skill] = []
+
+    def materialize(value, *, cache_dir=None, credentials=None, region=None):
+        del cache_dir
+        materialized.append(value)
+        assert credentials == ("ak", "sk", "sts")
+        assert region == "cn-beijing"
+        return skill_dir
+
+    monkeypatch.setattr(
+        "veadk.tools.builtin_tools.create_agent.orchestrator.materialize_remote_skill",
+        materialize,
+    )
+    toolset = CreateAgentToolset(
+        resource_sources=[_StaticSource([resource])],
+        leaf_factory=_leaf_factory,
+    )
+    context = _context()
+    context.state.update(
+        {
+            "VOLCENGINE_ACCESS_KEY": "ak",
+            "VOLCENGINE_SECRET_KEY": "sk",
+            "VOLCENGINE_SESSION_TOKEN": "sts",
+        }
+    )
+    collected = await toolset.collect_resources(tool_context=context)
+    assert version_requests == []
+
+    result = await toolset.create_agents(
+        collection_id=collected["collection_id"],
+        agents=[
+            {
+                "name": "private_agent",
+                "task": "run",
+                "root_node": "worker",
+                "nodes": [
+                    {
+                        "id": "worker",
+                        "type": "llm",
+                        "instruction": "use private skill",
+                        "resources": ["ss-private:skill-private"],
+                    }
+                ],
+            }
+        ],
+        handoff_to="private_agent",
+        tool_context=context,
+    )
+
+    assert result["results"][0]["status"] == "completed"
+    assert len(version_requests) == 1
+    assert version_requests[0].id == "skill-private"
+    assert version_requests[0].skill_version == "v7"
+    assert len(materialized) == 1
+    assert materialized[0].bucket_name == "private-skills"
+    assert materialized[0].path == "skills/skill-private/v7/archive.zip"
+
+
+@pytest.mark.asyncio
 async def test_concurrent_invocations_serialize_same_skill_materialization(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -834,7 +958,7 @@ async def test_selected_knowledge_is_mounted_as_read_only_search_tool(
             closed.append(True)
 
     monkeypatch.setattr(
-        "veadk.tools.builtin_tools.create_agent.orchestrator._resolve_credentials",
+        "veadk.tools.builtin_tools.create_agent.orchestrator.resolve_cloud_credentials",
         lambda context: CloudCredentials("ak", "sk", "sts"),
     )
 
@@ -922,7 +1046,7 @@ async def test_partial_knowledge_mount_failure_closes_created_instances(
         return Knowledge()
 
     monkeypatch.setattr(
-        "veadk.tools.builtin_tools.create_agent.orchestrator._resolve_credentials",
+        "veadk.tools.builtin_tools.create_agent.orchestrator.resolve_cloud_credentials",
         lambda context: CloudCredentials("ak", "sk"),
     )
     toolset = CreateAgentToolset(

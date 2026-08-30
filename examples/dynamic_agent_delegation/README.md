@@ -33,5 +33,6 @@ uv run veadk frontend \
   [3, 9, 2, 7, 5]。`：Main Agent 创建带自定义 Python Tool 的 Sub Agent 并移交。
 
 公共 Skill Hub 由 Main Agent 根据任务生成关键词并检索，不需要配置 Space ID。
-如果还要加载指定的 AgentKit 技能中心，在环境中配置 `SKILL_SPACE_ID`；多个空间 ID
-用逗号分隔。兼容旧版 Skill Hub Space 时仍可使用 `SKILL_HUB_SPACE_ID`。
+配置 AK/SK 或 STS 后，AgentKit 技能中心会自动检索当前账号可访问的全部 Skill
+Space。`SKILL_SPACE_ID` 仅用于将检索范围限制到指定 Space，多个 Space ID 用逗号
+分隔。兼容旧版 Skill Hub Space 时仍可使用 `SKILL_HUB_SPACE_ID`。

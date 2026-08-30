@@ -18,8 +18,9 @@ from __future__ import annotations
 
 import hashlib
 import os
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 from google.adk.agents import BaseAgent
 from google.adk.agents.readonly_context import ReadonlyContext
@@ -43,6 +44,7 @@ from veadk.tools.builtin_tools.create_agent.orchestrator import AgentOrchestrato
 from veadk.tools.builtin_tools.create_agent.resource_store import ResourceStore
 from veadk.tools.builtin_tools.create_agent.sources import (
     AgentKitKnowledgeSource,
+    AgentKitSkillCenterSource,
     BuiltinToolResourceSource,
     ResourceSource,
     SkillHubSearchSource,
@@ -103,6 +105,10 @@ class CreateAgentToolset(BaseToolset):
         tool_context: ToolContext | None = None,
     ) -> dict[str, Any]:
         """Collect resources and search public Skill Hub with task keywords.
+
+        AgentKit Skill Center discovery automatically enumerates every Skill
+        Space visible to the active AK/SK or STS credentials. Constructor-level
+        ``skill_source_ids`` only narrows that account catalog when supplied.
 
         Args:
             skill_hub_keywords: Two to five concise keywords or short phrases
@@ -285,8 +291,15 @@ def _default_sources(
             str(value).strip() for value in skill_source_ids if str(value).strip()
         ]
     unique_source_ids = list(dict.fromkeys(source_ids))
+    skill_hub_source_ids = [
+        source_id for source_id in unique_source_ids if source_id.startswith("sp-")
+    ]
+    agentkit_space_ids = [
+        source_id for source_id in unique_source_ids if not source_id.startswith("sp-")
+    ]
     return [
-        *(SkillResourceSource(source_id) for source_id in unique_source_ids),
+        *(SkillResourceSource(source_id) for source_id in skill_hub_source_ids),
+        AgentKitSkillCenterSource(agentkit_space_ids),
         AgentKitKnowledgeSource(),
         BuiltinToolResourceSource(),
     ]

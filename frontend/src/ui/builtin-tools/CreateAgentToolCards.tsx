@@ -246,9 +246,6 @@ export function CollectResourcesCard({ response, status }: CreateAgentToolCardPr
       )],
     };
   }), [data]);
-  const defaultCategory = groups.find(
-    (group) => group.resources.length > 0,
-  )?.value ?? "skill_hub";
   const failed = status === "failed";
   const error = failed ? responseError(response) : "";
 
@@ -265,7 +262,6 @@ export function CollectResourcesCard({ response, status }: CreateAgentToolCardPr
         <Accordion.Root
           key={data.collectionId || "collected-resources"}
           className="create-agent-card__accordion"
-          defaultValue={[defaultCategory]}
         >
           {groups.map((group) => (
             <Accordion.Item

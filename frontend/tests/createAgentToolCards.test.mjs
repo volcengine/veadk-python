@@ -112,7 +112,8 @@ test("normalizes collected resources and separates every resource source", async
 
 test("uses a single-category accordion and keeps implementation hints private", () => {
   assert.match(cardSource, /import \{ Accordion \} from "@base-ui\/react\/accordion"/);
-  assert.match(cardSource, /<Accordion\.Root[\s\S]*?defaultValue=\{\[defaultCategory\]\}/);
+  assert.doesNotMatch(cardSource, /const defaultCategory\s*=/);
+  assert.doesNotMatch(cardSource, /<Accordion\.Root[\s\S]*?defaultValue=/);
   assert.match(cardSource, /<Accordion\.Panel/);
   assert.match(cardSource, /filterCollectedResourcesByCategory\(data, item\.value\)/);
   assert.match(cardSource, /AgentKit 技能中心/);

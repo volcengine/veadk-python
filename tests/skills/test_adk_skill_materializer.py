@@ -205,7 +205,9 @@ def test_legacy_skillspace_download_uses_explicit_region(
             return True
 
     monkeypatch.setattr(
-        materializer, "_get_cloud_credentials", lambda: ("ak", "sk", "")
+        materializer,
+        "_get_cloud_credentials",
+        lambda: pytest.fail("explicit credentials should be reused"),
     )
     monkeypatch.setattr("veadk.integrations.ve_tos.ve_tos.VeTOS", FakeVeTOS)
 
@@ -213,8 +215,12 @@ def test_legacy_skillspace_download_uses_explicit_region(
         remote_skill,
         tmp_path / "skill.zip",
         region="cn-shanghai",
+        credentials=("state-ak", "state-sk", "state-sts"),
         raise_on_error=True,
     )
+    assert calls[0]["ak"] == "state-ak"
+    assert calls[0]["sk"] == "state-sk"
+    assert calls[0]["session_token"] == "state-sts"
     assert calls[0]["region"] == "cn-shanghai"
     assert calls[1]["raise_on_error"] is True
 

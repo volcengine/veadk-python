@@ -23,6 +23,7 @@ import shutil
 import tempfile
 import zipfile
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote
 
 import frontmatter
@@ -52,6 +53,8 @@ def materialize_remote_skill(
     skill: Skill,
     *,
     cache_dir: Path | None = None,
+    credentials: tuple[str, str, str] | None = None,
+    region: str | None = None,
 ) -> Path:
     """Download one remote VeADK skill and return an ADK-loadable skill dir."""
     base_cache_dir = _default_cache_dir() if cache_dir is None else Path(cache_dir)
@@ -91,7 +94,12 @@ def materialize_remote_skill(
         shutil.rmtree(staging_dir)
     version_dir.mkdir(parents=True, exist_ok=True)
 
-    _download_remote_skill(skill, zip_path)
+    _download_remote_skill(
+        skill,
+        zip_path,
+        credentials=credentials,
+        region=region,
+    )
     try:
         _safe_extract_zip(zip_path, staging_dir)
     finally:
@@ -110,7 +118,13 @@ def materialize_remote_skill(
     return final_dir
 
 
-def _download_remote_skill(skill: Skill, zip_path: Path) -> None:
+def _download_remote_skill(
+    skill: Skill,
+    zip_path: Path,
+    *,
+    credentials: tuple[str, str, str] | None = None,
+    region: str | None = None,
+) -> None:
     zip_path.parent.mkdir(parents=True, exist_ok=True)
 
     if skill.source_type == "findskill":
@@ -124,7 +138,12 @@ def _download_remote_skill(skill: Skill, zip_path: Path) -> None:
             )
         return
 
-    if not _download_legacy_skill_space_skill(skill, zip_path):
+    legacy_options: dict[str, Any] = {}
+    if credentials is not None:
+        legacy_options["credentials"] = credentials
+    if region is not None:
+        legacy_options["region"] = region
+    if not _download_legacy_skill_space_skill(skill, zip_path, **legacy_options):
         raise SkillMaterializeError(
             f"Failed to download skill-space skill '{skill.name}'."
         )
@@ -161,6 +180,7 @@ def _download_legacy_skill_space_skill(
     zip_path: Path,
     *,
     region: str | None = None,
+    credentials: tuple[str, str, str] | None = None,
     raise_on_error: bool = False,
 ) -> bool:
     if not skill.bucket_name or not skill.path:
@@ -168,7 +188,7 @@ def _download_legacy_skill_space_skill(
             f"Skill-space skill '{skill.name}' is missing bucket or TOS path."
         )
 
-    access_key, secret_key, session_token = _get_cloud_credentials()
+    access_key, secret_key, session_token = credentials or _get_cloud_credentials()
     service, resolved_region, host = _get_agentkit_endpoint(region)
     scheme = os.getenv("AGENTKIT_TOP_SCHEME", "https").lower()
     cloud_provider = (os.getenv("CLOUD_PROVIDER") or "").lower()

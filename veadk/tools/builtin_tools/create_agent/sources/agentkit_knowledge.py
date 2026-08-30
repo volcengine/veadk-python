@@ -28,13 +28,12 @@ from veadk.tools.builtin_tools.create_agent.models import (
 )
 from veadk.tools.builtin_tools.create_agent.resource_store import StoredResource
 from veadk.tools.builtin_tools.create_agent.sources.base import SourceCollection
-
-
-@dataclass(frozen=True)
-class CloudCredentials:
-    access_key: str
-    secret_key: str
-    session_token: str = ""
+from veadk.tools.builtin_tools.create_agent.sources.cloud import (
+    CloudCredentials,
+    default_agentkit_region,
+    resolve_cloud_credentials,
+)
+from veadk.utils.cloud_provider import cloud_provider_from_env
 
 
 @dataclass(frozen=True)
@@ -62,10 +61,10 @@ class AgentKitKnowledgeSource:
         client_factory=None,
         credential_resolver=None,
     ) -> None:
-        self.region = region or _default_region()
+        self.region = region or default_agentkit_region()
         self.project_name = project_name or os.getenv("VEADK_STUDIO_PROJECT") or None
         self._client_factory = client_factory or _default_client_factory
-        self._credential_resolver = credential_resolver or _resolve_credentials
+        self._credential_resolver = credential_resolver or resolve_cloud_credentials
 
     async def collect(self, tool_context: Any = None) -> SourceCollection:
         try:
@@ -115,13 +114,13 @@ class AgentKitKnowledgeSource:
         for _ in range(100):
             response = client.list_knowledge_bases(
                 knowledge_types.ListKnowledgeBasesRequest(
-                    max_results=100,
-                    next_token=next_token or None,
-                    project_name=self.project_name,
-                    filters=[
+                    MaxResults=100,
+                    NextToken=next_token or None,
+                    ProjectName=self.project_name,
+                    Filters=[
                         knowledge_types.FiltersItemForListKnowledgeBases(
-                            name="provider_type",
-                            values=["VIKINGDB_KNOWLEDGE"],
+                            Name="provider_type",
+                            Values=["VIKINGDB_KNOWLEDGE"],
                         )
                     ],
                 )
@@ -156,7 +155,7 @@ class AgentKitKnowledgeSource:
                 getattr(item, "project_name", "") or self.project_name or ""
             ),
             region=str(getattr(item, "region", "") or self.region),
-            cloud_provider=(os.getenv("CLOUD_PROVIDER") or "volcengine").lower(),
+            cloud_provider=cloud_provider_from_env(),
         )
         descriptor = ResourceDescriptor(
             ref=f"agentkit_kb:{knowledge_id}",
@@ -176,60 +175,16 @@ class AgentKitKnowledgeSource:
 
 
 def _default_client_factory(credentials: CloudCredentials, region: str):
+    from agentkit.platform.context import default_cloud_provider
     from agentkit.sdk.knowledge.client import AgentkitKnowledgeClient
 
-    return AgentkitKnowledgeClient(
-        access_key=credentials.access_key,
-        secret_key=credentials.secret_key,
-        session_token=credentials.session_token,
-        region=region,
-    )
-
-
-def _resolve_credentials(tool_context: Any = None) -> CloudCredentials | None:
-    state = getattr(tool_context, "state", None) or {}
-    provider = (os.getenv("CLOUD_PROVIDER") or "volcengine").lower()
-    if provider == "byteplus":
-        access_key = state.get("BYTEPLUS_ACCESS_KEY") or os.getenv(
-            "BYTEPLUS_ACCESS_KEY"
+    with default_cloud_provider(cloud_provider_from_env()):
+        return AgentkitKnowledgeClient(
+            access_key=credentials.access_key,
+            secret_key=credentials.secret_key,
+            session_token=credentials.session_token,
+            region=region,
         )
-        secret_key = state.get("BYTEPLUS_SECRET_KEY") or os.getenv(
-            "BYTEPLUS_SECRET_KEY"
-        )
-        session_token = state.get("BYTEPLUS_SESSION_TOKEN") or os.getenv(
-            "BYTEPLUS_SESSION_TOKEN", ""
-        )
-    else:
-        access_key = state.get("VOLCENGINE_ACCESS_KEY") or os.getenv(
-            "VOLCENGINE_ACCESS_KEY"
-        )
-        secret_key = state.get("VOLCENGINE_SECRET_KEY") or os.getenv(
-            "VOLCENGINE_SECRET_KEY"
-        )
-        session_token = state.get("VOLCENGINE_SESSION_TOKEN") or os.getenv(
-            "VOLCENGINE_SESSION_TOKEN", ""
-        )
-
-    if access_key and secret_key:
-        return CloudCredentials(access_key, secret_key, session_token)
-
-    from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
-
-    credential = get_credential_from_vefaas_iam()
-    if not credential.access_key_id or not credential.secret_access_key:
-        return None
-    return CloudCredentials(
-        credential.access_key_id,
-        credential.secret_access_key,
-        credential.session_token,
-    )
-
-
-def _default_region() -> str:
-    provider = (os.getenv("CLOUD_PROVIDER") or "volcengine").lower()
-    if provider == "byteplus":
-        return os.getenv("AGENTKIT_TOOL_REGION") or "ap-southeast-1"
-    return os.getenv("AGENTKIT_TOOL_REGION") or os.getenv("REGION") or "cn-beijing"
 
 
 def agentkit_viking_index(payload: AgentKitKnowledgePayload) -> str:

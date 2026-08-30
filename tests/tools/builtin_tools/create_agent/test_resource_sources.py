@@ -22,6 +22,7 @@ from veadk.skills.skill import Skill
 from veadk.skills.utils import _get_cloud_credentials
 from veadk.tools.builtin_tools.create_agent.sources import (
     AgentKitKnowledgeSource,
+    AgentKitSkillCenterSource,
     BuiltinToolResourceSource,
     CloudCredentials,
     SkillHubSearchSource,
@@ -68,6 +69,180 @@ async def test_skill_source_reports_collection_failure(monkeypatch) -> None:
     assert result.status.status == "error"
     assert result.status.count == 0
     assert result.status.message == "cannot list sp-public"
+
+
+@pytest.mark.asyncio
+async def test_agentkit_skill_center_skips_without_credentials() -> None:
+    source = AgentKitSkillCenterSource(credential_resolver=lambda context: None)
+
+    result = await source.collect()
+
+    assert result.resources == []
+    assert result.status.model_dump() == {
+        "source": "skill_space:agentkit",
+        "status": "skipped",
+        "count": 0,
+        "message": "AK/SK or STS credentials are unavailable.",
+        "search_keywords": [],
+    }
+
+
+@pytest.mark.asyncio
+async def test_agentkit_skill_center_paginates_spaces_and_skills() -> None:
+    space_requests = []
+    skill_requests = []
+
+    class Client:
+        def list_skill_spaces(self, request):
+            space_requests.append(request)
+            if request.page_number == 1:
+                return SimpleNamespace(
+                    items=[
+                        SimpleNamespace(
+                            id="ss-one",
+                            name="Team One",
+                            project_name="project-one",
+                        )
+                    ],
+                    total_count=2,
+                )
+            return SimpleNamespace(
+                items=[
+                    SimpleNamespace(
+                        id="ss-two",
+                        name="Team Two",
+                        project_name="project-two",
+                    )
+                ],
+                total_count=2,
+            )
+
+        def list_skills_by_skill_space(self, request):
+            skill_requests.append(request)
+            if request.skill_space_id == "ss-one" and request.page_number == 1:
+                return SimpleNamespace(
+                    items=[
+                        SimpleNamespace(
+                            skill_id="skill-a",
+                            skill_name="Writer",
+                            skill_description="Write a report",
+                            version="v1",
+                            skill_status="Published",
+                        )
+                    ],
+                    total_count=2,
+                )
+            if request.skill_space_id == "ss-one":
+                return SimpleNamespace(
+                    items=[
+                        SimpleNamespace(
+                            skill_id="skill-b",
+                            skill_name="Reviewer",
+                            skill_description="Review a report",
+                            version="v2",
+                            skill_status="Published",
+                        )
+                    ],
+                    total_count=2,
+                )
+            return SimpleNamespace(
+                items=[
+                    SimpleNamespace(
+                        skill_id="skill-c",
+                        skill_name="Analyst",
+                        skill_description="Analyze data",
+                        version="v3",
+                        skill_status="Published",
+                    )
+                ],
+                total_count=1,
+            )
+
+    source = AgentKitSkillCenterSource(
+        client_factory=lambda credentials, region: Client(),
+        credential_resolver=lambda context: CloudCredentials("ak", "sk", "sts"),
+    )
+
+    result = await source.collect()
+
+    assert [request.page_number for request in space_requests] == [1, 2]
+    assert sorted(
+        (request.skill_space_id, request.page_number) for request in skill_requests
+    ) == [("ss-one", 1), ("ss-one", 2), ("ss-two", 1)]
+    assert [resource.descriptor.ref for resource in result.resources] == [
+        "ss-one:skill-a",
+        "ss-one:skill-b",
+        "ss-two:skill-c",
+    ]
+    assert result.status.status == "ok"
+    assert result.status.count == 3
+    first = result.resources[0]
+    assert first.descriptor.source == "skill_space:ss-one"
+    assert first.descriptor.version == "v1"
+    assert first.descriptor.metadata["space_name"] == "Team One"
+    assert first.payload.skill_space_id == "ss-one"
+    assert first.payload.source_type == "skillspace"
+    assert first.payload.version_id == "v1"
+
+
+@pytest.mark.asyncio
+async def test_agentkit_skill_center_filters_discovered_spaces() -> None:
+    skill_space_ids = []
+
+    class Client:
+        def list_skill_spaces(self, request):
+            return SimpleNamespace(
+                items=[
+                    SimpleNamespace(id="ss-one", name="One", project_name="p"),
+                    SimpleNamespace(id="ss-two", name="Two", project_name="p"),
+                ],
+                total_count=2,
+            )
+
+        def list_skills_by_skill_space(self, request):
+            skill_space_ids.append(request.skill_space_id)
+            return SimpleNamespace(items=[], total_count=0)
+
+    source = AgentKitSkillCenterSource(
+        ["ss-two"],
+        client_factory=lambda credentials, region: Client(),
+        credential_resolver=lambda context: CloudCredentials("ak", "sk"),
+    )
+
+    result = await source.collect()
+
+    assert result.status.status == "ok"
+    assert skill_space_ids == ["ss-two"]
+
+
+@pytest.mark.parametrize(
+    ("cloud_provider", "expected_region"),
+    [("volcengine", "cn-beijing"), ("byteplus", "ap-southeast-1")],
+)
+def test_agentkit_skill_center_uses_provider_default_region(
+    monkeypatch, cloud_provider: str, expected_region: str
+) -> None:
+    monkeypatch.delenv("AGENTKIT_CLOUD_PROVIDER", raising=False)
+    monkeypatch.setenv("CLOUD_PROVIDER", cloud_provider)
+    monkeypatch.delenv("AGENTKIT_TOOL_REGION", raising=False)
+    monkeypatch.delenv("REGION", raising=False)
+
+    assert AgentKitSkillCenterSource().region == expected_region
+
+
+def test_agentkit_skill_center_prefers_agentkit_provider_and_byteplus_region(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENTKIT_CLOUD_PROVIDER", "byteplus")
+    monkeypatch.setenv("CLOUD_PROVIDER", "volcengine")
+    monkeypatch.setenv("BYTEPLUS_REGION", "ap-southeast-2")
+    monkeypatch.delenv("AGENTKIT_TOOL_REGION", raising=False)
+
+    assert AgentKitSkillCenterSource().region == "ap-southeast-2"
+
+
+def test_agentkit_skill_center_uses_cloud_safe_default_concurrency() -> None:
+    assert AgentKitSkillCenterSource()._max_concurrency == 2
 
 
 @pytest.mark.asyncio

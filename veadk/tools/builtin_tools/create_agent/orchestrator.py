@@ -47,10 +47,12 @@ from veadk.tools.builtin_tools.create_agent.sources import (
     AgentKitKnowledgePayload,
     CloudCredentials,
 )
-from veadk.tools.builtin_tools.create_agent.sources.agentkit_knowledge import (
-    _resolve_credentials,
+from veadk.tools.builtin_tools.create_agent.sources.cloud import (
+    resolve_cloud_credentials,
 )
-
+from veadk.tools.builtin_tools.create_agent.sources.skills import (
+    resolve_agentkit_skill,
+)
 
 LeafFactory = Callable[[LlmAgentNode, list[Any], bool, Any], BaseAgent]
 KnowledgeFactory = Callable[[AgentKitKnowledgePayload, CloudCredentials], Any]
@@ -372,7 +374,7 @@ class AgentOrchestrator:
 
             skills = await asyncio.gather(
                 *(
-                    self._load_skill(resource, skill_tasks)
+                    self._load_skill(resource, tool_context, skill_tasks)
                     for resource in skill_resources
                 )
             )
@@ -388,7 +390,9 @@ class AgentOrchestrator:
         ]
         mounted: list[Any] = []
         if knowledge_resources:
-            credentials = await asyncio.to_thread(_resolve_credentials, tool_context)
+            credentials = await asyncio.to_thread(
+                resolve_cloud_credentials, tool_context
+            )
             if credentials is None:
                 raise ValueError(
                     "Selected AgentKit knowledge bases require AK/SK or STS credentials."
@@ -416,6 +420,7 @@ class AgentOrchestrator:
     async def _load_skill(
         self,
         resource,
+        tool_context: Any,
         skill_tasks: dict[str, asyncio.Task[Any]],
     ) -> Any:
         task = skill_tasks.get(resource.descriptor.ref)
@@ -425,20 +430,78 @@ class AgentOrchestrator:
                 threading.Lock(),
             )
             task = asyncio.create_task(
-                asyncio.to_thread(
-                    _materialize_skill,
+                self._materialize_resource_skill(
+                    resource,
+                    tool_context,
                     lock,
-                    resource.payload,
-                    self._skill_cache_dir,
                 )
             )
             skill_tasks[resource.descriptor.ref] = task
         return await task
 
+    async def _materialize_resource_skill(
+        self,
+        resource: Any,
+        tool_context: Any,
+        lock: threading.Lock,
+    ) -> Any:
+        skill = resource.payload
+        credentials = None
+        region = None
+        if resource.descriptor.source.startswith("skill_space:") and not getattr(
+            skill, "bucket_name", None
+        ):
+            credentials = await asyncio.to_thread(
+                resolve_cloud_credentials, tool_context
+            )
+            if credentials is None:
+                raise ValueError(
+                    "Selected AgentKit Skills require AK/SK or STS credentials."
+                )
+            region = str(resource.descriptor.metadata.get("region") or "cn-beijing")
+            skill = await asyncio.to_thread(
+                resolve_agentkit_skill,
+                skill,
+                credentials=credentials,
+                region=region,
+                skill_space_name=str(
+                    resource.descriptor.metadata.get("space_name") or ""
+                )
+                or None,
+            )
+        return await asyncio.to_thread(
+            _materialize_skill,
+            lock,
+            skill,
+            self._skill_cache_dir,
+            credentials,
+            region,
+        )
 
-def _materialize_skill(lock: threading.Lock, skill: Any, cache_dir: Any) -> Any:
+
+def _materialize_skill(
+    lock: threading.Lock,
+    skill: Any,
+    cache_dir: Any,
+    credentials: CloudCredentials | None = None,
+    region: str | None = None,
+) -> Any:
     with lock:
-        return materialize_remote_skill(skill, cache_dir=cache_dir)
+        credential_tuple = (
+            (
+                credentials.access_key,
+                credentials.secret_key,
+                credentials.session_token,
+            )
+            if credentials is not None
+            else None
+        )
+        options: dict[str, Any] = {"cache_dir": cache_dir}
+        if credential_tuple is not None:
+            options["credentials"] = credential_tuple
+        if region is not None:
+            options["region"] = region
+        return materialize_remote_skill(skill, **options)
 
 
 def _builtin_tool_name(resource: Any) -> str:
