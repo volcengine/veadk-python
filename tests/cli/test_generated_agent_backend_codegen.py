@@ -515,6 +515,19 @@ def test_quick_mode_dynamic_agent_prompt_generalizes_subject_matter() -> None:
         assert reusable_node in _DYNAMIC_AGENT_DELEGATION_RULES
 
 
+def test_quick_mode_dynamic_agent_prompt_generalizes_cross_industry_optimization() -> (
+    None
+):
+    normalized_rules = " ".join(_DYNAMIC_AGENT_DELEGATION_RULES.split())
+
+    assert "跨行业、跨领域或跨场景复用" in normalized_rules
+    assert "decision_optimization_agent" in normalized_rules
+    assert "constraint_validator" in normalized_rules
+    assert (
+        "不得使用 portfolio、project、investment、asset、campaign" in normalized_rules
+    )
+
+
 @pytest.mark.parametrize("blueprint_model", (AgentBlueprint, LegacyAgentBlueprint))
 def test_dynamic_agent_blueprint_schema_separates_task_from_identity(
     blueprint_model: type[AgentBlueprint | LegacyAgentBlueprint],
