@@ -2,6 +2,7 @@ import {
   type CSSProperties,
   type SVGProps,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
@@ -14,6 +15,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { Clock } from "@openai/apps-sdk-ui/components/Icon";
+import { LoadingIndicator } from "@openai/apps-sdk-ui/components/Indicator";
 import type {
   AdkSession,
   SiteBranding,
@@ -38,6 +40,46 @@ import byteplusLogo from "../assets/byteplus.svg";
 import "./Sidebar.css";
 
 const SIDEBAR_AUTO_COLLAPSE_QUERY = "(max-width: 860px)";
+
+function ScrollableHistoryTitle({ title }: { title: string }) {
+  const titleRef = useRef<HTMLSpanElement>(null);
+  const [fadeEdges, setFadeEdges] = useState({ left: false, right: false });
+
+  const updateFadeEdges = () => {
+    const element = titleRef.current;
+    if (!element) return;
+    const next = {
+      left: element.scrollLeft > 1,
+      right: element.scrollLeft + element.clientWidth < element.scrollWidth - 1,
+    };
+    setFadeEdges((current) => (
+      current.left === next.left && current.right === next.right ? current : next
+    ));
+  };
+
+  useLayoutEffect(() => {
+    const element = titleRef.current;
+    if (!element) return undefined;
+    updateFadeEdges();
+    const observer = new ResizeObserver(updateFadeEdges);
+    observer.observe(element);
+    if (element.firstElementChild) observer.observe(element.firstElementChild);
+    return () => observer.disconnect();
+  }, [title]);
+
+  return (
+    <span
+      ref={titleRef}
+      className={`history-title${fadeEdges.left ? " has-left-fade" : ""}${
+        fadeEdges.right ? " has-right-fade" : ""
+      }`}
+      onScroll={updateFadeEdges}
+      onPointerEnter={updateFadeEdges}
+    >
+      <span className="history-title-text">{title}</span>
+    </span>
+  );
+}
 
 export type SidebarPage =
   | "new-chat"
@@ -93,7 +135,7 @@ export interface SidebarProps {
   features?: UiFeatures;
   /** Server-derived role and capabilities. */
   access: StudioAccess;
-  /** Session ids that are currently streaming a reply (shows a live dot). */
+  /** Session ids that are currently streaming a reply. */
   streamingSids?: Set<string>;
   /** Session ids whose latest reply is currently being evaluated. */
   evaluatingSids?: Set<string>;
@@ -507,7 +549,7 @@ export function Sidebar({
                         title={title}
                         disabled={busy}
                       >
-                        <span className="history-title">{title}</span>
+                        <ScrollableHistoryTitle title={title} />
                         {active ? (
                           <span className="history-current-badge">当前</span>
                         ) : null}
@@ -581,14 +623,7 @@ export function Sidebar({
                         aria-current={active ? "page" : undefined}
                         title={item.title}
                       >
-                        {streaming && (
-                          <span
-                            className="history-streaming"
-                            title="正在生成…"
-                            aria-label="正在生成"
-                          />
-                        )}
-                        <span className="history-title">{item.title}</span>
+                        <ScrollableHistoryTitle title={item.title} />
                         {evaluating && (
                           <span
                             className="history-evaluating-status"
@@ -602,19 +637,29 @@ export function Sidebar({
                           </span>
                         )}
                       </button>
-                      <button
-                        type="button"
-                        className="history-more"
-                        aria-label={`管理历史会话：${item.title}`}
-                        title="更多"
-                        onClick={() =>
-                          setMenuFor((current) =>
-                            current === item.id ? null : item.id
-                          )
-                        }
-                      >
-                        <MoreHorizontal className="icon" />
-                      </button>
+                      <div className="history-action-slot">
+                        {streaming ? (
+                          <LoadingIndicator
+                            className="history-streaming-indicator"
+                            size={12}
+                            role="status"
+                            aria-label="正在生成"
+                          />
+                        ) : null}
+                        <button
+                          type="button"
+                          className="history-more"
+                          aria-label={`管理历史会话：${item.title}`}
+                          title="更多"
+                          onClick={() =>
+                            setMenuFor((current) =>
+                              current === item.id ? null : item.id
+                            )
+                          }
+                        >
+                          <MoreHorizontal className="icon" />
+                        </button>
+                      </div>
                       {menuFor === item.id && (
                         <>
                           <div
