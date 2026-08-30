@@ -59,6 +59,7 @@ _AGENTKIT_BASE_IMAGES = {
     "volcengine": "agentkit-prod-public-cn-beijing.cr.volces.com/base/py-simple:python3.12-bookworm-slim-latest",
     "byteplus": "agentkit-prod-public-ap-southeast-1.cr.bytepluses.com/base/py-simple:python3.12-bookworm-slim-latest",
 }
+_PYPI_FALLBACK_INDEX = "https://repo.huaweicloud.com/repository/pypi/simple"
 _LARK_CLI_VERSION = "1.0.87"
 _LARK_CLI_SHA256 = {
     "amd64": "6027b1ddc12440400581bbdf9554850d8e119c7dd400439b1220e7a87b9673c5",
@@ -1895,7 +1896,11 @@ def render_cloud_environment_dockerfile(draft: AgentDraft) -> str | None:
             "",
             "# Install Python dependencies before copying the source for better layer caching.",
             "COPY requirements.txt requirements.txt",
-            "RUN uv pip install -r requirements.txt",
+            (
+                "RUN uv pip install -r requirements.txt || \\\n"
+                f"    uv pip install --index-url {_PYPI_FALLBACK_INDEX} "
+                "-r requirements.txt"
+            ),
             "",
             "# Copy the Agent application and configure its runtime entrypoint.",
             "EXPOSE 8000",

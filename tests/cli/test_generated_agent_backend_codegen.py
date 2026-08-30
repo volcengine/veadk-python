@@ -308,6 +308,12 @@ def test_codegen_cloud_environment_uses_provider_base_image(
         in files["Dockerfile"]
     )
     assert 'CMD ["python", "-m", "app"]' in files["Dockerfile"]
+    assert "RUN uv pip install -r requirements.txt || \\" in files["Dockerfile"]
+    assert (
+        "uv pip install --index-url "
+        "https://repo.huaweicloud.com/repository/pypi/simple -r requirements.txt"
+        in files["Dockerfile"]
+    )
 
 
 def test_codegen_cloud_environment_installs_github_cli_for_both_architectures() -> None:
