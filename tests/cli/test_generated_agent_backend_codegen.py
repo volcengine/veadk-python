@@ -92,6 +92,62 @@ def test_minimal_codegen_agent_py_compiles(tmp_path) -> None:
             py_compile.compile(str(target), doraise=True)
 
 
+def test_quick_mode_codegen_adds_dynamic_agent_toolset_and_managed_rules() -> None:
+    user_instruction = "请按照我的业务规则帮助用户完成数据分析。"
+    project = generate_project_from_draft(
+        AgentDraft(
+            name="quick-agent",
+            instruction=user_instruction,
+            dynamicAgentDelegation=True,
+        )
+    )
+
+    agent_py = next(
+        file.content
+        for file in project.files
+        if file.path == "agents/quick_agent/agent.py"
+    )
+    requirements = next(
+        file.content for file in project.files if file.path == "requirements.txt"
+    )
+
+    assert (
+        "from veadk.tools.builtin_tools.create_agent import CreateAgentToolset"
+        in agent_py
+    )
+    assert "dynamic_agent_toolset_agent = CreateAgentToolset()" in agent_py
+    assert "tools=[dynamic_agent_toolset_agent]" in agent_py
+    assert agent_py.index(user_instruction) < agent_py.index("动态子智能体协作规则")
+    assert "collect_resources" in agent_py
+    assert "create_agents" in agent_py
+    assert "handoff_to" in agent_py
+    assert "'dynamicAgentDelegation': True" in agent_py
+    assert (
+        "veadk-python @ https://github.com/volcengine/veadk-python/archive/"
+        "3d2b0d4c41a459310fba1f20116e989d6cc7f1ac.zip\n" in requirements
+    )
+    assert "veadk-python==1.1.6" not in requirements
+
+
+def test_traditional_codegen_does_not_add_dynamic_agent_capability() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(name="traditional-agent", instruction="直接完成用户任务。")
+    )
+    agent_py = next(
+        file.content
+        for file in project.files
+        if file.path == "agents/traditional_agent/agent.py"
+    )
+    requirements = next(
+        file.content for file in project.files if file.path == "requirements.txt"
+    )
+
+    assert "CreateAgentToolset" not in agent_py
+    assert "动态子智能体协作规则" not in agent_py
+    assert "dynamicAgentDelegation" not in agent_py
+    assert "veadk-python==1.1.6" in requirements
+
+
 def test_codegen_environment_image_adds_skills_without_replacing_agent_skills() -> None:
     project = generate_project_from_draft(
         AgentDraft.model_validate(

@@ -135,6 +135,7 @@ import {
 } from "./create/IntelligentCreate";
 import { IntelligentDeployment } from "./create/IntelligentDeployment";
 import { CustomCreate } from "./create/CustomCreate";
+import { AgentCreationModePicker } from "./create/AgentCreationModePicker";
 import { CodePackageCreate } from "./create/CodePackageCreate";
 import { MigrationWorkspace } from "./migrations/MigrationWorkspace";
 import type { AgentDraft } from "./create/types";
@@ -1952,6 +1953,10 @@ export default function App() {
   const [addAgent, setAddAgent] = useState(false);
   // The "添加 Agent" chooser (two cards: AgentKit / 从 0 快速创建).
   const [addMenu, setAddMenu] = useState(false);
+  const [addMenuSurface, setAddMenuSurface] =
+    useState<"entry" | "traditional">("entry");
+  const [customCreationSurface, setCustomCreationSurface] =
+    useState<"vulcan" | "traditional">("traditional");
   // A draft imported from YAML, used to pre-fill the custom wizard once.
   const [importedDraft, setImportedDraft] = useState<AgentDraft | null>(null);
   const [customCreateMode, setCustomCreateMode] =
@@ -5643,6 +5648,7 @@ export default function App() {
     setNewRuntimeRegion(region);
     setImportedDraft(null);
     setCreateView(null);
+    setAddMenuSurface("entry");
     setAddMenu(true);
     setError("");
   };
@@ -6010,6 +6016,7 @@ export default function App() {
           setCreateView(null);
           setImportedDraft(null);
           setNewRuntimeRegion(defaultCloudRegion(cloudProvider));
+          setAddMenuSurface("entry");
           setAddMenu(true);
           setError("");
         })}
@@ -6584,6 +6591,7 @@ export default function App() {
                     return;
                   }
                   exitAgentDetailContext();
+                  setAddMenuSurface("entry");
                   setAddMenu(true);
                   setCreateView(null);
                   setImportedDraft(null);
@@ -6729,6 +6737,24 @@ export default function App() {
                   setError("");
                 }}
               />
+            ) : showAddMenu && addMenuSurface === "entry" ? (
+              <AgentCreationModePicker
+                onSelectVulcan={() => {
+                  setAddMenu(false);
+                  setImportedDraft(null);
+                  setCustomCreateMode("custom");
+                  setCustomCreationSurface("vulcan");
+                  setRuntimeUpdateTarget(null);
+                  setFocusedDeploymentTaskId("");
+                  setFocusedWorkspaceAgentId("");
+                  setEditingDraftId(`draft-${Date.now().toString(36)}`);
+                  editingDraftBaselineRef.current = null;
+                  setCreateView("custom");
+                }}
+                onSelectTraditional={() => {
+                  setAddMenuSurface("traditional");
+                }}
+              />
             ) : showAddMenu ? (
               <StackCards
                 title="您想以哪种方式添加 Agent 来运行？"
@@ -6743,6 +6769,7 @@ export default function App() {
                       setAddMenu(false);
                       setImportedDraft(null);
                       setCustomCreateMode("custom");
+                      setCustomCreationSurface("traditional");
                       setRuntimeUpdateTarget(null);
                       setFocusedDeploymentTaskId("");
                       setFocusedWorkspaceAgentId("");
@@ -6892,6 +6919,7 @@ export default function App() {
                 onBack={() => {
                   cancelIntelligentPreparation();
                   setCreateView(null);
+                  setAddMenuSurface("traditional");
                   setAddMenu(true);
                 }}
                 onCreate={async (goal, modelId, baseVersion) => {
@@ -6951,6 +6979,12 @@ export default function App() {
                 initialDraft={importedDraft ?? undefined}
                 onBack={() => {
                   setCreateView(null);
+                  setAddMenuSurface(
+                    !importedDraft && !runtimeUpdateTarget &&
+                      customCreationSurface === "vulcan"
+                      ? "entry"
+                      : "traditional",
+                  );
                   setAddMenu(true);
                 }}
                 onCreate={onCreate}
@@ -6958,6 +6992,7 @@ export default function App() {
                 features={features}
                 onDeploymentTaskChange={updateDeploymentTask}
                 createMode={customCreateMode}
+                freshCreationSurface={customCreationSurface}
                 deploymentTarget={runtimeUpdateTarget ?? undefined}
                 initialDeployRegion={newRuntimeRegion}
                 onDraftChange={(draft, dirty) => {
@@ -6993,6 +7028,7 @@ export default function App() {
                 cloudProvider={cloudProvider}
                 onBack={() => {
                   setCreateView(null);
+                  setAddMenuSurface("traditional");
                   setAddMenu(true);
                 }}
                 onAgentAdded={onAgentAdded}
@@ -7006,6 +7042,7 @@ export default function App() {
                 cloudProvider={cloudProvider}
                 onBack={() => {
                   setCreateView(null);
+                  setAddMenuSurface("traditional");
                   setAddMenu(true);
                 }}
                 onAgentAdded={onAgentAdded}
@@ -7516,6 +7553,7 @@ export default function App() {
                 onClick={() => {
                   setImportedDraft(null);
                   setCreateView(null);
+                  setAddMenuSurface("traditional");
                   setAddMenu(true);
                   setConfirmLeave(false);
                 }}

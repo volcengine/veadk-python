@@ -70,6 +70,14 @@ _GITHUB_CLI_SHA256 = {
     "arm64": "73ea440ecad9c9e284429997ee6f93577bc6f7bc6fba357ef62c53ad8fb641a5",
 }
 
+_DYNAMIC_AGENT_DELEGATION_RULES = """动态子智能体协作规则：
+- 对于问候、身份介绍、能力说明或可以直接完成的简单任务，直接回答，不要创建子智能体。
+- 对于需要专业技能、知识库、工具调用、资料检索或临时 Python 工具的复杂任务，必须先调用 collect_resources。根据用户任务提炼 2 到 5 个简短检索关键词，通过 skill_hub_keywords 传入。
+- collect_resources 返回的是候选资源，不会自动挂载。只创建完成任务所需的最少数量子智能体，并把实际需要的 Skill、知识库和内置工具完整 ref 显式写入对应 LLM 节点的 resources。存在相关 Skill 时至少绑定一个；确实没有匹配 Skill 时才允许不绑定 Skill。
+- 每个子智能体的 instruction 必须明确说明任务目标、期望输出格式和完成标准，并要求它直接向用户给出最终结果。需要临时计算能力时，可以在 python_tools 中提供完整代码。
+- 调用 create_agents 时，在 handoff_to 中指定真正负责完成用户任务的智能体。任务移交后不要自行重复作答。
+- 不要向用户暴露内部运行时名称、资源引用、版本判断或编排实现细节。"""
+
 
 class GeneratedFile(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -255,6 +263,7 @@ class AgentDraft(BaseModel):
     cloudProvider: Literal["volcengine", "byteplus"] = "volcengine"
     description: str = ""
     instruction: str = ""
+    dynamicAgentDelegation: bool = False
     agentType: Literal["llm", "sequential", "parallel", "loop", "a2a"] = "llm"
     maxIterations: int = 3
     a2aUrl: str = ""
@@ -420,6 +429,8 @@ def _safe_draft_payload(draft: AgentDraft) -> dict[str, Any]:
     used: set[str] = set()
 
     def sanitize(node: dict[str, Any]) -> None:
+        if not node.get("dynamicAgentDelegation"):
+            node.pop("dynamicAgentDelegation", None)
         if node.get("cloudProvider") == "volcengine":
             node.pop("cloudProvider", None)
         if node.get("modelSource") is None:
@@ -629,6 +640,19 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
 
     tool_exprs: list[str] = []
 
+    if draft.dynamicAgentDelegation:
+        _add_import(
+            acc,
+            "from veadk.tools.builtin_tools.create_agent import CreateAgentToolset",
+        )
+        dynamic_agent_toolset = _unique_ident(
+            acc,
+            f"dynamic_agent_toolset_{var_name}",
+            "dynamic_agent_toolset",
+        )
+        acc.pre_lines.append(f"{dynamic_agent_toolset} = CreateAgentToolset()")
+        tool_exprs.append(dynamic_agent_toolset)
+
     for tool_id in draft.builtinTools:
         tool = TOOL_BY_ID.get(tool_id)
         if tool is None:
@@ -808,10 +832,10 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
         f"description={_py_str(draft.description or draft.name or 'A VeADK agent.')}",
         f"instruction=INSTRUCTION_{var_name.upper()}",
     ]
-    acc.pre_lines.append(
-        f"INSTRUCTION_{var_name.upper()} = "
-        f"{_py_triple(draft.instruction or 'You are a helpful assistant.')}"
-    )
+    instruction = draft.instruction or "You are a helpful assistant."
+    if draft.dynamicAgentDelegation:
+        instruction = f"{instruction.rstrip()}\n\n{_DYNAMIC_AGENT_DELEGATION_RULES}"
+    acc.pre_lines.append(f"INSTRUCTION_{var_name.upper()} = {_py_triple(instruction)}")
 
     if tool_exprs:
         kwargs.append(f"tools=[{', '.join(tool_exprs)}]")
@@ -997,7 +1021,18 @@ def render_env_example(env: list[EnvVar]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_requirements(extras: set[str], include_feishu_channel: bool) -> str:
+_DYNAMIC_AGENT_VEADK_SOURCE = (
+    "https://github.com/volcengine/veadk-python/archive/"
+    "3d2b0d4c41a459310fba1f20116e989d6cc7f1ac.zip"
+)
+
+
+def render_requirements(
+    extras: set[str],
+    include_feishu_channel: bool,
+    *,
+    dynamic_agent_delegation: bool = False,
+) -> str:
     # Keep Studio-generated projects reproducible. google-adk 2.2+ requires
     # Starlette 1.x, while AgentKit SDK 0.8.4 still relies on APIs removed in
     # Starlette 1.x, so these versions must be upgraded together.
@@ -1007,7 +1042,11 @@ def render_requirements(extras: set[str], include_feishu_channel: bool) -> str:
     unique_extras = sorted(all_extras)
     extras_str = f"[{','.join(unique_extras)}]" if unique_extras else ""
     managed_sidecar = "harness-sidecar" in all_extras
-    pkg = f"veadk-python{extras_str}==1.1.6"
+    pkg = (
+        f"veadk-python{extras_str} @ {_DYNAMIC_AGENT_VEADK_SOURCE}"
+        if dynamic_agent_delegation
+        else f"veadk-python{extras_str}==1.1.6"
+    )
     agentkit_sdk = (
         "agentkit-sdk-python==0.8.1"
         if managed_sidecar
@@ -2038,7 +2077,11 @@ def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
         ),
         GeneratedFile(
             path="requirements.txt",
-            content=render_requirements(acc.extras, feishu_channel_enabled),
+            content=render_requirements(
+                acc.extras,
+                feishu_channel_enabled,
+                dynamic_agent_delegation=draft.dynamicAgentDelegation,
+            ),
         ),
         GeneratedFile(path="README.md", content=render_readme(pkg, draft)),
     ]
