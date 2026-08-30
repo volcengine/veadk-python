@@ -523,6 +523,37 @@ def test_quick_mode_dynamic_agent_prompt_generalizes_cross_industry_optimization
     )
 
 
+def test_quick_mode_dynamic_agent_prompt_requires_json_safe_python_tools() -> None:
+    normalized_rules = " ".join(_DYNAMIC_AGENT_DELEGATION_RULES.split())
+
+    for contract in (
+        "小规模、可直接枚举或心算验证的问题优先由子智能体直接推理",
+        "全部数据必须可由标准 JSON 无损表达",
+        "对象键只能是字符串",
+        "不得使用 tuple、对象或其他非字符串字典键",
+        '[{"items": ["A", "C", "F"], "value": 13}]',
+        "若 schema 不兼容或工具结果明显错误，立即重写工具",
+        "禁止用同一错误输入反复循环",
+    ):
+        assert contract in normalized_rules
+
+
+def test_dynamic_python_tool_schema_requires_json_safe_boundaries() -> None:
+    schema = AgentBlueprint.model_json_schema()
+    python_tool_schema = schema["$defs"]["PythonToolSpec"]
+    code_description = python_tool_schema["properties"]["code"]["description"]
+    node_schema = schema["$defs"]["LlmAgentNode"]
+    tools_description = node_schema["properties"]["python_tools"]["description"]
+
+    assert "standard JSON round trip" in code_description
+    assert "object keys must be strings" in code_description
+    assert "tuple or object dictionary keys are forbidden" in code_description
+    assert "lists of records" in code_description
+    assert "small enumerable problems" in code_description
+    assert "JSON-safe parameter and result schemas" in tools_description
+    assert "non-string dictionary keys" in tools_description
+
+
 @pytest.mark.parametrize("blueprint_model", (AgentBlueprint, LegacyAgentBlueprint))
 def test_dynamic_agent_blueprint_schema_separates_task_from_identity(
     blueprint_model: type[AgentBlueprint | LegacyAgentBlueprint],

@@ -73,7 +73,13 @@ class PythonToolSpec(BaseModel):
     code: str = Field(
         description=(
             "Trusted Python source defining the callable named by entrypoint. "
-            "It runs in the host process without sandboxing."
+            "It runs in the host process without sandboxing. Every parameter, "
+            "return value, and value crossing the tool boundary must survive a "
+            "standard JSON round trip: object keys must be strings, tuple or "
+            "object dictionary keys are forbidden, and composite keys such as "
+            "item combinations must be represented as lists of records. Prefer "
+            "direct reasoning instead of a temporary tool for small enumerable "
+            "problems."
         )
     )
     entrypoint: str | None = Field(
@@ -159,7 +165,9 @@ class LlmAgentNode(BaseModel):
         default_factory=list,
         description=(
             "Tools authored by the main agent as complete trusted Python source. "
-            "These are separate from built-in tool refs in resources."
+            "These are separate from built-in tool refs in resources. Use only "
+            "JSON-safe parameter and result schemas; never use tuple or other "
+            "non-string dictionary keys across the tool boundary."
         ),
     )
 
