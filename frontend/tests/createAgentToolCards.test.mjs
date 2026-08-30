@@ -143,7 +143,7 @@ test("keeps status indicators out of result cards", () => {
 
 test("renders empty categories as plain text and exposes raw source messages", () => {
   assert.match(cardSource, /本次检索未返回该类别的资源。/);
-  assert.match(cardSource, /未配置该资源来源，本次未执行检索。/);
+  assert.match(cardSource, /`未配置 \$\{group\.label\}，本次未检索该来源。`/);
   assert.match(cardSource, /未提供检索关键词，本次未检索 Skill Hub。/);
   assert.match(cardSource, /\{source\.message\}/);
   assert.doesNotMatch(cardSource, /当前类别没有资源/);

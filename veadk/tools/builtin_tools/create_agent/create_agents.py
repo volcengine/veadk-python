@@ -37,8 +37,12 @@ class CreateAgentsTool(FunctionTool):
                 "Create one or more sub-agents and transfer the current task to "
                 "the agent named by handoff_to. You must call collect_resources "
                 "first, use its collection_id, and select only resource refs "
-                "returned by that call. The selected sub-agent, not the main "
-                "agent, produces the final answer."
+                "returned by that call. Collected resources are candidates only "
+                "and are not mounted automatically. For every LLM node, explicitly "
+                "include each relevant Skill, knowledge base, and built-in tool in "
+                "resources; when relevant Skills were returned, bind at least one. "
+                "The selected sub-agent, not the main agent, produces the final "
+                "answer."
             ),
             parameters_json_schema=self._input_model.model_json_schema(by_alias=True),
         )

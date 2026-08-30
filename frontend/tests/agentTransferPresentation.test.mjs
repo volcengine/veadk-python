@@ -43,7 +43,7 @@ test("groups child Agent work in an identified muted execution card", () => {
   assert.match(appSource, /agentNode\?\.description/);
   assert.match(stylesSource, /\.turn--subagent\s*\{/);
   assert.match(stylesSource, /\.turn--subagent::before\s*\{[^}]*backdrop-filter:\s*blur\(18px\)/s);
-  assert.match(stylesSource, /\.turn--subagent\s*\{[^}]*margin-top:\s*8px/s);
+  assert.match(stylesSource, /\.turn--subagent\s*\{[^}]*margin-top:\s*40px/s);
   assert.match(stylesSource, /\.turn--subagent\s*\{[^}]*margin-bottom:\s*16px/s);
   assert.match(stylesSource, /\.turn--subagent\s*\{[^}]*box-shadow:\s*none/s);
   assert.match(stylesSource, /\.turn--subagent::before\s*\{[^}]*radial-gradient/s);

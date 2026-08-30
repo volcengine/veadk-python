@@ -328,7 +328,7 @@ export function CollectResourcesCard({ response, status }: CreateAgentToolCardPr
                         {group.sources.length === 0
                           ? group.value === "skill_hub"
                             ? "未提供检索关键词，本次未检索 Skill Hub。"
-                            : "未配置该资源来源，本次未执行检索。"
+                            : `未配置 ${group.label}，本次未检索该来源。`
                           : "本次检索未返回该类别的资源。"}
                       </p>
                       {group.sources

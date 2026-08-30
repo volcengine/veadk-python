@@ -103,8 +103,11 @@ class LlmAgentNode(BaseModel):
     resources: list[str] = Field(
         default_factory=list,
         description=(
-            "Resource refs returned by collect_resources, including dynamically "
-            "mounted VeADK built-in tools."
+            "Every Skill, knowledge base, or VeADK built-in tool that this LLM "
+            "node should use, expressed as an exact ref returned by "
+            "collect_resources. Resources are not mounted automatically: include "
+            "each relevant Skill ref explicitly, and leave Skills empty only when "
+            "the collected results contain no Skill relevant to the node's task."
         ),
     )
     python_tools: list[PythonToolSpec] = Field(

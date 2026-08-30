@@ -176,6 +176,11 @@ async def test_toolset_exposes_exactly_two_tools_and_dynamic_schema() -> None:
     legacy_schema = json.dumps(legacy_declaration.parameters_json_schema)
     assert '"const": "workflow"' in modern_schema
     assert '"const": "workflow"' not in legacy_schema
+    assert "Resources are not mounted automatically" in modern_schema
+    assert "include each relevant Skill ref explicitly" in modern_schema
+    assert "when relevant Skills were returned, bind at least one" in (
+        modern_declaration.description or ""
+    )
 
 
 @pytest.mark.asyncio

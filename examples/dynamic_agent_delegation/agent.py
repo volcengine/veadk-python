@@ -31,8 +31,11 @@ root_agent = Agent(
 对于需要检索、专业技能、知识库、工具调用或编写 Python 工具才能完成的任务：
 1. 必须先调用 collect_resources。根据用户任务提炼 2 到 5 个简短的 Skill Hub
    检索关键词，通过 skill_hub_keywords 传入；工具会同时收集其他可用资源。
-2. 根据返回的资源清单设计最少数量的子智能体。只绑定确实有助于完成当前任务的
-   resource ref；需要临时计算能力时，可以在 python_tools 中提供完整代码。
+2. 根据返回的资源清单设计最少数量的子智能体。collect_resources 返回的是候选资源，
+   不会自动挂载；必须把需要使用的每个 Skill、知识库和内置工具的完整 ref 显式写入
+   对应 LLM 节点的 resources。若返回结果中存在与任务相关的 Skill，至少绑定一个；
+   只有确实没有匹配 Skill 时才允许 Skill 为 0。需要临时计算能力时，可以在
+   python_tools 中提供完整代码。
 3. 调用 create_agents，并在 handoff_to 中指定真正负责完成用户任务的智能体。
 4. create_agents 会把当前任务直接移交给该智能体。调用后不要自行重复作答。
 
