@@ -882,15 +882,32 @@ def test_studio_resource_region_uses_vefaas_region_fallback() -> None:
     )
 
 
-def test_skill_and_knowledge_defaults_use_cloud_studio_region(
+@pytest.mark.parametrize(
+    ("provider", "conflicting_provider", "region"),
+    [
+        ("volcengine", "byteplus", "cn-shanghai"),
+        ("byteplus", "volcengine", "ap-southeast-1"),
+    ],
+)
+def test_skill_and_knowledge_clients_use_cloud_studio_provider_and_region(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    provider: CloudProvider,
+    conflicting_provider: CloudProvider,
+    region: str,
 ) -> None:
-    requested_regions: list[tuple[str, str]] = []
+    from agentkit.platform.context import (
+        default_cloud_provider,
+        get_default_cloud_provider,
+    )
+
+    requested_clients: list[tuple[str, object, str]] = []
 
     class FakeSkillsClient:
         def __init__(self, **kwargs: Any) -> None:
-            requested_regions.append(("skills", kwargs["region"]))
+            requested_clients.append(
+                ("skills", get_default_cloud_provider(), kwargs["region"])
+            )
 
         def list_skill_spaces(self, request: object) -> SimpleNamespace:
             del request
@@ -898,7 +915,9 @@ def test_skill_and_knowledge_defaults_use_cloud_studio_region(
 
     class FakeKnowledgeClient:
         def __init__(self, **kwargs: Any) -> None:
-            requested_regions.append(("knowledge", kwargs["region"]))
+            requested_clients.append(
+                ("knowledge", get_default_cloud_provider(), kwargs["region"])
+            )
 
         def list_knowledge_bases(self, request: object) -> SimpleNamespace:
             del request
@@ -912,19 +931,31 @@ def test_skill_and_knowledge_defaults_use_cloud_studio_region(
         "agentkit.sdk.knowledge.client.AgentkitKnowledgeClient",
         FakeKnowledgeClient,
     )
+    monkeypatch.setenv("BYTEPLUS_ACCESS_KEY", "ak")
+    monkeypatch.setenv("BYTEPLUS_SECRET_KEY", "sk")
     monkeypatch.setenv("VEADK_STUDIO_FUNCTION_ID", "function-1")
-    monkeypatch.setenv("VEADK_STUDIO_DEPLOY_REGION", "cn-shanghai")
-    app = _create_frontend_app(monkeypatch, tmp_path, studio=True)
+    monkeypatch.setenv("VEADK_STUDIO_DEPLOY_REGION", region)
+    app = _create_frontend_app(
+        monkeypatch,
+        tmp_path,
+        studio=True,
+        provider=provider,
+    )
 
-    with TestClient(app) as client:
-        skills = client.get("/web/skill-spaces")
-        knowledge = client.get("/web/knowledge-bases")
+    with default_cloud_provider(conflicting_provider):
+        with TestClient(app) as client:
+            skills = client.get("/web/skill-spaces")
+            knowledge = client.get("/web/knowledge-bases")
+        assert get_default_cloud_provider().value == conflicting_provider
 
     assert skills.status_code == 200
     assert knowledge.status_code == 200
-    assert requested_regions == [
-        ("skills", "cn-shanghai"),
-        ("knowledge", "cn-shanghai"),
+    assert [
+        (kind, context.value, client_region)
+        for kind, context, client_region in requested_clients
+    ] == [
+        ("skills", provider, region),
+        ("knowledge", provider, region),
     ]
 
 

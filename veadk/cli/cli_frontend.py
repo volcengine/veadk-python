@@ -46,6 +46,7 @@ from uuid import uuid4
 import click
 from pydantic import BaseModel, Field
 
+from frontend.server.agentkit_clients import create_agentkit_client
 from veadk.cli.agentkit_sandbox_region import is_agentkit_resource_not_found
 from veadk.cli.frontend_branding import normalize_site_title, resolve_site_logo
 from veadk.cli.managed_sidecar_source import (
@@ -2231,7 +2232,9 @@ def _run_frontend_server(
         from agentkit.sdk.tools.client import AgentkitToolsClient
 
         access_key, secret_key, session_token = _resolve_ve_credentials()
-        client = AgentkitToolsClient(
+        client = create_agentkit_client(
+            AgentkitToolsClient,
+            provider=provider,
             access_key=access_key,
             secret_key=secret_key,
             region=region,
@@ -2245,7 +2248,9 @@ def _run_frontend_server(
         from agentkit.sdk.skills.client import AgentkitSkillsClient
 
         access_key, secret_key, session_token = _resolve_ve_credentials()
-        return AgentkitSkillsClient(
+        return create_agentkit_client(
+            AgentkitSkillsClient,
+            provider=provider,
             access_key=access_key,
             secret_key=secret_key,
             region=region,
@@ -2445,7 +2450,9 @@ def _run_frontend_server(
         from agentkit.sdk.knowledge.client import AgentkitKnowledgeClient
 
         access_key, secret_key, session_token = _resolve_ve_credentials()
-        return AgentkitKnowledgeClient(
+        return create_agentkit_client(
+            AgentkitKnowledgeClient,
+            provider=provider,
             access_key=access_key,
             secret_key=secret_key,
             session_token=session_token or "",
@@ -11702,7 +11709,9 @@ def _run_frontend_server(
         from agentkit.sdk.knowledge.client import AgentkitKnowledgeClient
         from agentkit.sdk.knowledge import types as knowledge_types
 
-        client = AgentkitKnowledgeClient(
+        client = create_agentkit_client(
+            AgentkitKnowledgeClient,
+            provider=provider,
             access_key=access_key,
             secret_key=secret_key,
             session_token=session_token or "",
@@ -12122,7 +12131,9 @@ def _run_frontend_server(
                     "(set VOLCENGINE_ACCESS_KEY/SECRET_KEY)."
                 ),
             )
-        return AgentkitSkillsClient(
+        return create_agentkit_client(
+            AgentkitSkillsClient,
+            provider=provider,
             access_key=ak,
             secret_key=sk,
             region=region,

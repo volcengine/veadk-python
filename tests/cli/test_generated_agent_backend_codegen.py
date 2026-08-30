@@ -23,6 +23,7 @@ from pydantic import ValidationError
 
 from frontend.server.environments.models import EnvironmentSkillManifestEntry
 from veadk.cli.generated_agent_codegen import (
+    _DYNAMIC_AGENT_DELEGATION_RULES,
     AgentDraft,
     DeploymentConfig,
     GeneratedAgentProjectRequest,
@@ -44,6 +45,10 @@ from veadk.cli.generated_agent_security import (
 from veadk.cli.generated_agent_skills import (
     materialize_selected_skills,
     materialize_source_preserving_skills,
+)
+from veadk.tools.builtin_tools.create_agent.models import (
+    AgentBlueprint,
+    LegacyAgentBlueprint,
 )
 
 
@@ -132,6 +137,87 @@ def test_quick_mode_codegen_adds_dynamic_agent_toolset_and_managed_rules() -> No
         "uv pip install --index-url "
         "https://repo.huaweicloud.com/repository/pypi/simple -r requirements.txt"
         in dockerfile
+    )
+
+
+def test_quick_mode_dynamic_agent_prompt_separates_task_from_identity() -> None:
+    normalized_rules = " ".join(_DYNAMIC_AGENT_DELEGATION_RULES.split())
+    contracts = (
+        "agents[*].task 完整保留当前用户的具体目标、对象、输入和交付要求",
+        "只描述可重复使用的稳定能力域",
+        "请求特有信息只能出现在 agents[*].task 中",
+        "不得出现在 name、id、description 或 instruction 中",
+        "禁止通过音译、拼音、翻译、缩写、拼接或轻微改写",
+        "要求读取当前用户请求及其上下文",
+        "使用所挂载资源完整完成当前任务",
+        "不得复述或硬编码本次任务中的特有实体",
+        "不要一律退化成 generic_agent 或 general_assistant",
+        "在调用 create_agents 前逐字段自检",
+        "工具调用就是无效的，必须先改写为通用能力表达",
+        "使用“替换测试”检查",
+    )
+
+    assert all(contract in normalized_rules for contract in contracts)
+
+
+def test_quick_mode_dynamic_agent_prompt_generalizes_specific_video_request() -> None:
+    assert "给我生成葫芦娃大战钢铁侠的视频" in _DYNAMIC_AGENT_DELEGATION_RULES
+    assert "video_creation_agent" in _DYNAMIC_AGENT_DELEGATION_RULES
+    assert "video_creator" in _DYNAMIC_AGENT_DELEGATION_RULES
+    assert "huluxia_vs_ironman_video" in _DYNAMIC_AGENT_DELEGATION_RULES
+    assert "不得使用 huluxia_vs_ironman_video" in _DYNAMIC_AGENT_DELEGATION_RULES
+
+
+@pytest.mark.parametrize(
+    "request_specific_category",
+    (
+        "人物或虚构角色",
+        "品牌",
+        "产品",
+        "组织",
+        "平台或渠道",
+        "地点",
+        "日期",
+        "活动名称",
+        "具体题材",
+        "一次性问题或事件",
+        "文档标题",
+        "文件名",
+        "URL",
+    ),
+)
+def test_quick_mode_dynamic_agent_prompt_excludes_request_specific_categories(
+    request_specific_category: str,
+) -> None:
+    assert request_specific_category in _DYNAMIC_AGENT_DELEGATION_RULES
+
+
+@pytest.mark.parametrize("blueprint_model", (AgentBlueprint, LegacyAgentBlueprint))
+def test_dynamic_agent_blueprint_schema_separates_task_from_identity(
+    blueprint_model: type[AgentBlueprint | LegacyAgentBlueprint],
+) -> None:
+    properties = blueprint_model.model_json_schema()["properties"]
+    name_description = properties["name"]["description"]
+    task_description = properties["task"]["description"]
+
+    assert "Stable, reusable snake_case capability name" in name_description
+    assert "request-specific entities" in name_description
+    assert "product categories, platforms, channels" in name_description
+    assert "one-off issues or incidents" in name_description
+    assert "Complete one-off user objective" in task_description
+    assert "specific subjects, inputs, constraints" in task_description
+
+
+def test_dynamic_llm_node_schema_requires_reusable_identity_and_current_task() -> None:
+    node_schema = AgentBlueprint.model_json_schema()["$defs"]["LlmAgentNode"]
+    properties = node_schema["properties"]
+
+    assert "without request-specific entities" in properties["id"]["description"]
+    assert "without request-specific people" in properties["description"]["description"]
+    assert "read the current user request" in properties["instruction"]["description"]
+    assert (
+        "parameterizing rather than hard-coding"
+        in (properties["instruction"]["description"])
     )
 
 

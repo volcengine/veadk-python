@@ -93,10 +93,28 @@ class PythonToolSpec(BaseModel):
 class LlmAgentNode(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    id: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    id: str = Field(
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
+        description=(
+            "Stable, reusable snake_case capability identifier without "
+            "request-specific entities."
+        ),
+    )
     type: Literal["llm"]
-    description: str = ""
-    instruction: str
+    description: str = Field(
+        default="",
+        description=(
+            "Reusable capability description without request-specific people, "
+            "brands, products, platforms, topics, incidents, or filenames."
+        ),
+    )
+    instruction: str = Field(
+        description=(
+            "Durable role instructions that read the current user request and "
+            "complete it, while parameterizing rather than hard-coding its "
+            "specific entities, topic, issue, platform, product, or filename."
+        )
+    )
     model_name: str | list[str] | None = None
     model_provider: str | None = None
     model_api_base: str | None = None
@@ -122,27 +140,45 @@ class LlmAgentNode(BaseModel):
 class SequentialAgentNode(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    id: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    id: str = Field(
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
+        description="Stable reusable capability identifier.",
+    )
     type: Literal["sequential"]
-    description: str = ""
+    description: str = Field(
+        default="",
+        description="Reusable workflow role without request-specific entities.",
+    )
     children: list[str] = Field(min_length=1)
 
 
 class ParallelAgentNode(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    id: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    id: str = Field(
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
+        description="Stable reusable capability identifier.",
+    )
     type: Literal["parallel"]
-    description: str = ""
+    description: str = Field(
+        default="",
+        description="Reusable workflow role without request-specific entities.",
+    )
     children: list[str] = Field(min_length=1)
 
 
 class LoopAgentNode(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    id: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    id: str = Field(
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
+        description="Stable reusable capability identifier.",
+    )
     type: Literal["loop"]
-    description: str = ""
+    description: str = Field(
+        default="",
+        description="Reusable workflow role without request-specific entities.",
+    )
     children: list[str] = Field(min_length=1)
     max_iterations: int = Field(default=3, ge=1)
 
@@ -158,9 +194,15 @@ class WorkflowEdge(BaseModel):
 class WorkflowAgentNode(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    id: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    id: str = Field(
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
+        description="Stable reusable capability identifier.",
+    )
     type: Literal["workflow"]
-    description: str = ""
+    description: str = Field(
+        default="",
+        description="Reusable workflow role without request-specific entities.",
+    )
     edges: list[WorkflowEdge] = Field(min_length=1)
     max_concurrency: int | None = Field(default=None, ge=1)
 
@@ -185,8 +227,21 @@ class LegacyAgentBlueprint(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    name: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
-    task: str
+    name: str = Field(
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
+        description=(
+            "Stable, reusable snake_case capability name. Do not include people, "
+            "characters, brands, products, product categories, platforms, channels, "
+            "organizations, places, dates, topics, one-off issues or incidents, "
+            "document titles, filenames, URLs, or other request-specific entities."
+        ),
+    )
+    task: str = Field(
+        description=(
+            "Complete one-off user objective, including its specific subjects, "
+            "inputs, constraints, and required deliverable."
+        )
+    )
     root_node: str
     nodes: list[LegacyAgentNode] = Field(min_length=1)
 
@@ -196,8 +251,21 @@ class AgentBlueprint(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    name: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
-    task: str
+    name: str = Field(
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
+        description=(
+            "Stable, reusable snake_case capability name. Do not include people, "
+            "characters, brands, products, product categories, platforms, channels, "
+            "organizations, places, dates, topics, one-off issues or incidents, "
+            "document titles, filenames, URLs, or other request-specific entities."
+        ),
+    )
+    task: str = Field(
+        description=(
+            "Complete one-off user objective, including its specific subjects, "
+            "inputs, constraints, and required deliverable."
+        )
+    )
     root_node: str
     nodes: list[AgentNode] = Field(min_length=1)
 
