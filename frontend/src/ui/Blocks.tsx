@@ -629,18 +629,20 @@ function ToolBlock({
   status?: "running" | "completed" | "failed";
   defaultOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
+  const toolStatus = status ?? (done ? "completed" : "running");
+  const builtinTool = getBuiltinToolDefinition(name);
+  const DetailRenderer = builtinTool?.detailRenderer;
+  const shouldDefaultOpen = defaultOpen || Boolean(DetailRenderer);
+  const [open, setOpen] = useState(shouldDefaultOpen);
   const touched = useRef(false);
   useEffect(() => {
-    if (!touched.current && defaultOpen) setOpen(true);
-  }, [defaultOpen]);
+    if (!touched.current && shouldDefaultOpen) setOpen(true);
+  }, [shouldDefaultOpen]);
   const toggle = () => {
     touched.current = true;
     setOpen((value) => !value);
   };
   const label = name === A2UI_TOOL ? "渲染 UI" : name;
-  const toolStatus = status ?? (done ? "completed" : "running");
-  const builtinTool = toolStatus === "failed" ? undefined : getBuiltinToolDefinition(name);
   const studioArtifacts = studioToolArtifacts(response);
   const respText =
     response == null
@@ -661,7 +663,9 @@ function ToolBlock({
       {builtinTool ? (
         <BuiltinToolHeader
           definition={builtinTool}
-          label={loadSkillLabel(name, args)}
+          label={toolStatus === "failed"
+            ? builtinTool.failedLabel
+            : loadSkillLabel(name, args)}
           done={done}
           open={open}
           onToggle={toggle}
@@ -688,7 +692,9 @@ function ToolBlock({
       )}
       <div className={`think-collapse ${open ? "open" : ""}`}>
         <div className="think-collapse-inner">
-          <div className="tool-detail">
+          {DetailRenderer ? (
+            <DetailRenderer args={args} response={response} status={toolStatus} />
+          ) : <div className="tool-detail">
             {args != null && (
               <div className="tool-section">
                 <div className="tool-section-label">参数</div>
@@ -717,7 +723,7 @@ function ToolBlock({
                 </div>
               </div>
             )}
-          </div>
+          </div>}
         </div>
       </div>
     </motion.div>
