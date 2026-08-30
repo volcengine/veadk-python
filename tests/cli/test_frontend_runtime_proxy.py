@@ -869,6 +869,19 @@ def test_studio_resource_region_uses_cloud_studio_deployment_region(
     )
 
 
+def test_studio_resource_region_uses_vefaas_region_fallback() -> None:
+    assert (
+        _studio_resource_region(
+            "volcengine",
+            {
+                "_FAAS_FUNC_ID": "function-1",
+                "APP_REGION": "cn-shanghai",
+            },
+        )
+        == "cn-shanghai"
+    )
+
+
 def test_skill_and_knowledge_defaults_use_cloud_studio_region(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
