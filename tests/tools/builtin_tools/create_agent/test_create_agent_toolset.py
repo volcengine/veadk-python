@@ -187,7 +187,33 @@ def test_default_sources_include_public_and_private_skill_spaces(monkeypatch) ->
         "skill_hub:sp-public",
         "skill_space:ss-private",
         "agentkit_knowledge",
+        "veadk_builtin_tools",
     ]
+
+
+@pytest.mark.asyncio
+async def test_default_collection_includes_veadk_builtin_tools(monkeypatch) -> None:
+    monkeypatch.delenv("SKILL_HUB_SPACE_ID", raising=False)
+    monkeypatch.delenv("SKILL_SPACE_ID", raising=False)
+    monkeypatch.setattr(
+        "veadk.tools.builtin_tools.create_agent.sources.builtin_tools.list_builtin_tools",
+        lambda: ["web_search", "run_code"],
+    )
+    toolset = CreateAgentToolset()
+
+    result = await toolset.collect_resources()
+
+    assert [resource["ref"] for resource in result["resources"]] == [
+        "veadk_tool:web_search",
+        "veadk_tool:run_code",
+    ]
+    assert all(resource["kind"] == "tool" for resource in result["resources"])
+    assert result["sources"][-1] == {
+        "source": "veadk_builtin_tools",
+        "status": "ok",
+        "count": 2,
+        "message": None,
+    }
 
 
 @pytest.mark.asyncio
@@ -232,12 +258,79 @@ async def test_collect_then_create_nested_agents_through_function_tools() -> Non
     assert result["results"] == [
         {
             "name": "research_pipeline",
+            "description": "research",
             "root_type": "sequential",
             "status": "completed",
+            "resources": [],
+            "python_tools": [],
             "output": "reviewer",
             "error": None,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_selected_builtin_tool_is_resolved_during_create(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    builtin = object()
+    resource = StoredResource(
+        descriptor=ResourceDescriptor(
+            ref="veadk_tool:web_search",
+            kind="tool",
+            name="web_search",
+            description="Search the web.",
+            source="veadk_builtin_tools",
+            metadata={"tool_name": "web_search"},
+        ),
+        payload="web_search",
+    )
+    resolved: list[str] = []
+
+    def get_tool(name: str):
+        resolved.append(name)
+        return builtin
+
+    monkeypatch.setattr(
+        "veadk.tools.builtin_tools.create_agent.orchestrator.get_builtin_tool",
+        get_tool,
+    )
+    mounted: list[list[Any]] = []
+
+    def leaf_factory(node, tools, workflow_member, parent_agent):
+        del workflow_member, parent_agent
+        mounted.append(tools)
+        return _TextAgent(name=node.id, marker=node.id)
+
+    toolset = CreateAgentToolset(
+        resource_sources=[_StaticSource([resource])],
+        leaf_factory=leaf_factory,
+    )
+    collected = await toolset.collect_resources()
+    result = await toolset.create_agents(
+        collection_id=collected["collection_id"],
+        agents=[
+            {
+                "name": "researcher",
+                "task": "research",
+                "root_node": "worker",
+                "nodes": [
+                    {
+                        "id": "worker",
+                        "type": "llm",
+                        "description": "Find current information",
+                        "instruction": "Use web search",
+                        "resources": ["veadk_tool:web_search"],
+                    }
+                ],
+            }
+        ],
+    )
+
+    assert resolved == ["web_search"]
+    assert mounted == [[builtin]]
+    assert result["results"][0]["description"] == "Find current information"
+    assert result["results"][0]["resources"] == [resource.descriptor.model_dump()]
 
 
 @pytest.mark.skipif(

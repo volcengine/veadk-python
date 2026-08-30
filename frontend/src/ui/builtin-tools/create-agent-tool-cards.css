@@ -9,16 +9,6 @@
   font-family: var(--font-sans);
 }
 
-.create-agent-card__status-icon {
-  width: 16px;
-  height: 16px;
-  flex: 0 0 auto;
-}
-
-.create-agent-card__status-icon.is-success {
-  color: var(--color-text-success);
-}
-
 .create-agent-card__resource-list {
   border-top: 1px solid hsl(var(--border));
 }
@@ -111,13 +101,30 @@
   outline-offset: -2px;
 }
 
-.create-agent-card__resource,
-.create-agent-card__agent {
+.create-agent-card__empty-category {
+  padding: 14px 15px 16px;
+  color: hsl(var(--foreground));
+}
+
+.create-agent-card__empty-category p {
+  margin: 0;
+  font-size: var(--font-text-sm-size, 14px);
+  font-weight: var(--font-weight-normal, 400);
+  line-height: var(--font-text-sm-line-height, 20px);
+  overflow-wrap: anywhere;
+}
+
+.create-agent-card__empty-category .create-agent-card__raw-source-error {
+  margin-top: 6px;
+  color: hsl(var(--destructive));
+  white-space: pre-wrap;
+}
+
+.create-agent-card__resource {
   border-bottom: 1px dashed hsl(var(--border) / 0.82);
 }
 
-.create-agent-card__resource:last-child,
-.create-agent-card__agent:last-child {
+.create-agent-card__resource:last-child {
   border-bottom: 0;
 }
 
@@ -137,17 +144,10 @@
 }
 
 .create-agent-card__resource-name,
-.create-agent-card__agent-name,
 .create-agent-card__message-title {
   font-size: var(--font-text-sm-size, 14px);
   font-weight: var(--font-weight-medium, 500);
   line-height: var(--font-text-sm-line-height, 20px);
-}
-
-.create-agent-card__agent-head > div > span {
-  color: hsl(var(--muted-foreground));
-  font-size: var(--font-text-2xs-size, 10px);
-  line-height: var(--font-text-2xs-line-height, 14px);
 }
 
 .create-agent-card__resource-version {
@@ -155,8 +155,7 @@
   font-weight: var(--font-weight-normal, 400);
 }
 
-.create-agent-card__resource p,
-.create-agent-card__agent p {
+.create-agent-card__resource p {
   margin: 4px 0 0;
   overflow-wrap: anywhere;
   color: hsl(var(--muted-foreground));
@@ -165,51 +164,341 @@
   line-height: var(--font-text-xs-line-height, 18px);
 }
 
-.create-agent-card__agent {
-  padding: 13px 15px;
+.create-agent-tool-card.is-agent-results {
+  width: 100%;
+  margin-left: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
-.create-agent-card__agent-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
+.create-agent-card__agent-grid {
+  max-height: min(640px, 70dvh);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+  align-items: stretch;
+  grid-auto-rows: 168px;
   gap: 12px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
-.create-agent-card__agent-head > div {
-  min-width: 0;
-  display: flex;
-  align-items: baseline;
+.create-agent-card__agent-card.resource-card {
+  height: 168px;
+  min-height: 168px;
+  gap: 0;
+  padding: 16px;
+  overflow: visible;
+  animation: none;
+  transition: none;
+}
+
+.create-agent-card__agent-card.resource-card:hover,
+.create-agent-card__agent-card.resource-card:focus-within {
+  border-color: rgba(229, 230, 235, 0.7);
+  box-shadow: none;
+}
+
+.create-agent-card__agent-card .resource-card__content {
   gap: 8px;
+  overflow: visible;
 }
 
-.create-agent-card__agent-metrics {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 14px;
-  margin-top: 9px;
+.create-agent-card__agent-card .resource-card__header {
+  height: auto;
+  min-height: 32px;
+  align-items: center;
+}
+
+.create-agent-card__agent-card .resource-card__identity {
+  align-items: center;
+}
+
+.create-agent-card__agent-card .resource-card__identity-mark {
+  width: 28px;
+  height: 28px;
+  flex-basis: 28px;
+}
+
+.create-agent-card__agent-card .resource-card__title-copy h3 {
+  font-size: var(--font-text-sm-size, 14px);
+  line-height: var(--font-text-sm-line-height, 20px);
+}
+
+.create-agent-card__agent-card .resource-card__title-copy > :last-child:not(h3) {
+  margin-top: 3px;
+}
+
+.create-agent-card__agent-card .resource-card__description {
+  min-height: 36px;
+  max-height: 36px;
+  display: -webkit-box;
+  overflow: hidden;
   color: hsl(var(--muted-foreground));
   font-size: var(--font-text-xs-size, 12px);
   line-height: var(--font-text-xs-line-height, 18px);
-  font-variant-numeric: tabular-nums;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.create-agent-card__agent-resources {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 4px;
+}
+
+.create-agent-card__resource-metric {
+  height: 28px;
+  min-width: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 9px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: transparent;
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: var(--font-text-xs-size, 12px);
+  font-weight: var(--font-weight-medium, 500);
+  line-height: 1;
+  cursor: default;
+}
+
+.create-agent-card__resource-metric:not(:disabled) {
+  cursor: pointer;
+}
+
+.create-agent-card__resource-metric:focus-visible {
+  outline: 2px solid hsl(var(--ring) / 0.42);
+  outline-offset: 2px;
+}
+
+.create-agent-card__resource-metric:disabled {
+  color: hsl(var(--muted-foreground));
+  opacity: 0.52;
+}
+
+.create-agent-card__resource-metric svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+}
+
+.create-agent-card__resource-popover {
+  width: min(340px, calc(100vw - 24px));
+  max-height: min(360px, 60dvh);
+  padding: 10px 12px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.create-agent-card__popover-section + .create-agent-card__popover-section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed hsl(var(--border));
+}
+
+.create-agent-card__popover-section h4 {
+  margin: 0 0 7px;
+  color: hsl(var(--foreground));
+  font-size: var(--font-text-xs-size, 12px);
+  font-weight: var(--font-weight-medium, 500);
+  line-height: var(--font-text-xs-line-height, 18px);
+}
+
+.create-agent-card__popover-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.create-agent-card__popover-item {
+  padding: 8px 0;
+  border-bottom: 1px dashed hsl(var(--border) / 0.82);
+}
+
+.create-agent-card__popover-item:first-child {
+  padding-top: 0;
+}
+
+.create-agent-card__popover-item:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.create-agent-card__popover-item-heading {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.create-agent-card__popover-item-heading strong {
+  min-width: 0;
+  overflow: hidden;
+  color: hsl(var(--foreground));
+  font-size: var(--font-text-xs-size, 12px);
+  font-weight: var(--font-weight-medium, 500);
+  line-height: var(--font-text-xs-line-height, 18px);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.create-agent-card__popover-item p {
+  margin: 3px 0 0;
+  color: hsl(var(--muted-foreground));
+  font-size: var(--font-text-2xs-size, 10px);
+  font-weight: var(--font-weight-normal, 400);
+  line-height: var(--font-text-2xs-line-height, 14px);
+  overflow-wrap: anywhere;
+}
+
+.create-agent-card__python-tool {
+  border-top: 1px dashed hsl(var(--border) / 0.82);
+}
+
+.create-agent-card__python-tool:last-child {
+  border-bottom: 0;
+}
+
+.create-agent-card__python-tool-header {
+  margin: 0;
+}
+
+.create-agent-card__python-tool-trigger {
+  width: 100%;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 0;
+  border: 0;
+  background: transparent;
+  color: hsl(var(--foreground));
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.create-agent-card__python-tool-trigger > span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.create-agent-card__python-tool-trigger > .create-agent-card__python-tool-meta {
+  flex: 0 0 auto;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+
+.create-agent-card__python-tool-trigger strong {
+  font-size: var(--font-text-xs-size, 12px);
+  font-weight: var(--font-weight-medium, 500);
+  line-height: var(--font-text-xs-line-height, 18px);
+}
+
+.create-agent-card__python-tool-trigger small {
+  overflow: hidden;
+  color: hsl(var(--muted-foreground));
+  font-size: var(--font-text-2xs-size, 10px);
+  font-weight: var(--font-weight-normal, 400);
+  line-height: var(--font-text-2xs-line-height, 14px);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.create-agent-card__python-tool-trigger:focus-visible {
+  outline: 2px solid hsl(var(--ring) / 0.35);
+  outline-offset: 2px;
+}
+
+.create-agent-card__python-tool-chevron {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  color: hsl(var(--muted-foreground));
+  transition: transform 160ms ease-out;
+}
+
+.create-agent-card__python-tool-trigger[data-panel-open]
+  .create-agent-card__python-tool-chevron {
+  transform: rotate(180deg);
+}
+
+.create-agent-card__python-tool-panel {
+  height: var(--accordion-panel-height);
+  overflow: hidden;
+  opacity: 1;
+  transition:
+    height 180ms ease-out,
+    opacity 140ms ease-out;
+}
+
+.create-agent-card__python-tool-panel[data-starting-style],
+.create-agent-card__python-tool-panel[data-ending-style] {
+  height: 0;
+  opacity: 0;
+}
+
+.create-agent-card__python-tool-panel pre {
+  max-height: 220px;
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  overflow: auto;
+  border-radius: 8px;
+  background: hsl(var(--muted) / 0.52);
+  color: hsl(var(--foreground));
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  font-weight: var(--font-weight-normal, 400);
+  line-height: 17px;
+  white-space: pre;
+}
+
+.create-agent-card__python-tool-panel pre:focus-visible {
+  outline: 2px solid hsl(var(--ring) / 0.35);
+  outline-offset: -2px;
+}
+
+.create-agent-card__python-tool-dependencies {
+  margin-bottom: 6px;
+  color: hsl(var(--muted-foreground));
+  font-size: var(--font-text-2xs-size, 10px);
+  line-height: var(--font-text-2xs-line-height, 14px);
+  overflow-wrap: anywhere;
 }
 
 .create-agent-card__agent-result {
-  margin-top: 10px;
-  padding: 9px 10px;
-  border-radius: 8px;
-  background: hsl(var(--muted) / 0.48);
+  max-height: 18px;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: transparent;
   font-size: var(--font-text-xs-size, 12px);
   font-weight: var(--font-weight-normal, 400);
   line-height: var(--font-text-xs-line-height, 18px);
-  white-space: pre-wrap;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   overflow-wrap: anywhere;
 }
 
 .create-agent-card__agent-result.is-error,
 .create-agent-card__message.is-error {
-  background: hsl(var(--destructive) / 0.08);
   color: hsl(var(--destructive));
+}
+
+.create-agent-card__message.is-error {
+  background: hsl(var(--destructive) / 0.08);
 }
 
 .create-agent-card__message {
@@ -266,15 +555,33 @@
 }
 
 @media (max-width: 560px) {
-  .create-agent-card__resource,
-  .create-agent-card__agent {
+  .create-agent-card__resource {
     padding-inline: 12px;
+  }
+
+  .create-agent-card__agent-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .create-agent-card__agent-card.resource-card {
+    padding: 14px;
+  }
+
+  .create-agent-card__agent-resources {
+    gap: 6px;
+  }
+
+  .create-agent-card__resource-metric {
+    min-width: 40px;
+    padding-inline: 8px;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .create-agent-card__accordion-content,
-  .create-agent-card__accordion-chevron {
+  .create-agent-card__accordion-chevron,
+  .create-agent-card__python-tool-panel,
+  .create-agent-card__python-tool-chevron {
     transition: none;
   }
 

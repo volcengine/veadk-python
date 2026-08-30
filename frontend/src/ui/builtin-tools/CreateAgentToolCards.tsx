@@ -1,15 +1,29 @@
-import { useMemo, type SVGProps } from "react";
+import { useMemo, type ReactNode, type SVGProps } from "react";
 import { Accordion } from "@base-ui/react/accordion";
 import { Badge } from "@openai/apps-sdk-ui/components/Badge";
-import { LoadingIndicator } from "@openai/apps-sdk-ui/components/Indicator";
-import { Check } from "@openai/apps-sdk-ui/components/Icon";
+import {
+  InternalKnowledge,
+  Tools,
+  ToolsSkills,
+  Users,
+} from "@openai/apps-sdk-ui/components/Icon";
+import { Popover } from "@openai/apps-sdk-ui/components/Popover";
 import {
   filterCollectedResourcesByCategory,
   parseCollectedResources,
   parseCreatedAgents,
+  type CreatedAgentResourceView,
+  type CreatedSubAgentView,
+  type PythonToolView,
   type ResourceCategory,
   type ToolExecutionStatus,
 } from "./createAgentToolCardData";
+import {
+  ResourceCard,
+  ResourceCardDescription,
+  ResourceCardHeader,
+  ResourceIdentityMark,
+} from "../ResourceCollection";
 import "./create-agent-tool-cards.css";
 
 export interface CreateAgentToolCardProps {
@@ -22,6 +36,7 @@ const RESOURCE_CATEGORIES: Array<{ value: ResourceCategory; label: string }> = [
   { value: "skill_hub", label: "Skill Hub" },
   { value: "skill_space", label: "AgentKit 技能中心" },
   { value: "knowledge_base", label: "知识库" },
+  { value: "tool", label: "工具" },
 ];
 
 const AGENT_TYPE_LABELS: Record<string, string> = {
@@ -31,27 +46,6 @@ const AGENT_TYPE_LABELS: Record<string, string> = {
   loop: "循环 Agent",
   workflow: "Workflow",
 };
-
-function statusIndicator(status: ToolExecutionStatus) {
-  if (status === "completed") {
-    return (
-      <Check
-        className="create-agent-card__status-icon is-success"
-        aria-label="已完成"
-      />
-    );
-  }
-  if (status === "failed") {
-    return <Badge color="danger" size="sm" variant="soft">失败</Badge>;
-  }
-  return (
-    <LoadingIndicator
-      className="create-agent-card__status-icon"
-      size={16}
-      aria-label="进行中"
-    />
-  );
-}
 
 function AccordionChevron(props: SVGProps<SVGSVGElement>) {
   return (
@@ -98,11 +92,153 @@ function LoadingRows({ label }: { label: string }) {
   );
 }
 
+function resourceTypeLabel(resource: CreatedAgentResourceView) {
+  if (resource.kind === "tool") return "内置工具";
+  if (resource.kind === "knowledge_base") return "知识库";
+  if (resource.source.startsWith("skill_hub:")) return "Skill Hub";
+  if (resource.source.startsWith("skill_space:")) return "AgentKit 技能中心";
+  return "Skill";
+}
+
+function AgentResourceList({
+  label,
+  resources,
+}: {
+  label: string;
+  resources: CreatedAgentResourceView[];
+}) {
+  if (resources.length === 0) return null;
+  return (
+    <section className="create-agent-card__popover-section">
+      <h4>{label}</h4>
+      <div className="create-agent-card__popover-list">
+        {resources.map((resource) => (
+          <div className="create-agent-card__popover-item" key={resource.ref}>
+            <div className="create-agent-card__popover-item-heading">
+              <strong>{resource.name}</strong>
+              <Badge color="secondary" size="sm" variant="soft">
+                {resourceTypeLabel(resource)}
+              </Badge>
+            </div>
+            {resource.description ? <p>{resource.description}</p> : null}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function PythonToolList({ tools }: { tools: PythonToolView[] }) {
+  if (tools.length === 0) return null;
+  return (
+    <section className="create-agent-card__popover-section">
+      <h4>自写工具</h4>
+      <Accordion.Root>
+        {tools.map((tool, index) => (
+          <Accordion.Item
+            className="create-agent-card__python-tool"
+            key={`${tool.name}:${index}`}
+            value={`${tool.name}:${index}`}
+          >
+            <Accordion.Header className="create-agent-card__python-tool-header">
+              <Accordion.Trigger className="create-agent-card__python-tool-trigger">
+                <span>
+                  <strong>{tool.name}</strong>
+                  {tool.description ? <small>{tool.description}</small> : null}
+                </span>
+                <span className="create-agent-card__python-tool-meta">
+                  <Badge color="secondary" size="sm" variant="soft">自写工具</Badge>
+                  <AccordionChevron className="create-agent-card__python-tool-chevron" />
+                </span>
+              </Accordion.Trigger>
+            </Accordion.Header>
+            <Accordion.Panel className="create-agent-card__python-tool-panel">
+              {tool.dependencies.length > 0 ? (
+                <div className="create-agent-card__python-tool-dependencies">
+                  依赖：{tool.dependencies.join(", ")}
+                </div>
+              ) : null}
+              <pre tabIndex={0} aria-label={`${tool.name} 完整代码`}>
+                <code>{tool.code}</code>
+              </pre>
+            </Accordion.Panel>
+          </Accordion.Item>
+        ))}
+      </Accordion.Root>
+    </section>
+  );
+}
+
+function SubAgentList({ agents }: { agents: CreatedSubAgentView[] }) {
+  if (agents.length === 0) return null;
+  return (
+    <section className="create-agent-card__popover-section">
+      <h4>Sub Agent</h4>
+      <div className="create-agent-card__popover-list">
+        {agents.map((agent) => (
+          <div className="create-agent-card__popover-item" key={agent.id}>
+            <div className="create-agent-card__popover-item-heading">
+              <strong>{agent.id}</strong>
+              <Badge color="secondary" size="sm" variant="soft">
+                {AGENT_TYPE_LABELS[agent.type] ?? agent.type}
+              </Badge>
+            </div>
+            {agent.description ? <p>{agent.description}</p> : null}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ResourceMetric({
+  label,
+  count,
+  icon,
+  children,
+}: {
+  label: string;
+  count: number;
+  icon: ReactNode;
+  children: ReactNode;
+}) {
+  const metric = (
+    <button
+      className="create-agent-card__resource-metric"
+      type="button"
+      disabled={count === 0}
+      aria-label={`${label} ${count} 项`}
+    >
+      {icon}
+      <span>{count}</span>
+    </button>
+  );
+
+  if (count === 0) {
+    return metric;
+  }
+
+  return (
+    <Popover showOnHover hoverOpenDelay={120}>
+      <Popover.Trigger>{metric}</Popover.Trigger>
+      <Popover.Content
+        side="top"
+        align="start"
+        minWidth="auto"
+        maxWidth={360}
+        className="create-agent-card__resource-popover"
+      >
+        {children}
+      </Popover.Content>
+    </Popover>
+  );
+}
+
 export function CollectResourcesCard({ response, status }: CreateAgentToolCardProps) {
   const data = useMemo(() => parseCollectedResources(response), [response]);
   const groups = useMemo(() => RESOURCE_CATEGORIES.map((item) => ({
     ...item,
-    resources: filterCollectedResourcesByCategory(data, item.value).resources,
+    ...filterCollectedResourcesByCategory(data, item.value),
   })), [data]);
   const defaultCategory = groups.find(
     (group) => group.resources.length > 0,
@@ -173,9 +309,18 @@ export function CollectResourcesCard({ response, status }: CreateAgentToolCardPr
                       ))}
                     </div>
                   ) : (
-                    <div className="create-agent-card__message">
-                      <span className="create-agent-card__message-title">当前类别没有资源</span>
-                      <span>本次检索未返回该类别的资源。</span>
+                    <div className="create-agent-card__empty-category">
+                      <p>本次检索未返回该类别的资源。</p>
+                      {group.sources
+                        .filter((source) => source.message)
+                        .map((source) => (
+                          <p
+                            className="create-agent-card__raw-source-error"
+                            key={source.source}
+                          >
+                            {source.message}
+                          </p>
+                        ))}
                     </div>
                   )}
                 </div>
@@ -193,7 +338,7 @@ export function CreateAgentsCard({ args, response, status }: CreateAgentToolCard
   const topLevelError = status === "failed" ? responseError(response) : "";
 
   return (
-    <section className="create-agent-tool-card" aria-label="创建 Agent 结果">
+    <section className="create-agent-tool-card is-agent-results" aria-label="创建 Agent 结果">
       {topLevelError ? (
         <div className="create-agent-card__message is-error" role="alert">
           <span className="create-agent-card__message-title">Agent 创建未完成</span>
@@ -202,33 +347,62 @@ export function CreateAgentsCard({ args, response, status }: CreateAgentToolCard
       ) : null}
 
       {data.agents.length > 0 ? (
-        <div className="create-agent-card__agent-list">
+        <div className="create-agent-card__agent-grid">
           {data.agents.map((agent) => {
             const agentStatus = status === "failed" ? "failed" : agent.status;
+            const toolCount = agent.builtinTools.length + agent.pythonTools.length;
             return (
-              <div className="create-agent-card__agent" key={agent.name}>
-                <div className="create-agent-card__agent-head">
-                  <div>
-                    <span className="create-agent-card__agent-name">{agent.name}</span>
-                    <span>{AGENT_TYPE_LABELS[agent.rootType] ?? agent.rootType}</span>
-                  </div>
-                  {statusIndicator(agentStatus)}
-                </div>
-                {agent.task ? <p>{agent.task}</p> : null}
-                <div className="create-agent-card__agent-metrics" aria-label={`${agent.name} 配置摘要`}>
-                  <span>{agent.nodeCount} 个节点</span>
-                  <span>{agent.resourceCount} 项资源</span>
-                  <span>{agent.pythonToolCount} 个 Python 工具</span>
-                </div>
-                {agent.output ? (
-                  <div className="create-agent-card__agent-result">{agent.output}</div>
+              <ResourceCard className="create-agent-card__agent-card" key={agent.name}>
+                <ResourceCardHeader
+                  leading={<ResourceIdentityMark seed={agent.name} />}
+                  title={agent.name}
+                  titleText={agent.name}
+                  status={(
+                    <Badge color="secondary" size="sm" variant="soft">
+                      {AGENT_TYPE_LABELS[agent.rootType] ?? agent.rootType}
+                    </Badge>
+                  )}
+                />
+                {agent.description ? (
+                  <ResourceCardDescription>{agent.description}</ResourceCardDescription>
                 ) : null}
                 {agent.error || (agentStatus === "failed" && topLevelError) ? (
                   <div className="create-agent-card__agent-result is-error" role="alert">
                     {agent.error || topLevelError}
                   </div>
                 ) : null}
-              </div>
+                <div className="create-agent-card__agent-resources" aria-label={`${agent.name} 具备的资源`}>
+                  <ResourceMetric
+                    label="Skill"
+                    count={agent.skills.length}
+                    icon={<ToolsSkills aria-hidden="true" />}
+                  >
+                    <AgentResourceList label="Skill" resources={agent.skills} />
+                  </ResourceMetric>
+                  <ResourceMetric
+                    label="知识库"
+                    count={agent.knowledgeBases.length}
+                    icon={<InternalKnowledge aria-hidden="true" />}
+                  >
+                    <AgentResourceList label="知识库" resources={agent.knowledgeBases} />
+                  </ResourceMetric>
+                  <ResourceMetric
+                    label="工具"
+                    count={toolCount}
+                    icon={<Tools aria-hidden="true" />}
+                  >
+                    <AgentResourceList label="内置工具" resources={agent.builtinTools} />
+                    <PythonToolList tools={agent.pythonTools} />
+                  </ResourceMetric>
+                  <ResourceMetric
+                    label="Sub Agent"
+                    count={agent.subAgentCount}
+                    icon={<Users aria-hidden="true" />}
+                  >
+                    <SubAgentList agents={agent.subAgents} />
+                  </ResourceMetric>
+                </div>
+              </ResourceCard>
             );
           })}
         </div>

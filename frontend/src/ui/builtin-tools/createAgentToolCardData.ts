@@ -1,9 +1,9 @@
-export type ResourceCategory = "skill_hub" | "skill_space" | "knowledge_base";
+export type ResourceCategory = "skill_hub" | "skill_space" | "knowledge_base" | "tool";
 export type ToolExecutionStatus = "running" | "completed" | "failed";
 
 export interface CollectedResourceView {
   ref: string;
-  kind: "skill" | "knowledge_base";
+  kind: "skill" | "knowledge_base" | "tool";
   category: ResourceCategory;
   name: string;
   description: string;
@@ -34,14 +34,44 @@ export interface CollectedResourcesView {
 
 export interface CreatedAgentView {
   name: string;
+  description: string;
   task: string;
   rootType: string;
   nodeCount: number;
+  subAgentCount: number;
   resourceCount: number;
   pythonToolCount: number;
+  skills: CreatedAgentResourceView[];
+  knowledgeBases: CreatedAgentResourceView[];
+  builtinTools: CreatedAgentResourceView[];
+  pythonTools: PythonToolView[];
+  subAgents: CreatedSubAgentView[];
   status: ToolExecutionStatus;
   output: string;
   error: string;
+}
+
+export interface CreatedAgentResourceView {
+  ref: string;
+  kind: "skill" | "knowledge_base" | "tool";
+  name: string;
+  description: string;
+  version: string;
+  source: string;
+}
+
+export interface CreatedSubAgentView {
+  id: string;
+  type: string;
+  description: string;
+}
+
+export interface PythonToolView {
+  name: string;
+  description: string;
+  code: string;
+  entrypoint: string;
+  dependencies: string[];
 }
 
 export interface CreatedAgentsView {
@@ -85,6 +115,7 @@ function unwrapPayload(value: unknown): Record<string, unknown> {
 }
 
 function resourceCategory(resource: Record<string, unknown>): ResourceCategory {
+  if (resource.kind === "tool") return "tool";
   if (resource.kind === "knowledge_base") return "knowledge_base";
   const metadata = asRecord(resource.metadata);
   const sourceType = asString(metadata?.source_type).toLowerCase();
@@ -96,6 +127,7 @@ function resourceCategory(resource: Record<string, unknown>): ResourceCategory {
 }
 
 function sourceLabel(source: string): string {
+  if (source === "veadk_builtin_tools") return "工具";
   if (source === "agentkit_knowledge") return "AgentKit 知识库";
   if (source.startsWith("skill_hub:")) return `Skill Hub ${source.slice(10)}`;
   if (source.startsWith("skill_space:")) return `AgentKit 技能中心 ${source.slice(12)}`;
@@ -103,6 +135,7 @@ function sourceLabel(source: string): string {
 }
 
 function sourceCategory(source: string): ResourceCategory {
+  if (source === "veadk_builtin_tools") return "tool";
   if (source === "agentkit_knowledge") return "knowledge_base";
   if (source.startsWith("skill_hub:")) return "skill_hub";
   return "skill_space";
@@ -114,7 +147,9 @@ export function parseCollectedResources(response: unknown): CollectedResourcesVi
   const resources = asArray(payload.resources).flatMap((value) => {
     const resource = asRecord(value);
     if (!resource) return [];
-    const kind = resource.kind === "knowledge_base" ? "knowledge_base" : "skill";
+    const kind = resource.kind === "tool"
+      ? "tool"
+      : resource.kind === "knowledge_base" ? "knowledge_base" : "skill";
     return [{
       ref: asString(resource.ref),
       kind,
@@ -157,6 +192,7 @@ export function parseCollectedResources(response: unknown): CollectedResourcesVi
       skill_hub: resources.filter((resource) => resource.category === "skill_hub").length,
       skill_space: resources.filter((resource) => resource.category === "skill_space").length,
       knowledge_base: resources.filter((resource) => resource.category === "knowledge_base").length,
+      tool: resources.filter((resource) => resource.category === "tool").length,
     },
   };
 }
@@ -200,27 +236,43 @@ export function parseCreatedAgents(args: unknown, response: unknown): CreatedAge
     });
     const rootId = asString(blueprint.root_node);
     const rootNode = nodes.find((node) => asString(node.id) === rootId);
+    const subAgents = nodes
+      .filter((node) => asString(node.id) !== rootId)
+      .map((node) => ({
+        id: asString(node.id) || "未命名 Agent",
+        type: asString(node.type) || "llm",
+        description: asString(node.description),
+      } satisfies CreatedSubAgentView));
     const result = results.get(name);
     const resultStatus = asString(result?.status);
     const status: ToolExecutionStatus = resultStatus === "failed"
       ? "failed"
       : resultStatus === "completed" ? "completed" : "running";
-    const resourceCount = nodes.reduce(
-      (total, node) => total + asArray(node.resources).length,
-      0,
-    );
-    const pythonToolCount = nodes.reduce(
-      (total, node) => total + asArray(node.python_tools).length,
-      0,
-    );
+    const responseResources = normalizeAgentResources(result?.resources);
+    const resources = responseResources.length > 0
+      ? responseResources
+      : normalizeAgentResources(nodes.flatMap((node) => asArray(node.resources)));
+    const responsePythonTools = normalizePythonTools(result?.python_tools);
+    const pythonTools = responsePythonTools.length > 0
+      ? responsePythonTools
+      : normalizePythonTools(nodes.flatMap((node) => asArray(node.python_tools)));
 
     return {
       name,
+      description: asString(result?.description)
+        || asString(rootNode?.description)
+        || asString(blueprint.task),
       task: asString(blueprint.task),
       rootType: asString(result?.root_type) || asString(rootNode?.type) || "llm",
       nodeCount: nodes.length,
-      resourceCount,
-      pythonToolCount,
+      subAgentCount: subAgents.length,
+      resourceCount: resources.length,
+      pythonToolCount: pythonTools.length,
+      skills: resources.filter((resource) => resource.kind === "skill"),
+      knowledgeBases: resources.filter((resource) => resource.kind === "knowledge_base"),
+      builtinTools: resources.filter((resource) => resource.kind === "tool"),
+      pythonTools,
+      subAgents,
       status,
       output: asString(result?.output),
       error: asString(result?.error),
@@ -234,4 +286,49 @@ export function parseCreatedAgents(args: unknown, response: unknown): CreatedAge
     failedCount: agents.filter((agent) => agent.status === "failed").length,
     runningCount: agents.filter((agent) => agent.status === "running").length,
   };
+}
+
+function normalizeAgentResources(value: unknown): CreatedAgentResourceView[] {
+  const seen = new Set<string>();
+  return asArray(value).flatMap((item) => {
+    const resource = asRecord(item);
+    const ref = resource ? asString(resource.ref) : asString(item);
+    if (!ref || seen.has(ref)) return [];
+    seen.add(ref);
+    const rawKind = asString(resource?.kind);
+    const kind: CreatedAgentResourceView["kind"] = rawKind === "tool"
+      || ref.startsWith("veadk_tool:")
+      ? "tool"
+      : rawKind === "knowledge_base" || ref.startsWith("agentkit_kb:")
+        ? "knowledge_base"
+        : "skill";
+    const refParts = ref.split(":");
+    return [{
+      ref,
+      kind,
+      name: asString(resource?.name) || refParts[refParts.length - 1] || ref,
+      description: asString(resource?.description),
+      version: asString(resource?.version),
+      source: asString(resource?.source),
+    } satisfies CreatedAgentResourceView];
+  });
+}
+
+function normalizePythonTools(value: unknown): PythonToolView[] {
+  const seen = new Set<string>();
+  return asArray(value).flatMap((item) => {
+    const tool = asRecord(item);
+    const name = asString(tool?.name);
+    const code = asString(tool?.code);
+    const key = `${name}\u0000${code}`;
+    if (!tool || !name || seen.has(key)) return [];
+    seen.add(key);
+    return [{
+      name,
+      description: asString(tool.description),
+      code,
+      entrypoint: asString(tool.entrypoint) || name,
+      dependencies: asArray(tool.dependencies).map(asString).filter(Boolean),
+    } satisfies PythonToolView];
+  });
 }

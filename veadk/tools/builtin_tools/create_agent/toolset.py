@@ -41,6 +41,7 @@ from veadk.tools.builtin_tools.create_agent.orchestrator import AgentOrchestrato
 from veadk.tools.builtin_tools.create_agent.resource_store import ResourceStore
 from veadk.tools.builtin_tools.create_agent.sources import (
     AgentKitKnowledgeSource,
+    BuiltinToolResourceSource,
     ResourceSource,
     SkillResourceSource,
 )
@@ -162,6 +163,7 @@ def _default_sources(
     return [
         *(SkillResourceSource(source_id) for source_id in unique_source_ids),
         AgentKitKnowledgeSource(),
+        BuiltinToolResourceSource(),
     ]
 
 

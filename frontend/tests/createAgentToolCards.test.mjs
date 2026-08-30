@@ -44,6 +44,7 @@ test("normalizes collected resources and separates every resource source", async
         { source: "skill_hub:sp-public", status: "ok", count: 1 },
         { source: "skill_space:private-space", status: "ok", count: 1 },
         { source: "agentkit_knowledge", status: "skipped", count: 0, message: "No STS" },
+        { source: "veadk_builtin_tools", status: "ok", count: 1 },
       ],
       resources: [
         {
@@ -66,6 +67,12 @@ test("normalizes collected resources and separates every resource source", async
           name: "Product docs",
           source: "agentkit_knowledge",
         },
+        {
+          ref: "veadk_tool:web_search",
+          kind: "tool",
+          name: "web_search",
+          source: "veadk_builtin_tools",
+        },
       ],
     },
   });
@@ -73,18 +80,19 @@ test("normalizes collected resources and separates every resource source", async
   assert.equal(parsed.collectionId, "collection-1");
   assert.equal(parsed.capabilities.googleAdkVersion, "2.1.0");
   assert.deepEqual(parsed.counts, {
-    all: 3,
+    all: 4,
     skill_hub: 1,
     skill_space: 1,
     knowledge_base: 1,
+    tool: 1,
   });
   assert.deepEqual(
     parsed.resources.map((resource) => resource.category),
-    ["skill_hub", "skill_space", "knowledge_base"],
+    ["skill_hub", "skill_space", "knowledge_base", "tool"],
   );
   assert.deepEqual(
     parsed.sources.map((source) => source.category),
-    ["skill_hub", "skill_space", "knowledge_base"],
+    ["skill_hub", "skill_space", "knowledge_base", "tool"],
   );
   assert.equal(parsed.sources[2].status, "skipped");
   assert.deepEqual(
@@ -102,22 +110,16 @@ test("uses a single-category accordion and keeps implementation hints private", 
   assert.match(cardSource, /<Accordion\.Panel/);
   assert.match(cardSource, /filterCollectedResourcesByCategory\(data, item\.value\)/);
   assert.match(cardSource, /AgentKit 技能中心/);
+  assert.match(cardSource, /value: "tool", label: "工具"/);
   assert.doesNotMatch(cardSource, /<SegmentedControl/);
   assert.doesNotMatch(cardSource, /Google ADK \$\{data\.capabilities\.googleAdkVersion\}/);
   assert.doesNotMatch(cardSource, /最多嵌套/);
 });
 
-test("uses native status indicators instead of text badges for active and completed states", () => {
-  assert.match(
-    cardSource,
-    /import \{ LoadingIndicator \} from "@openai\/apps-sdk-ui\/components\/Indicator"/,
-  );
-  assert.match(
-    cardSource,
-    /import \{ Check \} from "@openai\/apps-sdk-ui\/components\/Icon"/,
-  );
-  assert.match(cardSource, /<LoadingIndicator[\s\S]*?aria-label="进行中"/);
-  assert.match(cardSource, /<Check[\s\S]*?aria-label="已完成"/);
+test("keeps status indicators out of result cards", () => {
+  assert.doesNotMatch(cardSource, /LoadingIndicator/);
+  assert.doesNotMatch(cardSource, /\bCheck\b/);
+  assert.doesNotMatch(cardSource, /aria-label="已完成"/);
   assert.doesNotMatch(cardSource, /<Badge[^>]*>进行中<\/Badge>/);
   assert.doesNotMatch(cardSource, /<Badge[^>]*>已完成<\/Badge>/);
   assert.doesNotMatch(cardSource, /create-agent-card__summary/);
@@ -130,7 +132,21 @@ test("uses native status indicators instead of text badges for active and comple
   assert.match(cardStyles, /\.create-agent-card__resource-version\s*\{[\s\S]*?font-weight:\s*var\(--font-weight-normal, 400\);/);
   assert.match(cardStyles, /\.create-agent-card__resource-title\s*\{[\s\S]*?align-items:\s*center;/);
   assert.match(cardStyles, /border-bottom:\s*1px dashed hsl\(var\(--border\)/);
-  assert.match(cardStyles, /\.create-agent-card__resource p,[\s\S]*?overflow-wrap:\s*anywhere;/);
+  assert.match(cardStyles, /\.create-agent-card__resource p\s*\{[\s\S]*?overflow-wrap:\s*anywhere;/);
+});
+
+test("renders empty categories as plain text and exposes raw source messages", () => {
+  assert.match(cardSource, /本次检索未返回该类别的资源。/);
+  assert.match(cardSource, /\{source\.message\}/);
+  assert.doesNotMatch(cardSource, /当前类别没有资源/);
+  assert.match(
+    cardStyles,
+    /\.create-agent-card__empty-category\s*\{[\s\S]*?color:\s*hsl\(var\(--foreground\)\);/,
+  );
+  assert.match(
+    cardStyles,
+    /\.create-agent-card__empty-category \.create-agent-card__raw-source-error\s*\{[\s\S]*?color:\s*hsl\(var\(--destructive\)\);/,
+  );
 });
 
 test("bounds expanded resource details in a keyboard-scrollable region", () => {
@@ -168,7 +184,7 @@ test("combines create_agents input blueprints with partial execution results", a
               id: "researcher",
               type: "llm",
               instruction: "Research",
-              resources: ["sp-public:research"],
+              resources: ["sp-public:research", "veadk_tool:web_search"],
               python_tools: [{ name: "score", description: "Score", code: "def score(): pass" }],
             },
           ],
@@ -184,7 +200,29 @@ test("combines create_agents input blueprints with partial execution results", a
     JSON.stringify({
       collection_id: "collection-1",
       results: [
-        { name: "research_team", root_type: "sequential", status: "completed", output: "Done" },
+        {
+          name: "research_team",
+          description: "Research and score sources",
+          root_type: "sequential",
+          status: "completed",
+          resources: [
+            {
+              ref: "sp-public:research",
+              kind: "skill",
+              name: "Research",
+              version: "v1",
+            },
+            {
+              ref: "veadk_tool:web_search",
+              kind: "tool",
+              name: "web_search",
+            },
+          ],
+          python_tools: [
+            { name: "score", description: "Score", code: "def score(): pass" },
+          ],
+          output: "Done",
+        },
         { name: "writer", root_type: "llm", status: "failed", error: "Model unavailable" },
       ],
     }),
@@ -194,14 +232,61 @@ test("combines create_agents input blueprints with partial execution results", a
   assert.equal(parsed.failedCount, 1);
   assert.deepEqual(parsed.agents[0], {
     name: "research_team",
+    description: "Research and score sources",
     task: "Research the market",
     rootType: "sequential",
     nodeCount: 2,
-    resourceCount: 1,
+    subAgentCount: 1,
+    resourceCount: 2,
     pythonToolCount: 1,
+    skills: [{
+      ref: "sp-public:research",
+      kind: "skill",
+      name: "Research",
+      description: "",
+      version: "v1",
+      source: "",
+    }],
+    knowledgeBases: [],
+    builtinTools: [{
+      ref: "veadk_tool:web_search",
+      kind: "tool",
+      name: "web_search",
+      description: "",
+      version: "",
+      source: "",
+    }],
+    pythonTools: [{
+      name: "score",
+      description: "Score",
+      code: "def score(): pass",
+      entrypoint: "score",
+      dependencies: [],
+    }],
+    subAgents: [{
+      id: "researcher",
+      type: "llm",
+      description: "",
+    }],
     status: "completed",
     output: "Done",
     error: "",
   });
   assert.equal(parsed.agents[1].error, "Model unavailable");
+});
+
+test("renders fixed-height agent cards with resource popovers and separated tool types", () => {
+  assert.match(cardSource, /<ResourceCard className="create-agent-card__agent-card"/);
+  assert.match(cardSource, /<ResourceIdentityMark seed=\{agent\.name\}/);
+  assert.match(cardSource, /status=\{\([\s\S]*?AGENT_TYPE_LABELS\[agent\.rootType\]/);
+  assert.match(cardSource, /import \{ Popover \} from "@openai\/apps-sdk-ui\/components\/Popover"/);
+  assert.match(cardSource, /<Popover showOnHover hoverOpenDelay=\{120\}>/);
+  assert.match(cardSource, /label="内置工具" resources=\{agent\.builtinTools\}/);
+  assert.match(cardSource, /自写工具/);
+  assert.match(cardSource, /count=\{agent\.subAgentCount\}/);
+  assert.match(cardSource, /<code>\{tool\.code\}<\/code>/);
+  assert.match(cardStyles, /grid-template-columns:\s*repeat\(auto-fit,/);
+  assert.match(cardStyles, /grid-auto-rows:\s*168px/);
+  assert.match(cardStyles, /\.create-agent-card__agent-card\.resource-card:hover,[\s\S]*?box-shadow:\s*none;/);
+  assert.match(cardStyles, /\.create-agent-card__python-tool-panel pre\s*\{[\s\S]*?overflow:\s*auto;/);
 });

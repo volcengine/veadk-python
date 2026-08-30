@@ -22,6 +22,7 @@ from veadk.skills.skill import Skill
 from veadk.skills.utils import _get_cloud_credentials
 from veadk.tools.builtin_tools.create_agent.sources import (
     AgentKitKnowledgeSource,
+    BuiltinToolResourceSource,
     CloudCredentials,
     SkillResourceSource,
 )
@@ -121,3 +122,30 @@ def test_skill_sources_use_byteplus_credentials(monkeypatch) -> None:
         "byteplus-sk",
         "byteplus-sts",
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cloud_provider", ["volcengine", "byteplus"])
+async def test_builtin_tool_source_is_provider_independent(
+    monkeypatch, cloud_provider: str
+) -> None:
+    monkeypatch.setenv("CLOUD_PROVIDER", cloud_provider)
+    monkeypatch.setattr(
+        "veadk.tools.builtin_tools.create_agent.sources.builtin_tools.list_builtin_tools",
+        lambda: ["web_search", "run_code"],
+    )
+
+    result = await BuiltinToolResourceSource().collect()
+
+    assert result.status.model_dump() == {
+        "source": "veadk_builtin_tools",
+        "status": "ok",
+        "count": 2,
+        "message": None,
+    }
+    assert [item.descriptor.ref for item in result.resources] == [
+        "veadk_tool:web_search",
+        "veadk_tool:run_code",
+    ]
+    assert [item.payload for item in result.resources] == ["web_search", "run_code"]
+    assert all(item.descriptor.kind == "tool" for item in result.resources)

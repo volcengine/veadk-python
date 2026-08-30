@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 AgentType = Literal["llm", "sequential", "parallel", "loop", "workflow"]
-ResourceKind = Literal["skill", "knowledge_base"]
+ResourceKind = Literal["skill", "knowledge_base", "tool"]
 RouteValue = str | int | bool
 
 
@@ -101,9 +101,18 @@ class LlmAgentNode(BaseModel):
     model_api_base: str | None = None
     resources: list[str] = Field(
         default_factory=list,
-        description="Resource refs returned by collect_resources.",
+        description=(
+            "Resource refs returned by collect_resources, including dynamically "
+            "mounted VeADK built-in tools."
+        ),
     )
-    python_tools: list[PythonToolSpec] = Field(default_factory=list)
+    python_tools: list[PythonToolSpec] = Field(
+        default_factory=list,
+        description=(
+            "Tools authored by the main agent as complete trusted Python source. "
+            "These are separate from built-in tool refs in resources."
+        ),
+    )
 
 
 class SequentialAgentNode(BaseModel):
@@ -214,8 +223,11 @@ class LegacyCreateAgentsInput(BaseModel):
 
 class CreatedAgentResult(BaseModel):
     name: str
+    description: str = ""
     root_type: AgentType | None = None
     status: Literal["completed", "failed"]
+    resources: list[ResourceDescriptor] = Field(default_factory=list)
+    python_tools: list[PythonToolSpec] = Field(default_factory=list)
     output: str | None = None
     error: str | None = None
 

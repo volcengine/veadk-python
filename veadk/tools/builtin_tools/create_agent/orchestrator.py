@@ -26,6 +26,7 @@ from google.adk.agents import BaseAgent
 from google.adk.tools import FunctionTool
 
 from veadk.skills.materializer import materialize_remote_skill
+from veadk.tools import get_builtin_tool
 from veadk.tools.builtin_tools.create_agent.executor import default_executor
 from veadk.tools.builtin_tools.create_agent.knowledge_tools import (
     build_knowledge_tool,
@@ -105,6 +106,10 @@ class AgentOrchestrator:
     ) -> CreatedAgentResult:
         root_type = None
         knowledgebases: list[Any] = []
+        description, resources, python_tools = _blueprint_summary(
+            blueprint,
+            snapshot,
+        )
         try:
             nodes = {node.id: node for node in blueprint.nodes}
             root_type = nodes[blueprint.root_node].type
@@ -157,15 +162,21 @@ class AgentOrchestrator:
                 output = await output
             return CreatedAgentResult(
                 name=blueprint.name,
+                description=description,
                 root_type=root_type,
                 status="completed",
+                resources=resources,
+                python_tools=python_tools,
                 output=str(output or ""),
             )
         except Exception as exc:
             return CreatedAgentResult(
                 name=blueprint.name,
+                description=description,
                 root_type=root_type,
                 status="failed",
+                resources=resources,
+                python_tools=python_tools,
                 error=str(exc),
             )
         finally:
@@ -275,6 +286,13 @@ class AgentOrchestrator:
         tools: list[Any] = [
             FunctionTool(compile_python_tool(spec)) for spec in node.python_tools
         ]
+        tool_resources = [
+            resource for resource in selected if resource.descriptor.kind == "tool"
+        ]
+        tools.extend(
+            get_builtin_tool(_builtin_tool_name(resource))
+            for resource in tool_resources
+        )
         skill_resources = [
             resource for resource in selected if resource.descriptor.kind == "skill"
         ]
@@ -351,6 +369,42 @@ class AgentOrchestrator:
 def _materialize_skill(lock: threading.Lock, skill: Any, cache_dir: Any) -> Any:
     with lock:
         return materialize_remote_skill(skill, cache_dir=cache_dir)
+
+
+def _builtin_tool_name(resource: Any) -> str:
+    if isinstance(resource.payload, str) and resource.payload:
+        return resource.payload
+    name = resource.descriptor.metadata.get("tool_name")
+    return str(name or resource.descriptor.name)
+
+
+def _blueprint_summary(
+    blueprint: AgentBlueprint,
+    snapshot: ResourceSnapshot,
+) -> tuple[str, list[Any], list[Any]]:
+    nodes = {node.id: node for node in blueprint.nodes}
+    root = nodes.get(blueprint.root_node)
+    description = getattr(root, "description", "") or blueprint.task
+    resources = []
+    seen_refs: set[str] = set()
+    python_tools = []
+    seen_python_tools: set[tuple[str, str]] = set()
+    for node in blueprint.nodes:
+        if node.type != "llm":
+            continue
+        for ref in node.resources:
+            resource = snapshot.resources.get(ref)
+            if resource is None or ref in seen_refs:
+                continue
+            seen_refs.add(ref)
+            resources.append(resource.descriptor)
+        for spec in node.python_tools:
+            key = (spec.name, spec.code)
+            if key in seen_python_tools:
+                continue
+            seen_python_tools.add(key)
+            python_tools.append(spec)
+    return description, resources, python_tools
 
 
 async def _close_knowledgebases(knowledgebases: Sequence[Any]) -> None:
