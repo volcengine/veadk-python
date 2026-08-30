@@ -33,8 +33,10 @@ from veadk.cli.cli_frontend import (
     _open_browser_when_ready,
     _run_frontend_server,
     _runtime_regions,
+    _studio_resource_region,
 )
 from veadk.tools import list_builtin_tools
+from veadk.utils.cloud_provider import CloudProvider
 
 
 def test_runtime_proxy_uses_same_socket_studio_tool_channel_when_enabled(
@@ -829,6 +831,88 @@ def test_runtime_regions_use_byteplus_default_region(
     assert _runtime_regions("byteplus", "all") == ["ap-southeast-1"]
     monkeypatch.setenv("BYTEPLUS_REGION", "ap-southeast-2")
     assert _runtime_regions("byteplus", "all") == ["ap-southeast-2"]
+
+
+def test_studio_resource_region_uses_beijing_for_local_studio() -> None:
+    assert (
+        _studio_resource_region(
+            "volcengine",
+            {
+                "REGION": "cn-shanghai",
+                "VEADK_STUDIO_DEPLOY_REGION": "cn-shanghai",
+            },
+        )
+        == "cn-beijing"
+    )
+
+
+@pytest.mark.parametrize(
+    ("provider", "region"),
+    [
+        ("volcengine", "cn-shanghai"),
+        ("byteplus", "ap-southeast-1"),
+    ],
+)
+def test_studio_resource_region_uses_cloud_studio_deployment_region(
+    provider: CloudProvider,
+    region: str,
+) -> None:
+    assert (
+        _studio_resource_region(
+            provider,
+            {
+                "VEADK_STUDIO_FUNCTION_ID": "function-1",
+                "VEADK_STUDIO_DEPLOY_REGION": region,
+            },
+        )
+        == region
+    )
+
+
+def test_skill_and_knowledge_defaults_use_cloud_studio_region(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    requested_regions: list[tuple[str, str]] = []
+
+    class FakeSkillsClient:
+        def __init__(self, **kwargs: Any) -> None:
+            requested_regions.append(("skills", kwargs["region"]))
+
+        def list_skill_spaces(self, request: object) -> SimpleNamespace:
+            del request
+            return SimpleNamespace(items=[], total_count=0)
+
+    class FakeKnowledgeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            requested_regions.append(("knowledge", kwargs["region"]))
+
+        def list_knowledge_bases(self, request: object) -> SimpleNamespace:
+            del request
+            return SimpleNamespace(knowledge_bases=[], next_token="")
+
+    monkeypatch.setattr(
+        "agentkit.sdk.skills.client.AgentkitSkillsClient",
+        FakeSkillsClient,
+    )
+    monkeypatch.setattr(
+        "agentkit.sdk.knowledge.client.AgentkitKnowledgeClient",
+        FakeKnowledgeClient,
+    )
+    monkeypatch.setenv("VEADK_STUDIO_FUNCTION_ID", "function-1")
+    monkeypatch.setenv("VEADK_STUDIO_DEPLOY_REGION", "cn-shanghai")
+    app = _create_frontend_app(monkeypatch, tmp_path, studio=True)
+
+    with TestClient(app) as client:
+        skills = client.get("/web/skill-spaces")
+        knowledge = client.get("/web/knowledge-bases")
+
+    assert skills.status_code == 200
+    assert knowledge.status_code == 200
+    assert requested_regions == [
+        ("skills", "cn-shanghai"),
+        ("knowledge", "cn-shanghai"),
+    ]
 
 
 def test_byteplus_runtime_list_uses_vefaas_iam_credentials(

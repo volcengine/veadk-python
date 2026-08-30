@@ -89,6 +89,8 @@ server that `veadk frontend` launches — no separate backend.
   require Agent-management access.
 - **AgentKit Skill center**: browse Skill Spaces and their skills with
   server-side pagination by region, then inspect the selected Skill content.
+  Skill and knowledge requests default to the Studio deployment region in
+  cloud deployments and to `cn-beijing` in local Volcengine development.
 - **Library hub**: manage Skills, user-owned AgentKit knowledge bases, and chat
   artifacts from one sidebar entry. Knowledge documents support verified
   JPG/PNG, PDF/PPTX/DOCX/XLSX/TXT uploads and public webpage imports. Studio

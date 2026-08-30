@@ -231,7 +231,8 @@ test("uses a searchable Studio BFF tool dialog without dynamic Skills", () => {
   assert.match(capabilityDialogsSource, /onChange\(\[\.\.\.next\]\)/);
   assert.doesNotMatch(capabilityDialogsSource, /Skill Hub|SkillCapabilityDialog/);
   assert.doesNotMatch(clientSource, /SessionCapabilities|sessionCapabilitiesPath/);
-  assert.match(skillspaceClientSource, /"\/web\/skill-spaces\?region=all"/);
+  assert.match(skillspaceClientSource, /"\/web\/skill-spaces"/);
+  assert.doesNotMatch(skillspaceClientSource, /"\/web\/skill-spaces\?region=all"/);
   assert.match(stylesSource, /\.studio-tool-dialog-layer\s*\{[\s\S]*?z-index:\s*110;/);
   assert.match(
     stylesSource,

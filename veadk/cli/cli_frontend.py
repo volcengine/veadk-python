@@ -76,6 +76,7 @@ from veadk.utils.cloud_provider import (
     DEFAULT_BYTEPLUS_VIKING_MEMORY_HOST,
     DEFAULT_BYTEPLUS_VIKING_MEMORY_REGION,
     DEFAULT_CLOUD_PROVIDER,
+    DEFAULT_VOLCENGINE_REGION,
     CloudProvider,
     agentkit_openapi_base,
     cloud_provider_from_env,
@@ -565,6 +566,23 @@ def _runtime_regions(provider: str, requested_region: str) -> list[str]:
     if provider == "byteplus":
         return [os.getenv("BYTEPLUS_REGION") or DEFAULT_BYTEPLUS_REGION]
     return ["cn-beijing", "cn-shanghai"]
+
+
+def _studio_resource_region(
+    provider: CloudProvider,
+    environ: Mapping[str, str] | None = None,
+) -> str:
+    """Resolve the control-plane region used by Studio-owned resources."""
+    source = os.environ if environ is None else environ
+    if is_vefaas_runtime(source):
+        deployed_region = str(
+            source.get("VEADK_STUDIO_DEPLOY_REGION") or source.get("APP_REGION") or ""
+        ).strip()
+        if deployed_region:
+            return deployed_region
+    return (
+        DEFAULT_BYTEPLUS_REGION if provider == "byteplus" else DEFAULT_VOLCENGINE_REGION
+    )
 
 
 def _vikingdb_openapi_host(provider: str) -> str:
@@ -2362,15 +2380,20 @@ def _run_frontend_server(
             return _default_cloud_region()
         return candidate or _default_cloud_region()
 
+    def _coerce_studio_resource_region(region: str | None) -> str:
+        candidate = (region or "").strip()
+        fallback = _studio_resource_region(provider)
+        if provider == "byteplus" and candidate.startswith("cn-"):
+            return fallback
+        if provider == "volcengine" and candidate.startswith("ap-"):
+            return fallback
+        return candidate or fallback
+
     def _knowledge_regions() -> tuple[str, ...]:
-        return (
-            ("ap-southeast-1",)
-            if provider == "byteplus"
-            else ("cn-beijing", "cn-shanghai")
-        )
+        return (_studio_resource_region(provider),)
 
     def _knowledge_create_regions() -> tuple[str, ...]:
-        return ("ap-southeast-1",) if provider == "byteplus" else ("cn-beijing",)
+        return (_studio_resource_region(provider),)
 
     from frontend.server.knowledge import (
         KnowledgeIdentity,
@@ -2448,7 +2471,7 @@ def _run_frontend_server(
             ),
         ),
         identity_resolver=_knowledge_identity,
-        region_resolver=_coerce_cloud_region,
+        region_resolver=_coerce_studio_resource_region,
         region_candidates_resolver=_knowledge_regions,
         create_region_candidates_resolver=_knowledge_create_regions,
     )
@@ -12121,7 +12144,7 @@ def _run_frontend_server(
 
     @app.get("/web/skill-spaces")
     async def _web_list_skill_spaces(
-        region: str = "all",
+        region: str = "",
         page: int = Query(default=1, ge=1),
         page_size: int = Query(default=50, ge=1, le=100),
         project: str | None = None,
@@ -12134,8 +12157,12 @@ def _run_frontend_server(
         """
         from agentkit.sdk.skills.types import ListSkillSpacesRequest
 
-        aggregate_regions = region in {"all", "", "*"}
-        regions = _runtime_regions(provider, region)
+        aggregate_regions = region in {"all", "*"}
+        regions = (
+            _runtime_regions(provider, region)
+            if aggregate_regions
+            else [_coerce_studio_resource_region(region)]
+        )
         all_items = []
         total_count = 0
         project_name = (project or "").strip() or None
@@ -12198,7 +12225,7 @@ def _run_frontend_server(
         from agentkit.sdk.skills.types import ListSkillsBySkillSpaceRequest
 
         del project  # SkillSpace ID is already globally scoped by AgentKit.
-        region = _coerce_cloud_region(region)
+        region = _coerce_studio_resource_region(region)
         try:
             client = _skills_client(region)
             resp = await asyncio.to_thread(
@@ -12247,7 +12274,7 @@ def _run_frontend_server(
         skill_name: str | None = None,
     ):
         """Fetch a specific skill version's SKILL.md content plus package files."""
-        region = _coerce_cloud_region(region)
+        region = _coerce_studio_resource_region(region)
         try:
             client = _skills_client(region)
             resp = await asyncio.to_thread(
