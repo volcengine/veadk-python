@@ -694,23 +694,31 @@ export function MyAgents({
   const draftAgents = useMemo(() => drafts.map(draftToAgent), [drafts]);
   const activeDeploymentTasks = useMemo(() => {
     const byId = new Map<string, DeploymentTaskUpdate>();
+    const byDraftId = new Map<string, DeploymentTaskUpdate>();
     const byRuntimeId = new Map<string, DeploymentTaskUpdate>();
     for (const task of deploymentTasks) {
       if (task.status !== "running") continue;
       byId.set(task.id, task);
+      if (task.draftId) {
+        const previous = byDraftId.get(task.draftId);
+        if (!previous || task.startedAt > previous.startedAt) {
+          byDraftId.set(task.draftId, task);
+        }
+      }
       if (!task.runtimeId) continue;
       const previous = byRuntimeId.get(task.runtimeId);
       if (!previous || task.startedAt > previous.startedAt) {
         byRuntimeId.set(task.runtimeId, task);
       }
     }
-    return { byId, byRuntimeId };
+    return { byId, byDraftId, byRuntimeId };
   }, [deploymentTasks]);
 
   const deploymentTaskForAgent = useCallback((agent: MyAgentCardData) => {
     if (agent.draft) {
       const taskId = draftDeploymentTaskIds[agent.draft.id];
-      return taskId ? activeDeploymentTasks.byId.get(taskId) : undefined;
+      return activeDeploymentTasks.byDraftId.get(agent.draft.id)
+        ?? (taskId ? activeDeploymentTasks.byId.get(taskId) : undefined);
     }
     const runtimeId = agent.runtime?.runtimeId;
     return runtimeId

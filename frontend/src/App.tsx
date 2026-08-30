@@ -153,6 +153,7 @@ import {
 } from "./create/runtimeModelName";
 import {
   loadWorkspaceDrafts,
+  workspaceAgentCreationMode,
   workspaceDraftsKey,
   writeWorkspaceDrafts,
   type WorkspaceAgentDraft,
@@ -2101,6 +2102,7 @@ export default function App() {
       id: string,
       draft: AgentDraft,
       deploymentTarget?: WorkspaceAgentDraft["deploymentTarget"],
+      creationMode?: WorkspaceAgentDraft["creationMode"],
     ) => {
       if (!id || !userId) return;
       if (
@@ -2114,6 +2116,7 @@ export default function App() {
         draft,
         updatedAt: Date.now(),
         deploymentTarget,
+        creationMode,
       };
       if (workspaceDraftTimerRef.current !== null) {
         window.clearTimeout(workspaceDraftTimerRef.current);
@@ -2208,6 +2211,11 @@ export default function App() {
     if (createView === "custom" && activeDraft) {
       setEditingDraftId(activeDraft.id);
       setImportedDraft(activeDraft.draft);
+      setCustomCreationSurface(
+        workspaceAgentCreationMode(activeDraft) === "quick"
+          ? "vulcan"
+          : "traditional",
+      );
       setRuntimeUpdateTarget(activeDraft.deploymentTarget ?? null);
     }
     // Restore only when identity changes; later edits are already in state.
@@ -6544,6 +6552,11 @@ export default function App() {
                   setMyAgents(false);
                   setImportedDraft(item.draft);
                   setCustomCreateMode("custom");
+                  setCustomCreationSurface(
+                    workspaceAgentCreationMode(item) === "quick"
+                      ? "vulcan"
+                      : "traditional",
+                  );
                   setEditingDraftId(item.id);
                   editingDraftBaselineRef.current = item;
                   setRuntimeUpdateTarget(item.deploymentTarget ?? null);
@@ -6728,6 +6741,11 @@ export default function App() {
                   exitAgentDetailContext();
                   setImportedDraft(item.draft);
                   setCustomCreateMode("custom");
+                  setCustomCreationSurface(
+                    workspaceAgentCreationMode(item) === "quick"
+                      ? "vulcan"
+                      : "traditional",
+                  );
                   setEditingDraftId(item.id);
                   editingDraftBaselineRef.current = item;
                   setRuntimeUpdateTarget(item.deploymentTarget ?? null);
@@ -6993,6 +7011,7 @@ export default function App() {
                 onDeploymentTaskChange={updateDeploymentTask}
                 createMode={customCreateMode}
                 freshCreationSurface={customCreationSurface}
+                workspaceDraftId={editingDraftId || undefined}
                 deploymentTarget={runtimeUpdateTarget ?? undefined}
                 initialDeployRegion={newRuntimeRegion}
                 onDraftChange={(draft, dirty) => {
@@ -7002,6 +7021,7 @@ export default function App() {
                       editingDraftId,
                       draft,
                       runtimeUpdateTarget ?? undefined,
+                      customCreationSurface === "vulcan" ? "quick" : "traditional",
                     );
                   } else {
                     restoreWorkspaceDraftBaseline(editingDraftId);

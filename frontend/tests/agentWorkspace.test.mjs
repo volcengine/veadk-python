@@ -63,6 +63,7 @@ test("workspace drafts stay wired to custom Agent creation", () => {
   assert.match(appSource, /draftStorageError/);
   assert.match(appSource, /onDraftChange=\{\(draft, dirty\) =>/);
   assert.match(appSource, /deploymentTarget=\{runtimeUpdateTarget \?\? undefined\}/);
+  assert.match(appSource, /workspaceDraftId=\{editingDraftId \|\| undefined\}/);
   assert.match(
     appSource,
     /if \(dirty\)[\s\S]*?saveWorkspaceDraft[\s\S]*?else[\s\S]*?restoreWorkspaceDraftBaseline\(editingDraftId\)/,
@@ -70,6 +71,13 @@ test("workspace drafts stay wired to custom Agent creation", () => {
   assert.match(
     appSource,
     /onDiscard=\{editingDraftId \? \(\) => \{[\s\S]*?restoreWorkspaceDraftBaseline\(editingDraftId\)[\s\S]*?setFocusedWorkspaceAgentId\(appName\)/,
+  );
+});
+
+test("running deployments match drafts by stable draft id before names", () => {
+  assert.match(
+    workspaceSource,
+    /task\.draftId === selectedDraft\.id[\s\S]*?task\.agentDraft\?\.name === selectedDraft\.draft\.name/,
   );
 });
 

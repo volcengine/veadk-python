@@ -18,6 +18,7 @@ const moduleUrl = `data:text/javascript;base64,${Buffer.from(result.outputFiles[
 const {
   loadWorkspaceDrafts,
   sanitizeAgentDraftForStorage,
+  workspaceAgentCreationMode,
   workspaceDraftsKey,
   writeWorkspaceDrafts,
 } = await import(moduleUrl);
@@ -204,6 +205,49 @@ test("preserves cloud environment selections in local drafts", () => {
 
   const loaded = loadWorkspaceDrafts(storage, "cloud-builder");
   assert.deepEqual(loaded[0].draft.cloudEnvironment, cloudEnvironment);
+});
+
+test("persists the creation mode used to resume a workspace draft", () => {
+  const storage = memoryStorage();
+  writeWorkspaceDrafts(storage, "quick-builder", [
+    {
+      id: "quick-draft",
+      updatedAt: 456,
+      creationMode: "quick",
+      draft: draft({ dynamicAgentDelegation: true }),
+    },
+    {
+      id: "traditional-draft",
+      updatedAt: 123,
+      creationMode: "traditional",
+      draft: draft(),
+    },
+  ]);
+
+  const loaded = loadWorkspaceDrafts(storage, "quick-builder");
+  assert.equal(loaded[0].creationMode, "quick");
+  assert.equal(loaded[1].creationMode, "traditional");
+  assert.equal(workspaceAgentCreationMode(loaded[0]), "quick");
+  assert.equal(workspaceAgentCreationMode(loaded[1]), "traditional");
+});
+
+test("recovers legacy quick drafts from dynamic delegation", () => {
+  assert.equal(
+    workspaceAgentCreationMode({
+      id: "legacy-quick",
+      updatedAt: 1,
+      draft: draft({ dynamicAgentDelegation: true }),
+    }),
+    "quick",
+  );
+  assert.equal(
+    workspaceAgentCreationMode({
+      id: "legacy-traditional",
+      updatedAt: 2,
+      draft: draft({ dynamicAgentDelegation: false }),
+    }),
+    "traditional",
+  );
 });
 
 test("persists the published MCP key baseline with a Runtime update target", () => {

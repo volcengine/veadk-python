@@ -3490,6 +3490,8 @@ interface CustomCreateProps extends CreateModeProps {
   createMode?: "custom" | "yaml_import";
   /** Fresh custom creation experience selected by the app-level chooser. */
   freshCreationSurface?: "vulcan" | "traditional";
+  /** Stable local draft id propagated to persistent deployment tasks. */
+  workspaceDraftId?: string;
   /** Existing Runtime target when editing an Agent from the library. */
   deploymentTarget?: {
     runtimeId: string;
@@ -3524,6 +3526,7 @@ export function CustomCreate({
   onDeploymentTaskChange,
   createMode = "custom",
   freshCreationSurface = "traditional",
+  workspaceDraftId,
   deploymentTarget,
   cloudProvider = "volcengine",
   initialDeployRegion = defaultCloudRegion(cloudProvider),
@@ -3534,10 +3537,10 @@ export function CustomCreate({
 }: CustomCreateProps) {
   void onCreate; // outcome is the in-pane project preview, not a navigation
   void onDiscard; // the discard action is intentionally hidden in this flow
-  const isFreshCustomCreation =
-    createMode === "custom" && !initialDraft && !deploymentTarget;
-  const isFreshVulcanCreation =
-    isFreshCustomCreation && freshCreationSurface === "vulcan";
+  const isVulcanCreation =
+    createMode === "custom" && !deploymentTarget &&
+    freshCreationSurface === "vulcan";
+  const isFreshVulcanCreation = isVulcanCreation && !initialDraft;
   const [initialState] = useState<CustomCreateInitialState>(() => {
     const initialCreationDraft = initialDraft ?? emptyDraft(cloudProvider);
     const creationDraft = isFreshVulcanCreation
@@ -3555,7 +3558,7 @@ export function CustomCreate({
     );
   });
   const [draft, setDraft] = useState<AgentDraft>(initialState.draft);
-  const usesNewAgentWorkbench = isFreshVulcanCreation;
+  const usesNewAgentWorkbench = isVulcanCreation;
   const [customModelSecretValues, setCustomModelSecretValues] = useState<
     Record<string, string>
   >(initialState.customModelSecretValues);
@@ -4702,6 +4705,7 @@ export function CustomCreate({
       let latestMessage = "正在生成部署配置";
       const taskBase = {
         id: taskId,
+        ...(workspaceDraftId ? { draftId: workspaceDraftId } : {}),
         agentName: deploymentDraft.name,
         runtimeName: deploymentRuntimeName.trim(),
         region: deployRegion,

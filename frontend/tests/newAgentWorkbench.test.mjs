@@ -42,15 +42,11 @@ const globalStyles = readFileSync(
 test("the app-level create entry asks for a mode before either creation flow", () => {
   assert.match(
     customCreateSource,
-    /const isFreshCustomCreation =\s*createMode === "custom" && !initialDraft && !deploymentTarget/,
+    /const isVulcanCreation =\s*createMode === "custom" && !deploymentTarget &&\s*freshCreationSurface === "vulcan"/,
   );
   assert.match(
     customCreateSource,
-    /isFreshCustomCreation && freshCreationSurface === "vulcan"/,
-  );
-  assert.match(
-    customCreateSource,
-    /usesNewAgentWorkbench[\s\S]*?<NewAgentWorkbench/,
+    /usesNewAgentWorkbench = isVulcanCreation[\s\S]*?<NewAgentWorkbench/,
   );
   assert.doesNotMatch(customCreateSource, /<AgentCreationModePicker/);
   assert.match(
@@ -72,6 +68,26 @@ test("the app-level create entry asks for a mode before either creation flow", (
   );
   assert.match(appSource, /freshCreationSurface=\{customCreationSurface\}/);
   assert.doesNotMatch(workbenchSource, /className="cw-/);
+});
+
+test("workspace drafts restore the creation mode they were saved with", () => {
+  assert.match(
+    appSource,
+    /saveWorkspaceDraft\([\s\S]*?customCreationSurface === "vulcan" \? "quick" : "traditional"/,
+  );
+  assert.match(
+    appSource,
+    /setCustomCreationSurface\(\s*workspaceAgentCreationMode\(item\) === "quick"\s*\? "vulcan"\s*: "traditional"/,
+  );
+});
+
+test("deployment tasks carry the workspace draft id into the library", () => {
+  assert.match(customCreateSource, /workspaceDraftId\?: string/);
+  assert.match(
+    customCreateSource,
+    /const taskBase = \{[\s\S]*?\.\.\.\(workspaceDraftId \? \{ draftId: workspaceDraftId \} : \{\}\)/,
+  );
+  assert.match(appSource, /workspaceDraftId=\{editingDraftId \|\| undefined\}/);
 });
 
 test("creation mode picker has exactly the quick and traditional cards", () => {

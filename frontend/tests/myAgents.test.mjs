@@ -302,6 +302,8 @@ test("reopens running deployment progress from draft and Runtime cards", () => {
   assert.match(pageSource, /deploymentTasks\?: DeploymentTaskUpdate\[\]/);
   assert.match(pageSource, /draftDeploymentTaskIds\?: Readonly<Record<string, string>>/);
   assert.match(pageSource, /task\.status !== "running"/);
+  assert.match(pageSource, /byDraftId\.set\(task\.draftId, task\)/);
+  assert.match(pageSource, /activeDeploymentTasks\.byDraftId\.get\(agent\.draft\.id\)/);
   assert.match(pageSource, /draftDeploymentTaskIds\[agent\.draft\.id\]/);
   assert.match(pageSource, /activeDeploymentTasks\.byRuntimeId\.get\(runtimeId\)/);
   assert.match(pageSource, /className="my-agent-draft-badge">草稿<\/span>/);

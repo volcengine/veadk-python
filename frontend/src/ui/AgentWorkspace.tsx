@@ -1512,6 +1512,10 @@ export function AgentWorkspace({
   const deploymentTask = useMemo(() => {
     if (selectedPendingTask) return selectedPendingTask;
     if (selectedDraft) {
+      const taskForDraftId = deploymentTasks
+        .filter((task) => task.draftId === selectedDraft.id)
+        .sort((left, right) => right.startedAt - left.startedAt)[0];
+      if (taskForDraftId) return taskForDraftId;
       return deploymentTasks
         .filter(
           (task) =>
@@ -2557,7 +2561,10 @@ export function AgentWorkspace({
             ) : (
               <>
                 {filteredDrafts.map((item) => {
-                  const task = deploymentTasks
+                  const taskForDraftId = deploymentTasks
+                    .filter((candidate) => candidate.draftId === item.id)
+                    .sort((left, right) => right.startedAt - left.startedAt)[0];
+                  const task = taskForDraftId ?? deploymentTasks
                     .filter(
                       (candidate) =>
                         candidate.agentDraft?.name === item.draft.name ||
