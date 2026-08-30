@@ -110,6 +110,9 @@ def test_quick_mode_codegen_adds_dynamic_agent_toolset_and_managed_rules() -> No
     requirements = next(
         file.content for file in project.files if file.path == "requirements.txt"
     )
+    dockerfile = next(
+        file.content for file in project.files if file.path == "Dockerfile"
+    )
 
     assert (
         "from veadk.tools.builtin_tools.create_agent import CreateAgentToolset"
@@ -124,6 +127,12 @@ def test_quick_mode_codegen_adds_dynamic_agent_toolset_and_managed_rules() -> No
     assert "'dynamicAgentDelegation': True" in agent_py
     assert "veadk-python==1.1.7\n" in requirements
     assert "github.com/volcengine/veadk-python" not in requirements
+    assert "RUN uv pip install -r requirements.txt || \\" in dockerfile
+    assert (
+        "uv pip install --index-url "
+        "https://repo.huaweicloud.com/repository/pypi/simple -r requirements.txt"
+        in dockerfile
+    )
 
 
 def test_traditional_codegen_does_not_add_dynamic_agent_capability() -> None:

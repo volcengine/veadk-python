@@ -1828,7 +1828,7 @@ def render_cloud_environment_dockerfile(draft: AgentDraft) -> str | None:
         return draft.cloudEnvironment.dockerfile
 
     selected = set(draft.cloudEnvironment.cliTools)
-    if not selected:
+    if not selected and not draft.dynamicAgentDelegation:
         return None
 
     system_packages = ["ca-certificates", "curl"]
