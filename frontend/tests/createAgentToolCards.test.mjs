@@ -168,6 +168,16 @@ test("bounds expanded resource details in a keyboard-scrollable region", () => {
   );
 });
 
+test("keeps the loading skeleton flush with the card without a duplicate top edge", () => {
+  const loadingRule = cardStyles.match(
+    /\.create-agent-card__loading\s*\{(?<declarations>[\s\S]*?)\}/,
+  );
+
+  assert.ok(loadingRule?.groups?.declarations);
+  assert.doesNotMatch(loadingRule.groups.declarations, /border-top\s*:/);
+  assert.match(loadingRule.groups.declarations, /box-shadow:\s*none;/);
+});
+
 test("combines create_agents input blueprints with partial execution results", async () => {
   const { parseCreatedAgents } = await loadCardData();
   const parsed = parseCreatedAgents(

@@ -521,7 +521,7 @@
 .create-agent-card__loading {
   display: flex;
   flex-direction: column;
-  border-top: 1px solid hsl(var(--border));
+  box-shadow: none;
 }
 
 .create-agent-card__skeleton-row {
