@@ -24,6 +24,7 @@ from veadk.tools.builtin_tools.create_agent.sources import (
     AgentKitKnowledgeSource,
     BuiltinToolResourceSource,
     CloudCredentials,
+    SkillHubSearchSource,
     SkillResourceSource,
 )
 
@@ -67,6 +68,43 @@ async def test_skill_source_reports_collection_failure(monkeypatch) -> None:
     assert result.status.status == "error"
     assert result.status.count == 0
     assert result.status.message == "cannot list sp-public"
+
+
+@pytest.mark.asyncio
+async def test_skill_hub_search_source_uses_and_reports_keywords() -> None:
+    calls: list[str] = []
+
+    async def search(keyword: str) -> dict:
+        calls.append(keyword)
+        return {
+            "Skills": [
+                {
+                    "Slug": "public/research-assistant",
+                    "Name": "Research Assistant",
+                    "Description": f"Matched {keyword}",
+                    "EvaluationMetadata": {"skill_version": "v2"},
+                }
+            ]
+        }
+
+    result = await SkillHubSearchSource(
+        ["AgentKit", "公开资料"],
+        searcher=search,
+    ).collect()
+
+    assert calls == ["AgentKit", "公开资料"]
+    assert result.status.model_dump() == {
+        "source": "skill_hub:public",
+        "status": "ok",
+        "count": 1,
+        "message": None,
+        "search_keywords": ["AgentKit", "公开资料"],
+    }
+    resource = result.resources[0]
+    assert resource.descriptor.ref == "skill_hub:public/research-assistant"
+    assert resource.descriptor.version == "v2"
+    assert resource.payload.source_type == "findskill"
+    assert resource.payload.slug == "public/research-assistant"
 
 
 @pytest.mark.asyncio
@@ -142,6 +180,7 @@ async def test_builtin_tool_source_is_provider_independent(
         "status": "ok",
         "count": 2,
         "message": None,
+        "search_keywords": [],
     }
     assert [item.descriptor.ref for item in result.resources] == [
         "veadk_tool:web_search",

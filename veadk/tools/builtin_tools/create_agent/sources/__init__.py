@@ -26,7 +26,10 @@ from veadk.tools.builtin_tools.create_agent.sources.base import (
 from veadk.tools.builtin_tools.create_agent.sources.builtin_tools import (
     BuiltinToolResourceSource,
 )
-from veadk.tools.builtin_tools.create_agent.sources.skills import SkillResourceSource
+from veadk.tools.builtin_tools.create_agent.sources.skills import (
+    SkillHubSearchSource,
+    SkillResourceSource,
+)
 
 __all__ = [
     "AgentKitKnowledgePayload",
@@ -34,6 +37,7 @@ __all__ = [
     "BuiltinToolResourceSource",
     "CloudCredentials",
     "ResourceSource",
+    "SkillHubSearchSource",
     "SkillResourceSource",
     "SourceCollection",
 ]

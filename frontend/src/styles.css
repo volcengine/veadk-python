@@ -1379,8 +1379,8 @@ body {
   position: relative;
   width: 100%;
   max-width: 768px;
-  margin-top: 42px;
-  margin-bottom: 22px;
+  margin-top: 8px;
+  margin-bottom: 16px;
   padding: 30px 16px 14px;
   gap: 10px;
   border: 0;
@@ -1407,6 +1407,9 @@ body {
 .turn--subagent:has(> .turn-meta) { padding-bottom: 0; }
 .turn--subagent:has(> .turn-meta)::before { bottom: 44px; }
 .transcript.is-streaming > .turn--subagent:last-child { min-height: 0; }
+.turn--assistant:has(.create-agent-tool-card.is-agent-results):has(+ .turn--subagent) > .turn-meta {
+  display: none;
+}
 .subagent-run-label {
   position: absolute;
   top: 0;

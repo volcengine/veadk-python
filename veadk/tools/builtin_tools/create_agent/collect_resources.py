@@ -43,16 +43,21 @@ class ResourceCollector:
         self._capabilities = capabilities
 
     async def collect(
-        self, *, owner: str, tool_context: Any = None
+        self,
+        *,
+        owner: str,
+        tool_context: Any = None,
+        additional_sources: Sequence[ResourceSource] = (),
     ) -> CollectResourcesResponse:
+        sources = [*self._sources, *additional_sources]
         collections = await asyncio.gather(
-            *(source.collect(tool_context) for source in self._sources),
+            *(source.collect(tool_context) for source in sources),
             return_exceptions=True,
         )
 
         resources_by_ref = {}
         statuses: list[ResourceSourceStatus] = []
-        for source, collection in zip(self._sources, collections):
+        for source, collection in zip(sources, collections):
             if isinstance(collection, BaseException):
                 statuses.append(
                     ResourceSourceStatus(

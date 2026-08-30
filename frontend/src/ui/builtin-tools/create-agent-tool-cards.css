@@ -101,6 +101,29 @@
   outline-offset: -2px;
 }
 
+.create-agent-card__search-keywords {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 9px 15px;
+  border-top: 1px solid hsl(var(--border));
+  color: hsl(var(--muted-foreground));
+  font-size: var(--font-text-xs-size, 12px);
+  font-weight: var(--font-weight-normal, 400);
+  line-height: var(--font-text-xs-line-height, 18px);
+}
+
+.create-agent-card__search-keywords > :first-child {
+  flex: 0 0 auto;
+  color: hsl(var(--foreground));
+  font-weight: var(--font-weight-medium, 500);
+}
+
+.create-agent-card__search-keywords > :last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .create-agent-card__empty-category {
   padding: 14px 15px 16px;
   color: hsl(var(--foreground));
@@ -176,9 +199,10 @@
 .create-agent-card__agent-grid {
   max-height: min(640px, 70dvh);
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 372px));
   align-items: stretch;
-  grid-auto-rows: 168px;
+  justify-content: start;
+  grid-auto-rows: 140px;
   gap: 12px;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -186,10 +210,10 @@
 }
 
 .create-agent-card__agent-card.resource-card {
-  height: 168px;
-  min-height: 168px;
+  height: 140px;
+  min-height: 140px;
   gap: 0;
-  padding: 16px;
+  padding: 12px;
   overflow: visible;
   animation: none;
   transition: none;
@@ -223,8 +247,8 @@
 }
 
 .create-agent-card__agent-card .resource-card__title-copy h3 {
-  font-size: var(--font-text-sm-size, 14px);
-  line-height: var(--font-text-sm-line-height, 20px);
+  font-size: var(--font-text-md-size, 16px);
+  line-height: var(--font-text-md-line-height, 24px);
 }
 
 .create-agent-card__agent-card .resource-card__title-copy > :last-child:not(h3) {
@@ -232,13 +256,13 @@
 }
 
 .create-agent-card__agent-card .resource-card__description {
-  min-height: 36px;
-  max-height: 36px;
+  min-height: 40px;
+  max-height: 40px;
   display: -webkit-box;
   overflow: hidden;
   color: hsl(var(--muted-foreground));
-  font-size: var(--font-text-xs-size, 12px);
-  line-height: var(--font-text-xs-line-height, 18px);
+  font-size: var(--font-text-sm-size, 14px);
+  line-height: var(--font-text-sm-line-height, 20px);
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
@@ -564,7 +588,7 @@
   }
 
   .create-agent-card__agent-card.resource-card {
-    padding: 14px;
+    padding: 12px;
   }
 
   .create-agent-card__agent-resources {

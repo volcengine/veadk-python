@@ -20,6 +20,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
+import httpx
 from google.adk.skills import load_skill_from_dir
 
 from veadk.skills import SkillMaterializeError
@@ -79,6 +80,46 @@ def test_skillhub_skill_downloads_and_normalizes_root_zip(
     assert (
         tmp_path / "skillhub" / "sp-test" / "hub-skill" / "v1" / "hub-skill"
     ).is_dir()
+
+
+def test_findskill_skill_downloads_by_public_slug(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    remote_skill = VeADKSkill(
+        name="public-skill",
+        description="Public skill.",
+        path="public/example/public-skill",
+        id="public/example/public-skill",
+        slug="public/example/public-skill",
+        source_type="findskill",
+        version_id="v2",
+    )
+    requested: list[str] = []
+
+    def get(url: str, **kwargs):
+        requested.append(url)
+        return httpx.Response(
+            200,
+            request=httpx.Request("GET", url),
+            content=_zip_bytes(
+                {
+                    "SKILL.md": (
+                        "---\nname: public-skill\ndescription: Public skill.\n---\n"
+                        "Public body.\n"
+                    )
+                }
+            ),
+        )
+
+    monkeypatch.setattr(materializer.httpx, "get", get)
+
+    skill_dir = materialize_remote_skill(remote_skill, cache_dir=tmp_path)
+
+    assert load_skill_from_dir(skill_dir).name == "public-skill"
+    assert requested == [
+        "https://skills.volces.com/v1/skills/download/public/example/public-skill"
+    ]
 
 
 def test_default_cache_dir_uses_temp_dir(monkeypatch: pytest.MonkeyPatch):

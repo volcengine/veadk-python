@@ -41,7 +41,12 @@ test("normalizes collected resources and separates every resource source", async
         max_orchestration_depth: 2,
       },
       sources: [
-        { source: "skill_hub:sp-public", status: "ok", count: 1 },
+        {
+          source: "skill_hub:public",
+          status: "ok",
+          count: 1,
+          search_keywords: ["AgentKit", "公开资料"],
+        },
         { source: "skill_space:private-space", status: "ok", count: 1 },
         { source: "agentkit_knowledge", status: "skipped", count: 0, message: "No STS" },
         { source: "veadk_builtin_tools", status: "ok", count: 1 },
@@ -95,6 +100,7 @@ test("normalizes collected resources and separates every resource source", async
     ["skill_hub", "skill_space", "knowledge_base", "tool"],
   );
   assert.equal(parsed.sources[2].status, "skipped");
+  assert.deepEqual(parsed.sources[0].searchKeywords, ["AgentKit", "公开资料"]);
   assert.deepEqual(
     filterCollectedResourcesByCategory(parsed, "skill_space"),
     {
@@ -137,6 +143,8 @@ test("keeps status indicators out of result cards", () => {
 
 test("renders empty categories as plain text and exposes raw source messages", () => {
   assert.match(cardSource, /本次检索未返回该类别的资源。/);
+  assert.match(cardSource, /未配置该资源来源，本次未执行检索。/);
+  assert.match(cardSource, /未提供检索关键词，本次未检索 Skill Hub。/);
   assert.match(cardSource, /\{source\.message\}/);
   assert.doesNotMatch(cardSource, /当前类别没有资源/);
   assert.match(
@@ -147,6 +155,13 @@ test("renders empty categories as plain text and exposes raw source messages", (
     cardStyles,
     /\.create-agent-card__empty-category \.create-agent-card__raw-source-error\s*\{[\s\S]*?color:\s*hsl\(var\(--destructive\)\);/,
   );
+});
+
+test("shows the real Skill Hub search keywords and distinguishes an unconfigured source", () => {
+  assert.match(cardSource, /检索关键词/);
+  assert.match(cardSource, /group\.searchKeywords\.join\("、"\)/);
+  assert.match(cardSource, /group\.sources\.length === 0/);
+  assert.match(cardSource, /group\.value === "skill_hub" \? "未检索" : "未配置"/);
 });
 
 test("bounds expanded resource details in a keyboard-scrollable region", () => {
@@ -285,7 +300,7 @@ test("combines create_agents input blueprints with partial execution results", a
   assert.equal(parsed.agents[1].error, "Model unavailable");
 });
 
-test("renders fixed-height agent cards with resource popovers and separated tool types", () => {
+test("renders compact bounded agent cards with resource popovers and separated tool types", () => {
   assert.match(cardSource, /<ResourceCard className="create-agent-card__agent-card"/);
   assert.match(cardSource, /<ResourceIdentityMark seed=\{agent\.name\}/);
   assert.match(cardSource, /status=\{\([\s\S]*?AGENT_TYPE_LABELS\[agent\.rootType\]/);
@@ -295,8 +310,20 @@ test("renders fixed-height agent cards with resource popovers and separated tool
   assert.match(cardSource, /自写工具/);
   assert.match(cardSource, /count=\{agent\.subAgentCount\}/);
   assert.match(cardSource, /<code>\{tool\.code\}<\/code>/);
-  assert.match(cardStyles, /grid-template-columns:\s*repeat\(auto-fit,/);
-  assert.match(cardStyles, /grid-auto-rows:\s*168px/);
+  assert.match(
+    cardStyles,
+    /grid-template-columns:\s*repeat\(auto-fit, minmax\(min\(280px, 100%\), 372px\)\)/,
+  );
+  assert.match(cardStyles, /justify-content:\s*start/);
+  assert.match(cardStyles, /grid-auto-rows:\s*140px/);
+  assert.match(
+    cardStyles,
+    /\.create-agent-card__agent-card \.resource-card__title-copy h3\s*\{[^}]*font-size:\s*var\(--font-text-md-size, 16px\)/s,
+  );
+  assert.match(
+    cardStyles,
+    /\.create-agent-card__agent-card \.resource-card__description\s*\{[^}]*font-size:\s*var\(--font-text-sm-size, 14px\)/s,
+  );
   assert.match(cardStyles, /\.create-agent-card__agent-card\.resource-card:hover,[\s\S]*?box-shadow:\s*none;/);
   assert.match(cardStyles, /\.create-agent-card__python-tool-panel pre\s*\{[\s\S]*?overflow:\s*auto;/);
 });

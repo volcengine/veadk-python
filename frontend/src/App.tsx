@@ -462,6 +462,10 @@ function findAgentNode(node: AgentNode, name: string): AgentNode | undefined {
   return undefined;
 }
 
+function displayAgentName(name: string): string {
+  return name.replace(/__[0-9a-f]{10}(?:__.*)?$/i, "");
+}
+
 function mentionableDescendants(node: AgentNode): AgentTarget[] {
   const targets: AgentTarget[] = [];
   for (const child of node.children) {
@@ -7099,7 +7103,7 @@ export default function App() {
               rootAgentNames.length > 0 &&
               !rootAgentNames.includes(agentAuthor),
             );
-            const agentDisplayName = agentNode?.name || agentAuthor;
+            const agentDisplayName = displayAgentName(agentNode?.name || agentAuthor);
             const agentDescription = agentNode?.description ||
               (isSubAgent ? "正在执行主 Agent 移交的任务。" : "");
             if (

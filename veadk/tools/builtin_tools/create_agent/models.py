@@ -53,6 +53,7 @@ class ResourceSourceStatus(BaseModel):
     status: Literal["ok", "skipped", "error"]
     count: int = 0
     message: str | None = None
+    search_keywords: list[str] = Field(default_factory=list)
 
 
 class CollectResourcesResponse(BaseModel):
@@ -188,7 +189,7 @@ class LegacyAgentBlueprint(BaseModel):
 
 
 class AgentBlueprint(BaseModel):
-    """One independently constructed and executed root agent."""
+    """One independently constructed root agent."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -212,6 +213,17 @@ class CreateAgentsInput(BaseModel):
 
     collection_id: str
     agents: list[AgentBlueprint] = Field(min_length=1)
+    handoff_to: str = Field(
+        description=(
+            "Name of the agent blueprint that should receive control after all "
+            "agents have been created."
+        )
+    )
+
+    @model_validator(mode="after")
+    def validate_handoff_target(self) -> "CreateAgentsInput":
+        _validate_agent_names_and_handoff(self.agents, self.handoff_to)
+        return self
 
 
 class LegacyCreateAgentsInput(BaseModel):
@@ -219,10 +231,22 @@ class LegacyCreateAgentsInput(BaseModel):
 
     collection_id: str
     agents: list[LegacyAgentBlueprint] = Field(min_length=1)
+    handoff_to: str = Field(
+        description=(
+            "Name of the agent blueprint that should receive control after all "
+            "agents have been created."
+        )
+    )
+
+    @model_validator(mode="after")
+    def validate_handoff_target(self) -> "LegacyCreateAgentsInput":
+        _validate_agent_names_and_handoff(self.agents, self.handoff_to)
+        return self
 
 
 class CreatedAgentResult(BaseModel):
     name: str
+    runtime_name: str | None = None
     description: str = ""
     root_type: AgentType | None = None
     status: Literal["completed", "failed"]
@@ -234,4 +258,16 @@ class CreatedAgentResult(BaseModel):
 
 class CreateAgentsResponse(BaseModel):
     collection_id: str
+    handoff_to: str | None = None
     results: list[CreatedAgentResult]
+
+
+def _validate_agent_names_and_handoff(
+    agents: list[AgentBlueprint] | list[LegacyAgentBlueprint],
+    handoff_to: str,
+) -> None:
+    names = [agent.name for agent in agents]
+    if len(names) != len(set(names)):
+        raise ValueError("Agent blueprint names must be unique.")
+    if handoff_to not in names:
+        raise ValueError(f"handoff_to '{handoff_to}' must match one of agents[*].name.")

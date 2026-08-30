@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Build and execute dynamic agent blueprints."""
+"""Build dynamic agent blueprints for registration in the current agent tree."""
 
 from __future__ import annotations
 
@@ -20,14 +20,14 @@ import asyncio
 import inspect
 import threading
 from collections.abc import Callable, Sequence
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, cast
 
 from google.adk.agents import BaseAgent
 from google.adk.tools import FunctionTool
 
 from veadk.skills.materializer import materialize_remote_skill
 from veadk.tools import get_builtin_tool
-from veadk.tools.builtin_tools.create_agent.executor import default_executor
 from veadk.tools.builtin_tools.create_agent.knowledge_tools import (
     build_knowledge_tool,
     default_knowledge_factory,
@@ -36,6 +36,9 @@ from veadk.tools.builtin_tools.create_agent.models import (
     AgentBlueprint,
     CreatedAgentResult,
     LlmAgentNode,
+    LoopAgentNode,
+    ParallelAgentNode,
+    SequentialAgentNode,
     WorkflowAgentNode,
 )
 from veadk.tools.builtin_tools.create_agent.python_tools import compile_python_tool
@@ -51,11 +54,43 @@ from veadk.tools.builtin_tools.create_agent.sources.agentkit_knowledge import (
 
 LeafFactory = Callable[[LlmAgentNode, list[Any], bool, Any], BaseAgent]
 KnowledgeFactory = Callable[[AgentKitKnowledgePayload, CloudCredentials], Any]
-AgentExecutor = Callable[[Any, str, str], Any]
+
+
+@dataclass
+class BuiltAgent:
+    """One blueprint build result and its runtime-owned resources."""
+
+    result: CreatedAgentResult
+    root: BaseAgent | None = None
+    knowledgebases: list[Any] = field(default_factory=list)
+
+    async def close(self) -> None:
+        await _close_knowledgebases(self.knowledgebases)
+        self.knowledgebases.clear()
+
+
+class _WorkflowTransferAgent(BaseAgent):
+    """Expose an ADK 2.x Workflow as a target accepted by agent transfer."""
+
+    workflow: Any
+
+    async def _run_async_impl(self, ctx):
+        from google.adk.agents.context import Context
+        from google.adk.workflow._node_runner import NodeRunner
+
+        parent_ctx = Context(ctx, node=self)
+        child_ctx = await NodeRunner(
+            node=self.workflow,
+            parent_ctx=parent_ctx,
+        ).run(node_input=ctx.user_content)
+        if child_ctx.error:
+            raise child_ctx.error
+        if False:  # pragma: no cover - keep this method an async generator.
+            yield
 
 
 class AgentOrchestrator:
-    """Validate, materialize, compose, and execute requested agents."""
+    """Validate, materialize, and compose requested agents."""
 
     def __init__(
         self,
@@ -64,46 +99,47 @@ class AgentOrchestrator:
         max_orchestration_depth: int = 2,
         leaf_factory: LeafFactory | None = None,
         knowledge_factory: KnowledgeFactory | None = None,
-        executor: AgentExecutor | None = None,
         skill_cache_dir=None,
     ) -> None:
         self._supports_workflow = supports_workflow
         self._max_depth = max_orchestration_depth
         self._leaf_factory = leaf_factory or _default_leaf_factory
         self._knowledge_factory = knowledge_factory or default_knowledge_factory
-        self._executor = executor or default_executor
         self._skill_cache_dir = skill_cache_dir
         self._skill_locks: dict[str, threading.Lock] = {}
 
-    async def create_and_run(
+    async def create(
         self,
         *,
         snapshot: ResourceSnapshot,
         agents: Sequence[AgentBlueprint],
+        runtime_names: Sequence[str],
         tool_context: Any = None,
-    ) -> list[CreatedAgentResult]:
+    ) -> list[BuiltAgent]:
         skill_tasks: dict[str, asyncio.Task[Any]] = {}
         return list(
             await asyncio.gather(
                 *(
-                    self._create_and_run_one(
+                    self._create_one(
                         snapshot,
                         blueprint,
+                        runtime_name,
                         tool_context,
                         skill_tasks,
                     )
-                    for blueprint in agents
+                    for blueprint, runtime_name in zip(agents, runtime_names)
                 )
             )
         )
 
-    async def _create_and_run_one(
+    async def _create_one(
         self,
         snapshot: ResourceSnapshot,
         blueprint: AgentBlueprint,
+        runtime_name: str,
         tool_context: Any,
         skill_tasks: dict[str, asyncio.Task[Any]],
-    ) -> CreatedAgentResult:
+    ) -> BuiltAgent:
         root_type = None
         knowledgebases: list[Any] = []
         description, resources, python_tools = _blueprint_summary(
@@ -114,6 +150,14 @@ class AgentOrchestrator:
             nodes = {node.id: node for node in blueprint.nodes}
             root_type = nodes[blueprint.root_node].type
             workflow_members = self._validate_blueprint(blueprint, nodes)
+            runtime_node_names = {
+                node_id: (
+                    runtime_name
+                    if node_id == blueprint.root_node
+                    else f"{runtime_name}__{node_id}"
+                )
+                for node_id in nodes
+            }
             built: dict[str, Any] = {}
             building: set[str] = set()
 
@@ -124,8 +168,12 @@ class AgentOrchestrator:
                     raise ValueError(f"Cyclic agent nesting detected at '{node_id}'.")
                 building.add(node_id)
                 node = nodes[node_id]
+                runtime_node = node.model_copy(
+                    update={"id": runtime_node_names[node_id]}
+                )
 
                 if node.type == "llm":
+                    llm_node = cast(LlmAgentNode, runtime_node)
                     tools, mounted = await self._build_leaf_tools(
                         node,
                         snapshot,
@@ -134,21 +182,35 @@ class AgentOrchestrator:
                     )
                     knowledgebases.extend(mounted)
                     value = self._leaf_factory(
-                        node,
+                        llm_node,
                         tools,
                         node_id in workflow_members,
                         _parent_agent(tool_context),
                     )
                 elif node.type in {"sequential", "parallel", "loop"}:
-                    children = [await build(child) for child in node.children]
-                    value = _build_classic_orchestrator(node, children)
+                    classic_node = cast(
+                        SequentialAgentNode | ParallelAgentNode | LoopAgentNode,
+                        runtime_node,
+                    )
+                    children = [await build(child) for child in classic_node.children]
+                    value = _build_classic_orchestrator(classic_node, children)
                 elif node.type == "workflow":
-                    dependencies = _workflow_dependencies(node)
+                    workflow_node = cast(WorkflowAgentNode, runtime_node)
+                    dependencies = _workflow_dependencies(workflow_node)
                     resolved = {
                         dependency: await build(dependency)
                         for dependency in dependencies
                     }
-                    value = _build_workflow(node, resolved)
+                    workflow = _build_workflow(workflow_node, resolved)
+                    value = (
+                        _WorkflowTransferAgent(
+                            name=runtime_name,
+                            description=node.description,
+                            workflow=workflow,
+                        )
+                        if node_id == blueprint.root_node
+                        else workflow
+                    )
                 else:  # pragma: no cover - Pydantic prevents this.
                     raise ValueError(f"Unsupported node type: {node.type}")
 
@@ -157,30 +219,38 @@ class AgentOrchestrator:
                 return value
 
             root = await build(blueprint.root_node)
-            output = self._executor(root, blueprint.task, blueprint.name)
-            if inspect.isawaitable(output):
-                output = await output
-            return CreatedAgentResult(
-                name=blueprint.name,
-                description=description,
-                root_type=root_type,
-                status="completed",
-                resources=resources,
-                python_tools=python_tools,
-                output=str(output or ""),
+            if not isinstance(root, BaseAgent):
+                raise TypeError(
+                    f"Blueprint root '{blueprint.root_node}' cannot be registered "
+                    "as an ADK agent."
+                )
+            return BuiltAgent(
+                root=root,
+                knowledgebases=knowledgebases,
+                result=CreatedAgentResult(
+                    name=blueprint.name,
+                    runtime_name=runtime_name,
+                    description=description,
+                    root_type=root_type,
+                    status="completed",
+                    resources=resources,
+                    python_tools=python_tools,
+                ),
             )
         except Exception as exc:
-            return CreatedAgentResult(
-                name=blueprint.name,
-                description=description,
-                root_type=root_type,
-                status="failed",
-                resources=resources,
-                python_tools=python_tools,
-                error=str(exc),
-            )
-        finally:
             await _close_knowledgebases(knowledgebases)
+            return BuiltAgent(
+                result=CreatedAgentResult(
+                    name=blueprint.name,
+                    runtime_name=runtime_name,
+                    description=description,
+                    root_type=root_type,
+                    status="failed",
+                    resources=resources,
+                    python_tools=python_tools,
+                    error=str(exc),
+                )
+            )
 
     def _validate_blueprint(
         self, blueprint: AgentBlueprint, nodes: dict[str, Any]
@@ -481,6 +551,8 @@ def _default_leaf_factory(
         "description": node.description,
         "instruction": node.instruction,
         "tools": tools,
+        "disallow_transfer_to_parent": True,
+        "disallow_transfer_to_peers": True,
     }
     if node.model_name is not None:
         kwargs["model_name"] = node.model_name
@@ -495,7 +567,7 @@ def _default_leaf_factory(
         and parent_agent is not None
         and getattr(parent_agent, "model", None) is not None
     )
-    if inherit_parent_model:
+    if inherit_parent_model and parent_agent is not None:
         kwargs["model"] = parent_agent.model
         inherited_api_key = getattr(parent_agent, "model_api_key", "")
         if inherited_api_key:

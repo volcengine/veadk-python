@@ -18,15 +18,21 @@ import asyncio
 import json
 import threading
 import time
+from collections.abc import AsyncGenerator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from google.adk.agents import BaseAgent
+from google.adk.agents import BaseAgent, LlmAgent
 from google.adk.events import Event
+from google.adk.events.event_actions import EventActions
+from google.adk.models.base_llm import BaseLlm
+from google.adk.models.llm_response import LlmResponse
+from google.adk.runners import InMemoryRunner
 from google.genai import types
 
+from veadk import Agent
 from veadk.skills.skill import Skill
 from veadk.knowledgebase.entry import KnowledgebaseEntry
 from veadk.tools.builtin_tools.create_agent import CreateAgentToolset
@@ -53,6 +59,8 @@ def _context(
     parent_agent: Any = None,
     invocation_id: str | None = None,
 ) -> Any:
+    if parent_agent is None:
+        parent_agent = _TextAgent(name="main", marker="main")
     session = SimpleNamespace(
         id=session_id,
         app_name="test-app",
@@ -64,7 +72,11 @@ def _context(
         agent=parent_agent,
         invocation_id=invocation_id,
     )
-    return SimpleNamespace(state={}, _invocation_context=invocation)
+    return SimpleNamespace(
+        state={},
+        actions=EventActions(),
+        _invocation_context=invocation,
+    )
 
 
 class _StaticSource:
@@ -123,6 +135,15 @@ def _leaf_factory(node, tools, workflow_member, parent_agent):
     return _TextAgent(name=node.id, marker=node.id)
 
 
+def _blueprint(name: str = "child") -> dict[str, Any]:
+    return {
+        "name": name,
+        "task": "run",
+        "root_node": "worker",
+        "nodes": [{"id": "worker", "type": "llm", "instruction": "work"}],
+    }
+
+
 @pytest.mark.asyncio
 async def test_toolset_exposes_exactly_two_tools_and_dynamic_schema() -> None:
     modern = CreateAgentToolset(
@@ -147,12 +168,12 @@ async def test_toolset_exposes_exactly_two_tools_and_dynamic_schema() -> None:
         "collect_resources",
         "create_agents",
     ]
-    modern_schema = json.dumps(
-        modern_tools[1]._get_declaration().parameters_json_schema
-    )
-    legacy_schema = json.dumps(
-        legacy_tools[1]._get_declaration().parameters_json_schema
-    )
+    modern_declaration = modern_tools[1]._get_declaration()
+    legacy_declaration = legacy_tools[1]._get_declaration()
+    assert modern_declaration is not None
+    assert legacy_declaration is not None
+    modern_schema = json.dumps(modern_declaration.parameters_json_schema)
+    legacy_schema = json.dumps(legacy_declaration.parameters_json_schema)
     assert '"const": "workflow"' in modern_schema
     assert '"const": "workflow"' not in legacy_schema
 
@@ -213,7 +234,43 @@ async def test_default_collection_includes_veadk_builtin_tools(monkeypatch) -> N
         "status": "ok",
         "count": 2,
         "message": None,
+        "search_keywords": [],
     }
+
+
+@pytest.mark.asyncio
+async def test_collect_resources_searches_skill_hub_with_supplied_keywords(
+    monkeypatch,
+) -> None:
+    captured: list[list[str]] = []
+
+    class SearchSource:
+        name = "skill_hub:public"
+
+        def __init__(self, keywords):
+            captured.append(list(keywords))
+
+        async def collect(self, tool_context=None):
+            return SourceCollection(
+                status=ResourceSourceStatus(
+                    source=self.name,
+                    status="ok",
+                    search_keywords=captured[-1],
+                )
+            )
+
+    monkeypatch.setattr(
+        "veadk.tools.builtin_tools.create_agent.toolset.SkillHubSearchSource",
+        SearchSource,
+    )
+    toolset = CreateAgentToolset(resource_sources=[])
+
+    result = await toolset.collect_resources(
+        skill_hub_keywords=[" AgentKit ", "公开资料", "AgentKit"],
+    )
+
+    assert captured == [["AgentKit", "公开资料"]]
+    assert result["sources"][0]["search_keywords"] == ["AgentKit", "公开资料"]
 
 
 @pytest.mark.asyncio
@@ -251,22 +308,20 @@ async def test_collect_then_create_nested_agents_through_function_tools() -> Non
                     ],
                 }
             ],
+            "handoff_to": "research_pipeline",
         },
         tool_context=context,
     )
 
-    assert result["results"] == [
-        {
-            "name": "research_pipeline",
-            "description": "research",
-            "root_type": "sequential",
-            "status": "completed",
-            "resources": [],
-            "python_tools": [],
-            "output": "reviewer",
-            "error": None,
-        }
-    ]
+    created = result["results"][0]
+    assert created["name"] == "research_pipeline"
+    assert created["description"] == "research"
+    assert created["root_type"] == "sequential"
+    assert created["status"] == "completed"
+    assert created["output"] is None
+    assert result["handoff_to"] == created["runtime_name"]
+    assert context.actions.transfer_to_agent == created["runtime_name"]
+    assert context._invocation_context.agent.find_agent(created["runtime_name"])
 
 
 @pytest.mark.asyncio
@@ -306,7 +361,8 @@ async def test_selected_builtin_tool_is_resolved_during_create(
         resource_sources=[_StaticSource([resource])],
         leaf_factory=leaf_factory,
     )
-    collected = await toolset.collect_resources()
+    context = _context()
+    collected = await toolset.collect_resources(tool_context=context)
     result = await toolset.create_agents(
         collection_id=collected["collection_id"],
         agents=[
@@ -325,6 +381,8 @@ async def test_selected_builtin_tool_is_resolved_during_create(
                 ],
             }
         ],
+        handoff_to="researcher",
+        tool_context=context,
     )
 
     assert resolved == ["web_search"]
@@ -340,7 +398,8 @@ async def test_selected_builtin_tool_is_resolved_during_create(
 @pytest.mark.asyncio
 async def test_workflow_executes_when_adk_supports_it() -> None:
     toolset = CreateAgentToolset(resource_sources=[], leaf_factory=_leaf_factory)
-    collected = await toolset.collect_resources()
+    context = _context()
+    collected = await toolset.collect_resources(tool_context=context)
 
     result = await toolset.create_agents(
         collection_id=collected["collection_id"],
@@ -363,17 +422,21 @@ async def test_workflow_executes_when_adk_supports_it() -> None:
                 ],
             }
         ],
+        handoff_to="workflow_demo",
+        tool_context=context,
     )
 
     assert result["results"][0]["status"] == "completed"
     assert result["results"][0]["root_type"] == "workflow"
-    assert result["results"][0]["output"] == "second"
+    assert result["results"][0]["output"] is None
+    assert context.actions.transfer_to_agent == result["handoff_to"]
 
 
 @pytest.mark.asyncio
 async def test_rejects_more_than_two_orchestration_layers() -> None:
     toolset = CreateAgentToolset(resource_sources=[], leaf_factory=_leaf_factory)
-    collected = await toolset.collect_resources()
+    context = _context()
+    collected = await toolset.collect_resources(tool_context=context)
 
     result = await toolset.create_agents(
         collection_id=collected["collection_id"],
@@ -402,10 +465,48 @@ async def test_rejects_more_than_two_orchestration_layers() -> None:
                 ],
             }
         ],
+        handoff_to="too_deep",
+        tool_context=context,
     )
 
     assert result["results"][0]["status"] == "failed"
     assert "Maximum orchestration depth exceeded" in result["results"][0]["error"]
+    assert result["handoff_to"] is None
+    assert context.actions.transfer_to_agent is None
+
+
+@pytest.mark.asyncio
+async def test_create_agents_requires_an_active_agent_context() -> None:
+    toolset = CreateAgentToolset(
+        resource_sources=[],
+        leaf_factory=_leaf_factory,
+    )
+    collected = await toolset.collect_resources()
+
+    with pytest.raises(ValueError, match="active ADK agent invocation"):
+        await toolset.create_agents(
+            collection_id=collected["collection_id"],
+            agents=[_blueprint()],
+            handoff_to="child",
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_agents_rejects_unknown_handoff_target() -> None:
+    toolset = CreateAgentToolset(
+        resource_sources=[],
+        leaf_factory=_leaf_factory,
+    )
+    context = _context()
+    collected = await toolset.collect_resources(tool_context=context)
+
+    with pytest.raises(ValueError, match="must match one of agents"):
+        await toolset.create_agents(
+            collection_id=collected["collection_id"],
+            agents=[_blueprint()],
+            handoff_to="missing",
+            tool_context=context,
+        )
 
 
 @pytest.mark.asyncio
@@ -416,7 +517,8 @@ async def test_collection_is_scoped_to_the_calling_session() -> None:
     with pytest.raises(ValueError, match="different invocation or session"):
         await toolset.create_agents(
             collection_id=collected["collection_id"],
-            agents=[],
+            agents=[_blueprint()],
+            handoff_to="child",
             tool_context=_context("two"),
         )
 
@@ -431,86 +533,71 @@ async def test_collection_is_scoped_to_the_calling_invocation() -> None:
     with pytest.raises(ValueError, match="different invocation or session"):
         await toolset.create_agents(
             collection_id=collected["collection_id"],
-            agents=[],
+            agents=[_blueprint()],
+            handoff_to="child",
             tool_context=_context("shared-session", invocation_id="invocation-two"),
         )
 
 
 @pytest.mark.asyncio
 async def test_collection_is_released_after_create_agents() -> None:
-    toolset = CreateAgentToolset(resource_sources=[])
+    toolset = CreateAgentToolset(
+        resource_sources=[],
+        leaf_factory=_leaf_factory,
+    )
     context = _context(invocation_id="one-shot")
     collected = await toolset.collect_resources(tool_context=context)
 
     result = await toolset.create_agents(
         collection_id=collected["collection_id"],
-        agents=[],
+        agents=[_blueprint()],
+        handoff_to="child",
         tool_context=context,
     )
 
-    assert result["results"] == []
+    assert result["results"][0]["status"] == "completed"
     with pytest.raises(ValueError, match="Unknown or expired collection_id"):
         await toolset.create_agents(
             collection_id=collected["collection_id"],
-            agents=[],
+            agents=[_blueprint()],
+            handoff_to="child",
             tool_context=context,
         )
 
 
 @pytest.mark.asyncio
-async def test_agents_run_concurrently_and_fail_independently() -> None:
-    started: set[str] = set()
-    ready = asyncio.Event()
-
-    async def executor(root, task: str, name: str) -> str:
-        del root, task
-        started.add(name)
-        if len(started) == 2:
-            ready.set()
-        await asyncio.wait_for(ready.wait(), timeout=0.5)
-        if name == "broken":
-            raise RuntimeError("boom")
-        return "ok"
-
+async def test_agents_are_registered_and_selected_target_is_handed_off() -> None:
     toolset = CreateAgentToolset(
         resource_sources=[],
         leaf_factory=_leaf_factory,
-        executor=executor,
     )
-    collected = await toolset.collect_resources()
-    node = [{"id": "worker", "type": "llm", "instruction": "work"}]
+    context = _context()
+    collected = await toolset.collect_resources(tool_context=context)
 
     result = await toolset.create_agents(
         collection_id=collected["collection_id"],
         agents=[
-            {"name": "healthy", "task": "one", "root_node": "worker", "nodes": node},
-            {"name": "broken", "task": "two", "root_node": "worker", "nodes": node},
+            _blueprint("researcher"),
+            _blueprint("writer"),
         ],
+        handoff_to="writer",
+        tool_context=context,
     )
 
-    assert started == {"healthy", "broken"}
-    assert [item["status"] for item in result["results"]] == [
-        "completed",
-        "failed",
-    ]
-    assert result["results"][1]["error"] == "boom"
+    runtime_names = [item["runtime_name"] for item in result["results"]]
+    assert all(
+        context._invocation_context.agent.find_agent(name) for name in runtime_names
+    )
+    assert context.actions.transfer_to_agent == runtime_names[1]
+    assert result["handoff_to"] == runtime_names[1]
 
 
 @pytest.mark.asyncio
 async def test_default_leaf_inherits_parent_model() -> None:
-    observed = []
-
-    async def executor(root, task, name):
-        del task, name
-        observed.append(root.model)
-        return "ok"
-
-    toolset = CreateAgentToolset(resource_sources=[], executor=executor)
+    toolset = CreateAgentToolset(resource_sources=[])
+    parent = LlmAgent(name="main", model="parent-model")
     context = _context(
-        parent_agent=SimpleNamespace(
-            model="parent-model",
-            model_api_key="parent-key",
-        )
+        parent_agent=parent,
     )
     collected = await toolset.collect_resources(tool_context=context)
 
@@ -524,11 +611,15 @@ async def test_default_leaf_inherits_parent_model() -> None:
                 "nodes": [{"id": "worker", "type": "llm", "instruction": "work"}],
             }
         ],
+        handoff_to="child",
         tool_context=context,
     )
 
     assert result["results"][0]["status"] == "completed"
-    assert observed == ["parent-model"]
+    runtime_name = result["results"][0]["runtime_name"]
+    created_agent = parent.find_agent(runtime_name)
+    assert created_agent is not None
+    assert getattr(created_agent, "model", None) == "parent-model"
 
 
 @pytest.mark.asyncio
@@ -583,7 +674,8 @@ async def test_skill_is_materialized_only_during_create(
         resource_sources=[_StaticSource([resource])],
         leaf_factory=leaf_factory,
     )
-    collected = await toolset.collect_resources()
+    context = _context()
+    collected = await toolset.collect_resources(tool_context=context)
     assert calls == []
 
     result = await toolset.create_agents(
@@ -603,6 +695,8 @@ async def test_skill_is_materialized_only_during_create(
                 ],
             }
         ],
+        handoff_to="skilled",
+        tool_context=context,
     )
 
     assert result["results"][0]["status"] == "completed"
@@ -687,6 +781,7 @@ async def test_concurrent_invocations_serialize_same_skill_materialization(
             toolset.create_agents(
                 collection_id=collection["collection_id"],
                 agents=[blueprint],
+                handoff_to="skilled",
                 tool_context=context,
             )
             for collection, context in zip(collections, contexts)
@@ -742,19 +837,13 @@ async def test_selected_knowledge_is_mounted_as_read_only_search_tool(
         del workflow_member, parent_agent
         return _ToolAwareAgent(name=node.id, mounted_tools=tools)
 
-    async def executor(root, task, name):
-        del task, name
-        knowledge_tool = root.mounted_tools[0]
-        result = await knowledge_tool.func("policy", 3)
-        return result[0]["entries"][0]["content"]
-
     toolset = CreateAgentToolset(
         resource_sources=[_StaticSource([resource])],
         leaf_factory=leaf_factory,
         knowledge_factory=lambda selected, credentials: Knowledge(),
-        executor=executor,
     )
-    collected = await toolset.collect_resources()
+    context = _context()
+    collected = await toolset.collect_resources(tool_context=context)
 
     result = await toolset.create_agents(
         collection_id=collected["collection_id"],
@@ -773,10 +862,18 @@ async def test_selected_knowledge_is_mounted_as_read_only_search_tool(
                 ],
             }
         ],
+        handoff_to="grounded",
+        tool_context=context,
     )
 
     assert result["results"][0]["status"] == "completed"
-    assert result["results"][0]["output"] == "policy:3"
+    runtime_name = result["results"][0]["runtime_name"]
+    root = context._invocation_context.agent.find_agent(runtime_name)
+    knowledge_tool = root.mounted_tools[0]
+    search_result = await knowledge_tool.func("policy", 3)
+    assert search_result[0]["entries"][0]["content"] == "policy:3"
+    assert closed == []
+    await toolset.close()
     assert closed == [True]
 
 
@@ -828,7 +925,8 @@ async def test_partial_knowledge_mount_failure_closes_created_instances(
         leaf_factory=_leaf_factory,
         knowledge_factory=knowledge_factory,
     )
-    collected = await toolset.collect_resources()
+    context = _context()
+    collected = await toolset.collect_resources(tool_context=context)
 
     result = await toolset.create_agents(
         collection_id=collected["collection_id"],
@@ -850,6 +948,8 @@ async def test_partial_knowledge_mount_failure_closes_created_instances(
                 ],
             }
         ],
+        handoff_to="grounded",
+        tool_context=context,
     )
 
     assert result["results"][0]["status"] == "failed"
@@ -894,3 +994,151 @@ def test_python_tool_runs_locally_and_checks_current_dependencies() -> None:
                 dependencies=["definitely-not-installed-veadk-package>=1"],
             )
         )
+
+
+@pytest.mark.asyncio
+async def test_main_agent_can_answer_without_delegating() -> None:
+    class DirectLlm(BaseLlm):
+        async def generate_content_async(
+            self, llm_request, stream: bool = False
+        ) -> AsyncGenerator[LlmResponse, None]:
+            del llm_request, stream
+            yield LlmResponse(
+                content=types.Content(
+                    role="model",
+                    parts=[types.Part(text="direct answer")],
+                )
+            )
+
+    toolset = CreateAgentToolset(resource_sources=[])
+    main = Agent(
+        name="main",
+        model=DirectLlm(model="direct-llm"),
+        model_api_key="test-key",
+        instruction="Answer simple requests directly.",
+        tools=[toolset],
+    )
+    runner = InMemoryRunner(agent=main, app_name="dynamic-direct-test")
+    session_id = "dynamic-direct-session"
+    await runner.session_service.create_session(
+        app_name=runner.app_name,
+        user_id="test-user",
+        session_id=session_id,
+    )
+
+    events = [
+        event
+        async for event in runner.run_async(
+            user_id="test-user",
+            session_id=session_id,
+            new_message=types.UserContent(parts=[types.Part(text="hello")]),
+        )
+    ]
+
+    assert not [call for event in events for call in (event.get_function_calls() or [])]
+    assert any(
+        event.content
+        and any(part.text == "direct answer" for part in (event.content.parts or []))
+        for event in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_runner_transfers_from_create_agents_to_dynamic_sub_agent() -> None:
+    class DelegatingLlm(BaseLlm):
+        call_count: int = 0
+
+        async def generate_content_async(
+            self, llm_request, stream: bool = False
+        ) -> AsyncGenerator[LlmResponse, None]:
+            del stream
+            self.call_count += 1
+            if self.call_count == 1:
+                function_call = types.FunctionCall(
+                    id="collect-call",
+                    name="collect_resources",
+                    args={},
+                )
+            else:
+                collection_id = next(
+                    (part.function_response.response or {})["collection_id"]
+                    for content in reversed(llm_request.contents or [])
+                    for part in (content.parts or [])
+                    if part.function_response
+                    and part.function_response.name == "collect_resources"
+                )
+                function_call = types.FunctionCall(
+                    id="create-call",
+                    name="create_agents",
+                    args={
+                        "collection_id": collection_id,
+                        "agents": [_blueprint("specialist")],
+                        "handoff_to": "specialist",
+                    },
+                )
+            yield LlmResponse(
+                content=types.Content(
+                    role="model",
+                    parts=[types.Part(function_call=function_call)],
+                )
+            )
+
+    toolset = CreateAgentToolset(
+        resource_sources=[],
+        leaf_factory=_leaf_factory,
+    )
+    main = Agent(
+        name="main",
+        model=DelegatingLlm(model="delegating-llm"),
+        model_api_key="test-key",
+        instruction="Delegate this task.",
+        tools=[toolset],
+    )
+    runner = InMemoryRunner(agent=main, app_name="test-app")
+    session_id = "dynamic-transfer-session"
+    await runner.session_service.create_session(
+        app_name=runner.app_name,
+        user_id="test-user",
+        session_id=session_id,
+    )
+
+    events = [
+        event
+        async for event in runner.run_async(
+            user_id="test-user",
+            session_id=session_id,
+            new_message=types.UserContent(
+                parts=[types.Part(text="Complete the specialist task")]
+            ),
+        )
+    ]
+
+    create_event = next(
+        event
+        for event in events
+        if any(
+            response.name == "create_agents"
+            for response in event.get_function_responses()
+        )
+    )
+    target = create_event.actions.transfer_to_agent
+    assert target and target.startswith("specialist__")
+    assert any(event.author == target for event in events), [
+        (
+            event.author,
+            event.actions.transfer_to_agent,
+            [response.name for response in (event.get_function_responses() or [])],
+            event.error_message,
+        )
+        for event in events
+    ]
+    assert any(
+        event.author == target
+        and event.content
+        and any(part.text == target for part in (event.content.parts or []))
+        for event in events
+    )
+    assert target in toolset._registrations, (
+        [agent.name for agent in main.sub_agents],
+        list(toolset._registrations),
+    )

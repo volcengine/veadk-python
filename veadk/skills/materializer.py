@@ -23,8 +23,10 @@ import shutil
 import tempfile
 import zipfile
 from pathlib import Path
+from urllib.parse import quote
 
 import frontmatter
+import httpx
 from google.adk.skills import load_skill_from_dir
 
 from veadk.skills.exceptions import SkillMaterializeError
@@ -39,6 +41,11 @@ from veadk.utils.logger import get_logger
 logger = get_logger(__name__)
 
 _SKILL_MD_NAMES = ("SKILL.md", "skill.md")
+_FINDSKILL_DOWNLOAD_URL = os.getenv(
+    "FINDSKILL_DOWNLOAD_URL",
+    "https://skills.volces.com/v1/skills/download",
+)
+_MAX_FINDSKILL_ARCHIVE_BYTES = 64 * 1024 * 1024
 
 
 def materialize_remote_skill(
@@ -50,8 +57,10 @@ def materialize_remote_skill(
     base_cache_dir = _default_cache_dir() if cache_dir is None else Path(cache_dir)
     _ensure_cache_dir(base_cache_dir)
 
-    source_type = "skillhub" if skill.source_type == "skillhub" else "skillspace"
-    source_id = skill.skill_space_id or skill.id or "unknown-source"
+    source_type = (
+        "skillhub" if skill.source_type in {"skillhub", "findskill"} else "skillspace"
+    )
+    source_id = skill.skill_space_id or skill.slug or skill.id or "unknown-source"
     version_key = skill_version_key(skill)
     version_dir = (
         base_cache_dir
@@ -104,6 +113,10 @@ def materialize_remote_skill(
 def _download_remote_skill(skill: Skill, zip_path: Path) -> None:
     zip_path.parent.mkdir(parents=True, exist_ok=True)
 
+    if skill.source_type == "findskill":
+        _download_findskill_skill(skill, zip_path)
+        return
+
     if skill.source_type == "skillhub":
         if not download_skillhub_skill(skill, zip_path):
             raise SkillMaterializeError(
@@ -115,6 +128,32 @@ def _download_remote_skill(skill: Skill, zip_path: Path) -> None:
         raise SkillMaterializeError(
             f"Failed to download skill-space skill '{skill.name}'."
         )
+
+
+def _download_findskill_skill(skill: Skill, zip_path: Path) -> None:
+    slug = (skill.slug or skill.path or skill.id or "").strip("/")
+    if not slug:
+        raise SkillMaterializeError(
+            f"Skill Hub skill '{skill.name}' has no download slug."
+        )
+    url = f"{_FINDSKILL_DOWNLOAD_URL.rstrip('/')}/{quote(slug, safe='/')}"
+    try:
+        response = httpx.get(url, timeout=60, follow_redirects=True)
+        response.raise_for_status()
+    except httpx.HTTPError as error:
+        raise SkillMaterializeError(
+            f"Failed to download Skill Hub skill '{skill.name}'."
+        ) from error
+    content = response.content
+    if len(content) > _MAX_FINDSKILL_ARCHIVE_BYTES:
+        raise SkillMaterializeError(
+            f"Skill Hub skill '{skill.name}' archive exceeds 64 MiB."
+        )
+    if not (content.startswith(b"PK\x03\x04") or content.startswith(b"PK\x05\x06")):
+        raise SkillMaterializeError(
+            f"Skill Hub skill '{skill.name}' download is not a zip archive."
+        )
+    zip_path.write_bytes(content)
 
 
 def _download_legacy_skill_space_skill(

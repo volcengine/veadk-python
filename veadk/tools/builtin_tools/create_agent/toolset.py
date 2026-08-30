@@ -12,14 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Single toolset exposing resource collection and dynamic agent execution."""
+"""Single toolset exposing resource collection and dynamic agent transfer."""
 
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 from typing import Any, Sequence
 
+from google.adk.agents import BaseAgent
 from google.adk.agents.readonly_context import ReadonlyContext
 from google.adk.tools import BaseTool, FunctionTool, ToolContext
 from google.adk.tools.base_toolset import BaseToolset
@@ -43,12 +45,13 @@ from veadk.tools.builtin_tools.create_agent.sources import (
     AgentKitKnowledgeSource,
     BuiltinToolResourceSource,
     ResourceSource,
+    SkillHubSearchSource,
     SkillResourceSource,
 )
 
 
 class CreateAgentToolset(BaseToolset):
-    """Discover resources, then create and execute selected sub-agents."""
+    """Discover resources, then create and transfer to selected sub-agents."""
 
     def __init__(
         self,
@@ -60,7 +63,6 @@ class CreateAgentToolset(BaseToolset):
         skill_cache_dir: Path | None = None,
         leaf_factory=None,
         knowledge_factory=None,
-        executor=None,
     ) -> None:
         super().__init__()
         self.capabilities = capabilities or detect_agent_capabilities()
@@ -80,7 +82,6 @@ class CreateAgentToolset(BaseToolset):
             max_orchestration_depth=self.capabilities.max_orchestration_depth,
             leaf_factory=leaf_factory,
             knowledge_factory=knowledge_factory,
-            executor=executor,
             skill_cache_dir=skill_cache_dir,
         )
         input_model = (
@@ -88,44 +89,125 @@ class CreateAgentToolset(BaseToolset):
             if "workflow" in self.capabilities.agent_types
             else LegacyCreateAgentsInput
         )
+        self._input_model = input_model
+        self._registrations: dict[str, tuple[BaseAgent, Any, str]] = {}
+        self._bootstrap_agents: list[tuple[BaseAgent, BaseAgent]] = []
         self._tools = [
             FunctionTool(self.collect_resources),
             CreateAgentsTool(self.create_agents, input_model=input_model),
         ]
 
     async def collect_resources(
-        self, tool_context: ToolContext | None = None
+        self,
+        skill_hub_keywords: list[str] | None = None,
+        tool_context: ToolContext | None = None,
     ) -> dict[str, Any]:
-        """List all configured resources concurrently; no query or filtering is applied."""
+        """Collect resources and search public Skill Hub with task keywords.
+
+        Args:
+            skill_hub_keywords: Two to five concise keywords or short phrases
+                derived from the user's task. Each value is sent to Skill Hub
+                search and is returned for transparent UI display.
+        """
+        await self._release_session(_context_session(tool_context))
+        keywords = _normalize_skill_hub_keywords(skill_hub_keywords)
         result = await self._collector.collect(
             owner=_context_owner(tool_context),
             tool_context=tool_context,
+            additional_sources=(SkillHubSearchSource(keywords),) if keywords else (),
         )
         return result.model_dump(mode="json")
 
     async def create_agents(
         self,
         collection_id: str,
-        agents: list[AgentBlueprint],
+        agents: list[Any],
+        handoff_to: str,
         tool_context: ToolContext | None = None,
     ) -> dict[str, Any]:
-        """Create and run multiple agent blueprints after collecting resources."""
+        """Create agents, register them, then transfer control to one of them."""
+        request = self._input_model.model_validate(
+            {
+                "collection_id": collection_id,
+                "agents": agents,
+                "handoff_to": handoff_to,
+            }
+        )
         parsed_agents = [
-            agent
-            if isinstance(agent, AgentBlueprint)
-            else AgentBlueprint.model_validate(agent)
-            for agent in agents
+            AgentBlueprint.model_validate(
+                agent.model_dump() if hasattr(agent, "model_dump") else agent
+            )
+            for agent in request.agents
         ]
+        parent = _parent_agent(tool_context)
+        if parent is None:
+            raise ValueError(
+                "create_agents requires an active ADK agent invocation so the "
+                "created agents can be registered and transferred to."
+            )
+        actions = getattr(tool_context, "actions", None)
+        if actions is None:
+            raise ValueError(
+                "create_agents requires a ToolContext with event actions for "
+                "transfer_to_agent."
+            )
         owner = _context_owner(tool_context)
         snapshot = self._store.consume(collection_id=collection_id, owner=owner)
-        results = await self._orchestrator.create_and_run(
+        runtime_names = [
+            _runtime_name(agent.name, collection_id, index)
+            for index, agent in enumerate(parsed_agents)
+        ]
+        built_agents = await self._orchestrator.create(
             snapshot=snapshot,
             agents=parsed_agents,
+            runtime_names=runtime_names,
             tool_context=tool_context,
         )
+        target_index = next(
+            index
+            for index, agent in enumerate(parsed_agents)
+            if agent.name == handoff_to
+        )
+        target = built_agents[target_index]
+        if target.root is None or target.result.status == "failed":
+            for built in built_agents:
+                await built.close()
+            return CreateAgentsResponse(
+                collection_id=collection_id,
+                results=[built.result for built in built_agents],
+            ).model_dump(mode="json")
+
+        registered: list[str] = []
+        try:
+            for built in built_agents:
+                if built.root is None:
+                    continue
+                runtime_name = built.result.runtime_name
+                if not runtime_name:
+                    raise ValueError("Created agent is missing its runtime name.")
+                _register_sub_agent(parent, built.root)
+                self._registrations[runtime_name] = (
+                    parent,
+                    built,
+                    _context_session(tool_context),
+                )
+                registered.append(runtime_name)
+        except Exception:
+            for runtime_name in registered:
+                await self._release(runtime_name)
+            for built in built_agents:
+                if built.result.runtime_name not in registered:
+                    await built.close()
+            raise
+
+        handoff_runtime_name = target.result.runtime_name
+        if not handoff_runtime_name:  # pragma: no cover - guarded by the builder.
+            raise ValueError("Handoff target is missing its runtime name.")
+        actions.transfer_to_agent = handoff_runtime_name
         return CreateAgentsResponse(
             collection_id=collection_id,
-            results=results,
+            handoff_to=handoff_runtime_name,
+            results=[built.result for built in built_agents],
         ).model_dump(mode="json")
 
     @override
@@ -136,7 +218,50 @@ class CreateAgentToolset(BaseToolset):
         return list(self._tools)
 
     async def close(self) -> None:
-        return None
+        for runtime_name in list(self._registrations):
+            await self._release(runtime_name)
+        for parent, bootstrap in self._bootstrap_agents:
+            if bootstrap in parent.sub_agents:
+                parent.sub_agents.remove(bootstrap)
+            bootstrap.parent_agent = None
+        self._bootstrap_agents.clear()
+
+    def prepare_parent_agent(self, parent: BaseAgent) -> None:
+        """Make ADK select its transfer-aware scheduler before the first turn."""
+        if any(
+            registered_parent is parent
+            for registered_parent, _ in self._bootstrap_agents
+        ):
+            return
+        name = "_create_agent_runtime_slot"
+        suffix = 1
+        while parent.root_agent.find_agent(name) is not None:
+            name = f"_create_agent_runtime_slot_{suffix}"
+            suffix += 1
+        bootstrap = _TransferBootstrapAgent(name=name)
+        bootstrap.parent_agent = parent
+        parent.sub_agents.append(bootstrap)
+        self._bootstrap_agents.append((parent, bootstrap))
+
+    async def _release(self, runtime_name: str) -> None:
+        registration = self._registrations.pop(runtime_name, None)
+        if registration is None:
+            return
+        parent, built, _ = registration
+        if built.root in parent.sub_agents:
+            parent.sub_agents.remove(built.root)
+        if built.root is not None:
+            built.root.parent_agent = None
+        await built.close()
+
+    async def _release_session(self, session_key: str) -> None:
+        if not session_key:
+            return
+        for runtime_name, (_, _, registered_session) in list(
+            self._registrations.items()
+        ):
+            if registered_session == session_key:
+                await self._release(runtime_name)
 
 
 def _default_sources(
@@ -167,6 +292,17 @@ def _default_sources(
     ]
 
 
+def _normalize_skill_hub_keywords(values: Sequence[str] | None) -> list[str]:
+    keywords: list[str] = []
+    for value in values or ():
+        keyword = str(value).strip()
+        if keyword and keyword not in keywords:
+            keywords.append(keyword)
+        if len(keywords) == 5:
+            break
+    return keywords
+
+
 def _context_owner(tool_context: ToolContext | None) -> str:
     if tool_context is None:
         return "local"
@@ -181,3 +317,48 @@ def _context_owner(tool_context: ToolContext | None) -> str:
             getattr(invocation, "invocation_id", None),
         )
     )
+
+
+def _context_session(tool_context: ToolContext | None) -> str:
+    if tool_context is None:
+        return ""
+    invocation = getattr(tool_context, "_invocation_context", None)
+    session = getattr(invocation, "session", None)
+    return ":".join(
+        str(value or "")
+        for value in (
+            getattr(session, "app_name", None) or getattr(session, "appName", None),
+            getattr(invocation, "user_id", None) or getattr(session, "user_id", None),
+            getattr(session, "id", None),
+        )
+    )
+
+
+def _parent_agent(tool_context: ToolContext | None) -> BaseAgent | None:
+    invocation = getattr(tool_context, "_invocation_context", None)
+    agent = getattr(invocation, "agent", None)
+    return agent if isinstance(agent, BaseAgent) else None
+
+
+def _runtime_name(name: str, collection_id: str, index: int) -> str:
+    suffix = hashlib.sha256(f"{collection_id}:{index}".encode("utf-8")).hexdigest()[:10]
+    return f"{name}__{suffix}"
+
+
+def _register_sub_agent(parent: BaseAgent, child: BaseAgent) -> None:
+    root = parent.root_agent
+    if root.find_agent(child.name) is not None:
+        raise ValueError(f"Agent runtime name '{child.name}' is already registered.")
+    child.parent_agent = parent
+    parent.sub_agents.append(child)
+
+
+class _TransferBootstrapAgent(BaseAgent):
+    """Invisible scheduler marker; dynamic agents replace it as transfer targets."""
+
+    mode: str = "single_turn"
+
+    async def _run_async_impl(self, ctx):
+        del ctx
+        if False:  # pragma: no cover - this internal marker is never dispatched.
+            yield

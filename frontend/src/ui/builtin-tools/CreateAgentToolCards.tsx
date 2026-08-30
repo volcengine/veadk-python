@@ -236,10 +236,16 @@ function ResourceMetric({
 
 export function CollectResourcesCard({ response, status }: CreateAgentToolCardProps) {
   const data = useMemo(() => parseCollectedResources(response), [response]);
-  const groups = useMemo(() => RESOURCE_CATEGORIES.map((item) => ({
-    ...item,
-    ...filterCollectedResourcesByCategory(data, item.value),
-  })), [data]);
+  const groups = useMemo(() => RESOURCE_CATEGORIES.map((item) => {
+    const group = filterCollectedResourcesByCategory(data, item.value);
+    return {
+      ...item,
+      ...group,
+      searchKeywords: [...new Set(
+        group.sources.flatMap((source) => source.searchKeywords),
+      )],
+    };
+  }), [data]);
   const defaultCategory = groups.find(
     (group) => group.resources.length > 0,
   )?.value ?? "skill_hub";
@@ -272,7 +278,9 @@ export function CollectResourcesCard({ response, status }: CreateAgentToolCardPr
                   <span>{group.label}</span>
                   <span className="create-agent-card__accordion-meta">
                     <Badge color="secondary" size="sm" variant="soft">
-                      {group.resources.length}
+                      {group.sources.length === 0
+                        ? group.value === "skill_hub" ? "未检索" : "未配置"
+                        : group.resources.length}
                     </Badge>
                     <AccordionChevron className="create-agent-card__accordion-chevron" />
                   </span>
@@ -285,6 +293,12 @@ export function CollectResourcesCard({ response, status }: CreateAgentToolCardPr
                   aria-label={`${group.label}资源列表`}
                   tabIndex={0}
                 >
+                  {group.value === "skill_hub" && group.searchKeywords.length > 0 ? (
+                    <div className="create-agent-card__search-keywords">
+                      <span>检索关键词</span>
+                      <span>{group.searchKeywords.join("、")}</span>
+                    </div>
+                  ) : null}
                   {group.resources.length > 0 ? (
                     <div className="create-agent-card__resource-list">
                       {group.resources.map((resource) => (
@@ -310,7 +324,13 @@ export function CollectResourcesCard({ response, status }: CreateAgentToolCardPr
                     </div>
                   ) : (
                     <div className="create-agent-card__empty-category">
-                      <p>本次检索未返回该类别的资源。</p>
+                      <p>
+                        {group.sources.length === 0
+                          ? group.value === "skill_hub"
+                            ? "未提供检索关键词，本次未检索 Skill Hub。"
+                            : "未配置该资源来源，本次未执行检索。"
+                          : "本次检索未返回该类别的资源。"}
+                      </p>
                       {group.sources
                         .filter((source) => source.message)
                         .map((source) => (

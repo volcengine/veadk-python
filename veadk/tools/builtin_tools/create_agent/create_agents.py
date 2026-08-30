@@ -34,9 +34,11 @@ class CreateAgentsTool(FunctionTool):
         return types.FunctionDeclaration(
             name=self.name,
             description=(
-                "Create and run one or more sub-agents concurrently. You must call "
-                "collect_resources first, use its collection_id, and select only "
-                "resource refs returned by that call."
+                "Create one or more sub-agents and transfer the current task to "
+                "the agent named by handoff_to. You must call collect_resources "
+                "first, use its collection_id, and select only resource refs "
+                "returned by that call. The selected sub-agent, not the main "
+                "agent, produces the final answer."
             ),
             parameters_json_schema=self._input_model.model_json_schema(by_alias=True),
         )

@@ -18,6 +18,7 @@ export interface ResourceSourceView {
   status: "ok" | "skipped" | "error";
   count: number;
   message: string;
+  searchKeywords: string[];
 }
 
 export interface CollectedResourcesView {
@@ -175,6 +176,7 @@ export function parseCollectedResources(response: unknown): CollectedResourcesVi
       status,
       count: asNumber(source.count),
       message: asString(source.message),
+      searchKeywords: asArray(source.search_keywords).map(asString).filter(Boolean),
     } satisfies ResourceSourceView];
   });
 
