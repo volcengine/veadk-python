@@ -97,7 +97,12 @@ class LlmAgentNode(BaseModel):
         pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
         description=(
             "Stable, reusable snake_case capability identifier without "
-            "request-specific entities."
+            "request-specific entities, industries, sectors, verticals, or "
+            "their acronyms. Keep only the operation or deliverable; exclude the "
+            "target business domain, subject matter, content category, product "
+            "type, technology category, protocol, or runtime environment. For "
+            "example, use content_researcher instead of album_researcher and "
+            "technology_researcher instead of database_researcher."
         ),
     )
     type: Literal["llm"]
@@ -105,14 +110,25 @@ class LlmAgentNode(BaseModel):
         default="",
         description=(
             "Reusable capability description without request-specific people, "
-            "brands, products, platforms, topics, incidents, or filenames."
+            "brands, products, platforms, industries, sectors, verticals, "
+            "business domains, subject matters, content categories, languages, "
+            "locales, topics, incidents, product or technology types, protocols, "
+            "runtime environments, or filenames. Describe the operation against "
+            "user-specified inputs instead: say 'researches the user-specified "
+            "subject' rather than mentioning music or albums, and 'compares the "
+            "user-specified technologies' rather than mentioning cloud databases."
         ),
     )
     instruction: str = Field(
         description=(
             "Durable role instructions that read the current user request and "
             "complete it, while parameterizing rather than hard-coding its "
-            "specific entities, topic, issue, platform, product, or filename."
+            "specific entities, topic, issue, platform, product, industry, "
+            "sector, vertical, business domain, subject matter, content category, "
+            "product or technology type, protocol, runtime environment, acronym, "
+            "source or target language, locale, or filename. Refer to them as "
+            "user-specified inputs instead. Never mention music, album, cloud, "
+            "database, or another current subject merely to explain the role."
         )
     )
     model_name: str | list[str] | None = None
@@ -142,12 +158,19 @@ class SequentialAgentNode(BaseModel):
 
     id: str = Field(
         pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
-        description="Stable reusable capability identifier.",
+        description=(
+            "Stable reusable operation identifier without the current subject "
+            "matter, content category, product or technology type, protocol, or "
+            "runtime environment."
+        ),
     )
     type: Literal["sequential"]
     description: str = Field(
         default="",
-        description="Reusable workflow role without request-specific entities.",
+        description=(
+            "Reusable workflow role without the current subject matter, content "
+            "category, product or technology type, protocol, or runtime environment."
+        ),
     )
     children: list[str] = Field(min_length=1)
 
@@ -157,12 +180,19 @@ class ParallelAgentNode(BaseModel):
 
     id: str = Field(
         pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
-        description="Stable reusable capability identifier.",
+        description=(
+            "Stable reusable operation identifier without the current subject "
+            "matter, content category, product or technology type, protocol, or "
+            "runtime environment."
+        ),
     )
     type: Literal["parallel"]
     description: str = Field(
         default="",
-        description="Reusable workflow role without request-specific entities.",
+        description=(
+            "Reusable workflow role without the current subject matter, content "
+            "category, product or technology type, protocol, or runtime environment."
+        ),
     )
     children: list[str] = Field(min_length=1)
 
@@ -172,12 +202,19 @@ class LoopAgentNode(BaseModel):
 
     id: str = Field(
         pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
-        description="Stable reusable capability identifier.",
+        description=(
+            "Stable reusable operation identifier without the current subject "
+            "matter, content category, product or technology type, protocol, or "
+            "runtime environment."
+        ),
     )
     type: Literal["loop"]
     description: str = Field(
         default="",
-        description="Reusable workflow role without request-specific entities.",
+        description=(
+            "Reusable workflow role without the current subject matter, content "
+            "category, product or technology type, protocol, or runtime environment."
+        ),
     )
     children: list[str] = Field(min_length=1)
     max_iterations: int = Field(default=3, ge=1)
@@ -196,12 +233,19 @@ class WorkflowAgentNode(BaseModel):
 
     id: str = Field(
         pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
-        description="Stable reusable capability identifier.",
+        description=(
+            "Stable reusable operation identifier without the current subject "
+            "matter, content category, product or technology type, protocol, or "
+            "runtime environment."
+        ),
     )
     type: Literal["workflow"]
     description: str = Field(
         default="",
-        description="Reusable workflow role without request-specific entities.",
+        description=(
+            "Reusable workflow role without the current subject matter, content "
+            "category, product or technology type, protocol, or runtime environment."
+        ),
     )
     edges: list[WorkflowEdge] = Field(min_length=1)
     max_concurrency: int | None = Field(default=None, ge=1)
@@ -232,8 +276,10 @@ class LegacyAgentBlueprint(BaseModel):
         description=(
             "Stable, reusable snake_case capability name. Do not include people, "
             "characters, brands, products, product categories, platforms, channels, "
-            "organizations, places, dates, topics, one-off issues or incidents, "
-            "document titles, filenames, URLs, or other request-specific entities."
+            "industries, sectors, verticals, their acronyms, business domains, "
+            "subject matters, content categories, languages, locales, organizations, "
+            "places, dates, topics, one-off issues or incidents, document titles, "
+            "filenames, URLs, or other request-specific entities."
         ),
     )
     task: str = Field(
@@ -256,8 +302,10 @@ class AgentBlueprint(BaseModel):
         description=(
             "Stable, reusable snake_case capability name. Do not include people, "
             "characters, brands, products, product categories, platforms, channels, "
-            "organizations, places, dates, topics, one-off issues or incidents, "
-            "document titles, filenames, URLs, or other request-specific entities."
+            "industries, sectors, verticals, their acronyms, business domains, "
+            "subject matters, content categories, languages, locales, organizations, "
+            "places, dates, topics, one-off issues or incidents, document titles, "
+            "filenames, URLs, or other request-specific entities."
         ),
     )
     task: str = Field(

@@ -147,7 +147,7 @@ def test_quick_mode_dynamic_agent_prompt_separates_task_from_identity() -> None:
         "只描述可重复使用的稳定能力域",
         "请求特有信息只能出现在 agents[*].task 中",
         "不得出现在 name、id、description 或 instruction 中",
-        "禁止通过音译、拼音、翻译、缩写、拼接或轻微改写",
+        "禁止通过音译、拼音、翻译、首字母缩写、行业简称、拼接或轻微改写",
         "要求读取当前用户请求及其上下文",
         "使用所挂载资源完整完成当前任务",
         "不得复述或硬编码本次任务中的特有实体",
@@ -176,6 +176,12 @@ def test_quick_mode_dynamic_agent_prompt_generalizes_specific_video_request() ->
         "产品",
         "组织",
         "平台或渠道",
+        "行业或赛道",
+        "细分领域",
+        "业务领域",
+        "内容类别",
+        "研究主题",
+        "源语言或目标语言",
         "地点",
         "日期",
         "活动名称",
@@ -192,6 +198,56 @@ def test_quick_mode_dynamic_agent_prompt_excludes_request_specific_categories(
     assert request_specific_category in _DYNAMIC_AGENT_DELEGATION_RULES
 
 
+def test_quick_mode_dynamic_agent_prompt_generalizes_industry_investment_request() -> (
+    None
+):
+    requirement = (
+        "请调研并比较三家主流新能源汽车公司的最新财务表现、产品竞争力与主要风险，"
+        "给出结构化投资分析报告"
+    )
+
+    assert requirement in _DYNAMIC_AGENT_DELEGATION_RULES
+    assert "investment_analysis_agent" in _DYNAMIC_AGENT_DELEGATION_RULES
+    assert "完整原句和“新能源汽车”行业只放入 task" in (_DYNAMIC_AGENT_DELEGATION_RULES)
+    assert "不得使用 ev_investment_research_agent" in (_DYNAMIC_AGENT_DELEGATION_RULES)
+    assert "EV、electric vehicle 等行业名称、简称或翻译" in (
+        _DYNAMIC_AGENT_DELEGATION_RULES
+    )
+
+
+def test_quick_mode_dynamic_agent_prompt_generalizes_translation_languages() -> None:
+    assert "document_translation_agent" in _DYNAMIC_AGENT_DELEGATION_RULES
+    assert "翻译为用户指定的目标语言" in _DYNAMIC_AGENT_DELEGATION_RULES
+    assert "不得使用 japanese_translation_agent" in _DYNAMIC_AGENT_DELEGATION_RULES
+    assert "不得在 description 或 instruction 中出现日语、Japanese" in (
+        _DYNAMIC_AGENT_DELEGATION_RULES
+    )
+
+
+def test_quick_mode_dynamic_agent_prompt_generalizes_subject_matter() -> None:
+    assert "区分“执行方法或交付类型”和“本次研究对象或内容类别”" in (
+        _DYNAMIC_AGENT_DELEGATION_RULES
+    )
+    for invalid_name in (
+        "financial_rag_qa_assistant",
+        "music_album_research_agent",
+        "cloud_database_comparison_agent",
+        "cloud_api_diagnostic_agent",
+    ):
+        assert invalid_name in _DYNAMIC_AGENT_DELEGATION_RULES
+    for reusable_name in (
+        "document_rag_qa_agent",
+        "content_researcher",
+        "technology_comparison_agent",
+        "incident_diagnostics_agent",
+    ):
+        assert reusable_name in _DYNAMIC_AGENT_DELEGATION_RULES
+    assert "上述约束逐个适用于所有子节点" in _DYNAMIC_AGENT_DELEGATION_RULES
+    assert "不得出现 cloud 或 API" in _DYNAMIC_AGENT_DELEGATION_RULES
+    assert "不得出现 music、album 或 专辑" in _DYNAMIC_AGENT_DELEGATION_RULES
+    assert "不得出现 cloud、database 或 数据库" in _DYNAMIC_AGENT_DELEGATION_RULES
+
+
 @pytest.mark.parametrize("blueprint_model", (AgentBlueprint, LegacyAgentBlueprint))
 def test_dynamic_agent_blueprint_schema_separates_task_from_identity(
     blueprint_model: type[AgentBlueprint | LegacyAgentBlueprint],
@@ -203,6 +259,9 @@ def test_dynamic_agent_blueprint_schema_separates_task_from_identity(
     assert "Stable, reusable snake_case capability name" in name_description
     assert "request-specific entities" in name_description
     assert "product categories, platforms, channels" in name_description
+    assert "industries, sectors, verticals, their acronyms" in name_description
+    assert "business domains, subject matters, content categories" in name_description
+    assert "languages, locales" in name_description
     assert "one-off issues or incidents" in name_description
     assert "Complete one-off user objective" in task_description
     assert "specific subjects, inputs, constraints" in task_description
@@ -213,12 +272,74 @@ def test_dynamic_llm_node_schema_requires_reusable_identity_and_current_task() -
     properties = node_schema["properties"]
 
     assert "without request-specific entities" in properties["id"]["description"]
+    assert "industries, sectors, verticals" in properties["id"]["description"]
+    assert (
+        "content_researcher instead of album_researcher"
+        in (properties["id"]["description"])
+    )
+    assert (
+        "technology_researcher instead of database_researcher"
+        in (properties["id"]["description"])
+    )
     assert "without request-specific people" in properties["description"]["description"]
+    assert (
+        "industries, sectors, verticals" in (properties["description"]["description"])
+    )
+    assert (
+        "business domains, subject matters, content categories"
+        in (properties["description"]["description"])
+    )
+    assert "languages, locales" in properties["description"]["description"]
+    assert (
+        "product or technology types, protocols"
+        in (properties["description"]["description"])
+    )
+    assert "user-specified subject" in properties["description"]["description"]
+    assert "user-specified technologies" in (properties["description"]["description"])
     assert "read the current user request" in properties["instruction"]["description"]
     assert (
         "parameterizing rather than hard-coding"
         in (properties["instruction"]["description"])
     )
+    assert (
+        "source or target language, locale"
+        in (properties["instruction"]["description"])
+    )
+    assert (
+        "business domain, subject matter, content category"
+        in (properties["instruction"]["description"])
+    )
+    assert (
+        "product or technology type, protocol, runtime environment"
+        in (properties["instruction"]["description"])
+    )
+    assert (
+        "Never mention music, album, cloud, database"
+        in (properties["instruction"]["description"])
+    )
+    assert "industry, sector, vertical" in properties["instruction"]["description"]
+    assert "acronym" in properties["instruction"]["description"]
+
+
+@pytest.mark.parametrize(
+    "node_schema_name",
+    (
+        "SequentialAgentNode",
+        "ParallelAgentNode",
+        "LoopAgentNode",
+        "WorkflowAgentNode",
+    ),
+)
+def test_dynamic_orchestrator_node_schema_excludes_current_subject(
+    node_schema_name: str,
+) -> None:
+    node_schema = AgentBlueprint.model_json_schema()["$defs"][node_schema_name]
+
+    for field in ("id", "description"):
+        description = node_schema["properties"][field]["description"]
+        assert "subject matter, content category" in description
+        assert "product or technology type, protocol" in description
+        assert "runtime environment" in description
 
 
 def test_traditional_codegen_does_not_add_dynamic_agent_capability() -> None:
