@@ -165,7 +165,10 @@ export interface ComposerProps {
   showAgentPicker?: boolean;
   agentPickerDisabled?: boolean;
   selectedRuntimeId?: string;
+  agentsSource?: "local" | "cloud";
+  localApps?: string[];
   runtimeScope?: RuntimeScope;
+  onSelectLocalApp?: (app: string) => Promise<void>;
   onSelectRuntime?: (runtime: CloudRuntime) => Promise<void>;
   onSelectSandboxSession?: (session: SandboxAgentResource) => Promise<void>;
 }
@@ -219,7 +222,10 @@ export function Composer({
   showAgentPicker = false,
   agentPickerDisabled = false,
   selectedRuntimeId = "",
+  agentsSource = "cloud",
+  localApps = [],
   runtimeScope = "mine",
+  onSelectLocalApp,
   onSelectRuntime,
   onSelectSandboxSession,
 }: ComposerProps) {
@@ -676,8 +682,11 @@ export function Composer({
           <NewChatAgentPicker
             selectedAgentName={appName ? agentName : ""}
             selectedRuntimeId={selectedRuntimeId}
+            agentsSource={agentsSource}
+            localApps={localApps}
             runtimeScope={runtimeScope}
             disabled={agentPickerDisabled}
+            onSelectLocalApp={onSelectLocalApp}
             onSelectRuntime={onSelectRuntime}
             onSelectSandboxSession={onSelectSandboxSession}
           />

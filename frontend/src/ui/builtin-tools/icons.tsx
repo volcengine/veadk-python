@@ -172,6 +172,45 @@ export function RunCodeIcon(props: ToolIconProps) {
   );
 }
 
+export function CollectResourcesIcon(props: ToolIconProps) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      {...props}
+    >
+      <circle cx="6" cy="6.25" r="2.25" />
+      <circle cx="18" cy="6.25" r="2.25" />
+      <circle cx="12" cy="17.75" r="2.25" />
+      <path d="m7.7 7.75 2.7 7.55M16.3 7.75l-2.7 7.55M8.25 6.25h7.5" />
+    </svg>
+  );
+}
+
+export function CreateAgentsIcon(props: ToolIconProps) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      {...props}
+    >
+      <circle cx="9" cy="8" r="3" />
+      <path d="M3.75 18.75c.45-3.05 2.2-4.65 5.25-4.65s4.8 1.6 5.25 4.65" />
+      <path d="M17.75 4.25v5.5M15 7h5.5M16 13.25h4.25M18.125 11.125v4.25" />
+    </svg>
+  );
+}
+
 export function ToolDisclosureIcon(props: ToolIconProps) {
   return (
     <svg

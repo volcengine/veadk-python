@@ -70,7 +70,8 @@ test("renders built-in tool calls through the extensible dedicated header", () =
   assert.match(toolStylesSource, /data-tool-tone="search"/);
   assert.match(toolStylesSource, /data-tool-tone="skill"/);
   assert.match(blocksSource, /function loadSkillLabel/);
-  assert.match(blocksSource, /label=\{loadSkillLabel\(name, args\)\}/);
+  assert.match(blocksSource, /loadSkillLabel\(name, args\)/);
+  assert.match(blocksSource, /builtinTool\.failedLabel/);
   assert.match(blocksSource, /`使用 \$\{skillName\.trim\(\)\} 技能`/);
   assert.match(headerSource, /label\?: string/);
   assert.doesNotMatch(headerSource, /builtin-tool-state/);
@@ -143,8 +144,18 @@ test("additively supports tool outcomes and plans in the shared block renderer",
   assert.match(blocksSource, /function PlanBlock/);
   assert.match(blocksSource, /case "plan"/);
   assert.match(blocksSource, /data-status=\{toolStatus\}/);
-  assert.match(blocksSource, /useState\(defaultOpen\)/);
-  assert.match(blocksSource, /if \(!touched\.current && defaultOpen\) setOpen\(true\)/);
+  assert.match(blocksSource, /const shouldDefaultOpen = defaultOpen \|\| Boolean\(DetailRenderer\)/);
+  assert.match(blocksSource, /useState\(shouldDefaultOpen\)/);
+  assert.match(blocksSource, /if \(!touched\.current && shouldDefaultOpen\) setOpen\(true\)/);
+});
+
+test("registers create-agent tools with dedicated detail renderers", () => {
+  assert.match(registrySource, /collect_resources:[\s\S]*?detailRenderer: CollectResourcesCard/);
+  assert.match(registrySource, /create_agents:[\s\S]*?detailRenderer: CreateAgentsCard/);
+  assert.match(blocksSource, /<DetailRenderer args=\{args\} response=\{response\} status=\{toolStatus\} \/>/);
+  assert.doesNotMatch(headerSource, /LoadingIndicator|aria-label="已完成"|builtin-tool-status/);
+  assert.match(toolStylesSource, /data-tool-tone="resources"/);
+  assert.match(toolStylesSource, /data-tool-tone="agent"/);
 });
 
 test("uses repository-owned current-color SVG icons for every special tool", () => {
@@ -157,6 +168,8 @@ test("uses repository-owned current-color SVG icons for every special tool", () 
     "LoadKnowledgebaseIcon",
     "LoadSkillIcon",
     "RunCodeIcon",
+    "CollectResourcesIcon",
+    "CreateAgentsIcon",
   ]) {
     assert.match(iconsSource, new RegExp(`export function ${icon}`));
   }

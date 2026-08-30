@@ -220,6 +220,15 @@ class Agent(LlmAgent):
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(None)  # for sub_agents init
 
+        # Toolsets that create sub-agents at runtime need ADK to select its
+        # transfer-aware scheduler before the first tool call can register a
+        # concrete target. The hook is intentionally capability-based so Agent
+        # does not depend on any particular built-in toolset implementation.
+        for tool in self.tools:
+            prepare_parent_agent = getattr(tool, "prepare_parent_agent", None)
+            if callable(prepare_parent_agent):
+                prepare_parent_agent(self)
+
         # Resolve the model API key when not set explicitly. A key value always
         # wins over a key name. Precedence:
         #   explicit model_api_key
