@@ -234,6 +234,14 @@ def test_quick_mode_dynamic_agent_prompt_generalizes_translation_languages() -> 
     )
 
 
+def test_quick_mode_dynamic_agent_prompt_keeps_output_language_in_task() -> None:
+    normalized_rules = " ".join(_DYNAMIC_AGENT_DELEGATION_RULES.split())
+
+    assert "所有具体输出语言要求只能保留在 agents[*].task 中" in normalized_rules
+    assert "不得在节点 instruction 中写入或推断具体语言" in normalized_rules
+    assert "instruction 必须统一参数化为“使用用户指定语言输出”" in normalized_rules
+
+
 def test_quick_mode_dynamic_agent_prompt_generalizes_subject_matter() -> None:
     assert "区分“执行方法或交付类型”和“本次研究对象或内容类别”" in (
         _DYNAMIC_AGENT_DELEGATION_RULES
@@ -358,6 +366,22 @@ def test_dynamic_llm_node_schema_requires_reusable_identity_and_current_task() -
         assert reusable_node in properties["instruction"]["description"]
     assert "industry, sector, vertical" in properties["instruction"]["description"]
     assert "acronym" in properties["instruction"]["description"]
+    assert (
+        "Any concrete output-language requirement belongs only in AgentBlueprint.task"
+        in properties["instruction"]["description"]
+    )
+    assert (
+        "even when it matches the language used in the current request"
+        in properties["instruction"]["description"]
+    )
+    assert (
+        "respond in the user-specified language"
+        in properties["instruction"]["description"]
+    )
+    assert (
+        "never name or infer the concrete language"
+        in properties["instruction"]["description"]
+    )
 
 
 @pytest.mark.parametrize(
