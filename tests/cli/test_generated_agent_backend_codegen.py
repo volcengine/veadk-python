@@ -246,6 +246,20 @@ def test_quick_mode_dynamic_agent_prompt_generalizes_subject_matter() -> None:
     assert "不得出现 cloud 或 API" in _DYNAMIC_AGENT_DELEGATION_RULES
     assert "不得出现 music、album 或 专辑" in _DYNAMIC_AGENT_DELEGATION_RULES
     assert "不得出现 cloud、database 或 数据库" in _DYNAMIC_AGENT_DELEGATION_RULES
+    assert "agents[*].task 是当前任务具体信息的唯一载体" in (
+        _DYNAMIC_AGENT_DELEGATION_RULES
+    )
+    assert "调研并比较用户指定的候选项" in _DYNAMIC_AGENT_DELEGATION_RULES
+    assert "具体候选技术、所属类别和比较维度只从 task 与当前请求读取" in (
+        _DYNAMIC_AGENT_DELEGATION_RULES
+    )
+    assert "统一使用 technology_comparison_agent" in _DYNAMIC_AGENT_DELEGATION_RULES
+    for reusable_node in (
+        "evidence_researcher",
+        "criteria_evaluator",
+        "decision_report_writer",
+    ):
+        assert reusable_node in _DYNAMIC_AGENT_DELEGATION_RULES
 
 
 @pytest.mark.parametrize("blueprint_model", (AgentBlueprint, LegacyAgentBlueprint))
@@ -317,6 +331,21 @@ def test_dynamic_llm_node_schema_requires_reusable_identity_and_current_task() -
         "Never mention music, album, cloud, database"
         in (properties["instruction"]["description"])
     )
+    assert "domain-neutral pattern" in properties["instruction"]["description"]
+    assert (
+        "compare the user-specified candidates"
+        in (properties["instruction"]["description"])
+    )
+    assert (
+        "blueprint task is the only carrier"
+        in (properties["instruction"]["description"])
+    )
+    for reusable_node in (
+        "evidence_researcher",
+        "criteria_evaluator",
+        "decision_report_writer",
+    ):
+        assert reusable_node in properties["instruction"]["description"]
     assert "industry, sector, vertical" in properties["instruction"]["description"]
     assert "acronym" in properties["instruction"]["description"]
 

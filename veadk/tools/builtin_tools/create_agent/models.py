@@ -128,7 +128,14 @@ class LlmAgentNode(BaseModel):
             "product or technology type, protocol, runtime environment, acronym, "
             "source or target language, locale, or filename. Refer to them as "
             "user-specified inputs instead. Never mention music, album, cloud, "
-            "database, or another current subject merely to explain the role."
+            "database, or another current subject merely to explain the role. "
+            "For comparison roles, use the domain-neutral pattern: read the current "
+            "request, research and compare the user-specified candidates against "
+            "the requested criteria, and return a structured decision report. The "
+            "blueprint task is the only carrier of concrete candidate details. A "
+            "technology-comparison workflow uses evidence_researcher, "
+            "criteria_evaluator, and decision_report_writer; its instructions refer "
+            "only to user-specified candidates and requested evaluation criteria."
         )
     )
     model_name: str | list[str] | None = None
