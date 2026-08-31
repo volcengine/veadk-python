@@ -385,7 +385,11 @@ class AgentOrchestrator:
             loaded = [
                 await asyncio.to_thread(load_skill_from_dir, path) for path in skills
             ]
-            tools.append(SkillToolset(skills=loaded))
+            runtime_skills = [
+                _with_catalog_skill_name(resource, skill)
+                for resource, skill in zip(skill_resources, loaded)
+            ]
+            tools.append(SkillToolset(skills=runtime_skills))
 
         knowledge_resources = [
             resource
@@ -506,6 +510,23 @@ def _materialize_skill(
         if region is not None:
             options["region"] = region
         return materialize_remote_skill(skill, **options)
+
+
+def _with_catalog_skill_name(resource: Any, skill: Any) -> Any:
+    """Expose a materialized skill under the name shown in the catalog.
+
+    Public Skill Hub entries can use a marketplace name that differs from the
+    ``name`` declared in the downloaded SKILL.md. The create-agent result and
+    inherited conversation use the marketplace name, so the runtime toolset
+    must accept that same name. The archive is validated before this rename;
+    only the in-memory ADK model is copied.
+    """
+    catalog_name = str(resource.descriptor.name or "").strip()
+    declared_name = str(getattr(skill, "name", "") or "").strip()
+    if not catalog_name or catalog_name == declared_name:
+        return skill
+    frontmatter = skill.frontmatter.model_copy(update={"name": catalog_name})
+    return skill.model_copy(update={"frontmatter": frontmatter})
 
 
 def _builtin_tool_name(resource: Any) -> str:

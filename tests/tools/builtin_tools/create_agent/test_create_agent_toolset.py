@@ -890,6 +890,89 @@ async def test_skill_is_materialized_only_during_create(
 
 
 @pytest.mark.asyncio
+async def test_skill_hub_catalog_name_remains_callable_when_manifest_name_differs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    skill = Skill(
+        name="seedance-video-generation",
+        description="Generate videos",
+        path="clawhub/example/seedance-video-generation",
+        id="clawhub/example/seedance-video-generation",
+        source_type="findskill",
+    )
+    resource = StoredResource(
+        descriptor=ResourceDescriptor(
+            ref="skill_hub:clawhub/example/seedance-video-generation",
+            kind="skill",
+            name="seedance-video-generation",
+            description="Generate videos",
+            source="skill_hub:public",
+        ),
+        payload=skill,
+    )
+    skill_dir = tmp_path / "seedance-video"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: seedance-video\ndescription: Generate videos\n---\n"
+        "Use the video generation tools.",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "veadk.tools.builtin_tools.create_agent.orchestrator.materialize_remote_skill",
+        lambda value, *, cache_dir=None: skill_dir,
+    )
+    mounted_tools: list[Any] = []
+
+    def leaf_factory(node, tools, workflow_member, parent_agent):
+        del workflow_member, parent_agent
+        mounted_tools.extend(tools)
+        return _TextAgent(name=node.id, marker=node.id)
+
+    toolset = CreateAgentToolset(
+        resource_sources=[_StaticSource([resource])],
+        leaf_factory=leaf_factory,
+    )
+    context = _context()
+    collected = await toolset.collect_resources(tool_context=context)
+    result = await toolset.create_agents(
+        collection_id=collected["collection_id"],
+        agents=[
+            {
+                "name": "video_creator",
+                "task": "create a video",
+                "root_node": "worker",
+                "nodes": [
+                    {
+                        "id": "worker",
+                        "type": "llm",
+                        "instruction": "Use the selected skill",
+                        "resources": [resource.descriptor.ref],
+                    }
+                ],
+            }
+        ],
+        handoff_to="video_creator",
+        tool_context=context,
+    )
+
+    assert result["results"][0]["status"] == "completed"
+    skill_toolset = mounted_tools[0]
+    tools = await skill_toolset.get_tools()
+    load_skill = next(tool for tool in tools if tool.name == "load_skill")
+    load_result = await load_skill.run_async(
+        args={"skill_name": "seedance-video-generation"},
+        tool_context=SimpleNamespace(
+            invocation_id="invocation-1",
+            agent_name="worker",
+            state={},
+        ),
+    )
+    assert load_result["skill_name"] == "seedance-video-generation"
+    assert load_result["frontmatter"]["name"] == "seedance-video-generation"
+    assert "video generation tools" in load_result["instructions"]
+
+
+@pytest.mark.asyncio
 async def test_agentkit_skill_is_hydrated_only_when_selected(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
