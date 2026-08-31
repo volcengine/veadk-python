@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import importlib.util
 import ipaddress
 import py_compile
 import socket
@@ -23,6 +25,7 @@ from pydantic import ValidationError
 
 from frontend.server.environments.models import EnvironmentSkillManifestEntry
 from veadk.cli.generated_agent_codegen import (
+    _DYNAMIC_AGENT_DELEGATION_RULES,
     AgentDraft,
     DeploymentConfig,
     GeneratedAgentProjectRequest,
@@ -44,6 +47,11 @@ from veadk.cli.generated_agent_security import (
 from veadk.cli.generated_agent_skills import (
     materialize_selected_skills,
     materialize_source_preserving_skills,
+)
+from veadk.tools.builtin_tools.create_agent.models import (
+    AgentBlueprint,
+    AgentCapabilities,
+    LegacyAgentBlueprint,
 )
 
 
@@ -78,7 +86,7 @@ def test_minimal_codegen_agent_py_compiles(tmp_path) -> None:
         file.content for file in project.files if file.path == "requirements.txt"
     )
     assert requirements == (
-        "veadk-python==1.1.6\n"
+        "veadk-python==1.1.7\n"
         "agentkit-sdk-python==0.8.4\n"
         "google-adk==2.1.0\n"
         "starlette==0.52.1\n"
@@ -90,6 +98,654 @@ def test_minimal_codegen_agent_py_compiles(tmp_path) -> None:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(file.content, encoding="utf-8")
             py_compile.compile(str(target), doraise=True)
+
+
+def test_quick_mode_codegen_adds_dynamic_agent_toolset_and_managed_rules() -> None:
+    user_instruction = "请按照我的业务规则帮助用户完成数据分析。"
+    project = generate_project_from_draft(
+        AgentDraft(
+            name="quick-agent",
+            instruction=user_instruction,
+            dynamicAgentDelegation=True,
+        )
+    )
+
+    agent_py = next(
+        file.content
+        for file in project.files
+        if file.path == "agents/quick_agent/agent.py"
+    )
+    requirements = next(
+        file.content for file in project.files if file.path == "requirements.txt"
+    )
+    dockerfile = next(
+        file.content for file in project.files if file.path == "Dockerfile"
+    )
+
+    assert "from .quick_mode_compat import CreateAgentToolset" in agent_py
+    assert "dynamic_agent_toolset_agent = CreateAgentToolset()" in agent_py
+    assert "tools=[dynamic_agent_toolset_agent]" in agent_py
+    assert agent_py.index(user_instruction) < agent_py.index("动态子智能体协作规则")
+    assert "collect_resources" in agent_py
+    assert "create_agents" in agent_py
+    assert "handoff_to" in agent_py
+    assert "'dynamicAgentDelegation': True" in agent_py
+    assert "veadk-python==1.1.7\n" in requirements
+    assert "github.com/volcengine/veadk-python" not in requirements
+    assert "RUN uv pip install -r requirements.txt || \\" in dockerfile
+    assert (
+        "uv pip install --index-url "
+        "https://repo.huaweicloud.com/repository/pypi/simple -r requirements.txt"
+        in dockerfile
+    )
+
+    compat_py = next(
+        file.content
+        for file in project.files
+        if file.path == "agents/quick_agent/quick_mode_compat.py"
+    )
+    assert "class CreateAgentToolset(_BaseCreateAgentToolset)" in compat_py
+    assert (
+        "Current delegated task (runtime context, not reusable identity)" in compat_py
+    )
+    assert "resources=[]" in compat_py
+    assert "request-specific entities" in compat_py
+    assert "class _ReusableResourceStore" in compat_py
+    assert "Call create_agents exactly once" in compat_py
+    assert "_install_catalog_skill_name_compat()" in compat_py
+    assert 'hasattr(_orchestrator_module, "_with_catalog_skill_name")' in compat_py
+    assert "materialize_with_catalog_name" in compat_py
+    assert "load_with_catalog_name" in compat_py
+
+
+def test_quick_mode_compat_backports_offline_snapshot_and_task_context(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    project = generate_project_from_draft(
+        AgentDraft(name="quick-agent", dynamicAgentDelegation=True)
+    )
+    compat_py = next(
+        file.content
+        for file in project.files
+        if file.path == "agents/quick_agent/quick_mode_compat.py"
+    )
+    compat_path = tmp_path / "quick_mode_compat.py"
+    compat_path.write_text(compat_py, encoding="utf-8")
+    spec = importlib.util.spec_from_file_location(
+        "quick_mode_compat_test",
+        compat_path,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module._NATIVE_TASK_CONTEXT = False
+
+    store = module._ReusableResourceStore()
+    snapshot = store.put(
+        owner="test-invocation",
+        capabilities=AgentCapabilities(
+            google_adk_version="2.1.0",
+            agent_types=["llm", "sequential", "parallel", "loop", "workflow"],
+        ),
+        resources=[],
+    )
+    assert (
+        store.consume(
+            collection_id=snapshot.collection_id,
+            owner="test-invocation",
+        )
+        is snapshot
+    )
+    assert (
+        store.consume(
+            collection_id=snapshot.collection_id,
+            owner="test-invocation",
+        )
+        is snapshot
+    )
+
+    captured: dict[str, object] = {}
+    create_calls = 0
+
+    async def fake_create_agents(self, **kwargs):
+        nonlocal create_calls
+        create_calls += 1
+        await asyncio.sleep(0)
+        captured.update(kwargs)
+        return {"ok": True, "handoff_to": "analysis_agent__runtime"}
+
+    monkeypatch.setattr(
+        "veadk.tools.builtin_tools.create_agent.CreateAgentToolset.create_agents",
+        fake_create_agents,
+    )
+    toolset = module.CreateAgentToolset(resource_sources=[])
+    blueprint = {
+        "name": "analysis_agent",
+        "task": "比较用户指定的两个候选项并给出结论",
+        "root_node": "analyst",
+        "nodes": [
+            {
+                "id": "analyst",
+                "type": "llm",
+                "description": "分析用户指定的候选项",
+                "instruction": "完成结构化比较",
+                "resources": [],
+            }
+        ],
+    }
+
+    async def create_twice():
+        return await asyncio.gather(
+            toolset.create_agents(
+                collection_id="",
+                agents=[blueprint],
+                handoff_to="analysis_agent",
+            ),
+            toolset.create_agents(
+                collection_id="",
+                agents=[blueprint],
+                handoff_to="analysis_agent",
+            ),
+        )
+
+    result, duplicate = asyncio.run(create_twice())
+
+    assert (
+        result
+        == duplicate
+        == {
+            "ok": True,
+            "handoff_to": "analysis_agent__runtime",
+        }
+    )
+    assert create_calls == 1
+    assert str(captured["collection_id"]).startswith("resources_")
+    compatible_blueprint = captured["agents"][0]
+    instruction = compatible_blueprint.nodes[0].instruction
+    assert "完成结构化比较" in instruction
+    assert blueprint["task"] in instruction
+    assert blueprint["nodes"][0]["instruction"] == "完成结构化比较"
+
+    tools = asyncio.run(toolset.get_tools())
+    declaration = tools[1]._get_declaration()
+    assert declaration is not None
+    schema_text = str(declaration.parameters_json_schema)
+    assert "request-specific entities" in schema_text
+    assert "user-specified language" in schema_text
+    assert "empty string" in schema_text
+
+
+def test_quick_mode_compat_does_not_duplicate_native_task_context(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    project = generate_project_from_draft(
+        AgentDraft(name="quick-agent", dynamicAgentDelegation=True)
+    )
+    compat_py = next(
+        file.content
+        for file in project.files
+        if file.path == "agents/quick_agent/quick_mode_compat.py"
+    )
+    compat_path = tmp_path / "quick_mode_compat.py"
+    compat_path.write_text(compat_py, encoding="utf-8")
+    spec = importlib.util.spec_from_file_location(
+        "quick_mode_compat_native_test",
+        compat_path,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module._NATIVE_TASK_CONTEXT is True
+
+    captured: dict[str, object] = {}
+
+    async def fake_create_agents(self, **kwargs):
+        captured.update(kwargs)
+        return {"ok": True}
+
+    monkeypatch.setattr(
+        "veadk.tools.builtin_tools.create_agent.CreateAgentToolset.create_agents",
+        fake_create_agents,
+    )
+    toolset = module.CreateAgentToolset(resource_sources=[])
+    instruction = "Complete the delegated task."
+    asyncio.run(
+        toolset.create_agents(
+            collection_id="existing-collection",
+            agents=[
+                {
+                    "name": "worker_agent",
+                    "task": "One-off task",
+                    "root_node": "worker",
+                    "nodes": [
+                        {
+                            "id": "worker",
+                            "type": "llm",
+                            "instruction": instruction,
+                        }
+                    ],
+                }
+            ],
+            handoff_to="worker_agent",
+        )
+    )
+
+    assert captured["collection_id"] == "existing-collection"
+    assert captured["agents"][0].nodes[0].instruction == instruction
+
+
+def test_quick_mode_compat_rejects_resources_without_collection(
+    tmp_path,
+) -> None:
+    project = generate_project_from_draft(
+        AgentDraft(name="quick-agent", dynamicAgentDelegation=True)
+    )
+    compat_py = next(
+        file.content
+        for file in project.files
+        if file.path == "agents/quick_agent/quick_mode_compat.py"
+    )
+    compat_path = tmp_path / "quick_mode_compat.py"
+    compat_path.write_text(compat_py, encoding="utf-8")
+    spec = importlib.util.spec_from_file_location(
+        "quick_mode_compat_invalid_resources_test",
+        compat_path,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    toolset = module.CreateAgentToolset(resource_sources=[])
+
+    with pytest.raises(ValueError, match="requires empty resources"):
+        asyncio.run(
+            toolset.create_agents(
+                collection_id="",
+                agents=[
+                    {
+                        "name": "worker_agent",
+                        "task": "Offline task",
+                        "root_node": "worker",
+                        "nodes": [
+                            {
+                                "id": "worker",
+                                "type": "llm",
+                                "instruction": "Work offline.",
+                                "resources": ["veadk_tool:web_search"],
+                            }
+                        ],
+                    }
+                ],
+                handoff_to="worker_agent",
+            )
+        )
+
+
+def test_quick_mode_compat_uses_legacy_schema_without_workflow(tmp_path) -> None:
+    project = generate_project_from_draft(
+        AgentDraft(name="quick-agent", dynamicAgentDelegation=True)
+    )
+    compat_py = next(
+        file.content
+        for file in project.files
+        if file.path == "agents/quick_agent/quick_mode_compat.py"
+    )
+    compat_path = tmp_path / "quick_mode_compat.py"
+    compat_path.write_text(compat_py, encoding="utf-8")
+    spec = importlib.util.spec_from_file_location(
+        "quick_mode_compat_legacy_test",
+        compat_path,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    toolset = module.CreateAgentToolset(
+        resource_sources=[],
+        capabilities=AgentCapabilities(
+            google_adk_version="1.34.0",
+            agent_types=["llm", "sequential", "parallel", "loop"],
+        ),
+    )
+
+    tools = asyncio.run(toolset.get_tools())
+    declaration = tools[1]._get_declaration()
+    assert declaration is not None
+    assert "WorkflowAgentNode" not in str(declaration.parameters_json_schema)
+
+
+def test_traditional_mode_does_not_generate_quick_mode_compatibility_module() -> None:
+    project = generate_project_from_draft(AgentDraft(name="traditional-agent"))
+
+    assert all(not file.path.endswith("quick_mode_compat.py") for file in project.files)
+
+
+def test_quick_mode_dynamic_agent_prompt_separates_task_from_identity() -> None:
+    normalized_rules = " ".join(_DYNAMIC_AGENT_DELEGATION_RULES.split())
+    contracts = (
+        "agents[*].task 完整保留当前用户的具体目标、对象、输入和交付要求",
+        "只描述可重复使用的稳定能力域",
+        "请求特有信息只能出现在 agents[*].task 中",
+        "不得出现在 name、id、description 或 instruction 中",
+        "禁止通过音译、拼音、翻译、首字母缩写、行业简称、拼接或轻微改写",
+        "要求读取当前用户请求及其上下文",
+        "使用所挂载资源完整完成当前任务",
+        "不得复述或硬编码本次任务中的特有实体",
+        "不要一律退化成 generic_agent 或 general_assistant",
+        "在调用 create_agents 前逐字段自检",
+        "工具调用就是无效的，必须先改写为通用能力表达",
+        "使用“替换测试”检查",
+    )
+
+    assert all(contract in normalized_rules for contract in contracts)
+
+
+def test_quick_mode_dynamic_agent_prompt_respects_offline_requests() -> None:
+    normalized_rules = " ".join(_DYNAMIC_AGENT_DELEGATION_RULES.split())
+
+    assert "用户明确禁止联网、知识库或任何外部资源" in normalized_rules
+    assert "跳过 collect_resources" in normalized_rules
+    assert 'collection_id=""' in normalized_rules
+    assert "resources=[]" in normalized_rules
+    assert "不得发起 Skill Hub 关键词检索或其他资源源调用" in normalized_rules
+
+
+def test_quick_mode_dynamic_agent_prompt_generalizes_specific_video_request() -> None:
+    assert "给我生成葫芦娃大战钢铁侠的视频" in _DYNAMIC_AGENT_DELEGATION_RULES
+    assert "video_creation_agent" in _DYNAMIC_AGENT_DELEGATION_RULES
+    assert "video_creator" in _DYNAMIC_AGENT_DELEGATION_RULES
+    assert "huluxia_vs_ironman_video" in _DYNAMIC_AGENT_DELEGATION_RULES
+    assert "不得使用 huluxia_vs_ironman_video" in _DYNAMIC_AGENT_DELEGATION_RULES
+
+
+@pytest.mark.parametrize(
+    "request_specific_category",
+    (
+        "人物或虚构角色",
+        "品牌",
+        "产品",
+        "组织",
+        "平台或渠道",
+        "行业或赛道",
+        "细分领域",
+        "业务领域",
+        "内容类别",
+        "研究主题",
+        "源语言或目标语言",
+        "地点",
+        "日期",
+        "活动名称",
+        "具体题材",
+        "一次性问题或事件",
+        "文档标题",
+        "文件名",
+        "URL",
+    ),
+)
+def test_quick_mode_dynamic_agent_prompt_excludes_request_specific_categories(
+    request_specific_category: str,
+) -> None:
+    assert request_specific_category in _DYNAMIC_AGENT_DELEGATION_RULES
+
+
+def test_quick_mode_dynamic_agent_prompt_generalizes_industry_investment_request() -> (
+    None
+):
+    requirement = (
+        "请调研并比较三家主流新能源汽车公司的最新财务表现、产品竞争力与主要风险，"
+        "给出结构化投资分析报告"
+    )
+
+    assert requirement in _DYNAMIC_AGENT_DELEGATION_RULES
+    assert "investment_analysis_agent" in _DYNAMIC_AGENT_DELEGATION_RULES
+    assert "完整原句和“新能源汽车”行业只放入 task" in (_DYNAMIC_AGENT_DELEGATION_RULES)
+    assert "不得使用 ev_investment_research_agent" in (_DYNAMIC_AGENT_DELEGATION_RULES)
+    assert "EV、electric vehicle 等行业名称、简称或翻译" in (
+        _DYNAMIC_AGENT_DELEGATION_RULES
+    )
+
+
+def test_quick_mode_dynamic_agent_prompt_generalizes_translation_languages() -> None:
+    assert "document_translation_agent" in _DYNAMIC_AGENT_DELEGATION_RULES
+    assert "翻译为用户指定的目标语言" in _DYNAMIC_AGENT_DELEGATION_RULES
+    assert "不得使用 japanese_translation_agent" in _DYNAMIC_AGENT_DELEGATION_RULES
+    assert "不得在 description 或 instruction 中出现日语、Japanese" in (
+        _DYNAMIC_AGENT_DELEGATION_RULES
+    )
+
+
+def test_quick_mode_dynamic_agent_prompt_keeps_output_language_in_task() -> None:
+    normalized_rules = " ".join(_DYNAMIC_AGENT_DELEGATION_RULES.split())
+
+    assert "所有具体输出语言要求只能保留在 agents[*].task 中" in normalized_rules
+    assert "不得在节点 instruction 中写入或推断具体语言" in normalized_rules
+    assert "instruction 必须统一参数化为“使用用户指定语言输出”" in normalized_rules
+
+
+def test_quick_mode_dynamic_agent_prompt_generalizes_subject_matter() -> None:
+    assert "区分“执行方法或交付类型”和“本次研究对象或内容类别”" in (
+        _DYNAMIC_AGENT_DELEGATION_RULES
+    )
+    for invalid_name in (
+        "financial_rag_qa_assistant",
+        "music_album_research_agent",
+        "cloud_database_comparison_agent",
+        "cloud_api_diagnostic_agent",
+    ):
+        assert invalid_name in _DYNAMIC_AGENT_DELEGATION_RULES
+    for reusable_name in (
+        "document_rag_qa_agent",
+        "content_researcher",
+        "technology_comparison_agent",
+        "incident_diagnostics_agent",
+    ):
+        assert reusable_name in _DYNAMIC_AGENT_DELEGATION_RULES
+    assert "上述约束逐个适用于所有子节点" in _DYNAMIC_AGENT_DELEGATION_RULES
+    assert "不得出现 cloud 或 API" in _DYNAMIC_AGENT_DELEGATION_RULES
+    assert "不得出现 music、album 或 专辑" in _DYNAMIC_AGENT_DELEGATION_RULES
+    assert "不得出现 cloud、database 或 数据库" in _DYNAMIC_AGENT_DELEGATION_RULES
+    assert "agents[*].task 是当前任务具体信息的唯一载体" in (
+        _DYNAMIC_AGENT_DELEGATION_RULES
+    )
+    assert "调研并比较用户指定的候选项" in _DYNAMIC_AGENT_DELEGATION_RULES
+    assert "具体候选技术、所属类别和比较维度只从 task 与当前请求读取" in (
+        _DYNAMIC_AGENT_DELEGATION_RULES
+    )
+    assert "统一使用 technology_comparison_agent" in _DYNAMIC_AGENT_DELEGATION_RULES
+    for reusable_node in (
+        "evidence_researcher",
+        "criteria_evaluator",
+        "decision_report_writer",
+    ):
+        assert reusable_node in _DYNAMIC_AGENT_DELEGATION_RULES
+
+
+def test_quick_mode_dynamic_agent_prompt_generalizes_cross_industry_optimization() -> (
+    None
+):
+    normalized_rules = " ".join(_DYNAMIC_AGENT_DELEGATION_RULES.split())
+
+    assert "跨行业、跨领域或跨场景复用" in normalized_rules
+    assert "decision_optimization_agent" in normalized_rules
+    assert "constraint_validator" in normalized_rules
+    assert (
+        "不得使用 portfolio、project、investment、asset、campaign" in normalized_rules
+    )
+
+
+def test_quick_mode_dynamic_agent_prompt_requires_json_safe_python_tools() -> None:
+    normalized_rules = " ".join(_DYNAMIC_AGENT_DELEGATION_RULES.split())
+
+    for contract in (
+        "小规模、可直接枚举或心算验证的问题优先由子智能体直接推理",
+        "全部数据必须可由标准 JSON 无损表达",
+        "对象键只能是字符串",
+        "不得使用 tuple、对象或其他非字符串字典键",
+        '[{"items": ["A", "C", "F"], "value": 13}]',
+        "若 schema 不兼容或工具结果明显错误，立即重写工具",
+        "禁止用同一错误输入反复循环",
+    ):
+        assert contract in normalized_rules
+
+
+def test_dynamic_python_tool_schema_requires_json_safe_boundaries() -> None:
+    schema = AgentBlueprint.model_json_schema()
+    python_tool_schema = schema["$defs"]["PythonToolSpec"]
+    code_description = python_tool_schema["properties"]["code"]["description"]
+    node_schema = schema["$defs"]["LlmAgentNode"]
+    tools_description = node_schema["properties"]["python_tools"]["description"]
+
+    assert "standard JSON round trip" in code_description
+    assert "object keys must be strings" in code_description
+    assert "tuple or object dictionary keys are forbidden" in code_description
+    assert "lists of records" in code_description
+    assert "small enumerable problems" in code_description
+    assert "JSON-safe parameter and result schemas" in tools_description
+    assert "non-string dictionary keys" in tools_description
+
+
+@pytest.mark.parametrize("blueprint_model", (AgentBlueprint, LegacyAgentBlueprint))
+def test_dynamic_agent_blueprint_schema_separates_task_from_identity(
+    blueprint_model: type[AgentBlueprint | LegacyAgentBlueprint],
+) -> None:
+    properties = blueprint_model.model_json_schema()["properties"]
+    name_description = properties["name"]["description"]
+    task_description = properties["task"]["description"]
+
+    assert "Stable, reusable snake_case capability name" in name_description
+    assert "request-specific entities" in name_description
+    assert "product categories, platforms, channels" in name_description
+    assert "industries, sectors, verticals, their acronyms" in name_description
+    assert "business domains, subject matters, content categories" in name_description
+    assert "languages, locales" in name_description
+    assert "one-off issues or incidents" in name_description
+    assert "Complete one-off user objective" in task_description
+    assert "specific subjects, inputs, constraints" in task_description
+
+
+def test_dynamic_llm_node_schema_requires_reusable_identity_and_current_task() -> None:
+    node_schema = AgentBlueprint.model_json_schema()["$defs"]["LlmAgentNode"]
+    properties = node_schema["properties"]
+
+    assert "without request-specific entities" in properties["id"]["description"]
+    assert "industries, sectors, verticals" in properties["id"]["description"]
+    assert (
+        "content_researcher instead of album_researcher"
+        in (properties["id"]["description"])
+    )
+    assert (
+        "technology_researcher instead of database_researcher"
+        in (properties["id"]["description"])
+    )
+    assert "without request-specific people" in properties["description"]["description"]
+    assert (
+        "industries, sectors, verticals" in (properties["description"]["description"])
+    )
+    assert (
+        "business domains, subject matters, content categories"
+        in (properties["description"]["description"])
+    )
+    assert "languages, locales" in properties["description"]["description"]
+    assert (
+        "product or technology types, protocols"
+        in (properties["description"]["description"])
+    )
+    assert "user-specified subject" in properties["description"]["description"]
+    assert "user-specified technologies" in (properties["description"]["description"])
+    assert "read the current user request" in properties["instruction"]["description"]
+    assert (
+        "parameterizing rather than hard-coding"
+        in (properties["instruction"]["description"])
+    )
+    assert (
+        "source or target language, locale"
+        in (properties["instruction"]["description"])
+    )
+    assert (
+        "business domain, subject matter, content category"
+        in (properties["instruction"]["description"])
+    )
+    assert (
+        "product or technology type, protocol, runtime environment"
+        in (properties["instruction"]["description"])
+    )
+    assert (
+        "Never mention music, album, cloud, database"
+        in (properties["instruction"]["description"])
+    )
+    assert "domain-neutral pattern" in properties["instruction"]["description"]
+    assert (
+        "compare the user-specified candidates"
+        in (properties["instruction"]["description"])
+    )
+    assert (
+        "blueprint task is the only carrier"
+        in (properties["instruction"]["description"])
+    )
+    for reusable_node in (
+        "evidence_researcher",
+        "criteria_evaluator",
+        "decision_report_writer",
+    ):
+        assert reusable_node in properties["instruction"]["description"]
+    assert "industry, sector, vertical" in properties["instruction"]["description"]
+    assert "acronym" in properties["instruction"]["description"]
+    assert (
+        "Any concrete output-language requirement belongs only in AgentBlueprint.task"
+        in properties["instruction"]["description"]
+    )
+    assert (
+        "even when it matches the language used in the current request"
+        in properties["instruction"]["description"]
+    )
+    assert (
+        "respond in the user-specified language"
+        in properties["instruction"]["description"]
+    )
+    assert (
+        "never name or infer the concrete language"
+        in properties["instruction"]["description"]
+    )
+
+
+@pytest.mark.parametrize(
+    "node_schema_name",
+    (
+        "SequentialAgentNode",
+        "ParallelAgentNode",
+        "LoopAgentNode",
+        "WorkflowAgentNode",
+    ),
+)
+def test_dynamic_orchestrator_node_schema_excludes_current_subject(
+    node_schema_name: str,
+) -> None:
+    node_schema = AgentBlueprint.model_json_schema()["$defs"][node_schema_name]
+
+    for field in ("id", "description"):
+        description = node_schema["properties"][field]["description"]
+        assert "subject matter, content category" in description
+        assert "product or technology type, protocol" in description
+        assert "runtime environment" in description
+
+
+def test_traditional_codegen_does_not_add_dynamic_agent_capability() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(name="traditional-agent", instruction="直接完成用户任务。")
+    )
+    agent_py = next(
+        file.content
+        for file in project.files
+        if file.path == "agents/traditional_agent/agent.py"
+    )
+    requirements = next(
+        file.content for file in project.files if file.path == "requirements.txt"
+    )
+
+    assert "CreateAgentToolset" not in agent_py
+    assert "动态子智能体协作规则" not in agent_py
+    assert "dynamicAgentDelegation" not in agent_py
+    assert "veadk-python==1.1.7" in requirements
 
 
 def test_codegen_environment_image_adds_skills_without_replacing_agent_skills() -> None:
@@ -255,6 +911,12 @@ def test_codegen_cloud_environment_uses_provider_base_image(
         in files["Dockerfile"]
     )
     assert 'CMD ["python", "-m", "app"]' in files["Dockerfile"]
+    assert "RUN uv pip install -r requirements.txt || \\" in files["Dockerfile"]
+    assert (
+        "uv pip install --index-url "
+        "https://repo.huaweicloud.com/repository/pypi/simple -r requirements.txt"
+        in files["Dockerfile"]
+    )
 
 
 def test_codegen_cloud_environment_installs_github_cli_for_both_architectures() -> None:

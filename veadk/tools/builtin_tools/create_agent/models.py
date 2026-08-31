@@ -73,7 +73,13 @@ class PythonToolSpec(BaseModel):
     code: str = Field(
         description=(
             "Trusted Python source defining the callable named by entrypoint. "
-            "It runs in the host process without sandboxing."
+            "It runs in the host process without sandboxing. Every parameter, "
+            "return value, and value crossing the tool boundary must survive a "
+            "standard JSON round trip: object keys must be strings, tuple or "
+            "object dictionary keys are forbidden, and composite keys such as "
+            "item combinations must be represented as lists of records. Prefer "
+            "direct reasoning instead of a temporary tool for small enumerable "
+            "problems."
         )
     )
     entrypoint: str | None = Field(
@@ -93,10 +99,55 @@ class PythonToolSpec(BaseModel):
 class LlmAgentNode(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    id: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    id: str = Field(
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
+        description=(
+            "Stable, reusable snake_case capability identifier without "
+            "request-specific entities, industries, sectors, verticals, or "
+            "their acronyms. Keep only the operation or deliverable; exclude the "
+            "target business domain, subject matter, content category, product "
+            "type, technology category, protocol, or runtime environment. For "
+            "example, use content_researcher instead of album_researcher and "
+            "technology_researcher instead of database_researcher."
+        ),
+    )
     type: Literal["llm"]
-    description: str = ""
-    instruction: str
+    description: str = Field(
+        default="",
+        description=(
+            "Reusable capability description without request-specific people, "
+            "brands, products, platforms, industries, sectors, verticals, "
+            "business domains, subject matters, content categories, languages, "
+            "locales, topics, incidents, product or technology types, protocols, "
+            "runtime environments, or filenames. Describe the operation against "
+            "user-specified inputs instead: say 'researches the user-specified "
+            "subject' rather than mentioning music or albums, and 'compares the "
+            "user-specified technologies' rather than mentioning cloud databases."
+        ),
+    )
+    instruction: str = Field(
+        description=(
+            "Durable role instructions that read the current user request and "
+            "complete it, while parameterizing rather than hard-coding its "
+            "specific entities, topic, issue, platform, product, industry, "
+            "sector, vertical, business domain, subject matter, content category, "
+            "product or technology type, protocol, runtime environment, acronym, "
+            "source or target language, locale, or filename. Refer to them as "
+            "user-specified inputs instead. Any concrete output-language requirement "
+            "belongs only in AgentBlueprint.task, even when it matches the language "
+            "used in the current request. Express it solely as 'respond in the "
+            "user-specified language'; never name or infer the concrete language in "
+            "reusable instructions. Never mention music, album, cloud, "
+            "database, or another current subject merely to explain the role. "
+            "For comparison roles, use the domain-neutral pattern: read the current "
+            "request, research and compare the user-specified candidates against "
+            "the requested criteria, and return a structured decision report. The "
+            "blueprint task is the only carrier of concrete candidate details. A "
+            "technology-comparison workflow uses evidence_researcher, "
+            "criteria_evaluator, and decision_report_writer; its instructions refer "
+            "only to user-specified candidates and requested evaluation criteria."
+        )
+    )
     model_name: str | list[str] | None = None
     model_provider: str | None = None
     model_api_base: str | None = None
@@ -114,7 +165,9 @@ class LlmAgentNode(BaseModel):
         default_factory=list,
         description=(
             "Tools authored by the main agent as complete trusted Python source. "
-            "These are separate from built-in tool refs in resources."
+            "These are separate from built-in tool refs in resources. Use only "
+            "JSON-safe parameter and result schemas; never use tuple or other "
+            "non-string dictionary keys across the tool boundary."
         ),
     )
 
@@ -122,27 +175,66 @@ class LlmAgentNode(BaseModel):
 class SequentialAgentNode(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    id: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    id: str = Field(
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
+        description=(
+            "Stable reusable operation identifier without the current subject "
+            "matter, content category, product or technology type, protocol, or "
+            "runtime environment."
+        ),
+    )
     type: Literal["sequential"]
-    description: str = ""
+    description: str = Field(
+        default="",
+        description=(
+            "Reusable workflow role without the current subject matter, content "
+            "category, product or technology type, protocol, or runtime environment."
+        ),
+    )
     children: list[str] = Field(min_length=1)
 
 
 class ParallelAgentNode(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    id: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    id: str = Field(
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
+        description=(
+            "Stable reusable operation identifier without the current subject "
+            "matter, content category, product or technology type, protocol, or "
+            "runtime environment."
+        ),
+    )
     type: Literal["parallel"]
-    description: str = ""
+    description: str = Field(
+        default="",
+        description=(
+            "Reusable workflow role without the current subject matter, content "
+            "category, product or technology type, protocol, or runtime environment."
+        ),
+    )
     children: list[str] = Field(min_length=1)
 
 
 class LoopAgentNode(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    id: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    id: str = Field(
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
+        description=(
+            "Stable reusable operation identifier without the current subject "
+            "matter, content category, product or technology type, protocol, or "
+            "runtime environment."
+        ),
+    )
     type: Literal["loop"]
-    description: str = ""
+    description: str = Field(
+        default="",
+        description=(
+            "Reusable workflow role without the current subject matter, content "
+            "category, product or technology type, protocol, or runtime environment."
+        ),
+    )
     children: list[str] = Field(min_length=1)
     max_iterations: int = Field(default=3, ge=1)
 
@@ -158,9 +250,22 @@ class WorkflowEdge(BaseModel):
 class WorkflowAgentNode(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    id: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    id: str = Field(
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
+        description=(
+            "Stable reusable operation identifier without the current subject "
+            "matter, content category, product or technology type, protocol, or "
+            "runtime environment."
+        ),
+    )
     type: Literal["workflow"]
-    description: str = ""
+    description: str = Field(
+        default="",
+        description=(
+            "Reusable workflow role without the current subject matter, content "
+            "category, product or technology type, protocol, or runtime environment."
+        ),
+    )
     edges: list[WorkflowEdge] = Field(min_length=1)
     max_concurrency: int | None = Field(default=None, ge=1)
 
@@ -185,8 +290,23 @@ class LegacyAgentBlueprint(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    name: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
-    task: str
+    name: str = Field(
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
+        description=(
+            "Stable, reusable snake_case capability name. Do not include people, "
+            "characters, brands, products, product categories, platforms, channels, "
+            "industries, sectors, verticals, their acronyms, business domains, "
+            "subject matters, content categories, languages, locales, organizations, "
+            "places, dates, topics, one-off issues or incidents, document titles, "
+            "filenames, URLs, or other request-specific entities."
+        ),
+    )
+    task: str = Field(
+        description=(
+            "Complete one-off user objective, including its specific subjects, "
+            "inputs, constraints, and required deliverable."
+        )
+    )
     root_node: str
     nodes: list[LegacyAgentNode] = Field(min_length=1)
 
@@ -196,8 +316,23 @@ class AgentBlueprint(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    name: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
-    task: str
+    name: str = Field(
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
+        description=(
+            "Stable, reusable snake_case capability name. Do not include people, "
+            "characters, brands, products, product categories, platforms, channels, "
+            "industries, sectors, verticals, their acronyms, business domains, "
+            "subject matters, content categories, languages, locales, organizations, "
+            "places, dates, topics, one-off issues or incidents, document titles, "
+            "filenames, URLs, or other request-specific entities."
+        ),
+    )
+    task: str = Field(
+        description=(
+            "Complete one-off user objective, including its specific subjects, "
+            "inputs, constraints, and required deliverable."
+        )
+    )
     root_node: str
     nodes: list[AgentNode] = Field(min_length=1)
 
@@ -214,7 +349,13 @@ class AgentBlueprint(BaseModel):
 class CreateAgentsInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    collection_id: str
+    collection_id: str = Field(
+        description=(
+            "ID returned by collect_resources. Use an empty string only when the "
+            "user explicitly prohibits network, knowledge-base, and external-resource "
+            "access; every LLM node must then have empty resources."
+        )
+    )
     agents: list[AgentBlueprint] = Field(min_length=1)
     handoff_to: str = Field(
         description=(
@@ -232,7 +373,13 @@ class CreateAgentsInput(BaseModel):
 class LegacyCreateAgentsInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    collection_id: str
+    collection_id: str = Field(
+        description=(
+            "ID returned by collect_resources. Use an empty string only when the "
+            "user explicitly prohibits network, knowledge-base, and external-resource "
+            "access; every LLM node must then have empty resources."
+        )
+    )
     agents: list[LegacyAgentBlueprint] = Field(min_length=1)
     handoff_to: str = Field(
         description=(

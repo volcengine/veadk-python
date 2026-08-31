@@ -63,6 +63,7 @@ test("workspace drafts stay wired to custom Agent creation", () => {
   assert.match(appSource, /draftStorageError/);
   assert.match(appSource, /onDraftChange=\{\(draft, dirty\) =>/);
   assert.match(appSource, /deploymentTarget=\{runtimeUpdateTarget \?\? undefined\}/);
+  assert.match(appSource, /workspaceDraftId=\{editingDraftId \|\| undefined\}/);
   assert.match(
     appSource,
     /if \(dirty\)[\s\S]*?saveWorkspaceDraft[\s\S]*?else[\s\S]*?restoreWorkspaceDraftBaseline\(editingDraftId\)/,
@@ -70,6 +71,33 @@ test("workspace drafts stay wired to custom Agent creation", () => {
   assert.match(
     appSource,
     /onDiscard=\{editingDraftId \? \(\) => \{[\s\S]*?restoreWorkspaceDraftBaseline\(editingDraftId\)[\s\S]*?setFocusedWorkspaceAgentId\(appName\)/,
+  );
+});
+
+test("every continue-edit entry routes persisted quick drafts back to quick creation", () => {
+  assert.match(
+    appSource,
+    /const activeDraft = nextDrafts\.find[\s\S]*?setImportedDraft\(activeDraft\.draft\);[\s\S]*?setCustomCreationSurface\([\s\S]*?workspaceAgentCreationMode\(activeDraft\) === "quick"[\s\S]*?\? "vulcan"[\s\S]*?: "traditional"/,
+  );
+
+  const editHandlers = [
+    ...appSource.matchAll(/onEditDraft=\{\(item\) => \{([\s\S]*?)\n\s*\}\}/g),
+  ];
+  assert.ok(editHandlers.length >= 2);
+  for (const [, handler] of editHandlers) {
+    assert.match(handler, /setImportedDraft\(item\.draft\)/);
+    assert.match(
+      handler,
+      /setCustomCreationSurface\([\s\S]*?workspaceAgentCreationMode\(item\) === "quick"[\s\S]*?\? "vulcan"[\s\S]*?: "traditional"/,
+    );
+    assert.match(handler, /setRuntimeUpdateTarget\(item\.deploymentTarget \?\? null\)/);
+  }
+});
+
+test("running deployments match drafts by stable draft id before names", () => {
+  assert.match(
+    workspaceSource,
+    /task\.draftId === selectedDraft\.id[\s\S]*?task\.agentDraft\?\.name === selectedDraft\.draft\.name/,
   );
 });
 
@@ -709,9 +737,17 @@ test("runtime updates use the Agent selected in management instead of the active
   assert.match(handler, /envValues:\s*runtimeEnvValues/);
   assert.doesNotMatch(handler, /draftEnvValues|selectedAgentUpdateDraft\?\.draft/);
   assert.match(handler, /hydrateRuntimeModelSelection\(/);
+  assert.match(
+    handler,
+    /setCustomCreationSurface\([\s\S]*?classifiedDraft\.dynamicAgentDelegation === true[\s\S]*?\? "vulcan"[\s\S]*?: "traditional"/,
+  );
   assert.match(handler, /network:\s*capability\.runtime\.network/);
   assert.match(handler, /etag:\s*capability\.etag/);
   assert.match(handler, /editMode:\s*capability\.editMode/);
+  assert.match(
+    handler,
+    /setRuntimeUpdateTarget\(\{[\s\S]*?runtimeId:\s*capability\.runtime\.runtimeId,[\s\S]*?currentVersion:\s*capability\.runtime\.currentVersion,[\s\S]*?etag:\s*capability\.etag/,
+  );
   assert.match(
     handler,
     /exitAgentDetailContext\(\)[\s\S]*?setCreateView\("custom"\)/,

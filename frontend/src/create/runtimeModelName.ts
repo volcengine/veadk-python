@@ -85,6 +85,7 @@ export function applyRuntimeAgentIntrospection(
   editableDraft: AgentDraft,
   runtimeNode: RuntimeAgentIntrospection | undefined,
   fallbackRoot?: Pick<RuntimeAgentIntrospection, "name" | "model">,
+  preserveDraftInstruction = false,
 ): AgentDraft {
   const runtimeModel = modelConfigurationFromRuntime(
     runtimeNode?.model || fallbackRoot?.model,
@@ -105,13 +106,20 @@ export function applyRuntimeAgentIntrospection(
       fallbackRoot?.name?.trim() ||
       editableDraft.name,
     description: runtimeNode?.description ?? editableDraft.description,
-    instruction: runtimeNode?.instruction ?? editableDraft.instruction,
+    instruction: preserveDraftInstruction
+      ? editableDraft.instruction
+      : (runtimeNode?.instruction ?? editableDraft.instruction),
     agentType,
     modelName: runtimeModel.modelName || editableDraft.modelName,
     modelProvider: runtimeModel.modelProvider || editableDraft.modelProvider,
     skills: runtimeNode?.skills?.map((skill) => skill.name) ?? editableDraft.skills,
     subAgents: editableDraft.subAgents.map((child, index) =>
-      applyRuntimeAgentIntrospection(child, runtimeChildren[index]),
+      applyRuntimeAgentIntrospection(
+        child,
+        runtimeChildren[index],
+        undefined,
+        preserveDraftInstruction,
+      ),
     ),
   };
 }
@@ -272,6 +280,73 @@ function cloudDraftWithDefaults(
   };
 }
 
+const MANAGED_RUNTIME_INSTRUCTION_HEADING = "动态子智能体协作规则：";
+const MANAGED_RUNTIME_INSTRUCTION_SIGNATURES = [
+  "collect_resources",
+  "create_agents",
+  "handoff_to",
+] as const;
+
+function normalizeMarkdownEscapes(value: string): string {
+  return value.replace(/\\([\\`*_[\]{}()<>#+\-.!|])/g, "$1");
+}
+
+function stripManagedInstructionBlock(instruction: string): string {
+  const headingOffsets: number[] = [];
+  let searchOffset = 0;
+
+  while (searchOffset < instruction.length) {
+    const headingOffset = instruction.indexOf(
+      MANAGED_RUNTIME_INSTRUCTION_HEADING,
+      searchOffset,
+    );
+    if (headingOffset < 0) break;
+    headingOffsets.push(headingOffset);
+    searchOffset = headingOffset + MANAGED_RUNTIME_INSTRUCTION_HEADING.length;
+  }
+
+  const managedBlockOffset = headingOffsets.find((headingOffset, index) => {
+    const nextHeadingOffset = headingOffsets[index + 1] ?? instruction.length;
+    const candidate = normalizeMarkdownEscapes(
+      instruction.slice(headingOffset, nextHeadingOffset),
+    );
+    return MANAGED_RUNTIME_INSTRUCTION_SIGNATURES.every((signature) =>
+      candidate.includes(signature),
+    );
+  });
+
+  return managedBlockOffset === undefined
+    ? instruction
+    : instruction.slice(0, managedBlockOffset).trimEnd();
+}
+
+/** Remove generated quick-mode runtime rules before restoring an editable
+ * cloud draft. Match against Markdown-normalized text while slicing the
+ * original instruction so user-authored content is otherwise unchanged. */
+export function stripManagedRuntimeInstructions(draft: AgentDraft): AgentDraft {
+  const stripNode = (node: AgentDraft): AgentDraft => ({
+    ...node,
+    instruction:
+      node.dynamicAgentDelegation === true
+        ? stripManagedInstructionBlock(node.instruction)
+        : node.instruction,
+    subAgents: node.subAgents.map(stripNode),
+    ...(node.workflow
+      ? {
+          workflow: {
+            ...node.workflow,
+            nodes: node.workflow.nodes.map((workflowNode) => ({
+              ...workflowNode,
+              agent: stripNode(workflowNode.agent),
+            })),
+          },
+        }
+      : {}),
+  });
+
+  return stripNode(draft);
+}
+
 function cloudGraphToDraft(
   node: RuntimeAgentIntrospection,
   cloudProvider: CloudProvider,
@@ -330,12 +405,21 @@ export function runtimeAgentDraftFromCloud(
           tools: [...(agent.tools ?? [])],
           skills: agent.skills?.map((skill) => skill.name) ?? [],
         };
+  const editableCloudDraft =
+    agent.draft && cloudDraft.dynamicAgentDelegation === true
+      ? stripManagedRuntimeInstructions(cloudDraft)
+      : cloudDraft;
 
   return applyConfiguredMcpCredentials(
-    applyRuntimeAgentIntrospection(cloudDraft, agent.graph, {
-      name: agent.name?.trim() || agent.appName.trim(),
-      model: agent.model,
-    }),
+    applyRuntimeAgentIntrospection(
+      editableCloudDraft,
+      agent.graph,
+      {
+        name: agent.name?.trim() || agent.appName.trim(),
+        model: agent.model,
+      },
+      Boolean(agent.draft),
+    ),
     new Set(configuredEnvKeys),
   );
 }

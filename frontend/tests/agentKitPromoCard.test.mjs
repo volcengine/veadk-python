@@ -9,6 +9,7 @@ const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 const sidebarSource = read("../src/ui/Sidebar.tsx");
 const promoSource = read("../src/ui/AgentKitPromoCard.tsx");
 const promoStyles = read("../src/ui/AgentKitPromoCard.css");
+const globalStyles = read("../src/styles.css");
 
 const linksBuild = await build({
   entryPoints: [
@@ -46,41 +47,96 @@ test("promo links resolve to the matching cloud provider", () => {
   });
 });
 
-test("promo renders two direct external links", () => {
-  assert.match(promoSource, /className="agentkit-promo-stack"/);
-  assert.match(promoSource, /前往 AgentKit 控制台/);
-  assert.match(promoSource, /查看 AgentKit 官方文档/);
-  assert.match(promoSource, /target="_blank"/);
-  assert.match(promoSource, /rel="noreferrer"/);
-  assert.match(promoSource, /在新窗口打开/);
-  assert.doesNotMatch(promoSource, /AgentKitLogoIcon/);
-  assert.equal((promoSource.match(/<PromoLink/g) ?? []).length, 2);
-  assert.equal((promoSource.match(/viewBox="0 0 20 20"/g) ?? []).length, 1);
+test("promo renders one AgentKit welcome card with native actions", () => {
+  assert.match(
+    promoSource,
+    /import \{ Button, ButtonLink \} from "@openai\/apps-sdk-ui\/components\/Button"/,
+  );
+  assert.match(
+    promoSource,
+    /import \{ ArrowRight, X \} from "@openai\/apps-sdk-ui\/components\/Icon"/,
+  );
+  assert.match(promoSource, /className=\{`agentkit-promo-card/);
+  assert.match(promoSource, /欢迎使用 AgentKit/);
+  assert.match(
+    promoSource,
+    /通过 AgentKit 平台快速构建与托管您的企业级智能体/,
+  );
+  assert.match(
+    promoSource,
+    /href=\{links\.docs\}[\s\S]*?color="secondary"[\s\S]*?文档/,
+  );
+  assert.match(
+    promoSource,
+    /href=\{links\.console\}[\s\S]*?color="primary"[\s\S]*?控制台[\s\S]*?<ArrowRight/,
+  );
+  assert.equal((promoSource.match(/<ButtonLink/g) ?? []).length, 2);
+  assert.equal((promoSource.match(/<ArrowRight/g) ?? []).length, 1);
+  assert.doesNotMatch(promoSource, /ExternalLink/);
+  assert.doesNotMatch(promoSource, /AgentKitLogoIcon|agentkit-promo-leading-icon/);
 });
 
-test("promo card uses a flat static gradient treatment and collapsed layout", () => {
-  assert.ok((promoStyles.match(/linear-gradient/g) ?? []).length >= 6);
-  assert.doesNotMatch(promoStyles, /radial-gradient/);
-  assert.match(promoStyles, /height:\s*38px/);
-  assert.match(promoStyles, /height:\s*46px/);
+test("promo dismissal lasts only for the mounted page session", () => {
+  assert.match(promoSource, /const \[dismissed, setDismissed\] = useState\(false\)/);
+  assert.match(promoSource, /if \(dismissed\) return null/);
+  assert.match(promoSource, /onClick=\{\(\) => setDismissed\(true\)\}/);
+  assert.doesNotMatch(promoSource, /localStorage|sessionStorage/);
+});
+
+test("promo card uses neutral hover and restrained control motion", () => {
+  assert.doesNotMatch(promoStyles, /gradient/);
+  assert.match(promoStyles, /font-size:\s*14px/);
+  assert.match(promoStyles, /font-size:\s*12px/);
   assert.match(
     promoStyles,
-    /\.agentkit-promo-stack:hover[\s\S]*?height:\s*82px/,
+    /\.agentkit-promo-card:hover:not\(\.is-hover-suppressed\)[\s\S]*?background:\s*hsl\(var\(--sidebar-item-hover\)\)/,
   );
   assert.match(
     promoStyles,
-    /\.agentkit-promo-stack:hover \.agentkit-promo-link\.is-docs[\s\S]*?bottom:\s*44px/,
-  );
-  assert.match(promoStyles, /border:\s*0/);
-  assert.match(
-    promoStyles,
-    /\.agentkit-promo-link:hover \.agentkit-promo-external-icon/,
+    /\.agentkit-promo-close\s*\{[^}]*opacity:\s*0;/s,
   );
   assert.match(
     promoStyles,
-    /\.sidebar\.is-collapsed \.agentkit-promo-stack\s*\{[^}]*display:\s*none;/s,
+    /\.agentkit-promo-close\s*\{[^}]*top:\s*11px;/s,
+  );
+  assert.match(
+    promoStyles,
+    /\.agentkit-promo-card:hover:not\(\.is-hover-suppressed\) \.agentkit-promo-close[\s\S]*?\.agentkit-promo-card:focus-within \.agentkit-promo-close[\s\S]*?opacity:\s*1/,
+  );
+  assert.match(
+    promoStyles,
+    /\.agentkit-promo-action\s*\{[^}]*flex:\s*0 0 auto;[^}]*font-size:\s*12px;[^}]*font-weight:\s*400;/s,
+  );
+  assert.match(
+    promoStyles,
+    /\.agentkit-promo-arrow-icon\s*\{[^}]*transform:\s*translateX\(0\);[^}]*transition:\s*transform 160ms ease-out;/s,
+  );
+  assert.match(
+    promoStyles,
+    /\.agentkit-promo-action\.is-console:hover \.agentkit-promo-arrow-icon[\s\S]*?\.agentkit-promo-action\.is-console:focus-visible \.agentkit-promo-arrow-icon[\s\S]*?transform:\s*translateX\(2px\)/,
+  );
+  assert.doesNotMatch(
+    promoStyles,
+    /\.agentkit-promo-arrow-icon\s*\{[^}]*opacity:/s,
+  );
+  assert.match(
+    promoStyles,
+    /\.sidebar\.is-collapsed \.agentkit-promo-card\s*\{[^}]*display:\s*none;/s,
   );
   assert.match(promoStyles, /prefers-reduced-motion:\s*reduce/);
-  assert.doesNotMatch(promoStyles, /translateY/);
   assert.doesNotMatch(promoStyles, /@keyframes/);
+  assert.doesNotMatch(globalStyles, /\.sidebar \.agentkit-promo/);
+});
+
+test("promo actions clear the current hover presentation after click", () => {
+  assert.match(
+    promoSource,
+    /const \[hoverSuppressed, setHoverSuppressed\] = useState\(false\)/,
+  );
+  assert.match(
+    promoSource,
+    /handleActionClick[\s\S]*?currentTarget\.blur\(\)[\s\S]*?setHoverSuppressed\(true\)/,
+  );
+  assert.equal((promoSource.match(/onClick=\{handleActionClick\}/g) ?? []).length, 2);
+  assert.match(promoSource, /onMouseLeave=\{\(\) => setHoverSuppressed\(false\)\}/);
 });

@@ -4,6 +4,7 @@ import {
   lazy,
   type ReactNode,
   Suspense,
+  useCallback,
   useEffect,
   useId,
   useMemo,
@@ -67,10 +68,12 @@ import {
   KB_BACKENDS,
   DEFAULT_KB_BACKEND,
   TRACING_EXPORTERS,
+  FEISHU_ENV,
   type BackendOption,
   type EnvVar,
 } from "./veadkCatalog";
 import {
+  firstMissingRuntimeEnv,
   firstInvalidRuntimeEnv,
   runtimeEnvConfiguration,
   runtimeEnvJsonError,
@@ -106,9 +109,13 @@ import {
   resolvedModelSource,
   type ModelSource,
 } from "./modelSource";
-import { resolveRuntimeName } from "./runtimeName";
+import { resolveRuntimeName, runtimeNameProblem } from "./runtimeName";
 import type { AgentProject } from "./project";
 import { AgentBuildCanvas } from "./AgentBuildCanvas";
+import {
+  NewAgentWorkbench,
+  type NewAgentDeploymentOptions,
+} from "./NewAgentWorkbench";
 import { CloudEnvironmentConfigurator } from "../ui/CloudEnvironmentConfigurator";
 import { SkillSourcePicker } from "../ui/SkillSourcePicker";
 import { listA2aSpaces, type A2aSpaceRef } from "./a2aSpaces";
@@ -130,6 +137,7 @@ import { isImeCompositionEvent } from "../ui/composerKeyboard";
 import {
   createGeneratedAgentTestRun,
   createGeneratedAgentTestSession,
+  checkRuntimeNameAvailability,
   deleteGeneratedAgentTestRun,
   deployAgentkitProject,
   generateAgentDraftFromRequirement,
@@ -410,10 +418,8 @@ function a2aRegistryEnvValues(
     REGISTRY_SPACE_ID: registry.registrySpaceId ?? "",
   };
   if (options.includeDefaults) {
-    values.REGISTRY_TOP_K =
-      registry.registryTopK?.trim() || defaults.topK;
-    values.REGISTRY_REGION =
-      registry.registryRegion?.trim() || defaults.region;
+    values.REGISTRY_TOP_K = registry.registryTopK?.trim() || defaults.topK;
+    values.REGISTRY_REGION = registry.registryRegion?.trim() || defaults.region;
     values.REGISTRY_ENDPOINT =
       registry.registryEndpoint?.trim() || defaults.endpoint;
   } else {
@@ -811,10 +817,7 @@ function CatalogSelect({
         window.innerHeight - rect.bottom - viewportPadding - gap;
       const availableAbove = rect.top - viewportPadding - gap;
       const opensUp = availableBelow < 300 && availableAbove > availableBelow;
-      const available = Math.max(
-        96,
-        opensUp ? availableAbove : availableBelow,
-      );
+      const available = Math.max(96, opensUp ? availableAbove : availableBelow);
       const width = Math.min(
         rect.width,
         window.innerWidth - viewportPadding * 2,
@@ -1844,7 +1847,9 @@ function VikingMemorySelect({
       listLabel="VikingDB 记忆库"
       placeholder="请选择 VikingDB 记忆库，不选择则自动创建"
       emptyMessage="此账号下暂无 VikingDB 记忆库，未选择时会自动创建。"
-      loadedMessage={(count) => `已加载 ${count} 个记忆库；不选择时会自动创建。`}
+      loadedMessage={(count) =>
+        `已加载 ${count} 个记忆库；不选择时会自动创建。`
+      }
       refreshLabel="刷新记忆库列表"
       noMatchesMessage="未找到匹配的记忆库"
       getLabel={vikingMemoryDisplayName}
@@ -1992,7 +1997,9 @@ function McpToolEditor({
                           onClick={() =>
                             onChange(
                               tools.map((tool, index) =>
-                                index === i ? clearMcpConfiguredAuth(tool) : tool,
+                                index === i
+                                  ? clearMcpConfiguredAuth(tool)
+                                  : tool,
                               ),
                             )
                           }
@@ -2393,9 +2400,7 @@ function collectDeploymentEnv(
     fixedValues.MODEL_AGENT_NAME = selectedModelName;
     fixedValues.MODEL_NAME = selectedModelName;
   }
-  if (
-    selectedHarnessOptimizations(prepared.draft).includes("mcp_resilience")
-  ) {
+  if (selectedHarnessOptimizations(prepared.draft).includes("mcp_resilience")) {
     if (sourcePreserving) {
       selections.push({
         env: [
@@ -2418,10 +2423,7 @@ function collectDeploymentEnv(
         fixedValues: { ...config.fixedValues, ...fixedValues },
       };
     }
-    const gatewayEnv = resolveMcpGatewayEnv(
-      prepared.draft,
-      prepared.envValues,
-    );
+    const gatewayEnv = resolveMcpGatewayEnv(prepared.draft, prepared.envValues);
     const gatewayError = gatewayEnv.ok ? undefined : gatewayEnv.message;
     selections.push({
       env: [
@@ -2647,11 +2649,7 @@ export function TreeNode({
 type DebugPhase = "idle" | "starting" | "ready" | "sending" | "error";
 
 type WorkspaceMode =
-  | "build"
-  | "validate"
-  | "optimize"
-  | "environment"
-  | "publish";
+  "build" | "validate" | "optimize" | "environment" | "publish";
 interface DebugMessage {
   role: "user" | "assistant";
   content: string;
@@ -2766,7 +2764,9 @@ function customCreateInitialState(
       deployment: {
         ...(draft.deployment ?? { feishuEnabled: false }),
         envValues: Object.fromEntries(
-          Object.entries(initialEnvValues).filter(([key]) => !secretKeys.has(key)),
+          Object.entries(initialEnvValues).filter(
+            ([key]) => !secretKeys.has(key),
+          ),
         ),
       },
     },
@@ -2949,9 +2949,7 @@ function DebugComparisonWorkspace({
                   (message) => message.role === "assistant",
                 );
               const startDisabled =
-                busy ||
-                variant.configOpen ||
-                configurationUnavailable;
+                busy || variant.configOpen || configurationUnavailable;
               const disabledReason = !modelName
                 ? "请先选择模型"
                 : !description
@@ -3420,7 +3418,9 @@ function WorkspaceLifecycleFooter({
   const nextMode = WORKSPACE_MODES[activeIndex + 1];
   return (
     <footer className="cw-workspace-footer">
-      {accessory ? <div className="cw-workspace-footer-accessory">{accessory}</div> : null}
+      {accessory ? (
+        <div className="cw-workspace-footer-accessory">{accessory}</div>
+      ) : null}
       <div
         className={`cw-workspace-nav-actions${assistant ? " has-assistant" : ""}`}
       >
@@ -3488,6 +3488,10 @@ interface CustomCreateProps extends CreateModeProps {
   onDeploymentTaskChange?: (task: DeploymentTaskUpdate) => void;
   /** Specific creation path inside the scratch flow. */
   createMode?: "custom" | "yaml_import";
+  /** Fresh custom creation experience selected by the app-level chooser. */
+  freshCreationSurface?: "vulcan" | "traditional";
+  /** Stable local draft id propagated to persistent deployment tasks. */
+  workspaceDraftId?: string;
   /** Existing Runtime target when editing an Agent from the library. */
   deploymentTarget?: {
     runtimeId: string;
@@ -3521,6 +3525,8 @@ export function CustomCreate({
   features,
   onDeploymentTaskChange,
   createMode = "custom",
+  freshCreationSurface = "traditional",
+  workspaceDraftId,
   deploymentTarget,
   cloudProvider = "volcengine",
   initialDeployRegion = defaultCloudRegion(cloudProvider),
@@ -3530,15 +3536,28 @@ export function CustomCreate({
   onDiscard,
 }: CustomCreateProps) {
   void onCreate; // outcome is the in-pane project preview, not a navigation
-  void onBack; // no footer nav in the single-scroll layout; back lives in app chrome
   void onDiscard; // the discard action is intentionally hidden in this flow
-  const [initialState] = useState<CustomCreateInitialState>(() =>
-    customCreateInitialState(
-      initialDraft ?? emptyDraft(cloudProvider),
+  const isVulcanCreation =
+    createMode === "custom" && freshCreationSurface === "vulcan";
+  const isFreshVulcanCreation = isVulcanCreation && !initialDraft;
+  const [initialState] = useState<CustomCreateInitialState>(() => {
+    const initialCreationDraft = initialDraft ?? emptyDraft(cloudProvider);
+    const creationDraft = isFreshVulcanCreation
+      ? {
+          ...initialCreationDraft,
+          name: initialCreationDraft.name.trim()
+            ? initialCreationDraft.name
+            : "assistant",
+          dynamicAgentDelegation: true,
+        }
+      : initialCreationDraft;
+    return customCreateInitialState(
+      creationDraft,
       cloudProvider,
-    ),
-  );
+    );
+  });
   const [draft, setDraft] = useState<AgentDraft>(initialState.draft);
+  const usesNewAgentWorkbench = isVulcanCreation;
   const [customModelSecretValues, setCustomModelSecretValues] = useState<
     Record<string, string>
   >(initialState.customModelSecretValues);
@@ -3629,6 +3648,12 @@ export function CustomCreate({
     ((confirmed: boolean) => void) | null
   >(null);
   const [buildErr, setBuildErr] = useState("");
+  const [newWorkbenchDeploying, setNewWorkbenchDeploying] = useState(false);
+  const [newWorkbenchDeployStage, setNewWorkbenchDeployStage] =
+    useState<DeployStage | null>(null);
+  const [newWorkbenchDeployError, setNewWorkbenchDeployError] = useState("");
+  const [newWorkbenchDeploySucceeded, setNewWorkbenchDeploySucceeded] =
+    useState(false);
   const [a2aRegistryAdvancedOpen, setA2aRegistryAdvancedOpen] = useState(false);
 
   // Which tree node is being edited ([] = root). The detail pane and per-node
@@ -3956,6 +3981,20 @@ export function CustomCreate({
       requirement.label === `${node.name.trim() || "自定义模型"} 模型 API Key`,
   );
 
+  const updateNewWorkbenchModelApiKey = useCallback(
+    (key: ModelApiKeyOption) => {
+      setDraft((current) => ({
+        ...current,
+        deployment: {
+          ...(current.deployment ?? { feishuEnabled: false }),
+          modelApiKeyId: key.id,
+          modelApiKeyName: key.name,
+        },
+      }));
+    },
+    [],
+  );
+
   function focusValidationProblem(problem: TreeProblem) {
     const sectionId = problem.problem === "缺少子 Agent" ? "type" : "basic";
     const section = sectionRefs.current[sectionId];
@@ -3997,9 +4036,7 @@ export function CustomCreate({
     if (problems[0]) {
       setSelectedPath(problems[0].path);
       window.requestAnimationFrame(() => {
-        window.requestAnimationFrame(() =>
-          focusValidationProblem(problems[0]),
-        );
+        window.requestAnimationFrame(() => focusValidationProblem(problems[0]));
       });
     }
     return false;
@@ -4398,13 +4435,12 @@ export function CustomCreate({
       ? [...new Set([...harnessOptimizations, optionId])]
       : harnessOptimizations.filter((item) => item !== optionId);
     const profile =
-      harnessOptimizationProfile === "ops" ? "default" : harnessOptimizationProfile;
+      harnessOptimizationProfile === "ops"
+        ? "default"
+        : harnessOptimizationProfile;
     setDraft((current) => ({
       ...current,
-      harnessSidecar: harnessIntentFromOptimizations(
-        optimizations,
-        profile,
-      ),
+      harnessSidecar: harnessIntentFromOptimizations(optimizations, profile),
     }));
     setBuildErr("");
     setProject(null);
@@ -4469,8 +4505,7 @@ export function CustomCreate({
     onStage?: (s: DeployStage) => void,
     options?: Parameters<typeof deployAgentkitProject>[3],
   ) => {
-    const sourcePreserving =
-      deploymentTarget?.editMode === "source-preserving";
+    const sourcePreserving = deploymentTarget?.editMode === "source-preserving";
     const net = draft.deployment?.network;
     const network =
       net && net.mode && net.mode !== "public"
@@ -4514,8 +4549,7 @@ export function CustomCreate({
         environment: draft.cloudEnvironment?.environmentId
           ? {
               environmentId: draft.cloudEnvironment.environmentId,
-              environmentVersionId:
-                draft.cloudEnvironment.environmentVersionId,
+              environmentVersionId: draft.cloudEnvironment.environmentVersionId,
             }
           : undefined,
       },
@@ -4570,6 +4604,223 @@ export function CustomCreate({
     }));
     setBuildErr("");
     setProject(null);
+  };
+
+  const deployFromNewWorkbench = async (
+    deploymentOptions: NewAgentDeploymentOptions,
+  ) => {
+    if (newWorkbenchDeploying) return;
+    setNewWorkbenchDeployError("");
+    setNewWorkbenchDeploySucceeded(false);
+    if (!requireCompleteDraft()) return;
+
+    const runtimeError = runtimeNameProblem(deploymentRuntimeName.trim());
+    if (runtimeError) {
+      setNewWorkbenchDeployError(runtimeError);
+      return;
+    }
+    const deploymentDraft: AgentDraft = {
+      ...providerDraft,
+      memory: {
+        ...providerDraft.memory,
+        shortTerm: deploymentOptions.sessionBackend !== "local",
+      },
+      shortTermBackend: deploymentOptions.sessionBackend,
+    };
+    const activeDeploymentEnv = collectDeploymentEnv(
+      deploymentDraft,
+      deploymentTarget?.editMode === "source-preserving",
+    );
+    const network = deploymentDraft.deployment?.network;
+    if (
+      network?.mode !== undefined &&
+      network.mode !== "public" &&
+      !network.vpcId?.trim()
+    ) {
+      setNewWorkbenchDeployError("使用 VPC 网络时，请填写 VPC ID。");
+      return;
+    }
+    if (
+      resolvedModelSource(deploymentDraft, cloudProvider) === "ark" &&
+      !deploymentDraft.deployment?.modelApiKeyId?.trim()
+    ) {
+      setNewWorkbenchDeployError("请先选择模型使用的 API Key。");
+      return;
+    }
+    const allEnvValues = {
+      ...(deploymentDraft.deployment?.envValues ?? {}),
+      ...customModelSecretValues,
+      ...activeDeploymentEnv.fixedValues,
+    };
+    const invalidEnvKey = Object.keys(allEnvValues).find(
+      (key) => key && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key),
+    );
+    if (invalidEnvKey) {
+      setNewWorkbenchDeployError(`环境变量名称不合法：${invalidEnvKey}`);
+      return;
+    }
+    const activeEnvSpecs = deploymentDraft.deployment?.feishuEnabled
+      ? [...activeDeploymentEnv.specs, ...FEISHU_ENV]
+      : activeDeploymentEnv.specs;
+    const missingEnv = firstMissingRuntimeEnv(activeEnvSpecs, allEnvValues);
+    if (missingEnv) {
+      setNewWorkbenchDeployError(
+        `${missingEnv.comment || missingEnv.key}：请填写必填环境变量`,
+      );
+      return;
+    }
+    const invalidEnv = firstInvalidRuntimeEnv(activeEnvSpecs, allEnvValues);
+    if (invalidEnv) {
+      setNewWorkbenchDeployError(
+        `${invalidEnv.spec.comment || invalidEnv.spec.key}：${invalidEnv.error}`,
+      );
+      return;
+    }
+
+    setNewWorkbenchDeploying(true);
+    setNewWorkbenchDeployStage({
+      level: "info",
+      phase: "prepare",
+      message: "正在生成部署配置",
+      pct: 0,
+    });
+    let activeTask: DeploymentTaskUpdate | null = null;
+    try {
+      if (!deploymentTarget) {
+        const availability = await checkRuntimeNameAvailability(
+          deploymentRuntimeName.trim(),
+          deployRegion,
+        );
+        if (!availability.available) {
+          throw new Error("Runtime 名称已存在，请修改后重试。");
+        }
+      }
+      const generated = await generateAgentProject(
+        codegenDraft(deploymentDraft),
+      );
+      setProject(generated);
+      const taskId = crypto.randomUUID();
+      const startedAt = Date.now();
+      let latestPhase = "prepare";
+      let latestLabel = "准备部署";
+      let latestMessage = "正在生成部署配置";
+      const taskBase = {
+        id: taskId,
+        ...(workspaceDraftId ? { draftId: workspaceDraftId } : {}),
+        agentName: deploymentDraft.name,
+        runtimeName: deploymentRuntimeName.trim(),
+        region: deployRegion,
+        startedAt,
+        agentDraft: deploymentDraft,
+      };
+      const initialTask: DeploymentTaskUpdate = {
+        ...taskBase,
+        status: "running",
+        phase: latestPhase,
+        label: latestLabel,
+        message: latestMessage,
+        pct: 0,
+      };
+      activeTask = initialTask;
+      onDeploymentTaskChange?.(initialTask);
+      onDeploymentStarted?.(initialTask);
+
+      const envMap = new Map(
+        Object.entries(allEnvValues)
+          .map(([key, value]) => [key.trim(), value] as const)
+          .filter(([key, value]) => key && value.trim()),
+      );
+      for (const env of runtimeEnvVars(activeEnvSpecs, allEnvValues)) {
+        envMap.set(env.key, env.value);
+      }
+      const modelApiKeyId = deploymentDraft.deployment?.modelApiKeyId?.trim();
+      const modelApiKeyName =
+        deploymentDraft.deployment?.modelApiKeyName?.trim();
+      if (modelApiKeyId) envMap.set("MODEL_AGENT_API_KEY_ID", modelApiKeyId);
+      if (modelApiKeyName)
+        envMap.set("MODEL_AGENT_API_KEY_NAME", modelApiKeyName);
+
+      const result = await handleDeploy(
+        generated,
+        (stage) => {
+          latestPhase = stage.phase;
+          latestLabel =
+            stage.phase === "build"
+              ? "构建镜像"
+              : stage.phase === "deploy"
+                ? "部署 Runtime"
+                : stage.phase === "publish"
+                  ? "发布服务"
+                  : "部署中";
+          latestMessage = stage.message;
+          setNewWorkbenchDeployStage(stage);
+          onDeploymentTaskChange?.({
+            ...taskBase,
+            runtimeName: stage.runtimeName || taskBase.runtimeName,
+            status: "running",
+            phase: latestPhase,
+            label: latestLabel,
+            message: latestMessage,
+            pct: stage.pct,
+            ...(stage.buildLog ? { buildLog: stage.buildLog } : {}),
+          });
+        },
+        {
+          taskId,
+          runtimeName: deploymentRuntimeName.trim(),
+          sessionStorage: deploymentOptions.sessionStorage,
+          minInstance: deploymentOptions.minInstance,
+          maxInstance: deploymentOptions.maxInstance,
+          authentication: deploymentOptions.authentication,
+          createEvaluationSets: deploymentOptions.createEvaluationSets,
+          resources: deploymentOptions.resources,
+          ...(deploymentDraft.deployment?.feishuEnabled
+            ? { im: { feishu: { enabled: true } } }
+            : {}),
+          envs: [...envMap].map(([key, value]) => ({ key, value })),
+        },
+      );
+      setNewWorkbenchDeploySucceeded(true);
+      setNewWorkbenchDeployStage({
+        level: "success",
+        phase: "complete",
+        message: "部署已完成",
+        pct: 100,
+      });
+      onDeploymentTaskChange?.({
+        ...taskBase,
+        runtimeName: result.runtimeName || taskBase.runtimeName,
+        runtimeId: result.runtimeId,
+        region: result.region || deployRegion,
+        status: "success",
+        phase: "complete",
+        label: "部署完成",
+        message: result.warnings?.join("；"),
+        pct: 100,
+      });
+      await onDeploymentComplete?.(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setNewWorkbenchDeployError(message);
+      setNewWorkbenchDeployStage(null);
+      const failedTask: DeploymentTaskUpdate = {
+        ...(activeTask ?? {
+          id: crypto.randomUUID(),
+          agentName: providerDraft.name || "未命名智能体",
+          runtimeName: deploymentRuntimeName.trim(),
+          region: deployRegion,
+          startedAt: Date.now(),
+        }),
+        status: "error",
+        phase: activeTask?.phase,
+        label: "部署失败",
+        message,
+        retry: () => deployFromNewWorkbench(deploymentOptions),
+      };
+      onDeploymentTaskChange?.(failedTask);
+    } finally {
+      setNewWorkbenchDeploying(false);
+    }
   };
 
   const Section = sectionImpl.current;
@@ -4668,6 +4919,76 @@ export function CustomCreate({
       </AnimatePresence>
     </section>
   );
+
+  if (usesNewAgentWorkbench) {
+    return (
+      <NewAgentWorkbench
+        draft={providerDraft}
+        cloudProvider={cloudProvider}
+        deployRegion={deployRegion}
+        runtimeName={deploymentRuntimeName}
+        isRuntimeUpdate={Boolean(deploymentTarget)}
+        deploying={newWorkbenchDeploying}
+        deployStage={newWorkbenchDeployStage}
+        deployError={newWorkbenchDeployError}
+        deploySucceeded={newWorkbenchDeploySucceeded}
+        showErrors={showErrors}
+        onBack={onBack}
+        onDraftPatch={(updates) => {
+          setDraft((current) => ({ ...current, ...updates }));
+          setProject(null);
+          setBuildErr("");
+        }}
+        onDeploymentPatch={(updates) =>
+          setDraft((current) => ({
+            ...current,
+            deployment: {
+              ...(current.deployment ?? { feishuEnabled: false }),
+              ...updates,
+            },
+          }))
+        }
+        onModelApiKeyChange={updateNewWorkbenchModelApiKey}
+        customModelApiKey={
+          selectedCustomModelCredential
+            ? (customModelSecretValues[selectedCustomModelCredential.key] ?? "")
+            : ""
+        }
+        onCustomModelApiKeyChange={(value) => {
+          if (!selectedCustomModelCredential) return;
+          setCustomModelSecretValues((current) => ({
+            ...current,
+            [selectedCustomModelCredential.key]: value,
+          }));
+        }}
+        onSelectedSkillsChange={(selectedSkills) =>
+          setDraft((current) => ({ ...current, selectedSkills }))
+        }
+        onCloudEnvironmentChange={updateCloudEnvironment}
+        onDeployRegionChange={setDeployRegion}
+        onRuntimeNameChange={(runtimeName) =>
+          setDraft((current) => ({
+            ...current,
+            deployment: {
+              ...(current.deployment ?? { feishuEnabled: false }),
+              runtimeName,
+              runtimeNameCustomized: true,
+            },
+          }))
+        }
+        onNetworkChange={(network) =>
+          setDraft((current) => ({
+            ...current,
+            deployment: {
+              ...(current.deployment ?? { feishuEnabled: false }),
+              network,
+            },
+          }))
+        }
+        onDeploy={(options) => void deployFromNewWorkbench(options)}
+      />
+    );
+  }
 
   return (
     <div className={`cw-root is-${workspaceMode}`}>
@@ -5066,7 +5387,9 @@ export function CustomCreate({
                                       value={node.modelName ?? ""}
                                       cloudProvider={cloudProvider}
                                       apiKeyId={draft.deployment?.modelApiKeyId}
-                                      apiKeyName={draft.deployment?.modelApiKeyName}
+                                      apiKeyName={
+                                        draft.deployment?.modelApiKeyName
+                                      }
                                       onApiKeyChange={(key) =>
                                         setDraft((current) => ({
                                           ...current,
@@ -5553,7 +5876,12 @@ export function CustomCreate({
         {workspaceMode === "environment" && (
           <div className="cw-environment-workspace">
             <CloudEnvironmentConfigurator
-              value={draft.cloudEnvironment ?? { environmentId: "", environmentVersionId: "" }}
+              value={
+                draft.cloudEnvironment ?? {
+                  environmentId: "",
+                  environmentVersionId: "",
+                }
+              }
               onChange={updateCloudEnvironment}
               disabled={building}
             />
@@ -5581,7 +5909,9 @@ export function CustomCreate({
                         instruction: selectedDebugVariant.instruction,
                         optimizations: [
                           `优化场景：${harnessSidecarProfileLabel(harnessOptimizationProfile)}`,
-                          ...harnessOptimizations.map(harnessSidecarOptionLabel),
+                          ...harnessOptimizations.map(
+                            harnessSidecarOptionLabel,
+                          ),
                         ],
                       }
                     : undefined
@@ -5595,7 +5925,8 @@ export function CustomCreate({
                 deploymentRuntimeId={deploymentTarget?.runtimeId}
                 deploymentRuntimeName={deploymentRuntimeName}
                 deploymentRuntimeNameCustomized={
-                  !!deploymentTarget || !!draft.deployment?.runtimeNameCustomized
+                  !!deploymentTarget ||
+                  !!draft.deployment?.runtimeNameCustomized
                 }
                 onDeploymentRuntimeNameChange={(runtimeName) =>
                   setDraft((current) => ({

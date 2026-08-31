@@ -79,7 +79,7 @@ test("applies configured branding to the UI, document title, and favicon", () =>
   assert.match(loginSource, /target="_blank"/);
   assert.match(
     stylesSource,
-    /\.brand-logo\s*\{[\s\S]*?width:\s*22px;[\s\S]*?height:\s*22px;[\s\S]*?flex:\s*0 0 22px;/,
+    /\.brand-logo\s*\{[\s\S]*?width:\s*18px;[\s\S]*?height:\s*18px;[\s\S]*?flex:\s*0 0 18px;/,
   );
   assert.match(
     stylesSource,
@@ -96,7 +96,7 @@ test("applies configured branding to the UI, document title, and favicon", () =>
   );
   assert.match(
     stylesSource,
-    /\.brand\s*\{[\s\S]*?font-size:\s*17px;[\s\S]*?line-height:\s*1\.4;/,
+    /\.brand\s*\{[\s\S]*?font-size:\s*15px;[\s\S]*?line-height:\s*1\.4;/,
   );
   assert.match(
     stylesSource,
@@ -142,11 +142,20 @@ test("expanded sidebar navigation keeps equal visual gutters beside the main pan
   );
   assert.match(
     stylesSource,
+    /\.sidebar-brand-row\s*\{[\s\S]*?padding:\s*0 0 0 10px;/,
+  );
+  assert.match(
+    stylesSource,
     /\.new-chat\s*\{[\s\S]*?width:\s*100%;[\s\S]*?gap:\s*8px;[\s\S]*?padding:\s*7px 10px;/,
   );
   assert.match(
     stylesSource,
     /\.new-chat:hover,[\s\S]*?\.new-chat\.is-active\s*\{\s*background:\s*hsl\(var\(--sidebar-item-hover\)\);/,
+  );
+  assert.match(stylesSource, /\.brand\s*\{[\s\S]*?font-size:\s*15px;/);
+  assert.match(
+    stylesSource,
+    /\.sidebar-collapse-toggle \.icon\s*\{[\s\S]*?width:\s*18px;[\s\S]*?height:\s*18px;/,
   );
 });
 
@@ -243,7 +252,7 @@ test("history header offers a borderless new-session action", () => {
 test("main panel fills the shell edge to edge with no global navbar", () => {
   assert.match(
     stylesSource,
-    /\.sidebar-brand-row\s*\{[\s\S]*?height:\s*64px;[\s\S]*?min-height:\s*64px;[\s\S]*?padding:\s*0 0 0 8px;/,
+    /\.sidebar-brand-row\s*\{[\s\S]*?height:\s*64px;[\s\S]*?min-height:\s*64px;[\s\S]*?padding:\s*0 0 0 10px;/,
   );
   assert.match(
     stylesSource,

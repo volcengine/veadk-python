@@ -46,6 +46,7 @@ from uuid import uuid4
 import click
 from pydantic import BaseModel, Field
 
+from frontend.server.agentkit_clients import create_agentkit_client
 from veadk.cli.agentkit_sandbox_region import is_agentkit_resource_not_found
 from veadk.cli.frontend_branding import normalize_site_title, resolve_site_logo
 from veadk.cli.managed_sidecar_source import (
@@ -76,6 +77,7 @@ from veadk.utils.cloud_provider import (
     DEFAULT_BYTEPLUS_VIKING_MEMORY_HOST,
     DEFAULT_BYTEPLUS_VIKING_MEMORY_REGION,
     DEFAULT_CLOUD_PROVIDER,
+    DEFAULT_VOLCENGINE_REGION,
     CloudProvider,
     agentkit_openapi_base,
     cloud_provider_from_env,
@@ -565,6 +567,23 @@ def _runtime_regions(provider: str, requested_region: str) -> list[str]:
     if provider == "byteplus":
         return [os.getenv("BYTEPLUS_REGION") or DEFAULT_BYTEPLUS_REGION]
     return ["cn-beijing", "cn-shanghai"]
+
+
+def _studio_resource_region(
+    provider: CloudProvider,
+    environ: Mapping[str, str] | None = None,
+) -> str:
+    """Resolve the control-plane region used by Studio-owned resources."""
+    source = os.environ if environ is None else environ
+    if is_vefaas_runtime(source):
+        deployed_region = str(
+            source.get("VEADK_STUDIO_DEPLOY_REGION") or source.get("APP_REGION") or ""
+        ).strip()
+        if deployed_region:
+            return deployed_region
+    return (
+        DEFAULT_BYTEPLUS_REGION if provider == "byteplus" else DEFAULT_VOLCENGINE_REGION
+    )
 
 
 def _vikingdb_openapi_host(provider: str) -> str:
@@ -1901,6 +1920,7 @@ def _run_frontend_server(
         StudioAccessPolicy,
         StudioPrincipal,
         StudioRole,
+        runtime_attribution,
         runtime_belongs_to,
     )
     from veadk.multimodal.api import mount_media_routes
@@ -2213,7 +2233,9 @@ def _run_frontend_server(
         from agentkit.sdk.tools.client import AgentkitToolsClient
 
         access_key, secret_key, session_token = _resolve_ve_credentials()
-        client = AgentkitToolsClient(
+        client = create_agentkit_client(
+            AgentkitToolsClient,
+            provider=provider,
             access_key=access_key,
             secret_key=secret_key,
             region=region,
@@ -2227,7 +2249,9 @@ def _run_frontend_server(
         from agentkit.sdk.skills.client import AgentkitSkillsClient
 
         access_key, secret_key, session_token = _resolve_ve_credentials()
-        return AgentkitSkillsClient(
+        return create_agentkit_client(
+            AgentkitSkillsClient,
+            provider=provider,
             access_key=access_key,
             secret_key=secret_key,
             region=region,
@@ -2362,15 +2386,20 @@ def _run_frontend_server(
             return _default_cloud_region()
         return candidate or _default_cloud_region()
 
+    def _coerce_studio_resource_region(region: str | None) -> str:
+        candidate = (region or "").strip()
+        fallback = _studio_resource_region(provider)
+        if provider == "byteplus" and candidate.startswith("cn-"):
+            return fallback
+        if provider == "volcengine" and candidate.startswith("ap-"):
+            return fallback
+        return candidate or fallback
+
     def _knowledge_regions() -> tuple[str, ...]:
-        return (
-            ("ap-southeast-1",)
-            if provider == "byteplus"
-            else ("cn-beijing", "cn-shanghai")
-        )
+        return (_studio_resource_region(provider),)
 
     def _knowledge_create_regions() -> tuple[str, ...]:
-        return ("ap-southeast-1",) if provider == "byteplus" else ("cn-beijing",)
+        return (_studio_resource_region(provider),)
 
     from frontend.server.knowledge import (
         KnowledgeIdentity,
@@ -2422,7 +2451,9 @@ def _run_frontend_server(
         from agentkit.sdk.knowledge.client import AgentkitKnowledgeClient
 
         access_key, secret_key, session_token = _resolve_ve_credentials()
-        return AgentkitKnowledgeClient(
+        return create_agentkit_client(
+            AgentkitKnowledgeClient,
+            provider=provider,
             access_key=access_key,
             secret_key=secret_key,
             session_token=session_token or "",
@@ -2448,7 +2479,7 @@ def _run_frontend_server(
             ),
         ),
         identity_resolver=_knowledge_identity,
-        region_resolver=_coerce_cloud_region,
+        region_resolver=_coerce_studio_resource_region,
         region_candidates_resolver=_knowledge_regions,
         create_region_candidates_resolver=_knowledge_create_regions,
     )
@@ -5476,6 +5507,14 @@ def _run_frontend_server(
             )
         requested_runtime_name = (data.get("runtimeName") or agent_name).strip()
         files = data.get("files", [])
+        quick_mode_requested = (
+            isinstance(requested_draft, Mapping)
+            and requested_draft.get("dynamicAgentDelegation") is True
+        ) or any(
+            isinstance(item, Mapping)
+            and str(item.get("path") or "").endswith("/quick_mode_compat.py")
+            for item in files
+        )
         migration_task_id = str(data.get("migrationTaskId") or "").strip()
         source = data.get("source") or (
             {"kind": "migration", "migrationId": migration_task_id}
@@ -5548,8 +5587,7 @@ def _run_frontend_server(
         config = data.get("config", {})
         task_id = str(data.get("taskId") or f"deploy-{id(request)}").strip()
         create_evaluation_sets = data.get("createEvaluationSets", True)
-        author = principal.display_name if principal else ""
-        owner_id = principal.owner_id if principal else ""
+        author, owner_id = runtime_attribution(principal)
         environment_ref = (
             data.get("environment") if isinstance(data.get("environment"), dict) else {}
         )
@@ -7633,6 +7671,41 @@ def _run_frontend_server(
                             100,
                         )
                     if result is not None and getattr(result, "success", False):
+                        if quick_mode_requested:
+                            created_runtime_id = str(
+                                task_state.get("runtime_id") or runtime_id
+                            )
+                            if not created_runtime_id:
+                                raise RuntimeError(
+                                    "快速模式 Runtime 创建成功，但未返回 Runtime ID"
+                                )
+                            runtime_detail = _get_runtime(created_runtime_id, region)
+                            runtime_role_name = str(
+                                getattr(runtime_detail, "role_name", "") or ""
+                            ).strip()
+                            from veadk.cli.agentkit_runtime_iam import (
+                                ensure_quick_runtime_full_access,
+                            )
+
+                            access_key, secret_key, session_token = (
+                                _resolve_ve_credentials()
+                            )
+                            if not ensure_quick_runtime_full_access(
+                                runtime_role_name,
+                                access_key=access_key,
+                                secret_key=secret_key,
+                                session_token=session_token,
+                                provider=provider,
+                            ):
+                                raise RuntimeError(
+                                    "快速模式 Runtime 使用了自定义运行角色；"
+                                    "请为该角色授予 AgentKitFullAccess。"
+                                )
+                            _emit(
+                                "success",
+                                "快速模式 Runtime 已具备 AgentKit 资源访问权限",
+                                100,
+                            )
                         _verify_sdk_sidecar_release(result)
                         if existing_runtime is not None and provider != "byteplus":
                             try:
@@ -11679,7 +11752,9 @@ def _run_frontend_server(
         from agentkit.sdk.knowledge.client import AgentkitKnowledgeClient
         from agentkit.sdk.knowledge import types as knowledge_types
 
-        client = AgentkitKnowledgeClient(
+        client = create_agentkit_client(
+            AgentkitKnowledgeClient,
+            provider=provider,
             access_key=access_key,
             secret_key=secret_key,
             session_token=session_token or "",
@@ -12099,7 +12174,9 @@ def _run_frontend_server(
                     "(set VOLCENGINE_ACCESS_KEY/SECRET_KEY)."
                 ),
             )
-        return AgentkitSkillsClient(
+        return create_agentkit_client(
+            AgentkitSkillsClient,
+            provider=provider,
             access_key=ak,
             secret_key=sk,
             region=region,
@@ -12121,7 +12198,7 @@ def _run_frontend_server(
 
     @app.get("/web/skill-spaces")
     async def _web_list_skill_spaces(
-        region: str = "all",
+        region: str = "",
         page: int = Query(default=1, ge=1),
         page_size: int = Query(default=50, ge=1, le=100),
         project: str | None = None,
@@ -12134,8 +12211,12 @@ def _run_frontend_server(
         """
         from agentkit.sdk.skills.types import ListSkillSpacesRequest
 
-        aggregate_regions = region in {"all", "", "*"}
-        regions = _runtime_regions(provider, region)
+        aggregate_regions = region in {"all", "*"}
+        regions = (
+            _runtime_regions(provider, region)
+            if aggregate_regions
+            else [_coerce_studio_resource_region(region)]
+        )
         all_items = []
         total_count = 0
         project_name = (project or "").strip() or None
@@ -12198,7 +12279,7 @@ def _run_frontend_server(
         from agentkit.sdk.skills.types import ListSkillsBySkillSpaceRequest
 
         del project  # SkillSpace ID is already globally scoped by AgentKit.
-        region = _coerce_cloud_region(region)
+        region = _coerce_studio_resource_region(region)
         try:
             client = _skills_client(region)
             resp = await asyncio.to_thread(
@@ -12247,7 +12328,7 @@ def _run_frontend_server(
         skill_name: str | None = None,
     ):
         """Fetch a specific skill version's SKILL.md content plus package files."""
-        region = _coerce_cloud_region(region)
+        region = _coerce_studio_resource_region(region)
         try:
             client = _skills_client(region)
             resp = await asyncio.to_thread(

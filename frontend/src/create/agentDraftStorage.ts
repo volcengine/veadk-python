@@ -4,10 +4,13 @@ import { prepareMcpAuth, referencedMcpEnvKeys } from "./mcpAuth";
 const WORKSPACE_DRAFT_STORAGE_VERSION = 1;
 const SERVER_MANAGED_MODEL_API_KEY = "MODEL_AGENT_API_KEY";
 
+export type WorkspaceAgentCreationMode = "quick" | "traditional";
+
 export interface WorkspaceAgentDraft {
   id: string;
   draft: AgentDraft;
   updatedAt: number;
+  creationMode?: WorkspaceAgentCreationMode;
   deploymentTarget?: {
     runtimeId: string;
     name: string;
@@ -39,8 +42,18 @@ function isWorkspaceAgentDraft(value: unknown): value is WorkspaceAgentDraft {
     isRecord(value) &&
     typeof value.id === "string" &&
     typeof value.updatedAt === "number" &&
+    (value.creationMode === undefined ||
+      value.creationMode === "quick" ||
+      value.creationMode === "traditional") &&
     isRecord(value.draft)
   );
+}
+
+export function workspaceAgentCreationMode(
+  item: WorkspaceAgentDraft,
+): WorkspaceAgentCreationMode {
+  if (item.creationMode) return item.creationMode;
+  return item.draft.dynamicAgentDelegation === true ? "quick" : "traditional";
 }
 
 export function workspaceDraftsKey(userId: string): string {

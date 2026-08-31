@@ -119,6 +119,8 @@ export interface AgentDraft {
   description: string;
   /** System prompt. */
   instruction: string;
+  /** Enable runtime resource discovery and dynamic sub-Agent delegation. */
+  dynamicAgentDelegation?: boolean;
   /**
    * Agent kind for the custom flow. "llm" is a VeADK `Agent` (LlmAgent);
    * "sequential"/"parallel"/"loop" are orchestrators from `google.adk.agents`
@@ -206,6 +208,7 @@ export function emptyDraft(cloudProvider: CloudProvider = "volcengine"): AgentDr
     name: "",
     description: DEFAULT_DESCRIPTION,
     instruction: DEFAULT_INSTRUCTION,
+    dynamicAgentDelegation: false,
     agentType: "llm",
     cloudProvider,
     maxIterations: 3,

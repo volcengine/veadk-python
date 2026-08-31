@@ -15,11 +15,11 @@
 """Tests for Studio role and Runtime ownership policy."""
 
 import base64
-from concurrent.futures import ThreadPoolExecutor
 import itertools
 import json
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
@@ -50,6 +50,7 @@ from veadk.cli.studio_rbac import (
     StudioPrincipal,
     StudioRole,
     parse_role_members,
+    runtime_attribution,
     runtime_belongs_to,
 )
 
@@ -2081,6 +2082,23 @@ def test_runtime_ownership_requires_current_owner_tag() -> None:
     assert not runtime_belongs_to({"veadk:author": "OWNER@EXAMPLE.COM"}, principal)
 
 
+def test_runtime_attribution_prefers_identity_and_leaves_unknown_author_empty() -> None:
+    owner_only = StudioPrincipal(
+        owner_id="stable-id",
+        display_name="",
+        identifiers=frozenset({"stable-id"}),
+    )
+    named = StudioPrincipal(
+        owner_id="stable-id",
+        display_name="developer",
+        identifiers=frozenset({"stable-id", "developer"}),
+    )
+
+    assert runtime_attribution(named) == ("developer", "stable-id")
+    assert runtime_attribution(owner_only) == ("stable-id", "stable-id")
+    assert runtime_attribution(None) == ("", "")
+
+
 def test_studio_deploy_exposes_role_options() -> None:
     result = CliRunner().invoke(studio, ["deploy", "--help"])
 
@@ -2550,6 +2568,7 @@ def test_non_admin_runtime_list_uses_one_owner_filtered_request(
 
     other = _runtime("runtime-other", "someone-else")
     own = _runtime("runtime-own", "developer")
+    own.tags.append(SimpleNamespace(key="veadk:author", value="developer"))
     reader_own = _runtime("runtime-reader", "reader")
     developer_tag_filters: list[tuple[str, list[str]]] = []
 
@@ -2595,6 +2614,7 @@ def test_non_admin_runtime_list_uses_one_owner_filtered_request(
         "runtime-own"
     ]
     assert developer.json()["runtimes"][0]["canDelete"] is True
+    assert developer.json()["runtimes"][0]["author"] == "developer"
     assert ("veadk:owner", ["developer"]) in developer_tag_filters
     assert developer_call_count == 1
     assert reader.status_code == 200
@@ -3970,6 +3990,92 @@ def test_runtime_update_capability_uses_safe_agent_draft_fallback(
     assert "internal_server_error" not in unavailable.text
 
 
+def test_runtime_update_capability_restores_quick_mode_from_agent_draft_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+    runtime = _runtime_with_public_endpoint(_runtime("runtime-quick", "developer"))
+    runtime.current_version_number = 4
+    monkeypatch.setenv("BYTEPLUS_ACCESS_KEY", "test-ak")
+    monkeypatch.setenv("BYTEPLUS_SECRET_KEY", "test-sk")
+
+    monkeypatch.setattr(
+        AgentkitRuntimeClient,
+        "get_runtime",
+        lambda _self, _request: runtime,
+    )
+
+    class RuntimeAsyncClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> "RuntimeAsyncClient":
+            return self
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+        async def request(
+            self,
+            _method: str,
+            url: str,
+            **_kwargs: Any,
+        ) -> _RuntimeJsonResponse:
+            if url.endswith("/list-apps"):
+                return _RuntimeJsonResponse(["quick-agent"])
+            if url.endswith("/web/agent-info/quick-agent"):
+                return _RuntimeJsonResponse(
+                    {
+                        "name": "quick-agent",
+                        "description": "Reusable assistant",
+                        "tools": ["CreateAgentToolset"],
+                    }
+                )
+            assert url.endswith("/web/agent-draft/quick-agent")
+            return _RuntimeJsonResponse(
+                {
+                    "draft": {
+                        "name": "quick-agent",
+                        "description": "Reusable assistant",
+                        "instruction": "Delegate complex work.",
+                        "dynamicAgentDelegation": True,
+                        "cloudProvider": "byteplus",
+                    }
+                }
+            )
+
+    monkeypatch.setattr("httpx.AsyncClient", RuntimeAsyncClient)
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        developers="developer",
+        provider="byteplus",
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/runtime-update-capability",
+            params={
+                "runtimeId": runtime.runtime_id,
+                "region": "ap-southeast-1",
+                "appName": "quick-agent",
+                "currentVersion": 4,
+            },
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["canUpdate"] is True
+    assert payload["recoveryStatus"] == "draft-only"
+    assert payload["editMode"] == "regenerate"
+    assert payload["recoverySource"] == "agent-draft"
+    assert payload["agent"]["draft"]["dynamicAgentDelegation"] is True
+    assert payload["etag"]
+
+
 def test_legacy_runtime_capability_recovers_environment_and_agentkit_toolset(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -5266,11 +5372,18 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
 
 
 @pytest.mark.parametrize(
-    ("session_storage", "min_instance", "max_instance", "expects_update"),
+    (
+        "session_storage",
+        "min_instance",
+        "max_instance",
+        "expects_update",
+        "quick_mode",
+    ),
     [
-        ("in-memory", 1, 1, True),
-        ("persistent", 1, 5, False),
-        ("persistent", 2, 4, True),
+        ("in-memory", 1, 1, True, False),
+        ("persistent", 1, 5, False, False),
+        ("persistent", 2, 4, True, False),
+        ("persistent", 1, 5, False, True),
     ],
 )
 def test_new_deployment_only_updates_non_default_instance_range(
@@ -5280,6 +5393,7 @@ def test_new_deployment_only_updates_non_default_instance_range(
     min_instance: int,
     max_instance: int,
     expects_update: bool,
+    quick_mode: bool,
 ) -> None:
     from agentkit.sdk.runtime.client import AgentkitRuntimeClient
 
@@ -5287,6 +5401,7 @@ def test_new_deployment_only_updates_non_default_instance_range(
     update_requests: list[Any] = []
     create_requests: list[Any] = []
     captured_config: dict[str, Any] = {}
+    full_access_calls: list[dict[str, Any]] = []
 
     def create_runtime(_self: Any, request: Any) -> SimpleNamespace:
         create_requests.append(request)
@@ -5297,7 +5412,10 @@ def test_new_deployment_only_updates_non_default_instance_range(
         return SimpleNamespace(runtime_id=runtime_id)
 
     def get_runtime(_self: Any, _request: Any) -> SimpleNamespace:
-        return SimpleNamespace(current_version_number=2)
+        return SimpleNamespace(
+            current_version_number=2,
+            role_name="AgentKit_Runtime_Default_ServiceRole_test",
+        )
 
     def launch(*, config_file: str, **_kwargs: Any) -> SimpleNamespace:
         captured_config.update(yaml.safe_load(Path(config_file).read_text()))
@@ -5321,6 +5439,13 @@ def test_new_deployment_only_updates_non_default_instance_range(
     monkeypatch.setattr(AgentkitRuntimeClient, "update_runtime", update_runtime)
     monkeypatch.setattr(AgentkitRuntimeClient, "get_runtime", get_runtime)
     monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
+    monkeypatch.setattr(
+        "veadk.cli.agentkit_runtime_iam.ensure_quick_runtime_full_access",
+        lambda role_name, **kwargs: full_access_calls.append(
+            {"role_name": role_name, **kwargs}
+        )
+        or True,
+    )
     app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
 
     with TestClient(app) as client:
@@ -5335,6 +5460,7 @@ def test_new_deployment_only_updates_non_default_instance_range(
                 "minInstance": min_instance,
                 "maxInstance": max_instance,
                 "createEvaluationSets": False,
+                "draft": {"dynamicAgentDelegation": quick_mode},
                 "files": [{"path": "app.py", "content": "app = object()\n"}],
                 "config": {"region": "cn-beijing", "projectName": "default"},
             },
@@ -5351,6 +5477,8 @@ def test_new_deployment_only_updates_non_default_instance_range(
     assert frames[-1]["runtimeName"] == "generated-runtime-name"
     created_tags = {tag.key: tag.value for tag in create_requests[-1].tags}
     assert created_tags["veadk:environment-id"] == "default"
+    assert created_tags["veadk:author"] == "developer"
+    assert created_tags["veadk:owner"] == "developer"
     assert captured_config["launch_types"]["cloud"]["runtime_name"] == (
         "stable-runtime-name"
     )
@@ -5374,6 +5502,21 @@ def test_new_deployment_only_updates_non_default_instance_range(
     assert bool(update_requests) is expects_update
     assert all(request.apmplus_enable is True for request in update_requests)
     assert any(frame.get("phase") == "update" for frame in frames) is expects_update
+    assert bool(full_access_calls) is quick_mode
+    if quick_mode:
+        assert full_access_calls == [
+            {
+                "role_name": "AgentKit_Runtime_Default_ServiceRole_test",
+                "access_key": "test-ak",
+                "secret_key": "test-sk",
+                "session_token": None,
+                "provider": "volcengine",
+            }
+        ]
+        assert any(
+            frame.get("message") == "快速模式 Runtime 已具备 AgentKit 资源访问权限"
+            for frame in frames
+        )
     if expects_update:
         request = update_requests[0]
         assert request.runtime_id == runtime_id

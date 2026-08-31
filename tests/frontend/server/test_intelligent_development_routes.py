@@ -342,6 +342,8 @@ def _app(
 
 @pytest.fixture(autouse=True)
 def _remote(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CLOUD_PROVIDER", "volcengine")
+    monkeypatch.setenv("AGENTKIT_CLOUD_PROVIDER", "volcengine")
     monkeypatch.setattr(routes, "SandboxRemoteTransport", _Remote)
 
 

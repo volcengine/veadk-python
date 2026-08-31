@@ -202,7 +202,7 @@
   grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 372px));
   align-items: stretch;
   justify-content: start;
-  grid-auto-rows: 140px;
+  grid-auto-rows: 152px;
   gap: 12px;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -210,8 +210,8 @@
 }
 
 .create-agent-card__agent-card.resource-card {
-  height: 140px;
-  min-height: 140px;
+  height: 152px;
+  min-height: 152px;
   gap: 0;
   padding: 12px;
   overflow: visible;
@@ -265,6 +265,12 @@
   line-height: var(--font-text-sm-line-height, 20px);
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+}
+
+.create-agent-card__agent-card.is-error .resource-card__description {
+  min-height: 20px;
+  max-height: 20px;
+  -webkit-line-clamp: 1;
 }
 
 .create-agent-card__agent-resources {
@@ -503,6 +509,7 @@
 }
 
 .create-agent-card__agent-result {
+  flex: 0 0 18px;
   max-height: 18px;
   margin: 0;
   padding: 0;
