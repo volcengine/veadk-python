@@ -677,6 +677,30 @@ def _conversation_event_sse(
     return None
 
 
+def _public_intent_commentary(
+    events: list[SandboxStreamEvent],
+) -> tuple[SandboxStreamEvent, ...]:
+    """Keep gate progress public while hiding its machine-readable decision."""
+    if not events:
+        return ()
+    contract_events: set[int] = set()
+    for index, event in enumerate(events):
+        try:
+            parse_intent_decision(event.text)
+        except ValueError:
+            continue
+        contract_events.add(index)
+    if contract_events:
+        return tuple(
+            event for index, event in enumerate(events) if index not in contract_events
+        )
+    try:
+        parse_intent_decision("".join(event.text for event in events))
+    except ValueError:
+        return tuple(event for event in events if '"decision"' not in event.text)
+    return ()
+
+
 def _progress_sse(message: str) -> str:
     payload = {"text": message}
     return f"event: progress\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
@@ -1297,6 +1321,7 @@ def mount_intelligent_development_routes(
                 decision = None
                 for intent_attempt in range(2):
                     gate_text = ""
+                    gate_commentary: list[SandboxStreamEvent] = []
                     async for event in service.stream_message(
                         session_id,
                         owner,
@@ -1311,10 +1336,17 @@ def mount_intelligent_development_routes(
                     ):
                         if event.kind == "text":
                             gate_text += event.text
+                        elif event.kind == "commentary":
+                            gate_text += event.text
+                            gate_commentary.append(event)
                         else:
                             public_event = _conversation_event_sse(event)
                             if public_event is not None:
                                 yield public_event
+                    for event in _public_intent_commentary(gate_commentary):
+                        public_event = _conversation_event_sse(event)
+                        if public_event is not None:
+                            yield public_event
                     failure_stage = "intent_parse"
                     try:
                         decision = parse_intent_decision(gate_text)
