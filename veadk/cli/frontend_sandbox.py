@@ -836,6 +836,7 @@ class SandboxCodexConnection(Protocol):
         *,
         permissions: CodexPermissionSettings | None = None,
         timeout_seconds: float | None = None,
+        output_schema: dict[str, object] | None = None,
     ) -> AsyncIterator[CodexAppServerEvent]:
         """Run and stream one turn."""
         if False:
@@ -1867,6 +1868,7 @@ class SandboxConversationService:
         *,
         turn_permissions: CodexPermissionSettings | None = None,
         turn_timeout_seconds: float | None = None,
+        turn_output_schema: dict[str, object] | None = None,
     ) -> AsyncIterator[SandboxStreamEvent]:
         session = self._owned(session_id, owner_id)
         if session.background_turn is not None and not session.background_turn.done():
@@ -1881,7 +1883,11 @@ class SandboxConversationService:
                     session.pending_prompt = prompt
                     session.pending_prompt_timestamp = int(time.time() * 1_000)
                     try:
-                        if turn_permissions is None and turn_timeout_seconds is None:
+                        if (
+                            turn_permissions is None
+                            and turn_timeout_seconds is None
+                            and turn_output_schema is None
+                        ):
                             events = (
                                 session.codex.stream_turn(prompt, skill_ids)
                                 if skill_ids
@@ -1893,6 +1899,7 @@ class SandboxConversationService:
                                 skill_ids,
                                 permissions=turn_permissions,
                                 timeout_seconds=turn_timeout_seconds,
+                                output_schema=turn_output_schema,
                             )
                         async for event in events:
                             if event.kind and listening:
@@ -3854,6 +3861,8 @@ def mount_sandbox_routes(
             async for event in service.stream_message(
                 session_id, owner_id, prompt, skill_ids
             ):
+                if event.kind == "assistant_final":
+                    continue
                 if event.kind == "text":
                     payload = {"text": event.text}
                     yield f"event: delta\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"

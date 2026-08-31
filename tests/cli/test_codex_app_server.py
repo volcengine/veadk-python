@@ -386,6 +386,166 @@ class _CustomTurnTimeoutWebSocket(_FakeWebSocket):
         asyncio.create_task(_emit_progress())
 
 
+class _TurnCompletedItemsWebSocket(_FakeWebSocket):
+    """Return the final answer only in the authoritative completed Turn."""
+
+    async def send(self, raw: str) -> None:
+        message = json.loads(raw)
+        if message.get("method") != "turn/start":
+            await super().send(raw)
+            return
+        self.messages.append(message)
+        await self.queue.put(
+            json.dumps({"id": message["id"], "result": {"turn": {"id": "turn-items"}}})
+        )
+        prompt = message["params"]["input"][0]["text"]
+        await self._notification(
+            "item/completed",
+            {
+                "item": {
+                    "id": "reasoning-items",
+                    "type": "reasoning",
+                    "summary": ["Return the required JSON object."],
+                    "status": "completed",
+                }
+            },
+        )
+        if prompt == "delta-and-final":
+            await self._notification(
+                "item/agentMessage/delta",
+                {"itemId": "message-items", "delta": "streamed-final"},
+            )
+        final_items = []
+        if prompt != "reasoning-only":
+            final_items.append(
+                {
+                    "id": "message-items",
+                    "type": "agentMessage",
+                    "phase": (
+                        "commentary" if prompt == "commentary-final" else "final_answer"
+                    ),
+                    "text": (
+                        "commentary-result"
+                        if prompt == "commentary-final"
+                        else (
+                            "streamed-final"
+                            if prompt == "delta-and-final"
+                            else '{"decision":"accept"}'
+                        )
+                    ),
+                    "status": "completed",
+                }
+            )
+        for item in final_items:
+            await self._notification("item/completed", {"item": item})
+        await self._notification(
+            "turn/completed",
+            {
+                "turn": {
+                    "id": "turn-items",
+                    "status": "completed",
+                    "items": [
+                        {
+                            "id": "reasoning-items",
+                            "type": "reasoning",
+                            "summary": ["Return the required JSON object."],
+                            "status": "completed",
+                        },
+                        *final_items,
+                    ],
+                }
+            },
+        )
+
+
+class _ThreadReadFinalWebSocket(_FakeWebSocket):
+    """Simulate an older event stream whose stored Turn has the final answer."""
+
+    def __init__(self, *, final_phase: str | None = None) -> None:
+        super().__init__()
+        self.final_phase = final_phase
+
+    async def send(self, raw: str) -> None:
+        message = json.loads(raw)
+        method = message.get("method")
+        if method == "turn/start":
+            self.messages.append(message)
+            await self.queue.put(
+                json.dumps(
+                    {"id": message["id"], "result": {"turn": {"id": "turn-read"}}}
+                )
+            )
+            await self._notification(
+                "turn/completed",
+                {"turn": {"id": "turn-read", "status": "completed"}},
+            )
+            return
+        if method == "thread/read":
+            self.messages.append(message)
+            await self.queue.put(
+                json.dumps(
+                    {
+                        "id": message["id"],
+                        "result": {
+                            "thread": {
+                                "id": "thread-1",
+                                "turns": [
+                                    {
+                                        "id": "turn-previous",
+                                        "items": [
+                                            {
+                                                "id": "message-previous",
+                                                "type": "agentMessage",
+                                                "text": "previous-final",
+                                            }
+                                        ],
+                                    },
+                                    {
+                                        "id": "turn-read",
+                                        "items": [
+                                            {
+                                                "id": "message-read",
+                                                "type": "agentMessage",
+                                                "text": "stored-final",
+                                                **(
+                                                    {"phase": self.final_phase}
+                                                    if self.final_phase is not None
+                                                    else {}
+                                                ),
+                                            }
+                                        ],
+                                    },
+                                ],
+                            }
+                        },
+                    }
+                )
+            )
+            return
+        await super().send(raw)
+
+
+class _MalformedThreadReadWebSocket(_ThreadReadFinalWebSocket):
+    def __init__(self, thread: object) -> None:
+        super().__init__()
+        self.thread = thread
+
+    async def send(self, raw: str) -> None:
+        message = json.loads(raw)
+        if message.get("method") == "thread/read":
+            self.messages.append(message)
+            await self.queue.put(
+                json.dumps(
+                    {
+                        "id": message["id"],
+                        "result": {"thread": self.thread},
+                    }
+                )
+            )
+            return
+        await super().send(raw)
+
+
 class _MissingRolloutWebSocket(_FakeWebSocket):
     async def send(self, raw: str) -> None:
         message = json.loads(raw)
@@ -595,6 +755,175 @@ async def test_reasoning_deltas_stream_as_accumulated_thinking() -> None:
 
     assert [event.text for event in thinking] == ["分", "分析", "分析"]
     assert [event.status for event in thinking] == ["running", "running", "done"]
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_completed_turn_items_emit_one_authoritative_assistant_final() -> None:
+    websocket = _TurnCompletedItemsWebSocket()
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    await session.connect()
+
+    events = [event async for event in session.stream_turn("return-json")]
+
+    assert [
+        (event.item_id, event.text)
+        for event in events
+        if event.kind == "assistant_final"
+    ] == [("message-items", '{"decision":"accept"}')]
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_completed_turn_final_does_not_duplicate_streamed_text() -> None:
+    websocket = _TurnCompletedItemsWebSocket()
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    await session.connect()
+
+    events = [event async for event in session.stream_turn("delta-and-final")]
+
+    assert [event.text for event in events if event.kind == "text"] == [
+        "streamed-final"
+    ]
+    assert [event.text for event in events if event.kind == "assistant_final"] == [
+        "streamed-final"
+    ]
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_completed_turn_commentary_can_be_the_authoritative_final() -> None:
+    websocket = _TurnCompletedItemsWebSocket()
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    await session.connect()
+
+    events = [event async for event in session.stream_turn("commentary-final")]
+
+    assert [event.text for event in events if event.kind == "commentary"] == [
+        "commentary-result"
+    ]
+    assert [event.text for event in events if event.kind == "assistant_final"] == [
+        "commentary-result"
+    ]
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_reasoning_is_never_promoted_to_an_assistant_final() -> None:
+    websocket = _TurnCompletedItemsWebSocket()
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    await session.connect()
+
+    events = [event async for event in session.stream_turn("reasoning-only")]
+
+    assert not any(event.kind == "assistant_final" for event in events)
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_missing_completed_items_recover_final_from_the_same_stored_turn() -> (
+    None
+):
+    websocket = _ThreadReadFinalWebSocket()
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    await session.connect()
+
+    events = [event async for event in session.stream_turn("return-json")]
+
+    assert [event.text for event in events if event.kind == "text"] == ["stored-final"]
+    assert [event.text for event in events if event.kind == "assistant_final"] == [
+        "stored-final"
+    ]
+    assert "previous-final" not in [event.text for event in events]
+    assert any(message.get("method") == "thread/read" for message in websocket.messages)
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_thread_read_fallback_preserves_commentary_phase() -> None:
+    websocket = _ThreadReadFinalWebSocket(final_phase="commentary")
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    await session.connect()
+
+    events = [event async for event in session.stream_turn("return-json")]
+
+    assert [event.text for event in events if event.kind == "commentary"] == [
+        "stored-final"
+    ]
+    assert [event.text for event in events if event.kind == "assistant_final"] == [
+        "stored-final"
+    ]
+    await session.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("thread", "expected"),
+    [
+        ([], "Codex thread/read 未返回有效的 Thread。"),
+        ({"id": "thread-1", "turns": {}}, "Codex thread/read 未返回完整的 Turns。"),
+    ],
+)
+async def test_malformed_thread_read_fallback_fails_explicitly(
+    thread: object,
+    expected: str,
+) -> None:
+    websocket = _MalformedThreadReadWebSocket(thread)
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    await session.connect()
+
+    with pytest.raises(CodexAppServerError, match=expected):
+        _ = [event async for event in session.stream_turn("return-json")]
+
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_turn_output_schema_is_forwarded_to_app_server() -> None:
+    websocket = _TurnCompletedItemsWebSocket()
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    await session.connect()
+    schema = {
+        "type": "object",
+        "required": ["decision"],
+        "properties": {"decision": {"enum": ["accept"]}},
+    }
+
+    _ = [
+        event
+        async for event in session.stream_turn("return-json", output_schema=schema)
+    ]
+
+    turn_start = next(
+        message
+        for message in websocket.messages
+        if message.get("method") == "turn/start"
+    )
+    assert turn_start["params"]["outputSchema"] == schema
     await session.close()
 
 

@@ -427,6 +427,8 @@ class CodexAppServerSession:
         self._workspace_locked = False
         self._agent_message_delta_ids: set[str] = set()
         self._received_unidentified_agent_delta = False
+        self._completed_agent_messages: dict[str, dict[str, object]] = {}
+        self._turn_final_item_id = ""
         self._reasoning_delta_text: dict[str, str] = {}
         self._skills_by_id: dict[str, _CodexPrivateSkill] = {}
         self._skills_cwd = ""
@@ -704,6 +706,7 @@ class CodexAppServerSession:
         *,
         permissions: CodexPermissionSettings | None = None,
         timeout_seconds: float | None = None,
+        output_schema: dict[str, object] | None = None,
     ) -> AsyncIterator[CodexAppServerEvent]:
         """Start one Codex turn and stream its public events."""
         if self.active:
@@ -736,6 +739,8 @@ class CodexAppServerSession:
         self._active_turn_id = ""
         self._agent_message_delta_ids.clear()
         self._received_unidentified_agent_delta = False
+        self._completed_agent_messages.clear()
+        self._turn_final_item_id = ""
         self._reasoning_delta_text.clear()
         try:
             result = await self.request(
@@ -754,6 +759,11 @@ class CodexAppServerSession:
                         ),
                     ],
                     **_runtime_permission_params(turn_permissions, self.cwd),
+                    **(
+                        {"outputSchema": output_schema}
+                        if output_schema is not None
+                        else {}
+                    ),
                 },
             )
             turn = result.get("turn")
@@ -808,6 +818,11 @@ class CodexAppServerSession:
                     else f"Codex Turn 状态：{status}。"
                 )
                 raise CodexAppServerError(detail)
+            if not self._turn_final_item_id:
+                fallback = await self._read_turn_final_message(turn["id"])
+                if fallback is not None:
+                    for event in self._authoritative_agent_events(fallback):
+                        yield event
         except asyncio.CancelledError:
             await self.interrupt()
             raise
@@ -1598,6 +1613,16 @@ class CodexAppServerSession:
         if method in {"item/started", "item/completed"}:
             item = params.get("item")
             if isinstance(item, dict):
+                if method == "item/completed" and item.get("type") == "agentMessage":
+                    item_id = item.get("id")
+                    text = item.get("text")
+                    if (
+                        isinstance(item_id, str)
+                        and item_id
+                        and isinstance(text, str)
+                        and text
+                    ):
+                        self._completed_agent_messages[item_id] = item
                 if (
                     method == "item/completed"
                     and item.get("type") == "agentMessage"
@@ -1610,7 +1635,13 @@ class CodexAppServerSession:
                     ) or self._received_unidentified_agent_delta
                     text = _string(item.get("text"), 100_000)
                     if text and not received_delta:
-                        self._emit(CodexAppServerEvent(kind="text", text=text))
+                        self._emit(
+                            CodexAppServerEvent(
+                                kind="text",
+                                item_id=item_id if isinstance(item_id, str) else "",
+                                text=text,
+                            )
+                        )
                 event = _event_from_item(item, completed=method == "item/completed")
                 if event is not None:
                     self._emit(event)
@@ -1627,6 +1658,15 @@ class CodexAppServerSession:
                 and self._turn_completion is not None
                 and not self._turn_completion.done()
             ):
+                items = turn.get("items")
+                candidate = _final_agent_message(
+                    items
+                    if isinstance(items, list)
+                    else list(self._completed_agent_messages.values())
+                )
+                if candidate is not None:
+                    for event in self._authoritative_agent_events(candidate):
+                        self._emit(event)
                 self._turn_completion.set_result(turn)
             return
         if method == "thread/settings/updated":
@@ -1791,6 +1831,65 @@ class CodexAppServerSession:
     def _emit(self, event: CodexAppServerEvent) -> None:
         if self._turn_events is not None:
             self._turn_events.put_nowait(event)
+
+    def _authoritative_agent_events(
+        self, item: dict[str, object]
+    ) -> tuple[CodexAppServerEvent, ...]:
+        item_id = _string(item.get("id"), 200)
+        text = _string(item.get("text"), 100_000)
+        self._turn_final_item_id = item_id
+        events: list[CodexAppServerEvent] = []
+        already_public = (
+            item_id in self._agent_message_delta_ids
+            or item_id in self._completed_agent_messages
+            or self._received_unidentified_agent_delta
+        )
+        if not already_public:
+            if item.get("phase") == "commentary":
+                events.append(
+                    CodexAppServerEvent(
+                        kind="commentary",
+                        item_id=item_id,
+                        status="done",
+                        text=text,
+                    )
+                )
+            else:
+                events.append(
+                    CodexAppServerEvent(
+                        kind="text",
+                        item_id=item_id,
+                        status="done",
+                        text=text,
+                    )
+                )
+        events.append(
+            CodexAppServerEvent(
+                kind="assistant_final",
+                item_id=item_id,
+                status="done",
+                text=text,
+            )
+        )
+        return tuple(events)
+
+    async def _read_turn_final_message(self, turn_id: str) -> dict[str, object] | None:
+        result = await self.request(
+            "thread/read",
+            {"threadId": self.thread_id, "includeTurns": True},
+        )
+        thread = result.get("thread")
+        if not isinstance(thread, dict):
+            raise CodexAppServerError("Codex thread/read 未返回有效的 Thread。")
+        turns = thread.get("turns")
+        if not isinstance(turns, list):
+            raise CodexAppServerError("Codex thread/read 未返回完整的 Turns。")
+        for turn in turns:
+            if not isinstance(turn, dict) or turn.get("id") != turn_id:
+                continue
+            items = turn.get("items")
+            return _final_agent_message(items if isinstance(items, list) else [])
+        return None
 
     def _apply_thread_snapshot(self, result: dict[str, object]) -> None:
         self._activate_thread_snapshot("thread/start", result)
@@ -2107,6 +2206,24 @@ def _has_approval_identity(value: dict[str, object]) -> bool:
         and not isinstance(started_at_ms, bool)
         and math.isfinite(started_at_ms)
     )
+
+
+def _final_agent_message(items: list[object]) -> dict[str, object] | None:
+    messages = [
+        item
+        for item in items
+        if isinstance(item, dict)
+        and item.get("type") == "agentMessage"
+        and isinstance(item.get("id"), str)
+        and item["id"]
+        and isinstance(item.get("text"), str)
+        and item["text"]
+    ]
+    for phase in ("final_answer", None, "commentary"):
+        for item in reversed(messages):
+            if item.get("phase") == phase:
+                return item
+    return None
 
 
 def _event_from_item(

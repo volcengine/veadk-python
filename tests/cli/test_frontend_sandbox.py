@@ -962,6 +962,49 @@ def test_sandbox_routes_list_create_connect_and_disconnect() -> None:
     assert session_id == "remote-1"
 
 
+def test_sandbox_message_stream_hides_internal_assistant_final_event() -> None:
+    class _FinalEventCodex(_FakeCodex):
+        async def stream_turn(
+            self, prompt: str, skill_ids: tuple[str, ...] = ()
+        ) -> AsyncIterator[CodexAppServerEvent]:
+            del prompt, skill_ids
+            yield CodexAppServerEvent(
+                kind="text",
+                item_id="message-final",
+                text="最终答复",
+            )
+            yield CodexAppServerEvent(
+                kind="assistant_final",
+                item_id="message-final",
+                status="done",
+                text="最终答复",
+            )
+
+    class _FinalEventGateway(_FakeGateway):
+        async def open_codex(self, session: SandboxCloudSession) -> _FakeCodex:
+            del session
+            connection = _FinalEventCodex(self.thread_ids)
+            self.connections.append(connection)
+            return connection
+
+    with TestClient(_app(_FinalEventGateway())) as client:
+        connected = client.post(
+            "/web/sandbox/sessions/remote-existing/connect",
+            headers={"X-Test-User": "alice"},
+        )
+        response = client.post(
+            "/web/sandbox/sessions/remote-existing/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "hello"},
+        )
+
+    assert connected.status_code == 200
+    assert response.status_code == 200
+    assert response.text.count('event: delta\ndata: {"text": "最终答复"}') == 1
+    assert '"kind": "assistant_final"' not in response.text
+    assert "event: done" in response.text
+
+
 @pytest.mark.asyncio
 async def test_sandbox_client_disconnect_keeps_the_cloud_turn_running() -> None:
     class _CancellableCodex(_FakeCodex):
