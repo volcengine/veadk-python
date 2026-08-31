@@ -1461,6 +1461,87 @@ def test_fragmented_intent_json_does_not_trigger_protocol_retry() -> None:
     assert len(gateway.codex.calls) == 2
 
 
+def test_intent_json_from_commentary_is_consumed_without_being_exposed() -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud()
+    gate = _gate(changes=False)
+    gateway.codex.turns = [
+        [CodexAppServerEvent(kind="commentary", text=gate.text)],
+        [CodexAppServerEvent(kind="text", text="当前 Agent 状态正常。")],
+    ]
+
+    with TestClient(_app(gateway)) as client:
+        _connect(client)
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "检查当前 Agent，不修改源码"},
+        )
+
+    assert response.status_code == 200
+    assert "当前 Agent 状态正常" in response.text
+    assert gate.text not in response.text
+    assert "重新确认本次目标" not in response.text
+    assert "event: error" not in response.text
+    assert len(gateway.codex.calls) == 2
+
+
+def test_fragmented_intent_json_from_commentary_is_consumed() -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud()
+    gate_json = _gate(changes=False).text
+    midpoint = len(gate_json) // 2
+    gateway.codex.turns = [
+        [
+            CodexAppServerEvent(kind="commentary", text=gate_json[:midpoint]),
+            CodexAppServerEvent(kind="commentary", text=gate_json[midpoint:]),
+        ],
+        [CodexAppServerEvent(kind="text", text="当前 Agent 状态正常。")],
+    ]
+
+    with TestClient(_app(gateway)) as client:
+        _connect(client)
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "检查当前 Agent，不修改源码"},
+        )
+
+    assert response.status_code == 200
+    assert "当前 Agent 状态正常" in response.text
+    assert gate_json[:midpoint] not in response.text
+    assert gate_json[midpoint:] not in response.text
+    assert "event: error" not in response.text
+
+
+def test_incomplete_intent_json_from_commentary_remains_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud()
+    incomplete = '{"decision":"accept"}'
+    gateway.codex.turns = [
+        [CodexAppServerEvent(kind="commentary", text=incomplete)],
+        [CodexAppServerEvent(kind="commentary", text=incomplete)],
+    ]
+    credentials = AsyncMock()
+    monkeypatch.setattr(routes, "create_credential_lease", credentials)
+
+    with TestClient(_app(gateway)) as client:
+        _connect(client)
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "继续优化天气 Agent"},
+        )
+
+    assert response.status_code == 200
+    assert "INTELLIGENT_DEVELOPMENT_INTENT_INVALID" in response.text
+    assert incomplete not in response.text
+    assert len(gateway.codex.calls) == 2
+    credentials.assert_not_awaited()
+
+
 def test_protocol_retry_can_return_a_safe_rejection_without_side_effects(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
