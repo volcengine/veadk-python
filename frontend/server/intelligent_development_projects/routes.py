@@ -16,13 +16,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from pathlib import Path
 import re
 import shutil
 import tempfile
+from collections.abc import Callable
+from pathlib import Path
+from typing import Annotated
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 
 from frontend.server.deployment_source import DeploymentSourceError
 from frontend.server.intelligent_development_source import (
@@ -34,6 +35,7 @@ from frontend.server.intelligent_development_source import (
     materialize_intelligent_development_preview,
 )
 
+from .models import SourceProjectOrigin
 from .repository import (
     IntelligentDevelopmentProjectConflict,
     IntelligentDevelopmentProjectNotFound,
@@ -109,6 +111,11 @@ def _release_payload(
         "deployable": True,
         "verified": trusted.verified,
         "validationSummary": trusted.validation_summary,
+        "environment": {
+            "required": list(trusted.environment_required),
+            "optional": list(trusted.environment_optional),
+            "defaults": dict(trusted.environment_defaults),
+        },
         "files": [
             {"path": item.path, "content": item.content} for item in trusted.files
         ],
@@ -164,11 +171,14 @@ def mount_intelligent_development_project_routes(
         return project_service
 
     @app.get(f"{prefix}/projects")
-    async def _projects(request: Request) -> dict[str, object]:
+    async def _projects(
+        request: Request,
+        origin: Annotated[SourceProjectOrigin, Query()] = "intelligent-development",
+    ) -> dict[str, object]:
         owner = owner_resolver(request)
         service = configured_service()
         try:
-            projects = await service.list_projects(owner)
+            projects = await service.list_projects(owner, origin=origin)
         except PROJECT_EXCEPTIONS as error:
             raise project_http_error(error) from error
         return {

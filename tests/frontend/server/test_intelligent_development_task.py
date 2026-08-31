@@ -72,6 +72,109 @@ def test_intent_parser_accepts_only_bounded_typed_decisions() -> None:
         )
 
 
+def test_intent_parser_accepts_one_json_markdown_block() -> None:
+    decision = parse_intent_decision(
+        """```json
+{"decision":"accept","message":"","intentSummary":"继续优化天气 Agent","acceptanceCriteria":["保留现有能力"],"changesDelivery":true}
+```"""
+    )
+
+    assert decision.intent_summary == "继续优化天气 Agent"
+    assert decision.acceptance_criteria == ("保留现有能力",)
+
+
+def test_intent_parser_accepts_one_json_object_with_surrounding_text() -> None:
+    decision = parse_intent_decision(
+        "以下是识别结果：\n"
+        "```json\n"
+        '{"decision":"accept","message":"","intentSummary":"继续优化",'
+        '"acceptanceCriteria":["保留现有能力"],"changesDelivery":true}'
+        "\n```\n"
+        "请按以上结果执行。"
+    )
+
+    assert decision.decision == "accept"
+    assert decision.intent_summary == "继续优化"
+
+
+def test_intent_parser_accepts_optional_irrelevant_and_extension_fields() -> None:
+    accepted = parse_intent_decision(
+        json.dumps(
+            {
+                "decision": "accept",
+                "intentSummary": "继续优化天气 Agent",
+                "acceptanceCriteria": ["保留现有能力"],
+                "changesDelivery": True,
+                "reason": "这是现有 Agent 的正常迭代",
+            },
+            ensure_ascii=False,
+        )
+    )
+    rejected = parse_intent_decision(
+        json.dumps(
+            {"decision": "reject", "message": "该请求与创建 Agent 无关。"},
+            ensure_ascii=False,
+        )
+    )
+
+    assert accepted.message == ""
+    assert accepted.changes_delivery is True
+    assert rejected.intent_summary == ""
+    assert rejected.acceptance_criteria == ()
+    assert rejected.changes_delivery is False
+
+
+def test_intent_parser_rejects_multiple_json_decisions() -> None:
+    with pytest.raises(ValueError, match="multiple"):
+        parse_intent_decision(
+            '{"decision":"reject","message":"拒绝。"}\n'
+            '{"decision":"accept","intentSummary":"继续优化",'
+            '"acceptanceCriteria":["保留现有能力"],"changesDelivery":true}'
+        )
+
+
+def test_intent_parser_ignores_unrelated_json_around_one_decision() -> None:
+    decision = parse_intent_decision(
+        '诊断信息：{"attempt":1}\n'
+        '{"decision":"accept","intentSummary":"继续优化",'
+        '"acceptanceCriteria":["保留现有能力"],"changesDelivery":true}\n'
+        '附加信息：{"format":"json"}'
+    )
+
+    assert decision.decision == "accept"
+
+
+@pytest.mark.parametrize(
+    "invalid_field",
+    [
+        {"intentSummary": "", "acceptanceCriteria": ["保留现有能力"]},
+        {"intentSummary": "继续优化", "acceptanceCriteria": []},
+        {"intentSummary": "继续优化", "acceptanceCriteria": "保留现有能力"},
+        {
+            "intentSummary": "继续优化",
+            "acceptanceCriteria": ["保留现有能力"],
+            "changesDelivery": "true",
+        },
+    ],
+)
+def test_intent_parser_rejects_incomplete_or_mistyped_accepted_decision(
+    invalid_field: dict[str, object],
+) -> None:
+    payload: dict[str, object] = {
+        "decision": "accept",
+        "changesDelivery": True,
+        **invalid_field,
+    }
+
+    with pytest.raises(ValueError):
+        parse_intent_decision(json.dumps(payload, ensure_ascii=False))
+
+
+def test_intent_parser_rejects_oversized_response() -> None:
+    with pytest.raises(ValueError, match="too large"):
+        parse_intent_decision("x" * (128 * 1024 + 1))
+
+
 def test_intent_gate_preserves_normal_agent_work_and_narrowly_blocks_abuse() -> None:
     prompt = intent_gate_prompt("继续优化安全检测能力", expire_at="later")
 
@@ -215,6 +318,60 @@ def test_builder_context_uses_launcher_without_secret_values() -> None:
     assert "If time is running short" not in prompt
     assert "Studio" not in prompt
     assert "Sandbox" not in prompt
+
+
+def test_version_optimization_prompts_preserve_base_and_forbid_reinitialization() -> (
+    None
+):
+    project_context = json.dumps(
+        {
+            "intentSummary": "构建天气查询 Agent",
+            "acceptanceCriteria": ["返回天气和数据时间"],
+            "agentName": "weather_agent",
+            "entryPoint": "app.py",
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    decision = IntentDecision(
+        "accept",
+        "",
+        "在现有天气 Agent 中增加中文预警",
+        ("保留天气查询并返回中文预警",),
+        True,
+    )
+
+    gate = intent_gate_prompt(
+        "增加中文预警",
+        expire_at="later",
+        project_context=project_context,
+    )
+    builder = builder_prompt(
+        "增加中文预警",
+        decision,
+        launcher_path="/secure/task/launcher",
+        completion_path="/workspace/completion.json",
+        expire_at="later",
+        remaining_lifetime_minutes=60,
+        validation_region="cn-beijing",
+        validation_project="default",
+        project_context=project_context,
+    )
+
+    assert "version-based optimization" in gate
+    assert "change to the selected version" in gate
+    assert "even when the requested change is broad" in gate
+    assert '"acceptanceCriteria":["返回天气和数据时间"]' in gate
+    assert "## Version-based optimization" in builder
+    assert "authoritative baseline" in builder
+    assert "Do not run `ak init`" in builder
+    assert "clear or recreate the project directory" in builder
+    assert "complete deployable project, not only a patch" in builder
+    assert '"agentName":"weather_agent"' in builder
+    assert "use `ak init --template agent_server` by default" not in builder
+    assert "Do not default to the `basic` template" not in builder
+    assert "Studio" not in builder
+    assert "Sandbox" not in builder
 
 
 def test_read_only_prompt_forbids_changes_credentials_and_cloud_validation() -> None:

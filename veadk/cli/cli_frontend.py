@@ -2692,6 +2692,26 @@ def _run_frontend_server(
             else "local"
         )
 
+    from frontend.server.intelligent_development_projects import (
+        IntelligentDevelopmentProjectService,
+        TosIntelligentDevelopmentProjectRepository,
+    )
+    from frontend.server.storage import StudioStorageConfig
+    from frontend.server.storage.tos import create_tos_client_factory
+
+    intelligent_project_service = None
+    intelligent_project_storage = StudioStorageConfig.from_env(provider)
+    if intelligent_project_storage.configured:
+        intelligent_project_service = IntelligentDevelopmentProjectService(
+            TosIntelligentDevelopmentProjectRepository(
+                bucket=intelligent_project_storage.bucket,
+                client_factory=create_tos_client_factory(
+                    intelligent_project_storage,
+                    _resolve_ve_credentials,
+                ),
+            )
+        )
+
     migration_service = MigrationService(
         MigrationSandboxGateway(
             tools_client_factory=_sandbox_client,
@@ -2704,6 +2724,7 @@ def _run_frontend_server(
         migration_service,
         owner_resolver=_migration_owner,
         creator_resolver=_migration_creator,
+        project_service=intelligent_project_service,
     )
 
     sandbox_gateway = AgentkitSandboxGateway(
@@ -2718,12 +2739,6 @@ def _run_frontend_server(
         IntelligentDevelopmentGateway,
         mount_intelligent_development_routes,
     )
-    from frontend.server.intelligent_development_projects import (
-        IntelligentDevelopmentProjectService,
-        TosIntelligentDevelopmentProjectRepository,
-    )
-    from frontend.server.storage import StudioStorageConfig
-    from frontend.server.storage.tos import create_tos_client_factory
 
     intelligent_development_tool_id = (os.getenv("SANDBOX_DEV") or "").strip()
     intelligent_development_service = SandboxConversationService(
@@ -2796,19 +2811,6 @@ def _run_frontend_server(
     def _intelligent_development_credentials() -> StudioCredentials:
         access_key, secret_key, session_token = _resolve_ve_credentials()
         return StudioCredentials(access_key, secret_key, session_token)
-
-    intelligent_project_service = None
-    intelligent_project_storage = StudioStorageConfig.from_env(provider)
-    if intelligent_project_storage.configured:
-        intelligent_project_service = IntelligentDevelopmentProjectService(
-            TosIntelligentDevelopmentProjectRepository(
-                bucket=intelligent_project_storage.bucket,
-                client_factory=create_tos_client_factory(
-                    intelligent_project_storage,
-                    _resolve_ve_credentials,
-                ),
-            )
-        )
 
     mount_intelligent_development_routes(
         app,

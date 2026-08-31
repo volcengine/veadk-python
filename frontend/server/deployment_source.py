@@ -27,12 +27,16 @@ from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 
 import yaml
+from frontend.server.source_project_limits import (
+    SOURCE_PROJECT_MAX_BYTES,
+    SOURCE_PROJECT_MAX_FILES,
+)
 
 _DEFAULT_ENTRY_POINT = "app.py"
-_MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
-_MAX_ARCHIVE_FILES = 20_000
-_MAX_EXPANDED_BYTES = 512 * 1024 * 1024
-_MAX_FILE_BYTES = 128 * 1024 * 1024
+_MAX_ARCHIVE_BYTES = SOURCE_PROJECT_MAX_BYTES
+_MAX_ARCHIVE_FILES = SOURCE_PROJECT_MAX_FILES
+_MAX_EXPANDED_BYTES = SOURCE_PROJECT_MAX_BYTES
+_MAX_FILE_BYTES = SOURCE_PROJECT_MAX_BYTES
 _MAX_PATH_BYTES = 4 * 1024
 _MAX_PATH_DEPTH = 64
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -225,7 +229,7 @@ def _manifest_files(manifest: object) -> tuple[dict[str, tuple[int, str]], str]:
             raise DeploymentSourceError("迁移产物文件清单格式无效。")
         expanded_bytes += size
         if expanded_bytes > _MAX_EXPANDED_BYTES:
-            raise DeploymentSourceError("迁移产物解压后超过 512 MiB。")
+            raise DeploymentSourceError("迁移产物解压后超过 20 MiB。")
         descriptors[relative] = (size, digest)
     _reject_path_collisions(set(descriptors))
     entry_point = _relative_path(

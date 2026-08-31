@@ -136,6 +136,7 @@ import { MediaGroup } from "./ui/Media";
 import { StackCards } from "./ui/AddAgentMenu";
 import {
   IntelligentCreate,
+  type IntelligentCreateBaseVersion,
   type IntelligentDevelopmentCapabilities,
   type IntelligentPreparationStage,
 } from "./create/IntelligentCreate";
@@ -178,6 +179,7 @@ import {
   NEW_CHAT_TASK_TOOLS,
 } from "./ui/new-chat-modes/taskTools";
 import {
+  intelligentDevelopmentErrorMessage,
   intelligentDevelopmentClient,
   sandboxClient,
   type SandboxApproval,
@@ -1063,7 +1065,6 @@ export default function App() {
   const sandboxMessageAbortRef = useRef<AbortController | null>(null);
   const pendingIntelligentNavigationRef = useRef<(() => void) | null>(null);
   const [intelligentLeaveOpen, setIntelligentLeaveOpen] = useState(false);
-  const [intelligentLeaveBusy, setIntelligentLeaveBusy] = useState(false);
   const sandboxStopWaitRef = useRef<{
     controller: AbortController;
     promise: Promise<boolean>;
@@ -1202,6 +1203,9 @@ export default function App() {
     useState("");
   const [intelligentPreparationStage, setIntelligentPreparationStage] =
     useState<IntelligentPreparationStage | null>(null);
+  const [migrationProjectReturn, setMigrationProjectReturn] = useState<{
+    projectId: string;
+  }>();
   const [intelligentDeployment, setIntelligentDeploymentState] =
     useState<IntelligentDevelopmentReleaseRef | null>(null);
   const setIntelligentDeployment = useCallback(
@@ -2828,7 +2832,7 @@ export default function App() {
   }, [authStatus, intelligentDeployment, userId]);
 
   useEffect(() => {
-    if (!addMenu && createView !== "intelligent") return;
+    if (!addMenu && !["intelligent", "migration"].includes(createView ?? "")) return;
     if (authStatus !== "authenticated" || !userId) {
       setIntelligentCapabilities(null);
       setIntelligentCapabilitiesError("");
@@ -4145,7 +4149,7 @@ export default function App() {
     action();
   }
 
-  async function confirmIntelligentNavigation() {
+  function confirmIntelligentNavigation() {
     const activeSession = sandboxSession;
     const action = pendingIntelligentNavigationRef.current;
     if (!activeSession?.intelligentDevelopment || !action) {
@@ -4153,19 +4157,19 @@ export default function App() {
       pendingIntelligentNavigationRef.current = null;
       return;
     }
-    setIntelligentLeaveBusy(true);
     setError("");
-    try {
-      await intelligentDevelopmentClient.interruptSession(activeSession.id);
-      sandboxMessageAbortRef.current?.abort();
-      pendingIntelligentNavigationRef.current = null;
-      setIntelligentLeaveOpen(false);
-      action();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setIntelligentLeaveBusy(false);
-    }
+    const interrupt = intelligentDevelopmentClient.interruptSession(activeSession.id);
+    sandboxMessageAbortRef.current?.abort();
+    pendingIntelligentNavigationRef.current = null;
+    setIntelligentLeaveOpen(false);
+    action();
+    void interrupt.catch(() => {
+      if (!sandboxSessionIdRef.current) {
+        setError(
+          "已离开开发环境，但未能确认本轮构建已停止。任务可能仍在运行，请稍后从历史会话检查状态。",
+        );
+      }
+    });
   }
 
   async function sendSandboxMessage(
@@ -4387,11 +4391,13 @@ export default function App() {
       setAttachments(messageAttachments);
       sandboxCommands.setSelectedSkills(selectedSkills);
       setError(
-        `内置智能体发送失败：${
-          messageError instanceof Error
-            ? messageError.message
-            : String(messageError)
-          }`,
+        activeSession.intelligentDevelopment
+          ? intelligentDevelopmentErrorMessage(messageError)
+          : `内置智能体发送失败：${
+              messageError instanceof Error
+                ? messageError.message
+                : String(messageError)
+            }`,
       );
       try {
         const settings = await activeClient.getSettings(activeSession.id);
@@ -4476,6 +4482,10 @@ export default function App() {
     startNewChat();
     setIntelligentDeployment(null);
     setAddMenu(false);
+    if (migrationProjectReturn) {
+      setCreateView("migration");
+      return;
+    }
     setCreateView("intelligent");
   }
 
@@ -4517,6 +4527,62 @@ export default function App() {
     intelligentCreateAbortRef.current?.abort();
     intelligentCreateAbortRef.current = null;
     setIntelligentPreparationStage(null);
+  }
+
+  async function startIntelligentDevelopment(
+    goal: string,
+    modelId: string,
+    baseVersion?: IntelligentCreateBaseVersion,
+    returnTarget?: { projectId: string },
+  ) {
+    if (intelligentPreparationStage) return;
+    intelligentCreateAbortRef.current?.abort();
+    const controller = new AbortController();
+    intelligentCreateAbortRef.current = controller;
+    setIntelligentPreparationStage("preparing");
+    setIntelligentCapabilitiesError("");
+    try {
+      const created = await intelligentDevelopmentClient.startSession({
+        displayName: baseVersion?.projectName ?? goal.slice(0, 40),
+        modelId,
+        ...(baseVersion
+          ? {
+              projectId: baseVersion.projectId,
+              baseVersionId: baseVersion.versionId,
+            }
+          : {}),
+        signal: controller.signal,
+      });
+      if (
+        controller.signal.aborted ||
+        intelligentCreateAbortRef.current !== controller
+      ) return;
+      setIntelligentPreparationStage("starting");
+      const connected = await intelligentDevelopmentClient.connectSession(
+        created.id,
+        { signal: controller.signal },
+      );
+      if (
+        controller.signal.aborted ||
+        intelligentCreateAbortRef.current !== controller
+      ) return;
+      if (returnTarget) setMigrationProjectReturn(returnTarget);
+      activateIntelligentDevelopmentSession(connected, []);
+      intelligentCreateAbortRef.current = null;
+      setIntelligentPreparationStage(null);
+      await sendSandboxMessage(goal, [], [], connected);
+    } catch (cause) {
+      if ((cause as Error)?.name !== "AbortError") {
+        setIntelligentCapabilitiesError(
+          cause instanceof Error ? cause.message : "智能开发会话创建失败",
+        );
+      }
+    } finally {
+      if (intelligentCreateAbortRef.current === controller) {
+        intelligentCreateAbortRef.current = null;
+        setIntelligentPreparationStage(null);
+      }
+    }
   }
 
   async function removeSession(id: string) {
@@ -6979,6 +7045,7 @@ export default function App() {
                       setFocusedWorkspaceAgentId("");
                       setEditingDraftId("");
                       editingDraftBaselineRef.current = null;
+                      setMigrationProjectReturn(undefined);
                       setCreateView("intelligent");
                     },
                   },
@@ -7001,6 +7068,7 @@ export default function App() {
                     onClick: () => {
                       setAddMenu(false);
                       setImportedDraft(null);
+                      setMigrationProjectReturn(undefined);
                       setCreateView("migration");
                     },
                   },
@@ -7110,55 +7178,7 @@ export default function App() {
                   setAddMenuSurface("traditional");
                   setAddMenu(true);
                 }}
-                onCreate={async (goal, modelId, baseVersion) => {
-                  if (intelligentPreparationStage) return;
-                  intelligentCreateAbortRef.current?.abort();
-                  const controller = new AbortController();
-                  intelligentCreateAbortRef.current = controller;
-                  setIntelligentPreparationStage("preparing");
-                  setIntelligentCapabilitiesError("");
-                  try {
-                    const created = await intelligentDevelopmentClient.startSession({
-                      displayName: baseVersion?.projectName ?? goal.slice(0, 40),
-                      modelId,
-                      ...(baseVersion
-                        ? {
-                            projectId: baseVersion.projectId,
-                            baseVersionId: baseVersion.versionId,
-                          }
-                        : {}),
-                      signal: controller.signal,
-                    });
-                    if (
-                      controller.signal.aborted ||
-                      intelligentCreateAbortRef.current !== controller
-                    ) return;
-                    setIntelligentPreparationStage("starting");
-                    const connected = await intelligentDevelopmentClient.connectSession(
-                      created.id,
-                      { signal: controller.signal },
-                    );
-                    if (
-                      controller.signal.aborted ||
-                      intelligentCreateAbortRef.current !== controller
-                    ) return;
-                    activateIntelligentDevelopmentSession(connected, []);
-                    intelligentCreateAbortRef.current = null;
-                    setIntelligentPreparationStage(null);
-                    await sendSandboxMessage(goal, [], [], connected);
-                  } catch (cause) {
-                    if ((cause as Error)?.name !== "AbortError") {
-                      setIntelligentCapabilitiesError(
-                        cause instanceof Error ? cause.message : "智能开发会话创建失败",
-                      );
-                    }
-                  } finally {
-                    if (intelligentCreateAbortRef.current === controller) {
-                      intelligentCreateAbortRef.current = null;
-                      setIntelligentPreparationStage(null);
-                    }
-                  }
-                }}
+                onCreate={startIntelligentDevelopment}
               />
             ) : visibleCreateView === "custom" ? (
               <CustomCreate
@@ -7231,6 +7251,7 @@ export default function App() {
               <MigrationWorkspace
                 cloudProvider={cloudProvider}
                 onBack={() => {
+                  setMigrationProjectReturn(undefined);
                   setCreateView(null);
                   setAddMenuSurface("traditional");
                   setAddMenu(true);
@@ -7240,6 +7261,27 @@ export default function App() {
                 onDeploymentStarted={startDeployment}
                 onDeploymentComplete={finishDeployment}
                 initialDeployRegion={newRuntimeRegion}
+                projectCapabilities={intelligentCapabilities}
+                projectCapabilitiesLoading={intelligentCapabilitiesLoading}
+                optimizationPreparationStage={intelligentPreparationStage}
+                optimizationError={intelligentCapabilitiesError}
+                initialPage={migrationProjectReturn ? "projects" : "new"}
+                initialProjectId={migrationProjectReturn?.projectId}
+                onOptimizeVersion={(goal, modelId, base) =>
+                  startIntelligentDevelopment(
+                    goal,
+                    modelId,
+                    base,
+                    { projectId: base.projectId },
+                  )}
+                onCancelOptimization={cancelIntelligentPreparation}
+                onDownloadSavedVersion={downloadIntelligentDelivery}
+                onDeploySavedVersion={(delivery) => {
+                  setMigrationProjectReturn({
+                    projectId: delivery.projectId ?? "",
+                  });
+                  setIntelligentDeployment(delivery);
+                }}
               />
             ) : turns.length === 0 && !newChatCapabilitiesReady ? (
               <div className="session-loading">
@@ -7638,13 +7680,11 @@ export default function App() {
           description="离开将停止本轮构建；当前会话仍会保留，可稍后从历史会话重新进入。"
           confirmLabel="停止并离开"
           variant="warning"
-          busy={intelligentLeaveBusy}
           onCancel={() => {
-            if (intelligentLeaveBusy) return;
             pendingIntelligentNavigationRef.current = null;
             setIntelligentLeaveOpen(false);
           }}
-          onConfirm={() => void confirmIntelligentNavigation()}
+          onConfirm={confirmIntelligentNavigation}
         />
       ) : null}
 

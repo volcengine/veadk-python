@@ -37,6 +37,7 @@ from frontend.server.intelligent_development_task import (
     COMPLETION_FILE_PREFIX,
     CredentialResolver,
     DeliveryPublisher,
+    INTENT_DECISION_OUTPUT_SCHEMA,
     builder_prompt,
     create_credential_lease,
     intent_gate_prompt,
@@ -75,6 +76,8 @@ from veadk.cli.frontend_sandbox import (
     SandboxSessionUnavailableError,
     SandboxStreamEvent,
     SandboxToolQuotaError,
+    SandboxTransportError,
+    SandboxTurnTimeoutError,
     SandboxValidationError,
     mount_sandbox_routes,
 )
@@ -142,6 +145,24 @@ _COMMAND_PROGRESS = (
     (re.compile(r"(?:^|[\s;&|])(curl|wget)\b[^\n]*?/ping\b"), "正在检查本地服务。"),
 )
 logger = logging.getLogger(__name__)
+
+
+class IntelligentDevelopmentIntentError(SandboxSessionUnavailableError):
+    """The read-only intent turn did not satisfy its structured contract."""
+
+    code = "INTELLIGENT_DEVELOPMENT_INTENT_INVALID"
+
+
+class IntelligentDevelopmentTaskInProgressError(SandboxSessionUnavailableError):
+    """A second request arrived while the current development turn was active."""
+
+    code = "INTELLIGENT_DEVELOPMENT_TASK_IN_PROGRESS"
+
+
+class IntelligentDevelopmentCleanupError(SandboxSessionUnavailableError):
+    """Non-secret task evidence could not be removed after a turn."""
+
+    code = "INTELLIGENT_DEVELOPMENT_CLEANUP_INCOMPLETE"
 
 
 class IntelligentDevelopmentGateway:
@@ -365,7 +386,13 @@ def _project_user_facing_messages(
             continue
 
         user_message = _intent_gate_user_message(gate_message.content)
-        if user_message is not None:
+        repeated_protocol_retry = (
+            user_message is not None
+            and bool(projected)
+            and projected[-1].role == "user"
+            and projected[-1].content == user_message
+        )
+        if user_message is not None and not repeated_protocol_retry:
             projected.append(
                 replace(
                     gate_message,
@@ -660,6 +687,24 @@ def _stream_error_payload(error: SandboxError) -> dict[str, object]:
     """Return a stable public error without exposing exception internals."""
     responses: tuple[tuple[type[SandboxError], str, str, bool], ...] = (
         (
+            IntelligentDevelopmentIntentError,
+            IntelligentDevelopmentIntentError.code,
+            "未能确认本次优化目标，开发尚未开始。请重新发送，已有项目和版本不受影响。",
+            IntelligentDevelopmentIntentError.retryable,
+        ),
+        (
+            IntelligentDevelopmentTaskInProgressError,
+            IntelligentDevelopmentTaskInProgressError.code,
+            "上一条任务仍在处理，请稍后再试。",
+            IntelligentDevelopmentTaskInProgressError.retryable,
+        ),
+        (
+            IntelligentDevelopmentCleanupError,
+            IntelligentDevelopmentCleanupError.code,
+            "本轮任务未能完成清理。开发环境已保留，请在当前会话重试。",
+            IntelligentDevelopmentCleanupError.retryable,
+        ),
+        (
             SandboxToolQuotaError,
             SandboxToolQuotaError.code,
             "当前云账号的开发环境配额已用尽，请释放资源后重试。",
@@ -698,7 +743,7 @@ def _stream_error_payload(error: SandboxError) -> dict[str, object]:
         (
             SandboxSessionUnavailableError,
             SandboxSessionUnavailableError.code,
-            "当前开发环境暂时不可用，请在当前会话重试。",
+            "开发环境当前无法接受新任务，可能仍在启动或处理上一条请求。请稍后在当前会话重试。",
             SandboxSessionUnavailableError.retryable,
         ),
         (
@@ -708,9 +753,21 @@ def _stream_error_payload(error: SandboxError) -> dict[str, object]:
             SandboxProvisioningError.retryable,
         ),
         (
+            SandboxTurnTimeoutError,
+            SandboxTurnTimeoutError.code,
+            "本轮任务长时间未产生新进度，已停止。开发环境已保留，请在当前会话重试。",
+            SandboxTurnTimeoutError.retryable,
+        ),
+        (
+            SandboxTransportError,
+            SandboxTransportError.code,
+            "开发环境连接中断，本轮任务未能继续。开发环境已保留，请在当前会话重试。",
+            SandboxTransportError.retryable,
+        ),
+        (
             SandboxInvocationError,
             SandboxInvocationError.code,
-            "智能开发任务未能安全完成，请在当前会话重试。",
+            "Codex 执行本轮任务失败。开发环境已保留，请在当前会话重试。",
             SandboxInvocationError.retryable,
         ),
     )
@@ -1183,7 +1240,7 @@ def mount_intelligent_development_routes(
             task_lock = task_locks.setdefault(lock_key, asyncio.Lock())
             if task_lock.locked():
                 raise _http_error(
-                    SandboxSessionUnavailableError(
+                    IntelligentDevelopmentTaskInProgressError(
                         "当前智能开发任务仍在进行，请稍后继续。"
                     )
                 )
@@ -1193,6 +1250,7 @@ def mount_intelligent_development_routes(
             lease = None
             completion_path = ""
             emitted_progress: set[str] = set()
+            failure_stage = "intent_gate"
 
             async def cleanup_task_files() -> None:
                 nonlocal completion_path, lease
@@ -1231,36 +1289,73 @@ def mount_intelligent_development_routes(
                         "请新建会话后重试。"
                     ) from credential_error
                 if completion_error is not None:
-                    raise SandboxSessionUnavailableError(
+                    raise IntelligentDevelopmentCleanupError(
                         "临时交付证据文件未能清理，本轮已停止交付。请重试。"
                     ) from completion_error
 
             try:
                 yield _progress_sse("Codex 正在分析本次请求并确认预期结果。")
-                gate_text = ""
-                async for event in service.stream_message(
-                    session_id,
-                    owner,
-                    intent_gate_prompt(
-                        prompt.strip(),
-                        expire_at=cloud.expire_at,
-                        project_context=project_context,
-                    ),
-                    turn_permissions=_INTENT_PERMISSIONS,
-                    turn_timeout_seconds=_INTENT_TURN_TIMEOUT_SECONDS,
-                ):
-                    if event.kind == "text":
-                        gate_text += event.text
-                    else:
-                        public_event = _conversation_event_sse(event)
-                        if public_event is not None:
-                            yield public_event
-                try:
-                    decision = parse_intent_decision(gate_text)
-                except ValueError as error:
-                    raise SandboxSessionUnavailableError(
+                decision = None
+                for intent_attempt in range(2):
+                    gate_results: list[SandboxStreamEvent] = []
+                    gate_commentary: list[SandboxStreamEvent] = []
+                    async for event in service.stream_message(
+                        session_id,
+                        owner,
+                        intent_gate_prompt(
+                            prompt.strip(),
+                            expire_at=cloud.expire_at,
+                            project_context=project_context,
+                            protocol_retry=intent_attempt > 0,
+                        ),
+                        turn_permissions=_INTENT_PERMISSIONS,
+                        turn_timeout_seconds=_INTENT_TURN_TIMEOUT_SECONDS,
+                        turn_output_schema=INTENT_DECISION_OUTPUT_SCHEMA,
+                    ):
+                        if event.kind == "assistant_final":
+                            gate_results.append(event)
+                        elif event.kind == "text":
+                            continue
+                        elif event.kind == "commentary":
+                            gate_commentary.append(event)
+                        else:
+                            public_event = _conversation_event_sse(event)
+                            if public_event is not None:
+                                yield public_event
+                    if len(gate_results) == 1 and gate_results[0].item_id:
+                        final_item_id = gate_results[0].item_id
+                        for event in gate_commentary:
+                            if event.item_id and event.item_id != final_item_id:
+                                public_event = _conversation_event_sse(event)
+                                if public_event is not None:
+                                    yield public_event
+                    failure_stage = "intent_parse"
+                    try:
+                        if len(gate_results) != 1:
+                            raise ValueError(
+                                "Codex did not return exactly one final assistant result"
+                            )
+                        decision = parse_intent_decision(gate_results[0].text)
+                        break
+                    except ValueError as error:
+                        logger.warning(
+                            "Intent decision rejected attempt=%s reason=%s session_id=%s",
+                            intent_attempt + 1,
+                            str(error),
+                            session_id,
+                        )
+                        if intent_attempt == 0:
+                            yield _progress_sse(
+                                "Codex 正在重新确认本次目标和预期结果。"
+                            )
+                            continue
+                        raise IntelligentDevelopmentIntentError(
+                            "意图识别未返回有效结果，请重试。"
+                        ) from error
+                if decision is None:
+                    raise IntelligentDevelopmentIntentError(
                         "意图识别未返回有效结果，请重试。"
-                    ) from error
+                    )
                 if decision.decision != "accept":
                     payload = {"text": decision.message}
                     yield (
@@ -1271,6 +1366,7 @@ def mount_intelligent_development_routes(
                     return
 
                 if not decision.changes_delivery:
+                    failure_stage = "read_only_answer"
                     yield _progress_sse("正在检查当前项目并整理结果。")
                     async for event in service.stream_message(
                         session_id,
@@ -1289,6 +1385,7 @@ def mount_intelligent_development_routes(
                     yield "event: done\ndata: {}\n\n"
                     return
 
+                failure_stage = "delivery_prepare"
                 transport = SandboxRemoteTransport(cloud.endpoint)
                 await invalidate_current_delivery(transport)
                 completion_path = (
@@ -1301,6 +1398,7 @@ def mount_intelligent_development_routes(
                 )
                 yield _progress_sse("正在实现本次变更、运行测试并验证结果。")
                 delivery = None
+                failure_stage = "builder"
                 async for event in service.stream_message(
                     session_id,
                     owner,
@@ -1315,7 +1413,9 @@ def mount_intelligent_development_routes(
                         ),
                         validation_region=validation_region,
                         validation_project=validation_project,
+                        project_context=project_context,
                     ),
+                    turn_permissions=_BUILDER_PERMISSIONS,
                     turn_timeout_seconds=_BUILDER_TURN_TIMEOUT_SECONDS,
                 ):
                     progress = _command_progress(event)
@@ -1373,6 +1473,7 @@ def mount_intelligent_development_routes(
                         f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
                     )
                 yield _progress_sse("正在生成安全的源码快照。")
+                failure_stage = "delivery_publish"
                 delivery = await DeliveryPublisher(transport).publish(
                     session_id=cloud.instance_id,
                     project_root=project_root,
@@ -1384,6 +1485,7 @@ def mount_intelligent_development_routes(
                 stored_version = None
                 persistence_error: dict[str, object] | None = None
                 if project_service is not None:
+                    failure_stage = "version_persist"
                     yield _progress_sse("正在保存项目版本。")
                     try:
                         _, stored_version = await project_service.persist_delivery(
@@ -1436,6 +1538,7 @@ def mount_intelligent_development_routes(
                             session_id,
                         )
 
+                failure_stage = "cleanup"
                 await cleanup_task_files()
 
                 if delivery is not None:
@@ -1484,6 +1587,7 @@ def mount_intelligent_development_routes(
                         "event: development.succeeded\n"
                         f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                     )
+                failure_stage = "complete"
                 yield "event: done\ndata: {}\n\n"
             except SandboxError as error:
                 failure = error
@@ -1495,6 +1599,13 @@ def mount_intelligent_development_routes(
                     failure = SandboxError(
                         "智能开发任务未能安全清理，请勿继续使用当前会话。"
                     )
+                logger.warning(
+                    "Intelligent development turn failed stage=%s code=%s error_type=%s session_id=%s",
+                    failure_stage,
+                    failure.code,
+                    type(failure).__name__,
+                    session_id,
+                )
                 payload = _stream_error_payload(failure)
                 yield f"event: error\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
                 yield 'event: done\ndata: {"reason":"failed"}\n\n'

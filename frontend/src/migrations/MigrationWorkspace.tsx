@@ -38,6 +38,12 @@ import {
   type CloudProvider,
 } from "../adk/cloudProvider";
 import type { AgentProject } from "../create/project";
+import type {
+  IntelligentCreateBaseVersion,
+  IntelligentDevelopmentCapabilities,
+  IntelligentPreparationStage,
+} from "../create/IntelligentCreate";
+import type { IntelligentDevelopmentReleaseRef } from "../blocks";
 import type { NetworkConfig } from "../create/types";
 import type { EnvVar } from "../create/veadkCatalog";
 import CodeEditor from "../ui/CodeEditor";
@@ -67,9 +73,10 @@ import {
   migrationDeploymentEnvDefaults,
 } from "./deploymentEnvironment";
 import { migrationActivityBlocks } from "./migrationActivityBlocks";
+import { MigratedProjectsPage } from "./MigratedProjectsPage";
 import "./MigrationWorkspace.css";
 
-const MAX_SOURCE_BYTES = 50 * 1024 * 1024;
+const MAX_SOURCE_BYTES = 20 * 1024 * 1024;
 const POLL_INTERVAL_MS = 1_200;
 const ACTIVITY_POLL_INTERVAL_MS = 3_000;
 const LIST_POLL_INTERVAL_MS = 5_000;
@@ -102,6 +109,22 @@ interface MigrationWorkspaceProps {
   onDeploymentStarted?: (task: DeploymentTaskUpdate) => void;
   onDeploymentComplete?: (result: DeployResult) => void | Promise<void>;
   initialDeployRegion?: string;
+  projectCapabilities: IntelligentDevelopmentCapabilities | null;
+  projectCapabilitiesLoading: boolean;
+  optimizationPreparationStage: IntelligentPreparationStage | null;
+  optimizationError: string;
+  onOptimizeVersion: (
+    goal: string,
+    modelId: string,
+    base: IntelligentCreateBaseVersion,
+  ) => Promise<void>;
+  onCancelOptimization: () => void;
+  onDownloadSavedVersion: (
+    delivery: IntelligentDevelopmentReleaseRef,
+  ) => Promise<void>;
+  onDeploySavedVersion: (delivery: IntelligentDevelopmentReleaseRef) => void;
+  initialPage?: "new" | "projects";
+  initialProjectId?: string;
 }
 
 interface PreviewState {
@@ -270,6 +293,12 @@ function formatBytes(value: number): string {
   return `${(value / 1024 / 1024).toFixed(1)} MiB`;
 }
 
+function formatByteLimit(value: number): string {
+  return formatBytes(value)
+    .replace(".0 MiB", " MiB")
+    .replace(".0 KiB", " KiB");
+}
+
 function formatElapsedTime(seconds: number): string {
   if (seconds < 60) return `${seconds} 秒`;
   return `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
@@ -294,25 +323,34 @@ function migrationExpiryCopy(
   task: MigrationTask,
   now: number,
 ): { title: string; detail: string } {
+  const sourceSaved = task.persistence?.state === "saved";
+  const sourceSaving = task.persistence?.state === "saving";
+  const activeDetail = sourceSaved
+    ? "已保存项目不受影响"
+    : sourceSaving
+      ? "源码正在保存，完成后不受环境期限影响"
+      : "到期后任务记录和临时产物将无法访问";
   const expiry = new Date(task.expiresAt).getTime();
   if (!Number.isFinite(expiry)) {
     return {
-      title: "迁移环境保留 1 小时",
-      detail: "过期后无法查看会话，也无法预览、下载或部署产物",
+      title: "临时迁移环境保留 1 小时",
+      detail: activeDetail,
     };
   }
   if (task.state === "expired" || now >= expiry) {
     return {
-      title: "迁移环境已过期",
-      detail: "会话和产物已无法访问",
+      title: "临时迁移环境已结束",
+      detail: sourceSaved
+        ? "已保存项目仍可查看、下载、部署或优化"
+        : "任务记录和临时产物已无法访问",
     };
   }
   const remaining = Math.max(0, expiry - now);
   const minutes = Math.floor(remaining / 60_000);
   const seconds = Math.floor((remaining % 60_000) / 1_000);
   return {
-    title: `迁移环境将在 ${minutes} 分 ${seconds} 秒后过期`,
-    detail: "过期后无法查看会话，也无法预览、下载或部署产物",
+    title: `临时迁移环境将在 ${minutes} 分 ${seconds} 秒后结束`,
+    detail: activeDetail,
   };
 }
 
@@ -326,10 +364,13 @@ function expireTasksAtDeadline(
     const expiry = new Date(task.expiresAt).getTime();
     if (!Number.isFinite(expiry) || now < expiry) return task;
     changed = true;
+    const sourceSaved = task.persistence?.state === "saved";
     return {
       ...task,
       state: "expired" as const,
-      message: "迁移环境已过期，内容和产物无法继续访问。",
+      message: sourceSaved
+        ? "临时迁移环境已结束，已保存项目不受影响。"
+        : "临时迁移环境已结束，任务记录和临时产物无法继续访问。",
       canModify: false,
       canUpload: false,
       canAnswer: false,
@@ -641,6 +682,16 @@ export function MigrationWorkspace({
   onDeploymentStarted,
   onDeploymentComplete,
   initialDeployRegion = defaultCloudRegion(cloudProvider),
+  projectCapabilities,
+  projectCapabilitiesLoading,
+  optimizationPreparationStage,
+  optimizationError,
+  onOptimizeVersion,
+  onCancelOptimization,
+  onDownloadSavedVersion,
+  onDeploySavedVersion,
+  initialPage = "new",
+  initialProjectId = "",
 }: MigrationWorkspaceProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const preparedAnalysisRef = useRef("");
@@ -648,6 +699,8 @@ export function MigrationWorkspace({
   const [capability, setCapability] =
     useState<MigrationCapabilities | null>(null);
   const [tasks, setTasks] = useState<MigrationTask[]>([]);
+  const [page, setPage] = useState<"new" | "projects">(initialPage);
+  const [focusedProjectId, setFocusedProjectId] = useState(initialProjectId);
   const [selectedTaskId, setSelectedTaskId] = useState("");
   const [sourceFile, setSourceFile] = useState<File | null>(null);
   const [models, setModels] = useState<ModelOption[]>([]);
@@ -685,6 +738,8 @@ export function MigrationWorkspace({
     Record<string, string>
   >({});
   const task = selectedTask(tasks, selectedTaskId);
+  const maxSourceBytes = capability?.maxUploadBytes ?? MAX_SOURCE_BYTES;
+  const maxSourceSizeLabel = formatByteLimit(maxSourceBytes);
   const unsupportedMigrationModelIds = useMemo(
     () => new Set(capability?.unsupportedModelIds ?? []),
     [capability?.unsupportedModelIds],
@@ -903,7 +958,10 @@ export function MigrationWorkspace({
   }, [tasks.some((item) => isActiveState(item.state))]);
 
   useEffect(() => {
-    if (!task || !isActiveState(task.state)) return;
+    if (
+      !task
+      || (!isActiveState(task.state) && task.persistence?.state !== "saving")
+    ) return;
     const controller = new AbortController();
     let timer: number | undefined;
     const poll = async () => {
@@ -913,7 +971,10 @@ export function MigrationWorkspace({
         setTasks((current) => upsertTask(current, next));
         setPollError("");
         setPollErrorRetryable(false);
-        if (isActiveState(next.state)) {
+        if (
+          isActiveState(next.state)
+          || next.persistence?.state === "saving"
+        ) {
           timer = window.setTimeout(() => void poll(), POLL_INTERVAL_MS);
         }
       } catch (cause) {
@@ -932,7 +993,7 @@ export function MigrationWorkspace({
       controller.abort();
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [task?.id, task?.state]);
+  }, [task?.id, task?.state, task?.persistence?.state]);
 
   useEffect(() => {
     const conversation = conversationRef.current;
@@ -1064,9 +1125,9 @@ export function MigrationWorkspace({
       setError("ZIP 文件名无效，请重命名后重新选择。");
       return;
     }
-    if (file.size > MAX_SOURCE_BYTES) {
+    if (file.size > maxSourceBytes) {
       setSourceFile(null);
-      setError("项目 ZIP 不能超过 50 MiB。");
+      setError(`项目 ZIP 不能超过 ${maxSourceSizeLabel}。`);
       return;
     }
     if (file.size === 0) {
@@ -1292,6 +1353,8 @@ export function MigrationWorkspace({
   }
 
   function startNewMigration() {
+    setPage("new");
+    setFocusedProjectId("");
     setSelectedTaskId("");
     setSourceFile(null);
     setError("");
@@ -1457,12 +1520,24 @@ export function MigrationWorkspace({
           <button
             type="button"
             className="migration-new-button"
+            aria-current={page === "new" && !task ? "page" : undefined}
             onClick={startNewMigration}
             disabled={composerBusy}
           >
             <PlusIcon />
             <span>新建迁移</span>
           </button>
+          <button
+            type="button"
+            className={`migration-new-button${page === "projects" ? " is-active" : ""}`}
+            aria-current={page === "projects" ? "page" : undefined}
+            onClick={() => setPage("projects")}
+            disabled={composerBusy}
+          >
+            <FileIcon />
+            <span>已迁移项目</span>
+          </button>
+          <div className="migration-history__label">最近迁移</div>
           <nav aria-label="迁移会话">
             {loading ? (
               <TextShimmer>正在读取迁移会话…</TextShimmer>
@@ -1474,8 +1549,14 @@ export function MigrationWorkspace({
                   type="button"
                   key={item.id}
                   className={item.id === selectedTaskId ? "is-active" : ""}
+                  aria-current={
+                    page === "new" && item.id === selectedTaskId
+                      ? "page"
+                      : undefined
+                  }
                   disabled={composerBusy}
                   onClick={() => {
+                    setPage("new");
                     setSelectedTaskId(item.id);
                     setError("");
                     setPollError("");
@@ -1493,8 +1574,21 @@ export function MigrationWorkspace({
           </nav>
         </aside>
 
-        <main className="migration-main">
-          <header className="migration-main__header">
+        {page === "projects" ? (
+          <MigratedProjectsPage
+            capabilities={projectCapabilities}
+            capabilitiesLoading={projectCapabilitiesLoading}
+            preparationStage={optimizationPreparationStage}
+            optimizationError={optimizationError}
+            initialProjectId={focusedProjectId}
+            onOptimize={onOptimizeVersion}
+            onCancelOptimization={onCancelOptimization}
+            onDownload={onDownloadSavedVersion}
+            onDeploy={onDeploySavedVersion}
+          />
+        ) : (
+          <main className="migration-main">
+            <header className="migration-main__header">
             <div>
               <h2>
                 {task ? sourceStem(task.sourceFileName) : "迁移存量 Agent 项目"}
@@ -1525,7 +1619,7 @@ export function MigrationWorkspace({
                 ) : null}
               </div>
             ) : null}
-          </header>
+            </header>
 
           <div
             className="migration-conversation"
@@ -1550,7 +1644,10 @@ export function MigrationWorkspace({
                     请提供本地项目 ZIP。上传后我会识别框架、入口和迁移边界，
                     并在执行实际迁移前请你确认迁移方式。
                   </p>
-                  <small>仅支持本地 ZIP，最大 50 MiB；迁移环境从创建起保留 1 小时。</small>
+                  <small>
+                    仅支持本地 ZIP，最大 {maxSourceSizeLabel}
+                    ；迁移环境从创建起保留 1 小时。
+                  </small>
                 </div>
               </article>
               {action === "create" && sourceFile ? (
@@ -1835,12 +1932,27 @@ export function MigrationWorkspace({
                 <div>
                   <strong>迁移产物</strong>
                   <span>
-                    {task.artifact.deployReady
-                      ? "产物可预览、下载和部署。运行效果取决于源项目和部署环境变量；迁移环境过期后产物将无法访问。"
-                      : "产物可预览和下载，但当前交付状态不支持部署；迁移环境过期后产物将无法访问。"}
+                    {task.persistence?.state === "saved"
+                      ? "源码已保存，可继续查看、下载、部署或优化。"
+                      : task.persistence?.state === "saving"
+                        ? "产物已生成，正在保存源码版本。"
+                        : task.artifact.deployReady
+                          ? "产物可预览、下载和部署，正在等待源码保存状态。"
+                          : "产物可预览和下载，但当前交付状态不支持部署。"}
                   </span>
                 </div>
                 <div className="migration-result__actions">
+                  {task.persistence?.state === "saved" ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFocusedProjectId(task.persistence?.projectId ?? "");
+                        setPage("projects");
+                      }}
+                    >
+                      <span>查看已迁移项目</span>
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     onClick={() => void downloadArtifact()}
@@ -1865,6 +1977,12 @@ export function MigrationWorkspace({
                   </button>
                 </div>
               </header>
+              {task.persistence
+                && ["failed", "unavailable"].includes(task.persistence.state) ? (
+                <div className="migration-system-state is-error" role="alert">
+                  <p>{task.persistence.message}</p>
+                </div>
+              ) : null}
               {artifactError ? (
                 <div className="migration-system-state is-error" role="alert">
                   <p>{artifactError}</p>
@@ -2035,11 +2153,12 @@ export function MigrationWorkspace({
               />
               </div>
               <p>
-                迁移环境从创建完成起保留 1 小时，过期后产物无法预览、下载或部署。
+                临时迁移环境从创建完成起保留 1 小时；保存成功的源码版本不受影响。
               </p>
             </div>
           ) : null}
-        </main>
+          </main>
+        )}
       </section>
       {stopConfirmOpen && task ? (
         <StudioConfirmDialog

@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -23,6 +24,11 @@ from typing import Any
 from fastapi import HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response
+
+from frontend.server.source_projects import (
+    SOURCE_PROJECT_EXCEPTIONS,
+    SourceProjectService,
+)
 
 from .models import (
     ConfirmMigrationBody,
@@ -49,7 +55,12 @@ def mount_migration_routes(
     *,
     owner_resolver: Callable[[Request], str],
     creator_resolver: Callable[[Request], str],
+    project_service: SourceProjectService | None = None,
 ) -> None:
+    persistence_results: dict[tuple[str, str], dict[str, object]] = {}
+    persistence_tasks: dict[tuple[str, str], asyncio.Task[dict[str, object]]] = {}
+    watchers: dict[tuple[str, str], asyncio.Task[None]] = {}
+
     async def invoke(
         operation: str,
         call: Callable[[], Any],
@@ -90,6 +101,153 @@ def mount_migration_routes(
                 detail=internal.detail(),
             ) from error
 
+    async def ensure_persisted(
+        task_id: str,
+        owner_id: str,
+        *,
+        wait: bool = True,
+    ) -> dict[str, object]:
+        key = (owner_id, task_id)
+        cached = persistence_results.get(key)
+        if cached is not None and cached.get("state") == "saved":
+            return cached
+        if project_service is None:
+            result: dict[str, object] = {
+                "state": "unavailable",
+                "message": "项目存储尚未配置，迁移产物只在当前环境中保留。",
+            }
+            persistence_results[key] = result
+            return result
+        configured_project_service = project_service
+        running = persistence_tasks.get(key)
+        if running is not None:
+            if wait:
+                return await running
+            return {
+                "state": "saving",
+                "message": "正在保存源码版本。",
+            }
+
+        async def persist() -> dict[str, object]:
+            try:
+                bundle = await run_in_threadpool(
+                    service.persistence_bundle,
+                    task_id,
+                    owner_id,
+                )
+                project, version = await configured_project_service.persist_migration(
+                    owner_id=owner_id,
+                    task_id=bundle.task_id,
+                    project_name=bundle.project_name,
+                    artifact=bundle.artifact,
+                    result=bundle.result,
+                    result_bytes=bundle.result_bytes,
+                    environment_defaults=bundle.environment_defaults,
+                )
+                result: dict[str, object] = {
+                    "state": "saved",
+                    "projectId": project.project_id,
+                    "versionId": version.version_id,
+                    "message": "源码已保存到已迁移项目。",
+                }
+            except (MigrationError, *SOURCE_PROJECT_EXCEPTIONS) as error:
+                logger.warning(
+                    "Could not persist migration source task_id=%s error_type=%s",
+                    task_id,
+                    type(error).__name__,
+                )
+                result = {
+                    "state": "failed",
+                    "message": "源码暂未保存，可刷新任务重试。",
+                    "retryable": True,
+                }
+            except Exception:
+                logger.exception(
+                    "Unexpected migration persistence failure task_id=%s",
+                    task_id,
+                )
+                result = {
+                    "state": "failed",
+                    "message": "源码暂未保存，可刷新任务重试。",
+                    "retryable": True,
+                }
+            persistence_results[key] = result
+            return result
+
+        running = asyncio.create_task(persist())
+        persistence_tasks[key] = running
+        if not wait:
+
+            def cleanup(completed: asyncio.Task[dict[str, object]]) -> None:
+                if persistence_tasks.get(key) is completed:
+                    persistence_tasks.pop(key, None)
+
+            running.add_done_callback(cleanup)
+            return {
+                "state": "saving",
+                "message": "正在保存源码版本。",
+            }
+        try:
+            return await running
+        finally:
+            persistence_tasks.pop(key, None)
+
+    async def with_persistence(
+        task: dict[str, object],
+        owner_id: str,
+    ) -> dict[str, object]:
+        task_id = str(task.get("id") or "")
+        if task.get("state") not in {
+            "succeeded",
+            "succeeded_with_warnings",
+            "partial",
+        }:
+            cached = persistence_results.get((owner_id, task_id))
+            return {**task, "persistence": cached} if cached is not None else task
+        return {
+            **task,
+            "persistence": await ensure_persisted(
+                task_id,
+                owner_id,
+                wait=False,
+            ),
+        }
+
+    def start_watcher(task_id: str, owner_id: str) -> None:
+        key = (owner_id, task_id)
+        current = watchers.get(key)
+        if current is not None and not current.done():
+            return
+
+        async def watch() -> None:
+            try:
+                while True:
+                    await asyncio.sleep(3)
+                    try:
+                        task = await run_in_threadpool(
+                            service.get_task,
+                            task_id,
+                            owner_id,
+                        )
+                    except MigrationError as error:
+                        if error.retryable:
+                            continue
+                        return
+                    state = task.get("state")
+                    if state in {
+                        "succeeded",
+                        "succeeded_with_warnings",
+                        "partial",
+                    }:
+                        await ensure_persisted(task_id, owner_id)
+                        return
+                    if state in {"failed", "cancelled", "expired"}:
+                        return
+            finally:
+                watchers.pop(key, None)
+
+        watchers[key] = asyncio.create_task(watch())
+
     @app.get("/web/agent-migrations/capabilities")
     async def capabilities(request: Request) -> dict[str, object]:
         owner_resolver(request)
@@ -98,10 +256,23 @@ def mount_migration_routes(
     @app.get("/web/agent-migrations/tasks")
     async def list_tasks(request: Request) -> dict[str, list[dict[str, object]]]:
         owner_id = owner_resolver(request)
-        return await invoke(
+        payload = await invoke(
             "list_tasks",
             lambda: service.list_tasks(owner_id),
         )
+        items = payload.get("items") if isinstance(payload, dict) else None
+        if isinstance(items, list):
+            payload = {
+                **payload,
+                "items": await asyncio.gather(
+                    *(
+                        with_persistence(item, owner_id)
+                        for item in items
+                        if isinstance(item, dict)
+                    )
+                ),
+            }
+        return payload
 
     @app.post("/web/agent-migrations/tasks")
     async def create_task(
@@ -150,7 +321,7 @@ def mount_migration_routes(
             if declared_bytes > MIGRATION_UPLOAD_MAX_BYTES:
                 too_large = MigrationError(
                     "MIGRATION_SOURCE_TOO_LARGE",
-                    "项目 ZIP 不能超过 50 MiB。",
+                    "项目 ZIP 不能超过 20 MiB。",
                     status_code=413,
                 )
                 raise HTTPException(
@@ -162,7 +333,7 @@ def mount_migration_routes(
             if len(content) + len(chunk) > MIGRATION_UPLOAD_MAX_BYTES:
                 too_large = MigrationError(
                     "MIGRATION_SOURCE_TOO_LARGE",
-                    "项目 ZIP 不能超过 50 MiB。",
+                    "项目 ZIP 不能超过 20 MiB。",
                     status_code=413,
                 )
                 raise HTTPException(
@@ -182,11 +353,12 @@ def mount_migration_routes(
         request: Request,
     ) -> dict[str, object]:
         owner_id = owner_resolver(request)
-        return await invoke(
+        task = await invoke(
             "get_task",
             lambda: service.get_task(task_id, owner_id),
             task_id=task_id,
         )
+        return await with_persistence(task, owner_id)
 
     @app.post("/web/agent-migrations/tasks/{task_id}/answers")
     async def submit_answers(
@@ -208,11 +380,13 @@ def mount_migration_routes(
         request: Request,
     ) -> dict[str, object]:
         owner_id = owner_resolver(request)
-        return await invoke(
+        task = await invoke(
             "confirm",
             lambda: service.confirm(task_id, owner_id, body),
             task_id=task_id,
         )
+        start_watcher(task_id, owner_id)
+        return await with_persistence(task, owner_id)
 
     @app.post("/web/agent-migrations/tasks/{task_id}/stop")
     async def stop(
@@ -244,11 +418,13 @@ def mount_migration_routes(
         request: Request,
     ) -> dict[str, object]:
         owner_id = owner_resolver(request)
-        return await invoke(
+        artifact_payload = await invoke(
             "artifact",
             lambda: service.artifact(task_id, owner_id),
             task_id=task_id,
         )
+        await ensure_persisted(task_id, owner_id, wait=False)
+        return artifact_payload
 
     @app.get("/web/agent-migrations/tasks/{task_id}/download")
     async def download(

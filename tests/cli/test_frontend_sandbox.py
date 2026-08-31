@@ -36,6 +36,8 @@ from veadk.cli.agentkit_session_metadata import (
 from veadk.cli.codex_app_server import (
     CodexAppServerError,
     CodexAppServerEvent,
+    CodexAppServerTransportError,
+    CodexAppServerTurnTimeoutError,
     CodexDirectoryEntry,
     CodexDirectoryListing,
     CodexImportedImage,
@@ -58,6 +60,8 @@ from veadk.cli.frontend_sandbox import (
     SandboxConversationService,
     SandboxProvisioningError,
     SandboxSessionNotFoundError,
+    SandboxTransportError,
+    SandboxTurnTimeoutError,
     SandboxValidationError,
     mount_sandbox_agent_routes,
     mount_sandbox_routes,
@@ -956,6 +960,49 @@ def test_sandbox_routes_list_create_connect_and_disconnect() -> None:
     assert disconnected.json() == {"disconnected": True}
     assert gateway.deleted == []
     assert session_id == "remote-1"
+
+
+def test_sandbox_message_stream_hides_internal_assistant_final_event() -> None:
+    class _FinalEventCodex(_FakeCodex):
+        async def stream_turn(
+            self, prompt: str, skill_ids: tuple[str, ...] = ()
+        ) -> AsyncIterator[CodexAppServerEvent]:
+            del prompt, skill_ids
+            yield CodexAppServerEvent(
+                kind="text",
+                item_id="message-final",
+                text="最终答复",
+            )
+            yield CodexAppServerEvent(
+                kind="assistant_final",
+                item_id="message-final",
+                status="done",
+                text="最终答复",
+            )
+
+    class _FinalEventGateway(_FakeGateway):
+        async def open_codex(self, session: SandboxCloudSession) -> _FakeCodex:
+            del session
+            connection = _FinalEventCodex(self.thread_ids)
+            self.connections.append(connection)
+            return connection
+
+    with TestClient(_app(_FinalEventGateway())) as client:
+        connected = client.post(
+            "/web/sandbox/sessions/remote-existing/connect",
+            headers={"X-Test-User": "alice"},
+        )
+        response = client.post(
+            "/web/sandbox/sessions/remote-existing/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "hello"},
+        )
+
+    assert connected.status_code == 200
+    assert response.status_code == 200
+    assert response.text.count('event: delta\ndata: {"text": "最终答复"}') == 1
+    assert '"kind": "assistant_final"' not in response.text
+    assert "event: done" in response.text
 
 
 @pytest.mark.asyncio
@@ -2976,6 +3023,58 @@ def test_sse_error_has_an_explicit_done_frame() -> None:
 
     assert "event: error" in response.text
     assert 'event: done\ndata: {"reason": "failed"}' in response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("source_error", "expected_error"),
+    [
+        (
+            CodexAppServerTurnTimeoutError("turn inactive"),
+            SandboxTurnTimeoutError,
+        ),
+        (
+            CodexAppServerTransportError("connection closed"),
+            SandboxTransportError,
+        ),
+        (CodexAppServerError("turn failed"), frontend_sandbox.SandboxInvocationError),
+    ],
+)
+async def test_stream_message_preserves_codex_failure_category(
+    source_error: CodexAppServerError,
+    expected_error: type[frontend_sandbox.SandboxInvocationError],
+) -> None:
+    class _CategorizedFailureCodex(_FakeCodex):
+        async def stream_turn(
+            self, prompt: str, skill_ids: tuple[str, ...] = ()
+        ) -> AsyncIterator[CodexAppServerEvent]:
+            del prompt, skill_ids
+            if False:
+                yield CodexAppServerEvent()
+            raise source_error
+
+    class _CategorizedFailureGateway(_FakeGateway):
+        async def open_codex(self, session: SandboxCloudSession) -> _FakeCodex:
+            del session
+            connection = _CategorizedFailureCodex(self.thread_ids)
+            self.connections.append(connection)
+            return connection
+
+    service = SandboxConversationService(
+        _CategorizedFailureGateway(),
+        tool_id="tool-studio",
+    )
+    await service.connect("remote-existing", "alice")
+
+    with pytest.raises(expected_error):
+        _ = [
+            event
+            async for event in service.stream_message(
+                "remote-existing",
+                "alice",
+                "continue",
+            )
+        ]
 
 
 def test_sse_error_includes_redacted_exception_chain() -> None:

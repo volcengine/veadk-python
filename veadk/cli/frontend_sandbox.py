@@ -52,6 +52,8 @@ from veadk.cli.codex_app_server import (
     CodexAppServerError,
     CodexAppServerEvent,
     CodexAppServerSession,
+    CodexAppServerTransportError,
+    CodexAppServerTurnTimeoutError,
     CodexDirectoryListing,
     CodexImportedImage,
     CodexImportedMessage,
@@ -220,6 +222,18 @@ class SandboxInvocationError(SandboxError):
     retryable = True
 
 
+class SandboxTransportError(SandboxInvocationError):
+    """The connection to the coding agent ended unexpectedly."""
+
+    code = "SANDBOX_TRANSPORT_FAILED"
+
+
+class SandboxTurnTimeoutError(SandboxInvocationError):
+    """The coding agent exceeded the configured inactivity timeout."""
+
+    code = "SANDBOX_TURN_TIMEOUT"
+
+
 class SandboxCapacityError(SandboxError):
     """Studio has reached its local conversation-bridge limit."""
 
@@ -263,6 +277,16 @@ def _safe_error_message(error: object) -> str:
     raw_message = "\n".join(parts) if parts else str(error).strip()
     message = _redact_public_text(raw_message, maximum=20_000)
     return message or type(error).__name__
+
+
+def _sandbox_invocation_error(error: CodexAppServerError) -> SandboxInvocationError:
+    """Preserve actionable Codex failure categories at the Sandbox boundary."""
+    message = _safe_error_message(error)
+    if isinstance(error, CodexAppServerTurnTimeoutError):
+        return SandboxTurnTimeoutError(message)
+    if isinstance(error, CodexAppServerTransportError):
+        return SandboxTransportError(message)
+    return SandboxInvocationError(message)
 
 
 def _is_agentkit_tool_quota_error(error: BaseException) -> bool:
@@ -812,6 +836,7 @@ class SandboxCodexConnection(Protocol):
         *,
         permissions: CodexPermissionSettings | None = None,
         timeout_seconds: float | None = None,
+        output_schema: dict[str, object] | None = None,
     ) -> AsyncIterator[CodexAppServerEvent]:
         """Run and stream one turn."""
         if False:
@@ -1843,6 +1868,7 @@ class SandboxConversationService:
         *,
         turn_permissions: CodexPermissionSettings | None = None,
         turn_timeout_seconds: float | None = None,
+        turn_output_schema: dict[str, object] | None = None,
     ) -> AsyncIterator[SandboxStreamEvent]:
         session = self._owned(session_id, owner_id)
         if session.background_turn is not None and not session.background_turn.done():
@@ -1857,7 +1883,11 @@ class SandboxConversationService:
                     session.pending_prompt = prompt
                     session.pending_prompt_timestamp = int(time.time() * 1_000)
                     try:
-                        if turn_permissions is None and turn_timeout_seconds is None:
+                        if (
+                            turn_permissions is None
+                            and turn_timeout_seconds is None
+                            and turn_output_schema is None
+                        ):
                             events = (
                                 session.codex.stream_turn(prompt, skill_ids)
                                 if skill_ids
@@ -1869,6 +1899,7 @@ class SandboxConversationService:
                                 skill_ids,
                                 permissions=turn_permissions,
                                 timeout_seconds=turn_timeout_seconds,
+                                output_schema=turn_output_schema,
                             )
                         async for event in events:
                             if event.kind and listening:
@@ -1905,7 +1936,7 @@ class SandboxConversationService:
                         session.pending_prompt_timestamp = 0
             except CodexAppServerError as error:
                 if listening:
-                    queue.put_nowait(SandboxInvocationError(_safe_error_message(error)))
+                    queue.put_nowait(_sandbox_invocation_error(error))
             except asyncio.CancelledError:
                 raise
             except Exception as error:  # noqa: BLE001 - background task boundary
@@ -3830,6 +3861,8 @@ def mount_sandbox_routes(
             async for event in service.stream_message(
                 session_id, owner_id, prompt, skill_ids
             ):
+                if event.kind == "assistant_final":
+                    continue
                 if event.kind == "text":
                     payload = {"text": event.text}
                     yield f"event: delta\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"

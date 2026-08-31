@@ -54,6 +54,14 @@ server that `veadk frontend` launches — no separate backend.
   Deployable source can be sent to Runtime manually; an incomplete verification
   report requires an explicit confirmation. No separate “start verification”
   action is required.
+- **Existing Agent migration**: upload a local project ZIP for read-only
+  analysis, confirm the detected framework and entry point, then migrate and
+  validate it in a temporary Sandbox. Successful migration source is saved as
+  an immutable version in the same private Studio TOS project store. The
+  separate “已迁移项目” page can view, download, deploy, delete, and compare
+  versions; any version can be restored into the intelligent-development flow
+  for another intent-driven iteration after the temporary migration environment
+  has ended.
 - **Reasoning & tool calls** shown inline (collapsible "thinking", tool blocks).
 - **Agent context rail** keeps the selected Agent's description, model, tools,
   skills, and optional live multi-Agent topology together in the conversation's
@@ -230,7 +238,7 @@ server that `veadk frontend` launches — no separate backend.
   root `app.py` as the compatible default. Studio removes a single wrapping
   directory, rejects unsafe paths, and shows upload, image build, Runtime
   creation, and service publishing as separate deployment stages.
-- **Existing-project migration**: upload one local ZIP of at most 50 MiB from
+- **Existing-project migration**: upload one local ZIP of at most 20 MiB from
   the add-Agent menu. Studio creates one user-owned Dev Sandbox Session with a
   one-hour TTL, then asks the preinstalled Codex to perform read-only framework,
   entry-point, and migration-boundary analysis. Migration starts only after the
