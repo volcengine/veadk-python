@@ -15,11 +15,11 @@
 """Tests for Studio role and Runtime ownership policy."""
 
 import base64
-from concurrent.futures import ThreadPoolExecutor
 import itertools
 import json
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
@@ -50,6 +50,7 @@ from veadk.cli.studio_rbac import (
     StudioPrincipal,
     StudioRole,
     parse_role_members,
+    runtime_attribution,
     runtime_belongs_to,
 )
 
@@ -2081,6 +2082,23 @@ def test_runtime_ownership_requires_current_owner_tag() -> None:
     assert not runtime_belongs_to({"veadk:author": "OWNER@EXAMPLE.COM"}, principal)
 
 
+def test_runtime_attribution_prefers_identity_and_leaves_unknown_author_empty() -> None:
+    owner_only = StudioPrincipal(
+        owner_id="stable-id",
+        display_name="",
+        identifiers=frozenset({"stable-id"}),
+    )
+    named = StudioPrincipal(
+        owner_id="stable-id",
+        display_name="developer",
+        identifiers=frozenset({"stable-id", "developer"}),
+    )
+
+    assert runtime_attribution(named) == ("developer", "stable-id")
+    assert runtime_attribution(owner_only) == ("stable-id", "stable-id")
+    assert runtime_attribution(None) == ("", "")
+
+
 def test_studio_deploy_exposes_role_options() -> None:
     result = CliRunner().invoke(studio, ["deploy", "--help"])
 
@@ -2550,6 +2568,7 @@ def test_non_admin_runtime_list_uses_one_owner_filtered_request(
 
     other = _runtime("runtime-other", "someone-else")
     own = _runtime("runtime-own", "developer")
+    own.tags.append(SimpleNamespace(key="veadk:author", value="developer"))
     reader_own = _runtime("runtime-reader", "reader")
     developer_tag_filters: list[tuple[str, list[str]]] = []
 
@@ -2595,6 +2614,7 @@ def test_non_admin_runtime_list_uses_one_owner_filtered_request(
         "runtime-own"
     ]
     assert developer.json()["runtimes"][0]["canDelete"] is True
+    assert developer.json()["runtimes"][0]["author"] == "developer"
     assert ("veadk:owner", ["developer"]) in developer_tag_filters
     assert developer_call_count == 1
     assert reader.status_code == 200
@@ -5437,6 +5457,8 @@ def test_new_deployment_only_updates_non_default_instance_range(
     assert frames[-1]["runtimeName"] == "generated-runtime-name"
     created_tags = {tag.key: tag.value for tag in create_requests[-1].tags}
     assert created_tags["veadk:environment-id"] == "default"
+    assert created_tags["veadk:author"] == "developer"
+    assert created_tags["veadk:owner"] == "developer"
     assert captured_config["launch_types"]["cloud"]["runtime_name"] == (
         "stable-runtime-name"
     )

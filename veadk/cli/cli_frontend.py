@@ -1920,6 +1920,7 @@ def _run_frontend_server(
         StudioAccessPolicy,
         StudioPrincipal,
         StudioRole,
+        runtime_attribution,
         runtime_belongs_to,
     )
     from veadk.multimodal.api import mount_media_routes
@@ -5578,8 +5579,7 @@ def _run_frontend_server(
         config = data.get("config", {})
         task_id = str(data.get("taskId") or f"deploy-{id(request)}").strip()
         create_evaluation_sets = data.get("createEvaluationSets", True)
-        author = principal.display_name if principal else ""
-        owner_id = principal.owner_id if principal else ""
+        author, owner_id = runtime_attribution(principal)
         environment_ref = (
             data.get("environment") if isinstance(data.get("environment"), dict) else {}
         )

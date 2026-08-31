@@ -439,7 +439,7 @@ test("loads Runtime pages by the selected ownership and region", () => {
   assert.match(pageSource, /name: runtime\.name/);
   assert.match(pageSource, /description: runtime\.description\?\.trim\(\) \|\| "暂无描述"/);
   assert.match(pageSource, /specificationLabel: "创建人"/);
-  assert.match(pageSource, /specification: formatResourceSource\(runtime\.author\)/);
+  assert.match(pageSource, /specification: formatResourceCreator\(runtime\.author\)/);
   assert.match(pageSource, /runtimeId: runtime\.runtimeId/);
   assert.match(pageSource, /region: runtime\.region/);
   assert.match(pageSource, /<AgentCard[\s\S]*?key=\{agent\.id\}/);
@@ -459,7 +459,7 @@ test("loads Runtime pages by the selected ownership and region", () => {
   assert.match(appSource, /const refreshAgentLibrary[\s\S]*?scope: grantedRuntimeScope/);
 });
 
-test("uses one shared fallback for missing resource authors", async () => {
+test("uses semantic fallbacks for missing resource sources and creators", async () => {
   const { outputText } = ts.transpileModule(resourceMetadataSource, {
     compilerOptions: {
       module: ts.ModuleKind.ES2022,
@@ -467,12 +467,16 @@ test("uses one shared fallback for missing resource authors", async () => {
     },
   });
   const moduleUrl = `data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`;
-  const { formatResourceSource } = await import(moduleUrl);
+  const { formatResourceCreator, formatResourceSource } = await import(moduleUrl);
   assert.equal(formatResourceSource(undefined), "未知来源");
   assert.equal(formatResourceSource(null), "未知来源");
   assert.equal(formatResourceSource("   "), "未知来源");
   assert.equal(formatResourceSource(" Alice "), "Alice");
-  assert.match(pageSource, /specification: formatResourceSource\(session\.createdBy\)/);
+  assert.equal(formatResourceCreator(undefined), "未知创建者");
+  assert.equal(formatResourceCreator(null), "未知创建者");
+  assert.equal(formatResourceCreator("   "), "未知创建者");
+  assert.equal(formatResourceCreator(" Alice "), "Alice");
+  assert.match(pageSource, /specification: formatResourceCreator\(session\.createdBy\)/);
 });
 
 test("uses authoritative Sandbox ownership and region metadata for shared filters", () => {
