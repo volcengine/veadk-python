@@ -2,6 +2,7 @@ import {
   useDeferredValue,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type FormEvent,
   type SVGProps,
@@ -43,7 +44,10 @@ import {
 } from "./ResourceCollection";
 import { StudioConfirmDialog } from "./StudioConfirmDialog";
 import { TextShimmer } from "./text-shimmer/TextShimmer";
-import { EnvironmentCenter } from "./EnvironmentCenter";
+import {
+  EnvironmentCenter,
+  type EnvironmentClipboardImportRequest,
+} from "./EnvironmentCenter";
 import type { CloudProvider } from "../adk/cloudProvider";
 import "./WorkspaceCenter.css";
 
@@ -409,13 +413,58 @@ function WorkspaceList({ onEnvironment }: { onEnvironment: () => void }) {
 
 export function WorkspaceCenter({ cloudProvider }: { cloudProvider: CloudProvider }) {
   const [section, setSection] = useState<"workspaces" | "environments">("workspaces");
+  const [clipboardImport, setClipboardImport] = useState<EnvironmentClipboardImportRequest | null>(null);
+  const [clipboardReadError, setClipboardReadError] = useState("");
+  const clipboardRequestKeyRef = useRef(0);
+
+  const openEnvironments = () => {
+    clipboardRequestKeyRef.current += 1;
+    const key = clipboardRequestKeyRef.current;
+    setClipboardReadError("");
+
+    let clipboardRead: Promise<string> | null = null;
+    if (typeof navigator !== "undefined" && navigator.clipboard?.readText) {
+      try {
+        // Start while the tab click still has a user activation.
+        clipboardRead = navigator.clipboard.readText();
+      } catch {
+        setClipboardReadError("未能读取剪贴板。请允许剪贴板权限，或点击“导入环境”后手动粘贴分享码。");
+      }
+    } else {
+      setClipboardReadError("当前浏览器无法自动读取剪贴板；请点击“导入环境”后手动粘贴分享码。");
+    }
+
+    setSection("environments");
+    if (!clipboardRead) return;
+    void clipboardRead.then(async (text) => {
+      if (clipboardRequestKeyRef.current !== key) return;
+      if (text.trim()) {
+        setClipboardImport({ key, text });
+        return;
+      }
+      try {
+        const permission = await navigator.permissions?.query({ name: "clipboard-read" as PermissionName });
+        if (clipboardRequestKeyRef.current === key && permission?.state === "denied") {
+          setClipboardReadError("未能读取剪贴板。请允许剪贴板权限，或点击“导入环境”后手动粘贴分享码。");
+        }
+      } catch {
+        // Some browsers expose clipboard access without the Permissions API.
+      }
+    }).catch(() => {
+      if (clipboardRequestKeyRef.current !== key) return;
+      setClipboardReadError("未能读取剪贴板。请允许剪贴板权限，或点击“导入环境”后手动粘贴分享码。");
+    });
+  };
+
   if (section === "environments") {
     return (
       <EnvironmentCenter
         cloudProvider={cloudProvider}
         onWorkspace={() => setSection("workspaces")}
+        clipboardImport={clipboardImport}
+        clipboardReadError={clipboardReadError}
       />
     );
   }
-  return <WorkspaceList onEnvironment={() => setSection("environments")} />;
+  return <WorkspaceList onEnvironment={openEnvironments} />;
 }

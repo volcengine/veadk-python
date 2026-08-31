@@ -28,6 +28,17 @@ test("manages reusable environments inside workspaces", () => {
   assert.match(workspaceSource, /label: "环境"/);
 });
 
+test("reads environment share codes during the environment tab gesture", () => {
+  assert.match(
+    workspaceSource,
+    /clipboardRead = navigator\.clipboard\.readText\(\);[\s\S]*?setSection\("environments"\)/,
+  );
+  assert.match(workspaceSource, /clipboardImport=\{clipboardImport\}/);
+  assert.match(workspaceSource, /clipboardReadError=\{clipboardReadError\}/);
+  assert.match(workspaceSource, /请允许剪贴板权限/);
+  assert.match(workspaceSource, /permission\?\.state === "denied"/);
+});
+
 test("exposes typed workspace CRUD APIs", () => {
   assert.match(clientSource, /export interface StudioWorkspace/);
   assert.match(clientSource, /\/web\/workspaces/);

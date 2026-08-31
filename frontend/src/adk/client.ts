@@ -2128,6 +2128,7 @@ export interface EnvironmentBuildResource {
   registry?: string;
   namespace?: string;
   repository?: string;
+  region?: string;
   imageRepository?: string;
   consoleUrl: string;
 }
@@ -2152,6 +2153,7 @@ export interface EnvironmentBuildVersion {
   image: string;
   toolId: string;
   toolStatus: EnvironmentSandboxToolStatus;
+  sourceCommitSha: string;
   error: string;
   runId: string;
   currentStep: string;
@@ -2216,6 +2218,9 @@ export interface StudioEnvironment {
   optionIds: string[];
   selectedSkills: SelectedSkill[];
   dockerfile: string;
+  gitSource?: EnvironmentGitSource | null;
+  containerRepository?: EnvironmentContainerRepository | null;
+  imageSource?: EnvironmentImageSource | null;
   createdAt: string;
   updatedAt: string;
   latestVersion: EnvironmentBuildVersion | null;
@@ -2245,6 +2250,80 @@ export interface EnvironmentInput {
   optionIds: string[];
   selectedSkills: SelectedSkill[];
   dockerfile: string;
+  gitSource?: EnvironmentGitSource | null;
+  containerRepository?: EnvironmentContainerRepository | null;
+  imageSource?: EnvironmentImageSource | null;
+}
+
+export interface EnvironmentGitSource {
+  repositoryUrl: string;
+  ref?: string;
+  dockerfilePath: string;
+}
+
+export interface EnvironmentContainerRepository {
+  region: string;
+  registry: string;
+  namespace: string;
+  repository: string;
+}
+
+export interface EnvironmentImageSource extends EnvironmentContainerRepository {
+  reference: string;
+}
+
+export interface EnvironmentRepositoryInspection {
+  repositoryUrl: string;
+  ref: string;
+  commitSha: string;
+  dockerfiles: string[];
+}
+
+export interface EnvironmentShareCodeExport {
+  shareCode: string;
+  name: string;
+}
+
+export interface EnvironmentShareCodeInspection {
+  index: number;
+  status: "valid" | "invalid";
+  name: string;
+  error: string;
+}
+
+export interface EnvironmentShareCodeImportItem {
+  index: number;
+  status: "created" | "duplicate" | "failed";
+  name: string;
+  environment?: StudioEnvironment;
+  error: string;
+}
+
+export function parseEnvironmentShareCodes(value: string): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of value.split(/[,，\n\r]+/)) {
+    const code = item.trim();
+    if (!code || seen.has(code)) continue;
+    seen.add(code);
+    result.push(code);
+  }
+  return result;
+}
+
+export async function writeEnvironmentShareCode(
+  shareCode: string,
+  clipboard: Pick<Clipboard, "writeText"> | undefined =
+    typeof navigator === "undefined" ? undefined : navigator.clipboard,
+): Promise<void> {
+  if (!clipboard?.writeText) {
+    throw new Error("当前浏览器不支持写入剪贴板。");
+  }
+  try {
+    await clipboard.writeText(shareCode);
+  } catch {
+    throw new Error("无法写入剪贴板，请检查剪贴板权限。");
+  }
 }
 
 export interface EnvironmentResourcesResponse {
@@ -2367,6 +2446,7 @@ function environmentBuildVersion(value: unknown): EnvironmentBuildVersion | null
       : "",
     runId: typeof candidate.runId === "string" ? candidate.runId : "",
     currentStep: typeof candidate.currentStep === "string" ? candidate.currentStep : "",
+    sourceCommitSha: typeof candidate.sourceCommitSha === "string" ? candidate.sourceCommitSha : "",
     steps,
     progressError: typeof candidate.progressError === "string" ? candidate.progressError : "",
     logTail: typeof candidate.logTail === "string" ? candidate.logTail : "",
@@ -2411,6 +2491,51 @@ function environmentManifest(value: unknown): EnvironmentManifest {
   return candidate;
 }
 
+function environmentContainerRepository(
+  value: unknown,
+): EnvironmentContainerRepository | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!value || typeof value !== "object") {
+    throw new Error("环境镜像仓库响应格式无效");
+  }
+  const candidate = value as Partial<EnvironmentContainerRepository>;
+  if (
+    typeof candidate.region !== "string" ||
+    typeof candidate.registry !== "string" ||
+    typeof candidate.namespace !== "string" ||
+    typeof candidate.repository !== "string"
+  ) {
+    throw new Error("环境镜像仓库响应格式无效");
+  }
+  return candidate as EnvironmentContainerRepository;
+}
+
+function environmentGitSource(value: unknown): EnvironmentGitSource | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!value || typeof value !== "object") {
+    throw new Error("环境代码仓库响应格式无效");
+  }
+  const candidate = value as Partial<EnvironmentGitSource>;
+  if (
+    typeof candidate.repositoryUrl !== "string" ||
+    (candidate.ref !== undefined && typeof candidate.ref !== "string") ||
+    typeof candidate.dockerfilePath !== "string"
+  ) {
+    throw new Error("环境代码仓库响应格式无效");
+  }
+  return candidate as EnvironmentGitSource;
+}
+
+function environmentImageSource(value: unknown): EnvironmentImageSource | undefined {
+  const repository = environmentContainerRepository(value);
+  if (!repository) return undefined;
+  const candidate = value as Partial<EnvironmentImageSource>;
+  if (typeof candidate.reference !== "string") {
+    throw new Error("环境镜像来源响应格式无效");
+  }
+  return { ...repository, reference: candidate.reference };
+}
+
 function studioEnvironment(value: unknown): StudioEnvironment {
   if (!value || typeof value !== "object") {
     throw new Error("环境响应格式无效");
@@ -2439,6 +2564,9 @@ function studioEnvironment(value: unknown): StudioEnvironment {
     ...candidate,
     baseEnvironment: candidate.baseEnvironment === "aio-sandbox" ? "aio-sandbox" : "ubuntu",
     selectedSkills: candidate.selectedSkills ?? [],
+    gitSource: environmentGitSource(candidate.gitSource),
+    containerRepository: environmentContainerRepository(candidate.containerRepository),
+    imageSource: environmentImageSource(candidate.imageSource),
     latestVersion: environmentBuildVersion(candidate.latestVersion),
   };
 }
@@ -2531,6 +2659,148 @@ export async function listEnvironments(signal?: AbortSignal): Promise<StudioEnvi
   const payload = (await response.json()) as { items?: unknown };
   if (!Array.isArray(payload.items)) throw new Error("环境列表响应格式无效");
   return payload.items.map(studioEnvironment);
+}
+
+export async function inspectEnvironmentRepository(
+  input: { repositoryUrl: string; ref?: string },
+  signal?: AbortSignal,
+): Promise<EnvironmentRepositoryInspection> {
+  const response = await apiFetch("/web/environment-repositories/inspect", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, "探查代码仓库失败"));
+  }
+  const payload = (await response.json()) as Partial<EnvironmentRepositoryInspection>;
+  if (
+    typeof payload.repositoryUrl !== "string" ||
+    typeof payload.ref !== "string" ||
+    typeof payload.commitSha !== "string" ||
+    !Array.isArray(payload.dockerfiles) ||
+    !payload.dockerfiles.every((item) => typeof item === "string")
+  ) {
+    throw new Error("代码仓库探查响应格式无效");
+  }
+  return payload as EnvironmentRepositoryInspection;
+}
+
+export async function exportEnvironmentShareCode(
+  environmentId: string,
+  signal?: AbortSignal,
+): Promise<EnvironmentShareCodeExport> {
+  const response = await apiFetch(
+    `/web/environments/${encodeURIComponent(environmentId)}/share-code`,
+    { method: "POST", signal },
+  );
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, "导出环境分享码失败"));
+  }
+  const payload = (await response.json()) as Partial<EnvironmentShareCodeExport>;
+  if (typeof payload.shareCode !== "string" || typeof payload.name !== "string") {
+    throw new Error("环境分享码响应格式无效");
+  }
+  return payload as EnvironmentShareCodeExport;
+}
+
+export async function inspectEnvironmentShareCodes(
+  shareCodes: string[],
+  signal?: AbortSignal,
+): Promise<EnvironmentShareCodeInspection[]> {
+  const response = await apiFetch("/web/environment-share-codes/inspect", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ shareCodes }),
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, "检测环境分享码失败"));
+  }
+  const payload = (await response.json()) as { items?: unknown };
+  if (!Array.isArray(payload.items)) {
+    throw new Error("环境分享码检测响应格式无效");
+  }
+  return payload.items.map((value) => {
+    if (!value || typeof value !== "object") {
+      throw new Error("环境分享码检测响应格式无效");
+    }
+    const candidate = value as {
+      index?: unknown;
+      status?: unknown;
+      valid?: unknown;
+      name?: unknown;
+      error?: unknown;
+    };
+    const status = candidate.status === "valid" || candidate.valid === true
+      ? "valid"
+      : candidate.status === "invalid" || candidate.valid === false
+        ? "invalid"
+        : null;
+    if (
+      !Number.isInteger(candidate.index) ||
+      status === null ||
+      (candidate.name !== undefined && typeof candidate.name !== "string") ||
+      (candidate.error !== undefined && typeof candidate.error !== "string")
+    ) {
+      throw new Error("环境分享码检测响应格式无效");
+    }
+    return {
+      index: candidate.index as number,
+      status,
+      name: candidate.name ?? "",
+      error: candidate.error ?? "",
+    };
+  });
+}
+
+export async function importEnvironmentShareCodes(
+  shareCodes: string[],
+  signal?: AbortSignal,
+): Promise<EnvironmentShareCodeImportItem[]> {
+  const response = await apiFetch("/web/environment-share-codes/import", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ shareCodes }),
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, "导入环境分享码失败"));
+  }
+  const payload = (await response.json()) as { items?: unknown };
+  if (!Array.isArray(payload.items)) {
+    throw new Error("环境分享码导入响应格式无效");
+  }
+  return payload.items.map((value) => {
+    if (!value || typeof value !== "object") {
+      throw new Error("环境分享码导入响应格式无效");
+    }
+    const candidate = value as {
+      index?: unknown;
+      status?: unknown;
+      name?: unknown;
+      environment?: unknown;
+      error?: unknown;
+    };
+    if (
+      !Number.isInteger(candidate.index) ||
+      !(candidate.status === "created" || candidate.status === "duplicate" || candidate.status === "failed") ||
+      (candidate.name !== undefined && typeof candidate.name !== "string") ||
+      (candidate.error !== undefined && typeof candidate.error !== "string")
+    ) {
+      throw new Error("环境分享码导入响应格式无效");
+    }
+    return {
+      index: candidate.index as number,
+      status: candidate.status,
+      name: candidate.name ?? "",
+      environment: candidate.environment === undefined || candidate.environment === null
+        ? undefined
+        : studioEnvironment(candidate.environment),
+      error: candidate.error ?? "",
+    };
+  });
 }
 
 async function writeEnvironment(

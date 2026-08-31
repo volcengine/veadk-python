@@ -505,6 +505,49 @@ and npmmirror for Playwright browsers; BytePlus builds use the corresponding
 official sources. Cross-version Python combinations are compiled from pinned
 source releases instead of depending on GitHub-hosted binaries.
 
+除了自定义配置和上传 Dockerfile，环境还支持两种并列的镜像接入方式：
+
+1. **从公开 Git 仓库构建**：填写无需鉴权的 HTTPS Git 地址和可选的 Branch、Tag
+   或 Commit；Studio 通过 `POST /web/environment-repositories/inspect` 探查仓库中的
+   `Dockerfile`、`Dockerfile.*` 和 `*.Dockerfile`，用户确认其中一个文件后再创建
+   环境；没有匹配文件时不能继续。环境保存
+   `gitSource.repositoryUrl`、`gitSource.ref` 和
+   `gitSource.dockerfilePath`，CodePipeline 使用仓库根目录作为构建上下文，以选中的
+   Dockerfile 构建镜像，并在构建版本中记录实际 Commit SHA。首版不支持私有仓库、
+   SSH 地址或 Git 凭据。
+2. **绑定已有 CR 镜像**：适用于镜像已经由用户自己的 Git 流水线构建并推送到
+   Container Registry 的场景。用户先选择 Region，再依次选择 Registry 实例、
+   Namespace、Repository，最后填写 Tag 或 Digest；Studio 保存
+   `imageSource.region`、`imageSource.registry`、`imageSource.namespace`、
+   `imageSource.repository` 和 `imageSource.reference`，直接使用该镜像，不再启动
+   CodePipeline 构建。
+
+CR 资源层级为 `Registry 实例 / Namespace / Repository / Tag 或 Digest`。环境最终
+绑定的是可运行镜像，因此已有镜像必须精确到 Repository 和 Tag 或 Digest。对于 Git
+构建，`containerRepository` 只指定 CodePipeline 的推送目标，包含 `region`、
+`registry`、`namespace` 和 `repository`；每次构建产生的版本 Tag 仍由 Studio 记录在
+构建结果中。这两个字段含义不同：`containerRepository` 是构建输出位置，
+`imageSource` 是无需构建、直接作为环境使用的现有镜像。两种方式都通过 Region 分段
+选择器和服务端资源接口级联选择 CR；切换 Region 会清空已选的 Registry、Namespace
+和 Repository，避免跨 Region 组合无效资源。服务端使用所选 Region 校验 CR 资源，
+并把 Git 构建结果推送到该 Region 的目标 Repository。
+
+环境配置可以导出为 `akenv://v1/` 分享码，并在另一位 Studio 用户的环境列表中导入。
+分享码是自包含、无服务端分享记录的版本化数据：它包含环境名称、描述、系统、语言、
+组件、Dockerfile、Git/CR 来源和可移植的 Skill 配置；本地 Skill 文件会直接写入分享码，
+导入时再保存为接收者自己的 Skill 资产。环境 ID、所有者、创建/更新时间、构建版本、
+构建日志、运行记录及云凭据不会进入分享码。分享码本身可能包含 Dockerfile 和本地
+Skill 源码，应只发送给可信接收者。
+
+“导入环境”支持使用英文逗号、中文逗号或换行分隔多个分享码，自动忽略重复项，单次
+最多处理 20 个。Studio 会先检测并列出有效、无效项，再逐项导入，因此一个条目失败
+不会回滚已成功添加的环境。如果源环境存在可用版本，分享码会同时携带其镜像、
+Sandbox Tool 和版本级 Skill 快照，在同一云厂商的 Studio 中导入后可直接挂载；跨
+火山引擎与 BytePlus 导入时不会把该版本误标为可用。没有可用版本的自定义、Dockerfile
+和 Git 环境不会自动启动 CodePipeline；已有镜像环境会重新校验并绑定指定 CR 镜像。
+环境列表检测到剪贴板以 `akenv://` 开头时会提示导入；浏览器拒绝自动复制时，分享弹窗
+会保留完整分享码供用户手动复制。
+
 By default, Studio creates or reuses managed CodePipeline and Container Registry
 resources on the first environment build. With the account-stable default TOS
 bucket, Studio reuses the account's `agentkit-cli-<account-id>` CR instance and
