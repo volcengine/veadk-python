@@ -62,6 +62,7 @@ import {
   type UiConfig,
   type UiFeatures,
 } from "./adk/client";
+import type { RuntimeLogTarget } from "./adk/runtimeLogs";
 import {
   addTokenUsage,
   aggregateTokenUsage,
@@ -1330,6 +1331,9 @@ export default function App() {
   const [draftStudioToolIds, setDraftStudioToolIds] = useState<string[]>([]);
   const [studioToolIdsBySession, setStudioToolIdsBySession] = useState<
     Record<string, string[]>
+  >({});
+  const [runtimeLogTargetsBySession, setRuntimeLogTargetsBySession] = useState<
+    Record<string, RuntimeLogTarget>
   >({});
   const [agentInfo, setAgentInfo] = useState<AgentInfo | null>(null);
   const [agentInfoRefreshKey, setAgentInfoRefreshKey] = useState(0);
@@ -4898,6 +4902,12 @@ export default function App() {
         invocation: selectedInvocation,
         platformTools: currentRuntime ? platformTools : undefined,
         signal: ctrl.signal,
+        onRuntimeContext: (context) => {
+          setRuntimeLogTargetsBySession((current) => ({
+            ...current,
+            [`${appName}\n${sid}`]: context,
+          }));
+        },
       })) {
         if (ctrl.signal.aborted) break;
         const errMsg = event.error ?? event.errorMessage ?? event.error_message;
@@ -5088,6 +5098,12 @@ export default function App() {
         ],
         platformTools: currentRuntime ? selectedStudioToolIds : undefined,
         signal: ctrl.signal,
+        onRuntimeContext: (context) => {
+          setRuntimeLogTargetsBySession((current) => ({
+            ...current,
+            [`${appName}\n${sid}`]: context,
+          }));
+        },
       })) {
         if (ctrl.signal.aborted) break;
         const errMsg = event.error ?? event.errorMessage ?? event.error_message;
@@ -6386,6 +6402,9 @@ export default function App() {
               onSelectSandboxSession={(session) =>
                 openSandboxAgent(session, "new_chat_picker")
               }
+              runtimeLogTarget={currentRuntime
+                ? runtimeLogTargetsBySession[`${appName}\n${sessionId}`] ?? currentRuntime
+                : undefined}
               showModeSelector={false}
               onWorkspaceModeChange={(mode) => {
                 setNewChatWorkspaceMode(mode);
