@@ -5,7 +5,16 @@ import {
   type GitHubPullRequestFile,
 } from "../adk/githubIntegration";
 import {
+  defaultCloudRegion,
+  defaultModelName,
+  defaultModelApiBase,
+  type CloudProvider,
+} from "../adk/cloudProvider";
+import {
   baseBranchField,
+  cloudCredentialSecretLabels,
+  cloudCredentialSecretNames,
+  cloudProviderDisplayName,
   commonGitHubInput,
   initialAutomationValues,
   repositoryField,
@@ -24,7 +33,40 @@ function deliveryWorkflowPath(projectPath: string): string {
   return `.github/workflows/publish-agentkit-${slug || "root"}.yml`;
 }
 
-export function buildBasicTemplateFiles(projectName: string): Record<string, string> {
+const AGENTKIT_BASE_IMAGES: Record<CloudProvider, string> = {
+  volcengine:
+    "agentkit-prod-public-cn-beijing.cr.volces.com/base/py-simple:python3.12-bookworm-slim-latest",
+  byteplus:
+    "agentkit-prod-public-ap-southeast-1.cr.bytepluses.com/base/py-simple:python3.12-bookworm-slim-latest",
+};
+
+function buildEnvExample(cloudProvider: CloudProvider): string {
+  const secrets = cloudCredentialSecretNames(cloudProvider);
+  const providerName = cloudProviderDisplayName(cloudProvider);
+  return `# Local ${providerName} credentials. Never commit real values.
+${secrets.accessKey}=
+${secrets.secretKey}=
+# ${secrets.sessionToken}=
+${cloudProvider === "byteplus" ? "BYTEPLUS_REGION" : "VOLCENGINE_REGION"}=${defaultCloudRegion(cloudProvider)}
+CLOUD_PROVIDER=${cloudProvider}
+AGENTKIT_CLOUD_PROVIDER=${cloudProvider}
+
+# Optional model overrides.
+# MODEL_AGENT_PROVIDER=openai
+# MODEL_AGENT_NAME=${defaultModelName(cloudProvider)}
+# MODEL_AGENT_API_BASE=${defaultModelApiBase(cloudProvider)}
+# MODEL_AGENT_API_KEY=
+
+# Optional Feishu Channel credentials. Studio can create and bind these.
+FEISHU_APP_ID=
+FEISHU_APP_SECRET=
+`;
+}
+
+export function buildBasicTemplateFiles(
+  projectName: string,
+  cloudProvider: CloudProvider = "volcengine",
+): Record<string, string> {
   const files = {
     "app.py": `"""__PROJECT_NAME__ — a VeADK agent with the full Studio App Server."""
 
@@ -80,7 +122,7 @@ lark-channel-sdk==1.2.0
 lark-oapi==1.7.3
 starlette==0.52.1
 `,
-    Dockerfile: `FROM agentkit-prod-public-cn-beijing.cr.volces.com/base/py-simple:python3.12-bookworm-slim-latest
+    Dockerfile: `FROM ${AGENTKIT_BASE_IMAGES[cloudProvider]}
 
 ENV UV_SYSTEM_PYTHON=1 UV_COMPILE_BYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
@@ -113,21 +155,7 @@ and local short-term memory fallback.
 Pushes to the configured target branch are continuously published by the
 GitHub Actions workflow added with this project.
 `,
-    ".env.example": `# Local Volcengine credentials. Never commit real values.
-VOLCENGINE_ACCESS_KEY=
-VOLCENGINE_SECRET_KEY=
-# VOLCENGINE_REGION=cn-beijing
-
-# Optional model overrides.
-# MODEL_AGENT_PROVIDER=openai
-# MODEL_AGENT_NAME=doubao-seed-1-6-250615
-# MODEL_AGENT_API_BASE=https://ark.cn-beijing.volces.com/api/v3/
-# MODEL_AGENT_API_KEY=
-
-# Optional Feishu Channel credentials. Studio can create and bind these.
-FEISHU_APP_ID=
-FEISHU_APP_SECRET=
-`,
+    ".env.example": buildEnvExample(cloudProvider),
     ".gitignore": `__pycache__/
 *.pyc
 .venv/
@@ -177,20 +205,22 @@ export const templateProjectAutomation: GitHubAutomationDefinition = {
     runtimeNameField,
     runtimeIdField,
   ],
-  initialValues: initialAutomationValues({ projectPath: "agentkit-basic-agent" }),
+  initialValues: ({ cloudProvider }) => initialAutomationValues(
+    cloudProvider,
+    { projectPath: "agentkit-basic-agent" },
+  ),
   regionHelp: "必须与目标 Runtime 所在地域一致",
-  secrets: [
-    "VOLCENGINE_ACCESS_KEY、VOLCENGINE_SECRET_KEY（必填）",
-    "VOLCENGINE_SESSION_TOKEN（使用临时凭据时必填）",
-  ],
-  submit(values, signal) {
+  secrets: ({ cloudProvider }) => cloudCredentialSecretLabels(cloudProvider),
+  submit(values, context, signal) {
     const input = commonGitHubInput(values);
     const repository = normalizeGitHubRepository(input.repository);
     const projectPath = normalizeRepositoryPath(values.projectPath, "agentkit-basic-agent");
     const projectName = projectPath === "."
       ? repository.split("/").slice(-1)[0] || "agentkit-basic-agent"
       : projectPath.split("/").slice(-1)[0] || "agentkit-basic-agent";
-    const files: GitHubPullRequestFile[] = Object.entries(buildBasicTemplateFiles(projectName))
+    const files: GitHubPullRequestFile[] = Object.entries(
+      buildBasicTemplateFiles(projectName, context.cloudProvider),
+    )
       .map(([path, content]) => ({
         path: joinRepositoryPath(projectPath, path),
         content,
@@ -205,6 +235,7 @@ export const templateProjectAutomation: GitHubAutomationDefinition = {
         runtimeName: values.runtimeName.trim(),
         runtimeId: values.runtimeId.trim(),
         region: input.region,
+        cloudProvider: context.cloudProvider,
       }),
       commitMessage: "feat: add AgentKit Runtime delivery",
       mustBeNew: true,
@@ -216,7 +247,7 @@ export const templateProjectAutomation: GitHubAutomationDefinition = {
         files,
         branchPrefix: "feat/agentkit-basic-template",
         title: "feat: 导入 AgentKit basic 模板",
-        description: "导入带有 AgentKit Studio App Server 的 basic Agent 项目，并添加持续发布到 AgentKit Runtime 的工作流。合并前请配置 Volcengine Secrets。",
+        description: `导入带有 AgentKit Studio App Server 的 basic Agent 项目，并添加持续发布到 AgentKit Runtime 的工作流。合并前请配置 ${cloudProviderDisplayName(context.cloudProvider)} Secrets。`,
       },
       signal,
     );
