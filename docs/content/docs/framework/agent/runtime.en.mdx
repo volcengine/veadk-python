@@ -63,6 +63,31 @@ agent = Agent(
 
 Codex-native lifecycle notifications and ADK Function/MCP tool calls are converted into ADK Events. Runtime logs use stable `codex_*` event names and attribution fields such as `invocation_id`, `call_id`, `tool`, `status`, and `duration_ms`. Tool arguments, tool results, API tokens, credentials, and backend addresses are not logged. Token usage is exposed through `codex_event_type=token_usage` events and the corresponding log entry.
 
+## Choose where each tool runs
+
+`RuntimeProvider` leaves the Agent's model reasoning loop unchanged and only decides where individual tool calls execute. `DispatchRuntimeProvider` can send selected tools to a remote runtime while falling back to their original ADK implementation for all other tools:
+
+```python title="agent.py"
+from veadk import Agent, Runner
+from veadk.runtime import DispatchRuntimeProvider
+
+async def dispatch_task(tool_call):
+    return await remote_client.dispatch(
+        tool_call.name,
+        tool_call.arguments,
+        dispatch_id=tool_call.id,
+    )
+
+agent = Agent(name="assistant", tools=[bash, read_file])
+runtime_provider = DispatchRuntimeProvider(
+    dispatch_task,
+    dispatchable_tools=None,  # dispatch every non-MCP tool
+)
+runner = Runner(agent=agent, plugins=[runtime_provider])
+```
+
+In this example, every non-MCP tool only goes through `dispatch_task` and its local function is not invoked a second time. MCP tools retain their original ADK implementation. Pass a set of names to dispatch only those non-MCP tools. The dispatcher may be synchronous or asynchronous.
+
 ## Request processing
 
 Insert shared, cross-cutting processing into every run — auth, logging, retries, performance monitoring — without touching business logic. Pass a processor to `run_processor`, for example to enforce login via identity auth:
