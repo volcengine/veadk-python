@@ -3,8 +3,12 @@ import {
   normalizeRepositoryPath,
   type GitHubAutomationRegion,
 } from "../adk/githubIntegration";
+import type { CloudProvider } from "../adk/cloudProvider";
 import {
   baseBranchField,
+  cloudCredentialSecretLabels,
+  cloudCredentialSecretNames,
+  cloudProviderDisplayName,
   commonGitHubInput,
   initialAutomationValues,
   repositoryField,
@@ -20,9 +24,11 @@ interface RuntimeDeliveryWorkflowInput {
   runtimeName: string;
   runtimeId: string;
   region: GitHubAutomationRegion;
+  cloudProvider?: CloudProvider;
 }
 
 const RUNTIME_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const BYTEPLUS_VIKING_MEMORY_REGION = "cn-hongkong";
 
 export function validateRuntimeSettings(
   input: Pick<RuntimeDeliveryWorkflowInput, "runtimeName" | "runtimeId">,
@@ -38,6 +44,19 @@ export function validateRuntimeSettings(
 
 export function buildRuntimeDeliveryWorkflow(input: RuntimeDeliveryWorkflowInput): string {
   validateRuntimeSettings(input);
+  const cloudProvider = input.cloudProvider ?? "volcengine";
+  const secrets = cloudCredentialSecretNames(cloudProvider);
+  const byteplusEnv = cloudProvider === "byteplus"
+    ? `
+      VOLCENGINE_ACCESS_KEY: \${{ secrets.${secrets.accessKey} }}
+      VOLCENGINE_SECRET_KEY: \${{ secrets.${secrets.secretKey} }}
+      VOLCENGINE_SESSION_TOKEN: \${{ secrets.${secrets.sessionToken} }}
+      BYTEPLUS_REGION: ${JSON.stringify(input.region)}`
+    : "";
+  const byteplusRuntimeEnv = cloudProvider === "byteplus"
+    ? `
+                          "DATABASE_VIKING_REGION": ${JSON.stringify(BYTEPLUS_VIKING_MEMORY_REGION)},`
+    : "";
   const template = `name: Publish to AgentKit Runtime
 
 on:
@@ -55,15 +74,17 @@ concurrency:
 
 jobs:
   publish:
+    if: \${{ github.event_name != 'push' || !contains(github.event.head_commit.message, '[skip runtime]') }}
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: __PROJECT_PATH__
     env:
-      AGENTKIT_CLOUD_PROVIDER: volcengine
-      VOLC_ACCESSKEY: \${{ secrets.VOLCENGINE_ACCESS_KEY }}
-      VOLC_SECRETKEY: \${{ secrets.VOLCENGINE_SECRET_KEY }}
-      VOLC_SESSIONTOKEN: \${{ secrets.VOLCENGINE_SESSION_TOKEN }}
+      AGENTKIT_CLOUD_PROVIDER: __CLOUD_PROVIDER__
+      CLOUD_PROVIDER: __CLOUD_PROVIDER__
+      __ACCESS_KEY_SECRET__: \${{ secrets.__ACCESS_KEY_SECRET__ }}
+      __SECRET_KEY_SECRET__: \${{ secrets.__SECRET_KEY_SECRET__ }}
+      __SESSION_TOKEN_SECRET__: \${{ secrets.__SESSION_TOKEN_SECRET__ }}__BYTEPLUS_ENV__
       AGENTKIT_RUNTIME_NAME: __RUNTIME_NAME__
       AGENTKIT_RUNTIME_ID: __RUNTIME_ID__
       AGENTKIT_REGION: __REGION__
@@ -90,10 +111,15 @@ jobs:
           from agentkit.toolkit import sdk
           from agentkit.toolkit.models import PreflightMode
 
+          credential_prefix = (
+              "BYTEPLUS"
+              if os.environ["AGENTKIT_CLOUD_PROVIDER"] == "byteplus"
+              else "VOLCENGINE"
+          )
           runtime_client = AgentkitRuntimeClient(
-              access_key=os.environ["VOLC_ACCESSKEY"],
-              secret_key=os.environ["VOLC_SECRETKEY"],
-              session_token=os.environ.get("VOLC_SESSIONTOKEN", ""),
+              access_key=os.environ[f"{credential_prefix}_ACCESS_KEY"],
+              secret_key=os.environ[f"{credential_prefix}_SECRET_KEY"],
+              session_token=os.environ.get(f"{credential_prefix}_SESSION_TOKEN", ""),
               region=os.environ["AGENTKIT_REGION"],
           )
           runtime = runtime_client.get_runtime(
@@ -122,6 +148,10 @@ jobs:
                       "runtime_name": runtime_name,
                       "runtime_role_name": runtime_role_name,
                       "python_version": "3.12",
+                      "runtime_envs": {
+                          "CLOUD_PROVIDER": os.environ["CLOUD_PROVIDER"],
+                          "AGENTKIT_CLOUD_PROVIDER": os.environ["AGENTKIT_CLOUD_PROVIDER"],__BYTEPLUS_RUNTIME_ENV__
+                      },
                   }
               },
           }
@@ -141,6 +171,12 @@ jobs:
     __RUNTIME_NAME__: JSON.stringify(input.runtimeName),
     __RUNTIME_ID__: JSON.stringify(input.runtimeId),
     __REGION__: JSON.stringify(input.region),
+    __CLOUD_PROVIDER__: JSON.stringify(cloudProvider),
+    __ACCESS_KEY_SECRET__: secrets.accessKey,
+    __SECRET_KEY_SECRET__: secrets.secretKey,
+    __SESSION_TOKEN_SECRET__: secrets.sessionToken,
+    __BYTEPLUS_ENV__: byteplusEnv,
+    __BYTEPLUS_RUNTIME_ENV__: byteplusRuntimeEnv,
     __CONCURRENCY_GROUP__: JSON.stringify(`agentkit-runtime-${input.runtimeId}`),
   };
   return Object.entries(replacements).reduce(
@@ -173,15 +209,13 @@ export const runtimeDeliveryAutomation: GitHubAutomationDefinition = {
     runtimeNameField,
     runtimeIdField,
   ],
-  initialValues: initialAutomationValues(),
+  initialValues: ({ cloudProvider }) => initialAutomationValues(cloudProvider),
   regionHelp: "必须与目标 Runtime 所在地域一致",
-  secrets: [
-    "VOLCENGINE_ACCESS_KEY、VOLCENGINE_SECRET_KEY（必填）",
-    "VOLCENGINE_SESSION_TOKEN（使用临时凭据时必填）",
-  ],
-  submit(values, signal) {
+  secrets: ({ cloudProvider }) => cloudCredentialSecretLabels(cloudProvider),
+  submit(values, context, signal) {
     const input = commonGitHubInput(values);
     const projectPath = normalizeRepositoryPath(values.projectPath, ".");
+    const providerName = cloudProviderDisplayName(context.cloudProvider);
     return createGitHubPullRequest(
       {
         ...input,
@@ -194,13 +228,14 @@ export const runtimeDeliveryAutomation: GitHubAutomationDefinition = {
               runtimeName: values.runtimeName.trim(),
               runtimeId: values.runtimeId.trim(),
               region: input.region,
+              cloudProvider: context.cloudProvider,
             }),
             commitMessage: "feat: publish Agent to AgentKit Runtime",
           },
         ],
         branchPrefix: "feat/agentkit-release",
         title: "feat: 持续发布到 AgentKit Runtime",
-        description: "新增 GitHub Actions 工作流，在目标分支更新时持续发布到 AgentKit Runtime。合并前请配置工作流所需的 Volcengine Secrets。",
+        description: `新增 GitHub Actions 工作流，在目标分支更新时持续发布到 AgentKit Runtime。合并前请配置工作流所需的 ${providerName} Secrets。`,
       },
       signal,
     );

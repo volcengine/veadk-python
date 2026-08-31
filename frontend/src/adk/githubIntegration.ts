@@ -1,4 +1,6 @@
-export type GitHubAutomationRegion = "cn-beijing" | "cn-shanghai";
+import type { CloudRegion } from "./cloudProvider";
+
+export type GitHubAutomationRegion = CloudRegion;
 
 export interface GitHubPullRequestResult {
   number: number;

@@ -2,8 +2,11 @@ import {
   createGitHubPullRequest,
   type GitHubAutomationRegion,
 } from "../adk/githubIntegration";
+import type { CloudProvider } from "../adk/cloudProvider";
 import {
   baseBranchField,
+  cloudCredentialSecretLabels,
+  cloudCredentialSecretNames,
   commonGitHubInput,
   initialAutomationValues,
   repositoryField,
@@ -15,6 +18,7 @@ interface PullRequestReviewWorkflowInput {
   modelName: string;
   modelBaseUrl: string;
   region: GitHubAutomationRegion;
+  cloudProvider?: CloudProvider;
 }
 
 const SANDBOX_TOOL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -50,6 +54,17 @@ export function validatePullRequestReviewSettings(
 
 export function buildPullRequestReviewWorkflow(input: PullRequestReviewWorkflowInput): string {
   validatePullRequestReviewSettings(input);
+  const cloudProvider = input.cloudProvider ?? "volcengine";
+  const secrets = cloudCredentialSecretNames(cloudProvider);
+  const byteplusCompatibilityEnv = cloudProvider === "byteplus"
+    ? `
+      VOLCENGINE_ACCESS_KEY: \${{ secrets.${secrets.accessKey} }}
+      VOLCENGINE_SECRET_KEY: \${{ secrets.${secrets.secretKey} }}
+      VOLCENGINE_SESSION_TOKEN: \${{ secrets.${secrets.sessionToken} }}`
+    : "";
+  const providerRegionEnv = cloudProvider === "byteplus"
+    ? `      BYTEPLUS_REGION: ${JSON.stringify(input.region)}`
+    : `      VOLCENGINE_REGION: ${JSON.stringify(input.region)}`;
   const template = String.raw`name: PR Automated Review
 
 "on":
@@ -72,10 +87,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      VOLCENGINE_ACCESS_KEY: __GH__ secrets.VOLCENGINE_ACCESS_KEY }}
-      VOLCENGINE_SECRET_KEY: __GH__ secrets.VOLCENGINE_SECRET_KEY }}
-      VOLCENGINE_SESSION_TOKEN: __GH__ secrets.VOLCENGINE_SESSION_TOKEN }}
-      VOLCENGINE_REGION: __REGION__
+      AGENTKIT_CLOUD_PROVIDER: __CLOUD_PROVIDER__
+      CLOUD_PROVIDER: __CLOUD_PROVIDER__
+      __ACCESS_KEY_SECRET__: __GH__ secrets.__ACCESS_KEY_SECRET__ }}
+      __SECRET_KEY_SECRET__: __GH__ secrets.__SECRET_KEY_SECRET__ }}
+      __SESSION_TOKEN_SECRET__: __GH__ secrets.__SESSION_TOKEN_SECRET__ }}__BYTEPLUS_COMPATIBILITY_ENV__
+__PROVIDER_REGION_ENV__
+      AGENTKIT_REGION: __REGION__
       AGENTKIT_SANDBOX_TOOL_ID: __SANDBOX_TOOL_ID__
       CODEX_MODEL_NAME: __MODEL_NAME__
       CODEX_MODEL_BASE_URL: __MODEL_BASE_URL__
@@ -138,6 +156,12 @@ jobs:
   const replacements: Record<string, string> = {
     "__GH__": "${{",
     __REGION__: JSON.stringify(input.region),
+    __CLOUD_PROVIDER__: JSON.stringify(cloudProvider),
+    __ACCESS_KEY_SECRET__: secrets.accessKey,
+    __SECRET_KEY_SECRET__: secrets.secretKey,
+    __SESSION_TOKEN_SECRET__: secrets.sessionToken,
+    __BYTEPLUS_COMPATIBILITY_ENV__: byteplusCompatibilityEnv,
+    __PROVIDER_REGION_ENV__: providerRegionEnv,
     __SANDBOX_TOOL_ID__: JSON.stringify(input.sandboxToolId),
     __MODEL_NAME__: JSON.stringify(input.modelName),
     __MODEL_BASE_URL__: JSON.stringify(input.modelBaseUrl),
@@ -172,26 +196,30 @@ export const pullRequestReviewAutomation: GitHubAutomationDefinition = {
     {
       name: "modelName",
       label: "评审模型",
-      placeholder: "doubao-seed-code-preview",
+      placeholder: "review-model",
       help: "注入 Sandbox 的代码评审模型名称",
       required: true,
     },
     {
       name: "modelBaseUrl",
       label: "模型 API 地址",
-      placeholder: "https://ark.cn-beijing.volces.com/api/coding/v3",
+      placeholder: "https://ark.example.com/api/v3",
       help: "必须使用 OpenAI 兼容的 HTTPS 地址",
       required: true,
     },
   ],
-  initialValues: initialAutomationValues(),
+  initialValues: ({ cloudProvider }) => initialAutomationValues(cloudProvider),
   regionHelp: "必须与 Sandbox Tool 所在地域一致",
-  secrets: [
-    "VOLCENGINE_ACCESS_KEY、VOLCENGINE_SECRET_KEY（必填）",
-    "CODEX_MODEL_API_KEY（必填）",
-    "VOLCENGINE_SESSION_TOKEN（使用临时凭据时必填）",
-  ],
-  submit(values, signal) {
+  secrets: ({ cloudProvider }) => {
+    const [requiredCredentials, optionalSessionToken] =
+      cloudCredentialSecretLabels(cloudProvider);
+    return [
+      requiredCredentials,
+      "CODEX_MODEL_API_KEY（必填）",
+      optionalSessionToken,
+    ];
+  },
+  submit(values, context, signal) {
     const input = commonGitHubInput(values);
     return createGitHubPullRequest(
       {
@@ -204,6 +232,7 @@ export const pullRequestReviewAutomation: GitHubAutomationDefinition = {
               modelName: values.modelName.trim(),
               modelBaseUrl: values.modelBaseUrl.trim(),
               region: input.region,
+              cloudProvider: context.cloudProvider,
             }),
             commitMessage: "chore: configure PR automated review",
           },

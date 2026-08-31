@@ -6522,6 +6522,7 @@ export default function App() {
             ) : applicationsView && applicationsView !== "catalog" ? (
               <GitHubIntegration
                 automation={applicationsView}
+                cloudProvider={cloudProvider}
                 onBack={() => setApplicationsView("catalog")}
               />
             ) : applicationsView === "catalog" ? (

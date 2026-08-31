@@ -168,6 +168,8 @@ test("GitHub detail keeps credentials ephemeral and exposes accessible submissio
   assert.match(githubSource, /personal-access-tokens\/new/);
   assert.match(githubSource, /required \? "必填" : "可选"/);
   assert.match(githubSource, /definition\.fields\.map\(field\)/);
+  assert.match(githubSource, /cloudRegionOptions\(cloudProvider\)/);
+  assert.match(githubSource, /definition\.secrets\(\{ cloudProvider \}\)/);
   assert.doesNotMatch(githubSource, /automation === "review"|automation === "template"/);
   assert.match(templateSource, /normalizeRepositoryPath\(values\.projectPath, "agentkit-basic-agent"\)/);
   assert.match(reviewSource, /Sandbox Tool ID/);
@@ -175,7 +177,8 @@ test("GitHub detail keeps credentials ephemeral and exposes accessible submissio
   assert.match(githubSource, /className="pp-region-trigger"/);
   assert.match(githubSource, /role="listbox" aria-label="地域"/);
   assert.doesNotMatch(githubSource, /<select/);
-  assert.match(templateSource, /VOLCENGINE_ACCESS_KEY、VOLCENGINE_SECRET_KEY（必填）/);
+  assert.match(appSource, /<GitHubIntegration[\s\S]*?cloudProvider=\{cloudProvider\}/);
+  assert.match(templateSource, /cloudCredentialSecretLabels\(cloudProvider\)/);
   assert.doesNotMatch(appSource, /applicationsView !== "github" \? <Sidebar/);
   assert.match(
     appSource,
