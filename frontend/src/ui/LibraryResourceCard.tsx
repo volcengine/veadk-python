@@ -32,6 +32,7 @@ export interface LibraryResourceCardProps {
   metadata: readonly LibraryResourceCardMetadata[];
   detailAction: LibraryResourceCardAction;
   action: LibraryResourceCardAction;
+  auxiliaryAction?: Omit<LibraryResourceCardAction, "icon"> & { icon: ReactNode };
 }
 
 export function LibraryResourceCard({
@@ -42,6 +43,7 @@ export function LibraryResourceCard({
   metadata,
   detailAction,
   action,
+  auxiliaryAction,
 }: LibraryResourceCardProps) {
   return (
     <ResourceCard
@@ -59,13 +61,27 @@ export function LibraryResourceCard({
         />
       )}
       actions={(
-        <ResourceCardRevealAction
-          label={`${action.label} ${title}`}
-          icon={action.icon}
-          disabled={action.disabled}
-          title={action.title}
-          onClick={action.onClick}
-        />
+        <>
+          {auxiliaryAction ? (
+            <ResourceCardRevealAction
+              className="library-resource-card__auxiliary-action"
+              label={`${auxiliaryAction.label} ${title}`}
+              tone="secondary"
+              disabled={auxiliaryAction.disabled}
+              title={auxiliaryAction.title ?? auxiliaryAction.label}
+              onClick={auxiliaryAction.onClick}
+            >
+              {auxiliaryAction.icon}
+            </ResourceCardRevealAction>
+          ) : null}
+          <ResourceCardRevealAction
+            label={`${action.label} ${title}`}
+            icon={action.icon}
+            disabled={action.disabled}
+            title={action.title}
+            onClick={action.onClick}
+          />
+        </>
       )}
     >
       <ResourceCardHeader

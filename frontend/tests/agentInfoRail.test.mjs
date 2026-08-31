@@ -185,9 +185,9 @@ test("mixes selected Studio tools into the existing tool list", () => {
   assert.match(railSource, /const selectedStudioTools = studioTools/);
   assert.match(railSource, /selectedIds\.has\(tool\.id\)/);
   assert.match(railSource, /tool\.custom && <span className="topo-custom-badge">Studio Tool<\/span>/);
-  assert.match(railSource, /tool\.custom && \([\s\S]*?topo-remove-capability/);
+  assert.match(railSource, /tool\.custom && tool\.removable && \([\s\S]*?topo-remove-capability/);
   assert.doesNotMatch(railSource, /skill\.custom/);
-  assert.match(appSource, /studioTools=\{studioToolCapabilities\?\.tools \?\? \[\]\}/);
+  assert.match(appSource, /studioTools=\{visibleStudioTools\}/);
   assert.match(appSource, /selectedStudioToolIds=\{selectedStudioToolIds\}/);
   assert.doesNotMatch(appSource, /SessionCapabilities|sessionCapabilities/);
 });

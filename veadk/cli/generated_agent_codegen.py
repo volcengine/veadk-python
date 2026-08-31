@@ -78,7 +78,9 @@ _GITHUB_CLI_SHA256 = {
 
 _DYNAMIC_AGENT_DELEGATION_RULES = """动态子智能体协作规则：
 - 对于问候、身份介绍、能力说明或可以直接完成的简单任务，直接回答，不要创建子智能体。
-- 对于需要专业技能、知识库、工具调用、资料检索或临时 Python 工具的复杂任务，通常必须先调用 collect_resources。根据用户任务提炼 2 到 5 个简短检索关键词，通过 skill_hub_keywords 传入。
+- 只有用户明确要求创建、组建或委派新的子智能体时，才进入 collect_resources → create_agents 流程。不得仅因为任务复杂、需要专业技能、工具调用、资料检索或临时 Python 工具就创建子智能体；没有明确创建意图时，直接完成任务或使用当前已有工具。
+- 已挂载的执行环境优先于创建子智能体，也优先于当前智能体的知识库和 Skill 流程。对每个实质性任务，先列出环境，再主动根据环境名称、描述和能力与用户任务做语义匹配；不得先调用知识库、Skill 或其他非环境工具。用户不需要点名环境；明确点名某个已挂载环境时，必须精确选择该环境。未点名时，按用户要求的交付物和动作选择唯一主环境，并把环境描述中的“不用于评审”“不用于实现”等负向范围视为排除条件：需求、产品、架构或 ADR 设计匹配 authoring/design，评审或验证匹配 review，实现、修复或测试匹配 engineering。只要存在匹配环境，就先在该环境中执行，再按需调用其他工具；没有匹配环境时才由当前智能体直接处理。仅当用户明确要求创建或委派新的子智能体时，才允许改走动态子智能体流程。
+- 进入动态子智能体流程后，通常必须先调用 collect_resources。根据用户任务提炼 2 到 5 个简短检索关键词，通过 skill_hub_keywords 传入。
 - 如果用户明确禁止联网、知识库或任何外部资源，跳过 collect_resources，直接调用 create_agents，传入 collection_id=""，并确保每个 LLM 节点的 resources=[]。不得发起 Skill Hub 关键词检索或其他资源源调用；子智能体仍使用自身模型能力完成当前任务。
 - collect_resources 返回的是候选资源，不会自动挂载。只创建完成任务所需的最少数量子智能体，并把实际需要的 Skill、知识库和内置工具完整 ref 显式写入对应 LLM 节点的 resources。存在相关 Skill 时至少绑定一个；确实没有匹配 Skill 时才允许不绑定 Skill。
 - 每次 collect_resources 后只调用一次 create_agents，并把本次任务需要的所有子智能体放在同一个 agents 列表中。create_agents 返回 completed 或已经设置 handoff_to 后，严禁再次调用 create_agents；任务已经交给目标子智能体继续执行。
@@ -1277,7 +1279,11 @@ from veadk.tools.builtin_tools.create_agent.resource_store import (
 
 _CREATE_AGENTS_DESCRIPTION = (
     "Create one or more sub-agents and transfer the current task to the agent "
-    "named by handoff_to. Normally call collect_resources first, use its "
+    "named by handoff_to. Only use this tool when the user explicitly asks to "
+    "create, add, assemble, or delegate to a new agent or sub-agent. Task "
+    "complexity alone is not authorization. When a mounted execution "
+    "environment can complete the request, use the environment tools instead. "
+    "Normally call collect_resources first, use its "
     "collection_id, and select only resource refs returned by that call. If the "
     "user explicitly prohibits network, knowledge-base, and external-resource "
     "access, skip collection, pass an empty collection_id, and leave every "

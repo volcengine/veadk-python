@@ -35,6 +35,8 @@ import {
   getRuntimeStudioToolCapabilities,
   getRuntimes,
   listApps,
+  listEnvironments,
+  listWorkspaces,
   listModelOptions,
   listSessions,
   RUN_SSE_INCOMPLETE_RESPONSE_ERROR,
@@ -58,7 +60,10 @@ import {
   type MessageFeedbackRating,
   type SiteBranding,
   type RuntimeStudioToolCapabilities,
+  type SessionEnvironmentMountSelection,
   type StudioAccess,
+  type StudioEnvironment,
+  type StudioWorkspace,
   type UiConfig,
   type UiFeatures,
 } from "./adk/client";
@@ -383,6 +388,11 @@ const AUTO_EVALUATION_RETRY_POLL_MS = 5_000;
 const AUTO_EVALUATION_MIN_PENDING_POLL_MS = 500;
 const EMPTY_STRING_SET: Set<string> = new Set<string>();
 const EMPTY_STRING_ARR: string[] = [];
+const ENVIRONMENT_STUDIO_TOOL_IDS = [
+  "list_envs",
+  "get_env_manifest",
+  "execute_in_sandbox",
+] as const;
 
 function emptyInvocation(): FrontendInvocation {
   return { skills: [] };
@@ -1330,6 +1340,16 @@ export default function App() {
   } | null>(null);
   const [draftStudioToolIds, setDraftStudioToolIds] = useState<string[]>([]);
   const [studioToolIdsBySession, setStudioToolIdsBySession] = useState<
+    Record<string, string[]>
+  >({});
+  const [sessionEnvironments, setSessionEnvironments] = useState<StudioEnvironment[]>([]);
+  const [sessionWorkspaces, setSessionWorkspaces] = useState<StudioWorkspace[]>([]);
+  const [sessionEnvironmentsLoading, setSessionEnvironmentsLoading] = useState(false);
+  const [sessionEnvironmentsError, setSessionEnvironmentsError] = useState("");
+  const [environmentMountsBySession, setEnvironmentMountsBySession] = useState<
+    Record<string, SessionEnvironmentMountSelection[]>
+  >({});
+  const [environmentWorkspaceIdsBySession, setEnvironmentWorkspaceIdsBySession] = useState<
     Record<string, string[]>
   >({});
   const [runtimeLogTargetsBySession, setRuntimeLogTargetsBySession] = useState<
@@ -4757,6 +4777,14 @@ export default function App() {
     setError("");
     const createsSession = !sessionId;
     let platformTools = [...(selectedPlatformTools ?? selectedStudioToolIds)];
+    const environmentMounts = createsSession
+      ? []
+      : environmentMountsBySession[
+          studioToolSelectionKey(appName, userId, sessionId)
+        ] ?? [];
+    if (environmentMounts.length > 0 && currentRuntime) {
+      platformTools = [...new Set([...platformTools, ...ENVIRONMENT_STUDIO_TOOL_IDS])];
+    }
     const sessionState = createsSession ? "new" : "existing";
     const trackRuntimeMessage = Boolean(currentRuntime);
     const messageOperation = currentRuntime
@@ -4901,6 +4929,9 @@ export default function App() {
         attachments: atts,
         invocation: selectedInvocation,
         platformTools: currentRuntime ? platformTools : undefined,
+        environmentMounts: currentRuntime && environmentMounts.length > 0
+          ? environmentMounts
+          : undefined,
         signal: ctrl.signal,
         onRuntimeContext: (context) => {
           setRuntimeLogTargetsBySession((current) => ({
@@ -5079,6 +5110,12 @@ export default function App() {
     setStreaming(sid, true);
     startStreamPresentation(sid);
     let streamFailed = false;
+    const environmentMounts = environmentMountsBySession[
+      studioToolSelectionKey(appName, userId, sid)
+    ] ?? [];
+    const resumedPlatformTools = environmentMounts.length > 0
+      ? [...new Set([...selectedStudioToolIds, ...ENVIRONMENT_STUDIO_TOOL_IDS])]
+      : selectedStudioToolIds;
     try {
       let acc = emptyAcc();
       let currentStreamAuthor = lastTurn?.meta?.author ?? "";
@@ -5096,7 +5133,10 @@ export default function App() {
         functionResponses: [
           { id: block.callId, name: "adk_request_credential", response },
         ],
-        platformTools: currentRuntime ? selectedStudioToolIds : undefined,
+        platformTools: currentRuntime ? resumedPlatformTools : undefined,
+        environmentMounts: currentRuntime && environmentMounts.length > 0
+          ? environmentMounts
+          : undefined,
         signal: ctrl.signal,
         onRuntimeContext: (context) => {
           setRuntimeLogTargetsBySession((current) => ({
@@ -5253,6 +5293,56 @@ export default function App() {
     studioToolRuntime?.runtimeId,
   ]);
 
+  useEffect(() => {
+    const controller = new AbortController();
+    setSessionEnvironments([]);
+    setSessionWorkspaces([]);
+    setSessionEnvironmentsError("");
+    if (
+      authStatus !== "authenticated" ||
+      !access ||
+      myAgents ||
+      agentDetailTarget ||
+      !studioToolRuntime
+    ) {
+      setSessionEnvironmentsLoading(false);
+      return () => controller.abort();
+    }
+    setSessionEnvironmentsLoading(true);
+    void Promise.all([
+      listEnvironments(controller.signal),
+      listWorkspaces(controller.signal),
+    ])
+      .then(([items, workspaces]) => {
+        if (controller.signal.aborted) return;
+        setSessionEnvironments(items.filter((environment) =>
+          environment.baseEnvironment === "aio-sandbox" &&
+          environment.latestVersion?.status === "available" &&
+          environment.latestVersion.toolStatus === "ready" &&
+          Boolean(environment.latestVersion.toolId)
+        ));
+        setSessionWorkspaces(workspaces);
+      })
+      .catch((cause) => {
+        if (controller.signal.aborted) return;
+        setSessionEnvironmentsError(
+          cause instanceof Error ? cause.message : "读取环境失败",
+        );
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setSessionEnvironmentsLoading(false);
+      });
+    return () => controller.abort();
+  }, [
+    access,
+    agentDetailTarget,
+    authStatus,
+    environmentView,
+    myAgents,
+    studioToolRuntime?.region,
+    studioToolRuntime?.runtimeId,
+  ]);
+
   if (authError) {
     return (
       <div className="boot boot-error">
@@ -5322,16 +5412,37 @@ export default function App() {
   const storedStudioToolIds = sessionId
     ? (studioToolIdsBySession[activeStudioToolSelectionKey] ?? [])
     : draftStudioToolIds;
+  const allStudioToolIds = new Set(
+    studioToolCapabilities?.tools.map((tool) => tool.id) ?? [],
+  );
   const availableStudioToolIds = new Set(
-    studioToolCapabilities?.tools
-      .map((tool) => tool.id)
-      .filter((toolId) => !agentInfo?.tools.includes(toolId)) ?? [],
+    [...allStudioToolIds].filter((toolId) => !agentInfo?.tools.includes(toolId)),
   );
-  const selectedStudioToolIds = storedStudioToolIds.filter((toolId) =>
-    availableStudioToolIds.has(toolId),
+  const selectedEnvironmentMounts = sessionId
+    ? environmentMountsBySession[activeStudioToolSelectionKey] ?? []
+    : [];
+  const selectedEnvironmentWorkspaceIds = sessionId
+    ? environmentWorkspaceIdsBySession[activeStudioToolSelectionKey] ?? []
+    : [];
+  const canMountSessionEnvironment = ENVIRONMENT_STUDIO_TOOL_IDS.every((toolId) =>
+    allStudioToolIds.has(toolId)
   );
+  const selectedStudioToolIds = [...new Set([
+    ...storedStudioToolIds.filter((toolId) => availableStudioToolIds.has(toolId)),
+    ...(selectedEnvironmentMounts.length > 0 && canMountSessionEnvironment
+      ? [...ENVIRONMENT_STUDIO_TOOL_IDS]
+      : []),
+  ])];
+  const visibleStudioTools = studioToolCapabilities?.tools.filter((tool) =>
+    !ENVIRONMENT_STUDIO_TOOL_IDS.includes(
+      tool.id as (typeof ENVIRONMENT_STUDIO_TOOL_IDS)[number],
+    ) || selectedEnvironmentMounts.length > 0
+  ) ?? [];
   const updateSelectedStudioToolIds = (selectedIds: string[]) => {
-    const next = [...new Set(selectedIds)].filter((toolId) =>
+    const next = [...new Set([
+      ...selectedIds,
+      ...(selectedEnvironmentMounts.length > 0 ? [...ENVIRONMENT_STUDIO_TOOL_IDS] : []),
+    ])].filter((toolId) =>
       availableStudioToolIds.has(toolId),
     );
     if (!sessionId) {
@@ -5343,6 +5454,36 @@ export default function App() {
       [activeStudioToolSelectionKey]: next,
     }));
   };
+  const updateSelectedEnvironments = (
+    selections: SessionEnvironmentMountSelection[],
+    workspaceIds: string[] = [],
+  ) => {
+    if (!sessionId) return;
+    const valid = selections.every((selection) => sessionEnvironments.some((environment) =>
+      environment.id === selection.environment_id &&
+      environment.latestVersion?.versionId === selection.environment_version_id
+    ));
+    if (!valid) return;
+    setEnvironmentMountsBySession((current) => ({
+      ...current,
+      [activeStudioToolSelectionKey]: selections,
+    }));
+    setEnvironmentWorkspaceIdsBySession((current) => ({
+      ...current,
+      [activeStudioToolSelectionKey]: workspaceIds,
+    }));
+    setStudioToolIdsBySession((current) => {
+      const selectedIds = current[activeStudioToolSelectionKey] ?? [];
+      return {
+        ...current,
+        [activeStudioToolSelectionKey]: selections.length > 0
+          ? [...new Set([...selectedIds, ...ENVIRONMENT_STUDIO_TOOL_IDS])]
+          : selectedIds.filter((toolId) => !ENVIRONMENT_STUDIO_TOOL_IDS.includes(
+              toolId as (typeof ENVIRONMENT_STUDIO_TOOL_IDS)[number],
+            )),
+      };
+    });
+  };
 
   const studioToolsUnavailableReason = studioToolsError
     ? studioToolsError
@@ -5351,6 +5492,10 @@ export default function App() {
       : studioToolCapabilities && !studioToolCapabilities.supported
         ? "当前 Runtime Agent 未开启 BFF 工具能力。"
         : "";
+  const sessionEnvironmentsUnavailableReason = sessionEnvironmentsError
+    || (!studioToolsLoading && studioToolCapabilities && !canMountSessionEnvironment
+      ? "当前 Studio BFF 未提供 Sandbox 执行工具。"
+      : "");
   const connectedRuntimeId = currentRuntime?.runtimeId ?? "";
   const currentRuntimeAppName = currentConn
     ? currentConn.apps.find((app) =>
@@ -7397,13 +7542,28 @@ export default function App() {
                     activeAgent={activeAgent}
                     seenAgents={seenAgents}
                     execPath={execPath}
-                    studioTools={studioToolCapabilities?.tools ?? []}
+                    studioTools={visibleStudioTools}
                     selectedStudioToolIds={selectedStudioToolIds}
+                    managedStudioToolIds={selectedEnvironmentMounts.length > 0
+                      ? ENVIRONMENT_STUDIO_TOOL_IDS
+                      : []}
                     studioToolsLoading={studioToolsLoading}
                     studioToolsDisabled={conversationBusy}
                     studioToolsUnavailableReason={studioToolsUnavailableReason}
                     onStudioToolsChange={
                       studioToolRuntime ? updateSelectedStudioToolIds : undefined
+                    }
+                    environments={sessionEnvironments}
+                    workspaces={sessionWorkspaces}
+                    selectedEnvironments={selectedEnvironmentMounts}
+                    selectedEnvironmentWorkspaceIds={selectedEnvironmentWorkspaceIds}
+                    environmentsLoading={sessionEnvironmentsLoading || studioToolsLoading}
+                    environmentsDisabled={conversationBusy || !canMountSessionEnvironment}
+                    environmentsError={sessionEnvironmentsUnavailableReason}
+                    onEnvironmentsChange={
+                      studioToolRuntime && sessionId
+                        ? updateSelectedEnvironments
+                        : undefined
                     }
                   />
                 )}

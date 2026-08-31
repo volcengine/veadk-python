@@ -50,6 +50,9 @@ test("maps supported built-in tools to dedicated Chinese running and done labels
     ["video_generate", "正在生成视频", "已完成视频生成"],
     ["ppt_generate", "正在生成 PPT", "已完成 PPT 生成"],
     ["run_code", "正在 AgentKit 沙箱中执行代码", "已在 AgentKit 沙箱中完成代码执行"],
+    ["list_envs", "正在查看可用环境", "已读取可用环境"],
+    ["get_env_manifest", "正在读取环境 Manifest", "已读取环境 Manifest"],
+    ["execute_in_sandbox", "正在环境中执行命令", "已在环境中完成命令执行"],
     ["load_memory", "正在检索长期记忆", "已完成记忆检索"],
     ["load_knowledgebase", "正在检索知识库", "已完成知识库检索"],
     ["load_skill", "正在加载技能", "已加载技能"],
@@ -174,6 +177,9 @@ test("uses repository-owned current-color SVG icons for every special tool", () 
     "RunCodeIcon",
     "CollectResourcesIcon",
     "CreateAgentsIcon",
+    "ListEnvironmentsIcon",
+    "EnvironmentManifestIcon",
+    "ExecuteInSandboxIcon",
   ]) {
     assert.match(iconsSource, new RegExp(`export function ${icon}`));
   }

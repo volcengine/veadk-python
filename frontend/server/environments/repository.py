@@ -116,6 +116,13 @@ class TosEnvironmentRepository:
             self._get_skill_manifest, owner_id, environment_id, version_id
         )
 
+    async def get_version_config(
+        self, owner_id: str, environment_id: str, version_id: str
+    ) -> EnvironmentRecord:
+        return await asyncio.to_thread(
+            self._get_version_config, owner_id, environment_id, version_id
+        )
+
     async def get_version_skill_files(
         self, owner_id: str, environment_id: str, version_id: str
     ) -> list[tuple[str, bytes]]:
@@ -305,6 +312,25 @@ class TosEnvironmentRepository:
                 return EnvironmentSkillManifest()
             raise
         return EnvironmentSkillManifest.model_validate_json(content)
+
+    def _get_version_config(
+        self, owner_id: str, environment_id: str, version_id: str
+    ) -> EnvironmentRecord:
+        self._validate_environment_id(environment_id)
+        self._validate_version_id(version_id)
+        key = (
+            f"{self._version_prefix(owner_id, environment_id, version_id)}/config.json"
+        )
+        try:
+            content = self._read_object(self._client_factory(), key, _MAX_JSON_BYTES)
+        except Exception as error:
+            if _status_code(error) == 404:
+                raise EnvironmentNotFound("环境构建版本不存在。") from error
+            raise
+        record = EnvironmentRecord.model_validate_json(content)
+        if record.id != environment_id or record.owner_id != owner_id:
+            raise EnvironmentNotFound("环境构建版本不存在。")
+        return record
 
     def _get_version_skill_files(
         self, owner_id: str, environment_id: str, version_id: str

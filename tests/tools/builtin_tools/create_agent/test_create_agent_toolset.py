@@ -180,6 +180,13 @@ async def test_toolset_exposes_exactly_two_tools_and_dynamic_schema() -> None:
     assert "include each relevant Skill ref explicitly" in modern_schema
     assert "Use an empty string only when" in modern_schema
     assert modern_declaration.description is not None
+    assert "Only use this tool when the user explicitly asks" in (
+        modern_declaration.description or ""
+    )
+    assert "Task complexity alone is not authorization" in (
+        modern_declaration.description or ""
+    )
+    assert "use the environment tools instead" in (modern_declaration.description or "")
     assert "pass an empty collection_id" in modern_declaration.description
     assert "explicitly prohibits network" in modern_declaration.description
     assert "when relevant Skills were returned, bind at least one" in (

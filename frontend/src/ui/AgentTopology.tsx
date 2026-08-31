@@ -4,7 +4,10 @@ import { Maximize2, X } from "lucide-react";
 import type {
   AgentInfo,
   AgentNode,
+  SessionEnvironmentMountSelection,
   StudioBffTool,
+  StudioEnvironment,
+  StudioWorkspace,
 } from "../adk/client";
 import { AgentBuildCanvas } from "../create/AgentBuildCanvas";
 import {
@@ -17,6 +20,7 @@ import {
   StudioToolDialog,
 } from "./StudioToolDialog";
 import { TextShimmer } from "./text-shimmer/TextShimmer";
+import { SessionEnvironmentPicker } from "./SessionEnvironmentPicker";
 
 function totalNodes(node: AgentNode): number {
   return 1 + node.children.reduce((count, child) => count + totalNodes(child), 0);
@@ -107,10 +111,22 @@ interface AgentInfoPanelProps {
   variant?: "rail" | "drawer";
   studioTools?: StudioBffTool[];
   selectedStudioToolIds?: readonly string[];
+  managedStudioToolIds?: readonly string[];
   studioToolsLoading?: boolean;
   studioToolsDisabled?: boolean;
   studioToolsUnavailableReason?: string;
   onStudioToolsChange?: (selectedIds: string[]) => void;
+  environments?: StudioEnvironment[];
+  workspaces?: StudioWorkspace[];
+  selectedEnvironments?: readonly SessionEnvironmentMountSelection[];
+  selectedEnvironmentWorkspaceIds?: readonly string[];
+  environmentsLoading?: boolean;
+  environmentsDisabled?: boolean;
+  environmentsError?: string;
+  onEnvironmentsChange?: (
+    value: SessionEnvironmentMountSelection[],
+    workspaceIds?: string[],
+  ) => void;
 }
 
 /** Agent metadata and optional multi-Agent topology shown in the conversation's
@@ -123,10 +139,19 @@ export function AgentInfoPanel({
   variant = "rail",
   studioTools = [],
   selectedStudioToolIds = [],
+  managedStudioToolIds = [],
   studioToolsLoading = false,
   studioToolsDisabled = false,
   studioToolsUnavailableReason = "",
   onStudioToolsChange,
+  environments = [],
+  workspaces = [],
+  selectedEnvironments = [],
+  selectedEnvironmentWorkspaceIds = [],
+  environmentsLoading = false,
+  environmentsDisabled = false,
+  environmentsError = "",
+  onEnvironmentsChange,
 }: AgentInfoPanelProps) {
   const [dialog, setDialog] = useState<"tool" | null>(null);
   const [canvasExpanded, setCanvasExpanded] = useState(false);
@@ -183,9 +208,11 @@ export function AgentInfoPanel({
     name,
     label: studioToolLabel(name),
     custom: false,
+    removable: false,
   }));
   const baseToolNames = new Set(baseTools.map((tool) => tool.name));
   const selectedIds = new Set(selectedStudioToolIds);
+  const managedIds = new Set(managedStudioToolIds);
   const selectedStudioTools = studioTools
     .filter((tool) => selectedIds.has(tool.id) && !baseToolNames.has(tool.id))
     .map((tool) => ({
@@ -193,6 +220,7 @@ export function AgentInfoPanel({
       name: tool.id,
       label: tool.name,
       custom: true,
+      removable: !managedIds.has(tool.id),
     }));
   const tools = [...baseTools, ...selectedStudioTools];
   const skills = uniqueSkills(info.skills);
@@ -256,7 +284,7 @@ export function AgentInfoPanel({
                       </span>
                       {tool.custom && <span className="topo-custom-badge">Studio Tool</span>}
                     </span>
-                    {tool.custom && (
+                    {tool.custom && tool.removable && (
                       <button
                         type="button"
                         className="topo-remove-capability"
@@ -331,6 +359,22 @@ export function AgentInfoPanel({
           </div>
         </section>
 
+        {(onEnvironmentsChange || selectedEnvironments.length > 0) && (
+          <section className="topo-module-card topo-environment-card" aria-label="会话环境">
+            <ModuleTitle title="环境" count={selectedEnvironments.length} />
+            <SessionEnvironmentPicker
+              environments={environments}
+              workspaces={workspaces}
+              value={selectedEnvironments}
+              selectedWorkspaceIds={selectedEnvironmentWorkspaceIds}
+              loading={environmentsLoading}
+              disabled={environmentsDisabled}
+              error={environmentsError}
+              onChange={onEnvironmentsChange}
+            />
+          </section>
+        )}
+
         <section className="topo-module-card topo-topology" aria-label="Agent 画布">
           <div className="topo-canvas-heading">
             <ModuleTitle title="结构拓扑" count={totalNodes(graph)} />
@@ -353,7 +397,9 @@ export function AgentInfoPanel({
       {dialog === "tool" && onStudioToolsChange && (
         <StudioToolDialog
           agentName={info.name}
-          tools={studioTools.filter((tool) => !baseToolNames.has(tool.id))}
+          tools={studioTools.filter((tool) =>
+            !baseToolNames.has(tool.id) && !managedIds.has(tool.id)
+          )}
           selectedIds={selectedStudioToolIds}
           loading={studioToolsLoading}
           disabled={studioToolsDisabled}
@@ -420,10 +466,19 @@ export function AgentInfoDrawer({
   execPath,
   studioTools,
   selectedStudioToolIds,
+  managedStudioToolIds,
   studioToolsLoading,
   studioToolsDisabled,
   studioToolsUnavailableReason,
   onStudioToolsChange,
+  environments,
+  workspaces,
+  selectedEnvironments,
+  selectedEnvironmentWorkspaceIds,
+  environmentsLoading,
+  environmentsDisabled,
+  environmentsError,
+  onEnvironmentsChange,
   onClose,
   returnFocusRef,
 }: {
@@ -435,10 +490,22 @@ export function AgentInfoDrawer({
   execPath: string[];
   studioTools?: StudioBffTool[];
   selectedStudioToolIds?: readonly string[];
+  managedStudioToolIds?: readonly string[];
   studioToolsLoading?: boolean;
   studioToolsDisabled?: boolean;
   studioToolsUnavailableReason?: string;
   onStudioToolsChange?: (selectedIds: string[]) => void;
+  environments?: StudioEnvironment[];
+  workspaces?: StudioWorkspace[];
+  selectedEnvironments?: readonly SessionEnvironmentMountSelection[];
+  selectedEnvironmentWorkspaceIds?: readonly string[];
+  environmentsLoading?: boolean;
+  environmentsDisabled?: boolean;
+  environmentsError?: string;
+  onEnvironmentsChange?: (
+    value: SessionEnvironmentMountSelection[],
+    workspaceIds?: string[],
+  ) => void;
   onClose: () => void;
   returnFocusRef: RefObject<HTMLButtonElement>;
 }) {
@@ -493,10 +560,19 @@ export function AgentInfoDrawer({
               execPath={execPath}
               studioTools={studioTools}
               selectedStudioToolIds={selectedStudioToolIds}
+              managedStudioToolIds={managedStudioToolIds}
               studioToolsLoading={studioToolsLoading}
               studioToolsDisabled={studioToolsDisabled}
               studioToolsUnavailableReason={studioToolsUnavailableReason}
               onStudioToolsChange={onStudioToolsChange}
+              environments={environments}
+              workspaces={workspaces}
+              selectedEnvironments={selectedEnvironments}
+              selectedEnvironmentWorkspaceIds={selectedEnvironmentWorkspaceIds}
+              environmentsLoading={environmentsLoading}
+              environmentsDisabled={environmentsDisabled}
+              environmentsError={environmentsError}
+              onEnvironmentsChange={onEnvironmentsChange}
               variant="drawer"
             />
           ) : (

@@ -484,6 +484,14 @@ The Studio `环境` page stores each environment definition, generated Dockerfil
 build version, log metadata, and resulting image reference in the private Studio
 TOS bucket. Creating or saving an environment starts an asynchronous
 CodePipeline build and pushes the resulting image to Container Registry.
+New environments default to the AIO Sandbox base image, which keeps the inherited
+`/opt/gem/run.sh` entrypoint and port `8080` so the Sandbox Shell API remains
+available. Standard Ubuntu 22.04 and 24.04 images remain supported, and records
+created before the base-environment field was introduced resolve to Ubuntu.
+Each image version exposes a read-only Manifest at
+`/web/environments/{environmentId}/builds/{versionId}/manifest`; the Studio
+environment card opens the same version-bound contract as YAML for inspection
+and copying.
 Volcengine builds use the Aliyun PyPI mirror, Huawei Cloud Python source mirror,
 and npmmirror for Playwright browsers; BytePlus builds use the corresponding
 official sources. Cross-version Python combinations are compiled from pinned

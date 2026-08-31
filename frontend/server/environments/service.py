@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import io
 import json
@@ -37,12 +38,21 @@ from veadk.cli.generated_agent_skills import (
     skill_name_from_markdown,
 )
 
-from .dockerfile import build_dockerfile
+from .dockerfile import (
+    build_dockerfile,
+    environment_base_image,
+    environment_capabilities,
+)
 from .models import (
     EnvironmentBuild,
     EnvironmentBuildStatus,
     EnvironmentBuildStep,
+    EnvironmentBuildStepStatus,
     EnvironmentInput,
+    EnvironmentManifest,
+    EnvironmentManifestMetadata,
+    EnvironmentManifestSpec,
+    EnvironmentManifestStatus,
     EnvironmentPatch,
     EnvironmentRecord,
     EnvironmentResourceInfo,
@@ -60,6 +70,7 @@ from .repository import (
     TosEnvironmentRepository,
 )
 from .resources import EnvironmentCloudGateway
+from .tool_provisioning import EnvironmentToolProvisioner
 
 
 class WorkspaceReferenceLookup(Protocol):
@@ -75,13 +86,16 @@ class EnvironmentService:
         cloud: EnvironmentCloudGateway | None,
         *,
         workspace_references: WorkspaceReferenceLookup | None = None,
+        tool_provisioner: EnvironmentToolProvisioner | None = None,
         unavailable_reason: str = "管理员未配置环境持久化存储。",
     ) -> None:
         self._repository = repository
         self._cloud = cloud
         self._workspace_references = workspace_references
+        self._tool_provisioner = tool_provisioner
         self._unavailable_reason = unavailable_reason
         self._skillspace_resolver: SkillSpaceResolver | None = None
+        self._tool_tasks: dict[tuple[str, str, str], asyncio.Task[None]] = {}
 
     def set_skillspace_resolver(self, resolver: SkillSpaceResolver) -> None:
         self._skillspace_resolver = resolver
@@ -138,6 +152,7 @@ class EnvironmentService:
                 current=current.selected_skills,
             )
         if {
+            "base_environment",
             "operating_system",
             "language",
             "option_ids",
@@ -149,6 +164,7 @@ class EnvironmentService:
                 for key in (
                     "name",
                     "description",
+                    "base_environment",
                     "operating_system",
                     "language",
                     "execution_runtime",
@@ -252,6 +268,17 @@ class EnvironmentService:
         build = await repository.get_build(owner_id, environment_id, version_id)
         if build.status == "preparing":
             return build
+        if build.status == "available" and (
+            not build.tool_id or build.tool_status != "ready"
+        ):
+            build = await self._begin_aio_tool_provisioning(
+                repository,
+                owner_id,
+                build,
+            )
+        if build.status == "building" and build.tool_status == "creating":
+            self._schedule_tool_provisioning(repository, owner_id, build)
+            return build
         active = build.status in {"queued", "building", "scanning"}
         if not active:
             if not include_logs:
@@ -280,6 +307,7 @@ class EnvironmentService:
                 }
             )
             return await repository.update_build(owner_id, failed)
+
         cloud = self._require_cloud()
         try:
             status = (
@@ -312,6 +340,12 @@ class EnvironmentService:
             if include_logs or status in {"available", "failed"}:
                 log = await _to_thread_log(cloud, build.resources, build.run_id)
                 updated = _with_log_snapshot(updated, log)
+            if status == "available":
+                updated = await self._begin_aio_tool_provisioning(
+                    repository,
+                    owner_id,
+                    updated,
+                )
             return await repository.update_build(owner_id, updated, log=log)
         except Exception as error:  # noqa: BLE001 - persist status lookup failures
             failed = build.model_copy(
@@ -322,6 +356,48 @@ class EnvironmentService:
                 }
             )
             return await repository.update_build(owner_id, failed)
+
+    async def get_manifest(
+        self,
+        owner_id: str,
+        environment_id: str,
+        version_id: str,
+    ) -> EnvironmentManifest:
+        repository = self._require_repository()
+        environment = await repository.get_version_config(
+            owner_id, environment_id, version_id
+        )
+        build = await repository.get_build(owner_id, environment_id, version_id)
+        skills = await repository.get_skill_manifest(
+            owner_id, environment_id, version_id
+        )
+        return EnvironmentManifest(
+            apiVersion="agentkit.studio/v1alpha1",
+            metadata=EnvironmentManifestMetadata(
+                id=environment.id,
+                name=environment.name,
+                version=version_id,
+                description=environment.description,
+            ),
+            spec=EnvironmentManifestSpec(
+                image=build.image,
+                baseEnvironment=environment.base_environment,
+                baseImage=environment_base_image(environment),
+                operatingSystem=environment.operating_system,
+                language=environment.language,
+                executionRuntime=environment.execution_runtime,
+                packages=environment.option_ids,
+                capabilities=environment_capabilities(environment),
+                skills=skills.skills,
+            ),
+            status=EnvironmentManifestStatus(
+                phase=build.status,
+                toolId=build.tool_id,
+                toolStatus=build.tool_status,
+                createdAt=build.created_at,
+                updatedAt=build.updated_at,
+            ),
+        )
 
     def resource_info(self) -> EnvironmentResourceInfo:
         return self._require_cloud().describe()
@@ -338,8 +414,20 @@ class EnvironmentService:
         if not resolved_version:
             raise ValueError("所选环境尚未构建。")
         build = await repository.get_build(owner_id, environment_id, resolved_version)
+        if build.status == "building" and build.tool_status == "creating":
+            self._schedule_tool_provisioning(repository, owner_id, build)
         if build.status != "available" or not build.image.strip():
             raise ValueError("所选环境版本尚未构建完成。")
+        version_config = await repository.get_version_config(
+            owner_id,
+            environment_id,
+            resolved_version,
+        )
+        if version_config.base_environment == "aio-sandbox" and (
+            not build.tool_id or build.tool_status != "ready"
+        ):
+            build = await self._begin_aio_tool_provisioning(repository, owner_id, build)
+            raise ValueError("环境 Sandbox Tool 正在准备，请稍后重试。")
         manifest = await repository.get_skill_manifest(
             owner_id, environment_id, resolved_version
         )
@@ -347,9 +435,123 @@ class EnvironmentService:
             environmentId=environment_id,
             environmentVersionId=resolved_version,
             image=build.image,
+            toolId=build.tool_id,
+            toolStatus=build.tool_status,
             skills=manifest.skills,
             resources=build.resources,
         )
+
+    async def _begin_aio_tool_provisioning(
+        self,
+        repository: TosEnvironmentRepository,
+        owner_id: str,
+        build: EnvironmentBuild,
+    ) -> EnvironmentBuild:
+        environment = await repository.get_version_config(
+            owner_id,
+            build.environment_id,
+            build.version_id,
+        )
+        if environment.base_environment != "aio-sandbox":
+            return build
+        if build.tool_id and build.tool_status == "ready":
+            return build
+        steps = _with_tool_step(build.steps, "running")
+        creating = build.model_copy(
+            update={
+                "status": "building",
+                "tool_status": "creating",
+                "current_step": "创建 AgentKit Sandbox Tool",
+                "steps": steps,
+                "updated_at": _now(),
+            }
+        )
+        creating = await repository.update_build(owner_id, creating)
+        self._schedule_tool_provisioning(repository, owner_id, creating)
+        return creating
+
+    def _schedule_tool_provisioning(
+        self,
+        repository: TosEnvironmentRepository,
+        owner_id: str,
+        build: EnvironmentBuild,
+    ) -> None:
+        key = (owner_id, build.environment_id, build.version_id)
+        current = self._tool_tasks.get(key)
+        if current is not None and not current.done():
+            return
+        task = asyncio.create_task(
+            self._complete_tool_provisioning(repository, owner_id, build)
+        )
+        self._tool_tasks[key] = task
+        task.add_done_callback(
+            lambda completed, task_key=key: self._tool_task_done(task_key, completed)
+        )
+
+    def _tool_task_done(
+        self,
+        key: tuple[str, str, str],
+        task: asyncio.Task[None],
+    ) -> None:
+        if self._tool_tasks.get(key) is task:
+            self._tool_tasks.pop(key, None)
+        if not task.cancelled():
+            task.exception()
+
+    async def _complete_tool_provisioning(
+        self,
+        repository: TosEnvironmentRepository,
+        owner_id: str,
+        build: EnvironmentBuild,
+    ) -> None:
+        try:
+            if self._tool_provisioner is None:
+                raise RuntimeError("AgentKit Sandbox Tool 服务未配置。")
+            resources = build.resources
+            if not isinstance(resources, EnvironmentResources):
+                raise TypeError("环境构建记录缺少云资源信息。")
+            tool = await self._tool_provisioner.ensure_ready(
+                image=build.image,
+                provider=resources.provider,
+                region=resources.region,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:  # noqa: BLE001 - persist provisioning failure
+            current = await repository.get_build(
+                owner_id, build.environment_id, build.version_id
+            )
+            if current.tool_id and current.tool_status == "ready":
+                return
+            failed = current.model_copy(
+                update={
+                    "status": "failed",
+                    "tool_status": "failed",
+                    "error": str(error).strip() or type(error).__name__,
+                    "current_step": "创建 AgentKit Sandbox Tool 失败",
+                    "steps": _with_tool_step(current.steps, "failed"),
+                    "updated_at": _now(),
+                }
+            )
+            await repository.update_build(owner_id, failed)
+            return
+        current = await repository.get_build(
+            owner_id, build.environment_id, build.version_id
+        )
+        if current.tool_id and current.tool_status == "ready":
+            return
+        ready = current.model_copy(
+            update={
+                "status": "available",
+                "tool_id": tool.tool_id,
+                "tool_status": tool.status,
+                "error": "",
+                "current_step": "环境与 Sandbox Tool 已就绪",
+                "steps": _with_tool_step(current.steps, "succeeded"),
+                "updated_at": _now(),
+            }
+        )
+        await repository.update_build(owner_id, ready)
 
     async def get_skill_files_for_agent(
         self,
@@ -527,7 +729,10 @@ class EnvironmentService:
                 record.id,
                 record.latest_version_id,
             )
-            if latest.status in {"queued", "building", "scanning"}:
+            if latest.status in {"queued", "building", "scanning"} or (
+                latest.status == "available"
+                and (not latest.tool_id or latest.tool_status != "ready")
+            ):
                 latest = await self.get_build(
                     owner_id,
                     record.id,
@@ -544,6 +749,7 @@ class EnvironmentService:
             id=record.id,
             name=record.name,
             description=record.description,
+            baseEnvironment=record.base_environment,
             operatingSystem=record.operating_system,
             language=record.language,
             executionRuntime=record.execution_runtime,
@@ -618,6 +824,22 @@ def _default_steps(status: EnvironmentBuildStatus) -> list[EnvironmentBuildStep]
         EnvironmentBuildStep(key=key, label=label, status=terminal_status)
         for key, label in labels
     ]
+
+
+def _with_tool_step(
+    steps: list[EnvironmentBuildStep],
+    status: EnvironmentBuildStepStatus,
+) -> list[EnvironmentBuildStep]:
+    now = _now()
+    existing = next((item for item in steps if item.key == "sandbox-tool"), None)
+    tool_step = EnvironmentBuildStep(
+        key="sandbox-tool",
+        label="创建 AgentKit Sandbox Tool",
+        status=status,
+        startedAt=(existing.started_at if existing is not None else now),
+        finishedAt=now if status in {"succeeded", "failed"} else None,
+    )
+    return [item for item in steps if item.key != "sandbox-tool"] + [tool_step]
 
 
 def _current_step(

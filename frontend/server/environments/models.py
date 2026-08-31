@@ -22,6 +22,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 EnvironmentOperatingSystem = Literal["ubuntu-22.04", "ubuntu-24.04"]
+EnvironmentBaseEnvironment = Literal["ubuntu", "aio-sandbox"]
 EnvironmentLanguage = Literal["python-3.10", "python-3.12"]
 EnvironmentBuildStatus = Literal[
     "preparing",
@@ -128,6 +129,9 @@ class EnvironmentInput(BaseModel):
 
     name: str = Field(min_length=1, max_length=128)
     description: str = Field(default="", max_length=2000)
+    base_environment: EnvironmentBaseEnvironment = Field(
+        default="ubuntu", alias="baseEnvironment"
+    )
     operating_system: EnvironmentOperatingSystem = Field(alias="operatingSystem")
     language: EnvironmentLanguage
     execution_runtime: Literal["veadk"] = Field(
@@ -145,6 +149,15 @@ class EnvironmentInput(BaseModel):
     def normalize(self) -> EnvironmentInput:
         self.name = self.name.strip()
         self.description = self.description.strip()
+        self.dockerfile = self.dockerfile.strip()
+        if (
+            "base_environment" not in self.model_fields_set
+            and "aio.sandbox" in self.dockerfile.lower()
+        ):
+            self.base_environment = "aio-sandbox"
+        if self.base_environment == "aio-sandbox":
+            self.operating_system = "ubuntu-22.04"
+            self.language = "python-3.12"
         if not self.name:
             raise ValueError("环境名称不能为空。")
         normalized: list[str] = []
@@ -155,7 +168,6 @@ class EnvironmentInput(BaseModel):
             if option not in normalized:
                 normalized.append(option)
         self.option_ids = normalized
-        self.dockerfile = self.dockerfile.strip()
         return self
 
 
@@ -164,6 +176,9 @@ class EnvironmentPatch(BaseModel):
 
     name: str | None = Field(default=None, min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=2000)
+    base_environment: EnvironmentBaseEnvironment | None = Field(
+        default=None, alias="baseEnvironment"
+    )
     operating_system: EnvironmentOperatingSystem | None = Field(
         default=None, alias="operatingSystem"
     )
@@ -258,6 +273,10 @@ class EnvironmentBuild(BaseModel):
     version_id: str = Field(alias="versionId", min_length=1, max_length=128)
     status: EnvironmentBuildStatus
     image: str = ""
+    tool_id: str = Field(default="", alias="toolId")
+    tool_status: Literal["", "creating", "ready", "failed"] = Field(
+        default="", alias="toolStatus"
+    )
     error: str = ""
     run_id: str = Field(default="", alias="runId")
     resources: EnvironmentResources | dict[str, object] = Field(default_factory=dict)
@@ -272,12 +291,61 @@ class EnvironmentBuild(BaseModel):
     updated_at: datetime = Field(alias="updatedAt")
 
 
+class EnvironmentManifestMetadata(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    name: str
+    version: str
+    description: str = ""
+
+
+class EnvironmentManifestSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    image: str
+    base_environment: EnvironmentBaseEnvironment = Field(alias="baseEnvironment")
+    base_image: str = Field(alias="baseImage")
+    operating_system: EnvironmentOperatingSystem = Field(alias="operatingSystem")
+    language: EnvironmentLanguage
+    execution_runtime: Literal["veadk"] = Field(alias="executionRuntime")
+    packages: list[str] = Field(default_factory=list)
+    capabilities: list[str] = Field(default_factory=list)
+    skills: list[EnvironmentSkillManifestEntry] = Field(default_factory=list)
+
+
+class EnvironmentManifestStatus(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    phase: EnvironmentBuildStatus
+    tool_id: str = Field(default="", alias="toolId")
+    tool_status: Literal["", "creating", "ready", "failed"] = Field(
+        default="", alias="toolStatus"
+    )
+    created_at: datetime = Field(alias="createdAt")
+    updated_at: datetime = Field(alias="updatedAt")
+
+
+class EnvironmentManifest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    api_version: Literal["agentkit.studio/v1alpha1"] = Field(alias="apiVersion")
+    kind: Literal["Environment"] = "Environment"
+    metadata: EnvironmentManifestMetadata
+    spec: EnvironmentManifestSpec
+    status: EnvironmentManifestStatus
+
+
 class ResolvedEnvironment(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     environment_id: str = Field(alias="environmentId")
     version_id: str = Field(alias="environmentVersionId")
     image: str
+    tool_id: str = Field(default="", alias="toolId")
+    tool_status: Literal["", "creating", "ready", "failed"] = Field(
+        default="", alias="toolStatus"
+    )
     skills: list[EnvironmentSkillManifestEntry] = Field(default_factory=list)
     resources: EnvironmentResources | dict[str, object] = Field(default_factory=dict)
 
@@ -299,12 +367,17 @@ __all__ = [
     "SUPPORTED_OPTION_IDS",
     "CodePipelineResource",
     "ContainerRegistryResource",
+    "EnvironmentBaseEnvironment",
     "EnvironmentBuild",
     "EnvironmentBuildStatus",
     "EnvironmentBuildStep",
     "EnvironmentBuildStepStatus",
     "EnvironmentInput",
     "EnvironmentLanguage",
+    "EnvironmentManifest",
+    "EnvironmentManifestMetadata",
+    "EnvironmentManifestSpec",
+    "EnvironmentManifestStatus",
     "EnvironmentOperatingSystem",
     "EnvironmentPatch",
     "EnvironmentRecord",

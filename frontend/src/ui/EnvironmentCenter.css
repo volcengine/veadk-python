@@ -251,11 +251,62 @@
   line-height: 1.4;
 }
 
+.environment-base-options,
 .environment-language-options,
 .environment-option-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 2px 24px;
+}
+
+.environment-base-options > * {
+  min-width: 0;
+  min-height: 68px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+}
+
+.environment-base-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  text-align: left;
+}
+
+.environment-base-copy strong {
+  color: hsl(var(--foreground));
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.environment-base-copy span {
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+.environment-os-version-options {
+  width: min(100%, 420px);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px 16px;
+  margin: 8px 0 0 30px;
+}
+
+.environment-os-version-options > * {
+  min-width: 0;
+  min-height: 44px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  padding: 3px 10px;
 }
 
 .environment-language-options > * {
@@ -622,6 +673,69 @@
   border-top: 1px solid hsl(var(--border));
 }
 
+.environment-manifest-dialog {
+  width: min(760px, 100%);
+}
+
+.environment-manifest-dialog__body {
+  min-height: 0;
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  padding: 20px 22px;
+}
+
+.environment-manifest-dialog__editor {
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--panel));
+}
+
+.environment-manifest-dialog__editor > .cm-theme,
+.environment-manifest-dialog__editor .cm-editor,
+.environment-manifest-dialog__editor .cm-scroller {
+  height: 100%;
+}
+
+.environment-manifest-dialog__editor .cm-scroller {
+  overflow: auto;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 12.5px;
+}
+
+.environment-manifest-dialog__state {
+  min-height: 280px;
+  flex: 1;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 12px;
+  color: hsl(var(--muted-foreground));
+  font-size: 13px;
+  text-align: center;
+}
+
+.environment-manifest-dialog__state p {
+  max-width: 520px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.environment-manifest-dialog__state.is-error,
+.environment-manifest-dialog__copy-error {
+  color: hsl(var(--destructive));
+}
+
+.environment-manifest-dialog__copy-error {
+  margin-right: auto;
+  font-size: 12px;
+  line-height: 18px;
+}
+
 @media (max-width: 760px) {
   .environment-editor { padding: 24px 20px 0; }
 
@@ -635,8 +749,14 @@
   .environment-editor__header { align-items: stretch; flex-direction: column; gap: 16px; }
   .environment-editor__actions { justify-content: flex-end; }
   .environment-creation-options,
+  .environment-base-options,
   .environment-language-options,
   .environment-option-grid { grid-template-columns: minmax(0, 1fr); }
+  .environment-os-version-options {
+    width: auto;
+    grid-template-columns: minmax(0, 1fr);
+    margin-left: 30px;
+  }
   .environment-upload__header { flex-direction: column; }
   .environment-upload-dropzone { justify-content: flex-start; min-height: 96px; padding: 16px; }
   .environment-dockerfile__header { align-items: flex-start; flex-direction: column; }
@@ -661,6 +781,7 @@
   }
   .environment-build-dialog__summary a { grid-column: 1 / -1; margin-left: 0; }
   .environment-build-dialog__body { overflow-y: auto; padding: 16px; }
+  .environment-manifest-dialog__body { padding: 16px; }
   .environment-build-dialog__actions { padding: 9px 16px max(9px, env(safe-area-inset-bottom)); }
 }
 
@@ -668,4 +789,13 @@
   .environment-back,
   .environment-creation-options > *,
   .environment-upload-dropzone { transition: none; }
+}
+.environment-card .library-resource-card__auxiliary-action {
+  border-color: transparent;
+  background: transparent;
+}
+
+.environment-card .library-resource-card__auxiliary-action:hover:not(:disabled) {
+  border-color: transparent;
+  background: hsl(var(--muted) / 0.72);
 }
