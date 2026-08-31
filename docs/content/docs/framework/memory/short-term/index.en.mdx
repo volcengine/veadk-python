@@ -31,6 +31,7 @@ stm = ShortTermMemory(backend="sqlite", local_database_path="./stm.db")
 | `db_kwargs` | `dict` | `{}` | Extra args forwarded to the underlying database session service/driver (e.g. connection pool settings). |
 | `local_database_path` | `str` | `/tmp/veadk_local_database.db` | Local DB file path, used only by `sqlite`. |
 | `after_load_memory_callback` | `Callable \| None` | `None` | Callback invoked after a session is loaded; receives the loaded `Session`. |
+| `after_create_session_callback` | `Callable \| None` | `None` | Synchronous or asynchronous callback invoked after a new session is created; receives the new `Session` and is not invoked when an existing session is reused. |
 
 <Callout type="warn">
 If a username or password in the connection string contains special characters such as `@` or `:`, URL-encode it with `urllib.parse.quote_plus` first (e.g. `p@ssword` → `p%40ssword`), otherwise parsing fails.
@@ -101,6 +102,19 @@ You rarely create or manage a `Session` directly; instead you use `session_servi
 5. **Clean up** `delete_session()`: delete a `Session` and its associated data.
 
 Under a database backend, `ShortTermMemory.create_session()` first lists and reuses an existing session with the same `session_id` to avoid duplicates.
+
+To provision resources, record an audit event, or synchronize an external system after a session is first created, register `after_create_session_callback`:
+
+```python
+async def after_create_session(session):
+    await provision_external_resources(session.id)
+
+stm = ShortTermMemory(
+    after_create_session_callback=after_create_session,
+)
+```
+
+The callback runs only when a new session is actually created. If it raises an exception, that exception is propagated to the caller and agent execution does not continue.
 
 ## Context compaction
 

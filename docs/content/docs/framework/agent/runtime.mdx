@@ -63,6 +63,31 @@ agent = Agent(
 
 Codex 原生生命周期和 ADK Function/MCP 工具调用都会转换为 ADK Event。运行日志使用稳定的 `codex_*` 事件名，并包含 `invocation_id`、`call_id`、`tool`、`status`、`duration_ms` 等可归因字段。日志不会记录工具参数、工具结果、API Token、凭证或后端地址；Token Usage 通过 `codex_event_type=token_usage` 事件及对应日志提供。
 
+## 按工具选择执行位置
+
+`RuntimeProvider` 不替换智能体的模型推理循环，只决定单次工具调用在哪里执行。`DispatchRuntimeProvider` 可以把指定工具派发到远端，其余工具回退到原本的 ADK 本地实现：
+
+```python title="agent.py"
+from veadk import Agent, Runner
+from veadk.runtime import DispatchRuntimeProvider
+
+async def dispatch_task(tool_call):
+    return await remote_client.dispatch(
+        tool_call.name,
+        tool_call.arguments,
+        dispatch_id=tool_call.id,
+    )
+
+agent = Agent(name="assistant", tools=[bash, read_file])
+runtime_provider = DispatchRuntimeProvider(
+    dispatch_task,
+    dispatchable_tools=None,  # 派发所有非 MCP 工具
+)
+runner = Runner(agent=agent, plugins=[runtime_provider])
+```
+
+上例中所有非 MCP 工具只会经过 `dispatch_task`，不会再次执行本地函数；MCP 工具保留原本的 ADK 实现。传入具体工具名集合时，只派发集合中的非 MCP 工具。派发函数可以是同步或异步函数。
+
 ## 请求处理
 
 在不侵入业务逻辑的前提下，可为每次执行插入统一的横切处理——鉴权、日志、重试、性能监控等。把处理器传入 `run_processor` 即可，例如接入身份认证做登录态校验：

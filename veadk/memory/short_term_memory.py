@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import inspect
 from functools import wraps
 from typing import TYPE_CHECKING, Any, Callable, Literal
 
@@ -74,6 +75,10 @@ class ShortTermMemory(BaseModel):
             Default to `/tmp/veadk_local_database.db`.
         after_load_memory_callback (Callable | None):
             A callback to be called after loading memory from the backend. The callback function should accept `Session` as an input.
+        after_create_session_callback (Callable | None):
+            A callback to be called after a new session is created. The callback
+            function should accept `Session` as an input and may be synchronous or
+            asynchronous. It is not called when an existing session is reused.
     """
 
     backend: Literal["local", "mysql", "sqlite", "postgresql", "database"] = "local"
@@ -87,6 +92,8 @@ class ShortTermMemory(BaseModel):
     local_database_path: str = "/tmp/veadk_local_database.db"
 
     after_load_memory_callback: Callable | None = None
+
+    after_create_session_callback: Callable | None = None
 
     _session_service: BaseSessionService = PrivateAttr()
 
@@ -174,9 +181,14 @@ class ShortTermMemory(BaseModel):
             )
             return session
         else:
-            return await self._session_service.create_session(
+            session = await self._session_service.create_session(
                 app_name=app_name, user_id=user_id, session_id=session_id
             )
+            if session and self.after_create_session_callback:
+                callback_result = self.after_create_session_callback(session)
+                if inspect.isawaitable(callback_result):
+                    await callback_result
+            return session
 
     async def generate_profile(
         self,

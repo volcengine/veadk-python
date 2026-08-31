@@ -15,6 +15,8 @@
 import asyncio
 import os
 
+import pytest
+
 from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.utils.misc import formatted_timestamp
 
@@ -52,3 +54,60 @@ def test_short_term_memory():
     assert session is not None
     assert os.path.exists(memory.local_database_path)
     os.remove(memory.local_database_path)
+
+
+def test_after_create_session_callback_only_runs_for_new_session():
+    created_session_ids = []
+
+    def after_create_session(session):
+        created_session_ids.append(session.id)
+
+    memory = ShortTermMemory(
+        backend="local",
+        after_create_session_callback=after_create_session,
+    )
+
+    first_session = asyncio.run(
+        memory.create_session(app_name="app", user_id="user", session_id="session")
+    )
+    second_session = asyncio.run(
+        memory.create_session(app_name="app", user_id="user", session_id="session")
+    )
+
+    assert first_session is not None
+    assert second_session is not None
+    assert created_session_ids == ["session"]
+
+
+def test_after_create_session_callback_supports_async_callback():
+    created_session_ids = []
+
+    async def after_create_session(session):
+        await asyncio.sleep(0)
+        created_session_ids.append(session.id)
+
+    memory = ShortTermMemory(
+        backend="local",
+        after_create_session_callback=after_create_session,
+    )
+
+    asyncio.run(
+        memory.create_session(app_name="app", user_id="user", session_id="session")
+    )
+
+    assert created_session_ids == ["session"]
+
+
+def test_after_create_session_callback_error_is_propagated():
+    def after_create_session(_session):
+        raise RuntimeError("callback failed")
+
+    memory = ShortTermMemory(
+        backend="local",
+        after_create_session_callback=after_create_session,
+    )
+
+    with pytest.raises(RuntimeError, match="callback failed"):
+        asyncio.run(
+            memory.create_session(app_name="app", user_id="user", session_id="session")
+        )
