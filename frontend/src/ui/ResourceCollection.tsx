@@ -540,6 +540,7 @@ export function ResourceCardAction({
 export function ResourceCardRevealAction({
   label,
   icon = "arrow",
+  tone = "primary",
   className,
   children,
   title,
@@ -548,6 +549,7 @@ export function ResourceCardRevealAction({
   label: string;
   icon?: "arrow" | "play" | "plus";
   children?: ReactNode;
+  tone?: "primary" | "secondary" | "danger";
 }) {
   const defaultIcon = icon === "play"
     ? <PlaySm />
@@ -559,7 +561,7 @@ export function ResourceCardRevealAction({
     <ResourceCardAction
       className={className}
       iconOnly
-      tone="primary"
+      tone={tone}
       aria-label={label}
       title={title ?? label}
       {...props}

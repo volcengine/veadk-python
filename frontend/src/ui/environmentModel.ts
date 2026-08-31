@@ -1,4 +1,5 @@
 import type {
+  EnvironmentBaseEnvironment,
   EnvironmentLanguage,
   EnvironmentOperatingSystem,
 } from "../adk/client";
@@ -7,6 +8,7 @@ import type { SelectedSkill } from "../create/types";
 export type {
   EnvironmentBuildStatus,
   EnvironmentBuildVersion,
+  EnvironmentBaseEnvironment,
   EnvironmentLanguage,
   EnvironmentOperatingSystem,
   StudioEnvironment,
@@ -36,6 +38,7 @@ export interface EnvironmentCategory {
 export interface EnvironmentDraft {
   name: string;
   description: string;
+  baseEnvironment: EnvironmentBaseEnvironment;
   operatingSystem: EnvironmentOperatingSystem;
   language: EnvironmentLanguage;
   optionIds: string[];
@@ -51,6 +54,25 @@ export const ENVIRONMENT_OPERATING_SYSTEMS: ReadonlyArray<{
   { id: "ubuntu-22.04", label: "Ubuntu 22.04", image: "ubuntu:22.04" },
   { id: "ubuntu-24.04", label: "Ubuntu 24.04", image: "ubuntu:24.04" },
 ];
+
+export const ENVIRONMENT_BASE_ENVIRONMENTS: ReadonlyArray<{
+  id: EnvironmentBaseEnvironment;
+  label: string;
+  description: string;
+}> = [
+  {
+    id: "aio-sandbox",
+    label: "AIO Sandbox",
+    description: "内置 Sandbox Shell 能力 · Ubuntu 22.04",
+  },
+  {
+    id: "ubuntu",
+    label: "Ubuntu",
+    description: "标准 Linux 基础镜像",
+  },
+];
+
+export const AIO_BASE_IMAGE = "agentkit-cli-2107625663-cn-beijing.cr.volces.com/agentkit/agent-native-requirements-aio:0.2.1-20260831";
 
 export const ENVIRONMENT_LANGUAGES: ReadonlyArray<{
   id: EnvironmentLanguage;
@@ -206,14 +228,17 @@ function environmentAptPackages(
   selected: readonly EnvironmentOption[],
   pythonVersion: string,
   usesUbuntuPython: boolean,
+  usesAioPython: boolean,
 ) {
   const packages = ["ca-certificates"];
-  appendUnique(
-    packages,
-    usesUbuntuPython
-      ? [`python${pythonVersion}`, `python${pythonVersion}-venv`]
-      : PYTHON_BUILD_APT_PACKAGES,
-  );
+  if (!usesAioPython) {
+    appendUnique(
+      packages,
+      usesUbuntuPython
+        ? [`python${pythonVersion}`, `python${pythonVersion}-venv`]
+        : PYTHON_BUILD_APT_PACKAGES,
+    );
+  }
   for (const option of selected) {
     if (option.id === "playwright" || option.id === "chromium") continue;
     if (option.installer === "apt") appendUnique(packages, [option.packageName]);
@@ -229,6 +254,7 @@ function environmentAptPackages(
 export const EMPTY_ENVIRONMENT_DRAFT: EnvironmentDraft = {
   name: "",
   description: "",
+  baseEnvironment: "aio-sandbox",
   operatingSystem: "ubuntu-22.04",
   language: "python-3.12",
   optionIds: ["lark-cli", "pandoc", "opencli", "uv", "ripgrep", "jq", "git", "curl"],
@@ -243,14 +269,31 @@ export function environmentOperatingSystemLabel(operatingSystem: EnvironmentOper
   return ENVIRONMENT_OPERATING_SYSTEMS.find((item) => item.id === operatingSystem)?.label ?? operatingSystem;
 }
 
+export function environmentBaseEnvironmentLabel(baseEnvironment: EnvironmentBaseEnvironment): string {
+  return ENVIRONMENT_BASE_ENVIRONMENTS.find((item) => item.id === baseEnvironment)?.label ?? baseEnvironment;
+}
+
 export function environmentComponentCount(environment: EnvironmentDraft): number {
   return environment.optionIds.length + environment.selectedSkills.length + 3;
 }
 
+export function environmentBaseFromDockerfile(dockerfile: string): {
+  baseEnvironment: EnvironmentBaseEnvironment;
+  operatingSystem: EnvironmentOperatingSystem;
+} {
+  const from = dockerfile.match(/^\s*FROM\s+(.+)$/im)?.[1] ?? "";
+  return {
+    baseEnvironment: /aio\.sandbox/i.test(dockerfile) ? "aio-sandbox" : "ubuntu",
+    operatingSystem: /ubuntu:24\.04/i.test(from) ? "ubuntu-24.04" : "ubuntu-22.04",
+  };
+}
+
 export function buildEnvironmentDockerfile(environment: EnvironmentDraft): string {
   const selected = ALL_OPTIONS.filter((option) => environment.optionIds.includes(option.id));
-  const pythonVersion = environment.language.replace("python-", "");
-  const pythonPatchVersion = PYTHON_PATCH_VERSIONS[environment.language];
+  const usesAioPython = environment.baseEnvironment === "aio-sandbox";
+  const language = usesAioPython ? "python-3.12" : environment.language;
+  const pythonVersion = language.replace("python-", "");
+  const pythonPatchVersion = PYTHON_PATCH_VERSIONS[language];
   const operatingSystem = ENVIRONMENT_OPERATING_SYSTEMS.find(
     (item) => item.id === environment.operatingSystem,
   ) ?? ENVIRONMENT_OPERATING_SYSTEMS[0];
@@ -262,10 +305,19 @@ export function buildEnvironmentDockerfile(environment: EnvironmentDraft): strin
     selected,
     pythonVersion,
     usesUbuntuPython,
+    usesAioPython,
   );
-  const lines = [
+  const lines = usesAioPython ? [
+    `ARG AIO_BASE_IMAGE=${AIO_BASE_IMAGE}`,
+    "ARG AIO_BASE_PLATFORM=linux/amd64",
+    "",
+    `# Base environment: AIO Sandbox (${operatingSystem.label})`,
+    "FROM --platform=${AIO_BASE_PLATFORM} ${AIO_BASE_IMAGE}",
+  ] : [
     `# Operating system: ${operatingSystem.label}`,
     `FROM ${operatingSystem.image}`,
+  ];
+  lines.push(
     "",
     "ARG DEBIAN_FRONTEND=noninteractive",
     "ARG APT_MIRROR_URL=http://archive.ubuntu.com/ubuntu",
@@ -293,8 +345,17 @@ export function buildEnvironmentDockerfile(environment: EnvironmentDraft): strin
     "    PIP_NO_CACHE_DIR=1",
     "",
     `# Python ${pythonVersion}`,
-  ];
-  if (usesUbuntuPython) {
+  );
+  if (usesAioPython) {
+    lines.push(
+      "# Keep Studio dependencies isolated from AIO's system interpreter.",
+      "RUN /opt/python3.12/bin/python -m venv /opt/veadk-environment/.venv",
+      "",
+      "ENV VIRTUAL_ENV=/opt/veadk-environment/.venv \\",
+      "    BASH_VENV_PATH=/opt/veadk-environment/.venv \\",
+      "    PATH=\"/opt/veadk-environment/.venv/bin:$PATH\"",
+    );
+  } else if (usesUbuntuPython) {
     lines.push(`RUN python${pythonVersion} -m venv /opt/venv`);
   } else {
     lines.push(
@@ -309,7 +370,7 @@ export function buildEnvironmentDockerfile(environment: EnvironmentDraft): strin
       "    && rm -rf /tmp/python-source /tmp/python.tgz",
     );
   }
-  lines.push("", "ENV PATH=\"/opt/venv/bin:$PATH\"");
+  if (!usesAioPython) lines.push("", "ENV PATH=\"/opt/venv/bin:$PATH\"");
 
   const selectedOptionIds = new Set(environment.optionIds);
   if (selectedOptionIds.has("playwright") || selectedOptionIds.has("chromium")) {
@@ -351,6 +412,14 @@ export function buildEnvironmentDockerfile(environment: EnvironmentDraft): strin
     }
   }
 
-  lines.push("", "CMD [\"/bin/bash\"]");
+  if (usesAioPython) {
+    lines.push(
+      "",
+      "# Keep AIO's inherited /opt/gem/run.sh startup chain and shell API.",
+      "EXPOSE 8080",
+    );
+  } else {
+    lines.push("", "CMD [\"/bin/bash\"]");
+  }
   return lines.join("\n");
 }

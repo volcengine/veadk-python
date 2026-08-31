@@ -45,16 +45,19 @@ import {
 import { StudioConfirmDialog } from "./StudioConfirmDialog";
 import { StudioBuildProgress } from "./StudioBuildProgress";
 import { StudioPackageOption } from "./StudioPackageOption";
+import CodeEditor from "./CodeEditor";
 import {
   buildEnvironment,
   createEnvironment,
   deleteEnvironment,
   getEnvironmentBuild,
+  getEnvironmentManifest,
   listEnvironments,
   listWorkspaces,
   updateEnvironment,
   type EnvironmentBuildStatus,
   type EnvironmentBuildVersion,
+  type EnvironmentManifest,
   type EnvironmentInput,
   type StudioEnvironment,
   type StudioWorkspace,
@@ -62,11 +65,15 @@ import {
 import {
   buildEnvironmentDockerfile,
   EMPTY_ENVIRONMENT_DRAFT,
+  ENVIRONMENT_BASE_ENVIRONMENTS,
   ENVIRONMENT_CATEGORIES,
   ENVIRONMENT_LANGUAGES,
   ENVIRONMENT_OPERATING_SYSTEMS,
+  environmentBaseEnvironmentLabel,
+  environmentBaseFromDockerfile,
   environmentLanguageLabel,
   environmentOperatingSystemLabel,
+  type EnvironmentBaseEnvironment,
   type EnvironmentDraft,
   type EnvironmentLanguage,
   type EnvironmentOperatingSystem,
@@ -79,6 +86,7 @@ import {
   readDockerfileUpload,
   validateDockerfileUpload,
 } from "./environmentDockerfileUpload";
+import { formatEnvironmentManifest } from "./environmentManifest";
 import type { CloudProvider } from "../adk/cloudProvider";
 import "./EnvironmentCenter.css";
 
@@ -125,6 +133,15 @@ function EnvironmentEmptyIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+function ManifestIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+      <path d="M7 3.75h7l3 3V20.25H7z" />
+      <path d="M14 3.75v3h3M9.75 11h4.5M9.75 14.5h4.5" />
+    </svg>
+  );
+}
+
 function PackageFallback({ label }: { label: string }) {
   return <span className="environment-package-fallback">{label.slice(0, 1).toUpperCase()}</span>;
 }
@@ -149,6 +166,7 @@ function environmentDraft(environment?: StudioEnvironment): EnvironmentDraft {
   return {
     name: environment.name,
     description: environment.description,
+    baseEnvironment: environment.baseEnvironment,
     operatingSystem: environment.operatingSystem,
     language: environment.language,
     optionIds: [...environment.optionIds],
@@ -211,6 +229,160 @@ function buildElapsed(build: EnvironmentBuildVersion, now = Date.now()): string 
   const remainder = seconds % 60;
   if (minutes < 60) return `${minutes} 分 ${remainder} 秒`;
   return `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分`;
+}
+
+function EnvironmentManifestDialog({
+  environment,
+  onClose,
+}: {
+  environment: StudioEnvironment;
+  onClose: () => void;
+}) {
+  const versionId = environment.latestVersion?.versionId ?? "";
+  const titleId = useId();
+  const dialogRef = useRef<HTMLElement>(null);
+  const onCloseRef = useRef(onClose);
+  const [manifest, setManifest] = useState<EnvironmentManifest | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [reloadKey, setReloadKey] = useState(0);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
+  const manifestYaml = useMemo(
+    () => manifest ? formatEnvironmentManifest(manifest) : "",
+    [manifest],
+  );
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    const previousFocus = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    document.body.style.overflow = "hidden";
+    dialogRef.current?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab" || !dialogRef.current) return;
+      const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+      )).filter((item) => item.getClientRects().length > 0);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true);
+    setError("");
+    void getEnvironmentManifest(environment.id, versionId, controller.signal)
+      .then(setManifest)
+      .catch((cause) => {
+        if ((cause as Error)?.name !== "AbortError") {
+          setError(cause instanceof Error ? cause.message : String(cause));
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [environment.id, reloadKey, versionId]);
+
+  useEffect(() => {
+    if (copyState !== "copied") return;
+    const timer = window.setTimeout(() => setCopyState("idle"), 1500);
+    return () => window.clearTimeout(timer);
+  }, [copyState]);
+
+  const copyManifest = async () => {
+    try {
+      await navigator.clipboard.writeText(manifestYaml);
+      setCopyState("copied");
+    } catch {
+      setCopyState("error");
+    }
+  };
+
+  return createPortal(
+    <div className="environment-build-dialog__backdrop" onMouseDown={(event) => {
+      if (event.target === event.currentTarget) onClose();
+    }}>
+      <section
+        ref={dialogRef}
+        className="environment-build-dialog environment-manifest-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-busy={loading || undefined}
+        tabIndex={-1}
+      >
+        <header className="environment-build-dialog__header">
+          <div>
+            <div className="environment-build-dialog__title-row">
+              <h2 id={titleId}>环境 Manifest</h2>
+            </div>
+            <p>{environment.name} / {versionId}</p>
+          </div>
+          <Button type="button" color="secondary" variant="ghost" size="sm" uniform onClick={onClose} aria-label="关闭环境 Manifest">
+            <X aria-hidden />
+          </Button>
+        </header>
+
+        <div className="environment-manifest-dialog__body">
+          {loading ? (
+            <div className="environment-manifest-dialog__state" role="status">
+              <TextShimmer as="span">正在加载 Manifest</TextShimmer>
+            </div>
+          ) : error ? (
+            <div className="environment-manifest-dialog__state is-error" role="alert">
+              <p>{error}</p>
+              <Button type="button" color="secondary" variant="soft" size="sm" onClick={() => setReloadKey((key) => key + 1)}>
+                重新加载
+              </Button>
+            </div>
+          ) : (
+            <div className="environment-manifest-dialog__editor" aria-label="环境 Manifest YAML">
+              <CodeEditor
+                value={manifestYaml}
+                path="environment.yaml"
+                readOnly
+                onChange={() => undefined}
+              />
+            </div>
+          )}
+        </div>
+
+        <footer className="environment-build-dialog__actions">
+          {copyState === "error" ? (
+            <span className="environment-manifest-dialog__copy-error" role="alert">复制失败，请重试</span>
+          ) : null}
+          <Button type="button" color="secondary" variant="ghost" size="sm" onClick={onClose}>关闭</Button>
+          <Button type="button" color="info" size="sm" disabled={!manifestYaml} onClick={() => void copyManifest()}>
+            {copyState === "copied" ? "已复制" : "复制 Manifest"}
+          </Button>
+        </footer>
+      </section>
+    </div>,
+    document.body,
+  );
 }
 
 function EnvironmentBuildDetailsDialog({
@@ -417,7 +589,7 @@ function EnvironmentEditor({
   const fileReadSequence = useRef(0);
   const generatedDockerfile = useMemo(
     () => buildEnvironmentDockerfile(draft),
-    [draft.operatingSystem, draft.language, draft.optionIds],
+    [draft.baseEnvironment, draft.operatingSystem, draft.language, draft.optionIds],
   );
   const customDockerfile = draft.dockerfile ?? generatedDockerfile;
   const isEditing = Boolean(environment);
@@ -502,6 +674,7 @@ function EnvironmentEditor({
     setSaving(true);
     setSaveError("");
     try {
+      const uploadedBase = environmentBaseFromDockerfile(uploadedDockerfile);
       await onSave({
         ...draft,
         name: draft.name.trim(),
@@ -509,6 +682,7 @@ function EnvironmentEditor({
         optionIds: creationMethod === "dockerfile" ? [] : draft.optionIds,
         selectedSkills: creationMethod === "dockerfile" ? [] : draft.selectedSkills,
         dockerfile: creationMethod === "dockerfile" ? uploadedDockerfile : customDockerfile,
+        ...(creationMethod === "dockerfile" ? uploadedBase : {}),
       });
     } catch (cause) {
       setSaveError(cause instanceof Error ? cause.message : String(cause));
@@ -583,7 +757,7 @@ function EnvironmentEditor({
               <span className="environment-creation-option__icon"><SlidersHorizontal aria-hidden /></span>
               <span className="environment-creation-option__copy">
                 <strong>自定义配置</strong>
-                <span>选择系统、Python、工具和技能</span>
+                <span>选择基础环境、Python、工具和技能</span>
               </span>
             </RadioGroup.Item>
             <RadioGroup.Item
@@ -615,25 +789,52 @@ function EnvironmentEditor({
             </SegmentedControl>
             {activeTab === "configuration" ? (
               <div className="environment-configuration">
-            <section className="environment-section" aria-labelledby="environment-operating-system-title">
-              <h2 id="environment-operating-system-title">操作系统</h2>
-              <RadioGroup<EnvironmentOperatingSystem>
-                className="environment-language-options"
-                aria-label="操作系统"
-                value={draft.operatingSystem}
-                onChange={(operatingSystem) => setDraft((current) => ({ ...current, operatingSystem }))}
+            <section className="environment-section" aria-labelledby="environment-base-title">
+              <h2 id="environment-base-title">基础环境</h2>
+              <RadioGroup<EnvironmentBaseEnvironment>
+                className="environment-base-options"
+                aria-label="基础环境"
+                value={draft.baseEnvironment}
+                onChange={(baseEnvironment) => setDraft((current) => ({
+                  ...current,
+                  baseEnvironment,
+                  operatingSystem: baseEnvironment === "aio-sandbox" ? "ubuntu-22.04" : current.operatingSystem,
+                  language: baseEnvironment === "aio-sandbox" ? "python-3.12" : current.language,
+                }))}
               >
-                {ENVIRONMENT_OPERATING_SYSTEMS.map((operatingSystem) => (
+                {ENVIRONMENT_BASE_ENVIRONMENTS.map((baseEnvironment) => (
                   <RadioGroup.Item
-                    key={operatingSystem.id}
-                    value={operatingSystem.id}
+                    key={baseEnvironment.id}
+                    value={baseEnvironment.id}
                     block
-                    className={draft.operatingSystem === operatingSystem.id ? "is-selected" : ""}
+                    className={draft.baseEnvironment === baseEnvironment.id ? "is-selected" : ""}
                   >
-                    <span className="environment-language-copy">{operatingSystem.label}</span>
+                    <span className="environment-base-copy">
+                      <strong>{baseEnvironment.label}</strong>
+                      <span>{baseEnvironment.description}</span>
+                    </span>
                   </RadioGroup.Item>
                 ))}
               </RadioGroup>
+              {draft.baseEnvironment === "ubuntu" ? (
+                <RadioGroup<EnvironmentOperatingSystem>
+                  className="environment-os-version-options"
+                  aria-label="Ubuntu 版本"
+                  value={draft.operatingSystem}
+                  onChange={(operatingSystem) => setDraft((current) => ({ ...current, operatingSystem }))}
+                >
+                  {ENVIRONMENT_OPERATING_SYSTEMS.map((operatingSystem) => (
+                    <RadioGroup.Item
+                      key={operatingSystem.id}
+                      value={operatingSystem.id}
+                      block
+                      className={draft.operatingSystem === operatingSystem.id ? "is-selected" : ""}
+                    >
+                      <span className="environment-language-copy">{operatingSystem.label}</span>
+                    </RadioGroup.Item>
+                  ))}
+                </RadioGroup>
+              ) : null}
             </section>
 
             <section className="environment-section" aria-labelledby="environment-language-title">
@@ -644,7 +845,9 @@ function EnvironmentEditor({
                 value={draft.language}
                 onChange={(language) => setDraft((current) => ({ ...current, language }))}
               >
-                {ENVIRONMENT_LANGUAGES.map((language) => (
+                {ENVIRONMENT_LANGUAGES
+                  .filter((language) => draft.baseEnvironment !== "aio-sandbox" || language.id === "python-3.12")
+                  .map((language) => (
                   <RadioGroup.Item
                     key={language.id}
                     value={language.id}
@@ -812,6 +1015,7 @@ export function EnvironmentCenter({
   const [query, setQuery] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<StudioEnvironment | null>(null);
   const [buildDetailsId, setBuildDetailsId] = useState<string | null>(null);
+  const [manifestTarget, setManifestTarget] = useState<StudioEnvironment | null>(null);
   const [statusMessage, setStatusMessage] = useState("");
   const [statusError, setStatusError] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -823,7 +1027,8 @@ export function EnvironmentCenter({
     const normalized = deferredQuery.trim().toLocaleLowerCase();
     if (!normalized) return environments;
     return environments.filter((environment) =>
-      `${environment.name} ${environment.description} ${environmentOperatingSystemLabel(environment.operatingSystem)} ${environmentLanguageLabel(environment.language)}`
+      (`${environment.name} ${environment.description} ${environmentOperatingSystemLabel(environment.operatingSystem)} ${environmentLanguageLabel(environment.language)}`
+        + ` ${environmentBaseEnvironmentLabel(environment.baseEnvironment)}`)
         .toLocaleLowerCase()
         .includes(normalized),
     );
@@ -1013,7 +1218,12 @@ export function EnvironmentCenter({
                     "暂无描述"
                   }
                   metadata={[
-                    { label: "系统", value: environmentOperatingSystemLabel(environment.operatingSystem) },
+                    {
+                      label: "基础环境",
+                      value: environment.baseEnvironment === "aio-sandbox"
+                        ? "AIO Sandbox"
+                        : environmentOperatingSystemLabel(environment.operatingSystem),
+                    },
                     { label: "语言", value: environmentLanguageLabel(environment.language) },
                     { label: "工作区", value: `${referenceCount} 个工作区` },
                     { label: "更新", value: environmentUpdatedAt(environment.updatedAt) },
@@ -1026,6 +1236,13 @@ export function EnvironmentCenter({
                     onClick: () => environment.latestVersion
                       ? setBuildDetailsId(environment.id)
                       : void rebuildEnvironment(environment),
+                  }}
+                  auxiliaryAction={{
+                    label: "查看环境 Manifest",
+                    icon: <ManifestIcon />,
+                    title: environment.latestVersion ? "查看 Manifest" : "尚无可用 Manifest",
+                    disabled: !environment.latestVersion,
+                    onClick: () => setManifestTarget(environment),
                   }}
                   detailAction={{ label: "配置", onClick: () => setView({ kind: "editor", environmentId: environment.id }) }}
                 />
@@ -1051,6 +1268,13 @@ export function EnvironmentCenter({
           />
         );
       })() : null}
+
+      {manifestTarget?.latestVersion ? (
+        <EnvironmentManifestDialog
+          environment={manifestTarget}
+          onClose={() => setManifestTarget(null)}
+        />
+      ) : null}
 
       {deleteTarget ? (
         <StudioConfirmDialog

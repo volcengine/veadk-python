@@ -1695,6 +1695,10 @@ export interface RunArgs {
   invocation?: FrontendInvocation;
   /** Complete set of local BFF tool IDs selected for this run. */
   platformTools?: readonly string[];
+  /** Studio-only immutable environment selections for this session. */
+  environmentMounts?: readonly SessionEnvironmentMountSelection[];
+  /** @deprecated Compatibility with older Studio BFF versions. */
+  environmentMount?: SessionEnvironmentMountSelection;
   /** Function responses to send instead of/alongside text — used to resume a
    *  long-running call (e.g. answering ADK's `adk_request_credential`). */
   functionResponses?: { id: string; name: string; response: unknown }[];
@@ -1773,6 +1777,8 @@ export async function* runSSE({
   attachments = [],
   invocation,
   platformTools,
+  environmentMounts,
+  environmentMount,
   functionResponses = [],
   signal,
   onRuntimeContext,
@@ -1837,6 +1843,11 @@ export async function* runSSE({
           ...(platformTools !== undefined
             ? { platform_tools: [...platformTools] }
             : {}),
+          ...(environmentMounts !== undefined
+            ? { environment_mounts: [...environmentMounts] }
+            : environmentMount
+              ? { environment_mount: environmentMount }
+              : {}),
           custom_metadata: invocationMetadata
             ? { veadkInvocation: invocationMetadata }
             : undefined,
@@ -2093,7 +2104,12 @@ export interface SystemInfoResponse {
 }
 
 export type EnvironmentOperatingSystem = "ubuntu-22.04" | "ubuntu-24.04";
+export type EnvironmentBaseEnvironment = "ubuntu" | "aio-sandbox";
 export type EnvironmentLanguage = "python-3.10" | "python-3.12";
+export interface SessionEnvironmentMountSelection {
+  environment_id: string;
+  environment_version_id: string;
+}
 export type EnvironmentBuildStatus =
   | "preparing"
   | "queued"
@@ -2101,6 +2117,7 @@ export type EnvironmentBuildStatus =
   | "scanning"
   | "available"
   | "failed";
+export type EnvironmentSandboxToolStatus = "" | "creating" | "ready" | "failed";
 
 export interface EnvironmentBuildResource {
   source: "provided" | "managed";
@@ -2133,6 +2150,8 @@ export interface EnvironmentBuildVersion {
   versionId: string;
   status: EnvironmentBuildStatus;
   image: string;
+  toolId: string;
+  toolStatus: EnvironmentSandboxToolStatus;
   error: string;
   runId: string;
   currentStep: string;
@@ -2150,10 +2169,48 @@ export interface EnvironmentBuildVersion {
   } | null;
 }
 
+export interface EnvironmentManifestSkill {
+  name: string;
+  folder: string;
+  source: "skillhub" | "local" | "skillspace";
+  version: string;
+  digest: string;
+}
+
+export interface EnvironmentManifest {
+  apiVersion: "agentkit.studio/v1alpha1";
+  kind: "Environment";
+  metadata: {
+    id: string;
+    name: string;
+    version: string;
+    description: string;
+  };
+  spec: {
+    image: string;
+    baseEnvironment: EnvironmentBaseEnvironment;
+    baseImage: string;
+    operatingSystem: EnvironmentOperatingSystem;
+    language: EnvironmentLanguage;
+    executionRuntime: "veadk";
+    packages: string[];
+    capabilities: string[];
+    skills: EnvironmentManifestSkill[];
+  };
+  status: {
+    phase: EnvironmentBuildStatus;
+    toolId: string;
+    toolStatus: EnvironmentSandboxToolStatus;
+    createdAt: string;
+    updatedAt: string;
+  };
+}
+
 export interface StudioEnvironment {
   id: string;
   name: string;
   description: string;
+  baseEnvironment: EnvironmentBaseEnvironment;
   operatingSystem: EnvironmentOperatingSystem;
   language: EnvironmentLanguage;
   optionIds: string[];
@@ -2182,6 +2239,7 @@ export interface WorkspaceInput {
 export interface EnvironmentInput {
   name: string;
   description: string;
+  baseEnvironment: EnvironmentBaseEnvironment;
   operatingSystem: EnvironmentOperatingSystem;
   language: EnvironmentLanguage;
   optionIds: string[];
@@ -2303,6 +2361,10 @@ function environmentBuildVersion(value: unknown): EnvironmentBuildVersion | null
     : [];
   return {
     ...candidate,
+    toolId: typeof candidate.toolId === "string" ? candidate.toolId : "",
+    toolStatus: ["creating", "ready", "failed"].includes(candidate.toolStatus)
+      ? candidate.toolStatus
+      : "",
     runId: typeof candidate.runId === "string" ? candidate.runId : "",
     currentStep: typeof candidate.currentStep === "string" ? candidate.currentStep : "",
     steps,
@@ -2314,15 +2376,53 @@ function environmentBuildVersion(value: unknown): EnvironmentBuildVersion | null
   };
 }
 
+function environmentManifest(value: unknown): EnvironmentManifest {
+  if (!value || typeof value !== "object") {
+    throw new Error("环境 Manifest 响应格式无效");
+  }
+  const candidate = value as EnvironmentManifest;
+  if (
+    candidate.apiVersion !== "agentkit.studio/v1alpha1" ||
+    candidate.kind !== "Environment" ||
+    !candidate.metadata ||
+    typeof candidate.metadata.id !== "string" ||
+    typeof candidate.metadata.name !== "string" ||
+    typeof candidate.metadata.version !== "string" ||
+    typeof candidate.metadata.description !== "string" ||
+    !candidate.spec ||
+    typeof candidate.spec.image !== "string" ||
+    !["ubuntu", "aio-sandbox"].includes(candidate.spec.baseEnvironment) ||
+    typeof candidate.spec.baseImage !== "string" ||
+    !["ubuntu-22.04", "ubuntu-24.04"].includes(candidate.spec.operatingSystem) ||
+    !["python-3.10", "python-3.12"].includes(candidate.spec.language) ||
+    candidate.spec.executionRuntime !== "veadk" ||
+    !Array.isArray(candidate.spec.packages) ||
+    !candidate.spec.packages.every((item) => typeof item === "string") ||
+    !Array.isArray(candidate.spec.capabilities) ||
+    !candidate.spec.capabilities.every((item) => typeof item === "string") ||
+    !Array.isArray(candidate.spec.skills) ||
+    !candidate.status ||
+    !ENVIRONMENT_BUILD_STATUSES.has(candidate.status.phase) ||
+    typeof candidate.status.createdAt !== "string" ||
+    typeof candidate.status.updatedAt !== "string"
+  ) {
+    throw new Error("环境 Manifest 响应格式无效");
+  }
+  return candidate;
+}
+
 function studioEnvironment(value: unknown): StudioEnvironment {
   if (!value || typeof value !== "object") {
     throw new Error("环境响应格式无效");
   }
-  const candidate = value as StudioEnvironment;
+  const candidate = value as StudioEnvironment & { baseEnvironment?: unknown };
   if (
     typeof candidate.id !== "string" ||
     typeof candidate.name !== "string" ||
     typeof candidate.description !== "string" ||
+    (candidate.baseEnvironment !== undefined &&
+      candidate.baseEnvironment !== "ubuntu" &&
+      candidate.baseEnvironment !== "aio-sandbox") ||
     (candidate.operatingSystem !== "ubuntu-22.04" &&
       candidate.operatingSystem !== "ubuntu-24.04") ||
     (candidate.language !== "python-3.10" && candidate.language !== "python-3.12") ||
@@ -2337,6 +2437,7 @@ function studioEnvironment(value: unknown): StudioEnvironment {
   }
   return {
     ...candidate,
+    baseEnvironment: candidate.baseEnvironment === "aio-sandbox" ? "aio-sandbox" : "ubuntu",
     selectedSkills: candidate.selectedSkills ?? [],
     latestVersion: environmentBuildVersion(candidate.latestVersion),
   };
@@ -2515,6 +2616,21 @@ export async function getEnvironmentBuild(
   const result = environmentBuildVersion(await response.json());
   if (!result) throw new Error("环境构建响应格式无效");
   return result;
+}
+
+export async function getEnvironmentManifest(
+  environmentId: string,
+  versionId: string,
+  signal?: AbortSignal,
+): Promise<EnvironmentManifest> {
+  const response = await apiFetch(
+    `/web/environments/${encodeURIComponent(environmentId)}/builds/${encodeURIComponent(versionId)}/manifest`,
+    { signal },
+  );
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, "读取环境 Manifest 失败"));
+  }
+  return environmentManifest(await response.json());
 }
 
 function environmentBuildResource(value: unknown): EnvironmentBuildResource {
