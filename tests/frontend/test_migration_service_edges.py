@@ -73,7 +73,7 @@ def test_source_archive_validation_covers_size_structure_and_encryption(
     with pytest.raises(MigrationError) as upload_size:
         validate_source_archive(b"x")
     assert_code(upload_size, "MIGRATION_SOURCE_TOO_LARGE")
-    monkeypatch.setattr(service_module, "MIGRATION_UPLOAD_MAX_BYTES", 50 * 1024 * 1024)
+    monkeypatch.setattr(service_module, "MIGRATION_UPLOAD_MAX_BYTES", 20 * 1024 * 1024)
 
     with pytest.raises(MigrationError) as duplicate:
         validate_source_archive(zip_bytes({"A.py": b"a", "a.py": b"b"}))
@@ -90,7 +90,7 @@ def test_source_archive_validation_covers_size_structure_and_encryption(
     with pytest.raises(MigrationError) as file_count:
         validate_source_archive(zip_bytes({"app.py": b"x"}))
     assert_code(file_count, "MIGRATION_SOURCE_FILE_COUNT")
-    monkeypatch.setattr(service_module, "_MAX_ARCHIVE_FILES", 20_000)
+    monkeypatch.setattr(service_module, "_MAX_ARCHIVE_FILES", 2_000)
 
     monkeypatch.setattr(service_module, "_MAX_EXPANDED_BYTES", 0)
     with pytest.raises(MigrationError) as expanded:

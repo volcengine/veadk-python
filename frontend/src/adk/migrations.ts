@@ -123,6 +123,13 @@ export interface MigrationTask {
     message: string;
     retryable: boolean;
   };
+  persistence?: {
+    state: "saving" | "saved" | "failed" | "unavailable";
+    projectId?: string;
+    versionId?: string;
+    message: string;
+    retryable?: boolean;
+  };
 }
 
 export type MigrationActivityKind =
@@ -477,6 +484,31 @@ function normalizeTask(value: unknown): MigrationTask {
       code: typeof error.code === "string" ? error.code : "MIGRATION_ERROR",
       message: typeof error.message === "string" ? error.message : task.message,
       retryable: error.retryable === true,
+    };
+  }
+  if (task.persistence !== undefined) {
+    const persistence = record(task.persistence, "迁移源码保存状态");
+    if (
+      !["saving", "saved", "failed", "unavailable"].includes(String(persistence.state))
+      || typeof persistence.message !== "string"
+      || (persistence.projectId !== undefined && typeof persistence.projectId !== "string")
+      || (persistence.versionId !== undefined && typeof persistence.versionId !== "string")
+      || (persistence.retryable !== undefined && typeof persistence.retryable !== "boolean")
+    ) {
+      throw new Error("迁移源码保存状态格式错误。");
+    }
+    normalized.persistence = {
+      state: persistence.state as "saving" | "saved" | "failed" | "unavailable",
+      message: persistence.message,
+      ...(typeof persistence.projectId === "string"
+        ? { projectId: persistence.projectId }
+        : {}),
+      ...(typeof persistence.versionId === "string"
+        ? { versionId: persistence.versionId }
+        : {}),
+      ...(typeof persistence.retryable === "boolean"
+        ? { retryable: persistence.retryable }
+        : {}),
     };
   }
   return normalized;

@@ -18,14 +18,34 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from frontend.server.source_project_limits import (
+    SOURCE_PROJECT_MAX_BYTES,
+    SOURCE_PROJECT_MAX_FILES,
+)
+
+SourceProjectOrigin = Literal["intelligent-development", "migration"]
+SourceVersionProducer = Literal["intelligent-development", "migration"]
+
+
+class SourceVersionEnvironment(BaseModel):
+    """Runtime environment contract retained with one immutable source version."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    required: list[str] = Field(default_factory=list, max_length=500)
+    optional: list[str] = Field(default_factory=list, max_length=500)
+    defaults: dict[str, str] = Field(default_factory=dict)
 
 
 class IntelligentDevelopmentProject(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     schema_version: str = Field(default="1", alias="schemaVersion")
+    origin: SourceProjectOrigin = "intelligent-development"
     project_id: str = Field(alias="projectId", pattern=r"^[0-9a-f]{32}$")
     owner_id: str = Field(alias="ownerId", min_length=1, max_length=1024)
     name: str = Field(min_length=1, max_length=128)
@@ -44,6 +64,7 @@ class IntelligentDevelopmentVersion(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     schema_version: str = Field(default="1", alias="schemaVersion")
+    producer: SourceVersionProducer = "intelligent-development"
     project_id: str = Field(alias="projectId", pattern=r"^[0-9a-f]{32}$")
     version_id: str = Field(alias="versionId", pattern=r"^[0-9a-f]{32}$")
     parent_version_id: str | None = Field(
@@ -59,14 +80,21 @@ class IntelligentDevelopmentVersion(BaseModel):
     validation_report_sha256: str = Field(
         alias="validationReportSha256", pattern=r"^[0-9a-f]{64}$"
     )
-    artifact_size: int = Field(alias="artifactSize", ge=1, le=20 * 1024 * 1024)
-    file_count: int = Field(alias="fileCount", ge=1, le=2000)
+    artifact_size: int = Field(alias="artifactSize", ge=1, le=SOURCE_PROJECT_MAX_BYTES)
+    file_count: int = Field(alias="fileCount", ge=1, le=SOURCE_PROJECT_MAX_FILES)
     agent_name: str = Field(alias="agentName", min_length=1, max_length=256)
     entry_point: str = Field(alias="entryPoint", min_length=1, max_length=512)
     verified: bool
     validation_summary: str = Field(alias="validationSummary", max_length=4000)
     gate_summary: list[str] = Field(alias="gateSummary", max_length=50)
     validated_at: str = Field(alias="validatedAt", max_length=128)
+    environment: SourceVersionEnvironment = Field(
+        default_factory=SourceVersionEnvironment
+    )
+    migration_framework: str = Field(
+        default="", alias="migrationFramework", max_length=128
+    )
+    migration_engine: str = Field(default="", alias="migrationEngine", max_length=64)
 
 
 class IntelligentDevelopmentSessionBinding(BaseModel):

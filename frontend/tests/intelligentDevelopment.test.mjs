@@ -65,7 +65,11 @@ const result = await build({
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(
   result.outputFiles[0].contents,
 ).toString("base64")}`;
-const { intelligentDevelopmentClient, sandboxClient } = await import(moduleUrl);
+const {
+  intelligentDevelopmentClient,
+  intelligentDevelopmentErrorMessage,
+  sandboxClient,
+} = await import(moduleUrl);
 
 const sandboxSource = readFileSync(
   new URL("../src/adk/sandbox.ts", import.meta.url),
@@ -329,6 +333,71 @@ test("normal sandbox client keeps the existing endpoint and skill payload", asyn
     url: "/web/sandbox/sessions/sandbox%2F1/messages",
     body: { message: "use it", skillIds: ["skill-1"] },
   });
+});
+
+test("intelligent development errors preserve specific recovery guidance", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+  });
+  globalThis.fetch = async () => sseResponse([
+    `event: error\ndata: ${JSON.stringify({
+      code: "INTELLIGENT_DEVELOPMENT_INTENT_INVALID",
+      message: "未能确认本次优化目标，开发尚未开始。请重新发送，已有项目和版本不受影响。",
+      retryable: true,
+    })}`,
+  ]);
+
+  await assert.rejects(
+    intelligentDevelopmentClient.sendMessage({
+      sessionId: "dev-1",
+      text: "继续优化",
+    }),
+    (error) => {
+      assert.equal(error.code, "INTELLIGENT_DEVELOPMENT_INTENT_INVALID");
+      assert.equal(error.retryable, true);
+      assert.equal(
+        intelligentDevelopmentErrorMessage(error),
+        "未能确认本次优化目标，开发尚未开始。请重新发送，已有项目和版本不受影响。",
+      );
+      return true;
+    },
+  );
+
+  globalThis.fetch = async () => Response.json({
+    detail: {
+      code: "INTELLIGENT_DEVELOPMENT_TASK_IN_PROGRESS",
+      message: "上一条任务仍在处理，请稍后再试。",
+      retryable: true,
+    },
+  }, { status: 409 });
+  await assert.rejects(
+    intelligentDevelopmentClient.sendMessage({
+      sessionId: "dev-1",
+      text: "再次发送",
+    }),
+    (error) => {
+      assert.equal(error.code, "INTELLIGENT_DEVELOPMENT_TASK_IN_PROGRESS");
+      assert.equal(
+        intelligentDevelopmentErrorMessage(error),
+        "上一条任务仍在处理，请稍后再试。",
+      );
+      return true;
+    },
+  );
+
+  assert.equal(
+    intelligentDevelopmentErrorMessage(new DOMException("timed out", "TimeoutError")),
+    "等待开发环境响应超时。任务可能仍在运行，请稍后重新进入当前会话查看状态。",
+  );
+  assert.equal(
+    intelligentDevelopmentErrorMessage(new TypeError("Failed to fetch")),
+    "与开发环境的连接已中断。任务可能仍在运行，请稍后重新进入当前会话查看状态。",
+  );
+  assert.match(
+    appSource,
+    /activeSession\.intelligentDevelopment\s*\?\s*intelligentDevelopmentErrorMessage\(messageError\)/,
+  );
 });
 
 test("source-ready delivery is upgraded in place only by the verified event", async (t) => {
@@ -795,9 +864,11 @@ test("durable project APIs parse lists, versions, deletion, and exact source ide
     validationSummary: "验证通过",
     files: [{ path: "app.py", content: "agent = object()" }],
   };
+  const projectOrigins = [];
   globalThis.fetch = async (url, options = {}) => {
     const request = new URL(String(url), "http://localhost");
     if (request.pathname.endsWith("/projects")) {
+      projectOrigins.push(request.searchParams.get("origin"));
       return Response.json({ projects: [project] });
     }
     if (request.pathname.endsWith("/versions")) {
@@ -811,6 +882,11 @@ test("durable project APIs parse lists, versions, deletion, and exact source ide
   };
   try {
     assert.deepEqual(await fetchIntelligentDevelopmentProjects(), [project]);
+    assert.deepEqual(
+      await fetchIntelligentDevelopmentProjects(undefined, "migration"),
+      [project],
+    );
+    assert.deepEqual(projectOrigins, ["intelligent-development", "migration"]);
     assert.deepEqual(
       await fetchIntelligentDevelopmentVersions("project-1"),
       [version],
@@ -1228,6 +1304,50 @@ test("saved project actions stay compact, destructive, and resilient to long con
   );
 });
 
+test("migration optimization only enables Any and Dify project lineages", async () => {
+  const { migrationOptimizationUnavailableReason } = await importTsxBundle(
+    "../src/create/IntelligentProjectLibrary.tsx",
+  );
+  const version = (migrationFramework) => ({ migrationFramework });
+
+  assert.equal(
+    migrationOptimizationUnavailableReason("intelligent-development", []),
+    "",
+  );
+  assert.equal(
+    migrationOptimizationUnavailableReason("migration", [version("any")]),
+    "",
+  );
+  assert.equal(
+    migrationOptimizationUnavailableReason("migration", [version("DIFY")]),
+    "",
+  );
+  assert.equal(
+    migrationOptimizationUnavailableReason("migration", [
+      version(undefined),
+      version("any"),
+    ]),
+    "",
+  );
+  assert.equal(
+    migrationOptimizationUnavailableReason("migration", [version("langchain")]),
+    "暂不支持",
+  );
+  assert.equal(
+    migrationOptimizationUnavailableReason("migration", []),
+    "暂不支持",
+  );
+  assert.match(
+    projectLibrarySource,
+    /<Tooltip[\s\S]*?content=\{optimizationUnavailableReason\}[\s\S]*?暂不支持/,
+  );
+  assert.match(
+    projectLibrarySource,
+    /className="ic-disabled-action-tooltip"[\s\S]*?tabIndex=\{0\}/,
+  );
+  assert.doesNotMatch(projectLibrarySource, /目前仅 Any 和 Dify 类型可优化/);
+});
+
 test("version comparison controls align with project titles and expose clear selection", () => {
   const projectSummary = projectLibrarySource.match(
     /<div className="ic-project-summary">([\s\S]*?)\{expanded \? \(/,
@@ -1353,6 +1473,29 @@ test("authentication does not load Codex sessions into the global Sidebar", () =
     /function requestIntelligentNavigation[\s\S]*?sandboxSession\?\.intelligentDevelopment && sandboxBusy[\s\S]*?setIntelligentLeaveOpen\(true\)/,
   );
   assert.match(appSource, /离开将停止本轮构建；当前会话仍会保留/);
+});
+
+test("leaving an active intelligent build does not wait for remote cleanup", () => {
+  const handler = appSource.match(
+    /function confirmIntelligentNavigation\(\) \{[\s\S]*?\n  \}/,
+  )?.[0] ?? "";
+
+  assert.ok(handler, "intelligent navigation confirmation handler should exist");
+  assert.doesNotMatch(handler, /async function/);
+  assert.doesNotMatch(handler, /await intelligentDevelopmentClient\.interruptSession/);
+  assert.match(
+    handler,
+    /const interrupt = intelligentDevelopmentClient\.interruptSession\(activeSession\.id\)/,
+  );
+  assert.ok(
+    handler.indexOf("const interrupt =") < handler.indexOf("action();"),
+    "the stop request must start before navigation",
+  );
+  assert.ok(
+    handler.indexOf("action();") < handler.indexOf("void interrupt.catch"),
+    "navigation must not wait for remote cleanup",
+  );
+  assert.doesNotMatch(appSource, /intelligentLeaveBusy/);
 });
 
 test("verified delivery uses repository-owned visuals and user-facing copy", () => {

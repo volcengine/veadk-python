@@ -16,21 +16,30 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import hashlib
 import json
 import logging
 import shlex
+from collections.abc import Mapping
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from frontend.server.intelligent_development import DeliveryReference, release_path
 from frontend.server.intelligent_development_task import IntentDecision
 from frontend.server.sandbox_remote import SandboxRemoteTransport
+from frontend.server.source_project_limits import (
+    SOURCE_PROJECT_MAX_BYTES,
+    SOURCE_PROJECT_MAX_FILES,
+    SOURCE_PROJECT_MAX_REPORT_BYTES,
+)
 from veadk.cli.frontend_sandbox import SandboxSessionUnavailableError
 
 from .models import (
     IntelligentDevelopmentProject,
     IntelligentDevelopmentSessionBinding,
     IntelligentDevelopmentVersion,
+    SourceProjectOrigin,
+    SourceVersionEnvironment,
     StoredDevelopmentVersion,
 )
 from .repository import (
@@ -39,8 +48,8 @@ from .repository import (
     TosIntelligentDevelopmentProjectRepository,
 )
 
-_MAX_ARTIFACT_BYTES = 20 * 1024 * 1024
-_MAX_REPORT_BYTES = 2 * 1024 * 1024
+_MAX_ARTIFACT_BYTES = SOURCE_PROJECT_MAX_BYTES
+_MAX_REPORT_BYTES = SOURCE_PROJECT_MAX_REPORT_BYTES
 logger = logging.getLogger(__name__)
 
 
@@ -50,8 +59,16 @@ class IntelligentDevelopmentProjectService:
     def __init__(self, repository: TosIntelligentDevelopmentProjectRepository) -> None:
         self.repository = repository
 
-    async def list_projects(self, owner_id: str) -> list[IntelligentDevelopmentProject]:
-        return await self.repository.list_projects(owner_id)
+    async def list_projects(
+        self,
+        owner_id: str,
+        *,
+        origin: SourceProjectOrigin | None = None,
+    ) -> list[IntelligentDevelopmentProject]:
+        projects = await self.repository.list_projects(owner_id)
+        if origin is None:
+            return projects
+        return [project for project in projects if project.origin == origin]
 
     async def list_versions(
         self, owner_id: str, project_id: str
@@ -196,7 +213,8 @@ class IntelligentDevelopmentProjectService:
             " with zipfile.ZipFile(archive) as package:\n"
             "  files=[item for item in package.infolist() if not item.is_dir()]\n"
             "  if len(files)!=expected_count: raise ValueError('file count mismatch')\n"
-            "  if sum(item.file_size for item in files)>20*1024*1024: raise ValueError('archive too large')\n"
+            f"  if len(files)>{SOURCE_PROJECT_MAX_FILES}: raise ValueError('too many files')\n"
+            f"  if sum(item.file_size for item in files)>{SOURCE_PROJECT_MAX_BYTES}: raise ValueError('archive too large')\n"
             "  for item in files:\n"
             "   path=PurePosixPath(item.filename)\n"
             "   if path.is_absolute() or not path.parts or '..' in path.parts: raise ValueError('unsafe path')\n"
@@ -240,6 +258,38 @@ class IntelligentDevelopmentProjectService:
         decision: IntentDecision,
     ) -> tuple[IntelligentDevelopmentProject, IntelligentDevelopmentVersion]:
         binding = await self._resolved_binding(owner_id, session_id)
+        base_version = (
+            await self.repository.get_version(
+                owner_id,
+                binding.project_id,
+                binding.base_version_id,
+            )
+            if binding.base_version_id is not None
+            else None
+        )
+        migration_framework = (
+            base_version.migration_framework if base_version is not None else ""
+        )
+        migration_engine = (
+            base_version.migration_engine if base_version is not None else ""
+        )
+        if base_version is not None and not (migration_framework and migration_engine):
+            versions = await self.repository.list_versions(
+                owner_id,
+                binding.project_id,
+            )
+            migration_framework = migration_framework or next(
+                (
+                    item.migration_framework
+                    for item in versions
+                    if item.migration_framework
+                ),
+                "",
+            )
+            migration_engine = migration_engine or next(
+                (item.migration_engine for item in versions if item.migration_engine),
+                "",
+            )
         release = release_path(
             delivery.artifact_sha256, delivery.validation_report_sha256
         )
@@ -285,6 +335,8 @@ class IntelligentDevelopmentProjectService:
             validationSummary=delivery.validation_summary,
             gateSummary=list(delivery.gate_summary),
             validatedAt=delivery.validated_at,
+            migrationFramework=migration_framework,
+            migrationEngine=migration_engine,
         )
         project = await self.repository.commit_version(
             owner_id,
@@ -304,6 +356,116 @@ class IntelligentDevelopmentProjectService:
                 version.version_id,
                 session_id,
             )
+        return project, version
+
+    async def persist_migration(
+        self,
+        *,
+        owner_id: str,
+        task_id: str,
+        project_name: str,
+        artifact: bytes,
+        result: Mapping[str, object],
+        result_bytes: bytes,
+        environment_defaults: Mapping[str, str],
+    ) -> tuple[IntelligentDevelopmentProject, IntelligentDevelopmentVersion]:
+        """Idempotently retain one trusted migration result as a source version."""
+        artifact_descriptor = result.get("artifact")
+        startup = result.get("startup")
+        migration = result.get("migration")
+        environment = result.get("environment")
+        verification = result.get("verification")
+        files = result.get("files")
+        checks = (
+            verification.get("checks") if isinstance(verification, Mapping) else None
+        )
+        if not (
+            isinstance(artifact_descriptor, Mapping)
+            and isinstance(startup, Mapping)
+            and isinstance(migration, Mapping)
+            and isinstance(environment, Mapping)
+            and isinstance(verification, Mapping)
+            and isinstance(files, list)
+            and isinstance(checks, list)
+        ):
+            raise TypeError("Migration persistence payload is invalid.")
+        artifact_sha256 = str(artifact_descriptor.get("sha256") or "")
+        if hashlib.sha256(artifact).hexdigest() != artifact_sha256:
+            raise ValueError("Migration artifact digest does not match.")
+        report_sha256 = hashlib.sha256(result_bytes).hexdigest()
+        project_id = hashlib.sha256(
+            f"source-project:migration:v1\0{task_id}".encode()
+        ).hexdigest()[:32]
+        version_id = hashlib.sha256(
+            f"source-version:migration:v1\0{task_id}\0{artifact_sha256}".encode()
+        ).hexdigest()[:32]
+        created_text = str(result.get("created_at") or "")
+        created_at = datetime.fromisoformat(created_text.replace("Z", "+00:00"))
+        if created_at.tzinfo is None:
+            raise ValueError("Migration result timestamp must include a timezone.")
+        confirmation_name = project_name.strip()[:128]
+        agent_name = confirmation_name or "migrated-agent"
+        passed_checks = [
+            str(item.get("name"))
+            for item in checks
+            if isinstance(item, Mapping)
+            and item.get("status") == "passed"
+            and str(item.get("name") or "").strip()
+        ][:50]
+        all_checks = [
+            str(item.get("name"))
+            for item in checks
+            if isinstance(item, Mapping) and str(item.get("name") or "").strip()
+        ][:50]
+        status = str(result.get("status") or "")
+        verification_status = str(verification.get("status") or "")
+        verified = verification_status == "passed"
+        summary = {
+            "passed": "迁移校验通过",
+            "degraded": "迁移已完成，部分校验待确认",
+            "failed": "迁移已完成，校验未全部通过",
+        }.get(verification_status, "迁移结果待确认")
+        required = environment.get("required")
+        optional = environment.get("optional")
+        version = IntelligentDevelopmentVersion(
+            producer="migration",
+            projectId=project_id,
+            versionId=version_id,
+            parentVersionId=None,
+            sourceSessionId=task_id,
+            createdAt=created_at,
+            intentSummary=(
+                f"将 {project_name.strip() or agent_name} 迁移为可部署 Agent"
+            )[:2000],
+            acceptanceCriteria=all_checks,
+            artifactSha256=artifact_sha256,
+            validationReportSha256=report_sha256,
+            artifactSize=len(artifact),
+            fileCount=len(files),
+            agentName=agent_name,
+            entryPoint=str(startup.get("module") or ""),
+            verified=verified,
+            validationSummary=(
+                summary if status == "succeeded" else f"{summary}（{status}）"
+            ),
+            gateSummary=passed_checks,
+            validatedAt=created_text,
+            environment=SourceVersionEnvironment(
+                required=list(required) if isinstance(required, list) else [],
+                optional=list(optional) if isinstance(optional, list) else [],
+                defaults=dict(environment_defaults),
+            ),
+            migrationFramework=str(migration.get("framework") or ""),
+            migrationEngine=str(migration.get("engine") or ""),
+        )
+        project = await self.repository.commit_version(
+            owner_id,
+            agent_name,
+            version,
+            artifact,
+            result_bytes,
+            project_origin="migration",
+        )
         return project, version
 
     async def _resolved_binding(

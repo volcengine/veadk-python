@@ -110,21 +110,26 @@ export interface IntelligentCreateProps {
   ) => Promise<void>;
   onDownload: (delivery: IntelligentDevelopmentReleaseRef) => Promise<void>;
   onDeploy: (delivery: IntelligentDevelopmentReleaseRef) => void;
+  initialBaseVersion?: IntelligentCreateBaseVersion;
 }
 
-export function IntelligentCreate({
+export function IntelligentGoalPanel({
   capabilities,
   loading,
   preparationStage,
   error,
-  onBack,
   onCancel,
   onCreate,
-  onDownload,
-  onDeploy,
-}: IntelligentCreateProps) {
+  baseVersion,
+  onClearBaseVersion,
+}: Pick<
+  IntelligentCreateProps,
+  "capabilities" | "loading" | "preparationStage" | "error" | "onCancel" | "onCreate"
+> & {
+  baseVersion?: IntelligentCreateBaseVersion;
+  onClearBaseVersion?: () => void;
+}) {
   const [goal, setGoal] = useState("");
-  const [baseVersion, setBaseVersion] = useState<IntelligentCreateBaseVersion>();
   const [models, setModels] = useState<ModelOption[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState("");
@@ -206,6 +211,11 @@ export function IntelligentCreate({
     setSelectedModelId("");
   }, [defaultModelId, selectableModels, selectedModelId]);
 
+  useEffect(() => {
+    setGoal("");
+    window.requestAnimationFrame(() => goalInputRef.current?.focus());
+  }, [baseVersion?.versionId]);
+
   function changeModel(modelId: string) {
     const value = modelId.trim();
     setSelectedModelId(value && value !== defaultModelId ? value : "");
@@ -232,11 +242,128 @@ export function IntelligentCreate({
     }
   }
 
-  function selectBaseVersion(value: IntelligentCreateBaseVersion) {
-    setBaseVersion(value);
-    setGoal("");
-    window.requestAnimationFrame(() => goalInputRef.current?.focus());
-  }
+  return (
+    <section className="ic-panel ic-goal-panel" aria-busy={creating}>
+      <div className="ic-goal-heading">
+        <span className="ic-create-icon-wrap"><IntelligentCreateIcon /></span>
+        <div>
+          <h2>{baseVersion ? "继续优化项目" : "从目标开始"}</h2>
+        </div>
+      </div>
+      <p className="ic-goal-hint">
+        {baseVersion
+          ? "说明这次要调整的内容，完成后会保存为新版本。"
+          : "只需说明 Agent 要解决的问题；如有影响结果的关键信息，会在开始前向你确认。"}
+      </p>
+      {baseVersion ? (
+        <div className="ic-selected-base">
+          <span>基于</span>
+          <strong title={`${baseVersion.projectName} · ${baseVersion.versionLabel}`}>
+            {baseVersion.projectName} · {baseVersion.versionLabel}
+          </strong>
+          {onClearBaseVersion ? (
+            <button type="button" onClick={onClearBaseVersion}>
+              取消选择
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      <label className="ic-goal-label" htmlFor="intelligent-goal">
+        {baseVersion ? "优化目标" : "目标描述"}
+      </label>
+      <div className="ic-composer">
+        <textarea
+          ref={goalInputRef}
+          id="intelligent-goal"
+          className="ic-goal-input"
+          value={goal}
+          onChange={(event) => setGoal(event.target.value)}
+          onKeyDown={onKeyDown}
+          placeholder={baseVersion
+            ? "例如：增加数据来源标注，并在信息不足时先向用户确认"
+            : "例如：创建一个能读取销售数据、生成周报并校验输出格式的 Agent"}
+          rows={6}
+          disabled={loading || creating || unavailable}
+          autoFocus
+        />
+        <div className="ic-actions">
+          <div className="ic-composer-tools">
+            <div className="ic-model-select">
+              <IntelligentModelSelect
+                value={displayModelId}
+                options={modelSelectOptions}
+                onChange={changeModel}
+                loading={modelsLoading}
+                error={modelsError}
+                disabled={loading || creating || unavailable}
+                onRetry={() => setModelsReloadKey((current) => current + 1)}
+              />
+            </div>
+          </div>
+          <div className="ic-action-buttons">
+            {creating ? (
+              <button type="button" className="ic-secondary" onClick={onCancel}>
+                取消
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="ic-primary"
+              onClick={() => void submit()}
+              disabled={submitDisabled}
+              aria-busy={creating}
+            >
+              {creating ? "准备中…" : baseVersion ? "开始优化" : "开始构建"}
+            </button>
+          </div>
+        </div>
+      </div>
+      {preparationStage ? (
+        <div
+          className="ic-preparation"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          <div>
+            <strong>目标已收到，马上开始实现</strong>
+            <TextShimmer as="p" duration={2.4} spread={18}>
+              {PREPARATION_MESSAGES[preparationStage]}
+            </TextShimmer>
+            <p className="ic-preparation-next">
+              接下来会先梳理目标和实现方式，再编写、运行和验证 Agent。
+            </p>
+          </div>
+        </div>
+      ) : null}
+      {unavailableReason ? (
+        <p
+          className={loading ? "ic-state" : "ic-error"}
+          role={loading ? "status" : "alert"}
+        >
+          {unavailableReason}
+        </p>
+      ) : null}
+      {error ? <p className="ic-error" role="alert">{error}</p> : null}
+    </section>
+  );
+}
+
+export function IntelligentCreate({
+  capabilities,
+  loading,
+  preparationStage,
+  error,
+  onBack,
+  onCancel,
+  onCreate,
+  onDownload,
+  onDeploy,
+  initialBaseVersion,
+}: IntelligentCreateProps) {
+  const [baseVersion, setBaseVersion] = useState<IntelligentCreateBaseVersion | undefined>(
+    initialBaseVersion,
+  );
 
   return (
     <section className="ic-root" aria-labelledby="intelligent-create-title">
@@ -250,114 +377,23 @@ export function IntelligentCreate({
 
       <div className="ic-main">
         <div className="ic-content">
-          <section className="ic-panel ic-goal-panel" aria-busy={creating}>
-            <div className="ic-goal-heading">
-              <span className="ic-create-icon-wrap"><IntelligentCreateIcon /></span>
-              <div>
-                <h2>{baseVersion ? "继续优化项目" : "从目标开始"}</h2>
-              </div>
-            </div>
-            <p className="ic-goal-hint">
-              {baseVersion
-                ? "说明这次要调整的内容，完成后会保存为新版本。"
-                : "只需说明 Agent 要解决的问题；如有影响结果的关键信息，会在开始前向你确认。"}
-            </p>
-            {baseVersion ? (
-              <div className="ic-selected-base">
-                <span>基于</span>
-                <strong title={`${baseVersion.projectName} · ${baseVersion.versionLabel}`}>
-                  {baseVersion.projectName} · {baseVersion.versionLabel}
-                </strong>
-                <button type="button" onClick={() => setBaseVersion(undefined)}>
-                  取消选择
-                </button>
-              </div>
-            ) : null}
-            <label className="ic-goal-label" htmlFor="intelligent-goal">
-              {baseVersion ? "优化目标" : "目标描述"}
-            </label>
-            <div className="ic-composer">
-              <textarea
-                ref={goalInputRef}
-                id="intelligent-goal"
-                className="ic-goal-input"
-                value={goal}
-                onChange={(event) => setGoal(event.target.value)}
-                onKeyDown={onKeyDown}
-                placeholder={baseVersion
-                  ? "例如：增加数据来源标注，并在信息不足时先向用户确认"
-                  : "例如：创建一个能读取销售数据、生成周报并校验输出格式的 Agent"}
-                rows={6}
-                disabled={loading || creating || unavailable}
-                autoFocus
-              />
-              <div className="ic-actions">
-                <div className="ic-composer-tools">
-                  <div className="ic-model-select">
-                    <IntelligentModelSelect
-                      value={displayModelId}
-                      options={modelSelectOptions}
-                      onChange={changeModel}
-                      loading={modelsLoading}
-                      error={modelsError}
-                      disabled={loading || creating || unavailable}
-                      onRetry={() => setModelsReloadKey((current) => current + 1)}
-                    />
-                  </div>
-                </div>
-                <div className="ic-action-buttons">
-                  {creating ? (
-                    <button type="button" className="ic-secondary" onClick={onCancel}>
-                      取消
-                    </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    className="ic-primary"
-                    onClick={() => void submit()}
-                    disabled={submitDisabled}
-                    aria-busy={creating}
-                  >
-                    {creating ? "准备中…" : baseVersion ? "开始优化" : "开始构建"}
-                  </button>
-                </div>
-              </div>
-            </div>
-            {preparationStage ? (
-              <div
-                className="ic-preparation"
-                role="status"
-                aria-live="polite"
-                aria-atomic="true"
-              >
-                <div>
-                  <strong>目标已收到，马上开始实现</strong>
-                  <TextShimmer as="p" duration={2.4} spread={18}>
-                    {PREPARATION_MESSAGES[preparationStage]}
-                  </TextShimmer>
-                  <p className="ic-preparation-next">
-                    接下来会先梳理目标和实现方式，再编写、运行和验证 Agent。
-                  </p>
-                </div>
-              </div>
-            ) : null}
-            {unavailableReason ? (
-              <p
-                className={loading ? "ic-state" : "ic-error"}
-                role={loading ? "status" : "alert"}
-              >
-                {unavailableReason}
-              </p>
-            ) : null}
-            {error ? <p className="ic-error" role="alert">{error}</p> : null}
-          </section>
+          <IntelligentGoalPanel
+            capabilities={capabilities}
+            loading={loading}
+            preparationStage={preparationStage}
+            error={error}
+            onCancel={onCancel}
+            onCreate={onCreate}
+            baseVersion={baseVersion}
+            onClearBaseVersion={() => setBaseVersion(undefined)}
+          />
 
           <IntelligentProjectLibrary
             capabilities={capabilities}
             capabilitiesLoading={loading}
-            creating={creating}
+            creating={preparationStage !== null}
             selectedBaseVersionId={baseVersion?.versionId}
-            onSelectBaseVersion={selectBaseVersion}
+            onSelectBaseVersion={setBaseVersion}
             onClearBaseVersion={() => setBaseVersion(undefined)}
             onDownload={onDownload}
             onDeploy={onDeploy}

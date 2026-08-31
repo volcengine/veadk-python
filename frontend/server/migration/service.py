@@ -38,6 +38,11 @@ from frontend.server.deployment_source import (
     DeploymentSourceError,
     extract_migration_source,
 )
+from frontend.server.source_project_limits import (
+    SOURCE_PROJECT_MAX_BYTES,
+    SOURCE_PROJECT_MAX_FILES,
+    SOURCE_PROJECT_MAX_REPORT_BYTES,
+)
 
 from .contracts import (
     MigrationContractError,
@@ -70,16 +75,16 @@ from .models import (
 
 MIGRATION_ROOT = "/home/gem/.studio/migration/v1"
 MIGRATION_SESSION_TTL_SECONDS = 60 * 60
-MIGRATION_UPLOAD_MAX_BYTES = 50 * 1024 * 1024
+MIGRATION_UPLOAD_MAX_BYTES = SOURCE_PROJECT_MAX_BYTES
 MIGRATION_CLI_MIN_VERSION = "0.52.1"
 MIGRATION_UNSUPPORTED_MODEL_IDS = frozenset({"deepseek-v4-pro-260425"})
-_MAX_EXPANDED_BYTES = 1024 * 1024 * 1024
-_MAX_ARCHIVE_FILES = 20_000
+_MAX_EXPANDED_BYTES = SOURCE_PROJECT_MAX_BYTES
+_MAX_ARCHIVE_FILES = SOURCE_PROJECT_MAX_FILES
 _MAX_ARCHIVE_PATH_BYTES = 4 * 1024
 _MAX_ARCHIVE_DEPTH = 64
-_MAX_JSON_BYTES = 16 * 1024 * 1024
+_MAX_JSON_BYTES = SOURCE_PROJECT_MAX_REPORT_BYTES
 _MAX_PROVENANCE_BYTES = 64 * 1024
-_MAX_ARTIFACT_BYTES = 512 * 1024 * 1024
+_MAX_ARTIFACT_BYTES = SOURCE_PROJECT_MAX_BYTES
 _MAX_PREVIEW_BYTES = 2 * 1024 * 1024
 _FILE_OPERATION_TIMEOUT_SECONDS = 300
 _TASK_ID_RE = re.compile(r"^migration-v1-[0-9a-f]{32}$")
@@ -772,6 +777,16 @@ class SourceArchiveSummary:
     expanded_bytes: int
 
 
+@dataclass(frozen=True)
+class MigrationPersistenceBundle:
+    task_id: str
+    project_name: str
+    artifact: bytes
+    result: dict[str, object]
+    result_bytes: bytes
+    environment_defaults: dict[str, str]
+
+
 def _has_control_character(value: str) -> bool:
     return any(ord(character) < 32 or ord(character) == 127 for character in value)
 
@@ -787,7 +802,7 @@ def validate_source_archive(content: bytes) -> SourceArchiveSummary:
     if len(content) > MIGRATION_UPLOAD_MAX_BYTES:
         raise MigrationError(
             "MIGRATION_SOURCE_TOO_LARGE",
-            "项目 ZIP 不能超过 50 MiB。",
+            "项目 ZIP 不能超过 20 MiB。",
             status_code=413,
         )
     seen: set[str] = set()
@@ -847,7 +862,7 @@ def validate_source_archive(content: bytes) -> SourceArchiveSummary:
                 if expanded_bytes > _MAX_EXPANDED_BYTES:
                     raise MigrationError(
                         "MIGRATION_SOURCE_EXPANDED_TOO_LARGE",
-                        "项目 ZIP 解压后不能超过 1 GiB。",
+                        "项目 ZIP 解压后不能超过 20 MiB。",
                         status_code=413,
                     )
     except zipfile.BadZipFile as error:
@@ -3706,6 +3721,69 @@ class MigrationService:
         safe_stem = re.sub(r"[^A-Za-z0-9._-]+", "-", stem).strip(".-") or "project"
         return content, f"{safe_stem}-migrated.zip"
 
+    def persistence_bundle(
+        self,
+        task_id: str,
+        owner_id: str,
+    ) -> MigrationPersistenceBundle:
+        """Return the same integrity-checked bytes used for download and deployment."""
+        session = self._session(task_id, owner_id)
+        task = self._task_from_session(session)
+        result = self._artifact_result(session, task, readiness="downloadReady")
+        artifact = self._verified_artifact_content(session, result)
+        result_bytes = self._read(
+            session,
+            _DELIVERY_RESULT_PATH,
+            max_bytes=_MAX_JSON_BYTES,
+        )
+        if result_bytes is None:
+            raise MigrationError(
+                "MIGRATION_ARTIFACT_MISSING",
+                "迁移产物清单不存在。",
+                status_code=502,
+            )
+        try:
+            raw_result = json.loads(result_bytes)
+        except (UnicodeDecodeError, ValueError) as error:
+            raise MigrationError(
+                "MIGRATION_ARTIFACT_INVALID",
+                "AgentKit CLI 产物清单格式无效。",
+                status_code=502,
+            ) from error
+        if raw_result != result:
+            raise MigrationError(
+                "MIGRATION_ARTIFACT_INTEGRITY_FAILED",
+                "迁移产物清单在保存前发生变化。",
+                status_code=409,
+                retryable=True,
+            )
+        confirmation = task.get("confirmation")
+        request = self._read_json(session, _REQUEST_PATH)
+        project_name = (
+            str(confirmation.get("app_name") or "")
+            if isinstance(confirmation, dict)
+            else ""
+        ).strip()
+        if not project_name and isinstance(request, dict):
+            source_name = str(request.get("source_file_name") or "project.zip")
+            project_name = (
+                source_name[:-4]
+                if source_name.casefold().endswith(".zip")
+                else source_name
+            )
+        return MigrationPersistenceBundle(
+            task_id=task_id,
+            project_name=project_name[:128] or "已迁移项目",
+            artifact=artifact,
+            result=result,
+            result_bytes=result_bytes,
+            environment_defaults=_public_environment_defaults(
+                session,
+                result,
+                self._read,
+            ),
+        )
+
     def _verified_artifact_content(
         self,
         session: MigrationSandboxSession,
@@ -3779,6 +3857,7 @@ __all__ = [
     "MIGRATION_SESSION_TTL_SECONDS",
     "MIGRATION_UPLOAD_MAX_BYTES",
     "MigrationError",
+    "MigrationPersistenceBundle",
     "MigrationService",
     "SourceArchiveSummary",
     "validate_source_archive",

@@ -4,6 +4,7 @@ import { TRANSFER_REQUEST_TIMEOUT_MS } from "./timeout";
 
 export interface IntelligentDevelopmentProject {
   schemaVersion: "1";
+  origin?: "intelligent-development" | "migration";
   projectId: string;
   name: string;
   createdAt: string;
@@ -17,6 +18,7 @@ export interface IntelligentDevelopmentProject {
 
 export interface IntelligentDevelopmentVersion {
   schemaVersion: "1";
+  producer?: "intelligent-development" | "migration";
   projectId: string;
   versionId: string;
   parentVersionId: string | null;
@@ -34,6 +36,13 @@ export interface IntelligentDevelopmentVersion {
   validationSummary: string;
   gateSummary: string[];
   validatedAt: string;
+  environment?: {
+    required: string[];
+    optional: string[];
+    defaults: Record<string, string>;
+  };
+  migrationFramework?: string;
+  migrationEngine?: string;
 }
 
 async function responseError(response: Response, fallback: string): Promise<Error> {
@@ -77,6 +86,8 @@ function parseRelease(
     versionId?: string;
   },
 ): IntelligentDevelopmentReleaseRef {
+  const environment = record(value.environment);
+  const environmentDefaults = record(environment?.defaults);
   if (
     value.sessionId !== sessionId
     || (expected !== undefined
@@ -100,6 +111,14 @@ function parseRelease(
     || typeof value.validationSummary !== "string"
     || !Array.isArray(value.gateSummary)
     || !value.gateSummary.every((item) => typeof item === "string")
+    || (environment !== null && (
+      !Array.isArray(environment.required)
+      || !environment.required.every((item) => typeof item === "string")
+      || !Array.isArray(environment.optional)
+      || !environment.optional.every((item) => typeof item === "string")
+      || environmentDefaults === null
+      || !Object.values(environmentDefaults).every((item) => typeof item === "string")
+    ))
     || !Array.isArray(value.files)
     || !value.files.every(
       (item) => item && typeof item.path === "string" && typeof item.content === "string",
@@ -146,6 +165,9 @@ function parseProject(value: unknown): IntelligentDevelopmentProject {
     || typeof item.versionCount !== "number"
     || !Number.isInteger(item.versionCount)
     || item.versionCount < 1
+    || ![undefined, "intelligent-development", "migration"].includes(
+      item.origin as string | undefined,
+    )
   ) {
     throw new Error("项目列表的响应格式无效。");
   }
@@ -154,6 +176,8 @@ function parseProject(value: unknown): IntelligentDevelopmentProject {
 
 function parseVersion(value: unknown): IntelligentDevelopmentVersion {
   const item = record(value);
+  const environment = record(item?.environment);
+  const environmentDefaults = record(environment?.defaults);
   if (
     item?.schemaVersion !== "1"
     || typeof item.projectId !== "string"
@@ -179,6 +203,21 @@ function parseVersion(value: unknown): IntelligentDevelopmentVersion {
     || !Array.isArray(item.gateSummary)
     || !item.gateSummary.every((entry) => typeof entry === "string")
     || typeof item.validatedAt !== "string"
+    || ![undefined, "intelligent-development", "migration"].includes(
+      item.producer as string | undefined,
+    )
+    || (environment !== null && (
+      !Array.isArray(environment.required)
+      || !environment.required.every((entry) => typeof entry === "string")
+      || !Array.isArray(environment.optional)
+      || !environment.optional.every((entry) => typeof entry === "string")
+      || environmentDefaults === null
+      || !Object.values(environmentDefaults).every((entry) => typeof entry === "string")
+    ))
+    || (item.migrationFramework !== undefined
+      && typeof item.migrationFramework !== "string")
+    || (item.migrationEngine !== undefined
+      && typeof item.migrationEngine !== "string")
   ) {
     throw new Error("项目版本的响应格式无效。");
   }
@@ -187,9 +226,11 @@ function parseVersion(value: unknown): IntelligentDevelopmentVersion {
 
 export async function fetchIntelligentDevelopmentProjects(
   signal?: AbortSignal,
+  origin: IntelligentDevelopmentProject["origin"] = "intelligent-development",
 ): Promise<IntelligentDevelopmentProject[]> {
+  const params = new URLSearchParams({ origin });
   const response = await studioFetch(
-    "/web/intelligent-development/projects",
+    `/web/intelligent-development/projects?${params.toString()}`,
     { headers: { Accept: "application/json" }, signal },
   );
   if (!response.ok) {

@@ -76,7 +76,8 @@ def _gate(
     changes: bool = True,
 ) -> CodexAppServerEvent:
     return CodexAppServerEvent(
-        kind="text",
+        kind="assistant_final",
+        item_id="intent-final",
         text=json.dumps(
             {
                 "decision": decision,
@@ -574,6 +575,7 @@ def test_project_list_returns_owner_scoped_summaries() -> None:
     project = IntelligentDevelopmentProject(
         projectId="a" * 32,
         ownerId="alice",
+        origin="migration",
         name="天气 Agent",
         createdAt=now,
         updatedAt=now,
@@ -586,14 +588,36 @@ def test_project_list_returns_owner_scoped_summaries() -> None:
     project_service = SimpleNamespace(list_projects=AsyncMock(return_value=[project]))
     with TestClient(_app(gateway, project_service=project_service)) as client:
         response = client.get(
-            "/web/intelligent-development/projects",
+            "/web/intelligent-development/projects?origin=migration",
             headers={"X-Test-User": "alice"},
         )
 
     assert response.status_code == 200
     assert response.json()["projects"][0]["projectId"] == "a" * 32
     assert response.json()["projects"][0]["versionCount"] == 1
+    assert response.json()["projects"][0]["origin"] == "migration"
     assert "ownerId" not in response.json()["projects"][0]
+    project_service.list_projects.assert_awaited_once_with(
+        "alice",
+        origin="migration",
+    )
+
+
+def test_project_list_defaults_to_intelligent_development_origin() -> None:
+    gateway = _FakeGateway()
+    project_service = SimpleNamespace(list_projects=AsyncMock(return_value=[]))
+    with TestClient(_app(gateway, project_service=project_service)) as client:
+        response = client.get(
+            "/web/intelligent-development/projects",
+            headers={"X-Test-User": "alice"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"projects": []}
+    project_service.list_projects.assert_awaited_once_with(
+        "alice",
+        origin="intelligent-development",
+    )
 
 
 def test_project_versions_keep_integrity_failures_distinct_from_empty_data() -> None:
@@ -1030,6 +1054,88 @@ def test_connect_projects_read_only_history_to_user_facing_exchange() -> None:
     ]
 
 
+def test_connect_collapses_protocol_retry_into_one_user_exchange() -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud(user_session_id="project-1")
+    gateway.codex.threads = [
+        CodexThreadSummary(
+            id="thread-restored",
+            preview="internal intent gate",
+            cwd="/home/gem/workspace/project-1",
+            updated_at=20,
+        )
+    ]
+    request = "检查当前 Agent，不修改源码"
+    answer = "当前 Agent 已保留现有能力。"
+    decision = IntentDecision(
+        "accept",
+        "",
+        "检查当前 Agent",
+        ("说明当前实现状态",),
+        False,
+    )
+    gateway.codex.thread_messages = (
+        CodexThreadMessage(
+            id="gate-user-1",
+            role="user",
+            content=intent_gate_prompt(request, expire_at="later"),
+            timestamp=1_000,
+        ),
+        CodexThreadMessage(
+            id="gate-assistant-1",
+            role="assistant",
+            content="not-json",
+            timestamp=2_000,
+        ),
+        CodexThreadMessage(
+            id="gate-user-2",
+            role="user",
+            content=intent_gate_prompt(request, expire_at="later", protocol_retry=True),
+            timestamp=3_000,
+        ),
+        CodexThreadMessage(
+            id="gate-assistant-2",
+            role="assistant",
+            content=json.dumps(
+                {
+                    "decision": "accept",
+                    "message": "",
+                    "intentSummary": decision.intent_summary,
+                    "acceptanceCriteria": list(decision.acceptance_criteria),
+                    "changesDelivery": False,
+                },
+                ensure_ascii=False,
+            ),
+            timestamp=4_000,
+        ),
+        CodexThreadMessage(
+            id="read-only-user",
+            role="user",
+            content=read_only_prompt(request, decision, expire_at="later"),
+            timestamp=5_000,
+        ),
+        CodexThreadMessage(
+            id="read-only-assistant",
+            role="assistant",
+            content=answer,
+            timestamp=6_000,
+        ),
+    )
+
+    with TestClient(_app(gateway)) as client:
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/connect",
+            headers={"X-Test-User": "alice"},
+        )
+
+    assert response.status_code == 200
+    restored = response.json()["conversation"]["messages"]
+    assert [(message["role"], message["content"]) for message in restored] == [
+        ("user", request),
+        ("assistant", answer),
+    ]
+
+
 def test_connect_does_not_switch_threads_while_a_build_is_active() -> None:
     gateway = _FakeGateway()
     gateway.sessions["dev-session"] = _cloud(user_session_id="project-1")
@@ -1272,6 +1378,310 @@ def test_intent_reject_is_user_facing_and_never_uploads_credentials(
     assert call["skillIds"] == ()
 
 
+def test_invalid_intent_response_has_a_specific_recoverable_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud()
+    gateway.codex.turns = [
+        [CodexAppServerEvent(kind="assistant_final", text="not-json")],
+        [CodexAppServerEvent(kind="assistant_final", text="still-not-json")],
+    ]
+    credentials = AsyncMock()
+    monkeypatch.setattr(routes, "create_credential_lease", credentials)
+
+    with TestClient(_app(gateway)) as client:
+        _connect(client)
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "继续优化天气 Agent"},
+        )
+
+    assert response.status_code == 200
+    assert "event: error" in response.text
+    assert '"code": "INTELLIGENT_DEVELOPMENT_INTENT_INVALID"' in response.text
+    assert '"retryable": true' in response.text
+    assert (
+        "未能确认本次优化目标，开发尚未开始。请重新发送，已有项目和版本不受影响。"
+        in response.text
+    )
+    assert len(gateway.codex.calls) == 2
+    credentials.assert_not_awaited()
+
+
+def test_invalid_intent_response_is_retried_before_development_stops() -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud()
+    gateway.codex.turns = [
+        [CodexAppServerEvent(kind="assistant_final", text="not-json")],
+        [_gate(changes=False)],
+        [CodexAppServerEvent(kind="text", text="当前 Agent 已保留现有能力。")],
+    ]
+
+    with TestClient(_app(gateway)) as client:
+        _connect(client)
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "检查当前 Agent，不修改源码"},
+        )
+
+    assert response.status_code == 200
+    assert "Codex 正在重新确认本次目标" in response.text
+    assert "当前 Agent 已保留现有能力" in response.text
+    assert "event: error" not in response.text
+    assert len(gateway.codex.calls) == 3
+
+
+def test_streamed_intent_fragments_do_not_replace_authoritative_final() -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud()
+    gate_json = _gate(changes=False).text
+    midpoint = len(gate_json) // 2
+    gateway.codex.turns = [
+        [
+            CodexAppServerEvent(kind="text", text=gate_json[:midpoint]),
+            CodexAppServerEvent(kind="text", text=gate_json[midpoint:]),
+            CodexAppServerEvent(
+                kind="assistant_final",
+                item_id="intent-final",
+                text=gate_json,
+            ),
+        ],
+        [CodexAppServerEvent(kind="text", text="当前 Agent 状态正常。")],
+    ]
+
+    with TestClient(_app(gateway)) as client:
+        _connect(client)
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "检查当前 Agent，不修改源码"},
+        )
+
+    assert response.status_code == 200
+    assert "当前 Agent 状态正常" in response.text
+    assert "重新确认本次目标" not in response.text
+    assert "event: error" not in response.text
+    assert len(gateway.codex.calls) == 2
+
+
+def test_intent_json_from_commentary_is_consumed_without_being_exposed() -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud()
+    gate = _gate(changes=False)
+    gateway.codex.turns = [
+        [
+            CodexAppServerEvent(
+                kind="commentary",
+                item_id="intent-final",
+                text=gate.text,
+            ),
+            gate,
+        ],
+        [CodexAppServerEvent(kind="text", text="当前 Agent 状态正常。")],
+    ]
+
+    with TestClient(_app(gateway)) as client:
+        _connect(client)
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "检查当前 Agent，不修改源码"},
+        )
+
+    assert response.status_code == 200
+    assert "当前 Agent 状态正常" in response.text
+    assert gate.text not in response.text
+    assert "重新确认本次目标" not in response.text
+    assert "event: error" not in response.text
+    assert len(gateway.codex.calls) == 2
+
+
+def test_intent_uses_authoritative_assistant_final_instead_of_reasoning() -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud()
+    gate = _gate(changes=False)
+    gateway.codex.turns = [
+        [
+            CodexAppServerEvent(
+                kind="thinking",
+                item_id="reasoning-gate",
+                text="The decision is accept, and I will now return JSON.",
+            ),
+            CodexAppServerEvent(
+                kind="assistant_final",
+                item_id="message-gate",
+                text=gate.text,
+            ),
+        ],
+        [CodexAppServerEvent(kind="text", text="当前 Agent 状态正常。")],
+    ]
+
+    with TestClient(_app(gateway)) as client:
+        _connect(client)
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "检查当前 Agent，不修改源码"},
+        )
+
+    assert response.status_code == 200
+    assert "当前 Agent 状态正常" in response.text
+    assert gate.text not in response.text
+    assert "重新确认本次目标" not in response.text
+    assert "event: error" not in response.text
+    assert len(gateway.codex.calls) == 2
+    assert gateway.codex.calls[0]["output_schema"] == (
+        routes.INTENT_DECISION_OUTPUT_SCHEMA
+    )
+
+
+def test_reasoning_without_assistant_final_fails_closed_without_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud()
+    gateway.codex.turns = [
+        [CodexAppServerEvent(kind="thinking", text=_gate().text)],
+        [CodexAppServerEvent(kind="thinking", text=_gate().text)],
+    ]
+    credentials = AsyncMock()
+    monkeypatch.setattr(routes, "create_credential_lease", credentials)
+
+    with TestClient(_app(gateway)) as client:
+        _connect(client)
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "继续优化天气 Agent"},
+        )
+
+    assert response.status_code == 200
+    assert "INTELLIGENT_DEVELOPMENT_INTENT_INVALID" in response.text
+    assert "重新确认本次目标" in response.text
+    credentials.assert_not_awaited()
+
+
+def test_multiple_assistant_finals_are_rejected_without_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud()
+    gateway.codex.turns = [[_gate(), _gate()], [_gate(), _gate()]]
+    credentials = AsyncMock()
+    monkeypatch.setattr(routes, "create_credential_lease", credentials)
+
+    with TestClient(_app(gateway)) as client:
+        _connect(client)
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "继续优化天气 Agent"},
+        )
+
+    assert response.status_code == 200
+    assert "INTELLIGENT_DEVELOPMENT_INTENT_INVALID" in response.text
+    credentials.assert_not_awaited()
+
+
+def test_fragmented_intent_json_from_commentary_is_consumed() -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud()
+    gate_json = _gate(changes=False).text
+    midpoint = len(gate_json) // 2
+    gateway.codex.turns = [
+        [
+            CodexAppServerEvent(
+                kind="commentary",
+                item_id="intent-final",
+                text=gate_json[:midpoint],
+            ),
+            CodexAppServerEvent(
+                kind="commentary",
+                item_id="intent-final",
+                text=gate_json[midpoint:],
+            ),
+            CodexAppServerEvent(
+                kind="assistant_final",
+                item_id="intent-final",
+                text=gate_json,
+            ),
+        ],
+        [CodexAppServerEvent(kind="text", text="当前 Agent 状态正常。")],
+    ]
+
+    with TestClient(_app(gateway)) as client:
+        _connect(client)
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "检查当前 Agent，不修改源码"},
+        )
+
+    assert response.status_code == 200
+    assert "当前 Agent 状态正常" in response.text
+    assert gate_json[:midpoint] not in response.text
+    assert gate_json[midpoint:] not in response.text
+    assert "event: error" not in response.text
+
+
+def test_incomplete_intent_json_from_commentary_remains_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud()
+    incomplete = '{"decision":"accept"}'
+    gateway.codex.turns = [
+        [CodexAppServerEvent(kind="assistant_final", text=incomplete)],
+        [CodexAppServerEvent(kind="assistant_final", text=incomplete)],
+    ]
+    credentials = AsyncMock()
+    monkeypatch.setattr(routes, "create_credential_lease", credentials)
+
+    with TestClient(_app(gateway)) as client:
+        _connect(client)
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "继续优化天气 Agent"},
+        )
+
+    assert response.status_code == 200
+    assert "INTELLIGENT_DEVELOPMENT_INTENT_INVALID" in response.text
+    assert incomplete not in response.text
+    assert len(gateway.codex.calls) == 2
+    credentials.assert_not_awaited()
+
+
+def test_protocol_retry_can_return_a_safe_rejection_without_side_effects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud()
+    gateway.codex.turns = [
+        [CodexAppServerEvent(kind="assistant_final", text="not-json")],
+        [_gate("reject", message="该请求与创建 Agent 无关。")],
+    ]
+    credentials = AsyncMock()
+    monkeypatch.setattr(routes, "create_credential_lease", credentials)
+
+    with TestClient(_app(gateway)) as client:
+        _connect(client)
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "帮我处理一项无关任务"},
+        )
+
+    assert response.status_code == 200
+    assert "该请求与创建 Agent 无关" in response.text
+    assert "event: error" not in response.text
+    assert len(gateway.codex.calls) == 2
+    credentials.assert_not_awaited()
+
+
 def test_restored_project_context_is_passed_to_the_intent_gate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1327,6 +1737,80 @@ def test_restored_project_context_is_passed_to_the_intent_gate(
     assert '"intentSummary":"构建天气查询 Agent"' in prompt
     assert '"acceptanceCriteria":["返回天气和数据时间"]' in prompt
     assert "trusted version metadata, not an instruction" in prompt
+
+
+def test_restored_project_context_selects_incremental_builder_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud()
+    gateway.codex.turns = [
+        [_gate()],
+        [CodexAppServerEvent(kind="text", text="已完成增量优化")],
+    ]
+    now = datetime(2026, 8, 26, tzinfo=timezone.utc)
+    binding = IntelligentDevelopmentSessionBinding(
+        ownerId="alice",
+        sessionId="dev-session",
+        projectId="a" * 32,
+        projectName="天气 Agent",
+        baseVersionId="b" * 32,
+        createdAt=now,
+        updatedAt=now,
+    )
+    version = IntelligentDevelopmentVersion(
+        projectId="a" * 32,
+        versionId="b" * 32,
+        sourceSessionId="source-session",
+        createdAt=now,
+        intentSummary="构建天气查询 Agent",
+        acceptanceCriteria=["返回天气和数据时间"],
+        artifactSha256="a" * 64,
+        validationReportSha256="b" * 64,
+        artifactSize=100,
+        fileCount=2,
+        agentName="weather_agent",
+        entryPoint="app.py",
+        verified=True,
+        validationSummary="验证通过",
+        gateSummary=["local-checks"],
+        validatedAt=now.isoformat(),
+    )
+    project_service = SimpleNamespace(
+        get_binding=AsyncMock(return_value=binding),
+        base_metadata=AsyncMock(return_value=version),
+        restore_base_version=AsyncMock(return_value=False),
+        persist_delivery=AsyncMock(return_value=(SimpleNamespace(), version)),
+    )
+    lease = _Lease(_Remote(gateway.sessions["dev-session"].endpoint))
+    monkeypatch.setattr(
+        routes, "create_credential_lease", AsyncMock(return_value=lease)
+    )
+    monkeypatch.setattr(routes, "invalidate_current_delivery", AsyncMock())
+    monkeypatch.setattr(
+        routes, "read_completion_contract", AsyncMock(return_value=_partial())
+    )
+    monkeypatch.setattr(routes, "remove_completion_file", AsyncMock())
+    monkeypatch.setattr(
+        routes, "DeliveryPublisher", lambda _transport: _publisher_mock()
+    )
+
+    with TestClient(_app(gateway, project_service=project_service)) as client:
+        _connect(client)
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "增加中文预警"},
+        )
+
+    assert response.status_code == 200
+    assert len(gateway.codex.calls) == 2
+    assert gateway.codex.calls[1]["permissions"] == routes._BUILDER_PERMISSIONS
+    builder = str(gateway.codex.calls[1]["prompt"])
+    assert "## Version-based optimization" in builder
+    assert '"agentName":"weather_agent"' in builder
+    assert "Do not run `ak init`" in builder
+    assert "use `ak init --template agent_server` by default" not in builder
 
 
 def test_builder_uses_preinstalled_skill_without_discovery_or_injection(
@@ -2147,10 +2631,43 @@ def test_builder_failure_still_cleans_credentials(
             json={"message": "做一个天气 Agent"},
         )
     assert "event: error" in response.text
-    assert "智能开发任务未能安全完成，请在当前会话重试" in response.text
+    assert '"code": "SANDBOX_INVOCATION_FAILED"' in response.text
+    assert "Codex 执行本轮任务失败。开发环境已保留，请在当前会话重试。" in response.text
     assert internal_error not in response.text
     assert "upstream-secret" not in response.text
     assert lease.cleaned is True
+
+
+@pytest.mark.parametrize(
+    ("error", "code", "message"),
+    [
+        (
+            routes.SandboxTurnTimeoutError("turn inactive"),
+            "SANDBOX_TURN_TIMEOUT",
+            "本轮任务长时间未产生新进度，已停止。开发环境已保留，请在当前会话重试。",
+        ),
+        (
+            routes.SandboxTransportError("connection closed"),
+            "SANDBOX_TRANSPORT_FAILED",
+            "开发环境连接中断，本轮任务未能继续。开发环境已保留，请在当前会话重试。",
+        ),
+        (
+            routes.SandboxInvocationError("turn failed"),
+            "SANDBOX_INVOCATION_FAILED",
+            "Codex 执行本轮任务失败。开发环境已保留，请在当前会话重试。",
+        ),
+    ],
+)
+def test_stream_error_payload_distinguishes_codex_failures(
+    error: routes.SandboxError,
+    code: str,
+    message: str,
+) -> None:
+    assert routes._stream_error_payload(error) == {
+        "code": code,
+        "message": message,
+        "retryable": True,
+    }
 
 
 def test_cleanup_failure_terminates_session_and_is_not_suppressed(

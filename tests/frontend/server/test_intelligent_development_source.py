@@ -362,6 +362,31 @@ async def test_source_preview_omits_binary_files_without_rejecting_delivery(
 
 
 @pytest.mark.asyncio
+async def test_intelligent_source_preview_keeps_large_text_files(
+    tmp_path: Path,
+) -> None:
+    large_source = b"# generated source\n" + b"x" * (2 * 1024 * 1024)
+    artifact = _zip(
+        [
+            (
+                "agentkit.yaml",
+                b"common:\n  agent_name: trusted-agent\n  entry_point: app.py\n",
+            ),
+            ("app.py", b"root_agent = object()\n"),
+            ("generated/knowledge.py", large_source),
+        ]
+    )
+    request, downloads = _release_files(artifact=artifact)
+
+    result = await _materialize(tmp_path, request, downloads)
+
+    generated = next(
+        item for item in result.files if item.path == "generated/knowledge.py"
+    )
+    assert generated.content.encode() == large_source
+
+
+@pytest.mark.asyncio
 async def test_download_keeps_exact_artifact_including_binary_files(
     tmp_path: Path,
 ) -> None:

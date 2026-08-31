@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@openai/apps-sdk-ui/components/Button";
 import { Tooltip } from "@openai/apps-sdk-ui/components/Tooltip";
 import type { IntelligentDevelopmentReleaseRef } from "../blocks";
@@ -101,7 +101,19 @@ function releaseFromVersion(
     deployable: true,
     verified: version.verified,
     validationSummary: version.validationSummary,
+    ...(version.environment ? { environment: version.environment } : {}),
   };
+}
+
+export function migrationOptimizationUnavailableReason(
+  origin: IntelligentDevelopmentProject["origin"],
+  versions: Pick<IntelligentDevelopmentVersion, "migrationFramework">[],
+): string {
+  if (origin !== "migration") return "";
+  const framework = versions
+    .map((version) => version.migrationFramework?.trim().toLowerCase() ?? "")
+    .find(Boolean);
+  return framework === "any" || framework === "dify" ? "" : "暂不支持";
 }
 
 interface IntelligentProjectLibraryProps {
@@ -113,6 +125,12 @@ interface IntelligentProjectLibraryProps {
   onClearBaseVersion: () => void;
   onDownload: (delivery: IntelligentDevelopmentReleaseRef) => Promise<void>;
   onDeploy: (delivery: IntelligentDevelopmentReleaseRef) => void;
+  origin?: IntelligentDevelopmentProject["origin"];
+  title?: string;
+  description?: string;
+  emptyTitle?: string;
+  emptyDescription?: string;
+  initialProjectId?: string;
 }
 
 export function IntelligentProjectLibrary({
@@ -124,6 +142,12 @@ export function IntelligentProjectLibrary({
   onClearBaseVersion,
   onDownload,
   onDeploy,
+  origin = "intelligent-development",
+  title,
+  description,
+  emptyTitle,
+  emptyDescription,
+  initialProjectId,
 }: IntelligentProjectLibraryProps) {
   const [projects, setProjects] = useState<IntelligentDevelopmentProject[]>([]);
   const [projectsLoading, setProjectsLoading] = useState(true);
@@ -157,6 +181,7 @@ export function IntelligentProjectLibrary({
     projectId: string;
     versionIds: string[];
   } | null>(null);
+  const appliedInitialProjectId = useRef("");
   const storageEnabled = capabilities?.projectStorageEnabled === true;
 
   useEffect(() => {
@@ -164,7 +189,10 @@ export function IntelligentProjectLibrary({
     const controller = new AbortController();
     setProjectsLoading(true);
     setProjectsError("");
-    void fetchIntelligentDevelopmentProjects(controller.signal)
+    const request = origin === "intelligent-development"
+      ? fetchIntelligentDevelopmentProjects(controller.signal)
+      : fetchIntelligentDevelopmentProjects(controller.signal, origin);
+    void request
       .then((items) => {
         if (!controller.signal.aborted) setProjects(items);
       })
@@ -179,7 +207,18 @@ export function IntelligentProjectLibrary({
         if (!controller.signal.aborted) setProjectsLoading(false);
       });
     return () => controller.abort();
-  }, [projectsRefresh, storageEnabled]);
+  }, [origin, projectsRefresh, storageEnabled]);
+
+  useEffect(() => {
+    if (
+      initialProjectId
+      && appliedInitialProjectId.current !== initialProjectId
+      && projects.some((project) => project.projectId === initialProjectId)
+    ) {
+      appliedInitialProjectId.current = initialProjectId;
+      setSelectedProjectId(initialProjectId);
+    }
+  }, [initialProjectId, projects]);
 
   useEffect(() => {
     if (!selectedProjectId || !storageEnabled) return;
@@ -376,12 +415,17 @@ export function IntelligentProjectLibrary({
 
   return (
     <>
-      <section className="ic-panel ic-projects-panel" aria-labelledby="saved-projects-title">
+      <section
+        className="ic-panel ic-projects-panel"
+        aria-labelledby={`${origin}-projects-title`}
+      >
         <div className="ic-projects-heading">
           <span className="ic-project-icon-wrap"><ProjectArchiveIcon /></span>
           <div>
-            <h2 id="saved-projects-title">已保存项目</h2>
-            <p>选择已有版本继续优化，或查看、下载和部署源码。</p>
+            <h2 id={`${origin}-projects-title`}>
+              {title ?? "已保存项目"}
+            </h2>
+            <p>{description ?? "选择已有版本继续优化，或查看、下载和部署源码。"}</p>
           </div>
           {projects.length > 0 ? (
             <Tooltip compact content="刷新项目列表">
@@ -422,12 +466,14 @@ export function IntelligentProjectLibrary({
         ) : projectsLoading && projects.length === 0 ? (
           <div className="ic-project-state" role="status" aria-live="polite">
             <TextShimmer as="span" duration={2.2} spread={16}>
-              正在读取已保存项目…
+              {origin === "migration" ? "正在读取已迁移项目…" : "正在读取已保存项目…"}
             </TextShimmer>
           </div>
         ) : projectsError && projects.length === 0 ? (
           <div className="ic-project-state" role="alert">
-            <strong>无法读取已保存项目</strong>
+            <strong>
+              {origin === "migration" ? "无法读取已迁移项目" : "无法读取已保存项目"}
+            </strong>
             <span>{projectsError}</span>
             <button
               type="button"
@@ -437,8 +483,16 @@ export function IntelligentProjectLibrary({
           </div>
         ) : projects.length === 0 ? (
           <div className="ic-project-state">
-            <strong>还没有已保存的项目</strong>
-            <span>完成首次构建后，源码会自动保存在这里。</span>
+            <strong>
+              {emptyTitle ?? (origin === "migration"
+                ? "还没有已迁移的项目"
+                : "还没有已保存的项目")}
+            </strong>
+            <span>
+              {emptyDescription ?? (origin === "migration"
+                ? "完成首次迁移后，源码会自动保存在这里。"
+                : "完成首次构建后，源码会自动保存在这里。")}
+            </span>
           </div>
         ) : (
           <div className="ic-project-list" aria-busy={projectsLoading || undefined}>
@@ -458,6 +512,8 @@ export function IntelligentProjectLibrary({
               const projectComparison = compareSelection?.projectId === project.projectId
                 ? compareSelection
                 : null;
+              const optimizationUnavailableReason =
+                migrationOptimizationUnavailableReason(origin, projectVersions);
               return (
                 <article
                   className={`ic-project${expanded ? " is-expanded" : ""}`}
@@ -639,18 +695,37 @@ export function IntelligentProjectLibrary({
                                         ? "准备中…"
                                         : "部署"}
                                     </button>
-                                    <button
-                                      type="button"
-                                      className="ic-version-action"
-                                      onClick={() => selectBaseVersion(
-                                        project,
-                                        version.versionId,
-                                        version.versionId === project.latestVersionId
-                                          ? "最新版本"
-                                          : formatVersionTime(version.createdAt),
-                                      )}
-                                      disabled={creating || Boolean(busyAction)}
-                                    >去优化</button>
+                                    {optimizationUnavailableReason ? (
+                                      <Tooltip
+                                        compact
+                                        content={optimizationUnavailableReason}
+                                      >
+                                        <span
+                                          className="ic-disabled-action-tooltip"
+                                          tabIndex={0}
+                                          aria-label="去优化，暂不支持"
+                                        >
+                                          <button
+                                            type="button"
+                                            className="ic-version-action"
+                                            disabled
+                                          >去优化</button>
+                                        </span>
+                                      </Tooltip>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        className="ic-version-action"
+                                        onClick={() => selectBaseVersion(
+                                          project,
+                                          version.versionId,
+                                          version.versionId === project.latestVersionId
+                                            ? "最新版本"
+                                            : formatVersionTime(version.createdAt),
+                                        )}
+                                        disabled={creating || Boolean(busyAction)}
+                                      >去优化</button>
+                                    )}
                                     <Button
                                       type="button"
                                       className="ic-version-delete"
