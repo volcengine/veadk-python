@@ -29,6 +29,7 @@ import httpx
 from websockets.asyncio.client import connect
 from websockets.exceptions import InvalidStatus
 
+from frontend.server.runtime_logs import RuntimeRequestContext, runtime_request_context
 from frontend.server.studio_tools.registry import (
     StudioToolCatalogSnapshot,
     StudioToolExecutionContext,
@@ -166,6 +167,7 @@ class StudioToolRun:
         catalog_revision: str,
         run_id: str,
         execution_context: StudioToolExecutionContext,
+        runtime_context: RuntimeRequestContext | None = None,
     ) -> None:
         self._receive_message = receive_message
         self._send_message = send_message
@@ -175,6 +177,7 @@ class StudioToolRun:
         self.catalog_revision = catalog_revision
         self.run_id = run_id
         self.execution_context = execution_context
+        self.runtime_context = runtime_context
         self._send_lock = asyncio.Lock()
         self._tool_tasks: dict[str, asyncio.Task[None]] = {}
         self._completed = False
@@ -461,6 +464,7 @@ async def _open_http_studio_tool_run(
             catalog_revision=revision,
             run_id=run_id,
             execution_context=execution_context,
+            runtime_context=runtime_request_context(response.headers),
         )
     except Exception:
         if response is not None:
@@ -597,6 +601,9 @@ async def open_studio_tool_run(
             catalog_revision=revision,
             run_id=run_id,
             execution_context=execution_context,
+            runtime_context=runtime_request_context(
+                getattr(getattr(websocket, "response", None), "headers", {})
+            ),
         )
     except Exception:
         await websocket.close()

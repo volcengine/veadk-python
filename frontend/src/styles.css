@@ -3183,6 +3183,48 @@ body {
 }
 .composer-session-copy svg { width: 11px; height: 11px; }
 .composer-meta-separator { opacity: 0.55; }
+.composer-runtime-logs {
+  display: inline-flex;
+  min-height: 22px;
+  padding: 0 3px;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.composer-runtime-logs:hover {
+  background: hsl(var(--foreground) / 0.05);
+  color: hsl(var(--foreground));
+}
+.composer-runtime-logs:active {
+  background: hsl(var(--foreground) / 0.09);
+}
+.composer-runtime-logs:focus-visible {
+  outline: 2px solid hsl(var(--primary) / 0.45);
+  outline-offset: 1px;
+}
+.composer-runtime-logs svg {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+}
+@media (max-width: 640px) {
+  .composer-meta {
+    flex-wrap: wrap;
+    gap: 4px 8px;
+  }
+  .composer-session-line {
+    max-width: 100%;
+  }
+  .composer-session-id {
+    max-width: min(220px, 52vw);
+  }
+}
 .comp-input {
   flex: 1;
   resize: none;

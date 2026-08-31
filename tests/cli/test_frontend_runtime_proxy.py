@@ -74,6 +74,11 @@ def test_runtime_proxy_uses_same_socket_studio_tool_channel_when_enabled(
     opened: dict[str, Any] = {}
 
     class _FakeStudioRun:
+        runtime_context = SimpleNamespace(
+            instance_name="instance-channel",
+            request_id="request-channel",
+        )
+
         async def stream(self):
             yield b'data: {"id":"event-1","author":"agent"}\n\n'
 
@@ -121,6 +126,8 @@ def test_runtime_proxy_uses_same_socket_studio_tool_channel_when_enabled(
 
     assert response.status_code == 200
     assert response.text == 'data: {"id":"event-1","author":"agent"}\n\n'
+    assert response.headers["x-studio-faas-instance"] == "instance-channel"
+    assert response.headers["x-studio-faas-request-id"] == "request-channel"
     assert opened["endpoint"] == "https://runtime.example"
     assert opened["authorization"] == "Bearer runtime-api-key"
     assert opened["runtime_id"] == "runtime-1"
@@ -1605,7 +1612,11 @@ def test_runtime_proxy_uses_authorizer_credential(
 
     class _FakeUpstreamResponse:
         status_code = 200
-        headers: ClassVar[dict[str, str]] = {"content-type": "application/json"}
+        headers: ClassVar[dict[str, str]] = {
+            "content-type": "application/json",
+            "x-faas-instance-name": "instance-plain",
+            "x-faas-request-id": "request-plain",
+        }
 
         async def aiter_raw(self):
             yield b'["demo_agent"]'
@@ -1657,6 +1668,86 @@ def test_runtime_proxy_uses_authorizer_credential(
         "https://runtime.example/dev/apps/demo_agent/debug/trace/session/session-1"
     )
     assert upstream_headers["Authorization"] == expected_authorization
+
+
+def test_runtime_proxy_exposes_safe_instance_context(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            del request
+            return SimpleNamespace(
+                tags=[],
+                network_configurations=[
+                    SimpleNamespace(
+                        endpoint="https://runtime.example",
+                        network_type="public",
+                    )
+                ],
+                authorizer_configuration=SimpleNamespace(
+                    key_auth=SimpleNamespace(api_key="runtime-api-key"),
+                    custom_jwt_authorizer=None,
+                ),
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        _FakeRuntimeClient,
+    )
+
+    class _FakeUpstreamResponse:
+        status_code = 200
+        headers: ClassVar[dict[str, str]] = {
+            "content-type": "text/event-stream",
+            "x-faas-instance-name": "instance-plain",
+            "x-faas-request-id": "request-plain",
+            "x-session-id": "must-not-leave-the-bff",
+        }
+
+        async def aiter_raw(self):
+            yield b'data: {"id":"event-1","author":"agent"}\n\n'
+
+        async def aclose(self) -> None:
+            pass
+
+    class _FakeAsyncClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def build_request(self, *args: Any, **kwargs: Any) -> object:
+            del args, kwargs
+            return object()
+
+        async def send(self, request: object, *, stream: bool) -> _FakeUpstreamResponse:
+            del request, stream
+            return _FakeUpstreamResponse()
+
+        async def aclose(self) -> None:
+            pass
+
+    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/runtime-proxy/runtime-1/run_sse?region=cn-beijing",
+            json={
+                "app_name": "agent",
+                "user_id": "user-1",
+                "session_id": "session-1",
+                "new_message": {"role": "user", "parts": [{"text": "hello"}]},
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["x-studio-faas-instance"] == "instance-plain"
+    assert response.headers["x-studio-faas-request-id"] == "request-plain"
+    assert "x-session-id" not in response.headers
 
 
 def test_runtime_proxy_preserves_api_region_with_distinct_runtime_region(
