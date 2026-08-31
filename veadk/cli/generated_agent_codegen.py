@@ -1301,6 +1301,9 @@ _NATIVE_TASK_CONTEXT = hasattr(
 
 def _install_catalog_skill_name_compat() -> None:
     """Keep Skill Hub catalog names callable on the pinned runtime package."""
+    if hasattr(_orchestrator_module, "_with_catalog_skill_name"):
+        return
+
     marker = "_veadk_catalog_skill_name_compat"
     if getattr(_orchestrator_module, marker, False):
         return

@@ -153,6 +153,7 @@ def test_quick_mode_codegen_adds_dynamic_agent_toolset_and_managed_rules() -> No
     assert "class _ReusableResourceStore" in compat_py
     assert "Call create_agents exactly once" in compat_py
     assert "_install_catalog_skill_name_compat()" in compat_py
+    assert 'hasattr(_orchestrator_module, "_with_catalog_skill_name")' in compat_py
     assert "materialize_with_catalog_name" in compat_py
     assert "load_with_catalog_name" in compat_py
 
