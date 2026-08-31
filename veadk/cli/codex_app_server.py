@@ -68,6 +68,9 @@ _IMPORTED_HISTORY_IMAGE_MIME_TYPES = frozenset(
 )
 _GATEWAY_WEBSOCKET_MAX_LIFETIME_SECONDS = 30 * 60
 _GATEWAY_WEBSOCKET_REFRESH_MARGIN_SECONDS = 30
+_TURN_FINAL_READ_ATTEMPTS = 4
+_TURN_FINAL_READ_RETRY_SECONDS = 0.1
+_ACTIVE_TURN_TRANSPORT_RECOVERY_ATTEMPTS = 2
 
 
 class CodexAppServerError(RuntimeError):
@@ -773,42 +776,57 @@ class CodexAppServerSession:
             self._workspace_locked = True
 
             try:
-                deadline = asyncio.get_running_loop().time() + turn_timeout
+                loop = asyncio.get_running_loop()
+                deadline = loop.time() + turn_timeout
+                transport_recoveries = 0
                 while True:
-                    if completion.done() and queue.empty():
-                        break
-                    remaining = deadline - asyncio.get_running_loop().time()
-                    if remaining <= 0:
-                        raise TimeoutError
-                    event_task = asyncio.create_task(queue.get())
-                    done, _ = await asyncio.wait(
-                        {event_task, completion},
-                        timeout=remaining,
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    if not done:
-                        event_task.cancel()
-                        with contextlib.suppress(asyncio.CancelledError):
-                            await event_task
-                        raise TimeoutError
-                    if event_task in done:
-                        yield event_task.result()
-                        # Treat the turn timeout as an inactivity bound, not an
-                        # absolute wall-clock limit. Long coding tasks can run
-                        # well beyond ten minutes while continuing to emit
-                        # reasoning, tool, and progress events.
-                        deadline = asyncio.get_running_loop().time() + turn_timeout
-                    else:
-                        event_task.cancel()
-                        with contextlib.suppress(asyncio.CancelledError):
-                            await event_task
+                    while not (completion.done() and queue.empty()):
+                        remaining = deadline - loop.time()
+                        event_task = asyncio.create_task(queue.get())
+                        done, _ = await asyncio.wait(
+                            {event_task, completion},
+                            timeout=max(0.0, remaining),
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        if not done:
+                            event_task.cancel()
+                            with contextlib.suppress(asyncio.CancelledError):
+                                await event_task
+                            raise TimeoutError
+                        if event_task in done:
+                            yield event_task.result()
+                            # Treat the turn timeout as an inactivity bound, not an
+                            # absolute wall-clock limit. Long coding tasks can run
+                            # well beyond ten minutes while continuing to emit
+                            # reasoning, tool, and progress events.
+                            deadline = loop.time() + turn_timeout
+                        else:
+                            event_task.cancel()
+                            with contextlib.suppress(asyncio.CancelledError):
+                                await event_task
+                    try:
+                        turn_result = completion.result()
+                    except CodexAppServerTransportError:
+                        if transport_recoveries >= (
+                            _ACTIVE_TURN_TRANSPORT_RECOVERY_ATTEMPTS
+                        ):
+                            raise
+                        transport_recoveries += 1
+                        completion = loop.create_future()
+                        self._turn_completion = completion
+                        await self._reconnect_transport()
+                        stored_turn = await self._read_stored_turn(turn["id"])
+                        if stored_turn is not None and _turn_is_terminal(stored_turn):
+                            completion.set_result(stored_turn)
+                        deadline = loop.time() + turn_timeout
+                        continue
+                    break
             except TimeoutError as error:
                 await self.interrupt()
                 raise CodexAppServerTurnTimeoutError(
                     "Codex 智能体长时间没有新进度，已停止本次任务，请重试。"
                 ) from error
 
-            turn_result = completion.result()
             status = str(turn_result.get("status") or "completed")
             if status.lower() in {"failed", "cancelled"}:
                 error = turn_result.get("error")
@@ -1874,6 +1892,18 @@ class CodexAppServerSession:
         return tuple(events)
 
     async def _read_turn_final_message(self, turn_id: str) -> dict[str, object] | None:
+        for attempt in range(_TURN_FINAL_READ_ATTEMPTS):
+            turn = await self._read_stored_turn(turn_id)
+            if turn is not None:
+                items = turn.get("items")
+                final = _final_agent_message(items if isinstance(items, list) else [])
+                if final is not None:
+                    return final
+            if attempt + 1 < _TURN_FINAL_READ_ATTEMPTS:
+                await asyncio.sleep(_TURN_FINAL_READ_RETRY_SECONDS)
+        return None
+
+    async def _read_stored_turn(self, turn_id: str) -> dict[str, object] | None:
         result = await self.request(
             "thread/read",
             {"threadId": self.thread_id, "includeTurns": True},
@@ -1884,12 +1914,14 @@ class CodexAppServerSession:
         turns = thread.get("turns")
         if not isinstance(turns, list):
             raise CodexAppServerError("Codex thread/read 未返回完整的 Turns。")
-        for turn in turns:
-            if not isinstance(turn, dict) or turn.get("id") != turn_id:
-                continue
-            items = turn.get("items")
-            return _final_agent_message(items if isinstance(items, list) else [])
-        return None
+        return next(
+            (
+                turn
+                for turn in turns
+                if isinstance(turn, dict) and turn.get("id") == turn_id
+            ),
+            None,
+        )
 
     def _apply_thread_snapshot(self, result: dict[str, object]) -> None:
         self._activate_thread_snapshot("thread/start", result)
@@ -2321,6 +2353,20 @@ def _event_from_item(
 
 def _completion_status(value: object) -> str:
     return "error" if value in {"failed", "declined", "cancelled"} else "done"
+
+
+def _turn_is_terminal(turn: dict[str, object]) -> bool:
+    status = turn.get("status")
+    if isinstance(status, dict):
+        status = status.get("type")
+    if isinstance(status, str) and status.lower() in {
+        "completed",
+        "failed",
+        "cancelled",
+    }:
+        return True
+    items = turn.get("items")
+    return _final_agent_message(items if isinstance(items, list) else []) is not None
 
 
 def _string(value: object, maximum: int) -> str:

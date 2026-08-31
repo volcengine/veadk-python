@@ -461,9 +461,15 @@ class _TurnCompletedItemsWebSocket(_FakeWebSocket):
 class _ThreadReadFinalWebSocket(_FakeWebSocket):
     """Simulate an older event stream whose stored Turn has the final answer."""
 
-    def __init__(self, *, final_phase: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        final_phase: str | None = None,
+        empty_reads: int = 0,
+    ) -> None:
         super().__init__()
         self.final_phase = final_phase
+        self.empty_reads = empty_reads
 
     async def send(self, raw: str) -> None:
         message = json.loads(raw)
@@ -482,6 +488,22 @@ class _ThreadReadFinalWebSocket(_FakeWebSocket):
             return
         if method == "thread/read":
             self.messages.append(message)
+            final_items = []
+            if self.empty_reads > 0:
+                self.empty_reads -= 1
+            else:
+                final_items.append(
+                    {
+                        "id": "message-read",
+                        "type": "agentMessage",
+                        "text": "stored-final",
+                        **(
+                            {"phase": self.final_phase}
+                            if self.final_phase is not None
+                            else {}
+                        ),
+                    }
+                )
             await self.queue.put(
                 json.dumps(
                     {
@@ -502,18 +524,7 @@ class _ThreadReadFinalWebSocket(_FakeWebSocket):
                                     },
                                     {
                                         "id": "turn-read",
-                                        "items": [
-                                            {
-                                                "id": "message-read",
-                                                "type": "agentMessage",
-                                                "text": "stored-final",
-                                                **(
-                                                    {"phase": self.final_phase}
-                                                    if self.final_phase is not None
-                                                    else {}
-                                                ),
-                                            }
-                                        ],
+                                        "items": final_items,
                                     },
                                 ],
                             }
@@ -523,6 +534,133 @@ class _ThreadReadFinalWebSocket(_FakeWebSocket):
             )
             return
         await super().send(raw)
+
+
+class _DisconnectingActiveTurnWebSocket(_FakeWebSocket):
+    """Drop the transport after starting a Turn without completing it."""
+
+    async def send(self, raw: str) -> None:
+        message = json.loads(raw)
+        if message.get("method") != "turn/start":
+            await super().send(raw)
+            return
+        self.messages.append(message)
+        await self.queue.put(
+            json.dumps({"id": message["id"], "result": {"turn": {"id": "turn-active"}}})
+        )
+        await self.queue.put(None)
+
+
+class _ResumedActiveTurnWebSocket(_FakeWebSocket):
+    """Complete an active Turn after its Thread is resumed."""
+
+    def __init__(self, *, notify: bool = True) -> None:
+        super().__init__()
+        self.notify = notify
+
+    async def send(self, raw: str) -> None:
+        message = json.loads(raw)
+        if message.get("method") == "thread/read" and not self.notify:
+            self.messages.append(message)
+            await self.queue.put(
+                json.dumps(
+                    {
+                        "id": message["id"],
+                        "result": {
+                            "thread": {
+                                "id": "thread-1",
+                                "turns": [
+                                    {
+                                        "id": "turn-active",
+                                        "status": "completed",
+                                        "items": [
+                                            {
+                                                "id": "message-active",
+                                                "type": "agentMessage",
+                                                "text": "stored-resumed-final",
+                                            }
+                                        ],
+                                    }
+                                ],
+                            }
+                        },
+                    }
+                )
+            )
+            return
+        await super().send(raw)
+        if message.get("method") != "thread/resume" or not self.notify:
+            return
+        await self._notification(
+            "item/agentMessage/delta",
+            {"itemId": "message-active", "delta": "resumed-final"},
+        )
+        await self._notification(
+            "turn/completed",
+            {
+                "turn": {
+                    "id": "turn-active",
+                    "status": "completed",
+                    "items": [
+                        {
+                            "id": "message-active",
+                            "type": "agentMessage",
+                            "phase": "final_answer",
+                            "text": "resumed-final",
+                            "status": "completed",
+                        }
+                    ],
+                }
+            },
+        )
+
+
+class _DelayedStoredFinalWebSocket(_ThreadReadFinalWebSocket):
+    """Complete a Turn after stream_turn has started waiting for events."""
+
+    async def send(self, raw: str) -> None:
+        message = json.loads(raw)
+        if message.get("method") != "turn/start":
+            await super().send(raw)
+            return
+        self.messages.append(message)
+        await self.queue.put(
+            json.dumps({"id": message["id"], "result": {"turn": {"id": "turn-read"}}})
+        )
+
+        async def complete() -> None:
+            await asyncio.sleep(0)
+            await self._notification(
+                "turn/completed",
+                {"turn": {"id": "turn-read", "status": "completed"}},
+            )
+
+        asyncio.create_task(complete())
+
+
+class _DisconnectAfterStoredTurnReadWebSocket(_FakeWebSocket):
+    """Drop a resumed transport after reporting that the Turn is still active."""
+
+    async def send(self, raw: str) -> None:
+        message = json.loads(raw)
+        if message.get("method") != "thread/read":
+            await super().send(raw)
+            return
+        self.messages.append(message)
+        await self.queue.put(
+            json.dumps(
+                {
+                    "id": message["id"],
+                    "result": {
+                        "thread": {
+                            "id": "thread-1",
+                            "turns": [{"id": "turn-active", "status": "inProgress"}],
+                        }
+                    },
+                }
+            )
+        )
+        await self.queue.put(None)
 
 
 class _MalformedThreadReadWebSocket(_ThreadReadFinalWebSocket):
@@ -855,6 +993,27 @@ async def test_missing_completed_items_recover_final_from_the_same_stored_turn()
 
 
 @pytest.mark.asyncio
+async def test_missing_completed_items_wait_for_the_same_stored_turn() -> None:
+    websocket = _ThreadReadFinalWebSocket(empty_reads=1)
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    await session.connect()
+
+    events = [event async for event in session.stream_turn("return-json")]
+
+    assert [event.text for event in events if event.kind == "assistant_final"] == [
+        "stored-final"
+    ]
+    assert (
+        sum(message.get("method") == "thread/read" for message in websocket.messages)
+        == 2
+    )
+    await session.close()
+
+
+@pytest.mark.asyncio
 async def test_thread_read_fallback_preserves_commentary_phase() -> None:
     websocket = _ThreadReadFinalWebSocket(final_phase="commentary")
     session = CodexAppServerSession(
@@ -1145,6 +1304,127 @@ async def test_aging_transport_rotates_before_starting_a_long_turn() -> None:
     )
     assert any(event.text == "完成" for event in events)
     await session.close()
+
+
+@pytest.mark.asyncio
+async def test_active_turn_reconnects_without_starting_a_duplicate_turn() -> None:
+    first = _DisconnectingActiveTurnWebSocket()
+    second = _ResumedActiveTurnWebSocket()
+    sockets = [first, second]
+
+    async def factory(_url: str) -> _FakeWebSocket:
+        return sockets.pop(0)
+
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=factory,
+    )
+    await session.connect()
+
+    events = [event async for event in session.stream_turn("long-running")]
+
+    assert [event.text for event in events if event.kind == "assistant_final"] == [
+        "resumed-final"
+    ]
+    assert sum(message.get("method") == "turn/start" for message in first.messages) == 1
+    assert not any(message.get("method") == "turn/start" for message in second.messages)
+    assert any(message.get("method") == "thread/resume" for message in second.messages)
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_active_turn_reconnect_reads_completion_missed_during_disconnect() -> (
+    None
+):
+    first = _DisconnectingActiveTurnWebSocket()
+    second = _ResumedActiveTurnWebSocket(notify=False)
+    sockets = [first, second]
+
+    async def factory(_url: str) -> _FakeWebSocket:
+        return sockets.pop(0)
+
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=factory,
+    )
+    await session.connect()
+
+    events = [event async for event in session.stream_turn("long-running")]
+
+    assert [event.text for event in events if event.kind == "assistant_final"] == [
+        "stored-resumed-final"
+    ]
+    assert (
+        sum(message.get("method") == "thread/read" for message in second.messages) >= 1
+    )
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_active_turn_reconnect_stops_after_bounded_failures() -> None:
+    sockets = [
+        _DisconnectingActiveTurnWebSocket(),
+        _DisconnectAfterStoredTurnReadWebSocket(),
+        _DisconnectAfterStoredTurnReadWebSocket(),
+    ]
+
+    async def factory(_url: str) -> _FakeWebSocket:
+        return sockets.pop(0)
+
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=factory,
+    )
+    await session.connect()
+
+    with pytest.raises(CodexAppServerError, match="连接已断开"):
+        _ = [event async for event in session.stream_turn("long-running")]
+
+    assert sockets == []
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_turn_completion_without_events_cancels_the_pending_queue_read() -> None:
+    websocket = _DelayedStoredFinalWebSocket()
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    await session.connect()
+
+    events = [event async for event in session.stream_turn("long-running")]
+
+    assert [event.text for event in events if event.kind == "assistant_final"] == [
+        "stored-final"
+    ]
+    await session.close()
+
+
+@pytest.mark.parametrize(
+    ("turn", "expected"),
+    [
+        ({"status": {"type": "completed"}}, True),
+        (
+            {
+                "status": "inProgress",
+                "items": [
+                    {
+                        "id": "message-1",
+                        "type": "agentMessage",
+                        "text": "done",
+                    }
+                ],
+            },
+            True,
+        ),
+        ({"status": "inProgress", "items": []}, False),
+    ],
+)
+def test_turn_terminal_state_accepts_protocol_status_shapes(
+    turn: dict[str, object], expected: bool
+) -> None:
+    assert codex_app_server._turn_is_terminal(turn) is expected
 
 
 @pytest.mark.asyncio
