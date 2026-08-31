@@ -450,6 +450,18 @@ def test_quick_mode_dynamic_agent_prompt_respects_offline_requests() -> None:
     assert "不得发起 Skill Hub 关键词检索或其他资源源调用" in normalized_rules
 
 
+def test_quick_mode_dynamic_agent_prompt_requires_explicit_creation_intent() -> None:
+    normalized_rules = " ".join(_DYNAMIC_AGENT_DELEGATION_RULES.split())
+
+    assert "只有用户明确要求创建、组建或委派新的子智能体" in normalized_rules
+    assert "不得仅因为任务复杂" in normalized_rules
+    assert "已挂载的执行环境优先于创建子智能体" in normalized_rules
+    assert "主动根据环境名称、描述和能力与用户任务做语义匹配" in normalized_rules
+    assert "明确点名某个已挂载环境时，必须精确选择该环境" in normalized_rules
+    assert "不得先调用知识库、Skill 或其他非环境工具" in normalized_rules
+    assert "需求、产品、架构或 ADR 设计匹配 authoring/design" in normalized_rules
+
+
 def test_quick_mode_dynamic_agent_prompt_generalizes_specific_video_request() -> None:
     assert "给我生成葫芦娃大战钢铁侠的视频" in _DYNAMIC_AGENT_DELEGATION_RULES
     assert "video_creation_agent" in _DYNAMIC_AGENT_DELEGATION_RULES

@@ -211,6 +211,38 @@ export function CreateAgentsIcon(props: ToolIconProps) {
   );
 }
 
+/** A stacked environment catalog with one active sandbox. */
+export function ListEnvironmentsIcon(props: ToolIconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+      <rect x="4" y="4.25" width="16" height="5" rx="1.5" />
+      <rect x="4" y="14.75" width="16" height="5" rx="1.5" />
+      <path d="M7.25 6.75h.01M7.25 17.25h.01M10 6.75h6.5M10 17.25h6.5" />
+    </svg>
+  );
+}
+
+/** A manifest sheet with compact configuration lines. */
+export function EnvironmentManifestIcon(props: ToolIconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+      <path d="M6 3.75h8l4 4v12.5H6V3.75Z" />
+      <path d="M14 3.75v4h4M8.75 11h6.5M8.75 14.25h6.5M8.75 17.5h4" />
+    </svg>
+  );
+}
+
+/** A terminal prompt enclosed by the selected sandbox boundary. */
+export function ExecuteInSandboxIcon(props: ToolIconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+      <rect x="3.75" y="4.5" width="16.5" height="15" rx="2.5" />
+      <path d="m7.5 9 2.75 2.5L7.5 14M12.5 14h4" />
+      <path d="M3.75 7.5h16.5" opacity=".62" />
+    </svg>
+  );
+}
+
 export function ToolDisclosureIcon(props: ToolIconProps) {
   return (
     <svg

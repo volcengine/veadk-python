@@ -7,12 +7,15 @@ import {
 import {
   CollectResourcesIcon,
   CreateAgentsIcon,
+  EnvironmentManifestIcon,
+  ExecuteInSandboxIcon,
   ImageGenerateIcon,
   LoadKnowledgebaseIcon,
   LoadMemoryIcon,
   LoadSkillIcon,
   PresentationGenerateIcon,
   RunCodeIcon,
+  ListEnvironmentsIcon,
   VideoGenerateIcon,
   WebSearchIcon,
 } from "./icons";
@@ -53,6 +56,27 @@ const BUILTIN_TOOLS: Readonly<Record<string, BuiltinToolDefinition>> = {
     doneLabel: "已在 AgentKit 沙箱中完成代码执行",
     tone: "sandbox",
     icon: RunCodeIcon,
+  },
+  list_envs: {
+    name: "list_envs",
+    runningLabel: "正在查看可用环境",
+    doneLabel: "已读取可用环境",
+    tone: "resources",
+    icon: ListEnvironmentsIcon,
+  },
+  get_env_manifest: {
+    name: "get_env_manifest",
+    runningLabel: "正在读取环境 Manifest",
+    doneLabel: "已读取环境 Manifest",
+    tone: "knowledge",
+    icon: EnvironmentManifestIcon,
+  },
+  execute_in_sandbox: {
+    name: "execute_in_sandbox",
+    runningLabel: "正在环境中执行命令",
+    doneLabel: "已在环境中完成命令执行",
+    tone: "sandbox",
+    icon: ExecuteInSandboxIcon,
   },
   image_generate: {
     name: "image_generate",

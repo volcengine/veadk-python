@@ -35,7 +35,11 @@ class CreateAgentsTool(FunctionTool):
             name=self.name,
             description=(
                 "Create one or more sub-agents and transfer the current task to "
-                "the agent named by handoff_to. Normally call collect_resources "
+                "the agent named by handoff_to. Only use this tool when the user "
+                "explicitly asks to create, add, assemble, or delegate to a new "
+                "agent or sub-agent. Task complexity alone is not authorization. "
+                "When a mounted execution environment can complete the request, "
+                "use the environment tools instead. Normally call collect_resources "
                 "first, use its collection_id, and select only resource refs "
                 "returned by that call. If the user explicitly prohibits network, "
                 "knowledge-base, and external-resource access, skip collection, "

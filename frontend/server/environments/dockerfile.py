@@ -34,6 +34,11 @@ _OPERATING_SYSTEMS = {
     "ubuntu-24.04": ("Ubuntu 24.04", "ubuntu:24.04"),
 }
 
+AIO_BASE_IMAGE = (
+    "agentkit-cli-2107625663-cn-beijing.cr.volces.com/agentkit/"
+    "agent-native-requirements-aio:0.2.1-20260831"
+)
+
 _PYTHON_PATCH_VERSIONS = {
     "3.10": "3.10.18",
     "3.12": "3.12.11",
@@ -156,11 +161,17 @@ def _extend_unique(target: list[str], packages: tuple[str, ...] | list[str]) -> 
 
 
 def _apt_packages(
-    config: EnvironmentInput, *, python_version: str, uses_ubuntu_python: bool
+    config: EnvironmentInput,
+    *,
+    python_version: str,
+    uses_ubuntu_python: bool,
+    uses_aio_python: bool,
 ) -> list[str]:
     """Collect every system package so the generated image needs one apt update."""
     packages = ["ca-certificates"]
-    if uses_ubuntu_python:
+    if uses_aio_python:
+        pass
+    elif uses_ubuntu_python:
         _extend_unique(
             packages,
             [f"python{python_version}", f"python{python_version}-venv"],
@@ -191,7 +202,8 @@ def build_dockerfile(config: EnvironmentInput) -> str:
     if config.dockerfile:
         return validate_dockerfile(config.dockerfile)
 
-    os_label, base_image = _OPERATING_SYSTEMS[config.operating_system]
+    os_label, ubuntu_base_image = _OPERATING_SYSTEMS[config.operating_system]
+    uses_aio_python = config.base_environment == "aio-sandbox"
     python_version = config.language.removeprefix("python-")
     python_patch_version = _PYTHON_PATCH_VERSIONS[python_version]
     selected_options = set(config.option_ids)
@@ -202,39 +214,62 @@ def build_dockerfile(config: EnvironmentInput) -> str:
         config,
         python_version=python_version,
         uses_ubuntu_python=uses_ubuntu_python,
+        uses_aio_python=uses_aio_python,
     )
-    lines = [
-        f"# Operating system: {os_label}",
-        f"FROM {base_image}",
-        "",
-        "ARG DEBIAN_FRONTEND=noninteractive",
-        "ARG APT_MIRROR_URL=http://archive.ubuntu.com/ubuntu",
-        "ARG PIP_INDEX_URL=https://pypi.org/simple",
-        "ARG PYTHON_SOURCE_BASE_URL=https://www.python.org/ftp/python",
-        "ARG PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.playwright.dev",
-        "ARG PIP_DEFAULT_TIMEOUT=300",
-        "ARG PIP_RETRIES=10",
-        "",
-        "# Install all system dependencies in one transaction from the provider-local mirror.",
-        "RUN set -eux; \\",
-        '    mirror="${APT_MIRROR_URL%/}"; \\',
-        "    for source_file in /etc/apt/sources.list /etc/apt/sources.list.d/*.sources; do \\",
-        '        [ -f "$source_file" ] || continue; \\',
-        '        sed -i -E "s#https?://(archive|security).ubuntu.com/ubuntu/?#${mirror}#g" "$source_file"; \\',
-        "    done; \\",
-        '    printf \'Acquire::Retries "5";\\nAcquire::ForceIPv4 "true";\\nAcquire::http::Timeout "60";\\nAcquire::https::Timeout "60";\\n\' > /etc/apt/apt.conf.d/80-veadk-network; \\',
-        "    apt-get update; \\",
-        "    apt-get install -y --no-install-recommends \\",
-        *(f"    {package} \\" for package in apt_packages),
-        "    ; rm -rf /var/lib/apt/lists/*",
-        "",
-        "ENV PYTHONDONTWRITEBYTECODE=1 \\",
-        "    PYTHONUNBUFFERED=1 \\",
-        "    PIP_NO_CACHE_DIR=1",
-        "",
-        f"# Python {python_version}",
-    ]
-    if uses_ubuntu_python:
+    lines = (
+        [
+            f"ARG AIO_BASE_IMAGE={AIO_BASE_IMAGE}",
+            "ARG AIO_BASE_PLATFORM=linux/amd64",
+            "",
+            f"# Base environment: AIO Sandbox ({os_label})",
+            "FROM --platform=${AIO_BASE_PLATFORM} ${AIO_BASE_IMAGE}",
+        ]
+        if uses_aio_python
+        else [f"# Operating system: {os_label}", f"FROM {ubuntu_base_image}"]
+    )
+    lines.extend(
+        [
+            "",
+            "ARG DEBIAN_FRONTEND=noninteractive",
+            "ARG APT_MIRROR_URL=http://archive.ubuntu.com/ubuntu",
+            "ARG PIP_INDEX_URL=https://pypi.org/simple",
+            "ARG PYTHON_SOURCE_BASE_URL=https://www.python.org/ftp/python",
+            "ARG PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.playwright.dev",
+            "ARG PIP_DEFAULT_TIMEOUT=300",
+            "ARG PIP_RETRIES=10",
+            "",
+            "# Install all system dependencies in one transaction from the provider-local mirror.",
+            "RUN set -eux; \\",
+            '    mirror="${APT_MIRROR_URL%/}"; \\',
+            "    for source_file in /etc/apt/sources.list /etc/apt/sources.list.d/*.sources; do \\",
+            '        [ -f "$source_file" ] || continue; \\',
+            '        sed -i -E "s#https?://(archive|security).ubuntu.com/ubuntu/?#${mirror}#g" "$source_file"; \\',
+            "    done; \\",
+            '    printf \'Acquire::Retries "5";\\nAcquire::ForceIPv4 "true";\\nAcquire::http::Timeout "60";\\nAcquire::https::Timeout "60";\\n\' > /etc/apt/apt.conf.d/80-veadk-network; \\',
+            "    apt-get update; \\",
+            "    apt-get install -y --no-install-recommends \\",
+            *(f"    {package} \\" for package in apt_packages),
+            "    ; rm -rf /var/lib/apt/lists/*",
+            "",
+            "ENV PYTHONDONTWRITEBYTECODE=1 \\",
+            "    PYTHONUNBUFFERED=1 \\",
+            "    PIP_NO_CACHE_DIR=1",
+            "",
+            f"# Python {python_version}",
+        ]
+    )
+    if uses_aio_python:
+        lines.extend(
+            (
+                "# Keep Studio dependencies isolated from AIO's system interpreter.",
+                "RUN /opt/python3.12/bin/python -m venv /opt/veadk-environment/.venv",
+                "",
+                "ENV VIRTUAL_ENV=/opt/veadk-environment/.venv \\",
+                "    BASH_VENV_PATH=/opt/veadk-environment/.venv \\",
+                '    PATH="/opt/veadk-environment/.venv/bin:$PATH"',
+            )
+        )
+    elif uses_ubuntu_python:
         lines.append(f"RUN python{python_version} -m venv /opt/venv")
     else:
         lines.extend(
@@ -250,7 +285,8 @@ def build_dockerfile(config: EnvironmentInput) -> str:
                 "    && rm -rf /tmp/python-source /tmp/python.tgz",
             )
         )
-    lines.extend(("", 'ENV PATH="/opt/venv/bin:$PATH"'))
+    if not uses_aio_python:
+        lines.extend(("", 'ENV PATH="/opt/venv/bin:$PATH"'))
     if {"playwright", "chromium"} & selected_options:
         lines.extend(
             (
@@ -298,8 +334,29 @@ def build_dockerfile(config: EnvironmentInput) -> str:
                 browser_installed = True
         elif package.installer != "apt":
             lines.append(f"RUN python -m pip install --upgrade {package.package_name}")
-    lines.extend(("", 'CMD ["/bin/bash"]'))
+    if uses_aio_python:
+        lines.extend(
+            (
+                "",
+                "# Keep AIO's inherited /opt/gem/run.sh startup chain and shell API.",
+                "EXPOSE 8080",
+            )
+        )
+    else:
+        lines.extend(("", 'CMD ["/bin/bash"]'))
     return "\n".join(lines)
+
+
+def environment_base_image(config: EnvironmentInput) -> str:
+    if config.base_environment == "aio-sandbox":
+        return AIO_BASE_IMAGE
+    return _OPERATING_SYSTEMS[config.operating_system][1]
+
+
+def environment_capabilities(config: EnvironmentInput) -> list[str]:
+    if config.base_environment == "aio-sandbox":
+        return ["shell-exec"]
+    return []
 
 
 def validate_dockerfile(value: str) -> str:
@@ -315,4 +372,10 @@ def validate_dockerfile(value: str) -> str:
     return dockerfile
 
 
-__all__ = ["build_dockerfile", "validate_dockerfile"]
+__all__ = [
+    "AIO_BASE_IMAGE",
+    "build_dockerfile",
+    "environment_base_image",
+    "environment_capabilities",
+    "validate_dockerfile",
+]

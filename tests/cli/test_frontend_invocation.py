@@ -18,14 +18,17 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
 from google.adk.models.llm_request import LlmRequest
 from google.adk.skills import load_skill_from_dir
 from google.adk.tools.function_tool import FunctionTool
 from google.adk.tools.skill_toolset import SkillToolset
+from google.genai import types
 
-from veadk.cli.frontend_invocation import agent_skill_summaries
-from veadk.cli.frontend_invocation import FrontendInvocationPlugin
+from veadk.cli.frontend_invocation import (
+    ENVIRONMENT_MOUNTS_METADATA_KEY,
+    FrontendInvocationPlugin,
+    agent_skill_summaries,
+)
 
 
 def _tool() -> None:
@@ -75,6 +78,52 @@ def test_agent_skill_summaries_supports_google_and_legacy_skills(
         {"name": "review-code", "description": "Review code carefully."},
         {"name": "write-tests", "description": "Write focused tests."},
     ]
+
+
+@pytest.mark.asyncio
+async def test_mounted_environments_add_a_system_instruction_only() -> None:
+    plugin = FrontendInvocationPlugin()
+    request = _request("list_envs", "get_env_manifest", "execute_in_sandbox")
+    user_content = types.Content(
+        role="user",
+        parts=[types.Part(text="Run the project tests")],
+    )
+    request.contents = [user_content]
+
+    await plugin.before_model_callback(
+        callback_context=_context(  # type: ignore[arg-type]
+            agent_name="root",
+            metadata={ENVIRONMENT_MOUNTS_METADATA_KEY: True},
+        ),
+        llm_request=request,
+    )
+
+    instruction = str(request.config.system_instruction)
+    assert "execution environments are mounted" in instruction
+    assert "take priority over dynamic agent creation" in instruction
+    assert "Before answering any substantive user request" in instruction
+    assert "first tool call MUST be `list_envs`" in instruction
+    assert "Semantically match the user's task" in instruction
+    assert "does not need to mention an environment" in instruction
+    assert "names a mounted environment, select that environment exactly" in instruction
+    assert "Do not call any other tool before `list_envs`" in instruction
+    assert "requirement, product, architecture, or ADR design" in instruction
+    assert "Do not call `collect_resources` or `create_agents` first" in instruction
+    assert "Only call them when the user explicitly asks" in instruction
+    assert request.contents == [user_content]
+
+
+@pytest.mark.asyncio
+async def test_no_mounted_environment_adds_no_system_instruction() -> None:
+    plugin = FrontendInvocationPlugin()
+    request = _request("list_envs", "get_env_manifest", "execute_in_sandbox")
+
+    await plugin.before_model_callback(
+        callback_context=_context(agent_name="root", metadata={}),  # type: ignore[arg-type]
+        llm_request=request,
+    )
+
+    assert request.config.system_instruction is None
 
 
 @pytest.mark.asyncio

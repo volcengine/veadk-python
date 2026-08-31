@@ -130,6 +130,21 @@ def mount_environment_routes(
             _raise_api_error(error, "读取环境镜像构建状态")
             raise
 
+    @app.get("/web/environments/{environment_id}/builds/{version_id}/manifest")
+    async def get_environment_manifest(
+        environment_id: str,
+        version_id: str,
+        request: Request,
+    ) -> dict[str, Any]:
+        owner_id = identity_resolver(request)
+        try:
+            return _public(
+                await service.get_manifest(owner_id, environment_id, version_id)
+            )
+        except Exception as error:
+            _raise_api_error(error, "读取环境 Manifest")
+            raise
+
     @app.get("/web/environment-resources")
     async def environment_resources(request: Request) -> dict[str, Any]:
         _ = identity_resolver(request)

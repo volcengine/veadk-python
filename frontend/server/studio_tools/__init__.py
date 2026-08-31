@@ -27,8 +27,18 @@ from frontend.server.studio_tools.registry import (
     StudioToolRegistry,
     build_studio_tool_registry,
 )
+from frontend.server.studio_tools.sandbox_shell import (
+    AgentkitEnvironmentSandboxResolver,
+    SandboxExecutionTarget,
+    SandboxTargetResolver,
+    execute_in_sandbox,
+    register_sandbox_shell_tool,
+)
 
 __all__ = [
+    "AgentkitEnvironmentSandboxResolver",
+    "SandboxExecutionTarget",
+    "SandboxTargetResolver",
     "StudioChannelError",
     "StudioTool",
     "StudioToolCatalogSnapshot",
@@ -36,6 +46,8 @@ __all__ = [
     "StudioToolRegistry",
     "StudioToolRun",
     "build_studio_tool_registry",
+    "execute_in_sandbox",
     "open_studio_tool_run",
+    "register_sandbox_shell_tool",
     "runtime_supports_bff_tools",
 ]

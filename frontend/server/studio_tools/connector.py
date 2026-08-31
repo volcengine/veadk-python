@@ -20,7 +20,7 @@ import asyncio
 import hashlib
 import json
 import os
-from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Sequence
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
@@ -29,6 +29,7 @@ import httpx
 from websockets.asyncio.client import connect
 from websockets.exceptions import InvalidStatus
 
+from frontend.server.environments.session_mounts import SessionEnvironmentMount
 from frontend.server.runtime_logs import RuntimeRequestContext, runtime_request_context
 from frontend.server.studio_tools.registry import (
     StudioToolCatalogSnapshot,
@@ -480,6 +481,9 @@ async def open_studio_tool_run(
     runtime_id: str,
     payload: dict[str, Any],
     catalog: StudioToolCatalogSnapshot,
+    owner_id: str = "",
+    environment_mount: SessionEnvironmentMount | None = None,
+    environment_mounts: Sequence[SessionEnvironmentMount] = (),
 ) -> StudioToolRun:
     """Connect, publish the current catalog, and start one same-socket run."""
 
@@ -503,6 +507,9 @@ async def open_studio_tool_run(
         run_id=run_id,
         scope_id=scope_id,
         catalog_revision=revision,
+        owner_id=owner_id,
+        environment_mount=environment_mount,
+        environment_mounts=tuple(environment_mounts),
     )
     try:
         websocket = await connect(

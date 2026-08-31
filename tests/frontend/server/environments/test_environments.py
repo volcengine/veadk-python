@@ -21,6 +21,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from fastapi import FastAPI
@@ -32,11 +33,13 @@ from frontend.server.environments.models import (
     SUPPORTED_OPTION_IDS,
     CodePipelineResource,
     ContainerRegistryResource,
+    EnvironmentBuild,
     EnvironmentInput,
     EnvironmentResourceInfo,
 )
 from frontend.server.environments.repository import TosEnvironmentRepository
 from frontend.server.environments.resources import (
+    EnvironmentCloudGateway,
     EnvironmentResourceError,
     EnvironmentResourceSettings,
     StudioEnvironmentCloudGateway,
@@ -82,17 +85,18 @@ class FakeTos:
 
 
 class FakeCloud:
-    def __init__(self, statuses=None):
+    def __init__(self, statuses=None, *, provider="volcengine"):
         self.statuses = list(statuses or ["available"])
+        self.provider = provider
         self.started: list[tuple[str, str]] = []
         self.log_calls = 0
 
     def describe(self):
-        return _resource_info("volcengine", "managed", "managed")
+        return _resource_info(self.provider, "managed", "managed")
 
     def start_build(self, *, context_key, image_tag):
         self.started.append((context_key, image_tag))
-        resources = _resource_info("volcengine", "managed", "managed")
+        resources = _resource_info(self.provider, "managed", "managed")
         return resources, "run-1", f"registry.example/env/images:{image_tag}"
 
     def build_status(self, resources, run_id):
@@ -280,10 +284,55 @@ def _resource_info(provider, cp_source, cr_source):
     )
 
 
-def _service(tos=None, cloud=None):
+class FakeToolProvisioner:
+    def __init__(self, *, error: Exception | None = None):
+        self.error = error
+        self.calls: list[tuple[str, str, str]] = []
+
+    async def ensure_ready(self, *, image, provider, region):
+        from frontend.server.environments.tool_provisioning import (
+            EnvironmentToolState,
+        )
+
+        self.calls.append((image, provider, region))
+        if self.error is not None:
+            raise self.error
+        return EnvironmentToolState(
+            tool_id=f"tool-{provider}",
+            name="studio-env-test",
+            status="ready",
+        )
+
+
+class BlockingToolProvisioner(FakeToolProvisioner):
+    def __init__(self) -> None:
+        import asyncio
+
+        super().__init__()
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def ensure_ready(self, *, image, provider, region):
+        self.started.set()
+        await self.release.wait()
+        return await super().ensure_ready(
+            image=image,
+            provider=provider,
+            region=region,
+        )
+
+
+def _service(tos=None, cloud=None, tool_provisioner=None):
     tos = tos or FakeTos()
     repository = TosEnvironmentRepository(bucket="studio", client_factory=lambda: tos)
-    return EnvironmentService(repository, cloud or FakeCloud()), tos
+    return (
+        EnvironmentService(
+            repository,
+            cloud or FakeCloud(),
+            tool_provisioner=tool_provisioner,
+        ),
+        tos,
+    )
 
 
 def _payload(**updates):
@@ -296,6 +345,36 @@ def _payload(**updates):
     }
     payload.update(updates)
     return payload
+
+
+def test_legacy_environment_payload_defaults_to_ubuntu():
+    config = EnvironmentInput.model_validate(_payload())
+
+    assert config.base_environment == "ubuntu"
+
+
+def test_aio_environment_preserves_the_shell_runtime_contract():
+    config = EnvironmentInput.model_validate(
+        _payload(
+            baseEnvironment="aio-sandbox",
+            operatingSystem="ubuntu-24.04",
+            language="python-3.10",
+        )
+    )
+    dockerfile = build_dockerfile(config)
+
+    assert config.operating_system == "ubuntu-22.04"
+    assert config.language == "python-3.12"
+    assert (
+        "ARG AIO_BASE_IMAGE="
+        "agentkit-cli-2107625663-cn-beijing.cr.volces.com/agentkit/"
+        "agent-native-requirements-aio:0.2.1-20260831"
+    ) in dockerfile
+    assert "FROM --platform=${AIO_BASE_PLATFORM} ${AIO_BASE_IMAGE}" in dockerfile
+    assert "BASH_VENV_PATH=/opt/veadk-environment/.venv" in dockerfile
+    assert "EXPOSE 8080" in dockerfile
+    assert "CMD " not in dockerfile
+    assert "ENTRYPOINT " not in dockerfile
 
 
 @pytest.mark.parametrize("operating_system", ["ubuntu-22.04", "ubuntu-24.04"])
@@ -502,6 +581,310 @@ def test_environment_crud_build_and_tos_version_layout():
 
     assert client.delete(f"/web/environments/{environment_id}").status_code == 204
     assert client.get(f"/web/environments/{environment_id}").status_code == 404
+
+
+def test_environment_manifest_describes_the_immutable_image_version():
+    service, _tos = _service()
+    app = FastAPI()
+    mount_environment_routes(app, service, lambda _request: "owner")
+    client = TestClient(app)
+
+    environment = client.post(
+        "/web/environments",
+        json=_payload(
+            name="Browser tools",
+            description="Browser automation",
+            operatingSystem="ubuntu-24.04",
+            optionIds=["playwright", "chromium"],
+        ),
+    ).json()
+    build = client.post(f"/web/environments/{environment['id']}/build").json()
+    version_id = build["versionId"]
+
+    client.patch(
+        f"/web/environments/{environment['id']}",
+        json={"name": "Edited after build", "optionIds": ["git"]},
+    )
+    response = client.get(
+        f"/web/environments/{environment['id']}/builds/{version_id}/manifest"
+    )
+
+    assert response.status_code == 200
+    manifest = response.json()
+    assert manifest["apiVersion"] == "agentkit.studio/v1alpha1"
+    assert manifest["kind"] == "Environment"
+    assert manifest["metadata"] == {
+        "id": environment["id"],
+        "name": "Browser tools",
+        "version": version_id,
+        "description": "Browser automation",
+    }
+    assert manifest["spec"]["image"] == build["image"]
+    assert manifest["spec"]["baseEnvironment"] == "ubuntu"
+    assert manifest["spec"]["baseImage"] == "ubuntu:24.04"
+    assert manifest["spec"]["operatingSystem"] == "ubuntu-24.04"
+    assert manifest["spec"]["language"] == "python-3.12"
+    assert manifest["spec"]["executionRuntime"] == "veadk"
+    assert manifest["spec"]["packages"] == ["playwright", "chromium"]
+    assert manifest["spec"]["capabilities"] == []
+    assert manifest["spec"]["skills"] == []
+    assert manifest["status"]["phase"] == "available"
+    assert manifest["status"]["toolId"] == ""
+    assert manifest["status"]["toolStatus"] == ""
+
+
+@pytest.mark.parametrize(
+    "provider,region",
+    [("volcengine", "cn-beijing"), ("byteplus", "ap-southeast-1")],
+)
+def test_aio_build_provisions_and_persists_a_ready_private_tool(provider, region):
+    provisioner = FakeToolProvisioner()
+    service, tos = _service(
+        cloud=FakeCloud(provider=provider),
+        tool_provisioner=provisioner,
+    )
+    app = FastAPI()
+    mount_environment_routes(app, service, lambda _request: "owner")
+    with TestClient(app) as client:
+        environment = client.post(
+            "/web/environments",
+            json=_payload(baseEnvironment="aio-sandbox"),
+        ).json()
+        started = client.post(f"/web/environments/{environment['id']}/build").json()
+
+        provisioning = client.get(
+            f"/web/environments/{environment['id']}/builds/{started['versionId']}"
+        ).json()
+        assert provisioning["status"] == "building"
+        assert provisioning["toolStatus"] == "creating"
+        assert provisioning["steps"][-1]["key"] == "sandbox-tool"
+        assert provisioning["steps"][-1]["status"] == "running"
+
+        completed = _wait_for_build(
+            client,
+            f"/web/environments/{environment['id']}/builds/{started['versionId']}",
+        )
+        manifest = client.get(
+            f"/web/environments/{environment['id']}/builds/"
+            f"{started['versionId']}/manifest"
+        ).json()
+
+    assert completed["status"] == "available"
+    assert completed["toolId"] == f"tool-{provider}"
+    assert completed["toolStatus"] == "ready"
+    assert completed["steps"][-1]["key"] == "sandbox-tool"
+    assert completed["steps"][-1]["status"] == "succeeded"
+    assert provisioner.calls == [(started["image"], provider, region)]
+    prefix = (
+        f"veadk-studio/v1/environments/owner/{environment['id']}"
+        f"/versions/{started['versionId']}"
+    )
+    persisted = json.loads(tos.objects[f"{prefix}/build.json"])
+    assert persisted["toolId"] == f"tool-{provider}"
+    assert persisted["toolStatus"] == "ready"
+    assert manifest["status"]["toolId"] == f"tool-{provider}"
+    assert manifest["status"]["toolStatus"] == "ready"
+
+
+def test_ubuntu_build_does_not_provision_a_private_tool():
+    provisioner = FakeToolProvisioner()
+    service, _tos = _service(tool_provisioner=provisioner)
+    app = FastAPI()
+    mount_environment_routes(app, service, lambda _request: "owner")
+    client = TestClient(app)
+    environment = client.post("/web/environments", json=_payload()).json()
+    started = client.post(f"/web/environments/{environment['id']}/build").json()
+
+    completed = client.get(
+        f"/web/environments/{environment['id']}/builds/{started['versionId']}"
+    ).json()
+
+    assert completed["status"] == "available"
+    assert completed["toolId"] == ""
+    assert completed["toolStatus"] == ""
+    assert provisioner.calls == []
+
+
+def test_legacy_build_without_tool_fields_remains_valid():
+    build = EnvironmentBuild.model_validate(
+        {
+            "environmentId": "a" * 32,
+            "versionId": "20260831T010203Z-abcdef12",
+            "status": "available",
+            "image": "registry.example/environment:v1",
+            "createdAt": "2026-08-31T01:02:03Z",
+            "updatedAt": "2026-08-31T01:02:03Z",
+        }
+    )
+
+    assert build.tool_id == ""
+    assert build.tool_status == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("query", ["list", "get", "get_build"])
+async def test_environment_queries_backfill_legacy_aio_tool_binding(query: str):
+    initial_service, tos = _service(tool_provisioner=FakeToolProvisioner())
+    app = FastAPI()
+    mount_environment_routes(app, initial_service, lambda _request: "owner")
+    with TestClient(app) as client:
+        environment = client.post(
+            "/web/environments",
+            json=_payload(baseEnvironment="aio-sandbox"),
+        ).json()
+        started = client.post(f"/web/environments/{environment['id']}/build").json()
+        build_url = (
+            f"/web/environments/{environment['id']}/builds/{started['versionId']}"
+        )
+        client.get(build_url)
+        _wait_for_build(client, build_url)
+    prefix = (
+        f"veadk-studio/v1/environments/owner/{environment['id']}"
+        f"/versions/{started['versionId']}"
+    )
+    legacy = json.loads(tos.objects[f"{prefix}/build.json"])
+    legacy.pop("toolId")
+    legacy.pop("toolStatus")
+    tos.objects[f"{prefix}/build.json"] = json.dumps(legacy).encode()
+
+    blocking = BlockingToolProvisioner()
+    restored_service, _ = _service(tos=tos, tool_provisioner=blocking)
+    if query == "list":
+        result = (await restored_service.list("owner"))[0].latest_version
+    elif query == "get":
+        result = (await restored_service.get("owner", environment["id"])).latest_version
+    else:
+        result = await restored_service.get_build(
+            "owner",
+            environment["id"],
+            started["versionId"],
+        )
+
+    assert result is not None
+    assert result.status == "building"
+    assert result.tool_status == "creating"
+    await blocking.started.wait()
+    tasks = list(restored_service._tool_tasks.values())
+    blocking.release.set()
+    await __import__("asyncio").gather(*tasks)
+
+    completed = await restored_service.get_build(
+        "owner",
+        environment["id"],
+        started["versionId"],
+    )
+    assert completed.status == "available"
+    assert completed.tool_id == "tool-volcengine"
+    assert completed.tool_status == "ready"
+    assert len(blocking.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_resolving_legacy_aio_version_backfills_persisted_tool_binding():
+    initial_provisioner = FakeToolProvisioner()
+    service, tos = _service(tool_provisioner=initial_provisioner)
+    app = FastAPI()
+    mount_environment_routes(app, service, lambda _request: "owner")
+    with TestClient(app) as client:
+        environment = client.post(
+            "/web/environments",
+            json=_payload(baseEnvironment="aio-sandbox"),
+        ).json()
+        started = client.post(f"/web/environments/{environment['id']}/build").json()
+        build_url = (
+            f"/web/environments/{environment['id']}/builds/{started['versionId']}"
+        )
+        client.get(build_url)
+        _wait_for_build(client, build_url)
+    prefix = (
+        f"veadk-studio/v1/environments/owner/{environment['id']}"
+        f"/versions/{started['versionId']}"
+    )
+    legacy = json.loads(tos.objects[f"{prefix}/build.json"])
+    legacy.pop("toolId")
+    legacy.pop("toolStatus")
+    tos.objects[f"{prefix}/build.json"] = json.dumps(legacy).encode()
+
+    backfill = FakeToolProvisioner()
+    restored_service, _ = _service(
+        tos=tos,
+        tool_provisioner=backfill,
+    )
+    with pytest.raises(ValueError, match="正在准备"):
+        await restored_service.resolve_for_agent(
+            "owner",
+            environment["id"],
+            started["versionId"],
+        )
+
+    await __import__("asyncio").gather(*restored_service._tool_tasks.values())
+    resolved = await restored_service.resolve_for_agent(
+        "owner",
+        environment["id"],
+        started["versionId"],
+    )
+
+    assert resolved.tool_id == "tool-volcengine"
+    assert resolved.tool_status == "ready"
+    assert len(backfill.calls) == 1
+    persisted = json.loads(tos.objects[f"{prefix}/build.json"])
+    assert persisted["toolId"] == "tool-volcengine"
+    assert persisted["toolStatus"] == "ready"
+
+
+@pytest.mark.asyncio
+async def test_persisted_creating_state_resumes_after_service_restart():
+    tos = FakeTos()
+    repository = TosEnvironmentRepository(bucket="studio", client_factory=lambda: tos)
+    blocking = BlockingToolProvisioner()
+    service = EnvironmentService(
+        repository,
+        cast(EnvironmentCloudGateway, FakeCloud()),
+        tool_provisioner=blocking,
+    )
+    environment = await service.create(
+        "owner",
+        EnvironmentInput.model_validate(_payload(baseEnvironment="aio-sandbox")),
+    )
+    started = await service.start_build("owner", environment.id)
+
+    creating = await service.get_build("owner", environment.id, started.version_id)
+    await blocking.started.wait()
+    assert creating.status == "building"
+    assert creating.tool_status == "creating"
+    for task in service._tool_tasks.values():
+        task.cancel()
+    await __import__("asyncio").gather(
+        *service._tool_tasks.values(), return_exceptions=True
+    )
+
+    resumed_provisioner = FakeToolProvisioner()
+    resumed_service = EnvironmentService(
+        repository,
+        cast(EnvironmentCloudGateway, FakeCloud()),
+        tool_provisioner=resumed_provisioner,
+    )
+    resumed = await resumed_service.get_build(
+        "owner", environment.id, started.version_id
+    )
+    assert resumed.status == "building"
+    assert resumed.tool_status == "creating"
+    await __import__("asyncio").gather(*resumed_service._tool_tasks.values())
+
+    completed = await repository.get_build("owner", environment.id, started.version_id)
+    assert completed.status == "available"
+    assert completed.tool_id == "tool-volcengine"
+    assert completed.tool_status == "ready"
+    assert len(resumed_provisioner.calls) == 1
+
+
+def _wait_for_build(client: TestClient, url: str) -> dict:
+    for _ in range(20):
+        result = client.get(url).json()
+        if result["status"] in {"available", "failed"}:
+            return result
+        time.sleep(0.01)
+    raise AssertionError("environment build did not reach a terminal state")
 
 
 def test_build_detail_returns_steps_and_only_downloads_logs_when_requested():

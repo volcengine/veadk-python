@@ -13,6 +13,10 @@ const environmentStyles = readFileSync(
   new URL("../src/ui/EnvironmentCenter.css", import.meta.url),
   "utf8",
 );
+const resourceCollectionStyles = readFileSync(
+  new URL("../src/ui/ResourceCollection.css", import.meta.url),
+  "utf8",
+);
 const dockerfileUploadSource = readFileSync(
   new URL("../src/ui/environmentDockerfileUpload.ts", import.meta.url),
   "utf8",
@@ -43,6 +47,10 @@ const buildProgressStyles = readFileSync(
 );
 const buildLogSource = readFileSync(
   new URL("../src/ui/studioBuildLog.ts", import.meta.url),
+  "utf8",
+);
+const manifestSource = readFileSync(
+  new URL("../src/ui/environmentManifest.ts", import.meta.url),
   "utf8",
 );
 
@@ -80,7 +88,9 @@ test("uses Apps SDK UI controls and shared Studio patterns", () => {
 });
 
 test("covers environment categories, editor feedback, and responsive layout", () => {
-  assert.match(environmentSource, />操作系统<\/h2>/);
+  assert.match(environmentSource, />基础环境<\/h2>/);
+  assert.match(environmentSource, /AIO Sandbox/);
+  assert.match(environmentSource, /Ubuntu/);
   assert.match(environmentSource, />语言<\/h2>/);
   assert.match(environmentSource, />执行环境<\/h2>/);
   assert.match(environmentSource, />技能<\/h2>/);
@@ -173,6 +183,87 @@ test("shows live build steps and redacted log snapshots in a responsive detail d
   assert.match(environmentStyles, /\.environment-build-dialog__body[\s\S]*?overflow: hidden/);
   assert.match(buildProgressStyles, /@media \(max-width: 640px\)/);
   assert.match(environmentStyles, /max-height: 92dvh/);
+});
+
+test("opens a version-bound environment manifest beside the primary card action", async () => {
+  assert.match(resourceCardSource, /auxiliaryAction/);
+  assert.match(resourceCardSource, /className="library-resource-card__auxiliary-action"/);
+  assert.match(environmentSource, /function ManifestIcon/);
+  assert.match(environmentSource, /查看环境 Manifest/);
+  assert.match(environmentSource, /尚无可用 Manifest/);
+  assert.match(environmentSource, /<EnvironmentManifestDialog/);
+  assert.match(environmentSource, /<CodeEditor[\s\S]*?path="environment\.yaml"[\s\S]*?readOnly/);
+  assert.match(environmentSource, /navigator\.clipboard\.writeText\(manifestYaml\)/);
+  assert.match(clientSource, /\/manifest/);
+  assert.match(environmentStyles, /\.environment-manifest-dialog__editor/);
+  assert.match(environmentStyles, /\.environment-card \.library-resource-card__auxiliary-action\s*\{[\s\S]*?border-color: transparent;[\s\S]*?background: transparent;/);
+  assert.match(environmentStyles, /\.environment-card \.library-resource-card__auxiliary-action:hover:not\(:disabled\)[\s\S]*?background: hsl\(var\(--muted\) \/ 0\.72\)/);
+  assert.match(resourceCollectionStyles, /@media \(hover: none\), \(pointer: coarse\)/);
+
+  const server = await createServer({
+    appType: "custom",
+    logLevel: "silent",
+    optimizeDeps: { noDiscovery: true },
+    server: { middlewareMode: true },
+  });
+  try {
+    const manifest = await server.ssrLoadModule("/src/ui/environmentManifest.ts");
+    const yaml = manifest.formatEnvironmentManifest({
+      apiVersion: "agentkit.studio/v1alpha1",
+      kind: "Environment",
+      metadata: {
+        id: "env-1",
+        name: "Browser tools",
+        version: "20260831T010203Z-a1b2c3d4",
+        description: "Browser automation",
+      },
+      spec: {
+        image: "registry.example/browser:latest",
+        baseEnvironment: "ubuntu",
+        baseImage: "ubuntu:24.04",
+        operatingSystem: "ubuntu-24.04",
+        language: "python-3.12",
+        executionRuntime: "veadk",
+        packages: ["playwright", "chromium"],
+        capabilities: [],
+        skills: [],
+      },
+      status: {
+        phase: "available",
+        createdAt: "2026-08-31T01:02:03Z",
+        updatedAt: "2026-08-31T01:05:03Z",
+      },
+    });
+    assert.match(yaml, /^apiVersion: agentkit\.studio\/v1alpha1$/m);
+    assert.match(yaml, /^kind: Environment$/m);
+    assert.match(yaml, /^  image: registry\.example\/browser:latest$/m);
+    assert.match(yaml, /^    - playwright$/m);
+  } finally {
+    await server.close();
+  }
+  assert.match(manifestSource, /stringify\(manifest/);
+});
+
+test("uses AIO Sandbox as the default base environment and preserves its runtime", async () => {
+  const server = await createServer({
+    appType: "custom",
+    logLevel: "silent",
+    optimizeDeps: { noDiscovery: true },
+    server: { middlewareMode: true },
+  });
+  try {
+    const model = await server.ssrLoadModule("/src/ui/environmentModel.ts");
+    assert.equal(model.EMPTY_ENVIRONMENT_DRAFT.baseEnvironment, "aio-sandbox");
+    const dockerfile = model.buildEnvironmentDockerfile(model.EMPTY_ENVIRONMENT_DRAFT);
+    assert.match(dockerfile, /^ARG AIO_BASE_IMAGE=agentkit-cli-2107625663-cn-beijing\.cr\.volces\.com\/agentkit\/agent-native-requirements-aio:0\.2\.1-20260831$/m);
+    assert.match(dockerfile, /^FROM --platform=\$\{AIO_BASE_PLATFORM\} \$\{AIO_BASE_IMAGE\}$/m);
+    assert.match(dockerfile, /BASH_VENV_PATH=\/opt\/veadk-environment\/\.venv/);
+    assert.match(dockerfile, /^EXPOSE 8080$/m);
+    assert.doesNotMatch(dockerfile, /^CMD /m);
+    assert.doesNotMatch(dockerfile, /^ENTRYPOINT /m);
+  } finally {
+    await server.close();
+  }
 });
 
 test("highlights Bash logs and follows only while the reader stays near the bottom", async () => {
