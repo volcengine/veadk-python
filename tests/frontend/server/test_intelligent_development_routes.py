@@ -1805,6 +1805,7 @@ def test_restored_project_context_selects_incremental_builder_mode(
 
     assert response.status_code == 200
     assert len(gateway.codex.calls) == 2
+    assert gateway.codex.calls[1]["permissions"] == routes._BUILDER_PERMISSIONS
     builder = str(gateway.codex.calls[1]["prompt"])
     assert "## Version-based optimization" in builder
     assert '"agentName":"weather_agent"' in builder

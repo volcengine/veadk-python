@@ -1415,6 +1415,7 @@ def mount_intelligent_development_routes(
                         validation_project=validation_project,
                         project_context=project_context,
                     ),
+                    turn_permissions=_BUILDER_PERMISSIONS,
                     turn_timeout_seconds=_BUILDER_TURN_TIMEOUT_SECONDS,
                 ):
                     progress = _command_progress(event)
