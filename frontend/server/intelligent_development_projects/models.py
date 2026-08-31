@@ -22,6 +22,11 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from frontend.server.source_project_limits import (
+    SOURCE_PROJECT_MAX_BYTES,
+    SOURCE_PROJECT_MAX_FILES,
+)
+
 SourceProjectOrigin = Literal["intelligent-development", "migration"]
 SourceVersionProducer = Literal["intelligent-development", "migration"]
 
@@ -75,8 +80,8 @@ class IntelligentDevelopmentVersion(BaseModel):
     validation_report_sha256: str = Field(
         alias="validationReportSha256", pattern=r"^[0-9a-f]{64}$"
     )
-    artifact_size: int = Field(alias="artifactSize", ge=1, le=512 * 1024 * 1024)
-    file_count: int = Field(alias="fileCount", ge=1, le=20_000)
+    artifact_size: int = Field(alias="artifactSize", ge=1, le=SOURCE_PROJECT_MAX_BYTES)
+    file_count: int = Field(alias="fileCount", ge=1, le=SOURCE_PROJECT_MAX_FILES)
     agent_name: str = Field(alias="agentName", min_length=1, max_length=256)
     entry_point: str = Field(alias="entryPoint", min_length=1, max_length=512)
     verified: bool

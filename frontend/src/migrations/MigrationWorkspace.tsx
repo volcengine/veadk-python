@@ -76,7 +76,7 @@ import { migrationActivityBlocks } from "./migrationActivityBlocks";
 import { MigratedProjectsPage } from "./MigratedProjectsPage";
 import "./MigrationWorkspace.css";
 
-const MAX_SOURCE_BYTES = 50 * 1024 * 1024;
+const MAX_SOURCE_BYTES = 20 * 1024 * 1024;
 const POLL_INTERVAL_MS = 1_200;
 const ACTIVITY_POLL_INTERVAL_MS = 3_000;
 const LIST_POLL_INTERVAL_MS = 5_000;
@@ -291,6 +291,12 @@ function formatBytes(value: number): string {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`;
   return `${(value / 1024 / 1024).toFixed(1)} MiB`;
+}
+
+function formatByteLimit(value: number): string {
+  return formatBytes(value)
+    .replace(".0 MiB", " MiB")
+    .replace(".0 KiB", " KiB");
 }
 
 function formatElapsedTime(seconds: number): string {
@@ -732,6 +738,8 @@ export function MigrationWorkspace({
     Record<string, string>
   >({});
   const task = selectedTask(tasks, selectedTaskId);
+  const maxSourceBytes = capability?.maxUploadBytes ?? MAX_SOURCE_BYTES;
+  const maxSourceSizeLabel = formatByteLimit(maxSourceBytes);
   const unsupportedMigrationModelIds = useMemo(
     () => new Set(capability?.unsupportedModelIds ?? []),
     [capability?.unsupportedModelIds],
@@ -1117,9 +1125,9 @@ export function MigrationWorkspace({
       setError("ZIP 文件名无效，请重命名后重新选择。");
       return;
     }
-    if (file.size > MAX_SOURCE_BYTES) {
+    if (file.size > maxSourceBytes) {
       setSourceFile(null);
-      setError("项目 ZIP 不能超过 50 MiB。");
+      setError(`项目 ZIP 不能超过 ${maxSourceSizeLabel}。`);
       return;
     }
     if (file.size === 0) {
@@ -1636,7 +1644,10 @@ export function MigrationWorkspace({
                     请提供本地项目 ZIP。上传后我会识别框架、入口和迁移边界，
                     并在执行实际迁移前请你确认迁移方式。
                   </p>
-                  <small>仅支持本地 ZIP，最大 50 MiB；迁移环境从创建起保留 1 小时。</small>
+                  <small>
+                    仅支持本地 ZIP，最大 {maxSourceSizeLabel}
+                    ；迁移环境从创建起保留 1 小时。
+                  </small>
                 </div>
               </article>
               {action === "create" && sourceFile ? (

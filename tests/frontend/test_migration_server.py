@@ -597,7 +597,7 @@ def test_migration_capability_and_session_contract_are_bounded() -> None:
         "provider": "volcengine",
         "model": {"configured": True, "id": "doubao-test"},
         "unsupportedModelIds": ["deepseek-v4-pro-260425"],
-        "maxUploadBytes": 50 * 1024 * 1024,
+        "maxUploadBytes": 20 * 1024 * 1024,
         "sessionTtlSeconds": 3600,
         "frameworks": [
             "langchain",
@@ -625,7 +625,7 @@ def test_migration_capability_and_session_contract_are_bounded() -> None:
             "frameworks": ["dify", "any"],
         },
     }
-    assert MIGRATION_UPLOAD_MAX_BYTES == 50 * 1024 * 1024
+    assert MIGRATION_UPLOAD_MAX_BYTES == 20 * 1024 * 1024
     assert created["state"] == "awaiting_upload"
     request = json.loads(
         gateway.files[(str(created["id"]), f"{MIGRATION_ROOT}/request/task.json")]

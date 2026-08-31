@@ -26,6 +26,10 @@ from urllib.parse import quote
 
 from pydantic import ValidationError
 
+from frontend.server.source_project_limits import (
+    SOURCE_PROJECT_MAX_BYTES,
+    SOURCE_PROJECT_MAX_REPORT_BYTES,
+)
 from frontend.server.storage import STUDIO_STORAGE_ROOT_PREFIX
 
 from .models import (
@@ -41,8 +45,8 @@ _VERSION_MARKER_RE = re.compile(
     r"/projects/(?P<project>[0-9a-f]{32})/versions/[0-9a-f]{32}/version\.json$"
 )
 _MAX_JSON_BYTES = 256 * 1024
-_MAX_ARTIFACT_BYTES = 512 * 1024 * 1024
-_MAX_REPORT_BYTES = 16 * 1024 * 1024
+_MAX_ARTIFACT_BYTES = SOURCE_PROJECT_MAX_BYTES
+_MAX_REPORT_BYTES = SOURCE_PROJECT_MAX_REPORT_BYTES
 T = TypeVar("T")
 logger = logging.getLogger(__name__)
 

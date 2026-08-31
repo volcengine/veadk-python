@@ -37,6 +37,11 @@ from frontend.server.intelligent_development_projects import (
     IntelligentDevelopmentVersionNotFound,
 )
 from frontend.server.sandbox_remote import SandboxRemoteTransport
+from frontend.server.source_project_limits import (
+    SOURCE_PROJECT_MAX_BYTES,
+    SOURCE_PROJECT_MAX_FILES,
+    SOURCE_PROJECT_MAX_REPORT_BYTES,
+)
 from veadk.cli.frontend_sandbox import (
     SandboxConversationService,
     SandboxSessionNotFoundError,
@@ -44,15 +49,15 @@ from veadk.cli.frontend_sandbox import (
 )
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
-_MAX_ARTIFACT_BYTES = 20 * 1024 * 1024
-_MAX_EXPANDED_BYTES = 20 * 1024 * 1024
-_MAX_FILE_COUNT = 2_000
-_MAX_REPORT_BYTES = 2 * 1024 * 1024
+_MAX_ARTIFACT_BYTES = SOURCE_PROJECT_MAX_BYTES
+_MAX_EXPANDED_BYTES = SOURCE_PROJECT_MAX_BYTES
+_MAX_FILE_COUNT = SOURCE_PROJECT_MAX_FILES
+_MAX_REPORT_BYTES = SOURCE_PROJECT_MAX_REPORT_BYTES
 _MAX_DESCRIPTOR_BYTES = 256 * 1024
 _CURRENT_POINTER_BYTES = 4 * 1024
 _MAX_PREVIEW_FILE_BYTES = 2 * 1024 * 1024
-_MAX_PREVIEW_TOTAL_BYTES = 20 * 1024 * 1024
-_MAX_PREVIEW_FILES = 2_000
+_MAX_PREVIEW_TOTAL_BYTES = SOURCE_PROJECT_MAX_BYTES
+_MAX_PREVIEW_FILES = SOURCE_PROJECT_MAX_FILES
 _REQUIRED_GATES = {
     "local-checks",
     "service-probe",

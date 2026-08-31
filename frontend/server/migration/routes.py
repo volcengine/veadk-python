@@ -321,7 +321,7 @@ def mount_migration_routes(
             if declared_bytes > MIGRATION_UPLOAD_MAX_BYTES:
                 too_large = MigrationError(
                     "MIGRATION_SOURCE_TOO_LARGE",
-                    "项目 ZIP 不能超过 50 MiB。",
+                    "项目 ZIP 不能超过 20 MiB。",
                     status_code=413,
                 )
                 raise HTTPException(
@@ -333,7 +333,7 @@ def mount_migration_routes(
             if len(content) + len(chunk) > MIGRATION_UPLOAD_MAX_BYTES:
                 too_large = MigrationError(
                     "MIGRATION_SOURCE_TOO_LARGE",
-                    "项目 ZIP 不能超过 50 MiB。",
+                    "项目 ZIP 不能超过 20 MiB。",
                     status_code=413,
                 )
                 raise HTTPException(
