@@ -54,6 +54,28 @@ _MAX_COMPLETION_BYTES = 256 * 1024
 _MAX_MANIFEST_BYTES = 256 * 1024
 _MAX_ARTIFACT_BYTES = 20 * 1024 * 1024
 _MAX_INTENT_RESPONSE_CHARS = 128 * 1024
+INTENT_DECISION_OUTPUT_SCHEMA: dict[str, object] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": [
+        "decision",
+        "message",
+        "intentSummary",
+        "acceptanceCriteria",
+        "changesDelivery",
+    ],
+    "properties": {
+        "decision": {"type": "string", "enum": ["accept", "clarify", "reject"]},
+        "message": {"type": "string", "maxLength": 2_000},
+        "intentSummary": {"type": "string", "maxLength": 4_000},
+        "acceptanceCriteria": {
+            "type": "array",
+            "maxItems": 30,
+            "items": {"type": "string", "minLength": 1, "maxLength": 1_000},
+        },
+        "changesDelivery": {"type": "boolean"},
+    },
+}
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _RUNTIME_NAME = re.compile(r"^idv-[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$")
 _DELIVERY_AGENT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,255}$")
@@ -869,6 +891,7 @@ __all__ = [
     "CompletionContract",
     "CredentialResolver",
     "DeliveryPublisher",
+    "INTENT_DECISION_OUTPUT_SCHEMA",
     "IntentDecision",
     "TaskCredentialLease",
     "builder_prompt",

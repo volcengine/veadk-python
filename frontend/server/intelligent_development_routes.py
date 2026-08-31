@@ -37,6 +37,7 @@ from frontend.server.intelligent_development_task import (
     COMPLETION_FILE_PREFIX,
     CredentialResolver,
     DeliveryPublisher,
+    INTENT_DECISION_OUTPUT_SCHEMA,
     builder_prompt,
     create_credential_lease,
     intent_gate_prompt,
@@ -677,30 +678,6 @@ def _conversation_event_sse(
     return None
 
 
-def _public_intent_commentary(
-    events: list[SandboxStreamEvent],
-) -> tuple[SandboxStreamEvent, ...]:
-    """Keep gate progress public while hiding its machine-readable decision."""
-    if not events:
-        return ()
-    contract_events: set[int] = set()
-    for index, event in enumerate(events):
-        try:
-            parse_intent_decision(event.text)
-        except ValueError:
-            continue
-        contract_events.add(index)
-    if contract_events:
-        return tuple(
-            event for index, event in enumerate(events) if index not in contract_events
-        )
-    try:
-        parse_intent_decision("".join(event.text for event in events))
-    except ValueError:
-        return tuple(event for event in events if '"decision"' not in event.text)
-    return ()
-
-
 def _progress_sse(message: str) -> str:
     payload = {"text": message}
     return f"event: progress\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
@@ -1320,7 +1297,7 @@ def mount_intelligent_development_routes(
                 yield _progress_sse("Codex 正在分析本次请求并确认预期结果。")
                 decision = None
                 for intent_attempt in range(2):
-                    gate_text = ""
+                    gate_results: list[SandboxStreamEvent] = []
                     gate_commentary: list[SandboxStreamEvent] = []
                     async for event in service.stream_message(
                         session_id,
@@ -1333,23 +1310,32 @@ def mount_intelligent_development_routes(
                         ),
                         turn_permissions=_INTENT_PERMISSIONS,
                         turn_timeout_seconds=_INTENT_TURN_TIMEOUT_SECONDS,
+                        turn_output_schema=INTENT_DECISION_OUTPUT_SCHEMA,
                     ):
-                        if event.kind == "text":
-                            gate_text += event.text
+                        if event.kind == "assistant_final":
+                            gate_results.append(event)
+                        elif event.kind == "text":
+                            continue
                         elif event.kind == "commentary":
-                            gate_text += event.text
                             gate_commentary.append(event)
                         else:
                             public_event = _conversation_event_sse(event)
                             if public_event is not None:
                                 yield public_event
-                    for event in _public_intent_commentary(gate_commentary):
-                        public_event = _conversation_event_sse(event)
-                        if public_event is not None:
-                            yield public_event
+                    if len(gate_results) == 1 and gate_results[0].item_id:
+                        final_item_id = gate_results[0].item_id
+                        for event in gate_commentary:
+                            if event.item_id and event.item_id != final_item_id:
+                                public_event = _conversation_event_sse(event)
+                                if public_event is not None:
+                                    yield public_event
                     failure_stage = "intent_parse"
                     try:
-                        decision = parse_intent_decision(gate_text)
+                        if len(gate_results) != 1:
+                            raise ValueError(
+                                "Codex did not return exactly one final assistant result"
+                            )
+                        decision = parse_intent_decision(gate_results[0].text)
                         break
                     except ValueError as error:
                         logger.warning(

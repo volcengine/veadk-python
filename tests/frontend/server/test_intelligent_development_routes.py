@@ -76,7 +76,8 @@ def _gate(
     changes: bool = True,
 ) -> CodexAppServerEvent:
     return CodexAppServerEvent(
-        kind="text",
+        kind="assistant_final",
+        item_id="intent-final",
         text=json.dumps(
             {
                 "decision": decision,
@@ -1383,8 +1384,8 @@ def test_invalid_intent_response_has_a_specific_recoverable_error(
     gateway = _FakeGateway()
     gateway.sessions["dev-session"] = _cloud()
     gateway.codex.turns = [
-        [CodexAppServerEvent(kind="text", text="not-json")],
-        [CodexAppServerEvent(kind="text", text="still-not-json")],
+        [CodexAppServerEvent(kind="assistant_final", text="not-json")],
+        [CodexAppServerEvent(kind="assistant_final", text="still-not-json")],
     ]
     credentials = AsyncMock()
     monkeypatch.setattr(routes, "create_credential_lease", credentials)
@@ -1413,7 +1414,7 @@ def test_invalid_intent_response_is_retried_before_development_stops() -> None:
     gateway = _FakeGateway()
     gateway.sessions["dev-session"] = _cloud()
     gateway.codex.turns = [
-        [CodexAppServerEvent(kind="text", text="not-json")],
+        [CodexAppServerEvent(kind="assistant_final", text="not-json")],
         [_gate(changes=False)],
         [CodexAppServerEvent(kind="text", text="当前 Agent 已保留现有能力。")],
     ]
@@ -1433,7 +1434,7 @@ def test_invalid_intent_response_is_retried_before_development_stops() -> None:
     assert len(gateway.codex.calls) == 3
 
 
-def test_fragmented_intent_json_does_not_trigger_protocol_retry() -> None:
+def test_streamed_intent_fragments_do_not_replace_authoritative_final() -> None:
     gateway = _FakeGateway()
     gateway.sessions["dev-session"] = _cloud()
     gate_json = _gate(changes=False).text
@@ -1442,6 +1443,11 @@ def test_fragmented_intent_json_does_not_trigger_protocol_retry() -> None:
         [
             CodexAppServerEvent(kind="text", text=gate_json[:midpoint]),
             CodexAppServerEvent(kind="text", text=gate_json[midpoint:]),
+            CodexAppServerEvent(
+                kind="assistant_final",
+                item_id="intent-final",
+                text=gate_json,
+            ),
         ],
         [CodexAppServerEvent(kind="text", text="当前 Agent 状态正常。")],
     ]
@@ -1466,7 +1472,14 @@ def test_intent_json_from_commentary_is_consumed_without_being_exposed() -> None
     gateway.sessions["dev-session"] = _cloud()
     gate = _gate(changes=False)
     gateway.codex.turns = [
-        [CodexAppServerEvent(kind="commentary", text=gate.text)],
+        [
+            CodexAppServerEvent(
+                kind="commentary",
+                item_id="intent-final",
+                text=gate.text,
+            ),
+            gate,
+        ],
         [CodexAppServerEvent(kind="text", text="当前 Agent 状态正常。")],
     ]
 
@@ -1486,6 +1499,93 @@ def test_intent_json_from_commentary_is_consumed_without_being_exposed() -> None
     assert len(gateway.codex.calls) == 2
 
 
+def test_intent_uses_authoritative_assistant_final_instead_of_reasoning() -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud()
+    gate = _gate(changes=False)
+    gateway.codex.turns = [
+        [
+            CodexAppServerEvent(
+                kind="thinking",
+                item_id="reasoning-gate",
+                text="The decision is accept, and I will now return JSON.",
+            ),
+            CodexAppServerEvent(
+                kind="assistant_final",
+                item_id="message-gate",
+                text=gate.text,
+            ),
+        ],
+        [CodexAppServerEvent(kind="text", text="当前 Agent 状态正常。")],
+    ]
+
+    with TestClient(_app(gateway)) as client:
+        _connect(client)
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "检查当前 Agent，不修改源码"},
+        )
+
+    assert response.status_code == 200
+    assert "当前 Agent 状态正常" in response.text
+    assert gate.text not in response.text
+    assert "重新确认本次目标" not in response.text
+    assert "event: error" not in response.text
+    assert len(gateway.codex.calls) == 2
+    assert gateway.codex.calls[0]["output_schema"] == (
+        routes.INTENT_DECISION_OUTPUT_SCHEMA
+    )
+
+
+def test_reasoning_without_assistant_final_fails_closed_without_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud()
+    gateway.codex.turns = [
+        [CodexAppServerEvent(kind="thinking", text=_gate().text)],
+        [CodexAppServerEvent(kind="thinking", text=_gate().text)],
+    ]
+    credentials = AsyncMock()
+    monkeypatch.setattr(routes, "create_credential_lease", credentials)
+
+    with TestClient(_app(gateway)) as client:
+        _connect(client)
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "继续优化天气 Agent"},
+        )
+
+    assert response.status_code == 200
+    assert "INTELLIGENT_DEVELOPMENT_INTENT_INVALID" in response.text
+    assert "重新确认本次目标" in response.text
+    credentials.assert_not_awaited()
+
+
+def test_multiple_assistant_finals_are_rejected_without_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud()
+    gateway.codex.turns = [[_gate(), _gate()], [_gate(), _gate()]]
+    credentials = AsyncMock()
+    monkeypatch.setattr(routes, "create_credential_lease", credentials)
+
+    with TestClient(_app(gateway)) as client:
+        _connect(client)
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "继续优化天气 Agent"},
+        )
+
+    assert response.status_code == 200
+    assert "INTELLIGENT_DEVELOPMENT_INTENT_INVALID" in response.text
+    credentials.assert_not_awaited()
+
+
 def test_fragmented_intent_json_from_commentary_is_consumed() -> None:
     gateway = _FakeGateway()
     gateway.sessions["dev-session"] = _cloud()
@@ -1493,8 +1593,21 @@ def test_fragmented_intent_json_from_commentary_is_consumed() -> None:
     midpoint = len(gate_json) // 2
     gateway.codex.turns = [
         [
-            CodexAppServerEvent(kind="commentary", text=gate_json[:midpoint]),
-            CodexAppServerEvent(kind="commentary", text=gate_json[midpoint:]),
+            CodexAppServerEvent(
+                kind="commentary",
+                item_id="intent-final",
+                text=gate_json[:midpoint],
+            ),
+            CodexAppServerEvent(
+                kind="commentary",
+                item_id="intent-final",
+                text=gate_json[midpoint:],
+            ),
+            CodexAppServerEvent(
+                kind="assistant_final",
+                item_id="intent-final",
+                text=gate_json,
+            ),
         ],
         [CodexAppServerEvent(kind="text", text="当前 Agent 状态正常。")],
     ]
@@ -1521,8 +1634,8 @@ def test_incomplete_intent_json_from_commentary_remains_fail_closed(
     gateway.sessions["dev-session"] = _cloud()
     incomplete = '{"decision":"accept"}'
     gateway.codex.turns = [
-        [CodexAppServerEvent(kind="commentary", text=incomplete)],
-        [CodexAppServerEvent(kind="commentary", text=incomplete)],
+        [CodexAppServerEvent(kind="assistant_final", text=incomplete)],
+        [CodexAppServerEvent(kind="assistant_final", text=incomplete)],
     ]
     credentials = AsyncMock()
     monkeypatch.setattr(routes, "create_credential_lease", credentials)
@@ -1548,7 +1661,7 @@ def test_protocol_retry_can_return_a_safe_rejection_without_side_effects(
     gateway = _FakeGateway()
     gateway.sessions["dev-session"] = _cloud()
     gateway.codex.turns = [
-        [CodexAppServerEvent(kind="text", text="not-json")],
+        [CodexAppServerEvent(kind="assistant_final", text="not-json")],
         [_gate("reject", message="该请求与创建 Agent 无关。")],
     ]
     credentials = AsyncMock()
