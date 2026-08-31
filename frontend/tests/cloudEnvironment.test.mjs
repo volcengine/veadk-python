@@ -115,7 +115,10 @@ test("builds an editable provider-specific Dockerfile preview", () => {
   );
   assert.match(volcengine, /lark-cli-1\.0\.87-linux-\$\{arch\}\.tar\.gz/);
   assert.match(volcengine, /--connect-timeout 10/);
-  assert.match(volcengine, /https:\/\/ghfast\.top\/https:\/\/github\.com\/larksuite\/cli\/releases\/download/);
+  assert.match(
+    volcengine,
+    /https:\/\/ghfast\.top\/https:\/\/github\.com\/larksuite\/cli\/releases\/download/,
+  );
   assert.match(
     byteplus,
     /^FROM agentkit-prod-public-ap-southeast-1\.cr\.bytepluses\.com\/base\/py-simple:/,
@@ -126,7 +129,10 @@ test("builds an editable provider-specific Dockerfile preview", () => {
     /apt-get install -y --no-install-recommends ca-certificates curl git/,
   );
   assert.match(byteplus, /# Install GitHub CLI \(gh\)/);
-  assert.match(byteplus, /https:\/\/ghfast\.top\/https:\/\/github\.com\/cli\/cli\/releases\/download/);
+  assert.match(
+    byteplus,
+    /https:\/\/ghfast\.top\/https:\/\/github\.com\/cli\/cli\/releases\/download/,
+  );
   assert.match(
     buildCloudEnvironmentDockerfile("volcengine", ["pandoc"]),
     /apt-get install -y --no-install-recommends ca-certificates curl pandoc/,
@@ -159,6 +165,8 @@ test("adds an Apps SDK UI environment step before publishing", () => {
     /workspaceMode === "environment"[\s\S]*?<CloudEnvironmentConfigurator/,
   );
   assert.match(environmentSource, /@openai\/apps-sdk-ui\/components\/Select/);
+  assert.match(environmentSource, /optionClassName\?: string/);
+  assert.match(environmentSource, /optionClassName=\{optionClassName\}/);
   assert.match(environmentSource, /listEnvironments\(controller\.signal\)/);
   assert.match(environmentSource, /label: "默认环境"/);
   assert.match(environmentSource, /使用 AgentKit 默认运行环境/);
@@ -170,15 +178,37 @@ test("adds an Apps SDK UI environment step before publishing", () => {
     environmentSource,
     /value=\{value\.environmentId \|\| DEFAULT_ENVIRONMENT_VALUE\}/,
   );
-  assert.match(environmentSource, /disabled: environment\.latestVersion\?\.status !== "available"/);
+  assert.match(
+    environmentSource,
+    /disabled: environment\.latestVersion\?\.status !== "available"/,
+  );
   assert.match(environmentSource, /environmentVersionId: versionId/);
   assert.match(environmentSource, /正在加载环境/);
   assert.match(environmentSource, /环境加载失败/);
+  assert.match(environmentSource, /isPersistenceStorageUnavailableError/);
+  assert.match(environmentSource, /message\.includes\("HTTP 503"\)/);
+  assert.match(
+    environmentSource,
+    /message\.includes\("管理员未配置持久化存储"\)/,
+  );
+  assert.match(
+    environmentSource,
+    /onChangeRef\.current\(\{\s*environmentId: "",\s*environmentVersionId: "",?\s*\}\)/,
+  );
+  assert.match(environmentSource, /部署 Runtime 时的默认基础镜像/);
+  assert.match(environmentSource, /cloud-env-guidance--fallback/);
+  assert.match(
+    environmentStyles,
+    /\.cloud-env-guidance\.cloud-env-guidance--fallback\s*\{[^}]*color:\s*hsl\(var\(--destructive\)\)/,
+  );
   assert.match(environmentSource, /暂无自定义环境/);
   assert.match(environmentSource, /selectedEnvironment\.selectedSkills/);
   assert.doesNotMatch(environmentSource, /CloudEnvironmentAdvancedTrigger/);
   assert.doesNotMatch(environmentSource, /CodeEditor/);
-  assert.match(createSource, /environment: draft\.cloudEnvironment\?\.environmentId/);
+  assert.match(
+    createSource,
+    /environment: draft\.cloudEnvironment\?\.environmentId/,
+  );
   assert.match(clientSource, /environment: opts\?\.environment/);
   assert.match(
     clientSource,
@@ -191,7 +221,10 @@ test("adds an Apps SDK UI environment step before publishing", () => {
 });
 
 test("keeps selected environment details responsive", () => {
-  assert.match(environmentStyles, /\.cloud-env-details[\s\S]*?grid-template-columns: repeat\(2/);
+  assert.match(
+    environmentStyles,
+    /\.cloud-env-details[\s\S]*?grid-template-columns: repeat\(2/,
+  );
   assert.match(environmentStyles, /@media \(max-width: 700px\)/);
   assert.match(environmentStyles, /grid-template-columns: minmax\(0, 1fr\)/);
   assert.match(environmentSource, /searchPlaceholder="搜索环境"/);

@@ -309,6 +309,45 @@ def test_agent_info_exposes_sanitized_builder_draft() -> None:
     )
 
     assert client.get("/web/agent-info/agent").json()["draft"] == draft
+    assert client.get("/web/agent-draft/agent").json() == {"draft": draft}
+    assert client.get("/web/agent-draft/unknown").status_code == 404
+
+
+def test_agent_draft_endpoint_is_absent_without_a_published_snapshot() -> None:
+    client = TestClient(agentkit_app.create_agentkit_app(_root_agent()))
+
+    assert client.get("/web/agent-draft/agent").status_code == 404
+
+
+def test_agent_draft_endpoint_precedes_a_root_mount(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RootMountedAgentServer(_FakeAgentServer):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self.app.mount("/", FastAPI())
+
+    monkeypatch.setattr(
+        agentkit_app,
+        "AgentkitAgentServerApp",
+        RootMountedAgentServer,
+    )
+    draft = {"name": "agent", "instruction": "Keep this editable."}
+    app = agentkit_app.create_agentkit_app(_root_agent(), agent_draft=draft)
+
+    draft_route_index = next(
+        index
+        for index, route in enumerate(app.router.routes)
+        if getattr(route, "path", "") == "/web/agent-draft/{app_name}"
+    )
+    root_mount_index = next(
+        index
+        for index, route in enumerate(app.router.routes)
+        if getattr(route, "path", None) == ""
+    )
+
+    assert draft_route_index < root_mount_index
+    assert TestClient(app).get("/web/agent-draft/agent").json() == {"draft": draft}
 
 
 def test_dynamic_runner_registers_frontend_invocation_plugin(

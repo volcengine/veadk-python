@@ -461,6 +461,17 @@ def _add_introspection_routes(
             "draft": dict(agent_draft) if agent_draft is not None else None,
         }
 
+    if agent_draft is not None:
+
+        @app.get("/web/agent-draft/{app_name}")
+        def agent_draft_snapshot(app_name: str) -> dict[str, Any]:
+            if app_name != expected_name:
+                raise HTTPException(
+                    status_code=404,
+                    detail="unknown agent: " + app_name,
+                )
+            return {"draft": dict(agent_draft)}
+
     @app.get("/web/search")
     async def agent_search(
         source: str,
@@ -528,6 +539,7 @@ def _prioritize_platform_routes(app: FastAPI) -> None:
         "/",
         "/ping",
         "/web/agent-info/{app_name}",
+        "/web/agent-draft/{app_name}",
         "/web/agent-graph",
         "/web/search",
         "/web/harness-sidecar/status",

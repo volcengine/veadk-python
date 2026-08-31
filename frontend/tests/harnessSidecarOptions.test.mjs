@@ -342,10 +342,13 @@ test("applies scenario defaults while allowing an empty custom selection", () =>
   assert.doesNotMatch(customCreateSource, /!harnessOptimizationProfile/);
   assert.match(harnessOptionsSource, /不勾选时不启动 Sidecar/);
   assert.match(customCreateSource, /优化场景：\$\{harnessSidecarProfileLabel/);
-  assert.match(customCreateSource, /harnessOptimizations\.map\(harnessSidecarOptionLabel\)/);
   assert.match(
     customCreateSource,
-    /harnessOptimizationProfile === "ops" \? "default" : harnessOptimizationProfile/,
+    /harnessOptimizations\.map\(\s*harnessSidecarOptionLabel,?\s*\)/,
+  );
+  assert.match(
+    customCreateSource,
+    /harnessOptimizationProfile === "ops"\s*\? "default"\s*: harnessOptimizationProfile/,
   );
 });
 

@@ -23,11 +23,12 @@ import socket
 import sys
 import zipfile
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import Any, ClassVar, Literal
 
 import pytest
 import yaml
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
@@ -68,24 +69,24 @@ from veadk.cli.generated_agent_skills import (
 # These hashes lock the complete generated project contents, not just Python
 # syntax or selected snippets.
 _MINIMAL_FRONTEND_GOLDEN = {
-    "app.py": "51b63df9386dbdd4623d31bd717b54c93399a7600000e4d9c2d2ab967a90bb46",
+    "app.py": "48a85b8eaa87d836e6dabc41bae6bdc0c587e1d55093bc8aaa7bcb62a362ad21",
     "agents/__init__.py": "a6449a6cac3bfda8b834ea39ea95ca2f8d0471ac480e1e876313d7398eea59ba",
     "agents/demo_agent/agent.py": "3c28f3e63f185d1ee8402d58b62c8654cf18fe4180a1f348abaa63547d91446c",
     "agents/demo_agent/__init__.py": "ba3abbb199bbae74dc75151a44ba53a557e5f47d509835950ca756346c5a9582",
     "agents/demo_agent/dynamic_a2a.py": "d136f27d6a77439708c415686a3d167f2ad2fb9a96a5f8a0751916b09d46e364",
     ".env.example": "ec3258da9bef4e74333376d8554c265ccb12a4a1e5d4e1e1b0acdf5c9ae93ab6",
-    "requirements.txt": "fea27bc474621fc022228f49419a9a0af681e23af6f1623af989b42a4a5c0d1b",
+    "requirements.txt": "33054921190810d876ac568ff102f3f42e15d85657f01a033598fc4f50994db4",
     "README.md": "a34208314cf9061c02662028d7a9dd97448e6b73c1d732cb4aeaa8f70dbbc684",
 }
 
 _FULL_FRONTEND_GOLDEN = {
-    "app.py": "13a372bdb2af6d87e8e93d2d9c265c140f5041ab6ada8b12ba3269484dfc8a25",
+    "app.py": "47c87fd54ac00e208030a7a370f0dbd52a872a9adf8ecd2e2e4f2e1b56188854",
     "agents/__init__.py": "a6449a6cac3bfda8b834ea39ea95ca2f8d0471ac480e1e876313d7398eea59ba",
     "agents/full_agent/agent.py": "35560cfa5ea93955244482d727c8f8369599fa5b9560ba1f3804df7273e245ce",
     "agents/full_agent/__init__.py": "ba3abbb199bbae74dc75151a44ba53a557e5f47d509835950ca756346c5a9582",
     "agents/full_agent/dynamic_a2a.py": "d136f27d6a77439708c415686a3d167f2ad2fb9a96a5f8a0751916b09d46e364",
     ".env.example": "2bfd3afda4e661fbb71588ec5f0d584ce6682363cacc81b0394f8da09f7977e8",
-    "requirements.txt": "fc62c57faf21b608d4611273a97905c19024979aa80fe021e343a51886445d16",
+    "requirements.txt": "ee61f1353a4ac0771229b38afb1e2983c8f77ddfe0b0b2dfbe22767376668654",
     "README.md": "1bf4dc889c7d1076f50784d253b53412ba7c49bcb69a5d948f9092dbbecb18ac",
 }
 
@@ -270,6 +271,69 @@ def test_codegen_preserves_agent_display_names_for_topology() -> None:
     assert '_app_options["agent_draft"] = AGENT_DRAFT' in app_py
     assert '@app.get("/web/agent-info/{app_name}")' in app_py
     assert '"draft": AGENT_DRAFT' in app_py
+    assert '@app.get("/web/agent-draft/{app_name}")' in app_py
+    assert 'return {"draft": AGENT_DRAFT}' in app_py
+    assert 'getattr(route, "path", "") == "/web/agent-draft/{app_name}"' in app_py
+    assert "_agent_draft_route = app.router.routes.pop(_agent_draft_index)" in app_py
+    assert (
+        "app.router.routes.insert(_agent_info_index + 1, _agent_draft_route)" in app_py
+    )
+
+
+def test_generated_compat_draft_route_precedes_a_root_mount(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = generate_project_from_draft(AgentDraft(name="demo"))
+    app_py = _file_map(project)["app.py"]
+
+    def legacy_create_agentkit_app(
+        _root_agent: object,
+        _display_names: object,
+        *,
+        enable_feishu: bool,
+        enable_studio_tools: bool,
+    ) -> FastAPI:
+        del enable_feishu, enable_studio_tools
+        app = FastAPI()
+
+        @app.get("/web/agent-info/{app_name}")
+        def agent_info(app_name: str) -> dict[str, str]:
+            return {"name": app_name}
+
+        app.mount("/", FastAPI())
+        return app
+
+    import veadk.integrations.agentkit as agentkit_integration
+
+    monkeypatch.setattr(
+        agentkit_integration,
+        "create_agentkit_app",
+        legacy_create_agentkit_app,
+    )
+    agent_module = ModuleType("agents.demo.agent")
+    agent_module.AGENT_DISPLAY_NAMES = {"demo": "demo"}
+    agent_module.AGENT_DRAFT = {"name": "demo", "instruction": "Editable."}
+    agent_module.root_agent = object()
+    dynamic_module = ModuleType("agents.demo.dynamic_a2a")
+    dynamic_module.enable_dynamic_a2a_tools = lambda _app, _agent: None
+    agents_package = ModuleType("agents")
+    agents_package.__path__ = []
+    demo_package = ModuleType("agents.demo")
+    demo_package.__path__ = []
+    monkeypatch.setitem(sys.modules, "agents", agents_package)
+    monkeypatch.setitem(sys.modules, "agents.demo", demo_package)
+    monkeypatch.setitem(sys.modules, "agents.demo.agent", agent_module)
+    monkeypatch.setitem(sys.modules, "agents.demo.dynamic_a2a", dynamic_module)
+
+    namespace: dict[str, Any] = {"__name__": "generated_app"}
+    exec(compile(app_py, "generated-app.py", "exec"), namespace)
+    app = namespace["app"]
+    paths = [getattr(route, "path", None) for route in app.router.routes]
+
+    assert paths.index("/web/agent-draft/{app_name}") < paths.index("")
+    assert TestClient(app).get("/web/agent-draft/demo").json() == {
+        "draft": agent_module.AGENT_DRAFT
+    }
 
 
 def test_codegen_enables_feishu_without_exposing_lifecycle_code() -> None:

@@ -62,6 +62,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 
+from frontend.server.agentkit_clients import create_agentkit_client
 from veadk.cli.agentkit_sandbox_region import (
     is_agentkit_resource_not_found,
     sandbox_region_candidates,
@@ -918,10 +919,18 @@ class SkillWorkbenchService:
             region or os.getenv("AGENTKIT_SANDBOX_REGION")
         )[0]
         self._tools_client_factory = tools_client_factory or (
-            lambda region: AgentkitToolsClient(region=region)
+            lambda region: create_agentkit_client(
+                AgentkitToolsClient,
+                provider=cloud_provider_from_env(),
+                region=region,
+            )
         )
         self._skills_client_factory = skills_client_factory or (
-            lambda region: AgentkitSkillsClient(region=region)
+            lambda region: create_agentkit_client(
+                AgentkitSkillsClient,
+                provider=cloud_provider_from_env(),
+                region=region,
+            )
         )
         self._task_locks: weakref.WeakValueDictionary[str, threading.Lock] = (
             weakref.WeakValueDictionary()

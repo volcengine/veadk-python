@@ -66,6 +66,9 @@ function SelectedSkillRow({
   let Icon: ComponentType<{ className?: string }> = Sparkles;
   if (skill.source === "local" || skill.source === "runtime") Icon = FolderUp;
   else if (skill.source === "skillspace") Icon = AgentKitSkillsIcon;
+  const detail = `${skillSourceLabel(skill)}${
+    skill.description ? ` · ${displayDescription(skill.description)}` : ""
+  }`;
   return (
     <motion.div
       className="cw-selected-skill-row"
@@ -80,9 +83,12 @@ function SelectedSkillRow({
       </span>
       <span className="cw-selected-skill-meta">
         <span className="cw-selected-skill-name">{skill.name}</span>
-        <span className="cw-selected-skill-detail">
-          {skillSourceLabel(skill)}
-          {skill.description ? ` · ${displayDescription(skill.description)}` : ""}
+        <span
+          className="cw-selected-skill-detail"
+          tabIndex={0}
+          title={detail}
+        >
+          {detail}
         </span>
       </span>
       <button
@@ -128,12 +134,14 @@ export function SkillSourcePicker({
   cloudProvider,
   disabled = false,
   addLabel = "添加 Skill",
+  showSelectedCount = true,
 }: {
   selected: SelectedSkill[];
   onChange: (next: SelectedSkill[]) => void;
   cloudProvider: CloudProvider;
   disabled?: boolean;
   addLabel?: string;
+  showSelectedCount?: boolean;
 }) {
   const [active, setActive] = useState<SelectableSkillSource>("local");
   const [open, setOpen] = useState(false);
@@ -202,7 +210,11 @@ export function SkillSourcePicker({
 
       {selected.length > 0 && (
         <div className="cw-skill-selected">
-          <span className="cw-skill-selected-label">已加入技能 · {selected.length}</span>
+          {showSelectedCount ? (
+            <span className="cw-skill-selected-label">
+              已加入技能 · {selected.length}
+            </span>
+          ) : null}
           <div className="cw-selected-skill-list">
             <AnimatePresence initial={false}>
               {selected.map((skill) => (

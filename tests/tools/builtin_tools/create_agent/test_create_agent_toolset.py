@@ -178,6 +178,10 @@ async def test_toolset_exposes_exactly_two_tools_and_dynamic_schema() -> None:
     assert '"const": "workflow"' not in legacy_schema
     assert "Resources are not mounted automatically" in modern_schema
     assert "include each relevant Skill ref explicitly" in modern_schema
+    assert "Use an empty string only when" in modern_schema
+    assert modern_declaration.description is not None
+    assert "pass an empty collection_id" in modern_declaration.description
+    assert "explicitly prohibits network" in modern_declaration.description
     assert "when relevant Skills were returned, bind at least one" in (
         modern_declaration.description or ""
     )
@@ -342,6 +346,94 @@ async def test_collect_then_create_nested_agents_through_function_tools() -> Non
     assert result["handoff_to"] == created["runtime_name"]
     assert context.actions.transfer_to_agent == created["runtime_name"]
     assert context._invocation_context.agent.find_agent(created["runtime_name"])
+
+
+@pytest.mark.asyncio
+async def test_delegated_task_is_injected_into_each_runtime_leaf_instruction() -> None:
+    captured_instructions: list[str] = []
+
+    def capture_leaf(node, tools, workflow_member, parent_agent):
+        del tools, workflow_member, parent_agent
+        captured_instructions.append(node.instruction)
+        return _TextAgent(name=node.id, marker=node.id)
+
+    toolset = CreateAgentToolset(resource_sources=[], leaf_factory=capture_leaf)
+    context = _context()
+    collected = await toolset.collect_resources(tool_context=context)
+    task = "Compare the three user-provided options and return a decision matrix."
+    reusable_instruction = "Analyze user-specified candidates using requested criteria."
+    blueprint = {
+        "name": "comparison_agent",
+        "task": task,
+        "root_node": "comparison_flow",
+        "nodes": [
+            {
+                "id": "researcher",
+                "type": "llm",
+                "instruction": reusable_instruction,
+            },
+            {
+                "id": "writer",
+                "type": "llm",
+                "instruction": "Write the requested structured result.",
+            },
+            {
+                "id": "comparison_flow",
+                "type": "sequential",
+                "children": ["researcher", "writer"],
+            },
+        ],
+    }
+
+    result = await toolset.create_agents(
+        collection_id=collected["collection_id"],
+        agents=[blueprint],
+        handoff_to="comparison_agent",
+        tool_context=context,
+    )
+
+    assert result["results"][0]["status"] == "completed"
+    assert len(captured_instructions) == 2
+    assert all(
+        "Current delegated task (runtime context, not reusable identity):" in value
+        for value in captured_instructions
+    )
+    assert all(task in value for value in captured_instructions)
+    assert captured_instructions[0].startswith(reusable_instruction)
+    assert blueprint["nodes"][0]["instruction"] == reusable_instruction
+
+
+@pytest.mark.asyncio
+async def test_create_agents_accepts_empty_collection_without_querying_sources() -> (
+    None
+):
+    class UnexpectedSource:
+        name = "unexpected"
+        called = False
+
+        async def collect(self, tool_context=None):
+            del tool_context
+            self.called = True
+            raise AssertionError("resource source must not be queried")
+
+    source = UnexpectedSource()
+    toolset = CreateAgentToolset(
+        resource_sources=[source],
+        leaf_factory=_leaf_factory,
+    )
+    context = _context()
+
+    result = await toolset.create_agents(
+        collection_id="",
+        agents=[_blueprint("offline_worker")],
+        handoff_to="offline_worker",
+        tool_context=context,
+    )
+
+    assert not source.called
+    assert result["collection_id"].startswith("resources_")
+    assert result["results"][0]["status"] == "completed"
+    assert result["handoff_to"] == result["results"][0]["runtime_name"]
 
 
 @pytest.mark.asyncio
@@ -560,7 +652,7 @@ async def test_collection_is_scoped_to_the_calling_invocation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_collection_is_released_after_create_agents() -> None:
+async def test_collection_can_create_additional_agents_in_same_invocation() -> None:
     toolset = CreateAgentToolset(
         resource_sources=[],
         leaf_factory=_leaf_factory,
@@ -576,13 +668,86 @@ async def test_collection_is_released_after_create_agents() -> None:
     )
 
     assert result["results"][0]["status"] == "completed"
-    with pytest.raises(ValueError, match="Unknown or expired collection_id"):
-        await toolset.create_agents(
+    second = await toolset.create_agents(
+        collection_id=collected["collection_id"],
+        agents=[_blueprint("reviewer")],
+        handoff_to="reviewer",
+        tool_context=context,
+    )
+
+    assert second["results"][0]["status"] == "completed"
+    assert second["handoff_to"].startswith("reviewer__")
+
+
+@pytest.mark.asyncio
+async def test_repeating_create_agents_returns_existing_runtime() -> None:
+    toolset = CreateAgentToolset(
+        resource_sources=[],
+        leaf_factory=_leaf_factory,
+    )
+    context = _context(invocation_id="retry")
+    collected = await toolset.collect_resources(tool_context=context)
+
+    first = await toolset.create_agents(
+        collection_id=collected["collection_id"],
+        agents=[_blueprint()],
+        handoff_to="child",
+        tool_context=context,
+    )
+    second = await toolset.create_agents(
+        collection_id=collected["collection_id"],
+        agents=[_blueprint()],
+        handoff_to="child",
+        tool_context=context,
+    )
+
+    assert second == first
+
+
+@pytest.mark.asyncio
+async def test_parallel_duplicate_create_agents_calls_build_once() -> None:
+    built_nodes: list[str] = []
+
+    def counting_leaf_factory(node, tools, workflow_member, parent_agent):
+        del tools, workflow_member, parent_agent
+        built_nodes.append(node.id)
+        return _TextAgent(name=node.id, marker=node.id)
+
+    toolset = CreateAgentToolset(
+        resource_sources=[],
+        leaf_factory=counting_leaf_factory,
+    )
+    parent = _TextAgent(name="main", marker="main")
+    first_context = _context(
+        parent_agent=parent,
+        invocation_id="parallel-duplicate",
+    )
+    second_context = _context(
+        parent_agent=parent,
+        invocation_id="parallel-duplicate",
+    )
+    collected = await toolset.collect_resources(tool_context=first_context)
+
+    first, second = await asyncio.gather(
+        toolset.create_agents(
             collection_id=collected["collection_id"],
             agents=[_blueprint()],
             handoff_to="child",
-            tool_context=context,
-        )
+            tool_context=first_context,
+        ),
+        toolset.create_agents(
+            collection_id=collected["collection_id"],
+            agents=[_blueprint()],
+            handoff_to="child",
+            tool_context=second_context,
+        ),
+    )
+
+    assert first == second
+    assert len(built_nodes) == 1
+    assert built_nodes[0].startswith("child__")
+    assert first_context.actions.transfer_to_agent == first["handoff_to"]
+    assert second_context.actions.transfer_to_agent == first["handoff_to"]
 
 
 @pytest.mark.asyncio
@@ -722,6 +887,89 @@ async def test_skill_is_materialized_only_during_create(
     assert result["results"][0]["status"] == "completed"
     assert calls == ["demo-skill"]
     assert observed_tools == [["SkillToolset"]]
+
+
+@pytest.mark.asyncio
+async def test_skill_hub_catalog_name_remains_callable_when_manifest_name_differs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    skill = Skill(
+        name="seedance-video-generation",
+        description="Generate videos",
+        path="clawhub/example/seedance-video-generation",
+        id="clawhub/example/seedance-video-generation",
+        source_type="findskill",
+    )
+    resource = StoredResource(
+        descriptor=ResourceDescriptor(
+            ref="skill_hub:clawhub/example/seedance-video-generation",
+            kind="skill",
+            name="seedance-video-generation",
+            description="Generate videos",
+            source="skill_hub:public",
+        ),
+        payload=skill,
+    )
+    skill_dir = tmp_path / "seedance-video"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: seedance-video\ndescription: Generate videos\n---\n"
+        "Use the video generation tools.",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "veadk.tools.builtin_tools.create_agent.orchestrator.materialize_remote_skill",
+        lambda value, *, cache_dir=None: skill_dir,
+    )
+    mounted_tools: list[Any] = []
+
+    def leaf_factory(node, tools, workflow_member, parent_agent):
+        del workflow_member, parent_agent
+        mounted_tools.extend(tools)
+        return _TextAgent(name=node.id, marker=node.id)
+
+    toolset = CreateAgentToolset(
+        resource_sources=[_StaticSource([resource])],
+        leaf_factory=leaf_factory,
+    )
+    context = _context()
+    collected = await toolset.collect_resources(tool_context=context)
+    result = await toolset.create_agents(
+        collection_id=collected["collection_id"],
+        agents=[
+            {
+                "name": "video_creator",
+                "task": "create a video",
+                "root_node": "worker",
+                "nodes": [
+                    {
+                        "id": "worker",
+                        "type": "llm",
+                        "instruction": "Use the selected skill",
+                        "resources": [resource.descriptor.ref],
+                    }
+                ],
+            }
+        ],
+        handoff_to="video_creator",
+        tool_context=context,
+    )
+
+    assert result["results"][0]["status"] == "completed"
+    skill_toolset = mounted_tools[0]
+    tools = await skill_toolset.get_tools()
+    load_skill = next(tool for tool in tools if tool.name == "load_skill")
+    load_result = await load_skill.run_async(
+        args={"skill_name": "seedance-video-generation"},
+        tool_context=SimpleNamespace(
+            invocation_id="invocation-1",
+            agent_name="worker",
+            state={},
+        ),
+    )
+    assert load_result["skill_name"] == "seedance-video-generation"
+    assert load_result["frontmatter"]["name"] == "seedance-video-generation"
+    assert "video generation tools" in load_result["instructions"]
 
 
 @pytest.mark.asyncio

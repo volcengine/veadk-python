@@ -328,6 +328,7 @@ export function normalizeDraft(raw: unknown): AgentDraft {
     name: asString(o.name) || "my_agent",
     description: asString(o.description),
     instruction: asString(o.instruction) || "You are a helpful assistant.",
+    dynamicAgentDelegation: asBool(o.dynamicAgentDelegation),
     agentType,
     maxIterations: asMaxIterations(o.maxIterations),
     a2aUrl: asString(o.a2aUrl),

@@ -22,6 +22,7 @@ const {
   applyRuntimeAgentIntrospection,
   hydrateA2aRegistryFromRuntime,
   runtimeAgentDraftFromCloud,
+  stripManagedRuntimeInstructions,
 } = await loadTypeScriptModule("../src/create/runtimeModelName.ts");
 const { normalizeDraft } = await loadTypeScriptModule(
   "../src/create/normalizeDraft.ts",
@@ -101,6 +102,264 @@ test("deployed Runtime configuration is rebuilt only from cloud data", () => {
   assert.equal(restored.knowledgebaseIndex, "cloud-index");
   assert.equal(restored.tracing, true);
   assert.deepEqual(restored.tracingExporters, ["tls"]);
+});
+
+test("published draft instructions are not replaced by managed Runtime rules", () => {
+  const restored = runtimeAgentDraftFromCloud(
+    {
+      appName: "quick_agent",
+      name: "quick_agent",
+      draft: {
+        ...cachedRuntimeDraft("quick_agent"),
+        instruction: "User-authored instruction.",
+        dynamicAgentDelegation: true,
+      },
+      graph: {
+        name: "quick_agent",
+        type: "llm",
+        instruction:
+          "User-authored instruction.\n\nManaged dynamic delegation rules.",
+        children: [],
+      },
+    },
+    "volcengine",
+  );
+
+  assert.equal(restored.instruction, "User-authored instruction.");
+});
+
+const managedRuntimeRules = ({ escaped = false } = {}) => {
+  const collectResources = escaped ? "collect\\_resources" : "collect_resources";
+  const createAgents = escaped ? "create\\_agents" : "create_agents";
+  const handoffTo = escaped ? "handoff\\_to" : "handoff_to";
+  return [
+    "动态子智能体协作规则：",
+    `- 先调用 ${collectResources} 获取资源。`,
+    `- 再调用 ${createAgents} 创建子智能体。`,
+    `- 最后通过 ${handoffTo} 移交任务。`,
+  ].join("\n");
+};
+
+test("quick draft recovery strips an unescaped managed Runtime rule block", () => {
+  const instruction = "Keep this user prompt exactly.\n\n" + managedRuntimeRules();
+  const restored = stripManagedRuntimeInstructions({
+    ...cachedRuntimeDraft("quick_agent"),
+    instruction,
+    dynamicAgentDelegation: true,
+  });
+
+  assert.equal(restored.instruction, "Keep this user prompt exactly.");
+});
+
+test("quick draft recovery strips Markdown-escaped managed Runtime rules", () => {
+  const restored = stripManagedRuntimeInstructions({
+    ...cachedRuntimeDraft("quick_agent"),
+    instruction: `Escaped user prompt.\n\n${managedRuntimeRules({ escaped: true })}`,
+    dynamicAgentDelegation: true,
+  });
+
+  assert.equal(restored.instruction, "Escaped user prompt.");
+});
+
+test("quick draft recovery truncates repeated managed rules at the first valid block", () => {
+  const restored = stripManagedRuntimeInstructions({
+    ...cachedRuntimeDraft("quick_agent"),
+    instruction: [
+      "Original prompt",
+      managedRuntimeRules(),
+      managedRuntimeRules({ escaped: true }),
+    ].join("\n\n"),
+    dynamicAgentDelegation: true,
+  });
+
+  assert.equal(restored.instruction, "Original prompt");
+});
+
+test("a user-authored managed-rule heading without stable signatures is preserved", () => {
+  const instruction =
+    "请解释下面这个标题：\n动态子智能体协作规则：\n这只是用户输入。";
+  const restored = stripManagedRuntimeInstructions({
+    ...cachedRuntimeDraft("quick_agent"),
+    instruction,
+    dynamicAgentDelegation: true,
+  });
+
+  assert.equal(restored.instruction, instruction);
+});
+
+test("managed Runtime rules are stripped recursively from quick draft agents", () => {
+  const withManagedRules = (name, instruction) => ({
+    ...cachedRuntimeDraft(name),
+    instruction: `${instruction}\n\n${managedRuntimeRules({ escaped: true })}`,
+    dynamicAgentDelegation: true,
+  });
+  const restored = stripManagedRuntimeInstructions({
+    ...withManagedRules("root", "Root prompt"),
+    dynamicAgentDelegation: true,
+    subAgents: [withManagedRules("child", "Child prompt")],
+    workflow: {
+      nodes: [
+        {
+          id: "workflow-node",
+          agent: withManagedRules("workflow_agent", "Workflow prompt"),
+        },
+      ],
+    },
+  });
+
+  assert.equal(restored.instruction, "Root prompt");
+  assert.equal(restored.subAgents[0].instruction, "Child prompt");
+  assert.equal(restored.workflow.nodes[0].agent.instruction, "Workflow prompt");
+});
+
+test("traditional cloud drafts retain text resembling managed Runtime rules", () => {
+  const instruction = `Traditional prompt.\n\n${managedRuntimeRules()}`;
+  const restored = stripManagedRuntimeInstructions({
+    ...cachedRuntimeDraft("traditional_agent"),
+    instruction,
+    dynamicAgentDelegation: false,
+  });
+
+  assert.equal(restored.instruction, instruction);
+});
+
+test("mixed drafts strip managed rules only from delegation-enabled nodes", () => {
+  const childInstruction = `Traditional child prompt.\n\n${managedRuntimeRules()}`;
+  const restored = stripManagedRuntimeInstructions({
+    ...cachedRuntimeDraft("quick_agent"),
+    instruction: `Quick prompt.\n\n${managedRuntimeRules()}`,
+    dynamicAgentDelegation: true,
+    subAgents: [
+      {
+        ...cachedRuntimeDraft("traditional_child"),
+        instruction: childInstruction,
+        dynamicAgentDelegation: false,
+      },
+    ],
+  });
+
+  assert.equal(restored.instruction, "Quick prompt.");
+  assert.equal(restored.subAgents[0].instruction, childInstruction);
+});
+
+test("quick Runtime recovery restores every field shown by the three-step editor", () => {
+  const restored = runtimeAgentDraftFromCloud(
+    {
+      appName: "research_assistant",
+      name: "research_assistant",
+      draft: {
+        ...cachedRuntimeDraft("research_assistant"),
+        description: "Researches complex topics and produces cited reports",
+        instruction: "Plan, delegate independent research, and synthesize the result.",
+        dynamicAgentDelegation: true,
+        cloudProvider: "byteplus",
+        modelSource: "custom",
+        modelName: "deepseek-v3-2",
+        modelProvider: "openai",
+        modelApiBase: "https://ark.ap-southeast-1.bytepluses.com/api/v3",
+        selectedSkills: [
+          {
+            source: "runtime",
+            folder: "market-research",
+            name: "market-research",
+            description: "Research public markets",
+          },
+        ],
+        cloudEnvironment: {
+          environmentId: "env-1",
+          environmentVersionId: "env-version-2",
+          cliTools: ["lark-cli", "github-cli"],
+          dockerfile: "RUN echo ready",
+        },
+        memory: { shortTerm: true, longTerm: true },
+        shortTermBackend: "sqlite",
+        longTermBackend: "viking",
+        longTermMemoryIndex: "memory-index-1",
+        autoSaveSession: true,
+        deployment: {
+          feishuEnabled: false,
+          runtimeName: "research-assistant-runtime",
+          runtimeNameCustomized: true,
+          network: {
+            mode: "both",
+            vpcId: "vpc-1",
+            subnetIds: "subnet-1,subnet-2",
+            enableSharedInternetAccess: true,
+          },
+          modelApiKeyId: "api-key-1",
+          modelApiKeyName: "Production Ark key",
+          envValues: { REPORT_FORMAT: "markdown" },
+        },
+      },
+    },
+    "byteplus",
+  );
+
+  assert.deepEqual(
+    {
+      name: restored.name,
+      description: restored.description,
+      instruction: restored.instruction,
+      dynamicAgentDelegation: restored.dynamicAgentDelegation,
+      cloudProvider: restored.cloudProvider,
+      modelSource: restored.modelSource,
+      modelName: restored.modelName,
+      modelProvider: restored.modelProvider,
+      modelApiBase: restored.modelApiBase,
+      selectedSkills: restored.selectedSkills,
+      cloudEnvironment: restored.cloudEnvironment,
+      memory: restored.memory,
+      shortTermBackend: restored.shortTermBackend,
+      longTermBackend: restored.longTermBackend,
+      longTermMemoryIndex: restored.longTermMemoryIndex,
+      autoSaveSession: restored.autoSaveSession,
+      deployment: restored.deployment,
+    },
+    {
+      name: "research_assistant",
+      description: "Researches complex topics and produces cited reports",
+      instruction: "Plan, delegate independent research, and synthesize the result.",
+      dynamicAgentDelegation: true,
+      cloudProvider: "byteplus",
+      modelSource: "custom",
+      modelName: "deepseek-v3-2",
+      modelProvider: "openai",
+      modelApiBase: "https://ark.ap-southeast-1.bytepluses.com/api/v3",
+      selectedSkills: [
+        {
+          source: "runtime",
+          folder: "market-research",
+          name: "market-research",
+          description: "Research public markets",
+        },
+      ],
+      cloudEnvironment: {
+        environmentId: "env-1",
+        environmentVersionId: "env-version-2",
+        cliTools: ["lark-cli", "github-cli"],
+        dockerfile: "RUN echo ready",
+      },
+      memory: { shortTerm: true, longTerm: true },
+      shortTermBackend: "sqlite",
+      longTermBackend: "viking",
+      longTermMemoryIndex: "memory-index-1",
+      autoSaveSession: true,
+      deployment: {
+        feishuEnabled: false,
+        runtimeName: "research-assistant-runtime",
+        runtimeNameCustomized: true,
+        network: {
+          mode: "both",
+          vpcId: "vpc-1",
+          subnetIds: "subnet-1,subnet-2",
+          enableSharedInternetAccess: true,
+        },
+        modelApiKeyId: "api-key-1",
+        modelApiKeyName: "Production Ark key",
+        envValues: { REPORT_FORMAT: "markdown" },
+      },
+    },
+  );
 });
 
 test("legacy partial ops metadata is restored as the complete ops preset", () => {

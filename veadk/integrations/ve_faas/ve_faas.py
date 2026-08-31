@@ -890,6 +890,44 @@ class VeFaaS:
         if "_" in name:
             raise ValueError("Function or Application name cannot contain '_'.")
 
+        # Treat deployments as idempotent by application name.  Studio uses a
+        # stable application name so subsequent `studio deploy` runs should
+        # replace the existing function bundle instead of attempting to create
+        # another function with the same deterministic `<name>-fn` name.
+        existing_app_id = self.find_app_id_by_name(name)
+        if existing_app_id:
+            _, application_response = self._get_application_status(existing_app_id)
+            cloud_resource = json.loads(application_response["Result"]["CloudResource"])
+            function = cloud_resource.get("framework", {}).get("function", {})
+            function_id = str(function.get("Id") or "")
+            function_name = str(function.get("Name") or f"{name}-fn")
+            if not function_id:
+                raise ValueError(
+                    f"Function '{function_name}' not found for existing "
+                    f"application '{name}'."
+                )
+
+            logger.info(
+                f"VeFaaS application {name} already exists with ID "
+                f"{existing_app_id}; updating function {function_name} "
+                f"with ID {function_id}."
+            )
+            url = self.update_application_code_bundle(
+                application_id=existing_app_id,
+                function_id=function_id,
+                path=path,
+                environment_overrides={
+                    key: value
+                    for key, value in veadk.config.veadk_environments.items()
+                    if value is not None
+                },
+                disable_gateway_cors=disable_gateway_cors,
+            )
+            logger.info(
+                f"VeFaaS application {name} with ID {existing_app_id} updated on {url}."
+            )
+            return url, existing_app_id, function_id
+
         # Give default names
         if not gateway_name:
             gateway_name = f"{name}-gw-{formatted_timestamp()}"

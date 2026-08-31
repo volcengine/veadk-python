@@ -18,6 +18,7 @@ const moduleUrl = `data:text/javascript;base64,${Buffer.from(result.outputFiles[
 const {
   loadWorkspaceDrafts,
   sanitizeAgentDraftForStorage,
+  workspaceAgentCreationMode,
   workspaceDraftsKey,
   writeWorkspaceDrafts,
 } = await import(moduleUrl);
@@ -206,6 +207,49 @@ test("preserves cloud environment selections in local drafts", () => {
   assert.deepEqual(loaded[0].draft.cloudEnvironment, cloudEnvironment);
 });
 
+test("persists the creation mode used to resume a workspace draft", () => {
+  const storage = memoryStorage();
+  writeWorkspaceDrafts(storage, "quick-builder", [
+    {
+      id: "quick-draft",
+      updatedAt: 456,
+      creationMode: "quick",
+      draft: draft({ dynamicAgentDelegation: true }),
+    },
+    {
+      id: "traditional-draft",
+      updatedAt: 123,
+      creationMode: "traditional",
+      draft: draft(),
+    },
+  ]);
+
+  const loaded = loadWorkspaceDrafts(storage, "quick-builder");
+  assert.equal(loaded[0].creationMode, "quick");
+  assert.equal(loaded[1].creationMode, "traditional");
+  assert.equal(workspaceAgentCreationMode(loaded[0]), "quick");
+  assert.equal(workspaceAgentCreationMode(loaded[1]), "traditional");
+});
+
+test("recovers legacy quick drafts from dynamic delegation", () => {
+  assert.equal(
+    workspaceAgentCreationMode({
+      id: "legacy-quick",
+      updatedAt: 1,
+      draft: draft({ dynamicAgentDelegation: true }),
+    }),
+    "quick",
+  );
+  assert.equal(
+    workspaceAgentCreationMode({
+      id: "legacy-traditional",
+      updatedAt: 2,
+      draft: draft({ dynamicAgentDelegation: false }),
+    }),
+    "traditional",
+  );
+});
+
 test("persists the published MCP key baseline with a Runtime update target", () => {
   const storage = memoryStorage();
   const deploymentTarget = {
@@ -230,6 +274,122 @@ test("persists the published MCP key baseline with a Runtime update target", () 
 
   const loaded = loadWorkspaceDrafts(storage, "alice");
   assert.deepEqual(loaded[0].deploymentTarget, deploymentTarget);
+});
+
+test("round-trips every quick-create page field with its Runtime update identity", () => {
+  const storage = memoryStorage();
+  const quickDraft = draft({
+    name: "research_assistant",
+    description: "Researches complex topics and produces cited reports",
+    instruction: "Plan the work, delegate independent research, then synthesize it.",
+    dynamicAgentDelegation: true,
+    cloudProvider: "byteplus",
+    modelSource: "custom",
+    modelName: "deepseek-v3-2",
+    modelProvider: "openai",
+    modelApiBase: "https://ark.ap-southeast-1.bytepluses.com/api/v3",
+    selectedSkills: [
+      {
+        source: "skillspace",
+        folder: "market-research",
+        name: "Market research",
+        description: "Research public markets",
+        skillSpaceId: "space-1",
+        skillSpaceName: "Production skills",
+        skillId: "skill-1",
+        version: "3",
+      },
+    ],
+    cloudEnvironment: {
+      environmentId: "env-1",
+      environmentVersionId: "env-version-2",
+      cliTools: ["lark-cli", "github-cli"],
+      dockerfile: "RUN echo ready",
+    },
+    memory: { shortTerm: true, longTerm: true },
+    shortTermBackend: "sqlite",
+    longTermBackend: "viking",
+    longTermMemoryIndex: "memory-index-1",
+    autoSaveSession: true,
+    deployment: {
+      feishuEnabled: false,
+      runtimeName: "research-assistant-runtime",
+      runtimeNameCustomized: true,
+      network: {
+        mode: "both",
+        vpcId: "vpc-1",
+        subnetIds: "subnet-1,subnet-2",
+        enableSharedInternetAccess: true,
+      },
+      modelApiKeyId: "api-key-1",
+      modelApiKeyName: "Production Ark key",
+      envValues: { REPORT_FORMAT: "markdown" },
+    },
+  });
+  const deploymentTarget = {
+    runtimeId: "runtime-quick-1",
+    name: "research-assistant-runtime",
+    region: "ap-southeast-1",
+    appName: "research_assistant",
+    currentVersion: 12,
+    etag: "etag-v12",
+    editMode: "regenerate",
+    configuredMcpEnvKeys: ["MCP_RESEARCH_TOKEN"],
+  };
+
+  writeWorkspaceDrafts(storage, "quick-editor", [
+    {
+      id: "runtime-runtime-quick-1",
+      updatedAt: 789,
+      creationMode: "quick",
+      draft: quickDraft,
+      deploymentTarget,
+    },
+  ]);
+
+  const [loaded] = loadWorkspaceDrafts(storage, "quick-editor");
+  assert.equal(workspaceAgentCreationMode(loaded), "quick");
+  assert.deepEqual(
+    {
+      name: loaded.draft.name,
+      description: loaded.draft.description,
+      instruction: loaded.draft.instruction,
+      dynamicAgentDelegation: loaded.draft.dynamicAgentDelegation,
+      cloudProvider: loaded.draft.cloudProvider,
+      modelSource: loaded.draft.modelSource,
+      modelName: loaded.draft.modelName,
+      modelProvider: loaded.draft.modelProvider,
+      modelApiBase: loaded.draft.modelApiBase,
+      selectedSkills: loaded.draft.selectedSkills,
+      cloudEnvironment: loaded.draft.cloudEnvironment,
+      memory: loaded.draft.memory,
+      shortTermBackend: loaded.draft.shortTermBackend,
+      longTermBackend: loaded.draft.longTermBackend,
+      longTermMemoryIndex: loaded.draft.longTermMemoryIndex,
+      autoSaveSession: loaded.draft.autoSaveSession,
+      deployment: loaded.draft.deployment,
+    },
+    {
+      name: quickDraft.name,
+      description: quickDraft.description,
+      instruction: quickDraft.instruction,
+      dynamicAgentDelegation: quickDraft.dynamicAgentDelegation,
+      cloudProvider: quickDraft.cloudProvider,
+      modelSource: quickDraft.modelSource,
+      modelName: quickDraft.modelName,
+      modelProvider: quickDraft.modelProvider,
+      modelApiBase: quickDraft.modelApiBase,
+      selectedSkills: quickDraft.selectedSkills,
+      cloudEnvironment: quickDraft.cloudEnvironment,
+      memory: quickDraft.memory,
+      shortTermBackend: quickDraft.shortTermBackend,
+      longTermBackend: quickDraft.longTermBackend,
+      longTermMemoryIndex: quickDraft.longTermMemoryIndex,
+      autoSaveSession: quickDraft.autoSaveSession,
+      deployment: quickDraft.deployment,
+    },
+  );
+  assert.deepEqual(loaded.deploymentTarget, deploymentTarget);
 });
 
 test("never persists server-managed Ark API key values while retaining selection metadata", () => {

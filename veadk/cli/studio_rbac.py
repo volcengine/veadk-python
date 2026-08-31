@@ -16,9 +16,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Mapping
+from typing import Any
 
 
 class StudioRole(str, Enum):
@@ -189,3 +190,15 @@ def runtime_belongs_to(
         return False
     owner = str(tags.get("veadk:owner") or "").strip().casefold()
     return bool(owner and owner in principal.identifiers)
+
+
+def runtime_attribution(
+    principal: StudioPrincipal | None,
+) -> tuple[str, str]:
+    """Return truthful Runtime author and stable owner tag values."""
+    if principal is not None:
+        return (
+            (principal.display_name or principal.owner_id).strip(),
+            principal.owner_id.strip(),
+        )
+    return "", ""

@@ -115,6 +115,23 @@ function unwrapPayload(value: unknown): Record<string, unknown> {
   return nested ?? record;
 }
 
+export function toolResponseError(response: unknown): string {
+  if (typeof response === "string") {
+    try {
+      return toolResponseError(JSON.parse(response));
+    } catch {
+      return response;
+    }
+  }
+  const record = asRecord(response);
+  if (!record) return "";
+  const nested = asRecord(record.result);
+  return asString(record.error)
+    || asString(record.message)
+    || asString(nested?.error)
+    || asString(nested?.message);
+}
+
 function resourceCategory(resource: Record<string, unknown>): ResourceCategory {
   if (resource.kind === "tool") return "tool";
   if (resource.kind === "knowledge_base") return "knowledge_base";
@@ -288,6 +305,11 @@ export function parseCreatedAgents(args: unknown, response: unknown): CreatedAge
     failedCount: agents.filter((agent) => agent.status === "failed").length,
     runningCount: agents.filter((agent) => agent.status === "running").length,
   };
+}
+
+export function createdAgentsHaveFailure(args: unknown, response: unknown): boolean {
+  return Boolean(toolResponseError(response))
+    || parseCreatedAgents(args, response).failedCount > 0;
 }
 
 function normalizeAgentResources(value: unknown): CreatedAgentResourceView[] {

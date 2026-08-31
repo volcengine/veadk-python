@@ -41,7 +41,9 @@ class ResourceSnapshot:
 
 
 class ResourceStore:
-    """Small in-memory store; only the latest snapshot per invocation is retained."""
+    """Small bounded store retaining the latest snapshot per invocation."""
+
+    _MAX_SNAPSHOTS = 128
 
     def __init__(self) -> None:
         self._snapshots: dict[str, ResourceSnapshot] = {}
@@ -67,6 +69,11 @@ class ResourceStore:
         )
         self._snapshots[collection_id] = snapshot
         self._latest_by_owner[owner] = collection_id
+        while len(self._snapshots) > self._MAX_SNAPSHOTS:
+            expired_id = next(iter(self._snapshots))
+            expired = self._snapshots.pop(expired_id)
+            if self._latest_by_owner.get(expired.owner) == expired_id:
+                self._latest_by_owner.pop(expired.owner, None)
         return snapshot
 
     def get(self, *, collection_id: str, owner: str) -> ResourceSnapshot:

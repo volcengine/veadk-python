@@ -22,6 +22,61 @@ import pytest
 import frontend.server.studio_routes.skill_catalog as skill_catalog
 
 
+@pytest.mark.parametrize(
+    ("provider", "region", "configured_provider", "expected_host"),
+    [
+        (
+            "volcengine",
+            "cn-beijing",
+            "byteplus",
+            "open.volcengineapi.com",
+        ),
+        (
+            "byteplus",
+            "ap-southeast-1",
+            "volcengine",
+            "agentkit.ap-southeast-1.byteplusapi.com",
+        ),
+    ],
+)
+def test_skill_catalog_client_uses_studio_provider_over_global_config(
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+    region: str,
+    configured_provider: str,
+    expected_host: str,
+) -> None:
+    from agentkit.platform.context import (
+        default_cloud_provider,
+        get_default_cloud_provider,
+    )
+
+    monkeypatch.setattr(
+        skill_catalog,
+        "resolve_skill_publish_credentials",
+        lambda **_: SimpleNamespace(
+            access_key="placeholder-ak",
+            secret_key="placeholder-sk",
+            session_token=None,
+        ),
+    )
+    monkeypatch.setattr(
+        "agentkit.platform.configuration.read_cloud_provider_from_env",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "agentkit.platform.configuration.read_global_config_dict",
+        lambda: {"defaults": {"cloud_provider": configured_provider}},
+    )
+
+    with default_cloud_provider(None):
+        client = skill_catalog.StudioSkillCatalog(provider)._client(region)  # type: ignore[arg-type]
+        assert get_default_cloud_provider() is None
+
+    assert client.host == expected_host
+    assert client.region == region
+
+
 @pytest.mark.asyncio
 async def test_skill_catalog_lists_spaces_and_space_skills_from_studio_client(
     monkeypatch: pytest.MonkeyPatch,

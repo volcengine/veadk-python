@@ -326,8 +326,8 @@ export function ResourceFilterSelect<T extends string>({
   disabled?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const openTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
-  const closeTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
+  const openTimerRef = useRef<number | null>(null);
+  const closeTimerRef = useRef<number | null>(null);
   const hoverOpenedRef = useRef(false);
 
   const clearOpenTimer = useCallback(() => {

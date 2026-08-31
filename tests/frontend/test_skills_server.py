@@ -24,6 +24,7 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
+import frontend.server.skills.devenv as skill_devenv
 from frontend.server.skills.archive import SkillArchiveError, validate_skill_archive
 from frontend.server.skills.devenv import (
     CreateSkillTaskBody,
@@ -701,6 +702,53 @@ def test_workbench_reports_admin_not_configured_without_a_tool() -> None:
 
     assert capability["enabled"] is False
     assert capability["reason"] == "管理员未配置"
+
+
+@pytest.mark.parametrize(
+    ("provider", "conflicting_provider", "region"),
+    [
+        ("volcengine", "byteplus", "cn-beijing"),
+        ("byteplus", "volcengine", "ap-southeast-1"),
+    ],
+)
+def test_workbench_default_clients_use_environment_provider(
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+    conflicting_provider: str,
+    region: str,
+) -> None:
+    from agentkit.platform.context import (
+        default_cloud_provider,
+        get_default_cloud_provider,
+    )
+
+    constructed: list[tuple[str, object, str]] = []
+
+    class FakeToolsClient:
+        def __init__(self, *, region: str) -> None:
+            constructed.append(("tools", get_default_cloud_provider(), region))
+
+    class FakeSkillsClient:
+        def __init__(self, *, region: str) -> None:
+            constructed.append(("skills", get_default_cloud_provider(), region))
+
+    monkeypatch.setenv("AGENTKIT_CLOUD_PROVIDER", provider)
+    monkeypatch.setattr(skill_devenv, "AgentkitToolsClient", FakeToolsClient)
+    monkeypatch.setattr(skill_devenv, "AgentkitSkillsClient", FakeSkillsClient)
+
+    service = SkillWorkbenchService(tool_id="tool-1", region=region)
+    with default_cloud_provider(conflicting_provider):
+        service._tools_client_factory(region)
+        service._skills_client_factory(region)
+        assert get_default_cloud_provider().value == conflicting_provider
+
+    assert [
+        (kind, context.value, client_region)
+        for kind, context, client_region in constructed
+    ] == [
+        ("tools", provider, region),
+        ("skills", provider, region),
+    ]
 
 
 def test_prompt_injects_preset_or_custom_style_and_optional_name() -> None:
