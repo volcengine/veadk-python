@@ -21,6 +21,7 @@
 | 10 | [智能体路由](./10_agent_routing/) | 复杂 | 协调者动态委派给专家智能体 |
 | 11 | [链路追踪](./11_tracing/) | 复杂 | 观测大模型/工具调用；导出 span |
 | 13 | [OpenViking](./13_openviking/) | 复杂 | 使用 OpenViking 做知识检索与长期记忆 |
+| - | [ClickZetta 数据 Agent](./clickzetta_data_agent/) | 复杂 | 通过强类型只读工具访问 ClickZetta / 云器 |
 
 另外还有可通过 `veadk frontend --agents-dir examples` 运行的 frontend 示例：
 
@@ -32,7 +33,8 @@
 `veadk agentkit` 部署到火山引擎 AgentKit），参见 [`basic-app/`](./basic-app/)。
 
 这些示例按概念分组：01–02 基础，03 与 09 记忆，04–05 工具与知识，
-06 与 10 多智能体，07–08 模型行为，11 可观测性，13 为 OpenViking 知识与记忆。
+06 与 10 多智能体，07–08 模型行为，11 可观测性，13 为 OpenViking 知识与记忆，
+并包含 ClickZetta 数据 Agent 示例。
 
 ## 通用准备
 
