@@ -10,6 +10,10 @@ import {
 import {
   type GitHubPullRequestResult,
 } from "../adk/githubIntegration";
+import {
+  cloudRegionOptions,
+  type CloudProvider,
+} from "../adk/cloudProvider";
 import { getGitHubAutomation } from "../automations/registry";
 import type {
   AutomationFieldDefinition,
@@ -23,6 +27,7 @@ import "./GitHubIntegration.css";
 
 interface GitHubIntegrationProps {
   automation: GitHubAutomationId;
+  cloudProvider: CloudProvider;
   onBack: () => void;
 }
 
@@ -107,11 +112,18 @@ function validateField(name: FieldName, value: string, required: boolean): strin
   return "";
 }
 
-export function GitHubIntegration({ automation, onBack }: GitHubIntegrationProps) {
+export function GitHubIntegration({
+  automation,
+  cloudProvider,
+  onBack,
+}: GitHubIntegrationProps) {
   const definition = getGitHubAutomation(automation);
+  const regionOptions = cloudRegionOptions(cloudProvider);
+  const secrets = definition.secrets({ cloudProvider });
   const [form, setForm] = useState<AutomationFormValues>(() => ({
-    ...definition.initialValues,
+    ...definition.initialValues({ cloudProvider }),
   }));
+  const selectedRegion = regionOptions.find((region) => region.value === form.region);
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<FieldName, string>>>({});
   const [submitError, setSubmitError] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -121,6 +133,15 @@ export function GitHubIntegration({ automation, onBack }: GitHubIntegrationProps
   const submitAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => () => submitAbortRef.current?.abort(), []);
+
+  useEffect(() => {
+    setForm({ ...definition.initialValues({ cloudProvider }) });
+    setFieldErrors({});
+    setSubmitError("");
+    setResult(null);
+    setRegionMenuOpen(false);
+    submitAbortRef.current?.abort();
+  }, [automation, cloudProvider, definition]);
 
   const updateField = (name: FieldName, value: string) => {
     setForm((current) => ({ ...current, [name]: value }));
@@ -157,7 +178,11 @@ export function GitHubIntegration({ automation, onBack }: GitHubIntegrationProps
     setSubmitError("");
     setResult(null);
     try {
-      const nextResult = await definition.submit(form, controller.signal);
+      const nextResult = await definition.submit(
+        form,
+        { cloudProvider },
+        controller.signal,
+      );
       if (submitAbortRef.current !== controller) return;
       setResult(nextResult);
       setForm((current) => ({ ...current, token: "" }));
@@ -246,17 +271,14 @@ export function GitHubIntegration({ automation, onBack }: GitHubIntegrationProps
                     aria-expanded={regionMenuOpen}
                     onClick={() => setRegionMenuOpen((open) => !open)}
                   >
-                    <span>{form.region === "cn-shanghai" ? "华东 2（上海）" : "华北 2（北京）"}</span>
+                    <span>{selectedRegion?.label ?? form.region}</span>
                     <ChevronIcon className={`pp-region-chevron${regionMenuOpen ? " is-open" : ""}`} />
                   </button>
                   {regionMenuOpen ? (
                     <>
                       <div className="menu-scrim" onClick={() => setRegionMenuOpen(false)} />
                       <div className="pp-region-menu" role="listbox" aria-label="地域">
-                        {([
-                          { value: "cn-beijing", label: "华北 2（北京）" },
-                          { value: "cn-shanghai", label: "华东 2（上海）" },
-                        ] as const).map((region) => {
+                        {regionOptions.map((region) => {
                           const selected = region.value === form.region;
                           return (
                             <button
@@ -337,7 +359,7 @@ export function GitHubIntegration({ automation, onBack }: GitHubIntegrationProps
             <div className="github-form-actions">
               <div className="github-secrets-note">
                 <strong>合并 PR 前，请在仓库的 GitHub Actions Secrets 中配置：</strong>
-                {definition.secrets.map((secret) => <span key={secret}>{secret}</span>)}
+                {secrets.map((secret) => <span key={secret}>{secret}</span>)}
               </div>
               <button type="submit" disabled={submitting}>
                 {submitting ? "提交 PR 中…" : definition.submitLabel}

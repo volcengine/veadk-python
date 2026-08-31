@@ -59,12 +59,51 @@ test("generates the basic Studio project and Runtime delivery workflow in fronte
     region: "cn-beijing",
   });
   assert.match(workflow, /Publish to AgentKit Runtime/);
+  assert.match(workflow, /AGENTKIT_CLOUD_PROVIDER: "volcengine"/);
+  assert.match(workflow, /CLOUD_PROVIDER: "volcengine"/);
   assert.match(workflow, /\$\{\{ secrets\.VOLCENGINE_ACCESS_KEY \}\}/);
   assert.match(workflow, /AgentkitRuntimeClient/);
   assert.match(workflow, /"runtime_role_name": runtime_role_name/);
   assert.match(workflow, /"image_tag": f"veadk-v\{next_version\}"/);
   assert.match(workflow, /working-directory: "examples\/basic-agent"/);
   assert.match(workflow, /group: "agentkit-runtime-rt-basic-agent"/);
+  assert.doesNotMatch(workflow, /__[A-Z_]+__/);
+});
+
+test("generates BytePlus template and Runtime delivery workflow in frontend", async () => {
+  const [{ buildBasicTemplateFiles }, { buildRuntimeDeliveryWorkflow }] = await Promise.all([
+    loadTypeScriptModule("../src/automations/templateProject.ts"),
+    loadTypeScriptModule("../src/automations/runtimeDelivery.ts"),
+  ]);
+  const files = buildBasicTemplateFiles("basic-agent", "byteplus");
+  assert.match(
+    files.Dockerfile,
+    /^FROM agentkit-prod-public-ap-southeast-1\.cr\.bytepluses\.com\/base\/py-simple:/,
+  );
+  assert.match(files[".env.example"], /BYTEPLUS_ACCESS_KEY=/);
+  assert.match(files[".env.example"], /BYTEPLUS_SECRET_KEY=/);
+  assert.match(files[".env.example"], /BYTEPLUS_REGION=ap-southeast-1/);
+  assert.match(files[".env.example"], /AGENTKIT_CLOUD_PROVIDER=byteplus/);
+  assert.match(files[".env.example"], /https:\/\/ark\.ap-southeast\.bytepluses\.com\/api\/v3/);
+  assert.doesNotMatch(files[".env.example"], /VOLCENGINE_ACCESS_KEY=/);
+
+  const workflow = buildRuntimeDeliveryWorkflow({
+    baseBranch: "main",
+    projectPath: "examples/basic-agent",
+    runtimeName: "basic-agent",
+    runtimeId: "rt-basic-agent",
+    region: "ap-southeast-1",
+    cloudProvider: "byteplus",
+  });
+  assert.match(workflow, /AGENTKIT_CLOUD_PROVIDER: "byteplus"/);
+  assert.match(workflow, /CLOUD_PROVIDER: "byteplus"/);
+  assert.match(workflow, /AGENTKIT_REGION: "ap-southeast-1"/);
+  assert.match(workflow, /BYTEPLUS_ACCESS_KEY: \$\{\{ secrets\.BYTEPLUS_ACCESS_KEY \}\}/);
+  assert.match(workflow, /VOLCENGINE_ACCESS_KEY: \$\{\{ secrets\.BYTEPLUS_ACCESS_KEY \}\}/);
+  assert.match(workflow, /BYTEPLUS_REGION: "ap-southeast-1"/);
+  assert.match(workflow, /"DATABASE_VIKING_REGION": "cn-hongkong"/);
+  assert.match(workflow, /credential_prefix = \(/);
+  assert.doesNotMatch(workflow, /secrets\.VOLCENGINE_ACCESS_KEY/);
   assert.doesNotMatch(workflow, /__[A-Z_]+__/);
 });
 
@@ -79,6 +118,9 @@ test("generates the isolated pull request review workflow in frontend", async ()
     region: "cn-beijing",
   });
   assert.doesNotMatch(workflow, /pull_request_target/);
+  assert.match(workflow, /AGENTKIT_CLOUD_PROVIDER: "volcengine"/);
+  assert.match(workflow, /CLOUD_PROVIDER: "volcengine"/);
+  assert.match(workflow, /VOLCENGINE_REGION: "cn-beijing"/);
   assert.match(workflow, /github\.event\.pull_request\.head\.repo\.full_name == github\.repository/);
   assert.match(workflow, /agentkit sandbox exec \\/);
   assert.match(workflow, /--copy \. \/workspace \\/);
@@ -86,6 +128,28 @@ test("generates the isolated pull request review workflow in frontend", async ()
   assert.match(workflow, /agentkit sandbox delete \\/);
   assert.match(workflow, /\$\{\{ secrets\.CODEX_MODEL_API_KEY \}\}/);
   assert.match(workflow, /re\.sub\(r"\\x1b\\\[/);
+  assert.doesNotMatch(workflow, /__GH__|__[A-Z_]+__/);
+});
+
+test("generates the BytePlus isolated pull request review workflow in frontend", async () => {
+  const { buildPullRequestReviewWorkflow } = await loadTypeScriptModule(
+    "../src/automations/pullRequestReview.ts",
+  );
+  const workflow = buildPullRequestReviewWorkflow({
+    sandboxToolId: "tool-code-review",
+    modelName: "seed-2-0-lite-260228",
+    modelBaseUrl: "https://ark.ap-southeast.bytepluses.com/api/v3",
+    region: "ap-southeast-1",
+    cloudProvider: "byteplus",
+  });
+  assert.match(workflow, /AGENTKIT_CLOUD_PROVIDER: "byteplus"/);
+  assert.match(workflow, /CLOUD_PROVIDER: "byteplus"/);
+  assert.match(workflow, /BYTEPLUS_ACCESS_KEY: \$\{\{ secrets\.BYTEPLUS_ACCESS_KEY \}\}/);
+  assert.match(workflow, /VOLCENGINE_ACCESS_KEY: \$\{\{ secrets\.BYTEPLUS_ACCESS_KEY \}\}/);
+  assert.match(workflow, /BYTEPLUS_REGION: "ap-southeast-1"/);
+  assert.match(workflow, /CODEX_MODEL_BASE_URL: "https:\/\/ark\.ap-southeast\.bytepluses\.com\/api\/v3"/);
+  assert.match(workflow, /\$\{\{ secrets\.CODEX_MODEL_API_KEY \}\}/);
+  assert.doesNotMatch(workflow, /secrets\.VOLCENGINE_ACCESS_KEY/);
   assert.doesNotMatch(workflow, /__GH__|__[A-Z_]+__/);
 });
 

@@ -1,3 +1,8 @@
+import {
+  defaultCloudRegion,
+  defaultModelApiBase,
+  type CloudProvider,
+} from "../adk/cloudProvider";
 import type {
   AutomationFieldDefinition,
   AutomationFormValues,
@@ -35,7 +40,54 @@ export const runtimeIdField: AutomationFieldDefinition = {
   required: true,
 };
 
+const VOLCENGINE_REVIEW_MODEL_BASE_URL =
+  "https://ark.cn-beijing.volces.com/api/coding/v3";
+
+export interface CloudCredentialSecretNames {
+  accessKey: string;
+  secretKey: string;
+  sessionToken: string;
+}
+
+export function defaultReviewModelBaseUrl(provider: CloudProvider): string {
+  return provider === "byteplus"
+    ? defaultModelApiBase(provider)
+    : VOLCENGINE_REVIEW_MODEL_BASE_URL;
+}
+
+export function cloudCredentialSecretNames(
+  provider: CloudProvider,
+): CloudCredentialSecretNames {
+  if (provider === "byteplus") {
+    return {
+      accessKey: "BYTEPLUS_ACCESS_KEY",
+      secretKey: "BYTEPLUS_SECRET_KEY",
+      sessionToken: "BYTEPLUS_SESSION_TOKEN",
+    };
+  }
+  return {
+    accessKey: "VOLCENGINE_ACCESS_KEY",
+    secretKey: "VOLCENGINE_SECRET_KEY",
+    sessionToken: "VOLCENGINE_SESSION_TOKEN",
+  };
+}
+
+export function cloudCredentialSecretLabels(
+  provider: CloudProvider,
+): readonly string[] {
+  const secrets = cloudCredentialSecretNames(provider);
+  return [
+    `${secrets.accessKey}、${secrets.secretKey}（必填）`,
+    `${secrets.sessionToken}（使用临时凭据时必填）`,
+  ];
+}
+
+export function cloudProviderDisplayName(provider: CloudProvider): string {
+  return provider === "byteplus" ? "BytePlus" : "Volcengine";
+}
+
 export function initialAutomationValues(
+  provider: CloudProvider,
   overrides: Partial<AutomationFormValues> = {},
 ): AutomationFormValues {
   return {
@@ -46,8 +98,8 @@ export function initialAutomationValues(
     runtimeId: "",
     sandboxToolId: "",
     modelName: "",
-    modelBaseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3",
-    region: "cn-beijing",
+    modelBaseUrl: defaultReviewModelBaseUrl(provider),
+    region: defaultCloudRegion(provider),
     token: "",
     ...overrides,
   };
