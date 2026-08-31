@@ -3970,6 +3970,92 @@ def test_runtime_update_capability_uses_safe_agent_draft_fallback(
     assert "internal_server_error" not in unavailable.text
 
 
+def test_runtime_update_capability_restores_quick_mode_from_agent_draft_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+    runtime = _runtime_with_public_endpoint(_runtime("runtime-quick", "developer"))
+    runtime.current_version_number = 4
+    monkeypatch.setenv("BYTEPLUS_ACCESS_KEY", "test-ak")
+    monkeypatch.setenv("BYTEPLUS_SECRET_KEY", "test-sk")
+
+    monkeypatch.setattr(
+        AgentkitRuntimeClient,
+        "get_runtime",
+        lambda _self, _request: runtime,
+    )
+
+    class RuntimeAsyncClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> "RuntimeAsyncClient":
+            return self
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+        async def request(
+            self,
+            _method: str,
+            url: str,
+            **_kwargs: Any,
+        ) -> _RuntimeJsonResponse:
+            if url.endswith("/list-apps"):
+                return _RuntimeJsonResponse(["quick-agent"])
+            if url.endswith("/web/agent-info/quick-agent"):
+                return _RuntimeJsonResponse(
+                    {
+                        "name": "quick-agent",
+                        "description": "Reusable assistant",
+                        "tools": ["CreateAgentToolset"],
+                    }
+                )
+            assert url.endswith("/web/agent-draft/quick-agent")
+            return _RuntimeJsonResponse(
+                {
+                    "draft": {
+                        "name": "quick-agent",
+                        "description": "Reusable assistant",
+                        "instruction": "Delegate complex work.",
+                        "dynamicAgentDelegation": True,
+                        "cloudProvider": "byteplus",
+                    }
+                }
+            )
+
+    monkeypatch.setattr("httpx.AsyncClient", RuntimeAsyncClient)
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        developers="developer",
+        provider="byteplus",
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/runtime-update-capability",
+            params={
+                "runtimeId": runtime.runtime_id,
+                "region": "ap-southeast-1",
+                "appName": "quick-agent",
+                "currentVersion": 4,
+            },
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["canUpdate"] is True
+    assert payload["recoveryStatus"] == "draft-only"
+    assert payload["editMode"] == "regenerate"
+    assert payload["recoverySource"] == "agent-draft"
+    assert payload["agent"]["draft"]["dynamicAgentDelegation"] is True
+    assert payload["etag"]
+
+
 def test_legacy_runtime_capability_recovers_environment_and_agentkit_toolset(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

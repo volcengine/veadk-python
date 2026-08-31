@@ -42,7 +42,7 @@ const globalStyles = readFileSync(
 test("the app-level create entry asks for a mode before either creation flow", () => {
   assert.match(
     customCreateSource,
-    /const isVulcanCreation =\s*createMode === "custom" && !deploymentTarget &&\s*freshCreationSurface === "vulcan"/,
+    /const isVulcanCreation =\s*createMode === "custom" && freshCreationSurface === "vulcan"/,
   );
   assert.match(
     customCreateSource,
@@ -88,6 +88,23 @@ test("deployment tasks carry the workspace draft id into the library", () => {
     /const taskBase = \{[\s\S]*?\.\.\.\(workspaceDraftId \? \{ draftId: workspaceDraftId \} : \{\}\)/,
   );
   assert.match(appSource, /workspaceDraftId=\{editingDraftId \|\| undefined\}/);
+});
+
+test("quick Runtime updates keep the existing target and use update semantics", () => {
+  assert.match(
+    customCreateSource,
+    /if \(!deploymentTarget\) \{[\s\S]*?checkRuntimeNameAvailability/,
+  );
+  assert.match(
+    customCreateSource,
+    /isRuntimeUpdate=\{Boolean\(deploymentTarget\)\}/,
+  );
+  assert.match(workbenchSource, /isRuntimeUpdate\?: boolean/);
+  assert.match(
+    workbenchSource,
+    /disabled=\{deploying \|\| isRuntimeUpdate\}/,
+  );
+  assert.match(workbenchSource, /\? "更新并发布"[\s\S]*?: "部署"/);
 });
 
 test("creation mode picker has exactly the quick and traditional cards", () => {

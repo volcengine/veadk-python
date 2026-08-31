@@ -3538,8 +3538,7 @@ export function CustomCreate({
   void onCreate; // outcome is the in-pane project preview, not a navigation
   void onDiscard; // the discard action is intentionally hidden in this flow
   const isVulcanCreation =
-    createMode === "custom" && !deploymentTarget &&
-    freshCreationSurface === "vulcan";
+    createMode === "custom" && freshCreationSurface === "vulcan";
   const isFreshVulcanCreation = isVulcanCreation && !initialDraft;
   const [initialState] = useState<CustomCreateInitialState>(() => {
     const initialCreationDraft = initialDraft ?? emptyDraft(cloudProvider);
@@ -4687,12 +4686,14 @@ export function CustomCreate({
     });
     let activeTask: DeploymentTaskUpdate | null = null;
     try {
-      const availability = await checkRuntimeNameAvailability(
-        deploymentRuntimeName.trim(),
-        deployRegion,
-      );
-      if (!availability.available) {
-        throw new Error("Runtime 名称已存在，请修改后重试。");
+      if (!deploymentTarget) {
+        const availability = await checkRuntimeNameAvailability(
+          deploymentRuntimeName.trim(),
+          deployRegion,
+        );
+        if (!availability.available) {
+          throw new Error("Runtime 名称已存在，请修改后重试。");
+        }
       }
       const generated = await generateAgentProject(
         codegenDraft(deploymentDraft),
@@ -4926,6 +4927,7 @@ export function CustomCreate({
         cloudProvider={cloudProvider}
         deployRegion={deployRegion}
         runtimeName={deploymentRuntimeName}
+        isRuntimeUpdate={Boolean(deploymentTarget)}
         deploying={newWorkbenchDeploying}
         deployStage={newWorkbenchDeployStage}
         deployError={newWorkbenchDeployError}

@@ -23,11 +23,12 @@ import socket
 import sys
 import zipfile
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import Any, ClassVar, Literal
 
 import pytest
 import yaml
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
@@ -68,7 +69,7 @@ from veadk.cli.generated_agent_skills import (
 # These hashes lock the complete generated project contents, not just Python
 # syntax or selected snippets.
 _MINIMAL_FRONTEND_GOLDEN = {
-    "app.py": "51b63df9386dbdd4623d31bd717b54c93399a7600000e4d9c2d2ab967a90bb46",
+    "app.py": "48a85b8eaa87d836e6dabc41bae6bdc0c587e1d55093bc8aaa7bcb62a362ad21",
     "agents/__init__.py": "a6449a6cac3bfda8b834ea39ea95ca2f8d0471ac480e1e876313d7398eea59ba",
     "agents/demo_agent/agent.py": "3c28f3e63f185d1ee8402d58b62c8654cf18fe4180a1f348abaa63547d91446c",
     "agents/demo_agent/__init__.py": "ba3abbb199bbae74dc75151a44ba53a557e5f47d509835950ca756346c5a9582",
@@ -79,7 +80,7 @@ _MINIMAL_FRONTEND_GOLDEN = {
 }
 
 _FULL_FRONTEND_GOLDEN = {
-    "app.py": "13a372bdb2af6d87e8e93d2d9c265c140f5041ab6ada8b12ba3269484dfc8a25",
+    "app.py": "47c87fd54ac00e208030a7a370f0dbd52a872a9adf8ecd2e2e4f2e1b56188854",
     "agents/__init__.py": "a6449a6cac3bfda8b834ea39ea95ca2f8d0471ac480e1e876313d7398eea59ba",
     "agents/full_agent/agent.py": "35560cfa5ea93955244482d727c8f8369599fa5b9560ba1f3804df7273e245ce",
     "agents/full_agent/__init__.py": "ba3abbb199bbae74dc75151a44ba53a557e5f47d509835950ca756346c5a9582",
@@ -270,6 +271,69 @@ def test_codegen_preserves_agent_display_names_for_topology() -> None:
     assert '_app_options["agent_draft"] = AGENT_DRAFT' in app_py
     assert '@app.get("/web/agent-info/{app_name}")' in app_py
     assert '"draft": AGENT_DRAFT' in app_py
+    assert '@app.get("/web/agent-draft/{app_name}")' in app_py
+    assert 'return {"draft": AGENT_DRAFT}' in app_py
+    assert 'getattr(route, "path", "") == "/web/agent-draft/{app_name}"' in app_py
+    assert "_agent_draft_route = app.router.routes.pop(_agent_draft_index)" in app_py
+    assert (
+        "app.router.routes.insert(_agent_info_index + 1, _agent_draft_route)" in app_py
+    )
+
+
+def test_generated_compat_draft_route_precedes_a_root_mount(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = generate_project_from_draft(AgentDraft(name="demo"))
+    app_py = _file_map(project)["app.py"]
+
+    def legacy_create_agentkit_app(
+        _root_agent: object,
+        _display_names: object,
+        *,
+        enable_feishu: bool,
+        enable_studio_tools: bool,
+    ) -> FastAPI:
+        del enable_feishu, enable_studio_tools
+        app = FastAPI()
+
+        @app.get("/web/agent-info/{app_name}")
+        def agent_info(app_name: str) -> dict[str, str]:
+            return {"name": app_name}
+
+        app.mount("/", FastAPI())
+        return app
+
+    import veadk.integrations.agentkit as agentkit_integration
+
+    monkeypatch.setattr(
+        agentkit_integration,
+        "create_agentkit_app",
+        legacy_create_agentkit_app,
+    )
+    agent_module = ModuleType("agents.demo.agent")
+    agent_module.AGENT_DISPLAY_NAMES = {"demo": "demo"}
+    agent_module.AGENT_DRAFT = {"name": "demo", "instruction": "Editable."}
+    agent_module.root_agent = object()
+    dynamic_module = ModuleType("agents.demo.dynamic_a2a")
+    dynamic_module.enable_dynamic_a2a_tools = lambda _app, _agent: None
+    agents_package = ModuleType("agents")
+    agents_package.__path__ = []
+    demo_package = ModuleType("agents.demo")
+    demo_package.__path__ = []
+    monkeypatch.setitem(sys.modules, "agents", agents_package)
+    monkeypatch.setitem(sys.modules, "agents.demo", demo_package)
+    monkeypatch.setitem(sys.modules, "agents.demo.agent", agent_module)
+    monkeypatch.setitem(sys.modules, "agents.demo.dynamic_a2a", dynamic_module)
+
+    namespace: dict[str, Any] = {"__name__": "generated_app"}
+    exec(compile(app_py, "generated-app.py", "exec"), namespace)
+    app = namespace["app"]
+    paths = [getattr(route, "path", None) for route in app.router.routes]
+
+    assert paths.index("/web/agent-draft/{app_name}") < paths.index("")
+    assert TestClient(app).get("/web/agent-draft/demo").json() == {
+        "draft": agent_module.AGENT_DRAFT
+    }
 
 
 def test_codegen_enables_feishu_without_exposing_lifecycle_code() -> None:

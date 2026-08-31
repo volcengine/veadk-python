@@ -6713,6 +6713,11 @@ export default function App() {
                   exitAgentDetailContext();
                   setImportedDraft(classifiedDraft);
                   setCustomCreateMode("custom");
+                  setCustomCreationSurface(
+                    classifiedDraft.dynamicAgentDelegation === true
+                      ? "vulcan"
+                      : "traditional",
+                  );
                   const nextDraftId = `runtime-${capability.runtime.runtimeId}`;
                   setEditingDraftId(nextDraftId);
                   editingDraftBaselineRef.current = null;

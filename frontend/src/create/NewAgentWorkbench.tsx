@@ -53,6 +53,7 @@ export interface NewAgentWorkbenchProps {
   cloudProvider: CloudProvider;
   deployRegion: string;
   runtimeName: string;
+  isRuntimeUpdate?: boolean;
   deploying: boolean;
   deployStage: DeployStage | null;
   deployError: string;
@@ -668,6 +669,7 @@ export function NewAgentWorkbench({
   cloudProvider,
   deployRegion,
   runtimeName,
+  isRuntimeUpdate = false,
   deploying,
   deployStage,
   deployError,
@@ -1118,6 +1120,7 @@ export function NewAgentWorkbench({
                       </span>
                       <Input
                         value={runtimeName}
+                        disabled={deploying || isRuntimeUpdate}
                         size="xl"
                         gutterSize="md"
                         pill={false}
@@ -1127,7 +1130,9 @@ export function NewAgentWorkbench({
                         }
                       />
                       <small className="new-agent-workbench__helper-text">
-                        仅支持英文字母、数字、下划线和连字符
+                        {isRuntimeUpdate
+                          ? "更新时保持现有 Runtime 名称不变"
+                          : "仅支持英文字母、数字、下划线和连字符"}
                       </small>
                     </label>
                     <label className="new-agent-workbench__field">
@@ -1142,6 +1147,7 @@ export function NewAgentWorkbench({
                         triggerClassName="new-agent-workbench__select-trigger"
                         optionClassName={SELECT_OPTION_CLASS_NAME}
                         pill={false}
+                        disabled={deploying || isRuntimeUpdate}
                         onChange={(option) =>
                           onDeployRegionChange(option.value)
                         }
@@ -1550,8 +1556,12 @@ export function NewAgentWorkbench({
               >
                 {step === "deployment"
                   ? deploySucceeded
-                    ? "重新部署"
-                    : "部署"
+                    ? isRuntimeUpdate
+                      ? "再次更新"
+                      : "重新部署"
+                    : isRuntimeUpdate
+                      ? "更新并发布"
+                      : "部署"
                   : "下一步"}
               </Button>
             </motion.div>
