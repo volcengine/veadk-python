@@ -1,0 +1,309 @@
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import type { CloudProvider } from "../adk/cloudProvider";
+import {
+  runtimeConsoleUrl,
+  runtimeLogLevel,
+  streamRuntimeLogs,
+  type RuntimeLogTarget,
+} from "../adk/runtimeLogs";
+import {
+  SandboxCloseIcon,
+  SandboxSpinnerIcon,
+  SandboxTerminalIcon,
+} from "./icons/SandboxControlIcons";
+import "./RuntimeLogsDialog.css";
+
+const MAX_RENDERED_LINES = 1_000;
+
+function ExternalLinkIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M14 5h5v5M19 5l-8 8" />
+      <path d="M18 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
+    </svg>
+  );
+}
+
+export function RuntimeLogsDialog({
+  open,
+  provider,
+  sessionId,
+  target,
+  onClose,
+}: {
+  open: boolean;
+  provider: CloudProvider;
+  sessionId?: string;
+  target: RuntimeLogTarget;
+  onClose: () => void;
+}) {
+  const titleId = useId();
+  const dialogRef = useRef<HTMLElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const logRef = useRef<HTMLDivElement>(null);
+  const followTailRef = useRef(true);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  const [status, setStatus] = useState<"idle" | "connecting" | "live" | "retrying">("idle");
+  const [logs, setLogs] = useState("");
+  const [error, setError] = useState("");
+  const [retryKey, setRetryKey] = useState(0);
+  const [consoleUrl, setConsoleUrl] = useState("");
+  const [resolvedInstanceName, setResolvedInstanceName] = useState("");
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    if (!open) return;
+    previousFocusRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    closeRef.current?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab" || !dialogRef.current) return;
+      const focusable = [...dialogRef.current.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+      )].filter((item) => item.offsetParent !== null);
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+      if (previousFocusRef.current?.isConnected) previousFocusRef.current.focus();
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    followTailRef.current = true;
+    setLogs("");
+    setError("");
+    setResolvedInstanceName(target.instanceName ?? "");
+    if (!target.instanceName && !sessionId) {
+      setStatus("idle");
+      setConsoleUrl("");
+      return;
+    }
+    const controller = new AbortController();
+    setStatus("connecting");
+    setConsoleUrl(
+      target.instanceName
+        ? runtimeConsoleUrl(
+          provider,
+          target.region,
+          target.runtimeId,
+          target.instanceName,
+        )
+        : "",
+    );
+    void (async () => {
+      try {
+        for await (const event of streamRuntimeLogs({
+          runtimeId: target.runtimeId,
+          region: target.region,
+          instanceName: target.instanceName,
+          sessionId,
+          signal: controller.signal,
+        })) {
+          if (event.type === "context") {
+            setResolvedInstanceName(event.instanceName);
+            setConsoleUrl(event.consoleUrl);
+            setStatus("live");
+            setError("");
+          } else if (event.type === "logs") {
+            setLogs(event.text);
+            setStatus("live");
+            setError("");
+          } else if (event.type === "error") {
+            setStatus("retrying");
+            setError(event.detail || event.message);
+          }
+        }
+      } catch (cause) {
+        if (controller.signal.aborted) return;
+        setStatus("idle");
+        setError(cause instanceof Error ? cause.message : String(cause));
+      }
+    })();
+    return () => controller.abort();
+  }, [open, provider, retryKey, sessionId, target.instanceName, target.region, target.runtimeId]);
+
+  useEffect(() => {
+    const element = logRef.current;
+    if (!open || !element || !followTailRef.current) return;
+    element.scrollTop = element.scrollHeight;
+  }, [logs, open]);
+
+  const lines = useMemo(() => {
+    const occurrences = new Map<string, number>();
+    return logs.split(/\r?\n/).slice(-MAX_RENDERED_LINES).map((text) => {
+      const occurrence = (occurrences.get(text) ?? 0) + 1;
+      occurrences.set(text, occurrence);
+      return { id: `${text}\u0000${occurrence}`, text };
+    });
+  }, [logs]);
+  const resolvedConsoleUrl = consoleUrl || (
+    resolvedInstanceName
+      ? runtimeConsoleUrl(provider, target.region, target.runtimeId, resolvedInstanceName)
+      : ""
+  );
+  const statusLabel = status === "live"
+    ? "实时"
+    : status === "connecting"
+      ? "连接中"
+      : status === "retrying"
+        ? "重连中"
+        : "未连接";
+
+  if (!open) return null;
+  return createPortal(
+    <div
+      className="runtime-logs-layer"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          event.preventDefault();
+          onClose();
+        }
+      }}
+    >
+      <section
+        ref={dialogRef}
+        className="runtime-logs-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+      >
+        <header className="runtime-logs-head">
+          <span className="runtime-logs-head-icon" aria-hidden="true">
+            <SandboxTerminalIcon />
+          </span>
+          <div className="runtime-logs-heading">
+            <h2 id={titleId}>实例日志</h2>
+            <p>当前对话请求所在的 VeFaaS 实例</p>
+          </div>
+          <button
+            ref={closeRef}
+            type="button"
+            className="runtime-logs-close"
+            aria-label="关闭实例日志"
+            onClick={onClose}
+          >
+            <SandboxCloseIcon />
+          </button>
+        </header>
+
+        <div className="runtime-logs-meta">
+          <span className={`runtime-logs-status is-${status}`} aria-live="polite">
+            <i aria-hidden="true" />
+            {statusLabel}
+          </span>
+          <span className="runtime-logs-instance-label">实例 ID</span>
+          {resolvedInstanceName && resolvedConsoleUrl ? (
+            <a
+              className="runtime-logs-instance-link"
+              href={resolvedConsoleUrl}
+              target="_blank"
+              rel="noreferrer"
+              title={resolvedInstanceName}
+            >
+              <span>{resolvedInstanceName}</span>
+              <ExternalLinkIcon />
+            </a>
+          ) : (
+            <span className="runtime-logs-instance-empty">等待实例</span>
+          )}
+          {target.requestId ? (
+            <span className="runtime-logs-request" title={target.requestId}>
+              请求 {target.requestId}
+            </span>
+          ) : null}
+        </div>
+
+        <div
+          ref={logRef}
+          className="runtime-logs-output"
+          role="log"
+          aria-label="VeFaaS 实例实时日志"
+          aria-live="off"
+          onScroll={(event) => {
+            const element = event.currentTarget;
+            followTailRef.current =
+              element.scrollHeight - element.scrollTop - element.clientHeight <= 32;
+          }}
+        >
+          {!target.instanceName && !sessionId ? (
+            <div className="runtime-logs-empty">
+              <SandboxTerminalIcon />
+              <strong>尚未捕获到实例</strong>
+              <span>发送一条消息后，这里会显示实际处理请求的实例和实时日志。</span>
+            </div>
+          ) : status === "connecting" && !logs ? (
+            <div className="runtime-logs-empty">
+              <SandboxSpinnerIcon className="spin" />
+              <strong>正在连接实例日志</strong>
+              <span>正在通过 Studio BFF 建立安全日志流。</span>
+            </div>
+          ) : error && !logs ? (
+            <div className="runtime-logs-empty is-error" role="alert">
+              <strong>实例日志读取失败</strong>
+              <span>{error}</span>
+              <button type="button" onClick={() => setRetryKey((value) => value + 1)}>
+                重试
+              </button>
+            </div>
+          ) : lines.length === 0 || (lines.length === 1 && lines[0].text === "") ? (
+            <div className="runtime-logs-empty">
+              <strong>暂无日志</strong>
+              <span>已连接实例，等待新的日志输出。</span>
+            </div>
+          ) : (
+            <div className="runtime-logs-lines">
+              {lines.map((line, index) => (
+                <div
+                  key={line.id}
+                  className={`runtime-log-line is-${runtimeLogLevel(line.text)}`}
+                >
+                  <span className="runtime-log-index" aria-hidden="true">
+                    {String(index + 1).padStart(3, "0")}
+                  </span>
+                  <span className="runtime-log-text">{line.text || " "}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <footer className="runtime-logs-foot">
+          <span>日志自动刷新，仅保留最近 {MAX_RENDERED_LINES} 行</span>
+          {error && logs ? <span className="runtime-logs-inline-error">{error}</span> : null}
+        </footer>
+      </section>
+    </div>,
+    document.body,
+  );
+}

@@ -10,6 +10,10 @@ import {
 } from "./authSession";
 import { parseJsonResponse } from "./jsonResponse";
 import { formatRunSseError } from "./runSseError";
+import {
+  runtimeContextFromResponse,
+  type RuntimeLogTarget,
+} from "./runtimeLogs";
 import { parseSSE } from "./sse";
 import { normalizeRuntimeDescription } from "./runtimeDescription";
 import {
@@ -1696,6 +1700,8 @@ export interface RunArgs {
   functionResponses?: { id: string; name: string; response: unknown }[];
   /** Abort the stream (e.g. when the user switches to another session). */
   signal?: AbortSignal;
+  /** Receives trusted instance metadata exposed by the same-origin Studio BFF. */
+  onRuntimeContext?: (context: RuntimeLogTarget) => void;
 }
 
 export const RUN_SSE_EMPTY_RESPONSE_ERROR =
@@ -1769,6 +1775,7 @@ export async function* runSSE({
   platformTools,
   functionResponses = [],
   signal,
+  onRuntimeContext,
 }: RunArgs): AsyncGenerator<AdkEvent, void, unknown> {
   const { app, ep } = resolve(appName);
   const attachmentParts = attachments.flatMap<Record<string, unknown>>((a) => {
@@ -1845,6 +1852,12 @@ export async function* runSSE({
     if (signal?.aborted || (error as Error)?.name === "AbortError") throw error;
     throw new Error(formatRunSseError(error));
   }
+  const runtimeContext = runtimeContextFromResponse(
+    res,
+    ep.runtimeId ?? "",
+    ep.region ?? "",
+  );
+  if (runtimeContext) onRuntimeContext?.(runtimeContext);
   if (!res.ok) {
     firstEventDeadline.cleanup();
     const detail = await httpErrorMessage(res, "运行会话失败");

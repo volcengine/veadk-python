@@ -24,6 +24,7 @@ import type {
   RuntimeScope,
 } from "../adk/client";
 import type { CloudProvider } from "../adk/cloudProvider";
+import type { RuntimeLogTarget } from "../adk/runtimeLogs";
 import type { SessionTokenUsage } from "../adk/tokenUsage";
 import { getVideoCapabilities, type VideoCapabilities } from "../adk/video";
 import type { SandboxAgentResource } from "../adk/sandbox";
@@ -31,6 +32,7 @@ import { InvocationChips } from "./InvocationChips";
 import { MediaGroup } from "./Media";
 import { isImeCompositionEvent } from "./composerKeyboard";
 import { ComposerSendIcon, ComposerStopIcon } from "./icons/ComposerIcons";
+import { SandboxTerminalIcon } from "./icons/SandboxControlIcons";
 import { NewChatModeSelector } from "./new-chat-modes/NewChatModeSelector";
 import { NewChatAgentPicker } from "./new-chat-modes/NewChatAgentPicker";
 import { NewChatSkillControls } from "./new-chat-modes/NewChatSkillControls";
@@ -60,6 +62,7 @@ import type {
 import { NEW_CHAT_TASK_TOOLS } from "./new-chat-modes/taskTools";
 import { VideoGenerateIcon } from "./builtin-tools/icons";
 import { TokenUsageIndicator } from "./TokenUsageIndicator";
+import { RuntimeLogsDialog } from "./RuntimeLogsDialog";
 
 interface CompletionTrigger {
   kind: "skill" | "agent";
@@ -171,6 +174,7 @@ export interface ComposerProps {
   onSelectLocalApp?: (app: string) => Promise<void>;
   onSelectRuntime?: (runtime: CloudRuntime) => Promise<void>;
   onSelectSandboxSession?: (session: SandboxAgentResource) => Promise<void>;
+  runtimeLogTarget?: RuntimeLogTarget;
 }
 
 export function Composer({
@@ -228,6 +232,7 @@ export function Composer({
   onSelectLocalApp,
   onSelectRuntime,
   onSelectSandboxSession,
+  runtimeLogTarget,
 }: ComposerProps) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const imageInput = useRef<HTMLInputElement>(null);
@@ -237,6 +242,7 @@ export function Composer({
   const [trigger, setTrigger] = useState<CompletionTrigger | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
   const [sessionIdCopied, setSessionIdCopied] = useState(false);
+  const [runtimeLogsOpen, setRuntimeLogsOpen] = useState(false);
   const [newChatVideoConfig, setNewChatVideoConfig] = useState(
     DEFAULT_NEW_CHAT_VIDEO_CONFIG,
   );
@@ -1022,8 +1028,33 @@ export function Composer({
             |
           </span>
           <span>回答仅供参考</span>
+          {runtimeLogTarget ? (
+            <>
+              <span className="composer-meta-separator" aria-hidden>
+                |
+              </span>
+              <button
+                type="button"
+                className="composer-runtime-logs"
+                onClick={() => setRuntimeLogsOpen(true)}
+              >
+                <SandboxTerminalIcon />
+                <span>查看日志</span>
+              </button>
+            </>
+          ) : null}
         </div>
       )}
+
+      {runtimeLogTarget ? (
+        <RuntimeLogsDialog
+          open={runtimeLogsOpen}
+          provider={cloudProvider}
+          sessionId={sessionId}
+          target={runtimeLogTarget}
+          onClose={() => setRuntimeLogsOpen(false)}
+        />
+      ) : null}
 
       {/* hidden pickers */}
       <input

@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import socket
 from collections.abc import AsyncIterator
@@ -42,6 +43,19 @@ class _FakeWebSocket:
         self.sent: list[dict[str, Any]] = []
         self.closed = False
         self.mismatched_tool_context = mismatched_tool_context
+        payload = (
+            base64.urlsafe_b64encode(
+                json.dumps({"x-faas-instance-name": "instance-websocket"}).encode()
+            )
+            .decode()
+            .rstrip("=")
+        )
+        self.response = SimpleNamespace(
+            headers={
+                "x-session-id": f"v1.{payload}.signature",
+                "x-faas-request-id": "request-websocket",
+            }
+        )
 
     async def send(self, raw: str) -> None:
         message = json.loads(raw)
@@ -271,6 +285,8 @@ async def test_connector_runs_and_executes_tool_over_one_websocket(
     assert run.execution_context.run_id == run.run_id
     assert run.execution_context.scope_id == run.scope_id
     assert run.execution_context.catalog_revision == run.catalog_revision
+    assert run.runtime_context.instance_name == "instance-websocket"
+    assert run.runtime_context.request_id == "request-websocket"
     assert connect_calls[0][0] == (
         "wss://runtime.example/base/harness/studio-channel/v1?gateway=value"
     )

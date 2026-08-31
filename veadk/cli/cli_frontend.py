@@ -1800,6 +1800,12 @@ def _run_frontend_server(
 
     from contextlib import asynccontextmanager
 
+    from frontend.server.runtime_logs import (
+        RuntimeLogService,
+        mount_runtime_log_routes,
+        runtime_request_context,
+        studio_runtime_context_headers,
+    )
     from frontend.server.studio_routes import (
         StudioRouteChannelManager,
         build_studio_route_registry,
@@ -8158,6 +8164,28 @@ def _run_frontend_server(
         )
         return runtime
 
+    runtime_log_service = RuntimeLogService(
+        provider=provider,
+        resolve_credentials=_resolve_ve_credentials,
+        sanitize=lambda text: str(
+            _sanitize_build_log_snapshot(
+                text,
+                max_chars=240_000,
+                max_lines=1_000,
+            )["text"]
+        ),
+    )
+    mount_runtime_log_routes(
+        app,
+        service=runtime_log_service,
+        authorize_runtime=_authorized_runtime_for_connection,
+        normalize_region=_coerce_cloud_region,
+        safe_error=lambda error: _safe_exception_detail(
+            error,
+            secrets=_resolve_ve_credentials(),
+        ),
+    )
+
     from frontend.server.cronjobs import (
         CronjobAccessDenied,
         CronjobIdentity,
@@ -9462,6 +9490,9 @@ def _run_frontend_server(
                     _studio_channel_body(),
                     status_code=200,
                     media_type="text/event-stream",
+                    headers=studio_runtime_context_headers(
+                        getattr(studio_run, "runtime_context", None)
+                    ),
                 )
 
         is_retryable_read = _runtime_proxy_is_retryable_read(upstream_method)
@@ -9606,6 +9637,9 @@ def _run_frontend_server(
                 content=body_bytes,
                 status_code=upstream.status_code,
                 media_type=media,
+                headers=studio_runtime_context_headers(
+                    runtime_request_context(upstream.headers)
+                ),
             )
 
         async def _body():
@@ -9626,7 +9660,12 @@ def _run_frontend_server(
 
         media = upstream.headers.get("content-type", "application/octet-stream")
         return StreamingResponse(
-            _body(), status_code=upstream.status_code, media_type=media
+            _body(),
+            status_code=upstream.status_code,
+            media_type=media,
+            headers=studio_runtime_context_headers(
+                runtime_request_context(upstream.headers)
+            ),
         )
 
     # ---- Auth ----------------------------------------------------------------
