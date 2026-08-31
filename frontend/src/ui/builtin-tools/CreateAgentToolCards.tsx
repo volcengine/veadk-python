@@ -11,6 +11,7 @@ import {
   filterCollectedResourcesByCategory,
   parseCollectedResources,
   parseCreatedAgents,
+  toolResponseError,
   type CreatedAgentResourceView,
   type CreatedSubAgentView,
   type PythonToolView,
@@ -62,21 +63,6 @@ function AccordionChevron(props: SVGProps<SVGSVGElement>) {
       <path d="m4 6 4 4 4-4" />
     </svg>
   );
-}
-
-function responseError(response: unknown): string {
-  if (typeof response === "string") return response;
-  if (!response || typeof response !== "object" || Array.isArray(response)) return "";
-  const record = response as Record<string, unknown>;
-  const nested = record.result;
-  if (typeof record.error === "string") return record.error;
-  if (typeof record.message === "string") return record.message;
-  if (nested && typeof nested === "object" && !Array.isArray(nested)) {
-    const nestedRecord = nested as Record<string, unknown>;
-    if (typeof nestedRecord.error === "string") return nestedRecord.error;
-    if (typeof nestedRecord.message === "string") return nestedRecord.message;
-  }
-  return "";
 }
 
 function LoadingRows({ label }: { label: string }) {
@@ -247,7 +233,7 @@ export function CollectResourcesCard({ response, status }: CreateAgentToolCardPr
     };
   }), [data]);
   const failed = status === "failed";
-  const error = failed ? responseError(response) : "";
+  const error = failed ? toolResponseError(response) : "";
 
   return (
     <section className="create-agent-tool-card" aria-label="召回资源信息">
@@ -351,7 +337,7 @@ export function CollectResourcesCard({ response, status }: CreateAgentToolCardPr
 
 export function CreateAgentsCard({ args, response, status }: CreateAgentToolCardProps) {
   const data = useMemo(() => parseCreatedAgents(args, response), [args, response]);
-  const topLevelError = status === "failed" ? responseError(response) : "";
+  const topLevelError = status === "failed" ? toolResponseError(response) : "";
 
   return (
     <section className="create-agent-tool-card is-agent-results" aria-label="创建 Agent 结果">

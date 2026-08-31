@@ -10,6 +10,7 @@ import { MediaGroup } from "./Media";
 import type { A2uiAction, A2uiComponent } from "../a2ui/types";
 import { TextShimmer } from "./text-shimmer/TextShimmer";
 import { BuiltinToolHeader } from "./builtin-tools/BuiltinToolHeader";
+import { createdAgentsHaveFailure } from "./builtin-tools/createAgentToolCardData";
 import { ToolDisclosureIcon } from "./builtin-tools/icons";
 import { getBuiltinToolDefinition } from "./builtin-tools/registry";
 import { AgentKitLogoIcon } from "./icons/AgentKitLogoIcon";
@@ -621,6 +622,7 @@ function ToolBlock({
   done,
   status,
   defaultOpen = false,
+  retrying = false,
 }: {
   name: string;
   args?: unknown;
@@ -628,8 +630,17 @@ function ToolBlock({
   done: boolean;
   status?: "running" | "completed" | "failed";
   defaultOpen?: boolean;
+  retrying?: boolean;
 }) {
-  const toolStatus = status ?? (done ? "completed" : "running");
+  const inferredCreateAgentFailure = name === "create_agents"
+    && done
+    && createdAgentsHaveFailure(args, response);
+  const toolStatus = inferredCreateAgentFailure
+    ? "failed"
+    : status ?? (done ? "completed" : "running");
+  const isAdjustingAgent = name === "create_agents"
+    && toolStatus === "failed"
+    && retrying;
   const builtinTool = getBuiltinToolDefinition(name);
   const DetailRenderer = builtinTool?.detailRenderer;
   const shouldDefaultOpen = defaultOpen || Boolean(DetailRenderer);
@@ -663,9 +674,11 @@ function ToolBlock({
       {builtinTool ? (
         <BuiltinToolHeader
           definition={builtinTool}
-          label={toolStatus === "failed"
-            ? builtinTool.failedLabel
-            : loadSkillLabel(name, args)}
+          label={isAdjustingAgent
+            ? "Agent 正在调整"
+            : toolStatus === "failed"
+              ? builtinTool.failedLabel
+              : loadSkillLabel(name, args)}
           done={done}
           open={open}
           onToggle={toggle}
@@ -1039,8 +1052,12 @@ export function Blocks({
             );
           case "invocation":
             return <InvocationChips key={i} value={b.value} />;
-          case "tool":
+          case "tool": {
             if (b.name === A2UI_TOOL && b.done) return null;
+            const hasLaterCreateAgentAttempt = b.name === "create_agents"
+              && blocks.slice(i + 1).some(
+                (block) => block.kind === "tool" && block.name === "create_agents",
+              );
             return (
               <ToolBlock
                 key={i}
@@ -1050,8 +1067,11 @@ export function Blocks({
                 done={b.done}
                 status={b.status}
                 defaultOpen={b.defaultOpen}
+                retrying={b.name === "create_agents"
+                  && (streaming || hasLaterCreateAgentAttempt)}
               />
             );
+          }
           case "agent-transfer":
             return null;
           case "auth":

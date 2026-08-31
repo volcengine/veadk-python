@@ -72,6 +72,10 @@ test("renders built-in tool calls through the extensible dedicated header", () =
   assert.match(blocksSource, /function loadSkillLabel/);
   assert.match(blocksSource, /loadSkillLabel\(name, args\)/);
   assert.match(blocksSource, /builtinTool\.failedLabel/);
+  assert.match(blocksSource, /Agent 正在调整/);
+  assert.match(blocksSource, /createdAgentsHaveFailure\(args, response\)/);
+  assert.match(blocksSource, /streaming \|\| hasLaterCreateAgentAttempt/);
+  assert.match(blocksSource, /label=\{isAdjustingAgent[\s\S]*?done=\{done\}/);
   assert.match(blocksSource, /`使用 \$\{skillName\.trim\(\)\} 技能`/);
   assert.match(headerSource, /label\?: string/);
   assert.doesNotMatch(headerSource, /builtin-tool-state/);

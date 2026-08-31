@@ -195,7 +195,7 @@ test("keeps the loading skeleton flush with the card without a duplicate top edg
 });
 
 test("combines create_agents input blueprints with partial execution results", async () => {
-  const { parseCreatedAgents } = await loadCardData();
+  const { parseCreatedAgents, createdAgentsHaveFailure } = await loadCardData();
   const parsed = parseCreatedAgents(
     {
       collection_id: "collection-1",
@@ -299,6 +299,16 @@ test("combines create_agents input blueprints with partial execution results", a
     error: "",
   });
   assert.equal(parsed.agents[1].error, "Model unavailable");
+  assert.equal(createdAgentsHaveFailure(undefined, {
+    results: [{ name: "writer", status: "failed", error: "Model unavailable" }],
+  }), true);
+  assert.equal(createdAgentsHaveFailure(undefined, {
+    results: [{ name: "writer", status: "completed" }],
+  }), false);
+  assert.equal(createdAgentsHaveFailure(undefined, JSON.stringify({
+    results: [{ name: "writer", status: "completed" }],
+  })), false);
+  assert.equal(createdAgentsHaveFailure(undefined, "Unknown or expired collection_id"), true);
 });
 
 test("renders compact bounded agent cards with resource popovers and separated tool types", () => {
