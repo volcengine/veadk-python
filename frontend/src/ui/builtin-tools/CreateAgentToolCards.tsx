@@ -366,9 +366,13 @@ export function CreateAgentsCard({ args, response, status }: CreateAgentToolCard
         <div className="create-agent-card__agent-grid">
           {data.agents.map((agent) => {
             const agentStatus = status === "failed" ? "failed" : agent.status;
+            const agentError = agent.error || (agentStatus === "failed" && topLevelError);
             const toolCount = agent.builtinTools.length + agent.pythonTools.length;
             return (
-              <ResourceCard className="create-agent-card__agent-card" key={agent.name}>
+              <ResourceCard
+                className={`create-agent-card__agent-card${agentError ? " is-error" : ""}`}
+                key={agent.name}
+              >
                 <ResourceCardHeader
                   leading={<ResourceIdentityMark seed={agent.name} />}
                   title={agent.name}
@@ -382,9 +386,9 @@ export function CreateAgentsCard({ args, response, status }: CreateAgentToolCard
                 {agent.description ? (
                   <ResourceCardDescription>{agent.description}</ResourceCardDescription>
                 ) : null}
-                {agent.error || (agentStatus === "failed" && topLevelError) ? (
+                {agentError ? (
                   <div className="create-agent-card__agent-result is-error" role="alert">
-                    {agent.error || topLevelError}
+                    {agentError}
                   </div>
                 ) : null}
                 <div className="create-agent-card__agent-resources" aria-label={`${agent.name} 具备的资源`}>

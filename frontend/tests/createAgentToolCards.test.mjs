@@ -302,7 +302,10 @@ test("combines create_agents input blueprints with partial execution results", a
 });
 
 test("renders compact bounded agent cards with resource popovers and separated tool types", () => {
-  assert.match(cardSource, /<ResourceCard className="create-agent-card__agent-card"/);
+  assert.match(
+    cardSource,
+    /className=\{`create-agent-card__agent-card\$\{agentError \? " is-error" : ""\}`\}/,
+  );
   assert.match(cardSource, /<ResourceIdentityMark seed=\{agent\.name\}/);
   assert.match(cardSource, /import \{ ResourceLibraryIcon \} from "\.\.\/icons\/SidebarIcons"/);
   assert.match(cardSource, /icon=\{<ResourceLibraryIcon aria-hidden="true" \/>\}/);
@@ -319,7 +322,19 @@ test("renders compact bounded agent cards with resource popovers and separated t
     /grid-template-columns:\s*repeat\(auto-fit, minmax\(min\(280px, 100%\), 372px\)\)/,
   );
   assert.match(cardStyles, /justify-content:\s*start/);
-  assert.match(cardStyles, /grid-auto-rows:\s*140px/);
+  assert.match(cardStyles, /grid-auto-rows:\s*152px/);
+  assert.match(
+    cardStyles,
+    /\.create-agent-card__agent-card\.resource-card\s*\{[^}]*height:\s*152px;[^}]*min-height:\s*152px;/s,
+  );
+  assert.match(
+    cardStyles,
+    /\.create-agent-card__agent-card\.is-error \.resource-card__description\s*\{[^}]*min-height:\s*20px;[^}]*max-height:\s*20px;[^}]*-webkit-line-clamp:\s*1;/s,
+  );
+  assert.match(
+    cardStyles,
+    /\.create-agent-card__agent-result\s*\{[^}]*flex:\s*0 0 18px;[^}]*max-height:\s*18px;/s,
+  );
   assert.match(
     cardStyles,
     /\.create-agent-card__agent-card \.resource-card__title-copy h3\s*\{[^}]*font-size:\s*var\(--font-text-md-size, 16px\)/s,

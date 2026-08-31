@@ -16,11 +16,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import copy
 import hashlib
 import os
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
+from weakref import WeakValueDictionary
 
 from google.adk.agents import BaseAgent
 from google.adk.agents.readonly_context import ReadonlyContext
@@ -54,6 +57,8 @@ from veadk.tools.builtin_tools.create_agent.sources import (
 
 class CreateAgentToolset(BaseToolset):
     """Discover resources, then create and transfer to selected sub-agents."""
+
+    _MAX_COMPLETED_CREATIONS = 128
 
     def __init__(
         self,
@@ -94,6 +99,10 @@ class CreateAgentToolset(BaseToolset):
         self._input_model = input_model
         self._registrations: dict[str, tuple[BaseAgent, Any, str]] = {}
         self._bootstrap_agents: list[tuple[BaseAgent, BaseAgent]] = []
+        self._creation_locks: WeakValueDictionary[tuple[str, str], asyncio.Lock] = (
+            WeakValueDictionary()
+        )
+        self._completed_creations: dict[tuple[str, str, str], dict[str, Any]] = {}
         self._tools = [
             FunctionTool(self.collect_resources),
             CreateAgentsTool(self.create_agents, input_model=input_model),
@@ -158,15 +167,59 @@ class CreateAgentToolset(BaseToolset):
                 "transfer_to_agent."
             )
         owner = _context_owner(tool_context)
+        collection_key = collection_id or "__offline__"
+        request_fingerprint = hashlib.sha256(
+            request.model_dump_json(by_alias=True).encode("utf-8")
+        ).hexdigest()
+        cache_key = (owner, collection_key, request_fingerprint)
+        cached = self._completed_creations.get(cache_key)
+        if cached is not None:
+            actions.transfer_to_agent = cached["handoff_to"]
+            return copy.deepcopy(cached)
+
+        lock_key = (owner, collection_key)
+        creation_lock = self._creation_locks.setdefault(lock_key, asyncio.Lock())
+        async with creation_lock:
+            cached = self._completed_creations.get(cache_key)
+            if cached is not None:
+                actions.transfer_to_agent = cached["handoff_to"]
+                return copy.deepcopy(cached)
+            result = await self._create_agents_once(
+                collection_id=collection_id,
+                parsed_agents=parsed_agents,
+                handoff_to=handoff_to,
+                parent=parent,
+                tool_context=tool_context,
+                owner=owner,
+            )
+            handoff_runtime_name = result.get("handoff_to")
+            if handoff_runtime_name:
+                actions.transfer_to_agent = handoff_runtime_name
+                self._completed_creations[cache_key] = copy.deepcopy(result)
+                while len(self._completed_creations) > self._MAX_COMPLETED_CREATIONS:
+                    oldest_key = next(iter(self._completed_creations))
+                    self._completed_creations.pop(oldest_key)
+            return result
+
+    async def _create_agents_once(
+        self,
+        *,
+        collection_id: str,
+        parsed_agents: list[AgentBlueprint],
+        handoff_to: str,
+        parent: BaseAgent,
+        tool_context: ToolContext | None,
+        owner: str,
+    ) -> dict[str, Any]:
         if collection_id:
-            snapshot = self._store.consume(collection_id=collection_id, owner=owner)
+            snapshot = self._store.get(collection_id=collection_id, owner=owner)
         else:
             empty_snapshot = self._store.put(
                 owner=owner,
                 capabilities=self.capabilities,
                 resources=[],
             )
-            snapshot = self._store.consume(
+            snapshot = self._store.get(
                 collection_id=empty_snapshot.collection_id,
                 owner=owner,
             )
@@ -175,6 +228,8 @@ class CreateAgentToolset(BaseToolset):
             _runtime_name(agent.name, effective_collection_id, index)
             for index, agent in enumerate(parsed_agents)
         ]
+        for runtime_name in runtime_names:
+            await self._release(runtime_name)
         built_agents = await self._orchestrator.create(
             snapshot=snapshot,
             agents=parsed_agents,
@@ -221,7 +276,6 @@ class CreateAgentToolset(BaseToolset):
         handoff_runtime_name = target.result.runtime_name
         if not handoff_runtime_name:  # pragma: no cover - guarded by the builder.
             raise ValueError("Handoff target is missing its runtime name.")
-        actions.transfer_to_agent = handoff_runtime_name
         return CreateAgentsResponse(
             collection_id=effective_collection_id,
             handoff_to=handoff_runtime_name,

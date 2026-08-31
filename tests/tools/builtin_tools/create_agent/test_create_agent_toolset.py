@@ -652,7 +652,7 @@ async def test_collection_is_scoped_to_the_calling_invocation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_collection_is_released_after_create_agents() -> None:
+async def test_collection_can_create_additional_agents_in_same_invocation() -> None:
     toolset = CreateAgentToolset(
         resource_sources=[],
         leaf_factory=_leaf_factory,
@@ -668,13 +668,86 @@ async def test_collection_is_released_after_create_agents() -> None:
     )
 
     assert result["results"][0]["status"] == "completed"
-    with pytest.raises(ValueError, match="Unknown or expired collection_id"):
-        await toolset.create_agents(
+    second = await toolset.create_agents(
+        collection_id=collected["collection_id"],
+        agents=[_blueprint("reviewer")],
+        handoff_to="reviewer",
+        tool_context=context,
+    )
+
+    assert second["results"][0]["status"] == "completed"
+    assert second["handoff_to"].startswith("reviewer__")
+
+
+@pytest.mark.asyncio
+async def test_repeating_create_agents_returns_existing_runtime() -> None:
+    toolset = CreateAgentToolset(
+        resource_sources=[],
+        leaf_factory=_leaf_factory,
+    )
+    context = _context(invocation_id="retry")
+    collected = await toolset.collect_resources(tool_context=context)
+
+    first = await toolset.create_agents(
+        collection_id=collected["collection_id"],
+        agents=[_blueprint()],
+        handoff_to="child",
+        tool_context=context,
+    )
+    second = await toolset.create_agents(
+        collection_id=collected["collection_id"],
+        agents=[_blueprint()],
+        handoff_to="child",
+        tool_context=context,
+    )
+
+    assert second == first
+
+
+@pytest.mark.asyncio
+async def test_parallel_duplicate_create_agents_calls_build_once() -> None:
+    built_nodes: list[str] = []
+
+    def counting_leaf_factory(node, tools, workflow_member, parent_agent):
+        del tools, workflow_member, parent_agent
+        built_nodes.append(node.id)
+        return _TextAgent(name=node.id, marker=node.id)
+
+    toolset = CreateAgentToolset(
+        resource_sources=[],
+        leaf_factory=counting_leaf_factory,
+    )
+    parent = _TextAgent(name="main", marker="main")
+    first_context = _context(
+        parent_agent=parent,
+        invocation_id="parallel-duplicate",
+    )
+    second_context = _context(
+        parent_agent=parent,
+        invocation_id="parallel-duplicate",
+    )
+    collected = await toolset.collect_resources(tool_context=first_context)
+
+    first, second = await asyncio.gather(
+        toolset.create_agents(
             collection_id=collected["collection_id"],
             agents=[_blueprint()],
             handoff_to="child",
-            tool_context=context,
-        )
+            tool_context=first_context,
+        ),
+        toolset.create_agents(
+            collection_id=collected["collection_id"],
+            agents=[_blueprint()],
+            handoff_to="child",
+            tool_context=second_context,
+        ),
+    )
+
+    assert first == second
+    assert len(built_nodes) == 1
+    assert built_nodes[0].startswith("child__")
+    assert first_context.actions.transfer_to_agent == first["handoff_to"]
+    assert second_context.actions.transfer_to_agent == first["handoff_to"]
 
 
 @pytest.mark.asyncio

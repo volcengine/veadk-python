@@ -81,6 +81,7 @@ _DYNAMIC_AGENT_DELEGATION_RULES = """动态子智能体协作规则：
 - 对于需要专业技能、知识库、工具调用、资料检索或临时 Python 工具的复杂任务，通常必须先调用 collect_resources。根据用户任务提炼 2 到 5 个简短检索关键词，通过 skill_hub_keywords 传入。
 - 如果用户明确禁止联网、知识库或任何外部资源，跳过 collect_resources，直接调用 create_agents，传入 collection_id=""，并确保每个 LLM 节点的 resources=[]。不得发起 Skill Hub 关键词检索或其他资源源调用；子智能体仍使用自身模型能力完成当前任务。
 - collect_resources 返回的是候选资源，不会自动挂载。只创建完成任务所需的最少数量子智能体，并把实际需要的 Skill、知识库和内置工具完整 ref 显式写入对应 LLM 节点的 resources。存在相关 Skill 时至少绑定一个；确实没有匹配 Skill 时才允许不绑定 Skill。
+- 每次 collect_resources 后只调用一次 create_agents，并把本次任务需要的所有子智能体放在同一个 agents 列表中。create_agents 返回 completed 或已经设置 handoff_to 后，严禁再次调用 create_agents；任务已经交给目标子智能体继续执行。
 - 调用 create_agents 前，必须把“当前一次性任务”和“可复用能力身份”分开：agents[*].task 完整保留当前用户的具体目标、对象、输入和交付要求；agents[*].name 以及所有 nodes[*] 的 id、description、instruction 只描述可重复使用的稳定能力域。
 - 人物或虚构角色、品牌、产品、组织、平台或渠道、行业或赛道、细分领域、业务领域、内容类别、研究主题、源语言或目标语言、地点、日期、活动名称、具体题材、一次性问题或事件、文档标题、文件名、URL 等请求特有信息只能出现在 agents[*].task 中，不得出现在 name、id、description 或 instruction 中。即使这些信息会影响执行方法，也只能通过“用户指定的平台/产品/行业/主题/语言/问题”等参数化表达写入 instruction。禁止通过音译、拼音、翻译、首字母缩写、行业简称、拼接或轻微改写把这些特有信息写入名称。
 - 子智能体名称使用简洁的 snake_case 能力名，例如 video_creation_agent、document_translation_agent、financial_report_analysis_agent；不要按本次交付物命名，也不要一律退化成 generic_agent 或 general_assistant，保留真正影响专业能力和工具选择的领域边界。
@@ -1253,7 +1254,11 @@ def _render_quick_mode_compat_py() -> str:
         + f'''\
 from __future__ import annotations
 
+import asyncio
+import copy
+import hashlib
 from typing import Any
+from weakref import WeakValueDictionary
 
 from google.adk.tools import FunctionTool, ToolContext
 from google.genai import types
@@ -1263,6 +1268,9 @@ from veadk.tools.builtin_tools.create_agent import (
     CreateAgentToolset as _BaseCreateAgentToolset,
 )
 from veadk.tools.builtin_tools.create_agent import orchestrator as _orchestrator_module
+from veadk.tools.builtin_tools.create_agent.resource_store import (
+    ResourceStore as _BaseResourceStore,
+)
 
 
 _CREATE_AGENTS_DESCRIPTION = (
@@ -1276,8 +1284,10 @@ _CREATE_AGENTS_DESCRIPTION = (
     "relevant Skill, knowledge base, and built-in tool in resources; when "
     "relevant Skills were returned, bind at least one. Keep the one-off user "
     "objective in agents[*].task and keep reusable identity fields free of "
-    "request-specific entities. The selected sub-agent, not the main agent, "
-    "produces the final answer."
+    "request-specific entities. Call create_agents exactly once for each "
+    "collect_resources result and include every required sub-agent in that "
+    "single agents list. Once it completes or sets handoff_to, never call it "
+    "again. The selected sub-agent, not the main agent, produces the final answer."
 )
 _CREATE_AGENTS_SCHEMA = {create_agents_schema}
 _LEGACY_CREATE_AGENTS_SCHEMA = {legacy_create_agents_schema}
@@ -1303,6 +1313,14 @@ def _runtime_owner(tool_context: ToolContext | None) -> str:
             getattr(invocation, "invocation_id", None),
         )
     )
+
+
+class _ReusableResourceStore(_BaseResourceStore):
+    """Allow one model turn to reuse its resource snapshot safely."""
+
+    @override
+    def consume(self, *, collection_id: str, owner: str):
+        return self.get(collection_id=collection_id, owner=owner)
 
 
 def _with_delegated_task(instruction: str, task: str) -> str:
@@ -1352,8 +1370,13 @@ class _RuntimeCompatibleCreateAgentsTool(FunctionTool):
 class CreateAgentToolset(_BaseCreateAgentToolset):
     """Keep quick-mode semantics available in the pinned 1.1.7 runtime."""
 
+    _MAX_COMPLETED_CREATIONS = 128
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
+        kwargs.setdefault("resource_store", _ReusableResourceStore())
         super().__init__(*args, **kwargs)
+        self._creation_locks = WeakValueDictionary()
+        self._completed_creations = {{}}
         schema = (
             _CREATE_AGENTS_SCHEMA
             if self._input_model.__name__ == "CreateAgentsInput"
@@ -1379,6 +1402,56 @@ class CreateAgentToolset(_BaseCreateAgentToolset):
                 "handoff_to": handoff_to,
             }}
         )
+        owner = _runtime_owner(tool_context)
+        collection_key = collection_id or "__offline__"
+        request_fingerprint = hashlib.sha256(
+            request.model_dump_json(by_alias=True).encode("utf-8")
+        ).hexdigest()
+        cache_key = (owner, collection_key, request_fingerprint)
+        cached = self._completed_creations.get(cache_key)
+        if cached is not None:
+            actions = getattr(tool_context, "actions", None)
+            if actions is not None:
+                actions.transfer_to_agent = cached["handoff_to"]
+            return copy.deepcopy(cached)
+
+        lock_key = (owner, collection_key)
+        creation_lock = self._creation_locks.setdefault(
+            lock_key,
+            asyncio.Lock(),
+        )
+        async with creation_lock:
+            cached = self._completed_creations.get(cache_key)
+            if cached is not None:
+                actions = getattr(tool_context, "actions", None)
+                if actions is not None:
+                    actions.transfer_to_agent = cached["handoff_to"]
+                return copy.deepcopy(cached)
+            result = await self._create_agents_once(
+                request=request,
+                collection_id=collection_id,
+                handoff_to=handoff_to,
+                tool_context=tool_context,
+            )
+            handoff_runtime_name = result.get("handoff_to")
+            if handoff_runtime_name:
+                self._completed_creations[cache_key] = copy.deepcopy(result)
+                while (
+                    len(self._completed_creations)
+                    > self._MAX_COMPLETED_CREATIONS
+                ):
+                    oldest_key = next(iter(self._completed_creations))
+                    self._completed_creations.pop(oldest_key)
+            return result
+
+    async def _create_agents_once(
+        self,
+        *,
+        request: Any,
+        collection_id: str,
+        handoff_to: str,
+        tool_context: ToolContext | None,
+    ) -> dict[str, Any]:
         parsed_agents = list(request.agents)
         if not collection_id:
             invalid_nodes = [

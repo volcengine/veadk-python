@@ -150,6 +150,8 @@ def test_quick_mode_codegen_adds_dynamic_agent_toolset_and_managed_rules() -> No
     )
     assert "resources=[]" in compat_py
     assert "request-specific entities" in compat_py
+    assert "class _ReusableResourceStore" in compat_py
+    assert "Call create_agents exactly once" in compat_py
 
 
 def test_quick_mode_compat_backports_offline_snapshot_and_task_context(
@@ -175,11 +177,39 @@ def test_quick_mode_compat_backports_offline_snapshot_and_task_context(
     spec.loader.exec_module(module)
     module._NATIVE_TASK_CONTEXT = False
 
+    store = module._ReusableResourceStore()
+    snapshot = store.put(
+        owner="test-invocation",
+        capabilities=AgentCapabilities(
+            google_adk_version="2.1.0",
+            agent_types=["llm", "sequential", "parallel", "loop", "workflow"],
+        ),
+        resources=[],
+    )
+    assert (
+        store.consume(
+            collection_id=snapshot.collection_id,
+            owner="test-invocation",
+        )
+        is snapshot
+    )
+    assert (
+        store.consume(
+            collection_id=snapshot.collection_id,
+            owner="test-invocation",
+        )
+        is snapshot
+    )
+
     captured: dict[str, object] = {}
+    create_calls = 0
 
     async def fake_create_agents(self, **kwargs):
+        nonlocal create_calls
+        create_calls += 1
+        await asyncio.sleep(0)
         captured.update(kwargs)
-        return {"ok": True}
+        return {"ok": True, "handoff_to": "analysis_agent__runtime"}
 
     monkeypatch.setattr(
         "veadk.tools.builtin_tools.create_agent.CreateAgentToolset.create_agents",
@@ -201,15 +231,31 @@ def test_quick_mode_compat_backports_offline_snapshot_and_task_context(
         ],
     }
 
-    result = asyncio.run(
-        toolset.create_agents(
-            collection_id="",
-            agents=[blueprint],
-            handoff_to="analysis_agent",
+    async def create_twice():
+        return await asyncio.gather(
+            toolset.create_agents(
+                collection_id="",
+                agents=[blueprint],
+                handoff_to="analysis_agent",
+            ),
+            toolset.create_agents(
+                collection_id="",
+                agents=[blueprint],
+                handoff_to="analysis_agent",
+            ),
         )
-    )
 
-    assert result == {"ok": True}
+    result, duplicate = asyncio.run(create_twice())
+
+    assert (
+        result
+        == duplicate
+        == {
+            "ok": True,
+            "handoff_to": "analysis_agent__runtime",
+        }
+    )
+    assert create_calls == 1
     assert str(captured["collection_id"]).startswith("resources_")
     compatible_blueprint = captured["agents"][0]
     instruction = compatible_blueprint.nodes[0].instruction

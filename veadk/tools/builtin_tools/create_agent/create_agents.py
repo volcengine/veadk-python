@@ -44,6 +44,9 @@ class CreateAgentsTool(FunctionTool):
                 "and are not mounted automatically. For every LLM node, explicitly "
                 "include each relevant Skill, knowledge base, and built-in tool in "
                 "resources; when relevant Skills were returned, bind at least one. "
+                "Call create_agents exactly once for each collect_resources result "
+                "and include every required sub-agent in that single agents list. "
+                "Once it completes or sets handoff_to, never call it again. "
                 "The selected sub-agent, not the main agent, produces the final "
                 "answer."
             ),

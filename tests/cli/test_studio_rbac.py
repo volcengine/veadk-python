@@ -5372,11 +5372,18 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
 
 
 @pytest.mark.parametrize(
-    ("session_storage", "min_instance", "max_instance", "expects_update"),
+    (
+        "session_storage",
+        "min_instance",
+        "max_instance",
+        "expects_update",
+        "quick_mode",
+    ),
     [
-        ("in-memory", 1, 1, True),
-        ("persistent", 1, 5, False),
-        ("persistent", 2, 4, True),
+        ("in-memory", 1, 1, True, False),
+        ("persistent", 1, 5, False, False),
+        ("persistent", 2, 4, True, False),
+        ("persistent", 1, 5, False, True),
     ],
 )
 def test_new_deployment_only_updates_non_default_instance_range(
@@ -5386,6 +5393,7 @@ def test_new_deployment_only_updates_non_default_instance_range(
     min_instance: int,
     max_instance: int,
     expects_update: bool,
+    quick_mode: bool,
 ) -> None:
     from agentkit.sdk.runtime.client import AgentkitRuntimeClient
 
@@ -5393,6 +5401,7 @@ def test_new_deployment_only_updates_non_default_instance_range(
     update_requests: list[Any] = []
     create_requests: list[Any] = []
     captured_config: dict[str, Any] = {}
+    full_access_calls: list[dict[str, Any]] = []
 
     def create_runtime(_self: Any, request: Any) -> SimpleNamespace:
         create_requests.append(request)
@@ -5403,7 +5412,10 @@ def test_new_deployment_only_updates_non_default_instance_range(
         return SimpleNamespace(runtime_id=runtime_id)
 
     def get_runtime(_self: Any, _request: Any) -> SimpleNamespace:
-        return SimpleNamespace(current_version_number=2)
+        return SimpleNamespace(
+            current_version_number=2,
+            role_name="AgentKit_Runtime_Default_ServiceRole_test",
+        )
 
     def launch(*, config_file: str, **_kwargs: Any) -> SimpleNamespace:
         captured_config.update(yaml.safe_load(Path(config_file).read_text()))
@@ -5427,6 +5439,13 @@ def test_new_deployment_only_updates_non_default_instance_range(
     monkeypatch.setattr(AgentkitRuntimeClient, "update_runtime", update_runtime)
     monkeypatch.setattr(AgentkitRuntimeClient, "get_runtime", get_runtime)
     monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
+    monkeypatch.setattr(
+        "veadk.cli.agentkit_runtime_iam.ensure_quick_runtime_full_access",
+        lambda role_name, **kwargs: full_access_calls.append(
+            {"role_name": role_name, **kwargs}
+        )
+        or True,
+    )
     app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
 
     with TestClient(app) as client:
@@ -5441,6 +5460,7 @@ def test_new_deployment_only_updates_non_default_instance_range(
                 "minInstance": min_instance,
                 "maxInstance": max_instance,
                 "createEvaluationSets": False,
+                "draft": {"dynamicAgentDelegation": quick_mode},
                 "files": [{"path": "app.py", "content": "app = object()\n"}],
                 "config": {"region": "cn-beijing", "projectName": "default"},
             },
@@ -5482,6 +5502,21 @@ def test_new_deployment_only_updates_non_default_instance_range(
     assert bool(update_requests) is expects_update
     assert all(request.apmplus_enable is True for request in update_requests)
     assert any(frame.get("phase") == "update" for frame in frames) is expects_update
+    assert bool(full_access_calls) is quick_mode
+    if quick_mode:
+        assert full_access_calls == [
+            {
+                "role_name": "AgentKit_Runtime_Default_ServiceRole_test",
+                "access_key": "test-ak",
+                "secret_key": "test-sk",
+                "session_token": None,
+                "provider": "volcengine",
+            }
+        ]
+        assert any(
+            frame.get("message") == "快速模式 Runtime 已具备 AgentKit 资源访问权限"
+            for frame in frames
+        )
     if expects_update:
         request = update_requests[0]
         assert request.runtime_id == runtime_id

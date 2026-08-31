@@ -5507,6 +5507,14 @@ def _run_frontend_server(
             )
         requested_runtime_name = (data.get("runtimeName") or agent_name).strip()
         files = data.get("files", [])
+        quick_mode_requested = (
+            isinstance(requested_draft, Mapping)
+            and requested_draft.get("dynamicAgentDelegation") is True
+        ) or any(
+            isinstance(item, Mapping)
+            and str(item.get("path") or "").endswith("/quick_mode_compat.py")
+            for item in files
+        )
         migration_task_id = str(data.get("migrationTaskId") or "").strip()
         source = data.get("source") or (
             {"kind": "migration", "migrationId": migration_task_id}
@@ -7663,6 +7671,41 @@ def _run_frontend_server(
                             100,
                         )
                     if result is not None and getattr(result, "success", False):
+                        if quick_mode_requested:
+                            created_runtime_id = str(
+                                task_state.get("runtime_id") or runtime_id
+                            )
+                            if not created_runtime_id:
+                                raise RuntimeError(
+                                    "快速模式 Runtime 创建成功，但未返回 Runtime ID"
+                                )
+                            runtime_detail = _get_runtime(created_runtime_id, region)
+                            runtime_role_name = str(
+                                getattr(runtime_detail, "role_name", "") or ""
+                            ).strip()
+                            from veadk.cli.agentkit_runtime_iam import (
+                                ensure_quick_runtime_full_access,
+                            )
+
+                            access_key, secret_key, session_token = (
+                                _resolve_ve_credentials()
+                            )
+                            if not ensure_quick_runtime_full_access(
+                                runtime_role_name,
+                                access_key=access_key,
+                                secret_key=secret_key,
+                                session_token=session_token,
+                                provider=provider,
+                            ):
+                                raise RuntimeError(
+                                    "快速模式 Runtime 使用了自定义运行角色；"
+                                    "请为该角色授予 AgentKitFullAccess。"
+                                )
+                            _emit(
+                                "success",
+                                "快速模式 Runtime 已具备 AgentKit 资源访问权限",
+                                100,
+                            )
                         _verify_sdk_sidecar_release(result)
                         if existing_runtime is not None and provider != "byteplus":
                             try:
