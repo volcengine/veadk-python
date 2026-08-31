@@ -131,6 +131,13 @@ test("nested resource collections do not clip the shared card hover ring", () =>
   );
 });
 
+test("stacked resource toolbars align their action row to the content edge", () => {
+  assert.match(
+    resourceStyles,
+    /@media \(min-width: 721px\) and \(max-width: 1180px\) \{[\s\S]*?\.resource-toolbar__actions\s*\{[\s\S]*?width: 100%;[\s\S]*?justify-content: flex-start;[\s\S]*?margin-left: 0;/,
+  );
+});
+
 test("shared reveal actions expose domain-specific icons without forking card markup", () => {
   assert.match(resourceSource, /icon\?: "arrow" \| "play" \| "plus"/);
   assert.match(resourceSource, /icon === "play"[\s\S]*?<PlaySm/);
