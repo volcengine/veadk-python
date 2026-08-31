@@ -13,10 +13,20 @@ export interface RuntimeLogTarget {
   requestId?: string;
 }
 
+export interface RuntimeLogErrorEvent {
+  type: "error";
+  message: string;
+  detail?: string;
+  statusCode?: string;
+  errorCode?: string;
+  requestId?: string;
+  responseBody?: string;
+}
+
 export type RuntimeLogEvent =
   | { type: "context"; instanceName: string; consoleUrl: string }
   | { type: "logs"; text: string; updatedAt: number }
-  | { type: "error"; message: string; detail?: string }
+  | RuntimeLogErrorEvent
   | { type: "done" };
 
 export type RuntimeLogLevel = "error" | "warning" | "info" | "debug" | "default";
@@ -74,19 +84,61 @@ function isRuntimeLogEvent(value: unknown): value is RuntimeLogEvent {
   }
   if (event.type === "error") {
     return typeof event.message === "string" &&
-      (event.detail === undefined || typeof event.detail === "string");
+      (event.detail === undefined || typeof event.detail === "string") &&
+      (event.statusCode === undefined || typeof event.statusCode === "string") &&
+      (event.errorCode === undefined || typeof event.errorCode === "string") &&
+      (event.requestId === undefined || typeof event.requestId === "string") &&
+      (event.responseBody === undefined || typeof event.responseBody === "string");
   }
   return false;
 }
 
-async function responseError(response: Response): Promise<string> {
-  try {
-    const payload = (await response.json()) as { detail?: unknown };
-    if (typeof payload.detail === "string" && payload.detail) return payload.detail;
-  } catch {
-    // The status below remains actionable when an intermediary returns HTML.
+export function runtimeLogErrorText(error: Omit<RuntimeLogErrorEvent, "type">): string {
+  const lines = [error.message];
+  const metadata = [
+    error.statusCode ? `HTTP 状态码：${error.statusCode}` : "",
+    error.errorCode ? `错误码：${error.errorCode}` : "",
+    error.requestId ? `Request ID：${error.requestId}` : "",
+  ].filter(Boolean);
+  if (metadata.length > 0) lines.push(metadata.join("\n"));
+  if (error.detail && error.detail !== error.message) lines.push(error.detail);
+  if (
+    error.responseBody &&
+    !error.detail?.includes(error.responseBody)
+  ) {
+    lines.push(`云端响应正文：\n${error.responseBody}`);
   }
-  return `HTTP ${response.status}`;
+  return lines.join("\n\n");
+}
+
+async function responseError(response: Response): Promise<string> {
+  const status = `HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ""}`;
+  const body = await response.text();
+  if (!body) return status;
+  try {
+    const payload = JSON.parse(body) as { detail?: unknown };
+    if (typeof payload.detail === "string" && payload.detail) {
+      return `${status}\n\n${payload.detail}`;
+    }
+    if (payload.detail && typeof payload.detail === "object") {
+      const detail = payload.detail as Partial<RuntimeLogErrorEvent>;
+      if (typeof detail.message === "string") {
+        return runtimeLogErrorText({
+          message: detail.message,
+          ...(typeof detail.detail === "string" ? { detail: detail.detail } : {}),
+          ...(typeof detail.statusCode === "string" ? { statusCode: detail.statusCode } : {}),
+          ...(typeof detail.errorCode === "string" ? { errorCode: detail.errorCode } : {}),
+          ...(typeof detail.requestId === "string" ? { requestId: detail.requestId } : {}),
+          ...(typeof detail.responseBody === "string"
+            ? { responseBody: detail.responseBody }
+            : {}),
+        });
+      }
+    }
+    return `${status}\n\n${JSON.stringify(payload, null, 2)}`;
+  } catch {
+    return `${status}\n\n${body}`;
+  }
 }
 
 export async function* streamRuntimeLogs({

@@ -1,8 +1,11 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { CopyButton } from "@openai/apps-sdk-ui/components/Button";
+import { Check, Copy } from "@openai/apps-sdk-ui/components/Icon";
 import type { CloudProvider } from "../adk/cloudProvider";
 import {
   runtimeConsoleUrl,
+  runtimeLogErrorText,
   runtimeLogLevel,
   streamRuntimeLogs,
   type RuntimeLogTarget,
@@ -30,6 +33,41 @@ function ExternalLinkIcon() {
       <path d="M14 5h5v5M19 5l-8 8" />
       <path d="M18 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
     </svg>
+  );
+}
+
+function RuntimeLogErrorDetails({
+  error,
+  onRetry,
+}: {
+  error: string;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="runtime-logs-error-detail" role="alert">
+      <div className="runtime-logs-error-head">
+        <strong>云端日志错误</strong>
+        <div className="runtime-logs-error-actions">
+          <CopyButton
+            className="runtime-logs-error-copy"
+            copyValue={error}
+            color="secondary"
+            variant="ghost"
+            size="sm"
+            uniform
+            pill={false}
+            title="复制完整错误信息"
+            aria-label="复制完整错误信息"
+          >
+            {({ copied }) => copied ? <Check /> : <Copy />}
+          </CopyButton>
+          <button className="runtime-logs-error-retry" type="button" onClick={onRetry}>
+            重试
+          </button>
+        </div>
+      </div>
+      <pre>{error}</pre>
+    </div>
   );
 }
 
@@ -141,7 +179,7 @@ export function RuntimeLogsDialog({
             setError("");
           } else if (event.type === "error") {
             setStatus("retrying");
-            setError(event.detail || event.message);
+            setError(runtimeLogErrorText(event));
           }
         }
       } catch (cause) {
@@ -269,38 +307,42 @@ export function RuntimeLogsDialog({
               <span>正在通过 Studio BFF 建立安全日志流。</span>
             </div>
           ) : error && !logs ? (
-            <div className="runtime-logs-empty is-error" role="alert">
-              <strong>实例日志读取失败</strong>
-              <span>{error}</span>
-              <button type="button" onClick={() => setRetryKey((value) => value + 1)}>
-                重试
-              </button>
-            </div>
+            <RuntimeLogErrorDetails
+              error={error}
+              onRetry={() => setRetryKey((value) => value + 1)}
+            />
           ) : lines.length === 0 || (lines.length === 1 && lines[0].text === "") ? (
             <div className="runtime-logs-empty">
               <strong>暂无日志</strong>
               <span>已连接实例，等待新的日志输出。</span>
             </div>
           ) : (
-            <div className="runtime-logs-lines">
-              {lines.map((line, index) => (
-                <div
-                  key={line.id}
-                  className={`runtime-log-line is-${runtimeLogLevel(line.text)}`}
-                >
-                  <span className="runtime-log-index" aria-hidden="true">
-                    {String(index + 1).padStart(3, "0")}
-                  </span>
-                  <span className="runtime-log-text">{line.text || " "}</span>
-                </div>
-              ))}
-            </div>
+            <>
+              {error ? (
+                <RuntimeLogErrorDetails
+                  error={error}
+                  onRetry={() => setRetryKey((value) => value + 1)}
+                />
+              ) : null}
+              <div className="runtime-logs-lines">
+                {lines.map((line, index) => (
+                  <div
+                    key={line.id}
+                    className={`runtime-log-line is-${runtimeLogLevel(line.text)}`}
+                  >
+                    <span className="runtime-log-index" aria-hidden="true">
+                      {String(index + 1).padStart(3, "0")}
+                    </span>
+                    <span className="runtime-log-text">{line.text || " "}</span>
+                  </div>
+                ))}
+              </div>
+            </>
           )}
         </div>
 
         <footer className="runtime-logs-foot">
           <span>日志自动刷新，仅保留最近 {MAX_RENDERED_LINES} 行</span>
-          {error && logs ? <span className="runtime-logs-inline-error">{error}</span> : null}
         </footer>
       </section>
     </div>,

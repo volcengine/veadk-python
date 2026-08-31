@@ -33,6 +33,7 @@ const moduleUrl = `data:text/javascript;base64,${Buffer.from(
 const {
   runtimeContextFromResponse,
   runtimeConsoleUrl,
+  runtimeLogErrorText,
   runtimeLogLevel,
   streamRuntimeLogs,
 } = await import(moduleUrl);
@@ -126,4 +127,79 @@ test("lets the BFF resolve an instance from the current session", async () => {
 
   assert.match(requested, /session_id=session-1/);
   assert.doesNotMatch(requested, /instance_name=/);
+});
+
+test("formats the complete cloud error for display and copying", () => {
+  const text = runtimeLogErrorText({
+    message: "日志连接暂时中断，正在重试。",
+    statusCode: "403",
+    errorCode: "AccessDenied",
+    requestId: "request-cloud-123",
+    detail: "GetRuntimeInstanceLogs failed",
+    responseBody: '{"message":"missing permission","field":"logs"}',
+  });
+
+  assert.match(text, /HTTP 状态码：403/);
+  assert.match(text, /错误码：AccessDenied/);
+  assert.match(text, /Request ID：request-cloud-123/);
+  assert.match(text, /GetRuntimeInstanceLogs failed/);
+  assert.match(text, /"field":"logs"/);
+});
+
+test("preserves a non-JSON upstream error response", async () => {
+  globalThis.fetch = async () => new Response(
+    "gateway returned the complete diagnostic body",
+    { status: 502, statusText: "Bad Gateway" },
+  );
+
+  await assert.rejects(
+    async () => {
+      for await (const _event of streamRuntimeLogs({
+        runtimeId: "runtime-1",
+        region: "cn-beijing",
+        instanceName: "instance-1",
+        follow: false,
+      })) {
+        // Consume the stream so the response error is raised.
+      }
+    },
+    /HTTP 502 Bad Gateway[\s\S]*gateway returned the complete diagnostic body/,
+  );
+});
+
+test("renders every structured cloud error field from the BFF response", async () => {
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    detail: {
+      message: "读取实例日志失败。",
+      detail: "GetRuntimeInstanceLogs failed",
+      statusCode: "403",
+      errorCode: "AccessDenied",
+      requestId: "request-cloud-123",
+      responseBody: '{"message":"missing permission"}',
+    },
+  }), {
+    status: 502,
+    statusText: "Bad Gateway",
+    headers: { "Content-Type": "application/json" },
+  });
+
+  await assert.rejects(
+    async () => {
+      for await (const _event of streamRuntimeLogs({
+        runtimeId: "runtime-1",
+        region: "cn-beijing",
+        instanceName: "instance-1",
+        follow: false,
+      })) {
+        // Consume the stream so the response error is raised.
+      }
+    },
+    (error) => {
+      assert.match(error.message, /HTTP 状态码：403/);
+      assert.match(error.message, /错误码：AccessDenied/);
+      assert.match(error.message, /Request ID：request-cloud-123/);
+      assert.match(error.message, /missing permission/);
+      return true;
+    },
+  );
 });

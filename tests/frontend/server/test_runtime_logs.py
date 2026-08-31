@@ -309,3 +309,125 @@ def test_runtime_log_route_preserves_runtime_authorization_failure() -> None:
 
     assert response.status_code == 404
     assert response.json() == {"detail": "runtime_access_denied"}
+
+
+def test_runtime_log_route_preserves_complete_cloud_error() -> None:
+    class _CloudError(RuntimeError):
+        status_code = 403
+        error_code = "AccessDenied"
+        request_id = "request-cloud-123"
+        body = {
+            "ResponseMetadata": {
+                "RequestId": request_id,
+                "Error": {
+                    "Code": error_code,
+                    "Message": "missing GetRuntimeInstanceLogs permission",
+                },
+            },
+            "diagnostic": "cloud response body",
+            "secret_access_key": "secret-value",
+        }
+
+    class _Client:
+        def list_runtime_instances(self, request: Any) -> SimpleNamespace:
+            del request
+            raise _CloudError("cloud request failed")
+
+    app = FastAPI()
+    mount_runtime_log_routes(
+        app,
+        service=RuntimeLogService(
+            provider="volcengine",
+            resolve_credentials=lambda: ("ak", "secret-value", ""),
+            create_client=lambda **kwargs: _Client(),
+        ),
+        authorize_runtime=lambda request, runtime_id, region: SimpleNamespace(
+            project_name="default"
+        ),
+        normalize_region=lambda value: value or "cn-beijing",
+        safe_error=lambda error: str(error).replace("secret-value", "***"),
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/runtime-logs/runtime-1/stream",
+            params={"instance_name": "instance-abc", "follow": "false"},
+        )
+
+    assert response.status_code == 502
+    detail = response.json()["detail"]
+    assert detail == {
+        "message": "读取实例日志失败。",
+        "detail": "cloud request failed",
+        "statusCode": "403",
+        "errorCode": "AccessDenied",
+        "requestId": "request-cloud-123",
+        "responseBody": (
+            '{\n  "ResponseMetadata": {\n    "RequestId": '
+            '"request-cloud-123",\n    "Error": {\n      "Code": '
+            '"AccessDenied",\n      "Message": '
+            '"missing GetRuntimeInstanceLogs permission"\n    }\n  },'
+            '\n  "diagnostic": "cloud response body",\n  '
+            '"secret_access_key": "***"\n}'
+        ),
+    }
+
+
+def test_runtime_log_stream_emits_complete_cloud_error_before_retry() -> None:
+    class _CloudError(RuntimeError):
+        status = 429
+        error_code = "RequestLimitExceeded"
+        request_id = "request-stream-456"
+        body = "upstream log service is throttled"
+
+    class _Client:
+        def list_runtime_instances(self, request: Any) -> SimpleNamespace:
+            return SimpleNamespace(
+                instance_items=[
+                    SimpleNamespace(
+                        instance_name="instance-abc",
+                        runtime_id=request.runtime_id,
+                    )
+                ]
+            )
+
+        def get_runtime_instance_logs(self, request: Any) -> SimpleNamespace:
+            del request
+            raise _CloudError("GetRuntimeInstanceLogs failed")
+
+    app = FastAPI()
+    mount_runtime_log_routes(
+        app,
+        service=RuntimeLogService(
+            provider="byteplus",
+            resolve_credentials=lambda: ("ak", "sk", ""),
+            create_client=lambda **kwargs: _Client(),
+        ),
+        authorize_runtime=lambda request, runtime_id, region: SimpleNamespace(
+            project_name="default"
+        ),
+        normalize_region=lambda value: value or "ap-southeast-1",
+        safe_error=lambda error: str(error),
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/runtime-logs/runtime-1/stream",
+            params={"instance_name": "instance-abc", "follow": "false"},
+        )
+
+    events = [
+        json.loads(line.removeprefix("data: "))
+        for line in response.text.splitlines()
+        if line.startswith("data: ")
+    ]
+    assert events[1] == {
+        "type": "error",
+        "message": "日志连接暂时中断，正在重试。",
+        "detail": "GetRuntimeInstanceLogs failed",
+        "statusCode": "429",
+        "errorCode": "RequestLimitExceeded",
+        "requestId": "request-stream-456",
+        "responseBody": "upstream log service is throttled",
+    }
+    assert events[2] == {"type": "done"}

@@ -310,6 +310,90 @@ def _sse(payload: Mapping[str, Any]) -> bytes:
     ).encode("utf-8")
 
 
+def _error_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace").strip()
+    if isinstance(value, (Mapping, list)):
+        return json.dumps(value, ensure_ascii=False, indent=2, default=str).strip()
+    return str(value).strip()
+
+
+def _cloud_error_payload(
+    error: BaseException,
+    *,
+    message: str,
+    safe_error: Callable[[BaseException], str],
+) -> dict[str, Any]:
+    """Preserve the cloud error response while redacting configured secrets."""
+
+    payload: dict[str, Any] = {
+        "message": message,
+        "detail": safe_error(error),
+    }
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        response = getattr(current, "response", None)
+
+        for output_key, names in (
+            ("statusCode", ("status_code", "status", "http_status")),
+            ("errorCode", ("error_code", "code")),
+            ("requestId", ("request_id", "requestId", "requestid")),
+        ):
+            if output_key in payload:
+                continue
+            for owner in (current, response):
+                if owner is None:
+                    continue
+                for name in names:
+                    value = getattr(owner, name, None)
+                    text = _error_text(getattr(value, "value", value))
+                    if text:
+                        payload[output_key] = text
+                        break
+                if output_key in payload:
+                    break
+
+        for owner in (current, response):
+            headers = getattr(owner, "headers", None)
+            if not isinstance(headers, Mapping) or "requestId" in payload:
+                continue
+            for name in ("x-request-id", "x-tt-logid", "x-response-id"):
+                value = next(
+                    (
+                        header_value
+                        for header_name, header_value in headers.items()
+                        if str(header_name).lower() == name
+                    ),
+                    None,
+                )
+                if value:
+                    payload["requestId"] = str(value).strip()
+                    break
+
+        if "responseBody" not in payload:
+            for owner in (current, response):
+                if owner is None:
+                    continue
+                for name in ("body", "data", "text", "content"):
+                    value = getattr(owner, name, None)
+                    if callable(value):
+                        continue
+                    body = _error_text(value)
+                    if body:
+                        payload["responseBody"] = safe_error(Exception(body))
+                        break
+                if "responseBody" in payload:
+                    break
+
+        current = current.__cause__ or current.__context__
+
+    return payload
+
+
 def mount_runtime_log_routes(
     app: FastAPI,
     *,
@@ -359,7 +443,11 @@ def mount_runtime_log_routes(
         except Exception as error:
             raise HTTPException(
                 status_code=502,
-                detail=safe_error(error),
+                detail=_cloud_error_payload(
+                    error,
+                    message="读取实例日志失败。",
+                    safe_error=safe_error,
+                ),
             ) from error
 
         project_name = str(getattr(runtime, "project_name", "") or "default")
@@ -395,8 +483,11 @@ def mount_runtime_log_routes(
                     yield _sse(
                         {
                             "type": "error",
-                            "message": "日志连接暂时中断，正在重试。",
-                            "detail": safe_error(error),
+                            **_cloud_error_payload(
+                                error,
+                                message="日志连接暂时中断，正在重试。",
+                                safe_error=safe_error,
+                            ),
                         }
                     )
                 else:
