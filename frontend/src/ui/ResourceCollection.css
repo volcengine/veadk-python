@@ -908,6 +908,12 @@
     gap: 10px;
   }
 
+  .resource-toolbar__actions {
+    width: 100%;
+    justify-content: flex-start;
+    margin-left: 0;
+  }
+
   .resource-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
