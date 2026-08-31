@@ -27,6 +27,11 @@ from uuid import uuid4
 from frontend.server.intelligent_development import DeliveryReference, release_path
 from frontend.server.intelligent_development_task import IntentDecision
 from frontend.server.sandbox_remote import SandboxRemoteTransport
+from frontend.server.source_project_limits import (
+    SOURCE_PROJECT_MAX_BYTES,
+    SOURCE_PROJECT_MAX_FILES,
+    SOURCE_PROJECT_MAX_REPORT_BYTES,
+)
 from veadk.cli.frontend_sandbox import SandboxSessionUnavailableError
 
 from .models import (
@@ -43,8 +48,8 @@ from .repository import (
     TosIntelligentDevelopmentProjectRepository,
 )
 
-_MAX_ARTIFACT_BYTES = 20 * 1024 * 1024
-_MAX_REPORT_BYTES = 2 * 1024 * 1024
+_MAX_ARTIFACT_BYTES = SOURCE_PROJECT_MAX_BYTES
+_MAX_REPORT_BYTES = SOURCE_PROJECT_MAX_REPORT_BYTES
 logger = logging.getLogger(__name__)
 
 
@@ -208,8 +213,8 @@ class IntelligentDevelopmentProjectService:
             " with zipfile.ZipFile(archive) as package:\n"
             "  files=[item for item in package.infolist() if not item.is_dir()]\n"
             "  if len(files)!=expected_count: raise ValueError('file count mismatch')\n"
-            "  if len(files)>20000: raise ValueError('too many files')\n"
-            "  if sum(item.file_size for item in files)>512*1024*1024: raise ValueError('archive too large')\n"
+            f"  if len(files)>{SOURCE_PROJECT_MAX_FILES}: raise ValueError('too many files')\n"
+            f"  if sum(item.file_size for item in files)>{SOURCE_PROJECT_MAX_BYTES}: raise ValueError('archive too large')\n"
             "  for item in files:\n"
             "   path=PurePosixPath(item.filename)\n"
             "   if path.is_absolute() or not path.parts or '..' in path.parts: raise ValueError('unsafe path')\n"

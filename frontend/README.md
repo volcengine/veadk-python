@@ -238,7 +238,7 @@ server that `veadk frontend` launches — no separate backend.
   root `app.py` as the compatible default. Studio removes a single wrapping
   directory, rejects unsafe paths, and shows upload, image build, Runtime
   creation, and service publishing as separate deployment stages.
-- **Existing-project migration**: upload one local ZIP of at most 50 MiB from
+- **Existing-project migration**: upload one local ZIP of at most 20 MiB from
   the add-Agent menu. Studio creates one user-owned Dev Sandbox Session with a
   one-hour TTL, then asks the preinstalled Codex to perform read-only framework,
   entry-point, and migration-boundary analysis. Migration starts only after the

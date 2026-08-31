@@ -21,6 +21,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic import ValidationError
 
 from frontend.server import intelligent_development_source as source_module
 from frontend.server.intelligent_development_projects import (
@@ -34,6 +35,9 @@ from frontend.server.intelligent_development_projects import (
     TosIntelligentDevelopmentProjectRepository,
 )
 from frontend.server.intelligent_development_projects import service as service_module
+from frontend.server.intelligent_development_projects import (
+    repository as repository_module,
+)
 from frontend.server.intelligent_development_source import TrustedDevelopmentArtifact
 from veadk.cli.frontend_sandbox import SandboxSessionUnavailableError
 
@@ -120,6 +124,31 @@ def _version(
         gateSummary=["local-checks"],
         validatedAt=created_at.isoformat(),
     )
+
+
+def test_version_metadata_enforces_shared_project_limits() -> None:
+    now = datetime(2026, 8, 26, 8, tzinfo=timezone.utc)
+    artifact = b"source archive"
+    report = b'{"status":"passed"}'
+    payload = _version(
+        version_id="b" * 32,
+        artifact=artifact,
+        report=report,
+        created_at=now,
+    ).model_dump(by_alias=True)
+
+    IntelligentDevelopmentVersion.model_validate(
+        {**payload, "artifactSize": 20 * 1024 * 1024, "fileCount": 2_000}
+    )
+    for updates in (
+        {"artifactSize": 20 * 1024 * 1024 + 1},
+        {"fileCount": 2_001},
+    ):
+        with pytest.raises(ValidationError):
+            IntelligentDevelopmentVersion.model_validate({**payload, **updates})
+
+    assert repository_module._MAX_ARTIFACT_BYTES == 20 * 1024 * 1024
+    assert repository_module._MAX_REPORT_BYTES == 2 * 1024 * 1024
 
 
 @pytest.mark.asyncio
@@ -525,6 +554,8 @@ async def test_service_restores_the_bound_version_atomically(
     command = remote.exec_text.await_args.args[0]
     assert "os.replace(staging,root)" in command
     assert "workspace/session-1" in command
+    assert "len(files)>2000" in command
+    assert "sum(item.file_size for item in files)>20971520" in command
     assert remote.exec_text.await_args.kwargs["timeout"] == 60
 
 

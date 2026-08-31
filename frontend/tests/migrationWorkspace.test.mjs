@@ -129,7 +129,11 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
 
   assert.doesNotMatch(source, /from "lucide-react"/);
   assert.match(source, /from "\.\/MigrationIcons"/);
-  assert.match(source, /const MAX_SOURCE_BYTES = 50 \* 1024 \* 1024/);
+  assert.match(source, /const MAX_SOURCE_BYTES = 20 \* 1024 \* 1024/);
+  assert.match(
+    source,
+    /capability\?\.maxUploadBytes \?\? MAX_SOURCE_BYTES/,
+  );
   assert.match(source, /accept="\.zip,application\/zip"/);
   assert.match(source, /\.toLowerCase\(\)/);
   assert.match(

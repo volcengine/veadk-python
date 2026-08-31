@@ -201,6 +201,25 @@ def test_delivery_result_accepts_a_consistent_failed_verification() -> None:
     assert result["verification"]["status"] == "failed"
 
 
+def test_source_status_enforces_shared_project_limits() -> None:
+    at_limit = source_payload()
+    at_limit.update(
+        size=20 * 1024 * 1024,
+        file_count=2_000,
+        expanded_bytes=20 * 1024 * 1024,
+    )
+    contracts.validate_source_status(at_limit)
+
+    for field in ("size", "expanded_bytes"):
+        over_limit = {**at_limit, field: 20 * 1024 * 1024 + 1}
+        invalid(contracts.validate_source_status, over_limit, "invalid integer")
+    invalid(
+        contracts.validate_source_status,
+        {**at_limit, "file_count": 2_001},
+        "invalid integer",
+    )
+
+
 def test_contract_primitives_reject_unsafe_values() -> None:
     invalid(
         lambda value: contracts._text(value, allow_empty=False),
@@ -610,15 +629,8 @@ def test_delivery_result_contract_rejects_invalid_descriptors() -> None:
     )
 
     oversized = delivery_result_payload()
-    oversized["files"] = [
-        {
-            "path": f"file-{index}.bin",
-            "size": 128 * 1024 * 1024,
-            "sha256": SHA256,
-            "mode": "0644",
-        }
-        for index in range(5)
-    ]
+    oversized["files"][0]["size"] = 20 * 1024 * 1024
+    oversized["files"][1]["size"] = 1
     invalid(
         lambda value: contracts.validate_delivery_result(
             value,
@@ -627,6 +639,26 @@ def test_delivery_result_contract_rejects_invalid_descriptors() -> None:
         ),
         oversized,
         "size limit",
+    )
+
+    too_many_files = delivery_result_payload()
+    too_many_files["files"] = [
+        {
+            "path": f"file-{index}.bin",
+            "size": 0,
+            "sha256": SHA256,
+            "mode": "0644",
+        }
+        for index in range(2_001)
+    ]
+    invalid(
+        lambda value: contracts.validate_delivery_result(
+            value,
+            expected_run_id=TASK_ID,
+            expected_status="succeeded",
+        ),
+        too_many_files,
+        "delivery files",
     )
 
     empty_command = delivery_result_payload()

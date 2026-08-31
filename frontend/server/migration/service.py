@@ -38,6 +38,11 @@ from frontend.server.deployment_source import (
     DeploymentSourceError,
     extract_migration_source,
 )
+from frontend.server.source_project_limits import (
+    SOURCE_PROJECT_MAX_BYTES,
+    SOURCE_PROJECT_MAX_FILES,
+    SOURCE_PROJECT_MAX_REPORT_BYTES,
+)
 
 from .contracts import (
     MigrationContractError,
@@ -70,16 +75,16 @@ from .models import (
 
 MIGRATION_ROOT = "/home/gem/.studio/migration/v1"
 MIGRATION_SESSION_TTL_SECONDS = 60 * 60
-MIGRATION_UPLOAD_MAX_BYTES = 50 * 1024 * 1024
+MIGRATION_UPLOAD_MAX_BYTES = SOURCE_PROJECT_MAX_BYTES
 MIGRATION_CLI_MIN_VERSION = "0.52.1"
 MIGRATION_UNSUPPORTED_MODEL_IDS = frozenset({"deepseek-v4-pro-260425"})
-_MAX_EXPANDED_BYTES = 1024 * 1024 * 1024
-_MAX_ARCHIVE_FILES = 20_000
+_MAX_EXPANDED_BYTES = SOURCE_PROJECT_MAX_BYTES
+_MAX_ARCHIVE_FILES = SOURCE_PROJECT_MAX_FILES
 _MAX_ARCHIVE_PATH_BYTES = 4 * 1024
 _MAX_ARCHIVE_DEPTH = 64
-_MAX_JSON_BYTES = 16 * 1024 * 1024
+_MAX_JSON_BYTES = SOURCE_PROJECT_MAX_REPORT_BYTES
 _MAX_PROVENANCE_BYTES = 64 * 1024
-_MAX_ARTIFACT_BYTES = 512 * 1024 * 1024
+_MAX_ARTIFACT_BYTES = SOURCE_PROJECT_MAX_BYTES
 _MAX_PREVIEW_BYTES = 2 * 1024 * 1024
 _FILE_OPERATION_TIMEOUT_SECONDS = 300
 _TASK_ID_RE = re.compile(r"^migration-v1-[0-9a-f]{32}$")
@@ -797,7 +802,7 @@ def validate_source_archive(content: bytes) -> SourceArchiveSummary:
     if len(content) > MIGRATION_UPLOAD_MAX_BYTES:
         raise MigrationError(
             "MIGRATION_SOURCE_TOO_LARGE",
-            "项目 ZIP 不能超过 50 MiB。",
+            "项目 ZIP 不能超过 20 MiB。",
             status_code=413,
         )
     seen: set[str] = set()
@@ -857,7 +862,7 @@ def validate_source_archive(content: bytes) -> SourceArchiveSummary:
                 if expanded_bytes > _MAX_EXPANDED_BYTES:
                     raise MigrationError(
                         "MIGRATION_SOURCE_EXPANDED_TOO_LARGE",
-                        "项目 ZIP 解压后不能超过 1 GiB。",
+                        "项目 ZIP 解压后不能超过 20 MiB。",
                         status_code=413,
                     )
     except zipfile.BadZipFile as error:

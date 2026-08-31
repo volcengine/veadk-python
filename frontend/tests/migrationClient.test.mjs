@@ -189,7 +189,7 @@ test("accepts the migration default model while preserving legacy capabilities",
   const base = {
     enabled: true,
     reason: "",
-    maxUploadBytes: 50 * 1024 * 1024,
+    maxUploadBytes: 20 * 1024 * 1024,
     sessionTtlSeconds: 3600,
     frameworks: ["langchain", "dify", "any"],
   };

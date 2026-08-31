@@ -459,6 +459,39 @@ def test_migration_source_enforces_archive_and_expansion_limits(
         )
 
 
+def test_migration_manifest_enforces_shared_project_limits() -> None:
+    digest = hashlib.sha256(b"").hexdigest()
+    with pytest.raises(DeploymentSourceError, match="解压后超过 20 MiB"):
+        deployment_source._manifest_files(
+            {
+                "files": [
+                    {
+                        "path": "app.py",
+                        "size": 20 * 1024 * 1024,
+                        "sha256": digest,
+                    },
+                    {"path": "report.md", "size": 1, "sha256": digest},
+                ],
+                "startup": {"module": "app.py"},
+            }
+        )
+
+    with pytest.raises(DeploymentSourceError, match="文件清单格式无效"):
+        deployment_source._manifest_files(
+            {
+                "files": [
+                    {
+                        "path": f"file-{index}.txt",
+                        "size": 0,
+                        "sha256": digest,
+                    }
+                    for index in range(2_001)
+                ],
+                "startup": {"module": "file-0.txt"},
+            }
+        )
+
+
 def test_migration_source_rejects_unsafe_and_corrupt_entries(tmp_path: Path) -> None:
     content = b"app = object()\n"
     digest = hashlib.sha256(content).hexdigest()
