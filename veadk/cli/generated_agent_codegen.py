@@ -1257,9 +1257,11 @@ from __future__ import annotations
 import asyncio
 import copy
 import hashlib
+from pathlib import Path
 from typing import Any
 from weakref import WeakValueDictionary
 
+from google.adk import skills as _adk_skills
 from google.adk.tools import FunctionTool, ToolContext
 from google.genai import types
 from typing_extensions import override
@@ -1295,6 +1297,39 @@ _NATIVE_TASK_CONTEXT = hasattr(
     _orchestrator_module,
     "_with_delegated_task_context",
 )
+
+
+def _install_catalog_skill_name_compat() -> None:
+    """Keep Skill Hub catalog names callable on the pinned runtime package."""
+    marker = "_veadk_catalog_skill_name_compat"
+    if getattr(_orchestrator_module, marker, False):
+        return
+
+    path_names: dict[str, str] = {{}}
+    original_materialize = _orchestrator_module.materialize_remote_skill
+    original_load = _adk_skills.load_skill_from_dir
+
+    def materialize_with_catalog_name(skill: Any, *args: Any, **kwargs: Any):
+        path = original_materialize(skill, *args, **kwargs)
+        catalog_name = str(getattr(skill, "name", "") or "").strip()
+        if catalog_name:
+            path_names[str(Path(path).resolve())] = catalog_name
+        return path
+
+    def load_with_catalog_name(skill_dir: Any):
+        loaded = original_load(skill_dir)
+        catalog_name = path_names.get(str(Path(skill_dir).resolve()), "")
+        if not catalog_name or catalog_name == loaded.name:
+            return loaded
+        frontmatter = loaded.frontmatter.model_copy(update={{"name": catalog_name}})
+        return loaded.model_copy(update={{"frontmatter": frontmatter}})
+
+    _orchestrator_module.materialize_remote_skill = materialize_with_catalog_name
+    _adk_skills.load_skill_from_dir = load_with_catalog_name
+    setattr(_orchestrator_module, marker, True)
+
+
+_install_catalog_skill_name_compat()
 
 
 def _runtime_owner(tool_context: ToolContext | None) -> str:

@@ -152,6 +152,9 @@ def test_quick_mode_codegen_adds_dynamic_agent_toolset_and_managed_rules() -> No
     assert "request-specific entities" in compat_py
     assert "class _ReusableResourceStore" in compat_py
     assert "Call create_agents exactly once" in compat_py
+    assert "_install_catalog_skill_name_compat()" in compat_py
+    assert "materialize_with_catalog_name" in compat_py
+    assert "load_with_catalog_name" in compat_py
 
 
 def test_quick_mode_compat_backports_offline_snapshot_and_task_context(
