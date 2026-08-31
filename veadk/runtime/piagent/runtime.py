@@ -16,7 +16,9 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, AsyncGenerator
+import asyncio
+from collections.abc import AsyncGenerator
+from typing import TYPE_CHECKING
 
 from veadk.runtime.base_runtime import BaseRuntime
 from veadk.runtime.model_callbacks import (
@@ -37,6 +39,7 @@ from veadk.runtime.piagent.tool_runtime import PiToolRuntime
 from veadk.runtime.piagent.tools_bridge import (
     build_executable_tools,
     close_toolsets,
+    sync_bundle_to_tools_dict,
 )
 from veadk.runtime.piagent.translate import (
     PiEventTranslator,
@@ -51,6 +54,7 @@ if TYPE_CHECKING:
     from veadk.agent import Agent
 
 logger = get_logger(__name__)
+_QUEUE_DONE = object()
 
 
 class PiAgentRuntime(BaseRuntime):
@@ -59,15 +63,22 @@ class PiAgentRuntime(BaseRuntime):
     name = "piagent"
 
     async def run_async(
-        self, agent: "Agent", ctx: "InvocationContext"
-    ) -> AsyncGenerator["Event", None]:
+        self, agent: Agent, ctx: InvocationContext
+    ) -> AsyncGenerator[Event, None]:
         binary_path = resolve_or_install_piagent_binary()
         config = PiAgentConfig.from_agent(agent, binary_path)
         prepare_piagent_home(config)
         skill_bundle = materialize_skills_for_pi(agent)
         tool_bundle = None
+        event_queue: asyncio.Queue[object] = asyncio.Queue()
+
+        async def _emit_tool_event(event: Event) -> None:
+            await event_queue.put(event)
+
         try:
-            tool_bundle = await build_executable_tools(agent, ctx)
+            tool_bundle = await build_executable_tools(
+                agent, ctx, event_sink=_emit_tool_event
+            )
 
             runtime_call = await build_runtime_llm_request(
                 agent,
@@ -89,6 +100,12 @@ class PiAgentRuntime(BaseRuntime):
                 )
                 return
 
+            sync_bundle_to_tools_dict(
+                tool_bundle,
+                runtime_call.llm_request.tools_dict,
+                ctx,
+                event_sink=_emit_tool_event,
+            )
             prompt = build_prompt_from_llm_request(runtime_call.llm_request)
 
             logger.info(
@@ -98,6 +115,7 @@ class PiAgentRuntime(BaseRuntime):
             translator = PiEventTranslator(
                 author=agent.name,
                 invocation_id=ctx.invocation_id,
+                bridged_tool_names=set(tool_bundle.executors),
             )
             buffer_final_text = has_after_model_callbacks(agent, ctx)
             final_text_events: list[Event] = []
@@ -113,16 +131,38 @@ class PiAgentRuntime(BaseRuntime):
                     else run_config
                 )
                 async with PiAgentRpcClient(run_config) as client:
+                    pump: asyncio.Task[None] | None = None
+
+                    async def _pump_pi() -> None:
+                        try:
+                            async for pi_event in client.prompt(prompt):
+                                for event in translator.event_to_adk_events(pi_event):
+                                    await event_queue.put(event)
+                        except Exception as e:  # noqa: BLE001 - forward pump errors
+                            await event_queue.put(e)
+                        finally:
+                            await event_queue.put(_QUEUE_DONE)
+
                     try:
-                        async for pi_event in client.prompt(prompt):
-                            for event in translator.event_to_adk_events(pi_event):
-                                if buffer_final_text and is_final_model_text_event(
-                                    event, agent.name
-                                ):
-                                    final_text_events.append(event)
-                                    continue
-                                yield event
+                        pump = asyncio.create_task(_pump_pi())
+                        while True:
+                            queued = await event_queue.get()
+                            if queued is _QUEUE_DONE:
+                                break
+                            if isinstance(queued, BaseException):
+                                raise queued
+                            event = queued  # type: ignore[assignment]
+                            if buffer_final_text and is_final_model_text_event(
+                                event, agent.name
+                            ):
+                                final_text_events.append(event)
+                                continue
+                            yield event
+                        await pump
                     except Exception as e:
+                        if pump is not None and not pump.done():
+                            pump.cancel()
+                            await asyncio.gather(pump, return_exceptions=True)
                         fallback = await run_on_model_error_callbacks(
                             agent,
                             ctx,

@@ -28,6 +28,7 @@ from google.adk.models.llm_response import LlmResponse
 from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.base_toolset import BaseToolset
 from google.adk.tools.function_tool import FunctionTool
+from google.adk.tools.tool_context import ToolContext
 from google.genai import types
 
 from veadk import Agent
@@ -73,6 +74,8 @@ def _fake_ctx(*events: Event):
     return SimpleNamespace(
         invocation_id="inv-1",
         session=SimpleNamespace(events=list(events), state={}),
+        branch=None,
+        plugin_manager=None,
     )
 
 
@@ -230,6 +233,74 @@ for raw in sys.stdin:
     return path, prompt_path
 
 
+def _make_fake_pi_that_calls_bridge(tmp_path, *, tool_name: str = "get_weather"):
+    path = tmp_path / "pi"
+    path.write_text(
+        f"""#!/usr/bin/env python3
+import json
+import re
+import sys
+import urllib.request
+
+extension = sys.argv[sys.argv.index("--extension") + 1]
+source = open(extension, encoding="utf-8").read()
+bridge_url = json.loads(re.search(r'const BRIDGE_URL = (.*?);', source).group(1))
+token = json.loads(re.search(r'const TOKEN = (.*?);', source).group(1))
+
+for raw in sys.stdin:
+    command = json.loads(raw)
+    if command.get("type") == "prompt":
+        print(json.dumps({{
+            "id": command.get("id"),
+            "type": "response",
+            "command": "prompt",
+            "success": True,
+        }}), flush=True)
+        print(json.dumps({{
+            "type": "tool_execution_start",
+            "toolCallId": "call-weather",
+            "toolName": {tool_name!r},
+            "args": {{"city": "Beijing"}},
+        }}), flush=True)
+        body = json.dumps({{
+            "toolName": {tool_name!r},
+            "toolCallId": "call-weather",
+            "args": {{"city": "Beijing"}},
+        }}).encode()
+        request = urllib.request.Request(
+            bridge_url + "/call",
+            data=body,
+            headers={{
+                "Authorization": "Bearer " + token,
+                "Content-Type": "application/json",
+            }},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            payload = json.loads(response.read().decode())
+        print(json.dumps({{
+            "type": "tool_execution_end",
+            "toolCallId": "call-weather",
+            "toolName": {tool_name!r},
+            "result": payload["result"],
+            "isError": False,
+        }}), flush=True)
+        print(json.dumps({{
+            "type": "message_update",
+            "assistantMessageEvent": {{
+                "type": "text_delta",
+                "delta": "done",
+            }},
+        }}), flush=True)
+        print(json.dumps({{"type": "agent_settled"}}), flush=True)
+        break
+""",
+        encoding="utf-8",
+    )
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+    return path
+
+
 def _write_skill(path: Path, *, name: str, body: str = "Skill body.") -> None:
     path.mkdir(parents=True, exist_ok=True)
     (path / "SKILL.md").write_text(
@@ -292,12 +363,8 @@ def test_build_prompt_skips_thought_parts():
         _user_event("follow up"),
     )
 
-    assert build_prompt(ctx) == "\n".join(
-        [
-            "User: hello",
-            "Assistant: visible answer",
-            "User: follow up",
-        ]
+    assert (
+        build_prompt(ctx) == "User: hello\nAssistant: visible answer\nUser: follow up"
     )
 
 
@@ -606,6 +673,60 @@ def test_pi_event_translator_native_tool_update():
     function_response = response.content.parts[0].function_response
     assert function_response.name == "bash"
     assert function_response.response["result"]["content"] == "line 1\nline 2"
+
+
+def test_pi_event_translator_suppresses_bridged_tool_events():
+    translator = PiEventTranslator(
+        author="agent",
+        invocation_id="inv-1",
+        bridged_tool_names={"get_weather"},
+    )
+
+    assert (
+        translator.event_to_adk_events(
+            {
+                "type": "tool_execution_start",
+                "toolCallId": "call-1",
+                "toolName": "get_weather",
+                "args": {"city": "Beijing"},
+            }
+        )
+        == []
+    )
+    assert (
+        translator.event_to_adk_events(
+            {
+                "type": "tool_execution_update",
+                "toolCallId": "call-1",
+                "toolName": "get_weather",
+                "partialResult": {"stdout": "ignored"},
+            }
+        )
+        == []
+    )
+    assert (
+        translator.event_to_adk_events(
+            {
+                "type": "tool_execution_end",
+                "toolCallId": "call-1",
+                "toolName": "get_weather",
+                "result": {"content": [{"type": "text", "text": "ignored"}]},
+                "isError": False,
+            }
+        )
+        == []
+    )
+
+    native_call = translator.event_to_adk_events(
+        {
+            "type": "tool_execution_start",
+            "toolCallId": "call-2",
+            "toolName": "bash",
+            "args": {"command": "pwd"},
+        }
+    )
+
+    assert native_call[0].content.parts[0].function_call.name == "bash"
 
 
 def test_model_config_uses_custom_provider():
@@ -1070,6 +1191,59 @@ async def test_build_executable_tools_prefixes_pi_reserved_names():
     assert output["name"] == "read"
 
 
+@pytest.mark.asyncio
+async def test_build_executable_tools_runs_adk_tool_lifecycle_callbacks():
+    callback_order: list[str] = []
+    emitted: list[Event] = []
+
+    def get_weather(city: str, tool_context: ToolContext) -> dict[str, str]:
+        """Get weather.
+
+        Args:
+            city: City name.
+        """
+        callback_order.append("tool")
+        tool_context.state["weather_city"] = city
+        return {"weather": f"sunny in {city}"}
+
+    async def before_tool_callback(tool, args, tool_context):
+        callback_order.append("before")
+
+    async def after_tool_callback(tool, args, tool_context, tool_response):
+        callback_order.append("after")
+        return {"weather": "patched"}
+
+    agent = Agent(
+        name="assistant",
+        instruction="Answer briefly.",
+        model_name="model-a",
+        model_api_base="https://ark.example.com/api/v3/",
+        model_api_key="test-key",
+        model_api_key_name="",
+        runtime="piagent",
+        tools=[get_weather],
+        before_tool_callback=before_tool_callback,
+        after_tool_callback=after_tool_callback,
+    )
+    ctx = _fake_ctx(_user_event("hi"))
+
+    async def sink(event: Event) -> None:
+        emitted.append(event)
+
+    bundle = await build_executable_tools(agent, ctx, event_sink=sink)
+    output = await bundle.executors["get_weather"](
+        {"city": "Beijing"},
+        "call-weather",
+    )
+
+    assert output == {"weather": "patched"}
+    assert callback_order == ["before", "tool", "after"]
+    assert len(emitted) == 2
+    assert emitted[0].get_function_calls()[0].id == "call-weather"
+    assert emitted[1].actions.state_delta == {"weather_city": "Beijing"}
+    assert emitted[1].get_function_responses()[0].id == "call-weather"
+
+
 def test_render_extension_uses_pi_tool_shape():
     spec = PiToolSpec(
         name="get_weather",
@@ -1094,7 +1268,8 @@ def test_render_extension_uses_pi_tool_shape():
 
 @pytest.mark.asyncio
 async def test_pi_tool_runtime_serves_executor_call():
-    async def executor(args):
+    async def executor(args, call_id):
+        assert call_id == "call-1"
         return {"echo": args["value"]}
 
     bundle = PiToolBundle(
@@ -1199,6 +1374,116 @@ async def test_piagent_runtime_text_only_end_to_end(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_piagent_runtime_emits_canonical_bridge_tool_events(
+    tmp_path,
+    monkeypatch,
+):
+    def get_weather(city: str) -> dict[str, str]:
+        """Get weather.
+
+        Args:
+            city: City name.
+        """
+        return {"weather": f"sunny in {city}"}
+
+    binary = _make_fake_pi_that_calls_bridge(tmp_path)
+    agent_dir = tmp_path / "agent-home"
+    monkeypatch.setenv("PIAGENT_BINARY", str(binary))
+    monkeypatch.setenv("PIAGENT_AGENT_DIR", str(agent_dir))
+
+    agent = Agent(
+        name="assistant",
+        instruction="Answer briefly.",
+        model_name="model-a",
+        model_api_base="https://ark.example.com/api/v3/",
+        model_api_key="test-key",
+        model_api_key_name="",
+        runtime="piagent",
+        tools=[get_weather],
+    )
+    ctx = _fake_ctx(_user_event("ping"))
+
+    events = [event async for event in PiAgentRuntime().run_async(agent, ctx)]
+    function_calls = [
+        part.function_call
+        for event in events
+        for part in event.content.parts
+        if part.function_call
+    ]
+    function_responses = [
+        part.function_response
+        for event in events
+        for part in event.content.parts
+        if part.function_response
+    ]
+
+    assert [call.name for call in function_calls] == ["get_weather"]
+    assert function_calls[0].id == "call-weather"
+    assert function_calls[0].args == {"city": "Beijing"}
+    assert [response.name for response in function_responses] == ["get_weather"]
+    assert function_responses[0].id == "call-weather"
+    assert function_responses[0].response == {"weather": "sunny in Beijing"}
+    assert [
+        part.text for event in events for part in event.content.parts if part.text
+    ] == [
+        "done",
+        "done",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_piagent_runtime_exposes_before_model_added_tools(
+    tmp_path,
+    monkeypatch,
+):
+    def get_weather(city: str) -> dict[str, str]:
+        """Get weather.
+
+        Args:
+            city: City name.
+        """
+        return {"weather": f"sunny in {city}"}
+
+    def before_model_callback(callback_context, llm_request):
+        llm_request.tools_dict["get_weather"] = FunctionTool(get_weather)
+
+    binary = _make_fake_pi_that_calls_bridge(tmp_path)
+    agent_dir = tmp_path / "agent-home"
+    monkeypatch.setenv("PIAGENT_BINARY", str(binary))
+    monkeypatch.setenv("PIAGENT_AGENT_DIR", str(agent_dir))
+
+    agent = Agent(
+        name="assistant",
+        instruction="Answer briefly.",
+        model_name="model-a",
+        model_api_base="https://ark.example.com/api/v3/",
+        model_api_key="test-key",
+        model_api_key_name="",
+        runtime="piagent",
+        before_model_callback=before_model_callback,
+    )
+    ctx = _fake_ctx(_user_event("ping"))
+
+    events = [event async for event in PiAgentRuntime().run_async(agent, ctx)]
+    function_calls = [
+        part.function_call
+        for event in events
+        for part in event.content.parts
+        if part.function_call
+    ]
+    function_responses = [
+        part.function_response
+        for event in events
+        for part in event.content.parts
+        if part.function_response
+    ]
+
+    assert [call.name for call in function_calls] == ["get_weather"]
+    assert [response.name for response in function_responses] == ["get_weather"]
+    assert function_responses[0].response == {"weather": "sunny in Beijing"}
+
+
+@pytest.mark.asyncio
 async def test_piagent_runtime_closes_opened_toolsets(tmp_path, monkeypatch):
     def get_weather(city: str) -> dict[str, str]:
         """Get weather.
@@ -1236,6 +1521,46 @@ async def test_piagent_runtime_closes_opened_toolsets(tmp_path, monkeypatch):
     assert events[2].partial is not True
     assert [part.text for part in events[2].content.parts] == ["checking", "pong"]
     assert toolset.closed is True
+
+
+@pytest.mark.asyncio
+async def test_piagent_runtime_syncs_tools_after_before_model_callback(
+    tmp_path,
+    monkeypatch,
+):
+    def get_weather(city: str) -> dict[str, str]:
+        """Get weather.
+
+        Args:
+            city: City name.
+        """
+        return {"weather": f"sunny in {city}"}
+
+    def before_model_callback(callback_context, llm_request):
+        llm_request.tools_dict.clear()
+
+    binary, argv_path = _make_fake_pi_with_argv_capture(tmp_path)
+    agent_dir = tmp_path / "agent-home"
+    monkeypatch.setenv("PIAGENT_BINARY", str(binary))
+    monkeypatch.setenv("PIAGENT_AGENT_DIR", str(agent_dir))
+
+    agent = Agent(
+        name="assistant",
+        instruction="Answer briefly.",
+        model_name="model-a",
+        model_api_base="https://ark.example.com/api/v3/",
+        model_api_key="test-key",
+        model_api_key_name="",
+        runtime="piagent",
+        tools=[get_weather],
+        before_model_callback=before_model_callback,
+    )
+    ctx = _fake_ctx(_user_event("ping"))
+
+    _events = [event async for event in PiAgentRuntime().run_async(agent, ctx)]
+
+    argv = json.loads(argv_path.read_text(encoding="utf-8"))
+    assert "--extension" not in argv
 
 
 @pytest.mark.asyncio
