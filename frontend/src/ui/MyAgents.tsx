@@ -49,6 +49,7 @@ import {
   ResourceIdentityMark,
   ResourceFilterSelect,
   type ResourceFilterOption,
+  ResourceLoadingState,
   ResourcePageHeader,
   ResourcePageShell,
   ResourceResults,
@@ -1197,10 +1198,7 @@ export function MyAgents({
         aria-label={`${activeLabel}列表`}
       >
         {showInitialLoading ? (
-          <div className="my-agent-initial-loading" role="status" aria-live="polite">
-            <span className="my-agent-loading-mark" aria-hidden="true" />
-            <span>正在加载智能体</span>
-          </div>
+          <ResourceLoadingState />
         ) : (activeType === "general" ? runtimeError : sandboxError) && visibleAgents.length === 0 ? (
           <div className="my-agent-empty" role="alert">
             <p>{activeType === "general" ? runtimeError : sandboxError}</p>

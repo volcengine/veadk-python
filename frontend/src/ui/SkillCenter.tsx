@@ -42,6 +42,7 @@ import {
   ResourceDetailSectionHeader,
   ResourceDetailSummary,
   ResourceGrid,
+  ResourceLoadingState,
   ResourceResults,
   ResourceSearch,
   ResourceToolbar,
@@ -958,7 +959,7 @@ export function SkillCenterView({
                 )}
               />
             {skillsLoading && skills.length === 0 ? (
-              <div className="skillcenter-loading"><LoadingMark />正在加载技能</div>
+              <ResourceLoadingState />
             ) : skillsError && skills.length === 0 ? (
               <PageState
                 kind="error"
@@ -1040,10 +1041,7 @@ export function SkillCenterView({
               />
             ) : null}
             {spacesLoading && spaces.length === 0 ? (
-              <div className="my-agent-initial-loading" role="status" aria-live="polite">
-                <span className="my-agent-loading-mark" aria-hidden="true" />
-                <span>正在加载技能空间</span>
-              </div>
+              <ResourceLoadingState />
             ) : allSpaceRegionsFailed && spaces.length === 0 ? (
               <SpaceLoadErrors
                 errors={spaceErrors}

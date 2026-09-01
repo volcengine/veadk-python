@@ -14,6 +14,10 @@ const resourceStyles = readFileSync(
   new URL("../src/ui/ResourceCollection.css", import.meta.url),
   "utf8",
 );
+const resourceSource = readFileSync(
+  new URL("../src/ui/ResourceCollection.tsx", import.meta.url),
+  "utf8",
+);
 const modelSource = readFileSync(
   new URL("../src/cronjobs/model.ts", import.meta.url),
   "utf8",
@@ -112,9 +116,11 @@ test("uses Apps SDK controls while keeping only domain layout and responsive sty
   assert.doesNotMatch(cronJobsStyles, /#[0-9a-f]{3,8}/i);
   assert.doesNotMatch(cronJobsStyles, /font-family:\s*(?:monospace|[^;]*Mono)/i);
   assert.doesNotMatch(cronJobsSource, /from "lucide-react"|emoji/i);
-  for (const component of ["Alert", "Badge", "Button", "EmptyMessage", "Indicator", "Input", "SegmentedControl", "Select", "Switch", "Textarea", "Tooltip"]) {
+  for (const component of ["Alert", "Badge", "Button", "EmptyMessage", "Input", "SegmentedControl", "Select", "Switch", "Textarea", "Tooltip"]) {
     assert.match(cronJobsSource, new RegExp(`@openai/apps-sdk-ui/components/${component}`));
   }
+  assert.match(cronJobsSource, /<ResourceLoadingState \/>/);
+  assert.match(resourceSource, /@openai\/apps-sdk-ui\/components\/Indicator/);
   assert.match(cronJobsSource, /@openai\/apps-sdk-ui\/components\/Icon/);
   assert.doesNotMatch(cronJobsStyles, /\.cronjobs-button|\.cronjobs-icon-button/);
   assert.doesNotMatch(cronJobsStyles, /\.cronjobs-field (?:input|select|textarea)/);

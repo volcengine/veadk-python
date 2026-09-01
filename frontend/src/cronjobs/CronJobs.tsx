@@ -10,7 +10,6 @@ import { Alert } from "@openai/apps-sdk-ui/components/Alert";
 import { Badge } from "@openai/apps-sdk-ui/components/Badge";
 import { Button } from "@openai/apps-sdk-ui/components/Button";
 import { EmptyMessage } from "@openai/apps-sdk-ui/components/EmptyMessage";
-import { LoadingIndicator } from "@openai/apps-sdk-ui/components/Indicator";
 import {
   ArrowLeft,
   ArrowRotateCw,
@@ -57,6 +56,7 @@ import { LibraryResourceCard } from "../ui/LibraryResourceCard";
 import {
   ResourceCreateCard,
   ResourceGrid,
+  ResourceLoadingState,
   ResourcePageHeader,
   ResourcePageShell,
   ResourceResults,
@@ -540,7 +540,7 @@ function JobDetail({
         </section>
         <section className="cronjobs-history">
           <header><div><h2>执行历史</h2><p>每次运行均使用独立 Session，结果与错误会永久保留。</p></div><Tooltip compact content="刷新"><Button type="button" color="secondary" variant="ghost" size="lg" uniform pill={false} onClick={onRetryRuns} disabled={runsLoading} aria-label="刷新执行历史"><ArrowRotateCw /></Button></Tooltip></header>
-          {runsLoading && runs.length === 0 ? <div className="cronjobs-history-state cronjobs-loading" role="status" aria-live="polite"><LoadingIndicator size={20} /><span>正在加载执行历史…</span></div> : runsError ? <Alert className="cronjobs-history-alert" color="danger" variant="soft" title="无法加载执行历史" description={runsError} actions={<Button type="button" color="danger" variant="soft" size="sm" pill={false} onClick={onRetryRuns}>重试</Button>} /> : runs.length === 0 ? <EmptyMessage className="cronjobs-history-state" fill="none"><EmptyMessage.Icon><Clock /></EmptyMessage.Icon><EmptyMessage.Title>暂无执行记录</EmptyMessage.Title><EmptyMessage.Description>任务触发或立即执行后，记录会显示在这里。</EmptyMessage.Description></EmptyMessage> : (
+          {runsLoading && runs.length === 0 ? <ResourceLoadingState /> : runsError ? <Alert className="cronjobs-history-alert" color="danger" variant="soft" title="无法加载执行历史" description={runsError} actions={<Button type="button" color="danger" variant="soft" size="sm" pill={false} onClick={onRetryRuns}>重试</Button>} /> : runs.length === 0 ? <EmptyMessage className="cronjobs-history-state" fill="none"><EmptyMessage.Icon><Clock /></EmptyMessage.Icon><EmptyMessage.Title>暂无执行记录</EmptyMessage.Title><EmptyMessage.Description>任务触发或立即执行后，记录会显示在这里。</EmptyMessage.Description></EmptyMessage> : (
             <div className="cronjobs-runs">
               {runs.map((run) => <article className="cronjobs-run" key={run.runId}>
                 <div className="cronjobs-run-main"><StatusBadge run={run} /><div><strong>{formatCronJobDate(run.startedAt || run.scheduledAt)}</strong><span>耗时 {formatCronJobDuration(run)}{run.runtimeVersion ? ` · Runtime v${run.runtimeVersion}` : ""}</span></div></div>
@@ -751,7 +751,7 @@ export function CronJobs({ cloudProvider }: CronJobsProps) {
       </ResourceToolbar>
       {notice ? <div className="cronjobs-banner" role="status"><Alert color="info" variant="soft" description={notice} /></div> : null}
       <ResourceResults aria-label="定时任务列表">
-        {loading && jobs.length === 0 ? <div className="cronjobs-loading" role="status" aria-live="polite"><LoadingIndicator size={20} /><span>正在加载定时任务…</span></div> : error ? <EmptyMessage className="cronjobs-state" fill="none"><EmptyMessage.Icon color="danger"><Clock /></EmptyMessage.Icon><EmptyMessage.Title color="danger">无法加载定时任务</EmptyMessage.Title><EmptyMessage.Description>{error}</EmptyMessage.Description><EmptyMessage.ActionRow><Button type="button" color="secondary" variant="outline" size="lg" pill={false} onClick={() => void load()}><ArrowRotateCw />重试</Button></EmptyMessage.ActionRow></EmptyMessage> : <JobList jobs={visibleJobs} busyAction={busyAction} canCreate={!loading && runtimes.length > 0} onCreate={() => setDrawerJob(null)} onSelect={(job) => setSelectedId(job.jobId)} onRun={runNow} />}
+        {loading && jobs.length === 0 ? <ResourceLoadingState /> : error ? <EmptyMessage className="cronjobs-state" fill="none"><EmptyMessage.Icon color="danger"><Clock /></EmptyMessage.Icon><EmptyMessage.Title color="danger">无法加载定时任务</EmptyMessage.Title><EmptyMessage.Description>{error}</EmptyMessage.Description><EmptyMessage.ActionRow><Button type="button" color="secondary" variant="outline" size="lg" pill={false} onClick={() => void load()}><ArrowRotateCw />重试</Button></EmptyMessage.ActionRow></EmptyMessage> : <JobList jobs={visibleJobs} busyAction={busyAction} canCreate={!loading && runtimes.length > 0} onCreate={() => setDrawerJob(null)} onSelect={(job) => setSelectedId(job.jobId)} onRun={runNow} />}
       </ResourceResults>
       {drawerJob !== undefined ? <Drawer job={drawerJob} runtimes={runtimes} cloudProvider={cloudProvider} busy={busyAction.endsWith(":save")} onClose={() => setDrawerJob(undefined)} onSubmit={submitDrawer} /> : null}
     </ResourcePageShell>

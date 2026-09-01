@@ -53,6 +53,7 @@ import {
   ResourceDetailSectionHeader,
   ResourceDetailSummary,
   ResourceGrid,
+  ResourceLoadingState,
   ResourceResults,
   ResourceSearch,
   ResourceToolbar,
@@ -1354,10 +1355,7 @@ export function KnowledgeLibrary({
               />
               <div className={`knowledge-documents__body${documents.length > 0 ? " is-table" : ""}`} aria-live="polite">
                 {documentsLoading && documents.length === 0 ? (
-                  <div className="my-agent-initial-loading" role="status" aria-live="polite">
-                    <span className="my-agent-loading-mark" aria-hidden="true" />
-                    <span>正在加载数据</span>
-                  </div>
+                  <ResourceLoadingState />
                 ) : documentsError && documents.length === 0 ? (
                   <div className="knowledge-library__state is-error" role="alert">
                     <p>{documentsError}</p>
@@ -1498,10 +1496,7 @@ export function KnowledgeLibrary({
               </div>
             )}
             {loading && items.length === 0 ? (
-              <div className="my-agent-initial-loading" role="status" aria-live="polite">
-                <span className="my-agent-loading-mark" aria-hidden="true" />
-                <span>正在加载知识库</span>
-              </div>
+              <ResourceLoadingState />
             ) : error ? (
               <div className="knowledge-library__state is-error" role="alert"><p>{error}</p><button type="button" onClick={() => void loadBases()}>重试</button></div>
             ) : filteredItems.length === 0 && query.trim() ? (

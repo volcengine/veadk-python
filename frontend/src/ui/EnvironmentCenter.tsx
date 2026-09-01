@@ -37,6 +37,7 @@ import { LibraryResourceCard } from "./LibraryResourceCard";
 import {
   ResourceCreateCard,
   ResourceGrid,
+  ResourceLoadingState,
   ResourcePageHeader,
   ResourcePageShell,
   ResourceResults,
@@ -2374,9 +2375,7 @@ export function EnvironmentCenter({
 
       <ResourceResults aria-live="polite">
         {loading ? (
-          <div className="environment-loading" role="status" aria-live="polite">
-            <TextShimmer as="span">正在加载环境</TextShimmer>
-          </div>
+          <ResourceLoadingState />
         ) : loadError ? (
           <div className="environment-load-error" role="alert">
             <p>{loadError}</p>

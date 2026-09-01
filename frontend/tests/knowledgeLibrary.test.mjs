@@ -524,7 +524,8 @@ test("renders server-authorized ownership and management capabilities", () => {
 });
 
 test("provides a responsive card overview and a focused detail view", () => {
-  assert.match(pageSource, /正在加载知识库/);
+  assert.match(pageSource, /<ResourceLoadingState \/>/);
+  assert.match(resourceCollectionSource, /资源加载中，请稍候/);
   assert.match(pageSource, /<ResourceCreateCard[\s\S]*?新建知识库/);
   assert.match(pageSource, /role="alert"/);
   assert.match(pageSource, />重试</);

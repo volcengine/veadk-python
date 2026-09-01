@@ -13,7 +13,6 @@
   color: hsl(var(--destructive));
 }
 
-.workspace-loading,
 .workspace-load-error,
 .workspace-empty {
   min-height: 240px;

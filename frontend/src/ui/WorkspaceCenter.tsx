@@ -35,6 +35,7 @@ import {
   ResourceDetailSectionHeader,
   ResourceDetailSummary,
   ResourceGrid,
+  ResourceLoadingState,
   ResourcePageHeader,
   ResourcePageShell,
   ResourceResults,
@@ -43,7 +44,6 @@ import {
   ResourceToolbar,
 } from "./ResourceCollection";
 import { StudioConfirmDialog } from "./StudioConfirmDialog";
-import { TextShimmer } from "./text-shimmer/TextShimmer";
 import {
   EnvironmentCenter,
   type EnvironmentClipboardImportRequest,
@@ -338,7 +338,7 @@ function WorkspaceList({ onEnvironment }: { onEnvironment: () => void }) {
       </ResourceToolbar>
       <ResourceResults aria-live="polite">
         {loading ? (
-          <div className="workspace-loading" role="status"><TextShimmer as="span">正在加载工作区</TextShimmer></div>
+          <ResourceLoadingState />
         ) : loadError ? (
           <div className="workspace-load-error" role="alert">
             <p>{loadError}</p>
