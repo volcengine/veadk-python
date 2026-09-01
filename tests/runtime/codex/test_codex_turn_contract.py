@@ -209,9 +209,9 @@ async def test_agent_turn_still_gets_tools_and_replay(monkeypatch) -> None:
         f"over-corrected into never injecting: {backend.calls[0].tool_names}"
     )
 
-    assert (
-        len(backend.calls) >= 2
-    ), f"expected a tool round then an answer round: {backend.calls}"
+    assert len(backend.calls) >= 2, (
+        f"expected a tool round then an answer round: {backend.calls}"
+    )
     assert backend.calls[1].tool_records == (
         ("function_call", "record_fact"),
         ("function_response", "record_fact"),
@@ -251,9 +251,9 @@ async def test_agent_turn_replays_across_two_codex_requests(monkeypatch) -> None
     )
     assert error is None, error
     assert events, "the codex turn produced no events"
-    assert (
-        len(backend.calls) >= 3
-    ), f"codex never issued a second request: {len(backend.calls)} backend calls"
+    assert len(backend.calls) >= 3, (
+        f"codex never issued a second request: {len(backend.calls)} backend calls"
+    )
 
     replayed = backend.calls[2].tool_records
     assert ("function_call", "record_fact") in replayed, (
@@ -340,9 +340,9 @@ async def test_tool_only_turn_propagates_state_delta_and_usage(monkeypatch) -> N
         int(getattr(getattr(e, "usage_metadata", None), "total_token_count", 0) or 0)
         for e in events
     )
-    assert (
-        total == 26
-    ), f"a tool-only turn reported {total} tokens; the turn spent 11+5 and 7+3"
+    assert total == 26, (
+        f"a tool-only turn reported {total} tokens; the turn spent 11+5 and 7+3"
+    )
 
 
 # ----------------------------------- the workspace an ADK tool is able to find
@@ -775,9 +775,9 @@ def test_importing_the_runtime_creates_no_workspace_root(tmp_path) -> None:
         env={**os.environ, "TMPDIR": str(private_tmp)},
     )
     assert result.returncode == 0, result.stderr[-2000:]
-    assert (
-        result.stdout.strip() == "None"
-    ), f"the module built a workspace root on import: {result.stdout.strip()}"
+    assert result.stdout.strip() == "None", (
+        f"the module built a workspace root on import: {result.stdout.strip()}"
+    )
     assert not list(private_tmp.iterdir()), (
         "importing the module created "
         f"{[p.name for p in private_tmp.iterdir()]} in $TMPDIR"

@@ -765,12 +765,12 @@ async def test_shim_returns_the_turn_total_token_usage(monkeypatch) -> None:
         )
 
     usage = response.json().get("usage") or {}
-    assert (
-        usage.get("input_tokens") == 18
-    ), f"the tool round's 11 input tokens were dropped: {usage}"
-    assert (
-        usage.get("output_tokens") == 8
-    ), f"the tool round's 5 output tokens were dropped: {usage}"
+    assert usage.get("input_tokens") == 18, (
+        f"the tool round's 11 input tokens were dropped: {usage}"
+    )
+    assert usage.get("output_tokens") == 8, (
+        f"the tool round's 5 output tokens were dropped: {usage}"
+    )
     assert usage.get("total_tokens") == 26, usage
 
 
@@ -1324,9 +1324,9 @@ def test_two_threads_racing_get_shim_build_exactly_one_shim(monkeypatch) -> None
     )
     assert len(cached) == 1
     assert retired == []
-    assert (
-        leases[0].shim is leases[1].shim is cached[0]
-    ), "both threads must share the one cached shim"
+    assert leases[0].shim is leases[1].shim is cached[0], (
+        "both threads must share the one cached shim"
+    )
     # Nothing constructed may be unreachable from the cache -- that is the leak.
     assert {id(shim) for shim in constructed} == {id(shim) for shim in cached}
 

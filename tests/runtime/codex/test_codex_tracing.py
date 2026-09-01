@@ -111,7 +111,7 @@ async def test_codex_run_emits_call_llm_span_with_session_id(monkeypatch) -> Non
         exporter = tracer._inmemory_exporter._exporter
         call_llm_spans = [s for s in exporter._spans if s.name == "call_llm"]
         assert call_llm_spans, (
-            "no call_llm span: " f"{sorted({s.name for s in exporter._spans})}"
+            f"no call_llm span: {sorted({s.name for s in exporter._spans})}"
         )
         attributes = dict(call_llm_spans[0].attributes or {})
         assert attributes.get("gen_ai.session.id") == session_id, attributes

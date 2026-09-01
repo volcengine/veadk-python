@@ -140,6 +140,21 @@ def _kwargs(**values: Any) -> Callable[[ScriptedBackend], dict]:
     return lambda _backend: dict(values)
 
 
+def _sub_agent_kwargs(_backend: ScriptedBackend) -> dict:
+    from veadk import Agent
+
+    return {
+        "sub_agents": [
+            Agent(
+                name="specialist",
+                description="Handles specialist work.",
+                model_name="scripted-model",
+                model_api_key="k",
+            )
+        ]
+    }
+
+
 # ------------------------------------------------------------ extra asserts
 
 
@@ -286,6 +301,13 @@ PARITY_ROWS: tuple[Row, ...] = (
         extra_assert=_assert_callbacks_applied,
     ),
     Row(
+        id="sub_agent_transfer_tool",
+        plan=_TEXT_PLAN,
+        agent_kwargs=_sub_agent_kwargs,
+        expected_usage=(10, 4),
+        extra_assert=_assert_transfer_tool_advertised,
+    ),
+    Row(
         id="long_running_tool",
         plan=(
             Round(tool_calls=(("slow_approval", {"request": "deploy"}),), usage=(0, 0)),
@@ -371,7 +393,6 @@ ERROR_ROWS: tuple[tuple[str, dict, tuple[str, ...]], ...] = (
         ("include_contents", "history", "runtime='adk'"),
     ),
     ("planner", {"planner": PlanReActPlanner()}, ("planner", "runtime='adk'")),
-    ("sub_agents", {"sub_agents": "sentinel-sub-agents"}, ("sub_agents", "transfer")),
 )
 
 
@@ -446,10 +467,6 @@ async def test_unsupported_config_fails_fast_and_actionably(
     resolved = dict(kwargs)
     if resolved.get("model") == "sentinel-base-llm":
         resolved["model"] = ScriptedBackend([Round(text="x")]).as_base_llm()
-    if resolved.get("sub_agents") == "sentinel-sub-agents":
-        resolved["sub_agents"] = [
-            Agent(name="specialist", model_name="scripted-model", model_api_key="k")
-        ]
 
     with pytest.raises(ValueError) as excinfo:
         Agent(

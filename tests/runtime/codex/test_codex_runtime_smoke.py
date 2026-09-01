@@ -371,9 +371,9 @@ async def test_real_codex_binary_completes_one_tool_using_turn(monkeypatch) -> N
     shim = ResponsesShim(api_base=f"{backend_url}/v1", api_key="veadk-smoke-key")
     shims_before = dict(proxy_module._SHIMS)
     await shim.start()
-    assert shim.url and shim.url.startswith(
-        "http://127.0.0.1:"
-    ), "the shim must bind a real loopback port, not an ASGI transport"
+    assert shim.url and shim.url.startswith("http://127.0.0.1:"), (
+        "the shim must bind a real loopback port, not an ASGI transport"
+    )
 
     async def _shim_lookup(api_base: str, api_key: str) -> ResponsesShim:
         return shim
@@ -466,18 +466,18 @@ async def test_real_codex_binary_completes_one_tool_using_turn(monkeypatch) -> N
     )
 
     # -- the ADK tool path over a real socket ------------------------------
-    assert executed == [
-        _TOOL_MARKER
-    ], f"the ADK tool executor did not run exactly once: {executed!r}"
+    assert executed == [_TOOL_MARKER], (
+        f"the ADK tool executor did not run exactly once: {executed!r}"
+    )
     function_responses = [
         response
         for event in events
         for response in (event.get_function_responses() or [])
         if response.name == _ADK_TOOL_NAME
     ]
-    assert (
-        function_responses
-    ), "no function_response event reached the Runner for the ADK tool"
+    assert function_responses, (
+        "no function_response event reached the Runner for the ADK tool"
+    )
 
     # -- a final text event ------------------------------------------------
     final_texts = [
@@ -487,14 +487,14 @@ async def test_real_codex_binary_completes_one_tool_using_turn(monkeypatch) -> N
         for part in event.content.parts
         if part.text and not part.thought
     ]
-    assert any(
-        _FINAL_ANSWER in text for text in final_texts
-    ), f"the canned final answer never reached the Runner: {final_texts!r}"
+    assert any(_FINAL_ANSWER in text for text in final_texts), (
+        f"the canned final answer never reached the Runner: {final_texts!r}"
+    )
 
     # -- teardown left nothing behind --------------------------------------
-    assert (
-        shim._turns == {}
-    ), f"the turn was not unregistered from the shim: {list(shim._turns)}"
+    assert shim._turns == {}, (
+        f"the turn was not unregistered from the shim: {list(shim._turns)}"
+    )
     assert dict(proxy_module._SHIMS) == shims_before, (
         "the process-global shim cache was mutated; this test must construct "
         "ResponsesShim directly and never call get_shim()"
@@ -504,17 +504,17 @@ async def test_real_codex_binary_completes_one_tool_using_turn(monkeypatch) -> N
         f"{sorted(_codex_homes(temp_root) - codex_homes_before)}"
     )
     new_workspaces = set(workspace_root.iterdir()) - workspaces_before
-    assert (
-        len(new_workspaces) == 1
-    ), f"expected exactly one session workspace, got {sorted(new_workspaces)}"
+    assert len(new_workspaces) == 1, (
+        f"expected exactly one session workspace, got {sorted(new_workspaces)}"
+    )
     # Session workspaces are deliberately kept for the next turn of the same
     # session and reaped later; what must not happen is one escaping the
     # process-owned root or landing in the working directory.
     workspace = next(iter(new_workspaces))
     assert workspace.parent == workspace_root
-    assert not (
-        workspace / _WRITE_PROBE_FILE
-    ).exists(), "the read-only sandbox let Codex create a file in the workspace"
+    assert not (workspace / _WRITE_PROBE_FILE).exists(), (
+        "the read-only sandbox let Codex create a file in the workspace"
+    )
     cwd_after = {name for name in os.listdir(os.getcwd()) if name[0] != "."}
     assert cwd_after == cwd_before, (
         "the turn created entries in the working directory: "

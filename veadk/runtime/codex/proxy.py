@@ -58,6 +58,7 @@ except Exception:  # pragma: no cover - depends on the install extras
     otel_context_api = None  # type: ignore[assignment]
 
 logger = get_logger(__name__)
+_TRANSFERRED_STATUS = "transferred"
 
 # Parameters accepted by litellm.aresponses; everything else in the inbound
 # request body is dropped to avoid forwarding unsupported fields.
@@ -1017,23 +1018,33 @@ class ResponsesShim:
                         template=_with_total_usage(resp, usage_acc),
                     )
 
-                async def _execute(fc: dict[str, Any]) -> tuple[dict[str, Any], str]:
+                async def _execute(
+                    fc: dict[str, Any],
+                ) -> tuple[dict[str, Any], str, bool]:
                     cid = fc.get("call_id") or fc.get("id")
                     try:
                         args = json.loads(fc.get("arguments") or "{}")
                     except json.JSONDecodeError as e:
-                        return fc, json.dumps(
-                            {
-                                "error": f"Invalid JSON tool arguments: {e}",
-                                "status": "failed",
-                            }
+                        return (
+                            fc,
+                            json.dumps(
+                                {
+                                    "error": f"Invalid JSON tool arguments: {e}",
+                                    "status": "failed",
+                                }
+                            ),
+                            False,
                         )
                     if not isinstance(args, dict):
-                        return fc, json.dumps(
-                            {
-                                "error": "Tool arguments must decode to an object.",
-                                "status": "failed",
-                            }
+                        return (
+                            fc,
+                            json.dumps(
+                                {
+                                    "error": "Tool arguments must decode to an object.",
+                                    "status": "failed",
+                                }
+                            ),
+                            False,
                         )
                     # Re-attach the invocation's OTel context: this coroutine
                     # runs in a task descended from the uvicorn server task,
@@ -1042,7 +1053,7 @@ class ResponsesShim:
                     # an orphan root with a foreign trace_id.
                     with _otel_scope(turn_context.otel_context):
                         out = await agent_executors[fc["name"]](args, str(cid))
-                    return fc, out
+                    return fc, out, _is_transfer_output(out)
 
                 # `return_exceptions=True` so a sibling is never left running
                 # detached: a bare `gather` re-raises the first failure and
@@ -1077,12 +1088,14 @@ class ResponsesShim:
                         ),
                         template=_with_total_usage(resp, usage_acc),
                     )
-                executed: list[tuple[dict[str, Any], str]] = [
+                executed: list[tuple[dict[str, Any], str, bool]] = [
                     r for r in settled if not isinstance(r, BaseException)
                 ]
                 pairs: list[dict[str, Any]] = []
-                for fc, out in executed:
+                transferred = False
+                for fc, out, did_transfer in executed:
                     cid = fc.get("call_id") or fc.get("id")
+                    transferred = transferred or did_transfer
                     pairs.append(
                         {
                             "type": "function_call",
@@ -1101,6 +1114,9 @@ class ResponsesShim:
                         }
                     )
                 conv.extend(pairs)
+                if transferred:
+                    resp = _completed_transfer_response(resp)
+                    break
                 # Remember them for the *next* request of this same turn.
                 turn_context.state.record(pairs)
 
@@ -1586,6 +1602,38 @@ def _to_dict(obj: Any) -> dict[str, Any]:
     if hasattr(obj, "model_dump"):
         return obj.model_dump()
     return dict(obj)
+
+
+def _is_transfer_output(value: str) -> bool:
+    try:
+        payload = json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return False
+    return isinstance(payload, dict) and payload.get("status") == _TRANSFERRED_STATUS
+
+
+def _completed_transfer_response(resp: dict[str, Any]) -> dict[str, Any]:
+    """Return a minimal completed response after VeADK handled a transfer."""
+
+    completed = {
+        "id": resp.get("id") or "resp_transfer_complete",
+        "object": resp.get("object") or "response",
+        "created_at": resp.get("created_at") or int(time.time()),
+        "model": resp.get("model") or "model",
+        "status": "completed",
+        "output": [
+            {
+                "id": "msg_transfer_complete",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": ""}],
+            }
+        ],
+    }
+    if "usage" in resp:
+        completed["usage"] = resp["usage"]
+    return completed
 
 
 # Usage counters summed across a turn's backend calls. The nested detail fields

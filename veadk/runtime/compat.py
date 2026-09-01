@@ -150,17 +150,6 @@ def _model_name_fallbacks(agent: Any) -> list[str]:
 SUPPORT_RULES: tuple[SupportRule, ...] = (
     # --- error: silently wrong results -------------------------------------
     SupportRule(
-        field="sub_agents",
-        policy="error",
-        predicate=_truthy("sub_agents"),
-        message=lambda agent, rt: (
-            f"{rt} runtime does not implement agent transfer, so "
-            "Agent(sub_agents=...) is unreachable and the agent will silently "
-            "answer every request itself. Use runtime='adk', or drive "
-            "delegation from a parent SequentialAgent/AgentTool."
-        ),
-    ),
-    SupportRule(
         field="model",
         policy="error",
         predicate=_explicitly_set("model"),

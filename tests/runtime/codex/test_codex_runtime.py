@@ -21,6 +21,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.agents.llm_agent import LlmAgent
@@ -38,9 +39,12 @@ from fastapi.openapi.models import APIKey
 from fastapi.openapi.models import APIKeyIn
 
 from veadk.runtime.base_runtime import resolve_system_append
+from veadk.runtime.agent_transfer import build_transfer_tool
 from veadk.runtime.codex.config import CodexRuntimeConfig
 from veadk.runtime.codex.config import codex_subprocess_env
 from veadk.runtime.codex.config import toml_string
+from veadk.runtime.codex.proxy import ResponsesShim
+from veadk.runtime.codex.tools_bridge import add_tool_to_bundle
 from veadk.runtime.codex.tools_bridge import build_executable_tools
 from veadk.runtime.codex.tools_bridge import close_toolsets
 from veadk.runtime.codex.tools_bridge import resume_authenticated_tools
@@ -876,3 +880,102 @@ async def test_tool_executor_supports_stdio_mcp_toolset() -> None:
         assert output["structuredContent"]["status"] == "paid"
     finally:
         await asyncio.wait_for(close_toolsets(bundle.opened_toolsets), timeout=30)
+
+
+@pytest.mark.asyncio
+async def test_transfer_tool_executor_emits_adk_transfer_action() -> None:
+    worker = LlmAgent(name="worker", model="gemini-2.5-flash")
+    agent = LlmAgent(
+        name="agent",
+        model="gemini-2.5-flash",
+        sub_agents=[worker],
+    )
+    ctx = _ctx(agent)
+    emitted: list[Event] = []
+
+    async def emit(event: Event) -> None:
+        emitted.append(event)
+
+    bundle = await build_executable_tools(agent, ctx, event_sink=emit)
+    try:
+        add_tool_to_bundle(
+            bundle,
+            build_transfer_tool([worker]),
+            ctx,
+            event_sink=emit,
+        )
+        output = json.loads(
+            await bundle.executors["transfer_to_agent"](
+                {"agent_name": "worker"}, "call-transfer"
+            )
+        )
+    finally:
+        await close_toolsets(bundle.opened_toolsets)
+
+    assert output["status"] == "transferred"
+    assert output["agent_name"] == "worker"
+    assert bundle.specs[0]["parameters"]["properties"]["agent_name"]["enum"] == [
+        "worker"
+    ]
+    assert any(event.actions.transfer_to_agent == "worker" for event in emitted)
+
+
+@pytest.mark.asyncio
+async def test_shim_completes_turn_after_transfer_without_second_model_call(
+    monkeypatch,
+) -> None:
+    shim = ResponsesShim("https://backend.invalid/v1", "backend-key")
+    backend_calls = 0
+
+    async def executor(args, call_id):
+        return json.dumps(
+            {
+                "status": "transferred",
+                "call_id": call_id,
+                "agent_name": args["agent_name"],
+            }
+        )
+
+    token = shim.register_turn(
+        [{"type": "function", "name": "transfer_to_agent", "parameters": {}}],
+        {"transfer_to_agent": executor},
+    )
+
+    async def fake_aresponses(**kwargs):
+        nonlocal backend_calls
+        backend_calls += 1
+        assert not any(
+            item.get("type") == "function_call_output" for item in kwargs["input"]
+        )
+        return {
+            "id": "transfer-response",
+            "model": "model",
+            "output": [
+                {
+                    "id": "fc-transfer",
+                    "call_id": "call-transfer",
+                    "type": "function_call",
+                    "name": "transfer_to_agent",
+                    "arguments": json.dumps({"agent_name": "worker"}),
+                    "status": "completed",
+                }
+            ],
+        }
+
+    monkeypatch.setattr("veadk.runtime.codex.proxy.litellm.aresponses", fake_aresponses)
+    transport = httpx.ASGITransport(app=shim._app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://shim") as client:
+        response = await client.post(
+            "/v1/responses",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "model": "model",
+                "input": [{"type": "message", "role": "user", "content": "route"}],
+            },
+        )
+
+    assert response.status_code == 200
+    assert backend_calls == 1
+    body = response.json()
+    assert body["status"] == "completed"
+    assert body["output"][0]["type"] == "message"

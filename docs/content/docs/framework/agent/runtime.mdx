@@ -33,7 +33,7 @@ agent = Agent(name="assistant", runtime="codex")
 
 <Callout type="warn">
 **定位：`codex` / `piagent` 是「沙箱执行运行时」，不是 ADK 执行流程的等价替代品。**
-它们把整个内层循环交给外部 agent harness，因此 ADK 在该流程内实现的能力——Agent transfer、请求/响应处理器（planner、code_executor、example store、知识库注入）、逐次模型调用的回调与 span——都不会执行。选择它们是为了拿到「模型可以在受控沙箱里跑命令、改文件」的能力，而不是为了给已有 ADK 智能体换一个后端。具体差异见下方[支持矩阵](#支持矩阵)。
+它们把整个内层循环交给外部 agent harness，因此 ADK 请求/响应处理器（planner、code_executor、example store、知识库注入）、逐次模型调用的回调与 span 不会在这层流程里执行。VeADK 会把 `sub_agents` 桥接成 `transfer_to_agent` 工具，但这些运行时仍更适合「模型需要在受控沙箱里跑命令、改文件」的任务，而不是所有 ADK 能力的透明后端替换。具体差异见下方[支持矩阵](#支持矩阵)。
 </Callout>
 
 使用 Codex runtime 前安装可选依赖：
@@ -55,7 +55,7 @@ pip install "veadk-python[codex]"
 **不适合：**
 
 - **一次固定的工具调用 + 一段格式化回答。** 这正是 ADK 运行时的主场：更快、更便宜，而且不受下面任何一条限制。
-- **需要 `sub_agents`、`output_schema`、`planner`、`code_executor` 或 `generate_content_config` 的智能体。** 这些配置在非 adk 运行时下会**直接报错**，而不是降级——完整清单见[支持矩阵](#支持矩阵)。
+- **需要 `output_schema`、`planner`、`code_executor` 或 `generate_content_config` 的智能体。** 这些配置在非 adk 运行时下会**直接报错**，而不是降级——完整清单见[支持矩阵](#支持矩阵)。
 - **对延迟敏感的链路。** 每一次 invocation 都会重建一个临时 `CODEX_HOME`、拉起一个 Codex 子进程、开一个 ephemeral thread；这笔固定开销每回合都要付。
 - **`run_live`。** 非 adk 运行时没有 live/bidi 实现，见[下文](#不支持-run_live)。
 
@@ -273,7 +273,6 @@ Codex 原生生命周期和 ADK Function/MCP 工具调用都会转换为 ADK Eve
 
 | 配置 | 原因 |
 | :--- | :--- |
-| `sub_agents=[...]` | 外部运行时没有实现 agent transfer，子智能体永远不会被调用，父智能体会自己回答所有问题。如需编排，请用父级 `SequentialAgent` 或 `AgentTool`。 |
 | `model=...` | 运行时从 `model_name` 解析模型，完全忽略 `model` 对象，其 `api_base`、请求头和 fallback 都会丢失。请改用 `model_name`。 |
 | `generate_content_config=...` | 只有 `system_instruction` 会被转发，`temperature`、`max_output_tokens`、`thinking_config` 等都会被丢弃。 |
 | `output_schema=...` | schema 既不会下发给后端，也不会进入提示词，模型从未被要求按 schema 输出；`state[output_key]` 要么是未校验的回复，要么直接缺失。 |
@@ -282,7 +281,7 @@ Codex 原生生命周期和 ADK Function/MCP 工具调用都会转换为 ADK Eve
 | `enable_supervisor=True` | 监督流程挂在 ADK LLM flow 上，而该流程已被替换，不会有任何监督生效。 |
 
 <Callout type="info">
-这条规则只针对**非 adk 智能体自身**的 `sub_agents`。把一个 `runtime="codex"` 的智能体放进 `SequentialAgent` / `ParallelAgent` 的 `sub_agents` 中是完全支持的用法——编排由父级负责，不依赖 agent transfer。
+`runtime="codex"` 和 `runtime="piagent"` 都支持 `sub_agents`：VeADK 会注入一个 `transfer_to_agent` 工具供外部 agent 调用。把一个 `runtime="codex"` 智能体放进 `SequentialAgent` / `ParallelAgent` 的 `sub_agents` 中也支持——这种场景由父级负责调度。
 </Callout>
 
 ### 警告：被忽略但仍可运行

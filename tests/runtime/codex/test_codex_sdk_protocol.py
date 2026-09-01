@@ -78,9 +78,9 @@ def test_dispatch_table_covers_every_sdk_notification() -> None:
         f"stream: {sorted(stale)}. They are dead dispatch entries -- the SDK "
         "renamed or removed them, so the real payloads now fall through."
     )
-    assert not (
-        set(translate._DISPATCH) & translate._EXPLICITLY_IGNORED
-    ), "a notification is both handled and explicitly ignored"
+    assert not (set(translate._DISPATCH) & translate._EXPLICITLY_IGNORED), (
+        "a notification is both handled and explicitly ignored"
+    )
 
 
 def test_sdk_pin_matches_pyproject() -> None:

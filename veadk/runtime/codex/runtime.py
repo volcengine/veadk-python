@@ -62,16 +62,23 @@ from openai_codex.generated.v2_all import (  # type: ignore[import-not-found]
 )
 
 from veadk.runtime.base_runtime import BaseRuntime
+from veadk.runtime.agent_transfer import append_transfer_instructions
+from veadk.runtime.agent_transfer import build_transfer_tool
+from veadk.runtime.agent_transfer import get_transfer_targets
+from veadk.runtime.agent_transfer import run_transferred_agent
+from veadk.runtime.agent_transfer import transfer_agent_name
 from veadk.runtime.codex.config import CodexRuntimeConfig
 from veadk.runtime.codex.config import codex_subprocess_env
 from veadk.runtime.codex.config import toml_string
 from veadk.runtime.codex.proxy import get_shim
 from veadk.runtime.codex.skills import sync_skills_to_codex_home
 from veadk.runtime.codex.tools_bridge import (
+    add_tool_to_bundle,
     build_executable_tools,
     close_toolsets,
     resume_authenticated_tools,
     resume_confirmed_tools,
+    sync_bundle_to_tools_dict,
 )
 from veadk.runtime.codex.translate import (
     build_input_attachments_from_llm_request,
@@ -95,6 +102,7 @@ from veadk.runtime.model_callbacks import (
     run_on_model_error_callbacks,
     system_instruction_to_text,
 )
+from veadk.utils.adk_compat import is_adk_gte
 from veadk.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -255,6 +263,10 @@ class CodexRuntime(BaseRuntime):
         event_queue: asyncio.Queue["Event | BaseException | _QueueSentinel"] = (
             asyncio.Queue()
         )
+        use_adk_transfer_scheduler = _uses_adk_transfer_scheduler(ctx)
+        turn_token: str | None = None
+        run_started_at = time.monotonic()
+        run_status = "failed"
 
         async def _emit_tool_event(event: "Event") -> None:
             await event_queue.put(event)
@@ -269,6 +281,15 @@ class CodexRuntime(BaseRuntime):
                 event_sink=_emit_tool_event,
                 timeout_seconds=runtime_config.tool_timeout_seconds,
             )
+            transfer_targets = get_transfer_targets(agent)
+            if transfer_targets:
+                add_tool_to_bundle(
+                    tool_bundle,
+                    build_transfer_tool(transfer_targets),
+                    ctx,
+                    event_sink=_emit_tool_event,
+                    timeout_seconds=runtime_config.tool_timeout_seconds,
+                )
             # These resume paths execute real tools on *this* task, so the
             # workspace is bound around them too: a tool must see the same
             # directory whether the shim called it or a resumed confirmation
@@ -278,20 +299,6 @@ class CodexRuntime(BaseRuntime):
                     *await resume_authenticated_tools(tool_bundle, ctx),
                     *await resume_confirmed_tools(tool_bundle, ctx),
                 ]
-            turn_token = shim.register_turn(
-                tool_bundle.specs,
-                # Bound here rather than by a ContextVar set for the turn: the
-                # shim runs executors on a task descended from its uvicorn
-                # server task, which snapshotted its context when the *first*
-                # invocation in the process started the shim, so an ambient
-                # value would be that invocation's - a silent cross-tenant
-                # leak. See `veadk.runtime.codex.workspace`.
-                bind_workspace_to_executors(tool_bundle.executors, workspace),
-                max_tool_iterations=runtime_config.max_tool_iterations,
-                invocation_id=ctx.invocation_id,
-                model_extra_config=agent.model_extra_config,
-                on_model_call=lambda: _charge_llm_call(ctx),
-            )
         except BaseException as e:
             logger.error(
                 "codex_runtime_setup_failed invocation_id=%s stage=tools error_type=%s",
@@ -323,7 +330,8 @@ class CodexRuntime(BaseRuntime):
             if cleanup_done:
                 return
             cleanup_done = True
-            shim.unregister_turn(turn_token)
+            if turn_token is not None:
+                shim.unregister_turn(turn_token)
             await close_toolsets(tool_bundle.opened_toolsets)
             # `workspace` is deliberately kept: it is session-scoped and the
             # next invocation of this session must see the files this turn
@@ -350,7 +358,20 @@ class CodexRuntime(BaseRuntime):
             # Persist resumed confirmation responses before constructing history,
             # so Codex sees the completed/rejected tool result exactly once.
             for event in resumed_events:
+                transfer_target = transfer_agent_name(event)
+                if transfer_target and use_adk_transfer_scheduler:
+                    run_status = "transferred"
+                    yield event
+                    await _cleanup()
+                    return
                 yield event
+                if transfer_target:
+                    async for transferred_event in run_transferred_agent(ctx, event):
+                        _scope_event(transferred_event, ctx)
+                        yield transferred_event
+                    run_status = "transferred"
+                    await _cleanup()
+                    return
 
             runtime_call = await build_runtime_llm_request(
                 agent,
@@ -376,6 +397,33 @@ class CodexRuntime(BaseRuntime):
                 yield event
                 return
 
+            sync_bundle_to_tools_dict(
+                tool_bundle,
+                runtime_call.llm_request.tools_dict,
+                ctx,
+                event_sink=_emit_tool_event,
+                timeout_seconds=runtime_config.tool_timeout_seconds,
+            )
+            if "transfer_to_agent" in runtime_call.llm_request.tools_dict:
+                append_transfer_instructions(
+                    agent,
+                    runtime_call.llm_request,
+                    transfer_targets,
+                )
+            turn_token = shim.register_turn(
+                tool_bundle.specs,
+                # Bound here rather than by a ContextVar set for the turn: the
+                # shim runs executors on a task descended from its uvicorn
+                # server task, which snapshotted its context when the *first*
+                # invocation in the process started the shim, so an ambient
+                # value would be that invocation's - a silent cross-tenant
+                # leak. See `veadk.runtime.codex.workspace`.
+                bind_workspace_to_executors(tool_bundle.executors, workspace),
+                max_tool_iterations=runtime_config.max_tool_iterations,
+                invocation_id=ctx.invocation_id,
+                model_extra_config=agent.model_extra_config,
+                on_model_call=lambda: _charge_llm_call(ctx),
+            )
             # Keep privileged instructions out of the user transcript. The SDK
             # exposes a native developer-instruction channel for them.
             #
@@ -465,8 +513,6 @@ class CodexRuntime(BaseRuntime):
             raise
         turn = None
         pump: asyncio.Task[None] | None = None
-        run_started_at = time.monotonic()
-        run_status = "failed"
         # Lookahead for the tool-only turn. That turn's merged response carries
         # the turn's `usage_metadata` and any `state_delta` a model callback
         # wrote, but it has no content, and a contentless, tool-free,
@@ -553,6 +599,8 @@ class CodexRuntime(BaseRuntime):
                 # only when an after-model callback happens to be registered
                 # also made the event shape depend on plugin installation.
                 final_text_events: list[Event] = []
+                transfer_requested = False
+                deferred_transfer_event: Event | None = None
                 while True:
                     queued = await event_queue.get()
                     if queued is _QUEUE_DONE:
@@ -560,6 +608,13 @@ class CodexRuntime(BaseRuntime):
                     if isinstance(queued, BaseException):
                         raise queued
                     event = queued
+                    transfer_target = transfer_agent_name(event)
+                    if transfer_target and use_adk_transfer_scheduler:
+                        transfer_requested = True
+                        run_status = "transferred"
+                        final_text_events.clear()
+                        deferred_transfer_event = event
+                        continue
                     if is_codex_final_text_event(event):
                         final_text_events.append(event)
                         continue
@@ -578,7 +633,24 @@ class CodexRuntime(BaseRuntime):
                         continue
                     if merge_target is not None:
                         yield merge_target
+                        merge_target = None
+                    if transfer_target:
+                        transfer_requested = True
+                        final_text_events.clear()
+                        yield event
+                        async for transferred_event in run_transferred_agent(
+                            ctx, event
+                        ):
+                            _scope_event(transferred_event, ctx)
+                            yield transferred_event
+                        run_status = "transferred"
+                        break
                     merge_target = event
+                if transfer_requested:
+                    await pump
+                    if deferred_transfer_event is not None:
+                        yield deferred_transfer_event
+                    return
                 await pump
 
                 # The shim serves backend calls on the server's task, so an
@@ -1101,3 +1173,9 @@ def _build_codex_input(
 def _scope_event(event: "Event", ctx: "InvocationContext") -> None:
     event.branch = getattr(ctx, "branch", None)
     event.isolation_scope = getattr(ctx, "isolation_scope", None)
+
+
+def _uses_adk_transfer_scheduler(ctx: "InvocationContext") -> bool:
+    """Whether ADK's outer workflow scheduler should run transfer targets."""
+
+    return is_adk_gte("2.0.0") and getattr(ctx, "_event_queue", None) is not None
