@@ -100,8 +100,8 @@ test("conversation capture resets the offscreen export position", () => {
 
 test("the share action has an accessible Chinese name", () => {
   const combinedSource = `${appSource}\n${dialogSource}`;
-  assert.match(combinedSource, /aria-label=["']分享为图片["']/);
-  assert.match(combinedSource, /title=["']分享为图片["']/);
+  assert.match(combinedSource, /aria-label=["']导出会话["']/);
+  assert.match(combinedSource, /title=["']导出会话["']/);
 });
 
 test("the share dialog covers image generation, preview, and failures", () => {
@@ -112,6 +112,12 @@ test("the share dialog covers image generation, preview, and failures", () => {
   assert.match(dialogSource, /role=["']alert["']/);
 });
 
+test("the dialog paints its loading state before starting an expensive export", () => {
+  assert.match(dialogSource, /function\s+waitForDialogPaint\s*\(/);
+  assert.match(dialogSource, /await\s+waitForDialogPaint\s*\(/);
+  assert.match(dialogSource, /正在生成导出内容/);
+});
+
 test("the generated PNG can be copied or downloaded", () => {
   assert.match(dialogSource, /new\s+ClipboardItem\s*\(/);
   assert.match(dialogSource, /navigator\.clipboard\.write\s*\(/);
@@ -119,6 +125,34 @@ test("the generated PNG can be copied or downloaded", () => {
   assert.match(dialogSource, /\.download\s*=/);
   assert.match(dialogSource, /\.click\s*\(\s*\)/);
   assert.match(dialogSource, /\.png["'`]/i);
+});
+
+test("the export format can switch between PNG and PDF", () => {
+  assert.match(dialogSource, /type\s+ExportFormat\s*=\s*["']png["']\s*\|\s*["']pdf["']/);
+  assert.match(dialogSource, /role=["']radiogroup["']/);
+  assert.match(dialogSource, /role=["']radio["']/);
+  assert.match(dialogSource, /\(\[\s*["']png["']\s*,\s*["']pdf["']\s*\]\s+as\s+const\)/);
+  assert.match(dialogSource, /aria-checked=\{exportFormat\s*===\s*format\}/);
+  assert.match(dialogSource, /下载\s+\$\{exportFormat\.toUpperCase\(\)\}/);
+});
+
+test("PDF export is generated on demand and paginated before download", () => {
+  assert.match(dialogSource, /import\(\s*["']jspdf["']\s*\)/);
+  assert.match(dialogSource, /new\s+jsPDF\s*\(/);
+  assert.match(dialogSource, /\.addImage\s*\(/);
+  assert.match(dialogSource, /\.addPage\s*\(/);
+  assert.match(dialogSource, /function\s+findPageBreak\s*\(/);
+  assert.match(dialogSource, /rowIsBlank/);
+  assert.match(dialogSource, /application\/pdf/);
+  assert.match(dialogSource, /\.pdf["'`]/i);
+});
+
+test("the selected export format controls the available actions", () => {
+  assert.match(dialogSource, /exportFormat\s*===\s*["']png["'][\s\S]*?copyImage/);
+  assert.match(dialogSource, /downloadExport/);
+  assert.match(dialogSource, /downloadState\s*===\s*["']downloading["']/);
+  assert.match(dialogSource, /aria-live=["']polite["']/);
+  assert.doesNotMatch(dialogSource, />\s*取消\s*</);
 });
 
 test("the dialog closes with Escape and releases object URLs", () => {

@@ -830,8 +830,8 @@ function ShareMessageButton({
     <button
       type="button"
       className="icon-btn"
-      aria-label="分享为图片"
-      title="分享为图片"
+      aria-label="导出会话"
+      title="导出会话"
       onClick={onClick}
     >
       <Share className="icon" aria-hidden="true" />
