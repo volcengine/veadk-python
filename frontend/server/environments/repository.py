@@ -95,6 +95,21 @@ class TosEnvironmentRepository:
             skill_files or [],
         )
 
+    async def create_external_version(
+        self,
+        record: EnvironmentRecord,
+        build: EnvironmentBuild,
+        skill_manifest: EnvironmentSkillManifest | None = None,
+        skill_files: list[tuple[str, bytes]] | None = None,
+    ) -> EnvironmentRecord:
+        return await asyncio.to_thread(
+            self._create_external_version,
+            record,
+            build,
+            skill_manifest,
+            skill_files or [],
+        )
+
     async def put_skill_asset(
         self, owner_id: str, environment_id: str, artifact_id: str, content: bytes
     ) -> None:
@@ -269,6 +284,47 @@ class TosEnvironmentRepository:
             client,
             f"{self._environment_prefix(record.owner_id, record.id)}/latest.json",
             build,
+        )
+        updated = record.model_copy(update={"latest_version_id": build.version_id})
+        self._put_json(client, self._summary_key(record.owner_id, record.id), updated)
+        return updated
+
+    def _create_external_version(
+        self,
+        record: EnvironmentRecord,
+        build: EnvironmentBuild,
+        skill_manifest: EnvironmentSkillManifest | None,
+        skill_files: list[tuple[str, bytes]],
+    ) -> EnvironmentRecord:
+        self._validate_version_id(build.version_id)
+        client = self._client_factory()
+        version_prefix = self._version_prefix(
+            record.owner_id, record.id, build.version_id
+        )
+        self._put_json(client, f"{version_prefix}/config.json", record)
+        self._put_json(
+            client,
+            f"{version_prefix}/skills-manifest.json",
+            skill_manifest or EnvironmentSkillManifest(),
+        )
+        for relative_path, content in skill_files:
+            self._put_bytes(
+                client,
+                f"{version_prefix}/skills/{relative_path}",
+                content,
+                "text/plain",
+            )
+        self._put_json(client, f"{version_prefix}/build.json", build)
+        self._put_json(
+            client,
+            f"{self._environment_prefix(record.owner_id, record.id)}/latest.json",
+            build,
+        )
+        self._put_bytes(
+            client,
+            f"{version_prefix}/image.json",
+            json.dumps({"image": build.image}, ensure_ascii=False).encode(),
+            "application/json",
         )
         updated = record.model_copy(update={"latest_version_id": build.version_id})
         self._put_json(client, self._summary_key(record.owner_id, record.id), updated)

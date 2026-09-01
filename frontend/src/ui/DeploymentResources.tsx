@@ -5,6 +5,7 @@ import {
   type DeploymentResourceMode,
   type DeploymentResourceQuery,
   type DeployResources,
+  type EnvironmentContainerRepository,
 } from "../adk/client";
 import {
   DeploymentSelect,
@@ -192,6 +193,7 @@ function ResourcePicker({
   valueLabel,
   state,
   disabled,
+  disabledMessage,
   valueField = "id",
   onChange,
 }: {
@@ -200,6 +202,7 @@ function ResourcePicker({
   valueLabel?: string;
   state: ResourceListState;
   disabled: boolean;
+  disabledMessage?: string;
   valueField?: "id" | "name";
   onChange: (resource: DeploymentResource) => void;
 }) {
@@ -230,7 +233,9 @@ function ResourcePicker({
           if (resource) onChange(resource);
         }}
       />
-      {state.error ? (
+      {disabledMessage ? (
+        <span className="pp-resource-status">{disabledMessage}</span>
+      ) : state.error ? (
         <div className="pp-resource-error" role="alert">
           <span>{state.error}</span>
           <button type="button" onClick={state.reload}>重试</button>
@@ -249,6 +254,105 @@ function ResourcePicker({
           {state.totalCount > 0 ? `/${state.totalCount}` : ""}
         </span>
       ) : null}
+    </div>
+  );
+}
+
+export function ContainerRepositorySelector({
+  region,
+  value,
+  disabled = false,
+  onChange,
+}: {
+  region: string;
+  value: EnvironmentContainerRepository | undefined;
+  disabled?: boolean;
+  onChange: (value: EnvironmentContainerRepository) => void;
+}) {
+  const registryList = useDeploymentResourceList(
+    region ? { kind: "cr-registry", region } : null,
+  );
+  const namespaceList = useDeploymentResourceList(
+    region && value?.registry
+      ? { kind: "cr-namespace", region, registry: value.registry }
+      : null,
+  );
+  const repositoryList = useDeploymentResourceList(
+    region && value?.registry && value.namespace
+      ? {
+          kind: "cr-repository",
+          region,
+          registry: value.registry,
+          namespace: value.namespace,
+        }
+      : null,
+  );
+
+  const current: EnvironmentContainerRepository = value ?? {
+    region,
+    registry: "",
+    namespace: "",
+    repository: "",
+  };
+
+  return (
+    <div className="pp-resource-fields pp-resource-fields-three environment-repository-fields">
+      <label className="pp-resource-field">
+        <span>Registry 实例</span>
+        <ResourcePicker
+          ariaLabel="镜像仓库 Registry 实例"
+          value={current.registry}
+          valueLabel={current.registry}
+          state={registryList}
+          disabled={disabled || !region}
+          valueField="name"
+          onChange={(resource) => onChange({
+            region,
+            registry: resource.name,
+            namespace: "",
+            repository: "",
+          })}
+        />
+      </label>
+      <label className="pp-resource-field">
+        <span>Namespace</span>
+        <ResourcePicker
+          ariaLabel="镜像仓库 Namespace"
+          value={current.namespace}
+          valueLabel={current.namespace}
+          state={namespaceList}
+          disabled={disabled || !current.registry}
+          disabledMessage={!current.registry ? "请先选择 Registry 实例。" : undefined}
+          valueField="name"
+          onChange={(resource) => onChange({
+            ...current,
+            region,
+            namespace: resource.name,
+            repository: "",
+          })}
+        />
+      </label>
+      <label className="pp-resource-field">
+        <span>镜像仓库</span>
+        <ResourcePicker
+          ariaLabel="已有镜像仓库"
+          value={current.repository}
+          valueLabel={current.repository}
+          state={repositoryList}
+          disabled={disabled || !current.registry || !current.namespace}
+          disabledMessage={!current.registry
+            ? "请先选择 Registry 实例。"
+            : !current.namespace
+              ? "请先选择 Namespace。"
+              : undefined}
+          valueField="name"
+          onChange={(resource) => onChange({
+            ...current,
+            region,
+            repository: resource.name,
+          })}
+        />
+      </label>
     </div>
   );
 }

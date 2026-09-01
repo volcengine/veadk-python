@@ -595,12 +595,22 @@ def _find_session(
     return None
 
 
+def _get_tool(client: Any, request: Any) -> Any:
+    try:
+        return client.get_tool(request)
+    except StopIteration as error:
+        raise LookupError(
+            "AgentKit did not return the requested Sandbox Tool."
+        ) from error
+
+
 async def _require_ready_tool(client: Any, tool_id: str, image: str) -> None:
     from agentkit.sdk.tools import types as tools_types
 
     try:
         tool = await asyncio.to_thread(
-            client.get_tool,
+            _get_tool,
+            client,
             tools_types.GetToolRequest(ToolId=tool_id),
         )
     except Exception as error:
