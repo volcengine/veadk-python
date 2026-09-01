@@ -6,6 +6,17 @@ A minimal deployable app whose agent runs on the **OpenAI Codex runtime**
 
 > 中文版见 [README.zh.md](./README.zh.md)
 
+> **What this example is:** a **deployment reference**. It shows how to package
+> and ship a `runtime="codex"` agent to AgentKit — the requirements pins, the
+> bundled Codex binary, the `agentkit config` flags. The agent itself is a
+> placeholder, and its one-shot Q&A is not a use case this runtime is good at:
+> `runtime="adk"` answers that kind of question faster and cheaper. For what the
+> runtime is actually *for*, see [`codex_data_analysis/`](../codex_data_analysis/)
+> (a model that writes a script, runs it, reads the traceback and fixes it) and
+> [`codex_ops_assistant/`](../codex_ops_assistant/) (the same loop over logs and
+> metrics, under a no-network sandbox), or
+> [when to use the codex runtime](../../docs/content/docs/framework/agent/runtime.en.mdx#when-to-use-the-codex-runtime).
+
 ## What's inside
 
 ```text
@@ -52,7 +63,7 @@ cp .env.example .env
 ## 2. Run locally (optional)
 
 ```bash
-pip install "veadk-python[codex]>=1.0.10"   # or: pip install "veadk-python>=0.5.39" openai-codex
+pip install "veadk-python[codex]"   # openai-codex + the bundled Codex CLI binary
 python app.py            # or: python -m app
 # open http://127.0.0.1:8000 ; POST /run_sse, or GET /ping -> {"status":"ok"}
 ```

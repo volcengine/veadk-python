@@ -3,6 +3,18 @@
 A `runtime="codex"` agent that uses **both a local skill and an MCP tool** on a
 chat backend (Volcengine Ark).
 
+> **What this example is:** a **wiring reference**. It shows how a local skill
+> and an MCP tool reach the model under `runtime="codex"`, using a deliberately
+> trivial task (one weather lookup) so that the plumbing is the only thing on
+> screen. Read it that way, not as a recommendation to use the codex runtime for
+> that kind of task — a single tool call plus a formatted answer is exactly what
+> `runtime="adk"` does faster and cheaper, without a Codex subprocess per turn.
+> For what this runtime is actually *for* — a model that writes a script, runs
+> it, reads the traceback and fixes it — see
+> [`codex_data_analysis/`](../codex_data_analysis/) and
+> [`codex_ops_assistant/`](../codex_ops_assistant/), or
+> [when to use the codex runtime](../../docs/content/docs/framework/agent/runtime.en.mdx#when-to-use-the-codex-runtime).
+
 ```
 codex_with_skill_and_mcp/
 ├── main.py                     # the agent + a sample run

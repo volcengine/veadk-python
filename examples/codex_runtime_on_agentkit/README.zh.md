@@ -6,6 +6,16 @@
 
 > English version: [README.md](./README.md)
 
+> **这个示例是什么：** 一份**部署参考**。它展示如何把一个 `runtime="codex"` 的
+> 智能体打包并发布到 AgentKit——依赖版本怎么钉、自带的 Codex 二进制怎么进镜像、
+> `agentkit config` 要传哪些参数。里面的智能体本身只是个占位，它做的一问一答
+> 并不是这个运行时擅长的场景：这类问题用 `runtime="adk"` 更快也更便宜。
+> 这个运行时真正的用处见 [`codex_data_analysis/`](../codex_data_analysis/)
+> （模型写脚本、跑起来、读 traceback、自己改好）与
+> [`codex_ops_assistant/`](../codex_ops_assistant/)（同一个循环用在日志与指标上，
+> 全程断网沙箱），或
+> [什么时候该用 codex 运行时](../../docs/content/docs/framework/agent/runtime.mdx#什么时候该用-codex-运行时)。
+
 ## 目录结构
 
 ```text
@@ -48,7 +58,7 @@ cp .env.example .env
 ## 2. 本地运行（可选）
 
 ```bash
-pip install "veadk-python[codex]>=1.0.10"   # 或：pip install "veadk-python>=0.5.39" openai-codex
+pip install "veadk-python[codex]"   # openai-codex + 自带的 Codex CLI 二进制
 python app.py            # 或：python -m app
 # 打开 http://127.0.0.1:8000；POST /run_sse，或 GET /ping -> {"status":"ok"}
 ```

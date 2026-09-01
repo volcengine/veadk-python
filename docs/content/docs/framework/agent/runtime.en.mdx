@@ -42,6 +42,46 @@ Install the optional dependency before using the Codex runtime:
 pip install "veadk-python[codex]"
 ```
 
+### When to use the Codex runtime
+
+The positioning callout above reduces to a single test: **the Codex runtime's
+one real advantage is that the model can write a file, run it, read the
+traceback, fix it, and run it again — inside an OS sandbox, without you having
+to pre-enumerate every step as a tool.** On every other axis it costs more than
+`runtime="adk"`.
+
+**Good fits**
+
+- **Work whose steps cannot be enumerated as tools ahead of time** — ad-hoc analysis, log triage, data wrangling, code modification. What to do next depends on the last step's output, not on what you imagined while writing the agent.
+- **Work over a filesystem** — intermediate artifacts stay in the workspace and are still there on the next turn of the same session (see [Workspace lifetime](#workspace-lifetime)).
+- **Work where a wrong first attempt is normal and retrying is cheap** — the error message *is* the model's next input. Under the ADK runtime a failed tool call is just an error string; here it is a traceback the model can read, diagnose and fix.
+
+**Bad fits**
+
+- **A fixed tool call and a formatted answer.** That is the ADK runtime's home ground: faster, cheaper, and subject to none of the limits below.
+- **An agent that needs `sub_agents`, `output_schema`, `planner`, `code_executor` or `generate_content_config`.** Under a non-adk runtime these **raise** — they do not degrade. See the [support matrix](#support-matrix) for the full list.
+- **Latency-sensitive paths.** Every invocation builds a fresh `CODEX_HOME`, spawns a Codex subprocess and opens an ephemeral thread; that fixed cost is paid per turn.
+- **`run_live`.** Non-adk runtimes have no live/bidi implementation — see [below](#run_live-is-unsupported).
+
+**The costs, stated honestly**
+
+- **One Codex subprocess per invocation.** The runtime rebuilds `CODEX_HOME` and enters `AsyncCodex(...)` every turn, with an `ephemeral=True` thread.
+- **The whole ADK history is re-serialized into the prompt every turn.** Prior turns are rendered as a `<conversation_history>` JSON block in front of the current message — there is no incremental continuation — so prompt tokens grow with conversation length. It is also why `include_contents="none"` raises instead of being ignored.
+- **ADK tool results travel through the model's context.** See [The workspace is the data plane](#the-workspace-is-the-data-plane) — the easiest way to ruin a turn with this runtime.
+
+The one-line version: **if you can express the task as a fixed sequence of tool
+calls, use `runtime="adk"`; reach for `runtime="codex"` only when you can
+describe the goal but the path has to be discovered.**
+
+The repository's four codex examples divide up like this:
+
+| Example | What it teaches |
+| :--- | :--- |
+| [`codex_data_analysis`](https://github.com/volcengine/veadk-python/tree/main/examples/codex_data_analysis) | **What the runtime is for.** Codex writes an analysis script, runs it, hits a real error in dirty data, fixes it, re-runs, and reports — the self-iteration loop. |
+| [`codex_ops_assistant`](https://github.com/volcengine/veadk-python/tree/main/examples/codex_ops_assistant) | **What the runtime is for.** ADK tools land logs, metrics and deploy history in the workspace; Codex writes throwaway scripts to correlate the three and find a root cause, all inside a no-network sandbox. |
+| [`codex_with_skill_and_mcp`](https://github.com/volcengine/veadk-python/tree/main/examples/codex_with_skill_and_mcp) | **How to wire it up.** The paths a local skill and an MCP tool take under this runtime. |
+| [`codex_runtime_on_agentkit`](https://github.com/volcengine/veadk-python/tree/main/examples/codex_runtime_on_agentkit) | **How to deploy it.** Ship a `runtime="codex"` agent to Volcengine AgentKit. |
+
 ### Codex security configuration
 
 Codex defaults to a session-isolated workspace, the `workspace_write` sandbox, no network access, and denial of every escalated operation:
@@ -80,11 +120,108 @@ Because of that, `CodexRuntimeConfig(sandbox="full_access", network_access=False
 
 `full_access` and `reuse_workspace=True` relax filesystem isolation between invocations and should only be enabled in trusted environments.
 
+#### The security baseline
+
+Put the pieces above together and you get the default recipe for running codex
+over untrusted input. Each of the four settings blocks a different direction,
+and none of them is redundant:
+
+```python title="agent.py"
+from google.adk.agents import RunConfig
+from veadk import Agent, Runner
+from veadk.runtime.codex import CodexRuntimeConfig
+
+agent = Agent(
+    name="analyst",
+    runtime="codex",
+    tools=[load_orders, publish_report],  # the only way in and out
+    codex_runtime_config=CodexRuntimeConfig(
+        sandbox="workspace_write",  # writes confined to the workspace
+        network_access=False,       # no outbound path from the sandbox
+        approval_mode="deny_all",   # the default; refuses every escalation
+    ),
+)
+
+await Runner(agent=agent).run(
+    "...",
+    run_config=RunConfig(max_llm_calls=40),  # cost ceiling for the invocation
+)
+```
+
+They compose because **with the network off, the ADK tools you wired up are the
+only outbound path**: the model can compute freely over sensitive data and retry
+as often as it likes, but to get anything *out* it has to go through a function
+you audited, signed and logged. Your tool list is your data-egress policy — which
+holds only as long as no individual tool offers arbitrary outbound calls of its own.
+
+Three related points, covered elsewhere rather than repeated here:
+
+- `approval_mode="auto_review"` removes the foundation this recipe stands on; see the [error callout above](#codex-security-configuration).
+- The `sandbox` × `network_access` semantics are in the [table above](#codex-security-configuration): only `workspace_write` reads `network_access`.
+- The `VEADK_CODEX_*` environment variables take **precedence over** the Python config; see [Codex environment variables](#codex-environment-variables). A single `VEADK_CODEX_SANDBOX=full_access` in the deployment environment overrides all of the code above.
+
+When `RunConfig(max_llm_calls=...)` is unset, VeADK's `Runner` falls back to the
+`MODEL_AGENT_MAX_LLM_CALLS` environment variable (default `100`). Under this
+runtime, set it explicitly and lower: the model decides for itself how many
+script rounds to run, and this budget is the only hard stop.
+
 #### Workspace lifetime
 
 By default a workspace is keyed by `app_name` / `user_id` / `session_id` / agent name: every invocation of one session **shares the same directory**, and it is not deleted at the end of a turn, so files written by one turn are still there for the next. The whole tree is removed when the process exits; while the process runs, session workspaces left **idle for more than 6 hours** are reaped the next time a workspace is created, which bounds disk growth in a long-lived server.
 
 A `workspace_root` you pass explicitly is *your* directory: the runtime never deletes it and never applies that idle reaping to it — it still creates a per-session subdirectory underneath, but cleaning those up is on you. `reuse_workspace=True` only means anything alongside `workspace_root`: it makes every session share that directory itself, with no per-session isolation.
+
+### The workspace is the data plane
+
+This is the most important technique for this runtime, and the easiest one to
+miss: **tool arguments and tool results are the control plane; the workspace is
+the data plane.**
+
+The reason is the path a tool call takes. ADK/MCP tools are not called by Codex
+itself — the runtime's Responses shim executes them, serializes the return value
+with `json.dumps`, and appends the resulting string to the model's `input` array
+as a `function_call_output`. And because Codex rebuilds the entire `input` after each
+of its own native tool rounds, the shim must **replay that
+`function_call`/`function_call_output` pair into every subsequent backend
+request of the same turn**. So:
+
+<Callout type="warn">
+A tool that returns 50k log lines pushes those 50k lines into the model's context — and pushes them again on each following request of that turn. This is not "a bit slower"; it is a wasted turn.
+</Callout>
+
+The fix is for a tool to hand back **a path, never a payload**: write the data
+into the workspace (which is Codex's `cwd`) and return only its location plus a
+little metadata. The data sits on disk where the model can grep, slice and
+aggregate it with shell commands, and only one line of it reaches the context.
+
+```python title="tools.py"
+def load_orders(day: str) -> dict:
+    """Write one day of orders into your working directory as CSV.
+
+    Returns a receipt, never the rows themselves — read the CSV at the
+    returned path with your own code.
+    """
+    rows = warehouse.query(day)
+    name = f"orders-{day}.csv"
+    write_csv(WORKSPACE / name, rows)
+    # A receipt, not a payload: where it is and what shape it has.
+    return {"path": name, "rows": len(rows), "columns": list(rows[0])}
+```
+
+The docstring is doing real work here: it is what the model reads, so it has to
+say that the result is a receipt. Otherwise the model asks the tool for the data
+and you are back where you started.
+
+The same holds in the other direction. Once Codex has written a report into the
+workspace, a "publish" tool should take **the path of the file it wrote** and
+read it off disk itself — not have the model re-dictate the whole report as a
+tool argument, which pushes it through the context a second time and invites it
+to drift on the way.
+
+Two ways for a tool to know where the workspace is:
+
+- **A fixed path (single tenant).** Set `workspace_root` explicitly together with `reuse_workspace=True`; the workspace is then `workspace_root` itself, so the tool and the `CodexRuntimeConfig` can share one constant. The cost is that every session shares that directory — see [Workspace lifetime](#workspace-lifetime).
+- **Per-session isolation (multi-tenant).** Keep the default session-isolated directory and let the model pass the destination path as a tool argument: Codex's `cwd` *is* this session's workspace, so the tool writes to that path and returns it unchanged. That path comes from the model, so the tool should verify it really resolves inside the expected directory before opening it.
 
 ### Codex execution knobs
 
