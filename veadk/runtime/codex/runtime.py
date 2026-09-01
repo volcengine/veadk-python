@@ -61,16 +61,23 @@ from openai_codex.generated.v2_all import (  # type: ignore[import-not-found]
 )
 
 from veadk.runtime.base_runtime import BaseRuntime
+from veadk.runtime.agent_transfer import append_transfer_instructions
+from veadk.runtime.agent_transfer import build_transfer_tool
+from veadk.runtime.agent_transfer import get_transfer_targets
+from veadk.runtime.agent_transfer import run_transferred_agent
+from veadk.runtime.agent_transfer import transfer_agent_name
 from veadk.runtime.codex.config import CodexRuntimeConfig
 from veadk.runtime.codex.config import codex_subprocess_env
 from veadk.runtime.codex.config import toml_string
 from veadk.runtime.codex.proxy import get_shim
 from veadk.runtime.codex.skills import sync_skills_to_codex_home
 from veadk.runtime.codex.tools_bridge import (
+    add_tool_to_bundle,
     build_executable_tools,
     close_toolsets,
     resume_authenticated_tools,
     resume_confirmed_tools,
+    sync_bundle_to_tools_dict,
 )
 from veadk.runtime.codex.translate import (
     build_input_attachments_from_llm_request,
@@ -88,6 +95,7 @@ from veadk.runtime.model_callbacks import (
     run_on_model_error_callbacks,
     system_instruction_to_text,
 )
+from veadk.utils.adk_compat import is_adk_gte
 from veadk.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -143,6 +151,10 @@ class CodexRuntime(BaseRuntime):
             )
 
         event_queue: asyncio.Queue[object] = asyncio.Queue()
+        turn_token: str | None = None
+        run_started_at = time.monotonic()
+        run_status = "failed"
+        use_adk_transfer_scheduler = _uses_adk_transfer_scheduler(ctx)
 
         async def _emit_tool_event(event: "Event") -> None:
             await event_queue.put(event)
@@ -154,16 +166,19 @@ class CodexRuntime(BaseRuntime):
                 event_sink=_emit_tool_event,
                 timeout_seconds=runtime_config.tool_timeout_seconds,
             )
+            transfer_targets = get_transfer_targets(agent)
+            if transfer_targets:
+                add_tool_to_bundle(
+                    tool_bundle,
+                    build_transfer_tool(transfer_targets),
+                    ctx,
+                    event_sink=_emit_tool_event,
+                    timeout_seconds=runtime_config.tool_timeout_seconds,
+                )
             resumed_events = [
                 *await resume_authenticated_tools(tool_bundle, ctx),
                 *await resume_confirmed_tools(tool_bundle, ctx),
             ]
-            turn_token = shim.register_turn(
-                tool_bundle.specs,
-                tool_bundle.executors,
-                max_tool_iterations=runtime_config.max_tool_iterations,
-                invocation_id=ctx.invocation_id,
-            )
         except BaseException as e:
             logger.error(
                 "codex_runtime_setup_failed invocation_id=%s stage=tools error_type=%s",
@@ -181,13 +196,39 @@ class CodexRuntime(BaseRuntime):
             # Persist resumed confirmation responses before constructing history,
             # so Codex sees the completed/rejected tool result exactly once.
             for event in resumed_events:
+                _scope_event(event, ctx)
+                run_status = "transferred" if transfer_agent_name(event) else run_status
                 yield event
+                if transfer_agent_name(event):
+                    if not use_adk_transfer_scheduler:
+                        async for transferred_event in run_transferred_agent(
+                            ctx, event
+                        ):
+                            _scope_event(transferred_event, ctx)
+                            yield transferred_event
+                    run_status = "transferred"
+                    await close_toolsets(tool_bundle.opened_toolsets)
+                    shutil.rmtree(codex_home, ignore_errors=True)
+                    if cleanup_workspace:
+                        shutil.rmtree(workspace, ignore_errors=True)
+                    logger.info(
+                        "codex_runtime_complete invocation_id=%s status=%s duration_ms=%d",
+                        ctx.invocation_id,
+                        run_status,
+                        round((time.monotonic() - run_started_at) * 1000),
+                    )
+                    return
 
             runtime_call = await build_runtime_llm_request(
                 agent,
                 ctx,
                 model=model,
                 tools_dict=tool_bundle.tools,
+            )
+            append_transfer_instructions(
+                agent,
+                runtime_call.llm_request,
+                transfer_targets,
             )
             short_circuit = await run_before_model_callbacks(
                 agent,
@@ -202,13 +243,33 @@ class CodexRuntime(BaseRuntime):
                     runtime_call.model_response_event,
                 )
                 _scope_event(event, ctx)
-                shim.unregister_turn(turn_token)
                 await close_toolsets(tool_bundle.opened_toolsets)
                 shutil.rmtree(codex_home, ignore_errors=True)
                 if cleanup_workspace:
                     shutil.rmtree(workspace, ignore_errors=True)
+                run_status = "completed"
+                logger.info(
+                    "codex_runtime_complete invocation_id=%s status=%s duration_ms=%d",
+                    ctx.invocation_id,
+                    run_status,
+                    round((time.monotonic() - run_started_at) * 1000),
+                )
                 yield event
                 return
+
+            sync_bundle_to_tools_dict(
+                tool_bundle,
+                runtime_call.llm_request.tools_dict,
+                ctx,
+                event_sink=_emit_tool_event,
+                timeout_seconds=runtime_config.tool_timeout_seconds,
+            )
+            turn_token = shim.register_turn(
+                tool_bundle.specs,
+                tool_bundle.executors,
+                max_tool_iterations=runtime_config.max_tool_iterations,
+                invocation_id=ctx.invocation_id,
+            )
 
             # Keep privileged instructions out of the user transcript. The SDK
             # exposes native base/developer instruction channels.
@@ -243,7 +304,8 @@ class CodexRuntime(BaseRuntime):
                 ctx.invocation_id,
                 type(e).__name__,
             )
-            shim.unregister_turn(turn_token)
+            if turn_token is not None:
+                shim.unregister_turn(turn_token)
             await close_toolsets(tool_bundle.opened_toolsets)
             shutil.rmtree(codex_home, ignore_errors=True)
             if cleanup_workspace:
@@ -251,8 +313,6 @@ class CodexRuntime(BaseRuntime):
             raise
         turn = None
         pump: asyncio.Task[None] | None = None
-        run_started_at = time.monotonic()
-        run_status = "failed"
         try:
             async with AsyncCodex(config=sdk_config) as codex:
                 thread = await codex.thread_start(
@@ -314,6 +374,8 @@ class CodexRuntime(BaseRuntime):
                 pump = asyncio.create_task(_pump_codex())
                 buffer_final_text = has_after_model_callbacks(agent, ctx)
                 final_text_events: list[Event] = []
+                transfer_requested = False
+                deferred_transfer_event: Event | None = None
                 while True:
                     queued = await event_queue.get()
                     if queued is _QUEUE_DONE:
@@ -321,12 +383,34 @@ class CodexRuntime(BaseRuntime):
                     if isinstance(queued, BaseException):
                         raise queued
                     event = queued  # type: ignore[assignment]
+                    transfer_target = transfer_agent_name(event)
+                    if transfer_target and use_adk_transfer_scheduler:
+                        transfer_requested = True
+                        run_status = "transferred"
+                        final_text_events.clear()
+                        deferred_transfer_event = event
+                        continue
                     if buffer_final_text and is_final_model_text_event(
                         event, agent.name
                     ):
                         final_text_events.append(event)
                         continue
                     yield event
+                    if transfer_target:
+                        transfer_requested = True
+                        final_text_events.clear()
+                        async for transferred_event in run_transferred_agent(
+                            ctx, event
+                        ):
+                            _scope_event(transferred_event, ctx)
+                            yield transferred_event
+                        run_status = "transferred"
+                        break
+                if transfer_requested:
+                    await pump
+                    if deferred_transfer_event is not None:
+                        yield deferred_transfer_event
+                    return
                 await pump
                 if final_text_events:
                     llm_response = final_events_to_llm_response(final_text_events)
@@ -345,8 +429,9 @@ class CodexRuntime(BaseRuntime):
                     yield event
                 run_status = "completed"
         except asyncio.CancelledError:
-            run_status = "cancelled"
-            if turn is not None:
+            if run_status != "transferred":
+                run_status = "cancelled"
+            if turn is not None and run_status != "transferred":
                 try:
                     await turn.interrupt()
                 except Exception:  # noqa: BLE001
@@ -384,7 +469,8 @@ class CodexRuntime(BaseRuntime):
             if pump is not None and not pump.done():
                 pump.cancel()
                 await asyncio.gather(pump, return_exceptions=True)
-            shim.unregister_turn(turn_token)
+            if turn_token is not None:
+                shim.unregister_turn(turn_token)
             await close_toolsets(tool_bundle.opened_toolsets)
             shutil.rmtree(codex_home, ignore_errors=True)
             if cleanup_workspace:
@@ -513,3 +599,9 @@ def _build_codex_input(
 def _scope_event(event: "Event", ctx: "InvocationContext") -> None:
     event.branch = getattr(ctx, "branch", None)
     event.isolation_scope = getattr(ctx, "isolation_scope", None)
+
+
+def _uses_adk_transfer_scheduler(ctx: "InvocationContext") -> bool:
+    """Whether ADK's outer workflow scheduler should run transfer targets."""
+
+    return is_adk_gte("2.0.0") and getattr(ctx, "_event_queue", None) is not None

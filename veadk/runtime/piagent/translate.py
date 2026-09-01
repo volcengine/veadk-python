@@ -36,7 +36,7 @@ _THINKING_MESSAGE_TYPES = {
 }
 
 
-def build_prompt(ctx: "InvocationContext") -> str:
+def build_prompt(ctx: InvocationContext) -> str:
     """Render ADK session history into a text prompt for Pi RPC Phase 1."""
 
     lines: list[str] = []
@@ -61,7 +61,7 @@ def build_prompt(ctx: "InvocationContext") -> str:
     return "\n".join(lines)
 
 
-def build_prompt_from_llm_request(llm_request: "LlmRequest") -> str:
+def build_prompt_from_llm_request(llm_request: LlmRequest) -> str:
     """Render callback-mutated LlmRequest contents into a Pi prompt."""
 
     lines: list[str] = []
@@ -150,9 +150,16 @@ def make_model_event(
 class PiEventTranslator:
     """Stateful converter for one Pi turn."""
 
-    def __init__(self, *, author: str, invocation_id: str):
+    def __init__(
+        self,
+        *,
+        author: str,
+        invocation_id: str,
+        bridged_tool_names: set[str] | None = None,
+    ):
         self.author = author
         self.invocation_id = invocation_id
+        self.bridged_tool_names = set(bridged_tool_names or ())
         self.emitted_text = False
         self._thinking_parts: list[str] = []
         self._text_parts: list[str] = []
@@ -162,10 +169,17 @@ class PiEventTranslator:
         if event_type == "message_update":
             return self._message_update_to_events(event)
         if event_type == "tool_execution_start":
+            if self._is_bridged_tool_event(event):
+                self._drain_pending_parts()
+                return []
             return [self._tool_call_event(event)]
         if event_type == "tool_execution_update":
+            if self._is_bridged_tool_event(event):
+                return []
             return self._tool_update_events(event)
         if event_type == "tool_execution_end":
+            if self._is_bridged_tool_event(event):
+                return []
             return [self._tool_response_event(event)]
         if event_type == "message_end":
             message = event.get("message")
@@ -181,6 +195,9 @@ class PiEventTranslator:
         if event_type == "agent_settled":
             return self._flush_events()
         return []
+
+    def _is_bridged_tool_event(self, event: dict[str, Any]) -> bool:
+        return str(event.get("toolName") or "") in self.bridged_tool_names
 
     def _message_update_to_events(self, event: dict[str, Any]) -> list[Event]:
         update = event.get("assistantMessageEvent")
