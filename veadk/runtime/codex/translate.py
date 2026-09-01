@@ -648,8 +648,12 @@ def _on_item_started(
     if call is None:
         return [_lifecycle_event(author, invocation_id, "item_started", metadata)]
     name, args, _ = call
-    # Remember the id so the completed item emits only the response half.
-    active_tool_items.add(item_id)
+    # Remember the id so the completed item emits only the response half. An
+    # id-less item is never tracked: every one of them would share the empty
+    # key, so the *next* id-less tool item would match and lose its
+    # `function_call`, leaving an orphan `function_response` in the session.
+    if item_id:
+        active_tool_items.add(item_id)
     return [
         _lifecycle_event(
             author,
@@ -673,7 +677,7 @@ def _on_item_completed(
     item = data.get("item") or {}
     item_id = str(item.get("id") or "")
     converted = item_to_events(item, author, invocation_id)
-    if item_id in active_tool_items and len(converted) == 2:
+    if item_id and item_id in active_tool_items and len(converted) == 2:
         converted = converted[1:]
     active_tool_items.discard(item_id)
     for event in converted:

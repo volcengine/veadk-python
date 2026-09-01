@@ -168,14 +168,32 @@ async def test_two_requests_under_one_token_replay_the_tool_transcript(
             json={"model": "model", "stream": False, "input": [_message("go")]},
         )
         # Codex's own second request: a fresh `input` rebuilt from its thread,
-        # with no knowledge of the tool the shim ran on its behalf.
+        # with no knowledge of the tool the shim ran on its behalf. Codex
+        # appends its *own* items (here a native tool round) and re-sends the
+        # same user message -- it does not add a new user turn. That shape
+        # matters: a trailing user message is what a compaction pass looks
+        # like, and the agent-turn gate rejects those on purpose.
         second = await client.post(
             "/v1/responses",
             headers=headers,
             json={
                 "model": "model",
                 "stream": False,
-                "input": [_message("go"), _message("and now summarize")],
+                "input": [
+                    _message("go"),
+                    {
+                        "type": "function_call",
+                        "call_id": "shell-1",
+                        "name": "exec_command",
+                        "arguments": "{}",
+                        "status": "completed",
+                    },
+                    {
+                        "type": "function_call_output",
+                        "call_id": "shell-1",
+                        "output": "ok",
+                    },
+                ],
             },
         )
 
@@ -183,21 +201,21 @@ async def test_two_requests_under_one_token_replay_the_tool_transcript(
     assert second.status_code == 200
     assert executed == ["call-1"], "the tool must run exactly once for the turn"
 
+    # The replayed ADK pair must be there. Codex's own `shell-1` pair is there
+    # too -- it is part of the history Codex rebuilt -- so this asserts on the
+    # ADK call id rather than on the request containing nothing else.
     kinds = [
         (item.get("type"), item.get("call_id"))
         for item in seen[-1]
         if item.get("type") in ("function_call", "function_call_output")
     ]
-    assert kinds == [
-        ("function_call", "call-1"),
-        ("function_call_output", "call-1"),
-    ], seen[-1]
-    # Order matters to the chat bridge: the call must be immediately followed
-    # by its result.
-    types_only = [item.get("type") for item in seen[-1]]
-    assert types_only.index("function_call") + 1 == types_only.index(
-        "function_call_output"
-    )
+    assert kinds.count(("function_call", "call-1")) == 1, seen[-1]
+    assert kinds.count(("function_call_output", "call-1")) == 1, seen[-1]
+    # Order matters to the chat bridge: each call must be immediately followed
+    # by its own result, or litellm emits an `assistant(tool_calls)` with no
+    # matching `tool` message and the backend rejects the request.
+    call_index = kinds.index(("function_call", "call-1"))
+    assert kinds[call_index + 1] == ("function_call_output", "call-1"), kinds
 
 
 @pytest.mark.asyncio
@@ -924,3 +942,68 @@ async def test_compaction_request_never_executes_an_adk_tool(monkeypatch) -> Non
         "a compaction pass re-executed the agent's tool: the real side effect "
         f"ran twice (call ids: {executed})"
     )
+
+
+@pytest.mark.asyncio
+async def test_degraded_gate_rejects_a_compaction_shaped_request(monkeypatch) -> None:
+    """The marker-less fallback must still fail closed on a compaction pass.
+
+    When the turn marker never reaches the model request, the gate falls back to
+    matching the first request's user texts. Matching *any* remembered text
+    would admit compaction, which re-sends the whole history and therefore
+    always carries the turn's opening message -- and a summarizer that emits a
+    ``function_call`` would run a real ADK tool a second time. Only the *last*
+    user message is anchored, so compaction's appended instruction fails it.
+    """
+    shim = ResponsesShim("https://backend.invalid/v1", "backend-key")
+    executed: list[str] = []
+    seen: list[dict] = []
+
+    async def executor(args, call_id):
+        executed.append(call_id)
+        return json.dumps({"ok": True})
+
+    token = shim.register_turn(
+        [{"type": "function", "name": "record", "parameters": {}}],
+        {"record": executor},
+    )
+
+    async def backend(**kwargs):
+        seen.append(json.loads(json.dumps(kwargs)))
+        return _text_response("summary", f"resp-{len(seen)}")
+
+    monkeypatch.setattr(proxy_module.litellm, "aresponses", backend)
+
+    async with _client(shim) as client:
+        headers = {"Authorization": f"Bearer {token}"}
+        # First request establishes the anchors (no marker: degraded path).
+        await client.post(
+            "/v1/responses",
+            headers=headers,
+            json={"model": "model", "stream": False, "input": [_message("go")]},
+        )
+        # Compaction: whole history re-sent, a summarization instruction
+        # appended as a trailing user message, and an empty tools list.
+        await client.post(
+            "/v1/responses",
+            headers=headers,
+            json={
+                "model": "model",
+                "stream": False,
+                "tools": [],
+                "input": [_message("go"), _message("Summarize the conversation.")],
+            },
+        )
+
+    assert executed == [], "no ADK tool may run for a compaction pass"
+    compaction = seen[-1]
+    assert not compaction.get("tools"), (
+        "the agent's ADK tools must not be advertised to the summarizer, or it "
+        f"can call them: {compaction.get('tools')!r}"
+    )
+    replayed = [
+        item
+        for item in compaction["input"]
+        if item.get("type") in ("function_call", "function_call_output")
+    ]
+    assert replayed == [], f"tool transcript leaked into compaction: {replayed}"

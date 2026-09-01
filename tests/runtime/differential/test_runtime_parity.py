@@ -465,6 +465,34 @@ async def test_unsupported_config_fails_fast_and_actionably(
         assert fragment in message, f"{row_id}: {fragment!r} missing from {message!r}"
 
 
+def test_output_schema_rule_stays_an_error() -> None:
+    """Pin the invariant that makes ``output_state``'s schema branch dead code.
+
+    ``maybe_save_output_to_state`` guards its ``output_schema`` branch instead
+    of raising, and documents itself as unreachable because this rule refuses
+    the configuration long before an event reaches it. Demoting the rule to
+    ``"warn"`` would quietly revive that branch against a model nobody
+    constrained -- so the demotion has to be a deliberate act that fails here,
+    on its own diff, rather than a silent behaviour change discovered later in
+    someone's session state.
+
+    If you are here because this test failed: re-read
+    ``veadk/runtime/output_state.py``'s docstring before changing the rule.
+    """
+    from veadk.runtime import compat
+
+    rule = next(
+        (r for r in compat.SUPPORT_RULES if r.field == "output_schema"),
+        None,
+    )
+    assert rule is not None, "the output_schema support rule was removed"
+    assert rule.policy == "error", (
+        "output_schema was demoted to "
+        f"{rule.policy!r}; veadk/runtime/output_state.py assumes it stays "
+        "'error' and its schema branch is documented as unreachable."
+    )
+
+
 # -------------------------------------------------- paired positive asserts
 #
 # Every entry in the excluded set above is only safe to exclude because one of

@@ -116,23 +116,131 @@ def _validate(name: str, payload: dict) -> BaseModel:
 #: ``model_construct``) so a schema drift fails here rather than silently
 #: changing what the runtime observes.
 _NOTIFICATION_PAYLOADS: dict[str, dict] = {
-    "TurnStartedNotification": {"turn": {"id": "turn-1", "status": "inProgress"}},
-    "TurnCompletedNotification": {"turn": {"id": "turn-1", "status": "completed"}},
+    # Every turn notification carries `thread_id` alongside the turn scoping,
+    # and `Turn` itself requires `items` -- both are required by the real
+    # models, so a payload that omits them never validates.
+    "TurnStartedNotification": {
+        "thread_id": "thread-1",
+        "turn": {"id": "turn-1", "status": "inProgress", "items": []},
+    },
+    "TurnCompletedNotification": {
+        "thread_id": "thread-1",
+        "turn": {"id": "turn-1", "status": "completed", "items": []},
+    },
     "AgentMessageDeltaNotification": {
+        "thread_id": "thread-1",
         "turn_id": "turn-1",
         "item_id": "item-1",
         "delta": "hello",
     },
     "ReasoningSummaryTextDeltaNotification": {
+        "thread_id": "thread-1",
         "turn_id": "turn-1",
         "item_id": "item-1",
         "summary_index": 0,
         "delta": "thinking",
     },
-    "ThreadTokenUsageUpdatedNotification": {
+    "CommandExecutionOutputDeltaNotification": {
+        "thread_id": "thread-1",
         "turn_id": "turn-1",
-        "model_context_window": 128000,
+        "item_id": "item-1",
+        "delta": "stdout chunk",
+    },
+    "ContextCompactedNotification": {"thread_id": "thread-1", "turn_id": "turn-1"},
+    "ErrorNotification": {
+        "thread_id": "thread-1",
+        "turn_id": "turn-1",
+        "will_retry": False,
+        # `TurnError` has no `code`; the structured detail is `codex_error_info`.
+        "error": {"message": "boom"},
+    },
+    "FileChangeOutputDeltaNotification": {
+        "thread_id": "thread-1",
+        "turn_id": "turn-1",
+        "item_id": "item-1",
+        "delta": "patch chunk",
+    },
+    "FileChangePatchUpdatedNotification": {
+        "thread_id": "thread-1",
+        "turn_id": "turn-1",
+        "item_id": "item-1",
+        "changes": [
+            {"path": "/workspace/a.py", "kind": {"type": "add"}, "diff": "+veadk"}
+        ],
+    },
+    "ItemStartedNotification": {
+        "thread_id": "thread-1",
+        "turn_id": "turn-1",
+        "started_at_ms": 0,
+        "item": {"id": "item-1", "type": "webSearch", "query": "veadk"},
+    },
+    "ItemCompletedNotification": {
+        "thread_id": "thread-1",
+        "turn_id": "turn-1",
+        "completed_at_ms": 1,
+        "item": {"id": "item-1", "type": "webSearch", "query": "veadk"},
+    },
+    "ItemGuardianApprovalReviewStartedNotification": {
+        "thread_id": "thread-1",
+        "turn_id": "turn-1",
+        "review_id": "review-1",
+        "started_at_ms": 0,
+        "target_item_id": "item-1",
+        "action": {"type": "mcpToolCall", "server": "srv", "tool_name": "tool"},
+        "review": {"status": "inProgress"},
+    },
+    "ItemGuardianApprovalReviewCompletedNotification": {
+        "thread_id": "thread-1",
+        "turn_id": "turn-1",
+        "review_id": "review-1",
+        "started_at_ms": 0,
+        "completed_at_ms": 1,
+        "decision_source": "agent",
+        "target_item_id": "item-1",
+        "action": {"type": "mcpToolCall", "server": "srv", "tool_name": "tool"},
+        "review": {"status": "approved"},
+    },
+    "McpToolCallProgressNotification": {
+        "thread_id": "thread-1",
+        "turn_id": "turn-1",
+        "item_id": "item-1",
+        # This one names its text field `message`; every other delta member
+        # names it `delta`, and `_delta_handler` falls back accordingly.
+        "message": "half way",
+    },
+    "ModelReroutedNotification": {
+        "thread_id": "thread-1",
+        "turn_id": "turn-1",
+        "from_model": "gpt-5-codex",
+        "to_model": "gpt-5",
+        "reason": "highRiskCyberActivity",
+    },
+    "PlanDeltaNotification": {
+        "thread_id": "thread-1",
+        "turn_id": "turn-1",
+        "item_id": "item-1",
+        "delta": "plan chunk",
+    },
+    "ReasoningTextDeltaNotification": {
+        "thread_id": "thread-1",
+        "turn_id": "turn-1",
+        "item_id": "item-1",
+        "content_index": 0,
+        "delta": "thinking",
+    },
+    "TurnPlanUpdatedNotification": {
+        "thread_id": "thread-1",
+        "turn_id": "turn-1",
+        "plan": [{"step": "do the thing", "status": "inProgress"}],
+    },
+    "ThreadTokenUsageUpdatedNotification": {
+        "thread_id": "thread-1",
+        "turn_id": "turn-1",
+        # `model_context_window` belongs to `ThreadTokenUsage`, not to the
+        # notification: the SDK nests it beside `last`/`total`, and
+        # `_on_token_usage` forwards that mapping verbatim.
         "token_usage": {
+            "model_context_window": 128000,
             "last": {
                 "input_tokens": 10,
                 "cached_input_tokens": 0,
@@ -150,6 +258,21 @@ _NOTIFICATION_PAYLOADS: dict[str, dict] = {
         },
     },
 }
+
+
+def test_every_dispatched_notification_has_a_real_payload() -> None:
+    """The real-instance test below is only as good as its payload table.
+
+    Without this, adding a handler to ``_DISPATCH`` silently leaves it covered
+    by hand-rolled fakes alone -- which is the exact blind spot this module
+    exists to close.
+    """
+    missing = set(translate._DISPATCH) - set(_NOTIFICATION_PAYLOADS)
+    assert not missing, (
+        "these notifications are dispatched but never built as real SDK "
+        f"instances: {sorted(missing)}. Add a payload to "
+        "_NOTIFICATION_PAYLOADS."
+    )
 
 
 @pytest.mark.parametrize("name", sorted(_NOTIFICATION_PAYLOADS))
@@ -173,7 +296,13 @@ def test_notification_to_events_accepts_real_sdk_instances(name: str) -> None:
 
 
 def test_turn_completed_payload_exposes_turn_id() -> None:
-    """``runtime.py`` reads ``payload.turn.id`` directly, not through a dump."""
+    """The nested ``turn.id`` must survive both attribute access and the dump.
+
+    ``TurnCompletedNotification`` carries no ``turn_id`` of its own -- the id
+    is nested under ``turn`` -- and ``_on_turn_completed`` reads it out of the
+    dumped mapping to stamp ``custom_metadata["turn_id"]``. The SDK's own
+    ``notification_turn_id`` resolves it by attribute, so assert both paths.
+    """
     payload = _validate(
         "TurnCompletedNotification", _NOTIFICATION_PAYLOADS["TurnCompletedNotification"]
     )
@@ -187,7 +316,14 @@ def test_turn_completed_payload_exposes_turn_id() -> None:
 
 
 def _item_model_for(discriminator: str) -> type[BaseModel]:
-    """Find the SDK model whose ``type`` literal is ``discriminator``.
+    """Find the *thread item* model whose ``type`` literal is ``discriminator``.
+
+    Scoped to the SDK's own ``ThreadItem`` union rather than to every model in
+    ``v2_all``, because the discriminator strings are not globally unique:
+    ``mcpToolCall`` is carried by both ``McpToolCallThreadItem`` and
+    ``McpToolCallGuardianApprovalReviewAction``. Only a thread item is ever
+    handed to ``_tool_call``, and scanning the whole module picked the
+    approval-review model by alphabetical accident.
 
     Looked up by discriminator rather than by class name so an SDK *rename*
     still resolves; a removed or renamed *discriminator* -- which is what
@@ -195,11 +331,9 @@ def _item_model_for(discriminator: str) -> type[BaseModel]:
     """
     from openai_codex.generated import v2_all
 
+    union = typing.get_args(v2_all.ThreadItem.model_fields["root"].annotation)
     matches: list[type[BaseModel]] = []
-    for name in dir(v2_all):
-        candidate = getattr(v2_all, name)
-        if not isinstance(candidate, type) or not issubclass(candidate, BaseModel):
-            continue
+    for candidate in union:
         field = candidate.model_fields.get("type")
         if field is None:
             continue
@@ -207,9 +341,13 @@ def _item_model_for(discriminator: str) -> type[BaseModel]:
         if discriminator in literals or field.default == discriminator:
             matches.append(candidate)
     assert matches, (
-        f"no openai-codex model carries type={discriminator!r}; "
+        f"no openai-codex thread item carries type={discriminator!r}; "
         "translate._tool_call still matches that string and would now return "
         "None for every such item, silently dropping the tool call"
+    )
+    assert len(matches) == 1, (
+        f"type={discriminator!r} is ambiguous within the ThreadItem union: "
+        f"{[m.__name__ for m in matches]}"
     )
     return matches[0]
 
@@ -224,6 +362,9 @@ def _item_model_for(discriminator: str) -> type[BaseModel]:
                 "id": "item-1",
                 "type": "commandExecution",
                 "command": "ls",
+                # Required by CommandExecutionThreadItem: the SDK parses every
+                # command into a structured action list.
+                "command_actions": [],
                 "cwd": "/workspace",
                 "aggregated_output": "a\nb\n",
                 "exit_code": 0,

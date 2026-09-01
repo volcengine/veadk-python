@@ -55,4 +55,49 @@ jobs:
     - name: Run unit tests with pytest
       run: |
         source .venv/bin/activate
-        pytest -n 16
+        # `codex_smoke` is excluded here rather than relying on its
+        # CODEX_RUN_SMOKE opt-in alone: it spawns a real Codex subprocess and
+        # binds two real loopback ports, which must never run under `-n 16`.
+        pytest -n 16 -m "not codex_smoke"
+
+  # Real Codex binary + real OS sandbox + real shim socket, against a stubbed
+  # model backend (no credentials, no network egress). Kept out of the matrix
+  # job above because it is serial and process-spawning.
+  #
+  # `continue-on-error` is deliberate for now: the CLI is pinned to an alpha
+  # (openai-codex-cli-bin==0.137.0a4) and whether the OS sandbox
+  # (landlock+seccomp on a GitHub runner) establishes at all is precisely the
+  # unknown this test exists to discover. Collect the signal first; drop the
+  # flag once it has been green for a while.
+  codex-smoke:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Install the latest version of uv
+      uses: astral-sh/setup-uv@v6
+
+    - name: Install dependencies
+      run: |
+        uv venv .venv
+        source .venv/bin/activate
+        uv sync --all-extras
+        uv pip install -e .
+
+    - name: Run the Codex end-to-end smoke test
+      env:
+        CODEX_RUN_SMOKE: "1"
+      run: |
+        source .venv/bin/activate
+        # -p no:xdist: this test must not be distributed across workers.
+        # -rs: print skip reasons, so a silently skipped smoke test (missing
+        # SDK, missing binary, unsupported platform) is visible in the log.
+        pytest -m codex_smoke -p no:xdist -rs

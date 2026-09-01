@@ -322,7 +322,16 @@ class TurnToolState:
           failing the turn's tools closed for good. The first request under a
           freshly registered token is by construction the turn's opening
           sampling request: nothing exists yet to compact and no review thread
-          can have been spawned.
+          can have been spawned. Later requests are then held to the same
+          two-signal test as the marker path, because a compaction pass re-sends
+          the whole history and so always carries the anchor texts.
+
+        Residual risk, stated rather than hidden: both paths lean on compaction
+        sending an empty ``tools`` list. A Codex version that advertises tools
+        on a summarization pass would satisfy the ``tools_advertised`` arm and
+        be treated as the agent turn. That arm cannot simply be dropped — it is
+        what keeps ADK tools working for the rest of a turn after a mid-turn
+        compaction appends its summary as a trailing user message.
 
         Returns:
             bool: ``True`` when tool injection, transcript replay and the
@@ -341,7 +350,18 @@ class TurnToolState:
             if not any(marker in text for text in user_texts):
                 return False
             return tools_advertised or (bool(user_texts) and marker in user_texts[-1])
-        return first or any(text in anchors for text in user_texts)
+        if first:
+            return True
+        # Anchored on the *last* user message only. Matching any remembered
+        # text would admit a compaction pass, which re-sends the whole history
+        # and so always carries the turn's opening message. The marker path's
+        # `tools_advertised` arm is deliberately not mirrored here: without a
+        # marker it would also admit a review pass, which runs in a fresh
+        # delegate thread but does advertise tools. Losing ADK tools for the
+        # rest of a turn after a mid-turn compaction is a degradation; running
+        # a real tool inside a summarization or review pass is a wrong answer
+        # with side effects, so this fallback fails closed.
+        return bool(user_texts) and user_texts[-1] in anchors
 
     def marker_was_delivered(self) -> bool:
         """Whether the turn marker was seen on this turn's first request."""

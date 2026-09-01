@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any, Optional
 
 from google.adk.events.event import Event
@@ -25,56 +24,6 @@ from google.adk.utils._schema_utils import validate_schema
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
-
-_FENCED_BLOCK = re.compile(
-    r"```[ \t]*(?:json|JSON)?[ \t]*\r?\n(?P<body>.*?)\r?\n?[ \t]*```",
-    re.DOTALL,
-)
-
-
-def _validated_or_none(output_schema: Any, text: str) -> tuple[bool, Any]:
-    """Validate ``text`` against ``output_schema`` without ever raising.
-
-    Returns:
-        tuple[bool, Any]: ``(True, value)`` when ``text`` validates, otherwise
-        ``(False, None)``.
-    """
-    try:
-        return True, validate_schema(output_schema, text)
-    except Exception:  # noqa: BLE001 - pydantic/json errors must not kill a run
-        return False, None
-
-
-def _coerce_to_schema(output_schema: Any, text: str) -> tuple[bool, Any]:
-    """Try to read a schema-conforming value out of a model's reply.
-
-    Two shapes are accepted, in order:
-
-    1. The whole reply (stripped) is the JSON payload.
-    2. The reply contains exactly one fenced code block (```` ```json ... ``` ````
-       or a bare ```` ``` ... ``` ````) whose body is the JSON payload. A fence is
-       an unambiguous delimiter, so any prose around it can be discarded safely.
-
-    Anything else — prose with a bare ``{...}`` somewhere inside it, several
-    fenced blocks, truncated JSON — is *rejected rather than salvaged*. Locating
-    "the JSON" inside free-form prose is guesswork: braces occur in prose, a
-    reply may contain several candidate objects, and a wrong guess silently
-    writes a mangled value into tenant session state. Skipping leaves the
-    previous value in place, which is recoverable; a wrong write is not.
-
-    Returns:
-        tuple[bool, Any]: ``(True, value)`` on success, ``(False, None)``
-        otherwise.
-    """
-    ok, value = _validated_or_none(output_schema, text.strip())
-    if ok:
-        return True, value
-
-    blocks = _FENCED_BLOCK.findall(text)
-    if len(blocks) == 1:
-        return _validated_or_none(output_schema, blocks[0].strip())
-
-    return False, None
 
 
 def maybe_save_output_to_state(agent: Any, event: Event) -> None:
@@ -95,13 +44,22 @@ def maybe_save_output_to_state(agent: Any, event: Event) -> None:
     intermediate items ``partial=True``: those stop being final responses, only
     the real final message reaches this function, and the outcome is unchanged.
 
-    **Never raises.** ``validate_schema`` calls ``model_validate_json``, which
-    raises ``pydantic.ValidationError`` on prose. External harnesses emit prose
-    constantly, and this runs on every event of the invocation, so a raise here
-    would kill the whole turn. An unparseable or non-conforming final text is
-    therefore *skipped with a warning*: nothing is written, and any value an
-    earlier event wrote stays in place. Skipping matches ADK's "do not write
-    garbage" contract and cannot take down a tenant's run.
+    **The ``output_schema`` branch is unreachable by construction.**
+    ``veadk.runtime.compat`` classifies ``output_schema`` as ``"error"`` for
+    every non-``adk`` runtime, and that gate runs a few lines above this
+    function's only call site in :meth:`veadk.agent.Agent._run_async_impl`. The
+    rule is right: the schema reaches neither the backend nor the prompt (it is
+    written to ``LlmRequest.config.response_schema``, which the prompt builder
+    never reads), so the model is not constrained and "structured output" would
+    not be structured.
+
+    The branch is nonetheless *guarded rather than raising*, so that demoting
+    the rule can never kill a turn mid-stream: ``validate_schema`` calls
+    ``model_validate_json``, which raises on prose, and this runs on every
+    event of the invocation. A non-conforming final text is skipped with a
+    warning; any value an earlier event wrote stays in place. The real
+    protection against an accidental demotion is the test asserting that rule
+    stays at ``"error"`` — see ``tests/runtime/differential/``.
 
     Args:
         agent (Any): The agent that produced the event. Read defensively.
@@ -136,20 +94,21 @@ def maybe_save_output_to_state(agent: Any, event: Event) -> None:
 
     output_schema = getattr(agent, "output_schema", None)
     if output_schema:
+        # Unreachable while compat keeps output_schema at "error" — see the
+        # docstring. Guarded anyway so a demotion cannot kill a turn mid-stream.
         if not result.strip():
             return
-        ok, validated = _coerce_to_schema(output_schema, result)
-        if not ok:
+        try:
+            result = validate_schema(output_schema, result)
+        except Exception:  # noqa: BLE001 - pydantic/json errors must not kill a run
             logger.warning(
                 "Agent '%s' final response does not match output_schema %s; "
-                "skipping the state['%s'] write. External runtimes do not "
-                "constrain the model to the schema, so free-form replies are "
-                "expected. Drop output_schema, or use runtime='adk'.",
+                "skipping the state['%s'] write. Drop output_schema, or use "
+                "runtime='adk'.",
                 getattr(agent, "name", "<unknown>"),
                 getattr(output_schema, "__name__", type(output_schema).__name__),
                 output_key,
             )
             return
-        result = validated
 
     event.actions.state_delta[output_key] = result

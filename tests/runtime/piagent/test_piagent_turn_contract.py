@@ -182,21 +182,19 @@ async def test_answer_wins_over_a_tool_call_preamble(tmp_path, monkeypatch) -> N
     events = [e async for e in PiAgentRuntime().run_async(_agent(), ctx)]
 
     finals = [
-        e
-        for e in events
-        if e.is_final_response() and e.content and e.content.parts
+        e for e in events if e.is_final_response() and e.content and e.content.parts
     ]
     assert len(finals) == 1, (
         "a turn must produce exactly one final response; got "
         f"{[[p.text for p in e.content.parts] for e in finals]}"
     )
     text = "".join(p.text or "" for p in finals[0].content.parts)
-    assert "it is sunny" in text, (
-        f"the answering round was dropped; the turn answered {text!r}"
-    )
-    assert text.strip() == "it is sunny", (
-        f"the preamble leaked into the turn's answer: {text!r}"
-    )
+    assert (
+        "it is sunny" in text
+    ), f"the answering round was dropped; the turn answered {text!r}"
+    assert (
+        text.strip() == "it is sunny"
+    ), f"the preamble leaked into the turn's answer: {text!r}"
 
 
 # ------------------------------------------------------ the new runtime plumbing
@@ -264,9 +262,7 @@ async def test_turn_reports_accumulated_token_usage(tmp_path, monkeypatch) -> No
         },
         {
             "type": "message_end",
-            "message": _assistant_message(
-                "round two", usage={"input": 5, "output": 6}
-            ),
+            "message": _assistant_message("round two", usage={"input": 5, "output": 6}),
         },
         {"type": "agent_settled"},
     ]
@@ -278,9 +274,9 @@ async def test_turn_reports_accumulated_token_usage(tmp_path, monkeypatch) -> No
     events = [e async for e in PiAgentRuntime().run_async(_agent(), ctx)]
 
     carriers = [e for e in events if getattr(e, "usage_metadata", None) is not None]
-    assert len(carriers) == 1, (
-        f"expected exactly one usage carrier per turn, got {len(carriers)}"
-    )
+    assert (
+        len(carriers) == 1
+    ), f"expected exactly one usage carrier per turn, got {len(carriers)}"
     usage = carriers[0].usage_metadata
     # prompt <- input + cacheRead + cacheWrite = (10+3+2) + 5
     assert usage.prompt_token_count == 20, usage
@@ -341,9 +337,7 @@ async def test_turn_emits_an_indexable_call_llm_span(tmp_path, monkeypatch) -> N
         [
             {
                 "type": "message_end",
-                "message": _assistant_message(
-                    "hi", usage={"input": 11, "output": 7}
-                ),
+                "message": _assistant_message("hi", usage={"input": 11, "output": 7}),
             },
             {"type": "agent_settled"},
         ],
@@ -378,7 +372,9 @@ async def test_turn_emits_an_indexable_call_llm_span(tmp_path, monkeypatch) -> N
 
     spans = exporter._spans[before:]
     call_llm = [s for s in spans if s.name == "call_llm"]
-    assert call_llm, f"no call_llm span for a Pi turn: {sorted({s.name for s in spans})}"
+    assert (
+        call_llm
+    ), f"no call_llm span for a Pi turn: {sorted({s.name for s in spans})}"
 
     attributes = dict(call_llm[0].attributes or {})
     assert attributes.get("gen_ai.session.id") == session_id, attributes
