@@ -58,6 +58,7 @@ logger = get_logger(__name__)
 
 EventSink = Callable[[Event], Awaitable[None]]
 Executor = Callable[[dict[str, Any], str], Awaitable[str]]
+TRANSFERRED_STATUS = "transferred"
 
 
 @dataclass
@@ -166,6 +167,65 @@ async def build_executable_tools(
             ",".join(bundle.executors),
         )
     return bundle
+
+
+def add_tool_to_bundle(
+    bundle: CodexToolBundle,
+    tool: "BaseTool",
+    ctx: "InvocationContext",
+    *,
+    event_sink: EventSink | None = None,
+    timeout_seconds: float | None = None,
+) -> None:
+    """Add one ADK tool to an existing Codex tool bundle."""
+
+    from google.adk.models.lite_llm import _function_declaration_to_tool_param
+
+    try:
+        declaration = tool._get_declaration()
+    except Exception as e:  # noqa: BLE001 - one tool must not break the turn
+        logger.warning(
+            "codex_tool_skipped reason=missing_declaration error_type=%s",
+            type(e).__name__,
+        )
+        return
+    if declaration is None or not declaration.name:
+        return
+    name = str(declaration.name)
+    if name in bundle.tools:
+        raise ValueError(f"codex: duplicate tool name {name!r}")
+    chat_param = _function_declaration_to_tool_param(declaration)
+    bundle.specs.append({"type": "function", **chat_param["function"]})
+    bundle.tools[name] = tool
+    bundle.executors[name] = _make_executor(
+        tool,
+        ctx,
+        event_sink=event_sink,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def sync_bundle_to_tools_dict(
+    bundle: CodexToolBundle,
+    tools_dict: dict[str, "BaseTool"],
+    ctx: "InvocationContext",
+    *,
+    event_sink: EventSink | None = None,
+    timeout_seconds: float | None = None,
+) -> None:
+    """Rebuild specs/executors so the shim matches callback-mutated tools."""
+
+    bundle.specs = []
+    bundle.executors = {}
+    bundle.tools = {}
+    for tool in tools_dict.values():
+        add_tool_to_bundle(
+            bundle,
+            tool,
+            ctx,
+            event_sink=event_sink,
+            timeout_seconds=timeout_seconds,
+        )
 
 
 async def resume_confirmed_tools(
@@ -488,6 +548,14 @@ def _make_executor(
             payload = {
                 "status": status,
                 "call_id": call_id,
+                "response": payload,
+            }
+        elif getattr(actions, "transfer_to_agent", None):
+            status = TRANSFERRED_STATUS
+            payload = {
+                "status": status,
+                "call_id": call_id,
+                "agent_name": actions.transfer_to_agent,
                 "response": payload,
             }
         else:

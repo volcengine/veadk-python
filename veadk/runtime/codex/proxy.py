@@ -29,6 +29,7 @@ import asyncio
 import json
 import os
 import secrets
+import time
 from dataclasses import dataclass
 from typing import Any, AsyncIterator
 
@@ -41,6 +42,7 @@ from litellm.exceptions import APIError
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
+_TRANSFERRED_STATUS = "transferred"
 
 # Parameters accepted by litellm.aresponses; everything else in the inbound
 # request body is dropped to avoid forwarding unsupported fields.
@@ -287,30 +289,42 @@ class ResponsesShim:
                         ),
                     )
 
-                async def _execute(fc: dict[str, Any]) -> tuple[dict[str, Any], str]:
+                async def _execute(
+                    fc: dict[str, Any],
+                ) -> tuple[dict[str, Any], str, bool]:
                     cid = fc.get("call_id") or fc.get("id")
                     try:
                         args = json.loads(fc.get("arguments") or "{}")
                     except json.JSONDecodeError as e:
-                        return fc, json.dumps(
-                            {
-                                "error": f"Invalid JSON tool arguments: {e}",
-                                "status": "failed",
-                            }
+                        return (
+                            fc,
+                            json.dumps(
+                                {
+                                    "error": f"Invalid JSON tool arguments: {e}",
+                                    "status": "failed",
+                                }
+                            ),
+                            False,
                         )
                     if not isinstance(args, dict):
-                        return fc, json.dumps(
-                            {
-                                "error": "Tool arguments must decode to an object.",
-                                "status": "failed",
-                            }
+                        return (
+                            fc,
+                            json.dumps(
+                                {
+                                    "error": "Tool arguments must decode to an object.",
+                                    "status": "failed",
+                                }
+                            ),
+                            False,
                         )
                     out = await agent_executors[fc["name"]](args, str(cid))
-                    return fc, out
+                    return fc, out, _is_transfer_output(out)
 
                 executed = await asyncio.gather(*(_execute(fc) for fc in calls))
-                for fc, out in executed:
+                transferred = False
+                for fc, out, did_transfer in executed:
                     cid = fc.get("call_id") or fc.get("id")
+                    transferred = transferred or did_transfer
                     conv.append(
                         {
                             "type": "function_call",
@@ -328,6 +342,9 @@ class ResponsesShim:
                             "output": out,
                         }
                     )
+                if transferred:
+                    resp = _completed_transfer_response(resp)
+                    break
                 iters += 1
 
             if stream:
@@ -411,6 +428,35 @@ def _to_dict(obj: Any) -> dict[str, Any]:
     if hasattr(obj, "model_dump"):
         return obj.model_dump()
     return dict(obj)
+
+
+def _is_transfer_output(value: str) -> bool:
+    try:
+        payload = json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return False
+    return isinstance(payload, dict) and payload.get("status") == _TRANSFERRED_STATUS
+
+
+def _completed_transfer_response(resp: dict[str, Any]) -> dict[str, Any]:
+    """Return a minimal completed response after VeADK handled a transfer."""
+
+    return {
+        "id": resp.get("id") or "resp_transfer_complete",
+        "object": resp.get("object") or "response",
+        "created_at": resp.get("created_at") or int(time.time()),
+        "model": resp.get("model") or "model",
+        "status": "completed",
+        "output": [
+            {
+                "id": "msg_transfer_complete",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": ""}],
+            }
+        ],
+    }
 
 
 def _sse(event: dict[str, Any]) -> bytes:
