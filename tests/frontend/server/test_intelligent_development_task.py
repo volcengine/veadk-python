@@ -253,6 +253,58 @@ def test_completion_parser_accepts_forward_compatible_partial_metadata() -> None
     assert completion.acceptance_criteria == ()
 
 
+def test_completion_parser_accepts_answered_turn_without_delivery_evidence() -> None:
+    completion = parse_completion_contract(
+        json.dumps(
+            {
+                "schemaVersion": "1",
+                "status": "answered",
+                "summary": "已说明当前 Agent 的数据来源",
+                "intentSummary": "解释当前 Agent 的数据来源",
+                "runtimeName": "",
+                "attemptCount": 0,
+                "gates": {
+                    name: False
+                    for name in (
+                        "local-checks",
+                        "service-probe",
+                        "ak-config",
+                        "ak-build",
+                        "ak-deploy",
+                        "runtime-ready",
+                        "acceptance-invoke",
+                        "runtime-logs",
+                        "runtime-cleanup",
+                    )
+                },
+                "acceptanceCriteria": [],
+            }
+        ).encode()
+    )
+
+    assert completion.answered is True
+    assert completion.intent_summary == "解释当前 Agent 的数据来源"
+    assert completion.verified is False
+
+
+def test_completion_parser_rejects_answered_turn_with_delivery_evidence() -> None:
+    with pytest.raises(ValueError, match="delivery evidence"):
+        parse_completion_contract(
+            json.dumps(
+                {
+                    "schemaVersion": "1",
+                    "status": "answered",
+                    "summary": "错误地声明了部署证据",
+                    "intentSummary": "解释当前 Agent",
+                    "runtimeName": "idv-weather-123",
+                    "attemptCount": 1,
+                    "gates": {"local-checks": True},
+                    "acceptanceCriteria": [],
+                }
+            ).encode()
+        )
+
+
 def test_builder_context_uses_launcher_without_secret_values() -> None:
     decision = parse_intent_decision(
         json.dumps(
@@ -309,7 +361,8 @@ def test_builder_context_uses_launcher_without_secret_values() -> None:
     assert "Do not repeat progress messages" in prompt
     contract = prompt.split("It must contain exactly:\n", 1)[1].split("\n\n", 1)[0]
     example = json.loads(contract)
-    assert example["status"] == "partial"
+    assert example["status"] == "answered"
+    assert example["intentSummary"] == "concise current goal"
     assert example["runtimeName"] == ""
     assert example["acceptanceCriteria"] == []
     assert "verified|partial|blocked|indeterminate|failed" not in contract
@@ -483,7 +536,7 @@ def test_task_prompts_have_ordered_sections_and_mutually_exclusive_modes() -> No
             (
                 "## Operating mode",
                 "## Conversation and project continuity",
-                "## Accepted task",
+                "## Current task",
                 "## Delivery requirements",
                 "## Credential and validation boundaries",
                 "## Reporting contract",

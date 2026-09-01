@@ -933,6 +933,58 @@ def test_connect_projects_internal_multi_turn_history_to_user_facing_conversatio
     assert "changesDelivery" not in json.dumps(restored)
 
 
+def test_connect_projects_direct_turn_history_to_user_facing_conversation() -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud(user_session_id="project-1")
+    gateway.codex.threads = [
+        CodexThreadSummary(
+            id="thread-restored",
+            preview="internal direct task",
+            cwd="/home/gem/workspace/project-1",
+            updated_at=20,
+        )
+    ]
+    request = "给天气 Agent 增加法语输出"
+    answer = "已完成法语能力优化。\n\n### 已完成\n- 保留原有输出并支持法语"
+    gateway.codex.thread_messages = (
+        CodexThreadMessage(
+            id="direct-user",
+            role="user",
+            content=builder_prompt(
+                request,
+                launcher_path="/secure/launcher",
+                completion_path="/workspace/result.json",
+                expire_at="later",
+                remaining_lifetime_minutes=60,
+                validation_region="cn-beijing",
+                validation_project="default",
+            ),
+            timestamp=1_000,
+        ),
+        CodexThreadMessage(
+            id="direct-assistant",
+            role="assistant",
+            content=answer,
+            timestamp=1_001,
+        ),
+    )
+
+    with TestClient(_app(gateway)) as client:
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/connect",
+            headers={"X-Test-User": "alice"},
+        )
+
+    assert response.status_code == 200
+    restored = response.json()["conversation"]["messages"]
+    assert [(message["role"], message["content"]) for message in restored] == [
+        ("user", request),
+        ("assistant", answer),
+    ]
+    assert "authoritative Codex turn" not in json.dumps(restored)
+    assert "credential launcher" not in json.dumps(restored)
+
+
 def test_connect_projects_clarification_as_one_user_facing_exchange() -> None:
     gateway = _FakeGateway()
     gateway.sessions["dev-session"] = _cloud(user_session_id="project-1")
@@ -1355,40 +1407,25 @@ def test_release_download_maps_trust_and_transport_failures(
     assert response.status_code == status_code
 
 
-def test_intent_reject_is_user_facing_and_never_uploads_credentials(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    gateway = _FakeGateway()
-    gateway.sessions["dev-session"] = _cloud()
-    gateway.codex.turns = [[_gate("reject", message="这里只支持构建 VeADK Agent。")]]
-    credentials = AsyncMock()
-    monkeypatch.setattr(routes, "create_credential_lease", credentials)
-    with TestClient(_app(gateway)) as client:
-        _connect(client)
-        response = client.post(
-            "/web/intelligent-development/sessions/dev-session/messages",
-            headers={"X-Test-User": "alice"},
-            json={"message": "帮我写周报"},
-        )
-    assert response.status_code == 200
-    assert "这里只支持构建 VeADK Agent" in response.text
-    credentials.assert_not_awaited()
-    call = gateway.codex.calls[0]
-    assert call["permissions"] == routes._INTENT_PERMISSIONS
-    assert call["skillIds"] == ()
-
-
-def test_invalid_intent_response_has_a_specific_recoverable_error(
+def test_missing_turn_outcome_has_specific_recoverable_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     gateway = _FakeGateway()
     gateway.sessions["dev-session"] = _cloud()
     gateway.codex.turns = [
-        [CodexAppServerEvent(kind="assistant_final", text="not-json")],
-        [CodexAppServerEvent(kind="assistant_final", text="still-not-json")],
+        [CodexAppServerEvent(kind="text", text="已完成请求。")],
     ]
-    credentials = AsyncMock()
-    monkeypatch.setattr(routes, "create_credential_lease", credentials)
+    lease = _Lease(_Remote(gateway.sessions["dev-session"].endpoint))
+    create_lease = AsyncMock(return_value=lease)
+    invalidate = AsyncMock()
+    read_completion = AsyncMock(side_effect=FileNotFoundError("missing outcome"))
+    remove = AsyncMock()
+    publisher = _publisher_mock()
+    monkeypatch.setattr(routes, "create_credential_lease", create_lease)
+    monkeypatch.setattr(routes, "invalidate_current_delivery", invalidate)
+    monkeypatch.setattr(routes, "read_completion_contract", read_completion)
+    monkeypatch.setattr(routes, "remove_completion_file", remove)
+    monkeypatch.setattr(routes, "DeliveryPublisher", lambda _transport: publisher)
 
     with TestClient(_app(gateway)) as client:
         _connect(client)
@@ -1399,156 +1436,48 @@ def test_invalid_intent_response_has_a_specific_recoverable_error(
         )
 
     assert response.status_code == 200
-    assert "event: error" in response.text
-    assert '"code": "INTELLIGENT_DEVELOPMENT_INTENT_INVALID"' in response.text
-    assert '"retryable": true' in response.text
-    assert (
-        "未能确认本次优化目标，开发尚未开始。请重新发送，已有项目和版本不受影响。"
-        in response.text
+    assert '"code": "INTELLIGENT_DEVELOPMENT_OUTCOME_INVALID"' in response.text
+    assert "未发布新版本" in response.text
+    assert len(gateway.codex.calls) == 1
+    assert gateway.codex.calls[0]["output_schema"] is None
+    create_lease.assert_awaited_once()
+    read_completion.assert_awaited_once()
+    invalidate.assert_not_awaited()
+    publisher.publish.assert_not_awaited()
+    remove.assert_awaited_once()
+    assert lease.cleaned is True
+
+
+def test_delivery_outcome_requires_goal_and_acceptance_criteria(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud()
+    gateway.codex.turns = [
+        [CodexAppServerEvent(kind="text", text="已完成请求。")],
+    ]
+    lease = _Lease(_Remote(gateway.sessions["dev-session"].endpoint))
+    completion = CompletionContract(
+        "partial",
+        "本地检查已完成",
+        "",
+        0,
+        {},
+        (),
+        "",
     )
-    assert len(gateway.codex.calls) == 2
-    credentials.assert_not_awaited()
-
-
-def test_invalid_intent_response_is_retried_before_development_stops() -> None:
-    gateway = _FakeGateway()
-    gateway.sessions["dev-session"] = _cloud()
-    gateway.codex.turns = [
-        [CodexAppServerEvent(kind="assistant_final", text="not-json")],
-        [_gate(changes=False)],
-        [CodexAppServerEvent(kind="text", text="当前 Agent 已保留现有能力。")],
-    ]
-
-    with TestClient(_app(gateway)) as client:
-        _connect(client)
-        response = client.post(
-            "/web/intelligent-development/sessions/dev-session/messages",
-            headers={"X-Test-User": "alice"},
-            json={"message": "检查当前 Agent，不修改源码"},
-        )
-
-    assert response.status_code == 200
-    assert "Codex 正在重新确认本次目标" in response.text
-    assert "当前 Agent 已保留现有能力" in response.text
-    assert "event: error" not in response.text
-    assert len(gateway.codex.calls) == 3
-
-
-def test_streamed_intent_fragments_do_not_replace_authoritative_final() -> None:
-    gateway = _FakeGateway()
-    gateway.sessions["dev-session"] = _cloud()
-    gate_json = _gate(changes=False).text
-    midpoint = len(gate_json) // 2
-    gateway.codex.turns = [
-        [
-            CodexAppServerEvent(kind="text", text=gate_json[:midpoint]),
-            CodexAppServerEvent(kind="text", text=gate_json[midpoint:]),
-            CodexAppServerEvent(
-                kind="assistant_final",
-                item_id="intent-final",
-                text=gate_json,
-            ),
-        ],
-        [CodexAppServerEvent(kind="text", text="当前 Agent 状态正常。")],
-    ]
-
-    with TestClient(_app(gateway)) as client:
-        _connect(client)
-        response = client.post(
-            "/web/intelligent-development/sessions/dev-session/messages",
-            headers={"X-Test-User": "alice"},
-            json={"message": "检查当前 Agent，不修改源码"},
-        )
-
-    assert response.status_code == 200
-    assert "当前 Agent 状态正常" in response.text
-    assert "重新确认本次目标" not in response.text
-    assert "event: error" not in response.text
-    assert len(gateway.codex.calls) == 2
-
-
-def test_intent_json_from_commentary_is_consumed_without_being_exposed() -> None:
-    gateway = _FakeGateway()
-    gateway.sessions["dev-session"] = _cloud()
-    gate = _gate(changes=False)
-    gateway.codex.turns = [
-        [
-            CodexAppServerEvent(
-                kind="commentary",
-                item_id="intent-final",
-                text=gate.text,
-            ),
-            gate,
-        ],
-        [CodexAppServerEvent(kind="text", text="当前 Agent 状态正常。")],
-    ]
-
-    with TestClient(_app(gateway)) as client:
-        _connect(client)
-        response = client.post(
-            "/web/intelligent-development/sessions/dev-session/messages",
-            headers={"X-Test-User": "alice"},
-            json={"message": "检查当前 Agent，不修改源码"},
-        )
-
-    assert response.status_code == 200
-    assert "当前 Agent 状态正常" in response.text
-    assert gate.text not in response.text
-    assert "重新确认本次目标" not in response.text
-    assert "event: error" not in response.text
-    assert len(gateway.codex.calls) == 2
-
-
-def test_intent_uses_authoritative_assistant_final_instead_of_reasoning() -> None:
-    gateway = _FakeGateway()
-    gateway.sessions["dev-session"] = _cloud()
-    gate = _gate(changes=False)
-    gateway.codex.turns = [
-        [
-            CodexAppServerEvent(
-                kind="thinking",
-                item_id="reasoning-gate",
-                text="The decision is accept, and I will now return JSON.",
-            ),
-            CodexAppServerEvent(
-                kind="assistant_final",
-                item_id="message-gate",
-                text=gate.text,
-            ),
-        ],
-        [CodexAppServerEvent(kind="text", text="当前 Agent 状态正常。")],
-    ]
-
-    with TestClient(_app(gateway)) as client:
-        _connect(client)
-        response = client.post(
-            "/web/intelligent-development/sessions/dev-session/messages",
-            headers={"X-Test-User": "alice"},
-            json={"message": "检查当前 Agent，不修改源码"},
-        )
-
-    assert response.status_code == 200
-    assert "当前 Agent 状态正常" in response.text
-    assert gate.text not in response.text
-    assert "重新确认本次目标" not in response.text
-    assert "event: error" not in response.text
-    assert len(gateway.codex.calls) == 2
-    assert gateway.codex.calls[0]["output_schema"] == (
-        routes.INTENT_DECISION_OUTPUT_SCHEMA
+    invalidate = AsyncMock()
+    remove = AsyncMock()
+    publisher = _publisher_mock()
+    monkeypatch.setattr(
+        routes, "create_credential_lease", AsyncMock(return_value=lease)
     )
-
-
-def test_reasoning_without_assistant_final_fails_closed_without_credentials(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    gateway = _FakeGateway()
-    gateway.sessions["dev-session"] = _cloud()
-    gateway.codex.turns = [
-        [CodexAppServerEvent(kind="thinking", text=_gate().text)],
-        [CodexAppServerEvent(kind="thinking", text=_gate().text)],
-    ]
-    credentials = AsyncMock()
-    monkeypatch.setattr(routes, "create_credential_lease", credentials)
+    monkeypatch.setattr(
+        routes, "read_completion_contract", AsyncMock(return_value=completion)
+    )
+    monkeypatch.setattr(routes, "invalidate_current_delivery", invalidate)
+    monkeypatch.setattr(routes, "remove_completion_file", remove)
+    monkeypatch.setattr(routes, "DeliveryPublisher", lambda _transport: publisher)
 
     with TestClient(_app(gateway)) as client:
         _connect(client)
@@ -1559,135 +1488,19 @@ def test_reasoning_without_assistant_final_fails_closed_without_credentials(
         )
 
     assert response.status_code == 200
-    assert "INTELLIGENT_DEVELOPMENT_INTENT_INVALID" in response.text
-    assert "重新确认本次目标" in response.text
-    credentials.assert_not_awaited()
+    assert '"code": "INTELLIGENT_DEVELOPMENT_OUTCOME_INVALID"' in response.text
+    invalidate.assert_not_awaited()
+    publisher.publish.assert_not_awaited()
+    remove.assert_awaited_once()
+    assert lease.cleaned is True
 
 
-def test_multiple_assistant_finals_are_rejected_without_credentials(
+def test_restored_project_context_is_passed_to_the_direct_turn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     gateway = _FakeGateway()
     gateway.sessions["dev-session"] = _cloud()
-    gateway.codex.turns = [[_gate(), _gate()], [_gate(), _gate()]]
-    credentials = AsyncMock()
-    monkeypatch.setattr(routes, "create_credential_lease", credentials)
-
-    with TestClient(_app(gateway)) as client:
-        _connect(client)
-        response = client.post(
-            "/web/intelligent-development/sessions/dev-session/messages",
-            headers={"X-Test-User": "alice"},
-            json={"message": "继续优化天气 Agent"},
-        )
-
-    assert response.status_code == 200
-    assert "INTELLIGENT_DEVELOPMENT_INTENT_INVALID" in response.text
-    credentials.assert_not_awaited()
-
-
-def test_fragmented_intent_json_from_commentary_is_consumed() -> None:
-    gateway = _FakeGateway()
-    gateway.sessions["dev-session"] = _cloud()
-    gate_json = _gate(changes=False).text
-    midpoint = len(gate_json) // 2
-    gateway.codex.turns = [
-        [
-            CodexAppServerEvent(
-                kind="commentary",
-                item_id="intent-final",
-                text=gate_json[:midpoint],
-            ),
-            CodexAppServerEvent(
-                kind="commentary",
-                item_id="intent-final",
-                text=gate_json[midpoint:],
-            ),
-            CodexAppServerEvent(
-                kind="assistant_final",
-                item_id="intent-final",
-                text=gate_json,
-            ),
-        ],
-        [CodexAppServerEvent(kind="text", text="当前 Agent 状态正常。")],
-    ]
-
-    with TestClient(_app(gateway)) as client:
-        _connect(client)
-        response = client.post(
-            "/web/intelligent-development/sessions/dev-session/messages",
-            headers={"X-Test-User": "alice"},
-            json={"message": "检查当前 Agent，不修改源码"},
-        )
-
-    assert response.status_code == 200
-    assert "当前 Agent 状态正常" in response.text
-    assert gate_json[:midpoint] not in response.text
-    assert gate_json[midpoint:] not in response.text
-    assert "event: error" not in response.text
-
-
-def test_incomplete_intent_json_from_commentary_remains_fail_closed(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    gateway = _FakeGateway()
-    gateway.sessions["dev-session"] = _cloud()
-    incomplete = '{"decision":"accept"}'
-    gateway.codex.turns = [
-        [CodexAppServerEvent(kind="assistant_final", text=incomplete)],
-        [CodexAppServerEvent(kind="assistant_final", text=incomplete)],
-    ]
-    credentials = AsyncMock()
-    monkeypatch.setattr(routes, "create_credential_lease", credentials)
-
-    with TestClient(_app(gateway)) as client:
-        _connect(client)
-        response = client.post(
-            "/web/intelligent-development/sessions/dev-session/messages",
-            headers={"X-Test-User": "alice"},
-            json={"message": "继续优化天气 Agent"},
-        )
-
-    assert response.status_code == 200
-    assert "INTELLIGENT_DEVELOPMENT_INTENT_INVALID" in response.text
-    assert incomplete not in response.text
-    assert len(gateway.codex.calls) == 2
-    credentials.assert_not_awaited()
-
-
-def test_protocol_retry_can_return_a_safe_rejection_without_side_effects(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    gateway = _FakeGateway()
-    gateway.sessions["dev-session"] = _cloud()
-    gateway.codex.turns = [
-        [CodexAppServerEvent(kind="assistant_final", text="not-json")],
-        [_gate("reject", message="该请求与创建 Agent 无关。")],
-    ]
-    credentials = AsyncMock()
-    monkeypatch.setattr(routes, "create_credential_lease", credentials)
-
-    with TestClient(_app(gateway)) as client:
-        _connect(client)
-        response = client.post(
-            "/web/intelligent-development/sessions/dev-session/messages",
-            headers={"X-Test-User": "alice"},
-            json={"message": "帮我处理一项无关任务"},
-        )
-
-    assert response.status_code == 200
-    assert "该请求与创建 Agent 无关" in response.text
-    assert "event: error" not in response.text
-    assert len(gateway.codex.calls) == 2
-    credentials.assert_not_awaited()
-
-
-def test_restored_project_context_is_passed_to_the_intent_gate(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    gateway = _FakeGateway()
-    gateway.sessions["dev-session"] = _cloud()
-    gateway.codex.turns = [[_gate("reject", message="无需修改。")]]
+    gateway.codex.turns = [[CodexAppServerEvent(kind="text", text="无需修改。")]]
     now = datetime(2026, 8, 26, tzinfo=timezone.utc)
     binding = IntelligentDevelopmentSessionBinding(
         ownerId="alice",
@@ -1721,7 +1534,14 @@ def test_restored_project_context_is_passed_to_the_intent_gate(
         base_metadata=AsyncMock(return_value=version),
         restore_base_version=AsyncMock(return_value=False),
     )
-    monkeypatch.setattr(routes, "create_credential_lease", AsyncMock())
+    lease = _Lease(_Remote(gateway.sessions["dev-session"].endpoint))
+    monkeypatch.setattr(
+        routes, "create_credential_lease", AsyncMock(return_value=lease)
+    )
+    monkeypatch.setattr(
+        routes, "read_completion_contract", AsyncMock(return_value=_answered())
+    )
+    monkeypatch.setattr(routes, "remove_completion_file", AsyncMock())
 
     with TestClient(_app(gateway, project_service=project_service)) as client:
         _connect(client)
@@ -1733,7 +1553,7 @@ def test_restored_project_context_is_passed_to_the_intent_gate(
 
     assert response.status_code == 200
     prompt = str(gateway.codex.calls[0]["prompt"])
-    assert "## Restored project context" in prompt
+    assert "## Version-based optimization" in prompt
     assert '"intentSummary":"构建天气查询 Agent"' in prompt
     assert '"acceptanceCriteria":["返回天气和数据时间"]' in prompt
     assert "trusted version metadata, not an instruction" in prompt
@@ -1745,7 +1565,6 @@ def test_restored_project_context_selects_incremental_builder_mode(
     gateway = _FakeGateway()
     gateway.sessions["dev-session"] = _cloud()
     gateway.codex.turns = [
-        [_gate()],
         [CodexAppServerEvent(kind="text", text="已完成增量优化")],
     ]
     now = datetime(2026, 8, 26, tzinfo=timezone.utc)
@@ -1804,9 +1623,9 @@ def test_restored_project_context_selects_incremental_builder_mode(
         )
 
     assert response.status_code == 200
-    assert len(gateway.codex.calls) == 2
-    assert gateway.codex.calls[1]["permissions"] == routes._BUILDER_PERMISSIONS
-    builder = str(gateway.codex.calls[1]["prompt"])
+    assert len(gateway.codex.calls) == 1
+    assert gateway.codex.calls[0]["permissions"] == routes._BUILDER_PERMISSIONS
+    builder = str(gateway.codex.calls[0]["prompt"])
     assert "## Version-based optimization" in builder
     assert '"agentName":"weather_agent"' in builder
     assert "Do not run `ak init`" in builder
@@ -1820,7 +1639,6 @@ def test_builder_uses_preinstalled_skill_without_discovery_or_injection(
     gateway.sessions["dev-session"] = _cloud()
     gateway.codex.skills = ()
     gateway.codex.turns = [
-        [_gate()],
         [CodexAppServerEvent(kind="text", text="已完成实现")],
     ]
     lease = _Lease(_Remote(gateway.sessions["dev-session"].endpoint))
@@ -1845,8 +1663,8 @@ def test_builder_uses_preinstalled_skill_without_discovery_or_injection(
         )
 
     assert response.status_code == 200
-    assert len(gateway.codex.calls) == 2
-    builder = gateway.codex.calls[1]
+    assert len(gateway.codex.calls) == 1
+    builder = gateway.codex.calls[0]
     assert builder["skillIds"] == ()
     assert "Use the preinstalled veadk-agent-development Skill" in str(
         builder["prompt"]
@@ -1893,7 +1711,58 @@ def _partial() -> CompletionContract:
                 "runtime-cleanup",
             )
         },
+        ("返回天气和数据时间",),
+        "构建天气 Agent",
+    )
+
+
+def _verified() -> CompletionContract:
+    return CompletionContract(
+        "verified",
+        "验证完成",
+        "idv-weather-123",
+        1,
+        {
+            name: True
+            for name in (
+                "local-checks",
+                "service-probe",
+                "ak-config",
+                "ak-build",
+                "ak-deploy",
+                "runtime-ready",
+                "acceptance-invoke",
+                "runtime-logs",
+                "runtime-cleanup",
+            )
+        },
+        ("返回天气和数据时间",),
+        "构建天气 Agent",
+    )
+
+
+def _answered() -> CompletionContract:
+    return CompletionContract(
+        "answered",
+        "已说明当前 Agent 的数据来源",
+        "",
+        0,
+        {
+            name: False
+            for name in (
+                "local-checks",
+                "service-probe",
+                "ak-config",
+                "ak-build",
+                "ak-deploy",
+                "runtime-ready",
+                "acceptance-invoke",
+                "runtime-logs",
+                "runtime-cleanup",
+            )
+        },
         (),
+        "解释当前 Agent 的数据来源",
     )
 
 
@@ -1993,22 +1862,12 @@ def _verified_contract_text() -> str:
     )
 
 
-def test_accept_runs_hidden_gate_then_streams_builder_and_cleans_task_files(
+def test_direct_turn_streams_builder_and_cleans_task_files(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    task_progress = "正在实现本次变更、运行测试并验证结果。"
     gateway = _FakeGateway()
     gateway.sessions["dev-session"] = _cloud()
     gateway.codex.turns = [
-        [
-            CodexAppServerEvent(
-                kind="commentary",
-                item_id="gate-progress-1",
-                status="running",
-                text="正在判断目标是否属于 VeADK Agent 开发。",
-            ),
-            _gate(changes=True),
-        ],
         [
             CodexAppServerEvent(
                 kind="commentary",
@@ -2094,28 +1953,21 @@ def test_accept_runs_hidden_gate_then_streams_builder_and_cleans_task_files(
             json={"message": "做一个天气 Agent"},
         )
     assert response.status_code == 200
-    assert "Codex 正在分析本次请求并确认预期结果" in response.text
+    assert "Codex 正在处理本次请求" in response.text
     assert "event: progress" in response.text
-    assert "正在判断目标是否属于 VeADK Agent 开发" in response.text
-    assert task_progress in response.text
+    assert "正在判断目标是否属于 VeADK Agent 开发" not in response.text
     assert "目标已确认，正在配置构建环境" not in response.text
     assert "正在实现并验证天气 Agent" in response.text
     assert "正在构建临时验证版本" in response.text
     assert "已完成本地实现" in response.text
     assert "event: usage" in response.text
-    assert response.text.count("event: activity") == 6
-    assert response.text.count('"kind": "commentary"') == 2
+    assert response.text.count("event: activity") == 5
+    assert response.text.count('"kind": "commentary"') == 1
     assert response.text.count('"kind": "thinking"') == 2
     assert response.text.count('"kind": "tool"') == 2
     assert '"command": "ak build --config-file agentkit.yaml"' in response.text
     assert "build complete" in response.text
-    assert response.text.index(
-        "Codex 正在分析本次请求并确认预期结果"
-    ) < response.text.index("正在判断目标是否属于 VeADK Agent 开发")
-    assert response.text.index(
-        "正在判断目标是否属于 VeADK Agent 开发"
-    ) < response.text.index(task_progress)
-    assert response.text.index(task_progress) < response.text.index(
+    assert response.text.index("Codex 正在处理本次请求") < response.text.index(
         "正在实现并验证天气 Agent"
     )
     assert response.text.index("正在实现并验证天气 Agent") < response.text.index(
@@ -2128,14 +1980,15 @@ def test_accept_runs_hidden_gate_then_streams_builder_and_cleans_task_files(
     assert all(secret not in response.text for secret in lease.exact_secrets)
     assert "event: development.source_ready" in response.text
     assert "development.succeeded" not in response.text
-    assert len(gateway.codex.calls) == 2
-    assert str(gateway.codex.calls[1]["prompt"]).startswith(
+    assert len(gateway.codex.calls) == 1
+    assert str(gateway.codex.calls[0]["prompt"]).startswith(
         "Use the preinstalled veadk-agent-development Skill"
     )
-    assert gateway.codex.calls[1]["skillIds"] == ()
-    assert lease.launcher_path in str(gateway.codex.calls[1]["prompt"])
+    assert gateway.codex.calls[0]["skillIds"] == ()
+    assert gateway.codex.calls[0]["output_schema"] is None
+    assert lease.launcher_path in str(gateway.codex.calls[0]["prompt"])
     assert (
-        gateway.codex.calls[1]["timeout_seconds"]
+        gateway.codex.calls[0]["timeout_seconds"]
         == routes._BUILDER_TURN_TIMEOUT_SECONDS
     )
     invalidate.assert_awaited_once()
@@ -2144,21 +1997,21 @@ def test_accept_runs_hidden_gate_then_streams_builder_and_cleans_task_files(
     assert lease.cleaned is True
 
 
-def test_read_only_request_has_no_credentials_mutations_or_delivery(
+def test_answer_runs_one_direct_codex_turn_without_publishing_delivery(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     gateway = _FakeGateway()
     gateway.sessions["dev-session"] = _cloud()
     gateway.codex.turns = [
-        [_gate(changes=False)],
         [CodexAppServerEvent(kind="text", text="当前数据来自已配置的天气接口。")],
     ]
-    credentials = AsyncMock()
+    lease = _Lease(_Remote(gateway.sessions["dev-session"].endpoint))
+    create_lease = AsyncMock(return_value=lease)
     invalidate = AsyncMock()
-    read_completion = AsyncMock()
+    read_completion = AsyncMock(return_value=_answered())
     remove = AsyncMock()
     publisher = _publisher_mock()
-    monkeypatch.setattr(routes, "create_credential_lease", credentials)
+    monkeypatch.setattr(routes, "create_credential_lease", create_lease)
     monkeypatch.setattr(routes, "invalidate_current_delivery", invalidate)
     monkeypatch.setattr(routes, "read_completion_contract", read_completion)
     monkeypatch.setattr(routes, "remove_completion_file", remove)
@@ -2173,30 +2026,27 @@ def test_read_only_request_has_no_credentials_mutations_or_delivery(
         )
 
     assert response.status_code == 200
-    assert "正在检查当前项目并整理结果" in response.text
     assert "当前数据来自已配置的天气接口" in response.text
+    assert "INTELLIGENT_DEVELOPMENT_INTENT_INVALID" not in response.text
     assert "development.source_ready" not in response.text
     assert "development.succeeded" not in response.text
-    assert len(gateway.codex.calls) == 2
-    read_only = gateway.codex.calls[1]
-    assert read_only["permissions"] == routes._INTENT_PERMISSIONS
-    assert "read-only question" in str(read_only["prompt"])
-    credentials.assert_not_awaited()
+    assert len(gateway.codex.calls) == 1
+    assert gateway.codex.calls[0]["output_schema"] is None
+    create_lease.assert_awaited_once()
+    read_completion.assert_awaited_once()
     invalidate.assert_not_awaited()
-    read_completion.assert_not_awaited()
-    remove.assert_not_awaited()
     publisher.publish.assert_not_awaited()
+    remove.assert_awaited_once()
+    assert lease.cleaned is True
 
 
-def test_follow_up_runs_a_new_gate_and_build_cycle_in_the_same_thread(
+def test_follow_up_runs_a_new_direct_turn_in_the_same_thread(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     gateway = _FakeGateway()
     gateway.sessions["dev-session"] = _cloud()
     gateway.codex.turns = [
-        [_gate()],
         [CodexAppServerEvent(kind="text", text="第一轮完成")],
-        [_gate(changes=True)],
         [CodexAppServerEvent(kind="text", text="第二轮优化完成")],
     ]
     leases = [
@@ -2235,11 +2085,11 @@ def test_follow_up_runs_a_new_gate_and_build_cycle_in_the_same_thread(
     assert second.status_code == 200
     assert "第一轮完成" in first.text
     assert "第二轮优化完成" in second.text
-    assert len(gateway.codex.calls) == 4
+    assert len(gateway.codex.calls) == 2
     assert gateway.codex.calls[0]["skillIds"] == ()
     assert gateway.codex.calls[1]["skillIds"] == ()
-    assert gateway.codex.calls[2]["skillIds"] == ()
-    assert gateway.codex.calls[3]["skillIds"] == ()
+    assert gateway.codex.calls[0]["output_schema"] is None
+    assert gateway.codex.calls[1]["output_schema"] is None
     assert gateway.codex.thread_id == "thread-1"
     assert invalidate.await_count == 2
     assert all(lease.cleaned for lease in leases)
@@ -2257,9 +2107,8 @@ class _InterruptibleCodex(_FakeCodex):
         **options: object,
     ) -> AsyncIterator[CodexAppServerEvent]:
         self.calls.append({"prompt": prompt, "skillIds": skill_ids, **options})
-        if len(self.calls) == 1:
-            yield _gate()
-            return
+        if False:
+            yield CodexAppServerEvent()
         self.active = True
         self.builder_started.set()
         while self.active:
@@ -2351,7 +2200,6 @@ def test_verified_contract_emits_typed_delivery_only_after_cleanup(
     gateway = _FakeGateway()
     gateway.sessions["dev-session"] = _cloud()
     gateway.codex.turns = [
-        [_gate()],
         [CodexAppServerEvent(kind="text", text="验证完成")],
     ]
     lease = _Lease(_Remote(gateway.sessions["dev-session"].endpoint))
@@ -2359,9 +2207,8 @@ def test_verified_contract_emits_typed_delivery_only_after_cleanup(
         routes, "create_credential_lease", AsyncMock(return_value=lease)
     )
     monkeypatch.setattr(routes, "invalidate_current_delivery", AsyncMock())
-    verified = SimpleNamespace(verified=True, status="verified")
     monkeypatch.setattr(
-        routes, "read_completion_contract", AsyncMock(return_value=verified)
+        routes, "read_completion_contract", AsyncMock(return_value=_verified())
     )
     monkeypatch.setattr(routes, "remove_completion_file", AsyncMock())
     publisher = _publisher_mock(verified=True)
@@ -2389,7 +2236,6 @@ def test_persisted_delivery_ids_are_emitted_in_source_and_success_events(
     gateway = _FakeGateway()
     gateway.sessions["dev-session"] = _cloud()
     gateway.codex.turns = [
-        [_gate()],
         [CodexAppServerEvent(kind="text", text="验证完成")],
     ]
     lease = _Lease(_Remote(gateway.sessions["dev-session"].endpoint))
@@ -2400,7 +2246,7 @@ def test_persisted_delivery_ids_are_emitted_in_source_and_success_events(
     monkeypatch.setattr(
         routes,
         "read_completion_contract",
-        AsyncMock(return_value=SimpleNamespace(verified=True, status="verified")),
+        AsyncMock(return_value=_verified()),
     )
     monkeypatch.setattr(routes, "remove_completion_file", AsyncMock())
     monkeypatch.setattr(
@@ -2456,7 +2302,6 @@ def test_delivery_persistence_failures_keep_distinct_sse_semantics(
     gateway = _FakeGateway()
     gateway.sessions["dev-session"] = _cloud()
     gateway.codex.turns = [
-        [_gate()],
         [CodexAppServerEvent(kind="text", text="源码已生成")],
     ]
     lease = _Lease(_Remote(gateway.sessions["dev-session"].endpoint))
@@ -2491,94 +2336,12 @@ def test_delivery_persistence_failures_keep_distinct_sse_semantics(
     assert "event: development.succeeded" not in response.text
 
 
-def test_missing_completion_still_emits_source_but_never_verified_success(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    gateway = _FakeGateway()
-    gateway.sessions["dev-session"] = _cloud()
-    gateway.codex.turns = [
-        [_gate()],
-        [CodexAppServerEvent(kind="text", text="已生成源码，但验证结果未确认。")],
-    ]
-    lease = _Lease(_Remote(gateway.sessions["dev-session"].endpoint))
-    monkeypatch.setattr(
-        routes, "create_credential_lease", AsyncMock(return_value=lease)
-    )
-    monkeypatch.setattr(routes, "invalidate_current_delivery", AsyncMock())
-    read_completion = AsyncMock(side_effect=FileNotFoundError("missing completion"))
-    monkeypatch.setattr(routes, "read_completion_contract", read_completion)
-    monkeypatch.setattr(routes, "remove_completion_file", AsyncMock())
-    publisher = _publisher_mock()
-    monkeypatch.setattr(routes, "DeliveryPublisher", lambda _transport: publisher)
-
-    with TestClient(_app(gateway)) as client:
-        _connect(client)
-        response = client.post(
-            "/web/intelligent-development/sessions/dev-session/messages",
-            headers={"X-Test-User": "alice"},
-            json={"message": "做一个天气 Agent"},
-        )
-
-    assert response.status_code == 200
-    assert "已生成源码，但验证结果未确认" in response.text
-    assert "验证报告未生成或暂时无法读取" not in response.text
-    assert "验证报告格式不完整" not in response.text
-    assert "event: development.source_ready" in response.text
-    assert '"deployable": true' in response.text
-    assert '"verified": false' in response.text
-    assert "event: development.succeeded" not in response.text
-    assert read_completion.await_count == 1
-    assert len(gateway.codex.calls) == 2
-    assert publisher.publish.await_args.kwargs["completion"] is None
-    assert lease.cleaned is True
-
-
-def test_invalid_completion_contract_stays_internal_without_blocking_source(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    gateway = _FakeGateway()
-    gateway.sessions["dev-session"] = _cloud()
-    gateway.codex.turns = [
-        [_gate()],
-        [CodexAppServerEvent(kind="text", text="验证完成")],
-    ]
-    lease = _Lease(_Remote(gateway.sessions["dev-session"].endpoint))
-    monkeypatch.setattr(
-        routes, "create_credential_lease", AsyncMock(return_value=lease)
-    )
-    monkeypatch.setattr(routes, "invalidate_current_delivery", AsyncMock())
-    monkeypatch.setattr(
-        routes,
-        "read_completion_contract",
-        AsyncMock(side_effect=ValueError("Completion contract fields are invalid")),
-    )
-    monkeypatch.setattr(routes, "remove_completion_file", AsyncMock())
-    monkeypatch.setattr(
-        routes, "DeliveryPublisher", lambda _transport: _publisher_mock()
-    )
-
-    with TestClient(_app(gateway)) as client:
-        _connect(client)
-        response = client.post(
-            "/web/intelligent-development/sessions/dev-session/messages",
-            headers={"X-Test-User": "alice"},
-            json={"message": "做一个天气 Agent"},
-        )
-
-    assert response.status_code == 200
-    assert "验证报告格式不完整" not in response.text
-    assert "完整验证状态尚未确认" not in response.text
-    assert "event: development.source_ready" in response.text
-    assert "event: development.succeeded" not in response.text
-
-
 def test_builder_response_cannot_replace_a_missing_completion_file(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     gateway = _FakeGateway()
     gateway.sessions["dev-session"] = _cloud()
     gateway.codex.turns = [
-        [_gate()],
         [CodexAppServerEvent(kind="text", text=_verified_contract_text())],
     ]
     lease = _Lease(_Remote(gateway.sessions["dev-session"].endpoint))
@@ -2602,11 +2365,12 @@ def test_builder_response_cannot_replace_a_missing_completion_file(
 
     assert response.status_code == 200
     assert "schemaVersion" in response.text
-    assert "event: development.source_ready" in response.text
+    assert '"code": "INTELLIGENT_DEVELOPMENT_OUTCOME_INVALID"' in response.text
+    assert "event: development.source_ready" not in response.text
     assert "event: development.succeeded" not in response.text
-    assert len(gateway.codex.calls) == 2
+    assert len(gateway.codex.calls) == 1
     assert read_completion.await_count == 1
-    assert publisher.publish.await_args.kwargs["completion"] is None
+    publisher.publish.assert_not_awaited()
     assert lease.cleaned is True
 
 
@@ -2616,7 +2380,7 @@ def test_builder_failure_still_cleans_credentials(
     gateway = _FakeGateway()
     gateway.sessions["dev-session"] = _cloud()
     internal_error = "Traceback: /srv/private.py contains upstream-secret"
-    gateway.codex.turns = [[_gate()], CodexAppServerError(internal_error)]
+    gateway.codex.turns = [CodexAppServerError(internal_error)]
     lease = _Lease(_Remote(gateway.sessions["dev-session"].endpoint))
     monkeypatch.setattr(
         routes, "create_credential_lease", AsyncMock(return_value=lease)
@@ -2675,7 +2439,7 @@ def test_cleanup_failure_terminates_session_and_is_not_suppressed(
 ) -> None:
     gateway = _FakeGateway()
     gateway.sessions["dev-session"] = _cloud()
-    gateway.codex.turns = [[_gate()], CodexAppServerError("builder failed")]
+    gateway.codex.turns = [CodexAppServerError("builder failed")]
     lease = _Lease(
         _Remote(gateway.sessions["dev-session"].endpoint),
         cleanup_error=RuntimeError("cannot remove credentials"),
