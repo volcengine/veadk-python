@@ -150,17 +150,6 @@ def _model_name_fallbacks(agent: Any) -> list[str]:
 SUPPORT_RULES: tuple[SupportRule, ...] = (
     # --- error: silently wrong results -------------------------------------
     SupportRule(
-        field="sub_agents",
-        policy="error",
-        predicate=_truthy("sub_agents"),
-        message=lambda agent, rt: (
-            f"{rt} runtime does not implement agent transfer, so "
-            "Agent(sub_agents=...) is unreachable and the agent will silently "
-            "answer every request itself. Use runtime='adk', or drive "
-            "delegation from a parent SequentialAgent/AgentTool."
-        ),
-    ),
-    SupportRule(
         field="model",
         policy="error",
         predicate=_explicitly_set("model"),
@@ -473,9 +462,11 @@ def check_agent_runtime_support(
             raise ValueError(rule.message(agent, runtime))
         _warn_once(agent, rule.field, rule.message(agent, runtime))
 
-    # codex charges every backend model call through
+    # codex charges every backend model *call* through
     # `ResponsesShim.register_turn(on_model_call=...)`, *before* the call, so
-    # the budget binds exactly and warning would be a false positive. piagent
+    # the budget binds exactly and warning would be a false positive. litellm's
+    # `num_retries` re-attempts a failed call underneath that charge, the same
+    # way it does on the adk path, so a call is counted once either way. piagent
     # charges each call the Pi binary reports as finished, which still enforces
     # the budget but only after the overrunning call has run.
     if run_config is not None and runtime != "codex":

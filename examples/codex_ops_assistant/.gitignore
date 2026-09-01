@@ -1,5 +1,5 @@
-# Generated at run time: the simulated backend's storage, Codex's workspace,
-# and the tickets the agent filed.
+# Generated at run time: the simulated backend's storage and the tickets the
+# agent filed. Codex's workspace is no longer here -- the runtime keeps it
+# under its own per-session temp root, which `current_workspace()` resolves.
 _store/
-workspace/
 outbox/

@@ -57,4 +57,7 @@ it cannot hang a `pytest -n 16` run.
 
 `test_codex_shim_rounds.py` constructs `ResponsesShim` directly rather than
 calling `get_shim`, so the process-global `_SHIMS` cache (and its uvicorn
-servers) is never populated; an autouse fixture asserts that.
+servers) is never populated; an autouse fixture asserts that. The one test that
+must exercise `get_shim` — the cache is what it tests — swaps `_SHIMS`/`_RETIRED`
+for empty ones, restores them in a `finally` before that fixture runs, and stubs
+`start()` so nothing binds a port.

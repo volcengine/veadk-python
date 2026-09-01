@@ -100,6 +100,33 @@ Python 去 grep、聚合、做时间关联——写好几个程序，边看数�
   `file_incident_ticket` 会限制字段长度、检查 severity 枚举，并为每张工单打印一行
   审计日志。
 
+### 工具往哪里写
+
+ADK 工具每次被调用时，自己问一遍本轮的工作目录在哪：
+
+```python
+from veadk.runtime.codex import current_workspace
+
+def fetch_application_logs(stream: str, start_time: str, end_time: str) -> dict:
+    workspace = current_workspace()   # 本轮的工作目录，或者 None
+    if workspace is None:             # 不在 codex 轮次里——返回错误，而不是猜
+        return {"status": "error", "message": "no sandbox working directory"}
+    ...
+```
+
+这个值由 runtime 在每次工具调用前后绑定，所以一个进程里同时跑着多个会话时它依然是对的。
+因此这个示例把 `workspace_root` 和 `reuse_workspace` 都留空：每个
+`(app, user, session, agent)` 各得一个目录——这正是一个真实的 on-call 服务想要的，
+同时排查的两起故障不该共用一个临时目录——而它照样能跨同一会话的多轮存活，
+第二轮复用的就是这一点。
+
+不在 codex 轮次里时（换了 runtime、被 `AgentTool` 调用、单元测试），
+`current_workspace()` 返回 `None` 而不是抛异常；这里的工具会把它转成一条模型能处理的普通错误结果。
+
+钉死目录是反过来的取舍，而且是**单租户**下的取舍：`workspace_root` 加
+`reuse_workspace=True` 给你一个可预测、进程退出后还能 `ls` 的目录，
+代价是所有会话共用它。
+
 ## 安全配置，逐项拆解
 
 ```python
@@ -107,8 +134,6 @@ codex_runtime_config=CodexRuntimeConfig(
     sandbox="workspace_write",
     network_access=False,
     approval_mode="deny_all",
-    workspace_root=str(WORKSPACE),
-    reuse_workspace=True,
     max_tool_iterations=12,
     tool_timeout_seconds=60.0,
 )
@@ -125,6 +150,7 @@ run_config=RunConfig(max_llm_calls=40)
 | `max_tool_iterations=12` | **整轮**允许的 ADK 工具往返次数（不是每次后端请求）。四次抓取加一次开单绰绰有余。 |
 | `tool_timeout_seconds=60.0` | 卡住的 ADK 工具不会把整轮挂死。 |
 | `outbox/` 在工作区之外 | 出口是一条你拥有的代码路径，而不是模型可以随手丢文件的地方。 |
+| 不设 `workspace_root` / `reuse_workspace` | 每个 `(app, user, session, agent)` 一个工作区，空闲后被回收。同时排查的两起故障读不到彼此的文件，昨天那次运行也不会把数据留在今天的沙箱里。 |
 
 这是可以验证的，不是口号。让智能体在它自己的沙箱里试一下：
 
@@ -227,15 +253,16 @@ python main.py
 仅支持 macOS 或 Linux：沙箱是 seatbelt / landlock+seccomp。请选一个工具调用和写代码
 都过关的模型——这个智能体要给自己的脚本 debug——换模型之前请先读下面两个方舟坑。
 
-跑完之后看看沙箱产出了什么：
+跑完之后看看有什么离开了沙箱：
 
 ```bash
-ls workspace/analysis/     # 模型写的那些程序
 cat outbox/INC-*.json      # 所有离开沙箱的内容
 ```
 
-`main.py` 会在启动时删掉 `workspace/` 以保证每次运行可复现；去掉那一行就能看到工作区
-跨多次运行地累积。
+工作区本身——抓下来的数据，以及模型写在 `analysis/` 下的那些程序——由 `main.py`
+在退出前打印出来：按会话隔离的工作区位于 runtime 自己的临时根目录下，进程退出时即被清理。
+所以两次运行之间没有什么要清理的，也不会出现「模型在排查今天的故障，沙箱里却还躺着上周的文件」。
+如果你更想把目录留下来事后慢慢看，就把 `workspace_root` + `reuse_workspace` 钉死。
 
 ## 换模型前值得知道的两个方舟坑
 

@@ -21,8 +21,7 @@ from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.utils.misc import formatted_timestamp
 
 
-def test_short_term_memory():
-    # local
+def test_short_term_memory_local():
     memory = ShortTermMemory(backend="local")
     asyncio.run(
         memory.session_service.create_session(
@@ -36,7 +35,25 @@ def test_short_term_memory():
     )
     assert session is not None
 
-    # sqlite
+
+def test_short_term_memory_sqlite():
+    # Every non-`local` backend goes through ADK's DatabaseSessionService, whose
+    # async engine runs the sync DBAPI inside a greenlet. SQLAlchemy declares
+    # greenlet only for a fixed platform_machine list (aarch64/x86_64/amd64/
+    # win32) that excludes macOS arm64, so a plain `pip install veadk-python`
+    # leaves it missing there; `sqlalchemy[asyncio]` requires it unconditionally
+    # and is what veadk-python[extensions] pulls in transitively (via
+    # llama-index-core). On Linux/Windows CI runners it is always present, so
+    # this never skips there.
+    pytest.importorskip(
+        "greenlet",
+        reason=(
+            "SQLAlchemy's async engine needs greenlet: "
+            'pip install "sqlalchemy[asyncio]" '
+            '(also pulled in by "veadk-python[extensions]")'
+        ),
+    )
+
     memory = ShortTermMemory(
         backend="sqlite",
         local_database_path=f"/tmp/tmp_for_test_{formatted_timestamp()}.db",

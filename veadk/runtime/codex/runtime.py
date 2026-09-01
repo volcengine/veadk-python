@@ -87,7 +87,12 @@ from veadk.runtime.codex.translate import (
     is_codex_final_text_event,
     notification_to_events,
 )
+from veadk.runtime.codex.workspace import (
+    bind_workspace,
+    bind_workspace_to_executors,
+)
 from veadk.runtime.model_callbacks import (
+    merge_turn_bookkeeping,
     RuntimeLlmCall,
     build_runtime_llm_request,
     final_events_to_llm_response,
@@ -127,8 +132,11 @@ class _QueueSentinel(enum.Enum):
 
 
 _QUEUE_DONE = _QueueSentinel.DONE
-_SESSION_WORKSPACE_ROOT = tempfile.mkdtemp(prefix="veadk-codex-workspaces-")
-atexit.register(shutil.rmtree, _SESSION_WORKSPACE_ROOT, ignore_errors=True)
+_WORKSPACE_ROOT_PREFIX = "veadk-codex-workspaces-"
+# The process-owned root that holds every session workspace, created on first
+# use by `_ensure_session_workspace_root`. `None` until then.
+_session_workspace_root: str | None = None
+_session_workspace_root_lock = threading.Lock()
 # Session workspaces are shared by every invocation of the same session, so
 # they must outlive a turn. They are instead reaped once idle for this long,
 # which bounds disk growth inside a long-lived server process.
@@ -144,6 +152,75 @@ _WORKSPACE_REAP_INTERVAL_SECONDS = 600.0
 _WORKSPACE_REAP_MAX_PER_PASS = 16
 _last_workspace_reap_at = 0.0
 _workspace_reap_lock = threading.Lock()
+
+
+def _ensure_session_workspace_root() -> str:
+    """Return the process-owned session-workspace root, creating it on demand.
+
+    Created on first use rather than at import time. As a module-level
+    ``tempfile.mkdtemp`` it ran for anything that merely *imported* this module
+    — a CLI listing runtimes, a test collecting, a worker that never served a
+    turn — and left a ``veadk-codex-workspaces-*`` directory in ``$TMPDIR``
+    that the ``atexit`` hook can only reclaim on a clean exit. A ``SIGKILL``
+    (an OOM kill, a torn-down ``pytest -xdist`` worker, a container stop)
+    orphans it, which is why a smoke run found several roots predating it.
+    Nothing but a real invocation needs the directory now, so nothing else
+    creates one.
+
+    Returns:
+        str: Absolute path to the (existing) root directory.
+    """
+    global _session_workspace_root
+    with _session_workspace_root_lock:
+        if _session_workspace_root is None:
+            root = tempfile.mkdtemp(prefix=_WORKSPACE_ROOT_PREFIX)
+            # Registered alongside creation, not at import: a hook over a
+            # directory that was never created is pure noise, and
+            # `ignore_errors=True` would have hidden that it did nothing.
+            atexit.register(shutil.rmtree, root, ignore_errors=True)
+            _session_workspace_root = root
+        return _session_workspace_root
+
+
+def __getattr__(name: str) -> Any:
+    """Keep ``_SESSION_WORKSPACE_ROOT`` readable as a module attribute.
+
+    PEP 562 module hook. The root is created lazily now, so it can no longer be
+    a module-level constant, but reading it must keep working (the smoke test
+    reads it to assert a turn left exactly one workspace behind). Access
+    materializes the root, because a caller that wants the path is about to
+    look inside it.
+    """
+    if name == "_SESSION_WORKSPACE_ROOT":
+        return _ensure_session_workspace_root()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+#: Appended to every turn's developer instructions, because two things Codex's
+#: own (deliberately preserved) system prompt tells the model are not true
+#: here:
+#:
+#: - ``apply_patch`` never reaches the backend. Codex offers it as a non-
+#:   ``function`` tool and the shim forwards only ``function`` tools, so the
+#:   model is told to use a tool it was never given, and spends a round
+#:   discovering that.
+#: - ``request_user_input`` *is* advertised, but nothing can answer it: an ADK
+#:   invocation has no interactive channel, so calling it ends the turn with
+#:   the work undone.
+#:
+#: Kept to the two facts and what to do instead. Both example agents had to
+#: counter-instruct this in their own prompts, which is a workaround no user
+#: should have to discover. This rides `developer_instructions` (additive)
+#: rather than `base_instructions`, which would *replace* Codex's ~21KB
+#: system prompt.
+_TOOL_AVAILABILITY_NOTE = (
+    "Tools available on this run:\n"
+    "- `apply_patch` is not one of them. Create and edit files with "
+    "`exec_command` instead (for example a `cat > file <<'EOF'` heredoc).\n"
+    "- Nobody can answer `request_user_input` during this run, and calling it "
+    "ends your turn with the work undone. Decide with what you have, and say "
+    "what was missing in your final message."
+)
 
 
 class CodexRuntime(BaseRuntime):
@@ -186,6 +263,10 @@ class CodexRuntime(BaseRuntime):
         event_queue: asyncio.Queue["Event | BaseException | _QueueSentinel"] = (
             asyncio.Queue()
         )
+        turn_token: str | None = None
+        run_started_at = time.monotonic()
+        run_status = "failed"
+        use_adk_transfer_scheduler = _uses_adk_transfer_scheduler(ctx)
 
         async def _emit_tool_event(event: "Event") -> None:
             await event_queue.put(event)
@@ -209,18 +290,15 @@ class CodexRuntime(BaseRuntime):
                     event_sink=_emit_tool_event,
                     timeout_seconds=runtime_config.tool_timeout_seconds,
                 )
-            resumed_events = [
-                *await resume_authenticated_tools(tool_bundle, ctx),
-                *await resume_confirmed_tools(tool_bundle, ctx),
-            ]
-            turn_token = shim.register_turn(
-                tool_bundle.specs,
-                tool_bundle.executors,
-                max_tool_iterations=runtime_config.max_tool_iterations,
-                invocation_id=ctx.invocation_id,
-                model_extra_config=agent.model_extra_config,
-                on_model_call=lambda: _charge_llm_call(ctx),
-            )
+            # These resume paths execute real tools on *this* task, so the
+            # workspace is bound around them too: a tool must see the same
+            # directory whether the shim called it or a resumed confirmation
+            # did.
+            with bind_workspace(workspace):
+                resumed_events = [
+                    *await resume_authenticated_tools(tool_bundle, ctx),
+                    *await resume_confirmed_tools(tool_bundle, ctx),
+                ]
         except BaseException as e:
             logger.error(
                 "codex_runtime_setup_failed invocation_id=%s stage=tools error_type=%s",
@@ -252,7 +330,8 @@ class CodexRuntime(BaseRuntime):
             if cleanup_done:
                 return
             cleanup_done = True
-            shim.unregister_turn(turn_token)
+            if turn_token is not None:
+                shim.unregister_turn(turn_token)
             await close_toolsets(tool_bundle.opened_toolsets)
             # `workspace` is deliberately kept: it is session-scoped and the
             # next invocation of this session must see the files this turn
@@ -290,16 +369,7 @@ class CodexRuntime(BaseRuntime):
                             _scope_event(transferred_event, ctx)
                             yield transferred_event
                     run_status = "transferred"
-                    await close_toolsets(tool_bundle.opened_toolsets)
-                    shutil.rmtree(codex_home, ignore_errors=True)
-                    if cleanup_workspace:
-                        shutil.rmtree(workspace, ignore_errors=True)
-                    logger.info(
-                        "codex_runtime_complete invocation_id=%s status=%s duration_ms=%d",
-                        ctx.invocation_id,
-                        run_status,
-                        round((time.monotonic() - run_started_at) * 1000),
-                    )
+                    await _cleanup()
                     return
 
             runtime_call = await build_runtime_llm_request(
@@ -307,11 +377,6 @@ class CodexRuntime(BaseRuntime):
                 ctx,
                 model=model,
                 tools_dict=tool_bundle.tools,
-            )
-            append_transfer_instructions(
-                agent,
-                runtime_call.llm_request,
-                transfer_targets,
             )
             short_circuit = await run_before_model_callbacks(
                 agent,
@@ -338,11 +403,25 @@ class CodexRuntime(BaseRuntime):
                 event_sink=_emit_tool_event,
                 timeout_seconds=runtime_config.tool_timeout_seconds,
             )
+            if "transfer_to_agent" in runtime_call.llm_request.tools_dict:
+                append_transfer_instructions(
+                    agent,
+                    runtime_call.llm_request,
+                    transfer_targets,
+                )
             turn_token = shim.register_turn(
                 tool_bundle.specs,
-                tool_bundle.executors,
+                # Bound here rather than by a ContextVar set for the turn: the
+                # shim runs executors on a task descended from its uvicorn
+                # server task, which snapshotted its context when the *first*
+                # invocation in the process started the shim, so an ambient
+                # value would be that invocation's - a silent cross-tenant
+                # leak. See `veadk.runtime.codex.workspace`.
+                bind_workspace_to_executors(tool_bundle.executors, workspace),
                 max_tool_iterations=runtime_config.max_tool_iterations,
                 invocation_id=ctx.invocation_id,
+                model_extra_config=agent.model_extra_config,
+                on_model_call=lambda: _charge_llm_call(ctx),
             )
 
             # Keep privileged instructions out of the user transcript. The SDK
@@ -367,6 +446,7 @@ class CodexRuntime(BaseRuntime):
                     system_instruction_to_text(
                         runtime_call.llm_request.config.system_instruction
                     ).strip(),
+                    _TOOL_AVAILABILITY_NOTE,
                 )
                 if block
             )
@@ -433,8 +513,6 @@ class CodexRuntime(BaseRuntime):
             raise
         turn = None
         pump: asyncio.Task[None] | None = None
-        run_started_at = time.monotonic()
-        run_status = "failed"
         # Lookahead for the tool-only turn. That turn's merged response carries
         # the turn's `usage_metadata` and any `state_delta` a model callback
         # wrote, but it has no content, and a contentless, tool-free,
@@ -521,8 +599,6 @@ class CodexRuntime(BaseRuntime):
                 # only when an after-model callback happens to be registered
                 # also made the event shape depend on plugin installation.
                 final_text_events: list[Event] = []
-                transfer_requested = False
-                deferred_transfer_event: Event | None = None
                 while True:
                     queued = await event_queue.get()
                     if queued is _QUEUE_DONE:
@@ -546,6 +622,22 @@ class CodexRuntime(BaseRuntime):
                     if event.partial:
                         yield event
                         continue
+                    transfer_target = transfer_agent_name(event)
+                    if transfer_target:
+                        if merge_target is not None:
+                            yield merge_target
+                            merge_target = None
+                        final_text_events.clear()
+                        yield event
+                        run_status = "transferred"
+                        if use_adk_transfer_scheduler:
+                            return
+                        async for transferred_event in run_transferred_agent(
+                            ctx, event
+                        ):
+                            _scope_event(transferred_event, ctx)
+                            yield transferred_event
+                        return
                     if merge_target is not None:
                         yield merge_target
                     merge_target = event
@@ -588,9 +680,15 @@ class CodexRuntime(BaseRuntime):
                     yield event
                 elif merge_target is not None:
                     # A tool-only turn: the merged event has no text, and a
-                    # contentless one reads as the invocation's final response,
-                    # which would clobber `output_key`, evaluation and the A2A
-                    # reply. Dropping it whole, however, also threw away the
+                    # contentless, tool-free, non-partial event satisfies
+                    # `Event.is_final_response()` - a spurious "the agent
+                    # answered" marker for any consumer keying on that alone,
+                    # including upstream ADK code that stops at the first final
+                    # response. (VeADK's own readers of the final answer -
+                    # `runtime/output_state.py`, `evaluation/base_evaluator.py`,
+                    # `runner.py`'s A2A path - all guard on content as well, so
+                    # they are not what is at risk here.) Dropping it whole,
+                    # however, also threw away the
                     # `state_delta` model callbacks wrote through
                     # `CallbackContext(ctx, event_actions=model_response_event.actions)`
                     # and the turn's `usage_metadata`. Marking it partial does
@@ -599,13 +697,13 @@ class CodexRuntime(BaseRuntime):
                     # bookkeeping is folded onto the last tool event instead -
                     # an event that is emitted, persisted, and is not a final
                     # response.
-                    _merge_turn_bookkeeping(merge_target, event)
+                    merge_turn_bookkeeping(merge_target, event)
                     yield merge_target
                     merge_target = None
                 else:
-                    # Nothing durable was emitted this turn, so there is nothing
-                    # for a contentless event to clobber and nowhere else for
-                    # the bookkeeping to go.
+                    # Nothing durable was emitted this turn: there is nowhere
+                    # else for the bookkeeping to go, and no earlier event that
+                    # this one's final-response marker could displace.
                     yield event
                 run_status = "completed"
         except asyncio.CancelledError:
@@ -769,9 +867,13 @@ def _prepare_workspace(
 
     The workspace is keyed by app/user/session/agent, so successive
     invocations of one session share it and it is never deleted at the end of
-    a turn. Process-owned workspaces are removed by
-    :data:`_SESSION_WORKSPACE_ROOT`'s ``atexit`` hook and, while the process
+    a turn. Process-owned workspaces are removed by the ``atexit`` hook
+    :func:`_ensure_session_workspace_root` registers and, while the process
     runs, by :func:`_reap_idle_workspaces`.
+
+    An ADK tool that needs to write into this directory reads it back with
+    :func:`veadk.runtime.codex.current_workspace`; see
+    :mod:`veadk.runtime.codex.workspace` for why that is bound per tool call.
 
     A caller-supplied ``workspace_root`` is never reaped, because this runtime
     cannot tell its own session directories from whatever else the caller keeps
@@ -804,7 +906,7 @@ def _prepare_workspace(
     )
     digest = hashlib.sha256(scope.encode("utf-8")).hexdigest()[:16]
     safe_id = "".join(ch for ch in session_id if ch.isalnum() or ch in "-_")[:32]
-    base = Path(root or _SESSION_WORKSPACE_ROOT)
+    base = Path(root or _ensure_session_workspace_root())
     base.mkdir(parents=True, exist_ok=True)
     workspace = base / f"{safe_id or 'session'}-{digest}"
     workspace.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -833,13 +935,19 @@ async def _maybe_reap_workspaces(runtime_config: CodexRuntimeConfig) -> None:
     global _last_workspace_reap_at
     if runtime_config.workspace_root:
         return
+    # Read, never create: with no root yet there is nothing to reap, and
+    # materializing one here would reintroduce exactly the stray directory the
+    # lazy root exists to avoid.
+    root = _session_workspace_root
+    if root is None:
+        return
     now = time.monotonic()
     with _workspace_reap_lock:
         if now - _last_workspace_reap_at < _WORKSPACE_REAP_INTERVAL_SECONDS:
             return
         _last_workspace_reap_at = now
     try:
-        await asyncio.to_thread(_reap_idle_workspaces, Path(_SESSION_WORKSPACE_ROOT))
+        await asyncio.to_thread(_reap_idle_workspaces, Path(root))
     except Exception:  # noqa: BLE001 - housekeeping must never fail a turn
         logger.warning("codex_workspace_reap_failed")
 
@@ -1050,51 +1158,6 @@ def _build_codex_input(
         else:
             items.append(MentionInput(attachment["name"], value))
     return items
-
-
-#: Action fields carried from a dropped merged event onto the last emitted one.
-#: `skip_summarization` is deliberately excluded: `Event.is_final_response()`
-#: returns True for any event that sets it, so copying it would turn the tool
-#: event into the invocation's final response - exactly what withholding the
-#: contentless merged event is meant to prevent.
-_MERGED_ACTION_DICTS = (
-    "state_delta",
-    "artifact_delta",
-    "requested_auth_configs",
-    "requested_tool_confirmations",
-)
-_MERGED_ACTION_SCALARS = ("transfer_to_agent", "escalate", "end_invocation")
-
-
-def _merge_turn_bookkeeping(target: "Event", merged: "Event") -> None:
-    """Fold a tool-only turn's merged-response bookkeeping onto ``target``.
-
-    ``run_before_model_callbacks``/``run_after_model_callbacks`` build their
-    ``CallbackContext`` over ``model_response_event.actions``, so a callback's
-    ``callback_context.state[...]`` writes land on the merged event's
-    ``state_delta``; ``llm_response_to_event`` then also attaches the turn's
-    ``usage_metadata``. When the merged event has no content it cannot be
-    emitted (it would read as the final response), so that bookkeeping is moved
-    onto the last event this turn actually emits.
-
-    Args:
-        target (Event): The already-built event that will be emitted.
-        merged (Event): The contentless merged response being withheld.
-    """
-    source = getattr(merged, "actions", None)
-    destination = getattr(target, "actions", None)
-    if source is not None and destination is not None:
-        for name in _MERGED_ACTION_DICTS:
-            values = getattr(source, name, None)
-            if values:
-                getattr(destination, name).update(values)
-        for name in _MERGED_ACTION_SCALARS:
-            value = getattr(source, name, None)
-            if value:
-                setattr(destination, name, value)
-    usage = getattr(merged, "usage_metadata", None)
-    if usage is not None and getattr(target, "usage_metadata", None) is None:
-        target.usage_metadata = usage
 
 
 def _scope_event(event: "Event", ctx: "InvocationContext") -> None:

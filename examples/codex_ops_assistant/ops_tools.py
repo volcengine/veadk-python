@@ -27,10 +27,16 @@ model reads the file with its own sandboxed shell and Python.
 **The tools are the only egress.** Codex runs with ``network_access=False`` and
 ``sandbox="workspace_write"``, so it can read and rewrite everything in the
 workspace and reach nothing else: no sockets, and no writes outside the
-workspace. ``file_incident_ticket`` writes to ``outbox/``, which lives *beside*
+workspace. ``file_incident_ticket`` writes to ``outbox/``, which sits *outside*
 the workspace and is therefore unreachable from inside the sandbox. Every byte
 that leaves is a structured argument to this one function, on one audited code
 path you own.
+
+Where the workspace is, the ``fetch_*`` tools ask per call:
+:func:`veadk.runtime.codex.current_workspace` reports the directory of the turn
+that is calling them. Nothing here pins ``workspace_root``, so every session
+gets its own directory — what a real on-call service would want, since two
+incidents investigated at once must not share a scratch directory.
 """
 
 from __future__ import annotations
@@ -39,6 +45,8 @@ import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+from veadk.runtime.codex import current_workspace
 
 from ops_backend import (
     LOG_STREAM,
@@ -52,9 +60,6 @@ from ops_backend import (
 
 _HERE = Path(__file__).resolve().parent
 
-WORKSPACE = _HERE / "workspace"
-"""Codex's working directory. Writable by the sandbox *and* by these tools."""
-
 OUTBOX = _HERE / "outbox"
 """Where filed tickets land. Outside the workspace, so the sandbox cannot."""
 
@@ -64,6 +69,53 @@ STORE = _HERE / "_store"
 MAX_RANGE = timedelta(days=3)
 _MAX_TICKET_FIELD_CHARS = 4000
 _MAX_EVIDENCE_ITEMS = 20
+
+_LAST_WORKSPACE: Path | None = None
+"""The workspace the most recent tool call ran in — a *demo* affordance.
+
+``main.py`` lists the directory once the session is over, and this example does
+not pin ``workspace_root``, so nothing outside a tool call knows the path. A
+single-session script can remember it like this; a server handling several
+incidents at once cannot, and does not need to — its tools are handed the right
+directory on every call.
+"""
+
+
+def _workspace() -> Path | None:
+    """The workspace of the Codex turn calling this tool, or ``None``.
+
+    Returns:
+        Path | None: Codex's working directory for this turn, or ``None`` when
+        the tool runs outside a codex turn (another runtime, an ``AgentTool``,
+        a unit test).
+    """
+    global _LAST_WORKSPACE
+    workspace = current_workspace()
+    if workspace is None:
+        return None
+    _LAST_WORKSPACE = Path(workspace)
+    return _LAST_WORKSPACE
+
+
+def last_seen_workspace() -> Path | None:
+    """The workspace observed by the last tool call. See :data:`_LAST_WORKSPACE`."""
+    return _LAST_WORKSPACE
+
+
+def _no_workspace_error() -> dict:
+    """The result to return when there is no workspace to download into.
+
+    :func:`~veadk.runtime.codex.current_workspace` returns ``None`` rather than
+    raising when no codex turn is on the stack, so the tool answers in kind: an
+    error result the model can read beats an exception it cannot.
+    """
+    return {
+        "status": "error",
+        "message": (
+            "no sandbox working directory on this call, so nothing was "
+            "downloaded; these tools only work inside a codex turn."
+        ),
+    }
 
 
 def _parse_time(value: str, label: str) -> datetime:
@@ -101,9 +153,9 @@ def _slug(start: datetime, end: datetime) -> str:
     return f"{start:%Y%m%dT%H%M}_{end:%Y%m%dT%H%M}"
 
 
-def _write(relative: str, text: str) -> tuple[str, int]:
-    """Write into the workspace and return ``(relative path, bytes)``."""
-    target = WORKSPACE / relative
+def _write(workspace: Path, relative: str, text: str) -> tuple[str, int]:
+    """Write into this turn's workspace and return ``(relative path, bytes)``."""
+    target = workspace / relative
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(text, encoding="utf-8")
     return relative, target.stat().st_size
@@ -130,6 +182,9 @@ def fetch_application_logs(stream: str, start_time: str, end_time: str) -> dict:
         'bytes' on success, or 'status'='error' with a 'message' explaining
         how to fix the call.
     """
+    workspace = _workspace()
+    if workspace is None:
+        return _no_workspace_error()
     if stream != LOG_STREAM:
         return {
             "status": "error",
@@ -142,7 +197,9 @@ def fetch_application_logs(stream: str, start_time: str, end_time: str) -> dict:
 
     lines = list(read_log_lines(STORE, start, end))
     path, size = _write(
-        f"logs/{stream}_{_slug(start, end)}.log", "".join(f"{line}\n" for line in lines)
+        workspace,
+        f"logs/{stream}_{_slug(start, end)}.log",
+        "".join(f"{line}\n" for line in lines),
     )
     return {
         "status": "ok",
@@ -169,6 +226,9 @@ def fetch_service_metrics(service: str, start_time: str, end_time: str) -> dict:
         dict: A receipt with the workspace-relative 'path', 'rows', 'columns'
         and the metric names present, or 'status'='error' with a 'message'.
     """
+    workspace = _workspace()
+    if workspace is None:
+        return _no_workspace_error()
     if service != SERVICE:
         return {
             "status": "error",
@@ -181,6 +241,7 @@ def fetch_service_metrics(service: str, start_time: str, end_time: str) -> dict:
 
     rows = list(read_metric_rows(STORE, start, end))
     path, size = _write(
+        workspace,
         f"metrics/{service}_{_slug(start, end)}.csv",
         "timestamp,metric,value\n" + "".join(f"{row}\n" for row in rows),
     )
@@ -209,6 +270,9 @@ def fetch_deploy_history(start_time: str, end_time: str) -> dict:
         dict: A receipt with the workspace-relative 'path' and 'records', or
         'status'='error' with a 'message'.
     """
+    workspace = _workspace()
+    if workspace is None:
+        return _no_workspace_error()
     try:
         start, end = _resolve_range(start_time, end_time)
     except ValueError as exc:
@@ -216,6 +280,7 @@ def fetch_deploy_history(start_time: str, end_time: str) -> dict:
 
     records = read_deploys(STORE, start, end)
     path, size = _write(
+        workspace,
         f"deploys/deploys_{_slug(start, end)}.json",
         json.dumps(records, indent=2) + "\n",
     )

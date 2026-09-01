@@ -33,7 +33,7 @@ agent = Agent(name="assistant", runtime="codex")
 
 <Callout type="warn">
 **定位：`codex` / `piagent` 是「沙箱执行运行时」，不是 ADK 执行流程的等价替代品。**
-它们把整个内层循环交给外部 agent harness，因此 ADK 在该流程内实现的能力——Agent transfer、请求/响应处理器（planner、code_executor、example store、知识库注入）、逐次模型调用的回调与 span——都不会执行。选择它们是为了拿到「模型可以在受控沙箱里跑命令、改文件」的能力，而不是为了给已有 ADK 智能体换一个后端。具体差异见下方[支持矩阵](#支持矩阵)。
+它们把整个内层循环交给外部 agent harness，因此 ADK 在该流程内实现的大部分能力——请求/响应处理器（planner、code_executor、example store、知识库注入）、逐次模型调用的回调与 span——都不会执行。基础 Agent transfer 会通过 `transfer_to_agent` 桥接回 ADK，但这些运行时仍更适合「模型可以在受控沙箱里跑命令、改文件」的场景，而不是需要完整 ADK flow 的场景。具体差异见下方[支持矩阵](#支持矩阵)。
 </Callout>
 
 使用 Codex runtime 前安装可选依赖：
@@ -55,7 +55,7 @@ pip install "veadk-python[codex]"
 **不适合：**
 
 - **一次固定的工具调用 + 一段格式化回答。** 这正是 ADK 运行时的主场：更快、更便宜，而且不受下面任何一条限制。
-- **需要 `sub_agents`、`output_schema`、`planner`、`code_executor` 或 `generate_content_config` 的智能体。** 这些配置在非 adk 运行时下会**直接报错**，而不是降级——完整清单见[支持矩阵](#支持矩阵)。
+- **需要 `output_schema`、`planner`、`code_executor` 或高级 `generate_content_config` 的智能体。** 这些配置在非 adk 运行时下会**直接报错**，而不是降级——完整清单见[支持矩阵](#支持矩阵)。
 - **对延迟敏感的链路。** 每一次 invocation 都会重建一个临时 `CODEX_HOME`、拉起一个 Codex 子进程、开一个 ephemeral thread；这笔固定开销每回合都要付。
 - **`run_live`。** 非 adk 运行时没有 live/bidi 实现，见[下文](#不支持-run_live)。
 
@@ -154,6 +154,8 @@ await Runner(agent=agent).run(
 
 默认情况下，workspace 由 `app_name` / `user_id` / `session_id` / agent 名四元组定位：同一 Session 的多次调用**共享同一目录**，回合结束后不会删除，因此上一轮写下的文件下一轮仍然可见。进程退出时整棵目录树被清理；进程存活期间，**空闲超过 6 小时**的 Session workspace 会在下一次创建 workspace 时被顺带回收，以限制长期运行的服务进程的磁盘增长。
 
+工具不需要自己推导这个路径：不做任何配置，`current_workspace()` 就会返回当前调用它的这一轮的 workspace，见下方 [Workspace 是数据面](#workspace-是数据面)。
+
 显式传入 `workspace_root` 时，这块目录属于你自己：runtime 既不会删除它，也**不会**对它执行上述空闲回收——它仍会在其下为每个 Session 建独立子目录，但这些子目录需要你自行清理。`reuse_workspace=True` 只有在同时设置了 `workspace_root` 时才有意义，它让所有 Session 直接共用该目录本身，而不再做 Session 隔离。
 
 ### Workspace 是数据面
@@ -169,14 +171,22 @@ await Runner(agent=agent).run(
 正确的做法是让工具**交出一个路径，而不是一份数据**：把数据写进 workspace（Codex 的 `cwd` 就是它），只返回位置和少量元信息。数据落在磁盘上，模型用 shell 去读、去切片、去统计，上下文里只留下一行。
 
 ```python title="tools.py"
+from pathlib import Path
+
+from veadk.runtime.codex import current_workspace
+
+
 def load_orders(day: str) -> dict:
     """把某一天的订单写成 CSV，放进你的工作目录。
 
     只返回一张回执，不返回订单本身——请用你自己的代码去读返回路径上的 CSV。
     """
+    workspace = current_workspace()   # 本轮的工作目录，或者 None
+    if workspace is None:             # 不在 Codex 轮次里：返回模型能读懂的错误
+        return {"status": "error", "message": "no codex workspace on this call"}
     rows = warehouse.query(day)
     name = f"orders-{day}.csv"
-    write_csv(WORKSPACE / name, rows)
+    write_csv(Path(workspace) / name, rows)
     # 回执，不是数据：告诉模型文件在哪、有多大形状。
     return {"path": name, "rows": len(rows), "columns": list(rows[0])}
 ```
@@ -186,10 +196,12 @@ def load_orders(day: str) -> dict:
 
 反方向同理：Codex 在 workspace 里写好报告之后，「发布」工具应该收下**它写的那个文件的路径**，由工具自己读盘再送往外部系统——而不是让模型把整篇报告当作工具参数复述一遍（那同样要过一遍上下文，而且内容可能在复述中走样）。
 
-工具怎么知道 workspace 在哪，两种做法：
+工具怎么知道 workspace 在哪：
 
-- **固定路径（单租户）**：显式设置 `workspace_root` 并配合 `reuse_workspace=True`，此时 workspace 就是 `workspace_root` 本身，工具和 `CodexRuntimeConfig` 共用同一个常量。代价是所有 Session 共用一个目录，见 [Workspace 生命周期](#workspace-生命周期)。
-- **Session 隔离（多租户）**：保留默认的 Session 隔离目录，让模型把目标路径当作工具参数传进来——Codex 的 `cwd` 正是本 Session 的 workspace，工具写入该路径并把它原样返回即可。这条路径来自模型，所以工具应当自己校验它确实落在预期目录之内，再打开文件。
+- **`current_workspace()`——首选做法，也是多租户唯一可行的做法。** `from veadk.runtime.codex import current_workspace`，返回当前调用该工具的这一轮 workspace 的绝对路径。它不需要任何配置，`workspace_root` 与 `reuse_workspace` 都**不设**时同样有效。这个值是在每次工具调用前后绑定的，而不是从调用方的环境上下文里读，所以同一进程里并发的多个回合各自看到自己的目录。调用栈上没有 Codex 回合时它返回 `None`，而不是抛异常——同一个工具对象也会被别的 runtime、被 `AgentTool`、被单元测试执行——因此请判断 `None` 并返回你自己的 `{"status": "error", ...}` 让模型去处理，而不是抛异常，也不要退回到某个你自己选定的目录。
+- **固定路径——单租户，并且你想在跑完之后翻这个目录。** 设置 `workspace_root` 并配合 `reuse_workspace=True`，此时 workspace 就是 `workspace_root` 本身，工具和 `CodexRuntimeConfig` 可以共用同一个常量，而且进程退出后目录仍在磁盘上。代价是所有 Session 共用它，见 [Workspace 生命周期](#workspace-生命周期)。
+
+无论哪种做法，来自**模型**的路径都是不可信输入：打开之前请把它解析回 workspace，并拒绝一切越界的路径（`..`、绝对路径、指向外部的符号链接）。
 
 ### Codex 执行参数
 
@@ -199,7 +211,7 @@ def load_orders(day: str) -> dict:
 | `personality` | `"pragmatic"` | Codex 自带的回复风格，可选 `none`/`friendly`/`pragmatic`。 |
 | `max_tool_iterations` | `32` | 整个 Codex turn 内 shim 可执行的 ADK/MCP 工具轮次上限（1–256）。见下方行为变更说明。 |
 | `tool_timeout_seconds` | `120.0` | 单个 ADK/MCP 工具调用的超时秒数；设为 `None` 表示不超时。 |
-| `reuse_workspace` | `False` | 仅在同时设置了 `workspace_root` 时生效，见上方 [Workspace 生命周期](#workspace-生命周期)。 |
+| `reuse_workspace` | `False` | 仅在同时设置了 `workspace_root` 时生效，而且只值得在单租户场景下开启，见上方 [Workspace 生命周期](#workspace-生命周期)。否则两个字段都别设，让工具调用 `current_workspace()`，见 [Workspace 是数据面](#workspace-是数据面)。 |
 
 <Callout type="warn">
 **行为变更：`max_tool_iterations` 的含义已改变，默认值从 `8` 提高到 `32`。**
@@ -213,6 +225,13 @@ Codex 自带一份约 20KB、针对自身工具链（`apply_patch`、`update_pla
 因此，Agent 的身份块与 `instruction` 走的是 Codex 原生的 `developer_instructions` 通道：Codex 把它渲染成一条独立的 `developer` 消息，与 AGENTS.md、skills、环境上下文并列，是纯追加而非替换。
 
 副作用是 **`personality` 现在真的会生效**：它渲染在 Codex 内置的系统提示词模板里，而以前只要设置了 `base_instructions`，整个模板连同 personality 一起被替换掉，该字段形同虚设。
+
+同一条通道上还会追加两条更正——Codex 被保留下来的系统提示词描述的工具链，这座桥并不能完整提供。runtime 会在每一轮的 developer instructions 后面追加一段简短的**工具可用性说明**：
+
+- 本次运行没有 `apply_patch`：shim 只转发 `function` 类型的工具，而 Codex 的文件编辑工具不是，所以创建和修改文件要用 `exec_command`（例如 `cat > file <<'EOF'` heredoc）。
+- `request_user_input` 确实被通告了，但没有人能回答它：一次 ADK 调用没有交互通道，调用它只会让这一轮什么都没做就结束。说明里会要求模型用手上已有的信息作判断，并在最终回复里讲清楚缺了什么。
+
+这两点你不需要再在自己 Agent 的 `instruction` 里手写一遍。
 
 ### Codex 环境变量
 
@@ -254,7 +273,6 @@ Codex 原生生命周期和 ADK Function/MCP 工具调用都会转换为 ADK Eve
 
 | 配置 | 原因 |
 | :--- | :--- |
-| `sub_agents=[...]` | 外部运行时没有实现 agent transfer，子智能体永远不会被调用，父智能体会自己回答所有问题。如需编排，请用父级 `SequentialAgent` 或 `AgentTool`。 |
 | `model=...` | 运行时从 `model_name` 解析模型，完全忽略 `model` 对象，其 `api_base`、请求头和 fallback 都会丢失。请改用 `model_name`。 |
 | `generate_content_config=...` | 只有 `system_instruction` 会被转发，`temperature`、`max_output_tokens`、`thinking_config` 等都会被丢弃。 |
 | `output_schema=...` | schema 既不会下发给后端，也不会进入提示词，模型从未被要求按 schema 输出；`state[output_key]` 要么是未校验的回复，要么直接缺失。 |
@@ -263,7 +281,7 @@ Codex 原生生命周期和 ADK Function/MCP 工具调用都会转换为 ADK Eve
 | `enable_supervisor=True` | 监督流程挂在 ADK LLM flow 上，而该流程已被替换，不会有任何监督生效。 |
 
 <Callout type="info">
-这条规则只针对**非 adk 智能体自身**的 `sub_agents`。把一个 `runtime="codex"` 的智能体放进 `SequentialAgent` / `ParallelAgent` 的 `sub_agents` 中是完全支持的用法——编排由父级负责，不依赖 agent transfer。
+`sub_agents` 会通过 ADK 兼容的 `transfer_to_agent` 桥接支持。外部运行时可以请求转交，VeADK 再在外层 ADK 上下文中运行被选中的目标智能体。
 </Callout>
 
 ### 警告：被忽略但仍可运行

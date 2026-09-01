@@ -38,7 +38,6 @@ from fastapi.openapi.models import APIKey
 from fastapi.openapi.models import APIKeyIn
 
 from veadk.runtime.base_runtime import resolve_system_append
-from veadk.runtime.agent_transfer import build_transfer_tool
 from veadk.runtime.codex.config import CodexRuntimeConfig
 from veadk.runtime.codex.config import codex_subprocess_env
 from veadk.runtime.codex.config import toml_string

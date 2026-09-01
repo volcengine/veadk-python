@@ -371,7 +371,6 @@ ERROR_ROWS: tuple[tuple[str, dict, tuple[str, ...]], ...] = (
         ("include_contents", "history", "runtime='adk'"),
     ),
     ("planner", {"planner": PlanReActPlanner()}, ("planner", "runtime='adk'")),
-    ("sub_agents", {"sub_agents": "sentinel-sub-agents"}, ("sub_agents", "transfer")),
 )
 
 

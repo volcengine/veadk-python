@@ -19,7 +19,6 @@ codex_data_analysis/
 ├── skills/
 │   └── sales-report/
 │       └── SKILL.md        # the house format for the report
-├── .codex_workspace/       # created at run time — Codex's cwd (read it afterwards!)
 └── outbox/                 # created at run time — what publish_report let out
 ```
 
@@ -103,7 +102,8 @@ def fetch_sales_extract(quarter: str) -> dict:
 
 # RIGHT — the data goes to disk, the receipt goes to the model
 def fetch_sales_extract(quarter: str) -> dict:
-    shutil.copyfile(source, WORKSPACE / "data" / source.name)
+    workspace = Path(current_workspace())        # this turn's sandbox directory
+    shutil.copyfile(source, workspace / "data" / source.name)
     return {"status": "ok", "path": "data/sales_2025q3.csv", "rows": 2400,
             "columns": [...], "bytes": 127983}
 ```
@@ -130,21 +130,37 @@ Two consequences worth internalising:
 
 ### How the tools know where the workspace is
 
-The ADK tools run in *your* process, not in the sandbox, and the runtime does
-not currently expose the turn's workspace path to them. This example therefore
-pins it:
+The ADK tools run in *your* process, not in the sandbox, so they have to be
+told where Codex is working. They ask, once per call:
 
 ```python
-CodexRuntimeConfig(workspace_root=str(WORKSPACE), reuse_workspace=True, ...)
+from veadk.runtime.codex import current_workspace
+
+def fetch_sales_extract(quarter: str) -> dict:
+    workspace = current_workspace()      # this turn's directory, or None
+    if workspace is None:                # not a codex turn — say so, don't guess
+        return {"status": "error", "message": "no sandbox working directory"}
+    ...
 ```
 
-That makes the directory predictable — which is also why you can read Codex's
-script afterwards. **Do not copy this into a multi-tenant service.**
-`reuse_workspace=True` means every session shares one directory. There, leave
-both fields unset: the runtime gives each `(app, user, session, agent)` its own
-workspace, which still persists across the turns of that session (that is the
-property turn 2 relies on — pinning only makes it visible), and have the tool
-receive its destination directory as an argument instead.
+The runtime binds that value around each tool call, so it is *this* turn's
+workspace even with several sessions in flight in one process. Which is why the
+example leaves `workspace_root` and `reuse_workspace` unset: each
+`(app, user, session, agent)` gets its own directory, and it still persists
+across the turns of that session — the property turn 2 relies on.
+
+`current_workspace()` returns `None` rather than raising when no codex turn is
+on the stack (another runtime, an `AgentTool`, a unit test). The tools here turn
+that into an ordinary `{"status": "error", ...}` result the model can read,
+instead of raising or quietly falling back to a directory of their own.
+
+**Pinning is the single-tenant convenience, not the multi-tenant answer.**
+`workspace_root=..., reuse_workspace=True` makes the directory a constant you
+can `ls` long after the process exits — useful while developing one agent on
+your own machine, wrong on a server, where it collapses every session onto one
+directory. Unpinned workspaces live under a temporary root the runtime owns and
+are removed when the process exits, which is why `main.py` prints the tree
+before it finishes.
 
 ## Security is the demo, not boilerplate
 
@@ -257,10 +273,11 @@ just the chart and the Trend paragraph, recovered from a `zsh` quoting error,
 and republished. Expect that shape rather than those exact commands — the number
 of rounds varies from run to run.
 
-Afterwards, read what Codex actually left behind:
+The run ends by printing what Codex left in its workspace — its script, its
+drafts — because that directory belongs to the session and the runtime removes
+it when the process exits. What stays on disk is the outbox:
 
 ```bash
-ls examples/codex_data_analysis/.codex_workspace   # its script, its drafts
 cat examples/codex_data_analysis/outbox/*/report.md
 ```
 
@@ -293,21 +310,24 @@ so they are worth knowing before you build on it.
   `codex_backend_api_error` before believing the answer.
 - **A chat model bridged into Codex's protocol narrates instead of acting.**
   Codex ends a turn on an assistant message, so a model that replies *"I'll now
-  write the analysis script"* — or that calls Codex's `request_user_input` tool,
-  which is advertised even though no user can answer mid-invocation — silently
-  ends the turn with nothing done. That is why the instruction opens with *"Act,
-  do not narrate"* and forbids asking questions. Expect to spend prompt budget
-  on this with any chat backend.
-- **`apply_patch` never reaches the backend.** The shim forwards only
-  `function`-typed tools, and Codex's file-editing tool is not one — the list
-  the backend actually sees is `exec_command`, `write_stdin`, `update_plan`,
-  `request_user_input`, `view_image`, plus your ADK tools. Codex's own system
-  prompt still tells the model to use `apply_patch`, so it will try, and burn a
-  round. Hence the instruction's *"create files with a heredoc"*.
+  write the analysis script"* silently ends the turn with nothing done. That is
+  why the instruction opens with *"Act, do not narrate"*. Expect to spend prompt
+  budget on this with any chat backend.
+- **`apply_patch` never reaches the backend, and nobody can answer
+  `request_user_input`.** The shim forwards only `function`-typed tools, and
+  Codex's file-editing tool is not one — the list the backend actually sees is
+  `exec_command`, `write_stdin`, `update_plan`, `request_user_input`,
+  `view_image`, plus your ADK tools. Codex's own system prompt still tells the
+  model to use `apply_patch`, and `request_user_input` is advertised even though
+  an ADK invocation has no interactive channel to answer it on. **The runtime
+  appends a tool-availability note to every turn's developer instructions**
+  stating both facts and what to do instead — create files with an
+  `exec_command` heredoc, decide rather than ask. This example's instruction
+  used to carry those two sentences by hand and no longer needs to.
 
 The general lesson: on a chat backend this runtime's effective tool surface is
-narrower than Codex's documentation implies, and the instruction has to close
-the gap.
+narrower than Codex's documentation implies. The runtime closes those two gaps
+for you; anything else is still your instruction's job.
 
 ## Constraints
 

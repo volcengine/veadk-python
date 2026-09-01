@@ -31,7 +31,7 @@ The security posture is the demo, not boilerplate:
 - ``RunConfig(max_llm_calls=...)`` — a hard ceiling on a self-directed loop.
 
 The only egress is ``file_incident_ticket``, an audited ADK tool that writes to
-``outbox/`` — a directory beside the workspace that the sandbox cannot reach.
+``outbox/`` — a directory outside the workspace that the sandbox cannot reach.
 
 Run:
     cd examples/codex_ops_assistant && python main.py
@@ -45,7 +45,6 @@ Requires:
 
 import asyncio
 import os
-import shutil
 from pathlib import Path
 
 from google.adk.agents import RunConfig
@@ -53,7 +52,7 @@ from google.adk.agents.invocation_context import LlmCallsLimitExceededError
 from google.adk.skills import load_skill_from_dir
 from google.adk.tools.skill_toolset import SkillToolset
 from google.genai import types
-from ops_tools import OPS_TOOLS, OUTBOX, WORKSPACE
+from ops_tools import OPS_TOOLS, OUTBOX, last_seen_workspace
 
 from veadk import Agent, Runner
 from veadk.memory.short_term_memory import ShortTermMemory
@@ -135,12 +134,12 @@ def build_agent() -> Agent:
             # Refuse every escalation Codex asks for. Never use "auto_review"
             # in production — it auto-approves, it does not review.
             approval_mode="deny_all",
-            # Pin the workspace so the ADK tools and the sandbox agree on one
-            # directory, and so you can inspect what the model wrote after the
-            # run. Leave both unset in a server to get reaped, per-session
-            # workspaces instead.
-            workspace_root=str(WORKSPACE),
-            reuse_workspace=True,
+            # `workspace_root` and `reuse_workspace` are left unset, which is
+            # what a real on-call service wants: one reaped directory per
+            # (app, user, session, agent), still shared by the turns of that
+            # session, never shared between two incidents. The ADK tools find
+            # it per call with `current_workspace()` — see `ops_tools.py`.
+            #
             # ADK tool round-trips allowed for the whole turn (not per model
             # request). Four fetches plus a ticket fits comfortably.
             max_tool_iterations=12,
@@ -180,8 +179,6 @@ async def run_turn(runner: Runner, prompt: str, *, title: str) -> dict:
                         f"  [sandbox {tally['sandbox_commands']:>2}] "
                         f"{_summarize(call.args.get('command'))}"
                     )
-                elif call.name == "apply_patch":
-                    print("  [sandbox   ] wrote a script into the workspace")
                 else:
                     tally["adk_tool_calls"] += 1
                     print(f"  [adk tool ] {call.name}({_summarize(call.args, 90)})")
@@ -235,11 +232,12 @@ async def run_turn(runner: Runner, prompt: str, *, title: str) -> dict:
 
 
 async def main() -> None:
-    # Start from a clean slate so the run is reproducible. `reuse_workspace`
-    # means the directory would otherwise survive from the previous run.
-    shutil.rmtree(WORKSPACE, ignore_errors=True)
-    WORKSPACE.mkdir(parents=True, exist_ok=True)
-
+    # Nothing to clear before the run. This used to delete the pinned
+    # `workspace/` directory, which `reuse_workspace=True` would otherwise have
+    # carried over from the previous run — last week's logs and scripts sitting
+    # in the sandbox while the model investigates today's incident. The
+    # per-session workspace makes that impossible: the runtime creates it under
+    # a temporary root of its own, one per process, and removes it on exit.
     runner = Runner(agent=build_agent(), short_term_memory=ShortTermMemory())
     await runner.short_term_memory.create_session(
         app_name=runner.app_name, user_id=runner.user_id, session_id=SESSION_ID
@@ -250,10 +248,17 @@ async def main() -> None:
     # wrote in turn 1 are still on disk, so it does not start from zero.
     await run_turn(runner, FOLLOW_UP_QUESTION, title="Turn 2 — was it new?")
 
-    print(f"\nWorkspace (what the sandbox wrote): {WORKSPACE}")
-    for path in sorted(WORKSPACE.rglob("*")):
-        if path.is_file():
-            print(f"  {path.relative_to(WORKSPACE)} ({path.stat().st_size} bytes)")
+    # Listed here rather than left for you to `ls`: the runtime removes its
+    # per-session workspaces when the process exits. Pin `workspace_root` +
+    # `reuse_workspace` for a single-tenant run you want to inspect afterwards.
+    workspace = last_seen_workspace()
+    if workspace is None:
+        print("\nWorkspace: no tool ran, so nothing reported a workspace.")
+    else:
+        print(f"\nWorkspace (what the sandbox wrote): {workspace}")
+        for path in sorted(workspace.rglob("*")):
+            if path.is_file():
+                print(f"  {path.relative_to(workspace)} ({path.stat().st_size} bytes)")
     print(f"\nOutbox (what left the sandbox): {OUTBOX}")
     for path in sorted(OUTBOX.glob("*.json")):
         print(f"  {path.name}")

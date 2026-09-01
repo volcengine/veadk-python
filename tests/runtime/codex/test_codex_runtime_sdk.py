@@ -29,6 +29,7 @@ from openai_codex import ApprovalMode, Sandbox  # noqa: E402
 
 from veadk.runtime.codex.config import CodexRuntimeConfig  # noqa: E402
 from veadk.runtime.codex.runtime import CodexRuntime  # noqa: E402
+from veadk.runtime.codex.runtime import _TOOL_AVAILABILITY_NOTE  # noqa: E402
 from veadk.runtime.codex.runtime import _prepare_workspace  # noqa: E402
 
 
@@ -228,8 +229,12 @@ async def test_runtime_passes_isolated_config_and_safe_sdk_controls(
     # the runtime deliberately never sends it; the agent identity rides along
     # with the instruction on the developer channel instead.
     assert "base_instructions" not in _FakeAsyncCodex.calls["thread_start"]
+    # Identity, then the agent's instruction, then the runtime's note about the
+    # two tools Codex's own prompt gets wrong here (its content is asserted in
+    # `test_codex_turn_contract.py`; this row is about ordering and joining).
     assert _FakeAsyncCodex.calls["thread_start"]["developer_instructions"] == (
-        "Your name is agent.\n\nSDK contract agent\n\nFollow the contract."
+        "Your name is agent.\n\nSDK contract agent\n\nFollow the contract.\n\n"
+        + _TOOL_AVAILABILITY_NOTE
     )
     # `on_model_call` is what makes `RunConfig.max_llm_calls` fire at all for
     # runtime="codex": ADK enforces the budget only through

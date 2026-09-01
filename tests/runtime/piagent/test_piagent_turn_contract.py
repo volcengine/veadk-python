@@ -189,12 +189,12 @@ async def test_answer_wins_over_a_tool_call_preamble(tmp_path, monkeypatch) -> N
         f"{[[p.text for p in e.content.parts] for e in finals]}"
     )
     text = "".join(p.text or "" for p in finals[0].content.parts)
-    assert (
-        "it is sunny" in text
-    ), f"the answering round was dropped; the turn answered {text!r}"
-    assert (
-        text.strip() == "it is sunny"
-    ), f"the preamble leaked into the turn's answer: {text!r}"
+    assert "it is sunny" in text, (
+        f"the answering round was dropped; the turn answered {text!r}"
+    )
+    assert text.strip() == "it is sunny", (
+        f"the preamble leaked into the turn's answer: {text!r}"
+    )
 
 
 # ------------------------------------------------------ the new runtime plumbing
@@ -274,9 +274,9 @@ async def test_turn_reports_accumulated_token_usage(tmp_path, monkeypatch) -> No
     events = [e async for e in PiAgentRuntime().run_async(_agent(), ctx)]
 
     carriers = [e for e in events if getattr(e, "usage_metadata", None) is not None]
-    assert (
-        len(carriers) == 1
-    ), f"expected exactly one usage carrier per turn, got {len(carriers)}"
+    assert len(carriers) == 1, (
+        f"expected exactly one usage carrier per turn, got {len(carriers)}"
+    )
     usage = carriers[0].usage_metadata
     # prompt <- input + cacheRead + cacheWrite = (10+3+2) + 5
     assert usage.prompt_token_count == 20, usage
@@ -372,9 +372,9 @@ async def test_turn_emits_an_indexable_call_llm_span(tmp_path, monkeypatch) -> N
 
     spans = exporter._spans[before:]
     call_llm = [s for s in spans if s.name == "call_llm"]
-    assert (
-        call_llm
-    ), f"no call_llm span for a Pi turn: {sorted({s.name for s in spans})}"
+    assert call_llm, (
+        f"no call_llm span for a Pi turn: {sorted({s.name for s in spans})}"
+    )
 
     attributes = dict(call_llm[0].attributes or {})
     assert attributes.get("gen_ai.session.id") == session_id, attributes
@@ -384,4 +384,286 @@ async def test_turn_emits_an_indexable_call_llm_span(tmp_path, monkeypatch) -> N
     assert exporter.get_finished_spans(session_id), (
         "get_finished_spans() is empty, so OpentelemetryTracer.dump() would "
         "write [] and base_evaluator.build_eval_set would raise"
+    )
+
+
+# ------------------------------------------------------------ the tool-only turn
+
+
+#: A turn that ends in tool work and never speaks: the round's assistant message
+#: carries only a `tool_use` block, so no `message_end` ever produces text. The
+#: merged response for such a turn has no content -- but it still carries the
+#: turn's `usage_metadata` and whatever `state_delta` a model callback wrote.
+_TOOL_ONLY_TURN = [
+    {
+        "type": "tool_execution_start",
+        "toolCallId": "call-1",
+        "toolName": "write_file",
+        "args": {"path": "notes.md"},
+    },
+    {
+        "type": "tool_execution_end",
+        "toolCallId": "call-1",
+        "toolName": "write_file",
+        "result": {"ok": True},
+    },
+    {
+        "type": "message_end",
+        "message": {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "call-1", "name": "write_file"}],
+            "usage": {"input": 9, "output": 3},
+        },
+    },
+    {"type": "agent_settled"},
+]
+
+
+@pytest.mark.asyncio
+async def test_tool_only_turn_keeps_callback_state_and_usage(
+    tmp_path, monkeypatch
+) -> None:
+    """A text-less turn must not silently discard its own bookkeeping.
+
+    ``run_before_model_callbacks``/``run_after_model_callbacks`` build their
+    ``CallbackContext`` over ``model_response_event.actions``, so a callback's
+    ``callback_context.state[...]`` writes land on the merged event's
+    ``state_delta``, and ``llm_response_to_event`` attaches the turn's
+    ``usage_metadata`` to the same event. Dropping that event whole -- which a
+    bare ``if event.content and event.content.parts`` guard does -- throws both
+    away without a word.
+
+    Emitting it instead is not the alternative: a contentless, tool-free,
+    non-partial event is a final response by ADK's definition, so it would read
+    as the turn's answer. Nor does ``partial=True`` rescue it, since partial
+    events are never persisted. The bookkeeping is therefore folded onto the
+    last durable event the turn actually emitted.
+    """
+    written: dict[str, str] = {}
+
+    def after_model_callback(callback_context, llm_response):
+        callback_context.state["pi_last_turn"] = "tool-only"
+        written["ran"] = "yes"
+        return None
+
+    binary = _make_pi_emitting(tmp_path, _TOOL_ONLY_TURN)
+    monkeypatch.setenv("PIAGENT_BINARY", str(binary))
+    monkeypatch.setenv("PIAGENT_AGENT_DIR", str(tmp_path / "agent-home"))
+
+    agent = _agent(after_model_callback=after_model_callback)
+    ctx = _counting_ctx(_user_event("write the notes"))
+    events = [e async for e in PiAgentRuntime().run_async(agent, ctx)]
+
+    assert written.get("ran") == "yes", "the after-model callback never ran"
+    assert events, "a tool-only turn emitted nothing at all"
+
+    empty_finals = [
+        e
+        for e in events
+        if e.is_final_response() and not (e.content and e.content.parts)
+    ]
+    assert not empty_finals, (
+        "a contentless event was emitted; `Event.is_final_response()` is True "
+        "for it, so it reads as the turn's answer"
+    )
+
+    state_carriers = [e for e in events if e.actions.state_delta]
+    assert len(state_carriers) == 1, (
+        "the callback's state write must survive on exactly one emitted event; "
+        f"found {[dict(e.actions.state_delta) for e in events]}"
+    )
+    assert state_carriers[0].actions.state_delta["pi_last_turn"] == "tool-only"
+
+    usage_carriers = [e for e in events if getattr(e, "usage_metadata", None)]
+    assert len(usage_carriers) == 1, (
+        "the turn's token usage must survive on exactly one emitted event; "
+        f"got {len(usage_carriers)} carriers"
+    )
+    assert usage_carriers[0].usage_metadata.prompt_token_count == 9
+    assert usage_carriers[0].usage_metadata.candidates_token_count == 3
+
+
+@pytest.mark.asyncio
+async def test_partials_are_not_stalled_behind_the_held_back_event(
+    tmp_path, monkeypatch
+) -> None:
+    """Holding a durable event back must not stall the live stream.
+
+    The last durable event is withheld so a text-less turn's bookkeeping has
+    somewhere to land. Parking the partials that follow it behind that event --
+    to keep one global order -- stalls the stream for the rest of the turn: a
+    long command's output and the final answer's deltas all arrive *after* the
+    last durable event, so a user would see nothing until the Pi stream ended.
+
+    Overtaking is safe precisely because partials are never persisted
+    (``BaseSessionService.append_event`` returns early on ``event.partial``), so
+    only the order among durable events is observable in session history, and
+    that order is unchanged.
+    """
+    lines = [
+        {
+            "type": "tool_execution_start",
+            "toolCallId": "call-1",
+            "toolName": "bash",
+            "args": {"command": "ls"},
+        },
+        {
+            "type": "tool_execution_end",
+            "toolCallId": "call-1",
+            "toolName": "bash",
+            "result": {"stdout": "notes.md"},
+        },
+        # Round two streams its answer *after* the last durable event.
+        {
+            "type": "message_update",
+            "assistantMessageEvent": {"type": "text_delta", "delta": "one file"},
+        },
+        {"type": "message_end", "message": _assistant_message("one file")},
+        {"type": "agent_settled"},
+    ]
+    binary = _make_pi_emitting(tmp_path, lines)
+    monkeypatch.setenv("PIAGENT_BINARY", str(binary))
+    monkeypatch.setenv("PIAGENT_AGENT_DIR", str(tmp_path / "agent-home"))
+
+    ctx = _counting_ctx(_user_event("what is in the dir?"))
+    events = [e async for e in PiAgentRuntime().run_async(_agent(), ctx)]
+
+    def _index(predicate) -> int:
+        for index, event in enumerate(events):
+            if predicate(event):
+                return index
+        raise AssertionError(f"no event matched among {len(events)} events")
+
+    partial_at = _index(lambda e: e.partial)
+    response_at = _index(lambda e: e.get_function_responses())
+    assert partial_at < response_at, (
+        "the streamed delta was delivered only after the held-back tool "
+        "response, so the live stream stalled for the rest of the turn"
+    )
+
+    # The durable order itself is untouched: the call still precedes its result.
+    call_at = _index(lambda e: e.get_function_calls())
+    assert call_at < response_at
+
+    finals = [
+        e for e in events if e.is_final_response() and e.content and e.content.parts
+    ]
+    assert len(finals) == 1
+    assert "".join(p.text or "" for p in finals[0].content.parts) == "one file"
+
+
+# ------------------------------------------------------- the text-keyed dedup
+
+
+#: The final round answers with text byte-identical to the preamble its own tool
+#: call already carried -- a model that says "Done." beside the tool call and
+#: "Done." again once the tool returned. Rare, but nothing prevents it.
+_IDENTICAL_PREAMBLE_AND_ANSWER = [
+    {
+        "type": "message_update",
+        "assistantMessageEvent": {"type": "text_delta", "delta": "Done."},
+    },
+    {
+        "type": "tool_execution_start",
+        "toolCallId": "call-1",
+        "toolName": "write_file",
+        "args": {"path": "notes.md"},
+    },
+    {
+        "type": "tool_execution_end",
+        "toolCallId": "call-1",
+        "toolName": "write_file",
+        "result": {"ok": True},
+    },
+    # Round one closes, re-announcing the preamble the tool-call event carried.
+    {"type": "message_end", "message": _assistant_message("Done.")},
+    # Round two: a *new* assistant message that happens to repeat the words.
+    {"type": "message_end", "message": _assistant_message("Done.")},
+    {"type": "agent_settled"},
+]
+
+
+@pytest.mark.asyncio
+async def test_answer_survives_matching_an_earlier_preamble(
+    tmp_path, monkeypatch
+) -> None:
+    """Dedup must suppress a re-announcement, never a new round's answer.
+
+    Suppression used to be keyed on "has this exact text been emitted at any
+    point in the turn". That is right for a replay, but a round-closing
+    ``message_end`` only ever repeats the preamble *its own round* parked on a
+    tool-call event -- so keying it on the whole history silently dropped an
+    answering round whose text matched an earlier preamble. With no final text
+    event left, the merged response had no content, no final response was
+    emitted, and ``output_key`` was never written for the turn.
+    """
+    from veadk.runtime.output_state import maybe_save_output_to_state
+
+    binary = _make_pi_emitting(tmp_path, _IDENTICAL_PREAMBLE_AND_ANSWER)
+    monkeypatch.setenv("PIAGENT_BINARY", str(binary))
+    monkeypatch.setenv("PIAGENT_AGENT_DIR", str(tmp_path / "agent-home"))
+
+    agent = _agent(output_key="answer")
+    ctx = _counting_ctx(_user_event("write the notes"))
+    events = [e async for e in PiAgentRuntime().run_async(agent, ctx)]
+
+    finals = [
+        e for e in events if e.is_final_response() and e.content and e.content.parts
+    ]
+    assert len(finals) == 1, (
+        "the answering round was dropped because its text matched the "
+        f"preamble; final responses: {len(finals)}"
+    )
+    assert "".join(p.text or "" for p in finals[0].content.parts) == "Done."
+
+    # `Agent._run_async_impl` runs exactly this over every runtime event; with
+    # the answer suppressed there is no event for it to write from.
+    saved = {}
+    for event in events:
+        maybe_save_output_to_state(agent, event)
+        saved.update(event.actions.state_delta)
+    assert saved.get("answer") == "Done.", (
+        f"output_key was never written for the turn; state_delta: {saved}"
+    )
+
+
+def test_end_of_turn_replay_is_still_suppressed() -> None:
+    """The dedup the fix must not lose: a terminal replay of emitted text.
+
+    ``agent_end`` re-announces the last assistant message wholesale once the
+    turn is over. Nothing new can arrive after it, so text it repeats is always
+    a replay -- and re-emitting it would both duplicate content already
+    persisted on a tool-call event and turn a preamble into the turn's answer.
+    """
+    translator = PiEventTranslator(author="assistant", invocation_id="inv-1")
+
+    translator.event_to_adk_events(
+        {
+            "type": "message_update",
+            "assistantMessageEvent": {"type": "text_delta", "delta": "on it"},
+        }
+    )
+    call = translator.event_to_adk_events(
+        {
+            "type": "tool_execution_start",
+            "toolCallId": "call-1",
+            "toolName": "write_file",
+            "args": {},
+        }
+    )
+    assert call[0].content.parts[0].text == "on it"
+
+    # The round closes by repeating the preamble the tool-call event carried.
+    assert (
+        translator.event_to_adk_events(
+            {"type": "message_end", "message": _assistant_message("on it")}
+        )
+        == []
+    )
+    # ...and so does the end-of-turn replay, from a different code path.
+    assert (
+        translator.event_to_adk_events(
+            {"type": "agent_end", "messages": [_assistant_message("on it")]}
+        )
+        == []
     )
