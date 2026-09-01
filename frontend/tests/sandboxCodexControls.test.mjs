@@ -89,8 +89,12 @@ test("active Codex Sandbox threads replace normal history in the Sidebar", () =>
 test("a running handoff session is opened with live busy-state recovery", () => {
   assert.match(appSource, /setSandboxBusy\(connected\.busy\)/);
   assert.match(appSource, /sandboxSnapshotTurnsForStatus\(snapshot, connected\.busy\)/);
-  assert.match(appSource, /sandboxClient\.getStatus\(activeSession\.id/);
-  assert.match(appSource, /sandboxClient\.readThread\(activeSession\.id, status\.threadId/);
+  assert.match(
+    appSource,
+    /const backgroundClient = activeSession\.intelligentDevelopment[\s\S]*?intelligentDevelopmentClient[\s\S]*?: sandboxClient/,
+  );
+  assert.match(appSource, /backgroundClient\.getStatus\(activeSession\.id/);
+  assert.match(appSource, /backgroundClient\.readThread\(activeSession\.id, status\.threadId/);
   assert.match(appSource, /setSandboxBusy\(status\.busy\)/);
   assert.match(appSource, /window\.setTimeout\(syncBackgroundTurn, 1500\)/);
 });
