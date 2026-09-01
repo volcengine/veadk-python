@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SVGProps } from "react";
 import { EmptyMessage } from "@openai/apps-sdk-ui/components/EmptyMessage";
-import { Explore } from "@openai/apps-sdk-ui/components/Icon";
+import { ArrowRotateCw, Explore } from "@openai/apps-sdk-ui/components/Icon";
 import { Badge } from "@openai/apps-sdk-ui/components/Badge";
+import { Button } from "@openai/apps-sdk-ui/components/Button";
 import { Tooltip } from "@openai/apps-sdk-ui/components/Tooltip";
 
 import {
@@ -467,13 +468,17 @@ function AgentCard({
           </ResourceCardAction>
         </>
       ) : compatibilityFailed || incompatible ? (
-        <ResourceCardAction
-          className="my-agent-compatibility-retry"
+        <Button
+          type="button"
+          color="primary"
+          size="sm"
+          pill={false}
           aria-label={`重新检测 ${agent.name} 的对话兼容性`}
           onClick={() => onRetryCompatibility?.(agent)}
         >
+          <ArrowRotateCw />
           重试
-        </ResourceCardAction>
+        </Button>
       ) : (
         <ResourceCardRevealAction
           className={connected ? "my-agent-use is-connected" : "my-agent-use"}

@@ -433,18 +433,14 @@ function Drawer({
 
 function JobList({
   jobs,
-  busyAction,
   canCreate,
   onCreate,
   onSelect,
-  onRun,
 }: {
   jobs: CronJob[];
-  busyAction: string;
   canCreate: boolean;
   onCreate: () => void;
   onSelect: (job: CronJob) => void;
-  onRun: (job: CronJob) => void;
 }) {
   return (
     <ResourceGrid>
@@ -457,8 +453,6 @@ function JobList({
         创建定时任务
       </ResourceCreateCard>
       {jobs.map((job) => {
-        const running = cronJobIsRunning(job);
-        const busy = busyAction.includes(job.jobId);
         const schedule = describeCronJobSchedule(job.schedule);
         return (
           <LibraryResourceCard
@@ -468,16 +462,8 @@ function JobList({
             status={<Badge color={job.enabled ? "success" : "secondary"} variant="soft" size="sm" pill>{job.enabled ? "已启用" : "已暂停"}</Badge>}
             description={job.prompt}
             metadata={[
-              { label: "Runtime", value: job.runtimeName || job.agentName, title: `${job.runtimeName} / ${job.agentName}` },
               { label: "执行计划", value: schedule, title: schedule },
-              { label: "下次执行", value: job.enabled ? formatCronJobDate(job.nextRunAt) : "已暂停" },
             ]}
-            action={{
-              label: "立即执行",
-              disabled: busy || running || !job.enabled,
-              title: running ? "已有执行正在进行" : !job.enabled ? "请先启用任务" : "立即执行",
-              onClick: () => onRun(job),
-            }}
             detailAction={{ label: "查看详情", onClick: () => onSelect(job) }}
           />
         );
@@ -751,7 +737,7 @@ export function CronJobs({ cloudProvider }: CronJobsProps) {
       </ResourceToolbar>
       {notice ? <div className="cronjobs-banner" role="status"><Alert color="info" variant="soft" description={notice} /></div> : null}
       <ResourceResults aria-label="定时任务列表">
-        {loading && jobs.length === 0 ? <ResourceLoadingState /> : error ? <EmptyMessage className="cronjobs-state" fill="none"><EmptyMessage.Icon color="danger"><Clock /></EmptyMessage.Icon><EmptyMessage.Title color="danger">无法加载定时任务</EmptyMessage.Title><EmptyMessage.Description>{error}</EmptyMessage.Description><EmptyMessage.ActionRow><Button type="button" color="secondary" variant="outline" size="lg" pill={false} onClick={() => void load()}><ArrowRotateCw />重试</Button></EmptyMessage.ActionRow></EmptyMessage> : <JobList jobs={visibleJobs} busyAction={busyAction} canCreate={!loading && runtimes.length > 0} onCreate={() => setDrawerJob(null)} onSelect={(job) => setSelectedId(job.jobId)} onRun={runNow} />}
+        {loading && jobs.length === 0 ? <ResourceLoadingState /> : error ? <EmptyMessage className="cronjobs-state" fill="none"><EmptyMessage.Icon color="danger"><Clock /></EmptyMessage.Icon><EmptyMessage.Title color="danger">无法加载定时任务</EmptyMessage.Title><EmptyMessage.Description>{error}</EmptyMessage.Description><EmptyMessage.ActionRow><Button type="button" color="secondary" variant="outline" size="lg" pill={false} onClick={() => void load()}><ArrowRotateCw />重试</Button></EmptyMessage.ActionRow></EmptyMessage> : <JobList jobs={visibleJobs} canCreate={!loading && runtimes.length > 0} onCreate={() => setDrawerJob(null)} onSelect={(job) => setSelectedId(job.jobId)} />}
       </ResourceResults>
       {drawerJob !== undefined ? <Drawer job={drawerJob} runtimes={runtimes} cloudProvider={cloudProvider} busy={busyAction.endsWith(":save")} onClose={() => setDrawerJob(undefined)} onSubmit={submitDrawer} /> : null}
     </ResourcePageShell>

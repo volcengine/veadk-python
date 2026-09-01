@@ -204,10 +204,6 @@
   animation: loading-gap-spin 0.72s linear infinite;
 }
 
-.my-agent-compatibility-retry {
-  min-width: 48px;
-}
-
 .my-agent-card.is-connecting .resource-card__actions {
   opacity: 1;
   pointer-events: auto;

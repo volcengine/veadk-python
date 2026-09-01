@@ -20,6 +20,7 @@ import {
   Search,
   Trash2,
 } from "lucide-react";
+import { Button } from "@openai/apps-sdk-ui/components/Button";
 import {
   deleteAgentFeedbackCases,
   createGithubDeliveryRollbackPr,
@@ -74,7 +75,7 @@ import { BUILTIN_TOOLS } from "../create/veadkCatalog";
 import type { DeploymentTaskUpdate } from "./ProjectPreview";
 import { DeploymentErrorMessage } from "./DeploymentErrorMessage";
 import { Markdown } from "./Markdown";
-import { PageBackButton } from "./PageBackButton";
+import { ResourceDetailLayout } from "./ResourceCollection";
 import { StudioConfirmDialog } from "./StudioConfirmDialog";
 import { TextShimmer } from "./text-shimmer/TextShimmer";
 import "./AgentWorkspace.css";
@@ -2779,7 +2780,7 @@ export function AgentWorkspace({
             <p>未选择智能体</p>
           </main>
         ) : (
-          <main className={`aw-main${deploymentInProgress ? " is-deploying" : ""}`}>
+          <main className={`aw-main${deploymentInProgress ? " is-deploying" : ""}${detailOnly ? " resource-page" : ""}`}>
             {selectedAgent && !selectedAgentInfo && loadingAgentInfo && (
               <div className="aw-detail-loading" role="status" aria-live="polite">
                 <div className="aw-detail-loading-card">
@@ -2802,32 +2803,34 @@ export function AgentWorkspace({
                 </div>
               </div>
             )}
-            <div className="aw-agent-head">
-              <div className="aw-agent-heading">
-                {detailOnly && onBack ? (
-                  <PageBackButton label="返回智能体列表" onClick={onBack} />
-                ) : null}
-                <div className="aw-agent-heading-copy">
-                  <div className="aw-agent-title-row">
-                    <h2>{selectedName}</h2>
-                    {displayCurrentVersion != null && (
-                      <span>v{displayCurrentVersion}</span>
-                    )}
-                    {selectedDraft && <span>草稿</span>}
-                    {selectedAgentUpdateDraft && <span>待更新</span>}
-                    {!selectedAgent && !selectedDraft && selectedPendingTask && (
-                      <span>{selectedPendingTask.label}</span>
-                    )}
-                  </div>
-                  <p>{draft.description || (loadingAgentInfo || (detailOnly && !detailAgentInfoResolved) ? "正在读取智能体信息…" : "暂无描述")}</p>
-                </div>
-              </div>
-              {(selectedDraft || selectedAgentUpdateDraft || selectedAgent?.canDelete) && (
-                <div className="aw-head-actions">
+            <ResourceDetailLayout
+              className="aw-agent-detail"
+              title={selectedName}
+              description={draft.description || (loadingAgentInfo || (detailOnly && !detailAgentInfoResolved) ? "正在读取智能体信息…" : "暂无描述")}
+              identitySeed={selectedName}
+              backLabel="返回智能体列表"
+              onBack={detailOnly ? onBack : undefined}
+              meta={(
+                <>
+                  {displayCurrentVersion != null && <span className="aw-agent-meta">v{displayCurrentVersion}</span>}
+                  {selectedDraft && <span className="aw-agent-meta">草稿</span>}
+                  {selectedAgentUpdateDraft && <span className="aw-agent-meta">待更新</span>}
+                  {!selectedAgent && !selectedDraft && selectedPendingTask && (
+                    <span className="aw-agent-meta">{selectedPendingTask.label}</span>
+                  )}
+                </>
+              )}
+              actionsClassName="aw-head-actions"
+              bodyClassName="aw-agent-detail__body"
+              actions={(selectedDraft || selectedAgentUpdateDraft || selectedAgent?.canDelete) ? (
+                <>
                   {(selectedDraft || selectedAgentUpdateDraft) && (
-                    <button
+                    <Button
                       type="button"
-                      className="aw-head-delete aw-head-delete--draft"
+                      color="danger"
+                      variant="soft"
+                      size="lg"
+                      pill={false}
                       onClick={() => {
                         const draftToDelete = selectedDraft ?? selectedAgentUpdateDraft;
                         if (draftToDelete) deleteSingleDraft(draftToDelete);
@@ -2838,12 +2841,15 @@ export function AgentWorkspace({
                     >
                       <Trash2 aria-hidden />
                       <span>删除草稿</span>
-                    </button>
+                    </Button>
                   )}
                   {selectedAgent?.canDelete && (
-                    <button
+                    <Button
                       type="button"
-                      className="aw-head-delete"
+                      color="danger"
+                      variant="soft"
+                      size="lg"
+                      pill={false}
                       onClick={() => void deleteSingleAgent(selectedAgent)}
                       disabled={deletingAgents}
                       aria-label="删除 Agent"
@@ -2851,11 +2857,16 @@ export function AgentWorkspace({
                     >
                       <Trash2 aria-hidden />
                       <span>{deletingAgents ? "删除中…" : "删除 Agent"}</span>
-                    </button>
+                    </Button>
                   )}
-                </div>
-              )}
-            </div>
+                </>
+              ) : undefined}
+              sections={visibleAgentSections.map((item) => ({
+                key: item.id,
+                label: item.label,
+                disabled: deploymentInProgress,
+                content: item.id === section ? (
+                  <>
             {deploymentTask && shouldShowDeploymentTask && (
               <div
                 className={`aw-detail-deployment${deploymentInProgress ? " is-running" : ""}`}
@@ -2868,50 +2879,7 @@ export function AgentWorkspace({
                 />
               </div>
             )}
-            <nav
-              className="aw-agent-tabs"
-              aria-label="智能体详情"
-              role="tablist"
-            >
-              {visibleAgentSections.map((item) => (
-                <button
-                  type="button"
-                  key={item.id}
-                  id={`agent-${item.id}-tab`}
-                  className={section === item.id ? "is-active" : ""}
-                  role="tab"
-                  aria-selected={section === item.id}
-                  aria-controls={`agent-${item.id}-panel`}
-                  tabIndex={section === item.id ? 0 : -1}
-                  onClick={() => setSection(item.id)}
-                  onKeyDown={(event) => {
-                    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-                    event.preventDefault();
-                    const currentIndex = visibleAgentSections.findIndex(
-                      (sectionItem) => sectionItem.id === item.id,
-                    );
-                    const nextIndex = event.key === "Home"
-                      ? 0
-                      : event.key === "End"
-                        ? visibleAgentSections.length - 1
-                        : (currentIndex + (event.key === "ArrowRight" ? 1 : -1) + visibleAgentSections.length)
-                          % visibleAgentSections.length;
-                    const nextSection = visibleAgentSections[nextIndex];
-                    setSection(nextSection.id);
-                    document.getElementById(`agent-${nextSection.id}-tab`)?.focus();
-                  }}
-                >
-                  {item.label}
-                </button>
-              ))}
-            </nav>
-
-            <div
-              className="aw-content"
-              id={`agent-${section}-panel`}
-              role="tabpanel"
-              aria-labelledby={`agent-${section}-tab`}
-            >
+            <div className="aw-content">
               {section === "basic" && (
                 <div className="aw-basic-stack">
                   {(detailAgentInfoError || runtimeDetailError) && (
@@ -3746,6 +3714,13 @@ export function AgentWorkspace({
                 </span>
               </div>
             )}
+                  </>
+                ) : null,
+              }))}
+              activeSectionKey={section}
+              navigationLabel="智能体详情"
+              onSectionChange={setSection}
+            />
           </main>
         )}
         </div>

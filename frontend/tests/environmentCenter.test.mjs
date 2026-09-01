@@ -57,6 +57,10 @@ const manifestSource = readFileSync(
   new URL("../src/ui/environmentManifest.ts", import.meta.url),
   "utf8",
 );
+const environmentModelSource = readFileSync(
+  new URL("../src/ui/environmentModel.ts", import.meta.url),
+  "utf8",
+);
 
 test("keeps Environment available without a standalone sidebar item", () => {
   assert.doesNotMatch(sidebarSource, /onEnvironment: \(\) => void/);
@@ -93,8 +97,8 @@ test("uses Apps SDK UI controls and shared Studio patterns", () => {
 
 test("covers environment categories, editor feedback, and responsive layout", () => {
   assert.match(environmentSource, />基础环境<\/h2>/);
-  assert.match(environmentSource, /AIO Sandbox/);
-  assert.match(environmentSource, /Ubuntu/);
+  assert.match(environmentModelSource, /AIO Sandbox/);
+  assert.match(environmentModelSource, /Ubuntu/);
   assert.match(environmentSource, />语言<\/h2>/);
   assert.match(environmentSource, />执行环境<\/h2>/);
   assert.match(environmentSource, />技能<\/h2>/);
@@ -108,8 +112,8 @@ test("covers environment categories, editor feedback, and responsive layout", ()
   assert.match(environmentSource, /StudioConfirmDialog/);
   assert.match(environmentStyles, /@media \(max-width: 560px\)/);
   assert.match(environmentStyles, /grid-template-columns: minmax\(0, 1fr\)/);
-  assert.match(environmentStyles, /\.environment-editor__header\s*\{\s*align-items: center;/);
-  assert.match(environmentStyles, /\.environment-form[\s\S]*?height: 100%/);
+  assert.match(environmentSource, /<ResourceDetailLayout/);
+  assert.match(environmentStyles, /\.environment-form[\s\S]*?width: min\(100%, 920px\)/);
   assert.match(environmentStyles, /\.environment-dockerfile__editor > textarea[\s\S]*?min-height: inherit/);
 });
 
@@ -308,7 +312,8 @@ test("shows live build steps and redacted log snapshots in a responsive detail d
 test("opens a version-bound environment manifest beside the primary card action", async () => {
   assert.match(resourceCardSource, /auxiliaryAction/);
   assert.match(resourceCardSource, /className="library-resource-card__auxiliary-action"/);
-  assert.match(environmentSource, /function ManifestIcon/);
+  assert.match(environmentSource, /import \{ ArrowRotateCw, FileCode \} from "@openai\/apps-sdk-ui\/components\/Icon"/);
+  assert.match(environmentSource, /icon: <FileCode \/>/);
   assert.match(environmentSource, /查看环境 Manifest/);
   assert.match(environmentSource, /尚无可用 Manifest/);
   assert.match(environmentSource, /<EnvironmentManifestDialog/);
@@ -362,6 +367,15 @@ test("opens a version-bound environment manifest beside the primary card action"
     await server.close();
   }
   assert.match(manifestSource, /stringify\(manifest/);
+});
+
+test("keeps environment card metadata focused on its update time", () => {
+  const cardSource = environmentSource.slice(
+    environmentSource.indexOf("{visibleEnvironments.map"),
+    environmentSource.indexOf("</ResourceGrid>", environmentSource.indexOf("{visibleEnvironments.map")),
+  );
+  assert.match(cardSource, /metadata=\{\[[\s\S]*?label: "更新"/);
+  assert.doesNotMatch(cardSource, /label: "基础环境"|label: "语言"|label: "工作区"/);
 });
 
 test("uses AIO Sandbox as the default base environment and preserves its runtime", async () => {
