@@ -299,8 +299,12 @@ class _Turn:
 def _prompt_text(input_items: Any) -> str:
     texts: list[str] = []
     for item in input_items or []:
-        value = getattr(item, "value", None)
-        if isinstance(value, str) and type(item).__name__ == "TextInput":
+        if type(item).__name__ != "TextInput":
+            continue
+        value = getattr(item, "text", None)
+        if value is None:
+            value = getattr(item, "value", None)
+        if isinstance(value, str):
             texts.append(value)
     return "\n".join(texts)
 

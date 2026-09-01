@@ -330,6 +330,18 @@ def test_classifier_vocabulary(event_classifier, event, expected) -> None:
 # ------------------------------------------- the backend records its inputs
 
 
+def test_fake_codex_prompt_text_accepts_sdk_and_stub_shapes() -> None:
+    StubTextInput = type("TextInput", (), {})
+    stub = StubTextInput()
+    stub.value = "from stub"
+
+    SdkTextInput = type("TextInput", (), {})
+    sdk = SdkTextInput()
+    sdk.text = "from sdk"
+
+    assert harness.fake_codex_sdk._prompt_text([stub, sdk]) == "from stub\nfrom sdk"
+
+
 @pytest.mark.asyncio
 async def test_recorded_call_is_shaped_the_same_in_both_arms(parity_runner) -> None:
     """The normalizer really does make two different protocols comparable.
