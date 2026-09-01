@@ -189,10 +189,11 @@ SUPPORT_RULES: tuple[SupportRule, ...] = (
         policy="error",
         predicate=_truthy("output_schema"),
         message=lambda _agent, rt: (
-            f"{rt} runtime never sends Agent(output_schema=...) to the backend, "
-            "so the model is not constrained and validation of its prose reply "
-            "will fail at the end of the turn. Use runtime='adk', or drop "
-            "output_schema and parse the reply yourself."
+            f"{rt} runtime sends Agent(output_schema=...) neither to the "
+            "backend nor into the prompt, so the model is never asked for the "
+            "schema and state[output_key] would hold an unvalidated reply or "
+            "silently be missing. Use runtime='adk', or drop output_schema and "
+            "parse the reply yourself."
         ),
     ),
     SupportRule(

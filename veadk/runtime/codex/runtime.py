@@ -388,7 +388,6 @@ class CodexRuntime(BaseRuntime):
         # are no use as a target (they are never persisted), so any that follow
         # the held-back one are buffered behind it rather than overtaking it.
         merge_target: "Event | None" = None
-        trailing_events: list["Event"] = []
         try:
             async with AsyncCodex(config=sdk_config) as codex:
                 thread = await codex.thread_start(
@@ -475,17 +474,21 @@ class CodexRuntime(BaseRuntime):
                     if is_codex_final_text_event(event):
                         final_text_events.append(event)
                         continue
+                    # Partials go out immediately, even while a durable event
+                    # is held back as the merge target. Parking them behind it
+                    # stalled the live stream for the rest of the turn: the
+                    # final answer's deltas and a command's output both arrive
+                    # after the last durable event, so they were delivered only
+                    # once the Codex stream had already ended. Overtaking is
+                    # safe because partials are never persisted
+                    # (`BaseSessionService.append_event` returns early on them),
+                    # so only the order among durable events is observable in
+                    # session history, and that order is unchanged.
                     if event.partial:
-                        if merge_target is None:
-                            yield event
-                        else:
-                            trailing_events.append(event)
+                        yield event
                         continue
                     if merge_target is not None:
                         yield merge_target
-                        for buffered in trailing_events:
-                            yield buffered
-                        trailing_events = []
                     merge_target = event
                 await pump
 
@@ -523,9 +526,6 @@ class CodexRuntime(BaseRuntime):
                     if merge_target is not None:
                         yield merge_target
                         merge_target = None
-                    for buffered in trailing_events:
-                        yield buffered
-                    trailing_events = []
                     yield event
                 elif merge_target is not None:
                     # A tool-only turn: the merged event has no text, and a
@@ -543,16 +543,10 @@ class CodexRuntime(BaseRuntime):
                     _merge_turn_bookkeeping(merge_target, event)
                     yield merge_target
                     merge_target = None
-                    for buffered in trailing_events:
-                        yield buffered
-                    trailing_events = []
                 else:
                     # Nothing durable was emitted this turn, so there is nothing
                     # for a contentless event to clobber and nowhere else for
                     # the bookkeeping to go.
-                    for buffered in trailing_events:
-                        yield buffered
-                    trailing_events = []
                     yield event
                 run_status = "completed"
         except asyncio.CancelledError:
@@ -611,11 +605,8 @@ class CodexRuntime(BaseRuntime):
             # while it propagates is a hard `RuntimeError`.
             if not isinstance(e, GeneratorExit):
                 held, merge_target = merge_target, None
-                buffered, trailing_events = trailing_events, []
                 if held is not None:
                     yield held
-                for event in buffered:
-                    yield event
             # `runtime_call` is always bound here: it is assigned in the
             # preceding block, whose handler re-raises on failure.
             if isinstance(e, Exception):

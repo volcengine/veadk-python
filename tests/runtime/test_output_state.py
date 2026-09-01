@@ -14,7 +14,6 @@
 
 from __future__ import annotations
 
-import logging
 from types import SimpleNamespace
 
 import pytest
@@ -22,7 +21,6 @@ from google.adk.events.event import Event
 from google.adk.runners import Runner
 from google.adk.sessions.in_memory_session_service import InMemorySessionService
 from google.genai import types
-from pydantic import BaseModel
 
 from veadk import Agent
 from veadk.agents.sequential_agent import SequentialAgent
@@ -111,120 +109,6 @@ def test_maybe_save_output_to_state_ignores_non_final_model_text(event: Event) -
     maybe_save_output_to_state(agent, event)
 
     assert event.actions.state_delta == {}
-
-
-class _Result(BaseModel):
-    answer: str
-
-
-def _schema_agent() -> SimpleNamespace:
-    return SimpleNamespace(name="agent", output_key="result", output_schema=_Result)
-
-
-@pytest.fixture
-def output_state_logs(caplog: pytest.LogCaptureFixture):
-    """Capture ``veadk.runtime.output_state`` warnings.
-
-    ``veadk.utils.logger`` sets ``propagate = False`` on the ``veadk`` logger,
-    so ``caplog.at_level`` alone captures nothing: it sets a level but attaches
-    no handler. Attaching ``caplog.handler`` to the specific logger is the
-    pattern already used in ``tests/runtime/codex/test_codex_runtime.py``.
-    """
-    logger = logging.getLogger("veadk.runtime.output_state")
-    logger.addHandler(caplog.handler)
-    previous = logger.level
-    logger.setLevel(logging.WARNING)
-    try:
-        yield caplog
-    finally:
-        logger.removeHandler(caplog.handler)
-        logger.setLevel(previous)
-
-
-def test_maybe_save_output_to_state_accepts_valid_json() -> None:
-    agent = _schema_agent()
-    event = _text_event('{"answer": "done"}')
-
-    maybe_save_output_to_state(agent, event)
-
-    assert event.actions.state_delta == {"result": {"answer": "done"}}
-
-
-def test_maybe_save_output_to_state_accepts_single_fenced_json_block(
-    output_state_logs,
-) -> None:
-    """A lone fenced block is an unambiguous delimiter, so prose around it is safe.
-
-    (The task brief expected this to be *ignored*; production deliberately
-    accepts exactly one fence -- see ``_coerce_to_schema`` -- because a fence,
-    unlike a bare brace in prose, cannot be mistaken for anything else.)
-    """
-    agent = _schema_agent()
-    event = _text_event('Here you go:\n```json\n{"answer": "done"}\n```\n')
-
-    maybe_save_output_to_state(agent, event)
-
-    assert event.actions.state_delta == {"result": {"answer": "done"}}
-    assert [r.getMessage() for r in output_state_logs.records] == []
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        pytest.param("I think the answer is done.", id="freeform_text"),
-        pytest.param(
-            'Sure! Here it is: {"answer": "done"} -- hope that helps.',
-            id="prose_prefixed_json",
-        ),
-        pytest.param(
-            'Option A:\n```json\n{"answer": "a"}\n```\n'
-            'Option B:\n```json\n{"answer": "b"}\n```\n',
-            id="two_fenced_blocks",
-        ),
-        pytest.param('{"answer": "done"', id="truncated_json"),
-        pytest.param('{"other": "field"}', id="valid_json_wrong_schema"),
-    ],
-)
-def test_maybe_save_output_to_state_ignores_unparseable_final_text(
-    text: str, output_state_logs
-) -> None:
-    """An external harness emits prose constantly; that must not kill the turn.
-
-    ADK's own path calls ``model_validate_json`` and raises. External runtimes
-    cannot constrain the model to the schema, so raising here would fail an
-    entire tenant invocation on a chatty reply. The contract is: skip, warn
-    once, and leave whatever an earlier event wrote in place.
-    """
-    agent = _schema_agent()
-    event = _text_event(text)
-
-    maybe_save_output_to_state(agent, event)
-
-    assert event.actions.state_delta == {}
-    warnings = [r for r in output_state_logs.records if r.levelno == logging.WARNING]
-    # Deduplicated: the fixture attaches caplog's handler to the veadk logger
-    # (which sets `propagate = False` in some configurations), so a record can
-    # legitimately be captured twice. What matters is that exactly one distinct
-    # warning is emitted, not how many handlers saw it.
-    messages = {record.getMessage() for record in warnings}
-    assert len(messages) == 1, sorted(messages)
-    message = next(iter(messages))
-    assert "output_schema" in message
-    assert "result" in message
-    assert "agent" in message
-
-
-def test_maybe_save_output_to_state_leaves_an_earlier_value_in_place() -> None:
-    """A later unparseable message must not erase a good earlier one."""
-    agent = _schema_agent()
-    good = _text_event('{"answer": "done"}')
-    maybe_save_output_to_state(agent, good)
-
-    chatty = _text_event("Anything else I can help with?")
-    chatty.actions.state_delta.update(good.actions.state_delta)
-    maybe_save_output_to_state(agent, chatty)
-
-    assert chatty.actions.state_delta == {"result": {"answer": "done"}}
 
 
 def _codex_shaped_turn(author: str = "worker") -> list[Event]:

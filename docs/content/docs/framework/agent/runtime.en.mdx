@@ -152,7 +152,7 @@ On top of that:
 | `sub_agents=[...]` | External runtimes do not implement agent transfer, so sub-agents are unreachable and the agent silently answers everything itself. Drive delegation from a parent `SequentialAgent` or an `AgentTool` instead. |
 | `model=...` | The runtime resolves the model from `model_name` and ignores the `model` object entirely, dropping its `api_base`, headers and fallbacks. Set `model_name`. |
 | `generate_content_config=...` | Only `system_instruction` is forwarded; `temperature`, `max_output_tokens`, `thinking_config` and friends are dropped. |
-| `output_schema=...` | The schema never reaches the backend, so the model is unconstrained and validating its prose reply fails at the end of the turn. |
+| `output_schema=...` | The schema reaches neither the backend nor the prompt, so the model is never asked for it; `state[output_key]` would hold an unvalidated reply or silently be missing. |
 | `planner=...` / `code_executor=...` | Both run as ADK request/response processors, a layer external runtimes never execute. |
 | `include_contents="none"` | External runtimes always send the full conversation history, so this would be silently ignored and prior turns leaked to the model. |
 | `enable_supervisor=True` | Supervision is installed through the ADK LLM flow, which the runtime replaces. |

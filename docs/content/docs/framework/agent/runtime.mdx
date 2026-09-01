@@ -152,7 +152,7 @@ Codex 原生生命周期和 ADK Function/MCP 工具调用都会转换为 ADK Eve
 | `sub_agents=[...]` | 外部运行时没有实现 agent transfer，子智能体永远不会被调用，父智能体会自己回答所有问题。如需编排，请用父级 `SequentialAgent` 或 `AgentTool`。 |
 | `model=...` | 运行时从 `model_name` 解析模型，完全忽略 `model` 对象，其 `api_base`、请求头和 fallback 都会丢失。请改用 `model_name`。 |
 | `generate_content_config=...` | 只有 `system_instruction` 会被转发，`temperature`、`max_output_tokens`、`thinking_config` 等都会被丢弃。 |
-| `output_schema=...` | schema 不会下发给后端，模型不受约束；对自由文本做校验会在回合结束时失败。 |
+| `output_schema=...` | schema 既不会下发给后端，也不会进入提示词，模型从未被要求按 schema 输出；`state[output_key]` 要么是未校验的回复，要么直接缺失。 |
 | `planner=...` / `code_executor=...` | 二者以 ADK 请求/响应处理器的形式运行，外部运行时不执行这一层。 |
 | `include_contents="none"` | 外部运行时始终发送完整会话历史，该设置会被静默忽略并泄漏历史轮次。 |
 | `enable_supervisor=True` | 监督流程挂在 ADK LLM flow 上，而该流程已被替换，不会有任何监督生效。 |
