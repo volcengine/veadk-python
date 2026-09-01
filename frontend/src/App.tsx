@@ -226,6 +226,7 @@ import {
   type VideoTaskEvent,
 } from "./ui/new-chat-modes/video-task";
 import { NewChatVideoTaskDialog } from "./ui/new-chat-modes/NewChatVideoTaskDialog";
+import { AgentKitCliDialog } from "./ui/AgentKitCliDialog";
 import {
   SandboxLaunchDialog,
   type SandboxLaunchState,
@@ -1321,6 +1322,7 @@ export default function App() {
   );
   const [videoTask, setVideoTask] = useState<VideoGenerationTask | null>(null);
   const [videoTaskDialogOpen, setVideoTaskDialogOpen] = useState(false);
+  const [agentKitCliOpen, setAgentKitCliOpen] = useState(false);
   const videoTaskRef = useRef<VideoGenerationTask | null>(null);
   const videoTaskAbortRef = useRef<AbortController | null>(null);
   const [newChatCapabilities, setNewChatCapabilities] =
@@ -6306,6 +6308,7 @@ export default function App() {
         onWorkspace={() => requestIntelligentNavigation(openWorkspacePage)}
         onApplications={() => requestIntelligentNavigation(openApplicationsPage)}
         onCronJobs={() => requestIntelligentNavigation(openCronJobsPage)}
+        onAgentKitCli={() => setAgentKitCliOpen(true)}
         onSystemInfo={() => requestIntelligentNavigation(() => {
           pushStudioPage({
             page: "system-info",
@@ -7774,6 +7777,11 @@ export default function App() {
         checking={authRecoveryChecking}
         error={authRecoveryError}
         onLogin={() => void recoverAuthentication()}
+      />
+
+      <AgentKitCliDialog
+        open={agentKitCliOpen}
+        onClose={() => setAgentKitCliOpen(false)}
       />
 
       <NewChatVideoTaskDialog

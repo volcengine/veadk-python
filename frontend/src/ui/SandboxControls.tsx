@@ -28,16 +28,18 @@ import "./SandboxControls.css";
 
 interface DialogShellProps {
   open: boolean;
+  keepMounted?: boolean;
   title: string;
-  subtitle: string;
+  subtitle?: string;
   icon: ReactNode;
   className?: string;
   onClose: () => void;
   children: ReactNode;
 }
 
-function DialogShell({
+export function DialogShell({
   open,
+  keepMounted = false,
   title,
   subtitle,
   icon,
@@ -91,10 +93,11 @@ function DialogShell({
     };
   }, [open]);
 
-  if (!open) return null;
+  if (!open && !keepMounted) return null;
   return createPortal(
     <div
       className="sandbox-control-backdrop"
+      hidden={!open}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
@@ -111,7 +114,7 @@ function DialogShell({
           </span>
           <div>
             <h2 id={titleId}>{title}</h2>
-            <p>{subtitle}</p>
+            {subtitle ? <p>{subtitle}</p> : null}
           </div>
           <button
             ref={closeRef}

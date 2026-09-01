@@ -74,6 +74,7 @@ from veadk.cli.frontend_sandbox_proxy import (
     mount_sandbox_proxy_routes,
     proxy_cookie_name,
     proxy_prefix,
+    terminal_initial_command_url,
     terminal_launch_url,
     upload_sandbox_file,
 )
@@ -97,6 +98,7 @@ _CODEX_PROJECT_HANDOFF_PAIRING_MIN_TTL_SECONDS = 60
 _CODEX_PROJECT_HANDOFF_PAIRING_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
 _CODEX_PROJECT_HANDOFF_PAIRING_LENGTH = 8
 _SANDBOX_AGENT_TOOL_ENVS = {
+    "agentkit-cli": ("SANDBOX_DEV",),
     "deepseek-harness": (_SANDBOX_CHAT_TOOL_ENV,),
     "openclaw": ("SANDBOX_CHAT_OPENCLAW", "SANDBOX_OPENCLAW_TOOL"),
     "hermes": ("SANDBOX_CHAT_HERMES", "SANDBOX_HERMES_TOOL"),
@@ -2495,6 +2497,10 @@ class SandboxAgentSessionService:
         snapshot_tool_id: str | None = None,
         surface_path: str | None = None,
         filter_agent_kind: bool = False,
+        display_name_prefix: str = "",
+        allow_admin_cross_owner: bool = True,
+        terminal_initial_command: str = "",
+        unconfigured_message: str = "",
     ) -> None:
         if kind not in _SANDBOX_AGENT_TOOL_ENVS:
             raise ValueError(f"Unsupported Studio sandbox agent kind: {kind}")
@@ -2503,6 +2509,10 @@ class SandboxAgentSessionService:
         surface = (surface_path or f"/{kind}/").strip()
         self.surface_path = f"/{surface.strip('/')}/"
         self._filter_agent_kind = filter_agent_kind
+        self._display_name_prefix = display_name_prefix.strip()
+        self.allow_admin_cross_owner = allow_admin_cross_owner
+        self._terminal_initial_command = terminal_initial_command.strip()
+        self._unconfigured_message = unconfigured_message.strip()
         self._configured_tool_id = (tool_id or "").strip()
         self._configured_snapshot_tool_id = (snapshot_tool_id or "").strip()
         self._workspaces: dict[
@@ -2521,15 +2531,17 @@ class SandboxAgentSessionService:
                 ),
                 "",
             )
-        persistent = (
-            self._configured_snapshot_tool_id
-            or (os.getenv(_SANDBOX_AGENT_SNAPSHOT_TOOL_ENVS[self.kind]) or "").strip()
+        snapshot_env = _SANDBOX_AGENT_SNAPSHOT_TOOL_ENVS.get(self.kind, "")
+        persistent = self._configured_snapshot_tool_id or (
+            (os.getenv(snapshot_env) or "").strip() if snapshot_env else ""
         )
         return SandboxToolPair(transient=transient, persistent=persistent)
 
     def _tool_id(self, *, persistent: bool = False, required: bool = True) -> str:
         tool_id = self._tools().select(persistent)
         if required and not tool_id:
+            if self._unconfigured_message:
+                raise SandboxConfigurationError(self._unconfigured_message)
             detail = "快照版 " if persistent else ""
             raise SandboxConfigurationError(f"管理员未配置{detail}Sandbox Tool。")
         return tool_id
@@ -2539,7 +2551,7 @@ class SandboxAgentSessionService:
         enabled = bool(tools.configured)
         return {
             "enabled": enabled,
-            "reason": "" if enabled else "管理员未配置",
+            "reason": "" if enabled else (self._unconfigured_message or "管理员未配置"),
             "persistentEnabled": bool(tools.persistent),
             "persistentReason": "" if tools.persistent else "管理员未配置快照版 Tool",
         }
@@ -2677,7 +2689,15 @@ class SandboxAgentSessionService:
     ) -> SandboxCloudSession:
         if not isinstance(display_name, str):
             raise SandboxValidationError("智能体名称必须是文本。")
-        display_name = display_name.strip()
+        if self._display_name_prefix:
+            identity = creator_name.strip() or owner_id
+            identity_limit = max(
+                0,
+                STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH - len(self._display_name_prefix),
+            )
+            display_name = f"{self._display_name_prefix}{identity[:identity_limit]}"
+        else:
+            display_name = display_name.strip()
         if len(display_name) > STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH:
             raise SandboxValidationError(
                 f"智能体名称不能超过 {STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH} 个字符。"
@@ -2759,11 +2779,18 @@ class SandboxAgentSessionService:
         """Create a shell for an opened branded Session."""
         cloud, token, _expires_at = self._workspace(session_id, owner_id)
         try:
-            url, shell_session_id = await terminal_launch_url(
-                cloud.endpoint,
-                session_id,
-                direct=True,
-            )
+            if self._terminal_initial_command:
+                url = terminal_initial_command_url(
+                    session_id,
+                    self._terminal_initial_command,
+                )
+                shell_session_id = ""
+            else:
+                url, shell_session_id = await terminal_launch_url(
+                    cloud.endpoint,
+                    session_id,
+                    direct=True,
+                )
         except (RuntimeError, TypeError, ValueError) as error:
             raise SandboxInvocationError(_safe_error_message(error)) from error
         return url, shell_session_id, token
@@ -2855,8 +2882,12 @@ def mount_sandbox_agent_routes(
             raise HTTPException(status_code=404, detail="未知的沙箱智能体类型。")
         return service
 
-    def _is_admin(request: Request) -> bool:
-        return bool(admin_resolver and admin_resolver(request))
+    def _is_admin(service: SandboxAgentSessionService, request: Request) -> bool:
+        return bool(
+            service.allow_admin_cross_owner
+            and admin_resolver
+            and admin_resolver(request)
+        )
 
     def _http_error(error: SandboxError) -> HTTPException:
         status_code = 500
@@ -2916,9 +2947,10 @@ def mount_sandbox_agent_routes(
     ) -> dict[str, object]:
         try:
             owner_id = owner_resolver(request)
-            sessions, snapshots = await _service(kind).list_resources(
+            service = _service(kind)
+            sessions, snapshots = await service.list_resources(
                 owner_id,
-                is_admin=_is_admin(request),
+                is_admin=_is_admin(service, request),
                 auto_resume_snapshots=_request_auto_resume_snapshots(
                     request,
                     default=True,
@@ -2974,10 +3006,11 @@ def mount_sandbox_agent_routes(
     ) -> dict[str, object]:
         owner_id = owner_resolver(request)
         try:
-            session = await _service(kind).resume_snapshot(
+            service = _service(kind)
+            session = await service.resume_snapshot(
                 snapshot_id,
                 owner_id,
-                is_admin=_is_admin(request),
+                is_admin=_is_admin(service, request),
             )
         except SandboxError as error:
             raise _http_error(error) from error
@@ -2990,10 +3023,11 @@ def mount_sandbox_agent_routes(
         request: Request,
     ) -> dict[str, bool]:
         try:
-            await _service(kind).delete_snapshot(
+            service = _service(kind)
+            await service.delete_snapshot(
                 snapshot_id,
                 owner_resolver(request),
-                is_admin=_is_admin(request),
+                is_admin=_is_admin(service, request),
             )
         except SandboxError as error:
             raise _http_error(error) from error
@@ -3011,7 +3045,7 @@ def mount_sandbox_agent_routes(
             session, token = await service.open(
                 session_id,
                 owner_id,
-                is_admin=_is_admin(request),
+                is_admin=_is_admin(service, request),
             )
         except SandboxError as error:
             raise _http_error(error) from error
@@ -3028,10 +3062,11 @@ def mount_sandbox_agent_routes(
         request: Request,
     ) -> dict[str, bool]:
         try:
-            await _service(kind).delete(
+            service = _service(kind)
+            await service.delete(
                 session_id,
                 owner_resolver(request),
-                is_admin=_is_admin(request),
+                is_admin=_is_admin(service, request),
             )
         except SandboxError as error:
             raise _http_error(error) from error
@@ -3050,7 +3085,10 @@ def mount_sandbox_agent_routes(
             )
         except SandboxError as error:
             raise _http_error(error) from error
-        response = JSONResponse({"url": url, "shellSessionId": shell_session_id})
+        payload = {"url": url}
+        if shell_session_id:
+            payload["shellSessionId"] = shell_session_id
+        response = JSONResponse(payload)
         response.headers["Cache-Control"] = "no-store"
         forwarded_protocol = (
             request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip()

@@ -2757,6 +2757,16 @@ def _run_frontend_server(
         snapshot_tool_id=sandbox_chat_codex_snapshot_tool_id,
     )
     sandbox_agent_services = {
+        "agentkit-cli": SandboxAgentSessionService(
+            sandbox_gateway,
+            kind="agentkit-cli",
+            tool_id=intelligent_development_tool_id,
+            filter_agent_kind=True,
+            display_name_prefix="akcli-",
+            allow_admin_cross_owner=False,
+            terminal_initial_command="clear; agentkit --help; agentkit --version",
+            unconfigured_message=("管理员未配置 AgentKit Dev Sandbox，请配置后再使用"),
+        ),
         "deepseek-harness": SandboxAgentSessionService(
             sandbox_gateway,
             kind="deepseek-harness",

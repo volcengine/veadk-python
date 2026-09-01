@@ -22,8 +22,8 @@ import pytest
 from click import ClickException, Command
 from click.testing import CliRunner
 
-from veadk.cli.cli_frontend import frontend, studio
 from veadk.cli.cli import _bootstrap_serve_provider
+from veadk.cli.cli_frontend import frontend, studio
 
 
 def test_serve_provider_is_bootstrapped_before_command_modules_load(
@@ -132,6 +132,15 @@ def test_local_studio_mounts_snapshot_tools_into_sandbox_services() -> None:
         "        tool_id=sandbox_chat_codex_tool_id,\n"
         "        snapshot_tool_id=sandbox_chat_codex_snapshot_tool_id,\n"
         "    )"
+    ) in source
+    assert (
+        '        "agentkit-cli": SandboxAgentSessionService(\n'
+        "            sandbox_gateway,\n"
+        '            kind="agentkit-cli",\n'
+        "            tool_id=intelligent_development_tool_id,\n"
+        "            filter_agent_kind=True,\n"
+        '            display_name_prefix="akcli-",\n'
+        "            allow_admin_cross_owner=False,\n"
     ) in source
     assert (
         "SandboxAgentSessionService(\n"

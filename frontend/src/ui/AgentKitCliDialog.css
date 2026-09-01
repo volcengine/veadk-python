@@ -1,0 +1,129 @@
+.agentkit-cli-dialog {
+  width: min(1180px, calc(100vw - 44px));
+  height: min(780px, calc(100vh - 48px));
+}
+
+.agentkit-cli-dialog .sandbox-control-head {
+  grid-template-columns: 18px minmax(0, 1fr) 30px;
+  gap: 8px;
+  padding-left: 14px;
+}
+
+.agentkit-cli-dialog .sandbox-control-head-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 0;
+  background: transparent;
+}
+
+.agentkit-cli-dialog .sandbox-control-head-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.agentkit-cli-dialog .sandbox-control-head h2 {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.agentkit-cli-dialog .sandbox-tool-toolbar {
+  padding-left: 14px;
+}
+
+.agentkit-cli-dialog .sandbox-tool-toolbar > span {
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 20px;
+}
+
+.agentkit-cli-state {
+  --foreground: 0 0% 94%;
+  --muted-foreground: 220 8% 68%;
+  --border: 220 9% 30%;
+  --background: 225 15% 14%;
+  --secondary: 220 10% 22%;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 12px;
+  min-height: 100%;
+  padding: 32px;
+  color: hsl(var(--muted-foreground));
+  text-align: center;
+}
+
+.agentkit-cli-state > svg {
+  width: 28px;
+  height: 28px;
+  color: hsl(var(--foreground));
+}
+
+.agentkit-cli-state strong {
+  max-width: 520px;
+  color: hsl(var(--foreground));
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.6;
+  text-wrap: balance;
+}
+
+.agentkit-cli-state span {
+  max-width: 520px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.agentkit-cli-error-detail {
+  width: min(680px, 100%);
+  max-height: 220px;
+  margin: 0;
+  padding: 12px 14px;
+  overflow: auto;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--background));
+  color: hsl(var(--muted-foreground));
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.6;
+  text-align: left;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
+.agentkit-cli-state button {
+  min-width: 72px;
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.agentkit-cli-state button:hover {
+  background: hsl(var(--secondary));
+}
+
+@media (max-width: 640px) {
+  .agentkit-cli-dialog {
+    width: calc(100vw - 20px);
+    height: calc(100dvh - 20px);
+  }
+
+  .agentkit-cli-dialog .sandbox-control-head {
+    padding-inline: 14px;
+  }
+
+  .agentkit-cli-dialog .sandbox-tool-toolbar {
+    padding-inline: 12px;
+  }
+
+  .agentkit-cli-state {
+    padding: 24px 18px;
+  }
+}
