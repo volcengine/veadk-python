@@ -275,9 +275,10 @@ test("welcome heading uses the synchronized reveal while login keeps TextShimmer
   assert.match(stylesSource, /@keyframes avatar-smoke-drift/);
   assert.match(
     stylesSource,
-    /\.account-avatar\s*\{[\s\S]*?border:\s*none;[\s\S]*?border-radius:\s*9px;[\s\S]*?box-shadow:\s*none;/,
+    /\.account-avatar\s*\{[\s\S]*?width:\s*18px;[\s\S]*?height:\s*18px;[\s\S]*?border:\s*none;[\s\S]*?border-radius:\s*999px;[\s\S]*?box-shadow:\s*none;/,
   );
-  assert.match(stylesSource, /\.account-avatar--lg\s*\{[\s\S]*?border-radius:\s*11px;/);
+  assert.match(stylesSource, /\.account-avatar--lg\s*\{[\s\S]*?border-radius:\s*999px;/);
+  assert.doesNotMatch(sidebarSource, /\{initial\}/);
   assert.match(
     stylesSource,
     /@media \(prefers-reduced-motion: reduce\)[\s\S]*?animation-duration:\s*0\.001ms !important;/,
