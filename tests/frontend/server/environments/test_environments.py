@@ -48,6 +48,13 @@ from frontend.server.environments.resources import (
 from frontend.server.environments.routes import mount_environment_routes
 from frontend.server.environments.service import EnvironmentService
 
+_CURRENT_RECORD_FIELDS = (
+    "baseEnvironment",
+    "gitSource",
+    "imageSource",
+    "containerRepository",
+)
+
 
 class _TosError(Exception):
     def __init__(self, status_code: int):
@@ -570,8 +577,12 @@ def test_environment_crud_build_and_tos_version_layout():
     latest = client.get(f"/web/environments/{environment_id}").json()["latestVersion"]
     assert latest["versionId"] == version_id
     assert latest["status"] == "available"
-    prefix = f"veadk-studio/v1/environments/tenant%2Fa/{environment_id}"
+    prefix = f"veadk-studio/v2/environments/tenant%2Fa/{environment_id}"
     assert f"{prefix}/summary.json" in tos.objects
+    assert (
+        f"veadk-studio/v1/environments/tenant%2Fa/{environment_id}/summary.json"
+        not in tos.objects
+    )
     assert f"{prefix}/latest.json" in tos.objects
     assert f"{prefix}/versions/{version_id}/config.json" in tos.objects
     assert f"{prefix}/versions/{version_id}/Dockerfile" in tos.objects
@@ -581,6 +592,162 @@ def test_environment_crud_build_and_tos_version_layout():
 
     assert client.delete(f"/web/environments/{environment_id}").status_code == 204
     assert client.get(f"/web/environments/{environment_id}").status_code == 404
+
+
+def test_environment_list_reads_legacy_v1_records():
+    service, tos = _service()
+    app = FastAPI()
+    mount_environment_routes(app, service, lambda _request: "owner")
+    client = TestClient(app)
+    created = client.post("/web/environments", json=_payload()).json()
+    current_key = f"veadk-studio/v2/environments/owner/{created['id']}/summary.json"
+    legacy_key = f"veadk-studio/v1/environments/owner/{created['id']}/summary.json"
+    legacy = json.loads(tos.objects.pop(current_key))
+    for field in _CURRENT_RECORD_FIELDS:
+        legacy.pop(field)
+    tos.objects[legacy_key] = json.dumps(legacy).encode()
+
+    response = client.get("/web/environments")
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()["items"]] == [created["id"]]
+    assert response.json()["items"][0]["baseEnvironment"] == "ubuntu"
+    assert current_key not in tos.objects
+
+
+def test_environment_api_reads_a_complete_legacy_v1_environment_tree():
+    initial_service, tos = _service()
+    initial_app = FastAPI()
+    mount_environment_routes(initial_app, initial_service, lambda _request: "owner")
+    initial_client = TestClient(initial_app)
+    created = initial_client.post("/web/environments", json=_payload()).json()
+    started = initial_client.post(f"/web/environments/{created['id']}/build").json()
+    initial_client.get(
+        f"/web/environments/{created['id']}/builds/{started['versionId']}"
+    )
+    current_prefix = f"veadk-studio/v2/environments/owner/{created['id']}"
+    legacy_prefix = f"veadk-studio/v1/environments/owner/{created['id']}"
+    for current_key in [key for key in tos.objects if key.startswith(current_prefix)]:
+        content = tos.objects.pop(current_key)
+        if current_key.endswith(("/summary.json", "/config.json")):
+            payload = json.loads(content)
+            for field in _CURRENT_RECORD_FIELDS:
+                payload.pop(field)
+            content = json.dumps(payload).encode()
+        elif current_key.endswith(("/build.json", "/latest.json")):
+            payload = json.loads(content)
+            for field in ("toolId", "toolStatus", "sourceCommitSha"):
+                payload.pop(field)
+            content = json.dumps(payload).encode()
+        tos.objects[current_key.replace(current_prefix, legacy_prefix, 1)] = content
+
+    restored_service, _ = _service(tos=tos)
+    restored_app = FastAPI()
+    mount_environment_routes(restored_app, restored_service, lambda _request: "owner")
+    restored_client = TestClient(restored_app)
+
+    listed = restored_client.get("/web/environments")
+    build = restored_client.get(
+        f"/web/environments/{created['id']}/builds/{started['versionId']}"
+    )
+    manifest = restored_client.get(
+        f"/web/environments/{created['id']}/builds/{started['versionId']}/manifest"
+    )
+
+    assert listed.status_code == 200
+    assert [item["id"] for item in listed.json()["items"]] == [created["id"]]
+    assert build.status_code == 200
+    assert build.json()["versionId"] == started["versionId"]
+    assert manifest.status_code == 200
+    assert manifest.json()["spec"]["baseEnvironment"] == "ubuntu"
+
+
+def test_environment_list_prefers_v2_record_over_legacy_v1_record():
+    service, tos = _service()
+    app = FastAPI()
+    mount_environment_routes(app, service, lambda _request: "owner")
+    client = TestClient(app)
+    created = client.post("/web/environments", json=_payload()).json()
+    current_key = f"veadk-studio/v2/environments/owner/{created['id']}/summary.json"
+    legacy_key = f"veadk-studio/v1/environments/owner/{created['id']}/summary.json"
+    legacy = json.loads(tos.objects[current_key])
+    legacy["name"] = "旧版本名称"
+    for field in _CURRENT_RECORD_FIELDS:
+        legacy.pop(field)
+    tos.objects[legacy_key] = json.dumps(legacy).encode()
+
+    response = client.get("/web/environments")
+
+    assert response.status_code == 200
+    assert len(response.json()["items"]) == 1
+    assert response.json()["items"][0]["name"] == created["name"]
+
+
+def test_environment_update_copies_legacy_v1_record_to_v2():
+    service, tos = _service()
+    app = FastAPI()
+    mount_environment_routes(app, service, lambda _request: "owner")
+    client = TestClient(app)
+    created = client.post("/web/environments", json=_payload()).json()
+    current_key = f"veadk-studio/v2/environments/owner/{created['id']}/summary.json"
+    legacy_key = f"veadk-studio/v1/environments/owner/{created['id']}/summary.json"
+    legacy = json.loads(tos.objects.pop(current_key))
+    for field in _CURRENT_RECORD_FIELDS:
+        legacy.pop(field)
+    tos.objects[legacy_key] = json.dumps(legacy).encode()
+
+    response = client.patch(
+        f"/web/environments/{created['id']}", json={"name": "迁移后的环境"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["name"] == "迁移后的环境"
+    assert json.loads(tos.objects[current_key])["name"] == "迁移后的环境"
+    assert json.loads(tos.objects[legacy_key])["name"] == created["name"]
+
+
+def test_environment_list_repairs_records_written_to_legacy_prefix_by_new_schema():
+    service, tos = _service()
+    app = FastAPI()
+    mount_environment_routes(app, service, lambda _request: "owner")
+    client = TestClient(app)
+    created = client.post(
+        "/web/environments",
+        json=_payload(
+            baseEnvironment="aio-sandbox",
+            gitSource={
+                "repositoryUrl": "https://github.com/example/repo.git",
+                "ref": "main",
+                "dockerfilePath": "Dockerfile",
+            },
+        ),
+    ).json()
+    current_key = f"veadk-studio/v2/environments/owner/{created['id']}/summary.json"
+    legacy_key = f"veadk-studio/v1/environments/owner/{created['id']}/summary.json"
+    polluted = tos.objects.pop(current_key)
+    tos.objects[legacy_key] = polluted
+
+    response = client.get("/web/environments")
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["gitSource"]["ref"] == "main"
+    assert json.loads(tos.objects[current_key])["gitSource"]["ref"] == "main"
+    repaired = json.loads(tos.objects[legacy_key])
+    assert set(repaired) == {
+        "name",
+        "description",
+        "operatingSystem",
+        "language",
+        "executionRuntime",
+        "optionIds",
+        "selectedSkills",
+        "dockerfile",
+        "id",
+        "ownerId",
+        "createdAt",
+        "updatedAt",
+        "latestVersionId",
+    }
 
 
 def test_environment_manifest_describes_the_immutable_image_version():
@@ -676,7 +843,7 @@ def test_aio_build_provisions_and_persists_a_ready_private_tool(provider, region
     assert completed["steps"][-1]["status"] == "succeeded"
     assert provisioner.calls == [(started["image"], provider, region)]
     prefix = (
-        f"veadk-studio/v1/environments/owner/{environment['id']}"
+        f"veadk-studio/v2/environments/owner/{environment['id']}"
         f"/versions/{started['versionId']}"
     )
     persisted = json.loads(tos.objects[f"{prefix}/build.json"])
@@ -739,7 +906,7 @@ async def test_environment_queries_backfill_legacy_aio_tool_binding(query: str):
         client.get(build_url)
         _wait_for_build(client, build_url)
     prefix = (
-        f"veadk-studio/v1/environments/owner/{environment['id']}"
+        f"veadk-studio/v2/environments/owner/{environment['id']}"
         f"/versions/{started['versionId']}"
     )
     legacy = json.loads(tos.objects[f"{prefix}/build.json"])
@@ -797,7 +964,7 @@ async def test_resolving_legacy_aio_version_backfills_persisted_tool_binding():
         client.get(build_url)
         _wait_for_build(client, build_url)
     prefix = (
-        f"veadk-studio/v1/environments/owner/{environment['id']}"
+        f"veadk-studio/v2/environments/owner/{environment['id']}"
         f"/versions/{started['versionId']}"
     )
     legacy = json.loads(tos.objects[f"{prefix}/build.json"])
@@ -920,7 +1087,7 @@ def test_build_detail_returns_steps_and_only_downloads_logs_when_requested():
     assert complete["logUpdatedAt"]
     assert cloud.log_calls == 1
     prefix = (
-        f"veadk-studio/v1/environments/owner/{environment_id}/versions/{version_id}"
+        f"veadk-studio/v2/environments/owner/{environment_id}/versions/{version_id}"
     )
     assert tos.objects[f"{prefix}/build.log"] == b"build failed"
 
@@ -974,7 +1141,7 @@ def test_custom_dockerfile_is_preserved_verbatim():
     assert response.json()["dockerfile"] == custom
     environment_id = response.json()["id"]
     summary = tos.objects[
-        f"veadk-studio/v1/environments/owner/{environment_id}/summary.json"
+        f"veadk-studio/v2/environments/owner/{environment_id}/summary.json"
     ]
     assert json.loads(summary)["dockerfile"] == custom
 
@@ -1014,7 +1181,7 @@ def test_environment_build_snapshots_local_skills_into_fixed_image_directory(tmp
     assert build.status_code == 202
     version_id = build.json()["versionId"]
     prefix = (
-        f"veadk-studio/v1/environments/owner/{environment['id']}/versions/{version_id}"
+        f"veadk-studio/v2/environments/owner/{environment['id']}/versions/{version_id}"
     )
     manifest = json.loads(tos.objects[f"{prefix}/skills-manifest.json"])
     assert manifest["skills"][0]["name"] == "release-notes"
