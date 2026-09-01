@@ -120,6 +120,36 @@ combining ADK tools with this runtime, in either direction:
   small, structured, and yours to validate — `file_incident_ticket` caps field
   lengths, checks the severity enum, and prints one audit line per ticket.
 
+### Where the tools write
+
+An ADK tool asks for the directory of the turn that is calling it:
+
+```python
+from veadk.runtime.codex import current_workspace
+
+def fetch_application_logs(stream: str, start_time: str, end_time: str) -> dict:
+    workspace = current_workspace()   # this turn's directory, or None
+    if workspace is None:             # not a codex turn — an error, not a guess
+        return {"status": "error", "message": "no sandbox working directory"}
+    ...
+```
+
+The runtime binds that value around each tool call, so it stays correct with
+several sessions in flight in one process. That is why this example leaves
+`workspace_root` and `reuse_workspace` unset: every `(app, user, session,
+agent)` gets its own directory — which is what an on-call service wants, since
+two incidents under investigation at the same time must not share a scratch
+directory — and it still persists across the turns of one session, which is what
+turn 2 reuses.
+
+`current_workspace()` returns `None` rather than raising outside a codex turn
+(another runtime, an `AgentTool`, a unit test), and these tools turn that into
+an ordinary error result the model can act on.
+
+Pinning is the opposite trade, and it is a **single-tenant** one: `workspace_root`
+plus `reuse_workspace=True` gives you one predictable directory you can `ls`
+after the process exits, at the price of every session sharing it.
+
 ## The security configuration, knob by knob
 
 ```python
@@ -127,8 +157,6 @@ codex_runtime_config=CodexRuntimeConfig(
     sandbox="workspace_write",
     network_access=False,
     approval_mode="deny_all",
-    workspace_root=str(WORKSPACE),
-    reuse_workspace=True,
     max_tool_iterations=12,
     tool_timeout_seconds=60.0,
 )
@@ -145,6 +173,7 @@ run_config=RunConfig(max_llm_calls=40)
 | `max_tool_iterations=12` | ADK tool round-trips allowed for the **whole turn** (not per backend request). Four fetches plus a ticket fits with room to spare. |
 | `tool_timeout_seconds=60.0` | A wedged ADK tool cannot hang the turn. |
 | `outbox/` outside the workspace | Egress is a code path you own, not a file the model can drop somewhere. |
+| no `workspace_root` / `reuse_workspace` | One workspace per `(app, user, session, agent)`, reaped when idle. Two incidents investigated at once cannot read each other's files, and yesterday's run cannot leave data in today's sandbox. |
 
 This is checkable, not aspirational. Asking the agent to try it, from inside
 its own sandbox:
@@ -272,15 +301,19 @@ macOS or Linux only: the sandbox is seatbelt / landlock+seccomp. Pick a model
 with solid tool-calling and code-writing ability — this agent debugs its own
 scripts — and read the two Ark gotchas below before swapping the model.
 
-Afterwards, look at what the sandbox produced:
+Afterwards, look at what left the sandbox:
 
 ```bash
-ls workspace/analysis/     # the programs the model wrote
 cat outbox/INC-*.json      # everything that left the sandbox
 ```
 
-`main.py` deletes `workspace/` at startup so each run is reproducible; drop
-that line to watch a workspace accumulate across runs.
+The workspace itself — the fetched data and the programs the model wrote under
+`analysis/` — is printed by `main.py` just before it exits, because the
+per-session workspace lives under a temporary root the runtime removes on
+process exit. Nothing to clean up between runs, and no way for last week's files
+to still be in the sandbox while the model investigates today's incident. Pin
+`workspace_root` + `reuse_workspace` if you would rather keep the directory
+around and inspect it later.
 
 ## Two Ark gotchas worth knowing before you port an agent
 

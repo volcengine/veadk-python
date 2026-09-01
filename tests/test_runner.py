@@ -14,6 +14,7 @@
 
 import os
 
+import pytest
 from google.genai import types
 
 from veadk.agent import Agent
@@ -67,6 +68,16 @@ def _test_convert_messages(runner):
 
 def test_runner():
     """Test Runner class initialization and core properties"""
+    # `LongTermMemory(backend="local")` below resolves its backend class
+    # lazily, and the local one imports `llama_index.core`.
+    pytest.importorskip(
+        "llama_index.core",
+        reason=(
+            "the local KnowledgeBase/LongTermMemory backends need llama-index: "
+            'pip install "veadk-python[extensions]"'
+        ),
+    )
+
     os.environ["MODEL_EMBEDDING_API_KEY"] = "mocked_api_key"
 
     short_term_memory = ShortTermMemory()

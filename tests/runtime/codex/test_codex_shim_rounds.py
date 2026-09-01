@@ -21,15 +21,22 @@ sent exactly one POST per turn with ``stream: False``, so the ~113-line
 two requests under one token -- was a shape no test could express.
 
 Every test here builds :class:`ResponsesShim` **directly** over
-``httpx.ASGITransport``. ``get_shim`` is never called, so the process-global
-``_SHIMS`` cache (and its uvicorn servers and ports) stays untouched, which is
-what makes the file safe under ``pytest -n 16``.
+``httpx.ASGITransport``, so no uvicorn server is started and no port is bound,
+which is what makes the file safe under ``pytest -n 16``. The one test that has
+to exercise ``get_shim`` itself (the cache is what it is testing) swaps the
+process-global ``_SHIMS``/``_RETIRED`` for empty ones and restores them in a
+``finally``, and stubs ``start()`` so nothing binds either; the autouse fixture
+below re-checks that from the outside.
 """
 
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
+import threading
+import time
+from collections import OrderedDict
 
 import httpx
 import pytest
@@ -43,7 +50,9 @@ def _shim_cache_is_untouched():
     """Fail loudly if a test in this file ever starts a real shim server.
 
     ``get_shim`` binds a port and leaks a uvicorn task into the process-global
-    cache; nothing here may do that.
+    cache; nothing here may do that. A test that must call ``get_shim`` swaps
+    the global out and back itself (see ``_isolated_shim_cache``), so this still
+    holds for it.
     """
     before = dict(proxy_module._SHIMS)
     yield
@@ -1132,3 +1141,253 @@ async def test_reasoning_rejection_retries_once_without_reasoning_items(
             {"model": "m", "input": list(conversation)}
         )
     assert len(seen) == 1, "no retry for an unrelated error"
+
+
+# ------------------------------------------- the get_shim -> register_turn gap
+
+
+def test_a_reservation_outlives_its_deadline_while_the_lease_is_held(
+    monkeypatch,
+) -> None:
+    """A slow setup must not lose the shim it is about to register a turn on.
+
+    ``get_shim`` returns long before ``register_turn``: in between the runtime
+    prepares a workspace, reaps stale ones, prepares a ``CODEX_HOME``, syncs
+    skills and builds its toolsets -- which connects MCP servers. Any constant
+    deadline is a guess about how long that takes, and past it the shim is
+    evictable again: with the cache over ``CODEX_SHIM_CACHE_MAX`` it is stopped,
+    the turn registers on a corpse, and Codex spends the whole turn pointed at a
+    dead URL.
+
+    So the deadline is only a floor. What actually holds the reservation open is
+    the lease the caller is holding -- tracked weakly, so it needs no release
+    call that an exception or an abandoned async generator could skip. Here the
+    floor is set to 50ms and then deliberately overrun.
+    """
+    monkeypatch.setenv("CODEX_SHIM_RESERVE_SECONDS", "0.05")
+    shim = ResponsesShim("https://backend.invalid/v1", "backend-key")
+
+    lease = shim.reserve()
+    assert shim.busy
+
+    time.sleep(0.12)  # well past the floor: setup is still running
+    assert shim.busy, (
+        "the reservation lapsed while its caller was still in setup; the LRU "
+        "may now stop this shim out from under the turn about to register"
+    )
+
+    # Dropping the lease is the release -- no call to miss on any exit path.
+    del lease
+    gc.collect()
+    assert not shim.busy, (
+        "a dropped lease must release the shim (past the floor), or a caller "
+        "that crashed mid-setup would pin it in the cache forever"
+    )
+
+
+def test_a_dropped_lease_is_still_covered_by_the_deadline_floor(monkeypatch) -> None:
+    """The floor still protects a caller that kept only the URL.
+
+    ``get_shim_url`` returns a string and drops the lease immediately, and an
+    embedder may do the same. Releasing on the spot would hand those callers a
+    URL to a shim that is evictable the moment they look away, so the
+    ``CODEX_SHIM_RESERVE_SECONDS`` window remains underneath the lease rather
+    than being replaced by it.
+    """
+    shim = ResponsesShim("https://backend.invalid/v1", "backend-key")
+    shim.reserve()  # lease dropped immediately, as `get_shim_url` does
+    gc.collect()
+    assert shim.busy, "the reservation floor must survive a dropped lease"
+
+
+def test_register_turn_without_a_reservation_cannot_consume_someone_elses() -> None:
+    """A direct ``register_turn`` must not cancel another caller's protection.
+
+    Registering without reserving first is supported (tests, embedders). It used
+    to pop ``_reservations[0]`` -- the *oldest* reservation, belonging to
+    whichever other caller happened to be in setup -- so an unrelated turn
+    starting on the same shim silently re-opened that caller's eviction window.
+    Reservations are identified now: a caller consumes its own or nothing.
+    """
+    shim = ResponsesShim("https://backend.invalid/v1", "backend-key")
+
+    # Caller A: mid-setup, holding its lease.
+    lease_a = shim.reserve()
+    reservation_a = lease_a._reservation_id
+
+    # Caller B: registers directly, having never reserved.
+    token_b = shim.register_turn([], {})
+    shim.unregister_turn(token_b)
+
+    assert shim.busy, (
+        "an unrelated register_turn consumed caller A's reservation; A is now "
+        "evictable while it is still in setup"
+    )
+    assert list(shim._reservations) == [reservation_a]
+
+    # And a caller that *did* reserve consumes exactly its own reservation.
+    lease_c = shim.reserve()
+    assert len(shim._reservations) == 2
+    token_c = lease_c.register_turn([], {})
+    assert list(shim._reservations) == [reservation_a], (
+        "registering through a lease must consume that lease's reservation and "
+        f"leave A's alone (left: {list(shim._reservations)})"
+    )
+    shim.unregister_turn(token_c)
+    assert shim.busy  # A is still in setup
+
+
+# ------------------------------------------------- the cache across two loops
+
+
+def _isolated_shim_cache():
+    """Swap the process-global shim cache for empty ones, restoring on exit."""
+    return _SwappedShimCache()
+
+
+class _SwappedShimCache:
+    def __enter__(self):
+        self._shims = proxy_module._SHIMS
+        self._retired = proxy_module._RETIRED
+        proxy_module._SHIMS = OrderedDict()
+        proxy_module._RETIRED = []
+        return proxy_module._SHIMS
+
+    def __exit__(self, *exc):
+        # Restored unconditionally and before any fixture teardown runs, so the
+        # autouse guard above still compares the real cache with itself.
+        proxy_module._SHIMS = self._shims
+        proxy_module._RETIRED = self._retired
+        return False
+
+
+def test_two_threads_racing_get_shim_build_exactly_one_shim(monkeypatch) -> None:
+    """The cache must be atomic across event loops, not just across coroutines.
+
+    ``get_shim``'s check-and-insert used to rely on "this block performs no
+    awaits" -- which makes it atomic only within one event loop. ``usable_on``
+    exists precisely because invocations may run "under their own
+    ``asyncio.run``" on separate threads, and two of those both missed the cache
+    and both constructed a ``ResponsesShim``. The second ``_SHIMS[key] = shim``
+    orphaned the first, which then bound a port in ``start()`` while being
+    reachable from nothing -- not ``_evict_idle_shims``, not ``shutdown_shims``,
+    not ``_close_shims_at_exit`` -- leaking the socket for the life of the
+    process.
+
+    ``start`` is stubbed to bind nothing *and* to leave ``_loop`` unset, so
+    ``usable_on`` is true for both loops and the test isolates the insert race
+    from the (separate, intended) loop-affinity discard.
+    """
+    constructed: list[object] = []
+    real_init = proxy_module.ResponsesShim.__init__
+
+    def instrumented_init(self, *args, **kwargs):
+        real_init(self, *args, **kwargs)
+        constructed.append(self)
+        # Widen the window the old code raced in: the GIL is released here, so
+        # the other thread reliably reaches its own check-and-insert.
+        time.sleep(0.02)
+
+    async def fake_start(self):
+        self.url = self.url or "http://127.0.0.1:65535"
+        return self.url
+
+    monkeypatch.setattr(proxy_module.ResponsesShim, "__init__", instrumented_init)
+    monkeypatch.setattr(proxy_module.ResponsesShim, "start", fake_start)
+
+    barrier = threading.Barrier(2)
+    leases: dict[int, object] = {}
+    errors: list[BaseException] = []
+
+    def worker(index: int) -> None:
+        try:
+            barrier.wait(timeout=5)
+            leases[index] = asyncio.run(
+                proxy_module.get_shim("https://backend.invalid/v1", "backend-key")
+            )
+        except BaseException as e:  # noqa: BLE001 - reported below
+            errors.append(e)
+
+    with _isolated_shim_cache() as cache:
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+        cached = list(cache.values())
+        retired = list(proxy_module._RETIRED)
+
+    assert errors == [], errors
+    assert len(constructed) == 1, (
+        f"{len(constructed)} shims were built for one cache key: the loser is "
+        "an orphan that binds a port no teardown path can ever find"
+    )
+    assert len(cached) == 1
+    assert retired == []
+    assert (
+        leases[0].shim is leases[1].shim is cached[0]
+    ), "both threads must share the one cached shim"
+    # Nothing constructed may be unreachable from the cache -- that is the leak.
+    assert {id(shim) for shim in constructed} == {id(shim) for shim in cached}
+
+
+# ---------------------------------------------- what one charged call may cost
+
+
+@pytest.mark.asyncio
+async def test_a_repaired_backend_call_is_charged_once(monkeypatch) -> None:
+    """``on_model_call`` counts model calls, not HTTP attempts -- on purpose.
+
+    One charge can become several requests: ``litellm.aresponses`` is given
+    ``num_retries``, and ``_call_backend_tolerating_reasoning`` may re-issue the
+    request without Codex's replayed ``reasoning`` items. Both are re-attempts
+    of a call that produced no response, so neither is a second *model* call;
+    charging them would spend a budget the user is not billed for and would make
+    ``max_llm_calls`` bind at a different point than on the ``adk`` runtime,
+    which counts flow calls while litellm retries underneath it.
+
+    (``num_retries`` itself is applied inside ``litellm.aresponses``, which the
+    stub replaces, so what is asserted here is that the shim asks for it and
+    that the retry it *does* own is not charged.)
+    """
+    from litellm import exceptions as litellm_exceptions
+
+    shim = ResponsesShim("https://backend.invalid/v1", "backend-key")
+    charges: list[int] = []
+    token = shim.register_turn([], {}, on_model_call=lambda: charges.append(1))
+
+    attempts: list[dict] = []
+
+    async def refuses_reasoning_once(**kwargs):
+        attempts.append(kwargs)
+        if any(item.get("type") == "reasoning" for item in kwargs["input"]):
+            raise litellm_exceptions.BadRequestError(
+                message="input[1].reasoning is not supported for model",
+                model="doubao-seed-1-6",
+                llm_provider="openai",
+            )
+        return _text_response("done")
+
+    monkeypatch.setattr(proxy_module.litellm, "aresponses", refuses_reasoning_once)
+
+    async with _client(shim) as client:
+        response = await client.post(
+            "/v1/responses",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "model": "doubao-seed-1-6",
+                "stream": False,
+                "input": [
+                    _message("go"),
+                    {"type": "reasoning", "summary": [{"text": "thinking"}]},
+                ],
+            },
+        )
+
+    assert response.status_code == 200
+    assert len(attempts) == 2, "the repair retry must actually have happened"
+    assert charges == [1], (
+        f"one model call was charged {len(charges)} times; the budget counts "
+        "calls, not the attempts a single call may cost"
+    )
+    assert attempts[0]["num_retries"] == proxy_module._shim_num_retries()

@@ -473,9 +473,11 @@ def check_agent_runtime_support(
             raise ValueError(rule.message(agent, runtime))
         _warn_once(agent, rule.field, rule.message(agent, runtime))
 
-    # codex charges every backend model call through
+    # codex charges every backend model *call* through
     # `ResponsesShim.register_turn(on_model_call=...)`, *before* the call, so
-    # the budget binds exactly and warning would be a false positive. piagent
+    # the budget binds exactly and warning would be a false positive. litellm's
+    # `num_retries` re-attempts a failed call underneath that charge, the same
+    # way it does on the adk path, so a call is counted once either way. piagent
     # charges each call the Pi binary reports as finished, which still enforces
     # the budget but only after the overrunning call has run.
     if run_config is not None and runtime != "codex":

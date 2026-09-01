@@ -169,6 +169,8 @@ script rounds to run, and this budget is the only hard stop.
 
 By default a workspace is keyed by `app_name` / `user_id` / `session_id` / agent name: every invocation of one session **shares the same directory**, and it is not deleted at the end of a turn, so files written by one turn are still there for the next. The whole tree is removed when the process exits; while the process runs, session workspaces left **idle for more than 6 hours** are reaped the next time a workspace is created, which bounds disk growth in a long-lived server.
 
+A tool never has to derive that path: `current_workspace()` returns the workspace of the turn that is calling it, with nothing configured — see [The workspace is the data plane](#the-workspace-is-the-data-plane) below.
+
 A `workspace_root` you pass explicitly is *your* directory: the runtime never deletes it and never applies that idle reaping to it — it still creates a per-session subdirectory underneath, but cleaning those up is on you. `reuse_workspace=True` only means anything alongside `workspace_root`: it makes every session share that directory itself, with no per-session isolation.
 
 ### The workspace is the data plane
@@ -195,15 +197,23 @@ little metadata. The data sits on disk where the model can grep, slice and
 aggregate it with shell commands, and only one line of it reaches the context.
 
 ```python title="tools.py"
+from pathlib import Path
+
+from veadk.runtime.codex import current_workspace
+
+
 def load_orders(day: str) -> dict:
     """Write one day of orders into your working directory as CSV.
 
     Returns a receipt, never the rows themselves — read the CSV at the
     returned path with your own code.
     """
+    workspace = current_workspace()   # this turn's directory, or None
+    if workspace is None:             # not a Codex turn: an error the model can read
+        return {"status": "error", "message": "no codex workspace on this call"}
     rows = warehouse.query(day)
     name = f"orders-{day}.csv"
-    write_csv(WORKSPACE / name, rows)
+    write_csv(Path(workspace) / name, rows)
     # A receipt, not a payload: where it is and what shape it has.
     return {"path": name, "rows": len(rows), "columns": list(rows[0])}
 ```
@@ -218,10 +228,12 @@ read it off disk itself — not have the model re-dictate the whole report as a
 tool argument, which pushes it through the context a second time and invites it
 to drift on the way.
 
-Two ways for a tool to know where the workspace is:
+How a tool knows where the workspace is:
 
-- **A fixed path (single tenant).** Set `workspace_root` explicitly together with `reuse_workspace=True`; the workspace is then `workspace_root` itself, so the tool and the `CodexRuntimeConfig` can share one constant. The cost is that every session shares that directory — see [Workspace lifetime](#workspace-lifetime).
-- **Per-session isolation (multi-tenant).** Keep the default session-isolated directory and let the model pass the destination path as a tool argument: Codex's `cwd` *is* this session's workspace, so the tool writes to that path and returns it unchanged. That path comes from the model, so the tool should verify it really resolves inside the expected directory before opening it.
+- **`current_workspace()` — the primary way, and the one multi-tenancy needs.** `from veadk.runtime.codex import current_workspace` gives the absolute path of the workspace for the turn that is calling the tool. It needs no configuration and works with `workspace_root` and `reuse_workspace` both **unset**. The value is bound around each tool call rather than read from ambient invocation state, so turns running concurrently in one process each see their own directory. It returns `None` — never raises — when no Codex turn is on the call stack, because the same tool object is also run by other runtimes, by `AgentTool`, and by unit tests; branch on that and return your own `{"status": "error", ...}`, which the model can act on, instead of raising or falling back to a directory of your own choosing.
+- **A fixed path — single tenant, and you want to read the directory afterwards.** Set `workspace_root` together with `reuse_workspace=True`; the workspace is then `workspace_root` itself, so a tool and the `CodexRuntimeConfig` can share one constant and the directory is still on disk once the process has exited. The price is that every session shares it — see [Workspace lifetime](#workspace-lifetime).
+
+Either way, a path that came from the *model* is untrusted input: resolve it against the workspace and reject anything that escapes (`..`, absolute paths, symlinks pointing out) before opening it.
 
 ### Codex execution knobs
 
@@ -231,7 +243,7 @@ Two ways for a tool to know where the workspace is:
 | `personality` | `"pragmatic"` | Codex's own reply style: `none`/`friendly`/`pragmatic`. |
 | `max_tool_iterations` | `32` | Budget of bridged ADK/MCP tool round-trips the shim may run for the whole Codex turn (1–256). See the behavior change below. |
 | `tool_timeout_seconds` | `120.0` | Per-call timeout for a bridged ADK/MCP tool. `None` disables the timeout. |
-| `reuse_workspace` | `False` | Only meaningful alongside `workspace_root` — see [Workspace lifetime](#workspace-lifetime) above. |
+| `reuse_workspace` | `False` | Only meaningful alongside `workspace_root`, and only worth setting for a single tenant — see [Workspace lifetime](#workspace-lifetime) above. Leave both unset and let tools call `current_workspace()`; see [The workspace is the data plane](#the-workspace-is-the-data-plane). |
 
 <Callout type="warn">
 **Behavior change: `max_tool_iterations` changed meaning, and its default went from `8` to `32`.**
@@ -245,6 +257,13 @@ Codex ships its own ~20KB system prompt, tuned for its own toolchain (`apply_pat
 The agent's identity block and its `instruction` therefore travel over Codex's native `developer_instructions` channel instead. Codex renders that as its own `developer` message alongside AGENTS.md, skills and environment context — purely additive, never a replacement.
 
 One consequence: **`personality` now actually takes effect.** It is rendered into Codex's built-in system prompt template, and that template — personality included — used to be replaced wholesale whenever `base_instructions` was set, leaving the field inert.
+
+Two corrections ride along on the same channel, because Codex's preserved system prompt describes a toolchain this bridge cannot fully deliver. The runtime appends a short **tool-availability note** to every turn's developer instructions:
+
+- `apply_patch` is not one of the tools on this run — the shim forwards only `function`-typed tools, and Codex's file-editing tool is not one — so files are created and edited with `exec_command` (for example a `cat > file <<'EOF'` heredoc).
+- `request_user_input` *is* advertised, but nothing can answer it: an ADK invocation has no interactive channel, so calling it ends the turn with the work undone. The model is told to decide with what it has and to say what was missing in its final message.
+
+You do not need to counter-instruct for either of these in your agent's `instruction`.
 
 ### Codex environment variables
 

@@ -147,8 +147,7 @@ def counts_as_model_call(event: dict[str, Any]) -> bool:
     """
     if event.get("type") != "message_end":
         return False
-    message = event.get("message")
-    return isinstance(message, dict) and message.get("role") == "assistant"
+    return _is_assistant_message(event.get("message"))
 
 
 def make_text_event(
@@ -188,8 +187,10 @@ class PiEventTranslator:
     def __init__(self, *, author: str, invocation_id: str):
         self.author = author
         self.invocation_id = invocation_id
-        self.emitted_text = False
         self._emitted_texts: list[str] = []
+        # Text already carried out on a tool-call event, awaiting the
+        # `message_end` that closes the round it belonged to.
+        self._carried_text: str | None = None
         self._thinking_parts: list[str] = []
         self._text_parts: list[str] = []
         self._usage_totals: dict[str, int] = {}
@@ -209,7 +210,10 @@ class PiEventTranslator:
             message = event.get("message")
             if _message_is_thinking(message):
                 return []
-            return self._flush_events(preferred_text=_message_text(message))
+            return self._flush_events(
+                preferred_text=_message_text(message),
+                round_end=_is_assistant_message(message),
+            )
         if event_type == "turn_end":
             return self._flush_events()
         if event_type == "agent_end":
@@ -353,28 +357,53 @@ class PiEventTranslator:
             raise RuntimeError(f"Pi assistant error: {reason}")
         return []
 
-    def _flush_events(self, *, preferred_text: str = "") -> list[Event]:
+    def _flush_events(
+        self, *, preferred_text: str = "", round_end: bool = False
+    ) -> list[Event]:
         """Emit this round's durable assistant text, if it is new.
 
-        Pi closes every round of a turn with its own ``message_end``, and
-        ``turn_end`` / ``agent_end`` / ``agent_settled`` then re-announce text
-        that has already been emitted. Suppression is therefore keyed on the
-        text itself rather than on a "have I emitted anything yet" latch: a
-        latch made the *first* round win, so on a turn whose tool call carried a
-        text preamble ("let me check the weather...") the preamble became the
-        turn's answer and the round that actually answered was dropped.
+        Two different things re-announce text Pi has already reported, and they
+        need two different suppression rules -- a single "have I seen this text
+        before" set gets one of them wrong whichever way it is tuned:
 
-        Matching on text also covers the preamble a tool-call event has already
-        persisted, so it is not repeated as a standalone text event.
+        - A **round end** (an assistant ``message_end``, ``round_end=True``)
+          repeats only the preamble its own round already carried out on a
+          tool-call event, so it is matched against that one parked string.
+          Matching it against every text ever emitted instead loses a genuine
+          answer that happens to be byte-identical to an earlier preamble (a
+          model that says "Done." beside its tool call and "Done." again as the
+          answer): the answering round is suppressed, no final response is
+          produced at all, and ``output_key`` is never written.
+        - A **replay** (``turn_end`` / ``agent_end`` / ``agent_settled``,
+          ``round_end=False``) re-announces the last assistant message wholesale
+          once the turn is over. Nothing new can arrive after it, so it is
+          matched against everything already emitted.
+
+        Neither may become a "have I emitted anything yet" latch: that made the
+        *first* round win, so on a turn whose tool call carried a text preamble
+        ("let me check the weather...") the preamble became the turn's answer
+        and the round that actually answered was dropped.
+
+        Args:
+            preferred_text (str): Text Pi reported for the message, preferred
+                over the accumulated deltas when present.
+            round_end (bool): Whether this is an assistant ``message_end``
+                closing one round, rather than an end-of-turn replay.
         """
         if preferred_text:
             text = preferred_text
             self._text_parts.clear()
         else:
             text = self._drain_text()
+        carried = self._carried_text
+        if round_end:
+            # This round is over, so its parked preamble can no longer be
+            # re-announced -- whether or not this `message_end` repeated it.
+            self._carried_text = None
         if not text:
             return []
-        if text in self._emitted_texts:
+        duplicate = (text == carried) if round_end else (text in self._emitted_texts)
+        if duplicate:
             self._thinking_parts.clear()
             self._text_parts.clear()
             return []
@@ -401,14 +430,14 @@ class PiEventTranslator:
             if text:
                 parts.append(types.Part(text=text, thought=False))
                 # This text is now persisted on the carrying event (a tool
-                # call), so a later `message_end` repeating it must not emit it
-                # again as a standalone answer.
+                # call), so the `message_end` closing this round must not emit
+                # it again as a standalone answer.
+                self._carried_text = text
                 self._note_emitted(text)
 
         return parts
 
     def _note_emitted(self, text: str) -> None:
-        self.emitted_text = True
         if text not in self._emitted_texts:
             self._emitted_texts.append(text)
 
@@ -505,6 +534,10 @@ def _last_assistant_text(messages: Any) -> str:
         if text:
             return text
     return ""
+
+
+def _is_assistant_message(message: Any) -> bool:
+    return isinstance(message, dict) and message.get("role") == "assistant"
 
 
 def _message_is_thinking(message: Any) -> bool:

@@ -17,7 +17,6 @@ codex_data_analysis/
 ├── skills/
 │   └── sales-report/
 │       └── SKILL.md        # 报告的固定格式（house format）
-├── .codex_workspace/       # 运行时创建——Codex 的 cwd（跑完记得进去看看！）
 └── outbox/                 # 运行时创建——只有 publish_report 放行的文件
 ```
 
@@ -84,7 +83,8 @@ def fetch_sales_extract(quarter: str) -> dict:
 
 # 对 —— 数据落盘，回执给模型
 def fetch_sales_extract(quarter: str) -> dict:
-    shutil.copyfile(source, WORKSPACE / "data" / source.name)
+    workspace = Path(current_workspace())        # 本轮沙箱的工作目录
+    shutil.copyfile(source, workspace / "data" / source.name)
     return {"status": "ok", "path": "data/sales_2025q3.csv", "rows": 2400,
             "columns": [...], "bytes": 127983}
 ```
@@ -106,18 +106,33 @@ def fetch_sales_extract(quarter: str) -> dict:
 
 ### 工具是怎么知道工作区在哪的
 
-ADK 工具跑在*你的*进程里，而不是沙箱里，而 runtime 目前并没有把本轮的工作区路径暴露给它们。
-所以这个示例把它钉死：
+ADK 工具跑在*你的*进程里，而不是沙箱里，所以必须有人告诉它们 Codex 在哪工作。
+它们每次被调用时自己问一遍：
 
 ```python
-CodexRuntimeConfig(workspace_root=str(WORKSPACE), reuse_workspace=True, ...)
+from veadk.runtime.codex import current_workspace
+
+def fetch_sales_extract(quarter: str) -> dict:
+    workspace = current_workspace()      # 本轮的工作目录，或者 None
+    if workspace is None:                # 不在 codex 轮次里——直说，别猜
+        return {"status": "error", "message": "no sandbox working directory"}
+    ...
 ```
 
-这样目录就是可预测的——你也因此能在跑完之后读到 Codex 写的脚本。
-**不要把这段直接抄进多租户服务。** `reuse_workspace=True` 意味着所有会话共用一个目录。
-在那种场景下这两个字段都别设：runtime 会给每个 `(app, user, session, agent)` 各自一个工作区，
-它同样能跨该会话的多轮存活（第二轮依赖的正是这个特性，钉死只是让它变得可见），
-然后让工具通过入参接收目标目录。
+这个值由 runtime 在每次工具调用前后绑定，所以即使一个进程里同时跑着多个会话，
+拿到的也一定是*本轮*的工作区。正因如此，这个示例把 `workspace_root` 和 `reuse_workspace`
+都留空：每个 `(app, user, session, agent)` 各得一个目录，并且照样能跨该会话的多轮存活——
+第二轮依赖的正是这个特性。
+
+当调用栈上没有 codex 轮次时（换了 runtime、被 `AgentTool` 调用、单元测试），
+`current_workspace()` 返回 `None` 而不是抛异常。这里的工具因此把它转成一条普通的
+`{"status": "error", ...}` 结果交给模型，而不是抛异常，也不是悄悄退回到自己的某个本地目录。
+
+**钉死目录如今是单租户下的便利，而不是多租户的答案。**
+`workspace_root=..., reuse_workspace=True` 让目录变成一个常量，进程退出很久之后你依然能
+`ls` 它——在自己机器上开发单个 Agent 时很好用，放到服务端就是错的：它会把所有会话压到同一个目录。
+不钉死时，工作区位于 runtime 自己的临时根目录下，进程退出即被清理，
+所以 `main.py` 会在结束前先把目录树打印出来。
 
 ## 安全配置本身就是这个示例的内容
 
@@ -217,10 +232,10 @@ python examples/codex_data_analysis/main.py
 只替换了图和 Trend 段落，并从一次 `zsh` 引号错误里恢复过来，然后重新发布。
 请把它当作一种「形状」而不是固定命令——回合数每次都不一样。
 
-跑完之后，去看看 Codex 真正留下了什么：
+这次运行结束前会把 Codex 留在工作区里的东西（它的脚本、它的草稿）打印出来——
+那个目录属于本会话，进程退出时会被 runtime 清理。留在磁盘上的是 outbox：
 
 ```bash
-ls examples/codex_data_analysis/.codex_workspace   # 它的脚本、它的草稿
 cat examples/codex_data_analysis/outbox/*/report.md
 ```
 
@@ -248,18 +263,20 @@ cat examples/codex_data_analysis/outbox/*/report.md
   请使用 `deepseek-v4-flash-260425`（已端到端验证）；当一个 codex 轮次结束得可疑地早时，
   先在日志里 grep 一下 `codex_backend_api_error`，再决定要不要相信那个回答。
 - **被桥接进 Codex 协议的聊天模型会“讲解”而不是“动手”。** Codex 收到 assistant 消息就结束这一轮，
-  所以模型如果回一句*“我现在来写分析脚本”*——或者调用 Codex 的 `request_user_input`
-  （这个工具即使在没有用户能回答的调用里也照样被通告出去）——这一轮就会什么都没做地结束。
-  这正是 instruction 开头就写 *“Act, do not narrate”* 并禁止提问的原因。
+  所以模型如果回一句*“我现在来写分析脚本”*，这一轮就会什么都没做地结束。
+  这正是 instruction 开头就写 *“Act, do not narrate”* 的原因。
   在任何聊天后端上，都要预留一部分提示词预算来处理这件事。
-- **`apply_patch` 根本到不了后端。** shim 只转发 `function` 类型的工具，
-  而 Codex 的文件编辑工具不是——后端实际看到的列表是 `exec_command`、`write_stdin`、
-  `update_plan`、`request_user_input`、`view_image`，外加你自己的 ADK 工具。
-  但 Codex 自己的系统提示词仍然告诉模型去用 `apply_patch`，于是模型会去试，白白浪费一个回合。
-  这就是 instruction 里那句*“用 heredoc 创建文件”*的由来。
+- **`apply_patch` 根本到不了后端，`request_user_input` 也没人能回答。** shim 只转发
+  `function` 类型的工具，而 Codex 的文件编辑工具不是——后端实际看到的列表是 `exec_command`、
+  `write_stdin`、`update_plan`、`request_user_input`、`view_image`，外加你自己的 ADK 工具。
+  但 Codex 自己的系统提示词仍然告诉模型去用 `apply_patch`；`request_user_input` 也照样被通告出去，
+  尽管一次 ADK 调用根本没有可以回答它的交互通道。
+  **runtime 现在会在每轮的 developer instructions 后面追加一段工具可用性说明**，
+  把这两件事以及替代做法（用 `exec_command` 的 heredoc 写文件；自己拿主意而不是提问）讲清楚。
+  这个示例的 instruction 从前要手写这两句，现在不需要了。
 
-一般性的教训是：在聊天后端上，这个 runtime 实际可用的工具面比 Codex 文档给人的印象要窄，
-需要靠 instruction 把这个缺口补上。
+一般性的教训是：在聊天后端上，这个 runtime 实际可用的工具面比 Codex 文档给人的印象要窄。
+这两个缺口 runtime 已经替你补上了，其余的仍然要靠你的 instruction。
 
 ## 约束
 

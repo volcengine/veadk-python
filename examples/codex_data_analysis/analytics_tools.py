@@ -35,6 +35,13 @@ else. This tool is the single audited gate through which a finished artifact
 leaves — which is why it validates the paths the model hands it rather than
 trusting them.
 
+Both tools find the directory to write into with
+:func:`veadk.runtime.codex.current_workspace`, which reports the workspace of
+the turn that is calling the tool. Nothing here pins ``workspace_root``, so
+each session gets its own directory and these tools follow whichever one they
+are called from — the arrangement a multi-tenant server needs, and the one this
+example therefore demonstrates.
+
 Requires: nothing beyond the standard library. The "internal system" is the
 CSV under ``data/``.
 """
@@ -48,16 +55,9 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
+from veadk.runtime.codex import current_workspace
+
 _HERE = Path(__file__).resolve().parent
-
-WORKSPACE = _HERE / ".codex_workspace"
-"""Codex's working directory for this example.
-
-Pinned via ``CodexRuntimeConfig(workspace_root=..., reuse_workspace=True)`` so
-that these tools — which run in the *host* process, not in the sandbox — know
-where to put files, and so that you can read what Codex wrote after the run.
-See the README for what to do instead in a multi-tenant deployment.
-"""
 
 OUTBOX = _HERE / "outbox"
 """Where published artifacts land. Deliberately *outside* the workspace: the
@@ -72,15 +72,65 @@ _MAX_PUBLISH_BYTES = 2_000_000
 
 _ALLOWED_SUFFIXES = {".md", ".svg"}
 
+_LAST_WORKSPACE: Path | None = None
+"""The workspace the most recent tool call ran in — a *demo* affordance.
 
-def _resolve_in_workspace(candidate: str) -> Path:
+``main.py`` prints the directory tree once the run is over, and this example
+deliberately does not pin ``workspace_root``, so nothing outside a tool call
+knows the path. A single-process, single-session script can remember it like
+this; a server serving several sessions at once cannot, and does not need to —
+its tools already receive the right directory on every call.
+"""
+
+
+def _workspace() -> Path | None:
+    """The workspace of the Codex turn calling this tool, or ``None``.
+
+    Returns:
+        Path | None: Codex's working directory for this turn, or ``None`` when
+        the tool is running outside a codex turn (another runtime, an
+        ``AgentTool``, a unit test).
+    """
+    global _LAST_WORKSPACE
+    workspace = current_workspace()
+    if workspace is None:
+        return None
+    _LAST_WORKSPACE = Path(workspace)
+    return _LAST_WORKSPACE
+
+
+def last_seen_workspace() -> Path | None:
+    """The workspace observed by the last tool call. See :data:`_LAST_WORKSPACE`."""
+    return _LAST_WORKSPACE
+
+
+def _no_workspace_error() -> dict:
+    """The result to return when there is no workspace to write into.
+
+    :func:`~veadk.runtime.codex.current_workspace` returns ``None`` rather than
+    raising when no codex turn is on the stack, and the tool answers in kind:
+    an error result the model can read beats an exception it cannot.
+    """
+    return {
+        "status": "error",
+        "message": (
+            "no sandbox working directory on this call, so nothing was "
+            "written; this tool only works inside a codex turn."
+        ),
+    }
+
+
+def _resolve_in_workspace(workspace: Path, candidate: str) -> Path:
     """Resolve a model-supplied path, refusing anything outside the workspace.
 
     The argument comes from the model, so it is untrusted input: ``..``
     segments, absolute paths and symlinks pointing out of the workspace are all
-    rejected here rather than trusted.
+    rejected here rather than trusted. The workspace arrives as an argument
+    because it is a property of the *call* — this turn's directory — not a
+    constant of the module.
 
     Args:
+        workspace (Path): This turn's workspace, from :func:`_workspace`.
         candidate (str): Path as the model wrote it, relative to the workspace.
 
     Returns:
@@ -89,7 +139,7 @@ def _resolve_in_workspace(candidate: str) -> Path:
     Raises:
         ValueError: If the path escapes the workspace.
     """
-    root = WORKSPACE.resolve()
+    root = workspace.resolve()
     resolved = (root / candidate).resolve()
     if resolved != root and root not in resolved.parents:
         raise ValueError(f"path escapes the workspace: {candidate!r}")
@@ -111,6 +161,10 @@ def fetch_sales_extract(quarter: str) -> dict:
         directory), ``rows``, ``columns`` and ``bytes``. On failure,
         ``status="error"`` and a ``message`` saying what to try instead.
     """
+    workspace = _workspace()
+    if workspace is None:
+        return _no_workspace_error()
+
     normalized = quarter.strip().lower().replace("-", "").replace(" ", "")
     if not _QUARTER_RE.match(normalized):
         return {
@@ -129,7 +183,7 @@ def fetch_sales_extract(quarter: str) -> dict:
             "message": f"no extract for {quarter!r}; available: {available}",
         }
 
-    destination = WORKSPACE / "data" / source.name
+    destination = workspace / "data" / source.name
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source, destination)
 
@@ -140,7 +194,7 @@ def fetch_sales_extract(quarter: str) -> dict:
 
     return {
         "status": "ok",
-        "path": str(destination.relative_to(WORKSPACE)),
+        "path": str(destination.relative_to(workspace)),
         "rows": rows,
         "columns": header,
         "bytes": destination.stat().st_size,
@@ -166,8 +220,14 @@ def publish_report(report_path: str, chart_path: str) -> dict:
         its destination, size and content digest) and ``published_at``. On
         failure, ``status="error"`` and a ``message`` saying what to fix.
     """
+    workspace = _workspace()
+    if workspace is None:
+        return _no_workspace_error()
+
     try:
-        sources = [_resolve_in_workspace(p) for p in (report_path, chart_path)]
+        sources = [
+            _resolve_in_workspace(workspace, p) for p in (report_path, chart_path)
+        ]
     except ValueError as error:
         return {"status": "error", "message": str(error)}
 

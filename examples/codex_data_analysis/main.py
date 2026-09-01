@@ -64,7 +64,12 @@ from google.adk.skills import load_skill_from_dir
 from google.adk.tools.skill_toolset import SkillToolset
 from google.genai import types
 
-from analytics_tools import OUTBOX, WORKSPACE, fetch_sales_extract, publish_report
+from analytics_tools import (
+    OUTBOX,
+    fetch_sales_extract,
+    last_seen_workspace,
+    publish_report,
+)
 from veadk import Agent, Runner
 from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.runtime.codex import CodexRuntimeConfig
@@ -82,9 +87,6 @@ installed.
 
 Act, do not narrate. Never end a message with a plan you have not carried out:
 a reply that contains no tool call ends your turn and the work stops there.
-Nobody can answer you mid-turn, so never ask the user a question — decide and
-proceed. Create and edit files with `exec_command` and a heredoc
-(`cat > analyze.py <<'PY' ... PY`), not with `apply_patch`.
 
 How you work:
 
@@ -137,11 +139,13 @@ def build_agent() -> Agent:
             # Refuse every escalation Codex asks for. Never use "auto_review"
             # here: it is full auto-approval, not a review step.
             approval_mode="deny_all",
-            # Pinned so the ADK tools (which run in *this* process) know where
-            # the workspace is, and so you can read it afterwards. In a
-            # multi-tenant service, leave both unset — see the README.
-            workspace_root=str(WORKSPACE),
-            reuse_workspace=True,
+            # `workspace_root` and `reuse_workspace` are deliberately unset:
+            # each (app, user, session, agent) then gets its own directory,
+            # which still survives across the turns of that session. The two
+            # ADK tools find it with `current_workspace()` — see
+            # `analytics_tools.py`. Pinning would collapse every session onto
+            # one directory; the README says when that is worth doing.
+            #
             # ADK tool round-trips allowed for the whole turn. This agent needs
             # two (fetch + publish); the rest of the budget is for retries.
             max_tool_iterations=8,
@@ -150,11 +154,14 @@ def build_agent() -> Agent:
     )
 
 
-def _reset_run_dirs() -> None:
-    """Start from an empty workspace and outbox so the demo is reproducible."""
-    for directory in (WORKSPACE, OUTBOX):
-        shutil.rmtree(directory, ignore_errors=True)
-        directory.mkdir(parents=True, exist_ok=True)
+def _reset_outbox() -> None:
+    """Empty the outbox so the run's published files are the only ones in it.
+
+    The workspace needs no such reset: it is created per session under the
+    runtime's own temporary root, so this process starts with an empty one.
+    """
+    shutil.rmtree(OUTBOX, ignore_errors=True)
+    OUTBOX.mkdir(parents=True, exist_ok=True)
 
 
 def _truncate(value: Any, limit: int = 160) -> str:
@@ -210,7 +217,7 @@ def _print_tree(label: str, root: Path) -> None:
 
 
 async def main() -> None:
-    _reset_run_dirs()
+    _reset_outbox()
 
     runner = Runner(agent=build_agent(), short_term_memory=ShortTermMemory())
     await runner.short_term_memory.create_session(
@@ -233,8 +240,15 @@ async def main() -> None:
             _print_event(event)
 
     # The workspace is the agent's scratch space: its script and its drafts are
-    # still there. The outbox holds only what publish_report let through.
-    _print_tree("Workspace", WORKSPACE)
+    # still there. Printed here rather than left for you to `ls`, because the
+    # runtime removes its per-session workspaces when the process exits — pin
+    # `workspace_root` + `reuse_workspace` if you want to poke at one later.
+    # The outbox holds only what publish_report let through, and it persists.
+    workspace = last_seen_workspace()
+    if workspace is None:
+        print("\nWorkspace: no tool ran, so nothing reported a workspace.")
+    else:
+        _print_tree("Workspace", workspace)
     _print_tree("Outbox", OUTBOX)
 
 

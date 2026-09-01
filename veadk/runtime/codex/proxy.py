@@ -39,6 +39,7 @@ import os
 import secrets
 import threading
 import time
+import weakref
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Callable
@@ -89,6 +90,13 @@ def _shim_num_retries() -> int:
     the eval client's read timeout (default 300s) fired before any recovery.
     Retrying lets litellm apply its built-in exponential backoff. Env-tunable
     via ``CODEX_SHIM_NUM_RETRIES`` (default 2).
+
+    These are retries of a *failed* attempt, so they multiply HTTP requests but
+    not model calls: one charge against ``max_llm_calls`` can cost up to
+    ``1 + CODEX_SHIM_NUM_RETRIES`` requests, doubled again if
+    :func:`_call_backend_tolerating_reasoning` has to repair the request. See
+    ``ShimTurnContext.on_model_call`` for why the budget counts calls rather
+    than attempts.
     """
     try:
         return max(0, int(os.getenv("CODEX_SHIM_NUM_RETRIES", "2")))
@@ -135,23 +143,35 @@ def _shim_cache_max() -> int:
 
 
 def _shim_reserve_seconds() -> float:
-    """How long a shim handed out by :func:`get_shim` counts as busy.
+    """Floor on how long a shim handed out by :func:`get_shim` counts as busy.
 
     ``get_shim`` returns well before the caller can ``register_turn``: the Codex
-    runtime first prepares a workspace and a ``CODEX_HOME``, syncs skills, and
+    runtime first prepares a workspace, reaps stale ones (up to 16 ``rmtree``\ s
+    in a worker thread), prepares a ``CODEX_HOME``, syncs skills, and
     builds/resumes its toolsets (which connects MCP servers). Across that whole
     window the shim has no registered turn, so a concurrent ``get_shim`` for a
     different backend could evict it — stopping its server and releasing its
     port — and the turn would then register on a corpse and point Codex at a
     dead URL for its entire duration.
 
-    The reservation closes that window. It is a *deadline* rather than a
-    caller-released counter deliberately: a release call would itself have to
-    survive every exit path of an async generator (including the consumer
-    abandoning it mid-setup), and a missed release would pin a shim in the cache
-    forever. A deadline cannot be skipped, and :meth:`register_turn` consumes
-    the reservation atomically with inserting the turn, so the normal path never
-    waits for it to expire. Env-tunable via ``CODEX_SHIM_RESERVE_SECONDS``.
+    This value alone cannot close that window, because the window has no bound
+    the shim can know: MCP connect timeouts and workspace reaping are the
+    caller's business, and any constant is a guess that a slow setup outlives.
+    What actually holds the reservation open is the :class:`ShimLease`
+    ``get_shim`` returns — the shim keeps only a weak reference to it, so the
+    reservation lives exactly as long as the caller's own reference does, for
+    any setup duration. This deadline is the *floor* underneath that, for a
+    caller that keeps only the URL and drops the lease (:func:`get_shim_url`)
+    or that never held one at all.
+
+    Neither half is a caller-released counter, and that is deliberate: a release
+    call would have to survive every exit path of an async generator (including
+    a consumer abandoning it mid-setup), and one missed release would pin a shim
+    in the cache forever. Dropping the last reference to a lease is not a call
+    that can be missed — the interpreter always makes it, on every exit path —
+    and :meth:`register_turn` consumes the reservation atomically with inserting
+    the turn, so the normal path never waits for the floor to expire.
+    Env-tunable via ``CODEX_SHIM_RESERVE_SECONDS``; ``0`` disables reservations.
     """
     try:
         return max(0.0, float(os.getenv("CODEX_SHIM_RESERVE_SECONDS", "60")))
@@ -430,12 +450,99 @@ class ShimTurnContext:
     # OTel context captured on the invocation's own task, re-attached around
     # tool execution so ADK `execute_tool` spans keep their real parent.
     otel_context: Any = None
-    # Charged once per backend model call. ADK's `max_llm_calls` budget lives on
-    # the InvocationContext, and the real model calls happen here rather than in
-    # the runtime, so the runtime hands the counter down. Raising from it aborts
-    # the turn (see `TurnToolState.error`).
+    # Charged once per *model call* — one iteration of the shim's tool loop —
+    # not once per HTTP request. ADK's `max_llm_calls` budget lives on the
+    # InvocationContext, and the real model calls happen here rather than in the
+    # runtime, so the runtime hands the counter down. Raising from it aborts the
+    # turn (see `TurnToolState.error`).
+    #
+    # Calls, not attempts, is the deliberate reading and it matches the `adk`
+    # arm: ADK charges `increment_llm_call_count` once per `BaseLlmFlow` call
+    # while litellm's own `num_retries` re-attempts underneath it, so counting
+    # HTTP requests here would make the same agent hit `max_llm_calls` at
+    # different points on the two runtimes and break the differential parity the
+    # suite asserts. It is also the reading that means something: a retried
+    # attempt produced no response and (on a completion-billed backend such as
+    # Ark) no charge, so counting it would spend a budget the user is not
+    # paying. The fan-out is bounded and worth stating -- one charge admits at
+    # most `1 + CODEX_SHIM_NUM_RETRIES` requests, and up to twice that if
+    # `_call_backend_tolerating_reasoning` retries the request without Codex's
+    # replayed reasoning items (that repair is the *same* logical call: the
+    # first attempt was rejected outright, so it never produced a response).
     on_model_call: Callable[[], None] | None = None
     state: TurnToolState = field(default_factory=TurnToolState)
+
+
+@dataclass
+class _Reservation:
+    """One outstanding ``get_shim`` -> ``register_turn`` handoff.
+
+    Two independent things keep it alive, and either suffices:
+
+    * ``holder`` — a weak reference to the :class:`ShimLease` handed to the
+      caller. While that reference is alive the handoff is still in progress,
+      however long the caller's setup takes.
+    * ``deadline`` — the ``CODEX_SHIM_RESERVE_SECONDS`` floor, for a caller that
+      kept only the shim's URL and dropped the lease.
+    """
+
+    deadline: float
+    holder: "weakref.ReferenceType[ShimLease]"
+
+    def is_live(self, now: float) -> bool:
+        return self.holder() is not None or self.deadline > now
+
+
+class ShimLease:
+    """A shim borrowed from the process-wide cache, plus its reservation.
+
+    :func:`get_shim` returns one of these rather than the bare
+    :class:`ResponsesShim`. Every attribute access delegates to the shim, so a
+    caller uses it exactly as it used the shim; what the lease adds is
+    *liveness*. The shim holds only a weak reference back, so the reservation
+    that keeps it un-evictable lasts precisely as long as the caller's own
+    reference to this object — the entire ``get_shim`` -> ``register_turn``
+    setup, whatever that costs on the day, and not one moment past the frame
+    that owns it.
+
+    That is deliberately not a release call: there is nothing to call, so there
+    is nothing to miss on an exception, a ``GeneratorExit``, or a consumer that
+    abandons the runtime's async generator mid-setup — the interpreter drops the
+    reference on every one of those paths. The only way to pin a shim is to keep
+    a lease alive on purpose, which is an explicit strong reference and no
+    different from keeping the shim itself.
+
+    :meth:`register_turn` is overridden so the turn consumes *this* caller's
+    reservation and no one else's; see :meth:`ResponsesShim.register_turn`.
+    """
+
+    __slots__ = ("_shim", "_reservation_id", "__weakref__")
+
+    def __init__(self, shim: ResponsesShim) -> None:
+        self._shim = shim
+        self._reservation_id: int | None = None
+
+    @property
+    def shim(self) -> ResponsesShim:
+        """The leased shim itself, for a caller that needs it unwrapped."""
+        return self._shim
+
+    def register_turn(self, *args: Any, **kwargs: Any) -> str:
+        """:meth:`ResponsesShim.register_turn`, consuming this reservation."""
+        kwargs.setdefault("reservation", self)
+        return self._shim.register_turn(*args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        # Both slots are assigned in `__init__`, so normal lookup finds them and
+        # this is never reached for them on a built object. Guarding anyway:
+        # on a half-built one (unpickling, a subclass that skips `__init__`)
+        # delegating `_shim` would recurse until the stack ran out.
+        if name in ("_shim", "_reservation_id"):
+            raise AttributeError(name)
+        return getattr(self._shim, name)
+
+    def __repr__(self) -> str:
+        return f"ShimLease(url={getattr(self._shim, 'url', None)!r})"
 
 
 class ResponsesShim:
@@ -468,9 +575,11 @@ class ResponsesShim:
         # subprocess as its provider API key and arrives as a Bearer token, so
         # concurrent turns can never overwrite one another's tools/context.
         self._turns: dict[str, ShimTurnContext] = {}
-        # Deadlines for shims handed out by `get_shim` whose turn has not been
-        # registered yet; see `_shim_reserve_seconds`.
-        self._reservations: list[float] = []
+        # Outstanding `get_shim` handoffs whose turn has not been registered
+        # yet, keyed by an id that is never reused so one caller can only ever
+        # consume its own; see `_shim_reserve_seconds` and `ShimLease`.
+        self._reservations: dict[int, _Reservation] = {}
+        self._reservation_seq = 0
         self._turns_lock = threading.Lock()
         self._app = self._build_app()
 
@@ -490,19 +599,42 @@ class ResponsesShim:
             return bool(self._reservations)
 
     def _prune_reservations_locked(self) -> None:
+        """Drop reservations whose lease is gone *and* whose floor has passed."""
         now = time.monotonic()
-        self._reservations = [
-            deadline for deadline in self._reservations if deadline > now
-        ]
+        for reservation_id in [
+            key
+            for key, reservation in self._reservations.items()
+            if not reservation.is_live(now)
+        ]:
+            del self._reservations[reservation_id]
 
-    def reserve(self) -> None:
-        """Mark this shim busy until a turn registers or the window lapses."""
+    def reserve(self) -> ShimLease:
+        """Borrow this shim, keeping it un-evictable while the caller sets up.
+
+        Returns:
+            ShimLease: A handle that delegates every attribute to this shim.
+            Hold it for the whole ``get_shim`` -> ``register_turn`` handoff: the
+            handle *is* the reservation, and the shim tracks it weakly, so
+            letting go of it releases the reservation (no sooner than the
+            ``CODEX_SHIM_RESERVE_SECONDS`` floor, which covers a caller that
+            keeps only the URL). Registering a turn through the handle consumes
+            it immediately.
+        """
+        lease = ShimLease(self)
         window = _shim_reserve_seconds()
         if window <= 0:
-            return
+            # Reservations disabled by config. The lease is still returned so
+            # callers need no branch of their own; it simply protects nothing.
+            return lease
         with self._turns_lock:
             self._prune_reservations_locked()
-            self._reservations.append(time.monotonic() + window)
+            self._reservation_seq += 1
+            reservation_id = self._reservation_seq
+            self._reservations[reservation_id] = _Reservation(
+                deadline=time.monotonic() + window, holder=weakref.ref(lease)
+            )
+            lease._reservation_id = reservation_id
+        return lease
 
     def register_turn(
         self,
@@ -513,6 +645,7 @@ class ResponsesShim:
         invocation_id: str = "",
         model_extra_config: dict[str, Any] | None = None,
         on_model_call: Callable[[], None] | None = None,
+        reservation: ShimLease | None = None,
     ) -> str:
         """Register one invocation's routing state; returns its bearer token.
 
@@ -525,10 +658,15 @@ class ResponsesShim:
                 (``extra_headers``/``extra_body``), forwarded to the backend on
                 every call of this turn. Defaults to no extra config.
             on_model_call: Charged once per backend model call, before the call
-                is made. Used to enforce ADK's ``RunConfig.max_llm_calls``,
-                whose counter lives on the invocation the runtime owns. Raising
-                from it aborts the turn; the exception is recorded on the turn
-                state and surfaced to Codex as a ``429``.
+                is made -- per *call*, not per HTTP attempt; see
+                ``ShimTurnContext.on_model_call``. Used to enforce ADK's
+                ``RunConfig.max_llm_calls``, whose counter lives on the
+                invocation the runtime owns. Raising from it aborts the turn;
+                the exception is recorded on the turn state and surfaced to
+                Codex as a ``429``.
+            reservation: The lease :func:`get_shim` handed this caller, whose
+                reservation the new turn takes over. Callers that never reserved
+                (tests, embedders) leave it unset and consume nothing.
         """
         token = secrets.token_urlsafe(32)
         headers, body = _split_model_extra_config(model_extra_config)
@@ -551,11 +689,18 @@ class ResponsesShim:
             on_model_call=on_model_call,
         )
         with self._turns_lock:
-            # Consume one `get_shim` reservation in the same critical section
-            # that publishes the turn, so the shim is continuously `busy` across
-            # the handoff and can never be evicted between the two.
-            if self._reservations:
-                self._reservations.pop(0)
+            # Consume *this caller's* reservation -- and only it -- in the same
+            # critical section that publishes the turn, so the shim is
+            # continuously `busy` across the handoff and can never be evicted
+            # between the two. Popping an arbitrary reservation instead would
+            # make a caller that never reserved (registering directly, which is
+            # supported) cancel the protection of whichever *other* caller is in
+            # setup right now, re-opening for that turn exactly the window this
+            # exists to close.
+            self._prune_reservations_locked()
+            reservation_id = getattr(reservation, "_reservation_id", None)
+            if reservation_id is not None:
+                self._reservations.pop(reservation_id, None)
             self._turns[token] = context
         logger.debug(
             "codex_shim_turn_registered invocation_id=%s tool_count=%d "
@@ -1677,6 +1822,32 @@ async def _synth_failed_sse(
 # retained in a module global.
 _SHIMS: "OrderedDict[tuple[str, str], ResponsesShim]" = OrderedDict()
 
+# Guards every read-modify-write of `_SHIMS` and `_RETIRED`.
+#
+# A `threading.Lock` rather than an asyncio primitive, and not merely "no awaits
+# in this block": that argument only makes a block atomic against other
+# coroutines *on one event loop*, and this cache is explicitly designed to be
+# shared across them -- `ResponsesShim.usable_on` exists for "a serverless
+# worker that runs each invocation under its own `asyncio.run`". Two such
+# workers on two threads both missed the cache and both built a `ResponsesShim`;
+# the second `_SHIMS[key] = shim` orphaned the first, which then bound a port in
+# `start()` while being reachable from nothing -- not `_evict_idle_shims`, not
+# `shutdown_shims`, not `_close_shims_at_exit` -- so the socket leaked for the
+# life of the process. `TurnToolState` and the reservations were already
+# thread-safe; the cache holding them was not.
+#
+# Held only across dict operations, never across an await: a coroutine that
+# blocked here while holding it would deadlock its own loop.
+_SHIMS_LOCK = threading.Lock()
+
+# Shims removed from `_SHIMS` while still busy. A shim whose event loop no
+# longer matches the caller's must leave the cache, but force-closing one that
+# another loop's turn is still using would kill that turn, and simply dropping
+# the reference would leak its port exactly the way an orphan does. They are
+# parked here instead -- still serving, still reachable -- and closed by the
+# next sweep once they go idle, or by shutdown/atexit.
+_RETIRED: "list[ResponsesShim]" = []
+
 
 def _credential_fingerprint(api_key: str) -> str:
     if not api_key:
@@ -1684,61 +1855,103 @@ def _credential_fingerprint(api_key: str) -> str:
     return hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:32]
 
 
-async def get_shim(api_base: str, api_key: str) -> ResponsesShim:
-    """Return a started shim for the given backend, creating it if needed."""
+async def get_shim(api_base: str, api_key: str) -> ShimLease:
+    """Return a started shim for the given backend, creating it if needed.
+
+    Returns:
+        ShimLease: The shim, wrapped in the reservation that keeps it out of the
+        LRU's reach. Every attribute delegates to the shim, so it is used the
+        same way — but **hold the lease** for as long as the shim is needed:
+        letting go of it is what tells the cache the handoff is over. See
+        :class:`ShimLease`.
+    """
     key = (api_base, _credential_fingerprint(api_key))
     loop = asyncio.get_running_loop()
-    # This block performs no awaits, so it is atomic with respect to other
-    # coroutines; concurrent callers therefore share one instance, and
-    # `ResponsesShim.start()` serializes the actual bind.
-    shim = _SHIMS.get(key)
-    if shim is not None and not shim.usable_on(loop):
-        logger.warning("codex_shim_discarded reason=event_loop_changed_or_closed")
-        _SHIMS.pop(key, None)
-        shim.force_close()
-        shim = None
-    if shim is None:
-        shim = ResponsesShim(api_base=api_base, api_key=api_key)
-        _SHIMS[key] = shim
-    _SHIMS.move_to_end(key)
+    stale: ResponsesShim | None = None
+    retired: ResponsesShim | None = None
+    with _SHIMS_LOCK:
+        shim = _SHIMS.get(key)
+        if shim is not None and not shim.usable_on(loop):
+            del _SHIMS[key]
+            # Busy means another loop's turn is being served on it right now,
+            # so it is closed later (`_RETIRED`) rather than under that turn.
+            if shim.busy:
+                _RETIRED.append(shim)
+                retired = shim
+            else:
+                stale = shim
+            shim = None
+        if shim is None:
+            shim = ResponsesShim(api_base=api_base, api_key=api_key)
+            _SHIMS[key] = shim
+        _SHIMS.move_to_end(key)
+        # Reserved inside the same critical section that publishes the shim, so
+        # it is `busy` from the instant it becomes reachable: an `await` follows
+        # immediately below, and until this point a concurrent `get_shim` could
+        # evict a brand-new shim before its owner had ever been protected.
+        lease = shim.reserve()
+    if stale is not None or retired is not None:
+        logger.warning(
+            "codex_shim_discarded reason=event_loop_changed_or_closed retired=%s",
+            retired is not None,
+        )
+    if stale is not None:
+        stale.force_close()
 
     try:
         await shim.start()
     except BaseException:
-        if _SHIMS.get(key) is shim:
-            del _SHIMS[key]
+        with _SHIMS_LOCK:
+            if _SHIMS.get(key) is shim:
+                del _SHIMS[key]
         shim.force_close()
         raise
 
-    # Reserve before evicting, so this call's own shim is never the victim, and
-    # so it stays un-evictable while the caller finishes the setup that must
-    # happen before it can `register_turn`.
-    shim.reserve()
     await _evict_idle_shims()
-    return shim
+    return lease
 
 
 async def _evict_idle_shims() -> None:
     """Drop least-recently-used shims that have no registered turn."""
+    with _SHIMS_LOCK:
+        idle_retired = [shim for shim in _RETIRED if not shim.busy]
+        for shim in idle_retired:
+            _RETIRED.remove(shim)
+    for shim in idle_retired:
+        await shim.stop()
+
     limit = _shim_cache_max()
-    while len(_SHIMS) > limit:
-        victim_key = next((k for k, s in _SHIMS.items() if not s.busy), None)
-        if victim_key is None:
-            logger.warning(
-                "codex_shim_cache_over_limit size=%d limit=%d reason=all_busy",
-                len(_SHIMS),
-                limit,
-            )
-            return
-        victim = _SHIMS.pop(victim_key)
-        logger.info("codex_shim_evicted cache_size=%d limit=%d", len(_SHIMS), limit)
+    while True:
+        with _SHIMS_LOCK:
+            if len(_SHIMS) <= limit:
+                return
+            # The `busy` test and the pop have to be one critical section: a
+            # shim that reads idle here must still be idle when it is removed,
+            # or a turn registering in between is stopped out from under.
+            victim_key = next((k for k, s in _SHIMS.items() if not s.busy), None)
+            if victim_key is None:
+                logger.warning(
+                    "codex_shim_cache_over_limit size=%d limit=%d reason=all_busy",
+                    len(_SHIMS),
+                    limit,
+                )
+                return
+            victim = _SHIMS.pop(victim_key)
+            size = len(_SHIMS)
+        logger.info("codex_shim_evicted cache_size=%d limit=%d", size, limit)
         await victim.stop()
 
 
 async def shutdown_shims() -> None:
     """Stop every cached shim. Call on worker/app shutdown for a clean drain."""
-    while _SHIMS:
-        _, shim = _SHIMS.popitem()
+    while True:
+        with _SHIMS_LOCK:
+            if _SHIMS:
+                _, shim = _SHIMS.popitem()
+            elif _RETIRED:
+                shim = _RETIRED.pop()
+            else:
+                return
         await shim.stop()
 
 
@@ -1747,13 +1960,27 @@ async def shutdown_shims() -> None:
 @atexit.register
 def _close_shims_at_exit() -> None:
     """Last-resort teardown: release listening sockets at interpreter exit."""
-    while _SHIMS:
-        with contextlib.suppress(Exception):
-            _, shim = _SHIMS.popitem()
-            shim.force_close()
+    # Best-effort on the lock: at exit a daemon thread may still hold it, and
+    # blocking forever here would hang the interpreter on the way out. Releasing
+    # the sockets matters more than the critical section, so a failed acquire
+    # falls through and drains anyway.
+    acquired = _SHIMS_LOCK.acquire(timeout=1.0)
+    try:
+        while _SHIMS or _RETIRED:
+            with contextlib.suppress(Exception):
+                shim = _SHIMS.popitem()[1] if _SHIMS else _RETIRED.pop()
+                shim.force_close()
+    finally:
+        if acquired:
+            _SHIMS_LOCK.release()
 
 
 async def get_shim_url(api_base: str, api_key: str) -> str:
-    """Return a started shim URL for the given backend, creating it if needed."""
-    shim = await get_shim(api_base, api_key)
-    return shim.url or ""
+    """Return a started shim URL for the given backend, creating it if needed.
+
+    The lease is dropped on return, so the shim is protected only by the
+    ``CODEX_SHIM_RESERVE_SECONDS`` floor. Callers that need the shim for a whole
+    turn should use :func:`get_shim` and keep the lease.
+    """
+    lease = await get_shim(api_base, api_key)
+    return lease.url or ""
