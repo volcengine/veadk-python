@@ -41,6 +41,7 @@ logger = get_logger(__name__)
 
 EventSink = Callable[[Event], Awaitable[None]]
 Executor = Callable[[dict[str, Any], str], Awaitable[Any]]
+TRANSFERRED_STATUS = "transferred"
 
 _TOOL_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 _MAX_TOOL_RESULT_CHARS = 20000
@@ -372,6 +373,14 @@ def _make_executor(
         elif getattr(actions, "requested_tool_confirmations", None):
             status = "confirmation_required"
             payload = {"status": status, "call_id": call_id, "response": payload}
+        elif getattr(actions, "transfer_to_agent", None):
+            status = TRANSFERRED_STATUS
+            payload = {
+                "status": status,
+                "call_id": call_id,
+                "agent_name": actions.transfer_to_agent,
+                "response": payload,
+            }
         else:
             response = responses[0].response if responses else {}
             status = (
@@ -409,6 +418,12 @@ def _error_response_event(
 
 class _NoopPluginManager:
     plugins: ClassVar[list[Any]] = []
+
+    async def run_before_agent_callback(self, **_: Any) -> Any:
+        return None
+
+    async def run_after_agent_callback(self, **_: Any) -> Any:
+        return None
 
     async def run_before_model_callback(self, **_: Any) -> Any:
         return None

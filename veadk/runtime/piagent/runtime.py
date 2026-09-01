@@ -20,6 +20,13 @@ import asyncio
 from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING
 
+from veadk.runtime.agent_transfer import (
+    append_transfer_instructions,
+    build_transfer_tool,
+    get_transfer_targets,
+    run_transferred_agent,
+    transfer_agent_name,
+)
 from veadk.runtime.base_runtime import BaseRuntime
 from veadk.runtime.model_callbacks import (
     build_runtime_llm_request,
@@ -37,6 +44,7 @@ from veadk.runtime.piagent.installer import resolve_or_install_piagent_binary
 from veadk.runtime.piagent.skills import materialize_skills_for_pi
 from veadk.runtime.piagent.tool_runtime import PiToolRuntime
 from veadk.runtime.piagent.tools_bridge import (
+    add_tool_to_bundle,
     build_executable_tools,
     close_toolsets,
     sync_bundle_to_tools_dict,
@@ -79,6 +87,15 @@ class PiAgentRuntime(BaseRuntime):
             tool_bundle = await build_executable_tools(
                 agent, ctx, event_sink=_emit_tool_event
             )
+            transfer_targets = get_transfer_targets(agent)
+            if transfer_targets:
+                add_tool_to_bundle(
+                    tool_bundle,
+                    build_transfer_tool(transfer_targets),
+                    ctx,
+                    seen={spec.name for spec in tool_bundle.specs},
+                    event_sink=_emit_tool_event,
+                )
 
             runtime_call = await build_runtime_llm_request(
                 agent,
@@ -106,6 +123,12 @@ class PiAgentRuntime(BaseRuntime):
                 ctx,
                 event_sink=_emit_tool_event,
             )
+            if "transfer_to_agent" in runtime_call.llm_request.tools_dict:
+                append_transfer_instructions(
+                    agent,
+                    runtime_call.llm_request,
+                    transfer_targets,
+                )
             prompt = build_prompt_from_llm_request(runtime_call.llm_request)
 
             logger.info(
@@ -152,12 +175,28 @@ class PiAgentRuntime(BaseRuntime):
                             if isinstance(queued, BaseException):
                                 raise queued
                             event = queued  # type: ignore[assignment]
+                            transfer_target = transfer_agent_name(event)
                             if buffer_final_text and is_final_model_text_event(
                                 event, agent.name
                             ):
                                 final_text_events.append(event)
                                 continue
                             yield event
+                            if transfer_target:
+                                final_text_events.clear()
+                                async for transferred_event in run_transferred_agent(
+                                    ctx,
+                                    event,
+                                ):
+                                    _scope_event(transferred_event, ctx)
+                                    yield transferred_event
+                                if pump is not None and not pump.done():
+                                    pump.cancel()
+                                    await asyncio.gather(
+                                        pump,
+                                        return_exceptions=True,
+                                    )
+                                return
                         await pump
                     except Exception as e:
                         if pump is not None and not pump.done():
@@ -195,3 +234,8 @@ class PiAgentRuntime(BaseRuntime):
             if tool_bundle is not None:
                 await close_toolsets(tool_bundle.opened_toolsets)
             skill_bundle.close()
+
+
+def _scope_event(event: Event, ctx: InvocationContext) -> None:
+    event.branch = getattr(ctx, "branch", None)
+    event.isolation_scope = getattr(ctx, "isolation_scope", None)

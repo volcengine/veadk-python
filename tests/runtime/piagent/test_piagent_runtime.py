@@ -19,12 +19,17 @@ import json
 import stat
 import sys
 import tarfile
+from collections.abc import AsyncGenerator
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from google.adk.agents.base_agent import BaseAgent
+from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events.event import Event
 from google.adk.models.llm_response import LlmResponse
+from google.adk.sessions.in_memory_session_service import InMemorySessionService
+from google.adk.sessions.session import Session
 from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.base_toolset import BaseToolset
 from google.adk.tools.function_tool import FunctionTool
@@ -33,6 +38,7 @@ from google.genai import types
 
 from veadk import Agent
 from veadk.runtime import get_runtime
+from veadk.runtime.agent_transfer import build_transfer_tool
 from veadk.runtime.piagent import installer
 from veadk.runtime.piagent.client import PiAgentRpcClient
 from veadk.runtime.piagent.config import PiAgentConfig, PiAgentModelConfig
@@ -46,6 +52,7 @@ from veadk.runtime.piagent.tool_runtime import PiToolRuntime, render_extension
 from veadk.runtime.piagent.tools_bridge import (
     PiToolBundle,
     PiToolSpec,
+    add_tool_to_bundle,
     build_executable_tools,
     close_toolsets,
 )
@@ -76,6 +83,22 @@ def _fake_ctx(*events: Event):
         session=SimpleNamespace(events=list(events), state={}),
         branch=None,
         plugin_manager=None,
+    )
+
+
+def _ctx(agent, *events: Event, user_content=None) -> InvocationContext:
+    return InvocationContext(
+        session_service=InMemorySessionService(),
+        invocation_id="inv-1",
+        agent=agent,
+        user_content=user_content,
+        session=Session(
+            id="session-1",
+            appName="app",
+            userId="user",
+            state={},
+            events=list(events),
+        ),
     )
 
 
@@ -119,6 +142,23 @@ class _NamedTool(BaseTool):
 
     async def run_async(self, *, args, tool_context):
         return {"name": self.name, "args": args}
+
+
+class _TextAgent(BaseAgent):
+    marker: str
+
+    async def _run_async_impl(
+        self,
+        ctx: InvocationContext,
+    ) -> AsyncGenerator[Event, None]:
+        yield Event(
+            invocation_id=ctx.invocation_id,
+            author=self.name,
+            content=types.Content(
+                role="model",
+                parts=[types.Part(text=self.marker)],
+            ),
+        )
 
 
 def _make_fake_pi(tmp_path):
@@ -233,8 +273,16 @@ for raw in sys.stdin:
     return path, prompt_path
 
 
-def _make_fake_pi_that_calls_bridge(tmp_path, *, tool_name: str = "get_weather"):
+def _make_fake_pi_that_calls_bridge(
+    tmp_path,
+    *,
+    tool_name: str = "get_weather",
+    tool_args: dict | None = None,
+    text_after_tool: str = "done",
+):
     path = tmp_path / "pi"
+    tool_args = tool_args or {"city": "Beijing"}
+    tool_args_json = json.dumps(tool_args)
     path.write_text(
         f"""#!/usr/bin/env python3
 import json
@@ -260,12 +308,12 @@ for raw in sys.stdin:
             "type": "tool_execution_start",
             "toolCallId": "call-weather",
             "toolName": {tool_name!r},
-            "args": {{"city": "Beijing"}},
+            "args": {tool_args_json},
         }}), flush=True)
         body = json.dumps({{
             "toolName": {tool_name!r},
             "toolCallId": "call-weather",
-            "args": {{"city": "Beijing"}},
+            "args": {tool_args_json},
         }}).encode()
         request = urllib.request.Request(
             bridge_url + "/call",
@@ -288,9 +336,9 @@ for raw in sys.stdin:
         print(json.dumps({{
             "type": "message_update",
             "assistantMessageEvent": {{
-                "type": "text_delta",
-                "delta": "done",
-            }},
+            "type": "text_delta",
+            "delta": {text_after_tool!r},
+        }},
         }}), flush=True)
         print(json.dumps({{"type": "agent_settled"}}), flush=True)
         break
@@ -1244,6 +1292,47 @@ async def test_build_executable_tools_runs_adk_tool_lifecycle_callbacks():
     assert emitted[1].get_function_responses()[0].id == "call-weather"
 
 
+@pytest.mark.asyncio
+async def test_transfer_tool_executor_emits_adk_transfer_action():
+    worker = _TextAgent(name="worker", marker="worker handled it")
+    agent = Agent(
+        name="assistant",
+        instruction="Route to workers when appropriate.",
+        model_name="model-a",
+        model_api_base="https://ark.example.com/api/v3/",
+        model_api_key="test-key",
+        model_api_key_name="",
+        runtime="piagent",
+        sub_agents=[worker],
+    )
+    ctx = _ctx(agent)
+    emitted: list[Event] = []
+
+    async def emit(event: Event) -> None:
+        emitted.append(event)
+
+    bundle = await build_executable_tools(agent, ctx, event_sink=emit)
+    add_tool_to_bundle(
+        bundle,
+        build_transfer_tool([worker]),
+        ctx,
+        seen={spec.name for spec in bundle.specs},
+        event_sink=emit,
+    )
+
+    output = await bundle.executors["transfer_to_agent"](
+        {"agent_name": "worker"},
+        "call-transfer",
+    )
+
+    assert output["status"] == "transferred"
+    assert output["agent_name"] == "worker"
+    assert bundle.specs[0].parameters["properties"]["agent_name"]["enum"] == ["worker"]
+    assert emitted[0].get_function_calls()[0].name == "transfer_to_agent"
+    assert emitted[0].get_function_calls()[0].id == "call-transfer"
+    assert any(event.actions.transfer_to_agent == "worker" for event in emitted)
+
+
 def test_render_extension_uses_pi_tool_shape():
     spec = PiToolSpec(
         name="get_weather",
@@ -1484,6 +1573,190 @@ async def test_piagent_runtime_exposes_before_model_added_tools(
 
 
 @pytest.mark.asyncio
+async def test_piagent_runtime_runs_transferred_agent(tmp_path, monkeypatch):
+    worker = _TextAgent(name="worker", marker="worker handled it")
+    binary = _make_fake_pi_that_calls_bridge(
+        tmp_path,
+        tool_name="transfer_to_agent",
+        tool_args={"agent_name": "worker"},
+        text_after_tool="root text should not leak",
+    )
+    agent_dir = tmp_path / "agent-home"
+    monkeypatch.setenv("PIAGENT_BINARY", str(binary))
+    monkeypatch.setenv("PIAGENT_AGENT_DIR", str(agent_dir))
+
+    agent = Agent(
+        name="assistant",
+        description="Routes specialist work.",
+        instruction="Transfer implementation work to worker.",
+        model_name="model-a",
+        model_api_base="https://ark.example.com/api/v3/",
+        model_api_key="test-key",
+        model_api_key_name="",
+        runtime="piagent",
+        sub_agents=[worker],
+    )
+    ctx = _ctx(agent, _user_event("please ask worker"))
+
+    events = [event async for event in PiAgentRuntime().run_async(agent, ctx)]
+    function_calls = [
+        part.function_call
+        for event in events
+        for part in event.content.parts
+        if part.function_call
+    ]
+    transfer_events = [
+        event for event in events if event.actions.transfer_to_agent == "worker"
+    ]
+    texts = [
+        part.text
+        for event in events
+        for part in (event.content.parts if event.content else [])
+        if part.text
+    ]
+
+    assert [call.name for call in function_calls] == ["transfer_to_agent"]
+    assert len(transfer_events) == 1
+    assert "worker handled it" in texts
+    assert "root text should not leak" not in texts
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("target", "expected_text"),
+    [
+        ("planner", "planner handled it"),
+        ("coder", "coder handled it"),
+        ("reviewer", "reviewer handled it"),
+    ],
+)
+async def test_piagent_runtime_transfers_to_selected_sub_agent(
+    tmp_path,
+    monkeypatch,
+    target,
+    expected_text,
+):
+    sub_agents = [
+        _TextAgent(name="planner", marker="planner handled it"),
+        _TextAgent(name="coder", marker="coder handled it"),
+        _TextAgent(name="reviewer", marker="reviewer handled it"),
+    ]
+    binary = _make_fake_pi_that_calls_bridge(
+        tmp_path,
+        tool_name="transfer_to_agent",
+        tool_args={"agent_name": target},
+        text_after_tool="root text should not leak",
+    )
+    agent_dir = tmp_path / "agent-home"
+    monkeypatch.setenv("PIAGENT_BINARY", str(binary))
+    monkeypatch.setenv("PIAGENT_AGENT_DIR", str(agent_dir))
+
+    agent = Agent(
+        name="assistant",
+        description="Routes specialist work.",
+        instruction="Transfer work to the right specialist.",
+        model_name="model-a",
+        model_api_base="https://ark.example.com/api/v3/",
+        model_api_key="test-key",
+        model_api_key_name="",
+        runtime="piagent",
+        sub_agents=sub_agents,
+    )
+    ctx = _ctx(agent, _user_event(f"please ask {target}"))
+
+    events = [event async for event in PiAgentRuntime().run_async(agent, ctx)]
+    function_calls = [
+        part.function_call
+        for event in events
+        for part in event.content.parts
+        if part.function_call
+    ]
+    transfer_events = [
+        event for event in events if event.actions.transfer_to_agent == target
+    ]
+    texts = [
+        part.text
+        for event in events
+        for part in (event.content.parts if event.content else [])
+        if part.text
+    ]
+
+    assert [call.name for call in function_calls] == ["transfer_to_agent"]
+    assert function_calls[0].args == {"agent_name": target}
+    assert len(transfer_events) == 1
+    assert any(event.author == target for event in events)
+    assert expected_text in texts
+    assert "root text should not leak" not in texts
+
+
+@pytest.mark.asyncio
+async def test_piagent_runtime_rejects_unknown_transfer_target(tmp_path, monkeypatch):
+    worker = _TextAgent(name="worker", marker="worker handled it")
+    binary = _make_fake_pi_that_calls_bridge(
+        tmp_path,
+        tool_name="transfer_to_agent",
+        tool_args={"agent_name": "missing_agent"},
+        text_after_tool="root text should not leak",
+    )
+    agent_dir = tmp_path / "agent-home"
+    monkeypatch.setenv("PIAGENT_BINARY", str(binary))
+    monkeypatch.setenv("PIAGENT_AGENT_DIR", str(agent_dir))
+
+    agent = Agent(
+        name="assistant",
+        description="Routes specialist work.",
+        instruction="Transfer work to the right specialist.",
+        model_name="model-a",
+        model_api_base="https://ark.example.com/api/v3/",
+        model_api_key="test-key",
+        model_api_key_name="",
+        runtime="piagent",
+        sub_agents=[worker],
+    )
+    ctx = _ctx(agent, _user_event("please ask missing_agent"))
+
+    events: list[Event] = []
+    with pytest.raises(ValueError, match="Agent missing_agent not found"):
+        async for event in PiAgentRuntime().run_async(agent, ctx):
+            events.append(event)
+
+    assert any(event.actions.transfer_to_agent == "missing_agent" for event in events)
+    assert all(event.author != "worker" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_piagent_runtime_appends_transfer_instructions(tmp_path, monkeypatch):
+    worker = _TextAgent(
+        name="worker",
+        description="Handles implementation work.",
+        marker="worker handled it",
+    )
+    binary, prompt_path = _make_fake_pi_with_prompt_capture(tmp_path)
+    agent_dir = tmp_path / "agent-home"
+    monkeypatch.setenv("PIAGENT_BINARY", str(binary))
+    monkeypatch.setenv("PIAGENT_AGENT_DIR", str(agent_dir))
+
+    agent = Agent(
+        name="assistant",
+        instruction="Route work when needed.",
+        model_name="model-a",
+        model_api_base="https://ark.example.com/api/v3/",
+        model_api_key="test-key",
+        model_api_key_name="",
+        runtime="piagent",
+        sub_agents=[worker],
+    )
+    ctx = _ctx(agent, _user_event("please ask worker"))
+
+    _events = [event async for event in PiAgentRuntime().run_async(agent, ctx)]
+
+    prompt = prompt_path.read_text(encoding="utf-8")
+    assert "transfer_to_agent" in prompt
+    assert "`worker`" in prompt
+    assert "Handles implementation work." in prompt
+
+
+@pytest.mark.asyncio
 async def test_piagent_runtime_closes_opened_toolsets(tmp_path, monkeypatch):
     def get_weather(city: str) -> dict[str, str]:
         """Get weather.
@@ -1556,6 +1829,40 @@ async def test_piagent_runtime_syncs_tools_after_before_model_callback(
         before_model_callback=before_model_callback,
     )
     ctx = _fake_ctx(_user_event("ping"))
+
+    _events = [event async for event in PiAgentRuntime().run_async(agent, ctx)]
+
+    argv = json.loads(argv_path.read_text(encoding="utf-8"))
+    assert "--extension" not in argv
+
+
+@pytest.mark.asyncio
+async def test_piagent_runtime_before_model_can_remove_transfer_tool(
+    tmp_path,
+    monkeypatch,
+):
+    worker = _TextAgent(name="worker", marker="worker handled it")
+
+    def before_model_callback(callback_context, llm_request):
+        llm_request.tools_dict.clear()
+
+    binary, argv_path = _make_fake_pi_with_argv_capture(tmp_path)
+    agent_dir = tmp_path / "agent-home"
+    monkeypatch.setenv("PIAGENT_BINARY", str(binary))
+    monkeypatch.setenv("PIAGENT_AGENT_DIR", str(agent_dir))
+
+    agent = Agent(
+        name="assistant",
+        instruction="Answer briefly.",
+        model_name="model-a",
+        model_api_base="https://ark.example.com/api/v3/",
+        model_api_key="test-key",
+        model_api_key_name="",
+        runtime="piagent",
+        sub_agents=[worker],
+        before_model_callback=before_model_callback,
+    )
+    ctx = _ctx(agent, _user_event("ping"))
 
     _events = [event async for event in PiAgentRuntime().run_async(agent, ctx)]
 
