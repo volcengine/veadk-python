@@ -264,7 +264,11 @@ def _http_error(error: SandboxError) -> HTTPException:
     )
 
 
-def _public_session(session: SandboxCloudSession) -> dict[str, object]:
+def _public_session(
+    session: SandboxCloudSession,
+    *,
+    busy: bool = False,
+) -> dict[str, object]:
     return {
         "sessionId": session.instance_id,
         "userSessionId": session.user_session_id,
@@ -276,6 +280,7 @@ def _public_session(session: SandboxCloudSession) -> dict[str, object]:
         "displayName": session.display_name,
         "persistent": False,
         "toolName": INTELLIGENT_DEVELOPMENT_TOOL_NAME,
+        "busy": busy,
     }
 
 
@@ -836,6 +841,12 @@ def mount_intelligent_development_routes(
     delegated = FastAPI()
     task_locks: dict[tuple[str, str], asyncio.Lock] = {}
     task_locks_guard = asyncio.Lock()
+
+    async def task_active(owner_id: str, session_id: str) -> bool:
+        async with task_locks_guard:
+            task_lock = task_locks.get((owner_id, session_id))
+            return task_lock is not None and task_lock.locked()
+
     mount_sandbox_routes(
         delegated,
         service,
@@ -898,13 +909,17 @@ def mount_intelligent_development_routes(
             sessions = await service.list_sessions(owner, is_admin=False)
         except SandboxError as error:
             raise _http_error(error) from error
-        return {
-            "sessions": [
-                _public_session(session)
-                for session in sessions
-                if session.agent_kind == INTELLIGENT_DEVELOPMENT_AGENT_KIND
-            ]
-        }
+        public_sessions = []
+        for session in sessions:
+            if session.agent_kind != INTELLIGENT_DEVELOPMENT_AGENT_KIND:
+                continue
+            public_sessions.append(
+                _public_session(
+                    session,
+                    busy=await task_active(owner, session.instance_id),
+                )
+            )
+        return {"sessions": public_sessions}
 
     @app.post(f"{INTELLIGENT_DEVELOPMENT_PREFIX}/sessions")
     async def _create(request: Request) -> dict[str, object]:
@@ -1008,44 +1023,68 @@ def mount_intelligent_development_routes(
                 service, session_id, owner
             )
             workspace = _workspace(cloud)
-            conversation = await service.connect(session_id, owner, is_admin=False)
-            _require_development_session(conversation.cloud)
-            if not conversation.codex.workspace_locked:
-                await _prepare_workspace(conversation.cloud)
-                if project_service is not None:
-                    try:
-                        await project_service.restore_base_version(
-                            owner_id=owner,
-                            session_id=session_id,
-                            endpoint=conversation.cloud.endpoint,
-                            workspace=workspace,
-                        )
-                    except IntelligentDevelopmentProjectNotFound:
-                        # Sessions created before project persistence have no binding.
-                        pass
-                await service.update_workspace(session_id, owner, workspace)
-            elif conversation.codex.cwd != workspace:
-                raise SandboxSessionUnavailableError("开发会话已在非预期工作空间启动。")
-            if conversation.codex.permissions != _BUILDER_PERMISSIONS:
-                await service.update_permissions(
+            if await task_active(owner, session_id):
+                conversation = service._owned(session_id, owner)
+                settings = service.settings(session_id, owner)
+                busy = True
+                restored = None
+            else:
+                conversation = await service.connect(session_id, owner, is_admin=False)
+                _require_development_session(conversation.cloud)
+                if not conversation.codex.workspace_locked:
+                    await _prepare_workspace(conversation.cloud)
+                    if project_service is not None:
+                        try:
+                            await project_service.restore_base_version(
+                                owner_id=owner,
+                                session_id=session_id,
+                                endpoint=conversation.cloud.endpoint,
+                                workspace=workspace,
+                            )
+                        except IntelligentDevelopmentProjectNotFound:
+                            # Sessions created before project persistence have no binding.
+                            pass
+                    await service.update_workspace(session_id, owner, workspace)
+                elif conversation.codex.cwd != workspace:
+                    raise SandboxSessionUnavailableError(
+                        "开发会话已在非预期工作空间启动。"
+                    )
+                if conversation.codex.permissions != _BUILDER_PERMISSIONS:
+                    await service.update_permissions(
+                        session_id,
+                        owner,
+                        _BUILDER_PERMISSIONS,
+                    )
+                settings = service.settings(session_id, owner)
+                busy = bool(settings.get("busy"))
+                restored = await _restore_latest_conversation(
+                    service,
                     session_id,
                     owner,
-                    _BUILDER_PERMISSIONS,
+                    busy=busy,
                 )
-            restored = await _restore_latest_conversation(
-                service,
-                session_id,
-                owner,
-                busy=conversation.codex.active,
-            )
+                settings = service.settings(session_id, owner)
         except SandboxError as error:
             raise _http_error(error) from error
         except PROJECT_EXCEPTIONS as error:
             raise project_http_error(error) from error
         return {
             **_public_session(conversation.cloud),
-            **service.settings(session_id, owner),
+            **settings,
+            "busy": busy,
             **({"conversation": restored} if restored is not None else {}),
+        }
+
+    @app.get(f"{INTELLIGENT_DEVELOPMENT_PREFIX}/sessions/{{session_id}}/status")
+    async def _status(session_id: str, request: Request) -> dict[str, object]:
+        owner = owner_resolver(request)
+        try:
+            status = service.status(session_id, owner)
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return {
+            **status,
+            "busy": bool(status.get("busy")) or await task_active(owner, session_id),
         }
 
     @app.get(f"{INTELLIGENT_DEVELOPMENT_PREFIX}/releases/current")
@@ -1316,6 +1355,7 @@ def mount_intelligent_development_routes(
 
             try:
                 failure_stage = "task_prepare"
+                yield _progress_sse("Codex 正在处理本次请求。")
                 transport = SandboxRemoteTransport(cloud.endpoint)
                 completion_path = (
                     f"{project_root}/{COMPLETION_FILE_PREFIX}{uuid4().hex}.json"
@@ -1325,7 +1365,6 @@ def mount_intelligent_development_routes(
                 lease = await create_credential_lease(
                     cloud.endpoint, credential_resolver
                 )
-                yield _progress_sse("Codex 正在处理本次请求。")
                 delivery = None
                 failure_stage = "codex_turn"
                 async for event in service.stream_message(

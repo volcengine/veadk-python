@@ -2040,6 +2040,45 @@ def test_answer_runs_one_direct_codex_turn_without_publishing_delivery(
     assert lease.cleaned is True
 
 
+def test_direct_turn_emits_progress_before_credential_provisioning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud()
+    gateway.codex.turns = [
+        [CodexAppServerEvent(kind="text", text="当前数据来自天气接口。")],
+    ]
+    lease = _Lease(_Remote(gateway.sessions["dev-session"].endpoint))
+    order: list[str] = []
+    original_progress_sse = routes._progress_sse
+
+    def progress_sse(text: str) -> str:
+        order.append("progress")
+        return original_progress_sse(text)
+
+    async def create_lease(*_args: object, **_kwargs: object) -> _Lease:
+        order.append("credential-provisioning")
+        return lease
+
+    monkeypatch.setattr(routes, "_progress_sse", progress_sse)
+    monkeypatch.setattr(routes, "create_credential_lease", create_lease)
+    monkeypatch.setattr(
+        routes, "read_completion_contract", AsyncMock(return_value=_answered())
+    )
+    monkeypatch.setattr(routes, "remove_completion_file", AsyncMock())
+
+    with TestClient(_app(gateway)) as client:
+        _connect(client)
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "当前数据从哪里来？"},
+        )
+
+    assert response.status_code == 200
+    assert order[:2] == ["progress", "credential-provisioning"]
+
+
 def test_follow_up_runs_a_new_direct_turn_in_the_same_thread(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2182,6 +2221,14 @@ def test_interrupt_waits_for_task_cleanup_before_allowing_the_next_turn(
         assert cleanup_started.wait(timeout=2)
         interrupt_thread.join(timeout=0.1)
         waited_for_cleanup = interrupt_thread.is_alive()
+        status_while_cleaning = client.get(
+            "/web/intelligent-development/sessions/dev-session/status",
+            headers={"X-Test-User": "alice"},
+        )
+        connect_while_cleaning = client.post(
+            "/web/intelligent-development/sessions/dev-session/connect",
+            headers={"X-Test-User": "alice"},
+        )
         cleanup_allowed.set()
         interrupt_thread.join(timeout=2)
         message_thread.join(timeout=2)
@@ -2191,6 +2238,10 @@ def test_interrupt_waits_for_task_cleanup_before_allowing_the_next_turn(
     assert not message_thread.is_alive()
     assert interrupt_result["response"].status_code == 200
     assert message_result["response"].status_code == 200
+    assert status_while_cleaning.status_code == 200
+    assert status_while_cleaning.json()["busy"] is True
+    assert connect_while_cleaning.status_code == 200
+    assert connect_while_cleaning.json()["busy"] is True
     assert lease.cleaned is True
 
 

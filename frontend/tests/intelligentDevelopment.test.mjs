@@ -400,6 +400,21 @@ test("intelligent development errors preserve specific recovery guidance", async
   );
 });
 
+test("intelligent busy state follows the backend across reconnect and recovery", () => {
+  assert.match(
+    appSource,
+    /function activateIntelligentDevelopmentSession[\s\S]*?setSandboxBusy\(connected\.busy\)/,
+  );
+  assert.match(
+    appSource,
+    /const backgroundClient = activeSession\.intelligentDevelopment[\s\S]*?backgroundClient\.getStatus[\s\S]*?backgroundClient\.readThread/,
+  );
+  assert.match(
+    appSource,
+    /let remainingBusy = false[\s\S]*?remainingBusy = activeSession\.intelligentDevelopment[\s\S]*?activeClient\.getStatus[\s\S]*?remainingBusy = status\.busy[\s\S]*?setSandboxBusy\(remainingBusy\)/,
+  );
+});
+
 test("source-ready delivery is upgraded in place only by the verified event", async (t) => {
   const previousFetch = globalThis.fetch;
   const writes = [];

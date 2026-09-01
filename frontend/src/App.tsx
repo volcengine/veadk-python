@@ -182,6 +182,7 @@ import {
   intelligentDevelopmentErrorMessage,
   intelligentDevelopmentClient,
   sandboxClient,
+  SandboxServiceError,
   type SandboxApproval,
   type SandboxApprovalDecision,
   type SandboxAgentResource,
@@ -1782,12 +1783,15 @@ export default function App() {
 
     const syncBackgroundTurn = async () => {
       try {
-        const status = await sandboxClient.getStatus(activeSession.id, {
+        const backgroundClient = activeSession.intelligentDevelopment
+          ? intelligentDevelopmentClient
+          : sandboxClient;
+        const status = await backgroundClient.getStatus(activeSession.id, {
           signal: controller.signal,
         });
         if (stopped || sandboxSessionIdRef.current !== activeSession.id) return;
         const snapshot = status.threadId
-          ? await sandboxClient.readThread(activeSession.id, status.threadId, {
+          ? await backgroundClient.readThread(activeSession.id, status.threadId, {
               signal: controller.signal,
             })
           : null;
@@ -1822,6 +1826,11 @@ export default function App() {
         }
       } catch (cause) {
         if ((cause as Error)?.name === "AbortError" || stopped) return;
+        if (activeSession.intelligentDevelopment) {
+          setError(intelligentDevelopmentErrorMessage(cause));
+          timer = window.setTimeout(syncBackgroundTurn, 1500);
+          return;
+        }
         setSandboxBusy(false);
         setSandboxSession((current) =>
           current?.id === activeSession.id ? { ...current, busy: false } : current
@@ -3654,6 +3663,7 @@ export default function App() {
     setSandboxTurns(restoredTurns);
     sandboxSessionIdRef.current = connected.id;
     setSandboxSession(connected);
+    setSandboxBusy(connected.busy);
     setCreateView(null);
     setSkillCenter(false);
     setAddAgent(false);
@@ -4266,6 +4276,7 @@ export default function App() {
     const activeClient = activeSession.intelligentDevelopment
       ? intelligentDevelopmentClient
       : sandboxClient;
+    let remainingBusy = false;
     try {
       const reply = await activeClient.sendMessage(
         {
@@ -4392,24 +4403,32 @@ export default function App() {
       setInput(text);
       setAttachments(messageAttachments);
       sandboxCommands.setSelectedSkills(selectedSkills);
-      setError(
-        activeSession.intelligentDevelopment
-          ? intelligentDevelopmentErrorMessage(messageError)
-          : `内置智能体发送失败：${
-              messageError instanceof Error
-                ? messageError.message
-                : String(messageError)
-            }`,
-      );
+      const taskStillRunning =
+        activeSession.intelligentDevelopment &&
+        messageError instanceof SandboxServiceError &&
+        messageError.code === "INTELLIGENT_DEVELOPMENT_TASK_IN_PROGRESS";
+      remainingBusy = activeSession.intelligentDevelopment;
       try {
-        const settings = await activeClient.getSettings(activeSession.id);
+        const status = await activeClient.getStatus(activeSession.id);
+        remainingBusy = status.busy;
         setSandboxSession((current) =>
           current?.id === activeSession.id
-            ? { ...current, ...settings }
+            ? { ...current, ...status }
             : current,
         );
       } catch {
         // Keep the optimistic lock when the connection itself is unavailable.
+      }
+      if (!taskStillRunning) {
+        setError(
+          activeSession.intelligentDevelopment
+            ? intelligentDevelopmentErrorMessage(messageError)
+            : `内置智能体发送失败：${
+                messageError instanceof Error
+                  ? messageError.message
+                  : String(messageError)
+              }`,
+        );
       }
     } finally {
       if (sandboxMessageAbortRef.current === controller) {
@@ -4431,13 +4450,22 @@ export default function App() {
         if (sandboxActiveAssistantTurnIdRef.current === assistantTurnId) {
           sandboxActiveAssistantTurnIdRef.current = "";
         }
-        setSandboxBusy(false);
         setSandboxApproval(null);
-        setSandboxSession((current) =>
-          current?.id === activeSession.id
-            ? { ...current, busy: false }
-            : current,
-        );
+        if (activeSession.intelligentDevelopment) {
+          setSandboxBusy(remainingBusy);
+          setSandboxSession((current) =>
+            current?.id === activeSession.id
+              ? { ...current, busy: remainingBusy }
+              : current,
+          );
+        } else {
+          setSandboxBusy(false);
+          setSandboxSession((current) =>
+            current?.id === activeSession.id
+              ? { ...current, busy: false }
+              : current,
+          );
+        }
       }
     }
   }
