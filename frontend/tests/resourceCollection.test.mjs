@@ -9,6 +9,7 @@ const sources = {
   library: read("../src/ui/LibraryView.tsx"),
   skills: read("../src/ui/SkillCenter.tsx"),
   knowledge: read("../src/ui/KnowledgeLibrary.tsx"),
+  workspaces: read("../src/ui/WorkspaceCenter.tsx"),
   environments: read("../src/ui/EnvironmentCenter.tsx"),
   cronjobs: read("../src/cronjobs/CronJobs.tsx"),
   artifacts: read("../src/ui/ArtifactLibrary.tsx"),
@@ -54,6 +55,28 @@ test("resource list pages compose the same shared layout and card primitives", (
   assert.match(sources.agents, /<ResourceFilterSelect/);
   assert.match(sources.library, /<ResourceFilterSelect/);
   assert.match(sources.artifacts, /<ResourceFilterSelect/);
+});
+
+test("resource list pages share the same centered initial loading state", () => {
+  assert.match(resourceSource, /export function ResourceLoadingState/);
+  assert.match(resourceSource, /<LoadingIndicator size=\{20\} \/>/);
+  assert.match(resourceSource, /资源加载中，请稍候/);
+  assert.match(
+    resourceStyles,
+    /\.resource-loading-state\s*\{[\s\S]*?height:\s*100%;[\s\S]*?align-items:\s*center;[\s\S]*?justify-content:\s*center;/,
+  );
+
+  for (const source of [
+    sources.agents,
+    sources.skills,
+    sources.knowledge,
+    sources.workspaces,
+    sources.environments,
+    sources.cronjobs,
+    sources.artifacts,
+  ]) {
+    assert.match(source, /<ResourceLoadingState \/>/);
+  }
 });
 
 test("skill and knowledge detail pages compose the shared detail primitives", () => {

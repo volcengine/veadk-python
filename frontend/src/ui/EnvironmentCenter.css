@@ -87,7 +87,6 @@
 .environment-empty > * { max-width: 420px; }
 .environment-empty svg { width: 32px; height: 32px; }
 
-.environment-loading,
 .environment-load-error {
   min-height: 280px;
   display: grid;
