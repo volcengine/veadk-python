@@ -2,6 +2,16 @@
 
 一个 `runtime="codex"` 的 Agent，在 chat 后端（火山方舟）上**同时使用本地 skill 和 MCP 工具**。
 
+> **这个示例是什么：** 一份**接线参考**。它展示本地 skill 和 MCP 工具在
+> `runtime="codex"` 下分别怎么到达模型，任务故意选得极简（问一次天气），
+> 好让画面里只剩下管道本身。请照这个定位读它，而不要把它当成「这类任务应该用
+> codex 运行时」的推荐——一次固定的工具调用加一段格式化回答，正是
+> `runtime="adk"` 更快更便宜的场景，也不必每回合起一个 Codex 子进程。
+> 这个运行时**真正**的用处——模型写脚本、跑起来、读 traceback、自己改好——
+> 见 [`codex_data_analysis/`](../codex_data_analysis/) 与
+> [`codex_ops_assistant/`](../codex_ops_assistant/)，或
+> [什么时候该用 codex 运行时](../../docs/content/docs/framework/agent/runtime.mdx#什么时候该用-codex-运行时)。
+
 ```
 codex_with_skill_and_mcp/
 ├── main.py                     # Agent 定义 + 一次示例运行

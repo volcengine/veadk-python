@@ -42,6 +42,40 @@ agent = Agent(name="assistant", runtime="codex")
 pip install "veadk-python[codex]"
 ```
 
+### 什么时候该用 codex 运行时
+
+上面的定位说明可以压成一条判断标准：**codex 运行时只有一个真正的优势——模型可以写下一个文件、把它跑起来、读到报错、改掉、再跑一遍，整个循环发生在一个 OS 沙箱里，而你不需要事先把每一步都定义成工具。** 除此之外的每一条轴上，它都比 `runtime="adk"` 更贵。
+
+**适合：**
+
+- **步骤无法事先枚举成工具**——临时数据分析、日志排障、脏数据清洗、按需改代码。这类任务的下一步取决于上一步的输出，而不是取决于你写智能体时的设想。
+- **工作对象是一个文件系统**——中间产物留在 workspace 里，同一 Session 的下一轮仍然看得见（见 [Workspace 生命周期](#workspace-生命周期)）。
+- **第一次做错是正常的，且重试很便宜**——报错信息本身就是模型的下一份输入。在 ADK 运行时里，一次失败的工具调用只是一条错误字符串；在这里，它是一段可以被读、被诊断、被修好的 traceback。
+
+**不适合：**
+
+- **一次固定的工具调用 + 一段格式化回答。** 这正是 ADK 运行时的主场：更快、更便宜，而且不受下面任何一条限制。
+- **需要 `sub_agents`、`output_schema`、`planner`、`code_executor` 或 `generate_content_config` 的智能体。** 这些配置在非 adk 运行时下会**直接报错**，而不是降级——完整清单见[支持矩阵](#支持矩阵)。
+- **对延迟敏感的链路。** 每一次 invocation 都会重建一个临时 `CODEX_HOME`、拉起一个 Codex 子进程、开一个 ephemeral thread；这笔固定开销每回合都要付。
+- **`run_live`。** 非 adk 运行时没有 live/bidi 实现，见[下文](#不支持-run_live)。
+
+**成本，如实说清楚：**
+
+- **每次 invocation 一个 Codex 子进程。** runtime 每回合都会重建 `CODEX_HOME` 并进入 `AsyncCodex(...)`，thread 以 `ephemeral=True` 创建。
+- **每回合都会把整段 ADK 会话历史重新序列化进 prompt。** 历史被渲染成一个 `<conversation_history>` JSON 块，附在当前消息前面；codex 没有增量续接机制，所以 prompt token 随对话轮数增长。这也是 `include_contents="none"` 被拒绝（而不是被忽略）的原因。
+- **ADK 工具的结果会穿过模型上下文。** 见下方 [Workspace 是数据面](#workspace-是数据面)——这是本运行时最容易踩的一个坑。
+
+一句话版本：**能把任务写成一串确定的工具调用，就用 `runtime="adk"`；只有当你只能描述目标、路径必须试出来时，才用 `runtime="codex"`。**
+
+仓库里四个 codex 示例的分工：
+
+| 示例 | 讲什么 |
+| :--- | :--- |
+| [`codex_data_analysis`](https://github.com/volcengine/veadk-python/tree/main/examples/codex_data_analysis) | **本运行时是干什么用的。** Codex 写分析脚本 → 运行 → 在脏数据上撞到真实报错 → 自己改好 → 重跑 → 出报告。自迭代循环。 |
+| [`codex_ops_assistant`](https://github.com/volcengine/veadk-python/tree/main/examples/codex_ops_assistant) | **本运行时是干什么用的。** ADK 工具把日志、指标与发布记录落进 workspace，Codex 写一次性脚本把三者关联起来、定位根因，全程在断网沙箱里。 |
+| [`codex_with_skill_and_mcp`](https://github.com/volcengine/veadk-python/tree/main/examples/codex_with_skill_and_mcp) | **怎么接线。** 本地 skill 和 MCP 工具在这个运行时下分别走哪条路。 |
+| [`codex_runtime_on_agentkit`](https://github.com/volcengine/veadk-python/tree/main/examples/codex_runtime_on_agentkit) | **怎么部署。** 把一个 `runtime="codex"` 智能体发布到火山引擎 AgentKit。 |
+
 ### Codex 安全配置
 
 Codex 默认使用独立 Session workspace、`workspace_write` 沙箱、禁用网络，并拒绝一切需要提权的操作：
@@ -80,11 +114,82 @@ Codex SDK 内置的审批处理器对每一个 `requestApproval` 通知都回答
 
 `full_access` 和 `reuse_workspace=True` 会放宽不同调用之间的文件系统边界，只应在受信环境中开启。
 
+#### 安全基线组合
+
+把上面几项拼起来，就是在不可信输入下跑 codex 的默认配方。四个设置各挡一个方向，缺一不可：
+
+```python title="agent.py"
+from google.adk.agents import RunConfig
+from veadk import Agent, Runner
+from veadk.runtime.codex import CodexRuntimeConfig
+
+agent = Agent(
+    name="analyst",
+    runtime="codex",
+    tools=[load_orders, publish_report],  # 唯一的进出通道
+    codex_runtime_config=CodexRuntimeConfig(
+        sandbox="workspace_write",  # 只能写 workspace
+        network_access=False,       # 沙箱内没有出网通道
+        approval_mode="deny_all",   # 默认值；拒绝一切提权请求
+    ),
+)
+
+await Runner(agent=agent).run(
+    "...",
+    run_config=RunConfig(max_llm_calls=40),  # 单次 invocation 的成本上限
+)
+```
+
+它们之所以能组合成一套，是因为**关掉网络之后，你自己挂上去的那几个 ADK 工具就是唯一的出站通道**：模型可以在沙箱里对敏感数据任意计算、任意重试，但要把任何东西送出去，只能经过一个你审计过、有签名、有日志的函数。换句话说，工具列表就是你的数据出口策略——这条边界要成立，前提是每个工具自己也不提供任意外发能力。
+
+配套的三条，不在这里重复展开：
+
+- `approval_mode="auto_review"` 会拆掉这套配方的地基，理由见[上方的红色警告](#codex-安全配置)。
+- `sandbox` 与 `network_access` 的组合语义见[上表](#codex-安全配置)：只有 `workspace_write` 会读 `network_access`。
+- `VEADK_CODEX_*` 环境变量的优先级**高于**这里的 Python 配置，见 [Codex 环境变量](#codex-环境变量)。部署环境里一个 `VEADK_CODEX_SANDBOX=full_access` 就能推翻上面整段代码。
+
+`RunConfig(max_llm_calls=...)` 不设时，VeADK 的 `Runner` 会用环境变量 `MODEL_AGENT_MAX_LLM_CALLS`（默认 100）兜底。在这个运行时下建议显式写一个更小的值：模型自己决定跑多少轮脚本，只有这个配额是硬上限。
+
 #### Workspace 生命周期
 
 默认情况下，workspace 由 `app_name` / `user_id` / `session_id` / agent 名四元组定位：同一 Session 的多次调用**共享同一目录**，回合结束后不会删除，因此上一轮写下的文件下一轮仍然可见。进程退出时整棵目录树被清理；进程存活期间，**空闲超过 6 小时**的 Session workspace 会在下一次创建 workspace 时被顺带回收，以限制长期运行的服务进程的磁盘增长。
 
 显式传入 `workspace_root` 时，这块目录属于你自己：runtime 既不会删除它，也**不会**对它执行上述空闲回收——它仍会在其下为每个 Session 建独立子目录，但这些子目录需要你自行清理。`reuse_workspace=True` 只有在同时设置了 `workspace_root` 时才有意义，它让所有 Session 直接共用该目录本身，而不再做 Session 隔离。
+
+### Workspace 是数据面
+
+这是用好 codex 运行时最重要、也最容易被忽略的一条：**ADK 工具的参数和返回值是控制面，workspace 才是数据面。**
+
+原因在工具的执行路径上。ADK/MCP 工具不由 Codex 自己调用，而是由 runtime 的 Responses shim 执行：shim 拿到工具返回值后 `json.dumps` 成字符串，作为一条 `function_call_output` 塞回模型的 `input` 数组。而且因为 Codex 每完成一次原生工具调用就会重建整个 `input`，shim 还必须**在本回合后续的每一次后端请求里，把这对 `function_call` / `function_call_output` 重放一遍**。于是：
+
+<Callout type="warn">
+一个返回 5 万行日志的工具，会把这 5 万行灌进模型上下文，并在同一回合里重复灌若干次。这不是慢一点的问题，是这一回合直接废掉。
+</Callout>
+
+正确的做法是让工具**交出一个路径，而不是一份数据**：把数据写进 workspace（Codex 的 `cwd` 就是它），只返回位置和少量元信息。数据落在磁盘上，模型用 shell 去读、去切片、去统计，上下文里只留下一行。
+
+```python title="tools.py"
+def load_orders(day: str) -> dict:
+    """把某一天的订单写成 CSV，放进你的工作目录。
+
+    只返回一张回执，不返回订单本身——请用你自己的代码去读返回路径上的 CSV。
+    """
+    rows = warehouse.query(day)
+    name = f"orders-{day}.csv"
+    write_csv(WORKSPACE / name, rows)
+    # 回执，不是数据：告诉模型文件在哪、有多大形状。
+    return {"path": name, "rows": len(rows), "columns": list(rows[0])}
+```
+
+这里的 docstring 是真正干活的部分：模型读到的就是它，所以必须写清楚「返回的是回执」。
+否则模型会直接让工具把数据交出来，你又回到了原点。
+
+反方向同理：Codex 在 workspace 里写好报告之后，「发布」工具应该收下**它写的那个文件的路径**，由工具自己读盘再送往外部系统——而不是让模型把整篇报告当作工具参数复述一遍（那同样要过一遍上下文，而且内容可能在复述中走样）。
+
+工具怎么知道 workspace 在哪，两种做法：
+
+- **固定路径（单租户）**：显式设置 `workspace_root` 并配合 `reuse_workspace=True`，此时 workspace 就是 `workspace_root` 本身，工具和 `CodexRuntimeConfig` 共用同一个常量。代价是所有 Session 共用一个目录，见 [Workspace 生命周期](#workspace-生命周期)。
+- **Session 隔离（多租户）**：保留默认的 Session 隔离目录，让模型把目标路径当作工具参数传进来——Codex 的 `cwd` 正是本 Session 的 workspace，工具写入该路径并把它原样返回即可。这条路径来自模型，所以工具应当自己校验它确实落在预期目录之内，再打开文件。
 
 ### Codex 执行参数
 

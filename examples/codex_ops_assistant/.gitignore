@@ -1,0 +1,5 @@
+# Generated at run time: the simulated backend's storage, Codex's workspace,
+# and the tickets the agent filed.
+_store/
+workspace/
+outbox/
