@@ -268,7 +268,6 @@
   flex: 0 0 14px;
 }
 
-.my-agent-initial-loading,
 .my-agent-load-more,
 .my-agent-empty {
   display: flex;
@@ -276,11 +275,6 @@
   justify-content: center;
   color: hsl(var(--muted-foreground));
   font-size: 12.5px;
-}
-
-.my-agent-initial-loading {
-  min-height: 180px;
-  gap: 8px;
 }
 
 .my-agent-load-more {

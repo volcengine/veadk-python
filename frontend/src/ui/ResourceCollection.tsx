@@ -18,8 +18,10 @@ import {
   PlaySm,
   PlusLg18pxAdd,
 } from "@openai/apps-sdk-ui/components/Icon";
+import { LoadingIndicator } from "@openai/apps-sdk-ui/components/Indicator";
 import { Select, type Option } from "@openai/apps-sdk-ui/components/Select";
 
+import { TextShimmer } from "./text-shimmer/TextShimmer";
 import "./ResourceCollection.css";
 
 function joinClassNames(...values: Array<string | undefined | false>) {
@@ -462,6 +464,22 @@ export const ResourceResults = forwardRef<
     />
   );
 });
+
+export function ResourceLoadingState() {
+  return (
+    <div
+      className="resource-loading-state"
+      role="status"
+      aria-live="polite"
+      aria-busy="true"
+    >
+      <LoadingIndicator size={20} />
+      <TextShimmer as="span" duration={2.4}>
+        资源加载中，请稍候
+      </TextShimmer>
+    </div>
+  );
+}
 
 export function ResourceGrid({
   className,

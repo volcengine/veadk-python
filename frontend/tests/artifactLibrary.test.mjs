@@ -18,6 +18,10 @@ const resourceStyles = readFileSync(
   new URL("../src/ui/ResourceCollection.css", import.meta.url),
   "utf8",
 );
+const resourceSource = readFileSync(
+  new URL("../src/ui/ResourceCollection.tsx", import.meta.url),
+  "utf8",
+);
 const iconSource = readFileSync(
   new URL("../src/ui/icons/LibraryIcons.tsx", import.meta.url),
   "utf8",
@@ -117,7 +121,8 @@ test("shared artifact controls are keyboard accessible", () => {
 });
 
 test("covers loading, failure, retry, empty and unavailable-preview states", () => {
-  assert.match(pageSource, /正在加载产物/);
+  assert.match(pageSource, /<ResourceLoadingState \/>/);
+  assert.match(resourceSource, /资源加载中，请稍候/);
   assert.match(pageSource, /产物加载失败/);
   assert.match(pageSource, /重新加载/);
   assert.match(pageSource, /您还没有任何产物/);
