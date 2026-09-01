@@ -37,11 +37,13 @@ from frontend.server.storage import StudioProvider
 from .models import (
     CodePipelineResource,
     ContainerRegistryResource,
+    ContainerRepository,
     EnvironmentBuildStatus,
     EnvironmentBuildStep,
     EnvironmentBuildStepStatus,
     EnvironmentResourceInfo,
     EnvironmentResources,
+    ImageSource,
 )
 
 CP_WORKSPACE_ENV = "VEADK_STUDIO_ENVIRONMENT_CP_WORKSPACE"
@@ -177,7 +179,13 @@ class EnvironmentCloudGateway(Protocol):
         *,
         context_key: str,
         image_tag: str,
+        dockerfile_path: str = "Dockerfile",
+        container_repository: ContainerRepository | None = None,
     ) -> tuple[EnvironmentResources, str, str]: ...
+
+    def resolve_image_source(
+        self, source: ImageSource
+    ) -> tuple[EnvironmentResources, str]: ...
 
     def build_status(
         self,
@@ -231,6 +239,8 @@ class StudioEnvironmentCloudGateway:
         *,
         resolve_credentials: Callable[[], CloudCredentials] | None = None,
         resource_service: DeploymentResourceService | None = None,
+        resource_service_factory: Callable[[str], DeploymentResourceService]
+        | None = None,
     ) -> None:
         if settings.provider not in {"volcengine", "byteplus"}:
             raise ValueError(f"Unsupported environment provider: {settings.provider}")
@@ -240,6 +250,8 @@ class StudioEnvironmentCloudGateway:
         self.credentials = credentials
         self._resolve_credentials = resolve_credentials
         self._resources = resource_service
+        self._resource_service_factory = resource_service_factory
+        self._regional_resources: dict[str, DeploymentResourceService] = {}
         self._cp_resource: CodePipelineResource | None = None
         self._cr_resource: ContainerRegistryResource | None = None
         self._cp_resource_lock = threading.Lock()
@@ -261,6 +273,7 @@ class StudioEnvironmentCloudGateway:
             ),
             containerRegistry=ContainerRegistryResource(
                 source=cr_source,
+                region=self.settings.region,
                 registry=registry,
                 namespace=namespace,
                 repository=repository,
@@ -273,10 +286,16 @@ class StudioEnvironmentCloudGateway:
         *,
         context_key: str,
         image_tag: str,
+        dockerfile_path: str = "Dockerfile",
+        container_repository: ContainerRepository | None = None,
     ) -> tuple[EnvironmentResources, str, str]:
         try:
             cp = self._cached_code_pipeline()
-            cr = self._cached_container_registry()
+            cr = (
+                self._resolve_selected_container_registry(container_repository)
+                if container_repository is not None
+                else self._cached_container_registry()
+            )
             image_repository = f"{cr.domain}/{cr.namespace}/{cr.repository}"
             cr = cr.model_copy(update={"image_repository": image_repository})
             resources = EnvironmentResources(
@@ -294,14 +313,14 @@ class StudioEnvironmentCloudGateway:
                 {"Key": "DOWNLOAD_PATH", "Value": "/workspace"},
                 {
                     "Key": "DOCKERFILE_PATH",
-                    "Value": "/workspace/environment/Dockerfile",
+                    "Value": f"/workspace/environment/{dockerfile_path}",
                 },
                 {"Key": "CR_INSTANCE", "Value": cr.registry},
                 {"Key": "CR_DOMAIN", "Value": cr.domain},
                 {"Key": "CR_NAMESPACE", "Value": cr.namespace},
                 {"Key": "CR_OCI", "Value": cr.repository},
                 {"Key": "CR_TAG", "Value": image_tag},
-                {"Key": "CR_REGION", "Value": self.settings.region},
+                {"Key": "CR_REGION", "Value": cr.region or self.settings.region},
                 {"Key": "APT_MIRROR_URL", "Value": self._apt_mirror_url()},
                 {"Key": "PIP_INDEX_URL", "Value": self._pip_index_url()},
                 {
@@ -329,6 +348,33 @@ class StudioEnvironmentCloudGateway:
         except Exception as error:
             raise EnvironmentResourceError(
                 f"启动环境镜像构建失败：{_safe_error(error, self.credentials)}"
+            ) from error
+
+    def resolve_image_source(
+        self, source: ImageSource
+    ) -> tuple[EnvironmentResources, str]:
+        try:
+            selection = ContainerRepository.model_validate(
+                source.model_dump(exclude={"reference"})
+            )
+            cr = self._resolve_selected_container_registry(selection)
+            resources = EnvironmentResources(
+                provider=self.settings.provider,
+                region=source.region,
+                codePipeline=self.describe().code_pipeline,
+                containerRegistry=cr,
+            )
+            separator = "@" if source.reference.startswith("sha256:") else ":"
+            image = (
+                f"{cr.domain}/{cr.namespace}/{cr.repository}"
+                f"{separator}{source.reference}"
+            )
+            return resources, image
+        except EnvironmentResourceError:
+            raise
+        except Exception as error:
+            raise EnvironmentResourceError(
+                f"绑定已有环境镜像失败：{_safe_error(error, self.credentials)}"
             ) from error
 
     def _apt_mirror_url(self) -> str:
@@ -623,12 +669,50 @@ class StudioEnvironmentCloudGateway:
         domain = str(parsed.netloc or parsed.path).strip("/")
         return ContainerRegistryResource(
             source=source,
+            region=self.settings.region,
             registry=registry,
             namespace=namespace,
             repository=repository,
             domain=domain,
             imageRepository=f"{domain}/{namespace}/{repository}",
             consoleUrl=self._cr_console_url(registry),
+        )
+
+    def _resolve_selected_container_registry(
+        self, selection: ContainerRepository
+    ) -> ContainerRegistryResource:
+        resource_service = self._resource_service_for_region(selection.region)
+        resource_service._require_existing_resource(
+            "cr-registry", resource_id=selection.registry
+        )
+        resource_service._require_existing_resource(
+            "cr-namespace",
+            resource_id=selection.namespace,
+            registry=selection.registry,
+        )
+        resource_service._require_existing_resource(
+            "cr-repository",
+            resource_id=selection.repository,
+            registry=selection.registry,
+            namespace=selection.namespace,
+        )
+        client = resource_service._cr_client()
+        domain = str(client._get_default_domain(selection.registry) or "").strip()
+        if not domain:
+            raise EnvironmentResourceError(
+                f"无法获取容器镜像仓库 {selection.registry} 的访问域名。"
+            )
+        parsed = urlsplit(domain if "://" in domain else f"//{domain}")
+        domain = str(parsed.netloc or parsed.path).strip("/")
+        return ContainerRegistryResource(
+            source="provided",
+            region=selection.region,
+            registry=selection.registry,
+            namespace=selection.namespace,
+            repository=selection.repository,
+            domain=domain,
+            imageRepository=f"{domain}/{selection.namespace}/{selection.repository}",
+            consoleUrl=self._cr_console_url(selection.registry, selection.region),
         )
 
     def _cr_resource_exists(
@@ -698,6 +782,27 @@ class StudioEnvironmentCloudGateway:
             )
         return self._resources
 
+    def _resource_service_for_region(self, region: str) -> DeploymentResourceService:
+        if region == self.settings.region:
+            return self._resource_service()
+        if region not in self._regional_resources:
+            if self._resource_service_factory is not None:
+                service = self._resource_service_factory(region)
+            else:
+                credentials = (
+                    self._resolve_credentials()
+                    if self._resolve_credentials is not None
+                    else self.credentials
+                )
+                self.credentials = credentials
+                service = DeploymentResourceService(
+                    self.settings.provider,
+                    region,
+                    credentials,
+                )
+            self._regional_resources[region] = service
+        return self._regional_resources[region]
+
     def _cp_console_url(self, workspace_id: str) -> str:
         host = (
             "console.byteplus.com"
@@ -707,13 +812,14 @@ class StudioEnvironmentCloudGateway:
         suffix = f"/workspace/{workspace_id}" if workspace_id else ""
         return f"https://{host}/cp/region:{self.settings.region}{suffix}"
 
-    def _cr_console_url(self, registry: str) -> str:
+    def _cr_console_url(self, registry: str, region: str = "") -> str:
         host = (
             "console.byteplus.com"
             if self.settings.provider == "byteplus"
             else "console.volcengine.com"
         )
-        return f"https://{host}/cr/region:{self.settings.region}/instance/{registry}"
+        target_region = region or self.settings.region
+        return f"https://{host}/cr/region:{target_region}/instance/{registry}"
 
 
 def _item_name(item: Mapping[str, Any]) -> str:

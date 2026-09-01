@@ -23,7 +23,12 @@ from fastapi import HTTPException, Query, Request
 
 from veadk.utils.logger import get_logger
 
-from .models import EnvironmentInput, EnvironmentPatch
+from .models import (
+    EnvironmentInput,
+    EnvironmentPatch,
+    EnvironmentShareCodesRequest,
+    RepositoryInspectRequest,
+)
 from .repository import (
     EnvironmentConflict,
     EnvironmentNotFound,
@@ -40,6 +45,19 @@ def mount_environment_routes(
     service: EnvironmentService,
     identity_resolver: Callable[[Request], str],
 ) -> None:
+    @app.post("/web/environment-repositories/inspect")
+    async def inspect_environment_repository(
+        body: RepositoryInspectRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        _ = identity_resolver(request)
+        try:
+            inspection = await service.inspect_repository(body.repository_url, body.ref)
+            return _public(inspection)
+        except Exception as error:
+            _raise_api_error(error, "探查 Git 仓库")
+            raise
+
     @app.get("/web/environments")
     async def list_environments(request: Request) -> dict[str, Any]:
         owner_id = identity_resolver(request)
@@ -72,6 +90,42 @@ def mount_environment_routes(
             return _public(await service.get(owner_id, environment_id))
         except Exception as error:
             _raise_api_error(error, "读取环境")
+            raise
+
+    @app.post("/web/environments/{environment_id}/share-code")
+    async def export_environment_share_code(
+        environment_id: str,
+        request: Request,
+    ) -> dict[str, Any]:
+        owner_id = identity_resolver(request)
+        try:
+            return _public(await service.export_share_code(owner_id, environment_id))
+        except Exception as error:
+            _raise_api_error(error, "导出环境分享码")
+            raise
+
+    @app.post("/web/environment-share-codes/inspect")
+    async def inspect_environment_share_codes(
+        body: EnvironmentShareCodesRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        _ = identity_resolver(request)
+        try:
+            return _public(await service.inspect_share_codes(body.share_codes))
+        except Exception as error:
+            _raise_api_error(error, "解析环境分享码")
+            raise
+
+    @app.post("/web/environment-share-codes/import")
+    async def import_environment_share_codes(
+        body: EnvironmentShareCodesRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        owner_id = identity_resolver(request)
+        try:
+            return _public(await service.import_share_codes(owner_id, body.share_codes))
+        except Exception as error:
+            _raise_api_error(error, "导入环境分享码")
             raise
 
     @app.patch("/web/environments/{environment_id}")

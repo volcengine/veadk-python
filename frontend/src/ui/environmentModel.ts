@@ -1,5 +1,8 @@
 import type {
   EnvironmentBaseEnvironment,
+  EnvironmentContainerRepository,
+  EnvironmentGitSource,
+  EnvironmentImageSource,
   EnvironmentLanguage,
   EnvironmentOperatingSystem,
 } from "../adk/client";
@@ -44,6 +47,9 @@ export interface EnvironmentDraft {
   optionIds: string[];
   selectedSkills: SelectedSkill[];
   dockerfile?: string;
+  gitSource?: EnvironmentGitSource | null;
+  containerRepository?: EnvironmentContainerRepository | null;
+  imageSource?: EnvironmentImageSource | null;
 }
 
 export const ENVIRONMENT_OPERATING_SYSTEMS: ReadonlyArray<{

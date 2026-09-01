@@ -37,6 +37,10 @@ const packageOptionStyles = readFileSync(
   new URL("../src/ui/StudioPackageOption.css", import.meta.url),
   "utf8",
 );
+const deploymentResourcesSource = readFileSync(
+  new URL("../src/ui/DeploymentResources.tsx", import.meta.url),
+  "utf8",
+);
 const buildProgressSource = readFileSync(
   new URL("../src/ui/StudioBuildProgress.tsx", import.meta.url),
   "utf8",
@@ -110,7 +114,7 @@ test("covers environment categories, editor feedback, and responsive layout", ()
 });
 
 test("offers Dockerfile upload and custom configuration as explicit creation methods", () => {
-  assert.match(environmentSource, /type EnvironmentCreationMethod = "custom" \| "dockerfile"/);
+  assert.match(environmentSource, /type EnvironmentCreationMethod = "custom" \| "dockerfile" \| "git" \| "image"/);
   assert.match(environmentSource, /aria-label="环境创建方式"/);
   assert.match(environmentSource, /value="custom"[\s\S]*?自定义配置/);
   assert.match(environmentSource, /value="dockerfile"[\s\S]*?上传 Dockerfile/);
@@ -121,6 +125,122 @@ test("offers Dockerfile upload and custom configuration as explicit creation met
   assert.match(environmentStyles, /\.environment-creation-options/);
   assert.match(environmentStyles, /\.environment-upload-dropzone\.is-dragging/);
   assert.match(environmentStyles, /\.environment-upload-dropzone:focus-within/);
+});
+
+test("supports public Git builds with automatic Dockerfile inspection", () => {
+  assert.match(environmentSource, /value="git"[\s\S]*?从代码仓库构建/);
+  assert.match(environmentSource, /inspectEnvironmentRepository/);
+  assert.match(environmentSource, /自动探查并列出 Dockerfile/);
+  assert.match(environmentSource, /window\.setTimeout\(\(\) => void inspectRepository\(\), 600\)/);
+  assert.match(environmentSource, /autoAttemptedKeyRef/);
+  assert.match(environmentSource, /message\.split\("\\n原始响应：", 1\)/);
+  assert.match(environmentStyles, /@media \(max-width: 640px\)[\s\S]*?\.environment-source-error[\s\S]*?flex-direction: column/);
+  assert.match(environmentSource, /正在拉取仓库并查找 Dockerfile/);
+  assert.match(environmentSource, /仓库中未找到 Dockerfile/);
+  assert.match(environmentSource, /onDockerfilePathChange\(result\.dockerfiles\.length === 1/);
+  assert.match(environmentSource, /<DeploymentSelect[\s\S]*?ariaLabel="选择 Dockerfile"/);
+  assert.match(environmentSource, /Studio 默认镜像仓库/);
+  assert.match(environmentSource, /containerRepository: creationMethod === "git"/);
+  assert.match(clientSource, /POST \/web\/environment-repositories\/inspect|"\/web\/environment-repositories\/inspect"/);
+  assert.match(clientSource, /method: "POST"/);
+  assert.match(clientSource, /dockerfiles\.every\(\(item\) => typeof item === "string"\)/);
+});
+
+test("binds an existing image through region-aware CR resource selectors", () => {
+  assert.match(environmentSource, /value="image"[\s\S]*?使用已有镜像/);
+  assert.match(environmentSource, /aria-label="镜像仓库 Region"/);
+  assert.match(environmentSource, /<ContainerRepositorySelector/);
+  assert.match(environmentSource, /Tag 或 Digest/);
+  assert.match(environmentSource, /imageSource: creationMethod === "image"/);
+  assert.match(environmentSource, /if \(input\.imageSource\)[\s\S]*?return;/);
+  assert.match(environmentSource, /const cpUrl = environment\.imageSource[\s\S]*?undefined/);
+  assert.match(environmentSource, /build && !environment\.imageSource && !ACTIVE_BUILD_STATUSES/);
+  assert.match(deploymentResourcesSource, /export function ContainerRepositorySelector/);
+  assert.match(deploymentResourcesSource, /kind: "cr-registry"/);
+  assert.match(deploymentResourcesSource, /kind: "cr-namespace"/);
+  assert.match(deploymentResourcesSource, /kind: "cr-repository"/);
+  assert.match(deploymentResourcesSource, /registry: resource\.name,[\s\S]*?namespace: "",[\s\S]*?repository: ""/);
+  assert.match(environmentStyles, /\.environment-source-fields--git/);
+});
+
+test("exports and imports environments with share codes", async () => {
+  assert.match(clientSource, /\/web\/environments\/\$\{encodeURIComponent\(environmentId\)\}\/share-code/);
+  assert.match(clientSource, /"\/web\/environment-share-codes\/inspect"/);
+  assert.match(clientSource, /"\/web\/environment-share-codes\/import"/);
+  assert.match(clientSource, /shareCodes/);
+  assert.match(clientSource, /status === "created" \|\| candidate\.status === "duplicate" \|\| candidate\.status === "failed"/);
+
+  assert.match(clientSource, /export function parseEnvironmentShareCodes/);
+  assert.match(clientSource, /split\(\/\[,，\\n\\r\]\+\/\)/);
+  assert.match(clientSource, /new Set<string>\(\)/);
+  assert.match(environmentSource, /最多可一次导入 20 个环境/);
+  assert.match(environmentSource, />\s*分享\s*<\/Button>/);
+  assert.match(clientSource, /clipboard\.writeText/);
+  assert.match(environmentSource, /分享码已复制/);
+  assert.match(environmentSource, /state === "copied"[\s\S]*?分享码已复制[\s\S]*?shareCode \? \(/);
+  assert.match(environmentSource, /aria-label="完整环境分享码"/);
+  assert.match(environmentSource, /分享码已自动复制，也可在这里查看或手动复制/);
+  assert.match(environmentSource, /自动复制失败，可手动复制上方分享码/);
+  assert.match(environmentSource, /分享码可能包含环境配置与本地 Skill 内容/);
+  assert.match(environmentSource, /readOnly/);
+  assert.match(environmentSource, /重试/);
+  assert.match(environmentSource, /aria-label="导入环境"/);
+  assert.match(environmentSource, /多个分享码可使用英文逗号、中文逗号或换行分隔/);
+  assert.match(environmentSource, /检测到 \{validInspections\.length\} 个环境/);
+  assert.match(environmentSource, /navigator\.clipboard\.readText/);
+  assert.match(environmentSource, /startsWith\("akenv:\/\/"\)/);
+  assert.match(environmentSource, /promptedClipboardShareTexts/);
+  assert.match(environmentSource, /window\.addEventListener\("focus", handleFocus\)/);
+  assert.match(environmentSource, /document\.addEventListener\("visibilitychange", handleVisibilityChange\)/);
+  assert.match(environmentSource, /window\.addEventListener\("paste", handlePaste\)/);
+  assert.match(environmentSource, /openClipboardImport\(text, true\)/);
+  assert.match(environmentSource, /当前浏览器无法自动读取剪贴板/);
+  assert.match(environmentSource, /未能读取剪贴板。请允许剪贴板权限/);
+  assert.match(environmentSource, /clipboardReadPermissionDenied/);
+  assert.match(environmentSource, /className="environment-clipboard-notice" role="alert"/);
+  assert.match(environmentSource, />\s*手动导入\s*<\/Button>/);
+  assert.match(environmentSource, /item\.status === "failed"/);
+  assert.match(environmentSource, /readyToImport = phase === "ready"[\s\S]*?validInspections\.length > 0/);
+  assert.match(environmentSource, /const importedById = new Map<string, StudioEnvironment>/);
+  assert.match(environmentSource, /importedById\.set\(item\.environment\.id, item\.environment\)/);
+  assert.match(environmentStyles, /\.environment-share-dialog/);
+  assert.match(environmentStyles, /@media \(max-width: 560px\)[\s\S]*?\.environment-share-dialog/);
+  assert.match(environmentStyles, /\.environment-clipboard-notice/);
+
+  const server = await createServer({
+    appType: "custom",
+    logLevel: "silent",
+    optimizeDeps: { noDiscovery: true },
+    server: { middlewareMode: true },
+  });
+  try {
+    const module = await server.ssrLoadModule("/src/adk/client.ts");
+    assert.deepEqual(
+      module.parseEnvironmentShareCodes(" akenv://one，akenv://two\nakenv://one, ,akenv://three "),
+      ["akenv://one", "akenv://two", "akenv://three"],
+    );
+    await assert.rejects(
+      module.writeEnvironmentShareCode("akenv://one", null),
+      /当前浏览器不支持写入剪贴板/,
+    );
+    await assert.rejects(
+      module.writeEnvironmentShareCode("akenv://one", {
+        writeText: async () => { throw new Error("denied"); },
+      }),
+      /无法写入剪贴板/,
+    );
+  } finally {
+    await server.close();
+  }
+});
+
+test("keeps environment deletion discoverable from the editor", () => {
+  assert.match(environmentSource, /onDelete\?: \(\) => void/);
+  assert.match(environmentSource, /color="danger" variant="ghost"[\s\S]*?>\s*删除\s*<\/Button>/);
+  assert.match(environmentSource, /onDelete=\{editingEnvironment \? \(\) => setDeleteTarget\(editingEnvironment\)/);
+  assert.match(environmentSource, /const deleteDialog = deleteTarget \? \(/);
+  assert.match(environmentSource, /deleteEnvironment\(target\.id\)/);
+  assert.match(environmentSource, /setView\(\{ kind: "list" \}\)/);
 });
 
 test("validates Dockerfile uploads before the environment is created", async () => {
