@@ -44,11 +44,15 @@ import importlib.util
 import json
 import os
 import sys
-import tomllib
 import types as pytypes
 from typing import Any, AsyncIterator
 
 import httpx
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python < 3.11
+    import tomli as tomllib
 
 #: ``{shim_url: ResponsesShim}``. The runtime writes the shim URL into
 #: ``config.toml``; the fake reads it back and needs the ASGI app behind it.
