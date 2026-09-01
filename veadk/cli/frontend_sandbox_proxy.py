@@ -24,7 +24,7 @@ import posixpath
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from typing import Any, Literal
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 
 import httpx
 from fastapi import Request, WebSocket, WebSocketDisconnect
@@ -71,6 +71,20 @@ def browser_launch_url(
             raise RuntimeError("Sandbox Browser 返回了无效地址。")
         return sandbox_service_url(endpoint, "/browser-ui")
     return f"{proxy_prefix(session_id, 'browser')}/browser-ui"
+
+
+def terminal_initial_command_url(session_id: str, command: str) -> str:
+    """Return a proxied Terminal URL that creates a shell and runs one command."""
+    initial_command = command.strip()
+    if not initial_command:
+        raise ValueError("Sandbox Terminal 初始化命令不能为空。")
+    query = urlencode(
+        {
+            "command": initial_command,
+            "font_size": "12",
+        }
+    )
+    return f"{proxy_prefix(session_id, 'terminal')}/terminal?{query}"
 
 
 async def terminal_launch_url(
@@ -234,14 +248,14 @@ def mount_sandbox_proxy_routes(
         if target is None:
             return
         shell_session_id = websocket.query_params.get("session_id", "").strip()
-        if not shell_session_id or len(shell_session_id) > 1_000:
+        if len(shell_session_id) > 1_000:
             await websocket.close(code=1008, reason="invalid shell session")
             return
         upstream = sandbox_service_url(
             target.endpoint,
             "/v1/shell/ws",
             websocket=True,
-            query={"session_id": shell_session_id},
+            query={"session_id": shell_session_id} if shell_session_id else None,
         )
         await _relay_websocket(websocket, upstream)
 
@@ -357,7 +371,18 @@ async def _proxy_http_response(
     if surface == "browser" and asset_path == "v1/browser/info":
         return await _browser_info_response(request, upstream, client, prefix)
     if content_type.lower().startswith("text/html"):
-        return await _html_response(upstream, client, common_headers, prefix)
+        font_size = (
+            12
+            if surface == "terminal" and request.query_params.get("font_size") == "12"
+            else None
+        )
+        return await _html_response(
+            upstream,
+            client,
+            common_headers,
+            prefix,
+            terminal_font_size=font_size,
+        )
 
     async def _body() -> AsyncIterator[bytes]:
         size = 0
@@ -431,6 +456,8 @@ async def _html_response(
     client: httpx.AsyncClient,
     headers: dict[str, str],
     prefix: str,
+    *,
+    terminal_font_size: int | None = None,
 ) -> Response:
     try:
         content = await upstream.aread()
@@ -445,6 +472,12 @@ async def _html_response(
         ):
             text = text.replace(f'"{root}', f'"{prefix}{root}')
             text = text.replace(f"'{root}", f"'{prefix}{root}")
+        if terminal_font_size is not None:
+            text = text.replace(
+                "fontSize: 14,",
+                f"fontSize: {terminal_font_size},",
+                1,
+            )
         return Response(
             text,
             status_code=upstream.status_code,
@@ -588,6 +621,7 @@ __all__ = [
     "mount_sandbox_proxy_routes",
     "proxy_cookie_name",
     "proxy_prefix",
+    "terminal_initial_command_url",
     "terminal_launch_url",
     "upload_sandbox_file",
 ]

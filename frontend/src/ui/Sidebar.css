@@ -6,3 +6,7 @@
 .new-chat--cronjobs.is-active > .icon {
   color: hsl(var(--foreground));
 }
+
+.sidebar-agentkit-cli-slot {
+  padding: 6px 8px 0;
+}

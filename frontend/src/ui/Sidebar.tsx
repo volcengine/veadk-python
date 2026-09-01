@@ -28,6 +28,7 @@ import { displayName, profilePictureUrl } from "../adk/identity";
 import { SearchButton } from "./Search";
 import { AgentKitPromoCard } from "./AgentKitPromoCard";
 import { IssueFeedbackIcon } from "./icons/FeedbackIcons";
+import { SandboxTerminalIcon } from "./icons/SandboxControlIcons";
 import {
   NewChatIcon,
   ResourceLibraryIcon,
@@ -149,6 +150,7 @@ export interface SidebarProps {
   onWorkspace: () => void;
   onApplications: () => void;
   onCronJobs: () => void;
+  onAgentKitCli: () => void;
   onSystemInfo: () => void;
   onIssueFeedback: () => void;
   onPickSession: (id: string) => void;
@@ -331,6 +333,7 @@ export function Sidebar({
   onWorkspace,
   onApplications,
   onCronJobs,
+  onAgentKitCli,
   onSystemInfo,
   onIssueFeedback,
   onPickSession,
@@ -691,6 +694,18 @@ export function Sidebar({
 
       <div className="sidebar-footer">
         <AgentKitPromoCard cloudProvider={cloudProvider} />
+        <nav className="sidebar-nav sidebar-agentkit-cli-slot" aria-label="快捷入口">
+          <button
+            type="button"
+            className="new-chat sidebar-agentkit-cli"
+            onClick={onAgentKitCli}
+            aria-label="AgentKit CLI"
+            title="AgentKit CLI"
+          >
+            <SandboxTerminalIcon className="icon" />
+            <span className="sidebar-nav-label">AgentKit CLI</span>
+          </button>
+        </nav>
         <SidebarUser
           access={access}
           userInfo={userInfo}

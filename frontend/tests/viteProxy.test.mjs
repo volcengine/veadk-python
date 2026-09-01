@@ -18,6 +18,10 @@ test("proxies Runtime harness APIs in development", () => {
 test("local API proxy strips browser origin headers before forwarding", () => {
   assert.match(
     source,
+    /function localApiProxy\(\): ProxyOptions[\s\S]*?ws:\s*true/,
+  );
+  assert.match(
+    source,
     /function localApiProxy\(\): ProxyOptions[\s\S]*?proxy\.on\(["']proxyReq["'][\s\S]*?removeHeader\(["']origin["']\)[\s\S]*?removeHeader\(["']referer["']\)/,
   );
   for (const route of [
