@@ -56,7 +56,12 @@ test("renders the shared resource card list, independent-session form, details, 
   assert.match(cronJobsSource, /<ResourceGrid>[\s\S]*?<ResourceCreateCard[\s\S]*?<LibraryResourceCard/);
   assert.match(cronJobsSource, /<LibraryResourceCard[\s\S]*?title=\{job\.name\}/);
   assert.match(cronJobsSource, /metadata=\{\[/);
-  assert.match(cronJobsSource, /action=\{\{/);
+  const cardSource = cronJobsSource.slice(
+    cronJobsSource.indexOf("<LibraryResourceCard"),
+    cronJobsSource.indexOf("/>", cronJobsSource.indexOf("<LibraryResourceCard")),
+  );
+  assert.match(cardSource, /label: "执行计划"/);
+  assert.doesNotMatch(cardSource, /label: "Runtime"|label: "下次执行"|action=\{\{/);
   assert.match(cronJobsSource, /detailAction=\{\{ label: "查看详情"/);
   assert.match(cronJobsSource, /每次触发都会为 Runtime Agent 创建独立 Session/);
   assert.match(cronJobsSource, /type="datetime-local"/);
@@ -110,7 +115,10 @@ test("uses Apps SDK controls while keeping only domain layout and responsive sty
   assert.match(cronJobsStyles, /\.cronjobs-drawer\s*\{[\s\S]*?width: min\(520px, 100vw\)/);
   assert.match(cronJobsStyles, /@media \(max-width: 900px\)/);
   assert.match(cronJobsStyles, /@media \(max-width: 520px\)/);
-  assert.match(cronJobsSource, /label: "下次执行"/);
+  assert.doesNotMatch(cronJobsSource.slice(
+    cronJobsSource.indexOf("<LibraryResourceCard"),
+    cronJobsSource.indexOf("/>", cronJobsSource.indexOf("<LibraryResourceCard")),
+  ), /label: "下次执行"/);
   assert.match(resourceStyles, /@media \(max-width: 720px\)[\s\S]*?\.resource-grid\s*\{[\s\S]*?grid-template-columns: 1fr/);
   assert.match(cronJobsStyles, /@media \(prefers-reduced-motion: reduce\)/);
   assert.doesNotMatch(cronJobsStyles, /#[0-9a-f]{3,8}/i);

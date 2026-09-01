@@ -77,18 +77,10 @@ test("skill center uses the Studio page shell and opens spaces as a detail page"
   assert.match(skillCenterSource, /<ResourceSearch/);
   assert.match(skillCenterSource, /<ResourceGrid>/);
   assert.match(skillCenterSource, /<LibraryResourceCard[\s\S]*?className="skillcenter-space-card"/);
-  for (const component of [
-    "ResourceDetail",
-    "ResourceDetailHeader",
-    "ResourceDetailHeading",
-    "ResourceDetailActions",
-    "ResourceDetailBody",
-    "ResourceDetailSummary",
-    "ResourceDetailSectionHeader",
-  ]) {
+  for (const component of ["ResourceDetailLayout", "ResourceDetailSummary", "ResourceDetailSectionHeader"]) {
     assert.match(skillCenterSource, new RegExp(`<${component}`));
   }
-  assert.match(skillCenterSource, /<ResourceDetailHeading[\s\S]*?title=\{selectedSpace\.name\}[\s\S]*?onBack=\{closeSpace\}/);
+  assert.match(skillCenterSource, /<ResourceDetailLayout[\s\S]*?title=\{selectedSpace\.name\}[\s\S]*?onBack=\{closeSpace\}/);
   assert.doesNotMatch(skillCenterSource, /skillcenter-page-heading--back/);
   assert.doesNotMatch(skillCenterSource, /skillcenter-browser|点击 Skill 空间以查看详情/);
   assert.doesNotMatch(skillCenterSource, /items\[0\]/);
@@ -273,7 +265,7 @@ test("managed Skill APIs cover space creation, archives, deletion, and full file
   assert.match(skillCenterSource, /skillName: skill\.skillName/);
   assert.match(managementDialogsSource, /await validateSkillArchive\(selected\)/);
   assert.match(managementDialogsSource, /export function EditSkillSpaceDialog/);
-  assert.match(skillCenterSource, /onClick=\{\(\) => setEditingSpace\(selectedSpace\)\}[\s\S]*?>\s*编辑空间\s*<\/button>/);
+  assert.match(skillCenterSource, /onClick=\{\(\) => setEditingSpace\(selectedSpace\)\}[\s\S]*?>\s*编辑空间\s*<\/Button>/);
   assert.match(skillCenterSource, /onClick=\{\(\) => void removeSpace\(selectedSpace\)\}[\s\S]*?"删除空间"/);
   assert.match(resourceCardSource, /<ResourceCardRevealAction/);
   assert.match(managementDialogsSource, /不会自动上传/);
@@ -349,19 +341,32 @@ test("skill space cards expose direct actions and structured metadata", () => {
   assert.doesNotMatch(skillCenterSource, /metadata=\{\[[\s\S]*?label: "地域"/);
   assert.doesNotMatch(skillCenterSource, /<small>Project<\/small>/);
   assert.doesNotMatch(skillCenterSource, /<span>地域<\/span>/);
-  const detailHeaderStart = skillCenterSource.indexOf("<ResourceDetailHeader>");
-  const detailHeaderEnd = skillCenterSource.indexOf("</ResourceDetailHeader>", detailHeaderStart);
-  const detailHeader = skillCenterSource.slice(detailHeaderStart, detailHeaderEnd);
-  assert.match(detailHeader, />\s*编辑空间\s*<\/button>/);
+  const detailLayoutStart = skillCenterSource.indexOf("<ResourceDetailLayout");
+  const detailLayoutEnd = skillCenterSource.indexOf("</ResourceDetailLayout>", detailLayoutStart);
+  const detailHeader = skillCenterSource.slice(detailLayoutStart, detailLayoutEnd);
+  assert.match(detailHeader, /<Button[\s\S]*?color="secondary"[\s\S]*?variant="outline"[\s\S]*?>\s*编辑空间\s*<\/Button>/);
   assert.match(detailHeader, /"删除中…" : "删除空间"/);
-  assert.match(detailHeader, />本地上传<\/button>/);
+  assert.match(detailHeader, /<Button[^>]*color="danger"[^>]*variant="soft"/);
+  assert.match(detailHeader, /<Button[\s\S]*?color="secondary"[\s\S]*?variant="outline"[\s\S]*?>本地上传<\/Button>/);
+  assert.match(detailHeader, /<Button[\s\S]*?color="primary"[\s\S]*?<PlusLg18pxAdd[\s\S]*?>[\s\S]*?创建技能[\s\S]*?<\/Button>/);
   assert.match(detailHeader, />创建技能<\/span>/);
+  assert.doesNotMatch(detailHeader, /className="skillcenter-(?:primary|secondary)-action/);
+});
+
+test("skill space detail uses the shared split layout navigation", () => {
+  assert.match(skillCenterSource, /type SkillSpaceDetailSection = "overview" \| "skills"/);
+  assert.match(skillCenterSource, /sections=\{\[[\s\S]*?key: "overview"[\s\S]*?label: "概览"[\s\S]*?content:[\s\S]*?key: "skills"[\s\S]*?label: "技能"[\s\S]*?content:/);
+  assert.match(skillCenterSource, /activeSectionKey=\{detailSection\}/);
+  assert.match(skillCenterSource, /onSectionChange=\{\(key\) => setDetailSection\(key as SkillSpaceDetailSection\)\}/);
+  assert.doesNotMatch(skillCenterSource, /detailSection === "overview"/);
+  assert.match(skillCenterSource, /content: \([\s\S]*?<section className="skillcenter-overview">[\s\S]*?<ResourceDetailSummary className="skillcenter-detail-facts">/);
+  assert.match(skillStylesSource, /\.skillcenter-overview \.skillcenter-detail-facts\s*\{[^}]*border:\s*0;[^}]*background:\s*transparent;/);
+  assert.doesNotMatch(skillStylesSource, /\.skillcenter-detail\s+\.resource-detail__(?:body|navigation|content)/);
 });
 
 test("Skill running states, actions, and candidate loading use the requested visual hierarchy", () => {
   assert.doesNotMatch(skillStylesSource, /\.skillcenter-space-card\s*\{[^}]*min-height:\s*196px/);
-  assert.match(skillStylesSource, /\.skillcenter-primary-action,[\s\S]*?height:\s*36px/);
-  assert.match(skillStylesSource, /\.skillcenter-primary-action,[\s\S]*?box-sizing:\s*border-box/);
+  assert.doesNotMatch(skillStylesSource, /\.skillcenter-(?:primary|secondary)-action/);
   assert.match(resourceCollectionStylesSource, /\.resource-card__actions\s*\{[^}]*display:\s*flex;/);
   assert.match(resourceCollectionStylesSource, /\.resource-card__action\s*\{[^}]*min-height:\s*28px;[^}]*font-size:\s*12px;/);
   assert.match(generationSource, /className="skill-generation__spinner"/);

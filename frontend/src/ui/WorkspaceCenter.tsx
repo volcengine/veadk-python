@@ -27,11 +27,7 @@ import { environmentLanguageLabel } from "./environmentModel";
 import { LibraryResourceCard } from "./LibraryResourceCard";
 import {
   ResourceCreateCard,
-  ResourceDetail,
-  ResourceDetailActions,
-  ResourceDetailBody,
-  ResourceDetailHeader,
-  ResourceDetailHeading,
+  ResourceDetailLayout,
   ResourceDetailSectionHeader,
   ResourceDetailSummary,
   ResourceGrid,
@@ -137,23 +133,21 @@ function WorkspaceEditor({
 
   return (
     <ResourcePageShell className="workspace-center" aria-label={workspace ? "工作区详情" : "新建工作区"}>
-      <ResourceDetail>
-        <ResourceDetailHeader>
-          <ResourceDetailHeading
-            title={workspace ? workspace.name : "新建工作区"}
-            description="将常用环境组合在一起；同一个环境可以加入多个工作区。"
-            backLabel="返回工作区列表"
-            onBack={onBack}
-          />
-          <ResourceDetailActions>
+      <ResourceDetailLayout
+        title={workspace ? workspace.name : "新建工作区"}
+        description="将常用环境组合在一起；同一个环境可以加入多个工作区。"
+        identitySeed={workspace?.name || "新建工作区"}
+        backLabel="返回工作区列表"
+        onBack={onBack}
+        actions={(
+          <>
             {onDelete ? <button type="button" className="is-danger" onClick={onDelete}>删除</button> : null}
             <button type="submit" form="workspace-form" disabled={saving || !name.trim()}>
               {saving ? "保存中" : "保存"}
             </button>
-          </ResourceDetailActions>
-        </ResourceDetailHeader>
-
-        <ResourceDetailBody>
+          </>
+        )}
+      >
           {workspace ? (
             <ResourceDetailSummary>
               <div><dt>环境</dt><dd>{environmentIds.length} 个</dd></div>
@@ -224,8 +218,7 @@ function WorkspaceEditor({
             </section>
             {error ? <p className="workspace-form-error" role="alert">{error}</p> : null}
           </form>
-        </ResourceDetailBody>
-      </ResourceDetail>
+      </ResourceDetailLayout>
     </ResourcePageShell>
   );
 }

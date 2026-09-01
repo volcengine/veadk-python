@@ -10,17 +10,21 @@ import {
   type KeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
+  type Ref,
   type SVGProps,
 } from "react";
 import {
-  ArrowLeft,
   ArrowRight,
   PlaySm,
   PlusLg18pxAdd,
 } from "@openai/apps-sdk-ui/components/Icon";
+import { Button } from "@openai/apps-sdk-ui/components/Button";
+import { Input } from "@openai/apps-sdk-ui/components/Input";
 import { LoadingIndicator } from "@openai/apps-sdk-ui/components/Indicator";
 import { Select, type Option } from "@openai/apps-sdk-ui/components/Select";
+import { ChevronLeft } from "lucide-react";
 
+import { StudioActionMenu, type StudioActionMenuItem } from "./StudioActionMenu";
 import { TextShimmer } from "./text-shimmer/TextShimmer";
 import "./ResourceCollection.css";
 
@@ -137,21 +141,35 @@ export function ResourceDetailHeader({
 export function ResourceDetailHeading({
   title,
   description,
+  identitySeed,
+  meta,
   backLabel,
   onBack,
 }: {
   title: ReactNode;
   description?: ReactNode;
-  backLabel: string;
-  onBack: () => void;
+  identitySeed: string;
+  meta?: ReactNode;
+  backLabel?: string;
+  onBack?: () => void;
 }) {
+  const resolvedBackLabel = backLabel ?? "返回";
+
   return (
     <div className="resource-detail__heading">
-      <button type="button" className="resource-detail__back" onClick={onBack} aria-label={backLabel} title={backLabel}>
-        <ArrowLeft aria-hidden="true" />
-      </button>
+      {onBack ? (
+        <button type="button" className="resource-detail__back" onClick={onBack} aria-label={resolvedBackLabel} title={resolvedBackLabel}>
+          <ChevronLeft aria-hidden="true" />
+        </button>
+      ) : null}
       <div className="resource-detail__heading-copy">
-        <h1>{title}</h1>
+        <div className="resource-detail__title-row">
+          <span className="resource-detail__identity">
+            <ResourceIdentityMark seed={identitySeed} />
+          </span>
+          <h1>{title}</h1>
+          {meta ? <div className="resource-detail__meta">{meta}</div> : null}
+        </div>
         {description ? <p>{description}</p> : null}
       </div>
     </div>
@@ -170,6 +188,91 @@ export function ResourceDetailBody({
   ...props
 }: HTMLAttributes<HTMLDivElement>) {
   return <div className={joinClassNames("resource-detail__body", className)} {...props} />;
+}
+
+export interface ResourceDetailSection<T extends string> {
+  key: T;
+  label: ReactNode;
+  content: ReactNode;
+  disabled?: boolean;
+}
+
+export function ResourceDetailLayout<T extends string = string>({
+  title,
+  description,
+  identitySeed,
+  meta,
+  backLabel,
+  onBack,
+  actions,
+  className,
+  actionsClassName,
+  bodyClassName,
+  sections,
+  activeSectionKey,
+  navigationLabel = "详情导航",
+  onSectionChange,
+  children,
+}: {
+  title: ReactNode;
+  description?: ReactNode;
+  identitySeed: string;
+  meta?: ReactNode;
+  backLabel?: string;
+  onBack?: () => void;
+  actions?: ReactNode;
+  className?: string;
+  actionsClassName?: string;
+  bodyClassName?: string;
+  sections?: readonly ResourceDetailSection<T>[];
+  activeSectionKey?: T;
+  navigationLabel?: string;
+  onSectionChange?: (key: T) => void;
+  children?: ReactNode;
+}) {
+  const hasNavigation = Boolean(sections?.length);
+  const activeContent = sections?.find((section) => section.key === activeSectionKey)?.content;
+
+  return (
+    <ResourceDetail className={className}>
+      <ResourceDetailHeader>
+        <ResourceDetailHeading
+          title={title}
+          description={description}
+          identitySeed={identitySeed}
+          meta={meta}
+          backLabel={backLabel}
+          onBack={onBack}
+        />
+        {actions ? <ResourceDetailActions className={actionsClassName}>{actions}</ResourceDetailActions> : null}
+      </ResourceDetailHeader>
+      <ResourceDetailBody className={joinClassNames(hasNavigation && "is-split", bodyClassName)}>
+        {hasNavigation ? (
+          <>
+            <nav className="resource-detail__navigation" aria-label={navigationLabel}>
+              {sections?.map((section) => (
+                <Button
+                  type="button"
+                  key={section.key}
+                  color="secondary"
+                  variant={section.key === activeSectionKey ? "soft" : "ghost"}
+                  size="lg"
+                  pill={false}
+                  block
+                  aria-current={section.key === activeSectionKey ? "page" : undefined}
+                  disabled={section.disabled}
+                  onClick={() => onSectionChange?.(section.key)}
+                >
+                  <span className="resource-detail__navigation-label">{section.label}</span>
+                </Button>
+              ))}
+            </nav>
+            <div className="resource-detail__content">{activeContent}</div>
+          </>
+        ) : children}
+      </ResourceDetailBody>
+    </ResourceDetail>
+  );
 }
 
 export function ResourceDetailSummary({
@@ -198,6 +301,133 @@ export function ResourceDetailSectionHeader({
       </div>
       {actions}
     </header>
+  );
+}
+
+export interface ResourceDataTableColumn<T> {
+  key: string;
+  header: ReactNode;
+  render: (item: T) => ReactNode;
+  className?: string;
+}
+
+export interface ResourceDataTablePrimaryAction {
+  label: ReactNode;
+  onClick: () => void;
+  disabled?: boolean;
+  title?: string;
+}
+
+export function ResourceDataTable<T>({
+  rows,
+  rowKey,
+  rowLabel,
+  columns,
+  searchValue,
+  onSearchChange,
+  searchPlaceholder,
+  searchLabel,
+  primaryAction,
+  rowActions,
+  scrollRef,
+  onScroll,
+  busy,
+  footer,
+  emptyLabel = "暂无数据",
+}: {
+  rows: readonly T[];
+  rowKey: (item: T) => string;
+  rowLabel?: (item: T) => string;
+  columns: readonly ResourceDataTableColumn<T>[];
+  searchValue: string;
+  onSearchChange: (value: string) => void;
+  searchPlaceholder: string;
+  searchLabel: string;
+  primaryAction?: ResourceDataTablePrimaryAction;
+  rowActions?: (item: T) => readonly StudioActionMenuItem[];
+  scrollRef?: Ref<HTMLDivElement>;
+  onScroll?: HTMLAttributes<HTMLDivElement>["onScroll"];
+  busy?: boolean;
+  footer?: ReactNode;
+  emptyLabel?: ReactNode;
+}) {
+  const hasRowActions = Boolean(rowActions);
+
+  return (
+    <div className="resource-data-table">
+      <div className="resource-data-table__toolbar">
+        <div className="resource-data-table__search">
+          <Input
+            type="search"
+            value={searchValue}
+            onChange={(event) => onSearchChange(event.target.value)}
+            placeholder={searchPlaceholder}
+            aria-label={searchLabel}
+          />
+        </div>
+        {primaryAction ? (
+          <Button
+            type="button"
+            color="primary"
+            disabled={primaryAction.disabled}
+            title={primaryAction.title}
+            onClick={primaryAction.onClick}
+          >
+            {primaryAction.label}
+          </Button>
+        ) : null}
+      </div>
+      <div
+        ref={scrollRef}
+        className="resource-data-table__frame"
+        aria-busy={busy || undefined}
+        onScroll={onScroll}
+      >
+        <table className="resource-data-table__table">
+          <thead>
+            <tr>
+              {columns.map((column) => (
+                <th key={column.key} scope="col" className={column.className}>
+                  {column.header}
+                </th>
+              ))}
+              {hasRowActions ? <th scope="col" className="resource-data-table__actions-heading"><span className="sr-only">操作</span></th> : null}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 ? (
+              <tr>
+                <td className="resource-data-table__empty" colSpan={columns.length + (hasRowActions ? 1 : 0)}>
+                  {emptyLabel}
+                </td>
+              </tr>
+            ) : rows.map((item) => {
+              const key = rowKey(item);
+              const label = rowLabel?.(item) ?? key;
+              return (
+                <tr key={key}>
+                  {columns.map((column) => (
+                    <td key={column.key} className={column.className}>
+                      {column.render(item)}
+                    </td>
+                  ))}
+                  {rowActions ? (
+                    <td className="resource-data-table__actions">
+                      <StudioActionMenu
+                        label={`更多操作 ${label}`}
+                        menuLabel={`${label} 操作`}
+                        items={rowActions(item)}
+                      />
+                    </td>
+                  ) : null}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        {footer}
+      </div>
+    </div>
   );
 }
 

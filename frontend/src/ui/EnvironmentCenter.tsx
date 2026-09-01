@@ -17,6 +17,7 @@ import { ExternalLink, FileUp, SlidersHorizontal, X } from "lucide-react";
 import { Badge } from "@openai/apps-sdk-ui/components/Badge";
 import { Button } from "@openai/apps-sdk-ui/components/Button";
 import { EmptyMessage } from "@openai/apps-sdk-ui/components/EmptyMessage";
+import { ArrowRotateCw, FileCode } from "@openai/apps-sdk-ui/components/Icon";
 import { Input } from "@openai/apps-sdk-ui/components/Input";
 import { RadioGroup } from "@openai/apps-sdk-ui/components/RadioGroup";
 import { SegmentedControl } from "@openai/apps-sdk-ui/components/SegmentedControl";
@@ -36,6 +37,7 @@ import { GitHubLogo } from "./GitHubLogo";
 import { LibraryResourceCard } from "./LibraryResourceCard";
 import {
   ResourceCreateCard,
+  ResourceDetailLayout,
   ResourceGrid,
   ResourceLoadingState,
   ResourcePageHeader,
@@ -60,7 +62,6 @@ import {
   inspectEnvironmentRepository,
   inspectEnvironmentShareCodes,
   listEnvironments,
-  listWorkspaces,
   parseEnvironmentShareCodes,
   updateEnvironment,
   writeEnvironmentShareCode,
@@ -72,7 +73,6 @@ import {
   type EnvironmentRepositoryInspection,
   type EnvironmentShareCodeInspection,
   type StudioEnvironment,
-  type StudioWorkspace,
 } from "../adk/client";
 import {
   buildEnvironmentDockerfile,
@@ -147,14 +147,6 @@ const TOOL_LOGOS: Readonly<Record<string, string>> = {
   ffmpeg: ffmpegLogo,
   imagemagick: imagemagickLogo,
 };
-
-function BackIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
-      <path d="m14.5 6-6 6 6 6" />
-    </svg>
-  );
-}
 
 function AddIcon(props: SVGProps<SVGSVGElement>) {
   return (
@@ -237,15 +229,6 @@ function EnvironmentEmptyIcon(props: SVGProps<SVGSVGElement>) {
     <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
       <path d="M5.5 10.5 16 5l10.5 5.5L16 16 5.5 10.5Z" />
       <path d="M5.5 16 16 21.5 26.5 16M5.5 21.5 16 27l10.5-5.5" />
-    </svg>
-  );
-}
-
-function ManifestIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
-      <path d="M7 3.75h7l3 3V20.25H7z" />
-      <path d="M14 3.75v3h3M9.75 11h4.5M9.75 14.5h4.5" />
     </svg>
   );
 }
@@ -857,7 +840,10 @@ function GitRepositoryFields({
         {inspectError ? (
           <div className="environment-source-error" role="alert">
             <span>{inspectError}</span>
-            <button type="button" disabled={disabled} onClick={() => void inspectRepository()}>重试</button>
+            <Button type="button" color="primary" size="sm" pill={false} disabled={disabled} onClick={() => void inspectRepository()}>
+              <ArrowRotateCw />
+              重试
+            </Button>
           </div>
         ) : null}
         {!inspecting && !inspectError && inspectionIsCurrent && inspection ? (
@@ -1642,19 +1628,18 @@ function EnvironmentEditor({
     }
   };
 
+  const detailTitle = draft.name.trim() || (isEditing ? environment?.name || "配置环境" : "新建环境");
+
   return (
-    <section className="environment-editor" aria-labelledby="environment-editor-title">
-      <header className="environment-editor__header">
-        <div className="environment-editor__heading">
-          <button type="button" className="environment-back" onClick={onCancel} aria-label="返回环境列表">
-            <BackIcon />
-          </button>
-          <div>
-            <h1 id="environment-editor-title">{isEditing ? "配置环境" : "新建环境"}</h1>
-            <p>配置运行环境，或接入代码仓库和已有镜像</p>
-          </div>
-        </div>
-        <div className="environment-editor__actions">
+    <ResourcePageShell className="environment-editor" aria-label={isEditing ? "环境详情" : "新建环境"}>
+      <ResourceDetailLayout
+        title={detailTitle}
+        description="配置运行环境，或接入代码仓库和已有镜像"
+        identitySeed={detailTitle}
+        backLabel="返回环境列表"
+        onBack={onCancel}
+        actions={(
+          <>
           {onDelete ? (
             <Button type="button" color="danger" variant="ghost" size="sm" onClick={onDelete} disabled={saving}>
               删除
@@ -1673,8 +1658,9 @@ function EnvironmentEditor({
                 ? isEditing ? "保存环境" : "创建环境"
                 : isEditing ? "保存并构建" : "创建并构建"}
           </Button>
-        </div>
-      </header>
+          </>
+        )}
+      >
 
       <form id={formId} className="environment-form" onSubmit={submit}>
         <div className="environment-fields">
@@ -2034,7 +2020,8 @@ function EnvironmentEditor({
           />
         )}
       </form>
-    </section>
+      </ResourceDetailLayout>
+    </ResourcePageShell>
   );
 }
 
@@ -2050,7 +2037,6 @@ export function EnvironmentCenter({
   clipboardReadError?: string;
 }) {
   const [environments, setEnvironments] = useState<StudioEnvironment[]>([]);
-  const [workspaces, setWorkspaces] = useState<StudioWorkspace[]>([]);
   const [view, setView] = useState<EnvironmentView>({ kind: "list" });
   const [query, setQuery] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<StudioEnvironment | null>(null);
@@ -2128,10 +2114,9 @@ export function EnvironmentCenter({
     const controller = new AbortController();
     if (environments.length === 0) setLoading(true);
     setLoadError("");
-    void Promise.all([listEnvironments(controller.signal), listWorkspaces(controller.signal)])
-      .then(([nextEnvironments, nextWorkspaces]) => {
+    void listEnvironments(controller.signal)
+      .then((nextEnvironments) => {
         setEnvironments(nextEnvironments);
-        setWorkspaces(nextWorkspaces);
       })
       .catch((cause) => {
         if ((cause as Error)?.name !== "AbortError") {
@@ -2412,7 +2397,6 @@ export function EnvironmentCenter({
               </>
             ) : null}
             {visibleEnvironments.map((environment) => {
-              const referenceCount = workspaces.filter((workspace) => workspace.environmentIds.includes(environment.id)).length;
               const status = environmentStatus(environment);
               const buildActive = Boolean(
                 environment.latestVersion && ACTIVE_BUILD_STATUSES.has(environment.latestVersion.status),
@@ -2431,14 +2415,6 @@ export function EnvironmentCenter({
                     "暂无描述"
                   }
                   metadata={[
-                    {
-                      label: "基础环境",
-                      value: environment.baseEnvironment === "aio-sandbox"
-                        ? "AIO Sandbox"
-                        : environmentOperatingSystemLabel(environment.operatingSystem),
-                    },
-                    { label: "语言", value: environmentLanguageLabel(environment.language) },
-                    { label: "工作区", value: `${referenceCount} 个工作区` },
                     { label: "更新", value: environmentUpdatedAt(environment.updatedAt) },
                   ]}
                   action={{
@@ -2452,7 +2428,7 @@ export function EnvironmentCenter({
                   }}
                   auxiliaryAction={{
                     label: "查看环境 Manifest",
-                    icon: <ManifestIcon />,
+                    icon: <FileCode />,
                     title: environment.latestVersion ? "查看 Manifest" : "尚无可用 Manifest",
                     disabled: !environment.latestVersion,
                     onClick: () => setManifestTarget(environment),

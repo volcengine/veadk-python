@@ -127,25 +127,25 @@ test("focused agent details can render without the workspace tabs or list sideba
   assert.match(clientSource, /return fetchAgentInfo\(app, ep, false\)/);
 });
 
-test("focused agent details place the shared back icon beside the title", () => {
+test("focused agent details use the shared resource detail header", () => {
   assert.match(workspaceSource, /onBack\?: \(\) => void/);
   assert.match(
     workspaceSource,
-    /className="aw-agent-heading"[\s\S]*?<PageBackButton[\s\S]*?label="返回智能体列表"[\s\S]*?<div className="aw-agent-title-row">/,
+    /<ResourceDetailLayout[\s\S]*?title=\{selectedName\}[\s\S]*?identitySeed=\{selectedName\}[\s\S]*?backLabel="返回智能体列表"[\s\S]*?onBack=\{detailOnly \? onBack : undefined\}/,
   );
-  assert.match(workspaceStyles, /\.aw-agent-heading\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*center;[^}]*gap:\s*8px;/s);
+  assert.doesNotMatch(workspaceSource, /import \{ PageBackButton \}/);
   assert.match(appSource, /<AgentWorkspace[\s\S]*?detailOnly[\s\S]*?onBack=\{closeAgentDetailPage\}/);
 });
 
-test("agent detail tabs remain readable in the mobile horizontal scroller", () => {
-  assert.match(
-    workspaceStyles,
-    /@media \(max-width: 720px\)[\s\S]*?\.aw-agent-tabs\s*\{[\s\S]*?overflow-x:\s*auto;[\s\S]*?scrollbar-width:\s*none;/,
-  );
-  assert.match(
-    workspaceStyles,
-    /@media \(max-width: 720px\)[\s\S]*?\.aw-agent-tabs button\s*\{[\s\S]*?flex:\s*0 0 auto;[\s\S]*?white-space:\s*nowrap;/,
-  );
+test("agent detail navigation delegates responsive layout to the shared resource shell", () => {
+  const detailLayoutStart = workspaceSource.indexOf("<ResourceDetailLayout");
+  const detailLayoutContractEnd = workspaceSource.indexOf("activeSectionKey={section}", detailLayoutStart);
+  assert.ok(detailLayoutStart >= 0 && detailLayoutContractEnd > detailLayoutStart);
+  const detailLayoutContract = workspaceSource.slice(detailLayoutStart, detailLayoutContractEnd);
+  assert.match(detailLayoutContract, /sections=\{visibleAgentSections\.map/);
+  assert.doesNotMatch(detailLayoutContract, /className="aw-agent-tabs"/);
+  assert.match(workspaceSource, /activeSectionKey=\{section\}/);
+  assert.match(workspaceSource, /onSectionChange=\{setSection\}/);
 });
 
 test("runtime detail failures remain visible and retryable", () => {
@@ -200,7 +200,7 @@ test("agent details show capability badges and deployment state before the flow"
   assert.match(workspaceSource, /const draftFlowKey = useMemo\(\(\) => canvasDraftKey\(draft\), \[draft\]\)/);
   assert.match(workspaceSource, /const displayCurrentVersion =[\s\S]*?selectedAgent\?\.currentVersion \?\? runtimeDetail\?\.currentVersion \?\? null/);
   assert.match(workspaceSource, /const runtimeVersionKey =[\s\S]*?displayCurrentVersion \?\? selectedPendingTask\?\.startedAt/);
-  assert.match(workspaceSource, /<span>v\{displayCurrentVersion\}<\/span>/);
+  assert.match(workspaceSource, /className="aw-agent-meta">v\{displayCurrentVersion\}<\/span>/);
   assert.match(workspaceSource, /\? `v\$\{displayCurrentVersion\}`[\s\S]*?: "暂未提供"/);
   assert.match(
     workspaceSource,
@@ -507,10 +507,9 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   );
   assert.match(workspaceSource, /if \(!focusedDeploymentTaskId\) return;/);
   assert.doesNotMatch(workspaceSource, /activeDeploymentTaskId/);
-  assert.match(
-    workspaceSource,
-    /className=\{`aw-main\$\{deploymentInProgress \? " is-deploying" : ""\}`\}[\s\S]*?className="aw-agent-head"[\s\S]*?\{deploymentTask && shouldShowDeploymentTask && \([\s\S]*?className=\{`aw-detail-deployment\$\{deploymentInProgress \? " is-running" : ""\}`\}[\s\S]*?<DeploymentProgressCard[\s\S]*?task=\{deploymentTask\}[\s\S]*?<nav[\s\S]*?className="aw-agent-tabs"/,
-  );
+  assert.match(workspaceSource, /<ResourceDetailLayout[\s\S]*?sections=\{visibleAgentSections\.map\(\(item\) => \(\{[\s\S]*?key: item\.id,[\s\S]*?label: item\.label,[\s\S]*?content: item\.id === section/);
+  assert.match(workspaceSource, /activeSectionKey=\{section\}[\s\S]*?navigationLabel="智能体详情"[\s\S]*?onSectionChange=\{setSection\}/);
+  assert.match(workspaceSource, /className=\{`aw-detail-deployment\$\{deploymentInProgress \? " is-running" : ""\}`\}[\s\S]*?<DeploymentProgressCard[\s\S]*?task=\{deploymentTask\}/);
   assert.match(
     workspaceSource,
     /const deploymentDraft = deploymentTask\?\.draftId[\s\S]*?drafts\.find\(\(item\) => item\.id === deploymentTask\.draftId\)[\s\S]*?deploymentTask\.agentDraft/,
@@ -941,7 +940,7 @@ test("workspace keeps agent deletion in selection mode and the floating detail a
   assert.match(workspaceSource, /删除草稿/);
   assert.match(workspaceStyles, /\.aw-selection-toolbar/);
   assert.match(workspaceStyles, /\.aw-select-marker\.is-checked/);
-  assert.match(workspaceStyles, /\.aw-head-delete/);
+  assert.doesNotMatch(workspaceStyles, /\.aw-head-action(?:\s|\.|:|\{)/);
   assert.doesNotMatch(workspaceStyles, /\.aw-delete-confirm/);
   assert.match(appStyles, /\.studio-confirm-dialog\s*\{[\s\S]*?width:\s*min\(420px, calc\(100vw - 40px\)\)/);
   assert.match(appStyles, /\.studio-confirm-head\s*\{[\s\S]*?flex:\s*0 0 58px/);
@@ -954,16 +953,12 @@ test("workspace keeps agent deletion in selection mode and the floating detail a
   assert.doesNotMatch(appStyles, /\.studio-confirm-close:focus-visible/);
   assert.doesNotMatch(appStyles, /\.studio-confirm-dialog--danger \.studio-confirm-actions \.studio-confirm-primary/);
   assert.match(
-    workspaceStyles,
-    /\.aw-head-delete\.studio-update-action:hover:not\(:disabled\)[\s\S]*?color:\s*#fff;/,
-  );
-  assert.match(
     workspaceSource,
-    /className="aw-head-delete"[\s\S]*?aria-label="删除 Agent"/,
+    /<Button[\s\S]*?color="danger"[\s\S]*?aria-label="删除 Agent"/,
   );
   assert.doesNotMatch(
     workspaceSource,
-    /className="aw-basic-actions"[\s\S]*?className="aw-head-delete studio-update-action"/,
+    /className="aw-basic-actions"[\s\S]*?className="aw-head-action studio-update-action"/,
   );
 });
 
