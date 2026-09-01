@@ -1007,3 +1007,128 @@ async def test_degraded_gate_rejects_a_compaction_shaped_request(monkeypatch) ->
         if item.get("type") in ("function_call", "function_call_output")
     ]
     assert replayed == [], f"tool transcript leaked into compaction: {replayed}"
+
+
+def test_extra_body_drops_keys_the_responses_transport_rejects() -> None:
+    """VeADK's default caching block must not be forwarded to a Responses call.
+
+    Codex always sends the Responses ``instructions`` field, and Ark rejects
+    prompt caching alongside it ("caching is not supported for instructions"),
+    so forwarding ``DEFAULT_MODEL_EXTRA_CONFIG`` verbatim 400s *every* turn.
+    Forwarding ``model_extra_config`` at all is new; before it, the whole body
+    was dropped and this could not happen. Attribution headers -- the valuable
+    half -- must still go through, and a user's own body keys must be untouched.
+    """
+    from veadk.consts import DEFAULT_MODEL_EXTRA_CONFIG
+    from veadk.runtime.codex.proxy import _split_model_extra_config
+
+    headers, body = _split_model_extra_config(DEFAULT_MODEL_EXTRA_CONFIG)
+    assert "caching" not in body, body
+    assert "expire_at" not in body, body
+    assert headers["veadk-source"] == "veadk"
+    assert "x-is-encrypted" in headers
+
+    _, user_body = _split_model_extra_config(
+        {"extra_body": {"thinking": {"type": "disabled"}, "caching": {"type": "on"}}}
+    )
+    assert user_body == {"thinking": {"type": "disabled"}}, user_body
+
+
+@pytest.mark.asyncio
+async def test_backend_error_is_recorded_so_the_turn_cannot_finish_silently(
+    monkeypatch,
+) -> None:
+    """A rejected backend request must not read as a completed turn.
+
+    Codex treats a rejected request as the end of its turn and returns whatever
+    it already had, so a 4xx that is only logged produces `status=completed`, a
+    half-finished workspace and a plausible-sounding summary -- a silently wrong
+    answer. Recording it on the turn state is what lets the runtime re-raise
+    once the stream ends. The message must also reach the log and the client
+    without the backend credential in it.
+    """
+    from litellm import exceptions as litellm_exceptions
+
+    shim = ResponsesShim("https://backend.invalid/v1", "sk-secret-key")
+    token = shim.register_turn([], {}, invocation_id="inv-err")
+
+    async def boom(**kwargs):
+        raise litellm_exceptions.BadRequestError(
+            message="input[3].reasoning: not supported. key=sk-secret-key",
+            model="m",
+            llm_provider="openai",
+        )
+
+    monkeypatch.setattr(proxy_module.litellm, "aresponses", boom)
+
+    async with _client(shim) as client:
+        response = await client.post(
+            "/v1/responses",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"model": "m", "input": [_message("hi")]},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["type"] == "invalid_request_error"
+    assert "sk-secret-key" not in json.dumps(response.json())
+    recorded = shim.turn_error(token)
+    assert isinstance(recorded, litellm_exceptions.BadRequestError), recorded
+
+
+@pytest.mark.asyncio
+async def test_reasoning_rejection_retries_once_without_reasoning_items(
+    monkeypatch,
+) -> None:
+    """A model that refuses replayed reasoning items must still be usable.
+
+    After its first tool round Codex replays its own ``reasoning`` items in
+    ``input``. Ark refuses them per-model (``doubao-seed-1-6``), which killed
+    the turn mid-investigation and made that model family unusable with this
+    runtime. The retry drops reasoning items only in response to that specific
+    refusal -- never pre-emptively, since for backends that accept them they
+    carry the chain of thought across tool rounds.
+    """
+    from litellm import exceptions as litellm_exceptions
+
+    conversation = [
+        _message("go"),
+        {"type": "reasoning", "summary": [{"text": "thinking"}]},
+        {"type": "function_call", "call_id": "c1", "name": "t", "arguments": "{}"},
+    ]
+    seen: list[list[dict]] = []
+
+    async def refuses_reasoning(**kwargs):
+        seen.append(kwargs["input"])
+        if any(item.get("type") == "reasoning" for item in kwargs["input"]):
+            raise litellm_exceptions.BadRequestError(
+                message="input[1].reasoning is not supported for model",
+                model="doubao-seed-1-6",
+                llm_provider="openai",
+            )
+        return {"id": "r", "output": [], "usage": {}}
+
+    monkeypatch.setattr(proxy_module.litellm, "aresponses", refuses_reasoning)
+    result = await proxy_module._call_backend_tolerating_reasoning(
+        {"model": "m", "input": list(conversation)}
+    )
+    assert result["id"] == "r"
+    assert len(seen) == 2, "exactly one retry"
+    assert not any(item.get("type") == "reasoning" for item in seen[-1])
+    assert [item["type"] for item in seen[-1]] == ["message", "function_call"]
+
+    # An unrelated failure must not trigger the strip, or a real error would be
+    # masked by a second identical request.
+    seen.clear()
+
+    async def unrelated(**kwargs):
+        seen.append(kwargs["input"])
+        raise litellm_exceptions.BadRequestError(
+            message="quota exceeded", model="m", llm_provider="openai"
+        )
+
+    monkeypatch.setattr(proxy_module.litellm, "aresponses", unrelated)
+    with pytest.raises(litellm_exceptions.BadRequestError):
+        await proxy_module._call_backend_tolerating_reasoning(
+            {"model": "m", "input": list(conversation)}
+        )
+    assert len(seen) == 1, "no retry for an unrelated error"
