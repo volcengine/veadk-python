@@ -836,7 +836,7 @@ class ResponsesShim:
                                 resp or {"model": model}, usage_acc
                             ),
                         )
-                result = await litellm.aresponses(**call_kwargs)
+                result = await _call_backend_tolerating_reasoning(call_kwargs)
                 resp = _to_dict(result)
                 _accumulate_usage(usage_acc, resp.get("usage"))
                 if max_iters <= 0:
@@ -968,23 +968,27 @@ class ResponsesShim:
 
         # Starlette calls exception handlers as `handler(request, exc)`, so the
         # first parameter must exist even though this handler ignores it.
-        async def _on_backend_error(_request: Request, exc: Exception) -> JSONResponse:
+        async def _on_backend_error(request: Request, exc: Exception) -> JSONResponse:
             status = _error_status(exc)
+            detail = self._redact(str(getattr(exc, "message", None) or exc))
+            # Record it against the turn so the runtime re-raises after the
+            # stream ends. Codex treats a rejected request as the end of its
+            # turn and returns whatever it had, so without this the caller sees
+            # `status=completed`, a half-finished workspace and a plausible
+            # summary -- a silently wrong answer. A 4xx here is terminal: it
+            # arrives only after litellm's own retries are exhausted.
+            turn_context = self._turn(_bearer_token(request))
+            if turn_context is not None:
+                turn_context.state.record_error(exc)
             logger.warning(
-                "codex_backend_api_error status_code=%s error_type=%s",
+                "codex_backend_api_error status_code=%s error_type=%s detail=%s",
                 status,
                 type(exc).__name__,
+                detail,
             )
             return JSONResponse(
                 status_code=status,
-                content={
-                    "error": {
-                        "type": _error_type(status),
-                        "message": self._redact(
-                            str(getattr(exc, "message", None) or exc)
-                        ),
-                    }
-                },
+                content={"error": {"type": _error_type(status), "message": detail}},
             )
 
         # Starlette resolves handlers by walking `type(exc).__mro__`, and none
@@ -1160,10 +1164,68 @@ class ResponsesShim:
                     task.cancel()
 
 
+def _looks_like_reasoning_rejection(exc: BaseException) -> bool:
+    """Whether a backend error is "this model does not accept reasoning items"."""
+    text = str(getattr(exc, "message", None) or exc).lower()
+    return "reasoning" in text and (
+        "not supported" in text or "unsupported" in text or "invalid" in text
+    )
+
+
+async def _call_backend_tolerating_reasoning(call_kwargs: dict[str, Any]) -> Any:
+    """Call the backend, retrying once without Codex's replayed reasoning items.
+
+    After its first tool round Codex replays its own ``reasoning`` items in the
+    request ``input``. Some backends refuse them per-model -- Ark answers
+    ``InvalidParameter: input[N].reasoning ... not supported for model`` for
+    ``doubao-seed-1-6``, while accepting them for other models -- and the
+    rejection lands mid-investigation, so the model family silently became
+    unusable with this runtime rather than merely degraded.
+
+    Reasoning items are dropped only in response to that specific refusal, never
+    pre-emptively: for a backend that accepts them they carry the chain of
+    thought across tool rounds, and stripping them unconditionally would trade a
+    hard failure on a few models for quieter, worse answers on the rest.
+    """
+    try:
+        return await litellm.aresponses(**call_kwargs)
+    except Exception as e:  # noqa: BLE001 - re-raised unless it is this one case
+        conversation = call_kwargs.get("input")
+        if not _looks_like_reasoning_rejection(e) or not isinstance(conversation, list):
+            raise
+        kept = [
+            item
+            for item in conversation
+            if not (isinstance(item, dict) and item.get("type") == "reasoning")
+        ]
+        if len(kept) == len(conversation):
+            raise
+        logger.info(
+            "codex_backend_reasoning_items_dropped removed=%d",
+            len(conversation) - len(kept),
+        )
+        return await litellm.aresponses(**{**call_kwargs, "input": kept})
+
+
+#: ``extra_body`` keys that the Responses transport cannot carry, so they are
+#: dropped rather than forwarded. Ark rejects prompt caching when the request
+#: also has an ``instructions`` field ("caching is not supported for
+#: instructions"), and Codex *always* sends ``instructions`` -- so forwarding
+#: VeADK's default ``caching`` block 400s every single turn. ``expire_at`` only
+#: qualifies the cache entry, so it goes with it. Everything else in
+#: ``extra_body`` is forwarded untouched.
+_BODY_KEYS_UNSUPPORTED_ON_RESPONSES = ("caching", "expire_at")
+
+
 def _split_model_extra_config(
     model_extra_config: dict[str, Any] | None,
 ) -> tuple[dict[str, str], dict[str, Any]]:
-    """Normalize an agent ``model_extra_config`` into header/body dicts."""
+    """Normalize an agent ``model_extra_config`` into header/body dicts.
+
+    Headers are forwarded in full -- they carry VeADK's Ark attribution and
+    encryption defaults. Body keys the Responses transport cannot support are
+    filtered; see :data:`_BODY_KEYS_UNSUPPORTED_ON_RESPONSES`.
+    """
     config = model_extra_config if isinstance(model_extra_config, dict) else {}
     raw_headers = config.get("extra_headers")
     raw_body = config.get("extra_body")
@@ -1178,6 +1240,13 @@ def _split_model_extra_config(
         else {}
     )
     body = dict(raw_body) if isinstance(raw_body, dict) else {}
+    dropped = [key for key in _BODY_KEYS_UNSUPPORTED_ON_RESPONSES if key in body]
+    for key in dropped:
+        body.pop(key, None)
+    if dropped:
+        logger.debug(
+            "codex_shim_extra_body_filtered keys=%s", ",".join(sorted(dropped))
+        )
     return headers, body
 
 
