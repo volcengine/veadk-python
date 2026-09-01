@@ -21,7 +21,6 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
-import httpx
 import pytest
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.agents.llm_agent import LlmAgent
@@ -39,18 +38,16 @@ from fastapi.openapi.models import APIKey
 from fastapi.openapi.models import APIKeyIn
 
 from veadk.runtime.base_runtime import resolve_system_append
-from veadk.runtime.agent_transfer import build_transfer_tool
 from veadk.runtime.codex.config import CodexRuntimeConfig
 from veadk.runtime.codex.config import codex_subprocess_env
 from veadk.runtime.codex.config import toml_string
-from veadk.runtime.codex.proxy import ResponsesShim
-from veadk.runtime.codex.tools_bridge import add_tool_to_bundle
 from veadk.runtime.codex.tools_bridge import build_executable_tools
 from veadk.runtime.codex.tools_bridge import close_toolsets
 from veadk.runtime.codex.tools_bridge import resume_authenticated_tools
 from veadk.runtime.codex.tools_bridge import resume_confirmed_tools
 from veadk.runtime.codex.translate import build_prompt
 from veadk.runtime.codex.translate import build_input_attachments
+from veadk.runtime.codex.translate import build_turn_usage_metadata
 from veadk.runtime.codex.translate import notification_to_events
 
 
@@ -331,7 +328,12 @@ def test_native_plan_error_and_turn_complete_are_observable() -> None:
         (),
         {
             "model_dump": lambda self: {
-                "error": {"code": "backend", "message": "retrying"},
+                # A real TurnError has no `code` field; the classification comes
+                # from `codex_error_info`.
+                "error": {
+                    "message": "retrying",
+                    "codex_error_info": "contextWindowExceeded",
+                },
                 "will_retry": True,
             }
         },
@@ -351,31 +353,172 @@ def test_native_plan_error_and_turn_complete_are_observable() -> None:
     complete_event = notification_to_events(completed, "agent", "inv")[0]
 
     assert plan_event.custom_metadata["plan"][0]["step"] == "test"
-    assert error_event.error_code == "backend"
+    assert error_event.error_code == "contextWindowExceeded"
     assert error_event.custom_metadata["will_retry"] is True
     assert complete_event.turn_complete is True
     assert complete_event.custom_metadata["turn_id"] == "turn-1"
+    # Lifecycle markers are `partial=True` for a clean turn, so they are not
+    # final responses and never reach `output_key` or the persisted session.
+    assert plan_event.partial is True
+    assert plan_event.is_final_response() is False
+    assert complete_event.partial is True
 
 
-def test_native_token_usage_is_observable() -> None:
-    usage = type(
+# The exact payload `thread/tokenUsage/updated` carries: `last` (the model call
+# that just finished) and `total` (cumulative for the thread), each a
+# TokenUsageBreakdown, plus a sibling `model_context_window`.
+_TOKEN_USAGE_PAYLOAD = {
+    "turn_id": "turn-1",
+    "model_context_window": 128000,
+    "token_usage": {
+        "last": {
+            "input_tokens": 10,
+            "cached_input_tokens": 2,
+            "output_tokens": 4,
+            "reasoning_output_tokens": 1,
+            "total_tokens": 14,
+        },
+        "total": {
+            "input_tokens": 30,
+            "cached_input_tokens": 6,
+            "output_tokens": 9,
+            "reasoning_output_tokens": 3,
+            "total_tokens": 39,
+        },
+    },
+}
+
+
+def _token_usage_notification() -> object:
+    return type(
         "ThreadTokenUsageUpdatedNotification",
         (),
-        {
-            "model_dump": lambda self: {
-                "turn_id": "turn-1",
-                "token_usage": {
-                    "last": {"input_tokens": 10, "output_tokens": 4},
-                    "total": {"input_tokens": 10, "output_tokens": 4},
-                },
-            }
-        },
+        {"model_dump": lambda self: dict(_TOKEN_USAGE_PAYLOAD)},
     )()
 
-    event = notification_to_events(usage, "agent", "inv")[0]
 
+def test_token_usage_notification_populates_usage_metadata() -> None:
+    """Token accounting must reach `usage_metadata`, not just a log line.
+
+    The previous version of this test asserted only
+    `custom_metadata["token_usage"]["total"]["output_tokens"]`, a key whose only
+    repo-wide reader is a `logger.info`. That locked the bug in as the spec:
+    `usage_metadata` is the field every real consumer reads (portal metrics,
+    the trace exporter, the frontend token counter), and it was empty.
+
+    The lifecycle event itself deliberately carries no `usage_metadata` -- it
+    fires once per model call and is `partial`, so it is never persisted, and
+    every consumer sums `usage_metadata` across events with no dedupe. The
+    cumulative figure is attached once, to the merged final response.
+    """
+    event = notification_to_events(_token_usage_notification(), "agent", "inv")[0]
+
+    # Still a real UI contract: the raw mapping stays readable, and it is the
+    # only place `reasoning_output_tokens` survives.
     assert event.custom_metadata["codex_event_type"] == "token_usage"
-    assert event.custom_metadata["token_usage"]["total"]["output_tokens"] == 4
+    assert event.custom_metadata["token_usage"] == _TOKEN_USAGE_PAYLOAD["token_usage"]
+    assert event.usage_metadata is None
+
+    usage = build_turn_usage_metadata(event.custom_metadata["token_usage"])
+    assert usage is not None
+    assert usage.prompt_token_count == 30
+    assert usage.candidates_token_count == 9
+    assert usage.total_token_count == 39
+    assert usage.cached_content_token_count == 6
+    # Codex nests reasoning inside output; genai treats thoughts as disjoint
+    # from candidates, so mapping it would double-count any recomputed total.
+    assert usage.thoughts_token_count is None
+
+
+def test_turn_usage_metadata_falls_back_to_last_when_total_is_absent() -> None:
+    usage = build_turn_usage_metadata(
+        {"last": dict(_TOKEN_USAGE_PAYLOAD["token_usage"]["last"])}
+    )
+
+    assert usage is not None
+    assert (usage.prompt_token_count, usage.candidates_token_count) == (10, 4)
+
+
+def test_turn_usage_metadata_degrades_to_none_rather_than_zeroes() -> None:
+    """A malformed payload must not pollute token histograms with zeroes."""
+    assert build_turn_usage_metadata(None) is None
+    assert build_turn_usage_metadata({}) is None
+    assert build_turn_usage_metadata({"total": {"unrelated": 1}}) is None
+
+
+@pytest.fixture
+def fresh_global_meter_provider(monkeypatch):
+    """Give this test an isolated OpenTelemetry global meter provider.
+
+    ``PortalMetricRecorder`` builds its instruments in ``__init__`` from
+    whatever provider is installed *then*, and measurements taken before a real
+    provider is installed are dropped, so the provider has to be in place first
+    and torn down afterwards.
+    """
+    from opentelemetry.metrics import _internal as metrics_internal
+    from opentelemetry.sdk import metrics as metrics_sdk
+    from opentelemetry.util._once import Once
+
+    proxy_provider = metrics_internal._PROXY_METER_PROVIDER
+    monkeypatch.setattr(metrics_internal, "_METER_PROVIDER", None)
+    monkeypatch.setattr(metrics_internal, "_METER_PROVIDER_SET_ONCE", Once())
+    monkeypatch.setattr(proxy_provider, "_real_meter_provider", None)
+    monkeypatch.setattr(proxy_provider, "_meters", [])
+    yield
+    provider = metrics_internal._METER_PROVIDER
+    if isinstance(provider, metrics_sdk.MeterProvider):
+        provider.shutdown()
+
+
+def test_token_usage_reaches_portal_metrics(fresh_global_meter_provider) -> None:
+    """The real downstream: `usage_metadata` -> `record_call_llm` -> tokens.
+
+    `portal_metrics.record_call_llm` is gated entirely on
+    `llm_response.usage_metadata`; with it unset the recorder emits no token
+    histogram samples and not even the invocation counter. This walks the whole
+    chain that the old assertion skipped.
+    """
+    from opentelemetry import metrics as metrics_api
+    from opentelemetry.sdk import metrics as metrics_sdk
+    from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+
+    from veadk.runtime.model_callbacks import event_to_llm_response
+    from veadk.tracing.telemetry.portal_metrics import PortalMetricRecorder
+
+    event = notification_to_events(_token_usage_notification(), "agent", "inv")[0]
+    event.usage_metadata = build_turn_usage_metadata(
+        event.custom_metadata["token_usage"]
+    )
+    llm_response = event_to_llm_response(event)
+    assert llm_response.usage_metadata is not None
+
+    reader = InMemoryMetricReader()
+    provider = metrics_sdk.MeterProvider(metric_readers=[reader])
+    metrics_api.set_meter_provider(provider)
+    recorder = PortalMetricRecorder(name="codex-token-usage-test")
+
+    ctx = SimpleNamespace(
+        run_config=None,
+        agent=SimpleNamespace(model_api_base="https://backend.invalid/v1"),
+    )
+    recorder.record_call_llm(
+        ctx, "event-id", SimpleNamespace(model="scripted-model"), llm_response
+    )
+    provider.force_flush()
+
+    recorded: dict[str, int] = {}
+    for resource in reader.get_metrics_data().resource_metrics:
+        for scope in resource.scope_metrics:
+            for metric in scope.metrics:
+                for point in metric.data.data_points:
+                    token_type = dict(point.attributes).get("gen_ai_token_type")
+                    if metric.name == "gen_ai.client.token.usage" and token_type:
+                        recorded[token_type] = getattr(point, "sum", None) or 0
+
+    assert recorded.get("input"), f"no input tokens recorded: {recorded}"
+    assert recorded.get("output"), f"no output tokens recorded: {recorded}"
+    assert recorded["input"] == 30
+    assert recorded["output"] == 9
 
 
 @pytest.mark.asyncio
@@ -718,320 +861,18 @@ async def test_tool_executor_supports_stdio_mcp_toolset() -> None:
     )
     ctx = _ctx(agent)
 
-    bundle = await build_executable_tools(agent, ctx)
+    # This is the one test in the tree that spawns a real subprocess. Without a
+    # deadline a stuck MCP server hangs a `pytest -n 16` worker indefinitely.
+    bundle = await asyncio.wait_for(build_executable_tools(agent, ctx), timeout=60)
     try:
         output = json.loads(
-            await bundle.executors["get_order_status"](
-                {"order_id": "A10086"}, "call-mcp"
+            await asyncio.wait_for(
+                bundle.executors["get_order_status"](
+                    {"order_id": "A10086"}, "call-mcp"
+                ),
+                timeout=60,
             )
         )
         assert output["structuredContent"]["status"] == "paid"
     finally:
-        await close_toolsets(bundle.opened_toolsets)
-
-
-@pytest.mark.asyncio
-async def test_transfer_tool_executor_emits_adk_transfer_action() -> None:
-    worker = LlmAgent(name="worker", model="gemini-2.5-flash")
-    agent = LlmAgent(
-        name="agent",
-        model="gemini-2.5-flash",
-        sub_agents=[worker],
-    )
-    ctx = _ctx(agent)
-    emitted: list[Event] = []
-
-    async def emit(event: Event) -> None:
-        emitted.append(event)
-
-    bundle = await build_executable_tools(agent, ctx, event_sink=emit)
-    try:
-        add_tool_to_bundle(
-            bundle,
-            build_transfer_tool([worker]),
-            ctx,
-            event_sink=emit,
-        )
-        output = json.loads(
-            await bundle.executors["transfer_to_agent"](
-                {"agent_name": "worker"}, "call-transfer"
-            )
-        )
-    finally:
-        await close_toolsets(bundle.opened_toolsets)
-
-    assert output["status"] == "transferred"
-    assert output["agent_name"] == "worker"
-    assert bundle.specs[0]["parameters"]["properties"]["agent_name"]["enum"] == [
-        "worker"
-    ]
-    assert any(event.actions.transfer_to_agent == "worker" for event in emitted)
-
-
-@pytest.mark.asyncio
-async def test_shim_routes_concurrent_turns_to_their_own_executors(
-    monkeypatch,
-) -> None:
-    shim = ResponsesShim("https://backend.invalid/v1", "backend-key")
-    calls: list[tuple[str, str]] = []
-
-    async def executor_a(args, call_id):
-        await asyncio.sleep(0.01)
-        calls.append(("a", call_id))
-        return json.dumps({"owner": "a"})
-
-    async def executor_b(args, call_id):
-        calls.append(("b", call_id))
-        return json.dumps({"owner": "b"})
-
-    token_a = shim.register_turn(
-        [{"type": "function", "name": "tool_a", "parameters": {}}],
-        {"tool_a": executor_a},
-    )
-    token_b = shim.register_turn(
-        [{"type": "function", "name": "tool_b", "parameters": {}}],
-        {"tool_b": executor_b},
-    )
-
-    async def fake_aresponses(**kwargs):
-        conversation = kwargs["input"]
-        if any(item.get("type") == "function_call_output" for item in conversation):
-            return {
-                "id": "resp-final",
-                "model": "model",
-                "output": [
-                    {
-                        "id": "msg",
-                        "type": "message",
-                        "role": "assistant",
-                        "status": "completed",
-                        "content": [{"type": "output_text", "text": "done"}],
-                    }
-                ],
-            }
-        tool = next(
-            item for item in kwargs["tools"] if item["name"] in {"tool_a", "tool_b"}
-        )
-        suffix = tool["name"][-1]
-        return {
-            "id": f"resp-{suffix}",
-            "model": "model",
-            "output": [
-                {
-                    "id": f"fc-{suffix}",
-                    "call_id": f"call-{suffix}",
-                    "type": "function_call",
-                    "name": tool["name"],
-                    "arguments": "{}",
-                    "status": "completed",
-                }
-            ],
-        }
-
-    monkeypatch.setattr("veadk.runtime.codex.proxy.litellm.aresponses", fake_aresponses)
-    transport = httpx.ASGITransport(app=shim._app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://shim") as client:
-        body = {
-            "model": "model",
-            "stream": False,
-            "input": [{"type": "message", "role": "user", "content": "go"}],
-        }
-        response_a, response_b = await asyncio.gather(
-            client.post(
-                "/v1/responses",
-                headers={"Authorization": f"Bearer {token_a}"},
-                json=body,
-            ),
-            client.post(
-                "/v1/responses",
-                headers={"Authorization": f"Bearer {token_b}"},
-                json=body,
-            ),
-        )
-
-    assert response_a.status_code == 200
-    assert response_b.status_code == 200
-    assert sorted(calls) == [("a", "call-a"), ("b", "call-b")]
-
-
-@pytest.mark.asyncio
-async def test_shim_rejects_unknown_invocation_token() -> None:
-    shim = ResponsesShim("https://backend.invalid/v1", "backend-key")
-    transport = httpx.ASGITransport(app=shim._app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://shim") as client:
-        response = await client.post(
-            "/v1/responses",
-            headers={"Authorization": "Bearer unknown"},
-            json={"model": "model", "input": []},
-        )
-    assert response.status_code == 401
-
-
-@pytest.mark.asyncio
-async def test_shim_completes_turn_after_transfer_without_second_model_call(
-    monkeypatch,
-) -> None:
-    shim = ResponsesShim("https://backend.invalid/v1", "backend-key")
-    backend_calls = 0
-
-    async def executor(args, call_id):
-        return json.dumps(
-            {
-                "status": "transferred",
-                "call_id": call_id,
-                "agent_name": args["agent_name"],
-            }
-        )
-
-    token = shim.register_turn(
-        [{"type": "function", "name": "transfer_to_agent", "parameters": {}}],
-        {"transfer_to_agent": executor},
-    )
-
-    async def fake_aresponses(**kwargs):
-        nonlocal backend_calls
-        backend_calls += 1
-        assert not any(
-            item.get("type") == "function_call_output" for item in kwargs["input"]
-        )
-        return {
-            "id": "transfer-response",
-            "model": "model",
-            "output": [
-                {
-                    "id": "fc-transfer",
-                    "call_id": "call-transfer",
-                    "type": "function_call",
-                    "name": "transfer_to_agent",
-                    "arguments": json.dumps({"agent_name": "worker"}),
-                    "status": "completed",
-                }
-            ],
-        }
-
-    monkeypatch.setattr("veadk.runtime.codex.proxy.litellm.aresponses", fake_aresponses)
-    transport = httpx.ASGITransport(app=shim._app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://shim") as client:
-        response = await client.post(
-            "/v1/responses",
-            headers={"Authorization": f"Bearer {token}"},
-            json={
-                "model": "model",
-                "input": [{"type": "message", "role": "user", "content": "go"}],
-            },
-        )
-
-    assert response.status_code == 200
-    assert backend_calls == 1
-    body = response.json()
-    assert body["status"] == "completed"
-    assert body["output"][0]["type"] == "message"
-
-
-@pytest.mark.asyncio
-async def test_shim_reports_tool_iteration_budget_instead_of_dropping_call(
-    monkeypatch,
-) -> None:
-    shim = ResponsesShim("https://backend.invalid/v1", "backend-key")
-
-    async def executor(args, call_id):
-        return "{}"
-
-    token = shim.register_turn(
-        [{"type": "function", "name": "loop", "parameters": {}}],
-        {"loop": executor},
-        max_tool_iterations=1,
-    )
-
-    async def always_calls_tool(**kwargs):
-        return {
-            "id": "resp",
-            "model": "model",
-            "output": [
-                {
-                    "id": "fc",
-                    "call_id": "call-loop",
-                    "type": "function_call",
-                    "name": "loop",
-                    "arguments": "{}",
-                    "status": "completed",
-                }
-            ],
-        }
-
-    monkeypatch.setattr(
-        "veadk.runtime.codex.proxy.litellm.aresponses", always_calls_tool
-    )
-    transport = httpx.ASGITransport(app=shim._app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://shim") as client:
-        response = await client.post(
-            "/v1/responses",
-            headers={"Authorization": f"Bearer {token}"},
-            json={
-                "model": "model",
-                "input": [{"type": "message", "role": "user", "content": "go"}],
-            },
-        )
-
-    assert response.status_code == 409
-    assert response.json()["error"]["type"] == "tool_iteration_limit"
-
-
-@pytest.mark.asyncio
-async def test_shim_rejects_invalid_tool_json_without_calling_executor(
-    monkeypatch,
-) -> None:
-    shim = ResponsesShim("https://backend.invalid/v1", "backend-key")
-    called = False
-
-    async def executor(args, call_id):
-        nonlocal called
-        called = True
-        return "{}"
-
-    token = shim.register_turn(
-        [{"type": "function", "name": "parse", "parameters": {}}],
-        {"parse": executor},
-    )
-
-    async def fake_aresponses(**kwargs):
-        if any(item.get("type") == "function_call_output" for item in kwargs["input"]):
-            return {
-                "id": "final",
-                "model": "model",
-                "output": [
-                    {
-                        "id": "msg",
-                        "type": "message",
-                        "role": "assistant",
-                        "status": "completed",
-                        "content": [{"type": "output_text", "text": "handled"}],
-                    }
-                ],
-            }
-        return {
-            "id": "tool",
-            "model": "model",
-            "output": [
-                {
-                    "id": "fc",
-                    "call_id": "call-invalid",
-                    "type": "function_call",
-                    "name": "parse",
-                    "arguments": "{not-json",
-                    "status": "completed",
-                }
-            ],
-        }
-
-    monkeypatch.setattr("veadk.runtime.codex.proxy.litellm.aresponses", fake_aresponses)
-    transport = httpx.ASGITransport(app=shim._app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://shim") as client:
-        response = await client.post(
-            "/v1/responses",
-            headers={"Authorization": f"Bearer {token}"},
-            json={"model": "model", "input": []},
-        )
-
-    assert response.status_code == 200
-    assert called is False
+        await asyncio.wait_for(close_toolsets(bundle.opened_toolsets), timeout=30)

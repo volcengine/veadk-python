@@ -66,6 +66,12 @@ github-cicd = [
 codex = [
     "openai-codex==0.1.0b3",
     "openai-codex-cli-bin==0.137.0a4",
+    # The Responses->chat shim (veadk/runtime/codex/proxy.py) imports these at
+    # module level. They resolve transitively through google-adk today, but adk
+    # has already moved other web deps behind extras on 2.x, so declare them
+    # here rather than rely on that.
+    "fastapi",
+    "uvicorn",
 ]
 extensions = [
     "redis>=5.0",                                           # For Redis database

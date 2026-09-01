@@ -13,7 +13,7 @@ codex_runtime_on_agentkit/
 ├── app.py                       # deploy entry point (ADK agent API server)
 ├── agents/
 │   └── codex_agent/             # the agent — Agent(runtime="codex")
-├── requirements.txt             # veadk-python>=0.5.39 + openai-codex
+├── requirements.txt             # veadk-python + openai-codex + fastapi/uvicorn
 ├── .env.example
 └── .dockerignore
 ```
@@ -29,7 +29,13 @@ codex_runtime_on_agentkit/
 - **`openai-codex` is not a veadk dependency**, so `requirements.txt` lists it
   explicitly. It pulls in `openai-codex-cli-bin`, which ships the Codex CLI
   binary as a **manylinux wheel** — no separate binary install in the Linux
-  build.
+  build. These pins mirror veadk-python's `[codex]` extra; the extra is not
+  used directly because uv only accepts a pre-release when its exact version is
+  pinned at the top level, not transitively through an extra.
+- `fastapi` and `uvicorn` are listed too: `app.py` imports `uvicorn` directly
+  and the runtime's Responses→chat shim imports both at module level. They
+  resolve through google-adk today, but adk has been moving web deps behind
+  extras, so `[codex]` declares them explicitly and so does this file.
 
 > The codex runtime is included in `veadk-python` since **0.5.39** (on PyPI), so
 > the image installs everything from PyPI via the default
@@ -46,7 +52,7 @@ cp .env.example .env
 ## 2. Run locally (optional)
 
 ```bash
-pip install "veadk-python>=0.5.39" openai-codex
+pip install "veadk-python[codex]>=1.0.10"   # or: pip install "veadk-python>=0.5.39" openai-codex
 python app.py            # or: python -m app
 # open http://127.0.0.1:8000 ; POST /run_sse, or GET /ping -> {"status":"ok"}
 ```
@@ -99,8 +105,17 @@ tear the runtime down.
 - **Model**: the model in `MODEL_AGENT_*` is bridged to Codex; it does not need
   to be an OpenAI model — a Volcengine Ark chat model works.
 - **Tools / sandbox**: Codex runs tool calls (e.g. shell) in its own sandbox
-  inside the container. For tool-heavy agents that need filesystem/network
-  access, the runtime may need to be granted the corresponding permissions.
+  inside the container. The defaults are the safe ones — `workspace_write`,
+  `network_access=False`, and `approval_mode="deny_all"`, which refuses every
+  escalation. To let the agent reach the network, set
+  `CodexRuntimeConfig(sandbox="workspace_write", network_access=True)`; see the
+  [runtime docs](../../docs/content/docs/framework/agent/runtime.en.mdx).
+  Do **not** reach for `approval_mode="auto_review"` — it is not a review gate,
+  it auto-approves every escalation.
+- **Runtime env vars override the Python config**: `VEADK_CODEX_SANDBOX`,
+  `VEADK_CODEX_APPROVAL_MODE`, `VEADK_CODEX_WORKSPACE_ROOT` and
+  `VEADK_CODEX_NETWORK_ACCESS` take precedence over `CodexRuntimeConfig`, so be
+  careful about what you pass to `--runtime_envs`.
 - **First request latency**: the Codex app-server binary is spawned on first
   use, so the first turn is slower than subsequent ones.
 - **Build time**: installing veadk + openai-codex from PyPI can take several

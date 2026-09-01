@@ -28,7 +28,13 @@ agent = Agent(name="assistant", runtime="codex")
 | Value | Description |
 | :--- | :--- |
 | `adk` (default) | Google ADK's built-in execution flow; fits almost every case. |
-| `codex` | Uses the OpenAI Codex SDK to drive the inner loop. |
+| `codex` | Uses the OpenAI Codex SDK to drive the inner loop, executing commands and file edits inside a sandbox. |
+| `piagent` | Uses a local Pi coding agent binary (through its RPC mode) to drive the inner loop. The binary is downloaded on first run, or point `PIAGENT_BINARY` at an existing executable. |
+
+<Callout type="warn">
+**Positioning: `codex` and `piagent` are *sandboxed-execution* runtimes, not drop-in equivalents of the ADK flow.**
+They hand the entire inner loop to an external agent harness, so everything ADK implements *inside* that flow — agent transfer, request/response processors (planner, code executor, example store, knowledge base injection), per-LLM-call callbacks and spans — does not run. Pick them when you want a model that can run commands and edit files under a controlled sandbox, not to swap the backend of an existing ADK agent. See the [support matrix](#support-matrix) for the exact differences.
+</Callout>
 
 Install the optional dependency before using the Codex runtime:
 
@@ -38,7 +44,7 @@ pip install "veadk-python[codex]"
 
 ### Codex security configuration
 
-Codex defaults to a session-isolated workspace, the `workspace_write` sandbox, no network access, and denial of escalated operations. Broader access must be enabled explicitly:
+Codex defaults to a session-isolated workspace, the `workspace_write` sandbox, no network access, and denial of every escalated operation:
 
 ```python title="agent.py"
 from veadk import Agent
@@ -49,7 +55,7 @@ agent = Agent(
     runtime="codex",
     codex_runtime_config=CodexRuntimeConfig(
         sandbox="workspace_write",
-        approval_mode="auto_review",
+        approval_mode="deny_all",  # the default; auto_review means full auto-approval, see below
         network_access=True,
         # Set this explicitly to work inside an existing project.
         workspace_root="/workspace/codex",
@@ -57,36 +63,124 @@ agent = Agent(
 )
 ```
 
-`full_access` and `reuse_workspace=True` relax filesystem isolation and should only be enabled in trusted environments.
+<Callout type="error">
+**`approval_mode="auto_review"` is not a review gate — it is full auto-approval.**
+The Codex SDK's built-in approval handler answers every `requestApproval` notification with `accept`, and `AsyncCodex` exposes no hook to replace it. So `auto_review` auto-approves every sandbox escalation and file change without consulting a human or ADK. Only the default `deny_all` actually keeps Codex inside the sandbox. Do not use `auto_review` for multi-tenant deployments or untrusted input.
+</Callout>
+
+One sandbox/network combination is easy to misread: `network_access` is written to the `[sandbox_workspace_write]` table of Codex's `config.toml`, and **only the `workspace_write` sandbox reads it**.
+
+| `sandbox` | Is `network_access` honoured? |
+| :--- | :--- |
+| `workspace_write` | Yes. |
+| `read_only` | No (setting it to `True` logs a warning). |
+| `full_access` | No — `danger-full-access` already means full network and filesystem access. |
+
+Because of that, `CodexRuntimeConfig(sandbox="full_access", network_access=False)` **raises `ValueError`**: the combination reads as "no network" while actually granting full access. If you need `full_access`, write `network_access=True` explicitly to acknowledge the risk.
+
+`full_access` and `reuse_workspace=True` relax filesystem isolation between invocations and should only be enabled in trusted environments.
+
+#### Workspace lifetime
+
+By default a workspace is keyed by `app_name` / `user_id` / `session_id` / agent name: every invocation of one session **shares the same directory**, and it is not deleted at the end of a turn, so files written by one turn are still there for the next. The whole tree is removed when the process exits; while the process runs, session workspaces left **idle for more than 6 hours** are reaped the next time a workspace is created, which bounds disk growth in a long-lived server.
+
+A `workspace_root` you pass explicitly is *your* directory: the runtime never deletes it and never applies that idle reaping to it — it still creates a per-session subdirectory underneath, but cleaning those up is on you. `reuse_workspace=True` only means anything alongside `workspace_root`: it makes every session share that directory itself, with no per-session isolation.
+
+### Codex execution knobs
+
+| Field | Default | Description |
+| :--- | :--- | :--- |
+| `reasoning_effort` | `"medium"` | Reasoning budget: `minimal`/`low`/`medium`/`high`/`xhigh`. Higher is slower and uses more tokens. |
+| `personality` | `"pragmatic"` | Codex's own reply style: `none`/`friendly`/`pragmatic`. |
+| `max_tool_iterations` | `32` | Budget of bridged ADK/MCP tool round-trips the shim may run for the whole Codex turn (1–256). See the behavior change below. |
+| `tool_timeout_seconds` | `120.0` | Per-call timeout for a bridged ADK/MCP tool. `None` disables the timeout. |
+| `reuse_workspace` | `False` | Only meaningful alongside `workspace_root` — see [Workspace lifetime](#workspace-lifetime) above. |
+
+<Callout type="warn">
+**Behavior change: `max_tool_iterations` changed meaning, and its default went from `8` to `32`.**
+It now bounds the **whole Codex turn**, not a single backend request. Codex issues a fresh backend request after every native tool round, so the old per-request counter actually allowed *rounds × budget* tool executions. The default was raised at the same time so that turns which reach for an ADK tool only after several native tool rounds are not cut short. If you were relying on `8` as a cost backstop, re-evaluate — `RunConfig(max_llm_calls=...)` (below) is now the better ceiling.
+</Callout>
+
+### How instructions reach Codex
+
+Codex ships its own ~20KB system prompt, tuned for its own toolchain (`apply_patch`, `update_plan`, shell, AGENTS.md). VeADK deliberately does **not** override it via `base_instructions`: Codex *replaces* the built-in template outright when that field is set, which would delete all of that guidance (Codex's own docs call the equivalent config key strongly discouraged).
+
+The agent's identity block and its `instruction` therefore travel over Codex's native `developer_instructions` channel instead. Codex renders that as its own `developer` message alongside AGENTS.md, skills and environment context — purely additive, never a replacement.
+
+One consequence: **`personality` now actually takes effect.** It is rendered into Codex's built-in system prompt template, and that template — personality included — used to be replaced wholesale whenever `base_instructions` was set, leaving the field inert.
+
+### Codex environment variables
+
+<Callout type="warn">
+The four variables below **override** the Python `CodexRuntimeConfig` rather than acting as defaults for it. A hard-coded `sandbox="workspace_write"` in your code is still overridden by `VEADK_CODEX_SANDBOX=full_access` in the deployment environment. This precedence is the opposite of most settings and matters most where the platform injects environment variables (containers, FaaS).
+</Callout>
+
+| Variable | Overrides | Notes |
+| :--- | :--- | :--- |
+| `VEADK_CODEX_SANDBOX` | `sandbox` | Same values as the field. |
+| `VEADK_CODEX_APPROVAL_MODE` | `approval_mode` | Same values as the field. |
+| `VEADK_CODEX_WORKSPACE_ROOT` | `workspace_root` | Absolute path to the workspace. |
+| `VEADK_CODEX_NETWORK_ACCESS` | `network_access` | `1`/`true`/`yes`/`on` enable it; anything else disables it. |
+
+Four more variables tune the Responses→Chat shim. These are not part of the override rule above — they only tune the shim itself:
+
+| Variable | Default | Notes |
+| :--- | :--- | :--- |
+| `CODEX_SHIM_NUM_RETRIES` | `2` | Retries for a backend request that fails transiently (429/5xx/overloaded/timeout). |
+| `CODEX_SHIM_TIMEOUT` | `0` (no timeout) | Per-request timeout in seconds. |
+| `CODEX_SHIM_START_TIMEOUT` | `10` | Seconds to wait for the shim's local HTTP server to come up. On timeout the startup fails loudly instead of leaving Codex unable to connect. |
+| `CODEX_SHIM_CACHE_MAX` | `8` | Cap on cached shim instances per process (keyed by backend address + credential), bounding servers and ports in a multi-tenant process. |
 
 ### Codex observability
 
 Codex-native lifecycle notifications and ADK Function/MCP tool calls are converted into ADK Events. Runtime logs use stable `codex_*` event names and attribution fields such as `invocation_id`, `call_id`, `tool`, `status`, and `duration_ms`. Tool arguments, tool results, API tokens, credentials, and backend addresses are not logged. Token usage is exposed through `codex_event_type=token_usage` events and the corresponding log entry.
 
-## Choose where each tool runs
+On top of that:
 
-`RuntimeProvider` leaves the Agent's model reasoning loop unchanged and only decides where individual tool calls execute. `DispatchRuntimeProvider` can send selected tools to a remote runtime while falling back to their original ADK implementation for all other tools:
+- **A `call_llm` span.** ADK opens `call_llm` from its own LLM flow, which this runtime replaces, so the runtime opens the equivalent span itself and writes the prompt, the response and the token usage onto it at the end of the turn. VeADK's whole telemetry chain — the in-memory exporter's session index, trace export, portal metrics, and trace-based evaluation — therefore sees a Codex invocation at all. Mind the granularity: **one span per turn**, not one per inner model call.
+- **`usage_metadata`.** The turn's token usage is summed and attached to the single merged final event of that turn, rather than to each intermediate event, so downstream consumers that sum `usage_metadata` across events do not double-count.
+- **`RunConfig(max_llm_calls=...)` is enforced.** The shim charges the budget before every real backend model call. On exhaustion Codex sees a `429 llm_calls_limit` (not a 500, which it would retry — replaying every tool side effect of the turn), and once the turn ends the runtime re-raises `LlmCallsLimitExceededError` to the caller instead of returning whatever partial answer Codex salvaged.
 
-```python title="agent.py"
-from veadk import Agent, Runner
-from veadk.runtime import DispatchRuntimeProvider
+## Support matrix
 
-async def dispatch_task(tool_call):
-    return await remote_client.dispatch(
-        tool_call.name,
-        tool_call.arguments,
-        dispatch_id=tool_call.id,
-    )
+`runtime="codex"` and `runtime="piagent"` replace the whole ADK LLM flow, so a substantial part of the `Agent` configuration surface has no effect. VeADK checks for this at construction time and again before every invocation: **configuration that produces a wrong result raises `ValueError`**, and **configuration that is merely ignored logs a warning once**.
 
-agent = Agent(name="assistant", tools=[bash, read_file])
-runtime_provider = DispatchRuntimeProvider(
-    dispatch_task,
-    dispatchable_tools=None,  # dispatch every non-MCP tool
-)
-runner = Runner(agent=agent, plugins=[runtime_provider])
-```
+### Error — the agent refuses to run
 
-In this example, every non-MCP tool only goes through `dispatch_task` and its local function is not invoked a second time. MCP tools retain their original ADK implementation. Pass a set of names to dispatch only those non-MCP tools. The dispatcher may be synchronous or asynchronous.
+| Configuration | Why |
+| :--- | :--- |
+| `sub_agents=[...]` | External runtimes do not implement agent transfer, so sub-agents are unreachable and the agent silently answers everything itself. Drive delegation from a parent `SequentialAgent` or an `AgentTool` instead. |
+| `model=...` | The runtime resolves the model from `model_name` and ignores the `model` object entirely, dropping its `api_base`, headers and fallbacks. Set `model_name`. |
+| `generate_content_config=...` | Only `system_instruction` is forwarded; `temperature`, `max_output_tokens`, `thinking_config` and friends are dropped. |
+| `output_schema=...` | The schema never reaches the backend, so the model is unconstrained and validating its prose reply fails at the end of the turn. |
+| `planner=...` / `code_executor=...` | Both run as ADK request/response processors, a layer external runtimes never execute. |
+| `include_contents="none"` | External runtimes always send the full conversation history, so this would be silently ignored and prior turns leaked to the model. |
+| `enable_supervisor=True` | Supervision is installed through the ADK LLM flow, which the runtime replaces. |
+
+<Callout type="info">
+The `sub_agents` rule is about the **non-adk agent's own** `sub_agents`. Placing a `runtime="codex"` agent inside a `SequentialAgent`/`ParallelAgent`'s `sub_agents` is fully supported — the parent does the orchestration and never relies on agent transfer.
+</Callout>
+
+### Warning — ignored, but the turn still answers
+
+| Configuration | Behavior |
+| :--- | :--- |
+| `model_name=[primary, fallback...]` | Only the first entry is used; the fallback chain does not apply. |
+| `model_provider` (non-`openai`) | The runtime always talks to `model_api_base` over an OpenAI-compatible API. |
+| `model_extra_config` | `piagent` only. **codex forwards it**: the shim puts `extra_headers` and `extra_body` — including VeADK's Ark defaults for request encryption and prompt caching — onto the backend request, matching the `adk` path. |
+| `enable_responses` / `enable_responses_cache` | The Ark Responses API is unused, so `previous_response_id` continuation and response caching do not apply. |
+| `example_store` | Delivered by `ExampleTool.process_llm_request`, a hook external runtimes never call, so no few-shot examples reach the model. |
+| `knowledgebase` | **The knowledge base is silently disabled.** Same root cause: `LoadKnowledgebaseTool.process_llm_request` is what tells the model the knowledge base exists and when to query it, and that hook is never called, so retrieval is never triggered. |
+| `skills_mode` | External runtimes skip VeADK's `SkillsToolset` when bridging tools, so the `execute_skills`/`skills_tool` the instruction advertises is not registered. |
+| `enable_skills_checklist` | Depends on an ADK before-tool callback over the skills toolset; neither is bridged. |
+| `after_model_callback` | Different semantics: it fires once per turn on the merged final text, not once per LLM call. |
+| `tracers` | Different granularity: codex does add a `call_llm` span (prompt, response, whole-turn token usage), but **one per turn** — the inner model loop runs inside the external harness, so there are still no per-model-call spans. |
+| `codex_runtime_config` (with `runtime="piagent"`) | Codex-only; piagent ignores it entirely. |
+| `RunConfig(max_llm_calls=...)` | `piagent` only — its model loop counts its own iterations inside the harness and the budget does not bind. **codex enforces it**; see [Codex observability](#codex-observability) above. |
+
+### `run_live` is unsupported
+
+Non-`adk` runtimes have no live/bidi implementation. `/run_live`, exposed by ADK's `get_fast_api_app` and used by `veadk web`, raises `NotImplementedError` for such an agent instead of silently falling back to the ADK flow — which would run a different model loop with a different tool set. Use `runtime="adk"` for live sessions, and `runner.run_async` everywhere else.
 
 ## Request processing
 

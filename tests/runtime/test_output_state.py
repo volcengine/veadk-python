@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -112,11 +113,36 @@ def test_maybe_save_output_to_state_ignores_non_final_model_text(event: Event) -
     assert event.actions.state_delta == {}
 
 
-def test_maybe_save_output_to_state_validates_output_schema() -> None:
-    class Result(BaseModel):
-        answer: str
+class _Result(BaseModel):
+    answer: str
 
-    agent = SimpleNamespace(name="agent", output_key="result", output_schema=Result)
+
+def _schema_agent() -> SimpleNamespace:
+    return SimpleNamespace(name="agent", output_key="result", output_schema=_Result)
+
+
+@pytest.fixture
+def output_state_logs(caplog: pytest.LogCaptureFixture):
+    """Capture ``veadk.runtime.output_state`` warnings.
+
+    ``veadk.utils.logger`` sets ``propagate = False`` on the ``veadk`` logger,
+    so ``caplog.at_level`` alone captures nothing: it sets a level but attaches
+    no handler. Attaching ``caplog.handler`` to the specific logger is the
+    pattern already used in ``tests/runtime/codex/test_codex_runtime.py``.
+    """
+    logger = logging.getLogger("veadk.runtime.output_state")
+    logger.addHandler(caplog.handler)
+    previous = logger.level
+    logger.setLevel(logging.WARNING)
+    try:
+        yield caplog
+    finally:
+        logger.removeHandler(caplog.handler)
+        logger.setLevel(previous)
+
+
+def test_maybe_save_output_to_state_accepts_valid_json() -> None:
+    agent = _schema_agent()
     event = _text_event('{"answer": "done"}')
 
     maybe_save_output_to_state(agent, event)
@@ -124,14 +150,152 @@ def test_maybe_save_output_to_state_validates_output_schema() -> None:
     assert event.actions.state_delta == {"result": {"answer": "done"}}
 
 
+def test_maybe_save_output_to_state_accepts_single_fenced_json_block(
+    output_state_logs,
+) -> None:
+    """A lone fenced block is an unambiguous delimiter, so prose around it is safe.
+
+    (The task brief expected this to be *ignored*; production deliberately
+    accepts exactly one fence -- see ``_coerce_to_schema`` -- because a fence,
+    unlike a bare brace in prose, cannot be mistaken for anything else.)
+    """
+    agent = _schema_agent()
+    event = _text_event('Here you go:\n```json\n{"answer": "done"}\n```\n')
+
+    maybe_save_output_to_state(agent, event)
+
+    assert event.actions.state_delta == {"result": {"answer": "done"}}
+    assert [r.getMessage() for r in output_state_logs.records] == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param("I think the answer is done.", id="freeform_text"),
+        pytest.param(
+            'Sure! Here it is: {"answer": "done"} -- hope that helps.',
+            id="prose_prefixed_json",
+        ),
+        pytest.param(
+            'Option A:\n```json\n{"answer": "a"}\n```\n'
+            'Option B:\n```json\n{"answer": "b"}\n```\n',
+            id="two_fenced_blocks",
+        ),
+        pytest.param('{"answer": "done"', id="truncated_json"),
+        pytest.param('{"other": "field"}', id="valid_json_wrong_schema"),
+    ],
+)
+def test_maybe_save_output_to_state_ignores_unparseable_final_text(
+    text: str, output_state_logs
+) -> None:
+    """An external harness emits prose constantly; that must not kill the turn.
+
+    ADK's own path calls ``model_validate_json`` and raises. External runtimes
+    cannot constrain the model to the schema, so raising here would fail an
+    entire tenant invocation on a chatty reply. The contract is: skip, warn
+    once, and leave whatever an earlier event wrote in place.
+    """
+    agent = _schema_agent()
+    event = _text_event(text)
+
+    maybe_save_output_to_state(agent, event)
+
+    assert event.actions.state_delta == {}
+    warnings = [r for r in output_state_logs.records if r.levelno == logging.WARNING]
+    # Deduplicated: the fixture attaches caplog's handler to the veadk logger
+    # (which sets `propagate = False` in some configurations), so a record can
+    # legitimately be captured twice. What matters is that exactly one distinct
+    # warning is emitted, not how many handlers saw it.
+    messages = {record.getMessage() for record in warnings}
+    assert len(messages) == 1, sorted(messages)
+    message = next(iter(messages))
+    assert "output_schema" in message
+    assert "result" in message
+    assert "agent" in message
+
+
+def test_maybe_save_output_to_state_leaves_an_earlier_value_in_place() -> None:
+    """A later unparseable message must not erase a good earlier one."""
+    agent = _schema_agent()
+    good = _text_event('{"answer": "done"}')
+    maybe_save_output_to_state(agent, good)
+
+    chatty = _text_event("Anything else I can help with?")
+    chatty.actions.state_delta.update(good.actions.state_delta)
+    maybe_save_output_to_state(agent, chatty)
+
+    assert chatty.actions.state_delta == {"result": {"answer": "done"}}
+
+
+def _codex_shaped_turn(author: str = "worker") -> list[Event]:
+    """A realistic external-harness turn, not a single perfect event.
+
+    The previous version of this test yielded exactly one text event, which is
+    the one shape no real Codex turn ever has. A real turn interleaves
+    reasoning, tool lifecycle, streaming deltas and a contentless completion
+    marker around the answer -- and every one of those is a chance to write the
+    wrong thing into ``output_key``.
+    """
+    reasoning = Event(
+        invocation_id="inv-1",
+        author=author,
+        content=types.Content(
+            role="model",
+            parts=[types.Part(text="the user wants a summary", thought=True)],
+        ),
+        custom_metadata={"codex_event_type": "item_completed"},
+    )
+    tool_call = Event(
+        invocation_id="inv-1",
+        author=author,
+        content=types.Content(
+            role="model",
+            parts=[
+                types.Part(
+                    function_call=types.FunctionCall(
+                        id="call-1", name="exec_command", args={"command": "ls"}
+                    )
+                )
+            ],
+        ),
+        custom_metadata={"codex_event_type": "item_started"},
+    )
+    tool_response = Event(
+        invocation_id="inv-1",
+        author=author,
+        content=types.Content(
+            role="user",
+            parts=[
+                types.Part(
+                    function_response=types.FunctionResponse(
+                        id="call-1", name="exec_command", response={"exit_code": 0}
+                    )
+                )
+            ],
+        ),
+        custom_metadata={"codex_event_type": "item_completed"},
+    )
+    streaming = _text_event("Final ans", author=author, partial=True)
+    answer = _text_event("Final answer.", author=author)
+    turn_complete = Event(
+        invocation_id="inv-1",
+        author=author,
+        turn_complete=True,
+        partial=True,
+        custom_metadata={"codex_event_type": "turn_complete", "turn_id": "turn-1"},
+    )
+    return [reasoning, tool_call, tool_response, streaming, answer, turn_complete]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("runtime", ["codex", "piagent"])
 async def test_non_adk_runtime_saves_output_key(monkeypatch, runtime: str) -> None:
-    final_event = _text_event("runtime result", author="worker")
+    turn = _codex_shaped_turn()
 
     class FakeRuntime:
         async def run_async(self, agent, ctx):
-            yield final_event
+            for event in turn:
+                yield event
 
     monkeypatch.setattr("veadk.runtime.get_runtime", lambda name: FakeRuntime())
     agent = Agent(
@@ -143,8 +307,55 @@ async def test_non_adk_runtime_saves_output_key(monkeypatch, runtime: str) -> No
 
     events = [event async for event in agent._run_async_impl(SimpleNamespace())]
 
-    assert events == [final_event]
-    assert final_event.actions.state_delta == {"result": "runtime result"}
+    assert events == turn
+    written = [
+        (index, event.actions.state_delta)
+        for index, event in enumerate(events)
+        if event.actions.state_delta
+    ]
+    assert written == [(4, {"result": "Final answer."})], written
+
+
+@pytest.mark.asyncio
+async def test_multiple_final_text_events_write_output_key_once(monkeypatch) -> None:
+    """Several complete assistant messages in one turn: the last one wins.
+
+    ``is_final_response()`` is True for every non-partial tool-free text event,
+    so a harness that streams N completed messages runs the save N times. The
+    surviving value must be the agent's last message, never a concatenation of
+    its intermediate thinking.
+    """
+    turn = [
+        _text_event("Let me check that.", author="worker"),
+        _text_event("Almost there.", author="worker"),
+        _text_event("Final answer.", author="worker"),
+    ]
+
+    class FakeRuntime:
+        async def run_async(self, agent, ctx):
+            for event in turn:
+                yield event
+
+    monkeypatch.setattr("veadk.runtime.get_runtime", lambda name: FakeRuntime())
+    agent = Agent(
+        name="worker",
+        runtime="codex",
+        model_api_key="test-key",
+        output_key="result",
+    )
+
+    events = [event async for event in agent._run_async_impl(SimpleNamespace())]
+
+    assert [e.actions.state_delta["result"] for e in events] == [
+        "Let me check that.",
+        "Almost there.",
+        "Final answer.",
+    ]
+    # Merged in session order, the last write is what a downstream node reads.
+    merged: dict = {}
+    for event in events:
+        merged.update(event.actions.state_delta)
+    assert merged == {"result": "Final answer."}
 
 
 @pytest.mark.asyncio
