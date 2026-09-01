@@ -499,7 +499,10 @@ function formatErrorDetail(detail: unknown): string {
   return "";
 }
 
-async function httpErrorMessage(res: Response, fallback: string): Promise<string> {
+export async function httpErrorMessage(
+  res: Response,
+  fallback: string,
+): Promise<string> {
   const context = `${fallback}（HTTP ${res.status}）`;
   const text = await res.text().catch(() => "");
   if (!text) return context;

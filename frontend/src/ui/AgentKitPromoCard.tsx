@@ -1,6 +1,6 @@
 import { type MouseEvent, useState } from "react";
-import { Button, ButtonLink } from "@openai/apps-sdk-ui/components/Button";
-import { ArrowRight, X } from "@openai/apps-sdk-ui/components/Icon";
+import { Button } from "@openai/apps-sdk-ui/components/Button";
+import { X } from "@openai/apps-sdk-ui/components/Icon";
 import type { CloudProvider } from "../adk/cloudProvider";
 import { agentKitLinks } from "./agentKitLinks";
 import "./AgentKitPromoCard.css";
@@ -47,36 +47,26 @@ export function AgentKitPromoCard({ cloudProvider }: AgentKitPromoCardProps) {
       </p>
 
       <div className="agentkit-promo-actions">
-        <ButtonLink
+        <a
           className="agentkit-promo-action is-docs"
           href={links.docs}
-          external
-          color="secondary"
-          variant="soft"
-          size="xs"
-          pill={false}
+          target="_blank"
+          rel="noreferrer"
           aria-label="打开 AgentKit 文档，在新窗口打开"
           onClick={handleActionClick}
         >
           文档
-        </ButtonLink>
-        <ButtonLink
+        </a>
+        <a
           className="agentkit-promo-action is-console"
           href={links.console}
-          external
-          color="primary"
-          variant="solid"
-          size="xs"
-          pill={false}
+          target="_blank"
+          rel="noreferrer"
           aria-label="打开 AgentKit 控制台，在新窗口打开"
           onClick={handleActionClick}
         >
           控制台
-          <ArrowRight
-            className="agentkit-promo-arrow-icon"
-            aria-hidden="true"
-          />
-        </ButtonLink>
+        </a>
       </div>
     </section>
   );

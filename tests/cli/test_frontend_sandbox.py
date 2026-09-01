@@ -23,6 +23,7 @@ import time
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import replace
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from fastapi import FastAPI, HTTPException, Request
@@ -474,6 +475,7 @@ def _agent_app(
     gateway: _FakeGateway,
     *,
     snapshot_tool_ids: dict[str, str] | None = None,
+    agentkit_cli_tool_id: str | None = "tool-dev",
 ) -> FastAPI:
     if snapshot_tool_ids is None:
         snapshot_tool_ids = {
@@ -498,6 +500,18 @@ def _agent_app(
     mount_sandbox_agent_routes(
         app,
         {
+            "agentkit-cli": SandboxAgentSessionService(
+                gateway,
+                kind="agentkit-cli",
+                tool_id=agentkit_cli_tool_id,
+                filter_agent_kind=True,
+                display_name_prefix="akcli-",
+                allow_admin_cross_owner=False,
+                terminal_initial_command="clear; agentkit --help; agentkit --version",
+                unconfigured_message=(
+                    "管理员未配置 AgentKit Dev Sandbox，请配置后再使用"
+                ),
+            ),
             "deepseek-harness": SandboxAgentSessionService(
                 gateway,
                 kind="deepseek-harness",
@@ -651,6 +665,90 @@ def test_deepseek_harness_reuses_codex_tools_and_has_its_own_surface() -> None:
     assert opened.json()["webuiUrl"].endswith("/deepseek-harness/")
     assert gateway.agent_kinds == ["deepseek-harness"]
     assert "tool-studio-snapshot" in gateway.tool_ids
+
+
+def test_agentkit_cli_uses_dev_tool_and_isolates_admin_by_owner() -> None:
+    gateway = _FakeGateway()
+    alice_headers = {
+        "X-Test-User": "tenant-alice",
+        "X-Test-Creator": "alice",
+    }
+    bob_admin_headers = {
+        "X-Test-User": "tenant-bob",
+        "X-Test-Creator": "bob",
+        "X-Test-Role": "admin",
+    }
+    with TestClient(_agent_app(gateway)) as client:
+        created = client.post(
+            "/web/agentkit-cli/sessions",
+            headers=alice_headers,
+            json={"displayName": "untrusted", "persistent": False},
+        )
+        session_id = created.json()["sessionId"]
+        alice_sessions = client.get(
+            "/web/agentkit-cli/sessions",
+            headers=alice_headers,
+        )
+        bob_sessions = client.get(
+            "/web/agentkit-cli/sessions",
+            headers=bob_admin_headers,
+        )
+        bob_open = client.post(
+            f"/web/agentkit-cli/sessions/{session_id}/open",
+            headers=bob_admin_headers,
+        )
+        alice_open = client.post(
+            f"/web/agentkit-cli/sessions/{session_id}/open",
+            headers=alice_headers,
+        )
+        terminal = client.post(
+            f"/web/agentkit-cli/sessions/{session_id}/terminal",
+            headers=alice_headers,
+        )
+
+    assert created.status_code == 200
+    assert created.json()["displayName"] == "akcli-alice"
+    assert created.json()["toolName"] == "agentkit-cli"
+    assert created.json()["persistent"] is False
+    assert gateway.tool_ids.count("tool-dev") >= 1
+    assert gateway.agent_kinds == ["agentkit-cli"]
+    assert [item["sessionId"] for item in alice_sessions.json()["sessions"]] == [
+        session_id
+    ]
+    assert bob_sessions.json() == {"sessions": []}
+    assert bob_open.status_code == 404
+    assert alice_open.status_code == 200
+    assert terminal.status_code == 200
+    assert "shellSessionId" not in terminal.json()
+    terminal_query = parse_qs(urlsplit(terminal.json()["url"]).query)
+    assert terminal_query["command"] == ["clear; agentkit --help; agentkit --version"]
+    assert terminal_query["font_size"] == ["12"]
+    assert terminal.json()["url"].startswith(
+        f"/web/sandbox/proxy/{session_id}/terminal/terminal?"
+    )
+
+
+def test_agentkit_cli_reports_unconfigured_dev_sandbox(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("SANDBOX_DEV", raising=False)
+    gateway = _FakeGateway()
+    with TestClient(_agent_app(gateway, agentkit_cli_tool_id=None)) as client:
+        capabilities = client.get(
+            "/web/agentkit-cli/capabilities",
+            headers={"X-Test-User": "alice"},
+        )
+        sessions = client.get(
+            "/web/agentkit-cli/sessions",
+            headers={"X-Test-User": "alice"},
+        )
+
+    message = "管理员未配置 AgentKit Dev Sandbox，请配置后再使用"
+    assert capabilities.status_code == 200
+    assert capabilities.json()["enabled"] is False
+    assert capabilities.json()["reason"] == message
+    assert sessions.status_code == 503
+    assert sessions.json()["detail"]["message"] == message
 
 
 @pytest.mark.parametrize("kind", ["openclaw", "hermes"])

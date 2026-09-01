@@ -10,6 +10,7 @@ const API_TARGET = process.env.VEADK_API_TARGET ?? "http://127.0.0.1:8000";
 function localApiProxy(): ProxyOptions {
   return {
     target: API_TARGET,
+    ws: true,
     configure(proxy) {
       proxy.on("proxyReq", (proxyRequest) => {
         // The browser talks to Vite same-origin. Do not forward browser-only

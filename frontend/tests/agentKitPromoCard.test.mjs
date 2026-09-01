@@ -50,12 +50,9 @@ test("promo links resolve to the matching cloud provider", () => {
 test("promo renders one AgentKit welcome card with native actions", () => {
   assert.match(
     promoSource,
-    /import \{ Button, ButtonLink \} from "@openai\/apps-sdk-ui\/components\/Button"/,
+    /import \{ Button \} from "@openai\/apps-sdk-ui\/components\/Button"/,
   );
-  assert.match(
-    promoSource,
-    /import \{ ArrowRight, X \} from "@openai\/apps-sdk-ui\/components\/Icon"/,
-  );
+  assert.match(promoSource, /import \{ X \} from "@openai\/apps-sdk-ui\/components\/Icon"/);
   assert.match(promoSource, /className=\{`agentkit-promo-card/);
   assert.match(promoSource, /欢迎使用 AgentKit/);
   assert.match(
@@ -64,14 +61,14 @@ test("promo renders one AgentKit welcome card with native actions", () => {
   );
   assert.match(
     promoSource,
-    /href=\{links\.docs\}[\s\S]*?color="secondary"[\s\S]*?文档/,
+    /<a[\s\S]*?href=\{links\.docs\}[\s\S]*?target="_blank"[\s\S]*?文档/,
   );
   assert.match(
     promoSource,
-    /href=\{links\.console\}[\s\S]*?color="primary"[\s\S]*?控制台[\s\S]*?<ArrowRight/,
+    /<a[\s\S]*?href=\{links\.console\}[\s\S]*?target="_blank"[\s\S]*?控制台/,
   );
-  assert.equal((promoSource.match(/<ButtonLink/g) ?? []).length, 2);
-  assert.equal((promoSource.match(/<ArrowRight/g) ?? []).length, 1);
+  assert.equal((promoSource.match(/<a/g) ?? []).length, 2);
+  assert.doesNotMatch(promoSource, /ButtonLink|ArrowRight/);
   assert.doesNotMatch(promoSource, /ExternalLink/);
   assert.doesNotMatch(promoSource, /AgentKitLogoIcon|agentkit-promo-leading-icon/);
 });
@@ -105,20 +102,17 @@ test("promo card uses neutral hover and restrained control motion", () => {
   );
   assert.match(
     promoStyles,
-    /\.agentkit-promo-action\s*\{[^}]*flex:\s*0 0 auto;[^}]*font-size:\s*12px;[^}]*font-weight:\s*400;/s,
+    /\.agentkit-promo-action\s*\{[^}]*flex:\s*0 0 auto;[^}]*font-size:\s*12px;[^}]*text-decoration-line:\s*underline;/s,
   );
   assert.match(
     promoStyles,
-    /\.agentkit-promo-arrow-icon\s*\{[^}]*transform:\s*translateX\(0\);[^}]*transition:\s*transform 160ms ease-out;/s,
+    /\.agentkit-promo-action:hover\s*\{[^}]*color:\s*hsl\(var\(--sidebar-foreground\)\);/s,
   );
   assert.match(
     promoStyles,
-    /\.agentkit-promo-action\.is-console:hover \.agentkit-promo-arrow-icon[\s\S]*?\.agentkit-promo-action\.is-console:focus-visible \.agentkit-promo-arrow-icon[\s\S]*?transform:\s*translateX\(2px\)/,
+    /\.agentkit-promo-action:focus-visible\s*\{[^}]*outline:\s*2px solid/s,
   );
-  assert.doesNotMatch(
-    promoStyles,
-    /\.agentkit-promo-arrow-icon\s*\{[^}]*opacity:/s,
-  );
+  assert.doesNotMatch(promoStyles, /agentkit-promo-arrow-icon/);
   assert.match(
     promoStyles,
     /\.sidebar\.is-collapsed \.agentkit-promo-card\s*\{[^}]*display:\s*none;/s,

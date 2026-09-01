@@ -33,9 +33,22 @@ from veadk.cli.frontend_sandbox_proxy import (
     mount_sandbox_proxy_routes,
     proxy_cookie_name,
     proxy_prefix,
+    terminal_initial_command_url,
     terminal_launch_url,
     upload_sandbox_file,
 )
+
+
+def test_terminal_initial_command_url_uses_compact_terminal_style() -> None:
+    url = terminal_initial_command_url(
+        "cloud-session",
+        "clear; agentkit --help; agentkit --version",
+    )
+
+    assert url == (
+        "/web/sandbox/proxy/cloud-session/terminal/terminal"
+        "?command=clear%3B+agentkit+--help%3B+agentkit+--version&font_size=12"
+    )
 
 
 @pytest.mark.asyncio
