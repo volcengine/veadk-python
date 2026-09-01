@@ -23,7 +23,9 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from google.adk.agents import RunConfig
 from google.adk.agents.invocation_context import InvocationContext
+from google.adk.agents.invocation_context import LlmCallsLimitExceededError
 from google.adk.agents.llm_agent import LlmAgent
 from google.adk.auth.auth_credential import AuthCredential
 from google.adk.auth.auth_credential import AuthCredentialTypes
@@ -865,6 +867,128 @@ async def test_shim_rejects_unknown_invocation_token() -> None:
             json={"model": "model", "input": []},
         )
     assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_shim_counts_each_backend_call_before_tool_loop_retry(
+    monkeypatch,
+) -> None:
+    shim = ResponsesShim("https://backend.invalid/v1", "backend-key")
+    agent = LlmAgent(name="assistant", model="model")
+    ctx = InvocationContext(
+        session_service=InMemorySessionService(),
+        invocation_id="inv-1",
+        agent=agent,
+        session=Session(
+            id="session-1",
+            appName="app",
+            userId="user",
+            state={},
+            events=[],
+        ),
+        run_config=RunConfig(max_llm_calls=1),
+    )
+    backend_calls = 0
+
+    async def executor(args, call_id):
+        return "{}"
+
+    token = shim.register_turn(
+        [{"type": "function", "name": "loop", "parameters": {}}],
+        {"loop": executor},
+        before_model_call=ctx.increment_llm_call_count,
+    )
+
+    async def fake_aresponses(**kwargs):
+        nonlocal backend_calls
+        backend_calls += 1
+        if backend_calls > 1:
+            raise AssertionError("second backend call should be blocked")
+        return {
+            "id": "tool",
+            "model": "model",
+            "output": [
+                {
+                    "id": "fc",
+                    "call_id": "call-loop",
+                    "type": "function_call",
+                    "name": "loop",
+                    "arguments": "{}",
+                    "status": "completed",
+                }
+            ],
+        }
+
+    monkeypatch.setattr("veadk.runtime.codex.proxy.litellm.aresponses", fake_aresponses)
+    transport = httpx.ASGITransport(app=shim._app)
+    try:
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://shim"
+        ) as client:
+            with pytest.raises(LlmCallsLimitExceededError):
+                await client.post(
+                    "/v1/responses",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={
+                        "model": "model",
+                        "input": [{"type": "message", "role": "user", "content": "go"}],
+                    },
+                )
+    finally:
+        shim.unregister_turn(token)
+
+    assert backend_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_shim_counts_one_plain_backend_call(monkeypatch) -> None:
+    shim = ResponsesShim("https://backend.invalid/v1", "backend-key")
+    backend_calls = 0
+    counted_calls = 0
+
+    def before_model_call() -> None:
+        nonlocal counted_calls
+        counted_calls += 1
+
+    token = shim.register_turn([], {}, before_model_call=before_model_call)
+
+    async def fake_aresponses(**kwargs):
+        nonlocal backend_calls
+        backend_calls += 1
+        return {
+            "id": "final",
+            "model": "model",
+            "output": [
+                {
+                    "id": "msg",
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "done"}],
+                }
+            ],
+        }
+
+    monkeypatch.setattr("veadk.runtime.codex.proxy.litellm.aresponses", fake_aresponses)
+    transport = httpx.ASGITransport(app=shim._app)
+    try:
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://shim"
+        ) as client:
+            response = await client.post(
+                "/v1/responses",
+                headers={"Authorization": f"Bearer {token}"},
+                json={
+                    "model": "model",
+                    "input": [{"type": "message", "role": "user", "content": "go"}],
+                },
+            )
+    finally:
+        shim.unregister_turn(token)
+
+    assert response.status_code == 200
+    assert backend_calls == 1
+    assert counted_calls == 1
 
 
 @pytest.mark.asyncio

@@ -31,7 +31,7 @@ import os
 import secrets
 import time
 from dataclasses import dataclass
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Callable
 
 import litellm
 import uvicorn
@@ -119,6 +119,7 @@ class ShimTurnContext:
     executors: dict[str, Any]
     max_tool_iterations: int
     invocation_id: str = ""
+    before_model_call: Callable[[], None] | None = None
 
 
 class ResponsesShim:
@@ -144,6 +145,7 @@ class ResponsesShim:
         # subprocess as its provider API key and arrives as a Bearer token, so
         # concurrent turns can never overwrite one another's tools/context.
         self._turns: dict[str, ShimTurnContext] = {}
+        self._turn_errors: dict[str, BaseException] = {}
         self._app = self._build_app()
 
     def register_turn(
@@ -153,6 +155,7 @@ class ResponsesShim:
         *,
         max_tool_iterations: int = _AGENT_TOOL_MAX_ITERS,
         invocation_id: str = "",
+        before_model_call: Callable[[], None] | None = None,
     ) -> str:
         """Register immutable routing state and return its opaque bearer token."""
         token = secrets.token_urlsafe(32)
@@ -161,6 +164,7 @@ class ResponsesShim:
             executors=dict(executors or {}),
             max_tool_iterations=max(1, max_tool_iterations),
             invocation_id=invocation_id,
+            before_model_call=before_model_call,
         )
         logger.debug(
             "codex_shim_turn_registered invocation_id=%s tool_count=%d",
@@ -172,11 +176,26 @@ class ResponsesShim:
     def unregister_turn(self, token: str) -> None:
         """Remove one invocation's routing state."""
         context = self._turns.pop(token, None)
+        self._turn_errors.pop(token, None)
         if context is not None:
             logger.debug(
                 "codex_shim_turn_unregistered invocation_id=%s",
                 context.invocation_id,
             )
+
+    def pop_turn_error(self, token: str) -> BaseException | None:
+        """Return and clear an invocation-scoped shim error, if one exists."""
+        return self._turn_errors.pop(token, None)
+
+    def _before_model_call(self, token: str, context: ShimTurnContext) -> None:
+        callback = context.before_model_call
+        if callback is None:
+            return
+        try:
+            callback()
+        except BaseException as e:
+            self._turn_errors[token] = e
+            raise
 
     def _build_app(self) -> FastAPI:
         app = FastAPI()
@@ -258,6 +277,7 @@ class ResponsesShim:
             max_iters = turn_context.max_tool_iterations if agent_executors else 0
             iters = 0
             while True:
+                self._before_model_call(token, turn_context)
                 result = await litellm.aresponses(**call_kwargs)
                 resp = _to_dict(result)
                 if max_iters <= 0:

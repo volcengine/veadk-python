@@ -24,8 +24,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from google.adk.agents import RunConfig
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.agents.invocation_context import InvocationContext
+from google.adk.agents.invocation_context import LlmCallsLimitExceededError
 from google.adk.events.event import Event
 from google.adk.models.llm_response import LlmResponse
 from google.adk.sessions.in_memory_session_service import InMemorySessionService
@@ -83,10 +85,13 @@ def _fake_ctx(*events: Event):
         session=SimpleNamespace(events=list(events), state={}),
         branch=None,
         plugin_manager=None,
+        increment_llm_call_count=lambda: None,
     )
 
 
-def _ctx(agent, *events: Event, user_content=None) -> InvocationContext:
+def _ctx(
+    agent, *events: Event, user_content=None, run_config=None
+) -> InvocationContext:
     return InvocationContext(
         session_service=InMemorySessionService(),
         invocation_id="inv-1",
@@ -99,6 +104,7 @@ def _ctx(agent, *events: Event, user_content=None) -> InvocationContext:
             state={},
             events=list(events),
         ),
+        run_config=run_config,
     )
 
 
@@ -1460,6 +1466,94 @@ async def test_piagent_runtime_text_only_end_to_end(tmp_path, monkeypatch):
     assert events[2].content.parts[1].thought is False
     models = json.loads((agent_dir / "models.json").read_text(encoding="utf-8"))
     assert models["providers"]["veadk"]["models"][0]["id"] == "model-a"
+
+
+@pytest.mark.asyncio
+async def test_piagent_runtime_counts_one_visible_prompt(tmp_path, monkeypatch):
+    binary = _make_fake_pi(tmp_path)
+    agent_dir = tmp_path / "agent-home"
+    monkeypatch.setenv("PIAGENT_BINARY", str(binary))
+    monkeypatch.setenv("PIAGENT_AGENT_DIR", str(agent_dir))
+
+    agent = Agent(
+        name="assistant",
+        instruction="Answer briefly.",
+        model_name="model-a",
+        model_api_base="https://ark.example.com/api/v3/",
+        model_api_key="test-key",
+        model_api_key_name="",
+        runtime="piagent",
+    )
+    ctx = _fake_ctx(_user_event("ping"))
+    counted_calls = 0
+
+    def increment_llm_call_count() -> None:
+        nonlocal counted_calls
+        counted_calls += 1
+
+    ctx.increment_llm_call_count = increment_llm_call_count
+
+    events = [event async for event in PiAgentRuntime().run_async(agent, ctx)]
+
+    assert len(events) == 3
+    assert counted_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_piagent_runtime_blocks_prompt_when_llm_call_limit_exceeded(
+    tmp_path,
+    monkeypatch,
+):
+    binary = _make_fake_pi(tmp_path)
+    agent_dir = tmp_path / "agent-home"
+    monkeypatch.setenv("PIAGENT_BINARY", str(binary))
+    monkeypatch.setenv("PIAGENT_AGENT_DIR", str(agent_dir))
+    prompt_called = False
+
+    class FakePiAgentRpcClient:
+        def __init__(self, config):
+            self.config = config
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        def prompt(self, prompt):
+            nonlocal prompt_called
+            prompt_called = True
+
+            async def _events():
+                yield {"type": "agent_settled"}
+
+            return _events()
+
+    monkeypatch.setattr(
+        "veadk.runtime.piagent.runtime.PiAgentRpcClient",
+        FakePiAgentRpcClient,
+    )
+
+    agent = Agent(
+        name="assistant",
+        instruction="Answer briefly.",
+        model_name="model-a",
+        model_api_base="https://ark.example.com/api/v3/",
+        model_api_key="test-key",
+        model_api_key_name="",
+        runtime="piagent",
+    )
+    ctx = _ctx(
+        agent,
+        _user_event("ping"),
+        run_config=RunConfig(max_llm_calls=1),
+    )
+    ctx.increment_llm_call_count()
+
+    with pytest.raises(LlmCallsLimitExceededError):
+        [event async for event in PiAgentRuntime().run_async(agent, ctx)]
+
+    assert prompt_called is False
 
 
 @pytest.mark.asyncio

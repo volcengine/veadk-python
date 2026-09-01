@@ -158,6 +158,10 @@ class PiAgentRuntime(BaseRuntime):
 
                     async def _pump_pi() -> None:
                         try:
+                            # Pi may perform multiple internal model calls in its
+                            # subprocess; veADK can only enforce one budget unit
+                            # for each visible prompt boundary.
+                            ctx.increment_llm_call_count()
                             async for pi_event in client.prompt(prompt):
                                 for event in translator.event_to_adk_events(pi_event):
                                     await event_queue.put(event)

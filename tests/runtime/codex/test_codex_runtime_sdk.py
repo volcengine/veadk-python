@@ -46,6 +46,7 @@ class _FakeShim:
         *,
         max_tool_iterations,
         invocation_id,
+        before_model_call=None,
     ):
         self.registered.append(
             {
@@ -53,12 +54,16 @@ class _FakeShim:
                 "executors": executors,
                 "max_tool_iterations": max_tool_iterations,
                 "invocation_id": invocation_id,
+                "before_model_call": before_model_call,
             }
         )
         return "opaque-turn-token"
 
     def unregister_turn(self, token):
         self.unregistered.append(token)
+
+    def pop_turn_error(self, token):
+        return None
 
 
 class _EmptyStream:
@@ -128,6 +133,9 @@ class _Agent:
 class _Context(SimpleNamespace):
     def _get_events(self, **kwargs):
         return list(self.session.events)
+
+    def increment_llm_call_count(self):
+        return None
 
 
 @pytest.mark.asyncio

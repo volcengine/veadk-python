@@ -159,6 +159,13 @@ class CodexRuntime(BaseRuntime):
         async def _emit_tool_event(event: "Event") -> None:
             await event_queue.put(event)
 
+        def _raise_shim_turn_error() -> None:
+            if turn_token is None:
+                return
+            turn_error = shim.pop_turn_error(turn_token)
+            if turn_error is not None:
+                raise turn_error
+
         try:
             tool_bundle = await build_executable_tools(
                 agent,
@@ -269,6 +276,7 @@ class CodexRuntime(BaseRuntime):
                 tool_bundle.executors,
                 max_tool_iterations=runtime_config.max_tool_iterations,
                 invocation_id=ctx.invocation_id,
+                before_model_call=ctx.increment_llm_call_count,
             )
 
             # Keep privileged instructions out of the user transcript. The SDK
@@ -408,10 +416,12 @@ class CodexRuntime(BaseRuntime):
                         break
                 if transfer_requested:
                     await pump
+                    _raise_shim_turn_error()
                     if deferred_transfer_event is not None:
                         yield deferred_transfer_event
                     return
                 await pump
+                _raise_shim_turn_error()
                 if final_text_events:
                     llm_response = final_events_to_llm_response(final_text_events)
                     llm_response = await run_after_model_callbacks(
@@ -446,6 +456,7 @@ class CodexRuntime(BaseRuntime):
                 ctx.invocation_id,
                 type(e).__name__,
             )
+            _raise_shim_turn_error()
             if isinstance(e, Exception) and "runtime_call" in locals():
                 fallback = await run_on_model_error_callbacks(
                     agent,
