@@ -110,11 +110,10 @@ test("supports managed artifacts and preserves their source provenance", () => {
 });
 
 test("shared artifact controls are keyboard accessible", () => {
-  assert.match(actionMenuSource, /aria-haspopup="menu"/);
-  assert.match(actionMenuSource, /role="menuitem"/);
-  assert.match(actionMenuSource, /\["ArrowDown", "ArrowUp", "Home", "End"\]/);
-  assert.match(actionMenuSource, /window\.addEventListener\("pointerdown", closeOnPointerDown\)/);
-  assert.match(actionMenuSource, /event\.key !== "Escape"/);
+  assert.match(actionMenuSource, /from "@openai\/apps-sdk-ui\/components\/Menu"/);
+  assert.match(actionMenuSource, /<Menu\.Trigger>/);
+  assert.match(actionMenuSource, /<Menu\.Item/);
+  assert.match(actionMenuSource, /aria-label=\{label\}/);
   assert.match(editDialogSource, /event\.key !== "Tab"/);
   assert.match(pageSource, /event\.key !== "Tab"/);
   assert.match(pageSource, /document\.body\.style\.overflow = "hidden"/);

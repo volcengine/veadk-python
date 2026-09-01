@@ -259,7 +259,7 @@ test("agent cards reproduce the compact Figma hierarchy with card details and on
   assert.doesNotMatch(pageSource, /<small|<code/);
   assert.match(
     resourceStyles,
-    /\.resource-page\s*\{[\s\S]*?background: #fafafa;[\s\S]*?font-family: "PingFang SC"/,
+    /\.resource-page\s*\{[\s\S]*?background: hsl\(var\(--panel\)\);[\s\S]*?font-family: "PingFang SC"/,
   );
   assert.match(
     resourceStyles,
@@ -754,6 +754,7 @@ test("checks Runtime chat compatibility before enabling the connect action", () 
   assert.match(pageSource, /disabled=\{!actionable \|\| checkingCompatibility \|\| incompatible \|\| connecting \|\| connected\}/);
   assert.match(pageSource, />检测中<\/span>/);
   assert.match(pageSource, /onRetryCompatibility\?\.\(agent\)/);
+  assert.match(pageSource, /<Button[\s\S]*?color="primary"[\s\S]*?<ArrowRotateCw \/>[\s\S]*?重试[\s\S]*?<\/Button>/);
   assert.match(pageSource, /import \{ Badge \} from "@openai\/apps-sdk-ui\/components\/Badge"/);
   assert.match(pageSource, /import \{ Tooltip \} from "@openai\/apps-sdk-ui\/components\/Tooltip"/);
   assert.match(pageSource, /content=\{compatibility\?\.message\}/);

@@ -11,8 +11,6 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@openai/apps-sdk-ui/components/Button";
-import { Delete, Edit, Eye } from "@openai/apps-sdk-ui/components/Icon";
-import { Tooltip } from "@openai/apps-sdk-ui/components/Tooltip";
 import {
   formatCloudRegion,
   type CloudRegion,
@@ -45,12 +43,8 @@ import { LibraryResourceCard } from "./LibraryResourceCard";
 import { Markdown } from "./Markdown";
 import {
   ResourceCreateCard,
-  ResourceDetail,
-  ResourceDetailActions,
-  ResourceDetailBody,
-  ResourceDetailHeader,
-  ResourceDetailHeading,
-  ResourceDetailSectionHeader,
+  ResourceDataTable,
+  ResourceDetailLayout,
   ResourceDetailSummary,
   ResourceGrid,
   ResourceLoadingState,
@@ -61,6 +55,8 @@ import {
 import { formatResourceSource } from "./resourceMetadata";
 import { TextShimmer } from "./text-shimmer/TextShimmer";
 import "./KnowledgeLibrary.css";
+
+type KnowledgeDetailSection = "overview" | "data";
 
 function KnowledgeIcon(props: SVGProps<SVGSVGElement>) {
   return (
@@ -987,7 +983,9 @@ export function KnowledgeLibrary({
   const [nextTokens, setNextTokens] = useState<Record<string, string>>({});
   const [regionWarnings, setRegionWarnings] = useState<string[]>([]);
   const [selectedKey, setSelectedKey] = useState("");
+  const [detailSection, setDetailSection] = useState<KnowledgeDetailSection>("overview");
   const [query, setQuery] = useState("");
+  const [documentQuery, setDocumentQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState("");
@@ -1036,11 +1034,26 @@ export function KnowledgeLibrary({
     onDetailChange?.(Boolean(selected));
   }, [onDetailChange, selected]);
 
+  useEffect(() => {
+    setDetailSection("overview");
+    setDocumentQuery("");
+  }, [selectedKey]);
+
   const filteredItems = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase();
     if (!normalized) return items;
     return items.filter((item) => [item.name, item.description, item.ownerLabel, item.providerKnowledgeId].some((value) => value.toLocaleLowerCase().includes(normalized)));
   }, [items, query]);
+
+  const filteredDocuments = useMemo(() => {
+    const normalized = documentQuery.trim().toLocaleLowerCase();
+    if (!normalized) return documents;
+    return documents.filter((item) => [
+      item.name,
+      item.id,
+      knowledgeDocumentFormat(item),
+    ].some((value) => value.toLocaleLowerCase().includes(normalized)));
+  }, [documentQuery, documents]);
 
   useEffect(() => {
     setPreviewDocument(null);
@@ -1322,154 +1335,139 @@ export function KnowledgeLibrary({
   return (
     <section className={`knowledge-library${selected ? " is-detail" : " resource-collection"}`} aria-label="知识库">
       {selected ? (
-        <ResourceDetail className="knowledge-library__detail">
-          <ResourceDetailHeader>
-            <ResourceDetailHeading
-              title={selected.name}
-              description={selected.description || "暂无描述"}
-              backLabel="返回知识库列表"
-              onBack={() => setSelectedKey("")}
-            />
-            {selected.canManage && (
-              <ResourceDetailActions>
-                <Button type="button" color="secondary" variant="outline" size="sm" pill={false} onClick={() => setEditBaseOpen(true)}>编辑</Button>
-                <Button type="button" color="danger" variant="ghost" size="sm" pill={false} onClick={() => setDeleteBaseTarget(selected)}>删除</Button>
-              </ResourceDetailActions>
-            )}
-          </ResourceDetailHeader>
-          <ResourceDetailBody>
-            <ResourceDetailSummary>
-              <div><dt>Provider</dt><dd>{selected.providerType || "-"}</dd></div>
-              <div><dt>Knowledge ID</dt><dd className="knowledge-keyboard-reveal" tabIndex={0} title={selected.providerKnowledgeId}>{selected.providerKnowledgeId || "-"}</dd></div>
-              <div><dt>项目</dt><dd>{selected.projectName || "default"}</dd></div>
-              <div><dt>创建者</dt><dd>{formatResourceSource(selected.ownerLabel)}</dd></div>
-              <div><dt>更新时间</dt><dd>{formatDate(selected.updatedAt) || "-"}</dd></div>
-            </ResourceDetailSummary>
-            <section className="knowledge-documents">
-              <ResourceDetailSectionHeader
-                className="knowledge-documents__head"
-                title="数据"
-                actions={selected.canManage ? (
-                  <button type="button" className="knowledge-primary-button" disabled={providerAssociationInvalid} title={providerAssociationInvalid ? "底层 Provider 知识库已不存在" : undefined} onClick={() => setCreateDocumentBase(selected)}><PlusIcon /><span>{providerAssociationInvalid ? "关联已失效" : "添加数据"}</span></button>
-                ) : undefined}
-              />
-              <div className={`knowledge-documents__body${documents.length > 0 ? " is-table" : ""}`} aria-live="polite">
-                {documentsLoading && documents.length === 0 ? (
-                  <ResourceLoadingState />
-                ) : documentsError && documents.length === 0 ? (
-                  <div className="knowledge-library__state is-error" role="alert">
-                    <p>{documentsError}</p>
-                    {providerAssociationInvalid && selected.canManage
-                      ? <button type="button" onClick={() => setDeleteBaseTarget(selected)}>删除失效关联</button>
-                      : <button type="button" onClick={() => void loadDocuments(selected)}>重试</button>}
+        <ResourceDetailLayout
+          className="knowledge-library__detail"
+          title={selected.name}
+          description={selected.description || "暂无描述"}
+          identitySeed={selected.name}
+          backLabel="返回知识库列表"
+          onBack={() => setSelectedKey("")}
+          sections={[
+            {
+              key: "overview",
+              label: "概览",
+              content: (
+                <section className="knowledge-overview">
+                  <ResourceDetailSummary className="knowledge-overview__summary">
+                    <div><dt>Provider</dt><dd>{selected.providerType || "-"}</dd></div>
+                    <div><dt>Knowledge ID</dt><dd className="knowledge-keyboard-reveal" tabIndex={0} title={selected.providerKnowledgeId}>{selected.providerKnowledgeId || "-"}</dd></div>
+                    <div><dt>项目</dt><dd>{selected.projectName || "default"}</dd></div>
+                    <div><dt>创建者</dt><dd>{formatResourceSource(selected.ownerLabel)}</dd></div>
+                    <div><dt>更新时间</dt><dd>{formatDate(selected.updatedAt) || "-"}</dd></div>
+                  </ResourceDetailSummary>
+                </section>
+              ),
+            },
+            {
+              key: "data",
+              label: "数据",
+              content: (
+                <section className="knowledge-documents">
+                  <div className={`knowledge-documents__body${documents.length > 0 ? " is-table" : ""}`} aria-live="polite">
+                    {documentsLoading && documents.length === 0 ? (
+                      <ResourceLoadingState />
+                    ) : documentsError && documents.length === 0 ? (
+                      <div className="knowledge-library__state is-error" role="alert">
+                        <p>{documentsError}</p>
+                        {providerAssociationInvalid && selected.canManage
+                          ? <button type="button" onClick={() => setDeleteBaseTarget(selected)}>删除失效关联</button>
+                          : <button type="button" onClick={() => void loadDocuments(selected)}>重试</button>}
+                      </div>
+                    ) : documents.length === 0 ? (
+                      <div className="knowledge-library__state"><DocumentIcon /><p>这个知识库还没有数据</p>{selected.canManage && <button type="button" onClick={() => setCreateDocumentBase(selected)}>添加第一项数据</button>}</div>
+                    ) : (
+                      <ResourceDataTable
+                        rows={filteredDocuments}
+                        rowKey={(item) => item.id}
+                        rowLabel={(item) => item.name || item.id}
+                        columns={[
+                          {
+                            key: "name",
+                            header: "名称",
+                            className: "is-primary-column",
+                            render: (item) => <span title={item.name || item.id}>{item.name || item.id}</span>,
+                          },
+                          {
+                            key: "format",
+                            header: "格式",
+                            className: "is-compact-column",
+                            render: (item) => knowledgeDocumentFormat(item),
+                          },
+                          {
+                            key: "size",
+                            header: "大小",
+                            className: "is-compact-column",
+                            render: (item) => formatFileSize(item.sizeBytes),
+                          },
+                        ]}
+                        searchValue={documentQuery}
+                        onSearchChange={setDocumentQuery}
+                        searchPlaceholder="搜索数据"
+                        searchLabel="搜索知识库数据"
+                        primaryAction={selected.canManage ? {
+                          label: providerAssociationInvalid ? "关联已失效" : "添加数据",
+                          disabled: providerAssociationInvalid,
+                          title: providerAssociationInvalid ? "底层 Provider 知识库已不存在" : undefined,
+                          onClick: () => setCreateDocumentBase(selected),
+                        } : undefined}
+                        rowActions={(item) => [
+                          {
+                            label: "预览",
+                            onSelect: () => setPreviewDocument(item),
+                          },
+                          ...(selected.canManage ? [
+                            {
+                              label: "编辑",
+                              onSelect: () => setEditDocument(item),
+                            },
+                            {
+                              label: "删除",
+                              onSelect: () => setDeleteDocumentTarget(item),
+                              danger: true,
+                            },
+                          ] : []),
+                        ]}
+                        scrollRef={documentsScrollRef}
+                        onScroll={handleDocumentsScroll}
+                        busy={documentsLoading}
+                        emptyLabel="没有匹配的数据"
+                        footer={documentsLoading ? (
+                          <div className="knowledge-document-pagination" role="status" aria-live="polite">
+                            <span className="my-agent-loading-mark" aria-hidden="true" />
+                            <span>正在加载更多数据</span>
+                          </div>
+                        ) : documentsMoreError ? (
+                          <div className="knowledge-document-pagination is-error" role="alert">
+                            <span>{documentsMoreError}</span>
+                            <button type="button" onClick={() => void loadDocuments(selected, true)}>重试加载</button>
+                          </div>
+                        ) : documentsHasMore ? (
+                          <div
+                            ref={documentsLoadMoreRef}
+                            className="knowledge-document-pagination"
+                            role="status"
+                            aria-live="polite"
+                          >
+                            继续下滑加载更多
+                          </div>
+                        ) : null}
+                      />
+                    )}
                   </div>
-                ) : documents.length === 0 ? (
-                  <div className="knowledge-library__state"><DocumentIcon /><p>这个知识库还没有数据</p>{selected.canManage && <button type="button" onClick={() => setCreateDocumentBase(selected)}>添加第一项数据</button>}</div>
-                ) : (
-                  <div
-                    ref={documentsScrollRef}
-                    className="knowledge-document-table-wrap"
-                    aria-busy={documentsLoading || undefined}
-                    onScroll={handleDocumentsScroll}
-                  >
-                  <table className="knowledge-document-table">
-                    <thead>
-                      <tr>
-                        <th scope="col">名称</th>
-                        <th scope="col">格式</th>
-                        <th scope="col">大小</th>
-                        <th scope="col" className="knowledge-document-table__actions-heading">操作</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {documents.map((item) => (
-                        <tr key={item.id}>
-                          <td className="knowledge-document-table__name" title={item.name || item.id}>{item.name || item.id}</td>
-                          <td>{knowledgeDocumentFormat(item)}</td>
-                          <td>{formatFileSize(item.sizeBytes)}</td>
-                          <td>
-                            <div className="knowledge-document-table__actions">
-                              <Tooltip content="预览" compact>
-                                <Button
-                                  type="button"
-                                  className="knowledge-document-action-button"
-                                  color="secondary"
-                                  variant="ghost"
-                                  size="sm"
-                                  iconSize="sm"
-                                  uniform
-                                  aria-label={`预览 ${item.name || item.id}`}
-                                  onClick={() => setPreviewDocument(item)}
-                                >
-                                  <Eye aria-hidden="true" />
-                                </Button>
-                              </Tooltip>
-                              {selected.canManage ? (
-                                <>
-                                  <Tooltip content="编辑" compact>
-                                    <Button
-                                      type="button"
-                                      className="knowledge-document-action-button"
-                                      color="secondary"
-                                      variant="ghost"
-                                      size="sm"
-                                      iconSize="sm"
-                                      uniform
-                                      aria-label={`编辑 ${item.name || item.id}`}
-                                      onClick={() => setEditDocument(item)}
-                                    >
-                                      <Edit aria-hidden="true" />
-                                    </Button>
-                                  </Tooltip>
-                                  <Tooltip content="删除" compact>
-                                    <Button
-                                      type="button"
-                                      className="knowledge-document-action-button"
-                                      color="danger"
-                                      variant="ghost"
-                                      size="sm"
-                                      iconSize="sm"
-                                      uniform
-                                      aria-label={`删除 ${item.name || item.id}`}
-                                      onClick={() => setDeleteDocumentTarget(item)}
-                                    >
-                                      <Delete aria-hidden="true" />
-                                    </Button>
-                                  </Tooltip>
-                                </>
-                              ) : null}
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  {documentsLoading ? (
-                    <div className="knowledge-document-pagination" role="status" aria-live="polite">
-                      <span className="my-agent-loading-mark" aria-hidden="true" />
-                      <span>正在加载更多数据</span>
-                    </div>
-                  ) : documentsMoreError ? (
-                    <div className="knowledge-document-pagination is-error" role="alert">
-                      <span>{documentsMoreError}</span>
-                      <button type="button" onClick={() => void loadDocuments(selected, true)}>重试加载</button>
-                    </div>
-                  ) : documentsHasMore ? (
-                    <div
-                      ref={documentsLoadMoreRef}
-                      className="knowledge-document-pagination"
-                      role="status"
-                      aria-live="polite"
-                    >
-                      继续下滑加载更多
-                    </div>
-                  ) : null}
-                  </div>
-                )}
-              </div>
-            </section>
-          </ResourceDetailBody>
-        </ResourceDetail>
+                </section>
+              ),
+            },
+          ]}
+          activeSectionKey={detailSection}
+          navigationLabel="知识库详情"
+          onSectionChange={setDetailSection}
+          actions={selected.canManage ? (
+            <>
+                <Button type="button" color="danger" variant="soft" size="lg" pill={false} onClick={() => setDeleteBaseTarget(selected)}>删除</Button>
+                <Button type="button" color="primary" size="lg" pill={false} onClick={() => setEditBaseOpen(true)}>编辑</Button>
+            </>
+          ) : undefined}
+        />
       ) : (
         <>
           <ResourceToolbar className="knowledge-library__toolbar library-resource-toolbar">

@@ -31,11 +31,6 @@ const actionMenuSource = readFileSync(
   new URL("../src/ui/StudioActionMenu.tsx", import.meta.url),
   "utf8",
 );
-const actionMenuStylesSource = readFileSync(
-  new URL("../src/ui/StudioActionMenu.css", import.meta.url),
-  "utf8",
-);
-
 let knowledgeClientPromise;
 function loadKnowledgeClient() {
   knowledgeClientPromise ??= build({
@@ -326,7 +321,7 @@ test("disables adding knowledge when the Provider association is invalid", () =>
   assert.match(pageSource, /reason instanceof KnowledgeRequestError/);
   assert.match(pageSource, /reason\.errorCode === KNOWLEDGE_PROVIDER_ASSOCIATION_INVALID/);
   assert.match(pageSource, /const providerAssociationInvalid = Boolean/);
-  assert.match(pageSource, /disabled=\{providerAssociationInvalid\}/);
+  assert.match(pageSource, /disabled: providerAssociationInvalid/);
   assert.match(pageSource, />删除失效关联<\/button>/);
   assert.match(pageSource, /invalidProviderKey === baseKey\(item\)/);
   assert.match(pageSource, /onAssociationInvalid=\{\(reason\) =>/);
@@ -435,7 +430,8 @@ test("offers verified image document and web knowledge sources", () => {
 });
 
 test("renders document names with regular weight", () => {
-  assert.match(stylesSource, /\.knowledge-document-table__name\s*\{[^}]*font-weight:\s*400;/);
+  assert.match(pageSource, /className: "is-primary-column"/);
+  assert.doesNotMatch(resourceCollectionStyles, /\.resource-data-table__table td\s*\{[^}]*font-weight:/);
 });
 
 test("fetches a safe web markdown preview without creating a document", async () => {
@@ -550,29 +546,28 @@ test("provides a responsive card overview and a focused detail view", () => {
   assert.doesNotMatch(pageSource, /RefreshIcon|刷新知识库/);
   assert.match(pageSource, /className="my-agent-loading-mark"/);
   assert.doesNotMatch(pageSource, /项目 \/ 地域/);
-  for (const component of [
-    "ResourceDetail",
-    "ResourceDetailHeader",
-    "ResourceDetailHeading",
-    "ResourceDetailActions",
-    "ResourceDetailBody",
-    "ResourceDetailSummary",
-    "ResourceDetailSectionHeader",
-  ]) {
-    assert.match(pageSource, new RegExp(`<${component}`));
-  }
-  assert.match(pageSource, /<ResourceDetailHeading[\s\S]*?title=\{selected\.name\}[\s\S]*?backLabel="返回知识库列表"/);
+  assert.match(pageSource, /<ResourceDetailLayout[\s\S]*?title=\{selected\.name\}[\s\S]*?backLabel="返回知识库列表"/);
+  assert.match(pageSource, /sections=\{\[[\s\S]*?key: "overview",[\s\S]*?label: "概览",[\s\S]*?content:[\s\S]*?key: "data",[\s\S]*?label: "数据",[\s\S]*?content:/);
+  assert.match(pageSource, /activeSectionKey=\{detailSection\}/);
+  assert.match(pageSource, /onSectionChange=\{setDetailSection\}/);
+  assert.doesNotMatch(pageSource, /detailSection === "overview"/);
+  assert.match(pageSource, /<ResourceDetailSummary className="knowledge-overview__summary">/);
+  assert.match(stylesSource, /\.knowledge-overview__summary\s*\{[^}]*border:\s*0;[^}]*background:\s*transparent;/);
+  assert.doesNotMatch(pageSource, /<ResourceDetailSectionHeader/);
+  assert.doesNotMatch(pageSource, /<ResourceDetail(?:Header|Heading|Actions|Body)\b/);
   assert.doesNotMatch(pageSource, /\{documents\.length\} 项/);
-  assert.match(pageSource, /<table className="knowledge-document-table">/);
-  assert.match(pageSource, /<th scope="col">名称<\/th>/);
-  assert.match(pageSource, /<th scope="col">格式<\/th>/);
-  assert.match(pageSource, /<th scope="col">大小<\/th>/);
+  assert.match(pageSource, /<ResourceDataTable/);
+  assert.match(pageSource, /searchPlaceholder="搜索数据"/);
+  assert.match(pageSource, /label: providerAssociationInvalid \? "关联已失效" : "添加数据"/);
+  assert.match(pageSource, /header: "名称"/);
+  assert.match(pageSource, /header: "格式"/);
+  assert.match(pageSource, /header: "大小"/);
   assert.doesNotMatch(pageSource, /knowledge-document-row__source/);
   assert.doesNotMatch(pageSource, /item\.url \|\| item\.tosPath/);
   assert.match(clientSource, /sizeBytes: number/);
-  assert.match(stylesSource, /\.knowledge-document-table-wrap\s*\{[^}]*overflow:\s*auto;/);
+  assert.doesNotMatch(stylesSource, /\.knowledge-document-table-wrap\s*\{/);
   assert.match(stylesSource, /\.knowledge-documents__body\.is-table\s*\{[^}]*flex:\s*1;[^}]*border:\s*0;/);
-  assert.match(stylesSource, /\.knowledge-library \.knowledge-primary-button span\s*\{[^}]*color:\s*inherit;/);
+  assert.doesNotMatch(stylesSource, /knowledge-primary-button/);
   assert.match(resourceCollectionStyles, /\.resource-detail__back\s*\{/);
   assert.match(resourceCollectionStyles, /\.resource-detail__summary\s*\{[^}]*display:\s*grid;/);
   assert.match(resourceCollectionStyles, /\.resource-detail__summary dt\s*\{[^}]*font-size:/);
@@ -596,11 +591,9 @@ test("provides a responsive card overview and a focused detail view", () => {
 });
 
 test("previews knowledge data with safe media and paginated parsed chunks", () => {
-  assert.match(pageSource, /import \{ Delete, Edit, Eye \} from "@openai\/apps-sdk-ui\/components\/Icon"/);
   assert.match(pageSource, /import \{ Markdown \} from "\.\/Markdown"/);
   assert.match(pageSource, /function KnowledgeDocumentPreviewDialog/);
-  assert.match(pageSource, /aria-label=\{`预览 \$\{item\.name \|\| item\.id\}`\}/);
-  assert.match(pageSource, /<Eye aria-hidden="true" \/>/);
+  assert.match(pageSource, /label: "预览",[\s\S]*?onSelect: \(\) => setPreviewDocument\(item\)/);
   assert.match(pageSource, /await previewKnowledgeDocument/);
   assert.match(pageSource, /正在加载数据预览/);
   assert.doesNotMatch(pageSource, /<span>\{knowledgeDocumentFormat\(document\)\}<\/span>/);
@@ -668,21 +661,20 @@ test("auto loads document pages inside an independent table scroller", () => {
     /\.knowledge-documents__body\.is-table\s*\{[^}]*flex:\s*1;[^}]*overflow:\s*hidden;/,
   );
   assert.match(
-    stylesSource,
-    /\.knowledge-document-table-wrap\s*\{[^}]*height:\s*100%;[^}]*overflow:\s*auto;/,
+    resourceCollectionStyles,
+    /\.resource-data-table__frame\s*\{[^}]*overflow:\s*auto;/,
   );
 });
 
 test("uses one shared resource card for knowledge actions and overflow management", () => {
-  assert.match(resourceCardSource, /action: LibraryResourceCardAction/);
+  assert.match(resourceCardSource, /action\?: LibraryResourceCardAction/);
   assert.match(resourceCardSource, /detailAction: LibraryResourceCardAction/);
   assert.match(resourceCardSource, /<ResourceCardRevealAction/);
-  assert.match(actionMenuSource, /role="menu"/);
-  assert.match(actionMenuSource, /role="menuitem"/);
-  assert.match(
-    actionMenuStylesSource,
-    /\.studio-action-menu__item\s*\{[^}]*font-size:\s*12px;[^}]*font-weight:\s*400;[^}]*line-height:\s*18px;/,
-  );
+  assert.match(actionMenuSource, /from "@openai\/apps-sdk-ui\/components\/Menu"/);
+  assert.match(actionMenuSource, /from "@openai\/apps-sdk-ui\/components\/Button"/);
+  assert.match(actionMenuSource, /<Menu\.Trigger>/);
+  assert.match(actionMenuSource, /<Menu\.Item/);
+  assert.doesNotMatch(actionMenuSource, /StudioActionMenu\.css|studio-action-menu__/);
   assert.doesNotMatch(
     stylesSource,
     /\.knowledge-library button,[\s\S]*?\.knowledge-dialog select\s*\{\s*font:\s*inherit;/,
