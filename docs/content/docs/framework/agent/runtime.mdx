@@ -28,7 +28,13 @@ agent = Agent(name="assistant", runtime="codex")
 | 取值 | 说明 |
 | :--- | :--- |
 | `adk`（默认） | 使用 Google ADK 内置的执行流程，适用于绝大多数场景。 |
-| `codex` | 使用 OpenAI Codex SDK 驱动内层循环。 |
+| `codex` | 使用 OpenAI Codex SDK 驱动内层循环，在沙箱中执行命令与文件操作。 |
+| `piagent` | 使用本地 Pi coding agent 二进制（通过其 RPC 模式）驱动内层循环。二进制会在首次运行时自动下载，也可用 `PIAGENT_BINARY` 指定已有路径。 |
+
+<Callout type="warn">
+**定位：`codex` / `piagent` 是「沙箱执行运行时」，不是 ADK 执行流程的等价替代品。**
+它们把整个内层循环交给外部 agent harness，因此 ADK 在该流程内实现的能力——Agent transfer、请求/响应处理器（planner、code_executor、example store、知识库注入）、逐次模型调用的回调与 span——都不会执行。选择它们是为了拿到「模型可以在受控沙箱里跑命令、改文件」的能力，而不是为了给已有 ADK 智能体换一个后端。具体差异见下方[支持矩阵](#支持矩阵)。
+</Callout>
 
 使用 Codex runtime 前安装可选依赖：
 
@@ -38,7 +44,7 @@ pip install "veadk-python[codex]"
 
 ### Codex 安全配置
 
-Codex 默认使用独立 Session workspace、`workspace_write` 沙箱、禁用网络，并拒绝需要提权的操作。需要扩大权限时必须显式配置：
+Codex 默认使用独立 Session workspace、`workspace_write` 沙箱、禁用网络，并拒绝一切需要提权的操作：
 
 ```python title="agent.py"
 from veadk import Agent
@@ -49,7 +55,7 @@ agent = Agent(
     runtime="codex",
     codex_runtime_config=CodexRuntimeConfig(
         sandbox="workspace_write",
-        approval_mode="auto_review",
+        approval_mode="deny_all",  # 默认值；auto_review 等同于全自动批准，见下
         network_access=True,
         # 若需在已有工程内工作，显式指定目录；默认使用 Session 隔离目录。
         workspace_root="/workspace/codex",
@@ -57,36 +63,124 @@ agent = Agent(
 )
 ```
 
+<Callout type="error">
+**`approval_mode="auto_review"` 不是「人工复核」，而是「全自动批准」。**
+Codex SDK 内置的审批处理器对每一个 `requestApproval` 通知都回答 `accept`，而 `AsyncCodex` 没有提供替换该处理器的接口。因此 `auto_review` 会自动批准每一次沙箱提权和文件修改，既不询问人工，也不经过 ADK。只有默认的 `deny_all` 才真正把 Codex 约束在沙箱内。在多租户或不可信输入场景中，请勿使用 `auto_review`。
+</Callout>
+
+关于沙箱与网络的组合，有一个容易误判的点：`network_access` 只会写入 Codex `config.toml` 的 `[sandbox_workspace_write]` 段，**只有 `workspace_write` 沙箱会读取它**。
+
+| `sandbox` | `network_access` 是否生效 |
+| :--- | :--- |
+| `workspace_write` | 生效。 |
+| `read_only` | 不生效（设为 `True` 会记录一条警告）。 |
+| `full_access` | 不生效——`danger-full-access` 本身就意味着完全的网络与文件系统访问。 |
+
+因此 `CodexRuntimeConfig(sandbox="full_access", network_access=False)` 会**直接抛出 `ValueError`**：这个组合读起来像「禁用网络」，实际却给了完全访问权限。需要 `full_access` 时必须显式写上 `network_access=True` 以确认风险。
+
 `full_access` 和 `reuse_workspace=True` 会放宽不同调用之间的文件系统边界，只应在受信环境中开启。
+
+#### Workspace 生命周期
+
+默认情况下，workspace 由 `app_name` / `user_id` / `session_id` / agent 名四元组定位：同一 Session 的多次调用**共享同一目录**，回合结束后不会删除，因此上一轮写下的文件下一轮仍然可见。进程退出时整棵目录树被清理；进程存活期间，**空闲超过 6 小时**的 Session workspace 会在下一次创建 workspace 时被顺带回收，以限制长期运行的服务进程的磁盘增长。
+
+显式传入 `workspace_root` 时，这块目录属于你自己：runtime 既不会删除它，也**不会**对它执行上述空闲回收——它仍会在其下为每个 Session 建独立子目录，但这些子目录需要你自行清理。`reuse_workspace=True` 只有在同时设置了 `workspace_root` 时才有意义，它让所有 Session 直接共用该目录本身，而不再做 Session 隔离。
+
+### Codex 执行参数
+
+| 参数 | 默认值 | 说明 |
+| :--- | :--- | :--- |
+| `reasoning_effort` | `"medium"` | 推理强度，可选 `minimal`/`low`/`medium`/`high`/`xhigh`。越高越慢、消耗 token 越多。 |
+| `personality` | `"pragmatic"` | Codex 自带的回复风格，可选 `none`/`friendly`/`pragmatic`。 |
+| `max_tool_iterations` | `32` | 整个 Codex turn 内 shim 可执行的 ADK/MCP 工具轮次上限（1–256）。见下方行为变更说明。 |
+| `tool_timeout_seconds` | `120.0` | 单个 ADK/MCP 工具调用的超时秒数；设为 `None` 表示不超时。 |
+| `reuse_workspace` | `False` | 仅在同时设置了 `workspace_root` 时生效，见上方 [Workspace 生命周期](#workspace-生命周期)。 |
+
+<Callout type="warn">
+**行为变更：`max_tool_iterations` 的含义已改变，默认值从 `8` 提高到 `32`。**
+它现在约束的是**整个 Codex turn**，而不再是单次后端请求。Codex 每完成一次原生工具调用就会发起一次新的后端请求，所以旧的「每请求」计数实际允许的执行次数是「请求轮数 × budget」。默认值同时调高，是为了让「先跑若干轮原生工具、之后才调用 ADK 工具」的回合不被提前截断。如果你此前靠 `8` 这个值来兜底控制成本，请重新评估——现在更合适的成本上限是 `RunConfig(max_llm_calls=...)`（见下）。
+</Callout>
+
+### 指令是怎么下发给 Codex 的
+
+Codex 自带一份约 20KB、针对自身工具链（`apply_patch`、`update_plan`、shell、AGENTS.md）调优过的系统提示词。VeADK **不会**通过 `base_instructions` 覆盖它——Codex 在该字段被设置时会**整体替换**内置模板，这些指导会被全部删掉（Codex 官方文档也强烈不建议这么做）。
+
+因此，Agent 的身份块与 `instruction` 走的是 Codex 原生的 `developer_instructions` 通道：Codex 把它渲染成一条独立的 `developer` 消息，与 AGENTS.md、skills、环境上下文并列，是纯追加而非替换。
+
+副作用是 **`personality` 现在真的会生效**：它渲染在 Codex 内置的系统提示词模板里，而以前只要设置了 `base_instructions`，整个模板连同 personality 一起被替换掉，该字段形同虚设。
+
+### Codex 环境变量
+
+<Callout type="warn">
+以下四个环境变量**覆盖** Python 中的 `CodexRuntimeConfig`，而不是作为它的默认值。也就是说，即使代码里写死了 `sandbox="workspace_write"`，部署环境里的 `VEADK_CODEX_SANDBOX=full_access` 依然会生效。这一优先级与大多数配置项相反，在容器/函数计算等由平台注入环境变量的场景中尤其需要注意。
+</Callout>
+
+| 环境变量 | 覆盖的配置项 | 说明 |
+| :--- | :--- | :--- |
+| `VEADK_CODEX_SANDBOX` | `sandbox` | 取值同 `sandbox` 字段。 |
+| `VEADK_CODEX_APPROVAL_MODE` | `approval_mode` | 取值同 `approval_mode` 字段。 |
+| `VEADK_CODEX_WORKSPACE_ROOT` | `workspace_root` | 工作目录绝对路径。 |
+| `VEADK_CODEX_NETWORK_ACCESS` | `network_access` | `1`/`true`/`yes`/`on` 视为开启，其余视为关闭。 |
+
+另有四个用于 Responses→Chat 转换层（shim）的环境变量。它们不参与上面的覆盖规则，只是 shim 自身的调参：
+
+| 环境变量 | 默认值 | 说明 |
+| :--- | :--- | :--- |
+| `CODEX_SHIM_NUM_RETRIES` | `2` | 后端请求遇到 429/5xx/超时等瞬时错误时的重试次数。 |
+| `CODEX_SHIM_TIMEOUT` | `0`（不超时） | 单次后端请求的超时秒数。 |
+| `CODEX_SHIM_START_TIMEOUT` | `10` | 等待 shim 的本地 HTTP 服务起来的秒数；超时即判定启动失败并明确报错，而不是让 Codex 一直连不上。 |
+| `CODEX_SHIM_CACHE_MAX` | `8` | 进程内缓存的 shim 实例上限（按后端地址+凭证区分），用于限制多租户进程里的服务与端口数量。 |
 
 ### Codex 可观测性
 
 Codex 原生生命周期和 ADK Function/MCP 工具调用都会转换为 ADK Event。运行日志使用稳定的 `codex_*` 事件名，并包含 `invocation_id`、`call_id`、`tool`、`status`、`duration_ms` 等可归因字段。日志不会记录工具参数、工具结果、API Token、凭证或后端地址；Token Usage 通过 `codex_event_type=token_usage` 事件及对应日志提供。
 
-## 按工具选择执行位置
+此外：
 
-`RuntimeProvider` 不替换智能体的模型推理循环，只决定单次工具调用在哪里执行。`DispatchRuntimeProvider` 可以把指定工具派发到远端，其余工具回退到原本的 ADK 本地实现：
+- **`call_llm` span**：ADK 的 `call_llm` span 本由它自己的 LLM flow 打开，而该 flow 已被 codex 替换，因此 runtime 会自行打开一个同名 span，并在回合结束时写入 prompt、响应与 token 用量。VeADK 的整条遥测链路——内存 exporter 的 Session 索引、Trace 上报、Portal 指标、以及基于 Trace 的评测——因此都能看到 codex 回合。注意粒度：**每回合一个 span**，而不是每次内层模型调用一个。
+- **`usage_metadata`**：整轮的 token 用量汇总后，只挂在**每回合一个的合并后终态 Event** 上（而不是逐条事件累加），避免下游做求和统计时重复计数。
+- **`RunConfig(max_llm_calls=...)` 会被强制执行**：shim 在每一次真实的后端模型调用前扣减配额。超限时 Codex 侧收到一个 `429 llm_calls_limit`（而不是它会重试的 500——重试会把本回合的工具副作用重跑一遍），回合结束后 runtime 再向调用方重新抛出 `LlmCallsLimitExceededError`，而不是返回 Codex 勉强拼出的半截答案。
 
-```python title="agent.py"
-from veadk import Agent, Runner
-from veadk.runtime import DispatchRuntimeProvider
+## 支持矩阵
 
-async def dispatch_task(tool_call):
-    return await remote_client.dispatch(
-        tool_call.name,
-        tool_call.arguments,
-        dispatch_id=tool_call.id,
-    )
+`runtime="codex"` 和 `runtime="piagent"` 会替换整个 ADK LLM 流程，因此 `Agent` 上相当一部分配置不会生效。VeADK 会在智能体构造时以及每次调用前检查这些配置：**产生错误结果的配置直接报错（`ValueError`）**，**只是被忽略的配置记录一次警告**。
 
-agent = Agent(name="assistant", tools=[bash, read_file])
-runtime_provider = DispatchRuntimeProvider(
-    dispatch_task,
-    dispatchable_tools=None,  # 派发所有非 MCP 工具
-)
-runner = Runner(agent=agent, plugins=[runtime_provider])
-```
+### 报错：直接拒绝运行
 
-上例中所有非 MCP 工具只会经过 `dispatch_task`，不会再次执行本地函数；MCP 工具保留原本的 ADK 实现。传入具体工具名集合时，只派发集合中的非 MCP 工具。派发函数可以是同步或异步函数。
+| 配置 | 原因 |
+| :--- | :--- |
+| `sub_agents=[...]` | 外部运行时没有实现 agent transfer，子智能体永远不会被调用，父智能体会自己回答所有问题。如需编排，请用父级 `SequentialAgent` 或 `AgentTool`。 |
+| `model=...` | 运行时从 `model_name` 解析模型，完全忽略 `model` 对象，其 `api_base`、请求头和 fallback 都会丢失。请改用 `model_name`。 |
+| `generate_content_config=...` | 只有 `system_instruction` 会被转发，`temperature`、`max_output_tokens`、`thinking_config` 等都会被丢弃。 |
+| `output_schema=...` | schema 不会下发给后端，模型不受约束；对自由文本做校验会在回合结束时失败。 |
+| `planner=...` / `code_executor=...` | 二者以 ADK 请求/响应处理器的形式运行，外部运行时不执行这一层。 |
+| `include_contents="none"` | 外部运行时始终发送完整会话历史，该设置会被静默忽略并泄漏历史轮次。 |
+| `enable_supervisor=True` | 监督流程挂在 ADK LLM flow 上，而该流程已被替换，不会有任何监督生效。 |
+
+<Callout type="info">
+这条规则只针对**非 adk 智能体自身**的 `sub_agents`。把一个 `runtime="codex"` 的智能体放进 `SequentialAgent` / `ParallelAgent` 的 `sub_agents` 中是完全支持的用法——编排由父级负责，不依赖 agent transfer。
+</Callout>
+
+### 警告：被忽略但仍可运行
+
+| 配置 | 行为 |
+| :--- | :--- |
+| `model_name=[主, 备...]` | 只使用第一个模型，fallback 链不生效。 |
+| `model_provider`（非 `openai`） | 运行时始终以 OpenAI 兼容协议访问 `model_api_base`。 |
+| `model_extra_config` | 仅对 `piagent` 成立。**codex 会转发它**：`extra_headers` 与 `extra_body`（含 VeADK 默认的请求加密与 prompt 缓存配置）由 shim 原样带到后端请求上，与 `adk` 路径一致。 |
+| `enable_responses` / `enable_responses_cache` | 不使用 Ark Responses API，`previous_response_id` 续接与响应缓存均不生效。 |
+| `example_store` | 由 `ExampleTool.process_llm_request` 注入，外部运行时不调用该钩子，few-shot 示例不会进入 prompt。 |
+| `knowledgebase` | **知识库被静默禁用。** 同样由 `LoadKnowledgebaseTool.process_llm_request` 注入使用说明，外部运行时不调用，模型不知道知识库的存在，检索不会被触发。 |
+| `skills_mode` | 外部运行时在桥接工具时会跳过 VeADK 的 `SkillsToolset`，指令里宣称的 `execute_skills`/`skills_tool` 并未注册。 |
+| `enable_skills_checklist` | 依赖 ADK 的 before-tool 回调与 skills 工具集，两者都不生效。 |
+| `after_model_callback` | 语义不同：每回合在合并后的最终文本上触发一次，而不是每次模型调用触发一次。 |
+| `tracers` | 粒度不同：codex 会补一个**每回合一个**的 `call_llm` span（含 prompt、响应、整轮 token 用量），但内层模型循环跑在外部 harness 里，仍然没有逐次模型调用的 span。 |
+| `codex_runtime_config`（配合 `runtime="piagent"`） | 只对 codex 运行时有效，piagent 完全忽略。 |
+| `RunConfig(max_llm_calls=...)` | 仅对 `piagent` 成立——它的模型循环在 harness 内部自行计数，不受该配额约束。**codex 已支持**：见上方[可观测性](#codex-可观测性)。 |
+
+### 不支持 `run_live`
+
+非 `adk` 运行时没有 live/bidi 实现。通过 ADK `get_fast_api_app` 暴露的 `/run_live`（`veadk web` 使用）对这类智能体会抛出 `NotImplementedError`，而不是静默回退到 ADK 流程——否则会用完全不同的模型循环和工具集执行。live 场景请使用 `runtime="adk"`，其余场景使用 `runner.run_async`。
 
 ## 请求处理
 

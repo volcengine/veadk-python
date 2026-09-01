@@ -44,7 +44,7 @@ Both are handled by the runtime — the agent code is just normal tool wiring.
 ## Run
 
 ```bash
-pip install openai-codex          # bundles the Codex CLI binary
+pip install "veadk-python[codex]"   # openai-codex + the bundled Codex CLI binary
 # Ark (or another OpenAI-compatible chat) credentials:
 export MODEL_AGENT_API_KEY=...
 export MODEL_AGENT_API_BASE=https://ark.cn-beijing.volces.com/api/v3
@@ -62,3 +62,13 @@ python examples/codex_with_skill_and_mcp/main.py
   tokens) and ADK interactive authentication requested during tool execution
   are supported. Authentication required before an MCP toolset can list tools
   still depends on the corresponding ADK/MCP client capability.
+- `runtime="codex"` is a *sandboxed-execution* runtime, not a drop-in
+  replacement for the ADK flow. Part of the `Agent` surface is rejected outright
+  under it (`sub_agents`, `output_schema`, `planner`, `code_executor`,
+  `generate_content_config` beyond `system_instruction`, `include_contents="none"`,
+  `enable_supervisor`, and an explicit `model=`), and more is dropped with a
+  warning (`knowledgebase`, `example_store`, `skills_mode`, ...). See the
+  [support matrix](../../docs/content/docs/framework/agent/runtime.en.mdx#support-matrix).
+- Note the distinction this example relies on: ADK's `SkillToolset` is bridged
+  into Codex's native skill system, but VeADK's own `Agent(skills_mode=...)` is
+  **not** — that one warns and has no effect.

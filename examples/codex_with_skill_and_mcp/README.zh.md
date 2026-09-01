@@ -36,7 +36,7 @@ Codex 接管了整轮（而不是 ADK 的 LLM flow），且只会说 Responses A
 ## 运行
 
 ```bash
-pip install openai-codex          # 自带 Codex CLI 二进制
+pip install "veadk-python[codex]"   # openai-codex + 自带的 Codex CLI 二进制
 # 方舟（或其他 OpenAI 兼容 chat）凭证：
 export MODEL_AGENT_API_KEY=...
 export MODEL_AGENT_API_BASE=https://ark.cn-beijing.volces.com/api/v3
@@ -49,4 +49,5 @@ python examples/codex_with_skill_and_mcp/main.py
 
 - 工具由 runtime 的 shim 调度，但调用、结果、状态变更、确认和鉴权都会作为标准 ADK 事件进入 Session/Trace/UI。
 - 支持静态鉴权（header / bearer token / ve-identity workload token）以及工具执行中触发的 ADK 交互式鉴权；MCP toolset 在列举工具前触发的鉴权仍取决于对应 ADK/MCP 客户端能力。
-```
+- `runtime="codex"` 是**沙箱执行运行时**，不是 ADK 执行流程的等价替代品。`Agent` 上有一部分配置在它下面会**直接报错**（`sub_agents`、`output_schema`、`planner`、`code_executor`、`system_instruction` 以外的 `generate_content_config`、`include_contents="none"`、`enable_supervisor`，以及显式传入的 `model=`），另一部分会被丢弃并告警（`knowledgebase`、`example_store`、`skills_mode` 等）。详见[支持矩阵](../../docs/content/docs/framework/agent/runtime.mdx#支持矩阵)。
+- 注意本例依赖的区别：ADK 的 `SkillToolset` 会被桥接进 Codex 原生 skill 系统，但 VeADK 自己的 `Agent(skills_mode=...)` **不会**——后者只会告警且不生效。

@@ -187,6 +187,16 @@ class Agent(LlmAgent):
     enable_skills_checklist: bool = False
     _skills_with_checklist: Dict[str, Any] = {}
 
+    _veadk_explicit_fields: Optional[frozenset] = None
+    """Field names the caller actually passed to ``Agent(...)``.
+
+    Snapshotted at the top of :meth:`model_post_init`, before this class starts
+    assigning ``model``, ``model_extra_config`` and ``run_processor`` itself.
+    ``model_fields_set`` is unusable for "did the user set this?" afterwards:
+    those assignments add themselves to it, and ``BaseAgent.clone()``
+    re-assigns every list field on the copy. Consumed by
+    :func:`veadk.runtime.compat.explicit_fields`."""
+
     runtime: Literal["adk", "codex", "piagent"] = "adk"
     """Agent runtime backend. ``"adk"`` (default) uses Google ADK's built-in LLM
     flow. ``"codex"`` delegates the inner agent loop to the OpenAI Codex SDK.
@@ -218,6 +228,11 @@ class Agent(LlmAgent):
     `veadk.tunnel.mount_tunnel`/`mount_tunnel_if_enabled`."""
 
     def model_post_init(self, __context: Any) -> None:
+        # Snapshot before anything below assigns fields on ``self``: pydantic
+        # adds every assignment to ``model_fields_set``, so this is the only
+        # point at which "the caller set this" is still knowable.
+        self._veadk_explicit_fields = frozenset(self.model_fields_set)
+
         super().model_post_init(None)  # for sub_agents init
 
         # Toolsets that create sub-agents at runtime need ADK to select its
@@ -459,8 +474,31 @@ class Agent(LlmAgent):
             f"Agent: {self.model_dump(include={'id', 'name', 'model_name', 'model_api_base', 'tools', 'skills'})}"
         )
 
+        if self.runtime != "adk":
+            # Fail at ``Agent(...)`` rather than at the first turn. This is a
+            # convenience, not the authoritative gate: ``BaseAgent.clone()``
+            # uses ``model_copy(update=...)``, which runs neither validators nor
+            # ``model_post_init``, and ``spawn_harness_agent`` flips ``runtime``
+            # through exactly that path. ``_run_async_impl`` re-checks.
+            from veadk.runtime.compat import check_agent_runtime_support
+
+            check_agent_runtime_support(self, self.runtime)
+
     def update_model(self, model_name: str):
+        """Point the agent at a different model.
+
+        Both model sources are updated. ``self.model`` is what ADK's LLM flow
+        calls, while the external runtimes resolve the model from
+        ``self.model_name`` (``CodexRuntime._resolve_model``,
+        ``PiAgentModelConfig.from_agent``). Updating only ``self.model`` made
+        per-request model overrides a no-op under ``runtime="codex"`` /
+        ``"piagent"``.
+
+        Args:
+            model_name (str): The new model name, without a provider prefix.
+        """
         logger.info(f"Updating model to {model_name}")
+        self.model_name = model_name
         self.model = self.model.model_copy(
             update={"model": f"{self.model_provider}/{model_name}"}
         )
@@ -748,10 +786,47 @@ class Agent(LlmAgent):
             return
 
         from veadk.runtime import get_runtime
+        from veadk.runtime.compat import check_agent_runtime_support
         from veadk.runtime.output_state import maybe_save_output_to_state
+
+        # Authoritative support-matrix gate. It has to live here rather than in
+        # a validator or in the runtime: ``BaseAgent.clone()`` bypasses
+        # validators and ``model_post_init`` (and ``spawn_harness_agent`` flips
+        # ``runtime`` through it), while the runtimes themselves are also driven
+        # directly with bare ``LlmAgent``/duck-typed agents by their own tests.
+        check_agent_runtime_support(
+            self,
+            self.runtime,
+            run_config=getattr(ctx, "run_config", None),
+        )
 
         async for event in get_runtime(self.runtime).run_async(self, ctx):
             maybe_save_output_to_state(self, event)
+            yield event
+
+    async def _run_live_impl(
+        self, ctx: "InvocationContext"
+    ) -> AsyncGenerator["Event", None]:
+        """Run the live/bidi loop, which only the ``adk`` runtime implements.
+
+        ``LlmAgent._run_live_impl`` goes straight to ``self._llm_flow.run_live``,
+        which VeADK does not override. Without this guard a
+        ``runtime="codex"`` agent reached through ADK's ``/run_live`` endpoint
+        would silently run the full ADK flow — a different model loop, a
+        different tool set and no Codex sandbox — instead of its configured
+        runtime.
+
+        Raises:
+            NotImplementedError: If the agent uses a non-``adk`` runtime.
+        """
+        if self.runtime != "adk":
+            raise NotImplementedError(
+                f"Agent(runtime={self.runtime!r}) has no live/bidi "
+                "implementation; run_live would silently fall back to the ADK "
+                "flow and use a different model loop and tool set. Use "
+                "runner.run_async, or set runtime='adk' for live sessions."
+            )
+        async for event in super()._run_live_impl(ctx):
             yield event
 
     if not is_adk_gte("2.0.0"):

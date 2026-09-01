@@ -29,7 +29,8 @@ Run:
     python examples/codex_with_skill_and_mcp/main.py
 
 Requires:
-- ``pip install openai-codex`` (bundles the Codex CLI binary).
+- ``pip install "veadk-python[codex]"`` (openai-codex plus the bundled Codex
+  CLI binary).
 - Ark (or another OpenAI-compatible chat) credentials via ``MODEL_AGENT_API_KEY``
   / ``MODEL_AGENT_API_BASE`` / ``MODEL_AGENT_NAME`` (see the repo .env.example).
 """

@@ -44,15 +44,22 @@ class _FakeShim:
         specs,
         executors,
         *,
-        max_tool_iterations,
-        invocation_id,
+        max_tool_iterations=None,
+        invocation_id="",
+        model_extra_config=None,
+        on_model_call=None,
     ):
+        # Keyword-only params must carry defaults: the production signature has
+        # grown twice, and a required keyword here turns a runtime change into
+        # an opaque TypeError in an unrelated test.
         self.registered.append(
             {
                 "specs": specs,
                 "executors": executors,
                 "max_tool_iterations": max_tool_iterations,
                 "invocation_id": invocation_id,
+                "model_extra_config": model_extra_config,
+                "on_model_call": on_model_call,
             }
         )
         return "opaque-turn-token"
@@ -129,6 +136,11 @@ class _Context(SimpleNamespace):
     def _get_events(self, **kwargs):
         return list(self.session.events)
 
+    def increment_llm_call_count(self):
+        # Without this attribute the runtime's `max_llm_calls` charging
+        # silently no-ops and the SDK contract test covers nothing.
+        self.llm_call_count = getattr(self, "llm_call_count", 0) + 1
+
 
 @pytest.mark.asyncio
 async def test_runtime_passes_isolated_config_and_safe_sdk_controls(
@@ -187,10 +199,14 @@ async def test_runtime_passes_isolated_config_and_safe_sdk_controls(
         _FakeAsyncCodex.calls["thread_start"]["approval_mode"] is ApprovalMode.deny_all
     )
     assert _FakeAsyncCodex.calls["thread_start"]["sandbox"] is Sandbox.workspace_write
-    assert _FakeAsyncCodex.calls["thread_start"]["base_instructions"]
+    # `base_instructions` *replaces* Codex's 20.9KB built-in system prompt, so
+    # the runtime deliberately never sends it; the agent identity rides along
+    # with the instruction on the developer channel instead.
+    assert "base_instructions" not in _FakeAsyncCodex.calls["thread_start"]
     assert _FakeAsyncCodex.calls["thread_start"]["developer_instructions"] == (
-        "Follow the contract."
+        "Your name is agent.\n\nSDK contract agent\n\nFollow the contract."
     )
+    assert ctx.llm_call_count == 1, "the invocation was never charged an LLM call"
     messages = "\n".join(record.getMessage() for record in caplog.records)
     assert "codex_runtime_start invocation_id=inv-sdk" in messages
     assert "codex_runtime_complete invocation_id=inv-sdk status=completed" in messages
@@ -257,18 +273,21 @@ def test_session_workspaces_are_stable_and_isolated(tmp_path) -> None:
             ),
         )
 
-    first, first_cleanup = _prepare_workspace(config, context("session-a"))
-    repeated, repeated_cleanup = _prepare_workspace(config, context("session-a"))
-    second, second_cleanup = _prepare_workspace(config, context("session-b"))
+    first = _prepare_workspace(config, context("session-a"))
+    repeated = _prepare_workspace(config, context("session-a"))
+    second = _prepare_workspace(config, context("session-b"))
 
     assert first == repeated
     assert first != second
-    assert first_cleanup is repeated_cleanup is second_cleanup is False
+
+    # `_prepare_workspace` returns a plain path: the old second tuple element
+    # was always False, which made four rmtree call sites dead code. Session
+    # workspaces outlive a turn and are reaped on an idle TTL instead.
+    assert isinstance(first, str)
 
     shared_config = CodexRuntimeConfig(
         workspace_root=str(tmp_path / "shared"),
         reuse_workspace=True,
     )
-    shared, cleanup = _prepare_workspace(shared_config, context("session-c"))
+    shared = _prepare_workspace(shared_config, context("session-c"))
     assert shared == str(tmp_path / "shared")
-    assert cleanup is False

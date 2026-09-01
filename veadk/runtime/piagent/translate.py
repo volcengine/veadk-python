@@ -116,6 +116,41 @@ def _system_instruction_text(value: Any) -> str:
     return str(value).strip()
 
 
+# Pi's `Usage` counters, as published on assistant messages and tool results.
+# `reasoning` is deliberately tracked but never mapped onto genai's
+# `thoughts_token_count`: it is a *subset* of `output`, whereas genai treats
+# thoughts as disjoint from candidates, so mapping it would double-count.
+_USAGE_FIELDS = (
+    "input",
+    "output",
+    "cacheRead",
+    "cacheWrite",
+    "reasoning",
+    "totalTokens",
+)
+
+
+def counts_as_model_call(event: dict[str, Any]) -> bool:
+    """Whether a raw Pi RPC event marks one completed backend model call.
+
+    Pi's agent loop performs exactly one backend model call per iteration and
+    closes it with exactly one ``message_end`` carrying the assistant message.
+    ``message_end`` is also emitted for user and tool-result messages, so the
+    role check is what makes this a model-call boundary rather than a message
+    boundary.
+
+    Args:
+        event (dict[str, Any]): One raw Pi RPC event.
+
+    Returns:
+        bool: Whether the event closes one backend model call.
+    """
+    if event.get("type") != "message_end":
+        return False
+    message = event.get("message")
+    return isinstance(message, dict) and message.get("role") == "assistant"
+
+
 def make_text_event(
     text: str,
     author: str,
@@ -161,10 +196,13 @@ class PiEventTranslator:
         self.invocation_id = invocation_id
         self.bridged_tool_names = set(bridged_tool_names or ())
         self.emitted_text = False
+        self._emitted_texts: list[str] = []
         self._thinking_parts: list[str] = []
         self._text_parts: list[str] = []
+        self._usage_totals: dict[str, int] = {}
 
     def event_to_adk_events(self, event: dict[str, Any]) -> list[Event]:
+        self._accumulate_usage(event)
         event_type = event.get("type")
         if event_type == "message_update":
             return self._message_update_to_events(event)
@@ -196,8 +234,104 @@ class PiEventTranslator:
             return self._flush_events()
         return []
 
-    def _is_bridged_tool_event(self, event: dict[str, Any]) -> bool:
-        return str(event.get("toolName") or "") in self.bridged_tool_names
+    def _accumulate_usage(self, event: dict[str, Any]) -> None:
+        """Add one raw Pi event's token usage to this turn's running totals.
+
+        Only sources that contribute *new* tokens are summed, mirroring Pi's own
+        accounting:
+
+        - ``message_end`` for an assistant message -- one backend model call.
+        - ``turn_end.toolResults[]`` -- LLM work performed inside a tool (a
+          subagent), which no other event reports.
+        - ``compaction_end.result`` -- the call that produced a compaction
+          summary, which bypasses the agent loop.
+
+        Deliberately excluded: ``message_update.usage`` is cumulative for the
+        in-flight message rather than incremental, ``turn_end.message`` repeats
+        the assistant message already counted at its ``message_end``, and
+        ``agent_end.messages[]`` replays the whole conversation.
+
+        Args:
+            event (dict[str, Any]): One raw Pi RPC event.
+        """
+        event_type = event.get("type")
+        if event_type == "message_end":
+            message = event.get("message")
+            if isinstance(message, dict) and message.get("role") == "assistant":
+                self._add_usage(message.get("usage"))
+        elif event_type == "turn_end":
+            results = event.get("toolResults")
+            if isinstance(results, list):
+                for result in results:
+                    if isinstance(result, dict):
+                        self._add_usage(result.get("usage"))
+        elif event_type == "compaction_end":
+            result = event.get("result")
+            if isinstance(result, dict):
+                self._add_usage(result.get("usage"))
+
+    def _add_usage(self, usage: Any) -> None:
+        if not isinstance(usage, dict):
+            return
+        for key in _USAGE_FIELDS:
+            value = usage.get(key)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue
+            self._usage_totals[key] = self._usage_totals.get(key, 0) + int(value)
+
+    def build_turn_usage_metadata(
+        self,
+    ) -> types.GenerateContentResponseUsageMetadata | None:
+        """Map this turn's accumulated Pi usage onto genai usage metadata.
+
+        Pi normalizes every provider to disjoint prompt-side counters:
+        ``input`` excludes cached tokens, which are reported separately as
+        ``cacheRead`` (a cache hit) and ``cacheWrite`` (a cache entry being
+        created); adapters for providers that fold cache into prompt tokens
+        subtract them explicitly. genai's ``prompt_token_count`` is instead the
+        whole prompt, with ``cached_content_token_count`` a *subset* of it, so
+        the three are summed into the prompt count and the cache-read figure is
+        also surfaced on its own. ``cacheWrite`` counts as prompt because those
+        tokens are part of the prompt the model processes: Pi's own cost model
+        likewise sizes the input side as ``input + cacheRead + cacheWrite``,
+        billing the three at different rates rather than treating any of them as
+        non-prompt.
+
+        The total is the larger of Pi's reported ``totalTokens`` and the
+        component sum, because neither alone is right for every provider. Most
+        adapters compute ``totalTokens`` as exactly that sum, but some pass the
+        provider's figure through verbatim -- which can legitimately *exceed*
+        the sum, since genai's total also covers tool-use prompt tokens that Pi
+        never breaks out -- while at least one falls back to ``input + output``
+        alone, which against a prompt count that includes cache tokens would
+        report a total smaller than its own parts. Taking the maximum keeps
+        whichever figure carries more information without ever violating
+        ``total >= prompt + candidates``.
+
+        Returns:
+            google.genai.types.GenerateContentResponseUsageMetadata | None: The
+            turn's usage, or ``None`` when Pi reported no usable counter, so a
+            missing or malformed payload degrades to "no accounting" rather than
+            to zeroed accounting that would pollute token histograms.
+        """
+        if not self._usage_totals:
+            return None
+        totals = self._usage_totals
+        prompt = (
+            totals.get("input", 0)
+            + totals.get("cacheRead", 0)
+            + totals.get("cacheWrite", 0)
+        )
+        candidates = totals.get("output", 0)
+        total = max(prompt + candidates, totals.get("totalTokens", 0))
+        if not total:
+            return None
+        return types.GenerateContentResponseUsageMetadata(
+            prompt_token_count=prompt or None,
+            candidates_token_count=candidates or None,
+            total_token_count=total,
+            cached_content_token_count=totals.get("cacheRead") or None,
+        )
 
     def _message_update_to_events(self, event: dict[str, Any]) -> list[Event]:
         update = event.get("assistantMessageEvent")
@@ -234,11 +368,19 @@ class PiEventTranslator:
         return []
 
     def _flush_events(self, *, preferred_text: str = "") -> list[Event]:
-        if self.emitted_text:
-            self._thinking_parts.clear()
-            self._text_parts.clear()
-            return []
+        """Emit this round's durable assistant text, if it is new.
 
+        Pi closes every round of a turn with its own ``message_end``, and
+        ``turn_end`` / ``agent_end`` / ``agent_settled`` then re-announce text
+        that has already been emitted. Suppression is therefore keyed on the
+        text itself rather than on a "have I emitted anything yet" latch: a
+        latch made the *first* round win, so on a turn whose tool call carried a
+        text preamble ("let me check the weather...") the preamble became the
+        turn's answer and the round that actually answered was dropped.
+
+        Matching on text also covers the preamble a tool-call event has already
+        persisted, so it is not repeated as a standalone text event.
+        """
         if preferred_text:
             text = preferred_text
             self._text_parts.clear()
@@ -246,10 +388,14 @@ class PiEventTranslator:
             text = self._drain_text()
         if not text:
             return []
+        if text in self._emitted_texts:
+            self._thinking_parts.clear()
+            self._text_parts.clear()
+            return []
 
         parts = self._drain_pending_parts(include_text=False)
         parts.append(types.Part(text=text, thought=False))
-        self.emitted_text = True
+        self._note_emitted(text)
         return [
             make_model_event(
                 parts,
@@ -268,8 +414,17 @@ class PiEventTranslator:
             text = self._drain_text()
             if text:
                 parts.append(types.Part(text=text, thought=False))
+                # This text is now persisted on the carrying event (a tool
+                # call), so a later `message_end` repeating it must not emit it
+                # again as a standalone answer.
+                self._note_emitted(text)
 
         return parts
+
+    def _note_emitted(self, text: str) -> None:
+        self.emitted_text = True
+        if text not in self._emitted_texts:
+            self._emitted_texts.append(text)
 
     def _drain_thinking(self) -> str:
         text = "".join(self._thinking_parts).strip()
