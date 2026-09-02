@@ -27,6 +27,7 @@ from veadk.utils.logger import get_logger
 logger = get_logger(__name__)
 
 _MAX_TIMEOUT = 300
+_ISOLATE_PARALLEL_CALLS_ENV = "VEADK_RUN_CODE_ISOLATE_PARALLEL_CALLS"
 
 
 def _validate_timeout(name: str, value: int) -> None:
@@ -34,6 +35,31 @@ def _validate_timeout(name: str, value: int) -> None:
         raise ValueError(
             f"{name} must be an integer between 1 and {_MAX_TIMEOUT} seconds"
         )
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _tool_user_session_id(tool_context: ToolContext) -> str:
+    invocation_context = tool_context._invocation_context
+    session_id = invocation_context.session.id
+    agent_name = invocation_context.agent.name
+    user_id = invocation_context.user_id
+    base_session_id = agent_name + "_" + user_id + "_" + session_id
+
+    if (
+        _env_bool(_ISOLATE_PARALLEL_CALLS_ENV, True)
+        and getattr(tool_context, "_veadk_parallel_tool_call_count", 1) > 1
+    ):
+        function_call_id = getattr(tool_context, "function_call_id", None)
+        if function_call_id:
+            return base_session_id + "_" + function_call_id
+
+    return base_session_id
 
 
 def run_code(
@@ -72,9 +98,7 @@ def run_code(
     logger.debug(f"tools endpoint: {host}")
 
     session_id = tool_context._invocation_context.session.id
-    agent_name = tool_context._invocation_context.agent.name
-    user_id = tool_context._invocation_context.user_id
-    tool_user_session_id = agent_name + "_" + user_id + "_" + session_id
+    tool_user_session_id = _tool_user_session_id(tool_context)
     logger.debug(f"tool_user_session_id: {tool_user_session_id}")
 
     logger.debug(

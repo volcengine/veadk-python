@@ -22,15 +22,19 @@ from veadk.tools.builtin_tools.execute_skills import execute_skills
 from veadk.tools.builtin_tools import run_code as run_code_module
 
 
-def _tool_context():
-    return SimpleNamespace(
+def _tool_context(function_call_id=None, parallel_tool_call_count=None):
+    context = SimpleNamespace(
         state={},
+        function_call_id=function_call_id,
         _invocation_context=SimpleNamespace(
             session=SimpleNamespace(id="session-id"),
             agent=SimpleNamespace(name="agent-name"),
             user_id="user-id",
         ),
     )
+    if parallel_tool_call_count is not None:
+        context._veadk_parallel_tool_call_count = parallel_tool_call_count
+    return context
 
 
 @pytest.mark.parametrize(
@@ -102,6 +106,88 @@ def test_run_code_uses_default_timeout_for_python():
 
     assert result == "ok"
     assert invoke.call_args.kwargs["timeout"] == 300
+
+
+def test_run_code_keeps_session_id_without_parallel_marker():
+    with (
+        patch.object(run_code_module, "resolve_agentkit_tool_id", return_value="tool"),
+        patch.object(
+            run_code_module,
+            "get_agentkit_endpoint_config",
+            return_value=("service", "region", "host", "https"),
+        ),
+        patch.object(
+            run_code_module,
+            "invoke_agentkit_run_code",
+            return_value={"Result": {"Result": "ok"}},
+        ) as invoke,
+    ):
+        result = run_code_module.run_code(
+            "print('hello')",
+            "python3",
+            _tool_context(function_call_id="call-a"),
+        )
+
+    assert result == "ok"
+    assert invoke.call_args.kwargs["tool_user_session_id"] == (
+        "agent-name_user-id_session-id"
+    )
+
+
+def test_run_code_isolates_parallel_session_id_by_call_id(monkeypatch):
+    monkeypatch.delenv("VEADK_RUN_CODE_ISOLATE_PARALLEL_CALLS", raising=False)
+
+    with (
+        patch.object(run_code_module, "resolve_agentkit_tool_id", return_value="tool"),
+        patch.object(
+            run_code_module,
+            "get_agentkit_endpoint_config",
+            return_value=("service", "region", "host", "https"),
+        ),
+        patch.object(
+            run_code_module,
+            "invoke_agentkit_run_code",
+            return_value={"Result": {"Result": "ok"}},
+        ) as invoke,
+    ):
+        result = run_code_module.run_code(
+            "print('hello')",
+            "python3",
+            _tool_context(function_call_id="call-a", parallel_tool_call_count=2),
+        )
+
+    assert result == "ok"
+    assert invoke.call_args.kwargs["tool_user_session_id"] == (
+        "agent-name_user-id_session-id_call-a"
+    )
+
+
+def test_run_code_parallel_session_isolation_can_be_disabled(monkeypatch):
+    monkeypatch.setenv("VEADK_RUN_CODE_ISOLATE_PARALLEL_CALLS", "0")
+
+    with (
+        patch.object(run_code_module, "resolve_agentkit_tool_id", return_value="tool"),
+        patch.object(
+            run_code_module,
+            "get_agentkit_endpoint_config",
+            return_value=("service", "region", "host", "https"),
+        ),
+        patch.object(
+            run_code_module,
+            "invoke_agentkit_run_code",
+            return_value={"Result": {"Result": "ok"}},
+        ) as invoke,
+    ):
+        result = run_code_module.run_code(
+            "print('hello')",
+            "python3",
+            _tool_context(function_call_id="call-a", parallel_tool_call_count=2),
+        )
+
+    assert result == "ok"
+    assert invoke.call_args.kwargs["tool_user_session_id"] == (
+        "agent-name_user-id_session-id"
+    )
 
 
 def test_run_code_forwards_custom_timeouts_for_bash():
