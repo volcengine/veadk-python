@@ -445,11 +445,26 @@ test("invalid drafts reveal and focus the first failing field", () => {
   );
   assert.match(
     createSource,
-    /data-validation-field="name"[\s\S]*?aria-invalid=\{showErrors && nameInvalid\}[\s\S]*?aria-describedby=/,
+    /data-validation-field="name"[\s\S]*?aria-invalid=\{showNameError && nameInvalid\}[\s\S]*?aria-describedby=/,
   );
   assert.match(
     createSource,
     /id="cw-agent-name-error"[\s\S]*?role="alert"/,
+  );
+});
+
+test("agent name validation appears as soon as the selected name is edited or blurred", () => {
+  assert.match(
+    createSource,
+    /const showNameError =\s*showErrors \|\| touchedAgentNamePaths\.has\(selectedNamePathKey\)/,
+  );
+  assert.match(
+    createSource,
+    /data-validation-field="name"[\s\S]*?onBlur=\{markAgentNameTouched\}[\s\S]*?markAgentNameTouched\(\)[\s\S]*?patch\(\{ name: e\.target\.value \}\)/,
+  );
+  assert.match(
+    createSource,
+    /\{showNameError && nameProblem \? \([\s\S]*?id="cw-agent-name-error"[\s\S]*?role="alert"/,
   );
 });
 
