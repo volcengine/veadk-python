@@ -693,6 +693,7 @@ export function NewAgentWorkbench({
   const [isLeaving, setIsLeaving] = useState(false);
   const pendingBackRef = useRef<(() => void) | null>(null);
   const [agentValidationVisible, setAgentValidationVisible] = useState(false);
+  const [nameValidationTouched, setNameValidationTouched] = useState(false);
   const [modelDataLoading, setModelDataLoading] = useState(true);
   const [authenticationType, setAuthenticationType] =
     useState<DeployAuthentication["type"]>("api_key");
@@ -889,6 +890,7 @@ export function NewAgentWorkbench({
   };
 
   const showAgentErrors = showErrors || agentValidationVisible;
+  const showNameError = showAgentErrors || nameValidationTouched;
 
   return (
     <motion.div
@@ -951,14 +953,22 @@ export function NewAgentWorkbench({
                         size="xl"
                         gutterSize="md"
                         pill={false}
-                        invalid={showAgentErrors && nameInvalid}
+                        invalid={showNameError && nameInvalid}
                         placeholder="输入智能体名称"
-                        onChange={(event) =>
-                          onDraftPatch({ name: event.currentTarget.value })
+                        aria-describedby={
+                          showNameError && nameProblem
+                            ? "new-agent-workbench-name-error"
+                            : undefined
                         }
+                        onBlur={() => setNameValidationTouched(true)}
+                        onChange={(event) => {
+                          setNameValidationTouched(true);
+                          onDraftPatch({ name: event.currentTarget.value });
+                        }}
                       />
-                      {showAgentErrors && nameProblem ? (
+                      {showNameError && nameProblem ? (
                         <small
+                          id="new-agent-workbench-name-error"
                           className="new-agent-workbench__error"
                           role="alert"
                         >
