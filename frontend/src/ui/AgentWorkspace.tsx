@@ -20,6 +20,7 @@ import {
   Search,
   Trash2,
 } from "lucide-react";
+import { Alert } from "@openai/apps-sdk-ui/components/Alert";
 import { Button } from "@openai/apps-sdk-ui/components/Button";
 import {
   deleteAgentFeedbackCases,
@@ -73,7 +74,6 @@ import type { AgentDraft } from "../create/types";
 import type { WorkspaceAgentDraft } from "../create/agentDraftStorage";
 import { BUILTIN_TOOLS } from "../create/veadkCatalog";
 import type { DeploymentTaskUpdate } from "./ProjectPreview";
-import { DeploymentErrorMessage } from "./DeploymentErrorMessage";
 import { Markdown } from "./Markdown";
 import { ResourceDetailLayout } from "./ResourceCollection";
 import { StudioConfirmDialog } from "./StudioConfirmDialog";
@@ -1084,6 +1084,7 @@ export function AgentWorkspace({
   const [detailAgentInfo, setDetailAgentInfo] = useState<AgentInfo | null>(null);
   const [detailAgentInfoResolved, setDetailAgentInfoResolved] = useState(false);
   const [detailAgentInfoError, setDetailAgentInfoError] = useState("");
+  const [detailAgentInfoUnsupported, setDetailAgentInfoUnsupported] = useState(false);
   const [runtimeDetailError, setRuntimeDetailError] = useState("");
   const [detailReloadToken, setDetailReloadToken] = useState(0);
   const [query, setQuery] = useState("");
@@ -1626,6 +1627,7 @@ export function AgentWorkspace({
       : null;
     setDetailAgentInfo(cached);
     setDetailAgentInfoError("");
+    setDetailAgentInfoUnsupported(false);
     setDetailAgentInfoResolved(Boolean(cached) || !detailOnly || !runtimeId);
     if (!detailOnly || !runtimeId) return;
     void getRuntimeAgentInfo(
@@ -1640,6 +1642,9 @@ export function AgentWorkspace({
       .catch((error: unknown) => {
         if (!cancelled && !cached) setDetailAgentInfo(null);
         if (!cancelled) {
+          setDetailAgentInfoUnsupported(
+            error instanceof RuntimeProbeError && error.unsupported,
+          );
           setDetailAgentInfoError(
             error instanceof Error ? error.message : "加载 Agent 信息失败。",
           );
@@ -2882,18 +2887,35 @@ export function AgentWorkspace({
             <div className="aw-content">
               {section === "basic" && (
                 <div className="aw-basic-stack">
-                  {(detailAgentInfoError || runtimeDetailError) && (
-                    <DeploymentErrorMessage
-                      className="aw-usage-state aw-detail-fetch-error is-error"
-                      message={[...new Set([
-                        detailAgentInfoError,
-                        runtimeDetailError,
-                      ].filter(Boolean))].join("\n")}
-                      defaultExpanded={false}
-                      retryLabel="重试"
-                      onRetry={async () => {
-                        setDetailReloadToken((value) => value + 1);
-                      }}
+                  {detailAgentInfoUnsupported && (
+                    <Alert
+                      className="aw-detail-fetch-alert"
+                      color="warning"
+                      variant="soft"
+                      title="部分信息暂不可用"
+                      description="当前 Runtime 暂不支持 Studio 详情接口。升级 Runtime 后可查看完整信息。"
+                    />
+                  )}
+                  {((detailAgentInfoError && !detailAgentInfoUnsupported) ||
+                    runtimeDetailError) && (
+                    <Alert
+                      className="aw-detail-fetch-alert"
+                      color="danger"
+                      variant="soft"
+                      title="详情加载失败"
+                      description="暂时无法读取完整的 Agent 或 Runtime 信息，请稍后重试。"
+                      actions={(
+                        <Button
+                          type="button"
+                          color="danger"
+                          variant="soft"
+                          size="sm"
+                          pill={false}
+                          onClick={() => setDetailReloadToken((value) => value + 1)}
+                        >
+                          重试
+                        </Button>
+                      )}
                     />
                   )}
                   {selectedAgent &&
