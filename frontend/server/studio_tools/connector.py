@@ -21,6 +21,7 @@ import hashlib
 import json
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Sequence
+from dataclasses import replace
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
@@ -184,6 +185,7 @@ class StudioToolRun:
         self._completed = False
         self._fatal_error: BaseException | None = None
         self._fatal_event = asyncio.Event()
+        self._progress_events: asyncio.Queue[bytes] = asyncio.Queue()
 
     async def _send(self, message: dict[str, Any]) -> None:
         async with self._send_lock:
@@ -230,11 +232,45 @@ class StudioToolRun:
                 raise StudioToolExecutionError(
                     "Studio tool arguments must be an object."
                 )
+            tool_name = str(message.get("tool_name") or "")
+
+            async def report_progress(progress: dict[str, Any]) -> None:
+                event = {
+                    "id": f"studio-tool-progress:{request_id}:{uuid4().hex}",
+                    "author": self.execution_context.app_name,
+                    "partial": True,
+                    "content": {
+                        "role": "model",
+                        "parts": [
+                            {
+                                "partMetadata": {
+                                    "veadkStudioToolProgress": {
+                                        "toolName": tool_name,
+                                        "requestId": request_id,
+                                        **progress,
+                                    }
+                                }
+                            }
+                        ],
+                    },
+                }
+                encoded = (
+                    "data: "
+                    + json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+                    + "\n\n"
+                ).encode("utf-8")
+                await self._progress_events.put(encoded)
+
+            execution_context = replace(
+                self.execution_context,
+                tool_request_id=request_id,
+                report_progress=report_progress,
+            )
             content = await self.catalog.execute(
-                name=str(message.get("tool_name") or ""),
+                name=tool_name,
                 executor_revision=str(message.get("executor_revision") or ""),
                 arguments=arguments,
-                context=self.execution_context,
+                context=execution_context,
             )
             content = _bounded_tool_result(content)
         except StudioToolExecutionError as exc:
@@ -262,9 +298,24 @@ class StudioToolRun:
         )
 
     async def stream(self) -> AsyncIterator[bytes]:
+        receive_task: asyncio.Task[dict[str, Any]] | None = None
+        progress_task: asyncio.Task[bytes] | None = None
         try:
             while True:
-                message = await self._receive_or_raise()
+                if receive_task is None:
+                    receive_task = asyncio.create_task(self._receive_or_raise())
+                if progress_task is None:
+                    progress_task = asyncio.create_task(self._progress_events.get())
+                done, _ = await asyncio.wait(
+                    {receive_task, progress_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if progress_task in done:
+                    yield progress_task.result()
+                    progress_task = None
+                    continue
+                message = receive_task.result()
+                receive_task = None
                 if not isinstance(message, dict):
                     raise StudioChannelError(
                         "Runtime sent a non-object channel message."
@@ -313,6 +364,8 @@ class StudioToolRun:
                     self._completed = True
                     if message.get("status") == "error":
                         raise StudioChannelError("Runtime Studio-channel run failed.")
+                    while not self._progress_events.empty():
+                        yield self._progress_events.get_nowait()
                     return
                 elif message_type == "channel.error":
                     raise StudioChannelError(
@@ -321,6 +374,13 @@ class StudioToolRun:
                 elif message_type == "ping":
                     await self._send({"type": "pong"})
         finally:
+            for pending_task in (receive_task, progress_task):
+                if pending_task is not None and not pending_task.done():
+                    pending_task.cancel()
+            await asyncio.gather(
+                *(task for task in (receive_task, progress_task) if task is not None),
+                return_exceptions=True,
+            )
             if not self._completed:
                 try:
                     await self._send({"type": "run.cancel", "run_id": self.run_id})

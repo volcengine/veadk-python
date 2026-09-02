@@ -537,6 +537,7 @@ def test_runtime_tool_capabilities_expose_safe_local_metadata(
     assert body["supported"] is True
     assert {item["id"] for item in body["tools"]} == {
         *list_builtin_tools(),
+        "branch_compare",
         "current_time",
         "execute_in_sandbox",
         "get_env_manifest",

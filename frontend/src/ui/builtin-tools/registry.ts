@@ -1,8 +1,8 @@
 import type { ComponentType, SVGProps } from "react";
+import { BranchCompareCard } from "./BranchCompareCard";
 import {
   CollectResourcesCard,
   CreateAgentsCard,
-  type CreateAgentToolCardProps,
 } from "./CreateAgentToolCards";
 import {
   CollectResourcesIcon,
@@ -19,6 +19,7 @@ import {
   VideoGenerateIcon,
   WebSearchIcon,
 } from "./icons";
+import type { BranchCompareBranch } from "./branchCompareData";
 
 export type BuiltinToolTone =
   | "search"
@@ -32,6 +33,13 @@ export type BuiltinToolTone =
   | "resources"
   | "agent";
 
+export interface BuiltinToolDetailProps {
+  args?: unknown;
+  response?: unknown;
+  status: "running" | "completed" | "failed";
+  onBranchSelect?: (branch: BranchCompareBranch) => void;
+}
+
 export interface BuiltinToolDefinition {
   name: string;
   runningLabel: string;
@@ -39,7 +47,8 @@ export interface BuiltinToolDefinition {
   failedLabel?: string;
   tone: BuiltinToolTone;
   icon: ComponentType<SVGProps<SVGSVGElement>>;
-  detailRenderer?: ComponentType<CreateAgentToolCardProps>;
+  detailRenderer?: ComponentType<BuiltinToolDetailProps>;
+  hideHeader?: boolean;
 }
 
 const BUILTIN_TOOLS: Readonly<Record<string, BuiltinToolDefinition>> = {
@@ -137,6 +146,16 @@ const BUILTIN_TOOLS: Readonly<Record<string, BuiltinToolDefinition>> = {
     tone: "agent",
     icon: CreateAgentsIcon,
     detailRenderer: CreateAgentsCard,
+  },
+  branch_compare: {
+    name: "branch_compare",
+    runningLabel: "",
+    doneLabel: "",
+    failedLabel: "",
+    tone: "search",
+    icon: CreateAgentsIcon,
+    detailRenderer: BranchCompareCard,
+    hideHeader: true,
   },
 };
 

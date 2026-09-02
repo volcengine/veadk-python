@@ -32,7 +32,7 @@ test("account menu places issue feedback directly below system information", () 
     /系统信息[\s\S]*?问题反馈[\s\S]*?退出登录/,
   );
   assert.match(sidebarSource, /onIssueFeedback\(\)/);
-  assert.match(sidebarSource, /<AgentKitPromoCard cloudProvider=\{cloudProvider\}/);
+  assert.doesNotMatch(sidebarSource, /AgentKitPromoCard/);
   assert.doesNotMatch(sidebarSource, /className=\{`sidebar-feedback/);
 });
 

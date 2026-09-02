@@ -4683,13 +4683,13 @@ body {
 /* ---------- account (avatar button + click popover) ---------- */
 .account { position: relative; }
 .account-avatar {
-  width: 32px; height: 32px;
+  width: 18px; height: 18px;
   flex-shrink: 0;
   position: relative;
   isolation: isolate;
   overflow: hidden;
   border: none;
-  border-radius: 9px;
+  border-radius: 999px;
   background:
     radial-gradient(
       circle at var(--avatar-x, 32%) var(--avatar-y, 30%),
@@ -4710,11 +4710,8 @@ body {
     );
   background-size: 180% 180%, 160% 160%, 100% 100%;
   background-position: 20% 12%, 80% 80%, center;
-  color: hsl(218 54% 18% / 0.88);
   display: flex; align-items: center; justify-content: center;
-  font-size: 13px; font-weight: 600;
   cursor: pointer;
-  text-shadow: 0 1px 2px hsl(0 0% 100% / 0.62);
   box-shadow: none;
   animation: avatar-smoke-drift 9s ease-in-out infinite alternate;
   transition: filter 0.16s, transform 0.16s;
@@ -4725,7 +4722,6 @@ body {
 }
 .account-avatar.has-image {
   animation: none;
-  text-shadow: none;
 }
 .account-avatar-image {
   position: absolute;
@@ -4743,8 +4739,7 @@ body {
 }
 .account-avatar--lg {
   width: 40px; height: 40px;
-  border-radius: 11px;
-  font-size: 16px;
+  border-radius: 999px;
   cursor: default;
 }
 .account-pop {
@@ -4846,30 +4841,18 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.studio-role-badge {
+.studio-role-icon {
   flex-shrink: 0;
-  padding: 2px 5px;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 1.2;
-  white-space: nowrap;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: hsl(var(--muted-foreground));
 }
-.studio-role-badge--admin {
-  color: hsl(271 64% 43%);
-  background: hsl(271 74% 55% / 0.11);
-  border-color: hsl(271 64% 48% / 0.24);
-}
-.studio-role-badge--developer {
-  color: hsl(39 91% 31%);
-  background: hsl(47 96% 52% / 0.18);
-  border-color: hsl(44 88% 43% / 0.3);
-}
-.studio-role-badge--user {
-  color: hsl(144 65% 30%);
-  background: hsl(145 65% 42% / 0.12);
-  border-color: hsl(144 57% 37% / 0.24);
+.studio-role-icon__glyph {
+  width: 15px;
+  height: 15px;
 }
 .sidebar.is-collapsed .sidebar-user-btn {
   width: 36px;

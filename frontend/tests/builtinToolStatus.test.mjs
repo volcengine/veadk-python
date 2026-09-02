@@ -151,7 +151,10 @@ test("additively supports tool outcomes and plans in the shared block renderer",
   assert.match(blocksSource, /function PlanBlock/);
   assert.match(blocksSource, /case "plan"/);
   assert.match(blocksSource, /data-status=\{toolStatus\}/);
-  assert.match(blocksSource, /const shouldDefaultOpen = defaultOpen \|\| Boolean\(DetailRenderer\)/);
+  assert.match(
+    blocksSource,
+    /const shouldDefaultOpen = hideHeader \|\| defaultOpen \|\| Boolean\(DetailRenderer\)/,
+  );
   assert.match(blocksSource, /useState\(shouldDefaultOpen\)/);
   assert.match(blocksSource, /if \(!touched\.current && shouldDefaultOpen\) setOpen\(true\)/);
 });
@@ -159,7 +162,11 @@ test("additively supports tool outcomes and plans in the shared block renderer",
 test("registers create-agent tools with dedicated detail renderers", () => {
   assert.match(registrySource, /collect_resources:[\s\S]*?detailRenderer: CollectResourcesCard/);
   assert.match(registrySource, /create_agents:[\s\S]*?detailRenderer: CreateAgentsCard/);
-  assert.match(blocksSource, /<DetailRenderer args=\{args\} response=\{response\} status=\{toolStatus\} \/>/);
+  assert.match(
+    blocksSource,
+    /<DetailRenderer[\s\S]*?args=\{args\}[\s\S]*?response=\{response\}[\s\S]*?status=\{toolStatus\}[\s\S]*?\/>/,
+  );
+  assert.match(blocksSource, /onBranchSelect=\{onBranchSelect\}/);
   assert.doesNotMatch(headerSource, /LoadingIndicator|aria-label="已完成"|builtin-tool-status/);
   assert.match(toolStylesSource, /data-tool-tone="resources"/);
   assert.match(toolStylesSource, /data-tool-tone="agent"/);

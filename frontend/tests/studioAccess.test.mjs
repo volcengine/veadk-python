@@ -12,6 +12,7 @@ const selectorSource = read("ui/AgentSelector.tsx");
 const myAgentsSource = read("ui/MyAgents.tsx");
 const sidebarSource = read("ui/Sidebar.tsx");
 const stylesSource = read("styles.css");
+const roleIconsSource = read("ui/icons/StudioRoleIcons.tsx");
 const cliFrontendSource = readFileSync(
   new URL("../../veadk/cli/cli_frontend.py", import.meta.url),
   "utf8",
@@ -51,15 +52,20 @@ test("Agent workspace creation and update actions obey Studio access", () => {
   assert.match(appSource, /if \(!canManageAgents && !canCreateAgents\)[\s\S]*?当前账号没有管理 Agent 的权限/);
 });
 
-test("sidebar shows the OAuth email and translated role badge", () => {
+test("sidebar shows the OAuth email and accessible role icons", () => {
   assert.match(sidebarSource, /admin: "管理员"/);
   assert.match(sidebarSource, /developer: "开发者"/);
   assert.match(sidebarSource, /user: "普通用户"/);
   assert.match(sidebarSource, /typeof userInfo\.email === "string"/);
   assert.match(sidebarSource, /<SidebarUser\s+access=\{access\}/);
-  assert.match(stylesSource, /studio-role-badge--admin[\s\S]*?hsl\(271/);
-  assert.match(stylesSource, /studio-role-badge--developer[\s\S]*?hsl\(47/);
-  assert.match(stylesSource, /studio-role-badge--user[\s\S]*?hsl\(145/);
+  assert.match(sidebarSource, /<StudioRoleIcon role=\{role\} className="studio-role-icon__glyph" \/>/);
+  assert.match(sidebarSource, /aria-label=\{label\}/);
+  assert.match(sidebarSource, /title=\{label\}/);
+  assert.match(roleIconsSource, /export function StudioRoleIcon/);
+  assert.match(roleIconsSource, /case "admin"/);
+  assert.match(roleIconsSource, /case "developer"/);
+  assert.match(stylesSource, /\.studio-role-icon\s*\{[\s\S]*?width:\s*18px;[\s\S]*?height:\s*18px;/);
+  assert.doesNotMatch(stylesSource, /studio-role-badge/);
 });
 
 test("runtime selection obeys the server-granted scope", () => {

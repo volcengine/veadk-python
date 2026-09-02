@@ -13,6 +13,7 @@ import { BuiltinToolHeader } from "./builtin-tools/BuiltinToolHeader";
 import { createdAgentsHaveFailure } from "./builtin-tools/createAgentToolCardData";
 import { ToolDisclosureIcon } from "./builtin-tools/icons";
 import { getBuiltinToolDefinition } from "./builtin-tools/registry";
+import type { BranchCompareBranch } from "./builtin-tools/branchCompareData";
 import { AgentKitLogoIcon } from "./icons/AgentKitLogoIcon";
 import { DeliverySourceIcon } from "./icons/DeliverySourceIcon";
 import { DeliveryVerifiedIcon } from "./icons/DeliveryVerifiedIcon";
@@ -623,6 +624,7 @@ function ToolBlock({
   status,
   defaultOpen = false,
   retrying = false,
+  onBranchSelect,
 }: {
   name: string;
   args?: unknown;
@@ -631,6 +633,7 @@ function ToolBlock({
   status?: "running" | "completed" | "failed";
   defaultOpen?: boolean;
   retrying?: boolean;
+  onBranchSelect?: (branch: BranchCompareBranch) => void;
 }) {
   const inferredCreateAgentFailure = name === "create_agents"
     && done
@@ -643,7 +646,8 @@ function ToolBlock({
     && retrying;
   const builtinTool = getBuiltinToolDefinition(name);
   const DetailRenderer = builtinTool?.detailRenderer;
-  const shouldDefaultOpen = defaultOpen || Boolean(DetailRenderer);
+  const hideHeader = builtinTool?.hideHeader === true;
+  const shouldDefaultOpen = hideHeader || defaultOpen || Boolean(DetailRenderer);
   const [open, setOpen] = useState(shouldDefaultOpen);
   const touched = useRef(false);
   useEffect(() => {
@@ -671,7 +675,7 @@ function ToolBlock({
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.2, ease: "easeOut" }}
     >
-      {builtinTool ? (
+      {builtinTool && !hideHeader ? (
         <BuiltinToolHeader
           definition={builtinTool}
           label={isAdjustingAgent
@@ -683,7 +687,7 @@ function ToolBlock({
           open={open}
           onToggle={toggle}
         />
-      ) : (
+      ) : !builtinTool ? (
         <button
           className="tool-head tool-head--generic"
           onClick={toggle}
@@ -702,11 +706,16 @@ function ToolBlock({
           )}
           <ToolDisclosureIcon className={`tool-chevron${open ? " is-open" : ""}`} />
         </button>
-      )}
-      <div className={`think-collapse ${open ? "open" : ""}`}>
+      ) : null}
+      <div className={`${hideHeader ? "" : "think-collapse "}${open ? "open" : ""}`}>
         <div className="think-collapse-inner">
           {DetailRenderer ? (
-            <DetailRenderer args={args} response={response} status={toolStatus} />
+            <DetailRenderer
+              args={args}
+              response={response}
+              status={toolStatus}
+              onBranchSelect={onBranchSelect}
+            />
           ) : <div className="tool-detail">
             {args != null && (
               <div className="tool-section">
@@ -969,6 +978,7 @@ export interface BlocksProps {
     delivery: Extract<Block, { kind: "delivery" }>["value"],
   ) => Promise<void>;
   onDeployDelivery?: (delivery: Extract<Block, { kind: "delivery" }>["value"]) => void;
+  onBranchSelect?: (branch: BranchCompareBranch) => void;
 }
 
 export function Blocks({
@@ -985,6 +995,7 @@ export function Blocks({
   onResolveDeliveryComparison,
   onDownloadDelivery,
   onDeployDelivery,
+  onBranchSelect,
 }: BlocksProps) {
   const lastTextBlockIndex = blocks.reduce(
     (lastIndex, block, index) => block.kind === "text" ? index : lastIndex,
@@ -1069,6 +1080,7 @@ export function Blocks({
                 defaultOpen={b.defaultOpen}
                 retrying={b.name === "create_agents"
                   && (streaming || hasLaterCreateAgentAttempt)}
+                onBranchSelect={onBranchSelect}
               />
             );
           }

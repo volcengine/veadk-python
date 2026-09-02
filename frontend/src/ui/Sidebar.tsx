@@ -14,7 +14,9 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
+import { BookWrench } from "@openai/apps-sdk-ui/components/Icon";
 import { Clock } from "@openai/apps-sdk-ui/components/Icon";
+import { MarkerCode } from "@openai/apps-sdk-ui/components/Icon";
 import { LoadingIndicator } from "@openai/apps-sdk-ui/components/Indicator";
 import type {
   AdkSession,
@@ -26,9 +28,7 @@ import type { SandboxThreadSummary } from "../adk/sandbox";
 import { sessionTitle } from "../blocks";
 import { displayName, profilePictureUrl } from "../adk/identity";
 import { SearchButton } from "./Search";
-import { AgentKitPromoCard } from "./AgentKitPromoCard";
 import { IssueFeedbackIcon } from "./icons/FeedbackIcons";
-import { SandboxTerminalIcon } from "./icons/SandboxControlIcons";
 import {
   NewChatIcon,
   ResourceLibraryIcon,
@@ -36,6 +36,7 @@ import {
   SidebarCollapseIcon,
   SidebarExpandIcon,
 } from "./icons/SidebarIcons";
+import { StudioRoleIcon } from "./icons/StudioRoleIcons";
 import defaultSiteLogo from "../assets/logo.svg";
 import byteplusLogo from "../assets/byteplus.svg";
 import "./Sidebar.css";
@@ -91,6 +92,7 @@ export type SidebarPage =
   | "applications"
   | "cronjobs"
   | "search"
+  | "developer-resources"
   | "feedback"
   | null;
 
@@ -151,6 +153,7 @@ export interface SidebarProps {
   onApplications: () => void;
   onCronJobs: () => void;
   onAgentKitCli: () => void;
+  onDeveloperResources: () => void;
   onSystemInfo: () => void;
   onIssueFeedback: () => void;
   onPickSession: (id: string) => void;
@@ -182,11 +185,16 @@ const STUDIO_ROLE_LABELS: Record<StudioAccess["role"], string> = {
   user: "普通用户",
 };
 
-function StudioRoleBadge({ role }: { role: StudioAccess["role"] }) {
+function StudioRoleIndicator({ role }: { role: StudioAccess["role"] }) {
   const label = STUDIO_ROLE_LABELS[role];
   return (
-    <span className={`studio-role-badge studio-role-badge--${role}`} title={label}>
-      {label}
+    <span
+      className="studio-role-icon"
+      role="img"
+      aria-label={label}
+      title={label}
+    >
+      <StudioRoleIcon role={role} className="studio-role-icon__glyph" />
     </span>
   );
 }
@@ -208,8 +216,7 @@ function SidebarUser({
   if (!userInfo) return null;
   const name = displayName(userInfo);
   const email = typeof userInfo.email === "string" ? userInfo.email : "";
-  const initial = (name || "U").slice(0, 1).toUpperCase();
-  const avatarStyle = smokeAvatarStyle(name || email || initial);
+  const avatarStyle = smokeAvatarStyle(name || email || "user");
   const pictureUrl = profilePictureUrl(userInfo);
   const visiblePictureUrl = pictureUrl === failedAvatarUrl ? "" : pictureUrl;
   return (
@@ -222,8 +229,8 @@ function SidebarUser({
         <span
           className={`account-avatar${visiblePictureUrl ? " has-image" : ""}`}
           style={avatarStyle}
+          aria-hidden="true"
         >
-          {initial}
           {visiblePictureUrl ? (
             <img
               className="account-avatar-image"
@@ -238,7 +245,7 @@ function SidebarUser({
         <span className="sidebar-user-identity">
           <span className="sidebar-user-primary">
             <span className="sidebar-user-name">{name}</span>
-            <StudioRoleBadge role={access.role} />
+            <StudioRoleIndicator role={access.role} />
           </span>
           {email && email !== name && (
             <span className="sidebar-user-email">{email}</span>
@@ -255,8 +262,8 @@ function SidebarUser({
                   visiblePictureUrl ? " has-image" : ""
                 }`}
                 style={avatarStyle}
+                aria-hidden="true"
               >
-                {initial}
                 {visiblePictureUrl ? (
                   <img
                     className="account-avatar-image"
@@ -271,7 +278,7 @@ function SidebarUser({
               <div className="account-id">
                 <div className="account-name-row">
                   <div className="account-name">{name}</div>
-                  <StudioRoleBadge role={access.role} />
+                  <StudioRoleIndicator role={access.role} />
                 </div>
                 {email && email !== name && <div className="account-sub">{email}</div>}
               </div>
@@ -334,6 +341,7 @@ export function Sidebar({
   onApplications,
   onCronJobs,
   onAgentKitCli,
+  onDeveloperResources,
   onSystemInfo,
   onIssueFeedback,
   onPickSession,
@@ -693,17 +701,29 @@ export function Sidebar({
       )}
 
       <div className="sidebar-footer">
-        <AgentKitPromoCard cloudProvider={cloudProvider} />
         <nav className="sidebar-nav sidebar-agentkit-cli-slot" aria-label="快捷入口">
           <button
             type="button"
             className="new-chat sidebar-agentkit-cli"
             onClick={onAgentKitCli}
-            aria-label="AgentKit CLI"
-            title="AgentKit CLI"
+            aria-label="体验 AgentKit CLI"
+            title="体验 AgentKit CLI"
           >
-            <SandboxTerminalIcon className="icon" />
-            <span className="sidebar-nav-label">AgentKit CLI</span>
+            <MarkerCode className="icon" />
+            <span className="sidebar-nav-label">体验 AgentKit CLI</span>
+          </button>
+          <button
+            type="button"
+            className={`new-chat sidebar-developer-resources${
+              activePage === "developer-resources" ? " is-active" : ""
+            }`}
+            onClick={onDeveloperResources}
+            aria-label="开发者资源"
+            aria-current={activePage === "developer-resources" ? "page" : undefined}
+            title="开发者资源"
+          >
+            <BookWrench className="icon" />
+            <span className="sidebar-nav-label">开发者资源</span>
           </button>
         </nav>
         <SidebarUser

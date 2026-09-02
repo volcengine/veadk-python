@@ -98,3 +98,39 @@ export function ResourceLibraryIcon(props: SidebarIconProps) {
     </svg>
   );
 }
+
+export function SidebarDocumentIcon(props: SidebarIconProps) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.25"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      {...props}
+    >
+      <path d="M3.25 2.25h6l3.5 3.5v8H3.25v-11Z" />
+      <path d="M9.25 2.25v3.5h3.5M5.5 8.25h5M5.5 10.75h4" />
+    </svg>
+  );
+}
+
+export function SidebarConsoleIcon(props: SidebarIconProps) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.25"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      {...props}
+    >
+      <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.75" />
+      <path d="m4.5 6.25 2 1.75-2 1.75M8.25 10h3" />
+    </svg>
+  );
+}

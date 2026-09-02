@@ -20,7 +20,7 @@ import asyncio
 import importlib
 import inspect
 import os
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, cast
@@ -43,6 +43,7 @@ if TYPE_CHECKING:
 
 ToolExecutor = Callable[[dict[str, Any]], Any]
 ContextToolExecutor = Callable[[dict[str, Any], "StudioToolExecutionContext"], Any]
+StudioToolProgressReporter = Callable[[dict[str, Any]], Awaitable[None]]
 
 
 class StudioToolExecutionError(RuntimeError):
@@ -63,6 +64,8 @@ class StudioToolExecutionContext:
     owner_id: str = ""
     environment_mount: SessionEnvironmentMount | None = None
     environment_mounts: tuple[SessionEnvironmentMount, ...] = ()
+    tool_request_id: str = ""
+    report_progress: StudioToolProgressReporter | None = None
 
 
 @dataclass(frozen=True)
@@ -266,8 +269,12 @@ def build_studio_tool_registry(
     from frontend.server.studio_tools.veadk_builtin_tools import (
         register_veadk_builtin_tools,
     )
+    from frontend.server.studio_tools.branch_compare import (
+        register_branch_compare_tool,
+    )
 
     register_veadk_builtin_tools(registry, media_service=media_service)
+    register_branch_compare_tool(registry)
     if environment_mounts is not None and sandbox_target_resolver is not None:
         from frontend.server.studio_tools.sandbox_shell import (
             register_sandbox_shell_tool,

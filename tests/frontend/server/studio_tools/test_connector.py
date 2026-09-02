@@ -31,6 +31,7 @@ from websockets.exceptions import InvalidStatus
 
 import frontend.server.studio_tools.connector as connector
 from frontend.server.studio_tools.registry import StudioTool, StudioToolRegistry
+from frontend.server.studio_tools.registry import StudioToolExecutionContext
 from veadk.integrations.agentkit.studio_channel import (
     StudioExternalToolset,
     mount_studio_channel_routes,
@@ -159,6 +160,103 @@ def _registry() -> StudioToolRegistry:
         )
     )
     return registry
+
+
+@pytest.mark.asyncio
+async def test_connector_forwards_bff_tool_progress_as_adk_metadata() -> None:
+    incoming: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    sent: list[dict[str, Any]] = []
+
+    async def execute(
+        arguments: dict[str, Any],
+        context: StudioToolExecutionContext,
+    ) -> dict[str, Any]:
+        assert arguments == {"prompt": "compare"}
+        assert context.tool_request_id == "call-progress"
+        assert context.report_progress is not None
+        await context.report_progress(
+            {
+                "branchIndex": 0,
+                "label": "稳妥",
+                "delta": "第一段",
+                "status": "running",
+            }
+        )
+        return {"branches": []}
+
+    registry = StudioToolRegistry()
+    registry.register(
+        StudioTool(
+            name="branch_compare",
+            description="Compare two branches.",
+            input_schema={
+                "type": "object",
+                "properties": {"prompt": {"type": "string"}},
+                "required": ["prompt"],
+                "additionalProperties": False,
+            },
+            executor=execute,
+            requires_context=True,
+        )
+    )
+    snapshot = registry.snapshot()
+    context = StudioToolExecutionContext(
+        runtime_id="runtime-1",
+        app_name="agent",
+        user_id="user-1",
+        session_id="session-1",
+        run_id="run-progress",
+        scope_id="scope-progress",
+        catalog_revision=snapshot.revision,
+    )
+
+    async def receive_message() -> dict[str, Any]:
+        return await incoming.get()
+
+    async def send_message(message: dict[str, Any]) -> None:
+        sent.append(message)
+        if message["type"] == "tool.result":
+            await incoming.put(
+                {"type": "run.completed", "run_id": "run-progress", "status": "success"}
+            )
+
+    await incoming.put(
+        {
+            "type": "tool.call",
+            "request_id": "call-progress",
+            "run_id": "run-progress",
+            "scope_id": "scope-progress",
+            "catalog_revision": snapshot.revision,
+            "tool_name": "branch_compare",
+            "executor_revision": "v1",
+            "arguments": {"prompt": "compare"},
+        }
+    )
+    run = connector.StudioToolRun(
+        receive_message=receive_message,
+        send_message=send_message,
+        close_transport=lambda: asyncio.sleep(0),
+        catalog=snapshot,
+        scope_id="scope-progress",
+        catalog_revision=snapshot.revision,
+        run_id="run-progress",
+        execution_context=context,
+    )
+
+    chunks = [chunk async for chunk in run.stream()]
+
+    assert len(chunks) == 1
+    event = json.loads(chunks[0].removeprefix(b"data: ").strip())
+    assert event["author"] == "agent"
+    progress = event["content"]["parts"][0]["partMetadata"]["veadkStudioToolProgress"]
+    assert progress == {
+        "toolName": "branch_compare",
+        "requestId": "call-progress",
+        "branchIndex": 0,
+        "label": "稳妥",
+        "delta": "第一段",
+        "status": "running",
+    }
 
 
 def test_large_tool_results_are_bounded_before_crossing_the_channel() -> None:
