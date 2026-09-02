@@ -223,7 +223,7 @@ def main():
         fail("Delivery request is invalid")
     request_path = Path(sys.argv[1])
     request = json.loads(read_regular(request_path).decode("utf-8"))
-    if set(request) != {"projectRoot", "report", "secretPath", "agentName", "entryPoint", "manifestSha256"}:
+    if set(request) != {"projectRoot", "report", "secretPath", "agentName", "entryPoint", "fallbackEntryPoint", "manifestSha256"}:
         fail("Delivery request fields are invalid")
     project = project_path(request["projectRoot"])
     secret_path = Path(request["secretPath"])
@@ -258,9 +258,15 @@ def main():
             fail("Delivery agentkit.yaml changed during packaging")
         agent_name = request["agentName"]
         entry_point = request["entryPoint"]
+        fallback_entry_point = request["fallbackEntryPoint"]
         if not isinstance(agent_name, str) or not agent_name.strip():
             fail("Delivery agent name is invalid")
-        if not isinstance(entry_point, str) or entry_point not in {name for name, _ in files}:
+        if not isinstance(entry_point, str) or not isinstance(fallback_entry_point, str):
+            fail("Delivery entry point is invalid")
+        source_names = {name for name, _ in files}
+        if entry_point not in source_names and fallback_entry_point in source_names:
+            entry_point = fallback_entry_point
+        if entry_point not in source_names:
             fail("Delivery entry point is invalid")
         report["agentName"] = agent_name.strip()
         report["entryPoint"] = entry_point
