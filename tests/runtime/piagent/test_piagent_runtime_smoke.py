@@ -37,8 +37,11 @@ import pytest
 from veadk import Agent, Runner
 
 
-def pytest_configure(config):
-    config.addinivalue_line("markers", "piagent_smoke: real Pi binary/model smoke test")
+# NOTE: `pytest_configure` is only collected from `conftest.py` and plugins, so
+# defining it here would be dead code. The `piagent_smoke` marker is registered
+# in `pytest.ini` instead. (It previously appeared to work only because
+# `filterwarnings = ignore::UserWarning` swallowed the resulting
+# `PytestUnknownMarkWarning`.)
 
 
 @pytest.mark.piagent_smoke

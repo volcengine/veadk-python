@@ -25,7 +25,13 @@ dependencies = [
     # them behind extras ([extensions]/[db]) on 2.x, so declare them directly to
     # stay compatible across google-adk >= 1.34.0 (including 2.x).
     "litellm>=1.83.7,<=1.83.14", # google-adk LiteLlm model ([extensions] on 2.x)
-    "sqlalchemy>=2,<3", # google-adk sessions ([db] on 2.x)
+    # The `asyncio` extra is what pulls greenlet, which SQLAlchemy's async
+    # engine requires and which ADK's DatabaseSessionService therefore needs.
+    # Plain `sqlalchemy` leaves it to a platform marker that does not cover
+    # macOS arm64, so a bare install there raised "the greenlet library is
+    # required" on the first session write to sqlite/mysql/postgres. CI never
+    # saw it: ubuntu-latest is x86_64, where the marker matches.
+    "sqlalchemy[asyncio]>=2,<3", # google-adk sessions ([db] on 2.x)
     "opentelemetry-exporter-otlp==1.37.0",
     "opentelemetry-instrumentation-logging>=0.56b0",
     "wrapt==1.17.2", # For patching built-in functions
@@ -66,6 +72,12 @@ github-cicd = [
 codex = [
     "openai-codex==0.1.0b3",
     "openai-codex-cli-bin==0.137.0a4",
+    # The Responses->chat shim (veadk/runtime/codex/proxy.py) imports these at
+    # module level. They resolve transitively through google-adk today, but adk
+    # has already moved other web deps behind extras on 2.x, so declare them
+    # here rather than rely on that.
+    "fastapi",
+    "uvicorn",
 ]
 extensions = [
     "redis>=5.0",                                           # For Redis database
