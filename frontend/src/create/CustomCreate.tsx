@@ -3602,6 +3602,9 @@ export function CustomCreate({
   }, [cloudProvider, draft, draftDirty, draftSnapshot]);
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>("build");
   const [showErrors, setShowErrors] = useState(false);
+  const [touchedAgentNamePaths, setTouchedAgentNamePaths] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
   const [validationPulse, setValidationPulse] = useState(0);
   const [project, setProject] = useState<AgentProject | null>(null);
   const [building, setBuilding] = useState(false);
@@ -3734,6 +3737,13 @@ export function CustomCreate({
   const safePath = pathExists(draft, selectedPath) ? selectedPath : [];
   const node = getNode(draft, safePath);
   const isRootAgent = safePath.length === 0;
+  const selectedNamePathKey = safePath.join(".") || "root";
+  const markAgentNameTouched = () => {
+    setTouchedAgentNamePaths((current) => {
+      if (current.has(selectedNamePathKey)) return current;
+      return new Set(current).add(selectedNamePathKey);
+    });
+  };
   const a2aRegistryAdvancedId = `cw-a2a-registry-advanced-${
     safePath.join("-") || "root"
   }`;
@@ -3931,12 +3941,14 @@ export function CustomCreate({
         ? "Agent 名称在当前结构中必须唯一"
         : null));
   const nameInvalid = nameProblem !== null;
+  const showNameError =
+    showErrors || touchedAgentNamePaths.has(selectedNamePathKey);
   const descriptionMissing = !a2a && node.description.trim().length === 0;
   const instructionMissing = node.instruction.trim().length === 0;
   const a2aRegistrySpaceMissing =
     a2a && !node.a2aRegistry?.registrySpaceId.trim();
-  const invalidClass = (missing: boolean) =>
-    showErrors && missing
+  const invalidClass = (missing: boolean, visible = showErrors) =>
+    visible && missing
       ? `is-error cw-error-shake-${validationPulse % 2}`
       : "";
 
@@ -5092,21 +5104,23 @@ export function CustomCreate({
                                     <span className="cw-req">*</span>
                                   </label>
                                   <input
-                                    className={`cw-input ${invalidClass(nameInvalid)}`}
+                                    className={`cw-input ${invalidClass(nameInvalid, showNameError)}`}
                                     data-validation-field="name"
                                     value={node.name}
                                     placeholder="assistant"
-                                    aria-invalid={showErrors && nameInvalid}
+                                    aria-invalid={showNameError && nameInvalid}
                                     aria-describedby={
-                                      showErrors && nameProblem
+                                      showNameError && nameProblem
                                         ? "cw-agent-name-error"
                                         : undefined
                                     }
-                                    onChange={(e) =>
-                                      patch({ name: e.target.value })
-                                    }
+                                    onBlur={markAgentNameTouched}
+                                    onChange={(e) => {
+                                      markAgentNameTouched();
+                                      patch({ name: e.target.value });
+                                    }}
                                   />
-                                  {showErrors && nameProblem ? (
+                                  {showNameError && nameProblem ? (
                                     <span
                                       id="cw-agent-name-error"
                                       role="alert"

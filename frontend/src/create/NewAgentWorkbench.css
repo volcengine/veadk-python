@@ -411,7 +411,8 @@
   min-height: 62px;
 }
 
-.new-agent-workbench__error {
+.new-agent-workbench__error,
+.new-agent-workbench__field > .new-agent-workbench__error {
   margin: 0;
   color: hsl(var(--destructive));
   font-size: 12px;

@@ -389,8 +389,27 @@ test("fresh Vulcan creation defaults to assistant and uses Google ADK name valid
     workbenchSource,
     /const nameProblem = agentNameProblem\(draft\.name\)/,
   );
-  assert.match(workbenchSource, /invalid=\{showAgentErrors && nameInvalid\}/);
+  assert.match(
+    workbenchSource,
+    /const showNameError = showAgentErrors \|\| nameValidationTouched/,
+  );
+  assert.match(workbenchSource, /invalid=\{showNameError && nameInvalid\}/);
+  assert.match(
+    workbenchSource,
+    /onBlur=\{\(\) => setNameValidationTouched\(true\)\}/,
+  );
+  assert.match(
+    workbenchSource,
+    /onChange=\{\(event\) => \{[\s\S]*?setNameValidationTouched\(true\)[\s\S]*?onDraftPatch\(\{ name: event\.currentTarget\.value \}\)/,
+  );
   assert.match(workbenchSource, /\{nameProblem\}/);
+});
+
+test("inline agent validation keeps the compact destructive style", () => {
+  assert.match(
+    workbenchStyles,
+    /\.new-agent-workbench__error,\s*\.new-agent-workbench__field > \.new-agent-workbench__error\s*\{[\s\S]*?color:\s*hsl\(var\(--destructive\)\);[\s\S]*?font-size:\s*12px;/,
+  );
 });
 
 test("Vulcan creation is a fixed-size three-step wizard", () => {
