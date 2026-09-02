@@ -20,6 +20,10 @@ import type {
 import type { A2uiMessage } from "./a2ui/types";
 import type { SandboxTokenUsage } from "./adk/sandbox";
 import type { ProjectFile } from "./create/project";
+import {
+  applyBranchCompareProgress,
+  parseBranchCompareProgress,
+} from "./ui/builtin-tools/branchCompareData";
 
 const A2UI_TOOL = "send_a2ui_json_to_client";
 const VALIDATED_JSON_KEY = "validated_a2ui_json";
@@ -80,6 +84,7 @@ export type Block =
   | {
       kind: "tool";
       name: string;
+      callId?: string;
       args?: unknown;
       response?: unknown;
       done: boolean;
@@ -315,6 +320,31 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
   const blocks = acc.blocks.map((b) => ({ ...b }));
   let liveStart = acc.liveStart;
   const parts = ev.content?.parts ?? [];
+  const progressUpdates = parts.flatMap((part) => {
+    const progress = parseBranchCompareProgress(
+      part.partMetadata ?? part.part_metadata,
+    );
+    return progress ? [progress] : [];
+  });
+  if (progressUpdates.length > 0) {
+    for (const progress of progressUpdates) {
+      for (let index = blocks.length - 1; index >= 0; index -= 1) {
+        const block = blocks[index];
+        if (
+          block.kind !== "tool"
+          || block.done
+          || block.name !== progress.toolName
+          || (progress.requestId && block.callId && block.callId !== progress.requestId)
+        ) {
+          continue;
+        }
+        block.response = applyBranchCompareProgress(block.args, block.response, progress);
+        block.status = "running";
+        break;
+      }
+    }
+    return { blocks, liveStart };
+  }
   const hasFn = parts.some((p) => fnCall(p) || fnResp(p));
 
   if (ev.partial && !hasFn) {
@@ -366,7 +396,13 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
           done: false,
         });
       } else {
-        blocks.push({ kind: "tool", name: fc.name ?? "", args: fc.args, done: false });
+        blocks.push({
+          kind: "tool",
+          name: fc.name ?? "",
+          callId: fc.id,
+          args: fc.args,
+          done: false,
+        });
       }
     } else if (fr) {
       closeThinking(blocks);
@@ -391,7 +427,12 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
       }
       for (let i = blocks.length - 1; i >= 0; i--) {
         const b = blocks[i];
-        if (b.kind === "tool" && !b.done && b.name === fr.name) {
+        if (
+          b.kind === "tool"
+          && !b.done
+          && b.name === fr.name
+          && (!fr.id || !b.callId || b.callId === fr.id)
+        ) {
           b.done = true;
           b.response = fr.response;
           break;

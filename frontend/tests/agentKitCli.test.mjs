@@ -20,14 +20,35 @@ const clientSource = readFileSync(
 );
 const appSource = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
 
-test("places the AgentKit CLI entry between the promo and account", () => {
+test("keeps the CLI and Developer Resources entries before the account", () => {
   assert.match(sidebarSource, /onAgentKitCli: \(\) => void/);
+  assert.doesNotMatch(sidebarSource, /AgentKitPromoCard/);
+  const cliIndex = sidebarSource.indexOf(">体验 AgentKit CLI</span>");
+  const resourcesIndex = sidebarSource.indexOf(">开发者资源</span>");
+  const accountIndex = sidebarSource.indexOf("<SidebarUser", resourcesIndex);
+  assert.ok(cliIndex >= 0, "should render the AgentKit CLI entry");
+  assert.ok(
+    resourcesIndex > cliIndex,
+    "developer resources should follow the CLI entry",
+  );
+  assert.ok(
+    accountIndex > resourcesIndex,
+    "account should remain below resource entries",
+  );
+  assert.equal(sidebarSource.indexOf(">AgentKit 文档</span>"), -1);
+  assert.equal(sidebarSource.indexOf(">AgentKit 控制台</span>"), -1);
   assert.match(
     sidebarSource,
-    /<AgentKitPromoCard[\s\S]*?className="new-chat sidebar-agentkit-cli"[\s\S]*?<SidebarUser/,
+    /import \{ MarkerCode \} from "@openai\/apps-sdk-ui\/components\/Icon"/,
   );
-  assert.match(sidebarSource, /<SandboxTerminalIcon className="icon" \/>[\s\S]*?AgentKit CLI/);
-  assert.match(sidebarSource, /<span className="sidebar-nav-label">AgentKit CLI<\/span>/);
+  assert.match(
+    sidebarSource,
+    /<MarkerCode className="icon" \/>[\s\S]*?体验 AgentKit CLI/,
+  );
+  assert.match(
+    sidebarSource,
+    /<span className="sidebar-nav-label">体验 AgentKit CLI<\/span>/,
+  );
   assert.match(appSource, /onAgentKitCli=\{\(\) => setAgentKitCliOpen\(true\)\}/);
   assert.match(appSource, /<AgentKitCliDialog[\s\S]*?open=\{agentKitCliOpen\}/);
 });

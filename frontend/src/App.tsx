@@ -109,6 +109,7 @@ import { Applications, type ApplicationId } from "./ui/Applications";
 import { CronJobs } from "./cronjobs/CronJobs";
 import { getAutomation } from "./automations/registry";
 import { SystemInfo } from "./ui/SystemInfo";
+import { DeveloperResources } from "./ui/DeveloperResources";
 import { GitHubIntegration } from "./ui/GitHubIntegration";
 import { FeishuBotIntegration } from "./automations/feishu/FeishuBotIntegration";
 import { CodingAgentsIntegration } from "./automations/coding-agents/CodingAgentsIntegration";
@@ -376,8 +377,13 @@ type StudioPageId =
   | "agent-detail"
   | "sandbox-agent-detail"
   | "sandbox-agent-workspace"
+  | "developer-resources"
   | "feedback";
-type StudioStackPage = "system-info" | "agent-detail" | "sandbox-agent-detail";
+type StudioStackPage =
+  | "system-info"
+  | "agent-detail"
+  | "sandbox-agent-detail"
+  | "developer-resources";
 
 interface StudioPageStackEntry {
   page: StudioStackPage;
@@ -2028,6 +2034,7 @@ export default function App() {
   const activeStackEntry = pageStack[pageStack.length - 1];
   const activeStackPage = activeStackEntry?.page;
   const systemInfo = activeStackPage === "system-info";
+  const developerResourcesView = activeStackPage === "developer-resources";
   const pushStudioPage = useCallback((entry: StudioPageStackEntry) => {
     setPageStack((current) =>
       current[current.length - 1]?.page === entry.page
@@ -6107,6 +6114,29 @@ export default function App() {
     setError("");
   };
 
+  const openDeveloperResourcesPage = () => {
+    setPlatformFeedbackOrigin(null);
+    if (sandboxSession) exitSandboxSession();
+    viewSidRef.current = "";
+    setSessionId("");
+    setCreateView(null);
+    setSkillCenter(false);
+    setAddAgent(false);
+    setAddMenu(false);
+    setSearchView(false);
+    setManageAgents(false);
+    setAgentDetailTarget(null);
+    setSandboxAgentDetailTarget(null);
+    setSandboxAgentWorkspace(null);
+    setMyAgents(false);
+    setWorkspaceView(false);
+    setEnvironmentView(false);
+    setApplicationsView(null);
+    setCronJobsView(false);
+    setPageStack([{ page: "developer-resources", returnTo: "new-chat" }]);
+    setError("");
+  };
+
   const talkToWorkspaceAgent = async (agent: AgentEntry) => {
     setFeedbackCaseReturnAgentId("");
     setFeedbackTargetEventId("");
@@ -6158,6 +6188,8 @@ export default function App() {
 
   const currentStudioPage: StudioPageId = activeStackPage === "system-info"
     ? activeStackEntry?.returnTo ?? "new-chat"
+    : developerResourcesView
+      ? "developer-resources"
     : activeStackPage === "agent-detail" || activeStackPage === "sandbox-agent-detail"
       ? activeStackPage
       : platformFeedbackOrigin !== null
@@ -6188,6 +6220,8 @@ export default function App() {
 
   const sidebarActivePage: SidebarPage = systemInfo
     ? null
+    : developerResourcesView
+      ? "developer-resources"
     : platformFeedbackOrigin !== null
       ? "feedback"
       : environmentView
@@ -6337,6 +6371,7 @@ export default function App() {
         onApplications={() => requestIntelligentNavigation(openApplicationsPage)}
         onCronJobs={() => requestIntelligentNavigation(openCronJobsPage)}
         onAgentKitCli={() => setAgentKitCliOpen(true)}
+        onDeveloperResources={() => requestIntelligentNavigation(openDeveloperResourcesPage)}
         onSystemInfo={() => requestIntelligentNavigation(() => {
           pushStudioPage({
             page: "system-info",
@@ -6738,6 +6773,8 @@ export default function App() {
                 region={studioRegion || defaultCloudRegion(cloudProvider)}
                 onBack={closeSystemInfoPage}
               />
+            ) : developerResourcesView ? (
+              <DeveloperResources cloudProvider={cloudProvider} />
             ) : platformFeedbackOrigin !== null ? (
               <PlatformFeedback
                 initialModule={issueFeedbackModuleForPage(platformFeedbackOrigin)}
@@ -7494,6 +7531,9 @@ export default function App() {
                       onResolveDeliveryComparison={resolveIntelligentDeliveryComparison}
                       onDownloadDelivery={downloadIntelligentDelivery}
                       onDeployDelivery={setIntelligentDeployment}
+                      onBranchSelect={(branch) => {
+                        setInput(`继续“${branch.label}”这个方向`);
+                      }}
                     />
                     {/* Finalized turn that produced no visible answer (e.g. only
                         thinking + an empty A2UI surface) — show a fallback note. */}
