@@ -1566,7 +1566,8 @@ body {
   max-height: min(520px, 55vh);
   min-width: 0;
   padding-right: 2px;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   flex-direction: column;
   gap: 6px;
 }

@@ -183,6 +183,14 @@ test("keeps capability section titles text-only", () => {
 
 test("mixes selected Studio tools into the existing tool list", () => {
   assert.match(railSource, /const selectedStudioTools = studioTools/);
+  assert.match(
+    railSource,
+    /INTERNAL_AGENT_TOOL_NAMES = new Set\(\["StudioExternalToolset"\]\)/,
+  );
+  assert.match(
+    railSource,
+    /\.filter\(\(name\) => !INTERNAL_AGENT_TOOL_NAMES\.has\(name\)\)/,
+  );
   assert.match(railSource, /selectedIds\.has\(tool\.id\)/);
   assert.match(railSource, /tool\.custom && <span className="topo-custom-badge">Studio Tool<\/span>/);
   assert.match(railSource, /tool\.custom && tool\.removable && \([\s\S]*?topo-remove-capability/);

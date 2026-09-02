@@ -573,6 +573,64 @@ def test_runtime_tool_capabilities_expose_safe_local_metadata(
     assert all("input_schema" not in item for item in body["tools"])
 
 
+def test_local_runtime_tool_capabilities_do_not_query_cloud_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    class _UnexpectedRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+            raise AssertionError("local capabilities must not query a cloud Runtime")
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        _UnexpectedRuntimeClient,
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/runtime-tool-channel/local/capabilities?region=cn-beijing"
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["enabled"] is True
+    assert body["supported"] is True
+    assert {
+        "list_envs",
+        "get_env_manifest",
+        "execute_in_sandbox",
+        "delegate_to_codex_sandbox",
+    }.issubset({item["id"] for item in body["tools"]})
+    assert all("input_schema" not in item for item in body["tools"])
+
+
+def test_local_run_sse_rejects_unknown_studio_tool_before_loading_agent(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/run_sse",
+            headers={"X-VeADK-Local-User": "test"},
+            json={
+                "app_name": "missing-agent",
+                "user_id": "test",
+                "session_id": "session-1",
+                "new_message": {"role": "user", "parts": [{"text": "hello"}]},
+                "streaming": True,
+                "platform_tools": ["missing-tool"],
+            },
+        )
+
+    assert response.status_code == 400
+    assert "Unknown Studio tools: missing-tool" in response.json()["detail"]
+
+
 def test_empty_platform_tool_selection_uses_plain_run_without_forwarding_control(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

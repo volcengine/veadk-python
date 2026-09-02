@@ -25,6 +25,13 @@ from frontend.server.studio_tools.connector import (
     open_studio_tool_run,
     runtime_supports_bff_tools,
 )
+from frontend.server.studio_tools.local import (
+    LocalStudioToolDispatcher,
+    build_local_studio_tools,
+    ensure_local_studio_toolset,
+    local_progress_sse_event,
+    stream_local_studio_response,
+)
 from frontend.server.studio_tools.registry import (
     StudioTool,
     StudioToolCatalogSnapshot,
@@ -47,6 +54,7 @@ __all__ = [
     "CodexSandboxDelegate",
     "SandboxExecutionTarget",
     "SandboxTargetResolver",
+    "LocalStudioToolDispatcher",
     "StudioChannelError",
     "StudioTool",
     "StudioToolCatalogSnapshot",
@@ -55,9 +63,13 @@ __all__ = [
     "StudioToolRun",
     "StudioToolRuntimeError",
     "build_studio_tool_registry",
+    "build_local_studio_tools",
+    "ensure_local_studio_toolset",
     "execute_in_sandbox",
+    "local_progress_sse_event",
     "open_studio_tool_run",
     "register_codex_sandbox_tool",
     "register_sandbox_shell_tool",
     "runtime_supports_bff_tools",
+    "stream_local_studio_response",
 ]

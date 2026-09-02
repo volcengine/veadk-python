@@ -24,7 +24,7 @@ test("runSSE sends an explicit per-run platform tool selection", () => {
 test("Studio keeps BFF tool selection separate per session", () => {
   assert.match(appSource, /studioToolIdsBySession/);
   assert.match(appSource, /studioToolSelectionKey\(appName, userId, sessionId\)/);
-  assert.match(appSource, /platformTools: currentRuntime \? platformTools : undefined/);
+  assert.match(appSource, /platformTools: studioToolRuntime \? platformTools : undefined/);
   assert.match(railSource, /selectedStudioToolIds=\{selectedStudioToolIds\}/);
 });
 

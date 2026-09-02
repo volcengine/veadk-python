@@ -437,7 +437,14 @@ test("wires Codex progress into the active outer tool and renders the nested car
   assert.match(rendererSource, /Agent Session/);
   assert.match(rendererSource, /Sandbox Session/);
   assert.match(rendererSource, /Codex Thread/);
-  assert.match(rendererSource, /codexActivity\.items\.map\(\(item\) => item\.block\)/);
+  assert.match(
+    rendererSource,
+    /codexActivity\.items\.map\(\(item\)\s*=>\s*item\.block\)/,
+  );
+  assert.match(
+    rendererSource,
+    /:\s*!codexActivity\s*\?\s*\(\s*<div className="tool-detail">/,
+  );
   assert.match(stylesSource, /\.codex-sandbox-run\s*\{/);
   assert.match(stylesSource, /\.codex-sandbox-run__label\s*\{[^}]*position:\s*absolute/s);
   assert.match(stylesSource, /\.codex-sandbox-run__identity\s*\{/);

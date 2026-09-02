@@ -1,4 +1,4 @@
-import { toBlob } from "html-to-image";
+import { getFontEmbedCSS, toBlob } from "html-to-image";
 import {
   useEffect,
   useId,
@@ -21,9 +21,56 @@ type CopyState = "idle" | "copying" | "copied";
 type DownloadState = "idle" | "downloading";
 type ExportFormat = "png" | "pdf";
 
-const MAX_CANVAS_DIMENSION = 16_384;
-const MAX_CANVAS_PIXELS = 32_000_000;
+interface ShareImagePage {
+  blob: Blob;
+  width: number;
+  height: number;
+}
+
+interface ExportPageRange {
+  top: number;
+  height: number;
+}
+
+interface ExportChunkRange extends ExportPageRange {
+  pages: ExportPageRange[];
+}
+
+interface ExportElementMetrics {
+  top: number;
+  bottom: number;
+  height: number;
+  position: string;
+}
+
+interface ExportBreakMetrics {
+  top: number;
+  bottom: number;
+  height: number;
+}
+
+type ExportMeasurements = WeakMap<HTMLElement, ExportElementMetrics>;
+
+const EXPORT_WIDTH = 816;
+const EXPORT_PAGE_HEIGHT = 1_154;
+const EXPORT_CHUNK_HEIGHT = 12_000;
+const EXPORT_MIN_PAGE_FILL = 0.72;
+const EXPORT_MAX_LAST_PAGE_HEIGHT = EXPORT_PAGE_HEIGHT * 1.12;
 const PDF_MARGIN_MM = 10;
+const EXPORT_BREAK_SELECTOR = [
+  ".turn--user",
+  ".turn--assistant",
+  ".codex-sandbox-run__event",
+  ".block-tool",
+  ".block-thinking",
+  ".block-progress",
+  ".block-plan",
+  ".tool-result",
+  ".share-message-export-note",
+  "p",
+  "pre",
+  "li",
+].join(", ");
 
 function waitForDialogPaint(): Promise<void> {
   return new Promise((resolve) => {
@@ -57,13 +104,6 @@ function exportBackgroundColor(): string {
   return value ? `hsl(${value})` : "white";
 }
 
-function exportPixelRatio(width: number, height: number): number {
-  const preferred = Math.min(Math.max(window.devicePixelRatio || 1, 1), 2);
-  const dimensionLimit = MAX_CANVAS_DIMENSION / Math.max(width, height);
-  const areaLimit = Math.sqrt(MAX_CANVAS_PIXELS / Math.max(width * height, 1));
-  return Math.min(preferred, dimensionLimit, areaLimit);
-}
-
 function conversationTurnsThrough(targetTurn: HTMLElement): HTMLElement[] {
   const transcript = targetTurn.closest(".transcript");
   if (!transcript) return [targetTurn];
@@ -74,6 +114,59 @@ function conversationTurnsThrough(targetTurn: HTMLElement): HTMLElement[] {
   );
   const targetIndex = turns.indexOf(targetTurn);
   return targetIndex >= 0 ? turns.slice(0, targetIndex + 1) : [targetTurn];
+}
+
+function expandConversationExportContent(root: HTMLElement): void {
+  root
+    .querySelectorAll<HTMLElement>(
+      ".block-tool, .block-thinking, .block-progress, .block-plan",
+    )
+    .forEach((node) => {
+      node.style.opacity = "1";
+      node.style.transform = "none";
+      node.style.animation = "none";
+    });
+
+  root.querySelectorAll<HTMLElement>(".think-collapse").forEach((node) => {
+    node.classList.add("open");
+    node.style.gridTemplateRows = "1fr";
+    node.style.transition = "none";
+  });
+
+  root
+    .querySelectorAll<HTMLElement>(
+      ".codex-sandbox-run__stream, .think-body, .tool-result",
+    )
+    .forEach((node) => {
+      node.style.height = "auto";
+      node.style.maxHeight = "none";
+      node.style.overflow = "visible";
+      node.scrollTop = 0;
+      node.scrollLeft = 0;
+    });
+
+  root.querySelectorAll<HTMLElement>(".tool-args").forEach((node) => {
+    node.style.maxWidth = "100%";
+    node.style.overflowWrap = "anywhere";
+    node.style.whiteSpace = "pre-wrap";
+  });
+
+  root
+    .querySelectorAll<HTMLElement>(".think-collapse-inner")
+    .forEach((node) => {
+      node.style.height = "auto";
+      node.style.overflow = "visible";
+    });
+}
+
+function removeDuplicateCodexExportPayloads(root: HTMLElement): void {
+  root
+    .querySelectorAll<HTMLElement>(".codex-sandbox-run")
+    .forEach((codexActivity) => {
+      codexActivity.parentElement
+        ?.querySelector(":scope > .tool-detail")
+        ?.remove();
+    });
 }
 
 function createConversationExport(targetTurn: HTMLElement): HTMLElement {
@@ -91,6 +184,8 @@ function createConversationExport(targetTurn: HTMLElement): HTMLElement {
     clone
       .querySelectorAll("[data-share-image-exclude]")
       .forEach((node) => node.remove());
+    expandConversationExportContent(clone);
+    removeDuplicateCodexExportPayloads(clone);
     exportRoot.append(clone);
   }
 
@@ -103,125 +198,380 @@ function createConversationExport(targetTurn: HTMLElement): HTMLElement {
   return exportRoot;
 }
 
-async function generateShareImage(targetTurn: HTMLElement): Promise<Blob> {
+function createConversationExportPageRanges(
+  exportRoot: HTMLElement,
+): ExportPageRange[] {
+  const totalHeight = Math.max(1, Math.ceil(exportRoot.scrollHeight));
+  const rootTop = exportRoot.getBoundingClientRect().top;
+  const breakBlocks = Array.from(
+    exportRoot.querySelectorAll<HTMLElement>(EXPORT_BREAK_SELECTOR),
+  )
+    .map<ExportBreakMetrics>((node) => {
+      const rect = node.getBoundingClientRect();
+      return {
+        top: Math.floor(rect.top - rootTop),
+        bottom: Math.ceil(rect.bottom - rootTop),
+        height: Math.ceil(rect.height),
+      };
+    })
+    .filter(
+      ({ bottom, height }) => bottom > 0 && bottom < totalHeight && height > 0,
+    )
+    .sort((left, right) => left.bottom - right.bottom);
+  const ranges: ExportPageRange[] = [];
+  let pageTop = 0;
+
+  while (pageTop < totalHeight) {
+    const remainingHeight = totalHeight - pageTop;
+    if (remainingHeight <= EXPORT_MAX_LAST_PAGE_HEIGHT) {
+      ranges.push({ top: pageTop, height: remainingHeight });
+      break;
+    }
+
+    const idealBottom = Math.min(totalHeight, pageTop + EXPORT_PAGE_HEIGHT);
+    const minimumBottom = pageTop + EXPORT_PAGE_HEIGHT * EXPORT_MIN_PAGE_FILL;
+    const containingBlockTop = breakBlocks.reduce<number | undefined>(
+      (best, block) => {
+        const canKeepWhole =
+          block.top >= minimumBottom &&
+          block.top > pageTop &&
+          block.top < idealBottom &&
+          block.bottom > idealBottom &&
+          block.height <= EXPORT_PAGE_HEIGHT;
+        if (!canKeepWhole) return best;
+        return best === undefined ? block.top : Math.min(best, block.top);
+      },
+      undefined,
+    );
+    const pageBottom =
+      containingBlockTop ??
+      breakBlocks.reduce(
+        (best, candidate) =>
+          candidate.bottom >= minimumBottom && candidate.bottom <= idealBottom
+            ? candidate.bottom
+            : best,
+        idealBottom,
+      );
+    ranges.push({ top: pageTop, height: Math.max(1, pageBottom - pageTop) });
+    pageTop = pageBottom;
+  }
+
+  return ranges;
+}
+
+function createConversationExportChunks(
+  pageRanges: ExportPageRange[],
+): ExportChunkRange[] {
+  const chunks: ExportChunkRange[] = [];
+  for (const page of pageRanges) {
+    const current = chunks[chunks.length - 1];
+    const pageBottom = page.top + page.height;
+    if (current && pageBottom - current.top <= EXPORT_CHUNK_HEIGHT) {
+      current.pages.push(page);
+      current.height = pageBottom - current.top;
+    } else {
+      chunks.push({ top: page.top, height: page.height, pages: [page] });
+    }
+  }
+  return chunks;
+}
+
+function measureConversationExport(
+  exportRoot: HTMLElement,
+): ExportMeasurements {
+  const rootTop = exportRoot.getBoundingClientRect().top;
+  const measurements: ExportMeasurements = new WeakMap();
+  exportRoot.querySelectorAll<HTMLElement>("*").forEach((node) => {
+    const rect = node.getBoundingClientRect();
+    measurements.set(node, {
+      top: rect.top - rootTop,
+      bottom: rect.bottom - rootTop,
+      height: rect.height,
+      position: getComputedStyle(node).position,
+    });
+  });
+  return measurements;
+}
+
+function pruneConversationExportClone(
+  source: HTMLElement,
+  clone: HTMLElement,
+  range: ExportPageRange,
+  measurements: ExportMeasurements,
+): void {
+  if (source.matches(EXPORT_BREAK_SELECTOR)) return;
+
+  const sourceChildren = Array.from(source.children).filter(
+    (node): node is HTMLElement => node instanceof HTMLElement,
+  );
+  const cloneChildren = Array.from(clone.children).filter(
+    (node): node is HTMLElement => node instanceof HTMLElement,
+  );
+  const rangeBottom = range.top + range.height;
+
+  for (let index = sourceChildren.length - 1; index >= 0; index -= 1) {
+    const sourceChild = sourceChildren[index];
+    const cloneChild = cloneChildren[index];
+    const metrics = measurements.get(sourceChild);
+    if (!cloneChild || !metrics) continue;
+    const intersects = metrics.bottom > range.top && metrics.top < rangeBottom;
+    if (intersects) {
+      pruneConversationExportClone(
+        sourceChild,
+        cloneChild,
+        range,
+        measurements,
+      );
+      continue;
+    }
+
+    if (
+      metrics.height <= 0 ||
+      metrics.position === "absolute" ||
+      metrics.position === "fixed"
+    ) {
+      cloneChild.remove();
+      continue;
+    }
+
+    cloneChild.replaceChildren();
+    cloneChild.removeAttribute("id");
+    cloneChild.setAttribute("aria-hidden", "true");
+    cloneChild.style.boxSizing = "border-box";
+    cloneChild.style.height = `${metrics.height}px`;
+    cloneChild.style.minHeight = `${metrics.height}px`;
+    cloneChild.style.maxHeight = `${metrics.height}px`;
+    cloneChild.style.overflow = "hidden";
+    cloneChild.style.visibility = "hidden";
+    cloneChild.style.animation = "none";
+    cloneChild.style.transition = "none";
+  }
+}
+
+function createConversationExportPage(
+  exportRoot: HTMLElement,
+  range: ExportPageRange,
+  pageNumber: number,
+  pageCount: number,
+  measurements: ExportMeasurements,
+): HTMLElement {
+  const exportPage = document.createElement("section");
+  exportPage.className = "share-message-export-page";
+  exportPage.setAttribute("aria-hidden", "true");
+  exportPage.dataset.exportPage = String(pageNumber);
+  exportPage.dataset.exportPageCount = String(pageCount);
+  exportPage.style.height = `${range.height}px`;
+
+  const pageContent = exportRoot.cloneNode(true) as HTMLElement;
+  pruneConversationExportClone(exportRoot, pageContent, range, measurements);
+  pageContent.classList.add("share-message-export-page-content");
+  pageContent.style.position = "absolute";
+  pageContent.style.top = `${-range.top}px`;
+  pageContent.style.left = "0";
+  pageContent.style.margin = "0";
+  exportPage.append(pageContent);
+  document.body.append(exportPage);
+  return exportPage;
+}
+
+function canvasBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error("图片生成失败，请重试。"));
+    }, "image/png");
+  });
+}
+
+async function splitExportChunk(
+  chunkBlob: Blob,
+  width: number,
+  chunk: ExportChunkRange,
+): Promise<ShareImagePage[]> {
+  const bitmap = await createImageBitmap(chunkBlob);
+  const scaleX = bitmap.width / width;
+  const scaleY = bitmap.height / chunk.height;
+  const pages: ShareImagePage[] = [];
+  try {
+    for (const page of chunk.pages) {
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = page.height;
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("浏览器无法生成会话图片，请重试。");
+      context.drawImage(
+        bitmap,
+        0,
+        (page.top - chunk.top) * scaleY,
+        width * scaleX,
+        page.height * scaleY,
+        0,
+        0,
+        width,
+        page.height,
+      );
+      pages.push({
+        blob: await canvasBlob(canvas),
+        width,
+        height: page.height,
+      });
+      canvas.width = 0;
+      canvas.height = 0;
+    }
+  } finally {
+    bitmap.close();
+  }
+  return pages;
+}
+
+async function generateShareImages(
+  targetTurn: HTMLElement,
+): Promise<ShareImagePage[]> {
   if (document.fonts?.ready) await document.fonts.ready;
   const exportRoot = createConversationExport(targetTurn);
   try {
-    const width = Math.ceil(exportRoot.scrollWidth);
-    const height = Math.ceil(exportRoot.scrollHeight);
-    const pixelRatio = exportPixelRatio(width, height);
-    if (pixelRatio < 0.2) {
-      throw new Error("当前会话过长，暂时无法生成单张图片。");
+    const width = Math.max(EXPORT_WIDTH, Math.ceil(exportRoot.scrollWidth));
+    const pageRanges = createConversationExportPageRanges(exportRoot);
+    const exportChunks = createConversationExportChunks(pageRanges);
+    const measurements = measureConversationExport(exportRoot);
+    const fontEmbedCSS = await getFontEmbedCSS(exportRoot);
+    const pages: ShareImagePage[] = [];
+
+    for (const [chunkIndex, chunk] of exportChunks.entries()) {
+      const exportChunk = createConversationExportPage(
+        exportRoot,
+        chunk,
+        chunkIndex + 1,
+        exportChunks.length,
+        measurements,
+      );
+      try {
+        const blob = await toBlob(exportChunk, {
+          width,
+          height: chunk.height,
+          pixelRatio: 1,
+          backgroundColor: exportBackgroundColor(),
+          fontEmbedCSS,
+          style: {
+            position: "static",
+            top: "auto",
+            left: "auto",
+            width: `${width}px`,
+            height: `${chunk.height}px`,
+            margin: "0",
+            overflow: "hidden",
+            animation: "none",
+          },
+        });
+        if (!blob) throw new Error("图片生成失败，请重试。");
+        pages.push(...(await splitExportChunk(blob, width, chunk)));
+      } finally {
+        exportChunk.remove();
+      }
     }
 
-    const blob = await toBlob(exportRoot, {
-      width,
-      height,
-      pixelRatio,
-      backgroundColor: exportBackgroundColor(),
-      cacheBust: true,
-      style: {
-        position: "static",
-        top: "auto",
-        left: "auto",
-        width: `${width}px`,
-        height: `${height}px`,
-        margin: "0",
-        overflow: "visible",
-        animation: "none",
-      },
-    });
-    if (!blob) throw new Error("图片生成失败，请重试。");
-    return blob;
+    return pages;
   } finally {
     exportRoot.remove();
   }
 }
 
-function shareFileName(format: ExportFormat): string {
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const extension = format === "pdf" ? ".pdf" : ".png";
-  return `agentkit-conversation-${timestamp}${extension}`;
+function shareFileName(timestamp: string): string {
+  return `agentkit-conversation-${timestamp}.pdf`;
 }
 
-function loadBlobImage(blob: Blob): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const objectUrl = URL.createObjectURL(blob);
-    const image = new Image();
-    image.onload = () => {
-      URL.revokeObjectURL(objectUrl);
-      resolve(image);
-    };
-    image.onerror = () => {
-      URL.revokeObjectURL(objectUrl);
-      reject(new Error("无法读取会话图片，请重试。"));
-    };
-    image.src = objectUrl;
+function sharePageFileName(
+  pageNumber: number,
+  pageCount: number,
+  timestamp: string,
+): string {
+  const digits = Math.max(2, String(pageCount).length);
+  return `agentkit-conversation-${timestamp}-page-${String(pageNumber).padStart(digits, "0")}.png`;
+}
+
+function shareArchiveFileName(timestamp: string): string {
+  return `agentkit-conversation-${timestamp}-png-pages.zip`;
+}
+
+const CRC32_TABLE = Array.from({ length: 256 }, (_, value) => {
+  let checksum = value;
+  for (let bit = 0; bit < 8; bit += 1) {
+    checksum = checksum & 1 ? 0xedb88320 ^ (checksum >>> 1) : checksum >>> 1;
+  }
+  return checksum >>> 0;
+});
+
+function crc32(bytes: Uint8Array): number {
+  let checksum = 0xffffffff;
+  for (const byte of bytes) {
+    checksum = CRC32_TABLE[(checksum ^ byte) & 0xff] ^ (checksum >>> 8);
+  }
+  return (checksum ^ 0xffffffff) >>> 0;
+}
+
+async function createPngArchive(
+  imagePages: ShareImagePage[],
+  timestamp: string,
+): Promise<Blob> {
+  const encoder = new TextEncoder();
+  const archiveParts: BlobPart[] = [];
+  const centralDirectoryParts: BlobPart[] = [];
+  let localOffset = 0;
+  let centralDirectorySize = 0;
+
+  for (const [pageIndex, page] of imagePages.entries()) {
+    const fileName = sharePageFileName(
+      pageIndex + 1,
+      imagePages.length,
+      timestamp,
+    );
+    const fileNameBytes = encoder.encode(fileName);
+    const fileBytes = new Uint8Array(await page.blob.arrayBuffer());
+    const checksum = crc32(fileBytes);
+    const localHeader = new ArrayBuffer(30);
+    const localView = new DataView(localHeader);
+    localView.setUint32(0, 0x04034b50, true);
+    localView.setUint16(4, 20, true);
+    localView.setUint16(6, 0x0800, true);
+    localView.setUint16(8, 0, true);
+    localView.setUint32(14, checksum, true);
+    localView.setUint32(18, fileBytes.byteLength, true);
+    localView.setUint32(22, fileBytes.byteLength, true);
+    localView.setUint16(26, fileNameBytes.byteLength, true);
+    archiveParts.push(localHeader, fileNameBytes, fileBytes);
+
+    const centralHeader = new ArrayBuffer(46);
+    const centralView = new DataView(centralHeader);
+    centralView.setUint32(0, 0x02014b50, true);
+    centralView.setUint16(4, 20, true);
+    centralView.setUint16(6, 20, true);
+    centralView.setUint16(8, 0x0800, true);
+    centralView.setUint16(10, 0, true);
+    centralView.setUint32(16, checksum, true);
+    centralView.setUint32(20, fileBytes.byteLength, true);
+    centralView.setUint32(24, fileBytes.byteLength, true);
+    centralView.setUint16(28, fileNameBytes.byteLength, true);
+    centralView.setUint32(42, localOffset, true);
+    centralDirectoryParts.push(centralHeader, fileNameBytes);
+
+    localOffset += 30 + fileNameBytes.byteLength + fileBytes.byteLength;
+    centralDirectorySize += 46 + fileNameBytes.byteLength;
+  }
+
+  const endRecord = new ArrayBuffer(22);
+  const endView = new DataView(endRecord);
+  endView.setUint32(0, 0x06054b50, true);
+  endView.setUint16(8, imagePages.length, true);
+  endView.setUint16(10, imagePages.length, true);
+  endView.setUint32(12, centralDirectorySize, true);
+  endView.setUint32(16, localOffset, true);
+  return new Blob([...archiveParts, ...centralDirectoryParts, endRecord], {
+    type: "application/zip",
   });
 }
 
-function findPageBreak(
-  image: HTMLImageElement,
-  pageTop: number,
-  idealBottom: number,
-): number {
-  const searchHeight = Math.min(
-    idealBottom - pageTop,
-    Math.max(96, Math.round((idealBottom - pageTop) * 0.16)),
-  );
-  const searchTop = Math.max(pageTop + 1, idealBottom - searchHeight);
-  const canvas = document.createElement("canvas");
-  canvas.width = image.naturalWidth;
-  canvas.height = idealBottom - searchTop;
-  const context = canvas.getContext("2d", { willReadFrequently: true });
-  if (!context || canvas.height < 4) return idealBottom;
-  context.drawImage(
-    image,
-    0,
-    searchTop,
-    image.naturalWidth,
-    canvas.height,
-    0,
-    0,
-    image.naturalWidth,
-    canvas.height,
-  );
-  const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
-  const rowIsBlank = (row: number) => {
-    const rowStart = row * canvas.width * 4;
-    const red = pixels[rowStart];
-    const green = pixels[rowStart + 1];
-    const blue = pixels[rowStart + 2];
-    let differentPixels = 0;
-    for (let x = 0; x < canvas.width; x += 3) {
-      const index = rowStart + x * 4;
-      const difference =
-        Math.abs(pixels[index] - red) +
-        Math.abs(pixels[index + 1] - green) +
-        Math.abs(pixels[index + 2] - blue);
-      if (difference > 42) differentPixels += 1;
-    }
-    return differentPixels <= Math.max(2, Math.floor(canvas.width / 300));
-  };
-
-  for (let row = canvas.height - 1; row >= 3; row -= 1) {
-    if (
-      rowIsBlank(row) &&
-      rowIsBlank(row - 1) &&
-      rowIsBlank(row - 2) &&
-      rowIsBlank(row - 3)
-    ) {
-      return searchTop + row - 1;
-    }
-  }
-  return idealBottom;
-}
-
-async function generateSharePdf(imageBlob: Blob): Promise<Blob> {
-  const [{ jsPDF }, image] = await Promise.all([
-    import("jspdf"),
-    loadBlobImage(imageBlob),
-  ]);
+async function generateSharePdf(imagePages: ShareImagePage[]): Promise<Blob> {
+  const { jsPDF } = await import("jspdf");
   const pdf = new jsPDF({
     orientation: "portrait",
     unit: "mm",
@@ -232,52 +582,25 @@ async function generateSharePdf(imageBlob: Blob): Promise<Blob> {
   const pageHeight = pdf.internal.pageSize.getHeight();
   const contentWidth = pageWidth - PDF_MARGIN_MM * 2;
   const contentHeight = pageHeight - PDF_MARGIN_MM * 2;
-  const pagePixelHeight = Math.max(
-    1,
-    Math.floor((image.naturalWidth * contentHeight) / contentWidth),
-  );
-  let pageTop = 0;
-  let pageIndex = 0;
-
-  while (pageTop < image.naturalHeight) {
-    const idealBottom = Math.min(image.naturalHeight, pageTop + pagePixelHeight);
-    const pageBottom = idealBottom < image.naturalHeight
-      ? findPageBreak(image, pageTop, idealBottom)
-      : idealBottom;
-    const sliceHeight = Math.max(1, pageBottom - pageTop);
-    const slice = document.createElement("canvas");
-    slice.width = image.naturalWidth;
-    slice.height = sliceHeight;
-    const context = slice.getContext("2d");
-    if (!context) throw new Error("浏览器无法生成 PDF，请重试。");
-    context.drawImage(
-      image,
-      0,
-      pageTop,
-      image.naturalWidth,
-      sliceHeight,
-      0,
-      0,
-      image.naturalWidth,
-      sliceHeight,
+  for (const [pageIndex, page] of imagePages.entries()) {
+    const imageBytes = new Uint8Array(await page.blob.arrayBuffer());
+    const scale = Math.min(
+      contentWidth / page.width,
+      contentHeight / page.height,
     );
-    const sliceDataUrl = slice.toDataURL("image/png");
-    const renderedHeight = (sliceHeight * contentWidth) / image.naturalWidth;
+    const renderedWidth = page.width * scale;
+    const renderedHeight = page.height * scale;
     if (pageIndex > 0) pdf.addPage();
     pdf.addImage(
-      sliceDataUrl,
+      imageBytes,
       "PNG",
+      PDF_MARGIN_MM + (contentWidth - renderedWidth) / 2,
       PDF_MARGIN_MM,
-      PDF_MARGIN_MM,
-      contentWidth,
+      renderedWidth,
       renderedHeight,
       `conversation-export-${pageIndex}`,
       "FAST",
     );
-    slice.width = 0;
-    slice.height = 0;
-    pageTop = pageBottom;
-    pageIndex += 1;
   }
 
   return new Blob([pdf.output("arraybuffer")], { type: "application/pdf" });
@@ -310,7 +633,7 @@ export function ShareMessageDialog({
   const [generationState, setGenerationState] =
     useState<GenerationState>("generating");
   const [generationAttempt, setGenerationAttempt] = useState(0);
-  const [imageBlob, setImageBlob] = useState<Blob | null>(null);
+  const [imagePages, setImagePages] = useState<ShareImagePage[]>([]);
   const [imageUrl, setImageUrl] = useState("");
   const [error, setError] = useState("");
   const [copyState, setCopyState] = useState<CopyState>("idle");
@@ -369,7 +692,7 @@ export function ShareMessageDialog({
     let disposed = false;
     let objectUrl = "";
     setGenerationState("generating");
-    setImageBlob(null);
+    setImagePages([]);
     setImageUrl("");
     setError("");
     setCopyState("idle");
@@ -378,13 +701,14 @@ export function ShareMessageDialog({
       try {
         await waitForDialogPaint();
         if (disposed) return;
-        const blob = await generateShareImage(targetTurn);
-        objectUrl = URL.createObjectURL(blob);
+        const pages = await generateShareImages(targetTurn);
+        if (pages.length === 0) throw new Error("图片生成失败，请重试。");
+        objectUrl = URL.createObjectURL(pages[0].blob);
         if (disposed) {
           URL.revokeObjectURL(objectUrl);
           return;
         }
-        setImageBlob(blob);
+        setImagePages(pages);
         setImageUrl(objectUrl);
         setGenerationState("ready");
       } catch (cause) {
@@ -403,7 +727,8 @@ export function ShareMessageDialog({
   }, [generationAttempt, targetTurn]);
 
   const copyImage = async () => {
-    if (!imageBlob || copyState === "copying") return;
+    const firstPage = imagePages[0];
+    if (!firstPage || copyState === "copying") return;
     setCopyState("copying");
     setError("");
     try {
@@ -411,7 +736,7 @@ export function ShareMessageDialog({
         throw new Error("当前浏览器不支持复制图片，请下载后使用。");
       }
       await navigator.clipboard.write([
-        new ClipboardItem({ "image/png": imageBlob }),
+        new ClipboardItem({ "image/png": firstPage.blob }),
       ]);
       setCopyState("copied");
       copyResetTimerRef.current = window.setTimeout(
@@ -457,14 +782,20 @@ export function ShareMessageDialog({
   };
 
   const downloadExport = async () => {
-    if (!imageBlob || downloadState === "downloading") return;
+    if (imagePages.length === 0 || downloadState === "downloading") return;
     setDownloadState("downloading");
     setError("");
     try {
-      const blob = exportFormat === "pdf"
-        ? await generateSharePdf(imageBlob)
-        : imageBlob;
-      downloadBlob(blob, shareFileName(exportFormat));
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      if (exportFormat === "pdf") {
+        const blob = await generateSharePdf(imagePages);
+        downloadBlob(blob, shareFileName(timestamp));
+      } else if (imagePages.length === 1) {
+        downloadBlob(imagePages[0].blob, sharePageFileName(1, 1, timestamp));
+      } else {
+        const archive = await createPngArchive(imagePages, timestamp);
+        downloadBlob(archive, shareArchiveFileName(timestamp));
+      }
     } catch (cause) {
       if (mountedRef.current) {
         setError(cause instanceof Error ? cause.message : "导出失败，请重试。");
@@ -488,12 +819,16 @@ export function ShareMessageDialog({
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={descriptionId}
-        aria-busy={generationState === "generating" || downloadState === "downloading"}
+        aria-busy={
+          generationState === "generating" || downloadState === "downloading"
+        }
       >
         <header className="share-message-head">
           <div>
             <h2 id={titleId}>导出会话</h2>
-            <p id={descriptionId}>选择格式并下载截至当前回复的全部输入与输出。</p>
+            <p id={descriptionId}>
+              选择格式并下载截至当前回复的全部输入与输出。
+            </p>
           </div>
           <button
             ref={closeButtonRef}
@@ -523,12 +858,20 @@ export function ShareMessageDialog({
               </button>
             </div>
           ) : (
-            <div className="share-message-preview">
-              <img src={imageUrl} alt="会话导出内容预览" />
-            </div>
+            <figure className="share-message-preview">
+              <figcaption className="share-message-preview-meta">
+                预览第 1 页，共 {imagePages.length} 页
+              </figcaption>
+              <img
+                src={imageUrl}
+                alt={`会话导出内容第 1 页，共 ${imagePages.length} 页`}
+              />
+            </figure>
           )}
           {generationState !== "error" && error && (
-            <p className="share-message-error" role="alert">{error}</p>
+            <p className="share-message-error" role="alert">
+              {error}
+            </p>
           )}
         </div>
 
@@ -562,19 +905,29 @@ export function ShareMessageDialog({
 
         <footer className="share-message-actions">
           <span className="share-message-download-status" aria-live="polite">
-            {downloadState === "downloading" ? `正在生成 ${exportFormat.toUpperCase()}…` : ""}
+            {downloadState === "downloading"
+              ? `正在生成 ${exportFormat.toUpperCase()}…`
+              : ""}
           </span>
           {exportFormat === "png" && (
             <button
               type="button"
               onClick={() => void copyImage()}
-              disabled={!imageBlob || generationState !== "ready" || copyState === "copying"}
+              disabled={
+                imagePages.length === 0 ||
+                generationState !== "ready" ||
+                copyState === "copying"
+              }
             >
               {copyState === "copying"
                 ? "正在复制…"
                 : copyState === "copied"
-                  ? "已复制"
-                  : "复制图片"}
+                  ? imagePages.length > 1
+                    ? "已复制第一页"
+                    : "已复制"
+                  : imagePages.length > 1
+                    ? "复制第一页"
+                    : "复制图片"}
             </button>
           )}
           <button
@@ -582,14 +935,16 @@ export function ShareMessageDialog({
             className="is-primary"
             onClick={() => void downloadExport()}
             disabled={
-              !imageBlob ||
+              imagePages.length === 0 ||
               generationState !== "ready" ||
               downloadState === "downloading"
             }
           >
             {downloadState === "downloading"
               ? "正在生成…"
-              : `下载 ${exportFormat.toUpperCase()}`}
+              : exportFormat === "png" && imagePages.length > 1
+                ? `下载 PNG 压缩包（${imagePages.length} 页）`
+                : `下载 ${exportFormat.toUpperCase()}`}
           </button>
         </footer>
       </section>

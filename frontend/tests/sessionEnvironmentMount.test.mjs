@@ -67,8 +67,47 @@ test("environments are mounted dynamically after a Session exists", () => {
   assert.match(appSource, /selections\.length > 0[\s\S]*?ENVIRONMENT_STUDIO_TOOL_IDS[\s\S]*?selectedIds\.filter/);
   assert.match(appSource, /const visibleStudioTools = studioToolCapabilities\?\.tools\.filter/);
   assert.match(appSource, /managedStudioToolIds=\{selectedEnvironmentMounts\.length > 0/);
-  assert.match(appSource, /environmentMounts: currentRuntime && environmentMounts\.length > 0/);
+  assert.match(appSource, /environmentMounts: studioToolRuntime && environmentMounts\.length > 0/);
   assert.doesNotMatch(appSource, /environmentsLocked/);
+});
+
+test("environment mounts survive a page reload for the same Agent Session", () => {
+  assert.match(
+    appSource,
+    /SESSION_ENVIRONMENT_STORAGE_KEY = "veadk\.sessionEnvironmentMounts\.v1"/,
+  );
+  assert.match(appSource, /function loadStoredSessionEnvironmentState\(\)/);
+  assert.match(appSource, /function persistSessionEnvironmentState\(/);
+  assert.match(
+    appSource,
+    /useState<[\s\S]*SessionEnvironmentMountSelection\[\][\s\S]*>\(\(\) => storedSessionEnvironmentState\.current\?\.mounts \?\? \{\}\)/,
+  );
+  assert.match(
+    appSource,
+    /persistSessionEnvironmentState\(\s*environmentMountsBySession,\s*environmentWorkspaceIdsBySession,\s*\)/,
+  );
+  assert.match(appSource, /mount_instance_id: candidate\.mount_instance_id/);
+});
+
+test("local Agents discover Studio tools through a synthetic local runtime", () => {
+  assert.match(
+    appSource,
+    /const studioToolRuntime = currentRuntime \?\? selectedDraftStudioRuntime \?\? \(/,
+  );
+  assert.match(appSource, /runtimeId: "local"/);
+  assert.match(appSource, /region: defaultCloudRegion\(cloudProvider\)/);
+  assert.match(
+    appSource,
+    /platformTools: studioToolRuntime \? platformTools : undefined/,
+  );
+  assert.match(
+    appSource,
+    /environmentMounts: studioToolRuntime && environmentMounts\.length > 0/,
+  );
+  assert.match(
+    appSource,
+    /platformTools: studioToolRuntime \? resumedPlatformTools : undefined/,
+  );
 });
 
 test("environment picker stays in Agent info below skills", () => {
