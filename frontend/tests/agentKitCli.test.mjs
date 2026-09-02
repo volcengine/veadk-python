@@ -20,21 +20,14 @@ const clientSource = readFileSync(
 );
 const appSource = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
 
-test("keeps the CLI and Developer Resources entries before the account", () => {
+test("keeps the CLI and Developer Resources shortcuts beside the account", () => {
   assert.match(sidebarSource, /onAgentKitCli: \(\) => void/);
   assert.doesNotMatch(sidebarSource, /AgentKitPromoCard/);
-  const cliIndex = sidebarSource.indexOf(">体验 AgentKit CLI</span>");
-  const resourcesIndex = sidebarSource.indexOf(">开发者资源</span>");
-  const accountIndex = sidebarSource.indexOf("<SidebarUser", resourcesIndex);
-  assert.ok(cliIndex >= 0, "should render the AgentKit CLI entry");
-  assert.ok(
-    resourcesIndex > cliIndex,
-    "developer resources should follow the CLI entry",
-  );
-  assert.ok(
-    accountIndex > resourcesIndex,
-    "account should remain below resource entries",
-  );
+  assert.match(sidebarSource, /className="sidebar-user-shortcuts" aria-label="快捷入口"/);
+  assert.match(sidebarSource, /<Tooltip compact content="体验 AgentKit CLI">/);
+  assert.match(sidebarSource, /<Tooltip compact content="开发者资源">/);
+  assert.match(sidebarSource, /aria-label="体验 AgentKit CLI"/);
+  assert.match(sidebarSource, /aria-label="开发者资源"/);
   assert.equal(sidebarSource.indexOf(">AgentKit 文档</span>"), -1);
   assert.equal(sidebarSource.indexOf(">AgentKit 控制台</span>"), -1);
   assert.match(
@@ -43,11 +36,7 @@ test("keeps the CLI and Developer Resources entries before the account", () => {
   );
   assert.match(
     sidebarSource,
-    /<MarkerCode className="icon" \/>[\s\S]*?体验 AgentKit CLI/,
-  );
-  assert.match(
-    sidebarSource,
-    /<span className="sidebar-nav-label">体验 AgentKit CLI<\/span>/,
+    /aria-label="体验 AgentKit CLI"[\s\S]*?<MarkerCode className="icon" \/>/,
   );
   assert.match(appSource, /onAgentKitCli=\{\(\) => setAgentKitCliOpen\(true\)\}/);
   assert.match(appSource, /<AgentKitCliDialog[\s\S]*?open=\{agentKitCliOpen\}/);

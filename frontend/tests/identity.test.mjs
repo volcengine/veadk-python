@@ -17,6 +17,7 @@ const identitySource = readFileSync(
   "utf8",
 ).replace('from "./timeout"', `from "${timeoutUrl}"`);
 const {
+  displayName,
   fetchProviders,
   isOAuthLoginRequired,
   openLoginWindow,
@@ -158,6 +159,17 @@ test("reads a trimmed standard OIDC profile picture", () => {
   assert.equal(profilePictureUrl({ picture: "" }), "");
   assert.equal(profilePictureUrl({ picture: { url: "invalid" } }), "");
   assert.equal(profilePictureUrl(), "");
+});
+
+test("prefers a name or username before falling back to email", () => {
+  assert.equal(
+    displayName({ name: " 房耀政 ", preferred_username: "fyz", email: "fyz@example.com" }),
+    "房耀政",
+  );
+  assert.equal(displayName({ preferred_username: "fyz", email: "fyz@example.com" }), "fyz");
+  assert.equal(displayName({ username: "fyz", email: "fyz@example.com" }), "fyz");
+  assert.equal(displayName({ email: "fyz@example.com" }), "fyz@example.com");
+  assert.equal(displayName({ sub: "opaque-id" }), "");
 });
 
 test("provider lookup enables local mode only after a successful empty response", async () => {

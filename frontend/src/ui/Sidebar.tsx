@@ -14,10 +14,12 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
+import { Badge } from "@openai/apps-sdk-ui/components/Badge";
 import { BookWrench } from "@openai/apps-sdk-ui/components/Icon";
 import { Clock } from "@openai/apps-sdk-ui/components/Icon";
 import { MarkerCode } from "@openai/apps-sdk-ui/components/Icon";
 import { LoadingIndicator } from "@openai/apps-sdk-ui/components/Indicator";
+import { Tooltip } from "@openai/apps-sdk-ui/components/Tooltip";
 import type {
   AdkSession,
   SiteBranding,
@@ -36,7 +38,6 @@ import {
   SidebarCollapseIcon,
   SidebarExpandIcon,
 } from "./icons/SidebarIcons";
-import { StudioRoleIcon } from "./icons/StudioRoleIcons";
 import defaultSiteLogo from "../assets/logo.svg";
 import byteplusLogo from "../assets/byteplus.svg";
 import "./Sidebar.css";
@@ -185,73 +186,91 @@ const STUDIO_ROLE_LABELS: Record<StudioAccess["role"], string> = {
   user: "普通用户",
 };
 
-function StudioRoleIndicator({ role }: { role: StudioAccess["role"] }) {
-  const label = STUDIO_ROLE_LABELS[role];
-  return (
-    <span
-      className="studio-role-icon"
-      role="img"
-      aria-label={label}
-      title={label}
-    >
-      <StudioRoleIcon role={role} className="studio-role-icon__glyph" />
-    </span>
-  );
-}
-
 /** Account block pinned at the bottom of the sidebar: avatar + name, with a
  *  popover (opening upward) holding the full identity and account actions. */
 function SidebarUser({
+  activePage,
   access,
   userInfo,
+  onAgentKitCli,
+  onDeveloperResources,
   onSystemInfo,
   onIssueFeedback,
   onLogout,
 }: Pick<
   SidebarProps,
-  "access" | "userInfo" | "onSystemInfo" | "onIssueFeedback" | "onLogout"
+  | "activePage"
+  | "access"
+  | "userInfo"
+  | "onAgentKitCli"
+  | "onDeveloperResources"
+  | "onSystemInfo"
+  | "onIssueFeedback"
+  | "onLogout"
 >) {
   const [open, setOpen] = useState(false);
   const [failedAvatarUrl, setFailedAvatarUrl] = useState("");
   if (!userInfo) return null;
-  const name = displayName(userInfo);
-  const email = typeof userInfo.email === "string" ? userInfo.email : "";
-  const avatarStyle = smokeAvatarStyle(name || email || "user");
+  const name = displayName(userInfo) || "用户";
+  const email = typeof userInfo.email === "string" ? userInfo.email.trim() : "";
+  const avatarStyle = smokeAvatarStyle(name);
   const pictureUrl = profilePictureUrl(userInfo);
   const visiblePictureUrl = pictureUrl === failedAvatarUrl ? "" : pictureUrl;
   return (
     <div className="sidebar-user">
-      <button
-        className="sidebar-user-btn"
-        onClick={() => setOpen((o) => !o)}
-        title={email ? `${name}\n${email}` : name}
-      >
-        <span
-          className={`account-avatar${visiblePictureUrl ? " has-image" : ""}`}
-          style={avatarStyle}
-          aria-hidden="true"
+      <div className="sidebar-user-row">
+        <button
+          type="button"
+          className="sidebar-user-btn"
+          onClick={() => setOpen((o) => !o)}
+          title={name}
         >
-          {visiblePictureUrl ? (
-            <img
-              className="account-avatar-image"
-              src={visiblePictureUrl}
-              alt=""
-              aria-hidden="true"
-              referrerPolicy="no-referrer"
-              onError={() => setFailedAvatarUrl(visiblePictureUrl)}
-            />
-          ) : null}
-        </span>
-        <span className="sidebar-user-identity">
-          <span className="sidebar-user-primary">
-            <span className="sidebar-user-name">{name}</span>
-            <StudioRoleIndicator role={access.role} />
+          <span
+            className={`account-avatar${visiblePictureUrl ? " has-image" : ""}`}
+            style={avatarStyle}
+            aria-hidden="true"
+          >
+            {visiblePictureUrl ? (
+              <img
+                className="account-avatar-image"
+                src={visiblePictureUrl}
+                alt=""
+                aria-hidden="true"
+                referrerPolicy="no-referrer"
+                onError={() => setFailedAvatarUrl(visiblePictureUrl)}
+              />
+            ) : null}
           </span>
-          {email && email !== name && (
-            <span className="sidebar-user-email">{email}</span>
-          )}
-        </span>
-      </button>
+          <span className="sidebar-user-identity">
+            <span className="sidebar-user-name">{name}</span>
+          </span>
+        </button>
+        <div className="sidebar-user-shortcuts" aria-label="快捷入口">
+          <Tooltip compact content="体验 AgentKit CLI">
+            <button
+              type="button"
+              className="sidebar-user-shortcut"
+              onClick={onAgentKitCli}
+              aria-label="体验 AgentKit CLI"
+            >
+              <MarkerCode className="icon" />
+            </button>
+          </Tooltip>
+          <Tooltip compact content="开发者资源">
+            <button
+              type="button"
+              className={`sidebar-user-shortcut${
+                activePage === "developer-resources" ? " is-active" : ""
+              }`}
+              onClick={onDeveloperResources}
+              aria-label="开发者资源"
+              aria-current={activePage === "developer-resources" ? "page" : undefined}
+            >
+              <BookWrench className="icon" />
+            </button>
+          </Tooltip>
+        </div>
+      </div>
       {open && (
         <>
           <div className="menu-scrim" onClick={() => setOpen(false)} />
@@ -278,7 +297,9 @@ function SidebarUser({
               <div className="account-id">
                 <div className="account-name-row">
                   <div className="account-name">{name}</div>
-                  <StudioRoleIndicator role={access.role} />
+                  <Badge color="secondary" size="sm" variant="soft" pill>
+                    {STUDIO_ROLE_LABELS[access.role]}
+                  </Badge>
                 </div>
                 {email && email !== name && <div className="account-sub">{email}</div>}
               </div>
@@ -701,34 +722,12 @@ export function Sidebar({
       )}
 
       <div className="sidebar-footer">
-        <nav className="sidebar-nav sidebar-agentkit-cli-slot" aria-label="快捷入口">
-          <button
-            type="button"
-            className="new-chat sidebar-agentkit-cli"
-            onClick={onAgentKitCli}
-            aria-label="体验 AgentKit CLI"
-            title="体验 AgentKit CLI"
-          >
-            <MarkerCode className="icon" />
-            <span className="sidebar-nav-label">体验 AgentKit CLI</span>
-          </button>
-          <button
-            type="button"
-            className={`new-chat sidebar-developer-resources${
-              activePage === "developer-resources" ? " is-active" : ""
-            }`}
-            onClick={onDeveloperResources}
-            aria-label="开发者资源"
-            aria-current={activePage === "developer-resources" ? "page" : undefined}
-            title="开发者资源"
-          >
-            <BookWrench className="icon" />
-            <span className="sidebar-nav-label">开发者资源</span>
-          </button>
-        </nav>
         <SidebarUser
+          activePage={activePage}
           access={access}
           userInfo={userInfo}
+          onAgentKitCli={onAgentKitCli}
+          onDeveloperResources={onDeveloperResources}
           onSystemInfo={onSystemInfo}
           onIssueFeedback={onIssueFeedback}
           onLogout={onLogout}

@@ -953,10 +953,9 @@
   overflow-wrap: anywhere;
 }
 
-.aw-detail-fetch-error {
-  min-height: 0;
-  align-items: flex-start;
-  text-align: left;
+.aw-detail-fetch-alert {
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .aw-usage-state button,
