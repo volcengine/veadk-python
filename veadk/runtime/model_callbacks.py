@@ -374,3 +374,49 @@ def _same_content(left: Any, right: Any) -> bool:
             mode="json", exclude_none=True
         )
     return left == right
+
+
+#: Action fields carried from a dropped merged event onto the last emitted one.
+#: `skip_summarization` is deliberately excluded: `Event.is_final_response()`
+#: returns True for any event that sets it, so copying it would turn the tool
+#: event into the invocation's final response - exactly what withholding the
+#: contentless merged event is meant to prevent.
+_MERGED_ACTION_DICTS = (
+    "state_delta",
+    "artifact_delta",
+    "requested_auth_configs",
+    "requested_tool_confirmations",
+)
+_MERGED_ACTION_SCALARS = ("transfer_to_agent", "escalate", "end_invocation")
+
+
+def merge_turn_bookkeeping(target: Event, merged: Event) -> None:
+    """Fold a tool-only turn's merged-response bookkeeping onto ``target``.
+
+    This module owns both producers of that bookkeeping:
+    ``run_before_model_callbacks``/``run_after_model_callbacks`` build their
+    ``CallbackContext`` over ``model_response_event.actions``, so a callback's
+    ``callback_context.state[...]`` writes land on the merged event's
+    ``state_delta``; ``llm_response_to_event`` then also attaches the turn's
+    ``usage_metadata``. When the merged event has no content it cannot be
+    emitted (it would read as the final response), so that bookkeeping is moved
+    onto the last event this turn actually emits.
+
+    Args:
+        target (Event): The already-built event that will be emitted.
+        merged (Event): The contentless merged response being withheld.
+    """
+    source = getattr(merged, "actions", None)
+    destination = getattr(target, "actions", None)
+    if source is not None and destination is not None:
+        for name in _MERGED_ACTION_DICTS:
+            values = getattr(source, name, None)
+            if values:
+                getattr(destination, name).update(values)
+        for name in _MERGED_ACTION_SCALARS:
+            value = getattr(source, name, None)
+            if value:
+                setattr(destination, name, value)
+    usage = getattr(merged, "usage_metadata", None)
+    if usage is not None and getattr(target, "usage_metadata", None) is None:
+        target.usage_metadata = usage

@@ -86,6 +86,17 @@ def test_memory_auto_save_policy_is_exported():
 
 @pytest.mark.asyncio
 async def test_long_term_memory():
+    # Only the `local` backend needs llama-index, and it is imported lazily
+    # when the backend class is resolved; every other test in this module
+    # injects its own backend and runs without the extra.
+    pytest.importorskip(
+        "llama_index.core",
+        reason=(
+            "the local KnowledgeBase/LongTermMemory backends need llama-index: "
+            'pip install "veadk-python[extensions]"'
+        ),
+    )
+
     os.environ["MODEL_EMBEDDING_API_KEY"] = "mocked_api_key"
     long_term_memory = LongTermMemory(backend="local")
 
