@@ -377,23 +377,19 @@ test("marks missing optimization env inputs invalid and focuses the first error"
     customCreateSource,
     /requiredBy:\s*modelProxyHarnessOptimizationLabels/,
   );
-  assert.match(
-    customCreateSource,
-    /requiredBy:\s*\[harnessSidecarOptionLabel\("mcp_resilience"\)\]/,
-  );
   assert.match(customCreateSource, /resolveMcpGatewayEnv\(/);
+  assert.doesNotMatch(customCreateSource, /key: "MCP_URLS"/);
+  assert.doesNotMatch(customCreateSource, /key: "MCP_API_KEY"/);
+  assert.match(customCreateSource, /const mcpGatewayManaged =/);
   assert.match(
     customCreateSource,
-    /fixedValues\.MCP_URLS = gatewayEnv\.urls\.join\(","\)/,
+    /key: mcpTool\.authTokenEnv,[\s\S]*?serverManaged: mcpGatewayManaged,[\s\S]*?hidden: mcpGatewayManaged/,
   );
   assert.match(
     customCreateSource,
-    /fixedValues\.MCP_API_KEY = gatewayEnv\.apiKey/,
+    /deploymentTarget \|\| mcpGatewayManaged \? codegenDraft\(draft\) : undefined/,
   );
-  assert.match(
-    customCreateSource,
-    /key: "MCP_API_KEY",[\s\S]*?secret: true,[\s\S]*?readOnly: true/,
-  );
+  assert.match(customCreateSource, /mcpSecretValues:/);
   assert.match(projectPreviewSource, /missingRuntimeEnvs\(/);
   assert.match(projectPreviewSource, /row\.placeholder \|\|/);
   assert.match(projectPreviewSource, /setDeploymentEnvErrors\(/);
@@ -406,6 +402,34 @@ test("marks missing optimization env inputs invalid and focuses the first error"
     projectPreviewSource,
     /className="pp-env-error"[\s\S]*?role="alert"[\s\S]*?\{fieldError\}/,
   );
+});
+
+test("omits Studio-managed MCP values from fields, validation, and public env payload", () => {
+  const specs = [
+    {
+      key: "MCP_TEST_TOOL_AUTH_TOKEN",
+      required: false,
+      secret: true,
+      readOnly: true,
+      serverManaged: true,
+      hidden: true,
+    },
+    {
+      key: "MCP_SERVERS_JSON",
+      required: true,
+      secret: true,
+      readOnly: true,
+      serverManaged: true,
+      hidden: true,
+    },
+  ];
+  const values = {
+    MCP_TEST_TOOL_AUTH_TOKEN: "transient-test-value",
+  };
+
+  assert.deepEqual(runtimeEnvDisplayRows(specs, values), []);
+  assert.deepEqual(missingRuntimeEnvs(specs, values), []);
+  assert.deepEqual(runtimeEnvVars(specs, values), []);
 });
 
 test("uses copyable default runtime values and validates JSON settings", () => {

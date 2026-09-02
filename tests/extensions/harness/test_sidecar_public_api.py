@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -48,6 +49,35 @@ def test_sidecar_runtime_api_uses_local_import_contract() -> None:
     from veadk.extensions.harness import sidecar_runtime
 
     assert sidecar._sidecar_runtime_api() is sidecar_runtime
+
+
+def test_agentkit_cli_uses_secure_veadk_resolver(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    executable = tmp_path / "cache" / "ak"
+    executable.parent.mkdir()
+    executable.write_bytes(b"executable")
+    executable.chmod(0o755)
+    monkeypatch.setattr(
+        "veadk.cli.agentkit_cli.resolve_agentkit_cli",
+        lambda: executable,
+    )
+
+    assert sidecar.agentkit_cli_executable() == str(executable)
+
+
+def test_agentkit_cli_never_selects_the_sdk_agentkit_console_script(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from veadk.cli.agentkit_cli import AgentKitCliError
+
+    def unavailable() -> Path:
+        raise AgentKitCliError("unavailable")
+
+    monkeypatch.setattr("veadk.cli.agentkit_cli.resolve_agentkit_cli", unavailable)
+    with pytest.raises(sidecar.HarnessSidecarDependencyError, match="pinned"):
+        sidecar.agentkit_cli_executable()
 
 
 def test_agentkit_cli_resolver_contract(

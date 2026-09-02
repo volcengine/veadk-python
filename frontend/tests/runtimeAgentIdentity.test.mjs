@@ -417,7 +417,7 @@ test("runtime-preserved skills survive update draft normalization without fake f
   ]);
 });
 
-test("recovered MCP authentication exposes configured state without a secret value", () => {
+test("recovered MCP authentication populates the editable credential value", () => {
   const restored = runtimeAgentDraftFromCloud(
     {
       appName: "cloud_app",
@@ -429,6 +429,7 @@ test("recovered MCP authentication exposes configured state without a secret val
             name: "orders",
             transport: "http",
             url: "https://mcp.example.com/mcp",
+            authToken: "recovered-editor-token",
             authTokenEnv: "MCP_ORDERS_TOKEN",
           },
           {
@@ -444,9 +445,8 @@ test("recovered MCP authentication exposes configured state without a secret val
   );
 
   assert.equal(restored.mcpTools[0].credentialConfigured, true);
-  assert.equal(restored.mcpTools[0].authToken, undefined);
+  assert.equal(restored.mcpTools[0].authToken, "recovered-editor-token");
   assert.equal(restored.mcpTools[1].credentialConfigured, false);
-  assert.doesNotMatch(JSON.stringify(restored), /secret|bearer/i);
 });
 
 test("Agent name uses only cloud graph, metadata, then app name", () => {

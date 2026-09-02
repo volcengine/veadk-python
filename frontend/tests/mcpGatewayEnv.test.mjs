@@ -51,7 +51,7 @@ const { resolveMcpGatewayEnv } = await loadTypeScriptModule(
   "../src/create/mcpGatewayEnv.ts",
 );
 
-test("derives Sidecar MCP gateway env from the previously added HTTP tool", () => {
+test("derives Sidecar MCP upstream URLs from the previously added HTTP tool", () => {
   const result = resolveMcpGatewayEnv(
     draft({
       mcpTools: [
@@ -63,17 +63,15 @@ test("derives Sidecar MCP gateway env from the previously added HTTP tool", () =
         },
       ],
     }),
-    { MCP_ORDERS_TOKEN: "shared-secret" },
   );
 
   assert.deepEqual(result, {
     ok: true,
     urls: ["https://mcp.example.test/orders/mcp"],
-    apiKey: "shared-secret",
   });
 });
 
-test("collects nested and workflow HTTP tools once when they share one key", () => {
+test("collects nested and workflow HTTP tools once without inspecting credentials", () => {
   const sharedTool = {
     name: "inventory",
     transport: "http",
@@ -99,7 +97,6 @@ test("collects nested and workflow HTTP tools once when they share one key", () 
         edges: [],
       },
     }),
-    { MCP_SHARED_TOKEN: "shared-secret" },
   );
 
   assert.deepEqual(result, {
@@ -108,7 +105,6 @@ test("collects nested and workflow HTTP tools once when they share one key", () 
       "https://mcp.example.test/orders/mcp",
       "https://mcp.example.test/inventory/mcp",
     ],
-    apiKey: "shared-secret",
   });
 });
 
@@ -130,7 +126,6 @@ test("preserves one gateway route per configured HTTP tool", () => {
         },
       ],
     }),
-    { MCP_SHARED_TOKEN: "shared-secret" },
   );
 
   assert.deepEqual(result, {
@@ -139,7 +134,6 @@ test("preserves one gateway route per configured HTTP tool", () => {
       "https://mcp.example.test/shared/mcp",
       "https://mcp.example.test/shared/mcp",
     ],
-    apiKey: "shared-secret",
   });
 });
 
@@ -149,42 +143,25 @@ test("fails closed when no usable HTTP MCP tool is available", () => {
       draft({
         mcpTools: [{ name: "local", transport: "stdio", command: "example" }],
       }),
-      {},
     ).reason,
     "missing_http_tool",
   );
   assert.equal(
     resolveMcpGatewayEnv(
       draft({ mcpTools: [{ name: "orders", transport: "http", url: "" }] }),
-      {},
     ).reason,
     "missing_url",
   );
 });
 
-test("fails closed when a credential is missing or conflicts", () => {
-  const missing = resolveMcpGatewayEnv(
+test("accepts optional and distinct per-tool credentials", () => {
+  const result = resolveMcpGatewayEnv(
     draft({
       mcpTools: [
         {
           name: "orders",
           transport: "http",
           url: "https://mcp.example.test/orders/mcp",
-        },
-      ],
-    }),
-    {},
-  );
-  assert.equal(missing.reason, "missing_api_key");
-
-  const conflicting = resolveMcpGatewayEnv(
-    draft({
-      mcpTools: [
-        {
-          name: "orders",
-          transport: "http",
-          url: "https://mcp.example.test/orders/mcp",
-          authTokenEnv: "MCP_ORDERS_TOKEN",
         },
         {
           name: "inventory",
@@ -194,10 +171,12 @@ test("fails closed when a credential is missing or conflicts", () => {
         },
       ],
     }),
-    {
-      MCP_ORDERS_TOKEN: "orders-secret",
-      MCP_INVENTORY_TOKEN: "inventory-secret",
-    },
   );
-  assert.equal(conflicting.reason, "conflicting_api_keys");
+  assert.deepEqual(result, {
+    ok: true,
+    urls: [
+      "https://mcp.example.test/orders/mcp",
+      "https://mcp.example.test/inventory/mcp",
+    ],
+  });
 });

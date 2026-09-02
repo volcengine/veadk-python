@@ -184,9 +184,12 @@ def test_catalog_exposes_fixed_five_options_without_runtime_io(
         "verifier",
         "long_run_control",
     ]
-    assert catalog["profiles"][1]["defaultComponents"] == list(
-        sidecar.STUDIO_HARNESS_COMPONENT_IDS
-    )
+    assert catalog["profiles"][1]["defaultComponents"] == [
+        "context_engine",
+        "verifier",
+        "long_run_control",
+        "mcp_resilience",
+    ]
     assert catalog["profiles"][1]["autoAddedComponents"] == ["sql_readonly"]
 
 
