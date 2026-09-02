@@ -36,6 +36,7 @@ from frontend.server.studio_tools.registry import (
     StudioToolCatalogSnapshot,
     StudioToolExecutionContext,
     StudioToolExecutionError,
+    StudioToolRuntimeError,
 )
 from veadk.integrations.agentkit.studio_channel.protocol import (
     CAPABILITIES_SUFFIX,
@@ -233,6 +234,8 @@ class StudioToolRun:
                     "Studio tool arguments must be an object."
                 )
             tool_name = str(message.get("tool_name") or "")
+            function_call_id = str(message.get("function_call_id") or "").strip()
+            progress_request_id = function_call_id or request_id
 
             async def report_progress(progress: dict[str, Any]) -> None:
                 event = {
@@ -245,9 +248,9 @@ class StudioToolRun:
                             {
                                 "partMetadata": {
                                     "veadkStudioToolProgress": {
-                                        "toolName": tool_name,
-                                        "requestId": request_id,
                                         **progress,
+                                        "toolName": tool_name,
+                                        "requestId": progress_request_id,
                                     }
                                 }
                             }
@@ -273,6 +276,11 @@ class StudioToolRun:
                 context=execution_context,
             )
             content = _bounded_tool_result(content)
+        except StudioToolRuntimeError as exc:
+            status = "error"
+            error = str(exc)
+            if exc.content is not None:
+                content = _bounded_tool_result(exc.content)
         except StudioToolExecutionError as exc:
             status = "denied"
             error = str(exc)

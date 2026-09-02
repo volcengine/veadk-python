@@ -296,7 +296,15 @@ class FakeToolProvisioner:
         self.error = error
         self.calls: list[tuple[str, str, str]] = []
 
-    async def ensure_ready(self, *, image, provider, region):
+    async def ensure_ready(
+        self,
+        *,
+        image,
+        provider,
+        region,
+        existing_tool_id="",
+        on_created=None,
+    ):
         from frontend.server.environments.tool_provisioning import (
             EnvironmentToolState,
         )
@@ -304,8 +312,16 @@ class FakeToolProvisioner:
         self.calls.append((image, provider, region))
         if self.error is not None:
             raise self.error
+        if on_created is not None:
+            await on_created(
+                EnvironmentToolState(
+                    tool_id=existing_tool_id or f"tool-{provider}",
+                    name="studio-env-test",
+                    status="creating",
+                )
+            )
         return EnvironmentToolState(
-            tool_id=f"tool-{provider}",
+            tool_id=existing_tool_id or f"tool-{provider}",
             name="studio-env-test",
             status="ready",
         )
@@ -319,13 +335,76 @@ class BlockingToolProvisioner(FakeToolProvisioner):
         self.started = asyncio.Event()
         self.release = asyncio.Event()
 
-    async def ensure_ready(self, *, image, provider, region):
+    async def ensure_ready(self, *, image, provider, region, **kwargs):
         self.started.set()
         await self.release.wait()
         return await super().ensure_ready(
             image=image,
             provider=provider,
             region=region,
+            **kwargs,
+        )
+
+
+class PersistingToolProvisioner(FakeToolProvisioner):
+    def __init__(self) -> None:
+        import asyncio
+
+        super().__init__()
+        self.persisted = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def ensure_ready(self, *, image, provider, region, on_created, **_kwargs):
+        from frontend.server.environments.tool_provisioning import (
+            EnvironmentToolState,
+        )
+
+        self.calls.append((image, provider, region))
+        state = EnvironmentToolState(
+            tool_id=f"tool-{provider}",
+            name="studio-env-test",
+            status="creating",
+        )
+        await on_created(state)
+        self.persisted.set()
+        await self.release.wait()
+        return EnvironmentToolState(
+            tool_id=state.tool_id,
+            name=state.name,
+            status="ready",
+        )
+
+
+class TimeoutThenReadyToolProvisioner(FakeToolProvisioner):
+    async def ensure_ready(
+        self,
+        *,
+        image,
+        provider,
+        region,
+        existing_tool_id="",
+        on_created=None,
+    ):
+        from frontend.server.environments.tool_provisioning import (
+            EnvironmentToolState,
+        )
+
+        self.calls.append((image, provider, region))
+        tool_id = existing_tool_id or f"tool-{provider}"
+        if on_created is not None:
+            await on_created(
+                EnvironmentToolState(
+                    tool_id=tool_id,
+                    name="studio-env-test",
+                    status="creating",
+                )
+            )
+        if len(self.calls) == 1:
+            raise TimeoutError("Tool is still creating")
+        return EnvironmentToolState(
+            tool_id=tool_id,
+            name="studio-env-test",
+            status="ready",
         )
 
 
@@ -800,11 +879,54 @@ def test_environment_manifest_describes_the_immutable_image_version():
     assert manifest["status"]["toolStatus"] == ""
 
 
+def test_codex_environment_manifest_preserves_the_new_base_environment():
+    service, _tos = _service()
+    app = FastAPI()
+    mount_environment_routes(app, service, lambda _request: "owner")
+    client = TestClient(app)
+
+    environment = client.post(
+        "/web/environments",
+        json=_payload(
+            name="Codex Sandbox",
+            baseEnvironment="codex-sandbox",
+            dockerfile=(
+                "FROM enterprise-public-cn-beijing.cr.volces.com/"
+                "vefaas-public/codexenv:1.1.0"
+            ),
+        ),
+    ).json()
+    assert environment["baseEnvironment"] == "codex-sandbox"
+    listed = client.get("/web/environments").json()["items"]
+    assert (
+        next(item for item in listed if item["id"] == environment["id"])[
+            "baseEnvironment"
+        ]
+        == "codex-sandbox"
+    )
+    build = client.post(f"/web/environments/{environment['id']}/build").json()
+    response = client.get(
+        f"/web/environments/{environment['id']}/builds/{build['versionId']}/manifest"
+    )
+
+    assert response.status_code == 200
+    manifest = response.json()
+    assert manifest["apiVersion"] == "agentkit.studio/v1alpha1"
+    assert manifest["spec"]["baseEnvironment"] == "codex-sandbox"
+    assert manifest["spec"]["baseImage"].endswith("/vefaas-public/codexenv:1.1.0")
+    assert manifest["spec"]["capabilities"] == ["shell-exec"]
+
+
 @pytest.mark.parametrize(
     "provider,region",
     [("volcengine", "cn-beijing"), ("byteplus", "ap-southeast-1")],
 )
-def test_aio_build_provisions_and_persists_a_ready_private_tool(provider, region):
+@pytest.mark.parametrize("base_environment", ["aio-sandbox", "codex-sandbox"])
+def test_sandbox_build_provisions_and_persists_a_ready_private_tool(
+    provider,
+    region,
+    base_environment,
+):
     provisioner = FakeToolProvisioner()
     service, tos = _service(
         cloud=FakeCloud(provider=provider),
@@ -815,7 +937,19 @@ def test_aio_build_provisions_and_persists_a_ready_private_tool(provider, region
     with TestClient(app) as client:
         environment = client.post(
             "/web/environments",
-            json=_payload(baseEnvironment="aio-sandbox"),
+            json=_payload(
+                baseEnvironment=base_environment,
+                **(
+                    {
+                        "dockerfile": (
+                            "FROM enterprise-public-cn-beijing.cr.volces.com/"
+                            "vefaas-public/codexenv:1.1.0"
+                        )
+                    }
+                    if base_environment == "codex-sandbox"
+                    else {}
+                ),
+            ),
         ).json()
         started = client.post(f"/web/environments/{environment['id']}/build").json()
 
@@ -851,6 +985,7 @@ def test_aio_build_provisions_and_persists_a_ready_private_tool(provider, region
     assert persisted["toolStatus"] == "ready"
     assert manifest["status"]["toolId"] == f"tool-{provider}"
     assert manifest["status"]["toolStatus"] == "ready"
+    assert manifest["spec"]["baseEnvironment"] == base_environment
 
 
 def test_ubuntu_build_does_not_provision_a_private_tool():
@@ -1043,6 +1178,67 @@ async def test_persisted_creating_state_resumes_after_service_restart():
     assert completed.tool_id == "tool-volcengine"
     assert completed.tool_status == "ready"
     assert len(resumed_provisioner.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_tool_id_is_persisted_before_readiness_poll_completes():
+    tos = FakeTos()
+    repository = TosEnvironmentRepository(bucket="studio", client_factory=lambda: tos)
+    provisioner = PersistingToolProvisioner()
+    service = EnvironmentService(
+        repository,
+        cast(EnvironmentCloudGateway, FakeCloud()),
+        tool_provisioner=provisioner,
+    )
+    environment = await service.create(
+        "owner",
+        EnvironmentInput.model_validate(_payload(baseEnvironment="aio-sandbox")),
+    )
+    started = await service.start_build("owner", environment.id)
+
+    await service.get_build("owner", environment.id, started.version_id)
+    await provisioner.persisted.wait()
+    creating = await repository.get_build("owner", environment.id, started.version_id)
+
+    assert creating.status == "building"
+    assert creating.tool_id == "tool-volcengine"
+    assert creating.tool_status == "creating"
+    provisioner.release.set()
+    await __import__("asyncio").gather(*service._tool_tasks.values())
+
+
+@pytest.mark.asyncio
+async def test_tool_ready_timeout_remains_resumable_with_persisted_id():
+    provisioner = TimeoutThenReadyToolProvisioner()
+    service, _tos = _service(tool_provisioner=provisioner)
+    environment = await service.create(
+        "owner",
+        EnvironmentInput.model_validate(_payload(baseEnvironment="aio-sandbox")),
+    )
+    started = await service.start_build("owner", environment.id)
+
+    await service.get_build("owner", environment.id, started.version_id)
+    await __import__("asyncio").gather(*service._tool_tasks.values())
+    waiting = await service._require_repository().get_build(
+        "owner", environment.id, started.version_id
+    )
+
+    assert waiting.status == "building"
+    assert waiting.tool_id == "tool-volcengine"
+    assert waiting.tool_status == "creating"
+    assert waiting.progress_error == "Tool is still creating"
+
+    resumed = await service.get_build("owner", environment.id, started.version_id)
+    assert resumed.tool_status == "creating"
+    await __import__("asyncio").gather(*service._tool_tasks.values())
+    completed = await service._require_repository().get_build(
+        "owner", environment.id, started.version_id
+    )
+    assert completed.status == "available"
+    assert completed.tool_id == "tool-volcengine"
+    assert completed.tool_status == "ready"
+    assert completed.progress_error == ""
+    assert len(provisioner.calls) == 2
 
 
 def _wait_for_build(client: TestClient, url: str) -> dict:

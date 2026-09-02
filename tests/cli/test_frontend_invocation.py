@@ -25,6 +25,7 @@ from google.adk.tools.skill_toolset import SkillToolset
 from google.genai import types
 
 from veadk.cli.frontend_invocation import (
+    CODEX_SANDBOX_ENVIRONMENT_METADATA_KEY,
     ENVIRONMENT_MOUNTS_METADATA_KEY,
     FrontendInvocationPlugin,
     agent_skill_summaries,
@@ -124,6 +125,33 @@ async def test_no_mounted_environment_adds_no_system_instruction() -> None:
     )
 
     assert request.config.system_instruction is None
+
+
+@pytest.mark.asyncio
+async def test_codex_sandbox_environment_requires_one_delegated_task() -> None:
+    plugin = FrontendInvocationPlugin()
+    request = _request(
+        "list_envs",
+        "get_env_manifest",
+        "execute_in_sandbox",
+        "delegate_to_codex_sandbox",
+    )
+
+    await plugin.before_model_callback(
+        callback_context=_context(  # type: ignore[arg-type]
+            agent_name="root",
+            metadata={
+                ENVIRONMENT_MOUNTS_METADATA_KEY: True,
+                CODEX_SANDBOX_ENVIRONMENT_METADATA_KEY: True,
+            },
+        ),
+        llm_request=request,
+    )
+
+    instruction = str(request.config.system_instruction)
+    assert "call `delegate_to_codex_sandbox` once" in instruction
+    assert "self-contained, outcome-oriented task" in instruction
+    assert "Do not split that task" in instruction
 
 
 @pytest.mark.asyncio

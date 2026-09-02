@@ -509,14 +509,25 @@ The Studio `环境` page stores each environment definition, generated Dockerfil
 build version, log metadata, and resulting image reference in the private Studio
 TOS bucket. Creating or saving an environment starts an asynchronous
 CodePipeline build and pushes the resulting image to Container Registry.
-New environments default to the AIO Sandbox base image, which keeps the inherited
-`/opt/gem/run.sh` entrypoint and port `8080` so the Sandbox Shell API remains
-available. Standard Ubuntu 22.04 and 24.04 images remain supported, and records
-created before the base-environment field was introduced resolve to Ubuntu.
+Custom and Dockerfile environments can select a preset environment: none, AIO
+Sandbox, or Codex Sandbox. Selecting a preset pins its `FROM` instruction ahead
+of the editable Dockerfile body; selecting none leaves the complete Dockerfile
+under user control. AIO Sandbox keeps the inherited `/opt/gem/run.sh` entrypoint
+and port `8080`, while Codex Sandbox exposes task delegation through its Codex
+App Server instead of the generic Sandbox shell tool. Legacy records created
+before preset environments were introduced remain compatible.
 Each image version exposes a read-only Manifest at
 `/web/environments/{environmentId}/builds/{versionId}/manifest`; the Studio
 environment card opens the same version-bound contract as YAML for inspection
 and copying.
+
+When an environment is mounted to an Agent conversation, Studio assigns a new
+`mount_instance_id`. Sandbox Tool Sessions are reused only while the Agent
+session, mount instance, environment version, Tool ID, image, provider, and
+region all remain unchanged. Unmounting and mounting again creates a new mount
+instance and therefore a new Sandbox Tool Session. Codex Sandbox progress and
+its Sandbox Session and Codex Thread identifiers are streamed into the normal
+tool-call card and preserved in conversation history.
 Volcengine builds use the Aliyun PyPI mirror, Huawei Cloud Python source mirror,
 and npmmirror for Playwright browsers; BytePlus builds use the corresponding
 official sources. Cross-version Python combinations are compiled from pinned

@@ -158,6 +158,46 @@ function PlanIcon() {
   );
 }
 
+function SandboxHandoffIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M5 5v7.25A3.75 3.75 0 0 0 8.75 16H19" />
+      <path d="m15.5 12.5 3.5 3.5-3.5 3.5" />
+    </svg>
+  );
+}
+
+function CodexSandboxIdentity({
+  activity,
+}: {
+  activity: NonNullable<Extract<Block, { kind: "tool" }>["codexActivity"]>;
+}) {
+  const details: Array<[string, string | undefined]> = [
+    ["Agent Session", activity.agentSessionId],
+    ["Sandbox Session", activity.sandboxSessionId],
+    ["Codex Thread", activity.threadId],
+  ].filter((entry): entry is [string, string] => Boolean(entry[1]));
+  if (!details.length) return null;
+  return (
+    <dl className="codex-sandbox-run__identity" aria-label="Codex Sandbox 执行标识">
+      {details.map(([label, value]) => (
+        <div key={label}>
+          <dt>{label}</dt>
+          <dd title={value}>{value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 function loadSkillLabel(name: string, args: unknown): string | undefined {
   if (name !== "load_skill" || args == null || typeof args !== "object" || Array.isArray(args)) {
     return undefined;
@@ -624,7 +664,9 @@ function ToolBlock({
   status,
   defaultOpen = false,
   retrying = false,
+  codexActivity,
   onBranchSelect,
+  onAction,
 }: {
   name: string;
   args?: unknown;
@@ -633,7 +675,9 @@ function ToolBlock({
   status?: "running" | "completed" | "failed";
   defaultOpen?: boolean;
   retrying?: boolean;
+  codexActivity?: Extract<Block, { kind: "tool" }>["codexActivity"];
   onBranchSelect?: (branch: BranchCompareBranch) => void;
+  onAction: BlocksProps["onAction"];
 }) {
   const inferredCreateAgentFailure = name === "create_agents"
     && done
@@ -647,7 +691,7 @@ function ToolBlock({
   const builtinTool = getBuiltinToolDefinition(name);
   const DetailRenderer = builtinTool?.detailRenderer;
   const hideHeader = builtinTool?.hideHeader === true;
-  const shouldDefaultOpen = hideHeader || defaultOpen || Boolean(DetailRenderer);
+  const shouldDefaultOpen = hideHeader || defaultOpen || Boolean(DetailRenderer) || Boolean(codexActivity);
   const [open, setOpen] = useState(shouldDefaultOpen);
   const touched = useRef(false);
   useEffect(() => {
@@ -709,6 +753,34 @@ function ToolBlock({
       ) : null}
       <div className={`${hideHeader ? "" : "think-collapse "}${open ? "open" : ""}`}>
         <div className="think-collapse-inner">
+          {codexActivity ? (
+            <section
+              className="codex-sandbox-run"
+              aria-label="Codex Sandbox 详细输出"
+            >
+              <div className="codex-sandbox-run__label">
+                <span className="codex-sandbox-run__badge">
+                  <SandboxHandoffIcon />
+                  <span>Codex Sandbox</span>
+                </span>
+                <span className="codex-sandbox-run__title">{codexActivity.title}</span>
+              </div>
+              <CodexSandboxIdentity activity={codexActivity} />
+              <div className="codex-sandbox-run__stream">
+                {codexActivity.items.length > 0 ? (
+                  <Blocks
+                    blocks={codexActivity.items.map((item) => item.block)}
+                    streaming={!done}
+                    onAction={onAction}
+                  />
+                ) : (
+                  <TextShimmer className="codex-sandbox-run__empty">
+                    正在等待 Codex 输出
+                  </TextShimmer>
+                )}
+              </div>
+            </section>
+          ) : null}
           {DetailRenderer ? (
             <DetailRenderer
               args={args}
@@ -1080,7 +1152,9 @@ export function Blocks({
                 defaultOpen={b.defaultOpen}
                 retrying={b.name === "create_agents"
                   && (streaming || hasLaterCreateAgentAttempt)}
+                codexActivity={b.codexActivity}
                 onBranchSelect={onBranchSelect}
+                onAction={onAction}
               />
             );
           }

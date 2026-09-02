@@ -247,6 +247,31 @@ async def test_provisioner_injects_model_environment_on_create() -> None:
 
 
 @pytest.mark.asyncio
+async def test_provisioner_resolves_credentials_off_the_event_loop() -> None:
+    import threading
+
+    event_loop_thread = threading.get_ident()
+    resolver_threads: list[int] = []
+    client = _FakeToolsClient(statuses=["Ready"])
+    provisioner = AgentkitEnvironmentToolProvisioner(
+        lambda _provider, _region: client,
+        model_environment_resolver=lambda _provider, _region: (
+            resolver_threads.append(threading.get_ident()) or {}
+        ),
+        poll_interval_seconds=0,
+    )
+
+    await provisioner.ensure_ready(
+        image="registry.example/aio:threaded-credentials",
+        provider="volcengine",
+        region="cn-beijing",
+    )
+
+    assert resolver_threads
+    assert resolver_threads[0] != event_loop_thread
+
+
+@pytest.mark.asyncio
 async def test_provisioner_updates_changed_model_env_and_preserves_other_envs() -> None:
     client = _FakeToolsClient(statuses=["Ready", "Ready"])
     client.tools.append(
@@ -286,6 +311,51 @@ async def test_provisioner_updates_changed_model_env_and_preserves_other_envs() 
     assert envs["MODEL_AGENT_NAME"] == "new-model"
     assert envs["UNRELATED_ENV"] == "preserved"
     assert client.updated[0].model_agent_name == "new-model"
+
+
+@pytest.mark.asyncio
+async def test_provisioner_resumes_creating_tool_without_restarting_update() -> None:
+    client = _FakeToolsClient(statuses=["Creating", "Ready"])
+    client.tools.append(
+        SimpleNamespace(
+            name="studio-env-6ad974efe5bc7eda",
+            project_name="default",
+            tool_type="Private",
+            tool_id="tool-existing",
+            image_url="registry.example/aio:model-update",
+            command="/opt/gem/run.sh",
+            port=8080,
+            envs=[SimpleNamespace(key="MODEL_AGENT_API_KEY", value="old-key")],
+            status="Creating",
+        )
+    )
+    client.list_tools = lambda _request: pytest.fail(
+        "a persisted Tool ID must bypass name lookup"
+    )
+    observed: list[tuple[str, str]] = []
+    provisioner = AgentkitEnvironmentToolProvisioner(
+        lambda _provider, _region: client,
+        model_environment_resolver=lambda _provider, _region: {
+            "MODEL_AGENT_API_KEY": "new-key",
+        },
+        poll_interval_seconds=0,
+    )
+
+    state = await provisioner.ensure_ready(
+        image="registry.example/aio:model-update",
+        provider="volcengine",
+        region="cn-beijing",
+        existing_tool_id="tool-existing",
+        on_created=lambda tool: _record_tool_state(observed, tool),
+    )
+
+    assert state.tool_id == "tool-existing"
+    assert observed == [("tool-existing", "creating")]
+    assert client.updated == []
+
+
+async def _record_tool_state(observed: list[tuple[str, str]], tool: Any) -> None:
+    observed.append((tool.tool_id, tool.status))
 
 
 def test_provisioner_default_ready_timeout_allows_slow_first_creation() -> None:

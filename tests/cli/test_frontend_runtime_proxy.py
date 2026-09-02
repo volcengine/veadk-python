@@ -121,6 +121,7 @@ def test_runtime_proxy_uses_same_socket_studio_tool_channel_when_enabled(
                     "veadkInvocation": {
                         "skills": [{"name": "review-code"}],
                         "environmentMounts": True,
+                        "codexSandboxEnvironment": True,
                     }
                 },
                 "platform_tools": [
@@ -260,6 +261,14 @@ def test_runtime_proxy_resolves_environment_mount_without_forwarding_it(
         image="registry.example/aio:test",
         provider="volcengine",
         region="cn-beijing",
+        name="ANR Review",
+        description="Review requirements with ANR.",
+        manifest={
+            "spec": {
+                "baseEnvironment": "codex-sandbox",
+                "capabilities": ["review", "anr-cli"],
+            }
+        },
     )
     resolved: dict[str, Any] = {}
 
@@ -313,6 +322,20 @@ def test_runtime_proxy_resolves_environment_mount_without_forwarding_it(
     assert opened["environment_mount"] is mount
     assert opened["owner_id"] == "local"
     assert "environment_mount" not in opened["payload"]
+    assert {item["name"] for item in opened["catalog"].manifests()} == {
+        "delegate_to_codex_sandbox",
+        "execute_in_sandbox",
+        "get_city_weather",
+        "get_env_manifest",
+        "list_envs",
+    }
+    invocation = opened["payload"]["custom_metadata"]["veadkInvocation"]
+    assert invocation["environmentMounts"] is True
+    assert invocation["codexSandboxEnvironment"] is True
+    routing_instruction = opened["payload"]["new_message"]["parts"][1]["text"]
+    assert "base_environment=codex-sandbox" in routing_instruction
+    assert "delegate_to_codex_sandbox once" in routing_instruction
+    assert '"base_environment": "codex-sandbox"' in routing_instruction
 
 
 @pytest.mark.parametrize("provider", ["volcengine", "byteplus"])
@@ -416,7 +439,10 @@ def test_runtime_proxy_resolves_multiple_environment_mounts_and_adds_tools(
                 "session_id": "session-1",
                 "new_message": {"role": "user", "parts": [{"text": "pwd"}]},
                 "custom_metadata": {
-                    "veadkInvocation": {"skills": [{"name": "review-code"}]}
+                    "veadkInvocation": {
+                        "skills": [{"name": "review-code"}],
+                        "codexSandboxEnvironment": True,
+                    }
                 },
                 "platform_tools": [],
                 "environment_mounts": [
@@ -539,6 +565,7 @@ def test_runtime_tool_capabilities_expose_safe_local_metadata(
         *list_builtin_tools(),
         "branch_compare",
         "current_time",
+        "delegate_to_codex_sandbox",
         "execute_in_sandbox",
         "get_env_manifest",
         "list_envs",

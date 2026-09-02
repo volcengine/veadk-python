@@ -87,6 +87,14 @@ const BUILTIN_TOOLS: Readonly<Record<string, BuiltinToolDefinition>> = {
     tone: "sandbox",
     icon: ExecuteInSandboxIcon,
   },
+  delegate_to_codex_sandbox: {
+    name: "delegate_to_codex_sandbox",
+    runningLabel: "Codex Sandbox 正在执行",
+    doneLabel: "Codex Sandbox 已完成",
+    failedLabel: "Codex Sandbox 执行失败",
+    tone: "sandbox",
+    icon: ExecuteInSandboxIcon,
+  },
   image_generate: {
     name: "image_generate",
     runningLabel: "正在生成图片",

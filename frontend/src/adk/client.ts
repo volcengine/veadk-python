@@ -2107,11 +2107,13 @@ export interface SystemInfoResponse {
 }
 
 export type EnvironmentOperatingSystem = "ubuntu-22.04" | "ubuntu-24.04";
-export type EnvironmentBaseEnvironment = "ubuntu" | "aio-sandbox";
+export type EnvironmentBaseEnvironment = "ubuntu" | "aio-sandbox" | "codex-sandbox";
 export type EnvironmentLanguage = "python-3.10" | "python-3.12";
 export interface SessionEnvironmentMountSelection {
   environment_id: string;
   environment_version_id: string;
+  /** Identifies one continuous attachment; absent for legacy Studio clients. */
+  mount_instance_id?: string;
 }
 export type EnvironmentBuildStatus =
   | "preparing"
@@ -2459,7 +2461,7 @@ function environmentBuildVersion(value: unknown): EnvironmentBuildVersion | null
   };
 }
 
-function environmentManifest(value: unknown): EnvironmentManifest {
+export function parseEnvironmentManifest(value: unknown): EnvironmentManifest {
   if (!value || typeof value !== "object") {
     throw new Error("环境 Manifest 响应格式无效");
   }
@@ -2474,7 +2476,9 @@ function environmentManifest(value: unknown): EnvironmentManifest {
     typeof candidate.metadata.description !== "string" ||
     !candidate.spec ||
     typeof candidate.spec.image !== "string" ||
-    !["ubuntu", "aio-sandbox"].includes(candidate.spec.baseEnvironment) ||
+    !["ubuntu", "aio-sandbox", "codex-sandbox"].includes(
+      candidate.spec.baseEnvironment,
+    ) ||
     typeof candidate.spec.baseImage !== "string" ||
     !["ubuntu-22.04", "ubuntu-24.04"].includes(candidate.spec.operatingSystem) ||
     !["python-3.10", "python-3.12"].includes(candidate.spec.language) ||
@@ -2550,7 +2554,8 @@ function studioEnvironment(value: unknown): StudioEnvironment {
     typeof candidate.description !== "string" ||
     (candidate.baseEnvironment !== undefined &&
       candidate.baseEnvironment !== "ubuntu" &&
-      candidate.baseEnvironment !== "aio-sandbox") ||
+      candidate.baseEnvironment !== "aio-sandbox" &&
+      candidate.baseEnvironment !== "codex-sandbox") ||
     (candidate.operatingSystem !== "ubuntu-22.04" &&
       candidate.operatingSystem !== "ubuntu-24.04") ||
     (candidate.language !== "python-3.10" && candidate.language !== "python-3.12") ||
@@ -2565,7 +2570,11 @@ function studioEnvironment(value: unknown): StudioEnvironment {
   }
   return {
     ...candidate,
-    baseEnvironment: candidate.baseEnvironment === "aio-sandbox" ? "aio-sandbox" : "ubuntu",
+    baseEnvironment: candidate.baseEnvironment === "aio-sandbox"
+      ? "aio-sandbox"
+      : candidate.baseEnvironment === "codex-sandbox"
+        ? "codex-sandbox"
+        : "ubuntu",
     selectedSkills: candidate.selectedSkills ?? [],
     gitSource: environmentGitSource(candidate.gitSource),
     containerRepository: environmentContainerRepository(candidate.containerRepository),
@@ -2812,12 +2821,21 @@ async function writeEnvironment(
   input: EnvironmentInput,
   signal?: AbortSignal,
 ): Promise<StudioEnvironment> {
-  const response = await apiFetch(path, {
-    method,
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-    signal,
-  });
+  let response: Response;
+  try {
+    response = await apiFetch(path, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+      signal,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    if (error instanceof TypeError) {
+      throw new Error("无法连接 Studio 服务，请确认后端已启动后重试。");
+    }
+    throw error;
+  }
   if (!response.ok) {
     throw new Error(await httpErrorMessage(response, "保存环境失败"));
   }
@@ -2903,7 +2921,7 @@ export async function getEnvironmentManifest(
   if (!response.ok) {
     throw new Error(await httpErrorMessage(response, "读取环境 Manifest 失败"));
   }
-  return environmentManifest(await response.json());
+  return parseEnvironmentManifest(await response.json());
 }
 
 function environmentBuildResource(value: unknown): EnvironmentBuildResource {

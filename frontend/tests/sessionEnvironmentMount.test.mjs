@@ -16,17 +16,45 @@ test("runSSE keeps multiple environment mounts in the Studio BFF request only", 
   assert.match(clientSource, /environment_mount: environmentMount/);
   assert.match(clientSource, /environment_id: string/);
   assert.match(clientSource, /environment_version_id: string/);
+  assert.match(clientSource, /mount_instance_id\?: string/);
   assert.match(clientSource, /toolStatus: EnvironmentSandboxToolStatus/);
   assert.match(clientSource, /toolId: typeof candidate\.toolId === "string"/);
 });
 
-test("Studio offers only tool-ready AIO Sandbox environment versions", () => {
-  assert.match(appSource, /environment\.baseEnvironment === "aio-sandbox"/);
+test("environment mounts preserve one attachment id and renew it after remount", () => {
+  assert.match(
+    pickerSource,
+    /const existingMounts = new Map\(value\.map\(\(mount\) => \[mountKey\(mount\), mount\]\)\)/,
+  );
+  assert.match(
+    pickerSource,
+    /mount_instance_id: existing\?\.mount_instance_id \|\| crypto\.randomUUID\(\)/,
+  );
+});
+
+test("Studio offers tool-ready AIO and Codex Sandbox environment versions", () => {
+  assert.match(appSource, /\["aio-sandbox", "codex-sandbox"\]\.includes\(environment\.baseEnvironment\)/);
   assert.match(appSource, /environment\.latestVersion\?\.status === "available"/);
   assert.match(appSource, /environment\.latestVersion\.toolStatus === "ready"/);
   assert.match(appSource, /Boolean\(environment\.latestVersion\.toolId\)/);
   assert.match(appSource, /listEnvironments\(controller\.signal\)/);
   assert.match(appSource, /listWorkspaces\(controller\.signal\)/);
+});
+
+test("environment picker refreshes its snapshot on open and drops stale selections", () => {
+  assert.match(pickerSource, /onRefresh\?: \(\) => void \| Promise<void>/);
+  assert.match(pickerSource, /setOpen\(true\);[\s\S]*?void onRefresh\?\.\(\)/);
+  assert.match(railSource, /onRefresh=\{onEnvironmentsRefresh\}/);
+  assert.match(appSource, /const refreshSessionEnvironments = useCallback/);
+  assert.match(appSource, /setSessionEnvironments\(availableEnvironments\)/);
+  assert.match(appSource, /setSessionWorkspaces\(workspaces\)/);
+  assert.match(appSource, /selections\.filter\(\(selection\) => availableMountKeys\.has/);
+  assert.match(appSource, /workspaceIds\.filter\(\(workspaceId\) => availableWorkspaceIds\.has/);
+  assert.match(appSource, /onEnvironmentsRefresh=\{refreshSessionEnvironments\}/);
+  assert.doesNotMatch(
+    pickerSource,
+    /disabled=\{disabled \|\| loading \|\| Boolean\(error\) \|\| environments\.length === 0\}/,
+  );
 });
 
 test("environments are mounted dynamically after a Session exists", () => {
@@ -35,7 +63,7 @@ test("environments are mounted dynamically after a Session exists", () => {
   assert.match(appSource, /const environmentMounts = createsSession\s*\? \[\]/);
   assert.match(appSource, /if \(!sessionId\) return;/);
   assert.match(appSource, /setEnvironmentMountsBySession\(\(current\) => \(\{/);
-  assert.match(appSource, /ENVIRONMENT_STUDIO_TOOL_IDS = \[[\s\S]*?"list_envs"[\s\S]*?"get_env_manifest"[\s\S]*?"execute_in_sandbox"/);
+  assert.match(appSource, /ENVIRONMENT_STUDIO_TOOL_IDS = \[[\s\S]*?"list_envs"[\s\S]*?"get_env_manifest"[\s\S]*?"execute_in_sandbox"[\s\S]*?"delegate_to_codex_sandbox"/);
   assert.match(appSource, /selections\.length > 0[\s\S]*?ENVIRONMENT_STUDIO_TOOL_IDS[\s\S]*?selectedIds\.filter/);
   assert.match(appSource, /const visibleStudioTools = studioToolCapabilities\?\.tools\.filter/);
   assert.match(appSource, /managedStudioToolIds=\{selectedEnvironmentMounts\.length > 0/);

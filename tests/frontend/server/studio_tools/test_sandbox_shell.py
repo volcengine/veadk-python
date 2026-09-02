@@ -30,6 +30,7 @@ from frontend.server.studio_tools.registry import (
 from frontend.server.studio_tools.sandbox_shell import (
     AgentkitEnvironmentSandboxResolver,
     SandboxExecutionTarget,
+    _user_session_id,
     execute_in_sandbox,
     register_sandbox_shell_tool,
 )
@@ -336,22 +337,103 @@ async def test_registered_tool_uses_only_the_current_context_mount(
 @pytest.mark.asyncio
 async def test_agentkit_resolver_reuses_tool_and_session_per_agent_session() -> None:
     client = _FakeAgentkitClient()
-    _remember_tool(client, _mount())
+    mount = replace(_mount(), mount_instance_id="mount-1")
+    _remember_tool(client, mount)
     resolver = AgentkitEnvironmentSandboxResolver(
         lambda provider, region: client,
         poll_interval_seconds=0,
     )
 
-    first = await resolver.resolve(_mount(), _context(mount=_mount()))
-    repeated = await resolver.resolve(_mount(), _context(mount=_mount()))
-    second_session = await resolver.resolve(
-        _mount(), _context("session-2", mount=_mount())
+    first = await resolver.resolve(mount, _context(mount=mount))
+    repeated = await resolver.resolve(mount, _context(mount=mount))
+    second_session = await resolver.resolve(mount, _context("session-2", mount=mount))
+    restarted_resolver = AgentkitEnvironmentSandboxResolver(
+        lambda provider, region: client,
+        poll_interval_seconds=0,
     )
+    after_restart = await restarted_resolver.resolve(mount, _context(mount=mount))
 
     assert first == repeated
+    assert after_restart.session_id == first.session_id
     assert first.session_id != second_session.session_id
     assert client.created_tools == []
     assert len(client.created_sessions) == 2
+
+
+@pytest.mark.asyncio
+async def test_agentkit_resolver_does_not_reuse_across_environment_versions() -> None:
+    client = _FakeAgentkitClient()
+    first = _mount()
+    replacement = replace(first, environment_version_id="version-2")
+    _remember_tool(client, first)
+    resolver = AgentkitEnvironmentSandboxResolver(
+        lambda provider, region: client,
+        poll_interval_seconds=0,
+    )
+    context = _context(mount=first)
+
+    first_target = await resolver.resolve(first, context)
+    replacement_target = await resolver.resolve(replacement, context)
+
+    assert first_target.session_id != replacement_target.session_id
+    assert len(client.created_sessions) == 2
+
+
+@pytest.mark.asyncio
+async def test_agentkit_resolver_does_not_reuse_across_images() -> None:
+    client = _FakeAgentkitClient()
+    first = _mount()
+    replacement = replace(first, image="registry.example/anr-review:v2")
+    _remember_tool(client, first)
+    resolver = AgentkitEnvironmentSandboxResolver(
+        lambda provider, region: client,
+        poll_interval_seconds=0,
+    )
+    context = _context(mount=first)
+
+    first_target = await resolver.resolve(first, context)
+    client.tools[0].image_url = replacement.image
+    replacement_target = await resolver.resolve(replacement, context)
+
+    assert first_target.session_id != replacement_target.session_id
+    assert len(client.created_sessions) == 2
+
+
+@pytest.mark.asyncio
+async def test_agentkit_resolver_does_not_reuse_after_remount() -> None:
+    client = _FakeAgentkitClient()
+    first = replace(_mount(), mount_instance_id="mount-1")
+    remounted = replace(first, mount_instance_id="mount-2")
+    _remember_tool(client, first)
+    resolver = AgentkitEnvironmentSandboxResolver(
+        lambda provider, region: client,
+        poll_interval_seconds=0,
+    )
+    context = _context(mount=first)
+
+    first_target = await resolver.resolve(first, context)
+    remounted_target = await resolver.resolve(remounted, context)
+
+    assert first_target.session_id != remounted_target.session_id
+    assert len(client.created_sessions) == 2
+
+
+@pytest.mark.asyncio
+async def test_agentkit_resolver_reuses_legacy_mount_without_instance_id() -> None:
+    client = _FakeAgentkitClient()
+    mount = _mount()
+    _remember_tool(client, mount)
+    resolver = AgentkitEnvironmentSandboxResolver(
+        lambda provider, region: client,
+        poll_interval_seconds=0,
+    )
+    context = _context(mount=mount)
+
+    first_target = await resolver.resolve(mount, context)
+    repeated_target = await resolver.resolve(replace(mount), context)
+
+    assert first_target is repeated_target
+    assert len(client.created_sessions) == 1
 
 
 @pytest.mark.asyncio
@@ -369,6 +451,43 @@ async def test_agentkit_resolver_uses_persisted_ready_tool_id() -> None:
     assert target.tool_id == "tool-persisted"
     assert client.created_tools == []
     assert len(client.created_sessions) == 1
+
+
+@pytest.mark.asyncio
+async def test_agentkit_resolver_waits_for_session_ready_even_with_endpoint() -> None:
+    class TransitionalClient(_FakeAgentkitClient):
+        polls = 0
+
+        def get_session(self, request: Any) -> Any:
+            session = super().get_session(request)
+            self.polls += 1
+            if self.polls == 1:
+                return SimpleNamespace(**{**session.__dict__, "status": "Creating"})
+            session.status = "Ready"
+            return session
+
+    client = TransitionalClient()
+    mount = _mount()
+    context = _context(mount=mount)
+    _remember_tool(client, mount)
+    client.sessions.append(
+        SimpleNamespace(
+            session_id="sandbox-existing",
+            tool_id=mount.tool_id,
+            user_session_id=_user_session_id(context, mount),
+            endpoint="https://sandbox.example?Authorization=secret",
+            status="Creating",
+        )
+    )
+    resolver = AgentkitEnvironmentSandboxResolver(
+        lambda provider, region: client,
+        poll_interval_seconds=0,
+    )
+
+    target = await resolver.resolve(mount, context)
+
+    assert target.session_id == "sandbox-existing"
+    assert client.polls == 2
 
 
 @pytest.mark.asyncio
@@ -580,6 +699,7 @@ async def test_environment_tools_list_describe_and_enforce_mount_whitelist(
                 "environment_version_id": "version-1",
                 "name": "AIO environment",
                 "description": "Includes common CLIs",
+                "base_environment": "",
                 "capabilities": ["shell", "cli"],
             },
             {
@@ -587,6 +707,7 @@ async def test_environment_tools_list_describe_and_enforce_mount_whitelist(
                 "environment_version_id": "version-2",
                 "name": "Python data",
                 "description": "Data analysis tools",
+                "base_environment": "",
                 "capabilities": ["shell", "python"],
             },
         ]
@@ -602,6 +723,63 @@ async def test_environment_tools_list_describe_and_enforce_mount_whitelist(
             executor_revision="environment-catalog-v1",
             arguments={"environment_id": "a" * 32},
             context=context,
+        )
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_rejects_codex_environment_fallback() -> None:
+    codex_mount = replace(
+        _mount(),
+        manifest={
+            "apiVersion": "agentkit.studio/v1alpha1",
+            "kind": "Environment",
+            "metadata": {"id": "e" * 32, "name": "Codex environment"},
+            "spec": {
+                "baseEnvironment": "codex-sandbox",
+                "capabilities": ["shell", "cli"],
+            },
+        },
+    )
+
+    class Mounts:
+        @staticmethod
+        def get(
+            context: StudioToolExecutionContext, environment_id: str = ""
+        ) -> SessionEnvironmentMount:
+            del context, environment_id
+            return codex_mount
+
+        @staticmethod
+        def get_all(
+            context: StudioToolExecutionContext,
+        ) -> tuple[SessionEnvironmentMount, ...]:
+            del context
+            return (codex_mount,)
+
+    class Targets:
+        async def resolve(
+            self,
+            mount: SessionEnvironmentMount,
+            context: StudioToolExecutionContext,
+        ) -> SandboxExecutionTarget:
+            raise AssertionError((mount, context))
+
+    registry = StudioToolRegistry()
+    register_sandbox_shell_tool(
+        registry,
+        mounts=Mounts(),  # type: ignore[arg-type]
+        target_resolver=Targets(),
+    )
+
+    with pytest.raises(
+        StudioToolExecutionError,
+        match="delegate_to_codex_sandbox",
+    ):
+        await registry.execute(
+            name="execute_in_sandbox",
+            executor_revision="aio-shell-v2",
+            arguments={"environment_id": "e" * 32, "command": "pwd"},
+            context=_context(mount=codex_mount),
         )
 
 

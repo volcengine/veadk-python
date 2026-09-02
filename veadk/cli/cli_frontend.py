@@ -2670,6 +2670,8 @@ def _run_frontend_server(
 
     from frontend.server.studio_tools import (
         AgentkitEnvironmentSandboxResolver,
+        CodexSandboxDelegate,
+        register_codex_sandbox_tool,
         register_sandbox_shell_tool,
     )
 
@@ -2689,7 +2691,14 @@ def _run_frontend_server(
         mounts=session_environment_mounts,
         target_resolver=environment_sandbox_resolver,
     )
+    environment_codex_delegate = CodexSandboxDelegate(environment_sandbox_resolver)
+    register_codex_sandbox_tool(
+        studio_tool_registry,
+        mounts=session_environment_mounts,
+        delegate=environment_codex_delegate,
+    )
     app.state.environment_sandbox_resolver = environment_sandbox_resolver
+    app.state.environment_codex_delegate = environment_codex_delegate
 
     def _sandbox_owner(request: Request) -> str:
         principal = _current_principal(request)
@@ -9506,7 +9515,10 @@ def _run_frontend_server(
                     try:
                         await evaluation_automation.close()
                     finally:
-                        await agent_usage_service.close()
+                        try:
+                            await agent_usage_service.close()
+                        finally:
+                            await environment_codex_delegate.close()
 
         app.router.lifespan_context = _studio_services_lifespan
         mount_evaluation_automation_routes(
@@ -9708,6 +9720,7 @@ def _run_frontend_server(
                     status_code=400, detail="run_sse request body must be an object"
                 )
             from veadk.cli.frontend_invocation import (
+                CODEX_SANDBOX_ENVIRONMENT_METADATA_KEY,
                 ENVIRONMENT_MOUNTS_METADATA_KEY,
                 INVOCATION_METADATA_KEY,
             )
@@ -9718,6 +9731,10 @@ def _run_frontend_server(
                 if isinstance(invocation_metadata, dict):
                     invocation_metadata = dict(invocation_metadata)
                     invocation_metadata.pop(ENVIRONMENT_MOUNTS_METADATA_KEY, None)
+                    invocation_metadata.pop(
+                        CODEX_SANDBOX_ENVIRONMENT_METADATA_KEY,
+                        None,
+                    )
                     custom_metadata = dict(custom_metadata)
                     custom_metadata[INVOCATION_METADATA_KEY] = invocation_metadata
                     payload["custom_metadata"] = custom_metadata
@@ -9791,6 +9808,21 @@ def _run_frontend_server(
                                 "list_envs",
                                 "get_env_manifest",
                                 "execute_in_sandbox",
+                                *(
+                                    ["delegate_to_codex_sandbox"]
+                                    if any(
+                                        isinstance(mount.manifest, Mapping)
+                                        and isinstance(
+                                            mount.manifest.get("spec"), Mapping
+                                        )
+                                        and mount.manifest["spec"].get(
+                                            "baseEnvironment"
+                                        )
+                                        == "codex-sandbox"
+                                        for mount in session_environment_mounts_for_run
+                                    )
+                                    else []
+                                ),
                             ]
                         )
                     )
@@ -9809,9 +9841,21 @@ def _run_frontend_server(
                         raise TypeError(
                             f"custom_metadata.{INVOCATION_METADATA_KEY} must be an object"
                         )
+                    has_codex_sandbox_environment = any(
+                        isinstance(mount.manifest, Mapping)
+                        and isinstance(mount.manifest.get("spec"), Mapping)
+                        and mount.manifest["spec"].get("baseEnvironment")
+                        == "codex-sandbox"
+                        for mount in session_environment_mounts_for_run
+                    )
                     invocation_metadata = {
                         **invocation_metadata,
                         ENVIRONMENT_MOUNTS_METADATA_KEY: True,
+                        **(
+                            {CODEX_SANDBOX_ENVIRONMENT_METADATA_KEY: True}
+                            if has_codex_sandbox_environment
+                            else {}
+                        ),
                     }
                     payload["custom_metadata"] = {
                         **custom_metadata,
@@ -9881,6 +9925,11 @@ def _run_frontend_server(
                             "environment_id": mount.environment_id,
                             "name": mount.name,
                             "description": mount.description,
+                            "base_environment": (
+                                spec.get("baseEnvironment")
+                                if isinstance(spec, Mapping)
+                                else ""
+                            ),
                             "capabilities": capabilities,
                         }
                     )
@@ -9904,8 +9953,14 @@ def _run_frontend_server(
                             "fixes, debugging, or tests."
                         ),
                         (
-                            "Use get_env_manifest when details are needed and use "
-                            "execute_in_sandbox for every shell or CLI command."
+                            "Use get_env_manifest when details are needed. When the "
+                            "selected environment has base_environment=codex-sandbox, "
+                            "call delegate_to_codex_sandbox once with a self-contained, "
+                            "outcome-oriented task and let the inner Codex complete its "
+                            "CLI workflow end to end. This uses the existing mounted "
+                            "environment and is not dynamic-agent creation. For any "
+                            "other environment, use execute_in_sandbox for every shell "
+                            "or CLI command."
                         ),
                         (
                             "Mounted environments take priority over knowledge bases, "

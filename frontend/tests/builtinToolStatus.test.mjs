@@ -53,13 +53,17 @@ test("maps supported built-in tools to dedicated Chinese running and done labels
     ["list_envs", "正在查看可用环境", "已读取可用环境"],
     ["get_env_manifest", "正在读取环境 Manifest", "已读取环境 Manifest"],
     ["execute_in_sandbox", "正在环境中执行命令", "已在环境中完成命令执行"],
+    ["delegate_to_codex_sandbox", "Codex Sandbox 正在执行", "Codex Sandbox 已完成", "Codex Sandbox 执行失败"],
     ["load_memory", "正在检索长期记忆", "已完成记忆检索"],
     ["load_knowledgebase", "正在检索知识库", "已完成知识库检索"],
     ["load_skill", "正在加载技能", "已加载技能"],
   ];
 
-  for (const [name, running, done] of expected) {
+  for (const [name, running, done, failed] of expected) {
     assert.match(registrySource, new RegExp(`${name}:[\\s\\S]*?${running}[\\s\\S]*?${done}`));
+    if (failed) {
+      assert.match(registrySource, new RegExp(`${name}:[\\s\\S]*?${failed}`));
+    }
   }
 });
 

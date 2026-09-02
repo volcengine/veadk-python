@@ -127,6 +127,7 @@ interface AgentInfoPanelProps {
     value: SessionEnvironmentMountSelection[],
     workspaceIds?: string[],
   ) => void;
+  onEnvironmentsRefresh?: () => void | Promise<void>;
 }
 
 /** Agent metadata and optional multi-Agent topology shown in the conversation's
@@ -152,6 +153,7 @@ export function AgentInfoPanel({
   environmentsDisabled = false,
   environmentsError = "",
   onEnvironmentsChange,
+  onEnvironmentsRefresh,
 }: AgentInfoPanelProps) {
   const [dialog, setDialog] = useState<"tool" | null>(null);
   const [canvasExpanded, setCanvasExpanded] = useState(false);
@@ -371,6 +373,7 @@ export function AgentInfoPanel({
               disabled={environmentsDisabled}
               error={environmentsError}
               onChange={onEnvironmentsChange}
+              onRefresh={onEnvironmentsRefresh}
             />
           </section>
         )}
@@ -479,6 +482,7 @@ export function AgentInfoDrawer({
   environmentsDisabled,
   environmentsError,
   onEnvironmentsChange,
+  onEnvironmentsRefresh,
   onClose,
   returnFocusRef,
 }: {
@@ -506,6 +510,7 @@ export function AgentInfoDrawer({
     value: SessionEnvironmentMountSelection[],
     workspaceIds?: string[],
   ) => void;
+  onEnvironmentsRefresh?: () => void | Promise<void>;
   onClose: () => void;
   returnFocusRef: RefObject<HTMLButtonElement>;
 }) {
@@ -573,6 +578,7 @@ export function AgentInfoDrawer({
               environmentsDisabled={environmentsDisabled}
               environmentsError={environmentsError}
               onEnvironmentsChange={onEnvironmentsChange}
+              onEnvironmentsRefresh={onEnvironmentsRefresh}
               variant="drawer"
             />
           ) : (

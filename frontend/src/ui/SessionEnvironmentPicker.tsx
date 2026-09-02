@@ -211,9 +211,15 @@ function EnvironmentPickerDialog({
   };
 
   const confirm = () => {
+    const existingMounts = new Map(value.map((mount) => [mountKey(mount), mount]));
     onConfirm(environments.flatMap((environment) => {
       const mount = environmentMount(environment);
-      return mount && selectedKeys.has(mountKey(mount)) ? [mount] : [];
+      if (!mount || !selectedKeys.has(mountKey(mount))) return [];
+      const existing = existingMounts.get(mountKey(mount));
+      return [{
+        ...mount,
+        mount_instance_id: existing?.mount_instance_id || crypto.randomUUID(),
+      }];
     }), [...draftWorkspaceIds]);
     onClose();
   };
@@ -358,6 +364,7 @@ export function SessionEnvironmentPicker({
   disabled = false,
   error = "",
   onChange,
+  onRefresh,
 }: {
   environments: StudioEnvironment[];
   workspaces: StudioWorkspace[];
@@ -370,6 +377,7 @@ export function SessionEnvironmentPicker({
     value: SessionEnvironmentMountSelection[],
     workspaceIds?: string[],
   ) => void;
+  onRefresh?: () => void | Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
   const addButtonRef = useRef<HTMLButtonElement>(null);
@@ -477,8 +485,11 @@ export function SessionEnvironmentPicker({
           type="button"
           className="topo-capability-add-slot"
           aria-label="添加环境"
-          disabled={disabled || loading || Boolean(error) || environments.length === 0}
-          onClick={() => setOpen(true)}
+          disabled={disabled || loading}
+          onClick={() => {
+            setOpen(true);
+            void onRefresh?.();
+          }}
         >
           <AddIcon />
           <span>{value.length > 0 ? "添加更多环境" : "为当前 Session 添加环境"}</span>

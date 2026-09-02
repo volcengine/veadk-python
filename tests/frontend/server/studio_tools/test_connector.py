@@ -20,8 +20,7 @@ import json
 import socket
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
-from typing import Any
-from typing import cast
+from typing import Any, cast
 
 import pytest
 import uvicorn
@@ -30,8 +29,12 @@ from google.adk.tools.tool_context import ToolContext
 from websockets.exceptions import InvalidStatus
 
 import frontend.server.studio_tools.connector as connector
-from frontend.server.studio_tools.registry import StudioTool, StudioToolRegistry
-from frontend.server.studio_tools.registry import StudioToolExecutionContext
+from frontend.server.studio_tools.registry import (
+    StudioTool,
+    StudioToolExecutionContext,
+    StudioToolRegistry,
+    StudioToolRuntimeError,
+)
 from veadk.integrations.agentkit.studio_channel import (
     StudioExternalToolset,
     mount_studio_channel_routes,
@@ -176,6 +179,8 @@ async def test_connector_forwards_bff_tool_progress_as_adk_metadata() -> None:
         assert context.report_progress is not None
         await context.report_progress(
             {
+                "toolName": "spoofed-tool",
+                "requestId": "spoofed-call",
                 "branchIndex": 0,
                 "label": "稳妥",
                 "delta": "第一段",
@@ -224,6 +229,7 @@ async def test_connector_forwards_bff_tool_progress_as_adk_metadata() -> None:
         {
             "type": "tool.call",
             "request_id": "call-progress",
+            "function_call_id": "adk-function-call-progress",
             "run_id": "run-progress",
             "scope_id": "scope-progress",
             "catalog_revision": snapshot.revision,
@@ -251,7 +257,7 @@ async def test_connector_forwards_bff_tool_progress_as_adk_metadata() -> None:
     progress = event["content"]["parts"][0]["partMetadata"]["veadkStudioToolProgress"]
     assert progress == {
         "toolName": "branch_compare",
-        "requestId": "call-progress",
+        "requestId": "adk-function-call-progress",
         "branchIndex": 0,
         "label": "稳妥",
         "delta": "第一段",
@@ -400,6 +406,70 @@ async def test_connector_runs_and_executes_tool_over_one_websocket(
         "tool_result": {"product": 42},
     }
     assert websocket.closed
+
+
+@pytest.mark.asyncio
+async def test_connector_reports_safe_runtime_tool_errors_as_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    websocket = _FakeWebSocket()
+
+    async def fake_connect(url: str, **kwargs: Any) -> _FakeWebSocket:
+        del url, kwargs
+        return websocket
+
+    async def fail_at_runtime(arguments: dict[str, Any]) -> None:
+        del arguments
+        raise StudioToolRuntimeError(
+            "Codex Sandbox 连接中断，请重试本次任务。",
+            content={"ok": False, "codex_activity": {"events": []}},
+        )
+
+    registry = StudioToolRegistry()
+    registry.register(
+        StudioTool(
+            name="studio_multiply",
+            description="Fail with a safe operational error.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "left": {"type": "integer"},
+                    "right": {"type": "integer"},
+                },
+                "required": ["left", "right"],
+                "additionalProperties": False,
+            },
+            executor=fail_at_runtime,
+            executor_revision="v1",
+        )
+    )
+    monkeypatch.setattr(connector, "connect", fake_connect)
+    run = await connector.open_studio_tool_run(
+        endpoint="https://runtime.example",
+        authorization="Bearer runtime-key",
+        runtime_id="runtime-1",
+        payload={
+            "app_name": "agent",
+            "user_id": "user-1",
+            "session_id": "session-1",
+            "new_message": {"role": "user", "parts": [{"text": "6 * 7"}]},
+        },
+        catalog=registry.snapshot(),
+    )
+
+    chunks = [chunk async for chunk in run.stream()]
+
+    tool_result = next(item for item in websocket.sent if item["type"] == "tool.result")
+    assert tool_result["status"] == "error"
+    assert tool_result["content"] == {
+        "ok": False,
+        "codex_activity": {"events": []},
+    }
+    assert tool_result["error"] == "Codex Sandbox 连接中断，请重试本次任务。"
+    assert json.loads(chunks[0].removeprefix(b"data: ").strip())["tool_result"] == {
+        "ok": False,
+        "codex_activity": {"events": []},
+    }
 
 
 @pytest.mark.asyncio
