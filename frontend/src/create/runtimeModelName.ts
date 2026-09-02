@@ -36,12 +36,22 @@ function applyConfiguredMcpCredentials(
 ): AgentDraft {
   const apply = (node: AgentDraft): AgentDraft => ({
     ...node,
-    mcpTools: (node.mcpTools ?? []).map((tool) => ({
-      ...tool,
-      credentialConfigured: Boolean(
-        tool.authTokenEnv && configuredEnvKeys.has(tool.authTokenEnv),
-      ),
-    })),
+    mcpTools: (node.mcpTools ?? []).map((tool) => {
+      const credentialConfigured = Boolean(
+        tool.authTokenEnv &&
+          (configuredEnvKeys.has(tool.authTokenEnv) || tool.authToken),
+      );
+      return {
+        ...tool,
+        credentialConfigured,
+        ...(credentialConfigured
+          ? {
+              credentialSourceUrl: tool.url?.trim() ?? "",
+              credentialSourceAuthTokenEnv: tool.authTokenEnv?.trim() ?? "",
+            }
+          : {}),
+      };
+    }),
     subAgents: node.subAgents.map(apply),
     ...(node.workflow
       ? {

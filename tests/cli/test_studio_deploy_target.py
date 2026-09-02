@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import threading
+import zipfile
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,7 +23,6 @@ from uuid import uuid4
 import click
 import pytest
 from click.testing import CliRunner
-from typing_extensions import Self
 from volcenginesdkcore.interceptor.interceptors.build_request_interceptor import (
     sanitize_for_serialization,
 )
@@ -43,12 +43,89 @@ from veadk.cli.studio_knowledge_signing import (
     resolve_studio_knowledge_signing_key,
     studio_knowledge_signing_namespace,
 )
+from veadk.cli.studio_dependencies import STUDIO_AGENTKIT_CLI_ARTIFACT
 from veadk.config import veadk_environments
 from veadk.integrations.ve_identity.identity_client import IdentityClient
 
 
+def _write_test_veadk_wheel(destination: Path) -> Path:
+    wheel = destination / "veadk_python-test-py3-none-any.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr(
+            "veadk_python-test.dist-info/METADATA",
+            "Metadata-Version: 2.1\nName: veadk-python\nVersion: 0.0.0\n",
+        )
+    return wheel
+
+
+def _stage_test_studio_dependencies(
+    destination: Path,
+    *,
+    provider: str,
+    **_kwargs: object,
+) -> tuple[Path, ...]:
+    destination.mkdir(parents=True, exist_ok=True)
+    names = [
+        "trustedmcp-0.0.5-py3-none-any.whl",
+        "volcengine_python_sdk-5.0.36-py2.py3-none-any.whl",
+        ("tokenizers-0.22.2-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"),
+        "openviking_sdk-0.1.4-py3-none-any.whl",
+    ]
+    if provider == "byteplus":
+        names.append("pydantic-2.12.5-py3-none-any.whl")
+    staged: list[Path] = []
+    for name in names:
+        wheel = destination / name
+        wheel.write_bytes(b"test-wheel")
+        staged.append(wheel)
+    return tuple(staged)
+
+
+def _stage_test_studio_dependency_sources(
+    _destination: Path,
+    **_kwargs: object,
+) -> tuple[Path, ...]:
+    return ()
+
+
+def _build_test_offline_runtime(
+    _source_root: Path,
+    package_dir: Path,
+    *,
+    veadk_wheel: Path,
+    **_kwargs: object,
+) -> str:
+    wheelhouse = package_dir / "wheelhouse"
+    wheelhouse.mkdir()
+    target = wheelhouse / veadk_wheel.name
+    target.write_bytes(veadk_wheel.read_bytes())
+    (package_dir / "studio-runtime.lock").write_text(
+        "dependency==1\n",
+        encoding="utf-8",
+    )
+    return (
+        "--no-index\n"
+        "--find-links ./wheelhouse\n"
+        "-r ./studio-runtime.lock\n"
+        f"./wheelhouse/{target.name}\n"
+    )
+
+
+def _stage_test_agentkit_cli_archive(
+    destination: Path,
+    **_kwargs: object,
+) -> Path:
+    archive = destination / STUDIO_AGENTKIT_CLI_ARTIFACT.filename
+    archive.write_bytes(b"test-agentkit-cli")
+    return archive
+
+
 @pytest.fixture(autouse=True)
 def _skip_serverless_role_setup(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.stage_studio_agentkit_cli_archive",
+        _stage_test_agentkit_cli_archive,
+    )
     monkeypatch.delenv("AGENTKIT_CLOUD_PROVIDER", raising=False)
     monkeypatch.delenv("CLOUD_PROVIDER", raising=False)
     monkeypatch.delenv("REGION", raising=False)
@@ -2274,24 +2351,17 @@ def test_studio_deploy_rejects_unsupported_region() -> None:
 
 
 @pytest.mark.parametrize(
-    ("provider_args", "credential_args", "expected_prefix"),
+    ("provider_args", "credential_args", "expected_provider"),
     [
         (
             [],
             ["--volcengine-access-key", "ak", "--volcengine-secret-key", "sk"],
-            "",
+            "volcengine",
         ),
         (
             ["--provider", "byteplus"],
             ["--byteplus-access-key", "ak", "--byteplus-secret-key", "sk"],
-            (
-                "./trustedmcp-0.0.5-py3-none-any.whl\n"
-                "./volcengine_python_sdk-5.0.36-py2.py3-none-any.whl\n"
-                "./tokenizers-0.22.2-cp39-abi3-manylinux_2_17_x86_64."
-                "manylinux2014_x86_64.whl\n"
-                "./openviking_sdk-0.1.4-py3-none-any.whl\n"
-                "./pydantic-2.12.5-py3-none-any.whl\n"
-            ),
+            "byteplus",
         ),
     ],
 )
@@ -2299,7 +2369,7 @@ def test_studio_deploy_from_source_bundles_unmirrored_dependencies(
     monkeypatch: pytest.MonkeyPatch,
     provider_args: list[str],
     credential_args: list[str],
-    expected_prefix: str,
+    expected_provider: str,
 ) -> None:
     captured: dict[str, str] = {}
 
@@ -2319,17 +2389,7 @@ def test_studio_deploy_from_source_bundles_unmirrored_dependencies(
     def _fake_build(command: list[str], check: bool) -> None:
         assert check is True
         output_dir = Path(command[-1])
-        (output_dir / "veadk_python-test-py3-none-any.whl").write_bytes(b"wheel")
-
-    class _FakeWheelResponse:
-        def __enter__(self) -> Self:
-            return self
-
-        def __exit__(self, *_: object) -> None:
-            pass
-
-        def read(self) -> bytes:
-            return b"dependency-wheel"
+        _write_test_veadk_wheel(output_dir)
 
     monkeypatch.setattr(
         "veadk.cloud.cloud_agent_engine.CloudAgentEngine", _FakeCloudAgentEngine
@@ -2349,20 +2409,16 @@ def test_studio_deploy_from_source_bundles_unmirrored_dependencies(
         lambda *_args: None,
     )
     monkeypatch.setattr(
-        "urllib.request.urlopen", lambda *_args, **_kwargs: _FakeWheelResponse()
-    )
-    wheel_hashes = iter(
-        [
-            "3e89f6c9f5fb17cb70aaaa37df21a6e01722ccb1eec6cb8fc2e61417016986d4",
-            "3a74fa7a7baa5d5f604b175f967660cd0aa4c7057ce44d98c4041fbaf7944b5b",
-            "369cc9fc8cc10cb24143873a0d95438bb8ee257bb80c71989e3ee290e8d72c67",
-            "1e9f23332b1b687dd7f272e660953992de60ad3e9d07d62f7460fd4aedb99616",
-            "e561593fccf61e8a20fc46dfc2dfe075b8be7d0188df33f221ad1f0139180f9d",
-        ]
+        "veadk.cli.studio_package.stage_studio_dependency_wheels",
+        _stage_test_studio_dependencies,
     )
     monkeypatch.setattr(
-        "hashlib.sha256",
-        lambda _: SimpleNamespace(hexdigest=lambda: next(wheel_hashes)),
+        "veadk.cli.studio_package.stage_studio_dependency_sources",
+        _stage_test_studio_dependency_sources,
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.build_studio_offline_runtime",
+        _build_test_offline_runtime,
     )
 
     result = CliRunner().invoke(
@@ -2386,17 +2442,14 @@ def test_studio_deploy_from_source_bundles_unmirrored_dependencies(
     )
 
     assert result.exit_code == 0, result.output
-    expected_common_requirements = (
-        "./trustedmcp-0.0.5-py3-none-any.whl\n"
-        "./volcengine_python_sdk-5.0.36-py2.py3-none-any.whl\n"
-        "./tokenizers-0.22.2-cp39-abi3-manylinux_2_17_x86_64."
-        "manylinux2014_x86_64.whl\n"
-        "./openviking_sdk-0.1.4-py3-none-any.whl\n"
+    assert expected_provider in {"volcengine", "byteplus"}
+    expected_requirements = (
+        "--no-index\n"
+        "--find-links ./wheelhouse\n"
+        "-r ./studio-runtime.lock\n"
+        "./wheelhouse/veadk_python-test-py3-none-any.whl\n"
     )
-    assert captured["requirements"] == (
-        (expected_prefix or expected_common_requirements)
-        + "./veadk_python-test-py3-none-any.whl\n"
-    )
+    assert captured["requirements"] == expected_requirements
 
 
 def test_studio_deploy_from_source_writes_lf_run_script(
@@ -2420,7 +2473,7 @@ def test_studio_deploy_from_source_writes_lf_run_script(
     def _fake_build(command: list[str], check: bool) -> None:
         assert check is True
         output_dir = Path(command[-1])
-        (output_dir / "veadk_python-test-py3-none-any.whl").write_bytes(b"wheel")
+        _write_test_veadk_wheel(output_dir)
 
     monkeypatch.setattr(
         "veadk.cloud.cloud_agent_engine.CloudAgentEngine", _FakeCloudAgentEngine
@@ -2435,7 +2488,15 @@ def test_studio_deploy_from_source_writes_lf_run_script(
     )
     monkeypatch.setattr(
         "veadk.cli.studio_package.stage_studio_dependency_wheels",
-        lambda *_args, **_kwargs: [],
+        _stage_test_studio_dependencies,
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.stage_studio_dependency_sources",
+        _stage_test_studio_dependency_sources,
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.build_studio_offline_runtime",
+        _build_test_offline_runtime,
     )
     monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/uv")
     monkeypatch.setattr("subprocess.run", _fake_build)

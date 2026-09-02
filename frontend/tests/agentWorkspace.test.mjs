@@ -700,7 +700,7 @@ test("runtime updates use the Agent selected in management instead of the active
   assert.match(customCreateSource, /editMode:\s*deploymentTarget\?\.editMode/);
   assert.match(
     customCreateSource,
-    /draft:\s*deploymentTarget\s*\?\s*codegenDraft\(draft\)\s*:\s*undefined/,
+    /deploymentTarget \|\| mcpGatewayManaged \? codegenDraft\(draft\) : undefined/,
   );
   assert.match(customCreateSource, /updateEtag:\s*deploymentTarget\?\.etag/);
   assert.match(customCreateSource, /baseRuntimeVersion:\s*deploymentTarget\?\.currentVersion/);

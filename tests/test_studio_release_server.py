@@ -698,6 +698,13 @@ def test_standalone_publisher_builds_bundle_from_source_files(
     dependency_wheels = tmp_path / "dependencies"
     dependency_wheels.mkdir()
     (dependency_wheels / "dependency-1.0-py3-none-any.whl").write_bytes(b"wheel")
+    cli_archive = dependency_wheels / "agentkit-linux-x64.tar.gz"
+    cli_archive.write_bytes(b"pinned-cli")
+    monkeypatch.setattr(
+        release_publisher,
+        "_AGENTKIT_CLI_ARCHIVE_SHA256",
+        hashlib.sha256(cli_archive.read_bytes()).hexdigest(),
+    )
 
     def _run(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[Any]:
         output_dir = Path(command[command.index("-o") + 1])
@@ -708,9 +715,40 @@ def test_standalone_publisher_builds_bundle_from_source_files(
                 Path(__file__).parents[1]
             ):
                 wheel.writestr(name, "")
+            wheel.writestr(
+                "veadk_python-1.0.0.dist-info/METADATA",
+                "Metadata-Version: 2.1\nName: veadk-python\nVersion: 1.0.0\n",
+            )
         return subprocess.CompletedProcess(command, 0)
 
+    def _offline_runtime(
+        _source_root: Path,
+        package_dir: Path,
+        *,
+        veadk_wheel: Path,
+        **_kwargs: Any,
+    ) -> str:
+        wheelhouse = package_dir / "wheelhouse"
+        wheelhouse.mkdir()
+        target = wheelhouse / veadk_wheel.name
+        target.write_bytes(veadk_wheel.read_bytes())
+        (package_dir / "studio-runtime.lock").write_text(
+            "dependency==1.0\n",
+            encoding="utf-8",
+        )
+        return (
+            "--no-index\n"
+            "--find-links ./wheelhouse\n"
+            "-r ./studio-runtime.lock\n"
+            f"./wheelhouse/{target.name}\n"
+        )
+
     monkeypatch.setattr(release_publisher.subprocess, "run", _run)
+    monkeypatch.setattr(
+        release_publisher,
+        "build_studio_offline_runtime",
+        _offline_runtime,
+    )
     output_dir = tmp_path / "output"
     bundle, manifest = release_publisher.build_studio_release(
         source_root=Path(__file__).parents[1],
@@ -725,13 +763,22 @@ def test_standalone_publisher_builds_bundle_from_source_files(
 
     with zipfile.ZipFile(bundle) as archive:
         assert archive.read("requirements.txt").decode() == (
-            "./dependency-1.0-py3-none-any.whl\n./veadk_python-1.0.0-py3-none-any.whl\n"
+            "--no-index\n"
+            "--find-links ./wheelhouse\n"
+            "-r ./studio-runtime.lock\n"
+            "./wheelhouse/veadk_python-1.0.0-py3-none-any.whl\n"
         )
+        assert archive.read("agentkit-linux-x64.tar.gz") == b"pinned-cli"
         assert ".studio-release-environment.json" not in archive.namelist()
         assert (
             b'--provider "${CLOUD_PROVIDER:-${AGENTKIT_CLOUD_PROVIDER:-volcengine}}"'
             in archive.read("run.sh")
         )
+        assert (
+            b'export PYTHONPATH="./site-packages${PYTHONPATH:+:$PYTHONPATH}"'
+            in archive.read("run.sh")
+        )
+        assert b"python3 -m veadk.cli.studio_companion" in archive.read("run.sh")
     assert manifest.git_sha == "a" * 40
     assert manifest.sha256 == hashlib.sha256(bundle.read_bytes()).hexdigest()
 
@@ -885,7 +932,17 @@ def test_tos_dependency_store_populates_and_reuses_cached_wheel(
                         "url": "https://example.com/dependency.whl",
                         "sha256": digest,
                     }
-                ]
+                ],
+                "artifacts": [
+                    {
+                        "filename": "agentkit-linux-x64.tar.gz",
+                        "url": (
+                            "https://agentkit-cli.tos-cn-beijing.volces.com/"
+                            "0.52.14/agentkit-linux-x64.tar.gz"
+                        ),
+                        "sha256": digest,
+                    }
+                ],
             }
         ),
         encoding="utf-8",
@@ -908,16 +965,19 @@ def test_tos_dependency_store_populates_and_reuses_cached_wheel(
     first = store.materialize(manifest, tmp_path / "first")
     second = store.materialize(manifest, tmp_path / "second")
 
-    assert [path.read_bytes() for path in first] == [content]
-    assert [path.read_bytes() for path in second] == [content]
-    assert downloads == 1
+    assert [path.read_bytes() for path in first] == [content, content]
+    assert [path.read_bytes() for path in second] == [content, content]
+    assert downloads == 2
 
 
 def test_builder_restores_manifest_dependencies_from_cache(tmp_path: Path) -> None:
     prepared_root = tmp_path / ".studio-release"
     prepared_root.mkdir()
     manifest = prepared_root / "dependencies.json"
-    manifest.write_text('{"wheels": []}\n', encoding="utf-8")
+    manifest.write_text(
+        '{"wheels": [], "artifacts": []}\n',
+        encoding="utf-8",
+    )
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     dependency_store = _MemoryDependencyStore()
@@ -955,11 +1015,36 @@ def test_builder_generates_dependency_manifest_from_release_source(
         dependency_store=dependency_store,
     )
     commands: list[list[str]] = []
-    original_run = subprocess.run
 
     def capture_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
         commands.append(command)
-        return original_run(command, **kwargs)
+        assert kwargs["cwd"] == source_root
+        destination = Path(command[command.index("--manifest") + 1])
+        destination.write_text(
+            json.dumps(
+                {
+                    "wheels": [
+                        {
+                            "filename": "dependency.whl",
+                            "url": "https://example.com/dependency.whl",
+                            "sha256": "a" * 64,
+                        }
+                    ],
+                    "artifacts": [
+                        {
+                            "filename": "agentkit-linux-x64.tar.gz",
+                            "url": (
+                                "https://agentkit-cli.tos-cn-beijing.volces.com/"
+                                "0.52.14/agentkit-linux-x64.tar.gz"
+                            ),
+                            "sha256": "b" * 64,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(command, 0, stdout=b"")
 
     monkeypatch.setattr(release_builder.subprocess, "run", capture_run)
 
@@ -994,7 +1079,17 @@ def test_tos_dependency_store_rejects_download_with_wrong_checksum(
                         "url": "https://example.com/dependency.whl",
                         "sha256": "a" * 64,
                     }
-                ]
+                ],
+                "artifacts": [
+                    {
+                        "filename": "agentkit-linux-x64.tar.gz",
+                        "url": (
+                            "https://agentkit-cli.tos-cn-beijing.volces.com/"
+                            "0.52.14/agentkit-linux-x64.tar.gz"
+                        ),
+                        "sha256": "b" * 64,
+                    }
+                ],
             }
         ),
         encoding="utf-8",

@@ -498,7 +498,7 @@ def _prepare_managed_sidecar_runtime_envs(
     ):
         return (
             "已选择 MCP 稳定性治理，请在“添加 MCP 工具”中配置至少一个 HTTP MCP "
-            "服务地址和共享 Bearer Token 后重新发布。"
+            "服务地址后重新发布；Bearer Token 仅在该服务需要认证时配置。"
         )
     from veadk.extensions.harness.sidecar import (
         MANAGED_HARNESS_SIDECAR_RUNTIME_COMMAND,
@@ -3711,6 +3711,9 @@ def _run_frontend_server(
         ImageReference,
         LegacyRecoveryError,
         merge_mcp_recoveries,
+        mcp_reuse_supplied_credentials,
+        mcp_editor_draft_with_credentials,
+        mcp_secret_values_for_draft_references,
         mcp_secret_values_from_runtime_environment,
         mcp_secret_values_from_toolset,
         OciImageInspector,
@@ -3719,6 +3722,7 @@ def _run_frontend_server(
         RegistryCredential,
         recover_mcp_from_runtime_environment,
         recover_mcp_from_toolset,
+        retained_mcp_secret_values,
         resolve_source_preserving_mcp_owner,
         source_preserving_mcp_changed,
     )
@@ -3732,6 +3736,11 @@ def _run_frontend_server(
         studio_harness_deployment_config,
         studio_harness_runtime_env,
     )
+    from veadk.cli.studio_sidecar_prerequisites import (
+        SIDECAR_BASE_IMAGE_ENV,
+        StudioSidecarConfigurationError,
+        managed_studio_sidecar_base_image,
+    )
 
     _TEST_RUN_MAX_FILES = 300
     _TEST_RUN_MAX_FILE_BYTES = 256 * 1024
@@ -3744,14 +3753,10 @@ def _run_frontend_server(
         return value.strip().lower() in {"1", "true", "yes", "on"}
 
     def _managed_sidecar_regions() -> list[str]:
-        return [
-            item.strip()
-            for item in os.getenv(
-                "VEADK_STUDIO_HARNESS_SIDECAR_REGIONS",
-                "",
-            ).split(",")
-            if item.strip()
-        ]
+        # The managed base is a public immutable image. Keep this capability
+        # list aligned with AgentKit control-plane availability instead of
+        # treating a registry-region environment variable as a pull allowlist.
+        return _runtime_regions("volcengine", "all")
 
     def _harness_sidecar_debug_capability() -> dict[str, Any]:
         import platform
@@ -3789,24 +3794,22 @@ def _run_frontend_server(
         return {"available": True, "reason": ""}
 
     def _harness_sidecar_deployment_capability() -> dict[str, Any]:
-        regions = _managed_sidecar_regions()
+        from veadk.cli.agentkit_cli import AgentKitCliError, agentkit_cli_artifact
+
+        reasons: list[str] = []
         try:
-            agentkit_cli_executable()
-            cli_available = True
-        except HarnessSidecarDependencyError:
-            cli_available = False
-        available = bool(
-            cli_available
-            and regions
-            and os.getenv("VEADK_STUDIO_HARNESS_SIDECAR_BASE_IMAGE", "").strip()
-        )
+            agentkit_cli_artifact()
+        except AgentKitCliError:
+            reasons.append("当前平台不支持受管 AgentKit CLI。")
+        try:
+            managed_studio_sidecar_base_image(os.getenv(SIDECAR_BASE_IMAGE_ENV, ""))
+        except StudioSidecarConfigurationError as error:
+            reasons.append(str(error))
+        regions = _managed_sidecar_regions()
+        available = not reasons
         return {
             "available": available,
-            "reason": (
-                ""
-                if available
-                else "当前 Studio 尚未配置受控 Harness Sidecar Runtime artifact。"
-            ),
+            "reason": "" if available else " ".join(reasons),
             "regions": regions,
             "platform": "linux/amd64",
             "pythonVersion": "3.12",
@@ -5623,12 +5626,39 @@ def _run_frontend_server(
                 status_code=400,
                 detail="Invalid source-preserving MCP credential request",
             )
-        if raw_mcp_secret_values and not source_preserving_requested:
+        requested_mcp_secret_values = tuple(raw_mcp_secret_values)
+        raw_mcp_credential_reuses = data.get("mcpCredentialReuses", [])
+        if raw_mcp_credential_reuses is None:
+            raw_mcp_credential_reuses = []
+        required_mcp_reuse_fields = {
+            "agentName",
+            "name",
+            "url",
+            "sourceAuthTokenEnv",
+        }
+        if (
+            not isinstance(raw_mcp_credential_reuses, list)
+            or len(raw_mcp_credential_reuses) > 256
+            or any(
+                not isinstance(item, dict)
+                or set(item) != required_mcp_reuse_fields
+                or any(
+                    not isinstance(item[field], str)
+                    for field in required_mcp_reuse_fields
+                )
+                for item in raw_mcp_credential_reuses
+            )
+        ):
             raise HTTPException(
                 status_code=400,
-                detail="MCP credential identity submission requires a Runtime update",
+                detail="Invalid MCP credential reuse request",
             )
-        requested_mcp_secret_values = tuple(raw_mcp_secret_values)
+        requested_mcp_credential_reuses = tuple(raw_mcp_credential_reuses)
+        if requested_mcp_credential_reuses and not runtime_id:
+            raise HTTPException(
+                status_code=400,
+                detail="MCP credential reuse requires a Runtime update target",
+            )
         if not isinstance(source, dict) or source.get("kind") not in {
             "inlineFiles",
             "migration",
@@ -5748,6 +5778,8 @@ def _run_frontend_server(
         sidecar_base_image = ""
         sidecar_cli_runtime_env: dict[str, str] = {}
         source_preserving_sidecar_env: dict[str, str] = {}
+        sidecar_mcp_enabled = False
+        canonical_requested_draft: dict[str, Any] | None = None
         if sidecar_enabled:
             if not source_preserving_requested:
                 capability = _harness_sidecar_deployment_capability()
@@ -5786,11 +5818,49 @@ def _run_frontend_server(
                     status_code=409,
                     detail="Harness Sidecar 配置已更新，请重新解析后再部署。",
                 )
+            sidecar_mcp_enabled = bool(
+                set(sidecar_plan.get("effectiveComponents") or [])
+                & {"mcp_gateway", "mcp_resilience", "sql_readonly"}
+            )
+            if sidecar_mcp_enabled and not source_preserving_requested:
+                if not isinstance(requested_draft, Mapping):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "MCP 稳定性治理缺少可验证的 MCP 配置，请重新打开发布页面。"
+                        ),
+                    )
+                try:
+                    canonical_requested_draft = AgentDraft.model_validate(
+                        requested_draft
+                    ).model_dump(mode="json")
+                except ValidationError as error:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="MCP 稳定性治理配置无效，请返回 MCP 工具步骤检查。",
+                    ) from error
             if not source_preserving_requested:
-                sidecar_base_image = os.getenv(
-                    "VEADK_STUDIO_HARNESS_SIDECAR_BASE_IMAGE",
-                    "",
-                ).strip()
+                sidecar_base_image = managed_studio_sidecar_base_image(
+                    os.getenv(SIDECAR_BASE_IMAGE_ENV, "")
+                )
+        if (
+            requested_mcp_secret_values
+            and not source_preserving_requested
+            and not sidecar_mcp_enabled
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="MCP credential identity submission requires managed Sidecar MCP",
+            )
+        if (
+            requested_mcp_credential_reuses
+            and not source_preserving_requested
+            and not sidecar_mcp_enabled
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="MCP credential reuse requires managed Sidecar MCP",
+            )
         if not source_preserving_requested:
             _validate_harness_sidecar_project_files(files, enabled=sidecar_enabled)
         use_managed_sidecar_release = (
@@ -5804,11 +5874,6 @@ def _run_frontend_server(
 
         region = config.get("region") or _default_cloud_region()
         project_name = config.get("projectName", "default")
-        if sidecar_enabled and region not in _managed_sidecar_regions():
-            raise HTTPException(
-                status_code=409,
-                detail=f"Harness Sidecar 当前不支持地域 {region}。",
-            )
         try:
             from frontend.server.deployment_resources import (
                 DeploymentResourceService,
@@ -5867,6 +5932,8 @@ def _run_frontend_server(
             raise HTTPException(status_code=502, detail=str(e)) from e
         existing_runtime = None
         published_draft: Mapping[str, Any] = {}
+        published_mcp_reference_values: dict[str, str] = {}
+        explicit_mcp_reuse_credentials: tuple[dict[str, str], ...] = ()
         source_preserving_draft: dict[str, Any] | None = None
         source_preserving_source_image = ""
         source_preserving_mcp_secrets: dict[str, str] = {}
@@ -5942,6 +6009,35 @@ def _run_frontend_server(
                 published_draft = (update_capability.get("agent") or {}).get(
                     "draft"
                 ) or {}
+                published_environment = _legacy_runtime_environment(existing_runtime)
+                published_references = mcp_auth_environment_keys(published_draft)
+                published_mcp_reference_values.update(
+                    {
+                        reference: published_environment[reference]
+                        for reference in published_references
+                        if published_environment.get(reference)
+                    }
+                )
+                if published_references:
+                    try:
+                        published_mcp_recovery, recovered_mcp_values = (
+                            _legacy_mcp_state(existing_runtime, region)
+                        )
+                        published_mcp_reference_values.update(
+                            mcp_secret_values_for_draft_references(
+                                draft=published_draft,
+                                recovery=published_mcp_recovery,
+                                recovered_values=recovered_mcp_values,
+                            )
+                        )
+                    except LegacyRecoveryError as error:
+                        logger.info(
+                            "published MCP credential recovery unavailable "
+                            "runtime_id=%s region=%s code=%s",
+                            runtime_id,
+                            region,
+                            error.code,
+                        )
                 allowed_remove_runtime_env_keys = set(
                     mcp_auth_environment_keys(published_draft)
                 )
@@ -6041,6 +6137,10 @@ def _run_frontend_server(
                             existing_runtime,
                             region,
                         )
+                        recovered_mcp_secrets = {
+                            **recovered_mcp_secrets,
+                            **published_mcp_reference_values,
+                        }
                         mcp_changed = source_preserving_mcp_changed(
                             published_draft,
                             source_preserving_draft,
@@ -6065,11 +6165,18 @@ def _run_frontend_server(
                             if (
                                 mcp_changed
                                 or requested_mcp_secret_values
+                                or requested_mcp_credential_reuses
                                 or requested_remove_runtime_env_keys
                             ):
                                 raise LegacyRecoveryError(
                                     "legacy_platform_mcp_read_only"
                                 )
+                        explicit_mcp_reuse_credentials = mcp_reuse_supplied_credentials(
+                            published_draft=published_draft,
+                            edited_draft=source_preserving_draft,
+                            published_reference_values=(published_mcp_reference_values),
+                            reuse_requests=requested_mcp_credential_reuses,
+                        )
                         (
                             source_preserving_draft,
                             source_preserving_mcp_secrets,
@@ -6077,7 +6184,10 @@ def _run_frontend_server(
                             published_draft=published_draft,
                             edited_draft=source_preserving_draft,
                             recovered_values=recovered_mcp_secrets,
-                            supplied_credentials=requested_mcp_secret_values,
+                            supplied_credentials=(
+                                *requested_mcp_secret_values,
+                                *explicit_mcp_reuse_credentials,
+                            ),
                         )
                         files = list(
                             build_source_preserving_overlay(
@@ -6101,8 +6211,18 @@ def _run_frontend_server(
                         raise HTTPException(
                             status_code=409,
                             detail=(
-                                "运行版本中的 Skill 或 MCP 配置已变化，"
-                                "请重新打开详情并确认最新配置后再更新。"
+                                "MCP 地址变化后缺少可用凭证，请重新填写 Key 或"
+                                "明确选择沿用原凭证。"
+                                if error.code
+                                in {
+                                    "legacy_mcp_credential_missing",
+                                    "legacy_mcp_reuse_source_missing",
+                                    "legacy_mcp_reuse_identity_changed",
+                                }
+                                else (
+                                    "运行版本中的 Skill 或 MCP 配置已变化，"
+                                    "请重新打开详情并确认最新配置后再更新。"
+                                )
                             ),
                         ) from error
                 tagged_resources = deployment_resources_from_tags(
@@ -6135,6 +6255,29 @@ def _run_frontend_server(
                         namespace=namespace,
                         repository=repository,
                     )
+                elif canonical_requested_draft is not None:
+                    try:
+                        explicit_mcp_reuse_credentials = mcp_reuse_supplied_credentials(
+                            published_draft=published_draft,
+                            edited_draft=canonical_requested_draft,
+                            published_reference_values=(published_mcp_reference_values),
+                            reuse_requests=requested_mcp_credential_reuses,
+                        )
+                    except LegacyRecoveryError as error:
+                        logger.info(
+                            "managed Sidecar MCP credential reuse rejected "
+                            "runtime_id=%s region=%s code=%s",
+                            runtime_id,
+                            region,
+                            error.code,
+                        )
+                        raise HTTPException(
+                            status_code=409,
+                            detail=(
+                                "无法确认要沿用的原 MCP 凭证，请重新打开详情后"
+                                "重新填写 Key。"
+                            ),
+                        ) from error
             except HTTPException:
                 raise
             except Exception as e:
@@ -6467,12 +6610,67 @@ def _run_frontend_server(
                     raise HTTPException(
                         status_code=409,
                         detail=(
-                            "Harness Sidecar 仅支持配置明确的 HTTP MCP 服务，"
-                            "请检查 MCP 地址与认证后重试。"
+                            "已保存的 MCP 凭证无法解析，请重新打开更新页面；"
+                            "若地址已变化，请重新填写 Key 或确认沿用原凭证。"
+                            if error.code == "legacy_mcp_credential_missing"
+                            else (
+                                "Harness Sidecar 仅支持配置明确的 HTTP MCP 服务，"
+                                "请检查 MCP 地址与认证后重试。"
+                            )
                         ),
                     ) from error
             elif source_preserving_mcp_owner == "application":
                 runtime_envs.update(source_preserving_mcp_secrets)
+        elif sidecar_mcp_enabled:
+            if canonical_requested_draft is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="MCP 稳定性治理缺少可验证的 MCP 配置。",
+                )
+            try:
+                retained_mcp_secrets = retained_mcp_secret_values(
+                    published_draft=published_draft,
+                    edited_draft=canonical_requested_draft,
+                    published_reference_values=published_mcp_reference_values,
+                )
+                build_mcp_secret_values = dict(runtime_envs)
+                for reference in mcp_auth_environment_keys(published_draft):
+                    build_mcp_secret_values.pop(reference, None)
+                build_mcp_secret_values.update(retained_mcp_secrets)
+                structured_mcp = build_sidecar_mcp_servers_json(
+                    draft=canonical_requested_draft,
+                    secret_values=build_mcp_secret_values,
+                    supplied_credentials=(
+                        *requested_mcp_secret_values,
+                        *explicit_mcp_reuse_credentials,
+                    ),
+                )
+            except LegacyRecoveryError as error:
+                logger.info(
+                    "managed Sidecar MCP deployment rejected code=%s",
+                    error.code,
+                )
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "已保存的 MCP 凭证无法解析，请重新打开更新页面；"
+                        "若地址已变化，请重新填写 Key 或确认沿用原凭证。"
+                        if error.code == "legacy_mcp_credential_missing"
+                        else (
+                            "Harness Sidecar 仅支持配置明确的 HTTP MCP 服务，"
+                            "请检查 MCP 地址与认证后重试。"
+                        )
+                    ),
+                ) from error
+            for key in (
+                "MCP_SERVERS_JSON",
+                "MCP_URLS",
+                "MCP_API_KEY",
+                *mcp_auth_environment_keys(published_draft),
+                *mcp_auth_environment_keys(canonical_requested_draft),
+            ):
+                runtime_envs.pop(key, None)
+            runtime_envs["MCP_SERVERS_JSON"] = structured_mcp
         explicit_model_key_requested = bool(
             extra_runtime_envs.get("MODEL_AGENT_API_KEY", "").strip()
         )
@@ -10715,6 +10913,7 @@ def _run_frontend_server(
     def _configured_mcp_environment_keys(
         runtime: Any,
         draft: Mapping[str, Any],
+        region: str,
     ) -> list[str]:
         environment_view = sanitize_runtime_environment(
             (
@@ -10725,7 +10924,21 @@ def _run_frontend_server(
             if getattr(item, "key", None)
         )
         configured = set(environment_view.configured_env_keys)
-        return [key for key in mcp_auth_environment_keys(draft) if key in configured]
+        references = mcp_auth_environment_keys(draft)
+        missing = set(references).difference(configured)
+        if missing:
+            try:
+                recovery, recovered_values = _legacy_mcp_state(runtime, region)
+                configured.update(
+                    mcp_secret_values_for_draft_references(
+                        draft=draft,
+                        recovery=recovery,
+                        recovered_values=recovered_values,
+                    )
+                )
+            except LegacyRecoveryError:
+                pass
+        return [key for key in references if key in configured]
 
     def _runtime_update_result(
         runtime: Any,
@@ -11128,6 +11341,7 @@ def _run_frontend_server(
                 else _configured_mcp_environment_keys(
                     runtime,
                     recovery.agent.get("draft") or {},
+                    region,
                 )
             )
             runtime_payload = {
@@ -11149,6 +11363,65 @@ def _run_frontend_server(
             agent=recovery.agent,
         )
 
+    async def _runtime_update_editor_payload(
+        result: tuple[dict[str, Any], Any],
+        *,
+        region: str,
+    ) -> dict[str, Any]:
+        """Return one authorized editor response without caching credentials."""
+
+        payload, runtime = result
+        agent = payload.get("agent")
+        if not payload.get("canUpdate") or not isinstance(agent, Mapping):
+            return payload
+        recovered_draft = agent.get("draft")
+        if not isinstance(recovered_draft, Mapping):
+            return payload
+        references = set(mcp_auth_environment_keys(recovered_draft))
+        if not references:
+            return payload
+        environment = _legacy_runtime_environment(runtime)
+        editor_secrets = {
+            reference: environment[reference]
+            for reference in references
+            if environment.get(reference)
+        }
+        missing_references = references.difference(editor_secrets)
+        if missing_references:
+            mcp_recovery, recovered_values = await asyncio.to_thread(
+                _legacy_mcp_state,
+                runtime,
+                region,
+            )
+            editor_secrets.update(
+                {
+                    reference: recovered_values[reference]
+                    for reference in missing_references
+                    if recovered_values.get(reference)
+                }
+            )
+            editor_secrets.update(
+                {
+                    reference: value
+                    for reference, value in mcp_secret_values_for_draft_references(
+                        draft=recovered_draft,
+                        recovery=mcp_recovery,
+                        recovered_values=recovered_values,
+                    ).items()
+                    if reference in missing_references
+                }
+            )
+        return {
+            **payload,
+            "agent": {
+                **agent,
+                "draft": mcp_editor_draft_with_credentials(
+                    recovered_draft,
+                    editor_secrets,
+                ),
+            },
+        }
+
     @app.get("/web/runtime-update-capability")
     async def _web_runtime_update_capability(
         request: Request,
@@ -11160,6 +11433,10 @@ def _run_frontend_server(
     ) -> Response:
         _require_agent_management(request)
         region = _coerce_cloud_region(region)
+        no_store_headers = {
+            "Cache-Control": "no-store",
+            "Pragma": "no-cache",
+        }
         key = _runtime_update_capability_key(
             request,
             runtime_id=runtimeId,
@@ -11178,7 +11455,10 @@ def _run_frontend_server(
 
         cached = runtime_update_capability_results.get(key)
         if cached is not None:
-            return JSONResponse(cached[0][0])
+            return JSONResponse(
+                await _runtime_update_editor_payload(cached[0], region=region),
+                headers=no_store_headers,
+            )
 
         if existing_task is None:
             task = asyncio.create_task(
@@ -11208,6 +11488,7 @@ def _run_frontend_server(
                     current_version=currentVersion,
                 ),
                 status_code=202,
+                headers=no_store_headers,
             )
         except Exception:
             runtime_update_capability_tasks.pop(key, None)
@@ -11218,7 +11499,10 @@ def _run_frontend_server(
         # version still share in-flight work but cannot receive a stale result.
         if currentVersion is not None:
             runtime_update_capability_results[key] = (result, monotonic())
-        return JSONResponse(result[0])
+        return JSONResponse(
+            await _runtime_update_editor_payload(result, region=region),
+            headers=no_store_headers,
+        )
 
     @app.post("/web/evaluation/feedback")
     async def _web_message_feedback(
@@ -13088,6 +13372,18 @@ def _resolve_studio_cloud_credentials(
     "PyPI. Use to deploy unreleased frontend/backend changes.",
 )
 @click.option(
+    "--harness-sidecar-base-image",
+    default=None,
+    envvar="VEADK_STUDIO_HARNESS_SIDECAR_BASE_IMAGE",
+    help="Optional immutable override for the release-pinned public Sidecar image.",
+)
+@click.option(
+    "--harness-sidecar-regions",
+    default=None,
+    envvar="VEADK_STUDIO_HARNESS_SIDECAR_REGIONS",
+    help="Deprecated compatibility option; public Sidecar images are region agnostic.",
+)
+@click.option(
     "--keep-failed-deploy",
     is_flag=True,
     default=False,
@@ -13223,6 +13519,8 @@ def frontend_deploy(
     byteplus_session_token: str | None,
     veadk_version: str,
     from_source: bool,
+    harness_sidecar_base_image: str | None,
+    harness_sidecar_regions: str | None,
     keep_failed_deploy: bool,
     precheck_only: bool,
     site_logo: str | None,
@@ -13280,6 +13578,19 @@ def frontend_deploy(
         provider_id = "byteplus"
     else:
         provider_id = cloud_provider_from_env()
+    from veadk.cli.studio_sidecar_prerequisites import (
+        StudioSidecarConfigurationError,
+        normalize_studio_sidecar_environment,
+    )
+
+    try:
+        sidecar_environment = normalize_studio_sidecar_environment(
+            provider=provider_id,
+            base_image=harness_sidecar_base_image,
+            regions=harness_sidecar_regions,
+        )
+    except StudioSidecarConfigurationError as error:
+        raise click.ClickException(str(error)) from error
     studio_update_bucket = studio_update_bucket or (
         "veadk-studio-byteplus" if provider_id == "byteplus" else "veadk-studio"
     )
@@ -13800,6 +14111,7 @@ def frontend_deploy(
     veadk_environments.update(studio_environment_resource_environment)
     if client_secret:
         veadk_environments["OAUTH2_CLIENT_SECRET"] = client_secret
+    veadk_environments.update(sidecar_environment)
 
     # 3) Build the function project (zip): run.sh launches the frontend server on
     #    the FaaS-assigned port; requirements.txt pulls veadk-python (ships the UI).
@@ -13863,12 +14175,17 @@ def frontend_deploy(
 
         from veadk.cli.studio_package import write_studio_package
 
-        write_studio_package(
-            Path(tmp),
-            requirements=requirements,
-            site_logo=branding_logo,
-            provider=provider_id,
-        )
+        try:
+            write_studio_package(
+                Path(tmp),
+                requirements=requirements,
+                site_logo=branding_logo,
+                provider=provider_id,
+            )
+        except ValueError as error:
+            raise click.ClickException(
+                f"Could not assemble the Studio package: {error}"
+            ) from error
 
         # 3) Deploy the function + a plain public APIG trigger on the serverless
         #    gateway (auth_method="none" — no gateway SSO plugin / domain upstream).
@@ -14103,6 +14420,18 @@ def frontend_deploy(
     help="Replace the deployed Studio title, at most 16 characters.",
 )
 @click.option(
+    "--harness-sidecar-base-image",
+    default=None,
+    envvar="VEADK_STUDIO_HARNESS_SIDECAR_BASE_IMAGE",
+    help="Optional immutable override for the release-pinned public Sidecar image.",
+)
+@click.option(
+    "--harness-sidecar-regions",
+    default=None,
+    envvar="VEADK_STUDIO_HARNESS_SIDECAR_REGIONS",
+    help="Deprecated compatibility option; public Sidecar images are region agnostic.",
+)
+@click.option(
     "--sandbox-dev-tool-id",
     "sandbox_dev_tool_id",
     default=None,
@@ -14158,6 +14487,8 @@ def frontend_update(
     path: Path,
     site_logo: str | None,
     site_title: str | None,
+    harness_sidecar_base_image: str | None,
+    harness_sidecar_regions: str | None,
     sandbox_dev_tool_id: str | None,
     sandbox_chat_codex_tool_id: str | None,
     sandbox_chat_openclaw_tool_id: str | None,
@@ -14259,6 +14590,53 @@ def frontend_update(
         )
     target = targets[0]
 
+    service = VeFaaS(
+        access_key=ak,
+        secret_key=sk,
+        session_token=session_token,
+        region=target.region,
+        project_name=target.project,
+        provider=provider_id,
+    )
+    service_client = getattr(service, "client", None)
+    current_env: dict[str, str] = {}
+    remote_function: object | None = None
+    user_pool_id = ""
+    user_pool_client_id = ""
+    if service_client is not None:
+        import volcenginesdkvefaas
+
+        remote_function = service_client.get_function(
+            volcenginesdkvefaas.GetFunctionRequest(id=target.function_id)
+        )
+        current_env = {
+            item.key: item.value
+            for item in (getattr(remote_function, "envs", None) or [])
+        }
+        user_pool_id = str(
+            current_env.get("VEADK_STUDIO_USER_POOL_ID")
+            or current_env.get("OAUTH2_USER_POOL_ID")
+            or ""
+        ).strip()
+        user_pool_client_id = str(
+            current_env.get("OAUTH2_USER_POOL_CLIENT_ID") or ""
+        ).strip()
+
+    from veadk.cli.studio_sidecar_prerequisites import (
+        StudioSidecarConfigurationError,
+        resolve_studio_sidecar_environment,
+    )
+
+    try:
+        sidecar_environment = resolve_studio_sidecar_environment(
+            provider=provider_id,
+            base_image=harness_sidecar_base_image,
+            regions=harness_sidecar_regions,
+            current_environment=current_env,
+        )
+    except StudioSidecarConfigurationError as error:
+        raise click.ClickException(str(error)) from error
+
     try:
         branding_logo = (
             resolve_site_logo(site_logo)
@@ -14287,34 +14665,22 @@ def frontend_update(
             )
         except ValueError as error:
             raise click.ClickException(str(error)) from error
-        write_studio_package(
-            package_dir,
-            requirements=requirements,
-            site_logo=branding_logo,
-            provider=provider_id,
-        )
+        try:
+            write_studio_package(
+                package_dir,
+                requirements=requirements,
+                site_logo=branding_logo,
+                provider=provider_id,
+            )
+        except ValueError as error:
+            raise click.ClickException(
+                f"Could not assemble the Studio package: {error}"
+            ) from error
 
         click.echo(f"Updating '{vefaas_app_name}' in {target.region}/{target.project}…")
-        service = VeFaaS(
-            access_key=ak,
-            secret_key=sk,
-            session_token=session_token,
-            region=target.region,
-            project_name=target.project,
-            provider=provider_id,
-        )
         environment_overrides = {"AGENTKIT_SANDBOX_REGION": target.region}
-        service_client = getattr(service, "client", None)
-        current_env: dict[str, str] = {}
-        remote_function: object | None = None
-        user_pool_id = ""
-        user_pool_client_id = ""
-        if service_client is not None:
-            import volcenginesdkvefaas
-
-            remote_function = service_client.get_function(
-                volcenginesdkvefaas.GetFunctionRequest(id=target.function_id)
-            )
+        environment_overrides.update(sidecar_environment)
+        if remote_function is not None:
             from veadk.cli.frontend_deploy_iam import (
                 ensure_default_frontend_role_policy,
             )
@@ -14327,18 +14693,6 @@ def frontend_update(
                 provider=provider_id,
             ):
                 click.echo("Studio IAM role policy updated.")
-            current_env = {
-                item.key: item.value
-                for item in (getattr(remote_function, "envs", None) or [])
-            }
-            user_pool_id = str(
-                current_env.get("VEADK_STUDIO_USER_POOL_ID")
-                or current_env.get("OAUTH2_USER_POOL_ID")
-                or ""
-            ).strip()
-            user_pool_client_id = str(
-                current_env.get("OAUTH2_USER_POOL_CLIENT_ID") or ""
-            ).strip()
             if user_pool_id:
                 environment_overrides.update(
                     {

@@ -36,6 +36,7 @@ _REQUIRED_FILES = (
     "extensions/harness/sidecar.py",
     "extensions/harness/sidecar_runtime/mcp_client.py",
     "extensions/harness/sidecar_runtime/mcp_loopback_proxy.py",
+    "extensions/harness/sidecar_runtime/mcp_upstream_proxy.py",
     "extensions/harness/sidecar_runtime/sidecar.py",
     "integrations/agentkit/app.py",
 )
@@ -101,6 +102,9 @@ def test_stage_copies_only_safe_runtime_source_and_rewrites_requirements(
     webui = package / "webui"
     webui.mkdir()
     (webui / "bundle.js").write_bytes(b"browser-only")
+    assets = package / "cli" / "assets"
+    assets.mkdir(parents=True)
+    (assets / "deployment-only.tar.gz").write_bytes(b"x" * (8 * 1024 * 1024 + 1))
     (package / ".env.local").write_text("SECRET=ignored\n", encoding="utf-8")
     (package / ".python-version").write_text("3.12\n", encoding="utf-8")
     project = tmp_path / "project"
@@ -121,6 +125,7 @@ def test_stage_copies_only_safe_runtime_source_and_rewrites_requirements(
     assert (project / "veadk/extensions/harness/sidecar.py").is_file()
     assert not (project / "veadk/__pycache__").exists()
     assert not (project / "veadk/webui").exists()
+    assert not (project / "veadk/cli/assets").exists()
     assert not (project / "veadk/.env.local").exists()
     assert not (project / "veadk/.python-version").exists()
     requirements = (project / "requirements.txt").read_text(encoding="utf-8")

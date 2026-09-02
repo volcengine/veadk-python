@@ -23,8 +23,14 @@ export interface McpTool {
   authToken?: string;
   /** Environment variable used by generated code for the bearer token. */
   authTokenEnv?: string;
-  /** Server-confirmed configured state. The previous value is never exposed. */
+  /** Server-confirmed configured state; recovered values stay editor-only. */
   credentialConfigured?: boolean;
+  /** Original published endpoint for a server-managed credential. Editor-only. */
+  credentialSourceUrl?: string;
+  /** Original published credential reference. Editor-only and never a value. */
+  credentialSourceAuthTokenEnv?: string;
+  /** Explicit decision required after the published endpoint identity changes. */
+  credentialUpdate?: "pending" | "reuse" | "replace" | "remove";
   /** stdio transport: the command to launch (e.g. "npx"). */
   command?: string;
   /** stdio transport: command args (e.g. ["-y", "@playwright/mcp@latest"]). */

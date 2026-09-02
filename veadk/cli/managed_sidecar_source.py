@@ -36,7 +36,7 @@ _REMOVED_DISTRIBUTIONS = {
 _MANAGED_SDK_REQUIREMENT = "agentkit-sdk-python==0.8.1"
 _MANAGED_MCP_REQUIREMENT = "mcp==1.26.0"
 _MANAGED_ADK_REQUIREMENT = "google-adk>=1.34.0"
-_IGNORED_PARTS = {".git", "__pycache__", "webui"}
+_IGNORED_PARTS = {".git", "__pycache__", "assets", "webui"}
 _IGNORED_SUFFIXES = {".pyc", ".pyo"}
 _BLOCKED_SUFFIXES = {".key", ".p12", ".pem", ".pfx"}
 _REQUIRED_SOURCE_FILES = (
@@ -45,6 +45,7 @@ _REQUIRED_SOURCE_FILES = (
     "extensions/harness/sidecar.py",
     "extensions/harness/sidecar_runtime/mcp_client.py",
     "extensions/harness/sidecar_runtime/mcp_loopback_proxy.py",
+    "extensions/harness/sidecar_runtime/mcp_upstream_proxy.py",
     "extensions/harness/sidecar_runtime/sidecar.py",
     "integrations/agentkit/app.py",
 )

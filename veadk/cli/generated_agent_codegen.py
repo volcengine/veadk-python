@@ -2306,6 +2306,7 @@ def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
         _add_import(acc, "from google.adk.apps.app import App")
         _add_import(acc, "from veadk.extensions.harness import HarnessExtension")
     if acc.managed_mcp_http_count:
+        _add_import(acc, "import json")
         _add_import(acc, "import os")
         _add_import(
             acc,
@@ -2315,16 +2316,11 @@ def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
         acc.env.extend(
             [
                 EnvVar(
-                    "MCP_URLS",
+                    "MCP_SERVERS_JSON",
                     True,
-                    "https://example.com/mcp",
-                    "MCP upstream URLs, separated by commas",
-                ),
-                EnvVar(
-                    "MCP_API_KEY",
-                    True,
-                    "replace-with-your-mcp-api-key",
-                    "Shared MCP upstream API key",
+                    '[{"name":"example","url":"https://example.com/mcp",'
+                    '"headers":{"Authorization":"Bearer ..."}}]',
+                    "Studio-managed structured MCP upstream configuration",
                 ),
             ]
         )
@@ -2336,20 +2332,34 @@ def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
         harness_bootstrap = "harness_extension = HarnessExtension.from_env()\n"
     if acc.managed_mcp_http_count:
         managed_mcp_bootstrap = (
-            "\n_managed_mcp_urls = [\n"
-            '    value.strip() for value in os.environ.get("MCP_URLS", "").split(",")\n'
-            "    if value.strip()\n"
-            "]\n"
-            f"if len(_managed_mcp_urls) != {acc.managed_mcp_http_count}:\n"
+            "\ntry:\n"
+            "    _managed_mcp_servers = json.loads(\n"
+            '        os.environ.get("MCP_SERVERS_JSON", "")\n'
+            "    )\n"
+            "except (TypeError, ValueError) as _managed_mcp_error:\n"
+            "    raise RuntimeError(\n"
+            '        "Harness Sidecar MCP server configuration is invalid"\n'
+            "    ) from _managed_mcp_error\n"
+            "if (\n"
+            "    not isinstance(_managed_mcp_servers, list)\n"
+            f"    or len(_managed_mcp_servers) != {acc.managed_mcp_http_count}\n"
+            "):\n"
             '    raise RuntimeError("Harness Sidecar MCP gateway endpoint count does not match configured HTTP MCP tools")\n'
-            '_managed_mcp_api_key = os.environ.get("MCP_API_KEY", "").strip()\n'
-            "if not _managed_mcp_api_key:\n"
-            '    raise RuntimeError("Harness Sidecar MCP gateway API key is missing")\n'
             "\n"
             "def _managed_mcp_connection(index: int):\n"
+            "    server = _managed_mcp_servers[index]\n"
+            "    if not isinstance(server, dict):\n"
+            '        raise RuntimeError("Harness Sidecar MCP server entry is invalid")\n'
+            '    url = str(server.get("url") or "").strip()\n'
+            '    headers = server.get("headers") or {}\n'
+            "    if not url or not isinstance(headers, dict) or not all(\n"
+            "        isinstance(key, str) and isinstance(value, str)\n"
+            "        for key, value in headers.items()\n"
+            "    ):\n"
+            '        raise RuntimeError("Harness Sidecar MCP server entry is invalid")\n'
             "    return StreamableHTTPConnectionParams(\n"
-            "        url=_managed_mcp_urls[index],\n"
-            '        headers={"Authorization": f"Bearer {_managed_mcp_api_key}"},\n'
+            "        url=url,\n"
+            "        headers=headers,\n"
             "        timeout=30.0,\n"
             "        sse_read_timeout=300.0,\n"
             "        httpx_client_factory=managed_mcp_http_client_factory,\n"

@@ -200,9 +200,13 @@ server that `veadk frontend` launches — no separate backend.
   variables: generated source retains only the `${ENV_NAME}` reference, while
   YAML and browser drafts preserve the corresponding environment value.
   Runtime updates restore only explicitly public environment values. Existing
-  MCP authentication is represented as “configured” without returning its old
-  value to the browser; leaving it unchanged preserves the server-side Runtime
-  value, while entering a replacement Token overrides it. Long descriptions and prompts
+  MCP authentication references are resolved against the server-managed Runtime
+  configuration and transiently restored to the masked editor: leaving the MCP
+  identity unchanged reuses the stored value without another environment-variable
+  input. Changing an authenticated MCP
+  URL requires the user to enter a replacement Token, explicitly confirm reuse
+  of the previous credential, or mark the new endpoint as unauthenticated;
+  Studio never silently replays a credential to a different endpoint. Long descriptions and prompts
   scroll within bounded editors, while the sidebar stays pinned to the
   viewport. On narrow desktop windows, the structure, configuration, and debug
   panels stack vertically instead of squeezing the form. The deployment page

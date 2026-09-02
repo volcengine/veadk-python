@@ -299,31 +299,60 @@ class TosDependencyStore:
     def _load_manifest(self, manifest: Path) -> tuple[tuple[str, str, str], ...]:
         payload = json.loads(manifest.read_text(encoding="utf-8"))
         raw_wheels = payload.get("wheels") if isinstance(payload, dict) else None
-        if not isinstance(raw_wheels, list) or not raw_wheels or len(raw_wheels) > 32:
+        raw_sources = payload.get("sources", []) if isinstance(payload, dict) else None
+        raw_artifacts = payload.get("artifacts") if isinstance(payload, dict) else None
+        if (
+            not isinstance(raw_wheels, list)
+            or not raw_wheels
+            or len(raw_wheels) > 32
+            or not isinstance(raw_sources, list)
+            or len(raw_sources) > 8
+            or not isinstance(raw_artifacts, list)
+            or len(raw_artifacts) != 1
+        ):
             raise ValueError("Studio dependency manifest is invalid.")
-        wheels: list[tuple[str, str, str]] = []
-        for raw in raw_wheels:
-            if not isinstance(raw, dict):
-                raise ValueError("Studio dependency manifest is invalid.")
-            filename = raw.get("filename")
-            url = raw.get("url")
-            sha256 = raw.get("sha256")
-            if (
-                not isinstance(filename, str)
-                or Path(filename).name != filename
-                or not filename.endswith(".whl")
-                or not isinstance(url, str)
-                or not url.startswith("https://")
-                or not isinstance(sha256, str)
-                or len(sha256) != 64
-            ):
-                raise ValueError("Studio dependency manifest is invalid.")
-            try:
-                int(sha256, 16)
-            except ValueError as error:
-                raise ValueError("Studio dependency manifest is invalid.") from error
-            wheels.append((filename, url, sha256.lower()))
-        return tuple(wheels)
+        dependencies: list[tuple[str, str, str]] = []
+        filenames: set[str] = set()
+        groups = (
+            (raw_wheels, lambda name: name.endswith(".whl")),
+            (
+                raw_sources,
+                lambda name: name.endswith(".tar.gz")
+                and name != "agentkit-linux-x64.tar.gz",
+            ),
+            (raw_artifacts, lambda name: name == "agentkit-linux-x64.tar.gz"),
+        )
+        for items, valid_filename in groups:
+            for raw in items:
+                if not isinstance(raw, dict):
+                    raise ValueError("Studio dependency manifest is invalid.")
+                filename = raw.get("filename")
+                url = raw.get("url")
+                sha256 = raw.get("sha256")
+                if (
+                    not isinstance(filename, str)
+                    or Path(filename).name != filename
+                    or filename in filenames
+                    or not valid_filename(filename)
+                    or not isinstance(url, str)
+                    or not url.startswith("https://")
+                    or not isinstance(sha256, str)
+                    or len(sha256) != 64
+                ):
+                    raise ValueError("Studio dependency manifest is invalid.")
+                try:
+                    int(sha256, 16)
+                except ValueError as error:
+                    raise ValueError(
+                        "Studio dependency manifest is invalid."
+                    ) from error
+                if filename == "agentkit-linux-x64.tar.gz" and not url.startswith(
+                    "https://agentkit-cli.tos-cn-beijing.volces.com/0.52.14/"
+                ):
+                    raise ValueError("Studio dependency manifest is invalid.")
+                filenames.add(filename)
+                dependencies.append((filename, url, sha256.lower()))
+        return tuple(dependencies)
 
     def _cache_key(self, filename: str, sha256: str) -> str:
         prefix = self._settings.job_prefix.strip().strip("/")

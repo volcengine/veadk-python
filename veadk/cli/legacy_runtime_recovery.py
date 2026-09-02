@@ -13,9 +13,10 @@
 # limitations under the License.
 """Recover an editable, source-preserving view of a legacy Runtime.
 
-The control plane and OCI image are privileged server-side inputs.  This module
-returns only public MCP fields and bounded Skill source files; credential values
-never cross the module boundary.  Network and cloud clients are injected so the
+The control plane and OCI image are privileged server-side inputs. Parsers keep
+MCP credentials separate from public configuration. The authenticated Studio
+editor may explicitly combine them with :func:`mcp_editor_draft_with_credentials`
+for a transient edit response. Network and cloud clients are injected so the
 parsing and filesystem rules remain independently testable.
 """
 
@@ -47,6 +48,9 @@ __all__ = [
     "LegacyRecoveryError",
     "McpRecovery",
     "merge_mcp_recoveries",
+    "mcp_reuse_supplied_credentials",
+    "mcp_editor_draft_with_credentials",
+    "mcp_secret_values_for_draft_references",
     "mcp_secret_values_from_runtime_environment",
     "mcp_secret_values_from_toolset",
     "OciImageInspector",
@@ -56,6 +60,7 @@ __all__ = [
     "RegistryCredential",
     "recover_mcp_from_runtime_environment",
     "recover_mcp_from_toolset",
+    "retained_mcp_secret_values",
     "resolve_source_preserving_mcp_owner",
     "resolve_source_preserving_mcp_secrets",
     "source_preserving_mcp_changed",
@@ -807,6 +812,70 @@ def _validated_secret(value: Any) -> str:
     return secret
 
 
+def _canonical_supplied_mcp_credentials(
+    *,
+    draft: Mapping[str, Any],
+    supplied_credentials: Iterable[Mapping[str, Any]],
+) -> dict[tuple[str, str, str], str]:
+    """Bind submitted credentials to names canonicalized from the draft.
+
+    Older Studio snapshots may contain human-readable MCP display names that
+    predate the generated-name contract.  Such a name is accepted only when
+    the submitted Agent/name/URL tuple exactly matches a tool in the current
+    server-validated draft.  Arbitrary invalid names remain rejected.
+    """
+
+    aliases: dict[
+        tuple[str, str, str],
+        tuple[str, str, str],
+    ] = {}
+    for node in _draft_nodes(draft):
+        agent_name = str(node.get("name") or "").strip()
+        raw_tools = node.get("mcpTools")
+        if not agent_name or not isinstance(raw_tools, list):
+            continue
+        for index, raw_tool in enumerate(raw_tools):
+            if not isinstance(raw_tool, Mapping):
+                continue
+            if str(raw_tool.get("transport") or "http") != "http":
+                continue
+            url = _safe_mcp_url(raw_tool.get("url"))
+            raw_name = str(raw_tool.get("name") or "").strip()
+            canonical_name = _mcp_name(raw_name, url, index)
+            canonical_identity = (agent_name, canonical_name, url)
+            candidate_names = [canonical_name]
+            if not raw_name or (
+                len(raw_name) <= 80
+                and all(ord(character) >= 32 for character in raw_name)
+                and "\x7f" not in raw_name
+            ):
+                candidate_names.append(raw_name)
+            for candidate_name in candidate_names:
+                alias = (agent_name, candidate_name, url)
+                previous = aliases.get(alias)
+                if previous is not None and previous != canonical_identity:
+                    raise LegacyRecoveryError("legacy_mcp_recovery_duplicate")
+                aliases[alias] = canonical_identity
+
+    supplied: dict[tuple[str, str, str], str] = {}
+    for index, raw in enumerate(supplied_credentials):
+        if index >= 256 or not isinstance(raw, Mapping):
+            raise LegacyRecoveryError("legacy_mcp_credential_input_invalid")
+        agent_name = str(raw.get("agentName") or "").strip()
+        name = str(raw.get("name") or "").strip()
+        url = _safe_mcp_url(raw.get("url"))
+        input_identity = (agent_name, name, url)
+        identity = aliases.get(input_identity)
+        if identity is None:
+            if not agent_name or _MCP_NAME_RE.fullmatch(name) is None:
+                raise LegacyRecoveryError("legacy_mcp_credential_input_invalid")
+            identity = input_identity
+        if identity in supplied:
+            raise LegacyRecoveryError("legacy_mcp_credential_input_duplicate")
+        supplied[identity] = _validated_secret(raw.get("value"))
+    return supplied
+
+
 def resolve_source_preserving_mcp_secrets(
     *,
     published_draft: Mapping[str, Any],
@@ -863,19 +932,10 @@ def canonicalize_source_preserving_mcp_credentials(
             raise LegacyRecoveryError("legacy_mcp_recovery_duplicate")
         published_by_identity[identity] = reference
 
-    supplied: dict[tuple[str, str, str], str] = {}
-    for raw in supplied_credentials:
-        if not isinstance(raw, Mapping) or len(supplied) >= 256:
-            raise LegacyRecoveryError("legacy_mcp_credential_input_invalid")
-        agent_name = str(raw.get("agentName") or "").strip()
-        name = str(raw.get("name") or "").strip()
-        url = _safe_mcp_url(raw.get("url"))
-        if not agent_name or _MCP_NAME_RE.fullmatch(name) is None:
-            raise LegacyRecoveryError("legacy_mcp_credential_input_invalid")
-        identity = (agent_name, name, url)
-        if identity in supplied:
-            raise LegacyRecoveryError("legacy_mcp_credential_input_duplicate")
-        supplied[identity] = _validated_secret(raw.get("value"))
+    supplied = _canonical_supplied_mcp_credentials(
+        draft=canonical,
+        supplied_credentials=supplied_credentials,
+    )
 
     used_supplied: set[tuple[str, str, str]] = set()
     resolved: dict[str, str] = {}
@@ -942,13 +1002,22 @@ def build_sidecar_mcp_servers_json(
     *,
     draft: Mapping[str, Any],
     secret_values: Mapping[str, str],
+    supplied_credentials: Iterable[Mapping[str, Any]] = (),
 ) -> str:
     """Build the Sidecar MCP server list entirely on the Studio server."""
 
+    supplied = _canonical_supplied_mcp_credentials(
+        draft=draft,
+        supplied_credentials=supplied_credentials,
+    )
+
     servers: list[dict[str, Any]] = []
     seen_names: set[str] = set()
-    seen_urls: set[str] = set()
+    used_supplied: set[tuple[str, str, str]] = set()
     for node in _draft_nodes(draft):
+        agent_name = str(node.get("name") or "").strip()
+        if not agent_name:
+            raise LegacyRecoveryError("legacy_overlay_agent_identity_invalid")
         raw_tools = node.get("mcpTools")
         if not isinstance(raw_tools, list):
             continue
@@ -956,24 +1025,62 @@ def build_sidecar_mcp_servers_json(
             if not isinstance(raw_tool, Mapping):
                 raise LegacyRecoveryError("legacy_overlay_mcp_invalid")
             if str(raw_tool.get("transport") or "http") != "http":
-                raise LegacyRecoveryError("legacy_sidecar_mcp_transport_unsupported")
+                continue
             url = _safe_mcp_url(raw_tool.get("url"))
             name = _mcp_name(raw_tool.get("name"), url, index)
-            if name in seen_names or url in seen_urls:
+            if name in seen_names:
                 raise LegacyRecoveryError("legacy_mcp_recovery_duplicate")
             reference = str(raw_tool.get("authTokenEnv") or "").strip()
+            identity = (agent_name, name, url)
             server: dict[str, Any] = {"name": name, "url": url}
-            if reference:
-                secret = secret_values.get(reference)
+            secret = supplied.get(identity, "")
+            if secret:
+                used_supplied.add(identity)
+            elif reference:
+                secret = secret_values.get(reference, "")
                 if not secret:
                     raise LegacyRecoveryError("legacy_mcp_credential_missing")
+            if secret:
                 server["headers"] = {
                     "Authorization": "Bearer " + _validated_secret(secret)
                 }
             servers.append(server)
             seen_names.add(name)
-            seen_urls.add(url)
+    if used_supplied != set(supplied):
+        raise LegacyRecoveryError("legacy_mcp_credential_identity_changed")
     return json.dumps(servers, ensure_ascii=False, separators=(",", ":"))
+
+
+def mcp_editor_draft_with_credentials(
+    draft: Mapping[str, Any],
+    secret_values: Mapping[str, str],
+) -> dict[str, Any]:
+    """Populate only referenced MCP credentials for an authenticated editor.
+
+    The returned copy is intended for one Studio edit response. Callers must
+    not log or persist it. Values are matched through the server-recovered
+    environment reference, so a browser cannot select an arbitrary Runtime
+    environment variable for disclosure.
+    """
+
+    revealed = copy.deepcopy(dict(draft))
+    for node in _draft_nodes(revealed):
+        raw_tools = node.get("mcpTools")
+        if not isinstance(raw_tools, list):
+            continue
+        for raw_tool in raw_tools:
+            if not isinstance(raw_tool, dict):
+                raise LegacyRecoveryError("legacy_overlay_mcp_invalid")
+            reference = str(raw_tool.get("authTokenEnv") or "").strip()
+            if not reference:
+                raw_tool.pop("authToken", None)
+                continue
+            value = secret_values.get(reference, "")
+            if value:
+                raw_tool["authToken"] = _validated_secret(value)
+            else:
+                raw_tool.pop("authToken", None)
+    return revealed
 
 
 def _source_preserving_mcp_configuration(
@@ -1124,13 +1231,12 @@ def recover_mcp_from_runtime_environment(
             raise LegacyRecoveryError("legacy_mcp_servers_json_invalid")
         tools: list[dict[str, Any]] = []
         seen_names: set[str] = set()
-        seen_urls: set[str] = set()
         for index, item in enumerate(payload):
             if not isinstance(item, Mapping):
                 raise LegacyRecoveryError("legacy_mcp_servers_json_invalid")
             url = _safe_mcp_url(item.get("url"))
             name = _mcp_name(item.get("name"), url, index)
-            if name in seen_names or url in seen_urls:
+            if name in seen_names:
                 raise LegacyRecoveryError("legacy_mcp_servers_json_duplicate")
             token = _bearer_token(item.get("headers"))
             configured = bool(token)
@@ -1144,7 +1250,6 @@ def recover_mcp_from_runtime_environment(
                 }
             )
             seen_names.add(name)
-            seen_urls.add(url)
         return McpRecovery(
             tools=tuple(tools),
             configured_reference_keys=tuple(
@@ -1215,6 +1320,122 @@ def mcp_secret_values_from_runtime_environment(
             if token
         }
     return {}
+
+
+def mcp_secret_values_for_draft_references(
+    *,
+    draft: Mapping[str, Any],
+    recovery: McpRecovery,
+    recovered_values: Mapping[str, str],
+) -> dict[str, str]:
+    """Bind recovered secrets to the references used by a published draft.
+
+    Managed Sidecar Runtimes store effective credentials inside
+    ``MCP_SERVERS_JSON`` under opaque recovery references.  Published drafts
+    can retain an older generated environment name.  This function joins the
+    two representations only through the server-validated MCP name and URL;
+    browser-selected environment names are never trusted as secret selectors.
+    """
+
+    recovered_by_identity: dict[tuple[str, str], str] = {}
+    ambiguous: set[tuple[str, str]] = set()
+    for index, tool in enumerate(recovery.tools):
+        url = _safe_mcp_url(tool.get("url"))
+        identity = (_mcp_name(tool.get("name"), url, index), url)
+        reference = str(tool.get("authTokenEnv") or "").strip()
+        value = str(recovered_values.get(reference) or "")
+        if not reference or not value:
+            continue
+        if identity in recovered_by_identity:
+            ambiguous.add(identity)
+        else:
+            recovered_by_identity[identity] = _validated_secret(value)
+    for identity in ambiguous:
+        recovered_by_identity.pop(identity, None)
+
+    resolved: dict[str, str] = {}
+    for reference, (_agent_name, name, url) in _mcp_tool_bindings(draft).items():
+        value = recovered_by_identity.get((name, url), "")
+        if value:
+            resolved[reference] = value
+    return resolved
+
+
+def retained_mcp_secret_values(
+    *,
+    published_draft: Mapping[str, Any],
+    edited_draft: Mapping[str, Any],
+    published_reference_values: Mapping[str, str],
+) -> dict[str, str]:
+    """Keep a stored credential only while its complete identity is unchanged."""
+
+    published = _mcp_tool_bindings(published_draft)
+    edited = _mcp_tool_bindings(edited_draft)
+    return {
+        reference: _validated_secret(published_reference_values[reference])
+        for reference, identity in edited.items()
+        if published.get(reference) == identity
+        and published_reference_values.get(reference)
+    }
+
+
+def mcp_reuse_supplied_credentials(
+    *,
+    published_draft: Mapping[str, Any],
+    edited_draft: Mapping[str, Any],
+    published_reference_values: Mapping[str, str],
+    reuse_requests: Iterable[Mapping[str, Any]],
+) -> tuple[dict[str, str], ...]:
+    """Turn explicit, server-validated reuse decisions into supplied secrets.
+
+    Reuse is accepted only for the same Agent and canonical MCP name.  The URL
+    may change because that is the user-confirmed operation.  A credential from
+    another tool can never be selected through a browser-provided reference.
+    """
+
+    published = _mcp_tool_bindings(published_draft)
+    edited = _mcp_tool_bindings(edited_draft)
+    supplied: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for index, request in enumerate(reuse_requests):
+        if index >= 256 or not isinstance(request, Mapping):
+            raise LegacyRecoveryError("legacy_mcp_reuse_input_invalid")
+        source_reference = str(request.get("sourceAuthTokenEnv") or "").strip()
+        source_identity = published.get(source_reference)
+        edited_identity = edited.get(source_reference)
+        secret = str(published_reference_values.get(source_reference) or "")
+        if source_identity is None or edited_identity is None or not secret:
+            raise LegacyRecoveryError("legacy_mcp_reuse_source_missing")
+        raw_credential = {
+            "agentName": str(request.get("agentName") or "").strip(),
+            "name": str(request.get("name") or "").strip(),
+            "url": str(request.get("url") or "").strip(),
+            "value": "validated-reuse-marker",
+        }
+        canonical = _canonical_supplied_mcp_credentials(
+            draft=edited_draft,
+            supplied_credentials=(raw_credential,),
+        )
+        if len(canonical) != 1:
+            raise LegacyRecoveryError("legacy_mcp_reuse_input_invalid")
+        requested_identity = next(iter(canonical))
+        if edited_identity != requested_identity or (
+            source_identity[0],
+            source_identity[1],
+        ) != (requested_identity[0], requested_identity[1]):
+            raise LegacyRecoveryError("legacy_mcp_reuse_identity_changed")
+        if requested_identity in seen:
+            raise LegacyRecoveryError("legacy_mcp_reuse_input_duplicate")
+        seen.add(requested_identity)
+        supplied.append(
+            {
+                "agentName": raw_credential["agentName"],
+                "name": raw_credential["name"],
+                "url": raw_credential["url"],
+                "value": _validated_secret(secret),
+            }
+        )
+    return tuple(supplied)
 
 
 def _toolset_endpoint(toolset: Mapping[str, Any]) -> str:

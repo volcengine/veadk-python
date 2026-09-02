@@ -70,13 +70,23 @@ def fake_runtime(tmp_path: Path) -> Path:
                     "UNRELATED_RUNTIME_ENV",
                 )
                 values = {key: __import__("os").environ.get(key) for key in keys}
+                mcp_key_env = config["mcp_gateway"].get("upstream_api_key_env", "")
+                values["MCP_RELAY_KEY_CONFIGURED"] = bool(
+                    mcp_key_env and __import__("os").environ.get(mcp_key_env)
+                )
                 open(env_capture, "w", encoding="utf-8").write(json.dumps(values))
             model_enabled = config["model_proxy"]["enabled"]
             mcp_enabled = config["mcp_gateway"]["enabled"]
-            mcp_url = __import__("os").environ.get(
-                "FAKE_RUNTIME_MCP_URL",
-                "http://127.0.0.1:18899/metrics",
-            )
+            configured_mcp_urls = config["mcp_gateway"].get("upstreams") or []
+            mcp_urls = [
+                "http://127.0.0.1:18899/" + url.rstrip("/").rsplit("/", 1)[-1]
+                for url in configured_mcp_urls
+            ] or [
+                __import__("os").environ.get(
+                    "FAKE_RUNTIME_MCP_URL",
+                    "http://127.0.0.1:18899/metrics",
+                )
+            ]
             discovery = {
                 "schema_version": "1",
                 "status": "ok",
@@ -86,7 +96,7 @@ def fake_runtime(tmp_path: Path) -> Path:
                     if model_enabled else {}
                 ),
                 "mcp_gateway": (
-                    {"urls": [mcp_url]}
+                    {"urls": mcp_urls}
                     if mcp_enabled else {}
                 ),
                 "env": {
@@ -100,7 +110,7 @@ def fake_runtime(tmp_path: Path) -> Path:
                     "http://127.0.0.1:18787/api/v3"
                 )
             if mcp_enabled:
-                discovery["env"]["MCP_URLS"] = mcp_url
+                discovery["env"]["MCP_URLS"] = ",".join(mcp_urls)
             print(json.dumps(discovery), flush=True)
             if __import__("os").environ.get("FAKE_RUNTIME_EXIT_AFTER_DISCOVERY"):
                 time.sleep(0.1)
@@ -190,7 +200,73 @@ def test_runtime_process_env_is_separate_from_binding_target(
             "ENABLE_TLS": "false",
             "OTEL_SDK_DISABLED": "true",
             "UNRELATED_RUNTIME_ENV": "preserved",
+            "MCP_RELAY_KEY_CONFIGURED": False,
         }
+    finally:
+        binding.stop()
+
+
+def test_structured_mcp_configuration_is_converted_for_private_runtime(
+    fake_runtime: Path, tmp_path: Path
+) -> None:
+    config_capture = tmp_path / "runtime-config.json"
+    env_capture = tmp_path / "runtime-env.json"
+    environ = {
+        "MCP_SERVERS_JSON": json.dumps(
+            [
+                {
+                    "name": "public",
+                    "url": "https://mcp.example.test/public/mcp",
+                },
+                {
+                    "name": "orders",
+                    "url": "https://mcp.example.test/orders/mcp",
+                    "headers": {"Authorization": "Bearer orders-test-token"},
+                },
+            ]
+        ),
+        "HARNESS_SIDECAR_APIG_ENDPOINT": "http://127.0.0.1:9",
+        "HARNESS_SIDECAR_APIG_API_KEY": "runtime-gateway-test-marker",
+        "FAKE_RUNTIME_CAPTURE": str(config_capture),
+        "FAKE_RUNTIME_ENV_CAPTURE": str(env_capture),
+    }
+    config = HarnessSidecarConfig(
+        profile="default",
+        fail_open=False,
+        transport="apig_runtime_port",
+        runtime_command=[sys.executable, str(fake_runtime)],
+        model_proxy={"enabled": False},
+        mcp_gateway={
+            "enabled": True,
+            "host": "0.0.0.0",
+            "port": 18788,
+            "prefer_configured_upstream_api_key": True,
+            "fail_open": False,
+        },
+    )
+
+    binding = start_harness_sidecar(
+        config,
+        apply_env=True,
+        environ=environ,
+        process_env=environ,
+    )
+    try:
+        runtime_config = json.loads(config_capture.read_text(encoding="utf-8"))
+        upstreams = runtime_config["mcp_gateway"]["upstreams"]
+        assert len(upstreams) == 2
+        assert all(url.startswith("http://127.0.0.1:") for url in upstreams)
+        assert upstreams[0].endswith("/mcp-public-1")
+        assert upstreams[1].endswith("/mcp-orders-2")
+        assert runtime_config["mcp_gateway"]["prefer_configured_upstream_api_key"]
+        assert runtime_config["mcp_gateway"]["upstream_api_key_env"] == (
+            "VEADK_HARNESS_MCP_RELAY_API_KEY"
+        )
+        child_env = json.loads(env_capture.read_text(encoding="utf-8"))
+        assert child_env["MCP_RELAY_KEY_CONFIGURED"] is True
+        assert len(binding._upstream_relays) == 2
+        assert len(binding.spec.mcp_urls) == 2
+        assert environ["MCP_API_KEY"] == "runtime-gateway-test-marker"
     finally:
         binding.stop()
 

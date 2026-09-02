@@ -107,6 +107,7 @@ def test_build_frontend_assets_runs_clean_install_and_production_build(
     frontend_root = source_root / "frontend"
     frontend_root.mkdir(parents=True)
     (source_root / "pyproject.toml").write_text("", encoding="utf-8")
+    (source_root / "uv.lock").write_text("", encoding="utf-8")
     (source_root / "README.md").write_text("", encoding="utf-8")
     (source_root / "LICENSE").write_text("", encoding="utf-8")
     (frontend_root / "package.json").write_text("{}", encoding="utf-8")
@@ -493,6 +494,10 @@ def test_studio_update_preserves_branding_and_updates_existing_ids(
             "studio-app",
             "--path",
             str(tmp_path),
+            "--harness-sidecar-base-image",
+            "registry.example.com/agentkit/base@sha256:" + "a" * 64,
+            "--harness-sidecar-regions",
+            "cn-beijing",
             "--volcengine-access-key",
             "ak",
             "--volcengine-secret-key",
@@ -522,6 +527,9 @@ def test_studio_update_preserves_branding_and_updates_existing_ids(
         "AGENTKIT_SANDBOX_REGION": "cn-beijing",
         "VEADK_STUDIO_CRONJOB_SCHEDULER_BASE": "studio-app",
         "VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY": ANY,
+        "VEADK_STUDIO_HARNESS_SIDECAR_BASE_IMAGE": (
+            "registry.example.com/agentkit/base@sha256:" + "a" * 64
+        ),
     }
     assert len(scheduler_deploy) == 1
     scheduler_call = scheduler_deploy[0]
@@ -533,7 +541,180 @@ def test_studio_update_preserves_branding_and_updates_existing_ids(
     assert scheduler_call["environment_overrides"] == {
         "AGENTKIT_SANDBOX_REGION": "cn-beijing",
         "VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY": ANY,
+        "VEADK_STUDIO_HARNESS_SIDECAR_BASE_IMAGE": (
+            "registry.example.com/agentkit/base@sha256:" + "a" * 64
+        ),
     }
+
+
+def test_studio_update_inherits_sidecar_configuration_before_packaging(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    scheduler_deploy: list[dict[str, object]],
+) -> None:
+    target = _target(region="cn-shanghai")
+    image = "registry.example.com/agentkit/base@sha256:" + "f" * 64
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        "veadk.cli.studio_update.find_studio_deployments", lambda **_: [target]
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_update.load_deployed_site_logo", lambda _: None
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.build_frontend_assets", lambda *_: None
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.build_local_studio_requirements",
+        lambda *_a, **_k: "./veadk.whl\n",
+    )
+
+    def _write_package(*_args: object, **_kwargs: object) -> None:
+        captured["write_package_called"] = True
+
+    monkeypatch.setattr("veadk.cli.studio_package.write_studio_package", _write_package)
+    monkeypatch.setattr(
+        "veadk.cli.frontend_deploy_iam.ensure_default_frontend_role_policy",
+        lambda *_a, **_k: False,
+    )
+
+    class _FakeVeFaaS:
+        def __init__(self, **_: str) -> None:
+            self.client = SimpleNamespace(
+                get_function=lambda _request: SimpleNamespace(
+                    role="",
+                    envs=[
+                        SimpleNamespace(
+                            key="VEADK_STUDIO_HARNESS_SIDECAR_BASE_IMAGE",
+                            value=image,
+                        ),
+                        SimpleNamespace(
+                            key="VEADK_STUDIO_HARNESS_SIDECAR_REGIONS",
+                            value="cn-shanghai",
+                        ),
+                        SimpleNamespace(
+                            key="SANDBOX_CHAT_CODEX_SNAPSHOT", value="codex-snapshot"
+                        ),
+                        SimpleNamespace(
+                            key="SANDBOX_CHAT_OPENCLAW_SNAPSHOT",
+                            value="openclaw-snapshot",
+                        ),
+                        SimpleNamespace(
+                            key="SANDBOX_CHAT_HERMES_SNAPSHOT",
+                            value="hermes-snapshot",
+                        ),
+                    ],
+                )
+            )
+
+        def update_application_code_bundle(self, **kwargs: object) -> str:
+            captured["update"] = kwargs
+            return target.url
+
+    monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.VeFaaS", _FakeVeFaaS)
+
+    result = CliRunner().invoke(
+        studio,
+        [
+            "update",
+            "--vefaas-app-name",
+            "studio-app",
+            "--path",
+            str(tmp_path),
+            "--volcengine-access-key",
+            "ak",
+            "--volcengine-secret-key",
+            "sk",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["write_package_called"] is True
+    update = cast(dict[str, object], captured["update"])
+    overrides = cast(dict[str, str], update["environment_overrides"])
+    assert overrides["VEADK_STUDIO_HARNESS_SIDECAR_BASE_IMAGE"] == image
+    assert "VEADK_STUDIO_HARNESS_SIDECAR_REGIONS" not in overrides
+    assert len(scheduler_deploy) == 1
+
+
+def test_studio_update_ignores_legacy_region_without_image_override(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    scheduler_deploy: list[dict[str, object]],
+) -> None:
+    target = _target(region="cn-shanghai")
+    built: list[bool] = []
+    monkeypatch.setattr(
+        "veadk.cli.studio_update.find_studio_deployments", lambda **_: [target]
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.build_frontend_assets",
+        lambda *_: built.append(True),
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.build_local_studio_requirements",
+        lambda *_a, **_k: "./veadk.whl\n",
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.write_studio_package", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_update.load_deployed_site_logo", lambda _: None
+    )
+    monkeypatch.setattr(
+        "veadk.cli.frontend_deploy_iam.ensure_default_frontend_role_policy",
+        lambda *_a, **_k: False,
+    )
+
+    class _FakeVeFaaS:
+        def __init__(self, **_: str) -> None:
+            self.client = SimpleNamespace(
+                get_function=lambda _request: SimpleNamespace(
+                    role="",
+                    envs=[
+                        SimpleNamespace(
+                            key="VEADK_STUDIO_HARNESS_SIDECAR_REGIONS",
+                            value="cn-shanghai",
+                        ),
+                        SimpleNamespace(
+                            key="SANDBOX_CHAT_CODEX_SNAPSHOT",
+                            value="codex-snapshot",
+                        ),
+                        SimpleNamespace(
+                            key="SANDBOX_CHAT_OPENCLAW_SNAPSHOT",
+                            value="openclaw-snapshot",
+                        ),
+                        SimpleNamespace(
+                            key="SANDBOX_CHAT_HERMES_SNAPSHOT",
+                            value="hermes-snapshot",
+                        ),
+                    ],
+                )
+            )
+
+        def update_application_code_bundle(self, **_: object) -> str:
+            return target.url
+
+    monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.VeFaaS", _FakeVeFaaS)
+
+    result = CliRunner().invoke(
+        studio,
+        [
+            "update",
+            "--vefaas-app-name",
+            "studio-app",
+            "--path",
+            str(tmp_path),
+            "--volcengine-access-key",
+            "ak",
+            "--volcengine-secret-key",
+            "sk",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert built == [True]
+    assert len(scheduler_deploy) == 1
 
 
 def test_studio_update_supports_byteplus_provider(

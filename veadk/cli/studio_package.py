@@ -28,7 +28,15 @@ from frontend.service.studio_release_server.publisher import (
     validate_studio_wheel,
 )
 from veadk.cli.frontend_branding import SiteLogo
-from veadk.cli.studio_dependencies import stage_studio_dependency_wheels
+from veadk.cli.studio_dependencies import (
+    STUDIO_AGENTKIT_CLI_ARTIFACT,
+    stage_studio_agentkit_cli_archive,
+    stage_studio_dependency_sources,
+    stage_studio_dependency_wheels,
+)
+from frontend.service.studio_release_server.offline_runtime import (
+    build_studio_offline_runtime,
+)
 from veadk.utils.cloud_provider import DEFAULT_CLOUD_PROVIDER, CloudProvider
 
 
@@ -37,6 +45,7 @@ def stage_studio_provider_requirements(
     provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
 ) -> str:
     """Stage provider-specific wheels and return their requirements lines."""
+    stage_studio_agentkit_cli_archive(package_dir)
     if provider != "byteplus":
         return ""
     dependencies = stage_studio_dependency_wheels(package_dir, provider=provider)
@@ -69,7 +78,9 @@ def studio_run_script(
         'if [ -d "output" ]; then cd ./output/; fi\n'
         "HOST=0.0.0.0\n"
         "PORT=${_FAAS_RUNTIME_PORT:-8000}\n"
-        "export PYTHONPATH=$PYTHONPATH:./site-packages\n"
+        'export PYTHONPATH="./site-packages${PYTHONPATH:+:$PYTHONPATH}"\n'
+        "python3 -m veadk.cli.studio_companion "
+        f'--archive "$ROOT_DIR/{STUDIO_AGENTKIT_CLI_ARTIFACT.filename}"\n'
         f"{command}"
     )
 
@@ -121,10 +132,14 @@ def write_studio_package(
         f"site-logo.{site_logo.extension}" if site_logo is not None else None
     )
     (package_dir / "run.sh").write_text(
-        studio_run_script(logo_filename, provider=provider),
+        studio_run_script(
+            logo_filename,
+            provider=provider,
+        ),
         encoding="utf-8",
         newline="\n",
     )
+    (package_dir / "run.sh").chmod(0o755)
     if site_logo is not None and logo_filename is not None:
         (package_dir / logo_filename).write_bytes(site_logo.content)
     (package_dir / "requirements.txt").write_text(requirements, encoding="utf-8")
@@ -141,10 +156,12 @@ def build_local_studio_requirements(
     """Build a local VeADK wheel and return its offline requirements."""
     _validate_source_checkout(source_root)
     package_dir.mkdir(parents=True, exist_ok=True)
-    wheel_source = source_root
-    if frontend_assets is not None:
-        wheel_source = package_dir / "wheel-source"
-        _stage_wheel_source(source_root, frontend_assets, wheel_source)
+    wheel_source = package_dir / "wheel-source"
+    _stage_wheel_source(
+        source_root,
+        frontend_assets or source_root / "veadk" / "webui",
+        wheel_source,
+    )
 
     uv = shutil.which("uv")
     if uv:
@@ -170,17 +187,25 @@ def build_local_studio_requirements(
         raise ValueError("Local source build produced no veadk wheel.")
     validate_studio_wheel(wheels[0], wheel_source)
 
-    dependencies = stage_studio_dependency_wheels(
+    prepared_dependencies = package_dir / ".studio-runtime-inputs"
+    prepared_dependencies.mkdir()
+    dependency_sources = stage_studio_dependency_sources(
+        prepared_dependencies,
+        source_dir=dependency_wheels,
+    )
+    stage_studio_agentkit_cli_archive(
         package_dir,
         source_dir=dependency_wheels,
-        provider=provider,
     )
 
     shutil.rmtree(package_dir / "wheel-source", ignore_errors=True)
-    requirements = "".join(
-        f"./{name}\n"
-        for name in (*(path.name for path in dependencies), wheels[0].name)
+    requirements = build_studio_offline_runtime(
+        source_root,
+        package_dir,
+        veadk_wheel=wheels[0],
+        dependency_sources=dependency_sources,
     )
+    shutil.rmtree(prepared_dependencies)
     return requirements
 
 
@@ -188,6 +213,7 @@ def _validate_source_checkout(source_root: Path) -> None:
     """Require the files needed to build Studio from a source checkout."""
     required_paths = (
         source_root / "pyproject.toml",
+        source_root / "uv.lock",
         source_root / "README.md",
         source_root / "LICENSE",
         source_root / "frontend" / "package.json",
@@ -197,8 +223,8 @@ def _validate_source_checkout(source_root: Path) -> None:
     if not all(path.exists() for path in required_paths):
         raise ValueError(
             f"Not a VeADK source checkout: {source_root}. Expected pyproject.toml, "
-            "README.md, LICENSE, frontend/package.json, frontend/package-lock.json, "
-            "and veadk/."
+            "uv.lock, README.md, LICENSE, frontend/package.json, "
+            "frontend/package-lock.json, and veadk/."
         )
 
 

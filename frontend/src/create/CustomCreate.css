@@ -3784,6 +3784,19 @@
   outline: 2px solid hsl(var(--primary));
   outline-offset: 1px;
 }
+.cw-mcp-auth-state.is-warning {
+  align-items: flex-start;
+  border-color: hsl(var(--destructive) / 0.35);
+  background: hsl(var(--destructive) / 0.06);
+  color: hsl(var(--foreground));
+}
+.cw-mcp-auth-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
 .cw-mcp-warning {
   display: flex;
   align-items: flex-start;

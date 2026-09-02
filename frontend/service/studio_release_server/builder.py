@@ -57,6 +57,7 @@ _GITHUB_CLONE_MIRROR = "https://ghfast.top/https://github.com"
 _GIT_CLONE_ATTEMPT_SECONDS = 30
 _SPARSE_CHECKOUT_PATHS = (
     "/pyproject.toml",
+    "/uv.lock",
     "/README.md",
     "/LICENSE",
     "/frontend/",

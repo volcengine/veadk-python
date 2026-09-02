@@ -21,6 +21,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -32,11 +33,31 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+if __package__:
+    from .offline_runtime import build_studio_offline_runtime
+else:
+    import importlib.util
+
+    _offline_runtime_path = Path(__file__).with_name("offline_runtime.py")
+    _offline_runtime_spec = importlib.util.spec_from_file_location(
+        "veadk_studio_offline_runtime",
+        _offline_runtime_path,
+    )
+    if _offline_runtime_spec is None or _offline_runtime_spec.loader is None:
+        raise RuntimeError("Studio offline runtime builder is unavailable.")
+    _offline_runtime = importlib.util.module_from_spec(_offline_runtime_spec)
+    _offline_runtime_spec.loader.exec_module(_offline_runtime)
+    build_studio_offline_runtime = _offline_runtime.build_studio_offline_runtime
+
 _VERSION_PATTERN = re.compile(r"^\d{14}$")
 _GIT_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _MAX_STUDIO_BUNDLE_BYTES = 300 * 1024 * 1024
 _MAX_STUDIO_RELEASES = 50
+_AGENTKIT_CLI_ARCHIVE = "agentkit-linux-x64.tar.gz"
+_AGENTKIT_CLI_ARCHIVE_SHA256 = (
+    "4e76e32c60473b5037c331a7c74bb99b1c23b62eb8ce26379d3a8c41af38a64e"
+)
 
 
 class StudioPublisherError(ValueError):
@@ -271,6 +292,7 @@ class StudioReleaseStore:
 def _validate_source_checkout(source_root: Path) -> None:
     required = (
         source_root / "pyproject.toml",
+        source_root / "uv.lock",
         source_root / "README.md",
         source_root / "LICENSE",
         source_root / "frontend" / "package.json",
@@ -404,6 +426,69 @@ def validate_studio_wheel(wheel: Path, source_root: Path) -> None:
         )
 
 
+def validate_studio_agentkit_cli_archive(artifacts: list[Path]) -> Path:
+    """Require the exact pinned Linux/x64 native CLI archive."""
+
+    candidates = [path for path in artifacts if path.name == _AGENTKIT_CLI_ARCHIVE]
+    if len(candidates) != 1:
+        raise StudioPublisherError(
+            "The Studio release must contain the pinned AgentKit CLI archive."
+        )
+    archive = candidates[0]
+    try:
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    except OSError as error:
+        raise StudioPublisherError(
+            "The Studio release AgentKit CLI archive is unavailable."
+        ) from error
+    if digest != _AGENTKIT_CLI_ARCHIVE_SHA256:
+        raise StudioPublisherError(
+            "The Studio release AgentKit CLI archive checksum is invalid."
+        )
+    return archive
+
+
+def validate_studio_bundle_dependencies(package_dir: Path) -> Path:
+    """Validate the local VeADK/CLI dependency pair in an extracted bundle."""
+    requirements_path = package_dir / "requirements.txt"
+    try:
+        lines = requirements_path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError) as error:
+        raise StudioPublisherError(
+            "Studio release requirements are unavailable."
+        ) from error
+    local_wheels: list[Path] = []
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            tokens = shlex.split(line)
+        except ValueError as error:
+            raise StudioPublisherError(
+                "Studio release requirements contain invalid quoting."
+            ) from error
+        if not tokens or not tokens[0].endswith(".whl"):
+            continue
+        relative = tokens[0].removeprefix("./")
+        path = (package_dir / relative).resolve()
+        if not path.is_relative_to(package_dir.resolve()) or not path.is_file():
+            raise StudioPublisherError(
+                "Studio release requirements reference a missing local wheel."
+            )
+        local_wheels.append(path)
+    veadk_wheels = [
+        wheel
+        for wheel in local_wheels
+        if wheel.name.startswith(("veadk_python-", "veadk-python-"))
+    ]
+    if len(veadk_wheels) != 1:
+        raise StudioPublisherError(
+            "The Studio release must contain exactly one local VeADK wheel."
+        )
+    return validate_studio_agentkit_cli_archive(list(package_dir.iterdir()))
+
+
 def _build_local_requirements(
     source_root: Path,
     package_dir: Path,
@@ -432,15 +517,26 @@ def _build_local_requirements(
             "Local source build did not produce one VeADK wheel."
         )
     validate_studio_wheel(built_wheels[0], wheel_source)
-    dependencies: list[Path] = []
-    for source in sorted(dependency_wheels.glob("*.whl")):
-        target = package_dir / source.name
-        shutil.copy2(source, target)
-        dependencies.append(target)
-    if not dependencies:
-        raise StudioPublisherError("Prepared Studio dependency wheels are missing.")
+    archive_source = dependency_wheels / _AGENTKIT_CLI_ARCHIVE
+    if archive_source.is_file():
+        shutil.copy2(archive_source, package_dir / archive_source.name)
+    validate_studio_agentkit_cli_archive(list(package_dir.iterdir()))
     shutil.rmtree(wheel_source)
-    return "".join(f"./{path.name}\n" for path in (*dependencies, built_wheels[0]))
+    dependency_sources = sorted(
+        path
+        for path in dependency_wheels.glob("*.tar.gz")
+        if path.name != _AGENTKIT_CLI_ARCHIVE
+    )
+    try:
+        return build_studio_offline_runtime(
+            source_root,
+            package_dir,
+            veadk_wheel=built_wheels[0],
+            dependency_sources=dependency_sources,
+            environment=env,
+        )
+    except ValueError as error:
+        raise StudioPublisherError(str(error)) from error
 
 
 def _studio_run_script() -> str:
@@ -452,7 +548,9 @@ def _studio_run_script() -> str:
         'if [ -d "output" ]; then cd ./output/; fi\n'
         "HOST=0.0.0.0\n"
         "PORT=${_FAAS_RUNTIME_PORT:-8000}\n"
-        "export PYTHONPATH=$PYTHONPATH:./site-packages\n"
+        'export PYTHONPATH="./site-packages${PYTHONPATH:+:$PYTHONPATH}"\n'
+        "python3 -m veadk.cli.studio_companion "
+        f'--archive "$ROOT_DIR/{_AGENTKIT_CLI_ARCHIVE}"\n'
         "exec python3 -m veadk.cli.cli studio "
         '--provider "${CLOUD_PROVIDER:-${AGENTKIT_CLOUD_PROVIDER:-volcengine}}" '
         "--auth-mode frontend "

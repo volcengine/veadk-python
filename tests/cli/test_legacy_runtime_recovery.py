@@ -28,11 +28,15 @@ from veadk.cli.generated_agent_skills import CanonicalSkillSnapshot
 from veadk.cli.legacy_runtime_recovery import (
     apply_source_preserving_edits,
     build_sidecar_mcp_servers_json,
+    mcp_reuse_supplied_credentials,
+    mcp_secret_values_for_draft_references,
+    retained_mcp_secret_values,
     build_source_preserving_overlay,
     canonicalize_source_preserving_mcp_credentials,
     ImageReference,
     LegacyRecoveryError,
     merge_mcp_recoveries,
+    mcp_editor_draft_with_credentials,
     mcp_secret_values_from_runtime_environment,
     mcp_secret_values_from_toolset,
     OciImageInspector,
@@ -299,6 +303,42 @@ def test_mcp_servers_json_recovers_public_shape_without_headers() -> None:
             )
         }
     ) == {reference: raw_secret}
+
+    editor_draft = mcp_editor_draft_with_credentials(
+        {
+            "name": "root-agent",
+            "mcpTools": [dict(recovery.tools[0])],
+            "subAgents": [],
+        },
+        {reference: raw_secret, "UNREFERENCED_SECRET": "must-not-be-returned"},
+    )
+    assert editor_draft["mcpTools"][0]["authToken"] == raw_secret
+    assert "UNREFERENCED_SECRET" not in json.dumps(editor_draft)
+
+
+def test_structured_mcp_servers_allow_shared_url_with_distinct_names() -> None:
+    raw = build_sidecar_mcp_servers_json(
+        draft={
+            "name": "root-agent",
+            "mcpTools": [
+                {
+                    "name": "orders",
+                    "transport": "http",
+                    "url": "https://mcp.example.com/shared",
+                },
+                {
+                    "name": "inventory",
+                    "transport": "http",
+                    "url": "https://mcp.example.com/shared",
+                },
+            ],
+            "subAgents": [],
+        },
+        secret_values={},
+    )
+    assert [item["name"] for item in json.loads(raw)] == ["orders", "inventory"]
+    recovered = recover_mcp_from_runtime_environment({"MCP_SERVERS_JSON": raw})
+    assert [item["name"] for item in recovered.tools] == ["orders", "inventory"]
 
 
 def test_mcp_urls_reuses_opaque_api_key_marker() -> None:
@@ -662,6 +702,124 @@ def test_source_preserving_mcp_credentials_retain_exact_published_identity() -> 
     assert resolved == {"PUBLISHED_ORDERS_REF": "retained-secret"}
 
 
+def test_source_preserving_mcp_credentials_canonicalize_legacy_display_name() -> None:
+    published = {
+        "name": "root",
+        "mcpTools": [
+            {
+                "name": "订单 MCP 工具",
+                "transport": "http",
+                "url": "https://mcp.example.com/orders",
+                "authTokenEnv": "PUBLISHED_ORDERS_REF",
+            }
+        ],
+    }
+
+    canonical, resolved = canonicalize_source_preserving_mcp_credentials(
+        published_draft=published,
+        edited_draft=published,
+        recovered_values={},
+        supplied_credentials=[
+            {
+                "agentName": "root",
+                "name": "订单 MCP 工具",
+                "url": "https://mcp.example.com/orders",
+                "value": "replacement-secret",
+            }
+        ],
+    )
+
+    assert canonical["mcpTools"][0]["name"] == "MCP"
+    assert canonical["mcpTools"][0]["authTokenEnv"] == "PUBLISHED_ORDERS_REF"
+    assert resolved == {"PUBLISHED_ORDERS_REF": "replacement-secret"}
+
+
+def test_source_preserving_mcp_credentials_generate_missing_legacy_name() -> None:
+    published = {
+        "name": "root",
+        "mcpTools": [
+            {
+                "name": "",
+                "transport": "http",
+                "url": "https://mcp.example.com/orders",
+                "authTokenEnv": "PUBLISHED_ORDERS_REF",
+            }
+        ],
+    }
+
+    canonical, resolved = canonicalize_source_preserving_mcp_credentials(
+        published_draft=published,
+        edited_draft=published,
+        recovered_values={},
+        supplied_credentials=[
+            {
+                "agentName": "root",
+                "name": "",
+                "url": "https://mcp.example.com/orders",
+                "value": "replacement-secret",
+            }
+        ],
+    )
+
+    assert canonical["mcpTools"][0]["name"] == "orders"
+    assert canonical["mcpTools"][0]["authTokenEnv"] == "PUBLISHED_ORDERS_REF"
+    assert resolved == {"PUBLISHED_ORDERS_REF": "replacement-secret"}
+
+
+def test_source_preserving_mcp_credentials_reject_unmatched_invalid_name() -> None:
+    with pytest.raises(LegacyRecoveryError, match="credential_input_invalid"):
+        canonicalize_source_preserving_mcp_credentials(
+            published_draft={"name": "root", "mcpTools": []},
+            edited_draft={
+                "name": "root",
+                "mcpTools": [
+                    {
+                        "name": "orders",
+                        "transport": "http",
+                        "url": "https://mcp.example.com/orders",
+                    }
+                ],
+            },
+            recovered_values={},
+            supplied_credentials=[
+                {
+                    "agentName": "root",
+                    "name": "伪造 MCP 名称",
+                    "url": "https://mcp.example.com/orders",
+                    "value": "attacker-supplied-secret",
+                }
+            ],
+        )
+
+
+def test_source_preserving_mcp_credentials_reject_unsafe_legacy_display_name() -> None:
+    draft = {
+        "name": "root",
+        "mcpTools": [
+            {
+                "name": "orders\nunsafe",
+                "transport": "http",
+                "url": "https://mcp.example.com/orders",
+            }
+        ],
+    }
+
+    with pytest.raises(LegacyRecoveryError, match="credential_input_invalid"):
+        canonicalize_source_preserving_mcp_credentials(
+            published_draft={"name": "root", "mcpTools": []},
+            edited_draft=draft,
+            recovered_values={},
+            supplied_credentials=[
+                {
+                    "agentName": "root",
+                    "name": "orders\nunsafe",
+                    "url": "https://mcp.example.com/orders",
+                    "value": "attacker-supplied-secret",
+                }
+            ],
+        )
+
+
 def test_source_preserving_mcp_credentials_reject_stdio() -> None:
     with pytest.raises(LegacyRecoveryError, match="stdio_unsupported"):
         canonicalize_source_preserving_mcp_credentials(
@@ -703,6 +861,254 @@ def test_sidecar_mcp_servers_json_uses_server_secret_values() -> None:
             "name": "orders",
             "url": "https://mcp.example.com/orders",
             "headers": {"Authorization": "Bearer server-only-secret"},
+        }
+    ]
+
+
+def test_unchanged_mcp_reference_resolves_from_structured_runtime_secret() -> None:
+    published = {
+        "name": "root",
+        "mcpTools": [
+            {
+                "name": "orders",
+                "transport": "http",
+                "url": "https://mcp.example.com/orders",
+                "authTokenEnv": "ORDERS_REF",
+            }
+        ],
+    }
+    runtime_environment = {
+        "MCP_SERVERS_JSON": json.dumps(
+            [
+                {
+                    "name": "orders",
+                    "url": "https://mcp.example.com/orders",
+                    "headers": {"Authorization": "Bearer retained-secret"},
+                }
+            ]
+        )
+    }
+    recovery = recover_mcp_from_runtime_environment(runtime_environment)
+    recovered = mcp_secret_values_from_runtime_environment(runtime_environment)
+    reference_values = mcp_secret_values_for_draft_references(
+        draft=published,
+        recovery=recovery,
+        recovered_values=recovered,
+    )
+
+    assert reference_values == {"ORDERS_REF": "retained-secret"}
+    assert retained_mcp_secret_values(
+        published_draft=published,
+        edited_draft=published,
+        published_reference_values=reference_values,
+    ) == {"ORDERS_REF": "retained-secret"}
+
+
+def test_changed_mcp_url_requires_explicit_server_validated_reuse() -> None:
+    published = {
+        "name": "root",
+        "mcpTools": [
+            {
+                "name": "orders",
+                "transport": "http",
+                "url": "https://mcp.example.com/orders",
+                "authTokenEnv": "ORDERS_REF",
+            }
+        ],
+    }
+    edited = {
+        "name": "root",
+        "mcpTools": [
+            {
+                "name": "orders",
+                "transport": "http",
+                "url": "https://new-mcp.example.com/orders",
+                "authTokenEnv": "ORDERS_REF",
+            }
+        ],
+    }
+    reference_values = {"ORDERS_REF": "retained-secret"}
+
+    assert (
+        retained_mcp_secret_values(
+            published_draft=published,
+            edited_draft=edited,
+            published_reference_values=reference_values,
+        )
+        == {}
+    )
+    with pytest.raises(LegacyRecoveryError, match="credential_missing"):
+        build_sidecar_mcp_servers_json(
+            draft=edited,
+            secret_values={},
+        )
+
+    reuse = mcp_reuse_supplied_credentials(
+        published_draft=published,
+        edited_draft=edited,
+        published_reference_values=reference_values,
+        reuse_requests=[
+            {
+                "agentName": "root",
+                "name": "orders",
+                "url": "https://new-mcp.example.com/orders",
+                "sourceAuthTokenEnv": "ORDERS_REF",
+            }
+        ],
+    )
+    assert reuse == (
+        {
+            "agentName": "root",
+            "name": "orders",
+            "url": "https://new-mcp.example.com/orders",
+            "value": "retained-secret",
+        },
+    )
+    assert json.loads(
+        build_sidecar_mcp_servers_json(
+            draft=edited,
+            secret_values={},
+            supplied_credentials=reuse,
+        )
+    )[0]["headers"] == {"Authorization": "Bearer retained-secret"}
+
+
+def test_mcp_reuse_rejects_a_different_published_tool() -> None:
+    published = {
+        "name": "root",
+        "mcpTools": [
+            {
+                "name": "orders",
+                "transport": "http",
+                "url": "https://mcp.example.com/orders",
+                "authTokenEnv": "ORDERS_REF",
+            },
+            {
+                "name": "inventory",
+                "transport": "http",
+                "url": "https://mcp.example.com/inventory",
+                "authTokenEnv": "INVENTORY_REF",
+            },
+        ],
+    }
+    edited = {
+        "name": "root",
+        "mcpTools": [
+            {
+                "name": "orders",
+                "transport": "http",
+                "url": "https://new-mcp.example.com/orders",
+                "authTokenEnv": "ORDERS_REF",
+            }
+        ],
+    }
+
+    with pytest.raises(LegacyRecoveryError, match="reuse_source_missing"):
+        mcp_reuse_supplied_credentials(
+            published_draft=published,
+            edited_draft=edited,
+            published_reference_values={
+                "ORDERS_REF": "orders-secret",
+                "INVENTORY_REF": "inventory-secret",
+            },
+            reuse_requests=[
+                {
+                    "agentName": "root",
+                    "name": "orders",
+                    "url": "https://new-mcp.example.com/orders",
+                    "sourceAuthTokenEnv": "INVENTORY_REF",
+                }
+            ],
+        )
+
+
+def test_sidecar_mcp_servers_json_supports_no_auth_and_distinct_credentials() -> None:
+    value = build_sidecar_mcp_servers_json(
+        draft={
+            "name": "root",
+            "mcpTools": [
+                {
+                    "name": "public",
+                    "transport": "http",
+                    "url": "https://mcp.example.com/public",
+                },
+                {
+                    "name": "orders",
+                    "transport": "http",
+                    "url": "https://mcp.example.com/orders",
+                    "authTokenEnv": "ORDERS_REF",
+                },
+                {
+                    "name": "inventory",
+                    "transport": "http",
+                    "url": "https://mcp.example.com/inventory",
+                    "authTokenEnv": "INVENTORY_REF",
+                },
+                {
+                    "name": "local",
+                    "transport": "stdio",
+                    "command": "example",
+                },
+            ],
+        },
+        secret_values={"ORDERS_REF": "retained-orders-secret"},
+        supplied_credentials=[
+            {
+                "agentName": "root",
+                "name": "inventory",
+                "url": "https://mcp.example.com/inventory",
+                "value": "replacement-inventory-secret",
+            }
+        ],
+    )
+
+    assert json.loads(value) == [
+        {
+            "name": "public",
+            "url": "https://mcp.example.com/public",
+        },
+        {
+            "name": "orders",
+            "url": "https://mcp.example.com/orders",
+            "headers": {"Authorization": "Bearer retained-orders-secret"},
+        },
+        {
+            "name": "inventory",
+            "url": "https://mcp.example.com/inventory",
+            "headers": {"Authorization": "Bearer replacement-inventory-secret"},
+        },
+    ]
+
+
+def test_sidecar_mcp_servers_json_canonicalizes_legacy_display_name() -> None:
+    value = build_sidecar_mcp_servers_json(
+        draft={
+            "name": "root",
+            "mcpTools": [
+                {
+                    "name": "订单 MCP 工具",
+                    "transport": "http",
+                    "url": "https://mcp.example.com/orders",
+                    "authTokenEnv": "ORDERS_REF",
+                }
+            ],
+        },
+        secret_values={},
+        supplied_credentials=[
+            {
+                "agentName": "root",
+                "name": "订单 MCP 工具",
+                "url": "https://mcp.example.com/orders",
+                "value": "replacement-secret",
+            }
+        ],
+    )
+
+    assert json.loads(value) == [
+        {
+            "name": "MCP",
+            "url": "https://mcp.example.com/orders",
+            "headers": {"Authorization": "Bearer replacement-secret"},
         }
     ]
 

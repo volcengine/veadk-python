@@ -3396,6 +3396,12 @@ export async function deployAgentkitProject(
       url: string;
       value: string;
     }>;
+    mcpCredentialReuses?: Array<{
+      agentName: string;
+      name: string;
+      url: string;
+      sourceAuthTokenEnv: string;
+    }>;
     sessionStorage?: "in-memory" | "persistent";
     minInstance?: number;
     maxInstance?: number;
@@ -3457,6 +3463,7 @@ export async function deployAgentkitProject(
           baseRuntimeVersion: opts?.baseRuntimeVersion,
           removeRuntimeEnvKeys: opts?.removeRuntimeEnvKeys,
           mcpSecretValues: opts?.mcpSecretValues,
+          mcpCredentialReuses: opts?.mcpCredentialReuses,
           sessionStorage: opts?.sessionStorage,
           minInstance: opts?.minInstance,
           maxInstance: opts?.maxInstance,

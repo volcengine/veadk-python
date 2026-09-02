@@ -52,6 +52,20 @@ from veadk.version import VERSION
 
 logger = get_logger(__name__)
 
+_LARGE_CODE_BUNDLE_BYTES = 64 * 1024 * 1024
+_STANDARD_CODE_UPLOAD_TIMEOUT_SECONDS = 300
+_LARGE_CODE_UPLOAD_TIMEOUT_SECONDS = 1800
+_LARGE_CODE_UPLOAD_ATTEMPTS = 2
+
+
+def _code_upload_timeout_seconds(code_zip_size: int) -> int:
+    """Keep ordinary uploads unchanged while allowing bounded large bundles."""
+
+    if code_zip_size > _LARGE_CODE_BUNDLE_BYTES:
+        return _LARGE_CODE_UPLOAD_TIMEOUT_SECONDS
+    return _STANDARD_CODE_UPLOAD_TIMEOUT_SECONDS
+
+
 _APPLICATION_REVISION_LOG_MAX_BYTES = 50_000
 _TRANSIENT_VEFAAS_ERROR_MARKERS = (
     "connection aborted",
@@ -211,15 +225,37 @@ class VeFaaS:
         headers = {
             "Content-Type": "application/zip",
         }
-        try:
-            response = requests.put(
-                url=upload_url,
-                data=code_zip_data,
-                headers=headers,
-                timeout=(300, 300),
-            )
-        except requests.RequestException:
-            raise ValueError("Function code upload request failed.") from None
+        attempts = (
+            _LARGE_CODE_UPLOAD_ATTEMPTS
+            if code_zip_size > _LARGE_CODE_BUNDLE_BYTES
+            else 1
+        )
+        response = None
+        for attempt in range(1, attempts + 1):
+            try:
+                response = requests.put(
+                    url=upload_url,
+                    data=code_zip_data,
+                    headers=headers,
+                    timeout=(
+                        _STANDARD_CODE_UPLOAD_TIMEOUT_SECONDS,
+                        _code_upload_timeout_seconds(code_zip_size),
+                    ),
+                )
+                break
+            except (requests.ConnectionError, requests.Timeout) as upload_error:
+                if attempt == attempts:
+                    raise ValueError("Function code upload request failed.") from None
+                logger.warning(
+                    "Large function code upload connection was interrupted; "
+                    "retrying the same immutable payload once (%s).",
+                    type(upload_error).__name__,
+                )
+                time.sleep(1)
+            except requests.RequestException:
+                raise ValueError("Function code upload request failed.") from None
+        if response is None:
+            raise ValueError("Function code upload request failed.")
         if not (200 <= response.status_code < 300):
             raise ValueError(
                 f"Function code upload failed with status code {response.status_code}."

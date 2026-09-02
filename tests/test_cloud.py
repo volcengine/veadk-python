@@ -19,6 +19,7 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+import requests
 
 os.environ["VOLCENGINE_ACCESS_KEY"] = "test_access_key"
 os.environ["VOLCENGINE_SECRET_KEY"] = "test_secret_key"
@@ -350,6 +351,69 @@ def test_vefaas_code_upload_callback_uses_configured_region() -> None:
         session_token="",
         host="open.volcengineapi.com",
     )
+
+
+def test_vefaas_large_code_upload_uses_bounded_extended_timeout() -> None:
+    service = VeFaaS(
+        access_key="test_access_key",
+        secret_key="test_secret_key",
+        region="cn-shanghai",
+    )
+    service.client = Mock()
+    service.client.get_code_upload_address.return_value = Mock(
+        upload_address="https://example.com/upload"
+    )
+    archive_size = 64 * 1024 * 1024 + 1
+
+    with (
+        patch(
+            "veadk.integrations.ve_faas.ve_faas.zip_and_encode_folder",
+            return_value=(b"archive", archive_size, None),
+        ),
+        patch("veadk.integrations.ve_faas.ve_faas.requests.put") as upload,
+        patch("veadk.integrations.ve_faas.ve_faas.signed_request"),
+    ):
+        upload.return_value = Mock(status_code=200)
+        service._upload_and_mount_code("function-id", ".")
+
+    upload.assert_called_once_with(
+        url="https://example.com/upload",
+        data=b"archive",
+        headers={"Content-Type": "application/zip"},
+        timeout=(300, 1800),
+    )
+
+
+def test_vefaas_large_code_upload_retries_one_connection_interruption() -> None:
+    service = VeFaaS(
+        access_key="test_access_key",
+        secret_key="test_secret_key",
+        region="cn-shanghai",
+    )
+    service.client = Mock()
+    service.client.get_code_upload_address.return_value = Mock(
+        upload_address="https://example.com/upload"
+    )
+    archive_size = 64 * 1024 * 1024 + 1
+
+    with (
+        patch(
+            "veadk.integrations.ve_faas.ve_faas.zip_and_encode_folder",
+            return_value=(b"archive", archive_size, None),
+        ),
+        patch(
+            "veadk.integrations.ve_faas.ve_faas.requests.put",
+            side_effect=[requests.ConnectionError(), Mock(status_code=200)],
+        ) as upload,
+        patch("veadk.integrations.ve_faas.ve_faas.signed_request") as callback,
+        patch("veadk.integrations.ve_faas.ve_faas.time.sleep") as sleep,
+    ):
+        service._upload_and_mount_code("function-id", ".")
+
+    assert upload.call_count == 2
+    assert upload.call_args_list[0] == upload.call_args_list[1]
+    sleep.assert_called_once_with(1)
+    callback.assert_called_once()
 
 
 def test_vefaas_code_upload_callback_uses_byteplus_host() -> None:

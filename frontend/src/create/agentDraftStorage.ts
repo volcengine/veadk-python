@@ -123,8 +123,7 @@ function stripBrowserStorageSecrets(
   };
 }
 
-/** Restore only the opaque configured marker removed from code-generation data.
- * The matching token value never exists in the recovered browser draft. */
+/** Restore only the configured marker after stripping transient token values. */
 function preserveConfiguredMcpState(
   prepared: AgentDraft,
   source: AgentDraft,

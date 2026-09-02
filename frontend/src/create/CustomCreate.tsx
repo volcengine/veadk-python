@@ -91,13 +91,20 @@ import {
 import { localPickerMatches } from "./localPickerSearch";
 import { draftToYaml } from "./configYaml";
 import {
+  confirmMcpCredentialReuse,
   clearMcpConfiguredAuth,
+  deploymentMcpSecretValues,
   mcpAuthTokenInputValue,
+  mcpCredentialActionRequired,
+  mcpCredentialReuseValues,
   mcpUrlNeedsPathWarning,
   prepareMcpAuth,
+  removeMcpCredentialForChangedUrl,
+  replaceMcpCredentialForChangedUrl,
   removedConfiguredMcpEnvKeys,
   sourcePreservingMcpSecretValues,
   updateMcpAuthTokenInput,
+  updateMcpUrlInput,
 } from "./mcpAuth";
 import { resolveMcpGatewayEnv } from "./mcpGatewayEnv";
 import {
@@ -1960,7 +1967,15 @@ function McpToolEditor({
                       className="cw-input"
                       value={t.url ?? ""}
                       placeholder="MCP 服务地址（StreamableHTTP）"
-                      onChange={(e) => update(i, { url: e.target.value })}
+                      onChange={(e) =>
+                        onChange(
+                          tools.map((tool, index) =>
+                            index === i
+                              ? updateMcpUrlInput(tool, e.target.value)
+                              : tool,
+                          ),
+                        )
+                      }
                     />
                     {mcpUrlNeedsPathWarning(t.url ?? "") && (
                       <p className="cw-mcp-warning">
@@ -1973,9 +1988,10 @@ function McpToolEditor({
                     )}
                     <input
                       className="cw-input"
+                      aria-invalid={mcpCredentialActionRequired(t)}
                       value={mcpAuthTokenInputValue(t)}
                       placeholder={
-                        t.credentialConfigured
+                        t.credentialConfigured && !t.authToken
                           ? "认证已配置；留空继续使用"
                           : "Bearer Token（可选）"
                       }
@@ -1989,7 +2005,82 @@ function McpToolEditor({
                         )
                       }
                     />
-                    {t.credentialConfigured && (
+                    {t.credentialUpdate === "pending" && (
+                      <div
+                        className="cw-mcp-auth-state is-warning"
+                        role="alert"
+                      >
+                        <span>
+                          MCP 地址已变化，请重新填写 Key 或确认沿用原凭证。
+                        </span>
+                        <div className="cw-mcp-auth-actions">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onChange(
+                                tools.map((tool, index) =>
+                                  index === i
+                                    ? confirmMcpCredentialReuse(tool)
+                                    : tool,
+                                ),
+                              )
+                            }
+                          >
+                            沿用原凭证
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onChange(
+                                tools.map((tool, index) =>
+                                  index === i
+                                    ? replaceMcpCredentialForChangedUrl(tool)
+                                    : tool,
+                                ),
+                              )
+                            }
+                          >
+                            重新填写 Key
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onChange(
+                                tools.map((tool, index) =>
+                                  index === i
+                                    ? removeMcpCredentialForChangedUrl(tool)
+                                    : tool,
+                                ),
+                              )
+                            }
+                          >
+                            新地址无需认证
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    {t.credentialUpdate === "reuse" && (
+                      <div className="cw-mcp-auth-state" role="status">
+                        <span>发布时将沿用原凭证，并绑定到新的 MCP 地址。</span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onChange(
+                              tools.map((tool, index) =>
+                                index === i
+                                  ? replaceMcpCredentialForChangedUrl(tool)
+                                  : tool,
+                              ),
+                            )
+                          }
+                        >
+                          改为重新填写
+                        </button>
+                      </div>
+                    )}
+                    {t.credentialConfigured &&
+                      !t.authToken &&
+                      !t.credentialUpdate && (
                       <div className="cw-mcp-auth-state" role="status">
                         <span>认证已配置，旧值不会显示在页面中。</span>
                         <button
@@ -2201,6 +2292,9 @@ function nodeProblem(
   if (nameProblem) return nameProblem;
   if (duplicateNames.has(n.name)) return "Agent 名称在当前结构中必须唯一";
   if (n.description.trim().length === 0) return "缺少描述";
+  if ((n.mcpTools ?? []).some(mcpCredentialActionRequired)) {
+    return "MCP 地址变化后需要确认认证方式";
+  }
   if (isOrchestratorType(n.agentType))
     return n.subAgents.length === 0 ? "缺少子 Agent" : null;
   return n.instruction.trim().length === 0 ? "缺少系统提示词" : null;
@@ -2259,6 +2353,9 @@ function collectDeploymentEnv(
   sourcePreserving = false,
 ): RuntimeEnvConfiguration {
   const prepared = prepareMcpAuth(root);
+  const mcpGatewayManaged = selectedHarnessOptimizations(prepared.draft).includes(
+    "mcp_resilience",
+  );
   const selections: RuntimeEnvSelection[] = [];
   const fixedValues: Record<string, string> = { ...prepared.envValues };
   const cloudProvider = prepared.draft.cloudProvider ?? "volcengine";
@@ -2312,6 +2409,10 @@ function collectDeploymentEnv(
               key: mcpTool.authTokenEnv,
               required: false,
               comment: `${mcpTool.name.trim() || "MCP"} Bearer Token`,
+              secret: true,
+              readOnly: mcpGatewayManaged,
+              serverManaged: mcpGatewayManaged,
+              hidden: mcpGatewayManaged,
             },
           ],
         });
@@ -2400,7 +2501,7 @@ function collectDeploymentEnv(
     fixedValues.MODEL_AGENT_NAME = selectedModelName;
     fixedValues.MODEL_NAME = selectedModelName;
   }
-  if (selectedHarnessOptimizations(prepared.draft).includes("mcp_resilience")) {
+  if (mcpGatewayManaged) {
     if (sourcePreserving) {
       selections.push({
         env: [
@@ -2423,37 +2524,27 @@ function collectDeploymentEnv(
         fixedValues: { ...config.fixedValues, ...fixedValues },
       };
     }
-    const gatewayEnv = resolveMcpGatewayEnv(prepared.draft, prepared.envValues);
+    const gatewayEnv = resolveMcpGatewayEnv(prepared.draft);
     const gatewayError = gatewayEnv.ok ? undefined : gatewayEnv.message;
     selections.push({
       env: [
         {
-          key: "MCP_URLS",
+          key: "MCP_SERVERS_JSON",
           required: true,
           comment: "由已添加的 MCP 工具注入",
-          placeholder: "由已添加的 HTTP MCP 工具自动生成",
-          help: "由已添加的 HTTP MCP 工具自动注入。",
-          readOnly: true,
-          requiredBy: [harnessSidecarOptionLabel("mcp_resilience")],
-          missingError: gatewayError,
-        },
-        {
-          key: "MCP_API_KEY",
-          required: true,
-          comment: "由已添加的 MCP 工具注入",
-          placeholder: "由已添加的 HTTP MCP 工具自动生成",
-          help: "由已添加的 HTTP MCP 工具自动注入。",
+          placeholder: sourcePreserving
+            ? "由 Studio 服务端安全恢复"
+            : "由已添加的 HTTP MCP 工具自动生成",
+          help: "Studio 服务端自动合并 MCP 地址与可选认证，不向浏览器返回旧密钥。",
           secret: true,
           readOnly: true,
+          serverManaged: gatewayEnv.ok,
+          hidden: true,
           requiredBy: [harnessSidecarOptionLabel("mcp_resilience")],
           missingError: gatewayError,
         },
       ],
     });
-    if (gatewayEnv.ok) {
-      fixedValues.MCP_URLS = gatewayEnv.urls.join(",");
-      fixedValues.MCP_API_KEY = gatewayEnv.apiKey;
-    }
   }
   const config = runtimeEnvConfiguration(selections);
   return {
@@ -4517,7 +4608,11 @@ export function CustomCreate({
     onStage?: (s: DeployStage) => void,
     options?: Parameters<typeof deployAgentkitProject>[3],
   ) => {
-    const sourcePreserving = deploymentTarget?.editMode === "source-preserving";
+    const sourcePreserving =
+      deploymentTarget?.editMode === "source-preserving";
+    const mcpGatewayManaged = selectedHarnessOptimizations(draft).includes(
+      "mcp_resilience",
+    );
     const net = draft.deployment?.network;
     const network =
       net && net.mode && net.mode !== "public"
@@ -4543,12 +4638,18 @@ export function CustomCreate({
         runtimeName: options?.runtimeName ?? deploymentRuntimeName,
         appName: deploymentTarget?.appName,
         editMode: deploymentTarget?.editMode,
-        draft: deploymentTarget ? codegenDraft(draft) : undefined,
+        draft:
+          deploymentTarget || mcpGatewayManaged ? codegenDraft(draft) : undefined,
         updateEtag: deploymentTarget?.etag,
         baseRuntimeVersion: deploymentTarget?.currentVersion,
         envs: sourcePreserving ? [] : options?.envs,
         mcpSecretValues: sourcePreserving
           ? sourcePreservingMcpSecretValues(draft)
+          : mcpGatewayManaged
+            ? deploymentMcpSecretValues(draft)
+            : undefined,
+        mcpCredentialReuses: deploymentTarget
+          ? mcpCredentialReuseValues(draft)
           : undefined,
         removeRuntimeEnvKeys: deploymentTarget
           ? removedConfiguredMcpEnvKeys(

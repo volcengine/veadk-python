@@ -25,7 +25,9 @@ import pytest
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 
+from frontend.service.studio_release_server import publisher
 from veadk.cli.frontend_branding import SiteLogo
+from veadk.cli.studio_dependencies import STUDIO_AGENTKIT_CLI_ARTIFACT
 from veadk.cli.studio_release import (
     BYTEPLUS_STUDIO_RELEASE_REGION,
     STUDIO_RELEASE_REGION,
@@ -47,6 +49,11 @@ from veadk.utils.cloud_provider import CloudProvider
 
 @pytest.fixture(autouse=True)
 def _allow_studio_update_permissions(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        publisher,
+        "_AGENTKIT_CLI_ARCHIVE_SHA256",
+        hashlib.sha256(b"pinned-cli").hexdigest(),
+    )
     monkeypatch.setattr(
         StudioSelfUpdater,
         "_permission_report",
@@ -206,10 +213,29 @@ def _bundle(
     path: Path,
     *,
     unsafe_name: str | None = None,
+    include_cli_archive: bool = True,
+    cli_archive_content: bytes = b"pinned-cli",
 ) -> None:
+    veadk_wheel = "veadk_python-1.2.3-py3-none-any.whl"
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("run.sh", "#!/bin/bash\n")
-        archive.writestr("requirements.txt", "veadk-python\n")
+        requirements = [f"./{veadk_wheel}"]
+        archive.writestr("requirements.txt", "\n".join(requirements) + "\n")
+        with zipfile.ZipFile(
+            Path(path.parent) / veadk_wheel,
+            "w",
+        ) as wheel:
+            wheel.writestr(
+                "veadk_python-1.2.3.dist-info/METADATA",
+                "Metadata-Version: 2.1\nName: veadk-python\nVersion: 1.2.3\n",
+            )
+        archive.write(path.parent / veadk_wheel, veadk_wheel)
+        (path.parent / veadk_wheel).unlink()
+        if include_cli_archive:
+            archive.writestr(
+                STUDIO_AGENTKIT_CLI_ARTIFACT.filename,
+                cli_archive_content,
+            )
         if unsafe_name:
             archive.writestr(unsafe_name, "unsafe")
 
@@ -220,6 +246,57 @@ def test_extract_studio_bundle_rejects_path_traversal(tmp_path: Path) -> None:
 
     with pytest.raises(StudioReleaseError, match="unsafe path"):
         extract_studio_bundle(archive, tmp_path / "package")
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"include_cli_archive": False}, "pinned AgentKit CLI archive"),
+        ({"cli_archive_content": b"tampered"}, "checksum"),
+    ],
+)
+def test_extract_studio_bundle_rejects_incompatible_cli_archive(
+    tmp_path: Path,
+    kwargs: dict[str, Any],
+    message: str,
+) -> None:
+    archive = tmp_path / "bundle.zip"
+    _bundle(archive, **kwargs)
+
+    with pytest.raises(StudioReleaseError, match=message):
+        extract_studio_bundle(archive, tmp_path / "package")
+
+
+@pytest.mark.parametrize("provider", ["volcengine", "byteplus"])
+def test_online_update_preserves_preloaded_cli_archive_for_each_provider(
+    tmp_path: Path,
+    provider: CloudProvider,
+) -> None:
+    archive = tmp_path / "bundle.zip"
+    package = tmp_path / "package"
+    _bundle(archive)
+    extract_studio_bundle(archive, package)
+    updater = StudioSelfUpdater(
+        settings=_settings(
+            deployment_region=(
+                "ap-southeast-1" if provider == "byteplus" else "cn-beijing"
+            ),
+            provider=provider,
+        ),
+        credential_resolver=lambda: ("ak", "sk", "token"),
+        branding_logo=None,
+    )
+
+    updater._prepare_package(package)
+
+    requirements = (package / "requirements.txt").read_text(encoding="utf-8")
+    assert "volcengine-agentkit-cli-bin" not in requirements
+    assert (
+        package / STUDIO_AGENTKIT_CLI_ARTIFACT.filename
+    ).read_bytes() == b"pinned-cli"
+    run_script = (package / "run.sh").read_text(encoding="utf-8")
+    assert '--archive "$ROOT_DIR/agentkit-linux-x64.tar.gz"' in run_script
+    assert f"--provider {provider}" in run_script
 
 
 def test_self_update_preserves_deployed_branding_logo(tmp_path: Path) -> None:
