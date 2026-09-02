@@ -33,6 +33,7 @@ from google.adk.agents import LlmAgent
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.agents.context_cache_config import ContextCacheConfig
 from google.adk.agents.llm_agent import InstructionProvider, ToolUnion
+from google.adk.agents.run_config import ToolThreadPoolConfig
 from google.adk.examples.base_example_provider import BaseExampleProvider
 from google.adk.models.lite_llm import LiteLlm
 from pydantic import ConfigDict, Field
@@ -56,6 +57,7 @@ from veadk.tracing.base_tracer import BaseTracer
 from veadk.utils.adk_compat import is_adk_gte
 from veadk.utils.logger import get_logger
 from veadk.utils.patches import (
+    patch_adk_sync_tool_thread_pool,
     patch_asyncio,
     patch_mcp_session_retry,
     patch_tracer,
@@ -69,6 +71,7 @@ if TYPE_CHECKING:
 patch_tracer()
 patch_asyncio()
 patch_mcp_session_retry()
+patch_adk_sync_tool_thread_pool()
 logger = get_logger(__name__)
 
 
@@ -89,6 +92,8 @@ class Agent(LlmAgent):
         model_api_base (str): The base URL of the model API.
         model_api_key (str): The API key for accessing the model.
         model_extra_config (dict): Extra configurations to include in model requests.
+        tool_thread_pool_config (Optional[ToolThreadPoolConfig]): Default thread
+            pool config for synchronous tool execution.
         tools (list[ToolUnion]): Tools available to the agent.
         sub_agents (list[BaseAgent]): Sub-agents managed by this agent.
         knowledgebase (Optional[KnowledgeBase]): Knowledge base attached to the agent.
@@ -127,6 +132,7 @@ class Agent(LlmAgent):
     MODEL_AGENT_API_KEY_NAME). A key value always wins over a key name, so this
     is ignored when `model_api_key` or the MODEL_AGENT_API_KEY env is set."""
     model_extra_config: dict = Field(default_factory=dict)
+    tool_thread_pool_config: Optional[ToolThreadPoolConfig] = None
 
     tools: list[ToolUnion] = []
 
