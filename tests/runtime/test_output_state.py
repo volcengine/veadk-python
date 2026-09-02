@@ -21,7 +21,6 @@ from google.adk.events.event import Event
 from google.adk.runners import Runner
 from google.adk.sessions.in_memory_session_service import InMemorySessionService
 from google.genai import types
-from pydantic import BaseModel
 
 from veadk import Agent
 from veadk.agents.sequential_agent import SequentialAgent
@@ -112,26 +111,75 @@ def test_maybe_save_output_to_state_ignores_non_final_model_text(event: Event) -
     assert event.actions.state_delta == {}
 
 
-def test_maybe_save_output_to_state_validates_output_schema() -> None:
-    class Result(BaseModel):
-        answer: str
+def _codex_shaped_turn(author: str = "worker") -> list[Event]:
+    """A realistic external-harness turn, not a single perfect event.
 
-    agent = SimpleNamespace(name="agent", output_key="result", output_schema=Result)
-    event = _text_event('{"answer": "done"}')
-
-    maybe_save_output_to_state(agent, event)
-
-    assert event.actions.state_delta == {"result": {"answer": "done"}}
+    The previous version of this test yielded exactly one text event, which is
+    the one shape no real Codex turn ever has. A real turn interleaves
+    reasoning, tool lifecycle, streaming deltas and a contentless completion
+    marker around the answer -- and every one of those is a chance to write the
+    wrong thing into ``output_key``.
+    """
+    reasoning = Event(
+        invocation_id="inv-1",
+        author=author,
+        content=types.Content(
+            role="model",
+            parts=[types.Part(text="the user wants a summary", thought=True)],
+        ),
+        custom_metadata={"codex_event_type": "item_completed"},
+    )
+    tool_call = Event(
+        invocation_id="inv-1",
+        author=author,
+        content=types.Content(
+            role="model",
+            parts=[
+                types.Part(
+                    function_call=types.FunctionCall(
+                        id="call-1", name="exec_command", args={"command": "ls"}
+                    )
+                )
+            ],
+        ),
+        custom_metadata={"codex_event_type": "item_started"},
+    )
+    tool_response = Event(
+        invocation_id="inv-1",
+        author=author,
+        content=types.Content(
+            role="user",
+            parts=[
+                types.Part(
+                    function_response=types.FunctionResponse(
+                        id="call-1", name="exec_command", response={"exit_code": 0}
+                    )
+                )
+            ],
+        ),
+        custom_metadata={"codex_event_type": "item_completed"},
+    )
+    streaming = _text_event("Final ans", author=author, partial=True)
+    answer = _text_event("Final answer.", author=author)
+    turn_complete = Event(
+        invocation_id="inv-1",
+        author=author,
+        turn_complete=True,
+        partial=True,
+        custom_metadata={"codex_event_type": "turn_complete", "turn_id": "turn-1"},
+    )
+    return [reasoning, tool_call, tool_response, streaming, answer, turn_complete]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("runtime", ["codex", "piagent"])
 async def test_non_adk_runtime_saves_output_key(monkeypatch, runtime: str) -> None:
-    final_event = _text_event("runtime result", author="worker")
+    turn = _codex_shaped_turn()
 
     class FakeRuntime:
         async def run_async(self, agent, ctx):
-            yield final_event
+            for event in turn:
+                yield event
 
     monkeypatch.setattr("veadk.runtime.get_runtime", lambda name: FakeRuntime())
     agent = Agent(
@@ -143,8 +191,55 @@ async def test_non_adk_runtime_saves_output_key(monkeypatch, runtime: str) -> No
 
     events = [event async for event in agent._run_async_impl(SimpleNamespace())]
 
-    assert events == [final_event]
-    assert final_event.actions.state_delta == {"result": "runtime result"}
+    assert events == turn
+    written = [
+        (index, event.actions.state_delta)
+        for index, event in enumerate(events)
+        if event.actions.state_delta
+    ]
+    assert written == [(4, {"result": "Final answer."})], written
+
+
+@pytest.mark.asyncio
+async def test_multiple_final_text_events_write_output_key_once(monkeypatch) -> None:
+    """Several complete assistant messages in one turn: the last one wins.
+
+    ``is_final_response()`` is True for every non-partial tool-free text event,
+    so a harness that streams N completed messages runs the save N times. The
+    surviving value must be the agent's last message, never a concatenation of
+    its intermediate thinking.
+    """
+    turn = [
+        _text_event("Let me check that.", author="worker"),
+        _text_event("Almost there.", author="worker"),
+        _text_event("Final answer.", author="worker"),
+    ]
+
+    class FakeRuntime:
+        async def run_async(self, agent, ctx):
+            for event in turn:
+                yield event
+
+    monkeypatch.setattr("veadk.runtime.get_runtime", lambda name: FakeRuntime())
+    agent = Agent(
+        name="worker",
+        runtime="codex",
+        model_api_key="test-key",
+        output_key="result",
+    )
+
+    events = [event async for event in agent._run_async_impl(SimpleNamespace())]
+
+    assert [e.actions.state_delta["result"] for e in events] == [
+        "Let me check that.",
+        "Almost there.",
+        "Final answer.",
+    ]
+    # Merged in session order, the last write is what a downstream node reads.
+    merged: dict = {}
+    for event in events:
+        merged.update(event.actions.state_delta)
+    assert merged == {"result": "Final answer."}
 
 
 @pytest.mark.asyncio

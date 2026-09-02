@@ -535,34 +535,32 @@ def _runner_env(monkeypatch, tmp_path):
 
 
 def _make_fake_runner(_runner_env):
-    """Build a Runner with a never-called FakeLlm so we can inspect plumbing."""
-    from typing import AsyncGenerator
+    """Build a Runner over a scripted model so we can inspect the plumbing.
 
-    from google.adk.models.base_llm import BaseLlm
-    from google.adk.models.llm_response import LlmResponse
-    from google.genai import types
+    Uses the differential suite's :class:`ScriptedBackend` rather than a local
+    one-line ``BaseLlm``: the local one could not script multiple rounds or
+    record what it was asked for, and two divergent ADK model fakes in one repo
+    is how the two runtimes drifted apart in the first place.
+    """
+    import sys
+    from pathlib import Path
+
+    harness = Path(__file__).resolve().parent / "runtime" / "differential"
+    sys.path.insert(0, str(harness))
+    from scripted_backend import Round, ScriptedBackend
 
     from veadk import Agent, Runner
     from veadk.memory.short_term_memory import ShortTermMemory
 
-    class FakeLlm(BaseLlm):
-        async def generate_content_async(
-            self, llm_request, stream=False
-        ) -> AsyncGenerator[LlmResponse, None]:
-            yield LlmResponse(
-                content=types.Content(
-                    role="model",
-                    parts=[types.Part(text="fake reply")],
-                )
-            )
-
+    backend = ScriptedBackend([Round(text="fake reply")], arm="adk")
     agent = Agent(
         name="fake_agent",
         description="fake",
         instruction="be brief",
-        model=FakeLlm(model="fake"),
+        model=backend.as_base_llm(model="fake"),
     )
     runner = Runner(agent=agent, short_term_memory=ShortTermMemory(backend="local"))
+    runner._scripted_backend = backend
     return runner
 
 

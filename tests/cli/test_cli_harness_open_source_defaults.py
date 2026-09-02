@@ -43,7 +43,11 @@ def test_harness_dockerfile_uses_accelerated_source_with_official_fallback() -> 
         in cli_harness._DOCKERFILE
     )
     assert "https://github.com/volcengine/veadk-python.git" in cli_harness._DOCKERFILE
-    assert '"./src[harness]"' in cli_harness._DOCKERFILE
+    # The harness advertises `runtime: codex` in harness.yaml and honours a
+    # per-request runtime override, so the image must carry the codex extra or
+    # every such request fails with an ImportError on an already-deployed
+    # runtime.
+    assert '"./src[harness,codex]"' in cli_harness._DOCKERFILE
     old_package_path = "packages/" + "agentkit" + "-harness-python"
     assert old_package_path not in cli_harness._DOCKERFILE
 

@@ -25,6 +25,7 @@ import base64
 import json
 import mimetypes
 import os
+from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -205,6 +206,85 @@ def build_content_attachments(content: Any, workspace: str) -> list[dict[str, st
                 }
             )
     return attachments
+
+
+def _token_count(breakdown: dict[str, Any], *names: str) -> int | None:
+    """Read one integer token counter, tolerating snake_case or camelCase."""
+    for name in names:
+        value = breakdown.get(name)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+    return None
+
+
+def build_usage_metadata(
+    breakdown: Any,
+) -> types.GenerateContentResponseUsageMetadata | None:
+    """Map one Codex ``TokenUsageBreakdown`` onto genai usage metadata.
+
+    Codex counters nest: ``cached_input_tokens`` is part of ``input_tokens``
+    and ``reasoning_output_tokens`` is part of ``output_tokens``. genai's
+    ``thoughts_token_count`` is instead *disjoint* from
+    ``candidates_token_count`` -- its total is
+    ``prompt + candidates + tool_use_prompt + thoughts`` -- so reasoning tokens
+    are deliberately left unmapped; carrying them would double-count for any
+    consumer that recomputes a total. The reasoning figure stays readable on
+    ``custom_metadata["token_usage"]``. This mirrors the mapping already used
+    for Ark responses in :mod:`veadk.models.ark_llm`.
+
+    Args:
+        breakdown (Any): A ``TokenUsageBreakdown``-shaped mapping.
+
+    Returns:
+        google.genai.types.GenerateContentResponseUsageMetadata | None: The
+        mapped usage, or ``None`` when the breakdown is missing or carries no
+        usable counter, so a malformed payload degrades to "no accounting"
+        rather than to zeroed accounting that would pollute token histograms.
+    """
+    if not isinstance(breakdown, dict):
+        return None
+    prompt = _token_count(breakdown, "input_tokens", "inputTokens")
+    candidates = _token_count(breakdown, "output_tokens", "outputTokens")
+    total = _token_count(breakdown, "total_tokens", "totalTokens")
+    cached = _token_count(breakdown, "cached_input_tokens", "cachedInputTokens")
+    if prompt is None and candidates is None and total is None:
+        return None
+    if total is None:
+        total = (prompt or 0) + (candidates or 0)
+    return types.GenerateContentResponseUsageMetadata(
+        prompt_token_count=prompt,
+        candidates_token_count=candidates,
+        total_token_count=total,
+        cached_content_token_count=cached,
+    )
+
+
+def build_turn_usage_metadata(
+    token_usage: Any,
+) -> types.GenerateContentResponseUsageMetadata | None:
+    """Map a ``ThreadTokenUsage`` mapping's cumulative ``total`` breakdown.
+
+    ``thread/tokenUsage/updated`` carries both ``last`` (the model call that
+    just finished) and ``total`` (cumulative for the thread). Because the Codex
+    thread is created fresh and ephemeral for each ADK invocation, the final
+    ``total`` *is* that invocation's complete usage. Callers should therefore
+    attach this to the single merged final response instead of summing ``last``
+    across the per-notification lifecycle events: those events are ``partial``
+    and so are never persisted, which would leave a live stream and a reloaded
+    session reporting different totals. ``last`` is used only as a fallback
+    when ``total`` is absent; for a single-round turn the two are identical.
+
+    Args:
+        token_usage (Any): The mapping published on a ``token_usage``
+            lifecycle event's ``custom_metadata["token_usage"]``.
+
+    Returns:
+        google.genai.types.GenerateContentResponseUsageMetadata | None: The
+        cumulative usage, or ``None`` when it cannot be read.
+    """
+    if not isinstance(token_usage, dict):
+        return None
+    return build_usage_metadata(token_usage.get("total") or token_usage.get("last"))
 
 
 def _same_content(left: Any, right: Any) -> bool:
@@ -403,7 +483,9 @@ def item_to_events(item: Any, author: str, invocation_id: str) -> list[Event]:
     - tool calls (``commandExecution`` / ``mcpToolCall`` / ``dynamicToolCall``
       / ``fileChange`` / ``webSearch``) -> a ``function_call`` part plus a
       matching ``function_response`` part carrying the tool's output,
-    - ``agentMessage`` / ``plan`` / any other text-bearing item -> a text part,
+    - ``agentMessage`` -> a durable model text part (the assistant's answer),
+    - any other text-bearing item (notably ``plan``) -> a ``partial``
+      ``plan_item`` lifecycle event carrying the text,
     - ``userMessage`` (and anything else) -> nothing.
 
     Returning per-item keeps the conversion reusable both for the streaming
@@ -453,94 +535,175 @@ def item_to_events(item: Any, author: str, invocation_id: str) -> list[Event]:
             ),
         ]
 
-    if itype != "userMessage" and data.get("text"):
+    text = data.get("text")
+    if itype == "agentMessage" and text:
+        return [_event(author, invocation_id, "model", types.Part(text=str(text)))]
+
+    if itype != "userMessage" and text:
+        # Narration, not an answer. ``plan`` items carry ``text`` too, and
+        # emitting those durably lets plan chatter clobber ``output_key`` and
+        # the A2A reply. Keep them visible but partial, so they stream to the
+        # UI and stay out of session history.
         return [
-            _event(author, invocation_id, "model", types.Part(text=str(data["text"])))
+            _lifecycle_event(
+                author,
+                invocation_id,
+                "plan_item",
+                {"item_id": data.get("id"), "item_type": itype},
+                part=types.Part(text=str(text)),
+                partial=True,
+            )
         ]
 
     return []
 
 
-def notification_to_events(
-    payload: Any,
-    author: str,
-    invocation_id: str,
-    *,
-    active_tool_items: set[str] | None = None,
-) -> list[Event]:
-    """Translate a Codex lifecycle notification into observable ADK events.
+def is_codex_final_text_event(event: Event) -> bool:
+    """Report whether an event is Codex's durable assistant answer.
 
-    Completed items still use :func:`item_to_events`, while starts, output
-    deltas, plan changes, approval reviews, turn completion, and errors carry a
-    stable ``custom_metadata.codex_event_type`` for Trace/UI consumers.
+    True only for a completed ``agentMessage`` item that carries visible
+    (non-thought) text. Lifecycle markers, reasoning, plan narration and tool
+    traffic are all excluded, so callers can buffer or post-process the real
+    answer without re-deriving intent from :meth:`Event.is_final_response`.
+
+    Args:
+        event (google.adk.events.event.Event): A translated Codex event.
+
+    Returns:
+        bool: Whether this event holds the turn's assistant answer.
     """
-    data = _item_dict(payload)
-    kind = type(payload).__name__
-    active_tool_items = active_tool_items if active_tool_items is not None else set()
+    metadata = event.custom_metadata or {}
+    if metadata.get("codex_event_type") != "item_completed":
+        return False
+    if metadata.get("item_type") != "agentMessage":
+        return False
+    content = event.content
+    if content is None:
+        return False
+    return any(
+        part.text is not None and not getattr(part, "thought", False)
+        for part in content.parts or []
+    )
 
-    if kind == "ItemStartedNotification":
-        item = data.get("item") or {}
-        item_id = str(item.get("id") or "")
-        call = _tool_call(item)
-        if call is not None:
-            name, args, _ = call
-            active_tool_items.add(item_id)
-            return [
-                _lifecycle_event(
-                    author,
-                    invocation_id,
-                    "item_started",
-                    {
-                        "item_id": item_id,
-                        "item_type": item.get("type"),
-                        "status": "in_progress",
-                    },
-                    part=types.Part(
-                        function_call=types.FunctionCall(
-                            id=item_id, name=name, args=args
-                        )
-                    ),
-                )
-            ]
-        return [
-            _lifecycle_event(
-                author,
-                invocation_id,
-                "item_started",
-                {
-                    "item_id": item_id,
-                    "item_type": item.get("type"),
-                    "status": "in_progress",
-                },
-            )
-        ]
 
-    if kind == "ItemCompletedNotification":
-        item = data.get("item") or {}
-        item_id = str(item.get("id") or "")
-        converted = item_to_events(item, author, invocation_id)
-        if item_id in active_tool_items and len(converted) == 2:
-            converted = converted[1:]
-        active_tool_items.discard(item_id)
-        for event in converted:
-            event.custom_metadata = {
-                "codex_event_type": "item_completed",
-                "item_id": item_id,
-                "item_type": item.get("type"),
-                "status": _scalar(item.get("status")) or "completed",
-            }
-        return converted
+_ERROR_CODE_FALLBACK = "codex_error"
 
-    delta_types = {
-        "AgentMessageDeltaNotification": "message_delta",
-        "CommandExecutionOutputDeltaNotification": "command_output",
-        "FileChangeOutputDeltaNotification": "file_change_output",
-        "McpToolCallProgressNotification": "mcp_progress",
-        "PlanDeltaNotification": "plan_delta",
-        "ReasoningSummaryTextDeltaNotification": "reasoning_delta",
-        "ReasoningTextDeltaNotification": "reasoning_delta",
+
+def _camel(value: str) -> str:
+    """Normalize a ``snake_case`` identifier to the SDK's camelCase codes."""
+    head, *rest = value.split("_")
+    return head + "".join(word[:1].upper() + word[1:] for word in rest)
+
+
+def _error_code(error: Any) -> str:
+    """Classify a Codex ``TurnError`` into a stable ``Event.error_code``.
+
+    ``TurnError`` is ``{message, additional_details, codex_error_info}`` -- it
+    has no ``code`` field, so the machine-readable classification has to come
+    from ``codex_error_info``. That value is either a bare enum
+    (``"contextWindowExceeded"``) or a single-key object naming the variant
+    (``{"http_connection_failed": {"http_status_code": 503}}``); both normalize
+    to the camelCase code the SDK documents. A literal ``code`` key is still
+    honoured afterwards for hand-built dict payloads.
+
+    Args:
+        error (Any): The error mapping carried by the notification.
+
+    Returns:
+        str: A stable error code, or ``"codex_error"`` when unclassifiable.
+    """
+    if not isinstance(error, dict):
+        return _ERROR_CODE_FALLBACK
+    info = _scalar(error.get("codex_error_info") or error.get("codexErrorInfo"))
+    if isinstance(info, str) and info:
+        return _camel(info)
+    if isinstance(info, dict):
+        for key in info:
+            if key:
+                return _camel(str(key))
+    code = error.get("code")
+    if code:
+        return str(_scalar(code))
+    return _ERROR_CODE_FALLBACK
+
+
+# Every handler receives the dumped payload, the invocation scope, and the
+# mutable set of tool item ids whose ``function_call`` part was already emitted
+# at item start; it returns the ADK events for that one notification.
+_NotificationHandler = Callable[[dict[str, Any], str, str, set[str]], list[Event]]
+
+
+def _on_item_started(
+    data: dict[str, Any], author: str, invocation_id: str, active_tool_items: set[str]
+) -> list[Event]:
+    """Announce a thread item; tool items also carry their ``function_call``."""
+    item = data.get("item") or {}
+    item_id = str(item.get("id") or "")
+    metadata = {
+        "item_id": item_id,
+        "item_type": item.get("type"),
+        "status": "in_progress",
     }
-    if kind in delta_types:
+    call = _tool_call(item)
+    if call is None:
+        return [_lifecycle_event(author, invocation_id, "item_started", metadata)]
+    name, args, _ = call
+    # Remember the id so the completed item emits only the response half. An
+    # id-less item is never tracked: every one of them would share the empty
+    # key, so the *next* id-less tool item would match and lose its
+    # `function_call`, leaving an orphan `function_response` in the session.
+    if item_id:
+        active_tool_items.add(item_id)
+    return [
+        _lifecycle_event(
+            author,
+            invocation_id,
+            "item_started",
+            metadata,
+            part=types.Part(
+                function_call=types.FunctionCall(id=item_id, name=name, args=args)
+            ),
+            # A tool call/response pair has to persist, and the call part
+            # already keeps the event out of ``is_final_response``.
+            partial=None,
+        )
+    ]
+
+
+def _on_item_completed(
+    data: dict[str, Any], author: str, invocation_id: str, active_tool_items: set[str]
+) -> list[Event]:
+    """Emit the finished item, dropping a ``function_call`` already announced."""
+    item = data.get("item") or {}
+    item_id = str(item.get("id") or "")
+    converted = item_to_events(item, author, invocation_id)
+    if item_id and item_id in active_tool_items and len(converted) == 2:
+        converted = converted[1:]
+    active_tool_items.discard(item_id)
+    for event in converted:
+        # Preserve a narrower type already assigned by ``item_to_events``
+        # (``plan_item``); everything else is a plain completed item.
+        existing = event.custom_metadata or {}
+        event.custom_metadata = {
+            "codex_event_type": existing.get("codex_event_type") or "item_completed",
+            "item_id": item_id,
+            "item_type": item.get("type"),
+            "status": _scalar(item.get("status")) or "completed",
+        }
+    return converted
+
+
+def _delta_handler(event_type: str, *, thought: bool = False) -> _NotificationHandler:
+    """Build the handler for one streaming-delta notification family."""
+
+    def handler(
+        data: dict[str, Any],
+        author: str,
+        invocation_id: str,
+        active_tool_items: set[str],
+    ) -> list[Event]:
+        # ``McpToolCallProgressNotification`` names its text field ``message``;
+        # every other member of the family names it ``delta``.
         text = str(data.get("delta") or data.get("message") or "")
         if not text:
             return []
@@ -548,80 +711,117 @@ def notification_to_events(
             _lifecycle_event(
                 author,
                 invocation_id,
-                delta_types[kind],
+                event_type,
                 {"item_id": data.get("item_id"), "status": "in_progress"},
-                part=types.Part(
-                    text=text,
-                    thought=kind
-                    in {
-                        "ReasoningSummaryTextDeltaNotification",
-                        "ReasoningTextDeltaNotification",
-                    },
-                ),
+                part=types.Part(text=text, thought=thought),
                 partial=True,
             )
         ]
 
-    if kind == "FileChangePatchUpdatedNotification":
-        return [
-            _lifecycle_event(
-                author,
-                invocation_id,
-                "file_change_patch",
-                {
-                    "item_id": data.get("item_id"),
-                    "changes": data.get("changes") or [],
-                    "status": "in_progress",
-                },
-                partial=True,
-            )
-        ]
+    return handler
 
-    if kind == "TurnPlanUpdatedNotification":
-        return [
-            _lifecycle_event(
-                author,
-                invocation_id,
-                "plan_update",
-                {
-                    "explanation": data.get("explanation"),
-                    "plan": data.get("plan") or [],
-                },
-            )
-        ]
 
-    if kind == "TurnStartedNotification":
-        turn = data.get("turn") or {}
-        return [
-            _lifecycle_event(
-                author,
-                invocation_id,
-                "turn_started",
-                {
-                    "turn_id": turn.get("id"),
-                    "status": _scalar(turn.get("status")) or "in_progress",
-                },
-            )
-        ]
+def _on_file_change_patch(
+    data: dict[str, Any], author: str, invocation_id: str, active_tool_items: set[str]
+) -> list[Event]:
+    """Stream the in-progress patch for a ``fileChange`` item."""
+    return [
+        _lifecycle_event(
+            author,
+            invocation_id,
+            "file_change_patch",
+            {
+                "item_id": data.get("item_id"),
+                "changes": data.get("changes") or [],
+                "status": "in_progress",
+            },
+            partial=True,
+        )
+    ]
 
-    if kind == "ThreadTokenUsageUpdatedNotification":
-        return [
-            _lifecycle_event(
-                author,
-                invocation_id,
-                "token_usage",
-                {
-                    "turn_id": data.get("turn_id"),
-                    "token_usage": data.get("token_usage") or {},
-                },
-            )
-        ]
 
-    if kind in {
-        "ItemGuardianApprovalReviewStartedNotification",
-        "ItemGuardianApprovalReviewCompletedNotification",
-    }:
-        status = "in_progress" if kind.endswith("StartedNotification") else "completed"
+def _on_turn_plan_updated(
+    data: dict[str, Any], author: str, invocation_id: str, active_tool_items: set[str]
+) -> list[Event]:
+    """Surface the agent's updated to-do plan for the turn."""
+    return [
+        _lifecycle_event(
+            author,
+            invocation_id,
+            "plan_update",
+            {
+                "explanation": data.get("explanation"),
+                "plan": data.get("plan") or [],
+            },
+        )
+    ]
+
+
+def _on_turn_started(
+    data: dict[str, Any], author: str, invocation_id: str, active_tool_items: set[str]
+) -> list[Event]:
+    """Mark the start of a turn.
+
+    The payload is ``{thread_id, turn}``; there is no top-level ``turn_id``, so
+    the id is read from the nested ``turn``.
+    """
+    turn = data.get("turn") or {}
+    return [
+        _lifecycle_event(
+            author,
+            invocation_id,
+            "turn_started",
+            {
+                "turn_id": turn.get("id"),
+                "status": _scalar(turn.get("status")) or "in_progress",
+            },
+        )
+    ]
+
+
+def _on_token_usage(
+    data: dict[str, Any], author: str, invocation_id: str, active_tool_items: set[str]
+) -> list[Event]:
+    """Publish Codex token accounting as an observable lifecycle event.
+
+    The raw SDK mapping -- ``last``, ``total`` and ``model_context_window`` --
+    is kept verbatim on ``custom_metadata["token_usage"]``, which is the shape
+    the UI already reads and the only place ``reasoning_output_tokens``
+    survives.
+
+    Deliberately no ``usage_metadata`` here. This notification fires once per
+    model call, and every consumer of ``usage_metadata`` sums it across events
+    with no dedupe, so putting ``last`` on each of these would be correct only
+    while they are all delivered -- and they are ``partial``, hence never
+    persisted, so a reloaded session would disagree with the live stream.
+    ``after_model_callback`` collectors such as the harness usage plugin would
+    never see them at all. The runtime instead attaches the cumulative figure
+    once, via :func:`build_turn_usage_metadata`, to the merged final response;
+    the Codex thread is ephemeral per invocation, so that ``total`` is exactly
+    this invocation's usage.
+    """
+    return [
+        _lifecycle_event(
+            author,
+            invocation_id,
+            "token_usage",
+            {
+                "turn_id": data.get("turn_id"),
+                "token_usage": data.get("token_usage") or {},
+            },
+        )
+    ]
+
+
+def _approval_handler(status: str) -> _NotificationHandler:
+    """Build the handler for one side of a guardian approval review."""
+
+    def handler(
+        data: dict[str, Any],
+        author: str,
+        invocation_id: str,
+        active_tool_items: set[str],
+    ) -> list[Event]:
         return [
             _lifecycle_event(
                 author,
@@ -637,41 +837,199 @@ def notification_to_events(
             )
         ]
 
-    if kind == "ErrorNotification":
-        error = data.get("error") or {}
-        message = str(error.get("message") or error)
-        return [
-            Event(
-                invocation_id=invocation_id,
-                author=author,
-                error_code=str(error.get("code") or "codex_error"),
-                error_message=message,
-                custom_metadata={
-                    "codex_event_type": "error",
-                    "will_retry": bool(data.get("will_retry")),
-                },
-            )
-        ]
+    return handler
 
-    if kind == "TurnCompletedNotification":
-        turn = data.get("turn") or {}
-        error = turn.get("error") or {}
-        return [
-            Event(
-                invocation_id=invocation_id,
-                author=author,
-                turn_complete=True,
-                error_code=str(error.get("code") or "codex_error") if error else None,
-                error_message=str(error.get("message") or error) if error else None,
-                custom_metadata={
-                    "codex_event_type": "turn_complete",
-                    "turn_id": turn.get("id"),
-                    "status": _scalar(turn.get("status")) or "completed",
-                },
-            )
-        ]
 
-    return []
+def _on_context_compacted(
+    data: dict[str, Any], author: str, invocation_id: str, active_tool_items: set[str]
+) -> list[Event]:
+    """Report that Codex compacted the thread's history mid-turn.
+
+    Compaction silently drops earlier context and so changes what the model can
+    still see. Surfacing it gives Trace/UI consumers a marker for an otherwise
+    invisible discontinuity.
+    """
+    return [
+        _lifecycle_event(
+            author,
+            invocation_id,
+            "context_compacted",
+            {
+                "thread_id": data.get("thread_id"),
+                "turn_id": data.get("turn_id"),
+            },
+        )
+    ]
+
+
+def _on_model_rerouted(
+    data: dict[str, Any], author: str, invocation_id: str, active_tool_items: set[str]
+) -> list[Event]:
+    """Report that Codex served the turn with a model we did not request."""
+    return [
+        _lifecycle_event(
+            author,
+            invocation_id,
+            "model_rerouted",
+            {
+                "turn_id": data.get("turn_id"),
+                "from_model": data.get("from_model"),
+                "to_model": data.get("to_model"),
+                "reason": _scalar(data.get("reason")),
+            },
+        )
+    ]
+
+
+def _on_error(
+    data: dict[str, Any], author: str, invocation_id: str, active_tool_items: set[str]
+) -> list[Event]:
+    """Translate a turn-scoped error into an ADK error event.
+
+    A retryable error is a progress signal, so it is marked ``partial`` and
+    stays out of session history; a terminal one has to persist.
+    """
+    error = data.get("error") or {}
+    will_retry = bool(data.get("will_retry"))
+    return [
+        Event(
+            invocation_id=invocation_id,
+            author=author,
+            partial=True if will_retry else None,
+            error_code=_error_code(error),
+            error_message=str(error.get("message") or error),
+            custom_metadata={
+                "codex_event_type": "error",
+                "will_retry": will_retry,
+            },
+        )
+    ]
+
+
+def _on_turn_completed(
+    data: dict[str, Any], author: str, invocation_id: str, active_tool_items: set[str]
+) -> list[Event]:
+    """Close the turn, propagating ``turn.error`` when the turn failed.
+
+    A clean completion is a contentless control marker, so it is ``partial``
+    and never reads as the agent's final answer; a failed turn carries a real
+    error and has to persist.
+    """
+    turn = data.get("turn") or {}
+    error = turn.get("error") or {}
+    return [
+        Event(
+            invocation_id=invocation_id,
+            author=author,
+            turn_complete=True,
+            partial=None if error else True,
+            error_code=_error_code(error) if error else None,
+            error_message=str(error.get("message") or error) if error else None,
+            custom_metadata={
+                "codex_event_type": "turn_complete",
+                "turn_id": turn.get("id"),
+                "status": _scalar(turn.get("status")) or "completed",
+            },
+        )
+    ]
+
+
+# Turn-scoped notifications that deliberately translate to no ADK event.
+# Ignoring them is a recorded decision, not an oversight: the coverage test
+# asserts ``set(_DISPATCH) | _EXPLICITLY_IGNORED`` equals the SDK's full
+# turn-scoped notification set in both directions, so a new or renamed SDK type
+# fails the suite instead of being silently dropped here.
+_EXPLICITLY_IGNORED: frozenset[str] = frozenset(
+    {
+        # Structural marker only (item id + summary index). The reasoning text
+        # itself arrives on ReasoningSummaryTextDeltaNotification.
+        "ReasoningSummaryPartAddedNotification",
+        # Cumulative unified diff for the whole turn, resent on every edit.
+        # Per-file changes already reach ADK through
+        # FileChangePatchUpdatedNotification and the completed fileChange item.
+        "TurnDiffUpdatedNotification",
+        # Raw stdin written into an interactive terminal session. Replaying it
+        # would duplicate the command's own output and can echo typed secrets.
+        "TerminalInteractionNotification",
+        # Locally configured hook runs: operator tooling around the turn rather
+        # than model or tool output.
+        "HookStartedNotification",
+        "HookCompletedNotification",
+        # Thread-scoped goal bookkeeping (its turn_id is optional); not a
+        # product of this turn.
+        "ThreadGoalUpdatedNotification",
+        # Account-level attestation notice (e.g. "trustedAccessForCyber") with
+        # no per-turn meaning.
+        "ModelVerificationNotification",
+    }
+)
+
+# Notification class name -> handler. Keyed on ``type(payload).__name__`` so
+# this module never has to import the optional ``openai_codex`` package.
+_DISPATCH: dict[str, _NotificationHandler] = {
+    "AgentMessageDeltaNotification": _delta_handler("message_delta"),
+    "CommandExecutionOutputDeltaNotification": _delta_handler("command_output"),
+    "ContextCompactedNotification": _on_context_compacted,
+    "ErrorNotification": _on_error,
+    "FileChangeOutputDeltaNotification": _delta_handler("file_change_output"),
+    "FileChangePatchUpdatedNotification": _on_file_change_patch,
+    "ItemCompletedNotification": _on_item_completed,
+    "ItemGuardianApprovalReviewCompletedNotification": _approval_handler("completed"),
+    "ItemGuardianApprovalReviewStartedNotification": _approval_handler("in_progress"),
+    "ItemStartedNotification": _on_item_started,
+    "McpToolCallProgressNotification": _delta_handler("mcp_progress"),
+    "ModelReroutedNotification": _on_model_rerouted,
+    "PlanDeltaNotification": _delta_handler("plan_delta"),
+    "ReasoningSummaryTextDeltaNotification": _delta_handler(
+        "reasoning_delta", thought=True
+    ),
+    "ReasoningTextDeltaNotification": _delta_handler("reasoning_delta", thought=True),
+    "ThreadTokenUsageUpdatedNotification": _on_token_usage,
+    "TurnCompletedNotification": _on_turn_completed,
+    "TurnPlanUpdatedNotification": _on_turn_plan_updated,
+    "TurnStartedNotification": _on_turn_started,
+}
+
+
+def notification_to_events(
+    payload: Any,
+    author: str,
+    invocation_id: str,
+    *,
+    active_tool_items: set[str] | None = None,
+) -> list[Event]:
+    """Translate a Codex lifecycle notification into observable ADK events.
+
+    Completed items still use :func:`item_to_events`, while starts, output
+    deltas, plan changes, approval reviews, context compaction, model reroutes,
+    turn completion, and errors carry a stable
+    ``custom_metadata.codex_event_type`` for Trace/UI consumers.
+
+    Dispatch is a table lookup on ``type(payload).__name__`` (:data:`_DISPATCH`
+    plus :data:`_EXPLICITLY_IGNORED`), which keeps the module importable
+    without the optional ``openai_codex`` extra while making the set of
+    unhandled SDK types enumerable by tests instead of silently dropped.
+
+    Args:
+        payload (Any): A Codex notification payload (model or dict).
+        author (str): Event author (the agent name).
+        invocation_id (str): The ADK invocation id to stamp on each event.
+        active_tool_items (set[str] | None): Ids of tool items whose
+            ``function_call`` part was already emitted at item start.
+
+    Returns:
+        list[google.adk.events.event.Event]: Events for this notification;
+        empty when it carries nothing observable.
+    """
+    handler = _DISPATCH.get(type(payload).__name__)
+    if handler is None:
+        return []
+    return handler(
+        _item_dict(payload),
+        author,
+        invocation_id,
+        active_tool_items if active_tool_items is not None else set(),
+    )
 
 
 def _lifecycle_event(
@@ -681,8 +1039,18 @@ def _lifecycle_event(
     metadata: dict[str, Any],
     *,
     part: types.Part | None = None,
-    partial: bool | None = None,
+    partial: bool | None = True,
 ) -> Event:
+    """Build one observable, non-final Codex lifecycle event.
+
+    ``partial`` defaults to ``True`` on purpose. ``Event.is_final_response()``
+    is true for any contentless, tool-free, non-partial event, so a plain
+    lifecycle marker would otherwise read as the agent's final answer. These
+    events are also write-only in history -- ``build_prompt`` and the model
+    callbacks both drop parts-less records -- so keeping them out of the
+    session costs nothing. Pass ``partial=None`` for the rare marker that has
+    to persist.
+    """
     return Event(
         invocation_id=invocation_id,
         author=author,

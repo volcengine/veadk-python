@@ -1974,7 +1974,14 @@ async def test_piagent_runtime_loads_and_cleans_materialized_skills(
 
     argv = json.loads(argv_path.read_text(encoding="utf-8"))
     skill_path = Path(argv[argv.index("--skill") + 1])
-    assert events == []
+    # This fake Pi answers nothing at all, so the turn's only event is the
+    # contentless merged response that carries its bookkeeping (token usage, any
+    # `state_delta` a model callback wrote). It is emitted rather than dropped
+    # because there is no durable event to fold it onto, and being contentless
+    # it cannot clobber `output_key` or the evaluated answer -- both of which
+    # require content. See `test_piagent_turn_contract.py` for the tool-only
+    # turn, where the fold does have a target.
+    assert [e for e in events if e.content and e.content.parts] == []
     assert "--no-skills" in argv
     assert skill_path.name == "demo-skill"
     assert not skill_path.exists()

@@ -24,8 +24,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends git && \
     apt-get purge -y git && apt-get autoremove -y && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# To run with the "codex" runtime (RUNTIME=codex), also install:
-#   pip3 install --no-cache-dir openai-codex
+# The harness advertises `runtime: codex` in harness.yaml and also honours a
+# per-request runtime override, so the image must be able to serve it. Installed
+# unconditionally: a missing extra would otherwise surface as an ImportError on
+# the first request of an already-deployed runtime.
+ARG INSTALL_CODEX=1
+RUN if [ "$INSTALL_CODEX" = "1" ]; then \
+        pip3 install --no-cache-dir "openai-codex==0.1.0b3" "openai-codex-cli-bin==0.137.0a4"; \
+    fi
 
 COPY agent.py app.py ./
 

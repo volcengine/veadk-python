@@ -1,3 +1,7 @@
 veadk-python=={{ cookiecutter.veadk_version }}
 fastapi
 uvicorn[standard]
+# If any agent in this app uses `Agent(runtime="codex")`, uncomment the line
+# below. Without it the deployment builds and starts fine but every invocation
+# fails with an ImportError on the first request.
+# veadk-python[codex]=={{ cookiecutter.veadk_version }}
