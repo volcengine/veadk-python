@@ -228,7 +228,15 @@ export async function resolveIdentity(): Promise<Identity> {
 /** A short display name for the signed-in user. */
 export function displayName(info?: Record<string, unknown>): string {
   if (!info) return "";
-  return String(info.name ?? info.preferred_username ?? info.email ?? info.sub ?? "");
+  for (const value of [
+    info.name,
+    info.preferred_username,
+    info.username,
+    info.email,
+  ]) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
 }
 
 /** Standard OIDC profile picture URL, when provided by the identity service. */

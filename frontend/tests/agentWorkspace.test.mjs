@@ -150,6 +150,7 @@ test("agent detail navigation delegates responsive layout to the shared resource
 
 test("runtime detail failures remain visible and retryable", () => {
   assert.match(workspaceSource, /const \[detailAgentInfoError, setDetailAgentInfoError\] = useState\(""\)/);
+  assert.match(workspaceSource, /const \[detailAgentInfoUnsupported, setDetailAgentInfoUnsupported\] = useState\(false\)/);
   assert.match(workspaceSource, /const \[runtimeDetailError, setRuntimeDetailError\] = useState\(""\)/);
   assert.match(
     workspaceSource,
@@ -159,12 +160,11 @@ test("runtime detail failures remain visible and retryable", () => {
     workspaceSource,
     /getRuntimeDetail[\s\S]*?\.catch\(\(error: unknown\)[\s\S]*?setRuntimeDetailError/,
   );
-  assert.match(workspaceSource, /className="aw-usage-state aw-detail-fetch-error is-error"/);
-  assert.match(
-    workspaceSource,
-    /<DeploymentErrorMessage[\s\S]*?defaultExpanded=\{false\}[\s\S]*?retryLabel="重试"/,
-  );
-  assert.match(workspaceSource, /message=\{\[\.\.\.new Set\(\[/);
+  assert.match(workspaceSource, /title="部分信息暂不可用"/);
+  assert.match(workspaceSource, /当前 Runtime 暂不支持 Studio 详情接口。升级 Runtime 后可查看完整信息。/);
+  assert.match(workspaceSource, /title="详情加载失败"/);
+  assert.doesNotMatch(workspaceSource, /className="aw-usage-state aw-detail-fetch-error is-error"/);
+  assert.doesNotMatch(workspaceSource, /<DeploymentErrorMessage/);
   assert.match(workspaceSource, /setDetailReloadToken\(\(value\) => value \+ 1\)/);
 });
 

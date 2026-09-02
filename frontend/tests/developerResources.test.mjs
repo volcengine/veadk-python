@@ -15,15 +15,10 @@ test("opens Developer Resources as a first-class Studio page", () => {
     /import \{ BookWrench \} from "@openai\/apps-sdk-ui\/components\/Icon";/,
   );
   const clickIndex = sidebarSource.indexOf("onClick={onDeveloperResources}");
-  const labelIndex = sidebarSource.indexOf(">开发者资源</span>", clickIndex);
   assert.ok(clickIndex >= 0, "developer resources should be clickable");
-  assert.ok(
-    labelIndex > clickIndex && labelIndex - clickIndex < 500,
-    "the developer resources label should belong to its navigation button",
-  );
   assert.match(
-    sidebarSource.slice(clickIndex, labelIndex),
-    /<BookWrench className="icon" \/>/,
+    sidebarSource.slice(clickIndex, clickIndex + 500),
+    /aria-label="开发者资源"[\s\S]*?<BookWrench className="icon" \/>/,
   );
   assert.match(
     appSource,
