@@ -97,14 +97,16 @@ class LocalStudioToolDispatcher:
             report_progress=report,
         )
         try:
-            async with asyncio.timeout(manifest.timeout_ms / 1000):
-                return await self._catalog.execute(
+            return await asyncio.wait_for(
+                self._catalog.execute(
                     name=manifest.name,
                     executor_revision=manifest.executor_revision,
                     arguments=arguments,
                     context=context,
-                )
-        except TimeoutError:
+                ),
+                timeout=manifest.timeout_ms / 1000,
+            )
+        except asyncio.TimeoutError:
             return {
                 "status": "timeout",
                 "error": "Studio tool timed out.",
