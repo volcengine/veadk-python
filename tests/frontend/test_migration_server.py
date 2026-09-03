@@ -3433,7 +3433,7 @@ def test_service_recovers_terminal_state_and_verified_artifact_from_session() ->
 
 
 @pytest.mark.parametrize(
-    ("delivery_state", "verification"),
+    ("delivery_state", "verification", "deploy_ready"),
     [
         (
             "succeeded",
@@ -3441,6 +3441,7 @@ def test_service_recovers_terminal_state_and_verified_artifact_from_session() ->
                 "status": "passed",
                 "checks": [{"name": "import", "status": "passed"}],
             },
+            True,
         ),
         (
             "partial",
@@ -3454,13 +3455,15 @@ def test_service_recovers_terminal_state_and_verified_artifact_from_session() ->
                     }
                 ],
             },
+            False,
         ),
     ],
 )
-def test_materialize_deployment_accepts_complete_artifact_and_verifies_owner(
+def test_materialize_deployment_honors_cli_readiness_and_verifies_owner(
     tmp_path: Path,
     delivery_state: str,
     verification: dict[str, object],
+    deploy_ready: bool,
 ) -> None:
     gateway = FakeMigrationGateway()
     service = MigrationService(gateway)
@@ -3535,7 +3538,7 @@ def test_materialize_deployment_accepts_complete_artifact_and_verifies_owner(
                 "state": "ready",
                 "preview_ready": True,
                 "download_ready": True,
-                "deploy_ready": False,
+                "deploy_ready": deploy_ready,
             },
             "updated_at": "2026-08-11T08:20:00Z",
         }
@@ -3545,6 +3548,21 @@ def test_materialize_deployment_accepts_complete_artifact_and_verifies_owner(
     with pytest.raises(MigrationError) as wrong_owner:
         service.materialize_deployment(task_id, "owner-2", tmp_path)
 
+    assert task["artifact"]["deployReady"] is deploy_ready
+    assert wrong_owner.value.status_code == 404
+    if not deploy_ready:
+        downloaded, _ = service.download(task_id, "owner-1")
+        with pytest.raises(MigrationError) as not_deployable:
+            service.materialize_deployment(task_id, "owner-1", tmp_path)
+
+        assert downloaded == artifact
+        assert not_deployable.value.code == "MIGRATION_ARTIFACT_NOT_DEPLOYABLE"
+        assert (
+            str(not_deployable.value)
+            == "AgentKit CLI 尚未确认迁移产物可部署到 Runtime。"
+        )
+        return
+
     target = tmp_path / "deploy"
     target.mkdir()
     entry_point = service.materialize_deployment(
@@ -3553,8 +3571,6 @@ def test_materialize_deployment_accepts_complete_artifact_and_verifies_owner(
         target,
     )
 
-    assert task["artifact"]["deployReady"] is True
-    assert wrong_owner.value.status_code == 404
     assert entry_point == "runtime/agentkit_app.py"
     assert (target / entry_point).read_bytes() == project_files[entry_point]
     assert (target / "agentkit.yaml").read_bytes() == project_files["agentkit.yaml"]
@@ -3884,6 +3900,51 @@ def test_terminal_delivery_requires_a_ready_artifact_contract() -> None:
 
     assert raised.value.code == "MIGRATION_DELIVERY_INVALID"
     assert raised.value.retryable is False
+
+
+@pytest.mark.parametrize(
+    "state",
+    ["succeeded", "succeeded_with_warnings", "partial"],
+)
+def test_terminal_delivery_preserves_cli_deployment_readiness(state: str) -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, _ = create_uploaded_task(service)
+    mark_analysis_ready(gateway, task_id)
+    service.confirm(
+        task_id,
+        "owner-1",
+        confirmation_body(gateway, task_id),
+    )
+    gateway.files[(task_id, f"{MIGRATION_ROOT}/delivery/migration-status.json")] = (
+        json.dumps(
+            {
+                "schema_version": 1,
+                "run_id": task_id,
+                "sequence": 4,
+                "state": state,
+                "phase": "completed",
+                "message": "Migration artifact is ready",
+                "artifact": {
+                    "state": "ready",
+                    "preview_ready": True,
+                    "download_ready": True,
+                    "deploy_ready": False,
+                },
+                "updated_at": "2026-08-11T08:20:00Z",
+            }
+        ).encode()
+    )
+
+    task = service.get_task(task_id, "owner-1")
+
+    assert task["state"] == state
+    assert task["artifact"] == {
+        "state": "ready",
+        "previewReady": True,
+        "downloadReady": True,
+        "deployReady": False,
+    }
 
 
 def test_partial_delivery_cannot_advertise_deployment_readiness() -> None:

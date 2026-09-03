@@ -116,7 +116,8 @@ CURRENT = ROOT / "published.json"
 MAX_BYTES = 20 * 1024 * 1024
 MAX_FILES = 2000
 ZIP_TIME = (1980, 1, 1, 0, 0, 0)
-EXCLUDED_NAMES = {".git", ".agentkit", "node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", ".DS_Store", "dist", "target"}
+EXCLUDED_NAMES = {".git", "node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", ".DS_Store", "dist", "target"}
+EXCLUDED_PATHS = {".agentkit/artifacts", ".agentkit/migrate"}
 FORBIDDEN_DIRECTORIES = {".aws", ".ssh", ".kube"}
 FORBIDDEN_FILE_NAMES = {"id_rsa", "id_ed25519"}
 FORBIDDEN_SUFFIXES = {".key", ".pem", ".crt", ".secret", ".p12", ".pfx"}
@@ -184,18 +185,19 @@ def collect_project(path, secrets):
         kept = []
         for name in sorted(directories):
             candidate = current_path / name
+            relative = relative_root / name
             metadata = os.lstat(candidate)
             if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
                 fail("Delivery source contains an unsafe entry")
             if name.lower() in FORBIDDEN_DIRECTORIES:
                 fail("Delivery source contains a forbidden credential directory")
-            if name not in EXCLUDED_NAMES:
+            if name not in EXCLUDED_NAMES and relative.as_posix() not in EXCLUDED_PATHS:
                 kept.append(name)
         directories[:] = kept
         for name in sorted(names):
             candidate = current_path / name
             relative = relative_root / name
-            if name in EXCLUDED_NAMES or name.startswith(COMPLETION_PREFIXES):
+            if name in EXCLUDED_NAMES or relative.as_posix() in EXCLUDED_PATHS or name.startswith(COMPLETION_PREFIXES):
                 continue
             lower_name = name.lower()
             if lower_name == ".env" or (lower_name.startswith(".env.") and lower_name != ".env.example"):
