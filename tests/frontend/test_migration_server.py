@@ -3557,10 +3557,7 @@ def test_materialize_deployment_honors_cli_readiness_and_verifies_owner(
 
         assert downloaded == artifact
         assert not_deployable.value.code == "MIGRATION_ARTIFACT_NOT_DEPLOYABLE"
-        assert (
-            str(not_deployable.value)
-            == "AgentKit CLI 尚未确认迁移产物可部署到 Runtime。"
-        )
+        assert str(not_deployable.value) == "尚未确认迁移产物可部署到 Runtime。"
         return
 
     target = tmp_path / "deploy"
