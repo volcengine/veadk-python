@@ -7,6 +7,11 @@ const AGENTKIT_BASE_IMAGES: Record<CloudProvider, string> = {
   byteplus:
     "agentkit-prod-public-ap-southeast-1.cr.bytepluses.com/base/py-simple:python3.12-bookworm-slim-latest",
 };
+const VOLCENGINE_PYPI_INDEXES = [
+  "https://repo.huaweicloud.com/repository/pypi/simple",
+  "https://mirrors.aliyun.com/pypi/simple/",
+  "https://pypi.org/simple",
+] as const;
 
 const LARK_CLI_VERSION = "1.0.87";
 const LARK_CLI_SHA256 = {
@@ -66,6 +71,17 @@ function githubReleaseUrls(
     : [official, mirror];
 }
 
+function renderPythonDependencyInstall(cloudProvider: CloudProvider): string {
+  if (cloudProvider !== "volcengine") {
+    return "RUN uv pip install -r requirements.txt";
+  }
+
+  const attempts = VOLCENGINE_PYPI_INDEXES.map(
+    (index) => `uv pip install --index-url ${index} -r requirements.txt`,
+  );
+  return `RUN ${attempts.join(" || \\\n    ")}`;
+}
+
 export function buildCloudEnvironmentDockerfile(
   cloudProvider: CloudProvider,
   cliTools: CloudCliToolId[],
@@ -123,7 +139,7 @@ export function buildCloudEnvironmentDockerfile(
     "",
     "# Install Python dependencies before copying the source for better layer caching.",
     "COPY requirements.txt requirements.txt",
-    "RUN uv pip install -r requirements.txt",
+    renderPythonDependencyInstall(cloudProvider),
     "",
     "# Copy the Agent application and configure its runtime entrypoint.",
     "EXPOSE 8000",

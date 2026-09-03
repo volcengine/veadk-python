@@ -64,7 +64,12 @@ _AGENTKIT_BASE_IMAGES = {
     "volcengine": "agentkit-prod-public-cn-beijing.cr.volces.com/base/py-simple:python3.12-bookworm-slim-latest",
     "byteplus": "agentkit-prod-public-ap-southeast-1.cr.bytepluses.com/base/py-simple:python3.12-bookworm-slim-latest",
 }
-_PYPI_FALLBACK_INDEX = "https://repo.huaweicloud.com/repository/pypi/simple"
+_VEADK_VERSION = "1.1.9"
+_VOLCENGINE_PYPI_INDEXES = (
+    "https://repo.huaweicloud.com/repository/pypi/simple",
+    "https://mirrors.aliyun.com/pypi/simple/",
+    "https://pypi.org/simple",
+)
 _LARK_CLI_VERSION = "1.0.87"
 _LARK_CLI_SHA256 = {
     "amd64": "6027b1ddc12440400581bbdf9554850d8e119c7dd400439b1220e7a87b9673c5",
@@ -1060,7 +1065,7 @@ def render_requirements(
     unique_extras = sorted(all_extras)
     extras_str = f"[{','.join(unique_extras)}]" if unique_extras else ""
     managed_sidecar = "harness-sidecar" in all_extras
-    pkg = f"veadk-python{extras_str}==1.1.7"
+    pkg = f"veadk-python{extras_str}=={_VEADK_VERSION}"
     agentkit_sdk = (
         "agentkit-sdk-python==0.8.1"
         if managed_sidecar
@@ -1239,7 +1244,7 @@ def _render_managed_main_py() -> str:
 
 
 def _render_quick_mode_compat_py() -> str:
-    """Backport quick-mode runtime behavior while deployments stay on 1.1.7."""
+    """Keep quick-mode runtime behavior available in the pinned runtime."""
 
     create_agents_schema = pformat(
         CreateAgentsInput.model_json_schema(by_alias=True),
@@ -1412,7 +1417,7 @@ class _RuntimeCompatibleCreateAgentsTool(FunctionTool):
 
 
 class CreateAgentToolset(_BaseCreateAgentToolset):
-    """Keep quick-mode semantics available in the pinned 1.1.7 runtime."""
+    """Keep quick-mode semantics available in the pinned runtime."""
 
     _MAX_COMPLETED_CREATIONS = 128
 
@@ -2144,6 +2149,17 @@ def _github_release_urls(cloud_provider: str, repository: str) -> list[str]:
     return [mirror, official] if cloud_provider == "volcengine" else [official, mirror]
 
 
+def _render_python_dependency_install(cloud_provider: str) -> str:
+    if cloud_provider != "volcengine":
+        return "RUN uv pip install -r requirements.txt"
+
+    attempts = [
+        f"uv pip install --index-url {index} -r requirements.txt"
+        for index in _VOLCENGINE_PYPI_INDEXES
+    ]
+    return "RUN " + " || \\\n    ".join(attempts)
+
+
 def render_cloud_environment_dockerfile(draft: AgentDraft) -> str | None:
     """Render the custom image or an AgentKit-compatible image for selected CLIs."""
     if draft.cloudEnvironment.resolvedImage:
@@ -2232,11 +2248,7 @@ def render_cloud_environment_dockerfile(draft: AgentDraft) -> str | None:
             "",
             "# Install Python dependencies before copying the source for better layer caching.",
             "COPY requirements.txt requirements.txt",
-            (
-                "RUN uv pip install -r requirements.txt || \\\n"
-                f"    uv pip install --index-url {_PYPI_FALLBACK_INDEX} "
-                "-r requirements.txt"
-            ),
+            _render_python_dependency_install(draft.cloudProvider),
             "",
             "# Copy the Agent application and configure its runtime entrypoint.",
             "EXPOSE 8000",

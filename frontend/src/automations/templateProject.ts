@@ -40,6 +40,24 @@ const AGENTKIT_BASE_IMAGES: Record<CloudProvider, string> = {
     "agentkit-prod-public-ap-southeast-1.cr.bytepluses.com/base/py-simple:python3.12-bookworm-slim-latest",
 };
 
+const VEADK_VERSION = "1.1.9";
+const VOLCENGINE_PYPI_INDEXES = [
+  "https://repo.huaweicloud.com/repository/pypi/simple",
+  "https://mirrors.aliyun.com/pypi/simple/",
+  "https://pypi.org/simple",
+] as const;
+
+function buildPythonDependencyInstall(cloudProvider: CloudProvider): string {
+  if (cloudProvider !== "volcengine") {
+    return "RUN uv pip install -r requirements.txt";
+  }
+
+  const attempts = VOLCENGINE_PYPI_INDEXES.map(
+    (index) => `uv pip install --index-url ${index} -r requirements.txt`,
+  );
+  return `RUN ${attempts.join(" || \\\n    ")}`;
+}
+
 function buildEnvExample(cloudProvider: CloudProvider): string {
   const secrets = cloudCredentialSecretNames(cloudProvider);
   const providerName = cloudProviderDisplayName(cloudProvider);
@@ -115,7 +133,7 @@ root_agent = Agent(
     tools=[get_city_weather],
 )
 `,
-    "requirements.txt": `veadk-python==1.1.6
+    "requirements.txt": `veadk-python==${VEADK_VERSION}
 agentkit-sdk-python==0.8.4
 google-adk==2.1.0
 lark-channel-sdk==1.2.0
@@ -128,7 +146,7 @@ ENV UV_SYSTEM_PYTHON=1 UV_COMPILE_BYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 
 COPY requirements.txt ./
-RUN uv pip install -r requirements.txt
+${buildPythonDependencyInstall(cloudProvider)}
 
 COPY . .
 
