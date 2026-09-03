@@ -40,7 +40,7 @@ test("generates the basic Studio project and Runtime delivery workflow in fronte
   assert.equal(
     files["requirements.txt"],
     [
-      "veadk-python==1.1.6",
+      "veadk-python==1.1.9",
       "agentkit-sdk-python==0.8.4",
       "google-adk==2.1.0",
       "lark-channel-sdk==1.2.0",
@@ -49,6 +49,14 @@ test("generates the basic Studio project and Runtime delivery workflow in fronte
       "",
     ].join("\n"),
   );
+  const huawei = "https://repo.huaweicloud.com/repository/pypi/simple";
+  const aliyun = "https://mirrors.aliyun.com/pypi/simple/";
+  const pypi = "https://pypi.org/simple";
+  assert.match(files.Dockerfile, new RegExp(huawei.replaceAll(".", "\\.")));
+  assert.match(files.Dockerfile, new RegExp(aliyun.replaceAll(".", "\\.")));
+  assert.match(files.Dockerfile, new RegExp(pypi.replaceAll(".", "\\.")));
+  assert.ok(files.Dockerfile.indexOf(huawei) < files.Dockerfile.indexOf(aliyun));
+  assert.ok(files.Dockerfile.indexOf(aliyun) < files.Dockerfile.indexOf(pypi));
   assert.match(files["README.md"], /python app\.py/);
 
   const workflow = buildRuntimeDeliveryWorkflow({
@@ -86,6 +94,9 @@ test("generates BytePlus template and Runtime delivery workflow in frontend", as
   assert.match(files[".env.example"], /AGENTKIT_CLOUD_PROVIDER=byteplus/);
   assert.match(files[".env.example"], /https:\/\/ark\.ap-southeast\.bytepluses\.com\/api\/v3/);
   assert.doesNotMatch(files[".env.example"], /VOLCENGINE_ACCESS_KEY=/);
+  assert.match(files.Dockerfile, /RUN uv pip install -r requirements\.txt/);
+  assert.doesNotMatch(files.Dockerfile, /repo\.huaweicloud\.com/);
+  assert.doesNotMatch(files.Dockerfile, /mirrors\.aliyun\.com/);
 
   const workflow = buildRuntimeDeliveryWorkflow({
     baseBranch: "main",

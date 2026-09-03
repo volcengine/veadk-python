@@ -86,7 +86,7 @@ def test_minimal_codegen_agent_py_compiles(tmp_path) -> None:
         file.content for file in project.files if file.path == "requirements.txt"
     )
     assert requirements == (
-        "veadk-python==1.1.7\n"
+        "veadk-python==1.1.9\n"
         "agentkit-sdk-python==0.8.4\n"
         "google-adk==2.1.0\n"
         "starlette==0.52.1\n"
@@ -130,14 +130,12 @@ def test_quick_mode_codegen_adds_dynamic_agent_toolset_and_managed_rules() -> No
     assert "create_agents" in agent_py
     assert "handoff_to" in agent_py
     assert "'dynamicAgentDelegation': True" in agent_py
-    assert "veadk-python==1.1.7\n" in requirements
+    assert "veadk-python==1.1.9\n" in requirements
     assert "github.com/volcengine/veadk-python" not in requirements
-    assert "RUN uv pip install -r requirements.txt || \\" in dockerfile
-    assert (
-        "uv pip install --index-url "
-        "https://repo.huaweicloud.com/repository/pypi/simple -r requirements.txt"
-        in dockerfile
-    )
+    huawei = "https://repo.huaweicloud.com/repository/pypi/simple"
+    aliyun = "https://mirrors.aliyun.com/pypi/simple/"
+    pypi = "https://pypi.org/simple"
+    assert dockerfile.index(huawei) < dockerfile.index(aliyun) < dockerfile.index(pypi)
 
     compat_py = next(
         file.content
@@ -757,7 +755,7 @@ def test_traditional_codegen_does_not_add_dynamic_agent_capability() -> None:
     assert "CreateAgentToolset" not in agent_py
     assert "动态子智能体协作规则" not in agent_py
     assert "dynamicAgentDelegation" not in agent_py
-    assert "veadk-python==1.1.7" in requirements
+    assert "veadk-python==1.1.9" in requirements
 
 
 def test_codegen_environment_image_adds_skills_without_replacing_agent_skills() -> None:
@@ -923,12 +921,18 @@ def test_codegen_cloud_environment_uses_provider_base_image(
         in files["Dockerfile"]
     )
     assert 'CMD ["python", "-m", "app"]' in files["Dockerfile"]
-    assert "RUN uv pip install -r requirements.txt || \\" in files["Dockerfile"]
-    assert (
-        "uv pip install --index-url "
-        "https://repo.huaweicloud.com/repository/pypi/simple -r requirements.txt"
-        in files["Dockerfile"]
-    )
+    dockerfile = files["Dockerfile"]
+    if cloud_provider == "volcengine":
+        huawei = "https://repo.huaweicloud.com/repository/pypi/simple"
+        aliyun = "https://mirrors.aliyun.com/pypi/simple/"
+        pypi = "https://pypi.org/simple"
+        assert (
+            dockerfile.index(huawei) < dockerfile.index(aliyun) < dockerfile.index(pypi)
+        )
+    else:
+        assert "RUN uv pip install -r requirements.txt" in dockerfile
+        assert "repo.huaweicloud.com" not in dockerfile
+        assert "mirrors.aliyun.com" not in dockerfile
 
 
 def test_codegen_cloud_environment_installs_github_cli_for_both_architectures() -> None:
