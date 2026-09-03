@@ -69,6 +69,7 @@ from veadk.cli.generated_agent_skills import (
 # These hashes lock the complete generated project contents, not just Python
 # syntax or selected snippets.
 _MINIMAL_FRONTEND_GOLDEN = {
+    "Dockerfile": "0b643795fc79f04b0aaff219ff513c9ca65a05e1af0f0b54d47e45ecf5305137",
     "app.py": "48a85b8eaa87d836e6dabc41bae6bdc0c587e1d55093bc8aaa7bcb62a362ad21",
     "agents/__init__.py": "a6449a6cac3bfda8b834ea39ea95ca2f8d0471ac480e1e876313d7398eea59ba",
     "agents/demo_agent/agent.py": "3c28f3e63f185d1ee8402d58b62c8654cf18fe4180a1f348abaa63547d91446c",
@@ -80,6 +81,7 @@ _MINIMAL_FRONTEND_GOLDEN = {
 }
 
 _FULL_FRONTEND_GOLDEN = {
+    "Dockerfile": "0b643795fc79f04b0aaff219ff513c9ca65a05e1af0f0b54d47e45ecf5305137",
     "app.py": "47c87fd54ac00e208030a7a370f0dbd52a872a9adf8ecd2e2e4f2e1b56188854",
     "agents/__init__.py": "a6449a6cac3bfda8b834ea39ea95ca2f8d0471ac480e1e876313d7398eea59ba",
     "agents/full_agent/agent.py": "35560cfa5ea93955244482d727c8f8369599fa5b9560ba1f3804df7273e245ce",
