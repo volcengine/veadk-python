@@ -56,7 +56,7 @@ function memoryStorage(initial = {}) {
   };
 }
 
-test("keeps MCP credentials ephemeral while preserving non-MCP deployment values", () => {
+test("keeps MCP credentials ephemeral while preserving deployment values", () => {
   const sourceDraft = draft({
     mcpTools: [{ name: "root", transport: "http", authToken: "root-secret" }],
     deployment: { feishuEnabled: true, envValues: { FEISHU_APP_SECRET: "secret" } },
@@ -106,6 +106,139 @@ test("keeps MCP credentials ephemeral while preserving non-MCP deployment values
     JSON.stringify(sanitized),
     /root-secret|child-secret|workflow-secret/,
   );
+});
+
+test("persists every editable draft property including Feishu credentials", () => {
+  const storage = memoryStorage();
+  const completeDraft = draft({
+    description: "complete description",
+    instruction: "complete instruction",
+    dynamicAgentDelegation: true,
+    agentType: "llm",
+    cloudProvider: "byteplus",
+    maxIterations: 7,
+    a2aUrl: "https://agent.example.com",
+    model: "legacy-model",
+    modelSource: "custom",
+    modelName: "custom-model",
+    modelProvider: "openai",
+    modelApiBase: "https://model.example.com/v1",
+    tools: ["legacy-tool"],
+    skills: ["legacy-skill"],
+    memory: { shortTerm: true, longTerm: true },
+    knowledgebase: true,
+    tracing: true,
+    builtinTools: ["web_search"],
+    customTools: [{ name: "lookup", description: "lookup records" }],
+    mcpTools: [
+      {
+        name: "orders",
+        transport: "http",
+        url: "https://mcp.example.com/mcp",
+        authTokenEnv: "MCP_ORDERS_TOKEN",
+        credentialConfigured: true,
+        credentialSourceUrl: "https://mcp.example.com/mcp",
+        credentialSourceAuthTokenEnv: "MCP_ORDERS_TOKEN",
+      },
+    ],
+    a2aRegistry: {
+      enabled: true,
+      registrySpaceId: "space-1",
+      registryTopK: "5",
+      registryRegion: "ap-southeast-1",
+      registryEndpoint: "https://registry.example.com",
+    },
+    shortTermBackend: "redis",
+    longTermBackend: "viking",
+    longTermMemoryIndex: "memory-index",
+    autoSaveSession: true,
+    knowledgebaseBackend: "viking",
+    knowledgebaseIndex: "knowledge-index",
+    tracingExporters: ["tls"],
+    selectedSkills: [
+      {
+        source: "runtime",
+        folder: "ops",
+        name: "ops",
+        description: "operations",
+      },
+    ],
+    cloudEnvironment: {
+      environmentId: "environment-1",
+      environmentVersionId: "version-2",
+      cliTools: ["lark-cli"],
+      dockerfile: "RUN echo ready",
+    },
+    harnessSidecar: {
+      enabled: true,
+      profile: "default",
+      componentOverrides: {
+        context_engine: true,
+        compressor: false,
+        verifier: true,
+        long_run_control: false,
+        mcp_resilience: true,
+      },
+      catalogVersion: "catalog-1",
+      planHash: "sha256:plan",
+    },
+    deployment: {
+      feishuEnabled: true,
+      runtimeName: "runtime-name",
+      runtimeNameCustomized: true,
+      network: {
+        mode: "both",
+        vpcId: "vpc-1",
+        subnetIds: "subnet-1,subnet-2",
+        enableSharedInternetAccess: true,
+      },
+      modelApiKeyId: "key-id",
+      modelApiKeyName: "key-name",
+      envValues: {
+        FEISHU_APP_ID: "cli_test",
+        FEISHU_APP_SECRET: "persisted-feishu-secret",
+        CUSTOM_SETTING: "custom-value",
+      },
+    },
+  });
+
+  writeWorkspaceDrafts(storage, "complete-builder", [
+    {
+      id: "complete-draft",
+      updatedAt: 123,
+      creationMode: "quick",
+      deploymentTarget: {
+        runtimeId: "runtime-1",
+        name: "runtime-name",
+        region: "ap-southeast-1",
+        appName: "complete_app",
+        currentVersion: 3,
+        etag: "etag-1",
+        editMode: "source-preserving",
+        configuredMcpEnvKeys: ["MCP_ORDERS_TOKEN"],
+        configuredRuntimeEnvKeys: ["OPAQUE_RUNTIME_SECRET"],
+      },
+      draft: completeDraft,
+    },
+  ]);
+
+  const [loaded] = loadWorkspaceDrafts(storage, "complete-builder");
+  assert.equal(loaded.creationMode, "quick");
+  assert.deepEqual(loaded.deploymentTarget, {
+    runtimeId: "runtime-1",
+    name: "runtime-name",
+    region: "ap-southeast-1",
+    appName: "complete_app",
+    currentVersion: 3,
+    etag: "etag-1",
+    editMode: "source-preserving",
+    configuredMcpEnvKeys: ["MCP_ORDERS_TOKEN"],
+    configuredRuntimeEnvKeys: ["OPAQUE_RUNTIME_SECRET"],
+  });
+  const expectedDraft = structuredClone(completeDraft);
+  delete expectedDraft.mcpTools[0].credentialSourceUrl;
+  delete expectedDraft.mcpTools[0].credentialSourceAuthTokenEnv;
+  assert.deepEqual(loaded.draft, expectedDraft);
 });
 
 test("writes a versioned user-scoped payload without transient MCP values", () => {

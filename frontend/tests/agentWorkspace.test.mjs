@@ -734,6 +734,10 @@ test("runtime updates use the Agent selected in management instead of the active
     /capability\.runtime\.envs[\s\S]*?filter\(\(\{ key \}\) => !isRuntimeModelSelectionEnv\(key\)\)[\s\S]*?\.map/,
   );
   assert.match(handler, /envValues:\s*runtimeEnvValues/);
+  assert.match(
+    handler,
+    /runtimeEnv\.has\("FEISHU_APP_ID"\)[\s\S]*?runtimeEnv\.has\("FEISHU_APP_SECRET"\)/,
+  );
   assert.doesNotMatch(handler, /draftEnvValues|selectedAgentUpdateDraft\?\.draft/);
   assert.match(handler, /hydrateRuntimeModelSelection\(/);
   assert.match(
@@ -743,6 +747,10 @@ test("runtime updates use the Agent selected in management instead of the active
   assert.match(handler, /network:\s*capability\.runtime\.network/);
   assert.match(handler, /etag:\s*capability\.etag/);
   assert.match(handler, /editMode:\s*capability\.editMode/);
+  assert.match(
+    handler,
+    /configuredRuntimeEnvKeys:\s*capability\.runtime\.configuredEnvKeys/,
+  );
   assert.match(
     handler,
     /setRuntimeUpdateTarget\(\{[\s\S]*?runtimeId:\s*capability\.runtime\.runtimeId,[\s\S]*?currentVersion:\s*capability\.runtime\.currentVersion,[\s\S]*?etag:\s*capability\.etag/,

@@ -20,6 +20,7 @@ export interface WorkspaceAgentDraft {
     etag?: string;
     editMode?: "source-preserving" | "regenerate";
     configuredMcpEnvKeys?: string[];
+    configuredRuntimeEnvKeys?: string[];
   };
 }
 

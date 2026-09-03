@@ -3593,6 +3593,7 @@ interface CustomCreateProps extends CreateModeProps {
     etag?: string;
     editMode?: "source-preserving" | "regenerate";
     configuredMcpEnvKeys?: string[];
+    configuredRuntimeEnvKeys?: string[];
   };
   /** Region selected before entering the create flow. */
   initialDeployRegion?: string;
@@ -4652,10 +4653,15 @@ export function CustomCreate({
           ? mcpCredentialReuseValues(draft)
           : undefined,
         removeRuntimeEnvKeys: deploymentTarget
-          ? removedConfiguredMcpEnvKeys(
-              deploymentTarget.configuredMcpEnvKeys ?? [],
-              draft,
-            )
+          ? [
+              ...removedConfiguredMcpEnvKeys(
+                deploymentTarget.configuredMcpEnvKeys ?? [],
+                draft,
+              ),
+              ...(!draft.deployment?.feishuEnabled
+                ? ["FEISHU_APP_ID", "FEISHU_APP_SECRET"]
+                : []),
+            ]
           : undefined,
         description: draft.description,
         harnessSidecar: draft.harnessSidecar,
@@ -6056,7 +6062,10 @@ export function CustomCreate({
                 onDeploymentStarted={onDeploymentStarted}
                 onDeploymentComplete={onDeploymentComplete}
                 feishuEnabled={!!draft.deployment?.feishuEnabled}
-                onFeishuEnabledChange={(feishuEnabled) => {
+                configuredRuntimeEnvKeys={
+                  deploymentTarget?.configuredRuntimeEnvKeys
+                }
+                onFeishuEnabledChange={async (feishuEnabled) => {
                   const nextDraft: AgentDraft = {
                     ...draft,
                     deployment: {
@@ -6064,7 +6073,11 @@ export function CustomCreate({
                       feishuEnabled,
                     },
                   };
+                  const generated = await generateAgentProject(
+                    codegenDraft(nextDraft),
+                  );
                   setDraft(nextDraft);
+                  setProject(generated);
                 }}
                 deploymentEnv={deploymentEnv.specs}
                 requiredSecretEnv={customModelCredentials}

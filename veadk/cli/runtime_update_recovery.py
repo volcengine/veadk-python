@@ -70,6 +70,8 @@ _PUBLIC_RUNTIME_ENV_KEYS = frozenset(
         "MODEL_AGENT_API_BASE",
         "MODEL_AGENT_API_KEY_ID",
         "MODEL_AGENT_API_KEY_NAME",
+        "FEISHU_APP_ID",
+        "FEISHU_APP_SECRET",
     }
 )
 _URL_RUNTIME_ENV_KEYS = frozenset({"MODEL_AGENT_API_BASE"})
@@ -147,12 +149,14 @@ def _safe_public_environment_value(key: str, value: str) -> bool:
 def sanitize_runtime_environment(
     envs: Iterable[tuple[str, str]],
 ) -> RuntimeEnvironmentView:
-    """Return only explicitly public values and opaque configured-key state.
+    """Return explicitly editable values and opaque configured-key state.
 
     Runtime environment variables are not public merely because their names do
     not contain ``SECRET`` or ``TOKEN``.  In particular, ``MCP_SERVERS_JSON``
     can embed arbitrary authentication headers.  The allowlist is intentionally
-    limited to model-selection fields that the update UI must restore.
+    limited to fields that the update UI must restore. Feishu credentials are
+    editable deployment inputs, so both the App ID and App Secret are restored
+    from the selected Runtime.
     """
 
     public_envs: list[dict[str, str]] = []
