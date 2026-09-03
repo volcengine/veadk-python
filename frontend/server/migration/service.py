@@ -2772,15 +2772,6 @@ class MigrationService:
         request = request or {}
         expiry = self._session_expiry(session, request)
         artifact_status = self._artifact_status(artifact)
-        if (
-            state in {"succeeded", "succeeded_with_warnings", "partial"}
-            and artifact_status["previewReady"]
-            and artifact_status["downloadReady"]
-        ):
-            # CLI deploy_ready reflects migration validation. Studio can still
-            # deploy an integrity-checked artifact and surface repairable issues
-            # while Runtime deployment performs the authoritative build check.
-            artifact_status["deployReady"] = True
         payload: dict[str, object] = {
             "id": session.task_id,
             "state": state,
@@ -3825,14 +3816,14 @@ class MigrationService:
         if (
             task.get("state") not in {"succeeded", "succeeded_with_warnings", "partial"}
             or not isinstance(artifact_status, dict)
-            or not artifact_status.get("downloadReady")
+            or not artifact_status.get("deployReady")
         ):
             raise MigrationError(
                 "MIGRATION_ARTIFACT_NOT_DEPLOYABLE",
-                "迁移产物尚未完整交付，无法部署到 Runtime。",
+                "AgentKit CLI 尚未确认迁移产物可部署到 Runtime。",
                 status_code=409,
             )
-        result = self._artifact_result(session, task, readiness="downloadReady")
+        result = self._artifact_result(session, task, readiness="deployReady")
         content = self._verified_artifact_content(session, result)
         try:
             return extract_migration_source(target, content, result)
