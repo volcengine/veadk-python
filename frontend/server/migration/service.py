@@ -3820,7 +3820,7 @@ class MigrationService:
         ):
             raise MigrationError(
                 "MIGRATION_ARTIFACT_NOT_DEPLOYABLE",
-                "AgentKit CLI 尚未确认迁移产物可部署到 Runtime。",
+                "尚未确认迁移产物可部署到 Runtime。",
                 status_code=409,
             )
         result = self._artifact_result(session, task, readiness="deployReady")
