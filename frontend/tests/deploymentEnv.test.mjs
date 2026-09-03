@@ -806,11 +806,19 @@ test("regenerates the project when deployment channel settings change", () => {
 test("restores Feishu credentials into Runtime updates and reuses opaque values", () => {
   assert.match(
     projectPreviewSource,
-    /value=\{deploymentEnvValues\[env\.key\] \?\? ""\}/,
+    /appId=\{deploymentEnvValues\.FEISHU_APP_ID \?\? ""\}/,
   );
   assert.match(
     projectPreviewSource,
-    /configuredRuntimeEnvKeySet\.has\(env\.key\)[\s\S]*?已配置，留空沿用/,
+    /appSecret=\{deploymentEnvValues\.FEISHU_APP_SECRET \?\? ""\}/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /appIdConfigured=\{configuredRuntimeEnvKeySet\.has\([\s\S]*?"FEISHU_APP_ID"/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /appSecretConfigured=\{configuredRuntimeEnvKeySet\.has\([\s\S]*?"FEISHU_APP_SECRET"/,
   );
   assert.match(
     customCreateSource,

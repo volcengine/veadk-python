@@ -2580,6 +2580,21 @@ def _run_frontend_server(
         resolve_credentials=_resolve_ve_credentials,
     )
 
+    from frontend.server.feishu_bot_setup import (
+        create_feishu_bot_setup_service,
+        mount_feishu_bot_setup_routes,
+    )
+
+    def _feishu_setup_owner(request: Request) -> str:
+        principal = _require_agent_management(request)
+        return principal.owner_id if principal is not None else "local"
+
+    mount_feishu_bot_setup_routes(
+        app,
+        create_feishu_bot_setup_service(),
+        _feishu_setup_owner,
+    )
+
     def _require_studio_admin(request: Request) -> None:
         if _request_role(request) != StudioRole.ADMIN:
             raise HTTPException(
