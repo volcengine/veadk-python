@@ -101,6 +101,15 @@ _STUDIO_DEPLOY_PROCESS_ENV_KEYS = (
     "BYTEPLUS_SECRET_KEY",
     "BYTEPLUS_SESSION_TOKEN",
     "IAM_ROLE",
+    "VEFAAS_OPENAPI_HOST",
+    "VEFAAS_OPENAPI_SCHEME",
+    "APIG_OPENAPI_HOST",
+    "APIG_OPENAPI_SCHEME",
+    "IAM_OPENAPI_HOST",
+    "IAM_OPENAPI_SCHEME",
+    "IDENTITY_OPENAPI_HOST",
+    "IDENTITY_OPENAPI_SCHEME",
+    "VOLCENGINE_OPENAPI_VERIFY_SSL",
 )
 _RUNTIME_UPDATE_CAPABILITY_INITIAL_WAIT_SECONDS = 1.8
 _RUNTIME_UPDATE_CAPABILITY_CACHE_TTL_SECONDS = 5 * 60.0
@@ -2221,6 +2230,10 @@ def _run_frontend_server(
     from frontend.server.skills.devenv import mount_skill_workbench_routes
     from frontend.server.skills.models import SkillIdentity
 
+    is_vestack_deployment = (
+        os.getenv("VEADK_STUDIO_DEPLOY_TARGET") or ""
+    ).strip().lower() == "vestack"
+
     def _skill_identity(request: Request) -> SkillIdentity:
         principal = _current_principal(request)
         if access_policy.enabled and principal is None:
@@ -2247,8 +2260,9 @@ def _run_frontend_server(
             region=region,
             session_token=session_token or "",
         )
-        if provider != "byteplus":
+        if provider != "byteplus" and not is_vestack_deployment:
             client.set_host("open.volcengineapi.com")
+            client.host = "open.volcengineapi.com"
         return client
 
     def _skill_workbench_skills_client(region: str):
@@ -2649,8 +2663,9 @@ def _run_frontend_server(
             region=resolved_region,
             session_token=session_token or "",
         )
-        if provider != "byteplus":
+        if provider != "byteplus" and not is_vestack_deployment:
             client.set_host("open.volcengineapi.com")
+            client.host = "open.volcengineapi.com"
         return client
 
     from frontend.server.studio_tools import (
@@ -2742,7 +2757,17 @@ def _run_frontend_server(
         project_service=intelligent_project_service,
     )
 
-    sandbox_gateway = AgentkitSandboxGateway(
+    if is_vestack_deployment:
+        from veadk.cli.frontend_sandbox_managed_tool_vestack import (
+            VeStackAgentkitSandboxGateway,
+            VeStackManagedToolSpec,
+        )
+
+        sandbox_gateway_class = VeStackAgentkitSandboxGateway
+    else:
+        VeStackManagedToolSpec = None
+        sandbox_gateway_class = AgentkitSandboxGateway
+    sandbox_gateway = sandbox_gateway_class(
         _sandbox_client,
         region_candidates=sandbox_region_candidates(
             os.getenv("AGENTKIT_SANDBOX_REGION"),
@@ -2766,11 +2791,83 @@ def _run_frontend_server(
         snapshot_tool_id=None,
         agent_kind="intelligent-development",
     )
+    codex_managed_tool_spec = None
+    if is_vestack_deployment and (
+        os.getenv("VEADK_STUDIO_CODEX_TOOL_PER_AGENT") or ""
+    ).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        role_name = (os.getenv("VEADK_STUDIO_CODEX_ROLE_NAME") or "").strip()
+        if role_name:
+            codex_managed_tool_spec = VeStackManagedToolSpec(
+                tool_type="CodeEnv",
+                role_name=role_name,
+                project_name=(os.getenv("VEADK_STUDIO_PROJECT") or "default").strip(),
+                cpu_milli=int(os.getenv("VEADK_STUDIO_CODEX_CPU_MILLI") or "2000"),
+                memory_mb=int(os.getenv("VEADK_STUDIO_CODEX_MEMORY_MB") or "4096"),
+                port=int(os.getenv("VEADK_STUDIO_CODEX_PORT") or "8642"),
+                disk_gb=int(os.getenv("VEADK_STUDIO_CODEX_DISK_GB") or "10"),
+            )
+        else:
+            logger.warning(
+                "Codex Tool-per-Agent is enabled but the IAM role is missing."
+            )
     sandbox_service = SandboxConversationService(
         sandbox_gateway,
         tool_id=sandbox_chat_codex_tool_id,
         snapshot_tool_id=sandbox_chat_codex_snapshot_tool_id,
+        managed_tool_spec=codex_managed_tool_spec,
     )
+    hermes_managed_tool_spec = None
+    if is_vestack_deployment and (
+        os.getenv("VEADK_STUDIO_HERMES_TOOL_PER_AGENT") or ""
+    ).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        model_agent_name = (
+            os.getenv("VEADK_STUDIO_HERMES_MODEL_AGENT_NAME") or ""
+        ).strip()
+        model_agent_api_base = (
+            os.getenv("VEADK_STUDIO_HERMES_MODEL_API_BASE") or ""
+        ).strip()
+        model_agent_api_key = (
+            os.getenv("VEADK_STUDIO_HERMES_MODEL_API_KEY") or ""
+        ).strip()
+        model_agent_model_id = (os.getenv("VEADK_STUDIO_HERMES_MODEL_ID") or "").strip()
+        role_name = (os.getenv("VEADK_STUDIO_HERMES_ROLE_NAME") or "").strip()
+        if all(
+            (
+                model_agent_name,
+                model_agent_api_base,
+                model_agent_api_key,
+                model_agent_model_id,
+                role_name,
+            )
+        ):
+            hermes_managed_tool_spec = VeStackManagedToolSpec(
+                tool_type="Station-Hermes",
+                model_agent_name=model_agent_name,
+                model_agent_api_base=model_agent_api_base,
+                model_agent_api_key=model_agent_api_key,
+                model_agent_model_id=model_agent_model_id,
+                role_name=role_name,
+                project_name=(os.getenv("VEADK_STUDIO_PROJECT") or "default").strip(),
+                cpu_milli=int(os.getenv("VEADK_STUDIO_HERMES_CPU_MILLI") or "2000"),
+                memory_mb=int(os.getenv("VEADK_STUDIO_HERMES_MEMORY_MB") or "4096"),
+                port=int(os.getenv("VEADK_STUDIO_HERMES_PORT") or "4500"),
+                disk_gb=int(os.getenv("VEADK_STUDIO_HERMES_DISK_GB") or "10"),
+            )
+        else:
+            logger.warning(
+                "Hermes Tool-per-Agent is enabled but its ModelCenter Endpoint "
+                "or role is missing."
+            )
     sandbox_agent_services = {
         "agentkit-cli": SandboxAgentSessionService(
             sandbox_gateway,
@@ -2801,6 +2898,22 @@ def _run_frontend_server(
             kind="hermes",
             tool_id=sandbox_chat_hermes_tool_id,
             snapshot_tool_id=sandbox_chat_hermes_snapshot_tool_id,
+            managed_tool_spec=hermes_managed_tool_spec,
+            surface_path="/proxy/4500/",
+            surface_start_command=(
+                "if ! curl -fsS --max-time 2 http://127.0.0.1:4500/ "
+                ">/dev/null 2>&1; then "
+                "nohup /home/gem/.local/bin/hermes dashboard "
+                "--host 127.0.0.1 --port 4500 --no-open "
+                ">/home/gem/.hermes/dashboard.log 2>&1 & fi"
+            ),
+            surface_ready_path="/proxy/4500/",
+            unconfigured_message=(
+                "管理员未配置 Hermes 模型或 IAM Role。"
+                if hermes_managed_tool_spec is None
+                and (os.getenv("VEADK_STUDIO_HERMES_TOOL_PER_AGENT") or "").strip()
+                else ""
+            ),
         ),
     }
 
@@ -13313,6 +13426,112 @@ def _resolve_studio_cloud_credentials(
 
 @studio.command("deploy")
 @click.option(
+    "--deploy-target",
+    type=click.Choice(["application", "vestack"]),
+    default="application",
+    show_default=True,
+    envvar="VEADK_STUDIO_DEPLOY_TARGET",
+    help="Use public-cloud VeFaaS Application or VeStack image Function + APIG.",
+)
+@click.option(
+    "--image",
+    default="",
+    envvar="VEADK_STUDIO_IMAGE",
+    help="Prebuilt linux/amd64 Studio image required by --deploy-target vestack.",
+)
+@click.option(
+    "--public-domain",
+    default="",
+    envvar="VEADK_STUDIO_PUBLIC_DOMAIN",
+    help="Dedicated APIG host for the VeStack Studio deployment.",
+)
+@click.option(
+    "--vestack-openapi-url",
+    default="",
+    envvar="VESTACK_OPENAPI_URL",
+    help="VeStack control-plane URL, for example https://openapi.example.com.",
+)
+@click.option(
+    "--vestack-agentkit-host",
+    default="ops-top.ops-top.svc:8000",
+    show_default=True,
+    envvar="VESTACK_AGENTKIT_HOST",
+    help="AgentKit TOP host reachable from the VeFaaS data plane.",
+)
+@click.option(
+    "--vestack-agentkit-region",
+    default="",
+    envvar="VESTACK_AGENTKIT_REGION",
+    help="Delivered environment region id, for example e70.",
+)
+@click.option(
+    "--vestack-codex-port",
+    type=click.IntRange(1, 65535),
+    default=8642,
+    show_default=True,
+    envvar="VEADK_STUDIO_CODEX_PORT",
+    help="Code Sandbox service port used by independent VeStack Codex Tools.",
+)
+@click.option(
+    "--vestack-hermes-port",
+    type=click.IntRange(1, 65535),
+    default=4500,
+    show_default=True,
+    envvar="VEADK_STUDIO_HERMES_PORT",
+    help="Hermes dashboard port used by independent VeStack Hermes Tools.",
+)
+@click.option(
+    "--vestack-hermes-model-agent-name",
+    default="",
+    envvar="VEADK_STUDIO_HERMES_MODEL_AGENT_NAME",
+    help="Default AgentKit model endpoint name for independent VeStack Hermes Tools.",
+)
+@click.option(
+    "--vestack-hermes-model-api-base",
+    default="",
+    envvar="VEADK_STUDIO_HERMES_MODEL_API_BASE",
+    help="Model API base injected into independent VeStack Hermes Tools.",
+)
+@click.option(
+    "--vestack-hermes-model-api-key",
+    default="",
+    envvar="VEADK_STUDIO_HERMES_MODEL_API_KEY",
+    help="Model API key injected into independent VeStack Hermes Tools; prefer envvar.",
+)
+@click.option(
+    "--vestack-hermes-model-id",
+    default="",
+    envvar="VEADK_STUDIO_HERMES_MODEL_ID",
+    help="Model endpoint ID injected into independent VeStack Hermes Tools.",
+)
+@click.option(
+    "--vestack-apig-cluster-id",
+    default="",
+    envvar="VESTACK_APIG_CLUSTER_ID",
+    help="VeStack cluster ID used by APIG ClusterSpec.",
+)
+@click.option(
+    "--vestack-apig-namespace",
+    default="veadk-studio-apig",
+    show_default=True,
+    envvar="VESTACK_APIG_NAMESPACE",
+    help="Existing Kubernetes namespace where APIG installs the gateway.",
+)
+@click.option(
+    "--vestack-apig-cluster-name",
+    default="aio",
+    show_default=True,
+    envvar="VESTACK_APIG_CLUSTER_NAME",
+    help="VeStack APIG cluster display name.",
+)
+@click.option(
+    "--vestack-insecure-skip-tls-verify",
+    is_flag=True,
+    default=False,
+    envvar="VESTACK_INSECURE_SKIP_TLS_VERIFY",
+    help="Explicitly allow a private/self-signed OpenAPI certificate.",
+)
+@click.option(
     "--user-pool-id",
     default=None,
     help="Existing Identity User Pool UID. When omitted, Studio creates or "
@@ -13541,6 +13760,22 @@ def _resolve_studio_cloud_credentials(
     help="TOS object prefix for the Studio main release channel.",
 )
 def frontend_deploy(
+    deploy_target: str,
+    image: str,
+    public_domain: str,
+    vestack_openapi_url: str,
+    vestack_agentkit_host: str,
+    vestack_agentkit_region: str,
+    vestack_codex_port: int,
+    vestack_hermes_port: int,
+    vestack_hermes_model_agent_name: str,
+    vestack_hermes_model_api_base: str,
+    vestack_hermes_model_api_key: str,
+    vestack_hermes_model_id: str,
+    vestack_apig_cluster_id: str,
+    vestack_apig_namespace: str,
+    vestack_apig_cluster_name: str,
+    vestack_insecure_skip_tls_verify: bool,
     user_pool_id: str | None,
     allowed_client_id: str | None,
     client_secret: str,
@@ -13678,6 +13913,208 @@ def frontend_deploy(
         os.environ["BYTEPLUS_SECRET_KEY"] = sk
         if session_token:
             os.environ["BYTEPLUS_SESSION_TOKEN"] = session_token
+
+    if deploy_target == "vestack":
+        from urllib.parse import urlparse
+
+        if provider_id != "volcengine":
+            raise click.ClickException(
+                "VeStack Studio deploy requires --provider volcengine."
+            )
+        parsed_openapi = urlparse(vestack_openapi_url.strip())
+        if not parsed_openapi.scheme or not parsed_openapi.netloc:
+            raise click.ClickException(
+                "--vestack-openapi-url must include scheme and host."
+            )
+        if not image.strip():
+            raise click.ClickException("--image is required for VeStack Studio deploy.")
+        if not public_domain.strip():
+            raise click.ClickException(
+                "--public-domain is required for VeStack Studio deploy."
+            )
+        if not vestack_agentkit_region.strip():
+            raise click.ClickException(
+                "--vestack-agentkit-region is required for VeStack Studio deploy."
+            )
+        if not vestack_apig_cluster_id.strip():
+            raise click.ClickException(
+                "--vestack-apig-cluster-id is required for VeStack Studio deploy."
+            )
+
+        for service_name in ("VEFAAS", "APIG", "IAM", "IDENTITY"):
+            os.environ[f"{service_name}_OPENAPI_HOST"] = parsed_openapi.netloc
+            os.environ[f"{service_name}_OPENAPI_SCHEME"] = parsed_openapi.scheme
+        if vestack_insecure_skip_tls_verify:
+            os.environ["VOLCENGINE_OPENAPI_VERIFY_SSL"] = "false"
+
+        identity_region = region
+        user_pool_id, user_pool_domain, allowed_client_id = (
+            _resolve_or_create_studio_identity_resources(
+                access_key=ak,
+                secret_key=sk,
+                session_token=session_token,
+                user_pool_id=user_pool_id,
+                client_id=allowed_client_id,
+                application_name=vefaas_app_name,
+                region=identity_region,
+                provider=provider_id,
+            )
+        )
+
+        if iam_role:
+            role_trn = iam_role
+            click.echo(f"Using provided IAM role: {role_trn}")
+        else:
+            from veadk.cli.frontend_deploy_iam_vestack import (
+                ensure_frontend_role_vestack,
+            )
+
+            click.echo("Ensuring VeStack Studio IAM role + policy…")
+            role_trn = ensure_frontend_role_vestack(
+                ak,
+                sk,
+                session_token=session_token,
+                provider=provider_id,
+            )
+
+        endpoint = f"http://{public_domain.strip().rstrip('/')}"
+        redirect_uri = f"{endpoint}/oauth2/callback"
+        vestack_environment = {
+            "CLOUD_PROVIDER": "volcengine",
+            "AGENTKIT_CLOUD_PROVIDER": "volcengine",
+            "REGION": vestack_agentkit_region,
+            "VOLCENGINE_REGION": vestack_agentkit_region,
+            "AGENTKIT_SANDBOX_REGION": vestack_agentkit_region,
+            "VOLCENGINE_AGENTKIT_HOST": vestack_agentkit_host,
+            "VOLCENGINE_AGENTKIT_SCHEME": "http",
+            "VOLCENGINE_AGENTKIT_REGION": vestack_agentkit_region,
+            "VOLCENGINE_AGENTKIT_SERVICE": "agentkit",
+            "IDENTITY_OPENAPI_HOST": vestack_agentkit_host,
+            "IDENTITY_OPENAPI_SCHEME": "http",
+            "VEIDENTITY_OIDC_BASE_URL": (
+                f"http://{user_pool_domain}/userpool/{user_pool_id}"
+            ),
+            "OAUTH2_USER_POOL_ID": str(user_pool_id),
+            "OAUTH2_USER_POOL_CLIENT_ID": str(allowed_client_id),
+            "OAUTH2_PROVIDER": "veidentity",
+            "OAUTH2_REDIRECT_URI": redirect_uri,
+            "VEIDENTITY_REGION": identity_region,
+            "VEADK_STUDIO_AUTH_MODE": "frontend",
+            "VEADK_STUDIO_DEPLOY_TARGET": "vestack",
+            "VEADK_STUDIO_USER_POOL_ID": str(user_pool_id),
+            "VEADK_STUDIO_DEPLOY_REGION": vestack_agentkit_region,
+            "VEADK_STUDIO_PROJECT": project,
+            "VEADK_STUDIO_CODEX_TOOL_PER_AGENT": "true",
+            "VEADK_STUDIO_CODEX_ROLE_NAME": role_trn.rsplit("/", 1)[-1],
+            "VEADK_STUDIO_CODEX_PORT": str(vestack_codex_port),
+            "VEADK_STUDIO_HERMES_PORT": str(vestack_hermes_port),
+        }
+        if vestack_hermes_model_agent_name.strip():
+            missing_hermes_model_options = [
+                option
+                for option, value in (
+                    ("--vestack-hermes-model-api-base", vestack_hermes_model_api_base),
+                    ("--vestack-hermes-model-api-key", vestack_hermes_model_api_key),
+                    ("--vestack-hermes-model-id", vestack_hermes_model_id),
+                )
+                if not value.strip()
+            ]
+            if missing_hermes_model_options:
+                raise click.ClickException(
+                    "Independent VeStack Hermes Tools require complete model "
+                    "environment: " + ", ".join(missing_hermes_model_options)
+                )
+            vestack_environment.update(
+                {
+                    "VEADK_STUDIO_HERMES_TOOL_PER_AGENT": "true",
+                    "VEADK_STUDIO_HERMES_MODEL_AGENT_NAME": (
+                        vestack_hermes_model_agent_name.strip()
+                    ),
+                    "VEADK_STUDIO_HERMES_MODEL_API_BASE": (
+                        vestack_hermes_model_api_base.strip().rstrip("/")
+                    ),
+                    "VEADK_STUDIO_HERMES_MODEL_API_KEY": (
+                        vestack_hermes_model_api_key.strip()
+                    ),
+                    "VEADK_STUDIO_HERMES_MODEL_ID": vestack_hermes_model_id.strip(),
+                    "VEADK_STUDIO_HERMES_ROLE_NAME": role_trn.rsplit("/", 1)[-1],
+                    "SANDBOX_CHAT_HERMES": "",
+                    "SANDBOX_CHAT_HERMES_SNAPSHOT": "",
+                }
+            )
+        if client_secret:
+            vestack_environment["OAUTH2_CLIENT_SECRET"] = client_secret
+        if site_title is not None:
+            vestack_environment["VEADK_SITE_TITLE"] = branding_title
+        if studio_admins:
+            vestack_environment["VEADK_STUDIO_ADMINS"] = studio_admins
+        if studio_developers:
+            vestack_environment["VEADK_STUDIO_DEVELOPERS"] = studio_developers
+        configured_sandbox_tools = {
+            "SANDBOX_DEV": sandbox_dev_tool_id,
+            "SANDBOX_CHAT_CODEX": sandbox_chat_codex_tool_id,
+            "SANDBOX_CHAT_OPENCLAW": sandbox_chat_openclaw_tool_id,
+            "SANDBOX_CHAT_CODEX_SNAPSHOT": sandbox_chat_codex_snapshot_tool_id,
+            "SANDBOX_CHAT_OPENCLAW_SNAPSHOT": (sandbox_chat_openclaw_snapshot_tool_id),
+        }
+        vestack_environment.update(
+            {
+                key: str(value).strip()
+                for key, value in configured_sandbox_tools.items()
+                if str(value or "").strip()
+            }
+        )
+
+        from veadk.cli.vestack_studio_deploy import deploy_vestack_studio_image
+
+        click.echo("Deploying Studio as VeStack VeFaaS Function + APIG…")
+        deployment = deploy_vestack_studio_image(
+            access_key=ak,
+            secret_key=sk,
+            session_token=session_token,
+            region=region,
+            project=project,
+            application_name=vefaas_app_name,
+            image=image,
+            role_trn=role_trn,
+            public_domain=public_domain,
+            gateway_name=gateway_name,
+            gateway_service_name=gateway_service_name,
+            gateway_upstream_name=gateway_upstream_name,
+            apig_cluster_id=vestack_apig_cluster_id,
+            apig_namespace=vestack_apig_namespace,
+            apig_cluster_name=vestack_apig_cluster_name,
+            environment=vestack_environment,
+        )
+
+        endpoint = deployment.endpoint
+        redirect_uri = f"{endpoint}/oauth2/callback"
+
+        from veadk.integrations.ve_identity.identity_client import IdentityClient
+
+        IdentityClient(
+            access_key=ak,
+            secret_key=sk,
+            session_token=session_token,
+            region=identity_region,
+            provider=provider_id,
+            enable_vefaas_iam_fallback=False,
+        ).register_callback_for_user_pool_client(
+            user_pool_uid=str(user_pool_id),
+            client_uid=str(allowed_client_id),
+            callback_url=redirect_uri,
+            web_origin=endpoint,
+            dismiss_login_page_enabled=False,
+            skip_consent_enabled=True,
+        )
+        click.echo(f"✅ VeStack Studio Function deployed: {deployment.endpoint}")
+        click.echo(f"   function id: {deployment.function_id}")
+        click.echo(f"   gateway id: {deployment.gateway_id}")
+        click.echo(f"   service id: {deployment.service_id}")
+        click.echo(f"   upstream id: {deployment.upstream_id}")
+        click.echo(f"   route id: {deployment.route_id}")
+        click.echo(f"   IAM role: {role_trn}")
+        return
 
     manage_user_pool_settings = not bool((user_pool_id or "").strip())
     auto_identity_resources = not (user_pool_id and allowed_client_id)

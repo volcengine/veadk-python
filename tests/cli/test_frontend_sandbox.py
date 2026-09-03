@@ -67,6 +67,11 @@ from veadk.cli.frontend_sandbox import (
     mount_sandbox_agent_routes,
     mount_sandbox_routes,
 )
+from veadk.cli.frontend_sandbox_managed_tool_vestack import (
+    VeStackAgentkitSandboxGateway,
+    VeStackManagedTool,
+    VeStackManagedToolSpec,
+)
 
 
 class _FakeCodex:
@@ -317,6 +322,8 @@ class _FakeGateway:
         self.envs: list[dict[str, str] | None] = []
         self.deleted: list[SandboxCloudSession] = []
         self.deleted_snapshots: list[SandboxCloudSnapshot] = []
+        self.deleted_managed_tools: list[VeStackManagedTool] = []
+        self.created_managed_tool_specs: list[VeStackManagedToolSpec] = []
         self.thread_ids: list[str] = []
         self.connections: list[_FakeCodex] = []
         self.sessions: dict[str, SandboxCloudSession] = {
@@ -334,6 +341,45 @@ class _FakeGateway:
             )
         }
         self.snapshots: dict[str, SandboxCloudSnapshot] = {}
+        self.managed_tools: dict[str, VeStackManagedTool] = {}
+
+    async def list_managed_tools(
+        self, agent_kind: str, owner_id: str | None = None
+    ) -> list[VeStackManagedTool]:
+        return [
+            tool
+            for tool in self.managed_tools.values()
+            if tool.agent_kind == agent_kind
+            and (owner_id is None or tool.created_by == owner_id)
+        ]
+
+    async def create_managed_tool(
+        self,
+        spec: VeStackManagedToolSpec,
+        *,
+        display_name: str,
+        owner_id: str,
+        creator_name: str,
+        agent_kind: str,
+    ) -> VeStackManagedTool:
+        self.created_managed_tool_specs.append(spec)
+        tool = VeStackManagedTool(
+            tool_id=f"managed-tool-{len(self.managed_tools) + 1}",
+            name=f"VeADK-{agent_kind}",
+            region="e70",
+            status="Ready",
+            created_at="2026-09-01T08:00:00Z",
+            display_name=display_name,
+            created_by=owner_id,
+            creator_name=creator_name,
+            agent_kind=agent_kind,
+        )
+        self.managed_tools[tool.tool_id] = tool
+        return tool
+
+    async def delete_managed_tool(self, tool: VeStackManagedTool) -> None:
+        self.deleted_managed_tools.append(tool)
+        self.managed_tools.pop(tool.tool_id, None)
 
     async def get_tool(self, tool_id: str) -> SimpleNamespace:
         self.tool_ids.append(tool_id)
@@ -437,16 +483,49 @@ class _FakeGateway:
         return None
 
 
+def test_managed_tool_api_is_only_on_vestack_gateway() -> None:
+    assert not hasattr(AgentkitSandboxGateway, "create_managed_tool")
+    assert not hasattr(AgentkitSandboxGateway, "list_managed_tools")
+    assert not hasattr(AgentkitSandboxGateway, "delete_managed_tool")
+    assert hasattr(VeStackAgentkitSandboxGateway, "create_managed_tool")
+    assert hasattr(VeStackAgentkitSandboxGateway, "list_managed_tools")
+    assert hasattr(VeStackAgentkitSandboxGateway, "delete_managed_tool")
+
+
+def test_agent_surface_capability_rejects_missing_malformed_and_wrong_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY", raising=False)
+    assert not frontend_sandbox._valid_agent_surface_capability(
+        "token", "hermes", "session-1"
+    )
+
+    monkeypatch.setenv("VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY", "test-signing-key")
+    assert not frontend_sandbox._valid_agent_surface_capability(
+        "malformed", "hermes", "session-1"
+    )
+    token = frontend_sandbox._agent_surface_capability("hermes", "session-1")
+    assert frontend_sandbox._valid_agent_surface_capability(
+        token, "hermes", "session-1"
+    )
+    _version, remainder = token.split(".", 1)
+    assert not frontend_sandbox._valid_agent_surface_capability(
+        f"wrong.{remainder}", "hermes", "session-1"
+    )
+
+
 def _app(
     gateway: _FakeGateway,
     tool_id: str | None = "tool-studio",
     snapshot_tool_id: str | None = "tool-studio-snapshot",
+    managed_tool_spec: VeStackManagedToolSpec | None = None,
 ) -> FastAPI:
     app = FastAPI()
     service = SandboxConversationService(
         gateway,
         tool_id=tool_id,
         snapshot_tool_id=snapshot_tool_id,
+        managed_tool_spec=managed_tool_spec,
     )
 
     def _owner(request: Request) -> str:
@@ -476,6 +555,7 @@ def _agent_app(
     *,
     snapshot_tool_ids: dict[str, str] | None = None,
     agentkit_cli_tool_id: str | None = "tool-dev",
+    hermes_managed_tool_spec: VeStackManagedToolSpec | None = None,
 ) -> FastAPI:
     if snapshot_tool_ids is None:
         snapshot_tool_ids = {
@@ -529,8 +609,13 @@ def _agent_app(
             "hermes": SandboxAgentSessionService(
                 gateway,
                 kind="hermes",
-                tool_id="tool-hermes",
-                snapshot_tool_id=snapshot_tool_ids.get("hermes"),
+                tool_id=None if hermes_managed_tool_spec else "tool-hermes",
+                snapshot_tool_id=(
+                    None
+                    if hermes_managed_tool_spec
+                    else snapshot_tool_ids.get("hermes")
+                ),
+                managed_tool_spec=hermes_managed_tool_spec,
             ),
         },
         _owner,
@@ -538,6 +623,375 @@ def _agent_app(
         _creator,
     )
     return app
+
+
+def test_hermes_managed_tool_mode_creates_one_tool_per_agent() -> None:
+    gateway = _FakeGateway()
+    spec = VeStackManagedToolSpec(
+        tool_type="Station-Hermes",
+        model_agent_name="ep-deepseek-test",
+        model_agent_api_base="http://modelcenter.example:6789",
+        model_agent_api_key="test-model-key",
+        model_agent_model_id="ep-deepseek-test",
+        role_name="VeADKFrontendServiceRole",
+    )
+    alice_headers = {
+        "X-Test-User": "tenant-alice",
+        "X-Test-Creator": "alice@example.com",
+    }
+    with TestClient(_agent_app(gateway, hermes_managed_tool_spec=spec)) as client:
+        capabilities = client.get("/web/hermes/capabilities", headers=alice_headers)
+        created = client.post(
+            "/web/hermes/sessions",
+            headers=alice_headers,
+            json={"displayName": "Alice Hermes", "persistent": False, "diskGb": 32},
+        )
+        session_id = created.json()["sessionId"]
+        alice_list = client.get("/web/hermes/sessions", headers=alice_headers)
+        other_list = client.get(
+            "/web/hermes/sessions", headers={"X-Test-User": "tenant-bob"}
+        )
+        admin_list = client.get(
+            "/web/hermes/sessions",
+            headers={"X-Test-User": "admin", "X-Test-Role": "admin"},
+        )
+        deleted = client.delete(
+            f"/web/hermes/sessions/{session_id}", headers=alice_headers
+        )
+
+    assert capabilities.status_code == 200
+    assert capabilities.json() == {
+        "enabled": True,
+        "reason": "",
+        "persistentEnabled": True,
+        "persistentReason": "",
+        "persistentRequired": True,
+        "storageMode": "disk",
+        "diskGbDefault": 10,
+        "diskGbMin": 5,
+        "diskGbMax": 100,
+    }
+    assert created.status_code == 200
+    assert created.json()["displayName"] == "Alice Hermes"
+    assert created.json()["createdBy"] == "alice@example.com"
+    assert created.json()["persistent"] is True
+    assert len(gateway.created_managed_tool_specs) == 1
+    assert gateway.created_managed_tool_specs[0].disk_gb == 32
+    assert gateway.tool_ids[-2:] == ["managed-tool-1", "managed-tool-1"]
+    assert [item["sessionId"] for item in alice_list.json()["sessions"]] == [session_id]
+    assert other_list.json() == {"sessions": []}
+    assert [item["sessionId"] for item in admin_list.json()["sessions"]] == [session_id]
+    assert deleted.json() == {"deleted": True}
+    assert gateway.managed_tools == {}
+    assert [tool.tool_id for tool in gateway.deleted_managed_tools] == [
+        "managed-tool-1"
+    ]
+
+
+def test_codex_managed_tool_mode_creates_codeenv_tool_per_agent() -> None:
+    gateway = _FakeGateway()
+    spec = VeStackManagedToolSpec(
+        tool_type="CodeEnv",
+        role_name="VeADKFrontendServiceRole",
+    )
+    alice_headers = {
+        "X-Test-User": "tenant-alice",
+        "X-Test-Creator": "alice@example.com",
+    }
+    with TestClient(_app(gateway, managed_tool_spec=spec)) as client:
+        capabilities = client.get("/web/sandbox/capabilities", headers=alice_headers)
+        created = client.post(
+            "/web/sandbox/sessions",
+            headers=alice_headers,
+            json={"displayName": "Alice Codex", "persistent": False, "diskGb": 20},
+        )
+        session_id = created.json()["sessionId"]
+        alice_list = client.get("/web/sandbox/sessions", headers=alice_headers)
+        other_list = client.get(
+            "/web/sandbox/sessions", headers={"X-Test-User": "tenant-bob"}
+        )
+        deleted = client.delete(
+            f"/web/sandbox/sessions/{session_id}", headers=alice_headers
+        )
+
+    assert capabilities.status_code == 200
+    assert capabilities.json() == {
+        "enabled": True,
+        "reason": "",
+        "persistentEnabled": True,
+        "persistentReason": "",
+        "persistentRequired": True,
+        "storageMode": "disk",
+        "diskGbDefault": 10,
+        "diskGbMin": 5,
+        "diskGbMax": 100,
+        "endpointExportEnabled": True,
+    }
+    assert created.status_code == 200
+    assert created.json()["displayName"] == "Alice Codex"
+    assert created.json()["createdBy"] == "alice@example.com"
+    assert created.json()["persistent"] is True
+    assert len(gateway.created_managed_tool_specs) == 1
+    assert gateway.created_managed_tool_specs[0].disk_gb == 20
+    assert [item["sessionId"] for item in alice_list.json()["sessions"]] == [session_id]
+    assert other_list.json() == {"sessions": []}
+    assert deleted.json() == {"deleted": True}
+    assert gateway.managed_tools == {}
+
+
+@pytest.mark.parametrize("disk_gb", [4, 101, 10.5, True, "10"])
+def test_managed_tool_mode_rejects_invalid_disk_size(disk_gb: object) -> None:
+    gateway = _FakeGateway()
+    spec = VeStackManagedToolSpec(
+        tool_type="Station-Hermes",
+        role_name="VeADKFrontendServiceRole",
+    )
+
+    with TestClient(_agent_app(gateway, hermes_managed_tool_spec=spec)) as client:
+        response = client.post(
+            "/web/hermes/sessions",
+            headers={"X-Test-User": "alice"},
+            json={"displayName": "Hermes", "diskGb": disk_gb},
+        )
+
+    assert response.status_code == 422
+    assert gateway.created_managed_tool_specs == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("spec", "expected_model_agent_name", "expected_port"),
+    [
+        (
+            VeStackManagedToolSpec(
+                tool_type="CodeEnv",
+                role_name="VeADKFrontendServiceRole",
+                port=8642,
+                disk_gb=24,
+            ),
+            None,
+            8642,
+        ),
+        (
+            VeStackManagedToolSpec(
+                tool_type="Station-Hermes",
+                role_name="VeADKFrontendServiceRole",
+                model_agent_name="ep-deepseek-test",
+                model_agent_api_base="http://modelcenter.example:6789",
+                model_agent_api_key="test-model-key",
+                model_agent_model_id="ep-deepseek-test",
+                port=4500,
+                disk_gb=32,
+            ),
+            "ep-deepseek-test",
+            4500,
+        ),
+    ],
+)
+async def test_gateway_sends_console_equivalent_model_environment_for_hermes(
+    monkeypatch: pytest.MonkeyPatch,
+    spec: VeStackManagedToolSpec,
+    expected_model_agent_name: str | None,
+    expected_port: int,
+) -> None:
+    requests: list[dict[str, object]] = []
+    gateway = VeStackAgentkitSandboxGateway(object(), region_candidates=("e70",))
+
+    async def _call(method_name: str, request: object, *, region: str = "") -> object:
+        assert region == "e70"
+        if method_name == "create_tool":
+            requests.append(request.model_dump(by_alias=True, exclude_none=True))
+            return SimpleNamespace(tool_id="managed-tool-1")
+        assert method_name == "get_tool"
+        return SimpleNamespace(
+            tool_id="managed-tool-1",
+            name="VeADK-Test",
+            status="Ready",
+            tags=[],
+        )
+
+    monkeypatch.setattr(gateway, "_call", _call)
+
+    await gateway.create_managed_tool(
+        spec,
+        display_name="测试智能体",
+        owner_id="tenant-alice",
+        creator_name="alice@example.com",
+        agent_kind=("hermes" if spec.tool_type == "Station-Hermes" else "codex"),
+    )
+
+    assert requests[0]["ToolType"] == spec.tool_type
+    assert requests[0]["Port"] == expected_port
+    assert requests[0].get("ModelAgentName") == expected_model_agent_name
+    envs = {item["Key"]: item["Value"] for item in requests[0]["Envs"]}
+    assert envs["DiskGb"] == str(spec.disk_gb)
+    if spec.tool_type == "Station-Hermes":
+        assert envs == {
+            "DiskGb": "32",
+            "MODEL_AGENT_API_BASE": "http://modelcenter.example:6789",
+            "MODEL_AGENT_API_KEY": "test-model-key",
+            "MODEL_AGENT_MODEL_ID": "ep-deepseek-test",
+        }
+
+
+@pytest.mark.asyncio
+async def test_vestack_gateway_lists_owned_managed_tools_across_pages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = VeStackAgentkitSandboxGateway(object(), region_candidates=("region-a",))
+    requests: list[dict[str, object]] = []
+
+    async def _call(method_name: str, request: object, *, region: str = "") -> object:
+        assert method_name == "list_tools"
+        assert region == "region-a"
+        payload = request.model_dump(by_alias=True, exclude_none=True)
+        requests.append(payload)
+        page = len(requests)
+        return SimpleNamespace(
+            tools=[
+                SimpleNamespace(
+                    tool_id=f"tool-{page}",
+                    name=f"Tool {page}",
+                    status="Ready",
+                    created_at=f"2026-09-0{page}T00:00:00Z",
+                    tags=[
+                        {"Key": "veadk_display_name", "Value": f"Agent {page}"},
+                        SimpleNamespace(key="veadk_owner", value="owner-1"),
+                        {"key": "veadk_creator_name", "value": "Alice"},
+                        {"Key": "veadk_agent_kind", "Value": "hermes"},
+                    ],
+                )
+            ],
+            next_token="next" if page == 1 else "",
+        )
+
+    monkeypatch.setattr(gateway, "_call", _call)
+
+    tools = await gateway.list_managed_tools("hermes", owner_id="owner-1")
+
+    assert [tool.tool_id for tool in tools] == ["tool-2", "tool-1"]
+    assert tools[0].display_name == "Agent 2"
+    assert tools[0].created_by == "owner-1"
+    assert tools[0].creator_name == "Alice"
+    assert tools[0].agent_kind == "hermes"
+    assert "NextToken" not in requests[0]
+    assert requests[1]["NextToken"] == "next"
+    assert len(requests[0]["TagFilters"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_vestack_gateway_retries_not_found_region_for_managed_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = VeStackAgentkitSandboxGateway(
+        object(), region_candidates=("region-a", "region-b")
+    )
+    regions: list[str] = []
+
+    async def _call(method_name: str, request: object, *, region: str = "") -> object:
+        del method_name, request
+        regions.append(region)
+        if region == "region-a":
+            raise RuntimeError("InvalidResource.NotFound")
+        return SimpleNamespace(tools=[], next_token="")
+
+    monkeypatch.setattr(gateway, "_call", _call)
+
+    assert await gateway.list_managed_tools("codex") == []
+    assert regions == ["region-a", "region-b"]
+
+
+@pytest.mark.asyncio
+async def test_vestack_gateway_reports_managed_tool_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = VeStackAgentkitSandboxGateway(object(), region_candidates=("region-a",))
+
+    async def _list_error(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("AccessDenied")
+
+    monkeypatch.setattr(gateway, "_call", _list_error)
+    with pytest.raises(SandboxProvisioningError, match="AccessDenied"):
+        await gateway.list_managed_tools("hermes")
+
+    async def _create_without_id(
+        method_name: str, request: object, *, region: str = ""
+    ) -> object:
+        del request, region
+        assert method_name == "create_tool"
+        return SimpleNamespace(tool_id="")
+
+    monkeypatch.setattr(gateway, "_call", _create_without_id)
+    with pytest.raises(SandboxProvisioningError, match="缺少 ToolId"):
+        await gateway.create_managed_tool(
+            VeStackManagedToolSpec(tool_type="CodeEnv", role_name="role"),
+            display_name="Codex",
+            owner_id="owner-1",
+            creator_name="Alice",
+            agent_kind="codex",
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal_status", ["Failed", "Building"])
+async def test_vestack_gateway_reports_failed_or_timed_out_tool_creation(
+    monkeypatch: pytest.MonkeyPatch,
+    terminal_status: str,
+) -> None:
+    gateway = VeStackAgentkitSandboxGateway(object(), region_candidates=("region-a",))
+    monkeypatch.setattr(
+        "veadk.cli.frontend_sandbox_managed_tool_vestack._READY_ATTEMPTS", 2
+    )
+
+    async def _sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "veadk.cli.frontend_sandbox_managed_tool_vestack.asyncio.sleep", _sleep
+    )
+
+    async def _call(method_name: str, request: object, *, region: str = "") -> object:
+        del request, region
+        if method_name == "create_tool":
+            return SimpleNamespace(tool_id="tool-1")
+        return SimpleNamespace(
+            tool_id="tool-1",
+            name="Tool",
+            status=terminal_status,
+            tags=[],
+        )
+
+    monkeypatch.setattr(gateway, "_call", _call)
+    expected = "当前状态：failed" if terminal_status == "Failed" else "创建超时"
+    with pytest.raises(SandboxProvisioningError, match=expected):
+        await gateway.create_managed_tool(
+            VeStackManagedToolSpec(tool_type="CodeEnv", role_name="role"),
+            display_name="Codex",
+            owner_id="owner-1",
+            creator_name="Alice",
+            agent_kind="codex",
+        )
+
+
+@pytest.mark.asyncio
+async def test_vestack_gateway_delete_is_idempotent_and_wraps_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = VeStackAgentkitSandboxGateway(object())
+    tool = VeStackManagedTool(tool_id="tool-1", name="Tool", region="region-a")
+
+    async def _not_found(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("InvalidResource.NotFound")
+
+    monkeypatch.setattr(gateway, "_call", _not_found)
+    await gateway.delete_managed_tool(tool)
+
+    async def _denied(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("AccessDenied")
+
+    monkeypatch.setattr(gateway, "_call", _denied)
+    with pytest.raises(SandboxProvisioningError, match="AccessDenied"):
+        await gateway.delete_managed_tool(tool)
 
 
 def test_sandbox_route_response_types_resolve_in_openapi() -> None:
@@ -665,6 +1119,257 @@ def test_deepseek_harness_reuses_codex_tools_and_has_its_own_surface() -> None:
     assert opened.json()["webuiUrl"].endswith("/deepseek-harness/")
     assert gateway.agent_kinds == ["deepseek-harness"]
     assert "tool-studio-snapshot" in gateway.tool_ids
+
+
+def test_hermes_surface_targets_the_native_dashboard_port_proxy() -> None:
+    service = SandboxAgentSessionService(
+        _FakeGateway(),
+        kind="hermes",
+        tool_id="tool-hermes",
+        surface_path="/proxy/4500/",
+    )
+
+    assert service.surface_path == "/proxy/4500/"
+
+
+@pytest.mark.asyncio
+async def test_agent_surface_capability_resolves_across_replicas(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY", "shared-test-key")
+    gateway = _FakeGateway()
+    first = SandboxAgentSessionService(
+        gateway,
+        kind="hermes",
+        tool_id="tool-studio",
+    )
+    second = SandboxAgentSessionService(
+        gateway,
+        kind="hermes",
+        tool_id="tool-studio",
+    )
+    created = await first.create(
+        "alice",
+        display_name="Hermes",
+        creator_name="alice@example.com",
+        persistent=False,
+    )
+    cloud, token = await first.open(created.instance_id, "alice")
+
+    target = await second.resolve_surface_proxy_target(created.instance_id, token)
+
+    assert target.endpoint == cloud.endpoint
+    with pytest.raises(PermissionError):
+        await second.resolve_surface_proxy_target(created.instance_id, f"{token}x")
+
+
+@pytest.mark.asyncio
+async def test_agent_surface_capability_accepts_previous_valid_token_after_reopen(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY", "shared-test-key")
+    now = [1_000]
+    monkeypatch.setattr(frontend_sandbox.time, "time", lambda: now[0])
+    gateway = _FakeGateway()
+    service = SandboxAgentSessionService(
+        gateway,
+        kind="hermes",
+        tool_id="tool-studio",
+    )
+    created = await service.create(
+        "alice",
+        display_name="Hermes",
+        creator_name="alice@example.com",
+        persistent=False,
+    )
+    cloud, previous_token = await service.open(created.instance_id, "alice")
+    now[0] += 1
+    _, current_token = await service.open(created.instance_id, "alice")
+
+    assert previous_token != current_token
+    target = await service.resolve_surface_proxy_target(
+        created.instance_id,
+        previous_token,
+    )
+
+    assert target.endpoint == cloud.endpoint
+    with pytest.raises(PermissionError):
+        await service.resolve_surface_proxy_target(
+            created.instance_id,
+            f"{previous_token}x",
+        )
+
+
+@pytest.mark.asyncio
+async def test_managed_agent_recovers_tool_mapping_on_another_replica(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _FakeGateway()
+    gateway.managed_tools = {
+        "stale-tool": VeStackManagedTool(
+            tool_id="stale-tool", name="Stale", agent_kind="hermes"
+        ),
+        "managed-tool": VeStackManagedTool(
+            tool_id="managed-tool",
+            name="Hermes",
+            display_name="Recovered Hermes",
+            created_by="alice",
+            creator_name="Alice",
+            agent_kind="hermes",
+        ),
+    }
+    gateway.sessions["remote-managed"] = replace(
+        gateway.sessions["remote-existing"],
+        tool_id="managed-tool",
+        instance_id="remote-managed",
+        display_name="",
+        creator_name="",
+        agent_kind="",
+    )
+    original_list_sessions = gateway.list_sessions
+
+    async def _list_sessions(
+        tool_id: str, username: str | None = None
+    ) -> list[SandboxCloudSession]:
+        if tool_id == "stale-tool":
+            raise SandboxProvisioningError("stale")
+        return await original_list_sessions(tool_id, username)
+
+    monkeypatch.setattr(gateway, "list_sessions", _list_sessions)
+    service = SandboxAgentSessionService(
+        gateway,
+        kind="hermes",
+        tool_id=None,
+        managed_tool_spec=VeStackManagedToolSpec(
+            tool_type="Station-Hermes", role_name="role", port=4500
+        ),
+    )
+
+    cloud = await service._cloud_session("remote-managed")
+
+    assert cloud.display_name == "Recovered Hermes"
+    assert cloud.creator_name == "Alice"
+    assert cloud.agent_kind == "hermes"
+    assert cloud.persistent is True
+
+
+@pytest.mark.asyncio
+async def test_managed_agent_list_skips_retiring_and_racy_tools() -> None:
+    attempted_tool_ids: list[str] = []
+
+    class _RacyGateway(_FakeGateway):
+        async def list_sessions(
+            self,
+            tool_id: str,
+            username: str | None = None,
+        ) -> list[SandboxCloudSession]:
+            attempted_tool_ids.append(tool_id)
+            if tool_id == "managed-tool-racy":
+                raise SandboxProvisioningError("AgentKit ListSessions InternalError")
+            return await super().list_sessions(tool_id, username)
+
+    gateway = _RacyGateway()
+    gateway.managed_tools = {
+        "managed-tool-ready": VeStackManagedTool(
+            tool_id="managed-tool-ready",
+            name="VeADK-Hermes-ready",
+            status="Ready",
+            display_name="Ready Hermes",
+            created_by="alice",
+            agent_kind="hermes",
+        ),
+        "managed-tool-deleting": VeStackManagedTool(
+            tool_id="managed-tool-deleting",
+            name="VeADK-Hermes-deleting",
+            status="Deleting",
+            display_name="Deleting Hermes",
+            created_by="alice",
+            agent_kind="hermes",
+        ),
+        "managed-tool-racy": VeStackManagedTool(
+            tool_id="managed-tool-racy",
+            name="VeADK-Hermes-racy",
+            status="Ready",
+            display_name="Racy Hermes",
+            created_by="alice",
+            agent_kind="hermes",
+        ),
+    }
+    gateway.sessions = {
+        "session-ready": SandboxCloudSession(
+            tool_id="managed-tool-ready",
+            instance_id="session-ready",
+            user_session_id="ready",
+            endpoint="https://sandbox.example/?Authorization=secret",
+            status="Ready",
+            created_by="alice",
+        )
+    }
+    service = SandboxAgentSessionService(
+        gateway,
+        kind="hermes",
+        managed_tool_spec=VeStackManagedToolSpec(
+            tool_type="Station-Hermes",
+            role_name="VeADKFrontendServiceRole",
+        ),
+    )
+
+    sessions = await service.list_sessions("alice")
+
+    assert [session.instance_id for session in sessions] == ["session-ready"]
+    assert "managed-tool-deleting" not in attempted_tool_ids
+    assert "managed-tool-racy" in attempted_tool_ids
+
+
+@pytest.mark.asyncio
+async def test_agent_terminal_restores_workspace_across_replicas(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY", "shared-test-key")
+    gateway = _FakeGateway()
+    first = SandboxAgentSessionService(
+        gateway,
+        kind="hermes",
+        tool_id="tool-studio",
+    )
+    second = SandboxAgentSessionService(
+        gateway,
+        kind="hermes",
+        tool_id="tool-studio",
+    )
+    created = await first.create(
+        "alice",
+        display_name="Hermes",
+        creator_name="alice@example.com",
+        persistent=False,
+    )
+    await first.open(created.instance_id, "alice")
+
+    async def _terminal_url(
+        endpoint: str,
+        session_id: str,
+        *,
+        direct: bool = False,
+    ) -> tuple[str, str]:
+        assert endpoint == created.endpoint
+        assert session_id == created.instance_id
+        assert direct is True
+        return "https://sandbox.example/terminal", "shell-1"
+
+    monkeypatch.setattr(
+        "veadk.cli.frontend_sandbox.terminal_launch_url",
+        _terminal_url,
+    )
+
+    url, shell_session_id, token = await second.launch_terminal(
+        created.instance_id,
+        "alice",
+    )
+
+    assert url == "https://sandbox.example/terminal"
+    assert shell_session_id == "shell-1"
+    target = await first.resolve_surface_proxy_target(created.instance_id, token)
+    assert target.endpoint == created.endpoint
 
 
 def test_agentkit_cli_uses_dev_tool_and_isolates_admin_by_owner() -> None:

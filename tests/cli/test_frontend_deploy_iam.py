@@ -204,6 +204,27 @@ def test_existing_frontend_role_policy_error_fails_fast(
     service.create_role.assert_not_called()
 
 
+def test_public_cloud_missing_system_policy_fails_fast(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = MagicMock()
+    service.get_role.return_value = {
+        "Result": {"Role": {"Trn": "trn:iam::123:role/VeADKFrontendServiceRole"}}
+    }
+    service.update_policy.return_value = {"Result": {}}
+    service.get_policy.return_value = _policy_response()
+    service.list_attached_role_policies.return_value = {
+        "Result": {"AttachedPolicyMetadata": [{"PolicyName": "VeADKFrontendPolicy"}]}
+    }
+    service.attach_role_policy.side_effect = RuntimeError(
+        "PolicyNotExist: Policy does not exist"
+    )
+    _install_iam_service(monkeypatch, service)
+
+    with pytest.raises(RuntimeError, match="PolicyNotExist"):
+        ensure_frontend_role("ak", "sk")
+
+
 def test_existing_frontend_policy_uses_new_document_and_verifies_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
