@@ -132,6 +132,7 @@ export const FEISHU_ENV: EnvVar[] = [
     required: true,
     placeholder: "输入 App Secret",
     comment: "飞书应用 App Secret",
+    secret: true,
   },
 ];
 

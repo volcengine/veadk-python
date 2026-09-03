@@ -5119,6 +5119,8 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
         SimpleNamespace(key="MODEL_AGENT_API_KEY", value="old-raw-model-key"),
         SimpleNamespace(key="MODEL_AGENT_API_KEY_ID", value="old-key-id"),
         SimpleNamespace(key="MODEL_AGENT_API_KEY_NAME", value="old-key-name"),
+        SimpleNamespace(key="FEISHU_APP_ID", value="cli_existing"),
+        SimpleNamespace(key="FEISHU_APP_SECRET", value="existing-feishu-secret"),
         SimpleNamespace(key="VEADK_DISABLE_EXPIRE_AT", value="true"),
         SimpleNamespace(key="HARNESS_SIDECAR_ENABLED", value="true"),
         SimpleNamespace(key="HARNESS_SIDECAR_EXPECTED_PLAN_HASH", value="sha256:old"),
@@ -5260,12 +5262,53 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
         )
         assert capability.status_code == 200
         assert capability.json()["canUpdate"] is True
+        assert {"key": "FEISHU_APP_ID", "value": "cli_existing"} in (
+            capability.json()["runtime"]["envs"]
+        )
+        assert {
+            "key": "FEISHU_APP_SECRET",
+            "value": "existing-feishu-secret",
+        } in capability.json()["runtime"]["envs"]
+        assert (
+            "FEISHU_APP_SECRET" not in capability.json()["runtime"]["configuredEnvKeys"]
+        )
         recovered_mcp = capability.json()["agent"]["draft"]["mcpTools"][0]
         assert recovered_mcp["authToken"] == "preserved-secret"
         assert recovered_mcp["authTokenEnv"] == ("MCP_UPDATED_AGENT_ORDERS_AUTH_TOKEN")
         remove_mcp_credential = (
             provider == "volcengine" and has_resource_tags and evaluation_error is None
         )
+        replace_feishu_credentials = (
+            provider == "volcengine"
+            and not has_resource_tags
+            and evaluation_error is None
+        )
+        remove_feishu_credentials = (
+            provider == "byteplus" and has_resource_tags and evaluation_error is None
+        )
+        remove_runtime_env_keys = (
+            ["MCP_UPDATED_AGENT_ORDERS_AUTH_TOKEN"] if remove_mcp_credential else []
+        )
+        if remove_feishu_credentials:
+            remove_runtime_env_keys.extend(["FEISHU_APP_ID", "FEISHU_APP_SECRET"])
+        requested_envs = [
+            {"key": "REPLACED_ENV", "value": "new-value"},
+            {"key": "MODEL_AGENT_API_KEY_ID", "value": "new-key-id"},
+            {
+                "key": "MODEL_AGENT_API_KEY_NAME",
+                "value": "new-key-name",
+            },
+        ]
+        if replace_feishu_credentials:
+            requested_envs.extend(
+                [
+                    {"key": "FEISHU_APP_ID", "value": "cli_replaced"},
+                    {
+                        "key": "FEISHU_APP_SECRET",
+                        "value": "replaced-feishu-secret",
+                    },
+                ]
+            )
         with client.stream(
             "POST",
             "/web/deploy-agentkit",
@@ -5277,22 +5320,12 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
                 "appName": "updated-agent",
                 "updateEtag": capability.json()["etag"],
                 "baseRuntimeVersion": capability.json()["runtime"]["currentVersion"],
-                "removeRuntimeEnvKeys": (
-                    ["MCP_UPDATED_AGENT_ORDERS_AUTH_TOKEN"]
-                    if remove_mcp_credential
-                    else []
-                ),
+                "removeRuntimeEnvKeys": remove_runtime_env_keys,
                 "files": [{"path": "app.py", "content": "app = object()\n"}],
                 "config": {"region": region, "projectName": "default"},
                 "authentication": {"type": "api_key"},
-                "envs": [
-                    {"key": "REPLACED_ENV", "value": "new-value"},
-                    {"key": "MODEL_AGENT_API_KEY_ID", "value": "new-key-id"},
-                    {
-                        "key": "MODEL_AGENT_API_KEY_NAME",
-                        "value": "new-key-name",
-                    },
-                ],
+                "im": {"feishu": {"enabled": not remove_feishu_credentials}},
+                "envs": requested_envs,
                 "resources": {
                     "tos": {"mode": "create", "bucket": "request-bucket"},
                     "cr": {
@@ -5374,6 +5407,15 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
     assert cloud["runtime_envs"]["MODEL_AGENT_API_KEY_ID"] == "new-key-id"
     assert cloud["runtime_envs"]["MODEL_AGENT_API_KEY_NAME"] == "new-key-name"
     assert cloud["runtime_envs"]["MODEL_AGENT_API_KEY"] == "new-raw-model-key"
+    if remove_feishu_credentials:
+        assert "FEISHU_APP_ID" not in cloud["runtime_envs"]
+        assert "FEISHU_APP_SECRET" not in cloud["runtime_envs"]
+    elif replace_feishu_credentials:
+        assert cloud["runtime_envs"]["FEISHU_APP_ID"] == "cli_replaced"
+        assert cloud["runtime_envs"]["FEISHU_APP_SECRET"] == ("replaced-feishu-secret")
+    else:
+        assert cloud["runtime_envs"]["FEISHU_APP_ID"] == "cli_existing"
+        assert cloud["runtime_envs"]["FEISHU_APP_SECRET"] == ("existing-feishu-secret")
     assert "old-key-name" not in cloud["runtime_envs"].values()
     assert "old-key-id" not in cloud["runtime_envs"].values()
     assert "old-raw-model-key" not in cloud["runtime_envs"].values()
