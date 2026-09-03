@@ -275,6 +275,14 @@ Changing the Feishu channel on the deployment page regenerates the project so
 `app.py`, the `extensions` dependency, and the runtime environment variables
 stay aligned before deployment.
 
+The deployment card supports automatic and manual credential setup without
+changing its footprint in the publish form. Automatic setup uses the reusable
+`frontend.server.feishu_bot_setup` provider interface and Feishu's official
+PersonalAgent app-registration flow. Credentials are returned only after the
+user confirms the QR authorization; no mock provider or synthetic credentials
+are shipped. The App Secret remains process-local until Studio returns it to
+the authorized browser for credential autofill.
+
 Insight Sandbox requires server-side `VOLCENGINE_ACCESS_KEY`,
 `VOLCENGINE_SECRET_KEY`, `MODEL_AGENT_API_KEY`, and `MODEL_AGENT_NAME` values.
 These credentials and the AgentKit session endpoint remain on the Studio server

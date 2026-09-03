@@ -242,29 +242,13 @@ test("aligns the publish overview and deployment settings to one restrained cont
 test("uses a flipping Feishu channel card instead of a switch", () => {
   assert.match(
     projectPreviewSource,
-    /className=\{`pp-channel-card\$\{feishuEnabled \? " is-flipped" : ""\}`\}/,
+    /<FeishuDeploymentCard[\s\S]*?enabled=\{feishuEnabled\}/,
   );
-  assert.match(projectPreviewSource, /import feishuLogo from "\.\.\/assets\/feishu-logo\.svg"/);
-  assert.match(projectPreviewSource, /<img src=\{feishuLogo\} alt="" \/>/);
-  assert.match(projectPreviewSource, /飞书配置/);
-  assert.match(projectPreviewSource, /取消中…/);
+  assert.match(
+    projectPreviewSource,
+    /import \{ FeishuDeploymentCard \} from "\.\/FeishuDeploymentCard"/,
+  );
   assert.doesNotMatch(projectPreviewSource, /role="switch"|className="pp-switch"/);
-  assert.match(
-    projectPreviewStyles,
-    /\.pp-channel-card-inner\s*\{[\s\S]*?transform-style:\s*preserve-3d;[\s\S]*?transition:\s*transform 420ms/,
-  );
-  assert.match(
-    projectPreviewStyles,
-    /\.pp-channel-card\.is-flipped \.pp-channel-card-inner\s*\{[\s\S]*?rotateY\(180deg\)/,
-  );
-  assert.match(
-    projectPreviewStyles,
-    /\.pp-channel-card\s*\{[\s\S]*?width:\s*clamp\(154px, 33\.333%, 236px\);[\s\S]*?height:\s*112px;/,
-  );
-  assert.match(
-    projectPreviewStyles,
-    /\.pp-channel-card\.is-flipped\s*\{[\s\S]*?height:\s*176px/,
-  );
 
   assert.doesNotMatch(projectPreviewSource, /<select[\s\S]*?aria-label="部署区域"/);
   assert.match(projectPreviewSource, /deploymentRegionPicker\(false\)/);
@@ -275,10 +259,6 @@ test("uses a flipping Feishu channel card instead of a switch", () => {
   assert.match(
     projectPreviewStyles,
     /\.pp-region-help\s*\{[\s\S]*?font-size:\s*12px;[\s\S]*?line-height:\s*1\.5;/,
-  );
-  assert.match(
-    projectPreviewStyles,
-    /\.pp-channel-remove\s*\{[\s\S]*?background:\s*hsl\(var\(--destructive\) \/ 0\.07\);[\s\S]*?color:\s*hsl\(0 46% 36%\);/,
   );
 });
 

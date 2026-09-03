@@ -1,0 +1,452 @@
+.fdc-card {
+  position: relative;
+  width: clamp(154px, 33.333%, 236px);
+  max-width: 100%;
+  height: 112px;
+  container-type: inline-size;
+  perspective: 1200px;
+}
+
+.fdc-card-inner {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  transform-style: preserve-3d;
+  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.fdc-card.is-open .fdc-card-inner {
+  transform: rotateY(180deg);
+}
+
+.fdc-face {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+  border: 1px solid hsl(var(--border) / 0.72);
+  border-radius: 14px;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.fdc-front {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 12px;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    transform 180ms ease;
+}
+
+.fdc-front:hover:not(:disabled) {
+  border-color: hsl(var(--foreground) / 0.22);
+  box-shadow: 0 12px 30px hsl(var(--foreground) / 0.07);
+  transform: translateY(-1px);
+}
+
+.fdc-card.is-open .fdc-front {
+  pointer-events: none;
+}
+
+.fdc-logo {
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  display: grid;
+  place-items: center;
+  border: 1px solid hsl(var(--border) / 0.65);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 4px 14px hsl(var(--foreground) / 0.07);
+}
+
+.fdc-logo img {
+  width: 30px;
+  height: 30px;
+  display: block;
+}
+
+.fdc-front-copy {
+  min-width: 0;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.fdc-front-copy strong {
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.fdc-front-copy small {
+  display: -webkit-box;
+  overflow: hidden;
+  color: hsl(var(--muted-foreground));
+  font-size: 12.5px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.fdc-back {
+  display: flex;
+  flex-direction: column;
+  padding: 8px;
+  pointer-events: none;
+  transform: rotateY(180deg);
+}
+
+.fdc-card.is-open .fdc-back {
+  pointer-events: auto;
+}
+
+.fdc-toolbar {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+}
+
+.fdc-tabs {
+  min-width: 0;
+  height: 26px;
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 7px;
+  background: hsl(var(--secondary) / 0.72);
+}
+
+.fdc-tabs button {
+  min-width: 0;
+  height: 22px;
+  display: inline-flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 560;
+  white-space: nowrap;
+}
+
+.fdc-tabs button[aria-selected="true"] {
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  box-shadow: 0 1px 2px hsl(var(--foreground) / 0.08);
+}
+
+.fdc-cancel {
+  width: 28px;
+  height: 26px;
+  flex: 0 0 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+
+.fdc-cancel:hover:not(:disabled) {
+  background: hsl(var(--secondary));
+  color: hsl(var(--foreground));
+}
+
+.fdc-content {
+  min-height: 0;
+  flex: 1;
+  margin-top: 6px;
+}
+
+.fdc-content > [role="tabpanel"] {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+}
+
+.fdc-content strong {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fdc-content small {
+  overflow: hidden;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fdc-compact-state,
+.fdc-waiting {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.fdc-state-icon,
+.fdc-success-icon {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  flex: 0 0 30px;
+  place-items: center;
+  border-radius: 8px;
+}
+
+.fdc-state-icon {
+  background: hsl(var(--secondary));
+  color: hsl(var(--muted-foreground));
+}
+
+.fdc-success-icon {
+  background: hsl(145 40% 94%);
+  color: hsl(145 52% 32%);
+}
+
+.fdc-state-icon svg,
+.fdc-success-icon svg {
+  width: 17px;
+  height: 17px;
+}
+
+.fdc-state-copy,
+.fdc-waiting-copy {
+  min-width: 0;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.fdc-primary,
+.fdc-secondary {
+  min-height: 28px;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.fdc-primary {
+  border: 1px solid hsl(var(--foreground));
+  background: hsl(var(--foreground));
+  color: hsl(var(--background));
+}
+
+.fdc-secondary {
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+
+.fdc-primary:disabled,
+.fdc-secondary:disabled,
+.fdc-cancel:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.fdc-secondary svg {
+  width: 13px;
+  height: 13px;
+}
+
+.fdc-spinner {
+  width: 14px;
+  height: 14px;
+  animation: fdc-spin 800ms linear infinite;
+}
+
+.fdc-qr-surface {
+  width: 48px;
+  height: 48px;
+  display: grid;
+  flex: 0 0 48px;
+  place-items: center;
+  box-sizing: border-box;
+  padding: 4px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 7px;
+  background: #fff;
+}
+
+.fdc-qr-surface img {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.fdc-waiting-copy .fdc-secondary {
+  min-height: 22px;
+  align-self: flex-start;
+  margin-top: 2px;
+  padding-inline: 6px;
+}
+
+.fdc-fields {
+  height: 100%;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: center;
+  gap: 6px;
+}
+
+.fdc-fields label {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: hsl(var(--foreground));
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.fdc-fields input {
+  width: 100%;
+  height: 28px;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0 7px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  outline: 0;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.fdc-fields input:focus {
+  border-color: hsl(var(--ring) / 0.62);
+  box-shadow: 0 0 0 2px hsl(var(--ring) / 0.12);
+}
+
+.fdc-secret-field {
+  position: relative;
+  display: block;
+}
+
+.fdc-secret-field input {
+  padding-right: 28px;
+}
+
+.fdc-secret-field button {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+}
+
+.fdc-secret-field button:hover {
+  background: hsl(var(--secondary));
+  color: hsl(var(--foreground));
+}
+
+.fdc-secret-field svg {
+  width: 14px;
+  height: 14px;
+}
+
+.fdc-error {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  overflow: hidden;
+  margin: 0;
+  padding: 2px 4px;
+  border-radius: 4px;
+  background: hsl(var(--background) / 0.94);
+  color: hsl(var(--destructive));
+  font-size: 11px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fdc-card button:focus-visible,
+.fdc-card input:focus-visible {
+  outline: 2px solid hsl(var(--ring) / 0.42);
+  outline-offset: 1px;
+}
+
+@container (max-width: 190px) {
+  .fdc-state-icon,
+  .fdc-success-icon,
+  .fdc-state-copy small {
+    display: none;
+  }
+}
+
+@media (max-width: 620px) {
+  .fdc-card {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fdc-card-inner {
+    transition: none;
+  }
+
+  .fdc-spinner {
+    animation: none;
+  }
+}
+
+@keyframes fdc-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

@@ -27,6 +27,7 @@ from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 
 import yaml
+
 from frontend.server.source_project_limits import (
     SOURCE_PROJECT_MAX_BYTES,
     SOURCE_PROJECT_MAX_FILES,
@@ -46,6 +47,22 @@ _AGENT_RUNTIME_METHODS = frozenset({"run", "run_async"})
 
 class DeploymentSourceError(ValueError):
     """Deployment source does not satisfy the trusted package contract."""
+
+
+def ensure_default_agentkit_dockerfile(base: Path, cloud_provider: str) -> bool:
+    """Add Studio's canonical Dockerfile when a deployment has no custom one."""
+
+    dockerfile = base / "Dockerfile"
+    if dockerfile.exists():
+        return False
+
+    from veadk.cli.generated_agent_codegen import render_default_agentkit_dockerfile
+
+    dockerfile.write_text(
+        render_default_agentkit_dockerfile(cloud_provider),
+        encoding="utf-8",
+    )
+    return True
 
 
 def _relative_path(value: object, *, field: str) -> str:
