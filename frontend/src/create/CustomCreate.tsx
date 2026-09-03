@@ -3842,17 +3842,20 @@ export function CustomCreate({
   const patch = (p: Partial<AgentDraft>) =>
     setDraft((d) => updateNode(d, safePath, (n) => ({ ...n, ...p })));
 
-  const patchDeploymentEnv = (key: string, value: string) =>
+  const patchDeploymentEnvValues = (values: Record<string, string>) =>
     setDraft((current) => ({
       ...current,
       deployment: {
         ...(current.deployment ?? { feishuEnabled: false }),
         envValues: {
           ...(current.deployment?.envValues ?? {}),
-          [key]: value,
+          ...values,
         },
       },
     }));
+
+  const patchDeploymentEnv = (key: string, value: string) =>
+    patchDeploymentEnvValues({ [key]: value });
 
   const patchA2aRegistry = (
     updates: Partial<NonNullable<AgentDraft["a2aRegistry"]>>,
@@ -6094,6 +6097,12 @@ export function CustomCreate({
                   ...deploymentEnv.fixedValues,
                 }}
                 onDeploymentEnvChange={patchDeploymentEnv}
+                onFeishuCredentialsChange={(appId, appSecret) =>
+                  patchDeploymentEnvValues({
+                    FEISHU_APP_ID: appId,
+                    FEISHU_APP_SECRET: appSecret,
+                  })
+                }
                 network={draft.deployment?.network}
                 onNetworkChange={(network) =>
                   setDraft((current) => ({

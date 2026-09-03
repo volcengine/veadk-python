@@ -101,10 +101,10 @@ import {
   formatCloudRegion,
   type CloudProvider,
 } from "../adk/cloudProvider";
-import feishuLogo from "../assets/feishu-logo.svg";
 import { buildZip } from "./zip";
 import { ProjectCodeBrowser } from "./CodeBrowserDialog";
 import { DeploymentErrorMessage } from "./DeploymentErrorMessage";
+import { FeishuDeploymentCard } from "./FeishuDeploymentCard";
 import {
   DEFAULT_DEPLOY_RESOURCES,
   DeploymentResources,
@@ -706,6 +706,8 @@ export interface ProjectPreviewProps {
   /** Deployment-only values entered in each feature's configuration area. */
   deploymentEnvValues?: Record<string, string>;
   onDeploymentEnvChange?: (key: string, value: string) => void;
+  /** Atomically updates the Feishu app credentials returned by automatic setup. */
+  onFeishuCredentialsChange?: (appId: string, appSecret: string) => void;
   /** Runtime network settings edited on the deploy page. */
   network?: NetworkConfig;
   onNetworkChange?: (network: NetworkConfig | undefined) => void;
@@ -848,6 +850,7 @@ export function ProjectPreview({
   onRequiredSecretEnvChange,
   deploymentEnvValues = {},
   onDeploymentEnvChange,
+  onFeishuCredentialsChange,
   network,
   onNetworkChange,
   cloudProvider = "volcengine",
@@ -2571,95 +2574,29 @@ export function ProjectPreview({
               {!deploymentPrimaryPane && (
                 <section className="pp-config-section">
                 <div className="pp-config-label">消息渠道</div>
-                <div
-                  className={`pp-channel-card${feishuEnabled ? " is-flipped" : ""}`}
-                >
-                  <div className="pp-channel-card-inner">
-                    <button
-                      type="button"
-                      className="pp-channel-card-face pp-channel-card-front"
-                      aria-pressed={feishuEnabled}
-                      aria-hidden={feishuEnabled}
-                      tabIndex={feishuEnabled ? -1 : 0}
-                      onClick={() => void handleFeishuToggle()}
-                      disabled={
-                        feishuEnabled ||
-                        deploying ||
-                        runtimeNameChecking ||
-                        feishuUpdating ||
-                        !onFeishuEnabledChange
-                      }
-                    >
-                      <span className="pp-channel-logo">
-                        <img src={feishuLogo} alt="" />
-                      </span>
-                      <span className="pp-channel-card-copy">
-                        <strong>飞书</strong>
-                        <small>
-                          {feishuUpdating
-                            ? "正在启用并更新配置…"
-                            : "接收消息并通过飞书机器人回复"}
-                        </small>
-                      </span>
-                    </button>
-                    <div
-                      className="pp-channel-card-face pp-channel-card-back"
-                      aria-hidden={!feishuEnabled}
-                    >
-                      <div className="pp-channel-card-head">
-                        <strong>飞书配置</strong>
-                        <button
-                          type="button"
-                          className="pp-channel-remove"
-                          tabIndex={feishuEnabled ? 0 : -1}
-                          onClick={() => void handleFeishuToggle()}
-                          disabled={
-                            !feishuEnabled ||
-                            deploying ||
-                            feishuUpdating ||
-                            !onFeishuEnabledChange
-                          }
-                        >
-                          {feishuUpdating ? "取消中…" : "取消"}
-                        </button>
-                      </div>
-                      <div className="pp-channel-fields">
-                        {FEISHU_ENV.map((env) => (
-                          <label key={env.key}>
-                            <span>
-                              {env.comment || env.key}
-                              {env.required && <small>必填</small>}
-                            </span>
-                            <input
-                              type={
-                                env.key.includes("SECRET") ? "password" : "text"
-                              }
-                              value={deploymentEnvValues[env.key] ?? ""}
-                              placeholder={
-                                configuredRuntimeEnvKeySet.has(env.key)
-                                  ? "已配置，留空沿用"
-                                  : env.placeholder
-                              }
-                              tabIndex={feishuEnabled ? 0 : -1}
-                              disabled={
-                                !feishuEnabled ||
-                                deploying ||
-                                !onDeploymentEnvChange
-                              }
-                              autoComplete="off"
-                              onChange={(event) =>
-                                onDeploymentEnvChange?.(
-                                  env.key,
-                                  event.currentTarget.value,
-                                )
-                              }
-                            />
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                <FeishuDeploymentCard
+                  enabled={feishuEnabled}
+                  updating={feishuUpdating}
+                  disabled={
+                    deploying ||
+                    runtimeNameChecking ||
+                    !onFeishuEnabledChange ||
+                    !onFeishuCredentialsChange
+                  }
+                  agentName={agentName || project.name}
+                  appId={deploymentEnvValues.FEISHU_APP_ID ?? ""}
+                  appSecret={deploymentEnvValues.FEISHU_APP_SECRET ?? ""}
+                  appIdConfigured={configuredRuntimeEnvKeySet.has(
+                    "FEISHU_APP_ID",
+                  )}
+                  appSecretConfigured={configuredRuntimeEnvKeySet.has(
+                    "FEISHU_APP_SECRET",
+                  )}
+                  onToggle={handleFeishuToggle}
+                  onCredentialsChange={(appId, appSecret) => {
+                    onFeishuCredentialsChange?.(appId, appSecret);
+                  }}
+                />
               </section>
               )}
 

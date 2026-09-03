@@ -25,6 +25,7 @@ import pytest
 from frontend.server import deployment_source
 from frontend.server.deployment_source import (
     DeploymentSourceError,
+    ensure_default_agentkit_dockerfile,
     extract_migration_source,
     write_inline_source,
 )
@@ -36,6 +37,37 @@ def _archive(files: dict[str, bytes]) -> bytes:
         for path, content in files.items():
             archive.writestr(path, content)
     return output.getvalue()
+
+
+def test_default_agentkit_dockerfile_uses_volcengine_fallbacks(
+    tmp_path: Path,
+) -> None:
+    assert ensure_default_agentkit_dockerfile(tmp_path, "volcengine") is True
+
+    dockerfile = (tmp_path / "Dockerfile").read_text(encoding="utf-8")
+    huawei = "https://repo.huaweicloud.com/repository/pypi/simple"
+    aliyun = "https://mirrors.aliyun.com/pypi/simple/"
+    pypi = "https://pypi.org/simple"
+    assert dockerfile.index(huawei) < dockerfile.index(aliyun) < dockerfile.index(pypi)
+
+
+def test_default_agentkit_dockerfile_preserves_custom_file(tmp_path: Path) -> None:
+    custom = "FROM example.com/custom:latest\n"
+    (tmp_path / "Dockerfile").write_text(custom, encoding="utf-8")
+
+    assert ensure_default_agentkit_dockerfile(tmp_path, "volcengine") is False
+    assert (tmp_path / "Dockerfile").read_text(encoding="utf-8") == custom
+
+
+def test_default_agentkit_dockerfile_keeps_byteplus_default_index(
+    tmp_path: Path,
+) -> None:
+    assert ensure_default_agentkit_dockerfile(tmp_path, "byteplus") is True
+
+    dockerfile = (tmp_path / "Dockerfile").read_text(encoding="utf-8")
+    assert "RUN uv pip install -r requirements.txt" in dockerfile
+    assert "repo.huaweicloud.com" not in dockerfile
+    assert "mirrors.aliyun.com" not in dockerfile
 
 
 def test_inline_source_uses_manifest_entry_and_keeps_app_py_fallback(
