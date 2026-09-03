@@ -1610,9 +1610,8 @@ def test_restored_project_context_selects_incremental_builder_mode(
         routes, "read_completion_contract", AsyncMock(return_value=_partial())
     )
     monkeypatch.setattr(routes, "remove_completion_file", AsyncMock())
-    monkeypatch.setattr(
-        routes, "DeliveryPublisher", lambda _transport: _publisher_mock()
-    )
+    publisher = _publisher_mock()
+    monkeypatch.setattr(routes, "DeliveryPublisher", lambda _transport: publisher)
 
     with TestClient(_app(gateway, project_service=project_service)) as client:
         _connect(client)
@@ -1630,6 +1629,10 @@ def test_restored_project_context_selects_incremental_builder_mode(
     assert '"agentName":"weather_agent"' in builder
     assert "Do not run `ak init`" in builder
     assert "use `ak init --template agent_server` by default" not in builder
+    assert publisher.publish.await_args.kwargs["trusted_manifest_metadata"] == (
+        "weather_agent",
+        "app.py",
+    )
 
 
 def test_builder_uses_preinstalled_skill_without_discovery_or_injection(
@@ -2385,6 +2388,43 @@ def test_delivery_persistence_failures_keep_distinct_sse_semantics(
     assert message in response.text
     assert 'event: done\ndata: {"reason":"failed"}' in response.text
     assert "event: development.succeeded" not in response.text
+
+
+def test_unexpected_snapshot_failure_logs_stage_and_type_without_error_detail(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud()
+    gateway.codex.turns = [
+        [CodexAppServerEvent(kind="text", text="源码已生成")],
+    ]
+    lease = _Lease(_Remote(gateway.sessions["dev-session"].endpoint))
+    monkeypatch.setattr(
+        routes, "create_credential_lease", AsyncMock(return_value=lease)
+    )
+    monkeypatch.setattr(routes, "invalidate_current_delivery", AsyncMock())
+    monkeypatch.setattr(
+        routes, "read_completion_contract", AsyncMock(return_value=_partial())
+    )
+    monkeypatch.setattr(routes, "remove_completion_file", AsyncMock())
+    publisher = _publisher_mock()
+    publisher.publish.side_effect = RuntimeError("private upstream detail")
+    monkeypatch.setattr(routes, "DeliveryPublisher", lambda _transport: publisher)
+
+    with caplog.at_level("ERROR", logger=routes.__name__):
+        with TestClient(_app(gateway)) as client:
+            _connect(client)
+            response = client.post(
+                "/web/intelligent-development/sessions/dev-session/messages",
+                headers={"X-Test-User": "alice"},
+                json={"message": "做一个天气 Agent"},
+            )
+
+    assert '"code": "INTELLIGENT_DEVELOPMENT_FAILED"' in response.text
+    assert "stage=delivery_publish" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
+    assert "private upstream detail" not in caplog.text
 
 
 def test_builder_response_cannot_replace_a_missing_completion_file(

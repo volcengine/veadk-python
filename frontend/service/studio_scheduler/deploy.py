@@ -29,6 +29,11 @@ from inspect import Parameter, signature
 from pathlib import Path
 from typing import Any
 
+from frontend.service.studio_release_server.offline_runtime import (
+    STUDIO_RUNTIME_LOCK,
+    STUDIO_RUNTIME_WHEELHOUSE,
+)
+
 from .diagnostics import sanitize_diagnostic
 
 _SCAN_TIMER_NAME = "veadk-studio-cronjobs-minute"
@@ -256,6 +261,17 @@ def _stage_package(package_root: Path, destination: Path) -> None:
     if not requirements.is_file():
         raise ValueError("Studio scheduler package is missing requirements.txt")
     shutil.copy2(requirements, destination / requirements.name)
+
+    runtime_lock = package_root / STUDIO_RUNTIME_LOCK
+    if runtime_lock.is_file():
+        shutil.copy2(runtime_lock, destination / runtime_lock.name)
+
+    wheelhouse = package_root / STUDIO_RUNTIME_WHEELHOUSE
+    if wheelhouse.is_dir():
+        shutil.copytree(wheelhouse, destination / wheelhouse.name)
+
+    # Preserve compatibility with packages produced before the offline
+    # wheelhouse layout was introduced.
     for wheel in package_root.glob("*.whl"):
         shutil.copy2(wheel, destination / wheel.name)
     run_script = destination / "run.sh"

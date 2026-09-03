@@ -583,6 +583,41 @@ def test_delivery_manifest_rejects_non_ascii_agent_names(agent_name: str) -> Non
         task_module._delivery_manifest_metadata(manifest)
 
 
+def test_delivery_manifest_uses_trusted_metadata_for_legacy_fields() -> None:
+    manifest = b"common:\n  agent_name: optimized_agent\n"
+
+    assert task_module._delivery_manifest_metadata(
+        manifest,
+        trusted_fallback=("migrated_agent", "main.py"),
+    ) == ("optimized_agent", "main.py")
+
+
+def test_delivery_manifest_keeps_complete_manifest_authoritative() -> None:
+    manifest = b"common:\n  agent_name: optimized_agent\n  entry_point: optimized.py\n"
+
+    assert task_module._delivery_manifest_metadata(
+        manifest,
+        trusted_fallback=("migrated_agent", "main.py"),
+    ) == ("optimized_agent", "optimized.py")
+
+
+@pytest.mark.parametrize(
+    "manifest",
+    [
+        b"common:\n  agent_name: ../unsafe\n",
+        b"common:\n  agent_name: optimized_agent\n  entry_point: ../unsafe.py\n",
+    ],
+)
+def test_delivery_manifest_rejects_unsafe_explicit_metadata_with_fallback(
+    manifest: bytes,
+) -> None:
+    with pytest.raises(ValueError):
+        task_module._delivery_manifest_metadata(
+            manifest,
+            trusted_fallback=("migrated_agent", "main.py"),
+        )
+
+
 @pytest.mark.asyncio
 async def test_credentials_are_uploaded_once_outside_workspace_and_cleaned(
     monkeypatch: pytest.MonkeyPatch,
@@ -765,6 +800,7 @@ async def test_delivery_publisher_sends_server_parsed_manifest_contract() -> Non
     assert request["projectRoot"] == "/home/gem/workspace/session"
     assert request["agentName"] == "weather"
     assert request["entryPoint"] == "weather.py"
+    assert request["fallbackEntryPoint"] == ""
     assert request["manifestSha256"] == hashlib.sha256(manifest).hexdigest()
     assert set(request) == {
         "projectRoot",
@@ -772,6 +808,7 @@ async def test_delivery_publisher_sends_server_parsed_manifest_contract() -> Non
         "secretPath",
         "agentName",
         "entryPoint",
+        "fallbackEntryPoint",
         "manifestSha256",
     }
     secret_path = request["secretPath"]
@@ -806,12 +843,95 @@ async def test_delivery_publisher_sends_server_parsed_manifest_contract() -> Non
     assert source_only.gate_summary == ()
 
 
+@pytest.mark.asyncio
+async def test_delivery_publisher_packages_migrated_source_without_root_manifest() -> (
+    None
+):
+    artifact_digest = "a" * 64
+    report_digest = "b" * 64
+    release = (
+        f"/home/gem/.intelligent-development/releases/{artifact_digest}-{report_digest}"
+    )
+
+    class Remote:
+        def __init__(self) -> None:
+            self.downloads: list[str] = []
+            self.uploads: dict[str, tuple[bytes, int | None]] = {}
+            self.exec_json_calls = 0
+
+        async def download(self, path: str, *, max_bytes: int) -> bytes:
+            del max_bytes
+            self.downloads.append(path)
+            raise AssertionError("missing manifest must not be downloaded")
+
+        async def upload(
+            self,
+            path: str,
+            content: bytes,
+            *,
+            media_type: str = "application/octet-stream",
+            max_bytes: int = 20 * 1024 * 1024,
+            mode: int | None = None,
+        ) -> None:
+            del media_type, max_bytes
+            self.uploads[path] = (content, mode)
+
+        async def exec_json(self, command: str, *, timeout: int) -> dict[str, object]:
+            del command, timeout
+            self.exec_json_calls += 1
+            if self.exec_json_calls == 1:
+                return {"state": "missing"}
+            return {
+                "sessionId": "session",
+                "artifactSha256": artifact_digest,
+                "artifactSize": 128,
+                "agentName": "travel_planner",
+                "entryPoint": "main.py",
+                "fileCount": 2,
+                "artifactPath": f"{release}/artifact.zip",
+                "descriptorPath": f"{release}/descriptor.json",
+                "validationReportPath": f"{release}/validation/{report_digest}.json",
+                "validationReportSha256": report_digest,
+                "releasePath": release,
+            }
+
+        async def exec_text(self, command: str, *, timeout: int) -> str:
+            del command, timeout
+            return ""
+
+    remote = Remote()
+    delivery = await DeliveryPublisher(remote).publish(  # type: ignore[arg-type]
+        session_id="session",
+        project_root="/home/gem/workspace/session",
+        task_root="/home/gem/.intelligent-development/tasks/task",
+        completion=None,
+        exact_secrets=(),
+        trusted_manifest_metadata=("travel_planner", "main.py"),
+    )
+
+    request_path = next(
+        path
+        for path in remote.uploads
+        if path.endswith(".json") and "secrets" not in path
+    )
+    request = json.loads(remote.uploads[request_path][0])
+    assert remote.downloads == []
+    assert request["agentName"] == "travel_planner"
+    assert request["entryPoint"] == "main.py"
+    assert request["fallbackEntryPoint"] == "main.py"
+    assert request["manifestSha256"] == hashlib.sha256(b"").hexdigest()
+    assert delivery.agent_name == "travel_planner"
+    assert delivery.entry_point == "main.py"
+
+
 def _run_delivery_worker(
     tmp_path: Path,
     *,
     files: dict[str, bytes],
     secrets: tuple[str, ...] = (),
     report: dict[str, object] | None = None,
+    trusted_metadata: tuple[str, str] | None = None,
+    fallback_entry_point: str = "",
 ) -> subprocess.CompletedProcess[str]:
     workspace_root = tmp_path / "workspace"
     project = workspace_root / "session"
@@ -836,17 +956,20 @@ def _run_delivery_worker(
     secret_path.write_text(json.dumps(list(secrets)), encoding="utf-8")
     os.chmod(secret_path, 0o600)
     request = tmp_path / "request.json"
-    manifest_bytes = files["agentkit.yaml"]
-    manifest = yaml.safe_load(manifest_bytes)
-    common = manifest["common"]
+    manifest_bytes = files.get("agentkit.yaml", b"")
+    if trusted_metadata is None:
+        manifest = yaml.safe_load(manifest_bytes)
+        common = manifest["common"]
+        trusted_metadata = (common["agent_name"], common["entry_point"])
     request.write_text(
         json.dumps(
             {
                 "projectRoot": str(project),
                 "report": report or {"sessionId": "session"},
                 "secretPath": str(secret_path),
-                "agentName": common["agent_name"],
-                "entryPoint": common["entry_point"],
+                "agentName": trusted_metadata[0],
+                "entryPoint": trusted_metadata[1],
+                "fallbackEntryPoint": fallback_entry_point,
                 "manifestSha256": hashlib.sha256(manifest_bytes).hexdigest(),
             }
         ),
@@ -885,6 +1008,46 @@ def test_delivery_worker_packages_final_project_and_excludes_local_state(
             "agentkit.yaml",
             "weather.py",
         ]
+
+
+def test_delivery_worker_packages_migrated_project_without_root_manifest(
+    tmp_path: Path,
+) -> None:
+    result = _run_delivery_worker(
+        tmp_path,
+        files={
+            "main.py": b"root_agent = object()\n",
+            ".agentkit/agentkit.yaml": b"name: legacy\n",
+        },
+        trusted_metadata=("travel_planner", "main.py"),
+    )
+
+    assert result.returncode == 0, result.stderr
+    descriptor = json.loads(result.stdout)
+    assert descriptor["agentName"] == "travel_planner"
+    assert descriptor["entryPoint"] == "main.py"
+    with zipfile.ZipFile(descriptor["artifactPath"]) as archive:
+        assert archive.namelist() == ["main.py"]
+
+
+def test_delivery_worker_uses_trusted_entry_point_when_manifest_target_is_absent(
+    tmp_path: Path,
+) -> None:
+    result = _run_delivery_worker(
+        tmp_path,
+        files={
+            "agentkit.yaml": (
+                b"common:\n  agent_name: travel_planner\n  entry_point: agent.py\n"
+            ),
+            "main.py": b"root_agent = object()\n",
+        },
+        trusted_metadata=("travel_planner", "agent.py"),
+        fallback_entry_point="main.py",
+    )
+
+    assert result.returncode == 0, result.stderr
+    descriptor = json.loads(result.stdout)
+    assert descriptor["entryPoint"] == "main.py"
 
 
 def test_delivery_worker_rejects_supplied_credentials(tmp_path: Path) -> None:

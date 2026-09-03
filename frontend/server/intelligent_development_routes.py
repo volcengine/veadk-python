@@ -1255,6 +1255,7 @@ def mount_intelligent_development_routes(
     async def _message(session_id: str, request: Request) -> StreamingResponse:
         owner = owner_resolver(request)
         project_context = ""
+        trusted_manifest_metadata: tuple[str, str] | None = None
         try:
             data = await _request_object(request, 128 * 1024)
             if set(data) != {"message"}:
@@ -1280,6 +1281,7 @@ def mount_intelligent_development_routes(
                     )
                 base = await project_service.base_metadata(owner, session_id)
                 if base is not None:
+                    trusted_manifest_metadata = (base.agent_name, base.entry_point)
                     project_context = json.dumps(
                         {
                             "intentSummary": base.intent_summary,
@@ -1468,6 +1470,7 @@ def mount_intelligent_development_routes(
                     completion=completion,
                     exact_secrets=lease.exact_secrets,
                     acceptance_criteria=decision.acceptance_criteria,
+                    trusted_manifest_metadata=trusted_manifest_metadata,
                 )
                 stored_version = None
                 persistence_error: dict[str, object] | None = None
@@ -1596,7 +1599,13 @@ def mount_intelligent_development_routes(
                 payload = _stream_error_payload(failure)
                 yield f"event: error\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
                 yield 'event: done\ndata: {"reason":"failed"}\n\n'
-            except Exception:  # noqa: BLE001
+            except Exception as error:  # noqa: BLE001
+                logger.error(
+                    "Unexpected intelligent development turn failure stage=%s error_type=%s session_id=%s",
+                    failure_stage,
+                    type(error).__name__,
+                    session_id,
+                )
                 try:
                     await cleanup_task_files()
                 except SandboxError as cleanup_error:

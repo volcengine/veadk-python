@@ -726,18 +726,9 @@ async def read_completion_contract(
     return parse_completion_contract(content)
 
 
-def _delivery_manifest_metadata(content: bytes) -> tuple[str, str]:
-    if len(content) > _MAX_MANIFEST_BYTES:
-        raise ValueError("Delivery agentkit.yaml is too large")
-    try:
-        manifest = yaml.safe_load(content)
-    except (UnicodeDecodeError, yaml.YAMLError) as error:
-        raise ValueError("Delivery agentkit.yaml is invalid") from error
-    common = manifest.get("common") if isinstance(manifest, dict) else None
-    if not isinstance(common, dict):
-        raise ValueError("Delivery agentkit.yaml common is invalid")
-    agent_name = common.get("agent_name") or common.get("name")
-    entry_point = common.get("entry_point")
+def _validate_delivery_metadata(
+    agent_name: object, entry_point: object
+) -> tuple[str, str]:
     if (
         not isinstance(agent_name, str)
         or not agent_name.strip()
@@ -759,6 +750,48 @@ def _delivery_manifest_metadata(content: bytes) -> tuple[str, str]:
     return agent_name.strip(), entry_point
 
 
+def _delivery_manifest_metadata(
+    content: bytes,
+    *,
+    trusted_fallback: tuple[str, str] | None = None,
+) -> tuple[str, str]:
+    if len(content) > _MAX_MANIFEST_BYTES:
+        raise ValueError("Delivery agentkit.yaml is too large")
+    if not content:
+        if trusted_fallback is None:
+            raise ValueError("Delivery agentkit.yaml is missing")
+        return _validate_delivery_metadata(*trusted_fallback)
+    try:
+        manifest = yaml.safe_load(content)
+    except (UnicodeDecodeError, yaml.YAMLError) as error:
+        raise ValueError("Delivery agentkit.yaml is invalid") from error
+    if not isinstance(manifest, dict):
+        raise ValueError("Delivery agentkit.yaml is invalid")
+    common = manifest.get("common")
+    if common is None and trusted_fallback is not None:
+        return _validate_delivery_metadata(*trusted_fallback)
+    if not isinstance(common, dict):
+        raise ValueError("Delivery agentkit.yaml common is invalid")
+    if common.get("agent_name"):
+        agent_name = common["agent_name"]
+    elif "name" in common:
+        agent_name = common["name"]
+    elif "agent_name" in common:
+        agent_name = common["agent_name"]
+    elif trusted_fallback is not None:
+        agent_name = trusted_fallback[0]
+    else:
+        agent_name = None
+    entry_point = (
+        common["entry_point"]
+        if "entry_point" in common
+        else trusted_fallback[1]
+        if trusted_fallback is not None
+        else None
+    )
+    return _validate_delivery_metadata(agent_name, entry_point)
+
+
 class DeliveryPublisher:
     """Package an immutable source snapshot without re-running validation."""
 
@@ -774,7 +807,13 @@ class DeliveryPublisher:
         completion: CompletionContract | None,
         exact_secrets: tuple[str, ...],
         acceptance_criteria: tuple[str, ...] = (),
+        trusted_manifest_metadata: tuple[str, str] | None = None,
     ) -> DeliveryReference:
+        trusted_metadata = (
+            _validate_delivery_metadata(*trusted_manifest_metadata)
+            if trusted_manifest_metadata is not None
+            else None
+        )
         token = uuid4().hex
         worker_path = f"{task_root}/delivery-{token}.py"
         request_path = f"{task_root}/delivery-{token}.json"
@@ -813,16 +852,21 @@ class DeliveryPublisher:
             ),
             "steps": steps,
         }
-        manifest_bytes = await self._transport.download(
-            f"{project_root}/agentkit.yaml", max_bytes=_MAX_MANIFEST_BYTES
+        manifest_bytes = await self._manifest_bytes(
+            project_root,
+            allow_missing=trusted_metadata is not None,
         )
-        agent_name, entry_point = _delivery_manifest_metadata(manifest_bytes)
+        agent_name, entry_point = _delivery_manifest_metadata(
+            manifest_bytes,
+            trusted_fallback=trusted_metadata,
+        )
         request = {
             "projectRoot": project_root,
             "report": report,
             "secretPath": secret_path,
             "agentName": agent_name,
             "entryPoint": entry_point,
+            "fallbackEntryPoint": trusted_metadata[1] if trusted_metadata else "",
             "manifestSha256": hashlib.sha256(manifest_bytes).hexdigest(),
         }
         await self._transport.upload(
@@ -856,6 +900,40 @@ class DeliveryPublisher:
             )
         finally:
             await self._unlink_many(secret_path, request_path, worker_path)
+
+    async def _manifest_bytes(self, project_root: str, *, allow_missing: bool) -> bytes:
+        manifest_path = f"{project_root}/agentkit.yaml"
+        if not allow_missing:
+            return await self._transport.download(
+                manifest_path, max_bytes=_MAX_MANIFEST_BYTES
+            )
+        source = (
+            "import json,os,stat\n"
+            f"path={manifest_path!r}\n"
+            "try: metadata=os.lstat(path)\n"
+            "except FileNotFoundError: value={'state':'missing'}\n"
+            "else:\n"
+            " value={'state':'regular','size':metadata.st_size} if stat.S_ISREG(metadata.st_mode) else {'state':'unsafe'}\n"
+            "print(json.dumps(value,separators=(',',':')))\n"
+        )
+        status = await self._transport.exec_json(
+            f"python3 -c {shlex.quote(source)}", timeout=12
+        )
+        if status == {"state": "missing"}:
+            return b""
+        size = status.get("size")
+        if (
+            set(status) != {"state", "size"}
+            or status.get("state") != "regular"
+            or isinstance(size, bool)
+            or not isinstance(size, int)
+            or size < 0
+            or size > _MAX_MANIFEST_BYTES
+        ):
+            raise ValueError("Delivery agentkit.yaml is unsafe")
+        return await self._transport.download(
+            manifest_path, max_bytes=_MAX_MANIFEST_BYTES
+        )
 
     async def _unlink_many(self, *paths: str) -> None:
         source = (
