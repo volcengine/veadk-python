@@ -20,18 +20,23 @@ Two factory functions cover the two creation paths:
   :class:`HarnessConfig` and builds the long-lived agent, downloading its skills
   from the skill hub and mounting them as an ADK skill toolset.
 * :func:`spawn_harness_agent` — temporary, one-off creation that clones the base
-  agent and applies a per-request override (incremental tools/skills on top).
+  agent and applies a per-request override (configured tools/skills replace the
+  base harness selection).
 * :func:`spawn_harness_run_agent` — per-turn clone that also attaches dynamic
   registry-discovered remote A2A tools for the current user message.
 """
 
+import inspect
 import io
+import json
 import os
 import re
 import shutil
 import tempfile
 import zipfile
+from collections.abc import Callable, Mapping
 from dataclasses import replace
+from functools import wraps
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
@@ -41,15 +46,25 @@ import httpx
 from google.adk.code_executors import UnsafeLocalCodeExecutor
 from google.adk.skills import load_skill_from_dir
 from google.adk.tools.skill_toolset import SkillToolset
+from google.genai import types
 
 from veadk import Agent
-from veadk.cloud.harness_app.types import HarnessConfig, HarnessOverrides
+from veadk.cloud.harness_app.types import (
+    HarnessBuiltinTool,
+    HarnessConfig,
+    HarnessMcpServer,
+    HarnessOverrides,
+    HarnessRegistryOverride,
+    HarnessResourceOverride,
+    HarnessSelectedSkill,
+)
 from veadk.knowledgebase import KnowledgeBase
 from veadk.memory.long_term_memory import LongTermMemory
 from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.skills.materializer import materialize_remote_skill
 from veadk.skills.utils import _load_skills_from_space_id
 from veadk.tools import get_builtin_tool, list_builtin_tools
+from veadk.tools.builtin_tools.load_knowledgebase import LoadKnowledgebaseTool
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -66,21 +81,38 @@ _REGISTRY_OVERRIDE_FIELDS = {
     "registry_region",
     "registry_top_k",
 }
+_SAMPLING_OVERRIDE_FIELDS = {
+    "temperature",
+    "top_p",
+    "max_tokens",
+    "presence_penalty",
+    "frequency_penalty",
+    "penalty",
+}
+_KNOWLEDGEBASE_TOOL_NAMES = {"load_knowledgebase", "load_kb_queries"}
+_LONGTERM_MEMORY_TOOL_NAMES = {"load_memory"}
 _SKILL_CENTER_SPACE_PREFIX = "space:"
 
 __all__ = [
     "HarnessConfig",
     "HarnessOverrides",
-    "split_csv",
-    "agent_name_from_harness",
-    "build_skill_toolset",
+    "HarnessResourceResolver",
+    "ResourceResolutionError",
     "SkillLoadError",
     "ToolLoadError",
+    "agent_name_from_harness",
+    "build_skill_toolset",
     "config_from_env",
+    "harness_overrides_from_env",
+    "has_a2a_registry_config",
     "init_harness_agent",
+    "merge_harness_overrides",
+    "normalize_harness_overrides",
+    "set_harness_mcp_router_resolver",
+    "set_harness_resource_resolver",
     "spawn_harness_agent",
     "spawn_harness_run_agent",
-    "has_a2a_registry_config",
+    "split_csv",
 ]
 
 
@@ -104,6 +136,71 @@ def _load_builtin_tool(name: str) -> Any:
         ) from e
 
 
+class ResourceResolutionError(RuntimeError):
+    """A control-plane resource id could not be resolved into runtime config."""
+
+
+HarnessResourceResolver = Callable[
+    [str, HarnessResourceOverride],
+    HarnessResourceOverride | Mapping[str, Any] | None,
+]
+McpRouterResolver = Callable[[str, dict[str, Any]], Mapping[str, Any] | None]
+
+_resource_resolver: HarnessResourceResolver | None = None
+_mcp_router_resolver: McpRouterResolver | None = None
+
+
+def set_harness_resource_resolver(
+    resolver: HarnessResourceResolver | None,
+) -> None:
+    """Register a resolver for AgentKit resource ids.
+
+    The resolver receives a resource kind (``"knowledgebase"`` or
+    ``"longterm_memory"``) and the request/env resource override. It may return
+    another :class:`HarnessResourceOverride` or a mapping with ``type``, ``id``
+    and ``config`` keys. Flat mappings are treated as ``config`` for convenience.
+    Passing ``None`` clears the resolver and keeps the built-in id-as-index
+    fallback.
+    """
+    global _resource_resolver
+    _resource_resolver = resolver
+
+
+def set_harness_mcp_router_resolver(resolver: McpRouterResolver | None) -> None:
+    """Register a resolver for AgentKit MCP toolset ids."""
+
+    global _mcp_router_resolver
+    _mcp_router_resolver = resolver
+
+
+def _ensure_default_resource_resolver() -> None:
+    global _resource_resolver
+    if _resource_resolver is not None:
+        return
+    try:
+        from veadk.cloud.harness_app.agentkit_resources import (
+            default_agentkit_resource_resolver,
+        )
+    except ImportError as e:
+        logger.warning("AgentKit resource resolver is unavailable: %s", e)
+        return
+    _resource_resolver = default_agentkit_resource_resolver()
+
+
+def _ensure_default_mcp_router_resolver() -> None:
+    global _mcp_router_resolver
+    if _mcp_router_resolver is not None:
+        return
+    try:
+        from veadk.cloud.harness_app.agentkit_resources import (
+            default_agentkit_mcp_router_resolver,
+        )
+    except ImportError as e:
+        logger.warning("AgentKit MCP router resolver is unavailable: %s", e)
+        return
+    _mcp_router_resolver = default_agentkit_mcp_router_resolver()
+
+
 # Skill hub download endpoint. A skill name in a harness is the path after
 # `/download/`, e.g. "namespace/owner/skill-name".
 SKILL_HUB_DOWNLOAD_URL = os.getenv(
@@ -117,28 +214,47 @@ SKILL_HUB_SEARCH_URL = os.getenv(
 # populated via its "name" alias. Only variables that are set are passed, so the
 # model's own defaults apply to everything else.
 _ENV_FIELDS = {
-    "model_name": "MODEL_NAME",
-    "tools": "TOOLS",
-    "skills": "SKILLS",
-    "system_prompt": "SYSTEM_PROMPT",
-    "description": "DESCRIPTION",
-    "runtime": "RUNTIME",
-    "structured_tool_calls": "STRUCTURED_TOOL_CALLS",
-    "include_tools_every_turn": "INCLUDE_TOOLS_EVERY_TURN",
-    "name": "HARNESS_NAME",
-    "knowledgebase_type": "KNOWLEDGEBASE_TYPE",
-    "longterm_memory_type": "LONG_TERM_MEMORY_TYPE",
-    "shortterm_memory_type": "SHORT_TERM_MEMORY_TYPE",
-    "max_llm_calls": "MAX_LLM_CALLS",
-    "registry_type": "REGISTRY_TYPE",
-    "registry_space_id": "REGISTRY_SPACE_ID",
-    "registry_endpoint": "REGISTRY_ENDPOINT",
-    "registry_version": "REGISTRY_VERSION",
-    "registry_service_name": "REGISTRY_SERVICE_NAME",
-    "registry_region": "REGISTRY_REGION",
-    "registry_top_k": "REGISTRY_TOP_K",
-    "registry_timeout_ms": "REGISTRY_TIMEOUT_MS",
-    "registry_poll_interval_ms": "REGISTRY_POLL_INTERVAL_MS",
+    "model_name": ("MODEL_AGENT_NAME", "MODEL_NAME"),
+    "tools": ("TOOLS",),
+    "mcp_router_id": ("MCP_ROUTER_ID", "MCP_TOOLSET_ID"),
+    "skills": ("SKILLS",),
+    "system_prompt": ("SYSTEM_PROMPT",),
+    "description": ("DESCRIPTION",),
+    "runtime": ("RUNTIME",),
+    "temperature": ("MODEL_AGENT_TEMPERATURE",),
+    "top_p": ("MODEL_AGENT_TOP_P",),
+    "structured_tool_calls": ("STRUCTURED_TOOL_CALLS",),
+    "include_tools_every_turn": ("INCLUDE_TOOLS_EVERY_TURN",),
+    "name": ("HARNESS_NAME",),
+    "knowledgebase_type": ("KNOWLEDGEBASE_TYPE",),
+    "longterm_memory_type": ("LONG_TERM_MEMORY_TYPE",),
+    "shortterm_memory_type": ("SHORT_TERM_MEMORY_TYPE",),
+    "max_llm_calls": ("MAX_LLM_CALLS",),
+    "registry_type": ("REGISTRY_TYPE",),
+    "registry_space_id": ("REGISTRY_SPACE_ID",),
+    "registry_endpoint": ("REGISTRY_ENDPOINT",),
+    "registry_version": ("REGISTRY_VERSION",),
+    "registry_service_name": ("REGISTRY_SERVICE_NAME",),
+    "registry_region": ("REGISTRY_REGION",),
+    "registry_top_k": ("REGISTRY_TOP_K",),
+    "registry_timeout_ms": ("REGISTRY_TIMEOUT_MS",),
+    "registry_poll_interval_ms": ("REGISTRY_POLL_INTERVAL_MS",),
+}
+_HARNESS_BUILTIN_TOOL_ID_ATTR = "_veadk_harness_builtin_tool_id"
+_HARNESS_MCP_SERVER_ATTR = "_veadk_harness_mcp_server"
+_RUN_CODE_TOOL_ENVS = {
+    "run_code": "AGENTKIT_TOOL_ID_SCRIPT",
+    "coding": "AGENTKIT_TOOL_ID_OPENCODE",
+}
+_RESOURCE_DIRECT_FIELDS = {
+    "name",
+    "description",
+    "top_k",
+    "app_name",
+    "index",
+    "enable_profile",
+    "query_with_user_profile",
+    "user_id",
 }
 
 
@@ -148,6 +264,215 @@ def split_csv(value: str) -> list[str]:
     ``"web_search, web_fetch"`` -> ``["web_search", "web_fetch"]``; ``""`` -> ``[]``.
     """
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _env_value(*names: str) -> str | None:
+    for name in names:
+        value = os.environ.get(name)
+        if value is not None:
+            return value
+    return None
+
+
+def _json_env(name: str, key: str) -> Any:
+    raw = os.environ.get(name)
+    if not raw or not raw.strip():
+        return None
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON in {name}: {e}") from e
+    if isinstance(value, dict):
+        return value.get(key)
+    return value
+
+
+def _json_object_env(name: str) -> dict[str, Any]:
+    raw = os.environ.get(name)
+    if not raw or not raw.strip():
+        return {}
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON in {name}: {e}") from e
+    if not isinstance(value, dict):
+        raise TypeError(f"{name} must be a JSON object.")
+    return value
+
+
+def _builtin_tool_from_name(name: str) -> HarnessBuiltinTool:
+    return HarnessBuiltinTool(id=name)
+
+
+def _skill_from_legacy_ref(skill: str) -> HarnessSelectedSkill:
+    if _is_skill_center_space_ref(skill):
+        return HarnessSelectedSkill(
+            source="skillspace",
+            skill_space_id=_skill_center_space_id(skill),
+        )
+    return HarnessSelectedSkill(source="skillhub", slug=skill)
+
+
+def _selected_skill_ref(skill: HarnessSelectedSkill) -> str:
+    if skill.source == "skillspace":
+        return f"{_SKILL_CENTER_SPACE_PREFIX}{skill.skill_space_id or ''}".strip()
+    return (skill.slug or "").strip()
+
+
+def _dedupe_builtin_tools(
+    entries: list[HarnessBuiltinTool],
+) -> list[HarnessBuiltinTool]:
+    ordered: dict[str, HarnessBuiltinTool] = {}
+    for entry in entries:
+        tool_id = entry.id.strip()
+        if not tool_id:
+            continue
+        ordered[tool_id] = entry.model_copy(update={"id": tool_id})
+    return list(ordered.values())
+
+
+def _dedupe_selected_skills(
+    entries: list[HarnessSelectedSkill],
+) -> list[HarnessSelectedSkill]:
+    ordered: dict[str, HarnessSelectedSkill] = {}
+    for entry in entries:
+        ref = _selected_skill_ref(entry)
+        if ref:
+            ordered[ref] = entry
+    return list(ordered.values())
+
+
+def _builtin_tool_entries(
+    config: HarnessOverrides,
+    *,
+    only_set: bool,
+) -> list[HarnessBuiltinTool]:
+    set_fields = config.model_fields_set
+    entries: list[HarnessBuiltinTool] = []
+    if (not only_set or "tools" in set_fields) and config.tools:
+        entries.extend(
+            _builtin_tool_from_name(name) for name in split_csv(config.tools)
+        )
+    if (not only_set or "builtin_tools" in set_fields) and config.builtin_tools:
+        entries.extend(config.builtin_tools)
+    if (not only_set or "mcp_router_id" in set_fields) and config.mcp_router_id:
+        entries = _add_mcp_router_id_entry(entries, config.mcp_router_id)
+    return _dedupe_builtin_tools(entries)
+
+
+def _add_mcp_router_id_entry(
+    entries: list[HarnessBuiltinTool],
+    mcp_router_id: str,
+) -> list[HarnessBuiltinTool]:
+    updated: list[HarnessBuiltinTool] = []
+    found = False
+    for entry in entries:
+        if entry.id.strip() == "mcp_router":
+            config = {"mcp_router_id": mcp_router_id, **(entry.config or {})}
+            updated.append(entry.model_copy(update={"config": config}))
+            found = True
+        else:
+            updated.append(entry)
+    if not found:
+        updated.append(
+            HarnessBuiltinTool(
+                id="mcp_router",
+                config={"mcp_router_id": mcp_router_id},
+            )
+        )
+    return updated
+
+
+def _selected_skill_entries(
+    config: HarnessOverrides,
+    *,
+    only_set: bool,
+) -> list[HarnessSelectedSkill]:
+    set_fields = config.model_fields_set
+    entries: list[HarnessSelectedSkill] = []
+    if (not only_set or "skills" in set_fields) and config.skills:
+        entries.extend(
+            _skill_from_legacy_ref(skill) for skill in split_csv(config.skills)
+        )
+    if (not only_set or "selected_skills" in set_fields) and config.selected_skills:
+        entries.extend(config.selected_skills)
+    return _dedupe_selected_skills(entries)
+
+
+def normalize_harness_overrides(overrides: HarnessOverrides) -> HarnessOverrides:
+    """Return a canonical override using AgentKit's structured field names."""
+    data = overrides.model_dump(
+        mode="json",
+        exclude_unset=True,
+        exclude_none=False,
+    )
+    if "registry" in overrides.model_fields_set:
+        data.update(_registry_override_delta(overrides.registry))
+        data.pop("registry", None)
+    builtin_tools = _builtin_tool_entries(overrides, only_set=True)
+    if builtin_tools or "tools" in overrides.model_fields_set:
+        data["builtin_tools"] = [
+            item.model_dump(mode="json", exclude_none=True) for item in builtin_tools
+        ]
+        data.pop("tools", None)
+    selected_skills = _selected_skill_entries(overrides, only_set=True)
+    if selected_skills or "skills" in overrides.model_fields_set:
+        data["selected_skills"] = [
+            item.model_dump(mode="json", exclude_none=True) for item in selected_skills
+        ]
+        data.pop("skills", None)
+    return HarnessOverrides.model_validate(data)
+
+
+def _registry_override_delta(
+    registry: HarnessRegistryOverride | None,
+) -> dict[str, Any]:
+    if registry is None:
+        return {}
+
+    updates: dict[str, Any] = {}
+    if "space_id" in registry.model_fields_set:
+        updates["registry_space_id"] = registry.space_id
+    if "endpoint" in registry.model_fields_set:
+        updates["registry_endpoint"] = registry.endpoint
+    if "region" in registry.model_fields_set:
+        updates["registry_region"] = registry.region
+    if "top_k" in registry.model_fields_set:
+        updates["registry_top_k"] = registry.top_k
+    return updates
+
+
+def merge_harness_overrides(
+    *overrides_list: HarnessOverrides | Mapping[str, Any] | None,
+) -> HarnessOverrides:
+    """Merge Harness override layers in order, keeping AgentKit field names.
+
+    This represents the runtime precedence used by HarnessApp:
+    ``env/base agent < session latest < current request``. The env/base layer is
+    already materialized into ``base_agent``; this helper merges the request
+    overlay layers without injecting unset defaults.
+    """
+    merged: dict[str, Any] = {}
+    for overrides in overrides_list:
+        if overrides is None:
+            continue
+        if isinstance(overrides, HarnessOverrides):
+            normalized = normalize_harness_overrides(overrides)
+        else:
+            normalized = normalize_harness_overrides(
+                HarnessOverrides.model_validate(overrides)
+            )
+        delta = normalized.model_dump(
+            mode="json",
+            exclude_unset=True,
+            exclude_none=False,
+        )
+        if "builtin_tools" in delta:
+            merged.pop("tools", None)
+        if "selected_skills" in delta:
+            merged.pop("skills", None)
+        merged.update(delta)
+    return HarnessOverrides.model_validate(merged)
 
 
 def agent_name_from_harness(harness_name: str) -> str:
@@ -245,7 +570,7 @@ def _download_skill_response(name: str) -> httpx.Response:
 
 
 def _looks_like_zip(content: bytes) -> bool:
-    return content.startswith(b"PK\x03\x04") or content.startswith(b"PK\x05\x06")
+    return content.startswith((b"PK\x03\x04", b"PK\x05\x06"))
 
 
 def _resolve_skill_download_name(name: str) -> str | None:
@@ -259,7 +584,7 @@ def _resolve_skill_download_name(name: str) -> str | None:
         if response.status_code != 200:
             return None
         data = response.json()
-    except Exception:
+    except (httpx.HTTPError, ValueError):
         return None
 
     for item in _skill_search_items(data):
@@ -381,11 +706,246 @@ def build_skill_toolset(
 def config_from_env() -> HarnessConfig:
     """Parse the environment into a :class:`HarnessConfig` (validated by pydantic)."""
     kwargs: dict[str, Any] = {
-        field: os.environ[env]
-        for field, env in _ENV_FIELDS.items()
-        if env in os.environ
+        field: value
+        for field, env_names in _ENV_FIELDS.items()
+        if (value := _env_value(*env_names)) is not None
     }
+    selected_skills = _json_env("SELECTED_SKILLS_JSON", "selected_skills")
+    if selected_skills is not None:
+        kwargs["selected_skills"] = selected_skills
+    mcp_servers = _json_env("MCP_SERVERS_JSON", "mcp")
+    if mcp_servers is not None:
+        kwargs["mcp"] = mcp_servers
+    knowledgebase_id = os.environ.get("KNOWLEDGEBASE_ID")
+    knowledgebase_config = _json_object_env("KNOWLEDGEBASE_CONFIG_JSON")
+    if kwargs.get("knowledgebase_type") or knowledgebase_id:
+        kwargs["knowledgebase"] = {
+            "type": kwargs.get("knowledgebase_type", ""),
+            "id": knowledgebase_id,
+            "config": knowledgebase_config,
+        }
+    longterm_memory_id = os.environ.get("LONG_TERM_MEMORY_ID")
+    longterm_memory_config = _json_object_env("LONG_TERM_MEMORY_CONFIG_JSON")
+    if kwargs.get("longterm_memory_type") or longterm_memory_id:
+        kwargs["longterm_memory"] = {
+            "type": kwargs.get("longterm_memory_type", ""),
+            "id": longterm_memory_id,
+            "config": longterm_memory_config,
+        }
     return HarnessConfig(**kwargs)
+
+
+def harness_overrides_from_env() -> HarnessOverrides:
+    """Expose startup env config using the same shape as ``run_sse.harness``.
+
+    ``HarnessConfig`` includes creation-time fields such as app name and memory
+    backend selectors. The runtime config endpoint only speaks the request-time
+    ``HarnessOverrides`` contract, so this projects the startup env into that
+    shape while preserving the model defaults for frontend initialization.
+    """
+
+    config = config_from_env()
+    data = config.model_dump(
+        mode="json",
+        include=set(HarnessOverrides.model_fields),
+        exclude_none=True,
+    )
+    return normalize_harness_overrides(HarnessOverrides.model_validate(data))
+
+
+def _with_temporary_env(tool: Any, env: dict[str, str]) -> Any:
+    if not env:
+        return tool
+
+    if inspect.iscoroutinefunction(tool):
+
+        @wraps(tool)
+        async def async_wrapped(*args, **kwargs):
+            old = {key: os.environ.get(key) for key in env}
+            os.environ.update(env)
+            try:
+                return await tool(*args, **kwargs)
+            finally:
+                _restore_env(old)
+
+        return async_wrapped
+
+    @wraps(tool)
+    def wrapped(*args, **kwargs):
+        old = {key: os.environ.get(key) for key in env}
+        os.environ.update(env)
+        try:
+            return tool(*args, **kwargs)
+        finally:
+            _restore_env(old)
+
+    return wrapped
+
+
+def _restore_env(values: dict[str, str | None]) -> None:
+    for key, value in values.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
+
+def _configured_builtin_tool(entry: HarnessBuiltinTool) -> Any:
+    name = entry.id.strip()
+    config = dict(entry.config or {})
+    if name == "mcp_router":
+        tool = _mcp_router_tool(config)
+    else:
+        tool = _load_builtin_tool(name)
+        env = _tool_env_overrides(name, config)
+        tool = _with_temporary_env(tool, env)
+    setattr(tool, _HARNESS_BUILTIN_TOOL_ID_ATTR, name)
+    if config:
+        tool._veadk_harness_tool_config = config
+    return tool
+
+
+def _tool_env_overrides(name: str, config: dict[str, Any]) -> dict[str, str]:
+    env: dict[str, str] = {}
+    tool_id_env = _RUN_CODE_TOOL_ENVS.get(name)
+    tool_id = config.get("tool_id")
+    if tool_id_env and tool_id:
+        env[tool_id_env] = str(tool_id)
+    region = config.get("region")
+    if region:
+        env["AGENTKIT_TOOL_REGION"] = str(region)
+    return env
+
+
+def _mcp_router_tool(config: dict[str, Any]) -> Any:
+    from google.adk.tools.mcp_tool.mcp_session_manager import (
+        StreamableHTTPConnectionParams,
+    )
+    from google.adk.tools.mcp_tool.mcp_toolset import McpToolset
+
+    config = _resolve_mcp_router_config(config)
+    url = _config_or_env(config, "url", "url_env", "TOOL_MCP_ROUTER_URL")
+    api_key = _config_or_env(
+        config,
+        "api_key",
+        "api_key_env",
+        "TOOL_MCP_ROUTER_API_KEY",
+    ) or _config_or_env(config, "apikey", "apikey_env", "TOOL_MCP_ROUTER_API_KEY")
+    if not url:
+        raise ToolLoadError("Tool 'mcp_router' requires url or TOOL_MCP_ROUTER_URL.")
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else None
+    return McpToolset(
+        connection_params=StreamableHTTPConnectionParams(url=url, headers=headers)
+    )
+
+
+def _resolve_mcp_router_config(config: dict[str, Any]) -> dict[str, Any]:
+    mcp_router_id = (
+        config.get("mcp_router_id")
+        or config.get("mcp_toolset_id")
+        or config.get("id")
+        or config.get("_id")
+        or os.environ.get("MCP_ROUTER_ID")
+        or os.environ.get("MCP_TOOLSET_ID")
+    )
+    if not mcp_router_id:
+        return config
+    if _mcp_router_resolver is None:
+        if not _config_or_env(config, "url", "url_env", "TOOL_MCP_ROUTER_URL"):
+            logger.warning(
+                "No Harness MCP router resolver configured for id=%s; "
+                "falling back to explicit url/api_key config.",
+                mcp_router_id,
+            )
+        return config
+    try:
+        resolved = _mcp_router_resolver(str(mcp_router_id), config)
+    except Exception as e:
+        raise ToolLoadError(
+            f"Failed to resolve mcp_router_id '{mcp_router_id}': {e}"
+        ) from e
+    if resolved is None:
+        return config
+    merged = dict(resolved)
+    merged.update(config)
+    return merged
+
+
+def _config_or_env(
+    config: dict[str, Any],
+    value_key: str,
+    env_key: str,
+    default_env: str,
+) -> str:
+    value = config.get(value_key)
+    if value:
+        return str(value)
+    env_name = str(config.get(env_key) or default_env)
+    return os.environ.get(env_name, "")
+
+
+def _build_builtin_tools(entries: list[HarnessBuiltinTool]) -> list[Any]:
+    return [_configured_builtin_tool(entry) for entry in _dedupe_builtin_tools(entries)]
+
+
+def _add_or_replace_builtin_tools(
+    agent: Agent,
+    entries: list[HarnessBuiltinTool],
+) -> None:
+    entries = _dedupe_builtin_tools(entries)
+    requested = {entry.id for entry in entries}
+    agent.tools = [
+        tool for tool in agent.tools if _builtin_tool_id(tool) not in requested
+    ]
+    agent.tools.extend(_build_builtin_tools(entries))
+
+
+def _builtin_tool_id(tool: Any) -> str | None:
+    return getattr(tool, _HARNESS_BUILTIN_TOOL_ID_ATTR, None) or _tool_name(tool)
+
+
+def _mcp_server_key(server: HarnessMcpServer) -> str:
+    return server.name.strip() or server.server_url.strip()
+
+
+def _build_mcp_toolset(server: HarnessMcpServer) -> Any:
+    from google.adk.tools.mcp_tool.mcp_session_manager import (
+        StreamableHTTPConnectionParams,
+    )
+    from google.adk.tools.mcp_tool.mcp_toolset import McpToolset
+
+    url = server.server_url.strip()
+    if not url:
+        raise ToolLoadError("MCP server requires server_url.")
+    headers = (
+        {"Authorization": f"Bearer {server.bear_token}"} if server.bear_token else None
+    )
+    toolset = McpToolset(
+        connection_params=StreamableHTTPConnectionParams(url=url, headers=headers)
+    )
+    setattr(toolset, _HARNESS_MCP_SERVER_ATTR, _mcp_server_key(server))
+    return toolset
+
+
+def _build_mcp_toolsets(servers: list[HarnessMcpServer]) -> list[Any]:
+    return [_build_mcp_toolset(server) for server in servers]
+
+
+def _remove_harness_mcp_toolsets(agent: Agent) -> None:
+    agent.tools = [
+        tool for tool in agent.tools if not getattr(tool, _HARNESS_MCP_SERVER_ATTR, "")
+    ]
+
+
+def _add_mcp_toolsets(agent: Agent, servers: list[HarnessMcpServer]) -> None:
+    if not servers:
+        return
+    agent.tools.extend(_build_mcp_toolsets(servers))
+
+
+def _selected_skill_refs(skills: list[HarnessSelectedSkill]) -> list[str]:
+    refs = [_selected_skill_ref(skill) for skill in skills]
+    return [ref for ref in refs if ref]
 
 
 def _assemble_agent(config: HarnessConfig) -> tuple[Agent, ShortTermMemory]:
@@ -396,14 +956,15 @@ def _assemble_agent(config: HarnessConfig) -> tuple[Agent, ShortTermMemory]:
     base / long-term memory. Backend values are validated by each component's
     pydantic model (fast-fail on an unknown value).
     """
-    tools = [_load_builtin_tool(name) for name in split_csv(config.tools)]
+    tools = _build_builtin_tools(_builtin_tool_entries(config, only_set=False))
 
-    skills = split_csv(config.skills)
+    skills = _selected_skill_refs(_selected_skill_entries(config, only_set=False))
     if skills:
         logger.info(f"Loading skills {skills} for harness.")
         skill_toolset = build_skill_toolset(skills)
         if skill_toolset is not None:
             tools.append(skill_toolset)
+    tools.extend(_build_mcp_toolsets(config.mcp))
 
     registry_config = None
     if config.registry_type:
@@ -426,25 +987,50 @@ def _assemble_agent(config: HarnessConfig) -> tuple[Agent, ShortTermMemory]:
         tools.extend(build_a2a_registry_tools(registry_config))
 
     knowledgebase = None
-    if config.knowledgebase_type:
+    knowledgebase_override = config.knowledgebase
+    if knowledgebase_override is None and config.knowledgebase_type:
+        knowledgebase_override = HarnessResourceOverride(
+            type=config.knowledgebase_type,
+        )
+    if knowledgebase_override:
+        knowledgebase_override = _resolve_resource_override(
+            "knowledgebase", knowledgebase_override
+        )
+    if knowledgebase_override and knowledgebase_override.type:
         logger.info(
-            f"Initializing knowledge base: backend={config.knowledgebase_type} "
+            f"Initializing knowledge base: backend={knowledgebase_override.type} "
             f"index={config.app_name}"
         )
         knowledgebase = KnowledgeBase(
-            backend=config.knowledgebase_type,  # type: ignore[arg-type]
-            app_name=config.app_name,
+            backend=knowledgebase_override.type,  # type: ignore[arg-type]
+            **_request_resource_config(
+                "knowledgebase", knowledgebase_override, config.app_name, resolve=False
+            ),
         )
 
     long_term_memory = None
-    if config.longterm_memory_type:
+    longterm_memory_override = config.longterm_memory
+    if longterm_memory_override is None and config.longterm_memory_type:
+        longterm_memory_override = HarnessResourceOverride(
+            type=config.longterm_memory_type,
+        )
+    if longterm_memory_override:
+        longterm_memory_override = _resolve_resource_override(
+            "longterm_memory", longterm_memory_override
+        )
+    if longterm_memory_override and longterm_memory_override.type:
         logger.info(
-            f"Initializing long-term memory: backend={config.longterm_memory_type} "
+            f"Initializing long-term memory: backend={longterm_memory_override.type} "
             f"index={config.app_name}"
         )
         long_term_memory = LongTermMemory(
-            backend=config.longterm_memory_type,  # type: ignore[arg-type]
-            app_name=config.app_name,
+            backend=longterm_memory_override.type,  # type: ignore[arg-type]
+            **_request_resource_config(
+                "longterm_memory",
+                longterm_memory_override,
+                config.app_name,
+                resolve=False,
+            ),
         )
 
     logger.info(
@@ -465,8 +1051,10 @@ def _assemble_agent(config: HarnessConfig) -> tuple[Agent, ShortTermMemory]:
         enable_responses_cache=not config.include_tools_every_turn,
         knowledgebase=knowledgebase,
         long_term_memory=long_term_memory,
+        auto_save_session=long_term_memory is not None,
         short_term_memory=short_term_memory,
     )
+    _apply_sampling_overrides(agent, config)
     if registry_config is not None:
         setattr(agent, _REGISTRY_CONFIG_ATTR, registry_config)
     return agent, short_term_memory
@@ -479,6 +1067,8 @@ def init_harness_agent() -> tuple[Agent, ShortTermMemory]:
         A ``(agent, short_term_memory)`` tuple. The short-term memory is returned
         separately so the server can share the same instance with its ``Runner``.
     """
+    _ensure_default_resource_resolver()
+    _ensure_default_mcp_router_resolver()
     return _assemble_agent(config_from_env())
 
 
@@ -487,60 +1077,307 @@ def _tool_name(tool: Any) -> str | None:
     return getattr(tool, "__name__", None) or getattr(tool, "name", None)
 
 
-def _add_incremental_tools(agent: Agent, tool_names: list[str]) -> None:
-    """Append the requested built-in tools, skipping ones already on the agent."""
-    existing = {name for tool in agent.tools if (name := _tool_name(tool))}
-    for name in tool_names:
-        if name in existing:
-            logger.info(f"Tool '{name}' already on the agent; skipping.")
-            continue
-        agent.tools.append(_load_builtin_tool(name))
-        existing.add(name)
+def _replace_builtin_tools(
+    agent: Agent,
+    entries: list[HarnessBuiltinTool],
+) -> None:
+    """Replace the harness-selected built-in tools with ``entries``."""
+
+    agent.tools = [tool for tool in agent.tools if not _is_harness_builtin_tool(tool)]
+    agent.tools.extend(_build_builtin_tools(entries))
 
 
-def _add_incremental_skills(
+def _is_harness_builtin_tool(tool: Any) -> bool:
+    if getattr(tool, _HARNESS_BUILTIN_TOOL_ID_ATTR, None):
+        return True
+    name = _tool_name(tool)
+    return bool(name and name in set(list_builtin_tools()))
+
+
+def _replace_skills(
     agent: Agent, skill_ids: list[str], download_dir: Path | None = None
 ) -> None:
-    """Mount the requested skills, skipping ones whose name is already loaded.
+    """Replace the harness-selected skill toolset with ``skill_ids``."""
 
-    Skills already present are dropped (deduped by skill name). Any genuinely new
-    skills are merged into the agent's existing :class:`SkillToolset` so the agent
-    keeps a single toolset (two would expose duplicate ``list_skills``/``load_skill``
-    tools); if the agent has none yet, a new toolset is mounted. ``download_dir``
-    is where the skills are downloaded (cleaned up by the caller after the run).
-    """
+    agent.tools = [tool for tool in agent.tools if not isinstance(tool, SkillToolset)]
     toolset = build_skill_toolset(skill_ids, download_dir=download_dir)
-    if toolset is None:
-        return
-    new_skills = toolset._list_skills()
-
-    existing_toolset = next(
-        (tool for tool in agent.tools if isinstance(tool, SkillToolset)), None
-    )
-    if existing_toolset is None:
+    if toolset is not None:
         agent.tools.append(toolset)
-        return
-
-    existing_skills = existing_toolset._list_skills()
-    existing_names = {skill.name for skill in existing_skills}
-    new_skills = [skill for skill in new_skills if skill.name not in existing_names]
-    if not new_skills:
-        logger.info("All requested skills already loaded; skipping.")
-        return
-
-    agent.tools.remove(existing_toolset)
-    agent.tools.append(
-        SkillToolset(
-            skills=existing_skills + new_skills,
-            code_executor=(existing_toolset._code_executor or toolset._code_executor),
-        )
-    )
 
 
 def _remove_a2a_registry_tools(agent: Agent) -> None:
     agent.tools = [
         tool for tool in agent.tools if _tool_name(tool) not in _REGISTRY_TOOL_NAMES
     ]
+
+
+def _request_resource_config(
+    kind: str,
+    resource: HarnessResourceOverride,
+    app_name: str | None,
+    *,
+    resolve: bool = True,
+) -> dict[str, Any]:
+    if resolve:
+        resource = _resolve_resource_override(kind, resource)
+    config = dict(resource.config or {})
+    configured_backend_config = config.pop("backend_config", None)
+    if resource.id:
+        config.setdefault("index", resource.id)
+        config.setdefault("app_name", resource.id)
+    elif app_name:
+        config.setdefault("app_name", app_name)
+    config.pop("type", None)
+    config.pop("backend", None)
+    direct = {
+        key: value for key, value in config.items() if key in _RESOURCE_DIRECT_FIELDS
+    }
+    backend_config = {
+        key: value
+        for key, value in config.items()
+        if key not in _RESOURCE_DIRECT_FIELDS
+    }
+    if isinstance(configured_backend_config, Mapping):
+        backend_config = {**configured_backend_config, **backend_config}
+    elif configured_backend_config:
+        backend_config["backend_config"] = configured_backend_config
+    if backend_config:
+        if "index" in direct:
+            backend_config.setdefault("index", direct["index"])
+        if "app_name" in direct:
+            backend_config.setdefault("app_name", direct["app_name"])
+        direct["backend_config"] = backend_config
+    return direct
+
+
+def _resolve_resource_override(
+    kind: str,
+    resource: HarnessResourceOverride,
+) -> HarnessResourceOverride:
+    if not resource.id:
+        return resource
+    if _resource_resolver is None:
+        if not resource.config:
+            logger.warning(
+                "No Harness resource resolver configured for %s id=%s; "
+                "falling back to id as index/app_name.",
+                kind,
+                resource.id,
+            )
+        return resource
+    try:
+        resolved = _resource_resolver(kind, resource)
+    except Exception as e:
+        raise ResourceResolutionError(
+            f"Failed to resolve {kind} resource '{resource.id}': {e}"
+        ) from e
+    if resolved is None:
+        if resource.config:
+            logger.warning(
+                "Harness resource resolver returned no config for %s id=%s; "
+                "using the explicit request config.",
+                kind,
+                resource.id,
+            )
+            return resource
+        raise ResourceResolutionError(
+            f"No runtime config found for {kind} resource '{resource.id}'. "
+            "Provide config explicitly or register a Harness resource resolver."
+        )
+    return _merge_resolved_resource(resource, resolved)
+
+
+def _merge_resolved_resource(
+    requested: HarnessResourceOverride,
+    resolved: HarnessResourceOverride | Mapping[str, Any],
+) -> HarnessResourceOverride:
+    resolved_resource = _coerce_resolved_resource(requested, resolved)
+    config = dict(resolved_resource.config or {})
+    config.update(requested.config or {})
+    return HarnessResourceOverride(
+        type=requested.type or resolved_resource.type,
+        id=requested.id or resolved_resource.id,
+        config=config,
+    )
+
+
+def _coerce_resolved_resource(
+    requested: HarnessResourceOverride,
+    resolved: HarnessResourceOverride | Mapping[str, Any],
+) -> HarnessResourceOverride:
+    if isinstance(resolved, HarnessResourceOverride):
+        return resolved
+    raw = dict(resolved)
+    override_keys = {"type", "id", "_id", "config"}
+    override_data = {key: raw[key] for key in override_keys if key in raw}
+    flat_config = {key: value for key, value in raw.items() if key not in override_keys}
+    if override_data:
+        resolved_resource = HarnessResourceOverride.model_validate(override_data)
+        if flat_config:
+            config = dict(resolved_resource.config or {})
+            config.update(flat_config)
+            resolved_resource = resolved_resource.model_copy(update={"config": config})
+        return resolved_resource
+    return HarnessResourceOverride(
+        type=requested.type,
+        id=requested.id,
+        config=flat_config,
+    )
+
+
+def _remove_knowledgebase_tools(agent: Agent) -> None:
+    agent.tools = [
+        tool
+        for tool in agent.tools
+        if not isinstance(tool, LoadKnowledgebaseTool)
+        and _tool_name(tool) not in _KNOWLEDGEBASE_TOOL_NAMES
+    ]
+
+
+def _mount_knowledgebase_tools(agent: Agent) -> None:
+    if not agent.knowledgebase:
+        return
+
+    agent.tools.append(LoadKnowledgebaseTool(knowledgebase=agent.knowledgebase))
+    if agent.knowledgebase.enable_profile:
+        from veadk.tools.builtin_tools.load_kb_queries import load_kb_queries
+
+        agent.tools.append(load_kb_queries)
+
+
+def _remove_longterm_memory_tools(agent: Agent) -> None:
+    agent.tools = [
+        tool
+        for tool in agent.tools
+        if _tool_name(tool) not in _LONGTERM_MEMORY_TOOL_NAMES
+    ]
+
+
+def _mount_longterm_memory_tools(agent: Agent) -> None:
+    if agent.long_term_memory is None:
+        return
+
+    from google.adk.tools.load_memory_tool import LoadMemoryTool
+
+    load_memory_tool = LoadMemoryTool()
+    if hasattr(load_memory_tool, "custom_metadata"):
+        if not load_memory_tool.custom_metadata:
+            load_memory_tool.custom_metadata = {}
+        load_memory_tool.custom_metadata["backend"] = agent.long_term_memory.backend
+    agent.tools.append(load_memory_tool)
+
+
+def _set_longterm_memory_auto_save(agent: Agent, enabled: bool) -> None:
+    from veadk.memory.save_session_callback import save_session_to_long_term_memory
+
+    agent.auto_save_session = enabled
+    callback = getattr(agent, "after_agent_callback", None)
+
+    if enabled:
+        if callback is None:
+            agent.after_agent_callback = save_session_to_long_term_memory
+        elif isinstance(callback, list):
+            if save_session_to_long_term_memory not in callback:
+                callback.append(save_session_to_long_term_memory)
+        elif callback is not save_session_to_long_term_memory:
+            agent.after_agent_callback = [callback, save_session_to_long_term_memory]
+        return
+
+    if callback is save_session_to_long_term_memory:
+        agent.after_agent_callback = None
+    elif isinstance(callback, list):
+        callbacks = [
+            item for item in callback if item is not save_session_to_long_term_memory
+        ]
+        if not callbacks:
+            agent.after_agent_callback = None
+        elif len(callbacks) == 1:
+            agent.after_agent_callback = callbacks[0]
+        else:
+            agent.after_agent_callback = callbacks
+
+
+def _apply_resource_overrides(
+    agent: Agent,
+    overrides: HarnessOverrides,
+    app_name: str | None,
+) -> None:
+    set_fields = overrides.model_fields_set
+
+    if "knowledgebase" in set_fields:
+        _remove_knowledgebase_tools(agent)
+        knowledgebase_override = overrides.knowledgebase
+        if knowledgebase_override:
+            knowledgebase_override = _resolve_resource_override(
+                "knowledgebase", knowledgebase_override
+            )
+        if knowledgebase_override and knowledgebase_override.type:
+            agent.knowledgebase = KnowledgeBase(
+                backend=knowledgebase_override.type,  # type: ignore[arg-type]
+                **_request_resource_config(
+                    "knowledgebase", knowledgebase_override, app_name, resolve=False
+                ),
+            )
+            _mount_knowledgebase_tools(agent)
+        else:
+            agent.knowledgebase = None
+
+    if "longterm_memory" in set_fields:
+        _remove_longterm_memory_tools(agent)
+        longterm_memory_override = overrides.longterm_memory
+        if longterm_memory_override:
+            longterm_memory_override = _resolve_resource_override(
+                "longterm_memory", longterm_memory_override
+            )
+        if longterm_memory_override and longterm_memory_override.type:
+            agent.long_term_memory = LongTermMemory(
+                backend=longterm_memory_override.type,  # type: ignore[arg-type]
+                **_request_resource_config(
+                    "longterm_memory",
+                    longterm_memory_override,
+                    app_name,
+                    resolve=False,
+                ),
+            )
+            _mount_longterm_memory_tools(agent)
+            _set_longterm_memory_auto_save(agent, True)
+        else:
+            agent.long_term_memory = None
+            _set_longterm_memory_auto_save(agent, False)
+
+
+def _apply_sampling_overrides(agent: Agent, overrides: HarnessOverrides) -> None:
+    set_fields = overrides.model_fields_set
+    if not (_SAMPLING_OVERRIDE_FIELDS & set_fields):
+        return
+
+    updates: dict[str, Any] = {}
+    if "temperature" in set_fields and overrides.temperature is not None:
+        updates["temperature"] = overrides.temperature
+    if "top_p" in set_fields and overrides.top_p is not None:
+        updates["top_p"] = overrides.top_p
+    if "max_tokens" in set_fields and overrides.max_tokens is not None:
+        updates["max_output_tokens"] = overrides.max_tokens
+    if "presence_penalty" in set_fields and overrides.presence_penalty is not None:
+        updates["presence_penalty"] = overrides.presence_penalty
+    if "frequency_penalty" in set_fields and overrides.frequency_penalty is not None:
+        updates["frequency_penalty"] = overrides.frequency_penalty
+    if "penalty" in set_fields and overrides.penalty is not None:
+        if "presence_penalty" not in updates:
+            updates["presence_penalty"] = overrides.penalty
+        if "frequency_penalty" not in updates:
+            updates["frequency_penalty"] = overrides.penalty
+
+    if not updates:
+        return
+
+    base_config = getattr(agent, "generate_content_config", None)
+    generate_content_config = (
+        base_config.model_copy(deep=True)
+        if base_config is not None
+        else types.GenerateContentConfig()
+    )
+    agent.generate_content_config = generate_content_config.model_copy(update=updates)
 
 
 def _apply_registry_overrides(
@@ -627,20 +1464,22 @@ def _add_dynamic_a2a_agent_tools(agent: Agent, prompt: str) -> None:
 
 
 def spawn_harness_agent(
-    base_agent: Agent, overrides: HarnessOverrides, download_dir: Path | None = None
+    base_agent: Agent,
+    overrides: HarnessOverrides,
+    download_dir: Path | None = None,
+    app_name: str | None = None,
 ) -> Agent:
     """Clone the base agent for a one-off invocation and apply per-request overrides.
 
-    Uses ADK's :meth:`~google.adk.agents.base_agent.BaseAgent.clone`, so the clone
-    inherits the base agent's knowledge base and memory — these are never
-    overridable. Only the fields the request actually set are applied: ``model_name``,
-    ``system_prompt`` and ``runtime`` replace the base value, while ``tools`` and
-    ``skills`` are mounted *incrementally* — anything already on the agent (same
-    tool name / skill name) is skipped, so only the delta is added.
+    Uses ADK's :meth:`~google.adk.agents.base_agent.BaseAgent.clone`, then applies
+    only the fields the request actually set. ``model_name``, ``system_prompt``,
+    ``runtime``, sampling params, tools, skills, knowledge base, and long-term
+    memory replace the clone's value.
 
-    ``download_dir`` is where any incremental skills are downloaded; the caller
-    owns it and should remove it once the invocation finishes.
+    ``download_dir`` is where any skills are downloaded; the caller owns it and
+    should remove it once the invocation finishes.
     """
+    overrides = normalize_harness_overrides(overrides)
     set_fields = overrides.model_fields_set
 
     update: dict[str, Any] = {}
@@ -653,12 +1492,25 @@ def spawn_harness_agent(
     if "model_name" in set_fields:
         cloned.update_model(overrides.model_name)
 
-    if "tools" in set_fields:
-        _add_incremental_tools(cloned, split_csv(overrides.tools))
+    if "builtin_tools" in set_fields:
+        _replace_builtin_tools(
+            cloned,
+            _builtin_tool_entries(overrides, only_set=True),
+        )
 
-    if "skills" in set_fields:
-        _add_incremental_skills(cloned, split_csv(overrides.skills), download_dir)
+    if "selected_skills" in set_fields:
+        _replace_skills(
+            cloned,
+            _selected_skill_refs(_selected_skill_entries(overrides, only_set=True)),
+            download_dir,
+        )
 
+    if "mcp" in set_fields:
+        _remove_harness_mcp_toolsets(cloned)
+        _add_mcp_toolsets(cloned, overrides.mcp)
+
+    _apply_sampling_overrides(cloned, overrides)
+    _apply_resource_overrides(cloned, overrides, app_name)
     _apply_registry_overrides(
         cloned,
         getattr(base_agent, _REGISTRY_CONFIG_ATTR, None),
@@ -673,13 +1525,28 @@ def spawn_harness_run_agent(
     prompt: str,
     overrides: HarnessOverrides | None = None,
     download_dir: Path | None = None,
+    app_name: str | None = None,
     registry_tip_token: str = "",
     registry_authorization: str = "",
+    session_overrides: HarnessOverrides | Mapping[str, Any] | None = None,
+    current_overrides: HarnessOverrides | Mapping[str, Any] | None = None,
 ) -> Agent:
     """Clone a harness agent for one run and attach per-turn dynamic tools."""
 
+    if session_overrides is not None or current_overrides is not None:
+        overrides = merge_harness_overrides(
+            overrides,
+            session_overrides,
+            current_overrides,
+        )
+
     if overrides is not None:
-        cloned = spawn_harness_agent(base_agent, overrides, download_dir=download_dir)
+        cloned = spawn_harness_agent(
+            base_agent,
+            overrides,
+            download_dir=download_dir,
+            app_name=app_name,
+        )
     else:
         cloned = base_agent.clone(update={})
 
