@@ -6041,6 +6041,9 @@ def _run_frontend_server(
                 allowed_remove_runtime_env_keys = set(
                     mcp_auth_environment_keys(published_draft)
                 )
+                allowed_remove_runtime_env_keys.update(
+                    {"FEISHU_APP_ID", "FEISHU_APP_SECRET"}
+                )
                 if not requested_remove_runtime_env_keys.issubset(
                     allowed_remove_runtime_env_keys
                 ):
@@ -6393,6 +6396,17 @@ def _run_frontend_server(
             raw_feishu_config if isinstance(raw_feishu_config, dict) else {}
         )
         feishu_enabled = bool(feishu_config.get("enabled"))
+        existing_runtime_envs = {
+            str(getattr(item, "key", "") or "").strip(): str(
+                getattr(item, "value", "") or ""
+            )
+            for item in (
+                getattr(existing_runtime, "envs", None) or []
+                if existing_runtime is not None
+                else []
+            )
+            if str(getattr(item, "key", "") or "").strip()
+        }
         extra_runtime_envs = {
             key: value
             for key, value in requested_runtime_envs.items()
@@ -6401,11 +6415,13 @@ def _run_frontend_server(
         feishu_app_id = (
             requested_runtime_envs.get("FEISHU_APP_ID", "").strip()
             or requested_runtime_envs.get("TOOL_FEISHU_CHANNEL_APP_ID", "").strip()
+            or existing_runtime_envs.get("FEISHU_APP_ID", "").strip()
             or os.getenv("FEISHU_APP_ID", "").strip()
         )
         feishu_app_secret = (
             requested_runtime_envs.get("FEISHU_APP_SECRET", "").strip()
             or requested_runtime_envs.get("TOOL_FEISHU_CHANNEL_APP_SECRET", "").strip()
+            or existing_runtime_envs.get("FEISHU_APP_SECRET", "").strip()
             or os.getenv("FEISHU_APP_SECRET", "").strip()
         )
         if feishu_enabled and (not feishu_app_id or not feishu_app_secret):
@@ -10910,7 +10926,7 @@ def _run_frontend_server(
             raise LegacyRecoveryError("legacy_snapshot_identity_missing")
         return draft, source_identity, pinned_image
 
-    def _configured_mcp_environment_keys(
+    def _configured_editable_environment_keys(
         runtime: Any,
         draft: Mapping[str, Any],
         region: str,
@@ -10938,7 +10954,8 @@ def _run_frontend_server(
                 )
             except LegacyRecoveryError:
                 pass
-        return [key for key in references if key in configured]
+        editable_keys = [*references, "FEISHU_APP_SECRET"]
+        return [key for key in editable_keys if key in configured]
 
     def _runtime_update_result(
         runtime: Any,
@@ -11335,15 +11352,21 @@ def _run_frontend_server(
                     warnings=("未生成可发布更新，线上版本不会被覆盖。",),
                     agent=recovery.agent,
                 )
-            configured_env_keys = (
-                list(mcp_auth_environment_keys(recovery.agent.get("draft") or {}))
-                if recovery.source == "legacy-runtime"
-                else _configured_mcp_environment_keys(
-                    runtime,
-                    recovery.agent.get("draft") or {},
-                    region,
-                )
+            recovered_draft = recovery.agent.get("draft") or {}
+            configured_env_keys = _configured_editable_environment_keys(
+                runtime,
+                recovered_draft,
+                region,
             )
+            if recovery.source == "legacy-runtime":
+                configured_env_keys = list(
+                    dict.fromkeys(
+                        [
+                            *mcp_auth_environment_keys(recovered_draft),
+                            *configured_env_keys,
+                        ]
+                    )
+                )
             runtime_payload = {
                 **runtime_payload,
                 "configuredEnvKeys": configured_env_keys,

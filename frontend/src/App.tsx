@@ -2083,6 +2083,7 @@ export default function App() {
     etag?: string;
     editMode?: "source-preserving" | "regenerate";
     configuredMcpEnvKeys?: string[];
+    configuredRuntimeEnvKeys?: string[];
   } | null>(null);
   const [newRuntimeRegion, setNewRuntimeRegion] = useState<string>(
     defaultCloudRegion(cloudProvider),
@@ -6966,6 +6967,10 @@ export default function App() {
                   const runtimeModel = modelConfigurationFromRuntime(
                     runtimeAgent.model,
                   );
+                  const feishuConfigured =
+                    runtimeDraft.deployment?.feishuEnabled === true ||
+                    (runtimeEnv.has("FEISHU_APP_ID") &&
+                      runtimeEnv.has("FEISHU_APP_SECRET"));
                   const hydratedDraft = hydrateA2aRegistryFromRuntime(
                     hydrateRuntimeModelSelection(
                       {
@@ -6981,6 +6986,7 @@ export default function App() {
                           ...(runtimeDraft.deployment ?? {
                             feishuEnabled: false,
                           }),
+                          feishuEnabled: feishuConfigured,
                           network: capability.runtime.network,
                           envValues: runtimeEnvValues,
                         },
@@ -7037,6 +7043,8 @@ export default function App() {
                         ? "source-preserving"
                         : "regenerate",
                     configuredMcpEnvKeys: configuredMcpEnvKeys(classifiedDraft),
+                    configuredRuntimeEnvKeys:
+                      capability.runtime.configuredEnvKeys,
                   });
                   setCreateView("custom");
                   setError("");

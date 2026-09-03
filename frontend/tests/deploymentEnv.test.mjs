@@ -790,18 +790,36 @@ test("shows configured database and Feishu values in the runtime env summary", (
   ]);
 });
 
-test("keeps the generated project stable when only deployment channel settings change", () => {
+test("regenerates the project when deployment channel settings change", () => {
   assert.match(
     customCreateSource,
-    /onFeishuEnabledChange=\{\(feishuEnabled\) => \{[\s\S]*?setDraft\(nextDraft\);/,
+    /onFeishuEnabledChange=\{async \(feishuEnabled\) => \{[\s\S]*?generateAgentProject\([\s\S]*?codegenDraft\(nextDraft\)[\s\S]*?setDraft\(nextDraft\);[\s\S]*?setProject\(generated\);/,
   );
-  assert.doesNotMatch(customCreateSource, /buildPreviewProject/);
   assert.match(
     customCreateSource,
     /const releaseDraft = releaseVariant[\s\S]*?releaseDraftFromDebugVariant\(providerDraft, releaseVariant\)[\s\S]*?generateAgentProject\(codegenDraft\(releaseDraft\)\)/,
   );
   assert.match(projectPreviewSource, /await onFeishuEnabledChange\(!feishuEnabled\)/);
   assert.match(projectPreviewSource, /deploying \|\| feishuUpdating/);
+});
+
+test("restores Feishu credentials into Runtime updates and reuses opaque values", () => {
+  assert.match(
+    projectPreviewSource,
+    /value=\{deploymentEnvValues\[env\.key\] \?\? ""\}/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /configuredRuntimeEnvKeySet\.has\(env\.key\)[\s\S]*?已配置，留空沿用/,
+  );
+  assert.match(
+    customCreateSource,
+    /deploymentEnvValues=\{\{[\s\S]*?\.\.\.providerDraft\.deployment\?\.envValues/,
+  );
+  assert.match(
+    customCreateSource,
+    /removedConfiguredMcpEnvKeys\([\s\S]*?FEISHU_APP_ID[\s\S]*?FEISHU_APP_SECRET/,
+  );
 });
 
 test("normalizes generated project drafts to the selected cloud provider", () => {

@@ -64,7 +64,6 @@ import {
 } from "../create/veadkCatalog";
 import {
   firstInvalidRuntimeEnv,
-  firstMissingRuntimeEnv,
   missingRuntimeEnvs,
   runtimeEnvDisplayRows,
   runtimeEnvJsonError,
@@ -695,6 +694,8 @@ export interface ProjectPreviewProps {
   feishuEnabled?: boolean;
   /** Update the Feishu channel selection from the deploy page. */
   onFeishuEnabledChange?: (enabled: boolean) => void | Promise<void>;
+  /** Runtime keys whose values remain configured but are not returned to the browser. */
+  configuredRuntimeEnvKeys?: readonly string[];
   /** Environment variables required by the selected memory/knowledge backends. */
   deploymentEnv?: RuntimeEnvSpec[];
   /** Required deployment secrets kept only in this mounted publish page. */
@@ -840,6 +841,7 @@ export function ProjectPreview({
   onDeploymentTaskChange,
   feishuEnabled = false,
   onFeishuEnabledChange,
+  configuredRuntimeEnvKeys = [],
   deploymentEnv = [],
   requiredSecretEnv = [],
   requiredSecretEnvValues,
@@ -864,6 +866,10 @@ export function ProjectPreview({
 }: ProjectPreviewProps) {
   const editable = typeof onChange === "function";
   const isRuntimeUpdate = Boolean(deploymentRuntimeId);
+  const configuredRuntimeEnvKeySet = useMemo(
+    () => new Set(configuredRuntimeEnvKeys),
+    [configuredRuntimeEnvKeys],
+  );
   const inMemorySession = usesInMemorySession(agentDraft);
   const runtimeNameSource =
     agentName?.trim() || agentDraft?.name || project.name;
@@ -1505,9 +1511,10 @@ export function ProjectPreview({
       return;
     }
     if (feishuEnabled) {
-      const missingFeishuEnv = firstMissingRuntimeEnv(
-        FEISHU_ENV,
-        deploymentEnvValues,
+      const missingFeishuEnv = FEISHU_ENV.find(
+        (env) =>
+          !String(deploymentEnvValues[env.key] ?? "").trim() &&
+          !configuredRuntimeEnvKeySet.has(env.key),
       );
       if (missingFeishuEnv) {
         const env = FEISHU_ENV.find((item) => item.key === missingFeishuEnv.key);
@@ -2628,7 +2635,11 @@ export function ProjectPreview({
                                 env.key.includes("SECRET") ? "password" : "text"
                               }
                               value={deploymentEnvValues[env.key] ?? ""}
-                              placeholder={env.placeholder}
+                              placeholder={
+                                configuredRuntimeEnvKeySet.has(env.key)
+                                  ? "已配置，留空沿用"
+                                  : env.placeholder
+                              }
                               tabIndex={feishuEnabled ? 0 : -1}
                               disabled={
                                 !feishuEnabled ||

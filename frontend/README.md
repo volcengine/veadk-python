@@ -206,7 +206,12 @@ server that `veadk frontend` launches — no separate backend.
   input. Changing an authenticated MCP
   URL requires the user to enter a replacement Token, explicitly confirm reuse
   of the previous credential, or mark the new endpoint as unauthenticated;
-  Studio never silently replays a credential to a different endpoint. Long descriptions and prompts
+  Studio never silently replays a credential to a different endpoint. Feishu
+  App ID and App Secret are restored from the selected Runtime into the masked
+  update form and remain in the signed-in user's browser draft so a resumed
+  draft shows the same editable values. Disabling Feishu during an update
+  removes both Runtime variables; leaving it enabled preserves or replaces
+  them with the submitted values. Long descriptions and prompts
   scroll within bounded editors, while the sidebar stays pinned to the
   viewport. On narrow desktop windows, the structure, configuration, and debug
   panels stack vertically instead of squeezing the form. The deployment page

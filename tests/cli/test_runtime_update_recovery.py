@@ -31,6 +31,8 @@ def test_runtime_environment_exposes_only_allowlisted_public_values() -> None:
             ("MODEL_AGENT_API_BASE", "https://model.example.com/v1"),
             ("MODEL_AGENT_API_KEY_ID", "key-id"),
             ("MODEL_AGENT_API_KEY_NAME", "key-name"),
+            ("FEISHU_APP_ID", "cli_public_app_id"),
+            ("FEISHU_APP_SECRET", "feishu-secret"),
             ("MODEL_AGENT_API_KEY", "model-secret"),
             ("MCP_API_KEY", "mcp-secret"),
             (
@@ -51,6 +53,8 @@ def test_runtime_environment_exposes_only_allowlisted_public_values() -> None:
         },
         {"key": "MODEL_AGENT_API_KEY_ID", "value": "key-id"},
         {"key": "MODEL_AGENT_API_KEY_NAME", "value": "key-name"},
+        {"key": "FEISHU_APP_ID", "value": "cli_public_app_id"},
+        {"key": "FEISHU_APP_SECRET", "value": "feishu-secret"},
     )
     assert set(view.configured_env_keys) == {
         "MODEL_AGENT_API_KEY",
@@ -59,6 +63,7 @@ def test_runtime_environment_exposes_only_allowlisted_public_values() -> None:
         "CUSTOM_TOKEN",
         "ARBITRARY_PUBLIC_LOOKING_VALUE",
     }
+    assert {"key": "FEISHU_APP_SECRET", "value": "feishu-secret"} in (view.public_envs)
     serialized = json.dumps(view.as_payload())
     for protected in (
         "model-secret",

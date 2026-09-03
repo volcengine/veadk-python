@@ -277,7 +277,7 @@ test("quick Runtime recovery restores every field shown by the three-step editor
         longTermMemoryIndex: "memory-index-1",
         autoSaveSession: true,
         deployment: {
-          feishuEnabled: false,
+          feishuEnabled: true,
           runtimeName: "research-assistant-runtime",
           runtimeNameCustomized: true,
           network: {
@@ -288,7 +288,11 @@ test("quick Runtime recovery restores every field shown by the three-step editor
           },
           modelApiKeyId: "api-key-1",
           modelApiKeyName: "Production Ark key",
-          envValues: { REPORT_FORMAT: "markdown" },
+          envValues: {
+            REPORT_FORMAT: "markdown",
+            FEISHU_APP_ID: "cli_test",
+            FEISHU_APP_SECRET: "feishu-secret",
+          },
         },
       },
     },
@@ -345,7 +349,7 @@ test("quick Runtime recovery restores every field shown by the three-step editor
       longTermMemoryIndex: "memory-index-1",
       autoSaveSession: true,
       deployment: {
-        feishuEnabled: false,
+        feishuEnabled: true,
         runtimeName: "research-assistant-runtime",
         runtimeNameCustomized: true,
         network: {
@@ -356,7 +360,11 @@ test("quick Runtime recovery restores every field shown by the three-step editor
         },
         modelApiKeyId: "api-key-1",
         modelApiKeyName: "Production Ark key",
-        envValues: { REPORT_FORMAT: "markdown" },
+        envValues: {
+          REPORT_FORMAT: "markdown",
+          FEISHU_APP_ID: "cli_test",
+          FEISHU_APP_SECRET: "feishu-secret",
+        },
       },
     },
   );
