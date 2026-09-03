@@ -142,6 +142,8 @@ class FeishuBotSetupService:
 
 
 def create_feishu_bot_setup_service() -> FeishuBotSetupService:
-    """Create the service without inventing a vendor authorization flow."""
+    """Create the service backed by Feishu's official app-registration flow."""
 
-    return FeishuBotSetupService(None)
+    from .feishu_app_registration import FeishuAppRegistrationProvider
+
+    return FeishuBotSetupService(FeishuAppRegistrationProvider())

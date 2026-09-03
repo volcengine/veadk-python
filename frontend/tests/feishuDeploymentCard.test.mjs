@@ -52,11 +52,11 @@ test("renders the card in the real final deployment step", () => {
   assert.match(projectPreviewSource, /<FeishuDeploymentCard/);
   assert.match(
     projectPreviewSource,
-    /onDeploymentEnvChange\?\.\("FEISHU_APP_ID", appId\)/,
+    /onFeishuCredentialsChange\?\.\(appId, appSecret\)/,
   );
-  assert.match(
+  assert.doesNotMatch(
     projectPreviewSource,
-    /onDeploymentEnvChange\?\.\("FEISHU_APP_SECRET", appSecret\)/,
+    /onDeploymentEnvChange\?\.\("FEISHU_APP_(?:ID|SECRET)",/,
   );
   assert.doesNotMatch(projectPreviewSource, /创建机器人 Runtime/);
 });

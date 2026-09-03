@@ -277,10 +277,11 @@ stay aligned before deployment.
 
 The deployment card supports automatic and manual credential setup without
 changing its footprint in the publish form. Automatic setup uses the reusable
-`frontend.server.feishu_bot_setup` provider interface and keeps App Secret
-values in the mounted Studio process. No mock provider or synthetic credentials
-are shipped. Until a production provider is configured, Studio returns an
-explicit unavailable response and keeps manual credential entry available.
+`frontend.server.feishu_bot_setup` provider interface and Feishu's official
+PersonalAgent app-registration flow. Credentials are returned only after the
+user confirms the QR authorization; no mock provider or synthetic credentials
+are shipped. The App Secret remains process-local until Studio returns it to
+the authorized browser for credential autofill.
 
 Insight Sandbox requires server-side `VOLCENGINE_ACCESS_KEY`,
 `VOLCENGINE_SECRET_KEY`, `MODEL_AGENT_API_KEY`, and `MODEL_AGENT_NAME` values.

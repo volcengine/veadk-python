@@ -24,6 +24,7 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from .service import (
+    FeishuBotSetupError,
     FeishuBotSetupNotFound,
     FeishuBotSetupService,
     FeishuBotSetupUnavailable,
@@ -46,6 +47,8 @@ def mount_feishu_bot_setup_routes(
             raise HTTPException(status_code=503, detail=str(error)) from error
         except FeishuBotSetupNotFound as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
+        except FeishuBotSetupError as error:
+            raise HTTPException(status_code=502, detail=str(error)) from error
 
     @app.post("/web/feishu-bot-setup/sessions")
     async def create_session(

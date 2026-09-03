@@ -826,6 +826,14 @@ test("restores Feishu credentials into Runtime updates and reuses opaque values"
   );
   assert.match(
     customCreateSource,
+    /const patchDeploymentEnvValues = \(values: Record<string, string>\)[\s\S]*?envValues: \{[\s\S]*?\.\.\.\(current\.deployment\?\.envValues \?\? \{\}\),[\s\S]*?\.\.\.values/,
+  );
+  assert.match(
+    customCreateSource,
+    /onFeishuCredentialsChange=\{\(appId, appSecret\) =>[\s\S]*?patchDeploymentEnvValues\(\{[\s\S]*?FEISHU_APP_ID: appId,[\s\S]*?FEISHU_APP_SECRET: appSecret/,
+  );
+  assert.match(
+    customCreateSource,
     /removedConfiguredMcpEnvKeys\([\s\S]*?FEISHU_APP_ID[\s\S]*?FEISHU_APP_SECRET/,
   );
 });

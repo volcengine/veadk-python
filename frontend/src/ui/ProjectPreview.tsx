@@ -706,6 +706,8 @@ export interface ProjectPreviewProps {
   /** Deployment-only values entered in each feature's configuration area. */
   deploymentEnvValues?: Record<string, string>;
   onDeploymentEnvChange?: (key: string, value: string) => void;
+  /** Atomically updates the Feishu app credentials returned by automatic setup. */
+  onFeishuCredentialsChange?: (appId: string, appSecret: string) => void;
   /** Runtime network settings edited on the deploy page. */
   network?: NetworkConfig;
   onNetworkChange?: (network: NetworkConfig | undefined) => void;
@@ -848,6 +850,7 @@ export function ProjectPreview({
   onRequiredSecretEnvChange,
   deploymentEnvValues = {},
   onDeploymentEnvChange,
+  onFeishuCredentialsChange,
   network,
   onNetworkChange,
   cloudProvider = "volcengine",
@@ -2578,7 +2581,7 @@ export function ProjectPreview({
                     deploying ||
                     runtimeNameChecking ||
                     !onFeishuEnabledChange ||
-                    !onDeploymentEnvChange
+                    !onFeishuCredentialsChange
                   }
                   agentName={agentName || project.name}
                   appId={deploymentEnvValues.FEISHU_APP_ID ?? ""}
@@ -2591,8 +2594,7 @@ export function ProjectPreview({
                   )}
                   onToggle={handleFeishuToggle}
                   onCredentialsChange={(appId, appSecret) => {
-                    onDeploymentEnvChange?.("FEISHU_APP_ID", appId);
-                    onDeploymentEnvChange?.("FEISHU_APP_SECRET", appSecret);
+                    onFeishuCredentialsChange?.(appId, appSecret);
                   }}
                 />
               </section>
