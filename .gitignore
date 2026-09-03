@@ -99,7 +99,8 @@ ipython_config.py
 #   Similar to Pipfile.lock, it is generally recommended to include uv.lock in version control.
 #   This is especially recommended for binary packages to ensure reproducibility, and is more
 #   commonly ignored for libraries.
-uv.lock
+# VeADK also publishes Studio as a locked offline application. Keep the root
+# uv.lock tracked so a release built from an exact Git SHA is reproducible.
 
 # poetry
 #   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
