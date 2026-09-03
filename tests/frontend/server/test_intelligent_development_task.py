@@ -995,7 +995,10 @@ def test_delivery_worker_packages_final_project_and_excludes_local_state(
             ),
             "weather.py": b"root_agent = object()\n",
             ".env.example": b"MODEL_API_KEY=replace-me\n",
+            ".agentkit/agentkit.yaml": b"name: weather\n",
+            ".agentkit/Dockerfile": b"FROM python:3.12-slim\n",
             ".agentkit/artifacts/build.log": b"cloud build evidence\n",
+            ".agentkit/migrate/session.json": b"{}\n",
             ".studio-intelligent-development-result.json": b"{}",
         },
     )
@@ -1004,6 +1007,8 @@ def test_delivery_worker_packages_final_project_and_excludes_local_state(
     artifact = Path(descriptor["artifactPath"])
     with zipfile.ZipFile(artifact) as archive:
         assert sorted(archive.namelist()) == [
+            ".agentkit/Dockerfile",
+            ".agentkit/agentkit.yaml",
             ".env.example",
             "agentkit.yaml",
             "weather.py",
@@ -1018,6 +1023,7 @@ def test_delivery_worker_packages_migrated_project_without_root_manifest(
         files={
             "main.py": b"root_agent = object()\n",
             ".agentkit/agentkit.yaml": b"name: legacy\n",
+            ".agentkit/Dockerfile": b"FROM python:3.12-slim\n",
         },
         trusted_metadata=("travel_planner", "main.py"),
     )
@@ -1027,7 +1033,11 @@ def test_delivery_worker_packages_migrated_project_without_root_manifest(
     assert descriptor["agentName"] == "travel_planner"
     assert descriptor["entryPoint"] == "main.py"
     with zipfile.ZipFile(descriptor["artifactPath"]) as archive:
-        assert archive.namelist() == ["main.py"]
+        assert sorted(archive.namelist()) == [
+            ".agentkit/Dockerfile",
+            ".agentkit/agentkit.yaml",
+            "main.py",
+        ]
 
 
 def test_delivery_worker_uses_trusted_entry_point_when_manifest_target_is_absent(
