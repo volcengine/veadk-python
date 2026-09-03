@@ -14,16 +14,19 @@
 
 import asyncio
 import contextvars
-from contextlib import asynccontextmanager
 import functools
 import sys
+from contextlib import asynccontextmanager
 from typing import Callable
+
+from packaging.version import Version
 
 from veadk.tracing.telemetry.telemetry import (
     trace_call_llm,
     trace_send_data,
     trace_tool_call,
 )
+from veadk.utils.adk_compat import get_adk_version
 from veadk.utils.logger import get_logger
 from veadk.version import VERSION
 
@@ -33,6 +36,29 @@ _SUPPRESS_LANGUAGE_MODEL_INSTRUMENTATION = "suppress_language_model_instrumentat
 _PARALLEL_RUN_CODE_CALL_COUNT = contextvars.ContextVar(
     "veadk_parallel_run_code_call_count", default=1
 )
+
+
+def patch_adk_workflow_agent_mode() -> None:
+    """Backport ADK 2.2's safe peer-transfer check to ADK 2.0 and 2.1.
+
+    These releases read ``peer_agent.mode`` unconditionally while collecting
+    an LLM agent's peer transfer targets. Workflow agents do not define that
+    field, so mixed LLM/workflow trees fail before the delegated LLM runs. ADK
+    2.2 fixed the lookup with ``hasattr``; exposing ``None`` on ``BaseAgent``
+    preserves its target-selection semantics for built-in workflows and
+    custom agents without replacing ADK internals.
+    """
+    adk_version = get_adk_version()
+    if not Version("2.0.0") <= adk_version < Version("2.2.0"):
+        return
+
+    try:
+        from google.adk.agents import BaseAgent
+
+        if not hasattr(BaseAgent, "mode"):
+            BaseAgent.mode = None
+    except (ImportError, AttributeError) as error:
+        logger.debug(f"Skip ADK workflow-agent mode patch: {error}")
 
 
 def _adk_tool_name(tool) -> str:
@@ -79,6 +105,8 @@ def patch_asyncio():
     - https://github.com/google/adk-python/issues/1429
     - https://github.com/google/adk-python/pull/1420
     """
+    patch_adk_workflow_agent_mode()
+
     original_del = asyncio.base_subprocess.BaseSubprocessTransport.__del__
 
     def patched_del(self):
