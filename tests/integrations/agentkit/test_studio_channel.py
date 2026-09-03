@@ -123,6 +123,82 @@ def test_remote_tool_exposes_manifest_schema_and_dispatches() -> None:
     assert calls[0]["function_call_id"] == "adk-function-call-1"
 
 
+def test_successful_codex_tool_skips_outer_model_summarization() -> None:
+    class Dispatcher:
+        async def call_tool(self, **kwargs: Any) -> Any:
+            del kwargs
+            return {
+                "ok": True,
+                "message": "Codex final answer",
+                "codex_activity": {"events": [{"status": "completed"}]},
+            }
+
+    tool = StudioRemoteTool(
+        manifest=StudioToolManifest.model_validate(
+            _manifest("delegate_to_codex_sandbox")
+        ),
+        dispatcher=Dispatcher(),
+        run_id="run-1",
+        scope_id="scope-1",
+        catalog_revision="revision-1",
+    )
+    actions = SimpleNamespace(skip_summarization=None)
+
+    result = asyncio.run(
+        tool.run_async(
+            args={"task": "review"},
+            tool_context=cast(
+                ToolContext,
+                SimpleNamespace(
+                    function_call_id="adk-function-call-1",
+                    actions=actions,
+                ),
+            ),
+        )
+    )
+
+    assert result["message"] == "Codex final answer"
+    assert actions.skip_summarization is True
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "result"),
+    [
+        ("delegate_to_codex_sandbox", {"ok": False, "error": "busy"}),
+        ("studio_multiply", {"ok": True, "message": "42"}),
+    ],
+)
+def test_remote_tool_keeps_outer_summarization_for_nonfinal_results(
+    tool_name: str,
+    result: dict[str, Any],
+) -> None:
+    class Dispatcher:
+        async def call_tool(self, **kwargs: Any) -> Any:
+            del kwargs
+            return result
+
+    tool = StudioRemoteTool(
+        manifest=StudioToolManifest.model_validate(_manifest(tool_name)),
+        dispatcher=Dispatcher(),
+        run_id="run-1",
+        scope_id="scope-1",
+        catalog_revision="revision-1",
+    )
+    actions = SimpleNamespace(skip_summarization=None)
+
+    asyncio.run(
+        tool.run_async(
+            args={},
+            tool_context=cast(
+                ToolContext,
+                SimpleNamespace(function_call_id="call-1", actions=actions),
+            ),
+        )
+    )
+
+    assert actions.skip_summarization is None
+
+
 @pytest.mark.asyncio
 async def test_channel_preserves_bounded_content_for_failed_tool_result() -> None:
     sent: list[dict[str, Any]] = []
@@ -174,6 +250,46 @@ async def test_channel_preserves_bounded_content_for_failed_tool_result() -> Non
         "codex_activity": {"events": [{"status": "failed"}]},
         "status": "error",
         "error": "Codex Sandbox 连接中断",
+    }
+
+
+@pytest.mark.asyncio
+async def test_channel_returns_actionable_codex_timeout_without_retrying() -> None:
+    sent: list[dict[str, Any]] = []
+
+    async def sender(message: dict[str, Any]) -> None:
+        sent.append(message)
+
+    async def run_handler(
+        payload: dict[str, Any],
+    ) -> AsyncIterator[dict[str, Any]]:
+        del payload
+        if False:
+            yield {}
+
+    connection = _StudioChannelConnection(
+        sender=sender,
+        run_handler=run_handler,
+        reserved_tool_names=set(),
+    )
+    manifest = _manifest("delegate_to_codex_sandbox")
+    manifest["timeout_ms"] = 1
+
+    result = await connection.call_tool(
+        run_id="run-1",
+        scope_id="scope-1",
+        catalog_revision="revision-1",
+        manifest=StudioToolManifest.model_validate(manifest),
+        arguments={"task": "long review"},
+    )
+
+    assert [message["type"] for message in sent] == ["tool.call", "tool.cancel"]
+    assert result == {
+        "status": "timeout",
+        "error": (
+            "Codex Sandbox 长任务超过 30 分钟，已停止执行；"
+            "请确认当前状态后再决定是否重新提交。"
+        ),
     }
 
 

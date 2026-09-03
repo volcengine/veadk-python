@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { createServer } from "vite";
 
 const source = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 
@@ -32,6 +33,129 @@ test("environment mounts preserve one attachment id and renew it after remount",
   );
 });
 
+test("prepare validates mount count, order, identities, and network failures", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWindow = globalThis.window;
+  const originalSessionStorage = globalThis.sessionStorage;
+  const originalLocalStorage = globalThis.localStorage;
+  const values = new Map();
+  const storage = {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, String(value)),
+    removeItem: (key) => values.delete(key),
+  };
+  globalThis.window = {
+    location: { search: "", pathname: "/", hash: "", origin: "http://localhost" },
+    history: { replaceState() {} },
+  };
+  globalThis.sessionStorage = storage;
+  globalThis.localStorage = storage;
+  const server = await createServer({
+    appType: "custom",
+    logLevel: "silent",
+    optimizeDeps: { noDiscovery: true },
+    server: { middlewareMode: true },
+  });
+  const requested = [
+    {
+      environment_id: "env-a",
+      environment_version_id: "version-a",
+      mount_instance_id: "mount-a",
+    },
+    {
+      environment_id: "env-b",
+      environment_version_id: "version-b",
+      mount_instance_id: "mount-b",
+    },
+  ];
+  const prepared = requested.map((mount, index) => ({
+    ...mount,
+    sandbox_session_id: `sandbox-${index}`,
+  }));
+  try {
+    const client = await server.ssrLoadModule("/src/adk/client.ts");
+    const calls = [];
+    globalThis.fetch = async (url, init) => {
+      calls.push({ url: String(url), init });
+      return Response.json({ mounts: prepared });
+    };
+    assert.deepEqual(
+      await client.prepareSessionEnvironmentMounts({
+        runtimeId: "local",
+        appName: "review_agent",
+        userId: "user-1",
+        sessionId: "session-1",
+        environmentMounts: requested,
+      }),
+      prepared,
+    );
+    assert.equal(calls[0].url, "/web/v3/session-environment-mounts/prepare");
+    assert.equal(calls[0].init.method, "POST");
+    assert.deepEqual(JSON.parse(calls[0].init.body).environment_mounts, requested);
+
+    globalThis.fetch = async () => Response.json({ mounts: prepared.slice(0, 1) });
+    await assert.rejects(
+      client.prepareSessionEnvironmentMounts({
+        runtimeId: "local",
+        appName: "review_agent",
+        userId: "user-1",
+        sessionId: "session-1",
+        environmentMounts: requested,
+      }),
+      /挂载环境响应与请求不一致/,
+    );
+
+    globalThis.fetch = async () => Response.json({ mounts: [...prepared].reverse() });
+    await assert.rejects(
+      client.prepareSessionEnvironmentMounts({
+        runtimeId: "local",
+        appName: "review_agent",
+        userId: "user-1",
+        sessionId: "session-1",
+        environmentMounts: requested,
+      }),
+      /挂载环境响应与请求不一致/,
+    );
+
+    globalThis.fetch = async () => Response.json({
+      mounts: [
+        { ...prepared[0], mount_instance_id: "unexpected-mount" },
+        prepared[1],
+      ],
+    });
+    await assert.rejects(
+      client.prepareSessionEnvironmentMounts({
+        runtimeId: "local",
+        appName: "review_agent",
+        userId: "user-1",
+        sessionId: "session-1",
+        environmentMounts: requested,
+      }),
+      /挂载环境响应与请求不一致/,
+    );
+
+    globalThis.fetch = async () => {
+      throw new TypeError("Failed to fetch");
+    };
+    await assert.rejects(
+      client.prepareSessionEnvironmentMounts({
+        runtimeId: "local",
+        appName: "review_agent",
+        userId: "user-1",
+        sessionId: "session-1",
+        environmentMounts: requested,
+      }),
+      /无法连接 Studio 服务，环境挂载未完成。请检查网络后重试。/,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.window = originalWindow;
+    globalThis.sessionStorage = originalSessionStorage;
+    globalThis.localStorage = originalLocalStorage;
+    await server.close();
+  }
+});
+
 test("Studio offers tool-ready AIO and Codex Sandbox environment versions", () => {
   assert.match(appSource, /\["aio-sandbox", "codex-sandbox"\]\.includes\(environment\.baseEnvironment\)/);
   assert.match(appSource, /environment\.latestVersion\?\.status === "available"/);
@@ -61,7 +185,8 @@ test("environments are mounted dynamically after a Session exists", () => {
   assert.doesNotMatch(appSource, /draftEnvironmentMounts/);
   assert.match(appSource, /environmentMountsBySession/);
   assert.match(appSource, /const environmentMounts = createsSession\s*\? \[\]/);
-  assert.match(appSource, /if \(!sessionId\) return;/);
+  assert.match(appSource, /if \(!sessionId\) throw new Error\("当前会话不存在，无法挂载环境。"\)/);
+  assert.match(appSource, /if \(!valid\) throw new Error\("所选环境已失效，请刷新后重新选择。"\)/);
   assert.match(appSource, /setEnvironmentMountsBySession\(\(current\) => \(\{/);
   assert.match(appSource, /ENVIRONMENT_STUDIO_TOOL_IDS = \[[\s\S]*?"list_envs"[\s\S]*?"get_env_manifest"[\s\S]*?"execute_in_sandbox"[\s\S]*?"delegate_to_codex_sandbox"/);
   assert.match(appSource, /selections\.length > 0[\s\S]*?ENVIRONMENT_STUDIO_TOOL_IDS[\s\S]*?selectedIds\.filter/);
@@ -121,7 +246,15 @@ test("environment picker stays in Agent info below skills", () => {
   assert.match(pickerSource, /workspaceEnvironmentMounts/);
   assert.match(pickerSource, /已由工作区/);
   assert.match(pickerSource, /disabled=\{covered\}/);
-  assert.match(pickerSource, /onConfirm\(environments\.flatMap[\s\S]*?\[\.\.\.draftWorkspaceIds\]/);
+  assert.match(pickerSource, /const nextMounts = environments\.flatMap/);
+  assert.match(pickerSource, /await onConfirm\(nextMounts, \[\.\.\.draftWorkspaceIds\]\)/);
+  assert.match(pickerSource, /await onConfirm[\s\S]*?onClose\(\)[\s\S]*?catch \(cause\)/);
+  assert.match(pickerSource, /submitting \? "正在挂载…" : "确认添加"/);
+  assert.match(pickerSource, /event\.key === "Escape" && !submitting/);
+  assert.match(pickerSource, /studio-tool-dialog-scrim[\s\S]*?disabled=\{submitting\}/);
+  assert.match(pickerSource, /studio-tool-dialog-close[\s\S]*?disabled=\{submitting\}/);
+  assert.match(pickerSource, /const commitChange = async[\s\S]*?await onChange[\s\S]*?catch \(cause\)/);
+  assert.match(pickerSource, /changeError && \([\s\S]*?role="alert"/);
   assert.doesNotMatch(appSource, /<SessionEnvironmentPicker/);
   const homepagePanelStart = appSource.indexOf("turns.length === 0 ?");
   const transcriptStart = appSource.indexOf('className={`transcript', homepagePanelStart);

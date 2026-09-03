@@ -63,12 +63,16 @@ _CODEX_PERMISSIONS = CodexPermissionSettings(
 )
 _CONNECT_RETRY_DELAYS_SECONDS = (1.0, 2.0, 4.0)
 _READINESS_TIMEOUT_SECONDS = 5.0
-_MAX_RESULT_CHARACTERS = 100_000
+_CODEX_TOOL_TIMEOUT_MS = 30 * 60 * 1_000
+_MAX_RESULT_CHARACTERS = 32_768
+_MAX_RESULT_BYTES = 96 * 1024
 _MAX_PROGRESS_BYTES = 64 * 1024
 _MAX_PROGRESS_STRING_CHARACTERS = 16_000
 _MAX_PROGRESS_COLLECTION_ITEMS = 100
-_MAX_ACTIVITY_BYTES = 128 * 1024
+_MAX_ACTIVITY_BYTES = 16 * 1024
 _MAX_ACTIVITY_EVENTS = 100
+_MAX_ACTIVITY_STRING_CHARACTERS = 4_000
+_MAX_ACTIVITY_COLLECTION_ITEMS = 30
 _SENSITIVE_KEY_RE = re.compile(
     r"(?i)(?:api[_-]?key|access[_-]?key|secret|token|authorization|password)"
 )
@@ -147,8 +151,29 @@ class CodexSandboxDelegate:
         target = await self._target_resolver.resolve(mount, context)
         prompt = _delegated_prompt(mount, task)
         text_parts: list[str] = []
+        final_text = ""
         activity_events: list[dict[str, Any]] = []
         text_event_id = f"assistant:{context.tool_request_id or context.run_id}"
+
+        existing = await self._connection(target, mount, context)
+        if existing.lock.locked():
+            failure = await _report_failure(
+                context,
+                mount,
+                "Codex Sandbox 正在执行上一项任务",
+            )
+            _append_activity_event(activity_events, failure)
+            raise StudioToolRuntimeError(
+                "Codex Sandbox 正忙，请等待当前任务完成；不要重复提交同一任务。",
+                content=_activity_result(
+                    mount,
+                    context,
+                    activity_events,
+                    target=target,
+                    thread_id=existing.connection.thread_id,
+                    ok=False,
+                ),
+            )
 
         try:
             entry = await self._ready_connection(target, mount, context)
@@ -187,13 +212,16 @@ class CodexSandboxDelegate:
                     prompt,
                     permissions=_CODEX_PERMISSIONS,
                 ):
-                    if (
-                        event.kind == "text"
-                        and event.text
-                        and not _append_text_part(text_parts, event.text)
-                    ):
+                    if event.kind == "text":
+                        if event.text:
+                            _append_text_part(text_parts, event.text)
+                        # The activity card describes execution. The authoritative
+                        # assistant answer is emitted once as ordinary message text
+                        # after the function response, not duplicated in the card.
                         continue
                     if event.kind in {"assistant_final", "final"}:
+                        if event.text:
+                            final_text = event.text
                         continue
                     _append_activity_event(
                         activity_events,
@@ -269,7 +297,7 @@ class CodexSandboxDelegate:
                     },
                 ),
             )
-        message = _redact_text("".join(text_parts).strip())
+        message = _redact_text((final_text or "".join(text_parts)).strip())
         return {
             "ok": True,
             "environment_id": mount.environment_id,
@@ -283,11 +311,7 @@ class CodexSandboxDelegate:
                 target=target,
                 thread_id=entry.connection.thread_id,
             ),
-            "message": (
-                message[-_MAX_RESULT_CHARACTERS:]
-                if message
-                else "Codex Sandbox 已完成任务。"
-            ),
+            "message": _bounded_result_message(message),
         }
 
     async def _ready_connection(
@@ -428,6 +452,14 @@ def register_codex_sandbox_tool(
                 "requirements; Codex will inspect the environment and invoke its "
                 "installed CLIs end to end. This is execution within an already "
                 "mounted environment, not creation of a new agent."
+                " Preserve the user's requested scope instead of adding new length "
+                "or format requirements. The inner Codex final response must contain "
+                "the user-visible deliverable; a Sandbox-local file path alone is "
+                "not a deliverable unless the user explicitly requested a file."
+                " Call this tool at most once per outer user turn. If it reports "
+                "busy or timeout, surface that state and do not retry automatically."
+                " Treat a successful delegation as the final tool call of the outer "
+                "turn because its message is returned directly to the user."
             ),
             input_schema={
                 "type": "object",
@@ -456,10 +488,10 @@ def register_codex_sandbox_tool(
             },
             executor=execute,
             executor_revision="codex-app-server-v1",
-            # Keep the catalog compatible with runtimes that still enforce the
-            # original two-minute Studio tool protocol ceiling. The app-server
-            # turn itself retains its independent inactivity timeout.
-            timeout_ms=120_000,
+            # Codex performs complete repository workflows. Keep this absolute
+            # channel deadline separate from ordinary tools; the app-server turn
+            # still enforces its shorter inactivity timeout and interrupts on it.
+            timeout_ms=_CODEX_TOOL_TIMEOUT_MS,
             idempotent=False,
             risk_level="high",
             requires_context=True,
@@ -526,6 +558,19 @@ def _delegated_prompt(mount: SessionEnvironmentMount, task: str) -> str:
                 "as practical, avoid repeating successful checks, and return a "
                 "concise final result as soon as verification is complete."
             ),
+            (
+                "Put the complete user-visible deliverable in your final response. "
+                "Do not only save it to a Sandbox-local file or return a file path "
+                "unless the task explicitly requests a file."
+            ),
+            (
+                "Unless the user explicitly requests a file, do not create a file "
+                "for prose-only deliverables. Return exactly one final answer, do "
+                "not emit the full deliverable as an intermediate update, and do "
+                "not repeat it after the final answer. When no length is specified, "
+                "keep the final answer complete but concise enough to return "
+                "directly to the user."
+            ),
             "Do not ask the outer agent to run commands that you can run here.",
             "",
             "Task from the outer agent:",
@@ -579,6 +624,21 @@ def _append_text_part(parts: list[str], value: str) -> bool:
     return True
 
 
+def _bounded_result_message(value: str) -> str:
+    """Keep complete ordinary results and preserve the start of oversized ones."""
+
+    if not value:
+        return "Codex Sandbox 已完成任务。"
+    encoded = value.encode("utf-8")
+    if len(value) <= _MAX_RESULT_CHARACTERS and len(encoded) <= _MAX_RESULT_BYTES:
+        return value
+    marker = "\n\n…内容过长，已截断"
+    marker_bytes = marker.encode("utf-8")
+    candidate = value[:_MAX_RESULT_CHARACTERS].encode("utf-8")
+    available = _MAX_RESULT_BYTES - len(marker_bytes)
+    return candidate[:available].decode("utf-8", errors="ignore") + marker
+
+
 async def _report(
     context: StudioToolExecutionContext,
     mount: SessionEnvironmentMount,
@@ -617,11 +677,45 @@ def _append_activity_event(
     events: list[dict[str, Any]],
     event: dict[str, Any],
 ) -> None:
-    events.append(event)
+    compact = _safe_activity_value(event)
+    if not isinstance(compact, dict):
+        return
+    events.append(compact)
     while (
         len(events) > _MAX_ACTIVITY_EVENTS or _json_size(events) > _MAX_ACTIVITY_BYTES
     ):
         events.pop(0)
+
+
+def _safe_activity_value(value: Any, *, depth: int = 0) -> Any:
+    """Keep persisted tool responses compact; live progress is sent separately."""
+
+    if depth >= 6:
+        return "[truncated]"
+    if isinstance(value, str):
+        if len(value) <= _MAX_ACTIVITY_STRING_CHARACTERS:
+            return value
+        return value[:_MAX_ACTIVITY_STRING_CHARACTERS] + "…内容已截断"
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, Mapping):
+        result: dict[str, Any] = {}
+        for index, (raw_key, item) in enumerate(value.items()):
+            if index >= _MAX_ACTIVITY_COLLECTION_ITEMS:
+                result["truncated"] = True
+                break
+            key = str(raw_key)[:200]
+            result[key] = _safe_activity_value(item, depth=depth + 1)
+        return result
+    if isinstance(value, (list, tuple)):
+        items = [
+            _safe_activity_value(item, depth=depth + 1)
+            for item in value[:_MAX_ACTIVITY_COLLECTION_ITEMS]
+        ]
+        if len(value) > _MAX_ACTIVITY_COLLECTION_ITEMS:
+            items.append("[truncated]")
+        return items
+    return str(value)[:_MAX_ACTIVITY_STRING_CHARACTERS]
 
 
 def _json_size(value: Any) -> int:

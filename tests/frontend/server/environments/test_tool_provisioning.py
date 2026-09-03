@@ -405,6 +405,36 @@ async def test_provisioner_reuses_matching_tool_for_byteplus() -> None:
     assert updated_envs["PUBLIC_PORT"] == "8080"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider,region",
+    [("volcengine", "cn-beijing"), ("byteplus", "ap-southeast-1")],
+)
+async def test_provisioner_recreates_a_deleted_persisted_tool(
+    provider: str,
+    region: str,
+) -> None:
+    client = _FakeToolsClient(statuses=["Ready"])
+    provisioner = AgentkitEnvironmentToolProvisioner(
+        lambda actual_provider, actual_region: _assert_client_location(
+            client, actual_provider, actual_region, provider, region
+        ),
+        poll_interval_seconds=0,
+    )
+
+    state = await provisioner.ensure_ready(
+        image="registry.example/aio:repaired",
+        provider=provider,
+        region=region,
+        existing_tool_id="tool-deleted",
+    )
+
+    assert state.tool_id == "tool-1"
+    assert state.status == "ready"
+    assert len(client.created) == 1
+    assert client.created[0].image_url == "registry.example/aio:repaired"
+
+
 def _assert_client_location(
     client: Any,
     provider: str,

@@ -39,6 +39,7 @@ import {
   listWorkspaces,
   listModelOptions,
   listSessions,
+  prepareSessionEnvironmentMounts,
   RUN_SSE_INCOMPLETE_RESPONSE_ERROR,
   runSSE,
   refreshAgentFeedbackCases,
@@ -5749,16 +5750,34 @@ export default function App() {
       [activeStudioToolSelectionKey]: next,
     }));
   };
-  const updateSelectedEnvironments = (
+  const updateSelectedEnvironments = async (
     selections: SessionEnvironmentMountSelection[],
     workspaceIds: string[] = [],
-  ) => {
-    if (!sessionId) return;
+  ): Promise<void> => {
+    if (!sessionId) throw new Error("当前会话不存在，无法挂载环境。");
     const valid = selections.every((selection) => sessionEnvironments.some((environment) =>
       environment.id === selection.environment_id &&
       environment.latestVersion?.versionId === selection.environment_version_id
     ));
-    if (!valid) return;
+    if (!valid) throw new Error("所选环境已失效，请刷新后重新选择。");
+    if (selections.length > 0) {
+      if (!studioToolRuntime) {
+        throw new Error("当前 Agent 没有可用的 Sandbox Runtime。");
+      }
+      setSessionEnvironmentsError("");
+      try {
+        await prepareSessionEnvironmentMounts({
+          runtimeId: studioToolRuntime.runtimeId,
+          appName,
+          userId,
+          sessionId,
+          environmentMounts: selections,
+        });
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : "挂载环境失败";
+        throw new Error(message);
+      }
+    }
     setEnvironmentMountsBySession((current) => ({
       ...current,
       [activeStudioToolSelectionKey]: selections,

@@ -219,7 +219,7 @@ test("supports public Git builds with automatic Dockerfile inspection", () => {
   assert.match(environmentSource, /<DeploymentSelect[\s\S]*?ariaLabel="选择 Dockerfile"/);
   assert.match(environmentSource, /Studio 默认镜像仓库/);
   assert.match(environmentSource, /containerRepository: creationMethod === "git"/);
-  assert.match(clientSource, /POST \/web\/environment-repositories\/inspect|"\/web\/environment-repositories\/inspect"/);
+  assert.match(clientSource, /POST \/web\/v3\/environment-repositories\/inspect|"\/web\/v3\/environment-repositories\/inspect"/);
   assert.match(clientSource, /method: "POST"/);
   assert.match(clientSource, /dockerfiles\.every\(\(item\) => typeof item === "string"\)/);
 });
@@ -243,9 +243,9 @@ test("binds an existing image through region-aware CR resource selectors", () =>
 });
 
 test("exports and imports environments with share codes", async () => {
-  assert.match(clientSource, /\/web\/environments\/\$\{encodeURIComponent\(environmentId\)\}\/share-code/);
-  assert.match(clientSource, /"\/web\/environment-share-codes\/inspect"/);
-  assert.match(clientSource, /"\/web\/environment-share-codes\/import"/);
+  assert.match(clientSource, /\/web\/v3\/environments\/\$\{encodeURIComponent\(environmentId\)\}\/share-code/);
+  assert.match(clientSource, /"\/web\/v3\/environment-share-codes\/inspect"/);
+  assert.match(clientSource, /"\/web\/v3\/environment-share-codes\/import"/);
   assert.match(clientSource, /shareCodes/);
   assert.match(clientSource, /status === "created" \|\| candidate\.status === "duplicate" \|\| candidate\.status === "failed"/);
 
@@ -365,8 +365,12 @@ test("persists environments and starts image builds through the Studio API", () 
   assert.match(environmentSource, /重新加载/);
   assert.match(environmentSource, /重新构建/);
   assert.doesNotMatch(environmentSource, /INITIAL_ENVIRONMENTS/);
-  assert.match(clientSource, /\/web\/environments/);
-  assert.match(clientSource, /\/web\/environment-resources/);
+  assert.match(clientSource, /"\/web\/v3\/environments"/);
+  assert.match(clientSource, /\/web\/v3\/environments\/\$\{encodeURIComponent\(environmentId\)\}/);
+  assert.match(clientSource, /\/web\/v3\/environments\/\$\{encodeURIComponent\(environmentId\)\}\/build/);
+  assert.match(clientSource, /"\/web\/v3\/environment-resources"/);
+  assert.doesNotMatch(clientSource, /["`]\/web\/environments/);
+  assert.doesNotMatch(clientSource, /["`]\/web\/environment-(?:repositories|resources|share-codes)/);
 });
 
 test("shows live build steps and redacted log snapshots in a responsive detail dialog", () => {
@@ -416,7 +420,7 @@ test("opens a version-bound environment manifest beside the primary card action"
   try {
     const manifest = await server.ssrLoadModule("/src/ui/environmentManifest.ts");
     const yaml = manifest.formatEnvironmentManifest({
-      apiVersion: "agentkit.studio/v1alpha1",
+      apiVersion: "agentkit.studio/v3",
       kind: "Environment",
       metadata: {
         id: "env-1",
@@ -441,7 +445,7 @@ test("opens a version-bound environment manifest beside the primary card action"
         updatedAt: "2026-08-31T01:05:03Z",
       },
     });
-    assert.match(yaml, /^apiVersion: agentkit\.studio\/v1alpha1$/m);
+    assert.match(yaml, /^apiVersion: agentkit\.studio\/v3$/m);
     assert.match(yaml, /^kind: Environment$/m);
     assert.match(yaml, /^  image: registry\.example\/browser:latest$/m);
     assert.match(yaml, /^    - playwright$/m);
@@ -464,7 +468,7 @@ test("accepts legacy and Codex Sandbox environment manifests", async () => {
       "/src/ui/environmentManifest.ts",
     );
     const manifest = {
-      apiVersion: "agentkit.studio/v1alpha1",
+      apiVersion: "agentkit.studio/v3",
       kind: "Environment",
       metadata: {
         id: "env-codex",
@@ -501,6 +505,7 @@ test("accepts legacy and Codex Sandbox environment manifests", async () => {
 
     const legacyManifest = client.parseEnvironmentManifest({
       ...manifest,
+      apiVersion: "agentkit.studio/v1alpha1",
       metadata: { ...manifest.metadata, id: "env-aio", name: "AIO Sandbox" },
       spec: { ...manifest.spec, baseEnvironment: "aio-sandbox" },
     });

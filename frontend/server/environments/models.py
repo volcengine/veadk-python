@@ -443,10 +443,16 @@ class EnvironmentManifestStatus(BaseModel):
     updated_at: datetime = Field(alias="updatedAt")
 
 
+EnvironmentManifestApiVersion = Literal[
+    "agentkit.studio/v3",
+    "agentkit.studio/v1alpha1",
+]
+
+
 class EnvironmentManifest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    api_version: Literal["agentkit.studio/v1alpha1"] = Field(alias="apiVersion")
+    api_version: EnvironmentManifestApiVersion = Field(alias="apiVersion")
     kind: Literal["Environment"] = "Environment"
     metadata: EnvironmentManifestMetadata
     spec: EnvironmentManifestSpec

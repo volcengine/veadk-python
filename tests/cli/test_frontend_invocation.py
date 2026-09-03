@@ -152,6 +152,8 @@ async def test_codex_sandbox_environment_requires_one_delegated_task() -> None:
     assert "call `delegate_to_codex_sandbox` once" in instruction
     assert "self-contained, outcome-oriented task" in instruction
     assert "Do not split that task" in instruction
+    assert "do not invent length or format requirements" in instruction
+    assert "do not make a second delegation to retrieve files" in instruction
 
 
 @pytest.mark.asyncio

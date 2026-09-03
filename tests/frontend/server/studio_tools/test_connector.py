@@ -29,6 +29,7 @@ from google.adk.tools.tool_context import ToolContext
 from websockets.exceptions import InvalidStatus
 
 import frontend.server.studio_tools.connector as connector
+from frontend.server.environments.session_mounts import SessionEnvironmentMount
 from frontend.server.studio_tools.registry import (
     StudioTool,
     StudioToolExecutionContext,
@@ -281,6 +282,26 @@ def test_large_tool_results_are_bounded_before_crossing_the_channel() -> None:
     assert len(result["preview"].encode("utf-8")) <= connector.TOOL_RESULT_PREVIEW_BYTES
 
 
+def test_large_codex_result_keeps_a_utf8_bounded_message() -> None:
+    content = {
+        "ok": True,
+        "message": "😀" * connector.MAX_TOOL_RESULT_BYTES,
+        "codex_activity": {"events": [{"text": "x" * 100_000}]},
+    }
+
+    result = connector._bounded_tool_result(content)
+
+    assert result["ok"] is True
+    assert result["truncated"] is True
+    assert result["message"].startswith("😀")
+    assert result["message"].endswith("…内容已截断")
+    assert "preview" not in result
+    assert (
+        len(json.dumps(result, ensure_ascii=False).encode("utf-8"))
+        <= connector.MAX_TOOL_RESULT_BYTES
+    )
+
+
 @pytest.mark.asyncio
 async def test_connector_reads_agent_bff_tool_capability(
     monkeypatch: pytest.MonkeyPatch,
@@ -367,6 +388,23 @@ async def test_connector_runs_and_executes_tool_over_one_websocket(
         return websocket
 
     monkeypatch.setattr(connector, "connect", fake_connect)
+    mount = SessionEnvironmentMount(
+        environment_id="e" * 32,
+        environment_version_id="version-1",
+        image="registry.example/environment:v1",
+        provider="volcengine",
+        region="cn-beijing",
+        mount_instance_id="mount-1",
+    )
+    prepared: list[tuple[tuple[SessionEnvironmentMount, ...], str]] = []
+
+    async def prepare_mounts(
+        mounts: Any,
+        context: StudioToolExecutionContext,
+    ) -> tuple[SessionEnvironmentMount, ...]:
+        prepared.append((tuple(mounts), context.session_id))
+        return tuple(mounts)
+
     run = await connector.open_studio_tool_run(
         endpoint="https://runtime.example/base?gateway=value",
         authorization="Bearer runtime-key",
@@ -378,6 +416,9 @@ async def test_connector_runs_and_executes_tool_over_one_websocket(
             "new_message": {"role": "user", "parts": [{"text": "6 * 7"}]},
         },
         catalog=_registry().snapshot(),
+        environment_mount=mount,
+        environment_mounts=(mount,),
+        prepare_environment_mounts=prepare_mounts,
     )
 
     chunks = [chunk async for chunk in run.stream()]
@@ -389,6 +430,7 @@ async def test_connector_runs_and_executes_tool_over_one_websocket(
     assert run.execution_context.run_id == run.run_id
     assert run.execution_context.scope_id == run.scope_id
     assert run.execution_context.catalog_revision == run.catalog_revision
+    assert prepared == [((mount,), "session-1")]
     assert run.runtime_context.instance_name == "instance-websocket"
     assert run.runtime_context.request_id == "request-websocket"
     assert connect_calls[0][0] == (

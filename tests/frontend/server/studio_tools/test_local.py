@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -37,6 +38,48 @@ def _context(revision: str) -> StudioToolExecutionContext:
         scope_id="scope-1",
         catalog_revision=revision,
     )
+
+
+@pytest.mark.asyncio
+async def test_local_codex_timeout_is_actionable_and_discourages_retries() -> None:
+    async def execute(
+        arguments: dict[str, Any],
+        context: StudioToolExecutionContext,
+    ) -> dict[str, Any]:
+        del arguments, context
+        await asyncio.sleep(1)
+        return {"ok": True}
+
+    registry = StudioToolRegistry()
+    registry.register(
+        StudioTool(
+            name="delegate_to_codex_sandbox",
+            description="Delegate to Codex.",
+            input_schema={"type": "object", "additionalProperties": False},
+            executor=execute,
+            timeout_ms=1,
+            requires_context=True,
+        )
+    )
+    catalog = registry.snapshot(["delegate_to_codex_sandbox"])
+    [tool] = build_local_studio_tools(
+        catalog=catalog,
+        context=_context(catalog.revision),
+        report_progress=lambda _event: asyncio.sleep(0),
+    )
+
+    result = await tool.run_async(
+        args={},
+        tool_context=type("ToolContext", (), {"function_call_id": "call-1"})(),
+    )
+
+    assert result == {
+        "status": "timeout",
+        "error": (
+            "Codex Sandbox 长任务超过 30 分钟，已停止执行；"
+            "请确认当前状态后再决定是否重新提交。"
+        ),
+    }
 
 
 @pytest.mark.asyncio

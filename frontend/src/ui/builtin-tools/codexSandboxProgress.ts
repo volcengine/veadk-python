@@ -4,6 +4,7 @@ export interface CodexSandboxProgressEvent {
   id: string;
   block: Block;
   appendText?: boolean;
+  finalAnswer?: boolean;
 }
 
 export interface CodexSandboxProgress {
@@ -126,8 +127,13 @@ function parseNormalizedEvent(
       ? { id, block: { kind: "thinking", text, done: status !== "running" }, appendText }
       : null;
   }
-  if (["commentary", "message", "text", "assistant_final", "final"].includes(kind)) {
+  if (kind === "commentary") {
     return text ? { id, block: { kind: "text", text }, appendText } : null;
+  }
+  if (["message", "text", "assistant_final", "final"].includes(kind)) {
+    return text
+      ? { id, block: { kind: "text", text }, appendText, finalAnswer: true }
+      : null;
   }
   if (kind === "plan") {
     const plan = Array.isArray(event.plan) ? event.plan : [];
@@ -202,6 +208,9 @@ function parseRawCodexEvent(
       block: itemType === "reasoning"
         ? { kind: "thinking", text, done: status !== "running" }
         : { kind: "text", text },
+      ...(itemType === "agent_message" && item?.phase !== "commentary"
+        ? { finalAnswer: true }
+        : {}),
     };
   }
 
@@ -360,6 +369,10 @@ export function hydrateCodexSandboxActivity(
       ? parseRawCodexEvent(rawEvent)
       : parseNormalizedEvent(rawEvent);
     if (!event) continue;
+    // Persisted snapshots from older servers may contain the streamed final
+    // answer. The function response renders that answer as ordinary message
+    // text, while commentary remains useful execution context in the card.
+    if (event.finalAnswer) continue;
     activity = applyCodexSandboxProgress(activity, {
       toolName: "delegate_to_codex_sandbox",
       requestId: "persisted-response",

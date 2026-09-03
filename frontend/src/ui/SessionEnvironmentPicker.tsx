@@ -109,10 +109,12 @@ function EnvironmentPickerDialog({
   onConfirm: (
     value: SessionEnvironmentMountSelection[],
     workspaceIds: string[],
-  ) => void;
+  ) => void | Promise<void>;
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState("");
   const titleId = useId();
   const environmentsById = useMemo(
     () => new Map(environments.map((environment) => [environment.id, environment])),
@@ -167,11 +169,10 @@ function EnvironmentPickerDialog({
         .includes(normalized);
     });
   }, [environmentsById, query, workspaces]);
-
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape" && !submitting) onClose();
     };
     document.body.style.overflow = "hidden";
     document.addEventListener("keydown", handleKeyDown);
@@ -179,7 +180,7 @@ function EnvironmentPickerDialog({
       document.body.style.overflow = previousOverflow;
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [onClose]);
+  }, [onClose, submitting]);
 
   const toggle = (environment: StudioEnvironment) => {
     const mount = environmentMount(environment);
@@ -210,9 +211,9 @@ function EnvironmentPickerDialog({
     });
   };
 
-  const confirm = () => {
+  const confirm = async () => {
     const existingMounts = new Map(value.map((mount) => [mountKey(mount), mount]));
-    onConfirm(environments.flatMap((environment) => {
+    const nextMounts = environments.flatMap((environment) => {
       const mount = environmentMount(environment);
       if (!mount || !selectedKeys.has(mountKey(mount))) return [];
       const existing = existingMounts.get(mountKey(mount));
@@ -220,8 +221,17 @@ function EnvironmentPickerDialog({
         ...mount,
         mount_instance_id: existing?.mount_instance_id || crypto.randomUUID(),
       }];
-    }), [...draftWorkspaceIds]);
-    onClose();
+    });
+    setSubmitting(true);
+    setSubmitError("");
+    try {
+      await onConfirm(nextMounts, [...draftWorkspaceIds]);
+      onClose();
+    } catch (cause) {
+      setSubmitError(cause instanceof Error ? cause.message : "挂载环境失败");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return createPortal(
@@ -230,6 +240,7 @@ function EnvironmentPickerDialog({
         type="button"
         className="studio-tool-dialog-scrim"
         aria-label="关闭环境弹窗"
+        disabled={submitting}
         onClick={onClose}
       />
       <section
@@ -248,6 +259,7 @@ function EnvironmentPickerDialog({
             type="button"
             className="studio-tool-dialog-close"
             aria-label="关闭添加环境"
+            disabled={submitting}
             onClick={onClose}
           >
             <CloseIcon />
@@ -341,11 +353,13 @@ function EnvironmentPickerDialog({
           </div>
         </div>
         <footer className="session-environment-dialog__footer">
-          <span>已选择 {draftWorkspaceIds.size} 个工作区，覆盖 {selectedKeys.size} 个环境</span>
+          <span className={submitError ? "is-error" : ""} role={submitError ? "alert" : undefined}>
+            {submitError || `已选择 ${draftWorkspaceIds.size} 个工作区，覆盖 ${selectedKeys.size} 个环境`}
+          </span>
           <div>
-            <button type="button" onClick={onClose}>取消</button>
-            <button type="button" className="is-primary" disabled={loading || Boolean(error)} onClick={confirm}>
-              确认添加
+            <button type="button" disabled={submitting} onClick={onClose}>取消</button>
+            <button type="button" className="is-primary" disabled={loading || submitting || Boolean(error)} onClick={() => void confirm()}>
+              {submitting ? "正在挂载…" : "确认添加"}
             </button>
           </div>
         </footer>
@@ -376,10 +390,12 @@ export function SessionEnvironmentPicker({
   onChange?: (
     value: SessionEnvironmentMountSelection[],
     workspaceIds?: string[],
-  ) => void;
+  ) => void | Promise<void>;
   onRefresh?: () => void | Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
+  const [updating, setUpdating] = useState(false);
+  const [changeError, setChangeError] = useState("");
   const addButtonRef = useRef<HTMLButtonElement>(null);
   const environmentsByKey = useMemo(() => new Map(
     environments.flatMap((environment) => {
@@ -404,6 +420,21 @@ export function SessionEnvironmentPicker({
     setOpen(false);
     requestAnimationFrame(() => addButtonRef.current?.focus());
   };
+  const commitChange = async (
+    mounts: SessionEnvironmentMountSelection[],
+    workspaceIds: string[],
+  ) => {
+    if (!onChange) return;
+    setUpdating(true);
+    setChangeError("");
+    try {
+      await onChange(mounts, workspaceIds);
+    } catch (cause) {
+      setChangeError(cause instanceof Error ? cause.message : "挂载环境失败");
+    } finally {
+      setUpdating(false);
+    }
+  };
 
   return (
     <div className="session-environment-select">
@@ -427,13 +458,13 @@ export function SessionEnvironmentPicker({
                     className="topo-remove-capability"
                     aria-label={`移除工作区 ${workspace.name}`}
                     title="移除"
-                    disabled={disabled}
+                    disabled={disabled || updating}
                     onClick={() => {
                       const otherWorkspaceIds = selectedWorkspaceIds.filter((id) => id !== workspace.id);
                       const preservedEnvironmentIds = new Set(workspaces
                         .filter((item) => otherWorkspaceIds.includes(item.id))
                         .flatMap((item) => item.environmentIds));
-                      onChange(
+                      void commitChange(
                         value.filter((mount) =>
                           !workspaceMountIds.has(mount.environment_id) ||
                           preservedEnvironmentIds.has(mount.environment_id)
@@ -465,8 +496,8 @@ export function SessionEnvironmentPicker({
                     className="topo-remove-capability"
                     aria-label={`移除环境 ${environment?.name ?? mount.environment_id}`}
                     title="移除"
-                    disabled={disabled}
-                    onClick={() => onChange(
+                    disabled={disabled || updating}
+                    onClick={() => void commitChange(
                       value.filter((item) => mountKey(item) !== mountKey(mount)),
                       [...selectedWorkspaceIds],
                     )}
@@ -485,8 +516,9 @@ export function SessionEnvironmentPicker({
           type="button"
           className="topo-capability-add-slot"
           aria-label="添加环境"
-          disabled={disabled || loading}
+          disabled={disabled || loading || updating}
           onClick={() => {
+            setChangeError("");
             setOpen(true);
             void onRefresh?.();
           }}
@@ -494,6 +526,9 @@ export function SessionEnvironmentPicker({
           <AddIcon />
           <span>{value.length > 0 ? "添加更多环境" : "为当前 Session 添加环境"}</span>
         </button>
+      )}
+      {changeError && (
+        <p className="is-error" role="alert">{changeError}</p>
       )}
       {(loading || error || environments.length === 0) && (
         <p className={error ? "is-error" : undefined} role={error ? "alert" : undefined}>

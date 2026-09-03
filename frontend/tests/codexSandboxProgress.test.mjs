@@ -292,6 +292,7 @@ test("hydrates persisted Codex activity when replaying session history", () => {
             name: "delegate_to_codex_sandbox",
             response: {
               ok: true,
+              message: "完整 Codex 最终答案",
               codex_activity: {
                 title: "ANR Reviewer",
                 agent_session_id: "agent-session-history",
@@ -323,6 +324,171 @@ test("hydrates persisted Codex activity when replaying session history", () => {
   assert.equal(tool.codexActivity.sandboxSessionId, "sandbox-session-history");
   assert.equal(tool.codexActivity.threadId, "thread-history");
   assert.equal(tool.codexActivity.items[0].id, "command-history");
+  assert.deepEqual(turns[0].blocks[1], {
+    kind: "text",
+    text: "完整 Codex 最终答案",
+  });
+});
+
+test("keeps persisted final text out of the Codex activity card", () => {
+  const turns = eventsToTurns([
+    {
+      content: {
+        parts: [{
+          functionCall: {
+            id: "adk-function-call-no-duplicate-card",
+            name: "delegate_to_codex_sandbox",
+            args: { environment_id: "e".repeat(32), task: "Write the PRD" },
+          },
+        }],
+      },
+    },
+    {
+      content: {
+        parts: [{
+          functionResponse: {
+            id: "adk-function-call-no-duplicate-card",
+            name: "delegate_to_codex_sandbox",
+            response: {
+              ok: true,
+              message: "完整 PRD",
+              codex_activity: {
+                events: [
+                  { id: "message-1", kind: "text", status: "done", text: "完整 PRD" },
+                  { id: "commentary-1", kind: "commentary", status: "done", text: "正在整理需求" },
+                  { id: "command-1", kind: "command_execution", status: "completed", command: "anr design" },
+                ],
+              },
+            },
+          },
+        }],
+      },
+    },
+  ]);
+
+  const tool = turns[0].blocks[0];
+  assert.equal(tool.kind, "tool");
+  assert.deepEqual(tool.codexActivity.items.map((item) => item.id), [
+    "commentary-1",
+    "command-1",
+  ]);
+  assert.deepEqual(turns[0].blocks[1], { kind: "text", text: "完整 PRD" });
+});
+
+test("does not replay a persisted text delta over live Codex activity", () => {
+  let accumulator = applyEvent(emptyAcc(), {
+    content: {
+      parts: [{
+        functionCall: {
+          id: "adk-function-call-live-snapshot",
+          name: "delegate_to_codex_sandbox",
+          args: { environment_id: "e".repeat(32), task: "Write the PRD" },
+        },
+      }],
+    },
+  });
+  accumulator = applyEvent(accumulator, {
+    partial: true,
+    content: {
+      parts: [{
+        partMetadata: metadata({
+          id: "assistant-live-snapshot",
+          kind: "text",
+          status: "done",
+          delta: "内部最终答案",
+        }, {
+          toolName: "delegate_to_codex_sandbox",
+          requestId: "adk-function-call-live-snapshot",
+        }),
+      }],
+    },
+  });
+  accumulator = applyEvent(accumulator, {
+    content: {
+      parts: [{
+        functionResponse: {
+          id: "adk-function-call-live-snapshot",
+          name: "delegate_to_codex_sandbox",
+          response: {
+            ok: true,
+            message: "内部最终答案",
+            codex_activity: {
+              events: [{
+                id: "assistant-live-snapshot",
+                kind: "text",
+                status: "done",
+                delta: "内部最终答案",
+              }],
+            },
+          },
+        },
+      }],
+    },
+  });
+
+  assert.equal(accumulator.blocks[0].codexActivity.items.length, 0);
+  assert.deepEqual(accumulator.blocks[1], {
+    kind: "text",
+    text: "内部最终答案",
+  });
+});
+
+test("does not append the same successful Codex response twice", () => {
+  const response = { ok: true, message: "唯一最终答案" };
+  let accumulator = applyEvent(emptyAcc(), {
+    content: { parts: [{ functionCall: {
+      id: "adk-function-call-idempotent",
+      name: "delegate_to_codex_sandbox",
+      args: { environment_id: "e".repeat(32), task: "Do it" },
+    } }] },
+  });
+  const responseEvent = {
+    content: { parts: [{ functionResponse: {
+      id: "adk-function-call-idempotent",
+      name: "delegate_to_codex_sandbox",
+      response,
+    } }] },
+  };
+
+  accumulator = applyEvent(accumulator, responseEvent);
+  accumulator = applyEvent(accumulator, responseEvent);
+
+  assert.equal(accumulator.blocks.filter((block) => block.kind === "text").length, 1);
+  assert.equal(accumulator.blocks.at(-1).text, "唯一最终答案");
+});
+
+test("does not render failed or busy Codex messages as direct answers", () => {
+  for (const [suffix, response] of [
+    ["failed", { ok: false, status: "error", message: "Codex 执行失败" }],
+    ["busy", { ok: false, status: "busy", message: "Codex 正在执行其他任务" }],
+  ]) {
+    let accumulator = applyEvent(emptyAcc(), {
+      content: {
+        parts: [{
+          functionCall: {
+            id: `adk-function-call-${suffix}`,
+            name: "delegate_to_codex_sandbox",
+            args: { environment_id: "e".repeat(32), task: "Review this project" },
+          },
+        }],
+      },
+    });
+    accumulator = applyEvent(accumulator, {
+      content: {
+        parts: [{
+          functionResponse: {
+            id: `adk-function-call-${suffix}`,
+            name: "delegate_to_codex_sandbox",
+            response,
+          },
+        }],
+      },
+    });
+
+    assert.equal(accumulator.blocks.length, 1);
+    assert.equal(accumulator.blocks[0].kind, "tool");
+    assert.equal(accumulator.blocks[0].done, true);
+  }
 });
 
 test("marks a persisted failed Codex response as failed", () => {

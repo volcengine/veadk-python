@@ -109,7 +109,12 @@ class LocalStudioToolDispatcher:
         except asyncio.TimeoutError:
             return {
                 "status": "timeout",
-                "error": "Studio tool timed out.",
+                "error": (
+                    "Codex Sandbox 长任务超过 30 分钟，已停止执行；"
+                    "请确认当前状态后再决定是否重新提交。"
+                    if manifest.name == "delegate_to_codex_sandbox"
+                    else "Studio tool timed out."
+                ),
             }
         except StudioToolRuntimeError as error:
             response = dict(error.content) if isinstance(error.content, dict) else {}

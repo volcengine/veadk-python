@@ -633,7 +633,7 @@ class EnvironmentService:
             owner_id, environment_id, version_id
         )
         return EnvironmentManifest(
-            apiVersion="agentkit.studio/v1alpha1",
+            apiVersion="agentkit.studio/v3",
             metadata=EnvironmentManifestMetadata(
                 id=environment.id,
                 name=environment.name,
@@ -659,6 +659,52 @@ class EnvironmentService:
                 updatedAt=build.updated_at,
             ),
         )
+
+    async def ensure_sandbox_tool_ready(
+        self,
+        owner_id: str,
+        environment_id: str,
+        version_id: str,
+    ) -> EnvironmentBuild:
+        """Validate or repair the Tool for an already-built Sandbox image."""
+
+        repository = self._require_repository()
+        environment = await repository.get_version_config(
+            owner_id, environment_id, version_id
+        )
+        if environment.base_environment not in {"aio-sandbox", "codex-sandbox"}:
+            raise ValueError("所选环境不支持 Sandbox 命令执行。")
+        build = await repository.get_build(owner_id, environment_id, version_id)
+        if build.status != "available" or not build.image.strip():
+            raise ValueError("所选环境版本尚未构建完成。")
+        if self._tool_provisioner is None:
+            raise RuntimeError("AgentKit Sandbox Tool 服务未配置。")
+        resources = build.resources
+        if not isinstance(resources, EnvironmentResources):
+            raise TypeError("环境构建记录缺少云资源信息。")
+
+        tool = await self._tool_provisioner.ensure_ready(
+            image=build.image,
+            provider=resources.provider,
+            region=resources.region,
+            existing_tool_id=build.tool_id,
+        )
+        if build.tool_id == tool.tool_id and build.tool_status == tool.status:
+            return build
+        current = await repository.get_build(owner_id, environment_id, version_id)
+        repaired = current.model_copy(
+            update={
+                "status": "available",
+                "tool_id": tool.tool_id,
+                "tool_status": tool.status,
+                "error": "",
+                "progress_error": "",
+                "current_step": "环境与 Sandbox Tool 已就绪",
+                "steps": _with_tool_step(current.steps, "succeeded"),
+                "updated_at": _now(),
+            }
+        )
+        return await repository.update_build(owner_id, repaired)
 
     def resource_info(self) -> EnvironmentResourceInfo:
         return self._require_cloud().describe()

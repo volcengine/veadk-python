@@ -30,6 +30,7 @@ from frontend.server.studio_tools.registry import (
 from frontend.server.studio_tools.sandbox_shell import (
     AgentkitEnvironmentSandboxResolver,
     SandboxExecutionTarget,
+    SandboxResolutionError,
     _user_session_id,
     execute_in_sandbox,
     register_sandbox_shell_tool,
@@ -344,20 +345,80 @@ async def test_agentkit_resolver_reuses_tool_and_session_per_agent_session() -> 
         poll_interval_seconds=0,
     )
 
-    first = await resolver.resolve(mount, _context(mount=mount))
+    first = await resolver.prepare(mount, _context(mount=mount))
     repeated = await resolver.resolve(mount, _context(mount=mount))
-    second_session = await resolver.resolve(mount, _context("session-2", mount=mount))
+    second_session = await resolver.prepare(mount, _context("session-2", mount=mount))
     restarted_resolver = AgentkitEnvironmentSandboxResolver(
         lambda provider, region: client,
         poll_interval_seconds=0,
     )
-    after_restart = await restarted_resolver.resolve(mount, _context(mount=mount))
+    after_restart = await restarted_resolver.prepare(mount, _context(mount=mount))
 
     assert first == repeated
     assert after_restart.session_id == first.session_id
     assert first.session_id != second_session.session_id
     assert client.created_tools == []
     assert len(client.created_sessions) == 2
+
+
+@pytest.mark.asyncio
+async def test_agentkit_resolver_revalidates_cached_tool_and_session() -> None:
+    client = _FakeAgentkitClient()
+    mount = replace(_mount(), mount_instance_id="mount-1")
+    context = _context(mount=mount)
+    _remember_tool(client, mount)
+    resolver = AgentkitEnvironmentSandboxResolver(
+        lambda provider, region: client,
+        poll_interval_seconds=0,
+    )
+
+    first = await resolver.prepare(mount, context)
+    repeated = await resolver.prepare(mount, context)
+
+    assert repeated is first
+    assert client.got_tool_ids == [mount.tool_id, mount.tool_id]
+    assert client.got_session_ids == [first.session_id]
+    assert len(client.created_sessions) == 1
+
+
+@pytest.mark.asyncio
+async def test_agentkit_resolver_repairs_deleted_cached_session() -> None:
+    client = _FakeAgentkitClient()
+    mount = replace(_mount(), mount_instance_id="mount-1")
+    context = _context(mount=mount)
+    _remember_tool(client, mount)
+    resolver = AgentkitEnvironmentSandboxResolver(
+        lambda provider, region: client,
+        poll_interval_seconds=0,
+    )
+
+    stale = await resolver.prepare(mount, context)
+    client.sessions.clear()
+
+    repaired = await resolver.prepare(mount, context)
+
+    assert repaired.session_id != stale.session_id
+    assert resolver.is_prepared(mount, context) is True
+    assert await resolver.resolve(mount, context) is repaired
+    assert client.got_session_ids == [stale.session_id]
+    assert len(client.created_sessions) == 2
+
+
+@pytest.mark.asyncio
+async def test_agentkit_resolver_requires_mount_preparation_before_tool_call() -> None:
+    client = _FakeAgentkitClient()
+    mount = replace(_mount(), mount_instance_id="mount-1")
+    _remember_tool(client, mount)
+    resolver = AgentkitEnvironmentSandboxResolver(
+        lambda provider, region: client,
+        poll_interval_seconds=0,
+    )
+
+    with pytest.raises(SandboxResolutionError, match="was not prepared"):
+        await resolver.resolve(mount, _context(mount=mount))
+
+    assert client.created_tools == []
+    assert client.created_sessions == []
 
 
 @pytest.mark.asyncio
@@ -372,8 +433,8 @@ async def test_agentkit_resolver_does_not_reuse_across_environment_versions() ->
     )
     context = _context(mount=first)
 
-    first_target = await resolver.resolve(first, context)
-    replacement_target = await resolver.resolve(replacement, context)
+    first_target = await resolver.prepare(first, context)
+    replacement_target = await resolver.prepare(replacement, context)
 
     assert first_target.session_id != replacement_target.session_id
     assert len(client.created_sessions) == 2
@@ -391,9 +452,9 @@ async def test_agentkit_resolver_does_not_reuse_across_images() -> None:
     )
     context = _context(mount=first)
 
-    first_target = await resolver.resolve(first, context)
+    first_target = await resolver.prepare(first, context)
     client.tools[0].image_url = replacement.image
-    replacement_target = await resolver.resolve(replacement, context)
+    replacement_target = await resolver.prepare(replacement, context)
 
     assert first_target.session_id != replacement_target.session_id
     assert len(client.created_sessions) == 2
@@ -411,8 +472,8 @@ async def test_agentkit_resolver_does_not_reuse_after_remount() -> None:
     )
     context = _context(mount=first)
 
-    first_target = await resolver.resolve(first, context)
-    remounted_target = await resolver.resolve(remounted, context)
+    first_target = await resolver.prepare(first, context)
+    remounted_target = await resolver.prepare(remounted, context)
 
     assert first_target.session_id != remounted_target.session_id
     assert len(client.created_sessions) == 2
@@ -429,7 +490,7 @@ async def test_agentkit_resolver_reuses_legacy_mount_without_instance_id() -> No
     )
     context = _context(mount=mount)
 
-    first_target = await resolver.resolve(mount, context)
+    first_target = await resolver.prepare(mount, context)
     repeated_target = await resolver.resolve(replace(mount), context)
 
     assert first_target is repeated_target
@@ -446,7 +507,7 @@ async def test_agentkit_resolver_uses_persisted_ready_tool_id() -> None:
     mount = replace(_mount(), tool_id="tool-persisted", tool_status="ready")
     _remember_tool(client, mount)
 
-    target = await resolver.resolve(mount, _context(mount=mount))
+    target = await resolver.prepare(mount, _context(mount=mount))
 
     assert target.tool_id == "tool-persisted"
     assert client.created_tools == []
@@ -484,7 +545,7 @@ async def test_agentkit_resolver_waits_for_session_ready_even_with_endpoint() ->
         poll_interval_seconds=0,
     )
 
-    target = await resolver.resolve(mount, context)
+    target = await resolver.prepare(mount, context)
 
     assert target.session_id == "sandbox-existing"
     assert client.polls == 2
@@ -503,8 +564,8 @@ async def test_agentkit_resolver_does_not_cache_across_persisted_tool_ids() -> N
     )
     context = _context(mount=first)
 
-    first_target = await resolver.resolve(first, context)
-    replacement_target = await resolver.resolve(replacement, context)
+    first_target = await resolver.prepare(first, context)
+    replacement_target = await resolver.prepare(replacement, context)
 
     assert first_target.tool_id == "tool-persisted"
     assert replacement_target.tool_id == "tool-replacement"
@@ -523,7 +584,7 @@ async def test_agentkit_resolver_rejects_persisted_tool_that_is_not_ready() -> N
     )
 
     with pytest.raises(RuntimeError, match=r"not Ready \(status: creating\)"):
-        await resolver.resolve(mount, _context(mount=mount))
+        await resolver.prepare(mount, _context(mount=mount))
 
     assert client.created_tools == []
     assert client.created_sessions == []
@@ -543,20 +604,21 @@ async def test_registered_tool_surfaces_non_ready_persisted_tool() -> None:
             del context, environment_id
             return mount
 
+    resolver = AgentkitEnvironmentSandboxResolver(
+        lambda provider, region: client,
+        poll_interval_seconds=0,
+    )
     registry = StudioToolRegistry()
     register_sandbox_shell_tool(
         registry,
         mounts=Mounts(),  # type: ignore[arg-type]
-        target_resolver=AgentkitEnvironmentSandboxResolver(
-            lambda provider, region: client,
-            poll_interval_seconds=0,
-        ),
+        target_resolver=resolver,
     )
 
-    with pytest.raises(
-        StudioToolExecutionError,
-        match=r"not Ready \(status: creating\)",
-    ):
+    with pytest.raises(RuntimeError, match=r"not Ready \(status: creating\)"):
+        await resolver.prepare(mount, _context(mount=mount))
+
+    with pytest.raises(StudioToolExecutionError, match="was not prepared"):
         await registry.execute(
             name="execute_in_sandbox",
             executor_revision="aio-shell-v2",
@@ -575,7 +637,7 @@ async def test_agentkit_resolver_rejects_unavailable_persisted_tool_id() -> None
     )
 
     with pytest.raises(RuntimeError, match="persisted Sandbox Tool is unavailable"):
-        await resolver.resolve(mount, _context(mount=mount))
+        await resolver.prepare(mount, _context(mount=mount))
 
     assert client.created_tools == []
     assert client.created_sessions == []
@@ -591,7 +653,7 @@ async def test_agentkit_resolver_rejects_mount_without_persisted_tool_id() -> No
     mount = replace(_mount(), tool_id="", tool_status="")
 
     with pytest.raises(RuntimeError, match="persisted Tool"):
-        await resolver.resolve(mount, _context(mount=mount))
+        await resolver.prepare(mount, _context(mount=mount))
 
     assert client.created_tools == []
     assert client.created_sessions == []
@@ -805,9 +867,12 @@ async def test_agentkit_resolver_reuses_each_environment_session_independently()
     _remember_tool(client, second)
     context = _context(mounts=(first, second))
 
-    first_target = await resolver.resolve(first, context)
-    second_target = await resolver.resolve(second, context)
+    assert resolver.is_prepared(first, context) is False
+    assert resolver.is_prepared(second, context) is False
+    first_target, second_target = await resolver.prepare_many((first, second), context)
 
+    assert resolver.is_prepared(first, context) is True
+    assert resolver.is_prepared(second, context) is True
     assert await resolver.resolve(first, context) is first_target
     assert await resolver.resolve(second, context) is second_target
     assert first_target.session_id != second_target.session_id
@@ -843,6 +908,8 @@ class _FakeAgentkitClient:
         self.sessions: list[Any] = []
         self.created_tools: list[Any] = []
         self.created_sessions: list[Any] = []
+        self.got_tool_ids: list[str] = []
+        self.got_session_ids: list[str] = []
 
     def list_tools(self, request: Any) -> Any:
         name = request.filters[0].values[0]
@@ -876,6 +943,7 @@ class _FakeAgentkitClient:
         return tool
 
     def get_tool(self, request: Any) -> Any:
+        self.got_tool_ids.append(request.tool_id)
         return next(item for item in self.tools if item.tool_id == request.tool_id)
 
     def list_sessions(self, request: Any) -> Any:
@@ -891,19 +959,19 @@ class _FakeAgentkitClient:
 
     def create_session(self, request: Any) -> Any:
         self.created_sessions.append(request)
+        sequence = len(self.created_sessions)
         session = SimpleNamespace(
-            session_id=f"sandbox-{len(self.sessions) + 1}",
+            session_id=f"sandbox-{sequence}",
             tool_id=request.tool_id,
             user_session_id=request.user_session_id,
-            endpoint=(
-                f"https://sandbox-{len(self.sessions) + 1}.example?Authorization=secret"
-            ),
+            endpoint=(f"https://sandbox-{sequence}.example?Authorization=secret"),
             status="Ready",
         )
         self.sessions.append(session)
         return session
 
     def get_session(self, request: Any) -> Any:
+        self.got_session_ids.append(request.session_id)
         return next(
             item for item in self.sessions if item.session_id == request.session_id
         )

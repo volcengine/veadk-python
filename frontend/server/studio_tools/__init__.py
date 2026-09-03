@@ -43,6 +43,7 @@ from frontend.server.studio_tools.registry import (
 from frontend.server.studio_tools.sandbox_shell import (
     AgentkitEnvironmentSandboxResolver,
     SandboxExecutionTarget,
+    SandboxResolutionError,
     SandboxTargetResolver,
     execute_in_sandbox,
     register_sandbox_shell_tool,
@@ -53,6 +54,7 @@ __all__ = [
     "CodexSandboxConnection",
     "CodexSandboxDelegate",
     "SandboxExecutionTarget",
+    "SandboxResolutionError",
     "SandboxTargetResolver",
     "LocalStudioToolDispatcher",
     "StudioChannelError",

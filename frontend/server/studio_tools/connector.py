@@ -61,17 +61,54 @@ def _bounded_tool_result(content: Any) -> Any:
     encoded = json.dumps(content, ensure_ascii=False).encode("utf-8")
     if len(encoded) <= MAX_TOOL_RESULT_BYTES:
         return content
-    preview = encoded[:TOOL_RESULT_PREVIEW_BYTES].decode("utf-8", errors="replace")
     result: dict[str, Any] = {
         "truncated": True,
         "original_size_bytes": len(encoded),
-        "preview": preview,
     }
     if isinstance(content, dict):
         for key in ("ok", "error", "executed_by", "bff_process_id"):
             if key in content:
                 result[key] = content[key]
+        message = content.get("message")
+        if isinstance(message, str) and message:
+            # A delegated Codex message is already the user-visible answer.
+            # Preserve it instead of replacing the whole result with a debug
+            # preview, which would also disable skip_summarization downstream.
+            result["message"] = _fit_text_field(result, "message", message)
+            return result
+    preview = encoded[:TOOL_RESULT_PREVIEW_BYTES].decode("utf-8", errors="replace")
+    result["preview"] = _fit_text_field(result, "preview", preview)
     return result
+
+
+def _fit_text_field(
+    envelope: dict[str, Any],
+    field: str,
+    value: str,
+) -> str:
+    """Fit one text field inside the serialized UTF-8 channel limit."""
+
+    suffix = "\n…内容已截断"
+    low = 0
+    high = len(value)
+    best = ""
+    while low <= high:
+        middle = (low + high) // 2
+        candidate = value[:middle]
+        if middle < len(value):
+            candidate += suffix
+        size = len(
+            json.dumps(
+                {**envelope, field: candidate},
+                ensure_ascii=False,
+            ).encode("utf-8")
+        )
+        if size <= MAX_TOOL_RESULT_BYTES:
+            best = candidate
+            low = middle + 1
+        else:
+            high = middle - 1
+    return best
 
 
 async def runtime_supports_bff_tools(
@@ -552,6 +589,11 @@ async def open_studio_tool_run(
     owner_id: str = "",
     environment_mount: SessionEnvironmentMount | None = None,
     environment_mounts: Sequence[SessionEnvironmentMount] = (),
+    prepare_environment_mounts: Callable[
+        [Sequence[SessionEnvironmentMount], StudioToolExecutionContext],
+        Awaitable[Sequence[SessionEnvironmentMount]],
+    ]
+    | None = None,
 ) -> StudioToolRun:
     """Connect, publish the current catalog, and start one same-socket run."""
 
@@ -579,6 +621,20 @@ async def open_studio_tool_run(
         environment_mount=environment_mount,
         environment_mounts=tuple(environment_mounts),
     )
+    mounts_to_prepare = tuple(environment_mounts) or (
+        (environment_mount,) if environment_mount is not None else ()
+    )
+    if mounts_to_prepare and prepare_environment_mounts is not None:
+        prepared_mounts = tuple(
+            await prepare_environment_mounts(mounts_to_prepare, execution_context)
+        )
+        execution_context = replace(
+            execution_context,
+            environment_mount=(
+                prepared_mounts[0] if len(prepared_mounts) == 1 else None
+            ),
+            environment_mounts=prepared_mounts,
+        )
     try:
         websocket = await connect(
             _websocket_url(endpoint),

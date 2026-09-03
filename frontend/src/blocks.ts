@@ -186,6 +186,10 @@ function applyCodexProgressToTool(
   blocks: Block[],
   progress: CodexSandboxProgress,
 ): "applied" | "completed" | "unmatched" {
+  // The successful function response owns the final assistant message. Older
+  // servers may also stream it as Codex progress; do not duplicate it inside
+  // the nested execution card.
+  if (progress.event.finalAnswer) return "applied";
   let fallbackIndex = -1;
   for (let index = blocks.length - 1; index >= 0; index -= 1) {
     const block = blocks[index];
@@ -229,6 +233,13 @@ function codexResponseStatus(response: unknown): "completed" | "failed" {
     return "failed";
   }
   return "completed";
+}
+
+function codexDirectAnswer(response: unknown): string {
+  if (!response || typeof response !== "object" || Array.isArray(response)) return "";
+  const result = response as Record<string, unknown>;
+  if (result.ok !== true || typeof result.message !== "string") return "";
+  return result.message.trim();
 }
 
 const fnCall = (p: AdkPart) => p.functionCall ?? p.function_call;
@@ -530,6 +541,9 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
           && b.name === fr.name
           && (!fr.id || !b.callId || b.callId === fr.id)
         ) {
+          const previousAnswer = isCodexTool
+            ? codexDirectAnswer(b.response)
+            : "";
           b.done = true;
           b.response = fr.response;
           if (isCodexTool) {
@@ -538,6 +552,10 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
               fr.response,
             );
             b.status = codexResponseStatus(fr.response);
+            const answer = codexDirectAnswer(fr.response);
+            if (answer && answer !== previousAnswer) {
+              appendText(blocks, "text", answer);
+            }
           }
           break;
         }

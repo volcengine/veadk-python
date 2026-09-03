@@ -56,7 +56,11 @@ class FrontendInvocationPlugin(BasePlugin):
                 "outcome-oriented task and let its inner Codex invoke installed "
                 "CLIs end to end. Do not split that task into individual "
                 "`execute_in_sandbox` calls. This uses the existing mounted "
-                "environment and is not dynamic-agent creation. For other mounted "
+                "environment and is not dynamic-agent creation. "
+                "Preserve the user's requested scope and constraints exactly; do "
+                "not invent length or format requirements. Use the delegation result "
+                "directly and do not make a second delegation to retrieve files. "
+                "For other mounted "
                 "environments, use `execute_in_sandbox` for shell or CLI commands. "
                 if metadata.get(CODEX_SANDBOX_ENVIRONMENT_METADATA_KEY) is True
                 else "Use `execute_in_sandbox` in that primary environment before "

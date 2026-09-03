@@ -36,20 +36,23 @@ test("uses the Apps SDK loading indicator in the session action slot", () => {
   );
 });
 
-test("fades overflowing session titles on both scroll edges", () => {
+test("automatically reveals overflowing session titles on hover and focus", () => {
   assert.match(sidebarSource, /function ScrollableHistoryTitle/);
-  assert.match(sidebarSource, /left:\s*element\.scrollLeft > 1/);
   assert.match(
     sidebarSource,
-    /right:\s*element\.scrollLeft \+ element\.clientWidth < element\.scrollWidth - 1/,
+    /content\.scrollWidth - viewport\.clientWidth/,
   );
-  assert.match(sidebarSource, /onScroll=\{updateFadeEdges\}/);
-  assert.match(stylesSource, /\.history-title\.has-left-fade/);
-  assert.match(stylesSource, /\.history-title\.has-right-fade/);
+  assert.match(sidebarSource, /className={`history-title\$\{overflowDistance > 0 \? " is-overflowing" : ""\}`}/);
+  assert.match(sidebarSource, /"--history-title-translate": `-\$\{overflowDistance\}px`/);
+  assert.match(stylesSource, /@keyframes history-title-marquee/);
+  assert.match(
+    stylesSource,
+    /\.history-item:hover \.history-title\.is-overflowing \.history-title-text,[\s\S]*?\.history-item:focus-within \.history-title\.is-overflowing \.history-title-text[\s\S]*?animation:\s*history-title-marquee/,
+  );
   assert.match(stylesSource, /mask-image:\s*linear-gradient/);
   assert.match(
     stylesSource,
-    /\.history-item:hover \.history-title,[\s\S]*?overflow-x:\s*auto;/,
+    /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.history-title-text[\s\S]*?animation:\s*none;/,
   );
   assert.doesNotMatch(stylesSource, /\.history-title\s*\{[^}]*text-overflow:\s*ellipsis/);
 });

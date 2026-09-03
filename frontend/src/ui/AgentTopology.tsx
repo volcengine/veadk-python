@@ -128,7 +128,7 @@ interface AgentInfoPanelProps {
   onEnvironmentsChange?: (
     value: SessionEnvironmentMountSelection[],
     workspaceIds?: string[],
-  ) => void;
+  ) => void | Promise<void>;
   onEnvironmentsRefresh?: () => void | Promise<void>;
 }
 
@@ -513,7 +513,7 @@ export function AgentInfoDrawer({
   onEnvironmentsChange?: (
     value: SessionEnvironmentMountSelection[],
     workspaceIds?: string[],
-  ) => void;
+  ) => void | Promise<void>;
   onEnvironmentsRefresh?: () => void | Promise<void>;
   onClose: () => void;
   returnFocusRef: RefObject<HTMLButtonElement>;

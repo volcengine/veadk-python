@@ -37,6 +37,7 @@ import unicodedata
 import zipfile
 from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 from time import monotonic, sleep
 from typing import Any, Literal
@@ -2673,6 +2674,7 @@ def _run_frontend_server(
     from frontend.server.studio_tools import (
         AgentkitEnvironmentSandboxResolver,
         CodexSandboxDelegate,
+        SandboxResolutionError,
         StudioToolExecutionContext,
         build_local_studio_tools,
         ensure_local_studio_toolset,
@@ -2706,6 +2708,149 @@ def _run_frontend_server(
     )
     app.state.environment_sandbox_resolver = environment_sandbox_resolver
     app.state.environment_codex_delegate = environment_codex_delegate
+
+    async def _prepare_execution_environment_mounts(
+        owner_id: str,
+        mounts: tuple[Any, ...],
+        context: StudioToolExecutionContext,
+    ) -> tuple[Any, ...]:
+        """Validate every mounted Tool and Sandbox Session before each Agent run."""
+
+        await asyncio.gather(
+            *(
+                environment_service.ensure_sandbox_tool_ready(
+                    owner_id,
+                    mount.environment_id,
+                    mount.environment_version_id,
+                )
+                for mount in mounts
+            )
+        )
+        from frontend.server.environments.session_mounts import (
+            SessionEnvironmentSelection,
+        )
+
+        refreshed = await session_environment_mounts.resolve_many(
+            owner_id,
+            tuple(
+                SessionEnvironmentSelection(
+                    environment_id=mount.environment_id,
+                    environment_version_id=mount.environment_version_id,
+                    mount_instance_id=mount.mount_instance_id,
+                )
+                for mount in mounts
+            ),
+        )
+        await environment_sandbox_resolver.prepare_many(refreshed, context)
+        return refreshed
+
+    @app.post("/web/v3/session-environment-mounts/prepare")
+    async def _prepare_session_environment_mounts(request: Request):
+        """Validate mounted Tools and create their Agent-bound Sandbox Sessions."""
+
+        from frontend.server.environments.repository import (
+            EnvironmentNotFound,
+            EnvironmentStorageUnavailable,
+        )
+        from frontend.server.environments.session_mounts import (
+            SessionEnvironmentSelections,
+        )
+        from pydantic import ValidationError
+
+        try:
+            payload = await request.json()
+        except ValueError as error:
+            raise HTTPException(
+                status_code=400, detail="请求体必须是 JSON。"
+            ) from error
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="请求体必须是对象。")
+
+        def required_identity(name: str) -> str:
+            value = payload.get(name)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{name} must be a non-empty string")
+            if len(value) > 256:
+                raise ValueError(f"{name} is too long")
+            return value.strip()
+
+        try:
+            runtime_id = required_identity("runtime_id")
+            app_name_for_mount = required_identity("app_name")
+            user_id_for_mount = required_identity("user_id")
+            session_id_for_mount = required_identity("session_id")
+            selections = SessionEnvironmentSelections.model_validate(
+                payload.get("environment_mounts")
+            )
+            if any(
+                not selection.mount_instance_id.strip() for selection in selections.root
+            ):
+                raise ValueError(
+                    "mount_instance_id is required when mounting an environment"
+                )
+            owner = _current_principal(request)
+            owner_id_for_mount = owner.owner_id if owner is not None else "local"
+            await asyncio.gather(
+                *(
+                    environment_service.ensure_sandbox_tool_ready(
+                        owner_id_for_mount,
+                        selection.environment_id,
+                        selection.environment_version_id,
+                    )
+                    for selection in selections.root
+                )
+            )
+            mounts_for_session = await session_environment_mounts.resolve_many(
+                owner_id_for_mount,
+                selections.root,
+            )
+            prepare_context = StudioToolExecutionContext(
+                runtime_id=runtime_id,
+                app_name=app_name_for_mount,
+                user_id=user_id_for_mount,
+                session_id=session_id_for_mount,
+                run_id=f"mount-{uuid4()}",
+                scope_id="mount-prepare",
+                catalog_revision="mount-prepare",
+                owner_id=owner_id_for_mount,
+                environment_mount=(
+                    mounts_for_session[0] if len(mounts_for_session) == 1 else None
+                ),
+                environment_mounts=mounts_for_session,
+            )
+            targets = await environment_sandbox_resolver.prepare_many(
+                mounts_for_session,
+                prepare_context,
+            )
+        except EnvironmentNotFound as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except EnvironmentStorageUnavailable as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+        except (ValidationError, ValueError, TypeError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except SandboxResolutionError as error:
+            raise HTTPException(
+                status_code=409,
+                detail=f"sandbox_session_prepare_failed: {error}",
+            ) from error
+        except Exception as error:  # noqa: BLE001 - cloud preparation boundary
+            logger.exception("Session environment preparation failed")
+            raise HTTPException(
+                status_code=502,
+                detail="sandbox_session_prepare_failed",
+            ) from error
+
+        return {
+            "mounts": [
+                {
+                    "environment_id": mount.environment_id,
+                    "environment_version_id": mount.environment_version_id,
+                    "mount_instance_id": mount.mount_instance_id,
+                    "sandbox_session_id": target.session_id,
+                }
+                for mount, target in zip(mounts_for_session, targets, strict=True)
+            ]
+        }
 
     @app.post("/run_sse")
     async def _local_studio_run_sse(request: Request):
@@ -2928,7 +3073,13 @@ def _run_frontend_server(
                         "call delegate_to_codex_sandbox once with a self-contained, "
                         "outcome-oriented task and let the inner Codex complete its "
                         "CLI workflow end to end. This uses the existing mounted "
-                        "environment and is not dynamic-agent creation. For any "
+                        "environment and is not dynamic-agent creation. Never retry "
+                        "the delegation in the same turn after a busy or timeout "
+                        "result; report that state to the user. Preserve the user's "
+                        "requested scope and constraints exactly; do not invent length "
+                        "or format requirements. Use the delegation result directly "
+                        "and do not call execute_in_sandbox or make a second "
+                        "delegation to retrieve Sandbox-local files. For any "
                         "other environment, use execute_in_sandbox for every shell "
                         "or CLI command."
                     ),
@@ -3005,6 +3156,22 @@ def _run_frontend_server(
             environment_mount=(mounts[0] if len(mounts) == 1 else None),
             environment_mounts=mounts,
         )
+        try:
+            mounts = await _prepare_execution_environment_mounts(
+                owner_id,
+                mounts,
+                context,
+            )
+            context = replace(
+                context,
+                environment_mount=(mounts[0] if len(mounts) == 1 else None),
+                environment_mounts=mounts,
+            )
+        except SandboxResolutionError as error:
+            raise HTTPException(
+                status_code=409,
+                detail=f"sandbox_session_prepare_failed: {error}",
+            ) from error
         progress_events: asyncio.Queue[bytes] = asyncio.Queue()
 
         async def report_progress(progress: dict[str, Any]) -> None:
@@ -10313,7 +10480,13 @@ def _run_frontend_server(
                             "call delegate_to_codex_sandbox once with a self-contained, "
                             "outcome-oriented task and let the inner Codex complete its "
                             "CLI workflow end to end. This uses the existing mounted "
-                            "environment and is not dynamic-agent creation. For any "
+                            "environment and is not dynamic-agent creation. Never retry "
+                            "the delegation in the same turn after a busy or timeout "
+                            "result; report that state to the user. Preserve the user's "
+                            "requested scope and constraints exactly; do not invent "
+                            "length or format requirements. Use the delegation result "
+                            "directly and do not call execute_in_sandbox or make a "
+                            "second delegation to retrieve Sandbox-local files. For any "
                             "other environment, use execute_in_sandbox for every shell "
                             "or CLI command."
                         ),
@@ -10428,6 +10601,7 @@ def _run_frontend_server(
             and path == "run_sse"
         ):
             from frontend.server.studio_tools import (
+                SandboxResolutionError,
                 StudioChannelError,
                 open_studio_tool_run,
                 runtime_supports_bff_tools,
@@ -10448,10 +10622,23 @@ def _run_frontend_server(
                         owner_id=studio_tool_owner_id,
                         environment_mount=session_environment_mount,
                         environment_mounts=session_environment_mounts_for_run,
+                        prepare_environment_mounts=(
+                            lambda mounts,
+                            context: _prepare_execution_environment_mounts(
+                                studio_tool_owner_id,
+                                tuple(mounts),
+                                context,
+                            )
+                        ),
                     )
                     if bff_tools_enabled
                     else None
                 )
+            except SandboxResolutionError as error:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"sandbox_session_prepare_failed: {error}",
+                ) from error
             except StudioChannelError as error:
                 logger.warning(
                     "Studio tool channel connection failed runtime_id=%s "

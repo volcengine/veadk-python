@@ -118,7 +118,7 @@ class _StudioChannelConnection:
                 future,
                 timeout=manifest.timeout_ms / 1000,
             )
-        except TimeoutError:
+        except asyncio.TimeoutError:
             await self.send(
                 {
                     "type": "tool.cancel",
@@ -126,7 +126,15 @@ class _StudioChannelConnection:
                     "run_id": run_id,
                 }
             )
-            return {"status": "timeout", "error": "Studio tool timed out."}
+            return {
+                "status": "timeout",
+                "error": (
+                    "Codex Sandbox 长任务超过 30 分钟，已停止执行；"
+                    "请确认当前状态后再决定是否重新提交。"
+                    if manifest.name == "delegate_to_codex_sandbox"
+                    else "Studio tool timed out."
+                ),
+            }
         finally:
             self.pending_calls.pop(request_id, None)
 

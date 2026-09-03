@@ -243,11 +243,17 @@ class AgentkitEnvironmentToolProvisioner:
         from agentkit.sdk.tools import types as tools_types
 
         name = environment_tool_name(image)
-        match = (
-            client.get_tool(tools_types.GetToolRequest(ToolId=existing_tool_id))
-            if existing_tool_id
-            else _find_tool(client, tools_types, name)
-        )
+        if existing_tool_id:
+            try:
+                match = client.get_tool(
+                    tools_types.GetToolRequest(ToolId=existing_tool_id)
+                )
+            except Exception:
+                # Build metadata can outlive a manually deleted cloud Tool. Recover
+                # from the immutable image instead of forcing an image rebuild.
+                match = _find_tool(client, tools_types, name)
+        else:
+            match = _find_tool(client, tools_types, name)
         created_new = match is None
         if match is None:
             try:
