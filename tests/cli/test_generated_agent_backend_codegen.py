@@ -81,7 +81,7 @@ def test_minimal_codegen_agent_py_compiles(tmp_path) -> None:
     assert "agents/demo_agent/__init__.py" in paths
     assert ".env.example" in paths
     assert "requirements.txt" in paths
-    assert "Dockerfile" not in paths
+    assert "Dockerfile" in paths
     requirements = next(
         file.content for file in project.files if file.path == "requirements.txt"
     )
@@ -91,6 +91,13 @@ def test_minimal_codegen_agent_py_compiles(tmp_path) -> None:
         "google-adk==2.1.0\n"
         "starlette==0.52.1\n"
     )
+    dockerfile = next(
+        file.content for file in project.files if file.path == "Dockerfile"
+    )
+    huawei = "https://repo.huaweicloud.com/repository/pypi/simple"
+    aliyun = "https://mirrors.aliyun.com/pypi/simple/"
+    pypi = "https://pypi.org/simple"
+    assert dockerfile.index(huawei) < dockerfile.index(aliyun) < dockerfile.index(pypi)
 
     for file in project.files:
         if file.path.endswith(".py"):

@@ -898,6 +898,7 @@ def test_current_user_pool_deployment_forwards_studio_jwt_to_run_sse(
     from agentkit.sdk.runtime.client import AgentkitRuntimeClient
 
     captured_config: dict[str, Any] = {}
+    captured_dockerfile = ""
     runtime_id = "runtime-custom-jwt"
     runtime = _runtime_with_public_endpoint(_runtime(runtime_id, "developer"))
     runtime.current_version_number = 1
@@ -926,6 +927,8 @@ def test_current_user_pool_deployment_forwards_studio_jwt_to_run_sse(
             return uid, "studio.example.com"
 
     def launch(*, config_file: str, **_kwargs: Any) -> SimpleNamespace:
+        nonlocal captured_dockerfile
+        captured_dockerfile = (Path(config_file).parent / "Dockerfile").read_text()
         captured_config.update(yaml.safe_load(Path(config_file).read_text()))
         return SimpleNamespace(
             success=True,
@@ -1053,6 +1056,14 @@ def test_current_user_pool_deployment_forwards_studio_jwt_to_run_sse(
     assert response.headers["cache-control"] == "no-cache, no-transform"
     assert response.headers["x-accel-buffering"] == "no"
     assert frames[-1]["success"] is True
+    huawei = "https://repo.huaweicloud.com/repository/pypi/simple"
+    aliyun = "https://mirrors.aliyun.com/pypi/simple/"
+    pypi = "https://pypi.org/simple"
+    assert (
+        captured_dockerfile.index(huawei)
+        < captured_dockerfile.index(aliyun)
+        < captured_dockerfile.index(pypi)
+    )
     cloud = captured_config["launch_types"]["cloud"]
     assert cloud["runtime_auth_type"] == "custom_jwt"
     assert cloud["runtime_jwt_discovery_url"] == (
@@ -5126,6 +5137,7 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
         SimpleNamespace(key="HARNESS_SIDECAR_EXPECTED_PLAN_HASH", value="sha256:old"),
     ]
     captured_config: dict[str, Any] = {}
+    captured_dockerfile = ""
     update_requests: list[Any] = []
     evaluation_set_calls: list[dict[str, Any]] = []
     resolved_model_keys: list[dict[str, Any]] = []
@@ -5142,6 +5154,8 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
         return runtime
 
     def launch(*, config_file: str, **_kwargs: Any) -> SimpleNamespace:
+        nonlocal captured_dockerfile
+        captured_dockerfile = (Path(config_file).parent / "Dockerfile").read_text()
         captured_config.update(yaml.safe_load(Path(config_file).read_text()))
         AgentkitRuntimeClient.update_runtime(
             object(),
@@ -5392,6 +5406,19 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
     assert cloud["runtime_name"] == runtime.name
     assert cloud["runtime_role_name"] == "runtime-role"
     assert cloud["image_tag"] == "veadk-v4"
+    if provider == "volcengine":
+        huawei = "https://repo.huaweicloud.com/repository/pypi/simple"
+        aliyun = "https://mirrors.aliyun.com/pypi/simple/"
+        pypi = "https://pypi.org/simple"
+        assert (
+            captured_dockerfile.index(huawei)
+            < captured_dockerfile.index(aliyun)
+            < captured_dockerfile.index(pypi)
+        )
+    else:
+        assert "RUN uv pip install -r requirements.txt" in captured_dockerfile
+        assert "repo.huaweicloud.com" not in captured_dockerfile
+        assert "mirrors.aliyun.com" not in captured_dockerfile
     assert cloud["runtime_auth_type"] == "custom_jwt"
     assert cloud["runtime_jwt_discovery_url"] == (
         "https://studio.example.com/.well-known/openid-configuration"

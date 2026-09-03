@@ -2160,6 +2160,35 @@ def _render_python_dependency_install(cloud_provider: str) -> str:
     return "RUN " + " || \\\n    ".join(attempts)
 
 
+def render_default_agentkit_dockerfile(cloud_provider: str) -> str:
+    """Render the canonical Dockerfile for ordinary Studio Agent deployments."""
+
+    return "\n".join(
+        [
+            f"FROM {_AGENTKIT_BASE_IMAGES[cloud_provider]}",
+            "",
+            "# Configure AgentKit runtime defaults.",
+            (
+                "ENV UV_SYSTEM_PYTHON=1 UV_COMPILE_BYTECODE=1 "
+                "PYTHONUNBUFFERED=1 DOCKER_CONTAINER=1"
+            ),
+            "",
+            "# Install Python dependencies before copying the source for better layer caching.",
+            "COPY requirements.txt requirements.txt",
+            _render_python_dependency_install(cloud_provider),
+            "",
+            "# Copy the Agent application and configure its runtime entrypoint.",
+            "EXPOSE 8000",
+            "",
+            "WORKDIR /app",
+            "COPY . .",
+            "",
+            'CMD ["python", "-m", "app"]',
+            "",
+        ]
+    )
+
+
 def render_cloud_environment_dockerfile(draft: AgentDraft) -> str | None:
     """Render the custom image or an AgentKit-compatible image for selected CLIs."""
     if draft.cloudEnvironment.resolvedImage:
@@ -2181,7 +2210,7 @@ def render_cloud_environment_dockerfile(draft: AgentDraft) -> str | None:
 
     selected = set(draft.cloudEnvironment.cliTools)
     if not selected and not draft.dynamicAgentDelegation:
-        return None
+        return render_default_agentkit_dockerfile(draft.cloudProvider)
 
     system_packages = ["ca-certificates", "curl"]
     if "github-cli" in selected:

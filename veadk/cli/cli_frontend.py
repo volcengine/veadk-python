@@ -6500,6 +6500,7 @@ def _run_frontend_server(
         # server-side from the caller-owned Session; browser files are ignored.
         from frontend.server.deployment_source import (
             DeploymentSourceError,
+            ensure_default_agentkit_dockerfile,
             write_inline_source,
         )
         from frontend.server.intelligent_development_source import (
@@ -6573,6 +6574,9 @@ def _run_frontend_server(
                     detail="Trusted deployment source is unavailable",
                 ) from error
             raise
+
+        if not use_managed_sidecar_release:
+            ensure_default_agentkit_dockerfile(base, provider)
 
         if use_managed_sidecar_release:
             try:
