@@ -99,7 +99,11 @@ test("sandbox launch dialog covers confirmation loading failure and retry", () =
   assert.match(dialogSource, /nativeEvent\.isComposing/);
   assert.match(dialogSource, /if \(event\.key === "Escape"/);
   assert.match(dialogSource, /const \[persistent, setPersistent\] = useState\(true\)/);
-  assert.match(dialogSource, /setPersistent\(true\)/);
+  assert.match(dialogSource, /setPersistent\(persistentRequired \|\| persistentEnabled\)/);
+  assert.match(dialogSource, /const \[diskGb, setDiskGb\] = useState\(diskGbDefault\)/);
+  assert.match(appSource, /kind === "codex"[\s\S]*?getSandboxCapability\(controller\.signal\)/);
+  assert.match(appSource, /getSandboxAgentCapability\(kind, controller\.signal\)/);
+  assert.match(dialogSource, /persistentReason \|\| "当前环境不支持快照持久化"/);
   assert.match(
     dialogSource,
     /@openai\/apps-sdk-ui\/components\/Checkbox/,
@@ -108,6 +112,12 @@ test("sandbox launch dialog covers confirmation loading failure and retry", () =
     dialogSource,
     /<Checkbox[\s\S]*?className="sandbox-dialog-persistence-control"[\s\S]*?checked=\{persistent\}[\s\S]*?label="持久化"/,
   );
+  assert.match(
+    dialogSource,
+    /storageMode === "disk"[\s\S]*?<span>存储大小<\/span>[\s\S]*?type="number"[\s\S]*?min=\{diskGbMin\}[\s\S]*?max=\{diskGbMax\}/,
+  );
+  assert.match(dialogSource, /storageMode === "disk" \? true : persistent/);
+  assert.match(dialogSource, /storageMode === "disk" \? diskGb : undefined/);
   assert.match(
     dialogSource,
     /id="sandbox-persistence-description"[\s\S]*?persistent[\s\S]*?保留智能体数据，后续可继续使用。[\s\S]*?智能体将在 8 小时后清空/,
@@ -128,10 +138,11 @@ test("sandbox launch dialog covers confirmation loading failure and retry", () =
     /\.sandbox-dialog-persistence-description\.is-warning \{[\s\S]*?color: hsl\(37 72% 36%\)/,
   );
   assert.doesNotMatch(dialogSource, /id="sandbox-persistence-warning"/);
-  assert.match(dialogSource, /onConfirm\(validDisplayName, persistent\)/);
-  assert.match(appSource, /launchSandboxSession\(displayName: string, persistent: boolean\)/);
-  assert.match(appSource, /displayName,[\s\S]*?persistent,[\s\S]*?signal: controller\.signal/);
+  assert.match(appSource, /launchSandboxSession\([\s\S]*?diskGb\?: number/);
+  assert.match(appSource, /displayName,[\s\S]*?persistent,[\s\S]*?diskGb,[\s\S]*?signal: controller\.signal/);
   assert.match(sandboxClientSource, /persistent\?: boolean/);
+  assert.match(sandboxClientSource, /diskGb\?: number/);
+  assert.match(sandboxClientSource, /\{ diskGb: options\.diskGb \}/);
   assert.match(sandboxClientSource, /persistent: options\.persistent \?\? true/g);
   assert.match(appSource, /sandboxLaunchAbortRef\.current\?\.abort\(\)/);
 });

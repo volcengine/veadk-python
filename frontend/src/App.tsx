@@ -1058,6 +1058,17 @@ export default function App() {
   const [sandboxLaunchError, setSandboxLaunchError] = useState("");
   const [sandboxLaunchKind, setSandboxLaunchKind] =
     useState<"codex" | SandboxAgentKind>("codex");
+  const [sandboxLaunchPersistentEnabled, setSandboxLaunchPersistentEnabled] =
+    useState(true);
+  const [sandboxLaunchPersistentReason, setSandboxLaunchPersistentReason] =
+    useState("");
+  const [sandboxLaunchPersistentRequired, setSandboxLaunchPersistentRequired] =
+    useState(false);
+  const [sandboxLaunchStorageMode, setSandboxLaunchStorageMode] =
+    useState<"snapshot" | "disk">("snapshot");
+  const [sandboxLaunchDiskGbDefault, setSandboxLaunchDiskGbDefault] = useState(10);
+  const [sandboxLaunchDiskGbMin, setSandboxLaunchDiskGbMin] = useState(5);
+  const [sandboxLaunchDiskGbMax, setSandboxLaunchDiskGbMax] = useState(100);
   const [sandboxLaunchFromAgents, setSandboxLaunchFromAgents] = useState(false);
   const [sandboxProjectUploadOpen, setSandboxProjectUploadOpen] = useState(false);
   const [sandboxAgentRefreshKey, setSandboxAgentRefreshKey] = useState(0);
@@ -1069,6 +1080,7 @@ export default function App() {
   const [sandboxThreadDeleteTarget, setSandboxThreadDeleteTarget] =
     useState<SandboxThreadSummary | null>(null);
   const sandboxLaunchAbortRef = useRef<AbortController | null>(null);
+  const sandboxLaunchCapabilityAbortRef = useRef<AbortController | null>(null);
   const intelligentCreateAbortRef = useRef<AbortController | null>(null);
   const sandboxMessageAbortRef = useRef<AbortController | null>(null);
   const pendingIntelligentNavigationRef = useRef<(() => void) | null>(null);
@@ -1083,6 +1095,9 @@ export default function App() {
   const sandboxEndpointCopyTimerRef = useRef<number | undefined>(undefined);
   const sandboxPreviewUrlsRef = useRef<Set<string>>(new Set());
   sandboxSessionIdRef.current = sandboxSession?.id ?? "";
+  useEffect(() => () => {
+    sandboxLaunchCapabilityAbortRef.current?.abort();
+  }, []);
   useEffect(() => () => {
     if (sandboxEndpointCopyTimerRef.current !== undefined) {
       window.clearTimeout(sandboxEndpointCopyTimerRef.current);
@@ -3525,11 +3540,42 @@ export default function App() {
     setSandboxLaunchError("");
     setSandboxLaunchState("confirm");
     setSandboxLaunchKind(kind);
+    setSandboxLaunchPersistentEnabled(false);
+    setSandboxLaunchPersistentReason("正在检查持久化能力…");
+    setSandboxLaunchPersistentRequired(false);
+    setSandboxLaunchStorageMode("snapshot");
+    setSandboxLaunchDiskGbDefault(10);
+    setSandboxLaunchDiskGbMin(5);
+    setSandboxLaunchDiskGbMax(100);
+    sandboxLaunchCapabilityAbortRef.current?.abort();
+    const controller = new AbortController();
+    sandboxLaunchCapabilityAbortRef.current = controller;
+    const capabilityRequest = kind === "codex"
+      ? getSandboxCapability(controller.signal)
+      : getSandboxAgentCapability(kind, controller.signal);
+    void capabilityRequest
+      .then((capability) => {
+        if (controller.signal.aborted) return;
+        setSandboxLaunchPersistentEnabled(capability.persistentEnabled === true);
+        setSandboxLaunchPersistentReason(capability.persistentReason ?? "");
+        setSandboxLaunchPersistentRequired(capability.persistentRequired === true);
+        setSandboxLaunchStorageMode(capability.storageMode ?? "snapshot");
+        setSandboxLaunchDiskGbDefault(capability.diskGbDefault ?? 10);
+        setSandboxLaunchDiskGbMin(capability.diskGbMin ?? 5);
+        setSandboxLaunchDiskGbMax(capability.diskGbMax ?? 100);
+      })
+      .catch((cause) => {
+        if ((cause as Error)?.name === "AbortError") return;
+        setSandboxLaunchPersistentEnabled(false);
+        setSandboxLaunchPersistentReason("暂时无法确认持久化能力");
+      });
     setSandboxLaunchFromAgents(fromAgents);
     setSandboxLaunchOpen(true);
   }
 
   function cancelSandboxLaunch() {
+    sandboxLaunchCapabilityAbortRef.current?.abort();
+    sandboxLaunchCapabilityAbortRef.current = null;
     sandboxLaunchAbortRef.current?.abort();
     sandboxLaunchAbortRef.current = null;
     setSandboxLaunchOpen(false);
@@ -3544,7 +3590,11 @@ export default function App() {
     }
   }
 
-  async function launchSandboxSession(displayName: string, persistent: boolean) {
+  async function launchSandboxSession(
+    displayName: string,
+    persistent: boolean,
+    diskGb?: number,
+  ) {
     sandboxLaunchAbortRef.current?.abort();
     const controller = new AbortController();
     sandboxLaunchAbortRef.current = controller;
@@ -3559,11 +3609,13 @@ export default function App() {
         ? await sandboxClient.startSession({
             displayName,
             persistent,
+            diskGb,
             signal: controller.signal,
           })
         : await sandboxClient.startAgentSession(sandboxLaunchKind, {
             displayName,
             persistent,
+            diskGb,
             signal: controller.signal,
           });
       if (sandboxLaunchAbortRef.current !== controller) {
@@ -5473,12 +5525,13 @@ export default function App() {
     return <div className="boot" />;
   }
 
-  const canCreateAgents = access.capabilities.createAgents;
+  const canCreateRuntimeAgents = access.capabilities.createAgents;
+  const canCreatePersonalAgents = access.capabilities.createPersonalAgents;
   const canManageAgents = access.capabilities.manageAgents;
   const canViewAgentUsage = features.agentUsage && canManageAgents;
-  const visibleCreateView = canCreateAgents ? createView : null;
-  const showAddMenu = canCreateAgents && addMenu;
-  const showAddAgent = canCreateAgents && addAgent;
+  const visibleCreateView = canCreateRuntimeAgents ? createView : null;
+  const showAddMenu = canCreateRuntimeAgents && addMenu;
+  const showAddAgent = canCreateRuntimeAgents && addAgent;
   const showManageAgents = manageAgents && Boolean(
     agentDetailTarget || focusedDeploymentTaskId || focusedWorkspaceAgentId,
   );
@@ -5912,7 +5965,7 @@ export default function App() {
   };
 
   const openAgentCreateFromMyAgents = (region: string) => {
-    if (!canCreateAgents) {
+    if (!canCreateRuntimeAgents) {
       setError("当前账号没有添加 Agent 的权限。");
       return;
     }
@@ -6012,7 +6065,7 @@ export default function App() {
   const openSandboxAgentCreate = (
     kind: "codex" | SandboxAgentKind,
   ) => {
-    if (!canCreateAgents) {
+    if (!canCreatePersonalAgents) {
       setError("当前账号没有创建智能体的权限。");
       return;
     }
@@ -6292,7 +6345,7 @@ export default function App() {
           setError("");
         })}
         onQuickCreate={() => requestIntelligentNavigation(() => {
-          if (!canCreateAgents) {
+          if (!canCreateRuntimeAgents) {
             setError("当前账号没有添加 Agent 的权限。");
             return;
           }
@@ -6343,7 +6396,7 @@ export default function App() {
           setError("");
         })}
         onAddAgent={() => requestIntelligentNavigation(() => {
-          if (!canCreateAgents) {
+          if (!canCreateRuntimeAgents) {
             setError("当前账号没有添加 Agent 的权限。");
             return;
           }
@@ -6825,8 +6878,9 @@ export default function App() {
               <MyAgents
                 cloudProvider={cloudProvider}
                 studioRegion={agentsSource === "local" ? "cn-beijing" : studioRegion}
-                canCreate={canCreateAgents}
-                canUpdate={canCreateAgents || canManageAgents}
+                canCreateRuntimeAgents={canCreateRuntimeAgents}
+                canCreatePersonalAgents={canCreatePersonalAgents}
+                canUpdate={canCreateRuntimeAgents || canManageAgents}
                 runtimeScope={access.capabilities.runtimeScope}
                 onCreateAgent={openAgentCreateFromMyAgents}
                 onOpenCodexProjectUpload={() => setSandboxProjectUploadOpen(true)}
@@ -6877,8 +6931,8 @@ export default function App() {
                 agentInfo={agentInfo}
                 agentInfoAgentId={appName}
                 loadingAgentInfo={capabilitiesLoading}
-                canCreate={canCreateAgents}
-                canUpdate={canCreateAgents || canManageAgents}
+                canCreate={canCreateRuntimeAgents}
+                canUpdate={canCreateRuntimeAgents || canManageAgents}
                 canViewUsage={canViewAgentUsage}
                 loadingAgents={agentLibraryLoading}
                 agentsError={agentLibraryError}
@@ -6899,7 +6953,7 @@ export default function App() {
                 onOpenFeedbackCase={(item) => void openFeedbackCaseInStudio(item)}
                 onFeedbackCasesDeleted={clearDeletedFeedbackCases}
                 onCreateAgent={() => {
-                  if (!canCreateAgents) {
+                  if (!canCreateRuntimeAgents) {
                     setError("当前账号没有添加 Agent 的权限。");
                     return;
                   }
@@ -6917,7 +6971,7 @@ export default function App() {
                   setError("");
                 }}
                 onUpdateAgent={async (capability) => {
-                  if (!canManageAgents && !canCreateAgents) {
+                  if (!canManageAgents && !canCreateRuntimeAgents) {
                     setError("当前账号没有管理 Agent 的权限。");
                     return;
                   }
@@ -7740,9 +7794,16 @@ export default function App() {
         state={sandboxLaunchState}
         agentKind={sandboxLaunchKind}
         error={sandboxLaunchError}
+        persistentEnabled={sandboxLaunchPersistentEnabled}
+        persistentReason={sandboxLaunchPersistentReason}
+        persistentRequired={sandboxLaunchPersistentRequired}
+        storageMode={sandboxLaunchStorageMode}
+        diskGbDefault={sandboxLaunchDiskGbDefault}
+        diskGbMin={sandboxLaunchDiskGbMin}
+        diskGbMax={sandboxLaunchDiskGbMax}
         onCancel={cancelSandboxLaunch}
-        onConfirm={(displayName, persistent) =>
-          void launchSandboxSession(displayName, persistent)
+        onConfirm={(displayName, persistent, diskGb) =>
+          void launchSandboxSession(displayName, persistent, diskGb)
         }
       />
 
