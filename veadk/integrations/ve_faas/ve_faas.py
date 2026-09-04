@@ -44,6 +44,7 @@ from veadk.utils.cloud_provider import (
     CloudProvider,
     default_vefaas_application_template_id,
     vefaas_openapi_host,
+    configure_openapi_tls,
 )
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import formatted_timestamp, getenv
@@ -157,8 +158,9 @@ class VeFaaS:
         configuration.sk = self.sk
         configuration.session_token = self.session_token
         configuration.region = region
-        if provider == "byteplus":
-            configuration.host = f"https://{self.openapi_host}"
+        scheme = os.getenv("VEFAAS_OPENAPI_SCHEME", "https").strip() or "https"
+        configuration.host = f"{scheme}://{self.openapi_host}"
+        configure_openapi_tls(configuration)
 
         configuration.client_side_validation = True
         volcenginesdkcore.Configuration.set_default(configuration)
@@ -1063,6 +1065,9 @@ class VeFaaS:
                 source=image,  # Container image URL
                 request_timeout=1800,  # Request timeout in seconds
                 envs=envs,  # Environment variables from configuration
+                memory_mb=4096,
+                role=getenv("IAM_ROLE", None, allow_false_values=True),
+                project_name=self.project_name,
             )
         )
 
@@ -1189,6 +1194,9 @@ class VeFaaS:
                 source=image,  # Container image URL
                 request_timeout=1800,  # Request timeout in seconds
                 envs=envs,  # Environment variables from configuration
+                memory_mb=4096,
+                role=getenv("IAM_ROLE", None, allow_false_values=True),
+                project_name=self.project_name,
             )
         )
 

@@ -23,8 +23,6 @@ import {
 import {
   cloudRegionOptions,
   defaultCloudRegion,
-  isSupportedCloudRegion,
-  type CloudRegion,
   type CloudProvider,
 } from "../adk/cloudProvider";
 import {
@@ -299,20 +297,13 @@ function runtimeDetailTargetForCard(
 function resolveAgentRegion(
   studioRegion: string,
   cloudProvider: CloudProvider,
-): CloudRegion {
-  const providerRegions = cloudRegionOptions(cloudProvider);
-  if (
-    isSupportedCloudRegion(studioRegion) &&
-    providerRegions.some((option) => option.value === studioRegion)
-  ) {
-    return studioRegion;
-  }
-  return defaultCloudRegion(cloudProvider);
+): string {
+  return studioRegion.trim() || defaultCloudRegion(cloudProvider);
 }
 
 async function loadRuntimeAgents(
   runtimeScope: RuntimeScope,
-  region: CloudRegion,
+  region: string,
   nextToken: string,
   onList: (agents: MyAgentCardData[]) => void,
   signal?: AbortSignal,
@@ -604,7 +595,8 @@ function AgentCard({
 export interface MyAgentsProps {
   cloudProvider: CloudProvider;
   studioRegion: string;
-  canCreate: boolean;
+  canCreateRuntimeAgents: boolean;
+  canCreatePersonalAgents: boolean;
   canUpdate: boolean;
   runtimeScope: RuntimeScope;
   onCreateAgent: (region: string) => void;
@@ -630,7 +622,8 @@ export interface MyAgentsProps {
 export function MyAgents({
   cloudProvider,
   studioRegion,
-  canCreate,
+  canCreateRuntimeAgents,
+  canCreatePersonalAgents,
   canUpdate,
   runtimeScope,
   onCreateAgent,
@@ -664,7 +657,7 @@ export function MyAgents({
   const [ownership, setOwnership] = useState<RuntimeScope>(
     runtimeScope === "mine" ? "mine" : "all",
   );
-  const [region, setRegion] = useState<CloudRegion>(configuredRegion);
+  const [region, setRegion] = useState(configuredRegion);
   const [runtimeAgents, setRuntimeAgents] = useState<MyAgentCardData[]>([]);
   const [runtimeNextToken, setRuntimeNextToken] = useState("");
   const [loadingRuntimes, setLoadingRuntimes] = useState(true);
@@ -678,10 +671,17 @@ export function MyAgents({
   >({});
   const [draftToDelete, setDraftToDelete] = useState<WorkspaceAgentDraft | null>(null);
   const [remainingTimeNow, setRemainingTimeNow] = useState(() => Date.now());
-  const regionFilterOptions = useMemo<Array<ResourceFilterOption<CloudRegion>>>(
-    () => cloudRegionOptions(cloudProvider),
-    [cloudProvider],
-  );
+  const regionFilterOptions = useMemo<Array<ResourceFilterOption<string>>>(() => {
+    const providerOptions: Array<ResourceFilterOption<string>> =
+      cloudRegionOptions(cloudProvider);
+    if (providerOptions.some((option) => option.value === configuredRegion)) {
+      return providerOptions;
+    }
+    return [
+      { value: configuredRegion, label: configuredRegion },
+      ...providerOptions,
+    ];
+  }, [cloudProvider, configuredRegion]);
 
   useEffect(() => {
     if (runtimeScope === "mine") setOwnership("mine");
@@ -948,7 +948,7 @@ export function MyAgents({
     setOwnership(nextOwnership);
   }
 
-  function selectRegion(nextRegion: CloudRegion) {
+  function selectRegion(nextRegion: string) {
     if (nextRegion === region) return;
     resetRuntimePagination();
     setRegion(nextRegion);
@@ -1139,13 +1139,18 @@ export function MyAgents({
     ? loadingRuntimes && runtimeAgents.length === 0 && draftAgents.length === 0
     : loadingSandboxAgents && sandboxAgents.length === 0;
   const showEmpty = !showInitialLoading && visibleAgents.length === 0;
-  const createAgent = canCreate
+  const canCreateActiveAgent = activeType === "general"
+    ? canCreateRuntimeAgents
+    : canCreatePersonalAgents;
+  const createAgent = canCreateActiveAgent
     ? activeType === "general"
       ? () => onCreateAgent(region)
       : () => onCreateSandboxAgent(activeType)
     : undefined;
   const showCodexProjectUpload =
-    activeType === "codex" && canCreate && Boolean(onOpenCodexProjectUpload);
+    activeType === "codex" &&
+    canCreatePersonalAgents &&
+    Boolean(onOpenCodexProjectUpload);
 
   return (
     <ResourcePageShell className="my-agents-page" aria-label="智能体">

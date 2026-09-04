@@ -20,6 +20,8 @@ import asyncio
 import base64
 import binascii
 import contextlib
+import hashlib
+import hmac
 import json
 import os
 import posixpath
@@ -29,8 +31,9 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass, field, replace
-from typing import Annotated, Any, Protocol
+from typing import TYPE_CHECKING, Annotated, Any, Protocol
 
+import httpx
 from fastapi import File, Request, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -66,6 +69,7 @@ from veadk.cli.codex_app_server import (
     CodexTokenUsage,
     approval_decision_from_payload,
     permission_settings_from_payload,
+    sandbox_service_url,
 )
 from veadk.cli.frontend_sandbox_proxy import (
     SANDBOX_UPLOAD_MAX_BYTES,
@@ -82,10 +86,18 @@ from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+if TYPE_CHECKING:
+    from veadk.cli.frontend_sandbox_managed_tool_vestack import (
+        VeStackManagedTool,
+        VeStackManagedToolSpec,
+    )
+
 STUDIO_SANDBOX_TOOL_NAME = "veadk-studio-codex"
 STUDIO_SANDBOX_TTL_SECONDS = 28_800
 STUDIO_SANDBOX_MAX_ACTIVE = 20
 STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH = SESSION_DISPLAY_NAME_MAX_LENGTH
+STUDIO_SANDBOX_DISK_GB_MIN = 5
+STUDIO_SANDBOX_DISK_GB_MAX = 100
 _SANDBOX_CHAT_TOOL_ENV = "SANDBOX_CHAT_CODEX"
 _SANDBOX_CHAT_SNAPSHOT_TOOL_ENV = "SANDBOX_CHAT_CODEX_SNAPSHOT"
 _SANDBOX_ENDPOINT_EXPORT_ENV = "STUDIO_EXPOSE_SANDBOX_ENDPOINT"
@@ -109,6 +121,10 @@ _SANDBOX_AGENT_SNAPSHOT_TOOL_ENVS = {
     "hermes": "SANDBOX_CHAT_HERMES_SNAPSHOT",
 }
 _SANDBOX_CODEX_AGENT_KIND = "codex"
+_AGENT_SURFACE_READY_ATTEMPTS = 90
+_AGENT_SURFACE_READY_INTERVAL_SECONDS = 2
+_AGENT_SURFACE_SIGNING_KEY_ENV = "VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY"
+_AGENT_SURFACE_CAPABILITY_VERSION = "v1"
 _CREATE_SESSION_START_FAIL_CODE = "ErrCreateSessionFail"
 _SESSION_NOT_FOUND_CODE = "InvalidResource.NotFound"
 _ACTIVE_SESSION_STATUSES = {"creating", "pending", "running", "ready", "starting"}
@@ -676,6 +692,19 @@ class SandboxCloudSnapshot:
     created_by: str = ""
 
 
+def _managed_tool_disk_gb(value: object, default: int) -> int:
+    """Validate the persistent disk size used by an independent Tool."""
+    disk_gb = default if value is None else value
+    if isinstance(disk_gb, bool) or not isinstance(disk_gb, int):
+        raise SandboxValidationError("diskGb 必须是整数。")
+    if not STUDIO_SANDBOX_DISK_GB_MIN <= disk_gb <= STUDIO_SANDBOX_DISK_GB_MAX:
+        raise SandboxValidationError(
+            "diskGb 必须在 "
+            f"{STUDIO_SANDBOX_DISK_GB_MIN} 到 {STUDIO_SANDBOX_DISK_GB_MAX} GiB 之间。"
+        )
+    return disk_gb
+
+
 def _restorable_snapshots(
     sessions: list[SandboxCloudSession],
     snapshots: list[SandboxCloudSnapshot],
@@ -760,6 +789,51 @@ def _session_matches_agent_kind(
     if actual == agent_kind:
         return True
     return include_legacy and not actual
+
+
+def _agent_surface_capability(kind: str, session_id: str) -> str:
+    """Issue a replica-safe capability without exposing the cloud endpoint."""
+    signing_key = os.getenv(_AGENT_SURFACE_SIGNING_KEY_ENV, "").strip()
+    if not signing_key:
+        return secrets.token_urlsafe(32)
+    expires_at = int(time.time()) + STUDIO_SANDBOX_TTL_SECONDS
+    payload = f"{_AGENT_SURFACE_CAPABILITY_VERSION}.{expires_at}"
+    message = f"veadk-agent-surface\0{kind}\0{session_id}\0{payload}".encode()
+    signature = hmac.new(signing_key.encode(), message, hashlib.sha256).digest()
+    encoded_signature = base64.urlsafe_b64encode(signature).decode().rstrip("=")
+    return f"{payload}.{encoded_signature}"
+
+
+def _valid_agent_surface_capability(
+    token: str,
+    kind: str,
+    session_id: str,
+) -> bool:
+    signing_key = os.getenv(_AGENT_SURFACE_SIGNING_KEY_ENV, "").strip()
+    if not signing_key or not token:
+        return False
+    try:
+        version, raw_expiry, encoded_signature = token.split(".", 2)
+        expires_at = int(raw_expiry)
+    except (TypeError, ValueError):
+        return False
+    now = int(time.time())
+    if (
+        version != _AGENT_SURFACE_CAPABILITY_VERSION
+        or expires_at < now
+        or expires_at > now + STUDIO_SANDBOX_TTL_SECONDS + 60
+    ):
+        return False
+    payload = f"{version}.{expires_at}"
+    message = f"veadk-agent-surface\0{kind}\0{session_id}\0{payload}".encode()
+    expected = (
+        base64.urlsafe_b64encode(
+            hmac.new(signing_key.encode(), message, hashlib.sha256).digest()
+        )
+        .decode()
+        .rstrip("=")
+    )
+    return secrets.compare_digest(encoded_signature, expected)
 
 
 @dataclass
@@ -947,6 +1021,28 @@ class SandboxCloudGateway(Protocol):
     async def get_tool(self, tool_id: str) -> Any:
         """Read one configured Sandbox Tool."""
         raise NotImplementedError
+
+    async def list_managed_tools(
+        self, agent_kind: str, owner_id: str | None = None
+    ) -> list[VeStackManagedTool]:
+        """List Studio-created per-agent Tools, optionally by owner."""
+        raise NotImplementedError  # pragma: no cover - Protocol declaration
+
+    async def create_managed_tool(
+        self,
+        spec: VeStackManagedToolSpec,
+        *,
+        display_name: str,
+        owner_id: str,
+        creator_name: str,
+        agent_kind: str,
+    ) -> VeStackManagedTool:
+        """Create and wait for one independent Studio-owned Tool."""
+        raise NotImplementedError  # pragma: no cover - Protocol declaration
+
+    async def delete_managed_tool(self, tool: VeStackManagedTool) -> None:
+        """Delete one Studio-created per-agent Tool."""
+        raise NotImplementedError  # pragma: no cover - Protocol declaration
 
     async def list_sessions(
         self, tool_id: str, username: str | None = None
@@ -1560,11 +1656,14 @@ class SandboxConversationService:
         tool_id: str | None = None,
         snapshot_tool_id: str | None = None,
         agent_kind: str = _SANDBOX_CODEX_AGENT_KIND,
+        managed_tool_spec: VeStackManagedToolSpec | None = None,
     ) -> None:
         self._gateway = gateway
         self._configured_tool_id = (tool_id or "").strip()
         self._configured_snapshot_tool_id = (snapshot_tool_id or "").strip()
         self._agent_kind = agent_kind
+        self._managed_tool_spec = managed_tool_spec
+        self._managed_tools_by_session: dict[str, VeStackManagedTool] = {}
         self._sessions: dict[tuple[str, str], SandboxConversation] = {}
         self._registry_lock = asyncio.Lock()
         self._sessions_starting = 0
@@ -1572,12 +1671,34 @@ class SandboxConversationService:
     def capabilities(self) -> dict[str, object]:
         """Report whether the dedicated Codex Tool is configured."""
         tools = self._tools()
-        enabled = bool(tools.configured)
+        enabled = self._managed_tool_spec is not None or bool(tools.configured)
+        if self._managed_tool_spec is not None:
+            return {
+                "enabled": enabled,
+                "reason": "" if enabled else "管理员未配置",
+                "persistentEnabled": True,
+                "persistentReason": "",
+                "persistentRequired": True,
+                "storageMode": "disk",
+                "diskGbDefault": self._managed_tool_spec.disk_gb,
+                "diskGbMin": STUDIO_SANDBOX_DISK_GB_MIN,
+                "diskGbMax": STUDIO_SANDBOX_DISK_GB_MAX,
+                "endpointExportEnabled": _sandbox_endpoint_export_enabled(),
+            }
+        persistent_enabled = bool(tools.persistent)
         return {
             "enabled": enabled,
             "reason": "" if enabled else "管理员未配置",
-            "persistentEnabled": bool(tools.persistent),
-            "persistentReason": "" if tools.persistent else "管理员未配置快照版 Tool",
+            "persistentEnabled": persistent_enabled,
+            "persistentReason": (
+                ""
+                if persistent_enabled
+                else (
+                    "当前环境仅支持独立 Tool"
+                    if self._managed_tool_spec is not None
+                    else "管理员未配置快照版 Tool"
+                )
+            ),
             "endpointExportEnabled": _sandbox_endpoint_export_enabled(),
         }
 
@@ -1604,8 +1725,38 @@ class SandboxConversationService:
         """Read the configured transient or snapshot Sandbox Tool."""
         return await self._gateway.get_tool(self._tool_id(persistent=persistent))
 
+    async def _managed_tool_for_session(
+        self, session_id: str
+    ) -> VeStackManagedTool | None:
+        cached = self._managed_tools_by_session.get(session_id)
+        if cached is not None:
+            return cached
+        for tool in await self._gateway.list_managed_tools(self._agent_kind):
+            try:
+                sessions = await self._gateway.list_sessions(tool.tool_id)
+            except SandboxError:
+                continue
+            for session in sessions:
+                self._managed_tools_by_session[session.instance_id] = tool
+                if session.instance_id == session_id:
+                    return tool
+        return None
+
     async def _cloud_session(self, session_id: str) -> SandboxCloudSession:
         """Find a Session across the configured transient and snapshot Tools."""
+        if self._managed_tool_spec is not None:
+            tool = await self._managed_tool_for_session(session_id)
+            if tool is None:
+                raise SandboxSessionNotFoundError("AgentKit Session 不存在或已过期。")
+            cloud = await self._gateway.get_session(tool.tool_id, session_id)
+            return replace(
+                cloud,
+                display_name=cloud.display_name or tool.display_name,
+                created_by=cloud.created_by or tool.created_by,
+                creator_name=cloud.creator_name or tool.creator_name,
+                agent_kind=cloud.agent_kind or tool.agent_kind or self._agent_kind,
+                persistent=True,
+            )
         tools = self._tools()
         if not tools.configured:
             self._tool_id()
@@ -1628,6 +1779,30 @@ class SandboxConversationService:
         self, owner_id: str, *, is_admin: bool = False
     ) -> list[SandboxCloudSession]:
         """List the configured account's Sessions without exposing Endpoints."""
+        if self._managed_tool_spec is not None:
+            managed_tools = await self._gateway.list_managed_tools(
+                self._agent_kind,
+                None if is_admin else owner_id,
+            )
+            sessions: dict[str, SandboxCloudSession] = {}
+            for tool in managed_tools:
+                for session in await self._gateway.list_sessions(tool.tool_id):
+                    self._managed_tools_by_session[session.instance_id] = tool
+                    sessions[session.instance_id] = replace(
+                        session,
+                        display_name=session.display_name or tool.display_name,
+                        created_by=session.created_by or tool.created_by,
+                        creator_name=session.creator_name or tool.creator_name,
+                        agent_kind=(
+                            session.agent_kind or tool.agent_kind or self._agent_kind
+                        ),
+                        persistent=True,
+                    )
+            return sorted(
+                sessions.values(),
+                key=lambda session: session.created_at,
+                reverse=True,
+            )
         tools = self._tools()
         if not tools.configured:
             self._tool_id()
@@ -1656,6 +1831,8 @@ class SandboxConversationService:
         self, owner_id: str, *, is_admin: bool = False
     ) -> list[SandboxCloudSnapshot]:
         del owner_id
+        if self._managed_tool_spec is not None:
+            return []
         tools = self._tools()
         if not is_admin or not tools.persistent:
             return []
@@ -1733,6 +1910,7 @@ class SandboxConversationService:
         creator_name: str = "",
         persistent: object = True,
         envs: Mapping[str, str] | None = None,
+        disk_gb: object = None,
     ) -> SandboxCloudSession:
         """Create a cloud Session without opening a conversation connection."""
         if not isinstance(display_name, str):
@@ -1764,7 +1942,6 @@ class SandboxConversationService:
                 session_envs[key] = normalized
             if not session_envs:
                 session_envs = None
-        tool_id = self._tool_id(persistent=persistent)
         await self.cleanup_expired()
         async with self._registry_lock:
             if len(self._sessions) + self._sessions_starting >= (
@@ -1773,17 +1950,51 @@ class SandboxConversationService:
                 raise SandboxCapacityError("Sandbox 创建或连接数已达上限，请稍后重试。")
             self._sessions_starting += 1
         try:
-            created = await self._gateway.create_session(
-                tool_id,
-                display_name,
-                owner_id,
-                creator_name,
-                self._agent_kind,
-                **({"envs": session_envs} if session_envs else {}),
-            )
-            authoritative = await self._gateway.get_session(
-                tool_id, created.instance_id
-            )
+            managed_tool: VeStackManagedTool | None = None
+            if self._managed_tool_spec is not None:
+                managed_spec = replace(
+                    self._managed_tool_spec,
+                    disk_gb=_managed_tool_disk_gb(
+                        disk_gb,
+                        self._managed_tool_spec.disk_gb,
+                    ),
+                )
+                managed_tool = await self._gateway.create_managed_tool(
+                    managed_spec,
+                    display_name=display_name,
+                    owner_id=owner_id,
+                    creator_name=creator_name,
+                    agent_kind=self._agent_kind,
+                )
+                tool_id = managed_tool.tool_id
+            else:
+                tool_id = self._tool_id(persistent=persistent)
+            try:
+                created = await self._gateway.create_session(
+                    tool_id,
+                    display_name,
+                    owner_id,
+                    creator_name,
+                    self._agent_kind,
+                    **({"envs": session_envs} if session_envs else {}),
+                )
+                authoritative = await self._gateway.get_session(
+                    tool_id, created.instance_id
+                )
+            except Exception:
+                if managed_tool is not None:
+                    await self._gateway.delete_managed_tool(managed_tool)
+                raise
+            if managed_tool is not None:
+                self._managed_tools_by_session[created.instance_id] = managed_tool
+                return replace(
+                    authoritative,
+                    display_name=authoritative.display_name or display_name,
+                    created_by=authoritative.created_by or owner_id,
+                    creator_name=authoritative.creator_name or creator_name,
+                    agent_kind=authoritative.agent_kind or self._agent_kind,
+                    persistent=True,
+                )
             return _session_for_tools(
                 replace(
                     authoritative,
@@ -2429,6 +2640,11 @@ class SandboxConversationService:
         is_admin: bool = False,
     ) -> None:
         """Delete a cloud Session and close its local bridge when connected."""
+        managed_tool = (
+            await self._managed_tool_for_session(session_id)
+            if self._managed_tool_spec is not None
+            else None
+        )
         key = (owner_id, session_id)
         if not is_admin and any(
             candidate_id == session_id and candidate_owner != owner_id
@@ -2454,6 +2670,9 @@ class SandboxConversationService:
                 async with candidate.lock:
                     await candidate.codex.close()
         await self._gateway.delete_session(cloud)
+        if managed_tool is not None:
+            self._managed_tools_by_session.pop(session_id, None)
+            await self._gateway.delete_managed_tool(managed_tool)
 
     async def cleanup_expired(self) -> None:
         """Drop local connections that exceeded their remote TTL window."""
@@ -2500,25 +2719,96 @@ class SandboxAgentSessionService:
         display_name_prefix: str = "",
         allow_admin_cross_owner: bool = True,
         terminal_initial_command: str = "",
+        surface_start_command: str = "",
+        surface_ready_path: str = "",
         unconfigured_message: str = "",
+        managed_tool_spec: VeStackManagedToolSpec | None = None,
     ) -> None:
         if kind not in _SANDBOX_AGENT_TOOL_ENVS:
             raise ValueError(f"Unsupported Studio sandbox agent kind: {kind}")
         self._gateway = gateway
         self.kind = kind
         surface = (surface_path or f"/{kind}/").strip()
-        self.surface_path = f"/{surface.strip('/')}/"
+        normalized_surface = f"/{surface.strip('/')}"
+        self.surface_path = (
+            normalized_surface
+            if normalized_surface.lower().endswith((".html", ".htm"))
+            else f"{normalized_surface}/"
+        )
         self._filter_agent_kind = filter_agent_kind
         self._display_name_prefix = display_name_prefix.strip()
         self.allow_admin_cross_owner = allow_admin_cross_owner
         self._terminal_initial_command = terminal_initial_command.strip()
+        self._surface_start_command = surface_start_command.strip()
+        self._surface_ready_path = surface_ready_path.strip()
         self._unconfigured_message = unconfigured_message.strip()
+        self._managed_tool_spec = managed_tool_spec
         self._configured_tool_id = (tool_id or "").strip()
         self._configured_snapshot_tool_id = (snapshot_tool_id or "").strip()
         self._workspaces: dict[
             tuple[str, str], tuple[SandboxCloudSession, str, float]
         ] = {}
         self._created_session_ids: set[str] = set()
+        self._managed_tools_by_session: dict[str, VeStackManagedTool] = {}
+        self._surface_start_locks: dict[str, asyncio.Lock] = {}
+
+    async def _surface_is_ready(self, endpoint: str) -> bool:
+        if not self._surface_ready_path:
+            return True
+        try:
+            async with httpx.AsyncClient(
+                timeout=5,
+                follow_redirects=False,
+                trust_env=False,
+            ) as client:
+                response = await client.get(
+                    sandbox_service_url(endpoint, self._surface_ready_path),
+                    headers={"accept": "text/html"},
+                )
+        except (httpx.HTTPError, TypeError, ValueError):
+            return False
+        return 200 <= response.status_code < 300
+
+    async def _ensure_surface_ready(self, cloud: SandboxCloudSession) -> None:
+        if not self._surface_start_command or not self._surface_ready_path:
+            return
+        lock = self._surface_start_locks.setdefault(
+            cloud.instance_id,
+            asyncio.Lock(),
+        )
+        async with lock:
+            if await self._surface_is_ready(cloud.endpoint):
+                return
+            try:
+                async with httpx.AsyncClient(
+                    timeout=15,
+                    follow_redirects=False,
+                    trust_env=False,
+                ) as client:
+                    response = await client.post(
+                        sandbox_service_url(cloud.endpoint, "/v1/shell/exec"),
+                        headers={"content-type": "application/json"},
+                        json={
+                            "id": "",
+                            "exec_dir": "/home/gem/.hermes",
+                            "command": self._surface_start_command,
+                            "timeout": 5,
+                            "hard_timeout": 15,
+                            "strict": True,
+                        },
+                    )
+            except (httpx.HTTPError, TypeError, ValueError) as error:
+                raise SandboxInvocationError("无法启动 Hermes Dashboard。") from error
+            if response.status_code < 200 or response.status_code >= 300:
+                raise SandboxInvocationError(
+                    f"Hermes Dashboard 启动服务返回 HTTP {response.status_code}。"
+                )
+            for attempt in range(_AGENT_SURFACE_READY_ATTEMPTS):
+                if await self._surface_is_ready(cloud.endpoint):
+                    return
+                if attempt + 1 < _AGENT_SURFACE_READY_ATTEMPTS:
+                    await asyncio.sleep(_AGENT_SURFACE_READY_INTERVAL_SECONDS)
+            raise SandboxInvocationError("Hermes Dashboard 启动超时，请稍后重试。")
 
     def _tools(self) -> SandboxToolPair:
         transient = self._configured_tool_id
@@ -2548,15 +2838,62 @@ class SandboxAgentSessionService:
 
     def capabilities(self) -> dict[str, object]:
         tools = self._tools()
-        enabled = bool(tools.configured)
+        enabled = self._managed_tool_spec is not None or bool(tools.configured)
+        if self._managed_tool_spec is not None:
+            return {
+                "enabled": enabled,
+                "reason": ""
+                if enabled
+                else (self._unconfigured_message or "管理员未配置"),
+                "persistentEnabled": True,
+                "persistentReason": "",
+                "persistentRequired": True,
+                "storageMode": "disk",
+                "diskGbDefault": self._managed_tool_spec.disk_gb,
+                "diskGbMin": STUDIO_SANDBOX_DISK_GB_MIN,
+                "diskGbMax": STUDIO_SANDBOX_DISK_GB_MAX,
+            }
+        persistent_enabled = bool(tools.persistent)
         return {
             "enabled": enabled,
             "reason": "" if enabled else (self._unconfigured_message or "管理员未配置"),
-            "persistentEnabled": bool(tools.persistent),
-            "persistentReason": "" if tools.persistent else "管理员未配置快照版 Tool",
+            "persistentEnabled": persistent_enabled,
+            "persistentReason": (
+                "" if persistent_enabled else "当前环境仅支持独立 Tool"
+            ),
         }
 
+    async def _managed_tool_for_session(
+        self, session_id: str
+    ) -> VeStackManagedTool | None:
+        cached = self._managed_tools_by_session.get(session_id)
+        if cached is not None:
+            return cached
+        for tool in await self._gateway.list_managed_tools(self.kind):
+            try:
+                sessions = await self._gateway.list_sessions(tool.tool_id)
+            except SandboxError:
+                continue
+            for session in sessions:
+                self._managed_tools_by_session[session.instance_id] = tool
+                if session.instance_id == session_id:
+                    return tool
+        return None
+
     async def _cloud_session(self, session_id: str) -> SandboxCloudSession:
+        if self._managed_tool_spec is not None:
+            tool = await self._managed_tool_for_session(session_id)
+            if tool is None:
+                raise SandboxSessionNotFoundError("AgentKit Session 不存在或已过期。")
+            cloud = await self._gateway.get_session(tool.tool_id, session_id)
+            return replace(
+                cloud,
+                display_name=cloud.display_name or tool.display_name,
+                created_by=cloud.created_by or tool.created_by,
+                creator_name=cloud.creator_name or tool.creator_name,
+                agent_kind=cloud.agent_kind or tool.agent_kind or self.kind,
+                persistent=True,
+            )
         tools = self._tools()
         if not tools.configured:
             self._tool_id()
@@ -2580,6 +2917,49 @@ class SandboxAgentSessionService:
     async def list_sessions(
         self, owner_id: str, *, is_admin: bool = False
     ) -> list[SandboxCloudSession]:
+        if self._managed_tool_spec is not None:
+            managed_tools = await self._gateway.list_managed_tools(
+                self.kind,
+                None if is_admin else owner_id,
+            )
+            sessions: dict[str, SandboxCloudSession] = {}
+            for tool in managed_tools:
+                if tool.status.lower() in {"deleting", "deleted"}:
+                    self._managed_tools_by_session = {
+                        session_id: cached_tool
+                        for session_id, cached_tool in self._managed_tools_by_session.items()
+                        if cached_tool.tool_id != tool.tool_id
+                    }
+                    continue
+                try:
+                    found = await self._gateway.list_sessions(tool.tool_id)
+                except SandboxError as error:
+                    # Tool deletion is asynchronous. ListTools can briefly return
+                    # a stale Ready item after its Session data plane has already
+                    # disappeared, where ListSessions reports InternalError. One
+                    # retiring Tool must not make every managed agent unavailable.
+                    logger.warning(
+                        "Skipping %s Tool %s while listing Sessions: %s",
+                        self.kind,
+                        tool.tool_id,
+                        type(error).__name__,
+                    )
+                    continue
+                for session in found:
+                    self._managed_tools_by_session[session.instance_id] = tool
+                    sessions[session.instance_id] = replace(
+                        session,
+                        display_name=session.display_name or tool.display_name,
+                        created_by=session.created_by or tool.created_by,
+                        creator_name=session.creator_name or tool.creator_name,
+                        agent_kind=session.agent_kind or tool.agent_kind or self.kind,
+                        persistent=True,
+                    )
+            return sorted(
+                sessions.values(),
+                key=lambda session: session.created_at,
+                reverse=True,
+            )
         tools = self._tools()
         if not tools.configured:
             self._tool_id()
@@ -2610,6 +2990,8 @@ class SandboxAgentSessionService:
         self, owner_id: str, *, is_admin: bool = False
     ) -> list[SandboxCloudSnapshot]:
         del owner_id
+        if self._managed_tool_spec is not None:
+            return []
         tools = self._tools()
         if not is_admin or not tools.persistent:
             return []
@@ -2686,6 +3068,7 @@ class SandboxAgentSessionService:
         display_name: object = "",
         creator_name: str = "",
         persistent: object = True,
+        disk_gb: object = None,
     ) -> SandboxCloudSession:
         if not isinstance(display_name, str):
             raise SandboxValidationError("智能体名称必须是文本。")
@@ -2704,6 +3087,44 @@ class SandboxAgentSessionService:
             )
         if not isinstance(persistent, bool):
             raise SandboxValidationError("persistent 必须是布尔值。")
+        if self._managed_tool_spec is not None:
+            managed_spec = replace(
+                self._managed_tool_spec,
+                disk_gb=_managed_tool_disk_gb(
+                    disk_gb,
+                    self._managed_tool_spec.disk_gb,
+                ),
+            )
+            tool = await self._gateway.create_managed_tool(
+                managed_spec,
+                display_name=display_name,
+                owner_id=owner_id,
+                creator_name=creator_name,
+                agent_kind=self.kind,
+            )
+            try:
+                created = await self._gateway.create_session(
+                    tool.tool_id,
+                    display_name,
+                    owner_id,
+                    creator_name,
+                    self.kind,
+                )
+                authoritative = await self._gateway.get_session(
+                    tool.tool_id, created.instance_id
+                )
+            except Exception:
+                await self._gateway.delete_managed_tool(tool)
+                raise
+            self._managed_tools_by_session[created.instance_id] = tool
+            return replace(
+                authoritative,
+                display_name=authoritative.display_name or display_name,
+                created_by=authoritative.created_by or owner_id,
+                creator_name=authoritative.creator_name or creator_name,
+                agent_kind=authoritative.agent_kind or self.kind,
+                persistent=True,
+            )
         tool_id = self._tool_id(persistent=persistent)
         created = await self._gateway.create_session(
             tool_id,
@@ -2735,7 +3156,8 @@ class SandboxAgentSessionService:
             raise SandboxSessionUnavailableError(
                 f"AgentKit Session 尚未就绪，当前状态：{status}。"
             )
-        token = secrets.token_urlsafe(32)
+        await self._ensure_surface_ready(cloud)
+        token = _agent_surface_capability(self.kind, session_id)
         self._workspaces[(owner_id, session_id)] = (
             cloud,
             token,
@@ -2751,6 +3173,11 @@ class SandboxAgentSessionService:
         is_admin: bool = False,
     ) -> None:
         """Delete one managed cloud Session and revoke its local workspace."""
+        managed_tool = (
+            await self._managed_tool_for_session(session_id)
+            if self._managed_tool_spec is not None
+            else None
+        )
         if not is_admin and any(
             candidate_id == session_id and candidate_owner != owner_id
             for candidate_owner, candidate_id in self._workspaces
@@ -2770,14 +3197,34 @@ class SandboxAgentSessionService:
         }
         self._created_session_ids.discard(session_id)
         await self._gateway.delete_session(cloud)
+        if managed_tool is not None:
+            self._managed_tools_by_session.pop(session_id, None)
+            await self._gateway.delete_managed_tool(managed_tool)
 
     async def launch_terminal(
         self,
         session_id: str,
         owner_id: str,
+        *,
+        is_admin: bool = False,
     ) -> tuple[str, str, str]:
-        """Create a shell for an opened branded Session."""
-        cloud, token, _expires_at = self._workspace(session_id, owner_id)
+        """Create a shell, restoring replica-local state when necessary."""
+        try:
+            cloud, token, _expires_at = self._workspace(session_id, owner_id)
+        except SandboxSessionNotFoundError:
+            cloud = await self._cloud_session(session_id)
+            _require_session_access(cloud, owner_id, is_admin=is_admin)
+            if cloud.status.lower() != "ready" or not cloud.endpoint:
+                status = cloud.status or "Unknown"
+                raise SandboxSessionUnavailableError(
+                    f"AgentKit Session 尚未就绪，当前状态：{status}。"
+                )
+            token = _agent_surface_capability(self.kind, session_id)
+            self._workspaces[(owner_id, session_id)] = (
+                cloud,
+                token,
+                time.monotonic() + STUDIO_SANDBOX_TTL_SECONDS,
+            )
         try:
             if self._terminal_initial_command:
                 url = terminal_initial_command_url(
@@ -2812,6 +3259,27 @@ class SandboxAgentSessionService:
         if found:
             raise PermissionError("invalid managed agent proxy capability")
         raise KeyError(session_id)
+
+    async def resolve_surface_proxy_target(
+        self,
+        session_id: str,
+        token: str,
+    ) -> SandboxProxyTarget:
+        """Resolve a WebUI capability on any Studio replica."""
+        try:
+            return self.resolve_proxy_target(session_id, token)
+        except (KeyError, PermissionError):
+            # A different replica, or a later open on this replica, may have a
+            # different still-valid capability cached for the same Session.
+            # Fall back to the shared HMAC signature instead of treating the
+            # replica-local cache as authoritative.
+            pass
+        if not _valid_agent_surface_capability(token, self.kind, session_id):
+            raise PermissionError("invalid managed agent surface capability")
+        cloud = await self._cloud_session(session_id)
+        if cloud.status.lower() != "ready" or not cloud.endpoint:
+            raise KeyError(session_id)
+        return SandboxProxyTarget(endpoint=cloud.endpoint)
 
     def _workspace(
         self,
@@ -2993,6 +3461,7 @@ def mount_sandbox_agent_routes(
                 data.get("displayName", ""),
                 creator_resolver(request) if creator_resolver else owner_id,
                 data.get("persistent", True),
+                data.get("diskGb"),
             )
         except SandboxError as error:
             raise _http_error(error) from error
@@ -3079,9 +3548,11 @@ def mount_sandbox_agent_routes(
         request: Request,
     ) -> JSONResponse:
         try:
-            url, shell_session_id, token = await _service(kind).launch_terminal(
+            service = _service(kind)
+            url, shell_session_id, token = await service.launch_terminal(
                 session_id,
                 owner_resolver(request),
+                is_admin=_is_admin(service, request),
             )
         except SandboxError as error:
             raise _http_error(error) from error
@@ -3104,12 +3575,12 @@ def mount_sandbox_agent_routes(
         )
         return response
 
-    def _surface_target(
+    async def _surface_target(
         kind: str,
         session_id: str,
         token: str,
     ) -> SandboxProxyTarget:
-        return _service(kind).resolve_proxy_target(session_id, token)
+        return await _service(kind).resolve_surface_proxy_target(session_id, token)
 
     mount_agent_surface_proxy_routes(app, _surface_target)
 
@@ -3533,6 +4004,7 @@ def mount_sandbox_routes(
                 data.get("displayName", ""),
                 creator_resolver(request) if creator_resolver else owner_id,
                 data.get("persistent", True),
+                disk_gb=data.get("diskGb"),
             )
         except SandboxError as error:
             raise _http_error(error) from error

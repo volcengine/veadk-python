@@ -140,7 +140,18 @@ test("resets runtime pagination before changing ownership or region filters", ()
   );
   assert.match(
     pageSource,
-    /function selectRegion\(nextRegion: CloudRegion\)[\s\S]*?resetRuntimePagination\(\)[\s\S]*?setRegion\(nextRegion\)/,
+    /function selectRegion\(nextRegion: string\)[\s\S]*?resetRuntimePagination\(\)[\s\S]*?setRegion\(nextRegion\)/,
+  );
+});
+
+test("uses the Studio-delivered private region instead of a public-cloud fallback", () => {
+  assert.match(
+    pageSource,
+    /return studioRegion\.trim\(\) \|\| defaultCloudRegion\(cloudProvider\)/,
+  );
+  assert.match(
+    pageSource,
+    /providerOptions\.some\(\(option\) => option\.value === configuredRegion\)[\s\S]*?value: configuredRegion, label: configuredRegion/,
   );
 });
 
@@ -207,7 +218,8 @@ test("renders only account-backed Runtime and Sandbox agents", () => {
 });
 
 test("renders Agent creation as the first dashed card instead of a toolbar button", () => {
-  assert.match(pageSource, /canCreate: boolean/);
+  assert.match(pageSource, /canCreateRuntimeAgents: boolean/);
+  assert.match(pageSource, /canCreatePersonalAgents: boolean/);
   assert.match(pageSource, /cloudProvider: CloudProvider/);
   assert.match(pageSource, /activeType === "general"[\s\S]*?onCreateAgent\(region\)[\s\S]*?onCreateSandboxAgent\(activeType\)/);
   assert.match(pageSource, /onCreateSandboxAgent: \(kind: "codex" \| SandboxAgentKind\) => void/);
@@ -428,8 +440,8 @@ test("loads Runtime pages by the selected ownership and region", () => {
   assert.match(pageSource, /runtimeScope: RuntimeScope/);
   assert.match(pageSource, /studioRegion: string/);
   assert.match(pageSource, /const \[ownership, setOwnership\] = useState<RuntimeScope>/);
-  assert.match(pageSource, /const \[region, setRegion\] = useState<CloudRegion>\(configuredRegion\)/);
-  assert.match(pageSource, /function resolveAgentRegion\([\s\S]*?isSupportedCloudRegion\(studioRegion\)[\s\S]*?defaultCloudRegion\(cloudProvider\)/);
+  assert.match(pageSource, /const \[region, setRegion\] = useState\(configuredRegion\)/);
+  assert.match(pageSource, /function resolveAgentRegion\([\s\S]*?studioRegion\.trim\(\) \|\| defaultCloudRegion\(cloudProvider\)/);
   assert.doesNotMatch(pageSource, /label: "全部区域"/);
   assert.match(pageSource, /scope: runtimeScope,[\s\S]*?region,[\s\S]*?pageSize: RUNTIME_PAGE_SIZE/);
   assert.match(pageSource, /ariaLabel="创建人筛选"/);
@@ -495,7 +507,8 @@ test("keeps ownership filtering in the toolbar without duplicating it on cards",
   assert.match(pageSource, /isMine: runtime\.isMine/);
   assert.doesNotMatch(pageSource, /showOwnership=\{runtimeScope === "all"\}/);
   assert.doesNotMatch(pageSource, /className="runtime-owner-badge"/);
-  assert.match(appSource, /canCreate=\{canCreateAgents\}/);
+  assert.match(appSource, /canCreateRuntimeAgents=\{canCreateRuntimeAgents\}/);
+  assert.match(appSource, /canCreatePersonalAgents=\{canCreatePersonalAgents\}/);
 });
 
 test("keeps Runtime title rows clear of redundant region badges", () => {
@@ -777,7 +790,7 @@ test("prepares Runtime update capability before opening details without unbounde
   assert.match(pageSource, /onPointerEnter=\{\(\) => onPrepareUpdate\?\.\(agent\)\}/);
   assert.match(pageSource, /onFocusCapture=\{\(\) => onPrepareUpdate\?\.\(agent\)\}/);
   assert.match(pageSource, /canUpdate: boolean/);
-  assert.match(appSource, /<MyAgents[\s\S]*?canUpdate=\{canCreateAgents \|\| canManageAgents\}/);
+  assert.match(appSource, /<MyAgents[\s\S]*?canUpdate=\{canCreateRuntimeAgents \|\| canManageAgents\}/);
 });
 
 test("uses connected Runtime state only for the card action", () => {

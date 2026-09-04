@@ -19,9 +19,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import html
+import inspect
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
@@ -51,6 +52,51 @@ _DEEPSEEK_HARNESS_STATIC_PATHS = (
     "/deepseek-harness",
     "/plugins",
     "/assets",
+)
+_HERMES_AIO_PATHS = (
+    "/code-server",
+    "/terminal",
+    "/jupyter",
+    "/vnc",
+    "/proxy",
+    "/absproxy",
+    "/mcp",
+    "/v1",
+    "/llms.txt",
+    "/cdp",
+    "/tickets",
+    "/screenshot",
+    "/actions",
+    "/json",
+    "/devtools",
+    "/ws",
+    "/websockify",
+    "/static/sandbox",
+)
+_HERMES_DASHBOARD_PATHS = (
+    "/achievements",
+    "/api",
+    "/assets",
+    "/channels",
+    "/chat",
+    "/config",
+    "/cron",
+    "/docs",
+    "/env",
+    "/files",
+    "/favicon.ico",
+    "/kanban",
+    "/logs",
+    "/mcp",
+    "/model",
+    "/models",
+    "/pairing",
+    "/plugins",
+    "/profiles",
+    "/sessions",
+    "/skills",
+    "/system",
+    "/webhooks",
 )
 _BLOCKED_RESPONSE_HEADERS = {
     "connection",
@@ -88,11 +134,24 @@ def _rewrite_body(
     content_type: str,
     prefix: str,
     kind: str,
+    *,
+    upstream_path: str = "",
 ) -> bytes:
     if not any(marker in content_type for marker in _TEXT_CONTENT_TYPES):
         return body
     if kind in {"hermes", "deepseek-harness"}:
         body = _strip_hermes_gateway_query(body)
+    if kind == "hermes" and b"<title>AIO Sandbox</title>" not in body:
+        hermes_mount = _hermes_dashboard_mount(upstream_path)
+        if hermes_mount:
+            for path in _HERMES_DASHBOARD_PATHS:
+                body = _rewrite_root_path(
+                    body,
+                    path,
+                    f"{prefix}{hermes_mount}{path}",
+                )
+        for path in _HERMES_AIO_PATHS:
+            body = _rewrite_root_path(body, path, f"{prefix}{path}")
     if kind == "deepseek-harness":
         return _rewrite_deepseek_harness_body(body, content_type, prefix)
     source = f"/{kind}".encode()
@@ -103,6 +162,15 @@ def _rewrite_body(
     if kind == "openclaw" and "text/html" in content_type:
         body = body.replace(b"<head>", b"<head>" + _OPENCLAW_RESET_TAG, 1)
     return body
+
+
+def _hermes_dashboard_mount(upstream_path: str) -> str:
+    """Return the AIO port-proxy mount hosting the Hermes Dashboard."""
+    normalized = f"/{upstream_path.lstrip('/')}"
+    match = re.match(r"^/(absproxy|proxy)/(\d+)(?:/|$)", normalized)
+    if match is None:
+        return ""
+    return f"/{match.group(1)}/{match.group(2)}"
 
 
 def _rewrite_root_path(body: bytes, source_path: str, replacement_path: str) -> bytes:
@@ -220,6 +288,23 @@ def _rewrite_location(location: str, prefix: str) -> str:
     return urlunsplit(("", "", f"{prefix}{parsed.path}", safe_query, parsed.fragment))
 
 
+def _websocket_origin(kind: str, path: str, target_url: str) -> str:
+    """Return the Origin expected by the upstream WebSocket service.
+
+    AIO exposes arbitrary local ports below ``/proxy/<port>``.  Its HTTP proxy
+    accepts the public AgentKit origin, but the WebSocket target validates the
+    original local-service origin.  Sending the AgentKit endpoint origin makes
+    Hermes reject the upgrade and the browser only sees close code 1006.
+    """
+    normalized = f"/{path.lstrip('/')}"
+    if kind == "hermes":
+        match = re.match(r"/(?:abs)?proxy/(\d+)(?:/|$)", normalized)
+        if match is not None:
+            return f"http://localhost:{match.group(1)}"
+    parsed = urlsplit(target_url)
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
 def _rewrite_cookie(cookie: str, prefix: str) -> str:
     if re.search(r"(?i);\s*path=", cookie):
         return re.sub(
@@ -232,7 +317,10 @@ def _rewrite_cookie(cookie: str, prefix: str) -> str:
 
 def mount_agent_surface_proxy_routes(
     app: object,
-    target_resolver: Callable[[str, str, str], SandboxProxyTarget],
+    target_resolver: Callable[
+        [str, str, str],
+        SandboxProxyTarget | Awaitable[SandboxProxyTarget],
+    ],
 ) -> None:
     """Mount bounded HTTP and WebSocket proxies for branded agent WebUIs."""
 
@@ -248,7 +336,8 @@ def mount_agent_surface_proxy_routes(
         request: Request,
     ) -> Response:
         try:
-            target = target_resolver(kind, session_id, proxy_token)
+            resolved = target_resolver(kind, session_id, proxy_token)
+            target = await resolved if inspect.isawaitable(resolved) else resolved
         except (KeyError, PermissionError):
             return Response("沙箱页面授权已失效。", status_code=403)
         target_url = _target_url(target.endpoint, path, request.url.query)
@@ -300,7 +389,13 @@ def mount_agent_surface_proxy_routes(
                 response_headers["location"], prefix
             )
         response = Response(
-            content=_rewrite_body(upstream.content, content_type, prefix, kind),
+            content=_rewrite_body(
+                upstream.content,
+                content_type,
+                prefix,
+                kind,
+                upstream_path=path,
+            ),
             status_code=upstream.status_code,
             headers=response_headers,
             media_type=None,
@@ -323,8 +418,15 @@ def mount_agent_surface_proxy_routes(
         from websockets.exceptions import WebSocketException
 
         try:
-            target = target_resolver(kind, session_id, proxy_token)
+            resolved = target_resolver(kind, session_id, proxy_token)
+            target = await resolved if inspect.isawaitable(resolved) else resolved
         except (KeyError, PermissionError):
+            # Complete the WebSocket upgrade before returning an application-level
+            # capability error.  VeFaaS treats a rejected upgrade as a transport
+            # failure and temporarily puts the entire Function route in backoff,
+            # which can make a single-instance Studio return 429 for unrelated
+            # HTTP requests.
+            await websocket.accept()
             await websocket.close(code=1008, reason="invalid capability")
             return
         target_http_url = _target_url(target.endpoint, path, websocket.url.query)
@@ -346,7 +448,7 @@ def mount_agent_surface_proxy_routes(
         try:
             async with websockets.connect(
                 target_ws_url,
-                origin=f"{parsed.scheme}://{parsed.netloc}",
+                origin=_websocket_origin(kind, path, target_http_url),
                 subprotocols=protocols or None,
                 max_size=None,
             ) as upstream:
@@ -384,4 +486,9 @@ def mount_agent_surface_proxy_routes(
         except (OSError, TimeoutError, WebSocketException) as error:
             logger.warning("Managed agent WebUI proxy failed: %s", type(error).__name__)
             with contextlib.suppress(RuntimeError):
+                # The upstream failure belongs to this logical WebSocket, not to
+                # the Studio Function transport.  Finish the browser-side upgrade
+                # before closing so the outer VeFaaS gateway does not back off the
+                # only Studio instance.
+                await websocket.accept()
                 await websocket.close(code=1011)

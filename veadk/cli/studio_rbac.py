@@ -175,6 +175,7 @@ class StudioAccessPolicy:
             "rbacEnabled": self.enabled,
             "capabilities": {
                 "createAgents": can_manage,
+                "createPersonalAgents": principal is not None or not self.enabled,
                 "manageAgents": can_manage,
                 "runtimeScope": "all" if role == StudioRole.ADMIN else "mine",
             },

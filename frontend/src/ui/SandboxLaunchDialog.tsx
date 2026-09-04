@@ -15,8 +15,15 @@ export interface SandboxLaunchDialogProps {
   state: SandboxLaunchState;
   agentKind?: "codex" | SandboxAgentKind;
   error?: string;
+  persistentEnabled?: boolean;
+  persistentReason?: string;
+  persistentRequired?: boolean;
+  storageMode?: "snapshot" | "disk";
+  diskGbDefault?: number;
+  diskGbMin?: number;
+  diskGbMax?: number;
   onCancel: () => void;
-  onConfirm: (displayName: string, persistent: boolean) => void;
+  onConfirm: (displayName: string, persistent: boolean, diskGb?: number) => void;
 }
 
 export function SandboxLaunchDialog({
@@ -24,6 +31,13 @@ export function SandboxLaunchDialog({
   state,
   agentKind = "codex",
   error,
+  persistentEnabled = true,
+  persistentReason = "",
+  persistentRequired = false,
+  storageMode = "snapshot",
+  diskGbDefault = 10,
+  diskGbMin = 5,
+  diskGbMax = 100,
   onCancel,
   onConfirm,
 }: SandboxLaunchDialogProps) {
@@ -42,12 +56,14 @@ export function SandboxLaunchDialog({
   const onCancelRef = useRef(onCancel);
   const [displayName, setDisplayName] = useState(defaultDisplayName);
   const [persistent, setPersistent] = useState(true);
+  const [diskGb, setDiskGb] = useState(diskGbDefault);
   onCancelRef.current = onCancel;
 
   useEffect(() => {
     if (!open) return;
     setDisplayName(defaultDisplayName);
-    setPersistent(true);
+    setPersistent(persistentRequired || persistentEnabled);
+    setDiskGb(diskGbDefault);
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const focusFrame = window.requestAnimationFrame(() => {
@@ -81,12 +97,13 @@ export function SandboxLaunchDialog({
       document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [defaultDisplayName, open]);
+  }, [defaultDisplayName, diskGbDefault, open, persistentEnabled, persistentRequired]);
 
   if (!open) return null;
 
   const loading = state === "loading";
   const validDisplayName = displayName.trim();
+  const validDiskGb = Number.isInteger(diskGb) && diskGb >= diskGbMin && diskGb <= diskGbMax;
   const title = loading
     ? `正在创建 ${agentLabel} 智能体`
     : state === "error"
@@ -109,8 +126,17 @@ export function SandboxLaunchDialog({
         aria-describedby={state === "confirm" ? undefined : "sandbox-dialog-description"}
         onSubmit={(event) => {
           event.preventDefault();
-          if (!loading && !composingRef.current && validDisplayName) {
-            onConfirm(validDisplayName, persistent);
+          if (
+            !loading &&
+            !composingRef.current &&
+            validDisplayName &&
+            (storageMode !== "disk" || validDiskGb)
+          ) {
+            onConfirm(
+              validDisplayName,
+              storageMode === "disk" ? true : persistent,
+              storageMode === "disk" ? diskGb : undefined,
+            );
           }
         }}
       >
@@ -171,38 +197,66 @@ export function SandboxLaunchDialog({
               }}
             />
           </label>
-          <div
-            className="sandbox-dialog-persistence"
-            role="group"
-            aria-describedby="sandbox-persistence-description"
-          >
-            <Checkbox
-              id="sandbox-persistence"
-              className="sandbox-dialog-persistence-control"
-              checked={persistent}
-              disabled={loading}
-              onCheckedChange={setPersistent}
-              label="持久化"
-            />
-            <p
-              id="sandbox-persistence-description"
-              className={`sandbox-dialog-persistence-description${
-                persistent ? "" : " is-warning"
-              }`}
-              role={persistent ? undefined : "status"}
+          {storageMode === "disk" ? (
+            <label className="sandbox-dialog-field sandbox-dialog-disk-field">
+              <span className="sandbox-dialog-field-label">
+                <span>存储大小</span>
+                <span>GiB</span>
+              </span>
+              <input
+                type="number"
+                required
+                min={diskGbMin}
+                max={diskGbMax}
+                step={1}
+                value={diskGb}
+                disabled={loading}
+                onChange={(event) => setDiskGb(event.currentTarget.valueAsNumber)}
+              />
+              <span className="sandbox-dialog-field-help">
+                数据将持久化保存，可设置 {diskGbMin}–{diskGbMax} GiB。
+              </span>
+            </label>
+          ) : (
+            <div
+              className="sandbox-dialog-persistence"
+              role="group"
+              aria-describedby="sandbox-persistence-description"
             >
-              {persistent
-                ? "保留智能体数据，后续可继续使用。"
-                : "智能体将在 8 小时后清空"}
-            </p>
-          </div>
+              <Checkbox
+                id="sandbox-persistence"
+                className="sandbox-dialog-persistence-control"
+                checked={persistent}
+                disabled={loading || !persistentEnabled || persistentRequired}
+                onCheckedChange={setPersistent}
+                label="持久化"
+              />
+              <p
+                id="sandbox-persistence-description"
+                className={`sandbox-dialog-persistence-description${
+                  persistent ? "" : " is-warning"
+                }`}
+                role={persistent ? undefined : "status"}
+              >
+                {!persistentEnabled
+                  ? persistentReason || "当前环境不支持快照持久化"
+                  : persistent
+                  ? "保留智能体数据，后续可继续使用。"
+                  : "智能体将在 8 小时后清空"}
+              </p>
+            </div>
+          )}
         </div>
         <footer className="sandbox-dialog-actions">
           <button ref={cancelButtonRef} type="button" onClick={onCancel}>
             {loading ? "取消创建" : "取消"}
           </button>
           {!loading && (
-            <button type="submit" className="is-primary" disabled={!validDisplayName}>
+            <button
+              type="submit"
+              className="is-primary"
+              disabled={!validDisplayName || (storageMode === "disk" && !validDiskGb)}
+            >
               {state === "error" ? "重新尝试" : "确认创建"}
             </button>
           )}

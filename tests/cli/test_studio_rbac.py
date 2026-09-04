@@ -184,6 +184,35 @@ def _create_studio_app(
     return captured["app"]
 
 
+def test_vestack_server_builds_codex_and_hermes_managed_tool_specs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("VEADK_STUDIO_DEPLOY_TARGET", "vestack")
+    monkeypatch.setenv("VEADK_STUDIO_CODEX_TOOL_PER_AGENT", "true")
+    monkeypatch.setenv("VEADK_STUDIO_CODEX_ROLE_NAME", "studio-role")
+    monkeypatch.setenv("VEADK_STUDIO_HERMES_TOOL_PER_AGENT", "true")
+    monkeypatch.setenv("VEADK_STUDIO_HERMES_ROLE_NAME", "studio-role")
+    monkeypatch.setenv("VEADK_STUDIO_HERMES_MODEL_AGENT_NAME", "model-agent")
+    monkeypatch.setenv(
+        "VEADK_STUDIO_HERMES_MODEL_API_BASE", "http://model.example:6789"
+    )
+    monkeypatch.setenv("VEADK_STUDIO_HERMES_MODEL_API_KEY", "test-model-key")
+    monkeypatch.setenv("VEADK_STUDIO_HERMES_MODEL_ID", "model-id")
+
+    app = _create_studio_app(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        headers = {"X-VeADK-Local-User": "alice"}
+        codex = client.get("/web/sandbox/capabilities", headers=headers)
+        hermes = client.get("/web/hermes/capabilities", headers=headers)
+
+    assert codex.status_code == 200
+    assert codex.json()["storageMode"] == "disk"
+    assert hermes.status_code == 200
+    assert hermes.json()["storageMode"] == "disk"
+
+
 @pytest.mark.parametrize(
     ("provider", "path"),
     [
@@ -2010,6 +2039,7 @@ def test_role_matching_uses_all_trusted_identifiers_and_admin_wins() -> None:
     assert policy.role_for(principal) == StudioRole.ADMIN
     assert policy.access_payload(principal)["capabilities"] == {
         "createAgents": True,
+        "createPersonalAgents": True,
         "manageAgents": True,
         "runtimeScope": "all",
     }
@@ -2027,6 +2057,7 @@ def test_unconfigured_policy_preserves_legacy_full_access() -> None:
         "rbacEnabled": False,
         "capabilities": {
             "createAgents": True,
+            "createPersonalAgents": True,
             "manageAgents": True,
             "runtimeScope": "all",
         },
@@ -2060,6 +2091,7 @@ def test_unlisted_identity_is_a_regular_user() -> None:
     assert policy.role_for(principal) == StudioRole.USER
     assert policy.access_payload(principal)["capabilities"] == {
         "createAgents": False,
+        "createPersonalAgents": True,
         "manageAgents": False,
         "runtimeScope": "mine",
     }
@@ -2153,12 +2185,20 @@ def test_access_endpoint_resolves_local_roles_and_blocks_user_management(
         )
 
     assert admin.json()["role"] == "admin"
+    assert admin.json()["capabilities"]["createPersonalAgents"] is True
     assert developer.json()["role"] == "developer"
+    assert developer.json()["capabilities"]["createPersonalAgents"] is True
     assert developer.json()["telemetry"] == {
         "userId": "developer",
         "accountId": "2100123456",
     }
     assert user.json()["role"] == "user"
+    assert user.json()["capabilities"] == {
+        "createAgents": False,
+        "createPersonalAgents": True,
+        "manageAgents": False,
+        "runtimeScope": "mine",
+    }
     assert user.json()["telemetry"]["userId"] == "reader"
     assert user.json()["telemetry"]["accountId"] == "2100123456"
     assert forbidden.status_code == 403

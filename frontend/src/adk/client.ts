@@ -3743,6 +3743,7 @@ export interface StudioAccess {
   };
   capabilities: {
     createAgents: boolean;
+    createPersonalAgents: boolean;
     manageAgents: boolean;
     runtimeScope: RuntimeScope;
   };
@@ -3757,6 +3758,7 @@ export const DEFAULT_STUDIO_ACCESS: StudioAccess = {
   },
   capabilities: {
     createAgents: false,
+    createPersonalAgents: false,
     manageAgents: false,
     runtimeScope: "mine",
   },
@@ -3775,6 +3777,7 @@ export async function getStudioAccess(): Promise<StudioAccess> {
       typeof access.telemetry.accountId !== "string"
     ) ||
     typeof access.capabilities?.createAgents !== "boolean" ||
+    typeof access.capabilities?.createPersonalAgents !== "boolean" ||
     typeof access.capabilities?.manageAgents !== "boolean" ||
     !["all", "mine"].includes(access.capabilities?.runtimeScope)
   ) {

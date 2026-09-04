@@ -545,3 +545,45 @@ def test_from_veidentity_uses_refresh_token_absolute_lifetime(
     )
 
     assert config.session_timeout_seconds == 30 * 24 * 60 * 60
+
+
+def test_from_veidentity_supports_vestack_oidc_base_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity_client = Mock()
+    identity_client.get_user_pool.return_value = (
+        "pool-id",
+        "auth.example.com",
+    )
+    identity_client.get_user_pool_client.return_value = (
+        "client-id",
+        "client-secret",
+    )
+    identity_client.get_user_pool_client_refresh_token_lifetime.return_value = None
+    observed: list[str] = []
+    monkeypatch.setenv(
+        "VEIDENTITY_OIDC_BASE_URL",
+        "http://{user_pool_domain}/userpool/{user_pool_uid}",
+    )
+    monkeypatch.setattr(
+        "veadk.auth.middleware.oauth2_auth._fetch_oidc_discovery",
+        lambda base_url: (
+            observed.append(base_url)
+            or OIDCDiscoveryConfig(
+                issuer=f"{base_url}/issuer",
+                authorization_endpoint=f"{base_url}/authorize",
+                token_endpoint=f"{base_url}/oauth/token",
+            )
+        ),
+    )
+
+    OAuth2Config.from_veidentity(
+        user_pool_uid="pool-id",
+        client_uid="client-id",
+        redirect_uri="http://studio.example.com/oauth2/callback",
+        auto_create=False,
+        auto_register_callback=False,
+        identity_client=identity_client,
+    )
+
+    assert observed == ["http://auth.example.com/userpool/pool-id"]
