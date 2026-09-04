@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+from hashlib import sha256
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -206,11 +207,18 @@ def test_stage_package_preserves_offline_runtime_dependencies(
 
     _stage_package(package_root, destination)
 
-    assert (destination / "requirements.txt").is_file()
+    expected_hash = sha256(b"dependency").hexdigest()
+    assert (destination / "requirements.txt").read_text(encoding="utf-8") == (
+        "--no-index\n"
+        "--require-hashes\n"
+        "./fastapi-1.0-py3-none-any.whl "
+        f"--hash=sha256:{expected_hash}\n"
+    )
     assert (destination / "studio-runtime.lock").is_file()
-    assert (
-        destination / "wheelhouse" / "fastapi-1.0-py3-none-any.whl"
-    ).read_bytes() == b"dependency"
+    assert not (destination / "wheelhouse").exists()
+    assert (destination / "fastapi-1.0-py3-none-any.whl").read_bytes() == (
+        b"dependency"
+    )
     assert (destination / "veadk_python-1.0-py3-none-any.whl").read_bytes() == b"legacy"
 
 
