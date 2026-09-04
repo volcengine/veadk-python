@@ -32,6 +32,7 @@ from typing import Any
 from frontend.service.studio_release_server.offline_runtime import (
     STUDIO_RUNTIME_LOCK,
     STUDIO_RUNTIME_WHEELHOUSE,
+    build_studio_offline_requirements,
 )
 
 from .diagnostics import sanitize_diagnostic
@@ -260,7 +261,6 @@ def _stage_package(package_root: Path, destination: Path) -> None:
     requirements = package_root / "requirements.txt"
     if not requirements.is_file():
         raise ValueError("Studio scheduler package is missing requirements.txt")
-    shutil.copy2(requirements, destination / requirements.name)
 
     runtime_lock = package_root / STUDIO_RUNTIME_LOCK
     if runtime_lock.is_file():
@@ -268,7 +268,17 @@ def _stage_package(package_root: Path, destination: Path) -> None:
 
     wheelhouse = package_root / STUDIO_RUNTIME_WHEELHOUSE
     if wheelhouse.is_dir():
-        shutil.copytree(wheelhouse, destination / wheelhouse.name)
+        for wheel in wheelhouse.glob("*.whl"):
+            shutil.copy2(wheel, destination / wheel.name)
+        (destination / requirements.name).write_text(
+            build_studio_offline_requirements(
+                destination,
+                wheel_prefix="./",
+            ),
+            encoding="utf-8",
+        )
+    else:
+        shutil.copy2(requirements, destination / requirements.name)
 
     # Preserve compatibility with packages produced before the offline
     # wheelhouse layout was introduced.

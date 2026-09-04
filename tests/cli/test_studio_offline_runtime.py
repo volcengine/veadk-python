@@ -13,11 +13,32 @@
 # limitations under the License.
 
 from pathlib import Path
+import shutil
 import subprocess
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 
 from frontend.service.studio_release_server import offline_runtime
+
+
+def _write_pure_python_wheel(path: Path, *, name: str, version: str) -> None:
+    distribution = name.replace("-", "_")
+    dist_info = f"{distribution}-{version}.dist-info"
+    with ZipFile(path, "w", ZIP_DEFLATED) as wheel:
+        wheel.writestr(f"{distribution}/__init__.py", "")
+        wheel.writestr(
+            f"{dist_info}/METADATA",
+            f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n",
+        )
+        wheel.writestr(
+            f"{dist_info}/WHEEL",
+            "Wheel-Version: 1.0\n"
+            "Generator: veadk-test\n"
+            "Root-Is-Purelib: true\n"
+            "Tag: py3-none-any\n",
+        )
+        wheel.writestr(f"{dist_info}/RECORD", "")
 
 
 def test_lock_check_environment_uses_canonical_pypi() -> None:
@@ -101,16 +122,65 @@ def test_build_offline_runtime_rejects_stale_lock(
     assert not (tmp_path / "package").exists()
 
 
+def test_build_offline_requirements_rejects_empty_wheelhouse(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="wheelhouse is empty"):
+        offline_runtime.build_studio_offline_requirements(
+            tmp_path,
+            wheel_prefix="./wheelhouse/",
+        )
+
+
+def test_build_offline_requirements_rejects_duplicate_distribution(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "example_pkg-1.0-py3-none-any.whl").write_bytes(b"one")
+    (tmp_path / "example_pkg-2.0-py3-none-any.whl").write_bytes(b"two")
+
+    with pytest.raises(ValueError, match="duplicate distributions"):
+        offline_runtime.build_studio_offline_requirements(
+            tmp_path,
+            wheel_prefix="./wheelhouse/",
+        )
+
+
+@pytest.mark.parametrize(
+    "wheel_prefix",
+    (
+        "wheelhouse/",
+        "../wheelhouse/",
+        "./../wheelhouse/",
+        "./wheelhouse/\n--index-url https://example.invalid/",
+        "./wheelhouse/\r--index-url https://example.invalid/",
+    ),
+)
+def test_build_offline_requirements_rejects_unsafe_prefix(
+    tmp_path: Path,
+    wheel_prefix: str,
+) -> None:
+    (tmp_path / "example_pkg-1.0-py3-none-any.whl").write_bytes(b"wheel")
+
+    with pytest.raises(ValueError, match="wheel prefix is invalid"):
+        offline_runtime.build_studio_offline_requirements(
+            tmp_path,
+            wheel_prefix=wheel_prefix,
+        )
+
+
 def test_build_offline_runtime_creates_local_only_contract(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    original_run = subprocess.run
+    uv = shutil.which("uv")
+    assert uv is not None
     source_root = tmp_path / "source"
     source_root.mkdir()
     (source_root / "uv.lock").write_text("lock", encoding="utf-8")
     package_dir = tmp_path / "package"
     veadk_wheel = tmp_path / "veadk_python-1.0-py3-none-any.whl"
-    veadk_wheel.write_bytes(b"veadk")
+    _write_pure_python_wheel(veadk_wheel, name="veadk-python", version="1.0")
     source_archive = tmp_path / "tos-1.0.tar.gz"
     source_archive.write_bytes(b"source")
     commands: list[list[str]] = []
@@ -125,12 +195,28 @@ def test_build_offline_runtime_creates_local_only_contract(
             )
         elif "wheel" in command:
             output = Path(command[command.index("--wheel-dir") + 1])
-            (output / "tos-1.0-py3-none-any.whl").write_bytes(b"pure")
+            _write_pure_python_wheel(
+                output / "tos-1.0-py3-none-any.whl",
+                name="tos",
+                version="1.0",
+            )
         elif "download" in command:
             output = Path(command[command.index("--dest") + 1])
-            (output / "dependency-1-py3-none-any.whl").write_bytes(b"wheel")
-            (output / "linux_only-2-py3-none-any.whl").write_bytes(b"wheel")
-            (output / "tos-1-py3-none-any.whl").write_bytes(b"pure")
+            _write_pure_python_wheel(
+                output / "dependency-1-py3-none-any.whl",
+                name="dependency",
+                version="1",
+            )
+            _write_pure_python_wheel(
+                output / "linux_only-2-py3-none-any.whl",
+                name="linux-only",
+                version="2",
+            )
+            _write_pure_python_wheel(
+                output / "tos-1-py3-none-any.whl",
+                name="tos",
+                version="1",
+            )
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(
@@ -146,27 +232,49 @@ def test_build_offline_runtime_creates_local_only_contract(
         environment={"PATH": "/usr/bin"},
     )
 
-    assert requirements == (
-        "--no-index\n"
-        "--find-links ./wheelhouse\n"
-        "--require-hashes\n"
-        "-r ./studio-runtime.lock\n"
-        "./wheelhouse/veadk_python-1.0-py3-none-any.whl "
-        "--hash=sha256:62ee185cf74a591e7d1b3d2dbe3f389f92c893966e2fd39a3b92c19fc7fcd9c1\n"
+    staged_veadk = package_dir / "wheelhouse" / veadk_wheel.name
+    expected_wheels = sorted((package_dir / "wheelhouse").glob("*.whl"))
+    assert requirements == "--no-index\n--require-hashes\n" + "".join(
+        f"./wheelhouse/{wheel.name} --hash=sha256:{offline_runtime._sha256(wheel)}\n"
+        for wheel in expected_wheels
     )
+    assert "--find-links" not in requirements
+    assert "-r " not in requirements
     runtime_lock = (package_dir / "studio-runtime.lock").read_text(encoding="utf-8")
     assert runtime_lock.count("--hash=sha256:") == 3
     assert "dependency==1 --hash=sha256:" in runtime_lock
     assert "linux-only==2 --hash=sha256:" in runtime_lock
     assert "tos==1 --hash=sha256:" in runtime_lock
-    assert (package_dir / "wheelhouse" / veadk_wheel.name).read_bytes() == b"veadk"
+    assert staged_veadk.is_file()
     assert commands[0][1:] == ["lock", "--check"]
     download = next(command for command in commands if "download" in command)
     assert "--only-binary=:all:" in download
     assert "manylinux_2_17_x86_64" in download
     assert "--no-index" not in download
-    verification = [command for command in commands if "download" in command][-1]
-    assert "--no-index" in verification
+    verification = commands[-1]
+    assert verification[1:3] == ["pip", "install"]
+    assert verification[-2:] == ["--requirements", "-"]
+
+    platform_parse = original_run(
+        [
+            uv,
+            "pip",
+            "install",
+            "--dry-run",
+            "--no-deps",
+            "--no-python-downloads",
+            "--target",
+            str(tmp_path / "platform-target"),
+            "--requirements",
+            "-",
+        ],
+        cwd=package_dir,
+        input=requirements,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert platform_parse.returncode == 0, platform_parse.stderr
 
 
 def test_build_offline_runtime_rejects_native_source_wheel(
