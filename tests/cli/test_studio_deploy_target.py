@@ -95,20 +95,13 @@ def _build_test_offline_runtime(
     veadk_wheel: Path,
     **_kwargs: object,
 ) -> str:
-    wheelhouse = package_dir / "wheelhouse"
-    wheelhouse.mkdir()
-    target = wheelhouse / veadk_wheel.name
+    target = package_dir / veadk_wheel.name
     target.write_bytes(veadk_wheel.read_bytes())
     (package_dir / "studio-runtime.lock").write_text(
         "dependency==1\n",
         encoding="utf-8",
     )
-    return (
-        "--no-index\n"
-        "--find-links ./wheelhouse\n"
-        "-r ./studio-runtime.lock\n"
-        f"./wheelhouse/{target.name}\n"
-    )
+    return f"--no-index\n--require-hashes\n./{target.name} --hash=sha256:test\n"
 
 
 def _stage_test_agentkit_cli_archive(
@@ -2445,9 +2438,8 @@ def test_studio_deploy_from_source_bundles_unmirrored_dependencies(
     assert expected_provider in {"volcengine", "byteplus"}
     expected_requirements = (
         "--no-index\n"
-        "--find-links ./wheelhouse\n"
-        "-r ./studio-runtime.lock\n"
-        "./wheelhouse/veadk_python-test-py3-none-any.whl\n"
+        "--require-hashes\n"
+        "./veadk_python-test-py3-none-any.whl --hash=sha256:test\n"
     )
     assert captured["requirements"] == expected_requirements
 

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Build the locked Linux wheelhouse consumed by VeFaaS Studio releases."""
+"""Build the locked Linux wheel set consumed by VeFaaS Studio releases."""
 
 from __future__ import annotations
 
@@ -193,9 +193,20 @@ def build_studio_offline_runtime(
     if not staged_veadk.is_file():
         raise ValueError("Studio offline wheelhouse is incomplete.")
     _pin_runtime_lock_to_wheelhouse(runtime_lock, wheelhouse, staged_veadk)
+    for wheel in sorted(wheelhouse.glob("*.whl")):
+        destination = package_dir / wheel.name
+        if destination.exists():
+            raise ValueError("Studio offline wheel has a root-level conflict.")
+        shutil.move(str(wheel), destination)
+    try:
+        wheelhouse.rmdir()
+    except OSError as error:
+        raise ValueError(
+            "Studio offline wheelhouse contains unexpected files."
+        ) from error
     requirements = build_studio_offline_requirements(
-        wheelhouse,
-        wheel_prefix=f"./{STUDIO_RUNTIME_WHEELHOUSE}/",
+        package_dir,
+        wheel_prefix="./",
     )
     _verify_offline_resolution(
         package_dir,

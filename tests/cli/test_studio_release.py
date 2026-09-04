@@ -18,6 +18,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import zipfile
@@ -614,11 +615,36 @@ def test_extracted_bundle_requires_local_pinned_archive(
     package = tmp_path / "package"
     veadk_wheel, cli_archive = _write_release_package(package, monkeypatch)
     (package / "requirements.txt").write_text(
+        "--no-index\n"
+        "--require-hashes\n"
         f"./{veadk_wheel.name} --hash=sha256:{hashlib.sha256(veadk_wheel.read_bytes()).hexdigest()}\n",
         encoding="utf-8",
     )
 
     assert validate_studio_bundle_dependencies(package) == cli_archive
+
+
+def test_extracted_bundle_rejects_nested_wheelhouse_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = tmp_path / "package"
+    wheelhouse = package / "wheelhouse"
+    veadk_wheel, _cli_archive = _write_release_package(wheelhouse, monkeypatch)
+    shutil.move(
+        str(wheelhouse / STUDIO_AGENTKIT_CLI_ARTIFACT.filename),
+        package / STUDIO_AGENTKIT_CLI_ARTIFACT.filename,
+    )
+    (package / "requirements.txt").write_text(
+        "--no-index\n"
+        "--require-hashes\n"
+        f"./wheelhouse/{veadk_wheel.name} "
+        f"--hash=sha256:{hashlib.sha256(veadk_wheel.read_bytes()).hexdigest()}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(StudioPublisherError, match="full release dependency"):
+        validate_studio_bundle_dependencies(package)
 
 
 def test_release_entrypoint_reads_deployed_provider() -> None:

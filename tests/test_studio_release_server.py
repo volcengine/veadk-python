@@ -832,12 +832,10 @@ def test_standalone_publisher_builds_bundle_from_source_files(
         veadk_wheel: Path,
         **_kwargs: Any,
     ) -> str:
-        wheelhouse = package_dir / "wheelhouse"
-        wheelhouse.mkdir()
-        target = wheelhouse / veadk_wheel.name
+        target = package_dir / veadk_wheel.name
         target.write_bytes(veadk_wheel.read_bytes())
         _write_test_wheel(
-            wheelhouse / "six-1.17.0-py2.py3-none-any.whl",
+            package_dir / "six-1.17.0-py2.py3-none-any.whl",
             name="six",
             version="1.17.0",
         )
@@ -847,9 +845,9 @@ def test_standalone_publisher_builds_bundle_from_source_files(
         )
         return (
             "--no-index\n"
-            "--find-links ./wheelhouse\n"
-            "-r ./studio-runtime.lock\n"
-            f"./wheelhouse/{target.name}\n"
+            "--require-hashes\n"
+            "./six-1.17.0-py2.py3-none-any.whl --hash=sha256:test\n"
+            f"./{target.name} --hash=sha256:test\n"
         )
 
     monkeypatch.setattr(release_publisher.subprocess, "run", _run)
@@ -873,10 +871,12 @@ def test_standalone_publisher_builds_bundle_from_source_files(
     with zipfile.ZipFile(bundle) as archive:
         assert archive.read("requirements.txt").decode() == (
             "--no-index\n"
-            "--find-links ./wheelhouse\n"
-            "-r ./studio-runtime.lock\n"
-            "./wheelhouse/veadk_python-1.0.0-py3-none-any.whl\n"
+            "--require-hashes\n"
+            "./six-1.17.0-py2.py3-none-any.whl --hash=sha256:test\n"
+            "./veadk_python-1.0.0-py3-none-any.whl --hash=sha256:test\n"
         )
+        assert not any(name.startswith("wheelhouse/") for name in archive.namelist())
+        assert len([name for name in archive.namelist() if name.endswith(".whl")]) == 2
         assert archive.read("agentkit-linux-x64.tar.gz") == b"pinned-cli"
         assert ".studio-release-environment.json" not in archive.namelist()
         assert (
@@ -926,7 +926,8 @@ def test_standalone_publisher_builds_bundle_from_source_files(
         assert b"--runtime-manifest" in archive.read("run.sh")
     with zipfile.ZipFile(full_bundle) as archive:
         assert archive.read("agentkit-linux-x64.tar.gz") == b"pinned-cli"
-        assert any(name.startswith("wheelhouse/") for name in archive.namelist())
+        assert not any(name.startswith("wheelhouse/") for name in archive.namelist())
+        assert len([name for name in archive.namelist() if name.endswith(".whl")]) == 2
     extracted = tmp_path / "thin-extracted"
     with zipfile.ZipFile(thin_bundle) as archive:
         archive.extractall(extracted)
@@ -1047,9 +1048,8 @@ def test_publisher_stages_provider_local_thin_runtime(
         encoding="utf-8",
     )
     package_dir = tmp_path / "package"
-    wheelhouse = package_dir / "wheelhouse"
-    wheelhouse.mkdir(parents=True)
-    dependency_wheel = wheelhouse / "dependency-1.0-py3-none-any.whl"
+    package_dir.mkdir(parents=True)
+    dependency_wheel = package_dir / "dependency-1.0-py3-none-any.whl"
     _write_test_wheel(
         dependency_wheel,
         name="dependency",
@@ -1059,7 +1059,7 @@ def test_publisher_stages_provider_local_thin_runtime(
         _pypi_lock(("dependency", "1.0", dependency_wheel)),
         encoding="utf-8",
     )
-    veadk_wheel = wheelhouse / "veadk_python-1.0.0-py3-none-any.whl"
+    veadk_wheel = package_dir / "veadk_python-1.0.0-py3-none-any.whl"
     _write_test_wheel(
         veadk_wheel,
         name="veadk-python",
@@ -1087,7 +1087,8 @@ def test_publisher_stages_provider_local_thin_runtime(
     assert manifest["runtimeEpoch"] == epoch
     assert manifest["provider"] == provider
     assert len(list(artifact_dir.iterdir())) == 2
-    assert not wheelhouse.exists()
+    assert not (package_dir / "wheelhouse").exists()
+    assert not dependency_wheel.exists()
     assert not cli_archive.exists()
     assert len(list(package_dir.glob("veadk*.whl"))) == 1
     assert (
@@ -1410,10 +1411,9 @@ def test_runtime_epoch_reuses_dependencies_across_veadk_releases(
     artifact_names: list[set[str]] = []
     for version, content in (("1.0.0", b"app-one"), ("1.0.1", b"app-two")):
         package = tmp_path / f"package-{version}"
-        wheelhouse = package / "wheelhouse"
-        wheelhouse.mkdir(parents=True)
+        package.mkdir(parents=True)
         _write_test_wheel(
-            wheelhouse / "dependency-1.0-py3-none-any.whl",
+            package / "dependency-1.0-py3-none-any.whl",
             name="dependency",
             version="1.0",
         )
@@ -1422,20 +1422,19 @@ def test_runtime_epoch_reuses_dependencies_across_veadk_releases(
                 (
                     "dependency",
                     "1.0",
-                    wheelhouse / "dependency-1.0-py3-none-any.whl",
+                    package / "dependency-1.0-py3-none-any.whl",
                 )
             ),
             encoding="utf-8",
         )
         veadk_name = f"veadk_python-{version}-py3-none-any.whl"
         _write_test_wheel(
-            wheelhouse / veadk_name,
+            package / veadk_name,
             name="veadk-python",
             version=version,
             license_expression="Apache-2.0",
             marker=content.decode(),
         )
-        shutil.copy2(wheelhouse / veadk_name, package / veadk_name)
         (package / "agentkit-linux-x64.tar.gz").write_bytes(cli_content)
         (package / "requirements.txt").write_text("local\n", encoding="utf-8")
         (package / "run.sh").write_text("local\n", encoding="utf-8")

@@ -464,17 +464,26 @@ class StudioSelfUpdater:
                     "scheduler",
                     "正在更新定时任务调度服务与分钟触发器",
                 )
-                _, _, _, _, scheduler_base = deploy_scheduler_for_studio_update(
-                    service,
-                    studio_function_id=self._settings.function_id,
-                    package_root=package_dir,
-                    provider=self._settings.provider,
-                    project=self._settings.project,
-                    environment_overrides=resource_environment,
-                )
-                environment_overrides["VEADK_STUDIO_CRONJOB_SCHEDULER_BASE"] = (
-                    scheduler_base
-                )
+                try:
+                    _, _, _, _, scheduler_base = deploy_scheduler_for_studio_update(
+                        service,
+                        studio_function_id=self._settings.function_id,
+                        package_root=package_dir,
+                        provider=self._settings.provider,
+                        project=self._settings.project,
+                        environment_overrides=resource_environment,
+                    )
+                except Exception as error:  # noqa: BLE001 - scheduler is best effort
+                    self._record_warning(
+                        error,
+                        "定时任务更新未全部完成，继续更新 Studio 主函数",
+                        stage="scheduler",
+                        secrets=credentials,
+                    )
+                else:
+                    environment_overrides["VEADK_STUDIO_CRONJOB_SCHEDULER_BASE"] = (
+                        scheduler_base
+                    )
                 self._set_progress("submitting", "正在提交 VeFaaS Function 更新")
                 service.submit_application_code_bundle_update(
                     application_id=self._settings.application_id,
@@ -563,6 +572,34 @@ class StudioSelfUpdater:
             )
         )
         self._set_progress("error", message)
+
+    def _record_warning(
+        self,
+        error: BaseException,
+        message: str,
+        *,
+        stage: str,
+        secrets: tuple[str, ...] = (),
+    ) -> None:
+        """Record a non-blocking component failure without masking main update state."""
+        warning_id = uuid.uuid4().hex[:12]
+        self._diagnostic_lines.extend(
+            (
+                f"warningId={warning_id}",
+                f"stage={stage}",
+                f"region={self._settings.deployment_region}",
+                f"project={self._settings.project}",
+                f"applicationId={self._settings.application_id}",
+                f"functionId={self._settings.function_id}",
+                "",
+                _redact_diagnostic(
+                    "".join(traceback.format_exception(error)).rstrip(),
+                    secrets,
+                ),
+            )
+        )
+        logger.warning(message)
+        self._set_progress(stage, message)
 
     def _progress_payload(self) -> dict[str, Any]:
         """Return stable progress fields for every status response."""

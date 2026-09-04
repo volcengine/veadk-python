@@ -218,20 +218,23 @@ def _bundle(
     cli_archive_content: bytes = b"pinned-cli",
 ) -> None:
     veadk_wheel = "veadk_python-1.2.3-py3-none-any.whl"
+    wheel_path = path.parent / veadk_wheel
+    with zipfile.ZipFile(wheel_path, "w") as wheel:
+        wheel.writestr(
+            "veadk_python-1.2.3.dist-info/METADATA",
+            "Metadata-Version: 2.1\nName: veadk-python\nVersion: 1.2.3\n",
+        )
+    wheel_digest = hashlib.sha256(wheel_path.read_bytes()).hexdigest()
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("run.sh", "#!/bin/bash\n")
-        requirements = [f"./{veadk_wheel}"]
-        archive.writestr("requirements.txt", "\n".join(requirements) + "\n")
-        with zipfile.ZipFile(
-            Path(path.parent) / veadk_wheel,
-            "w",
-        ) as wheel:
-            wheel.writestr(
-                "veadk_python-1.2.3.dist-info/METADATA",
-                "Metadata-Version: 2.1\nName: veadk-python\nVersion: 1.2.3\n",
-            )
-        archive.write(path.parent / veadk_wheel, veadk_wheel)
-        (path.parent / veadk_wheel).unlink()
+        archive.writestr(
+            "requirements.txt",
+            "--no-index\n"
+            "--require-hashes\n"
+            f"./{veadk_wheel} --hash=sha256:{wheel_digest}\n",
+        )
+        archive.write(wheel_path, veadk_wheel)
+        wheel_path.unlink()
         if include_cli_archive:
             archive.writestr(
                 STUDIO_AGENTKIT_CLI_ARTIFACT.filename,
@@ -702,6 +705,92 @@ def test_submit_latest_uses_fixed_deployment_ids_and_sts(
     assert status["progressMessage"] == "已提交，正在等待新 Revision 发布"
     assert status["targetVersion"] == manifest.version
     assert status["startedAt"] > 0
+
+
+def test_submit_latest_continues_main_function_when_scheduler_update_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    archive = tmp_path / "source.zip"
+    _bundle(archive)
+    content = archive.read_bytes()
+    manifest = StudioReleaseManifest(
+        version="20260724153045",
+        git_sha="a" * 40,
+        sha256=hashlib.sha256(content).hexdigest(),
+        size=len(content),
+        created_at="2026-07-24T15:30:45+08:00",
+    )
+    captured: dict[str, Any] = {}
+
+    class _Store:
+        def latest_manifest(self) -> StudioReleaseManifest:
+            return manifest
+
+        def release_catalog(self) -> list[StudioReleaseManifest]:
+            return [manifest]
+
+        def download_bundle(
+            self, release: StudioReleaseManifest, destination: Path
+        ) -> None:
+            assert release == manifest
+            destination.write_bytes(content)
+
+    class _VeFaaS:
+        def __init__(self, **_kwargs: str) -> None:
+            self.client = object()
+
+        def submit_application_code_bundle_update(self, **kwargs: Any) -> None:
+            captured["main_update"] = kwargs
+
+    def _fail_scheduler(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError(
+            "Scheduler dependency installation failed for sts-ak/sts-sk "
+            "at https://upload.example.com/object?token=sts-token"
+        )
+
+    updater = StudioSelfUpdater(
+        settings=_settings(),
+        credential_resolver=lambda: ("sts-ak", "sts-sk", "sts-token"),
+        branding_logo=None,
+    )
+    monkeypatch.setattr(updater, "_store", lambda *_args: _Store())
+    monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.VeFaaS", _VeFaaS)
+    monkeypatch.setattr(
+        "frontend.server.studio_update_resources.reconcile_studio_update_resources",
+        lambda **_kwargs: {
+            "VEADK_STUDIO_TOS_BUCKET": "studio-bucket",
+            "VEADK_STUDIO_TOS_REGION": "cn-beijing",
+        },
+    )
+    monkeypatch.setattr(
+        "frontend.service.studio_scheduler.deploy.deploy_scheduler_for_studio_update",
+        _fail_scheduler,
+    )
+    monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "bundled")
+
+    assert updater.submit_latest() == manifest
+
+    update = captured["main_update"]
+    assert update["function_id"] == "function-id"
+    assert update["environment_overrides"] == {
+        "VEADK_STUDIO_RELEASE_VERSION": manifest.version,
+        "VEADK_STUDIO_TOS_BUCKET": "studio-bucket",
+        "VEADK_STUDIO_TOS_REGION": "cn-beijing",
+    }
+    status = updater.status()
+    assert status["state"] == "updating"
+    assert status["progressStage"] == "publishing"
+    assert status["errorId"] == ""
+    assert status["errorStage"] == ""
+    assert "warningId=" in status["errorLog"]
+    assert "stage=scheduler" in status["errorLog"]
+    assert "定时任务更新未全部完成，继续更新 Studio 主函数" in status["errorLog"]
+    assert "Scheduler dependency installation failed" in status["errorLog"]
+    assert "sts-ak" not in status["errorLog"]
+    assert "sts-sk" not in status["errorLog"]
+    assert "sts-token" not in status["errorLog"]
+    assert "?[REDACTED]" in status["errorLog"]
 
 
 def test_submit_latest_reports_missing_vefaas_permissions(
