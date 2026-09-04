@@ -205,6 +205,45 @@ def test_oauth2_callback_revalidates_stored_redirect(
     assert response.headers["location"] == expected
 
 
+@pytest.mark.asyncio
+async def test_fetch_user_info_keeps_only_cookie_safe_fields() -> None:
+    config = oauth2_config()
+    config.userinfo_url = "https://identity.example.com/userinfo"
+    config.user_id_field = "employee_id"
+    handler = OAuth2Handler(config)
+    response = Mock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {
+        "sub": "user-1",
+        "email": "user@example.com",
+        "name": "Example User",
+        "picture": "https://identity.example.com/avatar.png",
+        "employee_id": "employee-1",
+        "tenant_id": "tenant-1",
+        "roles": ["admin"],
+        "external.claims": {"opaque": "x" * 10_000},
+    }
+    handler._http_client.get = AsyncMock(return_value=response)
+
+    user_info = await handler._fetch_user_info("access-token")
+    cookie = handler.encode_session(
+        OAuth2Session(
+            access_token="access-token",
+            expires_at=time.time() + 3600,
+            user_info=user_info,
+        )
+    )
+
+    assert user_info == {
+        "sub": "user-1",
+        "email": "user@example.com",
+        "name": "Example User",
+        "picture": "https://identity.example.com/avatar.png",
+        "employee_id": "employee-1",
+    }
+    assert len(cookie) < 4096
+
+
 def test_refresh_token_keeps_browser_cookie_beyond_access_token_lifetime() -> None:
     handler = OAuth2Handler(oauth2_config())
     now = time.time()
