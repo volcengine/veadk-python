@@ -193,17 +193,13 @@ def build_studio_offline_runtime(
     if not staged_veadk.is_file():
         raise ValueError("Studio offline wheelhouse is incomplete.")
     _pin_runtime_lock_to_wheelhouse(runtime_lock, wheelhouse, staged_veadk)
-    requirements = (
-        "--no-index\n"
-        f"--find-links ./{STUDIO_RUNTIME_WHEELHOUSE}\n"
-        "--require-hashes\n"
-        f"-r ./{STUDIO_RUNTIME_LOCK}\n"
-        f"./{STUDIO_RUNTIME_WHEELHOUSE}/{staged_veadk.name} "
-        f"--hash=sha256:{_sha256(staged_veadk)}\n"
+    requirements = build_studio_offline_requirements(
+        wheelhouse,
+        wheel_prefix=f"./{STUDIO_RUNTIME_WHEELHOUSE}/",
     )
     _verify_offline_resolution(
         package_dir,
-        staged_veadk,
+        requirements,
         uv=uv,
         environment=build_environment,
     )
@@ -306,60 +302,73 @@ def _pin_runtime_lock_to_wheelhouse(
     runtime_lock.write_text("\n".join(locked_lines) + "\n", encoding="utf-8")
 
 
+def build_studio_offline_requirements(
+    wheelhouse: Path,
+    *,
+    wheel_prefix: str,
+) -> str:
+    """Return a hash-pinned contract without relative index URLs."""
+    if (
+        not wheel_prefix.startswith("./")
+        or ".." in Path(wheel_prefix).parts
+        or "\n" in wheel_prefix
+        or "\r" in wheel_prefix
+    ):
+        raise ValueError("Studio wheel prefix is invalid.")
+    wheels = sorted(wheelhouse.glob("*.whl"))
+    if not wheels:
+        raise ValueError("Studio offline wheelhouse is empty.")
+
+    distributions: set[str] = set()
+    lines = ["--no-index", "--require-hashes"]
+    for wheel in wheels:
+        try:
+            name, _version, _build, _tags = parse_wheel_filename(wheel.name)
+        except InvalidWheelFilename as error:
+            raise ValueError("Studio wheelhouse contains an invalid wheel.") from error
+        distribution = canonicalize_name(name)
+        if distribution in distributions:
+            raise ValueError("Studio wheelhouse contains duplicate distributions.")
+        distributions.add(distribution)
+        lines.append(f"{wheel_prefix}{wheel.name} --hash=sha256:{_sha256(wheel)}")
+    return "\n".join(lines) + "\n"
+
+
 def _verify_offline_resolution(
     package_dir: Path,
-    veadk_wheel: Path,
+    requirements: str,
     *,
     uv: str,
     environment: Mapping[str, str],
 ) -> None:
-    """Resolve the final bundle once with networking disabled before release."""
+    """Resolve the exact stdin contract used by the dependency installer."""
     with tempfile.TemporaryDirectory(prefix="veadk_studio_verify_") as tmp:
-        workspace = Path(tmp)
-        verification_requirements = workspace / "requirements.txt"
-        verification_requirements.write_text(
-            f"--find-links {(package_dir / STUDIO_RUNTIME_WHEELHOUSE).resolve().as_uri()}\n"
-            "--require-hashes\n"
-            f"-r {(package_dir / STUDIO_RUNTIME_LOCK).resolve()}\n"
-            f"{veadk_wheel.resolve().as_uri()} "
-            f"--hash=sha256:{_sha256(veadk_wheel)}\n",
-            encoding="utf-8",
-        )
-        resolved = workspace / "resolved"
+        resolved = Path(tmp) / "resolved"
         resolved.mkdir()
         command = [
             uv,
-            "tool",
-            "run",
-            "--from",
-            f"pip=={_PIP_VERSION}",
             "pip",
-            "download",
-            "--disable-pip-version-check",
+            "install",
+            "--dry-run",
+            "--offline",
             "--no-index",
-            "--only-binary=:all:",
+            "--require-hashes",
+            "--no-python-downloads",
+            "--python-version",
+            _PYTHON_VERSION,
+            "--python-platform",
+            "x86_64-manylinux_2_28",
+            "--target",
+            str(resolved),
+            "--requirements",
+            "-",
         ]
-        for platform_name in _LINUX_PLATFORMS:
-            command.extend(("--platform", platform_name))
-        command.extend(
-            (
-                "--implementation",
-                "cp",
-                "--python-version",
-                _PYTHON_VERSION,
-                "--abi",
-                _PYTHON_ABI,
-                "--dest",
-                str(resolved),
-                "--requirement",
-                str(verification_requirements),
-            )
-        )
         _run(
             command,
             cwd=package_dir,
             environment=environment,
             failure="Studio offline wheelhouse failed isolated resolution.",
+            stdin=requirements,
         )
 
 
@@ -377,6 +386,7 @@ def _run(
     cwd: Path,
     environment: Mapping[str, str],
     failure: str,
+    stdin: str | None = None,
 ) -> None:
     try:
         subprocess.run(
@@ -384,7 +394,9 @@ def _run(
             cwd=cwd,
             env=dict(environment),
             check=True,
+            input=stdin,
             stdout=subprocess.DEVNULL,
+            text=stdin is not None,
         )
     except subprocess.CalledProcessError as error:
         raise ValueError(f"{failure} Exit code: {error.returncode}.") from error
@@ -393,5 +405,6 @@ def _run(
 __all__ = [
     "STUDIO_RUNTIME_LOCK",
     "STUDIO_RUNTIME_WHEELHOUSE",
+    "build_studio_offline_requirements",
     "build_studio_offline_runtime",
 ]
