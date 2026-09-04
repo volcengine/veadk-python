@@ -45,7 +45,10 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10 compatibility
     import tomli as tomllib  # pyright: ignore[reportMissingImports]
 
 if __package__:
-    from .offline_runtime import build_studio_offline_runtime
+    from .offline_runtime import (
+        build_studio_offline_requirements,
+        build_studio_offline_runtime,
+    )
 else:
     _offline_runtime_path = Path(__file__).with_name("offline_runtime.py")
     _offline_runtime_spec = importlib.util.spec_from_file_location(
@@ -56,6 +59,9 @@ else:
         raise RuntimeError("Studio offline runtime builder is unavailable.")
     _offline_runtime = importlib.util.module_from_spec(_offline_runtime_spec)
     _offline_runtime_spec.loader.exec_module(_offline_runtime)
+    build_studio_offline_requirements = (
+        _offline_runtime.build_studio_offline_requirements
+    )
     build_studio_offline_runtime = _offline_runtime.build_studio_offline_runtime
 
 _VERSION_PATTERN = re.compile(r"^\d{14}$")
@@ -917,6 +923,23 @@ def validate_studio_bundle_dependencies(package_dir: Path) -> Path:
         raise StudioPublisherError(
             "The Studio release must contain exactly one local VeADK wheel."
         )
+    try:
+        expected_requirements = build_studio_offline_requirements(
+            package_dir,
+            wheel_prefix="./",
+        )
+    except ValueError as error:
+        raise StudioPublisherError(
+            "Studio full release dependency contract is invalid."
+        ) from error
+    if (
+        (package_dir / "wheelhouse").exists()
+        or requirements_path.read_text(encoding="utf-8") != expected_requirements
+        or set(local_wheels) != {path.resolve() for path in package_dir.glob("*.whl")}
+    ):
+        raise StudioPublisherError(
+            "Studio full release dependency contract is invalid."
+        )
     return validate_studio_agentkit_cli_archive(list(package_dir.iterdir()))
 
 
@@ -1023,25 +1046,19 @@ def stage_studio_thin_runtime(
     """Replace local runtime payloads with one exact public artifact manifest."""
 
     contract = _load_studio_artifact_contract(source_root)
-    wheelhouse = package_dir / "wheelhouse"
-    wheels = sorted(wheelhouse.glob("*.whl"))
+    wheels = sorted(package_dir.glob("*.whl"))
     runtime_veadk_wheels = [
         path
         for path in wheels
         if path.name.startswith(("veadk_python-", "veadk-python-"))
     ]
     dependency_wheels = [path for path in wheels if path not in runtime_veadk_wheels]
-    local_veadk_wheels = sorted(package_dir.glob("veadk*.whl"))
-    if len(runtime_veadk_wheels) == 1 and not local_veadk_wheels:
-        local_veadk = package_dir / runtime_veadk_wheels[0].name
-        shutil.copy2(runtime_veadk_wheels[0], local_veadk)
-        local_veadk_wheels = [local_veadk]
+    local_veadk_wheels = runtime_veadk_wheels
     cli_archive = package_dir / _AGENTKIT_CLI_ARCHIVE
     if (
         not dependency_wheels
         or len(runtime_veadk_wheels) != 1
         or len(local_veadk_wheels) != 1
-        or _sha256_file(runtime_veadk_wheels[0]) != _sha256_file(local_veadk_wheels[0])
         or not cli_archive.is_file()
     ):
         raise StudioPublisherError("Studio offline runtime is incomplete.")
@@ -1075,12 +1092,12 @@ def stage_studio_thin_runtime(
     artifact_dir = output_dir / f"runtime-artifacts-{runtime_manifest.runtime_epoch}"
     artifact_dir.mkdir(parents=True, exist_ok=False)
     for path in (*public_wheels, cli_archive):
-        shutil.copy2(path, artifact_dir / path.name)
+        shutil.move(str(path), artifact_dir / path.name)
     if bundled_wheels:
         bundled_wheelhouse = package_dir / "bundled-wheelhouse"
         bundled_wheelhouse.mkdir()
         for path in bundled_wheels:
-            shutil.copy2(path, bundled_wheelhouse / path.name)
+            shutil.move(str(path), bundled_wheelhouse / path.name)
     manifest_content = runtime_manifest.to_json()
     (package_dir / _STUDIO_RUNTIME_MANIFEST).write_bytes(manifest_content)
     (
@@ -1092,8 +1109,6 @@ def stage_studio_thin_runtime(
         + f"--hash=sha256:{_sha256_file(local_veadk_wheels[0])}\n",
         encoding="utf-8",
     )
-    shutil.rmtree(wheelhouse)
-    cli_archive.unlink()
     (package_dir / "run.sh").write_text(
         _studio_run_script(thin=True),
         encoding="utf-8",
