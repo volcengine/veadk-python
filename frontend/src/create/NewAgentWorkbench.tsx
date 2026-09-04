@@ -850,12 +850,16 @@ export function NewAgentWorkbench({
     const min = Number(minInstance);
     const max = Number(maxInstance);
     if (
+      !minInstance.trim() ||
+      !maxInstance.trim() ||
       !Number.isSafeInteger(min) ||
-      min < 1 ||
+      min < 0 ||
       !Number.isSafeInteger(max) ||
       max < 1
     ) {
-      setDeploymentValidationError("实例数必须为大于 0 的整数");
+      setDeploymentValidationError(
+        "最小实例数必须为大于等于 0 的整数，最大实例数必须为大于 0 的整数",
+      );
       return;
     }
     if (min > max) {
@@ -1252,7 +1256,7 @@ export function NewAgentWorkbench({
                           </span>
                           <Input
                             type="number"
-                            min={1}
+                            min={0}
                             step={1}
                             value={minInstance}
                             size="xl"

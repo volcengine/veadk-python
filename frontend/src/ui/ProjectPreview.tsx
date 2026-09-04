@@ -570,10 +570,13 @@ function validateRuntimeInstanceRange(
     !maxValue.trim() ||
     !Number.isSafeInteger(min) ||
     !Number.isSafeInteger(max) ||
-    min < 1 ||
+    min < 0 ||
     max < 1
   ) {
-    return { valid: false, error: "实例数必须为大于 0 的整数。" };
+    return {
+      valid: false,
+      error: "最小实例数必须为大于等于 0 的整数，最大实例数必须为大于 0 的整数。",
+    };
   }
   if (min > max) {
     return { valid: false, error: "最小实例数不能大于最大实例数。" };
@@ -2609,7 +2612,7 @@ export function ProjectPreview({
                       <input
                         id="runtime-min-instance"
                         type="number"
-                        min="1"
+                        min="0"
                         step="1"
                         inputMode="numeric"
                         value={minInstance}

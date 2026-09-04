@@ -46,7 +46,7 @@ test("renders Runtime instance inputs with memory-aware and Sidecar-safe default
   );
   assert.match(
     projectPreviewSource,
-    /id="runtime-min-instance"[\s\S]*?type="number"[\s\S]*?value=\{minInstance\}/,
+    /id="runtime-min-instance"[\s\S]*?type="number"[\s\S]*?min="0"[\s\S]*?value=\{minInstance\}/,
   );
   assert.match(
     projectPreviewSource,
@@ -55,6 +55,11 @@ test("renders Runtime instance inputs with memory-aware and Sidecar-safe default
   assert.match(
     projectPreviewSource,
     /disabled=\{deploying \|\| sidecarEnabled\}/,
+  );
+  assert.match(projectPreviewSource, /min < 0/);
+  assert.match(
+    projectPreviewSource,
+    /最小实例数必须为大于等于 0 的整数，最大实例数必须为大于 0 的整数。/,
   );
   assert.match(
     projectPreviewSource,

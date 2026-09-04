@@ -627,6 +627,19 @@ test("final step exposes deployment progress and error feedback", () => {
   );
   assert.match(
     workbenchSource,
+    /最小实例数[\s\S]*?type="number"[\s\S]*?min=\{0\}[\s\S]*?value=\{minInstance\}/,
+  );
+  assert.match(workbenchSource, /min < 0/);
+  assert.match(
+    workbenchSource,
+    /!minInstance\.trim\(\)[\s\S]*?!maxInstance\.trim\(\)/,
+  );
+  assert.match(
+    workbenchSource,
+    /最小实例数必须为大于等于 0 的整数，最大实例数必须为大于 0 的整数/,
+  );
+  assert.match(
+    workbenchSource,
     /role="table"[\s\S]*?aria-label="环境变量"[\s\S]*?role="columnheader">名称[\s\S]*?role="columnheader">值[\s\S]*?role="columnheader">操作/,
   );
   assert.match(

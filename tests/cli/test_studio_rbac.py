@@ -5498,6 +5498,7 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
     [
         ("in-memory", 1, 1, True, False),
         ("persistent", 1, 5, False, False),
+        ("persistent", 0, 5, True, False),
         ("persistent", 2, 4, True, False),
         ("persistent", 1, 5, False, True),
     ],
@@ -5694,8 +5695,30 @@ def test_deployment_rejects_internal_runtime_environment(
 @pytest.mark.parametrize(
     ("min_instance", "max_instance", "detail"),
     [
-        (0, 1, "Runtime instance range must use positive integers"),
-        ("1", 5, "Runtime instance range must use positive integers"),
+        (
+            -1,
+            1,
+            (
+                "Runtime minInstance must be a non-negative integer and "
+                "maxInstance must be a positive integer"
+            ),
+        ),
+        (
+            0,
+            0,
+            (
+                "Runtime minInstance must be a non-negative integer and "
+                "maxInstance must be a positive integer"
+            ),
+        ),
+        (
+            "1",
+            5,
+            (
+                "Runtime minInstance must be a non-negative integer and "
+                "maxInstance must be a positive integer"
+            ),
+        ),
         (2, 1, "Runtime minInstance cannot exceed maxInstance"),
     ],
 )
