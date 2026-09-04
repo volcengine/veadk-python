@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   HARNESS_SIDECAR_OPTION_IDS,
+  HARNESS_SIDECAR_OPTION_GROUPS,
   HARNESS_SIDECAR_OPTIONS,
   HARNESS_SIDECAR_PROFILES,
   harnessIntentFromOptimizations,
@@ -54,6 +55,10 @@ describe("Studio Harness Sidecar metadata options", () => {
       "Custom",
       "Operations",
     ]);
+    expect(HARNESS_SIDECAR_PROFILES.map((profile) => profile.description)).toEqual([
+      "Choose components as needed. The Sidecar stays off when none are selected.",
+      "For operations diagnostics, databases, logs, and monitoring MCP servers.",
+    ]);
     expect(harnessProfileDefaultOptimizations("default")).toEqual([]);
     expect(harnessProfileDefaultOptimizations("ops")).toEqual([
       "context_engine",
@@ -71,6 +76,14 @@ describe("Studio Harness Sidecar metadata options", () => {
         >[0],
       ),
     ).toEqual([]);
+  });
+
+  it("publishes localized optimization groups", () => {
+    expect(HARNESS_SIDECAR_OPTION_GROUPS.map((group) => group.displayName)).toEqual([
+      "Improve response quality",
+      "Reduce runtime cost",
+      "Improve runtime stability",
+    ]);
   });
 
   it("turns a selection into metadata without runtime identity", () => {
