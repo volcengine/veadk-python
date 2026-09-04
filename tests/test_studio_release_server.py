@@ -2176,6 +2176,135 @@ def test_public_artifact_bucket_preserves_existing_policy_and_tags() -> None:
     ]
 
 
+def test_public_artifact_bucket_accepts_tos_normalized_policy() -> None:
+    bucket = "veadk-studio-public"
+
+    class _NotFoundError(Exception):
+        status_code = 404
+
+    class _Client:
+        def __init__(self) -> None:
+            self.policy: dict[str, object] | None = None
+            self.policy_puts = 0
+
+        def list_buckets(self) -> Any:
+            return SimpleNamespace(buckets=[SimpleNamespace(name=bucket)])
+
+        def get_bucket_tagging(self, **_kwargs: Any) -> Any:
+            return SimpleNamespace(tag_set=[SimpleNamespace(key="note", value="勿删")])
+
+        def get_bucket_policy(self, **_kwargs: Any) -> Any:
+            if self.policy is None:
+                raise _NotFoundError
+            statements = self.policy.get("Statement")
+            assert isinstance(statements, list) and len(statements) == 1
+            statement = statements[0]
+            assert isinstance(statement, dict)
+            actions = statement.get("Action")
+            resources = statement.get("Resource")
+            assert isinstance(actions, list) and len(actions) == 1
+            assert isinstance(resources, list) and len(resources) == 1
+            normalized = {
+                "Version": "1.0",
+                "Statement": {
+                    **statement,
+                    "Principal": [statement["Principal"]],
+                    "Action": actions[0],
+                    "Resource": resources[0],
+                },
+            }
+            return SimpleNamespace(policy=json.dumps(normalized))
+
+        def put_bucket_policy(self, **kwargs: Any) -> None:
+            self.policy = json.loads(kwargs["policy"])
+            self.policy_puts += 1
+
+    client = _Client()
+
+    assert release_deploy._ensure_public_artifact_bucket(client, "volcengine") == bucket
+    assert release_deploy._ensure_public_artifact_bucket(client, "volcengine") == bucket
+    assert client.policy_puts == 1
+
+
+def test_public_artifact_bucket_accepts_normalized_existing_owned_statement() -> None:
+    bucket = "veadk-studio-public"
+
+    class _Client:
+        def list_buckets(self) -> Any:
+            return SimpleNamespace(buckets=[SimpleNamespace(name=bucket)])
+
+        def get_bucket_tagging(self, **_kwargs: Any) -> Any:
+            return SimpleNamespace(tag_set=[SimpleNamespace(key="note", value="勿删")])
+
+        def get_bucket_policy(self, **_kwargs: Any) -> Any:
+            return SimpleNamespace(
+                policy=json.dumps(
+                    {
+                        "Version": "1.0",
+                        "Statement": {
+                            "Sid": "PublicReadStudioRuntimeArtifacts",
+                            "Effect": "Allow",
+                            "Principal": ["*"],
+                            "Action": "tos:GetObject",
+                            "Resource": (
+                                f"trn:tos:::{bucket}/veadk/studio/artifacts/v1/*"
+                            ),
+                        },
+                    }
+                )
+            )
+
+        def put_bucket_policy(self, **_kwargs: Any) -> None:
+            raise AssertionError("normalized matching policy must not be rewritten")
+
+    assert (
+        release_deploy._ensure_public_artifact_bucket(_Client(), "volcengine") == bucket
+    )
+
+
+def test_public_artifact_bucket_rejects_dropped_unrelated_policy() -> None:
+    bucket = "veadk-studio-public"
+    unrelated = {
+        "Sid": "ExistingPrivateAutomation",
+        "Effect": "Allow",
+        "Principal": {"Service": "internal"},
+        "Action": ["tos:PutObject"],
+        "Resource": [f"trn:tos:::{bucket}/internal/*"],
+    }
+
+    class _Client:
+        def __init__(self) -> None:
+            self.policy_puts = 0
+
+        def list_buckets(self) -> Any:
+            return SimpleNamespace(buckets=[SimpleNamespace(name=bucket)])
+
+        def get_bucket_tagging(self, **_kwargs: Any) -> Any:
+            return SimpleNamespace(tag_set=[SimpleNamespace(key="note", value="勿删")])
+
+        def get_bucket_policy(self, **_kwargs: Any) -> Any:
+            statements = [unrelated]
+            if self.policy_puts:
+                statements = [
+                    {
+                        "Sid": "PublicReadStudioRuntimeArtifacts",
+                        "Effect": "Allow",
+                        "Principal": ["*"],
+                        "Action": "tos:GetObject",
+                        "Resource": (f"trn:tos:::{bucket}/veadk/studio/artifacts/v1/*"),
+                    }
+                ]
+            return SimpleNamespace(
+                policy=json.dumps({"Version": "2012-10-17", "Statement": statements})
+            )
+
+        def put_bucket_policy(self, **_kwargs: Any) -> None:
+            self.policy_puts += 1
+
+    with pytest.raises(RuntimeError, match="policy verification failed"):
+        release_deploy._ensure_public_artifact_bucket(_Client(), "volcengine")
+
+
 def test_public_artifact_bucket_rejects_owned_policy_conflict() -> None:
     with pytest.raises(RuntimeError, match="policy has a conflict"):
         release_deploy._merge_public_artifact_policy(
