@@ -27,7 +27,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import tomllib
 import urllib.parse
 import urllib.request
 import zipfile
@@ -39,6 +38,11 @@ from email.policy import default as email_policy
 from pathlib import Path
 from typing import Any, cast
 from zoneinfo import ZoneInfo
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python 3.10 compatibility
+    import tomli as tomllib  # pyright: ignore[reportMissingImports]
 
 if __package__:
     from .offline_runtime import build_studio_offline_runtime
