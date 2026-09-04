@@ -21,6 +21,11 @@ on:
         description: User-facing Studio release summary
         required: true
         type: string
+      thin_bundles:
+        description: Publish provider-local thin bundles (requires server opt-in)
+        required: true
+        default: false
+        type: boolean
   pull_request:
     paths:
       - '.github/workflows/publish-studio-release.yaml'
@@ -254,6 +259,7 @@ jobs:
       RELEASE_SERVER_URL: ${{ secrets[matrix.url_secret] }}
       RELEASE_SERVER_API_KEY: ${{ secrets[matrix.key_secret] }}
       RELEASE_VERSION: ${{ needs.release-context.outputs.version }}
+      RELEASE_THIN_BUNDLES: ${{ inputs.thin_bundles }}
 
     steps:
       - name: Validate release server configuration
@@ -303,6 +309,7 @@ jobs:
               "requestId": job_id,
               "version": os.environ["RELEASE_VERSION"],
               "changelog": [os.environ["STUDIO_CHANGELOG"]],
+              "thinBundle": os.environ["RELEASE_THIN_BUNDLES"].lower() == "true",
           }
           payload = json.dumps(payload_data).encode()
           request = urllib.request.Request(
