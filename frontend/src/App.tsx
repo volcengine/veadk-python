@@ -39,6 +39,7 @@ import {
   listWorkspaces,
   listModelOptions,
   listSessions,
+  prepareSessionEnvironmentMounts,
   RUN_SSE_INCOMPLETE_RESPONSE_ERROR,
   runSSE,
   refreshAgentFeedbackCases,
@@ -402,7 +403,83 @@ const ENVIRONMENT_STUDIO_TOOL_IDS = [
   "list_envs",
   "get_env_manifest",
   "execute_in_sandbox",
+  "delegate_to_codex_sandbox",
 ] as const;
+const SESSION_ENVIRONMENT_STORAGE_KEY = "veadk.sessionEnvironmentMounts.v1";
+
+interface StoredSessionEnvironmentState {
+  mounts: Record<string, SessionEnvironmentMountSelection[]>;
+  workspaceIds: Record<string, string[]>;
+}
+
+function emptyStoredSessionEnvironmentState(): StoredSessionEnvironmentState {
+  return { mounts: {}, workspaceIds: {} };
+}
+
+function loadStoredSessionEnvironmentState(): StoredSessionEnvironmentState {
+  if (typeof localStorage === "undefined") {
+    return emptyStoredSessionEnvironmentState();
+  }
+  try {
+    const raw = JSON.parse(
+      localStorage.getItem(SESSION_ENVIRONMENT_STORAGE_KEY) ?? "{}",
+    ) as Record<string, unknown>;
+    const readRecord = <T,>(
+      value: unknown,
+      readItems: (value: unknown) => T[],
+    ): Record<string, T[]> => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+      return Object.fromEntries(
+        Object.entries(value)
+          .slice(-200)
+          .map(([key, items]) => [key, readItems(items)]),
+      );
+    };
+    const mounts = readRecord(raw.mounts, (value) => {
+      if (!Array.isArray(value)) return [];
+      return value.slice(0, 20).flatMap((item) => {
+        if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+        const candidate = item as Record<string, unknown>;
+        if (
+          typeof candidate.environment_id !== "string" ||
+          typeof candidate.environment_version_id !== "string" ||
+          (candidate.mount_instance_id !== undefined &&
+            typeof candidate.mount_instance_id !== "string")
+        ) return [];
+        return [{
+          environment_id: candidate.environment_id,
+          environment_version_id: candidate.environment_version_id,
+          ...(candidate.mount_instance_id
+            ? { mount_instance_id: candidate.mount_instance_id }
+            : {}),
+        }];
+      });
+    });
+    const workspaceIds = readRecord(raw.workspaceIds, (value) =>
+      Array.isArray(value)
+        ? value.filter((item): item is string => typeof item === "string").slice(0, 20)
+        : [],
+    );
+    return { mounts, workspaceIds };
+  } catch {
+    return emptyStoredSessionEnvironmentState();
+  }
+}
+
+function persistSessionEnvironmentState(
+  mounts: Record<string, SessionEnvironmentMountSelection[]>,
+  workspaceIds: Record<string, string[]>,
+) {
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.setItem(
+      SESSION_ENVIRONMENT_STORAGE_KEY,
+      JSON.stringify({ mounts, workspaceIds }),
+    );
+  } catch {
+    // Storage can be unavailable in private or quota-restricted browsers.
+  }
+}
 
 function emptyInvocation(): FrontendInvocation {
   return { skills: [] };
@@ -1374,12 +1451,25 @@ export default function App() {
   const [sessionWorkspaces, setSessionWorkspaces] = useState<StudioWorkspace[]>([]);
   const [sessionEnvironmentsLoading, setSessionEnvironmentsLoading] = useState(false);
   const [sessionEnvironmentsError, setSessionEnvironmentsError] = useState("");
+  const sessionEnvironmentLoadAbortRef = useRef<AbortController | null>(null);
+  const storedSessionEnvironmentState = useRef<StoredSessionEnvironmentState | null>(
+    null,
+  );
+  if (storedSessionEnvironmentState.current === null) {
+    storedSessionEnvironmentState.current = loadStoredSessionEnvironmentState();
+  }
   const [environmentMountsBySession, setEnvironmentMountsBySession] = useState<
     Record<string, SessionEnvironmentMountSelection[]>
-  >({});
+  >(() => storedSessionEnvironmentState.current?.mounts ?? {});
   const [environmentWorkspaceIdsBySession, setEnvironmentWorkspaceIdsBySession] = useState<
     Record<string, string[]>
-  >({});
+  >(() => storedSessionEnvironmentState.current?.workspaceIds ?? {});
+  useEffect(() => {
+    persistSessionEnvironmentState(
+      environmentMountsBySession,
+      environmentWorkspaceIdsBySession,
+    );
+  }, [environmentMountsBySession, environmentWorkspaceIdsBySession]);
   const [runtimeLogTargetsBySession, setRuntimeLogTargetsBySession] = useState<
     Record<string, RuntimeLogTarget>
   >({});
@@ -4938,7 +5028,7 @@ export default function App() {
       : environmentMountsBySession[
           studioToolSelectionKey(appName, userId, sessionId)
         ] ?? [];
-    if (environmentMounts.length > 0 && currentRuntime) {
+    if (environmentMounts.length > 0 && studioToolRuntime) {
       platformTools = [...new Set([...platformTools, ...ENVIRONMENT_STUDIO_TOOL_IDS])];
     }
     const sessionState = createsSession ? "new" : "existing";
@@ -5005,7 +5095,7 @@ export default function App() {
       const agentTools = new Set(agentInfo?.tools ?? []);
       const availableTools = new Set([
         ...agentTools,
-        ...(currentRuntime ? availableStudioToolIds : []),
+        ...(studioToolRuntime ? availableStudioToolIds : []),
       ]);
       const missingTools = requiredTools.filter((tool) => !availableTools.has(tool));
       if (missingTools.length > 0) {
@@ -5027,7 +5117,7 @@ export default function App() {
         setError(`当前 Agent 缺少任务工具：${missingTools.join("、")}`);
         return;
       }
-      if (currentRuntime) {
+      if (studioToolRuntime) {
         const optionalTools = NEW_CHAT_TASK_OPTIONAL_TOOLS[selectedTask].filter(
           (toolName) => availableStudioToolIds.has(toolName) && !agentTools.has(toolName),
         );
@@ -5043,7 +5133,7 @@ export default function App() {
       createsSession ? optimisticTurns : [...current, ...optimisticTurns],
     );
     if (createsSession) {
-      if (currentRuntime) {
+      if (studioToolRuntime) {
         const key = studioToolSelectionKey(appName, userId, sid);
         setStudioToolIdsBySession((current) => ({
           ...current,
@@ -5084,8 +5174,8 @@ export default function App() {
         text,
         attachments: atts,
         invocation: selectedInvocation,
-        platformTools: currentRuntime ? platformTools : undefined,
-        environmentMounts: currentRuntime && environmentMounts.length > 0
+        platformTools: studioToolRuntime ? platformTools : undefined,
+        environmentMounts: studioToolRuntime && environmentMounts.length > 0
           ? environmentMounts
           : undefined,
         signal: ctrl.signal,
@@ -5289,8 +5379,8 @@ export default function App() {
         functionResponses: [
           { id: block.callId, name: "adk_request_credential", response },
         ],
-        platformTools: currentRuntime ? resumedPlatformTools : undefined,
-        environmentMounts: currentRuntime && environmentMounts.length > 0
+        platformTools: studioToolRuntime ? resumedPlatformTools : undefined,
+        environmentMounts: studioToolRuntime && environmentMounts.length > 0
           ? environmentMounts
           : undefined,
         signal: ctrl.signal,
@@ -5404,7 +5494,18 @@ export default function App() {
       : undefined;
   const selectedDraftStudioRuntime =
     draftStudioRuntime?.appName === appName ? draftStudioRuntime : undefined;
-  const studioToolRuntime = currentRuntime ?? selectedDraftStudioRuntime;
+  // Local Agents execute through this Studio process, so use the synthetic
+  // `local` runtime only for BFF capability discovery. ADK request routing is
+  // still derived from `appName` and therefore remains on the local /run_sse.
+  const studioToolRuntime = currentRuntime ?? selectedDraftStudioRuntime ?? (
+    appName
+      ? {
+          runtimeId: "local",
+          name: "Local Studio",
+          region: defaultCloudRegion(cloudProvider),
+        }
+      : undefined
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -5449,11 +5550,63 @@ export default function App() {
     studioToolRuntime?.runtimeId,
   ]);
 
-  useEffect(() => {
+  const refreshSessionEnvironments = useCallback(async () => {
+    sessionEnvironmentLoadAbortRef.current?.abort();
     const controller = new AbortController();
-    setSessionEnvironments([]);
-    setSessionWorkspaces([]);
+    sessionEnvironmentLoadAbortRef.current = controller;
+    setSessionEnvironmentsLoading(true);
     setSessionEnvironmentsError("");
+    try {
+      const [items, workspaces] = await Promise.all([
+        listEnvironments(controller.signal),
+        listWorkspaces(controller.signal),
+      ]);
+      if (controller.signal.aborted) return;
+      const availableEnvironments = items.filter((environment) =>
+        ["aio-sandbox", "codex-sandbox"].includes(environment.baseEnvironment) &&
+        environment.latestVersion?.status === "available" &&
+        environment.latestVersion.toolStatus === "ready" &&
+        Boolean(environment.latestVersion.toolId)
+      );
+      const availableMountKeys = new Set(availableEnvironments.flatMap((environment) =>
+        environment.latestVersion
+          ? [`${environment.id}\u0000${environment.latestVersion.versionId}`]
+          : []
+      ));
+      const availableWorkspaceIds = new Set(workspaces.map((workspace) => workspace.id));
+
+      // Replace the snapshot instead of merging it so deleted environments and
+      // workspaces disappear from both the picker and existing Session mounts.
+      setSessionEnvironments(availableEnvironments);
+      setSessionWorkspaces(workspaces);
+      setEnvironmentMountsBySession((current) => Object.fromEntries(
+        Object.entries(current).map(([key, selections]) => [
+          key,
+          selections.filter((selection) => availableMountKeys.has(
+            `${selection.environment_id}\u0000${selection.environment_version_id}`,
+          )),
+        ]),
+      ));
+      setEnvironmentWorkspaceIdsBySession((current) => Object.fromEntries(
+        Object.entries(current).map(([key, workspaceIds]) => [
+          key,
+          workspaceIds.filter((workspaceId) => availableWorkspaceIds.has(workspaceId)),
+        ]),
+      ));
+    } catch (cause) {
+      if (controller.signal.aborted) return;
+      setSessionEnvironmentsError(
+        cause instanceof Error ? cause.message : "读取环境失败",
+      );
+    } finally {
+      if (sessionEnvironmentLoadAbortRef.current === controller) {
+        sessionEnvironmentLoadAbortRef.current = null;
+        setSessionEnvironmentsLoading(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
     if (
       authStatus !== "authenticated" ||
       !access ||
@@ -5461,40 +5614,26 @@ export default function App() {
       agentDetailTarget ||
       !studioToolRuntime
     ) {
+      sessionEnvironmentLoadAbortRef.current?.abort();
+      sessionEnvironmentLoadAbortRef.current = null;
+      setSessionEnvironments([]);
+      setSessionWorkspaces([]);
+      setSessionEnvironmentsError("");
       setSessionEnvironmentsLoading(false);
-      return () => controller.abort();
+      return;
     }
-    setSessionEnvironmentsLoading(true);
-    void Promise.all([
-      listEnvironments(controller.signal),
-      listWorkspaces(controller.signal),
-    ])
-      .then(([items, workspaces]) => {
-        if (controller.signal.aborted) return;
-        setSessionEnvironments(items.filter((environment) =>
-          environment.baseEnvironment === "aio-sandbox" &&
-          environment.latestVersion?.status === "available" &&
-          environment.latestVersion.toolStatus === "ready" &&
-          Boolean(environment.latestVersion.toolId)
-        ));
-        setSessionWorkspaces(workspaces);
-      })
-      .catch((cause) => {
-        if (controller.signal.aborted) return;
-        setSessionEnvironmentsError(
-          cause instanceof Error ? cause.message : "读取环境失败",
-        );
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setSessionEnvironmentsLoading(false);
-      });
-    return () => controller.abort();
+    void refreshSessionEnvironments();
+    return () => {
+      sessionEnvironmentLoadAbortRef.current?.abort();
+      sessionEnvironmentLoadAbortRef.current = null;
+    };
   }, [
     access,
     agentDetailTarget,
     authStatus,
     environmentView,
     myAgents,
+    refreshSessionEnvironments,
     studioToolRuntime?.region,
     studioToolRuntime?.runtimeId,
   ]);
@@ -5611,16 +5750,34 @@ export default function App() {
       [activeStudioToolSelectionKey]: next,
     }));
   };
-  const updateSelectedEnvironments = (
+  const updateSelectedEnvironments = async (
     selections: SessionEnvironmentMountSelection[],
     workspaceIds: string[] = [],
-  ) => {
-    if (!sessionId) return;
+  ): Promise<void> => {
+    if (!sessionId) throw new Error("当前会话不存在，无法挂载环境。");
     const valid = selections.every((selection) => sessionEnvironments.some((environment) =>
       environment.id === selection.environment_id &&
       environment.latestVersion?.versionId === selection.environment_version_id
     ));
-    if (!valid) return;
+    if (!valid) throw new Error("所选环境已失效，请刷新后重新选择。");
+    if (selections.length > 0) {
+      if (!studioToolRuntime) {
+        throw new Error("当前 Agent 没有可用的 Sandbox Runtime。");
+      }
+      setSessionEnvironmentsError("");
+      try {
+        await prepareSessionEnvironmentMounts({
+          runtimeId: studioToolRuntime.runtimeId,
+          appName,
+          userId,
+          sessionId,
+          environmentMounts: selections,
+        });
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : "挂载环境失败";
+        throw new Error(message);
+      }
+    }
     setEnvironmentMountsBySession((current) => ({
       ...current,
       [activeStudioToolSelectionKey]: selections,
@@ -7740,6 +7897,7 @@ export default function App() {
                         ? updateSelectedEnvironments
                         : undefined
                     }
+                    onEnvironmentsRefresh={refreshSessionEnvironments}
                   />
                 )}
                 <div className="conversation-composer-slot">

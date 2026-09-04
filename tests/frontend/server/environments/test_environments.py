@@ -296,7 +296,15 @@ class FakeToolProvisioner:
         self.error = error
         self.calls: list[tuple[str, str, str]] = []
 
-    async def ensure_ready(self, *, image, provider, region):
+    async def ensure_ready(
+        self,
+        *,
+        image,
+        provider,
+        region,
+        existing_tool_id="",
+        on_created=None,
+    ):
         from frontend.server.environments.tool_provisioning import (
             EnvironmentToolState,
         )
@@ -304,8 +312,16 @@ class FakeToolProvisioner:
         self.calls.append((image, provider, region))
         if self.error is not None:
             raise self.error
+        if on_created is not None:
+            await on_created(
+                EnvironmentToolState(
+                    tool_id=existing_tool_id or f"tool-{provider}",
+                    name="studio-env-test",
+                    status="creating",
+                )
+            )
         return EnvironmentToolState(
-            tool_id=f"tool-{provider}",
+            tool_id=existing_tool_id or f"tool-{provider}",
             name="studio-env-test",
             status="ready",
         )
@@ -319,13 +335,76 @@ class BlockingToolProvisioner(FakeToolProvisioner):
         self.started = asyncio.Event()
         self.release = asyncio.Event()
 
-    async def ensure_ready(self, *, image, provider, region):
+    async def ensure_ready(self, *, image, provider, region, **kwargs):
         self.started.set()
         await self.release.wait()
         return await super().ensure_ready(
             image=image,
             provider=provider,
             region=region,
+            **kwargs,
+        )
+
+
+class PersistingToolProvisioner(FakeToolProvisioner):
+    def __init__(self) -> None:
+        import asyncio
+
+        super().__init__()
+        self.persisted = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def ensure_ready(self, *, image, provider, region, on_created, **_kwargs):
+        from frontend.server.environments.tool_provisioning import (
+            EnvironmentToolState,
+        )
+
+        self.calls.append((image, provider, region))
+        state = EnvironmentToolState(
+            tool_id=f"tool-{provider}",
+            name="studio-env-test",
+            status="creating",
+        )
+        await on_created(state)
+        self.persisted.set()
+        await self.release.wait()
+        return EnvironmentToolState(
+            tool_id=state.tool_id,
+            name=state.name,
+            status="ready",
+        )
+
+
+class TimeoutThenReadyToolProvisioner(FakeToolProvisioner):
+    async def ensure_ready(
+        self,
+        *,
+        image,
+        provider,
+        region,
+        existing_tool_id="",
+        on_created=None,
+    ):
+        from frontend.server.environments.tool_provisioning import (
+            EnvironmentToolState,
+        )
+
+        self.calls.append((image, provider, region))
+        tool_id = existing_tool_id or f"tool-{provider}"
+        if on_created is not None:
+            await on_created(
+                EnvironmentToolState(
+                    tool_id=tool_id,
+                    name="studio-env-test",
+                    status="creating",
+                )
+            )
+        if len(self.calls) == 1:
+            raise TimeoutError("Tool is still creating")
+        return EnvironmentToolState(
+            tool_id=tool_id,
+            name="studio-env-test",
+            status="ready",
         )
 
 
@@ -577,8 +656,10 @@ def test_environment_crud_build_and_tos_version_layout():
     latest = client.get(f"/web/environments/{environment_id}").json()["latestVersion"]
     assert latest["versionId"] == version_id
     assert latest["status"] == "available"
-    prefix = f"veadk-studio/v2/environments/tenant%2Fa/{environment_id}"
+    prefix = f"veadk-studio/v3/environments/tenant%2Fa/{environment_id}"
+    previous_prefix = f"veadk-studio/v2/environments/tenant%2Fa/{environment_id}"
     assert f"{prefix}/summary.json" in tos.objects
+    assert f"{previous_prefix}/summary.json" in tos.objects
     assert (
         f"veadk-studio/v1/environments/tenant%2Fa/{environment_id}/summary.json"
         not in tos.objects
@@ -589,6 +670,12 @@ def test_environment_crud_build_and_tos_version_layout():
     assert f"{prefix}/versions/{version_id}/context.tar.gz" in tos.objects
     assert f"{prefix}/versions/{version_id}/build.json" in tos.objects
     assert f"{prefix}/versions/{version_id}/image.json" in tos.objects
+    assert f"{previous_prefix}/latest.json" in tos.objects
+    assert f"{previous_prefix}/versions/{version_id}/config.json" in tos.objects
+    assert f"{previous_prefix}/versions/{version_id}/Dockerfile" in tos.objects
+    assert f"{previous_prefix}/versions/{version_id}/context.tar.gz" in tos.objects
+    assert f"{previous_prefix}/versions/{version_id}/build.json" in tos.objects
+    assert f"{previous_prefix}/versions/{version_id}/image.json" in tos.objects
 
     assert client.delete(f"/web/environments/{environment_id}").status_code == 204
     assert client.get(f"/web/environments/{environment_id}").status_code == 404
@@ -600,9 +687,11 @@ def test_environment_list_reads_legacy_v1_records():
     mount_environment_routes(app, service, lambda _request: "owner")
     client = TestClient(app)
     created = client.post("/web/environments", json=_payload()).json()
-    current_key = f"veadk-studio/v2/environments/owner/{created['id']}/summary.json"
+    current_key = f"veadk-studio/v3/environments/owner/{created['id']}/summary.json"
+    previous_key = f"veadk-studio/v2/environments/owner/{created['id']}/summary.json"
     legacy_key = f"veadk-studio/v1/environments/owner/{created['id']}/summary.json"
     legacy = json.loads(tos.objects.pop(current_key))
+    tos.objects.pop(previous_key)
     for field in _CURRENT_RECORD_FIELDS:
         legacy.pop(field)
     tos.objects[legacy_key] = json.dumps(legacy).encode()
@@ -615,6 +704,45 @@ def test_environment_list_reads_legacy_v1_records():
     assert current_key not in tos.objects
 
 
+def test_environment_routes_keep_v3_and_legacy_aliases_in_sync():
+    service, _tos = _service()
+    app = FastAPI()
+    mount_environment_routes(app, service, lambda _request: "owner")
+    routes = {
+        (route.path, method)
+        for route in app.routes
+        for method in getattr(route, "methods", set())
+    }
+    legacy_routes = {
+        (path, method)
+        for path, method in routes
+        if path.startswith("/web/environment") and not path.startswith("/web/v3/")
+    }
+
+    assert legacy_routes
+    assert {
+        (path.replace("/web/", "/web/v3/", 1), method) for path, method in legacy_routes
+    }.issubset(routes)
+
+
+def test_environment_manifest_versions_match_the_requested_api():
+    service, _tos = _service()
+    app = FastAPI()
+    mount_environment_routes(app, service, lambda _request: "owner")
+    client = TestClient(app)
+    created = client.post("/web/environments", json=_payload()).json()
+    build = client.post(f"/web/environments/{created['id']}/build").json()
+    path = f"/environments/{created['id']}/builds/{build['versionId']}/manifest"
+
+    legacy = client.get(f"/web{path}")
+    current = client.get(f"/web/v3{path}")
+
+    assert legacy.status_code == 200
+    assert legacy.json()["apiVersion"] == "agentkit.studio/v1alpha1"
+    assert current.status_code == 200
+    assert current.json()["apiVersion"] == "agentkit.studio/v3"
+
+
 def test_environment_api_reads_a_complete_legacy_v1_environment_tree():
     initial_service, tos = _service()
     initial_app = FastAPI()
@@ -625,7 +753,8 @@ def test_environment_api_reads_a_complete_legacy_v1_environment_tree():
     initial_client.get(
         f"/web/environments/{created['id']}/builds/{started['versionId']}"
     )
-    current_prefix = f"veadk-studio/v2/environments/owner/{created['id']}"
+    current_prefix = f"veadk-studio/v3/environments/owner/{created['id']}"
+    previous_prefix = f"veadk-studio/v2/environments/owner/{created['id']}"
     legacy_prefix = f"veadk-studio/v1/environments/owner/{created['id']}"
     for current_key in [key for key in tos.objects if key.startswith(current_prefix)]:
         content = tos.objects.pop(current_key)
@@ -640,6 +769,8 @@ def test_environment_api_reads_a_complete_legacy_v1_environment_tree():
                 payload.pop(field)
             content = json.dumps(payload).encode()
         tos.objects[current_key.replace(current_prefix, legacy_prefix, 1)] = content
+    for previous_key in [key for key in tos.objects if key.startswith(previous_prefix)]:
+        tos.objects.pop(previous_key)
 
     restored_service, _ = _service(tos=tos)
     restored_app = FastAPI()
@@ -651,7 +782,7 @@ def test_environment_api_reads_a_complete_legacy_v1_environment_tree():
         f"/web/environments/{created['id']}/builds/{started['versionId']}"
     )
     manifest = restored_client.get(
-        f"/web/environments/{created['id']}/builds/{started['versionId']}/manifest"
+        f"/web/v3/environments/{created['id']}/builds/{started['versionId']}/manifest"
     )
 
     assert listed.status_code == 200
@@ -662,15 +793,60 @@ def test_environment_api_reads_a_complete_legacy_v1_environment_tree():
     assert manifest.json()["spec"]["baseEnvironment"] == "ubuntu"
 
 
-def test_environment_list_prefers_v2_record_over_legacy_v1_record():
+def test_environment_api_reads_a_complete_v2_environment_tree():
+    initial_service, tos = _service()
+    initial_app = FastAPI()
+    mount_environment_routes(initial_app, initial_service, lambda _request: "owner")
+    initial_client = TestClient(initial_app)
+    created = initial_client.post("/web/environments", json=_payload()).json()
+    started = initial_client.post(f"/web/environments/{created['id']}/build").json()
+    initial_client.get(
+        f"/web/environments/{created['id']}/builds/{started['versionId']}"
+    )
+    current_prefix = f"veadk-studio/v3/environments/owner/{created['id']}"
+    previous_prefix = f"veadk-studio/v2/environments/owner/{created['id']}"
+    for current_key in [key for key in tos.objects if key.startswith(current_prefix)]:
+        tos.objects[current_key.replace(current_prefix, previous_prefix, 1)] = (
+            tos.objects.pop(current_key)
+        )
+
+    restored_service, _ = _service(tos=tos)
+    restored_app = FastAPI()
+    mount_environment_routes(restored_app, restored_service, lambda _request: "owner")
+    restored_client = TestClient(restored_app)
+
+    listed = restored_client.get("/web/environments")
+    build = restored_client.get(
+        f"/web/environments/{created['id']}/builds/{started['versionId']}"
+    )
+    manifest = restored_client.get(
+        f"/web/v3/environments/{created['id']}/builds/{started['versionId']}/manifest"
+    )
+
+    assert listed.status_code == 200
+    assert [item["id"] for item in listed.json()["items"]] == [created["id"]]
+    assert build.status_code == 200
+    assert build.json()["versionId"] == started["versionId"]
+    assert manifest.status_code == 200
+    assert manifest.json()["apiVersion"] == "agentkit.studio/v3"
+    assert manifest.json()["spec"]["baseEnvironment"] == "ubuntu"
+    assert f"{current_prefix}/summary.json" in tos.objects
+    assert f"{previous_prefix}/summary.json" in tos.objects
+
+
+def test_environment_list_prefers_v3_record_over_v2_and_legacy_v1_records():
     service, tos = _service()
     app = FastAPI()
     mount_environment_routes(app, service, lambda _request: "owner")
     client = TestClient(app)
     created = client.post("/web/environments", json=_payload()).json()
-    current_key = f"veadk-studio/v2/environments/owner/{created['id']}/summary.json"
+    current_key = f"veadk-studio/v3/environments/owner/{created['id']}/summary.json"
+    previous_key = f"veadk-studio/v2/environments/owner/{created['id']}/summary.json"
     legacy_key = f"veadk-studio/v1/environments/owner/{created['id']}/summary.json"
-    legacy = json.loads(tos.objects[current_key])
+    previous = json.loads(tos.objects[current_key])
+    previous["name"] = "v2 版本名称"
+    tos.objects[previous_key] = json.dumps(previous).encode()
+    legacy = dict(previous)
     legacy["name"] = "旧版本名称"
     for field in _CURRENT_RECORD_FIELDS:
         legacy.pop(field)
@@ -683,15 +859,43 @@ def test_environment_list_prefers_v2_record_over_legacy_v1_record():
     assert response.json()["items"][0]["name"] == created["name"]
 
 
-def test_environment_update_copies_legacy_v1_record_to_v2():
+def test_environment_list_prefers_v2_record_over_legacy_v1_record():
     service, tos = _service()
     app = FastAPI()
     mount_environment_routes(app, service, lambda _request: "owner")
     client = TestClient(app)
     created = client.post("/web/environments", json=_payload()).json()
-    current_key = f"veadk-studio/v2/environments/owner/{created['id']}/summary.json"
+    current_key = f"veadk-studio/v3/environments/owner/{created['id']}/summary.json"
+    previous_key = f"veadk-studio/v2/environments/owner/{created['id']}/summary.json"
+    legacy_key = f"veadk-studio/v1/environments/owner/{created['id']}/summary.json"
+    previous = json.loads(tos.objects.pop(current_key))
+    previous["name"] = "v2 版本名称"
+    tos.objects[previous_key] = json.dumps(previous).encode()
+    legacy = dict(previous)
+    legacy["name"] = "旧版本名称"
+    for field in _CURRENT_RECORD_FIELDS:
+        legacy.pop(field)
+    tos.objects[legacy_key] = json.dumps(legacy).encode()
+
+    response = client.get("/web/environments")
+
+    assert response.status_code == 200
+    assert len(response.json()["items"]) == 1
+    assert response.json()["items"][0]["name"] == "v2 版本名称"
+    assert current_key in tos.objects
+
+
+def test_environment_update_copies_legacy_v1_record_to_v3():
+    service, tos = _service()
+    app = FastAPI()
+    mount_environment_routes(app, service, lambda _request: "owner")
+    client = TestClient(app)
+    created = client.post("/web/environments", json=_payload()).json()
+    current_key = f"veadk-studio/v3/environments/owner/{created['id']}/summary.json"
+    previous_key = f"veadk-studio/v2/environments/owner/{created['id']}/summary.json"
     legacy_key = f"veadk-studio/v1/environments/owner/{created['id']}/summary.json"
     legacy = json.loads(tos.objects.pop(current_key))
+    tos.objects.pop(previous_key)
     for field in _CURRENT_RECORD_FIELDS:
         legacy.pop(field)
     tos.objects[legacy_key] = json.dumps(legacy).encode()
@@ -722,9 +926,11 @@ def test_environment_list_repairs_records_written_to_legacy_prefix_by_new_schema
             },
         ),
     ).json()
-    current_key = f"veadk-studio/v2/environments/owner/{created['id']}/summary.json"
+    current_key = f"veadk-studio/v3/environments/owner/{created['id']}/summary.json"
+    previous_key = f"veadk-studio/v2/environments/owner/{created['id']}/summary.json"
     legacy_key = f"veadk-studio/v1/environments/owner/{created['id']}/summary.json"
     polluted = tos.objects.pop(current_key)
+    tos.objects.pop(previous_key)
     tos.objects[legacy_key] = polluted
 
     response = client.get("/web/environments")
@@ -750,6 +956,169 @@ def test_environment_list_repairs_records_written_to_legacy_prefix_by_new_schema
     }
 
 
+def test_environment_queries_migrate_codex_records_without_exposing_them_to_v2():
+    initial_service, tos = _service()
+    initial_app = FastAPI()
+    mount_environment_routes(initial_app, initial_service, lambda _request: "owner")
+    initial_client = TestClient(initial_app)
+    created = initial_client.post(
+        "/web/environments",
+        json=_payload(
+            name="Codex Sandbox",
+            baseEnvironment="codex-sandbox",
+            dockerfile=(
+                "FROM enterprise-public-cn-beijing.cr.volces.com/"
+                "vefaas-public/codexenv:1.1.0"
+            ),
+        ),
+    ).json()
+    started = initial_client.post(f"/web/environments/{created['id']}/build").json()
+    version_id = started["versionId"]
+    current_prefix = f"veadk-studio/v3/environments/owner/{created['id']}"
+    previous_prefix = f"veadk-studio/v2/environments/owner/{created['id']}"
+    summary_key = f"{current_prefix}/summary.json"
+    config_key = f"{current_prefix}/versions/{version_id}/config.json"
+    previous_summary_key = f"{previous_prefix}/summary.json"
+    previous_config_key = f"{previous_prefix}/versions/{version_id}/config.json"
+    tos.objects[previous_summary_key] = tos.objects.pop(summary_key)
+    tos.objects[previous_config_key] = tos.objects.pop(config_key)
+
+    restored_service, _ = _service(tos=tos)
+    restored_app = FastAPI()
+    mount_environment_routes(restored_app, restored_service, lambda _request: "owner")
+    restored_client = TestClient(restored_app)
+
+    listed = restored_client.get("/web/environments")
+    manifest = restored_client.get(
+        f"/web/v3/environments/{created['id']}/builds/{version_id}/manifest"
+    )
+
+    assert listed.status_code == 200
+    assert listed.json()["items"][0]["baseEnvironment"] == "codex-sandbox"
+    assert manifest.status_code == 200
+    assert manifest.json()["apiVersion"] == "agentkit.studio/v3"
+    assert manifest.json()["spec"]["baseEnvironment"] == "codex-sandbox"
+    assert json.loads(tos.objects[summary_key])["baseEnvironment"] == "codex-sandbox"
+    assert json.loads(tos.objects[config_key])["baseEnvironment"] == "codex-sandbox"
+    assert previous_summary_key not in tos.objects
+    assert previous_config_key in tos.objects
+
+
+def test_environment_reads_newest_v2_or_v3_summary_and_reconciles_both_copies():
+    service, tos = _service()
+    app = FastAPI()
+    mount_environment_routes(app, service, lambda _request: "owner")
+    client = TestClient(app)
+    created = client.post("/web/environments", json=_payload()).json()
+    current_key = f"veadk-studio/v3/environments/owner/{created['id']}/summary.json"
+    previous_key = f"veadk-studio/v2/environments/owner/{created['id']}/summary.json"
+
+    previous = json.loads(tos.objects[previous_key])
+    previous["name"] = "由旧 Studio 更新"
+    previous["updatedAt"] = "2099-01-01T00:00:00Z"
+    tos.objects[previous_key] = json.dumps(previous).encode()
+
+    from_previous = client.get(f"/web/v3/environments/{created['id']}")
+
+    assert from_previous.status_code == 200
+    assert from_previous.json()["name"] == "由旧 Studio 更新"
+    assert json.loads(tos.objects[current_key])["name"] == "由旧 Studio 更新"
+
+    current = json.loads(tos.objects[current_key])
+    current["name"] = "由新 Studio 更新"
+    current["updatedAt"] = "2099-01-02T00:00:00Z"
+    tos.objects[current_key] = json.dumps(current).encode()
+
+    from_current = client.get(f"/web/environments/{created['id']}")
+
+    assert from_current.status_code == 200
+    assert from_current.json()["name"] == "由新 Studio 更新"
+    assert json.loads(tos.objects[previous_key])["name"] == "由新 Studio 更新"
+
+
+def test_environment_reads_newest_v2_or_v3_build_and_reconciles_both_copies():
+    service, tos = _service()
+    app = FastAPI()
+    mount_environment_routes(app, service, lambda _request: "owner")
+    client = TestClient(app)
+    created = client.post("/web/environments", json=_payload()).json()
+    started = client.post(f"/web/environments/{created['id']}/build").json()
+    version_id = started["versionId"]
+    client.get(f"/web/environments/{created['id']}/builds/{version_id}")
+    current_key = (
+        f"veadk-studio/v3/environments/owner/{created['id']}"
+        f"/versions/{version_id}/build.json"
+    )
+    previous_key = (
+        f"veadk-studio/v2/environments/owner/{created['id']}"
+        f"/versions/{version_id}/build.json"
+    )
+
+    previous = json.loads(tos.objects[previous_key])
+    previous["status"] = "failed"
+    previous["error"] = "updated by legacy Studio"
+    previous["updatedAt"] = "2099-01-01T00:00:00Z"
+    tos.objects[previous_key] = json.dumps(previous).encode()
+
+    response = client.get(f"/web/v3/environments/{created['id']}/builds/{version_id}")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "failed"
+    assert response.json()["error"] == "updated by legacy Studio"
+    assert json.loads(tos.objects[current_key])["status"] == "failed"
+
+
+def test_v3_and_legacy_environment_crud_routes_share_the_same_contract():
+    service, _tos = _service()
+    app = FastAPI()
+    mount_environment_routes(app, service, lambda _request: "owner")
+    client = TestClient(app)
+
+    created = client.post("/web/environments", json=_payload()).json()
+    assert client.get(f"/web/v3/environments/{created['id']}").json() == created
+
+    updated = client.patch(
+        f"/web/v3/environments/{created['id']}",
+        json={"name": "跨版本更新"},
+    ).json()
+    assert client.get(f"/web/environments/{created['id']}").json() == updated
+    assert (
+        client.get("/web/environments").json()
+        == client.get("/web/v3/environments").json()
+    )
+
+
+def test_environment_list_migrates_codex_inferred_from_legacy_v1_dockerfile():
+    service, tos = _service()
+    app = FastAPI()
+    mount_environment_routes(app, service, lambda _request: "owner")
+    client = TestClient(app)
+    created = client.post(
+        "/web/environments",
+        json=_payload(
+            name="Legacy Codex Sandbox",
+            baseEnvironment="codex-sandbox",
+            dockerfile=(
+                "FROM enterprise-public-cn-beijing.cr.volces.com/"
+                "vefaas-public/codexenv:1.1.0"
+            ),
+        ),
+    ).json()
+    current_key = f"veadk-studio/v3/environments/owner/{created['id']}/summary.json"
+    legacy_key = f"veadk-studio/v1/environments/owner/{created['id']}/summary.json"
+    legacy = json.loads(tos.objects.pop(current_key))
+    for field in _CURRENT_RECORD_FIELDS:
+        legacy.pop(field)
+    tos.objects[legacy_key] = json.dumps(legacy).encode()
+
+    response = client.get("/web/environments")
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["baseEnvironment"] == "codex-sandbox"
+    assert json.loads(tos.objects[current_key])["baseEnvironment"] == "codex-sandbox"
+    assert legacy_key not in tos.objects
+
+
 def test_environment_manifest_describes_the_immutable_image_version():
     service, _tos = _service()
     app = FastAPI()
@@ -773,12 +1142,12 @@ def test_environment_manifest_describes_the_immutable_image_version():
         json={"name": "Edited after build", "optionIds": ["git"]},
     )
     response = client.get(
-        f"/web/environments/{environment['id']}/builds/{version_id}/manifest"
+        f"/web/v3/environments/{environment['id']}/builds/{version_id}/manifest"
     )
 
     assert response.status_code == 200
     manifest = response.json()
-    assert manifest["apiVersion"] == "agentkit.studio/v1alpha1"
+    assert manifest["apiVersion"] == "agentkit.studio/v3"
     assert manifest["kind"] == "Environment"
     assert manifest["metadata"] == {
         "id": environment["id"],
@@ -800,11 +1169,56 @@ def test_environment_manifest_describes_the_immutable_image_version():
     assert manifest["status"]["toolStatus"] == ""
 
 
+def test_codex_environment_manifest_preserves_the_new_base_environment():
+    service, tos = _service()
+    app = FastAPI()
+    mount_environment_routes(app, service, lambda _request: "owner")
+    client = TestClient(app)
+
+    environment = client.post(
+        "/web/environments",
+        json=_payload(
+            name="Codex Sandbox",
+            baseEnvironment="codex-sandbox",
+            dockerfile=(
+                "FROM enterprise-public-cn-beijing.cr.volces.com/"
+                "vefaas-public/codexenv:1.1.0"
+            ),
+        ),
+    ).json()
+    assert environment["baseEnvironment"] == "codex-sandbox"
+    listed = client.get("/web/environments").json()["items"]
+    assert (
+        next(item for item in listed if item["id"] == environment["id"])[
+            "baseEnvironment"
+        ]
+        == "codex-sandbox"
+    )
+    build = client.post(f"/web/environments/{environment['id']}/build").json()
+    response = client.get(
+        f"/web/v3/environments/{environment['id']}/builds/{build['versionId']}/manifest"
+    )
+
+    assert response.status_code == 200
+    manifest = response.json()
+    assert manifest["apiVersion"] == "agentkit.studio/v3"
+    assert manifest["spec"]["baseEnvironment"] == "codex-sandbox"
+    assert manifest["spec"]["baseImage"].endswith("/vefaas-public/codexenv:1.1.0")
+    assert manifest["spec"]["capabilities"] == ["shell-exec"]
+    previous_prefix = f"veadk-studio/v2/environments/owner/{environment['id']}"
+    assert not any(key.startswith(previous_prefix) for key in tos.objects)
+
+
 @pytest.mark.parametrize(
     "provider,region",
     [("volcengine", "cn-beijing"), ("byteplus", "ap-southeast-1")],
 )
-def test_aio_build_provisions_and_persists_a_ready_private_tool(provider, region):
+@pytest.mark.parametrize("base_environment", ["aio-sandbox", "codex-sandbox"])
+def test_sandbox_build_provisions_and_persists_a_ready_private_tool(
+    provider,
+    region,
+    base_environment,
+):
     provisioner = FakeToolProvisioner()
     service, tos = _service(
         cloud=FakeCloud(provider=provider),
@@ -815,7 +1229,19 @@ def test_aio_build_provisions_and_persists_a_ready_private_tool(provider, region
     with TestClient(app) as client:
         environment = client.post(
             "/web/environments",
-            json=_payload(baseEnvironment="aio-sandbox"),
+            json=_payload(
+                baseEnvironment=base_environment,
+                **(
+                    {
+                        "dockerfile": (
+                            "FROM enterprise-public-cn-beijing.cr.volces.com/"
+                            "vefaas-public/codexenv:1.1.0"
+                        )
+                    }
+                    if base_environment == "codex-sandbox"
+                    else {}
+                ),
+            ),
         ).json()
         started = client.post(f"/web/environments/{environment['id']}/build").json()
 
@@ -843,7 +1269,7 @@ def test_aio_build_provisions_and_persists_a_ready_private_tool(provider, region
     assert completed["steps"][-1]["status"] == "succeeded"
     assert provisioner.calls == [(started["image"], provider, region)]
     prefix = (
-        f"veadk-studio/v2/environments/owner/{environment['id']}"
+        f"veadk-studio/v3/environments/owner/{environment['id']}"
         f"/versions/{started['versionId']}"
     )
     persisted = json.loads(tos.objects[f"{prefix}/build.json"])
@@ -851,6 +1277,7 @@ def test_aio_build_provisions_and_persists_a_ready_private_tool(provider, region
     assert persisted["toolStatus"] == "ready"
     assert manifest["status"]["toolId"] == f"tool-{provider}"
     assert manifest["status"]["toolStatus"] == "ready"
+    assert manifest["spec"]["baseEnvironment"] == base_environment
 
 
 def test_ubuntu_build_does_not_provision_a_private_tool():
@@ -906,7 +1333,7 @@ async def test_environment_queries_backfill_legacy_aio_tool_binding(query: str):
         client.get(build_url)
         _wait_for_build(client, build_url)
     prefix = (
-        f"veadk-studio/v2/environments/owner/{environment['id']}"
+        f"veadk-studio/v3/environments/owner/{environment['id']}"
         f"/versions/{started['versionId']}"
     )
     legacy = json.loads(tos.objects[f"{prefix}/build.json"])
@@ -964,7 +1391,7 @@ async def test_resolving_legacy_aio_version_backfills_persisted_tool_binding():
         client.get(build_url)
         _wait_for_build(client, build_url)
     prefix = (
-        f"veadk-studio/v2/environments/owner/{environment['id']}"
+        f"veadk-studio/v3/environments/owner/{environment['id']}"
         f"/versions/{started['versionId']}"
     )
     legacy = json.loads(tos.objects[f"{prefix}/build.json"])
@@ -1045,6 +1472,67 @@ async def test_persisted_creating_state_resumes_after_service_restart():
     assert len(resumed_provisioner.calls) == 1
 
 
+@pytest.mark.asyncio
+async def test_tool_id_is_persisted_before_readiness_poll_completes():
+    tos = FakeTos()
+    repository = TosEnvironmentRepository(bucket="studio", client_factory=lambda: tos)
+    provisioner = PersistingToolProvisioner()
+    service = EnvironmentService(
+        repository,
+        cast(EnvironmentCloudGateway, FakeCloud()),
+        tool_provisioner=provisioner,
+    )
+    environment = await service.create(
+        "owner",
+        EnvironmentInput.model_validate(_payload(baseEnvironment="aio-sandbox")),
+    )
+    started = await service.start_build("owner", environment.id)
+
+    await service.get_build("owner", environment.id, started.version_id)
+    await provisioner.persisted.wait()
+    creating = await repository.get_build("owner", environment.id, started.version_id)
+
+    assert creating.status == "building"
+    assert creating.tool_id == "tool-volcengine"
+    assert creating.tool_status == "creating"
+    provisioner.release.set()
+    await __import__("asyncio").gather(*service._tool_tasks.values())
+
+
+@pytest.mark.asyncio
+async def test_tool_ready_timeout_remains_resumable_with_persisted_id():
+    provisioner = TimeoutThenReadyToolProvisioner()
+    service, _tos = _service(tool_provisioner=provisioner)
+    environment = await service.create(
+        "owner",
+        EnvironmentInput.model_validate(_payload(baseEnvironment="aio-sandbox")),
+    )
+    started = await service.start_build("owner", environment.id)
+
+    await service.get_build("owner", environment.id, started.version_id)
+    await __import__("asyncio").gather(*service._tool_tasks.values())
+    waiting = await service._require_repository().get_build(
+        "owner", environment.id, started.version_id
+    )
+
+    assert waiting.status == "building"
+    assert waiting.tool_id == "tool-volcengine"
+    assert waiting.tool_status == "creating"
+    assert waiting.progress_error == "Tool is still creating"
+
+    resumed = await service.get_build("owner", environment.id, started.version_id)
+    assert resumed.tool_status == "creating"
+    await __import__("asyncio").gather(*service._tool_tasks.values())
+    completed = await service._require_repository().get_build(
+        "owner", environment.id, started.version_id
+    )
+    assert completed.status == "available"
+    assert completed.tool_id == "tool-volcengine"
+    assert completed.tool_status == "ready"
+    assert completed.progress_error == ""
+    assert len(provisioner.calls) == 2
+
+
 def _wait_for_build(client: TestClient, url: str) -> dict:
     for _ in range(20):
         result = client.get(url).json()
@@ -1087,7 +1575,7 @@ def test_build_detail_returns_steps_and_only_downloads_logs_when_requested():
     assert complete["logUpdatedAt"]
     assert cloud.log_calls == 1
     prefix = (
-        f"veadk-studio/v2/environments/owner/{environment_id}/versions/{version_id}"
+        f"veadk-studio/v3/environments/owner/{environment_id}/versions/{version_id}"
     )
     assert tos.objects[f"{prefix}/build.log"] == b"build failed"
 
@@ -1141,7 +1629,7 @@ def test_custom_dockerfile_is_preserved_verbatim():
     assert response.json()["dockerfile"] == custom
     environment_id = response.json()["id"]
     summary = tos.objects[
-        f"veadk-studio/v2/environments/owner/{environment_id}/summary.json"
+        f"veadk-studio/v3/environments/owner/{environment_id}/summary.json"
     ]
     assert json.loads(summary)["dockerfile"] == custom
 
@@ -1181,7 +1669,7 @@ def test_environment_build_snapshots_local_skills_into_fixed_image_directory(tmp
     assert build.status_code == 202
     version_id = build.json()["versionId"]
     prefix = (
-        f"veadk-studio/v2/environments/owner/{environment['id']}/versions/{version_id}"
+        f"veadk-studio/v3/environments/owner/{environment['id']}/versions/{version_id}"
     )
     manifest = json.loads(tos.objects[f"{prefix}/skills-manifest.json"])
     assert manifest["skills"][0]["name"] == "release-notes"

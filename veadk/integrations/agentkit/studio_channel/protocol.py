@@ -32,7 +32,7 @@ HTTP_RUN_SUFFIX = "/http-runs"
 HTTP_MESSAGE_SUFFIX = "/http-channels/{channel_id}/messages"
 MAX_TOOLS = 64
 MAX_CATALOG_BYTES = 512 * 1024
-MAX_TOOL_TIMEOUT_MS = 120_000
+MAX_TOOL_TIMEOUT_MS = 30 * 60 * 1_000
 
 
 class StudioToolManifest(BaseModel):

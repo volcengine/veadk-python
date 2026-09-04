@@ -144,7 +144,7 @@ test("expands only the new-chat composer into a multiline input", () => {
   );
   assert.match(
     stylesSource,
-    /\.composer--new-chat \.composer-menu-wrap[\s\S]*?bottom: 10px/,
+    /\.composer--new-chat \.composer-menu-wrap[\s\S]*?z-index: 5;[\s\S]*?bottom: 10px/,
   );
   assert.match(
     stylesSource,

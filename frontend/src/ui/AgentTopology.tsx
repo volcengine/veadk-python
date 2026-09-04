@@ -70,6 +70,8 @@ function uniqueValues(values: string[]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
 
+const INTERNAL_AGENT_TOOL_NAMES = new Set(["StudioExternalToolset"]);
+
 function uniqueSkills(skills: AgentInfo["skills"]): AgentInfo["skills"] {
   return [
     ...new Map(
@@ -126,7 +128,8 @@ interface AgentInfoPanelProps {
   onEnvironmentsChange?: (
     value: SessionEnvironmentMountSelection[],
     workspaceIds?: string[],
-  ) => void;
+  ) => void | Promise<void>;
+  onEnvironmentsRefresh?: () => void | Promise<void>;
 }
 
 /** Agent metadata and optional multi-Agent topology shown in the conversation's
@@ -152,6 +155,7 @@ export function AgentInfoPanel({
   environmentsDisabled = false,
   environmentsError = "",
   onEnvironmentsChange,
+  onEnvironmentsRefresh,
 }: AgentInfoPanelProps) {
   const [dialog, setDialog] = useState<"tool" | null>(null);
   const [canvasExpanded, setCanvasExpanded] = useState(false);
@@ -203,13 +207,15 @@ export function AgentInfoPanel({
       children: [],
     },
   );
-  const baseTools = uniqueValues(info.tools).map((name) => ({
-    id: `base:tool:${name}`,
-    name,
-    label: studioToolLabel(name),
-    custom: false,
-    removable: false,
-  }));
+  const baseTools = uniqueValues(info.tools)
+    .filter((name) => !INTERNAL_AGENT_TOOL_NAMES.has(name))
+    .map((name) => ({
+      id: `base:tool:${name}`,
+      name,
+      label: studioToolLabel(name),
+      custom: false,
+      removable: false,
+    }));
   const baseToolNames = new Set(baseTools.map((tool) => tool.name));
   const selectedIds = new Set(selectedStudioToolIds);
   const managedIds = new Set(managedStudioToolIds);
@@ -371,6 +377,7 @@ export function AgentInfoPanel({
               disabled={environmentsDisabled}
               error={environmentsError}
               onChange={onEnvironmentsChange}
+              onRefresh={onEnvironmentsRefresh}
             />
           </section>
         )}
@@ -479,6 +486,7 @@ export function AgentInfoDrawer({
   environmentsDisabled,
   environmentsError,
   onEnvironmentsChange,
+  onEnvironmentsRefresh,
   onClose,
   returnFocusRef,
 }: {
@@ -505,7 +513,8 @@ export function AgentInfoDrawer({
   onEnvironmentsChange?: (
     value: SessionEnvironmentMountSelection[],
     workspaceIds?: string[],
-  ) => void;
+  ) => void | Promise<void>;
+  onEnvironmentsRefresh?: () => void | Promise<void>;
   onClose: () => void;
   returnFocusRef: RefObject<HTMLButtonElement>;
 }) {
@@ -573,6 +582,7 @@ export function AgentInfoDrawer({
               environmentsDisabled={environmentsDisabled}
               environmentsError={environmentsError}
               onEnvironmentsChange={onEnvironmentsChange}
+              onEnvironmentsRefresh={onEnvironmentsRefresh}
               variant="drawer"
             />
           ) : (

@@ -120,7 +120,7 @@ test("collapses untouched thinking as soon as answer text starts streaming", () 
   );
   assert.match(
     blocksSource,
-    /blocks\.slice\(i \+ 1\)\.some\([\s\S]*?block\.kind === "text"[\s\S]*?block\.text\.trim\(\)/,
+    /blocks[\s\S]*?\.slice\(i \+ 1\)[\s\S]*?\.some\([\s\S]*?block\.kind === "text"[\s\S]*?block\.text\.trim\(\)/,
   );
   assert.match(blocksSource, /answerStarted=\{answerStarted\}/);
 });

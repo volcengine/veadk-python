@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 from .models import EnvironmentInput
 
@@ -201,6 +202,8 @@ def build_dockerfile(config: EnvironmentInput) -> str:
     """Build the canonical Dockerfile when the user did not provide one."""
     if config.dockerfile:
         return validate_dockerfile(config.dockerfile)
+    if config.base_environment == "codex-sandbox":
+        raise ValueError("Codex Sandbox 预制环境必须提供包含基础镜像的 Dockerfile。")
 
     os_label, ubuntu_base_image = _OPERATING_SYSTEMS[config.operating_system]
     uses_aio_python = config.base_environment == "aio-sandbox"
@@ -350,11 +353,18 @@ def build_dockerfile(config: EnvironmentInput) -> str:
 def environment_base_image(config: EnvironmentInput) -> str:
     if config.base_environment == "aio-sandbox":
         return AIO_BASE_IMAGE
+    if config.base_environment == "codex-sandbox":
+        match = re.search(
+            r"^\s*FROM(?:\s+--platform=\S+)?\s+(\S+)",
+            config.dockerfile,
+            flags=re.IGNORECASE | re.MULTILINE,
+        )
+        return match.group(1) if match else ""
     return _OPERATING_SYSTEMS[config.operating_system][1]
 
 
 def environment_capabilities(config: EnvironmentInput) -> list[str]:
-    if config.base_environment == "aio-sandbox":
+    if config.base_environment in {"aio-sandbox", "codex-sandbox"}:
         return ["shell-exec"]
     return []
 

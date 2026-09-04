@@ -49,17 +49,33 @@ test("maps supported built-in tools to dedicated Chinese running and done labels
     ["image_generate", "正在生成图片", "已完成图片生成"],
     ["video_generate", "正在生成视频", "已完成视频生成"],
     ["ppt_generate", "正在生成 PPT", "已完成 PPT 生成"],
-    ["run_code", "正在 AgentKit 沙箱中执行代码", "已在 AgentKit 沙箱中完成代码执行"],
+    [
+      "run_code",
+      "正在 AgentKit 沙箱中执行代码",
+      "已在 AgentKit 沙箱中完成代码执行",
+    ],
     ["list_envs", "正在查看可用环境", "已读取可用环境"],
     ["get_env_manifest", "正在读取环境 Manifest", "已读取环境 Manifest"],
     ["execute_in_sandbox", "正在环境中执行命令", "已在环境中完成命令执行"],
+    [
+      "delegate_to_codex_sandbox",
+      "Codex Sandbox 正在执行",
+      "Codex Sandbox 已完成",
+      "Codex Sandbox 执行失败",
+    ],
     ["load_memory", "正在检索长期记忆", "已完成记忆检索"],
     ["load_knowledgebase", "正在检索知识库", "已完成知识库检索"],
     ["load_skill", "正在加载技能", "已加载技能"],
   ];
 
-  for (const [name, running, done] of expected) {
-    assert.match(registrySource, new RegExp(`${name}:[\\s\\S]*?${running}[\\s\\S]*?${done}`));
+  for (const [name, running, done, failed] of expected) {
+    assert.match(
+      registrySource,
+      new RegExp(`${name}:[\\s\\S]*?${running}[\\s\\S]*?${done}`),
+    );
+    if (failed) {
+      assert.match(registrySource, new RegExp(`${name}:[\\s\\S]*?${failed}`));
+    }
   }
 });
 
@@ -78,11 +94,17 @@ test("renders built-in tool calls through the extensible dedicated header", () =
   assert.match(blocksSource, /Agent 正在调整/);
   assert.match(blocksSource, /createdAgentsHaveFailure\(args, response\)/);
   assert.match(blocksSource, /streaming \|\| hasLaterCreateAgentAttempt/);
-  assert.match(blocksSource, /label=\{isAdjustingAgent[\s\S]*?done=\{done\}/);
+  assert.match(
+    blocksSource,
+    /label=\{[\s\S]*?isAdjustingAgent[\s\S]*?done=\{done\}/,
+  );
   assert.match(blocksSource, /`使用 \$\{skillName\.trim\(\)\} 技能`/);
   assert.match(headerSource, /label\?: string/);
   assert.doesNotMatch(headerSource, /builtin-tool-state/);
-  assert.doesNotMatch(toolStylesSource, /builtin-tool-state|builtin-tool-breathe/);
+  assert.doesNotMatch(
+    toolStylesSource,
+    /builtin-tool-state|builtin-tool-breathe/,
+  );
 });
 
 test("keeps tool rows minimal and aligns larger details with their icons", () => {
@@ -94,10 +116,7 @@ test("keeps tool rows minimal and aligns larger details with their icons", () =>
     toolStylesSource,
     /\.builtin-tool-head:hover\s*\{[^}]*background/,
   );
-  assert.match(
-    toolStylesSource,
-    /\.builtin-tool-icon\s*\{[^}]*color:[^}]+\}/,
-  );
+  assert.match(toolStylesSource, /\.builtin-tool-icon\s*\{[^}]*color:[^}]+\}/);
   assert.match(
     toolStylesSource,
     /\.builtin-tool-icon > svg\s*\{[^}]*width:\s*18px[^}]*height:\s*18px/,
@@ -110,10 +129,7 @@ test("keeps tool rows minimal and aligns larger details with their icons", () =>
     sharedStylesSource,
     /\.tool-detail\s*\{[^}]*padding-left:\s*3px/,
   );
-  assert.match(
-    sharedStylesSource,
-    /\.tool-args\s*\{[^}]*font-size:\s*12px/,
-  );
+  assert.match(sharedStylesSource, /\.tool-args\s*\{[^}]*font-size:\s*12px/);
   assert.match(
     toolStylesSource,
     /\.builtin-tool-label\s*\{[^}]*font-weight:\s*400/,
@@ -147,27 +163,42 @@ test("additively supports tool outcomes and plans in the shared block renderer",
   );
   assert.match(blockTypesSource, /defaultOpen\?: boolean/);
   assert.match(blockTypesSource, /kind: "plan"/);
-  assert.match(blockTypesSource, /status: "pending" \| "in_progress" \| "completed" \| "failed"/);
+  assert.match(
+    blockTypesSource,
+    /status: "pending" \| "in_progress" \| "completed" \| "failed"/,
+  );
   assert.match(blocksSource, /function PlanBlock/);
   assert.match(blocksSource, /case "plan"/);
   assert.match(blocksSource, /data-status=\{toolStatus\}/);
   assert.match(
     blocksSource,
-    /const shouldDefaultOpen = hideHeader \|\| defaultOpen \|\| Boolean\(DetailRenderer\)/,
+    /const\s+shouldDefaultOpen\s*=[\s\S]*?hideHeader[\s\S]*?defaultOpen[\s\S]*?Boolean\(DetailRenderer\)/,
   );
   assert.match(blocksSource, /useState\(shouldDefaultOpen\)/);
-  assert.match(blocksSource, /if \(!touched\.current && shouldDefaultOpen\) setOpen\(true\)/);
+  assert.match(
+    blocksSource,
+    /if \(!touched\.current && shouldDefaultOpen\) setOpen\(true\)/,
+  );
 });
 
 test("registers create-agent tools with dedicated detail renderers", () => {
-  assert.match(registrySource, /collect_resources:[\s\S]*?detailRenderer: CollectResourcesCard/);
-  assert.match(registrySource, /create_agents:[\s\S]*?detailRenderer: CreateAgentsCard/);
+  assert.match(
+    registrySource,
+    /collect_resources:[\s\S]*?detailRenderer: CollectResourcesCard/,
+  );
+  assert.match(
+    registrySource,
+    /create_agents:[\s\S]*?detailRenderer: CreateAgentsCard/,
+  );
   assert.match(
     blocksSource,
     /<DetailRenderer[\s\S]*?args=\{args\}[\s\S]*?response=\{response\}[\s\S]*?status=\{toolStatus\}[\s\S]*?\/>/,
   );
   assert.match(blocksSource, /onBranchSelect=\{onBranchSelect\}/);
-  assert.doesNotMatch(headerSource, /LoadingIndicator|aria-label="已完成"|builtin-tool-status/);
+  assert.doesNotMatch(
+    headerSource,
+    /LoadingIndicator|aria-label="已完成"|builtin-tool-status/,
+  );
   assert.match(toolStylesSource, /data-tool-tone="resources"/);
   assert.match(toolStylesSource, /data-tool-tone="agent"/);
 });
@@ -205,19 +236,44 @@ test("centralizes all loading text shimmer behavior in TextShimmer", () => {
 });
 
 test("uses the monochrome AgentKit mark as the accessible thinking status indicator", () => {
-  assert.match(blocksSource, /<AgentKitLogoIcon className=\{`thinking-logo/);
+  assert.match(
+    blocksSource,
+    /<AgentKitLogoIcon[\s\S]*?className=\{`thinking-logo/,
+  );
   assert.doesNotMatch(blocksSource, /function SparkIcon/);
   assert.match(agentKitLogoSource, /viewBox="0 0 111 117"/);
   assert.match(agentKitLogoSource, /fill="currentColor"/);
   assert.match(agentKitLogoSource, /aria-hidden="true"/);
-  assert.match(sharedStylesSource, /\.think-icon > svg\s*\{\s*width:\s*14px;\s*height:\s*15px;/);
-  assert.match(sharedStylesSource, /thinking-logo-breathe 1\.6s ease-in-out infinite/);
-  assert.match(sharedStylesSource, /opacity:\s*0\.42;\s*transform:\s*scale\(0\.97\)/);
-  assert.match(sharedStylesSource, /opacity:\s*0\.72;\s*transform:\s*scale\(1\.02\)/);
+  assert.match(
+    sharedStylesSource,
+    /\.think-icon > svg\s*\{\s*width:\s*14px;\s*height:\s*15px;/,
+  );
+  assert.match(
+    sharedStylesSource,
+    /thinking-logo-breathe 1\.6s ease-in-out infinite/,
+  );
+  assert.match(
+    sharedStylesSource,
+    /opacity:\s*0\.42;\s*transform:\s*scale\(0\.97\)/,
+  );
+  assert.match(
+    sharedStylesSource,
+    /opacity:\s*0\.72;\s*transform:\s*scale\(1\.02\)/,
+  );
   assert.match(
     sharedStylesSource,
     /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.thinking-logo\.is-active\s*\{[^}]*animation:\s*none/,
   );
+});
+
+test("normalizes token-level line breaks in thinking text while retaining paragraphs", () => {
+  assert.match(blocksSource, /\.replace\(\/\\r\\n\?\/g,\s*["']\\n["']\)/);
+  assert.match(blocksSource, /\.split\(\/\\n\{2,\}\//);
+  assert.match(
+    blocksSource,
+    /paragraph\.replace\(\/\[\^\\S\\n\]\*\\n\[\^\\S\\n\]\*\/g/,
+  );
+  assert.match(blocksSource, /\.join\(["']\\n\\n["']\)/);
 });
 
 test("aligns thinking and special-tool headers on the same visual grid", () => {
@@ -238,5 +294,8 @@ test("aligns thinking and special-tool headers on the same visual grid", () => {
     sharedStylesSource,
     /\.tool-name\s*\{[^}]*font-size:\s*14\.5px[^}]*font-weight:\s*400[^}]*line-height:\s*1\.35/,
   );
-  assert.match(blocksSource, /<TextShimmer className="think-label" duration=\{2\.4\} spread=\{18\}>/);
+  assert.match(
+    blocksSource,
+    /<TextShimmer className="think-label" duration=\{2\.4\} spread=\{18\}>/,
+  );
 });

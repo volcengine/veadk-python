@@ -6,21 +6,18 @@ import {
   useMemo,
   useRef,
   useState,
-  type ChangeEvent,
-  type DragEvent,
   type FormEvent,
   type RefObject,
   type SVGProps,
 } from "react";
 import { createPortal } from "react-dom";
-import { ExternalLink, FileUp, SlidersHorizontal, X } from "lucide-react";
+import { ExternalLink, X } from "lucide-react";
 import { Badge } from "@openai/apps-sdk-ui/components/Badge";
 import { Button } from "@openai/apps-sdk-ui/components/Button";
 import { EmptyMessage } from "@openai/apps-sdk-ui/components/EmptyMessage";
 import { ArrowRotateCw, FileCode } from "@openai/apps-sdk-ui/components/Icon";
 import { Input } from "@openai/apps-sdk-ui/components/Input";
-import { RadioGroup } from "@openai/apps-sdk-ui/components/RadioGroup";
-import { SegmentedControl } from "@openai/apps-sdk-ui/components/SegmentedControl";
+import { Select, type Option } from "@openai/apps-sdk-ui/components/Select";
 import { Textarea } from "@openai/apps-sdk-ui/components/Textarea";
 import feishuLogo from "../assets/feishu-logo.svg";
 import pandocLogo from "../assets/pandoc-logo.svg";
@@ -51,6 +48,7 @@ import { StudioConfirmDialog } from "./StudioConfirmDialog";
 import { StudioBuildProgress } from "./StudioBuildProgress";
 import { StudioPackageOption } from "./StudioPackageOption";
 import CodeEditor from "./CodeEditor";
+import { formatRelativeTimeLabel } from "./relativeTime";
 import {
   buildEnvironment,
   createEnvironment,
@@ -76,6 +74,8 @@ import {
 } from "../adk/client";
 import {
   buildEnvironmentDockerfile,
+  AIO_BASE_IMAGE,
+  CODEX_SANDBOX_BASE_IMAGES,
   EMPTY_ENVIRONMENT_DRAFT,
   ENVIRONMENT_BASE_ENVIRONMENTS,
   ENVIRONMENT_CATEGORIES,
@@ -94,8 +94,12 @@ import {
 import { TextShimmer } from "./text-shimmer/TextShimmer";
 import { SkillSourcePicker } from "./SkillSourcePicker";
 import {
+  composeDockerfile,
+  dockerfileBaseImage,
+  dockerfileBody,
   dockerfileByteSize,
   readDockerfileUpload,
+  validateDockerfileBody,
   validateDockerfileUpload,
 } from "./environmentDockerfileUpload";
 import { formatEnvironmentManifest } from "./environmentManifest";
@@ -113,9 +117,62 @@ type EnvironmentView =
   | { kind: "list" }
   | { kind: "editor"; environmentId: string | null };
 
-type EnvironmentEditorTab = "configuration" | "dockerfile";
 type EnvironmentCreationMethod = "custom" | "dockerfile" | "git" | "image";
 type GitRepositoryMode = "managed" | "existing";
+type DockerfilePresetEnvironment = "none" | "aio-sandbox" | "codex-sandbox";
+
+const ENVIRONMENT_CREATION_OPTIONS: Option[] = [
+  { value: "custom", label: "自定义配置", description: "通过表单选择基础环境、Python、工具和技能" },
+  { value: "dockerfile", label: "自定义 Dockerfile", description: "上传或直接编辑 Dockerfile" },
+  { value: "git", label: "从代码仓库构建", description: "探查公开仓库并通过 CodePipeline 构建" },
+  { value: "image", label: "使用已有镜像", description: "绑定由外部流水线交付的 CR 镜像" },
+];
+
+const ENVIRONMENT_BASE_OPTIONS: Option[] = ENVIRONMENT_BASE_ENVIRONMENTS.map((item) => ({
+  value: item.id,
+  label: item.label,
+  description: item.description,
+}));
+
+const DOCKERFILE_PRESET_ENVIRONMENT_OPTIONS: Option[] = [
+  {
+    value: "none",
+    label: "无",
+    description: "自行填写 Dockerfile 基础镜像",
+  },
+  {
+    value: "aio-sandbox",
+    label: "AIO Sandbox",
+    description: "内置 Sandbox Shell 与常用运行时",
+  },
+  {
+    value: "codex-sandbox",
+    label: "Codex Sandbox",
+    description: "内置 Codex CLI、浏览器与代码执行环境",
+  },
+];
+
+function dockerfilePresetEnvironmentFromContent(content: string): DockerfilePresetEnvironment {
+  const baseImage = dockerfileBaseImage(content, "");
+  if (baseImage === AIO_BASE_IMAGE) return "aio-sandbox";
+  if (baseImage.includes("/codexenv:")) return "codex-sandbox";
+  return "none";
+}
+
+const ENVIRONMENT_OS_OPTIONS: Option[] = ENVIRONMENT_OPERATING_SYSTEMS.map((item) => ({
+  value: item.id,
+  label: item.label,
+}));
+
+const ENVIRONMENT_LANGUAGE_OPTIONS: Option[] = ENVIRONMENT_LANGUAGES.map((item) => ({
+  value: item.id,
+  label: item.label,
+}));
+
+const ENVIRONMENT_REPOSITORY_MODE_OPTIONS: Option[] = [
+  { value: "managed", label: "Studio 默认镜像仓库" },
+  { value: "existing", label: "已有镜像仓库" },
+];
 
 const MAX_ENVIRONMENT_SHARE_CODES = 20;
 const promptedClipboardShareTexts = new Set<string>();
@@ -156,25 +213,8 @@ function AddIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
-function GitRepositoryIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
-      <circle cx="6" cy="5" r="2" />
-      <circle cx="6" cy="19" r="2" />
-      <circle cx="18" cy="12" r="2" />
-      <path d="M8 5h2a4 4 0 0 1 4 4v0a3 3 0 0 0 3 3M8 19h2a4 4 0 0 0 4-4v0a3 3 0 0 1 3-3" />
-    </svg>
-  );
-}
-
-function ContainerImageIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
-      <path d="m4.5 7.5 7.5-4 7.5 4v9l-7.5 4-7.5-4v-9Z" />
-      <path d="m4.5 7.5 7.5 4 7.5-4M12 11.5v9" />
-      <path d="m8.5 5.4 7.3 4" />
-    </svg>
-  );
+function RequiredMark() {
+  return <span className="environment-required-mark" aria-hidden="true">*</span>;
 }
 
 function ImportEnvironmentIcon(props: SVGProps<SVGSVGElement>) {
@@ -246,7 +286,10 @@ function EnvironmentPackageIcon({ option }: { option: EnvironmentOption }) {
   return <img src={src} alt="" />;
 }
 
-function environmentDraft(environment?: StudioEnvironment): EnvironmentDraft {
+function environmentDraft(
+  environment: StudioEnvironment | undefined,
+  cloudProvider: CloudProvider,
+): EnvironmentDraft {
   if (!environment) {
     return {
       ...EMPTY_ENVIRONMENT_DRAFT,
@@ -263,7 +306,7 @@ function environmentDraft(environment?: StudioEnvironment): EnvironmentDraft {
     optionIds: [...environment.optionIds],
     selectedSkills: [...environment.selectedSkills],
     dockerfile:
-      environment.dockerfile === buildEnvironmentDockerfile(environment)
+      environment.dockerfile === buildEnvironmentDockerfile(environment, cloudProvider)
         ? undefined
         : environment.dockerfile,
     gitSource: environment.gitSource,
@@ -302,13 +345,15 @@ function environmentStatus(environment: StudioEnvironment): {
 }
 
 function environmentUpdatedAt(value: string): string {
+  return formatRelativeTimeLabel(value);
+}
+
+function environmentUpdatedAtTitle(value: string): string {
   const timestamp = Date.parse(value);
   if (Number.isNaN(timestamp)) return value;
   return new Intl.DateTimeFormat("zh-CN", {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
+    dateStyle: "medium",
+    timeStyle: "medium",
   }).format(timestamp);
 }
 
@@ -668,24 +713,27 @@ function EnvironmentRegionSelector({
   disabled: boolean;
   onChange: (region: CloudRegion) => void;
 }) {
-  const options = cloudRegionOptions(cloudProvider);
+  const options: Option[] = cloudRegionOptions(cloudProvider).map((option) => ({
+    value: option.value,
+    label: option.label,
+  }));
   return (
-    <div className="environment-source-field">
-      <span className="environment-source-field__label">Region</span>
-      <SegmentedControl
-        className="environment-region-control"
+    <label className="environment-field environment-region-field">
+      <span>区域<RequiredMark /></span>
+      <Select
+        id="environment-region"
         value={value}
-        aria-label="镜像仓库 Region"
+        options={options}
+        optionClassName="environment-select-option"
+        required
+        size="lg"
+        block
+        pill={false}
         disabled={disabled}
-        onChange={(nextValue) => onChange(nextValue as CloudRegion)}
-      >
-        {options.map((option) => (
-          <SegmentedControl.Option key={option.value} value={option.value}>
-            {option.label}
-          </SegmentedControl.Option>
-        ))}
-      </SegmentedControl>
-    </div>
+        triggerClassName="environment-select-trigger"
+        onChange={(option) => onChange(option.value as CloudRegion)}
+      />
+    </label>
   );
 }
 
@@ -798,17 +846,14 @@ function GitRepositoryFields({
 
   const dockerfiles = inspectionIsCurrent ? inspection?.dockerfiles ?? [] : [];
   return (
-    <section className="environment-source-section" aria-labelledby="environment-git-source-title">
-      <div className="environment-source-section__header">
-        <h2 id="environment-git-source-title">公开代码仓库</h2>
-        <p>输入无需鉴权的 HTTPS Git 地址后，将自动探查并列出 Dockerfile。</p>
-      </div>
-      <div className="environment-source-fields environment-source-fields--git">
-        <label className="environment-source-field environment-source-field--wide">
-          <span className="environment-source-field__label">Git 地址</span>
+    <section className="environment-source-section" aria-label="公开代码仓库">
+      <div className="environment-form-grid environment-git-fields">
+        <label className="environment-field">
+          <span>Git 地址<RequiredMark /></span>
           <Input
             size="lg"
             type="url"
+            required
             value={repositoryUrl}
             placeholder="https://github.com/owner/repository.git"
             autoComplete="url"
@@ -820,8 +865,8 @@ function GitRepositoryFields({
             }}
           />
         </label>
-        <label className="environment-source-field">
-          <span className="environment-source-field__label">Branch、Tag 或 Commit（可选）</span>
+        <label className="environment-field">
+          <span>Branch、Tag 或 Commit</span>
           <Input
             size="lg"
             value={gitRef}
@@ -835,7 +880,7 @@ function GitRepositoryFields({
           />
         </label>
       </div>
-      <div className="environment-inspection-status" aria-live="polite">
+      <div className="environment-inspection-status environment-form-feedback" aria-live="polite">
         {inspecting ? <TextShimmer as="span">正在拉取仓库并查找 Dockerfile</TextShimmer> : null}
         {inspectError ? (
           <div className="environment-source-error" role="alert">
@@ -862,8 +907,8 @@ function GitRepositoryFields({
         ) : null}
       </div>
       {dockerfiles.length > 0 ? (
-        <label className="environment-source-field environment-dockerfile-picker">
-          <span className="environment-source-field__label">Dockerfile</span>
+        <label className="environment-field environment-dockerfile-picker">
+          <span>Dockerfile<RequiredMark /></span>
           <DeploymentSelect
             ariaLabel="选择 Dockerfile"
             value={dockerfilePath}
@@ -899,37 +944,41 @@ function EnvironmentRepositoryDestination({
   onChange: (value: EnvironmentContainerRepository) => void;
 }) {
   return (
-    <section className="environment-source-section" aria-labelledby="environment-output-repository-title">
-      <div className="environment-source-section__header">
-        <h2 id="environment-output-repository-title">构建输出</h2>
-        <p>CodePipeline 会把构建完成的镜像推送到所选镜像仓库。</p>
-      </div>
-      <SegmentedControl
-        className="environment-repository-mode"
-        value={mode}
-        aria-label="构建输出镜像仓库"
-        disabled={disabled}
-        onChange={(nextMode) => onModeChange(nextMode as GitRepositoryMode)}
-      >
-        <SegmentedControl.Option value="managed">Studio 默认镜像仓库</SegmentedControl.Option>
-        <SegmentedControl.Option value="existing">已有镜像仓库</SegmentedControl.Option>
-      </SegmentedControl>
-      <EnvironmentRegionSelector
-        cloudProvider={cloudProvider}
-        value={region}
-        disabled={disabled}
-        onChange={onRegionChange}
-      />
-      {mode === "existing" ? (
-        <ContainerRepositorySelector
-          region={region}
-          value={value}
+    <section className="environment-source-section" aria-label="构建输出">
+      <div className="environment-form-grid">
+        <label className="environment-field">
+          <span>镜像仓库类型<RequiredMark /></span>
+          <Select
+            id="environment-repository-mode"
+            value={mode}
+            options={ENVIRONMENT_REPOSITORY_MODE_OPTIONS}
+            optionClassName="environment-select-option"
+            required
+            size="lg"
+            block
+            pill={false}
+            disabled={disabled}
+            triggerClassName="environment-select-trigger"
+            onChange={(option) => onModeChange(option.value as GitRepositoryMode)}
+          />
+        </label>
+        <EnvironmentRegionSelector
+          cloudProvider={cloudProvider}
+          value={region}
           disabled={disabled}
-          onChange={onChange}
+          onChange={onRegionChange}
         />
-      ) : (
-        <p className="environment-source-note">构建时自动创建或复用当前 Region 的 Studio 镜像仓库。</p>
-      )}
+        {mode === "existing" ? (
+          <ContainerRepositorySelector
+            region={region}
+            value={value}
+            disabled={disabled}
+            onChange={onChange}
+          />
+        ) : (
+          <p className="environment-source-note environment-form-feedback">构建时自动创建或复用当前区域的 Studio 镜像仓库。</p>
+        )}
+      </div>
     </section>
   );
 }
@@ -955,40 +1004,39 @@ function ExistingImageFields({
 }) {
   const referenceError = imageReferenceError(reference);
   return (
-    <section className="environment-source-section" aria-labelledby="environment-image-source-title">
-      <div className="environment-source-section__header">
-        <h2 id="environment-image-source-title">已有镜像</h2>
-        <p>绑定已由外部流水线交付到 CR 的镜像，创建后不会触发 CodePipeline 构建。</p>
-      </div>
-      <EnvironmentRegionSelector
-        cloudProvider={cloudProvider}
-        value={region}
-        disabled={disabled}
-        onChange={onRegionChange}
-      />
-      <ContainerRepositorySelector
-        region={region}
-        value={repository}
-        disabled={disabled}
-        onChange={onRepositoryChange}
-      />
-      <label className="environment-source-field environment-image-reference">
-        <span className="environment-source-field__label">Tag 或 Digest</span>
-        <Input
-          size="lg"
-          value={reference}
-          placeholder="例如：latest 或 sha256:..."
-          autoComplete="off"
+    <section className="environment-source-section" aria-label="已有镜像">
+      <div className="environment-form-grid">
+        <EnvironmentRegionSelector
+          cloudProvider={cloudProvider}
+          value={region}
           disabled={disabled}
-          aria-invalid={Boolean(referenceError)}
-          onChange={(event) => onReferenceChange(event.currentTarget.value)}
+          onChange={onRegionChange}
         />
-        {referenceError ? (
-          <small className="environment-source-field__error" role="alert">{referenceError}</small>
-        ) : (
-          <small>填写镜像 Tag，或以 sha256: 开头的完整 Digest。</small>
-        )}
-      </label>
+        <ContainerRepositorySelector
+          region={region}
+          value={repository}
+          disabled={disabled}
+          onChange={onRepositoryChange}
+        />
+        <label className="environment-field environment-image-reference">
+          <span>Tag 或 Digest<RequiredMark /></span>
+          <Input
+            size="lg"
+            value={reference}
+            required
+            placeholder="latest 或 sha256:..."
+            autoComplete="off"
+            disabled={disabled}
+            aria-invalid={Boolean(referenceError)}
+            onChange={(event) => onReferenceChange(event.currentTarget.value)}
+          />
+          {referenceError ? (
+            <small className="environment-source-field__error" role="alert">{referenceError}</small>
+          ) : (
+            <small>填写镜像 Tag，或以 sha256: 开头的完整 Digest。</small>
+          )}
+        </label>
+      </div>
     </section>
   );
 }
@@ -1341,7 +1389,7 @@ function EnvironmentImportDialog({
               disabled={busy}
               aria-invalid={tooMany || invalidInspections.length > 0 || undefined}
               aria-describedby={helpId}
-              placeholder="例如：akenv://v1/..."
+              placeholder="akenv://v1/..."
               onChange={(event) => {
                 setValue(event.currentTarget.value);
                 setPhase("editing");
@@ -1419,7 +1467,7 @@ function EnvironmentEditor({
   onShare?: () => void;
   onSave: (draft: EnvironmentDraft) => Promise<void>;
 }) {
-  const initialEnvironmentDraft = environmentDraft(environment);
+  const initialEnvironmentDraft = environmentDraft(environment, cloudProvider);
   const hasCustomDockerfile = initialEnvironmentDraft.dockerfile !== undefined;
   const [draft, setDraft] = useState<EnvironmentDraft>(() => ({
     ...initialEnvironmentDraft,
@@ -1434,16 +1482,19 @@ function EnvironmentEditor({
           ? "dockerfile"
           : "custom",
   );
-  const [activeTab, setActiveTab] = useState<EnvironmentEditorTab>("configuration");
   const [uploadedDockerfile, setUploadedDockerfile] = useState(
     hasCustomDockerfile ? environment?.dockerfile ?? "" : "",
   );
-  const [uploadedFileName, setUploadedFileName] = useState(
-    hasCustomDockerfile ? "已保存的 Dockerfile" : "",
-  );
-  const [uploadError, setUploadError] = useState("");
-  const [readingFile, setReadingFile] = useState(false);
-  const [draggingFile, setDraggingFile] = useState(false);
+  const [dockerfileFileError, setDockerfileFileError] = useState("");
+  const dockerfileInputRef = useRef<HTMLInputElement>(null);
+  const [dockerfilePresetEnvironment, setDockerfilePresetEnvironment] = useState<DockerfilePresetEnvironment>(() => (
+    hasCustomDockerfile
+      ? dockerfilePresetEnvironmentFromContent(environment?.dockerfile ?? "")
+      : initialEnvironmentDraft.baseEnvironment === "aio-sandbox"
+          || initialEnvironmentDraft.baseEnvironment === "codex-sandbox"
+        ? initialEnvironmentDraft.baseEnvironment
+        : "none"
+  ));
   const [gitRepositoryUrl, setGitRepositoryUrl] = useState(
     initialEnvironmentDraft.gitSource?.repositoryUrl ?? "",
   );
@@ -1493,18 +1544,37 @@ function EnvironmentEditor({
   const [imageReference, setImageReference] = useState(
     initialEnvironmentDraft.imageSource?.reference ?? "",
   );
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const fileReadSequence = useRef(0);
+  const [veadkSelected, setVeadkSelected] = useState(false);
   const generatedDockerfile = useMemo(
-    () => buildEnvironmentDockerfile(draft),
-    [draft.baseEnvironment, draft.operatingSystem, draft.language, draft.optionIds],
+    () => buildEnvironmentDockerfile(draft, cloudProvider),
+    [cloudProvider, draft.baseEnvironment, draft.operatingSystem, draft.language, draft.optionIds],
   );
   const customDockerfile = draft.dockerfile ?? generatedDockerfile;
+  const hasDockerfilePresetEnvironment = dockerfilePresetEnvironment !== "none";
+  const selectedBaseImage = dockerfilePresetEnvironment === "aio-sandbox"
+    ? AIO_BASE_IMAGE
+    : dockerfilePresetEnvironment === "codex-sandbox"
+      ? CODEX_SANDBOX_BASE_IMAGES[cloudProvider]
+      : "";
+  const dockerfileEditorValue = hasDockerfilePresetEnvironment
+    ? dockerfileBody(uploadedDockerfile)
+    : uploadedDockerfile;
+  const dockerfileTemplate = hasDockerfilePresetEnvironment
+    ? composeDockerfile(selectedBaseImage, "")
+    : "";
+  const resolvedUploadedDockerfile = hasDockerfilePresetEnvironment
+    ? composeDockerfile(selectedBaseImage, dockerfileEditorValue)
+    : uploadedDockerfile;
+  const uploadError = dockerfileFileError || (
+    hasDockerfilePresetEnvironment
+      ? validateDockerfileBody(dockerfileEditorValue, selectedBaseImage)
+      : validateDockerfileUpload(uploadedDockerfile)
+  );
   const isEditing = Boolean(environment);
   const formId = "environment-editor-form";
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
-  const uploadIsValid = Boolean(uploadedDockerfile.trim()) && !uploadError;
+  const uploadIsValid = Boolean(resolvedUploadedDockerfile.trim()) && !uploadError;
   const gitSourceKey = `${gitRepositoryUrl.trim()}\u0000${gitRef.trim()}`;
   const gitIsValid = !repositoryInputError(gitRepositoryUrl)
     && gitInspectedKey === gitSourceKey
@@ -1515,17 +1585,12 @@ function EnvironmentEditor({
     && !imageReferenceError(imageReference);
   const canSubmit = Boolean(draft.name.trim())
     && !saving
-    && !readingFile
     && (
       creationMethod === "custom"
       || creationMethod === "dockerfile" && uploadIsValid
       || creationMethod === "git" && gitIsValid
       || creationMethod === "image" && imageIsValid
     );
-
-  useEffect(() => () => {
-    fileReadSequence.current += 1;
-  }, []);
 
   const toggleOption = (optionId: string, selected: boolean) => {
     setDraft((current) => ({
@@ -1536,57 +1601,26 @@ function EnvironmentEditor({
     }));
   };
 
-  const loadDockerfile = async (file: File) => {
-    const sequence = fileReadSequence.current + 1;
-    fileReadSequence.current = sequence;
-    setReadingFile(true);
-    setUploadError("");
-    try {
-      const result = await readDockerfileUpload(file);
-      if (fileReadSequence.current !== sequence) return;
-      setUploadedDockerfile(result.content);
-      setUploadedFileName(file.name || "Dockerfile");
-      setUploadError(result.error);
-    } catch (cause) {
-      if (fileReadSequence.current !== sequence) return;
-      setUploadedDockerfile("");
-      setUploadedFileName(file.name || "Dockerfile");
-      setUploadError(`无法读取 Dockerfile：${cause instanceof Error ? cause.message : String(cause)}`);
-    } finally {
-      if (fileReadSequence.current === sequence) setReadingFile(false);
-      if (fileInputRef.current) fileInputRef.current.value = "";
-    }
-  };
-
-  const handleDockerfileChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file) void loadDockerfile(file);
-  };
-
-  const handleDockerfileDrop = (event: DragEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    setDraggingFile(false);
-    if (saving || readingFile) return;
-    if (event.dataTransfer.files.length !== 1) {
-      setUploadError("请一次只上传一个 Dockerfile。");
-      return;
-    }
-    const file = event.dataTransfer.files[0];
-    if (file) void loadDockerfile(file);
-  };
-
   const updateUploadedDockerfile = (value: string) => {
-    setUploadedDockerfile(value);
-    setUploadError(validateDockerfileUpload(value));
+    setDockerfileFileError("");
+    setUploadedDockerfile(
+      hasDockerfilePresetEnvironment
+        ? composeDockerfile(selectedBaseImage, value)
+        : value,
+    );
   };
 
-  const clearUploadedDockerfile = () => {
-    fileReadSequence.current += 1;
-    setReadingFile(false);
-    setUploadedDockerfile("");
-    setUploadedFileName("");
-    setUploadError("");
-    if (fileInputRef.current) fileInputRef.current.value = "";
+  const uploadDockerfile = async (file: File | undefined) => {
+    if (!file) return;
+    const result = await readDockerfileUpload(file);
+    setDockerfileFileError(result.error);
+    if (!result.content) return;
+    setUploadedDockerfile(result.content);
+  };
+
+  const resetDockerfile = () => {
+    setDockerfileFileError("");
+    setUploadedDockerfile(dockerfileTemplate);
   };
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
@@ -1595,7 +1629,7 @@ function EnvironmentEditor({
     setSaving(true);
     setSaveError("");
     try {
-      const uploadedBase = environmentBaseFromDockerfile(uploadedDockerfile);
+      const uploadedBase = environmentBaseFromDockerfile(resolvedUploadedDockerfile);
       await onSave({
         ...draft,
         name: draft.name.trim(),
@@ -1603,7 +1637,7 @@ function EnvironmentEditor({
         optionIds: creationMethod === "custom" ? draft.optionIds : [],
         selectedSkills: creationMethod === "custom" ? draft.selectedSkills : [],
         dockerfile: creationMethod === "dockerfile"
-          ? uploadedDockerfile
+          ? resolvedUploadedDockerfile
           : creationMethod === "custom"
             ? customDockerfile
             : "",
@@ -1665,14 +1699,15 @@ function EnvironmentEditor({
       <form id={formId} className="environment-form" onSubmit={submit}>
         <div className="environment-fields">
           <label className="environment-field">
-            <span>环境名称</span>
+            <span>环境名称<RequiredMark /></span>
             <Input
               className="environment-text-input"
               type="text"
               size="lg"
+              required
               value={draft.name}
               maxLength={60}
-              placeholder="例如：Python 数据处理"
+              placeholder="Python 数据处理"
               onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
             />
           </label>
@@ -1690,173 +1725,127 @@ function EnvironmentEditor({
           </label>
         </div>
 
-        <fieldset className="environment-creation-method">
-          <legend>创建方式</legend>
-          <RadioGroup<EnvironmentCreationMethod>
-            className="environment-creation-options"
+        <label className="environment-field environment-creation-method">
+          <span>创建方式<RequiredMark /></span>
+          <Select
+            id="environment-creation-method"
             value={creationMethod}
-            aria-label="环境创建方式"
-            onChange={(value) => {
-              setCreationMethod(value);
+            options={ENVIRONMENT_CREATION_OPTIONS}
+            optionClassName="environment-select-option"
+            required
+            size="lg"
+            block
+            pill={false}
+            triggerClassName="environment-select-trigger"
+            onChange={(option) => {
+              const nextMethod = option.value as EnvironmentCreationMethod;
+              setCreationMethod(nextMethod);
+              if (nextMethod === "dockerfile" && !uploadedDockerfile.trim()) {
+                setUploadedDockerfile(dockerfileTemplate);
+              }
               setSaveError("");
             }}
-          >
-            <RadioGroup.Item
-              value="custom"
-              block
-              className={creationMethod === "custom" ? "is-selected" : ""}
-            >
-              <span className="environment-creation-option__icon"><SlidersHorizontal aria-hidden /></span>
-              <span className="environment-creation-option__copy">
-                <strong>自定义配置</strong>
-                <span>选择基础环境、Python、工具和技能</span>
-              </span>
-            </RadioGroup.Item>
-            <RadioGroup.Item
-              value="dockerfile"
-              block
-              className={creationMethod === "dockerfile" ? "is-selected" : ""}
-            >
-              <span className="environment-creation-option__icon"><FileUp aria-hidden /></span>
-              <span className="environment-creation-option__copy">
-                <strong>上传 Dockerfile</strong>
-                <span>直接使用已有构建描述文件</span>
-              </span>
-            </RadioGroup.Item>
-            <RadioGroup.Item
-              value="git"
-              block
-              className={creationMethod === "git" ? "is-selected" : ""}
-            >
-              <span className="environment-creation-option__icon"><GitRepositoryIcon /></span>
-              <span className="environment-creation-option__copy">
-                <strong>从代码仓库构建</strong>
-                <span>探查公开仓库并通过 CodePipeline 构建</span>
-              </span>
-            </RadioGroup.Item>
-            <RadioGroup.Item
-              value="image"
-              block
-              className={creationMethod === "image" ? "is-selected" : ""}
-            >
-              <span className="environment-creation-option__icon"><ContainerImageIcon /></span>
-              <span className="environment-creation-option__copy">
-                <strong>使用已有镜像</strong>
-                <span>绑定由外部流水线交付的 CR 镜像</span>
-              </span>
-            </RadioGroup.Item>
-          </RadioGroup>
-        </fieldset>
+          />
+          <small>{ENVIRONMENT_CREATION_OPTIONS.find((item) => item.value === creationMethod)?.description}</small>
+        </label>
 
         {saveError ? <p className="environment-form-error" role="alert">{saveError}</p> : null}
 
         {creationMethod === "custom" ? (
-          <>
-            <SegmentedControl
-              className="environment-tabs"
-              value={activeTab}
-              aria-label="自定义环境编辑内容"
-              onChange={(value) => setActiveTab(value as EnvironmentEditorTab)}
-            >
-              <SegmentedControl.Option value="configuration">配置</SegmentedControl.Option>
-              <SegmentedControl.Option value="dockerfile">描述文件</SegmentedControl.Option>
-            </SegmentedControl>
-            {activeTab === "configuration" ? (
-              <div className="environment-configuration">
-            <section className="environment-section" aria-labelledby="environment-base-title">
-              <h2 id="environment-base-title">基础环境</h2>
-              <RadioGroup<EnvironmentBaseEnvironment>
-                className="environment-base-options"
-                aria-label="基础环境"
-                value={draft.baseEnvironment}
-                onChange={(baseEnvironment) => setDraft((current) => ({
-                  ...current,
-                  baseEnvironment,
-                  operatingSystem: baseEnvironment === "aio-sandbox" ? "ubuntu-22.04" : current.operatingSystem,
-                  language: baseEnvironment === "aio-sandbox" ? "python-3.12" : current.language,
-                }))}
-              >
-                {ENVIRONMENT_BASE_ENVIRONMENTS.map((baseEnvironment) => (
-                  <RadioGroup.Item
-                    key={baseEnvironment.id}
-                    value={baseEnvironment.id}
-                    block
-                    className={draft.baseEnvironment === baseEnvironment.id ? "is-selected" : ""}
-                  >
-                    <span className="environment-base-copy">
-                      <strong>{baseEnvironment.label}</strong>
-                      <span>{baseEnvironment.description}</span>
-                    </span>
-                  </RadioGroup.Item>
-                ))}
-              </RadioGroup>
-              {draft.baseEnvironment === "ubuntu" ? (
-                <RadioGroup<EnvironmentOperatingSystem>
-                  className="environment-os-version-options"
-                  aria-label="Ubuntu 版本"
-                  value={draft.operatingSystem}
-                  onChange={(operatingSystem) => setDraft((current) => ({ ...current, operatingSystem }))}
-                >
-                  {ENVIRONMENT_OPERATING_SYSTEMS.map((operatingSystem) => (
-                    <RadioGroup.Item
-                      key={operatingSystem.id}
-                      value={operatingSystem.id}
-                      block
-                      className={draft.operatingSystem === operatingSystem.id ? "is-selected" : ""}
-                    >
-                      <span className="environment-language-copy">{operatingSystem.label}</span>
-                    </RadioGroup.Item>
-                  ))}
-                </RadioGroup>
-              ) : null}
-            </section>
-
-            <section className="environment-section" aria-labelledby="environment-language-title">
-              <h2 id="environment-language-title">语言</h2>
-              <RadioGroup<EnvironmentLanguage>
-                className="environment-language-options"
-                aria-label="Python 版本"
-                value={draft.language}
-                onChange={(language) => setDraft((current) => ({ ...current, language }))}
-              >
-                {ENVIRONMENT_LANGUAGES
-                  .filter((language) => draft.baseEnvironment !== "aio-sandbox" || language.id === "python-3.12")
-                  .map((language) => (
-                  <RadioGroup.Item
-                    key={language.id}
-                    value={language.id}
-                    block
-                    className={draft.language === language.id ? "is-selected" : ""}
-                  >
-                    <span className="environment-language-copy">{language.label}</span>
-                  </RadioGroup.Item>
-                ))}
-              </RadioGroup>
-            </section>
-
-            <section className="environment-section" aria-labelledby="environment-runtime-title">
-              <h2 id="environment-runtime-title">执行环境</h2>
-              <div className="environment-option-grid">
-                <StudioPackageOption
-                  name="VeADK"
-                  description="Agent 开发与运行框架"
-                  selected
-                  disabled
-                  onChange={() => undefined}
-                  icon={<img src={veadkLogo} alt="" />}
-                />
-              </div>
-            </section>
+          <div className="environment-configuration">
+                <section className="environment-section environment-form-section" aria-label="基础配置">
+                  <div className="environment-form-grid">
+                    <label className="environment-field">
+                      <span>基础环境<RequiredMark /></span>
+                      <Select
+                        id="environment-base-environment"
+                        value={draft.baseEnvironment}
+                        options={ENVIRONMENT_BASE_OPTIONS}
+                        optionClassName="environment-select-option"
+                        required
+                        size="lg"
+                        block
+                        pill={false}
+                        triggerClassName="environment-select-trigger"
+                        onChange={(option) => {
+                          const baseEnvironment = option.value as EnvironmentBaseEnvironment;
+                          const usesPresetRuntime = baseEnvironment === "aio-sandbox"
+                            || baseEnvironment === "codex-sandbox";
+                          setDraft((current) => ({
+                            ...current,
+                            baseEnvironment,
+                            operatingSystem: usesPresetRuntime ? "ubuntu-22.04" : current.operatingSystem,
+                            language: usesPresetRuntime ? "python-3.12" : current.language,
+                          }));
+                        }}
+                      />
+                      <small>{ENVIRONMENT_BASE_ENVIRONMENTS.find((item) => item.id === draft.baseEnvironment)?.description}</small>
+                    </label>
+                    <label className="environment-field">
+                      <span>操作系统<RequiredMark /></span>
+                      <Select
+                        id="environment-operating-system"
+                        value={draft.operatingSystem}
+                        options={ENVIRONMENT_OS_OPTIONS}
+                        optionClassName="environment-select-option"
+                        required
+                        size="lg"
+                        block
+                        pill={false}
+                        disabled={draft.baseEnvironment !== "ubuntu"}
+                        triggerClassName="environment-select-trigger"
+                        onChange={(option) => setDraft((current) => ({
+                          ...current,
+                          operatingSystem: option.value as EnvironmentOperatingSystem,
+                        }))}
+                      />
+                      <small>{draft.baseEnvironment !== "ubuntu" ? `由 ${environmentBaseEnvironmentLabel(draft.baseEnvironment)} 固定为 Ubuntu 22.04` : "选择基础镜像的 Ubuntu 版本"}</small>
+                    </label>
+                    <label className="environment-field">
+                      <span>Python 版本<RequiredMark /></span>
+                      <Select
+                        id="environment-python-version"
+                        value={draft.language}
+                        options={draft.baseEnvironment !== "ubuntu"
+                          ? ENVIRONMENT_LANGUAGE_OPTIONS.filter((item) => item.value === "python-3.12")
+                          : ENVIRONMENT_LANGUAGE_OPTIONS}
+                        optionClassName="environment-select-option"
+                        required
+                        size="lg"
+                        block
+                        pill={false}
+                        disabled={draft.baseEnvironment !== "ubuntu"}
+                        triggerClassName="environment-select-trigger"
+                        onChange={(option) => setDraft((current) => ({
+                          ...current,
+                          language: option.value as EnvironmentLanguage,
+                        }))}
+                      />
+                      <small>{draft.baseEnvironment !== "ubuntu" ? `由 ${environmentBaseEnvironmentLabel(draft.baseEnvironment)} 固定为 Python 3.12` : "选择需要安装的 Python 版本"}</small>
+                    </label>
+                  </div>
+                </section>
 
             <section className="environment-section" aria-labelledby="environment-skills-title">
               <h2 id="environment-skills-title">技能</h2>
-              <SkillSourcePicker
-                selected={draft.selectedSkills}
-                onChange={(selectedSkills) => setDraft((current) => ({ ...current, selectedSkills }))}
-                cloudProvider={cloudProvider}
-                disabled={saving}
-                addLabel="添加环境技能"
-              />
+              <div className="environment-skill-grid">
+                <StudioPackageOption
+                  name="VeADK"
+                  description="Agent 开发与运行框架"
+                  selected={veadkSelected}
+                  disabled={saving}
+                  onChange={setVeadkSelected}
+                  icon={<img src={veadkLogo} alt="" />}
+                />
+                <SkillSourcePicker
+                  selected={draft.selectedSkills}
+                  onChange={(selectedSkills) => setDraft((current) => ({ ...current, selectedSkills }))}
+                  cloudProvider={cloudProvider}
+                  disabled={saving}
+                  addLabel="添加环境技能"
+                  showSelectedCount={false}
+                />
+              </div>
             </section>
 
             {ENVIRONMENT_CATEGORIES.map((category) => (
@@ -1879,96 +1868,96 @@ function EnvironmentEditor({
                 </div>
               </section>
             ))}
-              </div>
-            ) : (
-              <section className="environment-dockerfile" aria-labelledby="environment-dockerfile-title">
-                <div className="environment-dockerfile__header">
-                  <div>
-                    <h2 id="environment-dockerfile-title">Dockerfile</h2>
-                    <p>可直接编辑；配置页中的软件变更不会覆盖自定义内容。</p>
-                  </div>
-                  {draft.dockerfile !== undefined ? (
-                    <Button
-                      type="button"
-                      color="secondary"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setDraft((current) => ({ ...current, dockerfile: undefined }))}
-                    >
-                      恢复生成内容
-                    </Button>
-                  ) : null}
-                </div>
-                <Textarea
-                  className="environment-dockerfile__editor"
-                  value={customDockerfile}
-                  aria-label="Dockerfile 内容"
-                  spellCheck={false}
-                  onChange={(event) => setDraft((current) => ({ ...current, dockerfile: event.target.value }))}
-                />
-              </section>
-            )}
-          </>
+          </div>
         ) : creationMethod === "dockerfile" ? (
-          <section className="environment-upload" aria-labelledby="environment-upload-title">
-            <div className="environment-upload__header">
-              <div>
-                <h2 id="environment-upload-title">上传 Dockerfile</h2>
-                <p id="environment-upload-help">支持任意文件名，文件上限 128 KiB。上传后可继续编辑内容。</p>
-              </div>
-              {uploadedDockerfile ? (
-                <Button type="button" color="secondary" variant="ghost" size="sm" onClick={clearUploadedDockerfile} disabled={saving}>
-                  移除文件
-                </Button>
-              ) : null}
-            </div>
-            <div
-              className={`environment-upload-dropzone${draggingFile ? " is-dragging" : ""}${uploadedDockerfile ? " is-ready" : ""}`}
-              onDragEnter={(event) => {
-                event.preventDefault();
-                if (!saving && !readingFile) setDraggingFile(true);
-              }}
-              onDragOver={(event) => event.preventDefault()}
-              onDragLeave={(event) => {
-                if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDraggingFile(false);
-              }}
-              onDrop={handleDockerfileDrop}
-            >
-              <input
-                ref={fileInputRef}
-                type="file"
-                aria-label="Dockerfile 文件"
-                aria-describedby="environment-upload-help"
-                disabled={saving || readingFile}
-                onChange={handleDockerfileChange}
-              />
-              <span className="environment-upload-dropzone__icon"><FileUp aria-hidden /></span>
-              <span className="environment-upload-dropzone__copy">
-                <strong>{readingFile ? "正在读取 Dockerfile" : uploadedFileName || "选择 Dockerfile 或拖拽到这里"}</strong>
-                <span>
-                  {uploadedDockerfile
-                    ? `${dockerfileByteSize(uploadedDockerfile).toLocaleString("zh-CN")} 字节，点击可替换`
-                    : "Dockerfile 通常无扩展名"}
-                </span>
-              </span>
-            </div>
-            {uploadError ? <p className="environment-upload__error" role="alert">{uploadError}</p> : null}
-            {uploadedDockerfile ? (
-              <div className="environment-upload__preview">
-                <div>
-                  <h3>内容预览</h3>
-                  <span>{dockerfileByteSize(uploadedDockerfile).toLocaleString("zh-CN")} / 131,072 字节</span>
-                </div>
-                <Textarea
-                  className="environment-dockerfile__editor environment-upload__editor"
-                  value={uploadedDockerfile}
-                  aria-label="上传的 Dockerfile 内容"
-                  aria-invalid={Boolean(uploadError)}
-                  spellCheck={false}
-                  onChange={(event) => updateUploadedDockerfile(event.target.value)}
+          <section className="environment-upload" aria-label="自定义 Dockerfile">
+            <div className="environment-dockerfile-settings environment-form-grid">
+              <label className="environment-field">
+                <span>预制环境</span>
+                <Select
+                  id="environment-dockerfile-base-environment"
+                  value={dockerfilePresetEnvironment}
+                  options={DOCKERFILE_PRESET_ENVIRONMENT_OPTIONS}
+                  optionClassName="environment-select-option"
+                  size="lg"
+                  block
+                  pill={false}
+                  triggerClassName="environment-select-trigger"
+                  onChange={(option) => {
+                    setDockerfileFileError("");
+                    setDockerfilePresetEnvironment(option.value as DockerfilePresetEnvironment);
+                  }}
                 />
+                <small>选择“无”可自行填写 Dockerfile 第一行的基础镜像。</small>
+              </label>
+            </div>
+            <div className="environment-upload__preview">
+              <div>
+                <h3>Dockerfile<RequiredMark /></h3>
+                <div className="environment-upload__actions">
+                  <span className="environment-upload__size">
+                    {dockerfileByteSize(resolvedUploadedDockerfile).toLocaleString("zh-CN")} / 131,072 字节
+                  </span>
+                  <input
+                    ref={dockerfileInputRef}
+                    className="environment-upload__file-input"
+                    type="file"
+                    accept=".dockerfile,text/plain"
+                    tabIndex={-1}
+                    hidden
+                    onChange={(event) => {
+                      const input = event.currentTarget;
+                      void uploadDockerfile(input.files?.[0]).finally(() => {
+                        input.value = "";
+                      });
+                    }}
+                  />
+                  <Button
+                    className="environment-upload__action"
+                    type="button"
+                    color="secondary"
+                    variant="soft"
+                    size="sm"
+                    pill={false}
+                    disabled={saving}
+                    onClick={() => dockerfileInputRef.current?.click()}
+                  >上传</Button>
+                  <Button
+                    className="environment-upload__action"
+                    type="button"
+                    color="secondary"
+                    variant="ghost"
+                    size="sm"
+                    pill={false}
+                    disabled={saving || !dockerfileEditorValue}
+                    onClick={resetDockerfile}
+                  >重置</Button>
+                </div>
               </div>
-            ) : null}
+              <div className={`environment-dockerfile-editor${hasDockerfilePresetEnvironment ? " has-fixed-base" : ""}${uploadError ? " is-invalid" : ""}`}>
+                {hasDockerfilePresetEnvironment ? (
+                  <div className="environment-dockerfile-from" aria-label="Dockerfile 基础镜像">
+                    <span className="environment-dockerfile-from__line" aria-hidden="true">1</span>
+                    <code>
+                      <span className="environment-dockerfile-from__keyword">FROM</span>
+                      <span title={selectedBaseImage}>{selectedBaseImage}</span>
+                    </code>
+                  </div>
+                ) : null}
+                <div className="environment-dockerfile__editor environment-upload__editor" aria-label="Dockerfile 内容">
+                  <CodeEditor
+                    value={dockerfileEditorValue}
+                    path="Dockerfile"
+                    lineNumberStart={hasDockerfilePresetEnvironment ? 2 : 1}
+                    height="auto"
+                    minHeight="28px"
+                    maxHeight="var(--environment-dockerfile-editor-max-height)"
+                    onChange={updateUploadedDockerfile}
+                  />
+                </div>
+              </div>
+            </div>
+            {uploadError ? <p className="environment-upload__error environment-upload__error--below" role="alert">{uploadError}</p> : null}
           </section>
         ) : creationMethod === "git" ? (
           <div className="environment-source-workflow">
@@ -2186,7 +2175,7 @@ export function EnvironmentCenter({
   const saveEnvironment = async (draft: EnvironmentDraft) => {
     const input: EnvironmentInput = {
       ...draft,
-      dockerfile: draft.dockerfile ?? buildEnvironmentDockerfile(draft),
+      dockerfile: draft.dockerfile ?? buildEnvironmentDockerfile(draft, cloudProvider),
     };
     const saved = editingEnvironment
       ? await updateEnvironment(editingEnvironment.id, input)
@@ -2415,7 +2404,11 @@ export function EnvironmentCenter({
                     "暂无描述"
                   }
                   metadata={[
-                    { label: "更新", value: environmentUpdatedAt(environment.updatedAt) },
+                    {
+                      label: "更新",
+                      value: environmentUpdatedAt(environment.updatedAt),
+                      title: environmentUpdatedAtTitle(environment.updatedAt),
+                    },
                   ]}
                   action={{
                     label: environment.latestVersion ? "构建详情" : rebuilding ? "正在启动" : "开始构建",

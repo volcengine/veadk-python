@@ -20,7 +20,7 @@ import asyncio
 import hashlib
 import json
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 from urllib.parse import urlsplit
@@ -76,8 +76,7 @@ class SandboxExecutionTarget:
 
 @dataclass(frozen=True)
 class _CachedTarget:
-    image: str
-    tool_id: str
+    mount_identity: tuple[str, str, str, str, str, str, str]
     target: SandboxExecutionTarget
 
 
@@ -97,30 +96,17 @@ class AgentkitEnvironmentSandboxResolver:
         self._targets: dict[tuple[str, str, str, str, str], _CachedTarget] = {}
         self._locks: dict[tuple[str, str, str, str, str], asyncio.Lock] = {}
 
-    async def resolve(
+    async def prepare(
         self,
         mount: SessionEnvironmentMount,
         context: StudioToolExecutionContext,
     ) -> SandboxExecutionTarget:
-        key = (*_context_key(context), mount.environment_id)
-        cached = self._targets.get(key)
-        if (
-            cached is not None
-            and cached.image == mount.image
-            and cached.tool_id == mount.tool_id
-        ):
-            return cached.target
+        """Validate the mounted Tool and prepare its Agent-session Sandbox."""
 
+        key = _target_key(context, mount)
+        mount_identity = _mount_identity(mount)
         lock = self._locks.setdefault(key, asyncio.Lock())
         async with lock:
-            cached = self._targets.get(key)
-            if (
-                cached is not None
-                and cached.image == mount.image
-                and cached.tool_id == mount.tool_id
-            ):
-                return cached.target
-
             if not mount.tool_id or mount.tool_status != _READY_STATUS:
                 raise SandboxResolutionError(
                     "The mounted environment version does not have a persisted Tool "
@@ -129,13 +115,53 @@ class AgentkitEnvironmentSandboxResolver:
             client = self._client_factory(mount.provider, mount.region)
             tool_id = mount.tool_id
             await _require_ready_tool(client, tool_id, mount.image)
+            cached = self._targets.get(key)
+            if cached is not None and cached.mount_identity == mount_identity:
+                if await _cached_session_is_ready(client, cached.target):
+                    return cached.target
+                self._targets.pop(key, None)
             target = await self._session_for_mount(client, tool_id, mount, context)
             self._targets[key] = _CachedTarget(
-                image=mount.image,
-                tool_id=tool_id,
+                mount_identity=mount_identity,
                 target=target,
             )
             return target
+
+    async def prepare_many(
+        self,
+        mounts: Sequence[SessionEnvironmentMount],
+        context: StudioToolExecutionContext,
+    ) -> tuple[SandboxExecutionTarget, ...]:
+        """Prepare every mounted environment before the Agent can call tools."""
+
+        return tuple(
+            await asyncio.gather(*(self.prepare(mount, context) for mount in mounts))
+        )
+
+    def is_prepared(
+        self,
+        mount: SessionEnvironmentMount,
+        context: StudioToolExecutionContext,
+    ) -> bool:
+        """Return whether this exact attachment already has a cached target."""
+
+        cached = self._targets.get(_target_key(context, mount))
+        return cached is not None and cached.mount_identity == _mount_identity(mount)
+
+    async def resolve(
+        self,
+        mount: SessionEnvironmentMount,
+        context: StudioToolExecutionContext,
+    ) -> SandboxExecutionTarget:
+        """Return a pre-created Sandbox; tool execution never creates one."""
+
+        cached = self._targets.get(_target_key(context, mount))
+        if self.is_prepared(mount, context) and cached is not None:
+            return cached.target
+        raise SandboxResolutionError(
+            "The mounted Sandbox Session was not prepared for this Agent session. "
+            "Remount the environment or retry the Agent request."
+        )
 
     async def _session_for_mount(
         self,
@@ -178,17 +204,19 @@ class AgentkitEnvironmentSandboxResolver:
 
         session_id = str(getattr(existing, "session_id", "") or "").strip()
         endpoint = str(getattr(existing, "endpoint", "") or "").strip()
+        status = str(getattr(existing, "status", "") or "").strip().lower()
         if not session_id:
             raise RuntimeError("AgentKit did not return a Sandbox Session ID.")
         deadline = time.monotonic() + _SESSION_READY_TIMEOUT_SECONDS
-        while not endpoint:
+        while not endpoint or status != _READY_STATUS:
             session = await asyncio.to_thread(
-                client.get_session,
+                _get_session,
+                client,
                 tools_types.GetSessionRequest(ToolId=tool_id, SessionId=session_id),
             )
             status = str(getattr(session, "status", "") or "").strip().lower()
             endpoint = str(getattr(session, "endpoint", "") or "").strip()
-            if endpoint and status in {"", _READY_STATUS}:
+            if endpoint and status == _READY_STATUS:
                 break
             if status in _FAILED_TOOL_STATUSES:
                 raise RuntimeError("AgentKit Sandbox Session failed to become ready.")
@@ -227,6 +255,7 @@ def register_sandbox_shell_tool(
                     "environment_version_id": mount.environment_version_id,
                     "name": mount.name,
                     "description": mount.description,
+                    "base_environment": _manifest_base_environment(mount.manifest),
                     "capabilities": _manifest_capabilities(mount.manifest),
                 }
                 for mount in mounted
@@ -251,6 +280,11 @@ def register_sandbox_shell_tool(
             mount = mounts.get(context, str(arguments["environment_id"]))
         except (KeyError, TypeError, ValueError) as error:
             raise StudioToolExecutionError(str(error)) from error
+        if _manifest_base_environment(mount.manifest) == "codex-sandbox":
+            raise StudioToolExecutionError(
+                "Codex Sandbox 环境只允许通过 delegate_to_codex_sandbox "
+                "执行任务，不能回退到 execute_in_sandbox。"
+            )
         try:
             target = await target_resolver.resolve(mount, context)
             command_arguments = {
@@ -290,7 +324,9 @@ def register_sandbox_shell_tool(
                 "disqualifying. Requirement/design/ADR work matches authoring/design, "
                 "review/verification matches review, and implementation/fix/test work "
                 "matches engineering. A matching mounted "
-                "environment has priority over creating or delegating to a new agent."
+                "environment has priority over creating or delegating to a new agent. "
+                "When base_environment is codex-sandbox, use "
+                "delegate_to_codex_sandbox instead of individual shell commands."
             ),
             input_schema={
                 "type": "object",
@@ -333,7 +369,10 @@ def register_sandbox_shell_tool(
             display_name="在环境中执行命令",
             description=(
                 "Execute a non-interactive shell command, including installed CLI "
-                "tools, inside the environment mounted to this conversation. Use a "
+                "tools, inside a non-Codex environment mounted to this conversation. "
+                "Never use this tool for an environment whose base_environment is "
+                "codex-sandbox; delegate_to_codex_sandbox is the only supported "
+                "execution path for those environments. Use a "
                 "matching mounted environment to complete the task instead of "
                 "creating a new agent unless the user explicitly requests agent "
                 "creation or delegation. When the user explicitly names a mounted "
@@ -544,7 +583,7 @@ def _user_session_id(
     context: StudioToolExecutionContext,
     mount: SessionEnvironmentMount,
 ) -> str:
-    value = "\x00".join((*_context_key(context), mount.environment_id, mount.image))
+    value = "\x00".join((*_context_key(context), *_mount_identity(mount)))
     return "studio-env-" + hashlib.sha256(value.encode()).hexdigest()[:32]
 
 
@@ -559,6 +598,32 @@ def _context_key(
     )
 
 
+def _target_key(
+    context: StudioToolExecutionContext,
+    mount: SessionEnvironmentMount,
+) -> tuple[str, str, str, str, str]:
+    """Bind one cached target to the Agent session and attachment instance."""
+
+    mount_key = mount.mount_instance_id or mount.environment_id
+    return (*_context_key(context), mount_key)
+
+
+def _mount_identity(
+    mount: SessionEnvironmentMount,
+) -> tuple[str, str, str, str, str, str, str]:
+    """Return every immutable input that identifies one mounted Sandbox."""
+
+    return (
+        mount.provider,
+        mount.region,
+        mount.environment_id,
+        mount.environment_version_id,
+        mount.mount_instance_id,
+        mount.tool_id,
+        mount.image,
+    )
+
+
 def _manifest_capabilities(manifest: Mapping[str, Any]) -> list[str]:
     spec = manifest.get("spec")
     if not isinstance(spec, Mapping):
@@ -567,6 +632,14 @@ def _manifest_capabilities(manifest: Mapping[str, Any]) -> list[str]:
     if not isinstance(capabilities, list):
         return []
     return [item for item in capabilities if isinstance(item, str)]
+
+
+def _manifest_base_environment(manifest: Mapping[str, Any]) -> str:
+    spec = manifest.get("spec")
+    if not isinstance(spec, Mapping):
+        return ""
+    value = spec.get("baseEnvironment")
+    return value.strip() if isinstance(value, str) else ""
 
 
 def _find_session(
@@ -604,6 +677,15 @@ def _get_tool(client: Any, request: Any) -> Any:
         ) from error
 
 
+def _get_session(client: Any, request: Any) -> Any:
+    try:
+        return client.get_session(request)
+    except StopIteration as error:
+        raise LookupError(
+            "AgentKit did not return the requested Sandbox Session."
+        ) from error
+
+
 async def _require_ready_tool(client: Any, tool_id: str, image: str) -> None:
     from agentkit.sdk.tools import types as tools_types
 
@@ -627,6 +709,36 @@ async def _require_ready_tool(client: Any, tool_id: str, image: str) -> None:
         raise SandboxResolutionError(
             "The persisted Sandbox Tool image does not match the environment version."
         )
+
+
+async def _cached_session_is_ready(
+    client: Any,
+    target: SandboxExecutionTarget,
+) -> bool:
+    """Return whether a cached Sandbox Session still exists and is usable."""
+
+    from agentkit.sdk.tools import types as tools_types
+
+    try:
+        session = await asyncio.to_thread(
+            _get_session,
+            client,
+            tools_types.GetSessionRequest(
+                ToolId=target.tool_id,
+                SessionId=target.session_id,
+            ),
+        )
+    except Exception:
+        return False
+    status = str(getattr(session, "status", "") or "").strip().lower()
+    endpoint = str(getattr(session, "endpoint", "") or "").strip()
+    if status != _READY_STATUS or not endpoint:
+        return False
+    try:
+        _validated_endpoint(endpoint)
+    except StudioToolExecutionError:
+        return False
+    return True
 
 
 __all__ = [

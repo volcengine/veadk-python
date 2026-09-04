@@ -24,7 +24,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 EnvironmentOperatingSystem = Literal["ubuntu-22.04", "ubuntu-24.04"]
-EnvironmentBaseEnvironment = Literal["ubuntu", "aio-sandbox"]
+EnvironmentBaseEnvironment = Literal["ubuntu", "aio-sandbox", "codex-sandbox"]
 EnvironmentLanguage = Literal["python-3.10", "python-3.12"]
 EnvironmentBuildStatus = Literal[
     "preparing",
@@ -251,10 +251,15 @@ class EnvironmentInput(BaseModel):
         self.dockerfile = self.dockerfile.strip()
         if (
             "base_environment" not in self.model_fields_set
+            and "/codexenv:" in self.dockerfile.lower()
+        ):
+            self.base_environment = "codex-sandbox"
+        elif (
+            "base_environment" not in self.model_fields_set
             and "aio.sandbox" in self.dockerfile.lower()
         ):
             self.base_environment = "aio-sandbox"
-        if self.base_environment == "aio-sandbox":
+        if self.base_environment in {"aio-sandbox", "codex-sandbox"}:
             self.operating_system = "ubuntu-22.04"
             self.language = "python-3.12"
         if not self.name:
@@ -438,10 +443,16 @@ class EnvironmentManifestStatus(BaseModel):
     updated_at: datetime = Field(alias="updatedAt")
 
 
+EnvironmentManifestApiVersion = Literal[
+    "agentkit.studio/v3",
+    "agentkit.studio/v1alpha1",
+]
+
+
 class EnvironmentManifest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    api_version: Literal["agentkit.studio/v1alpha1"] = Field(alias="apiVersion")
+    api_version: EnvironmentManifestApiVersion = Field(alias="apiVersion")
     kind: Literal["Environment"] = "Environment"
     metadata: EnvironmentManifestMetadata
     spec: EnvironmentManifestSpec

@@ -16,7 +16,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const appSource = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+const appSource = readFileSync(
+  new URL("../src/App.tsx", import.meta.url),
+  "utf8",
+);
 const dialogSource = readFileSync(
   new URL("../src/ui/ShareMessageDialog.tsx", import.meta.url),
   "utf8",
@@ -52,7 +55,10 @@ test("the share action passes the selected assistant turn to the dialog", () => 
 
 test("the dialog exports every user and assistant turn through the selected reply", () => {
   assert.match(dialogSource, /function\s+conversationTurnsThrough\s*\(/);
-  assert.match(dialogSource, /targetTurn\.closest\(\s*["']\.transcript["']\s*\)/);
+  assert.match(
+    dialogSource,
+    /targetTurn\.closest\(\s*["']\.transcript["']\s*\)/,
+  );
   assert.match(dialogSource, /transcript\.children/);
   assert.match(
     dialogSource,
@@ -72,7 +78,55 @@ test("conversation export excludes controls and removes its temporary container"
   assert.match(dialogSource, /document\.body\.append\(\s*exportRoot\s*\)/);
   assert.match(
     dialogSource,
-    /try\s*\{[\s\S]*?toBlob\(\s*exportRoot\s*,[\s\S]*?\}\s*finally\s*\{[\s\S]*?exportRoot\.remove\(\s*\)/,
+    /try\s*\{[\s\S]*?toBlob\(\s*exportChunk\s*,[\s\S]*?\}\s*finally\s*\{[\s\S]*?exportChunk\.remove\(\s*\)[\s\S]*?exportRoot\.remove\(\s*\)/,
+  );
+});
+
+test("conversation export expands retained activity and tool details", () => {
+  assert.match(dialogSource, /function\s+expandConversationExportContent\s*\(/);
+  assert.match(
+    dialogSource,
+    /\.block-tool,\s*\.block-thinking,\s*\.block-progress,\s*\.block-plan[\s\S]*?opacity\s*=\s*["']1["'][\s\S]*?transform\s*=\s*["']none["']/,
+  );
+  assert.match(
+    dialogSource,
+    /querySelectorAll(?:<[^>]+>)?\(\s*["']\.think-collapse["']\s*\)[\s\S]*?classList\.add\(\s*["']open["']\s*\)[\s\S]*?gridTemplateRows\s*=\s*["']1fr["']/,
+  );
+  assert.match(
+    dialogSource,
+    /\.codex-sandbox-run__stream,\s*\.think-body,\s*\.tool-result/,
+  );
+  assert.match(
+    dialogSource,
+    /maxHeight\s*=\s*["']none["'][\s\S]*?overflow\s*=\s*["']visible["'][\s\S]*?scrollTop\s*=\s*0/,
+  );
+  assert.match(
+    dialogSource,
+    /querySelectorAll(?:<[^>]+>)?\(\s*["']\.tool-args["']\s*\)[\s\S]*?overflowWrap\s*=\s*["']anywhere["'][\s\S]*?whiteSpace\s*=\s*["']pre-wrap["']/,
+  );
+  assert.match(
+    dialogSource,
+    /querySelectorAll(?:<[^>]+>)?\(\s*["']\.think-collapse-inner["']\s*\)[\s\S]*?overflow\s*=\s*["']visible["']/,
+  );
+  assert.match(dialogSource, /expandConversationExportContent\(\s*clone\s*\)/);
+});
+
+test("conversation export removes only the raw payload duplicated beneath Codex activity cards", () => {
+  assert.match(
+    dialogSource,
+    /function\s+removeDuplicateCodexExportPayloads\s*\(/,
+  );
+  assert.match(
+    dialogSource,
+    /querySelectorAll(?:<[^>]+>)?\(\s*["']\.codex-sandbox-run["']\s*\)/,
+  );
+  assert.match(
+    dialogSource,
+    /parentElement[\s\S]*?\?\.querySelector\(\s*["']:scope\s*>\s*\.tool-detail["']\s*\)[\s\S]*?\?\.remove\(\)/,
+  );
+  assert.match(
+    dialogSource,
+    /removeDuplicateCodexExportPayloads\(\s*clone\s*\)/,
   );
 });
 
@@ -108,7 +162,10 @@ test("the share dialog covers image generation, preview, and failures", () => {
   assert.match(dialogSource, /(?:generating|isGenerating|生成中|正在生成)/i);
   assert.match(dialogSource, /aria-busy=/);
   assert.match(dialogSource, /<img\b[^>]*\bsrc=/);
-  assert.match(dialogSource, /alt=["'][^"']+["']/);
+  assert.match(
+    dialogSource,
+    /alt=\{`会话导出内容第 1 页，共 \$\{imagePages\.length\} 页`\}/,
+  );
   assert.match(dialogSource, /role=["']alert["']/);
 });
 
@@ -128,27 +185,132 @@ test("the generated PNG can be copied or downloaded", () => {
 });
 
 test("the export format can switch between PNG and PDF", () => {
-  assert.match(dialogSource, /type\s+ExportFormat\s*=\s*["']png["']\s*\|\s*["']pdf["']/);
+  assert.match(
+    dialogSource,
+    /type\s+ExportFormat\s*=\s*["']png["']\s*\|\s*["']pdf["']/,
+  );
   assert.match(dialogSource, /role=["']radiogroup["']/);
   assert.match(dialogSource, /role=["']radio["']/);
-  assert.match(dialogSource, /\(\[\s*["']png["']\s*,\s*["']pdf["']\s*\]\s+as\s+const\)/);
+  assert.match(
+    dialogSource,
+    /\(\[\s*["']png["']\s*,\s*["']pdf["']\s*\]\s+as\s+const\)/,
+  );
   assert.match(dialogSource, /aria-checked=\{exportFormat\s*===\s*format\}/);
   assert.match(dialogSource, /下载\s+\$\{exportFormat\.toUpperCase\(\)\}/);
 });
 
-test("PDF export is generated on demand and paginated before download", () => {
+test("conversation export renders fixed-height readable image pages", () => {
+  assert.match(dialogSource, /const\s+EXPORT_PAGE_HEIGHT\s*=\s*[\d_]+/);
+  assert.match(
+    dialogSource,
+    /const\s+EXPORT_MAX_LAST_PAGE_HEIGHT\s*=\s*EXPORT_PAGE_HEIGHT\s*\*\s*1\.12/,
+  );
+  assert.match(dialogSource, /const\s+EXPORT_CHUNK_HEIGHT\s*=\s*[\d_]+/);
+  assert.match(
+    dialogSource,
+    /function\s+createConversationExportPageRanges\s*\(/,
+  );
+  assert.match(dialogSource, /function\s+createConversationExportChunks\s*\(/);
+  assert.match(dialogSource, /function\s+measureConversationExport\s*\(/);
+  assert.match(dialogSource, /function\s+pruneConversationExportClone\s*\(/);
+  assert.match(dialogSource, /function\s+createConversationExportPage\s*\(/);
+  assert.match(dialogSource, /async\s+function\s+splitExportChunk\s*\(/);
+  assert.match(dialogSource, /async\s+function\s+generateShareImages\s*\(/);
+  assert.match(dialogSource, /Promise<ShareImagePage\[\]>/);
+  assert.match(
+    dialogSource,
+    /for\s*\(const\s+\[chunkIndex,\s*chunk\]\s+of\s+exportChunks\.entries\(\)\)/,
+  );
+  assert.match(dialogSource, /toBlob\(\s*exportChunk\s*,/);
+  assert.match(dialogSource, /pixelRatio:\s*1/);
+  assert.match(dialogSource, /cloneChild\.replaceChildren\(\)/);
+  assert.match(
+    dialogSource,
+    /if\s*\(source\.matches\(EXPORT_BREAK_SELECTOR\)\)\s*return/,
+  );
+  assert.match(dialogSource, /pruneConversationExportClone\(/);
+  assert.match(
+    dialogSource,
+    /pages\.push\([\s\S]*?\.\.\.\(await\s+splitExportChunk\(/,
+  );
+});
+
+test("conversation pagination keeps readable blocks together and avoids a tiny final page", () => {
+  assert.match(dialogSource, /interface\s+ExportBreakMetrics\s*\{/);
+  assert.match(
+    dialogSource,
+    /remainingHeight\s*<=\s*EXPORT_MAX_LAST_PAGE_HEIGHT/,
+  );
+  assert.match(dialogSource, /block\.top\s*>=\s*minimumBottom/);
+  assert.match(dialogSource, /block\.bottom\s*>\s*idealBottom/);
+  assert.match(dialogSource, /block\.height\s*<=\s*EXPORT_PAGE_HEIGHT/);
+  assert.match(dialogSource, /containingBlockTop\s*\?\?/);
+});
+
+test("PNG download packages every page with numbered filenames", () => {
+  assert.match(dialogSource, /function\s+sharePageFileName\s*\(/);
+  assert.match(
+    dialogSource,
+    /page-\$\{String\(pageNumber\)\.padStart\(digits,\s*["']0["']\)\}/,
+  );
+  assert.match(dialogSource, /async\s+function\s+createPngArchive\s*\(/);
+  assert.match(
+    dialogSource,
+    /for\s*\(const\s+\[pageIndex,\s*page\]\s+of\s+imagePages\.entries\(\)\)/,
+  );
+  assert.match(
+    dialogSource,
+    /sharePageFileName\(\s*pageIndex\s*\+\s*1,\s*imagePages\.length/,
+  );
+  assert.match(dialogSource, /type:\s*["']application\/zip["']/);
+  assert.match(
+    dialogSource,
+    /await\s+createPngArchive\(\s*imagePages,\s*timestamp\s*\)/,
+  );
+  assert.match(dialogSource, /-png-pages\.zip/);
+});
+
+test("PDF export uses the readable image pages directly", () => {
   assert.match(dialogSource, /import\(\s*["']jspdf["']\s*\)/);
   assert.match(dialogSource, /new\s+jsPDF\s*\(/);
   assert.match(dialogSource, /\.addImage\s*\(/);
   assert.match(dialogSource, /\.addPage\s*\(/);
-  assert.match(dialogSource, /function\s+findPageBreak\s*\(/);
-  assert.match(dialogSource, /rowIsBlank/);
+  assert.match(dialogSource, /generateSharePdf\(imagePages\)/);
+  assert.match(
+    dialogSource,
+    /for\s*\(const\s+\[pageIndex,\s*page\]\s+of\s+imagePages\.entries\(\)\)/,
+  );
+  assert.match(
+    dialogSource,
+    /async\s+function\s+generateSharePdf[\s\S]*?new\s+Uint8Array\(await\s+page\.blob\.arrayBuffer\(\)\)[\s\S]*?pdf\.addImage\(\s*imageBytes/,
+  );
+  assert.doesNotMatch(dialogSource, /function\s+findPageBreak\s*\(/);
+  assert.doesNotMatch(dialogSource, /rowIsBlank/);
   assert.match(dialogSource, /application\/pdf/);
   assert.match(dialogSource, /\.pdf["'`]/i);
 });
 
+test("preview and copy labels explain the first page of a multi-page export", () => {
+  assert.match(
+    dialogSource,
+    /预览第\s*1\s*页，共\s*\{imagePages\.length\}\s*页/,
+  );
+  assert.match(
+    dialogSource,
+    /imagePages\.length\s*>\s*1\s*\?\s*["']复制第一页["']/,
+  );
+  assert.match(
+    dialogSource,
+    /alt=\{`会话导出内容第 1 页，共 \$\{imagePages\.length\} 页`\}/,
+  );
+  assert.match(dialogStyles, /\.share-message-preview-meta\s*\{/);
+});
+
 test("the selected export format controls the available actions", () => {
-  assert.match(dialogSource, /exportFormat\s*===\s*["']png["'][\s\S]*?copyImage/);
+  assert.match(
+    dialogSource,
+    /exportFormat\s*===\s*["']png["'][\s\S]*?copyImage/,
+  );
   assert.match(dialogSource, /downloadExport/);
   assert.match(dialogSource, /downloadState\s*===\s*["']downloading["']/);
   assert.match(dialogSource, /aria-live=["']polite["']/);
@@ -164,12 +326,13 @@ test("the dialog closes with Escape and releases object URLs", () => {
   assert.match(dialogSource, /removeEventListener\s*\(\s*["']keydown["']/);
 });
 
-test("long conversation images lower pixel ratio and keep actions visible", () => {
+test("long conversation capture stays bounded and keeps actions visible", () => {
+  assert.match(dialogSource, /const\s+EXPORT_CHUNK_HEIGHT\s*=\s*12_000/);
   assert.match(
     dialogSource,
-    /Math\.min\(\s*preferred\s*,\s*dimensionLimit\s*,\s*areaLimit\s*\)/,
+    /pageBottom\s*-\s*current\.top\s*<=\s*EXPORT_CHUNK_HEIGHT/,
   );
-  assert.doesNotMatch(dialogSource, /pixelRatio\s*<\s*0\.5/);
+  assert.match(dialogSource, /pixelRatio:\s*1/);
   assert.match(
     dialogStyles,
     /\.share-message-body\s*\{[\s\S]*?overflow-y:\s*auto\s*;/,

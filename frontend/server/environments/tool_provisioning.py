@@ -20,7 +20,7 @@ import asyncio
 import hashlib
 import secrets
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -143,6 +143,8 @@ class EnvironmentToolProvisioner(Protocol):
         image: str,
         provider: str,
         region: str,
+        existing_tool_id: str = "",
+        on_created: Callable[[EnvironmentToolState], Awaitable[None]] | None = None,
     ) -> EnvironmentToolState: ...
 
 
@@ -172,42 +174,86 @@ class AgentkitEnvironmentToolProvisioner:
         image: str,
         provider: str,
         region: str,
+        existing_tool_id: str = "",
+        on_created: Callable[[EnvironmentToolState], Awaitable[None]] | None = None,
     ) -> EnvironmentToolState:
         normalized_image = image.strip()
         if not normalized_image:
-            raise ValueError("AIO environment image must not be empty.")
+            raise ValueError("Sandbox environment image must not be empty.")
         key = (provider.strip(), region.strip(), normalized_image)
         lock = self._locks.setdefault(key, asyncio.Lock())
         async with lock:
-            client = self._client_factory(key[0], key[1])
-            tool_envs = dict(_PRIVATE_TOOL_ENVS)
-            if self._model_environment_resolver is not None:
-                tool_envs.update(
-                    {
-                        env_key: str(value).strip()
-                        for env_key, value in self._model_environment_resolver(
-                            key[0], key[1]
-                        ).items()
-                        if env_key in _MODEL_TOOL_ENV_KEYS and str(value).strip()
-                    }
-                )
+            loop = asyncio.get_running_loop()
+
+            async def invoke_created(state: EnvironmentToolState) -> None:
+                if on_created is not None:
+                    await on_created(state)
+
+            def notify_created(state: EnvironmentToolState) -> None:
+                if on_created is None:
+                    return
+                future = asyncio.run_coroutine_threadsafe(invoke_created(state), loop)
+                future.result()
+
             return await asyncio.to_thread(
-                self._ensure_ready,
-                client,
+                self._ensure_ready_for_location,
+                key[0],
+                key[1],
                 normalized_image,
-                tool_envs,
+                existing_tool_id.strip(),
+                notify_created,
             )
+
+    def _ensure_ready_for_location(
+        self,
+        provider: str,
+        region: str,
+        image: str,
+        existing_tool_id: str,
+        on_created: Callable[[EnvironmentToolState], None],
+    ) -> EnvironmentToolState:
+        client = self._client_factory(provider, region)
+        tool_envs = dict(_PRIVATE_TOOL_ENVS)
+        if self._model_environment_resolver is not None:
+            tool_envs.update(
+                {
+                    env_key: str(value).strip()
+                    for env_key, value in self._model_environment_resolver(
+                        provider, region
+                    ).items()
+                    if env_key in _MODEL_TOOL_ENV_KEYS and str(value).strip()
+                }
+            )
+        return self._ensure_ready(
+            client,
+            image,
+            tool_envs,
+            existing_tool_id,
+            on_created,
+        )
 
     def _ensure_ready(
         self,
         client: Any,
         image: str,
         tool_envs: Mapping[str, str],
+        existing_tool_id: str,
+        on_created: Callable[[EnvironmentToolState], None],
     ) -> EnvironmentToolState:
         from agentkit.sdk.tools import types as tools_types
 
         name = environment_tool_name(image)
-        match = _find_tool(client, tools_types, name)
+        if existing_tool_id:
+            try:
+                match = client.get_tool(
+                    tools_types.GetToolRequest(ToolId=existing_tool_id)
+                )
+            except Exception:
+                # Build metadata can outlive a manually deleted cloud Tool. Recover
+                # from the immutable image instead of forcing an image rebuild.
+                match = _find_tool(client, tools_types, name)
+        else:
+            match = _find_tool(client, tools_types, name)
         created_new = match is None
         if match is None:
             try:
@@ -251,9 +297,21 @@ class AgentkitEnvironmentToolProvisioner:
             tool_id = _validated_tool_id(match, image)
         if not tool_id:
             raise RuntimeError("AgentKit did not return a Tool ID.")
+        current_status = "creating"
         if not created_new:
-            current = client.get_tool(tools_types.GetToolRequest(ToolId=tool_id))
-            if _tool_requires_update(current, image, tool_envs):
+            current = (
+                match
+                if existing_tool_id
+                else client.get_tool(tools_types.GetToolRequest(ToolId=tool_id))
+            )
+            current_status = _tool_status(current)
+            # An update restarts AgentKit's image preparation. A process restart
+            # can observe the Tool while the original create/update is still in
+            # progress, so never submit another update until that operation has
+            # reached a terminal state.
+            if current_status == _READY_STATUS and _tool_requires_update(
+                current, image, tool_envs
+            ):
                 current_envs = {
                     str(getattr(item, "key", "") or ""): str(
                         getattr(item, "value", "") or ""
@@ -278,11 +336,22 @@ class AgentkitEnvironmentToolProvisioner:
                         ],
                     )
                 )
+                current_status = "creating"
+
+        on_created(
+            EnvironmentToolState(
+                tool_id=tool_id,
+                name=name,
+                status=(
+                    _READY_STATUS if current_status == _READY_STATUS else "creating"
+                ),
+            )
+        )
 
         deadline = time.monotonic() + self._timeout_seconds
         while True:
             tool = client.get_tool(tools_types.GetToolRequest(ToolId=tool_id))
-            status = str(getattr(tool, "status", "") or "").strip().lower()
+            status = _tool_status(tool)
             if status == _READY_STATUS:
                 return EnvironmentToolState(
                     tool_id=tool_id,
@@ -310,6 +379,10 @@ def _validated_tool_id(tool: Any, image: str) -> str:
 
 def _tool_id(tool: Any) -> str:
     return str(getattr(tool, "tool_id", "") or "").strip()
+
+
+def _tool_status(tool: Any) -> str:
+    return str(getattr(tool, "status", "") or "").strip().lower()
 
 
 def _tool_requires_update(

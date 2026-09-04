@@ -59,8 +59,8 @@ test("resource list pages compose the same shared layout and card primitives", (
 
 test("resource list pages share the same centered initial loading state", () => {
   assert.match(resourceSource, /export function ResourceLoadingState/);
-  assert.match(resourceSource, /<LoadingIndicator size=\{20\} \/>/);
   assert.match(resourceSource, /资源加载中，请稍候/);
+  assert.match(resourceSource, /<LoadingIndicator size=\{16\} \/>/);
   assert.match(
     resourceStyles,
     /\.resource-loading-state\s*\{[\s\S]*?height:\s*100%;[\s\S]*?align-items:\s*center;[\s\S]*?justify-content:\s*center;/,

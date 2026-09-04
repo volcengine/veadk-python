@@ -703,7 +703,7 @@ export function ResourceLoadingState() {
       aria-live="polite"
       aria-busy="true"
     >
-      <LoadingIndicator size={20} />
+      <LoadingIndicator size={16} />
       <TextShimmer as="span" duration={2.4}>
         资源加载中，请稍候
       </TextShimmer>

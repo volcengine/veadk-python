@@ -43,11 +43,15 @@ class _EnvironmentService:
         phase: str = "available",
         tool_id: str = "tool-persisted",
         tool_status: str = "ready",
+        provider: str = "volcengine",
+        region: str = "cn-beijing",
     ) -> None:
         self.base_environment = base_environment
         self.phase = phase
         self.tool_id = tool_id
         self.tool_status = tool_status
+        self.provider = provider
+        self.region = region
         self.calls: list[tuple[str, str, str]] = []
 
     async def get(self, owner_id: str, environment_id: str) -> Any:
@@ -88,7 +92,7 @@ class _EnvironmentService:
         )
 
     def resource_info(self) -> dict[str, str]:
-        return {"provider": "volcengine", "region": "cn-beijing"}
+        return {"provider": self.provider, "region": self.region}
 
 
 @pytest.mark.asyncio
@@ -101,11 +105,13 @@ async def test_resolve_returns_an_immutable_run_mount() -> None:
         SessionEnvironmentSelection(
             environment_id="a" * 32,
             environment_version_id="version-1",
+            mount_instance_id=" mount-1 ",
         ),
     )
 
     assert mount.environment_id == "a" * 32
     assert mount.environment_version_id == "version-1"
+    assert mount.mount_instance_id == "mount-1"
     assert mount.image == "registry.example/aio:test"
     assert mount.provider == "volcengine"
     assert mount.region == "cn-beijing"
@@ -115,6 +121,41 @@ async def test_resolve_returns_an_immutable_run_mount() -> None:
     assert mount.tool_id == "tool-persisted"
     assert mount.tool_status == "ready"
     assert registry.get(_ToolContext(environment_mount=mount)) is mount
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "base_environment,provider,region",
+    [
+        ("aio-sandbox", "volcengine", "cn-beijing"),
+        ("aio-sandbox", "byteplus", "ap-southeast-1"),
+        ("codex-sandbox", "volcengine", "cn-beijing"),
+        ("codex-sandbox", "byteplus", "ap-southeast-1"),
+    ],
+)
+async def test_resolve_supports_sandbox_mounts_for_both_clouds(
+    base_environment: str,
+    provider: str,
+    region: str,
+) -> None:
+    service = _EnvironmentService(
+        base_environment=base_environment,
+        provider=provider,
+        region=region,
+    )
+    registry = SessionEnvironmentMountRegistry(cast(EnvironmentService, service))
+
+    mount = await registry.resolve(
+        "owner-1",
+        SessionEnvironmentSelection(
+            environment_id="a" * 32,
+            environment_version_id="version-1",
+        ),
+    )
+
+    assert mount.manifest["spec"]["baseEnvironment"] == base_environment
+    assert mount.provider == provider
+    assert mount.region == region
 
 
 @pytest.mark.asyncio
@@ -196,6 +237,15 @@ def test_selection_list_rejects_duplicate_environment_ids() -> None:
                 {"environment_id": "a" * 32},
             ]
         )
+
+
+def test_selection_keeps_mount_instance_optional_for_legacy_clients() -> None:
+    selection = SessionEnvironmentSelection(
+        environment_id="a" * 32,
+        environment_version_id="version-1",
+    )
+
+    assert selection.mount_instance_id == ""
 
 
 def test_get_all_accepts_legacy_single_environment_mount() -> None:

@@ -75,8 +75,7 @@ test("uses Apps SDK UI controls and shared Studio patterns", () => {
   assert.match(environmentSource, /@openai\/apps-sdk-ui\/components\/Button/);
   assert.doesNotMatch(environmentSource, /@openai\/apps-sdk-ui\/components\/Checkbox/);
   assert.match(environmentSource, /@openai\/apps-sdk-ui\/components\/Input/);
-  assert.match(environmentSource, /@openai\/apps-sdk-ui\/components\/RadioGroup/);
-  assert.match(environmentSource, /@openai\/apps-sdk-ui\/components\/SegmentedControl/);
+  assert.match(environmentSource, /@openai\/apps-sdk-ui\/components\/Select/);
   assert.match(environmentSource, /@openai\/apps-sdk-ui\/components\/Textarea/);
   assert.match(environmentSource, /<ResourcePageShell className="environment-center"/);
   assert.match(environmentSource, /<ResourcePageHeader/);
@@ -87,25 +86,30 @@ test("uses Apps SDK UI controls and shared Studio patterns", () => {
   assert.match(environmentSource, /<ResourceCreateCard/);
   assert.match(environmentSource, /<LibraryResourceCard/);
   assert.match(environmentSource, /<StudioPackageOption/);
-  assert.match(environmentSource, /<SegmentedControl\.Option value="configuration">配置/);
-  assert.match(environmentSource, /<SegmentedControl\.Option value="dockerfile">描述文件/);
+  assert.doesNotMatch(environmentSource, /自定义环境编辑内容/);
   assert.doesNotMatch(environmentSource, /自动生成<\/Badge>/);
   assert.match(resourceCardSource, /<ResourceCardRevealAction/);
-  assert.match(packageOptionSource, /aria-pressed=\{selected\}/);
+  assert.match(packageOptionSource, /<button[\s\S]*?aria-pressed=\{selected\}[\s\S]*?onClick=\{\(\) => onChange\(!selected\)\}/);
   assert.match(packageOptionStyles, /min-height: 54px/);
+  assert.match(packageOptionStyles, /\.studio-package-option\.is-selected[\s\S]*?border-color: transparent[\s\S]*?background: hsl\(var\(--muted\)/);
 });
 
 test("covers environment categories, editor feedback, and responsive layout", () => {
-  assert.match(environmentSource, />基础环境<\/h2>/);
+  assert.match(environmentSource, /aria-label="基础配置"/);
   assert.match(environmentModelSource, /AIO Sandbox/);
   assert.match(environmentModelSource, /Ubuntu/);
-  assert.match(environmentSource, />语言<\/h2>/);
-  assert.match(environmentSource, />执行环境<\/h2>/);
+  assert.match(environmentSource, /<span>基础环境<RequiredMark \/><\/span>[\s\S]*?<Select/);
+  assert.match(environmentSource, /<span>Python 版本<RequiredMark \/><\/span>[\s\S]*?<Select/);
+  assert.doesNotMatch(environmentSource, />执行环境<\/h2>/);
   assert.match(environmentSource, />技能<\/h2>/);
+  assert.match(environmentSource, /className="environment-skill-grid"[\s\S]*?name="VeADK"[\s\S]*?selected=\{veadkSelected\}[\s\S]*?onChange=\{setVeadkSelected\}/);
+  assert.match(environmentSource, /const \[veadkSelected, setVeadkSelected\] = useState\(false\)/);
   assert.match(environmentSource, /<SkillSourcePicker/);
   assert.match(environmentSource, /selected=\{draft\.selectedSkills\}/);
-  assert.match(environmentSource, /name="VeADK"/);
-  assert.match(environmentSource, /name="VeADK"[\s\S]*?selected[\s\S]*?disabled/);
+  assert.match(environmentSource, /showSelectedCount=\{false\}/);
+  assert.match(environmentStyles, /\.environment-skill-grid[\s\S]*?grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
+  assert.match(environmentStyles, /\.environment-skill-grid \.cw-skill-add[\s\S]*?min-height: 54px/);
+  assert.match(environmentStyles, /\.environment-skill-grid \.cw-selected-skill-row[\s\S]*?border-color: transparent[\s\S]*?background: hsl\(var\(--muted\)/);
   assert.match(environmentSource, /ENVIRONMENT_CATEGORIES\.map/);
   assert.match(environmentSource, /aria-label="Dockerfile 内容"/);
   assert.match(environmentSource, /role="status" aria-live="polite"/);
@@ -114,27 +118,97 @@ test("covers environment categories, editor feedback, and responsive layout", ()
   assert.match(environmentStyles, /grid-template-columns: minmax\(0, 1fr\)/);
   assert.match(environmentSource, /<ResourceDetailLayout/);
   assert.match(environmentStyles, /\.environment-form[\s\S]*?width: min\(100%, 920px\)/);
-  assert.match(environmentStyles, /\.environment-dockerfile__editor > textarea[\s\S]*?min-height: inherit/);
+  assert.match(environmentStyles, /--environment-dockerfile-editor-max-height: 404px/);
+  assert.match(environmentStyles, /\.environment-dockerfile-editor\.has-fixed-base[\s\S]*?--environment-dockerfile-editor-max-height: 384px/);
+  assert.match(environmentStyles, /\.environment-upload__editor[\s\S]*?min-height: 0[\s\S]*?max-height: var\(--environment-dockerfile-editor-max-height\)[\s\S]*?overflow: hidden/);
+  assert.match(environmentStyles, /\.environment-upload__editor \.cm-scroller[\s\S]*?overflow: auto/);
+  assert.match(environmentStyles, /--environment-dockerfile-gutter-width: 48px/);
+  assert.match(environmentStyles, /\.environment-upload__editor \.cm-gutters[\s\S]*?width: var\(--environment-dockerfile-gutter-width\)/);
+  assert.match(environmentStyles, /\.environment-upload__editor \.cm-foldGutter[\s\S]*?display: none !important/);
+  assert.match(environmentStyles, /\.environment-dockerfile-from[\s\S]*?min-height: 28px/);
+  assert.match(environmentStyles, /\.environment-dockerfile-from__line[\s\S]*?padding: 5px 11px 3px 5px/);
+  assert.match(environmentStyles, /\.environment-dockerfile-from code[\s\S]*?padding: 5px 10px 3px 5px/);
+  assert.match(environmentStyles, /\.environment-upload__action[\s\S]*?font-size: 12px/);
 });
 
-test("offers Dockerfile upload and custom configuration as explicit creation methods", () => {
+test("offers form-based creation modes and an editable custom Dockerfile", () => {
   assert.match(environmentSource, /type EnvironmentCreationMethod = "custom" \| "dockerfile" \| "git" \| "image"/);
-  assert.match(environmentSource, /aria-label="环境创建方式"/);
-  assert.match(environmentSource, /value="custom"[\s\S]*?自定义配置/);
-  assert.match(environmentSource, /value="dockerfile"[\s\S]*?上传 Dockerfile/);
-  assert.match(environmentSource, /type="file"/);
-  assert.match(environmentSource, /onDrop=\{handleDockerfileDrop\}/);
-  assert.match(environmentSource, /aria-label="Dockerfile 文件"/);
-  assert.match(environmentSource, /上传后可继续编辑内容/);
-  assert.match(environmentStyles, /\.environment-creation-options/);
-  assert.match(environmentStyles, /\.environment-upload-dropzone\.is-dragging/);
-  assert.match(environmentStyles, /\.environment-upload-dropzone:focus-within/);
+  assert.match(environmentSource, /<span>创建方式<RequiredMark \/><\/span>[\s\S]*?<Select/);
+  assert.match(environmentSource, /value: "custom", label: "自定义配置"/);
+  assert.match(environmentSource, /value: "dockerfile", label: "自定义 Dockerfile"/);
+  assert.doesNotMatch(environmentSource, /aria-label="Dockerfile 文件"/);
+  assert.doesNotMatch(environmentSource, /复制 Dockerfile/);
+  assert.doesNotMatch(environmentSource, /恢复模板/);
+  assert.doesNotMatch(environmentSource, /使用 AgentKit 基础环境/);
+  assert.match(environmentSource, /<span>预制环境<\/span>[\s\S]*?<Select/);
+  assert.match(environmentSource, /const dockerfileTemplate = hasDockerfilePresetEnvironment[\s\S]*?composeDockerfile\(selectedBaseImage, ""\)[\s\S]*?: ""/);
+  assert.match(environmentSource, /const dockerfileEditorValue = hasDockerfilePresetEnvironment[\s\S]*?dockerfileBody\(uploadedDockerfile\)[\s\S]*?: uploadedDockerfile/);
+  assert.match(environmentSource, /hasDockerfilePresetEnvironment[\s\S]*?validateDockerfileBody\(dockerfileEditorValue, selectedBaseImage\)[\s\S]*?validateDockerfileUpload\(uploadedDockerfile\)/);
+  assert.doesNotMatch(environmentSource, /uploadedDockerfile \|\| dockerfileTemplate/);
+  assert.match(environmentSource, />上传<\/Button>/);
+  assert.match(environmentSource, />重置<\/Button>/);
+  assert.match(environmentSource, /readDockerfileUpload/);
+  assert.match(environmentSource, /value: "none",[\s\S]*?label: "无"/);
+  assert.match(environmentSource, /environment-dockerfile-base-environment[\s\S]*?value=\{dockerfilePresetEnvironment\}/);
+  assert.match(environmentSource, /hasDockerfilePresetEnvironment \? \(\s*<div className="environment-dockerfile-from"/);
+  assert.doesNotMatch(environmentSource, /aria-label="Dockerfile 基础镜像"[\s\S]*?<input/);
+  assert.match(environmentSource, /value=\{dockerfileEditorValue\}/);
+  assert.match(environmentSource, /lineNumberStart=\{hasDockerfilePresetEnvironment \? 2 : 1\}/);
+  assert.match(environmentSource, /height="auto"/);
+  assert.match(environmentSource, /maxHeight="var\(--environment-dockerfile-editor-max-height\)"/);
+  assert.doesNotMatch(environmentSource, /environment-dockerfile-base-image/);
+  assert.match(environmentSource, /label: "AIO Sandbox"/);
+  assert.match(environmentSource, /label: "Codex Sandbox"/);
+  assert.doesNotMatch(environmentSource, /AGENTKIT_DOCKERFILE_BASE_OPTIONS[\s\S]*?label: "Ubuntu"/);
+  assert.match(environmentModelSource, /enterprise-public-cn-beijing\.cr\.volces\.com\/vefaas-public\/codexenv:1\.1\.0/);
+  assert.match(environmentModelSource, /enterprise-public-ap-southeast-1\.cr\.volces\.com\/vefaas-public\/codexenv:1\.1\.0/);
+  assert.match(environmentSource, /<h3>Dockerfile<RequiredMark \/><\/h3>/);
+  assert.match(environmentSource, /className="environment-dockerfile-from"/);
+  assert.match(environmentSource, /<span className="environment-dockerfile-from__keyword">FROM<\/span>/);
+  assert.match(environmentSource, /<CodeEditor[\s\S]*?path="Dockerfile"/);
+  assert.match(environmentSource, /validateDockerfileBody/);
+  assert.match(environmentSource, /<\/div>\s*\{uploadError \? <p className="environment-upload__error environment-upload__error--below"/);
+  assert.match(environmentStyles, /\.environment-form-grid/);
+  assert.doesNotMatch(environmentSource, /SegmentedControl/);
+  assert.match(environmentSource, /<span>镜像仓库类型<RequiredMark \/><\/span>[\s\S]*?<Select/);
+  assert.match(environmentSource, /<span>区域<RequiredMark \/><\/span>[\s\S]*?<Select/);
+  assert.match(environmentSource, /optionClassName="environment-select-option"/);
+  assert.match(environmentStyles, /\.environment-select-trigger[\s\S]*?font-size: 13px[\s\S]*?font-weight: 400/);
+  assert.match(environmentStyles, /\.environment-select-option > div > div \+ div[\s\S]*?font-size: 11\.5px[\s\S]*?font-weight: 400/);
+  assert.match(environmentStyles, /\.environment-configuration[\s\S]*?border-top: 1px dashed hsl\(var\(--border\)\)/);
+  assert.match(environmentStyles, /\.environment-upload[\s\S]*?border-top: 1px dashed hsl\(var\(--border\)\)/);
+  assert.match(environmentStyles, /\.environment-source-section[\s\S]*?border-top: 1px dashed hsl\(var\(--border\)\)/);
+  assert.match(environmentSource, /环境名称<RequiredMark \/>/);
+  assert.match(environmentSource, /Git 地址<RequiredMark \/>/);
+  assert.doesNotMatch(environmentSource, /placeholder="例如：/);
+  assert.match(environmentStyles, /\.environment-repository-fields \.pp-resource-field > span:first-child::after[\s\S]*?content: "\*"/);
+  assert.doesNotMatch(environmentSource, /environment-source-section__header/);
+  assert.match(environmentStyles, /\.environment-field[\s\S]*?font-size: 14px[\s\S]*?font-weight: 500/);
+  assert.match(environmentStyles, /\.environment-field[\s\S]*?align-items: center/);
+  assert.match(environmentStyles, /\.environment-field > span:first-child[\s\S]*?white-space: nowrap/);
+  assert.match(environmentSource, /<span>Branch、Tag 或 Commit<\/span>/);
+  assert.doesNotMatch(environmentSource, /Branch、Tag 或 Commit（可选）/);
+});
+
+test("starts optional icon packages unselected", async () => {
+  const server = await createServer({
+    appType: "custom",
+    logLevel: "silent",
+    optimizeDeps: { noDiscovery: true },
+    server: { middlewareMode: true },
+  });
+  try {
+    const model = await server.ssrLoadModule("/src/ui/environmentModel.ts");
+    assert.deepEqual(model.EMPTY_ENVIRONMENT_DRAFT.optionIds, []);
+  } finally {
+    await server.close();
+  }
 });
 
 test("supports public Git builds with automatic Dockerfile inspection", () => {
-  assert.match(environmentSource, /value="git"[\s\S]*?从代码仓库构建/);
+  assert.match(environmentSource, /value: "git", label: "从代码仓库构建"/);
   assert.match(environmentSource, /inspectEnvironmentRepository/);
-  assert.match(environmentSource, /自动探查并列出 Dockerfile/);
+  assert.match(environmentSource, /探查公开仓库并通过 CodePipeline 构建/);
   assert.match(environmentSource, /window\.setTimeout\(\(\) => void inspectRepository\(\), 600\)/);
   assert.match(environmentSource, /autoAttemptedKeyRef/);
   assert.match(environmentSource, /message\.split\("\\n原始响应：", 1\)/);
@@ -145,14 +219,14 @@ test("supports public Git builds with automatic Dockerfile inspection", () => {
   assert.match(environmentSource, /<DeploymentSelect[\s\S]*?ariaLabel="选择 Dockerfile"/);
   assert.match(environmentSource, /Studio 默认镜像仓库/);
   assert.match(environmentSource, /containerRepository: creationMethod === "git"/);
-  assert.match(clientSource, /POST \/web\/environment-repositories\/inspect|"\/web\/environment-repositories\/inspect"/);
+  assert.match(clientSource, /POST \/web\/v3\/environment-repositories\/inspect|"\/web\/v3\/environment-repositories\/inspect"/);
   assert.match(clientSource, /method: "POST"/);
   assert.match(clientSource, /dockerfiles\.every\(\(item\) => typeof item === "string"\)/);
 });
 
 test("binds an existing image through region-aware CR resource selectors", () => {
-  assert.match(environmentSource, /value="image"[\s\S]*?使用已有镜像/);
-  assert.match(environmentSource, /aria-label="镜像仓库 Region"/);
+  assert.match(environmentSource, /value: "image", label: "使用已有镜像"/);
+  assert.match(environmentSource, /id="environment-region"/);
   assert.match(environmentSource, /<ContainerRepositorySelector/);
   assert.match(environmentSource, /Tag 或 Digest/);
   assert.match(environmentSource, /imageSource: creationMethod === "image"/);
@@ -164,13 +238,14 @@ test("binds an existing image through region-aware CR resource selectors", () =>
   assert.match(deploymentResourcesSource, /kind: "cr-namespace"/);
   assert.match(deploymentResourcesSource, /kind: "cr-repository"/);
   assert.match(deploymentResourcesSource, /registry: resource\.name,[\s\S]*?namespace: "",[\s\S]*?repository: ""/);
-  assert.match(environmentStyles, /\.environment-source-fields--git/);
+  assert.match(environmentSource, /className="environment-form-grid environment-git-fields"/);
+  assert.match(environmentStyles, /\.environment-repository-fields[\s\S]*?grid-template-columns: minmax\(0, 1fr\)/);
 });
 
 test("exports and imports environments with share codes", async () => {
-  assert.match(clientSource, /\/web\/environments\/\$\{encodeURIComponent\(environmentId\)\}\/share-code/);
-  assert.match(clientSource, /"\/web\/environment-share-codes\/inspect"/);
-  assert.match(clientSource, /"\/web\/environment-share-codes\/import"/);
+  assert.match(clientSource, /\/web\/v3\/environments\/\$\{encodeURIComponent\(environmentId\)\}\/share-code/);
+  assert.match(clientSource, /"\/web\/v3\/environment-share-codes\/inspect"/);
+  assert.match(clientSource, /"\/web\/v3\/environment-share-codes\/import"/);
   assert.match(clientSource, /shareCodes/);
   assert.match(clientSource, /status === "created" \|\| candidate\.status === "duplicate" \|\| candidate\.status === "failed"/);
 
@@ -267,6 +342,13 @@ test("validates Dockerfile uploads before the environment is created", async () 
     );
     assert.equal(upload.validateDockerfileUpload("# syntax=docker/dockerfile:1\nFROM ubuntu:24.04"), "");
     assert.equal(upload.normalizeDockerfileContent("\uFEFFFROM ubuntu:24.04\r\n"), "FROM ubuntu:24.04\n");
+    assert.equal(upload.dockerfileBaseImage("FROM node:22\nRUN node --version"), "node:22");
+    assert.equal(upload.dockerfileBody("FROM node:22\n\nRUN node --version"), "RUN node --version");
+    assert.equal(upload.composeDockerfile("node:22", "RUN node --version"), "FROM node:22\nRUN node --version");
+    assert.equal(
+      upload.validateDockerfileBody("RUN echo ok\nFROM alpine", "node:22"),
+      "基础镜像已固定在第一行，请删除 Dockerfile 正文中的 FROM 指令。",
+    );
     assert.match(dockerfileUploadSource, /file\.text\(\)/);
   } finally {
     await server.close();
@@ -283,8 +365,12 @@ test("persists environments and starts image builds through the Studio API", () 
   assert.match(environmentSource, /重新加载/);
   assert.match(environmentSource, /重新构建/);
   assert.doesNotMatch(environmentSource, /INITIAL_ENVIRONMENTS/);
-  assert.match(clientSource, /\/web\/environments/);
-  assert.match(clientSource, /\/web\/environment-resources/);
+  assert.match(clientSource, /"\/web\/v3\/environments"/);
+  assert.match(clientSource, /\/web\/v3\/environments\/\$\{encodeURIComponent\(environmentId\)\}/);
+  assert.match(clientSource, /\/web\/v3\/environments\/\$\{encodeURIComponent\(environmentId\)\}\/build/);
+  assert.match(clientSource, /"\/web\/v3\/environment-resources"/);
+  assert.doesNotMatch(clientSource, /["`]\/web\/environments/);
+  assert.doesNotMatch(clientSource, /["`]\/web\/environment-(?:repositories|resources|share-codes)/);
 });
 
 test("shows live build steps and redacted log snapshots in a responsive detail dialog", () => {
@@ -334,7 +420,7 @@ test("opens a version-bound environment manifest beside the primary card action"
   try {
     const manifest = await server.ssrLoadModule("/src/ui/environmentManifest.ts");
     const yaml = manifest.formatEnvironmentManifest({
-      apiVersion: "agentkit.studio/v1alpha1",
+      apiVersion: "agentkit.studio/v3",
       kind: "Environment",
       metadata: {
         id: "env-1",
@@ -359,7 +445,7 @@ test("opens a version-bound environment manifest beside the primary card action"
         updatedAt: "2026-08-31T01:05:03Z",
       },
     });
-    assert.match(yaml, /^apiVersion: agentkit\.studio\/v1alpha1$/m);
+    assert.match(yaml, /^apiVersion: agentkit\.studio\/v3$/m);
     assert.match(yaml, /^kind: Environment$/m);
     assert.match(yaml, /^  image: registry\.example\/browser:latest$/m);
     assert.match(yaml, /^    - playwright$/m);
@@ -369,12 +455,81 @@ test("opens a version-bound environment manifest beside the primary card action"
   assert.match(manifestSource, /stringify\(manifest/);
 });
 
+test("accepts legacy and Codex Sandbox environment manifests", async () => {
+  const server = await createServer({
+    appType: "custom",
+    logLevel: "silent",
+    optimizeDeps: { noDiscovery: true },
+    server: { middlewareMode: true },
+  });
+  try {
+    const client = await server.ssrLoadModule("/src/adk/client.ts");
+    const formatter = await server.ssrLoadModule(
+      "/src/ui/environmentManifest.ts",
+    );
+    const manifest = {
+      apiVersion: "agentkit.studio/v3",
+      kind: "Environment",
+      metadata: {
+        id: "env-codex",
+        name: "Codex Sandbox",
+        version: "20260902T010203Z-a1b2c3d4",
+        description: "Codex development environment",
+      },
+      spec: {
+        image: "registry.example/codex:latest",
+        baseEnvironment: "codex-sandbox",
+        baseImage: "registry.example/codexenv:1.1.0",
+        operatingSystem: "ubuntu-22.04",
+        language: "python-3.12",
+        executionRuntime: "veadk",
+        packages: [],
+        capabilities: ["shell-exec"],
+        skills: [],
+      },
+      status: {
+        phase: "available",
+        toolId: "tool-codex",
+        toolStatus: "ready",
+        createdAt: "2026-09-02T01:02:03Z",
+        updatedAt: "2026-09-02T01:05:03Z",
+      },
+    };
+
+    const codexManifest = client.parseEnvironmentManifest(manifest);
+    assert.equal(codexManifest.spec.baseEnvironment, "codex-sandbox");
+    assert.match(
+      formatter.formatEnvironmentManifest(codexManifest),
+      /^  baseEnvironment: codex-sandbox$/m,
+    );
+
+    const legacyManifest = client.parseEnvironmentManifest({
+      ...manifest,
+      apiVersion: "agentkit.studio/v1alpha1",
+      metadata: { ...manifest.metadata, id: "env-aio", name: "AIO Sandbox" },
+      spec: { ...manifest.spec, baseEnvironment: "aio-sandbox" },
+    });
+    assert.equal(legacyManifest.spec.baseEnvironment, "aio-sandbox");
+  } finally {
+    await server.close();
+  }
+});
+
 test("keeps environment card metadata focused on its update time", () => {
   const cardSource = environmentSource.slice(
     environmentSource.indexOf("{visibleEnvironments.map"),
     environmentSource.indexOf("</ResourceGrid>", environmentSource.indexOf("{visibleEnvironments.map")),
   );
   assert.match(cardSource, /metadata=\{\[[\s\S]*?label: "更新"/);
+  assert.match(cardSource, /value: environmentUpdatedAt\(environment\.updatedAt\)/);
+  assert.match(cardSource, /title: environmentUpdatedAtTitle\(environment\.updatedAt\)/);
+  assert.match(environmentSource, /return formatRelativeTimeLabel\(value\)/);
+  assert.match(environmentSource, /dateStyle: "medium"/);
+  assert.match(environmentSource, /timeStyle: "medium"/);
+  assert.doesNotMatch(
+    environmentStyles,
+    /\.environment-card \.resource-card__metadata > div:last-child\s*\{[\s\S]*?display:\s*none/,
+  );
   assert.doesNotMatch(cardSource, /label: "基础环境"|label: "语言"|label: "工作区"/);
 });
 

@@ -45,41 +45,38 @@ import "./Sidebar.css";
 const SIDEBAR_AUTO_COLLAPSE_QUERY = "(max-width: 860px)";
 
 function ScrollableHistoryTitle({ title }: { title: string }) {
-  const titleRef = useRef<HTMLSpanElement>(null);
-  const [fadeEdges, setFadeEdges] = useState({ left: false, right: false });
-
-  const updateFadeEdges = () => {
-    const element = titleRef.current;
-    if (!element) return;
-    const next = {
-      left: element.scrollLeft > 1,
-      right: element.scrollLeft + element.clientWidth < element.scrollWidth - 1,
-    };
-    setFadeEdges((current) => (
-      current.left === next.left && current.right === next.right ? current : next
-    ));
-  };
+  const viewportRef = useRef<HTMLSpanElement>(null);
+  const contentRef = useRef<HTMLSpanElement>(null);
+  const [overflowDistance, setOverflowDistance] = useState(0);
 
   useLayoutEffect(() => {
-    const element = titleRef.current;
-    if (!element) return undefined;
-    updateFadeEdges();
-    const observer = new ResizeObserver(updateFadeEdges);
-    observer.observe(element);
-    if (element.firstElementChild) observer.observe(element.firstElementChild);
+    const viewport = viewportRef.current;
+    const content = contentRef.current;
+    if (!viewport || !content) return undefined;
+    const updateOverflowDistance = () => {
+      const next = Math.max(0, Math.ceil(content.scrollWidth - viewport.clientWidth));
+      setOverflowDistance((current) => (current === next ? current : next));
+    };
+    updateOverflowDistance();
+    const observer = new ResizeObserver(updateOverflowDistance);
+    observer.observe(viewport);
+    observer.observe(content);
     return () => observer.disconnect();
   }, [title]);
 
+  const scrollDuration = Math.min(12, Math.max(4.8, 3.6 + overflowDistance / 36));
+  const titleStyle = {
+    "--history-title-translate": `-${overflowDistance}px`,
+    "--history-title-duration": `${scrollDuration.toFixed(2)}s`,
+  } as CSSProperties;
+
   return (
     <span
-      ref={titleRef}
-      className={`history-title${fadeEdges.left ? " has-left-fade" : ""}${
-        fadeEdges.right ? " has-right-fade" : ""
-      }`}
-      onScroll={updateFadeEdges}
-      onPointerEnter={updateFadeEdges}
+      ref={viewportRef}
+      className={`history-title${overflowDistance > 0 ? " is-overflowing" : ""}`}
+      style={titleStyle}
     >
-      <span className="history-title-text">{title}</span>
+      <span ref={contentRef} className="history-title-text">{title}</span>
     </span>
   );
 }
