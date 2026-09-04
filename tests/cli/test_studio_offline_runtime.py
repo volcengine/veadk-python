@@ -41,6 +41,14 @@ def _write_pure_python_wheel(path: Path, *, name: str, version: str) -> None:
         wheel.writestr(f"{dist_info}/RECORD", "")
 
 
+def _stage_root_only_updater(package_root: Path, destination: Path) -> None:
+    """Mirror the oldest released Scheduler staging contract exactly."""
+    requirements = package_root / "requirements.txt"
+    shutil.copy2(requirements, destination / requirements.name)
+    for wheel in package_root.glob("*.whl"):
+        shutil.copy2(wheel, destination / wheel.name)
+
+
 def test_lock_check_environment_uses_canonical_pypi() -> None:
     environment = offline_runtime._lock_check_environment(
         {
@@ -232,10 +240,10 @@ def test_build_offline_runtime_creates_local_only_contract(
         environment={"PATH": "/usr/bin"},
     )
 
-    staged_veadk = package_dir / "wheelhouse" / veadk_wheel.name
-    expected_wheels = sorted((package_dir / "wheelhouse").glob("*.whl"))
+    staged_veadk = package_dir / veadk_wheel.name
+    expected_wheels = sorted(package_dir.glob("*.whl"))
     assert requirements == "--no-index\n--require-hashes\n" + "".join(
-        f"./wheelhouse/{wheel.name} --hash=sha256:{offline_runtime._sha256(wheel)}\n"
+        f"./{wheel.name} --hash=sha256:{offline_runtime._sha256(wheel)}\n"
         for wheel in expected_wheels
     )
     assert "--find-links" not in requirements
@@ -255,21 +263,35 @@ def test_build_offline_runtime_creates_local_only_contract(
     assert verification[1:3] == ["pip", "install"]
     assert verification[-2:] == ["--requirements", "-"]
 
+    historical_stage = tmp_path / "historical-scheduler"
+    historical_stage.mkdir()
+    (package_dir / "requirements.txt").write_text(requirements, encoding="utf-8")
+    _stage_root_only_updater(package_dir, historical_stage)
+    assert sorted(path.name for path in historical_stage.glob("*.whl")) == sorted(
+        path.name for path in expected_wheels
+    )
+
     platform_parse = original_run(
         [
             uv,
             "pip",
             "install",
             "--dry-run",
-            "--no-deps",
+            "--offline",
+            "--no-index",
+            "--require-hashes",
             "--no-python-downloads",
+            "--python-version",
+            "3.12",
+            "--python-platform",
+            "x86_64-manylinux_2_28",
             "--target",
             str(tmp_path / "platform-target"),
             "--requirements",
             "-",
         ],
-        cwd=package_dir,
-        input=requirements,
+        cwd=historical_stage,
+        input=(historical_stage / "requirements.txt").read_text(encoding="utf-8"),
         text=True,
         capture_output=True,
         check=False,
