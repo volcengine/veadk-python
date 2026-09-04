@@ -233,7 +233,7 @@ RUN set -eux; \\
     done; \\
     test -d src/veadk
 RUN uv pip install --system --index-url https://mirrors.aliyun.com/pypi/simple/ \\
-        "./src[harness,codex]" fastapi "uvicorn[standard]"
+        "./src[extensions,database,harness,codex]" fastapi "uvicorn[standard]"
 EXPOSE 8000
 CMD ["python", "-m", "uvicorn", "veadk.cloud.harness_app.app:app", "--host", "0.0.0.0", "--port", "8000"]
 """
@@ -293,7 +293,6 @@ Next steps:
 @click.group()
 def harness() -> None:
     """Create, configure, and deploy a VeADK harness server."""
-    pass
 
 
 @harness.command("create")
@@ -383,17 +382,34 @@ def _connection_options(func):
     return func
 
 
+_HTTP_ONLY_OVERRIDE_FIELDS = {
+    "knowledgebase",
+    "longterm_memory",
+    "temperature",
+    "top_p",
+    "max_tokens",
+    "presence_penalty",
+    "frequency_penalty",
+    "penalty",
+    "max_llm_calls",
+}
+
+
+def _hide_from_cli_override_flags(name: str) -> bool:
+    return name.startswith("registry_") or name in _HTTP_ONLY_OVERRIDE_FIELDS
+
+
 def _override_options(func):
     """Attach a ``--flag`` for every :class:`HarnessOverrides` field.
 
     Shared by ``add`` and ``invoke`` so their model / tools / skills /
     system-prompt / runtime flags stay identical and in sync with the model.
-    ``registry_*`` overrides are accepted by the HTTP API for AgentKit, but are
-    intentionally hidden from the VeADK CLI. Each exposed flag defaults to
-    ``None`` (unset → not applied).
+    Some HTTP-only overrides use nested objects or have dedicated CLI flags;
+    those are intentionally hidden from the VeADK CLI. Each exposed flag
+    defaults to ``None`` (unset → not applied).
     """
     for name, field in reversed(list(HarnessOverrides.model_fields.items())):
-        if name.startswith("registry_"):
+        if _hide_from_cli_override_flags(name):
             continue
         option: dict = {
             "default": None,
@@ -565,14 +581,15 @@ def show(path: str) -> None:
     click.echo("")
     click.secho("Overridable at invoke time:", fg="green", bold=True)
     for name, field in HarnessOverrides.model_fields.items():
-        if name.startswith("registry_"):
+        if _hide_from_cli_override_flags(name):
             continue
         flag = "--" + name.replace("_", "-")
         click.echo(f"  {flag}: {field.description or name}")
     click.echo("")
     click.echo(
         "Override per call via `veadk harness invoke ... --<flag>`. "
-        "Memory, knowledgebase, and registry are not exposed as VeADK CLI overrides."
+        "HTTP-only overrides such as memory, knowledgebase, sampling params, "
+        "and registry are not exposed as VeADK CLI overrides."
     )
 
 
