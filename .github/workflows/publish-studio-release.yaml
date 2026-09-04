@@ -74,6 +74,9 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@v6
 
+      - name: Validate frozen Studio runtime lock
+        run: uv lock --check
+
       - name: Build and validate Studio bundle
         env:
           PIP_INDEX_URL: https://mirrors.aliyun.com/pypi/simple/
@@ -85,7 +88,7 @@ jobs:
           output_dir="$RUNNER_TEMP/studio-release-output"
           version="$(TZ=Asia/Shanghai date +%Y%m%d%H%M%S)"
           export output_dir version
-          uv run --group dev python - <<'PY'
+          uv run --frozen --group dev python - <<'PY'
           import json
           import os
           from pathlib import Path
@@ -133,7 +136,7 @@ jobs:
           runtime_venv="$RUNNER_TEMP/studio-release-runtime"
           export package_dir runtime_venv
 
-          uv run --group dev python - <<'PY'
+          uv run --frozen --group dev python - <<'PY'
           import os
           from pathlib import Path
 
