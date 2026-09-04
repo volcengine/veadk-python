@@ -449,6 +449,71 @@ def _public_artifact_policy(bucket: str) -> dict[str, object]:
     }
 
 
+def _normalized_policy_statement(statement: dict[str, object]) -> dict[str, object]:
+    """Normalize TOS scalar/list response variants for semantic comparison."""
+
+    normalized = dict(statement)
+    for field in ("Principal", "Action", "Resource"):
+        value = normalized.get(field)
+        values = value if isinstance(value, list) else [value]
+        normalized[field] = sorted(
+            values,
+            key=lambda item: json.dumps(
+                item,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+        )
+    return normalized
+
+
+def _policy_statement_matches(
+    actual: dict[str, object],
+    expected: dict[str, object],
+) -> bool:
+    return _normalized_policy_statement(actual) == _normalized_policy_statement(
+        expected
+    )
+
+
+def _policy_matches(actual: object, expected: object) -> bool:
+    """Compare complete policies while accepting only observed TOS normalization."""
+
+    if not isinstance(actual, dict) or not isinstance(expected, dict):
+        return False
+    actual_metadata = {
+        key: value for key, value in actual.items() if key != "Statement"
+    }
+    expected_metadata = {
+        key: value for key, value in expected.items() if key != "Statement"
+    }
+    if "Version" not in expected_metadata and actual_metadata.get("Version") == "1.0":
+        actual_metadata.pop("Version")
+    if actual_metadata != expected_metadata:
+        return False
+
+    def normalized_statements(policy: dict[str, object]) -> list[dict[str, object]]:
+        raw = policy.get("Statement", [])
+        values = [raw] if isinstance(raw, dict) else raw
+        if not isinstance(values, list) or not all(
+            isinstance(item, dict) for item in values
+        ):
+            return []
+        statements = [_normalized_policy_statement(item) for item in values]
+        return sorted(
+            statements,
+            key=lambda item: json.dumps(
+                item,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+        )
+
+    actual_statements = normalized_statements(actual)
+    expected_statements = normalized_statements(expected)
+    return bool(actual_statements) and actual_statements == expected_statements
+
+
 def _is_tos_not_found(error: Exception) -> bool:
     return isinstance(error, KeyError) or getattr(error, "status_code", None) == 404
 
@@ -486,7 +551,7 @@ def _merge_public_artifact_policy(
         for statement in statements
         if statement.get("Sid") == _PUBLIC_ARTIFACT_POLICY_SID
     ]
-    if len(owned) > 1 or (owned and owned[0] != expected):
+    if len(owned) > 1 or (owned and not _policy_statement_matches(owned[0], expected)):
         raise RuntimeError("Studio public artifact bucket policy has a conflict.")
     if owned:
         policy["Statement"] = statements
@@ -545,8 +610,8 @@ def _ensure_public_artifact_bucket(client: Any, provider: CloudProvider) -> str:
         raise RuntimeError(
             "Studio public artifact bucket policy verification failed."
         ) from error
-    verified, _ = _merge_public_artifact_policy(actual, bucket)
-    if verified != expected:
+    verified, verification_changed = _merge_public_artifact_policy(actual, bucket)
+    if verification_changed or not _policy_matches(verified, expected):
         raise RuntimeError("Studio public artifact bucket policy verification failed.")
     return bucket
 
