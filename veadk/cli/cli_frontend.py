@@ -5771,12 +5771,15 @@ def _run_frontend_server(
             or isinstance(max_instance, bool)
             or not isinstance(min_instance, int)
             or not isinstance(max_instance, int)
-            or min_instance < 1
+            or min_instance < 0
             or max_instance < 1
         ):
             raise HTTPException(
                 status_code=400,
-                detail="Runtime instance range must use positive integers",
+                detail=(
+                    "Runtime minInstance must be a non-negative integer and "
+                    "maxInstance must be a positive integer"
+                ),
             )
         if min_instance > max_instance:
             raise HTTPException(
