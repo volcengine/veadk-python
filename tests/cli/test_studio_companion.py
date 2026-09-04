@@ -26,6 +26,7 @@ import zipfile
 import pytest
 
 from veadk.cli import agentkit_cli
+from veadk.cli import studio_companion
 from veadk.cli.agentkit_cli import (
     AGENTKIT_CLI_ENV,
     AGENTKIT_CLI_VERSION,
@@ -37,7 +38,11 @@ from veadk.cli.agentkit_cli import (
     install_agentkit_cli,
     resolve_agentkit_cli,
 )
-from veadk.cli.studio_companion import required_agentkit_cli_version
+from veadk.cli.studio_artifacts import StudioArtifact, StudioRuntimeManifest
+from veadk.cli.studio_companion import (
+    required_agentkit_cli_version,
+    validate_installed_agentkit_cli,
+)
 
 
 def _script(version: str = AGENTKIT_CLI_VERSION) -> bytes:
@@ -104,6 +109,82 @@ def test_platform_mapping_rejects_unsupported_platform() -> None:
 
 def test_required_version_is_owned_by_veadk_not_distribution_metadata() -> None:
     assert required_agentkit_cli_version() == "0.52.14"
+
+
+def test_companion_materializes_manifest_cli_for_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wheel = tmp_path / "dependency.whl"
+    wheel.write_bytes(b"wheel")
+    archive = tmp_path / "agentkit-linux-x64.tar.gz"
+    archive.write_bytes(b"cli")
+    manifest = StudioRuntimeManifest.create(
+        "byteplus",
+        (
+            StudioArtifact.from_path(wheel, provider="byteplus", kind="wheel"),
+            StudioArtifact.from_path(
+                archive,
+                provider="byteplus",
+                kind="agentkit-cli",
+            ),
+        ),
+    )
+    manifest_path = tmp_path / "studio-runtime.json"
+    manifest_path.write_bytes(manifest.to_json())
+    captured: dict[str, object] = {}
+
+    def _download(artifact: StudioArtifact, destination: Path) -> Path:
+        captured["artifact"] = artifact
+        captured["destination"] = destination
+        return archive
+
+    def _resolve(**kwargs: object) -> Path:
+        captured.update(kwargs)
+        return tmp_path / "ak"
+
+    monkeypatch.setattr(studio_companion, "download_studio_artifact", _download)
+    monkeypatch.setattr(studio_companion, "resolve_agentkit_cli", _resolve)
+    monkeypatch.setattr(
+        studio_companion,
+        "default_agentkit_cli_cache_root",
+        lambda: tmp_path / "cache",
+    )
+
+    assert (
+        validate_installed_agentkit_cli(
+            runtime_manifest=manifest_path,
+            provider="byteplus",
+        )
+        == AGENTKIT_CLI_VERSION
+    )
+    assert captured["artifact"].provider == "byteplus"  # type: ignore[union-attr]
+    assert captured["archive"] == archive
+
+
+def test_companion_rejects_runtime_manifest_provider_mismatch(tmp_path: Path) -> None:
+    wheel = tmp_path / "dependency.whl"
+    wheel.write_bytes(b"wheel")
+    archive = tmp_path / "agentkit-linux-x64.tar.gz"
+    archive.write_bytes(b"cli")
+    manifest = StudioRuntimeManifest.create(
+        "volcengine",
+        (
+            StudioArtifact.from_path(wheel, provider="volcengine", kind="wheel"),
+            StudioArtifact.from_path(
+                archive,
+                provider="volcengine",
+                kind="agentkit-cli",
+            ),
+        ),
+    )
+    manifest_path = tmp_path / "studio-runtime.json"
+    manifest_path.write_bytes(manifest.to_json())
+
+    with pytest.raises(AgentKitCliError, match="provider"):
+        validate_installed_agentkit_cli(
+            runtime_manifest=manifest_path,
+            provider="byteplus",
+        )
 
 
 def test_install_verified_archive_and_reuse_cache(tmp_path: Path) -> None:
