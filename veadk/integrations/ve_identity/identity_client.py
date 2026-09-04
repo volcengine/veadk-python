@@ -40,7 +40,12 @@ from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
 from veadk.config import settings
 
 from veadk.utils.logger import get_logger
-from veadk.utils.cloud_provider import CloudProvider, cloud_provider_from_env
+from veadk.utils.cloud_provider import (
+    CloudProvider,
+    cloud_provider_from_env,
+    configure_openapi_tls,
+    identity_openapi_host,
+)
 
 logger = get_logger(__name__)
 
@@ -222,8 +227,11 @@ class IdentityClient:
         configuration.sk = self._initial_secret_key
         configuration.session_token = self._initial_session_token
         configuration.logger = {}
-        if self.provider == "byteplus":
-            configuration.host = f"https://id.{region}.byteplusapi.com"
+        identity_scheme = os.getenv("IDENTITY_OPENAPI_SCHEME", "https").strip()
+        configuration.host = (
+            f"{identity_scheme}://{identity_openapi_host(region, self.provider)}"
+        )
+        configure_openapi_tls(configuration)
 
         self._api_client = volcenginesdkid.IDApi(
             volcenginesdkcore.ApiClient(configuration)

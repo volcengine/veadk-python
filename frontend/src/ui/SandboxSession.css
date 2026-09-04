@@ -513,6 +513,16 @@
   opacity: 0.66;
 }
 
+.sandbox-dialog-disk-field {
+  margin-top: 12px;
+}
+
+.sandbox-dialog-field-help {
+  color: hsl(var(--muted-foreground));
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
 .sandbox-dialog-persistence {
   display: grid;
   gap: 3px;

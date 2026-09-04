@@ -19,14 +19,29 @@ from __future__ import annotations
 import httpx
 import pytest
 from fastapi import FastAPI
+from starlette.websockets import WebSocketDisconnect
 from fastapi.testclient import TestClient
 from typing_extensions import Self
 
 from veadk.cli.frontend_agent_proxy import (
     _rewrite_body,
+    _websocket_origin,
     mount_agent_surface_proxy_routes,
 )
 from veadk.cli.frontend_sandbox_proxy import SandboxProxyTarget
+
+
+def test_hermes_port_proxy_websocket_uses_local_service_origin() -> None:
+    target = "https://sandbox.example/proxy/4500/api/ws?Authorization=secret"
+
+    assert (
+        _websocket_origin("hermes", "proxy/4500/api/ws", target)
+        == "http://localhost:4500"
+    )
+    assert (
+        _websocket_origin("openclaw", "openclaw/api/ws", target)
+        == "https://sandbox.example"
+    )
 
 
 def test_agent_surface_rewrite_only_changes_the_agent_base_path() -> None:
@@ -63,6 +78,89 @@ def test_hermes_surface_rewrite_removes_private_gateway_query() -> None:
     assert "Authorization" not in rewritten
     assert "hermes-instance" not in rewritten
     assert "hermes-secret" not in rewritten
+
+
+def test_hermes_aio_rewrite_routes_workspace_panels_through_surface() -> None:
+    prefix = "/web/hermes/sessions/session-1/surface/token-1"
+    body = (
+        b'<script>const code = "/code-server/";'
+        b'const terminal = "/terminal";'
+        b'const jupyter = "/jupyter/lab";'
+        b'const api = "/v1/ping";'
+        b"const proxy = `/proxy/8642/v1/chat/completions`;</script>"
+        b'<link href="/static/sandbox/app.css" rel="stylesheet">'
+    )
+
+    rewritten = _rewrite_body(body, "text/html", prefix, "hermes").decode()
+
+    for path in (
+        "/code-server/",
+        "/terminal",
+        "/jupyter/lab",
+        "/v1/ping",
+        "/proxy/8642/v1/chat/completions",
+        "/static/sandbox/app.css",
+    ):
+        assert f"{prefix}{path}" in rewritten
+
+
+def test_hermes_aio_entrypoint_keeps_its_relative_panel_resolution() -> None:
+    prefix = "/web/hermes/sessions/session-1/surface/token-1"
+    body = (
+        b"<html><head><title>AIO Sandbox</title></head>"
+        b'<script>const code = "/code-server/";'
+        b'const terminal = "/terminal";</script></html>'
+    )
+
+    rewritten = _rewrite_body(body, "text/html", prefix, "hermes").decode()
+
+    assert 'const code = "/code-server/"' in rewritten
+    assert 'const terminal = "/terminal"' in rewritten
+    assert f"{prefix}/code-server/" not in rewritten
+
+
+@pytest.mark.parametrize("proxy_kind", ["proxy", "absproxy"])
+@pytest.mark.parametrize("port", ["4500", "9119"])
+def test_hermes_dashboard_rewrite_preserves_its_port_proxy_mount(
+    proxy_kind: str,
+    port: str,
+) -> None:
+    prefix = "/web/hermes/sessions/session-1/surface/token-1"
+    body = (
+        b"<html><head><title>Hermes Agent - Dashboard</title>"
+        b'<link rel="icon" href="/favicon.ico">'
+        b'<script type="module" src="/assets/app.js"></script></head>'
+        b'<script>const api = "/api/status";'
+        b'const ws = new WebSocket("/api/ws");'
+        b'const files = "/files";'
+        b'const chat = "/chat";'
+        b'const logs = "/logs";'
+        b'const cron = "/cron";'
+        b'const channels = "/channels";'
+        b'const mcp = "/mcp";</script></html>'
+    )
+
+    rewritten = _rewrite_body(
+        body,
+        "text/html",
+        prefix,
+        "hermes",
+        upstream_path=f"{proxy_kind}/{port}/",
+    ).decode()
+
+    for path in (
+        "/favicon.ico",
+        "/assets/app.js",
+        "/api/status",
+        "/api/ws",
+        "/files",
+        "/chat",
+        "/logs",
+        "/cron",
+        "/channels",
+        "/mcp",
+    ):
+        assert f"{prefix}/{proxy_kind}/{port}{path}" in rewritten
 
 
 def test_deepseek_harness_rewrite_routes_root_assets_through_surface() -> None:
@@ -178,6 +276,68 @@ def test_agent_surface_proxy_keeps_endpoint_auth_server_side(
     assert 'const base64 = "/"' in response.text
     assert 'const api = "/api/status"' in response.text
     assert "server-secret" not in response.text
+
+
+def test_agent_surface_proxy_accepts_async_target_resolver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Client:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_: object) -> None:
+            return None
+
+        async def request(self, _method: str, _url: str, **_: object) -> httpx.Response:
+            return httpx.Response(
+                200, content=b"ok", headers={"content-type": "text/plain"}
+            )
+
+    monkeypatch.setattr("veadk.cli.frontend_agent_proxy.httpx.AsyncClient", _Client)
+    app = FastAPI()
+
+    async def _target(
+        kind: str,
+        session_id: str,
+        token: str,
+    ) -> SandboxProxyTarget:
+        assert (kind, session_id, token) == ("hermes", "session-1", "token-1")
+        return SandboxProxyTarget(endpoint="https://sandbox.example/")
+
+    mount_agent_surface_proxy_routes(app, _target)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/hermes/sessions/session-1/surface/token-1/proxy/4500/"
+        )
+
+    assert response.status_code == 200
+    assert response.text == "ok"
+
+
+def test_agent_surface_websocket_upgrades_before_invalid_capability_close() -> None:
+    app = FastAPI()
+
+    def _missing_target(
+        _kind: str,
+        _session_id: str,
+        _token: str,
+    ) -> SandboxProxyTarget:
+        raise KeyError("expired session")
+
+    mount_agent_surface_proxy_routes(app, _missing_target)
+
+    with TestClient(app) as client:
+        with pytest.raises(WebSocketDisconnect) as error:
+            with client.websocket_connect(
+                "/web/hermes/sessions/expired/surface/expired/proxy/4500/api/pty"
+            ) as websocket:
+                websocket.receive_text()
+
+    assert error.value.code == 1008
 
 
 def test_deepseek_harness_proxy_keeps_endpoint_auth_server_side(

@@ -1299,6 +1299,25 @@ def test_environment_sandbox_client_uses_studio_provider_endpoint_and_region(
     assert client.host == expected_host
 
 
+def test_environment_sandbox_client_preserves_vestack_agentkit_host(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "volc-ak")
+    monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "volc-sk")
+    monkeypatch.setenv("VEADK_STUDIO_DEPLOY_TARGET", "vestack")
+    monkeypatch.setenv("VOLCENGINE_AGENTKIT_HOST", "agentkit.internal.example")
+    app = _create_frontend_app(monkeypatch, tmp_path, provider="volcengine")
+
+    client = app.state.environment_sandbox_resolver._client_factory(
+        "volcengine",
+        "e70",
+    )
+
+    assert client.region == "e70"
+    assert client.host == "agentkit.internal.example"
+
+
 def test_environment_sandbox_client_rejects_cross_provider_mount(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

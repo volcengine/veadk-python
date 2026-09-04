@@ -131,6 +131,7 @@ def test_local_studio_mounts_snapshot_tools_into_sandbox_services() -> None:
         "        sandbox_gateway,\n"
         "        tool_id=sandbox_chat_codex_tool_id,\n"
         "        snapshot_tool_id=sandbox_chat_codex_snapshot_tool_id,\n"
+        "        managed_tool_spec=codex_managed_tool_spec,\n"
         "    )"
     ) in source
     assert (
@@ -166,7 +167,8 @@ def test_local_studio_mounts_snapshot_tools_into_sandbox_services() -> None:
         '            kind="hermes",\n'
         "            tool_id=sandbox_chat_hermes_tool_id,\n"
         "            snapshot_tool_id=sandbox_chat_hermes_snapshot_tool_id,\n"
-        "        )"
+        "            managed_tool_spec=hermes_managed_tool_spec,\n"
+        '            surface_path="/proxy/4500/",\n'
     ) in source
 
 

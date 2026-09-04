@@ -71,6 +71,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import random
 import secrets
 import time
@@ -496,8 +497,18 @@ class OAuth2Config(BaseModel):
             except Exception as e:
                 logger.warning("Callback registration skipped (may exist): %s", e)
 
-        # Step 4: Fetch OIDC discovery configuration
-        base_url = f"https://{user_pool_domain}"
+        # Step 4: Fetch OIDC discovery configuration. Public-cloud user pools
+        # expose discovery at the domain root over HTTPS. VeStack installations
+        # may expose it over HTTP under /userpool/<uid>; allow deploy-time
+        # configuration without changing the provider-returned OAuth endpoints.
+        base_url_template = os.getenv("VEIDENTITY_OIDC_BASE_URL", "").strip()
+        if base_url_template:
+            base_url = base_url_template.format(
+                user_pool_uid=user_pool_id,
+                user_pool_domain=user_pool_domain,
+            ).rstrip("/")
+        else:
+            base_url = f"https://{user_pool_domain}"
         oidc_config = _fetch_oidc_discovery(base_url)
 
         # Step 5: Build OAuth2Config from discovered endpoints

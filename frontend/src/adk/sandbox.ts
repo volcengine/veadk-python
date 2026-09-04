@@ -231,6 +231,7 @@ export interface SandboxStartOptions extends SandboxRequestOptions {
   displayName?: string;
   modelId?: string;
   persistent?: boolean;
+  diskGb?: number;
   projectId?: string;
   baseVersionId?: string;
 }
@@ -1237,6 +1238,7 @@ function createSandboxClient(
                 }
               : {}),
           ...(config.textOnly ? {} : { persistent: options.persistent ?? true }),
+          ...(options.diskGb !== undefined ? { diskGb: options.diskGb } : {}),
         }),
         signal: options.signal,
       },
@@ -1283,6 +1285,7 @@ function createSandboxClient(
         body: JSON.stringify({
           displayName: options.displayName?.trim() ?? "",
           persistent: options.persistent ?? true,
+          ...(options.diskGb !== undefined ? { diskGb: options.diskGb } : {}),
         }),
         signal: options.signal,
       },
