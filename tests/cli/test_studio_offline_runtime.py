@@ -20,6 +20,25 @@ import pytest
 from frontend.service.studio_release_server import offline_runtime
 
 
+def test_lock_check_environment_uses_canonical_pypi() -> None:
+    environment = offline_runtime._lock_check_environment(
+        {
+            "PATH": "/usr/bin",
+            "UV_DEFAULT_INDEX": "https://mirror.invalid/simple",
+            "UV_INDEX": "private=https://mirror.invalid/simple",
+            "UV_INDEX_URL": "https://legacy.invalid/simple",
+            "UV_EXTRA_INDEX_URL": "https://extra.invalid/simple",
+            "PIP_INDEX_URL": "https://pip.invalid/simple",
+            "PIP_EXTRA_INDEX_URL": "https://pip-extra.invalid/simple",
+        }
+    )
+
+    assert environment == {
+        "PATH": "/usr/bin",
+        "UV_DEFAULT_INDEX": "https://pypi.org/simple",
+    }
+
+
 def test_linux_runtime_lock_uses_target_markers(tmp_path: Path) -> None:
     exported = tmp_path / "exported.txt"
     exported.write_text(
@@ -34,6 +53,52 @@ def test_linux_runtime_lock_uses_target_markers(tmp_path: Path) -> None:
     offline_runtime._write_linux_runtime_lock(exported, target)
 
     assert target.read_text(encoding="utf-8") == ("common==1\nlinux-only==2\n")
+
+
+def test_build_offline_runtime_requires_committed_lock(tmp_path: Path) -> None:
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    veadk_wheel = tmp_path / "veadk_python-1.0-py3-none-any.whl"
+    veadk_wheel.write_bytes(b"veadk")
+
+    with pytest.raises(ValueError, match="requires uv.lock"):
+        offline_runtime.build_studio_offline_runtime(
+            source_root,
+            tmp_path / "package",
+            veadk_wheel=veadk_wheel,
+            dependency_sources=(),
+            environment={"PATH": ""},
+        )
+
+
+def test_build_offline_runtime_rejects_stale_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    (source_root / "uv.lock").write_text("stale", encoding="utf-8")
+    veadk_wheel = tmp_path / "veadk_python-1.0-py3-none-any.whl"
+    veadk_wheel.write_bytes(b"veadk")
+    monkeypatch.setattr(
+        offline_runtime.shutil, "which", lambda *_args, **_kwargs: "/usr/bin/uv"
+    )
+
+    def reject_lock(command: list[str], **_kwargs: object) -> None:
+        assert command[1:] == ["lock", "--check"]
+        raise subprocess.CalledProcessError(2, command)
+
+    monkeypatch.setattr(offline_runtime.subprocess, "run", reject_lock)
+
+    with pytest.raises(ValueError, match="Studio runtime lock is stale"):
+        offline_runtime.build_studio_offline_runtime(
+            source_root,
+            tmp_path / "package",
+            veadk_wheel=veadk_wheel,
+            dependency_sources=(),
+            environment={"PATH": "/usr/bin"},
+        )
+    assert not (tmp_path / "package").exists()
 
 
 def test_build_offline_runtime_creates_local_only_contract(
@@ -95,6 +160,7 @@ def test_build_offline_runtime_creates_local_only_contract(
     assert "linux-only==2 --hash=sha256:" in runtime_lock
     assert "tos==1 --hash=sha256:" in runtime_lock
     assert (package_dir / "wheelhouse" / veadk_wheel.name).read_bytes() == b"veadk"
+    assert commands[0][1:] == ["lock", "--check"]
     download = next(command for command in commands if "download" in command)
     assert "--only-binary=:all:" in download
     assert "manylinux_2_17_x86_64" in download

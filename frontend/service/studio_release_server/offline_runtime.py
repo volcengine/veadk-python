@@ -44,6 +44,24 @@ _LINUX_PLATFORMS = (
 _PYTHON_VERSION = "3.12"
 _PYTHON_ABI = "cp312"
 _PIP_VERSION = "25.2"
+_CANONICAL_PYPI_INDEX = "https://pypi.org/simple"
+_INDEX_ENVIRONMENT_KEYS = (
+    "UV_DEFAULT_INDEX",
+    "UV_INDEX",
+    "UV_INDEX_URL",
+    "UV_EXTRA_INDEX_URL",
+    "PIP_INDEX_URL",
+    "PIP_EXTRA_INDEX_URL",
+)
+
+
+def _lock_check_environment(environment: Mapping[str, str]) -> dict[str, str]:
+    """Validate the committed lock against its canonical package index."""
+    lock_environment = dict(environment)
+    for key in _INDEX_ENVIRONMENT_KEYS:
+        lock_environment.pop(key, None)
+    lock_environment["UV_DEFAULT_INDEX"] = _CANONICAL_PYPI_INDEX
+    return lock_environment
 
 
 def build_studio_offline_runtime(
@@ -61,12 +79,18 @@ def build_studio_offline_runtime(
     uv = shutil.which("uv", path=(environment or os.environ).get("PATH"))
     if uv is None:
         raise ValueError("uv is required to build the Studio offline runtime.")
+    build_environment = dict(environment or os.environ)
+    _run(
+        [uv, "lock", "--check"],
+        cwd=source_root,
+        environment=_lock_check_environment(build_environment),
+        failure="Studio runtime lock is stale.",
+    )
 
     package_dir.mkdir(parents=True, exist_ok=True)
     wheelhouse = package_dir / STUDIO_RUNTIME_WHEELHOUSE
     wheelhouse.mkdir()
     runtime_lock = package_dir / STUDIO_RUNTIME_LOCK
-    build_environment = dict(environment or os.environ)
 
     with tempfile.TemporaryDirectory(prefix="veadk_studio_runtime_") as tmp:
         workspace = Path(tmp)
