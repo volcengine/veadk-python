@@ -56,6 +56,7 @@ def studio_run_script(
     site_logo_filename: str | None = None,
     *,
     provider: CloudProvider | None = DEFAULT_CLOUD_PROVIDER,
+    runtime_manifest_filename: str | None = None,
 ) -> str:
     """Return the authenticated VeFaaS entrypoint used by Studio."""
     provider_argument = (
@@ -70,6 +71,14 @@ def studio_run_script(
     if site_logo_filename:
         command += f' --site-logo "$ROOT_DIR/{site_logo_filename}"'
     command += ' --host "$HOST" --port "$PORT"\n'
+    companion = (
+        "python3 -m veadk.cli.studio_companion "
+        f'--runtime-manifest "$ROOT_DIR/{runtime_manifest_filename}" '
+        f"--provider {provider_argument}\n"
+        if runtime_manifest_filename
+        else "python3 -m veadk.cli.studio_companion "
+        f'--archive "$ROOT_DIR/{STUDIO_AGENTKIT_CLI_ARTIFACT.filename}"\n'
+    )
     return (
         "#!/bin/bash\n"
         "set -ex\n"
@@ -79,8 +88,7 @@ def studio_run_script(
         "HOST=0.0.0.0\n"
         "PORT=${_FAAS_RUNTIME_PORT:-8000}\n"
         'export PYTHONPATH="./site-packages${PYTHONPATH:+:$PYTHONPATH}"\n'
-        "python3 -m veadk.cli.studio_companion "
-        f'--archive "$ROOT_DIR/{STUDIO_AGENTKIT_CLI_ARTIFACT.filename}"\n'
+        f"{companion}"
         f"{command}"
     )
 

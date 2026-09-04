@@ -37,8 +37,9 @@ import urllib.request
 import zipfile
 from typing import Any
 
-
 AGENTKIT_CLI_VERSION = "0.52.14"
+# Direct bootstrap uses the one verified public upstream. Provider-local Studio
+# bundles materialize this archive through their signed runtime manifest instead.
 AGENTKIT_CLI_RELEASE_HOST = "agentkit-cli.tos-cn-beijing.volces.com"
 AGENTKIT_CLI_RELEASE_BASE = f"https://{AGENTKIT_CLI_RELEASE_HOST}"
 AGENTKIT_CLI_ENV = "VEADK_AGENTKIT_CLI"

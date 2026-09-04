@@ -37,6 +37,10 @@ from typing import Any
 from fastapi import HTTPException, Request
 
 from veadk.cli.frontend_branding import SiteLogo
+from veadk.cli.studio_artifacts import (
+    StudioRuntimeManifest,
+    probe_studio_artifact,
+)
 from veadk.cli.studio_package import studio_run_script
 from veadk.cli.studio_release import (
     DEFAULT_RELEASE_PREFIX,
@@ -405,12 +409,12 @@ class StudioSelfUpdater:
                 raise StudioReleaseError("只能选择比当前版本新的 Studio 版本。")
             with tempfile.TemporaryDirectory(prefix="veadk_studio_self_update_") as tmp:
                 workspace = Path(tmp)
-                archive = workspace / "studio-bundle.zip"
-                package_dir = workspace / "package"
-                self._set_progress("downloading", "正在下载并校验完整更新包")
-                store.download_bundle(manifest, archive)
+                package_dir = self._download_runtime_package(
+                    store,
+                    manifest,
+                    workspace,
+                )
                 self._set_progress("preparing", "正在准备 VeFaaS Function 代码")
-                extract_studio_bundle(archive, package_dir)
                 self._prepare_package(package_dir)
                 from veadk.integrations.ve_faas.ve_faas import VeFaaS
 
@@ -824,11 +828,63 @@ class StudioSelfUpdater:
             filename = f"site-logo.{self._branding_logo.extension}"
             (package_dir / filename).write_bytes(self._branding_logo.content)
         (package_dir / "run.sh").write_text(
-            studio_run_script(filename, provider=self._settings.provider),
+            studio_run_script(
+                filename,
+                provider=self._settings.provider,
+                runtime_manifest_filename=(
+                    "studio-runtime.json"
+                    if (package_dir / "studio-runtime.json").is_file()
+                    else None
+                ),
+            ),
             encoding="utf-8",
             newline="\n",
         )
         (package_dir / "run.sh").chmod(0o755)
+
+    def _download_runtime_package(
+        self,
+        store: StudioReleaseStore,
+        release: StudioReleaseManifest,
+        workspace: Path,
+    ) -> Path:
+        """Prefer a verified thin bundle while preserving the legacy full fallback."""
+
+        if release.runtime_epoch:
+            try:
+                self._set_progress("downloading", "正在下载并校验精简更新包")
+                thin_archive = workspace / "studio-bundle-thin.zip"
+                thin_package = workspace / "package-thin"
+                store.download_thin_bundle(release, thin_archive)
+                extract_studio_bundle(thin_archive, thin_package)
+                runtime = StudioRuntimeManifest.from_json(
+                    (thin_package / "studio-runtime.json").read_bytes()
+                )
+                if (
+                    runtime.provider != self._settings.provider
+                    or runtime.runtime_epoch != release.runtime_epoch
+                ):
+                    raise ValueError("Studio runtime manifest does not match release.")
+                for artifact in runtime.artifacts:
+                    probe_studio_artifact(artifact)
+                return thin_package
+            except Exception:
+                logger.warning(
+                    "Studio thin bundle is unavailable; using the full bundle"
+                )
+        self._set_progress(
+            "downloading",
+            (
+                "公共运行时制品不可用，正在切换完整离线更新包"
+                if release.runtime_epoch
+                else "正在下载并校验完整更新包"
+            ),
+        )
+        archive = workspace / "studio-bundle.zip"
+        package = workspace / "package"
+        store.download_bundle(release, archive)
+        extract_studio_bundle(archive, package)
+        return package
 
 
 def extract_studio_bundle(archive: Path, destination: Path) -> None:

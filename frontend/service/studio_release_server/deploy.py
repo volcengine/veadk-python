@@ -33,6 +33,11 @@ from pathlib import Path
 from typing import Any
 
 from veadk.cloud.cloud_agent_engine import CloudAgentEngine
+from veadk.cli.studio_artifacts import (
+    STUDIO_ARTIFACT_BUCKETS,
+    STUDIO_ARTIFACT_PREFIX,
+    STUDIO_ARTIFACT_REGIONS,
+)
 from veadk.utils.cloud_provider import (
     CloudProvider,
     default_region,
@@ -54,6 +59,7 @@ _JOB_PREFIX = "veadk/studio/release-server/jobs"
 _REPOSITORY = "volcengine/veadk-python"
 _ROLE_NAME = "VeADKStudioReleaseServerRole"
 _POLICY_NAME = "VeADKStudioReleaseServerPolicy"
+_PUBLIC_ARTIFACT_POLICY_SID = "PublicReadStudioRuntimeArtifacts"
 _NODE_VERSION = "22.17.0"
 _NODE_ARCHIVE_NAME = f"node-v{_NODE_VERSION}-linux-x64.tar.xz"
 _NODE_ARCHIVE_URL = (
@@ -278,6 +284,7 @@ def _runtime_environment(
     bucket: str,
     provider: CloudProvider,
     region: str,
+    thin_bundles: bool = False,
 ) -> dict[str, str]:
     return {
         "STUDIO_RELEASE_SERVER_API_KEY": api_key,
@@ -287,6 +294,7 @@ def _runtime_environment(
         "STUDIO_RELEASE_PREFIX": _RELEASE_PREFIX,
         "STUDIO_RELEASE_JOB_PREFIX": _JOB_PREFIX,
         "STUDIO_RELEASE_REPOSITORY": _REPOSITORY,
+        "STUDIO_RELEASE_THIN_BUNDLES": "true" if thin_bundles else "false",
     }
 
 
@@ -423,6 +431,124 @@ def _ensure_release_bucket(client: Any, bucket: str) -> None:
         bucket=bucket,
         tag_set=[tos.models2.Tag(key="note", value="勿删")],
     )
+
+
+def _public_artifact_policy(bucket: str) -> dict[str, object]:
+    """Allow anonymous reads only below the immutable artifact namespace."""
+
+    return {
+        "Statement": [
+            {
+                "Sid": _PUBLIC_ARTIFACT_POLICY_SID,
+                "Effect": "Allow",
+                "Principal": "*",
+                "Action": ["tos:GetObject"],
+                "Resource": [f"trn:tos:::{bucket}/{STUDIO_ARTIFACT_PREFIX}/*"],
+            }
+        ]
+    }
+
+
+def _is_tos_not_found(error: Exception) -> bool:
+    return isinstance(error, KeyError) or getattr(error, "status_code", None) == 404
+
+
+def _merge_public_artifact_policy(
+    current: object,
+    bucket: str,
+) -> tuple[dict[str, object], bool]:
+    """Add only the policy statement owned by this deployer."""
+
+    if current is None:
+        policy: dict[str, object] = {}
+    elif isinstance(current, dict):
+        policy = dict(current)
+    else:
+        raise RuntimeError("Studio public artifact bucket policy is invalid.")
+    raw_statements = policy.get("Statement", [])
+    if isinstance(raw_statements, dict):
+        statements = [dict(raw_statements)]
+    elif isinstance(raw_statements, list) and all(
+        isinstance(item, dict) for item in raw_statements
+    ):
+        statements = [dict(item) for item in raw_statements]
+    else:
+        raise RuntimeError("Studio public artifact bucket policy is invalid.")
+    expected_policy = _public_artifact_policy(bucket)
+    expected_statements = expected_policy["Statement"]
+    if not isinstance(expected_statements, list) or not isinstance(
+        expected_statements[0], dict
+    ):
+        raise RuntimeError("Studio public artifact bucket policy is invalid.")
+    expected = dict(expected_statements[0])
+    owned = [
+        statement
+        for statement in statements
+        if statement.get("Sid") == _PUBLIC_ARTIFACT_POLICY_SID
+    ]
+    if len(owned) > 1 or (owned and owned[0] != expected):
+        raise RuntimeError("Studio public artifact bucket policy has a conflict.")
+    if owned:
+        policy["Statement"] = statements
+        return policy, False
+    statements.append(expected)
+    policy["Statement"] = statements
+    return policy, True
+
+
+def _ensure_do_not_delete_tag(client: Any, bucket: str) -> None:
+    """Add the marker without replacing unrelated bucket tags."""
+
+    import tos
+
+    try:
+        current = list(
+            getattr(client.get_bucket_tagging(bucket=bucket), "tag_set", []) or []
+        )
+    except Exception as error:
+        if not _is_tos_not_found(error):
+            raise
+        current = []
+    if any(getattr(item, "key", None) == "note" for item in current):
+        return
+    client.put_bucket_tagging(
+        bucket=bucket,
+        tag_set=[*current, tos.models2.Tag(key="note", value="勿删")],
+    )
+
+
+def _ensure_public_artifact_bucket(client: Any, provider: CloudProvider) -> str:
+    """Create one isolated bucket and merge its prefix-only public-read policy."""
+
+    bucket = STUDIO_ARTIFACT_BUCKETS[provider]
+    buckets = list(getattr(client.list_buckets(), "buckets", []) or [])
+    if not any(getattr(item, "name", "") == bucket for item in buckets):
+        client.create_bucket(bucket=bucket)
+    _ensure_do_not_delete_tag(client, bucket)
+    try:
+        current = json.loads(client.get_bucket_policy(bucket=bucket).policy)
+    except Exception as error:
+        if not _is_tos_not_found(error):
+            raise RuntimeError(
+                "Studio public artifact bucket policy lookup failed."
+            ) from error
+        current = None
+    expected, changed = _merge_public_artifact_policy(current, bucket)
+    if changed:
+        client.put_bucket_policy(
+            bucket=bucket,
+            policy=json.dumps(expected, sort_keys=True),
+        )
+    try:
+        actual = json.loads(client.get_bucket_policy(bucket=bucket).policy)
+    except Exception as error:
+        raise RuntimeError(
+            "Studio public artifact bucket policy verification failed."
+        ) from error
+    verified, _ = _merge_public_artifact_policy(actual, bucket)
+    if verified != expected:
+        raise RuntimeError("Studio public artifact bucket policy verification failed.")
+    return bucket
 
 
 def _release_function(service: Any, function_id: str) -> None:
@@ -726,6 +852,7 @@ def _deploy(
     access_key: str,
     secret_key: str,
     session_token: str,
+    thin_bundles: bool = False,
 ) -> tuple[str, str, str]:
     """Create or update the Function and bind it to an existing gateway."""
     engine = CloudAgentEngine(
@@ -741,6 +868,7 @@ def _deploy(
         bucket=_release_bucket(provider),
         provider=provider,
         region=region,
+        thin_bundles=thin_bundles,
     )
     with tempfile.TemporaryDirectory(prefix="studio_release_server_") as tmp:
         deployment_root = Path(tmp)
@@ -829,6 +957,16 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Deploy without changing repository secrets.",
     )
+    parser.add_argument(
+        "--provision-public-artifacts-only",
+        action="store_true",
+        help="Provision only the isolated public runtime artifact bucket.",
+    )
+    parser.add_argument(
+        "--enable-thin-bundles",
+        action="store_true",
+        help="Enable public-artifact thin Studio bundles (default: disabled).",
+    )
     return parser
 
 
@@ -846,6 +984,31 @@ def main() -> None:
             f"{credential_prefix}_ACCESS_KEY and {credential_prefix}_SECRET_KEY "
             "are required."
         )
+    if args.provision_public_artifacts_only:
+        artifact_region = STUDIO_ARTIFACT_REGIONS[provider]
+        bucket = _ensure_public_artifact_bucket(
+            _tos_client(
+                access_key,
+                secret_key,
+                session_token,
+                provider=provider,
+                region=artifact_region,
+            ),
+            provider,
+        )
+        print(
+            json.dumps(
+                {
+                    "provider": provider,
+                    "region": artifact_region,
+                    "bucket": bucket,
+                    "publicPrefix": STUDIO_ARTIFACT_PREFIX,
+                    "provisioned": True,
+                },
+                ensure_ascii=False,
+            )
+        )
+        return
     if not args.skip_github_secrets:
         _validate_github_secret_access()
     _ensure_release_bucket(
@@ -874,6 +1037,7 @@ def main() -> None:
         access_key=access_key,
         secret_key=secret_key,
         session_token=session_token,
+        thin_bundles=args.enable_thin_bundles,
     )
     _wait_for_health(endpoint, api_key)
     if not args.skip_github_secrets:
@@ -890,6 +1054,7 @@ def main() -> None:
                 "functionId": function_id,
                 "endpoint": endpoint,
                 "githubSecretsConfigured": not args.skip_github_secrets,
+                "thinBundlesEnabled": args.enable_thin_bundles,
             },
             ensure_ascii=False,
         )

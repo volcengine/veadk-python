@@ -81,6 +81,7 @@ _CGROUP_MEMORY_LIMIT_PATHS = (
 )
 _NODE_HEAP_MEMORY_RATIO = 0.75
 _DEFAULT_NODE_HEAP_MB = 4096
+_STUDIO_RELEASE_CONTRACT = "agentkit-cli-v1"
 
 logger = logging.getLogger(__name__)
 
@@ -607,6 +608,10 @@ class StudioReleaseBuilder:
         frontend_assets: Path | None,
         dependency_wheels: Path | None,
     ) -> None:
+        if request.thin_bundle and not self._settings.thin_releases:
+            raise RuntimeError(
+                "Studio thin releases are not enabled on this Release Server."
+            )
         credentials = resolve_credentials(self._settings.provider)
         command = [
             sys.executable,
@@ -627,7 +632,11 @@ class StudioReleaseBuilder:
             self._settings.provider,
             "--prefix",
             self._settings.release_prefix,
+            "--release-contract",
+            _STUDIO_RELEASE_CONTRACT,
         ]
+        if request.thin_bundle:
+            command.append("--thin")
         for item in request.changelog:
             command.extend(("--changelog", item))
         if frontend_assets is not None:

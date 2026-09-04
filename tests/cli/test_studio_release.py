@@ -53,6 +53,7 @@ from veadk.cli.studio_release import (
     manifest_object_key,
     release_catalog_object_key,
     studio_release_region,
+    thin_bundle_object_key,
 )
 from veadk.utils.cloud_provider import CloudProvider
 
@@ -152,6 +153,26 @@ def test_manifest_round_trip_uses_public_field_names() -> None:
     assert StudioReleaseManifest.from_json(manifest.to_json()) == manifest
 
 
+def test_thin_manifest_round_trip_includes_separate_thin_bundle() -> None:
+    manifest = StudioReleaseManifest(
+        version="20260724153046",
+        git_sha="a" * 40,
+        sha256="b" * 64,
+        size=100,
+        created_at="2026-07-24T15:30:46+08:00",
+        runtime_epoch="c" * 64,
+        thin_sha256="d" * 64,
+        thin_size=200,
+    )
+
+    payload = json.loads(manifest.to_json())
+
+    assert payload["runtimeEpoch"] == "c" * 64
+    assert payload["thinSha256"] == "d" * 64
+    assert payload["thinSize"] == 200
+    assert StudioReleaseManifest.from_json(manifest.to_json()) == manifest
+
+
 def test_frontend_build_exposes_release_changelog_to_vite(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -219,6 +240,59 @@ def test_publish_moves_latest_pointer_after_immutable_objects(tmp_path: Path) ->
     assert store.release_catalog() == [manifest]
 
 
+def test_publish_thin_release_preserves_full_legacy_bundle(tmp_path: Path) -> None:
+    content = b"full-offline"
+    thin_content = b"thin"
+    bundle = tmp_path / "full.zip"
+    bundle.write_bytes(content)
+    thin_bundle = tmp_path / "thin.zip"
+    thin_bundle.write_bytes(thin_content)
+    manifest = StudioReleaseManifest(
+        version="20260724153047",
+        git_sha="a" * 40,
+        sha256=hashlib.sha256(content).hexdigest(),
+        size=len(content),
+        created_at="2026-07-24T15:30:47+08:00",
+        runtime_epoch="c" * 64,
+        thin_sha256=hashlib.sha256(thin_content).hexdigest(),
+        thin_size=len(thin_content),
+    )
+    client = _FakeTosClient()
+    store = _store(client)
+
+    store.publish(bundle, manifest, thin_bundle=thin_bundle)
+
+    thin_key = thin_bundle_object_key(store.prefix, manifest.version)
+    assert client.put_order[:3] == [
+        bundle_object_key(store.prefix, manifest.version),
+        thin_key,
+        manifest_object_key(store.prefix, manifest.version),
+    ]
+    legacy_destination = tmp_path / "downloaded-full.zip"
+    store.download_bundle(manifest, legacy_destination)
+    assert legacy_destination.read_bytes() == content
+    thin_destination = tmp_path / "downloaded-thin.zip"
+    store.download_thin_bundle(manifest, thin_destination)
+    assert thin_destination.read_bytes() == thin_content
+
+
+def test_bundle_download_is_atomic_on_checksum_failure(tmp_path: Path) -> None:
+    content = b"expected"
+    manifest = _manifest(content)
+    client = _FakeTosClient()
+    client.objects[
+        ("studio-releases", bundle_object_key("veadk/studio/main", manifest.version))
+    ] = b"corrupt!"
+    destination = tmp_path / "bundle.zip"
+    destination.write_bytes(b"previous")
+
+    with pytest.raises(StudioReleaseError, match="checksum"):
+        _store(client).download_bundle(manifest, destination)
+
+    assert destination.read_bytes() == b"previous"
+    assert not list(tmp_path.glob("*.part"))
+
+
 def test_publish_catalog_keeps_newest_release_first(tmp_path: Path) -> None:
     client = _FakeTosClient()
     store = _store(client)
@@ -246,7 +320,7 @@ def test_publish_catalog_keeps_newest_release_first(tmp_path: Path) -> None:
     assert store.manifest(older.version) == older
 
 
-def test_publish_does_not_replace_an_immutable_release(tmp_path: Path) -> None:
+def test_publish_identical_release_is_idempotent(tmp_path: Path) -> None:
     content = b"complete-studio-bundle"
     bundle = tmp_path / "bundle.zip"
     bundle.write_bytes(content)
@@ -255,9 +329,62 @@ def test_publish_does_not_replace_an_immutable_release(tmp_path: Path) -> None:
     store = _store(client)
 
     store.publish(bundle, manifest)
+    put_order = list(client.put_order)
 
-    with pytest.raises(FileExistsError):
+    store.publish(bundle, manifest)
+
+    assert client.put_order == put_order
+
+
+@pytest.mark.parametrize("failed_pointer", ["releases.json", "latest.json"])
+def test_publish_repairs_interrupted_pointer_update(
+    tmp_path: Path,
+    failed_pointer: str,
+) -> None:
+    content = b"complete-studio-bundle"
+    bundle = tmp_path / "bundle.zip"
+    bundle.write_bytes(content)
+    manifest = _manifest(content)
+
+    class _FailOnceClient(_FakeTosClient):
+        failed = False
+
+        def put_object(self, **kwargs: Any) -> None:
+            if kwargs["key"].endswith(failed_pointer) and not self.failed:
+                self.failed = True
+                raise OSError("injected ambiguous write failure")
+            super().put_object(**kwargs)
+
+    client = _FailOnceClient()
+    store = _store(client)
+
+    with pytest.raises(StudioReleaseError, match="pointer upload failed"):
         store.publish(bundle, manifest)
+
+    store.publish(bundle, manifest)
+
+    assert store.latest_manifest() == manifest
+    assert store.release_catalog() == [manifest]
+
+
+def test_publish_rejects_conflicting_partial_immutable_object(tmp_path: Path) -> None:
+    content = b"complete-studio-bundle"
+    bundle = tmp_path / "bundle.zip"
+    bundle.write_bytes(content)
+    manifest = _manifest(content)
+    client = _FakeTosClient()
+    store = _store(client)
+    client.objects[
+        (store.bucket, bundle_object_key(store.prefix, manifest.version))
+    ] = b"conflicting-content"
+
+    with pytest.raises(StudioReleaseError, match="immutable release object conflicts"):
+        store.publish(bundle, manifest)
+
+    assert (
+        store.bucket,
+        latest_manifest_object_key(store.prefix),
+    ) not in client.objects
 
 
 def test_publish_does_not_move_latest_pointer_to_an_older_release(

@@ -1,6 +1,7 @@
 fastapi>=0.115,<1
 filetype==1.2.0
 httpx>=0.27,<1
+packaging==26.2
 Deprecated>=1.2.13,<2
 pytz
 requests>=2.19.1,<3
