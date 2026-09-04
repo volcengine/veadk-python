@@ -468,6 +468,7 @@ Environment variables:
 - `TOOL_VESPEECH_API_KEY`: VeSpeech service API key
 - `TOOL_VESPEECH_SPEAKER`: voice, defaults to `zh_female_vv_uranus_bigtts`
 - `TOOL_VESPEECH_AUDIO_OUTPUT_PATH`: audio output directory, defaults to the system temp directory
+- `VEADK_HTTP_STREAM_BUDGET`: total wall-clock ceiling for consuming the streamed synthesis response, defaults to 300 seconds; synthesis aborts with an error once it is exceeded. See [Environment variables · HTTP timeouts](/en/docs/references/configuration/environment-variables#http-timeouts)
 
 ## Code sandboxes
 

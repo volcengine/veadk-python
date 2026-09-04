@@ -23,9 +23,23 @@ import tempfile
 from typing import Dict, Any
 from google.adk.tools import ToolContext
 from veadk.config import getenv, settings
+from veadk.utils.http_defaults import (
+    DEFAULT_HTTP_TIMEOUT,
+    DEFAULT_STREAM_BUDGET_SECONDS,
+)
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+# bound on how long the audio player thread may take to exit once it has been
+# told to stop; a thread that is still marking queued chunks done is granted a
+# further window of the same length, so only a stalled one is given up on
+_PLAYER_JOIN_TIMEOUT = 5.0
+
+# how long the player thread waits for the next chunk before re-checking the
+# stop event, and so the worst case delay between the queue running dry and the
+# thread exiting
+_PLAYER_QUEUE_POLL_TIMEOUT = 0.1
 
 
 def text_to_speech(text: str, tool_context: ToolContext) -> Dict[str, Any]:
@@ -87,7 +101,13 @@ def text_to_speech(text: str, tool_context: ToolContext) -> Dict[str, Any]:
 
     try:
         logger.debug(f"Request TTS server with payload: {payload}.")
-        response = session.post(url, headers=headers, json=payload, stream=True)
+        response = session.post(
+            url,
+            headers=headers,
+            json=payload,
+            stream=True,
+            timeout=DEFAULT_HTTP_TIMEOUT,
+        )
 
         os.makedirs(temp_dir, exist_ok=True)
         with tempfile.NamedTemporaryFile(
@@ -158,8 +178,13 @@ def handle_server_response(
     except Exception as e:
         logger.error(f"Failed to initialize audio device: {e}")
 
+    deadline = time.monotonic() + DEFAULT_STREAM_BUDGET_SECONDS
     try:
         for chunk in response.iter_lines(decode_unicode=True):
+            if time.monotonic() > deadline:
+                raise TimeoutError(
+                    f"tts response not finished within {DEFAULT_STREAM_BUDGET_SECONDS}s"
+                )
             if not chunk:
                 continue
             data = json.loads(chunk)
@@ -190,11 +215,46 @@ def handle_server_response(
         raise
     finally:
         if output_stream:
-            audio_queue.join()
+            # Ask the player to play out what it already holds and then exit.
+            # Signalling before waiting is what makes the wait bounded: a
+            # thread wedged inside a blocking output_stream.write can only
+            # observe the event once that write returns, and one that never
+            # returns must be abandoned rather than waited on.
             stop_event.set()
-            if player_thread and player_thread.is_alive():
-                player_thread.join()
+            if player_thread:
+                _join_audio_player_thread(player_thread, audio_queue)
             output_stream.close()
+
+
+def _join_audio_player_thread(player_thread, audio_queue) -> None:
+    """Wait for a stopping player thread to drain and exit, but never forever.
+
+    The caller has already set the stop event, so the thread plays whatever is
+    still queued and then leaves. Each wait is bounded by _PLAYER_JOIN_TIMEOUT
+    and is only renewed while the thread keeps marking chunks done, so healthy
+    playback of any length still drains in full while a thread stalled inside
+    output_stream.write is given up on after a single window. audio_queue.join()
+    cannot do this job: it takes no timeout, and a stalled thread never reaches
+    task_done(). Nothing feeds the queue any more, so unfinished_tasks only
+    falls and the loop runs at most once per queued chunk.
+
+    Args:
+        player_thread: The already signalled audio player thread.
+        audio_queue: The queue that thread is draining.
+
+    Returns:
+        None
+    """
+    pending = audio_queue.unfinished_tasks
+    while True:
+        player_thread.join(timeout=_PLAYER_JOIN_TIMEOUT)
+        if not player_thread.is_alive():
+            return
+        remaining = audio_queue.unfinished_tasks
+        if remaining >= pending:
+            logger.error("audio player thread did not exit in time")
+            return
+        pending = remaining
 
 
 def _audio_player_thread(audio_queue, output_stream, stop_event):
@@ -203,24 +263,27 @@ def _audio_player_thread(audio_queue, output_stream, stop_event):
     Args:
         audio_queue: The queue to store audio data.
         output_stream: The output stream to play audio.
-        stop_event: The event to stop the thread.
+        stop_event: The event asking the thread to play out the queue and exit.
 
     Returns:
 
     """
-    while not stop_event.is_set():
+    # stop_event means "finish what is already queued, then exit", so the thread
+    # only leaves once the queue has actually run dry as well.
+    while not stop_event.is_set() or not audio_queue.empty():
+        try:
+            audio_data = audio_queue.get(timeout=_PLAYER_QUEUE_POLL_TIMEOUT)
+        except queue.Empty:
+            continue
         try:
             # write audio data to output stream
-            audio_data = audio_queue.get(timeout=1.0)
             if audio_data:
                 output_stream.write(audio_data)
-            audio_queue.task_done()
-        except queue.Empty:
-            # if queue is empty, sleep for a while
-            time.sleep(0.1)
         except Exception as e:
             logger.error(f"Failed to play audio data: {e}")
             time.sleep(0.1)
+        finally:
+            audio_queue.task_done()
     logger.debug("audio player thread exited")
 
 

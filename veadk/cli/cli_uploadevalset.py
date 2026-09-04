@@ -52,6 +52,7 @@ def uploadevalset(
     import json
     import requests
     from veadk.config import getenv
+    from veadk.utils.http_defaults import DEFAULT_HTTP_TIMEOUT
     from pathlib import Path
 
     if not cozeloop_workspace_id:
@@ -130,6 +131,7 @@ def uploadevalset(
             "is_skip_invalid_items": True,
             "items": items,
         },
+        timeout=DEFAULT_HTTP_TIMEOUT,
     )
 
     if response.status_code == 200:

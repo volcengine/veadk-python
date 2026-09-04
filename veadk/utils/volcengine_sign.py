@@ -21,10 +21,12 @@ from urllib.parse import quote
 
 import requests
 
+from veadk.utils.http_defaults import DEFAULT_HTTP_TIMEOUT
+
 # Bounded default (connect, read) timeout in seconds for Volcengine API calls, so a
 # hung endpoint cannot block the caller forever. Callers with slow control-plane
 # operations (deploys, large uploads) can override via the ``timeout`` parameter.
-DEFAULT_REQUEST_TIMEOUT: tuple[float, float] = (10, 60)
+DEFAULT_REQUEST_TIMEOUT: tuple[float, float] = DEFAULT_HTTP_TIMEOUT
 
 Service = ""
 Version = ""
