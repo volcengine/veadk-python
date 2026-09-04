@@ -12,18 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset
+import os
 
-from veadk.config import getenv
 from google.adk.tools.mcp_tool.mcp_session_manager import (
     StreamableHTTPConnectionParams,
 )
+from google.adk.tools.mcp_tool.mcp_toolset import McpToolset
 
-url = getenv("TOOL_MCP_ROUTER_URL")
-api_key = getenv("TOOL_MCP_ROUTER_API_KEY")
+url = os.getenv("TOOL_MCP_ROUTER_URL", "")
+api_key = os.getenv("TOOL_MCP_ROUTER_API_KEY", "")
 
-mcp_router = MCPToolset(
+mcp_router = McpToolset(
     connection_params=StreamableHTTPConnectionParams(
-        url=url, headers={"Authorization": f"Bearer {api_key}"}
-    ),
+        url=url,
+        headers={"Authorization": f"Bearer {api_key}"} if api_key else None,
+    )
 )

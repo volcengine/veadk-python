@@ -152,36 +152,39 @@ def test_build_skill_toolset_loads_skills_center_space(monkeypatch, tmp_path):
     assert isinstance(toolset._code_executor, UnsafeLocalCodeExecutor)
 
 
-def test_incremental_skills_preserve_existing_code_executor(monkeypatch, tmp_path):
+def test_replace_skills_replaces_existing_skill_toolset(monkeypatch, tmp_path):
     existing_dir = tmp_path / "existing"
     incoming_dir = tmp_path / "incoming"
     _write_adk_skill(existing_dir, name="existing")
     _write_adk_skill(incoming_dir, name="incoming")
 
-    executor = UnsafeLocalCodeExecutor()
     existing_toolset = SkillToolset(
         skills=[load_skill_from_dir(existing_dir)],
-        code_executor=executor,
+        code_executor=UnsafeLocalCodeExecutor(),
     )
     incoming_toolset = SkillToolset(
         skills=[load_skill_from_dir(incoming_dir)],
         code_executor=UnsafeLocalCodeExecutor(),
     )
-    agent = SimpleNamespace(tools=[existing_toolset])
+    marker_tool = object()
+    agent = SimpleNamespace(tools=[marker_tool, existing_toolset])
+    calls: list[tuple[list[str], object]] = []
+
+    def fake_build_skill_toolset(skill_ids, download_dir=None):
+        calls.append((skill_ids, download_dir))
+        return incoming_toolset
+
     monkeypatch.setattr(
         utils,
         "build_skill_toolset",
-        lambda skill_ids, download_dir=None: incoming_toolset,
+        fake_build_skill_toolset,
     )
 
-    utils._add_incremental_skills(agent, ["incoming"])
+    utils._replace_skills(agent, ["incoming"], download_dir=tmp_path)
 
-    merged_toolset = agent.tools[0]
-    assert [skill.name for skill in merged_toolset._list_skills()] == [
-        "existing",
-        "incoming",
-    ]
-    assert merged_toolset._code_executor is executor
+    assert calls == [(["incoming"], tmp_path)]
+    assert agent.tools == [marker_tool, incoming_toolset]
+    assert [skill.name for skill in incoming_toolset._list_skills()] == ["incoming"]
 
 
 @pytest.mark.asyncio

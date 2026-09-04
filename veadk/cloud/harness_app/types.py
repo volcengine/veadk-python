@@ -17,21 +17,128 @@
 The parameters split into two groups:
 
 * :class:`HarnessOverrides` — the subset that may be overridden per invocation
-  (model, prompt, tools, skills, runtime).
+  (model, prompt, tools, skills, runtime, resources, and sampling params).
 * :class:`HarnessConfig` — the full set fixed at agent creation time. It extends
-  the overridable params with the knowledge base and memory components, which are
-  bound when the agent is built and therefore **cannot** be overridden per request.
+  the overridable params with additional creation-time settings.
 
 ``tools`` and ``skills`` are comma-separated strings (e.g. ``"web_search,web_fetch"``).
 Skills may be SkillHub names/slugs or skills-center refs prefixed with ``space:``.
 """
 
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from veadk.consts import DEFAULT_MODEL_AGENT_NAME
 from veadk.prompts.agent_default_prompt import DEFAULT_DESCRIPTION, DEFAULT_INSTRUCTION
+
+
+class HarnessBuiltinTool(BaseModel):
+    """Built-in tool selected by AgentKit runtime config."""
+
+    id: str = Field(description="Built-in tool id.")
+    config: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Per-tool runtime config.",
+    )
+
+
+class HarnessMcpServer(BaseModel):
+    """Streamable HTTP MCP server selected by AgentKit runtime config."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str = Field(default="", description="MCP server display name.")
+    server_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("server_url", "url"),
+        description="Streamable HTTP MCP server URL.",
+    )
+    bear_token: str = Field(
+        default="",
+        validation_alias=AliasChoices("bear_token", "bearer_token", "api_key"),
+        description="Optional bearer token for the MCP server.",
+    )
+
+
+class HarnessSelectedSkill(BaseModel):
+    """Skill selected by AgentKit runtime config."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    source: Literal["skillhub", "skillspace"] = Field(
+        default="skillhub",
+        description="Skill source.",
+    )
+    slug: str | None = Field(
+        default=None,
+        description="SkillHub slug, e.g. namespace/owner/reporting-skill.",
+    )
+    namespace: str | None = Field(
+        default=None,
+        description="Optional SkillHub namespace.",
+    )
+    skill_space_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("skill_space_id", "space_id"),
+        description="SkillSpace id.",
+    )
+    skill_id: str | None = Field(default=None, description="Skill id.")
+    version: str | None = Field(default=None, description="Skill version.")
+    region: str | None = Field(default=None, description="Skill region.")
+
+
+class HarnessResourceOverride(BaseModel):
+    """Request-level knowledge or memory backend override."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    type: str = Field(
+        default="",
+        description="Backend type for this request-level resource override.",
+    )
+    id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("id", "_id"),
+        description="Resource id from AgentKit control plane.",
+    )
+    config: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Backend or component configuration for this request-level resource."
+        ),
+    )
+
+
+class HarnessRegistryOverride(BaseModel):
+    """Request-level AgentKit A2A registry override."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    type: Literal["agentkit_a2a"] = Field(
+        default="agentkit_a2a",
+        description="AgentKit registry backend type.",
+    )
+    space_id: str = Field(
+        default="",
+        validation_alias=AliasChoices("space_id", "registry_space_id"),
+        description="AgentKit A2A registry space id.",
+    )
+    endpoint: str = Field(
+        default="",
+        validation_alias=AliasChoices("endpoint", "registry_endpoint"),
+        description="AgentKit A2A registry OpenAPI endpoint.",
+    )
+    region: str = Field(
+        default="",
+        validation_alias=AliasChoices("region", "registry_region"),
+        description="AgentKit A2A registry OpenAPI region.",
+    )
+    top_k: int = Field(
+        default=3,
+        validation_alias=AliasChoices("top_k", "registry_top_k"),
+        description="Number of A2A AgentCards to retrieve.",
+    )
 
 
 class HarnessOverrides(BaseModel):
@@ -42,6 +149,8 @@ class HarnessOverrides(BaseModel):
     AgentKit's harness invoke API but intentionally hidden from the VeADK CLI.
     """
 
+    model_config = ConfigDict(populate_by_name=True)
+
     model_name: str = Field(
         default=DEFAULT_MODEL_AGENT_NAME, description="Reasoning model name."
     )
@@ -49,12 +158,29 @@ class HarnessOverrides(BaseModel):
         default="",
         description="Comma-separated built-in tool names, e.g. web_search,web_fetch.",
     )
+    builtin_tools: list[HarnessBuiltinTool] = Field(
+        default_factory=list,
+        description="Structured built-in tools selected by AgentKit.",
+    )
+    mcp_router_id: str = Field(
+        default="",
+        validation_alias=AliasChoices("mcp_router_id", "mcp_toolset_id"),
+        description="AgentKit MCP toolset id used by the built-in mcp_router tool.",
+    )
     skills: str = Field(
         default="",
         description=(
             "Comma-separated skill hub names/slugs or skills-center refs, "
             "e.g. data-visualization-cloud,space:ss-xxx."
         ),
+    )
+    selected_skills: list[HarnessSelectedSkill] = Field(
+        default_factory=list,
+        description="Structured skills selected by AgentKit.",
+    )
+    mcp: list[HarnessMcpServer] = Field(
+        default_factory=list,
+        description="Streamable HTTP MCP servers selected by AgentKit.",
     )
     system_prompt: str = Field(
         default="You are a helpful assistant.",
@@ -75,14 +201,53 @@ class HarnessOverrides(BaseModel):
     registry_top_k: int = Field(
         default=3, description="Override the number of A2A AgentCards to retrieve."
     )
+    registry: HarnessRegistryOverride | None = Field(
+        default=None,
+        description="Structured AgentKit A2A registry override.",
+    )
+    knowledgebase: HarnessResourceOverride | None = Field(
+        default=None,
+        validation_alias=AliasChoices("knowledgebase", "konwledgebase"),
+        description="Request-level knowledge base override.",
+    )
+    longterm_memory: HarnessResourceOverride | None = Field(
+        default=None,
+        validation_alias=AliasChoices("longterm_memory", "long_term_memory"),
+        description="Request-level long-term memory override.",
+    )
+    temperature: float | None = Field(
+        default=None, description="Request-level model temperature."
+    )
+    top_p: float | None = Field(default=None, description="Request-level model top_p.")
+    max_tokens: int | None = Field(
+        default=None,
+        description="Request-level max output tokens.",
+    )
+    presence_penalty: float | None = Field(
+        default=None, description="Request-level presence penalty."
+    )
+    frequency_penalty: float | None = Field(
+        default=None, description="Request-level frequency penalty."
+    )
+    penalty: float | None = Field(
+        default=None,
+        description=(
+            "Compatibility penalty applied to presence and frequency penalties "
+            "when those fields are not set."
+        ),
+    )
+    max_llm_calls: int | None = Field(
+        default=None,
+        ge=1,
+        description="Request-level max LLM calls.",
+    )
 
 
 class HarnessConfig(HarnessOverrides):
     """Full harness parameters fixed when the agent is created.
 
-    Extends :class:`HarnessOverrides` with the knowledge base and memory
-    backends. These are wired into the agent at build time and cannot be changed
-    per request, so they are intentionally absent from :class:`HarnessOverrides`.
+    Extends :class:`HarnessOverrides` with creation-time defaults such as the
+    short-term memory backend and registry runtime settings.
 
     An empty backend string means the component is disabled (not created).
     """
@@ -95,8 +260,9 @@ class HarnessConfig(HarnessOverrides):
     shortterm_memory_type: str = Field(default="local")
     runtime: Literal["adk", "codex"] = Field(default="adk")
     max_llm_calls: int | None = Field(
-        default=None,
-        description="Default max LLM calls per run; unset follows ADK RunConfig's default. Overridable per invocation.",
+        default=10,
+        ge=1,
+        description="Default max LLM calls per run. Overridable per invocation.",
     )
     structured_tool_calls: bool = Field(default=False)
     include_tools_every_turn: bool = Field(default=True)
@@ -136,8 +302,43 @@ class RunAgentRequest(BaseModel):
     session_id: str
     max_llm_calls: int | None = Field(
         default=None,
+        ge=1,
         description="Override max LLM calls for this single call (falls back to the harness default, then ADK's).",
     )
+
+
+class HarnessCreateSessionRequest(BaseModel):
+    """Session creation payload accepted by the AgentKit harness runtime."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str | None = Field(
+        default=None,
+        description="Session id from AgentKit playground. Empty means create one.",
+    )
+    session_id: str | None = Field(
+        default=None,
+        alias="sessionId",
+        description="ADK-compatible session id alias.",
+    )
+    state: dict[str, Any] | None = Field(
+        default=None,
+        description="Initial session state.",
+    )
+    events: list[dict[str, Any]] | None = Field(
+        default=None,
+        description="Initial session events.",
+    )
+
+
+class HarnessAgentConfigRequest(BaseModel):
+    """Request body for fetching the latest session-scoped harness config."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    app_name: str | None = Field(default=None, alias="appName")
+    user_id: str = Field(default="default", alias="userId")
+    session_id: str = Field(default="default", alias="sessionId")
 
 
 class LlmUsageMetrics(BaseModel):
@@ -193,9 +394,16 @@ class InvokeHarnessRequest(BaseModel):
     prompt: str
     harness_name: str
     # When present, a once-time override applied on top of the served agent for
-    # this single call. Only the fields actually set are applied; memory and the
-    # knowledge base are never overridable (absent from HarnessOverrides).
+    # this single call. Only the fields actually set are applied.
     harness: HarnessOverrides | None = None
+    harness_merge: bool = Field(
+        default=False,
+        description=(
+            "When true, merge the request harness with the default harness "
+            "configuration before running. When false, the request harness fully "
+            "replaces the default configurable overlay."
+        ),
+    )
     harness_enhance: HarnessEnhanceOverrides | None = None
     run_agent_request: RunAgentRequest
 
