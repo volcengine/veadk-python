@@ -633,7 +633,7 @@ class EnvironmentService:
             owner_id, environment_id, version_id
         )
         return EnvironmentManifest(
-            apiVersion="agentkit.studio/v1alpha1",
+            apiVersion="agentkit.studio/v3",
             metadata=EnvironmentManifestMetadata(
                 id=environment.id,
                 name=environment.name,
@@ -660,6 +660,52 @@ class EnvironmentService:
             ),
         )
 
+    async def ensure_sandbox_tool_ready(
+        self,
+        owner_id: str,
+        environment_id: str,
+        version_id: str,
+    ) -> EnvironmentBuild:
+        """Validate or repair the Tool for an already-built Sandbox image."""
+
+        repository = self._require_repository()
+        environment = await repository.get_version_config(
+            owner_id, environment_id, version_id
+        )
+        if environment.base_environment not in {"aio-sandbox", "codex-sandbox"}:
+            raise ValueError("所选环境不支持 Sandbox 命令执行。")
+        build = await repository.get_build(owner_id, environment_id, version_id)
+        if build.status != "available" or not build.image.strip():
+            raise ValueError("所选环境版本尚未构建完成。")
+        if self._tool_provisioner is None:
+            raise RuntimeError("AgentKit Sandbox Tool 服务未配置。")
+        resources = build.resources
+        if not isinstance(resources, EnvironmentResources):
+            raise TypeError("环境构建记录缺少云资源信息。")
+
+        tool = await self._tool_provisioner.ensure_ready(
+            image=build.image,
+            provider=resources.provider,
+            region=resources.region,
+            existing_tool_id=build.tool_id,
+        )
+        if build.tool_id == tool.tool_id and build.tool_status == tool.status:
+            return build
+        current = await repository.get_build(owner_id, environment_id, version_id)
+        repaired = current.model_copy(
+            update={
+                "status": "available",
+                "tool_id": tool.tool_id,
+                "tool_status": tool.status,
+                "error": "",
+                "progress_error": "",
+                "current_step": "环境与 Sandbox Tool 已就绪",
+                "steps": _with_tool_step(current.steps, "succeeded"),
+                "updated_at": _now(),
+            }
+        )
+        return await repository.update_build(owner_id, repaired)
+
     def resource_info(self) -> EnvironmentResourceInfo:
         return self._require_cloud().describe()
 
@@ -684,7 +730,7 @@ class EnvironmentService:
             environment_id,
             resolved_version,
         )
-        if version_config.base_environment == "aio-sandbox" and (
+        if version_config.base_environment in {"aio-sandbox", "codex-sandbox"} and (
             not build.tool_id or build.tool_status != "ready"
         ):
             build = await self._begin_aio_tool_provisioning(repository, owner_id, build)
@@ -713,7 +759,7 @@ class EnvironmentService:
             build.environment_id,
             build.version_id,
         )
-        if environment.base_environment != "aio-sandbox":
+        if environment.base_environment not in {"aio-sandbox", "codex-sandbox"}:
             return build
         if build.tool_id and build.tool_status == "ready":
             return build
@@ -775,9 +821,34 @@ class EnvironmentService:
                 image=build.image,
                 provider=resources.provider,
                 region=resources.region,
+                existing_tool_id=build.tool_id,
+                on_created=lambda state: self._persist_creating_tool(
+                    repository,
+                    owner_id,
+                    build,
+                    state.tool_id,
+                ),
             )
         except asyncio.CancelledError:
             raise
+        except TimeoutError as error:
+            current = await repository.get_build(
+                owner_id, build.environment_id, build.version_id
+            )
+            if current.tool_id and current.tool_status == "ready":
+                return
+            waiting = current.model_copy(
+                update={
+                    "status": "building",
+                    "tool_status": "creating",
+                    "progress_error": str(error).strip() or type(error).__name__,
+                    "current_step": "AgentKit Sandbox Tool 仍在准备",
+                    "steps": _with_tool_step(current.steps, "running"),
+                    "updated_at": _now(),
+                }
+            )
+            await repository.update_build(owner_id, waiting)
+            return
         except Exception as error:  # noqa: BLE001 - persist provisioning failure
             current = await repository.get_build(
                 owner_id, build.environment_id, build.version_id
@@ -807,12 +878,46 @@ class EnvironmentService:
                 "tool_id": tool.tool_id,
                 "tool_status": tool.status,
                 "error": "",
+                "progress_error": "",
                 "current_step": "环境与 Sandbox Tool 已就绪",
                 "steps": _with_tool_step(current.steps, "succeeded"),
                 "updated_at": _now(),
             }
         )
         await repository.update_build(owner_id, ready)
+
+    async def _persist_creating_tool(
+        self,
+        repository: TosEnvironmentRepository,
+        owner_id: str,
+        build: EnvironmentBuild,
+        tool_id: str,
+    ) -> None:
+        current = await repository.get_build(
+            owner_id, build.environment_id, build.version_id
+        )
+        if current.tool_id and current.tool_status == "ready":
+            return
+        if current.tool_id and current.tool_id != tool_id:
+            raise RuntimeError("环境构建记录关联了不同的 Sandbox Tool。")
+        if (
+            current.tool_id == tool_id
+            and current.tool_status == "creating"
+            and not current.error
+            and not current.progress_error
+        ):
+            return
+        creating = current.model_copy(
+            update={
+                "status": "building",
+                "tool_id": tool_id,
+                "tool_status": "creating",
+                "error": "",
+                "progress_error": "",
+                "updated_at": _now(),
+            }
+        )
+        await repository.update_build(owner_id, creating)
 
     async def get_skill_files_for_agent(
         self,

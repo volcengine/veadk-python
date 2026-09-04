@@ -50,6 +50,14 @@ class StudioToolExecutionError(RuntimeError):
     """A safe error that can be returned across the Studio channel."""
 
 
+class StudioToolRuntimeError(StudioToolExecutionError):
+    """A safe operational failure, distinct from a denied invocation."""
+
+    def __init__(self, message: str, *, content: Any = None) -> None:
+        super().__init__(message)
+        self.content = content
+
+
 @dataclass(frozen=True)
 class StudioToolExecutionContext:
     """Server-derived identity and run scope available only to BFF executors."""
@@ -111,7 +119,8 @@ class StudioToolRegistry:
         key = (manifest.name, manifest.executor_revision)
         if key in self._tools:
             raise ValueError(
-                f"Studio tool already registered: {manifest.name}@{manifest.executor_revision}"
+                f"Studio tool already registered: {manifest.name}@"
+                f"{manifest.executor_revision}"
             )
         self._tools[key] = tool
         self._latest[manifest.name] = manifest.executor_revision
@@ -266,16 +275,20 @@ def build_studio_tool_registry(
     """Build the complete Studio BFF tool registry."""
 
     registry = StudioToolRegistry()
-    from frontend.server.studio_tools.veadk_builtin_tools import (
-        register_veadk_builtin_tools,
-    )
     from frontend.server.studio_tools.branch_compare import (
         register_branch_compare_tool,
+    )
+    from frontend.server.studio_tools.veadk_builtin_tools import (
+        register_veadk_builtin_tools,
     )
 
     register_veadk_builtin_tools(registry, media_service=media_service)
     register_branch_compare_tool(registry)
     if environment_mounts is not None and sandbox_target_resolver is not None:
+        from frontend.server.studio_tools.codex_sandbox import (
+            CodexSandboxDelegate,
+            register_codex_sandbox_tool,
+        )
         from frontend.server.studio_tools.sandbox_shell import (
             register_sandbox_shell_tool,
         )
@@ -284,6 +297,11 @@ def build_studio_tool_registry(
             registry,
             mounts=environment_mounts,
             target_resolver=sandbox_target_resolver,
+        )
+        register_codex_sandbox_tool(
+            registry,
+            mounts=environment_mounts,
+            delegate=CodexSandboxDelegate(sandbox_target_resolver),
         )
     from frontend.server.studio_tools.extensions import (
         register_studio_tool_extensions,

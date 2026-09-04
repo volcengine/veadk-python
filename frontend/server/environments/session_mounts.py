@@ -33,6 +33,7 @@ class SessionEnvironmentSelection(BaseModel):
 
     environment_id: str = Field(min_length=32, max_length=32)
     environment_version_id: str = Field(default="", max_length=128)
+    mount_instance_id: str = Field(default="", max_length=128)
 
 
 class SessionEnvironmentSelections(RootModel[list[SessionEnvironmentSelection]]):
@@ -62,6 +63,7 @@ class SessionEnvironmentMount:
     manifest: Mapping[str, Any] = field(default_factory=dict)
     tool_id: str = ""
     tool_status: str = ""
+    mount_instance_id: str = ""
 
 
 class _StudioToolContext(Protocol):
@@ -104,7 +106,7 @@ class SessionEnvironmentMountRegistry:
         spec = manifest.get("spec")
         if not isinstance(spec, dict):
             raise TypeError("环境 Manifest 缺少 spec。")
-        if spec.get("baseEnvironment") != "aio-sandbox":
+        if spec.get("baseEnvironment") not in {"aio-sandbox", "codex-sandbox"}:
             raise ValueError("所选环境不支持 Sandbox 命令执行。")
         image = _string_value(spec.get("image"))
         if not image:
@@ -135,6 +137,7 @@ class SessionEnvironmentMountRegistry:
             manifest=manifest,
             tool_id=tool_id,
             tool_status=tool_status,
+            mount_instance_id=selection.mount_instance_id.strip(),
         )
 
     async def resolve_many(

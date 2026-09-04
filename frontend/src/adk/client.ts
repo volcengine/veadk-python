@@ -2107,11 +2107,101 @@ export interface SystemInfoResponse {
 }
 
 export type EnvironmentOperatingSystem = "ubuntu-22.04" | "ubuntu-24.04";
-export type EnvironmentBaseEnvironment = "ubuntu" | "aio-sandbox";
+export type EnvironmentBaseEnvironment = "ubuntu" | "aio-sandbox" | "codex-sandbox";
 export type EnvironmentLanguage = "python-3.10" | "python-3.12";
 export interface SessionEnvironmentMountSelection {
   environment_id: string;
   environment_version_id: string;
+  /** Identifies one continuous attachment; absent for legacy Studio clients. */
+  mount_instance_id?: string;
+}
+
+export interface PreparedSessionEnvironmentMount {
+  environment_id: string;
+  environment_version_id: string;
+  mount_instance_id: string;
+  sandbox_session_id: string;
+}
+
+export function parsePreparedSessionEnvironmentMounts(
+  value: unknown,
+  expectedMounts: readonly SessionEnvironmentMountSelection[],
+): PreparedSessionEnvironmentMount[] {
+  const payload = value as { mounts?: unknown };
+  if (!payload || typeof payload !== "object" || !Array.isArray(payload.mounts)) {
+    throw new Error("挂载环境响应格式无效");
+  }
+  if (payload.mounts.length !== expectedMounts.length) {
+    throw new Error("挂载环境响应与请求不一致");
+  }
+  return payload.mounts.map((item, index) => {
+    const expected = expectedMounts[index];
+    if (
+      !item ||
+      typeof item !== "object" ||
+      typeof item.environment_id !== "string" ||
+      typeof item.environment_version_id !== "string" ||
+      typeof item.mount_instance_id !== "string" ||
+      typeof item.sandbox_session_id !== "string" ||
+      !item.environment_id ||
+      !item.environment_version_id ||
+      !item.mount_instance_id ||
+      !item.sandbox_session_id
+    ) {
+      throw new Error("挂载环境响应格式无效");
+    }
+    if (
+      item.environment_id !== expected.environment_id ||
+      item.environment_version_id !== expected.environment_version_id ||
+      (expected.mount_instance_id !== undefined &&
+        item.mount_instance_id !== expected.mount_instance_id)
+    ) {
+      throw new Error("挂载环境响应与请求不一致");
+    }
+    return item as PreparedSessionEnvironmentMount;
+  });
+}
+
+export async function prepareSessionEnvironmentMounts({
+  runtimeId,
+  appName,
+  userId,
+  sessionId,
+  environmentMounts,
+}: {
+  runtimeId: string;
+  appName: string;
+  userId: string;
+  sessionId: string;
+  environmentMounts: readonly SessionEnvironmentMountSelection[];
+}): Promise<PreparedSessionEnvironmentMount[]> {
+  const { app } = resolve(appName);
+  let response: Response;
+  try {
+    response = await apiFetch("/web/v3/session-environment-mounts/prepare", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        runtime_id: runtimeId,
+        app_name: app,
+        user_id: userId,
+        session_id: sessionId,
+        environment_mounts: [...environmentMounts],
+      }),
+    });
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new Error("无法连接 Studio 服务，环境挂载未完成。请检查网络后重试。");
+    }
+    throw error;
+  }
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, "挂载环境失败"));
+  }
+  return parsePreparedSessionEnvironmentMounts(
+    await response.json(),
+    environmentMounts,
+  );
 }
 export type EnvironmentBuildStatus =
   | "preparing"
@@ -2183,7 +2273,7 @@ export interface EnvironmentManifestSkill {
 }
 
 export interface EnvironmentManifest {
-  apiVersion: "agentkit.studio/v1alpha1";
+  apiVersion: "agentkit.studio/v3" | "agentkit.studio/v1alpha1";
   kind: "Environment";
   metadata: {
     id: string;
@@ -2459,13 +2549,15 @@ function environmentBuildVersion(value: unknown): EnvironmentBuildVersion | null
   };
 }
 
-function environmentManifest(value: unknown): EnvironmentManifest {
+export function parseEnvironmentManifest(value: unknown): EnvironmentManifest {
   if (!value || typeof value !== "object") {
     throw new Error("环境 Manifest 响应格式无效");
   }
   const candidate = value as EnvironmentManifest;
   if (
-    candidate.apiVersion !== "agentkit.studio/v1alpha1" ||
+    !["agentkit.studio/v3", "agentkit.studio/v1alpha1"].includes(
+      candidate.apiVersion,
+    ) ||
     candidate.kind !== "Environment" ||
     !candidate.metadata ||
     typeof candidate.metadata.id !== "string" ||
@@ -2474,7 +2566,9 @@ function environmentManifest(value: unknown): EnvironmentManifest {
     typeof candidate.metadata.description !== "string" ||
     !candidate.spec ||
     typeof candidate.spec.image !== "string" ||
-    !["ubuntu", "aio-sandbox"].includes(candidate.spec.baseEnvironment) ||
+    !["ubuntu", "aio-sandbox", "codex-sandbox"].includes(
+      candidate.spec.baseEnvironment,
+    ) ||
     typeof candidate.spec.baseImage !== "string" ||
     !["ubuntu-22.04", "ubuntu-24.04"].includes(candidate.spec.operatingSystem) ||
     !["python-3.10", "python-3.12"].includes(candidate.spec.language) ||
@@ -2550,7 +2644,8 @@ function studioEnvironment(value: unknown): StudioEnvironment {
     typeof candidate.description !== "string" ||
     (candidate.baseEnvironment !== undefined &&
       candidate.baseEnvironment !== "ubuntu" &&
-      candidate.baseEnvironment !== "aio-sandbox") ||
+      candidate.baseEnvironment !== "aio-sandbox" &&
+      candidate.baseEnvironment !== "codex-sandbox") ||
     (candidate.operatingSystem !== "ubuntu-22.04" &&
       candidate.operatingSystem !== "ubuntu-24.04") ||
     (candidate.language !== "python-3.10" && candidate.language !== "python-3.12") ||
@@ -2565,7 +2660,11 @@ function studioEnvironment(value: unknown): StudioEnvironment {
   }
   return {
     ...candidate,
-    baseEnvironment: candidate.baseEnvironment === "aio-sandbox" ? "aio-sandbox" : "ubuntu",
+    baseEnvironment: candidate.baseEnvironment === "aio-sandbox"
+      ? "aio-sandbox"
+      : candidate.baseEnvironment === "codex-sandbox"
+        ? "codex-sandbox"
+        : "ubuntu",
     selectedSkills: candidate.selectedSkills ?? [],
     gitSource: environmentGitSource(candidate.gitSource),
     containerRepository: environmentContainerRepository(candidate.containerRepository),
@@ -2655,7 +2754,7 @@ export async function deleteWorkspace(
 }
 
 export async function listEnvironments(signal?: AbortSignal): Promise<StudioEnvironment[]> {
-  const response = await apiFetch("/web/environments", { signal });
+  const response = await apiFetch("/web/v3/environments", { signal });
   if (!response.ok) {
     throw new Error(await httpErrorMessage(response, "加载环境失败"));
   }
@@ -2668,7 +2767,7 @@ export async function inspectEnvironmentRepository(
   input: { repositoryUrl: string; ref?: string },
   signal?: AbortSignal,
 ): Promise<EnvironmentRepositoryInspection> {
-  const response = await apiFetch("/web/environment-repositories/inspect", {
+  const response = await apiFetch("/web/v3/environment-repositories/inspect", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
@@ -2695,7 +2794,7 @@ export async function exportEnvironmentShareCode(
   signal?: AbortSignal,
 ): Promise<EnvironmentShareCodeExport> {
   const response = await apiFetch(
-    `/web/environments/${encodeURIComponent(environmentId)}/share-code`,
+    `/web/v3/environments/${encodeURIComponent(environmentId)}/share-code`,
     { method: "POST", signal },
   );
   if (!response.ok) {
@@ -2712,7 +2811,7 @@ export async function inspectEnvironmentShareCodes(
   shareCodes: string[],
   signal?: AbortSignal,
 ): Promise<EnvironmentShareCodeInspection[]> {
-  const response = await apiFetch("/web/environment-share-codes/inspect", {
+  const response = await apiFetch("/web/v3/environment-share-codes/inspect", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ shareCodes }),
@@ -2762,7 +2861,7 @@ export async function importEnvironmentShareCodes(
   shareCodes: string[],
   signal?: AbortSignal,
 ): Promise<EnvironmentShareCodeImportItem[]> {
-  const response = await apiFetch("/web/environment-share-codes/import", {
+  const response = await apiFetch("/web/v3/environment-share-codes/import", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ shareCodes }),
@@ -2812,12 +2911,21 @@ async function writeEnvironment(
   input: EnvironmentInput,
   signal?: AbortSignal,
 ): Promise<StudioEnvironment> {
-  const response = await apiFetch(path, {
-    method,
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-    signal,
-  });
+  let response: Response;
+  try {
+    response = await apiFetch(path, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+      signal,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    if (error instanceof TypeError) {
+      throw new Error("无法连接 Studio 服务，请确认后端已启动后重试。");
+    }
+    throw error;
+  }
   if (!response.ok) {
     throw new Error(await httpErrorMessage(response, "保存环境失败"));
   }
@@ -2828,7 +2936,7 @@ export function createEnvironment(
   input: EnvironmentInput,
   signal?: AbortSignal,
 ): Promise<StudioEnvironment> {
-  return writeEnvironment("/web/environments", "POST", input, signal);
+  return writeEnvironment("/web/v3/environments", "POST", input, signal);
 }
 
 export function updateEnvironment(
@@ -2837,7 +2945,7 @@ export function updateEnvironment(
   signal?: AbortSignal,
 ): Promise<StudioEnvironment> {
   return writeEnvironment(
-    `/web/environments/${encodeURIComponent(environmentId)}`,
+    `/web/v3/environments/${encodeURIComponent(environmentId)}`,
     "PATCH",
     input,
     signal,
@@ -2849,7 +2957,7 @@ export async function deleteEnvironment(
   signal?: AbortSignal,
 ): Promise<void> {
   const response = await apiFetch(
-    `/web/environments/${encodeURIComponent(environmentId)}`,
+    `/web/v3/environments/${encodeURIComponent(environmentId)}`,
     { method: "DELETE", signal },
   );
   if (!response.ok) {
@@ -2862,7 +2970,7 @@ export async function buildEnvironment(
   signal?: AbortSignal,
 ): Promise<EnvironmentBuildVersion> {
   const response = await apiFetch(
-    `/web/environments/${encodeURIComponent(environmentId)}/build`,
+    `/web/v3/environments/${encodeURIComponent(environmentId)}/build`,
     { method: "POST", signal },
   );
   if (!response.ok) {
@@ -2880,7 +2988,7 @@ export async function getEnvironmentBuild(
 ): Promise<EnvironmentBuildVersion> {
   const query = options.includeLogs ? "?includeLogs=true" : "";
   const response = await apiFetch(
-    `/web/environments/${encodeURIComponent(environmentId)}/builds/${encodeURIComponent(versionId)}${query}`,
+    `/web/v3/environments/${encodeURIComponent(environmentId)}/builds/${encodeURIComponent(versionId)}${query}`,
     { signal: options.signal },
   );
   if (!response.ok) {
@@ -2897,13 +3005,13 @@ export async function getEnvironmentManifest(
   signal?: AbortSignal,
 ): Promise<EnvironmentManifest> {
   const response = await apiFetch(
-    `/web/environments/${encodeURIComponent(environmentId)}/builds/${encodeURIComponent(versionId)}/manifest`,
+    `/web/v3/environments/${encodeURIComponent(environmentId)}/builds/${encodeURIComponent(versionId)}/manifest`,
     { signal },
   );
   if (!response.ok) {
     throw new Error(await httpErrorMessage(response, "读取环境 Manifest 失败"));
   }
-  return environmentManifest(await response.json());
+  return parseEnvironmentManifest(await response.json());
 }
 
 function environmentBuildResource(value: unknown): EnvironmentBuildResource {
@@ -2923,7 +3031,7 @@ function environmentBuildResource(value: unknown): EnvironmentBuildResource {
 export async function getEnvironmentResources(
   signal?: AbortSignal,
 ): Promise<EnvironmentResourcesResponse> {
-  const response = await apiFetch("/web/environment-resources", { signal });
+  const response = await apiFetch("/web/v3/environment-resources", { signal });
   if (!response.ok) {
     throw new Error(await httpErrorMessage(response, "加载环境构建资源失败"));
   }

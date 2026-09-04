@@ -26,6 +26,7 @@ from veadk.agent_metadata import agent_skill_summaries as agent_skill_summaries
 
 INVOCATION_METADATA_KEY = "veadkInvocation"
 ENVIRONMENT_MOUNTS_METADATA_KEY = "environmentMounts"
+CODEX_SANDBOX_ENVIRONMENT_METADATA_KEY = "codexSandboxEnvironment"
 
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 _SKILL_TOOL_NAMES = ("load_skill", "skills_tool", "execute_skills")
@@ -49,6 +50,22 @@ class FrontendInvocationPlugin(BasePlugin):
             return
 
         if metadata.get(ENVIRONMENT_MOUNTS_METADATA_KEY) is True:
+            execution_instruction = (
+                "When the selected environment is a Codex Sandbox, call "
+                "`delegate_to_codex_sandbox` once with a self-contained, "
+                "outcome-oriented task and let its inner Codex invoke installed "
+                "CLIs end to end. Do not split that task into individual "
+                "`execute_in_sandbox` calls. This uses the existing mounted "
+                "environment and is not dynamic-agent creation. "
+                "Preserve the user's requested scope and constraints exactly; do "
+                "not invent length or format requirements. Use the delegation result "
+                "directly and do not make a second delegation to retrieve files. "
+                "For other mounted "
+                "environments, use `execute_in_sandbox` for shell or CLI commands. "
+                if metadata.get(CODEX_SANDBOX_ENVIRONMENT_METADATA_KEY) is True
+                else "Use `execute_in_sandbox` in that primary environment before "
+                "calling unrelated knowledge or skill tools. "
+            )
             llm_request.append_instructions(
                 [
                     (
@@ -56,27 +73,30 @@ class FrontendInvocationPlugin(BasePlugin):
                         "session. Mounted execution environments take priority over "
                         "dynamic agent creation. Environment routing is a Studio "
                         "execution constraint and also takes priority over agent-local "
-                        "knowledge and skill workflows whenever an environment can complete "
+                        "knowledge and skill workflows whenever an environment can "
+                        "complete "
                         "the task. Before answering any substantive user request, "
                         "unless the user explicitly asks to create or delegate to a "
                         "new agent, your first tool call MUST be `list_envs`. "
                         "Semantically match the user's task against each environment's "
                         "name, description, and capabilities; the user does not need "
                         "to mention an environment. If the user names a mounted "
-                        "environment, select that environment exactly; otherwise choose "
+                        "environment, select that environment exactly; otherwise "
+                        "choose "
                         "exactly one primary environment by matching the requested "
                         "deliverable and action, not merely an installed tool. Treat "
-                        "negative scope statements such as 'not for review' or 'not for "
+                        "negative scope statements such as 'not for review' or 'not "
+                        "for "
                         "implementation' as disqualifying. For example: requirement, "
                         "product, architecture, or ADR design matches an environment "
                         "advertising authoring/design; review or verification matches "
                         "review; implementation, fixes, or tests match engineering. "
-                        "Use `execute_in_sandbox` in that primary environment before "
-                        "calling unrelated knowledge or skill tools. "
+                        f"{execution_instruction}"
                         "Call `get_env_manifest` only when the list summary is "
                         "insufficient. If no mounted environment is relevant, continue "
-                        "normally. Do not call any other tool before `list_envs`. Do not "
-                        "call `collect_resources` or `create_agents` first, and do not call them "
+                        "normally. Do not call any other tool before `list_envs`. Do "
+                        "not call `collect_resources` or `create_agents` first, and do "
+                        "not call them "
                         "merely because a task is complex. Only call them when the "
                         "user explicitly asks to create, add, assemble, or delegate "
                         "to a new agent or sub-agent. Ambiguous wording does not "

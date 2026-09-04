@@ -545,7 +545,12 @@ def test_local_skill_files_are_embedded_without_owner_scoped_artifact_id():
         for key in tos.objects
         if "/environments/owner-b/" in key and "/skills/" in key
     ]
-    assert len(owner_b_skill_keys) == 1
+    assert len(owner_b_skill_keys) == 2
+    assert {key.split("/environments/", 1)[0] for key in owner_b_skill_keys} == {
+        "veadk-studio/v2",
+        "veadk-studio/v3",
+    }
+    assert len({tos.objects[key] for key in owner_b_skill_keys}) == 1
 
 
 def test_inspect_and_import_keep_order_and_report_in_batch_duplicates():
