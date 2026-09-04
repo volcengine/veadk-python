@@ -206,7 +206,16 @@ def resolve_agentkit_cli(
     cache_root: Path | None = None,
     allow_download: bool = True,
 ) -> Path:
-    """Resolve the pinned CLI, downloading it only after local candidates fail."""
+    """Resolve the pinned CLI, preferring an explicit immutable archive."""
+
+    if archive is not None:
+        artifact = agentkit_cli_artifact()
+        verify_agentkit_cli_archive(archive, artifact)
+        return install_agentkit_cli(
+            artifact=artifact,
+            archive=archive,
+            cache_root=cache_root,
+        )
 
     configured = os.getenv(AGENTKIT_CLI_ENV, "").strip()
     if configured:

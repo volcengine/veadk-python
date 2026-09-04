@@ -411,6 +411,63 @@ def test_explicit_cli_must_match_pinned_version(
         resolve_agentkit_cli(cache_root=tmp_path / "cache", allow_download=False)
 
 
+def test_explicit_archive_overrides_stale_cli_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive = tmp_path / "agentkit-linux-x64.tar.gz"
+    artifact = _write_test_archive(archive)
+    stale_executable = tmp_path / "stale-ak"
+    stale_executable.write_text("#!/bin/sh\necho 'ak 0.1.0'\n", encoding="utf-8")
+    stale_executable.chmod(0o755)
+    monkeypatch.setenv(AGENTKIT_CLI_ENV, str(stale_executable))
+    monkeypatch.setattr(agentkit_cli, "agentkit_cli_artifact", lambda: artifact)
+
+    resolved = resolve_agentkit_cli(
+        archive=archive,
+        cache_root=tmp_path / "cache",
+        allow_download=False,
+    )
+
+    assert resolved.read_bytes() == _script()
+
+
+def test_valid_explicit_cli_is_used_without_archive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executable = tmp_path / "ak"
+    executable.write_bytes(_script())
+    executable.chmod(0o755)
+    monkeypatch.setenv(AGENTKIT_CLI_ENV, str(executable))
+
+    assert (
+        resolve_agentkit_cli(cache_root=tmp_path / "cache", allow_download=False)
+        == executable
+    )
+
+
+def test_explicit_archive_fails_closed_before_valid_cli_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive = tmp_path / "agentkit-linux-x64.tar.gz"
+    artifact = _write_test_archive(archive)
+    archive.write_bytes(b"tampered")
+    executable = tmp_path / "ak"
+    executable.write_bytes(_script())
+    executable.chmod(0o755)
+    monkeypatch.setenv(AGENTKIT_CLI_ENV, str(executable))
+    monkeypatch.setattr(agentkit_cli, "agentkit_cli_artifact", lambda: artifact)
+
+    with pytest.raises(AgentKitCliError, match="checksum"):
+        resolve_agentkit_cli(
+            archive=archive,
+            cache_root=tmp_path / "cache",
+            allow_download=False,
+        )
+
+
 def test_resolver_uses_valid_path_before_cache(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
