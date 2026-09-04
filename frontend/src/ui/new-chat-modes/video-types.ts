@@ -1,5 +1,6 @@
 import type { CloudProvider } from "../../adk/cloudProvider";
 import type { NewChatCompactSelectOption } from "./NewChatCompactSelect";
+import { newChatT } from "./newChatI18n";
 
 export type VideoTaskMode =
   | "auto"
@@ -43,14 +44,22 @@ export function videoModelsForProvider(provider: CloudProvider): VideoProviderMo
   return VIDEO_MODELS_BY_PROVIDER[provider];
 }
 
-export const VIDEO_TASK_MODE_OPTIONS: NewChatCompactSelectOption[] = [
-  { value: "auto", label: "自动识别" },
-  { value: "text_to_video", label: "文生视频" },
-  { value: "reference_to_video", label: "参考素材生视频" },
-  { value: "video_editing", label: "视频编辑" },
-  { value: "video_extension", label: "视频续写" },
-  { value: "first_last_frame", label: "首尾帧生成" },
+export const VIDEO_TASK_MODES: readonly VideoTaskMode[] = [
+  "auto",
+  "text_to_video",
+  "reference_to_video",
+  "video_editing",
+  "video_extension",
+  "first_last_frame",
 ];
+
+/** Build labels when rendering so an in-place language change is reflected. */
+export function videoTaskModeOptions(locale?: string): NewChatCompactSelectOption[] {
+  return VIDEO_TASK_MODES.map((value) => ({
+    value,
+    label: newChatT(`video.modes.${value}`, locale ? { lng: locale } : {}),
+  }));
+}
 
 export const VIDEO_ASPECT_RATIO_OPTIONS: NewChatCompactSelectOption[] = [
   { value: "21:9", label: "21:9" },

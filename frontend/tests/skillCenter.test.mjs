@@ -108,10 +108,10 @@ test("Skill errors preserve and render upstream error details", () => {
   assert.match(managementClientSource, /readonly originalError\?: SkillApiOriginalError/);
   assert.match(managementClientSource, /readonly rawResponse = ""/);
   assert.match(managementClientSource, /const rawResponse = await response\.text\(\)/);
-  assert.match(errorDetailsSource, /原始错误：\{originalMessage\}/);
+  assert.match(errorDetailsSource, /errorDetails\.original/);
   assert.match(errorDetailsSource, /HTTP \$\{metadata\.status\}/);
-  assert.match(errorDetailsSource, /服务端原始响应/);
-  assert.match(errorDetailsSource, /<summary>详细信息<\/summary>/);
+  assert.match(errorDetailsSource, /errorDetails\.rawResponse/);
+  assert.match(errorDetailsSource, /<summary>\{t\("errorDetails\.details"\)\}<\/summary>/);
   assert.match(skillCenterSource, /errors\.map\(\(\{ region, error \}\) =>/);
   assert.match(skillCenterSource, /<SkillErrorDetails error=\{error\} \/>/);
 });
@@ -154,7 +154,7 @@ test("Library navigation replaces Skills immediately below agents", () => {
   const search = sidebarSource.indexOf('{show("search")');
   const agents = sidebarSource.indexOf('className={`new-chat new-chat--agents');
   const library = sidebarSource.indexOf('className={`new-chat new-chat--library');
-  const cronJobs = sidebarSource.indexOf('aria-label="定时任务"', library);
+  const cronJobs = sidebarSource.indexOf('aria-label={t("navigation.cronjobs")}', library);
 
   assert.ok(search >= 0 && agents > search);
   assert.ok(library > agents && cronJobs > library);
@@ -171,24 +171,24 @@ test("Library navigation replaces Skills immediately below agents", () => {
     /<ResourceLibraryIcon className="icon" \/>/,
   );
   assert.doesNotMatch(sidebarSource.slice(agents, cronJobs), /sidebar-nav-slot/);
-  assert.match(sidebarSource.slice(agents, cronJobs), />资源库<\/span>/);
+  assert.match(sidebarSource.slice(agents, cronJobs), /\{t\("navigation\.library"\)\}<\/span>/);
 });
 
 test("Skill workbench supports one to three independent model and style groups", () => {
   assert.match(generationSource, /const MAX_GROUPS = 3/);
   assert.match(generationSource, /models\[index % Math\.max\(1, capability\.models\.length\)\]/);
-  assert.match(generationSource, /value: "custom", label: "自定义"/);
-  assert.match(generationSource, /自定义风格/);
+  assert.match(generationSource, /value: "custom", label: t\("generation\.styles\.custom"\)/);
+  assert.match(generationSource, /generation\.styles\.customFallback/);
   assert.match(generationSource, /await Promise\.all\(groups\.map\(createRun\)\)/);
   assert.match(generationSource, /const MAX_AUTO_REPAIRS = 2/);
   assert.match(generationSource, /function isFormatValidationFailure/);
-  assert.match(generationSource, /正在自动修复（\$\{attempt\}\/\$\{MAX_AUTO_REPAIRS\}）/);
+  assert.match(generationSource, /generation\.stages\.autoRepairing/);
   assert.match(generationSource, /await refineSkillWorkbenchTask\(/);
-  assert.match(generationSource, /再次修复/);
-  assert.match(generationSource, /pollError: normalizeSkillError\(error, "读取候选方案状态失败，正在重试"\)/);
+  assert.match(generationSource, /generation\.repairAgain/);
+  assert.match(generationSource, /pollError: normalizeSkillError\(error, skillT\("generation\.errors\.pollCandidate"\)\)/);
   assert.match(generationSource, /window\.setTimeout\(\(\) => void poll\(\), POLL_INTERVAL_MS\)/);
   assert.doesNotMatch(generationSource, /window\.setInterval\(\(\) => void poll\(\), POLL_INTERVAL_MS\)/);
-  assert.match(generationSource, />生成<\/button>/);
+  assert.match(generationSource, /\{t\("generation\.generate"\)\}<\/button>/);
   assert.doesNotMatch(generationSource, /任务中心|恢复任务|task center/i);
 });
 
@@ -196,17 +196,17 @@ test("Skill generation setup follows Studio form and select conventions", () => 
   assert.doesNotMatch(generationSource, /<select\b|<option\b/);
   assert.match(generationSource, /<SkillConfigSelect/);
   assert.match(generationSource, /className="skill-generation__add-group"/);
-  assert.match(generationSource, /aria-label="返回技能空间"/);
+  assert.match(generationSource, /aria-label=\{t\("generation\.back"\)\}/);
   assert.match(generationSource, /<BackIcon \/>/);
-  assert.match(generationSource, /<strong>基本信息<\/strong>/);
-  assert.match(generationSource, /operation === "create" \? "生成方案" : "优化方案"/);
-  assert.match(generationSource, /按不同方案并行生成多个技能，您可以选择最佳结果/);
-  assert.match(generationSource, /按不同方案并行优化当前技能，您可以选择最佳结果/);
-  assert.match(generationSource, /目标<span className="skill-required-mark" aria-hidden="true">\*<\/span>/);
-  assert.match(generationSource, /<span>Skill 名称<\/span>/);
+  assert.match(generationSource, /<strong>\{t\("generation\.basicInfo"\)\}<\/strong>/);
+  assert.match(generationSource, /operation === "create" \? t\("generation\.createPlans"\) : t\("generation\.optimizePlans"\)/);
+  assert.match(generationSource, /generation\.createPlansDescription/);
+  assert.match(generationSource, /generation\.optimizePlansDescription/);
+  assert.match(generationSource, /\{t\("generation\.goal"\)\}<span className="skill-required-mark" aria-hidden="true">\*<\/span>/);
+  assert.match(generationSource, /<span>\{t\("generation\.skillName"\)\}<\/span>/);
   assert.doesNotMatch(generationSource, /Skill 名称（可选）/);
-  assert.match(generationSource, /label="模型"\s+required/);
-  assert.match(generationSource, /label="风格"\s+required/);
+  assert.match(generationSource, /label=\{t\("generation\.model"\)\}\s+required/);
+  assert.match(generationSource, /label=\{t\("generation\.style"\)\}\s+required/);
   assert.doesNotMatch(generationSource, /火山引擎|BytePlus/);
   assert.match(skillStylesSource, /\.skill-generation__add-group\s*\{[^}]*border:\s*1px dashed/);
   assert.match(skillStylesSource, /\.skill-generation__header\s*\{[^}]*padding:\s*32px 32px 0;/);
@@ -225,7 +225,7 @@ test("Skill generation setup follows Studio form and select conventions", () => 
   assert.match(configSelectSource, /aria-autocomplete="list"/);
   assert.match(configSelectSource, /nativeEvent\.isComposing/);
   assert.match(generationSource, /allowCustom/);
-  assert.match(generationSource, /选择或输入模型 ID/);
+  assert.match(generationSource, /generation\.modelPlaceholder/);
   assert.match(generationSource, /function modelNameProblem/);
   assert.match(configSelectSource, /role="listbox"/);
   assert.match(configSelectSource, /role="option"/);
@@ -240,9 +240,9 @@ test("Skill generation setup follows Studio form and select conventions", () => 
 
 test("Skill name validation is immediate, specific, and blocks generation", () => {
   assert.match(generationSource, /name\.length > 64/);
-  assert.match(generationSource, /Skill 名称不能超过 64 个字符/);
+  assert.match(generationSource, /generation\.validation\.nameTooLong/);
   assert.match(generationSource, /\^\[a-z0-9-\]\+\$/);
-  assert.match(generationSource, /Skill 名称只能包含小写字母、数字和连字符/);
+  assert.match(generationSource, /generation\.validation\.invalidName/);
   assert.match(generationSource, /aria-invalid=\{Boolean\(nameError\)\}/);
   assert.match(generationSource, /role="alert"/);
   assert.match(generationSource, /&& !nameError/);
@@ -265,10 +265,10 @@ test("managed Skill APIs cover space creation, archives, deletion, and full file
   assert.match(skillCenterSource, /skillName: skill\.skillName/);
   assert.match(managementDialogsSource, /await validateSkillArchive\(selected\)/);
   assert.match(managementDialogsSource, /export function EditSkillSpaceDialog/);
-  assert.match(skillCenterSource, /onClick=\{\(\) => setEditingSpace\(selectedSpace\)\}[\s\S]*?>\s*编辑空间\s*<\/Button>/);
-  assert.match(skillCenterSource, /onClick=\{\(\) => void removeSpace\(selectedSpace\)\}[\s\S]*?"删除空间"/);
+  assert.match(skillCenterSource, /onClick=\{\(\) => setEditingSpace\(selectedSpace\)\}[\s\S]*?t\("skillCenter\.editSpace"\)/);
+  assert.match(skillCenterSource, /onClick=\{\(\) => void removeSpace\(selectedSpace\)\}[\s\S]*?t\("skillCenter\.deleteSpace"\)/);
   assert.match(resourceCardSource, /<ResourceCardRevealAction/);
-  assert.match(managementDialogsSource, /不会自动上传/);
+  assert.match(managementDialogsSource, /management\.archiveHelp/);
   assert.match(managementDialogsSource, /!validation \|\| validating \|\| submitting/);
 });
 
@@ -276,7 +276,7 @@ test("Skill space creation requires an explicit region and keeps it after creati
   assert.match(managementDialogsSource, /import \{[\s\S]*?SkillConfigSelect,[\s\S]*?\} from "\.\/SkillConfigSelect"/);
   assert.match(managementDialogsSource, /regionOptions: SkillConfigOption\[\]/);
   assert.match(managementDialogsSource, /const \[region, setRegion\] = useState\(initialRegion\)/);
-  assert.match(managementDialogsSource, /<SkillConfigSelect[\s\S]*?label="地域"[\s\S]*?required/);
+  assert.match(managementDialogsSource, /<SkillConfigSelect[\s\S]*?label=\{t\("management\.region"\)\}[\s\S]*?required/);
   assert.match(managementDialogsSource, /createSkillSpace\(\{[\s\S]*?region,[\s\S]*?\}\)/);
   assert.match(managementDialogsSource, /onCreated\(\{ \.\.\.created, region: created\.region \|\| region \}\)/);
   assert.match(skillCenterSource, /regionOptions=\{cloudRegionOptions\(cloudProvider\)\}/);
@@ -312,7 +312,7 @@ test("Skill space cards keep the shared reveal action and load more while scroll
 test("Skill upload uses a large drag-and-drop target", () => {
   assert.match(managementDialogsSource, /onDragOver=/);
   assert.match(managementDialogsSource, /onDrop=/);
-  assert.match(managementDialogsSource, /拖拽 Skill ZIP 到这里/);
+  assert.match(managementDialogsSource, /management\.dropzone/);
   assert.match(skillStylesSource, /\.skill-upload-dropzone\s*\{[^}]*min-height:\s*min\(42vh, 360px\);/);
 });
 
@@ -321,7 +321,7 @@ test("Skill pages avoid decorative icons and use a semantic table", () => {
   assert.doesNotMatch(skillCenterSource, /skillcenter-card-icon|skillcenter-symbol/);
   assert.doesNotMatch(skillCenterSource, /<EmptyMessage\.Icon>/);
   assert.match(skillCenterSource, /<table className="skillcenter-table">/);
-  assert.match(skillCenterSource, /<th scope="col">技能<\/th>/);
+  assert.match(skillCenterSource, /<th scope="col">\{t\("skillCenter\.skills"\)\}<\/th>/);
   assert.doesNotMatch(skillCenterSource, /<th scope="col">版本<\/th>/);
   assert.match(skillCenterSource, /className="skillcenter-table__version-badge"/);
   assert.match(skillCenterSource, /className="skillcenter-detail-facts"/);
@@ -330,32 +330,32 @@ test("Skill pages avoid decorative icons and use a semantic table", () => {
 });
 
 test("skill space cards expose direct actions and structured metadata", () => {
-  assert.match(skillCenterSource, /action=\{\{ label: "添加技能"/);
-  assert.match(skillCenterSource, /detailAction=\{\{ label: "查看详情"/);
+  assert.match(skillCenterSource, /action=\{\{ label: t\("skillCenter\.addSkill"\)/);
+  assert.match(skillCenterSource, /detailAction=\{\{ label: t\("common\.viewDetails"\)/);
   assert.doesNotMatch(skillCenterSource, /status=\{<span className=\{`skillcenter-status \$\{statusTone\(space\.status\)\}`\}/);
   assert.match(resourceCardSource, /status\?: ReactNode/);
   assert.doesNotMatch(skillCenterSource, /menuLabel=\{`更多空间操作：\$\{space\.name\}`\}/);
   assert.doesNotMatch(skillCenterSource, /<small>地域<\/small>/);
-  assert.match(skillCenterSource, /label: "技能数量", value: `\$\{space\.skillCount \?\? 0\} 技能`/);
-  assert.match(skillCenterSource, /label: "更新时间", value: formatRelativeTimeLabel\(space\.updatedAt\)/);
+  assert.match(skillCenterSource, /label: t\("skillCenter\.skillCount"\), value: t\("skillCenter\.skillCountValue", \{ count: space\.skillCount \?\? 0 \}\)/);
+  assert.match(skillCenterSource, /label: t\("skillCenter\.updatedAt"\), value: formatRelativeTimeLabel\(space\.updatedAt/);
   assert.doesNotMatch(skillCenterSource, /metadata=\{\[[\s\S]*?label: "地域"/);
   assert.doesNotMatch(skillCenterSource, /<small>Project<\/small>/);
   assert.doesNotMatch(skillCenterSource, /<span>地域<\/span>/);
   const detailLayoutStart = skillCenterSource.indexOf("<ResourceDetailLayout");
   const detailLayoutEnd = skillCenterSource.indexOf("</ResourceDetailLayout>", detailLayoutStart);
   const detailHeader = skillCenterSource.slice(detailLayoutStart, detailLayoutEnd);
-  assert.match(detailHeader, /<Button[\s\S]*?color="secondary"[\s\S]*?variant="outline"[\s\S]*?>\s*编辑空间\s*<\/Button>/);
-  assert.match(detailHeader, /"删除中…" : "删除空间"/);
+  assert.match(detailHeader, /<Button[\s\S]*?color="secondary"[\s\S]*?variant="outline"[\s\S]*?>\s*\{t\("skillCenter\.editSpace"\)\}\s*<\/Button>/);
+  assert.match(detailHeader, /t\("common\.deleting"\) : t\("skillCenter\.deleteSpace"\)/);
   assert.match(detailHeader, /<Button[^>]*color="danger"[^>]*variant="soft"/);
-  assert.match(detailHeader, /<Button[\s\S]*?color="secondary"[\s\S]*?variant="outline"[\s\S]*?>本地上传<\/Button>/);
-  assert.match(detailHeader, /<Button[\s\S]*?color="primary"[\s\S]*?<PlusLg18pxAdd[\s\S]*?>[\s\S]*?创建技能[\s\S]*?<\/Button>/);
-  assert.match(detailHeader, />创建技能<\/span>/);
+  assert.match(detailHeader, /<Button[\s\S]*?color="secondary"[\s\S]*?variant="outline"[\s\S]*?>\{t\("skillCenter\.localUpload"\)\}<\/Button>/);
+  assert.match(detailHeader, /<Button[\s\S]*?color="primary"[\s\S]*?<PlusLg18pxAdd[\s\S]*?>[\s\S]*?t\("skillCenter\.createSkill"\)[\s\S]*?<\/Button>/);
+  assert.match(detailHeader, />\{t\("skillCenter\.createSkill"\)\}<\/span>/);
   assert.doesNotMatch(detailHeader, /className="skillcenter-(?:primary|secondary)-action/);
 });
 
 test("skill space detail uses the shared split layout navigation", () => {
   assert.match(skillCenterSource, /type SkillSpaceDetailSection = "overview" \| "skills"/);
-  assert.match(skillCenterSource, /sections=\{\[[\s\S]*?key: "overview"[\s\S]*?label: "概览"[\s\S]*?content:[\s\S]*?key: "skills"[\s\S]*?label: "技能"[\s\S]*?content:/);
+  assert.match(skillCenterSource, /sections=\{\[[\s\S]*?key: "overview"[\s\S]*?label: t\("skillCenter\.overview"\)[\s\S]*?content:[\s\S]*?key: "skills"[\s\S]*?label: t\("skillCenter\.skills"\)[\s\S]*?content:/);
   assert.match(skillCenterSource, /activeSectionKey=\{detailSection\}/);
   assert.match(skillCenterSource, /onSectionChange=\{\(key\) => setDetailSection\(key as SkillSpaceDetailSection\)\}/);
   assert.doesNotMatch(skillCenterSource, /detailSection === "overview"/);
@@ -370,9 +370,9 @@ test("Skill running states, actions, and candidate loading use the requested vis
   assert.match(resourceCollectionStylesSource, /\.resource-card__actions\s*\{[^}]*display:\s*flex;/);
   assert.match(resourceCollectionStylesSource, /\.resource-card__action\s*\{[^}]*min-height:\s*28px;[^}]*font-size:\s*12px;/);
   assert.match(generationSource, /className="skill-generation__spinner"/);
-  assert.match(generationSource, /className="skill-generation__summary-row"><span>风格<\/span>/);
-  assert.match(generationSource, /className="skill-generation__summary-row"><span>模型<\/span>/);
-  assert.match(generationSource, /className="skill-generation__summary-row"><span>进度<\/span>/);
+  assert.match(generationSource, /className="skill-generation__summary-row"><span>\{t\("generation\.style"\)\}<\/span>/);
+  assert.match(generationSource, /className="skill-generation__summary-row"><span>\{t\("generation\.model"\)\}<\/span>/);
+  assert.match(generationSource, /className="skill-generation__summary-row"><span>\{t\("generation\.progress"\)\}<\/span>/);
   const candidateView = generationSource.slice(generationSource.indexOf('className="skill-generation__candidate-tabs"'));
   assert.doesNotMatch(candidateView, /方案 \{index \+ 1\}|runs\.indexOf\(active\)/);
   assert.doesNotMatch(candidateView, /className="skill-generation__status"/);
@@ -390,13 +390,13 @@ test("disabled Dev Sandbox actions explain the missing configuration on hover an
   assert.match(skillCenterSource, /tabIndex=\{disabled \? 0 : undefined\}/);
   assert.match(skillCenterSource, /aria-describedby=\{disabled \? tooltipId : undefined\}/);
   assert.match(skillCenterSource, /role="tooltip"/);
-  assert.match(skillCenterSource, /管理员未配置 Dev Sandbox/);
+  assert.match(skillCenterSource, /t\("skillCenter\.sandboxNotConfigured"\)/);
   assert.doesNotMatch(skillCenterSource, /skillcenter-capability-note/);
   assert.doesNotMatch(skillCenterSource, /Dev Sandbox：管理员未配置/);
-  assert.match(skillCenterSource, /<strong>自动创建<\/strong>/);
+  assert.match(skillCenterSource, /<strong>\{t\("skillCenter\.autoCreate"\)\}<\/strong>/);
   assert.doesNotMatch(skillCenterSource, /<strong>Dev Sandbox 创建<\/strong>/);
-  assert.match(skillCenterSource, /本地上传 Skill，或自动创建/);
-  assert.match(skillCenterSource, /<span>选择模型和风格，通过对话生成技能<\/span>/);
+  assert.match(skillCenterSource, /t\("skillCenter\.localUploadDescription"\)/);
+  assert.match(skillCenterSource, /<span>\{t\("skillCenter\.autoCreateDescription"\)\}<\/span>/);
   assert.match(skillStylesSource, /\.skillcenter-disabled-action\.is-disabled:hover \.skillcenter-disabled-tooltip/);
   assert.match(skillStylesSource, /\.skillcenter-disabled-action\.is-disabled:focus-visible \.skillcenter-disabled-tooltip/);
 });
@@ -423,5 +423,5 @@ test("Skill table keeps version beside the name and uses clear actions", () => {
 test("skill descriptions hide legacy YAML block scalar markers", () => {
   assert.match(skillCenterSource, /function skillDescriptionLabel/);
   assert.match(skillCenterSource, /\[">", ">-", "\\|", "\\|-"\]/);
-  assert.match(skillCenterSource, /skillDescriptionLabel\(skill\.skillDescription\)/);
+  assert.match(skillCenterSource, /skillDescriptionLabel\(skill\.skillDescription, t\)/);
 });

@@ -1,0 +1,215 @@
+{
+  "common": {
+    "back": "返回",
+    "close": "关闭"
+  },
+  "optimization": {
+    "title": "优化迁移项目",
+    "closeAria": "关闭优化窗口"
+  },
+  "projects": {
+    "title": "已迁移项目",
+    "description": "管理迁移后的源码版本，也可以选择任一版本继续优化。",
+    "libraryTitle": "项目与版本",
+    "libraryDescription": "查看、下载、部署或对比源码版本，也可以基于任一版本继续优化。",
+    "emptyTitle": "还没有已迁移的项目",
+    "emptyDescription": "迁移完成后，源码会自动保存在这里。"
+  },
+  "framework": {
+    "langchain": "LangChain",
+    "langgraph": "LangGraph",
+    "adk": "Google ADK",
+    "strands": "Strands",
+    "agentcore": "AgentCore",
+    "dify": "Dify",
+    "any": "Any（通用迁移）"
+  },
+  "state": {
+    "awaitingUpload": "待上传",
+    "analyzing": "分析中",
+    "needsInput": "待补充",
+    "analysisReady": "待确认",
+    "migrating": "迁移中",
+    "validating": "校验中",
+    "packaging": "打包中",
+    "succeeded": "已完成",
+    "succeededWithWarnings": "已完成，有提示",
+    "partial": "部分完成",
+    "failed": "失败",
+    "cancelled": "已终止",
+    "expired": "已过期"
+  },
+  "task": {
+    "partialReady": "迁移产物已生成，但交付不完整，请查看迁移提示。",
+    "readyWithWarnings": "迁移产物已生成，请查看迁移提示。",
+    "ready": "迁移产物已生成。"
+  },
+  "verification": {
+    "passed": "产物校验通过",
+    "failed": "产物校验未通过",
+    "degraded": "产物校验未完成"
+  },
+  "transfer": {
+    "session": "创建迁移环境",
+    "upload": "上传项目",
+    "analysis": "分析项目"
+  },
+  "validation": {
+    "agentNameRequired": "请输入 Agent 名称",
+    "agentNameInvalid": "Agent 名称必须为 1-63 位，只能包含小写字母、数字和连字符，且必须以字母或数字开头和结尾"
+  },
+  "duration": {
+    "seconds": "{{seconds}} 秒",
+    "minutesSeconds": "{{minutes}} 分 {{seconds}} 秒"
+  },
+  "expiry": {
+    "savedUnaffected": "已保存项目不受影响",
+    "savingUnaffected": "源码正在保存，完成后不受环境期限影响",
+    "activeDetail": "到期后任务记录和临时产物将无法访问",
+    "oneHour": "临时迁移环境保留 1 小时",
+    "ended": "临时迁移环境已结束",
+    "savedAvailable": "已保存项目仍可查看、下载、部署或优化",
+    "unavailable": "任务记录和临时产物已无法访问",
+    "countdown": "临时迁移环境将在 {{minutes}} 分 {{seconds}} 秒后结束",
+    "expiredSavedMessage": "临时迁移环境已结束，已保存项目不受影响。",
+    "expiredMessage": "临时迁移环境已结束，任务记录和临时产物无法继续访问。"
+  },
+  "analysis": {
+    "recommended": "建议迁移方式",
+    "scope": "迁移范围",
+    "excluded": "不在本次范围",
+    "viewEvidence": "查看分析证据",
+    "viewAssumptions": "查看关键假设",
+    "viewSourceEvidence": "查看源码证据"
+  },
+  "activity": {
+    "ariaLabel": "Codex 执行动态",
+    "title": "Codex 执行动态",
+    "startingAnalysis": "Codex 正在开始分析…",
+    "startingMigration": "Codex 正在开始迁移…",
+    "loadError": "暂时无法读取 Codex 执行动态，不影响当前任务。"
+  },
+  "artifact": {
+    "title": "迁移产物",
+    "fileTooLarge": "该文件超过 2 MiB，请下载完整产物后查看。",
+    "unsupportedPreview": "该文件不支持在线预览，请下载完整产物后查看。",
+    "filesAria": "迁移产物文件",
+    "searchAria": "搜索产物文件",
+    "searchPlaceholder": "搜索文件",
+    "limit": "仅展示前 {{count}} 项，请搜索具体文件。",
+    "noSelection": "未选择文件",
+    "noPreview": "暂无可预览文件。",
+    "loadingFile": "正在读取产物文件…",
+    "startupFile": "启动文件",
+    "fileCountLabel": "文件数",
+    "saved": "源码已保存，可继续查看、下载、部署或优化。",
+    "saving": "产物已生成，正在保存源码版本。",
+    "deployReady": "产物可预览、下载和部署，正在等待源码保存状态。",
+    "deployUnavailable": "产物可预览和下载，但当前交付状态不支持部署。",
+    "viewProjects": "查看已迁移项目",
+    "downloading": "下载中…",
+    "downloadZip": "下载 ZIP",
+    "deployTitle": "部署迁移产物",
+    "deployUnavailableTitle": "当前交付状态不支持部署",
+    "deployRuntime": "部署到 Runtime",
+    "fileCount": "{{count}} 个文件",
+    "startup": "启动文件 {{module}}",
+    "loading": "正在读取迁移产物…"
+  },
+  "model": {
+    "retiring": "即将下线",
+    "currentDefault": "当前默认模型",
+    "loadError": "加载模型列表失败",
+    "label": "模型",
+    "placeholder": "选择模型"
+  },
+  "upload": {
+    "zipOnly": "请选择 .zip 格式的本地项目文件。",
+    "invalidName": "ZIP 文件名无效，请重命名后重新选择。",
+    "tooLarge": "项目 ZIP 不能超过 {{size}}。",
+    "empty": "项目 ZIP 不能为空。",
+    "removeAria": "移除项目 ZIP",
+    "reselectPrompt": "重新选择项目 ZIP",
+    "selectPrompt": "选择或拖入本地项目 ZIP",
+    "reselect": "重新选择",
+    "selectZip": "选择 ZIP",
+    "continue": "继续上传",
+    "start": "开始迁移",
+    "inputAria": "选择本地项目 ZIP",
+    "retention": "临时迁移环境从创建完成起保留 1 小时；保存成功的源码版本不受影响。"
+  },
+  "deployment": {
+    "requiredPlaceholder": "请输入 {{key}}",
+    "optionalPlaceholder": "可选：{{key}}",
+    "notReady": "迁移产物尚未准备完成。",
+    "back": "返回迁移结果"
+  },
+  "workspace": {
+    "backToAddAgent": "返回添加 Agent",
+    "title": "从存量迁移",
+    "newMigration": "新建迁移",
+    "recent": "最近迁移",
+    "sessionsAria": "迁移会话",
+    "loadingSessions": "正在读取迁移会话…",
+    "noSessions": "暂无迁移会话",
+    "heading": "迁移存量 Agent 项目",
+    "intro": "上传本地项目 ZIP，Codex 将先进行只读分析，再由你确认迁移方式。"
+  },
+  "actions": {
+    "stop": "终止迁移",
+    "stopping": "正在终止…",
+    "reload": "重新读取",
+    "refreshStatus": "刷新状态"
+  },
+  "capability": {
+    "unavailable": "迁移能力暂不可用",
+    "defaultReason": "Dev Sandbox 暂不可用，请联系管理员检查配置。"
+  },
+  "conversation": {
+    "requestZip": "请提供本地项目 ZIP。上传后我会识别框架、入口和迁移边界，并在执行实际迁移前请你确认迁移方式。",
+    "zipHint": "仅支持本地 ZIP，最大 {{size}}；迁移环境从创建起保留 1 小时。",
+    "creatingSandbox": "正在创建 Dev Sandbox",
+    "initializing": "正在初始化迁移工作目录，并检查 AgentKit CLI、Codex 和迁移能力。环境就绪后将自动上传项目。",
+    "elapsed": "已等待 {{duration}}",
+    "uploadThenAnalyze": "ZIP 上传完成后将自动开始只读分析。",
+    "analyzing": "Codex 正在识别框架、入口和迁移边界，不会执行实际迁移。",
+    "migrationLocked": "迁移执行中不能修改附件或迁移方式。你可以等待当前任务结束，或主动终止。",
+    "analysisPaused": "只读分析已暂停。请仅回答下面列出的问题，提交后会在同一迁移环境中重新分析，不会开始实际迁移。",
+    "analysisComplete": "只读分析已完成。请检查建议，并确认最终迁移方式。",
+    "awaitingUpload": "迁移环境已创建，请重新选择本地 ZIP 继续上传。",
+    "expiredTitle": "迁移环境已过期",
+    "expiredDescription": "迁移内容和产物已无法预览、下载或部署。如已完成 Runtime 部署，可返回智能体页面继续使用。",
+    "unsupportedTitle": "当前 ZIP 暂时无法迁移",
+    "unsupportedHint": "请按提示整理项目后，新建迁移并重新上传。",
+    "failedTitle": "迁移未完成",
+    "cancelled": "当前迁移已终止。你可以新建迁移并重新上传项目。"
+  },
+  "questions": {
+    "ariaLabel": "补充项目分析信息",
+    "title": "补充分析所需信息",
+    "description": "附件保持锁定，提交后仅继续只读分析",
+    "submitting": "正在继续分析…",
+    "submit": "提交并继续分析"
+  },
+  "confirmation": {
+    "ariaLabel": "确认迁移方式",
+    "title": "确认迁移方式",
+    "description": "确认后才会执行实际迁移",
+    "framework": "迁移方式",
+    "frameworkPlaceholder": "选择迁移方式",
+    "agentName": "Agent 名称",
+    "entry": "项目入口",
+    "entryPlaceholder": "选择项目入口",
+    "entryExample": "例如 agent.py:agent",
+    "consent": "点击“确认并开始迁移”即确认上述迁移范围、排除项和关键假设。",
+    "starting": "正在启动迁移…",
+    "start": "确认并开始迁移"
+  },
+  "errors": {
+    "closeAria": "关闭错误提示"
+  },
+  "stopDialog": {
+    "title": "终止当前迁移？",
+    "description": "终止后，当前分析或迁移进程将停止，已执行的步骤不会继续。"
+  }
+}

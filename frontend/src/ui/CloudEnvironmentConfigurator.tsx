@@ -1,4 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
+import type { TFunction } from "i18next";
+import { useTranslation } from "react-i18next";
 import { Badge } from "@openai/apps-sdk-ui/components/Badge";
 import { Button } from "@openai/apps-sdk-ui/components/Button";
 import { Select, type Option } from "@openai/apps-sdk-ui/components/Select";
@@ -25,11 +27,13 @@ interface CloudEnvironmentConfiguratorProps {
 type EnvironmentOption = Option & { environment?: StudioEnvironment };
 
 const DEFAULT_ENVIRONMENT_VALUE = "__default_environment__";
-const DEFAULT_ENVIRONMENT_OPTION: EnvironmentOption = {
-  value: DEFAULT_ENVIRONMENT_VALUE,
-  label: "默认环境",
-  description: "使用部署 Runtime 的默认基础镜像",
-};
+function defaultEnvironmentOption(t: TFunction): EnvironmentOption {
+  return {
+    value: DEFAULT_ENVIRONMENT_VALUE,
+    label: t("cloudEnvironment.defaultLabel"),
+    description: t("cloudEnvironment.defaultDescription"),
+  };
+}
 
 export function isPersistenceStorageUnavailableError(cause: unknown): boolean {
   const message = cause instanceof Error ? cause.message : String(cause);
@@ -38,19 +42,19 @@ export function isPersistenceStorageUnavailableError(cause: unknown): boolean {
   );
 }
 
-const STATUS_LABELS = {
-  preparing: "准备中",
-  queued: "排队中",
-  building: "构建中",
-  scanning: "扫描中",
-  available: "可用",
-  failed: "构建失败",
+const STATUS_KEYS = {
+  preparing: "cloudEnvironment.status.preparing",
+  queued: "cloudEnvironment.status.queued",
+  building: "cloudEnvironment.status.building",
+  scanning: "cloudEnvironment.status.scanning",
+  available: "cloudEnvironment.status.available",
+  failed: "cloudEnvironment.status.failed",
 } as const;
 
-function environmentStatus(environment: StudioEnvironment) {
+function environmentStatus(environment: StudioEnvironment, t: TFunction) {
   return environment.latestVersion
-    ? STATUS_LABELS[environment.latestVersion.status]
-    : "未构建";
+    ? t(STATUS_KEYS[environment.latestVersion.status])
+    : t("cloudEnvironment.status.notBuilt");
 }
 
 function statusColor(
@@ -70,6 +74,7 @@ export function CloudEnvironmentConfigurator({
   controlClassName,
   optionClassName,
 }: CloudEnvironmentConfiguratorProps) {
+  const { t } = useTranslation("ui");
   const selectId = useId();
   const onChangeRef = useRef(onChange);
   const [environments, setEnvironments] = useState<StudioEnvironment[]>([]);
@@ -116,16 +121,16 @@ export function CloudEnvironmentConfigurator({
 
   const options = useMemo<EnvironmentOption[]>(
     () => [
-      DEFAULT_ENVIRONMENT_OPTION,
+      defaultEnvironmentOption(t),
       ...environments.map((environment) => ({
         value: environment.id,
         label: environment.name,
-        description: `${environmentOperatingSystemLabel(environment.operatingSystem)} · ${environmentLanguageLabel(environment.language)} · ${environmentStatus(environment)}`,
+        description: `${environmentOperatingSystemLabel(environment.operatingSystem)} · ${environmentLanguageLabel(environment.language)} · ${environmentStatus(environment, t)}`,
         disabled: environment.latestVersion?.status !== "available",
         environment,
       })),
     ],
-    [environments],
+    [environments, t],
   );
   const selectedEnvironment = environments.find(
     (environment) => environment.id === value.environmentId,
@@ -152,7 +157,7 @@ export function CloudEnvironmentConfigurator({
   if (loading && environments.length === 0) {
     return (
       <div className="cloud-env-state" role="status">
-        <TextShimmer duration={1.25}>正在加载环境...</TextShimmer>
+        <TextShimmer duration={1.25}>{t("cloudEnvironment.loading")}</TextShimmer>
       </div>
     );
   }
@@ -161,7 +166,7 @@ export function CloudEnvironmentConfigurator({
     return (
       <div className="cloud-env-state cloud-env-state--error" role="alert">
         <div>
-          <strong>环境加载失败</strong>
+          <strong>{t("cloudEnvironment.loadFailed")}</strong>
           <p>{error}</p>
         </div>
         <Button
@@ -170,7 +175,7 @@ export function CloudEnvironmentConfigurator({
           size="sm"
           onClick={() => setReloadKey((key) => key + 1)}
         >
-          重试
+          {t("common.retry")}
         </Button>
       </div>
     );
@@ -183,7 +188,7 @@ export function CloudEnvironmentConfigurator({
         id={`${selectId}-title`}
         htmlFor={selectId}
       >
-        <span>环境</span>
+        <span>{t("cloudEnvironment.label")}</span>
         <Select
           id={selectId}
           value={value.environmentId || DEFAULT_ENVIRONMENT_VALUE}
@@ -193,13 +198,13 @@ export function CloudEnvironmentConfigurator({
           optionClassName={optionClassName}
           pill={false}
           disabled={disabled}
-          placeholder="选择一个已构建的环境"
-          searchPlaceholder="搜索环境"
-          searchEmptyMessage="没有匹配的环境"
+          placeholder={t("cloudEnvironment.placeholder")}
+          searchPlaceholder={t("cloudEnvironment.search")}
+          searchEmptyMessage={t("cloudEnvironment.noMatches")}
           onChange={selectEnvironment}
         />
         <small>
-          仅可选择构建状态为“可用”的环境，部署时会固定到当前镜像版本。
+          {t("cloudEnvironment.selectionHint")}
         </small>
       </label>
 
@@ -217,12 +222,12 @@ export function CloudEnvironmentConfigurator({
               variant="soft"
               size="sm"
             >
-              {environmentStatus(selectedEnvironment)}
+              {environmentStatus(selectedEnvironment, t)}
             </Badge>
           </div>
           <dl className="cloud-env-details">
             <div>
-              <dt>操作系统</dt>
+              <dt>{t("cloudEnvironment.operatingSystem")}</dt>
               <dd>
                 {environmentOperatingSystemLabel(
                   selectedEnvironment.operatingSystem,
@@ -230,50 +235,50 @@ export function CloudEnvironmentConfigurator({
               </dd>
             </div>
             <div>
-              <dt>语言</dt>
+              <dt>{t("cloudEnvironment.language")}</dt>
               <dd>{environmentLanguageLabel(selectedEnvironment.language)}</dd>
             </div>
             <div>
-              <dt>工具</dt>
+              <dt>{t("cloudEnvironment.tools")}</dt>
               <dd>
-                {selectedTools.length ? selectedTools.join("、") : "无额外工具"}
+                {selectedTools.length ? selectedTools.join(t("environmentCenter.listSeparator")) : t("cloudEnvironment.noExtraTools")}
               </dd>
             </div>
             <div>
-              <dt>技能</dt>
+              <dt>{t("cloudEnvironment.skills")}</dt>
               <dd>
                 {selectedEnvironment.selectedSkills?.length
                   ? selectedEnvironment.selectedSkills
                       .map((skill) => skill.name)
-                      .join("、")
-                  : "无环境技能"}
+                      .join(t("environmentCenter.listSeparator"))
+                  : t("cloudEnvironment.noSkills")}
               </dd>
             </div>
             <div>
-              <dt>镜像版本</dt>
+              <dt>{t("cloudEnvironment.imageVersion")}</dt>
               <dd>
                 {selectedVersion?.versionId ||
                   value.environmentVersionId ||
-                  "不可用"}
+                  t("cloudEnvironment.unavailable")}
               </dd>
             </div>
             <div>
-              <dt>镜像</dt>
+              <dt>{t("cloudEnvironment.image")}</dt>
               <dd title={selectedVersion?.image || ""}>
                 {selectedVersion?.image ||
-                  "当前固定版本已不在列表中，请重新选择环境"}
+                  t("cloudEnvironment.versionMissing")}
               </dd>
             </div>
           </dl>
           {!selectedVersion ? (
             <p className="cloud-env-version-warning" role="alert">
-              此环境的可用版本已变化，请重新选择后再发布。
+              {t("cloudEnvironment.versionChanged")}
             </p>
           ) : null}
         </div>
       ) : value.environmentId ? (
         <div className="cloud-env-version-warning" role="alert">
-          已选择的环境不存在或无权访问，请重新选择。
+          {t("cloudEnvironment.selectionUnavailable")}
         </div>
       ) : (
         <p
@@ -282,10 +287,10 @@ export function CloudEnvironmentConfigurator({
           }`}
         >
           {usingDefaultFallback
-            ? "管理员未配置持久化存储，将使用部署 Runtime 时的默认基础镜像。"
+            ? t("cloudEnvironment.persistenceFallback")
             : environments.length === 0
-              ? "暂无自定义环境，将使用部署 Runtime 的默认基础镜像。"
-              : "当前使用 AgentKit 默认运行环境；选择自定义环境后，会基于对应镜像构建并加载环境技能。"}
+              ? t("cloudEnvironment.emptyFallback")
+              : t("cloudEnvironment.defaultGuidance")}
         </p>
       )}
     </section>

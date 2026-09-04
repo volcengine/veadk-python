@@ -6,6 +6,7 @@
 // exports with markdown.
 
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Check, Cloud, ExternalLink, Info, Loader2, Plus } from "lucide-react";
 import {
   listSkillSpaces,
@@ -31,6 +32,7 @@ export function SkillSpacePicker({
   onChange: (next: SelectedSkill[]) => void;
   cloudProvider?: CloudProvider;
 }) {
+  const { t } = useTranslation("create");
   const [spaces, setSpaces] = useState<SkillSpaceRef[]>([]);
   const [skills, setSkills] = useState<SkillSpaceSkill[]>([]);
   const [spaceId, setSpaceId] = useState<string>("");
@@ -50,7 +52,7 @@ export function SkillSpacePicker({
           if (sp.length > 0) setSpaceId(sp[0].id);
         }
       } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : "加载失败");
+        if (!cancelled) setError(e instanceof Error ? e.message : t("skills.space.loadError"));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -58,7 +60,7 @@ export function SkillSpacePicker({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     if (!spaceId) {
@@ -74,7 +76,7 @@ export function SkillSpacePicker({
         const sk = await listSkillsInSpace(spaceId, selectedSpace?.region);
         if (!cancelled) setSkills(sk);
       } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : "加载失败");
+        if (!cancelled) setError(e instanceof Error ? e.message : t("skills.space.loadError"));
       } finally {
         if (!cancelled) setLoadingSkills(false);
       }
@@ -82,7 +84,7 @@ export function SkillSpacePicker({
     return () => {
       cancelled = true;
     };
-  }, [spaceId, spaces]);
+  }, [spaceId, spaces, t]);
 
   const selectedSpace = spaces.find((s) => s.id === spaceId);
   const consoleUrl = selectedSpace
@@ -131,7 +133,7 @@ export function SkillSpacePicker({
     <div className="cw-skillspace">
       {loading ? (
         <p className="cw-empty-line cw-skill-loading" role="status">
-          <Loader2 className="cw-i cw-spin" /> 正在加载 AgentKit Skills 中心…
+          <Loader2 className="cw-i cw-spin" /> {t("skills.space.loadingSpaces")}
         </p>
       ) : error ? (
         <div className="cw-banner">
@@ -139,7 +141,7 @@ export function SkillSpacePicker({
           <span>{error}</span>
         </div>
       ) : spaces.length === 0 ? (
-        <p className="cw-empty-line">此账号下没有 AgentKit Skills 中心。</p>
+        <p className="cw-empty-line">{t("skills.space.noSpaces")}</p>
       ) : (
         <>
           <div className="cw-skillspace-header">
@@ -147,7 +149,7 @@ export function SkillSpacePicker({
               className="cw-input cw-skillspace-select"
               value={spaceId}
               onChange={(e) => setSpaceId(e.target.value)}
-              aria-label="选择 AgentKit Skills 中心"
+              aria-label={t("skills.space.selectSpace")}
             >
               {spaces.map((s) => (
                 <option key={s.id} value={s.id}>
@@ -173,8 +175,8 @@ export function SkillSpacePicker({
                     target="_blank"
                     rel="noopener noreferrer"
                     className="cw-button cw-button-secondary cw-skillspace-console-link"
-                    title="在火山引擎控制台打开"
-                    aria-label="在火山引擎控制台打开"
+                    title={t("skills.space.openConsole")}
+                    aria-label={t("skills.space.openConsole")}
                   >
                     <ExternalLink className="cw-i cw-i-sm" />
                   </a>
@@ -185,10 +187,10 @@ export function SkillSpacePicker({
 
           {loadingSkills ? (
             <p className="cw-empty-line cw-skill-loading" role="status">
-              <Loader2 className="cw-i cw-spin" /> 正在加载技能列表…
+              <Loader2 className="cw-i cw-spin" /> {t("skills.space.loadingSkills")}
             </p>
           ) : skills.length === 0 ? (
-            <p className="cw-empty-line">此 AgentKit Skills 中心暂无技能。</p>
+            <p className="cw-empty-line">{t("skills.space.noSkills")}</p>
           ) : (
             <div className="cw-skill-results">
               {skills.map((sk) => {

@@ -23,6 +23,7 @@ import { Input } from "@openai/apps-sdk-ui/components/Input";
 import { LoadingIndicator } from "@openai/apps-sdk-ui/components/Indicator";
 import { Select, type Option } from "@openai/apps-sdk-ui/components/Select";
 import { ChevronLeft } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { StudioActionMenu, type StudioActionMenuItem } from "./StudioActionMenu";
 import { TextShimmer } from "./text-shimmer/TextShimmer";
@@ -153,7 +154,8 @@ export function ResourceDetailHeading({
   backLabel?: string;
   onBack?: () => void;
 }) {
-  const resolvedBackLabel = backLabel ?? "返回";
+  const { t } = useTranslation("ui");
+  const resolvedBackLabel = backLabel ?? t("resourceCollection.back");
 
   return (
     <div className="resource-detail__heading">
@@ -210,7 +212,7 @@ export function ResourceDetailLayout<T extends string = string>({
   bodyClassName,
   sections,
   activeSectionKey,
-  navigationLabel = "详情导航",
+  navigationLabel,
   onSectionChange,
   children,
 }: {
@@ -230,8 +232,10 @@ export function ResourceDetailLayout<T extends string = string>({
   onSectionChange?: (key: T) => void;
   children?: ReactNode;
 }) {
+  const { t } = useTranslation("ui");
   const hasNavigation = Boolean(sections?.length);
   const activeContent = sections?.find((section) => section.key === activeSectionKey)?.content;
+  const resolvedNavigationLabel = navigationLabel ?? t("resourceCollection.detailNavigation");
 
   return (
     <ResourceDetail className={className}>
@@ -249,7 +253,7 @@ export function ResourceDetailLayout<T extends string = string>({
       <ResourceDetailBody className={joinClassNames(hasNavigation && "is-split", bodyClassName)}>
         {hasNavigation ? (
           <>
-            <nav className="resource-detail__navigation" aria-label={navigationLabel}>
+            <nav className="resource-detail__navigation" aria-label={resolvedNavigationLabel}>
               {sections?.map((section) => (
                 <Button
                   type="button"
@@ -333,7 +337,7 @@ export function ResourceDataTable<T>({
   onScroll,
   busy,
   footer,
-  emptyLabel = "暂无数据",
+  emptyLabel,
 }: {
   rows: readonly T[];
   rowKey: (item: T) => string;
@@ -351,7 +355,9 @@ export function ResourceDataTable<T>({
   footer?: ReactNode;
   emptyLabel?: ReactNode;
 }) {
+  const { t } = useTranslation("ui");
   const hasRowActions = Boolean(rowActions);
+  const resolvedEmptyLabel = emptyLabel ?? t("resourceCollection.noData");
 
   return (
     <div className="resource-data-table">
@@ -391,14 +397,14 @@ export function ResourceDataTable<T>({
                   {column.header}
                 </th>
               ))}
-              {hasRowActions ? <th scope="col" className="resource-data-table__actions-heading"><span className="sr-only">操作</span></th> : null}
+              {hasRowActions ? <th scope="col" className="resource-data-table__actions-heading"><span className="sr-only">{t("resourceCollection.actions")}</span></th> : null}
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 ? (
               <tr>
                 <td className="resource-data-table__empty" colSpan={columns.length + (hasRowActions ? 1 : 0)}>
-                  {emptyLabel}
+                  {resolvedEmptyLabel}
                 </td>
               </tr>
             ) : rows.map((item) => {
@@ -414,8 +420,8 @@ export function ResourceDataTable<T>({
                   {rowActions ? (
                     <td className="resource-data-table__actions">
                       <StudioActionMenu
-                        label={`更多操作 ${label}`}
-                        menuLabel={`${label} 操作`}
+                        label={t("resourceCollection.moreActions", { label })}
+                        menuLabel={t("resourceCollection.actionsFor", { label })}
                         items={rowActions(item)}
                       />
                     </td>
@@ -696,6 +702,7 @@ export const ResourceResults = forwardRef<
 });
 
 export function ResourceLoadingState() {
+  const { t } = useTranslation("ui");
   return (
     <div
       className="resource-loading-state"
@@ -705,7 +712,7 @@ export function ResourceLoadingState() {
     >
       <LoadingIndicator size={16} />
       <TextShimmer as="span" duration={2.4}>
-        资源加载中，请稍候
+        {t("resourceCollection.loading")}
       </TextShimmer>
     </div>
   );

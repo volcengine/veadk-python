@@ -7,6 +7,8 @@ import {
   useRef,
   useState,
 } from "react";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import {
   Background,
   BaseEdge,
@@ -48,31 +50,31 @@ type AgentType = NonNullable<AgentDraft["agentType"]>;
 
 const PATTERN_COPY: Record<
   AgentType,
-  { label: string; description: string; icon: typeof Bot }
+  { labelKey: string; descriptionKey: string; icon: typeof Bot }
 > = {
   llm: {
-    label: "智能体",
-    description: "理解任务并直接完成一个具体工作",
+    labelKey: "buildCanvas.patterns.llm.label",
+    descriptionKey: "buildCanvas.patterns.llm.description",
     icon: Bot,
   },
   sequential: {
-    label: "分步协作",
-    description: "内部步骤按照顺序依次执行",
+    labelKey: "buildCanvas.patterns.sequential.label",
+    descriptionKey: "buildCanvas.patterns.sequential.description",
     icon: ListOrdered,
   },
   parallel: {
-    label: "同时处理",
-    description: "内部步骤同时工作，完成后统一汇总",
+    labelKey: "buildCanvas.patterns.parallel.label",
+    descriptionKey: "buildCanvas.patterns.parallel.description",
     icon: ArrowRightLeft,
   },
   loop: {
-    label: "循环执行",
-    description: "重复执行内部步骤，直到满足停止条件",
+    labelKey: "buildCanvas.patterns.loop.label",
+    descriptionKey: "buildCanvas.patterns.loop.description",
     icon: Repeat,
   },
   a2a: {
-    label: "远程智能体",
-    description: "调用已经存在的远程 Agent",
+    labelKey: "buildCanvas.patterns.a2a.label",
+    descriptionKey: "buildCanvas.patterns.a2a.description",
     icon: Globe,
   },
 };
@@ -268,6 +270,7 @@ function buildCanvasGraph(
   root: AgentDraft,
   direction: CanvasDirection,
   compactEmptyGroups = false,
+  t: TFunction<"create">,
 ): {
   nodes: CanvasNode[];
   edges: CanvasEdge[];
@@ -277,7 +280,7 @@ function buildCanvasGraph(
       id: "terminal-input",
       type: "terminal",
       position: { x: 0, y: 0 },
-      data: { kind: "terminal", title: "用户请求" },
+      data: { kind: "terminal", title: t("buildCanvas.terminals.input") },
       selectable: false,
       draggable: false,
     },
@@ -285,7 +288,7 @@ function buildCanvasGraph(
       id: "terminal-output",
       type: "terminal",
       position: { x: 0, y: 0 },
-      data: { kind: "terminal", title: "最终回复" },
+      data: { kind: "terminal", title: t("buildCanvas.terminals.output") },
       selectable: false,
       draggable: false,
     },
@@ -317,10 +320,10 @@ function buildCanvasGraph(
         agent,
         title:
           type === "a2a"
-            ? "远程智能体"
-            : agent.name.trim() || (path.length === 0 ? "主 Agent" : "未命名步骤"),
+            ? t("buildCanvas.patterns.a2a.label")
+            : agent.name.trim() || (path.length === 0 ? t("buildCanvas.rootAgent") : t("buildCanvas.unnamedStep")),
         pattern: type,
-        description: agent.description.trim() || PATTERN_COPY[type].description,
+        description: agent.description.trim() || t(PATTERN_COPY[type].descriptionKey),
         childCount: agent.subAgents.length,
         containedIn,
       },
@@ -351,9 +354,9 @@ function buildCanvasGraph(
         agent,
         title:
           agent.name.trim() ||
-          (path.length === 0 ? "主 Agent" : PATTERN_COPY[type].label),
+          (path.length === 0 ? t("buildCanvas.rootAgent") : t(PATTERN_COPY[type].labelKey)),
         pattern: type,
-        description: agent.description.trim() || PATTERN_COPY[type].description,
+        description: agent.description.trim() || t(PATTERN_COPY[type].descriptionKey),
         childCount: agent.subAgents.length,
         containedIn,
         layoutWidth: size.width,
@@ -398,7 +401,7 @@ function buildCanvasGraph(
     if (type === "sequential" || type === "loop") {
       for (let index = 0; index < childIds.length - 1; index += 1) {
         edges.push(
-          makeEdge(childIds[index], childIds[index + 1], "然后", {
+          makeEdge(childIds[index], childIds[index + 1], t("buildCanvas.edges.then"), {
             tone: type,
             insert: { parentPath: path, index: index + 1 },
           }),
@@ -406,7 +409,7 @@ function buildCanvasGraph(
       }
       if (type === "loop" && childIds.length > 1) {
         edges.push(
-          makeEdge(childIds[childIds.length - 1], childIds[0], "继续循环", {
+          makeEdge(childIds[childIds.length - 1], childIds[0], t("buildCanvas.edges.continueLoop"), {
             loop: true,
             tone: "loop",
           }),
@@ -433,10 +436,10 @@ function buildCanvasGraph(
         agent,
         title:
           type === "a2a"
-            ? "远程智能体"
-            : agent.name.trim() || (path.length === 0 ? "主 Agent" : "未命名步骤"),
+            ? t("buildCanvas.patterns.a2a.label")
+            : agent.name.trim() || (path.length === 0 ? t("buildCanvas.rootAgent") : t("buildCanvas.unnamedStep")),
         pattern: type,
-        description: agent.description.trim() || PATTERN_COPY[type].description,
+        description: agent.description.trim() || t(PATTERN_COPY[type].descriptionKey),
         childCount: agent.subAgents.length,
       },
     });
@@ -447,7 +450,7 @@ function buildCanvasGraph(
       const childPath = [...path, index];
       const childId = pathId(childPath);
       edges.push(
-        makeEdge(id, childId, "调用", {
+        makeEdge(id, childId, t("buildCanvas.edges.call"), {
           insert: { parentPath: path, index },
         }),
       );
@@ -541,6 +544,7 @@ function InsertStepEdge({
   label,
   data,
 }: EdgeProps<CanvasEdge>) {
+  const { t } = useTranslation("create");
   const actions = useContext(CanvasActionsContext);
   const [showInsert, setShowInsert] = useState(false);
   const [edgePath, labelX, labelY] = getSmoothStepPath({
@@ -585,8 +589,8 @@ function InsertStepEdge({
               <button
                 type="button"
                 className="abc-edge-add nodrag nopan"
-                aria-label="在这里插入步骤"
-                title="在这里插入步骤"
+                aria-label={t("buildCanvas.actions.insertHere")}
+                title={t("buildCanvas.actions.insertHere")}
                 onClick={(event) => {
                   event.stopPropagation();
                   actions?.onInsert(
@@ -606,6 +610,7 @@ function InsertStepEdge({
 }
 
 function AgentCanvasNode({ data, selected }: NodeProps<CanvasNode>) {
+  const { t } = useTranslation("create");
   const actions = useContext(CanvasActionsContext);
   const direction = useContext(CanvasDirectionContext);
   const targetPosition = direction === "vertical" ? Position.Top : Position.Left;
@@ -626,7 +631,7 @@ function AgentCanvasNode({ data, selected }: NodeProps<CanvasNode>) {
       )}
       <span className="abc-node-copy">
         <span className="abc-node-meta">
-          <span>{copy.label}</span>
+          <span>{t(copy.labelKey)}</span>
         </span>
         <strong>{data.title}</strong>
         <small>{data.description}</small>
@@ -635,8 +640,8 @@ function AgentCanvasNode({ data, selected }: NodeProps<CanvasNode>) {
         <button
           type="button"
           className="abc-node-delete nodrag nopan"
-          aria-label={`删除 ${data.title}`}
-          title="删除节点"
+          aria-label={t("buildCanvas.actions.deleteNamed", { name: data.title })}
+          title={t("buildCanvas.actions.deleteNode")}
           onClick={(event) => {
             event.stopPropagation();
             actions?.onDelete(data.path!);
@@ -667,6 +672,7 @@ function AgentCanvasNode({ data, selected }: NodeProps<CanvasNode>) {
 }
 
 function AgentGroupNode({ data, selected }: NodeProps<CanvasNode>) {
+  const { t } = useTranslation("create");
   const actions = useContext(CanvasActionsContext);
   const direction = useContext(CanvasDirectionContext);
   const targetPosition = direction === "vertical" ? Position.Top : Position.Left;
@@ -676,12 +682,12 @@ function AgentGroupNode({ data, selected }: NodeProps<CanvasNode>) {
   const childCount = data.childCount ?? 0;
   const addLabel =
     type === "llm"
-      ? "添加子 Agent"
+      ? t("buildCanvas.actions.addSubagent")
       : type === "parallel"
-      ? "添加一个同时处理的步骤"
+      ? t("buildCanvas.actions.addParallelStep")
       : type === "loop"
-        ? "添加循环步骤"
-        : "添加下一个步骤";
+        ? t("buildCanvas.actions.addLoopStep")
+        : t("buildCanvas.actions.addNextStep");
   return (
     <div
       className={`abc-group is-${type}${
@@ -703,8 +709,8 @@ function AgentGroupNode({ data, selected }: NodeProps<CanvasNode>) {
           <button
             type="button"
             className="abc-group-boundary-add is-start nodrag nopan"
-            aria-label="添加到最前"
-            title="添加到最前"
+            aria-label={t("buildCanvas.actions.addFirst")}
+            title={t("buildCanvas.actions.addFirst")}
             onClick={(event) => {
               event.stopPropagation();
               actions.onInsert(data.path!, 0);
@@ -715,8 +721,8 @@ function AgentGroupNode({ data, selected }: NodeProps<CanvasNode>) {
           <button
             type="button"
             className="abc-group-boundary-add is-end nodrag nopan"
-            aria-label="添加到最后"
-            title="添加到最后"
+            aria-label={t("buildCanvas.actions.addLast")}
+            title={t("buildCanvas.actions.addLast")}
             onClick={(event) => {
               event.stopPropagation();
               actions.onAdd(data.path!);
@@ -759,8 +765,8 @@ function AgentGroupNode({ data, selected }: NodeProps<CanvasNode>) {
         <button
           type="button"
           className="abc-node-delete nodrag nopan"
-          aria-label={`删除 ${data.title}`}
-          title="删除节点"
+          aria-label={t("buildCanvas.actions.deleteNamed", { name: data.title })}
+          title={t("buildCanvas.actions.deleteNode")}
           onClick={(event) => {
             event.stopPropagation();
             actions?.onDelete(data.path!);
@@ -1011,8 +1017,9 @@ function AgentBuildCanvasInner({
   interactivePreview = false,
   direction = "horizontal",
 }: AgentBuildCanvasProps) {
+  const { t } = useTranslation("create");
   const initialGraph = useMemo(
-    () => buildCanvasGraph(draft, direction, readOnly),
+    () => buildCanvasGraph(draft, direction, readOnly, t),
     [],
   );
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>(
@@ -1026,8 +1033,8 @@ function AgentBuildCanvasInner({
   const canvasRef = useRef<HTMLDivElement>(null);
   const { fitView } = useReactFlow<CanvasNode, CanvasEdge>();
   const currentGraph = useMemo(
-    () => buildCanvasGraph(draft, direction, readOnly),
-    [direction, draft, readOnly],
+    () => buildCanvasGraph(draft, direction, readOnly, t),
+    [direction, draft, readOnly, t],
   );
   const [compactCanvas, setCompactCanvas] = useState(() =>
     window.matchMedia("(max-width: 860px)").matches,
@@ -1130,7 +1137,7 @@ function AgentBuildCanvasInner({
     <CanvasActionsContext.Provider value={canvasActions}>
     <section
       className={`abc-root is-${direction}${readOnly ? " is-readonly" : ""}`}
-      aria-label={readOnly ? "只读 Agent 执行画布" : "Agent 执行画布"}
+      aria-label={readOnly ? t("buildCanvas.readOnlyLabel") : t("buildCanvas.label")}
     >
       <div ref={canvasRef} className="abc-canvas">
         <ReactFlow<CanvasNode, CanvasEdge>
@@ -1172,7 +1179,7 @@ function AgentBuildCanvasInner({
               zoomable
               position="top-left"
               className="abc-minimap"
-              ariaLabel="执行流程缩略图"
+              ariaLabel={t("buildCanvas.minimapLabel")}
               bgColor="hsl(var(--panel))"
               maskColor="hsl(var(--muted) / 0.46)"
               maskStrokeColor="hsl(var(--primary) / 0.5)"

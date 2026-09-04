@@ -1,5 +1,6 @@
 import { withAuth } from "./auth";
 import { studioFetch } from "./client";
+import { adkT, withLocaleHeaders } from "./i18n";
 import type { Block } from "../blocks";
 
 const SANDBOX_API = "/web/sandbox/sessions";
@@ -20,31 +21,31 @@ export type SandboxAgentKind = "deepseek-harness" | "openclaw" | "hermes";
 export function sandboxStatusLabel(status: string): string {
   switch (status.trim().toLowerCase()) {
     case "ready":
-      return "就绪";
+      return adkT("sandbox.status.ready");
     case "wakeable":
-      return "可唤醒";
+      return adkT("sandbox.status.wakeable");
     case "creating":
-      return "创建中";
+      return adkT("sandbox.status.creating");
     case "starting":
     case "initializing":
-      return "启动中";
+      return adkT("sandbox.status.starting");
     case "pending":
-      return "等待中";
+      return adkT("sandbox.status.pending");
     case "running":
-      return "运行中";
+      return adkT("sandbox.status.running");
     case "failed":
     case "error":
-      return "异常";
+      return adkT("sandbox.status.failed");
     case "stopped":
-      return "已停止";
+      return adkT("sandbox.status.stopped");
     case "expired":
-      return "已过期";
+      return adkT("sandbox.status.expired");
     case "deleting":
-      return "删除中";
+      return adkT("sandbox.status.deleting");
     case "deleted":
-      return "已删除";
+      return adkT("sandbox.status.deleted");
     default:
-      return "未知状态";
+      return adkT("sandbox.status.unknown");
   }
 }
 
@@ -550,7 +551,7 @@ interface SandboxStreamPayload {
 }
 
 function sandboxHeaders(headers?: HeadersInit): Headers {
-  const next = new Headers(headers);
+  const next = withLocaleHeaders(headers);
   if (!next.has("Accept")) next.set("Accept", "application/json");
   return next;
 }
@@ -582,12 +583,12 @@ export class SandboxServiceError extends Error {
 export function intelligentDevelopmentErrorMessage(error: unknown): string {
   if (error instanceof SandboxServiceError) return error.publicMessage;
   if (error instanceof Error && error.name === "TimeoutError") {
-    return "等待开发环境响应超时。任务可能仍在运行，请稍后重新进入当前会话查看状态。";
+    return adkT("sandbox.developmentTimeout");
   }
   if (error instanceof TypeError) {
-    return "与开发环境的连接已中断。任务可能仍在运行，请稍后重新进入当前会话查看状态。";
+    return adkT("sandbox.developmentDisconnected");
   }
-  return "开发任务未能继续，开发环境已保留。请在当前会话重试。";
+  return adkT("sandbox.developmentFailed");
 }
 
 async function responseError(response: Response, fallback: string): Promise<Error> {
@@ -596,8 +597,8 @@ async function responseError(response: Response, fallback: string): Promise<Erro
   try {
     payload = JSON.parse(text) as SandboxErrorPayload;
   } catch {
-    const summary = `${fallback}（HTTP ${response.status}）`;
-    return new Error(text ? `${summary}：${text}` : summary);
+    const summary = adkT("common.fallbackWithHttpStatus", { fallback, status: response.status });
+    return new Error(text ? adkT("common.fallbackWithDetail", { fallback: summary, detail: text }) : summary);
   }
   const nestedDetail = payload.detail;
   const structured = nestedDetail && typeof nestedDetail === "object"
@@ -612,8 +613,10 @@ async function responseError(response: Response, fallback: string): Promise<Erro
     : detail == null
       ? ""
       : JSON.stringify(detail);
-  const summary = `${fallback}（HTTP ${response.status}）`;
-  const message = detailText ? `${summary}：${detailText}` : summary;
+  const summary = adkT("common.fallbackWithHttpStatus", { fallback, status: response.status });
+  const message = detailText
+    ? adkT("common.fallbackWithDetail", { fallback: summary, detail: detailText })
+    : summary;
   return new SandboxServiceError(message, {
     code: typeof structured.code === "string" ? structured.code : "",
     retryable: structured.retryable === true,
@@ -630,7 +633,7 @@ async function responseJson(
   try {
     return JSON.parse(text) as unknown;
   } catch {
-    throw new Error(`${fallback} Studio 服务响应异常，请刷新后重试。`);
+    throw new Error(adkT("sandbox.invalidStudioResponse", { fallback }));
   }
 }
 
@@ -639,7 +642,7 @@ function parseSession(
   toolName: SandboxSession["toolName"] = "codex",
 ): SandboxSession {
   if (!data.sessionId || !data.status) {
-    throw new Error("AgentKit 沙箱返回了无效的 Session 信息。");
+    throw new Error(adkT("sandbox.invalidSession"));
   }
   return {
     resourceType: "session",
@@ -673,7 +676,7 @@ function parseSnapshot(
   toolName: SandboxSession["toolName"] = "codex",
 ): SandboxSnapshot {
   if (!data.snapshotId || !data.status) {
-    throw new Error("AgentKit 沙箱返回了无效的 Snapshot 信息。");
+    throw new Error(adkT("sandbox.invalidSnapshot"));
   }
   return {
     resourceType: "snapshot",
@@ -738,7 +741,7 @@ function parsePermissions(value: unknown): SandboxPermissions {
 
 function parseSettings(value: unknown): SandboxSessionSettings {
   if (!value || typeof value !== "object") {
-    throw new Error("Sandbox 返回了无效设置。");
+    throw new Error(adkT("sandbox.invalidSettings"));
   }
   const data = value as SessionResponse;
   return {
@@ -820,7 +823,7 @@ function parseThreadSnapshot(value: unknown): SandboxThreadSnapshot {
     typeof data.threadId !== "string" ||
     !Array.isArray(data.messages)
   ) {
-    throw new Error("Sandbox 返回了无效 Thread 快照。");
+    throw new Error(adkT("sandbox.invalidThreadSnapshot"));
   }
   const messages = data.messages.flatMap((value): SandboxThreadMessage[] => {
     const message = recordOf(value);
@@ -948,7 +951,7 @@ async function parseSandboxStream(
   response: Response,
   options: SandboxRequestOptions = {},
 ): Promise<SandboxReply> {
-  if (!response.body) throw new Error("沙箱对话服务未返回内容。");
+  if (!response.body) throw new Error(adkT("sandbox.emptyConversationResponse"));
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -1023,12 +1026,12 @@ async function parseSandboxStream(
     try {
       payload = JSON.parse(data.join("\n")) as SandboxStreamPayload;
     } catch {
-      throw new Error("沙箱对话服务返回了无法解析的响应。");
+      throw new Error(adkT("sandbox.invalidConversationResponse"));
     }
     if (event === "error") {
       const message = typeof payload.message === "string" && payload.message
         ? payload.message
-        : "沙箱对话失败，请稍后重试。";
+        : adkT("sandbox.conversationFailed");
       throw new SandboxServiceError(message, {
         code: typeof payload.code === "string" ? payload.code : "",
         retryable: payload.retryable === true,
@@ -1144,7 +1147,7 @@ async function parseSandboxStream(
     progressBlock = undefined;
     emitBlocks();
   }
-  if (blocks.length === 0) throw new Error("沙箱未返回有效回复，请重试。");
+  if (blocks.length === 0) throw new Error(adkT("sandbox.emptyReply"));
   return {
     text: reply,
     blocks,
@@ -1168,7 +1171,7 @@ async function sandboxJson(
     fallback: string;
   },
 ): Promise<unknown> {
-  if (!sessionId) throw new Error("缺少要操作的 AgentKit Session。");
+  if (!sessionId) throw new Error(adkT("sandbox.missingSession"));
   const response = await studioFetch(
     `${api}/${encodeURIComponent(sessionId)}/${action}`,
     {
@@ -1205,14 +1208,14 @@ function createSandboxClient(
       LIST_TIMEOUT_MS,
     );
     if (!response.ok) {
-      throw await responseError(response, "无法读取 Codex 智能体，请稍后重试。");
+      throw await responseError(response, adkT("sandbox.listCodexFailed"));
     }
     const data = (await response.json()) as ListSessionsResponse;
     if (!Array.isArray(data.sessions)) {
-      throw new Error("AgentKit 沙箱返回了无效的 Session 列表。");
+      throw new Error(adkT("sandbox.invalidSessionList"));
     }
     if (data.snapshots !== undefined && !Array.isArray(data.snapshots)) {
-      throw new Error("AgentKit 沙箱返回了无效的 Snapshot 列表。");
+      throw new Error(adkT("sandbox.invalidSnapshotList"));
     }
     return [
       ...data.sessions.map((session) => parseSession(session)),
@@ -1245,7 +1248,7 @@ function createSandboxClient(
       START_TIMEOUT_MS,
     );
     if (!response.ok) {
-      throw await responseError(response, "无法启动 AgentKit 沙箱，请稍后重试。");
+      throw await responseError(response, adkT("sandbox.startFailed"));
     }
     return parseSession((await response.json()) as SessionResponse);
   },
@@ -1261,14 +1264,14 @@ function createSandboxClient(
       LIST_TIMEOUT_MS,
     );
     if (!response.ok) {
-      throw await responseError(response, `无法读取 ${kind} 智能体，请稍后重试。`);
+      throw await responseError(response, adkT("sandbox.listAgentFailed", { kind }));
     }
     const data = (await response.json()) as ListSessionsResponse;
     if (!Array.isArray(data.sessions)) {
-      throw new Error(`AgentKit 返回了无效的 ${kind} Session 列表。`);
+      throw new Error(adkT("sandbox.invalidKindSessionList", { kind }));
     }
     if (data.snapshots !== undefined && !Array.isArray(data.snapshots)) {
-      throw new Error(`AgentKit 返回了无效的 ${kind} Snapshot 列表。`);
+      throw new Error(adkT("sandbox.invalidKindSnapshotList", { kind }));
     }
     return [
       ...data.sessions.map((session) => parseSession(session, kind)),
@@ -1292,13 +1295,13 @@ function createSandboxClient(
       START_TIMEOUT_MS,
     );
     if (!response.ok) {
-      throw await responseError(response, `无法创建 ${kind} 智能体，请稍后重试。`);
+      throw await responseError(response, adkT("sandbox.createAgentFailed", { kind }));
     }
     return parseSession((await response.json()) as SessionResponse, kind);
   },
 
   async openAgentSession(kind, sessionId, options = {}) {
-    if (!sessionId) throw new Error("缺少要打开的 AgentKit Session。");
+    if (!sessionId) throw new Error(adkT("sandbox.missingSessionToOpen"));
     const response = await studioFetch(
       `/web/${kind}/sessions/${encodeURIComponent(sessionId)}/open`,
       {
@@ -1309,13 +1312,13 @@ function createSandboxClient(
       SETTINGS_TIMEOUT_MS,
     );
     if (!response.ok) {
-      throw await responseError(response, `无法打开 ${kind} 智能体。`);
+      throw await responseError(response, adkT("sandbox.openAgentFailed", { kind }));
     }
     const value = (await response.json()) as SessionResponse & {
       webuiUrl?: unknown;
     };
     if (typeof value.webuiUrl !== "string" || !value.webuiUrl.startsWith("/")) {
-      throw new Error(`${kind} 智能体返回了无效的主页面地址。`);
+      throw new Error(adkT("sandbox.invalidAgentHomeUrl", { kind }));
     }
     return {
       session: parseSession(value, kind),
@@ -1325,7 +1328,7 @@ function createSandboxClient(
   },
 
   async launchAgentTerminal(kind, sessionId, options = {}) {
-    if (!sessionId) throw new Error("缺少要打开 Terminal 的 AgentKit Session。");
+    if (!sessionId) throw new Error(adkT("sandbox.missingSessionForTerminal"));
     const response = await studioFetch(
       `/web/${kind}/sessions/${encodeURIComponent(sessionId)}/terminal`,
       {
@@ -1336,7 +1339,7 @@ function createSandboxClient(
       SETTINGS_TIMEOUT_MS,
     );
     if (!response.ok) {
-      throw await responseError(response, `无法打开 ${kind} Terminal。`);
+      throw await responseError(response, adkT("sandbox.openTerminalFailed", { kind }));
     }
     const value = (await response.json()) as {
       url?: unknown;
@@ -1363,12 +1366,12 @@ function createSandboxClient(
       CLOSE_TIMEOUT_MS,
     );
     if (!response.ok && response.status !== 404) {
-      throw await responseError(response, `无法删除 ${kind} 智能体。`);
+      throw await responseError(response, adkT("sandbox.deleteAgentFailed", { kind }));
     }
   },
 
   async resumeSnapshot(kind, snapshotId, options = {}) {
-    if (!snapshotId) throw new Error("缺少要唤醒的 AgentKit Snapshot。");
+    if (!snapshotId) throw new Error(adkT("sandbox.missingSnapshot"));
     const base = kind === "codex" ? "/web/sandbox" : `/web/${kind}`;
     const response = await studioFetch(
       `${base}/snapshots/${encodeURIComponent(snapshotId)}/resume`,
@@ -1380,7 +1383,7 @@ function createSandboxClient(
       START_TIMEOUT_MS,
     );
     if (!response.ok) {
-      throw await responseError(response, "无法从快照唤醒智能体，请稍后重试。");
+      throw await responseError(response, adkT("sandbox.resumeSnapshotFailed"));
     }
     return parseSession((await response.json()) as SessionResponse, kind);
   },
@@ -1398,12 +1401,12 @@ function createSandboxClient(
       CLOSE_TIMEOUT_MS,
     );
     if (!response.ok && response.status !== 404) {
-      throw await responseError(response, "无法删除智能体快照。");
+      throw await responseError(response, adkT("sandbox.deleteSnapshotFailed"));
     }
   },
 
   async connectSession(sessionId, options = {}) {
-    if (!sessionId) throw new Error("缺少要连接的 AgentKit Session。");
+    if (!sessionId) throw new Error(adkT("sandbox.missingSessionToConnect"));
     const response = await studioFetch(
       `${api}/${encodeURIComponent(sessionId)}/connect`,
       {
@@ -1414,18 +1417,18 @@ function createSandboxClient(
       CONNECT_TIMEOUT_MS,
     );
     if (!response.ok) {
-      throw await responseError(response, "无法连接 Codex 智能体，请稍后重试。");
+      throw await responseError(response, adkT("sandbox.connectCodexFailed"));
     }
     const session = parseSession((await response.json()) as SessionResponse);
     if (session.status.toLowerCase() !== "ready") {
-      throw new Error(`AgentKit Session 尚未就绪，当前状态：${session.status}。`);
+      throw new Error(adkT("sandbox.sessionNotReady", { status: session.status }));
     }
     return session;
   },
 
   async sendMessage(message, options = {}) {
     if (!message.sessionId || !message.text.trim()) {
-      throw new Error("内置智能体会话缺少有效的消息内容。");
+      throw new Error(adkT("sandbox.invalidMessage"));
     }
     const response = await studioFetch(
       `${api}/${encodeURIComponent(message.sessionId)}/messages`,
@@ -1446,7 +1449,7 @@ function createSandboxClient(
       config.messageTimeoutMs ?? MESSAGE_TIMEOUT_MS,
     );
     if (!response.ok) {
-      throw await responseError(response, "沙箱对话失败，请稍后重试。");
+      throw await responseError(response, adkT("sandbox.conversationFailed"));
     }
     return parseSandboxStream(response, options);
   },
@@ -1463,14 +1466,14 @@ function createSandboxClient(
       config.interruptTimeoutMs ?? CLOSE_TIMEOUT_MS,
     );
     if (!response.ok && ![404, 409].includes(response.status)) {
-      throw await responseError(response, "无法停止当前任务。");
+      throw await responseError(response, adkT("sandbox.interruptFailed"));
     }
   },
 
   async getStatus(sessionId, options = {}) {
     const value = await sandboxJson(api, sessionId, "status", {
       options,
-      fallback: "无法读取 Codex 状态。",
+      fallback: adkT("sandbox.getStatusFailed"),
     });
     const settings = parseSettings(value);
     const data = recordOf(value);
@@ -1490,10 +1493,10 @@ function createSandboxClient(
   async getEndpoint(sessionId, options = {}) {
     const value = recordOf(await sandboxJson(api, sessionId, "endpoint", {
       options,
-      fallback: "无法读取 Sandbox Endpoint。",
+      fallback: adkT("sandbox.getEndpointFailed"),
     }));
     if (typeof value?.endpoint !== "string" || !value.endpoint.trim()) {
-      throw new Error("Sandbox 返回了无效 Endpoint。");
+      throw new Error(adkT("sandbox.invalidEndpoint"));
     }
     return {
       endpoint: value.endpoint,
@@ -1524,11 +1527,11 @@ function createSandboxClient(
     if (!response.ok) {
       throw await responseError(
         response,
-        "无法生成 Codex 云端接力配对码。",
+        adkT("sandbox.createHandoffPairingFailed"),
       );
     }
     const value = recordOf(
-      await responseJson(response, "无法生成 Codex 云端接力配对码。"),
+      await responseJson(response, adkT("sandbox.createHandoffPairingFailed")),
     );
     if (
       typeof value?.pairingCode !== "string" ||
@@ -1536,7 +1539,7 @@ function createSandboxClient(
       typeof value.expireAt !== "string" ||
       !value.expireAt.trim()
     ) {
-      throw new Error("Studio 返回了无效的 Codex 云端接力配对码。");
+      throw new Error(adkT("sandbox.invalidHandoffPairing"));
     }
     const studioUrl = typeof value.studioUrl === "string" && value.studioUrl.trim()
       ? value.studioUrl.trim()
@@ -1558,10 +1561,10 @@ function createSandboxClient(
       CODEX_PROJECT_HANDOFF_TIMEOUT_MS,
     );
     if (!response.ok) {
-      throw await responseError(response, "无法读取端云接力状态。");
+      throw await responseError(response, adkT("sandbox.getHandoffStatusFailed"));
     }
     const value = recordOf(
-      await responseJson(response, "无法读取端云接力状态。"),
+      await responseJson(response, adkT("sandbox.getHandoffStatusFailed")),
     );
     const states: ReadonlySet<string> = new Set([
       "issued",
@@ -1578,7 +1581,7 @@ function createSandboxClient(
       typeof value.expireAt !== "string" ||
       !value.expireAt.trim()
     ) {
-      throw new Error("Studio 返回了无效的端云接力状态。");
+      throw new Error(adkT("sandbox.invalidHandoffStatus"));
     }
     return {
       state: value.state as CodexProjectHandoffState,
@@ -1605,10 +1608,10 @@ function createSandboxClient(
   async listModels(sessionId, options = {}) {
     const value = recordOf(await sandboxJson(api, sessionId, "models", {
       options,
-      fallback: "无法读取 Codex 模型列表。",
+      fallback: adkT("sandbox.listModelsFailed"),
     }));
     if (!Array.isArray(value?.models)) {
-      throw new Error("Sandbox 返回了无效模型列表。");
+      throw new Error(adkT("sandbox.invalidModelList"));
     }
     return value.models.flatMap((model) => {
       const parsed = parseModel(model);
@@ -1621,10 +1624,10 @@ function createSandboxClient(
       method: "PUT",
       body: { model },
       options,
-      fallback: "无法切换 Codex 模型。",
+      fallback: adkT("sandbox.setModelFailed"),
     }));
     if (typeof value?.model !== "string" || !value.model) {
-      throw new Error("Sandbox 返回了无效模型。");
+      throw new Error(adkT("sandbox.invalidModel"));
     }
     return value.model;
   },
@@ -1633,10 +1636,10 @@ function createSandboxClient(
     const query = forceReload ? "?force_reload=true" : "";
     const value = recordOf(await sandboxJson(api, sessionId, `skills${query}`, {
       options,
-      fallback: "无法读取 Codex Skills。",
+      fallback: adkT("sandbox.listSkillsFailed"),
     }));
     if (!Array.isArray(value?.skills)) {
-      throw new Error("Sandbox 返回了无效 Skill 列表。");
+      throw new Error(adkT("sandbox.invalidSkillList"));
     }
     return value.skills.flatMap((skill) => {
       const parsed = parseSkill(skill);
@@ -1652,10 +1655,10 @@ function createSandboxClient(
     const suffix = search.size ? `?${search}` : "";
     const value = recordOf(await sandboxJson(api, sessionId, `threads${suffix}`, {
       options,
-      fallback: "无法读取 Codex Thread 列表。",
+      fallback: adkT("sandbox.listThreadsFailed"),
     }));
     if (!Array.isArray(value?.threads)) {
-      throw new Error("Sandbox 返回了无效 Thread 列表。");
+      throw new Error(adkT("sandbox.invalidThreadList"));
     }
     return {
       threads: value.threads.flatMap((thread) => {
@@ -1672,12 +1675,12 @@ function createSandboxClient(
     return parseThreadSnapshot(await sandboxJson(api, sessionId, "threads/new", {
       method: "POST",
       options,
-      fallback: "无法创建新的 Codex Thread。",
+      fallback: adkT("sandbox.createThreadFailed"),
     }));
   },
 
   async readThread(sessionId, threadId, options = {}) {
-    if (!threadId) throw new Error("缺少要读取的 Codex Thread。");
+    if (!threadId) throw new Error(adkT("sandbox.missingThread"));
     return parseThreadSnapshot(
       await sandboxJson(
         api,
@@ -1685,7 +1688,7 @@ function createSandboxClient(
         `threads/${encodeURIComponent(threadId)}`,
         {
           options,
-          fallback: "无法读取 Codex 历史消息。",
+          fallback: adkT("sandbox.readThreadFailed"),
         },
       ),
     );
@@ -1697,7 +1700,7 @@ function createSandboxClient(
         method: "POST",
         body: { threadId },
         options,
-        fallback: "无法恢复 Codex Thread。",
+        fallback: adkT("sandbox.resumeThreadFailed"),
       }),
     );
   },
@@ -1706,7 +1709,7 @@ function createSandboxClient(
     return parseThreadSnapshot(await sandboxJson(api, sessionId, "threads/fork", {
       method: "POST",
       options,
-      fallback: "无法分叉 Codex Thread。",
+      fallback: adkT("sandbox.forkThreadFailed"),
     }));
   },
 
@@ -1716,11 +1719,11 @@ function createSandboxClient(
         method: "POST",
         body: { threadId },
         options,
-        fallback: "无法归档 Codex Thread。",
+        fallback: adkT("sandbox.archiveThreadFailed"),
       }),
     );
     if (value?.archived !== true) {
-      throw new Error("Sandbox 返回了无效归档结果。");
+      throw new Error(adkT("sandbox.invalidArchiveResult"));
     }
     return {
       archived: true,
@@ -1734,11 +1737,11 @@ function createSandboxClient(
         method: "POST",
         body: { threadId },
         options,
-        fallback: "无法删除 Codex Thread。",
+        fallback: adkT("sandbox.deleteThreadFailed"),
       }),
     );
     if (value?.deleted !== true) {
-      throw new Error("Sandbox 返回了无效删除结果。");
+      throw new Error(adkT("sandbox.invalidDeleteResult"));
     }
     return {
       deleted: true,
@@ -1750,7 +1753,7 @@ function createSandboxClient(
     await sandboxJson(api, sessionId, "threads/compact", {
       method: "POST",
       options,
-      fallback: "无法压缩 Codex Thread。",
+      fallback: adkT("sandbox.compactThreadFailed"),
     });
   },
 
@@ -1765,7 +1768,7 @@ function createSandboxClient(
       SETTINGS_TIMEOUT_MS,
     );
     if (!response.ok) {
-      throw await responseError(response, "无法读取 Codex 权限与工作空间。");
+      throw await responseError(response, adkT("sandbox.getSettingsFailed"));
     }
     return parseSettings(await response.json());
   },
@@ -1782,7 +1785,7 @@ function createSandboxClient(
       SETTINGS_TIMEOUT_MS,
     );
     if (!response.ok) {
-      throw await responseError(response, "无法更新 Codex 权限。");
+      throw await responseError(response, adkT("sandbox.updatePermissionsFailed"));
     }
     const value = (await response.json()) as { permissions?: unknown };
     return parsePermissions(value.permissions);
@@ -1800,11 +1803,11 @@ function createSandboxClient(
       SETTINGS_TIMEOUT_MS,
     );
     if (!response.ok) {
-      throw await responseError(response, "无法更新 Codex 工作空间。");
+      throw await responseError(response, adkT("sandbox.updateWorkspaceFailed"));
     }
     const value = (await response.json()) as { cwd?: unknown };
     if (typeof value.cwd !== "string" || !value.cwd) {
-      throw new Error("Sandbox 返回了无效工作目录。");
+      throw new Error(adkT("sandbox.invalidWorkingDirectory"));
     }
     return value.cwd;
   },
@@ -1821,7 +1824,7 @@ function createSandboxClient(
       SETTINGS_TIMEOUT_MS,
     );
     if (!response.ok) {
-      throw await responseError(response, "无法读取 Sandbox 目录。");
+      throw await responseError(response, adkT("sandbox.listDirectoriesFailed"));
     }
     const value = (await response.json()) as Partial<SandboxDirectoryListing>;
     if (
@@ -1834,7 +1837,7 @@ function createSandboxClient(
           typeof entry.path !== "string",
       )
     ) {
-      throw new Error("Sandbox 返回了无效目录列表。");
+      throw new Error(adkT("sandbox.invalidDirectoryList"));
     }
     return {
       path: value.path,
@@ -1860,7 +1863,7 @@ function createSandboxClient(
       SETTINGS_TIMEOUT_MS,
     );
     if (!response.ok) {
-      throw await responseError(response, "无法提交 Codex 审批决定。");
+      throw await responseError(response, adkT("sandbox.resolveApprovalFailed"));
     }
   },
 
@@ -1886,7 +1889,7 @@ function createSandboxClient(
       UPLOAD_TIMEOUT_MS,
     );
     if (!response.ok) {
-      throw await responseError(response, "无法上传文件到 Sandbox。");
+      throw await responseError(response, adkT("sandbox.uploadFileFailed"));
     }
     const value = (await response.json()) as Partial<SandboxUploadedFile>;
     if (
@@ -1896,7 +1899,7 @@ function createSandboxClient(
       typeof value.mimeType !== "string" ||
       typeof value.sizeBytes !== "number"
     ) {
-      throw new Error("Sandbox 返回了无效上传结果。");
+      throw new Error(adkT("sandbox.invalidUploadResult"));
     }
     return value as SandboxUploadedFile;
   },
@@ -1913,7 +1916,7 @@ function createSandboxClient(
       CLOSE_TIMEOUT_MS,
     );
     if (!response.ok && response.status !== 404) {
-      throw await responseError(response, "无法断开 Codex 智能体连接。");
+      throw await responseError(response, adkT("sandbox.disconnectCodexFailed"));
     }
   },
 
@@ -1929,7 +1932,7 @@ function createSandboxClient(
       CLOSE_TIMEOUT_MS,
     );
     if (!response.ok && response.status !== 404) {
-      throw await responseError(response, "无法删除 Codex 智能体。");
+      throw await responseError(response, adkT("sandbox.deleteCodexFailed"));
     }
   },  };
 }
@@ -1964,15 +1967,15 @@ async function launchSandboxTool(
     throw await responseError(
       response,
       tool === "terminal"
-        ? "无法打开 Sandbox Terminal。"
-        : "无法打开 Sandbox Browser。",
+        ? adkT("sandbox.openSandboxTerminalFailed")
+        : adkT("sandbox.openSandboxBrowserFailed"),
     );
   }
   const value = (await response.json()) as {
     url?: unknown;
     shellSessionId?: unknown;
   };
-  const toolUrl = sandboxToolUrl(value.url, "Sandbox 工具");
+  const toolUrl = sandboxToolUrl(value.url, adkT("sandbox.toolLabel"));
   return {
     url: toolUrl,
     ...(typeof value.shellSessionId === "string"
@@ -1983,19 +1986,19 @@ async function launchSandboxTool(
 
 function sandboxToolUrl(value: unknown, label: string): string {
   if (typeof value !== "string") {
-    throw new Error(`${label} 返回了无效地址。`);
+    throw new Error(adkT("sandbox.invalidToolUrl", { label }));
   }
   if (value.startsWith("/")) return withAuth(value);
   let parsed: URL;
   try {
     parsed = new URL(value);
   } catch {
-    throw new Error(`${label} 返回了无效地址。`);
+    throw new Error(adkT("sandbox.invalidToolUrl", { label }));
   }
   const allowsHttp =
     parsed.protocol === "http:" && window.location.protocol === "http:";
   if (parsed.protocol !== "https:" && !allowsHttp) {
-    throw new Error(`${label} 返回了不安全的地址。`);
+    throw new Error(adkT("sandbox.unsafeToolUrl", { label }));
   }
   return parsed.toString();
 }

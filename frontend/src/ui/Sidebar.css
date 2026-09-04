@@ -6,3 +6,23 @@
 .new-chat--cronjobs.is-active > .icon {
   color: hsl(var(--foreground));
 }
+
+.account-menu-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 8px 10px;
+}
+
+.account-menu-action {
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  font-size: 13px;
+}
+
+.account-menu-action .icon {
+  width: 16px;
+  height: 16px;
+  color: hsl(var(--muted-foreground));
+}

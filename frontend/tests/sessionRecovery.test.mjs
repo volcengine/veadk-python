@@ -12,7 +12,7 @@ test("a stale 404 session does not fail hydration of the entire sidebar", () => 
 });
 
 test("session and run errors preserve upstream response details", () => {
-  assert.match(client, /httpErrorMessage\(res, "读取会话失败"\)/);
-  assert.match(client, /httpErrorMessage\(res, "运行会话失败"\)/);
+  assert.match(client, /httpErrorMessage\(res, adkT\("client\.getSessionFailed"\)\)/);
+  assert.match(client, /httpErrorMessage\(res, adkT\("client\.runSessionFailed"\)\)/);
   assert.match(client, /sessions\/\$\{encodeURIComponent\(sessionId\)\}/);
 });

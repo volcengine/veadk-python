@@ -6,6 +6,7 @@ import {
   type KeyboardEvent,
   type SVGProps,
 } from "react";
+import { useTranslation } from "react-i18next";
 
 import {
   type GitHubPullRequestResult,
@@ -75,38 +76,42 @@ function CheckIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
-function validateField(name: FieldName, value: string, required: boolean): string {
+function validateField(
+  name: FieldName,
+  value: string,
+  required: boolean,
+): string {
   const text = value.trim();
-  if (!text) return required ? "此项不能为空" : "";
+  if (!text) return required ? "github.validation.required" : "";
   if (name === "repository" && !/^(?:https:\/\/github\.com\/)?[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?$/.test(text)) {
-    return "请输入 owner/repository 或完整 GitHub Repo URL";
+    return "github.validation.repository";
   }
   if (name === "baseBranch" && (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(text) || text.includes(".."))) {
-    return "目标分支格式不正确";
+    return "github.validation.baseBranch";
   }
   if (name === "projectPath" && (text.startsWith("/") || text.split("/").includes(".."))) {
-    return "请输入仓库内的相对目录";
+    return "github.validation.projectPath";
   }
   if (name === "runtimeName") {
-    return runtimeNameProblem(text) ?? "";
+    return runtimeNameProblem(text, (key) => `github.validation.runtimeName.${key}`) ?? "";
   }
   if (name === "runtimeId" && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(text)) {
-    return "Runtime ID 格式不正确";
+    return "github.validation.runtimeId";
   }
   if (name === "sandboxToolId" && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(text)) {
-    return "Sandbox Tool ID 格式不正确";
+    return "github.validation.sandboxToolId";
   }
   if (name === "modelName" && !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(text)) {
-    return "模型名称格式不正确";
+    return "github.validation.modelName";
   }
   if (name === "modelBaseUrl") {
     try {
       const url = new URL(text);
       if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) {
-        return "请输入不含凭据、查询参数或锚点的 HTTPS 地址";
+        return "github.validation.modelBaseUrlSafe";
       }
     } catch {
-      return "请输入有效的 HTTPS 地址";
+      return "github.validation.modelBaseUrl";
     }
   }
   return "";
@@ -117,6 +122,7 @@ export function GitHubIntegration({
   cloudProvider,
   onBack,
 }: GitHubIntegrationProps) {
+  const { t } = useTranslation("automations");
   const definition = getGitHubAutomation(automation);
   const regionOptions = cloudRegionOptions(cloudProvider);
   const secrets = definition.secrets({ cloudProvider });
@@ -206,13 +212,14 @@ export function GitHubIntegration({
   const field = (
     fieldDefinition: AutomationFieldDefinition,
   ) => {
-    const { name, label, placeholder, help, required } = fieldDefinition;
+    const { name, placeholder, required } = fieldDefinition;
+    const fieldKey = `cards.${automation}.fields.${name}`;
     return (
       <div className="github-field" key={name}>
         <label htmlFor={`github-${name}`}>
-          <span>{label}</span>
+          <span>{t(`${fieldKey}.label`)}</span>
           <span className={`github-field-requirement${required ? " is-required" : ""}`}>
-            {required ? "必填" : "可选"}
+            {required ? t("github.required") : t("github.optional")}
           </span>
         </label>
         <input
@@ -220,13 +227,13 @@ export function GitHubIntegration({
           value={form[name]}
           onChange={(event) => updateField(name, event.target.value)}
           onBlur={() => blurField(name)}
-          placeholder={placeholder}
+          placeholder={t(`${fieldKey}.placeholder`, { defaultValue: placeholder })}
           required={required}
           aria-invalid={Boolean(fieldErrors[name])}
           aria-describedby={`github-${name}-help${fieldErrors[name] ? ` github-${name}-error` : ""}`}
         />
-        <span id={`github-${name}-help`} className="github-field-help">{help}</span>
-        {fieldErrors[name] ? <span id={`github-${name}-error`} className="github-field-error" role="alert">{fieldErrors[name]}</span> : null}
+        <span id={`github-${name}-help`} className="github-field-help">{t(`${fieldKey}.help`)}</span>
+        {fieldErrors[name] ? <span id={`github-${name}-error`} className="github-field-error" role="alert">{t(fieldErrors[name])}</span> : null}
       </div>
     );
   };
@@ -234,28 +241,28 @@ export function GitHubIntegration({
   return (
     <div className="github-integration-page">
       <header className="github-integration-header">
-        <button type="button" className="github-back" onClick={onBack} aria-label="返回自动化列表">
+        <button type="button" className="github-back" onClick={onBack} aria-label={t("backToAutomations")}>
           <BackIcon />
         </button>
         <GitHubLogo className="github-integration-logo" />
         <div>
-          <h1>{definition.title}</h1>
-          <p>{definition.subtitle}</p>
+          <h1>{t(`cards.${automation}.title`)}</h1>
+          <p>{t(`cards.${automation}.subtitle`)}</p>
         </div>
       </header>
 
       <div className="github-integration-layout">
         <section id={`github-panel-${automation}`} className="github-section-panel">
           <div className="github-panel-heading">
-            <p>{definition.panel}</p>
+            <p>{t(`cards.${automation}.panel`)}</p>
           </div>
           <form className="github-release-form" onSubmit={onSubmit} onKeyDown={stopComposingSubmit} noValidate>
             <div className="github-field-grid">
               {definition.fields.map(field)}
               <div className="github-field">
                 <label id="github-region-label">
-                  <span>地域</span>
-                  <span className="github-field-requirement is-required">必填</span>
+                  <span>{t("github.region")}</span>
+                  <span className="github-field-requirement is-required">{t("github.required")}</span>
                 </label>
                 <div
                   className="pp-network-region github-region-picker"
@@ -277,7 +284,7 @@ export function GitHubIntegration({
                   {regionMenuOpen ? (
                     <>
                       <div className="menu-scrim" onClick={() => setRegionMenuOpen(false)} />
-                      <div className="pp-region-menu" role="listbox" aria-label="地域">
+                      <div className="pp-region-menu" role="listbox" aria-label={t("github.region")}>
                         {regionOptions.map((region) => {
                           const selected = region.value === form.region;
                           return (
@@ -302,7 +309,7 @@ export function GitHubIntegration({
                   ) : null}
                 </div>
                 <span className="github-field-help">
-                  {definition.regionHelp}
+                  {t(`cards.${automation}.regionHelp`)}
                 </span>
               </div>
             </div>
@@ -310,15 +317,15 @@ export function GitHubIntegration({
             <div className="github-field github-token-field">
               <div className="github-token-label-row">
                 <label htmlFor="github-token">
-                  <span>GitHub Token</span>
-                  <span className="github-field-requirement is-required">必填</span>
+                  <span>{t("github.tokenLabel")}</span>
+                  <span className="github-field-requirement is-required">{t("github.required")}</span>
                 </label>
                 <a
                   href="https://github.com/settings/personal-access-tokens/new?name=VeADK%20Studio&description=Create%20a%20GitHub%20automation%20pull%20request&contents=write&pull_requests=write"
                   target="_blank"
                   rel="noreferrer"
                 >
-                  获取 Token
+                  {t("github.getToken")}
                   <ExternalIcon />
                 </a>
               </div>
@@ -331,38 +338,40 @@ export function GitHubIntegration({
                   onBlur={() => blurField("token")}
                   autoComplete="off"
                   required
-                  placeholder="需要仓库 Contents 与 Pull requests 写权限"
+                  placeholder={t("github.tokenPlaceholder")}
                   aria-invalid={Boolean(fieldErrors.token)}
                   aria-describedby={`github-token-help${fieldErrors.token ? " github-token-error" : ""}`}
                 />
                 <button
                   type="button"
                   onClick={() => setShowToken((current) => !current)}
-                  aria-label={showToken ? "隐藏 Token" : "显示 Token"}
-                  title={showToken ? "隐藏 Token" : "显示 Token"}
+                  aria-label={showToken ? t("github.hideToken") : t("github.showToken")}
+                  title={showToken ? t("github.hideToken") : t("github.showToken")}
                 >
                   <EyeIcon hidden={showToken} />
                 </button>
               </div>
-              <span id="github-token-help" className="github-field-help">Token 仅用于本次提交，不会保存在浏览器或写入 PR</span>
-              {fieldErrors.token ? <span id="github-token-error" className="github-field-error" role="alert">{fieldErrors.token}</span> : null}
+              <span id="github-token-help" className="github-field-help">{t("github.tokenHelp")}</span>
+              {fieldErrors.token ? <span id="github-token-error" className="github-field-error" role="alert">{t(fieldErrors.token)}</span> : null}
             </div>
 
             {submitError ? <div className="github-submit-message is-error" role="alert">{submitError}</div> : null}
             {result ? (
               <div className="github-submit-message is-success" role="status">
-                <span>PR #{result.number} 已创建</span>
-                <a href={result.url} target="_blank" rel="noreferrer">在 GitHub 查看<ExternalIcon /></a>
+                <span>{t("github.prCreated", { number: result.number })}</span>
+                <a href={result.url} target="_blank" rel="noreferrer">{t("github.viewOnGitHub")}<ExternalIcon /></a>
               </div>
             ) : null}
 
             <div className="github-form-actions">
               <div className="github-secrets-note">
-                <strong>合并 PR 前，请在仓库的 GitHub Actions Secrets 中配置：</strong>
-                {secrets.map((secret) => <span key={secret}>{secret}</span>)}
+                <strong>{t("github.secretsHeading")}</strong>
+                {secrets.map((secret) => (
+                  <span key={secret}>{secret}</span>
+                ))}
               </div>
               <button type="submit" disabled={submitting}>
-                {submitting ? "提交 PR 中…" : definition.submitLabel}
+                {submitting ? t("github.submitting") : t(`cards.${automation}.submitLabel`)}
               </button>
             </div>
           </form>

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   checkRuntimeNameAvailability,
   deployAgentkitProject,
@@ -38,6 +39,7 @@ export function IntelligentDeployment({
   cloudProvider = "volcengine",
   initialDeployRegion,
 }: IntelligentDeploymentProps) {
+  const { t } = useTranslation("create");
   const [deployRegion, setDeployRegion] = useState(
     initialDeployRegion ?? defaultCloudRegion(cloudProvider),
   );
@@ -68,7 +70,7 @@ export function IntelligentDeployment({
         key,
         required: true,
         comment: key,
-        placeholder: `请输入 ${key}`,
+        placeholder: t("intelligentDeployment.env.requiredPlaceholder", { key }),
       })),
     ...environment.optional
       .filter(isMigrationRuntimeEnvironmentKey)
@@ -76,10 +78,12 @@ export function IntelligentDeployment({
         key,
         required: false,
         comment: key,
-        placeholder: `可选：${key}`,
+        placeholder: t("intelligentDeployment.env.optionalPlaceholder", { key }),
       })),
   ];
-  const runtimeNameError = runtimeNameProblem(project.name);
+  const runtimeNameError = runtimeNameProblem(project.name, (key) =>
+    t(`validation.runtimeName.${key}`),
+  );
   useEffect(() => {
     if (runtimeNameError) {
       setRuntimeNameAvailable(null);
@@ -156,14 +160,14 @@ export function IntelligentDeployment({
       onDeploymentEnvChange={(key, value) =>
         setDeploymentEnvValues((current) => ({ ...current, [key]: value }))
       }
-      deploymentActionLabel="部署"
+      deploymentActionLabel={t("common.deploy")}
       deployDisabled={Boolean(runtimeNameError) || runtimeNameAvailable === false || runtimeNameChecking}
       deployDisabledReason={
         runtimeNameError
           ?? (runtimeNameAvailable === false
-            ? "Runtime 名称已存在，请更换后重试"
+            ? t("intelligentDeployment.runtimeNameExists")
             : runtimeNameChecking
-              ? "正在检查 Runtime 名称"
+              ? t("intelligentDeployment.checkingRuntimeName")
               : undefined)
       }
       deploymentTelemetry={{
@@ -172,18 +176,18 @@ export function IntelligentDeployment({
         aiAssisted: true,
       }}
       onBack={onBack}
-      backLabel="返回开发会话"
+      backLabel={t("intelligentDeployment.back")}
       deploymentPrimaryPane={
         <section
           className="trusted-source-pane"
-          aria-label={delivery.verified ? "已验证源码" : "可部署源码"}
+          aria-label={delivery.verified ? t("intelligentDeployment.verifiedSource") : t("intelligentDeployment.deployableSource")}
         >
           <div className="trusted-source-pane__badge">
-            {delivery.verified ? "已通过 Codex 云端验证" : "可部署源码"}
+            {delivery.verified ? t("intelligentDeployment.verifiedByCodex") : t("intelligentDeployment.deployableSource")}
           </div>
           <h2>{delivery.agentName}</h2>
           <label className="trusted-source-pane__runtime-name">
-            <span>Runtime 名称</span>
+            <span>{t("intelligentDeployment.runtimeName")}</span>
             <input
               value={project.name}
               maxLength={64}
@@ -194,15 +198,15 @@ export function IntelligentDeployment({
             />
           </label>
           <dl>
-            <div><dt>入口</dt><dd><code>{delivery.entryPoint}</code></dd></div>
-            <div><dt>文件</dt><dd>{delivery.fileCount}</dd></div>
+            <div><dt>{t("intelligentDeployment.entryPoint")}</dt><dd><code>{delivery.entryPoint}</code></dd></div>
+            <div><dt>{t("intelligentDeployment.files")}</dt><dd>{delivery.fileCount}</dd></div>
             <div><dt>Artifact</dt><dd><code>{delivery.artifactSha256.slice(0, 16)}</code></dd></div>
-            <div><dt>验证报告</dt><dd><code>{delivery.validationReportSha256.slice(0, 16)}</code></dd></div>
+            <div><dt>{t("intelligentDeployment.validationReport")}</dt><dd><code>{delivery.validationReportSha256.slice(0, 16)}</code></dd></div>
           </dl>
           <p>
             {delivery.verified
-              ? "源码由服务端从已验证交付物物化，浏览器文件不能替换。"
-              : "源码已由服务端安全物化，部署前请确认 Runtime 配置。"}
+              ? t("intelligentDeployment.verifiedHint")
+              : t("intelligentDeployment.unverifiedHint")}
           </p>
         </section>
       }

@@ -12,6 +12,7 @@ import { Button } from "@openai/apps-sdk-ui/components/Button";
 import { EmptyMessage } from "@openai/apps-sdk-ui/components/EmptyMessage";
 import { Input } from "@openai/apps-sdk-ui/components/Input";
 import { Textarea } from "@openai/apps-sdk-ui/components/Textarea";
+import { useTranslation } from "react-i18next";
 
 import {
   createWorkspace,
@@ -68,10 +69,10 @@ function WorkspaceEmptyIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
-function formatUpdatedAt(value: string): string {
+function formatUpdatedAt(value: string, locale: string): string {
   const timestamp = Date.parse(value);
   if (Number.isNaN(timestamp)) return value;
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat(locale, {
     month: "short",
     day: "numeric",
     hour: "2-digit",
@@ -101,6 +102,7 @@ function WorkspaceEditor({
   onSave: (input: WorkspaceInput) => Promise<void>;
   onDelete: (() => void) | null;
 }) {
+  const { t, i18n } = useTranslation("ui");
   const [name, setName] = useState(workspace?.name ?? "");
   const [description, setDescription] = useState(workspace?.description ?? "");
   const [environmentIds, setEnvironmentIds] = useState<string[]>(workspace?.environmentIds ?? []);
@@ -132,70 +134,74 @@ function WorkspaceEditor({
   };
 
   return (
-    <ResourcePageShell className="workspace-center" aria-label={workspace ? "工作区详情" : "新建工作区"}>
+    <ResourcePageShell className="workspace-center" aria-label={workspace ? t("workspace.detail") : t("workspace.create")}>
       <ResourceDetailLayout
-        title={workspace ? workspace.name : "新建工作区"}
-        description="将常用环境组合在一起；同一个环境可以加入多个工作区。"
-        identitySeed={workspace?.name || "新建工作区"}
-        backLabel="返回工作区列表"
+        title={workspace ? workspace.name : t("workspace.create")}
+        description={t("workspace.editorDescription")}
+        identitySeed={workspace?.name || t("workspace.create")}
+        backLabel={t("workspace.backToList")}
         onBack={onBack}
         actions={(
           <>
-            {onDelete ? <button type="button" className="is-danger" onClick={onDelete}>删除</button> : null}
+            {onDelete ? <button type="button" className="is-danger" onClick={onDelete}>{t("common.delete")}</button> : null}
             <button type="submit" form="workspace-form" disabled={saving || !name.trim()}>
-              {saving ? "保存中" : "保存"}
+              {saving ? t("common.saving") : t("common.save")}
             </button>
           </>
         )}
       >
           {workspace ? (
             <ResourceDetailSummary>
-              <div><dt>环境</dt><dd>{environmentIds.length} 个</dd></div>
-              <div><dt>创建时间</dt><dd>{formatUpdatedAt(workspace.createdAt)}</dd></div>
-              <div><dt>最近更新</dt><dd>{formatUpdatedAt(workspace.updatedAt)}</dd></div>
+              <div><dt>{t("common.environment")}</dt><dd>{t("workspace.environmentCount", { count: environmentIds.length })}</dd></div>
+              <div><dt>{t("workspace.createdAt")}</dt><dd>{formatUpdatedAt(workspace.createdAt, i18n.resolvedLanguage ?? i18n.language)}</dd></div>
+              <div><dt>{t("workspace.updatedAt")}</dt><dd>{formatUpdatedAt(workspace.updatedAt, i18n.resolvedLanguage ?? i18n.language)}</dd></div>
             </ResourceDetailSummary>
           ) : null}
 
           <form id="workspace-form" className="workspace-form" onSubmit={submit}>
-            <section className="workspace-fields" aria-label="基本信息">
+            <section className="workspace-fields" aria-label={t("workspace.basicInfo")}>
               <label>
-                <span>名称</span>
-                <Input value={name} maxLength={128} autoFocus onChange={(event) => setName(event.target.value)} placeholder="例如：内容生产" />
+                <span>{t("common.name")}</span>
+                <Input value={name} maxLength={128} autoFocus onChange={(event) => setName(event.target.value)} placeholder={t("workspace.namePlaceholder")} />
               </label>
               <label>
-                <span>描述</span>
-                <Textarea value={description} maxLength={2000} onChange={(event) => setDescription(event.target.value)} placeholder="说明这个工作区的用途" />
+                <span>{t("common.description")}</span>
+                <Textarea value={description} maxLength={2000} onChange={(event) => setDescription(event.target.value)} placeholder={t("workspace.descriptionPlaceholder")} />
               </label>
             </section>
 
             <section className="workspace-environments">
               <ResourceDetailSectionHeader
-                title="环境"
-                description={`已选择 ${environmentIds.length} 个，可在其他工作区中继续复用`}
+                title={t("common.environment")}
+                description={t("workspace.selectedEnvironmentCount", { count: environmentIds.length })}
                 actions={(
                   <ResourceSearch
-                    aria-label="搜索可用环境"
+                    aria-label={t("workspace.searchAvailableEnvironments")}
                     value={environmentQuery}
                     onChange={(event) => setEnvironmentQuery(event.target.value)}
-                    placeholder="搜索环境"
+                    placeholder={t("workspace.searchEnvironments")}
                   />
                 )}
               />
               {environments.length === 0 ? (
                 <div className="workspace-environment-empty">
-                  <p>还没有可添加的环境</p>
-                  <span>请先在“环境”页面创建并构建环境。</span>
+                  <p>{t("workspace.noAvailableEnvironments")}</p>
+                  <span>{t("workspace.createEnvironmentFirst")}</span>
                 </div>
               ) : visibleEnvironments.length === 0 ? (
                 <div className="workspace-environment-empty">
-                  <p>没有匹配的环境</p>
-                  <span>请尝试搜索其他名称。</span>
+                  <p>{t("workspace.noMatchingEnvironments")}</p>
+                  <span>{t("workspace.tryAnotherName")}</span>
                 </div>
               ) : (
                 <div className="workspace-environment-list">
                   {visibleEnvironments.map((environment) => {
                     const selected = environmentIds.includes(environment.id);
-                    const status = environment.latestVersion?.status === "available" ? "可用" : environment.latestVersion ? "构建中" : "未构建";
+                    const status = environment.latestVersion?.status === "available"
+                      ? t("workspace.environmentStatus.available")
+                      : environment.latestVersion
+                        ? t("workspace.environmentStatus.building")
+                        : t("workspace.environmentStatus.notBuilt");
                     return (
                       <label key={environment.id} className={`workspace-environment-option${selected ? " is-selected" : ""}`}>
                         <input
@@ -209,7 +215,7 @@ function WorkspaceEditor({
                           <strong title={environment.name}>{environment.name}</strong>
                           <span>{environmentLanguageLabel(environment.language)} · {status}</span>
                         </span>
-                        <span className="workspace-environment-option__action">{selected ? "已添加" : "添加"}</span>
+                        <span className="workspace-environment-option__action">{selected ? t("workspace.added") : t("common.add")}</span>
                       </label>
                     );
                   })}
@@ -224,6 +230,7 @@ function WorkspaceEditor({
 }
 
 function WorkspaceList({ onEnvironment }: { onEnvironment: () => void }) {
+  const { t, i18n } = useTranslation("ui");
   const [workspaces, setWorkspaces] = useState<StudioWorkspace[]>([]);
   const [environments, setEnvironments] = useState<StudioEnvironment[]>([]);
   const [view, setView] = useState<WorkspaceView>({ kind: "list" });
@@ -297,7 +304,7 @@ function WorkspaceList({ onEnvironment }: { onEnvironment: () => void }) {
             : await createWorkspace(input);
           setWorkspaces((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
           setStatusError(false);
-          setStatusMessage(`已保存工作区“${saved.name}”`);
+          setStatusMessage(t("workspace.saved", { name: saved.name }));
           setView({ kind: "list" });
         }}
       />
@@ -305,19 +312,19 @@ function WorkspaceList({ onEnvironment }: { onEnvironment: () => void }) {
   }
 
   return (
-    <ResourcePageShell className="workspace-center" aria-label="工作区">
-      <ResourcePageHeader title="工作区" />
+    <ResourcePageShell className="workspace-center" aria-label={t("workspace.title")}>
+      <ResourcePageHeader title={t("workspace.title")} />
       <ResourceToolbar>
         <ResourceTabs
           items={[
-            { id: "workspaces", label: "工作区" },
-            { id: "environments", label: "环境" },
+            { id: "workspaces", label: t("workspace.title") },
+            { id: "environments", label: t("common.environment") },
           ]}
           value="workspaces"
           onChange={(value) => {
             if (value === "environments") onEnvironment();
           }}
-          ariaLabel="工作区资源类型"
+          ariaLabel={t("workspace.resourceType")}
           idPrefix="workspace-center"
         />
         <div className="resource-toolbar__actions">
@@ -326,7 +333,7 @@ function WorkspaceList({ onEnvironment }: { onEnvironment: () => void }) {
               {statusMessage}
             </span>
           ) : null}
-          <ResourceSearch aria-label="搜索工作区" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索工作区" />
+          <ResourceSearch aria-label={t("workspace.searchWorkspaces")} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("workspace.searchWorkspaces")} />
         </div>
       </ResourceToolbar>
       <ResourceResults aria-live="polite">
@@ -335,21 +342,21 @@ function WorkspaceList({ onEnvironment }: { onEnvironment: () => void }) {
         ) : loadError ? (
           <div className="workspace-load-error" role="alert">
             <p>{loadError}</p>
-            <Button color="secondary" variant="soft" size="sm" onClick={() => setReloadKey((key) => key + 1)}>重新加载</Button>
+            <Button color="secondary" variant="soft" size="sm" onClick={() => setReloadKey((key) => key + 1)}>{t("common.reload")}</Button>
           </div>
         ) : visibleWorkspaces.length === 0 && query.trim() ? (
           <div className="workspace-empty">
             <EmptyMessage fill="none">
               <EmptyMessage.Icon><WorkspaceEmptyIcon /></EmptyMessage.Icon>
-              <EmptyMessage.Title>没有匹配的工作区</EmptyMessage.Title>
-              <EmptyMessage.Description>请尝试搜索其他名称或环境</EmptyMessage.Description>
+              <EmptyMessage.Title>{t("workspace.noMatchingWorkspaces")}</EmptyMessage.Title>
+              <EmptyMessage.Description>{t("workspace.tryAnotherNameOrEnvironment")}</EmptyMessage.Description>
             </EmptyMessage>
           </div>
         ) : (
           <ResourceGrid>
             {!query.trim() ? (
-              <ResourceCreateCard aria-label="新建工作区" icon={<AddIcon />} onClick={() => setView({ kind: "detail", workspaceId: null })}>
-                新建工作区
+              <ResourceCreateCard aria-label={t("workspace.create")} icon={<AddIcon />} onClick={() => setView({ kind: "detail", workspaceId: null })}>
+                {t("workspace.create")}
               </ResourceCreateCard>
             ) : null}
             {visibleWorkspaces.map((workspace) => {
@@ -361,16 +368,20 @@ function WorkspaceList({ onEnvironment }: { onEnvironment: () => void }) {
                   className="workspace-card"
                   title={workspace.name}
                   status={<Badge color={missing ? "danger" : available === workspace.environmentIds.length && available > 0 ? "success" : "secondary"} size="sm">
-                    {workspace.environmentIds.length === 0 ? "未添加环境" : missing ? "环境缺失" : `${available}/${workspace.environmentIds.length} 可用`}
+                    {workspace.environmentIds.length === 0
+                      ? t("workspace.noEnvironmentAdded")
+                      : missing
+                        ? t("workspace.environmentMissing")
+                        : t("workspace.availableFraction", { available, total: workspace.environmentIds.length })}
                   </Badge>}
-                  description={workspace.description || "暂无描述"}
+                  description={workspace.description || t("common.noDescription")}
                   metadata={[
-                    { label: "环境", value: `${workspace.environmentIds.length} 个环境` },
-                    { label: "可用", value: `${available} 个可用` },
-                    { label: "更新", value: formatUpdatedAt(workspace.updatedAt) },
+                    { label: t("common.environment"), value: t("workspace.environmentCount", { count: workspace.environmentIds.length }) },
+                    { label: t("workspace.available"), value: t("workspace.availableCount", { count: available }) },
+                    { label: t("workspace.updated"), value: formatUpdatedAt(workspace.updatedAt, i18n.resolvedLanguage ?? i18n.language) },
                   ]}
-                  detailAction={{ label: "管理", onClick: () => setView({ kind: "detail", workspaceId: workspace.id }) }}
-                  action={{ label: "添加环境", icon: "plus", onClick: () => setView({ kind: "detail", workspaceId: workspace.id }) }}
+                  detailAction={{ label: t("common.manage"), onClick: () => setView({ kind: "detail", workspaceId: workspace.id }) }}
+                  action={{ label: t("workspace.addEnvironment"), icon: "plus", onClick: () => setView({ kind: "detail", workspaceId: workspace.id }) }}
                 />
               );
             })}
@@ -380,9 +391,9 @@ function WorkspaceList({ onEnvironment }: { onEnvironment: () => void }) {
 
       {deleteTarget ? (
         <StudioConfirmDialog
-          title="删除工作区"
-          description={`确定删除工作区“${deleteTarget.name}”吗？环境本身不会被删除。`}
-          confirmLabel="删除"
+          title={t("workspace.deleteTitle")}
+          description={t("workspace.deleteDescription", { name: deleteTarget.name })}
+          confirmLabel={t("common.delete")}
           variant="danger"
           onCancel={() => setDeleteTarget(null)}
           onConfirm={() => {
@@ -391,7 +402,7 @@ function WorkspaceList({ onEnvironment }: { onEnvironment: () => void }) {
             void deleteWorkspace(target.id).then(() => {
               setWorkspaces((current) => current.filter((workspace) => workspace.id !== target.id));
               setStatusError(false);
-              setStatusMessage(`已删除工作区“${target.name}”`);
+              setStatusMessage(t("workspace.deleted", { name: target.name }));
               setView({ kind: "list" });
             }).catch((cause) => {
               setStatusError(true);
@@ -405,6 +416,7 @@ function WorkspaceList({ onEnvironment }: { onEnvironment: () => void }) {
 }
 
 export function WorkspaceCenter({ cloudProvider }: { cloudProvider: CloudProvider }) {
+  const { t } = useTranslation("ui");
   const [section, setSection] = useState<"workspaces" | "environments">("workspaces");
   const [clipboardImport, setClipboardImport] = useState<EnvironmentClipboardImportRequest | null>(null);
   const [clipboardReadError, setClipboardReadError] = useState("");
@@ -421,10 +433,10 @@ export function WorkspaceCenter({ cloudProvider }: { cloudProvider: CloudProvide
         // Start while the tab click still has a user activation.
         clipboardRead = navigator.clipboard.readText();
       } catch {
-        setClipboardReadError("未能读取剪贴板。请允许剪贴板权限，或点击“导入环境”后手动粘贴分享码。");
+        setClipboardReadError(t("workspace.clipboardPermissionError"));
       }
     } else {
-      setClipboardReadError("当前浏览器无法自动读取剪贴板；请点击“导入环境”后手动粘贴分享码。");
+      setClipboardReadError(t("workspace.clipboardUnsupported"));
     }
 
     setSection("environments");
@@ -438,14 +450,14 @@ export function WorkspaceCenter({ cloudProvider }: { cloudProvider: CloudProvide
       try {
         const permission = await navigator.permissions?.query({ name: "clipboard-read" as PermissionName });
         if (clipboardRequestKeyRef.current === key && permission?.state === "denied") {
-          setClipboardReadError("未能读取剪贴板。请允许剪贴板权限，或点击“导入环境”后手动粘贴分享码。");
+          setClipboardReadError(t("workspace.clipboardPermissionError"));
         }
       } catch {
         // Some browsers expose clipboard access without the Permissions API.
       }
     }).catch(() => {
       if (clipboardRequestKeyRef.current !== key) return;
-      setClipboardReadError("未能读取剪贴板。请允许剪贴板权限，或点击“导入环境”后手动粘贴分享码。");
+      setClipboardReadError(t("workspace.clipboardPermissionError"));
     });
   };
 

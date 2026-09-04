@@ -5,10 +5,11 @@ export function formatRequestError(
 ): string {
   const detail = cause instanceof Error
     ? `${cause.name}: ${cause.message}`
-    : String(cause || "未知错误");
+    : String(cause || adkT("common.unknownError"));
   return [
-    `${action}失败`,
-    `详细信息：${detail}`,
-    request ? `请求：${request}` : "",
+    adkT("requestError.actionFailed", { action }),
+    adkT("requestError.detail", { detail }),
+    request ? adkT("requestError.request", { request }) : "",
   ].filter(Boolean).join("\n");
 }
+import { adkT } from "./i18n";

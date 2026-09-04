@@ -1,4 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import {
   getCodingAgentSkillPreview,
@@ -49,7 +50,7 @@ function isAbortError(error: unknown): boolean {
 function errorMessage(error: unknown): string {
   return error instanceof Error && error.message
     ? error.message
-    : "读取 Skill 文件失败";
+    : "";
 }
 
 function formatFileSize(bytes: number): string {
@@ -80,6 +81,7 @@ function groupFiles(files: CodingAgentSkillPreviewFile[]): SkillFileGroup[] {
 }
 
 export function SkillPreviewDialog({ skill, onClose }: SkillPreviewDialogProps) {
+  const { t } = useTranslation("automations");
   const dialogRef = useRef<HTMLDialogElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const titleId = useId();
@@ -129,6 +131,9 @@ export function SkillPreviewDialog({ skill, onClose }: SkillPreviewDialogProps) 
 
   const groups = useMemo(() => groupFiles(preview?.files ?? []), [preview]);
   const selectedFile = preview?.files.find((file) => file.path === selectedPath) ?? null;
+  const skillName = t(`codingAgents.skills.items.${skill.id}.name`, {
+    defaultValue: skill.name,
+  });
 
   return (
     <dialog
@@ -152,26 +157,26 @@ export function SkillPreviewDialog({ skill, onClose }: SkillPreviewDialogProps) 
       <header className="coding-agents-preview-header">
         <span className="coding-agents-preview-mark"><FolderIcon /></span>
         <div>
-          <h2 id={titleId}>{skill.name}</h2>
-          <p id={descriptionId}>只读浏览随 Studio 提供的 Skill 文件</p>
+          <h2 id={titleId}>{skillName}</h2>
+          <p id={descriptionId}>{t("codingAgents.preview.description")}</p>
         </div>
-        <button type="button" autoFocus aria-label="关闭文件预览" onClick={onClose}>
+        <button type="button" autoFocus aria-label={t("codingAgents.preview.close")} onClick={onClose}>
           <CloseIcon />
         </button>
       </header>
 
       {loading ? (
-        <div className="coding-agents-preview-state"><i />正在读取文件…</div>
+        <div className="coding-agents-preview-state"><i />{t("codingAgents.preview.loading")}</div>
       ) : error ? (
         <div className="coding-agents-preview-state is-error" role="alert">
-          <span>{error}</span>
-          <button type="button" onClick={() => setReload((value) => value + 1)}>重试</button>
+          <span>{error || t("codingAgents.preview.error")}</span>
+          <button type="button" onClick={() => setReload((value) => value + 1)}>{t("codingAgents.retry")}</button>
         </div>
       ) : (
         <div className="coding-agents-preview-layout">
-          <nav className="coding-agents-preview-tree" aria-label={`${skill.name} 文件`}>
+          <nav className="coding-agents-preview-tree" aria-label={t("codingAgents.preview.skillFiles", { name: skillName })}>
             <div className="coding-agents-preview-tree-title">
-              <span>文件</span><small>{preview?.files.length ?? 0}</small>
+              <span>{t("codingAgents.preview.files")}</span><small>{preview?.files.length ?? 0}</small>
             </div>
             <div className="coding-agents-preview-tree-scroll">
               {groups.map((group) => group.directory ? (
@@ -205,7 +210,7 @@ export function SkillPreviewDialog({ skill, onClose }: SkillPreviewDialogProps) 
             </div>
           </nav>
 
-          <section className="coding-agents-preview-file" aria-label="文件内容">
+          <section className="coding-agents-preview-file" aria-label={t("codingAgents.preview.fileContent")}>
             {selectedFile ? (
               <>
                 <header>
@@ -216,12 +221,12 @@ export function SkillPreviewDialog({ skill, onClose }: SkillPreviewDialogProps) 
                   <pre tabIndex={0}><code>{selectedFile.content}</code></pre>
                 ) : (
                   <div className="coding-agents-preview-unavailable">
-                    此文件不是可预览的 UTF-8 文本。
+                    {t("codingAgents.preview.notPreviewable")}
                   </div>
                 )}
               </>
             ) : (
-              <div className="coding-agents-preview-unavailable">没有可预览的文件。</div>
+              <div className="coding-agents-preview-unavailable">{t("codingAgents.preview.noFiles")}</div>
             )}
           </section>
         </div>

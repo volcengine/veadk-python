@@ -1,5 +1,7 @@
 import { createRoot } from "react-dom/client";
 
+import "../i18n";
+
 import highlightStyles from "highlight.js/styles/github.css?inline";
 import builtinToolStyles from "../ui/builtin-tools/builtin-tools.css?inline";
 import codeBrowserStyles from "../ui/CodeBrowserDialog.css?inline";

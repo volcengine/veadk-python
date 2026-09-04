@@ -91,7 +91,7 @@ test("assistant selections open an accessible Apps SDK annotation popover", () =
   assert.match(componentSource, /@openai\/apps-sdk-ui\/components\/Popover/);
   assert.doesNotMatch(appSource, /onMouseUp=\{\(\) => queueResponseAnnotation/);
   assert.match(componentSource, /@openai\/apps-sdk-ui\/components\/Textarea/);
-  assert.match(componentSource, /aria-label="批注选中的模型回复"/);
+  assert.match(componentSource, /aria-label=\{t\("annotation\.ariaLabel"\)\}/);
   assert.match(componentSource, /role="alert"/);
   assert.match(helperSource, /selection\.isCollapsed/);
   assert.match(helperSource, /container\.contains\(anchorElement\)/);
@@ -106,7 +106,7 @@ test("assistant selections open an accessible Apps SDK annotation popover", () =
 test("annotation submission uses the explicit action without a keyboard shortcut", () => {
   assert.match(
     componentSource,
-    /<Button[\s\S]*?type="submit"[\s\S]*?>[\s\S]*?加入 Bad Case[\s\S]*?<\/Button>/,
+    /<Button[\s\S]*?type="submit"[\s\S]*?>[\s\S]*?t\("annotation\.submit"\)[\s\S]*?<\/Button>/,
   );
   assert.doesNotMatch(componentSource, /将保存为 Bad case/);
   assert.doesNotMatch(componentSource, />\s*加入评测集\s*</);
@@ -155,7 +155,7 @@ test("cancelling an annotation clears the selection without reopening the popove
   );
   assert.match(
     componentSource,
-    /onClick=\{dismiss\}[\s\S]*?>\s*取消\s*<\/Button>/,
+    /onClick=\{dismiss\}[\s\S]*?>[\s\S]*?t\("annotation\.cancel"\)[\s\S]*?<\/Button>/,
   );
 });
 

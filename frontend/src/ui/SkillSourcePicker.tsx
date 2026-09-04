@@ -9,6 +9,7 @@ import {
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "motion/react";
 import { FolderUp, Globe, Plus, Sparkles, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import type { CloudProvider } from "../adk/cloudProvider";
 import { LocalPicker } from "../create/LocalPicker";
@@ -45,13 +46,13 @@ function skillKey(skill: SelectedSkill): string {
   return `ss:${skill.skillSpaceId}/${skill.skillId}/${skill.version || ""}`;
 }
 
-function skillSourceLabel(skill: SelectedSkill): string {
+function skillSourceLabelKey(skill: SelectedSkill): string {
   if (skill.source === "runtime") {
-    return "运行中来源 · 原样保留，可移除或用同名 Skill 替换";
+    return "skillSourcePicker.sources.runtime";
   }
-  if (skill.source === "local") return "本地";
-  if (skill.source === "skillspace") return "AgentKit Skills 中心";
-  return "火山 Find Skill 技能广场";
+  if (skill.source === "local") return "skillSourcePicker.sources.local";
+  if (skill.source === "skillspace") return "skillSourcePicker.sources.skillspace";
+  return "skillSourcePicker.sources.skillhub";
 }
 
 function SelectedSkillRow({
@@ -63,10 +64,11 @@ function SelectedSkillRow({
   onRemove: () => void;
   disabled: boolean;
 }) {
+  const { t } = useTranslation("ui");
   let Icon: ComponentType<{ className?: string }> = Sparkles;
   if (skill.source === "local" || skill.source === "runtime") Icon = FolderUp;
   else if (skill.source === "skillspace") Icon = AgentKitSkillsIcon;
-  const detail = `${skillSourceLabel(skill)}${
+  const detail = `${t(skillSourceLabelKey(skill))}${
     skill.description ? ` · ${displayDescription(skill.description)}` : ""
   }`;
   return (
@@ -96,8 +98,8 @@ function SelectedSkillRow({
         className="cw-selected-skill-remove"
         onClick={onRemove}
         disabled={disabled}
-        aria-label={`移除 ${skill.name}`}
-        title={`移除 ${skill.name}`}
+        aria-label={t("skillSourcePicker.remove", { name: skill.name })}
+        title={t("skillSourcePicker.remove", { name: skill.name })}
       >
         <X className="cw-i cw-i-sm" />
       </button>
@@ -109,21 +111,26 @@ type SelectableSkillSource = Exclude<SkillSource, "runtime">;
 
 const SKILL_SOURCES: Array<{
   id: SelectableSkillSource;
-  label: string;
-  shortLabel: string;
+  labelKey: string;
+  shortLabelKey: string;
   icon: ComponentType<{ className?: string }>;
 }> = [
-  { id: "local", label: "本地文件", shortLabel: "本地文件", icon: FolderUp },
+  {
+    id: "local",
+    labelKey: "skillSourcePicker.tabs.local",
+    shortLabelKey: "skillSourcePicker.tabs.localShort",
+    icon: FolderUp,
+  },
   {
     id: "skillspace",
-    label: "AgentKit Skills 中心",
-    shortLabel: "AgentKit",
+    labelKey: "skillSourcePicker.tabs.skillspace",
+    shortLabelKey: "skillSourcePicker.tabs.skillspaceShort",
     icon: AgentKitSkillsIcon,
   },
   {
     id: "skillhub",
-    label: "火山 Find Skill 技能广场",
-    shortLabel: "Find Skill",
+    labelKey: "skillSourcePicker.tabs.skillhub",
+    shortLabelKey: "skillSourcePicker.tabs.skillhubShort",
     icon: Globe,
   },
 ];
@@ -133,7 +140,7 @@ export function SkillSourcePicker({
   onChange,
   cloudProvider,
   disabled = false,
-  addLabel = "添加 Skill",
+  addLabel,
   showSelectedCount = true,
 }: {
   selected: SelectedSkill[];
@@ -143,12 +150,14 @@ export function SkillSourcePicker({
   addLabel?: string;
   showSelectedCount?: boolean;
 }) {
+  const { t } = useTranslation("ui");
   const [active, setActive] = useState<SelectableSkillSource>("local");
   const [open, setOpen] = useState(false);
   const titleId = useId();
   const panelId = useId();
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const activeIndex = SKILL_SOURCES.findIndex((source) => source.id === active);
+  const resolvedAddLabel = addLabel ?? t("skillSourcePicker.addSkill");
 
   useEffect(() => {
     if (!open) return;
@@ -172,7 +181,7 @@ export function SkillSourcePicker({
   const remove = (key: string, skill: SelectedSkill) => {
     if (
       skill.source === "runtime" &&
-      !window.confirm(`从新版本中移除运行中的 Skill「${skill.name}」？`)
+      !window.confirm(t("skillSourcePicker.confirmRemoveRuntime", { name: skill.name }))
     ) {
       return;
     }
@@ -205,14 +214,14 @@ export function SkillSourcePicker({
         <span className="cw-skill-add-icon" aria-hidden="true">
           <Plus className="cw-i" />
         </span>
-        <span>{addLabel}</span>
+        <span>{resolvedAddLabel}</span>
       </button>
 
       {selected.length > 0 && (
         <div className="cw-skill-selected">
           {showSelectedCount ? (
             <span className="cw-skill-selected-label">
-              已加入技能 · {selected.length}
+              {t("skillSourcePicker.selectedCount", { count: selected.length })}
             </span>
           ) : null}
           <div className="cw-selected-skill-list">
@@ -254,12 +263,12 @@ export function SkillSourcePicker({
                 transition={{ duration: 0.18, ease: "easeOut" }}
               >
                 <header className="cw-skill-dialog-head">
-                  <h3 id={titleId}>{addLabel}</h3>
+                  <h3 id={titleId}>{resolvedAddLabel}</h3>
                   <button
                     ref={closeButtonRef}
                     type="button"
                     className="cw-skill-dialog-close"
-                    aria-label={`关闭${addLabel}`}
+                    aria-label={t("skillSourcePicker.close", { label: resolvedAddLabel })}
                     onClick={() => setOpen(false)}
                   >
                     <X className="cw-i" />
@@ -275,7 +284,7 @@ export function SkillSourcePicker({
                     } as CSSProperties}
                   >
                     <span className="cw-skill-tab-slider" aria-hidden="true" />
-                    {SKILL_SOURCES.map(({ id, label, shortLabel, icon: Icon }) => (
+                    {SKILL_SOURCES.map(({ id, labelKey, shortLabelKey, icon: Icon }) => (
                       <button
                         key={id}
                         type="button"
@@ -287,8 +296,8 @@ export function SkillSourcePicker({
                         onClick={() => setActive(id)}
                       >
                         <Icon className="cw-i cw-i-sm" />
-                        <span className="cw-skill-tab-label-full">{label}</span>
-                        <span className="cw-skill-tab-label-short">{shortLabel}</span>
+                        <span className="cw-skill-tab-label-full">{t(labelKey)}</span>
+                        <span className="cw-skill-tab-label-short">{t(shortLabelKey)}</span>
                       </button>
                     ))}
                   </div>

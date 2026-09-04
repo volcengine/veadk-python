@@ -32,8 +32,8 @@ test("moves the Skill entry into the Library shell", () => {
     /new-chat--library\$\{[\s\S]*?activePage === "library" \? " is-active" : ""/,
   );
   assert.match(sidebarSource, /onClick=\{onLibrary\}/);
-  assert.match(sidebarSource, /aria-label="资源库"/);
-  assert.match(sidebarSource, />资源库<\/span>/);
+  assert.match(sidebarSource, /aria-label=\{t\("navigation\.library"\)\}/);
+  assert.match(sidebarSource, /<span className="sidebar-nav-label">\{t\("navigation\.library"\)\}<\/span>/);
   assert.match(
     appSource,
     /const sidebarActivePage: SidebarPage =[\s\S]*?: skillCenter\s*\? "library"/,
@@ -42,12 +42,12 @@ test("moves the Skill entry into the Library shell", () => {
 });
 
 test("renders the three Library sections with the shared resource tabs", () => {
-  assert.match(librarySource, /<ResourcePageHeader[\s\S]*?title="资源库"/);
-  assert.match(librarySource, /id: "skills", label: "技能库"/);
-  assert.match(librarySource, /id: "knowledge", label: "知识库"/);
-  assert.match(librarySource, /id: "artifacts", label: "产物"/);
-  assert.match(librarySource, /<ResourceTabs[\s\S]*?idPrefix="library"[\s\S]*?items=\{LIBRARY_TABS\}/);
-  assert.match(librarySource, /<ResourceFilterSelect[\s\S]*?ariaLabel="区域"[\s\S]*?value=\{region\}[\s\S]*?onChange=\{setRegion\}/);
+  assert.match(librarySource, /<ResourcePageHeader[\s\S]*?title=\{t\("library\.title"\)\}/);
+  assert.match(librarySource, /id: "skills", label: t\("library\.tabs\.skills"\)/);
+  assert.match(librarySource, /id: "knowledge", label: t\("library\.tabs\.knowledge"\)/);
+  assert.match(librarySource, /id: "artifacts", label: t\("library\.tabs\.artifacts"\)/);
+  assert.match(librarySource, /<ResourceTabs[\s\S]*?idPrefix="library"[\s\S]*?items=\{tabs\}/);
+  assert.match(librarySource, /<ResourceFilterSelect[\s\S]*?ariaLabel=\{t\("library\.regionAria"\)\}[\s\S]*?value=\{region\}[\s\S]*?onChange=\{setRegion\}/);
   assert.match(appSource, /<LibraryView[\s\S]*?studioRegion=\{studioRegion \|\| defaultCloudRegion\(cloudProvider\)\}/);
   assert.match(resourceSource, /className=\{joinClassNames\("resource-tabs"/);
   assert.match(resourceSource, /role="tablist"/);
@@ -74,11 +74,11 @@ test("renders the three Library sections with the shared resource tabs", () => {
 test("hides the outer Library heading while a nested resource detail is active", () => {
   assert.match(
     librarySource,
-    /const detailActive = activeTab === "skills"[\s\S]*?skillPageTitle !== "技能库"[\s\S]*?: activeTab === "knowledge" && knowledgeDetailActive/,
+    /const detailActive = activeTab === "skills"[\s\S]*?skillPageTitle !== defaultSkillTitle[\s\S]*?: activeTab === "knowledge" && knowledgeDetailActive/,
   );
   assert.match(
     librarySource,
-    /<ResourcePageShell className=\{`library-view\$\{detailActive \? " is-detail" : ""\}`\}[\s\S]*?\{!detailActive \? \([\s\S]*?<ResourcePageHeader[\s\S]*?title="资源库"[\s\S]*?\) : null\}/,
+    /<ResourcePageShell className=\{`library-view\$\{detailActive \? " is-detail" : ""\}`\}[\s\S]*?\{!detailActive \? \([\s\S]*?<ResourcePageHeader[\s\S]*?title=\{t\("library\.title"\)\}[\s\S]*?\) : null\}/,
   );
   assert.match(librarySource, /<SkillCenterView[\s\S]*?onPageTitleChange=\{setSkillPageTitle\}/);
   assert.match(librarySource, /<KnowledgeLibrary[\s\S]*?onDetailChange=\{setKnowledgeDetailActive\}/);

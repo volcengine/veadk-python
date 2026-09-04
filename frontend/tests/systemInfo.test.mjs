@@ -52,10 +52,10 @@ test("account menu navigates to the system information page", () => {
   assert.match(appSource, /<SystemInfo[\s\S]*?onBack=\{closeSystemInfoPage\}/);
   assert.match(
     sidebarSource,
-    /系统信息[\s\S]*?退出登录/,
+    /account\.systemInfo[\s\S]*?account\.language[\s\S]*?account\.logout/,
     "system information should appear above logout",
   );
-  assert.match(sidebarSource, /onSystemInfo\(\)/);
+  assert.match(sidebarSource, /onSelect=\{onSystemInfo\}/);
   assert.doesNotMatch(sidebarSource, /role="dialog"/);
   assert.doesNotMatch(sidebarSource, /createPortal/);
 });
@@ -64,7 +64,7 @@ test("system information returns to the page recorded beneath it", () => {
   assert.match(systemInfoSource, /onBack: \(\) => void/);
   assert.match(
     systemInfoSource,
-    /<PageBackButton[\s\S]*?label="返回上一页"[\s\S]*?onClick=\{onBack\}/,
+    /<PageBackButton[\s\S]*?label=\{t\("common\.back"\)\}[\s\S]*?onClick=\{onBack\}/,
   );
   assert.match(
     appSource,
@@ -155,30 +155,30 @@ test("resource text and its console icon form one compact external link", () => 
 
 test("system information page lists sandbox tools and the current identity user pool", () => {
   assert.match(clientSource, /\/web\/system-info/);
-  assert.match(systemInfoSource, /当前版本/);
-  assert.match(systemInfoSource, />通用</);
-  assert.match(systemInfoSource, />存储</);
-  assert.match(systemInfoSource, /TOS 地址/);
+  assert.match(systemInfoSource, /t\("systemInfo\.currentVersion"\)/);
+  assert.match(systemInfoSource, /t\("systemInfo\.general"\)/);
+  assert.match(systemInfoSource, /t\("systemInfo\.storage"\)/);
+  assert.match(systemInfoSource, /t\("systemInfo\.tosAddress"\)/);
   assert.match(systemInfoSource, /tosAddress/);
-  assert.match(systemInfoSource, />沙箱信息</);
-  assert.match(systemInfoSource, /用户池/);
+  assert.match(systemInfoSource, /t\("systemInfo\.sandboxInfo"\)/);
+  assert.match(systemInfoSource, /t\("systemInfo\.userPool"\)/);
   assert.match(
     systemInfoSource,
-    /<dl className="system-info-pool"[\s\S]*?<dt>名称<\/dt>[\s\S]*?<dt>ID<\/dt>[\s\S]*?<dt>域名<\/dt>[\s\S]*?<dt>区域<\/dt>[\s\S]*?<\/dl>/,
+    /<dl className="system-info-pool"[\s\S]*?<dt>\{t\("common\.name"\)\}<\/dt>[\s\S]*?<dt>ID<\/dt>[\s\S]*?<dt>\{t\("systemInfo\.domain"\)\}<\/dt>[\s\S]*?<dt>\{t\("systemInfo\.region"\)\}<\/dt>[\s\S]*?<\/dl>/,
   );
   assert.match(
     systemInfoSource,
-    /<dt>名称<\/dt>[\s\S]*?<ConsoleLink[\s\S]*?identityUserPoolConsoleUrl/,
+    /<dt>\{t\("common\.name"\)\}<\/dt>[\s\S]*?<ConsoleLink[\s\S]*?identityUserPoolConsoleUrl/,
   );
   assert.doesNotMatch(systemInfoSource, /<dt>UID<\/dt>/);
   assert.match(systemInfoSource, /listIdentityUserPools/);
   assert.match(systemInfoSource, /pools\.filter\(\(pool\) => pool\.isCurrent\)/);
   assert.doesNotMatch(systemInfoSource, /当前 Studio<\/span>/);
-  assert.match(systemInfoSource, /重新加载/);
+  assert.match(systemInfoSource, /t\("common\.reload"\)/);
   assert.match(systemInfoSource, /setSandboxReloadKey/);
   assert.match(systemInfoSource, /setUserPoolsReloadKey/);
   assert.match(systemInfoSource, /role="alert"/);
-  assert.match(systemInfoSource, /未配置/);
+  assert.match(systemInfoSource, /t\("common\.notConfigured"\)/);
   assert.match(clientSource, /snapshot: boolean/);
   assert.match(clientSource, /"deepseek_harness"/);
   assert.match(clientSource, /"deepseek_harness_snapshot"/);
@@ -219,7 +219,7 @@ test("system information page lists sandbox tools and the current identity user 
   assert.match(clientSource, /updated: boolean/);
   assert.match(
     systemInfoSource,
-    /tool\.snapshot \?\s*\(\s*<span className="system-info-tool-badge">快照版<\/span>\s*\)\s*: null/,
+    /tool\.snapshot \?\s*\(\s*<span className="system-info-tool-badge">\{t\("systemInfo\.snapshot"\)\}<\/span>\s*\)\s*: null/,
   );
   assert.match(systemInfoSource, /function isCodexSandboxToolKind/);
   assert.match(systemInfoSource, /kind === "codex" \|\| kind === "codex_snapshot"/);
@@ -235,10 +235,10 @@ test("system information page lists sandbox tools and the current identity user 
   assert.doesNotMatch(systemInfoSource, /system-info-resource-actions/);
   assert.match(systemInfoSource, /className="system-info-resource-update"/);
   assert.match(systemInfoSource, /RefreshCw/);
-  assert.match(systemInfoSource, /aria-label=\{`更新/);
+  assert.match(systemInfoSource, /aria-label=\{t\("systemInfo\.updateModelEnv"/);
   assert.doesNotMatch(systemInfoSource, /<span>更新<\/span>/);
   assert.match(systemInfoSource, /updateSandboxToolModelEnv\(tool\)/);
-  assert.match(systemInfoSource, /result\.updated \? "已更新" : "无需更新"/);
+  assert.match(systemInfoSource, /result\.updated[\s\S]*?t\("systemInfo\.modelEnvUpdated"\)[\s\S]*?t\("systemInfo\.modelEnvAlreadyCurrent"\)/);
   assert.match(systemInfoSource, /const inlineError =/);
   assert.match(systemInfoSource, /className="system-info-inline-error" role="alert"/);
   assert.match(systemInfoSource, /className="system-info-inline-status" role="status"/);
@@ -257,8 +257,8 @@ test("system information page lists sandbox tools and the current identity user 
   assert.match(systemInfoStylesSource, /system-info-spin/);
   assert.match(systemInfoStylesSource, /\.system-info-resource-update:disabled\s*\{/);
   assert.match(systemInfoStylesSource, /\.system-info-inline-error\s*\{/);
-  assert.match(systemInfoSource, /本地模式未配置用户池/);
-  assert.match(systemInfoSource, /当前 Studio 未配置用户池/);
+  assert.match(systemInfoSource, /t\("systemInfo\.noLocalUserPool"\)/);
+  assert.match(systemInfoSource, /t\("systemInfo\.noUserPool"\)/);
   assert.match(systemInfoSource, /Volcengine credentials not found/);
   assert.match(systemInfoSource, /const isAdmin = role === "admin"/);
   assert.match(systemInfoSource, /if \(!isAdmin\)/);
@@ -302,10 +302,11 @@ test("system information page lists sandbox tools and the current identity user 
 test("system information shows environment CodePipeline and Container Registry resources", () => {
   assert.match(clientSource, /getEnvironmentResources/);
   assert.match(clientSource, /\/web\/v3\/environment-resources/);
-  assert.match(systemInfoSource, /环境构建/);
+  assert.match(systemInfoSource, /t\("systemInfo\.environmentBuild"\)/);
   assert.match(systemInfoSource, /CodePipeline Workspace/);
-  assert.match(systemInfoSource, /Container Registry 仓库/);
+  assert.match(systemInfoSource, /t\("systemInfo\.containerRegistryRepository"\)/);
   assert.match(systemInfoSource, /environmentResources\.codePipeline\.consoleUrl/);
   assert.match(systemInfoSource, /environmentResources\.containerRegistry\.consoleUrl/);
   assert.match(systemInfoSource, /environmentResourcesError/);
+  assert.match(systemInfoSource, /t\("systemInfo\.environmentResourcesError"\)/);
 });

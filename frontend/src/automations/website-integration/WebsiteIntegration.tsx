@@ -3,6 +3,7 @@ import { Button, CopyButton } from "@openai/apps-sdk-ui/components/Button";
 import { EmptyMessage } from "@openai/apps-sdk-ui/components/EmptyMessage";
 import { Input } from "@openai/apps-sdk-ui/components/Input";
 import { Select, type Option } from "@openai/apps-sdk-ui/components/Select";
+import { useTranslation } from "react-i18next";
 
 import { getRuntimes, probeRuntimeApps, type CloudRuntime } from "../../adk/client";
 import {
@@ -40,9 +41,9 @@ function WebsiteIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
-function formatCreatedAt(value: string): string {
+function formatCreatedAt(value: string, locale: string): string {
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN", {
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString(locale, {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
@@ -69,6 +70,7 @@ async function loadAllRuntimes(signal: AbortSignal): Promise<CloudRuntime[]> {
 }
 
 export function WebsiteIntegration({ onBack }: WebsiteIntegrationProps) {
+  const { t, i18n } = useTranslation("websiteIntegration");
   const [integrations, setIntegrations] = useState<WebsiteIntegrationRecord[]>([]);
   const [runtimes, setRuntimes] = useState<CloudRuntime[]>([]);
   const [selectedRuntime, setSelectedRuntime] = useState("");
@@ -97,14 +99,14 @@ export function WebsiteIntegration({ onBack }: WebsiteIntegrationProps) {
       })
       .catch((cause: unknown) => {
         if (!controller.signal.aborted) {
-          setError(cause instanceof Error ? cause.message : "加载网站集成失败");
+          setError(cause instanceof Error ? cause.message : t("errors.load"));
         }
       })
       .finally(() => {
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, []);
+  }, [t]);
 
   const runtimeOptions = useMemo<RuntimeOption[]>(() => runtimes.map((runtime) => ({
     value: `${runtime.region}::${runtime.runtimeId}`,
@@ -133,7 +135,7 @@ export function WebsiteIntegration({ onBack }: WebsiteIntegrationProps) {
       const apps = await probeRuntimeApps(runtime.runtimeId, runtime.region, {
         retryProbe: true,
       });
-      if (!apps?.length) throw new Error("该 Runtime 暂未发现可对话的 Agent");
+      if (!apps?.length) throw new Error(t("errors.noConversationalAgent"));
       const created = await createWebsiteIntegration({
         domain: domain.trim(),
         runtimeId: runtime.runtimeId,
@@ -145,14 +147,14 @@ export function WebsiteIntegration({ onBack }: WebsiteIntegrationProps) {
       setSelectedIntegrationId(created.id);
       setDomain("");
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "创建网站集成失败");
+      setError(cause instanceof Error ? cause.message : t("errors.create"));
     } finally {
       setSubmitting(false);
     }
   }
 
   async function removeIntegration(integration: WebsiteIntegrationRecord) {
-    if (!window.confirm(`确定删除 ${integration.domain} 的网站集成吗？`)) return;
+    if (!window.confirm(t("confirmDelete", { domain: integration.domain }))) return;
     setDeletingId(integration.id);
     setError("");
     try {
@@ -163,7 +165,7 @@ export function WebsiteIntegration({ onBack }: WebsiteIntegrationProps) {
         setSelectedIntegrationId(next?.id ?? "");
       }
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "删除网站集成失败");
+      setError(cause instanceof Error ? cause.message : t("errors.delete"));
     } finally {
       setDeletingId("");
     }
@@ -172,13 +174,13 @@ export function WebsiteIntegration({ onBack }: WebsiteIntegrationProps) {
   return (
     <div className="website-integration-page">
       <header className="website-integration-header">
-        <button type="button" className="website-integration-back" onClick={onBack} aria-label="返回自动化列表">
+        <button type="button" className="website-integration-back" onClick={onBack} aria-label={t("backToAutomations")}>
           <BackIcon />
         </button>
         <WebsiteIcon className="website-integration-logo" />
         <div>
-          <h1>网站集成</h1>
-          <p>将 AgentKit Runtime 以悬浮聊天窗口嵌入网站</p>
+          <h1>{t("title")}</h1>
+          <p>{t("description")}</p>
         </div>
       </header>
 
@@ -188,7 +190,7 @@ export function WebsiteIntegration({ onBack }: WebsiteIntegrationProps) {
             <div className="website-integration-section-heading">
               <div>
                 <span>1</span>
-                <h2 id="website-add-title">添加网站</h2>
+                <h2 id="website-add-title">{t("addWebsite")}</h2>
               </div>
             </div>
             <form className="website-integration-form" onSubmit={addIntegration}>
@@ -198,19 +200,19 @@ export function WebsiteIntegration({ onBack }: WebsiteIntegrationProps) {
                 options={runtimeOptions}
                 value={selectedRuntime}
                 onChange={(option) => setSelectedRuntime(option.value)}
-                placeholder={loading ? "正在加载 Runtime" : "选择 Runtime"}
+                placeholder={loading ? t("loadingRuntime") : t("selectRuntime")}
                 loading={loading}
                 disabled={loading || submitting || runtimeOptions.length === 0}
                 size="lg"
                 pill={false}
                 align="start"
               />
-              <label htmlFor="website-domain">网站域名</label>
+              <label htmlFor="website-domain">{t("websiteDomain")}</label>
               <Input
                 id="website-domain"
                 value={domain}
                 onChange={(event) => setDomain(event.target.value)}
-                placeholder="例如 xxxx.com 或 localhost:5173"
+                placeholder={t("domainPlaceholder")}
                 autoComplete="off"
                 disabled={submitting}
                 size="lg"
@@ -223,7 +225,7 @@ export function WebsiteIntegration({ onBack }: WebsiteIntegrationProps) {
                 loading={submitting}
                 disabled={!domain.trim() || !selectedRuntime || loading}
               >
-                {submitting ? "正在生成" : "生成 Token"}
+                {submitting ? t("generating") : t("generateToken")}
               </Button>
             </form>
             {error ? <div className="website-integration-error" role="alert">{error}</div> : null}
@@ -233,12 +235,12 @@ export function WebsiteIntegration({ onBack }: WebsiteIntegrationProps) {
             <div className="website-integration-section-heading">
               <div>
                 <span>2</span>
-                <h2 id="website-list-title">已添加网站</h2>
+                <h2 id="website-list-title">{t("addedWebsites")}</h2>
               </div>
-              <small>{integrations.length} 个</small>
+              <small>{t("websiteCount", { count: integrations.length })}</small>
             </div>
             {loading ? (
-              <div className="website-integration-loading" role="status">正在加载网站集成</div>
+              <div className="website-integration-loading" role="status">{t("loadingIntegrations")}</div>
             ) : integrations.length ? (
               <div className="website-integration-list">
                 {integrations.map((integration) => (
@@ -260,7 +262,7 @@ export function WebsiteIntegration({ onBack }: WebsiteIntegrationProps) {
                       <small>{integration.runtimeName} · {integration.appName}</small>
                     </span>
                     <span className="website-integration-token">{integration.token.slice(0, 12)}…</span>
-                    <span className="website-integration-created">{formatCreatedAt(integration.createdAt)}</span>
+                    <span className="website-integration-created">{formatCreatedAt(integration.createdAt, i18n.resolvedLanguage || i18n.language)}</span>
                     <Button
                       type="button"
                       color="danger"
@@ -273,7 +275,7 @@ export function WebsiteIntegration({ onBack }: WebsiteIntegrationProps) {
                         void removeIntegration(integration);
                       }}
                     >
-                      删除
+                      {t("delete")}
                     </Button>
                   </div>
                 ))}
@@ -281,8 +283,8 @@ export function WebsiteIntegration({ onBack }: WebsiteIntegrationProps) {
             ) : (
               <EmptyMessage className="website-integration-empty">
                 <EmptyMessage.Icon><WebsiteIcon /></EmptyMessage.Icon>
-                <EmptyMessage.Title>还没有网站集成</EmptyMessage.Title>
-                <EmptyMessage.Description>选择 Runtime 并输入网站域名即可生成 Token</EmptyMessage.Description>
+                <EmptyMessage.Title>{t("emptyTitle")}</EmptyMessage.Title>
+                <EmptyMessage.Description>{t("emptyDescription")}</EmptyMessage.Description>
               </EmptyMessage>
             )}
           </section>
@@ -291,14 +293,14 @@ export function WebsiteIntegration({ onBack }: WebsiteIntegrationProps) {
             <div className="website-integration-section-heading">
               <div>
                 <span>3</span>
-                <h2 id="website-embed-title">引入方法</h2>
+                <h2 id="website-embed-title">{t("embedMethod")}</h2>
               </div>
             </div>
             {selectedIntegration ? (
               <div className="website-integration-embed">
                 <div>
                   <strong>{selectedIntegration.domain}</strong>
-                  <span>将下面代码放到网页的 body 结束标签前</span>
+                  <span>{t("embedInstructions")}</span>
                 </div>
                 <pre><code>{embedSnippet}</code></pre>
                 <CopyButton
@@ -308,11 +310,11 @@ export function WebsiteIntegration({ onBack }: WebsiteIntegrationProps) {
                   size="sm"
                   pill={false}
                 >
-                  {({ copied }) => copied ? "已复制" : "复制代码"}
+                  {({ copied }) => copied ? t("copied") : t("copyCode")}
                 </CopyButton>
               </div>
             ) : (
-              <p className="website-integration-hint">添加网站后会在这里生成引入代码。</p>
+              <p className="website-integration-hint">{t("embedHint")}</p>
             )}
           </section>
         </div>

@@ -6,6 +6,7 @@ import {
   type FormEvent,
 } from "react";
 import { createPortal } from "react-dom";
+import { useTranslation } from "react-i18next";
 import type { ArtifactLibraryItem } from "./artifactLibraryModel";
 import { CloseLibraryIcon } from "./icons/LibraryIcons";
 
@@ -44,6 +45,7 @@ export function ArtifactEditDialog({
   onClose,
   onSave,
 }: ArtifactEditDialogProps) {
+  const { t } = useTranslation("workspaceTools");
   const [name, setName] = useState(artifact.name);
   const [description, setDescription] = useState(artifact.description ?? "");
   const [tags, setTags] = useState((artifact.tags ?? []).join("，"));
@@ -108,16 +110,16 @@ export function ArtifactEditDialog({
     const normalizedName = name.trim();
     const normalizedTags = parseTags(tags);
     if (!normalizedName) {
-      setValidationError("请输入产物名称");
+      setValidationError(t("artifactEdit.nameRequired"));
       nameRef.current?.focus();
       return;
     }
     if (normalizedTags.length > MAX_TAGS) {
-      setValidationError(`标签最多 ${MAX_TAGS} 个`);
+      setValidationError(t("artifactEdit.tooManyTags", { max: MAX_TAGS }));
       return;
     }
     if (normalizedTags.some((tag) => tag.length > MAX_TAG_LENGTH)) {
-      setValidationError(`单个标签不能超过 ${MAX_TAG_LENGTH} 个字符`);
+      setValidationError(t("artifactEdit.tagTooLong", { max: MAX_TAG_LENGTH }));
       return;
     }
     setValidationError("");
@@ -148,17 +150,17 @@ export function ArtifactEditDialog({
       >
         <header className="artifact-edit-dialog__header">
           <div>
-            <h2 id={titleId}>编辑产物信息</h2>
-            <p id={descriptionId}>内容文件不会被修改</p>
+            <h2 id={titleId}>{t("artifactEdit.title")}</h2>
+            <p id={descriptionId}>{t("artifactEdit.subtitle")}</p>
           </div>
-          <button type="button" onClick={onClose} disabled={busy} aria-label="关闭编辑框">
+          <button type="button" onClick={onClose} disabled={busy} aria-label={t("artifactEdit.close")}>
             <CloseLibraryIcon />
           </button>
         </header>
         <form onSubmit={submit}>
           <div className="artifact-edit-dialog__body">
             <label className="artifact-edit-field">
-              <span>名称</span>
+              <span>{t("artifactEdit.name")}</span>
               <input
                 ref={nameRef}
                 value={name}
@@ -172,23 +174,23 @@ export function ArtifactEditDialog({
               />
             </label>
             <label className="artifact-edit-field">
-              <span>描述</span>
+              <span>{t("artifactEdit.description")}</span>
               <textarea
                 value={description}
                 maxLength={MAX_DESCRIPTION_LENGTH}
                 disabled={busy}
                 rows={4}
-                placeholder="补充用途、版本或使用说明"
+                placeholder={t("artifactEdit.descriptionPlaceholder")}
                 onChange={(event) => setDescription(event.target.value)}
               />
               <small>{description.length}/{MAX_DESCRIPTION_LENGTH}</small>
             </label>
             <label className="artifact-edit-field">
-              <span>标签</span>
+              <span>{t("artifactEdit.tags")}</span>
               <input
                 value={tags}
                 disabled={busy}
-                placeholder="使用逗号分隔，最多 10 个"
+                placeholder={t("artifactEdit.tagsPlaceholder", { max: MAX_TAGS })}
                 onChange={(event) => {
                   setTags(event.target.value);
                   setValidationError("");
@@ -200,9 +202,9 @@ export function ArtifactEditDialog({
             ) : null}
           </div>
           <footer className="artifact-edit-dialog__actions">
-            <button type="button" onClick={onClose} disabled={busy}>取消</button>
+            <button type="button" onClick={onClose} disabled={busy}>{t("artifactEdit.cancel")}</button>
             <button type="submit" className="is-primary" disabled={busy}>
-              {busy ? "保存中" : "保存"}
+              {busy ? t("artifactEdit.saving") : t("artifactEdit.save")}
             </button>
           </footer>
         </form>

@@ -43,38 +43,36 @@ test("reuses loaded Agent metadata for the conversation information rail", () =>
 });
 
 test("shows Agent tools, skills, and a fullscreen execution canvas", () => {
-  assert.match(railSource, /Agent 信息/);
-  assert.match(railSource, /title="工具"/);
-  assert.match(railSource, /title="技能"/);
-  assert.match(railSource, /未配置/);
+  assert.match(railSource, /useTranslation\("workspaceTools"\)/);
+  assert.match(railSource, /title=\{t\("agentTopology\.tools"\)\}/);
+  assert.match(railSource, /title=\{t\("agentTopology\.skills"\)\}/);
+  assert.match(railSource, /t\("agentTopology\.notConfigured"\)/);
   assert.doesNotMatch(railSource, /const hasTopology/);
   assert.match(railSource, /className="topo-module-card topo-tools-card"/);
   assert.match(railSource, /className="topo-module-card topo-skills-card"/);
-  assert.match(railSource, /className="topo-module-card topo-topology" aria-label="Agent 画布"/);
-  assert.match(railSource, /<ModuleTitle title="结构拓扑" count=\{totalNodes\(graph\)\} \/>/);
-  assert.doesNotMatch(railSource, /<ModuleTitle title="画布"/);
+  assert.match(railSource, /className="topo-module-card topo-topology" aria-label=\{t\("agentTopology\.agentCanvas"\)\}/);
+  assert.match(railSource, /<ModuleTitle title=\{t\("agentTopology\.topology"\)\} count=\{totalNodes\(graph\)\} \/>/);
   assert.match(
     railSource,
     /<AgentBuildCanvas[\s\S]*?direction="horizontal"[\s\S]*?readOnly[\s\S]*?interactivePreview/,
   );
-  assert.match(railSource, /aria-label="全屏查看 Agent 画布"/);
-  assert.match(railSource, /createPortal\([\s\S]*?role="dialog"[\s\S]*?aria-label="全屏 Agent 执行画布"/);
+  assert.match(railSource, /aria-label=\{t\("agentTopology\.viewCanvasFullscreen"\)\}/);
+  assert.match(railSource, /createPortal\([\s\S]*?role="dialog"[\s\S]*?aria-label=\{t\("agentTopology\.fullscreenExecutionCanvas"\)\}/);
   assert.match(railSource, /event\.key === "Escape"/);
   assert.match(railStyles, /\.topo-canvas-preview[\s\S]*?border-radius:\s*12px/);
   assert.match(railStyles, /\.topo-canvas-dialog\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?inset:\s*0;/);
   assert.doesNotMatch(railSource, /className="topo-kicker"/);
   assert.match(railSource, /className="topo-module-scroll topo-tools-scroll"/);
   assert.match(railSource, /className="topo-module-scroll topo-skills-scroll"/);
-  assert.match(railSource, /aria-label="工具列表"[\s\S]*?tabIndex=\{0\}/);
-  assert.match(railSource, /aria-label="技能列表"[\s\S]*?tabIndex=\{0\}/);
+  assert.match(railSource, /aria-label=\{t\("agentTopology\.toolList"\)\}[\s\S]*?tabIndex=\{0\}/);
+  assert.match(railSource, /aria-label=\{t\("agentTopology\.skillList"\)\}[\s\S]*?tabIndex=\{0\}/);
   assert.match(railSource, /className="topo-skill-name"/);
   assert.doesNotMatch(railSource, /<strong>\{skill\.name\}<\/strong>/);
   assert.match(
     railSource,
     /className="topo-module-label"[\s\S]*?className="topo-section-count"[\s\S]*?\{count\}/,
   );
-  assert.match(railSource, /aria-label=\{`\$\{count\} 项`\}/);
-  assert.doesNotMatch(railSource, /\{count\} 项<\/span>/);
+  assert.match(railSource, /aria-label=\{t\("agentTopology\.itemCount", \{ count \}\)\}/);
   assert.match(
     railStyles,
     /\.topo-capability-name\s*\{[^}]*font-size:\s*13px;/,
@@ -90,8 +88,8 @@ test("shows Agent tools, skills, and a fullscreen execution canvas", () => {
   );
   assert.doesNotMatch(agentCard, /AgentIdentityIcon|topo-identity-mark/);
 
-  const toolsIndex = railSource.indexOf('title="工具"');
-  const skillsIndex = railSource.indexOf('title="技能"');
+  const toolsIndex = railSource.indexOf('title={t("agentTopology.tools")}');
+  const skillsIndex = railSource.indexOf('title={t("agentTopology.skills")}');
   const topologyIndex = railSource.indexOf('className="topo-module-card topo-topology"');
   assert.ok(toolsIndex > -1 && skillsIndex > toolsIndex);
   assert.ok(topologyIndex > skillsIndex);
@@ -192,7 +190,7 @@ test("mixes selected Studio tools into the existing tool list", () => {
     /\.filter\(\(name\) => !INTERNAL_AGENT_TOOL_NAMES\.has\(name\)\)/,
   );
   assert.match(railSource, /selectedIds\.has\(tool\.id\)/);
-  assert.match(railSource, /tool\.custom && <span className="topo-custom-badge">Studio Tool<\/span>/);
+  assert.match(railSource, /tool\.custom && <span className="topo-custom-badge">\{t\("agentTopology\.studioTool"\)\}<\/span>/);
   assert.match(railSource, /tool\.custom && tool\.removable && \([\s\S]*?topo-remove-capability/);
   assert.doesNotMatch(railSource, /skill\.custom/);
   assert.match(appSource, /studioTools=\{visibleStudioTools\}/);
@@ -201,8 +199,8 @@ test("mixes selected Studio tools into the existing tool list", () => {
 });
 
 test("offers only the Studio BFF tool control in the information rail", () => {
-  assert.match(railSource, /在此对话中添加 Studio 工具/);
-  assert.doesNotMatch(railSource, /aria-label="添加技能"/);
+  assert.match(railSource, /t\("agentTopology\.addStudioToolHere"\)/);
+  assert.doesNotMatch(railSource, /t\("agentTopology\.addSkill"\)/);
   assert.match(railSource, /className="topo-capability-add-slot"/);
   assert.match(railSource, /<StudioToolDialog/);
   assert.doesNotMatch(railSource, /<SkillCapabilityDialog/);
@@ -231,11 +229,11 @@ test("offers only the Studio BFF tool control in the information rail", () => {
 });
 
 test("uses a searchable Studio BFF tool dialog without dynamic Skills", () => {
-  assert.match(capabilityDialogsSource, /get_city_weather: "城市天气查询"/);
-  assert.match(capabilityDialogsSource, /get_location_weather: "位置天气查询"/);
-  assert.match(capabilityDialogsSource, />添加 Studio 工具<\/h2>/);
-  assert.match(capabilityDialogsSource, /aria-label="搜索 Studio 工具"/);
-  assert.match(capabilityDialogsSource, /Runtime 无需预装/);
+  assert.match(capabilityDialogsSource, /get_city_weather: "studioTools\.labels\.get_city_weather"/);
+  assert.match(capabilityDialogsSource, /get_location_weather: "studioTools\.labels\.get_location_weather"/);
+  assert.match(capabilityDialogsSource, /<h2 id=\{titleId\.current\}>\{t\("studioTools\.title"\)\}<\/h2>/);
+  assert.match(capabilityDialogsSource, /aria-label=\{t\("studioTools\.searchAria"\)\}/);
+  assert.match(capabilityDialogsSource, /t\("studioTools\.description", \{ agentName \}\)/);
   assert.match(capabilityDialogsSource, /onChange\(\[\.\.\.next\]\)/);
   assert.doesNotMatch(capabilityDialogsSource, /Skill Hub|SkillCapabilityDialog/);
   assert.doesNotMatch(clientSource, /SessionCapabilities|sessionCapabilitiesPath/);

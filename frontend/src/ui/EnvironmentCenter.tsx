@@ -10,6 +10,8 @@ import {
   type RefObject,
   type SVGProps,
 } from "react";
+import type { TFunction } from "i18next";
+import { useTranslation } from "react-i18next";
 import { createPortal } from "react-dom";
 import { ExternalLink, X } from "lucide-react";
 import { Badge } from "@openai/apps-sdk-ui/components/Badge";
@@ -121,12 +123,14 @@ type EnvironmentCreationMethod = "custom" | "dockerfile" | "git" | "image";
 type GitRepositoryMode = "managed" | "existing";
 type DockerfilePresetEnvironment = "none" | "aio-sandbox" | "codex-sandbox";
 
-const ENVIRONMENT_CREATION_OPTIONS: Option[] = [
-  { value: "custom", label: "自定义配置", description: "通过表单选择基础环境、Python、工具和技能" },
-  { value: "dockerfile", label: "自定义 Dockerfile", description: "上传或直接编辑 Dockerfile" },
-  { value: "git", label: "从代码仓库构建", description: "探查公开仓库并通过 CodePipeline 构建" },
-  { value: "image", label: "使用已有镜像", description: "绑定由外部流水线交付的 CR 镜像" },
-];
+function environmentCreationOptions(t: TFunction): Option[] {
+  return [
+    { value: "custom", label: t("environmentCenter.creation.custom.label"), description: t("environmentCenter.creation.custom.description") },
+    { value: "dockerfile", label: t("environmentCenter.creation.dockerfile.label"), description: t("environmentCenter.creation.dockerfile.description") },
+    { value: "git", label: t("environmentCenter.creation.git.label"), description: t("environmentCenter.creation.git.description") },
+    { value: "image", label: t("environmentCenter.creation.image.label"), description: t("environmentCenter.creation.image.description") },
+  ];
+}
 
 const ENVIRONMENT_BASE_OPTIONS: Option[] = ENVIRONMENT_BASE_ENVIRONMENTS.map((item) => ({
   value: item.id,
@@ -134,23 +138,13 @@ const ENVIRONMENT_BASE_OPTIONS: Option[] = ENVIRONMENT_BASE_ENVIRONMENTS.map((it
   description: item.description,
 }));
 
-const DOCKERFILE_PRESET_ENVIRONMENT_OPTIONS: Option[] = [
-  {
-    value: "none",
-    label: "无",
-    description: "自行填写 Dockerfile 基础镜像",
-  },
-  {
-    value: "aio-sandbox",
-    label: "AIO Sandbox",
-    description: "内置 Sandbox Shell 与常用运行时",
-  },
-  {
-    value: "codex-sandbox",
-    label: "Codex Sandbox",
-    description: "内置 Codex CLI、浏览器与代码执行环境",
-  },
-];
+function dockerfilePresetEnvironmentOptions(t: TFunction): Option[] {
+  return [
+    { value: "none", label: t("common.none"), description: t("environmentCenter.presets.none") },
+    { value: "aio-sandbox", label: "AIO Sandbox", description: t("environmentCenter.presets.aio") },
+    { value: "codex-sandbox", label: "Codex Sandbox", description: t("environmentCenter.presets.codex") },
+  ];
+}
 
 function dockerfilePresetEnvironmentFromContent(content: string): DockerfilePresetEnvironment {
   const baseImage = dockerfileBaseImage(content, "");
@@ -169,15 +163,15 @@ const ENVIRONMENT_LANGUAGE_OPTIONS: Option[] = ENVIRONMENT_LANGUAGES.map((item) 
   label: item.label,
 }));
 
-const ENVIRONMENT_REPOSITORY_MODE_OPTIONS: Option[] = [
-  { value: "managed", label: "Studio 默认镜像仓库" },
-  { value: "existing", label: "已有镜像仓库" },
-];
+function environmentRepositoryModeOptions(t: TFunction): Option[] {
+  return [
+    { value: "managed", label: t("environmentCenter.repository.managed") },
+    { value: "existing", label: t("environmentCenter.repository.existing") },
+  ];
+}
 
 const MAX_ENVIRONMENT_SHARE_CODES = 20;
 const promptedClipboardShareTexts = new Set<string>();
-const CLIPBOARD_READ_ERROR = "未能读取剪贴板。请允许剪贴板权限，或点击“导入环境”后手动粘贴分享码。";
-const CLIPBOARD_UNSUPPORTED_ERROR = "当前浏览器无法自动读取剪贴板；请点击“导入环境”后手动粘贴分享码。";
 
 async function clipboardReadPermissionDenied(): Promise<boolean> {
   if (typeof navigator === "undefined" || !navigator.permissions?.query) return false;
@@ -226,16 +220,16 @@ function ImportEnvironmentIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
-function repositoryInputError(repositoryUrl: string): string {
+function repositoryInputError(repositoryUrl: string, t: TFunction): string {
   const trimmed = repositoryUrl.trim();
-  if (!trimmed) return "请输入公开代码仓库地址。";
+  if (!trimmed) return t("environmentCenter.errors.repositoryRequired");
   try {
     const url = new URL(trimmed);
     if (url.protocol !== "https:" || !url.hostname) {
-      return "请输入公开仓库的 HTTPS 地址。";
+      return t("environmentCenter.errors.repositoryHttps");
     }
   } catch {
-    return "请输入有效的公开仓库 HTTPS 地址。";
+    return t("environmentCenter.errors.repositoryInvalid");
   }
   return "";
 }
@@ -246,16 +240,16 @@ function repositorySelected(value: EnvironmentContainerRepository | undefined): 
   );
 }
 
-function imageReferenceError(reference: string): string {
+function imageReferenceError(reference: string, t: TFunction): string {
   const value = reference.trim();
   if (!value) return "";
-  if (/\s/.test(value)) return "Tag 或 Digest 不能包含空格。";
+  if (/\s/.test(value)) return t("environmentCenter.errors.imageReferenceWhitespace");
   if (value.startsWith("sha256:")) {
     return /^sha256:[0-9a-fA-F]{64}$/.test(value)
       ? ""
-      : "Digest 必须是完整的 sha256 值。";
+      : t("environmentCenter.errors.imageDigestInvalid");
   }
-  if (/[@/]/.test(value)) return "这里只填写 Tag，不要重复填写镜像仓库路径。";
+  if (/[@/]/.test(value)) return t("environmentCenter.errors.imageTagOnly");
   return "";
 }
 
@@ -324,50 +318,50 @@ const ACTIVE_BUILD_STATUSES = new Set<EnvironmentBuildStatus>([
 
 const BUILD_LOG_REFRESH_INTERVAL_MS = 3_000;
 
-const BUILD_STATUS_LABELS: Record<EnvironmentBuildStatus, string> = {
-  preparing: "准备中",
-  queued: "排队中",
-  building: "构建中",
-  scanning: "扫描中",
-  available: "可用",
-  failed: "构建失败",
+const BUILD_STATUS_KEYS: Record<EnvironmentBuildStatus, string> = {
+  preparing: "environmentCenter.buildStatus.preparing",
+  queued: "environmentCenter.buildStatus.queued",
+  building: "environmentCenter.buildStatus.building",
+  scanning: "environmentCenter.buildStatus.scanning",
+  available: "environmentCenter.buildStatus.available",
+  failed: "environmentCenter.buildStatus.failed",
 };
 
-function environmentStatus(environment: StudioEnvironment): {
+function environmentStatus(environment: StudioEnvironment, t: TFunction): {
   label: string;
   color: "secondary" | "success" | "warning" | "danger";
 } {
   const status = environment.latestVersion?.status;
-  if (!status) return { label: "未构建", color: "secondary" };
-  if (status === "available") return { label: BUILD_STATUS_LABELS[status], color: "success" };
-  if (status === "failed") return { label: BUILD_STATUS_LABELS[status], color: "danger" };
-  return { label: BUILD_STATUS_LABELS[status], color: "warning" };
+  if (!status) return { label: t("environmentCenter.buildStatus.notBuilt"), color: "secondary" };
+  if (status === "available") return { label: t(BUILD_STATUS_KEYS[status]), color: "success" };
+  if (status === "failed") return { label: t(BUILD_STATUS_KEYS[status]), color: "danger" };
+  return { label: t(BUILD_STATUS_KEYS[status]), color: "warning" };
 }
 
-function environmentUpdatedAt(value: string): string {
-  return formatRelativeTimeLabel(value);
+function environmentUpdatedAt(value: string, locale: string): string {
+  return formatRelativeTimeLabel(value, Date.now(), locale);
 }
 
-function environmentUpdatedAtTitle(value: string): string {
+function environmentUpdatedAtTitle(value: string, locale: string): string {
   const timestamp = Date.parse(value);
   if (Number.isNaN(timestamp)) return value;
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat(locale, {
     dateStyle: "medium",
     timeStyle: "medium",
   }).format(timestamp);
 }
 
-function buildElapsed(build: EnvironmentBuildVersion, now = Date.now()): string {
+function buildElapsed(build: EnvironmentBuildVersion, t: TFunction, now = Date.now()): string {
   const start = Date.parse(build.createdAt);
   const active = ACTIVE_BUILD_STATUSES.has(build.status);
   const end = active ? now : Date.parse(build.updatedAt);
   if (Number.isNaN(start) || Number.isNaN(end)) return "";
   const seconds = Math.max(0, Math.floor((end - start) / 1000));
-  if (seconds < 60) return `${seconds} 秒`;
+  if (seconds < 60) return t("environmentCenter.duration.seconds", { count: seconds });
   const minutes = Math.floor(seconds / 60);
   const remainder = seconds % 60;
-  if (minutes < 60) return `${minutes} 分 ${remainder} 秒`;
-  return `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分`;
+  if (minutes < 60) return t("environmentCenter.duration.minutesSeconds", { minutes, seconds: remainder });
+  return t("environmentCenter.duration.hoursMinutes", { hours: Math.floor(minutes / 60), minutes: minutes % 60 });
 }
 
 function EnvironmentManifestDialog({
@@ -377,6 +371,7 @@ function EnvironmentManifestDialog({
   environment: StudioEnvironment;
   onClose: () => void;
 }) {
+  const { t } = useTranslation("ui");
   const versionId = environment.latestVersion?.versionId ?? "";
   const titleId = useId();
   const dialogRef = useRef<HTMLElement>(null);
@@ -476,11 +471,11 @@ function EnvironmentManifestDialog({
         <header className="environment-build-dialog__header">
           <div>
             <div className="environment-build-dialog__title-row">
-              <h2 id={titleId}>环境 Manifest</h2>
+              <h2 id={titleId}>{t("environmentCenter.manifest.title")}</h2>
             </div>
             <p>{environment.name} / {versionId}</p>
           </div>
-          <Button type="button" color="secondary" variant="ghost" size="sm" uniform onClick={onClose} aria-label="关闭环境 Manifest">
+          <Button type="button" color="secondary" variant="ghost" size="sm" uniform onClick={onClose} aria-label={t("environmentCenter.manifest.closeLabel")}>
             <X aria-hidden />
           </Button>
         </header>
@@ -488,17 +483,17 @@ function EnvironmentManifestDialog({
         <div className="environment-manifest-dialog__body">
           {loading ? (
             <div className="environment-manifest-dialog__state" role="status">
-              <TextShimmer as="span">正在加载 Manifest</TextShimmer>
+              <TextShimmer as="span">{t("environmentCenter.manifest.loading")}</TextShimmer>
             </div>
           ) : error ? (
             <div className="environment-manifest-dialog__state is-error" role="alert">
               <p>{error}</p>
               <Button type="button" color="secondary" variant="soft" size="sm" onClick={() => setReloadKey((key) => key + 1)}>
-                重新加载
+                {t("common.reload")}
               </Button>
             </div>
           ) : (
-            <div className="environment-manifest-dialog__editor" aria-label="环境 Manifest YAML">
+            <div className="environment-manifest-dialog__editor" aria-label={t("environmentCenter.manifest.editorLabel")}>
               <CodeEditor
                 value={manifestYaml}
                 path="environment.yaml"
@@ -511,11 +506,11 @@ function EnvironmentManifestDialog({
 
         <footer className="environment-build-dialog__actions">
           {copyState === "error" ? (
-            <span className="environment-manifest-dialog__copy-error" role="alert">复制失败，请重试</span>
+            <span className="environment-manifest-dialog__copy-error" role="alert">{t("environmentCenter.manifest.copyFailed")}</span>
           ) : null}
-          <Button type="button" color="secondary" variant="ghost" size="sm" onClick={onClose}>关闭</Button>
+          <Button type="button" color="secondary" variant="ghost" size="sm" onClick={onClose}>{t("common.close")}</Button>
           <Button type="button" color="info" size="sm" disabled={!manifestYaml} onClick={() => void copyManifest()}>
-            {copyState === "copied" ? "已复制" : "复制 Manifest"}
+            {copyState === "copied" ? t("environmentCenter.manifest.copied") : t("environmentCenter.manifest.copy")}
           </Button>
         </footer>
       </section>
@@ -535,6 +530,7 @@ function EnvironmentBuildDetailsDialog({
   onBuildUpdate: (build: EnvironmentBuildVersion) => void;
   onRebuild: () => Promise<void>;
 }) {
+  const { t } = useTranslation("ui");
   const initialBuild = environment.latestVersion;
   const [build, setBuild] = useState(initialBuild);
   const [loading, setLoading] = useState(Boolean(initialBuild));
@@ -622,8 +618,8 @@ function EnvironmentBuildDetailsDialog({
   }, [build?.status]);
 
   const status = build
-    ? environmentStatus({ ...environment, latestVersion: build })
-    : { label: "未构建", color: "secondary" as const };
+    ? environmentStatus({ ...environment, latestVersion: build }, t)
+    : { label: t("environmentCenter.buildStatus.notBuilt"), color: "secondary" as const };
   const cpUrl = environment.imageSource
     ? undefined
     : build?.resources?.codePipeline?.consoleUrl;
@@ -643,28 +639,28 @@ function EnvironmentBuildDetailsDialog({
         <header className="environment-build-dialog__header">
           <div>
             <div className="environment-build-dialog__title-row">
-              <h2 id={titleId}>构建详情</h2>
+              <h2 id={titleId}>{t("environmentCenter.buildDetails.title")}</h2>
               <Badge color={status.color} size="sm">{status.label}</Badge>
             </div>
             <p>{environment.name}</p>
           </div>
-          <Button type="button" color="secondary" variant="ghost" size="sm" uniform onClick={onClose} aria-label="关闭构建详情">
+          <Button type="button" color="secondary" variant="ghost" size="sm" uniform onClick={onClose} aria-label={t("environmentCenter.buildDetails.closeLabel")}>
             <X aria-hidden />
           </Button>
         </header>
 
         <div className="environment-build-dialog__summary">
-          <div><span>当前步骤</span><strong>{build?.currentStep || "等待构建信息"}</strong></div>
-          <div><span>已用时</span><strong>{build ? buildElapsed(build, now) : "-"}</strong></div>
+          <div><span>{t("environmentCenter.buildDetails.currentStep")}</span><strong>{build?.currentStep || t("environmentCenter.buildDetails.waiting")}</strong></div>
+          <div><span>{t("environmentCenter.buildDetails.elapsed")}</span><strong>{build ? buildElapsed(build, t, now) : "-"}</strong></div>
           {build?.sourceCommitSha ? (
             <div>
-              <span>源码提交</span>
+              <span>{t("environmentCenter.buildDetails.sourceCommit")}</span>
               <strong title={build.sourceCommitSha}>{build.sourceCommitSha.slice(0, 12)}</strong>
             </div>
           ) : null}
           {cpUrl ? (
             <a href={cpUrl} target="_blank" rel="noreferrer">
-              在 CodePipeline 中查看 <ExternalLink aria-hidden />
+              {t("environmentCenter.buildDetails.openCodePipeline")} <ExternalLink aria-hidden />
             </a>
           ) : null}
         </div>
@@ -686,13 +682,13 @@ function EnvironmentBuildDetailsDialog({
         </div>
 
         <footer className="environment-build-dialog__actions">
-          <Button type="button" color="secondary" variant="ghost" size="sm" onClick={onClose}>关闭</Button>
+          <Button type="button" color="secondary" variant="ghost" size="sm" onClick={onClose}>{t("common.close")}</Button>
           {build && !environment.imageSource && !ACTIVE_BUILD_STATUSES.has(build.status) ? (
             <Button type="button" color="info" size="sm" disabled={rebuilding} onClick={() => {
               setRebuilding(true);
               void onRebuild().then(onClose).finally(() => setRebuilding(false));
             }}>
-              {rebuilding ? "正在启动" : "重新构建"}
+              {rebuilding ? t("environmentCenter.buildDetails.starting") : t("environmentCenter.buildDetails.rebuild")}
             </Button>
           ) : null}
         </footer>
@@ -713,13 +709,14 @@ function EnvironmentRegionSelector({
   disabled: boolean;
   onChange: (region: CloudRegion) => void;
 }) {
+  const { t } = useTranslation("ui");
   const options: Option[] = cloudRegionOptions(cloudProvider).map((option) => ({
     value: option.value,
     label: option.label,
   }));
   return (
     <label className="environment-field environment-region-field">
-      <span>区域<RequiredMark /></span>
+      <span>{t("environmentCenter.region")}<RequiredMark /></span>
       <Select
         id="environment-region"
         value={value}
@@ -762,6 +759,7 @@ function GitRepositoryFields({
   onInspectionChange: (value: EnvironmentRepositoryInspection | null) => void;
   onInspectedKeyChange: (value: string) => void;
 }) {
+  const { t } = useTranslation("ui");
   const [inspecting, setInspecting] = useState(false);
   const [inspectError, setInspectError] = useState("");
   const requestRef = useRef<AbortController | null>(null);
@@ -787,7 +785,7 @@ function GitRepositoryFields({
   };
 
   const inspectRepository = useCallback(async () => {
-    const inputError = repositoryInputError(repositoryUrl);
+    const inputError = repositoryInputError(repositoryUrl, t);
     if (inputError) {
       setInspectError(inputError);
       return;
@@ -829,6 +827,7 @@ function GitRepositoryFields({
     onInspectedKeyChange,
     onInspectionChange,
     repositoryUrl,
+    t,
   ]);
 
   useEffect(() => {
@@ -836,20 +835,20 @@ function GitRepositoryFields({
       disabled
       || inspectionIsCurrent
       || autoAttemptedKeyRef.current === currentKey
-      || repositoryInputError(repositoryUrl)
+      || repositoryInputError(repositoryUrl, t)
     ) {
       return;
     }
     const timer = window.setTimeout(() => void inspectRepository(), 600);
     return () => window.clearTimeout(timer);
-  }, [currentKey, disabled, inspectRepository, inspectionIsCurrent, repositoryUrl]);
+  }, [currentKey, disabled, inspectRepository, inspectionIsCurrent, repositoryUrl, t]);
 
   const dockerfiles = inspectionIsCurrent ? inspection?.dockerfiles ?? [] : [];
   return (
-    <section className="environment-source-section" aria-label="公开代码仓库">
+    <section className="environment-source-section" aria-label={t("environmentCenter.git.sectionLabel")}>
       <div className="environment-form-grid environment-git-fields">
         <label className="environment-field">
-          <span>Git 地址<RequiredMark /></span>
+          <span>{t("environmentCenter.git.address")}<RequiredMark /></span>
           <Input
             size="lg"
             type="url"
@@ -866,11 +865,11 @@ function GitRepositoryFields({
           />
         </label>
         <label className="environment-field">
-          <span>Branch、Tag 或 Commit</span>
+          <span>{t("environmentCenter.git.ref")}</span>
           <Input
             size="lg"
             value={gitRef}
-            placeholder="默认分支"
+            placeholder={t("environmentCenter.git.defaultBranch")}
             autoComplete="off"
             disabled={disabled}
             onChange={(event) => {
@@ -881,13 +880,13 @@ function GitRepositoryFields({
         </label>
       </div>
       <div className="environment-inspection-status environment-form-feedback" aria-live="polite">
-        {inspecting ? <TextShimmer as="span">正在拉取仓库并查找 Dockerfile</TextShimmer> : null}
+        {inspecting ? <TextShimmer as="span">{t("environmentCenter.git.inspecting")}</TextShimmer> : null}
         {inspectError ? (
           <div className="environment-source-error" role="alert">
             <span>{inspectError}</span>
             <Button type="button" color="primary" size="sm" pill={false} disabled={disabled} onClick={() => void inspectRepository()}>
               <ArrowRotateCw />
-              重试
+              {t("common.retry")}
             </Button>
           </div>
         ) : null}
@@ -895,13 +894,13 @@ function GitRepositoryFields({
           dockerfiles.length > 0 ? (
             <span>
               {inspection.commitSha
-                ? `已在提交 ${inspection.commitSha.slice(0, 12)} 中找到 ${dockerfiles.length} 个 Dockerfile。`
-                : "已载入保存的 Dockerfile，可重新探查仓库更新。"}
+                ? t("environmentCenter.git.foundDockerfiles", { commit: inspection.commitSha.slice(0, 12), count: dockerfiles.length })
+                : t("environmentCenter.git.savedDockerfileLoaded")}
             </span>
           ) : (
             <div className="environment-source-error" role="alert">
-              <span>仓库中未找到 Dockerfile，请检查分支或仓库内容。</span>
-              <button type="button" disabled={disabled} onClick={() => void inspectRepository()}>重新探查</button>
+              <span>{t("environmentCenter.git.noDockerfile")}</span>
+              <button type="button" disabled={disabled} onClick={() => void inspectRepository()}>{t("environmentCenter.git.inspectAgain")}</button>
             </div>
           )
         ) : null}
@@ -910,10 +909,10 @@ function GitRepositoryFields({
         <label className="environment-field environment-dockerfile-picker">
           <span>Dockerfile<RequiredMark /></span>
           <DeploymentSelect
-            ariaLabel="选择 Dockerfile"
+            ariaLabel={t("environmentCenter.git.selectDockerfile")}
             value={dockerfilePath}
             valueLabel={dockerfilePath}
-            placeholder="请选择 Dockerfile"
+            placeholder={t("environmentCenter.git.selectDockerfile")}
             options={dockerfiles.map((path) => ({ value: path, label: path }))}
             disabled={disabled || inspecting}
             onChange={onDockerfilePathChange}
@@ -943,15 +942,16 @@ function EnvironmentRepositoryDestination({
   onRegionChange: (region: CloudRegion) => void;
   onChange: (value: EnvironmentContainerRepository) => void;
 }) {
+  const { t } = useTranslation("ui");
   return (
-    <section className="environment-source-section" aria-label="构建输出">
+    <section className="environment-source-section" aria-label={t("environmentCenter.repository.outputSection")}>
       <div className="environment-form-grid">
         <label className="environment-field">
-          <span>镜像仓库类型<RequiredMark /></span>
+          <span>{t("environmentCenter.repository.type")}<RequiredMark /></span>
           <Select
             id="environment-repository-mode"
             value={mode}
-            options={ENVIRONMENT_REPOSITORY_MODE_OPTIONS}
+            options={environmentRepositoryModeOptions(t)}
             optionClassName="environment-select-option"
             required
             size="lg"
@@ -976,7 +976,7 @@ function EnvironmentRepositoryDestination({
             onChange={onChange}
           />
         ) : (
-          <p className="environment-source-note environment-form-feedback">构建时自动创建或复用当前区域的 Studio 镜像仓库。</p>
+          <p className="environment-source-note environment-form-feedback">{t("environmentCenter.repository.managedHint")}</p>
         )}
       </div>
     </section>
@@ -1002,9 +1002,10 @@ function ExistingImageFields({
   onRepositoryChange: (value: EnvironmentContainerRepository) => void;
   onReferenceChange: (value: string) => void;
 }) {
-  const referenceError = imageReferenceError(reference);
+  const { t } = useTranslation("ui");
+  const referenceError = imageReferenceError(reference, t);
   return (
-    <section className="environment-source-section" aria-label="已有镜像">
+    <section className="environment-source-section" aria-label={t("environmentCenter.existingImage.sectionLabel")}>
       <div className="environment-form-grid">
         <EnvironmentRegionSelector
           cloudProvider={cloudProvider}
@@ -1019,12 +1020,12 @@ function ExistingImageFields({
           onChange={onRepositoryChange}
         />
         <label className="environment-field environment-image-reference">
-          <span>Tag 或 Digest<RequiredMark /></span>
+          <span>{t("environmentCenter.existingImage.reference")}<RequiredMark /></span>
           <Input
             size="lg"
             value={reference}
             required
-            placeholder="latest 或 sha256:..."
+            placeholder={t("environmentCenter.existingImage.placeholder")}
             autoComplete="off"
             disabled={disabled}
             aria-invalid={Boolean(referenceError)}
@@ -1033,7 +1034,7 @@ function ExistingImageFields({
           {referenceError ? (
             <small className="environment-source-field__error" role="alert">{referenceError}</small>
           ) : (
-            <small>填写镜像 Tag，或以 sha256: 开头的完整 Digest。</small>
+            <small>{t("environmentCenter.existingImage.hint")}</small>
           )}
         </label>
       </div>
@@ -1097,6 +1098,7 @@ function EnvironmentShareDialog({
   environment: StudioEnvironment;
   onClose: () => void;
 }) {
+  const { t } = useTranslation("ui");
   const titleId = useId();
   const descriptionId = useId();
   const dialogRef = useRef<HTMLElement>(null);
@@ -1148,7 +1150,7 @@ function EnvironmentShareDialog({
       >
         <header className="environment-build-dialog__header">
           <div>
-            <h2 id={titleId}>分享环境</h2>
+            <h2 id={titleId}>{t("environmentCenter.share.title")}</h2>
             <p id={descriptionId}>{environment.name}</p>
           </div>
           <Button
@@ -1160,62 +1162,62 @@ function EnvironmentShareDialog({
             uniform
             disabled={busy}
             onClick={onClose}
-            aria-label="关闭分享环境"
+            aria-label={t("environmentCenter.share.closeLabel")}
           >
             <X aria-hidden />
           </Button>
         </header>
         <div className="environment-share-dialog__body">
           {state === "loading" ? (
-            <TextShimmer as="p">正在生成并复制分享码</TextShimmer>
+            <TextShimmer as="p">{t("environmentCenter.share.generating")}</TextShimmer>
           ) : (
             <div className="environment-share-dialog__result">
               {state === "copied" ? (
                 <p className="environment-share-dialog__success" role="status" aria-live="polite">
-                  分享码已复制
+                  {t("environmentCenter.share.copied")}
                 </p>
               ) : (
                 <div className="environment-share-dialog__error" role="alert">
-                  <strong>分享失败</strong>
+                  <strong>{t("environmentCenter.share.failed")}</strong>
                   <span>{error}</span>
                 </div>
               )}
               {shareCode ? (
                 <label className="environment-share-dialog__field environment-share-dialog__manual-code">
-                  <span>分享码</span>
+                  <span>{t("environmentCenter.share.code")}</span>
                   <Textarea
                     size="lg"
                     rows={4}
                     value={shareCode}
                     readOnly
-                    aria-label="完整环境分享码"
+                    aria-label={t("environmentCenter.share.fullCode")}
                     onFocus={(event) => event.currentTarget.select()}
                     onClick={(event) => event.currentTarget.select()}
                   />
                   <small>
                     {state === "copied"
-                      ? "分享码已自动复制，也可在这里查看或手动复制。"
-                      : "自动复制失败，可手动复制上方分享码，或重试。"}
+                      ? t("environmentCenter.share.copiedHint")
+                      : t("environmentCenter.share.copyFailedHint")}
                   </small>
                 </label>
               ) : null}
               <p className="environment-share-dialog__safety">
-                分享码可能包含环境配置与本地 Skill 内容，请仅发送给可信对象。
+                {t("environmentCenter.share.safety")}
               </p>
             </div>
           )}
         </div>
         <footer className="environment-build-dialog__actions">
           <Button type="button" color="secondary" variant="ghost" size="sm" disabled={busy} onClick={onClose}>
-            关闭
+            {t("common.close")}
           </Button>
           {state === "error" ? (
             <Button type="button" color="info" size="sm" onClick={() => void copyShareCode(shareCode)}>
-              重试
+              {t("common.retry")}
             </Button>
           ) : state === "copied" ? (
             <Button type="button" color="info" size="sm" onClick={() => void copyShareCode(shareCode)}>
-              再次复制
+              {t("environmentCenter.share.copyAgain")}
             </Button>
           ) : null}
         </footer>
@@ -1243,6 +1245,7 @@ function EnvironmentImportDialog({
     failedCount: number,
   ) => void;
 }) {
+  const { t } = useTranslation("ui");
   const titleId = useId();
   const descriptionId = useId();
   const helpId = useId();
@@ -1301,13 +1304,13 @@ function EnvironmentImportDialog({
       const failed = importEntries.flatMap(({ code, name }, index) => {
         const item = resultByIndex.get(index);
         return !item || item.status === "failed"
-          ? [{ code, name, status: "valid" as const, error: item?.error || "服务未返回该分享码的导入结果。" }]
+          ? [{ code, name, status: "valid" as const, error: item?.error || t("environmentCenter.import.noResult") }]
           : [];
       });
       const invalid = invalidInspections.flatMap((item) => {
         const code = shareCodes[item.index];
         return code
-          ? [{ code, name: "", status: "invalid" as const, error: item.error || "分享码无效。" }]
+          ? [{ code, name: "", status: "invalid" as const, error: item.error || t("environmentCenter.import.invalidCode") }]
           : [];
       });
       const retained = [...invalid, ...failed];
@@ -1328,7 +1331,7 @@ function EnvironmentImportDialog({
         name: item.name,
         error: item.status === "invalid" ? item.error : "",
       })));
-      setRequestError(`已导入 ${createdCount} 个环境，${retained.length} 个未完成，可重试有效失败项。`);
+      setRequestError(t("environmentCenter.import.partial", { created: createdCount, remaining: retained.length }));
       setPhase("ready");
     } catch (cause) {
       setRequestError(cause instanceof Error ? cause.message : String(cause));
@@ -1337,12 +1340,12 @@ function EnvironmentImportDialog({
   };
 
   const primaryLabel = phase === "inspecting"
-    ? "正在检测"
+    ? t("environmentCenter.import.inspecting")
     : phase === "importing"
-      ? "正在导入"
+      ? t("environmentCenter.import.importing")
       : readyToImport
-        ? failedItems.length ? "重试导入" : "确认导入"
-        : "检测分享码";
+        ? failedItems.length ? t("environmentCenter.import.retryImport") : t("environmentCenter.import.confirm")
+        : t("environmentCenter.import.inspectCodes");
 
   return createPortal(
     <div
@@ -1362,8 +1365,8 @@ function EnvironmentImportDialog({
       >
         <header className="environment-build-dialog__header">
           <div>
-            <h2 id={titleId}>导入环境</h2>
-            <p id={descriptionId}>先检测分享码中的环境，再确认添加到当前账号。</p>
+            <h2 id={titleId}>{t("environmentCenter.import.title")}</h2>
+            <p id={descriptionId}>{t("environmentCenter.import.description")}</p>
           </div>
           <Button
             type="button"
@@ -1373,14 +1376,14 @@ function EnvironmentImportDialog({
             uniform
             disabled={busy}
             onClick={onClose}
-            aria-label="关闭导入环境"
+            aria-label={t("environmentCenter.import.closeLabel")}
           >
             <X aria-hidden />
           </Button>
         </header>
         <div className="environment-share-dialog__body">
           <label className="environment-share-dialog__field">
-            <span>环境分享码</span>
+            <span>{t("environmentCenter.import.code")}</span>
             <Textarea
               ref={textareaRef}
               size="lg"
@@ -1401,31 +1404,33 @@ function EnvironmentImportDialog({
           </label>
           <p id={helpId} className={`environment-share-dialog__help${tooMany ? " is-error" : ""}`}>
             {tooMany
-              ? `最多可一次导入 20 个环境，当前检测到 ${shareCodes.length} 个分享码。`
-              : "多个分享码可使用英文逗号、中文逗号或换行分隔，重复项会自动忽略。"}
+              ? t("environmentCenter.import.tooMany", { max: MAX_ENVIRONMENT_SHARE_CODES, count: shareCodes.length })
+              : t("environmentCenter.import.multipleHint")}
           </p>
           <p className="environment-share-dialog__safety">
-            分享码可能包含环境配置与本地 Skill 内容，请仅导入可信来源的分享码。
+            {t("environmentCenter.import.safety")}
           </p>
           {phase === "inspecting" ? (
-            <TextShimmer as="p">正在检测环境分享码</TextShimmer>
+            <TextShimmer as="p">{t("environmentCenter.import.inspectingCodes")}</TextShimmer>
           ) : validInspections.length ? (
             <p className="environment-share-dialog__summary" role="status" aria-live="polite">
-              检测到 {validInspections.length} 个环境，名称分别是：
-              {validInspections.map((item) => item.name || "未命名环境").join("、")}。
+              {t("environmentCenter.import.found", {
+                count: validInspections.length,
+                names: validInspections.map((item) => item.name || t("environmentCenter.unnamed")).join(t("environmentCenter.listSeparator")),
+              })}
             </p>
           ) : null}
           {invalidInspections.length ? (
             <ul className="environment-share-dialog__failures" role="alert">
               {invalidInspections.map((item) => (
-                <li key={item.index}>第 {item.index + 1} 个分享码：{item.error || "分享码无效。"}</li>
+                <li key={item.index}>{t("environmentCenter.import.itemError", { index: item.index + 1, error: item.error || t("environmentCenter.import.invalidCode") })}</li>
               ))}
             </ul>
           ) : null}
           {failedItems.length ? (
             <ul className="environment-share-dialog__failures" role="alert">
               {failedItems.map((item, index) => (
-                <li key={`${item.code}:${index}`}>第 {index + 1} 个分享码：{item.error}</li>
+                <li key={`${item.code}:${index}`}>{t("environmentCenter.import.itemError", { index: index + 1, error: item.error })}</li>
               ))}
             </ul>
           ) : null}
@@ -1433,7 +1438,7 @@ function EnvironmentImportDialog({
         </div>
         <footer className="environment-build-dialog__actions">
           <Button type="button" color="secondary" variant="ghost" size="sm" disabled={busy} onClick={onClose}>
-            取消
+            {t("common.cancel")}
           </Button>
           <Button
             type="button"
@@ -1467,6 +1472,8 @@ function EnvironmentEditor({
   onShare?: () => void;
   onSave: (draft: EnvironmentDraft) => Promise<void>;
 }) {
+  const { t, i18n } = useTranslation("ui");
+  const creationOptions = environmentCreationOptions(t);
   const initialEnvironmentDraft = environmentDraft(environment, cloudProvider);
   const hasCustomDockerfile = initialEnvironmentDraft.dockerfile !== undefined;
   const [draft, setDraft] = useState<EnvironmentDraft>(() => ({
@@ -1567,8 +1574,8 @@ function EnvironmentEditor({
     : uploadedDockerfile;
   const uploadError = dockerfileFileError || (
     hasDockerfilePresetEnvironment
-      ? validateDockerfileBody(dockerfileEditorValue, selectedBaseImage)
-      : validateDockerfileUpload(uploadedDockerfile)
+      ? validateDockerfileBody(dockerfileEditorValue, selectedBaseImage, t)
+      : validateDockerfileUpload(uploadedDockerfile, undefined, t)
   );
   const isEditing = Boolean(environment);
   const formId = "environment-editor-form";
@@ -1576,13 +1583,13 @@ function EnvironmentEditor({
   const [saveError, setSaveError] = useState("");
   const uploadIsValid = Boolean(resolvedUploadedDockerfile.trim()) && !uploadError;
   const gitSourceKey = `${gitRepositoryUrl.trim()}\u0000${gitRef.trim()}`;
-  const gitIsValid = !repositoryInputError(gitRepositoryUrl)
+  const gitIsValid = !repositoryInputError(gitRepositoryUrl, t)
     && gitInspectedKey === gitSourceKey
     && Boolean(gitDockerfilePath)
     && (gitRepositoryMode === "managed" || repositorySelected(gitContainerRepository));
   const imageIsValid = repositorySelected(imageRepository)
     && Boolean(imageReference.trim())
-    && !imageReferenceError(imageReference);
+    && !imageReferenceError(imageReference, t);
   const canSubmit = Boolean(draft.name.trim())
     && !saving
     && (
@@ -1612,7 +1619,7 @@ function EnvironmentEditor({
 
   const uploadDockerfile = async (file: File | undefined) => {
     if (!file) return;
-    const result = await readDockerfileUpload(file);
+    const result = await readDockerfileUpload(file, t);
     setDockerfileFileError(result.error);
     if (!result.content) return;
     setUploadedDockerfile(result.content);
@@ -1662,35 +1669,35 @@ function EnvironmentEditor({
     }
   };
 
-  const detailTitle = draft.name.trim() || (isEditing ? environment?.name || "配置环境" : "新建环境");
+  const detailTitle = draft.name.trim() || (isEditing ? environment?.name || t("environmentCenter.configure") : t("environmentCenter.create"));
 
   return (
-    <ResourcePageShell className="environment-editor" aria-label={isEditing ? "环境详情" : "新建环境"}>
+    <ResourcePageShell className="environment-editor" aria-label={isEditing ? t("environmentCenter.details") : t("environmentCenter.create")}>
       <ResourceDetailLayout
         title={detailTitle}
-        description="配置运行环境，或接入代码仓库和已有镜像"
+        description={t("environmentCenter.editorDescription")}
         identitySeed={detailTitle}
-        backLabel="返回环境列表"
+        backLabel={t("environmentCenter.backToList")}
         onBack={onCancel}
         actions={(
           <>
           {onDelete ? (
             <Button type="button" color="danger" variant="ghost" size="sm" onClick={onDelete} disabled={saving}>
-              删除
+              {t("common.delete")}
             </Button>
           ) : null}
           {onShare ? (
             <Button color="secondary" variant="soft" size="sm" onClick={onShare} disabled={saving}>
-              分享
+              {t("environmentCenter.share.action")}
             </Button>
           ) : null}
-          <Button color="secondary" variant="soft" size="sm" onClick={onCancel} disabled={saving}>取消</Button>
+          <Button color="secondary" variant="soft" size="sm" onClick={onCancel} disabled={saving}>{t("common.cancel")}</Button>
           <Button color="info" size="sm" type="submit" form={formId} disabled={!canSubmit}>
             {saving
-              ? "正在保存"
+              ? t("common.saving")
               : creationMethod === "image"
-                ? isEditing ? "保存环境" : "创建环境"
-                : isEditing ? "保存并构建" : "创建并构建"}
+                ? isEditing ? t("environmentCenter.save") : t("environmentCenter.create")
+                : isEditing ? t("environmentCenter.saveAndBuild") : t("environmentCenter.createAndBuild")}
           </Button>
           </>
         )}
@@ -1699,7 +1706,7 @@ function EnvironmentEditor({
       <form id={formId} className="environment-form" onSubmit={submit}>
         <div className="environment-fields">
           <label className="environment-field">
-            <span>环境名称<RequiredMark /></span>
+            <span>{t("environmentCenter.name")}<RequiredMark /></span>
             <Input
               className="environment-text-input"
               type="text"
@@ -1707,30 +1714,30 @@ function EnvironmentEditor({
               required
               value={draft.name}
               maxLength={60}
-              placeholder="Python 数据处理"
+              placeholder={t("environmentCenter.namePlaceholder")}
               onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
             />
           </label>
           <label className="environment-field">
-            <span>描述</span>
+            <span>{t("common.description")}</span>
             <Textarea
               className="environment-description-input"
               size="lg"
               rows={3}
               value={draft.description}
               maxLength={180}
-              placeholder="说明这个环境适合处理的任务"
+              placeholder={t("environmentCenter.descriptionPlaceholder")}
               onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))}
             />
           </label>
         </div>
 
         <label className="environment-field environment-creation-method">
-          <span>创建方式<RequiredMark /></span>
+          <span>{t("environmentCenter.creationMethod")}<RequiredMark /></span>
           <Select
             id="environment-creation-method"
             value={creationMethod}
-            options={ENVIRONMENT_CREATION_OPTIONS}
+            options={creationOptions}
             optionClassName="environment-select-option"
             required
             size="lg"
@@ -1746,21 +1753,21 @@ function EnvironmentEditor({
               setSaveError("");
             }}
           />
-          <small>{ENVIRONMENT_CREATION_OPTIONS.find((item) => item.value === creationMethod)?.description}</small>
+          <small>{creationOptions.find((item) => item.value === creationMethod)?.description}</small>
         </label>
 
         {saveError ? <p className="environment-form-error" role="alert">{saveError}</p> : null}
 
         {creationMethod === "custom" ? (
           <div className="environment-configuration">
-                <section className="environment-section environment-form-section" aria-label="基础配置">
+                <section className="environment-section environment-form-section" aria-label={t("environmentCenter.baseConfiguration")}>
                   <div className="environment-form-grid">
                     <label className="environment-field">
-                      <span>基础环境<RequiredMark /></span>
+                      <span>{t("environmentCenter.baseEnvironment")}<RequiredMark /></span>
                       <Select
                         id="environment-base-environment"
                         value={draft.baseEnvironment}
-                        options={ENVIRONMENT_BASE_OPTIONS}
+                        options={ENVIRONMENT_BASE_OPTIONS.map((item) => ({ ...item, description: t(`environmentCenter.baseDescriptions.${item.value}`) }))}
                         optionClassName="environment-select-option"
                         required
                         size="lg"
@@ -1779,10 +1786,10 @@ function EnvironmentEditor({
                           }));
                         }}
                       />
-                      <small>{ENVIRONMENT_BASE_ENVIRONMENTS.find((item) => item.id === draft.baseEnvironment)?.description}</small>
+                      <small>{t(`environmentCenter.baseDescriptions.${draft.baseEnvironment}`)}</small>
                     </label>
                     <label className="environment-field">
-                      <span>操作系统<RequiredMark /></span>
+                      <span>{t("environmentCenter.operatingSystem")}<RequiredMark /></span>
                       <Select
                         id="environment-operating-system"
                         value={draft.operatingSystem}
@@ -1799,10 +1806,10 @@ function EnvironmentEditor({
                           operatingSystem: option.value as EnvironmentOperatingSystem,
                         }))}
                       />
-                      <small>{draft.baseEnvironment !== "ubuntu" ? `由 ${environmentBaseEnvironmentLabel(draft.baseEnvironment)} 固定为 Ubuntu 22.04` : "选择基础镜像的 Ubuntu 版本"}</small>
+                      <small>{draft.baseEnvironment !== "ubuntu" ? t("environmentCenter.fixedByBase", { base: environmentBaseEnvironmentLabel(draft.baseEnvironment), value: "Ubuntu 22.04" }) : t("environmentCenter.selectUbuntuVersion")}</small>
                     </label>
                     <label className="environment-field">
-                      <span>Python 版本<RequiredMark /></span>
+                      <span>{t("environmentCenter.pythonVersion")}<RequiredMark /></span>
                       <Select
                         id="environment-python-version"
                         value={draft.language}
@@ -1821,17 +1828,17 @@ function EnvironmentEditor({
                           language: option.value as EnvironmentLanguage,
                         }))}
                       />
-                      <small>{draft.baseEnvironment !== "ubuntu" ? `由 ${environmentBaseEnvironmentLabel(draft.baseEnvironment)} 固定为 Python 3.12` : "选择需要安装的 Python 版本"}</small>
+                      <small>{draft.baseEnvironment !== "ubuntu" ? t("environmentCenter.fixedByBase", { base: environmentBaseEnvironmentLabel(draft.baseEnvironment), value: "Python 3.12" }) : t("environmentCenter.selectPythonVersion")}</small>
                     </label>
                   </div>
                 </section>
 
             <section className="environment-section" aria-labelledby="environment-skills-title">
-              <h2 id="environment-skills-title">技能</h2>
+              <h2 id="environment-skills-title">{t("environmentCenter.skills")}</h2>
               <div className="environment-skill-grid">
                 <StudioPackageOption
                   name="VeADK"
-                  description="Agent 开发与运行框架"
+                  description={t("environmentCenter.veadkDescription")}
                   selected={veadkSelected}
                   disabled={saving}
                   onChange={setVeadkSelected}
@@ -1842,7 +1849,7 @@ function EnvironmentEditor({
                   onChange={(selectedSkills) => setDraft((current) => ({ ...current, selectedSkills }))}
                   cloudProvider={cloudProvider}
                   disabled={saving}
-                  addLabel="添加环境技能"
+                  addLabel={t("environmentCenter.addSkill")}
                   showSelectedCount={false}
                 />
               </div>
@@ -1850,7 +1857,7 @@ function EnvironmentEditor({
 
             {ENVIRONMENT_CATEGORIES.map((category) => (
               <section className="environment-section" key={category.id} aria-labelledby={`environment-${category.id}-title`}>
-                <h2 id={`environment-${category.id}-title`}>{category.label}</h2>
+                <h2 id={`environment-${category.id}-title`}>{t(`environmentCenter.categories.${category.id}`)}</h2>
                 <div className="environment-option-grid">
                   {category.options.map((option) => {
                     const selected = draft.optionIds.includes(option.id);
@@ -1858,7 +1865,7 @@ function EnvironmentEditor({
                       <StudioPackageOption
                         key={option.id}
                         name={option.label}
-                        description={option.description}
+                        description={t(`environmentCenter.options.${option.id}`, { defaultValue: option.description })}
                         selected={selected}
                         onChange={(nextSelected) => toggleOption(option.id, nextSelected)}
                         icon={<EnvironmentPackageIcon option={option} />}
@@ -1870,14 +1877,14 @@ function EnvironmentEditor({
             ))}
           </div>
         ) : creationMethod === "dockerfile" ? (
-          <section className="environment-upload" aria-label="自定义 Dockerfile">
+          <section className="environment-upload" aria-label={t("environmentCenter.customDockerfile")}>
             <div className="environment-dockerfile-settings environment-form-grid">
               <label className="environment-field">
-                <span>预制环境</span>
+                <span>{t("environmentCenter.presetEnvironment")}</span>
                 <Select
                   id="environment-dockerfile-base-environment"
                   value={dockerfilePresetEnvironment}
-                  options={DOCKERFILE_PRESET_ENVIRONMENT_OPTIONS}
+                  options={dockerfilePresetEnvironmentOptions(t)}
                   optionClassName="environment-select-option"
                   size="lg"
                   block
@@ -1888,7 +1895,7 @@ function EnvironmentEditor({
                     setDockerfilePresetEnvironment(option.value as DockerfilePresetEnvironment);
                   }}
                 />
-                <small>选择“无”可自行填写 Dockerfile 第一行的基础镜像。</small>
+                <small>{t("environmentCenter.presetHint")}</small>
               </label>
             </div>
             <div className="environment-upload__preview">
@@ -1896,7 +1903,7 @@ function EnvironmentEditor({
                 <h3>Dockerfile<RequiredMark /></h3>
                 <div className="environment-upload__actions">
                   <span className="environment-upload__size">
-                    {dockerfileByteSize(resolvedUploadedDockerfile).toLocaleString("zh-CN")} / 131,072 字节
+                    {t("environmentCenter.dockerfileSize", { size: dockerfileByteSize(resolvedUploadedDockerfile).toLocaleString(i18n.resolvedLanguage ?? i18n.language), max: (131072).toLocaleString(i18n.resolvedLanguage ?? i18n.language) })}
                   </span>
                   <input
                     ref={dockerfileInputRef}
@@ -1921,7 +1928,7 @@ function EnvironmentEditor({
                     pill={false}
                     disabled={saving}
                     onClick={() => dockerfileInputRef.current?.click()}
-                  >上传</Button>
+                  >{t("environmentCenter.upload")}</Button>
                   <Button
                     className="environment-upload__action"
                     type="button"
@@ -1931,12 +1938,12 @@ function EnvironmentEditor({
                     pill={false}
                     disabled={saving || !dockerfileEditorValue}
                     onClick={resetDockerfile}
-                  >重置</Button>
+                  >{t("environmentCenter.reset")}</Button>
                 </div>
               </div>
               <div className={`environment-dockerfile-editor${hasDockerfilePresetEnvironment ? " has-fixed-base" : ""}${uploadError ? " is-invalid" : ""}`}>
                 {hasDockerfilePresetEnvironment ? (
-                  <div className="environment-dockerfile-from" aria-label="Dockerfile 基础镜像">
+                  <div className="environment-dockerfile-from" aria-label={t("environmentCenter.dockerfileBaseImage")}>
                     <span className="environment-dockerfile-from__line" aria-hidden="true">1</span>
                     <code>
                       <span className="environment-dockerfile-from__keyword">FROM</span>
@@ -1944,7 +1951,7 @@ function EnvironmentEditor({
                     </code>
                   </div>
                 ) : null}
-                <div className="environment-dockerfile__editor environment-upload__editor" aria-label="Dockerfile 内容">
+                <div className="environment-dockerfile__editor environment-upload__editor" aria-label={t("environmentCenter.dockerfileContent")}>
                   <CodeEditor
                     value={dockerfileEditorValue}
                     path="Dockerfile"
@@ -2025,6 +2032,7 @@ export function EnvironmentCenter({
   clipboardImport?: EnvironmentClipboardImportRequest | null;
   clipboardReadError?: string;
 }) {
+  const { t, i18n } = useTranslation("ui");
   const [environments, setEnvironments] = useState<StudioEnvironment[]>([]);
   const [view, setView] = useState<EnvironmentView>({ kind: "list" });
   const [query, setQuery] = useState("");
@@ -2085,19 +2093,19 @@ export function EnvironmentCenter({
   const readClipboardForImport = useCallback(async () => {
     if (view.kind !== "list" || importDialog) return;
     if (typeof navigator === "undefined" || !navigator.clipboard?.readText) {
-      setClipboardMessage(CLIPBOARD_UNSUPPORTED_ERROR);
+      setClipboardMessage(t("environmentCenter.clipboardUnsupported"));
       return;
     }
     try {
       const text = await navigator.clipboard.readText();
       const opened = openClipboardImport(text);
       if (!opened && !text.trim() && await clipboardReadPermissionDenied()) {
-        setClipboardMessage(CLIPBOARD_READ_ERROR);
+        setClipboardMessage(t("environmentCenter.clipboardReadError"));
       }
     } catch {
-      setClipboardMessage(CLIPBOARD_READ_ERROR);
+      setClipboardMessage(t("environmentCenter.clipboardReadError"));
     }
-  }, [importDialog, openClipboardImport, view.kind]);
+  }, [importDialog, openClipboardImport, t, view.kind]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -2184,7 +2192,7 @@ export function EnvironmentCenter({
     setView({ kind: "list" });
     setStatusError(false);
     if (input.imageSource) {
-      setStatusMessage(`环境“${saved.name}”已绑定已有镜像`);
+      setStatusMessage(t("environmentCenter.status.boundImage", { name: saved.name }));
       return;
     }
     try {
@@ -2192,11 +2200,11 @@ export function EnvironmentCenter({
       setEnvironments((current) => current.map((item) =>
         item.id === saved.id ? { ...item, latestVersion } : item,
       ));
-      setStatusMessage(`环境“${saved.name}”已进入构建队列`);
+      setStatusMessage(t("environmentCenter.status.queued", { name: saved.name }));
     } catch (cause) {
       setStatusError(true);
       setStatusMessage(
-        `环境已保存，但构建未启动：${cause instanceof Error ? cause.message : String(cause)}`,
+        t("environmentCenter.status.savedBuildFailed", { error: cause instanceof Error ? cause.message : String(cause) }),
       );
     }
   };
@@ -2210,7 +2218,7 @@ export function EnvironmentCenter({
       setEnvironments((current) => current.map((item) =>
         item.id === environment.id ? { ...item, latestVersion } : item,
       ));
-      setStatusMessage(`环境“${environment.name}”已进入构建队列`);
+      setStatusMessage(t("environmentCenter.status.queued", { name: environment.name }));
     } catch (cause) {
       setStatusError(true);
       setStatusMessage(cause instanceof Error ? cause.message : String(cause));
@@ -2238,18 +2246,18 @@ export function EnvironmentCenter({
     setStatusError(failedCount > 0);
     setStatusMessage(
       failedCount > 0
-        ? `已导入 ${createdCount} 个环境，${failedCount} 个失败`
+        ? t("environmentCenter.status.importedFailed", { created: createdCount, failed: failedCount })
         : duplicateCount > 0
-          ? `已导入 ${createdCount} 个环境，${duplicateCount} 个分享码已存在`
-          : `已导入 ${createdCount} 个环境`,
+          ? t("environmentCenter.status.importedDuplicate", { created: createdCount, duplicate: duplicateCount })
+          : t("environmentCenter.status.imported", { count: createdCount }),
     );
   };
 
   const deleteDialog = deleteTarget ? (
     <StudioConfirmDialog
-      title="删除环境"
-      description={`确定删除环境“${deleteTarget.name}”吗？删除后无法恢复。`}
-      confirmLabel="删除"
+      title={t("environmentCenter.deleteTitle")}
+      description={t("environmentCenter.deleteDescription", { name: deleteTarget.name })}
+      confirmLabel={t("common.delete")}
       variant="danger"
       onCancel={() => setDeleteTarget(null)}
       onConfirm={() => {
@@ -2260,7 +2268,7 @@ export function EnvironmentCenter({
           .then(() => {
             setEnvironments((current) => current.filter((environment) => environment.id !== target.id));
             setStatusError(false);
-            setStatusMessage(`已删除环境“${target.name}”`);
+            setStatusMessage(t("environmentCenter.status.deleted", { name: target.name }));
           })
           .catch((cause) => {
             setStatusError(true);
@@ -2294,23 +2302,23 @@ export function EnvironmentCenter({
   }
 
   return (
-    <ResourcePageShell className="environment-center" aria-label="环境">
+    <ResourcePageShell className="environment-center" aria-label={t("environmentCenter.title")}>
       <ResourcePageHeader
-        title="环境"
+        title={t("environmentCenter.title")}
       />
 
       <ResourceToolbar className="environment-toolbar">
         {onWorkspace ? (
           <ResourceTabs
             items={[
-              { id: "workspaces", label: "工作区" },
-              { id: "environments", label: "环境" },
+              { id: "workspaces", label: t("workspace.title") },
+              { id: "environments", label: t("environmentCenter.title") },
             ]}
             value="environments"
             onChange={(value) => {
               if (value === "workspaces") onWorkspace();
             }}
-            ariaLabel="工作区资源类型"
+            ariaLabel={t("workspace.resourceType")}
             idPrefix="environment-center"
           />
         ) : null}
@@ -2321,10 +2329,10 @@ export function EnvironmentCenter({
             </span>
           ) : null}
           <ResourceSearch
-            aria-label="搜索环境"
+            aria-label={t("environmentCenter.search")}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="搜索环境"
+            placeholder={t("environmentCenter.search")}
           />
         </div>
       </ResourceToolbar>
@@ -2342,7 +2350,7 @@ export function EnvironmentCenter({
               openImportDialog();
             }}
           >
-            手动导入
+            {t("environmentCenter.manualImport")}
           </Button>
         </div>
       ) : null}
@@ -2354,15 +2362,15 @@ export function EnvironmentCenter({
           <div className="environment-load-error" role="alert">
             <p>{loadError}</p>
             <Button color="secondary" variant="soft" size="sm" onClick={() => setReloadKey((key) => key + 1)}>
-              重新加载
+              {t("common.reload")}
             </Button>
           </div>
         ) : visibleEnvironments.length === 0 && query.trim() ? (
           <div className="environment-empty">
             <EmptyMessage fill="none">
               <EmptyMessage.Icon><EnvironmentEmptyIcon /></EmptyMessage.Icon>
-              <EmptyMessage.Title>没有匹配的环境</EmptyMessage.Title>
-              <EmptyMessage.Description>请尝试搜索其他名称</EmptyMessage.Description>
+              <EmptyMessage.Title>{t("environmentCenter.noMatches")}</EmptyMessage.Title>
+              <EmptyMessage.Description>{t("environmentCenter.tryAnotherName")}</EmptyMessage.Description>
             </EmptyMessage>
           </div>
         ) : (
@@ -2370,23 +2378,23 @@ export function EnvironmentCenter({
             {!query.trim() ? (
               <>
                 <ResourceCreateCard
-                  aria-label="新建环境"
+                  aria-label={t("environmentCenter.create")}
                   icon={<AddIcon />}
                   onClick={() => setView({ kind: "editor", environmentId: null })}
                 >
-                  新建环境
+                  {t("environmentCenter.create")}
                 </ResourceCreateCard>
                 <ResourceCreateCard
-                  aria-label="导入环境"
+                  aria-label={t("environmentCenter.import.title")}
                   icon={<ImportEnvironmentIcon />}
                   onClick={() => openImportDialog()}
                 >
-                  导入环境
+                  {t("environmentCenter.import.title")}
                 </ResourceCreateCard>
               </>
             ) : null}
             {visibleEnvironments.map((environment) => {
-              const status = environmentStatus(environment);
+              const status = environmentStatus(environment, t);
               const buildActive = Boolean(
                 environment.latestVersion && ACTIVE_BUILD_STATUSES.has(environment.latestVersion.status),
               );
@@ -2401,32 +2409,32 @@ export function EnvironmentCenter({
                     environment.latestVersion?.error ||
                     (buildActive ? environment.latestVersion?.currentStep : "") ||
                     environment.description ||
-                    "暂无描述"
+                    t("common.noDescription")
                   }
                   metadata={[
                     {
-                      label: "更新",
-                      value: environmentUpdatedAt(environment.updatedAt),
-                      title: environmentUpdatedAtTitle(environment.updatedAt),
+                      label: t("workspace.updated"),
+                      value: environmentUpdatedAt(environment.updatedAt, i18n.resolvedLanguage ?? i18n.language),
+                      title: environmentUpdatedAtTitle(environment.updatedAt, i18n.resolvedLanguage ?? i18n.language),
                     },
                   ]}
                   action={{
-                    label: environment.latestVersion ? "构建详情" : rebuilding ? "正在启动" : "开始构建",
+                    label: environment.latestVersion ? t("environmentCenter.buildDetails.title") : rebuilding ? t("environmentCenter.buildDetails.starting") : t("environmentCenter.startBuild"),
                     icon: "play",
-                    title: "构建",
+                    title: t("environmentCenter.build"),
                     disabled: rebuilding,
                     onClick: () => environment.latestVersion
                       ? setBuildDetailsId(environment.id)
                       : void rebuildEnvironment(environment),
                   }}
                   auxiliaryAction={{
-                    label: "查看环境 Manifest",
+                    label: t("environmentCenter.manifest.view"),
                     icon: <FileCode />,
-                    title: environment.latestVersion ? "查看 Manifest" : "尚无可用 Manifest",
+                    title: environment.latestVersion ? t("environmentCenter.manifest.viewShort") : t("environmentCenter.manifest.unavailable"),
                     disabled: !environment.latestVersion,
                     onClick: () => setManifestTarget(environment),
                   }}
-                  detailAction={{ label: "配置", onClick: () => setView({ kind: "editor", environmentId: environment.id }) }}
+                  detailAction={{ label: t("environmentCenter.configure"), onClick: () => setView({ kind: "editor", environmentId: environment.id }) }}
                 />
               );
             })}

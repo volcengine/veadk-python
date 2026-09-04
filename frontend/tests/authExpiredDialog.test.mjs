@@ -22,8 +22,8 @@ test("the global authentication event opens a blocking relogin dialog", () => {
   assert.match(appSource, /openLoginWindow\(\)/);
   assert.match(dialogSource, /role="alertdialog"/);
   assert.match(dialogSource, /aria-modal="true"/);
-  assert.match(dialogSource, /重新登录/);
-  assert.match(dialogSource, /当前编辑内容会保留/);
+  assert.match(dialogSource, /t\("authExpired\.signInAgain"\)/);
+  assert.match(dialogSource, /t\("authExpired\.description"\)/);
 });
 
 test("API requests recover only after a confirmed authentication failure", () => {

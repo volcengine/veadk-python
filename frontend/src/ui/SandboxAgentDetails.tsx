@@ -1,7 +1,7 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { sandboxStatusLabel, type SandboxAgentResource } from "../adk/sandbox";
 import { PageBackButton } from "./PageBackButton";
-import { formatResourceSource } from "./resourceMetadata";
 import "./SandboxAgentDetails.css";
 
 const AGENT_LABELS = {
@@ -11,11 +11,11 @@ const AGENT_LABELS = {
   hermes: "Hermes",
 } as const;
 
-function formatDate(value: string): string {
+function formatDate(value: string, locale: string): string {
   if (!value) return "—";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat(locale, {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -37,6 +37,7 @@ export function SandboxAgentDetails({
   onOpen: () => Promise<void>;
   onDelete: () => Promise<void>;
 }) {
+  const { t, i18n } = useTranslation("sandbox");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [opening, setOpening] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -46,6 +47,8 @@ export function SandboxAgentDetails({
   const resourceId = wakeable
     ? session.sourceSessionId || session.snapshotId
     : session.id;
+  const agentName = session.displayName || t("common.agentFallback", { agent: label });
+  const locale = i18n.resolvedLanguage ?? i18n.language;
 
   const openAgent = async () => {
     if (opening || deleting) return;
@@ -77,10 +80,10 @@ export function SandboxAgentDetails({
   return (
     <section className="sandbox-agent-details">
       <header className="sandbox-agent-details-header">
-        <PageBackButton label="返回智能体列表" onClick={onBack} />
+        <PageBackButton label={t("agentDetails.back")} onClick={onBack} />
         <div>
-          <h1>{session.displayName || `${label} 智能体`}</h1>
-          <p>{label} AgentKit Session 详情</p>
+          <h1>{agentName}</h1>
+          <p>{t("agentDetails.subtitle", { agent: label })}</p>
         </div>
       </header>
 
@@ -88,24 +91,24 @@ export function SandboxAgentDetails({
 
       <div className="sandbox-agent-detail-panel">
         <dl>
-          <div><dt>智能体类型</dt><dd>{label}</dd></div>
-          <div><dt>状态</dt><dd>{sandboxStatusLabel(session.status)}</dd></div>
-          <div><dt>创建人</dt><dd>{formatResourceSource(session.createdBy)}</dd></div>
+          <div><dt>{t("agentDetails.type")}</dt><dd>{label}</dd></div>
+          <div><dt>{t("agentDetails.status")}</dt><dd>{sandboxStatusLabel(session.status)}</dd></div>
+          <div><dt>{t("agentDetails.createdBy")}</dt><dd>{session.createdBy?.trim() || t("common.unknownSource")}</dd></div>
           <div>
-            <dt>{wakeable ? "快照状态" : "工具类型"}</dt>
+            <dt>{wakeable ? t("agentDetails.snapshotStatus") : t("agentDetails.toolType")}</dt>
             <dd>{wakeable ? session.snapshotStatus || "—" : session.toolType || "—"}</dd>
           </div>
-          <div><dt>创建时间</dt><dd>{formatDate(session.createdAt)}</dd></div>
+          <div><dt>{t("agentDetails.createdAt")}</dt><dd>{formatDate(session.createdAt, locale)}</dd></div>
           <div>
-            <dt>{wakeable ? "快照原因" : "过期时间"}</dt>
-            <dd>{wakeable ? session.reason || "—" : formatDate(session.expireAt)}</dd>
+            <dt>{wakeable ? t("agentDetails.snapshotReason") : t("agentDetails.expiresAt")}</dt>
+            <dd>{wakeable ? session.reason || "—" : formatDate(session.expireAt, locale)}</dd>
           </div>
           <div className="is-wide">
             <dt>{wakeable ? "Snapshot ID" : "Session ID"}</dt>
             <dd>{wakeable ? session.snapshotId : resourceId}</dd>
           </div>
           {wakeable && session.sourceSessionId ? (
-            <div className="is-wide"><dt>来源 Session ID</dt><dd>{session.sourceSessionId}</dd></div>
+            <div className="is-wide"><dt>{t("agentDetails.sourceSessionId")}</dt><dd>{session.sourceSessionId}</dd></div>
           ) : null}
         </dl>
         <footer>
@@ -115,7 +118,7 @@ export function SandboxAgentDetails({
             disabled={opening || deleting}
             onClick={() => setConfirmDelete(true)}
           >
-            删除智能体
+            {t("agentDetails.delete")}
           </button>
           <button
             type="button"
@@ -124,7 +127,13 @@ export function SandboxAgentDetails({
             aria-busy={opening || undefined}
             onClick={() => void openAgent()}
           >
-            {opening ? (wakeable ? "唤醒中…" : "打开中…") : wakeable ? "唤醒智能体" : "打开智能体"}
+            {opening
+              ? wakeable
+                ? t("agentDetails.waking")
+                : t("agentDetails.opening")
+              : wakeable
+                ? t("agentDetails.wake")
+                : t("agentDetails.open")}
           </button>
         </footer>
       </div>
@@ -138,9 +147,14 @@ export function SandboxAgentDetails({
             aria-labelledby="sandbox-agent-delete-title"
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="confirm-title" id="sandbox-agent-delete-title">删除智能体？</div>
+            <div className="confirm-title" id="sandbox-agent-delete-title">
+              {t("agentDetails.deleteTitle")}
+            </div>
             <div className="confirm-text">
-              将删除“{session.displayName || `${label} 智能体`}”及其 AgentKit {wakeable ? "Snapshot" : "Session"}，此操作无法撤销。
+              {t("agentDetails.deleteDescription", {
+                name: agentName,
+                resource: wakeable ? "Snapshot" : "Session",
+              })}
             </div>
             <div className="confirm-actions">
               <button
@@ -149,7 +163,7 @@ export function SandboxAgentDetails({
                 disabled={deleting}
                 onClick={() => setConfirmDelete(false)}
               >
-                取消
+                {t("common.cancel")}
               </button>
               <button
                 type="button"
@@ -157,7 +171,7 @@ export function SandboxAgentDetails({
                 disabled={deleting}
                 onClick={() => void deleteAgent()}
               >
-                {deleting ? "删除中…" : "确认删除"}
+                {deleting ? t("agentDetails.deleting") : t("agentDetails.confirmDelete")}
               </button>
             </div>
           </div>

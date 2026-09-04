@@ -14,7 +14,7 @@ export interface StackCardDef {
   disabled?: boolean;
 }
 
-/** A vertical list of wide "long bar" cards — used for the 添加 Agent chooser
+/** A vertical list of wide "long bar" cards used for the add-Agent chooser
  *  and the create-mode picker. */
 export function StackCards({ title, sub, cards, footer }: {
   title: string;

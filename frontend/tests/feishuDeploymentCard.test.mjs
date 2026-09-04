@@ -17,10 +17,9 @@ const projectPreviewSource = readFileSync(
 
 test("keeps Feishu setup as a standalone deployment channel card", () => {
   assert.match(componentSource, /export function FeishuDeploymentCard/);
-  assert.match(componentSource, /role="tablist" aria-label="飞书配置方式"/);
-  assert.match(componentSource, />\s*自动配置\s*<\/button>/);
-  assert.doesNotMatch(componentSource, /推荐/);
-  assert.match(componentSource, />\s*手动配置\s*<\/button>/);
+  assert.match(componentSource, /role="tablist" aria-label=\{t\("feishuDeployment\.configurationMode"\)\}/);
+  assert.match(componentSource, /t\("feishuDeployment\.automatic"\)/);
+  assert.match(componentSource, /t\("feishuDeployment\.manual"\)/);
   assert.match(componentSource, /onCredentialsChange/);
   assert.match(
     stylesSource,
@@ -35,11 +34,11 @@ test("keeps Feishu setup as a standalone deployment channel card", () => {
   assert.match(componentSource, /tabIndex=\{enabled \? 0 : -1\}/);
   assert.match(
     componentSource,
-    /appIdConfigured \? "已配置，留空沿用" : "cli_xxxxxxxxxxxxxxxx"/,
+    /appIdConfigured \? t\("feishuDeployment\.configuredPlaceholder"\) : "cli_xxxxxxxxxxxxxxxx"/,
   );
   assert.match(
     componentSource,
-    /appSecretConfigured \? "已配置，留空沿用" : "请输入 App Secret"/,
+    /appSecretConfigured \? t\("feishuDeployment\.configuredPlaceholder"\) : t\("feishuDeployment\.appSecretPlaceholder"\)/,
   );
   assert.doesNotMatch(componentSource, /from "lucide-react"/);
 });
@@ -47,7 +46,7 @@ test("keeps Feishu setup as a standalone deployment channel card", () => {
 test("renders the card in the real final deployment step", () => {
   assert.match(
     projectPreviewSource,
-    /<div className="pp-config-label">消息渠道<\/div>/,
+    /<div className="pp-config-label">\{t\("projectPreview\.messageChannels"\)\}<\/div>/,
   );
   assert.match(projectPreviewSource, /<FeishuDeploymentCard/);
   assert.match(

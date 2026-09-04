@@ -6,6 +6,7 @@ import {
   type KeyboardEvent,
   type SVGProps,
 } from "react";
+import { useTranslation } from "react-i18next";
 
 import {
   cancelAgentkitDeployment,
@@ -38,16 +39,13 @@ type DeploymentStatus =
   | "failed"
   | "cancelled";
 
-const REGIONS: readonly { value: Region; label: string }[] = [
-  { value: "cn-beijing", label: "北京" },
-  { value: "cn-shanghai", label: "上海" },
-];
+const REGIONS: readonly Region[] = ["cn-beijing", "cn-shanghai"];
 
 const DEPLOYMENT_STEPS = [
-  { phase: "prepare", label: "生成智能体" },
-  { phase: "build", label: "构建镜像" },
-  { phase: "deploy", label: "创建 Runtime" },
-  { phase: "publish", label: "发布服务" },
+  "prepare",
+  "build",
+  "deploy",
+  "publish",
 ] as const;
 
 function BackIcon(props: SVGProps<SVGSVGElement>) {
@@ -84,7 +82,7 @@ function ExternalIcon(props: SVGProps<SVGSVGElement>) {
 
 function stageIndex(phase: string | null): number {
   if (!phase || phase === "upload") return 0;
-  const index = DEPLOYMENT_STEPS.findIndex((step) => step.phase === phase);
+  const index = DEPLOYMENT_STEPS.findIndex((step) => step === phase);
   return index < 0 ? 0 : index;
 }
 
@@ -105,7 +103,13 @@ function telemetryDeployPhase(
   }
 }
 
+function agentNameErrorKey(name: string): string {
+  const key = agentNameProblem(name, (problem) => problem);
+  return key ? `feishu.validation.agentName.${key}` : "";
+}
+
 export function FeishuBotIntegration({ onBack }: FeishuBotIntegrationProps) {
+  const { t } = useTranslation("automations");
   const [agentName, setAgentName] = useState("feishu_assistant");
   const [appId, setAppId] = useState("");
   const [appSecret, setAppSecret] = useState("");
@@ -178,9 +182,9 @@ export function FeishuBotIntegration({ onBack }: FeishuBotIntegrationProps) {
   };
 
   const validate = () => {
-    const nextAgentNameError = agentNameProblem(agentName.trim()) ?? "";
-    const nextAppIdError = appId.trim() ? "" : "请输入飞书 App ID";
-    const nextAppSecretError = appSecret.trim() ? "" : "请输入飞书 App Secret";
+    const nextAgentNameError = agentNameErrorKey(agentName.trim());
+    const nextAppIdError = appId.trim() ? "" : "feishu.validation.appId";
+    const nextAppSecretError = appSecret.trim() ? "" : "feishu.validation.appSecret";
     setAgentNameError(nextAgentNameError);
     setAppIdError(nextAppIdError);
     setAppSecretError(nextAppSecretError);
@@ -228,7 +232,7 @@ export function FeishuBotIntegration({ onBack }: FeishuBotIntegrationProps) {
         operation.fail({
           failedPhase: telemetryDeployPhase(latestPhaseRef.current),
           errorKind: "abort",
-          errorMessage: safeTelemetryErrorMessage("用户取消部署"),
+          errorMessage: safeTelemetryErrorMessage("User cancelled deployment"),
         });
         return;
       }
@@ -260,7 +264,7 @@ export function FeishuBotIntegration({ onBack }: FeishuBotIntegrationProps) {
   const cancelDeployment = async () => {
     const taskId = taskIdRef.current;
     if (!taskId || deploymentStatus !== "running") return;
-    if (!window.confirm("取消部署将停止任务并清理已创建的 Runtime，确定继续吗？")) {
+    if (!window.confirm(t("feishu.confirmCancel"))) {
       return;
     }
     cancelledRef.current = true;
@@ -271,7 +275,7 @@ export function FeishuBotIntegration({ onBack }: FeishuBotIntegrationProps) {
       deploymentOperationRef.current?.fail({
         failedPhase: telemetryDeployPhase(latestPhaseRef.current),
         errorKind: "abort",
-        errorMessage: safeTelemetryErrorMessage("用户取消部署"),
+        errorMessage: safeTelemetryErrorMessage("User cancelled deployment"),
       });
       if (mountedRef.current) setDeploymentStatus("cancelled");
     } catch (error) {
@@ -286,7 +290,7 @@ export function FeishuBotIntegration({ onBack }: FeishuBotIntegrationProps) {
   const canSubmit = Boolean(
     agentName.trim() && appId.trim() && appSecret.trim() && !deploymentActive,
   );
-  const selectedRegion = REGIONS.find((option) => option.value === region)!;
+  const selectedRegion = t(`feishu.regions.${region}`);
 
   return (
     <div className="feishu-integration-page">
@@ -295,28 +299,28 @@ export function FeishuBotIntegration({ onBack }: FeishuBotIntegrationProps) {
           type="button"
           className="feishu-back"
           onClick={onBack}
-          aria-label="返回自动化列表"
+          aria-label={t("backToAutomations")}
           disabled={deploymentActive}
         >
           <BackIcon />
         </button>
         <img className="feishu-integration-logo" src={feishuLogo} alt="" aria-hidden="true" />
         <div>
-          <h1>飞书机器人</h1>
-          <p>创建一个由 AgentKit Runtime 驱动的飞书智能体</p>
+          <h1>{t("feishu.title")}</h1>
+          <p>{t("feishu.description")}</p>
         </div>
       </header>
 
       <div className="feishu-integration-layout">
         <section className="feishu-section-panel">
           <p className="feishu-panel-description">
-            填写已发布飞书应用的凭据，Studio 将生成 basic 智能体、创建独立 Runtime，并启用飞书消息长连接。
+            {t("feishu.panel")}
           </p>
 
           <form className="feishu-form" onSubmit={onSubmit} onKeyDown={stopComposingSubmit} noValidate>
             <div className="feishu-field-grid">
               <div className="feishu-field">
-                <label htmlFor="feishu-agent-name">智能体名称</label>
+                <label htmlFor="feishu-agent-name">{t("feishu.agentName")}</label>
                 <input
                   id="feishu-agent-name"
                   value={agentName}
@@ -326,18 +330,18 @@ export function FeishuBotIntegration({ onBack }: FeishuBotIntegrationProps) {
                     setAgentName(event.target.value);
                     if (agentNameError) setAgentNameError("");
                   }}
-                  onBlur={() => setAgentNameError(agentNameProblem(agentName.trim()) ?? "")}
+                  onBlur={() => setAgentNameError(agentNameErrorKey(agentName.trim()))}
                   aria-invalid={Boolean(agentNameError)}
                   aria-describedby={`feishu-agent-name-help${agentNameError ? " feishu-agent-name-error" : ""}`}
                 />
                 <span id="feishu-agent-name-help" className="feishu-field-help">
-                  将作为新 Runtime 中的根智能体名称
+                  {t("feishu.agentNameHelp")}
                 </span>
-                {agentNameError ? <span id="feishu-agent-name-error" className="feishu-field-error" role="alert">{agentNameError}</span> : null}
+                {agentNameError ? <span id="feishu-agent-name-error" className="feishu-field-error" role="alert">{t(agentNameError)}</span> : null}
               </div>
 
               <div className="feishu-field">
-                <label id="feishu-region-label">部署地域</label>
+                <label id="feishu-region-label">{t("feishu.region")}</label>
                 <div className="feishu-region-picker" ref={regionPickerRef}>
                   <button
                     ref={regionTriggerRef}
@@ -348,9 +352,7 @@ export function FeishuBotIntegration({ onBack }: FeishuBotIntegrationProps) {
                     aria-expanded={regionOpen}
                     aria-labelledby="feishu-region-label feishu-region-value"
                     onClick={() => {
-                      regionFocusIndexRef.current = REGIONS.findIndex(
-                        (option) => option.value === region,
-                      );
+                      regionFocusIndexRef.current = REGIONS.findIndex((option) => option === region);
                       setRegionOpen((open) => !open);
                     }}
                     onKeyDown={(event) => {
@@ -358,18 +360,18 @@ export function FeishuBotIntegration({ onBack }: FeishuBotIntegrationProps) {
                       event.preventDefault();
                       regionFocusIndexRef.current = event.key === "ArrowUp"
                         ? REGIONS.length - 1
-                        : REGIONS.findIndex((option) => option.value === region);
+                        : REGIONS.findIndex((option) => option === region);
                       setRegionOpen(true);
                     }}
                   >
-                    <span id="feishu-region-value">{selectedRegion.label}</span>
+                    <span id="feishu-region-value">{selectedRegion}</span>
                     <ChevronIcon />
                   </button>
                   {regionOpen ? (
                     <div
                       className="feishu-region-menu"
                       role="listbox"
-                      aria-label="部署地域"
+                      aria-label={t("feishu.region")}
                       onKeyDown={(event) => {
                         const currentIndex = regionOptionRefs.current.findIndex(
                           (option) => option === document.activeElement,
@@ -393,32 +395,32 @@ export function FeishuBotIntegration({ onBack }: FeishuBotIntegrationProps) {
                     >
                       {REGIONS.map((option) => (
                         <button
-                          key={option.value}
+                          key={option}
                           ref={(element) => {
-                            const index = REGIONS.findIndex((item) => item.value === option.value);
+                            const index = REGIONS.findIndex((item) => item === option);
                             regionOptionRefs.current[index] = element;
                           }}
                           type="button"
                           role="option"
-                          aria-selected={region === option.value}
-                          className={`feishu-region-option${region === option.value ? " is-selected" : ""}`}
+                          aria-selected={region === option}
+                          className={`feishu-region-option${region === option ? " is-selected" : ""}`}
                           onClick={() => {
-                            setRegion(option.value);
+                            setRegion(option);
                             setRegionOpen(false);
                             regionTriggerRef.current?.focus();
                           }}
                         >
-                          {option.label}
+                          {t(`feishu.regions.${option}`)}
                         </button>
                       ))}
                     </div>
                   ) : null}
                 </div>
-                <span className="feishu-field-help">Runtime 与构建产物将创建在该地域</span>
+                <span className="feishu-field-help">{t("feishu.regionHelp")}</span>
               </div>
 
               <div className="feishu-field">
-                <label htmlFor="feishu-app-id">飞书 App ID</label>
+                <label htmlFor="feishu-app-id">{t("feishu.appId")}</label>
                 <input
                   id="feishu-app-id"
                   value={appId}
@@ -430,16 +432,16 @@ export function FeishuBotIntegration({ onBack }: FeishuBotIntegrationProps) {
                     setAppId(event.target.value);
                     if (appIdError) setAppIdError("");
                   }}
-                  onBlur={() => setAppIdError(appId.trim() ? "" : "请输入飞书 App ID")}
+                  onBlur={() => setAppIdError(appId.trim() ? "" : "feishu.validation.appId")}
                   aria-invalid={Boolean(appIdError)}
                   aria-describedby={`feishu-app-id-help${appIdError ? " feishu-app-id-error" : ""}`}
                 />
-                <span id="feishu-app-id-help" className="feishu-field-help">来自飞书开放平台的应用凭证</span>
-                {appIdError ? <span id="feishu-app-id-error" className="feishu-field-error" role="alert">{appIdError}</span> : null}
+                <span id="feishu-app-id-help" className="feishu-field-help">{t("feishu.appIdHelp")}</span>
+                {appIdError ? <span id="feishu-app-id-error" className="feishu-field-error" role="alert">{t(appIdError)}</span> : null}
               </div>
 
               <div className="feishu-field">
-                <label htmlFor="feishu-app-secret">飞书 App Secret</label>
+                <label htmlFor="feishu-app-secret">{t("feishu.appSecret")}</label>
                 <div className="feishu-secret-input">
                   <input
                     id="feishu-app-secret"
@@ -448,12 +450,12 @@ export function FeishuBotIntegration({ onBack }: FeishuBotIntegrationProps) {
                     maxLength={256}
                     autoComplete="off"
                     disabled={deploymentActive}
-                    placeholder="请输入 App Secret"
+                    placeholder={t("feishu.appSecretPlaceholder")}
                     onChange={(event) => {
                       setAppSecret(event.target.value);
                       if (appSecretError) setAppSecretError("");
                     }}
-                    onBlur={() => setAppSecretError(appSecret.trim() ? "" : "请输入飞书 App Secret")}
+                    onBlur={() => setAppSecretError(appSecret.trim() ? "" : "feishu.validation.appSecret")}
                     aria-invalid={Boolean(appSecretError)}
                     aria-describedby={`feishu-app-secret-help${appSecretError ? " feishu-app-secret-error" : ""}`}
                   />
@@ -461,25 +463,25 @@ export function FeishuBotIntegration({ onBack }: FeishuBotIntegrationProps) {
                     type="button"
                     disabled={deploymentActive}
                     onClick={() => setShowSecret((visible) => !visible)}
-                    aria-label={showSecret ? "隐藏 App Secret" : "显示 App Secret"}
+                    aria-label={showSecret ? t("feishu.hideSecret") : t("feishu.showSecret")}
                   >
-                    {showSecret ? "隐藏" : "显示"}
+                    {showSecret ? t("feishu.hide") : t("feishu.show")}
                   </button>
                 </div>
-                <span id="feishu-app-secret-help" className="feishu-field-help">仅写入新 Runtime 的环境变量</span>
-                {appSecretError ? <span id="feishu-app-secret-error" className="feishu-field-error" role="alert">{appSecretError}</span> : null}
+                <span id="feishu-app-secret-help" className="feishu-field-help">{t("feishu.appSecretHelp")}</span>
+                {appSecretError ? <span id="feishu-app-secret-error" className="feishu-field-error" role="alert">{t(appSecretError)}</span> : null}
               </div>
             </div>
 
             {deploymentStatus !== "idle" ? (
               <div className={`feishu-deployment-status is-${deploymentStatus}`} role={deploymentStatus === "failed" ? "alert" : "status"}>
                 <div className="feishu-deployment-heading">
-                  {deploymentStatus === "preparing" ? <TextShimmer as="strong">正在生成 basic 智能体</TextShimmer> : null}
-                  {deploymentStatus === "running" ? <TextShimmer as="strong">{activeStage?.message || "正在创建 Runtime"}</TextShimmer> : null}
-                  {deploymentStatus === "cancelling" ? <TextShimmer as="strong">正在取消部署</TextShimmer> : null}
-                  {deploymentStatus === "succeeded" ? <strong><CheckIcon />飞书机器人 Runtime 已创建</strong> : null}
-                  {deploymentStatus === "cancelled" ? <strong>部署已取消</strong> : null}
-                  {deploymentStatus === "failed" ? <strong>创建失败</strong> : null}
+                  {deploymentStatus === "preparing" ? <TextShimmer as="strong">{t("feishu.status.preparing")}</TextShimmer> : null}
+                  {deploymentStatus === "running" ? <TextShimmer as="strong">{activeStage?.message || t("feishu.status.running")}</TextShimmer> : null}
+                  {deploymentStatus === "cancelling" ? <TextShimmer as="strong">{t("feishu.status.cancelling")}</TextShimmer> : null}
+                  {deploymentStatus === "succeeded" ? <strong><CheckIcon />{t("feishu.status.succeeded")}</strong> : null}
+                  {deploymentStatus === "cancelled" ? <strong>{t("feishu.status.cancelled")}</strong> : null}
+                  {deploymentStatus === "failed" ? <strong>{t("feishu.status.failed")}</strong> : null}
                 </div>
                 {deploymentStatus === "preparing" || deploymentStatus === "running" || deploymentStatus === "cancelling" ? (
                   <ol className="feishu-deployment-steps">
@@ -487,9 +489,9 @@ export function FeishuBotIntegration({ onBack }: FeishuBotIntegrationProps) {
                       const done = deploymentStatus === "running" && index < currentStepIndex;
                       const active = index === currentStepIndex;
                       return (
-                        <li key={step.phase} className={`${done ? "is-done" : ""}${active ? " is-active" : ""}`}>
+                        <li key={step} className={`${done ? "is-done" : ""}${active ? " is-active" : ""}`}>
                           <span aria-hidden="true">{done ? <CheckIcon /> : index + 1}</span>
-                          {step.label}
+                          {t(`feishu.steps.${step}`)}
                         </li>
                       );
                     })}
@@ -499,8 +501,8 @@ export function FeishuBotIntegration({ onBack }: FeishuBotIntegrationProps) {
                 {result ? (
                   <div className="feishu-deployment-result">
                     <span>{result.agentName}</span>
-                    <span>{REGIONS.find((option) => option.value === (result.region || region))?.label || result.region}</span>
-                    {result.consoleUrl ? <a href={result.consoleUrl} target="_blank" rel="noreferrer">打开 Runtime 控制台<ExternalIcon /></a> : null}
+                    <span>{REGIONS.includes((result.region || region) as Region) ? t(`feishu.regions.${result.region || region}`) : result.region}</span>
+                    {result.consoleUrl ? <a href={result.consoleUrl} target="_blank" rel="noreferrer">{t("feishu.openConsole")}<ExternalIcon /></a> : null}
                   </div>
                 ) : null}
               </div>
@@ -508,17 +510,17 @@ export function FeishuBotIntegration({ onBack }: FeishuBotIntegrationProps) {
 
             <div className="feishu-form-actions">
               <div className="feishu-secrets-note">
-                <strong>凭据处理</strong>
-                <span>App Secret 仅用于本次部署，不会写入生成源码或浏览器存储。</span>
+                <strong>{t("feishu.credentials.title")}</strong>
+                <span>{t("feishu.credentials.description")}</span>
               </div>
               <div className="feishu-action-buttons">
                 {deploymentStatus === "running" ? (
                   <button type="button" className="feishu-cancel" onClick={() => void cancelDeployment()}>
-                    取消部署
+                    {t("feishu.cancelDeployment")}
                   </button>
                 ) : null}
                 <button type="submit" className="feishu-submit" disabled={!canSubmit}>
-                  {deploymentActive ? "正在创建…" : "创建飞书机器人 Runtime"}
+                  {deploymentActive ? t("feishu.creating") : t("feishu.create")}
                 </button>
               </div>
             </div>

@@ -104,13 +104,14 @@ test("quick Runtime updates keep the existing target and use update semantics", 
     workbenchSource,
     /disabled=\{deploying \|\| isRuntimeUpdate\}/,
   );
-  assert.match(workbenchSource, /\? "更新并发布"[\s\S]*?: "部署"/);
+  assert.match(workbenchSource, /t\("workbench\.actions\.updateAndPublish"\)/);
+  assert.match(workbenchSource, /t\("common\.deploy"\)/);
 });
 
 test("creation mode picker has exactly the quick and traditional cards", () => {
-  assert.match(modePickerSource, />\s*以不同模式构建您的智能体\s*</);
-  assert.match(modePickerSource, />\s*快速模式\s*</);
-  assert.match(modePickerSource, />\s*传统模式\s*</);
+  assert.match(modePickerSource, /t\("modePicker\.subtitle"\)/);
+  assert.match(modePickerSource, /modePicker\.quick\.title/);
+  assert.match(modePickerSource, /modePicker\.traditional\.title/);
   assert.equal(
     modePickerSource.match(/className="agent-creation-mode-picker__card"/g)
       ?.length,
@@ -132,11 +133,11 @@ test("creation mode picker has exactly the quick and traditional cards", () => {
       ?.length,
     2,
   );
-  assert.equal(modePickerSource.match(/<span>特性<\/span>/g)?.length, 2);
-  assert.match(modePickerSource, />\s*动态派生子智能体自主完成任务\s*</);
-  assert.match(modePickerSource, />\s*高度自定义您的智能体结构\s*</);
-  assert.match(modePickerSource, />\s*动态派生子智能体\s*</);
-  assert.match(modePickerSource, />\s*可视化配置\s*</);
+  assert.equal(modePickerSource.match(/t\("modePicker\.features"\)/g)?.length, 2);
+  assert.match(modePickerSource, /modePicker\.quick\.description/);
+  assert.match(modePickerSource, /modePicker\.traditional\.description/);
+  assert.match(modePickerSource, /modePicker\.quick\.features\.dynamicSubagents/);
+  assert.match(modePickerSource, /modePicker\.traditional\.features\.visualConfig/);
   const vulcanCard = modePickerSource.slice(
     modePickerSource.indexOf("selectMode(onSelectVulcan)"),
     modePickerSource.indexOf("selectMode(onSelectTraditional)"),
@@ -146,12 +147,12 @@ test("creation mode picker has exactly the quick and traditional cards", () => {
   );
   assert.equal(vulcanCard.match(/<FeatureIcon/g)?.length, 6);
   assert.equal(traditionalCard.match(/<FeatureIcon/g)?.length, 5);
-  assert.match(modePickerSource, />\s*按需调用技能\s*</);
-  assert.match(modePickerSource, />\s*任务过程可追踪\s*</);
-  assert.match(modePickerSource, />\s*存量智能体迁移\s*</);
-  assert.match(modePickerSource, />\s*实时调试\s*</);
-  assert.match(modePickerSource, />\s*可选性能优化\s*</);
-  assert.match(modePickerSource, />\s*精细参数控制\s*</);
+  assert.match(modePickerSource, /modePicker\.quick\.features\.skills/);
+  assert.match(modePickerSource, /modePicker\.quick\.features\.trace/);
+  assert.match(modePickerSource, /modePicker\.traditional\.features\.migration/);
+  assert.match(modePickerSource, /modePicker\.traditional\.features\.debugging/);
+  assert.match(modePickerSource, /modePicker\.traditional\.features\.optimization/);
+  assert.match(modePickerSource, /modePicker\.traditional\.features\.parameters/);
   assert.doesNotMatch(
     modePickerSource,
     /purple|violet|gradient|className="cw-/i,
@@ -242,12 +243,10 @@ test("workbench uses native Apps SDK UI controls", () => {
 });
 
 test("workbench keeps the main-branch model fields and skill dialog on the first step", () => {
-  assert.match(workbenchSource, /label: "智能体"/);
-  assert.match(workbenchSource, /label: "执行环境"/);
-  assert.match(workbenchSource, /label: "部署偏好"/);
+  assert.match(workbenchSource, /t\(`workbench\.steps\.\$\{step\}\.label`\)/);
   assert.match(
     workbenchSource,
-    /className="new-agent-workbench__model-field-label">\s*模型来源\s*</,
+    /t\("workbench\.model\.source"\)/,
   );
   assert.match(
     workbenchSource,
@@ -255,14 +254,14 @@ test("workbench keeps the main-branch model fields and skill dialog on the first
   );
   assert.match(
     workbenchSource,
-    />\s*模型名称\s*<span className="new-agent-workbench__required">\*<\/span>/,
+    /t\("workbench\.model\.name"\)/,
   );
-  assert.match(workbenchSource, /服务商 Provider/);
+  assert.match(workbenchSource, /t\("workbench\.model\.provider"\)/);
   assert.match(workbenchSource, /API Base/);
-  assert.match(workbenchSource, />技能</);
+  assert.match(workbenchSource, /t\("workbench\.agent\.skills"\)/);
   assert.match(
     workbenchSource,
-    /className="new-agent-workbench__model-group-label">\s*模型\s*</,
+    /t\("workbench\.model\.label"\)/,
   );
   assert.match(
     workbenchStyles,
@@ -320,7 +319,7 @@ test("workbench keeps the main-branch model fields and skill dialog on the first
     )?.[1] ?? "";
   assert.match(agentStep, /<NativeModelPicker/);
   assert.match(agentStep, /<SkillSourcePicker/);
-  assert.match(workbenchSource, /addLabel="添加技能"/);
+  assert.match(workbenchSource, /addLabel=\{t\("workbench\.agent\.addSkill"\)\}/);
   assert.match(workbenchSource, /showSelectedCount=\{false\}/);
   assert.doesNotMatch(workbenchSource, /function LocalSkillsField/);
   assert.match(environmentStep, /<CloudEnvironmentConfigurator/);
@@ -387,7 +386,7 @@ test("fresh Vulcan creation defaults to assistant and uses Google ADK name valid
   );
   assert.match(
     workbenchSource,
-    /const nameProblem = agentNameProblem\(draft\.name\)/,
+    /const nameProblem = agentNameProblem\([\s\S]*?draft\.name,[\s\S]*?validation\.agentName/,
   );
   assert.match(
     workbenchSource,
@@ -417,10 +416,11 @@ test("Vulcan creation is a fixed-size three-step wizard", () => {
     workbenchSource,
     /type WizardStep = "agent" \| "environment" \| "deployment"/,
   );
-  assert.match(workbenchSource, /title: "基本信息"/);
-  assert.match(workbenchSource, /title: "配置执行环境"/);
-  assert.match(workbenchSource, /title: "部署偏好"/);
-  assert.match(workbenchSource, /description: "定义 AgentKit 云上参数"/);
+  assert.match(workbenchSource, /\{ id: "agent" \}/);
+  assert.match(workbenchSource, /\{ id: "environment" \}/);
+  assert.match(workbenchSource, /\{ id: "deployment" \}/);
+  assert.match(workbenchSource, /t\(`workbench\.steps\.\$\{step\}\.title`\)/);
+  assert.match(workbenchSource, /t\(`workbench\.steps\.\$\{step\}\.description`\)/);
   assert.match(workbenchSource, /className="new-agent-workbench__panel"/);
   assert.match(workbenchSource, /className="new-agent-workbench__panel-frame"/);
   assert.match(workbenchSource, /className="new-agent-workbench__actions"/);
@@ -574,21 +574,21 @@ test("final step exposes deployment progress and error feedback", () => {
   assert.match(workbenchSource, /deployError/);
   assert.match(workbenchSource, /role="alert"/);
   for (const label of [
-    "会话存储",
-    "实例设置",
-    "评测集",
-    "资源配置",
-    "环境变量",
+    "workbench.deployment.sessionStorage",
+    "workbench.deployment.instances",
+    "workbench.deployment.evaluationSets",
+    "workbench.deployment.resources",
+    "workbench.environmentVariables.title",
   ]) {
     assert.match(workbenchSource, new RegExp(label));
   }
   assert.doesNotMatch(workbenchSource, />\s*访问鉴权\s*</);
-  assert.match(workbenchSource, />\s*鉴权方式\s*</);
+  assert.match(workbenchSource, /t\("workbench\.deployment\.authentication"\)/);
   assert.doesNotMatch(
     workbenchSource,
     /new-agent-workbench__section-title">\s*网络\s*</,
   );
-  assert.match(workbenchSource, />\s*网络模式\s*</);
+  assert.match(workbenchSource, /t\("workbench\.deployment\.networkMode"\)/);
   assert.match(
     workbenchSource,
     /sessionStorage: "in-memory" \| "persistent"/,
@@ -602,7 +602,10 @@ test("final step exposes deployment progress and error feedback", () => {
     /backend === "local" \? "in-memory" : "persistent"/,
   );
   assert.match(workbenchSource, /options=\{STM_BACKENDS\.map/);
-  assert.match(workbenchSource, /option\.id === "local"\s*\? "In-memory 临时存储"\s*:\s*option\.label/);
+  assert.match(
+    workbenchSource,
+    /option\.id === "local"[\s\S]*?t\("workbench\.deployment\.inMemoryStorage"\)[\s\S]*?workbench\.deployment\.backends/,
+  );
   assert.doesNotMatch(
     workbenchSource,
     /options=\{STM_BACKENDS\.map\([\s\S]*?description:\s*option\.desc/,
@@ -623,11 +626,11 @@ test("final step exposes deployment progress and error feedback", () => {
   );
   assert.match(
     workbenchSource,
-    /className="new-agent-workbench__instance-fields"[\s\S]*?className="new-agent-workbench__model-field-label">\s*最小实例数[\s\S]*?className="new-agent-workbench__model-field-label">\s*最大实例数/,
+    /className="new-agent-workbench__instance-fields"[\s\S]*?workbench\.deployment\.minInstances[\s\S]*?workbench\.deployment\.maxInstances/,
   );
   assert.match(
     workbenchSource,
-    /最小实例数[\s\S]*?type="number"[\s\S]*?min=\{0\}[\s\S]*?value=\{minInstance\}/,
+    /workbench\.deployment\.minInstances[\s\S]*?type="number"[\s\S]*?min=\{0\}[\s\S]*?value=\{minInstance\}/,
   );
   assert.match(workbenchSource, /min < 0/);
   assert.match(
@@ -636,11 +639,11 @@ test("final step exposes deployment progress and error feedback", () => {
   );
   assert.match(
     workbenchSource,
-    /最小实例数必须为大于等于 0 的整数，最大实例数必须为大于 0 的整数/,
+    /t\("workbench\.validation\.instanceIntegers"\)/,
   );
   assert.match(
     workbenchSource,
-    /role="table"[\s\S]*?aria-label="环境变量"[\s\S]*?role="columnheader">名称[\s\S]*?role="columnheader">值[\s\S]*?role="columnheader">操作/,
+    /role="table"[\s\S]*?aria-label=\{t\("workbench\.environmentVariables\.title"\)\}[\s\S]*?t\("common\.name"\)[\s\S]*?t\("common\.value"\)[\s\S]*?t\("common\.actions"\)/,
   );
   assert.match(
     workbenchStyles,
@@ -677,10 +680,11 @@ test("final step exposes deployment progress and error feedback", () => {
   assert.match(customCreateSource, /resources: deploymentOptions\.resources/);
 });
 
-test("quick-mode session backends reuse the main-branch short-term memory catalog", () => {
-  for (const label of ["本地内存", "SQLite 文件", "MySQL", "PostgreSQL"]) {
-    assert.match(catalogSource, new RegExp(label));
+test("quick-mode session backends reuse the localized short-term memory catalog", () => {
+  for (const id of ["local", "sqlite", "mysql", "postgresql"]) {
+    assert.match(catalogSource, new RegExp(`id: "${id}"`));
   }
+  assert.match(catalogSource, /\], "traditional\.backends\.shortTerm"\)/);
   for (const key of [
     "DATABASE_MYSQL_HOST",
     "DATABASE_MYSQL_USER",
@@ -701,7 +705,7 @@ test("quick-mode session backends reuse the main-branch short-term memory catalo
 test("deployment helper and environment variable copy use their intended text roles", () => {
   assert.match(
     workbenchSource,
-    /className="new-agent-workbench__helper-text">\s*为避免多实例间会话丢失/,
+    /className="new-agent-workbench__helper-text">[\s\S]*?t\("workbench\.deployment\.inMemoryHint"\)/,
   );
   assert.match(
     workbenchStyles,
@@ -711,6 +715,6 @@ test("deployment helper and environment variable copy use their intended text ro
     workbenchStyles,
     /\.new-agent-workbench__env-head > button,[\s\S]*?\.new-agent-workbench__empty-row\s*\{[\s\S]*?font-size:\s*14px;[\s\S]*?line-height:\s*20px;/,
   );
-  assert.match(workbenchSource, /<span role="cell">无<\/span>/);
+  assert.match(workbenchSource, /<span role="cell">\{t\("common\.none"\)\}<\/span>/);
   assert.doesNotMatch(workbenchSource, /此后端无需额外运行参数/);
 });

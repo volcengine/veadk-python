@@ -29,8 +29,8 @@ const manageStyles = readFileSync(
 
 test("managed runtimes connect through the Agent page", () => {
   assert.match(manageSource, /onConnect:\s*\(runtime:\s*ManagedRuntime\)/);
-  assert.match(manageSource, /连接到此 Agent/);
-  assert.match(manageSource, /currentRuntimeId === rt\.runtimeId[\s\S]*?已连接/);
+  assert.match(manageSource, /t\("manageAgents\.connect"\)/);
+  assert.match(manageSource, /currentRuntimeId === rt\.runtimeId[\s\S]*?t\("manageAgents\.connected"\)/);
   assert.match(appSource, /connectMyAgent[\s\S]*?connectRuntime\(/);
   assert.match(appSource, /<MyAgents[\s\S]*?onUseAgent=\{/);
   assert.match(workspaceSource, /onSelectAgent\(agent\.id\)/);
@@ -103,11 +103,10 @@ test("management defaults to the active provider region without trailing list wh
   assert.match(manageSource, /cloudRegionOptions\(cloudProvider\)/);
   assert.match(manageSource, /formatCloudRegion\(regionFilter, cloudProvider\)/);
   assert.doesNotMatch(manageSource, /value: "all"/);
-  assert.match(manageSource, /role="listbox" aria-label="区域"/);
+  assert.match(manageSource, /role="listbox" aria-label=\{t\("manageAgents\.regionAria"\)\}/);
   assert.match(manageSource, /role="option"[\s\S]*?aria-selected=\{selected\}/);
   assert.match(manageStyles, /\.manage-region-menu\s*\{[\s\S]*?border-radius:\s*12px;/);
-  assert.match(manageSource, /列出你有权管理的 AgentKit Runtime\s*<\/p>/);
-  assert.doesNotMatch(manageSource, /列出你有权管理的 AgentKit Runtime。/);
+  assert.match(manageSource, /t\("manageAgents\.subtitle"\)/);
   assert.match(
     manageStyles,
     /\.manage\s*\{[\s\S]*?padding:\s*28px 24px 16px;/,

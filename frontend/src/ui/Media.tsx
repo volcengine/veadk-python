@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { PhotoView } from "react-photo-view";
+import { useTranslation } from "react-i18next";
 import { mediaContentUrl } from "../adk/client";
 import { Markdown } from "./Markdown";
 
@@ -73,6 +74,7 @@ function KindIcon({ kind }: { kind: ReturnType<typeof mediaKind> }) {
 }
 
 export function MediaGroup({ appName, items, compact = false, onRemove }: MediaGroupProps) {
+  const { t } = useTranslation("conversation");
   const [open, setOpen] = useState<MediaItem | null>(null);
   return (
     <>
@@ -88,10 +90,10 @@ export function MediaGroup({ appName, items, compact = false, onRemove }: MediaG
               className="media-card-main"
               disabled={disabled}
               onClick={kind === "image" ? undefined : () => setOpen(item)}
-              aria-label={`预览 ${item.name ?? "附件"}`}
+              aria-label={t("media.preview", { name: item.name ?? t("media.attachment") })}
             >
               {kind === "image" && source ? (
-                <img className="media-card-image" src={source} alt={item.name ?? "图片"} loading="lazy" />
+                <img className="media-card-image" src={source} alt={item.name ?? t("media.image")} loading="lazy" />
               ) : kind === "video" && source ? (
                 <div className="media-card-video-container">
                   <video
@@ -110,13 +112,13 @@ export function MediaGroup({ appName, items, compact = false, onRemove }: MediaG
                 <span className="media-card-icon"><KindIcon kind={kind} /></span>
               )}
               <span className="media-card-copy">
-                <span className="media-card-name">{item.name ?? "附件"}</span>
+                <span className="media-card-name">{item.name ?? t("media.attachment")}</span>
                 <span className="media-card-meta">
                   <span className="media-card-type">{labelFor(item)}</span>
                   {item.status === "uploading" ? (
-                    <><Loader2 className="media-card-spinner" /> 上传中</>
+                    <><Loader2 className="media-card-spinner" /> {t("media.uploading")}</>
                   ) : item.status === "error" ? (
-                    item.error ?? "上传失败"
+                    item.error ?? t("media.uploadFailed")
                   ) : (
                     formatBytes(item.sizeBytes)
                   )}
@@ -144,7 +146,7 @@ export function MediaGroup({ appName, items, compact = false, onRemove }: MediaG
                 <button
                   type="button"
                   className="media-card-remove"
-                  aria-label={`移除 ${item.name ?? "附件"}`}
+                  aria-label={t("media.remove", { name: item.name ?? t("media.attachment") })}
                   onClick={() => onRemove(item.id)}
                 >
                   <X />
@@ -164,6 +166,7 @@ export function MediaGroup({ appName, items, compact = false, onRemove }: MediaG
 }
 
 function MediaViewer({ appName, item, onClose }: { appName: string; item: MediaItem; onClose: () => void }) {
+  const { t } = useTranslation("conversation");
   const source = useMemo(() => sourceFor(item, appName), [appName, item]);
   const kind = mediaKind(item.mimeType);
   const [text, setText] = useState("");
@@ -205,7 +208,7 @@ function MediaViewer({ appName, item, onClose }: { appName: string; item: MediaI
       className="media-viewer-backdrop"
       role="dialog"
       aria-modal="true"
-      aria-label={item.name ?? "附件预览"}
+      aria-label={t("media.previewDialog", { name: item.name ?? t("media.attachment") })}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
@@ -222,16 +225,16 @@ function MediaViewer({ appName, item, onClose }: { appName: string; item: MediaI
       >
         <header className="media-viewer-header">
           <div>
-            <strong>{item.name ?? "附件"}</strong>
+            <strong>{item.name ?? t("media.attachment")}</strong>
             <span>{labelFor(item)}{item.sizeBytes ? ` · ${formatBytes(item.sizeBytes)}` : ""}</span>
           </div>
           <nav>
-            <a href={source} download={item.name} aria-label="下载"><Download /></a>
-            <button type="button" onClick={onClose} aria-label="关闭"><X /></button>
+            <a href={source} download={item.name} aria-label={t("media.download")}><Download /></a>
+            <button type="button" onClick={onClose} aria-label={t("media.close")}><X /></button>
           </nav>
         </header>
         <div className={`media-viewer-body media-viewer-body--${kind}`}>
-          {kind === "image" ? <img src={source} alt={item.name ?? "图片"} /> : null}
+          {kind === "image" ? <img src={source} alt={item.name ?? t("media.image")} /> : null}
           {kind === "video" ? (
             <div className="media-viewer-video-wrapper">
               <video
@@ -245,8 +248,8 @@ function MediaViewer({ appName, item, onClose }: { appName: string; item: MediaI
             </div>
           ) : null}
           {kind === "pdf" ? <iframe src={source} title={item.name ?? "PDF"} /> : null}
-          {loading ? <div className="media-viewer-loading"><Loader2 /> 正在读取文档…</div> : null}
-          {!loading && loadError ? <div className="media-viewer-loading">文档加载失败：{loadError}</div> : null}
+          {loading ? <div className="media-viewer-loading"><Loader2 /> {t("media.reading")}</div> : null}
+          {!loading && loadError ? <div className="media-viewer-loading">{t("media.loadFailed", { error: loadError })}</div> : null}
           {!loading && kind === "markdown" ? <div className="media-document"><Markdown text={text} /></div> : null}
           {!loading && kind === "text" ? <pre className="media-document media-document--plain">{text}</pre> : null}
         </div>

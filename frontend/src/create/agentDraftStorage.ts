@@ -1,8 +1,16 @@
 import type { AgentDraft } from "./types";
+import { createT } from "./i18n";
 import { prepareMcpAuth, referencedMcpEnvKeys } from "./mcpAuth";
 
 const WORKSPACE_DRAFT_STORAGE_VERSION = 1;
 const SERVER_MANAGED_MODEL_API_KEY = "MODEL_AGENT_API_KEY";
+const WORKSPACE_DRAFT_ERROR_NAME = "WorkspaceDraftError";
+
+function workspaceDraftError(key: string): Error {
+  const error = new Error(createT(key));
+  error.name = WORKSPACE_DRAFT_ERROR_NAME;
+  return error;
+}
 
 export type WorkspaceAgentCreationMode = "quick" | "traditional";
 
@@ -186,9 +194,9 @@ function parseWorkspaceDrafts(value: unknown): WorkspaceAgentDraft[] {
       : undefined;
   if (!Array.isArray(drafts) || !drafts.every(isWorkspaceAgentDraft)) {
     if (isRecord(value) && typeof value.version === "number") {
-      throw new Error("本机草稿版本暂不受支持，请升级 Studio 后重试。");
+      throw workspaceDraftError("helpers.drafts.unsupportedVersion");
     }
-    throw new Error("本机草稿数据格式无效。");
+    throw workspaceDraftError("helpers.drafts.invalidFormat");
   }
   return drafts.map(sanitizeWorkspaceDraft);
 }
@@ -203,10 +211,10 @@ export function loadWorkspaceDrafts(
   try {
     return parseWorkspaceDrafts(JSON.parse(raw));
   } catch (cause) {
-    if (cause instanceof Error && cause.message.startsWith("本机草稿")) {
+    if (cause instanceof Error && cause.name === WORKSPACE_DRAFT_ERROR_NAME) {
       throw cause;
     }
-    throw new Error("无法读取本机草稿，浏览器中的草稿数据可能已损坏。");
+    throw workspaceDraftError("helpers.drafts.readFailed");
   }
 }
 
@@ -228,9 +236,9 @@ export function writeWorkspaceDrafts(
       (cause.name === "QuotaExceededError" || cause.name === "NS_ERROR_DOM_QUOTA_REACHED")
     ) {
       throw new Error(
-        "浏览器存储空间不足，草稿未保存。请删除不需要的草稿或清理此站点的浏览器存储后重试。",
+        createT("helpers.drafts.quotaExceeded"),
       );
     }
-    throw new Error("浏览器拒绝保存草稿，请检查站点存储权限后重试。");
+    throw new Error(createT("helpers.drafts.writeRejected"));
   }
 }

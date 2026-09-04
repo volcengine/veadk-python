@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   listSkillSpaces,
   listSkillsInSpace,
@@ -13,12 +14,7 @@ import { NewChatSkillTargetPicker } from "./NewChatSkillTargetPicker";
 import type { NewChatSkillAction, NewChatSkillTarget } from "./types";
 import "./new-chat-workspace.css";
 
-const STYLE_LABELS: Record<string, string> = {
-  concise: "简洁实用",
-  strict: "严谨稳健",
-  tutorial: "教程友好",
-  automation: "自动化优先",
-};
+const DEFAULT_STYLE_KEYS = ["concise", "strict", "tutorial", "automation"] as const;
 
 interface NewChatSkillControlsProps {
   action: NewChatSkillAction;
@@ -39,6 +35,7 @@ export function NewChatSkillControls({
   onOptimizationSourceChange,
   disabled = false,
 }: NewChatSkillControlsProps) {
+  const { t } = useTranslation("newChat");
   const [capability, setCapability] = useState<SkillWorkbenchCapability | null>(null);
   const [capabilityLoading, setCapabilityLoading] = useState(false);
   const [capabilityError, setCapabilityError] = useState("");
@@ -69,14 +66,14 @@ export function NewChatSkillControls({
       })
       .catch((error: unknown) => {
         if (!controller.signal.aborted) {
-          setCapabilityError(errorMessage(error, "模型配置加载失败"));
+          setCapabilityError(errorMessage(error, t("skill.modelLoadFailed")));
         }
       })
       .finally(() => {
         if (!controller.signal.aborted) setCapabilityLoading(false);
       });
     return () => controller.abort();
-  }, [action, capability, capabilityReloadKey]);
+  }, [action, capability, capabilityReloadKey, t]);
 
   useEffect(() => {
     if (action !== "optimize" || spaces.length > 0) return;
@@ -88,7 +85,7 @@ export function NewChatSkillControls({
         if (!cancelled) setSpaces(items);
       })
       .catch((error: unknown) => {
-        if (!cancelled) setSpacesError(errorMessage(error, "Skill Space 加载失败"));
+        if (!cancelled) setSpacesError(errorMessage(error, t("skill.spaceLoadFailed")));
       })
       .finally(() => {
         if (!cancelled) setSpacesLoading(false);
@@ -96,7 +93,7 @@ export function NewChatSkillControls({
     return () => {
       cancelled = true;
     };
-  }, [action, spaces.length, spacesReloadKey]);
+  }, [action, spaces.length, spacesReloadKey, t]);
 
   const activeSpace = spaces.find((space) => space.id === activeSpaceId);
   useEffect(() => {
@@ -115,7 +112,7 @@ export function NewChatSkillControls({
         if (!cancelled) setSkills(items);
       })
       .catch((error: unknown) => {
-        if (!cancelled) setSkillsError(errorMessage(error, "Skill 加载失败"));
+        if (!cancelled) setSkillsError(errorMessage(error, t("skill.skillLoadFailed")));
       })
       .finally(() => {
         if (!cancelled) setSkillsLoading(false);
@@ -123,18 +120,23 @@ export function NewChatSkillControls({
     return () => {
       cancelled = true;
     };
-  }, [action, activeSpace, skillsReloadKey]);
+  }, [action, activeSpace, skillsReloadKey, t]);
 
   const styleOptions = useMemo<NewChatCompactSelectOption[]>(() => {
-    const keys = capability ? Object.keys(capability.styles) : Object.keys(STYLE_LABELS);
-    return keys.map((value) => ({ value, label: STYLE_LABELS[value] || value }));
-  }, [capability]);
+    const keys = capability ? Object.keys(capability.styles) : DEFAULT_STYLE_KEYS;
+    return keys.map((value) => ({
+      value,
+      label: DEFAULT_STYLE_KEYS.includes(value as (typeof DEFAULT_STYLE_KEYS)[number])
+        ? t(`skill.styles.${value}`)
+        : value,
+    }));
+  }, [capability, t]);
   const modelOptions = useMemo<NewChatCompactSelectOption[]>(
     () => capability?.models.map((item) => ({ value: item.id, label: item.label })) || [],
     [capability],
   );
   return (
-    <div className={`new-chat-skill-controls is-${action}`} aria-label="技能定制配置">
+    <div className={`new-chat-skill-controls is-${action}`} aria-label={t("skill.configuration")}>
       <NewChatSkillPicker
         value={action}
         onChange={onActionChange}
@@ -145,22 +147,22 @@ export function NewChatSkillControls({
         <>
           <div className="new-chat-skill-controls__style">
             <NewChatCompactSelect
-              label="风格"
+              label={t("skill.style")}
               value={style}
               options={styleOptions}
               onChange={setStyle}
-              placeholder="选择风格"
+              placeholder={t("skill.selectStyle")}
               disabled={disabled}
             />
           </div>
           <div className="new-chat-skill-controls__model">
             <NewChatCompactSelect
-              label="模型"
+              label={t("skill.model")}
               hideLabel
               value={model}
               options={modelOptions}
               onChange={setModel}
-              placeholder="选择模型"
+              placeholder={t("skill.selectModel")}
               loading={capabilityLoading}
               error={capabilityError}
               disabled={disabled}

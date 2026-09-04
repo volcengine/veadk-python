@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { TFunction } from "i18next";
+import { useTranslation } from "react-i18next";
 import {
   cloudRegionOptions,
   defaultCloudRegion,
@@ -33,11 +35,15 @@ import "./LibraryView.css";
 
 export type LibraryTab = "skills" | "knowledge" | "artifacts";
 
-const LIBRARY_TABS: ReadonlyArray<{ id: LibraryTab; label: string; panelId: string }> = [
-  { id: "skills", label: "技能库", panelId: "library-skills-panel" },
-  { id: "knowledge", label: "知识库", panelId: "library-knowledge-panel" },
-  { id: "artifacts", label: "产物", panelId: "library-artifacts-panel" },
-];
+function libraryTabs(
+  t: TFunction,
+): ReadonlyArray<{ id: LibraryTab; label: string; panelId: string }> {
+  return [
+    { id: "skills", label: t("library.tabs.skills"), panelId: "library-skills-panel" },
+    { id: "knowledge", label: t("library.tabs.knowledge"), panelId: "library-knowledge-panel" },
+    { id: "artifacts", label: t("library.tabs.artifacts"), panelId: "library-artifacts-panel" },
+  ];
+}
 
 export interface LibraryViewProps {
   cloudProvider: CloudProvider;
@@ -66,11 +72,15 @@ export function LibraryView({
   onArtifactActivate,
   onArtifactSourceOpen,
 }: LibraryViewProps) {
+  const { t } = useTranslation("workspaceTools");
+  const tabs = useMemo(() => libraryTabs(t), [t]);
+  const defaultSkillTitle = t("library.tabs.skills");
   const configuredRegion = isSupportedCloudRegion(studioRegion)
     ? studioRegion
     : defaultCloudRegion(cloudProvider);
   const [region, setRegion] = useState<CloudRegion>(configuredRegion);
-  const [skillPageTitle, setSkillPageTitle] = useState("技能库");
+  const [skillPageTitle, setSkillPageTitle] = useState(defaultSkillTitle);
+  const previousDefaultSkillTitleRef = useRef(defaultSkillTitle);
   const [knowledgeDetailActive, setKnowledgeDetailActive] = useState(false);
   const [mountedTabs, setMountedTabs] = useState<ReadonlySet<LibraryTab>>(
     () => new Set<LibraryTab>(["skills", activeTab]),
@@ -83,9 +93,12 @@ export function LibraryView({
   const [artifactLoading, setArtifactLoading] = useState(false);
   const [artifactError, setArtifactError] = useState("");
   const artifactCandidateSnapshot = useMemo(() => {
-    const candidates = collectArtifactIngestCandidates(artifactSources);
+    const candidates = collectArtifactIngestCandidates(
+      artifactSources,
+      t("library.untitledSession"),
+    );
     return { key: JSON.stringify(candidates), candidates };
-  }, [artifactSources]);
+  }, [artifactSources, t]);
   const artifactCandidateCache = useRef(artifactCandidateSnapshot);
   if (artifactCandidateCache.current.key !== artifactCandidateSnapshot.key) {
     artifactCandidateCache.current = artifactCandidateSnapshot;
@@ -96,6 +109,14 @@ export function LibraryView({
   useEffect(() => {
     setRegion(configuredRegion);
   }, [configuredRegion]);
+
+  useEffect(() => {
+    const previousDefault = previousDefaultSkillTitleRef.current;
+    setSkillPageTitle((current) => current === previousDefault
+      ? defaultSkillTitle
+      : current);
+    previousDefaultSkillTitleRef.current = defaultSkillTitle;
+  }, [defaultSkillTitle]);
 
   useEffect(() => {
     artifactActivateRef.current = onArtifactActivate;
@@ -113,9 +134,9 @@ export function LibraryView({
   useEffect(() => {
     const activeTitle = activeTab === "skills"
       ? skillPageTitle
-      : LIBRARY_TABS.find((tab) => tab.id === activeTab)?.label || "资源库";
+      : tabs.find((tab) => tab.id === activeTab)?.label || t("library.title");
     onPageTitleChange?.(activeTitle);
-  }, [activeTab, onPageTitleChange, skillPageTitle]);
+  }, [activeTab, onPageTitleChange, skillPageTitle, t, tabs]);
 
   useEffect(() => {
     if (activeTab === "artifacts") {
@@ -156,31 +177,31 @@ export function LibraryView({
   const toolbarLeading = (
     <ResourceTabs
       idPrefix="library"
-      ariaLabel="资源库分类"
+      ariaLabel={t("library.categoryAria")}
       value={activeTab}
-      items={LIBRARY_TABS}
+      items={tabs}
       onChange={selectTab}
     />
   );
   const regionFilter = (id: string) => (
     <ResourceFilterSelect
       id={id}
-      ariaLabel="区域"
+      ariaLabel={t("library.regionAria")}
       value={region}
       options={regionOptions}
       onChange={setRegion}
     />
   );
   const detailActive = activeTab === "skills"
-    ? skillPageTitle !== "技能库"
+    ? skillPageTitle !== defaultSkillTitle
     : activeTab === "knowledge" && knowledgeDetailActive;
 
   return (
-    <ResourcePageShell className={`library-view${detailActive ? " is-detail" : ""}`} aria-label="资源库">
+    <ResourcePageShell className={`library-view${detailActive ? " is-detail" : ""}`} aria-label={t("library.title")}>
       {!detailActive ? (
         <ResourcePageHeader
           className="library-view__header"
-          title="资源库"
+          title={t("library.title")}
         />
       ) : null}
       <div className="library-panels">

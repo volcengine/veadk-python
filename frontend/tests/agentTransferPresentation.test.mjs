@@ -36,7 +36,7 @@ test("models transfer_to_agent without rendering a separate event row", () => {
 test("groups child Agent work in an identified muted execution card", () => {
   assert.match(appSource, /className="subagent-run-label"/);
   assert.match(appSource, /className="subagent-run-handoff"/);
-  assert.match(appSource, /<span>智能体移交<\/span>/);
+  assert.match(appSource, /<span>\{t\("conversation\.agentTransfer"\)\}<\/span>/);
   assert.match(appSource, /className="subagent-run-title">\{agentDisplayName\}/);
   assert.match(appSource, /className="subagent-run-description"/);
   assert.match(appSource, /turn--subagent/);

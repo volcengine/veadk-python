@@ -1,0 +1,906 @@
+{
+  "common": {
+    "back": "返回",
+    "cancel": "取消",
+    "deploy": "部署",
+    "delete": "删除",
+    "loading": "读取中…",
+    "next": "下一步",
+    "notSupported": "暂不支持",
+    "previous": "上一步",
+    "required": "必填",
+    "retry": "重试",
+    "actions": "操作",
+    "value": "值",
+    "disabled": "关闭",
+    "enabled": "已开启",
+    "none": "无",
+    "close": "关闭",
+    "description": "描述",
+    "send": "发送"
+  },
+  "validation": {
+    "agentName": {
+      "required": "名称为必填项",
+      "reserved": "user 是 Google ADK 保留名称，请使用其他名称",
+      "characters": "名称须以英文字母或下划线开头，且只能包含英文字母、数字和下划线"
+    },
+    "runtimeName": {
+      "required": "Runtime 名称为必填项",
+      "characters": "Runtime 名称只能包含英文字母、数字、下划线和连字符",
+      "length": "Runtime 名称长度须为 4-64 个字符"
+    }
+  },
+  "defaults": {
+    "description": "一个基于 VeADK 构建的智能助手，理解用户意图并调用合适的工具完成任务。",
+    "instruction": "你是一个专业、可靠的智能助手。\n\n你的目标是准确理解用户的需求，并给出条理清晰、简洁有用的回答。\n\n约束：\n- 信息不足时主动提问澄清，不要臆造事实。\n- 需要时合理调用可用的工具，并说明关键结论。\n- 保持礼貌、专业的语气。"
+  },
+  "helpers": {
+    "requestFailed": "请求失败 ({{status}}){{detail}}",
+    "a2aSpaces": {
+      "credentialsMissing": "服务端未配置云厂商 AK/SK，无法访问 AgentKit 智能体中心",
+      "loginRequired": "请先登录以访问 AgentKit 智能体中心"
+    },
+    "vikingKnowledge": {
+      "credentialsMissing": "服务端未配置云厂商 AK/SK，无法访问 VikingDB 知识库",
+      "loginRequired": "请先登录以访问 VikingDB 知识库"
+    },
+    "vikingMemory": {
+      "credentialsMissing": "服务端未配置云厂商 AK/SK，无法访问 VikingDB 记忆库",
+      "loginRequired": "请先登录以访问 VikingDB 记忆库"
+    },
+    "mcpGateway": {
+      "missingHttpTool": "请返回“添加 MCP 工具”并添加至少一个 HTTP MCP 服务；MCP 稳定性治理不支持 stdio 服务。",
+      "missingUrl": "已添加的 HTTP MCP 工具缺少有效服务地址，请返回“添加 MCP 工具”补充后再发布。"
+    },
+    "customModel": {
+      "fallbackName": "自定义模型",
+      "apiKeyLabel": "{{name}} 模型 API Key"
+    },
+    "deploymentEnv": {
+      "serverInjected": "由服务端注入",
+      "selectedApiKeyPlaceholder": "由所选 API Key 注入",
+      "mcpInjectedComment": "由已添加的 MCP 工具注入",
+      "restoredPlaceholder": "由 Studio 服务端安全恢复",
+      "generatedMcpPlaceholder": "由已添加的 HTTP MCP 工具自动生成",
+      "restoredHelp": "更新时由 Studio 服务端合并 MCP 地址与认证，不向浏览器返回旧密钥。",
+      "mergedMcpHelp": "Studio 服务端自动合并 MCP 地址与可选认证，不向浏览器返回旧密钥。",
+      "listSeparator": "、",
+      "requirementHint": "优化项“{{labels}}”依赖此配置。",
+      "requiredBy": "优化项“{{labels}}”依赖此配置，请填写 {{key}}。",
+      "required": "请填写 {{label}}（{{key}}）。",
+      "invalidJson": "JSON 格式不正确"
+    },
+    "drafts": {
+      "unsupportedVersion": "本机草稿版本暂不受支持，请升级 Studio 后重试。",
+      "invalidFormat": "本机草稿数据格式无效。",
+      "readFailed": "无法读取本机草稿，浏览器中的草稿数据可能已损坏。",
+      "quotaExceeded": "浏览器存储空间不足，草稿未保存。请删除不需要的草稿或清理此站点的浏览器存储后重试。",
+      "writeRejected": "浏览器拒绝保存草稿，请检查站点存储权限后重试。"
+    },
+    "skills": {
+      "searchFailed": "搜索失败 ({{status}})",
+      "downloadFailed": "下载技能失败 ({{status}})",
+      "agentKitRequestFailed": "AgentKit Skills 请求失败",
+      "missingManifest": "{{location}} 缺少 SKILL.md",
+      "invalidParentPath": "{{location}} 包含非法路径（..）：{{path}}",
+      "invalidPath": "{{location}} 包含非法路径：{{path}}",
+      "localDescription": "本地 Skill",
+      "folderSource": "文件夹",
+      "noManifest": "{{location}} 中未发现 SKILL.md"
+    },
+    "zip": {
+      "invalid": "无效的 zip：找不到 EOCD",
+      "tooManyFiles": "zip 文件数不能超过 {{count}} 个",
+      "tooLarge": "zip 解压后的内容过大"
+    }
+  },
+  "intelligentDeployment": {
+    "back": "返回开发会话",
+    "runtimeName": "Runtime 名称",
+    "runtimeNameExists": "Runtime 名称已存在，请更换后重试",
+    "checkingRuntimeName": "正在检查 Runtime 名称",
+    "verifiedSource": "已验证源码",
+    "deployableSource": "可部署源码",
+    "verifiedByCodex": "已通过 Codex 云端验证",
+    "entryPoint": "入口",
+    "files": "文件",
+    "validationReport": "验证报告",
+    "verifiedHint": "源码由服务端从已验证交付物物化，浏览器文件不能替换。",
+    "unverifiedHint": "源码已由服务端安全物化，部署前请确认 Runtime 配置。",
+    "env": {
+      "requiredPlaceholder": "请输入 {{key}}",
+      "optionalPlaceholder": "可选：{{key}}"
+    }
+  },
+  "codePackage": {
+    "name": "代码包",
+    "back": "返回创建方式",
+    "reading": "正在读取代码包",
+    "readingEllipsis": "正在读取代码包…",
+    "uploadFirst": "请先上传代码包",
+    "uploadAriaLabel": "代码包上传",
+    "upload": "上传代码包",
+    "reupload": "重新上传代码包",
+    "uploadPrompt": "请上传代码包",
+    "filesRecognized": "已识别 {{count}} 个文件，点击区域可重新上传",
+    "dropHint": "点击或拖拽上传，支持 .zip 格式，最大 50 MB；可使用 app.py，或由 agentkit.yaml 声明入口",
+    "viewFiles": "查看文件",
+    "chooseFile": "选择代码包",
+    "errors": {
+      "invalidFormat": "请选择 .zip 格式的代码包。",
+      "tooLarge": "代码包不能超过 50 MB。",
+      "invalidPath": "压缩包包含非法路径：{{name}}",
+      "empty": "压缩包中没有可部署的文件。",
+      "tooManyFiles": "代码包文件数不能超过 {{count}} 个。",
+      "duplicateFile": "代码包包含重复文件：{{path}}",
+      "manifestParse": "agentkit.yaml 无法解析：{{detail}}",
+      "manifestRoot": "agentkit.yaml 根节点必须是对象。",
+      "manifestCommon": "agentkit.yaml 的 common 必须是对象。",
+      "entryPointType": "agentkit.yaml 的 common.entry_point 必须是文件路径。",
+      "entryPointInvalid": "agentkit.yaml 的 common.entry_point 不是有效文件路径。",
+      "entryPointMissing": "代码包中不存在 agentkit.yaml 声明的启动入口：{{entryPoint}}",
+      "defaultEntryPointMissing": "代码包根目录必须包含 app.py，或在 agentkit.yaml 的 common.entry_point 中声明已有入口。"
+    }
+  },
+  "buildCanvas": {
+    "label": "Agent 执行画布",
+    "readOnlyLabel": "只读 Agent 执行画布",
+    "minimapLabel": "执行流程缩略图",
+    "rootAgent": "主 Agent",
+    "unnamedStep": "未命名步骤",
+    "terminals": { "input": "用户请求", "output": "最终回复" },
+    "edges": { "then": "然后", "continueLoop": "继续循环", "call": "调用" },
+    "patterns": {
+      "llm": { "label": "智能体", "description": "理解任务并直接完成一个具体工作" },
+      "sequential": { "label": "分步协作", "description": "内部步骤按照顺序依次执行" },
+      "parallel": { "label": "同时处理", "description": "内部步骤同时工作，完成后统一汇总" },
+      "loop": { "label": "循环执行", "description": "重复执行内部步骤，直到满足停止条件" },
+      "a2a": { "label": "远程智能体", "description": "调用已经存在的远程 Agent" }
+    },
+    "actions": {
+      "insertHere": "在这里插入步骤",
+      "deleteNamed": "删除 {{name}}",
+      "deleteNode": "删除节点",
+      "addSubagent": "添加子 Agent",
+      "addParallelStep": "添加一个同时处理的步骤",
+      "addLoopStep": "添加循环步骤",
+      "addNextStep": "添加下一个步骤",
+      "addFirst": "添加到最前",
+      "addLast": "添加到最后"
+    }
+  },
+  "intelligent": {
+    "title": "智能模式",
+    "subtitle": "描述目标后，沙箱中的 Codex 会判断你的意图，完成构建、调试和临时云端验证。",
+    "model": {
+      "label": "模型",
+      "placeholder": "选择模型",
+      "retiring": "即将下线",
+      "currentConfiguration": "当前配置",
+      "loadError": "加载模型列表失败"
+    },
+    "availability": {
+      "checking": "正在检查智能开发能力…",
+      "unavailable": "当前无法使用智能模式，请返回后重试。"
+    },
+    "goal": {
+      "title": "从目标开始",
+      "continueTitle": "继续优化项目",
+      "hint": "只需说明 Agent 要解决的问题；如有影响结果的关键信息，会在开始前向你确认。",
+      "continueHint": "说明这次要调整的内容，完成后会保存为新版本。",
+      "basedOn": "基于",
+      "clearSelection": "取消选择",
+      "label": "目标描述",
+      "optimizationLabel": "优化目标",
+      "placeholder": "例如：创建一个能读取销售数据、生成周报并校验输出格式的 Agent",
+      "optimizationPlaceholder": "例如：增加数据来源标注，并在信息不足时先向用户确认"
+    },
+    "actions": {
+      "preparing": "准备中…",
+      "build": "开始构建",
+      "optimize": "开始优化"
+    },
+    "preparation": {
+      "accepted": "目标已收到，马上开始实现",
+      "preparing": "正在创建任务环境…",
+      "starting": "环境已就绪，正在启动 Codex…",
+      "next": "接下来会先梳理目标和实现方式，再编写、运行和验证 Agent。"
+    }
+  },
+  "projectLibrary": {
+    "title": "已保存项目",
+    "description": "选择已有版本继续优化，或查看、下载和部署源码。",
+    "refresh": "刷新项目列表",
+    "checkingStorage": "正在检查项目存储…",
+    "unavailableTitle": "暂时无法读取项目",
+    "storageCheckError": "无法确认项目存储状态，请稍后重试。",
+    "storageNotConfigured": "项目存储尚未配置。",
+    "loadingMigrated": "正在读取已迁移项目…",
+    "loadingSaved": "正在读取已保存项目…",
+    "loadingVersions": "正在读取项目版本…",
+    "unknownTime": "时间未知",
+    "sourceDownloaded": "源码已下载。",
+    "projectSummary_one": "{{count}} 个版本 · 更新于 {{time}}",
+    "projectSummary_other": "{{count}} 个版本 · 更新于 {{time}}",
+    "versionSummary_one": "{{time}} · {{count}} 个文件",
+    "versionSummary_other": "{{time}} · {{count}} 个文件",
+    "noVersionDescription": "暂无版本描述",
+    "latestVersion": "最新版本",
+    "verified": "已验证",
+    "pendingVerification": "待确认",
+    "viewSource": "查看源码",
+    "download": "下载",
+    "downloading": "下载中…",
+    "optimize": "去优化",
+    "optimizeUnavailable": "去优化，暂不支持",
+    "errors": {
+      "projects": "无法读取已保存项目。",
+      "source": "无法读取项目源码。",
+      "versions": "无法读取项目版本。",
+      "download": "下载源码失败。",
+      "prepareDeployment": "无法准备部署源码。",
+      "deleteVersion": "删除项目版本失败。",
+      "migrated": "无法读取已迁移项目",
+      "saved": "无法读取已保存项目"
+    },
+    "empty": {
+      "migratedTitle": "还没有已迁移的项目",
+      "savedTitle": "还没有已保存的项目",
+      "migratedDescription": "完成首次迁移后，源码会自动保存在这里。",
+      "savedDescription": "完成首次构建后，源码会自动保存在这里。",
+      "noVersions": "这个项目还没有可用版本。"
+    },
+    "compare": {
+      "selected": "已选择 {{count}}/2",
+      "selectedLabel": "已选择",
+      "select": "选择",
+      "view": "查看对比",
+      "start": "对比版本"
+    },
+    "delete": {
+      "title": "删除这个版本？",
+      "onlyVersion": "“{{name}}”只有这一个版本，删除后项目也会移除。此操作无法撤销。",
+      "description": "该版本的源码和验证记录将永久删除，其他版本不受影响。",
+      "confirm": "删除版本"
+    }
+  },
+  "modePicker": {
+    "title": "选择创建方式",
+    "subtitle": "以不同模式构建您的智能体",
+    "features": "特性",
+    "quick": {
+      "title": "快速模式",
+      "description": "动态派生子智能体自主完成任务",
+      "features": {
+        "dynamicSubagents": "动态派生子智能体",
+        "autonomousPlanning": "自主规划执行",
+        "collaboration": "多智能体协作",
+        "summary": "自动汇总结果",
+        "skills": "按需调用技能",
+        "trace": "任务过程可追踪"
+      }
+    },
+    "traditional": {
+      "title": "传统模式",
+      "description": "高度自定义您的智能体结构",
+      "features": {
+        "visualConfig": "可视化配置",
+        "migration": "存量智能体迁移",
+        "debugging": "实时调试",
+        "optimization": "可选性能优化",
+        "parameters": "精细参数控制"
+      }
+    }
+  },
+  "promptEditor": {
+    "placeholder": "输入系统提示词；键入 ## 加空格可创建二级标题…",
+    "toolbar": {
+      "undo": "撤销 {{shortcut}}",
+      "redo": "重做 {{shortcut}}",
+      "paragraph": "正文",
+      "quote": "引用",
+      "heading": "标题 {{level}}",
+      "selectBlockType": "选择文本类型",
+      "blockType": "文本类型",
+      "bold": "加粗",
+      "removeBold": "取消加粗",
+      "italic": "斜体",
+      "removeItalic": "取消斜体",
+      "bulletedList": "无序列表",
+      "numberedList": "有序列表"
+    }
+  },
+  "skills": {
+    "local": {
+      "duplicatesSkipped": "已跳过重复技能：{{names}}",
+      "invalidDrop": "请拖入包含 SKILL.md 的文件夹或一个 .zip 文件",
+      "readError": "读取失败：{{detail}}",
+      "dropLabel": "拖入文件夹或 ZIP，自动识别 Skill",
+      "hint": "每个技能需包含 SKILL.md。支持包含多个技能的目录。",
+      "reading": "正在读取文件…",
+      "fileCount": "本地 · {{count}} 个文件"
+    },
+    "hub": {
+      "searchError": "搜索失败，请稍后重试。",
+      "searchPlaceholder": "搜索火山 Find Skill 技能广场，例如 数据分析、PDF…",
+      "search": "搜索",
+      "searching": "正在搜索…",
+      "noResults": "没有找到匹配的技能，换个关键词试试。",
+      "hint": "输入关键词搜索火山 Find Skill 技能广场，所选技能会在生成项目时下载到 skills/ 目录。"
+    },
+    "space": {
+      "loadError": "加载失败",
+      "loadingSpaces": "正在加载 AgentKit Skills 中心…",
+      "noSpaces": "此账号下没有 AgentKit Skills 中心。",
+      "selectSpace": "选择 AgentKit Skills 中心",
+      "openConsole": "在火山引擎控制台打开",
+      "loadingSkills": "正在加载技能列表…",
+      "noSkills": "此 AgentKit Skills 中心暂无技能。"
+    }
+  },
+  "workflow": {
+    "unnamedNode": "未命名节点",
+    "editInstruction": "点击编辑指令…",
+    "sections": {
+      "info": "工作流信息",
+      "execution": "执行方式",
+      "nodes": "节点",
+      "nodeConfig": "节点配置"
+    },
+    "types": {
+      "sequential": { "label": "顺序", "description": "节点依次执行" },
+      "parallel": { "label": "并行", "description": "节点同时执行" },
+      "loop": { "label": "循环", "description": "节点循环执行" }
+    },
+    "placeholders": {
+      "description": "这个工作流做什么…",
+      "agentDescription": "这个 Agent 做什么…",
+      "instruction": "你是一个…"
+    },
+    "errors": {
+      "workflowNameUnique": "名称须与 Agent 节点名称保持唯一",
+      "agentNameUnique": "Agent 名称在当前工作流中必须唯一"
+    },
+    "dragHint": "拖拽到画布，或点击下方按钮添加",
+    "agentNode": "Agent 节点",
+    "addNode": "添加节点",
+    "connectHint": "拖拽节点的圆点连线以表达执行顺序。",
+    "create": "创建工作流",
+    "deleteNode": "删除节点",
+    "nameHelp": "仅使用英文字母、数字和下划线，且名称保持唯一。",
+    "instruction": "指令 (instruction)",
+    "tools": "工具 (逗号分隔)",
+    "nodeId": "节点 ID",
+    "empty": {
+      "selectNode": "选择一个节点以编辑其配置",
+      "summary": "共 {{nodes}} 个节点 · {{edges}} 条连线"
+    }
+  },
+  "workbench": {
+    "ariaLabel": "快速模式创建",
+    "progress": "快速模式创建进度",
+    "steps": {
+      "agent": { "label": "智能体", "title": "基本信息", "description": "设置智能体的名称、用途、行为方式与能力" },
+      "environment": { "label": "执行环境", "title": "配置执行环境", "description": "选择默认环境或已构建的自定义环境" },
+      "deployment": { "label": "部署偏好", "title": "部署偏好", "description": "定义 AgentKit 云上参数" }
+    },
+    "model": {
+      "label": "模型",
+      "source": "模型来源",
+      "name": "模型名称",
+      "provider": "服务商 Provider",
+      "volcengineArk": "火山方舟",
+      "custom": "自定义",
+      "gateway": "模型网关",
+      "comingSoon": "待上线",
+      "currentApiKey": "当前 API Key",
+      "loadingApiKeys": "正在加载 API Key",
+      "selectApiKey": "选择 API Key",
+      "searchApiKeys": "搜索 API Key 名称",
+      "noApiKeys": "暂无可用 API Key",
+      "loadingModels": "正在加载模型",
+      "selectModel": "选择模型",
+      "searchModels": "搜索名称、Model ID 或服务商",
+      "noModels": "没有可用的模型",
+      "apiKeyPlaceholder": "请输入模型 API Key",
+      "credentialsLoadError": "模型凭据加载失败",
+      "modelsLoadError": "模型列表加载失败"
+    },
+    "identity": {
+      "unnamedPool": "未命名用户池",
+      "currentPool": "{{value}}（当前用户池）",
+      "userPool": "用户池",
+      "loading": "正在加载用户池",
+      "placeholder": "请选择用户池",
+      "search": "搜索用户池",
+      "empty": "当前账号下暂无 Identity 用户池",
+      "currentHint": "当前 Studio 的登录 JWT 将透传访问此 Runtime",
+      "mismatchHint": "所选用户池不是当前 Studio 使用的用户池，部署后无法从 Studio 调用此 Runtime",
+      "selectionHint": "当前 Studio 使用的用户池已在列表中标注"
+    },
+    "agent": {
+      "namePlaceholder": "输入智能体名称",
+      "descriptionPlaceholder": "说明这个智能体可以做什么",
+      "prompt": "提示词",
+      "promptPlaceholder": "定义角色、目标和行为边界",
+      "skills": "技能",
+      "addSkill": "添加技能"
+    },
+    "validation": {
+      "descriptionRequired": "请输入描述",
+      "promptRequired": "请输入提示词",
+      "modelRequired": "请选择模型",
+      "instanceIntegers": "最小实例数必须为大于等于 0 的整数，最大实例数必须为大于 0 的整数",
+      "instanceOrder": "最小实例数不能大于最大实例数",
+      "userPoolRequired": "请选择用于 Runtime 鉴权的用户池"
+    },
+    "deployment": {
+      "runtimeName": "Runtime 名称",
+      "runtimeNameUpdateHint": "更新时保持现有 Runtime 名称不变",
+      "runtimeNameHint": "仅支持英文字母、数字、下划线和连字符",
+      "region": "发布区域",
+      "authentication": "鉴权方式",
+      "apiKeyDescription": "默认方式，使用 Runtime API Key 访问",
+      "userPoolDescription": "使用 Identity 用户池签发的 JWT",
+      "sessionStorage": "会话存储",
+      "inMemoryStorage": "In-memory 临时存储",
+      "backends": { "sqlite": "SQLite 文件", "mysql": "MySQL", "postgresql": "PostgreSQL" },
+      "instances": "实例设置",
+      "minInstances": "最小实例数",
+      "maxInstances": "最大实例数",
+      "inMemoryHint": "为避免多实例间会话丢失，推荐将 Runtime 固定为 1～1",
+      "networkMode": "网络模式",
+      "network": { "public": "公网", "private": "私网", "both": "公网与私网" },
+      "subnetIds": "子网 ID（可选，多个用逗号分隔）",
+      "sharedInternet": "VPC 内共享公网出口",
+      "sharedInternetHint": "允许私网 Runtime 通过共享出口访问公网",
+      "evaluationSets": "评测集",
+      "createEvaluationSets": "自动创建评测集",
+      "evaluationSetsHint": "部署成功后自动创建 Good Case 和 Bad Case 评测集",
+      "resources": "资源配置",
+      "complete": "部署已完成",
+      "preparing": "正在准备部署…"
+    },
+    "environmentVariables": {
+      "title": "环境变量",
+      "add": "添加变量",
+      "nameAriaLabel": "环境变量名称",
+      "valueAriaLabel": "{{name}} 的值",
+      "deleteNamed": "删除 {{name}}"
+    },
+    "actions": {
+      "updateAgain": "再次更新",
+      "deployAgain": "重新部署",
+      "updateAndPublish": "更新并发布"
+    }
+  },
+  "traditional": {
+    "actions": {
+      "addSubagent": "添加子 Agent",
+      "clearRoot": "清空根 Agent",
+      "clearRootConfirmation": "清空根 Agent 的全部配置和子 Agent？此操作无法撤销。"
+    },
+    "workspace": {
+      "progress": "Agent 创建进度",
+      "modes": { "build": "架构", "validate": "调试", "optimize": "优化", "environment": "环境", "publish": "发布" },
+      "titles": {
+        "build": "个性化您的智能体架构",
+        "validate": "调试您的智能体",
+        "optimize": "为您的智能体选择优化项",
+        "environment": "配置云上环境",
+        "publish": "准备好部署您的智能体"
+      }
+    },
+    "sections": {
+      "type": { "label": "Agent 类型", "hint": "选择 Agent 类型" },
+      "basic": { "label": "基本信息", "hint": "名称、描述与系统提示词" },
+      "model": { "label": "模型配置", "hint": "模型与服务（可选）" },
+      "tools": { "label": "工具", "hint": "可调用的能力" },
+      "skills": { "label": "技能", "hint": "声明式技能" },
+      "knowledge": { "label": "知识库", "hint": "外部知识检索" },
+      "memory": { "label": "记忆", "hint": "短期与长期记忆" },
+      "subagents": { "label": "子 Agent", "hint": "嵌套协作" },
+      "review": { "label": "完成", "hint": "预览并创建" }
+    },
+    "agentTypes": {
+      "ariaLabel": "Agent 类型",
+      "remoteChildOnly": "远程智能体只能作为子步骤使用",
+      "llm": { "label": "智能体", "fullLabel": "LLM 智能体", "description": "大模型驱动，自主完成任务" },
+      "sequential": { "label": "分步协作", "fullLabel": "顺序型智能体", "description": "子 Agent 按顺序依次执行" },
+      "parallel": { "label": "同时处理", "fullLabel": "并行型智能体", "description": "子 Agent 并行执行后汇总" },
+      "loop": { "label": "循环执行", "fullLabel": "循环型智能体", "description": "子 Agent 循环执行到满足条件" },
+      "a2a": { "label": "远程智能体", "fullLabel": "远程 Agent", "description": "通过 A2A 协议调用远程 Agent" }
+    },
+    "basic": {
+      "agentName": "Agent 名称",
+      "name": "名称",
+      "agentDescription": "智能体描述",
+      "descriptionPlaceholder": "简要描述这个 Agent 的用途，便于团队识别…",
+      "nameHelp": "遵循 Google ADK 命名规则，且在执行流程中保持唯一。",
+      "rootDescriptionHelp": "完整描述会保留；部署时会自动整理为符合 Runtime 规范的单行描述。",
+      "descriptionHelp": "描述会显示在 Agent 列表与选择器中。",
+      "orchestratorHelp": "这是一个协作容器，本身不生成回答。请在左侧画布中添加任务步骤，并通过拖拽调整它们的位置。",
+      "maxIterations": "最大轮次",
+      "maxIterationsHelp": "循环编排反复执行子 Agent，直到满足条件或达到该轮次上限。",
+      "agentCenter": "AgentKit 智能体中心",
+      "agentCenterHelp": "远程 Agent 的名称、描述和能力来自中心返回的 Agent Card。系统会根据每轮任务动态发现并挂载匹配的 Agent。",
+      "moreOptions": "更多选项",
+      "systemPrompt": "系统提示词",
+      "loadingMarkdown": "正在加载 Markdown 编辑器…",
+      "markdownHelp": "支持 Markdown 快捷输入，例如键入 ## 加空格创建二级标题。",
+      "unnamed": "未命名",
+      "unnamedAgent": "未命名智能体"
+    },
+    "validation": {
+      "remoteRoot": "远程 Agent 只能作为子 Agent",
+      "missingRegistry": "请选择 AgentKit 智能体中心",
+      "name": {
+        "required": "名称为必填项",
+        "reserved": "user 是 Google ADK 保留名称，请使用其他名称",
+        "characters": "名称须以英文字母或下划线开头，且只能包含英文字母、数字和下划线"
+      },
+      "duplicateName": "Agent 名称在当前结构中必须唯一",
+      "missingDescription": "描述为必填项",
+      "mcpAuthRequired": "MCP 地址变化后需要确认认证方式",
+      "missingSubagent": "缺少子 Agent",
+      "missingPrompt": "系统提示词为必填项",
+      "missingSubagentDetail": "{{type}}至少需要添加一个子 Agent 后才能调试或发布。",
+      "problem": "{{name}}：{{problem}}"
+    },
+    "ai": {
+      "ariaLabel": "AI 自动填写 Agent 配置",
+      "minimumLength": "请至少输入 {{count}} 个字符。",
+      "replaceConfirmation": "生成的新配置会替换当前画布和属性，确定继续吗？",
+      "placeholder": "描述目标，使用 {{model}} 模型一键生成配置",
+      "generate": "智能生成",
+      "generating": "正在智能生成",
+      "success": "生成成功",
+      "regenerate": "重新生成",
+      "failed": "智能生成失败"
+    },
+    "debug": {
+      "ariaLabel": "智能体调试工作区",
+      "unavailable": "当前后端暂不支持生成 Agent 调试运行。",
+      "baseline": "基准组",
+      "comparison": "对照组 {{count}}",
+      "selectModel": "请选择模型",
+      "enterDescription": "请输入描述",
+      "enterPrompt": "请输入系统提示词",
+      "duplicateConfiguration": "测试配置不能重复",
+      "starting": "启动中…",
+      "applyAndRestart": "应用并重启",
+      "restart": "重新启动",
+      "start": "启动环境",
+      "defaultModel": "默认模型",
+      "testConfiguration": "测试配置",
+      "deleteVariant": "删除 {{name}}",
+      "deleteVariantGroup": "删除对照组",
+      "creatingEnvironment": "正在创建测试环境…",
+      "configurationChanged": "配置已变更，请重新启动环境。",
+      "ready": "环境已就绪",
+      "readyHint": "发送消息以比较智能体回复。",
+      "startHint": "先完善配置，再启动环境。",
+      "viewTraceNamed": "查看 {{name}} 的调用链路",
+      "traceUnavailable": "发送消息后可查看调用链路",
+      "trace": "调用链路",
+      "useConfiguration": "使用此配置",
+      "finishConfiguration": "完成配置",
+      "finishAndStart": "完成并启动",
+      "currentAgentModel": "当前 Agent 模型",
+      "configurationHint": "修改仅用于本次对比，选择使用后才会进入部署流程。",
+      "messagePlaceholder": "向已启动的测试环境发送消息…",
+      "startOneFirst": "请先启动至少一个测试环境",
+      "addVariant": "添加对照组",
+      "traceTitle": "调用链路 · {{name}}",
+      "leaveTitle": "离开调试？",
+      "leaveDescription": "离开调试页面后，当前环境将被清理。您可以通过重新启动环境进行新的测试。",
+      "cleaning": "清理中…",
+      "confirmLeave": "确定离开",
+      "closeLeaveConfirmation": "关闭离开调试确认"
+    },
+    "optimization": {
+      "ariaLabel": "智能体优化选项",
+      "scenario": "优化场景",
+      "components": "优化组件",
+      "bytePlusUnavailable": "BytePlus 账号暂不支持 Harness Sidecar 优化项。请保持优化项为空后继续部署，普通 BytePlus 智能体不受影响。",
+      "releaseScenario": "优化场景：{{profile}}",
+      "profiles": {
+        "default": { "label": "自定义", "description": "按需选择组件，不勾选时不启动 Sidecar。" },
+        "ops": { "label": "运维场景", "description": "适用于运维诊断、数据库、日志和监控 MCP。" }
+      },
+      "groups": { "quality": "提升回答质量", "cost": "降低运行成本", "stability": "增强运行稳定性" },
+      "options": {
+        "context_engine": { "label": "上下文治理", "description": "治理上下文组装、任务锚定和上下文预算。" },
+        "compressor": { "label": "上下文与结果压缩", "description": "压缩长上下文和大型工具结果，降低 Token 成本。" },
+        "verifier": { "label": "回答校验与修复", "description": "校验证据和回答，在失败时执行修复或告警。" },
+        "long_run_control": { "label": "Goal 任务控制", "description": "管理 Goal 任务的进度、续跑和结束条件。" },
+        "mcp_resilience": { "label": "MCP 稳定性治理", "description": "治理连接、超时、空结果、大返回和调用预算；默认包含 SQL 只读保护。" }
+      }
+    },
+    "model": {
+      "label": "模型",
+      "source": "模型来源",
+      "volcanoArk": "火山方舟",
+      "volcengineArk": "火山方舟",
+      "bytePlusModelArk": "BytePlus ModelArk",
+      "custom": "自定义",
+      "gateway": "模型网关",
+      "comingSoon": "待上线",
+      "configuration": "模型配置",
+      "name": "模型名称",
+      "provider": "服务商 Provider",
+      "liteLlmProviders": "LiteLLM 支持列表",
+      "apiKeyPlaceholder": "请输入模型 API Key",
+      "available": "已开通",
+      "retiring": "即将下线",
+      "notActivated": "未开通",
+      "unavailable": "暂不可用",
+      "apiKeyLoadError": "加载 Ark API Key 失败",
+      "loadingApiKeys": "正在加载 API Key…",
+      "selectApiKey": "选择 API Key",
+      "currentApiKey": "当前 API Key",
+      "apiKeyList": "API Key 列表",
+      "searchApiKey": "搜索 API Key",
+      "searchApiKeyName": "搜索 API Key 名称",
+      "noApiKeys": "暂无可用 API Key",
+      "noMatchingApiKey": "没有匹配的 API Key",
+      "loading": "正在加载模型…",
+      "loaded": "已加载 {{count}} 个模型",
+      "loadError": "加载模型失败",
+      "selectModel": "选择模型",
+      "selectProviderModel": "选择服务商模型",
+      "providerModels": "服务商模型",
+      "search": "搜索模型",
+      "searchPlaceholder": "搜索名称、Model ID 或服务商",
+      "noMatches": "没有匹配的模型",
+      "empty": "暂无可用模型",
+      "unknownStatus": "未知状态",
+      "refresh": "刷新",
+      "refreshing": "刷新中…",
+      "activate": "开通",
+      "activateAction": "前往开通",
+      "currentConfiguration": "当前配置"
+    },
+    "tools": {
+      "builtIn": "内置工具",
+      "builtInHelp": "勾选 VeADK 提供的内置能力，生成时会自动补全 import 与所需环境变量。",
+      "codeExecution": "代码执行配置",
+      "codeExecutionHelp": "指定 AgentKit 代码执行沙箱。",
+      "mcp": "MCP 工具"
+    },
+    "catalog": {
+      "web_search": { "label": "联网搜索", "description": "火山引擎 Web Search，获取实时信息。" },
+      "parallel_web_search": { "label": "并行联网搜索", "description": "并行发起多条搜索查询，更快汇总。" },
+      "link_reader": { "label": "网页读取", "description": "抓取并阅读给定链接的正文内容。" },
+      "web_scraper": { "label": "网页爬取", "description": "结构化爬取网页（需要 Scraper 服务）。" },
+      "image_generate": { "label": "图像生成", "description": "文生图（Doubao Seedream）。" },
+      "image_edit": { "label": "图像编辑", "description": "图生图 / 编辑（Doubao SeedEdit）。" },
+      "video_generate": { "label": "视频生成", "description": "文/图生视频（Doubao Seedance），含任务查询。" },
+      "text_to_speech": { "label": "语音合成 (TTS)", "description": "把文本转成语音（火山语音）。" },
+      "run_code": { "label": "代码执行", "description": "在沙箱中执行代码。" },
+      "vesearch": { "label": "VeSearch 智能搜索", "description": "火山 VeSearch（需要 bot 端点）。" },
+      "links": {
+        "console": "控制台",
+        "documentation": "文档"
+      },
+      "env": {
+        "modelAgentName": { "comment": "模型名称" },
+        "embeddingModelName": { "comment": "向量化模型（记忆/知识库需要）" },
+        "vikingMemoryProject": { "comment": "VikingDB 记忆库项目" },
+        "vikingMemoryRegion": { "comment": "VikingDB 记忆库地域" },
+        "vikingMemoryType": { "comment": "记忆类型" },
+        "feishuAppId": { "comment": "飞书应用 App ID" },
+        "feishuAppSecret": { "comment": "飞书应用 App Secret", "placeholder": "输入 App Secret" },
+        "registrySpaceId": { "comment": "AgentKit 智能体中心", "placeholder": "请选择智能体中心" },
+        "registryTopK": { "comment": "召回 Agent 数量" },
+        "registryRegion": { "comment": "AgentKit 智能体中心地域" },
+        "registryEndpoint": { "comment": "AgentKit 智能体中心 OpenAPI 地址" },
+        "agentKitToolId": { "comment": "代码执行沙箱 ID" },
+        "agentKitToolRegion": { "comment": "AgentKit Tools 地域" },
+        "openVikingUrl": { "comment": "OpenViking 服务地址" },
+        "openVikingMemoryUserId": { "comment": "记忆归属 ID", "help": "对应 viking://user/<此值>/peers/<请求用户>/memories 中的 user 段；用于隔离 Agent、租户或业务场景，默认 default。" },
+        "openVikingMemoryPolicy": { "comment": "记忆策略", "help": "记忆的抽取策略和隔离策略，不填写时使用官方默认策略。" },
+        "openVikingKnowledgeUserId": { "comment": "知识库归属 ID", "help": "未配置资源目录时用于默认路径 viking://user/<此值>/resources/<知识库索引>/，默认 default。" },
+        "openVikingTargetUri": { "comment": "知识库资源目录", "help": "留空时由 KnowledgeBase index 自动生成；填写后直接检索该 OpenViking 资源目录，优先级最高。" },
+        "tlsServiceName": { "comment": "TLS topic_id，留空自动创建" }
+      }
+    },
+    "backends": {
+      "shortTerm": {
+        "local": { "label": "本地内存", "description": "进程内，不持久化。适合开发调试。" }, "sqlite": { "label": "SQLite 文件", "description": "持久化到本地 .db 文件。" }, "mysql": { "label": "MySQL", "description": "持久化到 MySQL。" }, "postgresql": { "label": "PostgreSQL", "description": "持久化到 PostgreSQL。" }
+      },
+      "longTerm": {
+        "local": { "label": "本地向量库", "description": "进程内 llama-index 向量库。" }, "opensearch": { "label": "OpenSearch", "description": "OpenSearch 向量检索。" }, "redis": { "label": "Redis", "description": "Redis 向量检索。" }, "viking": { "label": "VikingDB Memory", "description": "VikingDB 记忆库（支持用户画像）。" }, "openviking": { "label": "OpenViking Memory", "description": "OpenViking 长期记忆，按用户维度保存和检索偏好、事件与实体。" }, "mem0": { "label": "Mem0", "description": "Mem0 托管记忆服务。" }
+      },
+      "knowledge": {
+        "viking": { "label": "VikingDB Knowledge", "description": "VikingDB 知识库。" }, "opensearch": { "label": "OpenSearch", "description": "OpenSearch 向量检索。" }, "context_search": { "label": "Context Search", "description": "火山 Context Search 引擎（无需向量化）。" }, "openviking": { "label": "OpenViking Knowledge", "description": "OpenViking 资源目录知识库，无需向量化模型配置。" }
+      }
+    },
+    "exporters": {
+      "apmplus": { "label": "APMPlus", "description": "火山 APMPlus 应用性能监控。" },
+      "cozeloop": { "label": "CozeLoop", "description": "扣子 CozeLoop 链路观测。" },
+      "tls": { "label": "TLS (日志服务)", "description": "火山 TLS 日志服务导出。" }
+    },
+    "knowledge": {
+      "title": "知识库",
+      "description": "启用外部知识检索（RAG），让 Agent 基于你的资料作答。",
+      "backend": "知识库后端",
+      "vikingDatabase": "VikingDB 知识库"
+    },
+    "memory": {
+      "shortTerm": "短期记忆",
+      "shortTermDescription": "存储单会话上下文",
+      "shortTermBackend": "短期记忆后端",
+      "longTerm": "长期记忆",
+      "longTermDescription": "存储跨会话上下文，通常使用向量化检索",
+      "longTermBackend": "长期记忆后端",
+      "vikingDatabase": "VikingDB 记忆库",
+      "autoSave": "自动保存会话到长期记忆",
+      "autoSaveDescription": "会话结束时自动把内容写入长期记忆，无需手动调用。"
+    },
+    "mcp": {
+      "removeTool": "删除 MCP 工具",
+      "namePlaceholder": "名称（可选）",
+      "urlPlaceholder": "MCP 服务地址",
+      "pathWarning": "此地址没有路径，请确认它是完整的 MCP 服务地址。",
+      "configuredPlaceholder": "已安全保存认证信息",
+      "tokenPlaceholder": "Bearer Token（可选）",
+      "changedUrlWarning": "MCP 地址已变化，请确认如何处理已保存的认证信息。",
+      "reuseCredential": "继续使用",
+      "replaceCredential": "替换认证",
+      "noAuth": "不使用认证",
+      "reuseHint": "发布时将继续使用已保存的认证信息。",
+      "changeToReplace": "改为替换",
+      "credentialConfigured": "认证信息已由 Studio 安全保存。",
+      "removeCredential": "移除认证",
+      "commandPlaceholder": "命令，例如 npx",
+      "argsPlaceholder": "参数，以空格分隔",
+      "stdioHint": "stdio 工具在部署环境中启动，请确保命令和依赖可用。",
+      "addTool": "添加 MCP 工具"
+    },
+    "resources": {
+      "unnamedAgentCenter": "未命名智能体中心",
+      "unnamedKnowledgeBase": "未命名知识库",
+      "unnamedMemory": "未命名记忆库",
+      "loadError": "加载失败",
+      "loadingAgentCenters": "正在加载智能体中心…",
+      "agentCentersLoaded": "已加载 {{count}} 个智能体中心",
+      "noAgentCenters": "暂无智能体中心",
+      "noMatchingAgentCenters": "没有匹配的智能体中心",
+      "searchAgentKitCenter": "搜索 AgentKit 智能体中心",
+      "searchNameOrId": "搜索名称或 ID",
+      "selectAgentCenter": "选择智能体中心",
+      "selectAgentKitCenter": "选择 AgentKit 智能体中心",
+      "selectedAgentCenter": "已选智能体中心",
+      "agentKitCenter": "AgentKit 智能体中心",
+      "refreshAgentCenters": "刷新智能体中心",
+      "knowledgeBaseList": "知识库列表",
+      "knowledgeBasePlaceholder": "选择知识库",
+      "loadingKnowledgeBases": "正在加载知识库…",
+      "knowledgeBasesLoaded": "已加载 {{count}} 个知识库",
+      "noKnowledgeBases": "暂无知识库",
+      "noMatchingKnowledgeBases": "没有匹配的知识库",
+      "searchKnowledgeBase": "搜索知识库",
+      "selectKnowledgeBase": "选择知识库",
+      "refreshKnowledgeBases": "刷新知识库",
+      "memoryList": "记忆库列表",
+      "memoryPlaceholder": "选择记忆库",
+      "loadingMemories": "正在加载记忆库…",
+      "memoriesLoaded": "已加载 {{count}} 个记忆库",
+      "noMemories": "暂无记忆库",
+      "noMatchingMemories": "没有匹配的记忆库",
+      "searchMemory": "搜索记忆库",
+      "selectMemory": "选择记忆库",
+      "refreshMemories": "刷新记忆库"
+    },
+    "env": {
+      "noAdditionalParameters": "此后端无需额外运行参数。",
+      "invalidJson": "请输入有效的 JSON。",
+      "helpAriaLabel": "{{label}}说明：{{help}}",
+      "openOpenViking": "打开 OpenViking {{label}}",
+      "valuePlaceholder": "请输入参数值",
+      "openVikingIndex": "OpenViking 资源索引",
+      "openVikingIndexHelp": "默认值：留空；生成项目时使用 Agent 名自动生成，例如 my_agent_kb。未配置 DATABASE_OPENVIKING_TARGET_URI 时，默认 URI 拼接为 viking://user/{知识库归属 ID，未填则 default}/resources/{资源索引}/；如果填写了 DATABASE_OPENVIKING_TARGET_URI，则直接使用该完整 URI。",
+      "openVikingIndexAriaLabel": "OpenViking 资源索引说明：{{help}}"
+    },
+    "deployment": {
+      "vpcRequired": "使用 VPC 网络时，请填写 VPC ID。",
+      "apiKeyRequired": "请先选择模型使用的 API Key。",
+      "invalidEnvName": "环境变量名称不合法：{{key}}",
+      "requiredEnv": "{{name}}：请填写必填环境变量",
+      "generatingConfiguration": "正在生成部署配置",
+      "runtimeNameExists": "Runtime 名称已存在，请修改后重试。",
+      "preparing": "准备部署",
+      "complete": "部署完成",
+      "failed": "部署失败",
+      "updateAndPublish": "更新并发布",
+      "stages": { "build": "构建镜像", "deploy": "部署 Runtime", "publish": "发布服务", "running": "部署中" }
+    },
+    "publish": {
+      "generating": "正在生成发布配置",
+      "validating": "校验 Agent 结构并准备部署快照…"
+    }
+  },
+  "template": {
+    "presets": {
+      "support": {
+        "name": "客服助手",
+        "description": "7×24 在线答疑，结合知识库与历史对话，稳定、礼貌地解决用户问题。",
+        "instruction": "你是一名专业、耐心的客服助手。请始终保持礼貌、友好的语气，优先依据知识库中的资料回答用户问题；当资料不足以确定答案时，如实告知用户并主动引导其提供更多信息，切勿编造。回答尽量简洁、分点清晰，必要时给出操作步骤。",
+        "subagents": {}
+      },
+      "analyst": {
+        "name": "数据分析师",
+        "description": "运行代码完成统计与可视化，开启链路追踪，分析过程可观测、可复现。",
+        "instruction": "你是一名严谨的数据分析师。面对数据问题时，先厘清分析目标与口径，再通过编写并运行代码完成清洗、统计与可视化。每一步都要说明你的假设与方法，给出结论时附上关键数据支撑，并指出潜在的偏差与局限。",
+        "subagents": {}
+      },
+      "translator": {
+        "name": "翻译助手",
+        "description": "中英互译，忠实、通顺、地道，保留原文语气与专业术语。",
+        "instruction": "你是一名专业的翻译助手，精通中英互译。请在忠实于原文含义的前提下，使译文自然、地道、符合目标语言表达习惯；保留专有名词与专业术语的准确性，并尽量贴合原文的语气与风格。仅输出译文，除非用户额外要求解释。",
+        "subagents": {}
+      },
+      "coder": {
+        "name": "代码助手",
+        "description": "编写、调试与重构代码，可运行代码验证结果，给出清晰可维护的实现。",
+        "instruction": "你是一名资深软件工程师。请根据需求编写正确、清晰、可维护的代码，遵循目标语言的惯用风格与最佳实践。在不确定时通过运行代码验证你的实现，给出关键的边界条件与测试思路，并对复杂逻辑附上简要注释。",
+        "subagents": {}
+      },
+      "researcher": {
+        "name": "研究员",
+        "description": "联网检索一手资料，结合知识库与长期记忆，输出有据可查的研究结论。",
+        "instruction": "你是一名严谨的研究员。面对研究问题时，先拆解关键子问题，再通过联网检索收集多个一手、可信的来源，交叉验证后再下结论。结论需注明出处与不确定性，区分事实与推断，避免以偏概全。",
+        "subagents": {}
+      },
+      "research-team": {
+        "name": "多智能体研究团队",
+        "description": "由检索员、分析员、撰写员协作的研究编排，分工完成端到端调研报告。",
+        "instruction": "你是一支研究团队的总协调者。负责拆解用户的研究任务，将检索、分析、撰写分别委派给对应的子 Agent，汇总各子 Agent 的产出，把控整体质量，最终输出结构清晰、有据可查的研究报告。",
+        "subagents": {
+          "0": {
+            "name": "检索员",
+            "description": "联网搜集与课题相关的一手资料与数据。",
+            "instruction": "你是研究团队中的检索员。根据课题联网检索多个可信来源，整理出关键事实、数据与原文出处，交付给分析员，不做主观结论。"
+          },
+          "1": {
+            "name": "分析员",
+            "description": "对检索到的材料做交叉验证与归纳分析。",
+            "instruction": "你是研究团队中的分析员。对检索员提供的材料做交叉验证、归纳与对比，提炼洞见、识别矛盾与不确定性，形成结构化的分析要点。"
+          },
+          "2": {
+            "name": "撰写员",
+            "description": "将分析结论组织为结构清晰、引用规范的报告。",
+            "instruction": "你是研究团队中的撰写员。把分析员的要点组织成结构清晰、语言通顺、引用规范的研究报告，确保每个结论都能追溯到来源。"
+          }
+        }
+      }
+    },
+    "tags": {
+      "tools": "工具",
+      "memory": "记忆",
+      "knowledgeBase": "知识库",
+      "tracing": "观测",
+      "subagents": "子 Agent {{count}}"
+    },
+    "gallery": {
+      "title": "从模板新建",
+      "subtitle": "选择一个预制 Agent 模板，按需微调后即可创建。"
+    },
+    "detail": {
+      "back": "返回模板列表",
+      "name": "名称",
+      "systemPrompt": "系统提示词",
+      "model": "模型",
+      "tools": "工具",
+      "memory": "记忆",
+      "knowledgeBase": "知识库",
+      "tracing": "观测追踪",
+      "subagents": "子 Agent（{{count}}）",
+      "create": "使用此模板创建",
+      "shortTermMemory": "短期",
+      "longTermMemory": "长期"
+    }
+  }
+}

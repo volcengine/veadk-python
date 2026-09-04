@@ -1,0 +1,143 @@
+{
+  "actions": {
+    "backToList": "Back to scheduled tasks",
+    "cancel": "Cancel",
+    "cancelQueue": "Cancel queued run",
+    "cancelQueueFirst": "Cancel the queued run first",
+    "cancelling": "Cancelling…",
+    "closeDrawer": "Close panel",
+    "collapse": "Collapse",
+    "connectingRuntime": "Connecting to Runtime…",
+    "createScheduledTask": "Create scheduled task",
+    "createTask": "Create task",
+    "delete": "Delete",
+    "deleteTask": "Delete task",
+    "edit": "Edit",
+    "enable": "Enable",
+    "expand": "Expand",
+    "pause": "Pause",
+    "refresh": "Refresh",
+    "refreshHistory": "Refresh run history",
+    "rerun": "Run again",
+    "retry": "Retry",
+    "runNow": "Run now",
+    "saveChanges": "Save changes",
+    "saving": "Saving…",
+    "stop": "Stop run",
+    "stopRun": "Stop this run",
+    "stopRunFirst": "Stop the current run first",
+    "stopping": "Stopping…",
+    "viewDetails": "View details"
+  },
+  "confirm": {
+    "cancelDescription": "This Session will be cancelled. Future scheduled runs will remain enabled.",
+    "cancelTitle": "Stop this run?",
+    "deleteDescription": "“{{name}}” and its complete run history will be permanently deleted.",
+    "deleteTitle": "Delete scheduled task?"
+  },
+  "detail": {
+    "configuration": "Task configuration",
+    "nextRun": "Next run",
+    "pageLabel": "Scheduled task details",
+    "region": "Region",
+    "status": "Task status"
+  },
+  "drawer": {
+    "createTitle": "Create scheduled task",
+    "description": "Each trigger creates a separate Session for the Runtime Agent.",
+    "editTitle": "Edit scheduled task"
+  },
+  "duration": {
+    "minutesSeconds": "{{minutes}} min {{seconds}} sec",
+    "seconds": "{{count}} sec"
+  },
+  "fields": {
+    "cronExpression": "Cron expression",
+    "cronHelp": "Enter minute, hour, day of month, month, and day of week.",
+    "dailyTime": "Daily run time",
+    "enableAfterCreate": "Enable after creation",
+    "enableHelp": "The task will run at its next scheduled time after it is enabled.",
+    "name": "Task name",
+    "namePlaceholder": "For example: Generate a daily operations summary",
+    "noRuntime": "No Runtime available",
+    "prompt": "Execution prompt",
+    "promptPlaceholder": "Enter the text to send to the Agent on every run",
+    "runAt": "Run time",
+    "runtimeHelp": "The task always uses the Runtime's currently active version.",
+    "runtimePlaceholder": "Select a Runtime Agent",
+    "schedule": "Schedule",
+    "scheduleType": "Schedule type",
+    "timezone": "Time zone",
+    "weekday": "Day of week"
+  },
+  "filters": {
+    "all": "All"
+  },
+  "history": {
+    "description": "Each run uses a separate Session. Results and errors are retained.",
+    "duration": "Duration: {{duration}}",
+    "emptyDescription": "Runs will appear here after the task is triggered or run manually.",
+    "emptyTitle": "No runs yet",
+    "errorDetails": "Error details",
+    "finalAnswer": "Final answer",
+    "loadFailed": "Unable to load run history",
+    "title": "Run history"
+  },
+  "notices": {
+    "cancelRequested": "Stop request submitted.",
+    "created": "Task created.",
+    "deleted": "The task and its run history were deleted.",
+    "enabled": "Task enabled.",
+    "paused": "Task paused.",
+    "queued": "Task queued and will start within one minute.",
+    "requeued": "Task queued again and will start within one minute.",
+    "updated": "Task updated."
+  },
+  "page": {
+    "filterLabel": "Filter scheduled tasks by status",
+    "listLabel": "Scheduled task list",
+    "loadFailed": "Unable to load scheduled tasks",
+    "title": "Scheduled tasks"
+  },
+  "schedule": {
+    "cron": "Cron {{cron}}{{zone}}",
+    "daily": "Daily at {{time}}{{zone}}",
+    "once": "Once · {{date}}{{zone}}",
+    "weekly": "{{weekday}} at {{time}}{{zone}}"
+  },
+  "scheduleTypes": {
+    "daily": "Daily",
+    "once": "Once",
+    "weekly": "Weekly"
+  },
+  "status": {
+    "cancelled": "Cancelled",
+    "enabled": "Enabled",
+    "failed": "Failed",
+    "notRun": "Not run yet",
+    "paused": "Paused",
+    "pending": "Preparing",
+    "queued": "Queued",
+    "retrying": "Retrying",
+    "running": "Running",
+    "skipped": "Skipped",
+    "success": "Succeeded"
+  },
+  "validation": {
+    "cronFields": "A Cron expression must contain five fields, for example 0 9 * * *.",
+    "nameRequired": "Enter a task name.",
+    "promptRequired": "Enter the text to send to the Agent on each run.",
+    "runtimeAppMissing": "The Runtime Agent did not return an appName. Confirm that the Runtime is ready and compatible.",
+    "runtimeRequired": "Select an available Runtime Agent.",
+    "timeRequired": "Select a run time."
+  },
+  "weekdays": {
+    "friday": "Friday",
+    "monday": "Monday",
+    "saturday": "Saturday",
+    "sunday": "Sunday",
+    "thursday": "Thursday",
+    "tuesday": "Tuesday",
+    "wednesday": "Wednesday"
+  }
+}

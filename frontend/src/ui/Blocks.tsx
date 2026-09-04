@@ -9,6 +9,8 @@ import {
   X,
 } from "lucide-react";
 import { motion } from "motion/react";
+import { Trans, useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import type { Block } from "../blocks";
 import { buildSurfaces, SurfaceView } from "../a2ui/Surface";
 import { useStickToBottom } from "./useStickToBottom";
@@ -193,6 +195,7 @@ function CodexSandboxIdentity({
 }: {
   activity: NonNullable<Extract<Block, { kind: "tool" }>["codexActivity"]>;
 }) {
+  const { t } = useTranslation("conversation");
   const details: Array<[string, string | undefined]> = [
     ["Agent Session", activity.agentSessionId],
     ["Sandbox Session", activity.sandboxSessionId],
@@ -202,7 +205,7 @@ function CodexSandboxIdentity({
   return (
     <dl
       className="codex-sandbox-run__identity"
-      aria-label="Codex Sandbox 执行标识"
+      aria-label={t("blocks.sandboxIdentity")}
     >
       {details.map(([label, value]) => (
         <div key={label}>
@@ -214,7 +217,7 @@ function CodexSandboxIdentity({
   );
 }
 
-function loadSkillLabel(name: string, args: unknown): string | undefined {
+function loadSkillLabel(name: string, args: unknown, t: TFunction): string | undefined {
   if (
     name !== "load_skill" ||
     args == null ||
@@ -225,7 +228,7 @@ function loadSkillLabel(name: string, args: unknown): string | undefined {
   }
   const skillName = (args as Record<string, unknown>).skill_name;
   if (typeof skillName !== "string" || !skillName.trim()) return undefined;
-  return `使用 ${skillName.trim()} 技能`;
+  return t("blocks.useSkill", { name: skillName.trim() });
 }
 
 export function ThinkingBlock({
@@ -241,6 +244,7 @@ export function ThinkingBlock({
   streaming?: boolean;
   onStreamFrame?: () => void;
 }) {
+  const { t } = useTranslation("conversation");
   // Expanded while thinking; auto-collapses when the answer starts. A manual toggle wins.
   const [open, setOpen] = useState(!(done || answerStarted));
   const touched = useRef(false);
@@ -288,10 +292,10 @@ export function ThinkingBlock({
           />
         </span>
         {done ? (
-          <span className="think-label think-label--done">已完成思考</span>
+          <span className="think-label think-label--done">{t("blocks.thinkingDone")}</span>
         ) : (
           <TextShimmer className="think-label" duration={2.4} spread={18}>
-            思考中
+            {t("blocks.thinking")}
           </TextShimmer>
         )}
         <ChevronRight className={`chev ${open ? "open" : ""}`} />
@@ -349,6 +353,7 @@ function DeliveryCard({
   ) => Promise<void>;
   onDeploy?: (value: Extract<Block, { kind: "delivery" }>["value"]) => void;
 }) {
+  const { t, i18n } = useTranslation("conversation");
   const [resolved, setResolved] = useState<
     Extract<Block, { kind: "delivery" }>["value"] | null
   >(value.files ? value : null);
@@ -367,10 +372,10 @@ function DeliveryCard({
   } | null>(null);
   const validatedAt = new Date(value.validatedAt);
   const time = !value.validatedAt
-    ? "刚刚"
+    ? t("blocks.justNow")
     : Number.isNaN(validatedAt.getTime())
       ? value.validatedAt
-      : validatedAt.toLocaleString("zh-CN", { hour12: false });
+      : validatedAt.toLocaleString(i18n.resolvedLanguage ?? i18n.language, { hour12: false });
 
   useEffect(() => {
     if (!downloadStatus) return;
@@ -383,7 +388,7 @@ function DeliveryCard({
 
   async function resolveDelivery() {
     if (resolved) return resolved;
-    if (!onResolve) throw new Error("暂时无法读取生成的源码，请稍后重试。");
+    if (!onResolve) throw new Error(t("blocks.sourceUnavailable"));
     const delivery = await onResolve(value);
     setResolved(delivery);
     return delivery;
@@ -410,7 +415,7 @@ function DeliveryCard({
     setDownloadStatus(null);
     try {
       await onDownload(value);
-      setDownloadStatus({ message: "已开始下载" });
+      setDownloadStatus({ message: t("blocks.downloadStarted") });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -451,7 +456,7 @@ function DeliveryCard({
     <>
       <section
         className={`delivery-card${value.verified ? " is-verified" : " is-unverified"}`}
-        aria-label={value.verified ? "已验证交付物" : "生成的 Agent 源码"}
+        aria-label={value.verified ? t("blocks.verifiedDelivery") : t("blocks.generatedSource")}
       >
         <header className="delivery-card-header">
           <span className="delivery-card-icon">
@@ -459,40 +464,40 @@ function DeliveryCard({
           </span>
           <div>
             <strong>
-              {value.verified ? "已验证交付物" : "生成的 Agent 源码"}
+              {value.verified ? t("blocks.verifiedDelivery") : t("blocks.generatedSource")}
             </strong>
             <span>{value.agentName}</span>
           </div>
         </header>
         <dl className="delivery-card-grid">
           <div>
-            <dt>入口</dt>
+            <dt>{t("blocks.entryPoint")}</dt>
             <dd>
               <code>{value.entryPoint}</code>
             </dd>
           </div>
           <div>
-            <dt>文件数</dt>
+            <dt>{t("blocks.fileCount")}</dt>
             <dd>{value.fileCount}</dd>
           </div>
           <div>
-            <dt>大小</dt>
+            <dt>{t("blocks.size")}</dt>
             <dd>{(value.artifactSize / 1024).toFixed(1)} KiB</dd>
           </div>
           <div>
-            <dt>{value.verified ? "验证时间" : "生成时间"}</dt>
+            <dt>{value.verified ? t("blocks.validationTime") : t("blocks.generationTime")}</dt>
             <dd>{time}</dd>
           </div>
         </dl>
         <p className="delivery-card-gates">
           {value.verified
-            ? `${value.gateSummary.length} 项检查通过`
-            : "源码已准备好，可部署"}{" "}
+            ? t("blocks.checksPassed", { count: value.gateSummary.length })
+            : t("blocks.sourceReady")}{" "}
           · <code>{value.artifactSha256.slice(0, 12)}</code>
         </p>
         {!value.verified ? (
           <p className="delivery-card-guidance">
-            源码已准备好，可查看、下载或部署；部署前请确认 Runtime 配置。
+            {t("blocks.sourceGuidance")}
           </p>
         ) : null}
         <div className="delivery-card-actions">
@@ -505,7 +510,7 @@ function DeliveryCard({
             {busyAction === "source" ? (
               <Loader2 className="spin" aria-hidden="true" />
             ) : null}
-            查看源码
+            {t("blocks.viewSource")}
           </button>
           {value.projectId && value.versionId && value.parentVersionId ? (
             <button
@@ -517,7 +522,7 @@ function DeliveryCard({
               {busyAction === "compare" ? (
                 <Loader2 className="spin" aria-hidden="true" />
               ) : null}
-              {busyAction === "compare" ? "正在准备…" : "查看本次变更"}
+              {busyAction === "compare" ? t("blocks.preparing") : t("blocks.viewChanges")}
             </button>
           ) : null}
           <button
@@ -530,7 +535,7 @@ function DeliveryCard({
             {busyAction === "download" ? (
               <Loader2 className="spin" aria-hidden="true" />
             ) : null}
-            {busyAction === "download" ? "正在准备…" : "下载源码"}
+            {busyAction === "download" ? t("blocks.preparing") : t("blocks.downloadSource")}
           </button>
           <button
             type="button"
@@ -541,12 +546,12 @@ function DeliveryCard({
               !onResolve ||
               busyAction !== null
             }
-            title={value.deployable ? undefined : "源码尚未准备好"}
+            title={value.deployable ? undefined : t("blocks.sourceNotReady")}
           >
             {busyAction === "deploy" ? (
               <Loader2 className="spin" aria-hidden="true" />
             ) : null}
-            手动部署到 Runtime
+            {t("blocks.manualDeploy")}
           </button>
         </div>
         {error ? (
@@ -579,8 +584,8 @@ function DeliveryCard({
                   name: comparison.base.agentName,
                   files: comparison.base.files ?? [],
                 },
-                baseLabel: "优化前",
-                targetLabel: "优化后",
+                baseLabel: t("blocks.beforeOptimization"),
+                targetLabel: t("blocks.afterOptimization"),
               }
             : undefined
         }
@@ -625,22 +630,13 @@ const StreamingTextBlock = memo(function StreamingTextBlock({
 
 type PlanBlockValue = Extract<Block, { kind: "plan" }>;
 
-const PLAN_STATUS_LABELS: Record<
-  PlanBlockValue["items"][number]["status"],
-  string
-> = {
-  pending: "待处理",
-  in_progress: "进行中",
-  completed: "已完成",
-  failed: "未完成",
-};
-
 function PlanBlock({
   title,
   summary,
   items,
   done,
 }: Omit<PlanBlockValue, "kind">) {
+  const { t } = useTranslation("conversation");
   const [open, setOpen] = useState(!done);
   const touched = useRef(false);
   useEffect(() => {
@@ -687,7 +683,7 @@ function PlanBlock({
                 <li data-status={item.status} key={`${index}:${item.text}`}>
                   <span className="plan-item-marker" aria-hidden="true" />
                   <span className="plan-item-text">{item.text}</span>
-                  <small>{PLAN_STATUS_LABELS[item.status]}</small>
+                  <small>{t(`blocks.planStatuses.${item.status}`)}</small>
                 </li>
               ))}
             </ol>
@@ -751,6 +747,7 @@ function ToolBlock({
   onBranchSelect?: (branch: BranchCompareBranch) => void;
   onAction: BlocksProps["onAction"];
 }) {
+  const { t } = useTranslation("conversation");
   const inferredCreateAgentFailure =
     name === "create_agents" &&
     done &&
@@ -777,7 +774,7 @@ function ToolBlock({
     touched.current = true;
     setOpen((value) => !value);
   };
-  const label = name === A2UI_TOOL ? "渲染 UI" : name;
+  const label = name === A2UI_TOOL ? t("blocks.renderUi") : name;
   const studioArtifacts = studioToolArtifacts(response);
   const respText =
     response == null
@@ -787,7 +784,7 @@ function ToolBlock({
         : JSON.stringify(response, null, 2);
   const truncated =
     respText && respText.length > 2000
-      ? respText.slice(0, 2000) + "\n…（已截断）"
+      ? `${respText.slice(0, 2000)}\n${t("blocks.truncated")}`
       : respText;
   return (
     <motion.div
@@ -802,10 +799,12 @@ function ToolBlock({
           definition={builtinTool}
           label={
             isAdjustingAgent
-              ? "Agent 正在调整"
+              ? t("blocks.agentAdjusting")
               : toolStatus === "failed"
-                ? builtinTool.failedLabel
-                : loadSkillLabel(name, args)
+                ? t(`blocks.tools.${builtinTool.name}.failed`, {
+                    defaultValue: builtinTool.failedLabel ?? builtinTool.doneLabel,
+                  })
+                : loadSkillLabel(name, args, t)
           }
           done={done}
           open={open}
@@ -840,7 +839,7 @@ function ToolBlock({
           {codexActivity ? (
             <section
               className="codex-sandbox-run"
-              aria-label="Codex Sandbox 详细输出"
+              aria-label={t("blocks.sandboxDetails")}
             >
               <div className="codex-sandbox-run__label">
                 <span className="codex-sandbox-run__badge">
@@ -861,7 +860,7 @@ function ToolBlock({
                   />
                 ) : (
                   <TextShimmer className="codex-sandbox-run__empty">
-                    正在等待 Codex 输出
+                    {t("blocks.waitingCodex")}
                   </TextShimmer>
                 )}
               </div>
@@ -878,7 +877,7 @@ function ToolBlock({
             <div className="tool-detail">
               {args != null && (
                 <div className="tool-section">
-                  <div className="tool-section-label">参数</div>
+                  <div className="tool-section-label">{t("blocks.arguments")}</div>
                   <pre className="tool-args">
                     {JSON.stringify(args, null, 2)}
                   </pre>
@@ -886,13 +885,13 @@ function ToolBlock({
               )}
               {truncated != null && (
                 <div className="tool-section">
-                  <div className="tool-section-label">返回</div>
+                  <div className="tool-section-label">{t("blocks.result")}</div>
                   <pre className="tool-args tool-result">{truncated}</pre>
                 </div>
               )}
               {studioArtifacts.length > 0 && (
                 <div className="tool-section">
-                  <div className="tool-section-label">产物</div>
+                  <div className="tool-section-label">{t("blocks.artifacts")}</div>
                   <div className="studio-tool-artifacts">
                     {studioArtifacts.map((artifact) => (
                       <a
@@ -900,7 +899,7 @@ function ToolBlock({
                         href={artifact.contentUrl}
                         download={artifact.name}
                       >
-                        下载 {artifact.name}
+                        {t("blocks.downloadNamed", { name: artifact.name })}
                       </a>
                     ))}
                   </div>
@@ -926,6 +925,7 @@ function ArtifactCard({
   onDownload?: (filename: string, version: number) => Promise<void>;
   onPreview?: (filename: string, version: number) => Promise<string>;
 }) {
+  const { t } = useTranslation("conversation");
   const [pending, setPending] = useState("");
   const [error, setError] = useState("");
   const [preview, setPreview] = useState<{ name: string; url: string } | null>(
@@ -988,7 +988,7 @@ function ArtifactCard({
             </span>
             <span className="artifact-card__copy">
               <span className="artifact-card__name">{file.filename}</span>
-              <span className="artifact-card__hint">PowerPoint 演示文稿</span>
+              <span className="artifact-card__hint">{t("blocks.powerpoint")}</span>
             </span>
             <span className="artifact-card__actions">
               {previewFile && (
@@ -1009,7 +1009,7 @@ function ArtifactCard({
                   ) : (
                     <Eye />
                   )}
-                  预览
+                  {t("blocks.preview")}
                 </button>
               )}
               <button
@@ -1023,7 +1023,7 @@ function ArtifactCard({
                 ) : (
                   <Download />
                 )}
-                下载
+                {t("blocks.download")}
               </button>
             </span>
           </div>
@@ -1035,12 +1035,12 @@ function ArtifactCard({
           className="artifact-preview"
           role="dialog"
           aria-modal="true"
-          aria-label={`${preview.name} 预览`}
+          aria-label={t("blocks.previewDialog", { name: preview.name })}
         >
           <button
             className="artifact-preview__backdrop"
             type="button"
-            aria-label="关闭预览"
+            aria-label={t("blocks.closePreview")}
             onClick={closePreview}
           />
           <div className="artifact-preview__panel">
@@ -1048,14 +1048,14 @@ function ArtifactCard({
               <span>{preview.name}</span>
               <button
                 type="button"
-                aria-label="关闭预览"
+                aria-label={t("blocks.closePreview")}
                 onClick={closePreview}
               >
                 <X />
               </button>
             </div>
             <div className="artifact-preview__canvas">
-              <img src={preview.url} alt={`${preview.name} 幻灯片预览`} />
+              <img src={preview.url} alt={t("blocks.slidePreview", { name: preview.name })} />
             </div>
           </div>
         </div>
@@ -1073,12 +1073,13 @@ function AuthCard({
   block: AuthBlock;
   onAuth?: (block: AuthBlock) => Promise<void>;
 }) {
+  const { t } = useTranslation("conversation");
   const [status, setStatus] = useState<
     "idle" | "authorizing" | "done" | "error"
   >(block.done ? "done" : "idle");
   const [err, setErr] = useState("");
 
-  const toolLabel = block.label || "MCP 工具集";
+  const toolLabel = block.label || t("blocks.mcpToolset");
   const provider = (() => {
     try {
       return block.authUri ? new URL(block.authUri).host : "";
@@ -1113,7 +1114,7 @@ function AuthCard({
         transition={{ duration: 0.2 }}
       >
         <ShieldCheck className="auth-card-icon auth-card-icon--done" />
-        <span>已授权 · {toolLabel}</span>
+        <span>{t("blocks.authorized", { tool: toolLabel })}</span>
       </motion.div>
     );
   }
@@ -1127,19 +1128,27 @@ function AuthCard({
     >
       <div className="auth-card-head">
         <ShieldCheck className="auth-card-icon" />
-        <span className="auth-card-title">{toolLabel} 需要授权</span>
+        <span className="auth-card-title">{t("blocks.authorizationRequired", { tool: toolLabel })}</span>
       </div>
       <p className="auth-card-desc">
-        工具集 <code className="auth-card-code">{toolLabel}</code> 使用 OAuth
-        保护， 需登录授权后方可调用。
+        <Trans
+          t={t}
+          i18nKey="blocks.oauthDescription"
+          values={{ tool: toolLabel }}
+          components={{ code: <code className="auth-card-code" /> }}
+        />
         {provider && (
           <>
             {" "}
-            将跳转至 <code className="auth-card-code">{provider}</code>{" "}
-            完成登录，
+            <Trans
+              t={t}
+              i18nKey="blocks.oauthProvider"
+              values={{ provider }}
+              components={{ code: <code className="auth-card-code" /> }}
+            />{" "}
           </>
         )}
-        授权完成后对话自动继续。
+        {t("blocks.oauthContinue")}
       </p>
       <button
         className="auth-card-btn"
@@ -1148,14 +1157,14 @@ function AuthCard({
       >
         {status === "authorizing" ? (
           <>
-            <Loader2 className="cw-i spin" /> 等待授权…
+            <Loader2 className="cw-i spin" /> {t("blocks.waitingAuthorization")}
           </>
         ) : (
-          <>去授权</>
+          <>{t("blocks.authorize")}</>
         )}
       </button>
       {!block.authUri && (
-        <div className="auth-card-err">未在事件中找到授权地址。</div>
+        <div className="auth-card-err">{t("blocks.missingAuthorizationUrl")}</div>
       )}
       {err && <div className="auth-card-err">{err}</div>}
     </motion.div>

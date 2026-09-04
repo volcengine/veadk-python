@@ -16,6 +16,10 @@ globalThis.window = {
 };
 globalThis.localStorage = storage();
 globalThis.sessionStorage = storage();
+globalThis.localStorage.setItem?.("agentkit.studio.locale", "zh-CN");
+globalThis.window.localStorage = {
+  getItem: (key) => key === "agentkit.studio.locale" ? "zh-CN" : null,
+};
 
 const result = await build({
   entryPoints: [

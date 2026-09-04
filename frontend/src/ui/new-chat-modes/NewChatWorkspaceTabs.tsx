@@ -1,5 +1,6 @@
 import { useRef, type KeyboardEvent } from "react";
 import { motion } from "motion/react";
+import { useTranslation } from "react-i18next";
 import { ToolsSkills } from "@openai/apps-sdk-ui/components/Icon";
 import { AgentFaceIcon } from "../AgentFaceIcon";
 import { VideoGenerateIcon } from "../builtin-tools/icons";
@@ -20,9 +21,9 @@ function AnimatedSkillIcon({ className = "" }: { className?: string }) {
 }
 
 const WORKSPACE_MODES = [
-  { value: "agent", label: "智能体", icon: AgentFaceIcon },
-  { value: "skill", label: "技能定制", icon: AnimatedSkillIcon },
-  { value: "video", label: "视频创作", icon: VideoGenerateIcon },
+  { value: "agent", labelKey: "workspace.agent", icon: AgentFaceIcon },
+  { value: "skill", labelKey: "workspace.skill", icon: AnimatedSkillIcon },
+  { value: "video", labelKey: "workspace.video", icon: VideoGenerateIcon },
 ] as const;
 
 export interface NewChatWorkspaceTabsProps {
@@ -38,6 +39,7 @@ export function NewChatWorkspaceTabs({
   disabled = false,
   skillCustomizationEnabled = false,
 }: NewChatWorkspaceTabsProps) {
+  const { t } = useTranslation("newChat");
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const visibleModes = skillCustomizationEnabled
     ? WORKSPACE_MODES
@@ -66,7 +68,7 @@ export function NewChatWorkspaceTabs({
     <div
       className="new-chat-workspace-tabs"
       role="tablist"
-      aria-label="新会话模式"
+      aria-label={t("workspace.label")}
     >
       {visibleModes.map((mode, index) => {
         const Icon = mode.icon;
@@ -103,7 +105,7 @@ export function NewChatWorkspaceTabs({
               />
             ) : null}
             <Icon className="new-chat-workspace-tabs__icon" />
-            <span className="new-chat-workspace-tabs__label">{mode.label}</span>
+            <span className="new-chat-workspace-tabs__label">{t(mode.labelKey)}</span>
           </button>
         );
       })}

@@ -39,7 +39,7 @@ const result = await build({
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(
   result.outputFiles[0].contents,
 ).toString("base64")}`;
-const { RUN_SSE_FIRST_EVENT_TIMEOUT_ERROR, runSSE } = await import(moduleUrl);
+const { runSseFirstEventTimeoutError, runSSE } = await import(moduleUrl);
 
 test("runSSE forwards cancellation after yielding partial output", async (t) => {
   const previousFetch = globalThis.fetch;
@@ -139,9 +139,9 @@ test("runSSE aborts when no first event arrives before the deadline", async (t) 
   timeoutCallback();
 
   await assert.rejects(next, (error) => {
-    assert.equal(error.message, RUN_SSE_FIRST_EVENT_TIMEOUT_ERROR);
-    assert.match(error.message, /30 秒内未收到首个 SSE 事件/);
-    assert.match(error.message, /请检查共享公网出口等网络配置，然后重试/);
+    assert.equal(error.message, runSseFirstEventTimeoutError());
+    assert.match(error.message, /No SSE event was received within 30 seconds/);
+    assert.match(error.message, /Check network settings such as the shared public egress, then try again/);
     return true;
   });
 });
@@ -213,8 +213,8 @@ test("runSSE formats a fetch rejection before any response arrives", async (t) =
   });
 
   await assert.rejects(events.next(), (error) => {
-    assert.match(error.message, /^原始响应：TypeError: fetch failed: upstream unavailable/);
-    assert.match(error.message, /请检查共享公网出口等网络配置，然后重试/);
+    assert.match(error.message, /^Raw response: TypeError: fetch failed: upstream unavailable/);
+    assert.match(error.message, /Check network settings such as the shared public egress, then try again/);
     return true;
   });
 });
@@ -240,7 +240,7 @@ test("runSSE preserves an AbortError rejected by fetch", async (t) => {
   await assert.rejects(events.next(), (error) => {
     assert.equal(error, abortError);
     assert.equal(error.name, "AbortError");
-    assert.doesNotMatch(error.message, /原始响应|共享公网出口/);
+    assert.doesNotMatch(error.message, /Raw response|shared public egress/);
     return true;
   });
 });
@@ -265,7 +265,7 @@ test("runSSE rejects an HTTP 200 response that contains no valid events", async 
 
   await assert.rejects(
     events.next(),
-    /原始响应：HTTP 200，SSE 响应体为空。[\s\S]*请检查共享公网出口等网络配置，然后重试/,
+    /Raw response: HTTP 200 with an empty SSE response body\.[\s\S]*Check network settings such as the shared public egress, then try again/,
   );
 });
 
@@ -288,9 +288,9 @@ test("runSSE formats malformed SSE JSON without losing the original data", async
   });
 
   await assert.rejects(events.next(), (error) => {
-    assert.match(error.message, /^原始响应：Error: Failed to parse SSE event JSON/);
-    assert.match(error.message, /原始 data：malformed-json/);
-    assert.match(error.message, /请检查共享公网出口等网络配置，然后重试/);
+    assert.match(error.message, /^Raw response: Error: Failed to parse the SSE event JSON/);
+    assert.match(error.message, /Raw data: malformed-json/);
+    assert.match(error.message, /Check network settings such as the shared public egress, then try again/);
     return true;
   });
 });
@@ -334,9 +334,9 @@ test("runSSE preserves a partial event and reports an unexpected stream failure"
   assert.equal(first.done, false);
   assert.equal(first.value.content.parts[0].text, "part");
   await assert.rejects(events.next(), (error) => {
-    assert.match(error.message, /^原始响应：TypeError: terminated/);
-    assert.match(error.message, /请检查共享公网出口等网络配置，然后重试/);
-    assert.doesNotMatch(error.message, /Runtime 可能|无法访问模型服务/);
+    assert.match(error.message, /^Raw response: TypeError: terminated/);
+    assert.match(error.message, /Check network settings such as the shared public egress, then try again/);
+    assert.doesNotMatch(error.message, /Runtime may|Unable to access the model service/);
     return true;
   });
 });

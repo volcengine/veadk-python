@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { createT } from "./i18n";
 import { Button } from "@openai/apps-sdk-ui/components/Button";
 import { Tooltip } from "@openai/apps-sdk-ui/components/Tooltip";
 import type { IntelligentDevelopmentReleaseRef } from "../blocks";
@@ -70,10 +72,10 @@ function CompareCheckIcon() {
   );
 }
 
-function formatVersionTime(value: string): string {
+function formatVersionTime(value: string, locale: string, unknownLabel: string): string {
   const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return "时间未知";
-  return new Intl.DateTimeFormat("zh-CN", {
+  if (!Number.isFinite(date.getTime())) return unknownLabel;
+  return new Intl.DateTimeFormat(locale, {
     month: "numeric",
     day: "numeric",
     hour: "2-digit",
@@ -108,12 +110,13 @@ function releaseFromVersion(
 export function migrationOptimizationUnavailableReason(
   origin: IntelligentDevelopmentProject["origin"],
   versions: Pick<IntelligentDevelopmentVersion, "migrationFramework">[],
+  unavailableLabel = createT("common.notSupported"),
 ): string {
   if (origin !== "migration") return "";
   const framework = versions
     .map((version) => version.migrationFramework?.trim().toLowerCase() ?? "")
     .find(Boolean);
-  return framework === "any" || framework === "dify" ? "" : "暂不支持";
+  return framework === "any" || framework === "dify" ? "" : unavailableLabel;
 }
 
 interface IntelligentProjectLibraryProps {
@@ -149,6 +152,8 @@ export function IntelligentProjectLibrary({
   emptyDescription,
   initialProjectId,
 }: IntelligentProjectLibraryProps) {
+  const { t, i18n } = useTranslation("create");
+  const locale = i18n.resolvedLanguage || i18n.language;
   const [projects, setProjects] = useState<IntelligentDevelopmentProject[]>([]);
   const [projectsLoading, setProjectsLoading] = useState(true);
   const [projectsError, setProjectsError] = useState("");
@@ -199,7 +204,7 @@ export function IntelligentProjectLibrary({
       .catch((cause) => {
         if (!controller.signal.aborted) {
           setProjectsError(
-            cause instanceof Error ? cause.message : "无法读取已保存项目。",
+            cause instanceof Error ? cause.message : t("projectLibrary.errors.projects"),
           );
         }
       })
@@ -207,7 +212,7 @@ export function IntelligentProjectLibrary({
         if (!controller.signal.aborted) setProjectsLoading(false);
       });
     return () => controller.abort();
-  }, [origin, projectsRefresh, storageEnabled]);
+  }, [origin, projectsRefresh, storageEnabled, t]);
 
   useEffect(() => {
     if (
@@ -237,7 +242,7 @@ export function IntelligentProjectLibrary({
             ...current,
             [selectedProjectId]: cause instanceof Error
               ? cause.message
-              : "无法读取项目版本。",
+              : t("projectLibrary.errors.versions"),
           }));
         }
       })
@@ -245,7 +250,7 @@ export function IntelligentProjectLibrary({
         if (!controller.signal.aborted) setVersionsLoading("");
       });
     return () => controller.abort();
-  }, [selectedProjectId, storageEnabled, versionsRefresh]);
+  }, [selectedProjectId, storageEnabled, versionsRefresh, t]);
 
   const browserProject = useMemo(() => ({
     name: browserDelivery?.agentName ?? "Agent",
@@ -277,7 +282,7 @@ export function IntelligentProjectLibrary({
     } catch (cause) {
       setFeedback({
         kind: "error",
-        text: cause instanceof Error ? cause.message : "无法读取项目源码。",
+        text: cause instanceof Error ? cause.message : t("projectLibrary.errors.source"),
       });
     } finally {
       setBusyAction("");
@@ -338,14 +343,14 @@ export function IntelligentProjectLibrary({
       ]);
       setBrowserComparison({
         base,
-        baseLabel: formatVersionTime(selected[0].createdAt),
-        targetLabel: formatVersionTime(selected[1].createdAt),
+        baseLabel: formatVersionTime(selected[0].createdAt, locale, t("projectLibrary.unknownTime")),
+        targetLabel: formatVersionTime(selected[1].createdAt, locale, t("projectLibrary.unknownTime")),
       });
       setBrowserDelivery(target);
     } catch (cause) {
       setFeedback({
         kind: "error",
-        text: cause instanceof Error ? cause.message : "无法读取项目版本。",
+        text: cause instanceof Error ? cause.message : t("projectLibrary.errors.versions"),
       });
     } finally {
       setBusyAction("");
@@ -359,11 +364,11 @@ export function IntelligentProjectLibrary({
     setFeedback(null);
     try {
       await onDownload(releaseFromVersion(version));
-      setFeedback({ kind: "status", text: "源码已下载。" });
+      setFeedback({ kind: "status", text: t("projectLibrary.sourceDownloaded") });
     } catch (cause) {
       setFeedback({
         kind: "error",
-        text: cause instanceof Error ? cause.message : "下载源码失败。",
+        text: cause instanceof Error ? cause.message : t("projectLibrary.errors.download"),
       });
     } finally {
       setBusyAction("");
@@ -380,7 +385,7 @@ export function IntelligentProjectLibrary({
     } catch (cause) {
       setFeedback({
         kind: "error",
-        text: cause instanceof Error ? cause.message : "无法准备部署源码。",
+        text: cause instanceof Error ? cause.message : t("projectLibrary.errors.prepareDeployment"),
       });
       setBusyAction("");
     }
@@ -406,7 +411,7 @@ export function IntelligentProjectLibrary({
       setVersionsRefresh((value) => value + 1);
     } catch (cause) {
       setDeleteError(
-        cause instanceof Error ? cause.message : "删除项目版本失败。",
+        cause instanceof Error ? cause.message : t("projectLibrary.errors.deleteVersion"),
       );
     } finally {
       setBusyAction("");
@@ -423,18 +428,18 @@ export function IntelligentProjectLibrary({
           <span className="ic-project-icon-wrap"><ProjectArchiveIcon /></span>
           <div>
             <h2 id={`${origin}-projects-title`}>
-              {title ?? "已保存项目"}
+              {title ?? t("projectLibrary.title")}
             </h2>
-            <p>{description ?? "选择已有版本继续优化，或查看、下载和部署源码。"}</p>
+            <p>{description ?? t("projectLibrary.description")}</p>
           </div>
           {projects.length > 0 ? (
-            <Tooltip compact content="刷新项目列表">
+            <Tooltip compact content={t("projectLibrary.refresh")}>
               <button
                 type="button"
                 className={`ic-refresh ic-icon-button${projectsLoading ? " is-loading" : ""}`}
                 onClick={() => setProjectsRefresh((value) => value + 1)}
                 disabled={projectsLoading}
-                aria-label="刷新项目列表"
+                aria-label={t("projectLibrary.refresh")}
                 aria-busy={projectsLoading}
               >
                 <SourceRefreshIcon />
@@ -446,52 +451,52 @@ export function IntelligentProjectLibrary({
         {capabilitiesLoading ? (
           <div className="ic-project-state" role="status" aria-live="polite">
             <TextShimmer as="span" duration={2.2} spread={16}>
-              正在检查项目存储…
+              {t("projectLibrary.checkingStorage")}
             </TextShimmer>
           </div>
         ) : capabilities === null ? (
           <div className="ic-project-state" role="alert">
-            <strong>暂时无法读取项目</strong>
-            <span>无法确认项目存储状态，请稍后重试。</span>
+            <strong>{t("projectLibrary.unavailableTitle")}</strong>
+            <span>{t("projectLibrary.storageCheckError")}</span>
           </div>
         ) : !storageEnabled ? (
           <div className="ic-project-state" role="alert">
-            <strong>暂时无法读取项目</strong>
+            <strong>{t("projectLibrary.unavailableTitle")}</strong>
             <span>
               {capabilities.projectStorageReason
                 || capabilities.reason
-                || "项目存储尚未配置。"}
+                || t("projectLibrary.storageNotConfigured")}
             </span>
           </div>
         ) : projectsLoading && projects.length === 0 ? (
           <div className="ic-project-state" role="status" aria-live="polite">
             <TextShimmer as="span" duration={2.2} spread={16}>
-              {origin === "migration" ? "正在读取已迁移项目…" : "正在读取已保存项目…"}
+              {origin === "migration" ? t("projectLibrary.loadingMigrated") : t("projectLibrary.loadingSaved")}
             </TextShimmer>
           </div>
         ) : projectsError && projects.length === 0 ? (
           <div className="ic-project-state" role="alert">
             <strong>
-              {origin === "migration" ? "无法读取已迁移项目" : "无法读取已保存项目"}
+              {origin === "migration" ? t("projectLibrary.errors.migrated") : t("projectLibrary.errors.saved")}
             </strong>
             <span>{projectsError}</span>
             <button
               type="button"
               className="ic-secondary ic-state-action"
               onClick={() => setProjectsRefresh((value) => value + 1)}
-            >重试</button>
+            >{t("common.retry")}</button>
           </div>
         ) : projects.length === 0 ? (
           <div className="ic-project-state">
             <strong>
               {emptyTitle ?? (origin === "migration"
-                ? "还没有已迁移的项目"
-                : "还没有已保存的项目")}
+                ? t("projectLibrary.empty.migratedTitle")
+                : t("projectLibrary.empty.savedTitle"))}
             </strong>
             <span>
               {emptyDescription ?? (origin === "migration"
-                ? "完成首次迁移后，源码会自动保存在这里。"
-                : "完成首次构建后，源码会自动保存在这里。")}
+                ? t("projectLibrary.empty.migratedDescription")
+                : t("projectLibrary.empty.savedDescription"))}
             </span>
           </div>
         ) : (
@@ -502,7 +507,7 @@ export function IntelligentProjectLibrary({
                 <button
                   type="button"
                   onClick={() => setProjectsRefresh((value) => value + 1)}
-                >重试</button>
+                >{t("common.retry")}</button>
               </div>
             ) : null}
             {projects.map((project) => {
@@ -513,7 +518,7 @@ export function IntelligentProjectLibrary({
                 ? compareSelection
                 : null;
               const optimizationUnavailableReason =
-                migrationOptimizationUnavailableReason(origin, projectVersions);
+                migrationOptimizationUnavailableReason(origin, projectVersions, t("common.notSupported"));
               return (
                 <article
                   className={`ic-project${expanded ? " is-expanded" : ""}`}
@@ -533,7 +538,10 @@ export function IntelligentProjectLibrary({
                       <span className="ic-project-copy">
                         <strong title={project.name}>{project.name}</strong>
                         <span>
-                          {project.versionCount} 个版本 · 更新于 {formatVersionTime(project.updatedAt)}
+                          {t("projectLibrary.projectSummary", {
+                            count: project.versionCount,
+                            time: formatVersionTime(project.updatedAt, locale, t("projectLibrary.unknownTime")),
+                          })}
                         </span>
                       </span>
                     </button>
@@ -542,21 +550,21 @@ export function IntelligentProjectLibrary({
                         {projectComparison ? (
                           <>
                             <span aria-live="polite">
-                              已选择 {projectComparison.versionIds.length}/2
+                              {t("projectLibrary.compare.selected", { count: projectComparison.versionIds.length })}
                             </span>
                             <button
                               type="button"
                               className="ic-version-action"
                               onClick={() => setCompareSelection(null)}
                               disabled={Boolean(busyAction)}
-                            >取消</button>
+                            >{t("common.cancel")}</button>
                             <button
                               type="button"
                               className="ic-version-compare-primary"
                               onClick={() => void viewVersionComparison(project, projectVersions)}
                               disabled={projectComparison.versionIds.length !== 2 || Boolean(busyAction)}
                             >
-                              {busyAction === `compare:${project.projectId}` ? "读取中…" : "查看对比"}
+                              {busyAction === `compare:${project.projectId}` ? t("common.loading") : t("projectLibrary.compare.view")}
                             </button>
                           </>
                         ) : (
@@ -565,7 +573,7 @@ export function IntelligentProjectLibrary({
                             className="ic-version-compare-trigger"
                             onClick={() => startVersionComparison(project, projectVersions)}
                             disabled={Boolean(busyAction)}
-                          >对比版本</button>
+                          >{t("projectLibrary.compare.start")}</button>
                         )}
                       </div>
                     ) : null}
@@ -583,13 +591,13 @@ export function IntelligentProjectLibrary({
                           <button
                             type="button"
                             onClick={() => setVersionsRefresh((value) => value + 1)}
-                          >重试</button>
+                          >{t("common.retry")}</button>
                         </div>
                       ) : null}
                       {versionsLoading === project.projectId
                         && projectVersions.length === 0 ? (
                           <TextShimmer as="p" duration={2.2} spread={16}>
-                            正在读取项目版本…
+                            {t("projectLibrary.loadingVersions")}
                           </TextShimmer>
                         ) : versionError && projectVersions.length === 0 ? (
                           <div className="ic-version-error" role="alert">
@@ -597,16 +605,16 @@ export function IntelligentProjectLibrary({
                             <button
                               type="button"
                               onClick={() => setVersionsRefresh((value) => value + 1)}
-                            >重试</button>
+                            >{t("common.retry")}</button>
                           </div>
                         ) : projectVersions.length === 0 ? (
-                          <p className="ic-version-empty">这个项目还没有可用版本。</p>
+                          <p className="ic-version-empty">{t("projectLibrary.empty.noVersions")}</p>
                         ) : (
                           <ul className="ic-version-list">
                             {projectVersions.map((version, index) => {
                               const versionSummary = version.intentSummary
                                 || version.validationSummary
-                                || "暂无版本描述";
+                                || t("projectLibrary.noVersionDescription");
                               const isCompareSelected = projectComparison
                                 ?.versionIds.includes(version.versionId) === true;
                               const isCompareDisabled = Boolean(busyAction)
@@ -633,18 +641,18 @@ export function IntelligentProjectLibrary({
                                       <span className="ic-version-compare-box" aria-hidden="true">
                                         {isCompareSelected ? <CompareCheckIcon /> : null}
                                       </span>
-                                      <span>{isCompareSelected ? "已选择" : "选择"}</span>
+                                      <span>{isCompareSelected ? t("projectLibrary.compare.selectedLabel") : t("projectLibrary.compare.select")}</span>
                                     </label>
                                   ) : null}
                                   <div className="ic-version-copy">
                                     <div>
                                       <strong>
                                         {index === 0
-                                          ? "最新版本"
-                                          : formatVersionTime(version.createdAt)}
+                                          ? t("projectLibrary.latestVersion")
+                                          : formatVersionTime(version.createdAt, locale, t("projectLibrary.unknownTime"))}
                                       </strong>
                                       <span className={`ic-version-status${version.verified ? " is-verified" : ""}`}>
-                                        {version.verified ? "已验证" : "待确认"}
+                                        {version.verified ? t("projectLibrary.verified") : t("projectLibrary.pendingVerification")}
                                       </span>
                                     </div>
                                     <Tooltip
@@ -661,7 +669,10 @@ export function IntelligentProjectLibrary({
                                       </p>
                                     </Tooltip>
                                     <span>
-                                      {formatVersionTime(version.createdAt)} · {version.fileCount} 个文件
+                                      {t("projectLibrary.versionSummary", {
+                                        time: formatVersionTime(version.createdAt, locale, t("projectLibrary.unknownTime")),
+                                        count: version.fileCount,
+                                      })}
                                     </span>
                                   </div>
                                   <div className="ic-version-actions">
@@ -672,8 +683,8 @@ export function IntelligentProjectLibrary({
                                       disabled={Boolean(busyAction)}
                                     >
                                       {busyAction === `view:${version.versionId}`
-                                        ? "读取中…"
-                                        : "查看源码"}
+                                        ? t("common.loading")
+                                        : t("projectLibrary.viewSource")}
                                     </button>
                                     <button
                                       type="button"
@@ -682,8 +693,8 @@ export function IntelligentProjectLibrary({
                                       disabled={Boolean(busyAction)}
                                     >
                                       {busyAction === `download:${version.versionId}`
-                                        ? "下载中…"
-                                        : "下载"}
+                                        ? t("projectLibrary.downloading")
+                                        : t("projectLibrary.download")}
                                     </button>
                                     <button
                                       type="button"
@@ -692,8 +703,8 @@ export function IntelligentProjectLibrary({
                                       disabled={Boolean(busyAction)}
                                     >
                                       {busyAction === `deploy:${version.versionId}`
-                                        ? "准备中…"
-                                        : "部署"}
+                                        ? t("intelligent.actions.preparing")
+                                        : t("common.deploy")}
                                     </button>
                                     {optimizationUnavailableReason ? (
                                       <Tooltip
@@ -703,13 +714,13 @@ export function IntelligentProjectLibrary({
                                         <span
                                           className="ic-disabled-action-tooltip"
                                           tabIndex={0}
-                                          aria-label="去优化，暂不支持"
+                                          aria-label={t("projectLibrary.optimizeUnavailable")}
                                         >
                                           <button
                                             type="button"
                                             className="ic-version-action"
                                             disabled
-                                          >去优化</button>
+                                          >{t("projectLibrary.optimize")}</button>
                                         </span>
                                       </Tooltip>
                                     ) : (
@@ -720,11 +731,11 @@ export function IntelligentProjectLibrary({
                                           project,
                                           version.versionId,
                                           version.versionId === project.latestVersionId
-                                            ? "最新版本"
-                                            : formatVersionTime(version.createdAt),
+                                            ? t("projectLibrary.latestVersion")
+                                            : formatVersionTime(version.createdAt, locale, t("projectLibrary.unknownTime")),
                                         )}
                                         disabled={creating || Boolean(busyAction)}
-                                      >去优化</button>
+                                      >{t("projectLibrary.optimize")}</button>
                                     )}
                                     <Button
                                       type="button"
@@ -739,7 +750,7 @@ export function IntelligentProjectLibrary({
                                       }}
                                       disabled={Boolean(busyAction)}
                                     >
-                                      删除
+                                      {t("common.delete")}
                                     </Button>
                                   </div>
                                 </li>
@@ -785,12 +796,12 @@ export function IntelligentProjectLibrary({
       />
       {deleteTarget ? (
         <StudioConfirmDialog
-          title="删除这个版本？"
+          title={t("projectLibrary.delete.title")}
           description={deleteTarget.project.versionCount === 1
-            ? `“${deleteTarget.project.name}”只有这一个版本，删除后项目也会移除。此操作无法撤销。`
-            : "该版本的源码和验证记录将永久删除，其他版本不受影响。"}
+            ? t("projectLibrary.delete.onlyVersion", { name: deleteTarget.project.name })
+            : t("projectLibrary.delete.description")}
           error={deleteError}
-          confirmLabel="删除版本"
+          confirmLabel={t("projectLibrary.delete.confirm")}
           variant="danger"
           busy={busyAction === `delete:${deleteTarget.version.versionId}`}
           onCancel={() => {

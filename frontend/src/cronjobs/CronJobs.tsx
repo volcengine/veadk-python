@@ -31,6 +31,7 @@ import {
 import { Switch } from "@openai/apps-sdk-ui/components/Switch";
 import { Textarea } from "@openai/apps-sdk-ui/components/Textarea";
 import { Tooltip } from "@openai/apps-sdk-ui/components/Tooltip";
+import { useTranslation } from "react-i18next";
 import {
   cancelCronJobRun,
   createCronJob,
@@ -50,6 +51,7 @@ import {
 } from "../adk/client";
 import type { CloudProvider } from "../adk/cloudProvider";
 import { formatCloudRegion } from "../adk/cloudProvider";
+import { i18n } from "../i18n";
 import { StudioConfirmDialog } from "../ui/StudioConfirmDialog";
 import { DeploymentErrorMessage } from "../ui/DeploymentErrorMessage";
 import { LibraryResourceCard } from "../ui/LibraryResourceCard";
@@ -64,8 +66,8 @@ import {
   ResourceToolbar,
 } from "../ui/ResourceCollection";
 import {
-  CRONJOB_STATUS_LABELS,
-  WEEKDAY_LABELS,
+  CRONJOB_STATUS_LABEL_KEYS,
+  WEEKDAY_KEYS,
   cronJobIsRunning,
   describeCronJobSchedule,
   formatCronJobDate,
@@ -106,6 +108,10 @@ const TIMEZONE_OPTIONS = [
   "America/New_York",
   "UTC",
 ];
+
+function cronText(key: string, options?: Record<string, unknown>): string {
+  return i18n.t(key, { ns: "cronjobs", ...options });
+}
 
 function browserTimezone(): string {
   try {
@@ -169,7 +175,9 @@ function StatusBadge({ run }: { run?: CronJobRun }) {
       size="sm"
       pill
     >
-      {run ? CRONJOB_STATUS_LABELS[run.status] : "尚未执行"}
+      {run
+        ? cronText(CRONJOB_STATUS_LABEL_KEYS[run.status])
+        : cronText("status.notRun")}
     </Badge>
   );
 }
@@ -208,7 +216,10 @@ function Drawer({
     [cloudProvider, runtimes],
   );
   const weekdayOptions = useMemo<Option[]>(
-    () => WEEKDAY_LABELS.map((label, index) => ({ value: String(index), label })),
+    () => WEEKDAY_KEYS.map((key, index) => ({
+      value: String(index),
+      label: cronText(key),
+    })),
     [],
   );
   const timezoneOptions = useMemo<Option[]>(
@@ -265,16 +276,18 @@ function Drawer({
     const name = draft.name.trim();
     const prompt = draft.prompt.trim();
     const runtime = runtimes.find((item) => item.runtimeId === draft.runtimeId);
-    if (!name) return setError("请输入任务名称。");
-    if (!runtime) return setError("请选择可用的 Runtime Agent。");
-    if (!prompt) return setError("请输入每次执行时发送给 Agent 的文本。");
-    if (draft.scheduleType === "once" && !draft.onceAt) return setError("请选择执行时间。");
+    if (!name) return setError(cronText("validation.nameRequired"));
+    if (!runtime) return setError(cronText("validation.runtimeRequired"));
+    if (!prompt) return setError(cronText("validation.promptRequired"));
+    if (draft.scheduleType === "once" && !draft.onceAt) {
+      return setError(cronText("validation.timeRequired"));
+    }
     if ((draft.scheduleType === "daily" || draft.scheduleType === "weekly") && !draft.time) {
-      return setError("请选择执行时间。");
+      return setError(cronText("validation.timeRequired"));
     }
     const cronFields = draft.cron.trim().split(/\s+/);
     if (draft.scheduleType === "cron" && cronFields.length !== 5) {
-      return setError("Cron 表达式需要包含 5 个字段，例如 0 9 * * *。");
+      return setError(cronText("validation.cronFields"));
     }
     setError("");
     setResolvingRuntime(true);
@@ -290,7 +303,7 @@ function Drawer({
         agentName = runtimeApp?.trim() ?? "";
       }
       if (!agentName) {
-        throw new Error("Runtime Agent 未返回可调用的 appName，请确认 Runtime 已就绪且版本兼容。");
+        throw new Error(cronText("validation.runtimeAppMissing"));
       }
       await onSubmit({
         name,
@@ -324,8 +337,10 @@ function Drawer({
       <aside ref={drawerRef} className="cronjobs-drawer" role="dialog" aria-modal="true" aria-labelledby="cronjobs-drawer-title">
         <header className="cronjobs-drawer-head">
           <div>
-            <h2 id="cronjobs-drawer-title">{job ? "编辑定时任务" : "创建定时任务"}</h2>
-            <p>每次触发都会为 Runtime Agent 创建独立 Session。</p>
+            <h2 id="cronjobs-drawer-title">
+              {cronText(job ? "drawer.editTitle" : "drawer.createTitle")}
+            </h2>
+            <p>{cronText("drawer.description")}</p>
           </div>
           <Button
             type="button"
@@ -336,7 +351,7 @@ function Drawer({
             pill={false}
             onClick={onClose}
             disabled={isBusy}
-            aria-label="关闭抽屉"
+            aria-label={cronText("actions.closeDrawer")}
           >
             <X />
           </Button>
@@ -344,7 +359,7 @@ function Drawer({
         <form className="cronjobs-form" onSubmit={(event) => void submit(event)}>
           <div className="cronjobs-form-scroll">
             <label className="cronjobs-field">
-              <span>任务名称</span>
+              <span>{cronText("fields.name")}</span>
               <Input
                 ref={nameRef}
                 size="lg"
@@ -352,7 +367,7 @@ function Drawer({
                 maxLength={80}
                 invalid={Boolean(error) && !draft.name.trim()}
                 onChange={(event) => setDraft({ ...draft, name: event.target.value })}
-                placeholder="例如：每日生成运营摘要"
+                placeholder={cronText("fields.namePlaceholder")}
               />
             </label>
             <label className="cronjobs-field">
@@ -362,13 +377,15 @@ function Drawer({
                 options={runtimeOptions}
                 size="lg"
                 disabled={runtimes.length === 0}
-                placeholder={runtimes.length ? "选择 Runtime Agent" : "暂无可用 Runtime"}
+                placeholder={cronText(
+                  runtimes.length ? "fields.runtimePlaceholder" : "fields.noRuntime",
+                )}
                 onChange={(option) => setDraft({ ...draft, runtimeId: option.value })}
               />
-              <small>任务始终跟随该 Runtime 当前生效版本。</small>
+              <small>{cronText("fields.runtimeHelp")}</small>
             </label>
             <label className="cronjobs-field">
-              <span>执行文本</span>
+              <span>{cronText("fields.prompt")}</span>
               <Textarea
                 value={draft.prompt}
                 rows={5}
@@ -377,53 +394,53 @@ function Drawer({
                 maxLength={20_000}
                 invalid={Boolean(error) && !draft.prompt.trim()}
                 onChange={(event) => setDraft({ ...draft, prompt: event.target.value })}
-                placeholder="输入每次执行时发送给 Agent 的固定文本"
+                placeholder={cronText("fields.promptPlaceholder")}
               />
               <small className="cronjobs-character-count">
                 {draft.prompt.length.toLocaleString()} / 20,000
               </small>
             </label>
             <fieldset className="cronjobs-fieldset">
-              <legend>执行计划</legend>
+              <legend>{cronText("fields.schedule")}</legend>
               <SegmentedControl
                 className="cronjobs-schedule-types"
                 value={draft.scheduleType}
                 size="lg"
                 block
-                aria-label="执行计划类型"
+                aria-label={cronText("fields.scheduleType")}
                 onChange={(scheduleType) => setDraft({ ...draft, scheduleType })}
               >
-                <SegmentedControl.Option value="once">一次性</SegmentedControl.Option>
-                <SegmentedControl.Option value="daily">每天</SegmentedControl.Option>
-                <SegmentedControl.Option value="weekly">每周</SegmentedControl.Option>
+                <SegmentedControl.Option value="once">{cronText("scheduleTypes.once")}</SegmentedControl.Option>
+                <SegmentedControl.Option value="daily">{cronText("scheduleTypes.daily")}</SegmentedControl.Option>
+                <SegmentedControl.Option value="weekly">{cronText("scheduleTypes.weekly")}</SegmentedControl.Option>
                 <SegmentedControl.Option value="cron">Cron</SegmentedControl.Option>
               </SegmentedControl>
               {draft.scheduleType === "once" ? (
-                <label className="cronjobs-field"><span>执行时间</span><Input size="lg" type="datetime-local" value={draft.onceAt} onChange={(event) => setDraft({ ...draft, onceAt: event.target.value })} /></label>
+                <label className="cronjobs-field"><span>{cronText("fields.runAt")}</span><Input size="lg" type="datetime-local" value={draft.onceAt} onChange={(event) => setDraft({ ...draft, onceAt: event.target.value })} /></label>
               ) : null}
               {draft.scheduleType === "daily" ? (
-                <label className="cronjobs-field"><span>每天执行时间</span><Input size="lg" type="time" value={draft.time} onChange={(event) => setDraft({ ...draft, time: event.target.value })} /></label>
+                <label className="cronjobs-field"><span>{cronText("fields.dailyTime")}</span><Input size="lg" type="time" value={draft.time} onChange={(event) => setDraft({ ...draft, time: event.target.value })} /></label>
               ) : null}
               {draft.scheduleType === "weekly" ? (
                 <div className="cronjobs-inline-fields">
-                  <label className="cronjobs-field"><span>星期</span><Select value={String(draft.weekday)} options={weekdayOptions} size="lg" onChange={(option) => setDraft({ ...draft, weekday: Number(option.value) })} /></label>
-                  <label className="cronjobs-field"><span>执行时间</span><Input size="lg" type="time" value={draft.time} onChange={(event) => setDraft({ ...draft, time: event.target.value })} /></label>
+                  <label className="cronjobs-field"><span>{cronText("fields.weekday")}</span><Select value={String(draft.weekday)} options={weekdayOptions} size="lg" onChange={(option) => setDraft({ ...draft, weekday: Number(option.value) })} /></label>
+                  <label className="cronjobs-field"><span>{cronText("fields.runAt")}</span><Input size="lg" type="time" value={draft.time} onChange={(event) => setDraft({ ...draft, time: event.target.value })} /></label>
                 </div>
               ) : null}
               {draft.scheduleType === "cron" ? (
-                <label className="cronjobs-field"><span>Cron 表达式</span><Input size="lg" value={draft.cron} onChange={(event) => setDraft({ ...draft, cron: event.target.value })} placeholder="0 9 * * *" /><small>依次填写分钟、小时、日期、月份、星期。</small></label>
+                <label className="cronjobs-field"><span>{cronText("fields.cronExpression")}</span><Input size="lg" value={draft.cron} onChange={(event) => setDraft({ ...draft, cron: event.target.value })} placeholder="0 9 * * *" /><small>{cronText("fields.cronHelp")}</small></label>
               ) : null}
-              <label className="cronjobs-field"><span>时区</span><Select value={draft.timezone} options={timezoneOptions} size="lg" onChange={(option) => setDraft({ ...draft, timezone: option.value })} /></label>
+              <label className="cronjobs-field"><span>{cronText("fields.timezone")}</span><Select value={draft.timezone} options={timezoneOptions} size="lg" onChange={(option) => setDraft({ ...draft, timezone: option.value })} /></label>
             </fieldset>
             <div className="cronjobs-switch-row">
-              <span><strong>创建后启用</strong><small>启用后会从下一个计划时间开始执行。</small></span>
-              <Switch checked={draft.enabled} onCheckedChange={(enabled) => setDraft({ ...draft, enabled })} aria-label="创建后启用" />
+              <span><strong>{cronText("fields.enableAfterCreate")}</strong><small>{cronText("fields.enableHelp")}</small></span>
+              <Switch checked={draft.enabled} onCheckedChange={(enabled) => setDraft({ ...draft, enabled })} aria-label={cronText("fields.enableAfterCreate")} />
             </div>
             {error ? <div ref={errorRef} className="cronjobs-inline-error" tabIndex={-1}><Alert color="danger" variant="soft" description={error} /></div> : null}
           </div>
           <footer className="cronjobs-drawer-actions">
-            <Button type="button" color="secondary" variant="ghost" size="lg" pill={false} onClick={onClose} disabled={isBusy}>取消</Button>
-            <Button type="submit" color="primary" size="lg" pill={false} loading={isBusy} disabled={runtimes.length === 0} aria-busy={isBusy || undefined}>{resolvingRuntime ? "正在连接 Runtime…" : busy ? "保存中…" : job ? "保存更改" : "创建任务"}</Button>
+            <Button type="button" color="secondary" variant="ghost" size="lg" pill={false} onClick={onClose} disabled={isBusy}>{cronText("actions.cancel")}</Button>
+            <Button type="submit" color="primary" size="lg" pill={false} loading={isBusy} disabled={runtimes.length === 0} aria-busy={isBusy || undefined}>{cronText(resolvingRuntime ? "actions.connectingRuntime" : busy ? "actions.saving" : job ? "actions.saveChanges" : "actions.createTask")}</Button>
           </footer>
         </form>
       </aside>
@@ -448,9 +465,9 @@ function JobList({
         icon={<Plus />}
         onClick={onCreate}
         disabled={!canCreate}
-        title={canCreate ? "创建定时任务" : "暂无可用的 Runtime Agent"}
+        title={cronText(canCreate ? "actions.createScheduledTask" : "fields.noRuntime")}
       >
-        创建定时任务
+        {cronText("actions.createScheduledTask")}
       </ResourceCreateCard>
       {jobs.map((job) => {
         const schedule = describeCronJobSchedule(job.schedule);
@@ -459,12 +476,12 @@ function JobList({
             key={job.jobId}
             className="cronjobs-card"
             title={job.name}
-            status={<Badge color={job.enabled ? "success" : "secondary"} variant="soft" size="sm" pill>{job.enabled ? "已启用" : "已暂停"}</Badge>}
+            status={<Badge color={job.enabled ? "success" : "secondary"} variant="soft" size="sm" pill>{cronText(job.enabled ? "status.enabled" : "status.paused")}</Badge>}
             description={job.prompt}
             metadata={[
-              { label: "执行计划", value: schedule, title: schedule },
+              { label: cronText("fields.schedule"), value: schedule, title: schedule },
             ]}
-            detailAction={{ label: "查看详情", onClick: () => onSelect(job) }}
+            detailAction={{ label: cronText("actions.viewDetails"), onClick: () => onSelect(job) }}
           />
         );
       })}
@@ -507,33 +524,33 @@ function JobDetail({
     <div className="cronjobs-detail">
       <header className="cronjobs-detail-head">
         <div className="cronjobs-detail-title">
-          <Button type="button" color="secondary" variant="ghost" size="lg" uniform pill={false} onClick={onBack} aria-label="返回定时任务列表"><ArrowLeft /></Button>
+          <Button type="button" color="secondary" variant="ghost" size="lg" uniform pill={false} onClick={onBack} aria-label={cronText("actions.backToList")}><ArrowLeft /></Button>
           <div><h1>{job.name}</h1><p>{job.runtimeName || job.agentName} · {describeCronJobSchedule(job.schedule)}</p></div>
         </div>
         <div className="cronjobs-detail-actions">
-          <Button type="button" color="secondary" variant="outline" size="lg" pill={false} onClick={onEdit} disabled={busy}><Edit />编辑</Button>
-          <Button type="button" color="secondary" variant="outline" size="lg" pill={false} onClick={onToggle} disabled={busy}>{job.enabled ? <Pause /> : <Play />}{job.enabled ? "暂停" : "启用"}</Button>
-          {latestRunning ? <Button type="button" color="danger" variant="soft" size="lg" pill={false} onClick={() => onCancel(latestRunning)} disabled={busy || Boolean(latestRunning.cancellationRequestedAt)}><Stop />{latestRunning.cancellationRequestedAt ? (latestRunning.status === "queued" ? "取消中…" : "终止中…") : (latestRunning.status === "queued" ? "取消排队" : "终止本次执行")}</Button> : <Button type="button" color="primary" size="lg" pill={false} onClick={onRun} disabled={busy || !job.enabled}><Play />立即执行</Button>}
-          <Tooltip compact content={latestRunning ? (latestRunning.status === "queued" ? "请先取消排队" : "请先终止当前执行") : "删除任务"}>
-            <Button type="button" color="danger" variant="ghost" size="lg" pill={false} onClick={onDelete} disabled={busy || Boolean(latestRunning)} aria-label="删除任务"><Delete />删除</Button>
+          <Button type="button" color="secondary" variant="outline" size="lg" pill={false} onClick={onEdit} disabled={busy}><Edit />{cronText("actions.edit")}</Button>
+          <Button type="button" color="secondary" variant="outline" size="lg" pill={false} onClick={onToggle} disabled={busy}>{job.enabled ? <Pause /> : <Play />}{cronText(job.enabled ? "actions.pause" : "actions.enable")}</Button>
+          {latestRunning ? <Button type="button" color="danger" variant="soft" size="lg" pill={false} onClick={() => onCancel(latestRunning)} disabled={busy || Boolean(latestRunning.cancellationRequestedAt)}><Stop />{cronText(latestRunning.cancellationRequestedAt ? (latestRunning.status === "queued" ? "actions.cancelling" : "actions.stopping") : (latestRunning.status === "queued" ? "actions.cancelQueue" : "actions.stopRun"))}</Button> : <Button type="button" color="primary" size="lg" pill={false} onClick={onRun} disabled={busy || !job.enabled}><Play />{cronText("actions.runNow")}</Button>}
+          <Tooltip compact content={cronText(latestRunning ? (latestRunning.status === "queued" ? "actions.cancelQueueFirst" : "actions.stopRunFirst") : "actions.deleteTask")}>
+            <Button type="button" color="danger" variant="ghost" size="lg" pill={false} onClick={onDelete} disabled={busy || Boolean(latestRunning)} aria-label={cronText("actions.deleteTask")}><Delete />{cronText("actions.delete")}</Button>
           </Tooltip>
         </div>
       </header>
       <div className="cronjobs-detail-scroll">
-        <section className="cronjobs-summary-grid" aria-label="任务配置">
-          <dl><div><dt>任务状态</dt><dd>{job.enabled ? "已启用" : "已暂停"}</dd></div><div><dt>下次执行</dt><dd>{job.enabled ? formatCronJobDate(job.nextRunAt) : "-"}</dd></div><div><dt>Runtime</dt><dd title={job.runtimeName}>{job.runtimeName}</dd></div><div><dt>地域</dt><dd>{job.region}</dd></div></dl>
-          <div className="cronjobs-prompt"><span>执行文本</span><p>{job.prompt}</p></div>
+        <section className="cronjobs-summary-grid" aria-label={cronText("detail.configuration")}>
+          <dl><div><dt>{cronText("detail.status")}</dt><dd>{cronText(job.enabled ? "status.enabled" : "status.paused")}</dd></div><div><dt>{cronText("detail.nextRun")}</dt><dd>{job.enabled ? formatCronJobDate(job.nextRunAt) : "-"}</dd></div><div><dt>Runtime</dt><dd title={job.runtimeName}>{job.runtimeName}</dd></div><div><dt>{cronText("detail.region")}</dt><dd>{job.region}</dd></div></dl>
+          <div className="cronjobs-prompt"><span>{cronText("fields.prompt")}</span><p>{job.prompt}</p></div>
         </section>
         <section className="cronjobs-history">
-          <header><div><h2>执行历史</h2><p>每次运行均使用独立 Session，结果与错误会永久保留。</p></div><Tooltip compact content="刷新"><Button type="button" color="secondary" variant="ghost" size="lg" uniform pill={false} onClick={onRetryRuns} disabled={runsLoading} aria-label="刷新执行历史"><ArrowRotateCw /></Button></Tooltip></header>
-          {runsLoading && runs.length === 0 ? <ResourceLoadingState /> : runsError ? <Alert className="cronjobs-history-alert" color="danger" variant="soft" title="无法加载执行历史" description={runsError} actions={<Button type="button" color="danger" variant="soft" size="sm" pill={false} onClick={onRetryRuns}>重试</Button>} /> : runs.length === 0 ? <EmptyMessage className="cronjobs-history-state" fill="none"><EmptyMessage.Icon><Clock /></EmptyMessage.Icon><EmptyMessage.Title>暂无执行记录</EmptyMessage.Title><EmptyMessage.Description>任务触发或立即执行后，记录会显示在这里。</EmptyMessage.Description></EmptyMessage> : (
+          <header><div><h2>{cronText("history.title")}</h2><p>{cronText("history.description")}</p></div><Tooltip compact content={cronText("actions.refresh")}><Button type="button" color="secondary" variant="ghost" size="lg" uniform pill={false} onClick={onRetryRuns} disabled={runsLoading} aria-label={cronText("actions.refreshHistory")}><ArrowRotateCw /></Button></Tooltip></header>
+          {runsLoading && runs.length === 0 ? <ResourceLoadingState /> : runsError ? <Alert className="cronjobs-history-alert" color="danger" variant="soft" title={cronText("history.loadFailed")} description={runsError} actions={<Button type="button" color="danger" variant="soft" size="sm" pill={false} onClick={onRetryRuns}>{cronText("actions.retry")}</Button>} /> : runs.length === 0 ? <EmptyMessage className="cronjobs-history-state" fill="none"><EmptyMessage.Icon><Clock /></EmptyMessage.Icon><EmptyMessage.Title>{cronText("history.emptyTitle")}</EmptyMessage.Title><EmptyMessage.Description>{cronText("history.emptyDescription")}</EmptyMessage.Description></EmptyMessage> : (
             <div className="cronjobs-runs">
               {runs.map((run) => <article className="cronjobs-run" key={run.runId}>
-                <div className="cronjobs-run-main"><StatusBadge run={run} /><div><strong>{formatCronJobDate(run.startedAt || run.scheduledAt)}</strong><span>耗时 {formatCronJobDuration(run)}{run.runtimeVersion ? ` · Runtime v${run.runtimeVersion}` : ""}</span></div></div>
+                <div className="cronjobs-run-main"><StatusBadge run={run} /><div><strong>{formatCronJobDate(run.startedAt || run.scheduledAt)}</strong><span>{cronText("history.duration", { duration: formatCronJobDuration(run) })}{run.runtimeVersion ? ` · Runtime v${run.runtimeVersion}` : ""}</span></div></div>
                 {run.sessionId ? <div className="cronjobs-run-meta"><span>Session</span><strong title={run.sessionId}>{run.sessionId}</strong></div> : null}
-                {run.output ? <div className="cronjobs-run-output"><span>最终回答</span><CronJobFinalAnswer output={run.output} /></div> : null}
-                {run.error ? <div className="cronjobs-run-output is-error"><span>错误详情</span><DeploymentErrorMessage message={run.error} className="cronjobs-run-error-detail" defaultExpanded={false} onRetry={run.status === "failed" ? onRetryRun : undefined} retryLabel="重新执行" /></div> : null}
-                {(run.status === "queued" || run.status === "running" || run.status === "retrying" || run.status === "pending") ? <Button type="button" className="cronjobs-run-cancel" color="danger" variant="soft" size="sm" pill={false} onClick={() => onCancel(run)} disabled={busy || Boolean(run.cancellationRequestedAt)} loading={Boolean(run.cancellationRequestedAt)}>{run.cancellationRequestedAt ? "终止中…" : run.status === "queued" ? "取消排队" : "终止执行"}</Button> : null}
+                {run.output ? <div className="cronjobs-run-output"><span>{cronText("history.finalAnswer")}</span><CronJobFinalAnswer output={run.output} /></div> : null}
+                {run.error ? <div className="cronjobs-run-output is-error"><span>{cronText("history.errorDetails")}</span><DeploymentErrorMessage message={run.error} className="cronjobs-run-error-detail" defaultExpanded={false} onRetry={run.status === "failed" ? onRetryRun : undefined} retryLabel={cronText("actions.rerun")} /></div> : null}
+                {(run.status === "queued" || run.status === "running" || run.status === "retrying" || run.status === "pending") ? <Button type="button" className="cronjobs-run-cancel" color="danger" variant="soft" size="sm" pill={false} onClick={() => onCancel(run)} disabled={busy || Boolean(run.cancellationRequestedAt)} loading={Boolean(run.cancellationRequestedAt)}>{cronText(run.cancellationRequestedAt ? "actions.stopping" : run.status === "queued" ? "actions.cancelQueue" : "actions.stop")}</Button> : null}
               </article>)}
             </div>
           )}
@@ -544,6 +561,7 @@ function JobDetail({
 }
 
 export function CronJobs({ cloudProvider }: CronJobsProps) {
+  useTranslation("cronjobs");
   const [jobs, setJobs] = useState<CronJob[]>([]);
   const [runtimes, setRuntimes] = useState<CloudRuntime[]>([]);
   const [loading, setLoading] = useState(true);
@@ -614,7 +632,7 @@ export function CronJobs({ cloudProvider }: CronJobsProps) {
 
   const hasActiveJob = jobs.some(cronJobIsRunning);
   useEffect(() => {
-    if (!hasActiveJob && notice.includes("已排队")) setNotice("");
+    if (!hasActiveJob && notice === cronText("notices.queued")) setNotice("");
   }, [hasActiveJob, notice]);
 
   useEffect(() => {
@@ -676,16 +694,16 @@ export function CronJobs({ cloudProvider }: CronJobsProps) {
       replaceJob(saved);
       setDrawerJob(undefined);
       if (job) setSelectedId(saved.jobId);
-    }, job ? "任务已更新。" : "任务已创建。", true);
+    }, cronText(job ? "notices.updated" : "notices.created"), true);
   };
 
-  const toggle = (job: CronJob) => void runAction(`${job.jobId}:toggle`, async () => replaceJob(await setCronJobEnabled(job.jobId, !job.enabled)), job.enabled ? "任务已暂停。" : "任务已启用。");
+  const toggle = (job: CronJob) => void runAction(`${job.jobId}:toggle`, async () => replaceJob(await setCronJobEnabled(job.jobId, !job.enabled)), cronText(job.enabled ? "notices.paused" : "notices.enabled"));
   const queueRun = (job: CronJob, success: string) => runAction(`${job.jobId}:run`, async () => {
     const run = await runCronJobNow(job.jobId);
     replaceJob({ ...job, latestRun: run });
     if (selectedId === job.jobId) setRuns((current) => [run, ...current.filter((item) => item.runId !== run.runId)]);
   }, success);
-  const runNow = (job: CronJob) => void queueRun(job, "任务已排队，将在一分钟内开始执行。");
+  const runNow = (job: CronJob) => void queueRun(job, cronText("notices.queued"));
 
   const confirmAction = () => {
     if (!confirmTarget) return;
@@ -697,7 +715,7 @@ export function CronJobs({ cloudProvider }: CronJobsProps) {
         setJobs((current) => current.filter((job) => job.jobId !== target.job.jobId));
         setSelectedId("");
         setConfirmTarget(null);
-      }, "任务及其执行历史已删除。", true).catch((cause) => {
+      }, cronText("notices.deleted"), true).catch((cause) => {
         setConfirmError(cause instanceof Error ? cause.message : String(cause));
       });
     } else {
@@ -706,38 +724,38 @@ export function CronJobs({ cloudProvider }: CronJobsProps) {
         setRuns((current) => current.map((run) => run.runId === cancelled.runId ? cancelled : run));
         replaceJob({ ...target.job, latestRun: target.job.latestRun?.runId === cancelled.runId ? cancelled : target.job.latestRun });
         setConfirmTarget(null);
-      }, "已提交终止请求。", true).catch((cause) => {
+      }, cronText("notices.cancelRequested"), true).catch((cause) => {
         setConfirmError(cause instanceof Error ? cause.message : String(cause));
       });
     }
   };
 
   if (selectedJob) {
-    return <ResourcePageShell className="cronjobs-page" aria-label="定时任务详情"><JobDetail job={selectedJob} runs={runs} runsLoading={runsLoading} runsError={runsError} busyAction={busyAction} onBack={() => setSelectedId("")} onEdit={() => setDrawerJob(selectedJob)} onToggle={() => toggle(selectedJob)} onRun={() => runNow(selectedJob)} onDelete={() => { setConfirmError(""); setConfirmTarget({ kind: "delete", job: selectedJob }); }} onCancel={(run) => { setConfirmError(""); setConfirmTarget({ kind: "cancel", job: selectedJob, run }); }} onRetryRun={() => queueRun(selectedJob, "任务已重新排队，将在一分钟内开始执行。")} onRetryRuns={() => void loadRuns(selectedJob.jobId)} />{notice ? <div className="cronjobs-notice" role="status"><Alert color="info" variant="soft" description={notice} /></div> : null}{drawerJob !== undefined ? <Drawer job={drawerJob} runtimes={runtimes} cloudProvider={cloudProvider} busy={busyAction.endsWith(":save")} onClose={() => setDrawerJob(undefined)} onSubmit={submitDrawer} /> : null}{confirmTarget ? <StudioConfirmDialog title={confirmTarget.kind === "delete" ? "删除定时任务？" : "终止本次执行？"} description={confirmTarget.kind === "delete" ? `“${confirmTarget.job.name}”及其全部执行历史将被永久删除。` : "本次 Session 将被取消，后续计划不会暂停。"} error={confirmError} confirmLabel={confirmTarget.kind === "delete" ? "删除任务" : "终止执行"} variant="danger" busy={busyAction.endsWith(confirmTarget.kind)} onCancel={() => { setConfirmError(""); setConfirmTarget(null); }} onConfirm={confirmAction} /> : null}</ResourcePageShell>;
+    return <ResourcePageShell className="cronjobs-page" aria-label={cronText("detail.pageLabel")}><JobDetail job={selectedJob} runs={runs} runsLoading={runsLoading} runsError={runsError} busyAction={busyAction} onBack={() => setSelectedId("")} onEdit={() => setDrawerJob(selectedJob)} onToggle={() => toggle(selectedJob)} onRun={() => runNow(selectedJob)} onDelete={() => { setConfirmError(""); setConfirmTarget({ kind: "delete", job: selectedJob }); }} onCancel={(run) => { setConfirmError(""); setConfirmTarget({ kind: "cancel", job: selectedJob, run }); }} onRetryRun={() => queueRun(selectedJob, cronText("notices.requeued"))} onRetryRuns={() => void loadRuns(selectedJob.jobId)} />{notice ? <div className="cronjobs-notice" role="status"><Alert color="info" variant="soft" description={notice} /></div> : null}{drawerJob !== undefined ? <Drawer job={drawerJob} runtimes={runtimes} cloudProvider={cloudProvider} busy={busyAction.endsWith(":save")} onClose={() => setDrawerJob(undefined)} onSubmit={submitDrawer} /> : null}{confirmTarget ? <StudioConfirmDialog title={cronText(confirmTarget.kind === "delete" ? "confirm.deleteTitle" : "confirm.cancelTitle")} description={confirmTarget.kind === "delete" ? cronText("confirm.deleteDescription", { name: confirmTarget.job.name }) : cronText("confirm.cancelDescription")} error={confirmError} confirmLabel={cronText(confirmTarget.kind === "delete" ? "actions.deleteTask" : "actions.stop")} variant="danger" busy={busyAction.endsWith(confirmTarget.kind)} onCancel={() => { setConfirmError(""); setConfirmTarget(null); }} onConfirm={confirmAction} /> : null}</ResourcePageShell>;
   }
 
   return (
-    <ResourcePageShell className="cronjobs-page" aria-label="定时任务">
+    <ResourcePageShell className="cronjobs-page" aria-label={cronText("page.title")}>
       <ResourcePageHeader
         className="cronjobs-page-head"
-        title="定时任务"
+        title={cronText("page.title")}
       />
       <ResourceToolbar>
         <ResourceTabs
           idPrefix="cronjobs-filter"
-          ariaLabel="定时任务状态筛选"
+          ariaLabel={cronText("page.filterLabel")}
           value={listFilter}
           items={[
-            { id: "all", label: "全部" },
-            { id: "enabled", label: "已启用" },
-            { id: "paused", label: "已暂停" },
+            { id: "all", label: cronText("filters.all") },
+            { id: "enabled", label: cronText("status.enabled") },
+            { id: "paused", label: cronText("status.paused") },
           ]}
           onChange={setListFilter}
         />
       </ResourceToolbar>
       {notice ? <div className="cronjobs-banner" role="status"><Alert color="info" variant="soft" description={notice} /></div> : null}
-      <ResourceResults aria-label="定时任务列表">
-        {loading && jobs.length === 0 ? <ResourceLoadingState /> : error ? <EmptyMessage className="cronjobs-state" fill="none"><EmptyMessage.Icon color="danger"><Clock /></EmptyMessage.Icon><EmptyMessage.Title color="danger">无法加载定时任务</EmptyMessage.Title><EmptyMessage.Description>{error}</EmptyMessage.Description><EmptyMessage.ActionRow><Button type="button" color="secondary" variant="outline" size="lg" pill={false} onClick={() => void load()}><ArrowRotateCw />重试</Button></EmptyMessage.ActionRow></EmptyMessage> : <JobList jobs={visibleJobs} canCreate={!loading && runtimes.length > 0} onCreate={() => setDrawerJob(null)} onSelect={(job) => setSelectedId(job.jobId)} />}
+      <ResourceResults aria-label={cronText("page.listLabel")}>
+        {loading && jobs.length === 0 ? <ResourceLoadingState /> : error ? <EmptyMessage className="cronjobs-state" fill="none"><EmptyMessage.Icon color="danger"><Clock /></EmptyMessage.Icon><EmptyMessage.Title color="danger">{cronText("page.loadFailed")}</EmptyMessage.Title><EmptyMessage.Description>{error}</EmptyMessage.Description><EmptyMessage.ActionRow><Button type="button" color="secondary" variant="outline" size="lg" pill={false} onClick={() => void load()}><ArrowRotateCw />{cronText("actions.retry")}</Button></EmptyMessage.ActionRow></EmptyMessage> : <JobList jobs={visibleJobs} canCreate={!loading && runtimes.length > 0} onCreate={() => setDrawerJob(null)} onSelect={(job) => setSelectedId(job.jobId)} />}
       </ResourceResults>
       {drawerJob !== undefined ? <Drawer job={drawerJob} runtimes={runtimes} cloudProvider={cloudProvider} busy={busyAction.endsWith(":save")} onClose={() => setDrawerJob(undefined)} onSubmit={submitDrawer} /> : null}
     </ResourcePageShell>

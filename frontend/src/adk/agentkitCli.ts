@@ -1,12 +1,17 @@
 import { httpErrorMessage, studioFetch } from "./client";
+import { adkT, withLocaleHeaders } from "./i18n";
 import type { SandboxToolLaunch } from "./sandbox";
 
 const API = "/web/agentkit-cli";
 const REQUEST_TIMEOUT_MS = 60_000;
 const CREATE_TIMEOUT_MS = 330_000;
 
-export const AGENTKIT_CLI_UNCONFIGURED_MESSAGE =
-  "管理员未配置 AgentKit Dev Sandbox，请配置后再使用";
+export function agentKitCliUnconfiguredMessage(): string {
+  return adkT("agentkitCli.unconfigured");
+}
+
+/** @deprecated Prefer agentKitCliUnconfiguredMessage() for runtime language changes. */
+export const AGENTKIT_CLI_UNCONFIGURED_MESSAGE = agentKitCliUnconfiguredMessage();
 
 export interface AgentKitCliCapabilities {
   enabled: boolean;
@@ -25,7 +30,7 @@ interface RequestOptions {
 }
 
 function headers(json = false): Headers {
-  const value = new Headers({ Accept: "application/json" });
+  const value = withLocaleHeaders({ Accept: "application/json" });
   if (json) value.set("Content-Type", "application/json");
   return value;
 }
@@ -42,7 +47,7 @@ function parseSession(value: unknown): AgentKitCliSession {
     expireAt?: unknown;
   };
   if (typeof session?.sessionId !== "string" || typeof session.status !== "string") {
-    throw new Error("AgentKit CLI 返回了无效的 Session。");
+    throw new Error(adkT("agentkitCli.invalidSession"));
   }
   return {
     id: session.sessionId,
@@ -59,10 +64,10 @@ export const agentKitCliClient = {
       { headers: headers(), signal: options.signal },
       REQUEST_TIMEOUT_MS,
     );
-    if (!response.ok) throw await responseError(response, "无法读取 AgentKit CLI 配置。");
+    if (!response.ok) throw await responseError(response, adkT("agentkitCli.loadCapabilitiesFailed"));
     const value = (await response.json()) as { enabled?: unknown; reason?: unknown };
     if (typeof value.enabled !== "boolean") {
-      throw new Error("AgentKit CLI 返回了无效的配置状态。");
+      throw new Error(adkT("agentkitCli.invalidCapabilities"));
     }
     return {
       enabled: value.enabled,
@@ -76,10 +81,10 @@ export const agentKitCliClient = {
       { headers: headers(), signal: options.signal },
       REQUEST_TIMEOUT_MS,
     );
-    if (!response.ok) throw await responseError(response, "无法读取 AgentKit CLI Session。");
+    if (!response.ok) throw await responseError(response, adkT("agentkitCli.listSessionsFailed"));
     const value = (await response.json()) as { sessions?: unknown };
     if (!Array.isArray(value.sessions)) {
-      throw new Error("AgentKit CLI 返回了无效的 Session 列表。");
+      throw new Error(adkT("agentkitCli.invalidSessionList"));
     }
     return value.sessions.map(parseSession);
   },
@@ -95,7 +100,7 @@ export const agentKitCliClient = {
       },
       CREATE_TIMEOUT_MS,
     );
-    if (!response.ok) throw await responseError(response, "无法创建 AgentKit CLI Session。");
+    if (!response.ok) throw await responseError(response, adkT("agentkitCli.createSessionFailed"));
     return parseSession(await response.json());
   },
 
@@ -105,7 +110,7 @@ export const agentKitCliClient = {
       { method: "POST", headers: headers(), signal: options.signal },
       REQUEST_TIMEOUT_MS,
     );
-    if (!response.ok) throw await responseError(response, "无法打开 AgentKit CLI Session。");
+    if (!response.ok) throw await responseError(response, adkT("agentkitCli.openSessionFailed"));
   },
 
   async launchTerminal(
@@ -117,10 +122,10 @@ export const agentKitCliClient = {
       { method: "POST", headers: headers(), signal: options.signal },
       REQUEST_TIMEOUT_MS,
     );
-    if (!response.ok) throw await responseError(response, "无法打开 AgentKit CLI 终端。");
+    if (!response.ok) throw await responseError(response, adkT("agentkitCli.openTerminalFailed"));
     const value = (await response.json()) as { url?: unknown; shellSessionId?: unknown };
     if (typeof value.url !== "string" || !value.url) {
-      throw new Error("AgentKit CLI 返回了无效的终端地址。");
+      throw new Error(adkT("agentkitCli.invalidTerminalUrl"));
     }
     return {
       url: value.url,

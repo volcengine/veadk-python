@@ -7,6 +7,7 @@ import {
   type CSSProperties,
   type SVGProps,
 } from "react";
+import { useTranslation } from "react-i18next";
 import type {
   SkillSpaceRef,
   SkillSpaceSkill,
@@ -63,8 +64,8 @@ function CheckIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
-function spaceLabel(space: SkillSpaceRef): string {
-  return space.name.trim() || "未命名 Skill Space";
+function spaceLabel(space: SkillSpaceRef, unnamedLabel: string): string {
+  return space.name.trim() || unnamedLabel;
 }
 
 export function NewChatSkillTargetPicker({
@@ -84,6 +85,7 @@ export function NewChatSkillTargetPicker({
   onRetrySpaces,
   onRetrySkills,
 }: NewChatSkillTargetPickerProps) {
+  const { t } = useTranslation("newChat");
   const [open, setOpen] = useState(false);
   const [activeSpaceIndex, setActiveSpaceIndex] = useState(0);
   const [activeSkillIndex, setActiveSkillIndex] = useState(0);
@@ -97,8 +99,11 @@ export function NewChatSkillTargetPicker({
   const hoverOpenTimerRef = useRef<number | null>(null);
   const hoverCloseTimerRef = useRef<number | null>(null);
   const activeSpace = spaces.find((space) => space.id === activeSpaceId) ?? null;
-  const activeSpaceLabel = activeSpace ? spaceLabel(activeSpace) : "Skill Space";
-  const triggerLabel = selectedSkillLabel || "选择 Skill";
+  const unnamedSpaceLabel = t("skill.unnamedSpace");
+  const activeSpaceLabel = activeSpace
+    ? spaceLabel(activeSpace, unnamedSpaceLabel)
+    : "Skill Space";
+  const triggerLabel = selectedSkillLabel || t("skill.select");
 
   const close = useCallback((returnFocus = false) => {
     if (hoverOpenTimerRef.current !== null) {
@@ -275,7 +280,7 @@ export function NewChatSkillTargetPicker({
         ref={triggerRef}
         type="button"
         className="new-chat-agent-picker__trigger new-chat-skill-target-picker__trigger"
-        aria-label={`选择 Skill：${triggerLabel}`}
+        aria-label={t("skill.selectAria", { skill: triggerLabel })}
         aria-haspopup="menu"
         aria-expanded={open}
         disabled={disabled}
@@ -312,15 +317,15 @@ export function NewChatSkillTargetPicker({
             {spacesLoading && spaces.length === 0 ? (
               <div className="new-chat-agent-picker__status" role="status" aria-live="polite">
                 <span className="new-chat-agent-picker__spinner new-chat-skill-target-picker__spinner" aria-hidden="true" />
-                <span className="sr-only">正在加载 Skill Space</span>
+                <span className="sr-only">{t("skill.loadingSpaces")}</span>
               </div>
             ) : spacesError && spaces.length === 0 ? (
               <div className="new-chat-agent-picker__error" role="alert">
                 <span>{spacesError}</span>
-                <button type="button" onClick={onRetrySpaces}>重新加载</button>
+                <button type="button" onClick={onRetrySpaces}>{t("skill.reload")}</button>
               </div>
             ) : spaces.length === 0 ? (
-              <div className="new-chat-skill-target-picker__empty">暂无 Skill Space</div>
+              <div className="new-chat-skill-target-picker__empty">{t("skill.emptySpaces")}</div>
             ) : spaces.map((space, index) => (
               <button
                 key={space.id}
@@ -329,14 +334,14 @@ export function NewChatSkillTargetPicker({
                 aria-haspopup="listbox"
                 aria-expanded={activeSpaceId === space.id}
                 className={`new-chat-agent-picker__type new-chat-skill-target-picker__space${activeSpaceId === space.id ? " is-previewed" : ""}${keyboardNavigating && keyboardPanel === "spaces" && activeSpaceIndex === index ? " is-keyboard-active" : ""}`}
-                title={spaceLabel(space)}
+                title={spaceLabel(space, unnamedSpaceLabel)}
                 onMouseEnter={() => activateSpace(index)}
                 onClick={() => {
                   activateSpace(index);
                   setKeyboardPanel("skills");
                 }}
               >
-                <span>{spaceLabel(space)}</span>
+                <span>{spaceLabel(space, unnamedSpaceLabel)}</span>
                 <ChevronIcon className="new-chat-agent-picker__nested-chevron" />
               </button>
             ))}
@@ -346,20 +351,20 @@ export function NewChatSkillTargetPicker({
             <div
               className="new-chat-agent-picker__submenu new-chat-skill-target-picker__submenu"
               role="listbox"
-              aria-label={`${activeSpaceLabel} Skill 列表`}
+              aria-label={t("skill.skillList", { space: activeSpaceLabel })}
             >
               {skillsLoading && skills.length === 0 ? (
                 <div className="new-chat-agent-picker__status" role="status" aria-live="polite">
                   <span className="new-chat-agent-picker__spinner new-chat-skill-target-picker__spinner" aria-hidden="true" />
-                  <span className="sr-only">正在加载 Skill</span>
+                  <span className="sr-only">{t("skill.loadingSkills")}</span>
                 </div>
               ) : skillsError && skills.length === 0 ? (
                 <div className="new-chat-agent-picker__error" role="alert">
                   <span>{skillsError}</span>
-                  <button type="button" onClick={onRetrySkills}>重新加载</button>
+                  <button type="button" onClick={onRetrySkills}>{t("skill.reload")}</button>
                 </div>
               ) : skills.length === 0 ? (
-                <div className="new-chat-skill-target-picker__empty">暂无 Skill</div>
+                <div className="new-chat-skill-target-picker__empty">{t("skill.emptySkills")}</div>
               ) : (
                 <div className="new-chat-agent-picker__runtime-list">
                   {skills.map((skill, index) => {

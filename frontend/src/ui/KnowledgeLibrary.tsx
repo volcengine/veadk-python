@@ -10,6 +10,8 @@ import {
   type SVGProps,
 } from "react";
 import { createPortal } from "react-dom";
+import type { TFunction } from "i18next";
+import { useTranslation } from "react-i18next";
 import { Button } from "@openai/apps-sdk-ui/components/Button";
 import {
   formatCloudRegion,
@@ -102,6 +104,7 @@ interface KnowledgeDialogProps {
 }
 
 function KnowledgeDialog({ title, children, onClose, busy = false, className = "" }: KnowledgeDialogProps) {
+  const { t } = useTranslation("ui");
   const titleId = useId();
   const closeRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLElement>(null);
@@ -158,7 +161,7 @@ function KnowledgeDialog({ title, children, onClose, busy = false, className = "
       <section ref={dialogRef} className={`knowledge-dialog${className ? ` ${className}` : ""}`} role="dialog" aria-modal="true" aria-labelledby={titleId} aria-busy={busy || undefined}>
         <header className="knowledge-dialog__header">
           <h2 id={titleId}>{title}</h2>
-          <button ref={closeRef} type="button" onClick={onClose} disabled={busy} aria-label="关闭">
+          <button ref={closeRef} type="button" onClick={onClose} disabled={busy} aria-label={t("common.close")}>
             <CloseIcon />
           </button>
         </header>
@@ -177,11 +180,11 @@ function isAbortError(reason: unknown): boolean {
   return reason instanceof DOMException && reason.name === "AbortError";
 }
 
-function formatDate(value: string): string {
+function formatDate(value: string, locale: string): string {
   if (!value) return "";
   const timestamp = Date.parse(value);
   if (!Number.isFinite(timestamp)) return value;
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat(locale, {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -205,16 +208,16 @@ function fileExtension(name: string): string {
   return index < 0 ? "" : name.slice(index).toLocaleLowerCase();
 }
 
-function validateKnowledgeFile(file: File, kind: Exclude<KnowledgeSourceKind, "web">): string {
-  if (file.size > MAX_KNOWLEDGE_FILE_BYTES) return "单个文件不能超过 200 MB";
+function validateKnowledgeFile(file: File, kind: Exclude<KnowledgeSourceKind, "web">, t: TFunction<"ui">): string {
+  if (file.size > MAX_KNOWLEDGE_FILE_BYTES) return t("knowledge.errors.fileTooLarge");
   if (kind === "image") {
     return IMAGE_EXTENSIONS.has(fileExtension(file.name))
       ? ""
-      : "请选择 PNG、JPG 或 JPEG 图片";
+      : t("knowledge.errors.invalidImageType");
   }
   return DOCUMENT_EXTENSIONS.has(fileExtension(file.name))
     ? ""
-    : "请选择 PDF、PPTX、DOCX、XLSX 或 TXT 文件";
+    : t("knowledge.errors.invalidDocumentType");
 }
 
 function formatFileSize(size: number): string {
@@ -241,6 +244,7 @@ function CreateKnowledgeBaseDialog({
   onClose: () => void;
   onCreated: (item: KnowledgeBaseItem) => void;
 }) {
+  const { t } = useTranslation("ui");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [nameTouched, setNameTouched] = useState(false);
@@ -264,23 +268,23 @@ function CreateKnowledgeBaseDialog({
     try {
       onCreated(await createKnowledgeBase(input));
     } catch (reason) {
-      setError(formatKnowledgeError(reason, "创建知识库失败"));
+      setError(formatKnowledgeError(reason, t("knowledge.errors.createBase")));
     } finally {
       setBusy(false);
     }
   };
   return (
-    <KnowledgeDialog title="新建知识库" onClose={onClose} busy={busy}>
+    <KnowledgeDialog title={t("knowledge.createBase")} onClose={onClose} busy={busy}>
       <form onSubmit={(event) => void submit(event)}>
         <div className="knowledge-dialog__body">
-          <label><span>名称</span><input autoFocus value={name} maxLength={48} aria-invalid={nameTouched && nameInvalid || undefined} aria-describedby="knowledge-name-help" onBlur={() => setNameTouched(true)} onChange={(event) => setName(event.target.value)} /></label>
-          <p id="knowledge-name-help" className={`knowledge-dialog__note${nameTouched && nameInvalid ? " is-error" : ""}`} role={nameTouched && nameInvalid ? "alert" : undefined}>{nameTouched && nameInvalid ? "名称必须以字母开头，且只能包含字母、数字和下划线。" : "以字母开头，仅支持字母、数字和下划线，最多 48 个字符。"}</p>
-          <label><span>描述（可选）</span><textarea value={description} maxLength={80} onChange={(event) => setDescription(event.target.value)} /></label>
+          <label><span>{t("common.name")}</span><input autoFocus value={name} maxLength={48} aria-invalid={nameTouched && nameInvalid || undefined} aria-describedby="knowledge-name-help" onBlur={() => setNameTouched(true)} onChange={(event) => setName(event.target.value)} /></label>
+          <p id="knowledge-name-help" className={`knowledge-dialog__note${nameTouched && nameInvalid ? " is-error" : ""}`} role={nameTouched && nameInvalid ? "alert" : undefined}>{nameTouched && nameInvalid ? t("knowledge.invalidName") : t("knowledge.nameHelp")}</p>
+          <label><span>{t("knowledge.optionalDescription")}</span><textarea value={description} maxLength={80} onChange={(event) => setDescription(event.target.value)} /></label>
           <FormError message={error} />
         </div>
         <footer className="knowledge-dialog__actions">
-          <button type="button" onClick={onClose} disabled={busy}>取消</button>
-          <button type="submit" className="is-primary" disabled={busy || !normalizedName || nameInvalid}>{busy ? "创建中" : "创建"}</button>
+          <button type="button" onClick={onClose} disabled={busy}>{t("common.cancel")}</button>
+          <button type="submit" className="is-primary" disabled={busy || !normalizedName || nameInvalid}>{busy ? t("common.creating") : t("common.create")}</button>
         </footer>
       </form>
     </KnowledgeDialog>
@@ -288,6 +292,7 @@ function CreateKnowledgeBaseDialog({
 }
 
 function EditKnowledgeBaseDialog({ item, onClose, onUpdated }: { item: KnowledgeBaseItem; onClose: () => void; onUpdated: (item: KnowledgeBaseItem) => void }) {
+  const { t } = useTranslation("ui");
   const [description, setDescription] = useState(item.description);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -298,39 +303,40 @@ function EditKnowledgeBaseDialog({ item, onClose, onUpdated }: { item: Knowledge
     try {
       onUpdated(await updateKnowledgeBase(item.id, item.region, { description: description.trim() }));
     } catch (reason) {
-      setError(formatKnowledgeError(reason, "更新知识库失败"));
+      setError(formatKnowledgeError(reason, t("knowledge.errors.updateBase")));
     } finally {
       setBusy(false);
     }
   };
   return (
-    <KnowledgeDialog title="编辑知识库" onClose={onClose} busy={busy}>
+    <KnowledgeDialog title={t("knowledge.editBase")} onClose={onClose} busy={busy}>
       <form onSubmit={(event) => void submit(event)}>
         <div className="knowledge-dialog__body">
-          <label><span>名称</span><input value={item.name} disabled /></label>
-          <label><span>描述</span><textarea autoFocus value={description} maxLength={80} onChange={(event) => setDescription(event.target.value)} /></label>
-          <p className="knowledge-dialog__note">AgentKit 当前仅支持更新知识库描述。</p>
+          <label><span>{t("common.name")}</span><input value={item.name} disabled /></label>
+          <label><span>{t("common.description")}</span><textarea autoFocus value={description} maxLength={80} onChange={(event) => setDescription(event.target.value)} /></label>
+          <p className="knowledge-dialog__note">{t("knowledge.descriptionOnly")}</p>
           <FormError message={error} />
         </div>
         <footer className="knowledge-dialog__actions">
-          <button type="button" onClick={onClose} disabled={busy}>取消</button>
-          <button type="submit" className="is-primary" disabled={busy}>{busy ? "保存中" : "保存"}</button>
+          <button type="button" onClick={onClose} disabled={busy}>{t("common.cancel")}</button>
+          <button type="submit" className="is-primary" disabled={busy}>{busy ? t("common.saving") : t("common.save")}</button>
         </footer>
       </form>
     </KnowledgeDialog>
   );
 }
 
-function parseMetadata(value: string): Record<string, unknown> {
+function parseMetadata(value: string, invalidMessage: string): Record<string, unknown> {
   if (!value.trim()) return {};
   const parsed: unknown = JSON.parse(value);
   if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
-    throw new Error("Metadata 必须是 JSON 对象");
+    throw new Error(invalidMessage);
   }
   return parsed as Record<string, unknown>;
 }
 
 function CreateKnowledgeDocumentDialog({ base, onClose, onCreated, onAssociationInvalid }: { base: KnowledgeBaseItem; onClose: () => void; onCreated: () => void; onAssociationInvalid: (error: KnowledgeRequestError) => void }) {
+  const { t } = useTranslation("ui");
   const [sourceKind, setSourceKind] = useState<KnowledgeSourceKind>("document");
   const [name, setName] = useState("");
   const [documentType, setDocumentType] = useState("");
@@ -367,7 +373,7 @@ function CreateKnowledgeDocumentDialog({ base, onClose, onCreated, onAssociation
 
   const chooseFile = (candidate: File | null) => {
     if (!candidate || sourceKind === "web") return;
-    const validationError = validateKnowledgeFile(candidate, sourceKind);
+    const validationError = validateKnowledgeFile(candidate, sourceKind, t);
     if (validationError) {
       setFile(null);
       setName("");
@@ -386,9 +392,9 @@ function CreateKnowledgeDocumentDialog({ base, onClose, onCreated, onAssociation
     if (sourceKind === "web" ? !source.trim() : !file) return;
     let parsedMetadata: Record<string, unknown>;
     try {
-      parsedMetadata = parseMetadata(metadata);
+      parsedMetadata = parseMetadata(metadata, t("knowledge.errors.metadataObject"));
     } catch (reason) {
-      setError(formatKnowledgeError(reason, "Metadata 格式错误"));
+      setError(formatKnowledgeError(reason, t("knowledge.errors.metadataFormat")));
       return;
     }
     setBusyAction(sourceKind === "web" ? (webPreview ? "save" : "preview") : "upload");
@@ -400,7 +406,7 @@ function CreateKnowledgeDocumentDialog({ base, onClose, onCreated, onAssociation
             url: source.trim(),
           });
           if (!preview.sourceMarkdown.trim()) {
-            throw new Error("网页没有可预览的 Markdown 内容");
+            throw new Error(t("knowledge.errors.noWebPreview"));
           }
           setWebPreview({ preview, metadata: parsedMetadata });
         } else {
@@ -433,8 +439,8 @@ function CreateKnowledgeDocumentDialog({ base, onClose, onCreated, onAssociation
         setError(formatKnowledgeError(
           reason,
           sourceKind === "web"
-            ? webPreview ? "添加网页失败" : "生成网页预览失败"
-            : "上传文件失败",
+            ? webPreview ? t("knowledge.errors.addWeb") : t("knowledge.errors.previewWeb")
+            : t("knowledge.errors.uploadFile"),
         ));
       }
     } finally {
@@ -451,7 +457,7 @@ function CreateKnowledgeDocumentDialog({ base, onClose, onCreated, onAssociation
 
   return (
     <KnowledgeDialog
-      title={webPreview ? "预览网页内容" : "添加数据"}
+      title={webPreview ? t("knowledge.previewWeb") : t("knowledge.addData")}
       onClose={onClose}
       busy={busy}
       className={webPreview ? "knowledge-dialog--preview knowledge-dialog--web-confirm" : ""}
@@ -462,7 +468,7 @@ function CreateKnowledgeDocumentDialog({ base, onClose, onCreated, onAssociation
             <div className="knowledge-preview knowledge-web-preview">
               <div className="knowledge-preview__meta">
                 <strong title={webPreview.preview.name}>{webPreview.preview.name}</strong>
-                <a href={webPreview.preview.url} target="_blank" rel="noopener noreferrer">打开原网页</a>
+                <a href={webPreview.preview.url} target="_blank" rel="noopener noreferrer">{t("knowledge.openOriginalWeb")}</a>
               </div>
               <div className="knowledge-preview__body" aria-live="polite">
                 <div className="knowledge-preview__markdown-shell">
@@ -472,19 +478,19 @@ function CreateKnowledgeDocumentDialog({ base, onClose, onCreated, onAssociation
               {error ? <div className="knowledge-web-preview__error"><FormError message={error} /></div> : null}
             </div>
             <footer className="knowledge-dialog__actions">
-              <button type="button" className="is-back" onClick={returnToWebForm} disabled={busy}>返回修改</button>
-              <button type="button" onClick={onClose} disabled={busy}>取消</button>
-              <button ref={webConfirmRef} type="submit" className="is-primary" disabled={busy}>{busyAction === "save" ? "添加中" : "确认添加"}</button>
+              <button type="button" className="is-back" onClick={returnToWebForm} disabled={busy}>{t("knowledge.backToEdit")}</button>
+              <button type="button" onClick={onClose} disabled={busy}>{t("common.cancel")}</button>
+              <button ref={webConfirmRef} type="submit" className="is-primary" disabled={busy}>{busyAction === "save" ? t("common.adding") : t("knowledge.confirmAdd")}</button>
             </footer>
           </>
         ) : (
           <>
             <div className="knowledge-dialog__body">
-              <div className="knowledge-source-tabs" role="tablist" aria-label="知识来源">
+              <div className="knowledge-source-tabs" role="tablist" aria-label={t("knowledge.source")}>
                 {([
-                  ["image", "图片"],
-                  ["document", "文档文件"],
-                  ["web", "在线网页"],
+                  ["image", t("knowledge.image")],
+                  ["document", t("knowledge.documentFile")],
+                  ["web", t("knowledge.webPage")],
                 ] as const).map(([kind, label]) => (
                   <button
                     key={kind}
@@ -523,9 +529,9 @@ function CreateKnowledgeDocumentDialog({ base, onClose, onCreated, onAssociation
               >
                 {sourceKind === "web" ? (
                   <>
-                    <label><span>网页 URL</span><input ref={webUrlRef} autoFocus type="url" value={source} disabled={busy} onChange={(event) => { setSource(event.target.value); setError(""); }} placeholder="https://example.com/article" /></label>
+                    <label><span>{t("knowledge.webUrl")}</span><input ref={webUrlRef} autoFocus type="url" value={source} disabled={busy} onChange={(event) => { setSource(event.target.value); setError(""); }} placeholder="https://example.com/article" /></label>
                     <div className="knowledge-upload-status" role="status" aria-live="polite">
-                      {busyAction === "preview" ? <TextShimmer>正在抓取网页并生成 Markdown 预览</TextShimmer> : null}
+                      {busyAction === "preview" ? <TextShimmer>{t("knowledge.generatingWebPreview")}</TextShimmer> : null}
                     </div>
                   </>
                 ) : (
@@ -534,7 +540,7 @@ function CreateKnowledgeDocumentDialog({ base, onClose, onCreated, onAssociation
                       ref={fileInputRef}
                       className="knowledge-upload-input"
                       type="file"
-                      aria-label="选择知识文件"
+                      aria-label={t("knowledge.selectFile")}
                       accept={sourceKind === "image" ? IMAGE_ACCEPT : DOCUMENT_ACCEPT}
                       disabled={busy}
                       onChange={(event) => {
@@ -569,31 +575,31 @@ function CreateKnowledgeDocumentDialog({ base, onClose, onCreated, onAssociation
                         if (!busy) chooseFile(event.dataTransfer.files?.[0] ?? null);
                       }}
                     >
-                      <strong>{file ? file.name : "选择文件或拖拽到这里"}</strong>
+                      <strong>{file ? file.name : t("knowledge.selectOrDropFile")}</strong>
                       <span>{file
-                        ? `${formatFileSize(file.size)} · 点击可重新选择`
+                        ? t("knowledge.selectedFile", { size: formatFileSize(file.size) })
                         : sourceKind === "image"
-                          ? "支持 PNG、JPG 和 JPEG，单个文件不超过 200 MB"
-                          : "支持 PDF、PPTX、DOCX、XLSX 和 TXT，单个文件不超过 200 MB"}</span>
+                          ? t("knowledge.imageFileHelp")
+                          : t("knowledge.documentFileHelp")}</span>
                     </button>
                     <div className="knowledge-upload-status" role="status" aria-live="polite">
-                      {busy ? <TextShimmer>正在上传文件并添加到知识库</TextShimmer> : null}
+                      {busy ? <TextShimmer>{t("knowledge.uploadingFile")}</TextShimmer> : null}
                     </div>
                   </>
                 )}
               </div>
               {sourceKind !== "web" ? (
                 <div className="knowledge-dialog__fields">
-                  <label><span>名称（可选）</span><input value={name} disabled={busy} maxLength={256} onChange={(event) => setName(event.target.value)} /></label>
-                  <label><span>类型（可选）</span><input value={documentType} disabled={busy} maxLength={64} onChange={(event) => setDocumentType(event.target.value)} placeholder="pdf、docx、png" /></label>
+                  <label><span>{t("knowledge.optionalName")}</span><input value={name} disabled={busy} maxLength={256} onChange={(event) => setName(event.target.value)} /></label>
+                  <label><span>{t("knowledge.optionalType")}</span><input value={documentType} disabled={busy} maxLength={64} onChange={(event) => setDocumentType(event.target.value)} placeholder="pdf, docx, png" /></label>
                 </div>
               ) : null}
               <label><span>Metadata（JSON）</span><textarea className="is-code" value={metadata} disabled={busy} onChange={(event) => setMetadata(event.target.value)} spellCheck={false} /></label>
               <FormError message={error} />
             </div>
             <footer className="knowledge-dialog__actions">
-              <button type="button" onClick={onClose} disabled={busy}>取消</button>
-              <button type="submit" className="is-primary" disabled={busy || (sourceKind === "web" ? !source.trim() : !file)}>{busy ? (sourceKind === "web" ? "生成中" : "上传中") : (sourceKind === "web" ? "生成预览" : "上传文件")}</button>
+              <button type="button" onClick={onClose} disabled={busy}>{t("common.cancel")}</button>
+              <button type="submit" className="is-primary" disabled={busy || (sourceKind === "web" ? !source.trim() : !file)}>{busy ? (sourceKind === "web" ? t("common.generating") : t("common.uploading")) : (sourceKind === "web" ? t("knowledge.generatePreview") : t("knowledge.uploadFile"))}</button>
             </footer>
           </>
         )}
@@ -603,6 +609,7 @@ function CreateKnowledgeDocumentDialog({ base, onClose, onCreated, onAssociation
 }
 
 function EditKnowledgeDocumentDialog({ base, item, onClose, onUpdated }: { base: KnowledgeBaseItem; item: KnowledgeDocumentItem; onClose: () => void; onUpdated: (item: KnowledgeDocumentItem) => void }) {
+  const { t } = useTranslation("ui");
   const [metadata, setMetadata] = useState(() => JSON.stringify(item.metadata ?? {}, null, 2));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -610,9 +617,9 @@ function EditKnowledgeDocumentDialog({ base, item, onClose, onUpdated }: { base:
     event.preventDefault();
     let parsed: Record<string, unknown>;
     try {
-      parsed = parseMetadata(metadata);
+      parsed = parseMetadata(metadata, t("knowledge.errors.metadataObject"));
     } catch (reason) {
-      setError(formatKnowledgeError(reason, "Metadata 格式错误"));
+      setError(formatKnowledgeError(reason, t("knowledge.errors.metadataFormat")));
       return;
     }
     setBusy(true);
@@ -620,22 +627,22 @@ function EditKnowledgeDocumentDialog({ base, item, onClose, onUpdated }: { base:
     try {
       onUpdated(await updateKnowledgeDocument(base.id, item.id, base.region, { metadata: parsed }));
     } catch (reason) {
-      setError(formatKnowledgeError(reason, "更新知识失败"));
+      setError(formatKnowledgeError(reason, t("knowledge.errors.updateDocument")));
     } finally {
       setBusy(false);
     }
   };
   return (
-    <KnowledgeDialog title="编辑知识 Metadata" onClose={onClose} busy={busy}>
+    <KnowledgeDialog title={t("knowledge.editMetadata")} onClose={onClose} busy={busy}>
       <form onSubmit={(event) => void submit(event)}>
         <div className="knowledge-dialog__body">
-          <label><span>知识</span><input value={item.name || item.id} disabled /></label>
+          <label><span>{t("knowledge.knowledge")}</span><input value={item.name || item.id} disabled /></label>
           <label><span>Metadata（JSON）</span><textarea autoFocus className="is-code knowledge-metadata-editor" value={metadata} onChange={(event) => setMetadata(event.target.value)} spellCheck={false} /></label>
           <FormError message={error} />
         </div>
         <footer className="knowledge-dialog__actions">
-          <button type="button" onClick={onClose} disabled={busy}>取消</button>
-          <button type="submit" className="is-primary" disabled={busy}>{busy ? "保存中" : "保存"}</button>
+          <button type="button" onClick={onClose} disabled={busy}>{t("common.cancel")}</button>
+          <button type="submit" className="is-primary" disabled={busy}>{busy ? t("common.saving") : t("common.save")}</button>
         </footer>
       </form>
     </KnowledgeDialog>
@@ -673,7 +680,7 @@ function previewValue(value: unknown): string {
   }
 }
 
-function knowledgePreviewTable(value: unknown): KnowledgePreviewTable | null {
+function knowledgePreviewTable(value: unknown, t: TFunction<"ui">): KnowledgePreviewTable | null {
   if (Array.isArray(value)) {
     if (value.length === 0) return null;
     const records = value.map(previewRecord);
@@ -684,7 +691,7 @@ function knowledgePreviewTable(value: unknown): KnowledgePreviewTable | null {
         rows: records.map((record) => columns.map((column) => previewValue(record[column]))),
       };
     }
-    return { columns: ["值"], rows: value.map((item) => [previewValue(item)]) };
+    return { columns: [t("knowledge.value")], rows: value.map((item) => [previewValue(item)]) };
   }
   const record = previewRecord(value);
   const entries = Object.entries(record);
@@ -700,7 +707,7 @@ function knowledgePreviewTable(value: unknown): KnowledgePreviewTable | null {
     };
   }
   return {
-    columns: ["字段", "值"],
+    columns: [t("knowledge.field"), t("knowledge.value")],
     rows: entries.map(([key, item]) => [key, previewValue(item)]),
   };
 }
@@ -740,25 +747,25 @@ function knowledgeAttachmentKind(chunk: KnowledgeDocumentPreviewChunk): Knowledg
   return "none";
 }
 
-function knowledgePreviewEmptyCopy(document: KnowledgeDocumentItem): { title: string; detail: string } {
+function knowledgePreviewEmptyCopy(document: KnowledgeDocumentItem, t: TFunction<"ui">): { title: string; detail: string } {
   const status = document.status.trim().toLocaleLowerCase();
   if (PROCESSING_DOCUMENT_STATUSES.has(status)) {
     return {
-      title: "数据正在处理中",
-      detail: "知识库完成解析后即可预览，请稍后重新加载。",
+      title: t("knowledge.preview.processingTitle"),
+      detail: t("knowledge.preview.processingDetail"),
     };
   }
   if (FAILED_DOCUMENT_STATUSES.has(status)) {
     return {
-      title: "数据解析失败",
-      detail: "请检查源文件或网页地址后重新添加，也可以重新加载最新状态。",
+      title: t("knowledge.preview.failedTitle"),
+      detail: t("knowledge.preview.failedDetail"),
     };
   }
   const format = knowledgeDocumentFormat(document).toLocaleLowerCase();
   if (format === "pdf" || DOCUMENT_PREVIEW_EXTENSIONS.has(format)) {
     return {
-      title: "暂时没有可预览的解析内容",
-      detail: "此类文件会在知识库完成解析后显示文本、表格或页面图片。",
+      title: t("knowledge.preview.noParsedTitle"),
+      detail: t("knowledge.preview.noParsedDetail"),
     };
   }
   if (
@@ -767,37 +774,38 @@ function knowledgePreviewEmptyCopy(document: KnowledgeDocumentItem): { title: st
     || VIDEO_PREVIEW_EXTENSIONS.has(format)
   ) {
     return {
-      title: "暂时没有可预览的媒体内容",
-      detail: "知识库尚未返回可访问的媒体预览，请稍后重新加载。",
+      title: t("knowledge.preview.noMediaTitle"),
+      detail: t("knowledge.preview.noMediaDetail"),
     };
   }
   return {
-    title: "暂无可预览的数据内容",
-    detail: "知识库尚未返回解析结果，请稍后重新加载。",
+    title: t("knowledge.preview.noDataTitle"),
+    detail: t("knowledge.preview.noDataDetail"),
   };
 }
 
 function KnowledgeChunkAttachment({ chunk }: { chunk: KnowledgeDocumentPreviewChunk }) {
+  const { t } = useTranslation("ui");
   const [failed, setFailed] = useState(false);
   const source = safeKnowledgePreviewUrl(chunk.attachmentUrl);
   const kind = knowledgeAttachmentKind(chunk);
   if (!source || kind === "none") return null;
   if (failed) {
-    return <div className="knowledge-preview__attachment-error">附件无法预览，请稍后重试。</div>;
+    return <div className="knowledge-preview__attachment-error">{t("knowledge.preview.attachmentError")}</div>;
   }
   if (kind === "image") {
-    return <img className="knowledge-preview__image" src={source} alt={chunk.title || "知识数据图片"} loading="lazy" onError={() => setFailed(true)} />;
+    return <img className="knowledge-preview__image" src={source} alt={chunk.title || t("knowledge.preview.imageAlt")} loading="lazy" onError={() => setFailed(true)} />;
   }
   if (kind === "audio") {
     return (
       <audio className="knowledge-preview__audio" src={source} controls preload="metadata" onError={() => setFailed(true)}>
-        当前浏览器不支持音频预览。
+        {t("knowledge.preview.audioUnsupported")}
       </audio>
     );
   }
   if (kind === "video") return (
     <video className="knowledge-preview__video" src={source} controls playsInline preload="metadata" onError={() => setFailed(true)}>
-      当前浏览器不支持视频预览。
+      {t("knowledge.preview.videoUnsupported")}
     </video>
   );
   if (kind === "pdf") {
@@ -805,19 +813,19 @@ function KnowledgeChunkAttachment({ chunk }: { chunk: KnowledgeDocumentPreviewCh
       <div className="knowledge-preview__pdf">
         <iframe
           src={source}
-          title={chunk.title ? `${chunk.title} PDF 预览` : "PDF 预览"}
+          title={chunk.title ? t("knowledge.preview.namedPdf", { name: chunk.title }) : t("knowledge.preview.pdf")}
           sandbox=""
           referrerPolicy="no-referrer"
           onError={() => setFailed(true)}
         />
-        <a href={source} target="_blank" rel="noopener noreferrer">无法显示时，在新窗口打开 PDF</a>
+        <a href={source} target="_blank" rel="noopener noreferrer">{t("knowledge.preview.openPdf")}</a>
       </div>
     );
   }
   return (
     <div className="knowledge-preview__file-fallback">
-      <p>当前格式暂不支持直接在线预览，已优先显示解析后的内容。</p>
-      <a href={source} target="_blank" rel="noopener noreferrer">打开原文件</a>
+      <p>{t("knowledge.preview.fileUnsupported")}</p>
+      <a href={source} target="_blank" rel="noopener noreferrer">{t("knowledge.preview.openOriginalFile")}</a>
     </div>
   );
 }
@@ -831,6 +839,7 @@ function KnowledgeDocumentPreviewDialog({
   item: KnowledgeDocumentItem;
   onClose: () => void;
 }) {
+  const { t } = useTranslation("ui");
   const [chunks, setChunks] = useState<KnowledgeDocumentPreviewChunk[]>([]);
   const [document, setDocument] = useState(item);
   const [resolvedSourceMarkdown, setResolvedSourceMarkdown] = useState("");
@@ -866,7 +875,7 @@ function KnowledgeDocumentPreviewDialog({
       setHasMore(page.hasMore);
     } catch (reason) {
       if (!isAbortError(reason) && requestRef.current === request) {
-        setError(formatKnowledgeError(reason, "加载数据预览失败"));
+        setError(formatKnowledgeError(reason, t("knowledge.errors.loadPreview")));
       }
     } finally {
       if (requestRef.current === request) {
@@ -874,7 +883,7 @@ function KnowledgeDocumentPreviewDialog({
         setLoadingMore(false);
       }
     }
-  }, [base.id, base.region, item]);
+  }, [base.id, base.region, item, t]);
 
   useEffect(() => {
     void loadPreview();
@@ -885,7 +894,7 @@ function KnowledgeDocumentPreviewDialog({
   }, [loadPreview]);
 
   const sourceUrl = safeKnowledgeSourceUrl(document.url || item.url);
-  const emptyCopy = knowledgePreviewEmptyCopy(document);
+  const emptyCopy = knowledgePreviewEmptyCopy(document, t);
   const contentIsMarkdown = document.metadata._veadk_content_format === "markdown";
 
   return (
@@ -894,7 +903,7 @@ function KnowledgeDocumentPreviewDialog({
         {document.sizeBytes > 0 || sourceUrl ? (
           <div className="knowledge-preview__meta">
             {document.sizeBytes > 0 ? <span>{formatFileSize(document.sizeBytes)}</span> : null}
-            {sourceUrl ? <a href={sourceUrl} target="_blank" rel="noopener noreferrer">打开原网页</a> : null}
+            {sourceUrl ? <a href={sourceUrl} target="_blank" rel="noopener noreferrer">{t("knowledge.openOriginalWeb")}</a> : null}
           </div>
         ) : null}
         <div className="knowledge-preview__body" aria-live="polite">
@@ -904,28 +913,28 @@ function KnowledgeDocumentPreviewDialog({
             </div>
           ) : loading ? (
             <div className="knowledge-preview__state" role="status">
-              <TextShimmer as="span" duration={2.4}>正在加载数据预览</TextShimmer>
+              <TextShimmer as="span" duration={2.4}>{t("knowledge.preview.loading")}</TextShimmer>
             </div>
           ) : error && chunks.length === 0 ? (
             <div className="knowledge-preview__state is-error" role="alert">
               <p>{error}</p>
-              <button type="button" onClick={() => void loadPreview()}>重试</button>
+              <button type="button" onClick={() => void loadPreview()}>{t("common.retry")}</button>
             </div>
           ) : chunks.length === 0 ? (
             <div className="knowledge-preview__state">
               <p>{emptyCopy.title}</p>
-              <span>{sourceUrl ? "您可以打开原网页查看来源内容。" : emptyCopy.detail}</span>
-              <button type="button" onClick={() => void loadPreview()}>重新加载</button>
+              <span>{sourceUrl ? t("knowledge.preview.openOriginalHint") : emptyCopy.detail}</span>
+              <button type="button" onClick={() => void loadPreview()}>{t("common.reload")}</button>
             </div>
           ) : (
             <div className="knowledge-preview__chunks">
               {chunks.map((chunk, index) => {
-                const table = knowledgePreviewTable(chunk.tableFields);
+                const table = knowledgePreviewTable(chunk.tableFields, t);
                 const key = chunk.id || `${index}:${chunk.title}`;
                 return (
                   <article className="knowledge-preview__chunk" key={key}>
                     <header>
-                      <h3>{chunk.title || `片段 ${index + 1}`}</h3>
+                      <h3>{chunk.title || t("knowledge.preview.chunk", { index: index + 1 })}</h3>
                     </header>
                     {chunk.content ? (
                       contentIsMarkdown
@@ -951,7 +960,7 @@ function KnowledgeDocumentPreviewDialog({
               {error ? <div className="knowledge-preview__more-error" role="alert">{error}</div> : null}
               {hasMore ? (
                 <button type="button" className="knowledge-preview__load-more" disabled={loadingMore} onClick={() => void loadPreview(chunks.length)}>
-                  {loadingMore ? <TextShimmer as="span" duration={2.4}>正在加载更多</TextShimmer> : "加载更多"}
+                  {loadingMore ? <TextShimmer as="span" duration={2.4}>{t("knowledge.preview.loadingMore")}</TextShimmer> : t("knowledge.preview.loadMore")}
                 </button>
               ) : null}
             </div>
@@ -979,6 +988,7 @@ export function KnowledgeLibrary({
   toolbarLeading?: ReactNode;
   toolbarFilters?: ReactNode;
 }) {
+  const { t, i18n } = useTranslation("ui");
   const [items, setItems] = useState<KnowledgeBaseItem[]>([]);
   const [nextTokens, setNextTokens] = useState<Record<string, string>>({});
   const [regionWarnings, setRegionWarnings] = useState<string[]>([]);
@@ -1086,7 +1096,7 @@ export function KnowledgeLibrary({
       nextTokensRef.current = page.nextTokens;
       setNextTokens(page.nextTokens);
       const warnings = page.failures.map(({ region, error: reason }) => (
-        `${formatCloudRegion(region, cloudProvider)}：${formatKnowledgeError(reason, "加载失败")}`
+        `${formatCloudRegion(region, cloudProvider)}: ${formatKnowledgeError(reason, t("common.loadFailed"))}`
       ));
       setRegionWarnings((current) => append
         ? [...new Set([...current, ...warnings])]
@@ -1099,10 +1109,10 @@ export function KnowledgeLibrary({
       if (basesRequest.current === request) {
         if (append) {
           setRegionWarnings((current) => [
-            ...new Set([...current, formatKnowledgeError(reason, "加载更多知识库失败")]),
+            ...new Set([...current, formatKnowledgeError(reason, t("knowledge.errors.loadMoreBases"))]),
           ]);
         } else {
-          setError(formatKnowledgeError(reason, "加载知识库失败"));
+          setError(formatKnowledgeError(reason, t("knowledge.errors.loadBases")));
         }
       }
     } finally {
@@ -1112,7 +1122,7 @@ export function KnowledgeLibrary({
         setLoadingMore(false);
       }
     }
-  }, [baseKey, cloudProvider, regions]);
+  }, [baseKey, cloudProvider, regions, t]);
 
   const loadDocuments = useCallback(async (base: KnowledgeBaseItem, append = false) => {
     if (append && documentsLoadingRef.current) return;
@@ -1162,9 +1172,9 @@ export function KnowledgeLibrary({
           ));
         }
         if (append) {
-          setDocumentsMoreError(formatKnowledgeError(reason, "加载更多数据失败"));
+          setDocumentsMoreError(formatKnowledgeError(reason, t("knowledge.errors.loadMoreData")));
         } else {
-          setDocumentsError(formatKnowledgeError(reason, "加载数据失败"));
+          setDocumentsError(formatKnowledgeError(reason, t("knowledge.errors.loadData")));
         }
       }
     } finally {
@@ -1173,7 +1183,7 @@ export function KnowledgeLibrary({
         setDocumentsLoading(false);
       }
     }
-  }, [baseKey]);
+  }, [baseKey, t]);
 
   useEffect(() => {
     basesAbort.current?.abort();
@@ -1308,7 +1318,7 @@ export function KnowledgeLibrary({
       }
       setDeleteBaseTarget(null);
     } catch (reason) {
-      setError(formatKnowledgeError(reason, "删除知识库失败"));
+      setError(formatKnowledgeError(reason, t("knowledge.errors.deleteBase")));
       setDeleteBaseTarget(null);
     } finally {
       setDeleting(false);
@@ -1325,7 +1335,7 @@ export function KnowledgeLibrary({
       setDocuments(next);
       setDeleteDocumentTarget(null);
     } catch (reason) {
-      setDocumentsError(formatKnowledgeError(reason, "删除知识失败"));
+      setDocumentsError(formatKnowledgeError(reason, t("knowledge.errors.deleteDocument")));
       setDeleteDocumentTarget(null);
     } finally {
       setDeleting(false);
@@ -1333,34 +1343,34 @@ export function KnowledgeLibrary({
   };
 
   return (
-    <section className={`knowledge-library${selected ? " is-detail" : " resource-collection"}`} aria-label="知识库">
+    <section className={`knowledge-library${selected ? " is-detail" : " resource-collection"}`} aria-label={t("knowledge.library")}>
       {selected ? (
         <ResourceDetailLayout
           className="knowledge-library__detail"
           title={selected.name}
-          description={selected.description || "暂无描述"}
+          description={selected.description || t("common.noDescription")}
           identitySeed={selected.name}
-          backLabel="返回知识库列表"
+          backLabel={t("knowledge.backToList")}
           onBack={() => setSelectedKey("")}
           sections={[
             {
               key: "overview",
-              label: "概览",
+              label: t("skillCenter.overview"),
               content: (
                 <section className="knowledge-overview">
                   <ResourceDetailSummary className="knowledge-overview__summary">
                     <div><dt>Provider</dt><dd>{selected.providerType || "-"}</dd></div>
                     <div><dt>Knowledge ID</dt><dd className="knowledge-keyboard-reveal" tabIndex={0} title={selected.providerKnowledgeId}>{selected.providerKnowledgeId || "-"}</dd></div>
-                    <div><dt>项目</dt><dd>{selected.projectName || "default"}</dd></div>
-                    <div><dt>创建者</dt><dd>{formatResourceSource(selected.ownerLabel)}</dd></div>
-                    <div><dt>更新时间</dt><dd>{formatDate(selected.updatedAt) || "-"}</dd></div>
+                    <div><dt>{t("knowledge.project")}</dt><dd>{selected.projectName || "default"}</dd></div>
+                    <div><dt>{t("knowledge.creator")}</dt><dd>{formatResourceSource(selected.ownerLabel)}</dd></div>
+                    <div><dt>{t("skillCenter.updatedAt")}</dt><dd>{formatDate(selected.updatedAt, i18n.resolvedLanguage ?? i18n.language) || "-"}</dd></div>
                   </ResourceDetailSummary>
                 </section>
               ),
             },
             {
               key: "data",
-              label: "数据",
+              label: t("knowledge.data"),
               content: (
                 <section className="knowledge-documents">
                   <div className={`knowledge-documents__body${documents.length > 0 ? " is-table" : ""}`} aria-live="polite">
@@ -1370,11 +1380,11 @@ export function KnowledgeLibrary({
                       <div className="knowledge-library__state is-error" role="alert">
                         <p>{documentsError}</p>
                         {providerAssociationInvalid && selected.canManage
-                          ? <button type="button" onClick={() => setDeleteBaseTarget(selected)}>删除失效关联</button>
-                          : <button type="button" onClick={() => void loadDocuments(selected)}>重试</button>}
+                          ? <button type="button" onClick={() => setDeleteBaseTarget(selected)}>{t("knowledge.deleteInvalidAssociation")}</button>
+                          : <button type="button" onClick={() => void loadDocuments(selected)}>{t("common.retry")}</button>}
                       </div>
                     ) : documents.length === 0 ? (
-                      <div className="knowledge-library__state"><DocumentIcon /><p>这个知识库还没有数据</p>{selected.canManage && <button type="button" onClick={() => setCreateDocumentBase(selected)}>添加第一项数据</button>}</div>
+                      <div className="knowledge-library__state"><DocumentIcon /><p>{t("knowledge.noData")}</p>{selected.canManage && <button type="button" onClick={() => setCreateDocumentBase(selected)}>{t("knowledge.addFirstData")}</button>}</div>
                     ) : (
                       <ResourceDataTable
                         rows={filteredDocuments}
@@ -1383,45 +1393,45 @@ export function KnowledgeLibrary({
                         columns={[
                           {
                             key: "name",
-                            header: "名称",
+                            header: t("common.name"),
                             className: "is-primary-column",
                             render: (item) => <span title={item.name || item.id}>{item.name || item.id}</span>,
                           },
                           {
                             key: "format",
-                            header: "格式",
+                            header: t("knowledge.format"),
                             className: "is-compact-column",
                             render: (item) => knowledgeDocumentFormat(item),
                           },
                           {
                             key: "size",
-                            header: "大小",
+                            header: t("knowledge.size"),
                             className: "is-compact-column",
                             render: (item) => formatFileSize(item.sizeBytes),
                           },
                         ]}
                         searchValue={documentQuery}
                         onSearchChange={setDocumentQuery}
-                        searchPlaceholder="搜索数据"
-                        searchLabel="搜索知识库数据"
+                        searchPlaceholder={t("knowledge.searchData")}
+                        searchLabel={t("knowledge.searchLibraryData")}
                         primaryAction={selected.canManage ? {
-                          label: providerAssociationInvalid ? "关联已失效" : "添加数据",
+                          label: providerAssociationInvalid ? t("knowledge.associationInvalid") : t("knowledge.addData"),
                           disabled: providerAssociationInvalid,
-                          title: providerAssociationInvalid ? "底层 Provider 知识库已不存在" : undefined,
+                          title: providerAssociationInvalid ? t("knowledge.providerMissing") : undefined,
                           onClick: () => setCreateDocumentBase(selected),
                         } : undefined}
                         rowActions={(item) => [
                           {
-                            label: "预览",
+                            label: t("common.preview"),
                             onSelect: () => setPreviewDocument(item),
                           },
                           ...(selected.canManage ? [
                             {
-                              label: "编辑",
+                              label: t("common.edit"),
                               onSelect: () => setEditDocument(item),
                             },
                             {
-                              label: "删除",
+                              label: t("common.delete"),
                               onSelect: () => setDeleteDocumentTarget(item),
                               danger: true,
                             },
@@ -1430,16 +1440,16 @@ export function KnowledgeLibrary({
                         scrollRef={documentsScrollRef}
                         onScroll={handleDocumentsScroll}
                         busy={documentsLoading}
-                        emptyLabel="没有匹配的数据"
+                        emptyLabel={t("knowledge.noMatchingData")}
                         footer={documentsLoading ? (
                           <div className="knowledge-document-pagination" role="status" aria-live="polite">
                             <span className="my-agent-loading-mark" aria-hidden="true" />
-                            <span>正在加载更多数据</span>
+                            <span>{t("knowledge.loadingMoreData")}</span>
                           </div>
                         ) : documentsMoreError ? (
                           <div className="knowledge-document-pagination is-error" role="alert">
                             <span>{documentsMoreError}</span>
-                            <button type="button" onClick={() => void loadDocuments(selected, true)}>重试加载</button>
+                            <button type="button" onClick={() => void loadDocuments(selected, true)}>{t("knowledge.retryLoading")}</button>
                           </div>
                         ) : documentsHasMore ? (
                           <div
@@ -1448,7 +1458,7 @@ export function KnowledgeLibrary({
                             role="status"
                             aria-live="polite"
                           >
-                            继续下滑加载更多
+                            {t("skillCenter.scrollForMore")}
                           </div>
                         ) : null}
                       />
@@ -1459,12 +1469,12 @@ export function KnowledgeLibrary({
             },
           ]}
           activeSectionKey={detailSection}
-          navigationLabel="知识库详情"
+          navigationLabel={t("knowledge.details")}
           onSectionChange={setDetailSection}
           actions={selected.canManage ? (
             <>
-                <Button type="button" color="danger" variant="soft" size="lg" pill={false} onClick={() => setDeleteBaseTarget(selected)}>删除</Button>
-                <Button type="button" color="primary" size="lg" pill={false} onClick={() => setEditBaseOpen(true)}>编辑</Button>
+                <Button type="button" color="danger" variant="soft" size="lg" pill={false} onClick={() => setDeleteBaseTarget(selected)}>{t("common.delete")}</Button>
+                <Button type="button" color="primary" size="lg" pill={false} onClick={() => setEditBaseOpen(true)}>{t("common.edit")}</Button>
             </>
           ) : undefined}
         />
@@ -1477,8 +1487,8 @@ export function KnowledgeLibrary({
               <ResourceSearch
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="搜索知识库"
-                aria-label="搜索知识库"
+                placeholder={t("knowledge.searchBases")}
+                aria-label={t("knowledge.searchBases")}
               />
             </div>
           </ResourceToolbar>
@@ -1489,25 +1499,25 @@ export function KnowledgeLibrary({
           >
             {regionWarnings.length > 0 && !loading && (
               <div className="knowledge-region-warning" role="status">
-                <span>部分知识库暂时无法加载，已展示其余可用内容。</span>
-                <button type="button" onClick={() => void loadBases()}>重试</button>
+                <span>{t("knowledge.someBasesFailed")}</span>
+                <button type="button" onClick={() => void loadBases()}>{t("common.retry")}</button>
               </div>
             )}
             {loading && items.length === 0 ? (
               <ResourceLoadingState />
             ) : error ? (
-              <div className="knowledge-library__state is-error" role="alert"><p>{error}</p><button type="button" onClick={() => void loadBases()}>重试</button></div>
+              <div className="knowledge-library__state is-error" role="alert"><p>{error}</p><button type="button" onClick={() => void loadBases()}>{t("common.retry")}</button></div>
             ) : filteredItems.length === 0 && query.trim() ? (
-              <div className="knowledge-library__state"><KnowledgeIcon /><p>没有匹配的知识库</p></div>
+              <div className="knowledge-library__state"><KnowledgeIcon /><p>{t("knowledge.noMatchingBases")}</p></div>
             ) : (
               <ResourceGrid>
                 {!query.trim() ? (
                   <ResourceCreateCard
-                    aria-label="新建知识库"
+                    aria-label={t("knowledge.createBase")}
                     icon={<PlusIcon />}
                     onClick={() => setCreateBaseOpen(true)}
                   >
-                    新建知识库
+                    {t("knowledge.createBase")}
                   </ResourceCreateCard>
                 ) : null}
                 {filteredItems.map((item) => (
@@ -1515,23 +1525,23 @@ export function KnowledgeLibrary({
                     key={baseKey(item)}
                     className="knowledge-card"
                     title={item.name}
-                    description={item.description || "暂无描述"}
+                    description={item.description || t("common.noDescription")}
                     metadata={[
                       {
-                        label: "创建者",
+                        label: t("knowledge.creator"),
                         value: formatResourceSource(item.ownerLabel),
                         title: formatResourceSource(item.ownerLabel),
                       },
-                      { label: "项目", value: item.projectName || "default", title: item.projectName || "default" },
+                      { label: t("knowledge.project"), value: item.projectName || "default", title: item.projectName || "default" },
                     ]}
                     action={{
-                      label: invalidProviderKey === baseKey(item) ? "关联已失效" : "添加数据",
+                      label: invalidProviderKey === baseKey(item) ? t("knowledge.associationInvalid") : t("knowledge.addData"),
                       icon: "plus",
                       disabled: !item.canManage || invalidProviderKey === baseKey(item),
-                      title: !item.canManage ? "您没有管理此知识库的权限" : invalidProviderKey === baseKey(item) ? "底层 Provider 知识库已不存在" : undefined,
+                      title: !item.canManage ? t("knowledge.noManagePermission") : invalidProviderKey === baseKey(item) ? t("knowledge.providerMissing") : undefined,
                       onClick: () => setCreateDocumentBase(item),
                     }}
-                    detailAction={{ label: "查看详情", onClick: () => setSelectedKey(baseKey(item)) }}
+                    detailAction={{ label: t("common.viewDetails"), onClick: () => setSelectedKey(baseKey(item)) }}
                   />
                 ))}
               </ResourceGrid>
@@ -1546,9 +1556,9 @@ export function KnowledgeLibrary({
                 {loadingMore ? (
                   <>
                     <span className="my-agent-loading-mark" aria-hidden="true" />
-                    <span>正在加载更多知识库</span>
+                    <span>{t("knowledge.loadingMoreBases")}</span>
                   </>
-                ) : canLoadMoreBases ? <span>继续下滑加载更多</span> : null}
+                ) : canLoadMoreBases ? <span>{t("skillCenter.scrollForMore")}</span> : null}
               </div>
             ) : null}
           </ResourceResults>
@@ -1561,7 +1571,7 @@ export function KnowledgeLibrary({
       {createDocumentBase && <CreateKnowledgeDocumentDialog base={createDocumentBase} onClose={() => setCreateDocumentBase(null)} onAssociationInvalid={(reason) => {
         setInvalidProviderKey(baseKey(createDocumentBase));
         if (selected && baseKey(selected) === baseKey(createDocumentBase)) {
-          setDocumentsError(formatKnowledgeError(reason, "知识库关联已失效"));
+          setDocumentsError(formatKnowledgeError(reason, t("knowledge.associationInvalid")));
         }
         setCreateDocumentBase(null);
       }} onCreated={() => {
@@ -1569,8 +1579,8 @@ export function KnowledgeLibrary({
         setCreateDocumentBase(null);
       }} />}
       {selected && editDocument && <EditKnowledgeDocumentDialog base={selected} item={editDocument} onClose={() => setEditDocument(null)} onUpdated={(item) => { const next = documentsRef.current.map((candidate) => candidate.id === item.id ? item : candidate); documentsRef.current = next; setDocuments(next); setEditDocument(null); }} />}
-      {deleteBaseTarget && <StudioConfirmDialog title="删除知识库？" description={`将删除 ${deleteBaseTarget.name} 的 AgentKit 关联；如果它由 Studio 创建，也会同时删除 Provider 资源。此操作无法撤销。`} confirmLabel={deleting ? "删除中" : "删除"} variant="danger" busy={deleting} onCancel={() => setDeleteBaseTarget(null)} onConfirm={() => void confirmDeleteBase()} />}
-      {deleteDocumentTarget && <StudioConfirmDialog title="删除知识？" description={`将从 Provider 知识库中删除 ${deleteDocumentTarget.name || deleteDocumentTarget.id}，此操作无法撤销。`} confirmLabel={deleting ? "删除中" : "删除"} variant="danger" busy={deleting} onCancel={() => setDeleteDocumentTarget(null)} onConfirm={() => void confirmDeleteDocument()} />}
+      {deleteBaseTarget && <StudioConfirmDialog title={t("knowledge.deleteBaseTitle")} description={t("knowledge.deleteBaseDescription", { name: deleteBaseTarget.name })} confirmLabel={deleting ? t("common.deleting") : t("common.delete")} variant="danger" busy={deleting} onCancel={() => setDeleteBaseTarget(null)} onConfirm={() => void confirmDeleteBase()} />}
+      {deleteDocumentTarget && <StudioConfirmDialog title={t("knowledge.deleteDocumentTitle")} description={t("knowledge.deleteDocumentDescription", { name: deleteDocumentTarget.name || deleteDocumentTarget.id })} confirmLabel={deleting ? t("common.deleting") : t("common.delete")} variant="danger" busy={deleting} onCancel={() => setDeleteDocumentTarget(null)} onConfirm={() => void confirmDeleteDocument()} />}
     </section>
   );
 }
