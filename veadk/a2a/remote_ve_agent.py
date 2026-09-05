@@ -15,6 +15,7 @@
 import json
 import functools
 from typing import AsyncGenerator, Literal, Optional
+from urllib.parse import urlsplit, urlunsplit
 
 from a2a.client.base_client import BaseClient
 import httpx
@@ -33,6 +34,17 @@ from google.adk.agents.invocation_context import InvocationContext
 logger = get_logger(__name__)
 
 AGENT_CARD_WELL_KNOWN_PATH = "/.well-known/agent-card.json"
+
+
+def _url_with_path(base_url: str, path: str) -> str:
+    """Append a path while preserving Session endpoint query authentication."""
+    parts = urlsplit(base_url)
+    base_path = parts.path.rstrip("/")
+    relative_path = path.lstrip("/")
+    joined_path = f"{base_path}/{relative_path}" if base_path else f"/{relative_path}"
+    return urlunsplit(
+        (parts.scheme, parts.netloc, joined_path, parts.query, parts.fragment)
+    )
 
 
 def _convert_agent_card_dict_to_obj(agent_card_dict: dict) -> AgentCard:
@@ -138,6 +150,9 @@ class RemoteVeAgent(RemoteA2aAgent):
         auth_token: Optional[str] = None,
         auth_method: Literal["header", "querystring"] | None = None,
         httpx_client: Optional[httpx.AsyncClient] = None,
+        rpc_url: Optional[str] = None,
+        extra_headers: Optional[dict[str, str]] = None,
+        timeout: float = 600,
     ):
         # Determine the effective URL for the agent and handle conflicts.
         effective_url = url
@@ -155,12 +170,12 @@ class RemoteVeAgent(RemoteA2aAgent):
                 "Could not determine agent URL. Please provide the `url` parameter or an `httpx_client` with a configured `base_url`."
             )
 
-        req_headers = {}
+        req_headers = dict(extra_headers or {})
         req_params = {}
 
         if auth_token:
             if auth_method == "header":
-                req_headers = {"Authorization": f"Bearer {auth_token}"}
+                req_headers["Authorization"] = f"Bearer {auth_token}"
             elif auth_method == "querystring":
                 req_params = {"token": auth_token}
             elif auth_method:
@@ -169,45 +184,42 @@ class RemoteVeAgent(RemoteA2aAgent):
                 )
 
         agent_card_dict = requests.get(
-            effective_url + AGENT_CARD_WELL_KNOWN_PATH,
+            _url_with_path(effective_url, AGENT_CARD_WELL_KNOWN_PATH),
             headers=req_headers,
             params=req_params,
         ).json()
         # replace agent_card_url with actual host
-        agent_card_dict["url"] = effective_url
+        agent_card_dict["url"] = rpc_url or effective_url
 
         agent_card_object = _convert_agent_card_dict_to_obj(agent_card_dict)
 
-        logger.debug(f"Agent card of {name}: {agent_card_object}")
+        logger.debug("Loaded Agent card for %s", name)
 
         client_was_provided = httpx_client is not None
         client_to_use = httpx_client
 
         if client_was_provided:
             # If a client was provided, update it with auth info
-            if auth_token:
-                if auth_method == "header":
-                    client_to_use.headers.update(req_headers)
-                elif auth_method == "querystring":
-                    new_params = dict(client_to_use.params)
-                    new_params.update(req_params)
-                    client_to_use.params = new_params
+            if req_headers:
+                client_to_use.headers.update(req_headers)
+            if auth_token and auth_method == "querystring":
+                new_params = dict(client_to_use.params)
+                new_params.update(req_params)
+                client_to_use.params = new_params
         else:
             # If no client was provided, create a new one with auth info
-            if auth_token:
-                if auth_method == "header":
-                    client_to_use = httpx.AsyncClient(
-                        base_url=effective_url, headers=req_headers, timeout=600
-                    )
-                elif auth_method == "querystring":
-                    client_to_use = httpx.AsyncClient(
-                        base_url=effective_url, params=req_params, timeout=600
-                    )
-            else:  # No auth, no client provided
-                client_to_use = httpx.AsyncClient(base_url=effective_url, timeout=600)
+            client_to_use = httpx.AsyncClient(
+                base_url=effective_url,
+                headers=req_headers,
+                params=req_params,
+                timeout=timeout,
+            )
 
         super().__init__(
-            name=name, agent_card=agent_card_object, httpx_client=client_to_use
+            name=name,
+            agent_card=agent_card_object,
+            httpx_client=client_to_use,
+            timeout=timeout,
         )
 
         # The parent class sets _httpx_client_needs_cleanup based on whether
