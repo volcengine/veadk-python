@@ -151,6 +151,7 @@
       "upload": "Upload {{label}}",
       "replaceFile": "Replace {{label}}: {{name}}",
       "removeFile": "Remove {{label}} {{name}}",
+      "storageUnavailable": "Persistent storage is not configured",
       "loadingEnhancer": "Loading prompt enhancement model",
       "enhancerHint": "Uses {{model}} for intent recognition and prompt enhancement",
       "enhancerUnavailable": "Prompt enhancement model unavailable"

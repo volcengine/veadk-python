@@ -809,7 +809,7 @@ export function Composer({
                 !(videoCapabilities?.assetStorageAvailable ?? false)
               }
               unavailableReason={
-                videoCapabilities?.assetStorageUnavailableReason || ""
+                t("newChat:video.controls.storageUnavailable")
               }
               onChange={(asset) =>
                 setNewChatVideoConfig((current) =>
@@ -943,7 +943,7 @@ export function Composer({
               videoCapabilities?.assetStorageAvailable ?? false
             }
             assetStorageUnavailableReason={
-              videoCapabilities?.assetStorageUnavailableReason || ""
+              t("newChat:video.controls.storageUnavailable")
             }
             modelsLoading={videoCapabilitiesLoading}
             modelsError={videoCapabilitiesError}

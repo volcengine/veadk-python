@@ -151,6 +151,7 @@
       "upload": "上传{{label}}",
       "replaceFile": "更换{{label}}：{{name}}",
       "removeFile": "移除{{label}} {{name}}",
+      "storageUnavailable": "管理员未配置持久化存储",
       "loadingEnhancer": "正在加载增强模型",
       "enhancerHint": "使用 {{model}} 模型进行意图识别和提示词增强",
       "enhancerUnavailable": "增强模型不可用"

@@ -1698,10 +1698,7 @@ export default function App() {
     }
     const assets = videoAssetsForConfig(config);
     if (assets.length > 0 && !capabilities.assetStorageAvailable) {
-      setError(
-        capabilities.assetStorageUnavailableReason ||
-          appText("errors.persistentStorageNotConfigured"),
-      );
+      setError(appText("errors.persistentStorageNotConfigured"));
       return;
     }
     const oversized = assets.find(

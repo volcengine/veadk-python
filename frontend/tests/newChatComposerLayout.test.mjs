@@ -278,11 +278,15 @@ test("layers pill-shaped workspace tabs behind the new-chat input", () => {
   );
   assert.doesNotMatch(
     workspaceStylesSource,
+    /\.new-chat-workspace-tabs__tab\s*\{[\s\S]*?flex:\s*0 0 104px;[\s\S]*?width:\s*104px;/,
+  );
+  assert.doesNotMatch(
+    workspaceStylesSource,
     /\.new-chat-workspace-tabs\s*\{[^}]*\bborder:/,
   );
   assert.match(
     workspaceStylesSource,
-    /\.new-chat-workspace-tabs__tab\s*\{[\s\S]*?flex:\s*0 0 104px;[\s\S]*?width:\s*104px;[\s\S]*?min-height:\s*34px;[\s\S]*?border-radius:\s*10px;[\s\S]*?font-size:\s*14px;[\s\S]*?font-weight:\s*400;/,
+    /\.new-chat-workspace-tabs__tab\s*\{[\s\S]*?flex:\s*0 0 auto;[\s\S]*?width:\s*auto;[\s\S]*?min-width:\s*104px;[\s\S]*?min-height:\s*34px;[\s\S]*?border-radius:\s*10px;[\s\S]*?font-size:\s*14px;[\s\S]*?font-weight:\s*400;/,
   );
   assert.match(
     workspaceStylesSource,
@@ -555,8 +559,12 @@ test("loads provider-native video models from backend capabilities", () => {
     /assetStorageAvailable=\{[\s\S]*?videoCapabilities\?\.assetStorageAvailable \?\? false\s*\}/,
   );
   assert.match(
-    videoControlsSource,
-    /管理员未配置持久化存储|assetStorageUnavailableReason/,
+    composerSource,
+    /assetStorageUnavailableReason=\{\s*t\("newChat:video\.controls\.storageUnavailable"\)\s*\}/,
+  );
+  assert.doesNotMatch(
+    appSource,
+    /capabilities\.assetStorageUnavailableReason\s*\|\|\s*appText\("errors\.persistentStorageNotConfigured"\)/,
   );
 });
 
