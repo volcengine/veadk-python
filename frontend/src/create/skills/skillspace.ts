@@ -6,6 +6,7 @@ import type { ProjectFile } from "../project";
 import { skillApiErrorFromResponse } from "../../adk/skills";
 import { DEFAULT_REQUEST_TIMEOUT_MS, requestSignal } from "../../adk/timeout";
 import type { SkillHit } from "./types";
+import { createT } from "../i18n";
 
 export interface SkillSpaceRef {
   id: string;
@@ -56,7 +57,10 @@ async function jfetch<T>(url: string): Promise<T> {
     signal: requestSignal(undefined, DEFAULT_REQUEST_TIMEOUT_MS),
   });
   if (!res.ok) {
-    throw await skillApiErrorFromResponse(res, "AgentKit Skills 请求失败");
+    throw await skillApiErrorFromResponse(
+      res,
+      createT("helpers.skills.agentKitRequestFailed"),
+    );
   }
   return res.json() as Promise<T>;
 }

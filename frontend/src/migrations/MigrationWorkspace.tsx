@@ -6,6 +6,8 @@ import {
   type ChangeEvent,
   type DragEvent,
 } from "react";
+import { useTranslation } from "react-i18next";
+import { localeCompatibleBackendText } from "../i18n/locales";
 import {
   confirmMigrationTask,
   createMigrationTask,
@@ -33,10 +35,7 @@ import {
   type DeployStage,
   type ModelOption,
 } from "../adk/client";
-import {
-  defaultCloudRegion,
-  type CloudProvider,
-} from "../adk/cloudProvider";
+import { defaultCloudRegion, type CloudProvider } from "../adk/cloudProvider";
 import type { AgentProject } from "../create/project";
 import type {
   IntelligentCreateBaseVersion,
@@ -74,6 +73,7 @@ import {
 } from "./deploymentEnvironment";
 import { migrationActivityBlocks } from "./migrationActivityBlocks";
 import { MigratedProjectsPage } from "./MigratedProjectsPage";
+import { i18n } from "../i18n/runtime";
 import "./MigrationWorkspace.css";
 
 const MAX_SOURCE_BYTES = 20 * 1024 * 1024;
@@ -83,15 +83,23 @@ const LIST_POLL_INTERVAL_MS = 5_000;
 const MAX_VISIBLE_FILES = 500;
 const ignoreMigrationAction = () => undefined;
 
-const FRAMEWORK_LABELS: Record<MigrationFramework, string> = {
-  langchain: "LangChain",
-  langgraph: "LangGraph",
-  adk: "Google ADK",
-  strands: "Strands",
-  agentcore: "AgentCore",
-  dify: "Dify",
-  any: "Any（通用迁移）",
+const FRAMEWORK_LABEL_KEYS: Record<MigrationFramework, string> = {
+  langchain: "framework.langchain",
+  langgraph: "framework.langgraph",
+  adk: "framework.adk",
+  strands: "framework.strands",
+  agentcore: "framework.agentcore",
+  dify: "framework.dify",
+  any: "framework.any",
 };
+
+function migrationText(key: string, options?: Record<string, unknown>): string {
+  return i18n.t(key, { ns: "migrations", ...options });
+}
+
+function frameworkLabel(framework: MigrationFramework): string {
+  return migrationText(FRAMEWORK_LABEL_KEYS[framework]);
+}
 
 const STRUCTURED_FRAMEWORKS = new Set<MigrationFramework>([
   "langchain",
@@ -138,45 +146,45 @@ interface PreviewState {
 function stateLabel(state: MigrationTask["state"]): string {
   switch (state) {
     case "awaiting_upload":
-      return "待上传";
+      return migrationText("state.awaitingUpload");
     case "analyzing":
-      return "分析中";
+      return migrationText("state.analyzing");
     case "needs_input":
-      return "待补充";
+      return migrationText("state.needsInput");
     case "analysis_ready":
-      return "待确认";
+      return migrationText("state.analysisReady");
     case "migrating":
-      return "迁移中";
+      return migrationText("state.migrating");
     case "validating":
-      return "校验中";
+      return migrationText("state.validating");
     case "packaging":
-      return "打包中";
+      return migrationText("state.packaging");
     case "succeeded":
-      return "已完成";
+      return migrationText("state.succeeded");
     case "succeeded_with_warnings":
-      return "已完成，有提示";
+      return migrationText("state.succeededWithWarnings");
     case "partial":
-      return "部分完成";
+      return migrationText("state.partial");
     case "failed":
-      return "失败";
+      return migrationText("state.failed");
     case "cancelled":
-      return "已终止";
+      return migrationText("state.cancelled");
     case "expired":
-      return "已过期";
+      return migrationText("state.expired");
   }
 }
 
 function taskDisplayMessage(task: MigrationTask): string {
   if (task.state === "partial" && task.artifact.previewReady) {
-    return "迁移产物已生成，但交付不完整，请查看迁移提示。";
+    return migrationText("task.partialReady");
   }
   if (
     ["succeeded", "succeeded_with_warnings"].includes(task.state) &&
     task.artifact.previewReady
   ) {
     return task.state === "succeeded_with_warnings"
-      ? "迁移产物已生成，请查看迁移提示。"
-      : "迁移产物已生成。";
+      ? migrationText("task.readyWithWarnings")
+      : migrationText("task.ready");
   }
   return task.message;
 }
@@ -186,11 +194,11 @@ function verificationLabel(
 ): string {
   switch (status) {
     case "passed":
-      return "产物校验通过";
+      return migrationText("verification.passed");
     case "failed":
-      return "产物校验未通过";
+      return migrationText("verification.failed");
     case "degraded":
-      return "产物校验未完成";
+      return migrationText("verification.degraded");
   }
 }
 
@@ -199,10 +207,11 @@ function MigrationTransferProgress({
 }: {
   stage: "session" | "upload" | "analysis";
 }) {
+  const { t } = useTranslation("migrations");
   const stages = [
-    { id: "session", label: "创建迁移环境" },
-    { id: "upload", label: "上传项目" },
-    { id: "analysis", label: "分析项目" },
+    { id: "session", label: t("transfer.session") },
+    { id: "upload", label: t("transfer.upload") },
+    { id: "analysis", label: t("transfer.analysis") },
   ] as const;
   const activeIndex = stages.findIndex((item) => item.id === stage);
   return (
@@ -218,7 +227,10 @@ function MigrationTransferProgress({
                 : ""
           }
         >
-          <span className="migration-transfer-progress__marker" aria-hidden="true" />
+          <span
+            className="migration-transfer-progress__marker"
+            aria-hidden="true"
+          />
           {index === activeIndex ? (
             <TextShimmer>{item.label}</TextShimmer>
           ) : (
@@ -280,9 +292,9 @@ function defaultAppName(name: string): string {
 }
 
 function appNameError(value: string): string {
-  if (!value.trim()) return "请输入 Agent 名称";
+  if (!value.trim()) return migrationText("validation.agentNameRequired");
   if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(value.trim())) {
-    return "Agent 名称必须为 1-63 位，只能包含小写字母、数字和连字符，且必须以字母或数字开头和结尾";
+    return migrationText("validation.agentNameInvalid");
   }
   return "";
 }
@@ -294,23 +306,22 @@ function formatBytes(value: number): string {
 }
 
 function formatByteLimit(value: number): string {
-  return formatBytes(value)
-    .replace(".0 MiB", " MiB")
-    .replace(".0 KiB", " KiB");
+  return formatBytes(value).replace(".0 MiB", " MiB").replace(".0 KiB", " KiB");
 }
 
 function formatElapsedTime(seconds: number): string {
-  if (seconds < 60) return `${seconds} 秒`;
-  return `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
+  if (seconds < 60) return migrationText("duration.seconds", { seconds });
+  return migrationText("duration.minutesSeconds", {
+    minutes: Math.floor(seconds / 60),
+    seconds: seconds % 60,
+  });
 }
 
 function formatDate(value: string | number): string {
   const date =
-    typeof value === "number"
-      ? new Date(value * 1000)
-      : new Date(value);
+    typeof value === "number" ? new Date(value * 1000) : new Date(value);
   if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleString("zh-CN", {
+  return date.toLocaleString(i18n.resolvedLanguage || i18n.language, {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
@@ -326,30 +337,30 @@ function migrationExpiryCopy(
   const sourceSaved = task.persistence?.state === "saved";
   const sourceSaving = task.persistence?.state === "saving";
   const activeDetail = sourceSaved
-    ? "已保存项目不受影响"
+    ? migrationText("expiry.savedUnaffected")
     : sourceSaving
-      ? "源码正在保存，完成后不受环境期限影响"
-      : "到期后任务记录和临时产物将无法访问";
+      ? migrationText("expiry.savingUnaffected")
+      : migrationText("expiry.activeDetail");
   const expiry = new Date(task.expiresAt).getTime();
   if (!Number.isFinite(expiry)) {
     return {
-      title: "临时迁移环境保留 1 小时",
+      title: migrationText("expiry.oneHour"),
       detail: activeDetail,
     };
   }
   if (task.state === "expired" || now >= expiry) {
     return {
-      title: "临时迁移环境已结束",
+      title: migrationText("expiry.ended"),
       detail: sourceSaved
-        ? "已保存项目仍可查看、下载、部署或优化"
-        : "任务记录和临时产物已无法访问",
+        ? migrationText("expiry.savedAvailable")
+        : migrationText("expiry.unavailable"),
     };
   }
   const remaining = Math.max(0, expiry - now);
   const minutes = Math.floor(remaining / 60_000);
   const seconds = Math.floor((remaining % 60_000) / 1_000);
   return {
-    title: `临时迁移环境将在 ${minutes} 分 ${seconds} 秒后结束`,
+    title: migrationText("expiry.countdown", { minutes, seconds }),
     detail: activeDetail,
   };
 }
@@ -369,8 +380,8 @@ function expireTasksAtDeadline(
       ...task,
       state: "expired" as const,
       message: sourceSaved
-        ? "临时迁移环境已结束，已保存项目不受影响。"
-        : "临时迁移环境已结束，任务记录和临时产物无法继续访问。",
+        ? migrationText("expiry.expiredSavedMessage")
+        : migrationText("expiry.expiredMessage"),
       canModify: false,
       canUpload: false,
       canAnswer: false,
@@ -423,19 +434,20 @@ function isTextMime(mimeType: string, path: string): boolean {
 }
 
 function AnalysisSummary({ analysis }: { analysis: MigrationAnalysis }) {
+  const { t } = useTranslation("migrations");
   return (
     <div className="migration-analysis">
       <Markdown text={analysis.summary} allowRawHtml={false} />
       <div className="migration-analysis__facts">
         {analysis.recommended ? (
           <section>
-            <h3>建议迁移方式</h3>
-            <strong>{FRAMEWORK_LABELS[analysis.recommended.framework]}</strong>
+            <h3>{t("analysis.recommended")}</h3>
+            <strong>{frameworkLabel(analysis.recommended.framework)}</strong>
             <p>{analysis.recommended.reason}</p>
           </section>
         ) : null}
         <section>
-          <h3>迁移范围</h3>
+          <h3>{t("analysis.scope")}</h3>
           <ul>
             {analysis.boundary.include.map((item) => (
               <li key={item}>{item}</li>
@@ -444,7 +456,7 @@ function AnalysisSummary({ analysis }: { analysis: MigrationAnalysis }) {
         </section>
         {analysis.boundary.exclude.length > 0 ? (
           <section>
-            <h3>不在本次范围</h3>
+            <h3>{t("analysis.excluded")}</h3>
             <ul>
               {analysis.boundary.exclude.map((item) => (
                 <li key={item}>{item}</li>
@@ -455,12 +467,14 @@ function AnalysisSummary({ analysis }: { analysis: MigrationAnalysis }) {
       </div>
       {analysis.frameworks[0]?.evidence.length ? (
         <details className="migration-analysis__evidence">
-          <summary>查看分析证据</summary>
+          <summary>{t("analysis.viewEvidence")}</summary>
           <ul>
             {analysis.frameworks.flatMap((candidate) =>
               candidate.evidence.map((item) => (
                 <li key={`${candidate.id}:${item.path}:${item.line}`}>
-                  <code>{item.path}:{item.line}</code>
+                  <code>
+                    {item.path}:{item.line}
+                  </code>
                   <span>{item.reason}</span>
                 </li>
               )),
@@ -477,7 +491,7 @@ function AnalysisSummary({ analysis }: { analysis: MigrationAnalysis }) {
       ) : null}
       {analysis.assumptions.length > 0 ? (
         <details className="migration-analysis__evidence">
-          <summary>查看关键假设</summary>
+          <summary>{t("analysis.viewAssumptions")}</summary>
           <ul>
             {analysis.assumptions.map((assumption) => (
               <li key={assumption}>{assumption}</li>
@@ -500,17 +514,21 @@ function MigrationActivityFeed({
   error: string;
   analyzing: boolean;
 }) {
+  const { t } = useTranslation("migrations");
   const items = activity?.items ?? [];
   const blocks = migrationActivityBlocks(items);
 
   return (
-    <section className="migration-activity" aria-label="Codex 执行动态">
+    <section
+      className="migration-activity"
+      aria-label={t("activity.ariaLabel")}
+    >
       <div className="migration-activity__heading">
         <span
           className={`migration-activity__marker${activity?.complete ? " is-complete" : ""}`}
           aria-hidden="true"
         />
-        <strong>Codex 执行动态</strong>
+        <strong>{t("activity.title")}</strong>
       </div>
       {blocks.length > 0 ? (
         <div className="migration-activity__stream">
@@ -518,7 +536,9 @@ function MigrationActivityFeed({
         </div>
       ) : loading || !activity?.complete ? (
         <TextShimmer>
-          {analyzing ? "Codex 正在开始分析…" : "Codex 正在开始迁移…"}
+          {analyzing
+            ? t("activity.startingAnalysis")
+            : t("activity.startingMigration")}
         </TextShimmer>
       ) : null}
       {error ? (
@@ -537,10 +557,9 @@ function ArtifactBrowser({
   task: MigrationTask;
   artifact: MigrationArtifact;
 }) {
+  const { t, i18n: translation } = useTranslation("migrations");
   const [query, setQuery] = useState("");
-  const [activePath, setActivePath] = useState(
-    artifact.files[0]?.path ?? "",
-  );
+  const [activePath, setActivePath] = useState(artifact.files[0]?.path ?? "");
   const [preview, setPreview] = useState<PreviewState | null>(null);
   const activeFile =
     artifact.files.find((file) => file.path === activePath) ??
@@ -561,18 +580,14 @@ function ArtifactBrowser({
       setPreview({
         path: activeFile.path,
         loading: false,
-        error: "该文件超过 2 MiB，请下载完整产物后查看。",
+        error: t("artifact.fileTooLarge"),
       });
       return;
     }
     const controller = new AbortController();
     let objectUrl = "";
     setPreview({ path: activeFile.path, loading: true });
-    void getMigrationArtifactFile(
-      task.id,
-      activeFile.path,
-      controller.signal,
-    )
+    void getMigrationArtifactFile(task.id, activeFile.path, controller.signal)
       .then(async ({ blob, mimeType }) => {
         if (controller.signal.aborted) return;
         if (mimeType.startsWith("image/")) {
@@ -597,7 +612,7 @@ function ArtifactBrowser({
         setPreview({
           path: activeFile.path,
           loading: false,
-          error: "该文件不支持在线预览，请下载完整产物后查看。",
+          error: t("artifact.unsupportedPreview"),
         });
       })
       .catch((cause: unknown) => {
@@ -612,17 +627,17 @@ function ArtifactBrowser({
       controller.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [activeFile, task.id]);
+  }, [activeFile, task.id, t, translation.resolvedLanguage]);
 
   return (
     <div className="migration-artifact-browser">
-      <aside aria-label="迁移产物文件">
+      <aside aria-label={t("artifact.filesAria")}>
         <label className="migration-artifact-browser__search">
-          <span className="sr-only">搜索产物文件</span>
+          <span className="sr-only">{t("artifact.searchAria")}</span>
           <input
             value={query}
             onChange={(event) => setQuery(event.currentTarget.value)}
-            placeholder="搜索文件"
+            placeholder={t("artifact.searchPlaceholder")}
           />
         </label>
         <div className="migration-artifact-browser__files">
@@ -642,20 +657,22 @@ function ArtifactBrowser({
         </div>
         {artifact.files.length > filteredFiles.length ? (
           <p className="migration-artifact-browser__limit">
-            仅展示前 {MAX_VISIBLE_FILES} 项，请搜索具体文件。
+            {t("artifact.limit", { count: MAX_VISIBLE_FILES })}
           </p>
         ) : null}
       </aside>
       <section>
         <header>
-          <span title={activeFile?.path}>{activeFile?.path || "未选择文件"}</span>
+          <span title={activeFile?.path}>
+            {activeFile?.path || t("artifact.noSelection")}
+          </span>
           {activeFile ? <small>{formatBytes(activeFile.size)}</small> : null}
         </header>
         <div className="migration-artifact-browser__preview">
           {!activeFile ? (
-            <p>暂无可预览文件。</p>
+            <p>{t("artifact.noPreview")}</p>
           ) : preview?.path !== activeFile.path || preview.loading ? (
-            <TextShimmer>正在读取产物文件…</TextShimmer>
+            <TextShimmer>{t("artifact.loadingFile")}</TextShimmer>
           ) : preview.error ? (
             <p role="status">{preview.error}</p>
           ) : preview.imageUrl ? (
@@ -693,11 +710,14 @@ export function MigrationWorkspace({
   initialPage = "new",
   initialProjectId = "",
 }: MigrationWorkspaceProps) {
+  const { t, i18n } = useTranslation("migrations");
+  const locale = i18n.resolvedLanguage || i18n.language;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const preparedAnalysisRef = useRef("");
   const transferAbortRef = useRef<AbortController | null>(null);
-  const [capability, setCapability] =
-    useState<MigrationCapabilities | null>(null);
+  const [capability, setCapability] = useState<MigrationCapabilities | null>(
+    null,
+  );
   const [tasks, setTasks] = useState<MigrationTask[]>([]);
   const [page, setPage] = useState<"new" | "projects">(initialPage);
   const [focusedProjectId, setFocusedProjectId] = useState(initialProjectId);
@@ -718,8 +738,7 @@ export function MigrationWorkspace({
   const [pollErrorRetryable, setPollErrorRetryable] = useState(false);
   const [now, setNow] = useState(Date.now());
   const [createStartedAt, setCreateStartedAt] = useState<number | null>(null);
-  const [framework, setFramework] =
-    useState<MigrationFramework>("langchain");
+  const [framework, setFramework] = useState<MigrationFramework>("langchain");
   const [entry, setEntry] = useState("");
   const [appName, setAppName] = useState("");
   const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -759,7 +778,7 @@ export function MigrationWorkspace({
       description: [
         model.id,
         model.vendorName,
-        model.lifecycleStatus === "Retiring" ? "即将下线" : "",
+        model.lifecycleStatus === "Retiring" ? t("model.retiring") : "",
       ]
         .filter(Boolean)
         .join(" · "),
@@ -780,7 +799,7 @@ export function MigrationWorkspace({
       options.unshift({
         value: fallbackId,
         label: fallbackId,
-        description: "当前默认模型",
+        description: t("model.currentDefault"),
       });
     }
     return options;
@@ -789,6 +808,7 @@ export function MigrationWorkspace({
     selectableModels,
     selectedModelId,
     task?.modelId,
+    t,
     unsupportedMigrationModelIds,
   ]);
   const createElapsedSeconds = createStartedAt
@@ -887,7 +907,7 @@ export function MigrationWorkspace({
       .catch((cause: unknown) => {
         if (!controller.signal.aborted) {
           setModelsError(
-            cause instanceof Error ? cause.message : "加载模型列表失败",
+            cause instanceof Error ? cause.message : t("model.loadError"),
           );
         }
       })
@@ -895,14 +915,13 @@ export function MigrationWorkspace({
         if (!controller.signal.aborted) setModelsLoading(false);
       });
     return () => controller.abort();
-  }, [cloudProvider, modelsReloadKey]);
+  }, [cloudProvider, modelsReloadKey, t]);
 
   useEffect(() => {
     if (!capability || selectedModelId) return;
     const configuredModelId = capability.model?.id.trim() || "";
     const defaultModelId =
-      configuredModelId &&
-      !unsupportedMigrationModelIds.has(configuredModelId)
+      configuredModelId && !unsupportedMigrationModelIds.has(configuredModelId)
         ? configuredModelId
         : selectableModels[0]?.id || "";
     if (defaultModelId) setSelectedModelId(defaultModelId);
@@ -959,9 +978,10 @@ export function MigrationWorkspace({
 
   useEffect(() => {
     if (
-      !task
-      || (!isActiveState(task.state) && task.persistence?.state !== "saving")
-    ) return;
+      !task ||
+      (!isActiveState(task.state) && task.persistence?.state !== "saving")
+    )
+      return;
     const controller = new AbortController();
     let timer: number | undefined;
     const poll = async () => {
@@ -971,10 +991,7 @@ export function MigrationWorkspace({
         setTasks((current) => upsertTask(current, next));
         setPollError("");
         setPollErrorRetryable(false);
-        if (
-          isActiveState(next.state)
-          || next.persistence?.state === "saving"
-        ) {
+        if (isActiveState(next.state) || next.persistence?.state === "saving") {
           timer = window.setTimeout(() => void poll(), POLL_INTERVAL_MS);
         }
       } catch (cause) {
@@ -1023,17 +1040,23 @@ export function MigrationWorkspace({
         setActivity(next);
         setActivityError("");
         if (!next.complete && isActiveState(task.state)) {
-          timer = window.setTimeout(() => void poll(), ACTIVITY_POLL_INTERVAL_MS);
+          timer = window.setTimeout(
+            () => void poll(),
+            ACTIVITY_POLL_INTERVAL_MS,
+          );
         }
       } catch (cause) {
         if (controller.signal.aborted) return;
-        setActivityError("暂时无法读取 Codex 执行动态，不影响当前任务。");
+        setActivityError(t("activity.loadError"));
         if (
           isActiveState(task.state) &&
           cause instanceof MigrationApiError &&
           cause.retryable
         ) {
-          timer = window.setTimeout(() => void poll(), ACTIVITY_POLL_INTERVAL_MS);
+          timer = window.setTimeout(
+            () => void poll(),
+            ACTIVITY_POLL_INTERVAL_MS,
+          );
         }
       } finally {
         if (!controller.signal.aborted) setActivityLoading(false);
@@ -1049,6 +1072,7 @@ export function MigrationWorkspace({
     task?.state,
     task?.analysisRef?.sha256,
     task?.confirmation?.framework,
+    t,
   ]);
 
   useEffect(() => {
@@ -1114,25 +1138,22 @@ export function MigrationWorkspace({
     if (!file) return;
     if (!file.name.toLowerCase().endsWith(".zip")) {
       setSourceFile(null);
-      setError("请选择 .zip 格式的本地项目文件。");
+      setError(t("upload.zipOnly"));
       return;
     }
-    if (
-      file.name.length > 255 ||
-      /[/\\\u0000-\u001f]/.test(file.name)
-    ) {
+    if (file.name.length > 255 || /[/\\\u0000-\u001f]/.test(file.name)) {
       setSourceFile(null);
-      setError("ZIP 文件名无效，请重命名后重新选择。");
+      setError(t("upload.invalidName"));
       return;
     }
     if (file.size > maxSourceBytes) {
       setSourceFile(null);
-      setError(`项目 ZIP 不能超过 ${maxSourceSizeLabel}。`);
+      setError(t("upload.tooLarge", { size: maxSourceSizeLabel }));
       return;
     }
     if (file.size === 0) {
       setSourceFile(null);
-      setError("项目 ZIP 不能为空。");
+      setError(t("upload.empty"));
       return;
     }
     setSourceFile(file);
@@ -1398,7 +1419,7 @@ export function MigrationWorkspace({
             key,
             required: true,
             comment: key,
-            placeholder: `请输入 ${key}`,
+            placeholder: t("deployment.requiredPlaceholder", { key }),
           })),
         ...artifact.environment.optional
           .filter(isMigrationRuntimeEnvironmentKey)
@@ -1406,7 +1427,7 @@ export function MigrationWorkspace({
             key,
             required: false,
             comment: key,
-            placeholder: `可选：${key}`,
+            placeholder: t("deployment.optionalPlaceholder", { key }),
           })),
       ]
     : [];
@@ -1416,7 +1437,7 @@ export function MigrationWorkspace({
     onStage?: (stage: DeployStage) => void,
     options?: Parameters<typeof deployAgentkitProject>[3],
   ) {
-    if (!task || !artifact) throw new Error("迁移产物尚未准备完成。");
+    if (!task || !artifact) throw new Error(t("deployment.notReady"));
     const runtimeNetwork =
       network && network.mode !== "public"
         ? {
@@ -1470,22 +1491,22 @@ export function MigrationWorkspace({
             aiAssisted: true,
           }}
           onBack={() => setDeploymentOpen(false)}
-          backLabel="返回迁移结果"
+          backLabel={t("deployment.back")}
           deploymentPrimaryPane={
             <section className="migration-deployment-summary">
-              <strong>迁移产物</strong>
+              <strong>{t("artifact.title")}</strong>
               <span>{task.sourceFileName}</span>
               <dl>
                 <div>
-                  <dt>迁移方式</dt>
+                  <dt>{t("confirmation.framework")}</dt>
                   <dd>{artifact.migration.framework}</dd>
                 </div>
                 <div>
-                  <dt>启动文件</dt>
+                  <dt>{t("artifact.startupFile")}</dt>
                   <dd>{artifact.startup.module}</dd>
                 </div>
                 <div>
-                  <dt>文件数</dt>
+                  <dt>{t("artifact.fileCountLabel")}</dt>
                   <dd>{artifact.files.length}</dd>
                 </div>
               </dl>
@@ -1510,12 +1531,12 @@ export function MigrationWorkspace({
               type="button"
               className="migration-icon-button"
               onClick={onBack}
-              aria-label="返回添加 Agent"
-              title="返回"
+              aria-label={t("workspace.backToAddAgent")}
+              title={t("common.back")}
             >
               <BackIcon />
             </button>
-            <h1>从存量迁移</h1>
+            <h1>{t("workspace.title")}</h1>
           </header>
           <button
             type="button"
@@ -1525,7 +1546,7 @@ export function MigrationWorkspace({
             disabled={composerBusy}
           >
             <PlusIcon />
-            <span>新建迁移</span>
+            <span>{t("workspace.newMigration")}</span>
           </button>
           <button
             type="button"
@@ -1535,14 +1556,18 @@ export function MigrationWorkspace({
             disabled={composerBusy}
           >
             <FileIcon />
-            <span>已迁移项目</span>
+            <span>{t("projects.title")}</span>
           </button>
-          <div className="migration-history__label">最近迁移</div>
-          <nav aria-label="迁移会话">
+          <div className="migration-history__label">
+            {t("workspace.recent")}
+          </div>
+          <nav aria-label={t("workspace.sessionsAria")}>
             {loading ? (
-              <TextShimmer>正在读取迁移会话…</TextShimmer>
+              <TextShimmer>{t("workspace.loadingSessions")}</TextShimmer>
             ) : tasks.length === 0 ? (
-              <p className="migration-history__empty">暂无迁移会话</p>
+              <p className="migration-history__empty">
+                {t("workspace.noSessions")}
+              </p>
             ) : (
               tasks.map((item) => (
                 <button
@@ -1565,7 +1590,9 @@ export function MigrationWorkspace({
                 >
                   <span>{sourceStem(item.sourceFileName)}</span>
                   <small>
-                    <span data-state={item.state}>{stateLabel(item.state)}</span>
+                    <span data-state={item.state}>
+                      {stateLabel(item.state)}
+                    </span>
                     <time>{formatDate(item.createdAt)}</time>
                   </small>
                 </button>
@@ -1591,12 +1618,12 @@ export function MigrationWorkspace({
             <header className="migration-main__header">
             <div>
               <h2>
-                {task ? sourceStem(task.sourceFileName) : "迁移存量 Agent 项目"}
+                {task ? sourceStem(task.sourceFileName) : t("workspace.heading")}
               </h2>
               <p>
                 {task
                   ? taskDisplayMessage(task)
-                  : "上传本地项目 ZIP，Codex 将先进行只读分析，再由你确认迁移方式。"}
+                  : t("workspace.intro")}
               </p>
             </div>
             {task ? (
@@ -1608,7 +1635,7 @@ export function MigrationWorkspace({
                     onClick={() => setStopConfirmOpen(true)}
                     disabled={Boolean(action)}
                   >
-                    {action === "stop" ? "正在终止…" : "终止迁移"}
+                    {action === "stop" ? t("actions.stopping") : t("actions.stop")}
                   </button>
                 ) : null}
                 {expiryCopy ? (
@@ -1630,8 +1657,11 @@ export function MigrationWorkspace({
           >
           {!capability?.enabled && !loading ? (
             <div className="migration-system-state is-error" role="alert">
-              <strong>迁移能力暂不可用</strong>
-              <p>{capability?.reason || "Dev Sandbox 暂不可用，请联系管理员检查配置。"}</p>
+              <strong>{t("capability.unavailable")}</strong>
+              <p>
+                {localeCompatibleBackendText(capability?.reason, locale)
+                  || t("capability.defaultReason")}
+              </p>
             </div>
           ) : null}
 
@@ -1640,14 +1670,8 @@ export function MigrationWorkspace({
               <article className="migration-turn is-assistant">
                 <div className="migration-assistant-mark">AI</div>
                 <div>
-                  <p>
-                    请提供本地项目 ZIP。上传后我会识别框架、入口和迁移边界，
-                    并在执行实际迁移前请你确认迁移方式。
-                  </p>
-                  <small>
-                    仅支持本地 ZIP，最大 {maxSourceSizeLabel}
-                    ；迁移环境从创建起保留 1 小时。
-                  </small>
+                  <p>{t("conversation.requestZip")}</p>
+                  <small>{t("conversation.zipHint", { size: maxSourceSizeLabel })}</small>
                 </div>
               </article>
               {action === "create" && sourceFile ? (
@@ -1665,13 +1689,13 @@ export function MigrationWorkspace({
                     <div className="migration-assistant-content">
                       <MigrationTransferProgress stage="session" />
                       <TextShimmer as="strong">
-                        正在创建 Dev Sandbox
+                        {t("conversation.creatingSandbox")}
                       </TextShimmer>
                       <p className="migration-running-note">
-                        正在初始化迁移工作目录，并检查 AgentKit CLI、Codex 和迁移能力。环境就绪后将自动上传项目。
+                        {t("conversation.initializing")}
                       </p>
                       <small>
-                        已等待 {formatElapsedTime(createElapsedSeconds)}
+                        {t("conversation.elapsed", { duration: formatElapsedTime(createElapsedSeconds) })}
                       </small>
                     </div>
                   </article>
@@ -1697,33 +1721,30 @@ export function MigrationWorkspace({
                     <>
                       <MigrationTransferProgress stage="upload" />
                       <p className="migration-running-note">
-                        ZIP 上传完成后将自动开始只读分析。
+                        {t("conversation.uploadThenAnalyze")}
                       </p>
                     </>
                   ) : task.state === "analyzing" ? (
                     <>
                       <MigrationTransferProgress stage="analysis" />
                       <p className="migration-running-note">
-                        Codex 正在识别框架、入口和迁移边界，不会执行实际迁移。
+                        {t("conversation.analyzing")}
                       </p>
                     </>
                   ) : isActiveState(task.state) ? (
                     <>
                       <TextShimmer>{taskDisplayMessage(task)}</TextShimmer>
                       <p className="migration-running-note">
-                        迁移执行中不能修改附件或迁移方式。你可以等待当前任务结束，或主动终止。
+                        {t("conversation.migrationLocked")}
                       </p>
                     </>
                   ) : task.state === "needs_input" && task.analysis ? (
                     <>
                       <p>{task.analysis.summary}</p>
-                      <p>
-                        只读分析已暂停。请仅回答下面列出的问题，提交后会在同一
-                        迁移环境中重新分析，不会开始实际迁移。
-                      </p>
+                      <p>{t("conversation.analysisPaused")}</p>
                       {task.analysis.frameworks[0]?.evidence.length ? (
                         <details className="migration-analysis__evidence">
-                          <summary>查看源码证据</summary>
+                          <summary>{t("analysis.viewSourceEvidence")}</summary>
                           <ul>
                             {task.analysis.frameworks.flatMap((candidate) =>
                               candidate.evidence.map((item) => (
@@ -1741,23 +1762,21 @@ export function MigrationWorkspace({
                     </>
                   ) : task.state === "analysis_ready" && task.analysis ? (
                     <>
-                      <p>只读分析已完成。请检查建议，并确认最终迁移方式。</p>
+                      <p>{t("conversation.analysisComplete")}</p>
                       <AnalysisSummary analysis={task.analysis} />
                     </>
                   ) : task.state === "awaiting_upload" ? (
-                    <p>迁移环境已创建，请重新选择本地 ZIP 继续上传。</p>
+                    <p>{t("conversation.awaitingUpload")}</p>
                   ) : task.state === "expired" ? (
                     <div className="migration-expired">
-                      <strong>迁移环境已过期</strong>
-                      <p>
-                        迁移内容和产物已无法预览、下载或部署。如已完成 Runtime 部署，可返回智能体页面继续使用。
-                      </p>
+                      <strong>{t("conversation.expiredTitle")}</strong>
+                      <p>{t("conversation.expiredDescription")}</p>
                     </div>
                   ) : task.state === "failed" ? (
                     task.error?.code === "MIGRATION_ANALYSIS_UNSUPPORTED" &&
                     task.analysis ? (
                       <div className="migration-system-state is-error">
-                        <strong>当前 ZIP 暂时无法迁移</strong>
+                        <strong>{t("conversation.unsupportedTitle")}</strong>
                         <Markdown text={task.analysis.summary} allowRawHtml={false} />
                         {task.analysis.warnings.length > 0 ? (
                           <ul>
@@ -1766,16 +1785,16 @@ export function MigrationWorkspace({
                             ))}
                           </ul>
                         ) : null}
-                        <p>请按提示整理项目后，新建迁移并重新上传。</p>
+                        <p>{t("conversation.unsupportedHint")}</p>
                       </div>
                     ) : (
                       <div className="migration-system-state is-error">
-                        <strong>迁移未完成</strong>
+                        <strong>{t("conversation.failedTitle")}</strong>
                         <p>{task.message}</p>
                       </div>
                     )
                   ) : task.state === "cancelled" ? (
-                    <p>当前迁移已终止。你可以新建迁移并重新上传项目。</p>
+                    <p>{t("conversation.cancelled")}</p>
                   ) : (
                     <p>{taskDisplayMessage(task)}</p>
                   )}
@@ -1796,11 +1815,11 @@ export function MigrationWorkspace({
           {task?.state === "needs_input" && task.analysis ? (
             <section
               className="migration-confirmation"
-              aria-label="补充项目分析信息"
+              aria-label={t("questions.ariaLabel")}
             >
               <div className="migration-confirmation__heading">
-                <strong>补充分析所需信息</strong>
-                <span>附件保持锁定，提交后仅继续只读分析</span>
+                <strong>{t("questions.title")}</strong>
+                <span>{t("questions.description")}</span>
               </div>
               {task.analysis.questions.map((question) => (
                 <label className="migration-field" key={question.id}>
@@ -1831,7 +1850,7 @@ export function MigrationWorkspace({
                   onClick={() => void submitAnswers()}
                   disabled={!canSubmitAnswers}
                 >
-                  {action === "answer" ? "正在继续分析…" : "提交并继续分析"}
+                  {action === "answer" ? t("questions.submitting") : t("questions.submit")}
                 </button>
               </div>
             </section>
@@ -1840,19 +1859,19 @@ export function MigrationWorkspace({
           {task?.state === "analysis_ready" && task.analysis ? (
             <section
               className="migration-confirmation"
-              aria-label="确认迁移方式"
+              aria-label={t("confirmation.ariaLabel")}
             >
               <div className="migration-confirmation__heading">
-                <strong>确认迁移方式</strong>
-                <span>确认后才会执行实际迁移</span>
+                <strong>{t("confirmation.title")}</strong>
+                <span>{t("confirmation.description")}</span>
               </div>
               <div className="migration-confirmation__grid">
                 <NewChatCompactSelect
-                  label="迁移方式"
+                  label={t("confirmation.framework")}
                   value={framework}
                   options={(capability?.frameworks ?? []).map((item) => ({
                     value: item,
-                    label: FRAMEWORK_LABELS[item],
+                    label: frameworkLabel(item),
                   }))}
                   onChange={(value) => {
                     const next = value as MigrationFramework;
@@ -1862,12 +1881,12 @@ export function MigrationWorkspace({
                     );
                     setEntry(candidate?.value || "");
                   }}
-                  placeholder="选择迁移方式"
+                  placeholder={t("confirmation.frameworkPlaceholder")}
                   disabled={Boolean(action)}
                 />
                 <label className="migration-field">
                   <span>
-                    Agent 名称<b aria-hidden="true">*</b>
+                    {t("confirmation.agentName")}<b aria-hidden="true">*</b>
                   </span>
                   <input
                     value={appName}
@@ -1885,22 +1904,22 @@ export function MigrationWorkspace({
                 {STRUCTURED_FRAMEWORKS.has(framework) ? (
                   entryOptions.length > 0 ? (
                     <NewChatCompactSelect
-                      label="项目入口"
+                      label={t("confirmation.entry")}
                       value={entry}
                       options={entryOptions}
                       onChange={setEntry}
-                      placeholder="选择项目入口"
+                      placeholder={t("confirmation.entryPlaceholder")}
                       disabled={Boolean(action)}
                     />
                   ) : (
                     <label className="migration-field">
                       <span>
-                        项目入口<b aria-hidden="true">*</b>
+                        {t("confirmation.entry")}<b aria-hidden="true">*</b>
                       </span>
                       <input
                         value={entry}
                         onChange={(event) => setEntry(event.currentTarget.value)}
-                        placeholder="例如 agent.py:agent"
+                        placeholder={t("confirmation.entryExample")}
                         maxLength={512}
                         required
                         disabled={Boolean(action)}
@@ -1911,7 +1930,7 @@ export function MigrationWorkspace({
                 ) : null}
               </div>
               <p className="migration-running-note">
-                点击“确认并开始迁移”即确认上述迁移范围、排除项和关键假设。
+                {t("confirmation.consent")}
               </p>
               <div className="migration-confirmation__actions">
                 <button
@@ -1920,7 +1939,7 @@ export function MigrationWorkspace({
                   onClick={() => void confirmMigration()}
                   disabled={!canConfirm}
                 >
-                  {action === "confirm" ? "正在启动迁移…" : "确认并开始迁移"}
+                  {action === "confirm" ? t("confirmation.starting") : t("confirmation.start")}
                 </button>
               </div>
             </section>
@@ -1930,15 +1949,15 @@ export function MigrationWorkspace({
             <section className="migration-result">
               <header>
                 <div>
-                  <strong>迁移产物</strong>
+                  <strong>{t("artifact.title")}</strong>
                   <span>
                     {task.persistence?.state === "saved"
-                      ? "源码已保存，可继续查看、下载、部署或优化。"
+                      ? t("artifact.saved")
                       : task.persistence?.state === "saving"
-                        ? "产物已生成，正在保存源码版本。"
+                        ? t("artifact.saving")
                         : task.artifact.deployReady
-                          ? "产物可预览、下载和部署，正在等待源码保存状态。"
-                          : "产物可预览和下载，但当前交付状态不支持部署。"}
+                          ? t("artifact.deployReady")
+                          : t("artifact.deployUnavailable")}
                   </span>
                 </div>
                 <div className="migration-result__actions">
@@ -1950,7 +1969,7 @@ export function MigrationWorkspace({
                         setPage("projects");
                       }}
                     >
-                      <span>查看已迁移项目</span>
+                      <span>{t("artifact.viewProjects")}</span>
                     </button>
                   ) : null}
                   <button
@@ -1959,7 +1978,7 @@ export function MigrationWorkspace({
                     disabled={!task.artifact.downloadReady || Boolean(action)}
                   >
                     <DownloadIcon />
-                    <span>{action === "download" ? "下载中…" : "下载 ZIP"}</span>
+                    <span>{action === "download" ? t("artifact.downloading") : t("artifact.downloadZip")}</span>
                   </button>
                   <button
                     type="button"
@@ -1968,12 +1987,12 @@ export function MigrationWorkspace({
                     disabled={!task.artifact.deployReady || !artifact}
                     title={
                       task.artifact.deployReady
-                        ? "部署迁移产物"
-                        : "当前交付状态不支持部署"
+                        ? t("artifact.deployTitle")
+                        : t("artifact.deployUnavailableTitle")
                     }
                   >
                     <DeployIcon />
-                    <span>部署到 Runtime</span>
+                    <span>{t("artifact.deployRuntime")}</span>
                   </button>
                 </div>
               </header>
@@ -1996,29 +2015,32 @@ export function MigrationWorkspace({
                         setArtifactReload((current) => current + 1);
                       }}
                     >
-                      重新读取
+                      {t("actions.reload")}
                     </button>
                   ) : null}
                 </div>
               ) : artifact ? (
                 <>
                   <div className="migration-result__summary">
-                    <span>{artifact.files.length} 个文件</span>
+                    <span>{t("artifact.fileCount", { count: artifact.files.length })}</span>
                     <span>CLI {artifact.cli.version}</span>
-                    <span>启动文件 {artifact.startup.module}</span>
+                    <span>{t("artifact.startup", { module: artifact.startup.module })}</span>
                     <span>{verificationLabel(artifact.verification.status)}</span>
                   </div>
                   <ArtifactBrowser task={task} artifact={artifact} />
                 </>
               ) : (
-                <TextShimmer>正在读取迁移产物…</TextShimmer>
+                <TextShimmer>{t("artifact.loading")}</TextShimmer>
               )}
             </section>
           ) : null}
 
           {pollError ? (
             <div className="migration-inline-error" role="alert">
-              <span>{pollError}</span>
+              <span>
+                {localeCompatibleBackendText(pollError, locale)
+                  || t("errors.refreshFailed")}
+              </span>
               {pollErrorRetryable ? (
                 <button
                   type="button"
@@ -2040,15 +2062,18 @@ export function MigrationWorkspace({
                       });
                   }}
                 >
-                  刷新状态
+                  {t("actions.refreshStatus")}
                 </button>
               ) : null}
             </div>
           ) : null}
           {error ? (
             <div className="migration-inline-error" role="alert">
-              <span>{error}</span>
-              <button type="button" onClick={() => setError("")} aria-label="关闭错误提示">
+              <span>
+                {localeCompatibleBackendText(error, locale)
+                  || t("errors.loadFailed")}
+              </span>
+              <button type="button" onClick={() => setError("")} aria-label={t("errors.closeAria")}>
                 <CloseIcon />
               </button>
             </div>
@@ -2093,14 +2118,14 @@ export function MigrationWorkspace({
                     <button
                       type="button"
                       onClick={() => setSourceFile(null)}
-                      aria-label="移除项目 ZIP"
+                      aria-label={t("upload.removeAria")}
                       disabled={composerBusy}
                     >
                       <CloseIcon />
                     </button>
                   </div>
                 ) : (
-                  <p>{task ? "重新选择项目 ZIP" : "选择或拖入本地项目 ZIP"}</p>
+                  <p>{task ? t("upload.reselectPrompt") : t("upload.selectPrompt")}</p>
                 )}
               </div>
               <div className="migration-composer__actions">
@@ -2112,16 +2137,16 @@ export function MigrationWorkspace({
                     disabled={composerBusy}
                   >
                     <UploadIcon />
-                    <span>{sourceFile ? "重新选择" : "选择 ZIP"}</span>
+                    <span>{sourceFile ? t("upload.reselect") : t("upload.selectZip")}</span>
                   </button>
                   <div className="migration-composer__model-select">
                     <NewChatCompactSelect
-                      label="模型"
+                      label={t("model.label")}
                       hideLabel
                       value={composerModelId}
                       options={modelSelectOptions}
                       onChange={setSelectedModelId}
-                      placeholder="选择模型"
+                      placeholder={t("model.placeholder")}
                       searchable
                       loading={modelsLoading}
                       error={modelsError}
@@ -2140,7 +2165,7 @@ export function MigrationWorkspace({
                   }
                   disabled={!sourceFile || composerBusy}
                 >
-                  {task ? "继续上传" : "开始迁移"}
+                  {task ? t("upload.continue") : t("upload.start")}
                 </button>
               </div>
               <input
@@ -2148,12 +2173,12 @@ export function MigrationWorkspace({
                 type="file"
                 accept=".zip,application/zip"
                 onChange={handleFileChange}
-                aria-label="选择本地项目 ZIP"
+                aria-label={t("upload.inputAria")}
                 disabled={composerBusy}
               />
               </div>
               <p>
-                临时迁移环境从创建完成起保留 1 小时；保存成功的源码版本不受影响。
+                {t("upload.retention")}
               </p>
             </div>
           ) : null}
@@ -2162,9 +2187,11 @@ export function MigrationWorkspace({
       </section>
       {stopConfirmOpen && task ? (
         <StudioConfirmDialog
-          title="终止当前迁移？"
-          description="终止后，当前分析或迁移进程将停止，已执行的步骤不会继续。"
-          confirmLabel={action === "stop" ? "正在终止…" : "终止迁移"}
+          title={t("stopDialog.title")}
+          description={t("stopDialog.description")}
+          confirmLabel={
+            action === "stop" ? t("actions.stopping") : t("actions.stop")
+          }
           variant="danger"
           busy={action === "stop"}
           onCancel={() => setStopConfirmOpen(false)}

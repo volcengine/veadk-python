@@ -9,8 +9,8 @@ export const codingAgentsAutomation: CodingAgentAutomationDefinition = {
   kind: "coding-agent",
   category: "development",
   icon: "coding-agents",
-  name: "配置 Coding Agents",
-  badge: "本地",
+  name: "Configure coding agents",
+  badge: "Local",
   badgeTone: "success",
-  description: "将 VeADK 和 AgentKit 内置 Skills 全局配置到 Trae、Claude Code 或 Codex。",
+  description: "Install built-in VeADK and AgentKit skills globally for Trae, Claude Code, or Codex.",
 };

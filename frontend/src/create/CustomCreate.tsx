@@ -11,6 +11,8 @@ import {
   useRef,
   useState,
 } from "react";
+import type { TFunction } from "i18next";
+import { useTranslation } from "react-i18next";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "motion/react";
 import { Checkbox } from "@openai/apps-sdk-ui/components/Checkbox";
@@ -43,6 +45,7 @@ import {
   type McpTool,
   emptyDraft,
 } from "./types";
+import { createT } from "./i18n";
 import {
   HARNESS_SIDECAR_OPTIONS,
   HARNESS_SIDECAR_OPTION_GROUPS,
@@ -51,7 +54,6 @@ import {
   harnessProfileDefaultOptimizations,
   harnessSidecarProviderNotice,
   harnessSidecarOptionLabel,
-  harnessSidecarProfileLabel,
   releaseDraftFromDebugVariant,
   selectedHarnessModelProxyOptimizations,
   selectedHarnessProfile,
@@ -271,25 +273,25 @@ interface StepMeta {
 const STEPS: StepMeta[] = [
   {
     id: "type",
-    label: "Agent 类型",
-    hint: "选择 Agent 类型",
+    label: "traditional.sections.type.label",
+    hint: "traditional.sections.type.hint",
     icon: Shapes,
     required: true,
   },
   {
     id: "basic",
-    label: "基本信息",
-    hint: "名称、描述与系统提示词",
+    label: "traditional.sections.basic.label",
+    hint: "traditional.sections.basic.hint",
     icon: Info,
     required: true,
   },
-  { id: "model", label: "模型配置", hint: "模型与服务（可选）", icon: Cpu },
-  { id: "tools", label: "工具", hint: "可调用的能力", icon: Wrench },
-  { id: "skills", label: "技能", hint: "声明式技能", icon: Sparkles },
-  { id: "knowledge", label: "知识库", hint: "外部知识检索", icon: Database },
-  { id: "memory", label: "记忆", hint: "短期与长期记忆", icon: Layers },
-  { id: "subagents", label: "子 Agent", hint: "嵌套协作", icon: Boxes },
-  { id: "review", label: "完成", hint: "预览并创建", icon: Rocket },
+  { id: "model", label: "traditional.sections.model.label", hint: "traditional.sections.model.hint", icon: Cpu },
+  { id: "tools", label: "traditional.sections.tools.label", hint: "traditional.sections.tools.hint", icon: Wrench },
+  { id: "skills", label: "traditional.sections.skills.label", hint: "traditional.sections.skills.hint", icon: Sparkles },
+  { id: "knowledge", label: "traditional.sections.knowledge.label", hint: "traditional.sections.knowledge.hint", icon: Database },
+  { id: "memory", label: "traditional.sections.memory.label", hint: "traditional.sections.memory.hint", icon: Layers },
+  { id: "subagents", label: "traditional.sections.subagents.label", hint: "traditional.sections.subagents.hint", icon: Boxes },
+  { id: "review", label: "traditional.sections.review.label", hint: "traditional.sections.review.hint", icon: Rocket },
 ];
 
 /** Root-only reset mark: a tilted eraser clearing the current draft. */
@@ -394,11 +396,11 @@ function A2aRefreshIcon({ className }: { className?: string }) {
 type AgentType = NonNullable<AgentDraft["agentType"]>;
 
 const AGENT_TYPE_BAR_LABELS: Record<AgentType, string> = {
-  llm: "智能体",
-  sequential: "分步协作",
-  parallel: "同时处理",
-  loop: "循环执行",
-  a2a: "远程智能体",
+  llm: "traditional.agentTypes.llm.label",
+  sequential: "traditional.agentTypes.sequential.label",
+  parallel: "traditional.agentTypes.parallel.label",
+  loop: "traditional.agentTypes.loop.label",
+  a2a: "traditional.agentTypes.a2a.label",
 };
 
 const A2A_REGISTRY_ENV_TO_FIELD = {
@@ -497,6 +499,7 @@ function Checklist({
   onToggle: (id: string) => void;
   scrollRows?: number;
 }) {
+  const { t } = useTranslation("create");
   return (
     <div
       className={`cw-checklist ${scrollRows ? "cw-checklist-tools" : ""}`}
@@ -521,7 +524,7 @@ function Checklist({
             }}
             label={
               <span className="cw-check-text">
-                <span className="cw-check-title">{it.label}</span>
+                <span className="cw-check-title">{t(`traditional.catalog.${it.id}.label`, { defaultValue: it.label })}</span>
               </span>
             }
           />
@@ -539,11 +542,14 @@ function BackendSelect({
   options,
   value,
   onChange,
+  translationGroup,
 }: {
   options: BackendOption[];
   value: string | undefined;
   onChange: (id: string) => void;
+  translationGroup: "knowledge" | "shortTerm" | "longTerm";
 }) {
+  const { t } = useTranslation("create");
   return (
     <div className="cw-segmented">
       {options.map((o) => {
@@ -556,7 +562,12 @@ function BackendSelect({
             onClick={() => onChange(o.id)}
             aria-pressed={on}
           >
-            <span className="cw-seg-title">{o.label}</span>
+            <span className="cw-seg-title">
+              {t(
+                `traditional.backends.${translationGroup}.${o.id}.label`,
+                { defaultValue: o.label },
+              )}
+            </span>
           </button>
         );
       })}
@@ -581,15 +592,16 @@ function RuntimeEnvFields({
   onChange: (key: string, value: string) => void;
   renderAfterField?: (item: EnvVar) => ReactNode;
 }) {
+  const { t } = useTranslation("create");
   const visibleEnv = env.filter((item) => !item.hidden);
   if (visibleEnv.length === 0) {
-    return <p className="cw-env-empty">此后端无需额外运行参数。</p>;
+    return <p className="cw-env-empty">{t("traditional.env.noAdditionalParameters")}</p>;
   }
   return (
     <div className="cw-env-fields">
       {visibleEnv.map((item) => {
         const value = values[item.key] ?? item.defaultValue ?? "";
-        const jsonError = runtimeEnvJsonError(item, values);
+        const jsonError = runtimeEnvJsonError(item, values, t("traditional.env.invalidJson"));
         const controlId = `cw-env-${item.key}`;
         return (
           <Fragment key={item.key}>
@@ -605,7 +617,7 @@ function RuntimeEnvFields({
                       className="cw-env-help"
                       tabIndex={0}
                       data-help={item.help}
-                      aria-label={`${item.comment || item.key}说明：${item.help}`}
+                      aria-label={t("traditional.env.helpAriaLabel", { label: item.comment || item.key, help: item.help })}
                     >
                       ?
                       <span className="cw-env-help-popover" role="tooltip">
@@ -619,8 +631,8 @@ function RuntimeEnvFields({
                       href={item.link.url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      title={`打开 OpenViking ${item.link.label}`}
-                      aria-label={`打开 OpenViking ${item.link.label}`}
+                      title={t("traditional.env.openOpenViking", { label: item.link.label })}
+                      aria-label={t("traditional.env.openOpenViking", { label: item.link.label })}
                       onClick={(event) => event.stopPropagation()}
                     >
                       <ExternalLink aria-hidden="true" />
@@ -634,7 +646,7 @@ function RuntimeEnvFields({
                   id={controlId}
                   className="cw-input cw-env-textarea"
                   value={value}
-                  placeholder={item.placeholder || "请输入参数值"}
+                  placeholder={item.placeholder || t("traditional.env.valuePlaceholder")}
                   autoComplete="off"
                   spellCheck={false}
                   aria-invalid={!!jsonError}
@@ -648,7 +660,7 @@ function RuntimeEnvFields({
                   className="cw-input"
                   type={isSensitiveEnv(item.key) ? "password" : "text"}
                   value={value}
-                  placeholder={item.placeholder || "请输入参数值"}
+                  placeholder={item.placeholder || t("traditional.env.valuePlaceholder")}
                   autoComplete="off"
                   aria-invalid={!!jsonError}
                   onChange={(event) =>
@@ -666,9 +678,6 @@ function RuntimeEnvFields({
   );
 }
 
-const OPENVIKING_KNOWLEDGE_INDEX_HELP =
-  "默认值：留空；生成项目时使用 Agent 名自动生成，例如 my_agent_kb。未配置 DATABASE_OPENVIKING_TARGET_URI 时，默认 URI 拼接为 viking://user/{知识库归属 ID，未填则 default}/resources/{资源索引}/；如果填写了 DATABASE_OPENVIKING_TARGET_URI，则直接使用该完整 URI。";
-
 function OpenVikingKnowledgeIndexField({
   value,
   onChange,
@@ -676,21 +685,23 @@ function OpenVikingKnowledgeIndexField({
   value: string;
   onChange: (index: string) => void;
 }) {
+  const { t } = useTranslation("create");
   const controlId = "cw-openviking-knowledge-index";
+  const help = t("traditional.env.openVikingIndexHelp");
   return (
     <label className="cw-env-field" htmlFor={controlId}>
       <span className="cw-env-field-head">
         <span className="cw-env-field-title">
-          <span className="cw-env-field-label">OpenViking 资源索引</span>
+          <span className="cw-env-field-label">{t("traditional.env.openVikingIndex")}</span>
           <span
             className="cw-env-help"
             tabIndex={0}
-            data-help={OPENVIKING_KNOWLEDGE_INDEX_HELP}
-            aria-label={`OpenViking 资源索引说明：${OPENVIKING_KNOWLEDGE_INDEX_HELP}`}
+            data-help={help}
+            aria-label={t("traditional.env.openVikingIndexAriaLabel", { help })}
           >
             ?
             <span className="cw-env-help-popover" role="tooltip">
-              {OPENVIKING_KNOWLEDGE_INDEX_HELP}
+              {help}
             </span>
           </span>
         </span>
@@ -707,27 +718,27 @@ function OpenVikingKnowledgeIndexField({
   );
 }
 
-function a2aSpaceDisplayName(space: A2aSpaceRef): string {
-  return space.name.trim() || "未命名智能体中心";
+function a2aSpaceDisplayName(space: A2aSpaceRef, fallback = createT("traditional.resources.unnamedAgentCenter")): string {
+  return space.name.trim() || fallback;
 }
 
-function vikingKnowledgebaseDisplayName(item: VikingKnowledgebaseRef): string {
-  const name = item.name.trim() || item.id || "未命名知识库";
+function vikingKnowledgebaseDisplayName(item: VikingKnowledgebaseRef, fallback = createT("traditional.resources.unnamedKnowledgeBase")): string {
+  const name = item.name.trim() || item.id || fallback;
   const details = [item.sourceLabel, item.projectName].filter(Boolean);
   return details.length ? `${name} · ${details.join(" · ")}` : name;
 }
 
-function vikingMemoryDisplayName(item: VikingMemoryRef): string {
-  return item.name.trim() || item.id || "未命名记忆库";
+function vikingMemoryDisplayName(item: VikingMemoryRef, fallback = createT("traditional.resources.unnamedMemory")): string {
+  return item.name.trim() || item.id || fallback;
 }
 
-function modelAvailabilityLabel(model: ModelOption): string {
-  if (model.available) return "已开通";
-  if (model.lifecycleStatus === "Retiring") return "即将下线";
+function modelAvailabilityKey(model: ModelOption): string {
+  if (model.available) return "traditional.model.available";
+  if (model.lifecycleStatus === "Retiring") return "traditional.model.retiring";
   if (model.activationState && model.activationState !== "Available") {
-    return "未开通";
+    return "traditional.model.notActivated";
   }
-  return "暂不可用";
+  return "traditional.model.unavailable";
 }
 
 function isModelSelectable(model: ModelOption): boolean {
@@ -963,6 +974,7 @@ function ModelOptionSelect({
   onApiKeyChange: (key: ModelApiKeyOption) => void;
   onChange: (modelId: string) => void;
 }) {
+  const { t } = useTranslation("create");
   const [apiKeys, setApiKeys] = useState<ModelApiKeyOption[]>([]);
   const [keysLoading, setKeysLoading] = useState(false);
   const [models, setModels] = useState<ModelOption[]>([]);
@@ -992,7 +1004,7 @@ function ModelOptionSelect({
       .catch((err) => {
         if (!controller.signal.aborted) {
           setError(
-            err instanceof Error ? err.message : "加载 Ark API Key 失败",
+            err instanceof Error ? err.message : t("traditional.model.apiKeyLoadError"),
           );
         }
       })
@@ -1000,7 +1012,7 @@ function ModelOptionSelect({
         if (!controller.signal.aborted) setKeysLoading(false);
       });
     return () => controller.abort();
-  }, [cloudProvider, reloadKey]);
+  }, [cloudProvider, reloadKey, t]);
 
   useEffect(() => {
     if (!apiKeyId) {
@@ -1024,14 +1036,14 @@ function ModelOptionSelect({
       })
       .catch((err) => {
         if (!controller.signal.aborted) {
-          setError(err instanceof Error ? err.message : "加载模型列表失败");
+          setError(err instanceof Error ? err.message : t("traditional.model.loadError"));
         }
       })
       .finally(() => {
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [apiKeyId, cloudProvider, keySelectionRevision, reloadKey]);
+  }, [apiKeyId, cloudProvider, keySelectionRevision, reloadKey, t]);
 
   const normalizedValue = value.trim();
   const modelsAreCurrent = modelsApiKeyId === apiKeyId;
@@ -1040,12 +1052,12 @@ function ModelOptionSelect({
   const selectedApiKeyLabel = selectedApiKey
     ? selectedApiKey.name
     : apiKeyId
-      ? "当前 API Key"
+      ? t("traditional.model.currentApiKey")
       : keysLoading
-        ? "正在加载 API Key…"
+        ? t("traditional.model.loadingApiKeys")
         : apiKeys.length === 0
-          ? "暂无可用 API Key"
-          : "请选择 API Key";
+          ? t("traditional.model.noApiKeys")
+          : t("traditional.model.selectApiKey");
   const filteredApiKeys = useMemo(
     () =>
       apiKeys.filter((key) =>
@@ -1058,10 +1070,10 @@ function ModelOptionSelect({
   );
   const selectedLabel =
     loading && !modelsAreCurrent
-      ? "正在刷新模型列表…"
+      ? t("traditional.model.refreshing")
       : selectedModel
         ? `${selectedModel.displayName} (${selectedModel.id})`
-        : normalizedValue || "请选择模型";
+        : normalizedValue || t("traditional.model.selectModel");
   const filteredModels = useMemo(
     () =>
       visibleModels.filter((model) =>
@@ -1085,7 +1097,7 @@ function ModelOptionSelect({
     (model) => model.available,
   ).length;
   const providerLabel =
-    cloudProvider === "byteplus" ? "BytePlus ModelArk" : "火山方舟";
+    cloudProvider === "byteplus" ? "BytePlus ModelArk" : t("traditional.model.volcengineArk");
   const activationConsoleUrl = modelActivationConsoleUrl(cloudProvider);
 
   return (
@@ -1097,14 +1109,14 @@ function ModelOptionSelect({
             selectedLabel={selectedApiKeyLabel}
             placeholder={!apiKeyId}
             disabled={keysLoading}
-            triggerAriaLabel="选择 API Key"
-            menuAriaLabel="API Key 列表"
-            searchAriaLabel="搜索 API Key"
+            triggerAriaLabel={t("traditional.model.selectApiKey")}
+            menuAriaLabel={t("traditional.model.apiKeyList")}
+            searchAriaLabel={t("traditional.model.searchApiKey")}
             searchValue={apiKeySearchQuery}
-            searchPlaceholder="搜索 API Key 名称"
+            searchPlaceholder={t("traditional.model.searchApiKeyName")}
             onSearchChange={setApiKeySearchQuery}
             empty={filteredApiKeys.length === 0}
-            emptyLabel="未找到匹配的 API Key"
+            emptyLabel={t("traditional.model.noMatchingApiKey")}
             optionsClassName="cw-model-key-options"
             renderOptions={(closeMenu) =>
               filteredApiKeys.map((key) => {
@@ -1133,20 +1145,20 @@ function ModelOptionSelect({
           />
         </div>
         <div className="cw-model-picker-field">
-          <span className="cw-model-picker-label">模型</span>
+          <span className="cw-model-picker-label">{t("traditional.model.label")}</span>
           <div className="cw-a2a-space-row">
             <CatalogSelect
               selectedLabel={selectedLabel}
               placeholder={!normalizedValue}
               disabled={loading}
-              triggerAriaLabel={`选择${providerLabel}模型`}
-              menuAriaLabel={`${providerLabel}模型`}
-              searchAriaLabel="搜索模型"
+              triggerAriaLabel={t("traditional.model.selectProviderModel", { provider: providerLabel })}
+              menuAriaLabel={t("traditional.model.providerModels", { provider: providerLabel })}
+              searchAriaLabel={t("traditional.model.search")}
               searchValue={searchQuery}
-              searchPlaceholder="搜索名称、Model ID 或服务商"
+              searchPlaceholder={t("traditional.model.searchPlaceholder")}
               onSearchChange={setSearchQuery}
               empty={!showUnknownModel && filteredModels.length === 0}
-              emptyLabel="未找到匹配的模型"
+              emptyLabel={t("traditional.model.noMatches")}
               triggerClassName="cw-model-trigger"
               optionsClassName="cw-model-options"
               renderOptions={(closeMenu) => (
@@ -1163,11 +1175,11 @@ function ModelOptionSelect({
                       }}
                     >
                       <span className="cw-model-option-copy">
-                        <strong>当前配置</strong>
+                        <strong>{t("traditional.model.currentConfiguration")}</strong>
                         <small>{normalizedValue}</small>
                       </span>
                       <span className="cw-model-status is-unknown">
-                        状态未知
+                        {t("traditional.model.unknownStatus")}
                       </span>
                     </button>
                   )}
@@ -1184,7 +1196,7 @@ function ModelOptionSelect({
                           role="option"
                           aria-selected={false}
                           className="cw-a2a-space-option cw-model-option is-activation-link"
-                          title={`前往${providerLabel}开通 ${model.displayName}`}
+                          title={t("traditional.model.activate", { provider: providerLabel, model: model.displayName })}
                           onClick={() => {
                             window.open(
                               activationConsoleUrl,
@@ -1202,7 +1214,7 @@ function ModelOptionSelect({
                             </small>
                           </span>
                           <span className="cw-model-status is-unavailable">
-                            未开通，去开通
+                            {t("traditional.model.activateAction")}
                           </span>
                         </button>
                       );
@@ -1239,7 +1251,7 @@ function ModelOptionSelect({
                                 : "is-unavailable"
                           }`}
                         >
-                          {modelAvailabilityLabel(model)}
+                          {t(modelAvailabilityKey(model))}
                         </span>
                       </button>
                     );
@@ -1250,8 +1262,8 @@ function ModelOptionSelect({
             <button
               type="button"
               className="cw-icon-btn cw-a2a-space-refresh"
-              title="刷新 API Key 和模型列表"
-              aria-label="刷新 API Key 和模型列表"
+              title={t("traditional.model.refresh")}
+              aria-label={t("traditional.model.refresh")}
               disabled={loading || keysLoading}
               onClick={() => setReloadKey((key) => key + 1)}
             >
@@ -1272,13 +1284,13 @@ function ModelOptionSelect({
       ) : loading ? (
         <span className="cw-help cw-a2a-space-status" aria-live="polite">
           <Loader2 className="cw-i cw-i-sm cw-spin" />
-          正在加载模型列表…
+          {t("traditional.model.loading")}
         </span>
       ) : visibleModels.length === 0 ? (
-        <span className="cw-help">当前账号下暂无可配置模型。</span>
+        <span className="cw-help">{t("traditional.model.empty")}</span>
       ) : (
         <span className="cw-help">
-          已加载 {visibleModels.length} 个模型，其中 {availableCount} 个已开通。
+          {t("traditional.model.loaded", { count: visibleModels.length, available: availableCount })}
         </span>
       )}
     </div>
@@ -1296,6 +1308,7 @@ function A2aSpaceSelect({
   invalid: boolean;
   onChange: (spaceId: string) => void;
 }) {
+  const { t } = useTranslation("create");
   const normalizedRegion = region.trim() || A2A_REGISTRY_DEFAULTS.region;
   const [spaces, setSpaces] = useState<A2aSpaceRef[]>([]);
   const [loading, setLoading] = useState(false);
@@ -1316,7 +1329,7 @@ function A2aSpaceSelect({
       .catch((err) => {
         if (!cancelled) {
           setSpaces([]);
-          setError(err instanceof Error ? err.message : "加载失败");
+          setError(err instanceof Error ? err.message : t("traditional.resources.loadError"));
         }
       })
       .finally(() => {
@@ -1325,32 +1338,32 @@ function A2aSpaceSelect({
     return () => {
       cancelled = true;
     };
-  }, [normalizedRegion, reloadKey]);
+  }, [normalizedRegion, reloadKey, t]);
 
   const selectedKnown =
     !value || spaces.some((space) => space.id === value.trim());
   const selectedSpace = spaces.find((space) => space.id === value.trim());
   const selectedLabel = selectedSpace
-    ? a2aSpaceDisplayName(selectedSpace)
+    ? a2aSpaceDisplayName(selectedSpace, t("traditional.resources.unnamedAgentCenter"))
     : value && !selectedKnown
-      ? "已选择的智能体中心"
-      : "请选择智能体中心";
+      ? t("traditional.resources.selectedAgentCenter")
+      : t("traditional.resources.selectAgentCenter");
   const disabled = loading && spaces.length === 0;
   const filteredSpaces = useMemo(
     () =>
       spaces.filter((space) =>
         localPickerMatches(searchQuery, [
-          a2aSpaceDisplayName(space),
+          a2aSpaceDisplayName(space, t("traditional.resources.unnamedAgentCenter")),
           space.id,
           space.projectName,
         ]),
       ),
-    [searchQuery, spaces],
+    [searchQuery, spaces, t],
   );
   const showUnknownSpace = Boolean(
     value &&
     !selectedKnown &&
-    localPickerMatches(searchQuery, ["已选择的智能体中心", value]),
+    localPickerMatches(searchQuery, [t("traditional.resources.selectedAgentCenter"), value]),
   );
 
   useEffect(() => {
@@ -1394,7 +1407,7 @@ function A2aSpaceSelect({
             disabled={disabled}
             aria-haspopup="listbox"
             aria-expanded={open}
-            aria-label="选择 AgentKit 智能体中心"
+            aria-label={t("traditional.resources.selectAgentKitCenter")}
             onClick={() => {
               setSearchQuery("");
               setOpen((current) => !current);
@@ -1414,8 +1427,8 @@ function A2aSpaceSelect({
                   value={searchQuery}
                   autoFocus
                   autoComplete="off"
-                  aria-label="搜索 AgentKit 智能体中心"
-                  placeholder="搜索名称或 ID"
+                  aria-label={t("traditional.resources.searchAgentKitCenter")}
+                  placeholder={t("traditional.resources.searchNameOrId")}
                   onChange={(event) =>
                     setSearchQuery(event.currentTarget.value)
                   }
@@ -1424,7 +1437,7 @@ function A2aSpaceSelect({
               <div
                 className="cw-picker-options"
                 role="listbox"
-                aria-label="AgentKit 智能体中心"
+                aria-label={t("traditional.resources.agentKitCenter")}
               >
                 {showUnknownSpace && (
                   <button
@@ -1434,11 +1447,11 @@ function A2aSpaceSelect({
                     className="cw-a2a-space-option is-selected"
                     onClick={() => selectSpace(value)}
                   >
-                    已选择的智能体中心
+                    {t("traditional.resources.selectedAgentCenter")}
                   </button>
                 )}
                 {filteredSpaces.map((space) => {
-                  const optionLabel = a2aSpaceDisplayName(space);
+                  const optionLabel = a2aSpaceDisplayName(space, t("traditional.resources.unnamedAgentCenter"));
                   const selected = space.id === value;
                   return (
                     <button
@@ -1457,7 +1470,7 @@ function A2aSpaceSelect({
                   );
                 })}
                 {!showUnknownSpace && filteredSpaces.length === 0 && (
-                  <div className="cw-picker-empty">未找到匹配的智能体中心</div>
+                  <div className="cw-picker-empty">{t("traditional.resources.noMatchingAgentCenters")}</div>
                 )}
               </div>
             </div>
@@ -1466,8 +1479,8 @@ function A2aSpaceSelect({
         <button
           type="button"
           className="cw-icon-btn cw-a2a-space-refresh"
-          title="刷新智能体中心列表"
-          aria-label="刷新智能体中心列表"
+          title={t("traditional.resources.refreshAgentCenters")}
+          aria-label={t("traditional.resources.refreshAgentCenters")}
           disabled={loading}
           onClick={() => setReloadKey((key) => key + 1)}
         >
@@ -1486,13 +1499,13 @@ function A2aSpaceSelect({
       ) : loading ? (
         <span className="cw-help cw-a2a-space-status">
           <Loader2 className="cw-i cw-i-sm cw-spin" />
-          正在加载 AgentKit 智能体中心…
+          {t("traditional.resources.loadingAgentCenters")}
         </span>
       ) : spaces.length === 0 ? (
-        <span className="cw-help">此账号下暂无 AgentKit 智能体中心。</span>
+        <span className="cw-help">{t("traditional.resources.noAgentCenters")}</span>
       ) : (
         <span className="cw-help">
-          已加载 {spaces.length} 个智能体中心，列表仅展示中心名称。
+          {t("traditional.resources.agentCentersLoaded", { count: spaces.length })}
         </span>
       )}
     </div>
@@ -1544,6 +1557,7 @@ function ResourcePicker<T extends ResourcePickerItem>({
   onChange: (item: T) => void;
   onRefresh: () => void;
 }) {
+  const { t } = useTranslation("create");
   const [open, setOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const pickerRef = useRef<HTMLDivElement | null>(null);
@@ -1600,7 +1614,7 @@ function ResourcePicker<T extends ResourcePickerItem>({
     return (
       <span className="cw-viking-kb-inline-status" role="status">
         <Loader2 className="cw-i cw-i-sm cw-spin" />
-        正在加载…
+        {t("common.loading")}
       </span>
     );
   }
@@ -1639,7 +1653,7 @@ function ResourcePicker<T extends ResourcePickerItem>({
                   autoFocus
                   autoComplete="off"
                   aria-label={searchLabel}
-                  placeholder="搜索名称或 ID"
+                  placeholder={t("traditional.resources.searchNameOrId")}
                   onChange={(event) =>
                     setSearchQuery(event.currentTarget.value)
                   }
@@ -1730,6 +1744,7 @@ function VikingKnowledgebaseSelect({
   value: string;
   onChange: (item: VikingKnowledgebaseRef) => void;
 }) {
+  const { t } = useTranslation("create");
   const [items, setItems] = useState<VikingKnowledgebaseRef[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1746,7 +1761,7 @@ function VikingKnowledgebaseSelect({
       .catch((err) => {
         if (!cancelled) {
           setItems([]);
-          setError(err instanceof Error ? err.message : "加载失败");
+          setError(err instanceof Error ? err.message : t("traditional.resources.loadError"));
         }
       })
       .finally(() => {
@@ -1755,7 +1770,7 @@ function VikingKnowledgebaseSelect({
     return () => {
       cancelled = true;
     };
-  }, [reloadKey]);
+  }, [reloadKey, t]);
 
   return (
     <ResourcePicker
@@ -1764,19 +1779,19 @@ function VikingKnowledgebaseSelect({
       loading={loading}
       error={error}
       pickerClassName="cw-viking-kb-picker"
-      selectLabel="选择 VikingDB 知识库"
-      searchLabel="搜索 VikingDB 知识库"
-      listLabel="VikingDB 知识库"
-      placeholder="请选择 VikingDB 知识库"
-      emptyMessage="此账号下暂无 VikingDB 知识库。"
+      selectLabel={t("traditional.resources.selectKnowledgeBase")}
+      searchLabel={t("traditional.resources.searchKnowledgeBase")}
+      listLabel={t("traditional.resources.knowledgeBaseList")}
+      placeholder={t("traditional.resources.knowledgeBasePlaceholder")}
+      emptyMessage={t("traditional.resources.noKnowledgeBases")}
       loadedMessage={(count) =>
-        `已加载 ${count} 个知识库，选择的知识库会用于当前 Agent。`
+        t("traditional.resources.knowledgeBasesLoaded", { count })
       }
-      refreshLabel="刷新知识库列表"
-      noMatchesMessage="未找到匹配的知识库"
-      getLabel={vikingKnowledgebaseDisplayName}
+      refreshLabel={t("traditional.resources.refreshKnowledgeBases")}
+      noMatchesMessage={t("traditional.resources.noMatchingKnowledgeBases")}
+      getLabel={(item) => vikingKnowledgebaseDisplayName(item, t("traditional.resources.unnamedKnowledgeBase"))}
       getSearchFields={(item) => [
-        vikingKnowledgebaseDisplayName(item),
+        vikingKnowledgebaseDisplayName(item, t("traditional.resources.unnamedKnowledgeBase")),
         item.id,
         item.description,
         item.projectName,
@@ -1815,6 +1830,7 @@ function VikingMemorySelect({
   value: string;
   onChange: (item: VikingMemoryRef) => void;
 }) {
+  const { t } = useTranslation("create");
   const [items, setItems] = useState<VikingMemoryRef[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1831,7 +1847,7 @@ function VikingMemorySelect({
       .catch((err) => {
         if (!cancelled) {
           setItems([]);
-          setError(err instanceof Error ? err.message : "加载失败");
+          setError(err instanceof Error ? err.message : t("traditional.resources.loadError"));
         }
       })
       .finally(() => {
@@ -1840,7 +1856,7 @@ function VikingMemorySelect({
     return () => {
       cancelled = true;
     };
-  }, [reloadKey]);
+  }, [reloadKey, t]);
 
   return (
     <ResourcePicker
@@ -1849,19 +1865,19 @@ function VikingMemorySelect({
       loading={loading}
       error={error}
       pickerClassName="cw-viking-memory-picker"
-      selectLabel="选择 VikingDB 记忆库"
-      searchLabel="搜索 VikingDB 记忆库"
-      listLabel="VikingDB 记忆库"
-      placeholder="请选择 VikingDB 记忆库，不选择则自动创建"
-      emptyMessage="此账号下暂无 VikingDB 记忆库，未选择时会自动创建。"
+      selectLabel={t("traditional.resources.selectMemory")}
+      searchLabel={t("traditional.resources.searchMemory")}
+      listLabel={t("traditional.resources.memoryList")}
+      placeholder={t("traditional.resources.memoryPlaceholder")}
+      emptyMessage={t("traditional.resources.noMemories")}
       loadedMessage={(count) =>
-        `已加载 ${count} 个记忆库；不选择时会自动创建。`
+        t("traditional.resources.memoriesLoaded", { count })
       }
-      refreshLabel="刷新记忆库列表"
-      noMatchesMessage="未找到匹配的记忆库"
-      getLabel={vikingMemoryDisplayName}
+      refreshLabel={t("traditional.resources.refreshMemories")}
+      noMatchesMessage={t("traditional.resources.noMatchingMemories")}
+      getLabel={(item) => vikingMemoryDisplayName(item, t("traditional.resources.unnamedMemory"))}
       getSearchFields={(item) => [
-        vikingMemoryDisplayName(item),
+        vikingMemoryDisplayName(item, t("traditional.resources.unnamedMemory")),
         item.id,
         item.description,
         item.projectName,
@@ -1898,8 +1914,9 @@ function McpToolEditor({
   tools: McpTool[];
   onChange: (next: McpTool[]) => void;
 }) {
+  const { t } = useTranslation("create");
   const update = (i: number, p: Partial<McpTool>) =>
-    onChange(tools.map((t, idx) => (idx === i ? { ...t, ...p } : t)));
+    onChange(tools.map((tool, idx) => (idx === i ? { ...tool, ...p } : tool)));
 
   const remove = (i: number) => onChange(tools.filter((_, idx) => idx !== i));
 
@@ -1911,7 +1928,7 @@ function McpToolEditor({
       {tools.length > 0 && (
         <div className="cw-mcp-list">
           <AnimatePresence initial={false}>
-            {tools.map((t, i) => (
+            {tools.map((tool, i) => (
               <motion.div
                 key={i}
                 className="cw-mcp-row"
@@ -1926,20 +1943,20 @@ function McpToolEditor({
                     <button
                       type="button"
                       className={`cw-seg cw-seg-sm ${
-                        t.transport === "http" ? "is-on" : ""
+                        tool.transport === "http" ? "is-on" : ""
                       }`}
                       onClick={() => update(i, { transport: "http" })}
-                      aria-pressed={t.transport === "http"}
+                      aria-pressed={tool.transport === "http"}
                     >
                       <span className="cw-seg-title">HTTP</span>
                     </button>
                     <button
                       type="button"
                       className={`cw-seg cw-seg-sm ${
-                        t.transport === "stdio" ? "is-on" : ""
+                        tool.transport === "stdio" ? "is-on" : ""
                       }`}
                       onClick={() => update(i, { transport: "stdio" })}
-                      aria-pressed={t.transport === "stdio"}
+                      aria-pressed={tool.transport === "stdio"}
                     >
                       <span className="cw-seg-title">stdio</span>
                     </button>
@@ -1948,7 +1965,7 @@ function McpToolEditor({
                     type="button"
                     className="cw-icon-btn cw-icon-danger"
                     onClick={() => remove(i)}
-                    aria-label="移除 MCP 工具"
+                    aria-label={t("traditional.mcp.removeTool")}
                   >
                     <Trash2 className="cw-i cw-i-sm" />
                   </button>
@@ -1956,17 +1973,17 @@ function McpToolEditor({
 
                 <input
                   className="cw-input"
-                  value={t.name}
-                  placeholder="名称（用于命名，可留空）"
+                  value={tool.name}
+                  placeholder={t("traditional.mcp.namePlaceholder")}
                   onChange={(e) => update(i, { name: e.target.value })}
                 />
 
-                {t.transport === "http" ? (
+                {tool.transport === "http" ? (
                   <>
                     <input
                       className="cw-input"
-                      value={t.url ?? ""}
-                      placeholder="MCP 服务地址（StreamableHTTP）"
+                      value={tool.url ?? ""}
+                      placeholder={t("traditional.mcp.urlPlaceholder")}
                       onChange={(e) =>
                         onChange(
                           tools.map((tool, index) =>
@@ -1977,23 +1994,22 @@ function McpToolEditor({
                         )
                       }
                     />
-                    {mcpUrlNeedsPathWarning(t.url ?? "") && (
+                    {mcpUrlNeedsPathWarning(tool.url ?? "") && (
                       <p className="cw-mcp-warning">
                         <Info aria-hidden="true" />
                         <span>
-                          当前地址不是以 /mcp 结尾，请确认它是实际的 MCP
-                          Endpoint。Studio 会保留该地址，不会自动补充路径。
+                          {t("traditional.mcp.pathWarning")}
                         </span>
                       </p>
                     )}
                     <input
                       className="cw-input"
-                      aria-invalid={mcpCredentialActionRequired(t)}
-                      value={mcpAuthTokenInputValue(t)}
+                      aria-invalid={mcpCredentialActionRequired(tool)}
+                      value={mcpAuthTokenInputValue(tool)}
                       placeholder={
-                        t.credentialConfigured && !t.authToken
-                          ? "认证已配置；留空继续使用"
-                          : "Bearer Token（可选）"
+                        tool.credentialConfigured && !tool.authToken
+                          ? t("traditional.mcp.configuredPlaceholder")
+                          : t("traditional.mcp.tokenPlaceholder")
                       }
                       onChange={(e) =>
                         onChange(
@@ -2005,13 +2021,13 @@ function McpToolEditor({
                         )
                       }
                     />
-                    {t.credentialUpdate === "pending" && (
+                    {tool.credentialUpdate === "pending" && (
                       <div
                         className="cw-mcp-auth-state is-warning"
                         role="alert"
                       >
                         <span>
-                          MCP 地址已变化，请重新填写 Key 或确认沿用原凭证。
+                          {t("traditional.mcp.changedUrlWarning")}
                         </span>
                         <div className="cw-mcp-auth-actions">
                           <button
@@ -2026,7 +2042,7 @@ function McpToolEditor({
                               )
                             }
                           >
-                            沿用原凭证
+                            {t("traditional.mcp.reuseCredential")}
                           </button>
                           <button
                             type="button"
@@ -2040,7 +2056,7 @@ function McpToolEditor({
                               )
                             }
                           >
-                            重新填写 Key
+                            {t("traditional.mcp.replaceCredential")}
                           </button>
                           <button
                             type="button"
@@ -2054,14 +2070,14 @@ function McpToolEditor({
                               )
                             }
                           >
-                            新地址无需认证
+                            {t("traditional.mcp.noAuth")}
                           </button>
                         </div>
                       </div>
                     )}
-                    {t.credentialUpdate === "reuse" && (
+                    {tool.credentialUpdate === "reuse" && (
                       <div className="cw-mcp-auth-state" role="status">
-                        <span>发布时将沿用原凭证，并绑定到新的 MCP 地址。</span>
+                        <span>{t("traditional.mcp.reuseHint")}</span>
                         <button
                           type="button"
                           onClick={() =>
@@ -2074,15 +2090,15 @@ function McpToolEditor({
                             )
                           }
                         >
-                          改为重新填写
+                          {t("traditional.mcp.changeToReplace")}
                         </button>
                       </div>
                     )}
-                    {t.credentialConfigured &&
-                      !t.authToken &&
-                      !t.credentialUpdate && (
+                    {tool.credentialConfigured &&
+                      !tool.authToken &&
+                      !tool.credentialUpdate && (
                       <div className="cw-mcp-auth-state" role="status">
-                        <span>认证已配置，旧值不会显示在页面中。</span>
+                        <span>{t("traditional.mcp.credentialConfigured")}</span>
                         <button
                           type="button"
                           onClick={() =>
@@ -2095,7 +2111,7 @@ function McpToolEditor({
                             )
                           }
                         >
-                          移除认证
+                          {t("traditional.mcp.removeCredential")}
                         </button>
                       </div>
                     )}
@@ -2104,14 +2120,14 @@ function McpToolEditor({
                   <>
                     <input
                       className="cw-input"
-                      value={t.command ?? ""}
-                      placeholder="启动命令，例如 npx"
+                      value={tool.command ?? ""}
+                      placeholder={t("traditional.mcp.commandPlaceholder")}
                       onChange={(e) => update(i, { command: e.target.value })}
                     />
                     <input
                       className="cw-input"
-                      value={(t.args ?? []).join(" ")}
-                      placeholder="参数（用空格分隔），例如 -y @playwright/mcp@latest"
+                      value={(tool.args ?? []).join(" ")}
+                      placeholder={t("traditional.mcp.argsPlaceholder")}
                       onChange={(e) =>
                         update(i, {
                           args: e.target.value.split(/\s+/).filter(Boolean),
@@ -2119,8 +2135,7 @@ function McpToolEditor({
                       }
                     />
                     <p className="cw-mcp-note">
-                      stdio MCP
-                      暂不参与调试运行；点击“去部署”时会完整保留这项配置并生成对应代码。
+                      {t("traditional.mcp.stdioHint")}
                     </p>
                   </>
                 )}
@@ -2132,7 +2147,7 @@ function McpToolEditor({
 
       <button type="button" className="cw-add-sub" onClick={add}>
         <Plus className="cw-i" />
-        添加 MCP 工具
+        {t("traditional.mcp.addTool")}
       </button>
     </div>
   );
@@ -2281,30 +2296,42 @@ function nodeProblem(
   n: AgentDraft,
   duplicateNames: ReadonlySet<string>,
   isRoot = false,
-): string | null {
+): NodeProblemCode | null {
   if (isA2aType(n.agentType)) {
-    if (isRoot) return "远程 Agent 只能作为子 Agent";
+    if (isRoot) return "remoteRoot";
     return n.a2aRegistry?.registrySpaceId.trim()
       ? null
-      : "缺少 AgentKit 智能体中心";
+      : "missingRegistry";
   }
-  const nameProblem = agentNameProblem(n.name);
-  if (nameProblem) return nameProblem;
-  if (duplicateNames.has(n.name)) return "Agent 名称在当前结构中必须唯一";
-  if (n.description.trim().length === 0) return "缺少描述";
+  const nameProblem = agentNameProblem(n.name, (key) => `name.${key}`);
+  if (nameProblem) return nameProblem as NodeProblemCode;
+  if (duplicateNames.has(n.name)) return "duplicateName";
+  if (n.description.trim().length === 0) return "missingDescription";
   if ((n.mcpTools ?? []).some(mcpCredentialActionRequired)) {
-    return "MCP 地址变化后需要确认认证方式";
+    return "mcpAuthRequired";
   }
   if (isOrchestratorType(n.agentType))
-    return n.subAgents.length === 0 ? "缺少子 Agent" : null;
-  return n.instruction.trim().length === 0 ? "缺少系统提示词" : null;
+    return n.subAgents.length === 0 ? "missingSubagent" : null;
+  return n.instruction.trim().length === 0 ? "missingPrompt" : null;
 }
+
+type NodeProblemCode =
+  | "remoteRoot"
+  | "missingRegistry"
+  | "name.required"
+  | "name.reserved"
+  | "name.characters"
+  | "duplicateName"
+  | "missingDescription"
+  | "mcpAuthRequired"
+  | "missingSubagent"
+  | "missingPrompt";
 
 interface TreeProblem {
   path: NodePath;
   name: string;
-  typeLabel: string;
-  problem: string;
+  agentType: AgentDraft["agentType"];
+  problem: NodeProblemCode;
 }
 
 /** Collect required-field problems across the whole tree, in render order. */
@@ -2319,8 +2346,8 @@ function treeProblems(
   if (p) {
     out.push({
       path,
-      name: remote ? "远程 Agent" : root.name.trim() || "未命名",
-      typeLabel: agentTypeMeta(root.agentType).label,
+      name: remote ? "" : root.name.trim(),
+      agentType: root.agentType,
       problem: p,
     });
   }
@@ -2332,11 +2359,21 @@ function treeProblems(
   return out;
 }
 
-function validationProblemMessage(problem: TreeProblem): string {
-  if (problem.problem === "缺少子 Agent") {
-    return `${problem.typeLabel}至少需要添加一个子 Agent 后才能调试或发布。`;
+function validationProblemMessage(problem: TreeProblem, t: TFunction): string {
+  if (problem.problem === "missingSubagent") {
+    return t("traditional.validation.missingSubagentDetail", {
+      type: t(
+        `traditional.agentTypes.${problem.agentType ?? "llm"}.fullLabel`,
+      ),
+    });
   }
-  return `${problem.name}：${problem.problem}`;
+  const name = isA2aType(problem.agentType)
+    ? t("traditional.agentTypes.a2a.fullLabel")
+    : problem.name || t("traditional.basic.unnamed");
+  return t("traditional.validation.problem", {
+    name,
+    problem: t(`traditional.validation.${problem.problem}`),
+  });
 }
 
 /** Count the root Agent and every nested sub-Agent in the draft. */
@@ -2487,7 +2524,7 @@ function collectDeploymentEnv(
           key: "MODEL_AGENT_API_KEY",
           required: true,
           comment: "Ark API Key",
-          placeholder: "由所选 API Key 注入",
+          placeholder: createT("helpers.deploymentEnv.selectedApiKeyPlaceholder"),
           secret: true,
           readOnly: true,
           serverManaged: true,
@@ -2508,9 +2545,9 @@ function collectDeploymentEnv(
           {
             key: "MCP_SERVERS_JSON",
             required: true,
-            comment: "由已添加的 MCP 工具注入",
-            placeholder: "由 Studio 服务端安全恢复",
-            help: "更新时由 Studio 服务端合并 MCP 地址与认证，不向浏览器返回旧密钥。",
+            comment: createT("helpers.deploymentEnv.mcpInjectedComment"),
+            placeholder: createT("helpers.deploymentEnv.restoredPlaceholder"),
+            help: createT("helpers.deploymentEnv.restoredHelp"),
             readOnly: true,
             serverManaged: true,
             hidden: true,
@@ -2531,11 +2568,11 @@ function collectDeploymentEnv(
         {
           key: "MCP_SERVERS_JSON",
           required: true,
-          comment: "由已添加的 MCP 工具注入",
+          comment: createT("helpers.deploymentEnv.mcpInjectedComment"),
           placeholder: sourcePreserving
-            ? "由 Studio 服务端安全恢复"
-            : "由已添加的 HTTP MCP 工具自动生成",
-          help: "Studio 服务端自动合并 MCP 地址与可选认证，不向浏览器返回旧密钥。",
+            ? createT("helpers.deploymentEnv.restoredPlaceholder")
+            : createT("helpers.deploymentEnv.generatedMcpPlaceholder"),
+          help: createT("helpers.deploymentEnv.mergedMcpHelp"),
           secret: true,
           readOnly: true,
           serverManaged: gatewayEnv.ok,
@@ -2578,6 +2615,7 @@ export function TreeNode({
   onChange: (nextRoot: AgentDraft, select?: NodePath) => void;
   onClearRoot: () => void;
 }) {
+  const { t } = useTranslation("create");
   const node = getNode(root, path);
   const meta = agentTypeMeta(node.agentType);
   const Icon = meta.icon;
@@ -2667,18 +2705,20 @@ export function TreeNode({
         <span className="cw-tree-main">
           <span className="cw-tree-name">
             {isA2aType(node.agentType)
-              ? "远程 Agent"
-              : node.name.trim() || "未命名"}
+              ? t("traditional.agentTypes.a2a.fullLabel")
+              : node.name.trim() || t("traditional.basic.unnamed")}
           </span>
-          <span className="cw-tree-type">{meta.label}</span>
+          <span className="cw-tree-type">
+            {t(`traditional.agentTypes.${meta.id}.fullLabel`)}
+          </span>
         </span>
         <span className="cw-tree-actions">
           {isRoot && (
             <button
               type="button"
               className="cw-icon-btn cw-tree-clear"
-              title="清空根 Agent"
-              aria-label="清空根 Agent"
+              title={t("traditional.actions.clearRoot")}
+              aria-label={t("traditional.actions.clearRoot")}
               onClick={(e) => {
                 e.stopPropagation();
                 onClearRoot();
@@ -2691,7 +2731,8 @@ export function TreeNode({
             <button
               type="button"
               className="cw-icon-btn"
-              title="添加子 Agent"
+              title={t("traditional.actions.addSubagent")}
+              aria-label={t("traditional.actions.addSubagent")}
               onClick={(e) => {
                 e.stopPropagation();
                 add();
@@ -2704,7 +2745,8 @@ export function TreeNode({
             <button
               type="button"
               className="cw-icon-btn cw-icon-danger"
-              title="删除"
+              title={t("common.delete")}
+              aria-label={t("common.delete")}
               onClick={(e) => {
                 e.stopPropagation();
                 del();
@@ -2765,6 +2807,17 @@ interface DebugTraceTarget {
   runId: string;
   sessionId: string;
   variantName: string;
+}
+
+function debugVariantDisplayName(
+  variant: Pick<DebugVariant, "id" | "name">,
+  t: TFunction,
+): string {
+  if (variant.id === "baseline") return t("traditional.debug.baseline");
+  const sequence = /^variant-(\d+)$/.exec(variant.id)?.[1];
+  return sequence
+    ? t("traditional.debug.comparison", { count: Number(sequence) })
+    : variant.name;
 }
 
 function sameBaseUrl(a: string | undefined, b: string): boolean {
@@ -2983,6 +3036,7 @@ function DebugComparisonWorkspace({
   ) => void;
   onOpenTrace: (id: string) => void;
 }) {
+  const { t } = useTranslation("create");
   const runningVariants = variants.filter((variant) => {
     if (variant.phase !== "ready") return false;
     return (
@@ -2993,7 +3047,7 @@ function DebugComparisonWorkspace({
   const canSend = runningVariants.length > 0 && !sending;
 
   return (
-    <section className="cw-ab-workspace" aria-label="A/B 调试工作台">
+    <section className="cw-ab-workspace" aria-label={t("traditional.debug.ariaLabel")}>
       <div className="cw-ab-stage">
         {!enabled ? (
           <div className="cw-debug-empty">{disabledReason}</div>
@@ -3007,6 +3061,7 @@ function DebugComparisonWorkspace({
             }
           >
             {variants.map((variant, variantIndex) => {
+              const variantName = debugVariantDisplayName(variant, t);
               const modelName = variant.modelName.trim();
               const description = variant.description.trim();
               const instruction = variant.instruction.trim();
@@ -3042,23 +3097,23 @@ function DebugComparisonWorkspace({
               const startDisabled =
                 busy || variant.configOpen || configurationUnavailable;
               const disabledReason = !modelName
-                ? "请先选择模型"
+                ? t("traditional.debug.selectModel")
                 : !description
-                  ? "请填写描述"
+                  ? t("traditional.debug.enterDescription")
                   : !instruction
-                    ? "请填写系统提示词"
+                    ? t("traditional.debug.enterPrompt")
                     : duplicateConfiguration
-                      ? "该配置与已有测试组相同"
+                      ? t("traditional.debug.duplicateConfiguration")
                       : "";
               const startLabel = starting
-                ? "正在启动"
+                ? t("traditional.debug.starting")
                 : stale
-                  ? "应用配置并重启"
+                  ? t("traditional.debug.applyAndRestart")
                   : ready
-                    ? "重新启动环境"
+                    ? t("traditional.debug.restart")
                     : variant.phase === "error"
-                      ? "重新启动环境"
-                      : "启动环境";
+                      ? t("traditional.debug.restart")
+                      : t("traditional.debug.start");
               return (
                 <article key={variant.id} className="cw-ab-card">
                   <div
@@ -3070,8 +3125,8 @@ function DebugComparisonWorkspace({
                     >
                       <header className="cw-ab-card-head">
                         <div className="cw-ab-card-title">
-                          <strong>{variant.name}</strong>
-                          <span>{variant.modelName || "默认模型"}</span>
+                          <strong>{variantName}</strong>
+                          <span>{variant.modelName || t("traditional.debug.defaultModel")}</span>
                         </div>
                         <div className="cw-ab-card-actions">
                           <button
@@ -3080,13 +3135,13 @@ function DebugComparisonWorkspace({
                             disabled={variant.configOpen || busy}
                             onClick={() => onToggleConfig(variant.id)}
                           >
-                            测试配置
+                            {t("traditional.debug.testConfiguration")}
                           </button>
                           {variant.id !== "baseline" && (
                             <button
                               type="button"
                               className="cw-ab-remove"
-                              aria-label={`删除${variant.name}`}
+                              aria-label={t("traditional.debug.deleteVariant", { name: variantName })}
                               disabled={variant.configOpen || busy}
                               onClick={() => onRemoveVariant(variant.id)}
                             >
@@ -3106,26 +3161,26 @@ function DebugComparisonWorkspace({
                         ) : starting ? (
                           <div className="cw-ab-empty cw-ab-starting">
                             <Loader2 className="cw-i cw-spin" />
-                            <span>正在创建独立测试环境</span>
+                            <span>{t("traditional.debug.creatingEnvironment")}</span>
                           </div>
                         ) : stale ? (
                           <div className="cw-ab-empty cw-ab-launch">
-                            <span>配置已变更，请重新启动此环境</span>
+                            <span>{t("traditional.debug.configurationChanged")}</span>
                           </div>
                         ) : variant.messages.length === 0 ? (
                           <div className="cw-ab-empty cw-ab-launch">
                             {ready ? (
                               <>
                                 <strong className="cw-ab-ready-title">
-                                  已就绪
+                                  {t("traditional.debug.ready")}
                                 </strong>
                                 <span className="cw-ab-launch-hint">
-                                  可在下方输入测试消息
+                                  {t("traditional.debug.readyHint")}
                                 </span>
                               </>
                             ) : (
                               <span className="cw-ab-launch-hint">
-                                {disabledReason || "启动环境后即可加入本轮测试"}
+                                {disabledReason || t("traditional.debug.startHint")}
                               </span>
                             )}
                           </div>
@@ -3169,12 +3224,12 @@ function DebugComparisonWorkspace({
                           disabled={!traceAvailable}
                           title={
                             traceAvailable
-                              ? `查看${variant.name}调用链路`
-                              : "完成一次调试后可查看调用链路"
+                              ? t("traditional.debug.viewTraceNamed", { name: variantName })
+                              : t("traditional.debug.traceUnavailable")
                           }
                           onClick={() => onOpenTrace(variant.id)}
                         >
-                          调用链路
+                          {t("traditional.debug.trace")}
                         </button>
                         <button
                           type="button"
@@ -3196,7 +3251,7 @@ function DebugComparisonWorkspace({
                           disabled={busy || !modelName}
                           onClick={() => onUseVariant(variant.id)}
                         >
-                          使用该配置
+                          {t("traditional.debug.useConfiguration")}
                         </button>
                       </footer>
                     </section>
@@ -3207,16 +3262,16 @@ function DebugComparisonWorkspace({
                     >
                       <header className="cw-ab-config-head">
                         <div>
-                          <strong>测试配置</strong>
-                          <span>{variant.name}</span>
+                          <strong>{t("traditional.debug.testConfiguration")}</strong>
+                          <span>{variantName}</span>
                         </div>
                         <div className="cw-ab-config-head-actions">
                           {variant.id !== "baseline" && (
                             <button
                               type="button"
                               className="cw-icon-btn cw-icon-danger cw-ab-config-remove"
-                              aria-label={`删除${variant.name}`}
-                              title="删除配置组"
+                              aria-label={t("traditional.debug.deleteVariant", { name: variantName })}
+                              title={t("traditional.debug.deleteVariantGroup")}
                               disabled={busy}
                               onClick={() => onRemoveVariant(variant.id)}
                             >
@@ -3236,8 +3291,8 @@ function DebugComparisonWorkspace({
                               onClick={() => onCompleteConfig(variant.id)}
                             >
                               {variant.id === "baseline"
-                                ? "完成配置"
-                                : "完成并启动"}
+                                ? t("traditional.debug.finishConfiguration")
+                                : t("traditional.debug.finishAndStart")}
                             </button>
                             {disabledReason && (
                               <span
@@ -3252,10 +3307,10 @@ function DebugComparisonWorkspace({
                       </header>
                       <div className="cw-ab-config">
                         <label>
-                          <span>模型</span>
+                          <span>{t("traditional.model.label")}</span>
                           <input
                             value={variant.modelName}
-                            placeholder="使用 Agent 当前模型"
+                            placeholder={t("traditional.debug.currentAgentModel")}
                             disabled={!variant.configOpen}
                             onChange={(event) =>
                               onConfigChange(
@@ -3267,7 +3322,7 @@ function DebugComparisonWorkspace({
                           />
                         </label>
                         <label>
-                          <span>描述</span>
+                          <span>{t("common.description")}</span>
                           <textarea
                             rows={2}
                             value={variant.description}
@@ -3282,7 +3337,7 @@ function DebugComparisonWorkspace({
                           />
                         </label>
                         <label>
-                          <span>系统提示词</span>
+                          <span>{t("traditional.basic.systemPrompt")}</span>
                           <textarea
                             rows={5}
                             value={variant.instruction}
@@ -3296,7 +3351,7 @@ function DebugComparisonWorkspace({
                             }
                           />
                         </label>
-                        <p>设置完成后返回正面，再启动当前测试环境。</p>
+                        <p>{t("traditional.debug.configurationHint")}</p>
                       </div>
                     </section>
                   </div>
@@ -3315,8 +3370,8 @@ function DebugComparisonWorkspace({
             value={input}
             placeholder={
               canSend
-                ? "输入测试消息，将发送到所有已启动测试组..."
-                : "请先启动至少一个测试组"
+                ? t("traditional.debug.messagePlaceholder")
+                : t("traditional.debug.startOneFirst")
             }
             disabled={!canSend}
             onChange={(e) => onInput(e.target.value)}
@@ -3331,7 +3386,7 @@ function DebugComparisonWorkspace({
           <button
             type="button"
             className="cw-debug-send"
-            title="发送"
+            title={t("common.send")}
             disabled={!canSend || !input.trim()}
             onClick={onSend}
           >
@@ -3349,7 +3404,7 @@ function DebugComparisonWorkspace({
             onClick={onAddVariant}
           >
             <Plus className="cw-i" />
-            添加对照组
+            {t("traditional.debug.addVariant")}
           </button>
         )}
       </div>
@@ -3373,8 +3428,12 @@ function HarnessOptimizationWorkspace({
     selected: boolean,
   ) => void;
 }) {
+  const { t } = useTranslation("create");
   return (
-    <section className="cw-optimize-workspace" aria-label="智能体优化选项">
+    <section
+      className="cw-optimize-workspace"
+      aria-label={t("traditional.optimization.ariaLabel")}
+    >
       <div className="cw-optimize-panel">
         {unavailableMessage ? (
           <div className="cw-banner" role="alert">
@@ -3383,10 +3442,10 @@ function HarnessOptimizationWorkspace({
           </div>
         ) : null}
         <fieldset className="cw-optimize-section">
-          <legend>优化场景</legend>
+          <legend>{t("traditional.optimization.scenario")}</legend>
           <RadioGroup<HarnessSidecarProfileId>
             className="cw-optimize-profile-options"
-            aria-label="优化场景"
+            aria-label={t("traditional.optimization.scenario")}
             value={profile}
             onChange={onProfileChange}
           >
@@ -3403,8 +3462,14 @@ function HarnessOptimizationWorkspace({
                   className="cw-optimize-profile-control"
                 >
                   <span className="cw-optimize-profile-copy">
-                    <strong>{item.displayName}</strong>
-                    <small>{item.description}</small>
+                    <strong>
+                      {t(`traditional.optimization.profiles.${item.id}.label`)}
+                    </strong>
+                    <small>
+                      {t(
+                        `traditional.optimization.profiles.${item.id}.description`,
+                      )}
+                    </small>
                   </span>
                 </RadioGroup.Item>
               </div>
@@ -3413,7 +3478,7 @@ function HarnessOptimizationWorkspace({
         </fieldset>
 
         <fieldset className="cw-optimize-section">
-          <legend>优化组件</legend>
+          <legend>{t("traditional.optimization.components")}</legend>
           <div className="cw-optimize-option-list">
             {HARNESS_SIDECAR_OPTION_GROUPS.map((group) => (
               <section
@@ -3425,7 +3490,7 @@ function HarnessOptimizationWorkspace({
                   id={`cw-optimize-group-${group.id}`}
                   className="cw-optimize-option-group-title"
                 >
-                  {group.displayName}
+                  {t(`traditional.optimization.groups.${group.id}`)}
                 </h3>
                 <div className="cw-optimize-option-group-items">
                   {group.componentIds.map((optionId) => {
@@ -3446,8 +3511,16 @@ function HarnessOptimizationWorkspace({
                         }}
                         label={
                           <span className="cw-optimize-option-copy">
-                            <strong>{item.displayName}</strong>
-                            <small>{item.description}</small>
+                            <strong>
+                              {t(
+                                `traditional.optimization.options.${item.id}.label`,
+                              )}
+                            </strong>
+                            <small>
+                              {t(
+                                `traditional.optimization.options.${item.id}.description`,
+                              )}
+                            </small>
                           </span>
                         }
                         className="cw-optimize-option"
@@ -3468,25 +3541,26 @@ const WORKSPACE_MODES: Array<{
   id: WorkspaceMode;
   label: string;
 }> = [
-  { id: "build", label: "架构" },
-  { id: "validate", label: "调试" },
-  { id: "optimize", label: "优化" },
-  { id: "environment", label: "环境" },
-  { id: "publish", label: "发布" },
+  { id: "build", label: "traditional.workspace.modes.build" },
+  { id: "validate", label: "traditional.workspace.modes.validate" },
+  { id: "optimize", label: "traditional.workspace.modes.optimize" },
+  { id: "environment", label: "traditional.workspace.modes.environment" },
+  { id: "publish", label: "traditional.workspace.modes.publish" },
 ];
 
 const WORKSPACE_TITLES: Record<WorkspaceMode, string> = {
-  build: "个性化您的智能体架构",
-  validate: "调试您的智能体",
-  optimize: "为您的智能体选择优化项",
-  environment: "配置云上环境",
-  publish: "准备好部署您的智能体",
+  build: "traditional.workspace.titles.build",
+  validate: "traditional.workspace.titles.validate",
+  optimize: "traditional.workspace.titles.optimize",
+  environment: "traditional.workspace.titles.environment",
+  publish: "traditional.workspace.titles.publish",
 };
 
 function WorkspaceHeader({ mode }: { mode: WorkspaceMode }) {
+  const { t } = useTranslation("create");
   return (
     <header className="cw-workspace-header">
-      <h1>{WORKSPACE_TITLES[mode]}</h1>
+      <h1>{t(WORKSPACE_TITLES[mode])}</h1>
     </header>
   );
 }
@@ -3504,6 +3578,7 @@ function WorkspaceLifecycleFooter({
   assistant?: React.ReactNode;
   accessory?: React.ReactNode;
 }) {
+  const { t } = useTranslation("create");
   const activeIndex = WORKSPACE_MODES.findIndex((item) => item.id === mode);
   const previousMode = WORKSPACE_MODES[activeIndex - 1];
   const nextMode = WORKSPACE_MODES[activeIndex + 1];
@@ -3523,7 +3598,7 @@ function WorkspaceLifecycleFooter({
           disabled={!previousMode || busy}
           onClick={() => previousMode && onChange(previousMode.id)}
         >
-          上一步
+          {t("common.previous")}
         </button>
         <span aria-hidden="true" />
         {assistant ? (
@@ -3541,11 +3616,14 @@ function WorkspaceLifecycleFooter({
             disabled={!nextMode || busy}
             onClick={() => nextMode && onChange(nextMode.id)}
           >
-            下一步
+            {t("common.next")}
           </button>
         )}
       </div>
-      <nav className="cw-workspace-progress" aria-label="Agent 创建进度">
+      <nav
+        className="cw-workspace-progress"
+        aria-label={t("traditional.workspace.progress")}
+      >
         {WORKSPACE_MODES.map((item, index) => {
           const active = item.id === mode;
           return (
@@ -3554,7 +3632,7 @@ function WorkspaceLifecycleFooter({
               type="button"
               className={`${active ? "is-active" : ""}${index < activeIndex ? " is-complete" : ""}`}
               aria-current={active ? "step" : undefined}
-              aria-label={item.label}
+              aria-label={t(item.label)}
               disabled={busy}
               onClick={() => onChange(item.id)}
             >
@@ -3627,6 +3705,7 @@ export function CustomCreate({
   onDraftChange,
   onDiscard,
 }: CustomCreateProps) {
+  const { t } = useTranslation("create");
   void onCreate; // outcome is the in-pane project preview, not a navigation
   void onDiscard; // the discard action is intentionally hidden in this flow
   const isVulcanCreation =
@@ -3674,7 +3753,9 @@ export function CustomCreate({
   const aiRequirementError =
     trimmedAiRequirement.length > 0 &&
     trimmedAiRequirement.length < GENERATED_AGENT_REQUIREMENT_MIN_LENGTH
-      ? "请至少输入 4 个字符。"
+      ? t("traditional.ai.minimumLength", {
+          count: GENERATED_AGENT_REQUIREMENT_MIN_LENGTH,
+        })
       : "";
   const initialDraftSnapshotRef = useRef(JSON.stringify(draft));
   const lastNotifiedDraftSnapshotRef = useRef(initialDraftSnapshotRef.current);
@@ -3706,7 +3787,7 @@ export function CustomCreate({
   const debugEnabled = features?.generatedAgentTestRun === true;
   const debugDisabledReason =
     features?.generatedAgentTestRunDisabledReason ||
-    "当前后端暂不支持生成 Agent 调试运行。";
+    t("traditional.debug.unavailable");
   const [debugVariants, setDebugVariants] = useState<DebugVariant[]>(() => {
     const initialProviderDraft = draftForCloudProvider(
       initialDraft ?? emptyDraft(cloudProvider),
@@ -3715,7 +3796,7 @@ export function CustomCreate({
     return [
       {
         id: "baseline",
-        name: "基准组",
+        name: t("traditional.debug.baseline"),
         modelName: defaultDebugModelName(initialProviderDraft),
         description: initialProviderDraft.description,
         instruction: initialProviderDraft.instruction,
@@ -3771,7 +3852,7 @@ export function CustomCreate({
           await deleteGeneratedAgentTestRun(runId);
           forgetDebugTestRun(runId);
         } catch (err) {
-          console.warn("清理遗留调试运行失败", err);
+          console.warn("Failed to clean up stale debug run", err);
         }
       }),
     );
@@ -3783,7 +3864,7 @@ export function CustomCreate({
       for (const { run } of debugRunsRef.current.values()) {
         deleteGeneratedAgentTestRun(run.runId)
           .then(() => forgetDebugTestRun(run.runId))
-          .catch((err) => console.warn("清理调试运行失败", err));
+          .catch((err) => console.warn("Failed to clean up debug run", err));
       }
       debugRunsRef.current.clear();
     };
@@ -3817,7 +3898,7 @@ export function CustomCreate({
         className="cw-section"
       >
         <header className="cw-sec-head">
-          <h2 className="cw-sec-title">{meta.label}</h2>
+          <h2 className="cw-sec-title">{t(meta.label)}</h2>
         </header>
         <div className="cw-sec-body">{children}</div>
       </section>
@@ -3918,7 +3999,7 @@ export function CustomCreate({
     if (requirement.length < GENERATED_AGENT_REQUIREMENT_MIN_LENGTH) return;
     if (
       draftDirty &&
-      !window.confirm("生成的新配置会替换当前画布和属性，确定继续吗？")
+      !window.confirm(t("traditional.ai.replaceConfirmation"))
     ) {
       return;
     }
@@ -3971,7 +4052,7 @@ export function CustomCreate({
 
   const clearRootAgent = () => {
     if (
-      !window.confirm("清空根 Agent 的全部配置和子 Agent？此操作无法撤销。")
+      !window.confirm(t("traditional.actions.clearRootConfirmation"))
     ) {
       return;
     }
@@ -4031,9 +4112,11 @@ export function CustomCreate({
   const duplicateNames = useMemo(() => duplicateAgentNames(draft), [draft]);
   const nameProblem = a2a
     ? null
-    : (agentNameProblem(node.name) ??
+    : (agentNameProblem(node.name, (key) =>
+        t(`validation.agentName.${key}`),
+      ) ??
       (duplicateNames.has(node.name)
-        ? "Agent 名称在当前结构中必须唯一"
+        ? t("traditional.validation.duplicateName")
         : null));
   const nameInvalid = nameProblem !== null;
   const showNameError =
@@ -4085,7 +4168,9 @@ export function CustomCreate({
   );
   const selectedCustomModelCredential = customModelCredentials.find(
     (requirement) =>
-      requirement.label === `${node.name.trim() || "自定义模型"} 模型 API Key`,
+      requirement.label === createT("helpers.customModel.apiKeyLabel", {
+        name: node.name.trim() || createT("helpers.customModel.fallbackName"),
+      }),
   );
 
   const updateNewWorkbenchModelApiKey = useCallback(
@@ -4103,7 +4188,7 @@ export function CustomCreate({
   );
 
   function focusValidationProblem(problem: TreeProblem) {
-    const sectionId = problem.problem === "缺少子 Agent" ? "type" : "basic";
+    const sectionId = problem.problem === "missingSubagent" ? "type" : "basic";
     const section = sectionRefs.current[sectionId];
     section?.scrollIntoView({
       behavior: "smooth",
@@ -4111,14 +4196,14 @@ export function CustomCreate({
     });
 
     const field =
-      problem.problem === "缺少描述"
+      problem.problem === "missingDescription"
         ? "description"
-        : problem.problem === "缺少系统提示词"
+        : problem.problem === "missingPrompt"
           ? "instruction"
-          : problem.problem === "缺少 AgentKit 智能体中心"
+          : problem.problem === "missingRegistry"
             ? "a2a-registry"
-            : problem.problem === "缺少子 Agent" ||
-                problem.problem === "远程 Agent 只能作为子 Agent"
+            : problem.problem === "missingSubagent" ||
+                problem.problem === "remoteRoot"
               ? null
               : "name";
     const fieldRoot = field
@@ -4169,7 +4254,7 @@ export function CustomCreate({
           await deleteGeneratedAgentTestRun(run.runId);
           forgetDebugTestRun(run.runId);
         } catch (err) {
-          console.warn("清理调试运行失败", err);
+          console.warn("Failed to clean up debug run", err);
         }
       }),
     );
@@ -4184,7 +4269,7 @@ export function CustomCreate({
       await deleteGeneratedAgentTestRun(runtime.run.runId);
       forgetDebugTestRun(runtime.run.runId);
     } catch (err) {
-      console.warn("清理调试运行失败", err);
+      console.warn("Failed to clean up debug run", err);
     }
   };
 
@@ -4195,7 +4280,7 @@ export function CustomCreate({
     setDebugTraceTarget({
       runId: runtime.run.runId,
       sessionId: runtime.sessionId,
-      variantName: variant.name,
+      variantName: debugVariantDisplayName(variant, t),
     });
   };
 
@@ -4384,7 +4469,7 @@ export function CustomCreate({
           await deleteGeneratedAgentTestRun(createdRun.runId);
           forgetDebugTestRun(createdRun.runId);
         } catch (cleanupError) {
-          console.warn("清理调试运行失败", cleanupError);
+          console.warn("Failed to clean up debug run", cleanupError);
         }
       }
       setDebugVariants((current) =>
@@ -4501,7 +4586,7 @@ export function CustomCreate({
         ...current,
         {
           id,
-          name: `对照组 ${sequence}`,
+          name: t("traditional.debug.comparison", { count: sequence }),
           modelName: draft.modelName ?? "",
           description: draft.description,
           instruction: draft.instruction,
@@ -4759,14 +4844,14 @@ export function CustomCreate({
       network.mode !== "public" &&
       !network.vpcId?.trim()
     ) {
-      setNewWorkbenchDeployError("使用 VPC 网络时，请填写 VPC ID。");
+      setNewWorkbenchDeployError(t("traditional.deployment.vpcRequired"));
       return;
     }
     if (
       resolvedModelSource(deploymentDraft, cloudProvider) === "ark" &&
       !deploymentDraft.deployment?.modelApiKeyId?.trim()
     ) {
-      setNewWorkbenchDeployError("请先选择模型使用的 API Key。");
+      setNewWorkbenchDeployError(t("traditional.deployment.apiKeyRequired"));
       return;
     }
     const allEnvValues = {
@@ -4778,7 +4863,9 @@ export function CustomCreate({
       (key) => key && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key),
     );
     if (invalidEnvKey) {
-      setNewWorkbenchDeployError(`环境变量名称不合法：${invalidEnvKey}`);
+      setNewWorkbenchDeployError(
+        t("traditional.deployment.invalidEnvName", { key: invalidEnvKey }),
+      );
       return;
     }
     const activeEnvSpecs = deploymentDraft.deployment?.feishuEnabled
@@ -4787,7 +4874,9 @@ export function CustomCreate({
     const missingEnv = firstMissingRuntimeEnv(activeEnvSpecs, allEnvValues);
     if (missingEnv) {
       setNewWorkbenchDeployError(
-        `${missingEnv.comment || missingEnv.key}：请填写必填环境变量`,
+        t("traditional.deployment.requiredEnv", {
+          name: missingEnv.comment || missingEnv.key,
+        }),
       );
       return;
     }
@@ -4803,7 +4892,7 @@ export function CustomCreate({
     setNewWorkbenchDeployStage({
       level: "info",
       phase: "prepare",
-      message: "正在生成部署配置",
+      message: t("traditional.deployment.generatingConfiguration"),
       pct: 0,
     });
     let activeTask: DeploymentTaskUpdate | null = null;
@@ -4814,7 +4903,7 @@ export function CustomCreate({
           deployRegion,
         );
         if (!availability.available) {
-          throw new Error("Runtime 名称已存在，请修改后重试。");
+          throw new Error(t("traditional.deployment.runtimeNameExists"));
         }
       }
       const generated = await generateAgentProject(
@@ -4824,8 +4913,8 @@ export function CustomCreate({
       const taskId = crypto.randomUUID();
       const startedAt = Date.now();
       let latestPhase = "prepare";
-      let latestLabel = "准备部署";
-      let latestMessage = "正在生成部署配置";
+      let latestLabel = t("traditional.deployment.preparing");
+      let latestMessage = t("traditional.deployment.generatingConfiguration");
       const taskBase = {
         id: taskId,
         ...(workspaceDraftId ? { draftId: workspaceDraftId } : {}),
@@ -4868,12 +4957,12 @@ export function CustomCreate({
           latestPhase = stage.phase;
           latestLabel =
             stage.phase === "build"
-              ? "构建镜像"
+              ? t("traditional.deployment.stages.build")
               : stage.phase === "deploy"
-                ? "部署 Runtime"
+                ? t("traditional.deployment.stages.deploy")
                 : stage.phase === "publish"
-                  ? "发布服务"
-                  : "部署中";
+                  ? t("traditional.deployment.stages.publish")
+                  : t("traditional.deployment.stages.running");
           latestMessage = stage.message;
           setNewWorkbenchDeployStage(stage);
           onDeploymentTaskChange?.({
@@ -4883,6 +4972,7 @@ export function CustomCreate({
             phase: latestPhase,
             label: latestLabel,
             message: latestMessage,
+            messageCode: stage.messageCode,
             pct: stage.pct,
             ...(stage.buildLog ? { buildLog: stage.buildLog } : {}),
           });
@@ -4906,7 +4996,7 @@ export function CustomCreate({
       setNewWorkbenchDeployStage({
         level: "success",
         phase: "complete",
-        message: "部署已完成",
+        message: t("traditional.deployment.complete"),
         pct: 100,
       });
       onDeploymentTaskChange?.({
@@ -4916,7 +5006,7 @@ export function CustomCreate({
         region: result.region || deployRegion,
         status: "success",
         phase: "complete",
-        label: "部署完成",
+        label: t("traditional.deployment.complete"),
         message: result.warnings?.join("；"),
         pct: 100,
       });
@@ -4928,14 +5018,15 @@ export function CustomCreate({
       const failedTask: DeploymentTaskUpdate = {
         ...(activeTask ?? {
           id: crypto.randomUUID(),
-          agentName: providerDraft.name || "未命名智能体",
+          agentName:
+            providerDraft.name || t("traditional.basic.unnamedAgent"),
           runtimeName: deploymentRuntimeName.trim(),
           region: deployRegion,
           startedAt: Date.now(),
         }),
         status: "error",
         phase: activeTask?.phase,
-        label: "部署失败",
+        label: t("traditional.deployment.failed"),
         message,
         retry: () => deployFromNewWorkbench(deploymentOptions),
       };
@@ -4952,7 +5043,7 @@ export function CustomCreate({
   const aiComposer = (
     <section
       className={`cw-ai-compose${aiGenerating ? " is-generating" : ""}${aiGenerated ? " is-success" : ""}`}
-      aria-label="AI 自动填写 Agent 配置"
+      aria-label={t("traditional.ai.ariaLabel")}
     >
       <AnimatePresence initial={false} mode="wait">
         {aiGenerated ? (
@@ -4966,13 +5057,13 @@ export function CustomCreate({
             transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
           >
             <span className="cw-ai-success-check" aria-hidden />
-            <strong>生成成功</strong>
+            <strong>{t("traditional.ai.success")}</strong>
             <button
               type="button"
               className="cw-ai-regenerate"
               onClick={() => setAiGenerated(false)}
             >
-              重新生成
+              {t("traditional.ai.regenerate")}
             </button>
           </motion.div>
         ) : (
@@ -4996,7 +5087,9 @@ export function CustomCreate({
                 value={aiRequirement}
                 maxLength={8000}
                 disabled={aiGenerating}
-                placeholder={`描述目标，使用 ${plannerModelName(cloudProvider)} 模型一键生成配置`}
+                placeholder={t("traditional.ai.placeholder", {
+                  model: plannerModelName(cloudProvider),
+                })}
                 aria-invalid={Boolean(aiRequirementError)}
                 aria-describedby={
                   aiRequirementError ? "ai-requirement-error" : undefined
@@ -5016,14 +5109,18 @@ export function CustomCreate({
                   !trimmedAiRequirement ||
                   Boolean(aiRequirementError)
                 }
-                aria-label={aiGenerating ? "正在智能生成" : "智能生成"}
+                aria-label={
+                  aiGenerating
+                    ? t("traditional.ai.generating")
+                    : t("traditional.ai.generate")
+                }
               >
                 {aiGenerating ? (
                   <span className="cw-ai-orb" aria-hidden>
                     <span />
                   </span>
                 ) : (
-                  "智能生成"
+                  t("traditional.ai.generate")
                 )}
               </button>
             </form>
@@ -5144,21 +5241,22 @@ export function CustomCreate({
                         <Section meta={metaOf("type")}>
                           <RadioGroup<AgentType>
                             className="cw-agent-type-options"
-                            aria-label="Agent 类型"
+                            aria-label={t("traditional.agentTypes.ariaLabel")}
                             value={node.agentType ?? "llm"}
                             onChange={selectAgentType}
                           >
-                            {AGENT_TYPES.map((t) => {
-                              const on = (node.agentType ?? "llm") === t.id;
+                            {AGENT_TYPES.map((agentType) => {
+                              const on =
+                                (node.agentType ?? "llm") === agentType.id;
                               const remoteTypeDisabled =
-                                isRootAgent && t.id === "a2a";
+                                isRootAgent && agentType.id === "a2a";
                               const disabledHintId = remoteTypeDisabled
                                 ? "cw-remote-agent-disabled-hint"
                                 : undefined;
                               return (
                                 <div
-                                  key={t.id}
-                                  data-agent-type={t.id}
+                                  key={agentType.id}
+                                  data-agent-type={agentType.id}
                                   className={`cw-agent-type-option ${on ? "is-on" : ""} ${
                                     remoteTypeDisabled ? "is-disabled" : ""
                                   }`}
@@ -5166,14 +5264,16 @@ export function CustomCreate({
                                   aria-describedby={disabledHintId}
                                 >
                                   <RadioGroup.Item
-                                    value={t.id}
+                                    value={agentType.id}
                                     disabled={remoteTypeDisabled}
                                     block
                                     className="cw-agent-type-control"
                                   >
                                     <span className="cw-agent-type-copy">
                                       <strong>
-                                        {AGENT_TYPE_BAR_LABELS[t.id]}
+                                        {t(
+                                          AGENT_TYPE_BAR_LABELS[agentType.id],
+                                        )}
                                       </strong>
                                     </span>
                                   </RadioGroup.Item>
@@ -5183,7 +5283,7 @@ export function CustomCreate({
                                       className="cw-agent-type-disabled-hint"
                                       role="tooltip"
                                     >
-                                      远程智能体只能作为子步骤使用
+                                      {t("traditional.agentTypes.remoteChildOnly")}
                                     </span>
                                   )}
                                 </div>
@@ -5196,11 +5296,10 @@ export function CustomCreate({
                               <span className="cw-error-text">
                                 {validationProblemMessage({
                                   path: safePath,
-                                  name: node.name.trim() || "未命名",
-                                  typeLabel: agentTypeMeta(node.agentType)
-                                    .label,
-                                  problem: "缺少子 Agent",
-                                })}
+                                  name: node.name.trim(),
+                                  agentType: node.agentType,
+                                  problem: "missingSubagent",
+                                }, t)}
                               </span>
                             )}
                         </Section>
@@ -5210,7 +5309,9 @@ export function CustomCreate({
                               <>
                                 <div className="cw-field">
                                   <label className="cw-label">
-                                    {isRootAgent ? "Agent 名称" : "名称"}
+                                    {isRootAgent
+                                      ? t("traditional.basic.agentName")
+                                      : t("traditional.basic.name")}
                                     <span className="cw-req">*</span>
                                   </label>
                                   <input
@@ -5240,14 +5341,15 @@ export function CustomCreate({
                                     </span>
                                   ) : (
                                     <span className="cw-help">
-                                      遵循 Google ADK
-                                      命名规则，且在执行流程中保持唯一。
+                                      {t("traditional.basic.nameHelp")}
                                     </span>
                                   )}
                                 </div>
                                 <div className="cw-field">
                                   <label className="cw-label">
-                                    {isRootAgent ? "描述" : "智能体描述"}
+                                    {isRootAgent
+                                      ? t("common.description")
+                                      : t("traditional.basic.agentDescription")}
                                     <span className="cw-req">*</span>
                                   </label>
                                   <textarea
@@ -5256,7 +5358,9 @@ export function CustomCreate({
                                     )}`}
                                     data-validation-field="description"
                                     value={node.description}
-                                    placeholder="简要描述这个 Agent 的用途，便于团队识别…"
+                                    placeholder={t(
+                                      "traditional.basic.descriptionPlaceholder",
+                                    )}
                                     aria-invalid={
                                       showErrors && descriptionMissing
                                     }
@@ -5275,13 +5379,15 @@ export function CustomCreate({
                                       role="alert"
                                       className="cw-error-text"
                                     >
-                                      描述为必填项
+                                      {t(
+                                        "traditional.validation.missingDescription",
+                                      )}
                                     </span>
                                   ) : (
                                     <span className="cw-help">
                                       {isRootAgent
-                                        ? "完整描述会保留；部署时会自动整理为符合 Runtime 规范的单行描述。"
-                                        : "描述会显示在 Agent 列表与选择器中。"}
+                                        ? t("traditional.basic.rootDescriptionHelp")
+                                        : t("traditional.basic.descriptionHelp")}
                                     </span>
                                   )}
                                 </div>
@@ -5290,12 +5396,13 @@ export function CustomCreate({
                             {orchestrator ? (
                               <>
                                 <p className="cw-section-desc cw-dependency-hint">
-                                  这是一个协作容器，本身不生成回答。请在左侧画布中
-                                  添加任务步骤，并通过拖拽调整它们的位置。
+                                  {t("traditional.basic.orchestratorHelp")}
                                 </p>
                                 {node.agentType === "loop" && (
                                   <div className="cw-field">
-                                    <label className="cw-label">最大轮次</label>
+                                    <label className="cw-label">
+                                      {t("traditional.basic.maxIterations")}
+                                    </label>
                                     <input
                                       className="cw-input"
                                       type="number"
@@ -5311,8 +5418,7 @@ export function CustomCreate({
                                       }
                                     />
                                     <span className="cw-help">
-                                      循环编排反复执行子
-                                      Agent，直到满足条件或达到该轮次上限。
+                                      {t("traditional.basic.maxIterationsHelp")}
                                     </span>
                                   </div>
                                 )}
@@ -5324,14 +5430,11 @@ export function CustomCreate({
                               >
                                 <div className="cw-remote-center-head">
                                   <div className="cw-label">
-                                    AgentKit 智能体中心
+                                    {t("traditional.basic.agentCenter")}
                                     <span className="cw-req">*</span>
                                   </div>
                                   <p className="cw-help cw-remote-center-description">
-                                    远程 Agent 的名称、描述和能力来自中心返回的
-                                    Agent Card。
-                                    系统会根据每轮任务动态发现并挂载匹配的
-                                    Agent。
+                                    {t("traditional.basic.agentCenterHelp")}
                                   </p>
                                 </div>
                                 <A2aSpaceSelect
@@ -5361,7 +5464,7 @@ export function CustomCreate({
                                     setA2aRegistryAdvancedOpen((open) => !open)
                                   }
                                 >
-                                  <span>更多选项</span>
+                                  <span>{t("traditional.basic.moreOptions")}</span>
                                   <ChevronRight
                                     className={`cw-more-options-chevron ${
                                       a2aRegistryAdvancedOpen ? "is-open" : ""
@@ -5399,7 +5502,7 @@ export function CustomCreate({
                                 </AnimatePresence>
                                 {showErrors && a2aRegistrySpaceMissing && (
                                   <span className="cw-error-text" role="alert">
-                                    请选择 AgentKit 智能体中心
+                                    {t("traditional.validation.missingRegistry")}
                                   </span>
                                 )}
                               </div>
@@ -5409,7 +5512,8 @@ export function CustomCreate({
                                 data-validation-field="instruction"
                               >
                                 <label className="cw-label">
-                                  系统提示词<span className="cw-req">*</span>
+                                  {t("traditional.basic.systemPrompt")}
+                                  <span className="cw-req">*</span>
                                 </label>
                                 <Suspense
                                   fallback={
@@ -5417,7 +5521,7 @@ export function CustomCreate({
                                       className="cw-markdown-loading"
                                       role="status"
                                     >
-                                      正在加载 Markdown 编辑器…
+                                      {t("traditional.basic.loadingMarkdown")}
                                     </div>
                                   }
                                 >
@@ -5431,12 +5535,11 @@ export function CustomCreate({
                                 </Suspense>
                                 {showErrors && instructionMissing ? (
                                   <span className="cw-error-text" role="alert">
-                                    系统提示词为必填项
+                                    {t("traditional.validation.missingPrompt")}
                                   </span>
                                 ) : (
                                   <span className="cw-help">
-                                    支持 Markdown 快捷输入，例如键入 ##
-                                    加空格创建二级标题。
+                                    {t("traditional.basic.markdownHelp")}
                                   </span>
                                 )}
                               </div>
@@ -5451,10 +5554,12 @@ export function CustomCreate({
                             <Section meta={metaOf("model")}>
                               <div className="cw-form">
                                 <div className="cw-field cw-model-source-field">
-                                  <label className="cw-label">模型来源</label>
+                                  <label className="cw-label">
+                                    {t("traditional.model.source")}
+                                  </label>
                                   <RadioGroup<ModelSource | "gateway">
                                     className="cw-model-source-options"
-                                    aria-label="模型来源"
+                                    aria-label={t("traditional.model.source")}
                                     value={modelSource}
                                     onChange={(source) => {
                                       if (source !== "gateway")
@@ -5466,16 +5571,16 @@ export function CustomCreate({
                                         value: "ark" as const,
                                         label:
                                           cloudProvider === "byteplus"
-                                            ? "BytePlus ModelArk"
-                                            : "火山方舟",
+                                            ? t("traditional.model.bytePlusModelArk")
+                                            : t("traditional.model.volcanoArk"),
                                       },
                                       {
                                         value: "custom" as const,
-                                        label: "自定义",
+                                        label: t("traditional.model.custom"),
                                       },
                                       {
                                         value: "gateway" as const,
-                                        label: "模型网关",
+                                        label: t("traditional.model.gateway"),
                                         disabled: true,
                                       },
                                     ].map((option) => (
@@ -5496,7 +5601,7 @@ export function CustomCreate({
                                           <span>{option.label}</span>
                                           {option.disabled && (
                                             <span className="cw-model-source-coming-soon">
-                                              待上线
+                                              {t("traditional.model.comingSoon")}
                                             </span>
                                           )}
                                         </RadioGroup.Item>
@@ -5506,7 +5611,9 @@ export function CustomCreate({
                                 </div>
                                 {modelSource === "ark" ? (
                                   <div className="cw-field">
-                                    <label className="cw-label">模型配置</label>
+                                    <label className="cw-label">
+                                      {t("traditional.model.configuration")}
+                                    </label>
                                     <ModelOptionSelect
                                       value={node.modelName ?? ""}
                                       cloudProvider={cloudProvider}
@@ -5535,7 +5642,7 @@ export function CustomCreate({
                                   <>
                                     <div className="cw-field">
                                       <label className="cw-label">
-                                        模型名称
+                                        {t("traditional.model.name")}
                                       </label>
                                       <input
                                         className="cw-input"
@@ -5547,7 +5654,7 @@ export function CustomCreate({
                                     </div>
                                     <div className="cw-field">
                                       <label className="cw-label cw-label-with-link">
-                                        <span>服务商 Provider</span>
+                                        <span>{t("traditional.model.provider")}</span>
                                         <a
                                           href="https://docs.litellm.ai/docs/providers"
                                           target="_blank"
@@ -5556,7 +5663,7 @@ export function CustomCreate({
                                             event.stopPropagation()
                                           }
                                         >
-                                          LiteLLM 支持列表
+                                          {t("traditional.model.liteLlmProviders")}
                                           <ExternalLink aria-hidden="true" />
                                         </a>
                                       </label>
@@ -5603,7 +5710,9 @@ export function CustomCreate({
                                               ] ?? "")
                                             : ""
                                         }
-                                        placeholder="请输入模型 API Key"
+                                        placeholder={t(
+                                          "traditional.model.apiKeyPlaceholder",
+                                        )}
                                         autoComplete="new-password"
                                         onChange={(event) => {
                                           if (!selectedCustomModelCredential)
@@ -5628,10 +5737,11 @@ export function CustomCreate({
                             <Section meta={metaOf("tools")}>
                               <div className="cw-form">
                                 <div className="cw-field">
-                                  <label className="cw-label">内置工具</label>
+                                  <label className="cw-label">
+                                    {t("traditional.tools.builtIn")}
+                                  </label>
                                   <span className="cw-help">
-                                    勾选 VeADK 提供的内置能力，生成时会自动补全
-                                    import 与所需环境变量。
+                                    {t("traditional.tools.builtInHelp")}
                                   </span>
                                   <div className="cw-tools-list-shell">
                                     <Checklist
@@ -5655,10 +5765,10 @@ export function CustomCreate({
                                       >
                                         <div className="cw-tool-config-head">
                                           <span className="cw-label">
-                                            代码执行配置
+                                            {t("traditional.tools.codeExecution")}
                                           </span>
                                           <span className="cw-help">
-                                            指定 AgentKit 代码执行沙箱。
+                                            {t("traditional.tools.codeExecutionHelp")}
                                           </span>
                                         </div>
                                         <RuntimeEnvFields
@@ -5677,7 +5787,9 @@ export function CustomCreate({
                                   </AnimatePresence>
                                 </div>
                                 <div className="cw-field cw-mcp-field">
-                                  <label className="cw-label">MCP 工具</label>
+                                  <label className="cw-label">
+                                    {t("traditional.tools.mcp")}
+                                  </label>
                                   <McpToolEditor
                                     tools={mcpTools}
                                     onChange={(next) =>
@@ -5705,18 +5817,19 @@ export function CustomCreate({
                                 <Toggle
                                   checked={node.knowledgebase}
                                   onChange={(v) => patch({ knowledgebase: v })}
-                                  title="知识库"
-                                  desc="启用外部知识检索（RAG），让 Agent 基于你的资料作答。"
+                                  title={t("traditional.knowledge.title")}
+                                  desc={t("traditional.knowledge.description")}
                                   icon={Database}
                                 />
                                 {node.knowledgebase && (
                                   <div className="cw-field cw-subfield">
                                     <label className="cw-label">
-                                      知识库后端
+                                      {t("traditional.knowledge.backend")}
                                     </label>
                                     <BackendSelect
                                       options={KB_BACKENDS}
                                       value={node.knowledgebaseBackend}
+                                      translationGroup="knowledge"
                                       onChange={(id) =>
                                         patch({
                                           knowledgebaseBackend: id,
@@ -5732,7 +5845,7 @@ export function CustomCreate({
                                       DEFAULT_KB_BACKEND) === "viking" && (
                                       <div className="cw-field cw-subfield">
                                         <label className="cw-label">
-                                          VikingDB 知识库
+                                          {t("traditional.knowledge.vikingDatabase")}
                                         </label>
                                         <VikingKnowledgebaseSelect
                                           value={node.knowledgebaseIndex ?? ""}
@@ -5819,19 +5932,20 @@ export function CustomCreate({
                                         },
                                       })
                                     }
-                                    title="短期记忆"
-                                    desc="存储单会话上下文"
+                                    title={t("traditional.memory.shortTerm")}
+                                    desc={t("traditional.memory.shortTermDescription")}
                                     showDescription
                                     icon={Layers}
                                   />
                                   {node.memory.shortTerm && (
                                     <div className="cw-field cw-subfield">
                                       <label className="cw-label">
-                                        短期记忆后端
+                                        {t("traditional.memory.shortTermBackend")}
                                       </label>
                                       <BackendSelect
                                         options={STM_BACKENDS}
                                         value={node.shortTermBackend}
+                                        translationGroup="shortTerm"
                                         onChange={(id) =>
                                           patch({ shortTermBackend: id })
                                         }
@@ -5862,19 +5976,20 @@ export function CustomCreate({
                                         },
                                       })
                                     }
-                                    title="长期记忆"
-                                    desc="存储跨会话上下文，通常使用向量化检索"
+                                    title={t("traditional.memory.longTerm")}
+                                    desc={t("traditional.memory.longTermDescription")}
                                     showDescription
                                     icon={Database}
                                   />
                                   {node.memory.longTerm && (
                                     <div className="cw-field cw-subfield">
                                       <label className="cw-label">
-                                        长期记忆后端
+                                        {t("traditional.memory.longTermBackend")}
                                       </label>
                                       <BackendSelect
                                         options={LTM_BACKENDS}
                                         value={node.longTermBackend}
+                                        translationGroup="longTerm"
                                         onChange={(id) =>
                                           patch({
                                             longTermBackend: id,
@@ -5889,7 +6004,7 @@ export function CustomCreate({
                                         "viking" && (
                                         <div className="cw-field cw-subfield">
                                           <label className="cw-label">
-                                            VikingDB 记忆库
+                                            {t("traditional.memory.vikingDatabase")}
                                           </label>
                                           <VikingMemorySelect
                                             value={
@@ -5935,8 +6050,8 @@ export function CustomCreate({
                                         onChange={(v) =>
                                           patch({ autoSaveSession: v })
                                         }
-                                        title="自动保存会话到长期记忆"
-                                        desc="会话结束时自动把内容写入长期记忆，无需手动调用。"
+                                        title={t("traditional.memory.autoSave")}
+                                        desc={t("traditional.memory.autoSaveDescription")}
                                         icon={Database}
                                       />
                                     </div>
@@ -6020,7 +6135,7 @@ export function CustomCreate({
                 cloudProvider={cloudProvider}
                 project={project}
                 agentDraft={draft}
-                agentName={draft.name || "未命名 Agent"}
+                agentName={draft.name || t("traditional.basic.unnamedAgent")}
                 agentCount={countDraftAgents(draft)}
                 releaseConfiguration={
                   selectedDebugVariant
@@ -6028,13 +6143,17 @@ export function CustomCreate({
                         modelName:
                           selectedDebugVariant.modelName ||
                           draft.modelName ||
-                          "默认模型",
+                          t("traditional.debug.defaultModel"),
                         description: selectedDebugVariant.description,
                         instruction: selectedDebugVariant.instruction,
                         optimizations: [
-                          `优化场景：${harnessSidecarProfileLabel(harnessOptimizationProfile)}`,
-                          ...harnessOptimizations.map(
-                            harnessSidecarOptionLabel,
+                          t("traditional.optimization.releaseScenario", {
+                            profile: t(
+                              `traditional.optimization.profiles.${harnessOptimizationProfile}.label`,
+                            ),
+                          }),
+                          ...harnessOptimizations.map((id) =>
+                            t(`traditional.optimization.options.${id}.label`),
                           ),
                         ],
                       }
@@ -6044,7 +6163,11 @@ export function CustomCreate({
                 onDeploy={handleDeploy}
                 onAgentAdded={onAgentAdded}
                 onDeploymentTaskChange={onDeploymentTaskChange}
-                deploymentActionLabel={deploymentTarget ? "更新并发布" : "部署"}
+                deploymentActionLabel={
+                  deploymentTarget
+                    ? t("traditional.deployment.updateAndPublish")
+                    : t("common.deploy")
+                }
                 deploymentActionTargetId="cw-publish-primary-action"
                 deploymentRuntimeId={deploymentTarget?.runtimeId}
                 deploymentRuntimeName={deploymentRuntimeName}
@@ -6123,7 +6246,10 @@ export function CustomCreate({
                 onExportYaml={() =>
                   downloadText(
                     `${providerDraft.name || "agent"}.yaml`,
-                    draftToYaml(providerDraft),
+                    draftToYaml(providerDraft, {
+                      heading: t("yaml.heading"),
+                      importHint: t("yaml.importHint"),
+                    }),
                     "text/yaml",
                   )
                 }
@@ -6131,8 +6257,8 @@ export function CustomCreate({
             ) : (
               <div className="cw-publish-loading" role="status">
                 <Loader2 className="cw-i cw-spin" />
-                <strong>正在生成发布配置</strong>
-                <span>校验 Agent 结构并准备部署快照…</span>
+                <strong>{t("traditional.publish.generating")}</strong>
+                <span>{t("traditional.publish.validating")}</span>
               </div>
             )}
           </div>
@@ -6148,17 +6274,23 @@ export function CustomCreate({
         <TraceDrawer
           testRunId={debugTraceTarget.runId}
           sessionId={debugTraceTarget.sessionId}
-          title={`调用链路 · ${debugTraceTarget.variantName}`}
+          title={t("traditional.debug.traceTitle", {
+            name: debugTraceTarget.variantName,
+          })}
           onClose={() => setDebugTraceTarget(null)}
         />
       )}
       {debugLeaveConfirmOpen && (
         <StudioConfirmDialog
           variant="warning"
-          title="离开调试？"
-          description="离开调试页面后，当前环境将被清理。您可以通过重新启动环境进行新的测试。"
-          confirmLabel={debugLeaveCleaning ? "清理中..." : "确定离开"}
-          closeLabel="关闭离开调试确认"
+          title={t("traditional.debug.leaveTitle")}
+          description={t("traditional.debug.leaveDescription")}
+          confirmLabel={
+            debugLeaveCleaning
+              ? t("traditional.debug.cleaning")
+              : t("traditional.debug.confirmLeave")
+          }
+          closeLabel={t("traditional.debug.closeLeaveConfirmation")}
           busy={debugLeaveCleaning}
           onCancel={cancelDebugLeaveConfirm}
           onConfirm={() => void acceptDebugLeaveConfirm()}
@@ -6175,7 +6307,7 @@ export function CustomCreate({
             onClick={(event) => event.stopPropagation()}
           >
             <div className="confirm-title" id="ai-generate-error-title">
-              智能生成失败
+              {t("traditional.ai.failed")}
             </div>
             <div className="cw-ai-error-message" id="ai-generate-error-message">
               {aiErrorDialog}
@@ -6186,7 +6318,7 @@ export function CustomCreate({
                 className="confirm-btn cw-ai-error-close"
                 onClick={() => setAiErrorDialog(null)}
               >
-                关闭
+                {t("common.close")}
               </button>
             </div>
           </div>

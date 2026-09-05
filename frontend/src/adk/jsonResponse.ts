@@ -9,11 +9,17 @@ export async function parseJsonResponse<T>(
   } catch {
     const contentType =
       response.headers.get("content-type")?.split(";", 1)[0] ||
-      "Content-Type 缺失";
+      adkT("common.contentTypeMissing");
     const excerpt = text.trim().slice(0, 2000);
-    const detail = excerpt ? `\n响应：${excerpt}` : "";
+    const detail = excerpt ? `\n${adkT("common.response", { response: excerpt })}` : "";
     throw new Error(
-      `${fallback}：服务端返回非 JSON 响应（HTTP ${response.status}，${contentType}）${detail}`,
+      adkT("jsonResponse.nonJson", {
+        fallback,
+        status: response.status,
+        contentType,
+        detail,
+      }),
     );
   }
 }
+import { adkT } from "./i18n";

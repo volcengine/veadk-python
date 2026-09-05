@@ -7,28 +7,29 @@ import type {
   AutomationFieldDefinition,
   AutomationFormValues,
 } from "./types";
+import { automationT } from "./i18n";
 
 export const repositoryField: AutomationFieldDefinition = {
   name: "repository",
   label: "GitHub Repo",
   placeholder: "owner/repository",
-  help: "支持 owner/repository 或完整 github.com URL",
+  help: "Enter owner/repository or a full github.com URL",
   required: true,
 };
 
 export const baseBranchField: AutomationFieldDefinition = {
   name: "baseBranch",
-  label: "目标分支",
+  label: "Target branch",
   placeholder: "main",
-  help: "留空时使用 main，PR 将以此分支为 base",
+  help: "Defaults to main; the pull request will use this branch as its base",
   required: false,
 };
 
 export const runtimeNameField: AutomationFieldDefinition = {
   name: "runtimeName",
-  label: "Runtime 名称",
+  label: "Runtime name",
   placeholder: "support-agent",
-  help: "用于 AgentKit 发布配置",
+  help: "Used by the AgentKit delivery configuration",
   required: true,
 };
 
@@ -36,7 +37,7 @@ export const runtimeIdField: AutomationFieldDefinition = {
   name: "runtimeId",
   label: "Runtime ID",
   placeholder: "rt-xxxxxxxx",
-  help: "持续更新的目标 AgentKit Runtime",
+  help: "The AgentKit Runtime that will receive continuous updates",
   required: true,
 };
 
@@ -77,8 +78,11 @@ export function cloudCredentialSecretLabels(
 ): readonly string[] {
   const secrets = cloudCredentialSecretNames(provider);
   return [
-    `${secrets.accessKey}、${secrets.secretKey}（必填）`,
-    `${secrets.sessionToken}（使用临时凭据时必填）`,
+    automationT("github.secretPair", {
+      accessKey: secrets.accessKey,
+      secretKey: secrets.secretKey,
+    }),
+    automationT("github.sessionToken", { sessionToken: secrets.sessionToken }),
   ];
 }
 

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import {
   getEnvironmentResources,
   getSystemInfo,
@@ -86,6 +87,7 @@ export function SystemInfo({
   region,
   onBack,
 }: SystemInfoProps) {
+  const { t } = useTranslation("ui");
   const isAdmin = role === "admin";
   const [tosAddress, setTosAddress] = useState("");
   const [sandboxTools, setSandboxTools] = useState<SandboxToolInfo[]>([]);
@@ -152,13 +154,15 @@ export function SystemInfo({
       patchSandboxToolUpdate(tool.kind, {
         busy: false,
         error: "",
-        message: result.updated ? "已更新" : "无需更新",
+        message: result.updated
+          ? t("systemInfo.modelEnvUpdated")
+          : t("systemInfo.modelEnvAlreadyCurrent"),
       });
     } catch (cause) {
       if (!mountedRef.current) return;
       patchSandboxToolUpdate(tool.kind, {
         busy: false,
-        error: cause instanceof Error ? cause.message : String(cause),
+        error: t("systemInfo.modelEnvUpdateError"),
         message: "",
       });
     }
@@ -182,7 +186,7 @@ export function SystemInfo({
       })
       .catch((cause) => {
         if ((cause as Error)?.name === "AbortError") return;
-        setSandboxError(cause instanceof Error ? cause.message : String(cause));
+        setSandboxError(t("systemInfo.sandboxInfoError"));
       })
       .finally(() => {
         if (!controller.signal.aborted) setSandboxLoading(false);
@@ -210,7 +214,7 @@ export function SystemInfo({
           setUserPools([]);
           return;
         }
-        setUserPoolsError(cause instanceof Error ? cause.message : String(cause));
+        setUserPoolsError(t("systemInfo.userPoolError"));
       })
       .finally(() => {
         if (!controller.signal.aborted) setUserPoolsLoading(false);
@@ -232,7 +236,7 @@ export function SystemInfo({
       .then(setEnvironmentResources)
       .catch((cause) => {
         if ((cause as Error)?.name === "AbortError") return;
-        setEnvironmentResourcesError(cause instanceof Error ? cause.message : String(cause));
+        setEnvironmentResourcesError(t("systemInfo.environmentResourcesError"));
       })
       .finally(() => {
         if (!controller.signal.aborted) setEnvironmentResourcesLoading(false);
@@ -243,10 +247,10 @@ export function SystemInfo({
   return (
     <div className="system-info-page">
       <header className="system-info-page-header">
-        <PageBackButton label="返回上一页" onClick={onBack} />
+        <PageBackButton label={t("common.back")} onClick={onBack} />
         <div>
-          <h1>系统信息</h1>
-          <p>查看当前 Studio 版本及关联的基础资源</p>
+          <h1>{t("systemInfo.title")}</h1>
+          <p>{t("systemInfo.description")}</p>
         </div>
       </header>
 
@@ -255,10 +259,10 @@ export function SystemInfo({
           className="system-info-section"
           aria-labelledby="studio-info-title"
         >
-          <h2 id="studio-info-title">通用</h2>
+          <h2 id="studio-info-title">{t("systemInfo.general")}</h2>
           <dl className="system-info-summary">
             <div>
-              <dt>当前版本</dt>
+              <dt>{t("systemInfo.currentVersion")}</dt>
               <dd>{version || "—"}</dd>
             </div>
           </dl>
@@ -270,14 +274,14 @@ export function SystemInfo({
               className="system-info-section"
               aria-labelledby="storage-info-title"
             >
-              <h2 id="storage-info-title">存储</h2>
+              <h2 id="storage-info-title">{t("systemInfo.storage")}</h2>
               {sandboxLoading ? (
                 <div
                   className="system-info-loading"
                   role="status"
                   aria-live="polite"
                 >
-                  <TextShimmer as="span">正在加载存储信息</TextShimmer>
+                  <TextShimmer as="span">{t("systemInfo.loadingStorage")}</TextShimmer>
                 </div>
               ) : sandboxError ? (
                 <div className="system-info-error" role="alert">
@@ -286,21 +290,21 @@ export function SystemInfo({
                     type="button"
                     onClick={() => setSandboxReloadKey((key) => key + 1)}
                   >
-                    重新加载
+                    {t("common.reload")}
                   </button>
                 </div>
               ) : (
                 <dl className="system-info-summary">
                   <div className="system-info-resource-row">
-                    <dt>TOS 地址</dt>
+                    <dt>{t("systemInfo.tosAddress")}</dt>
                     <dd
                       className={`system-info-resource-value${tosAddress ? "" : " is-empty"}`}
                     >
                       <ConsoleLink
                         href={tosConsoleUrl(provider, tosAddress)}
-                        label="在云控制台中打开 TOS 存储桶"
+                        label={t("systemInfo.openTosConsole")}
                       >
-                        {tosAddress || "未配置"}
+                        {tosAddress || t("common.notConfigured")}
                       </ConsoleLink>
                     </dd>
                   </div>
@@ -312,10 +316,10 @@ export function SystemInfo({
               className="system-info-section"
               aria-labelledby="environment-build-info-title"
             >
-              <h2 id="environment-build-info-title">环境构建</h2>
+              <h2 id="environment-build-info-title">{t("systemInfo.environmentBuild")}</h2>
               {environmentResourcesLoading ? (
                 <div className="system-info-loading" role="status" aria-live="polite">
-                  <TextShimmer as="span">正在加载环境构建资源</TextShimmer>
+                  <TextShimmer as="span">{t("systemInfo.loadingEnvironmentResources")}</TextShimmer>
                 </div>
               ) : environmentResourcesError ? (
                 <div className="system-info-error" role="alert">
@@ -324,38 +328,38 @@ export function SystemInfo({
                     type="button"
                     onClick={() => setEnvironmentResourcesReloadKey((key) => key + 1)}
                   >
-                    重新加载
+                    {t("common.reload")}
                   </button>
                 </div>
               ) : environmentResources ? (
                 <dl className="system-info-summary">
                   <div className="system-info-resource-row">
-                    <dt>CodePipeline Workspace</dt>
+                    <dt>{t("systemInfo.codePipelineWorkspace")}</dt>
                     <dd className="system-info-resource-value">
                       <ConsoleLink
                         href={environmentResources.codePipeline.consoleUrl || null}
-                        label="在云控制台中打开 CodePipeline Workspace"
+                        label={t("systemInfo.openCodePipelineWorkspace")}
                       >
                         {environmentResources.codePipeline.workspaceName ||
                           environmentResources.codePipeline.workspaceId ||
-                          "首次构建时自动创建"}
+                          t("systemInfo.createdOnFirstBuild")}
                       </ConsoleLink>
                     </dd>
                   </div>
                   <div className="system-info-resource-row">
-                    <dt>CodePipeline Pipeline</dt>
+                    <dt>{t("systemInfo.codePipelinePipeline")}</dt>
                     <dd className="system-info-resource-value">
                       {environmentResources.codePipeline.pipelineName ||
                         environmentResources.codePipeline.pipelineId ||
-                        "首次构建时自动创建"}
+                        t("systemInfo.createdOnFirstBuild")}
                     </dd>
                   </div>
                   <div className="system-info-resource-row">
-                    <dt>Container Registry 仓库</dt>
+                    <dt>{t("systemInfo.containerRegistryRepository")}</dt>
                     <dd className="system-info-resource-value">
                       <ConsoleLink
                         href={environmentResources.containerRegistry.consoleUrl || null}
-                        label="在云控制台中打开 Container Registry 仓库"
+                        label={t("systemInfo.openContainerRegistryRepository")}
                       >
                         {environmentResources.containerRegistry.imageRepository ||
                           [
@@ -363,7 +367,7 @@ export function SystemInfo({
                             environmentResources.containerRegistry.namespace,
                             environmentResources.containerRegistry.repository,
                           ].filter(Boolean).join("/") ||
-                          "首次构建时自动创建"}
+                          t("systemInfo.createdOnFirstBuild")}
                       </ConsoleLink>
                     </dd>
                   </div>
@@ -375,14 +379,14 @@ export function SystemInfo({
               className="system-info-section"
               aria-labelledby="sandbox-tool-title"
             >
-              <h2 id="sandbox-tool-title">沙箱信息</h2>
+              <h2 id="sandbox-tool-title">{t("systemInfo.sandboxInfo")}</h2>
               {sandboxLoading ? (
                 <div
                   className="system-info-loading"
                   role="status"
                   aria-live="polite"
                 >
-                  <TextShimmer as="span">正在加载沙箱信息</TextShimmer>
+                  <TextShimmer as="span">{t("systemInfo.loadingSandboxInfo")}</TextShimmer>
                 </div>
               ) : sandboxError ? (
                 <div className="system-info-error" role="alert">
@@ -391,7 +395,7 @@ export function SystemInfo({
                     type="button"
                     onClick={() => setSandboxReloadKey((key) => key + 1)}
                   >
-                    重新加载
+                    {t("common.reload")}
                   </button>
                 </div>
               ) : (
@@ -417,7 +421,7 @@ export function SystemInfo({
                           <dt className="system-info-tool-label">
                             <span>{tool.label}</span>
                             {tool.snapshot ? (
-                              <span className="system-info-tool-badge">快照版</span>
+                              <span className="system-info-tool-badge">{t("systemInfo.snapshot")}</span>
                             ) : null}
                           </dt>
                           <dd
@@ -429,9 +433,9 @@ export function SystemInfo({
                                 region,
                                 tool.toolId,
                               )}
-                              label={`在云控制台中打开${tool.label}`}
+                              label={t("systemInfo.openToolConsole", { name: tool.label })}
                             >
-                              {tool.toolId || "未配置"}
+                              {tool.toolId || t("common.notConfigured")}
                             </ConsoleLink>
                             {updateVisible ? (
                               <button
@@ -439,8 +443,14 @@ export function SystemInfo({
                                 className="system-info-resource-update"
                                 disabled={updateState?.busy}
                                 aria-busy={updateState?.busy || undefined}
-                                aria-label={`更新${tool.snapshot ? "快照版 " : ""}${tool.label}模型环境变量`}
-                                title={`更新${tool.snapshot ? "快照版 " : ""}${tool.label}模型环境变量`}
+                                aria-label={t("systemInfo.updateModelEnv", {
+                                  name: tool.label,
+                                  variant: tool.snapshot ? t("systemInfo.snapshotWithSpace") : "",
+                                })}
+                                title={t("systemInfo.updateModelEnv", {
+                                  name: tool.label,
+                                  variant: tool.snapshot ? t("systemInfo.snapshotWithSpace") : "",
+                                })}
                                 onClick={() => void updateSandboxToolModelEnv(tool)}
                               >
                                 <RefreshCw
@@ -472,14 +482,14 @@ export function SystemInfo({
               className="system-info-section"
               aria-labelledby="user-pool-title"
             >
-              <h2 id="user-pool-title">用户池</h2>
+              <h2 id="user-pool-title">{t("systemInfo.userPool")}</h2>
               {userPoolsLoading ? (
                 <div
                   className="system-info-loading"
                   role="status"
                   aria-live="polite"
                 >
-                  <TextShimmer as="span">正在加载用户池</TextShimmer>
+                  <TextShimmer as="span">{t("systemInfo.loadingUserPool")}</TextShimmer>
                 </div>
               ) : userPoolsError ? (
                 <div className="system-info-error" role="alert">
@@ -488,7 +498,7 @@ export function SystemInfo({
                     type="button"
                     onClick={() => setUserPoolsReloadKey((key) => key + 1)}
                   >
-                    重新加载
+                    {t("common.reload")}
                   </button>
                 </div>
               ) : userPools.length > 0 ? (
@@ -496,7 +506,7 @@ export function SystemInfo({
                   {userPools.map((pool) => (
                     <dl className="system-info-pool" key={pool.uid}>
                       <div>
-                        <dt>名称</dt>
+                        <dt>{t("common.name")}</dt>
                         <dd className="system-info-resource-value">
                           <ConsoleLink
                             href={identityUserPoolConsoleUrl(
@@ -504,22 +514,24 @@ export function SystemInfo({
                               pool.region || region,
                               pool.uid,
                             )}
-                            label={`在云控制台中打开用户池${pool.name ? `“${pool.name}”` : ""}`}
+                            label={t("systemInfo.openUserPoolConsole", {
+                              name: pool.name || "",
+                            })}
                           >
-                            {pool.name || "未命名用户池"}
+                            {pool.name || t("systemInfo.unnamedUserPool")}
                           </ConsoleLink>
                         </dd>
                       </div>
                       <div>
-                        <dt>ID</dt>
+                        <dt>{t("systemInfo.id")}</dt>
                         <dd>{pool.uid || "—"}</dd>
                       </div>
                       <div>
-                        <dt>域名</dt>
+                        <dt>{t("systemInfo.domain")}</dt>
                         <dd>{pool.domain || "—"}</dd>
                       </div>
                       <div>
-                        <dt>区域</dt>
+                        <dt>{t("systemInfo.region")}</dt>
                         <dd>{pool.region || "—"}</dd>
                       </div>
                     </dl>
@@ -528,8 +540,8 @@ export function SystemInfo({
               ) : (
                 <p className="system-info-empty">
                   {localMode
-                    ? "本地模式未配置用户池"
-                    : "当前 Studio 未配置用户池"}
+                    ? t("systemInfo.noLocalUserPool")
+                    : t("systemInfo.noUserPool")}
                 </p>
               )}
             </section>

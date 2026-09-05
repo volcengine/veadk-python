@@ -10,6 +10,8 @@ import {
   useRef,
   useState,
 } from "react";
+import type { TFunction } from "i18next";
+import { useTranslation } from "react-i18next";
 import { createPortal } from "react-dom";
 import {
   AlertTriangle,
@@ -87,6 +89,7 @@ import {
   type IdentityUserPool,
   type GithubCicdPipelineResult,
 } from "../adk/client";
+import { localizeDeployStageMessage } from "../adk/deploymentI18n";
 import {
   beginAgentDeploy,
   beginAgentSourceDownload,
@@ -158,7 +161,7 @@ const DEPLOY_PHASE_ORDER: Record<string, number> = {
 };
 
 export const BUILD_STATUS_CONFIRMATION_ERROR_MESSAGE =
-  "构建任务已经提交，但暂时无法确认最终状态。请稍后在 Code Pipeline 查看构建结果，避免重复部署。";
+  "__BUILD_STATUS_CONFIRMATION_UNCONFIRMED__";
 
 export function isBuildStatusConfirmationError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
@@ -253,6 +256,7 @@ function DeploymentConfirmDialog({
   onCancel,
   onConfirm,
 }: DeploymentConfirmDialogProps) {
+  const { t } = useTranslation("ui");
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -291,13 +295,13 @@ function DeploymentConfirmDialog({
             <span className="code-browser-title-icon pp-confirm-icon" aria-hidden="true">
               <AlertTriangle />
             </span>
-            <h2 id="pp-confirm-title">{title ?? (isUpdate ? "确认更新" : "确认部署")}</h2>
+            <h2 id="pp-confirm-title">{title ?? (isUpdate ? t("projectPreview.confirm.updateTitle") : t("projectPreview.confirm.deployTitle"))}</h2>
           </div>
           <button
             type="button"
             className="code-browser-close"
             onClick={onCancel}
-            aria-label="关闭部署确认"
+            aria-label={t("projectPreview.confirm.closeLabel")}
           >
             <X aria-hidden="true" />
           </button>
@@ -305,16 +309,16 @@ function DeploymentConfirmDialog({
         <div className="pp-confirm-body">
           <p id="pp-confirm-description">
             {description ?? (isUpdate
-              ? "将更新并发布到当前云端 Runtime，过程可能需要几分钟。确定继续吗？"
-              : "将创建新的云端 Runtime，部署过程可能需要几分钟。确定继续吗？")}
+              ? t("projectPreview.confirm.updateDescription")
+              : t("projectPreview.confirm.deployDescription"))}
           </p>
         </div>
         <footer className="pp-confirm-actions">
           <button ref={cancelButtonRef} type="button" onClick={onCancel}>
-            取消
+            {t("common.cancel")}
           </button>
           <button type="button" className="is-primary" onClick={onConfirm}>
-            {confirmLabel ?? (isUpdate ? "确定更新" : "确定部署")}
+            {confirmLabel ?? (isUpdate ? t("projectPreview.confirm.update") : t("projectPreview.confirm.deploy"))}
           </button>
         </footer>
       </section>
@@ -332,6 +336,7 @@ function IdentityUserPoolSelect({
   disabled: boolean;
   onChange: (uid: string) => void;
 }) {
+  const { t } = useTranslation("ui");
   const [pools, setPools] = useState<IdentityUserPool[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -360,20 +365,20 @@ function IdentityUserPoolSelect({
         .sort((left, right) => Number(right.isCurrent) - Number(left.isCurrent))
         .map((pool) => ({
           value: pool.uid,
-          label: pool.name.trim() || "未命名用户池",
+          label: pool.name.trim() || t("projectPreview.userPool.unnamed"),
           description: pool.domain || pool.uid,
-          badge: pool.isCurrent ? "当前用户池" : undefined,
+          badge: pool.isCurrent ? t("projectPreview.userPool.current") : undefined,
         })),
-    [pools],
+    [pools, t],
   );
   const selectedPool = pools.find((pool) => pool.uid === value);
 
   return (
     <div className="pp-user-pool-picker">
       <DeploymentSelect
-        ariaLabel="部署用户池"
+        ariaLabel={t("projectPreview.userPool.ariaLabel")}
         value={value}
-        placeholder={loading ? "正在加载用户池…" : "请选择用户池"}
+        placeholder={loading ? t("projectPreview.userPool.loading") : t("projectPreview.userPool.placeholder")}
         options={options}
         disabled={disabled || loading || Boolean(error)}
         onChange={onChange}
@@ -382,48 +387,41 @@ function IdentityUserPoolSelect({
         <div className="pp-user-pool-error" role="alert">
           <span>{error}</span>
           <button type="button" onClick={() => setReloadKey((key) => key + 1)}>
-            重试
+            {t("common.retry")}
           </button>
         </div>
       ) : loading ? (
         <span className="pp-user-pool-status" aria-live="polite">
           <Loader2 aria-hidden="true" className="pp-user-pool-spinner" />
-          正在加载 Identity 用户池…
+          {t("projectPreview.userPool.loadingIdentity")}
         </span>
       ) : pools.length === 0 ? (
-        <span className="pp-user-pool-status">当前账号下暂无 Identity 用户池。</span>
+        <span className="pp-user-pool-status">{t("projectPreview.userPool.empty")}</span>
       ) : selectedPool?.isCurrent ? (
         <span className="pp-user-pool-status">
-          当前 Studio 的登录 JWT 将透传访问此 Runtime。
+          {t("projectPreview.userPool.currentHint")}
         </span>
       ) : selectedPool ? (
         <div className="pp-user-pool-error" role="alert">
           <span>
-            所选用户池不是当前 Studio 使用的用户池，部署后无法从 Studio
-            调用此 Runtime。
+            {t("projectPreview.userPool.mismatchHint")}
           </span>
         </div>
       ) : (
         <span className="pp-user-pool-status">
-          当前 Studio 使用的用户池已在列表中标注。
+          {t("projectPreview.userPool.markedHint")}
         </span>
       )}
     </div>
   );
 }
 
-const DEPLOYMENT_AUTHENTICATION_OPTIONS: DeploymentSelectOption[] = [
-  {
-    value: "api_key",
-    label: "API Key",
-    description: "默认方式，使用 Runtime API Key 访问",
-  },
-  {
-    value: "user_pool",
-    label: "用户池",
-    description: "使用 Identity 用户池签发的 JWT",
-  },
-];
+function deploymentAuthenticationOptions(t: TFunction): DeploymentSelectOption[] {
+  return [
+    { value: "api_key", label: "API Key", description: t("projectPreview.authentication.apiKeyDescription") },
+    { value: "user_pool", label: t("projectPreview.authentication.userPool"), description: t("projectPreview.authentication.userPoolDescription") },
+  ];
+}
 
 // --- syntax highlighting ----------------------------------------------------
 
@@ -523,29 +521,22 @@ export interface DeployResult {
 }
 
 /** The ordered deploy phases shown in the stepper (keys match DeployStage.phase). */
-const DEPLOY_STEPS: { phase: string; label: string }[] = [
-  { phase: "build", label: "构建镜像" },
-  { phase: "deploy", label: "部署" },
-  { phase: "publish", label: "发布" },
-];
-const GITHUB_SYNC_STEP = { phase: "github", label: "同步代码" };
+function deploySteps(t: TFunction): { phase: string; label: string }[] {
+  return [
+    { phase: "build", label: t("projectPreview.steps.buildImage") },
+    { phase: "deploy", label: t("projectPreview.steps.deploy") },
+    { phase: "publish", label: t("projectPreview.steps.publish") },
+  ];
+}
 
-const CODE_PACKAGE_DEPLOY_STEPS: { phase: string; label: string }[] = [
-  { phase: "upload", label: "上传代码包" },
-  { phase: "build", label: "镜像打包" },
-  { phase: "deploy", label: "创建 Runtime" },
-  { phase: "publish", label: "发布服务" },
-];
-
-const INSTANCE_UPDATE_STEP = {
-  phase: "update",
-  label: "更新实例配置",
-} as const;
-
-const EVALUATION_SET_STEP = {
-  phase: "evaluation",
-  label: "创建评测集",
-} as const;
+function codePackageDeploySteps(t: TFunction): { phase: string; label: string }[] {
+  return [
+    { phase: "upload", label: t("projectPreview.steps.uploadPackage") },
+    { phase: "build", label: t("projectPreview.steps.packageImage") },
+    { phase: "deploy", label: t("projectPreview.steps.createRuntime") },
+    { phase: "publish", label: t("projectPreview.steps.publishService") },
+  ];
+}
 
 function usesInMemorySession(agentDraft?: AgentDraft): boolean {
   if (!agentDraft) return false;
@@ -562,6 +553,7 @@ type RuntimeInstanceRangeValidation =
 function validateRuntimeInstanceRange(
   minValue: string,
   maxValue: string,
+  t: TFunction,
 ): RuntimeInstanceRangeValidation {
   const min = Number(minValue);
   const max = Number(maxValue);
@@ -575,11 +567,11 @@ function validateRuntimeInstanceRange(
   ) {
     return {
       valid: false,
-      error: "最小实例数必须为大于等于 0 的整数，最大实例数必须为大于 0 的整数。",
+      error: t("projectPreview.errors.instanceRangeInteger"),
     };
   }
   if (min > max) {
-    return { valid: false, error: "最小实例数不能大于最大实例数。" };
+    return { valid: false, error: t("projectPreview.errors.instanceRangeOrder") };
   }
   return { valid: true, min, max };
 }
@@ -620,6 +612,7 @@ export interface DeploymentTaskUpdate {
   phase?: string;
   label: string;
   message?: string;
+  messageCode?: string;
   pct?: number;
   buildLog?: DeployBuildLogSnapshot;
   /** Whether the detail progress card should include the GitHub delivery step. */
@@ -835,7 +828,7 @@ export function ProjectPreview({
   onDeploy,
   onAgentAdded,
   onDeploymentComplete,
-  deploymentActionLabel = "部署",
+  deploymentActionLabel: deploymentActionLabelProp,
   deploymentConfirmation,
   deploymentActionTargetId,
   deploymentRuntimeId,
@@ -865,11 +858,14 @@ export function ProjectPreview({
     aiAssisted: false,
   },
   onBack,
-  backLabel = "返回配置",
+  backLabel: backLabelProp,
   onExportYaml,
   deploymentPrimaryPane,
   deployDisabled = false,
 }: ProjectPreviewProps) {
+  const { t } = useTranslation("ui");
+  const deploymentActionLabel = deploymentActionLabelProp ?? t("projectPreview.deploy");
+  const backLabel = backLabelProp ?? t("projectPreview.backToConfiguration");
   const editable = typeof onChange === "function";
   const isRuntimeUpdate = Boolean(deploymentRuntimeId);
   const configuredRuntimeEnvKeySet = useMemo(
@@ -992,23 +988,23 @@ export function ProjectPreview({
     )
     .join("|");
   const previousDeployRegionRef = useRef(deployRegion);
-  const instanceRange = validateRuntimeInstanceRange(minInstance, maxInstance);
+  const instanceRange = validateRuntimeInstanceRange(minInstance, maxInstance, t);
   const needsInstanceUpdate =
     !isRuntimeUpdate &&
     instanceRange.valid &&
     (instanceRange.min !== 1 || instanceRange.max !== 5);
   const baseDeploymentSteps = deploymentPrimaryPane
-    ? CODE_PACKAGE_DEPLOY_STEPS
-    : DEPLOY_STEPS;
+    ? codePackageDeploySteps(t)
+    : deploySteps(t);
   const deploymentStepsWithInstanceUpdate = needsInstanceUpdate
-    ? [...baseDeploymentSteps, INSTANCE_UPDATE_STEP]
+    ? [...baseDeploymentSteps, { phase: "update", label: t("projectPreview.steps.updateInstances") }]
     : baseDeploymentSteps;
   const deploymentStepsBeforeGithub = effectiveCreateEvaluationSets
-    ? [...deploymentStepsWithInstanceUpdate, EVALUATION_SET_STEP]
+    ? [...deploymentStepsWithInstanceUpdate, { phase: "evaluation", label: t("projectPreview.steps.createEvaluationSets") }]
     : deploymentStepsWithInstanceUpdate;
   const deploymentSteps =
     (deploymentRuntimeId && githubCicdBinding?.pipelineId) || pendingGithubCicd
-      ? [...deploymentStepsBeforeGithub, GITHUB_SYNC_STEP]
+      ? [...deploymentStepsBeforeGithub, { phase: "github", label: t("projectPreview.steps.syncCode") }]
       : deploymentStepsBeforeGithub;
 
   function clearModelApiKeyReveal() {
@@ -1024,7 +1020,7 @@ export function ProjectPreview({
         status: "error",
         apiKeyId: "",
         value: "",
-        error: "请先在模型配置中选择 API Key。",
+        error: t("projectPreview.errors.selectApiKey"),
       });
       return;
     }
@@ -1063,7 +1059,7 @@ export function ProjectPreview({
         error:
           error instanceof Error
             ? error.message
-            : "加载 API Key 失败，请重试。",
+            : t("projectPreview.errors.loadApiKey"),
       });
     } finally {
       if (modelApiKeyRevealAbortRef.current === controller) {
@@ -1145,11 +1141,11 @@ export function ProjectPreview({
         if (event.key === "Escape") setRegionMenuOpen(false);
       }}
     >
-      {showLabel && <span>发布区域</span>}
+      {showLabel && <span>{t("projectPreview.releaseRegion")}</span>}
       <button
         type="button"
         className="pp-region-trigger"
-        aria-label="部署区域"
+        aria-label={t("projectPreview.deployRegion")}
         aria-haspopup="listbox"
         aria-expanded={regionMenuOpen}
         aria-describedby={isRuntimeUpdate ? deploymentRegionHelpId : undefined}
@@ -1164,7 +1160,7 @@ export function ProjectPreview({
       {regionMenuOpen && (
         <>
           <div className="menu-scrim" onClick={() => setRegionMenuOpen(false)} />
-          <div className="pp-region-menu" role="listbox" aria-label="部署区域">
+          <div className="pp-region-menu" role="listbox" aria-label={t("projectPreview.deployRegion")}>
             {deployRegionOptions.map((region) => {
               const selected = region.value === deployRegion;
               return (
@@ -1189,7 +1185,7 @@ export function ProjectPreview({
       )}
       {isRuntimeUpdate && (
         <span id={deploymentRegionHelpId} className="pp-region-help">
-          更新时沿用现有 Runtime 的部署区域，无法修改。
+          {t("projectPreview.regionPreserved")}
         </span>
       )}
     </div>
@@ -1244,7 +1240,7 @@ export function ProjectPreview({
 
   // Validate project structure AFTER all hooks
   if (!project || !Array.isArray(project.files)) {
-    return <div className="pp-error">项目数据无效</div>;
+    return <div className="pp-error">{t("projectPreview.errors.invalidProject")}</div>;
   }
 
   const selectedFile =
@@ -1274,14 +1270,14 @@ export function ProjectPreview({
   const modelApiKeyRevealVisible =
     currentModelApiKeyRevealState.status === "visible";
   const modelApiKeyRevealLabel = !selectedModelApiKeyId
-    ? "请先选择 API Key"
+    ? t("projectPreview.apiKey.selectFirst")
     : currentModelApiKeyRevealState.status === "loading"
-      ? "正在显示 API Key"
+      ? t("projectPreview.apiKey.revealing")
       : modelApiKeyRevealVisible
-        ? "隐藏 API Key"
+        ? t("projectPreview.apiKey.hide")
         : currentModelApiKeyRevealState.status === "error"
-          ? "重试显示 API Key"
-          : "显示 API Key";
+          ? t("projectPreview.apiKey.retryReveal")
+          : t("projectPreview.apiKey.reveal");
 
   function toggleFolder(key: string) {
     setCollapsed((prev) => {
@@ -1321,7 +1317,7 @@ export function ProjectPreview({
 
   function handleRename() {
     if (!selectedFile) return;
-    const next = window.prompt("重命名文件", selectedFile.path);
+    const next = window.prompt(t("projectPreview.files.renamePrompt"), selectedFile.path);
     const path = next?.trim();
     if (!path || path === selectedFile.path) return;
     if (project.files.some((f) => f.path === path)) return;
@@ -1421,7 +1417,9 @@ export function ProjectPreview({
     } catch (error) {
       if (mountedRef.current) {
         setDeployError(
-          `更新飞书配置失败：${error instanceof Error ? error.message : String(error)}`,
+          t("projectPreview.errors.updateFeishu", {
+            message: error instanceof Error ? error.message : String(error),
+          }),
         );
       }
     } finally {
@@ -1460,11 +1458,11 @@ export function ProjectPreview({
       authenticationType === "user_pool" &&
       !userPoolUid
     ) {
-      setDeployError("请选择用于 Runtime 鉴权的用户池。");
+      setDeployError(t("projectPreview.errors.userPoolRequired"));
       return;
     }
     if (networkMode !== "public" && !network?.vpcId?.trim()) {
-      setDeployError("使用 VPC 网络时，请填写 VPC ID。");
+      setDeployError(t("projectPreview.errors.vpcRequired"));
       return;
     }
     const missingSecret = requiredSecretEnv.find(
@@ -1472,7 +1470,7 @@ export function ProjectPreview({
     );
     if (missingSecret) {
       setSecretEnvErrorKey(missingSecret.key);
-      setDeployError(`请填写 ${missingSecret.label}，用于访问对应的自定义模型地址。`);
+      setDeployError(t("projectPreview.errors.modelSecretRequired", { label: missingSecret.label }));
       return;
     }
     setSecretEnvErrorKey(null);
@@ -1496,7 +1494,9 @@ export function ProjectPreview({
         missingEnvs.map((env) => [
           env.key,
           env.serverManaged
-            ? `${runtimeEnvRequirementHint(env)?.replace(/。$/, "") || env.comment || env.key}，请先返回模型配置选择 API Key。`
+            ? t("projectPreview.errors.managedApiKeyRequired", {
+                requirement: runtimeEnvRequirementHint(env)?.replace(/。$/, "") || env.comment || env.key,
+              })
             : runtimeEnvMissingError(env),
         ]),
       );
@@ -1524,7 +1524,7 @@ export function ProjectPreview({
       );
       if (missingFeishuEnv) {
         const env = FEISHU_ENV.find((item) => item.key === missingFeishuEnv.key);
-        setDeployError(`启用飞书后，请填写${env?.comment || env?.key}。`);
+        setDeployError(t("projectPreview.errors.feishuEnvRequired", { field: env?.comment || env?.key }));
         return;
       }
     }
@@ -1541,7 +1541,7 @@ export function ProjectPreview({
         if (!mountedRef.current) return;
         if (runtimeNameCheckKeyRef.current !== checkedKey) return;
         if (!result.available) {
-          const message = "Runtime 名称已存在，请修改后重试。";
+          const message = t("projectPreview.errors.runtimeNameExists");
           setRuntimeNameConflict({ key: checkedKey, message });
           setDeployError(message);
           return;
@@ -1594,7 +1594,7 @@ export function ProjectPreview({
       startedAt: taskStartedAt,
       status: "running",
       phase: "prepare",
-      label: "准备部署",
+      label: t("projectPreview.task.preparing"),
       agentDraft,
       githubDelivery: Boolean(pendingGithubCicd),
       instanceRange: needsInstanceUpdate
@@ -1608,6 +1608,7 @@ export function ProjectPreview({
     let latestGithubLog: DeployBuildLogSnapshot | undefined;
     let latestPhase = initialTask.phase ?? "prepare";
     let latestMessage = initialTask.message;
+    let latestMessageCode = initialTask.messageCode;
     const terminalBuildLog = (
       status: DeployBuildLogSnapshot["status"],
     ): DeployBuildLogSnapshot | undefined => (
@@ -1628,7 +1629,7 @@ export function ProjectPreview({
       lineCount: 0,
       truncated: false,
       updatedAt: Date.now(),
-      pendingMessage: "正在等待构建日志…",
+      pendingMessage: t("projectPreview.task.waitingBuildLog"),
     });
     const githubDeliveryLog = (
       line: string,
@@ -1643,7 +1644,7 @@ export function ProjectPreview({
         lineCount: text ? text.split("\n").length : 0,
         truncated: false,
         updatedAt: Date.now(),
-        pendingMessage: status === "running" ? "正在等待 GitHub 挂载日志…" : undefined,
+        pendingMessage: status === "running" ? t("projectPreview.task.waitingGithubLog") : undefined,
       };
       return latestGithubLog;
     };
@@ -1666,11 +1667,11 @@ export function ProjectPreview({
       let activeGithubBinding = githubCicdBinding;
       if (deploymentRuntimeId && githubCicdBinding?.pipelineId) {
         latestPhase = "github";
-        const githubLog = githubDeliveryLog("正在同步当前源码到 GitHub");
+        const githubLog = githubDeliveryLog(t("projectPreview.task.syncingGithub"));
         const githubSyncStage: DeployStage = {
           level: "info",
           phase: "github",
-          message: "正在同步当前源码到 GitHub",
+          message: t("projectPreview.task.syncingGithub"),
           pct: 0,
         };
         if (mountedRef.current) {
@@ -1686,7 +1687,7 @@ export function ProjectPreview({
           startedAt: taskStartedAt,
           status: "running",
           phase: "github",
-          label: "同步 GitHub 代码",
+          label: t("projectPreview.task.syncGithubCode"),
           message: githubSyncStage.message,
           pct: 0,
           githubDelivery: true,
@@ -1704,7 +1705,7 @@ export function ProjectPreview({
             github: {
               level: "success",
               phase: "github",
-              message: "GitHub 代码已同步",
+              message: t("projectPreview.task.githubSynced"),
               pct: 100,
             },
           }));
@@ -1720,12 +1721,12 @@ export function ProjectPreview({
             startedAt: taskStartedAt,
             status: "success",
             phase: "github",
-            label: "GitHub 代码已提交",
-            message: "代码已提交到 GitHub，GitHub Actions 正在更新同一个 Runtime",
+            label: t("projectPreview.task.githubSubmitted"),
+            message: t("projectPreview.task.githubUpdatingRuntime"),
             pct: 100,
             githubDelivery: true,
             githubLog: githubDeliveryLog(
-              "代码已提交到 GitHub，GitHub Actions 正在更新同一个 Runtime",
+              t("projectPreview.task.githubUpdatingRuntime"),
               "complete",
             ),
           });
@@ -1744,6 +1745,7 @@ export function ProjectPreview({
           }
           if (s.phase === nextPhase) {
             latestMessage = s.message;
+            latestMessageCode = s.messageCode;
           }
           latestPhase = nextPhase;
           if (mountedRef.current) {
@@ -1763,6 +1765,7 @@ export function ProjectPreview({
               deploymentSteps.find((step) => step.phase === latestPhase)?.label ??
               latestPhase,
             message: latestMessage,
+            messageCode: latestMessageCode,
             pct: s.pct,
             ...(latestBuildLog ? { buildLog: latestBuildLog } : {}),
           });
@@ -1804,11 +1807,11 @@ export function ProjectPreview({
         result.runtimeId
       ) {
         latestPhase = "github";
-        const githubLog = githubDeliveryLog("开始初始化 GitHub main 分支与 Actions workflow");
+        const githubLog = githubDeliveryLog(t("projectPreview.task.initializingGithub"));
         const githubAttachStage: DeployStage = {
           level: "info",
           phase: "github",
-          message: "正在初始化 GitHub 持续交付目标分支",
+          message: t("projectPreview.task.initializingGithubBranch"),
           pct: 0,
         };
         if (mountedRef.current) {
@@ -1824,7 +1827,7 @@ export function ProjectPreview({
           startedAt: taskStartedAt,
           status: "running",
           phase: "github",
-          label: "挂载 GitHub 持续交付",
+          label: t("projectPreview.task.mountGithubDelivery"),
           message: githubAttachStage.message,
           pct: 0,
           githubDelivery: true,
@@ -1854,7 +1857,7 @@ export function ProjectPreview({
               github: {
                 level: "success",
                 phase: "github",
-                message: "GitHub 持续交付已初始化目标分支",
+                message: t("projectPreview.task.githubBranchInitialized"),
                 pct: 100,
               },
             }));
@@ -1869,15 +1872,17 @@ export function ProjectPreview({
             startedAt: taskStartedAt,
             status: "running",
             phase: "github",
-            label: "GitHub 持续交付已挂载",
-            message: "GitHub 持续交付已初始化目标分支",
+            label: t("projectPreview.task.githubDeliveryMounted"),
+            message: t("projectPreview.task.githubBranchInitialized"),
             pct: 100,
             githubDelivery: true,
-            githubLog: githubDeliveryLog("GitHub 持续交付已初始化目标分支", "complete"),
+            githubLog: githubDeliveryLog(t("projectPreview.task.githubBranchInitialized"), "complete"),
           });
         } catch (error) {
           const githubLog = githubDeliveryLog(
-            `GitHub 持续交付挂载失败：${error instanceof Error ? error.message : String(error)}`,
+            t("projectPreview.task.githubMountFailedDetail", {
+              message: error instanceof Error ? error.message : String(error),
+            }),
             "error",
           );
           onDeploymentTaskChange?.({
@@ -1889,16 +1894,16 @@ export function ProjectPreview({
             startedAt: taskStartedAt,
             status: "error",
             phase: "github",
-            label: "挂载 GitHub 持续交付失败",
-            message: "挂载 GitHub 持续交付失败，详见 GitHub 日志。",
+            label: t("projectPreview.task.githubMountFailed"),
+            message: t("projectPreview.task.githubMountFailedHint"),
             pct: 100,
             githubDelivery: true,
             githubLog,
           });
           throw new Error(
-            `部署成功，但挂载 GitHub 持续交付失败：${
-              error instanceof Error ? error.message : String(error)
-            }`,
+            t("projectPreview.errors.deployedButGithubMountFailed", {
+              message: error instanceof Error ? error.message : String(error),
+            }),
           );
         }
       } else if (!deploymentRuntimeId && activeGithubBinding?.pipelineId && result.runtimeId) {
@@ -1914,9 +1919,9 @@ export function ProjectPreview({
         } catch (error) {
           if (mountedRef.current) {
             setDeployError(
-              `部署成功，但绑定 GitHub 失败：${
-                error instanceof Error ? error.message : String(error)
-              }`,
+              t("projectPreview.errors.deployedButGithubBindFailed", {
+                message: error instanceof Error ? error.message : String(error),
+              }),
             );
           }
         }
@@ -1937,8 +1942,8 @@ export function ProjectPreview({
         startedAt: taskStartedAt,
         status: "success",
         phase: "complete",
-        label: "部署完成",
-        message: result.warnings?.join("；"),
+        label: t("projectPreview.task.deploymentComplete"),
+        message: result.warnings?.join(t("environmentCenter.listSeparator")),
         githubDelivery: Boolean(pendingGithubCicd || latestGithubLog),
         ...(latestGithubLog ? { githubLog: latestGithubLog } : {}),
         ...terminalBuildLogUpdate("complete"),
@@ -1956,7 +1961,7 @@ export function ProjectPreview({
           startedAt: taskStartedAt,
           status: "success",
           phase: "complete",
-          label: "部署完成，暂未连接",
+          label: t("projectPreview.task.deployedNotConnected"),
           message: error.message,
           ...terminalBuildLogUpdate("complete"),
         });
@@ -1981,8 +1986,8 @@ export function ProjectPreview({
           region: deployRegion,
           startedAt: taskStartedAt,
           status: "cancelled",
-          label: "已取消",
-          message: "部署已取消，相关 Runtime 资源已请求销毁。",
+          label: t("projectPreview.task.cancelled"),
+          message: t("projectPreview.task.cancelledHint"),
           ...terminalBuildLogUpdate("complete"),
         });
         return;
@@ -2011,13 +2016,13 @@ export function ProjectPreview({
         startedAt: taskStartedAt,
         status: "error",
         phase: latestPhase,
-        label: buildStatusUnconfirmed ? "构建状态待确认" : "部署失败",
+        label: buildStatusUnconfirmed ? t("projectPreview.task.buildStatusUnconfirmed") : t("projectPreview.task.deploymentFailed"),
         message: buildStatusUnconfirmed
-          ? BUILD_STATUS_CONFIRMATION_ERROR_MESSAGE
+          ? t("projectPreview.errors.buildStatusUnconfirmed")
           : failedInBuild
-            ? "构建镜像失败，详见构建日志。"
+            ? t("projectPreview.task.buildFailedHint")
             : failedInGithub
-              ? "挂载 GitHub 持续交付失败，详见 GitHub 日志。"
+              ? t("projectPreview.task.githubMountFailedHint")
               : message,
         ...(buildLog ? { buildLog } : terminalBuildLogUpdate("complete")),
         ...(failedInGithub
@@ -2079,7 +2084,7 @@ export function ProjectPreview({
       }
 
       if (conn.apps.length === 0) {
-        setDeployError("连接成功，但该地址未发现任何 Agent（/list-apps 为空）。");
+        setDeployError(t("projectPreview.errors.noAgentAtEndpoint"));
       } else {
         const label = { [conn.apps[0]]: deployResult.agentName };
         const updatedConn = {
@@ -2103,12 +2108,14 @@ export function ProjectPreview({
           const agentId = remoteAppId(conn.id, conn.apps[0]);
           await onAgentAdded(agentId, deployResult.agentName);
         } else {
-          alert(`🎉 Agent "${deployResult.agentName}" 已添加到左上角下拉列表！`);
+          alert(t("projectPreview.agentAdded", { name: deployResult.agentName }));
         }
       }
     } catch (err) {
       setDeployError(
-        `添加 Agent 失败：${err instanceof Error ? err.message : String(err)}`,
+        t("projectPreview.errors.addAgent", {
+          message: err instanceof Error ? err.message : String(err),
+        }),
       );
     } finally {
       setAddingAgent(false);
@@ -2150,12 +2157,12 @@ export function ProjectPreview({
   const artifactActions = (
     <div
       className={`pp-artifact-actions${embedded ? " is-rail" : ""}`}
-      aria-label="发布产物操作"
+      aria-label={t("projectPreview.artifactActions")}
     >
       {onExportYaml && (
         <button type="button" className="pp-secondary" onClick={onExportYaml}>
           <FileDown className="pp-ic" />
-          导出 YAML
+          {t("projectPreview.exportYaml")}
         </button>
       )}
       {editable && onChange && (
@@ -2163,7 +2170,7 @@ export function ProjectPreview({
           project={project}
           onChange={onChange}
           className="pp-artifact-source"
-          label="查看源代码"
+          label={t("projectPreview.viewSource")}
         />
       )}
       {project.files.length > 0 && (
@@ -2173,7 +2180,7 @@ export function ProjectPreview({
           onClick={handleDownloadZip}
         >
           <Download className="pp-ic" />
-          下载源代码
+          {t("projectPreview.downloadSource")}
         </button>
       )}
     </div>
@@ -2234,8 +2241,12 @@ export function ProjectPreview({
                 </button>
               )}
               <span className="pp-toolbar-title">
-                部署 {agentName || project.name || "未命名 Agent"}
-                {agentCount && agentCount > 1 ? ` 等 ${agentCount} 个智能体` : ""}
+                {t("projectPreview.deployTitle", {
+                  name: agentName || project.name || t("projectPreview.unnamedAgent"),
+                })}
+                {agentCount && agentCount > 1
+                  ? t("projectPreview.additionalAgentCount", { count: agentCount })
+                  : ""}
               </span>
             </div>
           }
@@ -2245,7 +2256,7 @@ export function ProjectPreview({
 
       <div className="pp-body">
         {onDeploy && !deploymentPrimaryPane && (
-          <section className="pp-release-overview" aria-label="发布概览">
+          <section className="pp-release-overview" aria-label={t("projectPreview.releaseOverview")}>
             <div className={`pp-release-preview${embedded ? " is-embedded" : ""}`}>
               <div className="pp-flow-thumbnail">
                 {agentDraft && (
@@ -2265,8 +2276,8 @@ export function ProjectPreview({
                   type="button"
                   className="pp-flow-expand"
                   onClick={() => setFlowPreviewOpen(true)}
-                  aria-label="放大查看执行流程"
-                  title="放大查看"
+                  aria-label={t("projectPreview.expandFlow")}
+                  title={t("projectPreview.expand")}
                 >
                   <Maximize2 aria-hidden />
                 </button>
@@ -2274,10 +2285,10 @@ export function ProjectPreview({
               {embedded && artifactActions}
               {!embedded && (
                 <div className="pp-release-info">
-                <div className="pp-release-card-head">Agent 概览</div>
+                <div className="pp-release-card-head">{t("projectPreview.agentOverview")}</div>
                 <div className="pp-release-info-body">
                   <div className="pp-release-info-main">
-                    <h2>{agentName || project.name || "未命名 Agent"}</h2>
+                    <h2>{agentName || project.name || t("projectPreview.unnamedAgent")}</h2>
                     {agentDraft?.description && (
                       <p
                         className="pp-release-description"
@@ -2288,56 +2299,56 @@ export function ProjectPreview({
                     )}
                     <dl className="pp-release-facts">
                     <div>
-                      <dt>Agent 数量</dt>
+                      <dt>{t("projectPreview.agentCount")}</dt>
                       <dd>{agentCount ?? 1}</dd>
                     </div>
                     {releaseConfiguration && (
                       <>
                         <div>
-                          <dt>模型</dt>
+                          <dt>{t("projectPreview.model")}</dt>
                           <dd>{releaseConfiguration.modelName}</dd>
                         </div>
                         <div>
-                          <dt>描述</dt>
+                          <dt>{t("common.description")}</dt>
                           <dd className="pp-release-fact-long">
                             {releaseConfiguration.description}
                           </dd>
                         </div>
                         <div>
-                          <dt>系统提示词</dt>
+                          <dt>{t("projectPreview.systemPrompt")}</dt>
                           <dd className="pp-release-fact-long pp-release-prompt">
                             {releaseConfiguration.instruction}
                           </dd>
                         </div>
                         <div>
-                          <dt>优化选项</dt>
+                          <dt>{t("projectPreview.optimizations")}</dt>
                           <dd>
                             {releaseConfiguration.optimizations.length > 0
-                              ? releaseConfiguration.optimizations.join("、")
-                              : "未启用"}
+                              ? releaseConfiguration.optimizations.join(t("environmentCenter.listSeparator"))
+                              : t("projectPreview.notEnabled")}
                           </dd>
                         </div>
                         {releaseConfiguration.effectiveOptimizations &&
                           releaseConfiguration.effectiveOptimizations.length > 0 && (
                             <div>
-                              <dt>生效能力</dt>
+                              <dt>{t("projectPreview.effectiveCapabilities")}</dt>
                               <dd>
-                                {releaseConfiguration.effectiveOptimizations.join("、")}
+                                {releaseConfiguration.effectiveOptimizations.join(t("environmentCenter.listSeparator"))}
                               </dd>
                             </div>
                           )}
                         {releaseConfiguration.autoAddedOptimizations &&
                           releaseConfiguration.autoAddedOptimizations.length > 0 && (
                             <div>
-                              <dt>自动保护</dt>
+                              <dt>{t("projectPreview.automaticProtection")}</dt>
                               <dd>
-                                {releaseConfiguration.autoAddedOptimizations.join("、")}
+                                {releaseConfiguration.autoAddedOptimizations.join(t("environmentCenter.listSeparator"))}
                               </dd>
                             </div>
                           )}
                         {releaseConfiguration.planHash && (
                           <div>
-                            <dt>Plan Hash</dt>
+                            <dt>{t("projectPreview.planHash")}</dt>
                             <dd className="pp-release-fact-long">
                               {releaseConfiguration.planHash}
                             </dd>
@@ -2358,13 +2369,13 @@ export function ProjectPreview({
           <div className="pp-sidebar">
             <div className="pp-sidebar-head">
               <span className="pp-project-name" title={project.name}>
-                文件预览
+                {t("projectPreview.files.preview")}
               </span>
               {editable && (
                 <button
                   type="button"
                   className="pp-icon-btn"
-                  title="新建文件"
+                  title={t("projectPreview.files.new")}
                   onClick={() => {
                     setAdding(true);
                     setNewPath("");
@@ -2393,7 +2404,7 @@ export function ProjectPreview({
                 />
               )}
               {project.files.length === 0 && !adding ? (
-                <div className="pp-empty">暂无文件</div>
+                <div className="pp-empty">{t("projectPreview.files.empty")}</div>
               ) : (
                 renderNode(tree, 0, "")
               )}
@@ -2403,7 +2414,7 @@ export function ProjectPreview({
           <div className="pp-main">
             <div className="pp-main-head">
               <span className="pp-path" title={selectedFile?.path}>
-                {selectedFile?.path ?? "未选择文件"}
+                {selectedFile?.path ?? t("projectPreview.files.noneSelected")}
               </span>
               <div className="pp-actions">
                 {editable && selectedFile && (
@@ -2411,7 +2422,7 @@ export function ProjectPreview({
                     <button
                       type="button"
                       className="pp-icon-btn"
-                      title="重命名"
+                      title={t("projectPreview.files.rename")}
                       onClick={handleRename}
                     >
                       <Pencil className="pp-ic" />
@@ -2419,7 +2430,7 @@ export function ProjectPreview({
                     <button
                       type="button"
                       className="pp-icon-btn pp-danger"
-                      title="删除"
+                      title={t("common.delete")}
                       onClick={handleDelete}
                     >
                       <Trash2 className="pp-ic" />
@@ -2430,10 +2441,10 @@ export function ProjectPreview({
             </div>
             <div className="pp-content">
               {selectedFile == null ? (
-                <div className="pp-placeholder">选择左侧文件以查看内容</div>
+                <div className="pp-placeholder">{t("projectPreview.files.selectToView")}</div>
               ) : editable ? (
                 <div className="pp-codemirror">
-                  <Suspense fallback={<div className="pp-editor-loading">加载编辑器…</div>}>
+                  <Suspense fallback={<div className="pp-editor-loading">{t("projectPreview.files.loadingEditor")}</div>}>
                     <CodeEditor
                       value={selectedFile.content}
                       path={selectedFile.path}
@@ -2454,9 +2465,9 @@ export function ProjectPreview({
         </div>
 
         {onDeploy && (
-          <aside className="pp-config" aria-label="部署配置">
+          <aside className="pp-config" aria-label={t("projectPreview.deploymentConfiguration")}>
             <div className="pp-config-head">
-              <div className="pp-config-title">部署配置</div>
+              <div className="pp-config-title">{t("projectPreview.deploymentConfiguration")}</div>
             </div>
             <div className="pp-config-scroll">
               {deploymentPrimaryPane}
@@ -2464,7 +2475,7 @@ export function ProjectPreview({
               {!deploymentPrimaryPane && (
                 <section className="pp-config-section">
                   <label className="pp-config-label" htmlFor={runtimeNameInputId}>
-                    Runtime 名称
+                    {t("projectPreview.runtimeName")}
                   </label>
                   <div className="pp-runtime-name-field">
                     <input
@@ -2474,7 +2485,7 @@ export function ProjectPreview({
                       disabled={deploying || runtimeNameChecking || isRuntimeUpdate}
                       maxLength={64}
                       autoComplete="off"
-                      aria-label="Runtime 名称"
+                      aria-label={t("projectPreview.runtimeName")}
                       aria-invalid={Boolean(runtimeNameError)}
                       aria-describedby={`${runtimeNameHelpId}${runtimeNameError ? ` ${runtimeNameErrorId}` : ""}`}
                       onChange={(event) => {
@@ -2490,8 +2501,8 @@ export function ProjectPreview({
                     />
                     <p id={runtimeNameHelpId} className="pp-config-note">
                       {isRuntimeUpdate
-                        ? "更新时保持现有 Runtime 名称不变。"
-                        : "默认根据 Root Agent 名称生成，并添加随机后缀避免重名；支持 4-64 位字母、数字、连字符和下划线"}
+                        ? t("projectPreview.runtimeNamePreserved")
+                        : t("projectPreview.runtimeNameHint")}
                     </p>
                     {runtimeNameError && (
                       <p
@@ -2508,7 +2519,7 @@ export function ProjectPreview({
 
               {!deploymentPrimaryPane && (
                 <section className="pp-config-section">
-                  <div className="pp-config-label">发布区域</div>
+                  <div className="pp-config-label">{t("projectPreview.releaseRegion")}</div>
                   {deploymentRegionPicker(false)}
                 </section>
               )}
@@ -2516,20 +2527,20 @@ export function ProjectPreview({
               {!deploymentPrimaryPane && (
                 <>
                 <section className="pp-config-section pp-auth-section">
-                  <div className="pp-config-label">访问鉴权</div>
+                  <div className="pp-config-label">{t("projectPreview.accessAuthentication")}</div>
                   {isRuntimeUpdate ? (
                     <p className="pp-config-note pp-auth-preserved-note">
-                      更新时保持现有 Runtime 的鉴权方式不变。
+                      {t("projectPreview.authenticationPreserved")}
                     </p>
                   ) : (
                     <div className="pp-auth-fields">
                       <label>
-                        <span>鉴权方式</span>
+                        <span>{t("projectPreview.authenticationMethod")}</span>
                         <DeploymentSelect
-                          ariaLabel="部署鉴权方式"
+                          ariaLabel={t("projectPreview.authenticationAriaLabel")}
                           value={authenticationType}
-                          placeholder="请选择鉴权方式"
-                          options={DEPLOYMENT_AUTHENTICATION_OPTIONS}
+                          placeholder={t("projectPreview.authenticationPlaceholder")}
+                          options={deploymentAuthenticationOptions(t)}
                           disabled={deploying}
                           onChange={(value) => {
                             setDeployError(null);
@@ -2541,7 +2552,7 @@ export function ProjectPreview({
                       </label>
                       {authenticationType === "user_pool" && (
                         <label>
-                          <span>用户池</span>
+                          <span>{t("projectPreview.userPool.label")}</span>
                           <IdentityUserPoolSelect
                             value={userPoolUid}
                             disabled={deploying}
@@ -2576,7 +2587,7 @@ export function ProjectPreview({
 
               {!deploymentPrimaryPane && (
                 <section className="pp-config-section">
-                <div className="pp-config-label">消息渠道</div>
+                <div className="pp-config-label">{t("projectPreview.messageChannels")}</div>
                 <FeishuDeploymentCard
                   enabled={feishuEnabled}
                   updating={feishuUpdating}
@@ -2605,10 +2616,10 @@ export function ProjectPreview({
 
               {!isRuntimeUpdate && (
                 <section className="pp-config-section">
-                  <div className="pp-config-label">实例设置</div>
+                  <div className="pp-config-label">{t("projectPreview.instanceSettings")}</div>
                   <div className="pp-instance-fields">
                     <label htmlFor="runtime-min-instance">
-                      <span>最小实例数</span>
+                      <span>{t("projectPreview.minInstances")}</span>
                       <input
                         id="runtime-min-instance"
                         type="number"
@@ -2622,7 +2633,7 @@ export function ProjectPreview({
                       />
                     </label>
                     <label htmlFor="runtime-max-instance">
-                      <span>最大实例数</span>
+                      <span>{t("projectPreview.maxInstances")}</span>
                       <input
                         id="runtime-max-instance"
                         type="number"
@@ -2639,8 +2650,8 @@ export function ProjectPreview({
                   {(inMemorySession || sidecarEnabled) && (
                     <p className="pp-instance-note" role="note">
                       {sidecarEnabled
-                        ? "Harness Sidecar 首期仅支持单实例，Runtime 固定为 1～1"
-                        : "为避免多实例间会话丢失，推荐将 Runtime 固定为 1～1"}
+                        ? t("projectPreview.sidecarSingleInstance")
+                        : t("projectPreview.inMemorySingleInstance")}
                     </p>
                   )}
                   {!instanceRange.valid && (
@@ -2652,13 +2663,13 @@ export function ProjectPreview({
               )}
 
               <section className="pp-config-section">
-                <div className="pp-config-label">网络</div>
+                <div className="pp-config-label">{t("projectPreview.network")}</div>
                 {deploymentPrimaryPane && deploymentRegionPicker(true)}
                 {isRuntimeUpdate && (
-                  <p className="pp-config-note">现有 Runtime 的区域与网络模式保持不变。</p>
+                  <p className="pp-config-note">{t("projectPreview.networkPreserved")}</p>
                 )}
                 <div className="pp-network-layout">
-                  <div className="pp-network-modes" role="radiogroup" aria-label="网络模式">
+                  <div className="pp-network-modes" role="radiogroup" aria-label={t("projectPreview.networkMode")}>
                     {(["public", "private", "both"] as const).map((mode) => (
                       <label className="pp-network-option" key={mode}>
                         <input
@@ -2671,10 +2682,10 @@ export function ProjectPreview({
                         />
                         <span>
                           {mode === "public"
-                            ? "公网"
+                            ? t("projectPreview.networkModes.public")
                             : mode === "private"
                               ? "VPC"
-                              : "公网 + VPC"}
+                              : t("projectPreview.networkModes.both")}
                         </span>
                       </label>
                     ))}
@@ -2691,7 +2702,7 @@ export function ProjectPreview({
                         />
                       </label>
                       <label>
-                        <span>子网 ID <small>可选，多个用逗号分隔</small></span>
+                        <span>{t("projectPreview.subnetId")} <small>{t("projectPreview.subnetHint")}</small></span>
                         <input
                           value={network?.subnetIds ?? ""}
                           placeholder="subnet-xxx, subnet-yyy"
@@ -2708,7 +2719,7 @@ export function ProjectPreview({
                             patchNetwork({ enableSharedInternetAccess: e.target.checked })
                           }
                         />
-                        VPC 内共享公网出口
+                        {t("projectPreview.sharedInternetAccess")}
                       </label>
                     </div>
                   )}
@@ -2717,7 +2728,7 @@ export function ProjectPreview({
 
               {supportsEvaluationSets && (
                 <section className="pp-config-section">
-                  <div className="pp-config-label">评测集</div>
+                  <div className="pp-config-label">{t("projectPreview.evaluationSets")}</div>
                   <label className="pp-evaluation-set-option">
                     <input
                       type="checkbox"
@@ -2728,9 +2739,9 @@ export function ProjectPreview({
                       }
                     />
                     <span>
-                      <strong>自动创建评测集</strong>
+                      <strong>{t("projectPreview.createEvaluationSets")}</strong>
                       <small>
-                        部署成功后，自动创建 Good Case 和 Bad Case 评测集。
+                        {t("projectPreview.createEvaluationSetsHint")}
                       </small>
                     </span>
                   </label>
@@ -2739,7 +2750,7 @@ export function ProjectPreview({
 
               {!isRuntimeUpdate && (
                 <section className="pp-config-section pp-resource-section">
-                  <div className="pp-config-label">资源配置</div>
+                  <div className="pp-config-label">{t("projectPreview.resourceConfiguration")}</div>
                   <DeploymentResources
                     value={deployResources}
                     agentName={agentName || project.name || "agentkit-app"}
@@ -2759,13 +2770,13 @@ export function ProjectPreview({
                 <div className="pp-env-head">
                   <div>
                     <div className="pp-config-label">
-                      环境变量
+                      {t("projectPreview.environmentVariables")}
                       <span className="pp-agent-child-count pp-env-count">
-                        {environmentVariableCount} 项
+                        {t("projectPreview.itemCount", { count: environmentVariableCount })}
                       </span>
                     </div>
                     <div className="pp-env-sub">
-                      组件配置会自动同步到这里，部署前可核对最终值。
+                      {t("projectPreview.environmentVariablesHint")}
                     </div>
                   </div>
                 </div>
@@ -2776,7 +2787,7 @@ export function ProjectPreview({
                   disabled={deploying}
                 >
                   <Plus className="pp-ic" />
-                  添加变量
+                  {t("projectPreview.addVariable")}
                 </button>
                 {(automaticEnvRows.length > 0 ||
                   requiredSecretEnv.length > 0 ||
@@ -2785,8 +2796,8 @@ export function ProjectPreview({
                     {automaticEnvRows.length > 0 && (
                       <div className="pp-env-group">
                         <div className="pp-env-group-head">
-                          <span>组件自动生成</span>
-                          <small>{automaticEnvRows.length} 项</small>
+                          <span>{t("projectPreview.componentGenerated")}</span>
+                          <small>{t("projectPreview.itemCount", { count: automaticEnvRows.length })}</small>
                         </div>
                         {automaticEnvRows.map((row) => {
                           const fixed =
@@ -2797,7 +2808,7 @@ export function ProjectPreview({
                           const displayedValue = serverManagedModelApiKey
                             ? modelApiKeyRevealVisible
                               ? currentModelApiKeyRevealState.value
-                              : "由所选 API Key 注入"
+                              : t("projectPreview.injectedByApiKey")
                             : row.value;
                           const jsonError = runtimeEnvJsonError(
                             row,
@@ -2817,7 +2828,7 @@ export function ProjectPreview({
                             >
                               <div
                                 className="pp-env-key-fixed pp-env-key-cell"
-                                aria-label={`${row.key} 环境变量名`}
+                                aria-label={t("projectPreview.envNameAriaLabel", { key: row.key })}
                                 aria-disabled={deploying}
                               >
                                 <span title={row.key}>{row.key}</span>
@@ -2826,7 +2837,7 @@ export function ProjectPreview({
                                     className="pp-env-help"
                                     tabIndex={0}
                                     data-help={helpText}
-                                    aria-label={`${row.key}说明：${helpText}`}
+                                    aria-label={t("projectPreview.envDescriptionAriaLabel", { key: row.key, description: helpText })}
                                   >
                                     ?
                                     <span className="pp-env-help-popover" role="tooltip">
@@ -2840,8 +2851,8 @@ export function ProjectPreview({
                                     href={row.link.url}
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    title={`打开 OpenViking ${row.link.label}`}
-                                    aria-label={`${row.key}：打开 OpenViking ${row.link.label}`}
+                                    title={t("projectPreview.openOpenViking", { label: row.link.label })}
+                                    aria-label={t("projectPreview.openOpenVikingAriaLabel", { key: row.key, label: row.link.label })}
                                   >
                                     <ExternalLink aria-hidden="true" />
                                   </a>
@@ -2865,8 +2876,8 @@ export function ProjectPreview({
                                     placeholder={
                                       row.placeholder ||
                                       (row.required
-                                        ? "必填，尚未填写"
-                                        : "可选，尚未填写")
+                                        ? t("projectPreview.requiredEmpty")
+                                        : t("projectPreview.optionalEmpty"))
                                     }
                                     readOnly={fixed}
                                     disabled={
@@ -2878,7 +2889,7 @@ export function ProjectPreview({
                                     aria-describedby={
                                       fieldError ? errorId : undefined
                                     }
-                                    aria-label={`${row.key} 环境变量值`}
+                                    aria-label={t("projectPreview.envValueAriaLabel", { key: row.key })}
                                     onChange={(event) => {
                                       const value = event.currentTarget.value;
                                       onDeploymentEnvChange?.(
@@ -2924,8 +2935,8 @@ export function ProjectPreview({
                                       placeholder={
                                         row.placeholder ||
                                         (row.required
-                                          ? "必填，尚未填写"
-                                          : "可选，尚未填写")
+                                          ? t("projectPreview.requiredEmpty")
+                                          : t("projectPreview.optionalEmpty"))
                                       }
                                       readOnly={fixed}
                                       disabled={
@@ -2940,7 +2951,7 @@ export function ProjectPreview({
                                       aria-describedby={
                                         fieldError ? errorId : undefined
                                       }
-                                      aria-label={`${row.key} 环境变量值`}
+                                      aria-label={t("projectPreview.envValueAriaLabel", { key: row.key })}
                                       onChange={(event) => {
                                         const value = event.currentTarget.value;
                                         onDeploymentEnvChange?.(
@@ -3011,7 +3022,7 @@ export function ProjectPreview({
                                   )}
                               </div>
                               <span className="pp-env-source">
-                                {fixed ? "自动" : "同步"}
+                                {fixed ? t("projectPreview.automatic") : t("projectPreview.synced")}
                               </span>
                             </div>
                           );
@@ -3021,8 +3032,8 @@ export function ProjectPreview({
                     {requiredSecretEnv.length > 0 && (
                       <div className="pp-env-group">
                         <div className="pp-env-group-head">
-                          <span>自定义模型凭据</span>
-                          <small>{requiredSecretEnv.length} 项</small>
+                          <span>{t("projectPreview.customModelCredentials")}</span>
+                          <small>{t("projectPreview.itemCount", { count: requiredSecretEnv.length })}</small>
                         </div>
                         {requiredSecretEnv.map((env) => {
                           const invalid = secretEnvErrorKey === env.key;
@@ -3045,7 +3056,7 @@ export function ProjectPreview({
                                   className="pp-env-value"
                                   type="password"
                                   value={effectiveSecretEnvValues[env.key] ?? ""}
-                                  placeholder="必填，仅用于本次发布"
+                                  placeholder={t("projectPreview.releaseOnlySecret")}
                                   disabled={deploying}
                                   autoComplete="new-password"
                                   spellCheck={false}
@@ -3074,11 +3085,11 @@ export function ProjectPreview({
                                     className="pp-env-error"
                                     role="alert"
                                   >
-                                    请填写此模型地址对应的 API Key。
+                                    {t("projectPreview.errors.modelApiKeyRequired")}
                                   </span>
                                 )}
                               </div>
-                              <span className="pp-env-source">本次发布</span>
+                              <span className="pp-env-source">{t("projectPreview.thisRelease")}</span>
                             </div>
                           );
                         })}
@@ -3086,15 +3097,15 @@ export function ProjectPreview({
                     )}
                     {envRows.length > 0 && (
                       <div className="pp-env-group-head pp-env-group-head-custom">
-                        <span>自定义变量</span>
-                        <small>{envRows.length} 项</small>
+                        <span>{t("projectPreview.customVariables")}</span>
+                        <small>{t("projectPreview.itemCount", { count: envRows.length })}</small>
                       </div>
                     )}
                     {envRows.map((row) => (
                       <div className="pp-env-row" key={row.id}>
                         <input
                           value={row.key}
-                          placeholder="名称"
+                          placeholder={t("common.name")}
                           disabled={deploying}
                           autoComplete="off"
                           onChange={(e) => updateEnvRow(row.id, { key: e.currentTarget.value })}
@@ -3102,7 +3113,7 @@ export function ProjectPreview({
                         <input
                           type="text"
                           value={row.value}
-                          placeholder="值"
+                          placeholder={t("projectPreview.value")}
                           disabled={deploying}
                           autoComplete="off"
                           onChange={(e) => updateEnvRow(row.id, { value: e.currentTarget.value })}
@@ -3110,7 +3121,7 @@ export function ProjectPreview({
                         <button
                           type="button"
                           className="pp-icon-btn pp-env-remove"
-                          title="删除变量"
+                          title={t("projectPreview.deleteVariable")}
                           disabled={deploying}
                           onClick={() => removeEnvRow(row.id)}
                         >
@@ -3124,7 +3135,7 @@ export function ProjectPreview({
 
               {(deploying || deployResult || Object.keys(stageMap).length > 0) && (
                 <section className="pp-config-section pp-progress-section">
-                  <div className="pp-config-label">部署进度</div>
+                  <div className="pp-config-label">{t("projectPreview.deploymentProgress")}</div>
                   <ol className="pp-steps">
                     {deploymentSteps.map((step, index) => {
                       const activeIndex = activePhase
@@ -3158,7 +3169,7 @@ export function ProjectPreview({
                             <span className="pp-step-label">{step.label}</span>
                             {status === "active" && frame?.message && (
                               <span className="pp-step-msg">
-                                {frame.message}
+                                {localizeDeployStageMessage(frame)}
                                 {typeof frame.pct === "number" ? ` (${frame.pct}%)` : ""}
                               </span>
                             )}
@@ -3175,14 +3186,18 @@ export function ProjectPreview({
                   className="pp-error"
                   message={
                     deployError === BUILD_STATUS_CONFIRMATION_ERROR_MESSAGE
-                      ? `构建状态待确认：${deployError}`
-                      : `${activePhase
-                          ? `${isRuntimeUpdate ? "更新" : "部署"}失败（${
-                              deploymentSteps.find(
-                                (step) => step.phase === activePhase,
-                              )?.label ?? activePhase
-                            }阶段）：`
-                          : ""}${deployError}`
+                      ? t("projectPreview.errors.buildStatusUnconfirmedWithDetail", {
+                          message: t("projectPreview.errors.buildStatusUnconfirmed"),
+                        })
+                      : activePhase
+                        ? t("projectPreview.errors.failedAtStage", {
+                            action: isRuntimeUpdate ? t("projectPreview.update") : t("projectPreview.deploy"),
+                            stage: deploymentSteps.find(
+                              (step) => step.phase === activePhase,
+                            )?.label ?? activePhase,
+                            message: deployError,
+                          })
+                        : deployError
                   }
                   onRetry={
                     deployError === BUILD_STATUS_CONFIRMATION_ERROR_MESSAGE
@@ -3190,7 +3205,7 @@ export function ProjectPreview({
                       : requestDeploymentConfirmation
                   }
                   retryLabel={
-                    isRuntimeUpdate ? "重试更新" : "重试部署"
+                    isRuntimeUpdate ? t("projectPreview.retryUpdate") : t("projectPreview.retryDeploy")
                   }
                 />
               )}
@@ -3198,7 +3213,7 @@ export function ProjectPreview({
               {deployResult && (
                 <section className="pp-deploy-result">
                   <div className="pp-deploy-result-header">
-                    {isRuntimeUpdate ? "更新成功" : "部署成功"}
+                    {isRuntimeUpdate ? t("projectPreview.updateSucceeded") : t("projectPreview.deploySucceeded")}
                   </div>
                   <div className="pp-deploy-result-body">
                     {deployResult.warnings && deployResult.warnings.length > 0 && (
@@ -3210,22 +3225,22 @@ export function ProjectPreview({
                     )}
                     {deployResult.region && (
                       <div className="pp-deploy-result-field">
-                        <label>区域</label>
+                        <label>{t("projectPreview.region")}</label>
                         <code>
                           {formatCloudRegion(deployResult.region, cloudProvider)}
                         </code>
                       </div>
                     )}
                     <div className="pp-deploy-result-field">
-                      <label>Agent 名称</label>
+                      <label>{t("projectPreview.agentName")}</label>
                       <code>{deployResult.agentName}</code>
                     </div>
                     <div className="pp-deploy-result-field">
-                      <label>Runtime 名称</label>
+                      <label>{t("projectPreview.runtimeName")}</label>
                       <code>{deployResult.runtimeName}</code>
                     </div>
                     <div className="pp-deploy-result-field">
-                      <label>API 端点</label>
+                      <label>{t("projectPreview.apiEndpoint")}</label>
                       <code className="pp-deploy-result-url">{deployResult.url}</code>
                     </div>
                   </div>
@@ -3241,7 +3256,7 @@ export function ProjectPreview({
                       ) : (
                         <MessageSquare className="pp-ic" />
                       )}
-                      {addingAgent ? "连接中…" : "立即对话"}
+                      {addingAgent ? t("projectPreview.connecting") : t("projectPreview.chatNow")}
                     </button>
                     {deployResult.consoleUrl && (
                       <a
@@ -3251,7 +3266,7 @@ export function ProjectPreview({
                         className="pp-console-link pp-console-link-btn"
                       >
                         <ExternalLink className="pp-ic" />
-                        控制台
+                        {t("projectPreview.console")}
                       </a>
                     )}
                   </div>
@@ -3278,11 +3293,11 @@ export function ProjectPreview({
                       title={deployDisabledReason || runtimeNameError || undefined}
                     >
                       {deploying
-                        ? `${deploymentActionLabel}中…`
+                        ? t("projectPreview.actionInProgress", { action: deploymentActionLabel })
                         : runtimeNameChecking
-                          ? "正在检查名称…"
+                          ? t("projectPreview.checkingName")
                         : deployError
-                          ? `重试${deploymentActionLabel}`
+                          ? t("projectPreview.retryAction", { action: deploymentActionLabel })
                           : deploymentActionLabel}
                     </button>,
                     deploymentActionTarget,
@@ -3303,11 +3318,11 @@ export function ProjectPreview({
                 title={deployDisabledReason || runtimeNameError || undefined}
               >
                 {deploying
-                  ? `${deploymentActionLabel}中…`
+                  ? t("projectPreview.actionInProgress", { action: deploymentActionLabel })
                   : runtimeNameChecking
-                    ? "正在检查名称…"
+                    ? t("projectPreview.checkingName")
                   : deployError
-                    ? `重试${deploymentActionLabel}`
+                    ? t("projectPreview.retryAction", { action: deploymentActionLabel })
                     : deploymentActionLabel}
               </button>
                   )}
@@ -3329,17 +3344,17 @@ export function ProjectPreview({
               className="pp-flow-dialog"
               role="dialog"
               aria-modal="true"
-              aria-label="执行流程预览"
+              aria-label={t("projectPreview.flowPreview")}
             >
               <header>
                 <div>
-                  <strong>执行流程</strong>
-                  <span>只读预览，可缩放与拖动画布</span>
+                  <strong>{t("projectPreview.executionFlow")}</strong>
+                  <span>{t("projectPreview.flowPreviewHint")}</span>
                 </div>
                 <button
                   type="button"
                   onClick={() => setFlowPreviewOpen(false)}
-                  aria-label="关闭执行流程预览"
+                  aria-label={t("projectPreview.closeFlowPreview")}
                 >
                   <X aria-hidden />
                 </button>

@@ -1,0 +1,199 @@
+{
+  "compactSelect": {
+    "loading": "Loading…",
+    "searchLabel": "Search {{label}}",
+    "searchPlaceholder": "Search {{label}}",
+    "retry": "Retry",
+    "noMatches": "No matches",
+    "noOptions": "No options available",
+    "selection": "{{label}}: {{value}}"
+  },
+  "featureNotice": {
+    "badge": "All new",
+    "view": "See what's new",
+    "title": "What's new",
+    "defaultNotes": {
+      "multiRegion": "Multi-region agents: load Beijing and Shanghai Runtimes in parallel, with more available as you scroll.",
+      "switchAgent": "Switch in conversation: choose an agent beside the composer and start a new conversation immediately.",
+      "visualCanvas": "Visual execution canvas: inspect multi-agent structures on a horizontal canvas with fullscreen support."
+    }
+  },
+  "workspace": {
+    "label": "New conversation workspace",
+    "agent": "Agent",
+    "skill": "Skill customization",
+    "video": "Video creation"
+  },
+  "mode": {
+    "select": "Select conversation mode",
+    "agent": {
+      "label": "Agent",
+      "description": "Chat with the selected Agent"
+    },
+    "builtin": {
+      "label": "Built-in Agent",
+      "description": "Use an Agent provided by the platform"
+    },
+    "codex": {
+      "label": "Codex Agent",
+      "description": "Run tasks in a sandbox"
+    },
+    "deepseekHarness": {
+      "label": "DeepSeek Harness",
+      "description": "Open the DeepSeek Harness workspace"
+    },
+    "arkClaw": "ArkClaw",
+    "hermes": "Hermes Agent",
+    "checking": "Checking configuration",
+    "notConfigured": "Not configured by an administrator",
+    "unavailable": "Unavailable"
+  },
+  "agentPicker": {
+    "select": "Select Agent",
+    "typesLabel": "Agent types",
+    "listLabel": "{{type}} list",
+    "types": {
+      "agent": "Agent",
+      "general": "General Agent",
+      "codex": "Codex Agent",
+      "deepseekHarness": "DeepSeek Harness",
+      "openclaw": "OpenClaw Agent",
+      "hermes": "Hermes Agent"
+    },
+    "loading": "Loading Agents",
+    "reload": "Reload",
+    "empty": "No {{type}} yet",
+    "emptyLocal": "No local Agents yet",
+    "emptyGeneral": "No General Agents yet",
+    "createHint": "Create one from the Agents page",
+    "localHint": "Check the directory where Studio was started",
+    "waking": "Waking up",
+    "opening": "Opening",
+    "connecting": "Connecting",
+    "loadingMore": "Loading",
+    "loadMore": "Load more",
+    "runtimeTimeout": "Loading Agents timed out after 15 seconds. Check the network or Runtime service and retry.",
+    "loadGeneral": "Load General Agents",
+    "loadType": "Load {{type}}",
+    "connectGeneral": "Connect to General Agent",
+    "openLocal": "Open local Agent",
+    "openType": "Open {{type}}"
+  },
+  "skill": {
+    "spaceAria": "Skill spaces",
+    "configuration": "Skill customization settings",
+    "actions": {
+      "create": "Generate Skill",
+      "optimize": "Optimize Skill"
+    },
+    "selectAction": "Select a Skill customization action",
+    "actionList": "Skill customization actions",
+    "style": "Style",
+    "selectStyle": "Select style",
+    "model": "Model",
+    "selectModel": "Select model",
+    "styles": {
+      "concise": "Concise and practical",
+      "strict": "Rigorous and reliable",
+      "tutorial": "Tutorial-friendly",
+      "automation": "Automation-first"
+    },
+    "modelLoadFailed": "Failed to load model configuration",
+    "spaceLoadFailed": "Failed to load Skill Spaces",
+    "skillLoadFailed": "Failed to load Skills",
+    "unnamedSpace": "Unnamed Skill Space",
+    "space": "Skill Space",
+    "select": "Select Skill",
+    "selectAria": "Select Skill: {{skill}}",
+    "loadingSpaces": "Loading Skill Spaces",
+    "reload": "Reload",
+    "emptySpaces": "No Skill Spaces yet",
+    "skillList": "{{space}} Skill list",
+    "loadingSkills": "Loading Skills",
+    "emptySkills": "No Skills yet"
+  },
+  "video": {
+    "modes": {
+      "auto": "Auto detect",
+      "text_to_video": "Text to video",
+      "reference_to_video": "Reference to video",
+      "video_editing": "Video editing",
+      "video_extension": "Video extension",
+      "first_last_frame": "First and last frames"
+    },
+    "taskNames": {
+      "auto": "Video generation",
+      "text_to_video": "Text-to-video",
+      "reference_to_video": "Reference-to-video",
+      "video_editing": "Video editing",
+      "video_extension": "Video extension",
+      "first_last_frame": "First-and-last-frame generation"
+    },
+    "controls": {
+      "label": "Video creation settings",
+      "aspectRatio": "Aspect ratio",
+      "selectAspectRatio": "Select aspect ratio",
+      "resolution": "Resolution",
+      "selectResolution": "Select resolution",
+      "duration": "Duration",
+      "durationShort": "{{count}}s",
+      "durationAria": "Video duration: {{count}} seconds",
+      "lastFrame": "Last frame",
+      "lastFrameHelper": "Add the video's ending frame",
+      "assistImage": "Supporting image",
+      "referenceImage": "Reference image",
+      "assistImageHelper": "Add visual guidance",
+      "imageHelper": "Supports common image formats",
+      "referenceVideo": "Reference video",
+      "videoHelper": "Supports common video formats",
+      "optional": "Optional",
+      "replace": "Replace",
+      "add": "Add",
+      "upload": "Upload {{label}}",
+      "replaceFile": "Replace {{label}}: {{name}}",
+      "removeFile": "Remove {{label}} {{name}}",
+      "storageUnavailable": "Persistent storage is not configured",
+      "loadingEnhancer": "Loading prompt enhancement model",
+      "enhancerHint": "Uses {{model}} for intent recognition and prompt enhancement",
+      "enhancerUnavailable": "Prompt enhancement model unavailable"
+    },
+    "task": {
+      "title": "Video generation task",
+      "closeAria": "Close video generation task dialog",
+      "progressAria": "Video generation progress",
+      "optimizedPrompt": "Optimized prompt",
+      "processingAria": "{{task}} progress",
+      "waitingAria": "{{status}}, elapsed {{elapsed}}",
+      "elapsed": "Elapsed {{elapsed}}",
+      "previewAria": "Generated video preview",
+      "close": "Close",
+      "download": "Download video",
+      "retryOptimization": "Retry prompt optimization",
+      "retryGeneration": "Retry video generation",
+      "providerQueued": "Waiting for model scheduling",
+      "providerRunning": "Model generating",
+      "providerSubmitting": "Submitting task",
+      "queuedHint": "The task was submitted. Its status will update automatically when processing begins.",
+      "runningHint": "This may take several minutes. The video preview will appear here when complete.",
+      "backgroundHint": "You can close this dialog. The task will continue in the background.",
+      "successHint": "Your video is ready to preview or download.",
+      "activationHint": "Activate the service in the model console, then retry generation.",
+      "retryHint": "Fix the issue and retry the current step.",
+      "steps": {
+        "optimizationFailed": "Prompt optimization failed",
+        "optimizationDone": "Prompt optimization complete",
+        "optimizationActive": "Optimizing prompt",
+        "generationDone": "{{task}} complete",
+        "generationFailed": "{{task}} failed",
+        "generationQueued": "{{task}} queued",
+        "generationRunning": "Generating {{task}}",
+        "generationActive": "{{task}} in progress",
+        "generationPending": "Waiting for video generation",
+        "generationComplete": "Video generation complete"
+      },
+      "elapsedHours": "{{hours}}h {{minutes}}m",
+      "elapsedMinutes": "{{minutes}}m {{seconds}}s",
+      "elapsedSeconds": "{{seconds}}s"
+    }
+  }
+}

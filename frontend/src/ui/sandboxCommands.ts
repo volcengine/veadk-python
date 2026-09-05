@@ -4,6 +4,8 @@ import type {
   SandboxThreadSnapshot,
 } from "../adk/sandbox";
 import type { Turn, TurnActivityDetail } from "../blocks";
+import { i18n } from "../i18n/runtime";
+import { sandboxT } from "./sandboxI18n";
 
 export type SandboxSlashCommandName =
   | "model"
@@ -26,80 +28,71 @@ export interface SandboxSlashCommand {
   keywords: string[];
 }
 
-export const SANDBOX_SLASH_COMMANDS: readonly SandboxSlashCommand[] = [
+interface SandboxSlashCommandDefinition {
+  name: SandboxSlashCommandName;
+  usage: string;
+}
+
+export const SANDBOX_SLASH_COMMANDS: readonly SandboxSlashCommandDefinition[] = [
   {
     name: "model",
     usage: "/model [model]",
-    description: "显示或切换当前对话模型",
-    keywords: ["模型", "switch"],
   },
   {
     name: "models",
     usage: "/models",
-    description: "列出 app-server 可用模型",
-    keywords: ["模型列表", "list"],
   },
   {
     name: "skill",
     usage: "/skill",
-    description: "浏览并调用当前工作区可用的 Skill",
-    keywords: ["技能", "workflow"],
   },
   {
     name: "skills",
     usage: "/skills",
-    description: "浏览并调用当前工作区可用的 Skills",
-    keywords: ["技能列表", "workflow", "list"],
   },
   {
     name: "new",
     usage: "/new",
-    description: "开始一个新对话",
-    keywords: ["新建", "对话"],
   },
   {
     name: "resume",
     usage: "/resume [thread]",
-    description: "打开历史会话或恢复指定 thread",
-    keywords: ["历史", "恢复", "session"],
   },
   {
     name: "fork",
     usage: "/fork",
-    description: "从当前上下文分叉一个新对话",
-    keywords: ["分叉", "branch"],
   },
   {
     name: "compact",
     usage: "/compact",
-    description: "压缩当前对话上下文",
-    keywords: ["压缩", "上下文"],
   },
   {
     name: "archive",
     usage: "/archive",
-    description: "归档当前对话并新建对话",
-    keywords: ["归档", "关闭"],
   },
   {
     name: "status",
     usage: "/status",
-    description: "显示当前连接、thread、模型与 token 状态",
-    keywords: ["状态", "连接", "token"],
   },
   {
     name: "clear",
     usage: "/clear",
-    description: "清空当前视图并开始新对话",
-    keywords: ["清空", "重置"],
   },
   {
     name: "help",
     usage: "/help",
-    description: "显示 Sandbox 支持的快捷命令",
-    keywords: ["帮助", "命令"],
   },
 ];
+
+function localizedCommand(
+  command: SandboxSlashCommandDefinition,
+): SandboxSlashCommand {
+  return {
+    ...command,
+    description: sandboxT(`commands.${command.name}.description`),
+    keywords: sandboxT(`commands.${command.name}.keywords`).split(/\s+/),
+  };
+}
 
 export interface SandboxSlashInvocation {
   name: string;
@@ -121,7 +114,7 @@ export function matchingSandboxCommands(
   query: string,
 ): SandboxSlashCommand[] {
   const normalized = query.toLocaleLowerCase();
-  return SANDBOX_SLASH_COMMANDS
+  return SANDBOX_SLASH_COMMANDS.map(localizedCommand)
     .filter((command) =>
       !normalized ||
       [command.name, command.description, ...command.keywords].some((value) =>
@@ -138,7 +131,11 @@ function commandScore(
   command: SandboxSlashCommand,
   query: string,
 ): number {
-  if (!query) return SANDBOX_SLASH_COMMANDS.indexOf(command);
+  if (!query) {
+    return SANDBOX_SLASH_COMMANDS.findIndex(
+      (candidate) => candidate.name === command.name,
+    );
+  }
   if (command.name === query) return 0;
   if (command.name.startsWith(query)) return 1;
   if (command.name.includes(query)) return 2;
@@ -176,7 +173,7 @@ export function matchingSandboxModels(
 }
 
 export function sandboxHelpDetails(): TurnActivityDetail[] {
-  return SANDBOX_SLASH_COMMANDS.map((command) => ({
+  return SANDBOX_SLASH_COMMANDS.map(localizedCommand).map((command) => ({
     label: command.usage,
     value: command.description,
   }));
@@ -192,7 +189,9 @@ export function sandboxModelDetails(
       ? `${displayName} · ${model.id}`
       : model.id;
     return {
-      label: model.id === currentModel ? "当前模型" : "可用模型",
+      label: model.id === currentModel
+        ? sandboxT("commands.currentModel")
+        : sandboxT("commands.availableModel"),
       value: model.description
         ? `${modelName} — ${model.description}`
         : modelName,
@@ -206,23 +205,39 @@ export function sandboxStatusDetails(
 ): TurnActivityDetail[] {
   const details: TurnActivityDetail[] = [
     { label: "Thread", value: status.threadId, code: true },
-    { label: "工作空间", value: status.cwd || "未设置", code: Boolean(status.cwd) },
+    {
+      label: sandboxT("commands.workspace"),
+      value: status.cwd || sandboxT("commands.notSet"),
+      code: Boolean(status.cwd),
+    },
   ];
-  if (status.model) details.push({ label: "模型", value: status.model, code: true });
+  if (status.model) {
+    details.push({
+      label: sandboxT("commands.modelLabel"),
+      value: status.model,
+      code: true,
+    });
+  }
   details.push({
-    label: "状态",
-    value: status.busy ? "运行中" : "空闲",
+    label: sandboxT("commands.statusLabel"),
+    value: status.busy
+      ? sandboxT("commands.running")
+      : sandboxT("commands.idle"),
   });
   if (status.threadTotal) {
     details.push({
-      label: "累计 Token",
-      value: status.threadTotal.totalTokens.toLocaleString(),
+      label: sandboxT("commands.totalTokens"),
+      value: status.threadTotal.totalTokens.toLocaleString(
+        i18n.resolvedLanguage ?? i18n.language,
+      ),
     });
   }
   if (status.modelContextWindow !== undefined) {
     details.push({
-      label: "上下文窗口",
-      value: status.modelContextWindow.toLocaleString(),
+      label: sandboxT("commands.contextWindow"),
+      value: status.modelContextWindow.toLocaleString(
+        i18n.resolvedLanguage ?? i18n.language,
+      ),
     });
   }
   return details;
@@ -249,7 +264,7 @@ export function sandboxSnapshotTurns(snapshot: SandboxThreadSnapshot): Turn[] {
           id: `${message.id}-image-${index}`,
           mimeType: image.mimeType,
           data: image.data,
-          name: image.alt || image.name || "图片",
+          name: image.alt || image.name || sandboxT("commands.imageFallback"),
         })),
       });
     }

@@ -28,8 +28,8 @@ test("keeps Agent selection state without a global conversation header", () => {
   assert.doesNotMatch(appSource, /setAppName\(valid \? saved : fallback \|\| ""\)/);
   assert.doesNotMatch(appSource, /remoteIds\[0\] \?\? ""/);
   assert.doesNotMatch(appSource, /if \(agentsSource === "cloud"\) \{\s*setAppName\(""\)/);
-  assert.match(navbarSource, /appName \? label\(appName\) : "选择 Agent"/);
-  assert.match(navbarSource, /agentsSource === "cloud"[\s\S]*?aria-label="切换智能体"/);
+  assert.match(navbarSource, /appName \? label\(appName\) : t\("navbar\.selectAgent"\)/);
+  assert.match(navbarSource, /agentsSource === "cloud"[\s\S]*?aria-label=\{t\("navbar\.switchAgent"\)\}/);
   assert.match(navbarSource, /<ArrowLeftRight aria-hidden="true"/);
 });
 

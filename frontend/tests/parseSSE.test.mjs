@@ -1,13 +1,17 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
-import ts from "typescript";
+import { build } from "esbuild";
 
-const source = readFileSync(new URL("../src/adk/sse.ts", import.meta.url), "utf8");
-const { outputText } = ts.transpileModule(source, {
-  compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+const result = await build({
+  entryPoints: [fileURLToPath(new URL("../src/adk/sse.ts", import.meta.url))],
+  bundle: true,
+  format: "esm",
+  platform: "node",
+  target: "node20",
+  write: false,
 });
-const moduleUrl = `data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`;
+const moduleUrl = `data:text/javascript;base64,${Buffer.from(result.outputFiles[0].contents).toString("base64")}`;
 const { parseSSE } = await import(moduleUrl);
 
 function sseResponse(chunks, { hold = false, onCancel } = {}) {
@@ -58,7 +62,7 @@ test("rejects a truncated final data frame instead of silently dropping it", asy
     }
   }, (error) => {
     assert.match(error.message, /incomplete SSE event/i);
-    assert.match(error.message, /原始 data：\{"content":/);
+    assert.match(error.message, /Raw data: \{"content":/);
     return true;
   });
 });
@@ -70,8 +74,8 @@ test("rejects malformed JSON frames and includes their original data", async () 
       // Consume the stream so frame parsing runs.
     }
   }, (error) => {
-    assert.match(error.message, /Failed to parse SSE event JSON/);
-    assert.match(error.message, /原始 data：malformed/);
+    assert.match(error.message, /Failed to parse (?:the )?SSE event JSON/);
+    assert.match(error.message, /Raw data: malformed/);
     return true;
   });
 });
@@ -93,8 +97,8 @@ test("bounds malformed frame details while preserving the original prefix", asyn
       // Consume the stream so frame parsing runs.
     }
   }, (error) => {
-    assert.match(error.message, new RegExp(`原始 data：${"x".repeat(40)}`));
-    assert.match(error.message, /已截断，共 700 个字符/);
+    assert.match(error.message, new RegExp(`Raw data: ${"x".repeat(40)}`));
+    assert.match(error.message, /truncated, 700 characters total/);
     assert.ok(error.message.length < 650);
     return true;
   });

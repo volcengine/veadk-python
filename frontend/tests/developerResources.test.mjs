@@ -18,7 +18,7 @@ test("opens Developer Resources as a first-class Studio page", () => {
   assert.ok(clickIndex >= 0, "developer resources should be clickable");
   assert.match(
     sidebarSource.slice(clickIndex, clickIndex + 500),
-    /aria-label="开发者资源"[\s\S]*?<BookWrench className="icon" \/>/,
+    /aria-label=\{t\("sidebar:account\.developerResources"\)\}[\s\S]*?<BookWrench className="icon" \/>/,
   );
   assert.match(
     appSource,
@@ -29,28 +29,23 @@ test("opens Developer Resources as a first-class Studio page", () => {
 });
 
 test("renders a page title and three resource sections with subtitles", () => {
-  assert.ok(
-    /<h1[^>]*>\s*开发者资源\s*<\/h1>/.test(developerResourcesSource) ||
-      /<ResourcePageHeader\s+title="开发者资源"\s*\/>/.test(
-        developerResourcesSource,
-      ),
-    "should render 开发者资源 as the page title",
+  assert.match(
+    developerResourcesSource,
+    /<ResourcePageHeader title=\{t\("developerResources\.title"\)\} \/>/,
   );
 
-  for (const title of ["相关链接", "最佳实践", "Showcases"]) {
-    const escapedTitle = title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const dataSection = new RegExp(
-      `title:\\s*["']${escapedTitle}["'][\\s\\S]{0,180}?(?:subtitle|description):\\s*["'][^"']+["']`,
+  for (const section of ["documentation", "bestPractices", "showcases"]) {
+    assert.match(
+      developerResourcesSource,
+      new RegExp(`developerResources\\.sections\\.${section}\\.title`),
     );
-    const semanticSection = new RegExp(
-      `<h2[^>]*>\\s*${escapedTitle}\\s*</h2>[\\s\\S]{0,300}?<p[^>]*>\\s*[^<{][\\s\\S]*?</p>`,
-    );
-    assert.ok(
-      dataSection.test(developerResourcesSource) ||
-        semanticSection.test(developerResourcesSource),
-      `${title} should be a section heading with a non-empty subtitle`,
+    assert.match(
+      developerResourcesSource,
+      new RegExp(`developerResources\\.sections\\.${section}\\.description`),
     );
   }
+  assert.match(developerResourcesSource, /\{t\(section\.titleKey\)\}/);
+  assert.match(developerResourcesSource, /<p>\{t\(section\.descriptionKey\)\}<\/p>/);
 });
 
 test("renders related documentation and console destinations as Apps SDK links", () => {
@@ -62,13 +57,13 @@ test("renders related documentation and console destinations as Apps SDK links",
     developerResourcesSource,
     /import \{ ArrowUpRight \} from "@openai\/apps-sdk-ui\/components\/Icon"/,
   );
-  for (const label of [
-    "VeADK 文档",
-    "AgentKit CLI 文档",
-    "AgentKit 平台文档",
-    "AgentKit 控制台",
+  for (const key of [
+    "veadkDocs",
+    "cliDocs",
+    "platformDocs",
+    "console",
   ]) {
-    assert.match(developerResourcesSource, new RegExp(label));
+    assert.match(developerResourcesSource, new RegExp(`t\\("developerResources\\.links\\.${key}"\\)`));
   }
   assert.equal((developerResourcesSource.match(/<TextLink/g) ?? []).length, 4);
   assert.equal((developerResourcesSource.match(/<li>/g) ?? []).length, 4);
@@ -85,17 +80,19 @@ test("renders related documentation and console destinations as Apps SDK links",
 });
 
 test("renders linked best-practice guides and responsive showcases", () => {
-  for (const title of [
-    "使用 VeADK 开发并部署智能体",
-    "使用 AgentKit CLI 开发并部署智能体",
-    "多智能体研究助手",
-    "多模态内容分析",
-    "智能客服工作台",
-    "联网搜索 Agent",
-    "A2UI 交互应用",
+  for (const key of [
+    "developerResources.articles.veadkDevelopment.title",
+    "developerResources.articles.cliDevelopment.title",
+    "developerResources.showcases.researchAssistant.title",
+    "developerResources.showcases.multimodalAnalysis.title",
+    "developerResources.showcases.customerService.title",
+    "developerResources.showcases.webSearch.title",
+    "developerResources.showcases.a2uiApp.title",
   ]) {
-    assert.match(developerResourcesSource, new RegExp(title));
+    assert.match(developerResourcesSource, new RegExp(key.replaceAll(".", "\\.")));
   }
+  assert.match(developerResourcesSource, /<strong>\{t\(article\.titleKey\)\}<\/strong>/);
+  assert.match(developerResourcesSource, /<strong>\{t\(showcase\.titleKey\)\}<\/strong>/);
 
   assert.match(
     developerResourcesSource,

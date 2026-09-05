@@ -1,21 +1,20 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { Buffer } from "node:buffer";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
-import ts from "typescript";
+import { build } from "esbuild";
 
-function transpileUrl(source) {
-  const { outputText } = ts.transpileModule(source, {
-    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
-  });
-  return `data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`;
-}
+globalThis.localStorage = { getItem: () => "zh-CN" };
+globalThis.window = { localStorage: globalThis.localStorage };
 
-const timeoutSource = readFileSync(new URL("../src/adk/timeout.ts", import.meta.url), "utf8");
-const timeoutUrl = transpileUrl(timeoutSource);
-const identitySource = readFileSync(
-  new URL("../src/adk/identity.ts", import.meta.url),
-  "utf8",
-).replace('from "./timeout"', `from "${timeoutUrl}"`);
+const result = await build({
+  entryPoints: [fileURLToPath(new URL("../src/adk/identity.ts", import.meta.url))],
+  bundle: true,
+  format: "esm",
+  platform: "node",
+  target: "node20",
+  write: false,
+});
 const {
   displayName,
   fetchProviders,
@@ -25,7 +24,7 @@ const {
   resolveIdentity,
   withLocalUser,
 } = await import(
-  transpileUrl(identitySource)
+  `data:text/javascript;base64,${Buffer.from(result.outputFiles[0].contents).toString("base64")}`
 );
 
 const originalFetch = globalThis.fetch;

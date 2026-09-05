@@ -45,17 +45,17 @@ test("deployment identity keeps ADK agent and platform Runtime names distinct", 
     projectPreviewSource,
     /runtimeName: result\.runtimeName \|\| taskRuntimeName/,
   );
-  assert.match(projectPreviewSource, /<label>Runtime 名称<\/label>/);
+  assert.match(projectPreviewSource, /<label>\{t\("projectPreview\.runtimeName"\)\}<\/label>/);
 });
 
 test("new deployments use a unique editable Runtime name and check it before confirmation", () => {
   assert.match(clientSource, /runtimeName: opts\?\.runtimeName/);
   assert.match(clientSource, /export async function checkRuntimeNameAvailability/);
   assert.match(clientSource, /\/web\/runtime-name-availability/);
-  assert.match(projectPreviewSource, /aria-label="Runtime 名称"/);
+  assert.match(projectPreviewSource, /aria-label=\{t\("projectPreview\.runtimeName"\)\}/);
   assert.match(projectPreviewSource, /generateRuntimeName\(runtimeNameSource\)/);
   assert.match(projectPreviewSource, /checkRuntimeNameAvailability\(/);
-  assert.match(projectPreviewSource, /Runtime 名称已存在，请修改后重试/);
+  assert.match(projectPreviewSource, /t\("projectPreview\.errors\.runtimeNameExists"\)/);
   assert.match(
     projectPreviewSource,
     /const requestedRuntimeName = effectiveRuntimeName\.trim\(\)/,

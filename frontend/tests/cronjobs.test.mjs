@@ -41,8 +41,8 @@ test("places Automation below scheduled tasks without a scheduled-task beta badg
   assert.match(sidebarSource, /onCronJobs: \(\) => void/);
   assert.match(sidebarSource, /import \{ Clock \} from "@openai\/apps-sdk-ui\/components\/Icon"/);
   assert.doesNotMatch(sidebarSource, /function ScheduledTasksIcon/);
-  const automationIndex = sidebarSource.indexOf('aria-label="自动化"');
-  const cronJobsIndex = sidebarSource.indexOf('aria-label="定时任务"');
+  const automationIndex = sidebarSource.indexOf('aria-label={t("navigation.automations")}');
+  const cronJobsIndex = sidebarSource.indexOf('aria-label={t("navigation.cronjobs")}');
   assert.equal(automationIndex >= 0, true);
   assert.equal(cronJobsIndex < automationIndex, true);
   assert.doesNotMatch(sidebarSource, /sidebar-cronjobs-beta|>\s*Beta\s*</);
@@ -51,7 +51,7 @@ test("places Automation below scheduled tasks without a scheduled-task beta badg
 });
 
 test("renders the shared resource card list, independent-session form, details, and full execution lifecycle states", () => {
-  assert.match(cronJobsSource, /<ResourcePageHeader[\s\S]*?title="定时任务"/);
+  assert.match(cronJobsSource, /<ResourcePageHeader[\s\S]*?title=\{cronText\("page\.title"\)\}/);
   assert.match(cronJobsSource, /<ResourceTabs[\s\S]*?idPrefix="cronjobs-filter"/);
   assert.match(cronJobsSource, /<ResourceGrid>[\s\S]*?<ResourceCreateCard[\s\S]*?<LibraryResourceCard/);
   assert.match(cronJobsSource, /<LibraryResourceCard[\s\S]*?title=\{job\.name\}/);
@@ -60,34 +60,31 @@ test("renders the shared resource card list, independent-session form, details, 
     cronJobsSource.indexOf("<LibraryResourceCard"),
     cronJobsSource.indexOf("/>", cronJobsSource.indexOf("<LibraryResourceCard")),
   );
-  assert.match(cardSource, /label: "执行计划"/);
+  assert.match(cardSource, /label: cronText\("fields\.schedule"\)/);
   assert.doesNotMatch(cardSource, /label: "Runtime"|label: "下次执行"|action=\{\{/);
-  assert.match(cronJobsSource, /detailAction=\{\{ label: "查看详情"/);
-  assert.match(cronJobsSource, /每次触发都会为 Runtime Agent 创建独立 Session/);
+  assert.match(cronJobsSource, /detailAction=\{\{ label: cronText\("actions\.viewDetails"\)/);
+  assert.match(cronJobsSource, /cronText\("drawer\.description"\)/);
   assert.match(cronJobsSource, /type="datetime-local"/);
   assert.match(cronJobsSource, /type="time"/);
-  assert.match(cronJobsSource, /Cron 表达式/);
-  assert.match(cronJobsSource, /时区/);
-  assert.match(cronJobsSource, /创建后启用/);
-  assert.match(modelSource, /pending: "准备中"/);
-  assert.match(modelSource, /queued: "已排队"/);
-  assert.match(modelSource, /running: "执行中"/);
-  assert.match(modelSource, /retrying: "自动重试中"/);
-  assert.match(modelSource, /success: "成功"/);
-  assert.match(modelSource, /failed: "失败"/);
-  assert.match(modelSource, /cancelled: "已取消"/);
-  assert.match(modelSource, /skipped: "已跳过"/);
-  assert.match(cronJobsSource, /无法加载定时任务/);
-  assert.match(cronJobsSource, />\s*创建定时任务\s*<\/ResourceCreateCard>/);
-  assert.match(cronJobsSource, /暂无执行记录/);
-  assert.match(cronJobsSource, /终止本次执行/);
+  assert.match(cronJobsSource, /cronText\("fields\.cronExpression"\)/);
+  assert.match(cronJobsSource, /cronText\("fields\.timezone"\)/);
+  assert.match(cronJobsSource, /cronText\("fields\.enableAfterCreate"\)/);
+  for (const status of ["pending", "queued", "running", "retrying", "success", "failed", "cancelled", "skipped"]) {
+    assert.match(modelSource, new RegExp(`${status}: "status\\.${status}"`));
+  }
+  assert.match(cronJobsSource, /cronText\("page\.loadFailed"\)/);
+  assert.match(cronJobsSource, /setError\(cronText\("page\.loadFailedDescription"\)\)/);
+  assert.match(cronJobsSource, /setRunsError\(cronText\("history\.loadFailedDescription"\)\)/);
+  assert.match(cronJobsSource, /cronText\("actions\.createScheduledTask"\)/);
+  assert.match(cronJobsSource, /cronText\("history\.emptyTitle"\)/);
+  assert.match(cronJobsSource, /"actions\.stopRun"/);
   assert.match(cronJobsSource, /CRONJOB_ACTIVE_REFRESH_MS/);
   assert.match(cronJobsSource, /window\.setInterval/);
   assert.match(cronJobsSource, /StudioConfirmDialog/);
-  assert.match(cronJobsSource, /任务及其执行历史已删除/);
+  assert.match(cronJobsSource, /cronText\("notices\.deleted"\)/);
   assert.match(cronJobsSource, /DeploymentErrorMessage/);
-  assert.match(cronJobsSource, /retryLabel="重新执行"/);
-  assert.match(cronJobsSource, /任务已重新排队，将在一分钟内开始执行/);
+  assert.match(cronJobsSource, /retryLabel=\{cronText\("actions\.rerun"\)\}/);
+  assert.match(cronJobsSource, /cronText\("notices\.requeued"\)/);
   assert.match(cronJobsSource, /catch \(cause\) \{\s*setError\(/);
   assert.match(cronJobsSource, /error=\{confirmError\}/);
   assert.match(confirmSource, /<Alert className="studio-confirm-error" color="danger"/);
@@ -103,8 +100,8 @@ test("renders the shared resource card list, independent-session form, details, 
   assert.match(cronJobsSource, /fetchRemoteApps\("", "", \{/);
   assert.match(cronJobsSource, /agentName = runtimeApp\?\.trim\(\) \?\? ""/);
   assert.match(cronJobsSource, /runtimeName: runtime\.name,[\s\S]*?agentName,/);
-  assert.match(cronJobsSource, /正在连接 Runtime/);
-  assert.match(cronJobsSource, /Runtime Agent 未返回可调用的 appName/);
+  assert.match(cronJobsSource, /"actions\.connectingRuntime"/);
+  assert.match(cronJobsSource, /cronText\("validation\.runtimeAppMissing"\)/);
 });
 
 test("uses Apps SDK controls while keeping only domain layout and responsive styling", () => {

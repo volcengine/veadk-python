@@ -16,8 +16,8 @@ const sessionStylesSource = source("../src/ui/SandboxSession.css");
 
 test("Codex sessions use the dedicated composer and expose sandbox tools", () => {
   assert.match(appSource, /<SandboxComposer/);
-  assert.match(composerSource, /上传图片/);
-  assert.match(composerSource, /上传文档或 PDF/);
+  assert.match(composerSource, /t\("composer\.uploadImage"\)/);
+  assert.match(composerSource, /t\("composer\.uploadDocument"\)/);
   assert.match(composerSource, /actions\.onOpenTerminal\(\)/);
   assert.match(composerSource, /actions\.onOpenBrowser\(\)/);
   assert.match(composerSource, /actions\.onOpenPermissions/);
@@ -40,7 +40,8 @@ test("Codex commands and Skills are wired through the current session", () => {
   assert.doesNotMatch(composerSource, /onSubmit\(`\/\$\{item\.command\.name\}`\)/);
   assert.match(composerSource, /updateValue\(`\/\$\{item\.command\.name\}`\)/);
   assert.match(composerSource, /updateValue\(`\/model \$\{item\.model\.id\}`\)/);
-  assert.match(commandsSource, /label: model\.id === currentModel \? "当前模型" : "可用模型"/);
+  assert.match(commandsSource, /sandboxT\("commands\.currentModel"\)/);
+  assert.match(commandsSource, /sandboxT\("commands\.availableModel"\)/);
   assert.match(commandsSource, /displayName !== model\.id/);
   assert.match(composerSource, /index === activeIndex \? <kbd>↵<\/kbd> : null/);
   assert.doesNotMatch(composerSource, /<kbd>\{index === activeIndex \? "↵" : ""\}<\/kbd>/);
@@ -63,7 +64,7 @@ test("active Codex Sandbox threads replace normal history in the Sidebar", () =>
   assert.match(sidebarSource, /sandboxHistory\.onSelect\(thread\.id\)/);
   assert.match(sidebarSource, /sandboxHistory\.onDelete\(thread\)/);
   assert.match(sidebarSource, /sandboxHistory\.onLoadMore/);
-  assert.match(sidebarSource, /加载更多/);
+  assert.match(sidebarSource, /t\("history\.loadMore"\)/);
   assert.match(sidebarSource, /role="alert"/);
   assert.match(commandHookSource, /const \[threadsNextCursor, setThreadsNextCursor\]/);
   assert.match(commandHookSource, /loadMoreThreads/);
@@ -82,7 +83,7 @@ test("active Codex Sandbox threads replace normal history in the Sidebar", () =>
   assert.match(appSource, /onNew: \(\) => void sandboxCommands\.newThread\(\)/);
   assert.match(appSource, /newDisabled: sandboxBusy \|\| sandboxCommands\.commandBusy/);
   assert.match(appSource, /<StudioConfirmDialog/);
-  assert.match(appSource, /删除 Codex 历史会话/);
+  assert.match(appSource, /t\("dialogs\.deleteThread\.title"\)/);
   assert.match(confirmDialogSource, /role="alertdialog"/);
 });
 
@@ -105,8 +106,8 @@ test("Codex token usage and approvals are presented per assistant turn", () => {
   assert.match(appSource, /<SandboxTokenUsageRow/);
   assert.match(appSource, /onApproval: \(approval\) =>/);
   assert.match(appSource, /<SandboxApprovalDialog/);
-  assert.match(controlsSource, /title="Codex 权限"/);
-  assert.match(controlsSource, /保存权限/);
+  assert.match(controlsSource, /title=\{t\("permissions\.title"\)\}/);
+  assert.match(controlsSource, /t\("permissions\.save"\)/);
 });
 
 test("Codex image attachments keep their preview until the transcript is cleared", () => {
@@ -123,8 +124,8 @@ test("Codex image attachments keep their preview until the transcript is cleared
 test("sandbox dialogs provide explicit loading error and keyboard states", () => {
   assert.match(controlsSource, /role="dialog"/);
   assert.match(controlsSource, /if \(event\.key === "Escape"\)/);
-  assert.match(controlsSource, /打开失败/);
-  assert.match(controlsSource, /重试/);
+  assert.match(controlsSource, /t\("tool\.openFailed"/);
+  assert.match(controlsSource, /t\("common\.retry"\)/);
   assert.match(controlsSource, /disabled=\{busy/);
   assert.match(controlsSource, /previousFocusRef\.current\?\.focus\(\)/);
   assert.match(controlsSource, /role="radiogroup"/);

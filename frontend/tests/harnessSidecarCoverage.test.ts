@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   HARNESS_SIDECAR_OPTION_IDS,
+  HARNESS_SIDECAR_OPTION_GROUPS,
   HARNESS_SIDECAR_OPTIONS,
   HARNESS_SIDECAR_PROFILES,
   harnessIntentFromOptimizations,
@@ -21,7 +22,7 @@ describe("Studio Harness Sidecar metadata options", () => {
   it("keeps BytePlus ordinary deployment available while rejecting Sidecar selection", () => {
     expect(harnessSidecarProviderNotice("volcengine")).toBeNull();
     expect(harnessSidecarProviderNotice("byteplus")).toContain(
-      "BytePlus 账号暂不支持 Harness Sidecar 优化项",
+      "not available for BytePlus accounts",
     );
   });
 
@@ -34,14 +35,14 @@ describe("Studio Harness Sidecar metadata options", () => {
       "mcp_resilience",
     ]);
     expect(HARNESS_SIDECAR_OPTIONS.map((item) => item.displayName)).toEqual([
-      "上下文治理",
-      "上下文与结果压缩",
-      "回答校验与修复",
-      "Goal任务控制",
-      "MCP 稳定性治理",
+      "Context management",
+      "Context and result compression",
+      "Response verification and repair",
+      "Goal task control",
+      "MCP resilience",
     ]);
     expect(HARNESS_SIDECAR_OPTIONS.at(-1)?.description).toContain(
-      "默认包含 SQL 只读保护",
+      "read-only SQL protection",
     );
   });
 
@@ -51,8 +52,12 @@ describe("Studio Harness Sidecar metadata options", () => {
       "ops",
     ]);
     expect(HARNESS_SIDECAR_PROFILES.map((profile) => profile.displayName)).toEqual([
-      "自定义",
-      "运维场景",
+      "Custom",
+      "Operations",
+    ]);
+    expect(HARNESS_SIDECAR_PROFILES.map((profile) => profile.description)).toEqual([
+      "Choose components as needed. The Sidecar stays off when none are selected.",
+      "For operations diagnostics, databases, logs, and monitoring MCP servers.",
     ]);
     expect(harnessProfileDefaultOptimizations("default")).toEqual([]);
     expect(harnessProfileDefaultOptimizations("ops")).toEqual([
@@ -71,6 +76,14 @@ describe("Studio Harness Sidecar metadata options", () => {
         >[0],
       ),
     ).toEqual([]);
+  });
+
+  it("publishes localized optimization groups", () => {
+    expect(HARNESS_SIDECAR_OPTION_GROUPS.map((group) => group.displayName)).toEqual([
+      "Improve response quality",
+      "Reduce runtime cost",
+      "Improve runtime stability",
+    ]);
   });
 
   it("turns a selection into metadata without runtime identity", () => {
@@ -330,10 +343,10 @@ describe("Studio Harness Sidecar metadata options", () => {
   });
 
   it("maps known labels and preserves unknown runtime-only ids", () => {
-    expect(harnessSidecarProfileLabel("default")).toBe("自定义");
-    expect(harnessSidecarProfileLabel("ops")).toBe("运维场景");
+    expect(harnessSidecarProfileLabel("default")).toBe("Custom");
+    expect(harnessSidecarProfileLabel("ops")).toBe("Operations");
     expect(harnessSidecarProfileLabel("unknown")).toBe("unknown");
-    expect(harnessSidecarOptionLabel("long_run_control")).toBe("Goal任务控制");
+    expect(harnessSidecarOptionLabel("long_run_control")).toBe("Goal task control");
     expect(harnessSidecarOptionLabel("sql_readonly")).toBe("sql_readonly");
   });
 });

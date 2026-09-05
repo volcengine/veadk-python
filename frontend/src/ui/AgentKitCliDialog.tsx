@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
+import type { TFunction } from "i18next";
 import { LoadingIndicator } from "@openai/apps-sdk-ui/components/Indicator";
+import { useTranslation } from "react-i18next";
 import {
-  AGENTKIT_CLI_UNCONFIGURED_MESSAGE,
   agentKitCliClient,
+  agentKitCliUnconfiguredMessage,
   type AgentKitCliSession,
 } from "../adk/agentkitCli";
 import type { SandboxToolLaunch } from "../adk/sandbox";
@@ -13,12 +15,6 @@ import "./AgentKitCliDialog.css";
 
 type LoadingStage = "searching" | "creating" | "connecting";
 type DialogState = LoadingStage | "ready" | "unconfigured" | "error";
-
-const LOADING_LABELS: Record<LoadingStage, string> = {
-  searching: "正在查找已有环境",
-  creating: "环境初始化中",
-  connecting: "正在连接已有环境",
-};
 
 const ACTIVE_STATUSES = new Set([
   "creating",
@@ -52,33 +48,35 @@ function waitForPoll(signal: AbortSignal): Promise<void> {
 async function waitUntilReady(
   initial: AgentKitCliSession,
   signal: AbortSignal,
+  t: TFunction,
 ): Promise<AgentKitCliSession> {
   let session = initial;
   for (let attempt = 0; attempt < SESSION_POLL_ATTEMPTS; attempt += 1) {
     const status = normalizedStatus(session);
     if (status === READY_STATUS) return session;
     if (!ACTIVE_STATUSES.has(status)) {
-      throw new Error(`AgentKit CLI 环境初始化失败，当前状态：${session.status}。`);
+      throw new Error(t("agentKitCli.initializationFailed", { status: session.status }));
     }
     await waitForPoll(signal);
     const sessions = await agentKitCliClient.listSessions({ signal });
     const refreshed = sessions.find((candidate) => candidate.id === session.id);
     if (!refreshed) {
-      throw new Error("AgentKit CLI Session 不存在或已过期，请重试。");
+      throw new Error(t("agentKitCli.sessionExpired"));
     }
     session = refreshed;
   }
-  throw new Error("AgentKit CLI 环境初始化超时，请稍后重试。");
+  throw new Error(t("agentKitCli.initializationTimeout"));
 }
 
 async function initializeTerminal(
   signal: AbortSignal,
   onStage: (stage: LoadingStage) => void,
+  t: TFunction,
 ): Promise<{ launch: SandboxToolLaunch; session: AgentKitCliSession }> {
   onStage("searching");
   const capabilities = await agentKitCliClient.capabilities({ signal });
   if (!capabilities.enabled) {
-    throw new Error(capabilities.reason || AGENTKIT_CLI_UNCONFIGURED_MESSAGE);
+    throw new Error(capabilities.reason || agentKitCliUnconfiguredMessage());
   }
   const sessions = await agentKitCliClient.listSessions({ signal });
   let session = sessions.find((candidate) => normalizedStatus(candidate) === READY_STATUS)
@@ -89,7 +87,7 @@ async function initializeTerminal(
   } else {
     onStage("connecting");
   }
-  session = await waitUntilReady(session, signal);
+  session = await waitUntilReady(session, signal, t);
   onStage("connecting");
   await agentKitCliClient.openSession(session.id, { signal });
   return {
@@ -107,20 +105,22 @@ function isLaunchReusable(expireAt: string, now: number): boolean {
   return Number.isFinite(expiresAt) && expiresAt > now;
 }
 
-function recyclingLabel(expireAt: string, now: number): string {
+function recyclingLabel(expireAt: string, now: number, t: TFunction): string {
   const expiresAt = Date.parse(expireAt);
-  if (!Number.isFinite(expiresAt)) return "非持久化环境";
+  if (!Number.isFinite(expiresAt)) return t("agentKitCli.nonPersistent");
   const remainingMinutes = Math.max(0, Math.ceil((expiresAt - now) / 60_000));
   const hours = Math.floor(remainingMinutes / 60);
   const minutes = remainingMinutes % 60;
-  if (hours > 0) return `${hours} 小时 ${minutes} 分钟后环境回收`;
-  return `${minutes} 分钟后环境回收`;
+  if (hours > 0) {
+    return t("agentKitCli.recyclingHoursMinutes", { hours, minutes });
+  }
+  return t("agentKitCli.recyclingMinutes", { minutes });
 }
 
-function errorMessage(cause: unknown): string {
+function errorMessage(cause: unknown, t: TFunction): string {
   const raw = cause instanceof Error ? cause.message : String(cause);
   if (cause instanceof TypeError) {
-    return `无法连接 Studio 服务，未收到服务端响应。\n原始错误：${raw}`;
+    return t("agentKitCli.connectionError", { message: raw });
   }
   return raw;
 }
@@ -132,6 +132,7 @@ export function AgentKitCliDialog({
   open: boolean;
   onClose: () => void;
 }) {
+  const { t } = useTranslation("workspaceTools");
   const [state, setState] = useState<DialogState>("searching");
   const [launch, setLaunch] = useState<SandboxToolLaunch | null>(null);
   const [expireAt, setExpireAt] = useState("");
@@ -158,7 +159,7 @@ export function AgentKitCliDialog({
     setLaunch(null);
     setExpireAt("");
     setError("");
-    void initializeTerminal(controller.signal, setState)
+    void initializeTerminal(controller.signal, setState, t)
       .then(({ launch: nextLaunch, session }) => {
         if (controller.signal.aborted) return;
         setLaunch(nextLaunch);
@@ -167,16 +168,16 @@ export function AgentKitCliDialog({
       })
       .catch((cause) => {
         if (controller.signal.aborted) return;
-        const message = errorMessage(cause);
+        const message = errorMessage(cause, t);
         setError(message);
         setState(
-          message.includes(AGENTKIT_CLI_UNCONFIGURED_MESSAGE)
+          message.includes(agentKitCliUnconfiguredMessage())
             ? "unconfigured"
             : "error",
         );
       });
     return () => controller.abort();
-  }, [attempt, expireAt, launch, open]);
+  }, [attempt, expireAt, launch, open, t]);
 
   const loading = isLoadingState(state);
 
@@ -193,35 +194,35 @@ export function AgentKitCliDialog({
         <span>
           <i className={loading ? "is-loading" : state === "ready" ? "is-ready" : ""} />
           {loading
-            ? LOADING_LABELS[state]
+            ? t(`agentKitCli.loading.${state}`)
             : state === "ready"
-              ? recyclingLabel(expireAt, now)
-              : "连接不可用"}
+              ? recyclingLabel(expireAt, now, t)
+              : t("agentKitCli.unavailable")}
         </span>
       </div>
       <div className="sandbox-tool-surface agentkit-cli-surface">
         {loading ? (
           <div className="agentkit-cli-state" role="status" aria-live="polite">
             <LoadingIndicator size={20} />
-            <TextShimmer as="strong">{LOADING_LABELS[state]}</TextShimmer>
+            <TextShimmer as="strong">{t(`agentKitCli.loading.${state}`)}</TextShimmer>
           </div>
         ) : state === "unconfigured" ? (
           <div className="agentkit-cli-state" role="status">
             <SandboxTerminalIcon />
-            <strong>{AGENTKIT_CLI_UNCONFIGURED_MESSAGE}</strong>
+            <strong>{agentKitCliUnconfiguredMessage()}</strong>
           </div>
         ) : state === "error" ? (
           <div className="agentkit-cli-state is-error" role="alert">
-            <strong>AgentKit CLI 请求失败</strong>
+            <strong>{t("agentKitCli.requestFailed")}</strong>
             <pre className="agentkit-cli-error-detail">{error}</pre>
             <button type="button" onClick={() => setAttempt((value) => value + 1)}>
-              重试
+              {t("agentKitCli.retry")}
             </button>
           </div>
         ) : launch ? (
           <iframe
             src={launch.url}
-            title="AgentKit CLI 终端"
+            title={t("agentKitCli.terminalTitle")}
             allow="clipboard-read; clipboard-write"
             sandbox="allow-downloads allow-forms allow-modals allow-popups allow-pointer-lock allow-same-origin allow-scripts"
           />

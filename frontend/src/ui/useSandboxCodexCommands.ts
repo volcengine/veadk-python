@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { useTranslation } from "react-i18next";
 import {
   sandboxClient,
   type AgentKitSandboxClient,
@@ -47,6 +48,7 @@ export function useSandboxCodexCommands({
   onActivity,
   onError,
 }: UseSandboxCodexCommandsOptions) {
+  const { t } = useTranslation("sandbox");
   const sessionIdRef = useRef(session?.id ?? "");
   const threadsRequestRef = useRef(0);
   const threadsAbortRef = useRef<AbortController | null>(null);
@@ -223,7 +225,7 @@ export function useSandboxCodexCommands({
     const snapshot = await client.newThread(activeSessionId);
     if (sessionIdRef.current !== activeSessionId) return;
     applySnapshot(snapshot);
-    onActivity("已新建 Codex 对话", [
+    onActivity(t("commands.activity.new"), [
       { label: "Thread", value: snapshot.threadId, code: true },
     ]);
   }
@@ -263,7 +265,7 @@ export function useSandboxCodexCommands({
       );
       if (sessionIdRef.current !== activeSessionId) return;
       applySnapshot(snapshot);
-      onActivity("已恢复 Codex 对话", [
+      onActivity(t("commands.activity.resumed"), [
         { label: "Thread", value: snapshot.threadId, code: true },
       ]);
     } catch (error) {
@@ -289,7 +291,7 @@ export function useSandboxCodexCommands({
       if (sessionIdRef.current !== activeSessionId) return false;
       if (result.snapshot) applySnapshot(result.snapshot);
       setThreads((current) => current.filter((thread) => thread.id !== threadId));
-      onActivity("已删除 Codex 历史会话", [
+      onActivity(t("commands.activity.deleted"), [
         { label: "Thread", value: threadId, code: true },
       ]);
       return true;
@@ -321,7 +323,7 @@ export function useSandboxCodexCommands({
       );
     if (!invocation || !command) {
       onError(
-        `未知快捷命令：${content.split(/\s/, 1)[0]}。输入 /help 查看可用命令。`,
+        t("commands.unknown", { command: content.split(/\s/, 1)[0] }),
       );
       return true;
     }
@@ -335,7 +337,7 @@ export function useSandboxCodexCommands({
     }
     if (command.name === "skill" || command.name === "skills") {
       if (!allowSkillSelection) {
-        onError("智能开发模式会自动使用开发能力，无需手动选择 Skill。");
+        onError(t("commands.automaticSkills"));
         return true;
       }
       onInputChange("$");
@@ -361,14 +363,16 @@ export function useSandboxCodexCommands({
         );
         if (sessionIdRef.current !== activeSession.id) return true;
         onSessionPatch({ model });
-        onActivity("已切换 Codex 模型", [
-          { label: "模型", value: model, code: true },
+        onActivity(t("commands.activity.modelChanged"), [
+          { label: t("commands.modelLabel"), value: model, code: true },
         ]);
       } else if (command.name === "models") {
         const available = modelsLoaded ? models : await loadModels();
         if (sessionIdRef.current !== activeSession.id) return true;
         onActivity(
-          available.length > 0 ? "Codex 可用模型" : "当前没有可用模型",
+          available.length > 0
+            ? t("commands.activity.availableModels")
+            : t("commands.activity.noModels"),
           sandboxModelDetails(available, activeSession.model),
         );
       } else if (command.name === "new" || command.name === "clear") {
@@ -380,20 +384,20 @@ export function useSandboxCodexCommands({
         );
         if (sessionIdRef.current !== activeSession.id) return true;
         applySnapshot(snapshot);
-        onActivity("已恢复 Codex 对话", [
+        onActivity(t("commands.activity.resumed"), [
           { label: "Thread", value: snapshot.threadId, code: true },
         ]);
       } else if (command.name === "fork") {
         const snapshot = await client.forkThread(activeSession.id);
         if (sessionIdRef.current !== activeSession.id) return true;
         applySnapshot(snapshot);
-        onActivity("已分叉 Codex 对话", [
+        onActivity(t("commands.activity.forked"), [
           { label: "Thread", value: snapshot.threadId, code: true },
         ]);
       } else if (command.name === "compact") {
         await client.compactThread(activeSession.id);
         if (sessionIdRef.current !== activeSession.id) return true;
-        onActivity("已开始压缩当前 Codex 对话", [
+        onActivity(t("commands.activity.compacting"), [
           { label: "Thread", value: activeSession.threadId, code: true },
         ]);
       } else if (command.name === "archive") {
@@ -407,17 +411,17 @@ export function useSandboxCodexCommands({
         setThreads((current) =>
           current.filter((thread) => thread.id !== archivedThreadId)
         );
-        onActivity("已归档 Codex 对话", [
+        onActivity(t("commands.activity.archived"), [
           { label: "Thread", value: archivedThreadId, code: true },
         ]);
       } else if (command.name === "status") {
         const status = await client.getStatus(activeSession.id);
         if (sessionIdRef.current !== activeSession.id) return true;
         onSessionPatch(status);
-        onActivity("Codex 当前状态", sandboxStatusDetails(status));
+        onActivity(t("commands.activity.status"), sandboxStatusDetails(status));
       } else if (command.name === "help") {
         onActivity(
-          "Sandbox 支持的 Codex 快捷命令",
+          t("commands.activity.help"),
           sandboxHelpDetails(),
         );
       }

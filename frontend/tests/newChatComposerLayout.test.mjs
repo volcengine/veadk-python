@@ -162,8 +162,8 @@ test("keeps alternate chat modes hidden from the new-chat composer", () => {
     composerSource,
     /<NewChatModeSelector[\s\S]*?value=\{newChatMode\}/,
   );
-  assert.match(selectorSource, /value: "agent"[\s\S]*?label: "Agent"/);
-  assert.match(selectorSource, /value: "temporary"[\s\S]*?label: "内置智能体"/);
+  assert.match(selectorSource, /value: "agent"[\s\S]*?labelKey: "mode\.agent\.label"/);
+  assert.match(selectorSource, /value: "temporary"[\s\S]*?labelKey: "mode\.builtin\.label"/);
   assert.doesNotMatch(selectorSource, /value: "skill-create"|创建 Skill/);
   assert.match(
     stylesSource,
@@ -195,10 +195,10 @@ test("keeps alternate chat modes hidden from the new-chat composer", () => {
   assert.doesNotMatch(selectorSource, /M5 6\.2h10v7\.6H5z/);
   assert.doesNotMatch(selectorSource, /<AgentSelector/);
   assert.match(navbarSource, /<AgentSelector[\s\S]*?variant="navbar"/);
-  assert.match(selectorSource, /Codex 智能体/);
-  assert.match(selectorSource, /DeepSeek Harness/);
-  assert.match(selectorSource, /\{ label: "ArkClaw", kind: "openclaw" \}/);
-  assert.match(selectorSource, /\{ label: "Hermes 智能体", kind: "hermes" \}/);
+  assert.match(selectorSource, /mode\.codex\.label/);
+  assert.match(selectorSource, /mode\.deepseekHarness\.label/);
+  assert.match(selectorSource, /\{ labelKey: "mode\.arkClaw", kind: "openclaw" \}/);
+  assert.match(selectorSource, /\{ labelKey: "mode\.hermes", kind: "hermes" \}/);
   assert.match(
     selectorSource,
     /<SandboxAgentIcon kind=\{agent\.kind\} className="new-chat-mode__builtin-icon"/,
@@ -237,7 +237,7 @@ test("layers pill-shaped workspace tabs behind the new-chat input", () => {
   );
   assert.match(
     workspaceTabsSource,
-    /role="tablist"[\s\S]*?aria-label="新会话模式"/,
+    /role="tablist"[\s\S]*?aria-label=\{t\("workspace\.label"\)\}/,
   );
   assert.match(
     workspaceTabsSource,
@@ -245,7 +245,7 @@ test("layers pill-shaped workspace tabs behind the new-chat input", () => {
   );
   assert.match(
     workspaceTabsSource,
-    /label: "智能体"[\s\S]*?label: "技能定制"[\s\S]*?label: "视频创作"/,
+    /labelKey: "workspace\.agent"[\s\S]*?labelKey: "workspace\.skill"[\s\S]*?labelKey: "workspace\.video"/,
   );
   assert.match(workspaceTabsSource, /AgentFaceIcon/);
   assert.match(
@@ -278,11 +278,15 @@ test("layers pill-shaped workspace tabs behind the new-chat input", () => {
   );
   assert.doesNotMatch(
     workspaceStylesSource,
+    /\.new-chat-workspace-tabs__tab\s*\{[\s\S]*?flex:\s*0 0 104px;[\s\S]*?width:\s*104px;/,
+  );
+  assert.doesNotMatch(
+    workspaceStylesSource,
     /\.new-chat-workspace-tabs\s*\{[^}]*\bborder:/,
   );
   assert.match(
     workspaceStylesSource,
-    /\.new-chat-workspace-tabs__tab\s*\{[\s\S]*?flex:\s*0 0 104px;[\s\S]*?width:\s*104px;[\s\S]*?min-height:\s*34px;[\s\S]*?border-radius:\s*10px;[\s\S]*?font-size:\s*14px;[\s\S]*?font-weight:\s*400;/,
+    /\.new-chat-workspace-tabs__tab\s*\{[\s\S]*?flex:\s*0 0 auto;[\s\S]*?width:\s*auto;[\s\S]*?min-width:\s*104px;[\s\S]*?min-height:\s*34px;[\s\S]*?border-radius:\s*10px;[\s\S]*?font-size:\s*14px;[\s\S]*?font-weight:\s*400;/,
   );
   assert.match(
     workspaceStylesSource,
@@ -339,23 +343,23 @@ test("hides skill customization until the administrator Dev Sandbox is usable", 
 test("keeps the built-in Agent types and adds the two skill actions", () => {
   assert.match(
     newChatAgentPickerSource,
-    /\{ id: "general", label: "通用智能体" \}/,
+    /\{ id: "general", labelKey: "agentPicker\.types\.general" \}/,
   );
   assert.match(
     newChatAgentPickerSource,
-    /\{ id: "codex", label: "Codex 智能体" \}/,
+    /\{ id: "codex", labelKey: "agentPicker\.types\.codex" \}/,
   );
   assert.match(
     newChatAgentPickerSource,
-    /\{ id: "deepseek-harness", label: "DeepSeek Harness" \}/,
+    /\{ id: "deepseek-harness", labelKey: "agentPicker\.types\.deepseekHarness" \}/,
   );
   assert.match(
     newChatAgentPickerSource,
-    /\{ id: "openclaw", label: "OpenClaw 智能体" \}/,
+    /\{ id: "openclaw", labelKey: "agentPicker\.types\.openclaw" \}/,
   );
   assert.match(
     newChatAgentPickerSource,
-    /\{ id: "hermes", label: "Hermes 智能体" \}/,
+    /\{ id: "hermes", labelKey: "agentPicker\.types\.hermes" \}/,
   );
   assert.match(
     composerSource,
@@ -365,13 +369,13 @@ test("keeps the built-in Agent types and adds the two skill actions", () => {
     composerSource,
     /newChatWorkspaceMode === "skill"[\s\S]*?<NewChatSkillControls/,
   );
-  assert.match(skillPickerSource, /value: "create", label: "技能生成"/);
-  assert.match(skillPickerSource, /value: "optimize", label: "技能优化"/);
+  assert.match(skillPickerSource, /value: "create", labelKey: "skill\.actions\.create"/);
+  assert.match(skillPickerSource, /value: "optimize", labelKey: "skill\.actions\.optimize"/);
   assert.match(skillPickerSource, /role="listbox"[\s\S]*?role="option"/);
   assert.match(skillPickerSource, /Escape/);
   assert.match(skillPickerSource, /ArrowDown/);
   assert.match(skillPickerSource, /ArrowUp/);
-  assert.match(skillControlsSource, /label="风格"[\s\S]*?label="模型"/);
+  assert.match(skillControlsSource, /label=\{t\("skill\.style"\)\}[\s\S]*?label=\{t\("skill\.model"\)\}/);
   assert.match(skillControlsSource, /getSkillWorkbenchCapability/);
   assert.match(skillControlsSource, /<NewChatSkillTargetPicker/);
   assert.match(skillControlsSource, /listSkillSpaces/);
@@ -387,7 +391,7 @@ test("keeps the built-in Agent types and adds the two skill actions", () => {
   );
   assert.match(
     composerSource,
-    /const placeholderText\s*=[\s\S]*?newChatWorkspaceMode === "agent"[\s\S]*?"请先选择智能体"[\s\S]*?workspacePlaceholder/,
+    /const placeholderText\s*=[\s\S]*?newChatWorkspaceMode === "agent"[\s\S]*?composer\.selectAgentFirst[\s\S]*?workspacePlaceholder/,
   );
   assert.doesNotMatch(
     composerSource,
@@ -451,7 +455,7 @@ test("mounts video creation controls only in the ordinary new-chat workspace", (
   );
   assert.match(
     videoControlsSource,
-    /firstLastFrameMode \? \([\s\S]*?label="尾帧"/,
+    /firstLastFrameMode \? \([\s\S]*?label=\{t\("video\.controls\.lastFrame"\)\}/,
   );
   assert.doesNotMatch(
     videoControlsSource,
@@ -485,7 +489,7 @@ test("keeps workspace tabs and video controls out of Codex Sandbox conversations
 test("defines the video defaults, modes, and progressive media inputs", () => {
   assert.match(
     videoTypesSource,
-    /VIDEO_TASK_MODE_OPTIONS[\s\S]*?自动识别[\s\S]*?文生视频[\s\S]*?参考素材生视频[\s\S]*?视频编辑[\s\S]*?视频续写[\s\S]*?首尾帧生成/,
+    /VIDEO_TASK_MODES[\s\S]*?"auto"[\s\S]*?"text_to_video"[\s\S]*?"reference_to_video"[\s\S]*?"video_editing"[\s\S]*?"video_extension"[\s\S]*?"first_last_frame"/,
   );
   for (const ratio of ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"]) {
     assert.match(videoTypesSource, new RegExp(ratio));
@@ -546,7 +550,7 @@ test("loads provider-native video models from backend capabilities", () => {
   );
   assert.match(
     videoControlsSource,
-    /new-chat-video-controls__assets[\s\S]*?new-chat-video-controls__model-hint[\s\S]*?使用 \{enhancerModel\} 模型进行意图识别和提示词增强/,
+    /new-chat-video-controls__assets[\s\S]*?new-chat-video-controls__model-hint[\s\S]*?video\.controls\.enhancerHint/,
   );
   assert.match(composerSource, /videoCapabilities\?\.generationModel/);
   assert.match(composerSource, /videoCapabilities\?\.enhancerModel/);
@@ -555,8 +559,12 @@ test("loads provider-native video models from backend capabilities", () => {
     /assetStorageAvailable=\{[\s\S]*?videoCapabilities\?\.assetStorageAvailable \?\? false\s*\}/,
   );
   assert.match(
-    videoControlsSource,
-    /管理员未配置持久化存储|assetStorageUnavailableReason/,
+    composerSource,
+    /assetStorageUnavailableReason=\{\s*t\("newChat:video\.controls\.storageUnavailable"\)\s*\}/,
+  );
+  assert.doesNotMatch(
+    appSource,
+    /capabilities\.assetStorageUnavailableReason\s*\|\|\s*appText\("errors\.persistentStorageNotConfigured"\)/,
   );
 });
 
@@ -573,7 +581,7 @@ test("reveals video controls with reduced-motion support", () => {
   );
   assert.match(
     composerSource,
-    /className="new-chat-video-task-mode"[\s\S]*?label="任务模式"[\s\S]*?hideLabel[\s\S]*?VIDEO_TASK_MODE_OPTIONS\.filter/,
+    /className="new-chat-video-task-mode"[\s\S]*?label=\{t\("composer\.taskMode"\)\}[\s\S]*?hideLabel[\s\S]*?videoModeOptions\.filter/,
   );
   assert.match(
     videoStylesSource,
@@ -591,7 +599,7 @@ test("reveals video controls with reduced-motion support", () => {
   assert.doesNotMatch(composerSource, /<span>生成模型<\/span>/);
   assert.match(
     videoControlsSource,
-    /className="new-chat-video-controls__parameters"[\s\S]*?比例[\s\S]*?清晰度[\s\S]*?时长[\s\S]*?new-chat-video-controls__assets/,
+    /className="new-chat-video-controls__parameters"[\s\S]*?video\.controls\.aspectRatio[\s\S]*?video\.controls\.resolution[\s\S]*?video\.controls\.duration[\s\S]*?new-chat-video-controls__assets/,
   );
   assert.match(
     videoStylesSource,
@@ -613,9 +621,9 @@ test("runs and restores the accessible video generation task dialog", () => {
   assert.match(appSource, /uploadVideoAsset\(/);
   assert.match(appSource, /createVideoTask\(/);
   assert.match(appSource, /getVideoTask\(/);
-  assert.match(appSource, /视频续写需要先添加基础视频/);
-  assert.match(appSource, /参考素材生视频需要至少添加一项参考图片或参考视频/);
-  assert.match(appSource, /文生视频不使用参考素材/);
+  assert.match(appSource, /errors\.videoExtendRequiresVideo/);
+  assert.match(appSource, /errors\.videoReferenceRequired/);
+  assert.match(appSource, /errors\.textVideoRejectsReferences/);
   assert.match(appSource, /config\.taskMode === "text_to_video"\) return \[\]/);
   assert.match(appSource, /setVideoTaskDialogOpen\(false\)/);
   assert.match(appSource, /onOpenVideoTask=/);
@@ -623,8 +631,8 @@ test("runs and restores the accessible video generation task dialog", () => {
     videoTaskSource,
     /"optimizing"[\s\S]*?"generating"[\s\S]*?"success"[\s\S]*?"error"/,
   );
-  assert.match(videoTaskSource, /提示词优化中/);
-  assert.match(videoTaskSource, /提示词优化完成/);
+  assert.match(videoTaskSource, /video\.task\.steps\.optimizationActive/);
+  assert.match(videoTaskSource, /video\.task\.steps\.optimizationDone/);
   assert.match(videoTaskDialogSource, /role="dialog"/);
   assert.match(videoTaskDialogSource, /aria-modal="true"/);
   assert.match(videoTaskDialogSource, /aria-live="polite"/);
@@ -645,12 +653,12 @@ test("runs and restores the accessible video generation task dialog", () => {
   );
   assert.match(
     videoTaskDialogSource,
-    /这可能持续数分钟，完成后将在这里显示视频预览/,
+    /video\.task\.runningHint/,
   );
-  assert.match(videoTaskDialogSource, /可以关闭弹窗，任务会继续在后台运行/);
+  assert.match(videoTaskDialogSource, /video\.task\.backgroundHint/);
   assert.match(videoTaskDialogSource, /role="progressbar"/);
   assert.match(videoTaskDialogSource, /aria-valuetext=/);
-  assert.match(videoTaskDialogSource, /已等待 \{elapsed\}/);
+  assert.match(videoTaskDialogSource, /video\.task\.elapsed/);
   assert.doesNotMatch(
     videoTaskDialogSource,
     /new-chat-video-task-step__marker/,
@@ -678,7 +686,7 @@ test("runs and restores the accessible video generation task dialog", () => {
     videoTaskDialogStylesSource,
     /\.new-chat-video-task-dialog__icon\s*\{/,
   );
-  assert.match(videoTaskDialogSource, /请先在模型控制台开通服务，再重试生成/);
+  assert.match(videoTaskDialogSource, /video\.task\.activationHint/);
   assert.match(videoTaskDialogSource, /className="new-chat-video-task-error" role="alert"/);
   assert.match(
     videoTaskDialogStylesSource,
@@ -720,7 +728,7 @@ test("aligns the skill action picker with adjacent controls without an icon", ()
   );
   assert.match(
     skillControlsSource,
-    /className="new-chat-skill-controls__model"[\s\S]*?label="模型"[\s\S]*?hideLabel/,
+    /className="new-chat-skill-controls__model"[\s\S]*?label=\{t\("skill\.model"\)\}[\s\S]*?hideLabel/,
   );
   assert.match(
     workspaceStylesSource,
@@ -817,7 +825,7 @@ test("reveals the refreshed welcome heading and placeholder after Agent connecti
   );
   assert.match(
     featureNoticeSource,
-    /className="welcome-feature-pill"[\s\S]*?焕然一新[\s\S]*?查看新特性/,
+    /className="welcome-feature-pill"[\s\S]*?featureNotice\.badge[\s\S]*?featureNotice\.view/,
   );
   assert.match(stylesSource, /--feature-link:\s*208 100% 47\.45%/);
   assert.match(stylesSource, /\.welcome-primary\s*\{[\s\S]*?gap:\s*32px;/);
@@ -889,9 +897,9 @@ test("keeps the Agent picker aligned without extra highlighting or guidance", ()
 
 test("reveals feature details on hover or keyboard focus", () => {
   assert.match(featureNoticeSource, /role="tooltip"/);
-  assert.match(featureNoticeSource, /多地域智能体/);
-  assert.match(featureNoticeSource, /会话内切换/);
-  assert.match(featureNoticeSource, /可视化执行画布/);
+  assert.match(featureNoticeSource, /featureNotice\.defaultNotes\.multiRegion/);
+  assert.match(featureNoticeSource, /featureNotice\.defaultNotes\.switchAgent/);
+  assert.match(featureNoticeSource, /featureNotice\.defaultNotes\.visualCanvas/);
   assert.match(
     stylesSource,
     /\.welcome-feature-pill:hover \.welcome-feature-popover/,
@@ -915,15 +923,15 @@ test("shows task capsules for Harness agents without generic starter prompts", (
   assert.match(composerSource, /availableTaskShortcuts/);
   assert.match(
     composerSource,
-    /value: "ppt"[\s\S]*?label: "PPT"[\s\S]*?经营表现[\s\S]*?项目名称】进展[\s\S]*?输出解决方案[\s\S]*?行业主题】趋势/,
+    /value: "ppt"[\s\S]*?composer\.prompts\.ppt\.quarterlyReview[\s\S]*?composer\.prompts\.ppt\.projectUpdate[\s\S]*?composer\.prompts\.ppt\.solutionProposal[\s\S]*?composer\.prompts\.ppt\.industryAnalysis/,
   );
   assert.match(
     composerSource,
-    /value: "image"[\s\S]*?label: "图片生成"[\s\S]*?发布会主视觉[\s\S]*?电商海报[\s\S]*?概念效果图[\s\S]*?企业社媒配图/,
+    /value: "image"[\s\S]*?composer\.prompts\.image\.launchVisual[\s\S]*?composer\.prompts\.image\.ecommercePoster[\s\S]*?composer\.prompts\.image\.conceptRendering[\s\S]*?composer\.prompts\.image\.socialGraphic/,
   );
   assert.match(
     composerSource,
-    /value: "video"[\s\S]*?label: "视频生成"[\s\S]*?30 秒宣传片[\s\S]*?45 秒发布视频[\s\S]*?企业培训视频[\s\S]*?20 秒预热视频/,
+    /value: "video"[\s\S]*?composer\.prompts\.video\.brandFilm[\s\S]*?composer\.prompts\.video\.productLaunch[\s\S]*?composer\.prompts\.video\.trainingVideo[\s\S]*?composer\.prompts\.video\.eventTeaser/,
   );
   assert.doesNotMatch(
     composerSource,
@@ -948,9 +956,9 @@ test("shows task capsules for Harness agents without generic starter prompts", (
   assert.match(composerSource, /selectedTask\.prompts\.map\(\(prompt\) =>/);
   assert.match(
     composerSource,
-    /aria-label=\{`\$\{selectedTask\.label\}企业提示词`\}/,
+    /t\("composer\.enterprisePrompts"/,
   );
-  assert.match(composerSource, /onClick=\{\(\) => applyTaskPrompt\(prompt\)\}/);
+  assert.match(composerSource, /onClick=\{\(\) => applyTaskPrompt\(translatedPrompt\)\}/);
   assert.match(
     composerSource,
     /setSelectionRange\(placeholderStart \+ 1, placeholderEnd\)/,
@@ -986,7 +994,7 @@ test("shows the selected task between add and Agent and reveals cancel on hover"
   );
   assert.match(
     composerSource,
-    /aria-label=\{`取消\$\{selectedTask\.label\}任务`\}/,
+    /aria-label=\{t\("composer\.cancelTask"/,
   );
   assert.match(composerSource, /onClick=\{clearTask\}/);
   assert.match(

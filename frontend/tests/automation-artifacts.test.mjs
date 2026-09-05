@@ -177,7 +177,7 @@ test("rejects invalid Runtime and review settings before generating workflows", 
       runtimeId: "rt-agent",
       region: "cn-beijing",
     }),
-    /Runtime 名称/,
+    /Runtime name/,
   );
   assert.throws(
     () => buildPullRequestReviewWorkflow({
@@ -197,7 +197,7 @@ test("normalizes supported GitHub repository forms and rejects unsafe paths", as
   assert.equal(normalizeGitHubRepository("https://www.github.com/acme/agent.git"), "acme/agent");
   assert.equal(normalizeGitHubRepository("git@github.com:acme/agent.git"), "acme/agent");
   assert.throws(() => normalizeGitHubRepository("https://example.com/acme/agent"), /github\.com/);
-  assert.throws(() => normalizeRepositoryPath("../escape"), /安全相对路径/);
+  assert.throws(() => normalizeRepositoryPath("../escape"), /safe relative path/);
 });
 
 test("creates a GitHub pull request directly without persisting the token", async () => {

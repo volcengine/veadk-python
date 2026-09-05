@@ -2,6 +2,8 @@ import { useCallback, useDeferredValue, useEffect, useId, useMemo, useRef, useSt
 import { Button } from "@openai/apps-sdk-ui/components/Button";
 import { EmptyMessage } from "@openai/apps-sdk-ui/components/EmptyMessage";
 import { PlusLg18pxAdd } from "@openai/apps-sdk-ui/components/Icon";
+import type { TFunction } from "i18next";
+import { useTranslation } from "react-i18next";
 import {
   getSkillDetail,
   listSkillsInSpacePage,
@@ -73,6 +75,7 @@ function SandboxDisabledAction({
   placement?: "top" | "bottom" | "inside";
   children: ReactNode;
 }) {
+  const { t } = useTranslation("ui");
   const tooltipId = useId();
 
   return (
@@ -84,34 +87,24 @@ function SandboxDisabledAction({
       {children}
       {disabled ? (
         <span id={tooltipId} className="skillcenter-disabled-tooltip" role="tooltip">
-          管理员未配置 Dev Sandbox
+          {t("skillCenter.sandboxNotConfigured")}
         </span>
       ) : null}
     </span>
   );
 }
 
-const STATUS_LABELS: Record<string, string> = {
-  active: "可用",
-  available: "可用",
-  creating: "创建中",
-  disabled: "已停用",
-  enabled: "已启用",
-  failed: "异常",
-  inactive: "未启用",
-  pending: "等待中",
-  published: "已发布",
-  ready: "就绪",
-  released: "已发布",
-  running: "运行中",
-  success: "正常",
-  unavailable: "不可用",
-  unreleased: "未发布",
-  updating: "更新中",
-};
+const KNOWN_STATUSES = new Set([
+  "active", "available", "creating", "disabled", "enabled", "failed",
+  "inactive", "pending", "published", "ready", "released", "running",
+  "success", "unavailable", "unreleased", "updating",
+]);
 
-function statusLabel(status?: string): string {
-  return STATUS_LABELS[(status || "").trim().toLowerCase()] || "未知";
+function statusLabel(status: string | undefined, t: TFunction<"ui">): string {
+  const normalized = (status || "").trim().toLowerCase();
+  return KNOWN_STATUSES.has(normalized)
+    ? t(`skillCenter.status.${normalized}`)
+    : t("skillCenter.status.unknown");
 }
 
 function statusTone(status?: string): string {
@@ -125,7 +118,7 @@ function statusTone(status?: string): string {
   return "is-muted";
 }
 
-function updatedAtLabel(value?: string): string {
+function updatedAtLabel(value: string | undefined, locale: string): string {
   if (!value) return "";
   const trimmed = value.trim();
   const numeric = Number(trimmed);
@@ -133,7 +126,7 @@ function updatedAtLabel(value?: string): string {
     ? new Date(numeric < 1_000_000_000_000 ? numeric * 1000 : numeric)
     : new Date(trimmed);
   if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat(locale, {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
@@ -172,10 +165,10 @@ function skillMarkdownBody(value: string): string {
     : value;
 }
 
-function skillDescriptionLabel(value?: string): string {
+function skillDescriptionLabel(value: string | undefined, t: TFunction<"ui">): string {
   const description = (value || "").trim();
   return !description || [">", ">-", "|", "|-"].includes(description)
-    ? "暂无描述"
+    ? t("common.noDescription")
     : description;
 }
 
@@ -224,16 +217,17 @@ function Pager({
   pageSize: number;
   onPage: (page: number) => void;
 }) {
+  const { t } = useTranslation("ui");
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
   return (
     <footer className="skillcenter-pager">
-      <span>共 {total} 项</span>
+      <span>{t("skillCenter.totalItems", { count: total })}</span>
       <div className="skillcenter-pager-actions">
-        <button type="button" onClick={() => onPage(page - 1)} disabled={page <= 1} aria-label="上一页">
+        <button type="button" onClick={() => onPage(page - 1)} disabled={page <= 1} aria-label={t("common.previousPage")}>
           <ArrowIcon direction="left" />
         </button>
         <span>{page} / {pageCount}</span>
-        <button type="button" onClick={() => onPage(page + 1)} disabled={page >= pageCount} aria-label="下一页">
+        <button type="button" onClick={() => onPage(page + 1)} disabled={page >= pageCount} aria-label={t("common.nextPage")}>
           <ArrowIcon direction="right" />
         </button>
       </div>
@@ -285,13 +279,14 @@ function SpaceLoadErrors({
   fullPage?: boolean;
   onRetry: () => void;
 }) {
+  const { t } = useTranslation("ui");
   return (
     <div
       className={`skillcenter-space-errors${fullPage ? " is-full-page" : ""}`}
       role="alert"
     >
       <div className="skillcenter-space-errors__content">
-        <strong>{fullPage ? "无法加载技能空间" : "部分技能空间加载失败"}</strong>
+        <strong>{fullPage ? t("skillCenter.cannotLoadSpaces") : t("skillCenter.someSpacesFailed")}</strong>
         {errors.map(({ region, error }) => (
           <section key={region}>
             <span>{formatCloudRegion(region, cloudProvider)}</span>
@@ -299,7 +294,7 @@ function SpaceLoadErrors({
           </section>
         ))}
       </div>
-      <button type="button" onClick={onRetry}>重新加载</button>
+      <button type="button" onClick={onRetry}>{t("common.reload")}</button>
     </div>
   );
 }
@@ -331,6 +326,7 @@ function SkillDetailDialog({
   onDownload: () => void;
   onClose: () => void;
 }) {
+  const { t } = useTranslation("ui");
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
@@ -352,36 +348,36 @@ function SkillDetailDialog({
           <div className="skill-detail-heading">
             <div>
               <h2 id="skill-detail-title">{detail?.name || skill.skillName}</h2>
-              <p>{skillDescriptionLabel(detail?.description || skill.skillDescription)}</p>
+              <p>{skillDescriptionLabel(detail?.description || skill.skillDescription, t)}</p>
             </div>
           </div>
           <div className="skill-detail-actions">
-            <button type="button" onClick={onDownload} disabled={files.length === 0}>下载 ZIP</button>
+            <button type="button" onClick={onDownload} disabled={files.length === 0}>{t("skillCenter.downloadZip")}</button>
             <SandboxDisabledAction disabled={!canOptimize} placement="bottom">
-              <button type="button" onClick={onOptimize} disabled={!canOptimize}>优化</button>
+              <button type="button" onClick={onOptimize} disabled={!canOptimize}>{t("skillCenter.optimize")}</button>
             </SandboxDisabledAction>
-            <button type="button" className="skill-detail-close" onClick={onClose} aria-label="关闭技能详情"><CloseIcon /></button>
+            <button type="button" className="skill-detail-close" onClick={onClose} aria-label={t("skillCenter.closeSkillDetails")}><CloseIcon /></button>
           </div>
         </header>
 
         <dl className="skill-detail-meta">
-          <div><dt>技能 ID</dt><dd title={skill.skillId}>{skill.skillId}</dd></div>
-          <div><dt>版本</dt><dd>{detail?.version || skill.version || "—"}</dd></div>
-          <div><dt>状态</dt><dd>{statusLabel(skill.skillStatus)}</dd></div>
-          <div><dt>技能空间</dt><dd title={space.name}>{space.name}</dd></div>
-          <div><dt>地域</dt><dd>{formatCloudRegion(region, cloudProvider)}</dd></div>
+          <div><dt>{t("skillCenter.skillId")}</dt><dd title={skill.skillId}>{skill.skillId}</dd></div>
+          <div><dt>{t("agentSelector.version")}</dt><dd>{detail?.version || skill.version || "—"}</dd></div>
+          <div><dt>{t("agentSelector.status")}</dt><dd>{statusLabel(skill.skillStatus, t)}</dd></div>
+          <div><dt>{t("skillCenter.skillSpace")}</dt><dd title={space.name}>{space.name}</dd></div>
+          <div><dt>{t("myAgents.region")}</dt><dd>{formatCloudRegion(region, cloudProvider)}</dd></div>
         </dl>
 
         <div className="skill-detail-content skill-detail-content--files">
-          <div className="skill-detail-content-title">完整文件</div>
+          <div className="skill-detail-content-title">{t("skillCenter.allFiles")}</div>
           {loading ? (
-            <div className="skillcenter-loading"><LoadingMark />正在读取技能内容…</div>
+            <div className="skillcenter-loading"><LoadingMark />{t("skillCenter.loadingSkillContent")}</div>
           ) : error ? (
             <div className="skillcenter-error"><SkillErrorDetails error={error} /></div>
           ) : files.length > 0 ? (
             <SkillFileTree files={files.map((file) => file.path.endsWith("SKILL.md") && file.content ? { ...file, content: skillMarkdownBody(file.content) } : file)} />
           ) : (
-            <EmptyState>该技能暂无 SKILL.md 内容</EmptyState>
+            <EmptyState>{t("skillCenter.noSkillContent")}</EmptyState>
           )}
         </div>
       </section>
@@ -402,6 +398,7 @@ function AddSkillDialog({
   onSandbox: () => void;
   onClose: () => void;
 }) {
+  const { t } = useTranslation("ui");
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
@@ -421,15 +418,15 @@ function AddSkillDialog({
       >
         <header>
           <div>
-            <h2 id="skill-add-dialog-title">添加技能</h2>
+            <h2 id="skill-add-dialog-title">{t("skillCenter.addSkill")}</h2>
             <p title={space.name}>{space.name}</p>
           </div>
-          <button type="button" onClick={onClose}>取消</button>
+          <button type="button" onClick={onClose}>{t("common.cancel")}</button>
         </header>
         <div className="skill-add-dialog__options">
           <button type="button" onClick={onUpload}>
-            <strong>本地上传</strong>
-            <span>选择 ZIP 文件，校验通过后上传到技能空间</span>
+            <strong>{t("skillCenter.localUpload")}</strong>
+            <span>{t("skillCenter.localUploadDescription")}</span>
           </button>
           <SandboxDisabledAction disabled={!canUseSandbox} placement="inside">
             <button
@@ -437,8 +434,8 @@ function AddSkillDialog({
               disabled={!canUseSandbox}
               onClick={onSandbox}
             >
-              <strong>自动创建</strong>
-              <span>选择模型和风格，通过对话生成技能</span>
+              <strong>{t("skillCenter.autoCreate")}</strong>
+              <span>{t("skillCenter.autoCreateDescription")}</span>
             </button>
           </SandboxDisabledAction>
         </div>
@@ -479,6 +476,7 @@ export function SkillCenterView({
   toolbarLeading?: ReactNode;
   toolbarFilters?: ReactNode;
 }) {
+  const { t, i18n } = useTranslation("ui");
   const spaceRegions = useMemo(
     () => [region],
     [region],
@@ -521,10 +519,12 @@ export function SkillCenterView({
   const deferredSkillQuery = useDeferredValue(skillQuery);
   const workspaceTitle = workspace && (selectedSpace || workspace.selectPublishSpace)
     ? workspace.operation === "create"
-      ? "创建技能"
-      : `优化 ${workspace.source?.name || "技能"}`
+      ? t("skillCenter.createSkill")
+      : t("skillCenter.optimizeNamed", {
+          name: workspace.source?.name || t("skillCenter.skill"),
+        })
     : "";
-  const pageTitle = workspaceTitle || selectedSpace?.name || "技能库";
+  const pageTitle = workspaceTitle || selectedSpace?.name || t("skillCenter.library");
 
   useEffect(() => {
     if (active) onPageTitleChange?.(pageTitle);
@@ -571,13 +571,13 @@ export function SkillCenterView({
       .then(setCapability)
       .catch(() => setCapability({
         enabled: false,
-        reason: "管理员未配置",
+        reason: t("skillCenter.adminNotConfigured"),
         operations: ["create", "optimize"],
         models: [],
         styles: {},
       }));
     return () => controller.abort();
-  }, []);
+  }, [t]);
 
   const fetchSpacePages = useCallback(async (
     requests: Array<{ region: string; page: number }>,
@@ -616,7 +616,7 @@ export function SkillCenterView({
       if (settled.status === "rejected") {
         return {
           request,
-          error: normalizeSkillError(settled.reason, "读取技能空间失败，请稍后重试"),
+          error: normalizeSkillError(settled.reason, t("skillCenter.errors.loadSpaces")),
           items: [] as SkillSpaceRef[],
           totalCount: 0,
         };
@@ -741,13 +741,13 @@ export function SkillCenterView({
         if (!active) return;
         setSkills([]);
         setSkillTotal(0);
-        setSkillsError(normalizeSkillError(error, "读取技能失败，请稍后重试"));
+        setSkillsError(normalizeSkillError(error, t("skillCenter.errors.loadSkills")));
       })
       .finally(() => {
         if (active) setSkillsLoading(false);
       });
     return () => { active = false; };
-  }, [selectedRegion, selectedSpace, skillPage, skillRevision]);
+  }, [selectedRegion, selectedSpace, skillPage, skillRevision, t]);
 
   const selectSpace = (space: SkillSpaceRef) => {
     closeDetail();
@@ -811,7 +811,7 @@ export function SkillCenterView({
       }
     } catch (error) {
       if (detailRequest.current === request) {
-        setDetailError(normalizeSkillError(error, "读取技能详情失败，请稍后重试"));
+        setDetailError(normalizeSkillError(error, t("skillCenter.errors.loadSkillDetails")));
       }
     } finally {
       if (detailRequest.current === request) setDetailLoading(false);
@@ -841,7 +841,7 @@ export function SkillCenterView({
   };
 
   const removeSkill = async (skill: SkillSpaceSkill) => {
-    if (!selectedSpace || !window.confirm(`确定删除整个 Skill“${skill.skillName}”吗？此操作会影响所有引用它的空间。`)) return;
+    if (!selectedSpace || !window.confirm(t("skillCenter.deleteSkillConfirm", { name: skill.skillName }))) return;
     setDeletingSkillId(skill.skillId);
     setActionError(null);
     try {
@@ -853,14 +853,14 @@ export function SkillCenterView({
       setSkillRevision((value) => value + 1);
       setSpaceRevision((value) => value + 1);
     } catch (error) {
-      setActionError(normalizeSkillError(error, "删除 Skill 失败"));
+      setActionError(normalizeSkillError(error, t("skillCenter.errors.deleteSkill")));
     } finally {
       setDeletingSkillId("");
     }
   };
 
   const removeSpace = async (space: SkillSpaceRef) => {
-    if (!window.confirm(`确定删除 Skill 空间“${space.name}”吗？请先确认空间中的技能已删除。`)) return;
+    if (!window.confirm(t("skillCenter.deleteSpaceConfirm", { name: space.name }))) return;
     const key = skillSpaceKey(space);
     setDeletingSpaceId(key);
     setActionError(null);
@@ -872,7 +872,7 @@ export function SkillCenterView({
       if (selectedSpace && skillSpaceKey(selectedSpace) === key) closeSpace();
       setSpaceRevision((value) => value + 1);
     } catch (error) {
-      setActionError(normalizeSkillError(error, "删除 Skill 空间失败"));
+      setActionError(normalizeSkillError(error, t("skillCenter.errors.deleteSpace")));
     } finally {
       setDeletingSpaceId("");
     }
@@ -903,21 +903,21 @@ export function SkillCenterView({
         <ResourceDetailLayout
           className="skillcenter-detail"
           title={selectedSpace.name}
-          description={selectedSpace.description || "管理空间中的技能并创建新的版本"}
+          description={selectedSpace.description || t("skillCenter.manageSpaceDescription")}
           identitySeed={selectedSpace.name}
-          backLabel="返回技能空间列表"
+          backLabel={t("skillCenter.backToSpaces")}
           onBack={closeSpace}
           sections={[
             {
               key: "overview",
-              label: "概览",
+              label: t("skillCenter.overview"),
               content: (
                 <>
                   {actionError ? <div className="skillcenter-inline-error" role="alert"><SkillErrorDetails error={actionError} /></div> : null}
                   <section className="skillcenter-overview">
                     <ResourceDetailSummary className="skillcenter-detail-facts">
-                      <div><dt>技能数量</dt><dd>{skillTotal}</dd></div>
-                      <div><dt>更新时间</dt><dd>{selectedSpace.updatedAt ? updatedAtLabel(selectedSpace.updatedAt) : "—"}</dd></div>
+                      <div><dt>{t("skillCenter.skillCount")}</dt><dd>{skillTotal}</dd></div>
+                      <div><dt>{t("skillCenter.updatedAt")}</dt><dd>{selectedSpace.updatedAt ? updatedAtLabel(selectedSpace.updatedAt, i18n.resolvedLanguage ?? i18n.language) : "—"}</dd></div>
                     </ResourceDetailSummary>
                   </section>
                 </>
@@ -925,20 +925,20 @@ export function SkillCenterView({
             },
             {
               key: "skills",
-              label: "技能",
+              label: t("skillCenter.skills"),
               content: (
                 <>
                   {actionError ? <div className="skillcenter-inline-error" role="alert"><SkillErrorDetails error={actionError} /></div> : null}
-                  <section className="skillcenter-results" aria-label={`${selectedSpace.name}中的技能`}>
+                  <section className="skillcenter-results" aria-label={t("skillCenter.skillsInSpace", { name: selectedSpace.name })}>
                     <ResourceDetailSectionHeader
-                      title="技能"
-                      description={`共 ${skillTotal} 项`}
+                      title={t("skillCenter.skills")}
+                      description={t("skillCenter.totalItems", { count: skillTotal })}
                       actions={(
                         <ResourceSearch
-                          aria-label="搜索技能"
+                          aria-label={t("skillCenter.searchSkills")}
                           value={skillQuery}
                           onChange={(event) => setSkillQuery(event.target.value)}
-                          placeholder="搜索技能"
+                          placeholder={t("skillCenter.searchSkills")}
                         />
                       )}
                     />
@@ -947,21 +947,21 @@ export function SkillCenterView({
                     ) : skillsError && skills.length === 0 ? (
                       <PageState
                         kind="error"
-                        title="无法加载技能"
+                        title={t("skillCenter.cannotLoadSkills")}
                         error={skillsError}
-                        action={{ label: "重新加载", onClick: () => setSkillRevision((value) => value + 1) }}
+                        action={{ label: t("common.reload"), onClick: () => setSkillRevision((value) => value + 1) }}
                       />
                     ) : visibleSkills.length === 0 ? (
                       <PageState
                         kind="empty"
-                        title={skillQuery.trim() ? "没有匹配的技能" : "暂无技能"}
-                        description={skillQuery.trim() ? "请尝试搜索其他名称" : "本地上传 Skill，或自动创建"}
-                        action={!skillQuery.trim() ? { label: "本地上传", onClick: () => setUploadSpace(selectedSpace) } : undefined}
+                        title={skillQuery.trim() ? t("skillCenter.noMatchingSkills") : t("skillCenter.noSkills")}
+                        description={skillQuery.trim() ? t("skillCenter.tryAnotherName") : t("skillCenter.emptySkillsDescription")}
+                        action={!skillQuery.trim() ? { label: t("skillCenter.localUpload"), onClick: () => setUploadSpace(selectedSpace) } : undefined}
                       />
                     ) : (
                       <div className="skillcenter-table-wrap">
                         <table className="skillcenter-table">
-                          <thead><tr><th scope="col">技能</th><th scope="col">状态</th><th scope="col" className="skillcenter-table__actions-heading">操作</th></tr></thead>
+                          <thead><tr><th scope="col">{t("skillCenter.skills")}</th><th scope="col">{t("agentSelector.status")}</th><th scope="col" className="skillcenter-table__actions-heading">{t("skillCenter.actions")}</th></tr></thead>
                           <tbody>
                             {visibleSkills.map((skill) => (
                               <tr key={`${skill.skillId}:${skill.version}`}>
@@ -971,16 +971,16 @@ export function SkillCenterView({
                                       <strong title={skill.skillName}>{skill.skillName}</strong>
                                       {skill.version ? <span className="skillcenter-table__version-badge">{skill.version}</span> : null}
                                     </span>
-                                    <span className="skillcenter-table__description">{skillDescriptionLabel(skill.skillDescription)}</span>
+                                    <span className="skillcenter-table__description">{skillDescriptionLabel(skill.skillDescription, t)}</span>
                                   </button>
                                 </td>
-                                <td><span className={`skillcenter-status ${statusTone(skill.skillStatus)}`}>{statusLabel(skill.skillStatus)}</span></td>
+                                <td><span className={`skillcenter-status ${statusTone(skill.skillStatus)}`}>{statusLabel(skill.skillStatus, t)}</span></td>
                                 <td><div className="skillcenter-table__actions">
-                                  <button type="button" onClick={() => void openDetail(skill)}>查看</button>
+                                  <button type="button" onClick={() => void openDetail(skill)}>{t("common.view")}</button>
                                   <SandboxDisabledAction disabled={!capability?.enabled}>
-                                    <button type="button" disabled={!capability?.enabled} onClick={() => startOptimization(skill)}>优化</button>
+                                    <button type="button" disabled={!capability?.enabled} onClick={() => startOptimization(skill)}>{t("skillCenter.optimize")}</button>
                                   </SandboxDisabledAction>
-                                  <button type="button" className="is-danger" disabled={deletingSkillId === skill.skillId} onClick={() => void removeSkill(skill)}>{deletingSkillId === skill.skillId ? "删除中…" : "删除"}</button>
+                                  <button type="button" className="is-danger" disabled={deletingSkillId === skill.skillId} onClick={() => void removeSkill(skill)}>{deletingSkillId === skill.skillId ? t("common.deleting") : t("common.delete")}</button>
                                 </div></td>
                               </tr>
                             ))}
@@ -997,7 +997,7 @@ export function SkillCenterView({
             },
           ]}
           activeSectionKey={detailSection}
-          navigationLabel="技能空间详情"
+          navigationLabel={t("skillCenter.spaceDetails")}
           onSectionChange={(key) => setDetailSection(key as SkillSpaceDetailSection)}
           actionsClassName="skillcenter-toolbar-actions"
           actions={(
@@ -1010,7 +1010,7 @@ export function SkillCenterView({
                 pill={false}
                 onClick={() => setEditingSpace(selectedSpace)}
               >
-                编辑空间
+                {t("skillCenter.editSpace")}
               </Button>
               <Button
                 type="button"
@@ -1021,9 +1021,9 @@ export function SkillCenterView({
                 disabled={deletingSpaceId === skillSpaceKey(selectedSpace)}
                 onClick={() => void removeSpace(selectedSpace)}
               >
-                {deletingSpaceId === skillSpaceKey(selectedSpace) ? "删除中…" : "删除空间"}
+                {deletingSpaceId === skillSpaceKey(selectedSpace) ? t("common.deleting") : t("skillCenter.deleteSpace")}
               </Button>
-              <Button type="button" color="secondary" variant="outline" size="lg" pill={false} onClick={() => setUploadSpace(selectedSpace)}>本地上传</Button>
+              <Button type="button" color="secondary" variant="outline" size="lg" pill={false} onClick={() => setUploadSpace(selectedSpace)}>{t("skillCenter.localUpload")}</Button>
               <SandboxDisabledAction disabled={!capability?.enabled}>
                 <Button
                   type="button"
@@ -1034,7 +1034,7 @@ export function SkillCenterView({
                   onClick={() => setWorkspace({ operation: "create" })}
                 >
                   <PlusLg18pxAdd aria-hidden="true" />
-                  <span>创建技能</span>
+                  <span>{t("skillCenter.createSkill")}</span>
                 </Button>
               </SandboxDisabledAction>
             </>
@@ -1047,10 +1047,10 @@ export function SkillCenterView({
             <div className="resource-toolbar__actions">
               {toolbarFilters}
               <ResourceSearch
-                aria-label="搜索技能空间"
+                aria-label={t("skillCenter.searchSpaces")}
                 value={spaceQuery}
                 onChange={(event) => setSpaceQuery(event.target.value)}
-                placeholder="搜索技能空间"
+                placeholder={t("skillCenter.searchSpaces")}
               />
             </div>
           </ResourceToolbar>
@@ -1060,7 +1060,7 @@ export function SkillCenterView({
           <ResourceResults
             className="skillcenter-list-results"
             ref={spaceResultsRef}
-            aria-label="技能空间列表"
+            aria-label={t("skillCenter.spaceList")}
             onScroll={handleSpaceResultsScroll}
           >
             {spaceErrors.length > 0 && !allSpaceRegionsFailed ? (
@@ -1082,18 +1082,18 @@ export function SkillCenterView({
             ) : visibleSpaces.length === 0 && spaceQuery.trim() ? (
               <PageState
                 kind="empty"
-                title="没有匹配的技能空间"
-                description="请尝试搜索其他名称"
+                title={t("skillCenter.noMatchingSpaces")}
+                description={t("skillCenter.tryAnotherName")}
               />
             ) : (
               <ResourceGrid>
                 {!spaceQuery.trim() ? (
                   <ResourceCreateCard
-                    aria-label="新建技能空间"
+                    aria-label={t("skillCenter.createSpace")}
                     icon={<AddIcon />}
                     onClick={() => setCreateSpaceOpen(true)}
                   >
-                    新建空间
+                    {t("skillCenter.newSpace")}
                   </ResourceCreateCard>
                 ) : null}
                   {visibleSpaces.map((space) => {
@@ -1103,13 +1103,13 @@ export function SkillCenterView({
                     key={spaceKey}
                     className="skillcenter-space-card"
                     title={space.name}
-                    description={space.description || "暂无描述"}
+                    description={space.description || t("common.noDescription")}
                     metadata={[
-                      { label: "技能数量", value: `${space.skillCount ?? 0} 技能` },
-                      { label: "更新时间", value: formatRelativeTimeLabel(space.updatedAt) },
+                      { label: t("skillCenter.skillCount"), value: t("skillCenter.skillCountValue", { count: space.skillCount ?? 0 }) },
+                      { label: t("skillCenter.updatedAt"), value: formatRelativeTimeLabel(space.updatedAt, Date.now(), i18n.resolvedLanguage ?? i18n.language) },
                     ]}
-                    action={{ label: "添加技能", icon: "plus", onClick: () => setAddingSpace(space) }}
-                    detailAction={{ label: "查看详情", onClick: () => selectSpace(space) }}
+                    action={{ label: t("skillCenter.addSkill"), icon: "plus", onClick: () => setAddingSpace(space) }}
+                    detailAction={{ label: t("common.viewDetails"), onClick: () => selectSpace(space) }}
                   />
                     );
                   })}
@@ -1120,14 +1120,14 @@ export function SkillCenterView({
                 {spacesLoading ? (
                   <>
                     <span className="my-agent-loading-mark" aria-hidden="true" />
-                    <span>正在加载更多技能空间</span>
+                    <span>{t("skillCenter.loadingMoreSpaces")}</span>
                   </>
                 ) : canLoadMoreSpaces ? (
-                  <span>继续下滑加载更多</span>
+                  <span>{t("skillCenter.scrollForMore")}</span>
                 ) : spaceErrors.length > 0 ? (
-                  <span>部分技能空间加载失败</span>
+                  <span>{t("skillCenter.someSpacesFailed")}</span>
                 ) : (
-                  <span>已加载全部技能空间</span>
+                  <span>{t("skillCenter.allSpacesLoaded")}</span>
                 )}
               </div>
             ) : null}
@@ -1155,7 +1155,7 @@ export function SkillCenterView({
             fallbackName: detailSkill.skillName,
             skillSpaceName: selectedSpace.name,
             skillName: detailSkill.skillName,
-          }).catch((error: unknown) => setDetailError(normalizeSkillError(error, "下载 Skill 失败")))}
+          }).catch((error: unknown) => setDetailError(normalizeSkillError(error, t("skillCenter.errors.downloadSkill"))))}
           onClose={closeDetail}
         />
       )}

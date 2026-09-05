@@ -39,6 +39,12 @@ const skillSourcePickerSource = readFileSync(
   new URL("../src/ui/SkillSourcePicker.tsx", import.meta.url),
   "utf8",
 );
+const enUiCatalog = JSON.parse(
+  readFileSync(new URL("../src/i18n/resources/en-US/ui.json", import.meta.url), "utf8"),
+);
+const zhUiCatalog = JSON.parse(
+  readFileSync(new URL("../src/i18n/resources/zh-CN/ui.json", import.meta.url), "utf8"),
+);
 
 test("Agent navigation uses the card page and keeps only detail workspace routes", () => {
   assert.match(appSource, /import \{[\s\S]*?AgentWorkspace[\s\S]*?\} from "\.\/ui\/AgentWorkspace"/);
@@ -131,7 +137,7 @@ test("focused agent details use the shared resource detail header", () => {
   assert.match(workspaceSource, /onBack\?: \(\) => void/);
   assert.match(
     workspaceSource,
-    /<ResourceDetailLayout[\s\S]*?title=\{selectedName\}[\s\S]*?identitySeed=\{selectedName\}[\s\S]*?backLabel="返回智能体列表"[\s\S]*?onBack=\{detailOnly \? onBack : undefined\}/,
+    /<ResourceDetailLayout[\s\S]*?title=\{selectedName\}[\s\S]*?identitySeed=\{selectedName\}[\s\S]*?backLabel=\{t\("agentWorkspace\.backToAgentList"\)\}[\s\S]*?onBack=\{detailOnly \? onBack : undefined\}/,
   );
   assert.doesNotMatch(workspaceSource, /import \{ PageBackButton \}/);
   assert.match(appSource, /<AgentWorkspace[\s\S]*?detailOnly[\s\S]*?onBack=\{closeAgentDetailPage\}/);
@@ -146,6 +152,14 @@ test("agent detail navigation delegates responsive layout to the shared resource
   assert.doesNotMatch(detailLayoutContract, /className="aw-agent-tabs"/);
   assert.match(workspaceSource, /activeSectionKey=\{section\}/);
   assert.match(workspaceSource, /onSectionChange=\{setSection\}/);
+  assert.match(
+    workspaceStyles,
+    /@media \(max-width: 720px\)[\s\S]*?\.aw-version-row\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\)/,
+  );
+  assert.match(
+    workspaceStyles,
+    /@media \(max-width: 720px\)[\s\S]*?\.aw-version-row p\s*\{[\s\S]*?overflow-wrap:\s*anywhere/,
+  );
 });
 
 test("runtime detail failures remain visible and retryable", () => {
@@ -160,9 +174,9 @@ test("runtime detail failures remain visible and retryable", () => {
     workspaceSource,
     /getRuntimeDetail[\s\S]*?\.catch\(\(error: unknown\)[\s\S]*?setRuntimeDetailError/,
   );
-  assert.match(workspaceSource, /title="部分信息暂不可用"/);
-  assert.match(workspaceSource, /当前 Runtime 暂不支持 Studio 详情接口。升级 Runtime 后可查看完整信息。/);
-  assert.match(workspaceSource, /title="详情加载失败"/);
+  assert.match(workspaceSource, /title=\{t\("agentWorkspace\.partialInfoUnavailable"\)\}/);
+  assert.match(workspaceSource, /description=\{t\("agentWorkspace\.upgradeRuntimeForDetails"\)\}/);
+  assert.match(workspaceSource, /title=\{t\("agentWorkspace\.detailLoadFailed"\)\}/);
   assert.doesNotMatch(workspaceSource, /className="aw-usage-state aw-detail-fetch-error is-error"/);
   assert.doesNotMatch(workspaceSource, /<DeploymentErrorMessage/);
   assert.match(workspaceSource, /setDetailReloadToken\(\(value\) => value \+ 1\)/);
@@ -171,28 +185,28 @@ test("runtime detail failures remain visible and retryable", () => {
 test("agent details show capability badges and deployment state before the flow", () => {
   assert.match(workspaceSource, /const toolNames = useMemo/);
   assert.match(workspaceSource, /const skillNames = useMemo/);
-  assert.match(workspaceSource, /<dt>工具<\/dt>[\s\S]*?className="aw-fact-badges"[\s\S]*?toolNames\.map/);
-  assert.match(workspaceSource, /<dt>技能<\/dt>[\s\S]*?className="aw-fact-badges"[\s\S]*?skillNames\.map/);
+  assert.match(workspaceSource, /<dt>\{t\("agentSelector\.tools"\)\}<\/dt>[\s\S]*?className="aw-fact-badges"[\s\S]*?toolNames\.map/);
+  assert.match(workspaceSource, /<dt>\{t\("agentSelector\.skills"\)\}<\/dt>[\s\S]*?className="aw-fact-badges"[\s\S]*?skillNames\.map/);
   assert.match(workspaceStyles, /\.aw-fact-badges span\s*\{[\s\S]*?border-radius:\s*999px;/);
   assert.ok(
-    workspaceSource.indexOf("<h3>部署配置</h3>") < workspaceSource.indexOf("<strong>执行流程</strong>"),
+    workspaceSource.indexOf('t("agentWorkspace.deploymentConfig")') < workspaceSource.indexOf('t("agentWorkspace.executionFlow")'),
   );
   assert.ok(
-    workspaceSource.indexOf("<strong>执行流程</strong>") < workspaceSource.indexOf("<strong>详细信息</strong>"),
+    workspaceSource.indexOf('t("agentWorkspace.executionFlow")') < workspaceSource.indexOf('t("agentWorkspace.details")'),
   );
   assert.ok(
-    workspaceSource.indexOf("<strong>详细信息</strong>") < workspaceSource.indexOf("<h3>已选择的优化项</h3>"),
+    workspaceSource.indexOf('t("agentWorkspace.details")') < workspaceSource.indexOf('t("agentWorkspace.selectedOptimizations")'),
   );
   assert.match(
     workspaceSource,
     /const publishedHarnessSidecar =[\s\S]*?selectedAgentInfo\?\.draft\?\.harnessSidecar \?\?[\s\S]*?harnessIntentFromRuntimeEnvs\(runtimeDetail\?\.envs\)/,
   );
-  assert.match(workspaceSource, /aria-label="已选择的优化项"/);
+  assert.match(workspaceSource, /aria-label=\{t\("agentWorkspace\.selectedOptimizations"\)\}/);
   assert.doesNotMatch(workspaceSource, /<h3>Harness Sidecar<\/h3>/);
-  assert.match(workspaceSource, /<dt>配置状态<\/dt>[\s\S]*?已启用[\s\S]*?未启用[\s\S]*?未记录/);
-  assert.match(workspaceSource, /<dt>优化场景<\/dt>[\s\S]*?harnessSidecarProfileLabel/);
-  assert.match(workspaceSource, /<dt>已选优化项<\/dt>[\s\S]*?publishedHarnessOptimizations\.map/);
-  assert.match(workspaceSource, /发布时选择的智能体优化项。/);
+  assert.match(workspaceSource, /<dt>\{t\("agentWorkspace\.configurationStatus"\)\}<\/dt>[\s\S]*?t\("skillCenter\.status\.enabled"\)[\s\S]*?t\("skillCenter\.status\.inactive"\)[\s\S]*?t\("agentWorkspace\.notRecorded"\)/);
+  assert.match(workspaceSource, /<dt>\{t\("agentWorkspace\.optimizationProfile"\)\}<\/dt>[\s\S]*?harnessSidecarProfileLabel/);
+  assert.match(workspaceSource, /<dt>\{t\("agentWorkspace\.selectedOptimizations"\)\}<\/dt>[\s\S]*?publishedHarnessOptimizations\.map/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.selectedOptimizationsDescription"\)/);
   assert.doesNotMatch(workspaceSource, /发布时选择的智能体优化项，只读展示。/);
   assert.match(workspaceSource, /status\.toLowerCase\(\) === "ready"[\s\S]*?className="aw-status-dot"/);
   assert.match(workspaceStyles, /\.aw-readonly-config dd\.is-ready\s*\{[\s\S]*?color:\s*hsl\(142 62% 30%\)/);
@@ -201,7 +215,7 @@ test("agent details show capability badges and deployment state before the flow"
   assert.match(workspaceSource, /const displayCurrentVersion =[\s\S]*?selectedAgent\?\.currentVersion \?\? runtimeDetail\?\.currentVersion \?\? null/);
   assert.match(workspaceSource, /const runtimeVersionKey =[\s\S]*?displayCurrentVersion \?\? selectedPendingTask\?\.startedAt/);
   assert.match(workspaceSource, /className="aw-agent-meta">v\{displayCurrentVersion\}<\/span>/);
-  assert.match(workspaceSource, /\? `v\$\{displayCurrentVersion\}`[\s\S]*?: "暂未提供"/);
+  assert.match(workspaceSource, /\? `v\$\{displayCurrentVersion\}`[\s\S]*?: t\("agentWorkspace\.notAvailable"\)/);
   assert.match(
     workspaceSource,
     /className="aw-canvas"[\s\S]*?<AgentBuildCanvas[\s\S]*?key=\{executionFlowKey\}/,
@@ -225,7 +239,7 @@ test("agent details expose detected integration methods without inventing unavai
   );
   assert.match(
     workspaceSource,
-    /\{ id: "basic", label: "基本信息" \},\s*\{ id: "usage", label: "用量统计" \},\s*\{ id: "evaluations", label: "评测集" \},\s*\{ id: "optimizations", label: "优化项" \},\s*\{ id: "integrations", label: "接入方法" \},\s*\{ id: "versions", label: "版本" \}/,
+    /const AGENT_SECTIONS: AgentSection\[\] = \[[\s\S]*?"basic",[\s\S]*?"usage",[\s\S]*?"evaluations",[\s\S]*?"optimizations",[\s\S]*?"integrations",[\s\S]*?"versions",[\s\S]*?\]/,
   );
   assert.match(workspaceSource, /role="tablist"/);
   assert.match(workspaceSource, /role="tab"/);
@@ -234,7 +248,7 @@ test("agent details expose detected integration methods without inventing unavai
   assert.match(workspaceSource, /probeRuntimeApps/);
   assert.match(workspaceSource, /probeRuntimeA2a/);
   assert.match(workspaceSource, /type IntegrationProtocol = "api-server" \| "a2a"/);
-  assert.match(workspaceSource, /aria-label="接入协议"/);
+  assert.match(workspaceSource, /aria-label=\{t\("agentWorkspace\.integrationProtocol"\)\}/);
   assert.match(workspaceSource, /role="tab"/);
   assert.match(workspaceSource, /aria-controls=\{`integration-\$\{protocol\.id\}-panel`\}/);
   assert.match(workspaceSource, /setIntegrationProtocol/);
@@ -253,9 +267,9 @@ test("agent details expose detected integration methods without inventing unavai
   assert.match(workspaceSource, /<Markdown/);
   assert.match(workspaceSource, /<API_KEY>/);
   assert.match(workspaceSource, /revealRuntimeApiKey/);
-  assert.match(workspaceSource, /aria-label=\{visible \? "隐藏 API Key" : "显示 API Key"\}/);
+  assert.match(workspaceSource, /aria-label=\{visible \? t\("agentWorkspace\.hideApiKey"\) : t\("agentWorkspace\.showApiKey"\)\}/);
   assert.match(workspaceSource, /visible && value \? value : "\*\*\*\*"/);
-  assert.match(workspaceSource, /"暂无"/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.notAvailable"\)/);
   assert.match(
     workspaceSource,
     /section === "integrations" && integrationLoading[\s\S]*?className="aw-detail-loading"/,
@@ -305,14 +319,14 @@ test("runtime-backed Agent details load and paginate usage without stale respons
     /new URLSearchParams\(\{[\s\S]*?runtimeId,[\s\S]*?region,[\s\S]*?appName,[\s\S]*?page: String\(page\),[\s\S]*?pageSize: String\(pageSize\)/,
   );
   assert.match(clientSource, /`\/web\/agent-usage\?\$\{params\.toString\(\)\}`/);
-  assert.match(clientSource, /httpErrorMessage\(res, "加载 Agent 用量失败"\)/);
-  assert.match(clientSource, /服务端返回非 JSON 响应/);
+  assert.match(clientSource, /httpErrorMessage\(res, adkT\("client\.loadAgentUsageFailed"\)\)/);
+  assert.match(clientSource, /adkT\("client\.agentUsageNonJson"/);
   assert.match(clientSource, /Content-Type/);
-  assert.match(clientSource, /请确认当前服务以 Studio 模式启动/);
+  assert.match(clientSource, /adkT\("client\.checkStudioGateway"\)/);
 
   assert.match(
     workspaceSource,
-    /canViewUsage && selectedAgent\?\.runtimeId\s*\? AGENT_SECTIONS\s*:\s*AGENT_SECTIONS\.filter\(\(item\) => item\.id !== "usage"\)/,
+    /canViewUsage && selectedAgent\?\.runtimeId\s*\? AGENT_SECTIONS\s*:\s*AGENT_SECTIONS\.filter\(\(item\) => item !== "usage"\)/,
   );
   assert.match(workspaceSource, /canViewUsage\?: boolean/);
   assert.match(workspaceSource, /section === "usage" && !canViewUsage[\s\S]*?setSection\("basic"\)/);
@@ -327,17 +341,17 @@ test("runtime-backed Agent details load and paginate usage without stale respons
   assert.match(workspaceSource, /response\.runtimeId !== runtimeId/);
   assert.match(workspaceSource, /response\.appName !== appName/);
 
-  assert.match(workspaceSource, /<h3>使用概览<\/h3>/);
-  assert.match(workspaceSource, /<dt>总调用次数<\/dt>/);
-  assert.match(workspaceSource, /<dt>使用用户数<\/dt>/);
-  assert.match(workspaceSource, /<th scope="col">用户<\/th>/);
-  assert.match(workspaceSource, /<th scope="col">调用次数<\/th>/);
-  assert.match(workspaceSource, /<th scope="col">最近使用<\/th>/);
-  assert.match(workspaceSource, /正在加载用量统计/);
-  assert.match(workspaceSource, /暂无使用记录。用户成功调用后将在这里显示。/);
+  assert.match(workspaceSource, /<h3>\{t\("agentWorkspace\.usageOverview"\)\}<\/h3>/);
+  assert.match(workspaceSource, /<dt>\{t\("agentWorkspace\.totalCalls"\)\}<\/dt>/);
+  assert.match(workspaceSource, /<dt>\{t\("agentWorkspace\.userCount"\)\}<\/dt>/);
+  assert.match(workspaceSource, /<th scope="col">\{t\("agentWorkspace\.user"\)\}<\/th>/);
+  assert.match(workspaceSource, /<th scope="col">\{t\("agentWorkspace\.callCount"\)\}<\/th>/);
+  assert.match(workspaceSource, /<th scope="col">\{t\("agentWorkspace\.lastUsed"\)\}<\/th>/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.loadingUsage"\)/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.noUsage"\)/);
   assert.match(workspaceSource, /className="aw-usage-state is-error" role="alert"/);
   assert.match(workspaceSource, /setAgentUsageReloadToken/);
-  assert.match(workspaceSource, /aria-label="用量用户列表分页"/);
+  assert.match(workspaceSource, /aria-label=\{t\("agentWorkspace\.usagePagination"\)\}/);
   assert.match(workspaceSource, /setAgentUsagePage\(\(page\) => Math\.max\(1, page - 1\)\)/);
   assert.match(workspaceSource, /setAgentUsagePage\(\(page\) => page \+ 1\)/);
   assert.match(workspaceStyles, /\.aw-usage-summary/);
@@ -357,14 +371,14 @@ test("agent details show GitHub delivery versions and rollback actions", () => {
   assert.match(workspaceSource, /createGithubDeliveryRollbackPr/);
   assert.match(workspaceSource, /const \[githubVersions, setGithubVersions\]/);
   assert.match(workspaceSource, /section === "versions"/);
-  assert.match(workspaceSource, /GitHub 交付版本/);
-  assert.match(workspaceSource, /源码已合入 main/);
-  assert.match(workspaceSource, /PR 链接/);
-  assert.match(workspaceSource, /提交人/);
-  assert.match(workspaceSource, /发布状态/);
-  assert.match(workspaceSource, /回退事件/);
-  assert.match(workspaceSource, /回退到此版本/);
-  assert.match(workspaceSource, /未挂载 GitHub 时仅展示 Studio 当前版本/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.githubVersions"\)/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.sourceMergedRuntimeStill"\)/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.prLink"\)/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.author"\)/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.publishStatus"\)/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.rollbackEvent"\)/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.rollbackToVersion"\)/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.currentVersionOnly"\)/);
   assert.match(workspaceStyles, /\.aw-version-list/);
   assert.match(workspaceStyles, /\.aw-version-actions/);
 });
@@ -424,7 +438,10 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   assert.match(customCreateSource, /onDeploymentComplete\?: \(result: DeployResult\)/);
   assert.match(customCreateSource, /onDeploymentStarted\?: \(task: DeploymentTaskUpdate\)/);
   assert.match(customCreateSource, /<ProjectPreview[\s\S]*?embedded[\s\S]*?project=\{project\}/);
-  assert.match(customCreateSource, /deploymentActionLabel=\{deploymentTarget \? "更新并发布" : "部署"\}/);
+  assert.match(
+    customCreateSource,
+    /deploymentActionLabel=\{[\s\S]*?deploymentTarget[\s\S]*?t\("traditional\.deployment\.updateAndPublish"\)[\s\S]*?t\("common\.deploy"\)[\s\S]*?\}/,
+  );
   assert.match(customCreateSource, /deploymentRuntimeId=\{deploymentTarget\?\.runtimeId\}/);
   assert.match(customCreateSource, /onDeploymentStarted=\{onDeploymentStarted\}/);
   assert.match(customCreateSource, /onDeploymentComplete=\{onDeploymentComplete\}/);
@@ -455,7 +472,7 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   );
   assert.match(
     projectPreviewSource,
-    /更新时沿用现有 Runtime 的部署区域，无法修改。/,
+    /t\("projectPreview\.regionPreserved"\)/,
   );
   assert.match(projectPreviewSource, /onDeploymentStarted\?\.\(initialTask\)/);
   assert.match(projectPreviewSource, /RuntimeProbeError/);
@@ -476,13 +493,13 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   assert.match(projectPreviewSource, /setActivePhase\(latestPhase\)/);
   assert.match(
     projectPreviewSource,
-    /label: buildStatusUnconfirmed[\s\S]*?"构建状态待确认"[\s\S]*?"部署失败"[\s\S]*?message: buildStatusUnconfirmed[\s\S]*?failedInBuild[\s\S]*?\.\.\.\(buildLog/,
+    /label: buildStatusUnconfirmed[\s\S]*?t\("projectPreview\.task\.buildStatusUnconfirmed"\)[\s\S]*?t\("projectPreview\.task\.deploymentFailed"\)[\s\S]*?message: buildStatusUnconfirmed[\s\S]*?failedInBuild[\s\S]*?\.\.\.\(buildLog/,
   );
   assert.match(projectPreviewSource, /const failedInGithub = latestPhase === "github" && Boolean\(latestGithubLog\)/);
-  assert.match(projectPreviewSource, /failedInBuild[\s\S]*?"构建镜像失败，详见构建日志。"[\s\S]*?failedInGithub[\s\S]*?"挂载 GitHub 持续交付失败，详见 GitHub 日志。"/);
+  assert.match(projectPreviewSource, /failedInBuild[\s\S]*?t\("projectPreview\.task\.buildFailedHint"\)[\s\S]*?failedInGithub[\s\S]*?t\("projectPreview\.task\.githubMountFailedHint"\)/);
   assert.match(
     projectPreviewSource,
-    /await onDeploymentComplete\?\.\(result\)[\s\S]*?catch \(error\)[\s\S]*?error instanceof RuntimeProbeError[\s\S]*?status: "success"[\s\S]*?label: "部署完成，暂未连接"[\s\S]*?message: error\.message/,
+    /await onDeploymentComplete\?\.\(result\)[\s\S]*?catch \(error\)[\s\S]*?error instanceof RuntimeProbeError[\s\S]*?status: "success"[\s\S]*?label: t\("projectPreview\.task\.deployedNotConnected"\)[\s\S]*?message: error\.message/,
   );
   assert.match(
     appSource,
@@ -508,7 +525,7 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   assert.match(workspaceSource, /if \(!focusedDeploymentTaskId\) return;/);
   assert.doesNotMatch(workspaceSource, /activeDeploymentTaskId/);
   assert.match(workspaceSource, /<ResourceDetailLayout[\s\S]*?sections=\{visibleAgentSections\.map\(\(item\) => \(\{[\s\S]*?key: item\.id,[\s\S]*?label: item\.label,[\s\S]*?content: item\.id === section/);
-  assert.match(workspaceSource, /activeSectionKey=\{section\}[\s\S]*?navigationLabel="智能体详情"[\s\S]*?onSectionChange=\{setSection\}/);
+  assert.match(workspaceSource, /activeSectionKey=\{section\}[\s\S]*?navigationLabel=\{t\("agentWorkspace\.agentDetails"\)\}[\s\S]*?onSectionChange=\{setSection\}/);
   assert.match(workspaceSource, /className=\{`aw-detail-deployment\$\{deploymentInProgress \? " is-running" : ""\}`\}[\s\S]*?<DeploymentProgressCard[\s\S]*?task=\{deploymentTask\}/);
   assert.match(
     workspaceSource,
@@ -516,23 +533,23 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   );
   assert.match(
     workspaceSource,
-    /task\.status === "error" \|\| task\.status === "cancelled"[\s\S]*?onReturnToEdit[\s\S]*?>返回编辑<\/button>/,
+    /task\.status === "error" \|\| task\.status === "cancelled"[\s\S]*?onReturnToEdit[\s\S]*?>\{t\("agentWorkspace\.returnToEdit"\)\}<\/button>/,
   );
   assert.match(
     workspaceSource,
     /<DeploymentProgressCard[\s\S]*?task=\{deploymentTask\}[\s\S]*?onReturnToEdit=\{deploymentDraft[\s\S]*?onEditDraft\(deploymentDraft\)/,
   );
   assert.match(workspaceStyles, /\.aw-deploy-progress-actions\s*\{/);
-  assert.match(workspaceSource, /const BUILD_STEP_INDEX = DEPLOYMENT_STEPS\.findIndex/);
-  assert.match(workspaceSource, /const GITHUB_DELIVERY_STEP =/);
-  assert.match(workspaceSource, /task\.githubDelivery[\s\S]*?GITHUB_DELIVERY_STEP[\s\S]*?DEPLOYMENT_STEPS\[DEPLOYMENT_STEPS\.length - 1\]/);
-  assert.match(workspaceSource, /phase:\s*"github"[\s\S]*?label:\s*"挂载 GitHub 持续交付"/);
-  assert.match(workspaceSource, /const shouldAutoExpand = Boolean\([\s\S]*?deploymentStepIndex\(task\) === BUILD_STEP_INDEX/);
+  assert.match(workspaceSource, /const baseSteps = baseDeploymentSteps\(t\)/);
+  assert.match(workspaceSource, /task\.githubDelivery[\s\S]*?steps\.push\(\{ phase: "github"/);
+  assert.match(workspaceSource, /steps\.push\(baseSteps\[baseSteps\.length - 1\]\)/);
+  assert.match(workspaceSource, /phase:\s*"github"[\s\S]*?label:\s*t\("agentWorkspace\.deploymentSteps\.github\.label"\)/);
+  assert.match(workspaceSource, /autoExpand=\{Boolean\([\s\S]*?deploymentStepIndex\(task, t\) === 1/);
   assert.match(workspaceSource, /useState\(shouldAutoExpand\)/);
   assert.match(workspaceSource, /setExpanded\(shouldAutoExpand\)/);
   assert.match(workspaceSource, /const logTextRef = useRef<HTMLPreElement \| null>\(null\)/);
   assert.match(workspaceSource, /node\.scrollTop = node\.scrollHeight/);
-  assert.match(workspaceSource, /log\.omittedEarly[\s\S]*?"已省略早期日志"[\s\S]*?log\.snapshotTruncated[\s\S]*?"仅显示最近的构建日志"/);
+  assert.match(workspaceSource, /log\.omittedEarly[\s\S]*?t\("agentWorkspace\.logStatus\.earlyOmitted"\)[\s\S]*?log\.snapshotTruncated[\s\S]*?t\("agentWorkspace\.logStatus\.recentOnly"\)/);
   assert.match(workspaceSource, /log\.pendingMessage/);
   assert.match(workspaceSource, /className="aw-deploy-log-empty">\{pendingMessage\}/);
   assert.match(workspaceSource, /hasLogText[\s\S]*?\? <pre ref=\{logTextRef\}>\{visibleText\}<\/pre>[\s\S]*?: <div className="aw-deploy-log-empty">\{pendingMessage\}<\/div>/);
@@ -573,7 +590,7 @@ test("runtime update deployments stay on the existing agent row", () => {
   assert.match(workspaceSource, /leftTask\?\.status === "running"/);
   assert.match(
     workspaceSource,
-    /\{ label: "部署中", className: " is-deploying" \}/,
+    /\{ label: t\("myAgents\.deploying"\), className: " is-deploying" \}/,
   );
   assert.match(
     workspaceSource,
@@ -599,7 +616,7 @@ test("runtime update deployments stay on the existing agent row", () => {
 
 test("deployed agent detail connects, refreshes the current Agent, then opens a new chat", () => {
   assert.match(workspaceSource, /onTalkAgent\?: \(agent: AgentEntry\) => void/);
-  assert.match(workspaceSource, /className="aw-talk studio-update-action"[\s\S]*?去对话/);
+  assert.match(workspaceSource, /className="aw-talk studio-update-action"[\s\S]*?t\("agentWorkspace\.chat"\)/);
   assert.match(workspaceSource, /onClick=\{\(\) => onTalkAgent\?\.\(selectedAgent\)\}/);
   assert.match(appSource, /const talkToWorkspaceAgent = async \(agent: AgentEntry\) => \{/);
   assert.match(
@@ -659,9 +676,9 @@ test("runtime refresh preserves agent order and detail loading uses an overlay",
     workspaceSource,
     /className="aw-detail-loading"[\s\S]*?className="loading-gap-spinner"/,
   );
-  assert.match(workspaceSource, /正在加载智能体/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.loadingAgent"\)/);
   assert.match(workspaceSource, /const updateBlockedReason = selectedDraft/);
-  assert.match(workspaceSource, /updateCapabilityLoading[\s\S]*?正在检查 Runtime 更新配置/);
+  assert.match(workspaceSource, /updateCapabilityLoading[\s\S]*?t\("agentWorkspace\.errors\.checkingUpdateConfig"\)/);
   assert.match(workspaceStyles, /\.aw-detail-loading\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?inset:\s*0;/);
 });
 
@@ -766,14 +783,18 @@ test("introspection-only runtime updates are visibly blocked without treating em
     workspaceSource,
     /selectedUpdateCapability\.recoveryStatus !== "complete"[\s\S]*?selectedUpdateCapability\.recoveryStatus !== "draft-only"/,
   );
-  assert.match(workspaceSource, /原发布配置不可恢复/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.updateConfigUnavailable"\)/);
   assert.match(workspaceSource, /aw-update-recovery-notice/);
   assert.match(
     workspaceSource,
     /selectedUpdateCapability\s*&&\s*!selectedUpdateCapability\.canUpdate\s*&&/,
   );
   assert.doesNotMatch(workspaceSource, /更新配置说明/);
-  assert.match(workspaceSource, /selectedUpdateCapability\.warnings\.map/);
+  assert.match(workspaceSource, /updateCapabilityWarnings\.map/);
+  assert.match(
+    workspaceSource,
+    /import \{ localeCompatibleBackendText \} from "\.\.\/i18n\/locales";/,
+  );
   assert.match(workspaceStyles, /\.aw-update-recovery-notice\s*\{/);
   assert.match(workspaceStyles, /hsl\(42 92% 96%\)/);
   assert.doesNotMatch(
@@ -784,8 +805,8 @@ test("introspection-only runtime updates are visibly blocked without treating em
 
 test("runtime-preserved skills are explained and can be removed or replaced", () => {
   assert.match(skillSourcePickerSource, /skill\.source === "runtime"/);
-  assert.match(skillSourcePickerSource, /运行中来源/);
-  assert.match(skillSourcePickerSource, /原样保留/);
+  assert.match(skillSourcePickerSource, /skillSourcePicker\.sources\.runtime/);
+  assert.match(skillSourcePickerSource, /t\(skillSourceLabelKey\(skill\)\)/);
   assert.match(skillSourcePickerSource, /replaceRuntimeSkill/);
 });
 
@@ -831,9 +852,18 @@ test("runtime update capability checks ignore aborted and stale selections", () 
   );
   assert.match(workspaceSource, /value\.canUpdate && !value\.agent\?\.appName/);
   assert.match(workspaceSource, /selectedUpdateCapability\.agent\?\.appName/);
-  assert.match(workspaceSource, /updateCapabilityLoading[\s\S]*?loading-gap-spinner[\s\S]*?准备中/);
+  assert.match(workspaceSource, /updateCapabilityLoading[\s\S]*?loading-gap-spinner[\s\S]*?t\("agentWorkspace\.preparing"\)/);
   assert.match(workspaceSource, /aria-describedby=\{updateBlockedReason \? updateReasonId : undefined\}/);
   assert.match(workspaceSource, /className="aw-update-disabled-reason"[\s\S]*?role="tooltip"/);
+  const capabilityRequest = workspaceSource.slice(
+    workspaceSource.indexOf("const loadCapability = (initial: boolean) =>"),
+    workspaceSource.indexOf("loadCapability(true);"),
+  );
+  assert.match(
+    capabilityRequest,
+    /\.catch\(\(\) => \{[\s\S]*?setUpdateCapabilityError\(t\("agentWorkspace\.errors\.checkUpdateCapability"\)\)/,
+  );
+  assert.doesNotMatch(capabilityRequest, /error\.message/);
   assert.match(workspaceStyles, /\.aw-update-wrap\.is-disabled:hover \.aw-update-disabled-reason/);
   assert.match(workspaceStyles, /\.aw-update-wrap\.is-disabled:focus-visible \.aw-update-disabled-reason/);
 });
@@ -850,7 +880,7 @@ test("preparing recovery stops the button spinner and polls safely in the backgr
     workspaceSource,
     /setUpdateCapability\([\s\S]*?setUpdateCapabilityLoading\(false\)[\s\S]*?window\.setTimeout\(\(\) => loadCapability\(false\), 1_000\)/,
   );
-  assert.match(workspaceSource, /正在后台恢复更新配置/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.restoringUpdateConfig"\)/);
   assert.match(
     workspaceSource,
     /selectedUpdateCapability\.recoveryStatus === "preparing"[\s\S]*?\? "status"/,
@@ -908,7 +938,7 @@ test("workspace keeps agent deletion in selection mode and the floating detail a
   assert.match(workspaceSource, /const \[deleteConfirmTarget, setDeleteConfirmTarget\]/);
   assert.match(workspaceSource, /import \{ StudioConfirmDialog \} from "\.\/StudioConfirmDialog"/);
   assert.match(workspaceSource, /<StudioConfirmDialog[\s\S]*?variant="danger"/);
-  assert.match(workspaceSource, /closeLabel="关闭删除确认"/);
+  assert.match(workspaceSource, /closeLabel=\{t\("agentWorkspace\.closeDeleteConfirmation"\)\}/);
   assert.match(studioConfirmSource, /createPortal\(/);
   assert.match(studioConfirmSource, /@openai\/apps-sdk-ui\/components\/Alert/);
   assert.match(studioConfirmSource, /@openai\/apps-sdk-ui\/components\/Button/);
@@ -941,11 +971,11 @@ test("workspace keeps agent deletion in selection mode and the floating detail a
   assert.match(workspaceSource, /await onDeleteAgents\(agentsToDelete\)/);
   assert.match(workspaceSource, /onDeleteDrafts\?\.\(draftsToDelete\)/);
   assert.match(workspaceSource, /aria-pressed=\{selectionMode \? isSelectedForDelete : undefined\}/);
-  assert.match(workspaceSource, /删除所选/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.deleteSelected"\)/);
   assert.match(workspaceSource, /const deleteSingleAgent = \(agent: AgentEntry\) =>/);
   assert.match(workspaceSource, /const deleteSingleDraft = /);
-  assert.equal(workspaceSource.match(/aria-label="删除 Agent"/g)?.length, 1);
-  assert.match(workspaceSource, /删除草稿/);
+  assert.equal(workspaceSource.match(/aria-label=\{t\("agentWorkspace\.deleteAgent"\)\}/g)?.length, 1);
+  assert.match(workspaceSource, /aria-label=\{t\("myAgents\.deleteDraft"\)\}/);
   assert.match(workspaceStyles, /\.aw-selection-toolbar/);
   assert.match(workspaceStyles, /\.aw-select-marker\.is-checked/);
   assert.doesNotMatch(workspaceStyles, /\.aw-head-action(?:\s|\.|:|\{)/);
@@ -962,7 +992,7 @@ test("workspace keeps agent deletion in selection mode and the floating detail a
   assert.doesNotMatch(appStyles, /\.studio-confirm-dialog--danger \.studio-confirm-actions \.studio-confirm-primary/);
   assert.match(
     workspaceSource,
-    /<Button[\s\S]*?color="danger"[\s\S]*?aria-label="删除 Agent"/,
+    /<Button[\s\S]*?color="danger"[\s\S]*?aria-label=\{t\("agentWorkspace\.deleteAgent"\)\}/,
   );
   assert.doesNotMatch(
     workspaceSource,
@@ -1035,7 +1065,7 @@ test("agent detail evaluation tab reads feedback datasets", () => {
   assert.match(appSource, /focusedWorkspaceAgentSection/);
   assert.match(appSource, /focusedWorkspaceCaseKind/);
   assert.match(appSource, /focusedCaseKind=\{focusedWorkspaceCaseKind\}/);
-  assert.match(appSource, /返回评测案例/);
+  assert.match(appSource, /t\("actions\.backToEvaluationCase"\)/);
   assert.match(appSource, /clearDeletedFeedbackCases/);
   assert.match(appSource, /clearMessageFeedbackCache/);
   assert.match(appSource, /onFeedbackCasesDeleted=\{clearDeletedFeedbackCases\}/);
@@ -1050,31 +1080,34 @@ test("agent detail evaluation tab reads feedback datasets", () => {
   assert.match(workspaceSource, /const count = previewCase \? localCount : set\?\.itemCount \?\? localCount/);
   assert.doesNotMatch(workspaceSource, /Math\.max\(\s*set\?\.itemCount/);
   assert.match(workspaceSource, /loading=\{feedbackCasesLoading && visibleCases\.length === 0\}/);
-  assert.match(workspaceSource, /Good cases/);
-  assert.match(workspaceSource, /Bad cases/);
-  assert.match(workspaceSource, /AgentKit 评测集/);
+  assert.match(workspaceSource, /"agentWorkspace\.goodCases"/);
+  assert.match(workspaceSource, /"agentWorkspace\.badCases"/);
+  assert.match(workspaceSource, /"agentWorkspace\.goodCase"/);
+  assert.match(workspaceSource, /"agentWorkspace\.badCase"/);
+  assert.doesNotMatch(workspaceSource, />Good cases</);
+  assert.doesNotMatch(workspaceSource, />Bad cases</);
   assert.match(
     workspaceSource,
-    /<span>用户输入<\/span>[\s\S]*?<span>Agent 输出<\/span>[\s\S]*?<span>评分<\/span>[\s\S]*?<span>评分理由<\/span>[\s\S]*?<span className="aw-case-action-head">操作<\/span>/,
+    /<span>\{t\("agentWorkspace\.userInput"\)\}<\/span>[\s\S]*?<span>\{t\("agentWorkspace\.agentOutput"\)\}<\/span>[\s\S]*?<span>\{t\("agentWorkspace\.score"\)\}<\/span>[\s\S]*?<span>\{t\("agentWorkspace\.scoreReason"\)\}<\/span>[\s\S]*?<span className="aw-case-action-head">\{t\("skillCenter\.actions"\)\}<\/span>/,
   );
   assert.match(
     workspaceSource,
-    /className="aw-case-actions aw-case-cell"[\s\S]*?data-label="操作"[\s\S]*?className="aw-case-delete"/,
+    /className="aw-case-actions aw-case-cell"[\s\S]*?data-label=\{t\("skillCenter\.actions"\)\}[\s\S]*?className="aw-case-delete"/,
   );
   assert.match(workspaceSource, /function DeleteCaseIcon\(\)/);
   assert.doesNotMatch(workspaceSource, /<span>来源<\/span>/);
-  assert.match(workspaceSource, /自动回流/);
-  assert.match(workspaceSource, /手动回流/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.automaticFeedback"\)/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.manualFeedback"\)/);
   assert.match(workspaceSource, /useState<AgentFeedbackSource>\("auto"\)/);
   assert.match(workspaceSource, /source !== caseSourceFilter/);
   assert.match(workspaceSource, /caseSourceFilter === source/);
   assert.match(workspaceSource, /setCaseSourceFilter\(source\)/);
-  assert.match(workspaceSource, /formatCaseTime\(item\.createdAt\)/);
+  assert.match(workspaceSource, /formatCaseTime\(item\.createdAt, i18n\.resolvedLanguage \?\? i18n\.language, t\)/);
   assert.doesNotMatch(workspaceSource, /item\.source !== "auto"/);
   assert.match(workspaceSource, /Math\.round\(item\.score \* 100\)/);
   assert.match(workspaceSource, /item\.reason \|\| "—"/);
   assert.match(workspaceSource, /item\.comment\.trim\(\) !== item\.reason\?\.trim\(\)/);
-  assert.match(workspaceSource, /showComment && <small title=\{item\.comment\}>备注：\{item\.comment\}<\/small>/);
+  assert.match(workspaceSource, /showComment && <small title=\{item\.comment\}>\{t\("agentWorkspace\.note"\)\}\{item\.comment\}<\/small>/);
   assert.match(workspaceStyles, /\.aw-case-summary/);
   assert.match(workspaceStyles, /\.aw-case-filter-bar/);
   assert.match(workspaceStyles, /\.aw-case-source-filters/);
@@ -1093,6 +1126,55 @@ test("agent detail evaluation tab reads feedback datasets", () => {
   assert.match(workspaceStyles, /\.aw-case-error/);
 });
 
+test("Agent workspace-owned labels and sample cases are fully localized", () => {
+  const defaultCasesSource = workspaceSource.slice(
+    workspaceSource.indexOf("function buildDefaultCases"),
+    workspaceSource.indexOf("const DEFAULT_EVALUATION_GROUPS"),
+  );
+
+  assert.match(defaultCasesSource, /function buildDefaultCases\(t: TFunction\): AgentCase\[\]/);
+  assert.match(defaultCasesSource, /agentWorkspace\.defaultCases\.weeklyFeedback\.input/);
+  assert.match(defaultCasesSource, /agentWorkspace\.defaultCases\.repeatedTool\.output/);
+  assert.doesNotMatch(defaultCasesSource, /[\u3400-\u9fff]/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.agentCountLabel"\)/);
+  assert.doesNotMatch(workspaceSource, /<dt>\{t\("agentWorkspace\.agentCount"\)\}<\/dt>/);
+  assert.match(
+    workspaceSource,
+    /\{t\("agentWorkspace\.reference"\)\}: \{item\.referenceOutput\}/,
+  );
+  assert.doesNotMatch(workspaceSource, /Reference: \{item\.referenceOutput\}/);
+
+  for (const catalog of [enUiCatalog, zhUiCatalog]) {
+    assert.equal(typeof catalog.agentWorkspace.agentCountLabel, "string");
+    assert.equal(typeof catalog.agentWorkspace.goodCases, "string");
+    assert.equal(typeof catalog.agentWorkspace.badCases, "string");
+    assert.equal(typeof catalog.agentWorkspace.reference, "string");
+    assert.equal(typeof catalog.agentWorkspace.defaultCases.weeklyFeedback.input, "string");
+    assert.equal(typeof catalog.agentWorkspace.defaultCases.uncertainConclusion.reason, "string");
+  }
+  assert.match(enUiCatalog.agentWorkspace.defaultCases.weeklyFeedback.input, /customer feedback/i);
+  assert.match(zhUiCatalog.agentWorkspace.defaultCases.weeklyFeedback.input, /客户反馈/);
+});
+
+test("Agent detail request failures use localized messages instead of raw backend responses", () => {
+  assert.match(
+    workspaceSource,
+    /setAgentUsageError\(t\("agentWorkspace\.errors\.loadUsage"\)\)/,
+  );
+  assert.match(
+    workspaceSource,
+    /setFeedbackCasesError\(t\("agentWorkspace\.errors\.loadEvaluations"\)\)/,
+  );
+  assert.match(
+    workspaceSource,
+    /setOptimizationsError\(t\("agentWorkspace\.errors\.loadOptimizations"\)\)/,
+  );
+  assert.match(
+    workspaceSource,
+    /setIntegrationError\(t\("agentWorkspace\.errors\.probeIntegration"\)\)/,
+  );
+});
+
 test("agent detail exposes optimization recommendations between evaluations and integrations", () => {
   assert.match(clientSource, /export type AgentOptimizationModule =/);
   assert.match(clientSource, /export interface AgentOptimizationSuggestion/);
@@ -1106,13 +1188,13 @@ test("agent detail exposes optimization recommendations between evaluations and 
   assert.match(workspaceSource, /getAgentOptimizations\(\{/);
   assert.match(workspaceSource, /setOptimizationGroups\(response\.groups\)/);
   assert.match(workspaceSource, /<OptimizationTable groups=\{optimizationGroups\} \/>/);
-  assert.match(workspaceSource, /暂无优化项，自动评测完成后会在这里生成建议/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.noOptimizations"\)/);
   assert.match(workspaceSource, /setOptimizationsReloadToken/);
-  assert.match(workspaceSource, /<th scope="col">修复优先级<\/th>/);
-  assert.match(workspaceSource, /<th scope="col">建议优化模块<\/th>/);
-  assert.match(workspaceSource, /<th scope="col">优化建议和理由<\/th>/);
-  assert.match(workspaceSource, /optimizationPriorityLabel\(group\.priority\)/);
-  assert.match(workspaceSource, /optimizationModuleLabel\(group\)/);
+  assert.match(workspaceSource, /<th scope="col">\{t\("agentWorkspace\.fixPriority"\)\}<\/th>/);
+  assert.match(workspaceSource, /<th scope="col">\{t\("agentWorkspace\.suggestedModule"\)\}<\/th>/);
+  assert.match(workspaceSource, /<th scope="col">\{t\("agentWorkspace\.suggestionAndReason"\)\}<\/th>/);
+  assert.match(workspaceSource, /optimizationPriorityLabel\(group\.priority, t\)/);
+  assert.match(workspaceSource, /optimizationModuleLabel\(group, t\)/);
   assert.match(workspaceSource, /group\.items\.map/);
   assert.doesNotMatch(workspaceSource, /aw-option-glass/);
   assert.match(workspaceStyles, /\.aw-optimization-table/);
@@ -1127,5 +1209,5 @@ test("agent detail exposes optimization recommendations between evaluations and 
 test("evaluation tab remains the PR 748 placeholder until the real feature lands", () => {
   assert.match(workspaceSource, /view === "evaluation"/);
   assert.match(workspaceSource, /aw-evaluation-glass/);
-  assert.match(workspaceSource, /敬请期待/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.comingSoon"\)/);
 });

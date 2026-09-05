@@ -23,11 +23,11 @@ const appSource = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8
 test("keeps the CLI and Developer Resources shortcuts beside the account", () => {
   assert.match(sidebarSource, /onAgentKitCli: \(\) => void/);
   assert.doesNotMatch(sidebarSource, /AgentKitPromoCard/);
-  assert.match(sidebarSource, /className="sidebar-user-shortcuts" aria-label="快捷入口"/);
-  assert.match(sidebarSource, /<Tooltip compact content="体验 AgentKit CLI">/);
-  assert.match(sidebarSource, /<Tooltip compact content="开发者资源">/);
-  assert.match(sidebarSource, /aria-label="体验 AgentKit CLI"/);
-  assert.match(sidebarSource, /aria-label="开发者资源"/);
+  assert.match(sidebarSource, /className="sidebar-user-shortcuts"[\s\S]*?aria-label=\{t\("sidebar:account\.shortcuts"\)\}/);
+  assert.match(sidebarSource, /<Tooltip compact content=\{t\("sidebar:account\.tryCli"\)\}>/);
+  assert.match(sidebarSource, /<Tooltip compact content=\{t\("sidebar:account\.developerResources"\)\}>/);
+  assert.match(sidebarSource, /aria-label=\{t\("sidebar:account\.tryCli"\)\}/);
+  assert.match(sidebarSource, /aria-label=\{t\("sidebar:account\.developerResources"\)\}/);
   assert.equal(sidebarSource.indexOf(">AgentKit 文档</span>"), -1);
   assert.equal(sidebarSource.indexOf(">AgentKit 控制台</span>"), -1);
   assert.match(
@@ -36,7 +36,7 @@ test("keeps the CLI and Developer Resources shortcuts beside the account", () =>
   );
   assert.match(
     sidebarSource,
-    /aria-label="体验 AgentKit CLI"[\s\S]*?<MarkerCode className="icon" \/>/,
+    /aria-label=\{t\("sidebar:account\.tryCli"\)\}[\s\S]*?<MarkerCode className="icon" \/>/,
   );
   assert.match(appSource, /onAgentKitCli=\{\(\) => setAgentKitCliOpen\(true\)\}/);
   assert.match(appSource, /<AgentKitCliDialog[\s\S]*?open=\{agentKitCliOpen\}/);
@@ -49,9 +49,7 @@ test("initializes a non-persistent per-user AgentKit CLI session", () => {
   assert.match(dialogSource, /agentKitCliClient\.createSession/);
   assert.match(dialogSource, /agentKitCliClient\.openSession/);
   assert.match(dialogSource, /agentKitCliClient\.launchTerminal/);
-  assert.match(dialogSource, /searching: "正在查找已有环境"/);
-  assert.match(dialogSource, /creating: "环境初始化中"/);
-  assert.match(dialogSource, /connecting: "正在连接已有环境"/);
+  assert.match(dialogSource, /t\(`agentKitCli\.loading\.\$\{state\}`\)/);
   assert.match(dialogSource, /onStage\("searching"\)/);
   assert.match(dialogSource, /onStage\("creating"\)/);
   assert.match(dialogSource, /onStage\("connecting"\)/);
@@ -74,16 +72,15 @@ test("reuses the current terminal launch while its session is valid", () => {
 test("shows configuration, retry, terminal, and expiry states", () => {
   assert.match(
     clientSource,
-    /管理员未配置 AgentKit Dev Sandbox，请配置后再使用/,
+    /agentKitCliUnconfiguredMessage\(\): string/,
   );
-  assert.match(dialogSource, /小时 \$\{minutes\} 分钟后环境回收/);
-  assert.match(dialogSource, /分钟后环境回收/);
+  assert.match(dialogSource, /t\("agentKitCli\.recyclingHoursMinutes", \{ hours, minutes \}\)/);
+  assert.match(dialogSource, /t\("agentKitCli\.recyclingMinutes", \{ minutes \}\)/);
   assert.doesNotMatch(dialogSource, /在专属 Dev Sandbox Session 中体验 AgentKit CLI/);
-  assert.match(dialogSource, /AgentKit CLI 请求失败/);
+  assert.match(dialogSource, /t\("agentKitCli\.requestFailed"\)/);
   assert.match(dialogSource, /agentkit-cli-error-detail/);
-  assert.match(dialogSource, /未收到服务端响应/);
-  assert.match(dialogSource, /原始错误/);
+  assert.match(dialogSource, /t\("agentKitCli\.connectionError", \{ message: raw \}\)/);
   assert.match(clientSource, /httpErrorMessage\(response, fallback\)/);
-  assert.match(dialogSource, />\s*重试\s*</);
-  assert.match(dialogSource, /title="AgentKit CLI 终端"/);
+  assert.match(dialogSource, /t\("agentKitCli\.retry"\)/);
+  assert.match(dialogSource, /title=\{t\("agentKitCli\.terminalTitle"\)\}/);
 });

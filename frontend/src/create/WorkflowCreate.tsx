@@ -5,6 +5,7 @@ import {
   useState,
   type DragEvent,
 } from "react";
+import { useTranslation } from "react-i18next";
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -52,13 +53,11 @@ type WorkflowType = "sequential" | "parallel" | "loop";
 
 const WF_TYPES: {
   type: WorkflowType;
-  label: string;
-  desc: string;
   Icon: typeof ListOrdered;
 }[] = [
-  { type: "sequential", label: "顺序", desc: "节点依次执行", Icon: ListOrdered },
-  { type: "parallel", label: "并行", desc: "节点同时执行", Icon: ArrowRightLeft },
-  { type: "loop", label: "循环", desc: "节点循环执行", Icon: Repeat },
+  { type: "sequential", Icon: ListOrdered },
+  { type: "parallel", Icon: ArrowRightLeft },
+  { type: "loop", Icon: Repeat },
 ];
 
 let nodeSeq = 0;
@@ -93,6 +92,7 @@ function makeAgentNode(
  * aesthetic. Selection is reflected via the `selected` prop.
  * ------------------------------------------------------------------ */
 function AgentNode({ data, selected }: NodeProps<WfNode>) {
+  const { t } = useTranslation("create");
   const agent = data.agent;
   return (
     <div className={`wfb-node ${selected ? "wfb-node--selected" : ""}`}>
@@ -101,9 +101,9 @@ function AgentNode({ data, selected }: NodeProps<WfNode>) {
         <Bot className="icon" />
       </div>
       <div className="wfb-node-body">
-        <div className="wfb-node-name">{agent.name || "未命名节点"}</div>
+        <div className="wfb-node-name">{agent.name || t("workflow.unnamedNode")}</div>
         <div className="wfb-node-desc">
-          {agent.instruction ? agent.instruction.slice(0, 48) : "点击编辑指令…"}
+          {agent.instruction ? agent.instruction.slice(0, 48) : t("workflow.editInstruction")}
         </div>
       </div>
       <Handle type="source" position={Position.Right} className="wfb-handle" />
@@ -123,6 +123,7 @@ function WorkflowCreateInner({
   onBack,
   onCreate,
 }: CreateModeProps) {
+  const { t } = useTranslation("create");
   const rfInstance = useRef<ReactFlowInstance<WfNode, Edge> | null>(null);
 
   const [wfName, setWfName] = useState("");
@@ -153,14 +154,14 @@ function WorkflowCreateInner({
     [effectiveWorkflowName, nodes],
   );
   const workflowNameProblem =
-    agentNameProblem(effectiveWorkflowName) ??
+    agentNameProblem(effectiveWorkflowName, (key) => t(`validation.agentName.${key}`)) ??
     (duplicateNames.has(effectiveWorkflowName)
-      ? "名称须与 Agent 节点名称保持唯一"
+      ? t("workflow.errors.workflowNameUnique")
       : null);
   const selectedNameProblem = selectedNode
-    ? agentNameProblem(selectedNode.data.agent.name) ??
+    ? agentNameProblem(selectedNode.data.agent.name, (key) => t(`validation.agentName.${key}`)) ??
       (duplicateNames.has(selectedNode.data.agent.name)
-        ? "Agent 名称在当前工作流中必须唯一"
+        ? t("workflow.errors.agentNameUnique")
         : null)
     : null;
   const canCreate =
@@ -284,9 +285,9 @@ function WorkflowCreateInner({
       <div className="wfb-grid">
         {/* ---------- left palette ---------- */}
         <aside className="wfb-palette">
-          <div className="wfb-section-label">工作流信息</div>
+            <div className="wfb-section-label">{t("workflow.sections.info")}</div>
           <label className="wfb-field">
-            <span className="wfb-field-label">名称</span>
+              <span className="wfb-field-label">{t("common.name")}</span>
             <input
               className={`wfb-input ${workflowNameProblem ? "wfb-input--error" : ""}`}
               value={wfName}
@@ -298,19 +299,19 @@ function WorkflowCreateInner({
             )}
           </label>
           <label className="wfb-field">
-            <span className="wfb-field-label">描述</span>
+              <span className="wfb-field-label">{t("common.description")}</span>
             <textarea
               className="wfb-input wfb-textarea"
               value={wfDesc}
               onChange={(e) => setWfDesc(e.target.value)}
-              placeholder="这个工作流做什么…"
+                placeholder={t("workflow.placeholders.description")}
               rows={2}
             />
           </label>
 
-          <div className="wfb-section-label">执行方式</div>
+            <div className="wfb-section-label">{t("workflow.sections.execution")}</div>
           <div className="wfb-types">
-            {WF_TYPES.map(({ type, label, desc, Icon }) => (
+              {WF_TYPES.map(({ type, Icon }) => (
               <button
                 key={type}
                 type="button"
@@ -321,32 +322,32 @@ function WorkflowCreateInner({
               >
                 <Icon className="icon" />
                 <span className="wfb-type-text">
-                  <span className="wfb-type-name">{label}</span>
-                  <span className="wfb-type-desc">{desc}</span>
+                    <span className="wfb-type-name">{t(`workflow.types.${type}.label`)}</span>
+                    <span className="wfb-type-desc">{t(`workflow.types.${type}.description`)}</span>
                 </span>
               </button>
             ))}
           </div>
 
-          <div className="wfb-section-label">节点</div>
+          <div className="wfb-section-label">{t("workflow.sections.nodes")}</div>
           <div
             className="wfb-palette-item"
             draggable
             onDragStart={onDragStart}
-            title="拖拽到画布，或点击下方按钮添加"
+            title={t("workflow.dragHint")}
           >
             <GripVertical className="icon wfb-grip" />
             <span className="wfb-node-icon wfb-node-icon--sm">
               <Bot className="icon" />
             </span>
-            <span className="wfb-palette-item-text">Agent 节点</span>
+            <span className="wfb-palette-item-text">{t("workflow.agentNode")}</span>
           </div>
           <button className="wfb-add" type="button" onClick={addNode}>
             <Plus className="icon" />
-            添加节点
+            {t("workflow.addNode")}
           </button>
 
-          <div className="wfb-hint">拖拽节点的圆点连线以表达执行顺序。</div>
+          <div className="wfb-hint">{t("workflow.connectHint")}</div>
         </aside>
 
         {/* ---------- canvas ---------- */}
@@ -358,7 +359,7 @@ function WorkflowCreateInner({
             type="button"
           >
             <Sparkles className="icon" />
-            创建工作流
+            {t("workflow.create")}
           </button>
           <ReactFlow<WfNode, Edge>
             nodes={nodes}
@@ -376,6 +377,12 @@ function WorkflowCreateInner({
             fitView
             fitViewOptions={{ padding: 0.3, maxZoom: 1 }}
             proOptions={{ hideAttribution: true }}
+            ariaLabelConfig={{
+              "controls.ariaLabel": t("workflow.controls.ariaLabel"),
+              "controls.zoomIn.ariaLabel": t("workflow.controls.zoomIn"),
+              "controls.zoomOut.ariaLabel": t("workflow.controls.zoomOut"),
+              "controls.fitView.ariaLabel": t("workflow.controls.fitView"),
+            }}
           >
             <Background gap={16} size={1} color="hsl(240 5.9% 88%)" />
             <Controls showInteractive={false} />
@@ -388,19 +395,19 @@ function WorkflowCreateInner({
           {selectedNode ? (
             <>
               <div className="wfb-inspector-head">
-                <div className="wfb-section-label">节点配置</div>
+                <div className="wfb-section-label">{t("workflow.sections.nodeConfig")}</div>
                 <button
                   className="wfb-icon-btn"
                   type="button"
                   onClick={deleteSelected}
-                  title="删除节点"
+                  title={t("workflow.deleteNode")}
                 >
                   <Trash2 className="icon" />
                 </button>
               </div>
 
               <label className="wfb-field">
-                <span className="wfb-field-label">名称</span>
+                <span className="wfb-field-label">{t("common.name")}</span>
                 <input
                   className={`wfb-input ${selectedNameProblem ? "wfb-input--error" : ""}`}
                   value={selectedNode.data.agent.name}
@@ -411,38 +418,38 @@ function WorkflowCreateInner({
                   <span className="wfb-field-error">{selectedNameProblem}</span>
                 ) : (
                   <span className="wfb-field-help">
-                    仅使用英文字母、数字和下划线，且名称保持唯一。
+                    {t("workflow.nameHelp")}
                   </span>
                 )}
               </label>
 
               <label className="wfb-field">
-                <span className="wfb-field-label">描述</span>
+                <span className="wfb-field-label">{t("common.description")}</span>
                 <input
                   className="wfb-input"
                   value={selectedNode.data.agent.description}
                   onChange={(e) =>
                     patchSelected({ description: e.target.value })
                   }
-                  placeholder="这个 agent 做什么…"
+                  placeholder={t("workflow.placeholders.agentDescription")}
                 />
               </label>
 
               <label className="wfb-field">
-                <span className="wfb-field-label">指令 (instruction)</span>
+                <span className="wfb-field-label">{t("workflow.instruction")}</span>
                 <textarea
                   className="wfb-input wfb-textarea"
                   value={selectedNode.data.agent.instruction}
                   onChange={(e) =>
                     patchSelected({ instruction: e.target.value })
                   }
-                  placeholder="你是一个…"
+                  placeholder={t("workflow.placeholders.instruction")}
                   rows={6}
                 />
               </label>
 
               <label className="wfb-field">
-                <span className="wfb-field-label">工具 (逗号分隔)</span>
+                <span className="wfb-field-label">{t("workflow.tools")}</span>
                 <input
                   className="wfb-input"
                   value={selectedNode.data.agent.tools.join(", ")}
@@ -459,16 +466,16 @@ function WorkflowCreateInner({
               </label>
 
               <div className="wfb-inspector-meta">
-                <span className="wfb-meta-key">节点 ID</span>
+                <span className="wfb-meta-key">{t("workflow.nodeId")}</span>
                 <code className="wfb-meta-val">{selectedNode.id}</code>
               </div>
             </>
           ) : (
             <div className="wfb-inspector-empty">
               <Bot className="wfb-empty-icon" />
-              <p>选择一个节点以编辑其配置</p>
+              <p>{t("workflow.empty.selectNode")}</p>
               <p className="wfb-empty-sub">
-                共 {nodes.length} 个节点 · {edges.length} 条连线
+                {t("workflow.empty.summary", { nodes: nodes.length, edges: edges.length })}
               </p>
             </div>
           )}

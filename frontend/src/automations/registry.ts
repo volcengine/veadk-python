@@ -15,8 +15,8 @@ export const AUTOMATION_CATEGORIES: readonly {
   id: AutomationCategoryId;
   label: string;
 }[] = [
-  { id: "development", label: "研发" },
-  { id: "channels", label: "消息渠道" },
+  { id: "development", label: "Development" },
+  { id: "channels", label: "Messaging channels" },
 ];
 
 export const AUTOMATIONS: readonly AutomationDefinition[] = [

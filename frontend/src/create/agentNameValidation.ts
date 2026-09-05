@@ -1,15 +1,20 @@
 import type { AgentDraft } from "./types";
+import { createT } from "./i18n";
 
 const ADK_AGENT_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 type AgentNameNode = Pick<AgentDraft, "name" | "subAgents">;
 
 /** Return the Google ADK name validation error, or null when valid. */
-export function agentNameProblem(name: string): string | null {
-  if (name.trim().length === 0) return "名称为必填项";
-  if (name === "user") return "user 是 Google ADK 保留名称，请使用其他名称";
+export function agentNameProblem(
+  name: string,
+  translate: (key: string) => string = (key) =>
+    createT(`validation.agentName.${key}`),
+): string | null {
+  if (name.trim().length === 0) return translate("required");
+  if (name === "user") return translate("reserved");
   if (!ADK_AGENT_NAME_PATTERN.test(name)) {
-    return "名称须以英文字母或下划线开头，且只能包含英文字母、数字和下划线";
+    return translate("characters");
   }
   return null;
 }

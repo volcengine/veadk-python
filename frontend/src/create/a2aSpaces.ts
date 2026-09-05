@@ -2,6 +2,7 @@
 // route; the server signs ListA2aSpaces with its cloud credential chain.
 
 import { DEFAULT_REQUEST_TIMEOUT_MS, requestSignal } from "../adk/timeout";
+import { createT } from "./i18n";
 
 export interface A2aSpaceTag {
   key: string;
@@ -37,10 +38,10 @@ async function jfetch<T>(url: string): Promise<T> {
     signal: requestSignal(undefined, DEFAULT_REQUEST_TIMEOUT_MS),
   });
   if (res.status === 409) {
-    throw new Error("服务端未配置云厂商 AK/SK，无法访问 AgentKit 智能体中心");
+    throw new Error(createT("helpers.a2aSpaces.credentialsMissing"));
   }
   if (res.status === 401) {
-    throw new Error("请先登录以访问 AgentKit 智能体中心");
+    throw new Error(createT("helpers.a2aSpaces.loginRequired"));
   }
   if (!res.ok) {
     let detail = "";
@@ -50,7 +51,12 @@ async function jfetch<T>(url: string): Promise<T> {
     } catch {
       /* ignore */
     }
-    throw new Error(`请求失败 (${res.status})${detail ? ": " + detail : ""}`);
+    throw new Error(
+      createT("helpers.requestFailed", {
+        status: res.status,
+        detail: detail ? `: ${detail}` : "",
+      }),
+    );
   }
   return res.json() as Promise<T>;
 }

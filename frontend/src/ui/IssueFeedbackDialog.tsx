@@ -6,15 +6,16 @@ import {
   type SVGProps,
 } from "react";
 import { createPortal } from "react-dom";
+import { useTranslation } from "react-i18next";
 import type { IssueFeedbackIssue } from "../adk/issueFeedback";
 import "./IssueFeedbackDialog.css";
 
-const ISSUE_OPTIONS: { value: IssueFeedbackIssue; label: string }[] = [
-  { value: "slow", label: "执行速度慢" },
-  { value: "crash", label: "运行崩溃" },
-  { value: "incorrect", label: "结果不准确" },
-  { value: "tool_error", label: "工具调用失败" },
-  { value: "other", label: "其他问题" },
+const ISSUE_OPTIONS: IssueFeedbackIssue[] = [
+  "slow",
+  "crash",
+  "incorrect",
+  "tool_error",
+  "other",
 ];
 
 interface IssueFeedbackDialogProps {
@@ -63,6 +64,7 @@ export function IssueFeedbackDialog({
   onClose,
   onSubmit,
 }: IssueFeedbackDialogProps) {
+  const { t } = useTranslation("feedback");
   const titleId = useId();
   const descriptionId = useId();
   const dialogRef = useRef<HTMLElement>(null);
@@ -165,13 +167,13 @@ export function IssueFeedbackDialog({
         aria-busy={busy || undefined}
       >
         <header className="issue-feedback-head">
-          <h2 id={titleId}>问题反馈</h2>
+          <h2 id={titleId}>{t("title")}</h2>
           <button
             type="button"
             className="issue-feedback-close"
             onClick={onClose}
             disabled={busy}
-            aria-label="关闭问题反馈"
+            aria-label={t("dialog.close")}
           >
             <DialogCloseIcon />
           </button>
@@ -183,41 +185,41 @@ export function IssueFeedbackDialog({
               <DialogCheckIcon />
             </span>
             <div>
-              <h3>上报成功，感谢您的反馈</h3>
+              <h3>{t("success.title")}</h3>
               <p id={`${descriptionId}-success`}>
-                AgentKit 团队会尽快查看您提交的问题。
+                {t("success.description")}
               </p>
             </div>
           </div>
         ) : (
           <div className="issue-feedback-body">
             <p id={descriptionId} className="issue-feedback-intro">
-              请选择遇到的问题，也可以补充具体表现。
+              {t("dialog.intro")}
             </p>
             <p className="issue-feedback-privacy" role="alert">
-              您的对话数据将会上报到 AgentKit 团队，请注意隐私保护。
+              {t("dialog.privacy")}
             </p>
-            <div className="issue-feedback-chips" aria-label="常见问题">
+            <div className="issue-feedback-chips" aria-label={t("commonIssues")}>
               {ISSUE_OPTIONS.map((issue) => (
                 <button
-                  key={issue.value}
+                  key={issue}
                   type="button"
                   className="issue-feedback-chip"
-                  aria-pressed={selectedIssues.has(issue.value)}
-                  onClick={() => toggleIssue(issue.value)}
+                  aria-pressed={selectedIssues.has(issue)}
+                  onClick={() => toggleIssue(issue)}
                   disabled={busy}
                 >
-                  {issue.label}
+                  {t(`dialog.issues.${issue}`)}
                 </button>
               ))}
             </div>
             <label className="issue-feedback-field">
-              <span>问题描述</span>
+              <span>{t("descriptionLabel")}</span>
               <textarea
                 ref={textareaRef}
                 value={description}
                 onChange={(event) => setDescription(event.target.value)}
-                placeholder="请描述问题发生时的表现（选填）"
+                placeholder={t("dialog.descriptionPlaceholder")}
                 maxLength={4000}
                 rows={5}
                 disabled={busy}
@@ -232,12 +234,12 @@ export function IssueFeedbackDialog({
         <footer className="issue-feedback-actions">
           {submitted ? (
             <button type="button" className="is-primary" onClick={onClose}>
-              完成
+              {t("done")}
             </button>
           ) : (
             <>
               <button type="button" onClick={onClose} disabled={busy}>
-                取消
+                {t("cancel")}
               </button>
               <button
                 type="button"
@@ -245,7 +247,7 @@ export function IssueFeedbackDialog({
                 onClick={() => void submit()}
                 disabled={!canSubmit || busy}
               >
-                {busy ? "正在上报…" : "提交反馈"}
+                {busy ? t("submitting") : t("submit")}
               </button>
             </>
           )}

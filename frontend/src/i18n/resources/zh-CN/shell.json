@@ -1,0 +1,37 @@
+{
+  "login": {
+    "retry": "重试",
+    "signInToContinue": "登录以继续使用",
+    "signInWith": "使用 {{provider}} 登录",
+    "enterUsername": "输入一个用户名即可开始",
+    "usernamePlaceholder": "用户名（字母 + 数字，最多 16 位）",
+    "enter": "进入",
+    "usernameInvalid": "只能包含大小写字母和数字，最多 16 位。",
+    "identityProvider": {
+      "volcengine": "火山引擎 Identity",
+      "byteplus": "BytePlus Identity"
+    },
+    "powered": {
+      "volcengine": "火山引擎 AgentKit 提供企业级 Agent 解决方案",
+      "byteplus": "BytePlus AgentKit 提供企业级 Agent 解决方案"
+    },
+    "legalPrefix": "继续即表示你已阅读并同意 AgentKit",
+    "terms": "产品和服务条款",
+    "copyright": "© {{year}} VeADK。保留所有权利。"
+  },
+  "authExpired": {
+    "title": "登录状态已过期",
+    "description": "当前编辑内容会保留。重新登录后，刚才的操作将自动继续。",
+    "waiting": "等待登录完成…",
+    "signInAgain": "重新登录"
+  },
+  "navbar": {
+    "breadcrumbs": "面包屑",
+    "selectAgent": "选择 Agent",
+    "switchAgent": "切换智能体"
+  },
+  "confirm": {
+    "cancel": "取消",
+    "close": "关闭确认框"
+  }
+}

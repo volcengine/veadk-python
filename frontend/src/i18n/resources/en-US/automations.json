@@ -1,0 +1,241 @@
+{
+  "title": "Automations",
+  "description": "Connect development tools and extend your Agents with automated workflows",
+  "search": "Search automations",
+  "categoriesLabel": "Automation categories",
+  "categories": {
+    "development": "Development",
+    "channels": "Messaging channels"
+  },
+  "resultsLabel": "{{category}} automations",
+  "open": "Open {{name}}",
+  "localOnly": "Available only in local deployments",
+  "emptyTitle": "No matching automations",
+  "emptyDescription": "Try searching for another name",
+  "backToAutomations": "Back to automations",
+  "cards": {
+    "coding-agents": {
+      "name": "Configure coding agents",
+      "badge": "Local",
+      "description": "Install built-in VeADK and AgentKit skills globally for Trae, Claude Code, or Codex."
+    },
+    "template": {
+      "name": "Import starter project",
+      "description": "Create a minimal Agent project in your repository with continuous delivery to AgentKit Runtime.",
+      "title": "Import starter project",
+      "subtitle": "Add a ready-to-run basic Agent and continuous delivery configuration to your repository",
+      "panel": "This creates a pull request containing the basic project and AgentKit Runtime delivery workflow.",
+      "submitLabel": "Import template and create PR",
+      "regionHelp": "Must match the target Runtime region",
+      "pullRequest": {
+        "title": "feat: import AgentKit basic template",
+        "description": "Import a basic Agent project with the AgentKit Studio App Server and add continuous delivery to AgentKit Runtime. Configure the required {{provider}} secrets before merging."
+      },
+      "fields": {
+        "repository": { "label": "GitHub Repo", "placeholder": "owner/repository", "help": "Enter owner/repository or a full github.com URL" },
+        "baseBranch": { "label": "Target branch", "placeholder": "main", "help": "Defaults to main; the pull request will use this branch as its base" },
+        "projectPath": { "label": "Agent project directory", "placeholder": "agentkit-basic-agent", "help": "The basic project will be added here; app.py mounts the complete Studio App Server and serves as the entry point" },
+        "runtimeName": { "label": "Runtime name", "placeholder": "support-agent", "help": "Used by the AgentKit delivery configuration" },
+        "runtimeId": { "label": "Runtime ID", "placeholder": "rt-xxxxxxxx", "help": "The AgentKit Runtime that will receive continuous updates" }
+      }
+    },
+    "delivery": {
+      "name": "AgentKit Runtime delivery",
+      "description": "Add a workflow that continuously delivers your repository to AgentKit Runtime.",
+      "title": "AgentKit Runtime delivery",
+      "subtitle": "Add continuous delivery to the repository through a pull request",
+      "panel": "This creates a release branch and opens a pull request containing the GitHub Actions workflow.",
+      "submitLabel": "Confirm and create PR",
+      "regionHelp": "Must match the target Runtime region",
+      "pullRequest": {
+        "title": "feat: continuously publish to AgentKit Runtime",
+        "description": "Add a GitHub Actions workflow that continuously publishes updates from the target branch to AgentKit Runtime. Configure the required {{provider}} secrets before merging."
+      },
+      "fields": {
+        "repository": { "label": "GitHub Repo", "placeholder": "owner/repository", "help": "Enter owner/repository or a full github.com URL" },
+        "baseBranch": { "label": "Target branch", "placeholder": "main", "help": "Defaults to main; the pull request will use this branch as its base" },
+        "projectPath": { "label": "Agent project directory", "placeholder": ".", "help": "Defaults to the repository root; the directory must contain an app.py that mounts the complete Studio App Server" },
+        "runtimeName": { "label": "Runtime name", "placeholder": "support-agent", "help": "Used by the AgentKit delivery configuration" },
+        "runtimeId": { "label": "Runtime ID", "placeholder": "rt-xxxxxxxx", "help": "The AgentKit Runtime that will receive continuous updates" }
+      }
+    },
+    "review": {
+      "name": "Automated PR review",
+      "description": "Review code changes in an isolated Sandbox and publish the result to the pull request.",
+      "title": "Automated PR review",
+      "subtitle": "Inspect code changes in an isolated Sandbox and publish the result to the pull request",
+      "panel": "The workflow reviews only non-draft pull requests from the same repository. Pull requests from forks cannot access repository secrets.",
+      "submitLabel": "Add review and create PR",
+      "regionHelp": "Must match the Sandbox Tool region",
+      "pullRequest": {
+        "title": "chore: configure automated PR review",
+        "description": "Add a GitHub Actions workflow that reviews same-repository pull requests in an isolated Sandbox and publishes the result as a GitHub review. Configure the required workflow secrets before merging."
+      },
+      "fields": {
+        "repository": { "label": "GitHub Repo", "placeholder": "owner/repository", "help": "Enter owner/repository or a full github.com URL" },
+        "baseBranch": { "label": "Target branch", "placeholder": "main", "help": "Defaults to main; the pull request will use this branch as its base" },
+        "sandboxToolId": { "label": "Sandbox Tool ID", "placeholder": "tool-xxxxxxxx", "help": "The AgentKit CodeEnv used for each review" },
+        "modelName": { "label": "Review model", "placeholder": "review-model", "help": "The code review model name injected into the Sandbox" },
+        "modelBaseUrl": { "label": "Model API URL", "placeholder": "https://ark.example.com/api/v3", "help": "Must be an OpenAI-compatible HTTPS endpoint" }
+      }
+    },
+    "feishu": {
+      "name": "Feishu bot",
+      "badge": "Beta",
+      "description": "Create a Feishu bot and connect its messages directly to AgentKit Runtime."
+    },
+    "website-integration": {
+      "name": "Website integration",
+      "description": "Embed an AgentKit Runtime on your website as a floating chat window."
+    }
+  },
+  "github": {
+    "required": "Required",
+    "optional": "Optional",
+    "region": "Region",
+    "tokenLabel": "GitHub Token",
+    "getToken": "Get token",
+    "tokenPlaceholder": "Requires write access to repository contents and pull requests",
+    "hideToken": "Hide token",
+    "showToken": "Show token",
+    "tokenHelp": "The token is used only for this submission. It is not stored in the browser or written to the pull request.",
+    "prCreated": "PR #{{number}} created",
+    "viewOnGitHub": "View on GitHub",
+    "secretsHeading": "Before merging the pull request, configure these GitHub Actions secrets in the repository:",
+    "secretPair": "{{accessKey}}, {{secretKey}} (required)",
+    "sessionToken": "{{sessionToken}} (required when using temporary credentials)",
+    "requiredSecret": "{{name}} (required)",
+    "temporaryCredentialRequired": " (required when using temporary credentials)",
+    "requiredSuffix": " (required)",
+    "submitting": "Creating PR…",
+    "validation": {
+      "required": "This field is required",
+      "repository": "Enter owner/repository or a full GitHub repository URL",
+      "baseBranch": "The target branch format is invalid",
+      "projectPath": "Enter a relative path within the repository",
+      "runtimeId": "The Runtime ID format is invalid",
+      "sandboxToolId": "The Sandbox Tool ID format is invalid",
+      "modelName": "The model name format is invalid",
+      "modelBaseUrlSafe": "Enter an HTTPS URL without credentials, query parameters, or fragments",
+      "modelBaseUrl": "Enter a valid HTTPS URL",
+      "runtimeName": {
+        "required": "Runtime name is required",
+        "characters": "Runtime name can contain only letters, numbers, underscores, and hyphens",
+        "length": "Runtime name must be 4–64 characters"
+      }
+    }
+  },
+  "codingAgents": {
+    "title": "Configure coding agents",
+    "description": "Install the AgentKit skills bundled with Studio globally for local coding clients.",
+    "retry": "Retry",
+    "clients": {
+      "ariaLabel": "Select coding agents",
+      "title": "Local clients",
+      "detectAgain": "Detect again",
+      "detecting": "Detecting local clients…",
+      "detected": "Client detected",
+      "available": "Available",
+      "unavailable": "Not detected"
+    },
+    "skills": {
+      "ariaLabel": "Select bundled skills",
+      "title": "Bundled skills",
+      "viewFiles": "View files",
+      "items": {
+        "veadk-agent-development": {
+          "name": "VeADK Agent development",
+          "description": "Build and refine Agents with VeADK."
+        },
+        "agentkit-cli": {
+          "name": "AgentKit CLI",
+          "description": "Manage and deploy AgentKit resources with AgentKit CLI."
+        }
+      }
+    },
+    "global": {
+      "ariaLabel": "Global installation directories",
+      "title": "Global installation",
+      "description": "Available to other local projects after configuration",
+      "empty": "Select a client to see its installation directory."
+    },
+    "success": "Configured {{skillCount}} skill(s) for {{agentCount}} client(s)",
+    "selection": "{{agentCount}} client(s) and {{skillCount}} skill(s) selected",
+    "selectClient": "Select a client first",
+    "configuring": "Configuring…",
+    "configure": "Configure",
+    "errors": {
+      "detect": "Failed to detect local clients",
+      "configure": "Configuration failed. Check permissions for your user directory and try again."
+    },
+    "preview": {
+      "description": "Browse the skill files bundled with Studio in read-only mode",
+      "close": "Close file preview",
+      "loading": "Loading files…",
+      "error": "Failed to load skill files",
+      "skillFiles": "{{name}} files",
+      "files": "Files",
+      "fileContent": "File contents",
+      "notPreviewable": "This file is not previewable UTF-8 text.",
+      "noFiles": "No previewable files."
+    }
+  },
+  "feishu": {
+    "title": "Feishu bot",
+    "description": "Create a Feishu Agent powered by AgentKit Runtime",
+    "panel": "Enter the credentials for a published Feishu app. Studio will generate a basic Agent, create a dedicated Runtime, and enable the persistent Feishu messaging connection.",
+    "agentName": "Agent name",
+    "agentNameHelp": "Used as the root Agent name in the new Runtime",
+    "region": "Deployment region",
+    "regionHelp": "The Runtime and build artifacts will be created in this region",
+    "regions": {
+      "cn-beijing": "Beijing",
+      "cn-shanghai": "Shanghai"
+    },
+    "appId": "Feishu App ID",
+    "appIdHelp": "Application credential from the Feishu Open Platform",
+    "appSecret": "Feishu App Secret",
+    "appSecretPlaceholder": "Enter the App Secret",
+    "appSecretHelp": "Written only to the environment variables of the new Runtime",
+    "hideSecret": "Hide App Secret",
+    "showSecret": "Show App Secret",
+    "hide": "Hide",
+    "show": "Show",
+    "confirmCancel": "Cancelling will stop the task and clean up any Runtime already created. Continue?",
+    "status": {
+      "preparing": "Generating the basic Agent",
+      "running": "Creating Runtime",
+      "cancelling": "Cancelling deployment",
+      "succeeded": "Feishu bot Runtime created",
+      "cancelled": "Deployment cancelled",
+      "failed": "Creation failed"
+    },
+    "steps": {
+      "prepare": "Generate Agent",
+      "build": "Build image",
+      "deploy": "Create Runtime",
+      "publish": "Publish service"
+    },
+    "openConsole": "Open Runtime console",
+    "credentials": {
+      "title": "Credential handling",
+      "description": "The App Secret is used only for this deployment. It is never written to generated source code or browser storage."
+    },
+    "cancelDeployment": "Cancel deployment",
+    "creating": "Creating…",
+    "create": "Create Feishu bot Runtime",
+    "validation": {
+      "appId": "Enter the Feishu App ID",
+      "appSecret": "Enter the Feishu App Secret",
+      "agentName": {
+        "required": "Name is required",
+        "reserved": "user is reserved by Google ADK. Choose another name",
+        "characters": "Name must start with a letter or underscore and contain only letters, numbers, and underscores"
+      }
+    },
+    "generatedAgent": {
+      "description": "A helpful assistant that receives messages through Feishu.",
+      "instruction": "You are a helpful assistant serving users through Feishu. Understand each request accurately and provide concise, reliable answers. Ask clarifying questions when information is missing, and never invent facts."
+    }
+  }
+}

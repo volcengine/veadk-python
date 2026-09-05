@@ -12,6 +12,7 @@ import {
   repositoryField,
 } from "./githubFields";
 import type { GitHubAutomationDefinition } from "./types";
+import { automationT } from "./i18n";
 
 interface PullRequestReviewWorkflowInput {
   sandboxToolId: string;
@@ -28,17 +29,17 @@ export function validatePullRequestReviewSettings(
   input: PullRequestReviewWorkflowInput,
 ): void {
   if (!SANDBOX_TOOL_ID_PATTERN.test(input.sandboxToolId)) {
-    throw new Error("Sandbox Tool ID 格式不正确");
+    throw new Error(automationT("github.validation.sandboxToolId"));
   }
   if (!MODEL_NAME_PATTERN.test(input.modelName)) {
-    throw new Error("模型名称格式不正确");
+    throw new Error(automationT("github.validation.modelName"));
   }
 
   let modelUrl: URL;
   try {
     modelUrl = new URL(input.modelBaseUrl);
   } catch {
-    throw new Error("模型 API 地址必须是安全的 HTTPS URL");
+    throw new Error(automationT("github.validation.modelBaseUrlSafe"));
   }
   if (
     modelUrl.protocol !== "https:"
@@ -48,7 +49,7 @@ export function validatePullRequestReviewSettings(
     || modelUrl.search
     || modelUrl.hash
   ) {
-    throw new Error("模型 API 地址必须是安全的 HTTPS URL");
+    throw new Error(automationT("github.validation.modelBaseUrlSafe"));
   }
 }
 
@@ -177,12 +178,12 @@ export const pullRequestReviewAutomation: GitHubAutomationDefinition = {
   kind: "github",
   category: "development",
   icon: "github",
-  name: "PR 自动评审",
-  description: "在隔离 Sandbox 中评审代码变更，并将结果发布到 Pull Request。",
-  title: "PR 自动评审",
-  subtitle: "在隔离 Sandbox 中检查代码变更并把结果发布到 Pull Request",
-  panel: "工作流仅评审同仓库的非草稿 PR；fork PR 不会读取仓库 Secrets。",
-  submitLabel: "添加评审并提交 PR",
+  name: "Automated PR review",
+  description: "Review code changes in an isolated Sandbox and publish the result to the pull request.",
+  title: "Automated PR review",
+  subtitle: "Inspect code changes in an isolated Sandbox and publish the result to the pull request",
+  panel: "The workflow reviews only non-draft pull requests from the same repository. Pull requests from forks cannot access repository secrets.",
+  submitLabel: "Add review and create PR",
   fields: [
     repositoryField,
     baseBranchField,
@@ -190,32 +191,32 @@ export const pullRequestReviewAutomation: GitHubAutomationDefinition = {
       name: "sandboxToolId",
       label: "Sandbox Tool ID",
       placeholder: "tool-xxxxxxxx",
-      help: "用于运行每次评审的 AgentKit CodeEnv",
+      help: "The AgentKit CodeEnv used for each review",
       required: true,
     },
     {
       name: "modelName",
-      label: "评审模型",
+      label: "Review model",
       placeholder: "review-model",
-      help: "注入 Sandbox 的代码评审模型名称",
+      help: "The code review model name injected into the Sandbox",
       required: true,
     },
     {
       name: "modelBaseUrl",
-      label: "模型 API 地址",
+      label: "Model API URL",
       placeholder: "https://ark.example.com/api/v3",
-      help: "必须使用 OpenAI 兼容的 HTTPS 地址",
+      help: "Must be an OpenAI-compatible HTTPS endpoint",
       required: true,
     },
   ],
   initialValues: ({ cloudProvider }) => initialAutomationValues(cloudProvider),
-  regionHelp: "必须与 Sandbox Tool 所在地域一致",
+  regionHelp: "Must match the Sandbox Tool region",
   secrets: ({ cloudProvider }) => {
     const [requiredCredentials, optionalSessionToken] =
       cloudCredentialSecretLabels(cloudProvider);
     return [
       requiredCredentials,
-      "CODEX_MODEL_API_KEY（必填）",
+      automationT("github.requiredSecret", { name: "CODEX_MODEL_API_KEY" }),
       optionalSessionToken,
     ];
   },
@@ -238,8 +239,8 @@ export const pullRequestReviewAutomation: GitHubAutomationDefinition = {
           },
         ],
         branchPrefix: "chore/pr-automated-review",
-        title: "chore: 配置 PR 自动评审",
-        description: "新增 GitHub Actions 工作流，在隔离 Sandbox 中评审同仓库 PR，并将结果发布为 GitHub Review。合并前请配置工作流所需 Secrets。",
+        title: automationT("cards.review.pullRequest.title"),
+        description: automationT("cards.review.pullRequest.description"),
       },
       signal,
     );

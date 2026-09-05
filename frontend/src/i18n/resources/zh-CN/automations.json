@@ -1,0 +1,241 @@
+{
+  "title": "自动化",
+  "description": "连接研发工具，为智能体扩展自动化工作流",
+  "search": "搜索自动化",
+  "categoriesLabel": "自动化分类",
+  "categories": {
+    "development": "研发",
+    "channels": "消息渠道"
+  },
+  "resultsLabel": "{{category}}自动化列表",
+  "open": "打开{{name}}",
+  "localOnly": "仅本地部署可用",
+  "emptyTitle": "没有匹配的自动化",
+  "emptyDescription": "请尝试搜索其他名称",
+  "backToAutomations": "返回自动化列表",
+  "cards": {
+    "coding-agents": {
+      "name": "配置 Coding Agents",
+      "badge": "本地",
+      "description": "将 VeADK 和 AgentKit 内置 Skills 全局配置到 Trae、Claude Code 或 Codex。"
+    },
+    "template": {
+      "name": "模板项目导入",
+      "description": "在您的仓库中创建一个可持续交付到 AgentKit Runtime 的最简智能体",
+      "title": "模板项目导入",
+      "subtitle": "把可直接启动 Studio 的 basic Agent 和持续交付配置加入仓库",
+      "panel": "提交后将创建一个 PR，同时导入 basic 项目和 AgentKit Runtime 发布工作流。",
+      "submitLabel": "导入模板并提交 PR",
+      "regionHelp": "必须与目标 Runtime 所在地域一致",
+      "pullRequest": {
+        "title": "feat: 导入 AgentKit basic 模板",
+        "description": "导入带有 AgentKit Studio App Server 的 basic Agent 项目，并添加持续发布到 AgentKit Runtime 的工作流。合并前请配置 {{provider}} Secrets。"
+      },
+      "fields": {
+        "repository": { "label": "GitHub 仓库", "placeholder": "owner/repository", "help": "支持 owner/repository 或完整 github.com URL" },
+        "baseBranch": { "label": "目标分支", "placeholder": "main", "help": "留空时使用 main，PR 将以此分支为 base" },
+        "projectPath": { "label": "Agent 项目目录", "placeholder": "agentkit-basic-agent", "help": "将在此目录新增 basic 项目；app.py 挂载完整 Studio App Server，并作为服务入口启动" },
+        "runtimeName": { "label": "Runtime 名称", "placeholder": "support-agent", "help": "用于 AgentKit 发布配置" },
+        "runtimeId": { "label": "运行时 ID", "placeholder": "rt-xxxxxxxx", "help": "持续更新的目标 AgentKit Runtime" }
+      }
+    },
+    "delivery": {
+      "name": "AgentKit Runtime 持续交付",
+      "description": "为您的仓库添加持续交付到 AgentKit Runtime 的自动化工作流。",
+      "title": "AgentKit Runtime 持续交付",
+      "subtitle": "用 Pull Request 把持续发布配置安全地加入代码仓库",
+      "panel": "提交后将在目标仓库创建发布分支，并发起包含 GitHub Actions 工作流的 PR。",
+      "submitLabel": "确定并提交 PR",
+      "regionHelp": "必须与目标 Runtime 所在地域一致",
+      "pullRequest": {
+        "title": "feat: 持续发布到 AgentKit Runtime",
+        "description": "新增 GitHub Actions 工作流，在目标分支更新时持续发布到 AgentKit Runtime。合并前请配置工作流所需的 {{provider}} Secrets。"
+      },
+      "fields": {
+        "repository": { "label": "GitHub 仓库", "placeholder": "owner/repository", "help": "支持 owner/repository 或完整 github.com URL" },
+        "baseBranch": { "label": "目标分支", "placeholder": "main", "help": "留空时使用 main，PR 将以此分支为 base" },
+        "projectPath": { "label": "Agent 项目目录", "placeholder": ".", "help": "留空时使用仓库根目录；目录内需包含挂载完整 Studio App Server 的 app.py" },
+        "runtimeName": { "label": "Runtime 名称", "placeholder": "support-agent", "help": "用于 AgentKit 发布配置" },
+        "runtimeId": { "label": "运行时 ID", "placeholder": "rt-xxxxxxxx", "help": "持续更新的目标 AgentKit Runtime" }
+      }
+    },
+    "review": {
+      "name": "PR 自动评审",
+      "description": "在隔离 Sandbox 中评审代码变更，并将结果发布到 Pull Request。",
+      "title": "PR 自动评审",
+      "subtitle": "在隔离 Sandbox 中检查代码变更并把结果发布到 Pull Request",
+      "panel": "工作流仅评审同仓库的非草稿 PR；fork PR 不会读取仓库 Secrets。",
+      "submitLabel": "添加评审并提交 PR",
+      "regionHelp": "必须与 Sandbox Tool 所在地域一致",
+      "pullRequest": {
+        "title": "chore: 配置 PR 自动评审",
+        "description": "新增 GitHub Actions 工作流，在隔离 Sandbox 中评审同仓库 PR，并将结果发布为 GitHub Review。合并前请配置工作流所需 Secrets。"
+      },
+      "fields": {
+        "repository": { "label": "GitHub 仓库", "placeholder": "owner/repository", "help": "支持 owner/repository 或完整 github.com URL" },
+        "baseBranch": { "label": "目标分支", "placeholder": "main", "help": "留空时使用 main，PR 将以此分支为 base" },
+        "sandboxToolId": { "label": "沙箱工具 ID", "placeholder": "tool-xxxxxxxx", "help": "用于运行每次评审的 AgentKit CodeEnv" },
+        "modelName": { "label": "评审模型", "placeholder": "review-model", "help": "注入 Sandbox 的代码评审模型名称" },
+        "modelBaseUrl": { "label": "模型 API 地址", "placeholder": "https://ark.example.com/api/v3", "help": "必须使用 OpenAI 兼容的 HTTPS 地址" }
+      }
+    },
+    "feishu": {
+      "name": "飞书机器人",
+      "badge": "Beta",
+      "description": "创建飞书机器人，并将消息直接接入 AgentKit Runtime。"
+    },
+    "website-integration": {
+      "name": "网站集成",
+      "description": "将 AgentKit Runtime 以悬浮聊天窗口嵌入网站。"
+    }
+  },
+  "github": {
+    "required": "必填",
+    "optional": "可选",
+    "region": "地域",
+    "tokenLabel": "GitHub Token",
+    "getToken": "获取 Token",
+    "tokenPlaceholder": "需要仓库 Contents 与 Pull requests 写权限",
+    "hideToken": "隐藏 Token",
+    "showToken": "显示 Token",
+    "tokenHelp": "Token 仅用于本次提交，不会保存在浏览器或写入 PR",
+    "prCreated": "PR #{{number}} 已创建",
+    "viewOnGitHub": "在 GitHub 查看",
+    "secretsHeading": "合并 PR 前，请在仓库的 GitHub Actions Secrets 中配置：",
+    "secretPair": "{{accessKey}}、{{secretKey}}（必填）",
+    "sessionToken": "{{sessionToken}}（使用临时凭据时必填）",
+    "requiredSecret": "{{name}}（必填）",
+    "temporaryCredentialRequired": "（使用临时凭据时必填）",
+    "requiredSuffix": "（必填）",
+    "submitting": "提交 PR 中…",
+    "validation": {
+      "required": "此项不能为空",
+      "repository": "请输入 owner/repository 或完整 GitHub 仓库 URL",
+      "baseBranch": "目标分支格式不正确",
+      "projectPath": "请输入仓库内的相对目录",
+      "runtimeId": "运行时 ID 格式不正确",
+      "sandboxToolId": "沙箱工具 ID 格式不正确",
+      "modelName": "模型名称格式不正确",
+      "modelBaseUrlSafe": "请输入不含凭据、查询参数或锚点的 HTTPS 地址",
+      "modelBaseUrl": "请输入有效的 HTTPS 地址",
+      "runtimeName": {
+        "required": "Runtime 名称为必填项",
+        "characters": "Runtime 名称只能包含英文字母、数字、下划线和连字符",
+        "length": "Runtime 名称长度须为 4-64 个字符"
+      }
+    }
+  },
+  "codingAgents": {
+    "title": "配置 Coding Agents",
+    "description": "把随 Studio 提供的 AgentKit Skills 全局安装到本地编码客户端。",
+    "retry": "重试",
+    "clients": {
+      "ariaLabel": "选择 Coding Agent",
+      "title": "本机客户端",
+      "detectAgain": "重新检测",
+      "detecting": "正在检测本机客户端…",
+      "detected": "已检测到客户端",
+      "available": "可用",
+      "unavailable": "未检测到"
+    },
+    "skills": {
+      "ariaLabel": "选择内置 Skill",
+      "title": "内置 Skills",
+      "viewFiles": "查看文件",
+      "items": {
+        "veadk-agent-development": {
+          "name": "VeADK Agent 开发",
+          "description": "使用 VeADK 开发和完善 Agent。"
+        },
+        "agentkit-cli": {
+          "name": "AgentKit CLI",
+          "description": "通过 AgentKit CLI 管理和部署 AgentKit 资源。"
+        }
+      }
+    },
+    "global": {
+      "ariaLabel": "全局安装目录",
+      "title": "全局安装",
+      "description": "配置后可在本机其他项目中使用",
+      "empty": "选择客户端后显示对应安装目录。"
+    },
+    "success": "已为 {{agentCount}} 个客户端配置 {{skillCount}} 个 Skill",
+    "selection": "已选择 {{agentCount}} 个客户端、{{skillCount}} 个 Skill",
+    "selectClient": "请先选择客户端",
+    "configuring": "正在配置…",
+    "configure": "配置",
+    "errors": {
+      "detect": "检测本机客户端失败",
+      "configure": "配置失败，请检查用户目录权限后重试"
+    },
+    "preview": {
+      "description": "只读浏览随 Studio 提供的 Skill 文件",
+      "close": "关闭文件预览",
+      "loading": "正在读取文件…",
+      "error": "读取 Skill 文件失败",
+      "skillFiles": "{{name}} 文件",
+      "files": "文件",
+      "fileContent": "文件内容",
+      "notPreviewable": "此文件不是可预览的 UTF-8 文本。",
+      "noFiles": "没有可预览的文件。"
+    }
+  },
+  "feishu": {
+    "title": "飞书机器人",
+    "description": "创建一个由 AgentKit Runtime 驱动的飞书智能体",
+    "panel": "填写已发布飞书应用的凭据，Studio 将生成 basic 智能体、创建独立 Runtime，并启用飞书消息长连接。",
+    "agentName": "智能体名称",
+    "agentNameHelp": "将作为新 Runtime 中的根智能体名称",
+    "region": "部署地域",
+    "regionHelp": "Runtime 与构建产物将创建在该地域",
+    "regions": {
+      "cn-beijing": "北京",
+      "cn-shanghai": "上海"
+    },
+    "appId": "飞书 App ID",
+    "appIdHelp": "来自飞书开放平台的应用凭证",
+    "appSecret": "飞书 App Secret",
+    "appSecretPlaceholder": "请输入 App Secret",
+    "appSecretHelp": "仅写入新 Runtime 的环境变量",
+    "hideSecret": "隐藏 App Secret",
+    "showSecret": "显示 App Secret",
+    "hide": "隐藏",
+    "show": "显示",
+    "confirmCancel": "取消部署将停止任务并清理已创建的 Runtime，确定继续吗？",
+    "status": {
+      "preparing": "正在生成 basic 智能体",
+      "running": "正在创建 Runtime",
+      "cancelling": "正在取消部署",
+      "succeeded": "飞书机器人 Runtime 已创建",
+      "cancelled": "部署已取消",
+      "failed": "创建失败"
+    },
+    "steps": {
+      "prepare": "生成智能体",
+      "build": "构建镜像",
+      "deploy": "创建 Runtime",
+      "publish": "发布服务"
+    },
+    "openConsole": "打开 Runtime 控制台",
+    "credentials": {
+      "title": "凭据处理",
+      "description": "App Secret 仅用于本次部署，不会写入生成源码或浏览器存储。"
+    },
+    "cancelDeployment": "取消部署",
+    "creating": "正在创建…",
+    "create": "创建飞书机器人 Runtime",
+    "validation": {
+      "appId": "请输入飞书 App ID",
+      "appSecret": "请输入飞书 App Secret",
+      "agentName": {
+        "required": "名称为必填项",
+        "reserved": "user 是 Google ADK 保留名称，请使用其他名称",
+        "characters": "名称须以英文字母或下划线开头，且只能包含英文字母、数字和下划线"
+      }
+    },
+    "generatedAgent": {
+      "description": "一个通过飞书接收消息并提供帮助的智能助手。",
+      "instruction": "你是一个通过飞书为用户提供帮助的智能助手。准确理解用户问题，给出简洁、可靠的回答；信息不足时先提问澄清，不要臆造事实。"
+    }
+  }
+}

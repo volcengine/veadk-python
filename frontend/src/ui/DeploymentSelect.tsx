@@ -5,6 +5,7 @@ import {
   useState,
   type SVGProps,
 } from "react";
+import { useTranslation } from "react-i18next";
 
 function SelectChevronIcon(props: SVGProps<SVGSVGElement>) {
   return (
@@ -72,14 +73,17 @@ export function DeploymentSelect({
   options,
   disabled = false,
   searchValue,
-  searchPlaceholder = "搜索资源名称",
+  searchPlaceholder,
   loading = false,
   hasMore = false,
-  emptyMessage = "暂无可用选项",
+  emptyMessage,
   onSearchChange,
   onLoadMore,
   onChange,
 }: DeploymentSelectProps) {
+  const { t } = useTranslation("ui");
+  const resolvedSearchPlaceholder = searchPlaceholder ?? t("deploymentSelect.searchPlaceholder");
+  const resolvedEmptyMessage = emptyMessage ?? t("deploymentSelect.emptyMessage");
   const listboxId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -239,8 +243,8 @@ export function DeploymentSelect({
                 ref={searchInputRef}
                 type="search"
                 value={searchValue}
-                aria-label={`搜索${ariaLabel}`}
-                placeholder={searchPlaceholder}
+                aria-label={t("deploymentSelect.searchAriaLabel", { label: ariaLabel })}
+                placeholder={resolvedSearchPlaceholder}
                 autoComplete="off"
                 onChange={(event) => onSearchChange?.(event.currentTarget.value)}
               />
@@ -295,11 +299,11 @@ export function DeploymentSelect({
           </div>
           {loading && (
             <div className="pp-deployment-select-state" aria-live="polite">
-              正在加载更多资源…
+              {t("deploymentSelect.loadingMore")}
             </div>
           )}
           {!loading && options.length === 0 && (
-            <div className="pp-deployment-select-state">{emptyMessage}</div>
+            <div className="pp-deployment-select-state">{resolvedEmptyMessage}</div>
           )}
         </div>
       )}

@@ -1,0 +1,199 @@
+{
+  "compactSelect": {
+    "loading": "加载中…",
+    "searchLabel": "搜索{{label}}",
+    "searchPlaceholder": "搜索{{label}}",
+    "retry": "重试",
+    "noMatches": "没有匹配项",
+    "noOptions": "暂无可选项",
+    "selection": "{{label}}：{{value}}"
+  },
+  "featureNotice": {
+    "badge": "焕然一新",
+    "view": "查看新特性",
+    "title": "本次更新",
+    "defaultNotes": {
+      "multiRegion": "多地域智能体：并行加载北京与上海 Runtime，列表下滑即可继续加载。",
+      "switchAgent": "会话内切换：在输入框旁选择智能体，并直接开启一段新会话。",
+      "visualCanvas": "可视化执行画布：通过横向画布查看多智能体结构，并支持全屏浏览。"
+    }
+  },
+  "workspace": {
+    "label": "新会话模式",
+    "agent": "智能体",
+    "skill": "技能定制",
+    "video": "视频创作"
+  },
+  "mode": {
+    "select": "选择新会话模式",
+    "agent": {
+      "label": "Agent",
+      "description": "与当前选择的 Agent 对话"
+    },
+    "builtin": {
+      "label": "内置智能体",
+      "description": "使用平台提供的智能体"
+    },
+    "codex": {
+      "label": "Codex 智能体",
+      "description": "在沙箱中执行任务"
+    },
+    "deepseekHarness": {
+      "label": "DeepSeek Harness",
+      "description": "打开 DeepSeek Harness 工作区"
+    },
+    "arkClaw": "ArkClaw",
+    "hermes": "Hermes 智能体",
+    "checking": "正在检查配置",
+    "notConfigured": "管理员未配置",
+    "unavailable": "暂不可用"
+  },
+  "agentPicker": {
+    "select": "选择智能体",
+    "typesLabel": "智能体类型",
+    "listLabel": "{{type}}列表",
+    "types": {
+      "agent": "智能体",
+      "general": "通用智能体",
+      "codex": "Codex 智能体",
+      "deepseekHarness": "DeepSeek Harness",
+      "openclaw": "OpenClaw 智能体",
+      "hermes": "Hermes 智能体"
+    },
+    "loading": "正在加载智能体",
+    "reload": "重新加载",
+    "empty": "暂无{{type}}",
+    "emptyLocal": "暂无本地智能体",
+    "emptyGeneral": "暂无通用智能体",
+    "createHint": "请前往智能体页创建",
+    "localHint": "请检查当前 Studio 启动目录",
+    "waking": "正在唤醒",
+    "opening": "正在打开",
+    "connecting": "正在连接",
+    "loadingMore": "加载中",
+    "loadMore": "加载更多",
+    "runtimeTimeout": "加载智能体超时（15 秒），请检查网络或 Runtime 服务后重试",
+    "loadGeneral": "加载通用智能体",
+    "loadType": "加载 {{type}}",
+    "connectGeneral": "连接通用智能体",
+    "openLocal": "打开本地智能体",
+    "openType": "打开 {{type}}"
+  },
+  "skill": {
+    "spaceAria": "技能空间",
+    "configuration": "技能定制配置",
+    "actions": {
+      "create": "技能生成",
+      "optimize": "技能优化"
+    },
+    "selectAction": "选择技能定制方式",
+    "actionList": "技能定制方式",
+    "style": "风格",
+    "selectStyle": "选择风格",
+    "model": "模型",
+    "selectModel": "选择模型",
+    "styles": {
+      "concise": "简洁实用",
+      "strict": "严谨稳健",
+      "tutorial": "教程友好",
+      "automation": "自动化优先"
+    },
+    "modelLoadFailed": "模型配置加载失败",
+    "spaceLoadFailed": "Skill Space 加载失败",
+    "skillLoadFailed": "Skill 加载失败",
+    "unnamedSpace": "未命名 Skill Space",
+    "space": "技能空间",
+    "select": "选择 Skill",
+    "selectAria": "选择 Skill：{{skill}}",
+    "loadingSpaces": "正在加载 Skill Space",
+    "reload": "重新加载",
+    "emptySpaces": "暂无 Skill Space",
+    "skillList": "{{space}} Skill 列表",
+    "loadingSkills": "正在加载 Skill",
+    "emptySkills": "暂无 Skill"
+  },
+  "video": {
+    "modes": {
+      "auto": "自动识别",
+      "text_to_video": "文生视频",
+      "reference_to_video": "参考素材生视频",
+      "video_editing": "视频编辑",
+      "video_extension": "视频续写",
+      "first_last_frame": "首尾帧生成"
+    },
+    "taskNames": {
+      "auto": "视频生成",
+      "text_to_video": "文生视频",
+      "reference_to_video": "参考素材生视频",
+      "video_editing": "视频编辑",
+      "video_extension": "视频续写",
+      "first_last_frame": "首尾帧生成"
+    },
+    "controls": {
+      "label": "视频创作配置",
+      "aspectRatio": "比例",
+      "selectAspectRatio": "选择比例",
+      "resolution": "清晰度",
+      "selectResolution": "选择清晰度",
+      "duration": "时长",
+      "durationShort": "{{count}} 秒",
+      "durationAria": "视频时长：{{count}} 秒",
+      "lastFrame": "尾帧",
+      "lastFrameHelper": "添加视频结束画面",
+      "assistImage": "辅助图片",
+      "referenceImage": "参考图片",
+      "assistImageHelper": "用于补充画面参考",
+      "imageHelper": "支持常见图片格式",
+      "referenceVideo": "参考视频",
+      "videoHelper": "支持常见视频格式",
+      "optional": "可选",
+      "replace": "更换",
+      "add": "添加",
+      "upload": "上传{{label}}",
+      "replaceFile": "更换{{label}}：{{name}}",
+      "removeFile": "移除{{label}} {{name}}",
+      "storageUnavailable": "管理员未配置持久化存储",
+      "loadingEnhancer": "正在加载增强模型",
+      "enhancerHint": "使用 {{model}} 模型进行意图识别和提示词增强",
+      "enhancerUnavailable": "增强模型不可用"
+    },
+    "task": {
+      "title": "视频生成任务",
+      "closeAria": "关闭视频生成任务弹窗",
+      "progressAria": "视频生成进度",
+      "optimizedPrompt": "优化后的提示词",
+      "processingAria": "{{task}}处理进度",
+      "waitingAria": "{{status}}，已等待{{elapsed}}",
+      "elapsed": "已等待 {{elapsed}}",
+      "previewAria": "生成结果预览",
+      "close": "关闭",
+      "download": "下载视频",
+      "retryOptimization": "重试提示词优化",
+      "retryGeneration": "重试视频生成",
+      "providerQueued": "等待模型调度",
+      "providerRunning": "模型生成中",
+      "providerSubmitting": "正在提交任务",
+      "queuedHint": "任务已提交，模型开始处理后状态会自动更新",
+      "runningHint": "这可能持续数分钟，完成后将在这里显示视频预览",
+      "backgroundHint": "可以关闭弹窗，任务会继续在后台运行",
+      "successHint": "视频已生成，可预览或下载",
+      "activationHint": "请先在模型控制台开通服务，再重试生成",
+      "retryHint": "修正问题后可重试当前步骤",
+      "steps": {
+        "optimizationFailed": "提示词优化失败",
+        "optimizationDone": "提示词优化完成",
+        "optimizationActive": "提示词优化中",
+        "generationDone": "{{task}}已完成",
+        "generationFailed": "{{task}}失败",
+        "generationQueued": "{{task}}排队中",
+        "generationRunning": "{{task}}生成中",
+        "generationActive": "{{task}}进行中",
+        "generationPending": "等待视频生成",
+        "generationComplete": "视频生成完成"
+      },
+      "elapsedHours": "{{hours}}小时{{minutes}}分",
+      "elapsedMinutes": "{{minutes}}分{{seconds}}秒",
+      "elapsedSeconds": "{{seconds}}秒"
+    }
+  }
+}

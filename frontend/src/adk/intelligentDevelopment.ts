@@ -1,5 +1,6 @@
 import type { IntelligentDevelopmentReleaseRef } from "../blocks";
 import { studioFetch } from "./client";
+import { adkT } from "./i18n";
 import { TRANSFER_REQUEST_TIMEOUT_MS } from "./timeout";
 
 export interface IntelligentDevelopmentProject {
@@ -68,7 +69,7 @@ async function responseError(response: Response, fallback: string): Promise<Erro
   } catch {
     if (raw.trim()) return new Error(raw.trim().slice(0, 500));
   }
-  return new Error(`${fallback}（HTTP ${response.status}）`);
+  return new Error(adkT("common.fallbackWithHttpStatus", { fallback, status: response.status }));
 }
 
 function responseFilename(response: Response, fallback: string): string {
@@ -131,7 +132,7 @@ function parseRelease(
       || typeof value.parentVersionId === "string"
     )
   ) {
-    throw new Error("源码快照的响应格式无效。");
+    throw new Error(adkT("intelligentDevelopment.invalidSourceSnapshot"));
   }
   return value as IntelligentDevelopmentReleaseRef;
 }
@@ -169,7 +170,7 @@ function parseProject(value: unknown): IntelligentDevelopmentProject {
       item.origin as string | undefined,
     )
   ) {
-    throw new Error("项目列表的响应格式无效。");
+    throw new Error(adkT("intelligentDevelopment.invalidProjectList"));
   }
   return item as unknown as IntelligentDevelopmentProject;
 }
@@ -219,7 +220,7 @@ function parseVersion(value: unknown): IntelligentDevelopmentVersion {
     || (item.migrationEngine !== undefined
       && typeof item.migrationEngine !== "string")
   ) {
-    throw new Error("项目版本的响应格式无效。");
+    throw new Error(adkT("intelligentDevelopment.invalidProjectVersion"));
   }
   return item as unknown as IntelligentDevelopmentVersion;
 }
@@ -234,11 +235,11 @@ export async function fetchIntelligentDevelopmentProjects(
     { headers: { Accept: "application/json" }, signal },
   );
   if (!response.ok) {
-    throw await responseError(response, "无法读取已保存项目");
+    throw await responseError(response, adkT("intelligentDevelopment.loadProjectsFailed"));
   }
-  const body = record(await responseJson(response, "项目列表的响应格式无效。"));
+  const body = record(await responseJson(response, adkT("intelligentDevelopment.invalidProjectList")));
   if (!Array.isArray(body?.projects)) {
-    throw new Error("项目列表的响应格式无效。");
+    throw new Error(adkT("intelligentDevelopment.invalidProjectList"));
   }
   return body.projects.map(parseProject);
 }
@@ -252,11 +253,11 @@ export async function fetchIntelligentDevelopmentVersions(
     { headers: { Accept: "application/json" }, signal },
   );
   if (!response.ok) {
-    throw await responseError(response, "无法读取项目版本");
+    throw await responseError(response, adkT("intelligentDevelopment.loadVersionsFailed"));
   }
-  const body = record(await responseJson(response, "项目版本的响应格式无效。"));
+  const body = record(await responseJson(response, adkT("intelligentDevelopment.invalidProjectVersion")));
   if (!Array.isArray(body?.versions)) {
-    throw new Error("项目版本的响应格式无效。");
+    throw new Error(adkT("intelligentDevelopment.invalidProjectVersion"));
   }
   return body.versions.map(parseVersion);
 }
@@ -271,11 +272,11 @@ export async function deleteIntelligentDevelopmentVersion(
     { method: "DELETE", headers: { Accept: "application/json" }, signal },
   );
   if (!response.ok) {
-    throw await responseError(response, "删除项目版本失败");
+    throw await responseError(response, adkT("intelligentDevelopment.deleteVersionFailed"));
   }
-  const body = record(await responseJson(response, "删除项目版本的响应格式无效。"));
+  const body = record(await responseJson(response, adkT("intelligentDevelopment.invalidDeleteVersionResponse")));
   if (body?.deleted !== true || typeof body.projectDeleted !== "boolean") {
-    throw new Error("删除项目版本的响应格式无效。");
+    throw new Error(adkT("intelligentDevelopment.invalidDeleteVersionResponse"));
   }
   return { projectDeleted: body.projectDeleted };
 }
@@ -307,11 +308,11 @@ async function fetchStoredRelease(
     { headers: { Accept: "application/json" }, signal },
   );
   if (!response.ok) {
-    throw await responseError(response, "无法读取项目源码");
+    throw await responseError(response, adkT("intelligentDevelopment.loadProjectSourceFailed"));
   }
   const value = await responseJson(
     response,
-    "源码快照的响应格式无效。",
+    adkT("intelligentDevelopment.invalidSourceSnapshot"),
   ) as Partial<IntelligentDevelopmentReleaseRef>;
   return parseRelease(value, sessionId, {
     artifactSha256,
@@ -355,7 +356,7 @@ export async function fetchIntelligentDevelopmentRelease(
     { headers: { Accept: "application/json" }, signal },
   );
   if (!response.ok) {
-    throw await responseError(response, "无法读取源码快照");
+    throw await responseError(response, adkT("intelligentDevelopment.loadSnapshotFailed"));
   }
   const value = await response.json() as Partial<IntelligentDevelopmentReleaseRef>;
   return parseRelease(value, sessionId, {
@@ -375,7 +376,7 @@ export async function fetchCurrentIntelligentDevelopmentRelease(
   );
   if (response.status === 204) return null;
   if (!response.ok) {
-    throw await responseError(response, "无法恢复当前源码快照");
+    throw await responseError(response, adkT("intelligentDevelopment.restoreSnapshotFailed"));
   }
   const value = await response.json() as Partial<IntelligentDevelopmentReleaseRef>;
   return parseRelease(value, sessionId);
@@ -402,18 +403,18 @@ export async function downloadIntelligentDevelopmentRelease(
     TRANSFER_REQUEST_TIMEOUT_MS,
   );
   if (!response.ok) {
-    throw await responseError(response, "下载源码失败");
+    throw await responseError(response, adkT("intelligentDevelopment.downloadSourceFailed"));
   }
   const contentType = response.headers.get("content-type")
     ?.split(";", 1)[0]
     .trim()
     .toLowerCase();
   if (contentType !== "application/zip") {
-    throw new Error("源码下载响应不是 ZIP 文件。");
+    throw new Error(adkT("intelligentDevelopment.downloadNotZip"));
   }
   const blob = await response.blob();
   if (blob.size !== delivery.artifactSize) {
-    throw new Error("源码压缩包大小与发布记录不一致，请重试。");
+    throw new Error(adkT("intelligentDevelopment.downloadSizeMismatch"));
   }
   const fallback = `${delivery.agentName}-source-${delivery.artifactSha256.slice(0, 12)}.zip`;
   return { blob, filename: responseFilename(response, fallback) };

@@ -11,21 +11,23 @@ test("adds one workspace sidebar entry with the former environment icon", () => 
   assert.match(sidebarSource, /\| "workspaces"/);
   assert.match(sidebarSource, /onWorkspace: \(\) => void/);
   assert.match(sidebarSource, /onClick=\{onWorkspace\}/);
-  assert.match(sidebarSource, /aria-label="工作区"/);
+  assert.match(sidebarSource, /aria-label=\{t\("navigation\.workspaces"\)\}/);
   assert.match(sidebarSource, /<Box className="icon" \/>/);
   assert.doesNotMatch(sidebarSource, />环境<\/span>/);
   assert.match(appSource, /<WorkspaceCenter cloudProvider=\{cloudProvider\} \/>/);
 });
 
 test("manages reusable environments inside workspaces", () => {
-  assert.match(workspaceSource, /同一个环境可以加入多个工作区/);
+  assert.match(workspaceSource, /description=\{t\("workspace\.editorDescription"\)\}/);
   assert.match(workspaceSource, /type="checkbox"/);
   assert.match(workspaceSource, /environmentIds\.includes/);
   assert.match(workspaceSource, /createWorkspace/);
   assert.match(workspaceSource, /updateWorkspace/);
   assert.match(workspaceSource, /deleteWorkspace/);
   assert.match(workspaceSource, /<EnvironmentCenter/);
-  assert.match(workspaceSource, /label: "环境"/);
+  assert.match(workspaceSource, /label: t\("common\.environment"\)/);
+  assert.match(workspaceSource, /setLoadError\(t\("workspace\.loadFailed"\)\)/);
+  assert.doesNotMatch(workspaceSource, /setLoadError\(cause instanceof Error \? cause\.message/);
 });
 
 test("reads environment share codes during the environment tab gesture", () => {
@@ -35,7 +37,7 @@ test("reads environment share codes during the environment tab gesture", () => {
   );
   assert.match(workspaceSource, /clipboardImport=\{clipboardImport\}/);
   assert.match(workspaceSource, /clipboardReadError=\{clipboardReadError\}/);
-  assert.match(workspaceSource, /请允许剪贴板权限/);
+  assert.match(workspaceSource, /t\("workspace\.clipboardPermissionError"\)/);
   assert.match(workspaceSource, /permission\?\.state === "denied"/);
 });
 

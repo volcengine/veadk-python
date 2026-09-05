@@ -71,7 +71,7 @@ test("merges streamed deltas independently and hydrates final results", async ()
 test("renders a distilled responsive comparison without status labels", () => {
   assert.match(registrySource, /branch_compare:[\s\S]*?hideHeader: true/);
   assert.match(cardSource, /<Badge color="info" size="sm" variant="soft">/);
-  assert.equal((cardSource.match(/继续这个方向/g) ?? []).length, 1);
+  assert.equal((cardSource.match(/t\("blocks\.branchCompare\.continue"\)/g) ?? []).length, 1);
   assert.match(cardSource, /disabled=\{branch\.status !== "completed"\}/);
   assert.doesNotMatch(cardSource, /生成中|已完成|>A<|>B</);
   assert.match(stylesSource, /grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/);

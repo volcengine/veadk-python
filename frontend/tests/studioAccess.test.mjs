@@ -11,6 +11,7 @@ const connectionsSource = read("adk/connections.ts");
 const selectorSource = read("ui/AgentSelector.tsx");
 const myAgentsSource = read("ui/MyAgents.tsx");
 const sidebarSource = read("ui/Sidebar.tsx");
+const sidebarZh = read("i18n/resources/zh-CN/sidebar.json");
 const stylesSource = read("styles.css");
 const cliFrontendSource = readFileSync(
   new URL("../../veadk/cli/cli_frontend.py", import.meta.url),
@@ -47,18 +48,18 @@ test("Agent workspace creation and update actions obey Studio access", () => {
   assert.match(appSource, /<AgentWorkspace[\s\S]*?canCreate=\{canCreateRuntimeAgents\}[\s\S]*?canUpdate=\{canCreateRuntimeAgents \|\| canManageAgents\}/);
   assert.match(appSource, /const canViewAgentUsage = features\.agentUsage && canManageAgents/);
   assert.match(appSource, /<AgentWorkspace[\s\S]*?canViewUsage=\{canViewAgentUsage\}/);
-  assert.match(appSource, /if \(!canCreateRuntimeAgents\)[\s\S]*?当前账号没有添加 Agent 的权限/);
-  assert.match(appSource, /if \(!canManageAgents && !canCreateRuntimeAgents\)[\s\S]*?当前账号没有管理 Agent 的权限/);
+  assert.match(appSource, /if \(!canCreateRuntimeAgents\)[\s\S]*?appText\("errors\.noCreateAgentPermission"\)/);
+  assert.match(appSource, /if \(!canManageAgents && !canCreateRuntimeAgents\)[\s\S]*?appText\("errors\.noManageAgentPermission"\)/);
 });
 
 test("sidebar shows a compact identity and role badge in account details", () => {
-  assert.match(sidebarSource, /admin: "管理员"/);
-  assert.match(sidebarSource, /developer: "开发者"/);
-  assert.match(sidebarSource, /user: "普通用户"/);
+  assert.match(sidebarZh, /"admin": "管理员"/);
+  assert.match(sidebarZh, /"developer": "开发者"/);
+  assert.match(sidebarZh, /"user": "普通用户"/);
   assert.match(sidebarSource, /<SidebarUser[\s\S]{0,160}?access=\{access\}/);
   assert.match(sidebarSource, /<Badge color="secondary" size="sm" variant="soft" pill>/);
-  assert.match(sidebarSource, /\{STUDIO_ROLE_LABELS\[access\.role\]\}/);
-  assert.match(sidebarSource, /email && email !== name && <div className="account-sub">\{email\}<\/div>/);
+  assert.match(sidebarSource, /STUDIO_ROLE_KEYS\[access\.role\]/);
+  assert.match(sidebarSource, /email && email !== name && \(/);
   assert.doesNotMatch(sidebarSource, /StudioRoleIndicator/);
   assert.doesNotMatch(sidebarSource, /sidebar-user-email/);
   assert.match(stylesSource, /\.sidebar-user-shortcut\s*\{[\s\S]*?width:\s*28px;[\s\S]*?height:\s*28px;/);
@@ -98,7 +99,7 @@ test("regular users receive personal Agent creation without Runtime deployment a
   assert.match(clientSource, /createPersonalAgents: false/);
   assert.match(clientSource, /typeof access\.capabilities\?\.createPersonalAgents !== "boolean"/);
   assert.match(appSource, /const canCreatePersonalAgents = access\.capabilities\.createPersonalAgents/);
-  assert.match(appSource, /if \(!canCreatePersonalAgents\)[\s\S]*?当前账号没有创建智能体的权限/);
+  assert.match(appSource, /if \(!canCreatePersonalAgents\)[\s\S]*?appText\("errors\.noCreateAgentPermission"\)/);
   assert.match(myAgentsSource, /activeType === "general"[\s\S]*?canCreateRuntimeAgents[\s\S]*?canCreatePersonalAgents/);
 });
 
@@ -106,10 +107,10 @@ test("runtime authorization failures are not reported as unsupported", () => {
   assert.match(clientSource, /response\.clone\(\)\.json\(\)/);
   assert.match(clientSource, /runtime_access_denied/);
   assert.match(clientSource, /runtime_private_endpoint_unreachable/);
-  assert.match(clientSource, /Runtime 已部署成功，但当前 Studio 无法访问私网 Runtime/);
+  assert.match(clientSource, /adkT\("client\.privateRuntimeUnavailable"\)/);
   assert.match(clientSource, /runtime_proxy_connect_error/);
   assert.match(clientSource, /runtime_proxy_timeout/);
-  assert.match(clientSource, /Runtime 已部署成功，但 Studio 暂时无法连接服务/);
+  assert.match(clientSource, /adkT\("client\.runtimeTemporarilyUnavailable"\)/);
   assert.match(cliFrontendSource, /endpoint_network_type == "private"[\s\S]*?runtime_private_endpoint_unreachable/);
   assert.match(cliFrontendSource, /def _runtime_proxy_is_retryable_read[\s\S]*?\{"GET", "HEAD"\}/);
   assert.match(cliFrontendSource, /def _runtime_proxy_attempts[\s\S]*?endpoint_network_type == "private"[\s\S]*?return 1[\s\S]*?return 3 if _runtime_proxy_is_retryable_read\(method\) else 1/);

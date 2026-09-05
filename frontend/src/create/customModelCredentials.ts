@@ -1,4 +1,5 @@
 import type { AgentDraft } from "./types";
+import { createT } from "./i18n";
 
 export interface CustomModelCredentialRequirement {
   key: string;
@@ -87,7 +88,9 @@ export function customModelEnvironmentBindings(
         apiKeyKey,
         provider,
         apiBase,
-        label: `${node.name.trim() || "自定义模型"} 模型 API Key`,
+        label: createT("helpers.customModel.apiKeyLabel", {
+          name: node.name.trim() || createT("helpers.customModel.fallbackName"),
+        }),
       });
     }
     node.subAgents.forEach(visit);

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { SandboxTokenUsage } from "../adk/sandbox";
 import type { TurnActivity } from "../blocks";
 import { InsightIcon } from "./icons/InsightIcon";
@@ -15,16 +16,17 @@ export function SandboxEntryButton({
   active = false,
   onClick,
 }: SandboxEntryButtonProps) {
+  const { t } = useTranslation("sandbox");
   return (
     <button
       type="button"
       className={`sandbox-entry sandbox-entry--${variant}${active ? " is-active" : ""}`}
       onClick={onClick}
       disabled={active}
-      aria-label={active ? "Codex 智能体会话已开启" : "开启 Codex 智能体会话"}
+      aria-label={active ? t("session.activeAria") : t("session.openAria")}
     >
       <InsightIcon />
-      <span>{active ? "Codex 智能体会话中" : "灵光一现"}</span>
+      <span>{active ? t("session.active") : t("session.entry")}</span>
     </button>
   );
 }
@@ -32,7 +34,7 @@ export function SandboxEntryButton({
 export function SandboxSessionWarning({
   agentName,
   expireAt,
-  exitLabel = "退出当前智能体",
+  exitLabel,
   onExit,
 }: {
   agentName: string;
@@ -40,6 +42,7 @@ export function SandboxSessionWarning({
   exitLabel?: string;
   onExit: () => void;
 }) {
+  const { t, i18n } = useTranslation("sandbox");
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!expireAt) return undefined;
@@ -53,17 +56,23 @@ export function SandboxSessionWarning({
   const remaining = remainingMinutes === null
     ? ""
     : remainingMinutes === 0
-      ? "已到期"
+      ? t("session.expired")
       : remainingMinutes >= 60
-        ? `剩余 ${Math.floor(remainingMinutes / 60)} 小时 ${remainingMinutes % 60} 分钟`
-        : `剩余 ${remainingMinutes} 分钟`;
+        ? t("session.remainingHours", {
+            hours: Math.floor(remainingMinutes / 60),
+            minutes: remainingMinutes % 60,
+          })
+        : t("session.remainingMinutes", { minutes: remainingMinutes });
   const expiryLabel = Number.isFinite(expiry)
-    ? new Date(expiry).toLocaleString("zh-CN", {
+    ? new Date(expiry).toLocaleString(
+        i18n.resolvedLanguage ?? i18n.language,
+        {
         month: "numeric",
         day: "numeric",
         hour: "2-digit",
         minute: "2-digit",
-      })
+        },
+      )
     : "";
   return (
     <div
@@ -73,11 +82,11 @@ export function SandboxSessionWarning({
       <span className="sandbox-session-warning-dot" aria-hidden="true" />
       <span className="sandbox-session-warning-copy">
         {expiryLabel
-          ? `远端开发环境最长保留 8 小时，将于 ${expiryLabel} 到期（${remaining}）；到期后清除对话和文件。`
-          : `当前您在使用 ${agentName} 智能体`}
+          ? t("session.expiryWarning", { expiry: expiryLabel, remaining })
+          : t("session.usingAgent", { agent: agentName })}
       </span>
       <button type="button" onClick={onExit}>
-        {exitLabel}
+        {exitLabel ?? t("session.exit")}
       </button>
     </div>
   );
@@ -90,11 +99,16 @@ export function SandboxActivityRecord({
   activity: TurnActivity;
   time?: string;
 }) {
+  const { t } = useTranslation("sandbox");
   return (
-    <aside className="sandbox-activity-record" role="status" aria-label="Sandbox 操作记录">
+    <aside
+      className="sandbox-activity-record"
+      role="status"
+      aria-label={t("session.activityAria")}
+    >
       <div className="sandbox-activity-summary">
         <span className="sandbox-activity-dot" aria-hidden="true" />
-        <span className="sandbox-activity-label">操作记录</span>
+        <span className="sandbox-activity-label">{t("session.activity")}</span>
         <strong>{activity.title}</strong>
         {time ? <time>{time}</time> : null}
       </div>
@@ -125,21 +139,26 @@ function compactTokenCount(value: number): string {
 }
 
 export function SandboxTokenUsageRow({ usage }: { usage: SandboxTokenUsage }) {
+  const { t, i18n } = useTranslation("sandbox");
   const entries = [
-    ["Total", usage.totalTokens],
-    ["Input", usage.inputTokens],
+    ["total", t("session.tokenLabels.total"), usage.totalTokens],
+    ["input", t("session.tokenLabels.input"), usage.inputTokens],
     ...(usage.cachedInputTokens > 0
-      ? [["Cached input", usage.cachedInputTokens] as const]
+      ? [["cachedInput", t("session.tokenLabels.cachedInput"), usage.cachedInputTokens] as const]
       : []),
-    ["Output", usage.outputTokens],
+    ["output", t("session.tokenLabels.output"), usage.outputTokens],
     ...(usage.reasoningOutputTokens > 0
-      ? [["Reasoning output", usage.reasoningOutputTokens] as const]
+      ? [["reasoningOutput", t("session.tokenLabels.reasoningOutput"), usage.reasoningOutputTokens] as const]
       : []),
   ] as const;
+  const locale = i18n.resolvedLanguage ?? i18n.language;
   return (
-    <div className="sandbox-token-usage" aria-label="Codex Token 用量">
-      {entries.map(([label, value]) => (
-        <span key={label} title={`${label}: ${value.toLocaleString()} tokens`}>
+    <div className="sandbox-token-usage" aria-label={t("session.tokenUsageAria")}>
+      {entries.map(([key, label, value]) => (
+        <span
+          key={key}
+          title={t("session.tokens", { label, value: value.toLocaleString(locale) })}
+        >
           <small>{label}</small>
           <strong>{compactTokenCount(value)}</strong>
         </span>

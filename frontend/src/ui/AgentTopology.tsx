@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
+import type { TFunction } from "i18next";
 import { createPortal } from "react-dom";
+import { useTranslation } from "react-i18next";
 import { Maximize2, X } from "lucide-react";
 import type {
   AgentInfo,
@@ -32,20 +34,26 @@ function nodeId(node: AgentNode): string {
 
 /** Older generated runtimes exposed only Python variable names. Keep those
  * identifiers for event matching, but do not leak them into the UI. */
-function legacyDisplayName(node: AgentNode, isRoot: boolean): string {
+function legacyDisplayName(node: AgentNode, isRoot: boolean, t: TFunction): string {
   const id = nodeId(node);
   if (node.id && node.name && node.name !== id) return node.name;
-  if (isRoot && id === "agent") return "主 Agent";
+  if (isRoot && id === "agent") return t("agentTopology.mainAgent");
   const subAgent = /^agent_sub_(\d+)$/.exec(id);
-  return subAgent ? `子 Agent ${subAgent[1]}` : node.name || id;
+  return subAgent
+    ? t("agentTopology.subAgent", { index: subAgent[1] })
+    : node.name || id;
 }
 
-function normalizeLegacyNames(node: AgentNode, isRoot = true): AgentNode {
+function normalizeLegacyNames(
+  node: AgentNode,
+  t: TFunction,
+  isRoot = true,
+): AgentNode {
   return {
     ...node,
     id: nodeId(node),
-    name: legacyDisplayName(node, isRoot),
-    children: node.children.map((child) => normalizeLegacyNames(child, false)),
+    name: legacyDisplayName(node, isRoot, t),
+    children: node.children.map((child) => normalizeLegacyNames(child, t, false)),
   };
 }
 
@@ -91,11 +99,12 @@ interface ModuleTitleProps {
 }
 
 function ModuleTitle({ title, count }: ModuleTitleProps) {
+  const { t } = useTranslation("workspaceTools");
   return (
     <div className="topo-module-title">
       <span className="topo-module-label" title={title}>{title}</span>
       {count !== undefined && (
-        <span className="topo-section-count" aria-label={`${count} 项`}>
+        <span className="topo-section-count" aria-label={t("agentTopology.itemCount", { count })}>
           {count}
         </span>
       )}
@@ -157,6 +166,7 @@ export function AgentInfoPanel({
   onEnvironmentsChange,
   onEnvironmentsRefresh,
 }: AgentInfoPanelProps) {
+  const { t } = useTranslation("workspaceTools");
   const [dialog, setDialog] = useState<"tool" | null>(null);
   const [canvasExpanded, setCanvasExpanded] = useState(false);
   const expandCanvasRef = useRef<HTMLButtonElement>(null);
@@ -181,11 +191,11 @@ export function AgentInfoPanel({
     return (
       <aside
         className={`topo is-loading${variant === "drawer" ? " is-drawer" : ""}`}
-        aria-label="Agent 信息"
+        aria-label={t("agentTopology.info")}
         aria-live="polite"
       >
         <TextShimmer as="span" className="topo-loading-label" duration={2.2}>
-          正在读取 Agent 信息…
+          {t("agentTopology.loadingInfo")}
         </TextShimmer>
       </aside>
     );
@@ -206,13 +216,14 @@ export function AgentInfoPanel({
       mentionable: false,
       children: [],
     },
+    t,
   );
   const baseTools = uniqueValues(info.tools)
     .filter((name) => !INTERNAL_AGENT_TOOL_NAMES.has(name))
     .map((name) => ({
       id: `base:tool:${name}`,
       name,
-      label: studioToolLabel(name),
+      label: studioToolLabel(name, t),
       custom: false,
       removable: false,
     }));
@@ -251,12 +262,12 @@ export function AgentInfoPanel({
     <>
     <aside
       className={`topo${variant === "drawer" ? " is-drawer" : ""}`}
-      aria-label="Agent 信息与拓扑"
+      aria-label={t("agentTopology.infoAndTopology")}
     >
-      <section className="topo-agent-card" aria-label="Agent 信息">
+      <section className="topo-agent-card" aria-label={t("agentTopology.info")}>
         <div className="topo-agent-heading">
           <h2 title={info.name}>
-            {info.name || "未命名 Agent"}
+            {info.name || t("agentTopology.unnamedAgent")}
           </h2>
           {modelName && <span title={modelName}>{modelName}</span>}
         </div>
@@ -268,15 +279,15 @@ export function AgentInfoPanel({
       </section>
 
       <div className="topo-module-stack">
-        <section className="topo-module-card topo-tools-card" aria-label="工具">
+        <section className="topo-module-card topo-tools-card" aria-label={t("agentTopology.tools")}>
           <ModuleTitle
-            title="工具"
+            title={t("agentTopology.tools")}
             count={tools.length}
           />
           <div
             className="topo-module-scroll topo-tools-scroll"
             role="region"
-            aria-label="工具列表"
+            aria-label={t("agentTopology.toolList")}
             tabIndex={0}
           >
             {tools.length > 0 ? (
@@ -288,14 +299,14 @@ export function AgentInfoPanel({
                         <span className="topo-capability-name">{tool.label}</span>
                         <code>{tool.name}</code>
                       </span>
-                      {tool.custom && <span className="topo-custom-badge">Studio Tool</span>}
+                      {tool.custom && <span className="topo-custom-badge">{t("agentTopology.studioTool")}</span>}
                     </span>
                     {tool.custom && tool.removable && (
                       <button
                         type="button"
                         className="topo-remove-capability"
-                        aria-label={`移除工具 ${tool.name}`}
-                        title="移除"
+                        aria-label={t("agentTopology.removeTool", { name: tool.name })}
+                        title={t("agentTopology.remove")}
                         disabled={studioToolsDisabled}
                         onClick={() => onStudioToolsChange?.(
                           selectedStudioToolIds.filter((id) => id !== tool.name),
@@ -308,7 +319,7 @@ export function AgentInfoPanel({
                 ))}
               </div>
             ) : (
-              <div className="topo-empty">未配置</div>
+              <div className="topo-empty">{t("agentTopology.notConfigured")}</div>
             )}
           </div>
           {canCustomize && (
@@ -316,30 +327,30 @@ export function AgentInfoPanel({
               <button
                 type="button"
                 className="topo-capability-add-slot"
-                aria-label="添加 Studio 工具"
+                aria-label={t("agentTopology.addStudioTool")}
                 disabled={studioToolsDisabled}
                 onClick={() => setDialog("tool")}
               >
                 <span aria-hidden="true">＋</span>
-              <span>在此对话中添加 Studio 工具</span>
+              <span>{t("agentTopology.addStudioToolHere")}</span>
               </button>
             </div>
           )}
         </section>
 
-        <section className="topo-module-card topo-skills-card" aria-label="技能">
+        <section className="topo-module-card topo-skills-card" aria-label={t("agentTopology.skills")}>
           <ModuleTitle
-            title="技能"
+            title={t("agentTopology.skills")}
             count={info.skillsPreviewSupported ? skills.length : undefined}
           />
           <div
             className="topo-module-scroll topo-skills-scroll"
             role="region"
-            aria-label="技能列表"
+            aria-label={t("agentTopology.skillList")}
             tabIndex={0}
           >
             {!info.skillsPreviewSupported ? (
-              <div className="topo-empty">暂不支持预览</div>
+              <div className="topo-empty">{t("agentTopology.previewUnsupported")}</div>
             ) : skills.length > 0 ? (
               <div className="topo-skill-list">
                 {skills.map((skill) => (
@@ -360,14 +371,14 @@ export function AgentInfoPanel({
                 ))}
               </div>
             ) : (
-              <div className="topo-empty">未配置</div>
+              <div className="topo-empty">{t("agentTopology.notConfigured")}</div>
             )}
           </div>
         </section>
 
         {(onEnvironmentsChange || selectedEnvironments.length > 0) && (
-          <section className="topo-module-card topo-environment-card" aria-label="会话环境">
-            <ModuleTitle title="环境" count={selectedEnvironments.length} />
+          <section className="topo-module-card topo-environment-card" aria-label={t("agentTopology.sessionEnvironment")}>
+            <ModuleTitle title={t("agentTopology.environment")} count={selectedEnvironments.length} />
             <SessionEnvironmentPicker
               environments={environments}
               workspaces={workspaces}
@@ -382,21 +393,21 @@ export function AgentInfoPanel({
           </section>
         )}
 
-        <section className="topo-module-card topo-topology" aria-label="Agent 画布">
+        <section className="topo-module-card topo-topology" aria-label={t("agentTopology.agentCanvas")}>
           <div className="topo-canvas-heading">
-            <ModuleTitle title="结构拓扑" count={totalNodes(graph)} />
+            <ModuleTitle title={t("agentTopology.topology")} count={totalNodes(graph)} />
             <button
               ref={expandCanvasRef}
               type="button"
               className="topo-canvas-expand"
-              aria-label="全屏查看 Agent 画布"
-              title="全屏查看"
+              aria-label={t("agentTopology.viewCanvasFullscreen")}
+              title={t("agentTopology.viewFullscreen")}
               onClick={() => setCanvasExpanded(true)}
             >
               <Maximize2 aria-hidden="true" />
             </button>
           </div>
-          <div className="topo-canvas-preview" role="region" aria-label="Agent 执行画布">
+          <div className="topo-canvas-preview" role="region" aria-label={t("agentTopology.executionCanvas")}>
             {renderCanvas(`conversation-canvas:${appName}`)}
           </div>
         </section>
@@ -421,17 +432,17 @@ export function AgentInfoPanel({
         className="topo-canvas-dialog"
         role="dialog"
         aria-modal="true"
-        aria-label="全屏 Agent 执行画布"
+        aria-label={t("agentTopology.fullscreenExecutionCanvas")}
       >
         <header className="topo-canvas-dialog-header">
           <div>
-            <strong>Agent 执行画布</strong>
+            <strong>{t("agentTopology.executionCanvas")}</strong>
             <span>{info.name}</span>
           </div>
           <button
             type="button"
-            aria-label="关闭全屏画布"
-            title="关闭"
+            aria-label={t("agentTopology.closeFullscreenCanvas")}
+            title={t("agentTopology.close")}
             onClick={closeCanvas}
             autoFocus
           >
@@ -518,6 +529,7 @@ export function AgentInfoDrawer({
   onClose: () => void;
   returnFocusRef: RefObject<HTMLButtonElement>;
 }) {
+  const { t } = useTranslation("workspaceTools");
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -544,15 +556,15 @@ export function AgentInfoDrawer({
         <header className="drawer-head">
           <div>
             <div id="agent-info-drawer-title" className="drawer-title">
-              Agent 信息
+              {t("agentTopology.info")}
             </div>
-            <div className="drawer-sub">能力与协作拓扑</div>
+            <div className="drawer-sub">{t("agentTopology.capabilitiesSubtitle")}</div>
           </div>
           <button
             type="button"
             className="drawer-close"
             onClick={onClose}
-            aria-label="关闭 Agent 信息"
+            aria-label={t("agentTopology.closeInfo")}
             autoFocus
           >
             <CloseIcon />
@@ -586,7 +598,7 @@ export function AgentInfoDrawer({
               variant="drawer"
             />
           ) : (
-            <div className="drawer-empty">暂时无法读取 Agent 信息。</div>
+            <div className="drawer-empty">{t("agentTopology.infoUnavailable")}</div>
           )}
         </div>
       </aside>

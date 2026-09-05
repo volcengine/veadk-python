@@ -115,9 +115,9 @@ test("uses a single-category accordion and keeps implementation hints private", 
   assert.doesNotMatch(cardSource, /const defaultCategory\s*=/);
   assert.doesNotMatch(cardSource, /<Accordion\.Root[\s\S]*?defaultValue=/);
   assert.match(cardSource, /<Accordion\.Panel/);
-  assert.match(cardSource, /filterCollectedResourcesByCategory\(data, item\.value\)/);
-  assert.match(cardSource, /AgentKit 技能中心/);
-  assert.match(cardSource, /value: "tool", label: "工具"/);
+  assert.match(cardSource, /filterCollectedResourcesByCategory\(data, value\)/);
+  assert.match(cardSource, /t\(`blocks\.createAgents\.categories\.\$\{value\}`\)/);
+  assert.match(cardSource, /value,[\s\S]*?label: t\(`blocks\.createAgents\.categories\.\$\{value\}`\)/);
   assert.doesNotMatch(cardSource, /<SegmentedControl/);
   assert.doesNotMatch(cardSource, /Google ADK \$\{data\.capabilities\.googleAdkVersion\}/);
   assert.doesNotMatch(cardSource, /最多嵌套/);
@@ -143,9 +143,9 @@ test("keeps status indicators out of result cards", () => {
 });
 
 test("renders empty categories as plain text and exposes raw source messages", () => {
-  assert.match(cardSource, /本次检索未返回该类别的资源。/);
-  assert.match(cardSource, /`未配置 \$\{group\.label\}，本次未检索该来源。`/);
-  assert.match(cardSource, /未提供检索关键词，本次未检索 Skill Hub。/);
+  assert.match(cardSource, /t\("blocks\.createAgents\.noResources"\)/);
+  assert.match(cardSource, /t\("blocks\.createAgents\.sourceSkipped", \{ label: group\.label \}\)/);
+  assert.match(cardSource, /t\("blocks\.createAgents\.skillHubSkipped"\)/);
   assert.match(cardSource, /\{source\.message\}/);
   assert.doesNotMatch(cardSource, /当前类别没有资源/);
   assert.match(
@@ -159,10 +159,10 @@ test("renders empty categories as plain text and exposes raw source messages", (
 });
 
 test("shows the real Skill Hub search keywords and distinguishes an unconfigured source", () => {
-  assert.match(cardSource, /检索关键词/);
+  assert.match(cardSource, /t\("blocks\.createAgents\.searchKeywords"\)/);
   assert.match(cardSource, /group\.searchKeywords\.join\("、"\)/);
   assert.match(cardSource, /group\.sources\.length === 0/);
-  assert.match(cardSource, /group\.value === "skill_hub" \? "未检索" : "未配置"/);
+  assert.match(cardSource, /group\.value === "skill_hub" \? t\("blocks\.createAgents\.notSearched"\) : t\("blocks\.createAgents\.notConfigured"\)/);
 });
 
 test("bounds expanded resource details in a keyboard-scrollable region", () => {
@@ -320,11 +320,11 @@ test("renders compact bounded agent cards with resource popovers and separated t
   assert.match(cardSource, /import \{ ResourceLibraryIcon \} from "\.\.\/icons\/SidebarIcons"/);
   assert.match(cardSource, /icon=\{<ResourceLibraryIcon aria-hidden="true" \/>\}/);
   assert.doesNotMatch(cardSource, /InternalKnowledge/);
-  assert.match(cardSource, /status=\{\([\s\S]*?AGENT_TYPE_LABELS\[agent\.rootType\]/);
+  assert.match(cardSource, /status=\{\([\s\S]*?t\(`blocks\.createAgents\.agentTypes\.\$\{agent\.rootType\}`/);
   assert.match(cardSource, /import \{ Popover \} from "@openai\/apps-sdk-ui\/components\/Popover"/);
   assert.match(cardSource, /<Popover showOnHover hoverOpenDelay=\{120\}>/);
-  assert.match(cardSource, /label="内置工具" resources=\{agent\.builtinTools\}/);
-  assert.match(cardSource, /自写工具/);
+  assert.match(cardSource, /label=\{t\("blocks\.createAgents\.builtinTool"\)\} resources=\{agent\.builtinTools\}/);
+  assert.match(cardSource, /t\("blocks\.createAgents\.selfAuthoredTools"\)/);
   assert.match(cardSource, /count=\{agent\.subAgentCount\}/);
   assert.match(cardSource, /<code>\{tool\.code\}<\/code>/);
   assert.match(

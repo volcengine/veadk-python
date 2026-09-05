@@ -253,7 +253,7 @@ test("classifies /list-apps success, empty, malformed, auth, unsupported, and se
   response = Response.json({ detail: "Forbidden" }, { status: 403 });
   await assert.rejects(
     probeRuntimeApps("runtime-forbidden", "ap-southeast-1", { signal: new AbortController().signal }),
-    (error) => error instanceof RuntimeProbeError && error.message.includes("鉴权"),
+    (error) => error instanceof RuntimeProbeError && error.message.includes("authentication"),
   );
 
   globalThis.fetch = async (url) => {
@@ -270,7 +270,7 @@ test("classifies /list-apps success, empty, malformed, auth, unsupported, and se
     probeRuntimeApps("runtime-unauthorized", "ap-southeast-1", {
       signal: new AbortController().signal,
     }),
-    (error) => error instanceof RuntimeProbeError && error.message.includes("鉴权"),
+    (error) => error instanceof RuntimeProbeError && error.message.includes("authentication"),
   );
 
   globalThis.fetch = async () =>
@@ -281,7 +281,7 @@ test("classifies /list-apps success, empty, malformed, auth, unsupported, and se
     }),
     (error) => error instanceof RuntimeProbeError &&
       error.retryable === true &&
-      error.message.includes("暂时无法连接"),
+      error.message.includes("cannot connect yet"),
   );
 
   globalThis.fetch = async () =>

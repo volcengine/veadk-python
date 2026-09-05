@@ -46,7 +46,7 @@ test("renders an accessible evaluation status with streaming priority", () => {
     sidebarSource,
     /const evaluating = !streaming[\s\S]*?evaluatingSids\?\.has\(item\.id\) === true/,
   );
-  assert.match(sidebarSource, /className="history-evaluating-status"[\s\S]*?评测中/);
+  assert.match(sidebarSource, /className="history-evaluating-status"[\s\S]*?t\("history\.evaluating"\)/);
   assert.match(stylesSource, /\.history-evaluating\s*\{[\s\S]*?animation: history-evaluation-pulse/);
   assert.match(
     stylesSource,

@@ -5,6 +5,7 @@ import {
   useState,
   type SVGProps,
 } from "react";
+import { useTranslation } from "react-i18next";
 
 import {
   getCodingAgentCapabilities,
@@ -24,9 +25,14 @@ interface CodingAgentsIntegrationProps {
 }
 
 type ActionState = {
-  tone: "success" | "error";
+  tone: "success";
+  agentCount: number;
+  skillCount: number;
+  installations: CodingAgentInstallation[];
+} | {
+  tone: "error";
   message: string;
-  details?: string[];
+  installations?: undefined;
 } | null;
 
 function BackIcon(props: SVGProps<SVGSVGElement>) {
@@ -114,9 +120,10 @@ function errorMessage(error: unknown, fallback: string): string {
 }
 
 export function CodingAgentsIntegration({ onBack }: CodingAgentsIntegrationProps) {
+  const { t } = useTranslation("automations");
   const [capabilities, setCapabilities] = useState<CodingAgentCapabilities | null>(null);
   const [capabilitiesLoading, setCapabilitiesLoading] = useState(true);
-  const [capabilitiesError, setCapabilitiesError] = useState("");
+  const [capabilitiesError, setCapabilitiesError] = useState<string | null>(null);
   const [capabilitiesReload, setCapabilitiesReload] = useState(0);
   const [selectedAgentIds, setSelectedAgentIds] = useState<Set<CodingAgentId>>(new Set());
   const [selectedSkillIds, setSelectedSkillIds] = useState<Set<BundledCodingAgentSkillId>>(new Set());
@@ -128,7 +135,7 @@ export function CodingAgentsIntegration({ onBack }: CodingAgentsIntegrationProps
   useEffect(() => {
     const controller = new AbortController();
     setCapabilitiesLoading(true);
-    setCapabilitiesError("");
+    setCapabilitiesError(null);
     void getCodingAgentCapabilities(controller.signal)
       .then((result) => {
         if (controller.signal.aborted) return;
@@ -146,7 +153,7 @@ export function CodingAgentsIntegration({ onBack }: CodingAgentsIntegrationProps
       .catch((error: unknown) => {
         if (!isAbortError(error) && !controller.signal.aborted) {
           setCapabilities(null);
-          setCapabilitiesError(errorMessage(error, "检测本机客户端失败"));
+          setCapabilitiesError(errorMessage(error, ""));
         }
       })
       .finally(() => {
@@ -205,14 +212,15 @@ export function CodingAgentsIntegration({ onBack }: CodingAgentsIntegrationProps
       const installations: CodingAgentInstallation[] = result.installations;
       setActionState({
         tone: "success",
-        message: `已为 ${selectedAgents.length} 个客户端配置 ${selectedSkills.length} 个 Skill`,
-        details: installations.map((item) => `${item.agentName} · ${item.skill} → ${item.displayPath}`),
+        agentCount: selectedAgents.length,
+        skillCount: selectedSkills.length,
+        installations,
       });
     } catch (error) {
       if (!isAbortError(error) && !controller.signal.aborted) {
         setActionState({
           tone: "error",
-          message: errorMessage(error, "配置失败，请检查用户目录权限后重试"),
+          message: errorMessage(error, ""),
         });
       }
     } finally {
@@ -224,27 +232,27 @@ export function CodingAgentsIntegration({ onBack }: CodingAgentsIntegrationProps
   return (
     <section className="coding-agents-page">
       <header className="coding-agents-header">
-        <button type="button" className="coding-agents-back" onClick={onBack} disabled={actionBusy} aria-label="返回自动化列表">
+        <button type="button" className="coding-agents-back" onClick={onBack} disabled={actionBusy} aria-label={t("backToAutomations")}>
           <BackIcon />
         </button>
         <ConnectorIcon className="coding-agents-logo" />
         <div>
-          <h1>配置 Coding Agents</h1>
-          <p>把随 Studio 提供的 AgentKit Skills 全局安装到本地编码客户端。</p>
+          <h1>{t("codingAgents.title")}</h1>
+          <p>{t("codingAgents.description")}</p>
         </div>
       </header>
 
       <div className="coding-agents-scroll">
         <div className="coding-agents-content">
-          <section className="coding-agents-section" aria-label="选择 Coding Agent">
+          <section className="coding-agents-section" aria-label={t("codingAgents.clients.ariaLabel")}>
             <div className="coding-agents-section-heading">
-              <div><span>1</span><h2>本机客户端</h2></div>
-              <button type="button" onClick={() => setCapabilitiesReload((value) => value + 1)} disabled={capabilitiesLoading || actionBusy}>重新检测</button>
+              <div><span>1</span><h2>{t("codingAgents.clients.title")}</h2></div>
+              <button type="button" onClick={() => setCapabilitiesReload((value) => value + 1)} disabled={capabilitiesLoading || actionBusy}>{t("codingAgents.clients.detectAgain")}</button>
             </div>
             {capabilitiesLoading ? (
-              <div className="coding-agents-inline-state"><i />正在检测本机客户端…</div>
-            ) : capabilitiesError ? (
-              <div className="coding-agents-error-row" role="alert"><span>{capabilitiesError}</span><button type="button" onClick={() => setCapabilitiesReload((value) => value + 1)}>重试</button></div>
+              <div className="coding-agents-inline-state"><i />{t("codingAgents.clients.detecting")}</div>
+            ) : capabilitiesError !== null ? (
+              <div className="coding-agents-error-row" role="alert"><span>{capabilitiesError || t("codingAgents.errors.detect")}</span><button type="button" onClick={() => setCapabilitiesReload((value) => value + 1)}>{t("codingAgents.retry")}</button></div>
             ) : (
               <div className="coding-agents-agent-grid">
                 {capabilities?.agents.map((agent) => (
@@ -260,9 +268,9 @@ export function CodingAgentsIntegration({ onBack }: CodingAgentsIntegrationProps
                     <span className={`coding-agents-agent-mark is-${agent.id}`}><AgentLogo agentId={agent.id} /></span>
                     <span className="coding-agents-agent-copy">
                       <strong>{agent.name}</strong>
-                      <small>{agent.available ? agent.version || "已检测到客户端" : agent.reason}</small>
+                      <small>{agent.available ? agent.version || t("codingAgents.clients.detected") : agent.reason}</small>
                     </span>
-                    <span className={`coding-agents-status ${agent.available ? "is-ready" : ""}`}>{agent.available ? "可用" : "未检测到"}</span>
+                    <span className={`coding-agents-status ${agent.available ? "is-ready" : ""}`}>{agent.available ? t("codingAgents.clients.available") : t("codingAgents.clients.unavailable")}</span>
                     <span className="coding-agents-check"><CheckIcon /></span>
                   </button>
                 ))}
@@ -270,9 +278,9 @@ export function CodingAgentsIntegration({ onBack }: CodingAgentsIntegrationProps
             )}
           </section>
 
-          <section className="coding-agents-section" aria-label="选择内置 Skill">
+          <section className="coding-agents-section" aria-label={t("codingAgents.skills.ariaLabel")}>
             <div className="coding-agents-section-heading">
-              <div><span>2</span><h2>内置 Skills</h2></div>
+              <div><span>2</span><h2>{t("codingAgents.skills.title")}</h2></div>
             </div>
             <div className="coding-agents-skill-list">
               {capabilities?.skills.map((skill) => (
@@ -288,17 +296,17 @@ export function CodingAgentsIntegration({ onBack }: CodingAgentsIntegrationProps
                       disabled={actionBusy}
                     />
                     <span className="coding-agents-skill-check" aria-hidden="true"><CheckIcon /></span>
-                    <span><strong>{skill.name}</strong><small>{skill.description}</small></span>
+                    <span><strong>{t(`codingAgents.skills.items.${skill.id}.name`, { defaultValue: skill.name })}</strong><small>{t(`codingAgents.skills.items.${skill.id}.description`, { defaultValue: skill.description })}</small></span>
                   </label>
-                  <button type="button" onClick={() => setPreviewSkill(skill)}>查看文件</button>
+                  <button type="button" onClick={() => setPreviewSkill(skill)}>{t("codingAgents.skills.viewFiles")}</button>
                 </div>
               ))}
             </div>
 
-            <div className="coding-agents-global" aria-label="全局安装目录">
+            <div className="coding-agents-global" aria-label={t("codingAgents.global.ariaLabel")}>
               <div className="coding-agents-global-heading">
                 <FolderIcon />
-                <div><strong>全局安装</strong><span>配置后可在本机其他项目中使用</span></div>
+                <div><strong>{t("codingAgents.global.title")}</strong><span>{t("codingAgents.global.description")}</span></div>
               </div>
               {selectedAgents.length ? (
                 <dl>
@@ -307,22 +315,30 @@ export function CodingAgentsIntegration({ onBack }: CodingAgentsIntegrationProps
                   ))}
                 </dl>
               ) : (
-                <p>选择客户端后显示对应安装目录。</p>
+                <p>{t("codingAgents.global.empty")}</p>
               )}
             </div>
           </section>
 
           {actionState ? (
             <div className={`coding-agents-result is-${actionState.tone}`} role={actionState.tone === "error" ? "alert" : "status"}>
-              <strong>{actionState.message}</strong>
-              {actionState.details?.length ? <ul>{actionState.details.map((detail) => <li key={detail}>{detail}</li>)}</ul> : null}
+              <strong>{actionState.tone === "success"
+                ? t("codingAgents.success", { agentCount: actionState.agentCount, skillCount: actionState.skillCount })
+                : actionState.message || t("codingAgents.errors.configure")}</strong>
+              {actionState.installations?.length ? <ul>{actionState.installations.map((item) => (
+                <li key={`${item.agent}:${item.skillId}`}>
+                  {item.agentName} · {t(`codingAgents.skills.items.${item.skillId}.name`, { defaultValue: item.skill })} → {item.displayPath}
+                </li>
+              ))}</ul> : null}
             </div>
           ) : null}
 
           <div className="coding-agents-actions">
-            <span>{selectedAgents.length ? `已选择 ${selectedAgents.length} 个客户端、${selectedSkills.length} 个 Skill` : "请先选择客户端"}</span>
+            <span>{selectedAgents.length
+              ? t("codingAgents.selection", { agentCount: selectedAgents.length, skillCount: selectedSkills.length })
+              : t("codingAgents.selectClient")}</span>
             <button type="button" onClick={() => void configure()} disabled={!canConfigure}>
-              {actionBusy ? "正在配置…" : "配置"}
+              {actionBusy ? t("codingAgents.configuring") : t("codingAgents.configure")}
             </button>
           </div>
         </div>

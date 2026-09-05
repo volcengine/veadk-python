@@ -1,0 +1,45 @@
+{
+  "account": {
+    "defaultUser": "用户",
+    "shortcuts": "快捷入口",
+    "tryCli": "体验 AgentKit CLI",
+    "developerResources": "开发者资源",
+    "systemInfo": "系统信息",
+    "language": "语言",
+    "issueFeedback": "问题反馈",
+    "logout": "退出登录",
+    "roles": {
+      "admin": "管理员",
+      "developer": "开发者",
+      "user": "普通用户"
+    }
+  },
+  "navigation": {
+    "home": "返回首页",
+    "expand": "展开侧边栏",
+    "collapse": "收起侧边栏",
+    "label": "主导航",
+    "newChat": "新会话",
+    "agents": "智能体",
+    "workspaces": "工作区",
+    "library": "资源库",
+    "cronjobs": "定时任务",
+    "automations": "自动化"
+  },
+  "history": {
+    "title": "历史会话",
+    "newConversation": "新会话",
+    "create": "新建会话",
+    "loading": "正在加载历史会话…",
+    "empty": "暂无会话",
+    "current": "当前",
+    "manage": "管理历史会话：{{title}}",
+    "more": "更多",
+    "delete": "删除",
+    "loadingMore": "加载中…",
+    "loadMore": "加载更多",
+    "evaluatingTitle": "正在自动评测",
+    "evaluating": "评测中",
+    "generating": "正在生成"
+  }
+}

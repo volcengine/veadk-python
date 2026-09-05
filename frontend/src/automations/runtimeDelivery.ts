@@ -17,6 +17,7 @@ import {
 } from "./githubFields";
 import type { GitHubAutomationDefinition } from "./types";
 import { runtimeNameProblem } from "../create/runtimeName";
+import { automationT } from "./i18n";
 
 interface RuntimeDeliveryWorkflowInput {
   baseBranch: string;
@@ -33,12 +34,15 @@ const BYTEPLUS_VIKING_MEMORY_REGION = "cn-hongkong";
 export function validateRuntimeSettings(
   input: Pick<RuntimeDeliveryWorkflowInput, "runtimeName" | "runtimeId">,
 ): void {
-  const runtimeNameError = runtimeNameProblem(input.runtimeName);
+  const runtimeNameError = runtimeNameProblem(
+    input.runtimeName,
+    (key) => automationT(`github.validation.runtimeName.${key}`),
+  );
   if (runtimeNameError) {
     throw new Error(runtimeNameError);
   }
   if (!RUNTIME_ID_PATTERN.test(input.runtimeId)) {
-    throw new Error("Runtime ID 格式不正确");
+    throw new Error(automationT("github.validation.runtimeId"));
   }
 }
 
@@ -190,27 +194,27 @@ export const runtimeDeliveryAutomation: GitHubAutomationDefinition = {
   kind: "github",
   category: "development",
   icon: "github",
-  name: "AgentKit Runtime 持续交付",
-  description: "为您的仓库添加持续交付到 AgentKit Runtime 的自动化工作流。",
-  title: "AgentKit Runtime 持续交付",
-  subtitle: "用 Pull Request 把持续发布配置安全地加入代码仓库",
-  panel: "提交后将在目标仓库创建发布分支，并发起包含 GitHub Actions 工作流的 PR。",
-  submitLabel: "确定并提交 PR",
+  name: "AgentKit Runtime delivery",
+  description: "Add a workflow that continuously delivers your repository to AgentKit Runtime.",
+  title: "AgentKit Runtime delivery",
+  subtitle: "Add continuous delivery to the repository through a pull request",
+  panel: "This creates a release branch and opens a pull request containing the GitHub Actions workflow.",
+  submitLabel: "Confirm and create PR",
   fields: [
     repositoryField,
     baseBranchField,
     {
       name: "projectPath",
-      label: "Agent 项目目录",
+      label: "Agent project directory",
       placeholder: ".",
-      help: "留空时使用仓库根目录；目录内需包含挂载完整 Studio App Server 的 app.py",
+      help: "Defaults to the repository root; the directory must contain an app.py that mounts the complete Studio App Server",
       required: false,
     },
     runtimeNameField,
     runtimeIdField,
   ],
   initialValues: ({ cloudProvider }) => initialAutomationValues(cloudProvider),
-  regionHelp: "必须与目标 Runtime 所在地域一致",
+  regionHelp: "Must match the target Runtime region",
   secrets: ({ cloudProvider }) => cloudCredentialSecretLabels(cloudProvider),
   submit(values, context, signal) {
     const input = commonGitHubInput(values);
@@ -234,8 +238,8 @@ export const runtimeDeliveryAutomation: GitHubAutomationDefinition = {
           },
         ],
         branchPrefix: "feat/agentkit-release",
-        title: "feat: 持续发布到 AgentKit Runtime",
-        description: `新增 GitHub Actions 工作流，在目标分支更新时持续发布到 AgentKit Runtime。合并前请配置工作流所需的 ${providerName} Secrets。`,
+        title: automationT("cards.delivery.pullRequest.title"),
+        description: automationT("cards.delivery.pullRequest.description", { provider: providerName }),
       },
       signal,
     );

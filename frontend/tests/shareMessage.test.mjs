@@ -28,6 +28,14 @@ const dialogStyles = readFileSync(
   new URL("../src/ui/ShareMessageDialog.css", import.meta.url),
   "utf8",
 );
+const conversationEnglish = JSON.parse(readFileSync(
+  new URL("../src/i18n/resources/en-US/conversation.json", import.meta.url),
+  "utf8",
+));
+const conversationChinese = JSON.parse(readFileSync(
+  new URL("../src/i18n/resources/zh-CN/conversation.json", import.meta.url),
+  "utf8",
+));
 
 test("assistant messages expose the Apps SDK share action after copy", () => {
   assert.match(
@@ -133,7 +141,7 @@ test("conversation export removes only the raw payload duplicated beneath Codex 
 test("conversation export ends with the AgentKit Studio disclaimer", () => {
   assert.match(
     dialogSource,
-    /className\s*=\s*["']share-message-export-note["'][\s\S]*?上述会话由 AgentKit Studio 导出，仅供参考/,
+    /className\s*=\s*["']share-message-export-note["'][\s\S]*?share\.exportNote/,
   );
   assert.match(
     dialogStyles,
@@ -152,10 +160,12 @@ test("conversation capture resets the offscreen export position", () => {
   );
 });
 
-test("the share action has an accessible Chinese name", () => {
+test("the share action has an accessible localized name", () => {
   const combinedSource = `${appSource}\n${dialogSource}`;
-  assert.match(combinedSource, /aria-label=["']导出会话["']/);
-  assert.match(combinedSource, /title=["']导出会话["']/);
+  assert.match(combinedSource, /aria-label=\{appText\("actions\.exportConversation"\)\}/);
+  assert.match(combinedSource, /aria-label=\{t\("share\.close"\)\}/);
+  assert.equal(conversationChinese.share.title, "导出会话");
+  assert.equal(conversationEnglish.share.title, "Export conversation");
 });
 
 test("the share dialog covers image generation, preview, and failures", () => {
@@ -164,7 +174,7 @@ test("the share dialog covers image generation, preview, and failures", () => {
   assert.match(dialogSource, /<img\b[^>]*\bsrc=/);
   assert.match(
     dialogSource,
-    /alt=\{`会话导出内容第 1 页，共 \$\{imagePages\.length\} 页`\}/,
+    /alt=\{t\("share\.previewAlt", \{ count: imagePages\.length \}\)\}/,
   );
   assert.match(dialogSource, /role=["']alert["']/);
 });
@@ -172,7 +182,7 @@ test("the share dialog covers image generation, preview, and failures", () => {
 test("the dialog paints its loading state before starting an expensive export", () => {
   assert.match(dialogSource, /function\s+waitForDialogPaint\s*\(/);
   assert.match(dialogSource, /await\s+waitForDialogPaint\s*\(/);
-  assert.match(dialogSource, /正在生成导出内容/);
+  assert.match(dialogSource, /t\("share\.generatingContent"\)/);
 });
 
 test("the generated PNG can be copied or downloaded", () => {
@@ -196,7 +206,7 @@ test("the export format can switch between PNG and PDF", () => {
     /\(\[\s*["']png["']\s*,\s*["']pdf["']\s*\]\s+as\s+const\)/,
   );
   assert.match(dialogSource, /aria-checked=\{exportFormat\s*===\s*format\}/);
-  assert.match(dialogSource, /下载\s+\$\{exportFormat\.toUpperCase\(\)\}/);
+  assert.match(dialogSource, /t\("share\.downloadFormat", \{ format: exportFormat\.toUpperCase\(\) \}\)/);
 });
 
 test("conversation export renders fixed-height readable image pages", () => {
@@ -293,15 +303,15 @@ test("PDF export uses the readable image pages directly", () => {
 test("preview and copy labels explain the first page of a multi-page export", () => {
   assert.match(
     dialogSource,
-    /预览第\s*1\s*页，共\s*\{imagePages\.length\}\s*页/,
+    /t\("share\.previewPage", \{ count: imagePages\.length \}\)/,
   );
   assert.match(
     dialogSource,
-    /imagePages\.length\s*>\s*1\s*\?\s*["']复制第一页["']/,
+    /imagePages\.length\s*>\s*1\s*\?\s*t\("share\.copiedFirst"\)/,
   );
   assert.match(
     dialogSource,
-    /alt=\{`会话导出内容第 1 页，共 \$\{imagePages\.length\} 页`\}/,
+    /alt=\{t\("share\.previewAlt", \{ count: imagePages\.length \}\)\}/,
   );
   assert.match(dialogStyles, /\.share-message-preview-meta\s*\{/);
 });
@@ -320,7 +330,7 @@ test("the selected export format controls the available actions", () => {
 test("the dialog closes with Escape and releases object URLs", () => {
   assert.match(dialogSource, /["']keydown["']/);
   assert.match(dialogSource, /event\.key\s*===\s*["']Escape["']/);
-  assert.match(dialogSource, /aria-label=["']关闭["']/);
+  assert.match(dialogSource, /aria-label=\{t\("share\.close"\)\}/);
   assert.match(dialogSource, /URL\.createObjectURL\s*\(/);
   assert.match(dialogSource, /URL\.revokeObjectURL\s*\(/);
   assert.match(dialogSource, /removeEventListener\s*\(\s*["']keydown["']/);

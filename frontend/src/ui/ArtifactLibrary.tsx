@@ -6,6 +6,8 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import type { TFunction } from "i18next";
+import { useTranslation } from "react-i18next";
 
 import {
   downloadArtifact as downloadAdkArtifact,
@@ -67,24 +69,22 @@ export interface ArtifactLibraryProps {
 
 const ARTIFACT_BATCH_SIZE = 40;
 
-const ARTIFACT_TYPES: Array<{ id: ArtifactType; label: string }> = [
-  { id: "document", label: "文档" },
-  { id: "image", label: "图片" },
-  { id: "video", label: "视频" },
-];
-
 type ArtifactTypeFilter = "all" | ArtifactType;
 
-const ARTIFACT_TYPE_OPTIONS: Array<ResourceFilterOption<ArtifactTypeFilter>> = [
-  { value: "all", label: "全部类型" },
-  ...ARTIFACT_TYPES.map(({ id, label }) => ({ value: id, label })),
-];
+function artifactTypeOptions(
+  t: TFunction,
+): Array<ResourceFilterOption<ArtifactTypeFilter>> {
+  return [
+    { value: "all", label: t("artifactLibrary.types.all") },
+    { value: "document", label: t("artifactLibrary.types.document") },
+    { value: "image", label: t("artifactLibrary.types.image") },
+    { value: "video", label: t("artifactLibrary.types.video") },
+  ];
+}
 
-const ARTIFACT_LABELS: Record<ArtifactType, string> = {
-  document: "文档",
-  image: "图片",
-  video: "视频",
-};
+function artifactTypeLabel(t: TFunction, type: ArtifactType): string {
+  return t(`artifactLibrary.types.${type}`);
+}
 
 function messageFrom(reason: unknown): string {
   return reason instanceof Error ? reason.message : String(reason);
@@ -151,6 +151,8 @@ function ArtifactRow({
   onEdit,
   onDelete,
   onOpenSource,
+  t,
+  locale,
 }: {
   artifact: ArtifactLibraryItem;
   pendingAction: string;
@@ -160,6 +162,8 @@ function ArtifactRow({
   onEdit?: (artifact: ArtifactLibraryItem) => void;
   onDelete?: (artifact: ArtifactLibraryItem) => void;
   onOpenSource?: (artifact: ArtifactLibraryItem) => void;
+  t: TFunction;
+  locale: string;
 }) {
   const downloadPending = pendingAction === `download:${artifact.id}`;
   return (
@@ -168,7 +172,7 @@ function ArtifactRow({
         <button
           type="button"
           className="library-artifact-preview-trigger"
-          aria-label={`预览 ${artifact.name}`}
+          aria-label={t("artifactLibrary.previewArtifact", { name: artifact.name })}
           disabled={disabled || Boolean(pendingAction)}
           onClick={() => onPreview(artifact)}
         >
@@ -204,27 +208,33 @@ function ArtifactRow({
         )}
       </td>
       <td className="library-artifact-time">
-        {formatArtifactTime(artifact.updatedAt ?? artifact.createdAt)}
+        {formatArtifactTime(
+          artifact.updatedAt ?? artifact.createdAt,
+          locale,
+          t("artifactLibrary.unknownTime"),
+        )}
       </td>
       <td className="library-artifact-actions-cell">
         <div className="library-artifact-actions">
           <StudioActionMenu
-            label={`更多操作 ${artifact.name}`}
-            menuLabel={`${artifact.name} 操作`}
+            label={t("artifactLibrary.moreActions", { name: artifact.name })}
+            menuLabel={t("artifactLibrary.actionMenu", { name: artifact.name })}
             placement="bottom-end"
             items={[
               {
-                label: downloadPending ? "下载中" : "下载",
+                label: downloadPending
+                  ? t("artifactLibrary.downloading")
+                  : t("artifactLibrary.download"),
                 onSelect: () => onDownload(artifact),
                 disabled: disabled || Boolean(pendingAction),
               },
               ...(onEdit ? [{
-                label: "编辑信息",
+                label: t("artifactLibrary.edit"),
                 onSelect: () => onEdit(artifact),
                 disabled: disabled || Boolean(pendingAction) || artifact.canManage === false,
               }] : []),
               ...(onDelete ? [{
-                label: "删除产物",
+                label: t("artifactLibrary.delete"),
                 onSelect: () => onDelete(artifact),
                 disabled: disabled || Boolean(pendingAction) || artifact.canManage === false,
                 danger: true,
@@ -254,6 +264,8 @@ export function ArtifactLibrary({
   toolbarLeading,
   toolbarFilters,
 }: ArtifactLibraryProps) {
+  const { t, i18n } = useTranslation("workspaceTools");
+  const locale = i18n.resolvedLanguage || i18n.language;
   const [activeType, setActiveType] = useState<ArtifactTypeFilter>("all");
   const [query, setQuery] = useState("");
   const [previewArtifact, setPreviewArtifact] = useState<ArtifactLibraryItem | null>(null);
@@ -284,8 +296,10 @@ export function ArtifactLibrary({
   }, []);
 
   const collectedArtifacts = useMemo(
-    () => items ? [...items] : collectArtifactLibraryItems(sources),
-    [items, sources],
+    () => items
+      ? [...items]
+      : collectArtifactLibraryItems(sources, t("library.untitledSession"), locale),
+    [items, locale, sources, t],
   );
   const artifacts = useMemo(
     () => collectedArtifacts
@@ -369,7 +383,10 @@ export function ArtifactLibrary({
       setPreviewUrl(url);
     } catch (reason) {
       if (requestGenerationRef.current === generation) {
-        setActionError(`无法预览“${artifact.name}”：${messageFrom(reason)}`);
+        setActionError(t("artifactLibrary.previewFailed", {
+          name: artifact.name,
+          message: messageFrom(reason),
+        }));
       }
     } finally {
       if (requestGenerationRef.current === generation) setPendingAction("");
@@ -391,9 +408,12 @@ export function ArtifactLibrary({
           artifact.version,
         );
       }
-      setStatus(`已开始下载 ${artifact.name}`);
+      setStatus(t("artifactLibrary.downloadStarted", { name: artifact.name }));
     } catch (reason) {
-      setActionError(`无法下载“${artifact.name}”：${messageFrom(reason)}`);
+      setActionError(t("artifactLibrary.downloadFailed", {
+        name: artifact.name,
+        message: messageFrom(reason),
+      }));
     } finally {
       setPendingAction("");
     }
@@ -407,7 +427,7 @@ export function ArtifactLibrary({
       const saved = await onEdit(editArtifact, update);
       const next = saved ?? { ...editArtifact, ...update, updatedAt: Date.now() };
       setItemOverrides((current) => ({ ...current, [editArtifact.id]: next }));
-      setStatus(`已更新 ${next.name}`);
+      setStatus(t("artifactLibrary.updated", { name: next.name }));
       setEditArtifact(null);
     } catch (reason) {
       setEditError(messageFrom(reason));
@@ -423,11 +443,14 @@ export function ArtifactLibrary({
     try {
       await onDelete(deleteArtifact);
       setRemovedIds((current) => new Set([...current, deleteArtifact.id]));
-      setStatus(`已删除 ${deleteArtifact.name}`);
+      setStatus(t("artifactLibrary.deleted", { name: deleteArtifact.name }));
       if (previewArtifact?.id === deleteArtifact.id) closePreview();
       setDeleteArtifact(null);
     } catch (reason) {
-      setActionError(`无法删除“${deleteArtifact.name}”：${messageFrom(reason)}`);
+      setActionError(t("artifactLibrary.deleteFailed", {
+        name: deleteArtifact.name,
+        message: messageFrom(reason),
+      }));
       setDeleteArtifact(null);
     } finally {
       setDeleteBusy(false);
@@ -502,17 +525,17 @@ export function ArtifactLibrary({
         <div className="resource-toolbar__actions">
           <ResourceFilterSelect
             id="artifact-type-filter"
-            ariaLabel="产物类型"
+            ariaLabel={t("artifactLibrary.typeFilter")}
             value={activeType}
-            options={ARTIFACT_TYPE_OPTIONS}
+            options={artifactTypeOptions(t)}
             onChange={setActiveType}
           />
           {toolbarFilters}
           <ResourceSearch
-            aria-label="搜索产物"
+            aria-label={t("artifactLibrary.searchAria")}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="搜索产物或会话"
+            placeholder={t("artifactLibrary.searchPlaceholder")}
           />
         </div>
       </ResourceToolbar>
@@ -520,20 +543,20 @@ export function ArtifactLibrary({
       {error && artifacts.length > 0 ? (
         <div className="artifact-library-banner" role="alert">
           <span>{error}</span>
-          {onRetry ? <button type="button" onClick={onRetry}>重试</button> : null}
+          {onRetry ? <button type="button" onClick={onRetry}>{t("artifactLibrary.retry")}</button> : null}
         </div>
       ) : null}
       {actionError ? (
         <div className="artifact-library-banner" role="alert">
           <span>{actionError}</span>
-          <button type="button" onClick={() => setActionError("")}>关闭</button>
+          <button type="button" onClick={() => setActionError("")}>{t("artifactLibrary.close")}</button>
         </div>
       ) : null}
 
       <ResourceResults
         ref={resultsRef}
         className="artifact-library-results"
-        aria-label="产物列表"
+        aria-label={t("artifactLibrary.listAria")}
         onScroll={handleResultsScroll}
       >
         <div className="artifact-library-panel">
@@ -541,17 +564,20 @@ export function ArtifactLibrary({
             <ResourceLoadingState />
           ) : error && artifacts.length === 0 ? (
             <div className="artifact-library-empty is-error" role="alert">
-              <p>产物加载失败</p>
+              <p>{t("artifactLibrary.loadFailed")}</p>
               <span>{error}</span>
-              {onRetry ? <button type="button" onClick={onRetry}>重新加载</button> : null}
+              {onRetry ? <button type="button" onClick={onRetry}>{t("artifactLibrary.reload")}</button> : null}
             </div>
           ) : visibleArtifacts.length === 0 ? (
             <div className="artifact-library-empty">
-              <p>{hasSearchOrFilter ? "没有找到匹配的产物" : "您还没有任何产物"}</p>
+              <p>{hasSearchOrFilter
+                ? t("artifactLibrary.noMatch")
+                : t("artifactLibrary.noArtifacts")}
+              </p>
               <span>
                 {hasSearchOrFilter
-                  ? "请尝试搜索其他名称或切换类型"
-                  : "聊天中生成的产物会自动显示在这里"}
+                  ? t("artifactLibrary.searchHint")
+                  : t("artifactLibrary.emptyHint")}
               </span>
             </div>
           ) : (
@@ -565,10 +591,10 @@ export function ArtifactLibrary({
                 </colgroup>
                 <thead>
                   <tr>
-                    <th scope="col">名称</th>
-                    <th scope="col">来源</th>
-                    <th scope="col">修改时间</th>
-                    <th scope="col" className="artifact-library-table__actions-heading">操作</th>
+                    <th scope="col">{t("artifactLibrary.columns.name")}</th>
+                    <th scope="col">{t("artifactLibrary.columns.source")}</th>
+                    <th scope="col">{t("artifactLibrary.columns.updatedAt")}</th>
+                    <th scope="col" className="artifact-library-table__actions-heading">{t("artifactLibrary.columns.actions")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -586,6 +612,8 @@ export function ArtifactLibrary({
                       } : undefined}
                       onDelete={onDelete ? setDeleteArtifact : undefined}
                       onOpenSource={onOpenSource}
+                      t={t}
+                      locale={locale}
                     />
                   ))}
                 </tbody>
@@ -599,7 +627,7 @@ export function ArtifactLibrary({
               role="status"
               aria-live="polite"
             >
-              <TextShimmer as="span" duration={2.4}>正在加载更多产物</TextShimmer>
+              <TextShimmer as="span" duration={2.4}>{t("artifactLibrary.loadingMore")}</TextShimmer>
             </div>
           ) : null}
         </div>
@@ -617,7 +645,7 @@ export function ArtifactLibrary({
           <button
             type="button"
             className="artifact-library-preview-backdrop"
-            aria-label="关闭预览"
+            aria-label={t("artifactLibrary.preview.close")}
             onClick={closePreview}
           />
           <div ref={previewPanelRef} className="artifact-library-preview-panel">
@@ -625,13 +653,16 @@ export function ArtifactLibrary({
               <div>
                 <h2 id="artifact-library-preview-title">{previewArtifact.name}</h2>
                 <p>
-                  {ARTIFACT_LABELS[previewArtifact.type]} / 版本 {previewArtifact.version}
+                  {t("artifactLibrary.preview.meta", {
+                    type: artifactTypeLabel(t, previewArtifact.type),
+                    version: previewArtifact.version,
+                  })}
                 </p>
               </div>
               <button
                 ref={closePreviewButtonRef}
                 type="button"
-                aria-label="关闭预览"
+                aria-label={t("artifactLibrary.preview.close")}
                 onClick={closePreview}
               >
                 <CloseLibraryIcon />
@@ -640,25 +671,25 @@ export function ArtifactLibrary({
             <div className="artifact-library-preview-content">
               <div className="artifact-library-preview-canvas">
                 {pendingAction === `preview:${previewArtifact.id}` ? (
-                  <TextShimmer as="span" duration={2.4}>正在加载预览</TextShimmer>
+                  <TextShimmer as="span" duration={2.4}>{t("artifactLibrary.preview.loading")}</TextShimmer>
                 ) : previewUrl && previewArtifact.preview.mode === "image" ? (
-                  <img src={previewUrl} alt={`${previewArtifact.name} 预览`} />
+                  <img src={previewUrl} alt={t("artifactLibrary.preview.alt", { name: previewArtifact.name })} />
                 ) : previewUrl && previewArtifact.preview.mode === "video" ? (
-                  <video src={previewUrl} controls aria-label={`${previewArtifact.name} 预览`} />
+                  <video src={previewUrl} controls aria-label={t("artifactLibrary.preview.alt", { name: previewArtifact.name })} />
                 ) : previewUrl && previewArtifact.preview.mode === "frame" ? (
-                  <iframe src={previewUrl} title={`${previewArtifact.name} 预览`} />
+                  <iframe src={previewUrl} title={t("artifactLibrary.preview.alt", { name: previewArtifact.name })} />
                 ) : (
                   <div className="artifact-library-preview-unavailable">
                     <ArtifactVisual artifact={previewArtifact} large />
                     <p>
                       {actionError
-                        ? "预览加载失败，请稍后重试或下载查看"
-                        : "当前格式暂不支持在线预览，请下载查看"}
+                        ? t("artifactLibrary.preview.loadFailed")
+                        : t("artifactLibrary.preview.unsupported")}
                     </p>
                   </div>
                 )}
               </div>
-              <aside className="artifact-library-preview-details" aria-label="产物来源">
+              <aside className="artifact-library-preview-details" aria-label={t("artifactLibrary.preview.sourceAria")}>
                 {previewArtifact.description ? (
                   <p className="artifact-library-preview-description">
                     {previewArtifact.description}
@@ -666,32 +697,36 @@ export function ArtifactLibrary({
                 ) : null}
                 <dl>
                   <div>
-                    <dt>Agent</dt>
+                    <dt>{t("artifactLibrary.preview.agent")}</dt>
                     <dd title={previewArtifact.agentName}>{previewArtifact.agentName}</dd>
                   </div>
                   <div>
-                    <dt>会话</dt>
+                    <dt>{t("artifactLibrary.preview.session")}</dt>
                     <dd title={previewArtifact.sessionTitle}>{previewArtifact.sessionTitle}</dd>
                   </div>
                   {previewArtifact.origin?.toolName ? (
                     <div>
-                      <dt>生成工具</dt>
+                      <dt>{t("artifactLibrary.preview.tool")}</dt>
                       <dd>{previewArtifact.origin.toolName}</dd>
                     </div>
                   ) : null}
                   <div>
-                    <dt>生成时间</dt>
-                    <dd>{formatArtifactTime(previewArtifact.createdAt)}</dd>
+                    <dt>{t("artifactLibrary.preview.createdAt")}</dt>
+                    <dd>{formatArtifactTime(
+                      previewArtifact.createdAt,
+                      locale,
+                      t("artifactLibrary.unknownTime"),
+                    )}</dd>
                   </div>
                   {previewArtifact.sizeBytes ? (
                     <div>
-                      <dt>文件大小</dt>
+                      <dt>{t("artifactLibrary.preview.fileSize")}</dt>
                       <dd>{formatArtifactSize(previewArtifact.sizeBytes)}</dd>
                     </div>
                   ) : null}
                 </dl>
                 {previewArtifact.tags?.length ? (
-                  <div className="artifact-library-preview-tags" aria-label="标签">
+                  <div className="artifact-library-preview-tags" aria-label={t("artifactLibrary.preview.tags")}>
                     {previewArtifact.tags.map((tag) => <span key={tag}>{tag}</span>)}
                   </div>
                 ) : null}
@@ -710,7 +745,7 @@ export function ArtifactLibrary({
                     }}
                   >
                     <SourceArtifactIcon />
-                    查看会话
+                    {t("artifactLibrary.preview.viewSession")}
                   </button>
                 ) : null}
                 {onEdit ? (
@@ -726,7 +761,7 @@ export function ArtifactLibrary({
                     }}
                   >
                     <EditArtifactIcon />
-                    编辑信息
+                    {t("artifactLibrary.edit")}
                   </button>
                 ) : null}
               </div>
@@ -736,7 +771,7 @@ export function ArtifactLibrary({
                 onClick={() => void download(previewArtifact)}
               >
                 <DownloadArtifactIcon />
-                下载
+                {t("artifactLibrary.download")}
               </button>
             </footer>
           </div>
@@ -755,10 +790,12 @@ export function ArtifactLibrary({
       ) : null}
       {deleteArtifact ? (
         <StudioConfirmDialog
-          title="删除产物？"
-          description={`“${deleteArtifact.name}”将从产物库永久删除，聊天记录不会受到影响。`}
-          confirmLabel={deleteBusy ? "删除中" : "删除"}
-          closeLabel="关闭删除确认框"
+          title={t("artifactLibrary.deleteDialog.title")}
+          description={t("artifactLibrary.deleteDialog.description", { name: deleteArtifact.name })}
+          confirmLabel={deleteBusy
+            ? t("artifactLibrary.deleteDialog.deleting")
+            : t("artifactLibrary.deleteDialog.confirm")}
+          closeLabel={t("artifactLibrary.deleteDialog.close")}
           variant="danger"
           busy={deleteBusy}
           onCancel={() => {
