@@ -22,4 +22,8 @@ test("shared resource, Skill source, and Composer copy follow language changes",
   assert.equal(i18n.t("resourceCollection.loading", { ns: "ui" }), "Loading resources…");
   assert.equal(i18n.t("skillSourcePicker.tabs.local", { ns: "ui" }), "Local files");
   assert.match(i18n.t("composer.prompts.ppt.quarterlyReview", { ns: "ui" }), /business performance/);
+  assert.equal(i18n.t("navigation.library", { ns: "sidebar" }), "Library");
+  assert.equal(i18n.t("navigation.cronjobs", { ns: "sidebar" }), "Cronjob");
+  assert.equal(i18n.t("titles.cronJobs", { ns: "app" }), "Cronjob");
+  assert.equal(i18n.t("page.title", { ns: "cronjobs" }), "Cronjob");
 });

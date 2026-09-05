@@ -22,8 +22,8 @@
     "newChat": "New chat",
     "agents": "Agents",
     "workspaces": "Workspaces",
-    "library": "Resource library",
-    "cronjobs": "Scheduled tasks",
+    "library": "Library",
+    "cronjobs": "Cronjob",
     "automations": "Automations"
   },
   "history": {

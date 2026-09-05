@@ -24,6 +24,7 @@ import {
   type ModelApiKeyOption,
   type ModelOption,
 } from "../adk/client";
+import { localizeDeployStageMessage } from "../adk/deploymentI18n";
 import {
   cloudRegionOptions,
   defaultModelApiBase,
@@ -1508,7 +1509,7 @@ export function NewAgentWorkbench({
                       >
                         {deploySucceeded ? <CheckCircle aria-hidden /> : null}
                         <span>
-                          {deployStage?.message ||
+                          {(deployStage ? localizeDeployStageMessage(deployStage) : "") ||
                             (deploySucceeded ? t("workbench.deployment.complete") : t("workbench.deployment.preparing"))}
                         </span>
                         {typeof deployStage?.pct === "number" ? (

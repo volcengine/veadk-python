@@ -102,7 +102,7 @@
     "listLabel": "Scheduled task list",
     "loadFailed": "Unable to load scheduled tasks",
     "loadFailedDescription": "Check the Studio service and try again.",
-    "title": "Scheduled tasks"
+    "title": "Cronjob"
   },
   "schedule": {
     "cron": "Cron {{cron}}{{zone}}",

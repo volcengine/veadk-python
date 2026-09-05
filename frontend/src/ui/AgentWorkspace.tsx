@@ -61,6 +61,7 @@ import {
   type RuntimeUpdateCapability,
 } from "../adk/client";
 import type { AgentEntry } from "../adk/connections";
+import { localizeDeployStageMessage } from "../adk/deploymentI18n";
 import { AgentBuildCanvas } from "../create/AgentBuildCanvas";
 import {
   modelNameFromRuntime,
@@ -979,7 +980,9 @@ function DeploymentProgressCard({
             : index === currentIndex
               ? task.status === "running" ? "active" : "failed"
               : "pending";
-          const message = index === currentIndex ? task.message : undefined;
+          const message = index === currentIndex
+            ? localizeDeployStageMessage(task)
+            : undefined;
           return (
             <li key={step.phase} className={`is-${status}`}>
               <span className="aw-deploy-step-marker" aria-hidden>

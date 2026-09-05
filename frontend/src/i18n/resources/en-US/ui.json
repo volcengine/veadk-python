@@ -635,7 +635,15 @@
   "cloudEnvironment": {
     "defaultLabel": "Studio default environment",
     "defaultDescription": "Use the standard runtime environment provided by Studio",
-    "status": { "notBuilt": "Not built" },
+    "status": {
+      "notBuilt": "Not built",
+      "preparing": "Preparing",
+      "queued": "Queued",
+      "building": "Building",
+      "scanning": "Scanning",
+      "available": "Available",
+      "failed": "Failed"
+    },
     "label": "Runtime environment",
     "placeholder": "Select a runtime environment",
     "search": "Search runtime environments",

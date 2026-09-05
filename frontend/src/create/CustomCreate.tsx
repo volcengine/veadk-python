@@ -4972,6 +4972,7 @@ export function CustomCreate({
             phase: latestPhase,
             label: latestLabel,
             message: latestMessage,
+            messageCode: stage.messageCode,
             pct: stage.pct,
             ...(stage.buildLog ? { buildLog: stage.buildLog } : {}),
           });

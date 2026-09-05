@@ -49,6 +49,12 @@ const appSource = readFileSync(
   new URL("../src/App.tsx", import.meta.url),
   "utf8",
 );
+const enUiCatalog = JSON.parse(
+  readFileSync(new URL("../src/i18n/resources/en-US/ui.json", import.meta.url), "utf8"),
+);
+const zhUiCatalog = JSON.parse(
+  readFileSync(new URL("../src/i18n/resources/zh-CN/ui.json", import.meta.url), "utf8"),
+);
 
 function draft(overrides = {}) {
   return {
@@ -239,4 +245,28 @@ test("keeps selected environment details responsive", () => {
   assert.match(environmentStyles, /grid-template-columns: minmax\(0, 1fr\)/);
   assert.match(environmentSource, /searchPlaceholder=\{t\("cloudEnvironment\.search"\)\}/);
   assert.match(environmentSource, /searchEmptyMessage=\{t\("cloudEnvironment\.noMatches"\)\}/);
+});
+
+test("localizes every selectable cloud environment status", () => {
+  const statuses = [
+    "notBuilt",
+    "preparing",
+    "queued",
+    "building",
+    "scanning",
+    "available",
+    "failed",
+  ];
+
+  for (const [locale, catalog] of [["en-US", enUiCatalog], ["zh-CN", zhUiCatalog]]) {
+    for (const status of statuses) {
+      const label = catalog.cloudEnvironment.status[status];
+      assert.equal(typeof label, "string", `${locale} is missing ${status}`);
+      assert.ok(label.trim(), `${locale} has an empty ${status} label`);
+      assert.notEqual(label, `cloudEnvironment.status.${status}`);
+    }
+  }
+
+  assert.equal(enUiCatalog.cloudEnvironment.status.available, "Available");
+  assert.equal(zhUiCatalog.cloudEnvironment.status.available, "可用");
 });

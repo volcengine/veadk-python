@@ -13,6 +13,7 @@ import {
   type DeployAgentkitResult,
   type DeployStage,
 } from "../../adk/client";
+import { localizeDeployStageMessage } from "../../adk/deploymentI18n";
 import {
   beginAgentDeploy,
   classifyTelemetryError,
@@ -477,7 +478,7 @@ export function FeishuBotIntegration({ onBack }: FeishuBotIntegrationProps) {
               <div className={`feishu-deployment-status is-${deploymentStatus}`} role={deploymentStatus === "failed" ? "alert" : "status"}>
                 <div className="feishu-deployment-heading">
                   {deploymentStatus === "preparing" ? <TextShimmer as="strong">{t("feishu.status.preparing")}</TextShimmer> : null}
-                  {deploymentStatus === "running" ? <TextShimmer as="strong">{activeStage?.message || t("feishu.status.running")}</TextShimmer> : null}
+                  {deploymentStatus === "running" ? <TextShimmer as="strong">{activeStage ? localizeDeployStageMessage(activeStage) : t("feishu.status.running")}</TextShimmer> : null}
                   {deploymentStatus === "cancelling" ? <TextShimmer as="strong">{t("feishu.status.cancelling")}</TextShimmer> : null}
                   {deploymentStatus === "succeeded" ? <strong><CheckIcon />{t("feishu.status.succeeded")}</strong> : null}
                   {deploymentStatus === "cancelled" ? <strong>{t("feishu.status.cancelled")}</strong> : null}

@@ -222,7 +222,7 @@
     "automations": "Automations",
     "createAgent": "Create Agent",
     "createSkill": "Create Skill",
-    "cronJobs": "Scheduled tasks",
+    "cronJobs": "Cronjob",
     "issueFeedback": "Issue feedback",
     "library": "Library",
     "migrateAgent": "Migrate Agent",

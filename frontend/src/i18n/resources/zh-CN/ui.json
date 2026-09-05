@@ -635,7 +635,15 @@
   "cloudEnvironment": {
     "defaultLabel": "Studio 默认环境",
     "defaultDescription": "使用 Studio 预置的标准运行环境",
-    "status": { "notBuilt": "未构建" },
+    "status": {
+      "notBuilt": "未构建",
+      "preparing": "准备中",
+      "queued": "排队中",
+      "building": "构建中",
+      "scanning": "扫描中",
+      "available": "可用",
+      "failed": "失败"
+    },
     "label": "运行环境",
     "placeholder": "请选择运行环境",
     "search": "搜索运行环境",

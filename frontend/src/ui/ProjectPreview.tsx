@@ -89,6 +89,7 @@ import {
   type IdentityUserPool,
   type GithubCicdPipelineResult,
 } from "../adk/client";
+import { localizeDeployStageMessage } from "../adk/deploymentI18n";
 import {
   beginAgentDeploy,
   beginAgentSourceDownload,
@@ -611,6 +612,7 @@ export interface DeploymentTaskUpdate {
   phase?: string;
   label: string;
   message?: string;
+  messageCode?: string;
   pct?: number;
   buildLog?: DeployBuildLogSnapshot;
   /** Whether the detail progress card should include the GitHub delivery step. */
@@ -1606,6 +1608,7 @@ export function ProjectPreview({
     let latestGithubLog: DeployBuildLogSnapshot | undefined;
     let latestPhase = initialTask.phase ?? "prepare";
     let latestMessage = initialTask.message;
+    let latestMessageCode = initialTask.messageCode;
     const terminalBuildLog = (
       status: DeployBuildLogSnapshot["status"],
     ): DeployBuildLogSnapshot | undefined => (
@@ -1742,6 +1745,7 @@ export function ProjectPreview({
           }
           if (s.phase === nextPhase) {
             latestMessage = s.message;
+            latestMessageCode = s.messageCode;
           }
           latestPhase = nextPhase;
           if (mountedRef.current) {
@@ -1761,6 +1765,7 @@ export function ProjectPreview({
               deploymentSteps.find((step) => step.phase === latestPhase)?.label ??
               latestPhase,
             message: latestMessage,
+            messageCode: latestMessageCode,
             pct: s.pct,
             ...(latestBuildLog ? { buildLog: latestBuildLog } : {}),
           });
@@ -3164,7 +3169,7 @@ export function ProjectPreview({
                             <span className="pp-step-label">{step.label}</span>
                             {status === "active" && frame?.message && (
                               <span className="pp-step-msg">
-                                {frame.message}
+                                {localizeDeployStageMessage(frame)}
                                 {typeof frame.pct === "number" ? ` (${frame.pct}%)` : ""}
                               </span>
                             )}

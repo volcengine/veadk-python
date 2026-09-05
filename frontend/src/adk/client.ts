@@ -3203,6 +3203,8 @@ export interface DeployStage {
   level: "info" | "success" | "warning" | "error";
   phase: "build" | "deploy" | "publish" | string;
   message: string;
+  /** Stable server progress code used to localize provider-generated prose. */
+  messageCode?: string;
   pct?: number;
   runtimeName?: string;
   buildLog?: DeployBuildLogSnapshot;
