@@ -78,8 +78,11 @@ from veadk.cli.frontend_sandbox_proxy import (
 from veadk.cli.github_app_pr_review import (
     GitHubAppClient,
     GitHubAppReviewError,
+    GitHubAppReviewStorageUnavailable,
+    TosGitHubAppReviewRepositoryStore,
     github_app_public_config,
     load_github_app_config,
+    normalize_review_repository,
     parse_pull_request_event,
     verify_webhook_signature,
 )
@@ -3078,6 +3081,8 @@ def mount_sandbox_routes(
     proxy_target_resolver: Callable[[str, str], SandboxProxyTarget] | None = None,
     admin_resolver: Callable[[Any], bool] | None = None,
     creator_resolver: Callable[[Any], str] | None = None,
+    github_app_review_storage_bucket: str = "",
+    github_app_review_storage_client_factory: Callable[[], Any] | None = None,
 ) -> None:
     """Mount Studio HTTP routes for reusable Sandbox Sessions."""
     from fastapi import HTTPException
@@ -3502,6 +3507,33 @@ def mount_sandbox_routes(
             },
         )
 
+    def _github_app_review_store() -> TosGitHubAppReviewRepositoryStore | None:
+        bucket = github_app_review_storage_bucket.strip()
+        if not bucket or github_app_review_storage_client_factory is None:
+            return None
+        return TosGitHubAppReviewRepositoryStore(
+            bucket=bucket,
+            client_factory=github_app_review_storage_client_factory,
+        )
+
+    async def _github_app_installed_repositories() -> list[dict[str, object]]:
+        config = load_github_app_config()
+        if config is None:
+            raise GitHubAppReviewError("管理员未配置 GitHub App。")
+        client = GitHubAppClient(config)
+        repositories = await client.installed_repositories()
+        store = _github_app_review_store()
+        enabled_repositories: set[str] = set()
+        if store is not None:
+            enabled_repositories = await store.enabled_repositories()
+        enabled_lookup = {repository.casefold() for repository in enabled_repositories}
+        return [
+            repository.to_public_dict(
+                review_enabled=repository.full_name.casefold() in enabled_lookup
+            )
+            for repository in repositories
+        ]
+
     async def _github_app_installation_token_for_pull_request(
         owner: str,
         repo: str,
@@ -3596,6 +3628,61 @@ def mount_sandbox_routes(
         owner_resolver(request)
         return github_app_public_config()
 
+    @app.get("/web/github/app/repositories")
+    async def _github_app_repositories(request: Request) -> dict[str, object]:
+        owner_resolver(request)
+        try:
+            repositories = await _github_app_installed_repositories()
+        except GitHubAppReviewError as error:
+            raise _github_app_http_error(error) from error
+        storage_configured = _github_app_review_store() is not None
+        return {
+            "repositories": repositories,
+            "reviewSettingsConfigured": storage_configured,
+            "reviewSettingsReason": ""
+            if storage_configured
+            else "管理员未配置 Studio 持久化存储，无法保存启用评审设置。",
+        }
+
+    @app.put("/web/github/app/review-repositories")
+    async def _github_app_review_repositories(request: Request) -> dict[str, object]:
+        owner_resolver(request)
+        store = _github_app_review_store()
+        if store is None:
+            raise _github_app_http_error(
+                GitHubAppReviewStorageUnavailable(
+                    "管理员未配置 Studio 持久化存储，无法保存启用评审设置。"
+                )
+            )
+        try:
+            data = await _request_object(request)
+            repositories = data.get("repositories")
+            if not isinstance(repositories, list) or any(
+                not isinstance(repository, str) for repository in repositories
+            ):
+                raise SandboxValidationError("启用评审仓库列表格式无效。")
+            normalized = [normalize_review_repository(item) for item in repositories]
+            installed = await _github_app_installed_repositories()
+            installed_lookup = {
+                str(repository.get("fullName") or "").casefold()
+                for repository in installed
+            }
+            unknown = [
+                repository
+                for repository in normalized
+                if repository.casefold() not in installed_lookup
+            ]
+            if unknown:
+                raise SandboxValidationError(
+                    "GitHub App 未安装到这些仓库：" + "、".join(unknown)
+                )
+            saved = await store.save_enabled_repositories(normalized)
+        except SandboxError as error:
+            raise _http_error(error) from error
+        except GitHubAppReviewError as error:
+            raise _github_app_http_error(error) from error
+        return {"repositories": saved}
+
     @app.post("/web/github/app/webhook", status_code=202)
     async def _github_app_webhook(request: Request) -> dict[str, object]:
         try:
@@ -3637,6 +3724,22 @@ def mount_sandbox_routes(
                     "status": "ignored",
                     "reason": "pull-request-not-reviewable",
                     "action": event.action,
+                }
+            store = _github_app_review_store()
+            if store is None:
+                return {
+                    "status": "ignored",
+                    "reason": "review-settings-unavailable",
+                    "repository": event.repository,
+                }
+            enabled = await store.enabled_repositories()
+            if event.repository.casefold() not in {
+                repository.casefold() for repository in enabled
+            }:
+                return {
+                    "status": "ignored",
+                    "reason": "repository-review-disabled",
+                    "repository": event.repository,
                 }
             client = GitHubAppClient(config)
             installation_token = await client.installation_token(event.installation_id)

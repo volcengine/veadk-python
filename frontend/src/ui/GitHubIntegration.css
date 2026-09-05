@@ -195,6 +195,154 @@
 
 .github-app-install-link svg { width: 13px; height: 13px; }
 
+.github-app-repositories {
+  margin-top: 16px;
+  padding: 14px 16px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--panel));
+}
+
+.github-app-repositories-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.github-app-repositories-header h2 {
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.github-app-repositories-header p {
+  margin: 3px 0 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.github-app-repositories-header button {
+  min-width: 68px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 7px;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.github-app-repositories-header button:hover:not(:disabled) {
+  background: hsl(var(--secondary));
+}
+
+.github-app-repositories-header button:focus-visible,
+.github-review-switch:focus-visible {
+  outline: 2px solid hsl(var(--ring) / 0.35);
+  outline-offset: 2px;
+}
+
+.github-app-repositories-header button:disabled {
+  cursor: wait;
+  opacity: 0.56;
+}
+
+.github-app-repository-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.github-app-repository-row {
+  min-width: 0;
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  box-sizing: border-box;
+  padding: 9px 10px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 7px;
+  background: hsl(var(--background));
+}
+
+.github-app-repository-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.github-app-repository-main a {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: hsl(var(--foreground));
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  text-decoration: none;
+}
+
+.github-app-repository-main a:hover { text-decoration: underline; }
+.github-app-repository-main a:focus-visible { outline: 2px solid hsl(var(--ring) / 0.35); outline-offset: 2px; border-radius: 4px; }
+.github-app-repository-main a svg { width: 13px; height: 13px; flex: 0 0 auto; }
+
+.github-app-repository-main span,
+.github-app-repository-empty {
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.github-app-repository-empty {
+  margin-top: 12px;
+}
+
+.github-review-switch {
+  min-width: 72px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  padding: 0 11px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 999px;
+  background: hsl(var(--muted) / 0.3);
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, opacity 160ms ease;
+}
+
+.github-review-switch:hover:not(:disabled) {
+  background: hsl(var(--secondary));
+  color: hsl(var(--foreground));
+}
+
+.github-review-switch.is-on {
+  border-color: hsl(145 58% 34% / 0.28);
+  background: hsl(145 60% 42% / 0.1);
+  color: hsl(145 55% 27%);
+}
+
+.github-review-switch:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
 .github-form-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; margin-top: 24px; padding-top: 20px; border-top: 1px solid hsl(var(--border)); }
 .github-secrets-note { grid-column: 1 / -1; width: 100%; max-width: 980px; display: flex; flex-direction: column; gap: 8px; box-sizing: border-box; padding: 12px 14px; border: 1px solid hsl(var(--border)); border-radius: 8px; background: hsl(var(--muted) / 0.22); color: hsl(var(--muted-foreground)); font-size: 12.5px; line-height: 1.5; }
 .github-secrets-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -262,6 +410,10 @@
   .github-form-actions { grid-template-columns: minmax(0, 1fr); }
   .github-app-card { align-items: stretch; flex-direction: column; }
   .github-app-install-link { width: 100%; box-sizing: border-box; }
+  .github-app-repositories-header,
+  .github-app-repository-row { align-items: stretch; flex-direction: column; }
+  .github-app-repositories-header button,
+  .github-review-switch { width: 100%; }
   .github-secrets-header { align-items: flex-start; flex-direction: column; gap: 6px; }
   .github-field-label-row { align-items: flex-start; flex-direction: column; gap: 4px; }
   .github-result-message { align-items: stretch; flex-direction: column; }
@@ -276,6 +428,7 @@
   .github-back,
   .github-field input,
   .github-app-install-link,
+  .github-review-switch,
   .github-form-actions button,
   .github-review-now-actions button { transition: none; }
 }

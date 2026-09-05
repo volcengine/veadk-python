@@ -2606,6 +2606,18 @@ def _run_frontend_server(
             raise PermissionError("invalid Sandbox proxy capability")
         raise KeyError(session_id)
 
+    from frontend.server.storage import StudioStorageConfig
+    from frontend.server.storage.tos import create_tos_client_factory
+
+    github_app_review_storage = StudioStorageConfig.from_env(provider)
+    github_app_review_storage_client_factory = (
+        create_tos_client_factory(
+            github_app_review_storage,
+            _resolve_ve_credentials,
+        )
+        if github_app_review_storage.configured
+        else None
+    )
     mount_sandbox_routes(
         app,
         sandbox_service,
@@ -2613,6 +2625,10 @@ def _run_frontend_server(
         _sandbox_proxy_target,
         _sandbox_is_admin,
         _sandbox_creator,
+        github_app_review_storage_bucket=github_app_review_storage.bucket,
+        github_app_review_storage_client_factory=(
+            github_app_review_storage_client_factory
+        ),
     )
 
     def _intelligent_development_credentials() -> StudioCredentials:

@@ -21,6 +21,21 @@ export interface GitHubAppConfig {
   reason: string;
 }
 
+export interface GitHubAppRepository {
+  installationId: number;
+  account: string;
+  fullName: string;
+  htmlUrl: string;
+  private: boolean;
+  reviewEnabled: boolean;
+}
+
+export interface GitHubAppRepositoriesResult {
+  repositories: GitHubAppRepository[];
+  reviewSettingsConfigured: boolean;
+  reviewSettingsReason: string;
+}
+
 export interface GitHubPullRequestFile {
   path: string;
   content: string;
@@ -340,6 +355,67 @@ export async function getGitHubAppConfig(
     throw new Error("GitHub App 配置响应格式无效。");
   }
   return value as GitHubAppConfig;
+}
+
+export async function getGitHubAppRepositories(
+  signal: AbortSignal,
+): Promise<GitHubAppRepositoriesResult> {
+  const response = await studioFetch(
+    "/web/github/app/repositories",
+    {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      signal,
+    },
+  );
+  if (!response.ok) {
+    throw await responseErrorFromGitHubReview(response);
+  }
+  const value = (await response.json()) as Partial<GitHubAppRepositoriesResult>;
+  if (
+    !Array.isArray(value.repositories) ||
+    typeof value.reviewSettingsConfigured !== "boolean" ||
+    typeof value.reviewSettingsReason !== "string" ||
+    value.repositories.some((repository) => (
+      typeof repository !== "object" ||
+      repository === null ||
+      typeof repository.installationId !== "number" ||
+      typeof repository.account !== "string" ||
+      typeof repository.fullName !== "string" ||
+      typeof repository.htmlUrl !== "string" ||
+      typeof repository.private !== "boolean" ||
+      typeof repository.reviewEnabled !== "boolean"
+    ))
+  ) {
+    throw new Error("GitHub App 仓库列表响应格式无效。");
+  }
+  return value as GitHubAppRepositoriesResult;
+}
+
+export async function updateGitHubAppReviewRepositories(
+  repositories: string[],
+  signal: AbortSignal,
+): Promise<string[]> {
+  const response = await studioFetch(
+    "/web/github/app/review-repositories",
+    {
+      method: "PUT",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ repositories }),
+      signal,
+    },
+  );
+  if (!response.ok) {
+    throw await responseErrorFromGitHubReview(response);
+  }
+  const value = (await response.json()) as { repositories?: unknown };
+  if (
+    !Array.isArray(value.repositories) ||
+    value.repositories.some((repository) => typeof repository !== "string")
+  ) {
+    throw new Error("GitHub App 启用仓库响应格式无效。");
+  }
+  return value.repositories;
 }
 
 async function responseErrorFromGitHubReview(response: Response): Promise<Error> {

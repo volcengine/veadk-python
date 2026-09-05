@@ -64,6 +64,7 @@ from veadk.cli.frontend_sandbox import (
     mount_sandbox_agent_routes,
     mount_sandbox_routes,
 )
+from veadk.cli.github_app_pr_review import GitHubInstalledRepository
 
 
 class _FakeCodex:
@@ -434,10 +435,49 @@ class _FakeGateway:
         return None
 
 
+class _FakeTosObject:
+    def __init__(self, content: bytes) -> None:
+        self._content = content
+
+    def read(self, limit: int = -1) -> bytes:
+        if limit < 0:
+            return self._content
+        return self._content[:limit]
+
+
+class _FakeTosNotFound(Exception):
+    status_code = 404
+
+
+class _FakeTosClient:
+    def __init__(self) -> None:
+        self.objects: dict[tuple[str, str], bytes] = {}
+
+    def get_object(self, *, bucket: str, key: str) -> _FakeTosObject:
+        try:
+            return _FakeTosObject(self.objects[(bucket, key)])
+        except KeyError as error:
+            raise _FakeTosNotFound() from error
+
+    def put_object(
+        self,
+        *,
+        bucket: str,
+        key: str,
+        content: bytes,
+        content_length: int,
+        content_type: str,
+    ) -> None:
+        assert content_length == len(content)
+        assert content_type == "application/json"
+        self.objects[(bucket, key)] = content
+
+
 def _app(
     gateway: _FakeGateway,
     tool_id: str | None = "tool-studio",
     snapshot_tool_id: str | None = "tool-studio-snapshot",
+    github_app_review_storage_client: _FakeTosClient | None = None,
 ) -> FastAPI:
     app = FastAPI()
     service = SandboxConversationService(
@@ -464,6 +504,14 @@ def _app(
         _owner,
         admin_resolver=_admin,
         creator_resolver=_creator,
+        github_app_review_storage_bucket=(
+            "studio-state" if github_app_review_storage_client is not None else ""
+        ),
+        github_app_review_storage_client_factory=(
+            (lambda: github_app_review_storage_client)
+            if github_app_review_storage_client is not None
+            else None
+        ),
     )
     return app
 
@@ -552,6 +600,98 @@ def test_github_app_config_reports_install_url(monkeypatch: pytest.MonkeyPatch) 
     }
 
 
+def test_github_app_repositories_include_review_enablement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VEADK_GITHUB_APP_ID", "4830047")
+    monkeypatch.setenv("VEADK_GITHUB_APP_SLUG", "agentkit-veadk-studio")
+    monkeypatch.setenv("VEADK_GITHUB_APP_PRIVATE_KEY", "pem")
+    monkeypatch.setenv("VEADK_GITHUB_APP_WEBHOOK_SECRET", "secret")
+
+    class _FakeGitHubAppClient:
+        def __init__(self, config: object) -> None:
+            del config
+
+        async def installed_repositories(self) -> list[GitHubInstalledRepository]:
+            return [
+                GitHubInstalledRepository(
+                    installation_id=456,
+                    account="Rhosmarie",
+                    full_name="Rhosmarie/nice",
+                    html_url="https://github.com/Rhosmarie/nice",
+                    private=False,
+                )
+            ]
+
+    monkeypatch.setattr(frontend_sandbox, "GitHubAppClient", _FakeGitHubAppClient)
+    storage = _FakeTosClient()
+    client = TestClient(_app(_FakeGateway(), github_app_review_storage_client=storage))
+
+    save_response = client.put(
+        "/web/github/app/review-repositories",
+        json={"repositories": ["Rhosmarie/nice"]},
+        headers={"X-Test-User": "alice"},
+    )
+    list_response = client.get(
+        "/web/github/app/repositories",
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert save_response.status_code == 200
+    assert save_response.json() == {"repositories": ["Rhosmarie/nice"]}
+    assert list_response.status_code == 200
+    assert list_response.json() == {
+        "repositories": [
+            {
+                "installationId": 456,
+                "account": "Rhosmarie",
+                "fullName": "Rhosmarie/nice",
+                "htmlUrl": "https://github.com/Rhosmarie/nice",
+                "private": False,
+                "reviewEnabled": True,
+            }
+        ],
+        "reviewSettingsConfigured": True,
+        "reviewSettingsReason": "",
+    }
+
+
+def test_github_app_repositories_report_missing_review_storage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VEADK_GITHUB_APP_ID", "4830047")
+    monkeypatch.setenv("VEADK_GITHUB_APP_SLUG", "agentkit-veadk-studio")
+    monkeypatch.setenv("VEADK_GITHUB_APP_PRIVATE_KEY", "pem")
+    monkeypatch.setenv("VEADK_GITHUB_APP_WEBHOOK_SECRET", "secret")
+
+    class _FakeGitHubAppClient:
+        def __init__(self, config: object) -> None:
+            del config
+
+        async def installed_repositories(self) -> list[GitHubInstalledRepository]:
+            return [
+                GitHubInstalledRepository(
+                    installation_id=456,
+                    account="Rhosmarie",
+                    full_name="Rhosmarie/nice",
+                    html_url="https://github.com/Rhosmarie/nice",
+                    private=False,
+                )
+            ]
+
+    monkeypatch.setattr(frontend_sandbox, "GitHubAppClient", _FakeGitHubAppClient)
+    client = TestClient(_app(_FakeGateway()))
+
+    response = client.get(
+        "/web/github/app/repositories",
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["repositories"][0]["reviewEnabled"] is False
+    assert response.json()["reviewSettingsConfigured"] is False
+
+
 def test_pull_request_review_always_uses_github_app_installation_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -607,13 +747,33 @@ def test_github_app_webhook_starts_pull_request_review(
         def __init__(self, config: object) -> None:
             calls.append(("init", config))
 
+        async def installed_repositories(self) -> list[GitHubInstalledRepository]:
+            return [
+                GitHubInstalledRepository(
+                    installation_id=456,
+                    account="Rhosmarie",
+                    full_name="Rhosmarie/nice",
+                    html_url="https://github.com/Rhosmarie/nice",
+                    private=False,
+                )
+            ]
+
         async def installation_token(self, installation_id: int) -> str:
             calls.append(("installation", installation_id))
             return "webhook-installation-token"
 
     monkeypatch.setattr(frontend_sandbox, "GitHubAppClient", _FakeGitHubAppClient)
+    storage = _FakeTosClient()
     gateway = _FakeGateway()
-    client = TestClient(_app(gateway))
+    client = TestClient(_app(gateway, github_app_review_storage_client=storage))
+    assert (
+        client.put(
+            "/web/github/app/review-repositories",
+            json={"repositories": ["Rhosmarie/nice"]},
+            headers={"X-Test-User": "alice"},
+        ).status_code
+        == 200
+    )
     payload = {
         "action": "opened",
         "installation": {"id": 456},
@@ -650,6 +810,60 @@ def test_github_app_webhook_starts_pull_request_review(
     }
 
 
+def test_github_app_webhook_ignores_disabled_repository(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VEADK_GITHUB_APP_ID", "4830047")
+    monkeypatch.setenv("VEADK_GITHUB_APP_SLUG", "agentkit-veadk-studio")
+    monkeypatch.setenv("VEADK_GITHUB_APP_PRIVATE_KEY", "pem")
+    monkeypatch.setenv("VEADK_GITHUB_APP_WEBHOOK_SECRET", "secret")
+
+    class _FakeGitHubAppClient:
+        def __init__(self, config: object) -> None:
+            del config
+
+        async def installation_token(self, installation_id: int) -> str:
+            raise AssertionError("disabled repositories must not request tokens")
+
+    monkeypatch.setattr(frontend_sandbox, "GitHubAppClient", _FakeGitHubAppClient)
+    gateway = _FakeGateway()
+    client = TestClient(
+        _app(gateway, github_app_review_storage_client=_FakeTosClient())
+    )
+    payload = {
+        "action": "opened",
+        "installation": {"id": 456},
+        "repository": {"full_name": "Rhosmarie/nice"},
+        "pull_request": {
+            "number": 23,
+            "html_url": "https://github.com/Rhosmarie/nice/pull/23",
+            "draft": False,
+            "head": {"repo": {"full_name": "Rhosmarie/nice"}},
+        },
+    }
+    body = json.dumps(payload, separators=(",", ":")).encode()
+    signature = "sha256=" + hmac.new(b"secret", body, sha256).hexdigest()
+
+    response = client.post(
+        "/web/github/app/webhook",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-GitHub-Event": "pull_request",
+            "X-GitHub-Delivery": "delivery-1",
+            "X-Hub-Signature-256": signature,
+        },
+    )
+
+    assert response.status_code == 202
+    assert response.json() == {
+        "status": "ignored",
+        "reason": "repository-review-disabled",
+        "repository": "Rhosmarie/nice",
+    }
+    assert gateway.created == 0
+
+
 def test_github_app_webhook_retries_pr_review_connect(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -666,6 +880,17 @@ def test_github_app_webhook_retries_pr_review_connect(
     class _FakeGitHubAppClient:
         def __init__(self, config: object) -> None:
             del config
+
+        async def installed_repositories(self) -> list[GitHubInstalledRepository]:
+            return [
+                GitHubInstalledRepository(
+                    installation_id=456,
+                    account="Rhosmarie",
+                    full_name="Rhosmarie/nice",
+                    html_url="https://github.com/Rhosmarie/nice",
+                    private=False,
+                )
+            ]
 
         async def installation_token(self, installation_id: int) -> str:
             assert installation_id == 456
@@ -685,8 +910,17 @@ def test_github_app_webhook_retries_pr_review_connect(
             return await super().open_codex(session)
 
     monkeypatch.setattr(frontend_sandbox, "GitHubAppClient", _FakeGitHubAppClient)
+    storage = _FakeTosClient()
     gateway = _FlakyGateway()
-    client = TestClient(_app(gateway))
+    client = TestClient(_app(gateway, github_app_review_storage_client=storage))
+    assert (
+        client.put(
+            "/web/github/app/review-repositories",
+            json={"repositories": ["Rhosmarie/nice"]},
+            headers={"X-Test-User": "alice"},
+        ).status_code
+        == 200
+    )
     payload = {
         "action": "opened",
         "installation": {"id": 456},

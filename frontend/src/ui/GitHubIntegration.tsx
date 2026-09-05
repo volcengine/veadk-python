@@ -9,8 +9,12 @@ import {
 
 import {
   getGitHubAppConfig,
+  getGitHubAppRepositories,
   startGitHubPullRequestReview,
+  updateGitHubAppReviewRepositories,
   type GitHubAppConfig,
+  type GitHubAppRepositoriesResult,
+  type GitHubAppRepository,
   type GitHubPullRequestResult,
   type GitHubPullRequestReviewResult,
   normalizeGitHubRepository,
@@ -151,9 +155,18 @@ export function GitHubIntegration({ automation, onBack, onOpenSandboxSession }: 
   const [githubAppConfig, setGitHubAppConfig] = useState<GitHubAppConfig | null>(null);
   const [githubAppError, setGitHubAppError] = useState("");
   const [githubAppLoading, setGitHubAppLoading] = useState(isPullRequestReview);
+  const [githubAppRepositories, setGitHubAppRepositories] = useState<GitHubAppRepository[]>([]);
+  const [githubAppRepositoriesLoading, setGitHubAppRepositoriesLoading] = useState(isPullRequestReview);
+  const [githubAppRepositoriesError, setGitHubAppRepositoriesError] = useState("");
+  const [githubAppReviewSettings, setGitHubAppReviewSettings] = useState<Pick<GitHubAppRepositoriesResult, "reviewSettingsConfigured" | "reviewSettingsReason">>({
+    reviewSettingsConfigured: false,
+    reviewSettingsReason: "",
+  });
+  const [updatingRepository, setUpdatingRepository] = useState("");
   const submitAbortRef = useRef<AbortController | null>(null);
   const reviewAbortRef = useRef<AbortController | null>(null);
   const githubAppAbortRef = useRef<AbortController | null>(null);
+  const githubAppRepositoriesAbortRef = useRef<AbortController | null>(null);
   const configuredRepositoryUrl = repositoryUrl(form.repository);
   const configuredRepository = configuredRepositoryUrl.replace("https://github.com/", "");
   const repositorySecretsUrl = configuredRepositoryUrl
@@ -166,6 +179,7 @@ export function GitHubIntegration({ automation, onBack, onOpenSandboxSession }: 
     submitAbortRef.current?.abort();
     reviewAbortRef.current?.abort();
     githubAppAbortRef.current?.abort();
+    githubAppRepositoriesAbortRef.current?.abort();
   }, []);
 
   useEffect(() => {
@@ -191,6 +205,65 @@ export function GitHubIntegration({ automation, onBack, onOpenSandboxSession }: 
         }
       });
   }, [isPullRequestReview]);
+
+  const refreshGitHubAppRepositories = () => {
+    githubAppRepositoriesAbortRef.current?.abort();
+    const controller = new AbortController();
+    githubAppRepositoriesAbortRef.current = controller;
+    setGitHubAppRepositoriesLoading(true);
+    setGitHubAppRepositoriesError("");
+    void getGitHubAppRepositories(controller.signal)
+      .then((result) => {
+        if (githubAppRepositoriesAbortRef.current !== controller) return;
+        setGitHubAppRepositories(result.repositories);
+        setGitHubAppReviewSettings({
+          reviewSettingsConfigured: result.reviewSettingsConfigured,
+          reviewSettingsReason: result.reviewSettingsReason,
+        });
+      })
+      .catch((error) => {
+        if (controller.signal.aborted || githubAppRepositoriesAbortRef.current !== controller) return;
+        setGitHubAppRepositoriesError(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => {
+        if (githubAppRepositoriesAbortRef.current === controller) {
+          githubAppRepositoriesAbortRef.current = null;
+          setGitHubAppRepositoriesLoading(false);
+        }
+      });
+  };
+
+  useEffect(() => {
+    if (!isPullRequestReview || githubAppConfig?.configured !== true) return;
+    refreshGitHubAppRepositories();
+  }, [githubAppConfig?.configured, isPullRequestReview]);
+
+  const toggleRepositoryReview = async (repository: GitHubAppRepository) => {
+    if (!githubAppReviewSettings.reviewSettingsConfigured || updatingRepository) return;
+    const nextRepositories = githubAppRepositories.map((item) => (
+      item.fullName === repository.fullName
+        ? { ...item, reviewEnabled: !item.reviewEnabled }
+        : item
+    ));
+    const enabledRepositories = nextRepositories
+      .filter((item) => item.reviewEnabled)
+      .map((item) => item.fullName);
+    const controller = new AbortController();
+    setUpdatingRepository(repository.fullName);
+    setGitHubAppRepositoriesError("");
+    try {
+      const saved = await updateGitHubAppReviewRepositories(enabledRepositories, controller.signal);
+      const savedLookup = new Set(saved.map((item) => item.toLowerCase()));
+      setGitHubAppRepositories((current) => current.map((item) => ({
+        ...item,
+        reviewEnabled: savedLookup.has(item.fullName.toLowerCase()),
+      })));
+    } catch (error) {
+      setGitHubAppRepositoriesError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setUpdatingRepository("");
+    }
+  };
 
   const updateField = (name: FormFieldName, value: string) => {
     setForm((current) => ({ ...current, [name]: value }));
@@ -426,22 +499,83 @@ export function GitHubIntegration({ automation, onBack, onOpenSandboxSession }: 
             </div>
 
             {isPullRequestReview ? (
-              <div className={`github-app-card${githubAppConfig?.configured ? " is-ready" : ""}`}>
-                <div>
-                  <strong>GitHub App 授权</strong>
-                  <span>
-                    {githubAppLoading
-                      ? "正在检查中心服务配置..."
-                      : githubAppConfig?.configured
-                        ? `安装 ${githubAppName} 到目标仓库后，PR 创建或更新会自动触发评审。`
-                        : githubAppError || githubAppConfig?.reason || "管理员未配置 GitHub App。"}
-                  </span>
+              <>
+                <div className={`github-app-card${githubAppConfig?.configured ? " is-ready" : ""}`}>
+                  <div>
+                    <strong>GitHub App 授权</strong>
+                    <span>
+                      {githubAppLoading
+                        ? "正在检查中心服务配置..."
+                        : githubAppConfig?.configured
+                          ? `安装 ${githubAppName} 到目标仓库后，可在下方开启自动评审。`
+                          : githubAppError || githubAppConfig?.reason || "管理员未配置 GitHub App。"}
+                    </span>
+                  </div>
+                  <a className="github-app-install-link" href={githubAppInstallUrl} target="_blank" rel="noreferrer">
+                    安装 GitHub App
+                    <ExternalIcon />
+                  </a>
                 </div>
-                <a className="github-app-install-link" href={githubAppInstallUrl} target="_blank" rel="noreferrer">
-                  安装 GitHub App
-                  <ExternalIcon />
-                </a>
-              </div>
+
+                <section className="github-app-repositories" aria-labelledby="github-app-repositories-title">
+                  <div className="github-app-repositories-header">
+                    <div>
+                      <h2 id="github-app-repositories-title">已安装仓库</h2>
+                      <p>只有开启评审的仓库会响应 GitHub webhook 自动触发。</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={refreshGitHubAppRepositories}
+                      disabled={!githubAppConfig?.configured || githubAppRepositoriesLoading}
+                    >
+                      {githubAppRepositoriesLoading ? "刷新中..." : "刷新"}
+                    </button>
+                  </div>
+                  {githubAppRepositoriesError ? (
+                    <div className="github-submit-message is-error" role="alert">{githubAppRepositoriesError}</div>
+                  ) : null}
+                  {!githubAppReviewSettings.reviewSettingsConfigured && !githubAppRepositoriesError ? (
+                    <div className="github-submit-message is-error" role="alert">
+                      {githubAppReviewSettings.reviewSettingsReason || "管理员未配置 Studio 持久化存储，无法保存启用评审设置。"}
+                    </div>
+                  ) : null}
+                  {githubAppRepositoriesLoading && githubAppRepositories.length === 0 ? (
+                    <div className="github-app-repository-empty">正在读取 GitHub App 安装仓库...</div>
+                  ) : null}
+                  {!githubAppRepositoriesLoading && githubAppRepositories.length === 0 && !githubAppRepositoriesError ? (
+                    <div className="github-app-repository-empty">GitHub App 尚未安装到任何仓库。</div>
+                  ) : null}
+                  {githubAppRepositories.length > 0 ? (
+                    <div className="github-app-repository-list">
+                      {githubAppRepositories.map((repository) => {
+                        const busy = updatingRepository === repository.fullName;
+                        const disabled = !githubAppReviewSettings.reviewSettingsConfigured || Boolean(updatingRepository);
+                        return (
+                          <div className="github-app-repository-row" key={repository.fullName}>
+                            <div className="github-app-repository-main">
+                              <a href={repository.htmlUrl} target="_blank" rel="noreferrer" title={repository.fullName}>
+                                {repository.fullName}
+                                <ExternalIcon />
+                              </a>
+                              <span>{repository.private ? "Private" : "Public"} · Installation {repository.installationId}</span>
+                            </div>
+                            <button
+                              type="button"
+                              className={`github-review-switch${repository.reviewEnabled ? " is-on" : ""}`}
+                              role="switch"
+                              aria-checked={repository.reviewEnabled}
+                              disabled={disabled}
+                              onClick={() => { void toggleRepositoryReview(repository); }}
+                            >
+                              <span>{busy ? "保存中" : repository.reviewEnabled ? "已启用" : "未启用"}</span>
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </section>
+              </>
             ) : (
               <>
                 <div className="github-field github-token-field">

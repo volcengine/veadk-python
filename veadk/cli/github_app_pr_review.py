@@ -19,8 +19,11 @@ from __future__ import annotations
 import base64
 import binascii
 import hmac
+import json
 import os
 import time
+import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 from hashlib import sha256
 from typing import Any
@@ -37,10 +40,16 @@ GITHUB_APP_PRIVATE_KEY_PATH_ENV = "VEADK_GITHUB_APP_PRIVATE_KEY_PATH"
 GITHUB_APP_WEBHOOK_SECRET_ENV = "VEADK_GITHUB_APP_WEBHOOK_SECRET"
 GITHUB_APP_REVIEW_OWNER_ID_ENV = "VEADK_GITHUB_APP_REVIEW_OWNER_ID"
 GITHUB_APP_REVIEW_CREATOR_ENV = "VEADK_GITHUB_APP_REVIEW_CREATOR"
+GITHUB_APP_REVIEW_STORAGE_KEY = "veadk-studio/v1/github-pr-review/repositories.json"
+_MAX_REVIEW_REPOSITORIES_BYTES = 64 * 1024
 
 
 class GitHubAppReviewError(RuntimeError):
     """GitHub App review integration failed with a user-safe message."""
+
+
+class GitHubAppReviewStorageUnavailable(GitHubAppReviewError):
+    """GitHub App review enablement cannot be read or written."""
 
 
 @dataclass(frozen=True)
@@ -75,6 +84,109 @@ class GitHubPullRequestEvent:
             and not self.draft
             and self.head_repository == self.repository
         )
+
+
+@dataclass(frozen=True)
+class GitHubInstalledRepository:
+    installation_id: int
+    account: str
+    full_name: str
+    html_url: str
+    private: bool
+
+    def to_public_dict(self, *, review_enabled: bool) -> dict[str, object]:
+        return {
+            "installationId": self.installation_id,
+            "account": self.account,
+            "fullName": self.full_name,
+            "htmlUrl": self.html_url,
+            "private": self.private,
+            "reviewEnabled": review_enabled,
+        }
+
+
+class TosGitHubAppReviewRepositoryStore:
+    """Persist GitHub App PR review enablement in Studio's private TOS bucket."""
+
+    def __init__(
+        self,
+        *,
+        bucket: str,
+        client_factory: Callable[[], Any],
+        key: str = GITHUB_APP_REVIEW_STORAGE_KEY,
+    ) -> None:
+        if not bucket.strip():
+            raise ValueError("GitHub App review storage requires a bucket.")
+        self._bucket = bucket.strip()
+        self._client_factory = client_factory
+        self._key = key.strip("/")
+
+    async def enabled_repositories(self) -> set[str]:
+        return await asyncio.to_thread(self._enabled_repositories)
+
+    async def save_enabled_repositories(self, repositories: list[str]) -> list[str]:
+        return await asyncio.to_thread(self._save_enabled_repositories, repositories)
+
+    def _enabled_repositories(self) -> set[str]:
+        client = self._client_factory()
+        try:
+            response = client.get_object(bucket=self._bucket, key=self._key)
+        except Exception as error:
+            if _status_code(error) == 404:
+                return set()
+            raise GitHubAppReviewStorageUnavailable(
+                "无法读取 PR 自动评审仓库配置。"
+            ) from error
+        content = response.read(_MAX_REVIEW_REPOSITORIES_BYTES + 1)
+        if (
+            not isinstance(content, bytes)
+            or len(content) > _MAX_REVIEW_REPOSITORIES_BYTES
+        ):
+            raise GitHubAppReviewStorageUnavailable("PR 自动评审仓库配置无效或过大。")
+        try:
+            payload = json.loads(content)
+        except (json.JSONDecodeError, UnicodeDecodeError) as error:
+            raise GitHubAppReviewStorageUnavailable(
+                "PR 自动评审仓库配置不是有效 JSON。"
+            ) from error
+        repositories = (
+            payload.get("repositories") if isinstance(payload, dict) else None
+        )
+        if not isinstance(repositories, list):
+            raise GitHubAppReviewStorageUnavailable("PR 自动评审仓库配置格式无效。")
+        normalized: set[str] = set()
+        for repository in repositories:
+            if not isinstance(repository, str):
+                raise GitHubAppReviewStorageUnavailable("PR 自动评审仓库配置格式无效。")
+            normalized.add(normalize_review_repository(repository))
+        return normalized
+
+    def _save_enabled_repositories(self, repositories: list[str]) -> list[str]:
+        normalized = sorted(
+            {normalize_review_repository(repository) for repository in repositories},
+            key=str.casefold,
+        )
+        content = json.dumps(
+            {"repositories": normalized},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        if len(content) > _MAX_REVIEW_REPOSITORIES_BYTES:
+            raise GitHubAppReviewStorageUnavailable("PR 自动评审仓库配置过大。")
+        try:
+            self._client_factory().put_object(
+                bucket=self._bucket,
+                key=self._key,
+                content=content,
+                content_length=len(content),
+                content_type="application/json",
+            )
+        except Exception as error:
+            raise GitHubAppReviewStorageUnavailable(
+                "无法保存 PR 自动评审仓库配置。"
+            ) from error
+        return normalized
 
 
 def load_github_app_config() -> GitHubAppConfig | None:
@@ -216,6 +328,8 @@ class GitHubAppClient:
             f"/app/installations/{installation_id}/access_tokens",
             token=self._app_jwt(),
         )
+        if not isinstance(payload, dict):
+            raise GitHubAppReviewError("GitHub App 响应格式无效。")
         token = payload.get("token")
         if not isinstance(token, str) or not token.strip():
             raise GitHubAppReviewError("GitHub 未返回 installation token。")
@@ -227,12 +341,54 @@ class GitHubAppClient:
             f"/repos/{owner}/{repo}/installation",
             token=self._app_jwt(),
         )
+        if not isinstance(payload, dict):
+            raise GitHubAppReviewError("GitHub App 响应格式无效。")
         installation_id = payload.get("id")
         if not isinstance(installation_id, int) or installation_id <= 0:
             raise GitHubAppReviewError("GitHub 未返回有效 installation id。")
         return installation_id
 
-    async def _request(self, method: str, path: str, *, token: str) -> dict[str, Any]:
+    async def installed_repositories(self) -> list[GitHubInstalledRepository]:
+        installations = await self._request_pages(
+            "/app/installations",
+            token=self._app_jwt(),
+        )
+        repositories: list[GitHubInstalledRepository] = []
+        for installation in installations:
+            if not isinstance(installation, dict):
+                continue
+            installation_id = installation.get("id")
+            account = installation.get("account")
+            account_login = account.get("login") if isinstance(account, dict) else ""
+            if not isinstance(installation_id, int) or installation_id <= 0:
+                continue
+            token = await self.installation_token(installation_id)
+            payloads = await self._request_pages(
+                "/installation/repositories",
+                token=token,
+                list_key="repositories",
+            )
+            for repository in payloads:
+                if not isinstance(repository, dict):
+                    continue
+                full_name = repository.get("full_name")
+                html_url = repository.get("html_url")
+                if not isinstance(full_name, str) or "/" not in full_name:
+                    continue
+                if not isinstance(html_url, str) or not html_url:
+                    html_url = f"https://github.com/{full_name}"
+                repositories.append(
+                    GitHubInstalledRepository(
+                        installation_id=installation_id,
+                        account=str(account_login or full_name.split("/", 1)[0]),
+                        full_name=full_name,
+                        html_url=html_url,
+                        private=bool(repository.get("private")),
+                    )
+                )
+        return sorted(repositories, key=lambda item: item.full_name.casefold())
+
+    async def _request(self, method: str, path: str, *, token: str) -> Any:
         headers = {
             "Accept": "application/vnd.github+json",
             "Authorization": f"Bearer {token}",
@@ -256,9 +412,32 @@ class GitHubAppClient:
             raise GitHubAppReviewError(
                 detail[:240] or f"GitHub App 请求失败（HTTP {response.status_code}）。"
             )
-        if not isinstance(payload, dict):
+        if not isinstance(payload, (dict, list)):
             raise GitHubAppReviewError("GitHub App 响应格式无效。")
         return payload
+
+    async def _request_pages(
+        self,
+        path: str,
+        *,
+        token: str,
+        list_key: str | None = None,
+    ) -> list[Any]:
+        items: list[Any] = []
+        separator = "&" if "?" in path else "?"
+        for page in range(1, 101):
+            payload = await self._request(
+                "GET",
+                f"{path}{separator}per_page=100&page={page}",
+                token=token,
+            )
+            value: Any = payload.get(list_key) if list_key else payload
+            if not isinstance(value, list):
+                raise GitHubAppReviewError("GitHub App 响应格式无效。")
+            items.extend(value)
+            if len(value) < 100:
+                break
+        return items
 
     def _app_jwt(self) -> str:
         try:
@@ -296,3 +475,33 @@ def _load_private_key() -> str:
             return file.read().strip()
     except OSError as error:
         raise GitHubAppReviewError("无法读取 GitHub App private key 文件。") from error
+
+
+def normalize_review_repository(value: str) -> str:
+    repository = value.strip().removesuffix(".git").strip("/")
+    parts = repository.split("/")
+    if (
+        len(parts) != 2
+        or not parts[0]
+        or not parts[1]
+        or any(not _is_github_name(part) for part in parts)
+    ):
+        raise GitHubAppReviewError("GitHub 仓库格式应为 owner/repository。")
+    return f"{parts[0]}/{parts[1]}"
+
+
+def _is_github_name(value: str) -> bool:
+    return all(char.isalnum() or char in {"-", "_", "."} for char in value)
+
+
+def _status_code(error: BaseException) -> int | None:
+    for current in (error, error.__cause__, error.__context__):
+        if current is None:
+            continue
+        for name in ("status_code", "status", "http_status"):
+            value = getattr(current, name, None)
+            try:
+                return int(value) if value is not None else None
+            except (TypeError, ValueError):
+                continue
+    return None
