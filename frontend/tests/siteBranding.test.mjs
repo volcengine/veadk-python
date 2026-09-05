@@ -82,6 +82,12 @@ test("applies configured branding to the UI, document title, and favicon", () =>
     /<TextShimmer as="h1" className="login-title"[\s\S]*?\{branding\.title\}[\s\S]*?<\/TextShimmer>/,
   );
   assert.match(loginSource, /t\("login\.signInToContinue"\)/);
+  assert.match(loginSource, /p\.id === "veidentity"/);
+  assert.match(loginSource, /t\(`login\.identityProvider\.\$\{cloudProvider\}`\)/);
+  assert.equal(shellZh.login.identityProvider.volcengine, "火山引擎 Identity");
+  assert.equal(shellEn.login.identityProvider.volcengine, "Volcengine Identity");
+  assert.equal(shellZh.login.identityProvider.byteplus, "BytePlus Identity");
+  assert.equal(shellEn.login.identityProvider.byteplus, "BytePlus Identity");
   assert.equal(shellZh.login.powered.volcengine, "火山引擎 AgentKit 提供企业级 Agent 解决方案");
   assert.equal(shellEn.login.powered.byteplus, "BytePlus AgentKit provides enterprise-grade Agent solutions");
   assert.match(loginSource, /t\("login\.legalPrefix"\)/);

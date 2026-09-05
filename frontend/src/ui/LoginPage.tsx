@@ -98,7 +98,14 @@ export function LoginPage({ branding, cloudProvider, onUsername }: LoginPageProp
                 {providers.map((p) => (
                   <button key={p.id} className="login-btn" onClick={() => loginTo(p.loginUrl)}>
                     {providerIcon(p.id)}
-                    <span>{t("login.signInWith", { provider: p.label })}</span>
+                    <span>
+                      {t("login.signInWith", {
+                        provider:
+                          p.id === "veidentity"
+                            ? t(`login.identityProvider.${cloudProvider}`)
+                            : p.label,
+                      })}
+                    </span>
                   </button>
                 ))}
               </div>

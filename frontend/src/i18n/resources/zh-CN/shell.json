@@ -7,6 +7,10 @@
     "usernamePlaceholder": "用户名（字母 + 数字，最多 16 位）",
     "enter": "进入",
     "usernameInvalid": "只能包含大小写字母和数字，最多 16 位。",
+    "identityProvider": {
+      "volcengine": "火山引擎 Identity",
+      "byteplus": "BytePlus Identity"
+    },
     "powered": {
       "volcengine": "火山引擎 AgentKit 提供企业级 Agent 解决方案",
       "byteplus": "BytePlus AgentKit 提供企业级 Agent 解决方案"

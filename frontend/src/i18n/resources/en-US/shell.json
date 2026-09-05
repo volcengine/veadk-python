@@ -7,6 +7,10 @@
     "usernamePlaceholder": "Username (letters and numbers, up to 16 characters)",
     "enter": "Continue",
     "usernameInvalid": "Use letters and numbers only, up to 16 characters.",
+    "identityProvider": {
+      "volcengine": "Volcengine Identity",
+      "byteplus": "BytePlus Identity"
+    },
     "powered": {
       "volcengine": "Volcengine AgentKit provides enterprise-grade Agent solutions",
       "byteplus": "BytePlus AgentKit provides enterprise-grade Agent solutions"
