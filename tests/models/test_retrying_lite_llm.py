@@ -70,7 +70,9 @@ async def test_retries_one_pre_output_429_from_pristine_request(
     monkeypatch.setattr("veadk.models.retrying_lite_llm.asyncio.sleep", sleep)
     model = RetryingLiteLlm(model="openai/test-model")
 
-    responses = [response async for response in model.generate_content_async(_request())]
+    responses = [
+        response async for response in model.generate_content_async(_request())
+    ]
 
     assert len(responses) == 1
     assert seen_lengths == [1, 1]
