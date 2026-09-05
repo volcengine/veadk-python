@@ -657,6 +657,84 @@ def test_release_entrypoint_reads_deployed_provider() -> None:
     assert "python3 -m veadk.cli.studio_companion" in run_script
 
 
+def test_release_entrypoint_starts_companion_and_studio_concurrently() -> None:
+    run_script = studio_run_script(provider="volcengine")
+
+    companion_start = run_script.index("python3 -m veadk.cli.studio_companion")
+    companion_pid = run_script.index("COMPANION_PID=$!", companion_start)
+    studio_start = run_script.index("python3 -m veadk.cli.cli studio")
+    studio_pid = run_script.index("STUDIO_PID=$!", studio_start)
+    companion_wait = run_script.index('wait "$COMPANION_PID"', studio_pid)
+    studio_wait = run_script.index('wait "$STUDIO_PID"', companion_wait)
+
+    assert 'agentkit-linux-x64.tar.gz" &\n' in run_script
+    assert '--port "$PORT" &\n' in run_script
+    assert companion_start < companion_pid < studio_start < studio_pid
+    assert companion_pid < studio_pid < companion_wait < studio_wait
+    assert 'kill "$STUDIO_PID"' in run_script
+
+
+@pytest.mark.parametrize(
+    ("companion_exit", "expected_returncode", "studio_terminated"),
+    (("0", 0, False), ("7", 1, True)),
+)
+def test_release_entrypoint_parallel_startup_fails_closed(
+    tmp_path: Path,
+    companion_exit: str,
+    expected_returncode: int,
+    studio_terminated: bool,
+) -> None:
+    package = tmp_path / "package"
+    fake_bin = tmp_path / "bin"
+    package.mkdir()
+    fake_bin.mkdir()
+    entrypoint = package / "run.sh"
+    entrypoint.write_text(
+        studio_run_script(provider="volcengine"),
+        encoding="utf-8",
+    )
+    entrypoint.chmod(0o755)
+    fake_python = fake_bin / "python3"
+    fake_python.write_text(
+        "#!/bin/bash\n"
+        "set -eu\n"
+        'if [[ "$*" == *"veadk.cli.studio_companion"* ]]; then\n'
+        '  touch "$FAKE_STATE/companion-started"\n'
+        '  while [ ! -f "$FAKE_STATE/studio-started" ]; do sleep 0.01; done\n'
+        '  exit "$FAKE_COMPANION_EXIT"\n'
+        "fi\n"
+        'touch "$FAKE_STATE/studio-started"\n'
+        "trap 'touch \"$FAKE_STATE/studio-terminated\"; exit 0' TERM\n"
+        'while [ ! -f "$FAKE_STATE/companion-started" ]; do sleep 0.01; done\n'
+        'if [ "$FAKE_COMPANION_EXIT" != 0 ]; then\n'
+        "  while true; do sleep 1; done\n"
+        "fi\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PATH": f"{fake_bin}:{environment['PATH']}",
+            "FAKE_STATE": str(tmp_path),
+            "FAKE_COMPANION_EXIT": companion_exit,
+        }
+    )
+
+    completed = subprocess.run(
+        ["bash", str(entrypoint)],
+        cwd=package,
+        env=environment,
+        timeout=5,
+        check=False,
+    )
+
+    assert completed.returncode == expected_returncode
+    assert (tmp_path / "companion-started").is_file()
+    assert (tmp_path / "studio-started").is_file()
+    assert (tmp_path / "studio-terminated").exists() is studio_terminated
+
+
 def test_release_entrypoint_prefers_bundled_dependencies(
     tmp_path: Path,
 ) -> None:

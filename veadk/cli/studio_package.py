@@ -65,7 +65,7 @@ def studio_run_script(
         else '"${CLOUD_PROVIDER:-${AGENTKIT_CLOUD_PROVIDER:-volcengine}}"'
     )
     command = (
-        "exec python3 -m veadk.cli.cli studio "
+        "python3 -m veadk.cli.cli studio "
         f"--provider {provider_argument} --auth-mode frontend"
     )
     if site_logo_filename:
@@ -88,8 +88,19 @@ def studio_run_script(
         "HOST=0.0.0.0\n"
         "PORT=${_FAAS_RUNTIME_PORT:-8000}\n"
         'export PYTHONPATH="./site-packages${PYTHONPATH:+:$PYTHONPATH}"\n'
-        f"{companion}"
-        f"{command}"
+        'trap \'kill "${COMPANION_PID:-}" "${STUDIO_PID:-}" '
+        "2>/dev/null || true' INT TERM\n"
+        f"{companion.rstrip()} &\n"
+        "COMPANION_PID=$!\n"
+        f"{command.rstrip()} &\n"
+        "STUDIO_PID=$!\n"
+        'if ! wait "$COMPANION_PID"; then\n'
+        '  kill "$STUDIO_PID" 2>/dev/null || true\n'
+        '  wait "$STUDIO_PID" 2>/dev/null || true\n'
+        "  exit 1\n"
+        "fi\n"
+        "COMPANION_PID=\n"
+        'wait "$STUDIO_PID"\n'
     )
 
 

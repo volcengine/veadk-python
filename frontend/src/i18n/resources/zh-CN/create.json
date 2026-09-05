@@ -561,6 +561,8 @@
       "duplicateName": "Agent 名称在当前结构中必须唯一",
       "missingDescription": "描述为必填项",
       "mcpAuthRequired": "MCP 地址变化后需要确认认证方式",
+      "mcpDuplicateName": "MCP 名称重复，请为每个服务使用唯一名称",
+      "mcpDuplicateUrl": "MCP 地址重复，请删除重复服务后再发布",
       "missingSubagent": "缺少子 Agent",
       "missingPrompt": "系统提示词为必填项",
       "missingSubagentDetail": "{{type}}至少需要添加一个子 Agent 后才能调试或发布。",

@@ -14,10 +14,9 @@
 """Recover an editable, source-preserving view of a legacy Runtime.
 
 The control plane and OCI image are privileged server-side inputs. Parsers keep
-MCP credentials separate from public configuration. The authenticated Studio
-editor may explicitly combine them with :func:`mcp_editor_draft_with_credentials`
-for a transient edit response. Network and cloud clients are injected so the
-parsing and filesystem rules remain independently testable.
+MCP credentials separate from public configuration and browser-facing drafts.
+Network and cloud clients are injected so the parsing and filesystem rules
+remain independently testable.
 """
 
 from __future__ import annotations
@@ -49,7 +48,7 @@ __all__ = [
     "McpRecovery",
     "merge_mcp_recoveries",
     "mcp_reuse_supplied_credentials",
-    "mcp_editor_draft_with_credentials",
+    "mcp_editor_draft_without_credentials",
     "mcp_secret_values_for_draft_references",
     "mcp_secret_values_from_runtime_environment",
     "mcp_secret_values_from_toolset",
@@ -796,7 +795,11 @@ def _mcp_tool_bindings(
                 raise LegacyRecoveryError("legacy_mcp_auth_reference_invalid")
             if reference in bindings:
                 raise LegacyRecoveryError("legacy_mcp_auth_reference_duplicate")
-            bindings[reference] = (agent_name, name, url)
+            bindings[reference] = (
+                agent_name,
+                name,
+                _canonical_mcp_url_key(url),
+            )
     return bindings
 
 
@@ -842,7 +845,8 @@ def _canonical_supplied_mcp_credentials(
             url = _safe_mcp_url(raw_tool.get("url"))
             raw_name = str(raw_tool.get("name") or "").strip()
             canonical_name = _mcp_name(raw_name, url, index)
-            canonical_identity = (agent_name, canonical_name, url)
+            url_key = _canonical_mcp_url_key(url)
+            canonical_identity = (agent_name, canonical_name, url_key)
             candidate_names = [canonical_name]
             if not raw_name or (
                 len(raw_name) <= 80
@@ -851,7 +855,7 @@ def _canonical_supplied_mcp_credentials(
             ):
                 candidate_names.append(raw_name)
             for candidate_name in candidate_names:
-                alias = (agent_name, candidate_name, url)
+                alias = (agent_name, candidate_name, url_key)
                 previous = aliases.get(alias)
                 if previous is not None and previous != canonical_identity:
                     raise LegacyRecoveryError("legacy_mcp_recovery_duplicate")
@@ -864,7 +868,7 @@ def _canonical_supplied_mcp_credentials(
         agent_name = str(raw.get("agentName") or "").strip()
         name = str(raw.get("name") or "").strip()
         url = _safe_mcp_url(raw.get("url"))
-        input_identity = (agent_name, name, url)
+        input_identity = (agent_name, name, _canonical_mcp_url_key(url))
         identity = aliases.get(input_identity)
         if identity is None:
             if not agent_name or _MCP_NAME_RE.fullmatch(name) is None:
@@ -953,7 +957,7 @@ def canonicalize_source_preserving_mcp_credentials(
                 raise LegacyRecoveryError("legacy_overlay_mcp_stdio_unsupported")
             url = _safe_mcp_url(raw_tool.get("url"))
             name = _mcp_name(raw_tool.get("name"), url, index)
-            identity = (agent_name, name, url)
+            identity = (agent_name, name, _canonical_mcp_url_key(url))
             if identity in seen_identities:
                 raise LegacyRecoveryError("legacy_mcp_recovery_duplicate")
             seen_identities.add(identity)
@@ -1013,6 +1017,7 @@ def build_sidecar_mcp_servers_json(
 
     servers: list[dict[str, Any]] = []
     seen_names: set[str] = set()
+    seen_urls: set[str] = set()
     used_supplied: set[tuple[str, str, str]] = set()
     for node in _draft_nodes(draft):
         agent_name = str(node.get("name") or "").strip()
@@ -1028,10 +1033,13 @@ def build_sidecar_mcp_servers_json(
                 continue
             url = _safe_mcp_url(raw_tool.get("url"))
             name = _mcp_name(raw_tool.get("name"), url, index)
+            url_key = _canonical_mcp_url_key(url)
             if name in seen_names:
-                raise LegacyRecoveryError("legacy_mcp_recovery_duplicate")
+                raise LegacyRecoveryError("legacy_mcp_name_duplicate")
+            if url_key in seen_urls:
+                raise LegacyRecoveryError("legacy_mcp_url_duplicate")
             reference = str(raw_tool.get("authTokenEnv") or "").strip()
-            identity = (agent_name, name, url)
+            identity = (agent_name, name, url_key)
             server: dict[str, Any] = {"name": name, "url": url}
             secret = supplied.get(identity, "")
             if secret:
@@ -1046,41 +1054,27 @@ def build_sidecar_mcp_servers_json(
                 }
             servers.append(server)
             seen_names.add(name)
+            seen_urls.add(url_key)
     if used_supplied != set(supplied):
         raise LegacyRecoveryError("legacy_mcp_credential_identity_changed")
     return json.dumps(servers, ensure_ascii=False, separators=(",", ":"))
 
 
-def mcp_editor_draft_with_credentials(
+def mcp_editor_draft_without_credentials(
     draft: Mapping[str, Any],
-    secret_values: Mapping[str, str],
 ) -> dict[str, Any]:
-    """Populate only referenced MCP credentials for an authenticated editor.
+    """Return an editor draft containing references but never secret values."""
 
-    The returned copy is intended for one Studio edit response. Callers must
-    not log or persist it. Values are matched through the server-recovered
-    environment reference, so a browser cannot select an arbitrary Runtime
-    environment variable for disclosure.
-    """
-
-    revealed = copy.deepcopy(dict(draft))
-    for node in _draft_nodes(revealed):
+    sanitized = copy.deepcopy(dict(draft))
+    for node in _draft_nodes(sanitized):
         raw_tools = node.get("mcpTools")
         if not isinstance(raw_tools, list):
             continue
         for raw_tool in raw_tools:
             if not isinstance(raw_tool, dict):
                 raise LegacyRecoveryError("legacy_overlay_mcp_invalid")
-            reference = str(raw_tool.get("authTokenEnv") or "").strip()
-            if not reference:
-                raw_tool.pop("authToken", None)
-                continue
-            value = secret_values.get(reference, "")
-            if value:
-                raw_tool["authToken"] = _validated_secret(value)
-            else:
-                raw_tool.pop("authToken", None)
-    return revealed
+            raw_tool.pop("authToken", None)
+    return sanitized
 
 
 def _source_preserving_mcp_configuration(
@@ -1150,11 +1144,16 @@ def _source_preserving_mcp_configuration(
 
 
 def _safe_mcp_url(value: Any) -> str:
-    url = str(value or "").strip().rstrip("/")
+    url = str(value or "").strip()
     parsed = urlsplit(url)
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise LegacyRecoveryError("legacy_mcp_url_invalid") from error
     if (
-        parsed.scheme not in {"http", "https"}
+        parsed.scheme.casefold() not in {"http", "https"}
         or not parsed.netloc
+        or not parsed.hostname
         or parsed.username is not None
         or parsed.password is not None
         or parsed.query
@@ -1162,7 +1161,25 @@ def _safe_mcp_url(value: Any) -> str:
         or len(url) > 4096
     ):
         raise LegacyRecoveryError("legacy_mcp_url_invalid")
+    del port
     return url
+
+
+def _canonical_mcp_url_key(value: Any) -> str:
+    """Normalize an HTTP MCP URL for equality checks without rewriting it."""
+
+    url = _safe_mcp_url(value)
+    parsed = urlsplit(url)
+    scheme = parsed.scheme.casefold()
+    hostname = (parsed.hostname or "").casefold()
+    host = f"[{hostname}]" if ":" in hostname else hostname
+    port = parsed.port
+    if port is not None and not (
+        (scheme == "http" and port == 80) or (scheme == "https" and port == 443)
+    ):
+        host = f"{host}:{port}"
+    path = parsed.path.rstrip("/")
+    return f"{scheme}://{host}{path}"
 
 
 def _mcp_name(value: Any, url: str, index: int) -> str:

@@ -1395,6 +1395,7 @@
     "totalItems": "{{count}} items",
     "cannotLoadSpaces": "Unable to load Skill spaces",
     "someSpacesFailed": "Some Skill spaces failed to load",
+    "degradedRelationWarning": "Some relations are invalid. Readable skills have been restored.",
     "downloadZip": "Download ZIP",
     "optimize": "Optimize",
     "closeSkillDetails": "Close Skill details",
