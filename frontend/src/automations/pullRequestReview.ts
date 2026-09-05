@@ -1,4 +1,4 @@
-import { initialAutomationValues, repositoryField } from "./githubFields";
+import { initialAutomationValues } from "./githubFields";
 import type { GitHubAutomationDefinition } from "./types";
 
 export const pullRequestReviewAutomation: GitHubAutomationDefinition = {
@@ -12,7 +12,7 @@ export const pullRequestReviewAutomation: GitHubAutomationDefinition = {
   subtitle: "通过 GitHub App 触发 Sandbox 评审并把结果发布到 Pull Request",
   panel: "安装 GitHub App 到目标仓库后，同仓库非草稿 PR 会自动触发评审。",
   submitLabel: "安装 GitHub App",
-  fields: [repositoryField],
+  fields: [],
   initialValues: ({ cloudProvider }) => initialAutomationValues(cloudProvider),
   regionHelp: "",
   secrets: () => [],

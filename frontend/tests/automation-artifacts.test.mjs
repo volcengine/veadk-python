@@ -73,8 +73,7 @@ test("defines pull request review as a GitHub App automation", async () => {
     "../src/automations/pullRequestReview.ts",
   );
   assert.equal(pullRequestReviewAutomation.submitLabel, "安装 GitHub App");
-  assert.equal(pullRequestReviewAutomation.fields.length, 1);
-  assert.equal(pullRequestReviewAutomation.fields[0].name, "repository");
+  assert.deepEqual(pullRequestReviewAutomation.fields, []);
   assert.deepEqual(pullRequestReviewAutomation.secrets({ cloudProvider: "volcengine" }), []);
   assert.match(pullRequestReviewAutomation.panel, /GitHub App/);
   await assert.rejects(
@@ -84,6 +83,21 @@ test("defines pull request review as a GitHub App automation", async () => {
     ),
     /GitHub App 授权模式/,
   );
+});
+
+test("derives the repository from a GitHub pull request URL", async () => {
+  const { repositoryFromGitHubPullRequestUrl } = await loadTypeScriptModule(
+    "../src/adk/githubIntegration.ts",
+  );
+  assert.equal(
+    repositoryFromGitHubPullRequestUrl("https://github.com/Rhosmarie/nice/pull/25"),
+    "Rhosmarie/nice",
+  );
+  assert.equal(
+    repositoryFromGitHubPullRequestUrl(" https://github.com/Rhosmarie/nice/pull/25/ "),
+    "Rhosmarie/nice",
+  );
+  assert.equal(repositoryFromGitHubPullRequestUrl("https://github.com/Rhosmarie/nice"), "");
 });
 
 test("rejects invalid Runtime settings before generating workflows", async () => {

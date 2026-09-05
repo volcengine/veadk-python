@@ -18,6 +18,7 @@ import {
   type GitHubPullRequestResult,
   type GitHubPullRequestReviewResult,
   normalizeGitHubRepository,
+  repositoryFromGitHubPullRequestUrl,
 } from "../adk/githubIntegration";
 import {
   cloudRegionOptions,
@@ -123,11 +124,6 @@ function validateField(name: FieldName, value: string, required: boolean): strin
   return "";
 }
 
-function pullRequestRepository(value: string): string {
-  const match = value.trim().match(/^https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/pull\/[1-9][0-9]*\/?$/);
-  return match?.[1] ?? "";
-}
-
 function repositoryUrl(value: string): string {
   try {
     return `https://github.com/${normalizeGitHubRepository(value)}`;
@@ -187,6 +183,11 @@ export function GitHubIntegration({
     : "";
   const githubAppName = githubAppConfig?.appSlug || "agentkit-veadk-studio";
   const githubAppInstallUrl = githubAppConfig?.installUrl || `https://github.com/apps/${githubAppName}/installations/new`;
+  const reviewRepository = repositoryFromGitHubPullRequestUrl(pullRequestUrl);
+  const enabledReviewRepositories = githubAppRepositories.filter((repository) => repository.reviewEnabled);
+  const installedReviewRepository = reviewRepository
+    ? githubAppRepositories.find((repository) => repository.fullName.toLowerCase() === reviewRepository.toLowerCase())
+    : undefined;
 
   useEffect(() => () => {
     submitAbortRef.current?.abort();
@@ -357,19 +358,17 @@ export function GitHubIntegration({
 
   const startReview = async () => {
     const errors: Partial<Record<FieldName, string>> = {};
-    const repositoryError = validateField("repository", form.repository, true);
     const pullRequestError = validateField("pullRequestUrl", pullRequestUrl, true);
-    if (repositoryError) errors.repository = repositoryError;
     if (pullRequestError) errors.pullRequestUrl = pullRequestError;
-    if (!pullRequestError && !repositoryError) {
-      try {
-        const configuredRepository = normalizeGitHubRepository(form.repository);
-        const prRepository = pullRequestRepository(pullRequestUrl);
-        if (prRepository && prRepository !== configuredRepository) {
-          errors.pullRequestUrl = "PR URL 必须属于上方填写的 GitHub Repo";
-        }
-      } catch (error) {
-        errors.repository = error instanceof Error ? error.message : String(error);
+    if (!pullRequestError) {
+      const repository = repositoryFromGitHubPullRequestUrl(pullRequestUrl);
+      const installedRepository = githubAppRepositories.find((item) => (
+        item.fullName.toLowerCase() === repository.toLowerCase()
+      ));
+      if (!installedRepository) {
+        errors.pullRequestUrl = "PR URL 所属仓库尚未安装 GitHub App";
+      } else if (!installedRepository.reviewEnabled) {
+        errors.pullRequestUrl = `请先在下方开启 ${installedRepository.fullName} 的评审`;
       }
     }
     setFieldErrors(errors);
@@ -463,11 +462,9 @@ export function GitHubIntegration({
             <p>{definition.panel}</p>
           </div>
           <form className="github-release-form" onSubmit={onSubmit} onKeyDown={stopComposingSubmit} noValidate>
-            <div className="github-field-grid">
-              {definition.fields
-                .filter((fieldDefinition) => !isPullRequestReview || fieldDefinition.name === "repository")
-                .map(field)}
-              {!isPullRequestReview ? (
+            {!isPullRequestReview ? (
+              <div className="github-field-grid">
+                {definition.fields.map(field)}
                 <div className="github-field">
                   <label id="github-region-label">
                     <span>地域</span>
@@ -521,8 +518,8 @@ export function GitHubIntegration({
                     {definition.regionHelp}
                   </span>
                 </div>
-              ) : null}
-            </div>
+              </div>
+            ) : null}
 
             {isPullRequestReview ? (
               <>
@@ -702,7 +699,7 @@ export function GitHubIntegration({
                     <span>Pull Request URL</span>
                     {requiredMark(pullRequestUrl, true)}
                   </label>
-                  <span className="github-field-note">必须属于上方 GitHub Repo</span>
+                  <span className="github-field-note">会自动识别 PR 所属仓库</span>
                 </div>
                 <input
                   id="github-pull-request-url"
@@ -722,6 +719,20 @@ export function GitHubIntegration({
                   aria-describedby={fieldErrors.pullRequestUrl ? "github-pull-request-url-error" : undefined}
                 />
                 {fieldErrors.pullRequestUrl ? <span id="github-pull-request-url-error" className="github-field-error" role="alert">{fieldErrors.pullRequestUrl}</span> : null}
+                {!fieldErrors.pullRequestUrl && reviewRepository ? (
+                  <span className="github-field-help">
+                    {installedReviewRepository?.reviewEnabled
+                      ? `将使用 GitHub App 评审 ${installedReviewRepository.fullName}`
+                      : installedReviewRepository
+                        ? `请先在下方开启 ${installedReviewRepository.fullName} 的评审`
+                        : `PR URL 所属仓库 ${reviewRepository} 尚未安装 GitHub App`}
+                  </span>
+                ) : null}
+                {!fieldErrors.pullRequestUrl && !reviewRepository && enabledReviewRepositories.length > 0 ? (
+                  <span className="github-field-help">
+                    已启用仓库：{enabledReviewRepositories.map((repository) => repository.fullName).join("、")}
+                  </span>
+                ) : null}
               </div>
               {reviewError ? <div className="github-submit-message is-error" role="alert">{reviewError}</div> : null}
               {reviewResult ? (

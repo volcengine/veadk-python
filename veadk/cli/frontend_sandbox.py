@@ -52,6 +52,8 @@ from veadk.cli.codex_app_server import (
     CodexAppServerError,
     CodexAppServerEvent,
     CodexAppServerSession,
+    CodexAppServerTransportError,
+    CodexAppServerTurnTimeoutError,
     CodexDirectoryListing,
     CodexImportedImage,
     CodexImportedMessage,
@@ -106,11 +108,13 @@ _CODEX_PROJECT_HANDOFF_PAIRING_MIN_TTL_SECONDS = 60
 _CODEX_PROJECT_HANDOFF_PAIRING_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
 _CODEX_PROJECT_HANDOFF_PAIRING_LENGTH = 8
 _SANDBOX_AGENT_TOOL_ENVS = {
+    "agentkit-cli": ("SANDBOX_AGENTKIT_CLI_TOOL",),
     "deepseek-harness": (_SANDBOX_CHAT_TOOL_ENV,),
     "openclaw": ("SANDBOX_CHAT_OPENCLAW", "SANDBOX_OPENCLAW_TOOL"),
     "hermes": ("SANDBOX_CHAT_HERMES", "SANDBOX_HERMES_TOOL"),
 }
 _SANDBOX_AGENT_SNAPSHOT_TOOL_ENVS = {
+    "agentkit-cli": "SANDBOX_AGENTKIT_CLI_SNAPSHOT",
     "deepseek-harness": _SANDBOX_CHAT_SNAPSHOT_TOOL_ENV,
     "openclaw": "SANDBOX_CHAT_OPENCLAW_SNAPSHOT",
     "hermes": "SANDBOX_CHAT_HERMES_SNAPSHOT",
@@ -247,6 +251,18 @@ class SandboxInvocationError(SandboxError):
 
     code = "SANDBOX_INVOCATION_FAILED"
     retryable = True
+
+
+class SandboxTransportError(SandboxInvocationError):
+    """The coding agent transport disconnected during a conversation turn."""
+
+    code = "SANDBOX_TRANSPORT_FAILED"
+
+
+class SandboxTurnTimeoutError(SandboxInvocationError):
+    """The coding agent turn stopped after exceeding its inactivity timeout."""
+
+    code = "SANDBOX_TURN_TIMEOUT"
 
 
 class SandboxCapacityError(SandboxError):
@@ -1562,11 +1578,13 @@ class SandboxConversationService:
         tool_id: str | None = None,
         snapshot_tool_id: str | None = None,
         agent_kind: str = _SANDBOX_CODEX_AGENT_KIND,
+        managed_tool_spec: Any | None = None,
     ) -> None:
         self._gateway = gateway
         self._configured_tool_id = (tool_id or "").strip()
         self._configured_snapshot_tool_id = (snapshot_tool_id or "").strip()
         self._agent_kind = agent_kind
+        self._managed_tool_spec = managed_tool_spec
         self._sessions: dict[tuple[str, str], SandboxConversation] = {}
         self._registry_lock = asyncio.Lock()
         self._sessions_starting = 0
@@ -1932,6 +1950,14 @@ class SandboxConversationService:
                     finally:
                         session.pending_prompt = ""
                         session.pending_prompt_timestamp = 0
+            except CodexAppServerTurnTimeoutError as error:
+                if listening:
+                    queue.put_nowait(
+                        SandboxTurnTimeoutError(_safe_error_message(error))
+                    )
+            except CodexAppServerTransportError as error:
+                if listening:
+                    queue.put_nowait(SandboxTransportError(_safe_error_message(error)))
             except CodexAppServerError as error:
                 if listening:
                     queue.put_nowait(SandboxInvocationError(_safe_error_message(error)))
@@ -2491,8 +2517,15 @@ class SandboxAgentSessionService:
         kind: str,
         tool_id: str | None = None,
         snapshot_tool_id: str | None = None,
+        managed_tool_spec: Any | None = None,
         surface_path: str | None = None,
         filter_agent_kind: bool = False,
+        display_name_prefix: str = "",
+        allow_admin_cross_owner: bool = True,
+        terminal_initial_command: str = "",
+        surface_start_command: str = "",
+        surface_ready_path: str = "",
+        unconfigured_message: str = "",
     ) -> None:
         if kind not in _SANDBOX_AGENT_TOOL_ENVS:
             raise ValueError(f"Unsupported Studio sandbox agent kind: {kind}")
@@ -2503,6 +2536,13 @@ class SandboxAgentSessionService:
         self._filter_agent_kind = filter_agent_kind
         self._configured_tool_id = (tool_id or "").strip()
         self._configured_snapshot_tool_id = (snapshot_tool_id or "").strip()
+        self._managed_tool_spec = managed_tool_spec
+        self._display_name_prefix = display_name_prefix
+        self._allow_admin_cross_owner = allow_admin_cross_owner
+        self._terminal_initial_command = terminal_initial_command
+        self._surface_start_command = surface_start_command
+        self._surface_ready_path = surface_ready_path
+        self._unconfigured_message = unconfigured_message
         self._workspaces: dict[
             tuple[str, str], tuple[SandboxCloudSession, str, float]
         ] = {}
@@ -2537,7 +2577,7 @@ class SandboxAgentSessionService:
         enabled = bool(tools.configured)
         return {
             "enabled": enabled,
-            "reason": "" if enabled else "管理员未配置",
+            "reason": "" if enabled else self._unconfigured_message or "管理员未配置",
             "persistentEnabled": bool(tools.persistent),
             "persistentReason": "" if tools.persistent else "管理员未配置快照版 Tool",
         }

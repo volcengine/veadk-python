@@ -195,7 +195,13 @@ test("GitHub detail keeps credentials ephemeral and exposes accessible submissio
   assert.match(githubSource, /getGitHubAppConfig/);
   assert.match(githubSource, /安装 GitHub App/);
   assert.match(githubSource, /立即评审一个 PR/);
-  assert.match(githubSource, /className="github-field-note">必须属于上方 GitHub Repo/);
+  assert.match(githubSource, /会自动识别 PR 所属仓库/);
+  assert.match(githubSource, /repositoryFromGitHubPullRequestUrl\(pullRequestUrl\)/);
+  assert.match(githubSource, /PR URL 所属仓库尚未安装 GitHub App/);
+  assert.match(githubSource, /请先在下方开启 .* 的评审/);
+  assert.doesNotMatch(githubSource, /PR URL 必须属于上方填写的 GitHub Repo/);
+  assert.doesNotMatch(githubSource, /fieldDefinition\.name === "repository"/);
+  assert.doesNotMatch(githubSource, /className="github-field-note">必须属于上方 GitHub Repo/);
   assert.doesNotMatch(githubSource, /新建一次性 Codex Sandbox Session/);
   assert.doesNotMatch(githubSource, /发起成功后会自动打开新 Session/);
   assert.match(githubSource, /startGitHubPullRequestReview/);

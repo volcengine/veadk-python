@@ -176,6 +176,13 @@ export function normalizeGitHubRepository(value: string): string {
   return candidate;
 }
 
+export function repositoryFromGitHubPullRequestUrl(value: string): string {
+  const match = value.trim().match(
+    /^https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/pull\/[1-9][0-9]*\/?$/,
+  );
+  return match?.[1] ?? "";
+}
+
 export function normalizeRepositoryPath(value: string, fallback = "."): string {
   const candidate = value.trim() || fallback;
   const parts = candidate.split("/");
