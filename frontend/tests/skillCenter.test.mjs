@@ -130,6 +130,20 @@ test("SkillSpace downloads prefer full package files over SKILL.md only", () => 
   );
 });
 
+test("dangling SkillSpace relations use name lookup and show a degraded warning", () => {
+  assert.match(skillspaceSource, /lookupByName\?: boolean/);
+  assert.match(skillspaceSource, /skill\.skillId \|\| skill\.skillName/);
+  assert.match(skillCenterSource, /skillCenter\.degradedRelationWarning/);
+  assert.equal(
+    uiChinese.skillCenter.degradedRelationWarning,
+    "部分关联异常，已恢复可读取技能",
+  );
+  assert.equal(
+    uiEnglish.skillCenter.degradedRelationWarning,
+    "Some relations are invalid. Readable skills have been restored.",
+  );
+});
+
 test("skill details render external markdown with raw HTML disabled", () => {
   assert.match(markdownSource, /allowRawHtml = true/);
   assert.match(

@@ -149,6 +149,7 @@
 }
 
 .skillcenter-inline-error { margin-top: 16px; padding: 10px 12px; border: 1px solid hsl(var(--destructive) / .2); border-radius: 8px; background: hsl(var(--destructive) / .05); color: hsl(var(--destructive)); font-size: 12px; }
+.skillcenter-inline-warning { margin-bottom: 12px; padding: 10px 12px; border: 1px solid hsl(38 80% 45% / .24); border-radius: 8px; background: hsl(38 80% 50% / .08); color: hsl(var(--foreground)); font-size: 12px; }
 .skillcenter-overview { padding: 0; }
 .skillcenter-overview .skillcenter-detail-facts {
   grid-template-columns: minmax(0, 1fr);

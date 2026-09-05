@@ -561,6 +561,8 @@
       "duplicateName": "Agent names must be unique within this structure",
       "missingDescription": "Description is required",
       "mcpAuthRequired": "Confirm how to handle authentication after changing the MCP address",
+      "mcpDuplicateName": "MCP names must be unique",
+      "mcpDuplicateUrl": "Remove the duplicate MCP endpoint before publishing",
       "missingSubagent": "A subagent is required",
       "missingPrompt": "System prompt is required",
       "missingSubagentDetail": "Add at least one subagent to {{type}} before debugging or publishing.",

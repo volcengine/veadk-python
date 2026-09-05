@@ -43,6 +43,7 @@ from veadk.cli.studio_companion import (
     required_agentkit_cli_version,
     validate_installed_agentkit_cli,
 )
+from veadk.cli.studio_dependencies import stage_studio_agentkit_cli_archive
 
 
 def _script(version: str = AGENTKIT_CLI_VERSION) -> bytes:
@@ -86,6 +87,27 @@ def _write_test_archive(
     content = _tar_bytes(base, member_name=member_name, member_type=member_type)
     path.write_bytes(content)
     return replace(base, sha256=hashlib.sha256(content).hexdigest())
+
+
+def test_staged_cli_archive_is_runtime_readable_under_secure_umask(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    base = agentkit_cli_artifact(system="Linux", machine="x86_64")
+    artifact = _write_test_archive(source / base.filename)
+    previous_umask = os.umask(0o077)
+    try:
+        target = stage_studio_agentkit_cli_archive(
+            destination,
+            source_dir=source,
+            artifact=artifact,
+        )
+    finally:
+        os.umask(previous_umask)
+
+    assert stat.S_IMODE(target.stat().st_mode) == 0o644
 
 
 @pytest.mark.parametrize(

@@ -98,6 +98,7 @@ import {
   deploymentMcpSecretValues,
   mcpAuthTokenInputValue,
   mcpCredentialActionRequired,
+  mcpConfigurationConflict,
   mcpCredentialReuseValues,
   mcpUrlNeedsPathWarning,
   prepareMcpAuth,
@@ -2324,6 +2325,8 @@ type NodeProblemCode =
   | "duplicateName"
   | "missingDescription"
   | "mcpAuthRequired"
+  | "mcpDuplicateName"
+  | "mcpDuplicateUrl"
   | "missingSubagent"
   | "missingPrompt";
 
@@ -2341,6 +2344,20 @@ function treeProblems(
   path: NodePath = [],
 ): TreeProblem[] {
   const out: TreeProblem[] = [];
+  if (path.length === 0) {
+    const conflict = mcpConfigurationConflict(root);
+    if (conflict) {
+      out.push({
+        path,
+        name: root.name.trim(),
+        agentType: root.agentType,
+        problem:
+          conflict === "duplicateName"
+            ? "mcpDuplicateName"
+            : "mcpDuplicateUrl",
+      });
+    }
+  }
   const remote = isA2aType(root.agentType);
   const p = nodeProblem(root, duplicateNames, path.length === 0);
   if (p) {

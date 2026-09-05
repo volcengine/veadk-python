@@ -24,6 +24,10 @@ from typing import Any
 import httpx
 
 from frontend.server.agentkit_clients import create_agentkit_client
+from frontend.server.skills.repository import (
+    DEGRADED_SKILLSPACE_WARNING,
+    list_skill_space_items,
+)
 from frontend.server.skills.storage import resolve_skill_publish_credentials
 from frontend.server.storage import StudioProvider
 
@@ -124,19 +128,19 @@ class StudioSkillCatalog:
         space_id: str,
         region: str,
     ) -> dict[str, Any]:
-        from agentkit.sdk.skills.types import ListSkillsBySkillSpaceRequest
+        from agentkit.sdk.skills import types as skills_types
 
         if not re.fullmatch(r"[A-Za-z0-9._~-]{1,256}", space_id):
             raise StudioSkillCatalogError(400, "invalid Skill Space id")
         resolved_region = self.regions(region)[0]
         try:
-            response = await asyncio.to_thread(
-                self._client(resolved_region).list_skills_by_skill_space,
-                ListSkillsBySkillSpaceRequest(
-                    SkillSpaceId=space_id,
-                    PageNumber=1,
-                    PageSize=100,
-                ),
+            result = await asyncio.to_thread(
+                list_skill_space_items,
+                self._client(resolved_region),
+                skills_types,
+                space_id=space_id,
+                page=1,
+                page_size=100,
             )
         except StudioSkillCatalogError:
             raise
@@ -145,22 +149,16 @@ class StudioSkillCatalog:
                 502,
                 "Studio could not load Skills from this Skill Space.",
             ) from error
-        items = list(response.items or [])
-        return {
-            "items": [
-                {
-                    "skillId": skill.skill_id or "",
-                    "skillName": skill.skill_name or "",
-                    "skillDescription": skill.skill_description or "",
-                    "version": skill.version or "",
-                    "skillStatus": skill.skill_status or "",
-                }
-                for skill in items
-            ],
-            "totalCount": (
-                response.total_count if response.total_count is not None else len(items)
-            ),
+        payload: dict[str, Any] = {
+            "items": list(result.items),
+            "totalCount": result.total_count,
         }
+        if result.degraded:
+            payload.update(
+                degraded=True,
+                warnings=[DEGRADED_SKILLSPACE_WARNING],
+            )
+        return payload
 
     async def search_findskill(
         self,
@@ -196,13 +194,13 @@ class StudioSkillCatalog:
             name = str(raw.get("Name") or "").strip()
             if not slug or not name:
                 continue
-            metadata = (
-                raw.get("Metadata") if isinstance(raw.get("Metadata"), dict) else {}
+            raw_metadata = raw.get("Metadata")
+            metadata: dict[str, Any] = (
+                dict(raw_metadata) if isinstance(raw_metadata, dict) else {}
             )
-            evaluation = (
-                raw.get("EvaluationMetadata")
-                if isinstance(raw.get("EvaluationMetadata"), dict)
-                else {}
+            raw_evaluation = raw.get("EvaluationMetadata")
+            evaluation: dict[str, Any] = (
+                dict(raw_evaluation) if isinstance(raw_evaluation, dict) else {}
             )
             items.append(
                 {
