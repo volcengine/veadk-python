@@ -26,3 +26,10 @@
   height: 16px;
   color: hsl(var(--muted-foreground));
 }
+
+.account-menu-action__label {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}

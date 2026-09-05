@@ -117,6 +117,10 @@ test("the account menu exposes an accessible language radio submenu", () => {
   assert.match(sidebarSource, /void changeLanguage\(locale\)/);
   assert.match(
     sidebarSource,
+    /Menu\.SubTrigger[\s\S]*?account-menu-action__label[\s\S]*?LanguageIcon[\s\S]*?account\.language/,
+  );
+  assert.match(
+    sidebarSource,
     /<Menu\.SubContent sideOffset=\{6\} minWidth=\{136\}>/,
   );
 });

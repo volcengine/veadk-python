@@ -307,8 +307,10 @@ function SidebarUser({
             </Menu.Item>
             <Menu.Sub>
               <Menu.SubTrigger className="account-menu-action">
-                <LanguageIcon className="icon" />
-                {t("sidebar:account.language")}
+                <span className="account-menu-action__label">
+                  <LanguageIcon className="icon" />
+                  {t("sidebar:account.language")}
+                </span>
               </Menu.SubTrigger>
               <Menu.SubContent sideOffset={6} minWidth={136}>
                 <Menu.RadioGroup
