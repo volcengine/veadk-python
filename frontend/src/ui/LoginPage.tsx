@@ -152,7 +152,7 @@ export function LoginPage({ branding, cloudProvider, onUsername }: LoginPageProp
         </div>
       </main>
 
-      <footer className="login-footer">© 2026 VeADK. All rights reserved.</footer>
+      <footer className="login-footer">{t("login.copyright", { year: 2026 })}</footer>
     </div>
   );
 }

@@ -12,7 +12,8 @@
       "byteplus": "BytePlus AgentKit provides enterprise-grade Agent solutions"
     },
     "legalPrefix": "By continuing, you acknowledge that you have read and agree to the AgentKit",
-    "terms": "Product and Service Terms"
+    "terms": "Product and Service Terms",
+    "copyright": "© {{year}} VeADK. All rights reserved."
   },
   "authExpired": {
     "title": "Your session has expired",

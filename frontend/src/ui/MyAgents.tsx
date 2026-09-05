@@ -205,18 +205,16 @@ export function formatCardUpdateLabel(value: string, nowMs = Date.now()): string
 export function formatSandboxRemainingTime(
   expireAt: string,
   nowMs = Date.now(),
-  locale = "zh-CN",
+  t: TFunction<"ui">,
 ): string {
   const expireTime = Date.parse(expireAt);
   if (!Number.isFinite(expireTime) || expireTime - nowMs < 60_000) {
-    return locale.toLowerCase().startsWith("zh") ? "即将清空" : "Expiring soon";
+    return t("myAgents.expiringSoon");
   }
   const remainingMinutes = Math.ceil((expireTime - nowMs) / 60_000);
   const hours = Math.floor(remainingMinutes / 60);
   const minutes = remainingMinutes % 60;
-  return locale.toLowerCase().startsWith("zh")
-    ? `${hours} 小时 ${minutes} 分钟`
-    : `${hours} hr ${minutes} min`;
+  return t("myAgents.sandboxRemaining", { hours, minutes });
 }
 
 function runtimeToAgent(runtime: CloudRuntime, t: TFunction<"ui">): MyAgentCardData {
@@ -433,7 +431,7 @@ function AgentCard({
                 ? t("myAgents.wakeable")
                 : agent.sandbox.persistent
                   ? t("myAgents.neverExpires")
-                  : formatSandboxRemainingTime(agent.sandbox.expireAt, nowMs, i18n.resolvedLanguage ?? i18n.language),
+                  : formatSandboxRemainingTime(agent.sandbox.expireAt, nowMs, t),
               className: `my-agent-expiry${
                 agent.sandbox.resourceType === "session" && agent.sandbox.persistent
                   ? ""

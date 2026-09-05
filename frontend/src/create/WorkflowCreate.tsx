@@ -377,6 +377,12 @@ function WorkflowCreateInner({
             fitView
             fitViewOptions={{ padding: 0.3, maxZoom: 1 }}
             proOptions={{ hideAttribution: true }}
+            ariaLabelConfig={{
+              "controls.ariaLabel": t("workflow.controls.ariaLabel"),
+              "controls.zoomIn.ariaLabel": t("workflow.controls.zoomIn"),
+              "controls.zoomOut.ariaLabel": t("workflow.controls.zoomOut"),
+              "controls.fitView.ariaLabel": t("workflow.controls.fitView"),
+            }}
           >
             <Background gap={16} size={1} color="hsl(240 5.9% 88%)" />
             <Controls showInteractive={false} />

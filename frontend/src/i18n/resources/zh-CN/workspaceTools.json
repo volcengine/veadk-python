@@ -26,6 +26,7 @@
     "close": "关闭",
     "listAria": "产物列表",
     "loadFailed": "产物加载失败",
+    "loadDetailFallback": "请检查存储配置后重试。",
     "reload": "重新加载",
     "noMatch": "没有找到匹配的产物",
     "noArtifacts": "您还没有任何产物",

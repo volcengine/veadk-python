@@ -66,6 +66,12 @@ const resourceCollectionStylesSource = readFileSync(
   new URL("../src/ui/ResourceCollection.css", import.meta.url),
   "utf8",
 );
+const uiEnglish = JSON.parse(
+  readFileSync(new URL("../src/i18n/resources/en-US/ui.json", import.meta.url), "utf8"),
+);
+const uiChinese = JSON.parse(
+  readFileSync(new URL("../src/i18n/resources/zh-CN/ui.json", import.meta.url), "utf8"),
+);
 test("skill center uses the Studio page shell and opens spaces as a detail page", () => {
   assert.doesNotMatch(skillCenterSource, /Find Skill|findskill|SKILL_URL|skill-frame/);
   assert.match(skillCenterSource, /defaultCloudRegion\(cloudProvider\)/);
@@ -337,6 +343,10 @@ test("skill space cards expose direct actions and structured metadata", () => {
   assert.doesNotMatch(skillCenterSource, /menuLabel=\{`更多空间操作：\$\{space\.name\}`\}/);
   assert.doesNotMatch(skillCenterSource, /<small>地域<\/small>/);
   assert.match(skillCenterSource, /label: t\("skillCenter\.skillCount"\), value: t\("skillCenter\.skillCountValue", \{ count: space\.skillCount \?\? 0 \}\)/);
+  assert.equal(uiEnglish.skillCenter.skillCountValue_one, "{{count}} Skill");
+  assert.equal(uiEnglish.skillCenter.skillCountValue_other, "{{count}} Skills");
+  assert.equal(uiChinese.skillCenter.skillCountValue_one, "{{count}} 技能");
+  assert.equal(uiChinese.skillCenter.skillCountValue_other, "{{count}} 技能");
   assert.match(skillCenterSource, /label: t\("skillCenter\.updatedAt"\), value: formatRelativeTimeLabel\(space\.updatedAt/);
   assert.doesNotMatch(skillCenterSource, /metadata=\{\[[\s\S]*?label: "地域"/);
   assert.doesNotMatch(skillCenterSource, /<small>Project<\/small>/);

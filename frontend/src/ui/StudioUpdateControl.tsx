@@ -800,7 +800,7 @@ export function StudioUpdateControl({
                     <dd>{targetVersion}</dd>
                   </div>
                   <div>
-                    <dt>Commit</dt>
+                    <dt>{t("studioUpdate.commit")}</dt>
                     <dd>{(targetRelease?.gitSha || status.latestGitSha).slice(0, 8)}</dd>
                   </div>
                 </dl>

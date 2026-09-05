@@ -402,6 +402,7 @@
   },
   "environmentCenter": {
     "title": "Environments",
+    "loadFailed": "Failed to load environments. Check the storage configuration and try again.",
     "create": "New environment",
     "configure": "Configure environment",
     "details": "Environment details",
@@ -660,6 +661,12 @@
   },
   "githubCicd": {
     "repository": "GitHub repository",
+    "githubUrl": "GitHub URL",
+    "token": "Token",
+    "sessionToken": "{{provider}} Session Token",
+    "runtime": "Runtime",
+    "commit": "Commit",
+    "workflow": "Workflow",
     "syncFailed": "Failed to sync GitHub code",
     "status": { "mounted": "Mounted", "bound": "Bound", "synced": "Synced", "created": "Created" },
     "volcengine": "Volcengine",
@@ -775,6 +782,8 @@
     "autoRegistry": "agentkit-platform-{account ID}",
     "autoRepositoryName": "{{name}}-{4 random characters}",
     "registryNameNote": "The account ID is resolved and the repository suffix is generated during deployment.",
+    "workspace": "Workspace",
+    "pipeline": "Pipeline",
     "workspaceName": "Workspace name",
     "pipelineName": "Pipeline name",
     "existingWorkspace": "Existing CodePipeline Workspace",
@@ -783,6 +792,7 @@
     "pipelineNameNote": "The Pipeline name matches the Runtime name."
   },
   "studioUpdate": {
+    "commit": "Commit",
     "steps": {
       "permissions": "Preflight OTA permissions",
       "resolving": "Resolve target version",
@@ -883,6 +893,7 @@
   "projectPreview": {
     "deploy": "Deploy",
     "update": "Update",
+    "planHash": "Plan hash",
     "backToConfiguration": "Back to configuration",
     "releaseRegion": "Release region",
     "deployRegion": "Deployment region",
@@ -1306,6 +1317,8 @@
     "viewDetails": "View details for {{name}}",
     "time": "Time",
     "remainingTime": "Time remaining",
+    "expiringSoon": "Expiring soon",
+    "sandboxRemaining": "{{hours}} hr {{minutes}} min",
     "wakeable": "Wakeable",
     "neverExpires": "Never expires",
     "editDraftNamed": "Edit draft {{name}}",
@@ -1394,7 +1407,8 @@
     "backToSpaces": "Back to Skill spaces",
     "overview": "Overview",
     "skillCount": "Skills",
-    "skillCountValue": "{{count}} Skills",
+    "skillCountValue_one": "{{count}} Skill",
+    "skillCountValue_other": "{{count}} Skills",
     "updatedAt": "Updated",
     "skillsInSpace": "Skills in {{name}}",
     "searchSkills": "Search Skills",

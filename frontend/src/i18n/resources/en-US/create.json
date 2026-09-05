@@ -153,6 +153,12 @@
     "label": "Agent execution canvas",
     "readOnlyLabel": "Read-only agent execution canvas",
     "minimapLabel": "Execution flow minimap",
+    "controls": {
+      "ariaLabel": "Execution flow controls",
+      "zoomIn": "Zoom in",
+      "zoomOut": "Zoom out",
+      "fitView": "Fit view"
+    },
     "rootAgent": "Main agent",
     "unnamedStep": "Unnamed step",
     "terminals": { "input": "User request", "output": "Final response" },
@@ -348,6 +354,12 @@
   "workflow": {
     "unnamedNode": "Unnamed node",
     "editInstruction": "Select to edit instructions…",
+    "controls": {
+      "ariaLabel": "Workflow canvas controls",
+      "zoomIn": "Zoom in",
+      "zoomOut": "Zoom out",
+      "fitView": "Fit view"
+    },
     "sections": {
       "info": "Workflow information",
       "execution": "Execution mode",

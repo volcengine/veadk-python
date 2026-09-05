@@ -153,6 +153,12 @@
     "label": "Agent 执行画布",
     "readOnlyLabel": "只读 Agent 执行画布",
     "minimapLabel": "执行流程缩略图",
+    "controls": {
+      "ariaLabel": "执行流程控制",
+      "zoomIn": "放大",
+      "zoomOut": "缩小",
+      "fitView": "适应视图"
+    },
     "rootAgent": "主 Agent",
     "unnamedStep": "未命名步骤",
     "terminals": { "input": "用户请求", "output": "最终回复" },
@@ -348,6 +354,12 @@
   "workflow": {
     "unnamedNode": "未命名节点",
     "editInstruction": "点击编辑指令…",
+    "controls": {
+      "ariaLabel": "工作流画布控制",
+      "zoomIn": "放大",
+      "zoomOut": "缩小",
+      "fitView": "适应视图"
+    },
     "sections": {
       "info": "工作流信息",
       "execution": "执行方式",

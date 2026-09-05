@@ -182,6 +182,14 @@ test("creation mode picker has exactly the quick and traditional cards", () => {
     /\.agent-creation-mode-picker__card:active\s*\{[\s\S]*?background:\s*transparent/,
   );
   assert.match(modePickerStyles, /@media \(max-width: 640px\)/);
+  assert.match(
+    modePickerStyles,
+    /@media \(max-width: 420px\)[\s\S]*?\.agent-creation-mode-picker__feature-grid\s*\{[\s\S]*?grid-auto-flow:\s*row;[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\);/,
+  );
+  assert.match(
+    modePickerStyles,
+    /@media \(max-width: 420px\)[\s\S]*?\.agent-creation-mode-picker__feature > span:last-child\s*\{[\s\S]*?white-space:\s*normal;/,
+  );
   assert.doesNotMatch(modePickerStyles, /position:\s*fixed/);
   assert.match(
     modePickerStyles,

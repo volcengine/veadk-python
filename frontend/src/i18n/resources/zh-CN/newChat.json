@@ -102,6 +102,7 @@
     "spaceLoadFailed": "Skill Space 加载失败",
     "skillLoadFailed": "Skill 加载失败",
     "unnamedSpace": "未命名 Skill Space",
+    "space": "技能空间",
     "select": "选择 Skill",
     "selectAria": "选择 Skill：{{skill}}",
     "loadingSpaces": "正在加载 Skill Space",

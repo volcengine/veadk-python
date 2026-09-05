@@ -18,9 +18,23 @@ export function resolveSupportedLocale(
 ): SupportedLocale | null {
   if (!locale) return null;
   const normalized = locale.trim().replace(/_/g, "-").toLowerCase();
+  const exactMatch = SUPPORTED_LOCALES.find(
+    (supported) => supported.toLowerCase() === normalized,
+  );
+  if (exactMatch) return exactMatch;
   if (normalized === "zh" || normalized.startsWith("zh-")) return "zh-CN";
   if (normalized === "en" || normalized.startsWith("en-")) return "en-US";
   return null;
+}
+
+export function localeCompatibleBackendText(
+  value: string | null | undefined,
+  locale: string,
+): string {
+  const text = value?.trim() ?? "";
+  if (!text) return "";
+  const hasHanText = /\p{Script=Han}/u.test(text);
+  return locale.toLowerCase().startsWith("zh") === hasHanText ? text : "";
 }
 
 function storedLocale(): SupportedLocale | null {

@@ -59,6 +59,13 @@ const BUILTIN_TOOLS: Readonly<Record<string, BuiltinToolDefinition>> = {
     tone: "search",
     icon: WebSearchIcon,
   },
+  link_reader: {
+    name: "link_reader",
+    runningLabel: "Reading webpage",
+    doneLabel: "Webpage read complete",
+    tone: "search",
+    icon: WebSearchIcon,
+  },
   run_code: {
     name: "run_code",
     runningLabel: "Running code in the AgentKit sandbox",

@@ -31,6 +31,8 @@ def test_runtime_environment_exposes_only_allowlisted_public_values() -> None:
             ("MODEL_AGENT_API_BASE", "https://model.example.com/v1"),
             ("MODEL_AGENT_API_KEY_ID", "key-id"),
             ("MODEL_AGENT_API_KEY_NAME", "key-name"),
+            ("AGENTKIT_TOOL_ID", "t-code-sandbox"),
+            ("AGENTKIT_TOOL_REGION", "cn-beijing"),
             ("FEISHU_APP_ID", "cli_public_app_id"),
             ("FEISHU_APP_SECRET", "feishu-secret"),
             ("MODEL_AGENT_API_KEY", "model-secret"),
@@ -53,6 +55,8 @@ def test_runtime_environment_exposes_only_allowlisted_public_values() -> None:
         },
         {"key": "MODEL_AGENT_API_KEY_ID", "value": "key-id"},
         {"key": "MODEL_AGENT_API_KEY_NAME", "value": "key-name"},
+        {"key": "AGENTKIT_TOOL_ID", "value": "t-code-sandbox"},
+        {"key": "AGENTKIT_TOOL_REGION", "value": "cn-beijing"},
         {"key": "FEISHU_APP_ID", "value": "cli_public_app_id"},
         {"key": "FEISHU_APP_SECRET", "value": "feishu-secret"},
     )

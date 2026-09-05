@@ -21,6 +21,7 @@ const {
   DEFAULT_LOCALE,
   LOCALE_STORAGE_KEY,
   detectLocale,
+  localeCompatibleBackendText,
   resolveSupportedLocale,
 } = await import(localeModuleUrl);
 
@@ -54,9 +55,24 @@ function mockBrowser({ storedLocale = null, languages = [] } = {}) {
 }
 
 test("normalizes supported language variants", () => {
+  assert.equal(resolveSupportedLocale("zh-CN"), "zh-CN");
+  assert.equal(resolveSupportedLocale("en-US"), "en-US");
   assert.equal(resolveSupportedLocale("zh-Hant-TW"), "zh-CN");
   assert.equal(resolveSupportedLocale("en_GB"), "en-US");
   assert.equal(resolveSupportedLocale("fr-FR"), null);
+});
+
+test("filters backend copy that does not match the active language", () => {
+  assert.equal(localeCompatibleBackendText("管理员未配置持久化存储", "en-US"), "");
+  assert.equal(localeCompatibleBackendText("Storage is not configured", "zh-CN"), "");
+  assert.equal(
+    localeCompatibleBackendText("SANDBOX_DEV 暂不可用", "zh-CN"),
+    "SANDBOX_DEV 暂不可用",
+  );
+  assert.equal(
+    localeCompatibleBackendText("Storage is not configured", "en-US"),
+    "Storage is not configured",
+  );
 });
 
 test("prefers a stored locale over browser languages", (t) => {

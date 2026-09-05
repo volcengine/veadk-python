@@ -12,7 +12,8 @@
       "byteplus": "BytePlus AgentKit 提供企业级 Agent 解决方案"
     },
     "legalPrefix": "继续即表示你已阅读并同意 AgentKit",
-    "terms": "产品和服务条款"
+    "terms": "产品和服务条款",
+    "copyright": "© {{year}} VeADK。保留所有权利。"
   },
   "authExpired": {
     "title": "登录状态已过期",

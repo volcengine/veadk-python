@@ -1168,6 +1168,12 @@ function AgentBuildCanvasInner({
           minZoom={readOnly ? 0.05 : 0.35}
           maxZoom={1.6}
           proOptions={{ hideAttribution: true }}
+          ariaLabelConfig={{
+            "controls.ariaLabel": t("buildCanvas.controls.ariaLabel"),
+            "controls.zoomIn.ariaLabel": t("buildCanvas.controls.zoomIn"),
+            "controls.zoomOut.ariaLabel": t("buildCanvas.controls.zoomOut"),
+            "controls.fitView.ariaLabel": t("buildCanvas.controls.fitView"),
+          }}
         >
           <Background gap={20} size={1.2} color="hsl(34 20% 82%)" />
           {(!readOnly || interactivePreview) && (

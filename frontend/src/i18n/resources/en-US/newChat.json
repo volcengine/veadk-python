@@ -102,6 +102,7 @@
     "spaceLoadFailed": "Failed to load Skill Spaces",
     "skillLoadFailed": "Failed to load Skills",
     "unnamedSpace": "Unnamed Skill Space",
+    "space": "Skill Space",
     "select": "Select Skill",
     "selectAria": "Select Skill: {{skill}}",
     "loadingSpaces": "Loading Skill Spaces",

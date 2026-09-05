@@ -9,6 +9,8 @@
     "unknownSource": "Unknown source"
   },
   "tool": {
+    "terminalTitle": "Terminal",
+    "browserTitle": "Sandbox browser",
     "terminalSubtitle": "Connect to the interactive terminal for the current AgentKit Session",
     "browserSubtitle": "View and control the browser in the current AgentKit Session",
     "connecting": "Connecting…",

@@ -102,7 +102,7 @@ export function NewChatSkillTargetPicker({
   const unnamedSpaceLabel = t("skill.unnamedSpace");
   const activeSpaceLabel = activeSpace
     ? spaceLabel(activeSpace, unnamedSpaceLabel)
-    : "Skill Space";
+    : t("skill.space");
   const triggerLabel = selectedSkillLabel || t("skill.select");
 
   const close = useCallback((returnFocus = false) => {

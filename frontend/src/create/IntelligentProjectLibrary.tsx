@@ -4,6 +4,7 @@ import { createT } from "./i18n";
 import { Button } from "@openai/apps-sdk-ui/components/Button";
 import { Tooltip } from "@openai/apps-sdk-ui/components/Tooltip";
 import type { IntelligentDevelopmentReleaseRef } from "../blocks";
+import { localeCompatibleBackendText } from "../i18n/locales";
 import {
   deleteIntelligentDevelopmentVersion,
   fetchIntelligentDevelopmentProjects,
@@ -463,8 +464,8 @@ export function IntelligentProjectLibrary({
           <div className="ic-project-state" role="alert">
             <strong>{t("projectLibrary.unavailableTitle")}</strong>
             <span>
-              {capabilities.projectStorageReason
-                || capabilities.reason
+              {localeCompatibleBackendText(capabilities.projectStorageReason, locale)
+                || localeCompatibleBackendText(capabilities.reason, locale)
                 || t("projectLibrary.storageNotConfigured")}
             </span>
           </div>

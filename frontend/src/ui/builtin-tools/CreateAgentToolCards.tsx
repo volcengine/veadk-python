@@ -402,11 +402,11 @@ export function CreateAgentsCard({ args, response, status }: CreateAgentToolCard
                 ) : null}
                 <div className="create-agent-card__agent-resources" aria-label={t("blocks.createAgents.agentResources", { name: agent.name })}>
                   <ResourceMetric
-                    label="Skill"
+                    label={t("blocks.createAgents.skill")}
                     count={agent.skills.length}
                     icon={<ToolsSkills aria-hidden="true" />}
                   >
-                    <AgentResourceList label="Skill" resources={agent.skills} />
+                    <AgentResourceList label={t("blocks.createAgents.skill")} resources={agent.skills} />
                   </ResourceMetric>
                   <ResourceMetric
                     label={t("blocks.createAgents.knowledgeBase")}
@@ -424,7 +424,7 @@ export function CreateAgentsCard({ args, response, status }: CreateAgentToolCard
                     <PythonToolList tools={agent.pythonTools} />
                   </ResourceMetric>
                   <ResourceMetric
-                    label="Sub Agent"
+                    label={t("blocks.createAgents.subAgents")}
                     count={agent.subAgentCount}
                     icon={<Users aria-hidden="true" />}
                   >

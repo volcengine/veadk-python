@@ -26,6 +26,7 @@
     "close": "Close",
     "listAria": "Artifact list",
     "loadFailed": "Could not load artifacts",
+    "loadDetailFallback": "Check the storage configuration and try again.",
     "reload": "Reload",
     "noMatch": "No matching artifacts",
     "noArtifacts": "You do not have any artifacts yet",

@@ -5,6 +5,7 @@ import {
   type ModelOption,
 } from "../adk/client";
 import type { IntelligentDevelopmentReleaseRef } from "../blocks";
+import { localeCompatibleBackendText } from "../i18n/locales";
 import { isImeCompositionEvent } from "../ui/composerKeyboard";
 import {
   NewChatCompactSelect,
@@ -131,7 +132,7 @@ export function IntelligentGoalPanel({
   baseVersion?: IntelligentCreateBaseVersion;
   onClearBaseVersion?: () => void;
 }) {
-  const { t } = useTranslation("create");
+  const { t, i18n } = useTranslation("create");
   const [goal, setGoal] = useState("");
   const [models, setModels] = useState<ModelOption[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
@@ -175,7 +176,10 @@ export function IntelligentGoalPanel({
     ? t("intelligent.availability.checking")
     : capabilities?.enabled
       ? ""
-      : capabilities?.reason || (error ? "" : t("intelligent.availability.unavailable"));
+      : localeCompatibleBackendText(
+          capabilities?.reason,
+          i18n.resolvedLanguage || i18n.language,
+        ) || (error ? "" : t("intelligent.availability.unavailable"));
   const submitDisabled = loading || creating || unavailable || !goal.trim();
 
   useEffect(() => {

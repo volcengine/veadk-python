@@ -723,7 +723,7 @@ export function DeploymentResources({
           {value.codePipeline.mode === "existing" && (
             <div className="pp-resource-fields">
               <label className="pp-resource-field">
-                <span>Workspace</span>
+                <span>{t("deploymentResources.workspace")}</span>
                 <ResourcePicker
                   ariaLabel={t("deploymentResources.existingWorkspace")}
                   value={value.codePipeline.workspaceId ?? ""}
@@ -765,9 +765,9 @@ export function DeploymentResources({
           {value.codePipeline.mode === "auto" && (
             <AutomaticResourceNames
               items={[
-                { label: "Workspace", name: "agentkit-cli-workspace" },
+                { label: t("deploymentResources.workspace"), name: "agentkit-cli-workspace" },
                 {
-                  label: "Pipeline",
+                  label: t("deploymentResources.pipeline"),
                   name: resolvedRuntimeName,
                 },
               ]}

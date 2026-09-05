@@ -9,6 +9,8 @@
     "unknownSource": "未知来源"
   },
   "tool": {
+    "terminalTitle": "终端",
+    "browserTitle": "沙箱浏览器",
     "terminalSubtitle": "连接当前 AgentKit Session 的交互式终端",
     "browserSubtitle": "在当前 AgentKit Session 中查看与操作浏览器",
     "connecting": "正在连接…",

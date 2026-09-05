@@ -402,6 +402,7 @@
   },
   "environmentCenter": {
     "title": "环境",
+    "loadFailed": "环境加载失败，请检查存储配置后重试。",
     "create": "新建环境",
     "configure": "配置环境",
     "details": "环境详情",
@@ -660,6 +661,12 @@
   },
   "githubCicd": {
     "repository": "GitHub 仓库",
+    "githubUrl": "GitHub 地址",
+    "token": "访问令牌",
+    "sessionToken": "{{provider}} 临时令牌",
+    "runtime": "Runtime",
+    "commit": "提交",
+    "workflow": "工作流",
     "syncFailed": "同步 GitHub 代码失败",
     "status": { "mounted": "已挂载", "bound": "已绑定", "synced": "已同步", "created": "已创建" },
     "volcengine": "火山引擎",
@@ -775,6 +782,8 @@
     "autoRegistry": "agentkit-platform-{账号 ID}",
     "autoRepositoryName": "{{name}}-{4 位随机字符}",
     "registryNameNote": "账号 ID 在部署时解析，镜像仓库的随机字符在部署时生成。",
+    "workspace": "工作空间",
+    "pipeline": "流水线",
     "workspaceName": "Workspace 名称",
     "pipelineName": "Pipeline 名称",
     "existingWorkspace": "已有 CodePipeline Workspace",
@@ -783,6 +792,7 @@
     "pipelineNameNote": "Pipeline 与 Runtime 名称一致。"
   },
   "studioUpdate": {
+    "commit": "提交",
     "steps": {
       "permissions": "预检 OTA 所需权限",
       "resolving": "读取目标版本信息",
@@ -883,6 +893,7 @@
   "projectPreview": {
     "deploy": "部署",
     "update": "更新",
+    "planHash": "方案哈希",
     "backToConfiguration": "返回配置",
     "releaseRegion": "发布区域",
     "deployRegion": "部署区域",
@@ -1306,6 +1317,8 @@
     "viewDetails": "查看 {{name}} 详情",
     "time": "时间",
     "remainingTime": "剩余时间",
+    "expiringSoon": "即将清空",
+    "sandboxRemaining": "{{hours}} 小时 {{minutes}} 分钟",
     "wakeable": "可唤醒",
     "neverExpires": "永不过期",
     "editDraftNamed": "编辑草稿 {{name}}",
@@ -1394,7 +1407,8 @@
     "backToSpaces": "返回技能空间列表",
     "overview": "概览",
     "skillCount": "技能数量",
-    "skillCountValue": "{{count}} 技能",
+    "skillCountValue_one": "{{count}} 技能",
+    "skillCountValue_other": "{{count}} 技能",
     "updatedAt": "更新时间",
     "skillsInSpace": "{{name}}中的技能",
     "searchSkills": "搜索技能",

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
+import { localeCompatibleBackendText } from "../i18n/locales";
 import {
   cloudRegionOptions,
   defaultCloudRegion,
@@ -72,7 +73,7 @@ export function LibraryView({
   onArtifactActivate,
   onArtifactSourceOpen,
 }: LibraryViewProps) {
-  const { t } = useTranslation("workspaceTools");
+  const { t, i18n } = useTranslation("workspaceTools");
   const tabs = useMemo(() => libraryTabs(t), [t]);
   const defaultSkillTitle = t("library.tabs.skills");
   const configuredRegion = isSupportedCloudRegion(studioRegion)
@@ -260,7 +261,12 @@ export function LibraryView({
               active={activeTab === "artifacts"}
               activationRevision={activationRevisions.artifacts}
               loading={artifactLoading}
-              error={artifactError}
+              error={artifactError
+                ? localeCompatibleBackendText(
+                    artifactError,
+                    i18n.resolvedLanguage || i18n.language,
+                  ) || t("artifactLibrary.loadDetailFallback")
+                : ""}
               onRetry={() => void loadArtifacts()}
               onEdit={updateStoredArtifact}
               onDelete={deleteStoredArtifact}

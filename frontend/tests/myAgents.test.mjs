@@ -247,6 +247,7 @@ test("renders Agent creation as the first dashed card instead of a toolbar butto
 });
 
 test("agent cards reproduce the compact Figma hierarchy with card details and one chat action", () => {
+  assert.match(pageSource, /const \{ t, i18n \} = useTranslation\("ui"\)/);
   assert.match(pageSource, /<ResourceIdentityMark seed=\{agent\.name\} \/>/);
   assert.match(pageSource, /<ResourceCardHeader[\s\S]*?title=\{agent\.name\}/);
   assert.match(pageSource, /formatRelativeTimeLabel\(agent\.createdAt, nowMs, i18n\.resolvedLanguage \?\? i18n\.language\)/);
@@ -390,15 +391,26 @@ test("shows aligned lifetime metadata for persistent and non-persistent Sandbox 
   const now = Date.parse("2026-08-11T00:00:00.000Z");
 
   assert.equal(
-    formatSandboxRemainingTime("2026-08-11T02:30:00.000Z", now),
+    formatSandboxRemainingTime(
+      "2026-08-11T02:30:00.000Z",
+      now,
+      (key, values) => key === "myAgents.sandboxRemaining"
+        ? `${values.hours} 小时 ${values.minutes} 分钟`
+        : "即将清空",
+    ),
     "2 小时 30 分钟",
   );
   assert.equal(
-    formatSandboxRemainingTime("2026-08-11T00:00:30.000Z", now),
+    formatSandboxRemainingTime(
+      "2026-08-11T00:00:30.000Z",
+      now,
+      () => "即将清空",
+    ),
     "即将清空",
   );
-  assert.equal(formatSandboxRemainingTime("2026-08-10T23:59:59.000Z", now), "即将清空");
-  assert.equal(formatSandboxRemainingTime("invalid", now), "即将清空");
+  assert.equal(formatSandboxRemainingTime("2026-08-10T23:59:59.000Z", now, () => "即将清空"), "即将清空");
+  assert.equal(formatSandboxRemainingTime("invalid", now, () => "即将清空"), "即将清空");
+  assert.match(pageSource, /formatSandboxRemainingTime\(agent\.sandbox\.expireAt, nowMs, t\)/);
 
   assert.match(
     pageSource,

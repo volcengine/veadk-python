@@ -370,7 +370,7 @@ export function GithubCicdPanel({
       {showSetup && (
         <form className="pp-github-cicd-form" onSubmit={handleSubmit}>
           <label className="pp-github-cicd-field">
-            <span>GitHub URL</span>
+            <span>{t("githubCicd.githubUrl")}</span>
             <input
               value={githubUrl}
               placeholder="https://github.com/org/repo"
@@ -383,7 +383,7 @@ export function GithubCicdPanel({
             />
           </label>
           <label className="pp-github-cicd-field">
-            <span>Token</span>
+            <span>{t("githubCicd.token")}</span>
             <input
               type="password"
               value={githubToken}
@@ -440,7 +440,7 @@ export function GithubCicdPanel({
                 />
               </label>
               <label className="pp-github-cicd-field">
-                <span>{credentialProviderLabel} Session Token</span>
+                <span>{t("githubCicd.sessionToken", { provider: credentialProviderLabel })}</span>
                 <input
                   type="password"
                   value={volcengineSessionToken}
@@ -499,19 +499,19 @@ export function GithubCicdPanel({
             </div>
             {resultRuntimeId && (
               <div>
-                <dt>Runtime</dt>
+                <dt>{t("githubCicd.runtime")}</dt>
                 <dd>{resultRuntimeId}</dd>
               </div>
             )}
             {resultGithub?.commitSha && (
               <div>
-                <dt>Commit</dt>
+                <dt>{t("githubCicd.commit")}</dt>
                 <dd>{resultGithub.commitSha.slice(0, 12)}</dd>
               </div>
             )}
             {result.cicd?.workflowPath && (
               <div>
-                <dt>Workflow</dt>
+                <dt>{t("githubCicd.workflow")}</dt>
                 <dd>{result.cicd.workflowPath}</dd>
               </div>
             )}
@@ -552,7 +552,7 @@ export function GithubCicdPanel({
               )}
               {error.runtimeId && (
                 <div>
-                  <dt>Runtime</dt>
+                  <dt>{t("githubCicd.runtime")}</dt>
                   <dd>{error.runtimeId}</dd>
                 </div>
               )}

@@ -206,7 +206,9 @@
     "start": "确认并开始迁移"
   },
   "errors": {
-    "closeAria": "关闭错误提示"
+    "closeAria": "关闭错误提示",
+    "loadFailed": "无法读取迁移数据，请重试。",
+    "refreshFailed": "无法刷新迁移状态，请重试。"
   },
   "stopDialog": {
     "title": "终止当前迁移？",

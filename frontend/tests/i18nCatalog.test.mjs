@@ -150,6 +150,63 @@ test("Agent workspace section labels exist in every locale", () => {
   }
 });
 
+test("secondary workflows do not expose untranslated fallback labels", () => {
+  const assertions = [
+    ["../src/ui/SandboxControls.tsx", /t\("tool\.(?:terminal|browser)Title"\)/],
+    ["../src/ui/new-chat-modes/NewChatSkillTargetPicker.tsx", /t\("skill\.space"\)/],
+    ["../src/ui/builtin-tools/CreateAgentToolCards.tsx", /t\("blocks\.createAgents\.skill"\)/],
+    ["../src/ui/LoginPage.tsx", /t\("login\.copyright"/],
+    ["../src/ui/DeploymentResources.tsx", /t\("deploymentResources\.(?:workspace|pipeline)"\)/],
+    ["../src/ui/GithubCicdPanel.tsx", /t\("githubCicd\.githubUrl"\)/],
+    ["../src/ui/StudioUpdateControl.tsx", /t\("studioUpdate\.commit"\)/],
+    ["../src/ui/ProjectPreview.tsx", /t\("projectPreview\.planHash"\)/],
+  ];
+
+  for (const [relativePath, expected] of assertions) {
+    const source = readFileSync(new URL(relativePath, import.meta.url), "utf8");
+    assert.match(source, expected, relativePath);
+  }
+});
+
+test("canvas controls and backend-error fallbacks are localized", () => {
+  const locales = ["en-US", "zh-CN"];
+  for (const locale of locales) {
+    const create = JSON.parse(
+      readFileSync(
+        new URL(`../src/i18n/resources/${locale}/create.json`, import.meta.url),
+        "utf8",
+      ),
+    );
+    const ui = JSON.parse(
+      readFileSync(
+        new URL(`../src/i18n/resources/${locale}/ui.json`, import.meta.url),
+        "utf8",
+      ),
+    );
+    const migrations = JSON.parse(
+      readFileSync(
+        new URL(`../src/i18n/resources/${locale}/migrations.json`, import.meta.url),
+        "utf8",
+      ),
+    );
+    const workspaceTools = JSON.parse(
+      readFileSync(
+        new URL(`../src/i18n/resources/${locale}/workspaceTools.json`, import.meta.url),
+        "utf8",
+      ),
+    );
+
+    assert.ok(create.buildCanvas.controls.zoomIn);
+    assert.ok(create.buildCanvas.controls.zoomOut);
+    assert.ok(create.buildCanvas.controls.fitView);
+    assert.ok(create.workflow.controls.zoomIn);
+    assert.ok(ui.environmentCenter.loadFailed);
+    assert.ok(migrations.errors.loadFailed);
+    assert.ok(migrations.errors.refreshFailed);
+    assert.ok(workspaceTools.artifactLibrary.loadDetailFallback);
+  }
+});
+
 test("English uses bundled Inter while product branding keeps its display face", () => {
   const mainSource = readFileSync(
     new URL("../src/main.tsx", import.meta.url),

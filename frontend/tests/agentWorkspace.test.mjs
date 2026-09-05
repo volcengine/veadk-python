@@ -152,6 +152,14 @@ test("agent detail navigation delegates responsive layout to the shared resource
   assert.doesNotMatch(detailLayoutContract, /className="aw-agent-tabs"/);
   assert.match(workspaceSource, /activeSectionKey=\{section\}/);
   assert.match(workspaceSource, /onSectionChange=\{setSection\}/);
+  assert.match(
+    workspaceStyles,
+    /@media \(max-width: 720px\)[\s\S]*?\.aw-version-row\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\)/,
+  );
+  assert.match(
+    workspaceStyles,
+    /@media \(max-width: 720px\)[\s\S]*?\.aw-version-row p\s*\{[\s\S]*?overflow-wrap:\s*anywhere/,
+  );
 });
 
 test("runtime detail failures remain visible and retryable", () => {
@@ -783,7 +791,10 @@ test("introspection-only runtime updates are visibly blocked without treating em
   );
   assert.doesNotMatch(workspaceSource, /更新配置说明/);
   assert.match(workspaceSource, /updateCapabilityWarnings\.map/);
-  assert.match(workspaceSource, /function localeCompatibleBackendText/);
+  assert.match(
+    workspaceSource,
+    /import \{ localeCompatibleBackendText \} from "\.\.\/i18n\/locales";/,
+  );
   assert.match(workspaceStyles, /\.aw-update-recovery-notice\s*\{/);
   assert.match(workspaceStyles, /hsl\(42 92% 96%\)/);
   assert.doesNotMatch(

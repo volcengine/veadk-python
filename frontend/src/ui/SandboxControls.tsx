@@ -156,7 +156,7 @@ export function SandboxToolDialog({
 }: SandboxToolDialogProps) {
   const { t } = useTranslation("sandbox");
   const terminal = kind === "terminal";
-  const title = terminal ? "Terminal" : "Sandbox Browser";
+  const title = terminal ? t("tool.terminalTitle") : t("tool.browserTitle");
 
   return (
     <DialogShell

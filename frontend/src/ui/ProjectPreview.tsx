@@ -2343,7 +2343,7 @@ export function ProjectPreview({
                           )}
                         {releaseConfiguration.planHash && (
                           <div>
-                            <dt>Plan Hash</dt>
+                            <dt>{t("projectPreview.planHash")}</dt>
                             <dd className="pp-release-fact-long">
                               {releaseConfiguration.planHash}
                             </dd>

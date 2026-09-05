@@ -206,7 +206,9 @@
     "start": "Confirm and start migration"
   },
   "errors": {
-    "closeAria": "Dismiss error"
+    "closeAria": "Dismiss error",
+    "loadFailed": "Could not load migration data. Try again.",
+    "refreshFailed": "Could not refresh the migration status. Try again."
   },
   "stopDialog": {
     "title": "Stop the current migration?",

@@ -12,6 +12,7 @@ import {
 } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
+import { localeCompatibleBackendText } from "../i18n/locales";
 import { createPortal } from "react-dom";
 import { ExternalLink, X } from "lucide-react";
 import { Badge } from "@openai/apps-sdk-ui/components/Badge";
@@ -2360,7 +2361,12 @@ export function EnvironmentCenter({
           <ResourceLoadingState />
         ) : loadError ? (
           <div className="environment-load-error" role="alert">
-            <p>{loadError}</p>
+            <p>
+              {localeCompatibleBackendText(
+                loadError,
+                i18n.resolvedLanguage || i18n.language,
+              ) || t("environmentCenter.loadFailed")}
+            </p>
             <Button color="secondary" variant="soft" size="sm" onClick={() => setReloadKey((key) => key + 1)}>
               {t("common.reload")}
             </Button>

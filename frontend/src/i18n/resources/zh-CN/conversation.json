@@ -160,6 +160,7 @@
     "missingAuthorizationUrl": "未在事件中找到授权地址。"
     ,"tools": {
       "web_search": { "running": "正在进行网络搜索", "done": "已完成网络搜索" },
+      "link_reader": { "running": "正在读取网页", "done": "已完成网页读取" },
       "run_code": { "running": "正在 AgentKit 沙箱中执行代码", "done": "已在 AgentKit 沙箱中完成代码执行" },
       "list_envs": { "running": "正在查看可用环境", "done": "已读取可用环境" },
       "get_env_manifest": { "running": "正在读取环境 Manifest", "done": "已读取环境 Manifest" },
@@ -177,6 +178,7 @@
     "createAgents": {
       "categories": { "skill_hub": "Skill Hub", "skill_space": "AgentKit 技能中心", "knowledge_base": "知识库", "tool": "工具" },
       "agentTypes": { "llm": "LLM 智能体", "sequential": "顺序智能体", "parallel": "并行智能体", "loop": "循环智能体", "workflow": "工作流" },
+      "skill": "技能",
       "subAgents": "子智能体",
       "builtinTool": "内置工具",
       "skillCenter": "AgentKit 技能中心",

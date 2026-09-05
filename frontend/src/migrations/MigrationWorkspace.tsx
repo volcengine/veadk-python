@@ -7,6 +7,7 @@ import {
   type DragEvent,
 } from "react";
 import { useTranslation } from "react-i18next";
+import { localeCompatibleBackendText } from "../i18n/locales";
 import {
   confirmMigrationTask,
   createMigrationTask,
@@ -709,7 +710,8 @@ export function MigrationWorkspace({
   initialPage = "new",
   initialProjectId = "",
 }: MigrationWorkspaceProps) {
-  const { t } = useTranslation("migrations");
+  const { t, i18n } = useTranslation("migrations");
+  const locale = i18n.resolvedLanguage || i18n.language;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const preparedAnalysisRef = useRef("");
   const transferAbortRef = useRef<AbortController | null>(null);
@@ -1656,7 +1658,10 @@ export function MigrationWorkspace({
           {!capability?.enabled && !loading ? (
             <div className="migration-system-state is-error" role="alert">
               <strong>{t("capability.unavailable")}</strong>
-              <p>{capability?.reason || t("capability.defaultReason")}</p>
+              <p>
+                {localeCompatibleBackendText(capability?.reason, locale)
+                  || t("capability.defaultReason")}
+              </p>
             </div>
           ) : null}
 
@@ -2032,7 +2037,10 @@ export function MigrationWorkspace({
 
           {pollError ? (
             <div className="migration-inline-error" role="alert">
-              <span>{pollError}</span>
+              <span>
+                {localeCompatibleBackendText(pollError, locale)
+                  || t("errors.refreshFailed")}
+              </span>
               {pollErrorRetryable ? (
                 <button
                   type="button"
@@ -2061,7 +2069,10 @@ export function MigrationWorkspace({
           ) : null}
           {error ? (
             <div className="migration-inline-error" role="alert">
-              <span>{error}</span>
+              <span>
+                {localeCompatibleBackendText(error, locale)
+                  || t("errors.loadFailed")}
+              </span>
               <button type="button" onClick={() => setError("")} aria-label={t("errors.closeAria")}>
                 <CloseIcon />
               </button>

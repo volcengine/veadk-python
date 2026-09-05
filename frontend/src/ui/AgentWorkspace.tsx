@@ -75,6 +75,7 @@ import {
 import type { AgentDraft } from "../create/types";
 import type { WorkspaceAgentDraft } from "../create/agentDraftStorage";
 import { BUILTIN_TOOLS } from "../create/veadkCatalog";
+import { localeCompatibleBackendText } from "../i18n/locales";
 import type { DeploymentTaskUpdate } from "./ProjectPreview";
 import { Markdown } from "./Markdown";
 import { ResourceDetailLayout } from "./ResourceCollection";
@@ -277,11 +278,6 @@ const EVALUATION_TEXT_KEYS: Record<string, string> = {
 function evaluationText(value: string, t: TFunction): string {
   const key = EVALUATION_TEXT_KEYS[value];
   return key ? t(key) : value;
-}
-
-function localeCompatibleBackendText(value: string, locale: string): string {
-  const hasHanText = /\p{Script=Han}/u.test(value);
-  return locale.toLowerCase().startsWith("zh") === hasHanText ? value : "";
 }
 
 const AGENT_SECTIONS: AgentSection[] = [
