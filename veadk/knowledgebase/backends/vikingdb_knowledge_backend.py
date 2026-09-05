@@ -36,6 +36,7 @@ from veadk.configs.database_configs import NormalTOSConfig, TOSConfig
 from veadk.integrations.ve_tos.ve_tos import VeTOS
 from veadk.knowledgebase.backends.base_backend import BaseKnowledgebaseBackend
 from veadk.knowledgebase.entry import KnowledgebaseEntry
+from veadk.utils.http_defaults import DEFAULT_HTTP_TIMEOUT
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import formatted_timestamp, getenv
 
@@ -775,6 +776,7 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
             url=full_path,
             headers=request.headers,
             data=request.body,
+            timeout=DEFAULT_HTTP_TIMEOUT,
         )
         if not response.ok:
             logger.error(

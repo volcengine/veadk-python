@@ -92,7 +92,7 @@ import os
 import time
 from dataclasses import dataclass
 from typing import Type, TypeVar, List, Dict, Any, Callable
-from queue import Queue
+from queue import Empty, Queue
 from threading import Lock
 
 from veadk.utils.logger import get_logger
@@ -116,6 +116,9 @@ REQUIRED_ENV_VARS = [
     "VOLCENGINE_SECRET_KEY",
     "TOOL_MOBILE_USE_TOOL_ID",
 ]
+
+# Bounded wait for a free pod so callers can re-check their own deadline.
+POD_ACQUIRE_TIMEOUT_SECONDS = 1
 
 
 class MobileUseToolError(Exception):
@@ -209,6 +212,10 @@ class PodPool:
         self.pod_ids = pod_ids
         self.available_pods = Queue()
         self.pod_lock = Lock()
+        # Invariant: every read and write of `task_map` goes through the
+        # accessors on this class, which all hold `pod_lock`. `acquire_pod` runs
+        # on a worker thread (`asyncio.to_thread`), so its write really can
+        # interleave with an event-loop-side read.
         self.task_map: Dict[str, str] = {}
 
         for pid in pod_ids:
@@ -217,16 +224,19 @@ class PodPool:
 
     def acquire_pod(self) -> Any | None:
         try:
-            pid = self.available_pods.get(block=True)
-            with self.pod_lock:
-                self.task_map[pid] = "pending"
-            logger.debug(
-                f"Acquired pod: {pid}, available pods: {self.available_pods.qsize()}"
+            pid = self.available_pods.get(
+                block=True, timeout=POD_ACQUIRE_TIMEOUT_SECONDS
             )
-            return pid
-        except Exception as e:
-            logger.warning(f"Pod acquisition timeout: {e}")
+        except Empty:
+            logger.debug(
+                f"Pod acquisition timeout after {POD_ACQUIRE_TIMEOUT_SECONDS}s, no available pod"
+            )
             return None
+        self.set_pod_task(pid, "pending")
+        logger.debug(
+            f"Acquired pod: {pid}, available pods: {self.available_pods.qsize()}"
+        )
+        return pid
 
     def release_pod(self, pid: str) -> None:
         with self.pod_lock:
@@ -236,6 +246,16 @@ class PodPool:
         logger.debug(
             f"Released pod: {pid}, available pods: {self.available_pods.qsize()}"
         )
+
+    # Task bookkeeping is only ever touched through these two accessors, so the
+    # `pod_lock` discipline lives in this class instead of at every call site.
+    def set_pod_task(self, pid: str, task_id: str) -> None:
+        with self.pod_lock:
+            self.task_map[pid] = task_id
+
+    def get_pod_task(self, pid: str) -> str | None:
+        with self.pod_lock:
+            return self.task_map.get(pid)
 
     def get_pod_status(self, pid: str) -> str:
         with self.pod_lock:
@@ -407,7 +427,7 @@ def create_mobile_use_tool(
               * "You are a mobile testing agent. Follow least-privilege principles and avoid unauthorized access."
         max_step (int): Maximum execution steps per agent.
         timeout_seconds (int):
-            Maximum wait time in seconds. Raises if not finished. Default: 600.
+            Maximum wait time in seconds. Raises if not finished. Default: 900.
         step_interval_seconds (int):
             Status polling interval in seconds. Default: 1.
 
@@ -444,17 +464,22 @@ def create_mobile_use_tool(
         coroutines = []
 
         def task_worker(index: int, prompt: str) -> Callable:
-            wait_start = time.time()
+            # One budget, one clock: waiting for a pod and polling for its
+            # result are consecutive phases of the same `timeout_seconds`, so
+            # they share a single deadline armed here. Monotonic only - an NTP
+            # step must not stretch (step back) or cut short (step forward) a
+            # wait, which is what a `time.time()` deadline would allow.
+            deadline = time.monotonic() + timeout_seconds
 
             async def run():
                 nonlocal results
                 pod_id = None
                 try:
                     while True:
-                        pod_id = pod_pool.acquire_pod()
+                        pod_id = await asyncio.to_thread(pod_pool.acquire_pod)
                         if pod_id:
                             break
-                        if time.time() - wait_start >= timeout_seconds:
+                        if time.monotonic() >= deadline:
                             raise MobileUseToolError(
                                 f"Task {index} timed out acquiring pod after {timeout_seconds}s"
                             )
@@ -466,7 +491,10 @@ def create_mobile_use_tool(
                     logger.info(
                         f"Task {index} assigned to pod: {pod_id}, starting: {prompt}"
                     )
-                    task_response = _run_agent_task(
+                    # Every ACEP call below is blocking `requests` I/O; run it
+                    # off the event loop so `asyncio.gather` really is concurrent.
+                    task_response = await asyncio.to_thread(
+                        _run_agent_task,
                         system_prompt,
                         prompt,
                         pod_id,
@@ -475,11 +503,19 @@ def create_mobile_use_tool(
                         timeout_seconds,
                     )
                     task_id = task_response.Result.RunId
-                    pod_pool.task_map[pod_id] = task_id
+                    pod_pool.set_pod_task(pod_id, task_id)
 
                     while True:
-                        result_response = _get_task_result(task_id)
-                        if result_response.Result.IsSuccess == 1:
+                        if time.monotonic() >= deadline:
+                            raise MobileUseToolError(
+                                f"Task {index} timed out waiting for result after {timeout_seconds}s"
+                            )
+
+                        result_response = await asyncio.to_thread(
+                            _get_task_result, task_id
+                        )
+                        status = result_response.Result.IsSuccess
+                        if status == 1:
                             results[index] = (
                                 f"task success: {result_response.Result.Content}\n"
                             )
@@ -487,14 +523,20 @@ def create_mobile_use_tool(
                                 f"Task {index} succeeded on pod: {pod_id}, result: {result_response.Result.Content}"
                             )
                             break
-                        elif result_response.Result.IsSuccess == 2:
+                        elif status == 2:
                             results[index] = (
                                 f"task failed: {result_response.Result.Content}"
                             )
                             logger.error(f"Task {index} failed on pod: {pod_id}")
                             break
+                        elif status not in (None, 0):
+                            raise MobileUseToolError(
+                                f"Task {index} returned unknown status {status} on pod: {pod_id}, content: {result_response.Result.Content}"
+                            )
 
-                        current_step = _get_current_step(task_id)
+                        current_step = await asyncio.to_thread(
+                            _get_current_step, task_id
+                        )
                         if current_step.Result.Results:
                             last_step = current_step.Result.Results[-1]
                             logger.debug(
@@ -508,8 +550,16 @@ def create_mobile_use_tool(
                     logger.error(error_msg)
                 finally:
                     if pod_id:
-                        _cancel_task(pod_pool.task_map[pod_id])
-                        pod_pool.release_pod(pod_id)
+                        try:
+                            await asyncio.to_thread(
+                                _cancel_task, pod_pool.get_pod_task(pod_id)
+                            )
+                        except Exception as e:
+                            # A failed cancel must not skip release_pod, or the
+                            # pod leaks for the lifetime of the process.
+                            logger.error(f"Task {index} cancel failed: {e}")
+                        finally:
+                            pod_pool.release_pod(pod_id)
 
             return run
 

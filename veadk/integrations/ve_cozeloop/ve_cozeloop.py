@@ -15,6 +15,7 @@
 import requests
 
 from veadk.consts import DEFAULT_COZELOOP_SPACE_NAME
+from veadk.utils.http_defaults import DEFAULT_HTTP_TIMEOUT
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -49,7 +50,9 @@ class VeCozeloop:
                 "description": "Created by Volcengine Agent Development Kit (VeADK)",
             }
 
-            response = requests.post(URL, headers=headers, json=data)
+            response = requests.post(
+                URL, headers=headers, json=data, timeout=DEFAULT_HTTP_TIMEOUT
+            )
 
             if response.json().get("code") == 0:
                 workspace_id = response.json().get("data").get("id")
@@ -79,7 +82,9 @@ class VeCozeloop:
             "page_size": 50,
         }
 
-        response = requests.get(URL, headers=headers, json=data)
+        response = requests.get(
+            URL, headers=headers, json=data, timeout=DEFAULT_HTTP_TIMEOUT
+        )
 
         if response.json().get("code") == 0:
             workspaces = response.json().get("data").get("workspaces", [])

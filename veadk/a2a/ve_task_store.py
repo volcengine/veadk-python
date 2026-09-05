@@ -12,26 +12,53 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
+
+from a2a.server.context import ServerCallContext
 from a2a.server.tasks import TaskStore
 from a2a.types import Task
 from typing_extensions import override
 
+from veadk.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 
 class VeTaskStore(TaskStore):
-    def __init__(self):
+    """In-process implementation of the A2A `TaskStore` interface.
+
+    Tasks are held in a dictionary owned by this instance, so they are visible
+    only to the server process that stored them and are lost when it stops.
+
+    Every method takes the `context` argument required by `TaskStore` -- the
+    A2A request handlers pass it positionally -- but this store does not scope
+    tasks by caller, so the value is unused.
+    """
+
+    def __init__(self) -> None:
         super().__init__()
+        self._tasks: dict[str, Task] = {}
+        self._lock = asyncio.Lock()
 
     @override
-    async def save(self, task: Task) -> None:
+    async def save(self, task: Task, context: ServerCallContext | None = None) -> None:
         """Saves or updates a task in the store."""
-        return None
+        async with self._lock:
+            self._tasks[task.id] = task
 
     @override
-    async def get(self, task_id: str) -> Task | None:
+    async def get(
+        self, task_id: str, context: ServerCallContext | None = None
+    ) -> Task | None:
         """Retrieves a task from the store by ID."""
-        return None
+        async with self._lock:
+            return self._tasks.get(task_id)
 
     @override
-    async def delete(self, task_id: str) -> None:
+    async def delete(
+        self, task_id: str, context: ServerCallContext | None = None
+    ) -> None:
         """Deletes a task from the store by ID."""
-        return None
+        async with self._lock:
+            if self._tasks.pop(task_id, None) is None:
+                logger.warning(f"Attempted to delete nonexistent task: {task_id}")

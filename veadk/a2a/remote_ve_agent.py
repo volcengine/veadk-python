@@ -24,6 +24,7 @@ from google.adk.agents.remote_a2a_agent import RemoteA2aAgent
 
 from veadk.integrations.ve_identity.utils import generate_headers
 from veadk.utils.auth import VE_TIP_TOKEN_CREDENTIAL_KEY, VE_TIP_TOKEN_HEADER
+from veadk.utils.http_defaults import DEFAULT_HTTP_TIMEOUT
 from veadk.utils.logger import get_logger
 from google.adk.utils.context_utils import Aclosing
 from google.adk.events.event import Event
@@ -172,6 +173,7 @@ class RemoteVeAgent(RemoteA2aAgent):
             effective_url + AGENT_CARD_WELL_KNOWN_PATH,
             headers=req_headers,
             params=req_params,
+            timeout=DEFAULT_HTTP_TIMEOUT,
         ).json()
         # replace agent_card_url with actual host
         agent_card_dict["url"] = effective_url

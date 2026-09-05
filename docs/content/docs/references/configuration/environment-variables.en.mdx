@@ -187,6 +187,30 @@ Prefix `OBSERVABILITY_`, configuring where traces and metrics are reported.
 | | `OBSERVABILITY_PROMETHEUS_USERNAME` | Username |
 | | `OBSERVABILITY_PROMETHEUS_PASSWORD` | Password |
 
+## HTTP timeouts
+
+The `VEADK_HTTP_*` variables bound outbound `requests` calls VeADK makes internally (built-in tools, knowledge base backends, deployment and integration SDKs). `VEADK_MAX_DOWNLOAD_BYTES` separately caps remote bodies downloaded by media and Skill tooling. `requests` has no default timeout of its own: a peer that accepts the connection and then goes silent blocks the call forever.
+
+| Variable | Default | Meaning |
+| :- | :- | :- |
+| `VEADK_HTTP_CONNECT_TIMEOUT` | `10` | Seconds allowed to establish a TCP/TLS connection. An unreachable peer fails fast instead of occupying a worker. |
+| `VEADK_HTTP_READ_TIMEOUT` | `60` | Maximum seconds allowed **between two consecutive socket reads**. It caps silence, not the total duration of the call, so a large body is not cut off merely for taking a long time to transfer. |
+| `VEADK_HTTP_STREAM_BUDGET` | `300` | **Total wall-clock ceiling** in seconds for consuming a streamed response end to end; used by TTS plus remote media and Skill downloads. This is a different quantity from the read timeout above: a server emitting an endless trickle of valid frames resets the read gap forever and is only caught by a total budget. |
+| `VEADK_MAX_DOWNLOAD_BYTES` | `268435456` | Maximum size of one remote media or Skill download in bytes (default 256 MiB). Oversized bodies are stopped before replacing a destination file. |
+
+Timeout values are clamped to a minimum of `1.0` second and the byte limit to at least one byte. Invalid values fall back to their defaults.
+
+<Callout type="warn">
+These four variables are evaluated at module import time, so they **must come from the real process environment** (`export`, or environment variables injected by a container or FaaS platform). Setting them in `.env` or `config.yaml` has no effect — VeADK loads those into `os.environ` later than these constants are evaluated, so the "every variable can also be expressed in `config.yaml`" rule stated at the top of this page does not apply here.
+</Callout>
+
+```bash
+export VEADK_HTTP_CONNECT_TIMEOUT=10
+export VEADK_HTTP_READ_TIMEOUT=60
+export VEADK_HTTP_STREAM_BUDGET=300
+export VEADK_MAX_DOWNLOAD_BYTES=268435456
+```
+
 ## Others
 
 | Variable | Meaning |

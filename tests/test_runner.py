@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import inspect
 import os
 
 import pytest
@@ -99,3 +100,71 @@ def test_runner():
 
     # Run message conversion tests
     _test_convert_messages(runner)
+
+
+def _make_offline_runner() -> tuple[Runner, list[str]]:
+    """Build a Runner whose ``run_async`` is stubbed out.
+
+    ``Runner.run`` still executes end to end; only the LLM-backed event stream
+    is replaced, so the returned list records the exact ``session_id`` that each
+    run forwarded downstream.
+    """
+    agent = Agent(
+        model_name="test_model_name",
+        model_provider="test_model_provider",
+        model_api_key="test_model_api_key",
+        model_api_base="test_model_api_base",
+    )
+    runner = Runner(agent=agent, short_term_memory=ShortTermMemory())
+
+    seen_session_ids: list[str] = []
+
+    async def fake_run_async(*, user_id, session_id, new_message, **kwargs):
+        seen_session_ids.append(session_id)
+        return
+        yield  # pragma: no cover - makes this a generator, never reached
+
+    runner.run_async = fake_run_async
+    return runner, seen_session_ids
+
+
+def test_run_session_id_default_is_a_sentinel():
+    """``session_id`` must default to ``None``, not to a call expression.
+
+    A default such as ``f"tmp-session-{formatted_timestamp()}"`` is evaluated
+    once, when the function is defined, so every run omitting ``session_id``
+    would share a single id frozen at import time.
+    """
+    default = inspect.signature(Runner.run).parameters["session_id"].default
+    assert default is None
+
+
+@pytest.mark.asyncio
+async def test_run_generates_a_fresh_session_id_per_call(monkeypatch):
+    """Two runs that omit ``session_id`` must get different ids.
+
+    UUID generation is patched with deterministic values so the test pins both
+    per-call evaluation and the public ``tmp-session-`` prefix.
+    """
+    runner, seen_session_ids = _make_offline_runner()
+
+    generated = iter(["uuid-one", "uuid-two"])
+    monkeypatch.setattr(
+        "veadk.runner.uuid.uuid4",
+        lambda: type("UUID", (), {"hex": next(generated)})(),
+    )
+
+    await runner.run(messages="first")
+    await runner.run(messages="second")
+
+    assert seen_session_ids == ["tmp-session-uuid-one", "tmp-session-uuid-two"]
+
+
+@pytest.mark.asyncio
+async def test_run_uses_an_explicit_session_id_unchanged():
+    """An explicitly passed ``session_id`` is forwarded verbatim."""
+    runner, seen_session_ids = _make_offline_runner()
+
+    await runner.run(messages="hi", session_id="explicit-session-id")
+
+    assert seen_session_ids == ["explicit-session-id"]

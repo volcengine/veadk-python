@@ -26,6 +26,7 @@ from google.adk.tools import ToolContext
 from veadk.tools.skills_tools.session_path import get_session_path
 from veadk.integrations.ve_tos.ve_tos import VeTOS
 from veadk.utils.volcengine_sign import ve_request
+from veadk.utils.http_defaults import DEFAULT_HTTP_TIMEOUT
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -185,7 +186,9 @@ def register_skills_tool(
 
             try:
                 with open(zip_file_path, "rb") as f:
-                    response = requests.put(signed_url, data=f)
+                    response = requests.put(
+                        signed_url, data=f, timeout=DEFAULT_HTTP_TIMEOUT
+                    )
                     response.raise_for_status()
             except Exception as e:
                 logger.error(f"Failed to upload skill '{skill_name}' to minio: {e}")

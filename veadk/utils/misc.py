@@ -16,14 +16,44 @@ import importlib.util
 import json
 import os
 import sys
+import tempfile
 import time
 import types
-from typing import Any, Dict, List, MutableMapping, Optional, Tuple
+from pathlib import Path
+from typing import Any, Callable, Dict, List, MutableMapping, Optional, Tuple
 
 import requests
 from yaml import safe_load
 
+from veadk.utils.http_defaults import (
+    DEFAULT_HTTP_TIMEOUT,
+    DEFAULT_STREAM_BUDGET_SECONDS,
+)
+
 import __main__
+
+
+def _env_int(name: str, default: int, minimum: int = 1) -> int:
+    """Read a positive int from the environment, mirroring `http_defaults`."""
+    raw = os.getenv(name)
+    if not raw:
+        return default
+    try:
+        return max(minimum, int(raw))
+    except (TypeError, ValueError):
+        return default
+
+
+# Hard ceiling on a single remote download. The wall-clock budget bounds how
+# long a transfer may run, not how much it may deliver: 300s on a fast link is
+# tens of gigabytes. Some callers materialize the body in memory and others
+# write remote skill archives to disk, so both paths share the same limit.
+# 256 MiB is far above any generated image, short clip, or normal skill bundle.
+MAX_DOWNLOAD_BYTES: int = _env_int("VEADK_MAX_DOWNLOAD_BYTES", 256 * 1024 * 1024)
+
+# Big enough that per-chunk overhead is noise, small enough that the deadline
+# and the size cap are re-checked often during a transfer.
+_DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 
 
 def read_file(file_path):
@@ -38,11 +68,75 @@ def formatted_timestamp() -> str:
     return time.strftime("%Y%m%d%H%M%S", time.localtime())
 
 
-def read_file_to_bytes(file_path: str) -> bytes:
-    if file_path.startswith(("http://", "https://")):
-        response = requests.get(file_path)
+def _consume_remote_file(file_url: str, consume: Callable[[bytes], Any]) -> int:
+    """Consume a remote body in bounded chunks and return its byte count."""
+    deadline = time.monotonic() + DEFAULT_STREAM_BUDGET_SECONDS
+    downloaded = 0
+    with requests.get(file_url, timeout=DEFAULT_HTTP_TIMEOUT, stream=True) as response:
         response.raise_for_status()
-        return response.content
+        for chunk in response.iter_content(chunk_size=_DOWNLOAD_CHUNK_SIZE):
+            if time.monotonic() > deadline:
+                raise requests.exceptions.Timeout(
+                    f"download of {file_url} not finished within "
+                    f"{DEFAULT_STREAM_BUDGET_SECONDS}s"
+                )
+            if not chunk:
+                continue
+            downloaded += len(chunk)
+            if downloaded > MAX_DOWNLOAD_BYTES:
+                raise ValueError(
+                    f"download of {file_url} exceeds the "
+                    f"{MAX_DOWNLOAD_BYTES} byte limit "
+                    "(override with VEADK_MAX_DOWNLOAD_BYTES)"
+                )
+            consume(chunk)
+    return downloaded
+
+
+def download_url_to_file(file_url: str, destination: str | os.PathLike[str]) -> int:
+    """Download an HTTP(S) URL to a file with time and size bounds.
+
+    The body is streamed to a temporary sibling and atomically moved into
+    place only after the complete response succeeds. An existing destination
+    therefore survives timeouts, oversized bodies, and other transfer errors.
+    """
+    if not file_url.startswith(("http://", "https://")):
+        raise ValueError(f"download URL must use http(s): {file_url}")
+
+    destination_path = Path(destination)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            prefix=f".{destination_path.name}.",
+            suffix=".part",
+            dir=destination_path.parent,
+            delete=False,
+        ) as temporary_file:
+            temporary_path = Path(temporary_file.name)
+            downloaded = _consume_remote_file(file_url, temporary_file.write)
+        os.replace(temporary_path, destination_path)
+        temporary_path = None
+        return downloaded
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
+def read_file_to_bytes(file_path: str) -> bytes:
+    """Read a local path or an http(s) URL into memory.
+
+    Raises `requests.exceptions.Timeout` if a remote transfer outlives
+    `DEFAULT_STREAM_BUDGET_SECONDS`, and `ValueError` if it exceeds
+    `MAX_DOWNLOAD_BYTES`. The read half of `DEFAULT_HTTP_TIMEOUT` only bounds
+    the gap between two socket reads, so a peer trickling a byte every 59s
+    never trips it and would otherwise stream into `response.content` forever:
+    unbounded in both wall-clock time and memory.
+    """
+    if file_path.startswith(("http://", "https://")):
+        chunks: List[bytes] = []
+        _consume_remote_file(file_path, chunks.append)
+        return b"".join(chunks)
     else:
         with open(file_path, "rb") as f:
             return f.read()
