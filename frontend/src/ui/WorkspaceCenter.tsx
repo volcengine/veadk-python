@@ -2,6 +2,7 @@ import {
   useDeferredValue,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type FormEvent,
   type SVGProps,
@@ -26,14 +27,11 @@ import { environmentLanguageLabel } from "./environmentModel";
 import { LibraryResourceCard } from "./LibraryResourceCard";
 import {
   ResourceCreateCard,
-  ResourceDetail,
-  ResourceDetailActions,
-  ResourceDetailBody,
-  ResourceDetailHeader,
-  ResourceDetailHeading,
+  ResourceDetailLayout,
   ResourceDetailSectionHeader,
   ResourceDetailSummary,
   ResourceGrid,
+  ResourceLoadingState,
   ResourcePageHeader,
   ResourcePageShell,
   ResourceResults,
@@ -42,8 +40,10 @@ import {
   ResourceToolbar,
 } from "./ResourceCollection";
 import { StudioConfirmDialog } from "./StudioConfirmDialog";
-import { TextShimmer } from "./text-shimmer/TextShimmer";
-import { EnvironmentCenter } from "./EnvironmentCenter";
+import {
+  EnvironmentCenter,
+  type EnvironmentClipboardImportRequest,
+} from "./EnvironmentCenter";
 import type { CloudProvider } from "../adk/cloudProvider";
 import "./WorkspaceCenter.css";
 
@@ -133,23 +133,21 @@ function WorkspaceEditor({
 
   return (
     <ResourcePageShell className="workspace-center" aria-label={workspace ? "工作区详情" : "新建工作区"}>
-      <ResourceDetail>
-        <ResourceDetailHeader>
-          <ResourceDetailHeading
-            title={workspace ? workspace.name : "新建工作区"}
-            description="将常用环境组合在一起；同一个环境可以加入多个工作区。"
-            backLabel="返回工作区列表"
-            onBack={onBack}
-          />
-          <ResourceDetailActions>
+      <ResourceDetailLayout
+        title={workspace ? workspace.name : "新建工作区"}
+        description="将常用环境组合在一起；同一个环境可以加入多个工作区。"
+        identitySeed={workspace?.name || "新建工作区"}
+        backLabel="返回工作区列表"
+        onBack={onBack}
+        actions={(
+          <>
             {onDelete ? <button type="button" className="is-danger" onClick={onDelete}>删除</button> : null}
             <button type="submit" form="workspace-form" disabled={saving || !name.trim()}>
               {saving ? "保存中" : "保存"}
             </button>
-          </ResourceDetailActions>
-        </ResourceDetailHeader>
-
-        <ResourceDetailBody>
+          </>
+        )}
+      >
           {workspace ? (
             <ResourceDetailSummary>
               <div><dt>环境</dt><dd>{environmentIds.length} 个</dd></div>
@@ -220,8 +218,7 @@ function WorkspaceEditor({
             </section>
             {error ? <p className="workspace-form-error" role="alert">{error}</p> : null}
           </form>
-        </ResourceDetailBody>
-      </ResourceDetail>
+      </ResourceDetailLayout>
     </ResourcePageShell>
   );
 }
@@ -334,7 +331,7 @@ function WorkspaceList({ onEnvironment }: { onEnvironment: () => void }) {
       </ResourceToolbar>
       <ResourceResults aria-live="polite">
         {loading ? (
-          <div className="workspace-loading" role="status"><TextShimmer as="span">正在加载工作区</TextShimmer></div>
+          <ResourceLoadingState />
         ) : loadError ? (
           <div className="workspace-load-error" role="alert">
             <p>{loadError}</p>
@@ -409,13 +406,58 @@ function WorkspaceList({ onEnvironment }: { onEnvironment: () => void }) {
 
 export function WorkspaceCenter({ cloudProvider }: { cloudProvider: CloudProvider }) {
   const [section, setSection] = useState<"workspaces" | "environments">("workspaces");
+  const [clipboardImport, setClipboardImport] = useState<EnvironmentClipboardImportRequest | null>(null);
+  const [clipboardReadError, setClipboardReadError] = useState("");
+  const clipboardRequestKeyRef = useRef(0);
+
+  const openEnvironments = () => {
+    clipboardRequestKeyRef.current += 1;
+    const key = clipboardRequestKeyRef.current;
+    setClipboardReadError("");
+
+    let clipboardRead: Promise<string> | null = null;
+    if (typeof navigator !== "undefined" && navigator.clipboard?.readText) {
+      try {
+        // Start while the tab click still has a user activation.
+        clipboardRead = navigator.clipboard.readText();
+      } catch {
+        setClipboardReadError("未能读取剪贴板。请允许剪贴板权限，或点击“导入环境”后手动粘贴分享码。");
+      }
+    } else {
+      setClipboardReadError("当前浏览器无法自动读取剪贴板；请点击“导入环境”后手动粘贴分享码。");
+    }
+
+    setSection("environments");
+    if (!clipboardRead) return;
+    void clipboardRead.then(async (text) => {
+      if (clipboardRequestKeyRef.current !== key) return;
+      if (text.trim()) {
+        setClipboardImport({ key, text });
+        return;
+      }
+      try {
+        const permission = await navigator.permissions?.query({ name: "clipboard-read" as PermissionName });
+        if (clipboardRequestKeyRef.current === key && permission?.state === "denied") {
+          setClipboardReadError("未能读取剪贴板。请允许剪贴板权限，或点击“导入环境”后手动粘贴分享码。");
+        }
+      } catch {
+        // Some browsers expose clipboard access without the Permissions API.
+      }
+    }).catch(() => {
+      if (clipboardRequestKeyRef.current !== key) return;
+      setClipboardReadError("未能读取剪贴板。请允许剪贴板权限，或点击“导入环境”后手动粘贴分享码。");
+    });
+  };
+
   if (section === "environments") {
     return (
       <EnvironmentCenter
         cloudProvider={cloudProvider}
         onWorkspace={() => setSection("workspaces")}
+        clipboardImport={clipboardImport}
+        clipboardReadError={clipboardReadError}
       />
     );
   }
-  return <WorkspaceList onEnvironment={() => setSection("environments")} />;
+  return <WorkspaceList onEnvironment={openEnvironments} />;
 }

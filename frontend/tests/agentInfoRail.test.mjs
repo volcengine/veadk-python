@@ -183,11 +183,19 @@ test("keeps capability section titles text-only", () => {
 
 test("mixes selected Studio tools into the existing tool list", () => {
   assert.match(railSource, /const selectedStudioTools = studioTools/);
+  assert.match(
+    railSource,
+    /INTERNAL_AGENT_TOOL_NAMES = new Set\(\["StudioExternalToolset"\]\)/,
+  );
+  assert.match(
+    railSource,
+    /\.filter\(\(name\) => !INTERNAL_AGENT_TOOL_NAMES\.has\(name\)\)/,
+  );
   assert.match(railSource, /selectedIds\.has\(tool\.id\)/);
   assert.match(railSource, /tool\.custom && <span className="topo-custom-badge">Studio Tool<\/span>/);
-  assert.match(railSource, /tool\.custom && \([\s\S]*?topo-remove-capability/);
+  assert.match(railSource, /tool\.custom && tool\.removable && \([\s\S]*?topo-remove-capability/);
   assert.doesNotMatch(railSource, /skill\.custom/);
-  assert.match(appSource, /studioTools=\{studioToolCapabilities\?\.tools \?\? \[\]\}/);
+  assert.match(appSource, /studioTools=\{visibleStudioTools\}/);
   assert.match(appSource, /selectedStudioToolIds=\{selectedStudioToolIds\}/);
   assert.doesNotMatch(appSource, /SessionCapabilities|sessionCapabilities/);
 });
@@ -231,7 +239,8 @@ test("uses a searchable Studio BFF tool dialog without dynamic Skills", () => {
   assert.match(capabilityDialogsSource, /onChange\(\[\.\.\.next\]\)/);
   assert.doesNotMatch(capabilityDialogsSource, /Skill Hub|SkillCapabilityDialog/);
   assert.doesNotMatch(clientSource, /SessionCapabilities|sessionCapabilitiesPath/);
-  assert.match(skillspaceClientSource, /"\/web\/skill-spaces\?region=all"/);
+  assert.match(skillspaceClientSource, /"\/web\/skill-spaces"/);
+  assert.doesNotMatch(skillspaceClientSource, /"\/web\/skill-spaces\?region=all"/);
   assert.match(stylesSource, /\.studio-tool-dialog-layer\s*\{[\s\S]*?z-index:\s*110;/);
   assert.match(
     stylesSource,

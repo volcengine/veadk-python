@@ -301,7 +301,7 @@ test("system information page lists sandbox tools and the current identity user 
 
 test("system information shows environment CodePipeline and Container Registry resources", () => {
   assert.match(clientSource, /getEnvironmentResources/);
-  assert.match(clientSource, /\/web\/environment-resources/);
+  assert.match(clientSource, /\/web\/v3\/environment-resources/);
   assert.match(systemInfoSource, /环境构建/);
   assert.match(systemInfoSource, /CodePipeline Workspace/);
   assert.match(systemInfoSource, /Container Registry 仓库/);

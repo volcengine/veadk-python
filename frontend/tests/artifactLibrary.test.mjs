@@ -18,6 +18,10 @@ const resourceStyles = readFileSync(
   new URL("../src/ui/ResourceCollection.css", import.meta.url),
   "utf8",
 );
+const resourceSource = readFileSync(
+  new URL("../src/ui/ResourceCollection.tsx", import.meta.url),
+  "utf8",
+);
 const iconSource = readFileSync(
   new URL("../src/ui/icons/LibraryIcons.tsx", import.meta.url),
   "utf8",
@@ -106,18 +110,18 @@ test("supports managed artifacts and preserves their source provenance", () => {
 });
 
 test("shared artifact controls are keyboard accessible", () => {
-  assert.match(actionMenuSource, /aria-haspopup="menu"/);
-  assert.match(actionMenuSource, /role="menuitem"/);
-  assert.match(actionMenuSource, /\["ArrowDown", "ArrowUp", "Home", "End"\]/);
-  assert.match(actionMenuSource, /window\.addEventListener\("pointerdown", closeOnPointerDown\)/);
-  assert.match(actionMenuSource, /event\.key !== "Escape"/);
+  assert.match(actionMenuSource, /from "@openai\/apps-sdk-ui\/components\/Menu"/);
+  assert.match(actionMenuSource, /<Menu\.Trigger>/);
+  assert.match(actionMenuSource, /<Menu\.Item/);
+  assert.match(actionMenuSource, /aria-label=\{label\}/);
   assert.match(editDialogSource, /event\.key !== "Tab"/);
   assert.match(pageSource, /event\.key !== "Tab"/);
   assert.match(pageSource, /document\.body\.style\.overflow = "hidden"/);
 });
 
 test("covers loading, failure, retry, empty and unavailable-preview states", () => {
-  assert.match(pageSource, /正在加载产物/);
+  assert.match(pageSource, /<ResourceLoadingState \/>/);
+  assert.match(resourceSource, /资源加载中，请稍候/);
   assert.match(pageSource, /产物加载失败/);
   assert.match(pageSource, /重新加载/);
   assert.match(pageSource, /您还没有任何产物/);

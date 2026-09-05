@@ -31,6 +31,7 @@ from frontend.server.storage import (
     StudioStorageConfig,
     StudioTosMediaStorage,
 )
+from frontend.server.storage.tos import create_tos_client_factory
 from veadk.multimodal.models import MediaRecord, MediaRef
 from veadk.multimodal.service import MediaService
 
@@ -246,16 +247,18 @@ def video_asset_repository_factory(
     if not config.configured:
         return None, max_bytes
 
+    client_factory = create_tos_client_factory(config, resolve_credentials)
+
     def factory() -> VideoAssetRepository:
-        access_key, secret_key, session_token = resolve_credentials()
         storage = StudioTosMediaStorage(
             bucket=config.bucket,
             region=config.region,
             endpoint=config.endpoint,
-            access_key=access_key,
-            secret_key=secret_key,
-            session_token=session_token or "",
+            access_key="",
+            secret_key="",
             key_prefix=STUDIO_STORAGE_ROOT_PREFIX,
+            client=client_factory(),
+            signed_url_endpoint=config.endpoint,
         )
         return VideoAssetRepository(MediaService(storage, max_file_bytes=max_bytes))
 

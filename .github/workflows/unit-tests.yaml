@@ -55,4 +55,135 @@ jobs:
     - name: Run unit tests with pytest
       run: |
         source .venv/bin/activate
-        pytest -n 16
+        # `codex_smoke` is excluded here rather than relying on its
+        # CODEX_RUN_SMOKE opt-in alone: it spawns a real Codex subprocess and
+        # binds two real loopback ports, which must never run under `-n 16`.
+        pytest -n 16 -m "not codex_smoke"
+
+  # Real Codex binary + real OS sandbox + real shim socket, against a stubbed
+  # model backend (no credentials, no network egress). Kept out of the matrix
+  # job above because it is serial and process-spawning.
+  #
+  # The job tolerates the test FAILING but not the test being ABSENT, and those
+  # are two separate steps below:
+  #
+  #   * `continue-on-error` sits on the pytest step only. Whether the OS sandbox
+  #     (landlock+seccomp on a GitHub runner) establishes at all is precisely the
+  #     unknown this test exists to discover, and the CLI is pinned to an alpha
+  #     (openai-codex-cli-bin==0.137.0a4), so a red assertion is signal to read,
+  #     not a broken build. Drop that flag once the Linux sandbox verdict is in
+  #     and the test has been green for a few runs -- at which point this job
+  #     becomes an ordinary required check.
+  #   * The step after it has NO such flag: a skipped or uncollected smoke test
+  #     means the job proved nothing (lost binary, SDK install failure, platform
+  #     check tripping), and an exit-0 green tick for that would defeat the whole
+  #     point of running it. That must stay a hard failure even before the flag
+  #     above comes off.
+  codex-smoke:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Install the latest version of uv
+      uses: astral-sh/setup-uv@v6
+
+    - name: Install dependencies
+      run: |
+        uv venv .venv
+        source .venv/bin/activate
+        uv sync --all-extras
+        uv pip install -e .
+
+    - name: Run the Codex end-to-end smoke test
+      # Tolerates a failing assertion (the sandbox verdict this job exists to
+      # collect); does NOT tolerate the test not running -- see the next step.
+      continue-on-error: true
+      env:
+        CODEX_RUN_SMOKE: "1"
+      run: |
+        source .venv/bin/activate
+        # -p no:xdist: this test must not be distributed across workers.
+        # -rs: print skip reasons, so a silently skipped smoke test (missing
+        # SDK, missing binary, unsupported platform) is visible in the log.
+        # --junitxml: machine-readable outcome for the assertion step below;
+        # pytest's own exit code cannot distinguish "passed" from "skipped".
+        pytest -m codex_smoke -p no:xdist -rs --junitxml=codex-smoke.xml
+
+    - name: Assert the smoke test actually ran
+      # No continue-on-error: this is the guard that stops the job going green
+      # while proving nothing.
+      run: |
+        python3 - <<'PY'
+        import sys
+        import xml.etree.ElementTree as ET
+        from pathlib import Path
+
+        report = Path("codex-smoke.xml")
+        if not report.exists():
+            sys.exit(
+                "codex smoke: pytest wrote no JUnit report, so it never got as "
+                "far as running tests (crash, bad invocation, or a broken venv)."
+            )
+
+        entries = list(ET.parse(report).getroot().iter("testcase"))
+
+        def _detail(case, tag):
+            node = case.find(tag)
+            if node is None:
+                return None
+            name = f"{case.get('classname', '')}::{case.get('name', '')}"
+            return f"  {name}: {node.get('message') or (node.text or '').strip()}"
+
+        # pytest also emits a classname-less entry per module skipped during
+        # collection -- including modules `-m codex_smoke` deselected entirely
+        # (any `pytest.importorskip` at module scope elsewhere in the tree).
+        # Those are not this job's business; only real test cases are.
+        cases = [entry for entry in entries if entry.get("classname")]
+        if not cases:
+            collection = [d for d in (_detail(e, "skipped") for e in entries) if d]
+            sys.exit(
+                "codex smoke: no test ran under `-m codex_smoke`. Either the "
+                "smoke test was renamed/moved/lost its marker, or its whole "
+                "module was skipped at collection -- either way this job is "
+                "asserting nothing."
+                + ("\nmodules skipped at collection:\n" + "\n".join(collection)
+                   if collection else "")
+            )
+
+        skipped = [d for d in (_detail(c, "skipped") for c in cases) if d]
+        if skipped:
+            sys.exit(
+                "codex smoke: the smoke test SKIPPED, so nothing was verified. "
+                "CODEX_RUN_SMOKE=1 is set by this job, so the cause is the "
+                "environment (openai-codex SDK missing, no runnable Codex "
+                "binary, or the platform check tripping) and must be fixed "
+                "rather than tolerated:\n" + "\n".join(skipped)
+            )
+
+        errored = [d for d in (_detail(c, "error") for c in cases) if d]
+        if errored:
+            sys.exit(
+                "codex smoke: the test errored in setup/teardown rather than "
+                "running to a verdict:\n" + "\n".join(errored)
+            )
+
+        failed = [d for d in (_detail(c, "failure") for c in cases) if d]
+        if failed:
+            # Deliberately not fatal: the pytest step above already reported it,
+            # and its `continue-on-error` is what keeps this job advisory while
+            # the Linux sandbox verdict is unknown. Both come off together.
+            print(
+                f"codex smoke: {len(cases)} test(s) ran, {len(failed)} FAILED "
+                "-- this is the signal this job exists to collect; read the "
+                "pytest output above:\n" + "\n".join(failed)
+            )
+        else:
+            print(f"codex smoke: {len(cases)} test(s) ran and passed.")
+        PY

@@ -25,6 +25,10 @@
   line-height: 1.55;
 }
 
+.cloud-env-guidance.cloud-env-guidance--fallback {
+  color: hsl(var(--destructive));
+}
+
 .cloud-env-summary {
   min-width: 0;
   padding: 16px;

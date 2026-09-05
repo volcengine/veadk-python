@@ -1,5 +1,13 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ChevronRight, Download, Eye, FileText, Loader2, ShieldCheck, X } from "lucide-react";
+import {
+  ChevronRight,
+  Download,
+  Eye,
+  FileText,
+  Loader2,
+  ShieldCheck,
+  X,
+} from "lucide-react";
 import { motion } from "motion/react";
 import type { Block } from "../blocks";
 import { buildSurfaces, SurfaceView } from "../a2ui/Surface";
@@ -10,8 +18,10 @@ import { MediaGroup } from "./Media";
 import type { A2uiAction, A2uiComponent } from "../a2ui/types";
 import { TextShimmer } from "./text-shimmer/TextShimmer";
 import { BuiltinToolHeader } from "./builtin-tools/BuiltinToolHeader";
+import { createdAgentsHaveFailure } from "./builtin-tools/createAgentToolCardData";
 import { ToolDisclosureIcon } from "./builtin-tools/icons";
 import { getBuiltinToolDefinition } from "./builtin-tools/registry";
+import type { BranchCompareBranch } from "./builtin-tools/branchCompareData";
 import { AgentKitLogoIcon } from "./icons/AgentKitLogoIcon";
 import { DeliverySourceIcon } from "./icons/DeliverySourceIcon";
 import { DeliveryVerifiedIcon } from "./icons/DeliveryVerifiedIcon";
@@ -52,9 +62,12 @@ function useSmoothStreamingText(
 
   useEffect(() => {
     const current = displayedRef.current;
-    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const reduceMotion = window.matchMedia(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
     if (!streaming || reduceMotion || !text.startsWith(current)) {
-      if (frameRef.current !== null) window.cancelAnimationFrame(frameRef.current);
+      if (frameRef.current !== null)
+        window.cancelAnimationFrame(frameRef.current);
       frameRef.current = null;
       if (current !== text) {
         displayedRef.current = text;
@@ -92,9 +105,8 @@ function useSmoothStreamingText(
       displayedRef.current = next;
       lastFrameRef.current = timestamp;
       setDisplayed(next);
-      frameRef.current = next === target
-        ? null
-        : window.requestAnimationFrame(renderFrame);
+      frameRef.current =
+        next === target ? null : window.requestAnimationFrame(renderFrame);
     };
 
     frameRef.current = window.requestAnimationFrame(renderFrame);
@@ -108,12 +120,15 @@ function useSmoothStreamingText(
     if (displayed === text) onComplete?.();
   }, [displayed, onComplete, text]);
 
-  useEffect(() => () => {
-    if (frameRef.current !== null) {
-      window.cancelAnimationFrame(frameRef.current);
-      frameRef.current = null;
-    }
-  }, []);
+  useEffect(
+    () => () => {
+      if (frameRef.current !== null) {
+        window.cancelAnimationFrame(frameRef.current);
+        frameRef.current = null;
+      }
+    },
+    [],
+  );
 
   return displayed;
 }
@@ -156,8 +171,56 @@ function PlanIcon() {
   );
 }
 
+function SandboxHandoffIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M5 5v7.25A3.75 3.75 0 0 0 8.75 16H19" />
+      <path d="m15.5 12.5 3.5 3.5-3.5 3.5" />
+    </svg>
+  );
+}
+
+function CodexSandboxIdentity({
+  activity,
+}: {
+  activity: NonNullable<Extract<Block, { kind: "tool" }>["codexActivity"]>;
+}) {
+  const details: Array<[string, string | undefined]> = [
+    ["Agent Session", activity.agentSessionId],
+    ["Sandbox Session", activity.sandboxSessionId],
+    ["Codex Thread", activity.threadId],
+  ].filter((entry): entry is [string, string] => Boolean(entry[1]));
+  if (!details.length) return null;
+  return (
+    <dl
+      className="codex-sandbox-run__identity"
+      aria-label="Codex Sandbox 执行标识"
+    >
+      {details.map(([label, value]) => (
+        <div key={label}>
+          <dt>{label}</dt>
+          <dd title={value}>{value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 function loadSkillLabel(name: string, args: unknown): string | undefined {
-  if (name !== "load_skill" || args == null || typeof args !== "object" || Array.isArray(args)) {
+  if (
+    name !== "load_skill" ||
+    args == null ||
+    typeof args !== "object" ||
+    Array.isArray(args)
+  ) {
     return undefined;
   }
   const skillName = (args as Record<string, unknown>).skill_name;
@@ -188,14 +251,41 @@ export function ThinkingBlock({
     touched.current = true;
     setOpen((o) => !o);
   };
-  const body = text.replace(/^\s+/, "");
-  const displayedBody = useSmoothStreamingText(body, !done || streaming, onStreamFrame);
+  const body = text
+    .replace(/\r\n?/g, "\n")
+    .trimStart()
+    .split(/\n{2,}/)
+    .map((paragraph) =>
+      paragraph.replace(/[^\S\n]*\n[^\S\n]*/g, (lineBreak, offset, source) => {
+        const before = source[offset - 1] ?? "";
+        const after = source[offset + lineBreak.length] ?? "";
+        if (!before || !after) return "";
+        if (/\p{Script=Han}/u.test(before) && /\p{Script=Han}/u.test(after)) {
+          return "";
+        }
+        if (
+          /[(\[{“‘/]/u.test(before) ||
+          /[),.\]}，。！？；：、”’]/u.test(after)
+        ) {
+          return "";
+        }
+        return " ";
+      }),
+    )
+    .join("\n\n");
+  const displayedBody = useSmoothStreamingText(
+    body,
+    !done || streaming,
+    onStreamFrame,
+  );
   const { ref, onScroll } = useStickToBottom<HTMLDivElement>(displayedBody);
   return (
     <div className="block-thinking">
       <button className="think-head" onClick={toggle} type="button">
         <span className="think-icon" aria-hidden="true">
-          <AgentKitLogoIcon className={`thinking-logo ${done ? "" : "is-active"}`} />
+          <AgentKitLogoIcon
+            className={`thinking-logo ${done ? "" : "is-active"}`}
+          />
         </span>
         {done ? (
           <span className="think-label think-label--done">已完成思考</span>
@@ -240,6 +330,7 @@ function BuildProgressBlock({ text }: { text: string }) {
 function DeliveryCard({
   value,
   onResolve,
+  onResolveComparison,
   onDownload,
   onDeploy,
 }: {
@@ -247,6 +338,12 @@ function DeliveryCard({
   onResolve?: (
     value: Extract<Block, { kind: "delivery" }>["value"],
   ) => Promise<Extract<Block, { kind: "delivery" }>["value"]>;
+  onResolveComparison?: (
+    value: Extract<Block, { kind: "delivery" }>["value"],
+  ) => Promise<{
+    base: Extract<Block, { kind: "delivery" }>["value"];
+    target: Extract<Block, { kind: "delivery" }>["value"];
+  }>;
   onDownload?: (
     value: Extract<Block, { kind: "delivery" }>["value"],
   ) => Promise<void>;
@@ -256,8 +353,13 @@ function DeliveryCard({
     Extract<Block, { kind: "delivery" }>["value"] | null
   >(value.files ? value : null);
   const [codeOpen, setCodeOpen] = useState(false);
+  const [comparisonOpen, setComparisonOpen] = useState(false);
+  const [comparison, setComparison] = useState<{
+    base: Extract<Block, { kind: "delivery" }>["value"];
+    target: Extract<Block, { kind: "delivery" }>["value"];
+  } | null>(null);
   const [busyAction, setBusyAction] = useState<
-    "source" | "download" | "deploy" | null
+    "source" | "compare" | "download" | "deploy" | null
   >(null);
   const [error, setError] = useState("");
   const [downloadStatus, setDownloadStatus] = useState<{
@@ -316,6 +418,22 @@ function DeliveryCard({
     }
   }
 
+  async function openComparison() {
+    if (!onResolveComparison) return;
+    setBusyAction("compare");
+    setError("");
+    setDownloadStatus(null);
+    try {
+      const result = comparison ?? (await onResolveComparison(value));
+      setComparison(result);
+      setComparisonOpen(true);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
   async function deploy() {
     setBusyAction("deploy");
     setError("");
@@ -340,14 +458,18 @@ function DeliveryCard({
             {value.verified ? <DeliveryVerifiedIcon /> : <DeliverySourceIcon />}
           </span>
           <div>
-            <strong>{value.verified ? "已验证交付物" : "生成的 Agent 源码"}</strong>
+            <strong>
+              {value.verified ? "已验证交付物" : "生成的 Agent 源码"}
+            </strong>
             <span>{value.agentName}</span>
           </div>
         </header>
         <dl className="delivery-card-grid">
           <div>
             <dt>入口</dt>
-            <dd><code>{value.entryPoint}</code></dd>
+            <dd>
+              <code>{value.entryPoint}</code>
+            </dd>
           </div>
           <div>
             <dt>文件数</dt>
@@ -365,8 +487,8 @@ function DeliveryCard({
         <p className="delivery-card-gates">
           {value.verified
             ? `${value.gateSummary.length} 项检查通过`
-            : "源码已准备好，可部署"} ·{" "}
-          <code>{value.artifactSha256.slice(0, 12)}</code>
+            : "源码已准备好，可部署"}{" "}
+          · <code>{value.artifactSha256.slice(0, 12)}</code>
         </p>
         {!value.verified ? (
           <p className="delivery-card-guidance">
@@ -385,6 +507,19 @@ function DeliveryCard({
             ) : null}
             查看源码
           </button>
+          {value.projectId && value.versionId && value.parentVersionId ? (
+            <button
+              type="button"
+              className="delivery-card-secondary"
+              onClick={() => void openComparison()}
+              disabled={!onResolveComparison || busyAction !== null}
+            >
+              {busyAction === "compare" ? (
+                <Loader2 className="spin" aria-hidden="true" />
+              ) : null}
+              {busyAction === "compare" ? "正在准备…" : "查看本次变更"}
+            </button>
+          ) : null}
           <button
             type="button"
             className="delivery-card-secondary"
@@ -401,7 +536,10 @@ function DeliveryCard({
             type="button"
             onClick={() => void deploy()}
             disabled={
-              !value.deployable || !onDeploy || !onResolve || busyAction !== null
+              !value.deployable ||
+              !onDeploy ||
+              !onResolve ||
+              busyAction !== null
             }
             title={value.deployable ? undefined : "源码尚未准备好"}
           >
@@ -411,7 +549,11 @@ function DeliveryCard({
             手动部署到 Runtime
           </button>
         </div>
-        {error ? <p className="delivery-card-error" role="alert">{error}</p> : null}
+        {error ? (
+          <p className="delivery-card-error" role="alert">
+            {error}
+          </p>
+        ) : null}
         {downloadStatus ? (
           <p className="delivery-card-status" role="status" aria-live="polite">
             {downloadStatus.message}
@@ -422,6 +564,28 @@ function DeliveryCard({
         project={{ name: value.agentName, files: resolved?.files ?? [] }}
         open={codeOpen}
         onClose={() => setCodeOpen(false)}
+        onChange={() => {}}
+        readOnly
+      />
+      <CodeBrowserDialog
+        project={{
+          name: comparison?.target.agentName ?? value.agentName,
+          files: comparison?.target.files ?? [],
+        }}
+        comparison={
+          comparison
+            ? {
+                baseProject: {
+                  name: comparison.base.agentName,
+                  files: comparison.base.files ?? [],
+                },
+                baseLabel: "优化前",
+                targetLabel: "优化后",
+              }
+            : undefined
+        }
+        open={comparisonOpen}
+        onClose={() => setComparisonOpen(false)}
         onChange={() => {}}
         readOnly
       />
@@ -461,7 +625,10 @@ const StreamingTextBlock = memo(function StreamingTextBlock({
 
 type PlanBlockValue = Extract<Block, { kind: "plan" }>;
 
-const PLAN_STATUS_LABELS: Record<PlanBlockValue["items"][number]["status"], string> = {
+const PLAN_STATUS_LABELS: Record<
+  PlanBlockValue["items"][number]["status"],
+  string
+> = {
   pending: "待处理",
   in_progress: "进行中",
   completed: "已完成",
@@ -505,10 +672,14 @@ function PlanBlock({
         )}
         {summary ? <span className="plan-summary">{summary}</span> : null}
         {items.length > 0 ? (
-          <ToolDisclosureIcon className={`plan-chevron${open ? " is-open" : ""}`} />
+          <ToolDisclosureIcon
+            className={`plan-chevron${open ? " is-open" : ""}`}
+          />
         ) : null}
       </button>
-      <div className={`think-collapse ${open && items.length > 0 ? "open" : ""}`}>
+      <div
+        className={`think-collapse ${open && items.length > 0 ? "open" : ""}`}
+      >
         <div className="think-collapse-inner">
           {items.length > 0 ? (
             <ol className="plan-items">
@@ -540,13 +711,15 @@ function studioToolArtifacts(response: unknown): StudioToolArtifact[] {
   if (Array.isArray(record.studio_artifacts)) {
     candidates = record.studio_artifacts;
   } else if (nested && typeof nested === "object") {
-    const nestedArtifacts = (nested as Record<string, unknown>).studio_artifacts;
+    const nestedArtifacts = (nested as Record<string, unknown>)
+      .studio_artifacts;
     if (Array.isArray(nestedArtifacts)) candidates = nestedArtifacts;
   }
   return candidates.flatMap((candidate) => {
     if (!candidate || typeof candidate !== "object") return [];
     const artifact = candidate as Record<string, unknown>;
-    return typeof artifact.name === "string" && typeof artifact.contentUrl === "string"
+    return typeof artifact.name === "string" &&
+      typeof artifact.contentUrl === "string"
       ? [{ name: artifact.name, contentUrl: artifact.contentUrl }]
       : [];
   });
@@ -562,6 +735,10 @@ function ToolBlock({
   done,
   status,
   defaultOpen = false,
+  retrying = false,
+  codexActivity,
+  onBranchSelect,
+  onAction,
 }: {
   name: string;
   args?: unknown;
@@ -569,19 +746,38 @@ function ToolBlock({
   done: boolean;
   status?: "running" | "completed" | "failed";
   defaultOpen?: boolean;
+  retrying?: boolean;
+  codexActivity?: Extract<Block, { kind: "tool" }>["codexActivity"];
+  onBranchSelect?: (branch: BranchCompareBranch) => void;
+  onAction: BlocksProps["onAction"];
 }) {
-  const [open, setOpen] = useState(defaultOpen);
+  const inferredCreateAgentFailure =
+    name === "create_agents" &&
+    done &&
+    createdAgentsHaveFailure(args, response);
+  const toolStatus = inferredCreateAgentFailure
+    ? "failed"
+    : (status ?? (done ? "completed" : "running"));
+  const isAdjustingAgent =
+    name === "create_agents" && toolStatus === "failed" && retrying;
+  const builtinTool = getBuiltinToolDefinition(name);
+  const DetailRenderer = builtinTool?.detailRenderer;
+  const hideHeader = builtinTool?.hideHeader === true;
+  const shouldDefaultOpen =
+    hideHeader ||
+    defaultOpen ||
+    Boolean(DetailRenderer) ||
+    Boolean(codexActivity);
+  const [open, setOpen] = useState(shouldDefaultOpen);
   const touched = useRef(false);
   useEffect(() => {
-    if (!touched.current && defaultOpen) setOpen(true);
-  }, [defaultOpen]);
+    if (!touched.current && shouldDefaultOpen) setOpen(true);
+  }, [shouldDefaultOpen]);
   const toggle = () => {
     touched.current = true;
     setOpen((value) => !value);
   };
   const label = name === A2UI_TOOL ? "渲染 UI" : name;
-  const toolStatus = status ?? (done ? "completed" : "running");
-  const builtinTool = toolStatus === "failed" ? undefined : getBuiltinToolDefinition(name);
   const studioArtifacts = studioToolArtifacts(response);
   const respText =
     response == null
@@ -590,7 +786,9 @@ function ToolBlock({
         ? response
         : JSON.stringify(response, null, 2);
   const truncated =
-    respText && respText.length > 2000 ? respText.slice(0, 2000) + "\n…（已截断）" : respText;
+    respText && respText.length > 2000
+      ? respText.slice(0, 2000) + "\n…（已截断）"
+      : respText;
   return (
     <motion.div
       className={`block-tool${builtinTool ? " block-tool--builtin" : ""}`}
@@ -599,15 +797,21 @@ function ToolBlock({
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.2, ease: "easeOut" }}
     >
-      {builtinTool ? (
+      {builtinTool && !hideHeader ? (
         <BuiltinToolHeader
           definition={builtinTool}
-          label={loadSkillLabel(name, args)}
+          label={
+            isAdjustingAgent
+              ? "Agent 正在调整"
+              : toolStatus === "failed"
+                ? builtinTool.failedLabel
+                : loadSkillLabel(name, args)
+          }
           done={done}
           open={open}
           onToggle={toggle}
         />
-      ) : (
+      ) : !builtinTool ? (
         <button
           className="tool-head tool-head--generic"
           onClick={toggle}
@@ -624,41 +828,86 @@ function ToolBlock({
               {label}
             </TextShimmer>
           )}
-          <ToolDisclosureIcon className={`tool-chevron${open ? " is-open" : ""}`} />
+          <ToolDisclosureIcon
+            className={`tool-chevron${open ? " is-open" : ""}`}
+          />
         </button>
-      )}
-      <div className={`think-collapse ${open ? "open" : ""}`}>
+      ) : null}
+      <div
+        className={`${hideHeader ? "" : "think-collapse "}${open ? "open" : ""}`}
+      >
         <div className="think-collapse-inner">
-          <div className="tool-detail">
-            {args != null && (
-              <div className="tool-section">
-                <div className="tool-section-label">参数</div>
-                <pre className="tool-args">{JSON.stringify(args, null, 2)}</pre>
+          {codexActivity ? (
+            <section
+              className="codex-sandbox-run"
+              aria-label="Codex Sandbox 详细输出"
+            >
+              <div className="codex-sandbox-run__label">
+                <span className="codex-sandbox-run__badge">
+                  <SandboxHandoffIcon />
+                  <span>Codex Sandbox</span>
+                </span>
+                <span className="codex-sandbox-run__title">
+                  {codexActivity.title}
+                </span>
               </div>
-            )}
-            {truncated != null && (
-              <div className="tool-section">
-                <div className="tool-section-label">返回</div>
-                <pre className="tool-args tool-result">{truncated}</pre>
+              <CodexSandboxIdentity activity={codexActivity} />
+              <div className="codex-sandbox-run__stream">
+                {codexActivity.items.length > 0 ? (
+                  <Blocks
+                    blocks={codexActivity.items.map((item) => item.block)}
+                    streaming={!done}
+                    onAction={onAction}
+                  />
+                ) : (
+                  <TextShimmer className="codex-sandbox-run__empty">
+                    正在等待 Codex 输出
+                  </TextShimmer>
+                )}
               </div>
-            )}
-            {studioArtifacts.length > 0 && (
-              <div className="tool-section">
-                <div className="tool-section-label">产物</div>
-                <div className="studio-tool-artifacts">
-                  {studioArtifacts.map((artifact) => (
-                    <a
-                      key={`${artifact.contentUrl}:${artifact.name}`}
-                      href={artifact.contentUrl}
-                      download={artifact.name}
-                    >
-                      下载 {artifact.name}
-                    </a>
-                  ))}
+            </section>
+          ) : null}
+          {DetailRenderer ? (
+            <DetailRenderer
+              args={args}
+              response={response}
+              status={toolStatus}
+              onBranchSelect={onBranchSelect}
+            />
+          ) : !codexActivity ? (
+            <div className="tool-detail">
+              {args != null && (
+                <div className="tool-section">
+                  <div className="tool-section-label">参数</div>
+                  <pre className="tool-args">
+                    {JSON.stringify(args, null, 2)}
+                  </pre>
                 </div>
-              </div>
-            )}
-          </div>
+              )}
+              {truncated != null && (
+                <div className="tool-section">
+                  <div className="tool-section-label">返回</div>
+                  <pre className="tool-args tool-result">{truncated}</pre>
+                </div>
+              )}
+              {studioArtifacts.length > 0 && (
+                <div className="tool-section">
+                  <div className="tool-section-label">产物</div>
+                  <div className="studio-tool-artifacts">
+                    {studioArtifacts.map((artifact) => (
+                      <a
+                        key={`${artifact.contentUrl}:${artifact.name}`}
+                        href={artifact.contentUrl}
+                        download={artifact.name}
+                      >
+                        下载 {artifact.name}
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : null}
         </div>
       </div>
     </motion.div>
@@ -679,10 +928,15 @@ function ArtifactCard({
 }) {
   const [pending, setPending] = useState("");
   const [error, setError] = useState("");
-  const [preview, setPreview] = useState<{ name: string; url: string } | null>(null);
-  useEffect(() => () => {
-    if (preview) URL.revokeObjectURL(preview.url);
-  }, [preview]);
+  const [preview, setPreview] = useState<{ name: string; url: string } | null>(
+    null,
+  );
+  useEffect(
+    () => () => {
+      if (preview) URL.revokeObjectURL(preview.url);
+    },
+    [preview],
+  );
 
   const closePreview = () => setPreview(null);
   const download = async (filename: string, version: number) => {
@@ -697,7 +951,11 @@ function ArtifactCard({
       setPending("");
     }
   };
-  const openPreview = async (filename: string, version: number, name: string) => {
+  const openPreview = async (
+    filename: string,
+    version: number,
+    name: string,
+  ) => {
     if (!onPreview) return;
     setPending(`preview:${name}`);
     setError("");
@@ -710,56 +968,91 @@ function ArtifactCard({
       setPending("");
     }
   };
-  const files = block.files.filter((file) => !file.filename.endsWith(".preview.webp"));
+  const files = block.files.filter(
+    (file) => !file.filename.endsWith(".preview.webp"),
+  );
   return (
     <div className="artifact-list">
       {files.map((file) => {
         const previewName = `${file.filename.replace(/\.pptx$/i, "")}.preview.webp`;
-        const previewFile = block.files.find((item) => item.filename === previewName);
+        const previewFile = block.files.find(
+          (item) => item.filename === previewName,
+        );
         return (
-        <div
-          className="artifact-card"
-          key={`${file.filename}:${file.version}`}
-        >
-          <span className="artifact-card__icon" aria-hidden="true">
-            <FileText />
-          </span>
-          <span className="artifact-card__copy">
-            <span className="artifact-card__name">{file.filename}</span>
-            <span className="artifact-card__hint">PowerPoint 演示文稿</span>
-          </span>
-          <span className="artifact-card__actions">
-            {previewFile && (
+          <div
+            className="artifact-card"
+            key={`${file.filename}:${file.version}`}
+          >
+            <span className="artifact-card__icon" aria-hidden="true">
+              <FileText />
+            </span>
+            <span className="artifact-card__copy">
+              <span className="artifact-card__name">{file.filename}</span>
+              <span className="artifact-card__hint">PowerPoint 演示文稿</span>
+            </span>
+            <span className="artifact-card__actions">
+              {previewFile && (
+                <button
+                  className="artifact-card__action"
+                  type="button"
+                  disabled={!onPreview || pending !== ""}
+                  onClick={() =>
+                    void openPreview(
+                      previewFile.filename,
+                      previewFile.version,
+                      file.filename,
+                    )
+                  }
+                >
+                  {pending === `preview:${file.filename}` ? (
+                    <Loader2 className="spin" />
+                  ) : (
+                    <Eye />
+                  )}
+                  预览
+                </button>
+              )}
               <button
-                className="artifact-card__action"
+                className="artifact-card__action artifact-card__action--primary"
                 type="button"
-                disabled={!onPreview || pending !== ""}
-                onClick={() => void openPreview(previewFile.filename, previewFile.version, file.filename)}
+                disabled={!onDownload || pending !== ""}
+                onClick={() => void download(file.filename, file.version)}
               >
-                {pending === `preview:${file.filename}` ? <Loader2 className="spin" /> : <Eye />}
-                预览
+                {pending === `download:${file.filename}` ? (
+                  <Loader2 className="spin" />
+                ) : (
+                  <Download />
+                )}
+                下载
               </button>
-            )}
-            <button
-              className="artifact-card__action artifact-card__action--primary"
-              type="button"
-              disabled={!onDownload || pending !== ""}
-              onClick={() => void download(file.filename, file.version)}
-            >
-              {pending === `download:${file.filename}` ? <Loader2 className="spin" /> : <Download />}
-              下载
-            </button>
-          </span>
-        </div>
-      )})}
+            </span>
+          </div>
+        );
+      })}
       {error && <div className="artifact-card__error">{error}</div>}
       {preview && (
-        <div className="artifact-preview" role="dialog" aria-modal="true" aria-label={`${preview.name} 预览`}>
-          <button className="artifact-preview__backdrop" type="button" aria-label="关闭预览" onClick={closePreview} />
+        <div
+          className="artifact-preview"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`${preview.name} 预览`}
+        >
+          <button
+            className="artifact-preview__backdrop"
+            type="button"
+            aria-label="关闭预览"
+            onClick={closePreview}
+          />
           <div className="artifact-preview__panel">
             <div className="artifact-preview__header">
               <span>{preview.name}</span>
-              <button type="button" aria-label="关闭预览" onClick={closePreview}><X /></button>
+              <button
+                type="button"
+                aria-label="关闭预览"
+                onClick={closePreview}
+              >
+                <X />
+              </button>
             </div>
             <div className="artifact-preview__canvas">
               <img src={preview.url} alt={`${preview.name} 幻灯片预览`} />
@@ -780,9 +1073,9 @@ function AuthCard({
   block: AuthBlock;
   onAuth?: (block: AuthBlock) => Promise<void>;
 }) {
-  const [status, setStatus] = useState<"idle" | "authorizing" | "done" | "error">(
-    block.done ? "done" : "idle",
-  );
+  const [status, setStatus] = useState<
+    "idle" | "authorizing" | "done" | "error"
+  >(block.done ? "done" : "idle");
   const [err, setErr] = useState("");
 
   const toolLabel = block.label || "MCP 工具集";
@@ -837,11 +1130,13 @@ function AuthCard({
         <span className="auth-card-title">{toolLabel} 需要授权</span>
       </div>
       <p className="auth-card-desc">
-        工具集 <code className="auth-card-code">{toolLabel}</code> 使用 OAuth 保护，
-        需登录授权后方可调用。
+        工具集 <code className="auth-card-code">{toolLabel}</code> 使用 OAuth
+        保护， 需登录授权后方可调用。
         {provider && (
           <>
-            {" "}将跳转至 <code className="auth-card-code">{provider}</code> 完成登录，
+            {" "}
+            将跳转至 <code className="auth-card-code">{provider}</code>{" "}
+            完成登录，
           </>
         )}
         授权完成后对话自动继续。
@@ -881,10 +1176,19 @@ export interface BlocksProps {
   onResolveDelivery?: (
     delivery: Extract<Block, { kind: "delivery" }>["value"],
   ) => Promise<Extract<Block, { kind: "delivery" }>["value"]>;
+  onResolveDeliveryComparison?: (
+    delivery: Extract<Block, { kind: "delivery" }>["value"],
+  ) => Promise<{
+    base: Extract<Block, { kind: "delivery" }>["value"];
+    target: Extract<Block, { kind: "delivery" }>["value"];
+  }>;
   onDownloadDelivery?: (
     delivery: Extract<Block, { kind: "delivery" }>["value"],
   ) => Promise<void>;
-  onDeployDelivery?: (delivery: Extract<Block, { kind: "delivery" }>["value"]) => void;
+  onDeployDelivery?: (
+    delivery: Extract<Block, { kind: "delivery" }>["value"],
+  ) => void;
+  onBranchSelect?: (branch: BranchCompareBranch) => void;
 }
 
 export function Blocks({
@@ -898,11 +1202,13 @@ export function Blocks({
   onArtifactDownload,
   onArtifactPreview,
   onResolveDelivery,
+  onResolveDeliveryComparison,
   onDownloadDelivery,
   onDeployDelivery,
+  onBranchSelect,
 }: BlocksProps) {
   const lastTextBlockIndex = blocks.reduce(
-    (lastIndex, block, index) => block.kind === "text" ? index : lastIndex,
+    (lastIndex, block, index) => (block.kind === "text" ? index : lastIndex),
     -1,
   );
   return (
@@ -912,9 +1218,11 @@ export function Blocks({
           case "progress":
             return <BuildProgressBlock key="build-progress" text={b.text} />;
           case "thinking": {
-            const answerStarted = blocks.slice(i + 1).some(
-              (block) => block.kind === "text" && Boolean(block.text.trim()),
-            );
+            const answerStarted = blocks
+              .slice(i + 1)
+              .some(
+                (block) => block.kind === "text" && Boolean(block.text.trim()),
+              );
             return (
               <ThinkingBlock
                 key={i}
@@ -934,9 +1242,9 @@ export function Blocks({
                 text={t}
                 streaming={streaming}
                 onStreamFrame={onStreamFrame}
-                onStreamComplete={i === lastTextBlockIndex
-                  ? onStreamComplete
-                  : undefined}
+                onStreamComplete={
+                  i === lastTextBlockIndex ? onStreamComplete : undefined
+                }
               />
             ) : null;
           }
@@ -953,21 +1261,37 @@ export function Blocks({
           case "attachment":
             return <MediaGroup key={i} appName={appName} items={b.files} />;
           case "artifact":
-            return <ArtifactCard key={i} block={b} onDownload={onArtifactDownload} onPreview={onArtifactPreview} />;
+            return (
+              <ArtifactCard
+                key={i}
+                block={b}
+                onDownload={onArtifactDownload}
+                onPreview={onArtifactPreview}
+              />
+            );
           case "delivery":
             return (
               <DeliveryCard
                 key={i}
                 value={b.value}
                 onResolve={onResolveDelivery}
+                onResolveComparison={onResolveDeliveryComparison}
                 onDownload={onDownloadDelivery}
                 onDeploy={onDeployDelivery}
               />
             );
           case "invocation":
             return <InvocationChips key={i} value={b.value} />;
-          case "tool":
+          case "tool": {
             if (b.name === A2UI_TOOL && b.done) return null;
+            const hasLaterCreateAgentAttempt =
+              b.name === "create_agents" &&
+              blocks
+                .slice(i + 1)
+                .some(
+                  (block) =>
+                    block.kind === "tool" && block.name === "create_agents",
+                );
             return (
               <ToolBlock
                 key={i}
@@ -977,8 +1301,16 @@ export function Blocks({
                 done={b.done}
                 status={b.status}
                 defaultOpen={b.defaultOpen}
+                retrying={
+                  b.name === "create_agents" &&
+                  (streaming || hasLaterCreateAgentAttempt)
+                }
+                codexActivity={b.codexActivity}
+                onBranchSelect={onBranchSelect}
+                onAction={onAction}
               />
             );
+          }
           case "agent-transfer":
             return null;
           case "auth":
@@ -989,15 +1321,15 @@ export function Blocks({
             return buildSurfaces(b.messages)
               .filter((s) => s.components[s.rootId])
               .map((s) => (
-              <motion.div
-                key={`${i}-${s.surfaceId}`}
-                initial={{ opacity: 0, y: 8, scale: 0.985 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                transition={{ type: "spring", stiffness: 380, damping: 30 }}
-              >
-                <SurfaceView surface={s} onAction={onAction} />
-              </motion.div>
-            ));
+                <motion.div
+                  key={`${i}-${s.surfaceId}`}
+                  initial={{ opacity: 0, y: 8, scale: 0.985 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                >
+                  <SurfaceView surface={s} onAction={onAction} />
+                </motion.div>
+              ));
           default:
             return null;
         }

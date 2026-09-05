@@ -134,7 +134,9 @@ def load_skills_from_directory(skills_directory: Path) -> list[Skill]:
     return skills
 
 
-def load_skills_from_cloud(skill_space_ids: str) -> list[Skill]:
+def load_skills_from_cloud(
+    skill_space_ids: str, *, raise_on_error: bool = False
+) -> list[Skill]:
     skill_space_ids_list = [x.strip() for x in skill_space_ids.split(",") if x.strip()]
     logger.info(f"Load skills from cloud skill sources: {skill_space_ids_list}")
 
@@ -144,9 +146,19 @@ def load_skills_from_cloud(skill_space_ids: str) -> list[Skill]:
         # SkillHub space ids use the `sp-` prefix; all other ids keep the
         # legacy AgentKit skill-space behavior for backward compatibility.
         if skill_space_id.startswith("sp-"):
-            skills.extend(_load_skills_from_skillhub_space_id(skill_space_id))
+            skills.extend(
+                _load_skills_from_skillhub_space_id(
+                    skill_space_id,
+                    raise_on_error=raise_on_error,
+                )
+            )
         else:
-            skills.extend(_load_skills_from_space_id(skill_space_id))
+            skills.extend(
+                _load_skills_from_space_id(
+                    skill_space_id,
+                    raise_on_error=raise_on_error,
+                )
+            )
 
     return skills
 
@@ -154,9 +166,11 @@ def load_skills_from_cloud(skill_space_ids: str) -> list[Skill]:
 def _get_cloud_credentials() -> tuple[str, str, str]:
     from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
 
-    access_key = os.getenv("VOLCENGINE_ACCESS_KEY")
-    secret_key = os.getenv("VOLCENGINE_SECRET_KEY")
-    session_token = os.getenv("VOLCENGINE_SESSION_TOKEN", "")
+    provider = (os.getenv("CLOUD_PROVIDER") or "volcengine").lower()
+    prefix = "BYTEPLUS" if provider == "byteplus" else "VOLCENGINE"
+    access_key = os.getenv(f"{prefix}_ACCESS_KEY")
+    secret_key = os.getenv(f"{prefix}_SECRET_KEY")
+    session_token = os.getenv(f"{prefix}_SESSION_TOKEN", "")
 
     if not (access_key and secret_key):
         cred = get_credential_from_vefaas_iam()
@@ -262,7 +276,9 @@ def _build_skill_from_skillhub_item(
     )
 
 
-def _load_skills_from_space_id(skill_space_id: str) -> list[Skill]:
+def _load_skills_from_space_id(
+    skill_space_id: str, *, raise_on_error: bool = False
+) -> list[Skill]:
     logger.info(f"Load skills from skill space: {skill_space_id}")
 
     skills = []
@@ -312,6 +328,8 @@ def _load_skills_from_space_id(skill_space_id: str) -> list[Skill]:
             )
     except Exception as e:
         logger.error(f"Failed to load skills from skill space={skill_space_id}: {e}")
+        if raise_on_error:
+            raise
 
     return skills
 
@@ -363,7 +381,9 @@ def _get_skillhub_page_size(default: int = 100) -> int:
     return value
 
 
-def _load_skills_from_skillhub_space_id(skill_space_id: str) -> list[Skill]:
+def _load_skills_from_skillhub_space_id(
+    skill_space_id: str, *, raise_on_error: bool = False
+) -> list[Skill]:
     logger.info(f"Load skills from SkillHub skill space: {skill_space_id}")
 
     skills = []
@@ -435,6 +455,8 @@ def _load_skills_from_skillhub_space_id(skill_space_id: str) -> list[Skill]:
             page_number += 1
     except Exception as e:
         logger.error(f"Failed to load skills from SkillHub skill space: {e}")
+        if raise_on_error:
+            raise
 
     return skills
 

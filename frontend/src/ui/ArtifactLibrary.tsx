@@ -27,6 +27,7 @@ import { StudioConfirmDialog } from "./StudioConfirmDialog";
 import { TextShimmer } from "./text-shimmer/TextShimmer";
 import {
   ResourceFilterSelect,
+  ResourceLoadingState,
   ResourceResults,
   ResourceSearch,
   ResourceToolbar,
@@ -537,9 +538,7 @@ export function ArtifactLibrary({
       >
         <div className="artifact-library-panel">
           {loading && artifacts.length === 0 ? (
-            <div className="artifact-library-empty" role="status" aria-live="polite">
-              <TextShimmer as="p" duration={2.4}>正在加载产物</TextShimmer>
-            </div>
+            <ResourceLoadingState />
           ) : error && artifacts.length === 0 ? (
             <div className="artifact-library-empty is-error" role="alert">
               <p>产物加载失败</p>

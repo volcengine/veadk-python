@@ -68,10 +68,21 @@ _IMPORTED_HISTORY_IMAGE_MIME_TYPES = frozenset(
 )
 _GATEWAY_WEBSOCKET_MAX_LIFETIME_SECONDS = 30 * 60
 _GATEWAY_WEBSOCKET_REFRESH_MARGIN_SECONDS = 30
+_TURN_FINAL_READ_ATTEMPTS = 4
+_TURN_FINAL_READ_RETRY_SECONDS = 0.1
+_ACTIVE_TURN_TRANSPORT_RECOVERY_ATTEMPTS = 2
 
 
 class CodexAppServerError(RuntimeError):
     """The Sandbox Codex app-server rejected or interrupted an operation."""
+
+
+class CodexAppServerTransportError(CodexAppServerError):
+    """The Codex app-server transport could not continue an operation."""
+
+
+class CodexAppServerTurnTimeoutError(CodexAppServerError):
+    """A Codex turn exceeded its configured inactivity timeout."""
 
 
 def _app_server_error_detail(error: object) -> str:
@@ -419,6 +430,8 @@ class CodexAppServerSession:
         self._workspace_locked = False
         self._agent_message_delta_ids: set[str] = set()
         self._received_unidentified_agent_delta = False
+        self._completed_agent_messages: dict[str, dict[str, object]] = {}
+        self._turn_final_item_id = ""
         self._reasoning_delta_text: dict[str, str] = {}
         self._skills_by_id: dict[str, _CodexPrivateSkill] = {}
         self._skills_cwd = ""
@@ -470,7 +483,7 @@ class CodexAppServerSession:
         if self.healthy:
             return
         if self._closed:
-            raise CodexAppServerError("Codex app-server connection is closed.")
+            raise CodexAppServerTransportError("Codex app-server connection is closed.")
         async with self._connection_lock:
             if self.healthy:
                 return
@@ -507,14 +520,14 @@ class CodexAppServerSession:
     ) -> None:
         """Refresh a closed or aging transport without replacing its thread."""
         if self._closed:
-            raise CodexAppServerError("Codex app-server 连接已关闭。")
+            raise CodexAppServerTransportError("Codex app-server 连接已关闭。")
         if not self.thread_id:
-            raise CodexAppServerError("Codex app-server 尚未连接。")
+            raise CodexAppServerTransportError("Codex app-server 尚未连接。")
         if not self._transport_needs_refresh(minimum_lifetime_seconds):
             return
         if self.active:
             if not self.healthy:
-                raise self._connection_failure or CodexAppServerError(
+                raise self._connection_failure or CodexAppServerTransportError(
                     "Codex app-server 连接已断开。"
                 )
             return
@@ -523,14 +536,14 @@ class CodexAppServerSession:
                 return
             if self.active:
                 if not self.healthy:
-                    raise self._connection_failure or CodexAppServerError(
+                    raise self._connection_failure or CodexAppServerTransportError(
                         "Codex app-server 连接已断开。"
                     )
                 return
             if any(not future.done() for future in self._pending_requests.values()):
                 if self.healthy:
                     return
-                raise self._connection_failure or CodexAppServerError(
+                raise self._connection_failure or CodexAppServerTransportError(
                     "Codex app-server 连接已断开。"
                 )
             await self._reconnect_transport()
@@ -552,7 +565,7 @@ class CodexAppServerSession:
                     max_size=_APP_SERVER_MAX_MESSAGE_BYTES,
                 )
         except Exception as error:
-            raise CodexAppServerError(
+            raise CodexAppServerTransportError(
                 "无法连接 AgentKit Session 中的 Codex 服务。"
             ) from error
         self._connected_at = time.monotonic()
@@ -696,15 +709,21 @@ class CodexAppServerSession:
         *,
         permissions: CodexPermissionSettings | None = None,
         timeout_seconds: float | None = None,
+        output_schema: dict[str, object] | None = None,
     ) -> AsyncIterator[CodexAppServerEvent]:
         """Start one Codex turn and stream its public events."""
         if self.active:
             raise CodexAppServerError("当前 Codex 任务仍在运行。")
+        turn_timeout = (
+            _TURN_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+        )
+        if turn_timeout <= 0 or not math.isfinite(turn_timeout):
+            raise CodexAppServerError("Codex Turn 超时时间无效。")
         if not self.thread_id:
             await self.connect()
         else:
             await self.ensure_connected(
-                minimum_lifetime_seconds=_TURN_TIMEOUT_SECONDS,
+                minimum_lifetime_seconds=turn_timeout,
             )
         if not self.thread_id:
             raise CodexAppServerError("Codex Thread 尚未初始化。")
@@ -713,11 +732,6 @@ class CodexAppServerSession:
             raise CodexAppServerError("消息内容不能为空。")
         skills = await self._resolve_skills(prompt, skill_ids)
         turn_permissions = permissions or self.permissions
-        turn_timeout = (
-            _TURN_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
-        )
-        if turn_timeout <= 0 or not math.isfinite(turn_timeout):
-            raise CodexAppServerError("Codex Turn 超时时间无效。")
 
         queue: asyncio.Queue[CodexAppServerEvent] = asyncio.Queue()
         completion: asyncio.Future[dict[str, object]] = (
@@ -728,6 +742,8 @@ class CodexAppServerSession:
         self._active_turn_id = ""
         self._agent_message_delta_ids.clear()
         self._received_unidentified_agent_delta = False
+        self._completed_agent_messages.clear()
+        self._turn_final_item_id = ""
         self._reasoning_delta_text.clear()
         try:
             result = await self.request(
@@ -746,6 +762,11 @@ class CodexAppServerSession:
                         ),
                     ],
                     **_runtime_permission_params(turn_permissions, self.cwd),
+                    **(
+                        {"outputSchema": output_schema}
+                        if output_schema is not None
+                        else {}
+                    ),
                 },
             )
             turn = result.get("turn")
@@ -755,44 +776,57 @@ class CodexAppServerSession:
             self._workspace_locked = True
 
             try:
-                deadline = asyncio.get_running_loop().time() + turn_timeout
+                loop = asyncio.get_running_loop()
+                deadline = loop.time() + turn_timeout
+                transport_recoveries = 0
                 while True:
-                    if completion.done() and queue.empty():
-                        break
-                    remaining = deadline - asyncio.get_running_loop().time()
-                    if remaining <= 0:
-                        raise TimeoutError
-                    event_task = asyncio.create_task(queue.get())
-                    done, _ = await asyncio.wait(
-                        {event_task, completion},
-                        timeout=remaining,
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    if not done:
-                        event_task.cancel()
-                        with contextlib.suppress(asyncio.CancelledError):
-                            await event_task
-                        raise TimeoutError
-                    if event_task in done:
-                        yield event_task.result()
-                        # Treat the turn timeout as an inactivity bound, not an
-                        # absolute wall-clock limit. Long coding tasks can run
-                        # well beyond ten minutes while continuing to emit
-                        # reasoning, tool, and progress events.
-                        deadline = (
-                            asyncio.get_running_loop().time() + _TURN_TIMEOUT_SECONDS
+                    while not (completion.done() and queue.empty()):
+                        remaining = deadline - loop.time()
+                        event_task = asyncio.create_task(queue.get())
+                        done, _ = await asyncio.wait(
+                            {event_task, completion},
+                            timeout=max(0.0, remaining),
+                            return_when=asyncio.FIRST_COMPLETED,
                         )
-                    else:
-                        event_task.cancel()
-                        with contextlib.suppress(asyncio.CancelledError):
-                            await event_task
+                        if not done:
+                            event_task.cancel()
+                            with contextlib.suppress(asyncio.CancelledError):
+                                await event_task
+                            raise TimeoutError
+                        if event_task in done:
+                            yield event_task.result()
+                            # Treat the turn timeout as an inactivity bound, not an
+                            # absolute wall-clock limit. Long coding tasks can run
+                            # well beyond ten minutes while continuing to emit
+                            # reasoning, tool, and progress events.
+                            deadline = loop.time() + turn_timeout
+                        else:
+                            event_task.cancel()
+                            with contextlib.suppress(asyncio.CancelledError):
+                                await event_task
+                    try:
+                        turn_result = completion.result()
+                    except CodexAppServerTransportError:
+                        if transport_recoveries >= (
+                            _ACTIVE_TURN_TRANSPORT_RECOVERY_ATTEMPTS
+                        ):
+                            raise
+                        transport_recoveries += 1
+                        completion = loop.create_future()
+                        self._turn_completion = completion
+                        await self._reconnect_transport()
+                        stored_turn = await self._read_stored_turn(turn["id"])
+                        if stored_turn is not None and _turn_is_terminal(stored_turn):
+                            completion.set_result(stored_turn)
+                        deadline = loop.time() + turn_timeout
+                        continue
+                    break
             except TimeoutError as error:
                 await self.interrupt()
-                raise CodexAppServerError(
+                raise CodexAppServerTurnTimeoutError(
                     "Codex 智能体长时间没有新进度，已停止本次任务，请重试。"
                 ) from error
 
-            turn_result = completion.result()
             status = str(turn_result.get("status") or "completed")
             if status.lower() in {"failed", "cancelled"}:
                 error = turn_result.get("error")
@@ -802,6 +836,11 @@ class CodexAppServerSession:
                     else f"Codex Turn 状态：{status}。"
                 )
                 raise CodexAppServerError(detail)
+            if not self._turn_final_item_id:
+                fallback = await self._read_turn_final_message(turn["id"])
+                if fallback is not None:
+                    for event in self._authoritative_agent_events(fallback):
+                        yield event
         except asyncio.CancelledError:
             await self.interrupt()
             raise
@@ -1467,12 +1506,14 @@ class CodexAppServerSession:
 
     async def _send(self, message: dict[str, object]) -> None:
         if self._websocket is None or self._closed:
-            raise CodexAppServerError("Codex app-server 连接已关闭。")
+            raise CodexAppServerTransportError("Codex app-server 连接已关闭。")
         async with self._send_lock:
             try:
                 await self._websocket.send(json.dumps(message, ensure_ascii=False))
             except Exception as error:
-                failure = CodexAppServerError("向 Codex app-server 发送请求失败。")
+                failure = CodexAppServerTransportError(
+                    "向 Codex app-server 发送请求失败。"
+                )
                 failure.__cause__ = error
                 self._connection_failure = failure
                 raise failure
@@ -1511,14 +1552,14 @@ class CodexAppServerSession:
         except asyncio.CancelledError:
             raise
         except Exception as error:  # noqa: BLE001 - transport boundary
-            if isinstance(error, CodexAppServerError):
+            if isinstance(error, CodexAppServerTransportError):
                 failure = error
             else:
-                failure = CodexAppServerError("Codex app-server 连接异常。")
+                failure = CodexAppServerTransportError("Codex app-server 连接异常。")
                 failure.__cause__ = error
         else:
             if not self._closed:
-                failure = CodexAppServerError("Codex app-server 连接已断开。")
+                failure = CodexAppServerTransportError("Codex app-server 连接已断开。")
         if failure is not None:
             self._connection_failure = failure
             for future in self._pending_requests.values():
@@ -1590,6 +1631,16 @@ class CodexAppServerSession:
         if method in {"item/started", "item/completed"}:
             item = params.get("item")
             if isinstance(item, dict):
+                if method == "item/completed" and item.get("type") == "agentMessage":
+                    item_id = item.get("id")
+                    text = item.get("text")
+                    if (
+                        isinstance(item_id, str)
+                        and item_id
+                        and isinstance(text, str)
+                        and text
+                    ):
+                        self._completed_agent_messages[item_id] = item
                 if (
                     method == "item/completed"
                     and item.get("type") == "agentMessage"
@@ -1602,7 +1653,13 @@ class CodexAppServerSession:
                     ) or self._received_unidentified_agent_delta
                     text = _string(item.get("text"), 100_000)
                     if text and not received_delta:
-                        self._emit(CodexAppServerEvent(kind="text", text=text))
+                        self._emit(
+                            CodexAppServerEvent(
+                                kind="text",
+                                item_id=item_id if isinstance(item_id, str) else "",
+                                text=text,
+                            )
+                        )
                 event = _event_from_item(item, completed=method == "item/completed")
                 if event is not None:
                     self._emit(event)
@@ -1619,6 +1676,15 @@ class CodexAppServerSession:
                 and self._turn_completion is not None
                 and not self._turn_completion.done()
             ):
+                items = turn.get("items")
+                candidate = _final_agent_message(
+                    items
+                    if isinstance(items, list)
+                    else list(self._completed_agent_messages.values())
+                )
+                if candidate is not None:
+                    for event in self._authoritative_agent_events(candidate):
+                        self._emit(event)
                 self._turn_completion.set_result(turn)
             return
         if method == "thread/settings/updated":
@@ -1783,6 +1849,79 @@ class CodexAppServerSession:
     def _emit(self, event: CodexAppServerEvent) -> None:
         if self._turn_events is not None:
             self._turn_events.put_nowait(event)
+
+    def _authoritative_agent_events(
+        self, item: dict[str, object]
+    ) -> tuple[CodexAppServerEvent, ...]:
+        item_id = _string(item.get("id"), 200)
+        text = _string(item.get("text"), 100_000)
+        self._turn_final_item_id = item_id
+        events: list[CodexAppServerEvent] = []
+        already_public = (
+            item_id in self._agent_message_delta_ids
+            or item_id in self._completed_agent_messages
+            or self._received_unidentified_agent_delta
+        )
+        if not already_public:
+            if item.get("phase") == "commentary":
+                events.append(
+                    CodexAppServerEvent(
+                        kind="commentary",
+                        item_id=item_id,
+                        status="done",
+                        text=text,
+                    )
+                )
+            else:
+                events.append(
+                    CodexAppServerEvent(
+                        kind="text",
+                        item_id=item_id,
+                        status="done",
+                        text=text,
+                    )
+                )
+        events.append(
+            CodexAppServerEvent(
+                kind="assistant_final",
+                item_id=item_id,
+                status="done",
+                text=text,
+            )
+        )
+        return tuple(events)
+
+    async def _read_turn_final_message(self, turn_id: str) -> dict[str, object] | None:
+        for attempt in range(_TURN_FINAL_READ_ATTEMPTS):
+            turn = await self._read_stored_turn(turn_id)
+            if turn is not None:
+                items = turn.get("items")
+                final = _final_agent_message(items if isinstance(items, list) else [])
+                if final is not None:
+                    return final
+            if attempt + 1 < _TURN_FINAL_READ_ATTEMPTS:
+                await asyncio.sleep(_TURN_FINAL_READ_RETRY_SECONDS)
+        return None
+
+    async def _read_stored_turn(self, turn_id: str) -> dict[str, object] | None:
+        result = await self.request(
+            "thread/read",
+            {"threadId": self.thread_id, "includeTurns": True},
+        )
+        thread = result.get("thread")
+        if not isinstance(thread, dict):
+            raise CodexAppServerError("Codex thread/read 未返回有效的 Thread。")
+        turns = thread.get("turns")
+        if not isinstance(turns, list):
+            raise CodexAppServerError("Codex thread/read 未返回完整的 Turns。")
+        return next(
+            (
+                turn
+                for turn in turns
+                if isinstance(turn, dict) and turn.get("id") == turn_id
+            ),
+            None,
+        )
 
     def _apply_thread_snapshot(self, result: dict[str, object]) -> None:
         self._activate_thread_snapshot("thread/start", result)
@@ -2101,6 +2240,24 @@ def _has_approval_identity(value: dict[str, object]) -> bool:
     )
 
 
+def _final_agent_message(items: list[object]) -> dict[str, object] | None:
+    messages = [
+        item
+        for item in items
+        if isinstance(item, dict)
+        and item.get("type") == "agentMessage"
+        and isinstance(item.get("id"), str)
+        and item["id"]
+        and isinstance(item.get("text"), str)
+        and item["text"]
+    ]
+    for phase in ("final_answer", None, "commentary"):
+        for item in reversed(messages):
+            if item.get("phase") == phase:
+                return item
+    return None
+
+
 def _event_from_item(
     item: dict[str, object], *, completed: bool
 ) -> CodexAppServerEvent | None:
@@ -2196,6 +2353,20 @@ def _event_from_item(
 
 def _completion_status(value: object) -> str:
     return "error" if value in {"failed", "declined", "cancelled"} else "done"
+
+
+def _turn_is_terminal(turn: dict[str, object]) -> bool:
+    status = turn.get("status")
+    if isinstance(status, dict):
+        status = status.get("type")
+    if isinstance(status, str) and status.lower() in {
+        "completed",
+        "failed",
+        "cancelled",
+    }:
+        return True
+    items = turn.get("items")
+    return _final_agent_message(items if isinstance(items, list) else []) is not None
 
 
 def _string(value: object, maximum: int) -> str:
@@ -2585,6 +2756,8 @@ __all__ = [
     "CodexAppServerError",
     "CodexAppServerEvent",
     "CodexAppServerSession",
+    "CodexAppServerTransportError",
+    "CodexAppServerTurnTimeoutError",
     "CodexApproval",
     "CodexDirectoryListing",
     "CodexImportedImage",

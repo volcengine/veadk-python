@@ -9,6 +9,7 @@ const sources = {
   library: read("../src/ui/LibraryView.tsx"),
   skills: read("../src/ui/SkillCenter.tsx"),
   knowledge: read("../src/ui/KnowledgeLibrary.tsx"),
+  workspaces: read("../src/ui/WorkspaceCenter.tsx"),
   environments: read("../src/ui/EnvironmentCenter.tsx"),
   cronjobs: read("../src/cronjobs/CronJobs.tsx"),
   artifacts: read("../src/ui/ArtifactLibrary.tsx"),
@@ -56,7 +57,29 @@ test("resource list pages compose the same shared layout and card primitives", (
   assert.match(sources.artifacts, /<ResourceFilterSelect/);
 });
 
-test("skill and knowledge detail pages compose the shared detail primitives", () => {
+test("resource list pages share the same centered initial loading state", () => {
+  assert.match(resourceSource, /export function ResourceLoadingState/);
+  assert.match(resourceSource, /资源加载中，请稍候/);
+  assert.match(resourceSource, /<LoadingIndicator size=\{16\} \/>/);
+  assert.match(
+    resourceStyles,
+    /\.resource-loading-state\s*\{[\s\S]*?height:\s*100%;[\s\S]*?align-items:\s*center;[\s\S]*?justify-content:\s*center;/,
+  );
+
+  for (const source of [
+    sources.agents,
+    sources.skills,
+    sources.knowledge,
+    sources.workspaces,
+    sources.environments,
+    sources.cronjobs,
+    sources.artifacts,
+  ]) {
+    assert.match(source, /<ResourceLoadingState \/>/);
+  }
+});
+
+test("resource detail pages reuse the shared detail layout", () => {
   const detailComponents = [
     "ResourceDetail",
     "ResourceDetailHeader",
@@ -69,15 +92,45 @@ test("skill and knowledge detail pages compose the shared detail primitives", ()
 
   for (const component of detailComponents) {
     assert.match(resourceSource, new RegExp(`export function ${component}`));
-    assert.match(sources.skills, new RegExp(`<${component}`));
-    assert.match(sources.knowledge, new RegExp(`<${component}`));
   }
+
+  assert.match(resourceSource, /export function ResourceDetailLayout/);
+  assert.match(resourceSource, /export interface ResourceDetailSection/);
+  assert.match(resourceSource, /<ResourceDetailHeading/);
+  assert.match(resourceSource, /<ResourceDetailActions/);
+  assert.match(resourceSource, /<ResourceDetailBody/);
+  assert.match(resourceSource, /className="resource-detail__navigation"/);
+  assert.match(resourceSource, /className="resource-detail__content"/);
+  assert.match(resourceSource, /sections\?\.find\(\(section\) => section\.key === activeSectionKey\)\?\.content/);
+  assert.doesNotMatch(resourceSource, /selected=\{section\.key === activeSectionKey\}/);
+  assert.match(sources.skills, /<ResourceDetailLayout/);
+  assert.match(sources.knowledge, /<ResourceDetailLayout/);
+  assert.doesNotMatch(sources.skills, /<ResourceDetail(?:Header|Heading|Actions|Body)\b/);
+  assert.doesNotMatch(sources.knowledge, /<ResourceDetail(?:Header|Heading|Actions|Body)\b/);
 
   assert.match(resourceStyles, /\.resource-detail\s*\{/);
   assert.match(resourceStyles, /\.resource-detail__header\s*\{/);
   assert.match(resourceStyles, /\.resource-detail__body\s*\{/);
+  assert.match(resourceStyles, /\.resource-detail__body\.is-split\s*\{/);
+  assert.match(resourceStyles, /\.resource-detail__navigation\s*\{/);
+  assert.match(resourceStyles, /\.resource-detail__navigation-label\s*\{[\s\S]*?text-align:\s*left;/);
+  assert.match(resourceStyles, /\.resource-detail__content\s*\{/);
   assert.match(resourceStyles, /\.resource-detail__summary\s*\{/);
   assert.match(resourceStyles, /\.resource-detail__section-header\s*\{/);
+});
+
+test("shared resource data table owns search, primary action, and overflow actions", () => {
+  assert.match(resourceSource, /export function ResourceDataTable/);
+  assert.match(resourceSource, /<Input[\s\S]*?placeholder=\{searchPlaceholder\}/);
+  assert.match(resourceSource, /<Button[\s\S]*?color="primary"/);
+  assert.doesNotMatch(resourceSource, /<Input[^>]*(?:className|size|gutterSize|pill|variant|startAdornment|endAdornment)=/);
+  assert.doesNotMatch(resourceSource, /<Button[^>]*color="primary"[^>]*(?:className|size|gutterSize|iconSize|pill|variant)=/);
+  assert.match(resourceSource, /<table className="resource-data-table__table">/);
+  assert.match(resourceSource, /<StudioActionMenu/);
+  assert.doesNotMatch(resourceSource, /type="checkbox"/);
+  assert.match(resourceStyles, /\.resource-data-table__toolbar\s*\{[\s\S]*?justify-content:\s*space-between;/);
+  assert.doesNotMatch(resourceStyles, /\.resource-data-table__search\s*>/);
+  assert.match(resourceStyles, /\.resource-data-table__frame\s*\{[\s\S]*?border:\s*1px solid hsl\(var\(--border\)\);/);
 });
 
 test("domain styles do not reimplement shared tabs, grids, cards, or hover actions", () => {
@@ -128,6 +181,13 @@ test("nested resource collections do not clip the shared card hover ring", () =>
   assert.match(
     resourceStyles,
     /\.resource-card:hover,[\s\S]*?\.resource-card:focus-within\s*\{[\s\S]*?box-shadow:\s*0 0 0 4px/,
+  );
+});
+
+test("stacked resource toolbars align their action row to the content edge", () => {
+  assert.match(
+    resourceStyles,
+    /@media \(min-width: 721px\) and \(max-width: 1180px\) \{[\s\S]*?\.resource-toolbar__actions\s*\{[\s\S]*?width: 100%;[\s\S]*?justify-content: flex-start;[\s\S]*?margin-left: 0;/,
   );
 });
 

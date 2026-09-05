@@ -311,7 +311,7 @@ def test_list_skill_spaces_maps_metadata_and_pagination(
     assert request.project_name == "support-project"
 
 
-def test_list_skill_spaces_keeps_cross_region_defaults(
+def test_list_skill_spaces_defaults_to_local_studio_region(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     app = _create_frontend_app(monkeypatch, tmp_path)
@@ -346,14 +346,11 @@ def test_list_skill_spaces_keeps_cross_region_defaults(
         response = client.get("/web/skill-spaces")
 
     assert response.status_code == 200
-    assert response.json()["totalCount"] == 2
+    assert response.json()["totalCount"] == 100
     assert response.json()["page"] == 1
     assert response.json()["pageSize"] == 50
-    assert {item["region"] for item in response.json()["items"]} == {
-        "cn-beijing",
-        "cn-shanghai",
-    }
-    assert {region for region, _ in calls} == {"cn-beijing", "cn-shanghai"}
+    assert {item["region"] for item in response.json()["items"]} == {"cn-beijing"}
+    assert {region for region, _ in calls} == {"cn-beijing"}
     assert all(request.page_number == 1 for _, request in calls)
     assert all(request.page_size == 50 for _, request in calls)
     assert all(request.project_name is None for _, request in calls)

@@ -14,6 +14,9 @@
 
 from __future__ import annotations
 
+import json
+import os
+
 import pytest
 from pydantic import ValidationError
 
@@ -123,8 +126,10 @@ def test_mcp_resilience_constructs_toolsets_after_sidecar_gateway_binding() -> N
     agent_py = files["agents/sidecar_mcp_agent/agent.py"]
     assert agent_py.index("HarnessExtension.from_env()") < agent_py.index("MCPToolset(")
     assert "def _managed_mcp_connection(index: int)" in agent_py
-    assert 'os.environ.get("MCP_URLS", "")' in agent_py
-    assert 'os.environ.get("MCP_API_KEY", "")' in agent_py
+    assert 'os.environ.get("MCP_SERVERS_JSON", "")' in agent_py
+    assert "MCP_URLS" not in agent_py
+    assert "MCP_API_KEY" not in agent_py
+    assert "headers=headers" in agent_py
     assert "httpx_client_factory=managed_mcp_http_client_factory" in agent_py
     assert "timeout=30.0" in agent_py
     assert "sse_read_timeout=300.0" in agent_py
@@ -132,6 +137,45 @@ def test_mcp_resilience_constructs_toolsets_after_sidecar_gateway_binding() -> N
     assert "connection_params=_managed_mcp_connection(1)" in agent_py
     assert "MCP gateway endpoint count does not match" in agent_py
     compile(agent_py, "agent.py", "exec")
+    assert "MCP_SERVERS_JSON=" in files[".env.example"]
+
+    start = agent_py.index("try:\n    _managed_mcp_servers")
+    end = agent_py.index("orders_mcp = MCPToolset")
+    bootstrap = agent_py[start:end]
+    previous = os.environ.get("MCP_SERVERS_JSON")
+    os.environ["MCP_SERVERS_JSON"] = json.dumps(
+        [
+            {
+                "name": "orders",
+                "url": "https://mcp.example.test/orders/mcp",
+                "headers": {"Authorization": "Bearer orders-secret"},
+            },
+            {
+                "name": "inventory",
+                "url": "https://mcp.example.test/inventory/mcp",
+                "headers": {"Authorization": "Bearer inventory-secret"},
+            },
+        ]
+    )
+    namespace = {
+        "json": json,
+        "os": os,
+        "StreamableHTTPConnectionParams": lambda **kwargs: kwargs,
+        "managed_mcp_http_client_factory": object(),
+    }
+    try:
+        exec(bootstrap, namespace)
+        orders = namespace["_managed_mcp_connection"](0)
+        inventory = namespace["_managed_mcp_connection"](1)
+    finally:
+        if previous is None:
+            os.environ.pop("MCP_SERVERS_JSON", None)
+        else:
+            os.environ["MCP_SERVERS_JSON"] = previous
+    assert orders["url"].endswith("/orders/mcp")
+    assert orders["headers"]["Authorization"] == "Bearer orders-secret"
+    assert inventory["url"].endswith("/inventory/mcp")
+    assert inventory["headers"]["Authorization"] == "Bearer inventory-secret"
 
 
 def test_plain_http_mcp_tool_keeps_direct_connection_without_sidecar_gateway() -> None:

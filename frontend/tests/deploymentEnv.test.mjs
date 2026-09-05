@@ -30,6 +30,7 @@ const {
 const {
   A2A_REGISTRY_DEFAULTS,
   A2A_REGISTRY_ENV,
+  a2aRegistryDefaults,
   BUILTIN_TOOLS,
   DEFAULT_KB_BACKEND,
   KB_BACKENDS,
@@ -376,23 +377,19 @@ test("marks missing optimization env inputs invalid and focuses the first error"
     customCreateSource,
     /requiredBy:\s*modelProxyHarnessOptimizationLabels/,
   );
-  assert.match(
-    customCreateSource,
-    /requiredBy:\s*\[harnessSidecarOptionLabel\("mcp_resilience"\)\]/,
-  );
   assert.match(customCreateSource, /resolveMcpGatewayEnv\(/);
+  assert.doesNotMatch(customCreateSource, /key: "MCP_URLS"/);
+  assert.doesNotMatch(customCreateSource, /key: "MCP_API_KEY"/);
+  assert.match(customCreateSource, /const mcpGatewayManaged =/);
   assert.match(
     customCreateSource,
-    /fixedValues\.MCP_URLS = gatewayEnv\.urls\.join\(","\)/,
+    /key: mcpTool\.authTokenEnv,[\s\S]*?serverManaged: mcpGatewayManaged,[\s\S]*?hidden: mcpGatewayManaged/,
   );
   assert.match(
     customCreateSource,
-    /fixedValues\.MCP_API_KEY = gatewayEnv\.apiKey/,
+    /deploymentTarget \|\| mcpGatewayManaged \? codegenDraft\(draft\) : undefined/,
   );
-  assert.match(
-    customCreateSource,
-    /key: "MCP_API_KEY",[\s\S]*?secret: true,[\s\S]*?readOnly: true/,
-  );
+  assert.match(customCreateSource, /mcpSecretValues:/);
   assert.match(projectPreviewSource, /missingRuntimeEnvs\(/);
   assert.match(projectPreviewSource, /row\.placeholder \|\|/);
   assert.match(projectPreviewSource, /setDeploymentEnvErrors\(/);
@@ -405,6 +402,34 @@ test("marks missing optimization env inputs invalid and focuses the first error"
     projectPreviewSource,
     /className="pp-env-error"[\s\S]*?role="alert"[\s\S]*?\{fieldError\}/,
   );
+});
+
+test("omits Studio-managed MCP values from fields, validation, and public env payload", () => {
+  const specs = [
+    {
+      key: "MCP_TEST_TOOL_AUTH_TOKEN",
+      required: false,
+      secret: true,
+      readOnly: true,
+      serverManaged: true,
+      hidden: true,
+    },
+    {
+      key: "MCP_SERVERS_JSON",
+      required: true,
+      secret: true,
+      readOnly: true,
+      serverManaged: true,
+      hidden: true,
+    },
+  ];
+  const values = {
+    MCP_TEST_TOOL_AUTH_TOKEN: "transient-test-value",
+  };
+
+  assert.deepEqual(runtimeEnvDisplayRows(specs, values), []);
+  assert.deepEqual(missingRuntimeEnvs(specs, values), []);
+  assert.deepEqual(runtimeEnvVars(specs, values), []);
 });
 
 test("uses copyable default runtime values and validates JSON settings", () => {
@@ -765,18 +790,52 @@ test("shows configured database and Feishu values in the runtime env summary", (
   ]);
 });
 
-test("keeps the generated project stable when only deployment channel settings change", () => {
+test("regenerates the project when deployment channel settings change", () => {
   assert.match(
     customCreateSource,
-    /onFeishuEnabledChange=\{\(feishuEnabled\) => \{[\s\S]*?setDraft\(nextDraft\);/,
+    /onFeishuEnabledChange=\{async \(feishuEnabled\) => \{[\s\S]*?generateAgentProject\([\s\S]*?codegenDraft\(nextDraft\)[\s\S]*?setDraft\(nextDraft\);[\s\S]*?setProject\(generated\);/,
   );
-  assert.doesNotMatch(customCreateSource, /buildPreviewProject/);
   assert.match(
     customCreateSource,
     /const releaseDraft = releaseVariant[\s\S]*?releaseDraftFromDebugVariant\(providerDraft, releaseVariant\)[\s\S]*?generateAgentProject\(codegenDraft\(releaseDraft\)\)/,
   );
   assert.match(projectPreviewSource, /await onFeishuEnabledChange\(!feishuEnabled\)/);
   assert.match(projectPreviewSource, /deploying \|\| feishuUpdating/);
+});
+
+test("restores Feishu credentials into Runtime updates and reuses opaque values", () => {
+  assert.match(
+    projectPreviewSource,
+    /appId=\{deploymentEnvValues\.FEISHU_APP_ID \?\? ""\}/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /appSecret=\{deploymentEnvValues\.FEISHU_APP_SECRET \?\? ""\}/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /appIdConfigured=\{configuredRuntimeEnvKeySet\.has\([\s\S]*?"FEISHU_APP_ID"/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /appSecretConfigured=\{configuredRuntimeEnvKeySet\.has\([\s\S]*?"FEISHU_APP_SECRET"/,
+  );
+  assert.match(
+    customCreateSource,
+    /deploymentEnvValues=\{\{[\s\S]*?\.\.\.providerDraft\.deployment\?\.envValues/,
+  );
+  assert.match(
+    customCreateSource,
+    /const patchDeploymentEnvValues = \(values: Record<string, string>\)[\s\S]*?envValues: \{[\s\S]*?\.\.\.\(current\.deployment\?\.envValues \?\? \{\}\),[\s\S]*?\.\.\.values/,
+  );
+  assert.match(
+    customCreateSource,
+    /onFeishuCredentialsChange=\{\(appId, appSecret\) =>[\s\S]*?patchDeploymentEnvValues\(\{[\s\S]*?FEISHU_APP_ID: appId,[\s\S]*?FEISHU_APP_SECRET: appSecret/,
+  );
+  assert.match(
+    customCreateSource,
+    /removedConfiguredMcpEnvKeys\([\s\S]*?FEISHU_APP_ID[\s\S]*?FEISHU_APP_SECRET/,
+  );
 });
 
 test("normalizes generated project drafts to the selected cloud provider", () => {
@@ -847,7 +906,7 @@ test("materializes A2A registry defaults for deployment env", () => {
   );
   assert.match(
     customCreateSource,
-    /a2aRegistryEnvValues\(node\.a2aRegistry, \{ includeDefaults: true \}\)/,
+    /a2aRegistryEnvValues\([\s\S]*?node\.a2aRegistry,[\s\S]*?\{ includeDefaults: true \},[\s\S]*?cloudProvider,[\s\S]*?\)/,
   );
   assert.match(
     customCreateSource,
@@ -856,6 +915,18 @@ test("materializes A2A registry defaults for deployment env", () => {
   assert.match(
     customCreateSource,
     /deploymentEnvValues=\{\{[\s\S]*?\.\.\.providerDraft\.deployment\?\.envValues,[\s\S]*?\.\.\.deploymentEnv\.fixedValues,/,
+  );
+});
+
+test("uses BytePlus defaults for an A2A registry child agent", () => {
+  assert.deepEqual(a2aRegistryDefaults("byteplus"), {
+    topK: "3",
+    region: "ap-southeast-1",
+    endpoint: "https://agentkit.ap-southeast-1.byteplusapi.com/",
+  });
+  assert.match(
+    customCreateSource,
+    /region=\{[\s\S]*?node\.a2aRegistry\?\.registryRegion \|\|[\s\S]*?a2aDefaults\.region[\s\S]*?\}/,
   );
 });
 
@@ -947,6 +1018,6 @@ test("opens generated source in an editable code browser dialog", () => {
   assert.match(codeBrowserSource, /document\.body\.style\.overflow = "hidden"/);
   assert.match(
     codeBrowserStyles,
-    /\.code-browser-dialog\s*\{[\s\S]*?height:\s*min\(720px, 84vh\);/,
+    /\.code-browser-dialog\s*\{[\s\S]*?height:\s*min\(800px, 88vh\);/,
   );
 });

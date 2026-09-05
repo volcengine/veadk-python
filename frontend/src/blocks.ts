@@ -20,6 +20,16 @@ import type {
 import type { A2uiMessage } from "./a2ui/types";
 import type { SandboxTokenUsage } from "./adk/sandbox";
 import type { ProjectFile } from "./create/project";
+import {
+  applyBranchCompareProgress,
+  parseBranchCompareProgress,
+} from "./ui/builtin-tools/branchCompareData";
+import {
+  applyCodexSandboxProgress,
+  hydrateCodexSandboxActivity,
+  parseCodexSandboxProgress,
+} from "./ui/builtin-tools/codexSandboxProgress";
+import type { CodexSandboxProgress } from "./ui/builtin-tools/codexSandboxProgress";
 
 const A2UI_TOOL = "send_a2ui_json_to_client";
 const VALIDATED_JSON_KEY = "validated_a2ui_json";
@@ -51,6 +61,9 @@ export interface AttachmentView {
 
 export interface IntelligentDevelopmentReleaseRef {
   sessionId: string;
+  projectId?: string;
+  versionId?: string;
+  parentVersionId?: string | null;
   artifactSha256: string;
   validationReportSha256: string;
   agentName: string;
@@ -62,7 +75,20 @@ export interface IntelligentDevelopmentReleaseRef {
   deployable: boolean;
   verified: boolean;
   validationSummary: string;
+  environment?: {
+    required: string[];
+    optional: string[];
+    defaults: Record<string, string>;
+  };
   files?: ProjectFile[];
+}
+
+export interface CodexSandboxActivity {
+  title: string;
+  agentSessionId?: string;
+  sandboxSessionId?: string;
+  threadId?: string;
+  items: Array<{ id: string; block: Block }>;
 }
 
 export type Block =
@@ -72,11 +98,13 @@ export type Block =
   | {
       kind: "tool";
       name: string;
+      callId?: string;
       args?: unknown;
       response?: unknown;
       done: boolean;
       status?: "running" | "completed" | "failed";
       defaultOpen?: boolean;
+      codexActivity?: CodexSandboxActivity;
     }
   | {
       kind: "plan";
@@ -115,6 +143,7 @@ export type Block =
 export interface Acc {
   blocks: Block[];
   liveStart: number;
+  pendingCodexProgress: CodexSandboxProgress[];
 }
 
 export interface TurnMeta {
@@ -148,7 +177,69 @@ export interface Turn {
 }
 
 export function emptyAcc(): Acc {
-  return { blocks: [], liveStart: 0 };
+  return { blocks: [], liveStart: 0, pendingCodexProgress: [] };
+}
+
+const MAX_PENDING_CODEX_PROGRESS = 64;
+
+function applyCodexProgressToTool(
+  blocks: Block[],
+  progress: CodexSandboxProgress,
+): "applied" | "completed" | "unmatched" {
+  // The successful function response owns the final assistant message. Older
+  // servers may also stream it as Codex progress; do not duplicate it inside
+  // the nested execution card.
+  if (progress.event.finalAnswer) return "applied";
+  let fallbackIndex = -1;
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const block = blocks[index];
+    if (block.kind !== "tool" || block.name !== progress.toolName) continue;
+    if (block.callId === progress.requestId) {
+      if (block.done) return "completed";
+      block.codexActivity = applyCodexSandboxProgress(block.codexActivity, progress);
+      block.status = progress.terminalStatus ?? "running";
+      if (progress.terminalStatus) block.done = true;
+      return "applied";
+    }
+    if (!block.done) {
+      if (fallbackIndex >= 0) return "unmatched";
+      fallbackIndex = index;
+    }
+  }
+  // Older Studio-channel runtimes reported their transport request id instead
+  // of the outer ADK function-call id. Bind only when the unfinished tool is
+  // unambiguous; exact ids above always win when calls overlap.
+  if (fallbackIndex >= 0) {
+    const block = blocks[fallbackIndex];
+    if (block.kind !== "tool") return "unmatched";
+    block.codexActivity = applyCodexSandboxProgress(block.codexActivity, progress);
+    block.status = progress.terminalStatus ?? "running";
+    if (progress.terminalStatus) block.done = true;
+    return "applied";
+  }
+  return "unmatched";
+}
+
+function codexResponseStatus(response: unknown): "completed" | "failed" {
+  if (!response || typeof response !== "object" || Array.isArray(response)) {
+    return "completed";
+  }
+  const result = response as Record<string, unknown>;
+  const status = typeof result.status === "string" ? result.status.toLowerCase() : "";
+  if (
+    result.ok === false
+    || ["error", "failed", "denied", "declined", "cancelled", "timeout"].includes(status)
+  ) {
+    return "failed";
+  }
+  return "completed";
+}
+
+function codexDirectAnswer(response: unknown): string {
+  if (!response || typeof response !== "object" || Array.isArray(response)) return "";
+  const result = response as Record<string, unknown>;
+  if (result.ok !== true || typeof result.message !== "string") return "";
+  return result.message.trim();
 }
 
 const fnCall = (p: AdkPart) => p.functionCall ?? p.function_call;
@@ -306,7 +397,46 @@ function closeThinking(blocks: Block[]) {
 export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
   const blocks = acc.blocks.map((b) => ({ ...b }));
   let liveStart = acc.liveStart;
+  let pendingCodexProgress = acc.pendingCodexProgress.slice();
   const parts = ev.content?.parts ?? [];
+  const progressUpdates = parts.flatMap((part) => {
+    const progress = parseBranchCompareProgress(
+      part.partMetadata ?? part.part_metadata,
+    );
+    return progress ? [progress] : [];
+  });
+  const codexProgressUpdates = parts.flatMap((part) => {
+    const progress = parseCodexSandboxProgress(
+      part.partMetadata ?? part.part_metadata,
+    );
+    return progress ? [progress] : [];
+  });
+  if (progressUpdates.length > 0 || codexProgressUpdates.length > 0) {
+    for (const progress of progressUpdates) {
+      for (let index = blocks.length - 1; index >= 0; index -= 1) {
+        const block = blocks[index];
+        if (
+          block.kind !== "tool"
+          || block.done
+          || block.name !== progress.toolName
+          || (progress.requestId && block.callId && block.callId !== progress.requestId)
+        ) {
+          continue;
+        }
+        block.response = applyBranchCompareProgress(block.args, block.response, progress);
+        block.status = "running";
+        break;
+      }
+    }
+    for (const progress of codexProgressUpdates) {
+      const outcome = applyCodexProgressToTool(blocks, progress);
+      if (outcome === "unmatched") {
+        pendingCodexProgress = [...pendingCodexProgress, progress]
+          .slice(-MAX_PENDING_CODEX_PROGRESS);
+      }
+    }
+    return { blocks, liveStart, pendingCodexProgress };
+  }
   const hasFn = parts.some((p) => fnCall(p) || fnResp(p));
 
   if (ev.partial && !hasFn) {
@@ -316,7 +446,7 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
       if (typeof text === "string" && text)
         appendText(blocks, p.thought ? "thinking" : "text", text);
     }
-    return { blocks, liveStart };
+    return { blocks, liveStart, pendingCodexProgress };
   }
 
   // Consolidated / final event: drop the live preview and append authoritative
@@ -358,7 +488,28 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
           done: false,
         });
       } else {
-        blocks.push({ kind: "tool", name: fc.name ?? "", args: fc.args, done: false });
+        const toolBlock: Extract<Block, { kind: "tool" }> = {
+          kind: "tool",
+          name: fc.name ?? "",
+          callId: fc.id,
+          args: fc.args,
+          done: false,
+        };
+        blocks.push(toolBlock);
+        if (toolBlock.callId) {
+          const stillPending: CodexSandboxProgress[] = [];
+          for (const progress of pendingCodexProgress) {
+            if (
+              progress.toolName === toolBlock.name
+              && progress.requestId === toolBlock.callId
+            ) {
+              applyCodexProgressToTool(blocks, progress);
+            } else {
+              stillPending.push(progress);
+            }
+          }
+          pendingCodexProgress = stillPending;
+        }
       }
     } else if (fr) {
       closeThinking(blocks);
@@ -383,9 +534,29 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
       }
       for (let i = blocks.length - 1; i >= 0; i--) {
         const b = blocks[i];
-        if (b.kind === "tool" && !b.done && b.name === fr.name) {
+        const isCodexTool = b.kind === "tool" && b.name === "delegate_to_codex_sandbox";
+        if (
+          b.kind === "tool"
+          && (!b.done || isCodexTool)
+          && b.name === fr.name
+          && (!fr.id || !b.callId || b.callId === fr.id)
+        ) {
+          const previousAnswer = isCodexTool
+            ? codexDirectAnswer(b.response)
+            : "";
           b.done = true;
           b.response = fr.response;
+          if (isCodexTool) {
+            b.codexActivity = hydrateCodexSandboxActivity(
+              b.codexActivity,
+              fr.response,
+            );
+            b.status = codexResponseStatus(fr.response);
+            const answer = codexDirectAnswer(fr.response);
+            if (answer && answer !== previousAnswer) {
+              appendText(blocks, "text", answer);
+            }
+          }
           break;
         }
       }
@@ -408,7 +579,7 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
   }
   closeThinking(blocks); // a consolidated thinking segment is complete
   liveStart = blocks.length;
-  return { blocks, liveStart };
+  return { blocks, liveStart, pendingCodexProgress };
 }
 
 /** Replay stored session events into chat turns (for history). */

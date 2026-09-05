@@ -26,6 +26,11 @@ import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
+from frontend.server.environments.session_mounts import SessionEnvironmentMount
+from frontend.server.studio_tools import (
+    SandboxExecutionTarget,
+    StudioToolExecutionContext,
+)
 from veadk.cli import cli_frontend
 from veadk.cli.cli_frontend import (
     _build_agentkit_proxy_headers,
@@ -33,8 +38,10 @@ from veadk.cli.cli_frontend import (
     _open_browser_when_ready,
     _run_frontend_server,
     _runtime_regions,
+    _studio_resource_region,
 )
 from veadk.tools import list_builtin_tools
+from veadk.utils.cloud_provider import CloudProvider
 
 
 def test_runtime_proxy_uses_same_socket_studio_tool_channel_when_enabled(
@@ -72,6 +79,11 @@ def test_runtime_proxy_uses_same_socket_studio_tool_channel_when_enabled(
     opened: dict[str, Any] = {}
 
     class _FakeStudioRun:
+        runtime_context = SimpleNamespace(
+            instance_name="instance-channel",
+            request_id="request-channel",
+        )
+
         async def stream(self):
             yield b'data: {"id":"event-1","author":"agent"}\n\n'
 
@@ -109,6 +121,13 @@ def test_runtime_proxy_uses_same_socket_studio_tool_channel_when_enabled(
                 "user_id": "user-1",
                 "session_id": "session-1",
                 "new_message": {"role": "user", "parts": [{"text": "6 * 7"}]},
+                "custom_metadata": {
+                    "veadkInvocation": {
+                        "skills": [{"name": "review-code"}],
+                        "environmentMounts": True,
+                        "codexSandboxEnvironment": True,
+                    }
+                },
                 "platform_tools": [
                     "get_city_weather",
                     "web_fetch",
@@ -119,9 +138,14 @@ def test_runtime_proxy_uses_same_socket_studio_tool_channel_when_enabled(
 
     assert response.status_code == 200
     assert response.text == 'data: {"id":"event-1","author":"agent"}\n\n'
+    assert response.headers["x-studio-faas-instance"] == "instance-channel"
+    assert response.headers["x-studio-faas-request-id"] == "request-channel"
     assert opened["endpoint"] == "https://runtime.example"
     assert opened["authorization"] == "Bearer runtime-api-key"
     assert opened["runtime_id"] == "runtime-1"
+    assert opened["payload"]["custom_metadata"] == {
+        "veadkInvocation": {"skills": [{"name": "review-code"}]}
+    }
     assert {item["name"] for item in opened["catalog"].manifests()} == {
         "get_city_weather",
         "web_fetch",
@@ -203,6 +227,425 @@ def test_runtime_proxy_builds_a_per_run_selected_tool_catalog(
     assert "platform_tools" not in opened["payload"]
 
 
+def test_runtime_proxy_resolves_environment_mount_without_forwarding_it(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            del request
+            return SimpleNamespace(
+                runtime_id="runtime-1",
+                project_name="default",
+                network_configurations=[
+                    SimpleNamespace(
+                        endpoint="https://runtime.example",
+                        network_type="public",
+                    )
+                ],
+                authorizer_configuration=SimpleNamespace(
+                    key_auth=SimpleNamespace(api_key="runtime-api-key"),
+                    custom_jwt_authorizer=None,
+                ),
+                tags=[],
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        _FakeRuntimeClient,
+    )
+    mount = SessionEnvironmentMount(
+        environment_id="a" * 32,
+        environment_version_id="version-1",
+        image="registry.example/aio:test",
+        provider="volcengine",
+        region="cn-beijing",
+        name="ANR Review",
+        description="Review requirements with ANR.",
+        manifest={
+            "spec": {
+                "baseEnvironment": "codex-sandbox",
+                "capabilities": ["review", "anr-cli"],
+            }
+        },
+        tool_id="tool-ready",
+        tool_status="ready",
+    )
+    resolved: dict[str, Any] = {}
+    preflight_calls: list[tuple[str, Any]] = []
+
+    async def fake_resolve(owner_id: str, selection: Any) -> SessionEnvironmentMount:
+        resolved.update(owner_id=owner_id, selection=selection)
+        return mount
+
+    monkeypatch.setattr(app.state.session_environment_mounts, "resolve", fake_resolve)
+    environment_service = app.state.session_environment_mounts._environment_service
+
+    async def fake_ensure_sandbox_tool_ready(
+        owner_id: str,
+        environment_id: str,
+        environment_version_id: str,
+    ) -> object:
+        preflight_calls.append(
+            ("tool", (owner_id, environment_id, environment_version_id))
+        )
+        return object()
+
+    async def fake_prepare_many(
+        mounts: Any,
+        context: StudioToolExecutionContext,
+    ) -> tuple[SandboxExecutionTarget, ...]:
+        preflight_calls.append(("session", (tuple(mounts), context.session_id)))
+        return (
+            SandboxExecutionTarget(
+                endpoint="https://sandbox.example",
+                session_id="sandbox-session-1",
+                tool_id="tool-ready",
+            ),
+        )
+
+    monkeypatch.setattr(
+        environment_service,
+        "ensure_sandbox_tool_ready",
+        fake_ensure_sandbox_tool_ready,
+    )
+    monkeypatch.setattr(
+        app.state.environment_sandbox_resolver,
+        "prepare_many",
+        fake_prepare_many,
+    )
+    opened: dict[str, Any] = {}
+
+    class _FakeStudioRun:
+        async def stream(self):
+            yield b'data: {"id":"mounted-run"}\n\n'
+
+    async def fake_open_studio_tool_run(**kwargs: Any) -> _FakeStudioRun:
+        opened.update(kwargs)
+        context = StudioToolExecutionContext(
+            runtime_id="runtime-1",
+            app_name="agent",
+            user_id="user-1",
+            session_id="session-1",
+            run_id="run-1",
+            scope_id="scope-1",
+            catalog_revision="catalog-1",
+            owner_id="local",
+            environment_mount=mount,
+            environment_mounts=(mount,),
+        )
+        prepared = await kwargs["prepare_environment_mounts"]((mount,), context)
+        assert tuple(prepared) == (mount,)
+        return _FakeStudioRun()
+
+    async def fake_runtime_supports_bff_tools(**kwargs: Any) -> bool:
+        del kwargs
+        return True
+
+    monkeypatch.setattr(
+        "frontend.server.studio_tools.open_studio_tool_run",
+        fake_open_studio_tool_run,
+    )
+    monkeypatch.setattr(
+        "frontend.server.studio_tools.runtime_supports_bff_tools",
+        fake_runtime_supports_bff_tools,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/runtime-proxy/runtime-1/run_sse?region=cn-beijing",
+            json={
+                "app_name": "agent",
+                "user_id": "user-1",
+                "session_id": "session-1",
+                "new_message": {"role": "user", "parts": [{"text": "pwd"}]},
+                "platform_tools": ["get_city_weather"],
+                "environment_mount": {
+                    "environment_id": "a" * 32,
+                    "environment_version_id": "version-1",
+                },
+            },
+        )
+
+    assert response.status_code == 200
+    assert resolved["owner_id"] == "local"
+    assert resolved["selection"].environment_id == "a" * 32
+    assert opened["environment_mount"] is mount
+    assert opened["owner_id"] == "local"
+    assert "environment_mount" not in opened["payload"]
+    assert [name for name, _ in preflight_calls] == ["tool", "session"]
+    assert preflight_calls[-1][1][1] == "session-1"
+    assert {item["name"] for item in opened["catalog"].manifests()} == {
+        "delegate_to_codex_sandbox",
+        "execute_in_sandbox",
+        "get_city_weather",
+        "get_env_manifest",
+        "list_envs",
+    }
+    invocation = opened["payload"]["custom_metadata"]["veadkInvocation"]
+    assert invocation["environmentMounts"] is True
+    assert invocation["codexSandboxEnvironment"] is True
+    routing_instruction = opened["payload"]["new_message"]["parts"][1]["text"]
+    assert "base_environment=codex-sandbox" in routing_instruction
+    assert "delegate_to_codex_sandbox once" in routing_instruction
+    assert '"base_environment": "codex-sandbox"' in routing_instruction
+
+
+@pytest.mark.parametrize("provider", ["volcengine", "byteplus"])
+def test_runtime_proxy_resolves_multiple_environment_mounts_and_adds_tools(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    provider: CloudProvider,
+) -> None:
+    if provider == "byteplus":
+        monkeypatch.setenv("BYTEPLUS_ACCESS_KEY", "byte-ak")
+        monkeypatch.setenv("BYTEPLUS_SECRET_KEY", "byte-sk")
+    app = _create_frontend_app(monkeypatch, tmp_path, provider=provider)
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            del request
+            return SimpleNamespace(
+                runtime_id="runtime-1",
+                project_name="default",
+                network_configurations=[
+                    SimpleNamespace(
+                        endpoint="https://runtime.example",
+                        network_type="public",
+                    )
+                ],
+                authorizer_configuration=SimpleNamespace(
+                    key_auth=SimpleNamespace(api_key="runtime-api-key"),
+                    custom_jwt_authorizer=None,
+                ),
+                tags=[],
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        _FakeRuntimeClient,
+    )
+    mounts = (
+        SessionEnvironmentMount(
+            environment_id="a" * 32,
+            environment_version_id="version-1",
+            image="registry.example/aio:first",
+            provider=provider,
+            region=("ap-southeast-1" if provider == "byteplus" else "cn-beijing"),
+            name="First",
+            description="Authoring environment for product and specification design.",
+            manifest={"spec": {"capabilities": ["authoring", "design"]}},
+        ),
+        SessionEnvironmentMount(
+            environment_id="b" * 32,
+            environment_version_id="version-2",
+            image="registry.example/aio:second",
+            provider=provider,
+            region=("ap-southeast-1" if provider == "byteplus" else "cn-beijing"),
+            name="Second",
+            description="Engineering environment for implementation and tests.",
+            manifest={"spec": {"capabilities": ["engineering", "shell-exec"]}},
+        ),
+    )
+    resolved: dict[str, Any] = {}
+    resolve_calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    async def fake_resolve_many(owner_id: str, selections: Any) -> Any:
+        selections = tuple(selections)
+        resolve_calls.append((owner_id, selections))
+        resolved.update(owner_id=owner_id, selections=selections)
+        return mounts
+
+    monkeypatch.setattr(
+        app.state.session_environment_mounts, "resolve_many", fake_resolve_many
+    )
+    opened: dict[str, Any] = {}
+    tool_preflights: list[tuple[str, str, str]] = []
+    session_preflights: list[tuple[tuple[str, ...], str]] = []
+
+    async def fake_ensure_sandbox_tool_ready(
+        owner_id: str,
+        environment_id: str,
+        environment_version_id: str,
+    ) -> object:
+        tool_preflights.append((owner_id, environment_id, environment_version_id))
+        return object()
+
+    async def fake_prepare_many(
+        prepared_mounts: Any,
+        context: StudioToolExecutionContext,
+    ) -> tuple[SandboxExecutionTarget, ...]:
+        prepared_mounts = tuple(prepared_mounts)
+        session_preflights.append(
+            (
+                tuple(mount.environment_id for mount in prepared_mounts),
+                context.session_id,
+            )
+        )
+        return tuple(
+            SandboxExecutionTarget(
+                endpoint=f"https://sandbox.example/{mount.environment_id}",
+                session_id=f"sandbox-{mount.environment_id[:4]}",
+                tool_id=f"tool-{mount.environment_id[:4]}",
+            )
+            for mount in prepared_mounts
+        )
+
+    environment_service = app.state.session_environment_mounts._environment_service
+    monkeypatch.setattr(
+        environment_service,
+        "ensure_sandbox_tool_ready",
+        fake_ensure_sandbox_tool_ready,
+    )
+    monkeypatch.setattr(
+        app.state.environment_sandbox_resolver,
+        "prepare_many",
+        fake_prepare_many,
+    )
+    monkeypatch.setattr(
+        app.state.environment_sandbox_resolver,
+        "is_prepared",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("run_sse preflight must not trust the local target cache")
+        ),
+    )
+
+    class _FakeStudioRun:
+        async def stream(self):
+            yield b'data: {"id":"mounted-run"}\n\n'
+
+    async def fake_open_studio_tool_run(**kwargs: Any) -> _FakeStudioRun:
+        opened.update(kwargs)
+        prepare_mounts = kwargs["prepare_environment_mounts"]
+        context = StudioToolExecutionContext(
+            runtime_id="runtime-1",
+            app_name="agent",
+            user_id="user-1",
+            session_id="session-1",
+            run_id="run-1",
+            scope_id="scope-1",
+            catalog_revision="catalog-1",
+            owner_id="local",
+            environment_mounts=mounts,
+        )
+        # Simulate two Agent runs against an already cached resolver. Every run
+        # must still validate and repair the remote Tool/Session resources.
+        assert await prepare_mounts(mounts, context) == mounts
+        assert await prepare_mounts(mounts, context) == mounts
+        return _FakeStudioRun()
+
+    async def fake_runtime_supports_bff_tools(**kwargs: Any) -> bool:
+        del kwargs
+        return True
+
+    monkeypatch.setattr(
+        "frontend.server.studio_tools.open_studio_tool_run",
+        fake_open_studio_tool_run,
+    )
+    monkeypatch.setattr(
+        "frontend.server.studio_tools.runtime_supports_bff_tools",
+        fake_runtime_supports_bff_tools,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/runtime-proxy/runtime-1/run_sse?region="
+            + ("ap-southeast-1" if provider == "byteplus" else "cn-beijing"),
+            json={
+                "app_name": "agent",
+                "user_id": "user-1",
+                "session_id": "session-1",
+                "new_message": {"role": "user", "parts": [{"text": "pwd"}]},
+                "custom_metadata": {
+                    "veadkInvocation": {
+                        "skills": [{"name": "review-code"}],
+                        "codexSandboxEnvironment": True,
+                    }
+                },
+                "platform_tools": [],
+                "environment_mounts": [
+                    {
+                        "environment_id": "a" * 32,
+                        "environment_version_id": "version-1",
+                    },
+                    {
+                        "environment_id": "b" * 32,
+                        "environment_version_id": "version-2",
+                    },
+                ],
+            },
+        )
+
+    assert response.status_code == 200
+    assert resolved["owner_id"] == "local"
+    assert [item.environment_id for item in resolved["selections"]] == [
+        "a" * 32,
+        "b" * 32,
+    ]
+    assert opened["environment_mounts"] == mounts
+    assert opened["environment_mount"] is None
+    assert [item["name"] for item in opened["catalog"].manifests()] == [
+        "execute_in_sandbox",
+        "get_env_manifest",
+        "list_envs",
+    ]
+    assert "environment_mounts" not in opened["payload"]
+    message = opened["payload"]["new_message"]
+    assert message["role"] == "user"
+    assert message["parts"][0] == {"text": "pwd"}
+    hidden_routing_part = message["parts"][1]
+    assert hidden_routing_part["partMetadata"] == {
+        "veadkTransport": {"hidden": True, "hideText": True}
+    }
+    routing_instruction = hidden_routing_part["text"]
+    assert "first tool call MUST be list_envs" in routing_instruction
+    assert "authoring/design environment" in routing_instruction
+    assert "choose review for review" in routing_instruction
+    assert "choose engineering for implementation" in routing_instruction
+    assert "execute_in_sandbox for every shell or CLI command" in routing_instruction
+    assert "take priority over knowledge bases" in routing_instruction
+    assert (
+        "Do not call collect_resources or create_agents unless" in routing_instruction
+    )
+    assert "First" in routing_instruction
+    assert "Authoring environment for product and specification design." in (
+        routing_instruction
+    )
+    assert '"capabilities": ["authoring", "design"]' in routing_instruction
+    assert '"environment_id": "' + ("a" * 32) + '"' in routing_instruction
+    assert "Second" in routing_instruction
+    assert "Engineering environment for implementation and tests." in (
+        routing_instruction
+    )
+    assert '"capabilities": ["engineering", "shell-exec"]' in routing_instruction
+    assert '"environment_id": "' + ("b" * 32) + '"' in routing_instruction
+    assert opened["payload"]["custom_metadata"] == {
+        "veadkInvocation": {
+            "skills": [{"name": "review-code"}],
+            "environmentMounts": True,
+        }
+    }
+    assert len(resolve_calls) == 3
+    assert tool_preflights == [
+        ("local", "a" * 32, "version-1"),
+        ("local", "b" * 32, "version-2"),
+        ("local", "a" * 32, "version-1"),
+        ("local", "b" * 32, "version-2"),
+    ]
+    assert session_preflights == [
+        (("a" * 32, "b" * 32), "session-1"),
+        (("a" * 32, "b" * 32), "session-1"),
+    ]
+
+
 def test_runtime_tool_capabilities_expose_safe_local_metadata(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -257,9 +700,319 @@ def test_runtime_tool_capabilities_expose_safe_local_metadata(
     assert body["supported"] is True
     assert {item["id"] for item in body["tools"]} == {
         *list_builtin_tools(),
+        "branch_compare",
         "current_time",
+        "delegate_to_codex_sandbox",
+        "execute_in_sandbox",
+        "get_env_manifest",
+        "list_envs",
     }
     assert all("input_schema" not in item for item in body["tools"])
+
+
+def test_local_runtime_tool_capabilities_do_not_query_cloud_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    class _UnexpectedRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+            raise AssertionError("local capabilities must not query a cloud Runtime")
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        _UnexpectedRuntimeClient,
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/runtime-tool-channel/local/capabilities?region=cn-beijing"
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["enabled"] is True
+    assert body["supported"] is True
+    assert {
+        "list_envs",
+        "get_env_manifest",
+        "execute_in_sandbox",
+        "delegate_to_codex_sandbox",
+    }.issubset({item["id"] for item in body["tools"]})
+    assert all("input_schema" not in item for item in body["tools"])
+
+
+@pytest.mark.parametrize("provider", ["volcengine", "byteplus"])
+def test_prepare_session_environment_mounts_creates_agent_bound_sandbox(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    provider: CloudProvider,
+) -> None:
+    if provider == "byteplus":
+        monkeypatch.setenv("BYTEPLUS_ACCESS_KEY", "byte-ak")
+        monkeypatch.setenv("BYTEPLUS_SECRET_KEY", "byte-sk")
+    app = _create_frontend_app(monkeypatch, tmp_path, provider=provider)
+    mount = SessionEnvironmentMount(
+        environment_id="e" * 32,
+        environment_version_id="version-1",
+        image="registry.example/environment:v1",
+        provider=provider,
+        region="ap-southeast-1" if provider == "byteplus" else "cn-beijing",
+        tool_id="tool-ready",
+        tool_status="ready",
+        mount_instance_id="mount-1",
+    )
+    calls: list[tuple[str, Any]] = []
+
+    async def ensure_tool(owner_id: str, environment_id: str, version_id: str):
+        calls.append(("tool", (owner_id, environment_id, version_id)))
+        return object()
+
+    async def resolve_many(owner_id: str, selections: Any):
+        calls.append(("mounts", (owner_id, selections)))
+        return (mount,)
+
+    async def prepare_many(mounts: Any, context: Any):
+        calls.append(("session", (tuple(mounts), context)))
+        return (
+            SandboxExecutionTarget(
+                endpoint="https://sandbox.example",
+                session_id="sandbox-session-1",
+                tool_id="tool-ready",
+            ),
+        )
+
+    service = app.state.session_environment_mounts._environment_service
+    monkeypatch.setattr(service, "ensure_sandbox_tool_ready", ensure_tool)
+    monkeypatch.setattr(
+        app.state.session_environment_mounts,
+        "resolve_many",
+        resolve_many,
+    )
+    monkeypatch.setattr(
+        app.state.environment_sandbox_resolver,
+        "prepare_many",
+        prepare_many,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/v3/session-environment-mounts/prepare",
+            headers={"X-VeADK-Local-User": "test"},
+            json={
+                "runtime_id": "runtime-1",
+                "app_name": "agent",
+                "user_id": "user-1",
+                "session_id": "agent-session-1",
+                "environment_mounts": [
+                    {
+                        "environment_id": "e" * 32,
+                        "environment_version_id": "version-1",
+                        "mount_instance_id": "mount-1",
+                    }
+                ],
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "mounts": [
+            {
+                "environment_id": "e" * 32,
+                "environment_version_id": "version-1",
+                "mount_instance_id": "mount-1",
+                "sandbox_session_id": "sandbox-session-1",
+            }
+        ]
+    }
+    assert [name for name, _ in calls] == ["tool", "mounts", "session"]
+    context = calls[-1][1][1]
+    assert context.runtime_id == "runtime-1"
+    assert context.app_name == "agent"
+    assert context.user_id == "user-1"
+    assert context.session_id == "agent-session-1"
+
+
+def test_local_run_sse_rejects_unknown_studio_tool_before_loading_agent(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/run_sse",
+            headers={"X-VeADK-Local-User": "test"},
+            json={
+                "app_name": "missing-agent",
+                "user_id": "test",
+                "session_id": "session-1",
+                "new_message": {"role": "user", "parts": [{"text": "hello"}]},
+                "streaming": True,
+                "platform_tools": ["missing-tool"],
+            },
+        )
+
+    assert response.status_code == 400
+    assert "Unknown Studio tools: missing-tool" in response.json()["detail"]
+
+
+def test_local_run_sse_resolves_mixed_mounts_and_selects_environment_tools(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+    mounts = (
+        SessionEnvironmentMount(
+            environment_id="a" * 32,
+            environment_version_id="aio-version",
+            image="registry.example/aio:test",
+            provider="volcengine",
+            region="cn-beijing",
+            name="AIO Review",
+            manifest={"spec": {"baseEnvironment": "aio-sandbox"}},
+            mount_instance_id="aio-mount",
+        ),
+        SessionEnvironmentMount(
+            environment_id="b" * 32,
+            environment_version_id="codex-version",
+            image="registry.example/codex:test",
+            provider="volcengine",
+            region="cn-beijing",
+            name="Codex Engineer",
+            manifest={"spec": {"baseEnvironment": "codex-sandbox"}},
+            mount_instance_id="codex-mount",
+        ),
+    )
+    resolved: dict[str, Any] = {}
+
+    async def fake_resolve_many(owner_id: str, selections: Any) -> Any:
+        resolved["owner_id"] = owner_id
+        resolved["selections"] = tuple(selections)
+        return mounts
+
+    monkeypatch.setattr(
+        app.state.session_environment_mounts,
+        "resolve_many",
+        fake_resolve_many,
+    )
+    selected_catalogs: list[tuple[str, ...]] = []
+    original_snapshot = app.state.studio_tool_registry.snapshot
+
+    def recording_snapshot(selected_names: Any = None) -> Any:
+        selected_catalogs.append(tuple(selected_names or ()))
+        return original_snapshot(selected_names)
+
+    monkeypatch.setattr(
+        app.state.studio_tool_registry,
+        "snapshot",
+        recording_snapshot,
+    )
+    validated_payload: dict[str, Any] = {}
+
+    class _CapturingRunAgentRequest:
+        @classmethod
+        def model_validate(cls, payload: dict[str, Any]) -> None:
+            del cls
+            validated_payload.update(payload)
+            raise ValueError("stop before loading an Agent")
+
+    monkeypatch.setattr(
+        "google.adk.cli.api_server.RunAgentRequest",
+        _CapturingRunAgentRequest,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/run_sse",
+            headers={"X-VeADK-Local-User": "test"},
+            json={
+                "app_name": "agent",
+                "user_id": "test",
+                "session_id": "session-1",
+                "new_message": {"role": "user", "parts": [{"text": "review"}]},
+                "streaming": True,
+                "environment_mounts": [
+                    {
+                        "environment_id": "a" * 32,
+                        "environment_version_id": "aio-version",
+                        "mount_instance_id": "aio-mount",
+                    },
+                    {
+                        "environment_id": "b" * 32,
+                        "environment_version_id": "codex-version",
+                        "mount_instance_id": "codex-mount",
+                    },
+                ],
+            },
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "stop before loading an Agent"
+    assert resolved["owner_id"] == "test"
+    assert [item.environment_id for item in resolved["selections"]] == [
+        "a" * 32,
+        "b" * 32,
+    ]
+    assert [item.mount_instance_id for item in resolved["selections"]] == [
+        "aio-mount",
+        "codex-mount",
+    ]
+    assert selected_catalogs == [
+        (
+            "list_envs",
+            "get_env_manifest",
+            "execute_in_sandbox",
+            "delegate_to_codex_sandbox",
+        )
+    ]
+    assert "environment_mounts" not in validated_payload
+    invocation = validated_payload["custom_metadata"]["veadkInvocation"]
+    assert invocation["environmentMounts"] is True
+    assert invocation["codexSandboxEnvironment"] is True
+    hidden_routing_part = validated_payload["new_message"]["parts"][1]
+    assert hidden_routing_part["partMetadata"] == {
+        "veadkTransport": {"hidden": True, "hideText": True}
+    }
+    assert "first tool call MUST be list_envs" in hidden_routing_part["text"]
+    assert "base_environment=codex-sandbox" in hidden_routing_part["text"]
+
+
+def test_local_run_sse_rejects_legacy_and_multi_mount_fields_together(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/run_sse",
+            headers={"X-VeADK-Local-User": "test"},
+            json={
+                "app_name": "missing-agent",
+                "user_id": "test",
+                "session_id": "session-1",
+                "new_message": {"role": "user", "parts": [{"text": "hello"}]},
+                "streaming": True,
+                "environment_mount": {
+                    "environment_id": "a" * 32,
+                    "environment_version_id": "version-1",
+                },
+                "environment_mounts": [
+                    {
+                        "environment_id": "a" * 32,
+                        "environment_version_id": "version-1",
+                    }
+                ],
+            },
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "environment_mount and environment_mounts cannot be used together"
+    )
 
 
 def test_empty_platform_tool_selection_uses_plain_run_without_forwarding_control(
@@ -378,26 +1131,35 @@ def test_runtime_route_channel_connects_after_runtime_probe(
     )
     app = _create_frontend_app(monkeypatch, tmp_path)
 
+    runtime = SimpleNamespace(
+        runtime_id="runtime-1",
+        project_name="default",
+        network_configurations=[
+            SimpleNamespace(
+                endpoint="https://runtime.example",
+                network_type="public",
+            )
+        ],
+        authorizer_configuration=SimpleNamespace(
+            key_auth=SimpleNamespace(api_key="runtime-api-key"),
+            custom_jwt_authorizer=None,
+        ),
+        tags=[],
+    )
+
     class _FakeRuntimeClient:
         def __init__(self, **kwargs: Any) -> None:
             del kwargs
 
         def get_runtime(self, request: Any) -> SimpleNamespace:
             del request
+            raise RuntimeError("InvalidAgentKitRuntime.NotFound: hidden")
+
+        def list_runtimes(self, request: Any) -> SimpleNamespace:
+            del request
             return SimpleNamespace(
-                runtime_id="runtime-1",
-                project_name="default",
-                network_configurations=[
-                    SimpleNamespace(
-                        endpoint="https://runtime.example",
-                        network_type="public",
-                    )
-                ],
-                authorizer_configuration=SimpleNamespace(
-                    key_auth=SimpleNamespace(api_key="runtime-api-key"),
-                    custom_jwt_authorizer=None,
-                ),
-                tags=[],
+                agent_kit_runtimes=[runtime],
+                next_token=None,
             )
 
     monkeypatch.setattr(
@@ -419,6 +1181,67 @@ def test_runtime_route_channel_connects_after_runtime_probe(
         "endpoint": "https://runtime.example",
         "authorization": "Bearer runtime-api-key",
     }
+
+
+def test_runtime_tool_capabilities_use_list_fallback_when_get_is_hidden(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+    runtime = SimpleNamespace(
+        runtime_id="runtime-1",
+        network_configurations=[
+            SimpleNamespace(
+                endpoint="https://runtime.example",
+                network_type="public",
+            )
+        ],
+        authorizer_configuration=SimpleNamespace(
+            key_auth=SimpleNamespace(api_key="runtime-api-key"),
+            custom_jwt_authorizer=None,
+        ),
+        tags=[],
+    )
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            del request
+            raise RuntimeError("InvalidAgentKitRuntime.NotFound: hidden")
+
+        def list_runtimes(self, request: Any) -> SimpleNamespace:
+            del request
+            return SimpleNamespace(
+                agent_kit_runtimes=[runtime],
+                next_token=None,
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        _FakeRuntimeClient,
+    )
+
+    async def fake_runtime_supports_bff_tools(**kwargs: Any) -> bool:
+        assert kwargs == {
+            "endpoint": "https://runtime.example",
+            "authorization": "Bearer runtime-api-key",
+        }
+        return True
+
+    monkeypatch.setattr(
+        "frontend.server.studio_tools.runtime_supports_bff_tools",
+        fake_runtime_supports_bff_tools,
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/runtime-tool-channel/runtime-1/capabilities?region=cn-beijing"
+        )
+
+    assert response.status_code == 200
+    assert response.json()["supported"] is True
 
 
 def test_runtime_proxy_uses_plain_run_sse_when_runtime_lacks_bff_tool_host(
@@ -759,6 +1582,224 @@ def test_runtime_regions_use_byteplus_default_region(
     assert _runtime_regions("byteplus", "all") == ["ap-southeast-1"]
     monkeypatch.setenv("BYTEPLUS_REGION", "ap-southeast-2")
     assert _runtime_regions("byteplus", "all") == ["ap-southeast-2"]
+
+
+def test_studio_resource_region_uses_beijing_for_local_studio() -> None:
+    assert (
+        _studio_resource_region(
+            "volcengine",
+            {
+                "REGION": "cn-shanghai",
+                "VEADK_STUDIO_DEPLOY_REGION": "cn-shanghai",
+            },
+        )
+        == "cn-beijing"
+    )
+
+
+@pytest.mark.parametrize(
+    ("provider", "region"),
+    [
+        ("volcengine", "cn-shanghai"),
+        ("byteplus", "ap-southeast-1"),
+    ],
+)
+def test_studio_resource_region_uses_cloud_studio_deployment_region(
+    provider: CloudProvider,
+    region: str,
+) -> None:
+    assert (
+        _studio_resource_region(
+            provider,
+            {
+                "VEADK_STUDIO_FUNCTION_ID": "function-1",
+                "VEADK_STUDIO_DEPLOY_REGION": region,
+            },
+        )
+        == region
+    )
+
+
+def test_studio_resource_region_uses_vefaas_region_fallback() -> None:
+    assert (
+        _studio_resource_region(
+            "volcengine",
+            {
+                "_FAAS_FUNC_ID": "function-1",
+                "APP_REGION": "cn-shanghai",
+            },
+        )
+        == "cn-shanghai"
+    )
+
+
+@pytest.mark.parametrize(
+    ("provider", "conflicting_provider", "region"),
+    [
+        ("volcengine", "byteplus", "cn-shanghai"),
+        ("byteplus", "volcengine", "ap-southeast-1"),
+    ],
+)
+def test_skill_and_knowledge_clients_use_cloud_studio_provider_and_region(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    provider: CloudProvider,
+    conflicting_provider: CloudProvider,
+    region: str,
+) -> None:
+    from agentkit.platform.context import (
+        default_cloud_provider,
+        get_default_cloud_provider,
+    )
+
+    requested_clients: list[tuple[str, object, str]] = []
+
+    class FakeSkillsClient:
+        def __init__(self, **kwargs: Any) -> None:
+            requested_clients.append(
+                ("skills", get_default_cloud_provider(), kwargs["region"])
+            )
+
+        def list_skill_spaces(self, request: object) -> SimpleNamespace:
+            del request
+            return SimpleNamespace(items=[], total_count=0)
+
+    class FakeKnowledgeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            requested_clients.append(
+                ("knowledge", get_default_cloud_provider(), kwargs["region"])
+            )
+
+        def list_knowledge_bases(self, request: object) -> SimpleNamespace:
+            del request
+            return SimpleNamespace(knowledge_bases=[], next_token="")
+
+    monkeypatch.setattr(
+        "agentkit.sdk.skills.client.AgentkitSkillsClient",
+        FakeSkillsClient,
+    )
+    monkeypatch.setattr(
+        "agentkit.sdk.knowledge.client.AgentkitKnowledgeClient",
+        FakeKnowledgeClient,
+    )
+    monkeypatch.setenv("BYTEPLUS_ACCESS_KEY", "ak")
+    monkeypatch.setenv("BYTEPLUS_SECRET_KEY", "sk")
+    monkeypatch.setenv("VEADK_STUDIO_FUNCTION_ID", "function-1")
+    monkeypatch.setenv("VEADK_STUDIO_DEPLOY_REGION", region)
+    app = _create_frontend_app(
+        monkeypatch,
+        tmp_path,
+        studio=True,
+        provider=provider,
+    )
+
+    with default_cloud_provider(conflicting_provider):
+        with TestClient(app) as client:
+            skills = client.get("/web/skill-spaces")
+            knowledge = client.get("/web/knowledge-bases")
+        assert get_default_cloud_provider().value == conflicting_provider
+
+    assert skills.status_code == 200
+    assert knowledge.status_code == 200
+    assert [
+        (kind, context.value, client_region)
+        for kind, context, client_region in requested_clients
+    ] == [
+        ("skills", provider, region),
+        ("knowledge", provider, region),
+    ]
+
+
+@pytest.mark.parametrize(
+    (
+        "provider",
+        "conflicting_provider",
+        "requested_region",
+        "expected_region",
+        "expected_host",
+    ),
+    [
+        (
+            "volcengine",
+            "byteplus",
+            "cn-shanghai",
+            "cn-shanghai",
+            "open.volcengineapi.com",
+        ),
+        (
+            "byteplus",
+            "volcengine",
+            "cn-beijing",
+            "ap-southeast-1",
+            "agentkit.ap-southeast-1.byteplusapi.com",
+        ),
+    ],
+)
+def test_environment_sandbox_client_uses_studio_provider_endpoint_and_region(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    provider: CloudProvider,
+    conflicting_provider: CloudProvider,
+    requested_region: str,
+    expected_region: str,
+    expected_host: str,
+) -> None:
+    from agentkit.platform.context import (
+        default_cloud_provider,
+        get_default_cloud_provider,
+    )
+
+    monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "volc-ak")
+    monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "volc-sk")
+    monkeypatch.setenv("BYTEPLUS_ACCESS_KEY", "byte-ak")
+    monkeypatch.setenv("BYTEPLUS_SECRET_KEY", "byte-sk")
+    app = _create_frontend_app(monkeypatch, tmp_path, provider=provider)
+
+    with default_cloud_provider(conflicting_provider):
+        client = app.state.environment_sandbox_resolver._client_factory(
+            provider,
+            requested_region,
+        )
+        active_provider = get_default_cloud_provider()
+        assert active_provider is not None
+        assert active_provider.value == conflicting_provider
+
+    assert client.region == expected_region
+    assert client.host == expected_host
+
+
+def test_environment_sandbox_client_preserves_vestack_agentkit_host(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "volc-ak")
+    monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "volc-sk")
+    monkeypatch.setenv("VEADK_STUDIO_DEPLOY_TARGET", "vestack")
+    monkeypatch.setenv("VOLCENGINE_AGENTKIT_HOST", "agentkit.internal.example")
+    app = _create_frontend_app(monkeypatch, tmp_path, provider="volcengine")
+
+    client = app.state.environment_sandbox_resolver._client_factory(
+        "volcengine",
+        "e70",
+    )
+
+    assert client.region == "e70"
+    assert client.host == "agentkit.internal.example"
+
+
+def test_environment_sandbox_client_rejects_cross_provider_mount(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from veadk.cli.frontend_sandbox import SandboxConfigurationError
+
+    app = _create_frontend_app(monkeypatch, tmp_path, provider="volcengine")
+
+    with pytest.raises(SandboxConfigurationError, match="云服务商不一致"):
+        app.state.environment_sandbox_resolver._client_factory(
+            "byteplus",
+            "ap-southeast-1",
+        )
 
 
 def test_byteplus_runtime_list_uses_vefaas_iam_credentials(
@@ -1407,7 +2448,11 @@ def test_runtime_proxy_uses_authorizer_credential(
 
     class _FakeUpstreamResponse:
         status_code = 200
-        headers: ClassVar[dict[str, str]] = {"content-type": "application/json"}
+        headers: ClassVar[dict[str, str]] = {
+            "content-type": "application/json",
+            "x-faas-instance-name": "instance-plain",
+            "x-faas-request-id": "request-plain",
+        }
 
         async def aiter_raw(self):
             yield b'["demo_agent"]'
@@ -1441,6 +2486,11 @@ def test_runtime_proxy_uses_authorizer_credential(
 
     monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
 
+    async def _unexpected_get_body(_request: Request) -> bytes:
+        raise AssertionError("GET proxy requests must not read the client body")
+
+    monkeypatch.setattr(Request, "body", _unexpected_get_body)
+
     with TestClient(app) as client:
         response = client.get(
             "/web/runtime-proxy/runtime-1/dev/apps/demo_agent/debug/trace/"
@@ -1454,6 +2504,86 @@ def test_runtime_proxy_uses_authorizer_credential(
         "https://runtime.example/dev/apps/demo_agent/debug/trace/session/session-1"
     )
     assert upstream_headers["Authorization"] == expected_authorization
+
+
+def test_runtime_proxy_exposes_safe_instance_context(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            del request
+            return SimpleNamespace(
+                tags=[],
+                network_configurations=[
+                    SimpleNamespace(
+                        endpoint="https://runtime.example",
+                        network_type="public",
+                    )
+                ],
+                authorizer_configuration=SimpleNamespace(
+                    key_auth=SimpleNamespace(api_key="runtime-api-key"),
+                    custom_jwt_authorizer=None,
+                ),
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        _FakeRuntimeClient,
+    )
+
+    class _FakeUpstreamResponse:
+        status_code = 200
+        headers: ClassVar[dict[str, str]] = {
+            "content-type": "text/event-stream",
+            "x-faas-instance-name": "instance-plain",
+            "x-faas-request-id": "request-plain",
+            "x-session-id": "must-not-leave-the-bff",
+        }
+
+        async def aiter_raw(self):
+            yield b'data: {"id":"event-1","author":"agent"}\n\n'
+
+        async def aclose(self) -> None:
+            pass
+
+    class _FakeAsyncClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def build_request(self, *args: Any, **kwargs: Any) -> object:
+            del args, kwargs
+            return object()
+
+        async def send(self, request: object, *, stream: bool) -> _FakeUpstreamResponse:
+            del request, stream
+            return _FakeUpstreamResponse()
+
+        async def aclose(self) -> None:
+            pass
+
+    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/runtime-proxy/runtime-1/run_sse?region=cn-beijing",
+            json={
+                "app_name": "agent",
+                "user_id": "user-1",
+                "session_id": "session-1",
+                "new_message": {"role": "user", "parts": [{"text": "hello"}]},
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["x-studio-faas-instance"] == "instance-plain"
+    assert response.headers["x-studio-faas-request-id"] == "request-plain"
+    assert "x-session-id" not in response.headers
 
 
 def test_runtime_proxy_preserves_api_region_with_distinct_runtime_region(
@@ -1795,6 +2925,150 @@ def test_runtime_proxy_retry_policy(
             if network_type == "private"
             else "runtime_proxy_connect_error"
         )
+
+
+@pytest.mark.parametrize(
+    "error_code",
+    ["InvalidResource.NotFound", "InvalidAgentKitRuntime.NotFound"],
+)
+def test_runtime_proxy_classifies_runtime_lookup_not_found_without_raw_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    error_code: str,
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            del request
+            raise RuntimeError(f"{error_code}: protected-upstream-detail")
+
+        def list_runtimes(self, request: Any) -> SimpleNamespace:
+            del request
+            return SimpleNamespace(
+                agent_kit_runtimes=[],
+                next_token=None,
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        _FakeRuntimeClient,
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/runtime-proxy/runtime-1/list-apps?_runtime_region=cn-shanghai"
+        )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "runtime_not_found"}
+    assert "protected-upstream-detail" not in response.text
+
+
+def test_runtime_proxy_uses_exact_list_item_when_role_get_runtime_is_hidden(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+    list_requests: list[Any] = []
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            assert kwargs["region"] == "cn-shanghai"
+
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            del request
+            raise RuntimeError(
+                "InvalidAgentKitRuntime.NotFound: protected-upstream-detail"
+            )
+
+        def list_runtimes(self, request: Any) -> SimpleNamespace:
+            list_requests.append(request)
+            return SimpleNamespace(
+                agent_kit_runtimes=[
+                    SimpleNamespace(
+                        runtime_id="runtime-1",
+                        name="runtime-name",
+                        status="Ready",
+                        current_version_number=2,
+                        network_configurations=[
+                            SimpleNamespace(
+                                endpoint="https://runtime.example",
+                                network_type="public",
+                            )
+                        ],
+                        authorizer_configuration=SimpleNamespace(
+                            key_auth=SimpleNamespace(api_key="runtime-api-key"),
+                            custom_jwt_authorizer=None,
+                        ),
+                        tags=[],
+                    )
+                ],
+                next_token=None,
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        _FakeRuntimeClient,
+    )
+
+    class _FakeUpstreamResponse:
+        status_code = 200
+        headers: ClassVar[dict[str, str]] = {"content-type": "application/json"}
+
+        async def aiter_raw(self):
+            yield b'["demo_agent"]'
+
+        async def aclose(self) -> None:
+            pass
+
+    class _FakeAsyncClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def build_request(
+            self,
+            method: str,
+            url: str,
+            *,
+            params: dict[str, str],
+            headers: dict[str, str],
+            content: bytes,
+        ) -> object:
+            assert method == "GET"
+            assert url == "https://runtime.example/list-apps"
+            assert params == {}
+            assert headers["Authorization"] == "Bearer runtime-api-key"
+            assert content == b""
+            return object()
+
+        async def send(
+            self,
+            request: object,
+            *,
+            stream: bool,
+        ) -> _FakeUpstreamResponse:
+            del request
+            assert stream is True
+            return _FakeUpstreamResponse()
+
+        async def aclose(self) -> None:
+            pass
+
+    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/runtime-proxy/runtime-1/list-apps"
+            "?_runtime_region=cn-shanghai&probe_retry=connect"
+        )
+
+    assert response.status_code == 200
+    assert response.json() == ["demo_agent"]
+    assert len(list_requests) == 1
 
 
 def test_runtime_proxy_resolves_studio_media_before_forwarding(

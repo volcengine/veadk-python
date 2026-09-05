@@ -13,6 +13,7 @@
 # limitations under the License.
 import json
 import os
+import time
 import requests
 from typing import Optional, List, Dict, Any, Union
 from volcenginesdkllmshield.models.llm_shield_sign import request_sign
@@ -82,7 +83,27 @@ class LLMShieldPlugin(BasePlugin):
             107: "Computational Resource Consumption",
         }
 
-    def _request_llm_shield(self, message: str, role: str) -> Optional[str]:
+    def _get_session_info(self, tool_context: Any) -> Dict[str, str]:
+        """Extract session id and run id from the tool context when available."""
+        session_info = {"SessionID": "", "RunID": ""}
+        try:
+            session = getattr(tool_context, "session", None)
+            session_id = getattr(session, "id", "") if session else ""
+            run_id = getattr(tool_context, "invocation_id", "") or ""
+            session_info = {"SessionID": session_id or "", "RunID": run_id}
+        except Exception:
+            logger.debug(
+                "Failed to extract session info from tool context", exc_info=True
+            )
+        return session_info
+
+    def _request_llm_shield(
+        self,
+        message: str,
+        role: str,
+        hook_name: Optional[str] = None,
+        session_info: Optional[Dict[str, str]] = None,
+    ) -> Optional[str]:
         """
         Make a request to the LLM Shield service for content moderation.
 
@@ -93,6 +114,8 @@ class LLMShieldPlugin(BasePlugin):
         Args:
             message (str): The content to be moderated
             role (str): The role of the message sender ("user" or "assistant")
+            hook_name (str, optional): Hook name for the Lumen Moderate endpoint
+            session_info (dict, optional): Session and run ids for the Lumen endpoint
 
         Returns:
             Optional[str]: A blocking message if content violates policies,
@@ -102,64 +125,94 @@ class LLMShieldPlugin(BasePlugin):
             logger.error("LLM Shield app ID not configured")
             return None
 
-        body = {
-            "Message": {
-                "Role": role,
-                "Content": message,
-                "ContentType": 1,
-            },
-            "Scene": self.appid,
-        }
-
-        body_json = json.dumps(body).encode("utf-8")
-
-        path = "/v2/moderate"
-        action = "Moderate"
-        version = "2025-08-31"
-
-        # Check if using API key authentication
-        logger.debug(f"API key configured: {bool(self.api_key)}")
-        if self.api_key and self.api_key != "":
-            logger.debug("Using API key authentication (no AK/SK signature)")
-            # Use API key authentication only - match curl command headers exactly
-            signed_header = {
-                "Content-Type": "application/json",
-                "x-api-key": self.api_key,
+        if "/OpenTOP/V1/Lumen/Moderate" in self.url:
+            logger.debug("Using Lumen Moderate endpoint")
+            body = {
+                "Message": {
+                    "Role": role,
+                    "MultiPart": [
+                        {"Content": message, "ContentType": 1},
+                    ],
+                },
+                "History": [],
+                "HookName": hook_name or "before_tool_call",
+                "IsGroup": False,
+                "LocalTimestamp": int(time.time()),
+                "LocalTimestampMS": int(time.time() * 1000),
+                "SessionInfo": session_info or {"SessionID": "", "RunID": ""},
             }
+            headers = {
+                "Content-Type": "application/json",
+                "X-Top-Account-Id": "30000001",
+                "X-Top-Region": "cn-private",
+                "X-endpoint-Id": self.appid,
+                "X-endpoint-api-Key": self.api_key,
+            }
+            body_json = json.dumps(body).encode("utf-8")
+            request_url = self.url
+            params = None
         else:
-            logger.debug("Using AK/SK signature authentication")
-            # Use AK/SK signature authentication
-            ak = os.getenv("VOLCENGINE_ACCESS_KEY")
-            sk = os.getenv("VOLCENGINE_SECRET_KEY")
-            session_token = ""
-            if not (ak and sk):
-                logger.debug("Get AK/SK from environment variables failed.")
-                credential = get_credential_from_vefaas_iam()
-                ak = credential.access_key_id
-                sk = credential.secret_access_key
-                session_token = credential.session_token
-            else:
-                logger.debug("Successfully get AK/SK from environment variables.")
+            body = {
+                "Message": {
+                    "Role": role,
+                    "Content": message,
+                    "ContentType": 1,
+                },
+                "Scene": self.appid,
+            }
+            body_json = json.dumps(body).encode("utf-8")
 
-            header = {"X-Security-Token": session_token}
-            signed_header = request_sign(
-                header, ak, sk, self.region, self.url, path, action, body_json
-            )
+            path = "/v2/moderate"
+            action = "Moderate"
+            version = "2025-08-31"
 
-            signed_header.update(
-                {
+            # Check if using API key authentication
+            logger.debug(f"API key configured: {bool(self.api_key)}")
+            if self.api_key and self.api_key != "":
+                logger.debug("Using API key authentication (no AK/SK signature)")
+                # Use API key authentication only - match curl command headers exactly
+                signed_header = {
                     "Content-Type": "application/json",
-                    "X-Top-Service": "llmshield",
-                    "X-Top-Region": self.region,
+                    "x-api-key": self.api_key,
                 }
-            )
+            else:
+                logger.debug("Using AK/SK signature authentication")
+                # Use AK/SK signature authentication
+                ak = os.getenv("VOLCENGINE_ACCESS_KEY")
+                sk = os.getenv("VOLCENGINE_SECRET_KEY")
+                session_token = ""
+                if not (ak and sk):
+                    logger.debug("Get AK/SK from environment variables failed.")
+                    credential = get_credential_from_vefaas_iam()
+                    ak = credential.access_key_id
+                    sk = credential.secret_access_key
+                    session_token = credential.session_token
+                else:
+                    logger.debug("Successfully get AK/SK from environment variables.")
+
+                header = {"X-Security-Token": session_token}
+                signed_header = request_sign(
+                    header, ak, sk, self.region, self.url, path, action, body_json
+                )
+
+                signed_header.update(
+                    {
+                        "Content-Type": "application/json",
+                        "X-Top-Service": "llmshield",
+                        "X-Top-Region": self.region,
+                    }
+                )
+
+            headers = signed_header
+            request_url = self.url + path
+            params = {"Action": action, "Version": version}
 
         try:
             response = requests.post(
-                self.url + path,
-                headers=signed_header,
+                request_url,
+                headers=headers,
                 data=body_json,
-                params={"Action": action, "Version": version},
+                params=params,
                 timeout=self.timeout,
             )
 
@@ -261,7 +314,9 @@ class LLMShieldPlugin(BasePlugin):
         if not last_user_message:
             return None
 
-        response = self._request_llm_shield(message=last_user_message, role="user")
+        response = self._request_llm_shield(
+            message=last_user_message, role="user", hook_name="before_model"
+        )
         if response:
             logger.debug("LLM Shield triggered in before_model_callback.")
             return LlmResponse(
@@ -308,7 +363,7 @@ class LLMShieldPlugin(BasePlugin):
             return None
 
         response = self._request_llm_shield(
-            message=last_model_message, role="assistant"
+            message=last_model_message, role="assistant", hook_name="after_model"
         )
         if response:
             logger.debug("LLM Shield triggered in after_model_callback.")
@@ -347,7 +402,12 @@ class LLMShieldPlugin(BasePlugin):
             args_list.append(f"{key}: {value}")
 
         message = "\n".join(args_list)
-        response = self._request_llm_shield(message=message, role="user")
+        response = self._request_llm_shield(
+            message=message,
+            role="user",
+            hook_name="before_tool_call",
+            session_info=self._get_session_info(tool_context),
+        )
         if response:
             logger.debug("LLM Shield triggered in before_tool_callback.")
             return {"result": response}
@@ -389,7 +449,12 @@ class LLMShieldPlugin(BasePlugin):
             for item in tool_response:
                 message += f"{item}\n"
 
-        response = self._request_llm_shield(message=message, role="assistant")
+        response = self._request_llm_shield(
+            message=message,
+            role="assistant",
+            hook_name="after_tool_call",
+            session_info=self._get_session_info(tool_context),
+        )
         if response:
             logger.debug("LLM Shield triggered in after_tool_callback.")
             return {"result": response}

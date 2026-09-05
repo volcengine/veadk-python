@@ -1,14 +1,25 @@
 import type { ComponentType, SVGProps } from "react";
+import { BranchCompareCard } from "./BranchCompareCard";
 import {
+  CollectResourcesCard,
+  CreateAgentsCard,
+} from "./CreateAgentToolCards";
+import {
+  CollectResourcesIcon,
+  CreateAgentsIcon,
+  EnvironmentManifestIcon,
+  ExecuteInSandboxIcon,
   ImageGenerateIcon,
   LoadKnowledgebaseIcon,
   LoadMemoryIcon,
   LoadSkillIcon,
   PresentationGenerateIcon,
   RunCodeIcon,
+  ListEnvironmentsIcon,
   VideoGenerateIcon,
   WebSearchIcon,
 } from "./icons";
+import type { BranchCompareBranch } from "./branchCompareData";
 
 export type BuiltinToolTone =
   | "search"
@@ -18,14 +29,26 @@ export type BuiltinToolTone =
   | "memory"
   | "knowledge"
   | "skill"
-  | "sandbox";
+  | "sandbox"
+  | "resources"
+  | "agent";
+
+export interface BuiltinToolDetailProps {
+  args?: unknown;
+  response?: unknown;
+  status: "running" | "completed" | "failed";
+  onBranchSelect?: (branch: BranchCompareBranch) => void;
+}
 
 export interface BuiltinToolDefinition {
   name: string;
   runningLabel: string;
   doneLabel: string;
+  failedLabel?: string;
   tone: BuiltinToolTone;
   icon: ComponentType<SVGProps<SVGSVGElement>>;
+  detailRenderer?: ComponentType<BuiltinToolDetailProps>;
+  hideHeader?: boolean;
 }
 
 const BUILTIN_TOOLS: Readonly<Record<string, BuiltinToolDefinition>> = {
@@ -42,6 +65,35 @@ const BUILTIN_TOOLS: Readonly<Record<string, BuiltinToolDefinition>> = {
     doneLabel: "已在 AgentKit 沙箱中完成代码执行",
     tone: "sandbox",
     icon: RunCodeIcon,
+  },
+  list_envs: {
+    name: "list_envs",
+    runningLabel: "正在查看可用环境",
+    doneLabel: "已读取可用环境",
+    tone: "resources",
+    icon: ListEnvironmentsIcon,
+  },
+  get_env_manifest: {
+    name: "get_env_manifest",
+    runningLabel: "正在读取环境 Manifest",
+    doneLabel: "已读取环境 Manifest",
+    tone: "knowledge",
+    icon: EnvironmentManifestIcon,
+  },
+  execute_in_sandbox: {
+    name: "execute_in_sandbox",
+    runningLabel: "正在环境中执行命令",
+    doneLabel: "已在环境中完成命令执行",
+    tone: "sandbox",
+    icon: ExecuteInSandboxIcon,
+  },
+  delegate_to_codex_sandbox: {
+    name: "delegate_to_codex_sandbox",
+    runningLabel: "Codex Sandbox 正在执行",
+    doneLabel: "Codex Sandbox 已完成",
+    failedLabel: "Codex Sandbox 执行失败",
+    tone: "sandbox",
+    icon: ExecuteInSandboxIcon,
   },
   image_generate: {
     name: "image_generate",
@@ -84,6 +136,34 @@ const BUILTIN_TOOLS: Readonly<Record<string, BuiltinToolDefinition>> = {
     doneLabel: "已加载技能",
     tone: "skill",
     icon: LoadSkillIcon,
+  },
+  collect_resources: {
+    name: "collect_resources",
+    runningLabel: "正在收集可用资源",
+    doneLabel: "已完成资源收集",
+    failedLabel: "资源收集失败",
+    tone: "resources",
+    icon: CollectResourcesIcon,
+    detailRenderer: CollectResourcesCard,
+  },
+  create_agents: {
+    name: "create_agents",
+    runningLabel: "正在创建并运行 Agent",
+    doneLabel: "已完成 Agent 创建",
+    failedLabel: "Agent 创建失败",
+    tone: "agent",
+    icon: CreateAgentsIcon,
+    detailRenderer: CreateAgentsCard,
+  },
+  branch_compare: {
+    name: "branch_compare",
+    runningLabel: "",
+    doneLabel: "",
+    failedLabel: "",
+    tone: "search",
+    icon: CreateAgentsIcon,
+    detailRenderer: BranchCompareCard,
+    hideHeader: true,
   },
 };
 

@@ -6,6 +6,7 @@ import {
   harnessIntentFromOptimizations,
   harnessIntentFromRuntimeEnvs,
   harnessProfileDefaultOptimizations,
+  normalizeHarnessSidecarIntent,
   harnessSidecarProviderNotice,
   harnessSidecarProfileLabel,
   harnessSidecarOptionLabel,
@@ -108,7 +109,7 @@ describe("Studio Harness Sidecar metadata options", () => {
     );
   });
 
-  it("preserves an existing ops Runtime's explicit compressor selection", () => {
+  it("canonicalizes an existing ops Runtime to the fixed ops preset", () => {
     const intent = harnessIntentFromRuntimeEnvs([
       { key: "HARNESS_SIDECAR_ENABLED", value: "true" },
       { key: "HARNESS_PROFILE", value: "ops" },
@@ -126,16 +127,45 @@ describe("Studio Harness Sidecar metadata options", () => {
 
     expect(intent).toEqual(
       harnessIntentFromOptimizations(
-        [
-          "context_engine",
-          "compressor",
-          "verifier",
-          "long_run_control",
-          "mcp_resilience",
-        ],
+        harnessProfileDefaultOptimizations("ops"),
         "ops",
       ),
     );
+  });
+
+  it("repairs a partial legacy ops snapshot without enabling compression", () => {
+    expect(
+      normalizeHarnessSidecarIntent(
+        harnessIntentFromOptimizations(["mcp_resilience"], "ops"),
+      ),
+    ).toEqual(
+      harnessIntentFromOptimizations(
+        harnessProfileDefaultOptimizations("ops"),
+        "ops",
+      ),
+    );
+  });
+
+  it("normalizes custom snapshots from explicit overrides and missing legacy metadata", () => {
+    expect(
+      normalizeHarnessSidecarIntent({
+        ...harnessIntentFromOptimizations(["verifier"]),
+        catalogVersion: "catalog-v1",
+        planHash: "sha256:test-plan",
+      }),
+    ).toEqual({
+      ...harnessIntentFromOptimizations(["verifier"]),
+      catalogVersion: "catalog-v1",
+      planHash: "sha256:test-plan",
+    });
+
+    expect(
+      normalizeHarnessSidecarIntent({
+        enabled: true,
+        profile: "default",
+        componentOverrides: undefined,
+      } as unknown as Parameters<typeof normalizeHarnessSidecarIntent>[0]),
+    ).toEqual(harnessIntentFromOptimizations([]));
   });
 
   it("restores custom model and MCP optimizations from explicit Runtime flags", () => {

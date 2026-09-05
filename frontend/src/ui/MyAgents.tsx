@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SVGProps } from "react";
 import { EmptyMessage } from "@openai/apps-sdk-ui/components/EmptyMessage";
-import { Explore } from "@openai/apps-sdk-ui/components/Icon";
+import { ArrowRotateCw, Explore } from "@openai/apps-sdk-ui/components/Icon";
 import { Badge } from "@openai/apps-sdk-ui/components/Badge";
+import { Button } from "@openai/apps-sdk-ui/components/Button";
 import { Tooltip } from "@openai/apps-sdk-ui/components/Tooltip";
 
 import {
+  invalidateRuntimeUpdateCapabilityCache,
+  prefetchRuntimeUpdateCapability,
   probeRuntimeApps,
   RuntimeProbeError,
   type CloudRuntime,
@@ -20,8 +23,6 @@ import {
 import {
   cloudRegionOptions,
   defaultCloudRegion,
-  isSupportedCloudRegion,
-  type CloudRegion,
   type CloudProvider,
 } from "../adk/cloudProvider";
 import {
@@ -47,6 +48,7 @@ import {
   ResourceIdentityMark,
   ResourceFilterSelect,
   type ResourceFilterOption,
+  ResourceLoadingState,
   ResourcePageHeader,
   ResourcePageShell,
   ResourceResults,
@@ -54,7 +56,7 @@ import {
   ResourceTabs,
   ResourceToolbar,
 } from "./ResourceCollection";
-import { formatResourceSource } from "./resourceMetadata";
+import { formatResourceCreator } from "./resourceMetadata";
 import { StudioConfirmDialog } from "./StudioConfirmDialog";
 import { formatRelativeTimeLabel } from "./relativeTime";
 import "./MyAgents.css";
@@ -101,6 +103,9 @@ const RUNTIME_PAGE_SIZE = 24;
 const RUNTIME_PAGE_CACHE_TTL_MS = 30_000;
 const RUNTIME_COMPATIBILITY_TIMEOUT_MS = 7_000;
 const RUNTIME_COMPATIBILITY_RETRY_TIMEOUT_MS = 20_000;
+const UPDATE_CAPABILITY_PREFETCH_LIMIT = 6;
+const UPDATE_CAPABILITY_PREFETCH_CONCURRENCY = 2;
+const UPDATE_CAPABILITY_PREFETCH_DELAY_MS = 250;
 type RuntimeCompatibilityStatus = "checking" | "compatible" | "unsupported" | "error";
 interface RuntimeCompatibility {
   status: RuntimeCompatibilityStatus;
@@ -143,6 +148,7 @@ export function invalidateRuntimeAgentCache(runtimeIds?: Iterable<string>) {
   if (!runtimeIds) {
     runtimePageRequests.clear();
     runtimePageCache.clear();
+    invalidateRuntimeUpdateCapabilityCache();
     return;
   }
   const targetRuntimeIds = new Set(runtimeIds);
@@ -151,6 +157,9 @@ export function invalidateRuntimeAgentCache(runtimeIds?: Iterable<string>) {
     if (cached.page.runtimes.some((runtime) => targetRuntimeIds.has(runtime.runtimeId))) {
       runtimePageCache.delete(key);
     }
+  }
+  for (const runtimeId of targetRuntimeIds) {
+    invalidateRuntimeUpdateCapabilityCache(runtimeId);
   }
   runtimePageRequests.clear();
 }
@@ -218,7 +227,7 @@ function runtimeToAgent(runtime: CloudRuntime): MyAgentCardData {
     description: runtime.description?.trim() || "暂无描述",
     createdAt: runtime.createdAt ?? "",
     specificationLabel: "创建人",
-    specification: formatResourceSource(runtime.author),
+    specification: formatResourceCreator(runtime.author),
     isMine: runtime.isMine,
     runtime: {
       runtimeId: runtime.runtimeId,
@@ -236,7 +245,7 @@ function sandboxToAgent(session: SandboxAgentResource): MyAgentCardData {
     description: sandboxStatusLabel(session.status),
     createdAt: session.createdAt,
     specificationLabel: "创建人",
-    specification: formatResourceSource(session.createdBy),
+    specification: formatResourceCreator(session.createdBy),
     isMine: session.isMine,
     region: session.region,
     sandbox: session,
@@ -288,20 +297,13 @@ function runtimeDetailTargetForCard(
 function resolveAgentRegion(
   studioRegion: string,
   cloudProvider: CloudProvider,
-): CloudRegion {
-  const providerRegions = cloudRegionOptions(cloudProvider);
-  if (
-    isSupportedCloudRegion(studioRegion) &&
-    providerRegions.some((option) => option.value === studioRegion)
-  ) {
-    return studioRegion;
-  }
-  return defaultCloudRegion(cloudProvider);
+): string {
+  return studioRegion.trim() || defaultCloudRegion(cloudProvider);
 }
 
 async function loadRuntimeAgents(
   runtimeScope: RuntimeScope,
-  region: CloudRegion,
+  region: string,
   nextToken: string,
   onList: (agents: MyAgentCardData[]) => void,
   signal?: AbortSignal,
@@ -341,6 +343,7 @@ function AgentCard({
   agent,
   onUse,
   onViewDetails,
+  onPrepareUpdate,
   compatibility,
   onRetryCompatibility,
   connecting,
@@ -354,6 +357,7 @@ function AgentCard({
   agent: MyAgentCardData;
   onUse?: (agent: MyAgentCardData) => Promise<void>;
   onViewDetails?: (agent: MyAgentCardData) => void;
+  onPrepareUpdate?: (agent: MyAgentCardData) => void;
   compatibility?: RuntimeCompatibility;
   onRetryCompatibility?: (agent: MyAgentCardData) => void;
   connecting?: boolean;
@@ -400,6 +404,8 @@ function AgentCard({
       className={connecting ? "my-agent-card is-connecting" : "my-agent-card"}
       activateLabel={cardTargetEnabled ? cardTargetLabel : undefined}
       onActivate={cardTargetEnabled ? openCard : undefined}
+      onPointerEnter={() => onPrepareUpdate?.(agent)}
+      onFocusCapture={() => onPrepareUpdate?.(agent)}
       footer={(
         <ResourceCardMetadata
           className="my-agent-meta"
@@ -453,13 +459,17 @@ function AgentCard({
           </ResourceCardAction>
         </>
       ) : compatibilityFailed || incompatible ? (
-        <ResourceCardAction
-          className="my-agent-compatibility-retry"
+        <Button
+          type="button"
+          color="primary"
+          size="sm"
+          pill={false}
           aria-label={`重新检测 ${agent.name} 的对话兼容性`}
           onClick={() => onRetryCompatibility?.(agent)}
         >
+          <ArrowRotateCw />
           重试
-        </ResourceCardAction>
+        </Button>
       ) : (
         <ResourceCardRevealAction
           className={connected ? "my-agent-use is-connected" : "my-agent-use"}
@@ -585,7 +595,9 @@ function AgentCard({
 export interface MyAgentsProps {
   cloudProvider: CloudProvider;
   studioRegion: string;
-  canCreate: boolean;
+  canCreateRuntimeAgents: boolean;
+  canCreatePersonalAgents: boolean;
+  canUpdate: boolean;
   runtimeScope: RuntimeScope;
   onCreateAgent: (region: string) => void;
   onOpenCodexProjectUpload?: () => void;
@@ -610,7 +622,9 @@ export interface MyAgentsProps {
 export function MyAgents({
   cloudProvider,
   studioRegion,
-  canCreate,
+  canCreateRuntimeAgents,
+  canCreatePersonalAgents,
+  canUpdate,
   runtimeScope,
   onCreateAgent,
   onOpenCodexProjectUpload,
@@ -643,7 +657,7 @@ export function MyAgents({
   const [ownership, setOwnership] = useState<RuntimeScope>(
     runtimeScope === "mine" ? "mine" : "all",
   );
-  const [region, setRegion] = useState<CloudRegion>(configuredRegion);
+  const [region, setRegion] = useState(configuredRegion);
   const [runtimeAgents, setRuntimeAgents] = useState<MyAgentCardData[]>([]);
   const [runtimeNextToken, setRuntimeNextToken] = useState("");
   const [loadingRuntimes, setLoadingRuntimes] = useState(true);
@@ -657,10 +671,17 @@ export function MyAgents({
   >({});
   const [draftToDelete, setDraftToDelete] = useState<WorkspaceAgentDraft | null>(null);
   const [remainingTimeNow, setRemainingTimeNow] = useState(() => Date.now());
-  const regionFilterOptions = useMemo<Array<ResourceFilterOption<CloudRegion>>>(
-    () => cloudRegionOptions(cloudProvider),
-    [cloudProvider],
-  );
+  const regionFilterOptions = useMemo<Array<ResourceFilterOption<string>>>(() => {
+    const providerOptions: Array<ResourceFilterOption<string>> =
+      cloudRegionOptions(cloudProvider);
+    if (providerOptions.some((option) => option.value === configuredRegion)) {
+      return providerOptions;
+    }
+    return [
+      { value: configuredRegion, label: configuredRegion },
+      ...providerOptions,
+    ];
+  }, [cloudProvider, configuredRegion]);
 
   useEffect(() => {
     if (runtimeScope === "mine") setOwnership("mine");
@@ -679,23 +700,31 @@ export function MyAgents({
   const draftAgents = useMemo(() => drafts.map(draftToAgent), [drafts]);
   const activeDeploymentTasks = useMemo(() => {
     const byId = new Map<string, DeploymentTaskUpdate>();
+    const byDraftId = new Map<string, DeploymentTaskUpdate>();
     const byRuntimeId = new Map<string, DeploymentTaskUpdate>();
     for (const task of deploymentTasks) {
       if (task.status !== "running") continue;
       byId.set(task.id, task);
+      if (task.draftId) {
+        const previous = byDraftId.get(task.draftId);
+        if (!previous || task.startedAt > previous.startedAt) {
+          byDraftId.set(task.draftId, task);
+        }
+      }
       if (!task.runtimeId) continue;
       const previous = byRuntimeId.get(task.runtimeId);
       if (!previous || task.startedAt > previous.startedAt) {
         byRuntimeId.set(task.runtimeId, task);
       }
     }
-    return { byId, byRuntimeId };
+    return { byId, byDraftId, byRuntimeId };
   }, [deploymentTasks]);
 
   const deploymentTaskForAgent = useCallback((agent: MyAgentCardData) => {
     if (agent.draft) {
       const taskId = draftDeploymentTaskIds[agent.draft.id];
-      return taskId ? activeDeploymentTasks.byId.get(taskId) : undefined;
+      return activeDeploymentTasks.byDraftId.get(agent.draft.id)
+        ?? (taskId ? activeDeploymentTasks.byId.get(taskId) : undefined);
     }
     const runtimeId = agent.runtime?.runtimeId;
     return runtimeId
@@ -919,7 +948,7 @@ export function MyAgents({
     setOwnership(nextOwnership);
   }
 
-  function selectRegion(nextRegion: CloudRegion) {
+  function selectRegion(nextRegion: string) {
     if (nextRegion === region) return;
     resetRuntimePagination();
     setRegion(nextRegion);
@@ -1014,6 +1043,17 @@ export function MyAgents({
     }
   }, []);
 
+  const prepareRuntimeUpdate = useCallback((agent: MyAgentCardData) => {
+    const runtime = agent.runtime;
+    if (!canUpdate || !runtime || deploymentTaskForAgent(agent)) return;
+    void prefetchRuntimeUpdateCapability({
+      runtimeId: runtime.runtimeId,
+      region: runtime.region,
+      appName: agent.appName,
+      currentVersion: runtime.currentVersion,
+    });
+  }, [canUpdate, deploymentTaskForAgent]);
+
   const visibleAgents = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase();
     const source = activeType === "general"
@@ -1058,19 +1098,59 @@ export function MyAgents({
     sandboxAgents,
   ]);
 
+  useEffect(() => {
+    if (!canUpdate || activeType !== "general") return;
+    const targets = visibleAgents
+      .filter((agent) => Boolean(agent.runtime))
+      .filter((agent) => !deploymentTaskForAgent(agent))
+      .slice(0, UPDATE_CAPABILITY_PREFETCH_LIMIT);
+    if (targets.length === 0) return;
+
+    let cancelled = false;
+    let nextIndex = 0;
+    const runWorker = async () => {
+      while (!cancelled) {
+        const target = targets[nextIndex];
+        nextIndex += 1;
+        if (!target?.runtime) return;
+        await prefetchRuntimeUpdateCapability({
+          runtimeId: target.runtime.runtimeId,
+          region: target.runtime.region,
+          appName: target.appName,
+          currentVersion: target.runtime.currentVersion,
+        });
+        if (cancelled) return;
+      }
+    };
+    const timer = window.setTimeout(() => {
+      for (let index = 0; index < UPDATE_CAPABILITY_PREFETCH_CONCURRENCY; index += 1) {
+        void runWorker();
+      }
+    }, UPDATE_CAPABILITY_PREFETCH_DELAY_MS);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [activeType, canUpdate, deploymentTaskForAgent, visibleAgents]);
+
   const activeTypeInfo = AGENT_TYPES.find((type) => type.id === activeType);
   const activeLabel = activeTypeInfo?.label ?? "智能体";
   const showInitialLoading = activeType === "general"
     ? loadingRuntimes && runtimeAgents.length === 0 && draftAgents.length === 0
     : loadingSandboxAgents && sandboxAgents.length === 0;
   const showEmpty = !showInitialLoading && visibleAgents.length === 0;
-  const createAgent = canCreate
+  const canCreateActiveAgent = activeType === "general"
+    ? canCreateRuntimeAgents
+    : canCreatePersonalAgents;
+  const createAgent = canCreateActiveAgent
     ? activeType === "general"
       ? () => onCreateAgent(region)
       : () => onCreateSandboxAgent(activeType)
     : undefined;
   const showCodexProjectUpload =
-    activeType === "codex" && canCreate && Boolean(onOpenCodexProjectUpload);
+    activeType === "codex" &&
+    canCreatePersonalAgents &&
+    Boolean(onOpenCodexProjectUpload);
 
   return (
     <ResourcePageShell className="my-agents-page" aria-label="智能体">
@@ -1128,10 +1208,7 @@ export function MyAgents({
         aria-label={`${activeLabel}列表`}
       >
         {showInitialLoading ? (
-          <div className="my-agent-initial-loading" role="status" aria-live="polite">
-            <span className="my-agent-loading-mark" aria-hidden="true" />
-            <span>正在加载智能体</span>
-          </div>
+          <ResourceLoadingState />
         ) : (activeType === "general" ? runtimeError : sandboxError) && visibleAgents.length === 0 ? (
           <div className="my-agent-empty" role="alert">
             <p>{activeType === "general" ? runtimeError : sandboxError}</p>
@@ -1221,6 +1298,7 @@ export function MyAgents({
                         }
                       : undefined}
                     onRetryCompatibility={retryRuntimeCompatibility}
+                    onPrepareUpdate={prepareRuntimeUpdate}
                     onViewDetails={detailTarget ? () => {
                       if (detailTarget.sandbox) {
                         onViewSandboxAgentDetails(detailTarget.sandbox);

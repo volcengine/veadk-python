@@ -132,6 +132,7 @@ export const FEISHU_ENV: EnvVar[] = [
     required: true,
     placeholder: "输入 App Secret",
     comment: "飞书应用 App Secret",
+    secret: true,
   },
 ];
 
@@ -140,6 +141,18 @@ export const A2A_REGISTRY_DEFAULTS = {
   region: "cn-beijing",
   endpoint: "https://open.volcengineapi.com/",
 } as const;
+
+export function a2aRegistryDefaults(cloudProvider: CloudProvider) {
+  if (cloudProvider === "byteplus") {
+    const region = "ap-southeast-1";
+    return {
+      topK: A2A_REGISTRY_DEFAULTS.topK,
+      region,
+      endpoint: `https://agentkit.${region}.byteplusapi.com/`,
+    };
+  }
+  return A2A_REGISTRY_DEFAULTS;
+}
 
 /** AgentKit A2A registry center runtime configuration. */
 export const A2A_REGISTRY_ENV: EnvVar[] = [

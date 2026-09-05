@@ -20,7 +20,8 @@ import asyncio
 import hashlib
 import json
 import os
-from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Sequence
+from dataclasses import replace
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
@@ -29,10 +30,13 @@ import httpx
 from websockets.asyncio.client import connect
 from websockets.exceptions import InvalidStatus
 
+from frontend.server.environments.session_mounts import SessionEnvironmentMount
+from frontend.server.runtime_logs import RuntimeRequestContext, runtime_request_context
 from frontend.server.studio_tools.registry import (
     StudioToolCatalogSnapshot,
     StudioToolExecutionContext,
     StudioToolExecutionError,
+    StudioToolRuntimeError,
 )
 from veadk.integrations.agentkit.studio_channel.protocol import (
     CAPABILITIES_SUFFIX,
@@ -57,17 +61,54 @@ def _bounded_tool_result(content: Any) -> Any:
     encoded = json.dumps(content, ensure_ascii=False).encode("utf-8")
     if len(encoded) <= MAX_TOOL_RESULT_BYTES:
         return content
-    preview = encoded[:TOOL_RESULT_PREVIEW_BYTES].decode("utf-8", errors="replace")
     result: dict[str, Any] = {
         "truncated": True,
         "original_size_bytes": len(encoded),
-        "preview": preview,
     }
     if isinstance(content, dict):
         for key in ("ok", "error", "executed_by", "bff_process_id"):
             if key in content:
                 result[key] = content[key]
+        message = content.get("message")
+        if isinstance(message, str) and message:
+            # A delegated Codex message is already the user-visible answer.
+            # Preserve it instead of replacing the whole result with a debug
+            # preview, which would also disable skip_summarization downstream.
+            result["message"] = _fit_text_field(result, "message", message)
+            return result
+    preview = encoded[:TOOL_RESULT_PREVIEW_BYTES].decode("utf-8", errors="replace")
+    result["preview"] = _fit_text_field(result, "preview", preview)
     return result
+
+
+def _fit_text_field(
+    envelope: dict[str, Any],
+    field: str,
+    value: str,
+) -> str:
+    """Fit one text field inside the serialized UTF-8 channel limit."""
+
+    suffix = "\n…内容已截断"
+    low = 0
+    high = len(value)
+    best = ""
+    while low <= high:
+        middle = (low + high) // 2
+        candidate = value[:middle]
+        if middle < len(value):
+            candidate += suffix
+        size = len(
+            json.dumps(
+                {**envelope, field: candidate},
+                ensure_ascii=False,
+            ).encode("utf-8")
+        )
+        if size <= MAX_TOOL_RESULT_BYTES:
+            best = candidate
+            low = middle + 1
+        else:
+            high = middle - 1
+    return best
 
 
 async def runtime_supports_bff_tools(
@@ -166,6 +207,7 @@ class StudioToolRun:
         catalog_revision: str,
         run_id: str,
         execution_context: StudioToolExecutionContext,
+        runtime_context: RuntimeRequestContext | None = None,
     ) -> None:
         self._receive_message = receive_message
         self._send_message = send_message
@@ -175,11 +217,13 @@ class StudioToolRun:
         self.catalog_revision = catalog_revision
         self.run_id = run_id
         self.execution_context = execution_context
+        self.runtime_context = runtime_context
         self._send_lock = asyncio.Lock()
         self._tool_tasks: dict[str, asyncio.Task[None]] = {}
         self._completed = False
         self._fatal_error: BaseException | None = None
         self._fatal_event = asyncio.Event()
+        self._progress_events: asyncio.Queue[bytes] = asyncio.Queue()
 
     async def _send(self, message: dict[str, Any]) -> None:
         async with self._send_lock:
@@ -226,13 +270,54 @@ class StudioToolRun:
                 raise StudioToolExecutionError(
                     "Studio tool arguments must be an object."
                 )
+            tool_name = str(message.get("tool_name") or "")
+            function_call_id = str(message.get("function_call_id") or "").strip()
+            progress_request_id = function_call_id or request_id
+
+            async def report_progress(progress: dict[str, Any]) -> None:
+                event = {
+                    "id": f"studio-tool-progress:{request_id}:{uuid4().hex}",
+                    "author": self.execution_context.app_name,
+                    "partial": True,
+                    "content": {
+                        "role": "model",
+                        "parts": [
+                            {
+                                "partMetadata": {
+                                    "veadkStudioToolProgress": {
+                                        **progress,
+                                        "toolName": tool_name,
+                                        "requestId": progress_request_id,
+                                    }
+                                }
+                            }
+                        ],
+                    },
+                }
+                encoded = (
+                    "data: "
+                    + json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+                    + "\n\n"
+                ).encode("utf-8")
+                await self._progress_events.put(encoded)
+
+            execution_context = replace(
+                self.execution_context,
+                tool_request_id=request_id,
+                report_progress=report_progress,
+            )
             content = await self.catalog.execute(
-                name=str(message.get("tool_name") or ""),
+                name=tool_name,
                 executor_revision=str(message.get("executor_revision") or ""),
                 arguments=arguments,
-                context=self.execution_context,
+                context=execution_context,
             )
             content = _bounded_tool_result(content)
+        except StudioToolRuntimeError as exc:
+            status = "error"
+            error = str(exc)
+            if exc.content is not None:
+                content = _bounded_tool_result(exc.content)
         except StudioToolExecutionError as exc:
             status = "denied"
             error = str(exc)
@@ -258,9 +343,24 @@ class StudioToolRun:
         )
 
     async def stream(self) -> AsyncIterator[bytes]:
+        receive_task: asyncio.Task[dict[str, Any]] | None = None
+        progress_task: asyncio.Task[bytes] | None = None
         try:
             while True:
-                message = await self._receive_or_raise()
+                if receive_task is None:
+                    receive_task = asyncio.create_task(self._receive_or_raise())
+                if progress_task is None:
+                    progress_task = asyncio.create_task(self._progress_events.get())
+                done, _ = await asyncio.wait(
+                    {receive_task, progress_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if progress_task in done:
+                    yield progress_task.result()
+                    progress_task = None
+                    continue
+                message = receive_task.result()
+                receive_task = None
                 if not isinstance(message, dict):
                     raise StudioChannelError(
                         "Runtime sent a non-object channel message."
@@ -309,6 +409,8 @@ class StudioToolRun:
                     self._completed = True
                     if message.get("status") == "error":
                         raise StudioChannelError("Runtime Studio-channel run failed.")
+                    while not self._progress_events.empty():
+                        yield self._progress_events.get_nowait()
                     return
                 elif message_type == "channel.error":
                     raise StudioChannelError(
@@ -317,6 +419,13 @@ class StudioToolRun:
                 elif message_type == "ping":
                     await self._send({"type": "pong"})
         finally:
+            for pending_task in (receive_task, progress_task):
+                if pending_task is not None and not pending_task.done():
+                    pending_task.cancel()
+            await asyncio.gather(
+                *(task for task in (receive_task, progress_task) if task is not None),
+                return_exceptions=True,
+            )
             if not self._completed:
                 try:
                     await self._send({"type": "run.cancel", "run_id": self.run_id})
@@ -461,6 +570,7 @@ async def _open_http_studio_tool_run(
             catalog_revision=revision,
             run_id=run_id,
             execution_context=execution_context,
+            runtime_context=runtime_request_context(response.headers),
         )
     except Exception:
         if response is not None:
@@ -476,6 +586,14 @@ async def open_studio_tool_run(
     runtime_id: str,
     payload: dict[str, Any],
     catalog: StudioToolCatalogSnapshot,
+    owner_id: str = "",
+    environment_mount: SessionEnvironmentMount | None = None,
+    environment_mounts: Sequence[SessionEnvironmentMount] = (),
+    prepare_environment_mounts: Callable[
+        [Sequence[SessionEnvironmentMount], StudioToolExecutionContext],
+        Awaitable[Sequence[SessionEnvironmentMount]],
+    ]
+    | None = None,
 ) -> StudioToolRun:
     """Connect, publish the current catalog, and start one same-socket run."""
 
@@ -499,7 +617,24 @@ async def open_studio_tool_run(
         run_id=run_id,
         scope_id=scope_id,
         catalog_revision=revision,
+        owner_id=owner_id,
+        environment_mount=environment_mount,
+        environment_mounts=tuple(environment_mounts),
     )
+    mounts_to_prepare = tuple(environment_mounts) or (
+        (environment_mount,) if environment_mount is not None else ()
+    )
+    if mounts_to_prepare and prepare_environment_mounts is not None:
+        prepared_mounts = tuple(
+            await prepare_environment_mounts(mounts_to_prepare, execution_context)
+        )
+        execution_context = replace(
+            execution_context,
+            environment_mount=(
+                prepared_mounts[0] if len(prepared_mounts) == 1 else None
+            ),
+            environment_mounts=prepared_mounts,
+        )
     try:
         websocket = await connect(
             _websocket_url(endpoint),
@@ -597,6 +732,9 @@ async def open_studio_tool_run(
             catalog_revision=revision,
             run_id=run_id,
             execution_context=execution_context,
+            runtime_context=runtime_request_context(
+                getattr(getattr(websocket, "response", None), "headers", {})
+            ),
         )
     except Exception:
         await websocket.close()

@@ -20,12 +20,15 @@ import {
   Search,
   Trash2,
 } from "lucide-react";
+import { Alert } from "@openai/apps-sdk-ui/components/Alert";
+import { Button } from "@openai/apps-sdk-ui/components/Button";
 import {
   deleteAgentFeedbackCases,
   createGithubDeliveryRollbackPr,
   getCachedAgentFeedbackCases,
   getCachedRuntimeAgentInfo,
   getCachedRuntimeDetail,
+  getCachedRuntimeUpdateCapability,
   getAgentUsage,
   getAgentFeedbackCases,
   getAgentOptimizations,
@@ -71,9 +74,8 @@ import type { AgentDraft } from "../create/types";
 import type { WorkspaceAgentDraft } from "../create/agentDraftStorage";
 import { BUILTIN_TOOLS } from "../create/veadkCatalog";
 import type { DeploymentTaskUpdate } from "./ProjectPreview";
-import { DeploymentErrorMessage } from "./DeploymentErrorMessage";
 import { Markdown } from "./Markdown";
-import { PageBackButton } from "./PageBackButton";
+import { ResourceDetailLayout } from "./ResourceCollection";
 import { StudioConfirmDialog } from "./StudioConfirmDialog";
 import { TextShimmer } from "./text-shimmer/TextShimmer";
 import "./AgentWorkspace.css";
@@ -1082,6 +1084,7 @@ export function AgentWorkspace({
   const [detailAgentInfo, setDetailAgentInfo] = useState<AgentInfo | null>(null);
   const [detailAgentInfoResolved, setDetailAgentInfoResolved] = useState(false);
   const [detailAgentInfoError, setDetailAgentInfoError] = useState("");
+  const [detailAgentInfoUnsupported, setDetailAgentInfoUnsupported] = useState(false);
   const [runtimeDetailError, setRuntimeDetailError] = useState("");
   const [detailReloadToken, setDetailReloadToken] = useState(0);
   const [query, setQuery] = useState("");
@@ -1262,15 +1265,28 @@ export function AgentWorkspace({
     selectedIntegrationProbe?.a2a?.endpoint ?? "",
     runtimeEndpoint,
   );
+  const capabilityRuntimeAppName = selectedAgent?.runtimeApp || "";
   const updateCapabilityRequestKey = JSON.stringify([
     selectedAgent?.runtimeId ?? "",
     selectedAgent?.region ?? "",
-    selectedAgentAppName,
+    selectedAgent?.currentVersion ?? null,
+    capabilityRuntimeAppName,
   ]);
+  const cachedUpdateCapability = canUpdate &&
+    selectedAgent?.runtimeId &&
+    selectedAgent.region &&
+    detailReloadToken === 0
+    ? getCachedRuntimeUpdateCapability({
+        runtimeId: selectedAgent.runtimeId,
+        region: selectedAgent.region,
+        appName: capabilityRuntimeAppName,
+        currentVersion: selectedAgent.currentVersion,
+      })
+    : null;
   const selectedUpdateCapability =
     updateCapability?.requestKey === updateCapabilityRequestKey
       ? updateCapability.value
-      : null;
+      : cachedUpdateCapability;
   useEffect(() => {
     const requestId = updateCapabilityRequestRef.current + 1;
     updateCapabilityRequestRef.current = requestId;
@@ -1284,48 +1300,86 @@ export function AgentWorkspace({
       return;
     }
 
+    const cached = detailReloadToken === 0
+      ? getCachedRuntimeUpdateCapability({
+          runtimeId,
+          region,
+          appName: capabilityRuntimeAppName,
+          currentVersion: selectedAgent?.currentVersion,
+        })
+      : null;
+    if (cached) {
+      setUpdateCapability({ requestKey: updateCapabilityRequestKey, value: cached });
+      setUpdateCapabilityLoading(false);
+      return;
+    }
+
     const controller = new AbortController();
+    let pollTimer: number | undefined;
+    let pollAttempts = 0;
+    const maxPollAttempts = 60;
     setUpdateCapabilityLoading(true);
-    void getRuntimeUpdateCapability({
-      runtimeId,
-      region,
-      appName: selectedAgentAppName,
-      signal: controller.signal,
-    }).then((value) => {
-      if (requestId !== updateCapabilityRequestRef.current) return;
-      if (
-        value.runtime.runtimeId !== runtimeId ||
-        value.runtime.region !== region ||
-        (selectedAgentAppName &&
-          value.agent?.appName !== selectedAgentAppName) ||
-        (value.canUpdate && !value.agent?.appName)
-      ) {
-        setUpdateCapabilityError("Runtime 更新能力响应与当前选择不匹配。");
-        return;
-      }
-      setUpdateCapability({ requestKey: updateCapabilityRequestKey, value });
-    }).catch((error: unknown) => {
-      if (
-        requestId !== updateCapabilityRequestRef.current ||
-        controller.signal.aborted
-      ) return;
-      setUpdateCapabilityError(
-        error instanceof Error ? error.message : "检查 Runtime 更新能力失败。",
-      );
-    }).finally(() => {
-      if (
-        requestId === updateCapabilityRequestRef.current &&
-        !controller.signal.aborted
-      ) {
+    const loadCapability = (initial: boolean) => {
+      void getRuntimeUpdateCapability({
+        runtimeId,
+        region,
+        appName: capabilityRuntimeAppName,
+        currentVersion: selectedAgent?.currentVersion,
+        signal: controller.signal,
+        force: initial && detailReloadToken > 0,
+      }).then((value) => {
+        if (requestId !== updateCapabilityRequestRef.current) return;
+        const preparing = value.recoveryStatus === "preparing";
+        if (
+          value.runtime.runtimeId !== runtimeId ||
+          value.runtime.region !== region ||
+          (!preparing && capabilityRuntimeAppName &&
+            value.agent?.appName !== capabilityRuntimeAppName) ||
+          (value.canUpdate && !value.agent?.appName)
+        ) {
+          setUpdateCapabilityError("Runtime 更新能力响应与当前选择不匹配。");
+          return;
+        }
+        setUpdateCapability({ requestKey: updateCapabilityRequestKey, value });
         setUpdateCapabilityLoading(false);
-      }
-    });
-    return () => controller.abort();
+        if (!preparing) return;
+        pollAttempts += 1;
+        if (pollAttempts >= maxPollAttempts) {
+          setUpdateCapabilityError(
+            "更新配置仍在后台恢复，请稍后点击重试。",
+          );
+          return;
+        }
+        pollTimer = window.setTimeout(() => loadCapability(false), 1_000);
+      }).catch((error: unknown) => {
+        if (
+          requestId !== updateCapabilityRequestRef.current ||
+          controller.signal.aborted
+        ) return;
+        setUpdateCapabilityError(
+          error instanceof Error ? error.message : "检查 Runtime 更新能力失败。",
+        );
+      }).finally(() => {
+        if (
+          requestId === updateCapabilityRequestRef.current &&
+          !controller.signal.aborted
+        ) {
+          setUpdateCapabilityLoading(false);
+        }
+      });
+    };
+    loadCapability(true);
+    return () => {
+      controller.abort();
+      if (pollTimer != null) window.clearTimeout(pollTimer);
+    };
   }, [
     canUpdate,
+    capabilityRuntimeAppName,
+    detailReloadToken,
+    selectedAgent?.currentVersion,
     selectedAgent?.region,
     selectedAgent?.runtimeId,
-    selectedAgentAppName,
     updateCapabilityRequestKey,
   ]);
   const listedAgents = useMemo(() => {
@@ -1375,10 +1429,15 @@ export function AgentWorkspace({
     const cloudProvider = selectedAgent?.region?.startsWith("ap-")
       ? "byteplus"
       : "volcengine";
-    if (selectedUpdateCapability?.agent) {
+    if (
+      selectedUpdateCapability?.agent &&
+      (selectedUpdateCapability.recoveryStatus === "complete" ||
+        selectedUpdateCapability.recoveryStatus === "draft-only")
+    ) {
       return runtimeAgentDraftFromCloud(
         selectedUpdateCapability.agent,
         cloudProvider,
+        selectedUpdateCapability.runtime.configuredEnvKeys,
       );
     }
     return infoToDraft(
@@ -1394,7 +1453,7 @@ export function AgentWorkspace({
       selectedAgent?.region,
       selectedDraft?.draft,
       selectedPendingTask?.agentDraft,
-      selectedUpdateCapability?.agent,
+      selectedUpdateCapability,
     ],
   );
   const publishedHarnessSidecar =
@@ -1414,11 +1473,15 @@ export function AgentWorkspace({
         : !selectedAgent.region
           ? "Runtime 缺少地域信息，无法更新。"
           : updateCapabilityLoading
-            ? "正在检查 Runtime 更新能力…"
+            ? "正在检查 Runtime 更新配置。"
             : updateCapabilityError
               ? updateCapabilityError
               : !selectedUpdateCapability
                 ? "尚未完成 Runtime 更新能力检查。"
+                : selectedUpdateCapability.recoveryStatus !== "complete" &&
+                    selectedUpdateCapability.recoveryStatus !== "draft-only"
+                  ? selectedUpdateCapability.reason ||
+                    "该 Runtime 的原发布配置不可恢复，无法安全更新。"
                 : !selectedUpdateCapability.canUpdate
                   ? selectedUpdateCapability.reason || "当前 Runtime 不支持原地更新。"
                   : selectedUpdateCapability.agent?.appName
@@ -1451,6 +1514,10 @@ export function AgentWorkspace({
   const deploymentTask = useMemo(() => {
     if (selectedPendingTask) return selectedPendingTask;
     if (selectedDraft) {
+      const taskForDraftId = deploymentTasks
+        .filter((task) => task.draftId === selectedDraft.id)
+        .sort((left, right) => right.startedAt - left.startedAt)[0];
+      if (taskForDraftId) return taskForDraftId;
       return deploymentTasks
         .filter(
           (task) =>
@@ -1560,6 +1627,7 @@ export function AgentWorkspace({
       : null;
     setDetailAgentInfo(cached);
     setDetailAgentInfoError("");
+    setDetailAgentInfoUnsupported(false);
     setDetailAgentInfoResolved(Boolean(cached) || !detailOnly || !runtimeId);
     if (!detailOnly || !runtimeId) return;
     void getRuntimeAgentInfo(
@@ -1574,6 +1642,9 @@ export function AgentWorkspace({
       .catch((error: unknown) => {
         if (!cancelled && !cached) setDetailAgentInfo(null);
         if (!cancelled) {
+          setDetailAgentInfoUnsupported(
+            error instanceof RuntimeProbeError && error.unsupported,
+          );
           setDetailAgentInfoError(
             error instanceof Error ? error.message : "加载 Agent 信息失败。",
           );
@@ -2496,7 +2567,10 @@ export function AgentWorkspace({
             ) : (
               <>
                 {filteredDrafts.map((item) => {
-                  const task = deploymentTasks
+                  const taskForDraftId = deploymentTasks
+                    .filter((candidate) => candidate.draftId === item.id)
+                    .sort((left, right) => right.startedAt - left.startedAt)[0];
+                  const task = taskForDraftId ?? deploymentTasks
                     .filter(
                       (candidate) =>
                         candidate.agentDraft?.name === item.draft.name ||
@@ -2711,7 +2785,7 @@ export function AgentWorkspace({
             <p>未选择智能体</p>
           </main>
         ) : (
-          <main className={`aw-main${deploymentInProgress ? " is-deploying" : ""}`}>
+          <main className={`aw-main${deploymentInProgress ? " is-deploying" : ""}${detailOnly ? " resource-page" : ""}`}>
             {selectedAgent && !selectedAgentInfo && loadingAgentInfo && (
               <div className="aw-detail-loading" role="status" aria-live="polite">
                 <div className="aw-detail-loading-card">
@@ -2734,32 +2808,34 @@ export function AgentWorkspace({
                 </div>
               </div>
             )}
-            <div className="aw-agent-head">
-              <div className="aw-agent-heading">
-                {detailOnly && onBack ? (
-                  <PageBackButton label="返回智能体列表" onClick={onBack} />
-                ) : null}
-                <div className="aw-agent-heading-copy">
-                  <div className="aw-agent-title-row">
-                    <h2>{selectedName}</h2>
-                    {displayCurrentVersion != null && (
-                      <span>v{displayCurrentVersion}</span>
-                    )}
-                    {selectedDraft && <span>草稿</span>}
-                    {selectedAgentUpdateDraft && <span>待更新</span>}
-                    {!selectedAgent && !selectedDraft && selectedPendingTask && (
-                      <span>{selectedPendingTask.label}</span>
-                    )}
-                  </div>
-                  <p>{draft.description || (loadingAgentInfo || (detailOnly && !detailAgentInfoResolved) ? "正在读取智能体信息…" : "暂无描述")}</p>
-                </div>
-              </div>
-              {(selectedDraft || selectedAgentUpdateDraft || selectedAgent?.canDelete) && (
-                <div className="aw-head-actions">
+            <ResourceDetailLayout
+              className="aw-agent-detail"
+              title={selectedName}
+              description={draft.description || (loadingAgentInfo || (detailOnly && !detailAgentInfoResolved) ? "正在读取智能体信息…" : "暂无描述")}
+              identitySeed={selectedName}
+              backLabel="返回智能体列表"
+              onBack={detailOnly ? onBack : undefined}
+              meta={(
+                <>
+                  {displayCurrentVersion != null && <span className="aw-agent-meta">v{displayCurrentVersion}</span>}
+                  {selectedDraft && <span className="aw-agent-meta">草稿</span>}
+                  {selectedAgentUpdateDraft && <span className="aw-agent-meta">待更新</span>}
+                  {!selectedAgent && !selectedDraft && selectedPendingTask && (
+                    <span className="aw-agent-meta">{selectedPendingTask.label}</span>
+                  )}
+                </>
+              )}
+              actionsClassName="aw-head-actions"
+              bodyClassName="aw-agent-detail__body"
+              actions={(selectedDraft || selectedAgentUpdateDraft || selectedAgent?.canDelete) ? (
+                <>
                   {(selectedDraft || selectedAgentUpdateDraft) && (
-                    <button
+                    <Button
                       type="button"
-                      className="aw-head-delete aw-head-delete--draft"
+                      color="danger"
+                      variant="soft"
+                      size="lg"
+                      pill={false}
                       onClick={() => {
                         const draftToDelete = selectedDraft ?? selectedAgentUpdateDraft;
                         if (draftToDelete) deleteSingleDraft(draftToDelete);
@@ -2770,12 +2846,15 @@ export function AgentWorkspace({
                     >
                       <Trash2 aria-hidden />
                       <span>删除草稿</span>
-                    </button>
+                    </Button>
                   )}
                   {selectedAgent?.canDelete && (
-                    <button
+                    <Button
                       type="button"
-                      className="aw-head-delete"
+                      color="danger"
+                      variant="soft"
+                      size="lg"
+                      pill={false}
                       onClick={() => void deleteSingleAgent(selectedAgent)}
                       disabled={deletingAgents}
                       aria-label="删除 Agent"
@@ -2783,11 +2862,16 @@ export function AgentWorkspace({
                     >
                       <Trash2 aria-hidden />
                       <span>{deletingAgents ? "删除中…" : "删除 Agent"}</span>
-                    </button>
+                    </Button>
                   )}
-                </div>
-              )}
-            </div>
+                </>
+              ) : undefined}
+              sections={visibleAgentSections.map((item) => ({
+                key: item.id,
+                label: item.label,
+                disabled: deploymentInProgress,
+                content: item.id === section ? (
+                  <>
             {deploymentTask && shouldShowDeploymentTask && (
               <div
                 className={`aw-detail-deployment${deploymentInProgress ? " is-running" : ""}`}
@@ -2800,66 +2884,64 @@ export function AgentWorkspace({
                 />
               </div>
             )}
-            <nav
-              className="aw-agent-tabs"
-              aria-label="智能体详情"
-              role="tablist"
-            >
-              {visibleAgentSections.map((item) => (
-                <button
-                  type="button"
-                  key={item.id}
-                  id={`agent-${item.id}-tab`}
-                  className={section === item.id ? "is-active" : ""}
-                  role="tab"
-                  aria-selected={section === item.id}
-                  aria-controls={`agent-${item.id}-panel`}
-                  tabIndex={section === item.id ? 0 : -1}
-                  onClick={() => setSection(item.id)}
-                  onKeyDown={(event) => {
-                    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-                    event.preventDefault();
-                    const currentIndex = visibleAgentSections.findIndex(
-                      (sectionItem) => sectionItem.id === item.id,
-                    );
-                    const nextIndex = event.key === "Home"
-                      ? 0
-                      : event.key === "End"
-                        ? visibleAgentSections.length - 1
-                        : (currentIndex + (event.key === "ArrowRight" ? 1 : -1) + visibleAgentSections.length)
-                          % visibleAgentSections.length;
-                    const nextSection = visibleAgentSections[nextIndex];
-                    setSection(nextSection.id);
-                    document.getElementById(`agent-${nextSection.id}-tab`)?.focus();
-                  }}
-                >
-                  {item.label}
-                </button>
-              ))}
-            </nav>
-
-            <div
-              className="aw-content"
-              id={`agent-${section}-panel`}
-              role="tabpanel"
-              aria-labelledby={`agent-${section}-tab`}
-            >
+            <div className="aw-content">
               {section === "basic" && (
                 <div className="aw-basic-stack">
-                  {(detailAgentInfoError || runtimeDetailError) && (
-                    <DeploymentErrorMessage
-                      className="aw-usage-state aw-detail-fetch-error is-error"
-                      message={[...new Set([
-                        detailAgentInfoError,
-                        runtimeDetailError,
-                      ].filter(Boolean))].join("\n")}
-                      defaultExpanded={false}
-                      retryLabel="重试"
-                      onRetry={async () => {
-                        setDetailReloadToken((value) => value + 1);
-                      }}
+                  {detailAgentInfoUnsupported && (
+                    <Alert
+                      className="aw-detail-fetch-alert"
+                      color="warning"
+                      variant="soft"
+                      title="部分信息暂不可用"
+                      description="当前 Runtime 暂不支持 Studio 详情接口。升级 Runtime 后可查看完整信息。"
                     />
                   )}
+                  {((detailAgentInfoError && !detailAgentInfoUnsupported) ||
+                    runtimeDetailError) && (
+                    <Alert
+                      className="aw-detail-fetch-alert"
+                      color="danger"
+                      variant="soft"
+                      title="详情加载失败"
+                      description="暂时无法读取完整的 Agent 或 Runtime 信息，请稍后重试。"
+                      actions={(
+                        <Button
+                          type="button"
+                          color="danger"
+                          variant="soft"
+                          size="sm"
+                          pill={false}
+                          onClick={() => setDetailReloadToken((value) => value + 1)}
+                        >
+                          重试
+                        </Button>
+                      )}
+                    />
+                  )}
+                  {selectedAgent &&
+                    selectedUpdateCapability &&
+                    !selectedUpdateCapability.canUpdate && (
+                      <div
+                        className="aw-update-recovery-notice"
+                        role={
+                          selectedUpdateCapability.recoveryStatus === "preparing"
+                            ? "status"
+                            : "alert"
+                        }
+                      >
+                        <strong>
+                          {selectedUpdateCapability.recoveryStatus === "preparing"
+                            ? "正在后台恢复更新配置"
+                            : "已检测到运行中的智能体，但原发布配置不可恢复"}
+                        </strong>
+                        {selectedUpdateCapability.reason && (
+                          <span>{selectedUpdateCapability.reason}</span>
+                        )}
+                        {selectedUpdateCapability.warnings.map((warning) => (
+                          <span key={warning}>{warning}</span>
+                        ))}
+                      </div>
+                    )}
                   <section className="aw-deployment-panel aw-settings-card">
                     <div className="aw-section-head">
                       <div><h3>部署配置</h3><p>配置目标环境与网络访问方式。</p></div>
@@ -3634,7 +3716,7 @@ export function AgentWorkspace({
                           className="loading-gap-spinner aw-update-spinner"
                           aria-hidden="true"
                         />
-                        <span>检测中</span>
+                        <span>准备中</span>
                       </>
                     ) : selectedDraft || selectedAgentUpdateDraft ? (
                       "继续编辑"
@@ -3654,6 +3736,13 @@ export function AgentWorkspace({
                 </span>
               </div>
             )}
+                  </>
+                ) : null,
+              }))}
+              activeSectionKey={section}
+              navigationLabel="智能体详情"
+              onSectionChange={setSection}
+            />
           </main>
         )}
         </div>

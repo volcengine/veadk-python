@@ -72,6 +72,9 @@ class StudioReleaseManifest:
     size: int
     created_at: str
     changelog: tuple[str, ...] = ()
+    runtime_epoch: str = ""
+    thin_sha256: str = ""
+    thin_size: int = 0
 
     def __post_init__(self) -> None:
         try:
@@ -104,6 +107,15 @@ class StudioReleaseManifest:
             not item.strip() or len(item) > 240 for item in self.changelog
         ):
             raise StudioReleaseError("Studio release changelog is invalid.")
+        thin_values = (self.runtime_epoch, self.thin_sha256, self.thin_size)
+        if any(thin_values):
+            if (
+                not _SHA256_PATTERN.fullmatch(self.runtime_epoch)
+                or not _SHA256_PATTERN.fullmatch(self.thin_sha256)
+                or self.thin_size <= 0
+                or self.thin_size > MAX_STUDIO_BUNDLE_BYTES
+            ):
+                raise StudioReleaseError("Studio thin release metadata is invalid.")
 
     @classmethod
     def from_json(cls, payload: bytes | str) -> StudioReleaseManifest:
@@ -124,6 +136,9 @@ class StudioReleaseManifest:
                 size=int(raw["size"]),
                 created_at=str(raw["createdAt"]),
                 changelog=tuple(str(item) for item in raw.get("changelog", [])),
+                runtime_epoch=str(raw.get("runtimeEpoch", "")),
+                thin_sha256=str(raw.get("thinSha256", "")),
+                thin_size=int(raw.get("thinSize", 0) or 0),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise StudioReleaseError(
@@ -141,6 +156,14 @@ class StudioReleaseManifest:
             "createdAt": data["created_at"],
             "changelog": list(data["changelog"]),
         }
+        if self.runtime_epoch:
+            payload.update(
+                {
+                    "runtimeEpoch": self.runtime_epoch,
+                    "thinSha256": self.thin_sha256,
+                    "thinSize": self.thin_size,
+                }
+            )
         return (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode()
 
 
@@ -155,6 +178,14 @@ def normalize_release_prefix(prefix: str) -> str:
 def bundle_object_key(prefix: str, version: str) -> str:
     """Return the immutable object key for a release bundle."""
     return f"{normalize_release_prefix(prefix)}/releases/{version}/studio-bundle.zip"
+
+
+def thin_bundle_object_key(prefix: str, version: str) -> str:
+    """Return the immutable thin bundle object key for capable updaters."""
+
+    return (
+        f"{normalize_release_prefix(prefix)}/releases/{version}/studio-bundle-thin.zip"
+    )
 
 
 def manifest_object_key(prefix: str, version: str) -> str:
@@ -254,33 +285,77 @@ class StudioReleaseStore:
         destination: Path,
     ) -> None:
         """Download one bundle and verify its exact size and digest."""
+        self._download_bundle_object(
+            key=bundle_object_key(self.prefix, manifest.version),
+            destination=destination,
+            expected_size=manifest.size,
+            expected_sha256=manifest.sha256,
+        )
+
+    def download_thin_bundle(
+        self,
+        manifest: StudioReleaseManifest,
+        destination: Path,
+    ) -> None:
+        """Download the optional thin bundle used only by capable updaters."""
+
+        if not manifest.runtime_epoch:
+            raise StudioReleaseError("Studio release has no thin bundle.")
+        self._download_bundle_object(
+            key=thin_bundle_object_key(self.prefix, manifest.version),
+            destination=destination,
+            expected_size=manifest.thin_size,
+            expected_sha256=manifest.thin_sha256,
+        )
+
+    def _download_bundle_object(
+        self,
+        *,
+        key: str,
+        destination: Path,
+        expected_size: int,
+        expected_sha256: str,
+    ) -> None:
         response = self._client.get_object(
             bucket=self.bucket,
-            key=bundle_object_key(self.prefix, manifest.version),
+            key=key,
         )
         destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_name(f".{destination.name}.{os.getpid()}.part")
+        temporary.unlink(missing_ok=True)
         digest = hashlib.sha256()
         size = 0
-        with destination.open("wb") as output:
-            for chunk in response:
-                size += len(chunk)
-                if size > MAX_STUDIO_BUNDLE_BYTES or size > manifest.size:
-                    raise StudioReleaseError(
-                        "Studio release bundle exceeds its manifest size."
-                    )
-                digest.update(chunk)
-                output.write(chunk)
-        if size != manifest.size:
-            raise StudioReleaseError(
-                "Studio release bundle size does not match manifest."
-            )
-        if digest.hexdigest() != manifest.sha256:
-            raise StudioReleaseError(
-                "Studio release bundle checksum does not match manifest."
-            )
+        try:
+            with temporary.open("wb") as output:
+                for chunk in response:
+                    size += len(chunk)
+                    if size > MAX_STUDIO_BUNDLE_BYTES or size > expected_size:
+                        raise StudioReleaseError(
+                            "Studio release bundle exceeds its manifest size."
+                        )
+                    digest.update(chunk)
+                    output.write(chunk)
+            if size != expected_size:
+                raise StudioReleaseError(
+                    "Studio release bundle size does not match manifest."
+                )
+            if digest.hexdigest() != expected_sha256:
+                raise StudioReleaseError(
+                    "Studio release bundle checksum does not match manifest."
+                )
+            os.replace(temporary, destination)
+        except Exception:
+            temporary.unlink(missing_ok=True)
+            raise
 
-    def publish(self, bundle: Path, manifest: StudioReleaseManifest) -> None:
-        """Publish immutable objects, then move the latest pointer last."""
+    def publish(
+        self,
+        bundle: Path,
+        manifest: StudioReleaseManifest,
+        *,
+        thin_bundle: Path | None = None,
+    ) -> None:
+        """Publish immutable objects and repair an identical interrupted attempt."""
         if not bundle.is_file():
             raise StudioReleaseError(f"Studio release bundle does not exist: {bundle}")
         content = bundle.read_bytes()
@@ -292,26 +367,46 @@ class StudioReleaseStore:
             raise StudioReleaseError(
                 "Studio release bundle checksum does not match manifest."
             )
+        thin_content: bytes | None = None
+        if manifest.runtime_epoch:
+            if thin_bundle is None or not thin_bundle.is_file():
+                raise StudioReleaseError("Studio thin release bundle is missing.")
+            thin_content = thin_bundle.read_bytes()
+            if (
+                len(thin_content) != manifest.thin_size
+                or hashlib.sha256(thin_content).hexdigest() != manifest.thin_sha256
+            ):
+                raise StudioReleaseError("Studio thin bundle does not match manifest.")
+        elif thin_bundle is not None:
+            raise StudioReleaseError("Studio full release has no thin bundle.")
         manifest_bytes = manifest.to_json()
         releases = self._existing_releases()
-        if any(item.version > manifest.version for item in releases):
+        same_version = [item for item in releases if item.version == manifest.version]
+        if same_version and same_version != [manifest]:
+            raise StudioReleaseError("Studio release version has a conflict.")
+        newer_exists = any(item.version > manifest.version for item in releases)
+        if newer_exists and not same_version:
             raise StudioReleaseError(
                 "Studio release version must be newer than the published releases."
             )
-        self._client.put_object(
-            bucket=self.bucket,
+        self._put_immutable(
             key=bundle_object_key(self.prefix, manifest.version),
             content=content,
             content_type="application/zip",
-            forbid_overwrite=True,
         )
-        self._client.put_object(
-            bucket=self.bucket,
+        if thin_content is not None:
+            self._put_immutable(
+                key=thin_bundle_object_key(self.prefix, manifest.version),
+                content=thin_content,
+                content_type="application/zip",
+            )
+        self._put_immutable(
             key=manifest_object_key(self.prefix, manifest.version),
             content=manifest_bytes,
             content_type="application/json",
-            forbid_overwrite=True,
         )
+        if newer_exists:
+            return
         releases = [item for item in releases if item.version != manifest.version]
         releases.append(manifest)
         releases.sort(key=lambda item: item.version, reverse=True)
@@ -328,32 +423,98 @@ class StudioReleaseStore:
             )
             + "\n"
         ).encode()
-        self._client.put_object(
-            bucket=self.bucket,
+        self._put_mutable_verified(
             key=release_catalog_object_key(self.prefix),
             content=catalog_bytes,
             content_type="application/json",
         )
-        self._client.put_object(
-            bucket=self.bucket,
+        self._put_mutable_verified(
             key=latest_manifest_object_key(self.prefix),
             content=manifest_bytes,
             content_type="application/json",
         )
 
-    def _existing_releases(self) -> list[StudioReleaseManifest]:
-        """Load the catalog, seeding it from the legacy latest pointer."""
+    def _get_optional_object(self, key: str, max_bytes: int) -> bytes | None:
         try:
-            return self.release_catalog()
+            response = self._client.get_object(bucket=self.bucket, key=key)
+            return _read_object(response, max_bytes)
+        except Exception as error:
+            if _is_not_found(error):
+                return None
+            raise StudioReleaseError("Studio release object lookup failed.") from error
+
+    def _put_immutable(self, *, key: str, content: bytes, content_type: str) -> None:
+        existing = self._get_optional_object(key, MAX_STUDIO_BUNDLE_BYTES)
+        if existing is not None:
+            if existing != content:
+                raise StudioReleaseError("Studio immutable release object conflicts.")
+            return
+        try:
+            self._client.put_object(
+                bucket=self.bucket,
+                key=key,
+                content=content,
+                content_type=content_type,
+                forbid_overwrite=True,
+            )
+        except Exception as error:
+            existing = self._get_optional_object(key, MAX_STUDIO_BUNDLE_BYTES)
+            if existing == content:
+                return
+            if existing is not None:
+                raise StudioReleaseError(
+                    "Studio immutable release object conflicts."
+                ) from error
+            raise StudioReleaseError(
+                "Studio immutable release object upload failed."
+            ) from error
+
+    def _put_mutable_verified(
+        self,
+        *,
+        key: str,
+        content: bytes,
+        content_type: str,
+    ) -> None:
+        if self._get_optional_object(key, MAX_STUDIO_BUNDLE_BYTES) == content:
+            return
+        try:
+            self._client.put_object(
+                bucket=self.bucket,
+                key=key,
+                content=content,
+                content_type=content_type,
+            )
+        except Exception as error:
+            if self._get_optional_object(key, MAX_STUDIO_BUNDLE_BYTES) == content:
+                return
+            raise StudioReleaseError("Studio release pointer upload failed.") from error
+        if self._get_optional_object(key, MAX_STUDIO_BUNDLE_BYTES) != content:
+            raise StudioReleaseError("Studio release pointer verification failed.")
+
+    def _existing_releases(self) -> list[StudioReleaseManifest]:
+        """Merge the catalog and latest pointer without trusting either alone."""
+
+        releases: list[StudioReleaseManifest] = []
+        try:
+            releases = self.release_catalog()
         except Exception as error:
             if not _is_not_found(error):
                 raise
         try:
-            return [self.latest_manifest()]
+            latest = self.latest_manifest()
         except Exception as error:
-            if _is_not_found(error):
-                return []
-            raise
+            if not _is_not_found(error):
+                raise
+        else:
+            matches = [item for item in releases if item.version == latest.version]
+            if matches and matches != [latest]:
+                raise StudioReleaseError(
+                    "Studio release catalog and latest pointer conflict."
+                )
+            if not matches:
+                releases.append(latest)
+        return sorted(releases, key=lambda item: item.version, reverse=True)
 
 
 def build_studio_release(

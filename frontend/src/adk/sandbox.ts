@@ -231,7 +231,9 @@ export interface SandboxStartOptions extends SandboxRequestOptions {
   displayName?: string;
   modelId?: string;
   persistent?: boolean;
-  envs?: Record<string, string>;
+  diskGb?: number;
+  projectId?: string;
+  baseVersionId?: string;
 }
 
 export interface SandboxSession {
@@ -515,6 +517,8 @@ interface SandboxErrorPayload {
   detail?: unknown;
   error?: unknown;
   message?: unknown;
+  code?: unknown;
+  retryable?: unknown;
 }
 
 interface SandboxStreamPayload {
@@ -541,12 +545,49 @@ interface SandboxStreamPayload {
   modelContextWindow?: unknown;
   delivery?: unknown;
   payload?: unknown;
+  code?: unknown;
+  retryable?: unknown;
 }
 
 function sandboxHeaders(headers?: HeadersInit): Headers {
   const next = new Headers(headers);
   if (!next.has("Accept")) next.set("Accept", "application/json");
   return next;
+}
+
+export class SandboxServiceError extends Error {
+  readonly code: string;
+  readonly retryable: boolean;
+  readonly publicMessage: string;
+  readonly httpStatus?: number;
+
+  constructor(
+    message: string,
+    options: {
+      code?: string;
+      retryable?: boolean;
+      publicMessage?: string;
+      httpStatus?: number;
+    } = {},
+  ) {
+    super(message);
+    this.name = "SandboxServiceError";
+    this.code = options.code ?? "";
+    this.retryable = options.retryable === true;
+    this.publicMessage = options.publicMessage?.trim() || message;
+    this.httpStatus = options.httpStatus;
+  }
+}
+
+export function intelligentDevelopmentErrorMessage(error: unknown): string {
+  if (error instanceof SandboxServiceError) return error.publicMessage;
+  if (error instanceof Error && error.name === "TimeoutError") {
+    return "等待开发环境响应超时。任务可能仍在运行，请稍后重新进入当前会话查看状态。";
+  }
+  if (error instanceof TypeError) {
+    return "与开发环境的连接已中断。任务可能仍在运行，请稍后重新进入当前会话查看状态。";
+  }
+  return "开发任务未能继续，开发环境已保留。请在当前会话重试。";
 }
 
 async function responseError(response: Response, fallback: string): Promise<Error> {
@@ -559,6 +600,9 @@ async function responseError(response: Response, fallback: string): Promise<Erro
     return new Error(text ? `${summary}：${text}` : summary);
   }
   const nestedDetail = payload.detail;
+  const structured = nestedDetail && typeof nestedDetail === "object"
+    ? nestedDetail as SandboxErrorPayload
+    : payload;
   const detail =
     nestedDetail && typeof nestedDetail === "object" && "message" in nestedDetail
       ? (nestedDetail as SandboxErrorPayload).message
@@ -569,7 +613,13 @@ async function responseError(response: Response, fallback: string): Promise<Erro
       ? ""
       : JSON.stringify(detail);
   const summary = `${fallback}（HTTP ${response.status}）`;
-  return new Error(detailText ? `${summary}：${detailText}` : summary);
+  const message = detailText ? `${summary}：${detailText}` : summary;
+  return new SandboxServiceError(message, {
+    code: typeof structured.code === "string" ? structured.code : "",
+    retryable: structured.retryable === true,
+    publicMessage: detailText || summary,
+    httpStatus: response.status,
+  });
 }
 
 async function responseJson(
@@ -976,11 +1026,14 @@ async function parseSandboxStream(
       throw new Error("沙箱对话服务返回了无法解析的响应。");
     }
     if (event === "error") {
-      throw new Error(
-        typeof payload.message === "string" && payload.message
-          ? payload.message
-          : "沙箱对话失败，请稍后重试。",
-      );
+      const message = typeof payload.message === "string" && payload.message
+        ? payload.message
+        : "沙箱对话失败，请稍后重试。";
+      throw new SandboxServiceError(message, {
+        code: typeof payload.code === "string" ? payload.code : "",
+        retryable: payload.retryable === true,
+        publicMessage: message,
+      });
     }
     if (event === "progress" && typeof payload.text === "string" && payload.text) {
       progressBlock = {
@@ -1014,6 +1067,17 @@ async function parseSandboxStream(
           kind: "delivery",
           value: {
             sessionId: eventData.sessionId,
+            ...(typeof eventData.projectId === "string"
+              && typeof eventData.versionId === "string"
+              ? {
+                  projectId: eventData.projectId,
+                  versionId: eventData.versionId,
+                  ...(eventData.parentVersionId === null
+                    || typeof eventData.parentVersionId === "string"
+                    ? { parentVersionId: eventData.parentVersionId }
+                    : {}),
+                }
+              : {}),
             artifactSha256: eventData.artifactSha256,
             validationReportSha256: eventData.validationReportSha256,
             agentName: eventData.agentName,
@@ -1165,8 +1229,16 @@ function createSandboxClient(
         body: JSON.stringify({
           displayName: options.displayName?.trim() ?? "",
           ...(options.modelId?.trim() ? { modelId: options.modelId.trim() } : {}),
+          ...(config.textOnly && options.projectId
+            ? {
+                projectId: options.projectId,
+                ...(options.baseVersionId
+                  ? { baseVersionId: options.baseVersionId }
+                  : {}),
+                }
+              : {}),
           ...(config.textOnly ? {} : { persistent: options.persistent ?? true }),
-          ...(options.envs ? { envs: options.envs } : {}),
+          ...(options.diskGb !== undefined ? { diskGb: options.diskGb } : {}),
         }),
         signal: options.signal,
       },
@@ -1213,6 +1285,7 @@ function createSandboxClient(
         body: JSON.stringify({
           displayName: options.displayName?.trim() ?? "",
           persistent: options.persistent ?? true,
+          ...(options.diskGb !== undefined ? { diskGb: options.diskGb } : {}),
         }),
         signal: options.signal,
       },

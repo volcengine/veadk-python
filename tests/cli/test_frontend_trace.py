@@ -15,7 +15,11 @@
 
 from __future__ import annotations
 
+import importlib
 import json
+import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -55,14 +59,33 @@ def _write_agent_app(tmp_path: Path, app_name: str, source: str) -> None:
     (app_dir / "agent.py").write_text(source, encoding="utf-8")
 
 
-def _build_adk_web_client(tmp_path: Path) -> TestClient:
+_MISSING = object()
+
+
+@contextmanager
+def _build_adk_web_client(tmp_path: Path) -> Iterator[TestClient]:
     from google.adk.cli.fast_api import get_fast_api_app
 
     from veadk.utils.patches import patch_adk_build_graph_serialization
 
+    original_sys_path = list(sys.path)
+    app_names = [path.name for path in tmp_path.iterdir() if path.is_dir()]
+    module_names = {name for name in app_names}
+    module_names.update(f"{name}.agent" for name in app_names)
+    original_modules = {name: sys.modules.get(name, _MISSING) for name in module_names}
     patch_adk_build_graph_serialization()
-    app = get_fast_api_app(agents_dir=str(tmp_path), web=True)
-    return TestClient(app)
+    try:
+        app = get_fast_api_app(agents_dir=str(tmp_path), web=True)
+        with TestClient(app) as client:
+            yield client
+    finally:
+        sys.path[:] = original_sys_path
+        for name, module in original_modules.items():
+            if module is _MISSING:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module
+        importlib.invalidate_caches()
 
 
 def test_session_trace_route_returns_json_spans() -> None:
@@ -177,7 +200,8 @@ root_agent = Agent(
 """,
     )
 
-    response = _build_adk_web_client(tmp_path).get("/dev/apps/demo_agent/build_graph")
+    with _build_adk_web_client(tmp_path) as client:
+        response = client.get("/dev/apps/demo_agent/build_graph")
 
     assert response.status_code == 200
     payload = response.json()
@@ -216,7 +240,8 @@ root_agent = Agent(
 """,
     )
 
-    response = _build_adk_web_client(tmp_path).get("/dev/apps/nested_agent/build_graph")
+    with _build_adk_web_client(tmp_path) as client:
+        response = client.get("/dev/apps/nested_agent/build_graph")
 
     assert response.status_code == 200
     payload = response.json()

@@ -39,6 +39,7 @@ class StudioToolDispatcher(Protocol):
         catalog_revision: str,
         manifest: StudioToolManifest,
         arguments: dict[str, Any],
+        function_call_id: str = "",
     ) -> Any: ...
 
 
@@ -119,11 +120,24 @@ class StudioRemoteTool(BaseTool):
         args: dict[str, Any],
         tool_context: ToolContext,
     ) -> Any:
-        del tool_context
-        return await self._dispatcher.call_tool(
+        result = await self._dispatcher.call_tool(
             run_id=self._run_id,
             scope_id=self._scope_id,
             catalog_revision=self._catalog_revision,
             manifest=self._manifest,
             arguments=args,
+            function_call_id=str(getattr(tool_context, "function_call_id", "") or ""),
         )
+        if (
+            self.name == "delegate_to_codex_sandbox"
+            and isinstance(result, dict)
+            and result.get("ok") is True
+            and isinstance(result.get("message"), str)
+            and result["message"].strip()
+        ):
+            # The inner Codex response is already the final answer. Asking the
+            # outer model to summarize it again can duplicate or truncate long
+            # results, while the function-response event remains available to
+            # Studio for the detailed codex_activity rendering.
+            tool_context.actions.skip_summarization = True
+        return result

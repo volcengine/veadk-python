@@ -71,6 +71,18 @@ test("renders a two-level Agent type and runtime menu", () => {
   assert.match(pickerStyles, /\.new-chat-agent-picker__submenu/);
 });
 
+test("lists local apps in the general Agent menu when Studio uses local agents", () => {
+  assert.match(pickerSource, /agentsSource\?: "local" \| "cloud"/);
+  assert.match(pickerSource, /localApps\?: string\[\]/);
+  assert.match(pickerSource, /agentsSource === "local" \|\| !open/);
+  assert.match(pickerSource, /localApps\.map\(\(app, index\) =>/);
+  assert.match(pickerSource, /onSelectLocalApp\(app\)/);
+  assert.match(pickerSource, /暂无本地智能体/);
+  assert.match(appSource, /agentsSource=\{agentsSource\}/);
+  assert.match(appSource, /localApps=\{apps\}/);
+  assert.match(appSource, /onSelectLocalApp=\{refreshCurrentAgentAndStartNewChat\}/);
+});
+
 test("keeps the Agent face in menu options but removes it from the compact trigger", () => {
   assert.match(pickerSource, /import \{ AgentFaceIcon \} from "\.\.\/AgentFaceIcon"/);
   assert.match(

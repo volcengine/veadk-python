@@ -40,7 +40,7 @@ test("generates the basic Studio project and Runtime delivery workflow in fronte
   assert.equal(
     files["requirements.txt"],
     [
-      "veadk-python==1.1.5",
+      "veadk-python==1.1.9",
       "agentkit-sdk-python==0.8.4",
       "google-adk==2.1.0",
       "lark-channel-sdk==1.2.0",
@@ -75,7 +75,7 @@ test("defines pull request review as a GitHub App automation", async () => {
   assert.equal(pullRequestReviewAutomation.submitLabel, "安装 GitHub App");
   assert.equal(pullRequestReviewAutomation.fields.length, 1);
   assert.equal(pullRequestReviewAutomation.fields[0].name, "repository");
-  assert.deepEqual(pullRequestReviewAutomation.secrets, []);
+  assert.deepEqual(pullRequestReviewAutomation.secrets({ cloudProvider: "volcengine" }), []);
   assert.match(pullRequestReviewAutomation.panel, /GitHub App/);
   await assert.rejects(
     () => pullRequestReviewAutomation.submit(

@@ -204,10 +204,6 @@
   animation: loading-gap-spin 0.72s linear infinite;
 }
 
-.my-agent-compatibility-retry {
-  min-width: 48px;
-}
-
 .my-agent-card.is-connecting .resource-card__actions {
   opacity: 1;
   pointer-events: auto;
@@ -268,7 +264,6 @@
   flex: 0 0 14px;
 }
 
-.my-agent-initial-loading,
 .my-agent-load-more,
 .my-agent-empty {
   display: flex;
@@ -276,11 +271,6 @@
   justify-content: center;
   color: hsl(var(--muted-foreground));
   font-size: 12.5px;
-}
-
-.my-agent-initial-loading {
-  min-height: 180px;
-  gap: 8px;
 }
 
 .my-agent-load-more {

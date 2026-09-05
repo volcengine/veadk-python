@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import re
+from pprint import pformat
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -29,6 +30,7 @@ from veadk.cli.generated_agent_catalog import (
     STM_BY_ID,
     TOOL_BY_ID,
     EnvVar,
+    a2a_registry_env_for_provider,
     env_for_provider,
     model_env_for_provider,
 )
@@ -37,6 +39,10 @@ from veadk.extensions.harness.sidecar import (
     normalize_studio_harness_intent,
     studio_harness_env_example,
     studio_harness_intent_payload,
+)
+from veadk.tools.builtin_tools.create_agent.models import (
+    CreateAgentsInput,
+    LegacyCreateAgentsInput,
 )
 
 _PYTHON_LICENSE_HEADER = """# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
@@ -58,6 +64,12 @@ _AGENTKIT_BASE_IMAGES = {
     "volcengine": "agentkit-prod-public-cn-beijing.cr.volces.com/base/py-simple:python3.12-bookworm-slim-latest",
     "byteplus": "agentkit-prod-public-ap-southeast-1.cr.bytepluses.com/base/py-simple:python3.12-bookworm-slim-latest",
 }
+_VEADK_VERSION = "1.1.9"
+_VOLCENGINE_PYPI_INDEXES = (
+    "https://repo.huaweicloud.com/repository/pypi/simple",
+    "https://mirrors.aliyun.com/pypi/simple/",
+    "https://pypi.org/simple",
+)
 _LARK_CLI_VERSION = "1.0.87"
 _LARK_CLI_SHA256 = {
     "amd64": "6027b1ddc12440400581bbdf9554850d8e119c7dd400439b1220e7a87b9673c5",
@@ -68,6 +80,32 @@ _GITHUB_CLI_SHA256 = {
     "amd64": "a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112",
     "arm64": "73ea440ecad9c9e284429997ee6f93577bc6f7bc6fba357ef62c53ad8fb641a5",
 }
+
+_DYNAMIC_AGENT_DELEGATION_RULES = """动态子智能体协作规则：
+- 对于问候、身份介绍、能力说明或可以直接完成的简单任务，直接回答，不要创建子智能体。
+- 只有用户明确要求创建、组建或委派新的子智能体时，才进入 collect_resources → create_agents 流程。不得仅因为任务复杂、需要专业技能、工具调用、资料检索或临时 Python 工具就创建子智能体；没有明确创建意图时，直接完成任务或使用当前已有工具。
+- 已挂载的执行环境优先于创建子智能体，也优先于当前智能体的知识库和 Skill 流程。对每个实质性任务，先列出环境，再主动根据环境名称、描述和能力与用户任务做语义匹配；不得先调用知识库、Skill 或其他非环境工具。用户不需要点名环境；明确点名某个已挂载环境时，必须精确选择该环境。未点名时，按用户要求的交付物和动作选择唯一主环境，并把环境描述中的“不用于评审”“不用于实现”等负向范围视为排除条件：需求、产品、架构或 ADR 设计匹配 authoring/design，评审或验证匹配 review，实现、修复或测试匹配 engineering。只要存在匹配环境，就先在该环境中执行，再按需调用其他工具；没有匹配环境时才由当前智能体直接处理。仅当用户明确要求创建或委派新的子智能体时，才允许改走动态子智能体流程。
+- 进入动态子智能体流程后，通常必须先调用 collect_resources。根据用户任务提炼 2 到 5 个简短检索关键词，通过 skill_hub_keywords 传入。
+- 如果用户明确禁止联网、知识库或任何外部资源，跳过 collect_resources，直接调用 create_agents，传入 collection_id=""，并确保每个 LLM 节点的 resources=[]。不得发起 Skill Hub 关键词检索或其他资源源调用；子智能体仍使用自身模型能力完成当前任务。
+- collect_resources 返回的是候选资源，不会自动挂载。只创建完成任务所需的最少数量子智能体，并把实际需要的 Skill、知识库和内置工具完整 ref 显式写入对应 LLM 节点的 resources。存在相关 Skill 时至少绑定一个；确实没有匹配 Skill 时才允许不绑定 Skill。
+- 每次 collect_resources 后只调用一次 create_agents，并把本次任务需要的所有子智能体放在同一个 agents 列表中。create_agents 返回 completed 或已经设置 handoff_to 后，严禁再次调用 create_agents；任务已经交给目标子智能体继续执行。
+- 调用 create_agents 前，必须把“当前一次性任务”和“可复用能力身份”分开：agents[*].task 完整保留当前用户的具体目标、对象、输入和交付要求；agents[*].name 以及所有 nodes[*] 的 id、description、instruction 只描述可重复使用的稳定能力域。
+- 人物或虚构角色、品牌、产品、组织、平台或渠道、行业或赛道、细分领域、业务领域、内容类别、研究主题、源语言或目标语言、地点、日期、活动名称、具体题材、一次性问题或事件、文档标题、文件名、URL 等请求特有信息只能出现在 agents[*].task 中，不得出现在 name、id、description 或 instruction 中。即使这些信息会影响执行方法，也只能通过“用户指定的平台/产品/行业/主题/语言/问题”等参数化表达写入 instruction。禁止通过音译、拼音、翻译、首字母缩写、行业简称、拼接或轻微改写把这些特有信息写入名称。
+- 子智能体名称使用简洁的 snake_case 能力名，例如 video_creation_agent、document_translation_agent、financial_report_analysis_agent；不要按本次交付物命名，也不要一律退化成 generic_agent 或 general_assistant，保留真正影响专业能力和工具选择的领域边界。
+- 每个 LLM 节点的 instruction 必须是长期可复用的角色说明：要求读取当前用户请求及其上下文，明确期望输出格式和完成标准，使用所挂载资源完整完成当前任务，并直接向用户给出最终结果；不得复述或硬编码本次任务中的特有实体。需要临时计算能力时，可以在 python_tools 中提供完整代码。
+- 小规模、可直接枚举或心算验证的问题优先由子智能体直接推理，不要创建临时 Python 工具。确需 python_tools 时，函数参数、返回值以及跨工具边界传递的全部数据必须可由标准 JSON 无损表达：对象键只能是字符串，不得使用 tuple、对象或其他非字符串字典键，也不得依赖 Python 特有类型在 JSON 往返后保持不变。组合、边或协同项等复合键必须改成记录列表，例如 [{"items": ["A", "C", "F"], "value": 13}]，并在工具内显式转换。调用前先检查生成函数的参数 schema；若 schema 不兼容或工具结果明显错误，立即重写工具，或者停止调用工具并直接完成推理，禁止用同一错误输入反复循环。
+- 所有具体输出语言要求只能保留在 agents[*].task 中；即使用户要求使用其当前所用语言，也不得在节点 instruction 中写入或推断具体语言。instruction 必须统一参数化为“使用用户指定语言输出”。
+- 示例：用户要求“给我生成葫芦娃大战钢铁侠的视频”时，使用 video_creation_agent / video_creator 等通用能力名称，把原句和视频交付要求放入 task，并为 LLM 节点绑定视频生成资源；不得使用 huluxia_vs_ironman_video 或任何包含葫芦娃、钢铁侠及其音译/翻译的 name、id、description、instruction。指定平台上的品牌营销必须使用 social_media_campaign_agent，并在 instruction 中写“适配用户指定的平台”，不得把平台名、品牌名或本次产品写入身份。指定产品故障的售后任务必须使用 customer_support_agent，并写“诊断用户当前描述的问题”，不得把产品类别或本次故障写入身份。财报文件分析、指定人物播客等任务同样抽象为 financial_report_analysis_agent、podcast_production_agent 等稳定能力。
+- 精确示例：用户要求“请调研并比较三家主流新能源汽车公司的最新财务表现、产品竞争力与主要风险，给出结构化投资分析报告”时，必须使用 investment_analysis_agent 等跨行业可复用能力名称；description 和 instruction 只能描述调研用户指定公司、比较财务表现与竞争力、分析风险并生成投资报告的通用能力。完整原句和“新能源汽车”行业只放入 task。不得使用 ev_investment_research_agent、new_energy_vehicle_investment_agent，也不得在 description 或 instruction 中出现新能源汽车、EV、electric vehicle 等行业名称、简称或翻译。
+- 文件翻译任务必须使用 document_translation_agent 等跨语言可复用能力名称，并在 instruction 中写“翻译为用户指定的目标语言”；文件名、源语言和目标语言完整保留在 task，不得使用 japanese_translation_agent，也不得在 description 或 instruction 中出现日语、Japanese 等本次指定语言。
+- 区分“执行方法或交付类型”和“本次研究对象或内容类别”：前者可以成为能力身份，例如 investment_analysis、document_rag_qa、podcast_production、technology_comparison、incident_diagnostics；后者只能留在 task。不得使用 financial_rag_qa_assistant、music_album_research_agent、cloud_database_comparison_agent、cloud_api_diagnostic_agent 等绑定本次语料主题、节目题材、技术类别或运行环境的身份；应分别使用 document_rag_qa_agent、content_researcher、technology_comparison_agent、incident_diagnostics_agent 等跨主题名称，并在 instruction 中读取用户指定的语料、主题、候选技术或运行环境。
+- 上述约束逐个适用于所有子节点，而不只是 agents[*].name：云上 API 故障任务的每个 node 都只能描述“诊断用户指定系统的当前故障”，不得出现 cloud 或 API；音乐专辑播客任务应使用 content_researcher、podcast_script_writer、podcast_audio_producer，并描述“用户指定主题”，不得出现 music、album 或 专辑；云数据库对比任务应使用 technology_researcher、technology_comparison_agent，并描述“用户指定的候选技术”，不得出现 cloud、database 或 数据库。
+- agents[*].task 是当前任务具体信息的唯一载体；nodes[*].instruction 不要为了说明如何完成当前任务而再次复述研究对象或类别。技术方案对比节点使用领域中立模板：“读取当前用户请求，调研并比较用户指定的候选项，按用户要求的维度评估并输出结构化决策报告”，具体候选技术、所属类别和比较维度只从 task 与当前请求读取。
+- 对任何技术方案对比任务，统一使用 technology_comparison_agent 作为可复用能力身份；需要拆分节点时，只使用 evidence_researcher、criteria_evaluator、decision_report_writer 等按执行步骤命名的节点。所有节点 description 和 instruction 只写“用户指定的候选项”“用户要求的评估维度”“结构化决策报告”，不得为说明角色而补充候选项所属技术类别。
+- 当用户明确要求子智能体跨行业、跨领域或跨场景复用时，必须采用不绑定业务对象的最高合理抽象。对于带预算、风险、数量或其他约束的枚举、组合与敏感性分析，统一使用 decision_optimization_agent 或 decision_analysis_agent；节点只使用 constraint_validator、option_evaluator、scenario_analyst、decision_report_writer 等执行步骤名称。不得使用 portfolio、project、investment、asset、campaign 等业务对象或其中文、缩写作为 name、id、description 或 instruction 的身份边界，即使当前任务看起来属于该领域。
+- 在调用 create_agents 前逐字段自检每个 agents[*].name 和 nodes[*] 的 id、description、instruction。只要其中仍含本次任务特有的品牌、平台或渠道、产品或品类、行业或赛道、细分领域、业务领域、内容类别、研究主题、源语言或目标语言、故障或事件、人物、题材、文件名，或这些词的拼音、翻译、首字母缩写、行业简称，工具调用就是无效的，必须先改写为通用能力表达。使用“替换测试”检查：把当前请求的实体、行业、赛道、主题和语言全部换成另一组后，这些身份字段应当保持不变。xiaohongshu、douyin、tiktok 等渠道都只能作为 task 中的运行时参数；新能源汽车、EV 等行业赛道，智能手机、电池异常等产品类别和具体问题，以及日语、Japanese 等目标语言也只能作为 task 数据。
+- 调用 create_agents 时，在 handoff_to 中指定真正负责完成用户任务的智能体。任务移交后不要自行重复作答。
+- 不要向用户暴露内部运行时名称、资源引用、版本判断或编排实现细节。"""
 
 
 class GeneratedFile(BaseModel):
@@ -136,7 +174,7 @@ class A2ARegistryConfig(BaseModel):
 class SelectedSkill(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    source: Literal["skillhub", "local", "skillspace"] = "skillhub"
+    source: Literal["skillhub", "local", "skillspace", "runtime"] = "skillhub"
     folder: str = ""
     name: str = ""
     description: str = ""
@@ -254,6 +292,7 @@ class AgentDraft(BaseModel):
     cloudProvider: Literal["volcengine", "byteplus"] = "volcengine"
     description: str = ""
     instruction: str = ""
+    dynamicAgentDelegation: bool = False
     agentType: Literal["llm", "sequential", "parallel", "loop", "a2a"] = "llm"
     maxIterations: int = 3
     a2aUrl: str = ""
@@ -419,6 +458,8 @@ def _safe_draft_payload(draft: AgentDraft) -> dict[str, Any]:
     used: set[str] = set()
 
     def sanitize(node: dict[str, Any]) -> None:
+        if not node.get("dynamicAgentDelegation"):
+            node.pop("dynamicAgentDelegation", None)
         if node.get("cloudProvider") == "volcengine":
             node.pop("cloudProvider", None)
         if node.get("modelSource") is None:
@@ -628,6 +669,19 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
 
     tool_exprs: list[str] = []
 
+    if draft.dynamicAgentDelegation:
+        _add_import(
+            acc,
+            "from .quick_mode_compat import CreateAgentToolset",
+        )
+        dynamic_agent_toolset = _unique_ident(
+            acc,
+            f"dynamic_agent_toolset_{var_name}",
+            "dynamic_agent_toolset",
+        )
+        acc.pre_lines.append(f"{dynamic_agent_toolset} = CreateAgentToolset()")
+        tool_exprs.append(dynamic_agent_toolset)
+
     for tool_id in draft.builtinTools:
         tool = TOOL_BY_ID.get(tool_id)
         if tool is None:
@@ -725,7 +779,9 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
             tool_exprs.append(_emit_tool_stub(acc, name, ""))
 
     skill_folders = [
-        skill.folder for skill in draft.selectedSkills if skill.folder.strip()
+        skill.folder
+        for skill in draft.selectedSkills
+        if skill.source != "runtime" and skill.folder.strip()
     ]
     environment_skill_folders = [
         skill.folder for skill in acc.environment_skills if skill.folder.strip()
@@ -805,10 +861,10 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
         f"description={_py_str(draft.description or draft.name or 'A VeADK agent.')}",
         f"instruction=INSTRUCTION_{var_name.upper()}",
     ]
-    acc.pre_lines.append(
-        f"INSTRUCTION_{var_name.upper()} = "
-        f"{_py_triple(draft.instruction or 'You are a helpful assistant.')}"
-    )
+    instruction = draft.instruction or "You are a helpful assistant."
+    if draft.dynamicAgentDelegation:
+        instruction = f"{instruction.rstrip()}\n\n{_DYNAMIC_AGENT_DELEGATION_RULES}"
+    acc.pre_lines.append(f"INSTRUCTION_{var_name.upper()} = {_py_triple(instruction)}")
 
     if tool_exprs:
         kwargs.append(f"tools=[{', '.join(tool_exprs)}]")
@@ -994,7 +1050,12 @@ def render_env_example(env: list[EnvVar]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_requirements(extras: set[str], include_feishu_channel: bool) -> str:
+def render_requirements(
+    extras: set[str],
+    include_feishu_channel: bool,
+    *,
+    dynamic_agent_delegation: bool = False,
+) -> str:
     # Keep Studio-generated projects reproducible. google-adk 2.2+ requires
     # Starlette 1.x, while AgentKit SDK 0.8.4 still relies on APIs removed in
     # Starlette 1.x, so these versions must be upgraded together.
@@ -1004,7 +1065,7 @@ def render_requirements(extras: set[str], include_feishu_channel: bool) -> str:
     unique_extras = sorted(all_extras)
     extras_str = f"[{','.join(unique_extras)}]" if unique_extras else ""
     managed_sidecar = "harness-sidecar" in all_extras
-    pkg = f"veadk-python{extras_str}==1.1.5"
+    pkg = f"veadk-python{extras_str}=={_VEADK_VERSION}"
     agentkit_sdk = (
         "agentkit-sdk-python==0.8.1"
         if managed_sidecar
@@ -1137,6 +1198,28 @@ def _render_app_py(
             '    return {**_agent_info_handler(app_name), "draft": AGENT_DRAFT}',
             "",
             "app.router.routes.insert(_agent_info_index, app.router.routes.pop())",
+            "",
+            "if not any(",
+            '    getattr(route, "path", "") == "/web/agent-draft/{app_name}"',
+            "    for route in app.router.routes",
+            "):",
+            '    @app.get("/web/agent-draft/{app_name}")',
+            "    def agent_draft(app_name: str):",
+            "        agent_info_with_draft(app_name)",
+            '        return {"draft": AGENT_DRAFT}',
+            "",
+            "_agent_draft_index = next(",
+            "    index",
+            "    for index, route in enumerate(app.router.routes)",
+            '    if getattr(route, "path", "") == "/web/agent-draft/{app_name}"',
+            ")",
+            "_agent_draft_route = app.router.routes.pop(_agent_draft_index)",
+            "_agent_info_index = next(",
+            "    index",
+            "    for index, route in enumerate(app.router.routes)",
+            '    if getattr(route, "path", "") == "/web/agent-info/{app_name}"',
+            ")",
+            "app.router.routes.insert(_agent_info_index + 1, _agent_draft_route)",
         ]
     )
     lines.extend(["", "enable_dynamic_a2a_tools(app, root_agent)"])
@@ -1157,6 +1240,297 @@ def _render_managed_main_py() -> str:
             "    run_agentkit_app(app)",
             "",
         ]
+    )
+
+
+def _render_quick_mode_compat_py() -> str:
+    """Keep quick-mode runtime behavior available in the pinned runtime."""
+
+    create_agents_schema = pformat(
+        CreateAgentsInput.model_json_schema(by_alias=True),
+        sort_dicts=False,
+        width=88,
+    )
+    legacy_create_agents_schema = pformat(
+        LegacyCreateAgentsInput.model_json_schema(by_alias=True),
+        sort_dicts=False,
+        width=88,
+    )
+    return (
+        _PYTHON_LICENSE_HEADER
+        + f'''\
+from __future__ import annotations
+
+import asyncio
+import copy
+import hashlib
+from pathlib import Path
+from typing import Any
+from weakref import WeakValueDictionary
+
+from google.adk import skills as _adk_skills
+from google.adk.tools import FunctionTool, ToolContext
+from google.genai import types
+from typing_extensions import override
+
+from veadk.tools.builtin_tools.create_agent import (
+    CreateAgentToolset as _BaseCreateAgentToolset,
+)
+from veadk.tools.builtin_tools.create_agent import orchestrator as _orchestrator_module
+from veadk.tools.builtin_tools.create_agent.resource_store import (
+    ResourceStore as _BaseResourceStore,
+)
+
+
+_CREATE_AGENTS_DESCRIPTION = (
+    "Create one or more sub-agents and transfer the current task to the agent "
+    "named by handoff_to. Only use this tool when the user explicitly asks to "
+    "create, add, assemble, or delegate to a new agent or sub-agent. Task "
+    "complexity alone is not authorization. When a mounted execution "
+    "environment can complete the request, use the environment tools instead. "
+    "Normally call collect_resources first, use its "
+    "collection_id, and select only resource refs returned by that call. If the "
+    "user explicitly prohibits network, knowledge-base, and external-resource "
+    "access, skip collection, pass an empty collection_id, and leave every "
+    "node's resources empty. Collected resources are candidates only and are "
+    "not mounted automatically. For every LLM node, explicitly include each "
+    "relevant Skill, knowledge base, and built-in tool in resources; when "
+    "relevant Skills were returned, bind at least one. Keep the one-off user "
+    "objective in agents[*].task and keep reusable identity fields free of "
+    "request-specific entities. Call create_agents exactly once for each "
+    "collect_resources result and include every required sub-agent in that "
+    "single agents list. Once it completes or sets handoff_to, never call it "
+    "again. The selected sub-agent, not the main agent, produces the final answer."
+)
+_CREATE_AGENTS_SCHEMA = {create_agents_schema}
+_LEGACY_CREATE_AGENTS_SCHEMA = {legacy_create_agents_schema}
+_NATIVE_TASK_CONTEXT = hasattr(
+    _orchestrator_module,
+    "_with_delegated_task_context",
+)
+
+
+def _install_catalog_skill_name_compat() -> None:
+    """Keep Skill Hub catalog names callable on the pinned runtime package."""
+    if hasattr(_orchestrator_module, "_with_catalog_skill_name"):
+        return
+
+    marker = "_veadk_catalog_skill_name_compat"
+    if getattr(_orchestrator_module, marker, False):
+        return
+
+    path_names: dict[str, str] = {{}}
+    original_materialize = _orchestrator_module.materialize_remote_skill
+    original_load = _adk_skills.load_skill_from_dir
+
+    def materialize_with_catalog_name(skill: Any, *args: Any, **kwargs: Any):
+        path = original_materialize(skill, *args, **kwargs)
+        catalog_name = str(getattr(skill, "name", "") or "").strip()
+        if catalog_name:
+            path_names[str(Path(path).resolve())] = catalog_name
+        return path
+
+    def load_with_catalog_name(skill_dir: Any):
+        loaded = original_load(skill_dir)
+        catalog_name = path_names.get(str(Path(skill_dir).resolve()), "")
+        if not catalog_name or catalog_name == loaded.name:
+            return loaded
+        frontmatter = loaded.frontmatter.model_copy(update={{"name": catalog_name}})
+        return loaded.model_copy(update={{"frontmatter": frontmatter}})
+
+    _orchestrator_module.materialize_remote_skill = materialize_with_catalog_name
+    _adk_skills.load_skill_from_dir = load_with_catalog_name
+    setattr(_orchestrator_module, marker, True)
+
+
+_install_catalog_skill_name_compat()
+
+
+def _runtime_owner(tool_context: ToolContext | None) -> str:
+    if tool_context is None:
+        return "local"
+    invocation = getattr(tool_context, "_invocation_context", None)
+    session = getattr(invocation, "session", None)
+    return ":".join(
+        str(value or "")
+        for value in (
+            getattr(session, "app_name", None)
+            or getattr(session, "appName", None),
+            getattr(invocation, "user_id", None)
+            or getattr(session, "user_id", None),
+            getattr(session, "id", None),
+            getattr(invocation, "invocation_id", None),
+        )
+    )
+
+
+class _ReusableResourceStore(_BaseResourceStore):
+    """Allow one model turn to reuse its resource snapshot safely."""
+
+    @override
+    def consume(self, *, collection_id: str, owner: str):
+        return self.get(collection_id=collection_id, owner=owner)
+
+
+def _with_delegated_task(instruction: str, task: str) -> str:
+    delegated_task = task.strip()
+    if not delegated_task:
+        return instruction
+    return (
+        f"{{instruction.rstrip()}}\\n\\n"
+        "Current delegated task (runtime context, not reusable identity):\\n"
+        f"{{delegated_task}}"
+    )
+
+
+def _inject_delegated_task(blueprint: Any) -> Any:
+    if _NATIVE_TASK_CONTEXT:
+        return blueprint
+    nodes = [
+        node.model_copy(
+            update={{
+                "instruction": _with_delegated_task(
+                    node.instruction,
+                    blueprint.task,
+                )
+            }}
+        )
+        if node.type == "llm"
+        else node
+        for node in blueprint.nodes
+    ]
+    return blueprint.model_copy(update={{"nodes": nodes}})
+
+
+class _RuntimeCompatibleCreateAgentsTool(FunctionTool):
+    def __init__(self, function: Any, *, parameters_json_schema: dict[str, Any]):
+        self._parameters_json_schema = parameters_json_schema
+        super().__init__(function)
+
+    @override
+    def _get_declaration(self) -> types.FunctionDeclaration | None:
+        return types.FunctionDeclaration(
+            name=self.name,
+            description=_CREATE_AGENTS_DESCRIPTION,
+            parameters_json_schema=self._parameters_json_schema,
+        )
+
+
+class CreateAgentToolset(_BaseCreateAgentToolset):
+    """Keep quick-mode semantics available in the pinned runtime."""
+
+    _MAX_COMPLETED_CREATIONS = 128
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        kwargs.setdefault("resource_store", _ReusableResourceStore())
+        super().__init__(*args, **kwargs)
+        self._creation_locks = WeakValueDictionary()
+        self._completed_creations = {{}}
+        schema = (
+            _CREATE_AGENTS_SCHEMA
+            if self._input_model.__name__ == "CreateAgentsInput"
+            else _LEGACY_CREATE_AGENTS_SCHEMA
+        )
+        self._tools[1] = _RuntimeCompatibleCreateAgentsTool(
+            self.create_agents,
+            parameters_json_schema=schema,
+        )
+
+    @override
+    async def create_agents(
+        self,
+        collection_id: str,
+        agents: list[Any],
+        handoff_to: str,
+        tool_context: ToolContext | None = None,
+    ) -> dict[str, Any]:
+        request = self._input_model.model_validate(
+            {{
+                "collection_id": collection_id,
+                "agents": agents,
+                "handoff_to": handoff_to,
+            }}
+        )
+        owner = _runtime_owner(tool_context)
+        collection_key = collection_id or "__offline__"
+        request_fingerprint = hashlib.sha256(
+            request.model_dump_json(by_alias=True).encode("utf-8")
+        ).hexdigest()
+        cache_key = (owner, collection_key, request_fingerprint)
+        cached = self._completed_creations.get(cache_key)
+        if cached is not None:
+            actions = getattr(tool_context, "actions", None)
+            if actions is not None:
+                actions.transfer_to_agent = cached["handoff_to"]
+            return copy.deepcopy(cached)
+
+        lock_key = (owner, collection_key)
+        creation_lock = self._creation_locks.setdefault(
+            lock_key,
+            asyncio.Lock(),
+        )
+        async with creation_lock:
+            cached = self._completed_creations.get(cache_key)
+            if cached is not None:
+                actions = getattr(tool_context, "actions", None)
+                if actions is not None:
+                    actions.transfer_to_agent = cached["handoff_to"]
+                return copy.deepcopy(cached)
+            result = await self._create_agents_once(
+                request=request,
+                collection_id=collection_id,
+                handoff_to=handoff_to,
+                tool_context=tool_context,
+            )
+            handoff_runtime_name = result.get("handoff_to")
+            if handoff_runtime_name:
+                self._completed_creations[cache_key] = copy.deepcopy(result)
+                while (
+                    len(self._completed_creations)
+                    > self._MAX_COMPLETED_CREATIONS
+                ):
+                    oldest_key = next(iter(self._completed_creations))
+                    self._completed_creations.pop(oldest_key)
+            return result
+
+    async def _create_agents_once(
+        self,
+        *,
+        request: Any,
+        collection_id: str,
+        handoff_to: str,
+        tool_context: ToolContext | None,
+    ) -> dict[str, Any]:
+        parsed_agents = list(request.agents)
+        if not collection_id:
+            invalid_nodes = [
+                f"{{blueprint.name}}.{{node.id}}"
+                for blueprint in parsed_agents
+                for node in blueprint.nodes
+                if node.type == "llm" and node.resources
+            ]
+            if invalid_nodes:
+                raise ValueError(
+                    "Offline agent creation requires empty resources for every "
+                    f"LLM node: {{', '.join(invalid_nodes)}}."
+                )
+            snapshot = self._store.put(
+                owner=_runtime_owner(tool_context),
+                capabilities=self.capabilities,
+                resources=[],
+            )
+            collection_id = snapshot.collection_id
+
+        compatible_agents = [
+            _inject_delegated_task(blueprint) for blueprint in parsed_agents
+        ]
+        return await super().create_agents(
+            collection_id=collection_id,
+            agents=compatible_agents,
+            handoff_to=handoff_to,
+            tool_context=tool_context,
+        )
+'''
     )
 
 
@@ -1570,17 +1944,25 @@ def enable_dynamic_a2a_tools(app: FastAPI, root_agent: BaseAgent) -> None:
 
 
 def _a2a_registry_env_values(draft: AgentDraft) -> dict[str, str]:
+    defaults = {
+        item.key: item.placeholder
+        for item in a2a_registry_env_for_provider(draft.cloudProvider)
+    }
     if draft.a2aRegistry.enabled:
         registry = draft.a2aRegistry
         return {
             "REGISTRY_SPACE_ID": registry.registrySpaceId.strip(),
-            "REGISTRY_TOP_K": registry.registryTopK.strip() or "3",
-            "REGISTRY_REGION": registry.registryRegion.strip() or "cn-beijing",
+            "REGISTRY_TOP_K": registry.registryTopK.strip()
+            or defaults["REGISTRY_TOP_K"],
+            "REGISTRY_REGION": registry.registryRegion.strip()
+            or defaults["REGISTRY_REGION"],
             "REGISTRY_ENDPOINT": registry.registryEndpoint.strip()
-            or "https://open.volcengineapi.com/",
+            or defaults["REGISTRY_ENDPOINT"],
         }
     for sub_agent in draft.subAgents:
-        values = _a2a_registry_env_values(sub_agent)
+        values = _a2a_registry_env_values(
+            sub_agent.model_copy(update={"cloudProvider": draft.cloudProvider})
+        )
         if values:
             return values
     return {}
@@ -1641,13 +2023,19 @@ def debug_runtime_env_from_draft(draft: AgentDraft) -> dict[str, str]:
                 allowed_keys.add(mcp_tool.authTokenEnv)
         if node.a2aRegistry.enabled:
             registry = node.a2aRegistry
+            defaults = {
+                item.key: item.placeholder
+                for item in a2a_registry_env_for_provider(draft.cloudProvider)
+            }
             fixed_values.update(
                 {
                     "REGISTRY_SPACE_ID": registry.registrySpaceId.strip(),
-                    "REGISTRY_TOP_K": registry.registryTopK.strip() or "3",
-                    "REGISTRY_REGION": registry.registryRegion.strip() or "cn-beijing",
+                    "REGISTRY_TOP_K": registry.registryTopK.strip()
+                    or defaults["REGISTRY_TOP_K"],
+                    "REGISTRY_REGION": registry.registryRegion.strip()
+                    or defaults["REGISTRY_REGION"],
                     "REGISTRY_ENDPOINT": registry.registryEndpoint.strip()
-                    or "https://open.volcengineapi.com/",
+                    or defaults["REGISTRY_ENDPOINT"],
                 }
             )
         if node.memory.shortTerm:
@@ -1761,6 +2149,46 @@ def _github_release_urls(cloud_provider: str, repository: str) -> list[str]:
     return [mirror, official] if cloud_provider == "volcengine" else [official, mirror]
 
 
+def _render_python_dependency_install(cloud_provider: str) -> str:
+    if cloud_provider != "volcengine":
+        return "RUN uv pip install -r requirements.txt"
+
+    attempts = [
+        f"uv pip install --index-url {index} -r requirements.txt"
+        for index in _VOLCENGINE_PYPI_INDEXES
+    ]
+    return "RUN " + " || \\\n    ".join(attempts)
+
+
+def render_default_agentkit_dockerfile(cloud_provider: str) -> str:
+    """Render the canonical Dockerfile for ordinary Studio Agent deployments."""
+
+    return "\n".join(
+        [
+            f"FROM {_AGENTKIT_BASE_IMAGES[cloud_provider]}",
+            "",
+            "# Configure AgentKit runtime defaults.",
+            (
+                "ENV UV_SYSTEM_PYTHON=1 UV_COMPILE_BYTECODE=1 "
+                "PYTHONUNBUFFERED=1 DOCKER_CONTAINER=1"
+            ),
+            "",
+            "# Install Python dependencies before copying the source for better layer caching.",
+            "COPY requirements.txt requirements.txt",
+            _render_python_dependency_install(cloud_provider),
+            "",
+            "# Copy the Agent application and configure its runtime entrypoint.",
+            "EXPOSE 8000",
+            "",
+            "WORKDIR /app",
+            "COPY . .",
+            "",
+            'CMD ["python", "-m", "app"]',
+            "",
+        ]
+    )
+
+
 def render_cloud_environment_dockerfile(draft: AgentDraft) -> str | None:
     """Render the custom image or an AgentKit-compatible image for selected CLIs."""
     if draft.cloudEnvironment.resolvedImage:
@@ -1781,8 +2209,8 @@ def render_cloud_environment_dockerfile(draft: AgentDraft) -> str | None:
         return draft.cloudEnvironment.dockerfile
 
     selected = set(draft.cloudEnvironment.cliTools)
-    if not selected:
-        return None
+    if not selected and not draft.dynamicAgentDelegation:
+        return render_default_agentkit_dockerfile(draft.cloudProvider)
 
     system_packages = ["ca-certificates", "curl"]
     if "github-cli" in selected:
@@ -1849,7 +2277,7 @@ def render_cloud_environment_dockerfile(draft: AgentDraft) -> str | None:
             "",
             "# Install Python dependencies before copying the source for better layer caching.",
             "COPY requirements.txt requirements.txt",
-            "RUN uv pip install -r requirements.txt",
+            _render_python_dependency_install(draft.cloudProvider),
             "",
             "# Copy the Agent application and configure its runtime entrypoint.",
             "EXPOSE 8000",
@@ -1919,6 +2347,7 @@ def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
         _add_import(acc, "from google.adk.apps.app import App")
         _add_import(acc, "from veadk.extensions.harness import HarnessExtension")
     if acc.managed_mcp_http_count:
+        _add_import(acc, "import json")
         _add_import(acc, "import os")
         _add_import(
             acc,
@@ -1928,16 +2357,11 @@ def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
         acc.env.extend(
             [
                 EnvVar(
-                    "MCP_URLS",
+                    "MCP_SERVERS_JSON",
                     True,
-                    "https://example.com/mcp",
-                    "MCP upstream URLs, separated by commas",
-                ),
-                EnvVar(
-                    "MCP_API_KEY",
-                    True,
-                    "replace-with-your-mcp-api-key",
-                    "Shared MCP upstream API key",
+                    '[{"name":"example","url":"https://example.com/mcp",'
+                    '"headers":{"Authorization":"Bearer ..."}}]',
+                    "Studio-managed structured MCP upstream configuration",
                 ),
             ]
         )
@@ -1949,20 +2373,34 @@ def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
         harness_bootstrap = "harness_extension = HarnessExtension.from_env()\n"
     if acc.managed_mcp_http_count:
         managed_mcp_bootstrap = (
-            "\n_managed_mcp_urls = [\n"
-            '    value.strip() for value in os.environ.get("MCP_URLS", "").split(",")\n'
-            "    if value.strip()\n"
-            "]\n"
-            f"if len(_managed_mcp_urls) != {acc.managed_mcp_http_count}:\n"
+            "\ntry:\n"
+            "    _managed_mcp_servers = json.loads(\n"
+            '        os.environ.get("MCP_SERVERS_JSON", "")\n'
+            "    )\n"
+            "except (TypeError, ValueError) as _managed_mcp_error:\n"
+            "    raise RuntimeError(\n"
+            '        "Harness Sidecar MCP server configuration is invalid"\n'
+            "    ) from _managed_mcp_error\n"
+            "if (\n"
+            "    not isinstance(_managed_mcp_servers, list)\n"
+            f"    or len(_managed_mcp_servers) != {acc.managed_mcp_http_count}\n"
+            "):\n"
             '    raise RuntimeError("Harness Sidecar MCP gateway endpoint count does not match configured HTTP MCP tools")\n'
-            '_managed_mcp_api_key = os.environ.get("MCP_API_KEY", "").strip()\n'
-            "if not _managed_mcp_api_key:\n"
-            '    raise RuntimeError("Harness Sidecar MCP gateway API key is missing")\n'
             "\n"
             "def _managed_mcp_connection(index: int):\n"
+            "    server = _managed_mcp_servers[index]\n"
+            "    if not isinstance(server, dict):\n"
+            '        raise RuntimeError("Harness Sidecar MCP server entry is invalid")\n'
+            '    url = str(server.get("url") or "").strip()\n'
+            '    headers = server.get("headers") or {}\n'
+            "    if not url or not isinstance(headers, dict) or not all(\n"
+            "        isinstance(key, str) and isinstance(value, str)\n"
+            "        for key, value in headers.items()\n"
+            "    ):\n"
+            '        raise RuntimeError("Harness Sidecar MCP server entry is invalid")\n'
             "    return StreamableHTTPConnectionParams(\n"
-            "        url=_managed_mcp_urls[index],\n"
-            '        headers={"Authorization": f"Bearer {_managed_mcp_api_key}"},\n'
+            "        url=url,\n"
+            "        headers=headers,\n"
             "        timeout=30.0,\n"
             "        sse_read_timeout=300.0,\n"
             "        httpx_client_factory=managed_mcp_http_client_factory,\n"
@@ -2021,10 +2459,22 @@ def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
         ),
         GeneratedFile(
             path="requirements.txt",
-            content=render_requirements(acc.extras, feishu_channel_enabled),
+            content=render_requirements(
+                acc.extras,
+                feishu_channel_enabled,
+                dynamic_agent_delegation=draft.dynamicAgentDelegation,
+            ),
         ),
         GeneratedFile(path="README.md", content=render_readme(pkg, draft)),
     ]
+    if draft.dynamicAgentDelegation:
+        files.insert(
+            4,
+            GeneratedFile(
+                path=f"agents/{pkg}/quick_mode_compat.py",
+                content=_render_quick_mode_compat_py(),
+            ),
+        )
     dockerfile = render_cloud_environment_dockerfile(draft)
     if dockerfile is not None:
         files.append(GeneratedFile(path="Dockerfile", content=dockerfile))

@@ -35,8 +35,11 @@ import {
   getRuntimeStudioToolCapabilities,
   getRuntimes,
   listApps,
+  listEnvironments,
+  listWorkspaces,
   listModelOptions,
   listSessions,
+  prepareSessionEnvironmentMounts,
   RUN_SSE_INCOMPLETE_RESPONSE_ERROR,
   runSSE,
   refreshAgentFeedbackCases,
@@ -58,10 +61,14 @@ import {
   type MessageFeedbackRating,
   type SiteBranding,
   type RuntimeStudioToolCapabilities,
+  type SessionEnvironmentMountSelection,
   type StudioAccess,
+  type StudioEnvironment,
+  type StudioWorkspace,
   type UiConfig,
   type UiFeatures,
 } from "./adk/client";
+import type { RuntimeLogTarget } from "./adk/runtimeLogs";
 import {
   addTokenUsage,
   aggregateTokenUsage,
@@ -103,6 +110,7 @@ import { Applications, type ApplicationId } from "./ui/Applications";
 import { CronJobs } from "./cronjobs/CronJobs";
 import { getAutomation } from "./automations/registry";
 import { SystemInfo } from "./ui/SystemInfo";
+import { DeveloperResources } from "./ui/DeveloperResources";
 import { GitHubIntegration } from "./ui/GitHubIntegration";
 import { FeishuBotIntegration } from "./automations/feishu/FeishuBotIntegration";
 import { CodingAgentsIntegration } from "./automations/coding-agents/CodingAgentsIntegration";
@@ -130,26 +138,31 @@ import { MediaGroup } from "./ui/Media";
 import { StackCards } from "./ui/AddAgentMenu";
 import {
   IntelligentCreate,
+  type IntelligentCreateBaseVersion,
   type IntelligentDevelopmentCapabilities,
   type IntelligentPreparationStage,
 } from "./create/IntelligentCreate";
 import { IntelligentDeployment } from "./create/IntelligentDeployment";
 import { CustomCreate } from "./create/CustomCreate";
+import { AgentCreationModePicker } from "./create/AgentCreationModePicker";
 import { CodePackageCreate } from "./create/CodePackageCreate";
 import { MigrationWorkspace } from "./migrations/MigrationWorkspace";
 import type { AgentDraft } from "./create/types";
+import { configuredMcpEnvKeys } from "./create/mcpAuth";
 import {
   hydrateRuntimeModelSelection,
   isRuntimeModelSelectionEnv,
 } from "./create/modelSource";
 import {
   classifyRuntimeModelSources,
+  hydrateA2aRegistryFromRuntime,
   modelConfigurationFromRuntime,
   modelNameFromRuntime,
   runtimeAgentDraftFromCloud,
 } from "./create/runtimeModelName";
 import {
   loadWorkspaceDrafts,
+  workspaceAgentCreationMode,
   workspaceDraftsKey,
   writeWorkspaceDrafts,
   type WorkspaceAgentDraft,
@@ -168,8 +181,10 @@ import {
   NEW_CHAT_TASK_TOOLS,
 } from "./ui/new-chat-modes/taskTools";
 import {
+  intelligentDevelopmentErrorMessage,
   intelligentDevelopmentClient,
   sandboxClient,
+  SandboxServiceError,
   type SandboxApproval,
   type SandboxApprovalDecision,
   type SandboxAgentResource,
@@ -185,6 +200,9 @@ import {
 import {
   downloadIntelligentDevelopmentRelease,
   fetchIntelligentDevelopmentRelease,
+  fetchIntelligentDevelopmentProjectRelease,
+  fetchIntelligentDevelopmentVersions,
+  fetchIntelligentDevelopmentVersionSource,
 } from "./adk/intelligentDevelopment";
 import {
   getSandboxAgentCapability,
@@ -211,6 +229,7 @@ import {
   type VideoTaskEvent,
 } from "./ui/new-chat-modes/video-task";
 import { NewChatVideoTaskDialog } from "./ui/new-chat-modes/NewChatVideoTaskDialog";
+import { AgentKitCliDialog } from "./ui/AgentKitCliDialog";
 import {
   SandboxLaunchDialog,
   type SandboxLaunchState,
@@ -359,8 +378,13 @@ type StudioPageId =
   | "agent-detail"
   | "sandbox-agent-detail"
   | "sandbox-agent-workspace"
+  | "developer-resources"
   | "feedback";
-type StudioStackPage = "system-info" | "agent-detail" | "sandbox-agent-detail";
+type StudioStackPage =
+  | "system-info"
+  | "agent-detail"
+  | "sandbox-agent-detail"
+  | "developer-resources";
 
 interface StudioPageStackEntry {
   page: StudioStackPage;
@@ -375,6 +399,87 @@ const AUTO_EVALUATION_RETRY_POLL_MS = 5_000;
 const AUTO_EVALUATION_MIN_PENDING_POLL_MS = 500;
 const EMPTY_STRING_SET: Set<string> = new Set<string>();
 const EMPTY_STRING_ARR: string[] = [];
+const ENVIRONMENT_STUDIO_TOOL_IDS = [
+  "list_envs",
+  "get_env_manifest",
+  "execute_in_sandbox",
+  "delegate_to_codex_sandbox",
+] as const;
+const SESSION_ENVIRONMENT_STORAGE_KEY = "veadk.sessionEnvironmentMounts.v1";
+
+interface StoredSessionEnvironmentState {
+  mounts: Record<string, SessionEnvironmentMountSelection[]>;
+  workspaceIds: Record<string, string[]>;
+}
+
+function emptyStoredSessionEnvironmentState(): StoredSessionEnvironmentState {
+  return { mounts: {}, workspaceIds: {} };
+}
+
+function loadStoredSessionEnvironmentState(): StoredSessionEnvironmentState {
+  if (typeof localStorage === "undefined") {
+    return emptyStoredSessionEnvironmentState();
+  }
+  try {
+    const raw = JSON.parse(
+      localStorage.getItem(SESSION_ENVIRONMENT_STORAGE_KEY) ?? "{}",
+    ) as Record<string, unknown>;
+    const readRecord = <T,>(
+      value: unknown,
+      readItems: (value: unknown) => T[],
+    ): Record<string, T[]> => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+      return Object.fromEntries(
+        Object.entries(value)
+          .slice(-200)
+          .map(([key, items]) => [key, readItems(items)]),
+      );
+    };
+    const mounts = readRecord(raw.mounts, (value) => {
+      if (!Array.isArray(value)) return [];
+      return value.slice(0, 20).flatMap((item) => {
+        if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+        const candidate = item as Record<string, unknown>;
+        if (
+          typeof candidate.environment_id !== "string" ||
+          typeof candidate.environment_version_id !== "string" ||
+          (candidate.mount_instance_id !== undefined &&
+            typeof candidate.mount_instance_id !== "string")
+        ) return [];
+        return [{
+          environment_id: candidate.environment_id,
+          environment_version_id: candidate.environment_version_id,
+          ...(candidate.mount_instance_id
+            ? { mount_instance_id: candidate.mount_instance_id }
+            : {}),
+        }];
+      });
+    });
+    const workspaceIds = readRecord(raw.workspaceIds, (value) =>
+      Array.isArray(value)
+        ? value.filter((item): item is string => typeof item === "string").slice(0, 20)
+        : [],
+    );
+    return { mounts, workspaceIds };
+  } catch {
+    return emptyStoredSessionEnvironmentState();
+  }
+}
+
+function persistSessionEnvironmentState(
+  mounts: Record<string, SessionEnvironmentMountSelection[]>,
+  workspaceIds: Record<string, string[]>,
+) {
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.setItem(
+      SESSION_ENVIRONMENT_STORAGE_KEY,
+      JSON.stringify({ mounts, workspaceIds }),
+    );
+  } catch {
+    // Storage can be unavailable in private or quota-restricted browsers.
+  }
+}
 
 function emptyInvocation(): FrontendInvocation {
   return { skills: [] };
@@ -455,6 +560,10 @@ function findAgentNode(node: AgentNode, name: string): AgentNode | undefined {
     if (found) return found;
   }
   return undefined;
+}
+
+function displayAgentName(name: string): string {
+  return name.replace(/__[0-9a-f]{10}(?:__.*)?$/i, "");
 }
 
 function mentionableDescendants(node: AgentNode): AgentTarget[] {
@@ -806,8 +915,8 @@ function ShareMessageButton({
     <button
       type="button"
       className="icon-btn"
-      aria-label="分享为图片"
-      title="分享为图片"
+      aria-label="导出会话"
+      title="导出会话"
       onClick={onClick}
     >
       <Share className="icon" aria-hidden="true" />
@@ -1026,6 +1135,17 @@ export default function App() {
   const [sandboxLaunchError, setSandboxLaunchError] = useState("");
   const [sandboxLaunchKind, setSandboxLaunchKind] =
     useState<"codex" | SandboxAgentKind>("codex");
+  const [sandboxLaunchPersistentEnabled, setSandboxLaunchPersistentEnabled] =
+    useState(true);
+  const [sandboxLaunchPersistentReason, setSandboxLaunchPersistentReason] =
+    useState("");
+  const [sandboxLaunchPersistentRequired, setSandboxLaunchPersistentRequired] =
+    useState(false);
+  const [sandboxLaunchStorageMode, setSandboxLaunchStorageMode] =
+    useState<"snapshot" | "disk">("snapshot");
+  const [sandboxLaunchDiskGbDefault, setSandboxLaunchDiskGbDefault] = useState(10);
+  const [sandboxLaunchDiskGbMin, setSandboxLaunchDiskGbMin] = useState(5);
+  const [sandboxLaunchDiskGbMax, setSandboxLaunchDiskGbMax] = useState(100);
   const [sandboxLaunchFromAgents, setSandboxLaunchFromAgents] = useState(false);
   const [sandboxProjectUploadOpen, setSandboxProjectUploadOpen] = useState(false);
   const [sandboxAgentRefreshKey, setSandboxAgentRefreshKey] = useState(0);
@@ -1037,11 +1157,11 @@ export default function App() {
   const [sandboxThreadDeleteTarget, setSandboxThreadDeleteTarget] =
     useState<SandboxThreadSummary | null>(null);
   const sandboxLaunchAbortRef = useRef<AbortController | null>(null);
+  const sandboxLaunchCapabilityAbortRef = useRef<AbortController | null>(null);
   const intelligentCreateAbortRef = useRef<AbortController | null>(null);
   const sandboxMessageAbortRef = useRef<AbortController | null>(null);
   const pendingIntelligentNavigationRef = useRef<(() => void) | null>(null);
   const [intelligentLeaveOpen, setIntelligentLeaveOpen] = useState(false);
-  const [intelligentLeaveBusy, setIntelligentLeaveBusy] = useState(false);
   const sandboxStopWaitRef = useRef<{
     controller: AbortController;
     promise: Promise<boolean>;
@@ -1052,6 +1172,9 @@ export default function App() {
   const sandboxEndpointCopyTimerRef = useRef<number | undefined>(undefined);
   const sandboxPreviewUrlsRef = useRef<Set<string>>(new Set());
   sandboxSessionIdRef.current = sandboxSession?.id ?? "";
+  useEffect(() => () => {
+    sandboxLaunchCapabilityAbortRef.current?.abort();
+  }, []);
   useEffect(() => () => {
     if (sandboxEndpointCopyTimerRef.current !== undefined) {
       window.clearTimeout(sandboxEndpointCopyTimerRef.current);
@@ -1180,6 +1303,9 @@ export default function App() {
     useState("");
   const [intelligentPreparationStage, setIntelligentPreparationStage] =
     useState<IntelligentPreparationStage | null>(null);
+  const [migrationProjectReturn, setMigrationProjectReturn] = useState<{
+    projectId: string;
+  }>();
   const [intelligentDeployment, setIntelligentDeploymentState] =
     useState<IntelligentDevelopmentReleaseRef | null>(null);
   const setIntelligentDeployment = useCallback(
@@ -1195,6 +1321,13 @@ export default function App() {
           "validationReportSha256",
           delivery.validationReportSha256,
         );
+        if (delivery.projectId && delivery.versionId) {
+          url.searchParams.set("projectId", delivery.projectId);
+          url.searchParams.set("versionId", delivery.versionId);
+        } else {
+          url.searchParams.delete("projectId");
+          url.searchParams.delete("versionId");
+        }
       } else {
         for (const key of [
           "view",
@@ -1202,6 +1335,8 @@ export default function App() {
           "sessionId",
           "artifactSha256",
           "validationReportSha256",
+          "projectId",
+          "versionId",
         ]) url.searchParams.delete(key);
       }
       window.history.replaceState(null, "", url);
@@ -1209,12 +1344,42 @@ export default function App() {
     [],
   );
   const resolveIntelligentDelivery = useCallback(
-    (delivery: IntelligentDevelopmentReleaseRef) =>
-      fetchIntelligentDevelopmentRelease(
-        delivery.sessionId,
-        delivery.artifactSha256,
-        delivery.validationReportSha256,
-      ),
+    (delivery: IntelligentDevelopmentReleaseRef) => delivery.projectId && delivery.versionId
+      ? fetchIntelligentDevelopmentProjectRelease(
+          delivery.projectId,
+          delivery.versionId,
+          delivery.sessionId,
+          delivery.artifactSha256,
+          delivery.validationReportSha256,
+        )
+      : fetchIntelligentDevelopmentRelease(
+          delivery.sessionId,
+          delivery.artifactSha256,
+          delivery.validationReportSha256,
+        ),
+    [],
+  );
+  const resolveIntelligentDeliveryComparison = useCallback(
+    async (delivery: IntelligentDevelopmentReleaseRef) => {
+      if (!delivery.projectId || !delivery.versionId || !delivery.parentVersionId) {
+        throw new Error("当前版本没有可对比的优化前版本。");
+      }
+      const versions = await fetchIntelligentDevelopmentVersions(delivery.projectId);
+      const targetVersion = versions.find(
+        (version) => version.versionId === delivery.versionId,
+      );
+      const baseVersion = versions.find(
+        (version) => version.versionId === delivery.parentVersionId,
+      );
+      if (!targetVersion || !baseVersion) {
+        throw new Error("无法找到本次优化对应的项目版本，可能已被删除。");
+      }
+      const [base, target] = await Promise.all([
+        fetchIntelligentDevelopmentVersionSource(baseVersion),
+        fetchIntelligentDevelopmentVersionSource(targetVersion),
+      ]);
+      return { base, target };
+    },
     [],
   );
   const downloadIntelligentDelivery = useCallback(
@@ -1256,6 +1421,7 @@ export default function App() {
   );
   const [videoTask, setVideoTask] = useState<VideoGenerationTask | null>(null);
   const [videoTaskDialogOpen, setVideoTaskDialogOpen] = useState(false);
+  const [agentKitCliOpen, setAgentKitCliOpen] = useState(false);
   const videoTaskRef = useRef<VideoGenerationTask | null>(null);
   const videoTaskAbortRef = useRef<AbortController | null>(null);
   const [newChatCapabilities, setNewChatCapabilities] =
@@ -1280,6 +1446,32 @@ export default function App() {
   const [draftStudioToolIds, setDraftStudioToolIds] = useState<string[]>([]);
   const [studioToolIdsBySession, setStudioToolIdsBySession] = useState<
     Record<string, string[]>
+  >({});
+  const [sessionEnvironments, setSessionEnvironments] = useState<StudioEnvironment[]>([]);
+  const [sessionWorkspaces, setSessionWorkspaces] = useState<StudioWorkspace[]>([]);
+  const [sessionEnvironmentsLoading, setSessionEnvironmentsLoading] = useState(false);
+  const [sessionEnvironmentsError, setSessionEnvironmentsError] = useState("");
+  const sessionEnvironmentLoadAbortRef = useRef<AbortController | null>(null);
+  const storedSessionEnvironmentState = useRef<StoredSessionEnvironmentState | null>(
+    null,
+  );
+  if (storedSessionEnvironmentState.current === null) {
+    storedSessionEnvironmentState.current = loadStoredSessionEnvironmentState();
+  }
+  const [environmentMountsBySession, setEnvironmentMountsBySession] = useState<
+    Record<string, SessionEnvironmentMountSelection[]>
+  >(() => storedSessionEnvironmentState.current?.mounts ?? {});
+  const [environmentWorkspaceIdsBySession, setEnvironmentWorkspaceIdsBySession] = useState<
+    Record<string, string[]>
+  >(() => storedSessionEnvironmentState.current?.workspaceIds ?? {});
+  useEffect(() => {
+    persistSessionEnvironmentState(
+      environmentMountsBySession,
+      environmentWorkspaceIdsBySession,
+    );
+  }, [environmentMountsBySession, environmentWorkspaceIdsBySession]);
+  const [runtimeLogTargetsBySession, setRuntimeLogTargetsBySession] = useState<
+    Record<string, RuntimeLogTarget>
   >({});
   const [agentInfo, setAgentInfo] = useState<AgentInfo | null>(null);
   const [agentInfoRefreshKey, setAgentInfoRefreshKey] = useState(0);
@@ -1702,12 +1894,15 @@ export default function App() {
 
     const syncBackgroundTurn = async () => {
       try {
-        const status = await sandboxClient.getStatus(activeSession.id, {
+        const backgroundClient = activeSession.intelligentDevelopment
+          ? intelligentDevelopmentClient
+          : sandboxClient;
+        const status = await backgroundClient.getStatus(activeSession.id, {
           signal: controller.signal,
         });
         if (stopped || sandboxSessionIdRef.current !== activeSession.id) return;
         const snapshot = status.threadId
-          ? await sandboxClient.readThread(activeSession.id, status.threadId, {
+          ? await backgroundClient.readThread(activeSession.id, status.threadId, {
               signal: controller.signal,
             })
           : null;
@@ -1742,6 +1937,11 @@ export default function App() {
         }
       } catch (cause) {
         if ((cause as Error)?.name === "AbortError" || stopped) return;
+        if (activeSession.intelligentDevelopment) {
+          setError(intelligentDevelopmentErrorMessage(cause));
+          timer = window.setTimeout(syncBackgroundTurn, 1500);
+          return;
+        }
         setSandboxBusy(false);
         setSandboxSession((current) =>
           current?.id === activeSession.id ? { ...current, busy: false } : current
@@ -1904,6 +2104,10 @@ export default function App() {
   const [addAgent, setAddAgent] = useState(false);
   // The "添加 Agent" chooser (two cards: AgentKit / 从 0 快速创建).
   const [addMenu, setAddMenu] = useState(false);
+  const [addMenuSurface, setAddMenuSurface] =
+    useState<"entry" | "traditional">("entry");
+  const [customCreationSurface, setCustomCreationSurface] =
+    useState<"vulcan" | "traditional">("traditional");
   // A draft imported from YAML, used to pre-fill the custom wizard once.
   const [importedDraft, setImportedDraft] = useState<AgentDraft | null>(null);
   const [customCreateMode, setCustomCreateMode] =
@@ -1935,6 +2139,7 @@ export default function App() {
   const activeStackEntry = pageStack[pageStack.length - 1];
   const activeStackPage = activeStackEntry?.page;
   const systemInfo = activeStackPage === "system-info";
+  const developerResourcesView = activeStackPage === "developer-resources";
   const pushStudioPage = useCallback((entry: StudioPageStackEntry) => {
     setPageStack((current) =>
       current[current.length - 1]?.page === entry.page
@@ -1980,6 +2185,10 @@ export default function App() {
     region: string;
     appName?: string;
     currentVersion?: number | null;
+    etag?: string;
+    editMode?: "source-preserving" | "regenerate";
+    configuredMcpEnvKeys?: string[];
+    configuredRuntimeEnvKeys?: string[];
   } | null>(null);
   const [newRuntimeRegion, setNewRuntimeRegion] = useState<string>(
     defaultCloudRegion(cloudProvider),
@@ -2045,6 +2254,7 @@ export default function App() {
       id: string,
       draft: AgentDraft,
       deploymentTarget?: WorkspaceAgentDraft["deploymentTarget"],
+      creationMode?: WorkspaceAgentDraft["creationMode"],
     ) => {
       if (!id || !userId) return;
       if (
@@ -2058,6 +2268,7 @@ export default function App() {
         draft,
         updatedAt: Date.now(),
         deploymentTarget,
+        creationMode,
       };
       if (workspaceDraftTimerRef.current !== null) {
         window.clearTimeout(workspaceDraftTimerRef.current);
@@ -2152,6 +2363,11 @@ export default function App() {
     if (createView === "custom" && activeDraft) {
       setEditingDraftId(activeDraft.id);
       setImportedDraft(activeDraft.draft);
+      setCustomCreationSurface(
+        workspaceAgentCreationMode(activeDraft) === "quick"
+          ? "vulcan"
+          : "traditional",
+      );
       setRuntimeUpdateTarget(activeDraft.deploymentTarget ?? null);
     }
     // Restore only when identity changes; later edits are already in state.
@@ -2695,14 +2911,26 @@ export default function App() {
     const sessionId = query.get("sessionId") ?? "";
     const artifactSha256 = query.get("artifactSha256") ?? "";
     const validationReportSha256 = query.get("validationReportSha256") ?? "";
+    const projectId = query.get("projectId") ?? "";
+    const versionId = query.get("versionId") ?? "";
     if (!sessionId || !artifactSha256 || !validationReportSha256) return;
     const controller = new AbortController();
-    void fetchIntelligentDevelopmentRelease(
-      sessionId,
-      artifactSha256,
-      validationReportSha256,
-      controller.signal,
-    )
+    const load = projectId && versionId
+      ? fetchIntelligentDevelopmentProjectRelease(
+          projectId,
+          versionId,
+          sessionId,
+          artifactSha256,
+          validationReportSha256,
+          controller.signal,
+        )
+      : fetchIntelligentDevelopmentRelease(
+          sessionId,
+          artifactSha256,
+          validationReportSha256,
+          controller.signal,
+        );
+    void load
       .then((delivery) => {
         if (controller.signal.aborted) return;
         if (!delivery.deployable) {
@@ -2728,7 +2956,7 @@ export default function App() {
   }, [authStatus, intelligentDeployment, userId]);
 
   useEffect(() => {
-    if (!addMenu && createView !== "intelligent") return;
+    if (!addMenu && !["intelligent", "migration"].includes(createView ?? "")) return;
     if (authStatus !== "authenticated" || !userId) {
       setIntelligentCapabilities(null);
       setIntelligentCapabilitiesError("");
@@ -2748,6 +2976,8 @@ export default function App() {
           enabled?: unknown;
           reason?: unknown;
           model?: unknown;
+          projectStorageEnabled?: unknown;
+          projectStorageReason?: unknown;
         }>;
       })
       .then((value) => {
@@ -2755,6 +2985,10 @@ export default function App() {
         const capability: IntelligentDevelopmentCapabilities = {
           enabled: value.enabled === true,
           reason: typeof value.reason === "string" ? value.reason : "",
+          projectStorageEnabled: value.projectStorageEnabled === true,
+          projectStorageReason: typeof value.projectStorageReason === "string"
+            ? value.projectStorageReason
+            : "",
         };
         if (value.model !== undefined) {
           if (typeof value.model !== "object" || value.model === null) {
@@ -3396,11 +3630,42 @@ export default function App() {
     setSandboxLaunchError("");
     setSandboxLaunchState("confirm");
     setSandboxLaunchKind(kind);
+    setSandboxLaunchPersistentEnabled(false);
+    setSandboxLaunchPersistentReason("正在检查持久化能力…");
+    setSandboxLaunchPersistentRequired(false);
+    setSandboxLaunchStorageMode("snapshot");
+    setSandboxLaunchDiskGbDefault(10);
+    setSandboxLaunchDiskGbMin(5);
+    setSandboxLaunchDiskGbMax(100);
+    sandboxLaunchCapabilityAbortRef.current?.abort();
+    const controller = new AbortController();
+    sandboxLaunchCapabilityAbortRef.current = controller;
+    const capabilityRequest = kind === "codex"
+      ? getSandboxCapability(controller.signal)
+      : getSandboxAgentCapability(kind, controller.signal);
+    void capabilityRequest
+      .then((capability) => {
+        if (controller.signal.aborted) return;
+        setSandboxLaunchPersistentEnabled(capability.persistentEnabled === true);
+        setSandboxLaunchPersistentReason(capability.persistentReason ?? "");
+        setSandboxLaunchPersistentRequired(capability.persistentRequired === true);
+        setSandboxLaunchStorageMode(capability.storageMode ?? "snapshot");
+        setSandboxLaunchDiskGbDefault(capability.diskGbDefault ?? 10);
+        setSandboxLaunchDiskGbMin(capability.diskGbMin ?? 5);
+        setSandboxLaunchDiskGbMax(capability.diskGbMax ?? 100);
+      })
+      .catch((cause) => {
+        if ((cause as Error)?.name === "AbortError") return;
+        setSandboxLaunchPersistentEnabled(false);
+        setSandboxLaunchPersistentReason("暂时无法确认持久化能力");
+      });
     setSandboxLaunchFromAgents(fromAgents);
     setSandboxLaunchOpen(true);
   }
 
   function cancelSandboxLaunch() {
+    sandboxLaunchCapabilityAbortRef.current?.abort();
+    sandboxLaunchCapabilityAbortRef.current = null;
     sandboxLaunchAbortRef.current?.abort();
     sandboxLaunchAbortRef.current = null;
     setSandboxLaunchOpen(false);
@@ -3415,7 +3680,11 @@ export default function App() {
     }
   }
 
-  async function launchSandboxSession(displayName: string, persistent: boolean) {
+  async function launchSandboxSession(
+    displayName: string,
+    persistent: boolean,
+    diskGb?: number,
+  ) {
     sandboxLaunchAbortRef.current?.abort();
     const controller = new AbortController();
     sandboxLaunchAbortRef.current = controller;
@@ -3430,11 +3699,13 @@ export default function App() {
         ? await sandboxClient.startSession({
             displayName,
             persistent,
+            diskGb,
             signal: controller.signal,
           })
         : await sandboxClient.startAgentSession(sandboxLaunchKind, {
             displayName,
             persistent,
+            diskGb,
             signal: controller.signal,
           });
       if (sandboxLaunchAbortRef.current !== controller) {
@@ -3542,6 +3813,7 @@ export default function App() {
     setSandboxTurns(restoredTurns);
     sandboxSessionIdRef.current = connected.id;
     setSandboxSession(connected);
+    setSandboxBusy(connected.busy);
     setCreateView(null);
     setSkillCenter(false);
     setAddAgent(false);
@@ -4092,7 +4364,7 @@ export default function App() {
     action();
   }
 
-  async function confirmIntelligentNavigation() {
+  function confirmIntelligentNavigation() {
     const activeSession = sandboxSession;
     const action = pendingIntelligentNavigationRef.current;
     if (!activeSession?.intelligentDevelopment || !action) {
@@ -4100,19 +4372,19 @@ export default function App() {
       pendingIntelligentNavigationRef.current = null;
       return;
     }
-    setIntelligentLeaveBusy(true);
     setError("");
-    try {
-      await intelligentDevelopmentClient.interruptSession(activeSession.id);
-      sandboxMessageAbortRef.current?.abort();
-      pendingIntelligentNavigationRef.current = null;
-      setIntelligentLeaveOpen(false);
-      action();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setIntelligentLeaveBusy(false);
-    }
+    const interrupt = intelligentDevelopmentClient.interruptSession(activeSession.id);
+    sandboxMessageAbortRef.current?.abort();
+    pendingIntelligentNavigationRef.current = null;
+    setIntelligentLeaveOpen(false);
+    action();
+    void interrupt.catch(() => {
+      if (!sandboxSessionIdRef.current) {
+        setError(
+          "已离开开发环境，但未能确认本轮构建已停止。任务可能仍在运行，请稍后从历史会话检查状态。",
+        );
+      }
+    });
   }
 
   async function sendSandboxMessage(
@@ -4207,6 +4479,7 @@ export default function App() {
     const activeClient = activeSession.intelligentDevelopment
       ? intelligentDevelopmentClient
       : sandboxClient;
+    let remainingBusy = false;
     try {
       const reply = await activeClient.sendMessage(
         {
@@ -4333,22 +4606,32 @@ export default function App() {
       setInput(text);
       setAttachments(messageAttachments);
       sandboxCommands.setSelectedSkills(selectedSkills);
-      setError(
-        `内置智能体发送失败：${
-          messageError instanceof Error
-            ? messageError.message
-            : String(messageError)
-          }`,
-      );
+      const taskStillRunning =
+        activeSession.intelligentDevelopment &&
+        messageError instanceof SandboxServiceError &&
+        messageError.code === "INTELLIGENT_DEVELOPMENT_TASK_IN_PROGRESS";
+      remainingBusy = activeSession.intelligentDevelopment;
       try {
-        const settings = await activeClient.getSettings(activeSession.id);
+        const status = await activeClient.getStatus(activeSession.id);
+        remainingBusy = status.busy;
         setSandboxSession((current) =>
           current?.id === activeSession.id
-            ? { ...current, ...settings }
+            ? { ...current, ...status }
             : current,
         );
       } catch {
         // Keep the optimistic lock when the connection itself is unavailable.
+      }
+      if (!taskStillRunning) {
+        setError(
+          activeSession.intelligentDevelopment
+            ? intelligentDevelopmentErrorMessage(messageError)
+            : `内置智能体发送失败：${
+                messageError instanceof Error
+                  ? messageError.message
+                  : String(messageError)
+              }`,
+        );
       }
     } finally {
       if (sandboxMessageAbortRef.current === controller) {
@@ -4370,13 +4653,22 @@ export default function App() {
         if (sandboxActiveAssistantTurnIdRef.current === assistantTurnId) {
           sandboxActiveAssistantTurnIdRef.current = "";
         }
-        setSandboxBusy(false);
         setSandboxApproval(null);
-        setSandboxSession((current) =>
-          current?.id === activeSession.id
-            ? { ...current, busy: false }
-            : current,
-        );
+        if (activeSession.intelligentDevelopment) {
+          setSandboxBusy(remainingBusy);
+          setSandboxSession((current) =>
+            current?.id === activeSession.id
+              ? { ...current, busy: remainingBusy }
+              : current,
+          );
+        } else {
+          setSandboxBusy(false);
+          setSandboxSession((current) =>
+            current?.id === activeSession.id
+              ? { ...current, busy: false }
+              : current,
+          );
+        }
       }
     }
   }
@@ -4419,6 +4711,17 @@ export default function App() {
     if (abandonedSession) void abandonDraftSession(abandonedSession);
   }
 
+  function returnToIntelligentCreate() {
+    startNewChat();
+    setIntelligentDeployment(null);
+    setAddMenu(false);
+    if (migrationProjectReturn) {
+      setCreateView("migration");
+      return;
+    }
+    setCreateView("intelligent");
+  }
+
   function clearSelectedAgentAfterRemoval() {
     agentSelectionClearedRef.current = true;
     localStorage.removeItem(LS.app);
@@ -4457,6 +4760,62 @@ export default function App() {
     intelligentCreateAbortRef.current?.abort();
     intelligentCreateAbortRef.current = null;
     setIntelligentPreparationStage(null);
+  }
+
+  async function startIntelligentDevelopment(
+    goal: string,
+    modelId: string,
+    baseVersion?: IntelligentCreateBaseVersion,
+    returnTarget?: { projectId: string },
+  ) {
+    if (intelligentPreparationStage) return;
+    intelligentCreateAbortRef.current?.abort();
+    const controller = new AbortController();
+    intelligentCreateAbortRef.current = controller;
+    setIntelligentPreparationStage("preparing");
+    setIntelligentCapabilitiesError("");
+    try {
+      const created = await intelligentDevelopmentClient.startSession({
+        displayName: baseVersion?.projectName ?? goal.slice(0, 40),
+        modelId,
+        ...(baseVersion
+          ? {
+              projectId: baseVersion.projectId,
+              baseVersionId: baseVersion.versionId,
+            }
+          : {}),
+        signal: controller.signal,
+      });
+      if (
+        controller.signal.aborted ||
+        intelligentCreateAbortRef.current !== controller
+      ) return;
+      setIntelligentPreparationStage("starting");
+      const connected = await intelligentDevelopmentClient.connectSession(
+        created.id,
+        { signal: controller.signal },
+      );
+      if (
+        controller.signal.aborted ||
+        intelligentCreateAbortRef.current !== controller
+      ) return;
+      if (returnTarget) setMigrationProjectReturn(returnTarget);
+      activateIntelligentDevelopmentSession(connected, []);
+      intelligentCreateAbortRef.current = null;
+      setIntelligentPreparationStage(null);
+      await sendSandboxMessage(goal, [], [], connected);
+    } catch (cause) {
+      if ((cause as Error)?.name !== "AbortError") {
+        setIntelligentCapabilitiesError(
+          cause instanceof Error ? cause.message : "智能开发会话创建失败",
+        );
+      }
+    } finally {
+      if (intelligentCreateAbortRef.current === controller) {
+        intelligentCreateAbortRef.current = null;
+        setIntelligentPreparationStage(null);
+      }
+    }
   }
 
   async function removeSession(id: string) {
@@ -4717,6 +5076,14 @@ export default function App() {
     setError("");
     const createsSession = !sessionId;
     let platformTools = [...(selectedPlatformTools ?? selectedStudioToolIds)];
+    const environmentMounts = createsSession
+      ? []
+      : environmentMountsBySession[
+          studioToolSelectionKey(appName, userId, sessionId)
+        ] ?? [];
+    if (environmentMounts.length > 0 && studioToolRuntime) {
+      platformTools = [...new Set([...platformTools, ...ENVIRONMENT_STUDIO_TOOL_IDS])];
+    }
     const sessionState = createsSession ? "new" : "existing";
     const trackRuntimeMessage = Boolean(currentRuntime);
     const messageOperation = currentRuntime
@@ -4781,7 +5148,7 @@ export default function App() {
       const agentTools = new Set(agentInfo?.tools ?? []);
       const availableTools = new Set([
         ...agentTools,
-        ...(currentRuntime ? availableStudioToolIds : []),
+        ...(studioToolRuntime ? availableStudioToolIds : []),
       ]);
       const missingTools = requiredTools.filter((tool) => !availableTools.has(tool));
       if (missingTools.length > 0) {
@@ -4803,7 +5170,7 @@ export default function App() {
         setError(`当前 Agent 缺少任务工具：${missingTools.join("、")}`);
         return;
       }
-      if (currentRuntime) {
+      if (studioToolRuntime) {
         const optionalTools = NEW_CHAT_TASK_OPTIONAL_TOOLS[selectedTask].filter(
           (toolName) => availableStudioToolIds.has(toolName) && !agentTools.has(toolName),
         );
@@ -4819,7 +5186,7 @@ export default function App() {
       createsSession ? optimisticTurns : [...current, ...optimisticTurns],
     );
     if (createsSession) {
-      if (currentRuntime) {
+      if (studioToolRuntime) {
         const key = studioToolSelectionKey(appName, userId, sid);
         setStudioToolIdsBySession((current) => ({
           ...current,
@@ -4860,8 +5227,17 @@ export default function App() {
         text,
         attachments: atts,
         invocation: selectedInvocation,
-        platformTools: currentRuntime ? platformTools : undefined,
+        platformTools: studioToolRuntime ? platformTools : undefined,
+        environmentMounts: studioToolRuntime && environmentMounts.length > 0
+          ? environmentMounts
+          : undefined,
         signal: ctrl.signal,
+        onRuntimeContext: (context) => {
+          setRuntimeLogTargetsBySession((current) => ({
+            ...current,
+            [`${appName}\n${sid}`]: context,
+          }));
+        },
       })) {
         if (ctrl.signal.aborted) break;
         const errMsg = event.error ?? event.errorMessage ?? event.error_message;
@@ -5033,6 +5409,12 @@ export default function App() {
     setStreaming(sid, true);
     startStreamPresentation(sid);
     let streamFailed = false;
+    const environmentMounts = environmentMountsBySession[
+      studioToolSelectionKey(appName, userId, sid)
+    ] ?? [];
+    const resumedPlatformTools = environmentMounts.length > 0
+      ? [...new Set([...selectedStudioToolIds, ...ENVIRONMENT_STUDIO_TOOL_IDS])]
+      : selectedStudioToolIds;
     try {
       let acc = emptyAcc();
       let currentStreamAuthor = lastTurn?.meta?.author ?? "";
@@ -5050,8 +5432,17 @@ export default function App() {
         functionResponses: [
           { id: block.callId, name: "adk_request_credential", response },
         ],
-        platformTools: currentRuntime ? selectedStudioToolIds : undefined,
+        platformTools: studioToolRuntime ? resumedPlatformTools : undefined,
+        environmentMounts: studioToolRuntime && environmentMounts.length > 0
+          ? environmentMounts
+          : undefined,
         signal: ctrl.signal,
+        onRuntimeContext: (context) => {
+          setRuntimeLogTargetsBySession((current) => ({
+            ...current,
+            [`${appName}\n${sid}`]: context,
+          }));
+        },
       })) {
         if (ctrl.signal.aborted) break;
         const errMsg = event.error ?? event.errorMessage ?? event.error_message;
@@ -5156,7 +5547,18 @@ export default function App() {
       : undefined;
   const selectedDraftStudioRuntime =
     draftStudioRuntime?.appName === appName ? draftStudioRuntime : undefined;
-  const studioToolRuntime = currentRuntime ?? selectedDraftStudioRuntime;
+  // Local Agents execute through this Studio process, so use the synthetic
+  // `local` runtime only for BFF capability discovery. ADK request routing is
+  // still derived from `appName` and therefore remains on the local /run_sse.
+  const studioToolRuntime = currentRuntime ?? selectedDraftStudioRuntime ?? (
+    appName
+      ? {
+          runtimeId: "local",
+          name: "Local Studio",
+          region: defaultCloudRegion(cloudProvider),
+        }
+      : undefined
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -5201,6 +5603,94 @@ export default function App() {
     studioToolRuntime?.runtimeId,
   ]);
 
+  const refreshSessionEnvironments = useCallback(async () => {
+    sessionEnvironmentLoadAbortRef.current?.abort();
+    const controller = new AbortController();
+    sessionEnvironmentLoadAbortRef.current = controller;
+    setSessionEnvironmentsLoading(true);
+    setSessionEnvironmentsError("");
+    try {
+      const [items, workspaces] = await Promise.all([
+        listEnvironments(controller.signal),
+        listWorkspaces(controller.signal),
+      ]);
+      if (controller.signal.aborted) return;
+      const availableEnvironments = items.filter((environment) =>
+        ["aio-sandbox", "codex-sandbox"].includes(environment.baseEnvironment) &&
+        environment.latestVersion?.status === "available" &&
+        environment.latestVersion.toolStatus === "ready" &&
+        Boolean(environment.latestVersion.toolId)
+      );
+      const availableMountKeys = new Set(availableEnvironments.flatMap((environment) =>
+        environment.latestVersion
+          ? [`${environment.id}\u0000${environment.latestVersion.versionId}`]
+          : []
+      ));
+      const availableWorkspaceIds = new Set(workspaces.map((workspace) => workspace.id));
+
+      // Replace the snapshot instead of merging it so deleted environments and
+      // workspaces disappear from both the picker and existing Session mounts.
+      setSessionEnvironments(availableEnvironments);
+      setSessionWorkspaces(workspaces);
+      setEnvironmentMountsBySession((current) => Object.fromEntries(
+        Object.entries(current).map(([key, selections]) => [
+          key,
+          selections.filter((selection) => availableMountKeys.has(
+            `${selection.environment_id}\u0000${selection.environment_version_id}`,
+          )),
+        ]),
+      ));
+      setEnvironmentWorkspaceIdsBySession((current) => Object.fromEntries(
+        Object.entries(current).map(([key, workspaceIds]) => [
+          key,
+          workspaceIds.filter((workspaceId) => availableWorkspaceIds.has(workspaceId)),
+        ]),
+      ));
+    } catch (cause) {
+      if (controller.signal.aborted) return;
+      setSessionEnvironmentsError(
+        cause instanceof Error ? cause.message : "读取环境失败",
+      );
+    } finally {
+      if (sessionEnvironmentLoadAbortRef.current === controller) {
+        sessionEnvironmentLoadAbortRef.current = null;
+        setSessionEnvironmentsLoading(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (
+      authStatus !== "authenticated" ||
+      !access ||
+      myAgents ||
+      agentDetailTarget ||
+      !studioToolRuntime
+    ) {
+      sessionEnvironmentLoadAbortRef.current?.abort();
+      sessionEnvironmentLoadAbortRef.current = null;
+      setSessionEnvironments([]);
+      setSessionWorkspaces([]);
+      setSessionEnvironmentsError("");
+      setSessionEnvironmentsLoading(false);
+      return;
+    }
+    void refreshSessionEnvironments();
+    return () => {
+      sessionEnvironmentLoadAbortRef.current?.abort();
+      sessionEnvironmentLoadAbortRef.current = null;
+    };
+  }, [
+    access,
+    agentDetailTarget,
+    authStatus,
+    environmentView,
+    myAgents,
+    refreshSessionEnvironments,
+    studioToolRuntime?.region,
+    studioToolRuntime?.runtimeId,
+  ]);
+
   if (authError) {
     return (
       <div className="boot boot-error">
@@ -5227,12 +5717,13 @@ export default function App() {
     return <div className="boot" />;
   }
 
-  const canCreateAgents = access.capabilities.createAgents;
+  const canCreateRuntimeAgents = access.capabilities.createAgents;
+  const canCreatePersonalAgents = access.capabilities.createPersonalAgents;
   const canManageAgents = access.capabilities.manageAgents;
   const canViewAgentUsage = features.agentUsage && canManageAgents;
-  const visibleCreateView = canCreateAgents ? createView : null;
-  const showAddMenu = canCreateAgents && addMenu;
-  const showAddAgent = canCreateAgents && addAgent;
+  const visibleCreateView = canCreateRuntimeAgents ? createView : null;
+  const showAddMenu = canCreateRuntimeAgents && addMenu;
+  const showAddAgent = canCreateRuntimeAgents && addAgent;
   const showManageAgents = manageAgents && Boolean(
     agentDetailTarget || focusedDeploymentTaskId || focusedWorkspaceAgentId,
   );
@@ -5270,16 +5761,37 @@ export default function App() {
   const storedStudioToolIds = sessionId
     ? (studioToolIdsBySession[activeStudioToolSelectionKey] ?? [])
     : draftStudioToolIds;
+  const allStudioToolIds = new Set(
+    studioToolCapabilities?.tools.map((tool) => tool.id) ?? [],
+  );
   const availableStudioToolIds = new Set(
-    studioToolCapabilities?.tools
-      .map((tool) => tool.id)
-      .filter((toolId) => !agentInfo?.tools.includes(toolId)) ?? [],
+    [...allStudioToolIds].filter((toolId) => !agentInfo?.tools.includes(toolId)),
   );
-  const selectedStudioToolIds = storedStudioToolIds.filter((toolId) =>
-    availableStudioToolIds.has(toolId),
+  const selectedEnvironmentMounts = sessionId
+    ? environmentMountsBySession[activeStudioToolSelectionKey] ?? []
+    : [];
+  const selectedEnvironmentWorkspaceIds = sessionId
+    ? environmentWorkspaceIdsBySession[activeStudioToolSelectionKey] ?? []
+    : [];
+  const canMountSessionEnvironment = ENVIRONMENT_STUDIO_TOOL_IDS.every((toolId) =>
+    allStudioToolIds.has(toolId)
   );
+  const selectedStudioToolIds = [...new Set([
+    ...storedStudioToolIds.filter((toolId) => availableStudioToolIds.has(toolId)),
+    ...(selectedEnvironmentMounts.length > 0 && canMountSessionEnvironment
+      ? [...ENVIRONMENT_STUDIO_TOOL_IDS]
+      : []),
+  ])];
+  const visibleStudioTools = studioToolCapabilities?.tools.filter((tool) =>
+    !ENVIRONMENT_STUDIO_TOOL_IDS.includes(
+      tool.id as (typeof ENVIRONMENT_STUDIO_TOOL_IDS)[number],
+    ) || selectedEnvironmentMounts.length > 0
+  ) ?? [];
   const updateSelectedStudioToolIds = (selectedIds: string[]) => {
-    const next = [...new Set(selectedIds)].filter((toolId) =>
+    const next = [...new Set([
+      ...selectedIds,
+      ...(selectedEnvironmentMounts.length > 0 ? [...ENVIRONMENT_STUDIO_TOOL_IDS] : []),
+    ])].filter((toolId) =>
       availableStudioToolIds.has(toolId),
     );
     if (!sessionId) {
@@ -5291,6 +5803,54 @@ export default function App() {
       [activeStudioToolSelectionKey]: next,
     }));
   };
+  const updateSelectedEnvironments = async (
+    selections: SessionEnvironmentMountSelection[],
+    workspaceIds: string[] = [],
+  ): Promise<void> => {
+    if (!sessionId) throw new Error("当前会话不存在，无法挂载环境。");
+    const valid = selections.every((selection) => sessionEnvironments.some((environment) =>
+      environment.id === selection.environment_id &&
+      environment.latestVersion?.versionId === selection.environment_version_id
+    ));
+    if (!valid) throw new Error("所选环境已失效，请刷新后重新选择。");
+    if (selections.length > 0) {
+      if (!studioToolRuntime) {
+        throw new Error("当前 Agent 没有可用的 Sandbox Runtime。");
+      }
+      setSessionEnvironmentsError("");
+      try {
+        await prepareSessionEnvironmentMounts({
+          runtimeId: studioToolRuntime.runtimeId,
+          appName,
+          userId,
+          sessionId,
+          environmentMounts: selections,
+        });
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : "挂载环境失败";
+        throw new Error(message);
+      }
+    }
+    setEnvironmentMountsBySession((current) => ({
+      ...current,
+      [activeStudioToolSelectionKey]: selections,
+    }));
+    setEnvironmentWorkspaceIdsBySession((current) => ({
+      ...current,
+      [activeStudioToolSelectionKey]: workspaceIds,
+    }));
+    setStudioToolIdsBySession((current) => {
+      const selectedIds = current[activeStudioToolSelectionKey] ?? [];
+      return {
+        ...current,
+        [activeStudioToolSelectionKey]: selections.length > 0
+          ? [...new Set([...selectedIds, ...ENVIRONMENT_STUDIO_TOOL_IDS])]
+          : selectedIds.filter((toolId) => !ENVIRONMENT_STUDIO_TOOL_IDS.includes(
+              toolId as (typeof ENVIRONMENT_STUDIO_TOOL_IDS)[number],
+            )),
+      };
+    });
+  };
 
   const studioToolsUnavailableReason = studioToolsError
     ? studioToolsError
@@ -5299,6 +5859,10 @@ export default function App() {
       : studioToolCapabilities && !studioToolCapabilities.supported
         ? "当前 Runtime Agent 未开启 BFF 工具能力。"
         : "";
+  const sessionEnvironmentsUnavailableReason = sessionEnvironmentsError
+    || (!studioToolsLoading && studioToolCapabilities && !canMountSessionEnvironment
+      ? "当前 Studio BFF 未提供 Sandbox 执行工具。"
+      : "");
   const connectedRuntimeId = currentRuntime?.runtimeId ?? "";
   const currentRuntimeAppName = currentConn
     ? currentConn.apps.find((app) =>
@@ -5611,7 +6175,7 @@ export default function App() {
   };
 
   const openAgentCreateFromMyAgents = (region: string) => {
-    if (!canCreateAgents) {
+    if (!canCreateRuntimeAgents) {
       setError("当前账号没有添加 Agent 的权限。");
       return;
     }
@@ -5620,6 +6184,7 @@ export default function App() {
     setNewRuntimeRegion(region);
     setImportedDraft(null);
     setCreateView(null);
+    setAddMenuSurface("entry");
     setAddMenu(true);
     setError("");
   };
@@ -5710,7 +6275,7 @@ export default function App() {
   const openSandboxAgentCreate = (
     kind: "codex" | SandboxAgentKind,
   ) => {
-    if (!canCreateAgents) {
+    if (!canCreatePersonalAgents) {
       setError("当前账号没有创建智能体的权限。");
       return;
     }
@@ -5813,6 +6378,29 @@ export default function App() {
     setError("");
   };
 
+  const openDeveloperResourcesPage = () => {
+    setPlatformFeedbackOrigin(null);
+    if (sandboxSession) exitSandboxSession();
+    viewSidRef.current = "";
+    setSessionId("");
+    setCreateView(null);
+    setSkillCenter(false);
+    setAddAgent(false);
+    setAddMenu(false);
+    setSearchView(false);
+    setManageAgents(false);
+    setAgentDetailTarget(null);
+    setSandboxAgentDetailTarget(null);
+    setSandboxAgentWorkspace(null);
+    setMyAgents(false);
+    setWorkspaceView(false);
+    setEnvironmentView(false);
+    setApplicationsView(null);
+    setCronJobsView(false);
+    setPageStack([{ page: "developer-resources", returnTo: "new-chat" }]);
+    setError("");
+  };
+
   const talkToWorkspaceAgent = async (agent: AgentEntry) => {
     setFeedbackCaseReturnAgentId("");
     setFeedbackTargetEventId("");
@@ -5864,6 +6452,8 @@ export default function App() {
 
   const currentStudioPage: StudioPageId = activeStackPage === "system-info"
     ? activeStackEntry?.returnTo ?? "new-chat"
+    : developerResourcesView
+      ? "developer-resources"
     : activeStackPage === "agent-detail" || activeStackPage === "sandbox-agent-detail"
       ? activeStackPage
       : platformFeedbackOrigin !== null
@@ -5894,6 +6484,8 @@ export default function App() {
 
   const sidebarActivePage: SidebarPage = systemInfo
     ? null
+    : developerResourcesView
+      ? "developer-resources"
     : platformFeedbackOrigin !== null
       ? "feedback"
       : environmentView
@@ -5963,7 +6555,7 @@ export default function App() {
           setError("");
         })}
         onQuickCreate={() => requestIntelligentNavigation(() => {
-          if (!canCreateAgents) {
+          if (!canCreateRuntimeAgents) {
             setError("当前账号没有添加 Agent 的权限。");
             return;
           }
@@ -5987,6 +6579,7 @@ export default function App() {
           setCreateView(null);
           setImportedDraft(null);
           setNewRuntimeRegion(defaultCloudRegion(cloudProvider));
+          setAddMenuSurface("entry");
           setAddMenu(true);
           setError("");
         })}
@@ -6013,7 +6606,7 @@ export default function App() {
           setError("");
         })}
         onAddAgent={() => requestIntelligentNavigation(() => {
-          if (!canCreateAgents) {
+          if (!canCreateRuntimeAgents) {
             setError("当前账号没有添加 Agent 的权限。");
             return;
           }
@@ -6041,6 +6634,8 @@ export default function App() {
         onWorkspace={() => requestIntelligentNavigation(openWorkspacePage)}
         onApplications={() => requestIntelligentNavigation(openApplicationsPage)}
         onCronJobs={() => requestIntelligentNavigation(openCronJobsPage)}
+        onAgentKitCli={() => setAgentKitCliOpen(true)}
+        onDeveloperResources={() => requestIntelligentNavigation(openDeveloperResourcesPage)}
         onSystemInfo={() => requestIntelligentNavigation(() => {
           pushStudioPage({
             page: "system-info",
@@ -6114,7 +6709,11 @@ export default function App() {
                     ? "退出开发环境"
                     : undefined
                 }
-                onExit={() => requestIntelligentNavigation(startNewChat)}
+                onExit={() => requestIntelligentNavigation(
+                  sandboxSession.intelligentDevelopment
+                    ? returnToIntelligentCreate
+                    : startNewChat
+                )}
               />
             )}
             {sandboxSession ? (
@@ -6296,7 +6895,10 @@ export default function App() {
               }
               agentPickerDisabled={!userId || conversationBusy}
               selectedRuntimeId={studioToolRuntime?.runtimeId}
+              agentsSource={agentsSource}
+              localApps={apps}
               runtimeScope={access.capabilities.runtimeScope}
+              onSelectLocalApp={refreshCurrentAgentAndStartNewChat}
               onSelectRuntime={async (runtime) => {
                 try {
                   await connectMyAgent(
@@ -6341,6 +6943,9 @@ export default function App() {
               onSelectSandboxSession={(session) =>
                 openSandboxAgent(session, "new_chat_picker")
               }
+              runtimeLogTarget={currentRuntime
+                ? runtimeLogTargetsBySession[`${appName}\n${sessionId}`] ?? currentRuntime
+                : undefined}
               showModeSelector={false}
               onWorkspaceModeChange={(mode) => {
                 setNewChatWorkspaceMode(mode);
@@ -6432,6 +7037,8 @@ export default function App() {
                 region={studioRegion || defaultCloudRegion(cloudProvider)}
                 onBack={closeSystemInfoPage}
               />
+            ) : developerResourcesView ? (
+              <DeveloperResources cloudProvider={cloudProvider} />
             ) : platformFeedbackOrigin !== null ? (
               <PlatformFeedback
                 initialModule={issueFeedbackModuleForPage(platformFeedbackOrigin)}
@@ -6458,6 +7065,7 @@ export default function App() {
             ) : applicationsView && applicationsView !== "catalog" ? (
               <GitHubIntegration
                 automation={applicationsView}
+                cloudProvider={cloudProvider}
                 onBack={() => setApplicationsView("catalog")}
                 onOpenSandboxSession={(id) => {
                   void openCodexSandboxSession(id);
@@ -6483,7 +7091,9 @@ export default function App() {
               <MyAgents
                 cloudProvider={cloudProvider}
                 studioRegion={agentsSource === "local" ? "cn-beijing" : studioRegion}
-                canCreate={canCreateAgents}
+                canCreateRuntimeAgents={canCreateRuntimeAgents}
+                canCreatePersonalAgents={canCreatePersonalAgents}
+                canUpdate={canCreateRuntimeAgents || canManageAgents}
                 runtimeScope={access.capabilities.runtimeScope}
                 onCreateAgent={openAgentCreateFromMyAgents}
                 onOpenCodexProjectUpload={() => setSandboxProjectUploadOpen(true)}
@@ -6509,6 +7119,11 @@ export default function App() {
                   setMyAgents(false);
                   setImportedDraft(item.draft);
                   setCustomCreateMode("custom");
+                  setCustomCreationSurface(
+                    workspaceAgentCreationMode(item) === "quick"
+                      ? "vulcan"
+                      : "traditional",
+                  );
                   setEditingDraftId(item.id);
                   editingDraftBaselineRef.current = item;
                   setRuntimeUpdateTarget(item.deploymentTarget ?? null);
@@ -6529,8 +7144,8 @@ export default function App() {
                 agentInfo={agentInfo}
                 agentInfoAgentId={appName}
                 loadingAgentInfo={capabilitiesLoading}
-                canCreate={canCreateAgents}
-                canUpdate={canCreateAgents || canManageAgents}
+                canCreate={canCreateRuntimeAgents}
+                canUpdate={canCreateRuntimeAgents || canManageAgents}
                 canViewUsage={canViewAgentUsage}
                 loadingAgents={agentLibraryLoading}
                 agentsError={agentLibraryError}
@@ -6551,11 +7166,12 @@ export default function App() {
                 onOpenFeedbackCase={(item) => void openFeedbackCaseInStudio(item)}
                 onFeedbackCasesDeleted={clearDeletedFeedbackCases}
                 onCreateAgent={() => {
-                  if (!canCreateAgents) {
+                  if (!canCreateRuntimeAgents) {
                     setError("当前账号没有添加 Agent 的权限。");
                     return;
                   }
                   exitAgentDetailContext();
+                  setAddMenuSurface("entry");
                   setAddMenu(true);
                   setCreateView(null);
                   setImportedDraft(null);
@@ -6568,12 +7184,22 @@ export default function App() {
                   setError("");
                 }}
                 onUpdateAgent={async (capability) => {
-                  if (!canManageAgents && !canCreateAgents) {
+                  if (!canManageAgents && !canCreateRuntimeAgents) {
                     setError("当前账号没有管理 Agent 的权限。");
                     return;
                   }
                   if (!capability.canUpdate) {
                     setError(capability.reason || "当前 Runtime 不支持原地更新。");
+                    return;
+                  }
+                  if (
+                    capability.recoveryStatus !== "complete" &&
+                    capability.recoveryStatus !== "draft-only"
+                  ) {
+                    setError(
+                      capability.reason ||
+                        "该 Runtime 的原发布配置不可恢复，无法安全更新。",
+                    );
                     return;
                   }
                   if (!capability.runtime.runtimeId) {
@@ -6603,30 +7229,41 @@ export default function App() {
                   const runtimeDraft = runtimeAgentDraftFromCloud(
                     runtimeAgent,
                     cloudProvider,
+                    capability.runtime.configuredEnvKeys,
                   );
                   const runtimeModel = modelConfigurationFromRuntime(
                     runtimeAgent.model,
                   );
-                  const hydratedDraft = hydrateRuntimeModelSelection(
-                    {
-                      ...runtimeDraft,
-                      modelProvider:
-                        runtimeModel.modelProvider ||
-                        runtimeEnv.get("MODEL_AGENT_PROVIDER") ||
-                        runtimeDraft.modelProvider,
-                      modelApiBase:
-                        runtimeEnv.get("MODEL_AGENT_API_BASE") ||
-                        runtimeDraft.modelApiBase,
-                      deployment: {
-                        ...(runtimeDraft.deployment ?? { feishuEnabled: false }),
-                        network: capability.runtime.network,
-                        envValues: runtimeEnvValues,
+                  const feishuConfigured =
+                    runtimeDraft.deployment?.feishuEnabled === true ||
+                    (runtimeEnv.has("FEISHU_APP_ID") &&
+                      runtimeEnv.has("FEISHU_APP_SECRET"));
+                  const hydratedDraft = hydrateA2aRegistryFromRuntime(
+                    hydrateRuntimeModelSelection(
+                      {
+                        ...runtimeDraft,
+                        modelProvider:
+                          runtimeModel.modelProvider ||
+                          runtimeEnv.get("MODEL_AGENT_PROVIDER") ||
+                          runtimeDraft.modelProvider,
+                        modelApiBase:
+                          runtimeEnv.get("MODEL_AGENT_API_BASE") ||
+                          runtimeDraft.modelApiBase,
+                        deployment: {
+                          ...(runtimeDraft.deployment ?? {
+                            feishuEnabled: false,
+                          }),
+                          feishuEnabled: feishuConfigured,
+                          network: capability.runtime.network,
+                          envValues: runtimeEnvValues,
+                        },
+                        cloudEnvironment: capability.runtime.environment ?? {
+                          environmentId: "",
+                          environmentVersionId: "",
+                        },
                       },
-                      cloudEnvironment: capability.runtime.environment ?? {
-                        environmentId: "",
-                        environmentVersionId: "",
-                      },
-                    },
+                      capability.runtime.envs,
+                    ),
                     capability.runtime.envs,
                   );
                   const apiKeyId =
@@ -6648,6 +7285,11 @@ export default function App() {
                   exitAgentDetailContext();
                   setImportedDraft(classifiedDraft);
                   setCustomCreateMode("custom");
+                  setCustomCreationSurface(
+                    classifiedDraft.dynamicAgentDelegation === true
+                      ? "vulcan"
+                      : "traditional",
+                  );
                   const nextDraftId = `runtime-${capability.runtime.runtimeId}`;
                   setEditingDraftId(nextDraftId);
                   editingDraftBaselineRef.current = null;
@@ -6662,6 +7304,14 @@ export default function App() {
                     region: capability.runtime.region,
                     appName: capability.agent.appName,
                     currentVersion: capability.runtime.currentVersion,
+                    etag: capability.etag,
+                    editMode:
+                      capability.editMode === "source-preserving"
+                        ? "source-preserving"
+                        : "regenerate",
+                    configuredMcpEnvKeys: configuredMcpEnvKeys(classifiedDraft),
+                    configuredRuntimeEnvKeys:
+                      capability.runtime.configuredEnvKeys,
                   });
                   setCreateView("custom");
                   setError("");
@@ -6670,6 +7320,11 @@ export default function App() {
                   exitAgentDetailContext();
                   setImportedDraft(item.draft);
                   setCustomCreateMode("custom");
+                  setCustomCreationSurface(
+                    workspaceAgentCreationMode(item) === "quick"
+                      ? "vulcan"
+                      : "traditional",
+                  );
                   setEditingDraftId(item.id);
                   editingDraftBaselineRef.current = item;
                   setRuntimeUpdateTarget(item.deploymentTarget ?? null);
@@ -6677,6 +7332,24 @@ export default function App() {
                   setFocusedWorkspaceAgentId("");
                   setCreateView("custom");
                   setError("");
+                }}
+              />
+            ) : showAddMenu && addMenuSurface === "entry" ? (
+              <AgentCreationModePicker
+                onSelectVulcan={() => {
+                  setAddMenu(false);
+                  setImportedDraft(null);
+                  setCustomCreateMode("custom");
+                  setCustomCreationSurface("vulcan");
+                  setRuntimeUpdateTarget(null);
+                  setFocusedDeploymentTaskId("");
+                  setFocusedWorkspaceAgentId("");
+                  setEditingDraftId(`draft-${Date.now().toString(36)}`);
+                  editingDraftBaselineRef.current = null;
+                  setCreateView("custom");
+                }}
+                onSelectTraditional={() => {
+                  setAddMenuSurface("traditional");
                 }}
               />
             ) : showAddMenu ? (
@@ -6693,6 +7366,7 @@ export default function App() {
                       setAddMenu(false);
                       setImportedDraft(null);
                       setCustomCreateMode("custom");
+                      setCustomCreationSurface("traditional");
                       setRuntimeUpdateTarget(null);
                       setFocusedDeploymentTaskId("");
                       setFocusedWorkspaceAgentId("");
@@ -6714,6 +7388,7 @@ export default function App() {
                       setFocusedWorkspaceAgentId("");
                       setEditingDraftId("");
                       editingDraftBaselineRef.current = null;
+                      setMigrationProjectReturn(undefined);
                       setCreateView("intelligent");
                     },
                   },
@@ -6736,6 +7411,7 @@ export default function App() {
                     onClick: () => {
                       setAddMenu(false);
                       setImportedDraft(null);
+                      setMigrationProjectReturn(undefined);
                       setCreateView("migration");
                     },
                   },
@@ -6837,54 +7513,15 @@ export default function App() {
                 preparationStage={intelligentPreparationStage}
                 error={intelligentCapabilitiesError}
                 onCancel={cancelIntelligentPreparation}
+                onDownload={downloadIntelligentDelivery}
+                onDeploy={setIntelligentDeployment}
                 onBack={() => {
                   cancelIntelligentPreparation();
                   setCreateView(null);
+                  setAddMenuSurface("traditional");
                   setAddMenu(true);
                 }}
-                onCreate={async (goal, modelId) => {
-                  if (intelligentPreparationStage) return;
-                  intelligentCreateAbortRef.current?.abort();
-                  const controller = new AbortController();
-                  intelligentCreateAbortRef.current = controller;
-                  setIntelligentPreparationStage("preparing");
-                  setIntelligentCapabilitiesError("");
-                  try {
-                    const created = await intelligentDevelopmentClient.startSession({
-                      displayName: goal.slice(0, 40),
-                      modelId,
-                      signal: controller.signal,
-                    });
-                    if (
-                      controller.signal.aborted ||
-                      intelligentCreateAbortRef.current !== controller
-                    ) return;
-                    setIntelligentPreparationStage("starting");
-                    const connected = await intelligentDevelopmentClient.connectSession(
-                      created.id,
-                      { signal: controller.signal },
-                    );
-                    if (
-                      controller.signal.aborted ||
-                      intelligentCreateAbortRef.current !== controller
-                    ) return;
-                    activateIntelligentDevelopmentSession(connected, []);
-                    intelligentCreateAbortRef.current = null;
-                    setIntelligentPreparationStage(null);
-                    await sendSandboxMessage(goal, [], [], connected);
-                  } catch (cause) {
-                    if ((cause as Error)?.name !== "AbortError") {
-                      setIntelligentCapabilitiesError(
-                        cause instanceof Error ? cause.message : "智能开发会话创建失败",
-                      );
-                    }
-                  } finally {
-                    if (intelligentCreateAbortRef.current === controller) {
-                      intelligentCreateAbortRef.current = null;
-                      setIntelligentPreparationStage(null);
-                    }
-                  }
-                }}
+                onCreate={startIntelligentDevelopment}
               />
             ) : visibleCreateView === "custom" ? (
               <CustomCreate
@@ -6893,6 +7530,12 @@ export default function App() {
                 initialDraft={importedDraft ?? undefined}
                 onBack={() => {
                   setCreateView(null);
+                  setAddMenuSurface(
+                    !importedDraft && !runtimeUpdateTarget &&
+                      customCreationSurface === "vulcan"
+                      ? "entry"
+                      : "traditional",
+                  );
                   setAddMenu(true);
                 }}
                 onCreate={onCreate}
@@ -6900,6 +7543,8 @@ export default function App() {
                 features={features}
                 onDeploymentTaskChange={updateDeploymentTask}
                 createMode={customCreateMode}
+                freshCreationSurface={customCreationSurface}
+                workspaceDraftId={editingDraftId || undefined}
                 deploymentTarget={runtimeUpdateTarget ?? undefined}
                 initialDeployRegion={newRuntimeRegion}
                 onDraftChange={(draft, dirty) => {
@@ -6909,6 +7554,7 @@ export default function App() {
                       editingDraftId,
                       draft,
                       runtimeUpdateTarget ?? undefined,
+                      customCreationSurface === "vulcan" ? "quick" : "traditional",
                     );
                   } else {
                     restoreWorkspaceDraftBaseline(editingDraftId);
@@ -6935,6 +7581,7 @@ export default function App() {
                 cloudProvider={cloudProvider}
                 onBack={() => {
                   setCreateView(null);
+                  setAddMenuSurface("traditional");
                   setAddMenu(true);
                 }}
                 onAgentAdded={onAgentAdded}
@@ -6947,7 +7594,9 @@ export default function App() {
               <MigrationWorkspace
                 cloudProvider={cloudProvider}
                 onBack={() => {
+                  setMigrationProjectReturn(undefined);
                   setCreateView(null);
+                  setAddMenuSurface("traditional");
                   setAddMenu(true);
                 }}
                 onAgentAdded={onAgentAdded}
@@ -6955,6 +7604,27 @@ export default function App() {
                 onDeploymentStarted={startDeployment}
                 onDeploymentComplete={finishDeployment}
                 initialDeployRegion={newRuntimeRegion}
+                projectCapabilities={intelligentCapabilities}
+                projectCapabilitiesLoading={intelligentCapabilitiesLoading}
+                optimizationPreparationStage={intelligentPreparationStage}
+                optimizationError={intelligentCapabilitiesError}
+                initialPage={migrationProjectReturn ? "projects" : "new"}
+                initialProjectId={migrationProjectReturn?.projectId}
+                onOptimizeVersion={(goal, modelId, base) =>
+                  startIntelligentDevelopment(
+                    goal,
+                    modelId,
+                    base,
+                    { projectId: base.projectId },
+                  )}
+                onCancelOptimization={cancelIntelligentPreparation}
+                onDownloadSavedVersion={downloadIntelligentDelivery}
+                onDeploySavedVersion={(delivery) => {
+                  setMigrationProjectReturn({
+                    projectId: delivery.projectId ?? "",
+                  });
+                  setIntelligentDeployment(delivery);
+                }}
               />
             ) : turns.length === 0 && !newChatCapabilitiesReady ? (
               <div className="session-loading">
@@ -7045,7 +7715,7 @@ export default function App() {
               rootAgentNames.length > 0 &&
               !rootAgentNames.includes(agentAuthor),
             );
-            const agentDisplayName = agentNode?.name || agentAuthor;
+            const agentDisplayName = displayAgentName(agentNode?.name || agentAuthor);
             const agentDescription = agentNode?.description ||
               (isSubAgent ? "正在执行主 Agent 移交的任务。" : "");
             if (
@@ -7133,8 +7803,12 @@ export default function App() {
                         previewArtifact(appName, userId, sessionId, filename, version)
                       }
                       onResolveDelivery={resolveIntelligentDelivery}
+                      onResolveDeliveryComparison={resolveIntelligentDeliveryComparison}
                       onDownloadDelivery={downloadIntelligentDelivery}
                       onDeployDelivery={setIntelligentDeployment}
+                      onBranchSelect={(branch) => {
+                        setInput(`继续“${branch.label}”这个方向`);
+                      }}
                     />
                     {/* Finalized turn that produced no visible answer (e.g. only
                         thinking + an empty A2UI surface) — show a fallback note. */}
@@ -7256,14 +7930,30 @@ export default function App() {
                     activeAgent={activeAgent}
                     seenAgents={seenAgents}
                     execPath={execPath}
-                    studioTools={studioToolCapabilities?.tools ?? []}
+                    studioTools={visibleStudioTools}
                     selectedStudioToolIds={selectedStudioToolIds}
+                    managedStudioToolIds={selectedEnvironmentMounts.length > 0
+                      ? ENVIRONMENT_STUDIO_TOOL_IDS
+                      : []}
                     studioToolsLoading={studioToolsLoading}
                     studioToolsDisabled={conversationBusy}
                     studioToolsUnavailableReason={studioToolsUnavailableReason}
                     onStudioToolsChange={
                       studioToolRuntime ? updateSelectedStudioToolIds : undefined
                     }
+                    environments={sessionEnvironments}
+                    workspaces={sessionWorkspaces}
+                    selectedEnvironments={selectedEnvironmentMounts}
+                    selectedEnvironmentWorkspaceIds={selectedEnvironmentWorkspaceIds}
+                    environmentsLoading={sessionEnvironmentsLoading || studioToolsLoading}
+                    environmentsDisabled={conversationBusy || !canMountSessionEnvironment}
+                    environmentsError={sessionEnvironmentsUnavailableReason}
+                    onEnvironmentsChange={
+                      studioToolRuntime && sessionId
+                        ? updateSelectedEnvironments
+                        : undefined
+                    }
+                    onEnvironmentsRefresh={refreshSessionEnvironments}
                   />
                 )}
                 <div className="conversation-composer-slot">
@@ -7318,9 +8008,16 @@ export default function App() {
         state={sandboxLaunchState}
         agentKind={sandboxLaunchKind}
         error={sandboxLaunchError}
+        persistentEnabled={sandboxLaunchPersistentEnabled}
+        persistentReason={sandboxLaunchPersistentReason}
+        persistentRequired={sandboxLaunchPersistentRequired}
+        storageMode={sandboxLaunchStorageMode}
+        diskGbDefault={sandboxLaunchDiskGbDefault}
+        diskGbMin={sandboxLaunchDiskGbMin}
+        diskGbMax={sandboxLaunchDiskGbMax}
         onCancel={cancelSandboxLaunch}
-        onConfirm={(displayName, persistent) =>
-          void launchSandboxSession(displayName, persistent)
+        onConfirm={(displayName, persistent, diskGb) =>
+          void launchSandboxSession(displayName, persistent, diskGb)
         }
       />
 
@@ -7337,13 +8034,11 @@ export default function App() {
           description="离开将停止本轮构建；当前会话仍会保留，可稍后从历史会话重新进入。"
           confirmLabel="停止并离开"
           variant="warning"
-          busy={intelligentLeaveBusy}
           onCancel={() => {
-            if (intelligentLeaveBusy) return;
             pendingIntelligentNavigationRef.current = null;
             setIntelligentLeaveOpen(false);
           }}
-          onConfirm={() => void confirmIntelligentNavigation()}
+          onConfirm={confirmIntelligentNavigation}
         />
       ) : null}
 
@@ -7435,6 +8130,11 @@ export default function App() {
         onLogin={() => void recoverAuthentication()}
       />
 
+      <AgentKitCliDialog
+        open={agentKitCliOpen}
+        onClose={() => setAgentKitCliOpen(false)}
+      />
+
       <NewChatVideoTaskDialog
         open={videoTaskDialogOpen}
         task={videoTask}
@@ -7457,6 +8157,7 @@ export default function App() {
                 onClick={() => {
                   setImportedDraft(null);
                   setCreateView(null);
+                  setAddMenuSurface("traditional");
                   setAddMenu(true);
                   setConfirmLeave(false);
                 }}

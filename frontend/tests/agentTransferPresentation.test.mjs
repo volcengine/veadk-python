@@ -43,11 +43,15 @@ test("groups child Agent work in an identified muted execution card", () => {
   assert.match(appSource, /agentNode\?\.description/);
   assert.match(stylesSource, /\.turn--subagent\s*\{/);
   assert.match(stylesSource, /\.turn--subagent::before\s*\{[^}]*backdrop-filter:\s*blur\(18px\)/s);
-  assert.match(stylesSource, /\.turn--subagent\s*\{[^}]*margin-top:\s*42px/s);
-  assert.match(stylesSource, /\.turn--subagent\s*\{[^}]*margin-bottom:\s*22px/s);
+  assert.match(stylesSource, /\.turn--subagent\s*\{[^}]*margin-top:\s*40px/s);
+  assert.match(stylesSource, /\.turn--subagent\s*\{[^}]*margin-bottom:\s*16px/s);
   assert.match(stylesSource, /\.turn--subagent\s*\{[^}]*box-shadow:\s*none/s);
   assert.match(stylesSource, /\.turn--subagent::before\s*\{[^}]*radial-gradient/s);
   assert.match(stylesSource, /\.turn--subagent:has\(> \.turn-meta\)::before\s*\{[^}]*bottom:\s*44px/s);
+  assert.match(
+    stylesSource,
+    /\.turn--assistant:has\(\.create-agent-tool-card\.is-agent-results\):has\(\+ \.turn--subagent\) > \.turn-meta\s*\{[^}]*display:\s*none/s,
+  );
   assert.match(stylesSource, /\.subagent-run-label\s*\{[^}]*position:\s*absolute/s);
   assert.match(stylesSource, /\.subagent-run-label\s*\{[^}]*box-shadow:\s*none/s);
   assert.match(stylesSource, /\.subagent-run-title\s*\{[^}]*font-size:\s*14\.5px[^}]*font-weight:\s*400/s);
@@ -57,7 +61,18 @@ test("groups child Agent work in an identified muted execution card", () => {
     /\.turn--subagent \.turn-meta\s*\{[^}]*(?:position:\s*absolute|bottom:\s*-\d+px)/s,
   );
   assert.match(appSource, /<CornerDownRight \/>/);
+  assert.match(appSource, /function displayAgentName\(name: string\): string/);
+  assert.match(appSource, /replace\(\/__\[0-9a-f\]\{10\}/);
+  assert.match(
+    appSource,
+    /displayAgentName\(agentNode\?\.name \|\| agentAuthor\)/,
+  );
   assert.match(stylesSource, /\.subagent-run-description\s*\{[^}]*font-size:\s*13\.5px/s);
   assert.doesNotMatch(stylesSource, /\.subagent-run-description\s*\{[^}]*border-bottom/s);
+  assert.match(
+    stylesSource,
+    /\.block-thinking, \.block-progress, \.block-tool, \.block-plan\s*\{[^}]*min-width:\s*0;[^}]*align-self:\s*stretch;/s,
+  );
+  assert.match(stylesSource, /\.think-body\s*\{[^}]*width:\s*100%;[^}]*min-width:\s*0;/s);
   assert.match(stylesSource, /@media \(max-width: 700px\)[\s\S]*?\.turn--subagent/);
 });

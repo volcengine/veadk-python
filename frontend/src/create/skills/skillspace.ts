@@ -62,7 +62,7 @@ async function jfetch<T>(url: string): Promise<T> {
 }
 
 export async function listSkillSpaces(): Promise<SkillSpaceRef[]> {
-  const data = await jfetch<{ items: SkillSpaceRef[] }>("/web/skill-spaces?region=all");
+  const data = await jfetch<{ items: SkillSpaceRef[] }>("/web/skill-spaces");
   return data.items || [];
 }
 

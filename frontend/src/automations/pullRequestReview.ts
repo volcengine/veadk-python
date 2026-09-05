@@ -13,9 +13,9 @@ export const pullRequestReviewAutomation: GitHubAutomationDefinition = {
   panel: "安装 GitHub App 到目标仓库后，同仓库非草稿 PR 会自动触发评审。",
   submitLabel: "安装 GitHub App",
   fields: [repositoryField],
-  initialValues: initialAutomationValues(),
+  initialValues: ({ cloudProvider }) => initialAutomationValues(cloudProvider),
   regionHelp: "",
-  secrets: [],
+  secrets: () => [],
   async submit() {
     throw new Error("PR 自动评审已切换为 GitHub App 授权模式。");
   },

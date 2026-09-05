@@ -20,10 +20,11 @@ import pytest
 import requests
 
 from veadk.a2a.registry_client import (
+    _OAUTH_TOKEN_CACHE,
     AgentKitA2ARegistryConfig,
     RegistryError,
-    _OAUTH_TOKEN_CACHE,
     _agent_auth_headers,
+    _resolve_credentials,
     _volc_sign_v4,
     create_task,
     poll_task,
@@ -105,6 +106,27 @@ def _oauth_agent_card() -> dict:
             }
         ],
     }
+
+
+@patch.dict(
+    "os.environ",
+    {
+        "VOLCENGINE_ACCESS_KEY": "volc-ak",
+        "VOLCENGINE_SECRET_KEY": "volc-sk",
+        "BYTEPLUS_ACCESS_KEY": "byteplus-ak",
+        "BYTEPLUS_SECRET_KEY": "byteplus-sk",
+        "BYTEPLUS_SESSION_TOKEN": "byteplus-token",
+    },
+    clear=True,
+)
+def test_registry_credentials_follow_byteplus_endpoint() -> None:
+    credentials = _resolve_credentials(
+        "https://agentkit.ap-southeast-1.byteplusapi.com"
+    )
+
+    assert credentials.access_key == "byteplus-ak"
+    assert credentials.secret_key == "byteplus-sk"
+    assert credentials.session_token == "byteplus-token"
 
 
 @patch.dict(

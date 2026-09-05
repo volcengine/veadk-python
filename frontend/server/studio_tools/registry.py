@@ -20,11 +20,10 @@ import asyncio
 import importlib
 import inspect
 import os
-from collections.abc import Callable
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError
@@ -35,14 +34,28 @@ from veadk.integrations.agentkit.studio_channel import (
 )
 
 if TYPE_CHECKING:
+    from frontend.server.environments.session_mounts import (
+        SessionEnvironmentMount,
+        SessionEnvironmentMountRegistry,
+    )
+    from frontend.server.studio_tools.sandbox_shell import SandboxTargetResolver
     from veadk.multimodal.service import MediaService
 
 ToolExecutor = Callable[[dict[str, Any]], Any]
 ContextToolExecutor = Callable[[dict[str, Any], "StudioToolExecutionContext"], Any]
+StudioToolProgressReporter = Callable[[dict[str, Any]], Awaitable[None]]
 
 
 class StudioToolExecutionError(RuntimeError):
     """A safe error that can be returned across the Studio channel."""
+
+
+class StudioToolRuntimeError(StudioToolExecutionError):
+    """A safe operational failure, distinct from a denied invocation."""
+
+    def __init__(self, message: str, *, content: Any = None) -> None:
+        super().__init__(message)
+        self.content = content
 
 
 @dataclass(frozen=True)
@@ -56,6 +69,11 @@ class StudioToolExecutionContext:
     run_id: str
     scope_id: str
     catalog_revision: str
+    owner_id: str = ""
+    environment_mount: SessionEnvironmentMount | None = None
+    environment_mounts: tuple[SessionEnvironmentMount, ...] = ()
+    tool_request_id: str = ""
+    report_progress: StudioToolProgressReporter | None = None
 
 
 @dataclass(frozen=True)
@@ -101,7 +119,8 @@ class StudioToolRegistry:
         key = (manifest.name, manifest.executor_revision)
         if key in self._tools:
             raise ValueError(
-                f"Studio tool already registered: {manifest.name}@{manifest.executor_revision}"
+                f"Studio tool already registered: {manifest.name}@"
+                f"{manifest.executor_revision}"
             )
         self._tools[key] = tool
         self._latest[manifest.name] = manifest.executor_revision
@@ -238,9 +257,10 @@ async def _invoke_tool(
     call_arguments: tuple[Any, ...] = (
         (arguments, context) if tool.requires_context else (arguments,)
     )
-    if inspect.iscoroutinefunction(tool.executor):
-        return await tool.executor(*call_arguments)
-    result = await asyncio.to_thread(tool.executor, *call_arguments)
+    executor = cast(Callable[..., Any], tool.executor)
+    if inspect.iscoroutinefunction(executor):
+        return await executor(*call_arguments)
+    result = await asyncio.to_thread(executor, *call_arguments)
     if inspect.isawaitable(result):
         return await result
     return result
@@ -249,15 +269,40 @@ async def _invoke_tool(
 def build_studio_tool_registry(
     *,
     media_service: MediaService | None = None,
+    environment_mounts: SessionEnvironmentMountRegistry | None = None,
+    sandbox_target_resolver: SandboxTargetResolver | None = None,
 ) -> StudioToolRegistry:
     """Build the complete Studio BFF tool registry."""
 
     registry = StudioToolRegistry()
+    from frontend.server.studio_tools.branch_compare import (
+        register_branch_compare_tool,
+    )
     from frontend.server.studio_tools.veadk_builtin_tools import (
         register_veadk_builtin_tools,
     )
 
     register_veadk_builtin_tools(registry, media_service=media_service)
+    register_branch_compare_tool(registry)
+    if environment_mounts is not None and sandbox_target_resolver is not None:
+        from frontend.server.studio_tools.codex_sandbox import (
+            CodexSandboxDelegate,
+            register_codex_sandbox_tool,
+        )
+        from frontend.server.studio_tools.sandbox_shell import (
+            register_sandbox_shell_tool,
+        )
+
+        register_sandbox_shell_tool(
+            registry,
+            mounts=environment_mounts,
+            target_resolver=sandbox_target_resolver,
+        )
+        register_codex_sandbox_tool(
+            registry,
+            mounts=environment_mounts,
+            delegate=CodexSandboxDelegate(sandbox_target_resolver),
+        )
     from frontend.server.studio_tools.extensions import (
         register_studio_tool_extensions,
     )

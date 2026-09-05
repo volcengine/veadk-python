@@ -140,7 +140,18 @@ test("resets runtime pagination before changing ownership or region filters", ()
   );
   assert.match(
     pageSource,
-    /function selectRegion\(nextRegion: CloudRegion\)[\s\S]*?resetRuntimePagination\(\)[\s\S]*?setRegion\(nextRegion\)/,
+    /function selectRegion\(nextRegion: string\)[\s\S]*?resetRuntimePagination\(\)[\s\S]*?setRegion\(nextRegion\)/,
+  );
+});
+
+test("uses the Studio-delivered private region instead of a public-cloud fallback", () => {
+  assert.match(
+    pageSource,
+    /return studioRegion\.trim\(\) \|\| defaultCloudRegion\(cloudProvider\)/,
+  );
+  assert.match(
+    pageSource,
+    /providerOptions\.some\(\(option\) => option\.value === configuredRegion\)[\s\S]*?value: configuredRegion, label: configuredRegion/,
   );
 });
 
@@ -207,7 +218,8 @@ test("renders only account-backed Runtime and Sandbox agents", () => {
 });
 
 test("renders Agent creation as the first dashed card instead of a toolbar button", () => {
-  assert.match(pageSource, /canCreate: boolean/);
+  assert.match(pageSource, /canCreateRuntimeAgents: boolean/);
+  assert.match(pageSource, /canCreatePersonalAgents: boolean/);
   assert.match(pageSource, /cloudProvider: CloudProvider/);
   assert.match(pageSource, /activeType === "general"[\s\S]*?onCreateAgent\(region\)[\s\S]*?onCreateSandboxAgent\(activeType\)/);
   assert.match(pageSource, /onCreateSandboxAgent: \(kind: "codex" \| SandboxAgentKind\) => void/);
@@ -259,7 +271,7 @@ test("agent cards reproduce the compact Figma hierarchy with card details and on
   assert.doesNotMatch(pageSource, /<small|<code/);
   assert.match(
     resourceStyles,
-    /\.resource-page\s*\{[\s\S]*?background: #fafafa;[\s\S]*?font-family: "PingFang SC"/,
+    /\.resource-page\s*\{[\s\S]*?background: hsl\(var\(--panel\)\);[\s\S]*?font-family: "PingFang SC"/,
   );
   assert.match(
     resourceStyles,
@@ -302,6 +314,8 @@ test("reopens running deployment progress from draft and Runtime cards", () => {
   assert.match(pageSource, /deploymentTasks\?: DeploymentTaskUpdate\[\]/);
   assert.match(pageSource, /draftDeploymentTaskIds\?: Readonly<Record<string, string>>/);
   assert.match(pageSource, /task\.status !== "running"/);
+  assert.match(pageSource, /byDraftId\.set\(task\.draftId, task\)/);
+  assert.match(pageSource, /activeDeploymentTasks\.byDraftId\.get\(agent\.draft\.id\)/);
   assert.match(pageSource, /draftDeploymentTaskIds\[agent\.draft\.id\]/);
   assert.match(pageSource, /activeDeploymentTasks\.byRuntimeId\.get\(runtimeId\)/);
   assert.match(pageSource, /className="my-agent-draft-badge">草稿<\/span>/);
@@ -404,7 +418,7 @@ test("shows aligned lifetime metadata for persistent and non-persistent Sandbox 
   assert.match(pageStyles, /\.my-agent-expiry\.is-expiring dd\s*\{[\s\S]*?color: hsl\(38 78% 36%\)/);
 });
 
-test("metadata remains compact without adding data-plane requests", () => {
+test("metadata stays compact without expanding every card into Agent metadata", () => {
   assert.doesNotMatch(pageStyles, /\.my-agent-label/);
   assert.match(pageSource, /label: agent\.specificationLabel,[\s\S]*?hideLabel: true/);
   assert.match(pageSource, /label: "时间",[\s\S]*?hideLabel: true/);
@@ -426,8 +440,8 @@ test("loads Runtime pages by the selected ownership and region", () => {
   assert.match(pageSource, /runtimeScope: RuntimeScope/);
   assert.match(pageSource, /studioRegion: string/);
   assert.match(pageSource, /const \[ownership, setOwnership\] = useState<RuntimeScope>/);
-  assert.match(pageSource, /const \[region, setRegion\] = useState<CloudRegion>\(configuredRegion\)/);
-  assert.match(pageSource, /function resolveAgentRegion\([\s\S]*?isSupportedCloudRegion\(studioRegion\)[\s\S]*?defaultCloudRegion\(cloudProvider\)/);
+  assert.match(pageSource, /const \[region, setRegion\] = useState\(configuredRegion\)/);
+  assert.match(pageSource, /function resolveAgentRegion\([\s\S]*?studioRegion\.trim\(\) \|\| defaultCloudRegion\(cloudProvider\)/);
   assert.doesNotMatch(pageSource, /label: "全部区域"/);
   assert.match(pageSource, /scope: runtimeScope,[\s\S]*?region,[\s\S]*?pageSize: RUNTIME_PAGE_SIZE/);
   assert.match(pageSource, /ariaLabel="创建人筛选"/);
@@ -437,7 +451,7 @@ test("loads Runtime pages by the selected ownership and region", () => {
   assert.match(pageSource, /name: runtime\.name/);
   assert.match(pageSource, /description: runtime\.description\?\.trim\(\) \|\| "暂无描述"/);
   assert.match(pageSource, /specificationLabel: "创建人"/);
-  assert.match(pageSource, /specification: formatResourceSource\(runtime\.author\)/);
+  assert.match(pageSource, /specification: formatResourceCreator\(runtime\.author\)/);
   assert.match(pageSource, /runtimeId: runtime\.runtimeId/);
   assert.match(pageSource, /region: runtime\.region/);
   assert.match(pageSource, /<AgentCard[\s\S]*?key=\{agent\.id\}/);
@@ -457,7 +471,7 @@ test("loads Runtime pages by the selected ownership and region", () => {
   assert.match(appSource, /const refreshAgentLibrary[\s\S]*?scope: grantedRuntimeScope/);
 });
 
-test("uses one shared fallback for missing resource authors", async () => {
+test("uses semantic fallbacks for missing resource sources and creators", async () => {
   const { outputText } = ts.transpileModule(resourceMetadataSource, {
     compilerOptions: {
       module: ts.ModuleKind.ES2022,
@@ -465,12 +479,16 @@ test("uses one shared fallback for missing resource authors", async () => {
     },
   });
   const moduleUrl = `data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`;
-  const { formatResourceSource } = await import(moduleUrl);
+  const { formatResourceCreator, formatResourceSource } = await import(moduleUrl);
   assert.equal(formatResourceSource(undefined), "未知来源");
   assert.equal(formatResourceSource(null), "未知来源");
   assert.equal(formatResourceSource("   "), "未知来源");
   assert.equal(formatResourceSource(" Alice "), "Alice");
-  assert.match(pageSource, /specification: formatResourceSource\(session\.createdBy\)/);
+  assert.equal(formatResourceCreator(undefined), "未知创建者");
+  assert.equal(formatResourceCreator(null), "未知创建者");
+  assert.equal(formatResourceCreator("   "), "未知创建者");
+  assert.equal(formatResourceCreator(" Alice "), "Alice");
+  assert.match(pageSource, /specification: formatResourceCreator\(session\.createdBy\)/);
 });
 
 test("uses authoritative Sandbox ownership and region metadata for shared filters", () => {
@@ -489,7 +507,8 @@ test("keeps ownership filtering in the toolbar without duplicating it on cards",
   assert.match(pageSource, /isMine: runtime\.isMine/);
   assert.doesNotMatch(pageSource, /showOwnership=\{runtimeScope === "all"\}/);
   assert.doesNotMatch(pageSource, /className="runtime-owner-badge"/);
-  assert.match(appSource, /canCreate=\{canCreateAgents\}/);
+  assert.match(appSource, /canCreateRuntimeAgents=\{canCreateRuntimeAgents\}/);
+  assert.match(appSource, /canCreatePersonalAgents=\{canCreatePersonalAgents\}/);
 });
 
 test("keeps Runtime title rows clear of redundant region badges", () => {
@@ -568,7 +587,7 @@ test("refreshes Runtime permissions without connecting to the data plane", () =>
   );
 });
 
-test("defers conversation data-plane requests until leaving the Agent list", () => {
+test("defers conversation and session requests while update preparation stays bounded", () => {
   assert.match(
     appSource,
     /if \(authStatus !== "authenticated"\) return;[\s\S]*?if \(agentsSource === "cloud"\) \{[\s\S]*?return;[\s\S]*?listApps\(\)/,
@@ -748,12 +767,30 @@ test("checks Runtime chat compatibility before enabling the connect action", () 
   assert.match(pageSource, /disabled=\{!actionable \|\| checkingCompatibility \|\| incompatible \|\| connecting \|\| connected\}/);
   assert.match(pageSource, />检测中<\/span>/);
   assert.match(pageSource, /onRetryCompatibility\?\.\(agent\)/);
+  assert.match(pageSource, /<Button[\s\S]*?color="primary"[\s\S]*?<ArrowRotateCw \/>[\s\S]*?重试[\s\S]*?<\/Button>/);
   assert.match(pageSource, /import \{ Badge \} from "@openai\/apps-sdk-ui\/components\/Badge"/);
   assert.match(pageSource, /import \{ Tooltip \} from "@openai\/apps-sdk-ui\/components\/Tooltip"/);
   assert.match(pageSource, /content=\{compatibility\?\.message\}/);
   assert.match(pageSource, /contentClassName="my-agent-compatibility-tooltip"/);
   assert.match(pageSource, /color="warning"[\s\S]*?>[\s\S]*?不支持对话[\s\S]*?<\/Badge>/);
   assert.match(pageSource, /color="danger"[\s\S]*?>[\s\S]*?检测失败[\s\S]*?<\/Badge>/);
+});
+
+test("prepares Runtime update capability before opening details without unbounded work", () => {
+  assert.match(pageSource, /prefetchRuntimeUpdateCapability/);
+  assert.match(pageSource, /invalidateRuntimeUpdateCapabilityCache/);
+  assert.match(pageSource, /const UPDATE_CAPABILITY_PREFETCH_LIMIT = 6/);
+  assert.match(pageSource, /const UPDATE_CAPABILITY_PREFETCH_CONCURRENCY = 2/);
+  assert.match(
+    pageSource,
+    /visibleAgents[\s\S]*?\.filter\(\(agent\) => Boolean\(agent\.runtime\)\)[\s\S]*?\.slice\(0, UPDATE_CAPABILITY_PREFETCH_LIMIT\)/,
+  );
+  assert.match(pageSource, /for \(let index = 0; index < UPDATE_CAPABILITY_PREFETCH_CONCURRENCY; index \+= 1\)/);
+  assert.match(pageSource, /if \(cancelled\) return/);
+  assert.match(pageSource, /onPointerEnter=\{\(\) => onPrepareUpdate\?\.\(agent\)\}/);
+  assert.match(pageSource, /onFocusCapture=\{\(\) => onPrepareUpdate\?\.\(agent\)\}/);
+  assert.match(pageSource, /canUpdate: boolean/);
+  assert.match(appSource, /<MyAgents[\s\S]*?canUpdate=\{canCreateRuntimeAgents \|\| canManageAgents\}/);
 });
 
 test("uses connected Runtime state only for the card action", () => {

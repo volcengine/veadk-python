@@ -15,12 +15,13 @@
 import asyncio
 import os
 
+import pytest
+
 from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.utils.misc import formatted_timestamp
 
 
-def test_short_term_memory():
-    # local
+def test_short_term_memory_local():
     memory = ShortTermMemory(backend="local")
     asyncio.run(
         memory.session_service.create_session(
@@ -34,7 +35,25 @@ def test_short_term_memory():
     )
     assert session is not None
 
-    # sqlite
+
+def test_short_term_memory_sqlite():
+    # Every non-`local` backend goes through ADK's DatabaseSessionService, whose
+    # async engine runs the sync DBAPI inside a greenlet. SQLAlchemy declares
+    # greenlet only for a fixed platform_machine list (aarch64/x86_64/amd64/
+    # win32) that excludes macOS arm64, so a plain `pip install veadk-python`
+    # leaves it missing there; `sqlalchemy[asyncio]` requires it unconditionally
+    # and is what veadk-python[extensions] pulls in transitively (via
+    # llama-index-core). On Linux/Windows CI runners it is always present, so
+    # this never skips there.
+    pytest.importorskip(
+        "greenlet",
+        reason=(
+            "SQLAlchemy's async engine needs greenlet: "
+            'pip install "sqlalchemy[asyncio]" '
+            '(also pulled in by "veadk-python[extensions]")'
+        ),
+    )
+
     memory = ShortTermMemory(
         backend="sqlite",
         local_database_path=f"/tmp/tmp_for_test_{formatted_timestamp()}.db",
@@ -52,3 +71,60 @@ def test_short_term_memory():
     assert session is not None
     assert os.path.exists(memory.local_database_path)
     os.remove(memory.local_database_path)
+
+
+def test_after_create_session_callback_only_runs_for_new_session():
+    created_session_ids = []
+
+    def after_create_session(session):
+        created_session_ids.append(session.id)
+
+    memory = ShortTermMemory(
+        backend="local",
+        after_create_session_callback=after_create_session,
+    )
+
+    first_session = asyncio.run(
+        memory.create_session(app_name="app", user_id="user", session_id="session")
+    )
+    second_session = asyncio.run(
+        memory.create_session(app_name="app", user_id="user", session_id="session")
+    )
+
+    assert first_session is not None
+    assert second_session is not None
+    assert created_session_ids == ["session"]
+
+
+def test_after_create_session_callback_supports_async_callback():
+    created_session_ids = []
+
+    async def after_create_session(session):
+        await asyncio.sleep(0)
+        created_session_ids.append(session.id)
+
+    memory = ShortTermMemory(
+        backend="local",
+        after_create_session_callback=after_create_session,
+    )
+
+    asyncio.run(
+        memory.create_session(app_name="app", user_id="user", session_id="session")
+    )
+
+    assert created_session_ids == ["session"]
+
+
+def test_after_create_session_callback_error_is_propagated():
+    def after_create_session(_session):
+        raise RuntimeError("callback failed")
+
+    memory = ShortTermMemory(
+        backend="local",
+        after_create_session_callback=after_create_session,
+    )
+
+    with pytest.raises(RuntimeError, match="callback failed"):
+        asyncio.run(
+            memory.create_session(app_name="app", user_id="user", session_id="session")
+        )

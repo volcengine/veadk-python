@@ -1,0 +1,87 @@
+.migration-optimize-backdrop {
+  position: fixed;
+  z-index: 1200;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: hsl(var(--foreground) / .22);
+  backdrop-filter: blur(3px);
+}
+
+.migration-optimize-dialog {
+  width: min(720px, 94vw);
+  max-height: min(820px, 90vh);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  background: hsl(var(--panel));
+  color: hsl(var(--foreground));
+  box-shadow: 0 24px 64px hsl(var(--foreground) / .16);
+}
+
+.migration-optimize-dialog__header {
+  min-height: 58px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 12px 10px 20px;
+  border-bottom: 1px solid hsl(var(--border));
+}
+.migration-optimize-dialog__header > div { min-width: 0; }
+.migration-optimize-dialog__header h2,
+.migration-optimize-dialog__header p { margin: 0; }
+.migration-optimize-dialog__header h2 { font-size: 15px; font-weight: 650; }
+.migration-optimize-dialog__header p {
+  overflow: hidden;
+  margin-top: 3px;
+  color: hsl(var(--muted-foreground));
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.migration-optimize-dialog__close {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+}
+.migration-optimize-dialog__close svg { width: 17px; height: 17px; }
+.migration-optimize-dialog__close:hover:not(:disabled) {
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
+}
+.migration-optimize-dialog__close:disabled { opacity: .45; cursor: not-allowed; }
+.migration-optimize-dialog__close:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 1px;
+}
+
+.migration-optimize-dialog__body {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px;
+}
+.migration-optimize-dialog__body .ic-goal-panel {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+@media (max-width: 640px) {
+  .migration-optimize-backdrop { padding: 12px; }
+  .migration-optimize-dialog { width: 100%; max-height: calc(100vh - 24px); }
+  .migration-optimize-dialog__body { padding: 18px; }
+}

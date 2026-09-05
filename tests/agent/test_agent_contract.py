@@ -38,6 +38,7 @@ _EXPECTED_DEFAULTS = {
     "enable_skills_checklist": False,
     "enable_tunnel": False,
     "runtime": "adk",
+    "tool_thread_pool_config": None,
 }
 
 _EXPECTED_PRESENT = {

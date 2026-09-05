@@ -23,6 +23,7 @@ from typing import Any
 
 import httpx
 
+from frontend.server.agentkit_clients import create_agentkit_client
 from frontend.server.skills.storage import resolve_skill_publish_credentials
 from frontend.server.storage import StudioProvider
 
@@ -46,7 +47,7 @@ class StudioSkillCatalog:
     """Query public and account Skill catalogs with Studio-side credentials."""
 
     def __init__(self, provider: StudioProvider = "volcengine") -> None:
-        self.provider = provider
+        self.provider: StudioProvider = provider
 
     def regions(self, requested: str) -> list[str]:
         candidate = requested.strip()
@@ -75,7 +76,9 @@ class StudioSkillCatalog:
                 409,
                 "Studio cloud credentials are not configured for Skill catalog access.",
             ) from error
-        return AgentkitSkillsClient(
+        return create_agentkit_client(
+            AgentkitSkillsClient,
+            provider=self.provider,
             access_key=credentials.access_key,
             secret_key=credentials.secret_key,
             region=region,

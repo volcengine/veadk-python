@@ -44,6 +44,7 @@ from frontend.service.studio_release_server.tos_store import (
     DependencyStore,
     SourceStore,
     resolve_credentials,
+    tos_endpoint,
 )
 
 _MAX_SOURCE_ARCHIVE_BYTES = 200 * 1024 * 1024
@@ -56,6 +57,7 @@ _GITHUB_CLONE_MIRROR = "https://ghfast.top/https://github.com"
 _GIT_CLONE_ATTEMPT_SECONDS = 30
 _SPARSE_CHECKOUT_PATHS = (
     "/pyproject.toml",
+    "/uv.lock",
     "/README.md",
     "/LICENSE",
     "/frontend/",
@@ -79,6 +81,7 @@ _CGROUP_MEMORY_LIMIT_PATHS = (
 )
 _NODE_HEAP_MEMORY_RATIO = 0.75
 _DEFAULT_NODE_HEAP_MB = 4096
+_STUDIO_RELEASE_CONTRACT = "agentkit-cli-v1"
 
 logger = logging.getLogger(__name__)
 
@@ -209,7 +212,9 @@ class StudioReleaseBuilder:
                 raise RuntimeError("uv is not installed in the release server package.")
             tools_seconds = time.monotonic() - tools_started
 
-            version = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d%H%M%S")
+            version = request.version or datetime.now(
+                ZoneInfo("Asia/Shanghai")
+            ).strftime("%Y%m%d%H%M%S")
             output_dir = workspace / "dist"
             publish_started = time.monotonic()
             on_progress("building", "正在构建 Studio Bundle 并发布到 TOS")
@@ -603,7 +608,11 @@ class StudioReleaseBuilder:
         frontend_assets: Path | None,
         dependency_wheels: Path | None,
     ) -> None:
-        credentials = resolve_credentials()
+        if request.thin_bundle and not self._settings.thin_releases:
+            raise RuntimeError(
+                "Studio thin releases are not enabled on this Release Server."
+            )
+        credentials = resolve_credentials(self._settings.provider)
         command = [
             sys.executable,
             str(Path(__file__).with_name("publisher.py")),
@@ -619,9 +628,15 @@ class StudioReleaseBuilder:
             self._settings.bucket,
             "--region",
             self._settings.region,
+            "--provider",
+            self._settings.provider,
             "--prefix",
             self._settings.release_prefix,
+            "--release-contract",
+            _STUDIO_RELEASE_CONTRACT,
         ]
+        if request.thin_bundle:
+            command.append("--thin")
         for item in request.changelog:
             command.extend(("--changelog", item))
         if frontend_assets is not None:
@@ -638,12 +653,15 @@ class StudioReleaseBuilder:
         if node_bin is not None:
             path_entries.insert(0, str(node_bin))
         path_entries.append(env.get("PATH", ""))
+        credential_prefix = (
+            "BYTEPLUS" if self._settings.provider == "byteplus" else "VOLCENGINE"
+        )
         env.update(
             {
                 "PATH": os.pathsep.join(path_entries),
-                "VOLCENGINE_ACCESS_KEY": credentials.access_key,
-                "VOLCENGINE_SECRET_KEY": credentials.secret_key,
-                "VOLCENGINE_SESSION_TOKEN": credentials.session_token,
+                f"{credential_prefix}_ACCESS_KEY": credentials.access_key,
+                f"{credential_prefix}_SECRET_KEY": credentials.secret_key,
+                f"{credential_prefix}_SESSION_TOKEN": credentials.session_token,
                 "TZ": "Asia/Shanghai",
                 "PIP_INDEX_URL": _PYPI_SIMPLE_INDEX,
                 "UV_CACHE_DIR": str(
@@ -676,12 +694,12 @@ class StudioReleaseBuilder:
     def _verify_latest(self, expected: dict[str, object]) -> None:
         import tos
 
-        credentials = resolve_credentials()
+        credentials = resolve_credentials(self._settings.provider)
         client = tos.TosClientV2(
             credentials.access_key,
             credentials.secret_key,
             security_token=credentials.session_token or None,
-            endpoint=f"tos-{self._settings.region}.volces.com",
+            endpoint=tos_endpoint(self._settings.region, self._settings.provider),
             region=self._settings.region,
         )
         response = client.get_object(

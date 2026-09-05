@@ -206,7 +206,8 @@ test("GitHub detail keeps credentials ephemeral and exposes accessible submissio
   assert.match(githubSource, /className="pp-region-trigger"/);
   assert.match(githubSource, /role="listbox" aria-label="地域"/);
   assert.doesNotMatch(githubSource, /<select/);
-  assert.match(templateSource, /VOLCENGINE_ACCESS_KEY、VOLCENGINE_SECRET_KEY（必填）/);
+  assert.match(templateSource, /cloudCredentialSecretLabels\(cloudProvider\)/);
+  assert.match(templateSource, /cloudCredentialSecretNames\(cloudProvider\)/);
   assert.doesNotMatch(appSource, /applicationsView !== "github" \? <Sidebar/);
   assert.match(
     appSource,

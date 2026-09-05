@@ -44,6 +44,7 @@ from veadk.utils.cloud_provider import (
     CloudProvider,
     default_vefaas_application_template_id,
     vefaas_openapi_host,
+    configure_openapi_tls,
 )
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import formatted_timestamp, getenv
@@ -51,6 +52,20 @@ from veadk.utils.volcengine_sign import ve_request
 from veadk.version import VERSION
 
 logger = get_logger(__name__)
+
+_LARGE_CODE_BUNDLE_BYTES = 64 * 1024 * 1024
+_STANDARD_CODE_UPLOAD_TIMEOUT_SECONDS = 300
+_LARGE_CODE_UPLOAD_TIMEOUT_SECONDS = 1800
+_LARGE_CODE_UPLOAD_ATTEMPTS = 2
+
+
+def _code_upload_timeout_seconds(code_zip_size: int) -> int:
+    """Keep ordinary uploads unchanged while allowing bounded large bundles."""
+
+    if code_zip_size > _LARGE_CODE_BUNDLE_BYTES:
+        return _LARGE_CODE_UPLOAD_TIMEOUT_SECONDS
+    return _STANDARD_CODE_UPLOAD_TIMEOUT_SECONDS
+
 
 _APPLICATION_REVISION_LOG_MAX_BYTES = 50_000
 _TRANSIENT_VEFAAS_ERROR_MARKERS = (
@@ -143,8 +158,9 @@ class VeFaaS:
         configuration.sk = self.sk
         configuration.session_token = self.session_token
         configuration.region = region
-        if provider == "byteplus":
-            configuration.host = f"https://{self.openapi_host}"
+        scheme = os.getenv("VEFAAS_OPENAPI_SCHEME", "https").strip() or "https"
+        configuration.host = f"{scheme}://{self.openapi_host}"
+        configure_openapi_tls(configuration)
 
         configuration.client_side_validation = True
         volcenginesdkcore.Configuration.set_default(configuration)
@@ -211,15 +227,37 @@ class VeFaaS:
         headers = {
             "Content-Type": "application/zip",
         }
-        try:
-            response = requests.put(
-                url=upload_url,
-                data=code_zip_data,
-                headers=headers,
-                timeout=(300, 300),
-            )
-        except requests.RequestException:
-            raise ValueError("Function code upload request failed.") from None
+        attempts = (
+            _LARGE_CODE_UPLOAD_ATTEMPTS
+            if code_zip_size > _LARGE_CODE_BUNDLE_BYTES
+            else 1
+        )
+        response = None
+        for attempt in range(1, attempts + 1):
+            try:
+                response = requests.put(
+                    url=upload_url,
+                    data=code_zip_data,
+                    headers=headers,
+                    timeout=(
+                        _STANDARD_CODE_UPLOAD_TIMEOUT_SECONDS,
+                        _code_upload_timeout_seconds(code_zip_size),
+                    ),
+                )
+                break
+            except (requests.ConnectionError, requests.Timeout) as upload_error:
+                if attempt == attempts:
+                    raise ValueError("Function code upload request failed.") from None
+                logger.warning(
+                    "Large function code upload connection was interrupted; "
+                    "retrying the same immutable payload once (%s).",
+                    type(upload_error).__name__,
+                )
+                time.sleep(1)
+            except requests.RequestException:
+                raise ValueError("Function code upload request failed.") from None
+        if response is None:
+            raise ValueError("Function code upload request failed.")
         if not (200 <= response.status_code < 300):
             raise ValueError(
                 f"Function code upload failed with status code {response.status_code}."
@@ -890,6 +928,44 @@ class VeFaaS:
         if "_" in name:
             raise ValueError("Function or Application name cannot contain '_'.")
 
+        # Treat deployments as idempotent by application name.  Studio uses a
+        # stable application name so subsequent `studio deploy` runs should
+        # replace the existing function bundle instead of attempting to create
+        # another function with the same deterministic `<name>-fn` name.
+        existing_app_id = self.find_app_id_by_name(name)
+        if existing_app_id:
+            _, application_response = self._get_application_status(existing_app_id)
+            cloud_resource = json.loads(application_response["Result"]["CloudResource"])
+            function = cloud_resource.get("framework", {}).get("function", {})
+            function_id = str(function.get("Id") or "")
+            function_name = str(function.get("Name") or f"{name}-fn")
+            if not function_id:
+                raise ValueError(
+                    f"Function '{function_name}' not found for existing "
+                    f"application '{name}'."
+                )
+
+            logger.info(
+                f"VeFaaS application {name} already exists with ID "
+                f"{existing_app_id}; updating function {function_name} "
+                f"with ID {function_id}."
+            )
+            url = self.update_application_code_bundle(
+                application_id=existing_app_id,
+                function_id=function_id,
+                path=path,
+                environment_overrides={
+                    key: value
+                    for key, value in veadk.config.veadk_environments.items()
+                    if value is not None
+                },
+                disable_gateway_cors=disable_gateway_cors,
+            )
+            logger.info(
+                f"VeFaaS application {name} with ID {existing_app_id} updated on {url}."
+            )
+            return url, existing_app_id, function_id
+
         # Give default names
         if not gateway_name:
             gateway_name = f"{name}-gw-{formatted_timestamp()}"
@@ -989,6 +1065,9 @@ class VeFaaS:
                 source=image,  # Container image URL
                 request_timeout=1800,  # Request timeout in seconds
                 envs=envs,  # Environment variables from configuration
+                memory_mb=4096,
+                role=getenv("IAM_ROLE", None, allow_false_values=True),
+                project_name=self.project_name,
             )
         )
 
@@ -1115,6 +1194,9 @@ class VeFaaS:
                 source=image,  # Container image URL
                 request_timeout=1800,  # Request timeout in seconds
                 envs=envs,  # Environment variables from configuration
+                memory_mb=4096,
+                role=getenv("IAM_ROLE", None, allow_false_values=True),
+                project_name=self.project_name,
             )
         )
 

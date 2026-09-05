@@ -4,7 +4,7 @@
 import type { ProjectFile } from "../project";
 
 /** Discriminator for where a selected skill came from. */
-export type SkillSource = "skillhub" | "local" | "skillspace";
+export type SkillSource = "skillhub" | "local" | "skillspace" | "runtime";
 
 /** A selectable hit from any source. Pickers produce these before the user
  *  toggles them into SelectedSkill. */
@@ -45,6 +45,9 @@ export interface SelectedSkill {
   namespace?: string;
   // Local: embedded file snapshot so the selection survives YAML round-trip / reload.
   localFiles?: ProjectFile[];
+  // Runtime: opaque Skill already present in the deployed source image. It has
+  // no browser-visible file snapshot and is preserved unless explicitly
+  // removed or replaced by another source with the same folder.
   // SkillSpace: ids resolved to SKILL.md content at finish() time (SkillMd is
   // fetched live rather than serialized, since it can be large).
   skillSpaceId?: string;

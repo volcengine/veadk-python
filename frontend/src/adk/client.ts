@@ -10,6 +10,10 @@ import {
 } from "./authSession";
 import { parseJsonResponse } from "./jsonResponse";
 import { formatRunSseError } from "./runSseError";
+import {
+  runtimeContextFromResponse,
+  type RuntimeLogTarget,
+} from "./runtimeLogs";
 import { parseSSE } from "./sse";
 import { normalizeRuntimeDescription } from "./runtimeDescription";
 import {
@@ -495,7 +499,10 @@ function formatErrorDetail(detail: unknown): string {
   return "";
 }
 
-async function httpErrorMessage(res: Response, fallback: string): Promise<string> {
+export async function httpErrorMessage(
+  res: Response,
+  fallback: string,
+): Promise<string> {
   const context = `${fallback}（HTTP ${res.status}）`;
   const text = await res.text().catch(() => "");
   if (!text) return context;
@@ -612,6 +619,8 @@ const runtimeAgentInfoCache = new Map<string, ClientCacheEntry<AgentInfo>>();
 const runtimeDetailCache = new Map<string, ClientCacheEntry<RuntimeDetail>>();
 const feedbackCasesCache =
   new Map<string, ClientCacheEntry<AgentFeedbackCasesResponse>>();
+const runtimeUpdateCapabilityCache =
+  new Map<string, ClientCacheEntry<RuntimeUpdateCapability>>();
 
 function runtimeAppsCacheKey(
   runtimeId: string,
@@ -622,6 +631,7 @@ function runtimeAppsCacheKey(
 }
 
 export function setClientCloudProvider(provider: CloudProvider): void {
+  if (provider !== activeCloudProvider) runtimeUpdateCapabilityCache.clear();
   activeCloudProvider = provider;
 }
 
@@ -673,6 +683,32 @@ function rememberClientCache<T>(
 ): T {
   cache.set(key, { value, updatedAt: Date.now() });
   return value;
+}
+
+function waitForSharedRequest<T>(
+  promise: Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) {
+    return Promise.reject(new DOMException("The operation was aborted.", "AbortError"));
+  }
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => {
+      reject(new DOMException("The operation was aborted.", "AbortError"));
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    void promise.then(
+      (value) => {
+        signal.removeEventListener("abort", abort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", abort);
+        reject(error);
+      },
+    );
+  });
 }
 
 async function runtimeProxyErrorCode(response: Response): Promise<string> {
@@ -1662,11 +1698,17 @@ export interface RunArgs {
   invocation?: FrontendInvocation;
   /** Complete set of local BFF tool IDs selected for this run. */
   platformTools?: readonly string[];
+  /** Studio-only immutable environment selections for this session. */
+  environmentMounts?: readonly SessionEnvironmentMountSelection[];
+  /** @deprecated Compatibility with older Studio BFF versions. */
+  environmentMount?: SessionEnvironmentMountSelection;
   /** Function responses to send instead of/alongside text — used to resume a
    *  long-running call (e.g. answering ADK's `adk_request_credential`). */
   functionResponses?: { id: string; name: string; response: unknown }[];
   /** Abort the stream (e.g. when the user switches to another session). */
   signal?: AbortSignal;
+  /** Receives trusted instance metadata exposed by the same-origin Studio BFF. */
+  onRuntimeContext?: (context: RuntimeLogTarget) => void;
 }
 
 export const RUN_SSE_EMPTY_RESPONSE_ERROR =
@@ -1738,8 +1780,11 @@ export async function* runSSE({
   attachments = [],
   invocation,
   platformTools,
+  environmentMounts,
+  environmentMount,
   functionResponses = [],
   signal,
+  onRuntimeContext,
 }: RunArgs): AsyncGenerator<AdkEvent, void, unknown> {
   const { app, ep } = resolve(appName);
   const attachmentParts = attachments.flatMap<Record<string, unknown>>((a) => {
@@ -1801,6 +1846,11 @@ export async function* runSSE({
           ...(platformTools !== undefined
             ? { platform_tools: [...platformTools] }
             : {}),
+          ...(environmentMounts !== undefined
+            ? { environment_mounts: [...environmentMounts] }
+            : environmentMount
+              ? { environment_mount: environmentMount }
+              : {}),
           custom_metadata: invocationMetadata
             ? { veadkInvocation: invocationMetadata }
             : undefined,
@@ -1816,6 +1866,12 @@ export async function* runSSE({
     if (signal?.aborted || (error as Error)?.name === "AbortError") throw error;
     throw new Error(formatRunSseError(error));
   }
+  const runtimeContext = runtimeContextFromResponse(
+    res,
+    ep.runtimeId ?? "",
+    ep.region ?? "",
+  );
+  if (runtimeContext) onRuntimeContext?.(runtimeContext);
   if (!res.ok) {
     firstEventDeadline.cleanup();
     const detail = await httpErrorMessage(res, "运行会话失败");
@@ -1886,6 +1942,8 @@ export async function checkRuntimeNameAvailability(
 export interface IntelligentDevelopmentDeploymentSource {
   kind: "intelligentDevelopment";
   sessionId: string;
+  projectId?: string;
+  versionId?: string;
   artifactSha256: string;
   validationReportSha256: string;
   acknowledgeUnverified?: true;
@@ -2049,7 +2107,102 @@ export interface SystemInfoResponse {
 }
 
 export type EnvironmentOperatingSystem = "ubuntu-22.04" | "ubuntu-24.04";
+export type EnvironmentBaseEnvironment = "ubuntu" | "aio-sandbox" | "codex-sandbox";
 export type EnvironmentLanguage = "python-3.10" | "python-3.12";
+export interface SessionEnvironmentMountSelection {
+  environment_id: string;
+  environment_version_id: string;
+  /** Identifies one continuous attachment; absent for legacy Studio clients. */
+  mount_instance_id?: string;
+}
+
+export interface PreparedSessionEnvironmentMount {
+  environment_id: string;
+  environment_version_id: string;
+  mount_instance_id: string;
+  sandbox_session_id: string;
+}
+
+export function parsePreparedSessionEnvironmentMounts(
+  value: unknown,
+  expectedMounts: readonly SessionEnvironmentMountSelection[],
+): PreparedSessionEnvironmentMount[] {
+  const payload = value as { mounts?: unknown };
+  if (!payload || typeof payload !== "object" || !Array.isArray(payload.mounts)) {
+    throw new Error("挂载环境响应格式无效");
+  }
+  if (payload.mounts.length !== expectedMounts.length) {
+    throw new Error("挂载环境响应与请求不一致");
+  }
+  return payload.mounts.map((item, index) => {
+    const expected = expectedMounts[index];
+    if (
+      !item ||
+      typeof item !== "object" ||
+      typeof item.environment_id !== "string" ||
+      typeof item.environment_version_id !== "string" ||
+      typeof item.mount_instance_id !== "string" ||
+      typeof item.sandbox_session_id !== "string" ||
+      !item.environment_id ||
+      !item.environment_version_id ||
+      !item.mount_instance_id ||
+      !item.sandbox_session_id
+    ) {
+      throw new Error("挂载环境响应格式无效");
+    }
+    if (
+      item.environment_id !== expected.environment_id ||
+      item.environment_version_id !== expected.environment_version_id ||
+      (expected.mount_instance_id !== undefined &&
+        item.mount_instance_id !== expected.mount_instance_id)
+    ) {
+      throw new Error("挂载环境响应与请求不一致");
+    }
+    return item as PreparedSessionEnvironmentMount;
+  });
+}
+
+export async function prepareSessionEnvironmentMounts({
+  runtimeId,
+  appName,
+  userId,
+  sessionId,
+  environmentMounts,
+}: {
+  runtimeId: string;
+  appName: string;
+  userId: string;
+  sessionId: string;
+  environmentMounts: readonly SessionEnvironmentMountSelection[];
+}): Promise<PreparedSessionEnvironmentMount[]> {
+  const { app } = resolve(appName);
+  let response: Response;
+  try {
+    response = await apiFetch("/web/v3/session-environment-mounts/prepare", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        runtime_id: runtimeId,
+        app_name: app,
+        user_id: userId,
+        session_id: sessionId,
+        environment_mounts: [...environmentMounts],
+      }),
+    });
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new Error("无法连接 Studio 服务，环境挂载未完成。请检查网络后重试。");
+    }
+    throw error;
+  }
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, "挂载环境失败"));
+  }
+  return parsePreparedSessionEnvironmentMounts(
+    await response.json(),
+    environmentMounts,
+  );
+}
 export type EnvironmentBuildStatus =
   | "preparing"
   | "queued"
@@ -2057,6 +2210,7 @@ export type EnvironmentBuildStatus =
   | "scanning"
   | "available"
   | "failed";
+export type EnvironmentSandboxToolStatus = "" | "creating" | "ready" | "failed";
 
 export interface EnvironmentBuildResource {
   source: "provided" | "managed";
@@ -2067,6 +2221,7 @@ export interface EnvironmentBuildResource {
   registry?: string;
   namespace?: string;
   repository?: string;
+  region?: string;
   imageRepository?: string;
   consoleUrl: string;
 }
@@ -2089,6 +2244,9 @@ export interface EnvironmentBuildVersion {
   versionId: string;
   status: EnvironmentBuildStatus;
   image: string;
+  toolId: string;
+  toolStatus: EnvironmentSandboxToolStatus;
+  sourceCommitSha: string;
   error: string;
   runId: string;
   currentStep: string;
@@ -2106,15 +2264,56 @@ export interface EnvironmentBuildVersion {
   } | null;
 }
 
+export interface EnvironmentManifestSkill {
+  name: string;
+  folder: string;
+  source: "skillhub" | "local" | "skillspace";
+  version: string;
+  digest: string;
+}
+
+export interface EnvironmentManifest {
+  apiVersion: "agentkit.studio/v3" | "agentkit.studio/v1alpha1";
+  kind: "Environment";
+  metadata: {
+    id: string;
+    name: string;
+    version: string;
+    description: string;
+  };
+  spec: {
+    image: string;
+    baseEnvironment: EnvironmentBaseEnvironment;
+    baseImage: string;
+    operatingSystem: EnvironmentOperatingSystem;
+    language: EnvironmentLanguage;
+    executionRuntime: "veadk";
+    packages: string[];
+    capabilities: string[];
+    skills: EnvironmentManifestSkill[];
+  };
+  status: {
+    phase: EnvironmentBuildStatus;
+    toolId: string;
+    toolStatus: EnvironmentSandboxToolStatus;
+    createdAt: string;
+    updatedAt: string;
+  };
+}
+
 export interface StudioEnvironment {
   id: string;
   name: string;
   description: string;
+  baseEnvironment: EnvironmentBaseEnvironment;
   operatingSystem: EnvironmentOperatingSystem;
   language: EnvironmentLanguage;
   optionIds: string[];
   selectedSkills: SelectedSkill[];
   dockerfile: string;
+  gitSource?: EnvironmentGitSource | null;
+  containerRepository?: EnvironmentContainerRepository | null;
+  imageSource?: EnvironmentImageSource | null;
   createdAt: string;
   updatedAt: string;
   latestVersion: EnvironmentBuildVersion | null;
@@ -2138,11 +2337,86 @@ export interface WorkspaceInput {
 export interface EnvironmentInput {
   name: string;
   description: string;
+  baseEnvironment: EnvironmentBaseEnvironment;
   operatingSystem: EnvironmentOperatingSystem;
   language: EnvironmentLanguage;
   optionIds: string[];
   selectedSkills: SelectedSkill[];
   dockerfile: string;
+  gitSource?: EnvironmentGitSource | null;
+  containerRepository?: EnvironmentContainerRepository | null;
+  imageSource?: EnvironmentImageSource | null;
+}
+
+export interface EnvironmentGitSource {
+  repositoryUrl: string;
+  ref?: string;
+  dockerfilePath: string;
+}
+
+export interface EnvironmentContainerRepository {
+  region: string;
+  registry: string;
+  namespace: string;
+  repository: string;
+}
+
+export interface EnvironmentImageSource extends EnvironmentContainerRepository {
+  reference: string;
+}
+
+export interface EnvironmentRepositoryInspection {
+  repositoryUrl: string;
+  ref: string;
+  commitSha: string;
+  dockerfiles: string[];
+}
+
+export interface EnvironmentShareCodeExport {
+  shareCode: string;
+  name: string;
+}
+
+export interface EnvironmentShareCodeInspection {
+  index: number;
+  status: "valid" | "invalid";
+  name: string;
+  error: string;
+}
+
+export interface EnvironmentShareCodeImportItem {
+  index: number;
+  status: "created" | "duplicate" | "failed";
+  name: string;
+  environment?: StudioEnvironment;
+  error: string;
+}
+
+export function parseEnvironmentShareCodes(value: string): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of value.split(/[,，\n\r]+/)) {
+    const code = item.trim();
+    if (!code || seen.has(code)) continue;
+    seen.add(code);
+    result.push(code);
+  }
+  return result;
+}
+
+export async function writeEnvironmentShareCode(
+  shareCode: string,
+  clipboard: Pick<Clipboard, "writeText"> | undefined =
+    typeof navigator === "undefined" ? undefined : navigator.clipboard,
+): Promise<void> {
+  if (!clipboard?.writeText) {
+    throw new Error("当前浏览器不支持写入剪贴板。");
+  }
+  try {
+    await clipboard.writeText(shareCode);
+  } catch {
+    throw new Error("无法写入剪贴板，请检查剪贴板权限。");
+  }
 }
 
 export interface EnvironmentResourcesResponse {
@@ -2259,8 +2533,13 @@ function environmentBuildVersion(value: unknown): EnvironmentBuildVersion | null
     : [];
   return {
     ...candidate,
+    toolId: typeof candidate.toolId === "string" ? candidate.toolId : "",
+    toolStatus: ["creating", "ready", "failed"].includes(candidate.toolStatus)
+      ? candidate.toolStatus
+      : "",
     runId: typeof candidate.runId === "string" ? candidate.runId : "",
     currentStep: typeof candidate.currentStep === "string" ? candidate.currentStep : "",
+    sourceCommitSha: typeof candidate.sourceCommitSha === "string" ? candidate.sourceCommitSha : "",
     steps,
     progressError: typeof candidate.progressError === "string" ? candidate.progressError : "",
     logTail: typeof candidate.logTail === "string" ? candidate.logTail : "",
@@ -2270,15 +2549,103 @@ function environmentBuildVersion(value: unknown): EnvironmentBuildVersion | null
   };
 }
 
+export function parseEnvironmentManifest(value: unknown): EnvironmentManifest {
+  if (!value || typeof value !== "object") {
+    throw new Error("环境 Manifest 响应格式无效");
+  }
+  const candidate = value as EnvironmentManifest;
+  if (
+    !["agentkit.studio/v3", "agentkit.studio/v1alpha1"].includes(
+      candidate.apiVersion,
+    ) ||
+    candidate.kind !== "Environment" ||
+    !candidate.metadata ||
+    typeof candidate.metadata.id !== "string" ||
+    typeof candidate.metadata.name !== "string" ||
+    typeof candidate.metadata.version !== "string" ||
+    typeof candidate.metadata.description !== "string" ||
+    !candidate.spec ||
+    typeof candidate.spec.image !== "string" ||
+    !["ubuntu", "aio-sandbox", "codex-sandbox"].includes(
+      candidate.spec.baseEnvironment,
+    ) ||
+    typeof candidate.spec.baseImage !== "string" ||
+    !["ubuntu-22.04", "ubuntu-24.04"].includes(candidate.spec.operatingSystem) ||
+    !["python-3.10", "python-3.12"].includes(candidate.spec.language) ||
+    candidate.spec.executionRuntime !== "veadk" ||
+    !Array.isArray(candidate.spec.packages) ||
+    !candidate.spec.packages.every((item) => typeof item === "string") ||
+    !Array.isArray(candidate.spec.capabilities) ||
+    !candidate.spec.capabilities.every((item) => typeof item === "string") ||
+    !Array.isArray(candidate.spec.skills) ||
+    !candidate.status ||
+    !ENVIRONMENT_BUILD_STATUSES.has(candidate.status.phase) ||
+    typeof candidate.status.createdAt !== "string" ||
+    typeof candidate.status.updatedAt !== "string"
+  ) {
+    throw new Error("环境 Manifest 响应格式无效");
+  }
+  return candidate;
+}
+
+function environmentContainerRepository(
+  value: unknown,
+): EnvironmentContainerRepository | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!value || typeof value !== "object") {
+    throw new Error("环境镜像仓库响应格式无效");
+  }
+  const candidate = value as Partial<EnvironmentContainerRepository>;
+  if (
+    typeof candidate.region !== "string" ||
+    typeof candidate.registry !== "string" ||
+    typeof candidate.namespace !== "string" ||
+    typeof candidate.repository !== "string"
+  ) {
+    throw new Error("环境镜像仓库响应格式无效");
+  }
+  return candidate as EnvironmentContainerRepository;
+}
+
+function environmentGitSource(value: unknown): EnvironmentGitSource | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!value || typeof value !== "object") {
+    throw new Error("环境代码仓库响应格式无效");
+  }
+  const candidate = value as Partial<EnvironmentGitSource>;
+  if (
+    typeof candidate.repositoryUrl !== "string" ||
+    (candidate.ref !== undefined && typeof candidate.ref !== "string") ||
+    typeof candidate.dockerfilePath !== "string"
+  ) {
+    throw new Error("环境代码仓库响应格式无效");
+  }
+  return candidate as EnvironmentGitSource;
+}
+
+function environmentImageSource(value: unknown): EnvironmentImageSource | undefined {
+  const repository = environmentContainerRepository(value);
+  if (!repository) return undefined;
+  const candidate = value as Partial<EnvironmentImageSource>;
+  if (typeof candidate.reference !== "string") {
+    throw new Error("环境镜像来源响应格式无效");
+  }
+  return { ...repository, reference: candidate.reference };
+}
+
 function studioEnvironment(value: unknown): StudioEnvironment {
   if (!value || typeof value !== "object") {
     throw new Error("环境响应格式无效");
   }
-  const candidate = value as StudioEnvironment;
+  const candidate = value as StudioEnvironment & { baseEnvironment?: unknown };
   if (
     typeof candidate.id !== "string" ||
     typeof candidate.name !== "string" ||
     typeof candidate.description !== "string" ||
+    (candidate.baseEnvironment !== undefined &&
+      candidate.baseEnvironment !== "ubuntu" &&
+      candidate.baseEnvironment !== "aio-sandbox" &&
+      candidate.baseEnvironment !== "codex-sandbox") ||
     (candidate.operatingSystem !== "ubuntu-22.04" &&
       candidate.operatingSystem !== "ubuntu-24.04") ||
     (candidate.language !== "python-3.10" && candidate.language !== "python-3.12") ||
@@ -2293,7 +2660,15 @@ function studioEnvironment(value: unknown): StudioEnvironment {
   }
   return {
     ...candidate,
+    baseEnvironment: candidate.baseEnvironment === "aio-sandbox"
+      ? "aio-sandbox"
+      : candidate.baseEnvironment === "codex-sandbox"
+        ? "codex-sandbox"
+        : "ubuntu",
     selectedSkills: candidate.selectedSkills ?? [],
+    gitSource: environmentGitSource(candidate.gitSource),
+    containerRepository: environmentContainerRepository(candidate.containerRepository),
+    imageSource: environmentImageSource(candidate.imageSource),
     latestVersion: environmentBuildVersion(candidate.latestVersion),
   };
 }
@@ -2379,7 +2754,7 @@ export async function deleteWorkspace(
 }
 
 export async function listEnvironments(signal?: AbortSignal): Promise<StudioEnvironment[]> {
-  const response = await apiFetch("/web/environments", { signal });
+  const response = await apiFetch("/web/v3/environments", { signal });
   if (!response.ok) {
     throw new Error(await httpErrorMessage(response, "加载环境失败"));
   }
@@ -2388,18 +2763,169 @@ export async function listEnvironments(signal?: AbortSignal): Promise<StudioEnvi
   return payload.items.map(studioEnvironment);
 }
 
+export async function inspectEnvironmentRepository(
+  input: { repositoryUrl: string; ref?: string },
+  signal?: AbortSignal,
+): Promise<EnvironmentRepositoryInspection> {
+  const response = await apiFetch("/web/v3/environment-repositories/inspect", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, "探查代码仓库失败"));
+  }
+  const payload = (await response.json()) as Partial<EnvironmentRepositoryInspection>;
+  if (
+    typeof payload.repositoryUrl !== "string" ||
+    typeof payload.ref !== "string" ||
+    typeof payload.commitSha !== "string" ||
+    !Array.isArray(payload.dockerfiles) ||
+    !payload.dockerfiles.every((item) => typeof item === "string")
+  ) {
+    throw new Error("代码仓库探查响应格式无效");
+  }
+  return payload as EnvironmentRepositoryInspection;
+}
+
+export async function exportEnvironmentShareCode(
+  environmentId: string,
+  signal?: AbortSignal,
+): Promise<EnvironmentShareCodeExport> {
+  const response = await apiFetch(
+    `/web/v3/environments/${encodeURIComponent(environmentId)}/share-code`,
+    { method: "POST", signal },
+  );
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, "导出环境分享码失败"));
+  }
+  const payload = (await response.json()) as Partial<EnvironmentShareCodeExport>;
+  if (typeof payload.shareCode !== "string" || typeof payload.name !== "string") {
+    throw new Error("环境分享码响应格式无效");
+  }
+  return payload as EnvironmentShareCodeExport;
+}
+
+export async function inspectEnvironmentShareCodes(
+  shareCodes: string[],
+  signal?: AbortSignal,
+): Promise<EnvironmentShareCodeInspection[]> {
+  const response = await apiFetch("/web/v3/environment-share-codes/inspect", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ shareCodes }),
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, "检测环境分享码失败"));
+  }
+  const payload = (await response.json()) as { items?: unknown };
+  if (!Array.isArray(payload.items)) {
+    throw new Error("环境分享码检测响应格式无效");
+  }
+  return payload.items.map((value) => {
+    if (!value || typeof value !== "object") {
+      throw new Error("环境分享码检测响应格式无效");
+    }
+    const candidate = value as {
+      index?: unknown;
+      status?: unknown;
+      valid?: unknown;
+      name?: unknown;
+      error?: unknown;
+    };
+    const status = candidate.status === "valid" || candidate.valid === true
+      ? "valid"
+      : candidate.status === "invalid" || candidate.valid === false
+        ? "invalid"
+        : null;
+    if (
+      !Number.isInteger(candidate.index) ||
+      status === null ||
+      (candidate.name !== undefined && typeof candidate.name !== "string") ||
+      (candidate.error !== undefined && typeof candidate.error !== "string")
+    ) {
+      throw new Error("环境分享码检测响应格式无效");
+    }
+    return {
+      index: candidate.index as number,
+      status,
+      name: candidate.name ?? "",
+      error: candidate.error ?? "",
+    };
+  });
+}
+
+export async function importEnvironmentShareCodes(
+  shareCodes: string[],
+  signal?: AbortSignal,
+): Promise<EnvironmentShareCodeImportItem[]> {
+  const response = await apiFetch("/web/v3/environment-share-codes/import", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ shareCodes }),
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, "导入环境分享码失败"));
+  }
+  const payload = (await response.json()) as { items?: unknown };
+  if (!Array.isArray(payload.items)) {
+    throw new Error("环境分享码导入响应格式无效");
+  }
+  return payload.items.map((value) => {
+    if (!value || typeof value !== "object") {
+      throw new Error("环境分享码导入响应格式无效");
+    }
+    const candidate = value as {
+      index?: unknown;
+      status?: unknown;
+      name?: unknown;
+      environment?: unknown;
+      error?: unknown;
+    };
+    if (
+      !Number.isInteger(candidate.index) ||
+      !(candidate.status === "created" || candidate.status === "duplicate" || candidate.status === "failed") ||
+      (candidate.name !== undefined && typeof candidate.name !== "string") ||
+      (candidate.error !== undefined && typeof candidate.error !== "string")
+    ) {
+      throw new Error("环境分享码导入响应格式无效");
+    }
+    return {
+      index: candidate.index as number,
+      status: candidate.status,
+      name: candidate.name ?? "",
+      environment: candidate.environment === undefined || candidate.environment === null
+        ? undefined
+        : studioEnvironment(candidate.environment),
+      error: candidate.error ?? "",
+    };
+  });
+}
+
 async function writeEnvironment(
   path: string,
   method: "POST" | "PATCH",
   input: EnvironmentInput,
   signal?: AbortSignal,
 ): Promise<StudioEnvironment> {
-  const response = await apiFetch(path, {
-    method,
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-    signal,
-  });
+  let response: Response;
+  try {
+    response = await apiFetch(path, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+      signal,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    if (error instanceof TypeError) {
+      throw new Error("无法连接 Studio 服务，请确认后端已启动后重试。");
+    }
+    throw error;
+  }
   if (!response.ok) {
     throw new Error(await httpErrorMessage(response, "保存环境失败"));
   }
@@ -2410,7 +2936,7 @@ export function createEnvironment(
   input: EnvironmentInput,
   signal?: AbortSignal,
 ): Promise<StudioEnvironment> {
-  return writeEnvironment("/web/environments", "POST", input, signal);
+  return writeEnvironment("/web/v3/environments", "POST", input, signal);
 }
 
 export function updateEnvironment(
@@ -2419,7 +2945,7 @@ export function updateEnvironment(
   signal?: AbortSignal,
 ): Promise<StudioEnvironment> {
   return writeEnvironment(
-    `/web/environments/${encodeURIComponent(environmentId)}`,
+    `/web/v3/environments/${encodeURIComponent(environmentId)}`,
     "PATCH",
     input,
     signal,
@@ -2431,7 +2957,7 @@ export async function deleteEnvironment(
   signal?: AbortSignal,
 ): Promise<void> {
   const response = await apiFetch(
-    `/web/environments/${encodeURIComponent(environmentId)}`,
+    `/web/v3/environments/${encodeURIComponent(environmentId)}`,
     { method: "DELETE", signal },
   );
   if (!response.ok) {
@@ -2444,7 +2970,7 @@ export async function buildEnvironment(
   signal?: AbortSignal,
 ): Promise<EnvironmentBuildVersion> {
   const response = await apiFetch(
-    `/web/environments/${encodeURIComponent(environmentId)}/build`,
+    `/web/v3/environments/${encodeURIComponent(environmentId)}/build`,
     { method: "POST", signal },
   );
   if (!response.ok) {
@@ -2462,7 +2988,7 @@ export async function getEnvironmentBuild(
 ): Promise<EnvironmentBuildVersion> {
   const query = options.includeLogs ? "?includeLogs=true" : "";
   const response = await apiFetch(
-    `/web/environments/${encodeURIComponent(environmentId)}/builds/${encodeURIComponent(versionId)}${query}`,
+    `/web/v3/environments/${encodeURIComponent(environmentId)}/builds/${encodeURIComponent(versionId)}${query}`,
     { signal: options.signal },
   );
   if (!response.ok) {
@@ -2471,6 +2997,21 @@ export async function getEnvironmentBuild(
   const result = environmentBuildVersion(await response.json());
   if (!result) throw new Error("环境构建响应格式无效");
   return result;
+}
+
+export async function getEnvironmentManifest(
+  environmentId: string,
+  versionId: string,
+  signal?: AbortSignal,
+): Promise<EnvironmentManifest> {
+  const response = await apiFetch(
+    `/web/v3/environments/${encodeURIComponent(environmentId)}/builds/${encodeURIComponent(versionId)}/manifest`,
+    { signal },
+  );
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, "读取环境 Manifest 失败"));
+  }
+  return parseEnvironmentManifest(await response.json());
 }
 
 function environmentBuildResource(value: unknown): EnvironmentBuildResource {
@@ -2490,7 +3031,7 @@ function environmentBuildResource(value: unknown): EnvironmentBuildResource {
 export async function getEnvironmentResources(
   signal?: AbortSignal,
 ): Promise<EnvironmentResourcesResponse> {
-  const response = await apiFetch("/web/environment-resources", { signal });
+  const response = await apiFetch("/web/v3/environment-resources", { signal });
   if (!response.ok) {
     throw new Error(await httpErrorMessage(response, "加载环境构建资源失败"));
   }
@@ -2952,6 +3493,23 @@ export async function deployAgentkitProject(
     runtimeId?: string;
     runtimeName?: string;
     appName?: string;
+    editMode?: "source-preserving" | "regenerate";
+    draft?: AgentDraft;
+    updateEtag?: string;
+    baseRuntimeVersion?: number | null;
+    removeRuntimeEnvKeys?: string[];
+    mcpSecretValues?: Array<{
+      agentName: string;
+      name: string;
+      url: string;
+      value: string;
+    }>;
+    mcpCredentialReuses?: Array<{
+      agentName: string;
+      name: string;
+      url: string;
+      sourceAuthTokenEnv: string;
+    }>;
     sessionStorage?: "in-memory" | "persistent";
     minInstance?: number;
     maxInstance?: number;
@@ -3007,6 +3565,13 @@ export async function deployAgentkitProject(
           runtimeId: opts?.runtimeId,
           runtimeName: opts?.runtimeName,
           appName: opts?.appName,
+          editMode: opts?.editMode,
+          draft: opts?.draft,
+          updateEtag: opts?.updateEtag,
+          baseRuntimeVersion: opts?.baseRuntimeVersion,
+          removeRuntimeEnvKeys: opts?.removeRuntimeEnvKeys,
+          mcpSecretValues: opts?.mcpSecretValues,
+          mcpCredentialReuses: opts?.mcpCredentialReuses,
           sessionStorage: opts?.sessionStorage,
           minInstance: opts?.minInstance,
           maxInstance: opts?.maxInstance,
@@ -3286,6 +3851,7 @@ export interface StudioAccess {
   };
   capabilities: {
     createAgents: boolean;
+    createPersonalAgents: boolean;
     manageAgents: boolean;
     runtimeScope: RuntimeScope;
   };
@@ -3300,6 +3866,7 @@ export const DEFAULT_STUDIO_ACCESS: StudioAccess = {
   },
   capabilities: {
     createAgents: false,
+    createPersonalAgents: false,
     manageAgents: false,
     runtimeScope: "mine",
   },
@@ -3318,6 +3885,7 @@ export async function getStudioAccess(): Promise<StudioAccess> {
       typeof access.telemetry.accountId !== "string"
     ) ||
     typeof access.capabilities?.createAgents !== "boolean" ||
+    typeof access.capabilities?.createPersonalAgents !== "boolean" ||
     typeof access.capabilities?.manageAgents !== "boolean" ||
     !["all", "mine"].includes(access.capabilities?.runtimeScope)
   ) {
@@ -3333,6 +3901,19 @@ export interface StudioReleaseOption {
   changelog: string[];
 }
 
+export type StudioUpdateProgressStage =
+  | "idle"
+  | "permissions"
+  | "resolving"
+  | "downloading"
+  | "preparing"
+  | "provisioning"
+  | "scheduler"
+  | "submitting"
+  | "publishing"
+  | "complete"
+  | "error";
+
 export interface StudioUpdateStatus {
   enabled: boolean;
   currentVersion: string;
@@ -3342,15 +3923,7 @@ export interface StudioUpdateStatus {
   available: boolean;
   state: "disabled" | "idle" | "updating" | "error";
   message: string;
-  progressStage:
-    | "idle"
-    | "resolving"
-    | "downloading"
-    | "preparing"
-    | "submitting"
-    | "publishing"
-    | "complete"
-    | "error";
+  progressStage: StudioUpdateProgressStage;
   progressMessage: string;
   targetVersion: string;
   startedAt: number;
@@ -3936,11 +4509,30 @@ export async function deleteRuntime(
   }
 }
 
+/** Server-authorized recovery state for one concrete Runtime app. */
+export type RuntimeUpdateRecoveryStatus =
+  | "preparing"
+  | "complete"
+  | "draft-only"
+  | "introspection-only"
+  | "missing-source"
+  | "incompatible";
+
 /** Server-authorized update compatibility for one concrete Runtime app. */
 export interface RuntimeUpdateCapability {
   canUpdate: boolean;
   reason: string;
   reasonCode?: string;
+  recoveryStatus: RuntimeUpdateRecoveryStatus;
+  editMode: "source-preserving" | "regenerate" | "blocked";
+  recoverySource:
+    | "editable-spec"
+    | "agent-info"
+    | "agent-draft"
+    | "legacy-runtime"
+    | "none";
+  warnings: string[];
+  etag: string;
   runtime: {
     runtimeId: string;
     name: string;
@@ -3951,6 +4543,7 @@ export interface RuntimeUpdateCapability {
       environmentVersionId: string;
     };
     envs: { key: string; value: string }[];
+    configuredEnvKeys: string[];
     network: NetworkConfig;
   };
   agent?: {
@@ -3964,30 +4557,208 @@ export interface RuntimeUpdateCapability {
     skills?: AgentSkill[];
     graph?: AgentNode;
     draft?: AgentDraft;
+    sourceImage?: string;
   } | null;
 }
 
-export async function getRuntimeUpdateCapability({
-  runtimeId,
-  region,
-  appName,
-  signal,
-}: {
+interface RuntimeUpdateCapabilityRequest {
   runtimeId: string;
   region: string;
   appName?: string;
+  currentVersion?: number | null;
   signal?: AbortSignal;
-}): Promise<RuntimeUpdateCapability> {
+  force?: boolean;
+}
+
+function runtimeUpdateCapabilityCacheKey({
+  runtimeId,
+  region,
+  appName,
+  currentVersion,
+}: Omit<RuntimeUpdateCapabilityRequest, "signal" | "force">): string {
+  return cacheKey(
+    activeCloudProvider,
+    region,
+    runtimeId,
+    currentVersion ?? "",
+    appName?.trim() ?? "",
+  );
+}
+
+async function fetchRuntimeUpdateCapability({
+  runtimeId,
+  region,
+  appName,
+  currentVersion,
+  force = false,
+}: Omit<RuntimeUpdateCapabilityRequest, "signal">): Promise<RuntimeUpdateCapability> {
   const params = new URLSearchParams({ runtimeId, region });
   if (appName) params.set("appName", appName);
-  const res = await apiFetch(
-    `/web/runtime-update-capability?${params.toString()}`,
-    { signal },
-  );
+  if (currentVersion != null) params.set("currentVersion", String(currentVersion));
+  if (force) params.set("refresh", "true");
+  const res = await apiFetch(`/web/runtime-update-capability?${params.toString()}`);
   if (!res.ok) {
     throw new Error(await runtimeUpdateCapabilityErrorMessage(res));
   }
   return (await res.json()) as RuntimeUpdateCapability;
+}
+
+export function getRuntimeUpdateCapability({
+  runtimeId,
+  region,
+  appName,
+  currentVersion,
+  signal,
+  force = false,
+}: RuntimeUpdateCapabilityRequest): Promise<RuntimeUpdateCapability> {
+  const request = { runtimeId, region, appName, currentVersion };
+  const key = runtimeUpdateCapabilityCacheKey(request);
+  if (force) runtimeUpdateCapabilityCache.delete(key);
+  if (!force) {
+    const cached = freshCacheValue(
+      runtimeUpdateCapabilityCache,
+      key,
+      RUNTIME_METADATA_CACHE_TTL_MS,
+    );
+    if (cached) return waitForSharedRequest(Promise.resolve(cached), signal);
+    const inFlight = runtimeUpdateCapabilityCache.get(key)?.promise;
+    if (inFlight) return waitForSharedRequest(inFlight, signal);
+    if (appName) {
+      const baseKey = runtimeUpdateCapabilityCacheKey({
+        ...request,
+        appName: "",
+      });
+      const baseInFlight = runtimeUpdateCapabilityCache.get(baseKey)?.promise;
+      if (baseInFlight) {
+        let aliasPromise: Promise<RuntimeUpdateCapability>;
+        aliasPromise = baseInFlight.then(
+          (value) => {
+            if (value.recoveryStatus === "preparing") {
+              if (runtimeUpdateCapabilityCache.get(key)?.promise === aliasPromise) {
+                runtimeUpdateCapabilityCache.delete(key);
+              }
+              return value;
+            }
+            const resolvedAppName = value.agent?.appName?.trim() ?? "";
+            if (resolvedAppName && resolvedAppName !== appName.trim()) {
+              if (runtimeUpdateCapabilityCache.get(key)?.promise === aliasPromise) {
+                runtimeUpdateCapabilityCache.delete(key);
+              }
+              return getRuntimeUpdateCapability(request);
+            }
+            if (runtimeUpdateCapabilityCache.get(key)?.promise === aliasPromise) {
+              runtimeUpdateCapabilityCache.set(key, {
+                value,
+                updatedAt: Date.now(),
+              });
+            }
+            return value;
+          },
+          (error: unknown) => {
+            if (runtimeUpdateCapabilityCache.get(key)?.promise === aliasPromise) {
+              runtimeUpdateCapabilityCache.delete(key);
+            }
+            throw error;
+          },
+        );
+        runtimeUpdateCapabilityCache.set(key, {
+          promise: aliasPromise,
+          updatedAt: 0,
+        });
+        return waitForSharedRequest(aliasPromise, signal);
+      }
+    }
+  }
+
+  let promise: Promise<RuntimeUpdateCapability>;
+  promise = fetchRuntimeUpdateCapability({ ...request, force }).then(
+    (value) => {
+      if (value.recoveryStatus === "preparing") {
+        if (runtimeUpdateCapabilityCache.get(key)?.promise === promise) {
+          runtimeUpdateCapabilityCache.delete(key);
+        }
+        return value;
+      }
+      if (runtimeUpdateCapabilityCache.get(key)?.promise === promise) {
+        runtimeUpdateCapabilityCache.set(key, {
+          value,
+          updatedAt: Date.now(),
+        });
+        const aliasNames = new Set(["", value.agent?.appName?.trim() ?? ""]);
+        for (const aliasName of aliasNames) {
+          const aliasKey = runtimeUpdateCapabilityCacheKey({
+            ...request,
+            appName: aliasName,
+          });
+          if (
+            aliasKey !== key &&
+            !runtimeUpdateCapabilityCache.get(aliasKey)?.promise
+          ) {
+            runtimeUpdateCapabilityCache.set(aliasKey, {
+              value,
+              updatedAt: Date.now(),
+            });
+          }
+        }
+      }
+      return value;
+    },
+    (error: unknown) => {
+      if (runtimeUpdateCapabilityCache.get(key)?.promise === promise) {
+        runtimeUpdateCapabilityCache.delete(key);
+      }
+      throw error;
+    },
+  );
+  runtimeUpdateCapabilityCache.set(key, { promise, updatedAt: 0 });
+  return waitForSharedRequest(promise, signal);
+}
+
+export function getCachedRuntimeUpdateCapability({
+  runtimeId,
+  region,
+  appName,
+  currentVersion,
+}: Omit<RuntimeUpdateCapabilityRequest, "signal" | "force">): RuntimeUpdateCapability | null {
+  return freshCacheValue(
+    runtimeUpdateCapabilityCache,
+    runtimeUpdateCapabilityCacheKey({
+      runtimeId,
+      region,
+      appName,
+      currentVersion,
+    }),
+    RUNTIME_METADATA_CACHE_TTL_MS,
+  );
+}
+
+export function prefetchRuntimeUpdateCapability(
+  request: Omit<RuntimeUpdateCapabilityRequest, "signal" | "force">,
+): Promise<void> {
+  return getRuntimeUpdateCapability(request).then(
+    () => undefined,
+    () => undefined,
+  );
+}
+
+export function invalidateRuntimeUpdateCapabilityCache(
+  runtimeId?: string,
+  region?: string,
+): void {
+  if (!runtimeId) {
+    runtimeUpdateCapabilityCache.clear();
+    return;
+  }
+  for (const key of runtimeUpdateCapabilityCache.keys()) {
+    const [provider, keyRegion, keyRuntimeId] = key.split("\u0001");
+    if (
+      provider === activeCloudProvider &&
+      keyRuntimeId === runtimeId &&
+      (!region || keyRegion === region)
+    ) {
+      runtimeUpdateCapabilityCache.delete(key);
+    }
+  }
 }
 
 async function runtimeUpdateCapabilityErrorMessage(res: Response): Promise<string> {

@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+from hashlib import sha256
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -21,6 +22,7 @@ from typing import Any
 import pytest
 
 from frontend.service.studio_scheduler.deploy import (
+    _stage_package,
     deploy_scheduler,
     deploy_scheduler_for_studio_update,
     scheduler_function_name,
@@ -181,6 +183,43 @@ def test_deploy_extends_vefaas_sdk_request_timeout(tmp_path: Path) -> None:
     assert service.client.timeouts
     assert set(service.client.timeouts) == {600}
     assert service.client.list_functions == original_list_functions
+
+
+def test_stage_package_preserves_offline_runtime_dependencies(
+    tmp_path: Path,
+) -> None:
+    package_root = tmp_path / "package"
+    destination = tmp_path / "scheduler"
+    package_root.mkdir()
+    destination.mkdir()
+    (package_root / "requirements.txt").write_text(
+        "--no-index\n--find-links ./wheelhouse\n-r ./studio-runtime.lock\n",
+        encoding="utf-8",
+    )
+    (package_root / "studio-runtime.lock").write_text(
+        "fastapi==1.0 --hash=sha256:test\n",
+        encoding="utf-8",
+    )
+    wheelhouse = package_root / "wheelhouse"
+    wheelhouse.mkdir()
+    (wheelhouse / "fastapi-1.0-py3-none-any.whl").write_bytes(b"dependency")
+    (package_root / "veadk_python-1.0-py3-none-any.whl").write_bytes(b"legacy")
+
+    _stage_package(package_root, destination)
+
+    expected_hash = sha256(b"dependency").hexdigest()
+    assert (destination / "requirements.txt").read_text(encoding="utf-8") == (
+        "--no-index\n"
+        "--require-hashes\n"
+        "./fastapi-1.0-py3-none-any.whl "
+        f"--hash=sha256:{expected_hash}\n"
+    )
+    assert (destination / "studio-runtime.lock").is_file()
+    assert not (destination / "wheelhouse").exists()
+    assert (destination / "fastapi-1.0-py3-none-any.whl").read_bytes() == (
+        b"dependency"
+    )
+    assert (destination / "veadk_python-1.0-py3-none-any.whl").read_bytes() == b"legacy"
 
 
 def test_scheduler_function_name_is_safe_and_bounded() -> None:

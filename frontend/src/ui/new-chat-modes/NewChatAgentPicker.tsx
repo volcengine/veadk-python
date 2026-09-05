@@ -44,8 +44,11 @@ const HOVER_CLOSE_DELAY_MS = 180;
 export interface NewChatAgentPickerProps {
   selectedAgentName?: string;
   selectedRuntimeId?: string;
+  agentsSource?: "local" | "cloud";
+  localApps?: string[];
   runtimeScope: RuntimeScope;
   disabled?: boolean;
+  onSelectLocalApp?: (app: string) => Promise<void>;
   onSelectRuntime: (runtime: CloudRuntime) => Promise<void>;
   onSelectSandboxSession: (session: SandboxAgentResource) => Promise<void>;
 }
@@ -94,8 +97,11 @@ function AgentTypeIcon({
 export function NewChatAgentPicker({
   selectedAgentName = "",
   selectedRuntimeId = "",
+  agentsSource = "cloud",
+  localApps = [],
   runtimeScope,
   disabled = false,
+  onSelectLocalApp,
   onSelectRuntime,
   onSelectSandboxSession,
 }: NewChatAgentPickerProps) {
@@ -211,9 +217,9 @@ export function NewChatAgentPicker({
   }, []);
 
   useEffect(() => {
-    if (!open || activeType !== "general" || runtimes.length > 0 || loading || error) return;
+    if (agentsSource === "local" || !open || activeType !== "general" || runtimes.length > 0 || loading || error) return;
     void loadRuntimes("", true);
-  }, [activeType, error, loadRuntimes, loading, open, runtimes.length]);
+  }, [activeType, agentsSource, error, loadRuntimes, loading, open, runtimes.length]);
 
   useEffect(() => {
     if (!open || activeType === null || activeType === "general" || loadedSandboxType === activeType) return;
@@ -312,6 +318,20 @@ export function NewChatAgentPicker({
     }
   }
 
+  async function chooseLocalApp(app: string) {
+    if (connectingRuntimeId || !onSelectLocalApp) return;
+    setConnectingRuntimeId(app);
+    setError("");
+    try {
+      await onSelectLocalApp(app);
+      close(true);
+    } catch (cause) {
+      setError(formatRequestError(cause, "打开本地智能体"));
+    } finally {
+      setConnectingRuntimeId("");
+    }
+  }
+
   async function chooseSandboxSession(session: SandboxAgentResource) {
     if (connectingRuntimeId) return;
     setConnectingRuntimeId(session.id);
@@ -327,6 +347,7 @@ export function NewChatAgentPicker({
   }
 
   function onMenuKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    const generalOptionCount = agentsSource === "local" ? localApps.length : runtimes.length;
     if (event.key === "Escape") {
       event.preventDefault();
       close(true);
@@ -349,12 +370,15 @@ export function NewChatAgentPicker({
     if (event.key === "ArrowLeft") {
       event.preventDefault();
       setKeyboardPanel("types");
-    } else if ((activeType === "general" ? runtimes : sandboxSessions).length > 0 &&
+    } else if ((activeType === "general" ? generalOptionCount : sandboxSessions.length) > 0 &&
       (event.key === "ArrowDown" || event.key === "ArrowUp")) {
       event.preventDefault();
       const delta = event.key === "ArrowDown" ? 1 : -1;
-      const optionCount = activeType === "general" ? runtimes.length : sandboxSessions.length;
+      const optionCount = activeType === "general" ? generalOptionCount : sandboxSessions.length;
       setActiveRuntimeIndex((index) => (index + delta + optionCount) % optionCount);
+    } else if (event.key === "Enter" && activeType === "general" && agentsSource === "local" && localApps[activeRuntimeIndex]) {
+      event.preventDefault();
+      void chooseLocalApp(localApps[activeRuntimeIndex]);
     } else if (event.key === "Enter" && activeType === "general" && runtimes[activeRuntimeIndex]) {
       event.preventDefault();
       void chooseRuntime(runtimes[activeRuntimeIndex]);
@@ -501,6 +525,50 @@ export function NewChatAgentPicker({
                     </button>
                   );
                 })}
+              </div>
+            ) : agentsSource === "local" && localApps.length === 0 ? (
+              <EmptyMessage className="new-chat-agent-picker__empty" fill="none">
+                <EmptyMessage.Icon size="sm">
+                  <AgentFaceIcon />
+                </EmptyMessage.Icon>
+                <EmptyMessage.Title>
+                  <span className="new-chat-agent-picker__empty-title">
+                    暂无本地智能体
+                  </span>
+                </EmptyMessage.Title>
+                <EmptyMessage.Description>
+                  请检查当前 Studio 启动目录
+                </EmptyMessage.Description>
+              </EmptyMessage>
+            ) : agentsSource === "local" ? (
+              <div className="new-chat-agent-picker__runtime-list">
+                {localApps.map((app, index) => {
+                  const connecting = connectingRuntimeId === app;
+                  const selected = app === selectedAgentName;
+                  return (
+                    <button
+                      key={app}
+                      type="button"
+                      role="option"
+                      aria-selected={selected}
+                      aria-busy={connecting || undefined}
+                      className={`new-chat-agent-picker__runtime${keyboardNavigating && keyboardPanel === "runtimes" && activeRuntimeIndex === index ? " is-keyboard-active" : ""}`}
+                      disabled={Boolean(connectingRuntimeId)}
+                      title={app}
+                      onMouseEnter={() => setActiveRuntimeIndex(index)}
+                      onClick={() => void chooseLocalApp(app)}
+                    >
+                      <AgentFaceIcon className="new-chat-agent-picker__runtime-icon" />
+                      <span>{app}</span>
+                      {connecting ? (
+                        <small>正在打开</small>
+                      ) : selected ? (
+                        <CheckIcon className="new-chat-agent-picker__check" />
+                      ) : null}
+                    </button>
+                  );
+                })}
+                {error ? <div className="new-chat-agent-picker__inline-error" role="alert">{error}</div> : null}
               </div>
             ) : loading && runtimes.length === 0 ? (
               <div className="new-chat-agent-picker__status" role="status" aria-live="polite">

@@ -23,7 +23,12 @@ from fastapi import HTTPException, Query, Request
 
 from veadk.utils.logger import get_logger
 
-from .models import EnvironmentInput, EnvironmentPatch
+from .models import (
+    EnvironmentInput,
+    EnvironmentPatch,
+    EnvironmentShareCodesRequest,
+    RepositoryInspectRequest,
+)
 from .repository import (
     EnvironmentConflict,
     EnvironmentNotFound,
@@ -40,6 +45,21 @@ def mount_environment_routes(
     service: EnvironmentService,
     identity_resolver: Callable[[Request], str],
 ) -> None:
+    @app.post("/web/v3/environment-repositories/inspect")
+    @app.post("/web/environment-repositories/inspect")
+    async def inspect_environment_repository(
+        body: RepositoryInspectRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        _ = identity_resolver(request)
+        try:
+            inspection = await service.inspect_repository(body.repository_url, body.ref)
+            return _public(inspection)
+        except Exception as error:
+            _raise_api_error(error, "探查 Git 仓库")
+            raise
+
+    @app.get("/web/v3/environments")
     @app.get("/web/environments")
     async def list_environments(request: Request) -> dict[str, Any]:
         owner_id = identity_resolver(request)
@@ -50,6 +70,7 @@ def mount_environment_routes(
             raise
         return {"items": [_public(record) for record in records]}
 
+    @app.post("/web/v3/environments", status_code=201)
     @app.post("/web/environments", status_code=201)
     async def create_environment(
         body: EnvironmentInput,
@@ -62,6 +83,7 @@ def mount_environment_routes(
             _raise_api_error(error, "创建环境")
             raise
 
+    @app.get("/web/v3/environments/{environment_id}")
     @app.get("/web/environments/{environment_id}")
     async def get_environment(
         environment_id: str,
@@ -74,6 +96,46 @@ def mount_environment_routes(
             _raise_api_error(error, "读取环境")
             raise
 
+    @app.post("/web/v3/environments/{environment_id}/share-code")
+    @app.post("/web/environments/{environment_id}/share-code")
+    async def export_environment_share_code(
+        environment_id: str,
+        request: Request,
+    ) -> dict[str, Any]:
+        owner_id = identity_resolver(request)
+        try:
+            return _public(await service.export_share_code(owner_id, environment_id))
+        except Exception as error:
+            _raise_api_error(error, "导出环境分享码")
+            raise
+
+    @app.post("/web/v3/environment-share-codes/inspect")
+    @app.post("/web/environment-share-codes/inspect")
+    async def inspect_environment_share_codes(
+        body: EnvironmentShareCodesRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        _ = identity_resolver(request)
+        try:
+            return _public(await service.inspect_share_codes(body.share_codes))
+        except Exception as error:
+            _raise_api_error(error, "解析环境分享码")
+            raise
+
+    @app.post("/web/v3/environment-share-codes/import")
+    @app.post("/web/environment-share-codes/import")
+    async def import_environment_share_codes(
+        body: EnvironmentShareCodesRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        owner_id = identity_resolver(request)
+        try:
+            return _public(await service.import_share_codes(owner_id, body.share_codes))
+        except Exception as error:
+            _raise_api_error(error, "导入环境分享码")
+            raise
+
+    @app.patch("/web/v3/environments/{environment_id}")
     @app.patch("/web/environments/{environment_id}")
     async def update_environment(
         environment_id: str,
@@ -87,6 +149,8 @@ def mount_environment_routes(
             _raise_api_error(error, "更新环境")
             raise
 
+    @app.delete("/web/v3/environments/{environment_id}", status_code=204)
+    @app.post("/web/v3/environments/{environment_id}/delete", status_code=204)
     @app.delete("/web/environments/{environment_id}", status_code=204)
     @app.post("/web/environments/{environment_id}/delete", status_code=204)
     async def delete_environment(environment_id: str, request: Request) -> None:
@@ -97,6 +161,7 @@ def mount_environment_routes(
             _raise_api_error(error, "删除环境")
             raise
 
+    @app.post("/web/v3/environments/{environment_id}/build", status_code=202)
     @app.post("/web/environments/{environment_id}/build", status_code=202)
     async def build_environment(
         environment_id: str,
@@ -109,6 +174,7 @@ def mount_environment_routes(
             _raise_api_error(error, "启动环境镜像构建")
             raise
 
+    @app.get("/web/v3/environments/{environment_id}/builds/{version_id}")
     @app.get("/web/environments/{environment_id}/builds/{version_id}")
     async def get_environment_build(
         environment_id: str,
@@ -130,6 +196,26 @@ def mount_environment_routes(
             _raise_api_error(error, "读取环境镜像构建状态")
             raise
 
+    @app.get("/web/v3/environments/{environment_id}/builds/{version_id}/manifest")
+    @app.get("/web/environments/{environment_id}/builds/{version_id}/manifest")
+    async def get_environment_manifest(
+        environment_id: str,
+        version_id: str,
+        request: Request,
+    ) -> dict[str, Any]:
+        owner_id = identity_resolver(request)
+        try:
+            manifest = await service.get_manifest(owner_id, environment_id, version_id)
+            if not request.url.path.startswith("/web/v3/"):
+                manifest = manifest.model_copy(
+                    update={"api_version": "agentkit.studio/v1alpha1"}
+                )
+            return _public(manifest)
+        except Exception as error:
+            _raise_api_error(error, "读取环境 Manifest")
+            raise
+
+    @app.get("/web/v3/environment-resources")
     @app.get("/web/environment-resources")
     async def environment_resources(request: Request) -> dict[str, Any]:
         _ = identity_resolver(request)

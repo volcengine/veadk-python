@@ -20,7 +20,7 @@ const cliFrontendSource = readFileSync(
 test("Studio access fails closed until the server-derived role is known", () => {
   assert.match(clientSource, /export type StudioRole = "admin" \| "developer" \| "user"/);
   assert.match(clientSource, /telemetry:\s*\{\s*userId: string;\s*accountId\?: string;\s*\}/);
-  assert.match(clientSource, /export const DEFAULT_STUDIO_ACCESS[\s\S]*?userId: ""[\s\S]*?accountId: ""[\s\S]*?createAgents: false[\s\S]*?manageAgents: false[\s\S]*?runtimeScope: "mine"/);
+  assert.match(clientSource, /export const DEFAULT_STUDIO_ACCESS[\s\S]*?userId: ""[\s\S]*?accountId: ""[\s\S]*?createAgents: false[\s\S]*?createPersonalAgents: false[\s\S]*?manageAgents: false[\s\S]*?runtimeScope: "mine"/);
   assert.match(clientSource, /typeof access\.telemetry\?\.userId !== "string"/);
   assert.match(appSource, /accountId: access\.telemetry\.accountId \?\? ""/);
   assert.match(clientSource, /apiFetch\("\/web\/access"\)/);
@@ -40,26 +40,28 @@ test("Agent workspace creation and update actions obey Studio access", () => {
   assert.doesNotMatch(sidebarSource, /access\.capabilities\.createAgents && show\("addAgent"\)/);
   assert.doesNotMatch(sidebarSource, /access\.capabilities\.manageAgents && show\("manageAgents"\)/);
   assert.doesNotMatch(sidebarSource, /onManageAgents/);
-  assert.match(appSource, /<MyAgents[\s\S]*?canCreate=\{canCreateAgents\}/);
-  assert.match(appSource, /const visibleCreateView = canCreateAgents \? createView : null/);
+  assert.match(appSource, /<MyAgents[\s\S]*?canCreateRuntimeAgents=\{canCreateRuntimeAgents\}[\s\S]*?canCreatePersonalAgents=\{canCreatePersonalAgents\}/);
+  assert.match(appSource, /const visibleCreateView = canCreateRuntimeAgents \? createView : null/);
   assert.match(appSource, /const showManageAgents = manageAgents/);
   assert.match(appSource, /if \(!access\.capabilities\.manageAgents\) setManageAgents\(false\)/);
-  assert.match(appSource, /<AgentWorkspace[\s\S]*?canCreate=\{canCreateAgents\}[\s\S]*?canUpdate=\{canCreateAgents \|\| canManageAgents\}/);
+  assert.match(appSource, /<AgentWorkspace[\s\S]*?canCreate=\{canCreateRuntimeAgents\}[\s\S]*?canUpdate=\{canCreateRuntimeAgents \|\| canManageAgents\}/);
   assert.match(appSource, /const canViewAgentUsage = features\.agentUsage && canManageAgents/);
   assert.match(appSource, /<AgentWorkspace[\s\S]*?canViewUsage=\{canViewAgentUsage\}/);
-  assert.match(appSource, /if \(!canCreateAgents\)[\s\S]*?当前账号没有添加 Agent 的权限/);
-  assert.match(appSource, /if \(!canManageAgents && !canCreateAgents\)[\s\S]*?当前账号没有管理 Agent 的权限/);
+  assert.match(appSource, /if \(!canCreateRuntimeAgents\)[\s\S]*?当前账号没有添加 Agent 的权限/);
+  assert.match(appSource, /if \(!canManageAgents && !canCreateRuntimeAgents\)[\s\S]*?当前账号没有管理 Agent 的权限/);
 });
 
-test("sidebar shows the OAuth email and translated role badge", () => {
+test("sidebar shows a compact identity and role badge in account details", () => {
   assert.match(sidebarSource, /admin: "管理员"/);
   assert.match(sidebarSource, /developer: "开发者"/);
   assert.match(sidebarSource, /user: "普通用户"/);
-  assert.match(sidebarSource, /typeof userInfo\.email === "string"/);
-  assert.match(sidebarSource, /<SidebarUser\s+access=\{access\}/);
-  assert.match(stylesSource, /studio-role-badge--admin[\s\S]*?hsl\(271/);
-  assert.match(stylesSource, /studio-role-badge--developer[\s\S]*?hsl\(47/);
-  assert.match(stylesSource, /studio-role-badge--user[\s\S]*?hsl\(145/);
+  assert.match(sidebarSource, /<SidebarUser[\s\S]{0,160}?access=\{access\}/);
+  assert.match(sidebarSource, /<Badge color="secondary" size="sm" variant="soft" pill>/);
+  assert.match(sidebarSource, /\{STUDIO_ROLE_LABELS\[access\.role\]\}/);
+  assert.match(sidebarSource, /email && email !== name && <div className="account-sub">\{email\}<\/div>/);
+  assert.doesNotMatch(sidebarSource, /StudioRoleIndicator/);
+  assert.doesNotMatch(sidebarSource, /sidebar-user-email/);
+  assert.match(stylesSource, /\.sidebar-user-shortcut\s*\{[\s\S]*?width:\s*28px;[\s\S]*?height:\s*28px;/);
 });
 
 test("runtime selection obeys the server-granted scope", () => {
@@ -82,12 +84,22 @@ test("runtime proxy region does not consume upstream API region filters", () => 
 });
 
 test("only administrators and developers receive Agent deployment controls", () => {
-  assert.match(appSource, /<MyAgents[\s\S]*?canCreate=\{canCreateAgents\}/);
+  assert.match(appSource, /<MyAgents[\s\S]*?canCreateRuntimeAgents=\{canCreateRuntimeAgents\}/);
   assert.match(
     myAgentsSource,
     /\{createAgent \? \([\s\S]*?className="my-agent-create-card"/,
   );
-  assert.match(myAgentsSource, /const createAgent = canCreate/);
+  assert.match(myAgentsSource, /const canCreateActiveAgent = activeType === "general"[\s\S]*?canCreateRuntimeAgents[\s\S]*?canCreatePersonalAgents/);
+  assert.match(myAgentsSource, /const createAgent = canCreateActiveAgent/);
+});
+
+test("regular users receive personal Agent creation without Runtime deployment access", () => {
+  assert.match(clientSource, /createPersonalAgents: boolean/);
+  assert.match(clientSource, /createPersonalAgents: false/);
+  assert.match(clientSource, /typeof access\.capabilities\?\.createPersonalAgents !== "boolean"/);
+  assert.match(appSource, /const canCreatePersonalAgents = access\.capabilities\.createPersonalAgents/);
+  assert.match(appSource, /if \(!canCreatePersonalAgents\)[\s\S]*?当前账号没有创建智能体的权限/);
+  assert.match(myAgentsSource, /activeType === "general"[\s\S]*?canCreateRuntimeAgents[\s\S]*?canCreatePersonalAgents/);
 });
 
 test("runtime authorization failures are not reported as unsupported", () => {

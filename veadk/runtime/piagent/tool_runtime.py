@@ -27,6 +27,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from typing_extensions import Self
+
 from veadk.runtime.piagent.tools_bridge import PiToolBundle, PiToolSpec
 from veadk.utils.logger import get_logger
 
@@ -47,7 +49,7 @@ class PiToolRuntime:
         self._token = secrets.token_urlsafe(24)
         self._tmpdir: tempfile.TemporaryDirectory[str] | None = None
 
-    async def __aenter__(self) -> "PiToolRuntime":
+    async def __aenter__(self) -> Self:
         if not self.bundle.has_tools:
             return self
 
@@ -100,8 +102,11 @@ class PiToolRuntime:
             writer.close()
             try:
                 await writer.wait_closed()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as e:  # noqa: BLE001
+                logger.debug(
+                    "piagent: failed to close tool bridge response writer: %s",
+                    type(e).__name__,
+                )
 
     async def _dispatch(self, request: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         if request["method"] != "POST" or request["path"] != "/call":
@@ -120,7 +125,8 @@ class PiToolRuntime:
         if executor is None:
             return 404, {"ok": False, "error": f"unknown tool: {tool_name}"}
 
-        result = _tool_result_to_pi_result(await executor(args))
+        tool_call_id = str(body.get("toolCallId") or "")
+        result = _tool_result_to_pi_result(await executor(args, tool_call_id))
         return 200, {"ok": True, "result": result}
 
 
@@ -147,7 +153,7 @@ async def _read_http_json(reader: asyncio.StreamReader) -> dict[str, Any]:
     except json.JSONDecodeError as e:
         raise ValueError("invalid JSON request body") from e
     if not isinstance(body, dict):
-        raise ValueError("request body must be a JSON object")
+        raise TypeError("request body must be a JSON object")
     return {"method": method, "path": path, "headers": headers, "body": body}
 
 

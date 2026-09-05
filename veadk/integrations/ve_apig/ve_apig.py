@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
 import time
 
@@ -23,6 +24,7 @@ from veadk.utils.cloud_provider import (
     DEFAULT_CLOUD_PROVIDER,
     CloudProvider,
     apig_openapi_host,
+    configure_openapi_tls,
 )
 from veadk.utils.volcengine_sign import ve_request
 
@@ -51,7 +53,9 @@ class APIGateway:
         configuration.sk = self.sk
         configuration.session_token = self.session_token
         configuration.region = region
-        configuration.host = f"https://{self.openapi_host}"
+        scheme = os.getenv("APIG_OPENAPI_SCHEME", "https").strip() or "https"
+        configuration.host = f"{scheme}://{self.openapi_host}"
+        configure_openapi_tls(configuration)
 
         self.api_client = volcenginesdkcore.ApiClient(configuration=configuration)
         self.apig_20221112_client = APIG20221112Api(api_client=self.api_client)
@@ -90,28 +94,65 @@ class APIGateway:
             return running[0]
         return serverless[0] if serverless else None
 
-    def create_serverless_gateway(self, instance_name: str) -> str:  # instance
+    def create_serverless_gateway(
+        self,
+        instance_name: str,
+        *,
+        vestack_cluster_id: str = "",
+        vestack_namespace: str = "",
+        vestack_cluster_name: str = "aio",
+    ) -> str:  # instance
         from volcenginesdkapig import (
             CreateGatewayRequest,
             ResourceSpecForCreateGatewayInput,
             ListGatewaysRequest,
         )
 
-        request = CreateGatewayRequest(
-            name=instance_name,
-            region=self.region,
-            type="serverless",
-            resource_spec=ResourceSpecForCreateGatewayInput(
-                replicas=2,
-                instance_spec_code="1c2g",
-                clb_spec_code="small_1",
-                public_network_billing_type="traffic",
-                network_type={
-                    "EnablePublicNetwork": True,
-                    "EnablePrivateNetwork": False,
+        if vestack_cluster_id:
+            if not vestack_namespace:
+                raise ValueError("VeStack APIG namespace is required")
+            # VeStack APIG v2.5 uses the same OpenAPI action/version but a
+            # cluster-native request shape that is not represented by the
+            # public-cloud Python SDK models. Extend the generated model so the
+            # SDK still performs signing, retries, and endpoint configuration.
+            request = CreateGatewayRequest(
+                name=instance_name,
+                region=self.region,
+                type="serverless",
+                resource_spec={
+                    "Replicas": 2,
+                    "CpuRequest": "100m",
+                    "CpuLimit": "1000m",
+                    "MemoryRequest": "128Mi",
+                    "MemoryLimit": "1Gi",
                 },
-            ),
-        )
+            )
+            request.swagger_types = dict(request.swagger_types)
+            request.attribute_map = dict(request.attribute_map)
+            request.swagger_types["resource_spec"] = "object"
+            request.swagger_types["cluster_spec"] = "object"
+            request.attribute_map["cluster_spec"] = "ClusterSpec"
+            request.cluster_spec = {
+                "ClusterId": vestack_cluster_id,
+                "Namespace": vestack_namespace,
+                "ClusterName": vestack_cluster_name,
+            }
+        else:
+            request = CreateGatewayRequest(
+                name=instance_name,
+                region=self.region,
+                type="serverless",
+                resource_spec=ResourceSpecForCreateGatewayInput(
+                    replicas=2,
+                    instance_spec_code="1c2g",
+                    clb_spec_code="small_1",
+                    public_network_billing_type="traffic",
+                    network_type={
+                        "EnablePublicNetwork": True,
+                        "EnablePrivateNetwork": False,
+                    },
+                ),
+            )
         thread = self.apig_client.create_gateway(request, async_req=True)
         result = thread.get()
         gateway_id = result.to_dict()["id"]
@@ -132,7 +173,51 @@ class APIGateway:
                 time.sleep(5)
         return gateway_id
 
-    def create_gateway_service(self, gateway_id: str, service_name: str) -> str:
+    def get_gateway_external_http_address(self, gateway_id: str) -> tuple[str, int]:
+        """Return the VeStack gateway's external IP and allocated HTTP port."""
+        from volcenginesdkapig import GetGatewayRequest
+
+        captured: dict[str, object] = {}
+        rest_client = self.apig_client.api_client.rest_client
+        original_request = rest_client.request
+
+        def capture_response(*args, **kwargs):
+            response = original_request(*args, **kwargs)
+            payload = response.data
+            if isinstance(payload, bytes):
+                payload = payload.decode("utf-8")
+            captured.update(json.loads(payload))
+            return response
+
+        rest_client.request = capture_response
+        try:
+            self.apig_client.get_gateway(GetGatewayRequest(id=gateway_id))
+        finally:
+            rest_client.request = original_request
+
+        gateway = captured.get("Result", {}).get("Gateway", {})
+        external = gateway.get("GatewayExternalAddress", {})
+        ips = external.get("IPs", [])
+        http_item = next(
+            (
+                item
+                for item in external.get("Items", [])
+                if str(item.get("Protocol", "")).upper() == "HTTP"
+            ),
+            None,
+        )
+        if not ips or not http_item or not http_item.get("Port"):
+            raise RuntimeError("VeStack APIG did not return an external HTTP address")
+        return str(ips[0]), int(http_item["Port"])
+
+    def create_gateway_service(
+        self,
+        gateway_id: str,
+        service_name: str,
+        custom_domain: str = "",
+        *,
+        vestack: bool = False,
+    ) -> str:
         """
         Create a gateway service. (Domain name)
         Args:
@@ -143,6 +228,7 @@ class APIGateway:
         """
         from volcenginesdkapig import (
             AuthSpecForCreateGatewayServiceInput,
+            CustomDomainForCreateGatewayServiceInput,
             CreateGatewayServiceRequest,
         )
 
@@ -151,7 +237,28 @@ class APIGateway:
             service_name=service_name,
             protocol=["HTTP", "HTTPS"],
             auth_spec=AuthSpecForCreateGatewayServiceInput(enable=False),
+            custom_domains=(
+                [
+                    CustomDomainForCreateGatewayServiceInput(
+                        domain=custom_domain,
+                        protocol=["HTTP"],
+                        ssl_redirect=False,
+                    )
+                ]
+                if custom_domain and not vestack
+                else None
+            ),
         )
+        if vestack:
+            if not custom_domain:
+                raise ValueError("VeStack APIG service requires a domain")
+            request.swagger_types = dict(request.swagger_types)
+            request.attribute_map = dict(request.attribute_map)
+            request.swagger_types["service_domain_spec"] = "object"
+            request.attribute_map["service_domain_spec"] = "ServiceDomainSpec"
+            request.service_domain_spec = [
+                {"Domain": custom_domain, "Protocol": ["HTTP"]}
+            ]
         thread = self.apig_client.create_gateway_service(request, async_req=True)
         result = thread.get()
         return result.to_dict()["id"]
@@ -176,6 +283,53 @@ class APIGateway:
         thread = self.apig_client.create_upstream(request, async_req=True)
         result = thread.get()
         return result.to_dict()["id"]
+
+    def find_gateway_service(self, gateway_id: str, name: str):
+        from volcenginesdkapig import ListGatewayServicesRequest
+
+        result = self.apig_client.list_gateway_services(
+            ListGatewayServicesRequest(
+                gateway_id=gateway_id, page_number=1, page_size=100
+            )
+        )
+        return next(
+            (
+                item
+                for item in (getattr(result, "items", None) or [])
+                if getattr(item, "name", "") == name
+            ),
+            None,
+        )
+
+    def find_upstream(self, gateway_id: str, name: str):
+        from volcenginesdkapig import ListUpstreamsRequest
+
+        result = self.apig_client.list_upstreams(
+            ListUpstreamsRequest(gateway_id=gateway_id, page_number=1, page_size=100)
+        )
+        return next(
+            (
+                item
+                for item in (getattr(result, "items", None) or [])
+                if getattr(item, "name", "") == name
+            ),
+            None,
+        )
+
+    def find_route(self, service_id: str, name: str):
+        from volcenginesdkapig20221112 import ListRoutesRequest
+
+        result = self.apig_20221112_client.list_routes(
+            ListRoutesRequest(service_id=service_id, page_number=1, page_size=100)
+        )
+        return next(
+            (
+                item
+                for item in (getattr(result, "items", None) or [])
+                if getattr(item, "name", "") == name
+            ),
+            None,
+        )
 
     def create_domain_upstream(
         self,

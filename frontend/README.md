@@ -43,9 +43,25 @@ server that `veadk frontend` launches — no separate backend.
   Stopping preserves received output and blocks the next submission until
   cleanup finishes. Users can inspect generated text files and download the
   complete ZIP (including binary assets) as soon as the source is ready.
+  Each completed build or optimization is also saved as an immutable project
+  version in the private Studio TOS bucket. Users can reopen any saved version,
+  view, download, deploy, delete, or restore it into a new Sandbox for another
+  intent-driven iteration after the original Sandbox expires. The source
+  workspace provides an IDE-style file tree with persistent light and dark
+  themes. Optimizations expose their before/after changes directly, and any two
+  saved versions of the same project can be compared on demand without storing
+  another artifact.
   Deployable source can be sent to Runtime manually; an incomplete verification
   report requires an explicit confirmation. No separate “start verification”
   action is required.
+- **Existing Agent migration**: upload a local project ZIP for read-only
+  analysis, confirm the detected framework and entry point, then migrate and
+  validate it in a temporary Sandbox. Successful migration source is saved as
+  an immutable version in the same private Studio TOS project store. The
+  separate “已迁移项目” page can view, download, deploy, delete, and compare
+  versions; any version can be restored into the intelligent-development flow
+  for another intent-driven iteration after the temporary migration environment
+  has ended.
 - **Reasoning & tool calls** shown inline (collapsible "thinking", tool blocks).
 - **Agent context rail** keeps the selected Agent's description, model, tools,
   skills, and optional live multi-Agent topology together in the conversation's
@@ -81,6 +97,8 @@ server that `veadk frontend` launches — no separate backend.
   require Agent-management access.
 - **AgentKit Skill center**: browse Skill Spaces and their skills with
   server-side pagination by region, then inspect the selected Skill content.
+  Skill and knowledge requests default to the Studio deployment region in
+  cloud deployments and to `cn-beijing` in local Volcengine development.
 - **Library hub**: manage Skills, user-owned AgentKit knowledge bases, and chat
   artifacts from one sidebar entry. Knowledge documents support verified
   JPG/PNG, PDF/PPTX/DOCX/XLSX/TXT uploads and public webpage imports. Studio
@@ -131,10 +149,24 @@ server that `veadk frontend` launches — no separate backend.
   the info action opens a tabbed Agent/Runtime panel. The Agent directory loads
   one selected region at a time, defaults to Beijing, and carries the Runtime's
   region through details, connection, update, evaluation, and deletion. Studio
-  enables in-place updates for any authorized single-Agent Runtime that exposes
-  compatible `list-apps` and `web/agent-info` endpoints, regardless of whether
-  Studio originally deployed it; multi-Agent Runtimes are rejected because an
-  AgentKit update replaces the whole Runtime package. Studio distinguishes its
+  enables in-place updates for an authorized single-Agent Runtime when its
+  `web/agent-info` response, or the compatible `web/agent-draft` fallback,
+  contains a validated Studio publishing snapshot. For an older Runtime without
+  that snapshot, Studio can instead recover public MCP metadata server-side and
+  extract bounded local Skill files from its exact digest-pinned Volcengine CR
+  image. That legacy path keeps the existing application image and overlays only
+  confirmed Skill/MCP changes. If the image, Skill roots, MCP identity, or
+  authentication state is missing or ambiguous, the Runtime remains visible but
+  its update action is blocked, preventing an empty generated project from
+  replacing custom source. The Agent directory prepares update capability for a
+  bounded set of likely targets with at most two background requests, then
+  reuses the version-keyed in-memory result or in-flight request when details
+  open. Capability failures are not cached, and no recovered configuration is
+  written to browser storage.
+  Multi-Agent Runtimes are rejected because an AgentKit update replaces the
+  whole Runtime package. Every accepted update carries the recovered snapshot
+  etag and base Runtime version so a stale page cannot overwrite a newer
+  release. Studio distinguishes its
   own ownership checks from Agent Server compatibility and authentication
   failures when a connection cannot be established. Each Agent detail page also
   probes and lists confirmed API Server and A2A integration endpoints; protocols
@@ -167,9 +199,19 @@ server that `veadk frontend` launches — no separate backend.
   to the signed-in user. MCP tokens are converted to Runtime environment
   variables: generated source retains only the `${ENV_NAME}` reference, while
   YAML and browser drafts preserve the corresponding environment value.
-  Runtime updates reload existing values, and the deployment form keeps all
-  environment values visible to users who can view the Agent. Entering a
-  replacement Token overrides the previous value. Long descriptions and prompts
+  Runtime updates restore only explicitly public environment values. Existing
+  MCP authentication references are resolved against the server-managed Runtime
+  configuration and transiently restored to the masked editor: leaving the MCP
+  identity unchanged reuses the stored value without another environment-variable
+  input. Changing an authenticated MCP
+  URL requires the user to enter a replacement Token, explicitly confirm reuse
+  of the previous credential, or mark the new endpoint as unauthenticated;
+  Studio never silently replays a credential to a different endpoint. Feishu
+  App ID and App Secret are restored from the selected Runtime into the masked
+  update form and remain in the signed-in user's browser draft so a resumed
+  draft shows the same editable values. Disabling Feishu during an update
+  removes both Runtime variables; leaving it enabled preserves or replaces
+  them with the submitted values. Long descriptions and prompts
   scroll within bounded editors, while the sidebar stays pinned to the
   viewport. On narrow desktop windows, the structure, configuration, and debug
   panels stack vertically instead of squeezing the form. The deployment page
@@ -205,7 +247,7 @@ server that `veadk frontend` launches — no separate backend.
   root `app.py` as the compatible default. Studio removes a single wrapping
   directory, rejects unsafe paths, and shows upload, image build, Runtime
   creation, and service publishing as separate deployment stages.
-- **Existing-project migration**: upload one local ZIP of at most 50 MiB from
+- **Existing-project migration**: upload one local ZIP of at most 20 MiB from
   the add-Agent menu. Studio creates one user-owned Dev Sandbox Session with a
   one-hour TTL, then asks the preinstalled Codex to perform read-only framework,
   entry-point, and migration-boundary analysis. Migration starts only after the
@@ -232,6 +274,14 @@ server that `veadk frontend` launches — no separate backend.
 Changing the Feishu channel on the deployment page regenerates the project so
 `app.py`, the `extensions` dependency, and the runtime environment variables
 stay aligned before deployment.
+
+The deployment card supports automatic and manual credential setup without
+changing its footprint in the publish form. Automatic setup uses the reusable
+`frontend.server.feishu_bot_setup` provider interface and Feishu's official
+PersonalAgent app-registration flow. Credentials are returned only after the
+user confirms the QR authorization; no mock provider or synthetic credentials
+are shipped. The App Secret remains process-local until Studio returns it to
+the authorized browser for credential autofill.
 
 Insight Sandbox requires server-side `VOLCENGINE_ACCESS_KEY`,
 `VOLCENGINE_SECRET_KEY`, `MODEL_AGENT_API_KEY`, and `MODEL_AGENT_NAME` values.
@@ -459,10 +509,72 @@ The Studio `环境` page stores each environment definition, generated Dockerfil
 build version, log metadata, and resulting image reference in the private Studio
 TOS bucket. Creating or saving an environment starts an asynchronous
 CodePipeline build and pushes the resulting image to Container Registry.
+Custom and Dockerfile environments can select a preset environment: none, AIO
+Sandbox, or Codex Sandbox. Selecting a preset pins its `FROM` instruction ahead
+of the editable Dockerfile body; selecting none leaves the complete Dockerfile
+under user control. AIO Sandbox keeps the inherited `/opt/gem/run.sh` entrypoint
+and port `8080`, while Codex Sandbox exposes task delegation through its Codex
+App Server instead of the generic Sandbox shell tool. Legacy records created
+before preset environments were introduced remain compatible.
+Each image version exposes a read-only Manifest at
+`/web/environments/{environmentId}/builds/{versionId}/manifest`; the Studio
+environment card opens the same version-bound contract as YAML for inspection
+and copying.
+
+When an environment is mounted to an Agent conversation, Studio assigns a new
+`mount_instance_id`. Sandbox Tool Sessions are reused only while the Agent
+session, mount instance, environment version, Tool ID, image, provider, and
+region all remain unchanged. Unmounting and mounting again creates a new mount
+instance and therefore a new Sandbox Tool Session. Codex Sandbox progress and
+its Sandbox Session and Codex Thread identifiers are streamed into the normal
+tool-call card and preserved in conversation history.
 Volcengine builds use the Aliyun PyPI mirror, Huawei Cloud Python source mirror,
 and npmmirror for Playwright browsers; BytePlus builds use the corresponding
 official sources. Cross-version Python combinations are compiled from pinned
 source releases instead of depending on GitHub-hosted binaries.
+
+除了自定义配置和上传 Dockerfile，环境还支持两种并列的镜像接入方式：
+
+1. **从公开 Git 仓库构建**：填写无需鉴权的 HTTPS Git 地址和可选的 Branch、Tag
+   或 Commit；Studio 通过 `POST /web/environment-repositories/inspect` 探查仓库中的
+   `Dockerfile`、`Dockerfile.*` 和 `*.Dockerfile`，用户确认其中一个文件后再创建
+   环境；没有匹配文件时不能继续。环境保存
+   `gitSource.repositoryUrl`、`gitSource.ref` 和
+   `gitSource.dockerfilePath`，CodePipeline 使用仓库根目录作为构建上下文，以选中的
+   Dockerfile 构建镜像，并在构建版本中记录实际 Commit SHA。首版不支持私有仓库、
+   SSH 地址或 Git 凭据。
+2. **绑定已有 CR 镜像**：适用于镜像已经由用户自己的 Git 流水线构建并推送到
+   Container Registry 的场景。用户先选择 Region，再依次选择 Registry 实例、
+   Namespace、Repository，最后填写 Tag 或 Digest；Studio 保存
+   `imageSource.region`、`imageSource.registry`、`imageSource.namespace`、
+   `imageSource.repository` 和 `imageSource.reference`，直接使用该镜像，不再启动
+   CodePipeline 构建。
+
+CR 资源层级为 `Registry 实例 / Namespace / Repository / Tag 或 Digest`。环境最终
+绑定的是可运行镜像，因此已有镜像必须精确到 Repository 和 Tag 或 Digest。对于 Git
+构建，`containerRepository` 只指定 CodePipeline 的推送目标，包含 `region`、
+`registry`、`namespace` 和 `repository`；每次构建产生的版本 Tag 仍由 Studio 记录在
+构建结果中。这两个字段含义不同：`containerRepository` 是构建输出位置，
+`imageSource` 是无需构建、直接作为环境使用的现有镜像。两种方式都通过 Region 分段
+选择器和服务端资源接口级联选择 CR；切换 Region 会清空已选的 Registry、Namespace
+和 Repository，避免跨 Region 组合无效资源。服务端使用所选 Region 校验 CR 资源，
+并把 Git 构建结果推送到该 Region 的目标 Repository。
+
+环境配置可以导出为 `akenv://v1/` 分享码，并在另一位 Studio 用户的环境列表中导入。
+分享码是自包含、无服务端分享记录的版本化数据：它包含环境名称、描述、系统、语言、
+组件、Dockerfile、Git/CR 来源和可移植的 Skill 配置；本地 Skill 文件会直接写入分享码，
+导入时再保存为接收者自己的 Skill 资产。环境 ID、所有者、创建/更新时间、构建版本、
+构建日志、运行记录及云凭据不会进入分享码。分享码本身可能包含 Dockerfile 和本地
+Skill 源码，应只发送给可信接收者。
+
+“导入环境”支持使用英文逗号、中文逗号或换行分隔多个分享码，自动忽略重复项，单次
+最多处理 20 个。Studio 会先检测并列出有效、无效项，再逐项导入，因此一个条目失败
+不会回滚已成功添加的环境。如果源环境存在可用版本，分享码会同时携带其镜像、
+Sandbox Tool 和版本级 Skill 快照，在同一云厂商的 Studio 中导入后可直接挂载；跨
+火山引擎与 BytePlus 导入时不会把该版本误标为可用。没有可用版本的自定义、Dockerfile
+和 Git 环境不会自动启动 CodePipeline；已有镜像环境会重新校验并绑定指定 CR 镜像。
+环境列表检测到剪贴板以 `akenv://` 开头时会提示导入；浏览器拒绝自动复制时，分享弹窗
+会保留完整分享码供用户手动复制。
 
 By default, Studio creates or reuses managed CodePipeline and Container Registry
 resources on the first environment build. With the account-stable default TOS
@@ -613,13 +725,28 @@ export VEADK_STUDIO_TOS_BUCKET=teststudio
 ```
 
 The server derives the provider-specific endpoint, such as
-`tos-cn-beijing.volces.com`, and never sends TOS credentials to the
-browser. Local Studio uses the configured Volcengine or BytePlus AK/SK; VeFaaS
-uses its IAM role credentials. Studio objects use the versioned, user-first
-layout
+`tos-cn-beijing.volces.com`, and never sends TOS credentials to the browser.
+For Volcengine, Studio probes the public endpoint once and automatically uses
+the matching `tos-<region>.ivolces.com` intranet endpoint when the public
+endpoint has a transport-level connection failure. Authentication, permission,
+and other TOS service errors do not trigger fallback. Browser-facing signed URLs
+continue to use the public endpoint. BytePlus and custom endpoints are left
+unchanged. Local Studio uses the configured Volcengine or BytePlus AK/SK;
+VeFaaS uses its IAM role credentials. Studio objects use the versioned,
+user-first layout
 `veadk-studio/v1/users/<encoded-user-id>/<namespace>/<scope>/<resource-id>/`.
 Video reference assets currently use the `video/<asset-role>/<asset-id>/`
 namespace and store `content` plus `metadata.json` below it.
+
+Intelligent-development projects use
+`intelligent-development/projects/<project-id>/versions/<version-id>/` below
+the signed-in user's prefix. A version contains an immutable source ZIP,
+validation report, and commit marker; the mutable project summary is only an
+index. Viewing, downloading, and deploying a committed version do not depend on
+the original Sandbox. TOS configuration, integrity, and availability failures
+are returned as distinct errors and are never rendered as an empty project
+list. If persistence fails after a Sandbox delivery is generated, the current
+Sandbox delivery remains usable until that environment expires.
 
 Local Studio still accepts `VEADK_STUDIO_TOS_BUCKET` together with
 `VEADK_STUDIO_TOS_REGION`. When local storage is not configured,

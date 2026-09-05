@@ -445,11 +445,26 @@ test("invalid drafts reveal and focus the first failing field", () => {
   );
   assert.match(
     createSource,
-    /data-validation-field="name"[\s\S]*?aria-invalid=\{showErrors && nameInvalid\}[\s\S]*?aria-describedby=/,
+    /data-validation-field="name"[\s\S]*?aria-invalid=\{showNameError && nameInvalid\}[\s\S]*?aria-describedby=/,
   );
   assert.match(
     createSource,
     /id="cw-agent-name-error"[\s\S]*?role="alert"/,
+  );
+});
+
+test("agent name validation appears as soon as the selected name is edited or blurred", () => {
+  assert.match(
+    createSource,
+    /const showNameError =\s*showErrors \|\| touchedAgentNamePaths\.has\(selectedNamePathKey\)/,
+  );
+  assert.match(
+    createSource,
+    /data-validation-field="name"[\s\S]*?onBlur=\{markAgentNameTouched\}[\s\S]*?markAgentNameTouched\(\)[\s\S]*?patch\(\{ name: e\.target\.value \}\)/,
+  );
+  assert.match(
+    createSource,
+    /\{showNameError && nameProblem \? \([\s\S]*?id="cw-agent-name-error"[\s\S]*?role="alert"/,
   );
 });
 
@@ -738,7 +753,14 @@ test("skill sources open in a fixed-height dialog above a six-row selected list"
     skillSourcePickerSource,
     /id: "local", label: "本地文件"[\s\S]*?id: "skillspace"[\s\S]*?label: "AgentKit Skills 中心"[\s\S]*?id: "skillhub"[\s\S]*?label: "火山 Find Skill 技能广场"/,
   );
-  assert.match(skillSourcePickerSource, /useState<SkillSource>\("local"\)/);
+  assert.match(
+    skillSourcePickerSource,
+    /type SelectableSkillSource = Exclude<SkillSource, "runtime">/,
+  );
+  assert.match(
+    skillSourcePickerSource,
+    /useState<SelectableSkillSource>\("local"\)/,
+  );
   assert.match(
     skillSourcePickerSource,
     /className="cw-skill-add"[\s\S]*?<span>\{addLabel\}<\/span>/,
@@ -937,19 +959,19 @@ test("memory is a directly visible configuration section", () => {
 test("A2A registry YAML export materializes default optional settings", () => {
   assert.match(
     configYamlSource,
-    /import \{ A2A_REGISTRY_DEFAULTS \} from "\.\/veadkCatalog";/,
+    /import \{ a2aRegistryDefaults \} from "\.\/veadkCatalog";/,
   );
   assert.match(
     configYamlSource,
-    /registry\.registryTopK\s*=\s*draft\.a2aRegistry\.registryTopK\?\.trim\(\) \|\| A2A_REGISTRY_DEFAULTS\.topK;/,
+    /registry\.registryTopK\s*=\s*draft\.a2aRegistry\.registryTopK\?\.trim\(\) \|\| defaults\.topK;/,
   );
   assert.match(
     configYamlSource,
-    /registry\.registryRegion\s*=\s*draft\.a2aRegistry\.registryRegion\?\.trim\(\) \|\| A2A_REGISTRY_DEFAULTS\.region;/,
+    /registry\.registryRegion\s*=\s*draft\.a2aRegistry\.registryRegion\?\.trim\(\) \|\| defaults\.region;/,
   );
   assert.match(
     configYamlSource,
-    /registry\.registryEndpoint\s*=\s*draft\.a2aRegistry\.registryEndpoint\?\.trim\(\) \|\|\s*A2A_REGISTRY_DEFAULTS\.endpoint;/,
+    /registry\.registryEndpoint\s*=\s*draft\.a2aRegistry\.registryEndpoint\?\.trim\(\) \|\|\s*defaults\.endpoint;/,
   );
   assert.match(
     configYamlSource,

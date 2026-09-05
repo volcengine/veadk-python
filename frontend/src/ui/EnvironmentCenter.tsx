@@ -1,23 +1,23 @@
 import {
+  useCallback,
   useDeferredValue,
   useEffect,
   useId,
   useMemo,
   useRef,
   useState,
-  type ChangeEvent,
-  type DragEvent,
   type FormEvent,
+  type RefObject,
   type SVGProps,
 } from "react";
 import { createPortal } from "react-dom";
-import { ExternalLink, FileUp, SlidersHorizontal, X } from "lucide-react";
+import { ExternalLink, X } from "lucide-react";
 import { Badge } from "@openai/apps-sdk-ui/components/Badge";
 import { Button } from "@openai/apps-sdk-ui/components/Button";
 import { EmptyMessage } from "@openai/apps-sdk-ui/components/EmptyMessage";
+import { ArrowRotateCw, FileCode } from "@openai/apps-sdk-ui/components/Icon";
 import { Input } from "@openai/apps-sdk-ui/components/Input";
-import { RadioGroup } from "@openai/apps-sdk-ui/components/RadioGroup";
-import { SegmentedControl } from "@openai/apps-sdk-ui/components/SegmentedControl";
+import { Select, type Option } from "@openai/apps-sdk-ui/components/Select";
 import { Textarea } from "@openai/apps-sdk-ui/components/Textarea";
 import feishuLogo from "../assets/feishu-logo.svg";
 import pandocLogo from "../assets/pandoc-logo.svg";
@@ -34,7 +34,9 @@ import { GitHubLogo } from "./GitHubLogo";
 import { LibraryResourceCard } from "./LibraryResourceCard";
 import {
   ResourceCreateCard,
+  ResourceDetailLayout,
   ResourceGrid,
+  ResourceLoadingState,
   ResourcePageHeader,
   ResourcePageShell,
   ResourceResults,
@@ -45,28 +47,45 @@ import {
 import { StudioConfirmDialog } from "./StudioConfirmDialog";
 import { StudioBuildProgress } from "./StudioBuildProgress";
 import { StudioPackageOption } from "./StudioPackageOption";
+import CodeEditor from "./CodeEditor";
+import { formatRelativeTimeLabel } from "./relativeTime";
 import {
   buildEnvironment,
   createEnvironment,
   deleteEnvironment,
+  exportEnvironmentShareCode,
   getEnvironmentBuild,
+  getEnvironmentManifest,
+  importEnvironmentShareCodes,
+  inspectEnvironmentRepository,
+  inspectEnvironmentShareCodes,
   listEnvironments,
-  listWorkspaces,
+  parseEnvironmentShareCodes,
   updateEnvironment,
+  writeEnvironmentShareCode,
   type EnvironmentBuildStatus,
   type EnvironmentBuildVersion,
+  type EnvironmentManifest,
+  type EnvironmentContainerRepository,
   type EnvironmentInput,
+  type EnvironmentRepositoryInspection,
+  type EnvironmentShareCodeInspection,
   type StudioEnvironment,
-  type StudioWorkspace,
 } from "../adk/client";
 import {
   buildEnvironmentDockerfile,
+  AIO_BASE_IMAGE,
+  CODEX_SANDBOX_BASE_IMAGES,
   EMPTY_ENVIRONMENT_DRAFT,
+  ENVIRONMENT_BASE_ENVIRONMENTS,
   ENVIRONMENT_CATEGORIES,
   ENVIRONMENT_LANGUAGES,
   ENVIRONMENT_OPERATING_SYSTEMS,
+  environmentBaseEnvironmentLabel,
+  environmentBaseFromDockerfile,
   environmentLanguageLabel,
   environmentOperatingSystemLabel,
+  type EnvironmentBaseEnvironment,
   type EnvironmentDraft,
   type EnvironmentLanguage,
   type EnvironmentOperatingSystem,
@@ -75,19 +94,105 @@ import {
 import { TextShimmer } from "./text-shimmer/TextShimmer";
 import { SkillSourcePicker } from "./SkillSourcePicker";
 import {
+  composeDockerfile,
+  dockerfileBaseImage,
+  dockerfileBody,
   dockerfileByteSize,
   readDockerfileUpload,
+  validateDockerfileBody,
   validateDockerfileUpload,
 } from "./environmentDockerfileUpload";
-import type { CloudProvider } from "../adk/cloudProvider";
+import { formatEnvironmentManifest } from "./environmentManifest";
+import {
+  cloudRegionOptions,
+  defaultCloudRegion,
+  type CloudProvider,
+  type CloudRegion,
+} from "../adk/cloudProvider";
+import { ContainerRepositorySelector } from "./DeploymentResources";
+import { DeploymentSelect } from "./DeploymentSelect";
 import "./EnvironmentCenter.css";
 
 type EnvironmentView =
   | { kind: "list" }
   | { kind: "editor"; environmentId: string | null };
 
-type EnvironmentEditorTab = "configuration" | "dockerfile";
-type EnvironmentCreationMethod = "custom" | "dockerfile";
+type EnvironmentCreationMethod = "custom" | "dockerfile" | "git" | "image";
+type GitRepositoryMode = "managed" | "existing";
+type DockerfilePresetEnvironment = "none" | "aio-sandbox" | "codex-sandbox";
+
+const ENVIRONMENT_CREATION_OPTIONS: Option[] = [
+  { value: "custom", label: "自定义配置", description: "通过表单选择基础环境、Python、工具和技能" },
+  { value: "dockerfile", label: "自定义 Dockerfile", description: "上传或直接编辑 Dockerfile" },
+  { value: "git", label: "从代码仓库构建", description: "探查公开仓库并通过 CodePipeline 构建" },
+  { value: "image", label: "使用已有镜像", description: "绑定由外部流水线交付的 CR 镜像" },
+];
+
+const ENVIRONMENT_BASE_OPTIONS: Option[] = ENVIRONMENT_BASE_ENVIRONMENTS.map((item) => ({
+  value: item.id,
+  label: item.label,
+  description: item.description,
+}));
+
+const DOCKERFILE_PRESET_ENVIRONMENT_OPTIONS: Option[] = [
+  {
+    value: "none",
+    label: "无",
+    description: "自行填写 Dockerfile 基础镜像",
+  },
+  {
+    value: "aio-sandbox",
+    label: "AIO Sandbox",
+    description: "内置 Sandbox Shell 与常用运行时",
+  },
+  {
+    value: "codex-sandbox",
+    label: "Codex Sandbox",
+    description: "内置 Codex CLI、浏览器与代码执行环境",
+  },
+];
+
+function dockerfilePresetEnvironmentFromContent(content: string): DockerfilePresetEnvironment {
+  const baseImage = dockerfileBaseImage(content, "");
+  if (baseImage === AIO_BASE_IMAGE) return "aio-sandbox";
+  if (baseImage.includes("/codexenv:")) return "codex-sandbox";
+  return "none";
+}
+
+const ENVIRONMENT_OS_OPTIONS: Option[] = ENVIRONMENT_OPERATING_SYSTEMS.map((item) => ({
+  value: item.id,
+  label: item.label,
+}));
+
+const ENVIRONMENT_LANGUAGE_OPTIONS: Option[] = ENVIRONMENT_LANGUAGES.map((item) => ({
+  value: item.id,
+  label: item.label,
+}));
+
+const ENVIRONMENT_REPOSITORY_MODE_OPTIONS: Option[] = [
+  { value: "managed", label: "Studio 默认镜像仓库" },
+  { value: "existing", label: "已有镜像仓库" },
+];
+
+const MAX_ENVIRONMENT_SHARE_CODES = 20;
+const promptedClipboardShareTexts = new Set<string>();
+const CLIPBOARD_READ_ERROR = "未能读取剪贴板。请允许剪贴板权限，或点击“导入环境”后手动粘贴分享码。";
+const CLIPBOARD_UNSUPPORTED_ERROR = "当前浏览器无法自动读取剪贴板；请点击“导入环境”后手动粘贴分享码。";
+
+async function clipboardReadPermissionDenied(): Promise<boolean> {
+  if (typeof navigator === "undefined" || !navigator.permissions?.query) return false;
+  try {
+    const permission = await navigator.permissions.query({ name: "clipboard-read" as PermissionName });
+    return permission.state === "denied";
+  } catch {
+    return false;
+  }
+}
+
+export interface EnvironmentClipboardImportRequest {
+  key: number;
+  text: string;
+}
 
 const TOOL_LOGOS: Readonly<Record<string, string>> = {
   opencli: opencliLogo,
@@ -100,20 +205,63 @@ const TOOL_LOGOS: Readonly<Record<string, string>> = {
   imagemagick: imagemagickLogo,
 };
 
-function BackIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
-      <path d="m14.5 6-6 6 6 6" />
-    </svg>
-  );
-}
-
 function AddIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true" {...props}>
       <path d="M8 3.25v9.5M3.25 8h9.5" />
     </svg>
   );
+}
+
+function RequiredMark() {
+  return <span className="environment-required-mark" aria-hidden="true">*</span>;
+}
+
+function ImportEnvironmentIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+      <path d="M12 3v11m0 0 4-4m-4 4-4-4" />
+      <path d="M5 16v2.5A2.5 2.5 0 0 0 7.5 21h9a2.5 2.5 0 0 0 2.5-2.5V16" />
+    </svg>
+  );
+}
+
+function repositoryInputError(repositoryUrl: string): string {
+  const trimmed = repositoryUrl.trim();
+  if (!trimmed) return "请输入公开代码仓库地址。";
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== "https:" || !url.hostname) {
+      return "请输入公开仓库的 HTTPS 地址。";
+    }
+  } catch {
+    return "请输入有效的公开仓库 HTTPS 地址。";
+  }
+  return "";
+}
+
+function repositorySelected(value: EnvironmentContainerRepository | undefined): boolean {
+  return Boolean(
+    value?.region && value.registry && value.namespace && value.repository,
+  );
+}
+
+function imageReferenceError(reference: string): string {
+  const value = reference.trim();
+  if (!value) return "";
+  if (/\s/.test(value)) return "Tag 或 Digest 不能包含空格。";
+  if (value.startsWith("sha256:")) {
+    return /^sha256:[0-9a-fA-F]{64}$/.test(value)
+      ? ""
+      : "Digest 必须是完整的 sha256 值。";
+  }
+  if (/[@/]/.test(value)) return "这里只填写 Tag，不要重复填写镜像仓库路径。";
+  return "";
+}
+
+function conciseErrorMessage(cause: unknown): string {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  return message.split("\n原始响应：", 1)[0].trim();
 }
 
 function EnvironmentEmptyIcon(props: SVGProps<SVGSVGElement>) {
@@ -138,7 +286,10 @@ function EnvironmentPackageIcon({ option }: { option: EnvironmentOption }) {
   return <img src={src} alt="" />;
 }
 
-function environmentDraft(environment?: StudioEnvironment): EnvironmentDraft {
+function environmentDraft(
+  environment: StudioEnvironment | undefined,
+  cloudProvider: CloudProvider,
+): EnvironmentDraft {
   if (!environment) {
     return {
       ...EMPTY_ENVIRONMENT_DRAFT,
@@ -149,14 +300,18 @@ function environmentDraft(environment?: StudioEnvironment): EnvironmentDraft {
   return {
     name: environment.name,
     description: environment.description,
+    baseEnvironment: environment.baseEnvironment,
     operatingSystem: environment.operatingSystem,
     language: environment.language,
     optionIds: [...environment.optionIds],
     selectedSkills: [...environment.selectedSkills],
     dockerfile:
-      environment.dockerfile === buildEnvironmentDockerfile(environment)
+      environment.dockerfile === buildEnvironmentDockerfile(environment, cloudProvider)
         ? undefined
         : environment.dockerfile,
+    gitSource: environment.gitSource,
+    containerRepository: environment.containerRepository,
+    imageSource: environment.imageSource,
   };
 }
 
@@ -166,6 +321,8 @@ const ACTIVE_BUILD_STATUSES = new Set<EnvironmentBuildStatus>([
   "building",
   "scanning",
 ]);
+
+const BUILD_LOG_REFRESH_INTERVAL_MS = 3_000;
 
 const BUILD_STATUS_LABELS: Record<EnvironmentBuildStatus, string> = {
   preparing: "准备中",
@@ -188,13 +345,15 @@ function environmentStatus(environment: StudioEnvironment): {
 }
 
 function environmentUpdatedAt(value: string): string {
+  return formatRelativeTimeLabel(value);
+}
+
+function environmentUpdatedAtTitle(value: string): string {
   const timestamp = Date.parse(value);
   if (Number.isNaN(timestamp)) return value;
   return new Intl.DateTimeFormat("zh-CN", {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
+    dateStyle: "medium",
+    timeStyle: "medium",
   }).format(timestamp);
 }
 
@@ -209,6 +368,160 @@ function buildElapsed(build: EnvironmentBuildVersion, now = Date.now()): string 
   const remainder = seconds % 60;
   if (minutes < 60) return `${minutes} 分 ${remainder} 秒`;
   return `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分`;
+}
+
+function EnvironmentManifestDialog({
+  environment,
+  onClose,
+}: {
+  environment: StudioEnvironment;
+  onClose: () => void;
+}) {
+  const versionId = environment.latestVersion?.versionId ?? "";
+  const titleId = useId();
+  const dialogRef = useRef<HTMLElement>(null);
+  const onCloseRef = useRef(onClose);
+  const [manifest, setManifest] = useState<EnvironmentManifest | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [reloadKey, setReloadKey] = useState(0);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
+  const manifestYaml = useMemo(
+    () => manifest ? formatEnvironmentManifest(manifest) : "",
+    [manifest],
+  );
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    const previousFocus = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    document.body.style.overflow = "hidden";
+    dialogRef.current?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab" || !dialogRef.current) return;
+      const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+      )).filter((item) => item.getClientRects().length > 0);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true);
+    setError("");
+    void getEnvironmentManifest(environment.id, versionId, controller.signal)
+      .then(setManifest)
+      .catch((cause) => {
+        if ((cause as Error)?.name !== "AbortError") {
+          setError(cause instanceof Error ? cause.message : String(cause));
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [environment.id, reloadKey, versionId]);
+
+  useEffect(() => {
+    if (copyState !== "copied") return;
+    const timer = window.setTimeout(() => setCopyState("idle"), 1500);
+    return () => window.clearTimeout(timer);
+  }, [copyState]);
+
+  const copyManifest = async () => {
+    try {
+      await navigator.clipboard.writeText(manifestYaml);
+      setCopyState("copied");
+    } catch {
+      setCopyState("error");
+    }
+  };
+
+  return createPortal(
+    <div className="environment-build-dialog__backdrop" onMouseDown={(event) => {
+      if (event.target === event.currentTarget) onClose();
+    }}>
+      <section
+        ref={dialogRef}
+        className="environment-build-dialog environment-manifest-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-busy={loading || undefined}
+        tabIndex={-1}
+      >
+        <header className="environment-build-dialog__header">
+          <div>
+            <div className="environment-build-dialog__title-row">
+              <h2 id={titleId}>环境 Manifest</h2>
+            </div>
+            <p>{environment.name} / {versionId}</p>
+          </div>
+          <Button type="button" color="secondary" variant="ghost" size="sm" uniform onClick={onClose} aria-label="关闭环境 Manifest">
+            <X aria-hidden />
+          </Button>
+        </header>
+
+        <div className="environment-manifest-dialog__body">
+          {loading ? (
+            <div className="environment-manifest-dialog__state" role="status">
+              <TextShimmer as="span">正在加载 Manifest</TextShimmer>
+            </div>
+          ) : error ? (
+            <div className="environment-manifest-dialog__state is-error" role="alert">
+              <p>{error}</p>
+              <Button type="button" color="secondary" variant="soft" size="sm" onClick={() => setReloadKey((key) => key + 1)}>
+                重新加载
+              </Button>
+            </div>
+          ) : (
+            <div className="environment-manifest-dialog__editor" aria-label="环境 Manifest YAML">
+              <CodeEditor
+                value={manifestYaml}
+                path="environment.yaml"
+                readOnly
+                onChange={() => undefined}
+              />
+            </div>
+          )}
+        </div>
+
+        <footer className="environment-build-dialog__actions">
+          {copyState === "error" ? (
+            <span className="environment-manifest-dialog__copy-error" role="alert">复制失败，请重试</span>
+          ) : null}
+          <Button type="button" color="secondary" variant="ghost" size="sm" onClick={onClose}>关闭</Button>
+          <Button type="button" color="info" size="sm" disabled={!manifestYaml} onClick={() => void copyManifest()}>
+            {copyState === "copied" ? "已复制" : "复制 Manifest"}
+          </Button>
+        </footer>
+      </section>
+    </div>,
+    document.body,
+  );
 }
 
 function EnvironmentBuildDetailsDialog({
@@ -285,12 +598,12 @@ function EnvironmentBuildDetailsDialog({
         setError("");
         onBuildUpdateRef.current(next);
         if (ACTIVE_BUILD_STATUSES.has(next.status)) {
-          timer = window.setTimeout(refresh, 5000);
+          timer = window.setTimeout(refresh, BUILD_LOG_REFRESH_INTERVAL_MS);
         }
       } catch (cause) {
         if ((cause as Error)?.name === "AbortError") return;
         setError(cause instanceof Error ? cause.message : String(cause));
-        timer = window.setTimeout(refresh, 5000);
+        timer = window.setTimeout(refresh, BUILD_LOG_REFRESH_INTERVAL_MS);
       } finally {
         if (!controller.signal.aborted) setLoading(false);
       }
@@ -311,7 +624,9 @@ function EnvironmentBuildDetailsDialog({
   const status = build
     ? environmentStatus({ ...environment, latestVersion: build })
     : { label: "未构建", color: "secondary" as const };
-  const cpUrl = build?.resources?.codePipeline?.consoleUrl;
+  const cpUrl = environment.imageSource
+    ? undefined
+    : build?.resources?.codePipeline?.consoleUrl;
 
   return createPortal(
     <div className="environment-build-dialog__backdrop" onMouseDown={(event) => {
@@ -340,7 +655,13 @@ function EnvironmentBuildDetailsDialog({
 
         <div className="environment-build-dialog__summary">
           <div><span>当前步骤</span><strong>{build?.currentStep || "等待构建信息"}</strong></div>
-          <div><span>已用时</span><strong>{build ? buildElapsed(build, now) : "—"}</strong></div>
+          <div><span>已用时</span><strong>{build ? buildElapsed(build, now) : "-"}</strong></div>
+          {build?.sourceCommitSha ? (
+            <div>
+              <span>源码提交</span>
+              <strong title={build.sourceCommitSha}>{build.sourceCommitSha.slice(0, 12)}</strong>
+            </div>
+          ) : null}
           {cpUrl ? (
             <a href={cpUrl} target="_blank" rel="noreferrer">
               在 CodePipeline 中查看 <ExternalLink aria-hidden />
@@ -366,7 +687,7 @@ function EnvironmentBuildDetailsDialog({
 
         <footer className="environment-build-dialog__actions">
           <Button type="button" color="secondary" variant="ghost" size="sm" onClick={onClose}>关闭</Button>
-          {build && !ACTIVE_BUILD_STATUSES.has(build.status) ? (
+          {build && !environment.imageSource && !ACTIVE_BUILD_STATUSES.has(build.status) ? (
             <Button type="button" color="info" size="sm" disabled={rebuilding} onClick={() => {
               setRebuilding(true);
               void onRebuild().then(onClose).finally(() => setRebuilding(false));
@@ -381,56 +702,895 @@ function EnvironmentBuildDetailsDialog({
   );
 }
 
+function EnvironmentRegionSelector({
+  cloudProvider,
+  value,
+  disabled,
+  onChange,
+}: {
+  cloudProvider: CloudProvider;
+  value: CloudRegion;
+  disabled: boolean;
+  onChange: (region: CloudRegion) => void;
+}) {
+  const options: Option[] = cloudRegionOptions(cloudProvider).map((option) => ({
+    value: option.value,
+    label: option.label,
+  }));
+  return (
+    <label className="environment-field environment-region-field">
+      <span>区域<RequiredMark /></span>
+      <Select
+        id="environment-region"
+        value={value}
+        options={options}
+        optionClassName="environment-select-option"
+        required
+        size="lg"
+        block
+        pill={false}
+        disabled={disabled}
+        triggerClassName="environment-select-trigger"
+        onChange={(option) => onChange(option.value as CloudRegion)}
+      />
+    </label>
+  );
+}
+
+function GitRepositoryFields({
+  repositoryUrl,
+  gitRef,
+  dockerfilePath,
+  inspection,
+  inspectedKey,
+  disabled,
+  onRepositoryUrlChange,
+  onGitRefChange,
+  onDockerfilePathChange,
+  onInspectionChange,
+  onInspectedKeyChange,
+}: {
+  repositoryUrl: string;
+  gitRef: string;
+  dockerfilePath: string;
+  inspection: EnvironmentRepositoryInspection | null;
+  inspectedKey: string;
+  disabled: boolean;
+  onRepositoryUrlChange: (value: string) => void;
+  onGitRefChange: (value: string) => void;
+  onDockerfilePathChange: (value: string) => void;
+  onInspectionChange: (value: EnvironmentRepositoryInspection | null) => void;
+  onInspectedKeyChange: (value: string) => void;
+}) {
+  const [inspecting, setInspecting] = useState(false);
+  const [inspectError, setInspectError] = useState("");
+  const requestRef = useRef<AbortController | null>(null);
+  const autoAttemptedKeyRef = useRef("");
+  const currentKey = `${repositoryUrl.trim()}\u0000${gitRef.trim()}`;
+  const inspectionIsCurrent = inspectedKey === currentKey;
+
+  useEffect(() => () => {
+    const controller = requestRef.current;
+    requestRef.current = null;
+    controller?.abort();
+  }, []);
+
+  const resetInspection = () => {
+    requestRef.current?.abort();
+    requestRef.current = null;
+    setInspecting(false);
+    setInspectError("");
+    onInspectionChange(null);
+    onInspectedKeyChange("");
+    onDockerfilePathChange("");
+    autoAttemptedKeyRef.current = "";
+  };
+
+  const inspectRepository = useCallback(async () => {
+    const inputError = repositoryInputError(repositoryUrl);
+    if (inputError) {
+      setInspectError(inputError);
+      return;
+    }
+    autoAttemptedKeyRef.current = currentKey;
+    requestRef.current?.abort();
+    const controller = new AbortController();
+    requestRef.current = controller;
+    setInspecting(true);
+    setInspectError("");
+    try {
+      const result = await inspectEnvironmentRepository(
+        {
+          repositoryUrl: repositoryUrl.trim(),
+          ...(gitRef.trim() ? { ref: gitRef.trim() } : {}),
+        },
+        controller.signal,
+      );
+      if (requestRef.current !== controller) return;
+      onInspectionChange(result);
+      onInspectedKeyChange(currentKey);
+      onDockerfilePathChange(result.dockerfiles.length === 1 ? result.dockerfiles[0] : "");
+    } catch (cause) {
+      if ((cause as Error)?.name === "AbortError") return;
+      setInspectError(conciseErrorMessage(cause));
+      onInspectionChange(null);
+      onInspectedKeyChange("");
+      onDockerfilePathChange("");
+    } finally {
+      if (requestRef.current === controller) {
+        requestRef.current = null;
+        setInspecting(false);
+      }
+    }
+  }, [
+    currentKey,
+    gitRef,
+    onDockerfilePathChange,
+    onInspectedKeyChange,
+    onInspectionChange,
+    repositoryUrl,
+  ]);
+
+  useEffect(() => {
+    if (
+      disabled
+      || inspectionIsCurrent
+      || autoAttemptedKeyRef.current === currentKey
+      || repositoryInputError(repositoryUrl)
+    ) {
+      return;
+    }
+    const timer = window.setTimeout(() => void inspectRepository(), 600);
+    return () => window.clearTimeout(timer);
+  }, [currentKey, disabled, inspectRepository, inspectionIsCurrent, repositoryUrl]);
+
+  const dockerfiles = inspectionIsCurrent ? inspection?.dockerfiles ?? [] : [];
+  return (
+    <section className="environment-source-section" aria-label="公开代码仓库">
+      <div className="environment-form-grid environment-git-fields">
+        <label className="environment-field">
+          <span>Git 地址<RequiredMark /></span>
+          <Input
+            size="lg"
+            type="url"
+            required
+            value={repositoryUrl}
+            placeholder="https://github.com/owner/repository.git"
+            autoComplete="url"
+            disabled={disabled}
+            aria-invalid={Boolean(inspectError)}
+            onChange={(event) => {
+              resetInspection();
+              onRepositoryUrlChange(event.currentTarget.value);
+            }}
+          />
+        </label>
+        <label className="environment-field">
+          <span>Branch、Tag 或 Commit</span>
+          <Input
+            size="lg"
+            value={gitRef}
+            placeholder="默认分支"
+            autoComplete="off"
+            disabled={disabled}
+            onChange={(event) => {
+              resetInspection();
+              onGitRefChange(event.currentTarget.value);
+            }}
+          />
+        </label>
+      </div>
+      <div className="environment-inspection-status environment-form-feedback" aria-live="polite">
+        {inspecting ? <TextShimmer as="span">正在拉取仓库并查找 Dockerfile</TextShimmer> : null}
+        {inspectError ? (
+          <div className="environment-source-error" role="alert">
+            <span>{inspectError}</span>
+            <Button type="button" color="primary" size="sm" pill={false} disabled={disabled} onClick={() => void inspectRepository()}>
+              <ArrowRotateCw />
+              重试
+            </Button>
+          </div>
+        ) : null}
+        {!inspecting && !inspectError && inspectionIsCurrent && inspection ? (
+          dockerfiles.length > 0 ? (
+            <span>
+              {inspection.commitSha
+                ? `已在提交 ${inspection.commitSha.slice(0, 12)} 中找到 ${dockerfiles.length} 个 Dockerfile。`
+                : "已载入保存的 Dockerfile，可重新探查仓库更新。"}
+            </span>
+          ) : (
+            <div className="environment-source-error" role="alert">
+              <span>仓库中未找到 Dockerfile，请检查分支或仓库内容。</span>
+              <button type="button" disabled={disabled} onClick={() => void inspectRepository()}>重新探查</button>
+            </div>
+          )
+        ) : null}
+      </div>
+      {dockerfiles.length > 0 ? (
+        <label className="environment-field environment-dockerfile-picker">
+          <span>Dockerfile<RequiredMark /></span>
+          <DeploymentSelect
+            ariaLabel="选择 Dockerfile"
+            value={dockerfilePath}
+            valueLabel={dockerfilePath}
+            placeholder="请选择 Dockerfile"
+            options={dockerfiles.map((path) => ({ value: path, label: path }))}
+            disabled={disabled || inspecting}
+            onChange={onDockerfilePathChange}
+          />
+        </label>
+      ) : null}
+    </section>
+  );
+}
+
+function EnvironmentRepositoryDestination({
+  cloudProvider,
+  mode,
+  region,
+  value,
+  disabled,
+  onModeChange,
+  onRegionChange,
+  onChange,
+}: {
+  cloudProvider: CloudProvider;
+  mode: GitRepositoryMode;
+  region: CloudRegion;
+  value: EnvironmentContainerRepository | undefined;
+  disabled: boolean;
+  onModeChange: (mode: GitRepositoryMode) => void;
+  onRegionChange: (region: CloudRegion) => void;
+  onChange: (value: EnvironmentContainerRepository) => void;
+}) {
+  return (
+    <section className="environment-source-section" aria-label="构建输出">
+      <div className="environment-form-grid">
+        <label className="environment-field">
+          <span>镜像仓库类型<RequiredMark /></span>
+          <Select
+            id="environment-repository-mode"
+            value={mode}
+            options={ENVIRONMENT_REPOSITORY_MODE_OPTIONS}
+            optionClassName="environment-select-option"
+            required
+            size="lg"
+            block
+            pill={false}
+            disabled={disabled}
+            triggerClassName="environment-select-trigger"
+            onChange={(option) => onModeChange(option.value as GitRepositoryMode)}
+          />
+        </label>
+        <EnvironmentRegionSelector
+          cloudProvider={cloudProvider}
+          value={region}
+          disabled={disabled}
+          onChange={onRegionChange}
+        />
+        {mode === "existing" ? (
+          <ContainerRepositorySelector
+            region={region}
+            value={value}
+            disabled={disabled}
+            onChange={onChange}
+          />
+        ) : (
+          <p className="environment-source-note environment-form-feedback">构建时自动创建或复用当前区域的 Studio 镜像仓库。</p>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function ExistingImageFields({
+  cloudProvider,
+  region,
+  repository,
+  reference,
+  disabled,
+  onRegionChange,
+  onRepositoryChange,
+  onReferenceChange,
+}: {
+  cloudProvider: CloudProvider;
+  region: CloudRegion;
+  repository: EnvironmentContainerRepository | undefined;
+  reference: string;
+  disabled: boolean;
+  onRegionChange: (region: CloudRegion) => void;
+  onRepositoryChange: (value: EnvironmentContainerRepository) => void;
+  onReferenceChange: (value: string) => void;
+}) {
+  const referenceError = imageReferenceError(reference);
+  return (
+    <section className="environment-source-section" aria-label="已有镜像">
+      <div className="environment-form-grid">
+        <EnvironmentRegionSelector
+          cloudProvider={cloudProvider}
+          value={region}
+          disabled={disabled}
+          onChange={onRegionChange}
+        />
+        <ContainerRepositorySelector
+          region={region}
+          value={repository}
+          disabled={disabled}
+          onChange={onRepositoryChange}
+        />
+        <label className="environment-field environment-image-reference">
+          <span>Tag 或 Digest<RequiredMark /></span>
+          <Input
+            size="lg"
+            value={reference}
+            required
+            placeholder="latest 或 sha256:..."
+            autoComplete="off"
+            disabled={disabled}
+            aria-invalid={Boolean(referenceError)}
+            onChange={(event) => onReferenceChange(event.currentTarget.value)}
+          />
+          {referenceError ? (
+            <small className="environment-source-field__error" role="alert">{referenceError}</small>
+          ) : (
+            <small>填写镜像 Tag，或以 sha256: 开头的完整 Digest。</small>
+          )}
+        </label>
+      </div>
+    </section>
+  );
+}
+
+function useEnvironmentDialogFocus(
+  dialogRef: RefObject<HTMLElement | null>,
+  initialFocusRef: RefObject<HTMLElement | null>,
+  onClose: () => void,
+  busy: boolean,
+) {
+  const onCloseRef = useRef(onClose);
+  const busyRef = useRef(busy);
+  onCloseRef.current = onClose;
+  busyRef.current = busy;
+
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    const previousFocus = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    document.body.style.overflow = "hidden";
+    const frame = window.requestAnimationFrame(() => initialFocusRef.current?.focus());
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !busyRef.current) {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), textarea:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ) ?? []).filter((item) => item.getClientRects().length > 0);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, [dialogRef, initialFocusRef]);
+}
+
+function EnvironmentShareDialog({
+  environment,
+  onClose,
+}: {
+  environment: StudioEnvironment;
+  onClose: () => void;
+}) {
+  const titleId = useId();
+  const descriptionId = useId();
+  const dialogRef = useRef<HTMLElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const [shareCode, setShareCode] = useState("");
+  const [state, setState] = useState<"loading" | "copied" | "error">("loading");
+  const [error, setError] = useState("");
+  const busy = state === "loading";
+  useEnvironmentDialogFocus(dialogRef, closeButtonRef, onClose, busy);
+
+  const copyShareCode = async (existingCode = "", signal?: AbortSignal) => {
+    setState("loading");
+    setError("");
+    try {
+      const code = existingCode || (await exportEnvironmentShareCode(environment.id, signal)).shareCode;
+      setShareCode(code);
+      await writeEnvironmentShareCode(code);
+      if (!signal?.aborted) setState("copied");
+    } catch (cause) {
+      if ((cause as Error)?.name === "AbortError") return;
+      setError(cause instanceof Error ? cause.message : String(cause));
+      setState("error");
+    }
+  };
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void copyShareCode("", controller.signal);
+    return () => controller.abort();
+    // Generate once when the dialog opens for this environment.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [environment.id]);
+
+  return createPortal(
+    <div
+      className="environment-build-dialog__backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !busy) onClose();
+      }}
+    >
+      <section
+        ref={dialogRef}
+        className="environment-share-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={descriptionId}
+        aria-busy={busy || undefined}
+      >
+        <header className="environment-build-dialog__header">
+          <div>
+            <h2 id={titleId}>分享环境</h2>
+            <p id={descriptionId}>{environment.name}</p>
+          </div>
+          <Button
+            ref={closeButtonRef}
+            type="button"
+            color="secondary"
+            variant="ghost"
+            size="sm"
+            uniform
+            disabled={busy}
+            onClick={onClose}
+            aria-label="关闭分享环境"
+          >
+            <X aria-hidden />
+          </Button>
+        </header>
+        <div className="environment-share-dialog__body">
+          {state === "loading" ? (
+            <TextShimmer as="p">正在生成并复制分享码</TextShimmer>
+          ) : (
+            <div className="environment-share-dialog__result">
+              {state === "copied" ? (
+                <p className="environment-share-dialog__success" role="status" aria-live="polite">
+                  分享码已复制
+                </p>
+              ) : (
+                <div className="environment-share-dialog__error" role="alert">
+                  <strong>分享失败</strong>
+                  <span>{error}</span>
+                </div>
+              )}
+              {shareCode ? (
+                <label className="environment-share-dialog__field environment-share-dialog__manual-code">
+                  <span>分享码</span>
+                  <Textarea
+                    size="lg"
+                    rows={4}
+                    value={shareCode}
+                    readOnly
+                    aria-label="完整环境分享码"
+                    onFocus={(event) => event.currentTarget.select()}
+                    onClick={(event) => event.currentTarget.select()}
+                  />
+                  <small>
+                    {state === "copied"
+                      ? "分享码已自动复制，也可在这里查看或手动复制。"
+                      : "自动复制失败，可手动复制上方分享码，或重试。"}
+                  </small>
+                </label>
+              ) : null}
+              <p className="environment-share-dialog__safety">
+                分享码可能包含环境配置与本地 Skill 内容，请仅发送给可信对象。
+              </p>
+            </div>
+          )}
+        </div>
+        <footer className="environment-build-dialog__actions">
+          <Button type="button" color="secondary" variant="ghost" size="sm" disabled={busy} onClick={onClose}>
+            关闭
+          </Button>
+          {state === "error" ? (
+            <Button type="button" color="info" size="sm" onClick={() => void copyShareCode(shareCode)}>
+              重试
+            </Button>
+          ) : state === "copied" ? (
+            <Button type="button" color="info" size="sm" onClick={() => void copyShareCode(shareCode)}>
+              再次复制
+            </Button>
+          ) : null}
+        </footer>
+      </section>
+    </div>,
+    document.body,
+  );
+}
+
+type EnvironmentImportPhase = "editing" | "inspecting" | "ready" | "importing";
+
+function EnvironmentImportDialog({
+  initialValue,
+  autoInspect,
+  onClose,
+  onImported,
+}: {
+  initialValue: string;
+  autoInspect: boolean;
+  onClose: () => void;
+  onImported: (
+    environments: StudioEnvironment[],
+    createdCount: number,
+    duplicateCount: number,
+    failedCount: number,
+  ) => void;
+}) {
+  const titleId = useId();
+  const descriptionId = useId();
+  const helpId = useId();
+  const dialogRef = useRef<HTMLElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const autoInspectStartedRef = useRef(false);
+  const [value, setValue] = useState(initialValue);
+  const [phase, setPhase] = useState<EnvironmentImportPhase>("editing");
+  const [inspections, setInspections] = useState<EnvironmentShareCodeInspection[]>([]);
+  const [requestError, setRequestError] = useState("");
+  const [failedItems, setFailedItems] = useState<Array<{ code: string; error: string }>>([]);
+  const shareCodes = useMemo(() => parseEnvironmentShareCodes(value), [value]);
+  const tooMany = shareCodes.length > MAX_ENVIRONMENT_SHARE_CODES;
+  const busy = phase === "inspecting" || phase === "importing";
+  const validInspections = inspections.filter((item) => item.status === "valid");
+  const invalidInspections = inspections.filter((item) => item.status === "invalid");
+  const readyToImport = phase === "ready"
+    && validInspections.length > 0;
+  useEnvironmentDialogFocus(dialogRef, textareaRef, onClose, busy);
+
+  const inspectCodes = useCallback(async () => {
+    if (!shareCodes.length || tooMany) return;
+    setPhase("inspecting");
+    setRequestError("");
+    setFailedItems([]);
+    try {
+      const result = await inspectEnvironmentShareCodes(shareCodes);
+      setInspections([...result].sort((left, right) => left.index - right.index));
+      setPhase("ready");
+    } catch (cause) {
+      setRequestError(cause instanceof Error ? cause.message : String(cause));
+      setPhase("editing");
+    }
+  }, [shareCodes, tooMany]);
+
+  useEffect(() => {
+    if (!autoInspect || autoInspectStartedRef.current) return;
+    autoInspectStartedRef.current = true;
+    void inspectCodes();
+  }, [autoInspect, inspectCodes]);
+
+  const importCodes = async () => {
+    if (!readyToImport) return;
+    setPhase("importing");
+    setRequestError("");
+    setFailedItems([]);
+    try {
+      const importEntries = validInspections.map((item) => ({
+        code: shareCodes[item.index],
+        name: item.name,
+      })).filter((item): item is { code: string; name: string } => Boolean(item.code));
+      const result = await importEnvironmentShareCodes(importEntries.map((item) => item.code));
+      const createdCount = result.filter((item) => item.status === "created").length;
+      const duplicateCount = result.filter((item) => item.status === "duplicate").length;
+      const resultByIndex = new Map(result.map((item) => [item.index, item]));
+      const failed = importEntries.flatMap(({ code, name }, index) => {
+        const item = resultByIndex.get(index);
+        return !item || item.status === "failed"
+          ? [{ code, name, status: "valid" as const, error: item?.error || "服务未返回该分享码的导入结果。" }]
+          : [];
+      });
+      const invalid = invalidInspections.flatMap((item) => {
+        const code = shareCodes[item.index];
+        return code
+          ? [{ code, name: "", status: "invalid" as const, error: item.error || "分享码无效。" }]
+          : [];
+      });
+      const retained = [...invalid, ...failed];
+      const importedById = new Map<string, StudioEnvironment>();
+      result.forEach((item) => {
+        if (item.environment) importedById.set(item.environment.id, item.environment);
+      });
+      onImported([...importedById.values()], createdCount, duplicateCount, retained.length);
+      if (!retained.length) {
+        onClose();
+        return;
+      }
+      setValue(retained.map((item) => item.code).join("\n"));
+      setFailedItems(failed);
+      setInspections(retained.map((item, index) => ({
+        index,
+        status: item.status,
+        name: item.name,
+        error: item.status === "invalid" ? item.error : "",
+      })));
+      setRequestError(`已导入 ${createdCount} 个环境，${retained.length} 个未完成，可重试有效失败项。`);
+      setPhase("ready");
+    } catch (cause) {
+      setRequestError(cause instanceof Error ? cause.message : String(cause));
+      setPhase("ready");
+    }
+  };
+
+  const primaryLabel = phase === "inspecting"
+    ? "正在检测"
+    : phase === "importing"
+      ? "正在导入"
+      : readyToImport
+        ? failedItems.length ? "重试导入" : "确认导入"
+        : "检测分享码";
+
+  return createPortal(
+    <div
+      className="environment-build-dialog__backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !busy) onClose();
+      }}
+    >
+      <section
+        ref={dialogRef}
+        className="environment-share-dialog environment-import-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={descriptionId}
+        aria-busy={busy || undefined}
+      >
+        <header className="environment-build-dialog__header">
+          <div>
+            <h2 id={titleId}>导入环境</h2>
+            <p id={descriptionId}>先检测分享码中的环境，再确认添加到当前账号。</p>
+          </div>
+          <Button
+            type="button"
+            color="secondary"
+            variant="ghost"
+            size="sm"
+            uniform
+            disabled={busy}
+            onClick={onClose}
+            aria-label="关闭导入环境"
+          >
+            <X aria-hidden />
+          </Button>
+        </header>
+        <div className="environment-share-dialog__body">
+          <label className="environment-share-dialog__field">
+            <span>环境分享码</span>
+            <Textarea
+              ref={textareaRef}
+              size="lg"
+              rows={6}
+              value={value}
+              disabled={busy}
+              aria-invalid={tooMany || invalidInspections.length > 0 || undefined}
+              aria-describedby={helpId}
+              placeholder="akenv://v1/..."
+              onChange={(event) => {
+                setValue(event.currentTarget.value);
+                setPhase("editing");
+                setInspections([]);
+                setRequestError("");
+                setFailedItems([]);
+              }}
+            />
+          </label>
+          <p id={helpId} className={`environment-share-dialog__help${tooMany ? " is-error" : ""}`}>
+            {tooMany
+              ? `最多可一次导入 20 个环境，当前检测到 ${shareCodes.length} 个分享码。`
+              : "多个分享码可使用英文逗号、中文逗号或换行分隔，重复项会自动忽略。"}
+          </p>
+          <p className="environment-share-dialog__safety">
+            分享码可能包含环境配置与本地 Skill 内容，请仅导入可信来源的分享码。
+          </p>
+          {phase === "inspecting" ? (
+            <TextShimmer as="p">正在检测环境分享码</TextShimmer>
+          ) : validInspections.length ? (
+            <p className="environment-share-dialog__summary" role="status" aria-live="polite">
+              检测到 {validInspections.length} 个环境，名称分别是：
+              {validInspections.map((item) => item.name || "未命名环境").join("、")}。
+            </p>
+          ) : null}
+          {invalidInspections.length ? (
+            <ul className="environment-share-dialog__failures" role="alert">
+              {invalidInspections.map((item) => (
+                <li key={item.index}>第 {item.index + 1} 个分享码：{item.error || "分享码无效。"}</li>
+              ))}
+            </ul>
+          ) : null}
+          {failedItems.length ? (
+            <ul className="environment-share-dialog__failures" role="alert">
+              {failedItems.map((item, index) => (
+                <li key={`${item.code}:${index}`}>第 {index + 1} 个分享码：{item.error}</li>
+              ))}
+            </ul>
+          ) : null}
+          {requestError ? <p className="environment-share-dialog__error-text" role="alert">{requestError}</p> : null}
+        </div>
+        <footer className="environment-build-dialog__actions">
+          <Button type="button" color="secondary" variant="ghost" size="sm" disabled={busy} onClick={onClose}>
+            取消
+          </Button>
+          <Button
+            type="button"
+            color="info"
+            size="sm"
+            loading={busy}
+            disabled={busy || !shareCodes.length || tooMany || (phase === "ready" && !readyToImport)}
+            onClick={() => readyToImport ? void importCodes() : void inspectCodes()}
+          >
+            {primaryLabel}
+          </Button>
+        </footer>
+      </section>
+    </div>,
+    document.body,
+  );
+}
+
 function EnvironmentEditor({
   environment,
   cloudProvider,
   onCancel,
+  onDelete,
+  onShare,
   onSave,
 }: {
   environment?: StudioEnvironment;
   cloudProvider: CloudProvider;
   onCancel: () => void;
+  onDelete?: () => void;
+  onShare?: () => void;
   onSave: (draft: EnvironmentDraft) => Promise<void>;
 }) {
-  const initialEnvironmentDraft = environmentDraft(environment);
+  const initialEnvironmentDraft = environmentDraft(environment, cloudProvider);
   const hasCustomDockerfile = initialEnvironmentDraft.dockerfile !== undefined;
   const [draft, setDraft] = useState<EnvironmentDraft>(() => ({
     ...initialEnvironmentDraft,
     dockerfile: hasCustomDockerfile ? undefined : initialEnvironmentDraft.dockerfile,
   }));
   const [creationMethod, setCreationMethod] = useState<EnvironmentCreationMethod>(
-    hasCustomDockerfile ? "dockerfile" : "custom",
+    initialEnvironmentDraft.gitSource
+      ? "git"
+      : initialEnvironmentDraft.imageSource
+        ? "image"
+        : hasCustomDockerfile
+          ? "dockerfile"
+          : "custom",
   );
-  const [activeTab, setActiveTab] = useState<EnvironmentEditorTab>("configuration");
   const [uploadedDockerfile, setUploadedDockerfile] = useState(
     hasCustomDockerfile ? environment?.dockerfile ?? "" : "",
   );
-  const [uploadedFileName, setUploadedFileName] = useState(
-    hasCustomDockerfile ? "已保存的 Dockerfile" : "",
+  const [dockerfileFileError, setDockerfileFileError] = useState("");
+  const dockerfileInputRef = useRef<HTMLInputElement>(null);
+  const [dockerfilePresetEnvironment, setDockerfilePresetEnvironment] = useState<DockerfilePresetEnvironment>(() => (
+    hasCustomDockerfile
+      ? dockerfilePresetEnvironmentFromContent(environment?.dockerfile ?? "")
+      : initialEnvironmentDraft.baseEnvironment === "aio-sandbox"
+          || initialEnvironmentDraft.baseEnvironment === "codex-sandbox"
+        ? initialEnvironmentDraft.baseEnvironment
+        : "none"
+  ));
+  const [gitRepositoryUrl, setGitRepositoryUrl] = useState(
+    initialEnvironmentDraft.gitSource?.repositoryUrl ?? "",
   );
-  const [uploadError, setUploadError] = useState("");
-  const [readingFile, setReadingFile] = useState(false);
-  const [draggingFile, setDraggingFile] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const fileReadSequence = useRef(0);
+  const [gitRef, setGitRef] = useState(initialEnvironmentDraft.gitSource?.ref ?? "");
+  const [gitDockerfilePath, setGitDockerfilePath] = useState(
+    initialEnvironmentDraft.gitSource?.dockerfilePath ?? "",
+  );
+  const [gitInspection, setGitInspection] = useState<EnvironmentRepositoryInspection | null>(
+    initialEnvironmentDraft.gitSource
+      ? {
+          repositoryUrl: initialEnvironmentDraft.gitSource.repositoryUrl,
+          ref: initialEnvironmentDraft.gitSource.ref ?? "",
+          commitSha: "",
+          dockerfiles: [initialEnvironmentDraft.gitSource.dockerfilePath],
+        }
+      : null,
+  );
+  const [gitInspectedKey, setGitInspectedKey] = useState(
+    initialEnvironmentDraft.gitSource
+      ? `${initialEnvironmentDraft.gitSource.repositoryUrl}\u0000${initialEnvironmentDraft.gitSource.ref ?? ""}`
+      : "",
+  );
+  const [gitRepositoryMode, setGitRepositoryMode] = useState<GitRepositoryMode>(
+    initialEnvironmentDraft.containerRepository ? "existing" : "managed",
+  );
+  const [gitRegion, setGitRegion] = useState<CloudRegion>(
+    (initialEnvironmentDraft.containerRepository?.region as CloudRegion | undefined)
+      ?? defaultCloudRegion(cloudProvider),
+  );
+  const [gitContainerRepository, setGitContainerRepository] = useState<EnvironmentContainerRepository | undefined>(
+    initialEnvironmentDraft.containerRepository ?? undefined,
+  );
+  const [imageRegion, setImageRegion] = useState<CloudRegion>(
+    (initialEnvironmentDraft.imageSource?.region as CloudRegion | undefined)
+      ?? defaultCloudRegion(cloudProvider),
+  );
+  const [imageRepository, setImageRepository] = useState<EnvironmentContainerRepository | undefined>(
+    initialEnvironmentDraft.imageSource
+      ? {
+          region: initialEnvironmentDraft.imageSource.region,
+          registry: initialEnvironmentDraft.imageSource.registry,
+          namespace: initialEnvironmentDraft.imageSource.namespace,
+          repository: initialEnvironmentDraft.imageSource.repository,
+        }
+      : undefined,
+  );
+  const [imageReference, setImageReference] = useState(
+    initialEnvironmentDraft.imageSource?.reference ?? "",
+  );
+  const [veadkSelected, setVeadkSelected] = useState(false);
   const generatedDockerfile = useMemo(
-    () => buildEnvironmentDockerfile(draft),
-    [draft.operatingSystem, draft.language, draft.optionIds],
+    () => buildEnvironmentDockerfile(draft, cloudProvider),
+    [cloudProvider, draft.baseEnvironment, draft.operatingSystem, draft.language, draft.optionIds],
   );
   const customDockerfile = draft.dockerfile ?? generatedDockerfile;
+  const hasDockerfilePresetEnvironment = dockerfilePresetEnvironment !== "none";
+  const selectedBaseImage = dockerfilePresetEnvironment === "aio-sandbox"
+    ? AIO_BASE_IMAGE
+    : dockerfilePresetEnvironment === "codex-sandbox"
+      ? CODEX_SANDBOX_BASE_IMAGES[cloudProvider]
+      : "";
+  const dockerfileEditorValue = hasDockerfilePresetEnvironment
+    ? dockerfileBody(uploadedDockerfile)
+    : uploadedDockerfile;
+  const dockerfileTemplate = hasDockerfilePresetEnvironment
+    ? composeDockerfile(selectedBaseImage, "")
+    : "";
+  const resolvedUploadedDockerfile = hasDockerfilePresetEnvironment
+    ? composeDockerfile(selectedBaseImage, dockerfileEditorValue)
+    : uploadedDockerfile;
+  const uploadError = dockerfileFileError || (
+    hasDockerfilePresetEnvironment
+      ? validateDockerfileBody(dockerfileEditorValue, selectedBaseImage)
+      : validateDockerfileUpload(uploadedDockerfile)
+  );
   const isEditing = Boolean(environment);
   const formId = "environment-editor-form";
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
-  const uploadIsValid = Boolean(uploadedDockerfile.trim()) && !uploadError;
+  const uploadIsValid = Boolean(resolvedUploadedDockerfile.trim()) && !uploadError;
+  const gitSourceKey = `${gitRepositoryUrl.trim()}\u0000${gitRef.trim()}`;
+  const gitIsValid = !repositoryInputError(gitRepositoryUrl)
+    && gitInspectedKey === gitSourceKey
+    && Boolean(gitDockerfilePath)
+    && (gitRepositoryMode === "managed" || repositorySelected(gitContainerRepository));
+  const imageIsValid = repositorySelected(imageRepository)
+    && Boolean(imageReference.trim())
+    && !imageReferenceError(imageReference);
   const canSubmit = Boolean(draft.name.trim())
     && !saving
-    && !readingFile
-    && (creationMethod === "custom" || uploadIsValid);
-
-  useEffect(() => () => {
-    fileReadSequence.current += 1;
-  }, []);
+    && (
+      creationMethod === "custom"
+      || creationMethod === "dockerfile" && uploadIsValid
+      || creationMethod === "git" && gitIsValid
+      || creationMethod === "image" && imageIsValid
+    );
 
   const toggleOption = (optionId: string, selected: boolean) => {
     setDraft((current) => ({
@@ -441,57 +1601,26 @@ function EnvironmentEditor({
     }));
   };
 
-  const loadDockerfile = async (file: File) => {
-    const sequence = fileReadSequence.current + 1;
-    fileReadSequence.current = sequence;
-    setReadingFile(true);
-    setUploadError("");
-    try {
-      const result = await readDockerfileUpload(file);
-      if (fileReadSequence.current !== sequence) return;
-      setUploadedDockerfile(result.content);
-      setUploadedFileName(file.name || "Dockerfile");
-      setUploadError(result.error);
-    } catch (cause) {
-      if (fileReadSequence.current !== sequence) return;
-      setUploadedDockerfile("");
-      setUploadedFileName(file.name || "Dockerfile");
-      setUploadError(`无法读取 Dockerfile：${cause instanceof Error ? cause.message : String(cause)}`);
-    } finally {
-      if (fileReadSequence.current === sequence) setReadingFile(false);
-      if (fileInputRef.current) fileInputRef.current.value = "";
-    }
-  };
-
-  const handleDockerfileChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file) void loadDockerfile(file);
-  };
-
-  const handleDockerfileDrop = (event: DragEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    setDraggingFile(false);
-    if (saving || readingFile) return;
-    if (event.dataTransfer.files.length !== 1) {
-      setUploadError("请一次只上传一个 Dockerfile。");
-      return;
-    }
-    const file = event.dataTransfer.files[0];
-    if (file) void loadDockerfile(file);
-  };
-
   const updateUploadedDockerfile = (value: string) => {
-    setUploadedDockerfile(value);
-    setUploadError(validateDockerfileUpload(value));
+    setDockerfileFileError("");
+    setUploadedDockerfile(
+      hasDockerfilePresetEnvironment
+        ? composeDockerfile(selectedBaseImage, value)
+        : value,
+    );
   };
 
-  const clearUploadedDockerfile = () => {
-    fileReadSequence.current += 1;
-    setReadingFile(false);
-    setUploadedDockerfile("");
-    setUploadedFileName("");
-    setUploadError("");
-    if (fileInputRef.current) fileInputRef.current.value = "";
+  const uploadDockerfile = async (file: File | undefined) => {
+    if (!file) return;
+    const result = await readDockerfileUpload(file);
+    setDockerfileFileError(result.error);
+    if (!result.content) return;
+    setUploadedDockerfile(result.content);
+  };
+
+  const resetDockerfile = () => {
+    setDockerfileFileError("");
+    setUploadedDockerfile(dockerfileTemplate);
   };
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
@@ -500,13 +1629,32 @@ function EnvironmentEditor({
     setSaving(true);
     setSaveError("");
     try {
+      const uploadedBase = environmentBaseFromDockerfile(resolvedUploadedDockerfile);
       await onSave({
         ...draft,
         name: draft.name.trim(),
         description: draft.description.trim(),
-        optionIds: creationMethod === "dockerfile" ? [] : draft.optionIds,
-        selectedSkills: creationMethod === "dockerfile" ? [] : draft.selectedSkills,
-        dockerfile: creationMethod === "dockerfile" ? uploadedDockerfile : customDockerfile,
+        optionIds: creationMethod === "custom" ? draft.optionIds : [],
+        selectedSkills: creationMethod === "custom" ? draft.selectedSkills : [],
+        dockerfile: creationMethod === "dockerfile"
+          ? resolvedUploadedDockerfile
+          : creationMethod === "custom"
+            ? customDockerfile
+            : "",
+        gitSource: creationMethod === "git"
+          ? {
+              repositoryUrl: gitRepositoryUrl.trim(),
+              ...(gitRef.trim() ? { ref: gitRef.trim() } : {}),
+              dockerfilePath: gitDockerfilePath,
+            }
+          : null,
+        containerRepository: creationMethod === "git" && gitRepositoryMode === "existing"
+          ? gitContainerRepository
+          : null,
+        imageSource: creationMethod === "image" && imageRepository
+          ? { ...imageRepository, reference: imageReference.trim() }
+          : null,
+        ...(creationMethod === "dockerfile" ? uploadedBase : {}),
       });
     } catch (cause) {
       setSaveError(cause instanceof Error ? cause.message : String(cause));
@@ -514,37 +1662,52 @@ function EnvironmentEditor({
     }
   };
 
+  const detailTitle = draft.name.trim() || (isEditing ? environment?.name || "配置环境" : "新建环境");
+
   return (
-    <section className="environment-editor" aria-labelledby="environment-editor-title">
-      <header className="environment-editor__header">
-        <div className="environment-editor__heading">
-          <button type="button" className="environment-back" onClick={onCancel} aria-label="返回环境列表">
-            <BackIcon />
-          </button>
-          <div>
-            <h1 id="environment-editor-title">{isEditing ? "配置环境" : "新建环境"}</h1>
-            <p>上传 Dockerfile，或通过可视化配置生成运行环境</p>
-          </div>
-        </div>
-        <div className="environment-editor__actions">
+    <ResourcePageShell className="environment-editor" aria-label={isEditing ? "环境详情" : "新建环境"}>
+      <ResourceDetailLayout
+        title={detailTitle}
+        description="配置运行环境，或接入代码仓库和已有镜像"
+        identitySeed={detailTitle}
+        backLabel="返回环境列表"
+        onBack={onCancel}
+        actions={(
+          <>
+          {onDelete ? (
+            <Button type="button" color="danger" variant="ghost" size="sm" onClick={onDelete} disabled={saving}>
+              删除
+            </Button>
+          ) : null}
+          {onShare ? (
+            <Button color="secondary" variant="soft" size="sm" onClick={onShare} disabled={saving}>
+              分享
+            </Button>
+          ) : null}
           <Button color="secondary" variant="soft" size="sm" onClick={onCancel} disabled={saving}>取消</Button>
           <Button color="info" size="sm" type="submit" form={formId} disabled={!canSubmit}>
-            {saving ? "正在保存" : isEditing ? "保存并构建" : "创建并构建"}
+            {saving
+              ? "正在保存"
+              : creationMethod === "image"
+                ? isEditing ? "保存环境" : "创建环境"
+                : isEditing ? "保存并构建" : "创建并构建"}
           </Button>
-        </div>
-      </header>
+          </>
+        )}
+      >
 
       <form id={formId} className="environment-form" onSubmit={submit}>
         <div className="environment-fields">
           <label className="environment-field">
-            <span>环境名称</span>
+            <span>环境名称<RequiredMark /></span>
             <Input
               className="environment-text-input"
               type="text"
               size="lg"
+              required
               value={draft.name}
               maxLength={60}
-              placeholder="例如：Python 数据处理"
+              placeholder="Python 数据处理"
               onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
             />
           </label>
@@ -562,122 +1725,127 @@ function EnvironmentEditor({
           </label>
         </div>
 
-        <fieldset className="environment-creation-method">
-          <legend>创建方式</legend>
-          <RadioGroup<EnvironmentCreationMethod>
-            className="environment-creation-options"
+        <label className="environment-field environment-creation-method">
+          <span>创建方式<RequiredMark /></span>
+          <Select
+            id="environment-creation-method"
             value={creationMethod}
-            aria-label="环境创建方式"
-            onChange={(value) => {
-              setCreationMethod(value);
+            options={ENVIRONMENT_CREATION_OPTIONS}
+            optionClassName="environment-select-option"
+            required
+            size="lg"
+            block
+            pill={false}
+            triggerClassName="environment-select-trigger"
+            onChange={(option) => {
+              const nextMethod = option.value as EnvironmentCreationMethod;
+              setCreationMethod(nextMethod);
+              if (nextMethod === "dockerfile" && !uploadedDockerfile.trim()) {
+                setUploadedDockerfile(dockerfileTemplate);
+              }
               setSaveError("");
             }}
-          >
-            <RadioGroup.Item
-              value="custom"
-              block
-              className={creationMethod === "custom" ? "is-selected" : ""}
-            >
-              <span className="environment-creation-option__icon"><SlidersHorizontal aria-hidden /></span>
-              <span className="environment-creation-option__copy">
-                <strong>自定义配置</strong>
-                <span>选择系统、Python、工具和技能</span>
-              </span>
-            </RadioGroup.Item>
-            <RadioGroup.Item
-              value="dockerfile"
-              block
-              className={creationMethod === "dockerfile" ? "is-selected" : ""}
-            >
-              <span className="environment-creation-option__icon"><FileUp aria-hidden /></span>
-              <span className="environment-creation-option__copy">
-                <strong>上传 Dockerfile</strong>
-                <span>直接使用已有构建描述文件</span>
-              </span>
-            </RadioGroup.Item>
-          </RadioGroup>
-        </fieldset>
+          />
+          <small>{ENVIRONMENT_CREATION_OPTIONS.find((item) => item.value === creationMethod)?.description}</small>
+        </label>
 
         {saveError ? <p className="environment-form-error" role="alert">{saveError}</p> : null}
 
         {creationMethod === "custom" ? (
-          <>
-            <SegmentedControl
-              className="environment-tabs"
-              value={activeTab}
-              aria-label="自定义环境编辑内容"
-              onChange={(value) => setActiveTab(value as EnvironmentEditorTab)}
-            >
-              <SegmentedControl.Option value="configuration">配置</SegmentedControl.Option>
-              <SegmentedControl.Option value="dockerfile">描述文件</SegmentedControl.Option>
-            </SegmentedControl>
-            {activeTab === "configuration" ? (
-              <div className="environment-configuration">
-            <section className="environment-section" aria-labelledby="environment-operating-system-title">
-              <h2 id="environment-operating-system-title">操作系统</h2>
-              <RadioGroup<EnvironmentOperatingSystem>
-                className="environment-language-options"
-                aria-label="操作系统"
-                value={draft.operatingSystem}
-                onChange={(operatingSystem) => setDraft((current) => ({ ...current, operatingSystem }))}
-              >
-                {ENVIRONMENT_OPERATING_SYSTEMS.map((operatingSystem) => (
-                  <RadioGroup.Item
-                    key={operatingSystem.id}
-                    value={operatingSystem.id}
-                    block
-                    className={draft.operatingSystem === operatingSystem.id ? "is-selected" : ""}
-                  >
-                    <span className="environment-language-copy">{operatingSystem.label}</span>
-                  </RadioGroup.Item>
-                ))}
-              </RadioGroup>
-            </section>
-
-            <section className="environment-section" aria-labelledby="environment-language-title">
-              <h2 id="environment-language-title">语言</h2>
-              <RadioGroup<EnvironmentLanguage>
-                className="environment-language-options"
-                aria-label="Python 版本"
-                value={draft.language}
-                onChange={(language) => setDraft((current) => ({ ...current, language }))}
-              >
-                {ENVIRONMENT_LANGUAGES.map((language) => (
-                  <RadioGroup.Item
-                    key={language.id}
-                    value={language.id}
-                    block
-                    className={draft.language === language.id ? "is-selected" : ""}
-                  >
-                    <span className="environment-language-copy">{language.label}</span>
-                  </RadioGroup.Item>
-                ))}
-              </RadioGroup>
-            </section>
-
-            <section className="environment-section" aria-labelledby="environment-runtime-title">
-              <h2 id="environment-runtime-title">执行环境</h2>
-              <div className="environment-option-grid">
-                <StudioPackageOption
-                  name="VeADK"
-                  description="Agent 开发与运行框架"
-                  selected
-                  disabled
-                  onChange={() => undefined}
-                  icon={<img src={veadkLogo} alt="" />}
-                />
-              </div>
-            </section>
+          <div className="environment-configuration">
+                <section className="environment-section environment-form-section" aria-label="基础配置">
+                  <div className="environment-form-grid">
+                    <label className="environment-field">
+                      <span>基础环境<RequiredMark /></span>
+                      <Select
+                        id="environment-base-environment"
+                        value={draft.baseEnvironment}
+                        options={ENVIRONMENT_BASE_OPTIONS}
+                        optionClassName="environment-select-option"
+                        required
+                        size="lg"
+                        block
+                        pill={false}
+                        triggerClassName="environment-select-trigger"
+                        onChange={(option) => {
+                          const baseEnvironment = option.value as EnvironmentBaseEnvironment;
+                          const usesPresetRuntime = baseEnvironment === "aio-sandbox"
+                            || baseEnvironment === "codex-sandbox";
+                          setDraft((current) => ({
+                            ...current,
+                            baseEnvironment,
+                            operatingSystem: usesPresetRuntime ? "ubuntu-22.04" : current.operatingSystem,
+                            language: usesPresetRuntime ? "python-3.12" : current.language,
+                          }));
+                        }}
+                      />
+                      <small>{ENVIRONMENT_BASE_ENVIRONMENTS.find((item) => item.id === draft.baseEnvironment)?.description}</small>
+                    </label>
+                    <label className="environment-field">
+                      <span>操作系统<RequiredMark /></span>
+                      <Select
+                        id="environment-operating-system"
+                        value={draft.operatingSystem}
+                        options={ENVIRONMENT_OS_OPTIONS}
+                        optionClassName="environment-select-option"
+                        required
+                        size="lg"
+                        block
+                        pill={false}
+                        disabled={draft.baseEnvironment !== "ubuntu"}
+                        triggerClassName="environment-select-trigger"
+                        onChange={(option) => setDraft((current) => ({
+                          ...current,
+                          operatingSystem: option.value as EnvironmentOperatingSystem,
+                        }))}
+                      />
+                      <small>{draft.baseEnvironment !== "ubuntu" ? `由 ${environmentBaseEnvironmentLabel(draft.baseEnvironment)} 固定为 Ubuntu 22.04` : "选择基础镜像的 Ubuntu 版本"}</small>
+                    </label>
+                    <label className="environment-field">
+                      <span>Python 版本<RequiredMark /></span>
+                      <Select
+                        id="environment-python-version"
+                        value={draft.language}
+                        options={draft.baseEnvironment !== "ubuntu"
+                          ? ENVIRONMENT_LANGUAGE_OPTIONS.filter((item) => item.value === "python-3.12")
+                          : ENVIRONMENT_LANGUAGE_OPTIONS}
+                        optionClassName="environment-select-option"
+                        required
+                        size="lg"
+                        block
+                        pill={false}
+                        disabled={draft.baseEnvironment !== "ubuntu"}
+                        triggerClassName="environment-select-trigger"
+                        onChange={(option) => setDraft((current) => ({
+                          ...current,
+                          language: option.value as EnvironmentLanguage,
+                        }))}
+                      />
+                      <small>{draft.baseEnvironment !== "ubuntu" ? `由 ${environmentBaseEnvironmentLabel(draft.baseEnvironment)} 固定为 Python 3.12` : "选择需要安装的 Python 版本"}</small>
+                    </label>
+                  </div>
+                </section>
 
             <section className="environment-section" aria-labelledby="environment-skills-title">
               <h2 id="environment-skills-title">技能</h2>
-              <SkillSourcePicker
-                selected={draft.selectedSkills}
-                onChange={(selectedSkills) => setDraft((current) => ({ ...current, selectedSkills }))}
-                cloudProvider={cloudProvider}
-                disabled={saving}
-                addLabel="添加环境技能"
-              />
+              <div className="environment-skill-grid">
+                <StudioPackageOption
+                  name="VeADK"
+                  description="Agent 开发与运行框架"
+                  selected={veadkSelected}
+                  disabled={saving}
+                  onChange={setVeadkSelected}
+                  icon={<img src={veadkLogo} alt="" />}
+                />
+                <SkillSourcePicker
+                  selected={draft.selectedSkills}
+                  onChange={(selectedSkills) => setDraft((current) => ({ ...current, selectedSkills }))}
+                  cloudProvider={cloudProvider}
+                  disabled={saving}
+                  addLabel="添加环境技能"
+                  showSelectedCount={false}
+                />
+              </div>
             </section>
 
             {ENVIRONMENT_CATEGORIES.map((category) => (
@@ -700,118 +1868,179 @@ function EnvironmentEditor({
                 </div>
               </section>
             ))}
-              </div>
-            ) : (
-              <section className="environment-dockerfile" aria-labelledby="environment-dockerfile-title">
-                <div className="environment-dockerfile__header">
-                  <div>
-                    <h2 id="environment-dockerfile-title">Dockerfile</h2>
-                    <p>可直接编辑；配置页中的软件变更不会覆盖自定义内容。</p>
-                  </div>
-                  {draft.dockerfile !== undefined ? (
-                    <Button
-                      type="button"
-                      color="secondary"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setDraft((current) => ({ ...current, dockerfile: undefined }))}
-                    >
-                      恢复生成内容
-                    </Button>
-                  ) : null}
-                </div>
-                <Textarea
-                  className="environment-dockerfile__editor"
-                  value={customDockerfile}
-                  aria-label="Dockerfile 内容"
-                  spellCheck={false}
-                  onChange={(event) => setDraft((current) => ({ ...current, dockerfile: event.target.value }))}
+          </div>
+        ) : creationMethod === "dockerfile" ? (
+          <section className="environment-upload" aria-label="自定义 Dockerfile">
+            <div className="environment-dockerfile-settings environment-form-grid">
+              <label className="environment-field">
+                <span>预制环境</span>
+                <Select
+                  id="environment-dockerfile-base-environment"
+                  value={dockerfilePresetEnvironment}
+                  options={DOCKERFILE_PRESET_ENVIRONMENT_OPTIONS}
+                  optionClassName="environment-select-option"
+                  size="lg"
+                  block
+                  pill={false}
+                  triggerClassName="environment-select-trigger"
+                  onChange={(option) => {
+                    setDockerfileFileError("");
+                    setDockerfilePresetEnvironment(option.value as DockerfilePresetEnvironment);
+                  }}
                 />
-              </section>
-            )}
-          </>
-        ) : (
-          <section className="environment-upload" aria-labelledby="environment-upload-title">
-            <div className="environment-upload__header">
+                <small>选择“无”可自行填写 Dockerfile 第一行的基础镜像。</small>
+              </label>
+            </div>
+            <div className="environment-upload__preview">
               <div>
-                <h2 id="environment-upload-title">上传 Dockerfile</h2>
-                <p id="environment-upload-help">支持任意文件名，文件上限 128 KiB。上传后可继续编辑内容。</p>
-              </div>
-              {uploadedDockerfile ? (
-                <Button type="button" color="secondary" variant="ghost" size="sm" onClick={clearUploadedDockerfile} disabled={saving}>
-                  移除文件
-                </Button>
-              ) : null}
-            </div>
-            <div
-              className={`environment-upload-dropzone${draggingFile ? " is-dragging" : ""}${uploadedDockerfile ? " is-ready" : ""}`}
-              onDragEnter={(event) => {
-                event.preventDefault();
-                if (!saving && !readingFile) setDraggingFile(true);
-              }}
-              onDragOver={(event) => event.preventDefault()}
-              onDragLeave={(event) => {
-                if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDraggingFile(false);
-              }}
-              onDrop={handleDockerfileDrop}
-            >
-              <input
-                ref={fileInputRef}
-                type="file"
-                aria-label="Dockerfile 文件"
-                aria-describedby="environment-upload-help"
-                disabled={saving || readingFile}
-                onChange={handleDockerfileChange}
-              />
-              <span className="environment-upload-dropzone__icon"><FileUp aria-hidden /></span>
-              <span className="environment-upload-dropzone__copy">
-                <strong>{readingFile ? "正在读取 Dockerfile" : uploadedFileName || "选择 Dockerfile 或拖拽到这里"}</strong>
-                <span>
-                  {uploadedDockerfile
-                    ? `${dockerfileByteSize(uploadedDockerfile).toLocaleString("zh-CN")} 字节，点击可替换`
-                    : "Dockerfile 通常无扩展名"}
-                </span>
-              </span>
-            </div>
-            {uploadError ? <p className="environment-upload__error" role="alert">{uploadError}</p> : null}
-            {uploadedDockerfile ? (
-              <div className="environment-upload__preview">
-                <div>
-                  <h3>内容预览</h3>
-                  <span>{dockerfileByteSize(uploadedDockerfile).toLocaleString("zh-CN")} / 131,072 字节</span>
+                <h3>Dockerfile<RequiredMark /></h3>
+                <div className="environment-upload__actions">
+                  <span className="environment-upload__size">
+                    {dockerfileByteSize(resolvedUploadedDockerfile).toLocaleString("zh-CN")} / 131,072 字节
+                  </span>
+                  <input
+                    ref={dockerfileInputRef}
+                    className="environment-upload__file-input"
+                    type="file"
+                    accept=".dockerfile,text/plain"
+                    tabIndex={-1}
+                    hidden
+                    onChange={(event) => {
+                      const input = event.currentTarget;
+                      void uploadDockerfile(input.files?.[0]).finally(() => {
+                        input.value = "";
+                      });
+                    }}
+                  />
+                  <Button
+                    className="environment-upload__action"
+                    type="button"
+                    color="secondary"
+                    variant="soft"
+                    size="sm"
+                    pill={false}
+                    disabled={saving}
+                    onClick={() => dockerfileInputRef.current?.click()}
+                  >上传</Button>
+                  <Button
+                    className="environment-upload__action"
+                    type="button"
+                    color="secondary"
+                    variant="ghost"
+                    size="sm"
+                    pill={false}
+                    disabled={saving || !dockerfileEditorValue}
+                    onClick={resetDockerfile}
+                  >重置</Button>
                 </div>
-                <Textarea
-                  className="environment-dockerfile__editor environment-upload__editor"
-                  value={uploadedDockerfile}
-                  aria-label="上传的 Dockerfile 内容"
-                  aria-invalid={Boolean(uploadError)}
-                  spellCheck={false}
-                  onChange={(event) => updateUploadedDockerfile(event.target.value)}
-                />
               </div>
-            ) : null}
+              <div className={`environment-dockerfile-editor${hasDockerfilePresetEnvironment ? " has-fixed-base" : ""}${uploadError ? " is-invalid" : ""}`}>
+                {hasDockerfilePresetEnvironment ? (
+                  <div className="environment-dockerfile-from" aria-label="Dockerfile 基础镜像">
+                    <span className="environment-dockerfile-from__line" aria-hidden="true">1</span>
+                    <code>
+                      <span className="environment-dockerfile-from__keyword">FROM</span>
+                      <span title={selectedBaseImage}>{selectedBaseImage}</span>
+                    </code>
+                  </div>
+                ) : null}
+                <div className="environment-dockerfile__editor environment-upload__editor" aria-label="Dockerfile 内容">
+                  <CodeEditor
+                    value={dockerfileEditorValue}
+                    path="Dockerfile"
+                    lineNumberStart={hasDockerfilePresetEnvironment ? 2 : 1}
+                    height="auto"
+                    minHeight="28px"
+                    maxHeight="var(--environment-dockerfile-editor-max-height)"
+                    onChange={updateUploadedDockerfile}
+                  />
+                </div>
+              </div>
+            </div>
+            {uploadError ? <p className="environment-upload__error environment-upload__error--below" role="alert">{uploadError}</p> : null}
           </section>
+        ) : creationMethod === "git" ? (
+          <div className="environment-source-workflow">
+            <GitRepositoryFields
+              repositoryUrl={gitRepositoryUrl}
+              gitRef={gitRef}
+              dockerfilePath={gitDockerfilePath}
+              inspection={gitInspection}
+              inspectedKey={gitInspectedKey}
+              disabled={saving}
+              onRepositoryUrlChange={setGitRepositoryUrl}
+              onGitRefChange={setGitRef}
+              onDockerfilePathChange={setGitDockerfilePath}
+              onInspectionChange={setGitInspection}
+              onInspectedKeyChange={setGitInspectedKey}
+            />
+            <EnvironmentRepositoryDestination
+              cloudProvider={cloudProvider}
+              mode={gitRepositoryMode}
+              region={gitRegion}
+              value={gitContainerRepository}
+              disabled={saving}
+              onModeChange={(mode) => {
+                setGitRepositoryMode(mode);
+                setSaveError("");
+              }}
+              onRegionChange={(region) => {
+                setGitRegion(region);
+                setGitContainerRepository(undefined);
+                setSaveError("");
+              }}
+              onChange={setGitContainerRepository}
+            />
+          </div>
+        ) : (
+          <ExistingImageFields
+            cloudProvider={cloudProvider}
+            region={imageRegion}
+            repository={imageRepository}
+            reference={imageReference}
+            disabled={saving}
+            onRegionChange={(region) => {
+              setImageRegion(region);
+              setImageRepository(undefined);
+              setSaveError("");
+            }}
+            onRepositoryChange={setImageRepository}
+            onReferenceChange={setImageReference}
+          />
         )}
       </form>
-    </section>
+      </ResourceDetailLayout>
+    </ResourcePageShell>
   );
 }
 
 export function EnvironmentCenter({
   cloudProvider = "volcengine",
   onWorkspace,
+  clipboardImport = null,
+  clipboardReadError = "",
 }: {
   cloudProvider?: CloudProvider;
   onWorkspace?: () => void;
+  clipboardImport?: EnvironmentClipboardImportRequest | null;
+  clipboardReadError?: string;
 }) {
   const [environments, setEnvironments] = useState<StudioEnvironment[]>([]);
-  const [workspaces, setWorkspaces] = useState<StudioWorkspace[]>([]);
   const [view, setView] = useState<EnvironmentView>({ kind: "list" });
   const [query, setQuery] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<StudioEnvironment | null>(null);
   const [buildDetailsId, setBuildDetailsId] = useState<string | null>(null);
+  const [manifestTarget, setManifestTarget] = useState<StudioEnvironment | null>(null);
+  const [shareTarget, setShareTarget] = useState<StudioEnvironment | null>(null);
+  const [importDialog, setImportDialog] = useState<{
+    key: number;
+    initialValue: string;
+    autoInspect: boolean;
+  } | null>(null);
+  const importDialogKeyRef = useRef(0);
   const [statusMessage, setStatusMessage] = useState("");
   const [statusError, setStatusError] = useState(false);
+  const [clipboardMessage, setClipboardMessage] = useState(clipboardReadError);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [reloadKey, setReloadKey] = useState(0);
@@ -821,20 +2050,62 @@ export function EnvironmentCenter({
     const normalized = deferredQuery.trim().toLocaleLowerCase();
     if (!normalized) return environments;
     return environments.filter((environment) =>
-      `${environment.name} ${environment.description} ${environmentOperatingSystemLabel(environment.operatingSystem)} ${environmentLanguageLabel(environment.language)}`
+      (`${environment.name} ${environment.description} ${environmentOperatingSystemLabel(environment.operatingSystem)} ${environmentLanguageLabel(environment.language)}`
+        + ` ${environmentBaseEnvironmentLabel(environment.baseEnvironment)}`)
         .toLocaleLowerCase()
         .includes(normalized),
     );
   }, [deferredQuery, environments]);
 
+  const openImportDialog = useCallback((initialValue = "", autoInspect = false) => {
+    importDialogKeyRef.current += 1;
+    setImportDialog({
+      key: importDialogKeyRef.current,
+      initialValue,
+      autoInspect,
+    });
+  }, []);
+
+  const openClipboardImport = useCallback((clipboardText: string, allowRepeat = false): boolean => {
+    const normalized = clipboardText.trim();
+    if (
+      !normalized.startsWith("akenv://") ||
+      !allowRepeat && promptedClipboardShareTexts.has(normalized)
+    ) {
+      return false;
+    }
+    const shareCodes = parseEnvironmentShareCodes(normalized);
+    if (!shareCodes.length || shareCodes.length > MAX_ENVIRONMENT_SHARE_CODES) return false;
+    promptedClipboardShareTexts.add(normalized);
+    setClipboardMessage("");
+    openImportDialog(normalized, true);
+    return true;
+  }, [openImportDialog]);
+
+  const readClipboardForImport = useCallback(async () => {
+    if (view.kind !== "list" || importDialog) return;
+    if (typeof navigator === "undefined" || !navigator.clipboard?.readText) {
+      setClipboardMessage(CLIPBOARD_UNSUPPORTED_ERROR);
+      return;
+    }
+    try {
+      const text = await navigator.clipboard.readText();
+      const opened = openClipboardImport(text);
+      if (!opened && !text.trim() && await clipboardReadPermissionDenied()) {
+        setClipboardMessage(CLIPBOARD_READ_ERROR);
+      }
+    } catch {
+      setClipboardMessage(CLIPBOARD_READ_ERROR);
+    }
+  }, [importDialog, openClipboardImport, view.kind]);
+
   useEffect(() => {
     const controller = new AbortController();
     if (environments.length === 0) setLoading(true);
     setLoadError("");
-    void Promise.all([listEnvironments(controller.signal), listWorkspaces(controller.signal)])
-      .then(([nextEnvironments, nextWorkspaces]) => {
+    void listEnvironments(controller.signal)
+      .then((nextEnvironments) => {
         setEnvironments(nextEnvironments);
-        setWorkspaces(nextWorkspaces);
       })
       .catch((cause) => {
         if ((cause as Error)?.name !== "AbortError") {
@@ -861,6 +2132,42 @@ export function EnvironmentCenter({
     return () => window.clearTimeout(timer);
   }, [statusError, statusMessage]);
 
+  useEffect(() => {
+    if (clipboardReadError) setClipboardMessage(clipboardReadError);
+  }, [clipboardReadError]);
+
+  useEffect(() => {
+    if (clipboardImport) openClipboardImport(clipboardImport.text);
+  }, [clipboardImport, openClipboardImport]);
+
+  useEffect(() => {
+    if (view.kind !== "list") return;
+    const handleFocus = () => void readClipboardForImport();
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") void readClipboardForImport();
+    };
+    const handlePaste = (event: ClipboardEvent) => {
+      const target = event.target;
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLElement && target.isContentEditable
+      ) {
+        return;
+      }
+      const text = event.clipboardData?.getData("text/plain") ?? "";
+      if (openClipboardImport(text, true)) event.preventDefault();
+    };
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("paste", handlePaste);
+    return () => {
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("paste", handlePaste);
+    };
+  }, [openClipboardImport, readClipboardForImport, view.kind]);
+
   const editingEnvironment = view.kind === "editor" && view.environmentId
     ? environments.find((environment) => environment.id === view.environmentId)
     : undefined;
@@ -868,7 +2175,7 @@ export function EnvironmentCenter({
   const saveEnvironment = async (draft: EnvironmentDraft) => {
     const input: EnvironmentInput = {
       ...draft,
-      dockerfile: draft.dockerfile ?? buildEnvironmentDockerfile(draft),
+      dockerfile: draft.dockerfile ?? buildEnvironmentDockerfile(draft, cloudProvider),
     };
     const saved = editingEnvironment
       ? await updateEnvironment(editingEnvironment.id, input)
@@ -876,6 +2183,10 @@ export function EnvironmentCenter({
     setEnvironments((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
     setView({ kind: "list" });
     setStatusError(false);
+    if (input.imageSource) {
+      setStatusMessage(`环境“${saved.name}”已绑定已有镜像`);
+      return;
+    }
     try {
       const latestVersion = await buildEnvironment(saved.id);
       setEnvironments((current) => current.map((item) =>
@@ -912,15 +2223,73 @@ export function EnvironmentCenter({
     }
   };
 
+  const handleImportedEnvironments = (
+    imported: StudioEnvironment[],
+    createdCount: number,
+    duplicateCount: number,
+    failedCount: number,
+  ) => {
+    if (imported.length) {
+      setEnvironments((current) => {
+        const importedIds = new Set(imported.map((item) => item.id));
+        return [...imported, ...current.filter((item) => !importedIds.has(item.id))];
+      });
+    }
+    setStatusError(failedCount > 0);
+    setStatusMessage(
+      failedCount > 0
+        ? `已导入 ${createdCount} 个环境，${failedCount} 个失败`
+        : duplicateCount > 0
+          ? `已导入 ${createdCount} 个环境，${duplicateCount} 个分享码已存在`
+          : `已导入 ${createdCount} 个环境`,
+    );
+  };
+
+  const deleteDialog = deleteTarget ? (
+    <StudioConfirmDialog
+      title="删除环境"
+      description={`确定删除环境“${deleteTarget.name}”吗？删除后无法恢复。`}
+      confirmLabel="删除"
+      variant="danger"
+      onCancel={() => setDeleteTarget(null)}
+      onConfirm={() => {
+        const target = deleteTarget;
+        setDeleteTarget(null);
+        setView({ kind: "list" });
+        void deleteEnvironment(target.id)
+          .then(() => {
+            setEnvironments((current) => current.filter((environment) => environment.id !== target.id));
+            setStatusError(false);
+            setStatusMessage(`已删除环境“${target.name}”`);
+          })
+          .catch((cause) => {
+            setStatusError(true);
+            setStatusMessage(cause instanceof Error ? cause.message : String(cause));
+          });
+      }}
+    />
+  ) : null;
+
   if (view.kind === "editor") {
     return (
-      <EnvironmentEditor
-        key={view.environmentId ?? "new"}
-        environment={editingEnvironment}
-        cloudProvider={cloudProvider}
-        onCancel={() => setView({ kind: "list" })}
-        onSave={saveEnvironment}
-      />
+      <>
+        <EnvironmentEditor
+          key={view.environmentId ?? "new"}
+          environment={editingEnvironment}
+          cloudProvider={cloudProvider}
+          onCancel={() => setView({ kind: "list" })}
+          onDelete={editingEnvironment ? () => setDeleteTarget(editingEnvironment) : undefined}
+          onShare={editingEnvironment ? () => setShareTarget(editingEnvironment) : undefined}
+          onSave={saveEnvironment}
+        />
+        {shareTarget ? (
+          <EnvironmentShareDialog
+            environment={shareTarget}
+            onClose={() => setShareTarget(null)}
+          />
+        ) : null}
+        {deleteDialog}
+      </>
     );
   }
 
@@ -960,11 +2329,27 @@ export function EnvironmentCenter({
         </div>
       </ResourceToolbar>
 
+      {clipboardMessage ? (
+        <div className="environment-clipboard-notice" role="alert">
+          <span>{clipboardMessage}</span>
+          <Button
+            type="button"
+            color="secondary"
+            variant="soft"
+            size="sm"
+            onClick={() => {
+              setClipboardMessage("");
+              openImportDialog();
+            }}
+          >
+            手动导入
+          </Button>
+        </div>
+      ) : null}
+
       <ResourceResults aria-live="polite">
         {loading ? (
-          <div className="environment-loading" role="status" aria-live="polite">
-            <TextShimmer as="span">正在加载环境</TextShimmer>
-          </div>
+          <ResourceLoadingState />
         ) : loadError ? (
           <div className="environment-load-error" role="alert">
             <p>{loadError}</p>
@@ -983,16 +2368,24 @@ export function EnvironmentCenter({
         ) : (
           <ResourceGrid>
             {!query.trim() ? (
-              <ResourceCreateCard
-                aria-label="新建环境"
-                icon={<AddIcon />}
-                onClick={() => setView({ kind: "editor", environmentId: null })}
-              >
-                新建环境
-              </ResourceCreateCard>
+              <>
+                <ResourceCreateCard
+                  aria-label="新建环境"
+                  icon={<AddIcon />}
+                  onClick={() => setView({ kind: "editor", environmentId: null })}
+                >
+                  新建环境
+                </ResourceCreateCard>
+                <ResourceCreateCard
+                  aria-label="导入环境"
+                  icon={<ImportEnvironmentIcon />}
+                  onClick={() => openImportDialog()}
+                >
+                  导入环境
+                </ResourceCreateCard>
+              </>
             ) : null}
             {visibleEnvironments.map((environment) => {
-              const referenceCount = workspaces.filter((workspace) => workspace.environmentIds.includes(environment.id)).length;
               const status = environmentStatus(environment);
               const buildActive = Boolean(
                 environment.latestVersion && ACTIVE_BUILD_STATUSES.has(environment.latestVersion.status),
@@ -1011,10 +2404,11 @@ export function EnvironmentCenter({
                     "暂无描述"
                   }
                   metadata={[
-                    { label: "系统", value: environmentOperatingSystemLabel(environment.operatingSystem) },
-                    { label: "语言", value: environmentLanguageLabel(environment.language) },
-                    { label: "工作区", value: `${referenceCount} 个工作区` },
-                    { label: "更新", value: environmentUpdatedAt(environment.updatedAt) },
+                    {
+                      label: "更新",
+                      value: environmentUpdatedAt(environment.updatedAt),
+                      title: environmentUpdatedAtTitle(environment.updatedAt),
+                    },
                   ]}
                   action={{
                     label: environment.latestVersion ? "构建详情" : rebuilding ? "正在启动" : "开始构建",
@@ -1024,6 +2418,13 @@ export function EnvironmentCenter({
                     onClick: () => environment.latestVersion
                       ? setBuildDetailsId(environment.id)
                       : void rebuildEnvironment(environment),
+                  }}
+                  auxiliaryAction={{
+                    label: "查看环境 Manifest",
+                    icon: <FileCode />,
+                    title: environment.latestVersion ? "查看 Manifest" : "尚无可用 Manifest",
+                    disabled: !environment.latestVersion,
+                    onClick: () => setManifestTarget(environment),
                   }}
                   detailAction={{ label: "配置", onClick: () => setView({ kind: "editor", environmentId: environment.id }) }}
                 />
@@ -1050,27 +2451,22 @@ export function EnvironmentCenter({
         );
       })() : null}
 
-      {deleteTarget ? (
-        <StudioConfirmDialog
-          title="删除环境"
-          description={`确定删除环境“${deleteTarget.name}”吗？删除后无法恢复。`}
-          confirmLabel="删除"
-          variant="danger"
-          onCancel={() => setDeleteTarget(null)}
-          onConfirm={() => {
-            const target = deleteTarget;
-            setDeleteTarget(null);
-            void deleteEnvironment(target.id)
-              .then(() => {
-                setEnvironments((current) => current.filter((environment) => environment.id !== target.id));
-                setStatusError(false);
-                setStatusMessage(`已删除环境“${target.name}”`);
-              })
-              .catch((cause) => {
-                setStatusError(true);
-                setStatusMessage(cause instanceof Error ? cause.message : String(cause));
-              });
-          }}
+      {manifestTarget?.latestVersion ? (
+        <EnvironmentManifestDialog
+          environment={manifestTarget}
+          onClose={() => setManifestTarget(null)}
+        />
+      ) : null}
+
+      {deleteDialog}
+
+      {importDialog ? (
+        <EnvironmentImportDialog
+          key={importDialog.key}
+          initialValue={importDialog.initialValue}
+          autoInspect={importDialog.autoInspect}
+          onClose={() => setImportDialog(null)}
+          onImported={handleImportedEnvironments}
         />
       ) : null}
     </ResourcePageShell>

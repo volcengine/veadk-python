@@ -2,6 +2,7 @@ import {
   type CSSProperties,
   type SVGProps,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
@@ -13,7 +14,12 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
+import { Badge } from "@openai/apps-sdk-ui/components/Badge";
+import { BookWrench } from "@openai/apps-sdk-ui/components/Icon";
 import { Clock } from "@openai/apps-sdk-ui/components/Icon";
+import { MarkerCode } from "@openai/apps-sdk-ui/components/Icon";
+import { LoadingIndicator } from "@openai/apps-sdk-ui/components/Indicator";
+import { Tooltip } from "@openai/apps-sdk-ui/components/Tooltip";
 import type {
   AdkSession,
   SiteBranding,
@@ -24,7 +30,6 @@ import type { SandboxThreadSummary } from "../adk/sandbox";
 import { sessionTitle } from "../blocks";
 import { displayName, profilePictureUrl } from "../adk/identity";
 import { SearchButton } from "./Search";
-import { AgentKitPromoCard } from "./AgentKitPromoCard";
 import { IssueFeedbackIcon } from "./icons/FeedbackIcons";
 import {
   NewChatIcon,
@@ -39,6 +44,43 @@ import "./Sidebar.css";
 
 const SIDEBAR_AUTO_COLLAPSE_QUERY = "(max-width: 860px)";
 
+function ScrollableHistoryTitle({ title }: { title: string }) {
+  const viewportRef = useRef<HTMLSpanElement>(null);
+  const contentRef = useRef<HTMLSpanElement>(null);
+  const [overflowDistance, setOverflowDistance] = useState(0);
+
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current;
+    const content = contentRef.current;
+    if (!viewport || !content) return undefined;
+    const updateOverflowDistance = () => {
+      const next = Math.max(0, Math.ceil(content.scrollWidth - viewport.clientWidth));
+      setOverflowDistance((current) => (current === next ? current : next));
+    };
+    updateOverflowDistance();
+    const observer = new ResizeObserver(updateOverflowDistance);
+    observer.observe(viewport);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [title]);
+
+  const scrollDuration = Math.min(12, Math.max(4.8, 3.6 + overflowDistance / 36));
+  const titleStyle = {
+    "--history-title-translate": `-${overflowDistance}px`,
+    "--history-title-duration": `${scrollDuration.toFixed(2)}s`,
+  } as CSSProperties;
+
+  return (
+    <span
+      ref={viewportRef}
+      className={`history-title${overflowDistance > 0 ? " is-overflowing" : ""}`}
+      style={titleStyle}
+    >
+      <span ref={contentRef} className="history-title-text">{title}</span>
+    </span>
+  );
+}
+
 export type SidebarPage =
   | "new-chat"
   | "agents"
@@ -48,6 +90,7 @@ export type SidebarPage =
   | "applications"
   | "cronjobs"
   | "search"
+  | "developer-resources"
   | "feedback"
   | null;
 
@@ -93,7 +136,7 @@ export interface SidebarProps {
   features?: UiFeatures;
   /** Server-derived role and capabilities. */
   access: StudioAccess;
-  /** Session ids that are currently streaming a reply (shows a live dot). */
+  /** Session ids that are currently streaming a reply. */
   streamingSids?: Set<string>;
   /** Session ids whose latest reply is currently being evaluated. */
   evaluatingSids?: Set<string>;
@@ -107,6 +150,8 @@ export interface SidebarProps {
   onWorkspace: () => void;
   onApplications: () => void;
   onCronJobs: () => void;
+  onAgentKitCli: () => void;
+  onDeveloperResources: () => void;
   onSystemInfo: () => void;
   onIssueFeedback: () => void;
   onPickSession: (id: string) => void;
@@ -138,69 +183,91 @@ const STUDIO_ROLE_LABELS: Record<StudioAccess["role"], string> = {
   user: "普通用户",
 };
 
-function StudioRoleBadge({ role }: { role: StudioAccess["role"] }) {
-  const label = STUDIO_ROLE_LABELS[role];
-  return (
-    <span className={`studio-role-badge studio-role-badge--${role}`} title={label}>
-      {label}
-    </span>
-  );
-}
-
 /** Account block pinned at the bottom of the sidebar: avatar + name, with a
  *  popover (opening upward) holding the full identity and account actions. */
 function SidebarUser({
+  activePage,
   access,
   userInfo,
+  onAgentKitCli,
+  onDeveloperResources,
   onSystemInfo,
   onIssueFeedback,
   onLogout,
 }: Pick<
   SidebarProps,
-  "access" | "userInfo" | "onSystemInfo" | "onIssueFeedback" | "onLogout"
+  | "activePage"
+  | "access"
+  | "userInfo"
+  | "onAgentKitCli"
+  | "onDeveloperResources"
+  | "onSystemInfo"
+  | "onIssueFeedback"
+  | "onLogout"
 >) {
   const [open, setOpen] = useState(false);
   const [failedAvatarUrl, setFailedAvatarUrl] = useState("");
   if (!userInfo) return null;
-  const name = displayName(userInfo);
-  const email = typeof userInfo.email === "string" ? userInfo.email : "";
-  const initial = (name || "U").slice(0, 1).toUpperCase();
-  const avatarStyle = smokeAvatarStyle(name || email || initial);
+  const name = displayName(userInfo) || "用户";
+  const email = typeof userInfo.email === "string" ? userInfo.email.trim() : "";
+  const avatarStyle = smokeAvatarStyle(name);
   const pictureUrl = profilePictureUrl(userInfo);
   const visiblePictureUrl = pictureUrl === failedAvatarUrl ? "" : pictureUrl;
   return (
     <div className="sidebar-user">
-      <button
-        className="sidebar-user-btn"
-        onClick={() => setOpen((o) => !o)}
-        title={email ? `${name}\n${email}` : name}
-      >
-        <span
-          className={`account-avatar${visiblePictureUrl ? " has-image" : ""}`}
-          style={avatarStyle}
+      <div className="sidebar-user-row">
+        <button
+          type="button"
+          className="sidebar-user-btn"
+          onClick={() => setOpen((o) => !o)}
+          title={name}
         >
-          {initial}
-          {visiblePictureUrl ? (
-            <img
-              className="account-avatar-image"
-              src={visiblePictureUrl}
-              alt=""
-              aria-hidden="true"
-              referrerPolicy="no-referrer"
-              onError={() => setFailedAvatarUrl(visiblePictureUrl)}
-            />
-          ) : null}
-        </span>
-        <span className="sidebar-user-identity">
-          <span className="sidebar-user-primary">
-            <span className="sidebar-user-name">{name}</span>
-            <StudioRoleBadge role={access.role} />
+          <span
+            className={`account-avatar${visiblePictureUrl ? " has-image" : ""}`}
+            style={avatarStyle}
+            aria-hidden="true"
+          >
+            {visiblePictureUrl ? (
+              <img
+                className="account-avatar-image"
+                src={visiblePictureUrl}
+                alt=""
+                aria-hidden="true"
+                referrerPolicy="no-referrer"
+                onError={() => setFailedAvatarUrl(visiblePictureUrl)}
+              />
+            ) : null}
           </span>
-          {email && email !== name && (
-            <span className="sidebar-user-email">{email}</span>
-          )}
-        </span>
-      </button>
+          <span className="sidebar-user-identity">
+            <span className="sidebar-user-name">{name}</span>
+          </span>
+        </button>
+        <div className="sidebar-user-shortcuts" aria-label="快捷入口">
+          <Tooltip compact content="体验 AgentKit CLI">
+            <button
+              type="button"
+              className="sidebar-user-shortcut"
+              onClick={onAgentKitCli}
+              aria-label="体验 AgentKit CLI"
+            >
+              <MarkerCode className="icon" />
+            </button>
+          </Tooltip>
+          <Tooltip compact content="开发者资源">
+            <button
+              type="button"
+              className={`sidebar-user-shortcut${
+                activePage === "developer-resources" ? " is-active" : ""
+              }`}
+              onClick={onDeveloperResources}
+              aria-label="开发者资源"
+              aria-current={activePage === "developer-resources" ? "page" : undefined}
+            >
+              <BookWrench className="icon" />
+            </button>
+          </Tooltip>
+        </div>
+      </div>
       {open && (
         <>
           <div className="menu-scrim" onClick={() => setOpen(false)} />
@@ -211,8 +278,8 @@ function SidebarUser({
                   visiblePictureUrl ? " has-image" : ""
                 }`}
                 style={avatarStyle}
+                aria-hidden="true"
               >
-                {initial}
                 {visiblePictureUrl ? (
                   <img
                     className="account-avatar-image"
@@ -227,7 +294,9 @@ function SidebarUser({
               <div className="account-id">
                 <div className="account-name-row">
                   <div className="account-name">{name}</div>
-                  <StudioRoleBadge role={access.role} />
+                  <Badge color="secondary" size="sm" variant="soft" pill>
+                    {STUDIO_ROLE_LABELS[access.role]}
+                  </Badge>
                 </div>
                 {email && email !== name && <div className="account-sub">{email}</div>}
               </div>
@@ -289,6 +358,8 @@ export function Sidebar({
   onWorkspace,
   onApplications,
   onCronJobs,
+  onAgentKitCli,
+  onDeveloperResources,
   onSystemInfo,
   onIssueFeedback,
   onPickSession,
@@ -507,7 +578,7 @@ export function Sidebar({
                         title={title}
                         disabled={busy}
                       >
-                        <span className="history-title">{title}</span>
+                        <ScrollableHistoryTitle title={title} />
                         {active ? (
                           <span className="history-current-badge">当前</span>
                         ) : null}
@@ -581,14 +652,7 @@ export function Sidebar({
                         aria-current={active ? "page" : undefined}
                         title={item.title}
                       >
-                        {streaming && (
-                          <span
-                            className="history-streaming"
-                            title="正在生成…"
-                            aria-label="正在生成"
-                          />
-                        )}
-                        <span className="history-title">{item.title}</span>
+                        <ScrollableHistoryTitle title={item.title} />
                         {evaluating && (
                           <span
                             className="history-evaluating-status"
@@ -602,19 +666,29 @@ export function Sidebar({
                           </span>
                         )}
                       </button>
-                      <button
-                        type="button"
-                        className="history-more"
-                        aria-label={`管理历史会话：${item.title}`}
-                        title="更多"
-                        onClick={() =>
-                          setMenuFor((current) =>
-                            current === item.id ? null : item.id
-                          )
-                        }
-                      >
-                        <MoreHorizontal className="icon" />
-                      </button>
+                      <div className="history-action-slot">
+                        {streaming ? (
+                          <LoadingIndicator
+                            className="history-streaming-indicator"
+                            size={12}
+                            role="status"
+                            aria-label="正在生成"
+                          />
+                        ) : null}
+                        <button
+                          type="button"
+                          className="history-more"
+                          aria-label={`管理历史会话：${item.title}`}
+                          title="更多"
+                          onClick={() =>
+                            setMenuFor((current) =>
+                              current === item.id ? null : item.id
+                            )
+                          }
+                        >
+                          <MoreHorizontal className="icon" />
+                        </button>
+                      </div>
                       {menuFor === item.id && (
                         <>
                           <div
@@ -645,10 +719,12 @@ export function Sidebar({
       )}
 
       <div className="sidebar-footer">
-        <AgentKitPromoCard cloudProvider={cloudProvider} />
         <SidebarUser
+          activePage={activePage}
           access={access}
           userInfo={userInfo}
+          onAgentKitCli={onAgentKitCli}
+          onDeveloperResources={onDeveloperResources}
           onSystemInfo={onSystemInfo}
           onIssueFeedback={onIssueFeedback}
           onLogout={onLogout}

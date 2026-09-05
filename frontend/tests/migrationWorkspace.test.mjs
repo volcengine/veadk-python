@@ -19,6 +19,10 @@ const deploymentEnvironmentUrl = new URL(
   "../src/migrations/deploymentEnvironment.ts",
   import.meta.url,
 );
+const migratedProjectsUrl = new URL(
+  "../src/migrations/MigratedProjectsPage.tsx",
+  import.meta.url,
+);
 const iconsUrl = new URL(
   "../src/migrations/MigrationIcons.tsx",
   import.meta.url,
@@ -71,6 +75,49 @@ test("enables the existing migration entry and renders its workspace", () => {
   assert.match(appSource, /<MigrationWorkspace/);
 });
 
+test("keeps new migration and migrated projects as parallel workspace pages", () => {
+  const source = readFileSync(workspaceUrl, "utf8");
+  const projects = readFileSync(migratedProjectsUrl, "utf8");
+
+  assert.match(source, /initialPage = "new"/);
+  assert.match(source, /useState<"new" \| "projects">\(initialPage\)/);
+  assert.match(source, /useState\(initialProjectId\)/);
+  assert.match(source, />新建迁移</);
+  assert.match(source, />已迁移项目</);
+  assert.match(source, />最近迁移</);
+  assert.match(
+    source,
+    /aria-current=\{page === "projects" \? "page" : undefined\}/,
+  );
+  assert.match(source, /page === "projects" \? \(/);
+  assert.match(source, /<MigratedProjectsPage/);
+  assert.match(source, /task\.persistence\?\.state === "saved"/);
+  assert.match(source, />查看已迁移项目</);
+  assert.match(projects, /origin="migration"/);
+  assert.match(projects, /title="项目与版本"/);
+  assert.match(projects, /onSelectBaseVersion=\{setOptimizationBase\}/);
+  assert.match(projects, /<IntelligentOptimizationDialog/);
+  assert.match(projects, /onCreate=\{onOptimize\}/);
+  assert.match(projects, /onDownload=\{onDownload\}/);
+  assert.match(projects, /onDeploy=\{onDeploy\}/);
+  assert.match(
+    appSource,
+    /initialPage=\{migrationProjectReturn \? "projects" : "new"\}/,
+  );
+  assert.match(
+    appSource,
+    /onOptimizeVersion=\{\(goal, modelId, base\) =>[\s\S]*?startIntelligentDevelopment\([\s\S]*?goal,[\s\S]*?modelId,[\s\S]*?base,[\s\S]*?\{ projectId: base\.projectId \}/,
+  );
+  const migrationWorkspaceBlock = appSource.match(
+    /visibleCreateView === "migration" \? \(([\s\S]*?)\) : turns\.length === 0/,
+  )?.[1] ?? "";
+  assert.doesNotMatch(migrationWorkspaceBlock, /setCreateView\("intelligent"\)/);
+  assert.match(
+    appSource,
+    /function returnToIntelligentCreate\(\)[\s\S]*?migrationProjectReturn[\s\S]*?setCreateView\("migration"\)/,
+  );
+});
+
 test("implements the confirmed migration lifecycle as a desktop chat workspace", () => {
   assert.equal(existsSync(workspaceUrl), true);
   assert.equal(existsSync(stylesUrl), true);
@@ -82,7 +129,11 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
 
   assert.doesNotMatch(source, /from "lucide-react"/);
   assert.match(source, /from "\.\/MigrationIcons"/);
-  assert.match(source, /const MAX_SOURCE_BYTES = 50 \* 1024 \* 1024/);
+  assert.match(source, /const MAX_SOURCE_BYTES = 20 \* 1024 \* 1024/);
+  assert.match(
+    source,
+    /capability\?\.maxUploadBytes \?\? MAX_SOURCE_BYTES/,
+  );
   assert.match(source, /accept="\.zip,application\/zip"/);
   assert.match(source, /\.toLowerCase\(\)/);
   assert.match(
@@ -143,9 +194,10 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
   assert.match(source, /function expireTasksAtDeadline/);
   assert.match(source, /setTasks\(\(current\) => expireTasksAtDeadline/);
   assert.match(source, /function migrationExpiryCopy/);
-  assert.match(source, /迁移环境将在 \$\{minutes\} 分 \$\{seconds\} 秒后过期/);
-  assert.match(source, /过期后无法查看会话，也无法预览、下载或部署产物/);
-  assert.match(source, /会话和产物已无法访问/);
+  assert.match(source, /临时迁移环境将在 \$\{minutes\} 分 \$\{seconds\} 秒后结束/);
+  assert.match(source, /已保存项目不受影响/);
+  assert.match(source, /源码正在保存，完成后不受环境期限影响/);
+  assert.match(source, /已保存项目仍可查看、下载、部署或优化/);
   assert.doesNotMatch(source, /剩余 \$\{minutes\}:/);
   assert.match(
     source,
@@ -158,17 +210,15 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
     source,
     /artifact\.files\.map\(\(file\) => \(\{[\s\S]*?content: ""/,
   );
-  assert.match(source, /迁移环境已过期，内容和产物无法继续访问/);
+  assert.match(source, /临时迁移环境已结束，已保存项目不受影响/);
   assert.match(source, /function taskDisplayMessage/);
   assert.match(source, /迁移产物已生成，请查看迁移提示/);
   assert.match(
     source,
     /task\.state === "failed"[\s\S]*?<p>\{task\.message\}<\/p>/,
   );
-  assert.match(
-    source,
-    /产物可预览、下载和部署。运行效果取决于源项目和部署环境变量/,
-  );
+  assert.match(source, /源码已保存，可继续查看、下载、部署或优化/);
+  assert.match(source, /临时迁移环境从创建完成起保留 1 小时；保存成功的源码版本不受影响/);
   assert.match(source, /产物校验未完成/);
   assert.match(source, /迁移执行中不能修改附件或迁移方式/);
   assert.doesNotMatch(source, /const \[instruction, setInstruction\]/);

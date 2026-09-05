@@ -37,6 +37,25 @@ The examples are grouped by concept: 01–02 basics, 03 & 09 memory, 04–05 too
 knowledge, 06 & 10 multi-agent, 07–08 model behavior, 11 observability, and 13
 OpenViking-backed knowledge and memory.
 
+## Codex runtime
+
+Four examples use `Agent(runtime="codex")`, which hands the inner loop to a
+sandboxed coding agent that can write a file, run it, read the traceback and fix
+it. Two of them show **what the runtime is for**; two show **how to wire it up**.
+
+| Example | Kind | What you'll learn |
+| --- | --- | --- |
+| [Data analysis](./codex_data_analysis/) | What it's for | Codex writes an analysis script, hits a real error in dirty data, fixes it, re-runs, reports — the self-iteration loop |
+| [Ops assistant](./codex_ops_assistant/) | What it's for | Correlate logs, metrics and deploys with throwaway scripts to find a root cause, inside a no-network sandbox |
+| [Skill + MCP](./codex_with_skill_and_mcp/) | How to wire it | The paths a local skill and an MCP tool take under this runtime |
+| [Deploy to AgentKit](./codex_runtime_on_agentkit/) | How to deploy | Ship a `runtime="codex"` agent to Volcengine AgentKit |
+
+Reach for this runtime when the steps cannot be enumerated as tools ahead of
+time — ad-hoc analysis, log triage, data wrangling. Keep `runtime="adk"` for a
+fixed tool call and a formatted answer: it is faster, cheaper, and does not
+reject `sub_agents` / `output_schema` / `planner` / `code_executor`. See
+[when to use the codex runtime](../docs/content/docs/framework/agent/runtime.en.mdx#when-to-use-the-codex-runtime).
+
 ## Common setup
 
 1. Install VeADK (example 05 with the local backend needs the `extensions` extra):

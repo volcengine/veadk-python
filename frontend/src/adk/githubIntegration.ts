@@ -1,6 +1,7 @@
+import type { CloudRegion } from "./cloudProvider";
 import { studioFetch } from "./client";
 
-export type GitHubAutomationRegion = "cn-beijing" | "cn-shanghai";
+export type GitHubAutomationRegion = CloudRegion;
 
 export interface GitHubPullRequestResult {
   number: number;

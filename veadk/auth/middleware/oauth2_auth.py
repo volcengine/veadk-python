@@ -71,6 +71,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import random
 import secrets
 import time
@@ -496,8 +497,18 @@ class OAuth2Config(BaseModel):
             except Exception as e:
                 logger.warning("Callback registration skipped (may exist): %s", e)
 
-        # Step 4: Fetch OIDC discovery configuration
-        base_url = f"https://{user_pool_domain}"
+        # Step 4: Fetch OIDC discovery configuration. Public-cloud user pools
+        # expose discovery at the domain root over HTTPS. VeStack installations
+        # may expose it over HTTP under /userpool/<uid>; allow deploy-time
+        # configuration without changing the provider-returned OAuth endpoints.
+        base_url_template = os.getenv("VEIDENTITY_OIDC_BASE_URL", "").strip()
+        if base_url_template:
+            base_url = base_url_template.format(
+                user_pool_uid=user_pool_id,
+                user_pool_domain=user_pool_domain,
+            ).rstrip("/")
+        else:
+            base_url = f"https://{user_pool_domain}"
         oidc_config = _fetch_oidc_discovery(base_url)
 
         # Step 5: Build OAuth2Config from discovered endpoints
@@ -556,6 +567,22 @@ class OAuth2Session(BaseModel):
     def to_authorization_header(self) -> str:
         """Convert to Authorization header value."""
         return f"{self.token_type} {self.access_token}"
+
+
+_USERINFO_SESSION_FIELDS = frozenset(
+    {
+        "sub",
+        "email",
+        "email_verified",
+        "name",
+        "given_name",
+        "family_name",
+        "preferred_username",
+        "picture",
+        "locale",
+        "updated_at",
+    }
+)
 
 
 @runtime_checkable
@@ -968,7 +995,7 @@ class OAuth2Handler:
             return None
 
     async def _fetch_user_info(self, access_token: str) -> dict[str, Any]:
-        """Fetch user information from the userinfo endpoint."""
+        """Fetch the userinfo fields safe to store in a browser session cookie."""
         if not self.config.userinfo_url:
             raise ValueError("userinfo_url not configured")
 
@@ -985,8 +1012,22 @@ class OAuth2Handler:
             response.raise_for_status()
 
             user_info = response.json()
-            logger.debug("Fetched user info: %s", user_info)
-            return user_info
+            if not isinstance(user_info, dict):
+                raise ValueError("User info response is not a JSON object")
+
+            fields = _USERINFO_SESSION_FIELDS | {self.config.user_id_field}
+            filtered_user_info = {
+                field: value
+                for field, value in user_info.items()
+                if field in fields
+                and isinstance(value, (str, int, float, bool))
+                and value is not None
+            }
+            logger.debug(
+                "Fetched user info with cookie-safe fields: %s",
+                sorted(filtered_user_info),
+            )
+            return filtered_user_info
 
         except httpx.HTTPStatusError as e:
             logger.error("User info fetch failed: %s", e.response.text)

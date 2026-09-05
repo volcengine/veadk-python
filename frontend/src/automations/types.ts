@@ -2,6 +2,7 @@ import type {
   GitHubAutomationRegion,
   GitHubPullRequestResult,
 } from "../adk/githubIntegration";
+import type { CloudProvider } from "../adk/cloudProvider";
 
 export type AutomationId =
   | "template"
@@ -57,6 +58,10 @@ export interface AutomationCardDefinition {
   description: string;
 }
 
+export interface GitHubAutomationContext {
+  cloudProvider: CloudProvider;
+}
+
 export interface GitHubAutomationDefinition extends AutomationCardDefinition {
   id: GitHubAutomationId;
   kind: "github";
@@ -65,11 +70,12 @@ export interface GitHubAutomationDefinition extends AutomationCardDefinition {
   panel: string;
   submitLabel: string;
   fields: readonly AutomationFieldDefinition[];
-  initialValues: AutomationFormValues;
+  initialValues: (context: GitHubAutomationContext) => AutomationFormValues;
   regionHelp: string;
-  secrets: readonly string[];
+  secrets: (context: GitHubAutomationContext) => readonly string[];
   submit: (
     values: AutomationFormValues,
+    context: GitHubAutomationContext,
     signal: AbortSignal,
   ) => Promise<GitHubPullRequestResult>;
 }

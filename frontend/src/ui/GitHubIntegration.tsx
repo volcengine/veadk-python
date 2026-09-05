@@ -19,6 +19,10 @@ import {
   type GitHubPullRequestReviewResult,
   normalizeGitHubRepository,
 } from "../adk/githubIntegration";
+import {
+  cloudRegionOptions,
+  type CloudProvider,
+} from "../adk/cloudProvider";
 import { getGitHubAutomation } from "../automations/registry";
 import type {
   AutomationFieldDefinition,
@@ -32,6 +36,7 @@ import "./GitHubIntegration.css";
 
 interface GitHubIntegrationProps {
   automation: GitHubAutomationId;
+  cloudProvider: CloudProvider;
   onBack: () => void;
   onOpenSandboxSession?: (sessionId: string) => void;
 }
@@ -136,12 +141,20 @@ function requiredMark(value: string, required: boolean) {
   return <span className="github-required-mark" aria-hidden="true">*</span>;
 }
 
-export function GitHubIntegration({ automation, onBack, onOpenSandboxSession }: GitHubIntegrationProps) {
+export function GitHubIntegration({
+  automation,
+  cloudProvider,
+  onBack,
+  onOpenSandboxSession,
+}: GitHubIntegrationProps) {
   const definition = getGitHubAutomation(automation);
   const isPullRequestReview = automation === "review";
+  const regionOptions = cloudRegionOptions(cloudProvider);
+  const secrets = definition.secrets({ cloudProvider });
   const [form, setForm] = useState<AutomationFormValues>(() => ({
-    ...definition.initialValues,
+    ...definition.initialValues({ cloudProvider }),
   }));
+  const selectedRegion = regionOptions.find((region) => region.value === form.region);
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<FieldName, string>>>({});
   const [submitError, setSubmitError] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -181,6 +194,18 @@ export function GitHubIntegration({ automation, onBack, onOpenSandboxSession }: 
     githubAppAbortRef.current?.abort();
     githubAppRepositoriesAbortRef.current?.abort();
   }, []);
+
+  useEffect(() => {
+    setForm({ ...definition.initialValues({ cloudProvider }) });
+    setFieldErrors({});
+    setSubmitError("");
+    setResult(null);
+    setRegionMenuOpen(false);
+    submitAbortRef.current?.abort();
+    reviewAbortRef.current?.abort();
+    setReviewResult(null);
+    setReviewError("");
+  }, [automation, cloudProvider, definition]);
 
   useEffect(() => {
     if (!isPullRequestReview) return;
@@ -305,7 +330,11 @@ export function GitHubIntegration({ automation, onBack, onOpenSandboxSession }: 
     setSubmitError("");
     setResult(null);
     try {
-      const nextResult = await definition.submit(form, controller.signal);
+      const nextResult = await definition.submit(
+        form,
+        { cloudProvider },
+        controller.signal,
+      );
       if (submitAbortRef.current !== controller) return;
       setResult(nextResult);
       setForm((current) => ({ ...current, token: "" }));
@@ -458,17 +487,14 @@ export function GitHubIntegration({ automation, onBack, onOpenSandboxSession }: 
                       aria-expanded={regionMenuOpen}
                       onClick={() => setRegionMenuOpen((open) => !open)}
                     >
-                      <span>{form.region === "cn-shanghai" ? "华东 2（上海）" : "华北 2（北京）"}</span>
+                      <span>{selectedRegion?.label ?? form.region}</span>
                       <ChevronIcon className={`pp-region-chevron${regionMenuOpen ? " is-open" : ""}`} />
                     </button>
                     {regionMenuOpen ? (
                       <>
                         <div className="menu-scrim" onClick={() => setRegionMenuOpen(false)} />
                         <div className="pp-region-menu" role="listbox" aria-label="地域">
-                          {([
-                            { value: "cn-beijing", label: "华北 2（北京）" },
-                            { value: "cn-shanghai", label: "华东 2（上海）" },
-                          ] as const).map((region) => {
+                          {regionOptions.map((region) => {
                             const selected = region.value === form.region;
                             return (
                               <button
@@ -647,7 +673,7 @@ export function GitHubIntegration({ automation, onBack, onOpenSandboxSession }: 
                     </div>
                     <span className="github-secrets-path">路径：Settings → Secrets and variables → Actions → Repository secrets</span>
                     <ul>
-                      {definition.secrets.map((secret) => {
+                      {secrets.map((secret) => {
                         const [name, ...descriptionParts] = secret.split("：");
                         return (
                           <li key={secret}>

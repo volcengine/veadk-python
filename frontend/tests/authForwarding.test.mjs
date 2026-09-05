@@ -47,6 +47,8 @@ test("keeps intelligent deployment deep-link fields out of forwarded auth", asyn
     view: "runtime-deploy",
     source: "intelligent-development",
     sessionId: "session-1",
+    projectId: "project-1",
+    versionId: "version-1",
     artifactSha256: "a".repeat(64),
     validationReportSha256: "b".repeat(64),
   });
@@ -60,6 +62,8 @@ test("keeps intelligent deployment deep-link fields out of forwarded auth", asyn
   assert.equal(request.searchParams.get("token"), "secret");
   assert.equal(request.searchParams.get("sessionId"), "session-1");
   assert.equal(request.searchParams.has("view"), false);
+  assert.equal(request.searchParams.has("projectId"), false);
+  assert.equal(request.searchParams.has("versionId"), false);
   assert.equal(request.searchParams.has("artifactSha256"), false);
   assert.deepEqual(replacements, [`/?${local}#result`]);
 });
@@ -69,6 +73,8 @@ test("a local-only deep link stays visible and preserves stored auth", async () 
     view: "runtime-deploy",
     source: "intelligent-development",
     sessionId: "session-1",
+    projectId: "project-1",
+    versionId: "version-1",
     artifactSha256: "a".repeat(64),
     validationReportSha256: "b".repeat(64),
   });

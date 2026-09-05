@@ -1,19 +1,26 @@
 import type { AgentDraft } from "./types";
-import { prepareMcpAuth } from "./mcpAuth";
+import { prepareMcpAuth, referencedMcpEnvKeys } from "./mcpAuth";
 
 const WORKSPACE_DRAFT_STORAGE_VERSION = 1;
 const SERVER_MANAGED_MODEL_API_KEY = "MODEL_AGENT_API_KEY";
+
+export type WorkspaceAgentCreationMode = "quick" | "traditional";
 
 export interface WorkspaceAgentDraft {
   id: string;
   draft: AgentDraft;
   updatedAt: number;
+  creationMode?: WorkspaceAgentCreationMode;
   deploymentTarget?: {
     runtimeId: string;
     name: string;
     region: string;
     appName?: string;
     currentVersion?: number | null;
+    etag?: string;
+    editMode?: "source-preserving" | "regenerate";
+    configuredMcpEnvKeys?: string[];
+    configuredRuntimeEnvKeys?: string[];
   };
 }
 
@@ -36,20 +43,30 @@ function isWorkspaceAgentDraft(value: unknown): value is WorkspaceAgentDraft {
     isRecord(value) &&
     typeof value.id === "string" &&
     typeof value.updatedAt === "number" &&
+    (value.creationMode === undefined ||
+      value.creationMode === "quick" ||
+      value.creationMode === "traditional") &&
     isRecord(value.draft)
   );
+}
+
+export function workspaceAgentCreationMode(
+  item: WorkspaceAgentDraft,
+): WorkspaceAgentCreationMode {
+  if (item.creationMode) return item.creationMode;
+  return item.draft.dynamicAgentDelegation === true ? "quick" : "traditional";
 }
 
 export function workspaceDraftsKey(userId: string): string {
   return `veadk.agentDrafts.${encodeURIComponent(userId)}`;
 }
 
-/**
- * Ark key values are resolved by the Studio server. Keep only the non-secret
- * key ID/name in drafts so a legacy value cannot be copied back to browser
- * storage through a Root Agent, nested sub-agent, or workflow node.
- */
-function stripServerManagedModelApiKey(draft: AgentDraft): AgentDraft {
+/** Remove values that must remain ephemeral from every nested deployment. */
+function stripBrowserStorageSecrets(
+  draft: AgentDraft,
+  protectedMcpKeys: ReadonlySet<string>,
+  transientMcpKeys: ReadonlySet<string>,
+): AgentDraft {
   const deployment = draft.deployment;
   const envValues = deployment?.envValues;
   const safeDeployment = deployment
@@ -59,7 +76,9 @@ function stripServerManagedModelApiKey(draft: AgentDraft): AgentDraft {
           ? {
               envValues: Object.fromEntries(
                 Object.entries(envValues).filter(
-                  ([key]) => key !== SERVER_MANAGED_MODEL_API_KEY,
+                  ([key]) =>
+                    key !== SERVER_MANAGED_MODEL_API_KEY &&
+                    !protectedMcpKeys.has(key),
                 ),
               ),
             }
@@ -68,15 +87,73 @@ function stripServerManagedModelApiKey(draft: AgentDraft): AgentDraft {
     : undefined;
   return {
     ...draft,
+    ...(draft.mcpTools
+      ? {
+          mcpTools: draft.mcpTools.map((tool) => {
+            if (
+              !tool.authTokenEnv ||
+              !transientMcpKeys.has(tool.authTokenEnv)
+            ) {
+              return tool;
+            }
+            const safeTool = { ...tool };
+            delete safeTool.authTokenEnv;
+            return safeTool;
+          }),
+        }
+      : {}),
     ...(safeDeployment ? { deployment: safeDeployment } : {}),
-    subAgents: draft.subAgents.map(stripServerManagedModelApiKey),
+    subAgents: draft.subAgents.map((child) =>
+      stripBrowserStorageSecrets(child, protectedMcpKeys, transientMcpKeys),
+    ),
     ...(draft.workflow
       ? {
           workflow: {
             ...draft.workflow,
             nodes: draft.workflow.nodes.map((node) => ({
               ...node,
-              agent: stripServerManagedModelApiKey(node.agent),
+              agent: stripBrowserStorageSecrets(
+                node.agent,
+                protectedMcpKeys,
+                transientMcpKeys,
+              ),
+            })),
+          },
+        }
+      : {}),
+  };
+}
+
+/** Restore only the configured marker after stripping transient token values. */
+function preserveConfiguredMcpState(
+  prepared: AgentDraft,
+  source: AgentDraft,
+): AgentDraft {
+  return {
+    ...prepared,
+    ...(prepared.mcpTools
+      ? {
+          mcpTools: prepared.mcpTools.map((tool, index) => ({
+            ...tool,
+            ...(source.mcpTools?.[index]?.credentialConfigured === true
+              ? { credentialConfigured: true }
+              : {}),
+          })),
+        }
+      : {}),
+    subAgents: prepared.subAgents.map((child, index) =>
+      preserveConfiguredMcpState(child, source.subAgents[index] ?? child),
+    ),
+    ...(prepared.workflow
+      ? {
+          workflow: {
+            ...prepared.workflow,
+            nodes: prepared.workflow.nodes.map((node, index) => ({
+              ...node,
+              agent: preserveConfiguredMcpState(
+                node.agent,
+                source.workflow?.nodes[index]?.agent ?? node.agent,
+              ),
             })),
           },
         }
@@ -86,20 +163,12 @@ function stripServerManagedModelApiKey(draft: AgentDraft): AgentDraft {
 
 export function sanitizeAgentDraftForStorage(draft: AgentDraft): AgentDraft {
   const prepared = prepareMcpAuth(draft);
-  const envValues = {
-    ...(prepared.draft.deployment?.envValues ?? {}),
-    ...prepared.envValues,
-  };
-  if (!prepared.draft.deployment && Object.keys(envValues).length === 0) {
-    return stripServerManagedModelApiKey(prepared.draft);
-  }
-  return stripServerManagedModelApiKey({
-    ...prepared.draft,
-    deployment: {
-      ...(prepared.draft.deployment ?? { feishuEnabled: false }),
-      envValues,
-    },
-  });
+  const storageDraft = preserveConfiguredMcpState(prepared.draft, draft);
+  return stripBrowserStorageSecrets(
+    storageDraft,
+    new Set(referencedMcpEnvKeys(prepared.draft)),
+    new Set(Object.keys(prepared.envValues)),
+  );
 }
 
 function sanitizeWorkspaceDraft(item: WorkspaceAgentDraft): WorkspaceAgentDraft {

@@ -63,6 +63,16 @@ test("preserves malformed tool argument details and adds an actionable message",
   assert.ok(formatted.endsWith(NETWORK_HINT));
 });
 
+test("explains an expired resource collection without blaming public egress", () => {
+  const error =
+    "Unknown or expired collection_id 'resources_2b25f87314b6'. Call collect_resources first.";
+  const formatted = formatRunSseError(error);
+  assert.ok(formatted.startsWith(`原始响应：${error}`));
+  assert.match(formatted, /资源清单已失效/);
+  assert.match(formatted, /重新收集资源/);
+  assert.doesNotMatch(formatted, /共享公网出口/);
+});
+
 test("does not claim that a model error was caused by public egress", () => {
   const error = "ModelInvocationError: upstream model returned 503";
   const formatted = formatRunSseError(error);

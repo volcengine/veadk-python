@@ -1,4 +1,5 @@
 .studio-package-option {
+  width: 100%;
   min-width: 0;
   min-height: 54px;
   display: flex;
@@ -6,8 +7,32 @@
   gap: 10px;
   box-sizing: border-box;
   padding: 4px;
+  border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition: background-color 140ms ease, border-color 140ms ease;
+}
+
+.studio-package-option:hover:not(:disabled) {
+  background: hsl(var(--muted) / 0.52);
+}
+
+.studio-package-option.is-selected {
+  border-color: transparent;
+  background: hsl(var(--muted) / 0.72);
+}
+
+.studio-package-option:focus-visible {
+  outline: 2px solid hsl(var(--ring) / 0.32);
+  outline-offset: 2px;
+}
+
+.studio-package-option:disabled {
+  cursor: default;
 }
 
 .studio-package-option__icon {
@@ -73,6 +98,9 @@
   align-self: center;
   padding: 0;
   border-radius: 7px;
+  display: inline-grid;
+  place-items: center;
+  color: hsl(var(--muted-foreground));
 }
 
 .studio-package-option__action svg {

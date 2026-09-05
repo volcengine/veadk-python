@@ -116,7 +116,8 @@ CURRENT = ROOT / "published.json"
 MAX_BYTES = 20 * 1024 * 1024
 MAX_FILES = 2000
 ZIP_TIME = (1980, 1, 1, 0, 0, 0)
-EXCLUDED_NAMES = {".git", ".agentkit", "node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", ".DS_Store", "dist", "target"}
+EXCLUDED_NAMES = {".git", "node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", ".DS_Store", "dist", "target"}
+EXCLUDED_PATHS = {".agentkit/artifacts", ".agentkit/migrate"}
 FORBIDDEN_DIRECTORIES = {".aws", ".ssh", ".kube"}
 FORBIDDEN_FILE_NAMES = {"id_rsa", "id_ed25519"}
 FORBIDDEN_SUFFIXES = {".key", ".pem", ".crt", ".secret", ".p12", ".pfx"}
@@ -184,18 +185,19 @@ def collect_project(path, secrets):
         kept = []
         for name in sorted(directories):
             candidate = current_path / name
+            relative = relative_root / name
             metadata = os.lstat(candidate)
             if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
                 fail("Delivery source contains an unsafe entry")
             if name.lower() in FORBIDDEN_DIRECTORIES:
                 fail("Delivery source contains a forbidden credential directory")
-            if name not in EXCLUDED_NAMES:
+            if name not in EXCLUDED_NAMES and relative.as_posix() not in EXCLUDED_PATHS:
                 kept.append(name)
         directories[:] = kept
         for name in sorted(names):
             candidate = current_path / name
             relative = relative_root / name
-            if name in EXCLUDED_NAMES or name.startswith(COMPLETION_PREFIXES):
+            if name in EXCLUDED_NAMES or relative.as_posix() in EXCLUDED_PATHS or name.startswith(COMPLETION_PREFIXES):
                 continue
             lower_name = name.lower()
             if lower_name == ".env" or (lower_name.startswith(".env.") and lower_name != ".env.example"):
@@ -223,7 +225,7 @@ def main():
         fail("Delivery request is invalid")
     request_path = Path(sys.argv[1])
     request = json.loads(read_regular(request_path).decode("utf-8"))
-    if set(request) != {"projectRoot", "report", "secretPath", "agentName", "entryPoint", "manifestSha256"}:
+    if set(request) != {"projectRoot", "report", "secretPath", "agentName", "entryPoint", "fallbackEntryPoint", "manifestSha256"}:
         fail("Delivery request fields are invalid")
     project = project_path(request["projectRoot"])
     secret_path = Path(request["secretPath"])
@@ -258,9 +260,15 @@ def main():
             fail("Delivery agentkit.yaml changed during packaging")
         agent_name = request["agentName"]
         entry_point = request["entryPoint"]
+        fallback_entry_point = request["fallbackEntryPoint"]
         if not isinstance(agent_name, str) or not agent_name.strip():
             fail("Delivery agent name is invalid")
-        if not isinstance(entry_point, str) or entry_point not in {name for name, _ in files}:
+        if not isinstance(entry_point, str) or not isinstance(fallback_entry_point, str):
+            fail("Delivery entry point is invalid")
+        source_names = {name for name, _ in files}
+        if entry_point not in source_names and fallback_entry_point in source_names:
+            entry_point = fallback_entry_point
+        if entry_point not in source_names:
             fail("Delivery entry point is invalid")
         report["agentName"] = agent_name.strip()
         report["entryPoint"] = entry_point

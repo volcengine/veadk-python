@@ -19,7 +19,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import shutil
 import subprocess
 from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass
@@ -41,7 +40,12 @@ STUDIO_HARNESS_PROFILE_DEFAULTS = {
         "verifier",
         "long_run_control",
     ),
-    "ops": STUDIO_HARNESS_COMPONENT_IDS,
+    "ops": (
+        "context_engine",
+        "verifier",
+        "long_run_control",
+        "mcp_resilience",
+    ),
 }
 _STUDIO_HARNESS_PROFILE_METADATA = {
     "default": (
@@ -81,7 +85,6 @@ _INCOMPATIBLE_IMAGE_MESSAGE = (
     "The Runtime image is incompatible with managed Harness Sidecar support. "
     "Use a Sidecar-enabled managed Runtime image."
 )
-_AGENTKIT_CLI_ENV = "VEADK_AGENTKIT_CLI"
 _SIDECAR_COMPRESSION_PROVIDER = "headroom"
 _SIDECAR_NO_COMPRESSION_PROVIDER = "noop"
 MANAGED_HARNESS_SIDECAR_RUNTIME_COMMAND = (
@@ -113,15 +116,16 @@ def _sidecar_runtime_api() -> Any:
 
 
 def agentkit_cli_executable() -> str:
-    """Resolve the configured AgentKit CLI without invoking a shell."""
+    """Resolve or securely bootstrap the pinned standalone AgentKit CLI."""
 
-    configured = os.getenv(_AGENTKIT_CLI_ENV, "agentkit").strip()
-    executable = shutil.which(configured)
-    if executable is None:
+    from veadk.cli.agentkit_cli import AgentKitCliError, resolve_agentkit_cli
+
+    try:
+        return str(resolve_agentkit_cli())
+    except AgentKitCliError as error:
         raise HarnessSidecarDependencyError(
-            "AgentKit CLI is required for managed Harness Sidecar operations."
-        )
-    return executable
+            "The pinned standalone AgentKit CLI is unavailable."
+        ) from error
 
 
 def _run_agentkit_cli_json(arguments: list[str]) -> dict[str, Any]:

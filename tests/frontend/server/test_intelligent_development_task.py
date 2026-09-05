@@ -72,6 +72,109 @@ def test_intent_parser_accepts_only_bounded_typed_decisions() -> None:
         )
 
 
+def test_intent_parser_accepts_one_json_markdown_block() -> None:
+    decision = parse_intent_decision(
+        """```json
+{"decision":"accept","message":"","intentSummary":"继续优化天气 Agent","acceptanceCriteria":["保留现有能力"],"changesDelivery":true}
+```"""
+    )
+
+    assert decision.intent_summary == "继续优化天气 Agent"
+    assert decision.acceptance_criteria == ("保留现有能力",)
+
+
+def test_intent_parser_accepts_one_json_object_with_surrounding_text() -> None:
+    decision = parse_intent_decision(
+        "以下是识别结果：\n"
+        "```json\n"
+        '{"decision":"accept","message":"","intentSummary":"继续优化",'
+        '"acceptanceCriteria":["保留现有能力"],"changesDelivery":true}'
+        "\n```\n"
+        "请按以上结果执行。"
+    )
+
+    assert decision.decision == "accept"
+    assert decision.intent_summary == "继续优化"
+
+
+def test_intent_parser_accepts_optional_irrelevant_and_extension_fields() -> None:
+    accepted = parse_intent_decision(
+        json.dumps(
+            {
+                "decision": "accept",
+                "intentSummary": "继续优化天气 Agent",
+                "acceptanceCriteria": ["保留现有能力"],
+                "changesDelivery": True,
+                "reason": "这是现有 Agent 的正常迭代",
+            },
+            ensure_ascii=False,
+        )
+    )
+    rejected = parse_intent_decision(
+        json.dumps(
+            {"decision": "reject", "message": "该请求与创建 Agent 无关。"},
+            ensure_ascii=False,
+        )
+    )
+
+    assert accepted.message == ""
+    assert accepted.changes_delivery is True
+    assert rejected.intent_summary == ""
+    assert rejected.acceptance_criteria == ()
+    assert rejected.changes_delivery is False
+
+
+def test_intent_parser_rejects_multiple_json_decisions() -> None:
+    with pytest.raises(ValueError, match="multiple"):
+        parse_intent_decision(
+            '{"decision":"reject","message":"拒绝。"}\n'
+            '{"decision":"accept","intentSummary":"继续优化",'
+            '"acceptanceCriteria":["保留现有能力"],"changesDelivery":true}'
+        )
+
+
+def test_intent_parser_ignores_unrelated_json_around_one_decision() -> None:
+    decision = parse_intent_decision(
+        '诊断信息：{"attempt":1}\n'
+        '{"decision":"accept","intentSummary":"继续优化",'
+        '"acceptanceCriteria":["保留现有能力"],"changesDelivery":true}\n'
+        '附加信息：{"format":"json"}'
+    )
+
+    assert decision.decision == "accept"
+
+
+@pytest.mark.parametrize(
+    "invalid_field",
+    [
+        {"intentSummary": "", "acceptanceCriteria": ["保留现有能力"]},
+        {"intentSummary": "继续优化", "acceptanceCriteria": []},
+        {"intentSummary": "继续优化", "acceptanceCriteria": "保留现有能力"},
+        {
+            "intentSummary": "继续优化",
+            "acceptanceCriteria": ["保留现有能力"],
+            "changesDelivery": "true",
+        },
+    ],
+)
+def test_intent_parser_rejects_incomplete_or_mistyped_accepted_decision(
+    invalid_field: dict[str, object],
+) -> None:
+    payload: dict[str, object] = {
+        "decision": "accept",
+        "changesDelivery": True,
+        **invalid_field,
+    }
+
+    with pytest.raises(ValueError):
+        parse_intent_decision(json.dumps(payload, ensure_ascii=False))
+
+
+def test_intent_parser_rejects_oversized_response() -> None:
+    with pytest.raises(ValueError, match="too large"):
+        parse_intent_decision("x" * (128 * 1024 + 1))
+
+
 def test_intent_gate_preserves_normal_agent_work_and_narrowly_blocks_abuse() -> None:
     prompt = intent_gate_prompt("继续优化安全检测能力", expire_at="later")
 
@@ -150,6 +253,58 @@ def test_completion_parser_accepts_forward_compatible_partial_metadata() -> None
     assert completion.acceptance_criteria == ()
 
 
+def test_completion_parser_accepts_answered_turn_without_delivery_evidence() -> None:
+    completion = parse_completion_contract(
+        json.dumps(
+            {
+                "schemaVersion": "1",
+                "status": "answered",
+                "summary": "已说明当前 Agent 的数据来源",
+                "intentSummary": "解释当前 Agent 的数据来源",
+                "runtimeName": "",
+                "attemptCount": 0,
+                "gates": {
+                    name: False
+                    for name in (
+                        "local-checks",
+                        "service-probe",
+                        "ak-config",
+                        "ak-build",
+                        "ak-deploy",
+                        "runtime-ready",
+                        "acceptance-invoke",
+                        "runtime-logs",
+                        "runtime-cleanup",
+                    )
+                },
+                "acceptanceCriteria": [],
+            }
+        ).encode()
+    )
+
+    assert completion.answered is True
+    assert completion.intent_summary == "解释当前 Agent 的数据来源"
+    assert completion.verified is False
+
+
+def test_completion_parser_rejects_answered_turn_with_delivery_evidence() -> None:
+    with pytest.raises(ValueError, match="delivery evidence"):
+        parse_completion_contract(
+            json.dumps(
+                {
+                    "schemaVersion": "1",
+                    "status": "answered",
+                    "summary": "错误地声明了部署证据",
+                    "intentSummary": "解释当前 Agent",
+                    "runtimeName": "idv-weather-123",
+                    "attemptCount": 1,
+                    "gates": {"local-checks": True},
+                    "acceptanceCriteria": [],
+                }
+            ).encode()
+        )
+
+
 def test_builder_context_uses_launcher_without_secret_values() -> None:
     decision = parse_intent_decision(
         json.dumps(
@@ -206,7 +361,8 @@ def test_builder_context_uses_launcher_without_secret_values() -> None:
     assert "Do not repeat progress messages" in prompt
     contract = prompt.split("It must contain exactly:\n", 1)[1].split("\n\n", 1)[0]
     example = json.loads(contract)
-    assert example["status"] == "partial"
+    assert example["status"] == "answered"
+    assert example["intentSummary"] == "concise current goal"
     assert example["runtimeName"] == ""
     assert example["acceptanceCriteria"] == []
     assert "verified|partial|blocked|indeterminate|failed" not in contract
@@ -215,6 +371,60 @@ def test_builder_context_uses_launcher_without_secret_values() -> None:
     assert "If time is running short" not in prompt
     assert "Studio" not in prompt
     assert "Sandbox" not in prompt
+
+
+def test_version_optimization_prompts_preserve_base_and_forbid_reinitialization() -> (
+    None
+):
+    project_context = json.dumps(
+        {
+            "intentSummary": "构建天气查询 Agent",
+            "acceptanceCriteria": ["返回天气和数据时间"],
+            "agentName": "weather_agent",
+            "entryPoint": "app.py",
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    decision = IntentDecision(
+        "accept",
+        "",
+        "在现有天气 Agent 中增加中文预警",
+        ("保留天气查询并返回中文预警",),
+        True,
+    )
+
+    gate = intent_gate_prompt(
+        "增加中文预警",
+        expire_at="later",
+        project_context=project_context,
+    )
+    builder = builder_prompt(
+        "增加中文预警",
+        decision,
+        launcher_path="/secure/task/launcher",
+        completion_path="/workspace/completion.json",
+        expire_at="later",
+        remaining_lifetime_minutes=60,
+        validation_region="cn-beijing",
+        validation_project="default",
+        project_context=project_context,
+    )
+
+    assert "version-based optimization" in gate
+    assert "change to the selected version" in gate
+    assert "even when the requested change is broad" in gate
+    assert '"acceptanceCriteria":["返回天气和数据时间"]' in gate
+    assert "## Version-based optimization" in builder
+    assert "authoritative baseline" in builder
+    assert "Do not run `ak init`" in builder
+    assert "clear or recreate the project directory" in builder
+    assert "complete deployable project, not only a patch" in builder
+    assert '"agentName":"weather_agent"' in builder
+    assert "use `ak init --template agent_server` by default" not in builder
+    assert "Do not default to the `basic` template" not in builder
+    assert "Studio" not in builder
+    assert "Sandbox" not in builder
 
 
 def test_read_only_prompt_forbids_changes_credentials_and_cloud_validation() -> None:
@@ -326,7 +536,7 @@ def test_task_prompts_have_ordered_sections_and_mutually_exclusive_modes() -> No
             (
                 "## Operating mode",
                 "## Conversation and project continuity",
-                "## Accepted task",
+                "## Current task",
                 "## Delivery requirements",
                 "## Credential and validation boundaries",
                 "## Reporting contract",
@@ -371,6 +581,41 @@ def test_delivery_manifest_rejects_non_ascii_agent_names(agent_name: str) -> Non
 
     with pytest.raises(ValueError, match="ASCII"):
         task_module._delivery_manifest_metadata(manifest)
+
+
+def test_delivery_manifest_uses_trusted_metadata_for_legacy_fields() -> None:
+    manifest = b"common:\n  agent_name: optimized_agent\n"
+
+    assert task_module._delivery_manifest_metadata(
+        manifest,
+        trusted_fallback=("migrated_agent", "main.py"),
+    ) == ("optimized_agent", "main.py")
+
+
+def test_delivery_manifest_keeps_complete_manifest_authoritative() -> None:
+    manifest = b"common:\n  agent_name: optimized_agent\n  entry_point: optimized.py\n"
+
+    assert task_module._delivery_manifest_metadata(
+        manifest,
+        trusted_fallback=("migrated_agent", "main.py"),
+    ) == ("optimized_agent", "optimized.py")
+
+
+@pytest.mark.parametrize(
+    "manifest",
+    [
+        b"common:\n  agent_name: ../unsafe\n",
+        b"common:\n  agent_name: optimized_agent\n  entry_point: ../unsafe.py\n",
+    ],
+)
+def test_delivery_manifest_rejects_unsafe_explicit_metadata_with_fallback(
+    manifest: bytes,
+) -> None:
+    with pytest.raises(ValueError):
+        task_module._delivery_manifest_metadata(
+            manifest,
+            trusted_fallback=("migrated_agent", "main.py"),
+        )
 
 
 @pytest.mark.asyncio
@@ -555,6 +800,7 @@ async def test_delivery_publisher_sends_server_parsed_manifest_contract() -> Non
     assert request["projectRoot"] == "/home/gem/workspace/session"
     assert request["agentName"] == "weather"
     assert request["entryPoint"] == "weather.py"
+    assert request["fallbackEntryPoint"] == ""
     assert request["manifestSha256"] == hashlib.sha256(manifest).hexdigest()
     assert set(request) == {
         "projectRoot",
@@ -562,6 +808,7 @@ async def test_delivery_publisher_sends_server_parsed_manifest_contract() -> Non
         "secretPath",
         "agentName",
         "entryPoint",
+        "fallbackEntryPoint",
         "manifestSha256",
     }
     secret_path = request["secretPath"]
@@ -596,12 +843,95 @@ async def test_delivery_publisher_sends_server_parsed_manifest_contract() -> Non
     assert source_only.gate_summary == ()
 
 
+@pytest.mark.asyncio
+async def test_delivery_publisher_packages_migrated_source_without_root_manifest() -> (
+    None
+):
+    artifact_digest = "a" * 64
+    report_digest = "b" * 64
+    release = (
+        f"/home/gem/.intelligent-development/releases/{artifact_digest}-{report_digest}"
+    )
+
+    class Remote:
+        def __init__(self) -> None:
+            self.downloads: list[str] = []
+            self.uploads: dict[str, tuple[bytes, int | None]] = {}
+            self.exec_json_calls = 0
+
+        async def download(self, path: str, *, max_bytes: int) -> bytes:
+            del max_bytes
+            self.downloads.append(path)
+            raise AssertionError("missing manifest must not be downloaded")
+
+        async def upload(
+            self,
+            path: str,
+            content: bytes,
+            *,
+            media_type: str = "application/octet-stream",
+            max_bytes: int = 20 * 1024 * 1024,
+            mode: int | None = None,
+        ) -> None:
+            del media_type, max_bytes
+            self.uploads[path] = (content, mode)
+
+        async def exec_json(self, command: str, *, timeout: int) -> dict[str, object]:
+            del command, timeout
+            self.exec_json_calls += 1
+            if self.exec_json_calls == 1:
+                return {"state": "missing"}
+            return {
+                "sessionId": "session",
+                "artifactSha256": artifact_digest,
+                "artifactSize": 128,
+                "agentName": "travel_planner",
+                "entryPoint": "main.py",
+                "fileCount": 2,
+                "artifactPath": f"{release}/artifact.zip",
+                "descriptorPath": f"{release}/descriptor.json",
+                "validationReportPath": f"{release}/validation/{report_digest}.json",
+                "validationReportSha256": report_digest,
+                "releasePath": release,
+            }
+
+        async def exec_text(self, command: str, *, timeout: int) -> str:
+            del command, timeout
+            return ""
+
+    remote = Remote()
+    delivery = await DeliveryPublisher(remote).publish(  # type: ignore[arg-type]
+        session_id="session",
+        project_root="/home/gem/workspace/session",
+        task_root="/home/gem/.intelligent-development/tasks/task",
+        completion=None,
+        exact_secrets=(),
+        trusted_manifest_metadata=("travel_planner", "main.py"),
+    )
+
+    request_path = next(
+        path
+        for path in remote.uploads
+        if path.endswith(".json") and "secrets" not in path
+    )
+    request = json.loads(remote.uploads[request_path][0])
+    assert remote.downloads == []
+    assert request["agentName"] == "travel_planner"
+    assert request["entryPoint"] == "main.py"
+    assert request["fallbackEntryPoint"] == "main.py"
+    assert request["manifestSha256"] == hashlib.sha256(b"").hexdigest()
+    assert delivery.agent_name == "travel_planner"
+    assert delivery.entry_point == "main.py"
+
+
 def _run_delivery_worker(
     tmp_path: Path,
     *,
     files: dict[str, bytes],
     secrets: tuple[str, ...] = (),
     report: dict[str, object] | None = None,
+    trusted_metadata: tuple[str, str] | None = None,
+    fallback_entry_point: str = "",
 ) -> subprocess.CompletedProcess[str]:
     workspace_root = tmp_path / "workspace"
     project = workspace_root / "session"
@@ -626,17 +956,20 @@ def _run_delivery_worker(
     secret_path.write_text(json.dumps(list(secrets)), encoding="utf-8")
     os.chmod(secret_path, 0o600)
     request = tmp_path / "request.json"
-    manifest_bytes = files["agentkit.yaml"]
-    manifest = yaml.safe_load(manifest_bytes)
-    common = manifest["common"]
+    manifest_bytes = files.get("agentkit.yaml", b"")
+    if trusted_metadata is None:
+        manifest = yaml.safe_load(manifest_bytes)
+        common = manifest["common"]
+        trusted_metadata = (common["agent_name"], common["entry_point"])
     request.write_text(
         json.dumps(
             {
                 "projectRoot": str(project),
                 "report": report or {"sessionId": "session"},
                 "secretPath": str(secret_path),
-                "agentName": common["agent_name"],
-                "entryPoint": common["entry_point"],
+                "agentName": trusted_metadata[0],
+                "entryPoint": trusted_metadata[1],
+                "fallbackEntryPoint": fallback_entry_point,
                 "manifestSha256": hashlib.sha256(manifest_bytes).hexdigest(),
             }
         ),
@@ -662,7 +995,10 @@ def test_delivery_worker_packages_final_project_and_excludes_local_state(
             ),
             "weather.py": b"root_agent = object()\n",
             ".env.example": b"MODEL_API_KEY=replace-me\n",
+            ".agentkit/agentkit.yaml": b"name: weather\n",
+            ".agentkit/Dockerfile": b"FROM python:3.12-slim\n",
             ".agentkit/artifacts/build.log": b"cloud build evidence\n",
+            ".agentkit/migrate/session.json": b"{}\n",
             ".studio-intelligent-development-result.json": b"{}",
         },
     )
@@ -671,10 +1007,57 @@ def test_delivery_worker_packages_final_project_and_excludes_local_state(
     artifact = Path(descriptor["artifactPath"])
     with zipfile.ZipFile(artifact) as archive:
         assert sorted(archive.namelist()) == [
+            ".agentkit/Dockerfile",
+            ".agentkit/agentkit.yaml",
             ".env.example",
             "agentkit.yaml",
             "weather.py",
         ]
+
+
+def test_delivery_worker_packages_migrated_project_without_root_manifest(
+    tmp_path: Path,
+) -> None:
+    result = _run_delivery_worker(
+        tmp_path,
+        files={
+            "main.py": b"root_agent = object()\n",
+            ".agentkit/agentkit.yaml": b"name: legacy\n",
+            ".agentkit/Dockerfile": b"FROM python:3.12-slim\n",
+        },
+        trusted_metadata=("travel_planner", "main.py"),
+    )
+
+    assert result.returncode == 0, result.stderr
+    descriptor = json.loads(result.stdout)
+    assert descriptor["agentName"] == "travel_planner"
+    assert descriptor["entryPoint"] == "main.py"
+    with zipfile.ZipFile(descriptor["artifactPath"]) as archive:
+        assert sorted(archive.namelist()) == [
+            ".agentkit/Dockerfile",
+            ".agentkit/agentkit.yaml",
+            "main.py",
+        ]
+
+
+def test_delivery_worker_uses_trusted_entry_point_when_manifest_target_is_absent(
+    tmp_path: Path,
+) -> None:
+    result = _run_delivery_worker(
+        tmp_path,
+        files={
+            "agentkit.yaml": (
+                b"common:\n  agent_name: travel_planner\n  entry_point: agent.py\n"
+            ),
+            "main.py": b"root_agent = object()\n",
+        },
+        trusted_metadata=("travel_planner", "agent.py"),
+        fallback_entry_point="main.py",
+    )
+
+    assert result.returncode == 0, result.stderr
+    descriptor = json.loads(result.stdout)
+    assert descriptor["entryPoint"] == "main.py"
 
 
 def test_delivery_worker_rejects_supplied_credentials(tmp_path: Path) -> None:

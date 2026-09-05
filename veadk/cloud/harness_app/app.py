@@ -41,7 +41,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from google.adk.agents import RunConfig
 from google.adk.agents.base_agent import BaseAgent
@@ -56,8 +56,10 @@ from google.adk.evaluation.local_eval_set_results_manager import (
     LocalEvalSetResultsManager,
 )
 from google.adk.evaluation.local_eval_sets_manager import LocalEvalSetsManager
+from google.adk.events import Event
 from google.adk.memory.in_memory_memory_service import InMemoryMemoryService
 from google.adk.plugins import BasePlugin
+from google.adk.sessions import Session
 from google.adk.utils.context_utils import Aclosing
 from typing_extensions import override
 
@@ -75,7 +77,10 @@ from veadk.cloud.harness_app.harness_plugins import (
 )
 from veadk.cloud.harness_app.metrics import HarnessLlmUsagePlugin
 from veadk.cloud.harness_app.types import (
+    HarnessAgentConfigRequest,
     HarnessCompactionMetric,
+    HarnessCreateSessionRequest,
+    HarnessEnhanceOverrides,
     HarnessOverrides,
     HarnessPluginMetrics,
     HarnessResponseMetrics,
@@ -85,7 +90,9 @@ from veadk.cloud.harness_app.types import (
 from veadk.cloud.harness_app.utils import (
     SkillLoadError,
     ToolLoadError,
+    harness_overrides_from_env,
     has_a2a_registry_config,
+    merge_harness_overrides,
     spawn_harness_run_agent,
 )
 from veadk.integrations.agentkit.app import (
@@ -100,10 +107,10 @@ from veadk.utils.logger import get_logger
 logger = get_logger(__name__)
 
 HARNESS_NAME = os.getenv("HARNESS_NAME", "default")
-# Optional harness default max LLM calls per run, from harness.yaml (overridable
-# per invocation). Unset -> falls through to ADK RunConfig's own default.
+# Harness default max LLM calls per run, from harness.yaml (overridable per
+# invocation). Unset uses the documented default.
 DEFAULT_MAX_LLM_CALLS = (
-    int(os.environ["MAX_LLM_CALLS"]) if os.environ.get("MAX_LLM_CALLS") else None
+    int(os.environ["MAX_LLM_CALLS"]) if os.environ.get("MAX_LLM_CALLS") else 10
 )
 RETURN_LLM_USAGE = os.getenv("HARNESS_APP_RETURN_LLM_USAGE", "").lower() in {
     "1",
@@ -111,6 +118,8 @@ RETURN_LLM_USAGE = os.getenv("HARNESS_APP_RETURN_LLM_USAGE", "").lower() in {
     "yes",
     "on",
 }
+_RESOURCE_HARNESS_FIELDS = ("knowledgebase", "longterm_memory")
+_RESOURCE_ID_FIELDS = ("id", "_id", "resource_id", "index", "app_name")
 
 
 def _content_text(content: Any) -> str:
@@ -121,6 +130,45 @@ def _content_text(content: Any) -> str:
         if text:
             texts.append(text)
     return "\n".join(texts)
+
+
+def _harness_config_delta(overrides: HarnessOverrides) -> dict[str, Any]:
+    return merge_harness_overrides(overrides).model_dump(
+        mode="json",
+        exclude_unset=True,
+        exclude_none=False,
+    )
+
+
+def _merge_harness_config(
+    current: dict[str, Any] | HarnessOverrides | None,
+    overrides: dict[str, Any] | HarnessOverrides | None,
+) -> dict[str, Any]:
+    return _harness_config_delta(merge_harness_overrides(current, overrides))
+
+
+def _public_harness_config(config: dict[str, Any]) -> dict[str, Any]:
+    public_config = dict(config)
+    for field in _RESOURCE_HARNESS_FIELDS:
+        value = public_config.get(field)
+        if value is None:
+            public_config.pop(field, None)
+            continue
+        if isinstance(value, dict):
+            resource_id = _public_resource_id(value)
+            public_config[field] = {"id": resource_id} if resource_id else {}
+    return public_config
+
+
+def _public_resource_id(value: dict[str, Any]) -> str:
+    config = value.get("config")
+    candidates = [value.get(field) for field in _RESOURCE_ID_FIELDS]
+    if isinstance(config, dict):
+        candidates.extend(config.get(field) for field in _RESOURCE_ID_FIELDS)
+    for candidate in candidates:
+        if candidate not in {None, ""}:
+            return str(candidate)
+    return ""
 
 
 class _HarnessAgentLoader(BaseAgentLoader):
@@ -165,6 +213,8 @@ class HarnessRunAgentRequest(RunAgentRequest):
     """
 
     harness: HarnessOverrides | None = None
+    harness_merge: bool = False
+    harness_enhance: HarnessEnhanceOverrides | None = None
 
 
 class HarnessApp:
@@ -181,6 +231,9 @@ class HarnessApp:
         self.harness_name = harness_name
         self.max_llm_calls = max_llm_calls
         self.return_llm_usage = RETURN_LLM_USAGE
+        self.default_harness_config = _harness_config_delta(
+            harness_overrides_from_env()
+        )
         self.plugins = build_harness_plugins_from_runtime_env()
         self.runner = Runner(
             agent=agent,
@@ -233,16 +286,137 @@ class HarnessApp:
         self._mount_run_sse_override()
         self.app.mount("/", self._a2a_app)
 
+    def _promote_route(self, endpoint: Any) -> None:
+        routes = self.app.router.routes
+        for i, route in enumerate(routes):
+            if getattr(route, "endpoint", None) is endpoint:
+                routes.insert(0, routes.pop(i))
+                return
+
+    async def _get_session_or_404(
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+    ) -> Session:
+        session = await self.short_term_memory.session_service.get_session(
+            app_name=app_name,
+            user_id=user_id,
+            session_id=session_id,
+        )
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        return session
+
+    def _effective_harness_config(
+        self,
+        overrides: HarnessOverrides,
+        *,
+        harness_merge: bool = False,
+    ) -> HarnessOverrides:
+        if harness_merge:
+            return HarnessOverrides.model_validate(
+                _merge_harness_config(self.default_harness_config, overrides)
+            )
+        return HarnessOverrides.model_validate(_harness_config_delta(overrides))
+
+    async def _agent_config_response(
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+    ) -> dict[str, Any]:
+        return {
+            "app_name": app_name,
+            "user_id": user_id,
+            "session_id": session_id,
+            "harness": _public_harness_config(self.default_harness_config),
+        }
+
     def mount(self):
+        @self.app.post(
+            "/apps/{app_name}/users/{user_id}/sessions",
+            response_model_exclude_none=True,
+        )
+        async def create_harness_session(
+            app_name: str,
+            user_id: str,
+            req: HarnessCreateSessionRequest | None = None,
+        ) -> Session:
+            session_id = None
+            state = None
+            events = None
+            if req is not None:
+                session_id = req.id or req.session_id or None
+                state = req.state
+                events = req.events
+
+            session = await self._server._create_session(
+                app_name=app_name,
+                user_id=user_id,
+                state=state,
+                session_id=session_id,
+            )
+            for event_data in events or []:
+                event = Event.model_validate(event_data)
+                await self.short_term_memory.session_service.append_event(
+                    session=session,
+                    event=event,
+                )
+            return session
+
+        self._promote_route(create_harness_session)
+
+        @self.app.get("/get_agent_config")
+        async def get_agent_config(
+            user_id: str | None = Query(default="default"),
+            session_id: str | None = Query(default="default"),
+            app_name: str | None = Query(default=None),
+            user_id_camel: str | None = Query(default=None, alias="userId"),
+            session_id_camel: str | None = Query(default=None, alias="sessionId"),
+            app_name_camel: str | None = Query(default=None, alias="appName"),
+        ) -> dict[str, Any]:
+            resolved_user_id = user_id_camel or user_id or "default"
+            resolved_session_id = session_id_camel or session_id or "default"
+            return await self._agent_config_response(
+                app_name or app_name_camel or self.harness_name,
+                resolved_user_id,
+                resolved_session_id,
+            )
+
+        @self.app.post("/get_agent_config")
+        async def post_get_agent_config(
+            req: HarnessAgentConfigRequest,
+        ) -> dict[str, Any]:
+            return await self._agent_config_response(
+                req.app_name or self.harness_name,
+                req.user_id,
+                req.session_id,
+            )
+
         @self.app.post("/harness/invoke")
         async def invoke_harness(
             request: InvokeHarnessRequest,
             http_request: Request,
         ) -> InvokeHarnessResponse:
-            # max LLM calls: per-call override, else the harness default; if
-            # neither is set, fall through to ADK RunConfig's own default.
+            effective_harness = (
+                self._effective_harness_config(
+                    request.harness,
+                    harness_merge=request.harness_merge,
+                )
+                if request.harness is not None
+                else None
+            )
+            # max LLM calls: per-call override, then request harness override,
+            # then the app default from env/config.
             max_llm_calls = (
-                request.run_agent_request.max_llm_calls or self.max_llm_calls
+                request.run_agent_request.max_llm_calls
+                or (
+                    effective_harness.max_llm_calls
+                    if effective_harness and effective_harness.max_llm_calls is not None
+                    else None
+                )
+                or self.max_llm_calls
             )
             run_config = (
                 RunConfig(max_llm_calls=max_llm_calls)
@@ -277,9 +451,9 @@ class HarnessApp:
                     or bool(header_plugins)
                     or usage_plugin is not None
                 )
-                if request.harness is not None:
+                if effective_harness is not None:
                     logger.info(
-                        f"Applying once-time harness override: {request.harness}"
+                        f"Applying once-time harness override: {effective_harness}"
                     )
                     # The override clones the base agent and may download incremental
                     # skills into a temp dir; the skill files are read from disk while
@@ -291,8 +465,9 @@ class HarnessApp:
                         agent = spawn_harness_run_agent(
                             self.agent,
                             request.prompt,
-                            request.harness,
+                            effective_harness,
                             download_dir=Path(work_dir),
+                            app_name=self.harness_name,
                             registry_tip_token=tip_token,
                             registry_authorization=auth_header,
                         )
@@ -313,6 +488,7 @@ class HarnessApp:
                         run_agent = spawn_harness_run_agent(
                             self.agent,
                             request.prompt,
+                            app_name=self.harness_name,
                             registry_tip_token=tip_token,
                             registry_authorization=auth_header,
                         )
@@ -390,8 +566,20 @@ class HarnessApp:
 
         @self.app.post("/run_sse")
         async def run_sse(req: HarnessRunAgentRequest, http_request: Request):
+            app_name = req.app_name or self.harness_name
+            req.app_name = app_name
+            if req.harness is not None:
+                req.harness = self._effective_harness_config(
+                    req.harness,
+                    harness_merge=req.harness_merge,
+                )
+            header_plugins = build_harness_plugins_from_headers(http_request.headers)
+            body_plugins = build_harness_plugins_from_enhance(req.harness_enhance)
+            harness_plugins = body_plugins or header_plugins or self.plugins
+            self._reset_plugin_diagnostics(harness_plugins)
             if (
                 req.harness is None
+                and not harness_plugins
                 and not has_a2a_registry_config(self.agent)
                 and adk_run_sse is not None
             ):
@@ -400,30 +588,40 @@ class HarnessApp:
             tip_token = registry_tip_token_from_headers(http_request.headers)
             auth_header = registry_authorization_from_headers(http_request.headers)
             return StreamingResponse(
-                self._run_sse_events(req, tip_token, auth_header),
+                self._run_sse_events(
+                    req,
+                    tip_token,
+                    auth_header,
+                    plugins=self._plugins_for_run(harness_plugins, None),
+                ),
                 media_type="text/event-stream",
             )
 
         # Move ours to the front so it wins (Starlette matches the first route),
         # without deleting the default we delegate to.
-        routes = self.app.router.routes
-        for i, r in enumerate(routes):
-            if getattr(r, "path", None) == "/run_sse" and (
-                getattr(r, "endpoint", None) is run_sse
-            ):
-                routes.insert(0, routes.pop(i))
-                break
+        self._promote_route(run_sse)
 
     async def _run_sse_events(
         self,
         req: "HarnessRunAgentRequest",
         tip_token: str = "",
         auth_header: str = "",
+        plugins: list[BasePlugin] | None = None,
     ):
         """Yield SSE ``data:`` lines for a run, spawning the agent on override."""
-        run_config = RunConfig(
-            streaming_mode=StreamingMode.SSE if req.streaming else StreamingMode.NONE
+        run_config_kwargs: dict[str, Any] = {
+            "streaming_mode": StreamingMode.SSE if req.streaming else StreamingMode.NONE
+        }
+        if req.custom_metadata:
+            run_config_kwargs["custom_metadata"] = req.custom_metadata
+        max_llm_calls = (
+            req.harness.max_llm_calls
+            if req.harness and req.harness.max_llm_calls is not None
+            else self.max_llm_calls
         )
+        if max_llm_calls is not None:
+            run_config_kwargs["max_llm_calls"] = max_llm_calls
+        run_config = RunConfig(**run_config_kwargs)
         work_dir_ctx = None
         prompt = _content_text(req.new_message)
         try:
@@ -438,6 +636,7 @@ class HarnessApp:
                         prompt,
                         req.harness,
                         download_dir=Path(work_dir_ctx.name),
+                        app_name=req.app_name,
                         registry_tip_token=tip_token,
                         registry_authorization=auth_header,
                     )
@@ -449,6 +648,7 @@ class HarnessApp:
                 agent = spawn_harness_run_agent(
                     self.agent,
                     prompt,
+                    app_name=req.app_name,
                     registry_tip_token=tip_token,
                     registry_authorization=auth_header,
                 )
@@ -459,6 +659,7 @@ class HarnessApp:
                 agent=agent,
                 short_term_memory=self.short_term_memory,
                 app_name=req.app_name,
+                plugins=plugins or None,
             )
             # Be self-sufficient: create the session if the caller did not.
             if not await runner.session_service.get_session(
@@ -477,15 +678,34 @@ class HarnessApp:
                     user_id=req.user_id,
                     session_id=req.session_id,
                     new_message=req.new_message,
+                    state_delta=req.state_delta,
                     run_config=run_config,
+                    invocation_id=req.invocation_id,
                 )
             ) as agen:
                 async for event in agen:
-                    yield (
-                        "data: "
-                        + event.model_dump_json(exclude_none=True, by_alias=True)
-                        + "\n\n"
-                    )
+                    events_to_stream = [event]
+                    if (
+                        not req.function_call_event_id
+                        and event.actions.artifact_delta
+                        and event.content
+                        and event.content.parts
+                    ):
+                        content_event = event.model_copy(deep=True)
+                        content_event.actions.artifact_delta = {}
+                        artifact_event = event.model_copy(deep=True)
+                        artifact_event.content = None
+                        events_to_stream = [content_event, artifact_event]
+
+                    for event_to_stream in events_to_stream:
+                        yield (
+                            "data: "
+                            + event_to_stream.model_dump_json(
+                                exclude_none=True,
+                                by_alias=True,
+                            )
+                            + "\n\n"
+                        )
         except Exception as e:
             logger.exception("run_sse failed")
             yield f"data: {json.dumps({'error': str(e)})}\n\n"

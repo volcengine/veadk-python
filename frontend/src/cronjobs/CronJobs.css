@@ -25,7 +25,6 @@
   line-height: 1.5;
 }
 
-.cronjobs-loading,
 .cronjobs-state {
   width: 100%;
   min-height: 300px;
@@ -34,13 +33,6 @@
   align-content: center;
   color: hsl(var(--muted-foreground));
   text-align: center;
-}
-.cronjobs-loading {
-  min-height: 220px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  font-size: 13px;
 }
 .cronjobs-banner { flex: 0 0 auto; margin-top: 16px; }
 .cronjobs-notice { position: absolute; z-index: 50; right: 32px; bottom: 24px; max-width: min(420px, calc(100% - 64px)); }

@@ -15,7 +15,9 @@
 import os
 from unittest.mock import Mock, PropertyMock, patch
 
+import pytest
 from google.adk.agents.llm_agent import LlmAgent
+from google.adk.agents.run_config import ToolThreadPoolConfig
 from google.adk.models.lite_llm import LiteLlm
 from google.adk.tools import load_memory
 
@@ -34,6 +36,18 @@ from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
 
 
 def test_agent():
+    # `KnowledgeBase(backend="local")` and `LongTermMemory(backend="local")`
+    # import their llama-index-backed backend classes lazily, at construction
+    # time, so this test body -- not the module import -- is where the missing
+    # extra bites. The rest of this module runs without it.
+    pytest.importorskip(
+        "llama_index.core",
+        reason=(
+            "the local KnowledgeBase/LongTermMemory backends need llama-index: "
+            'pip install "veadk-python[extensions]"'
+        ),
+    )
+
     os.environ["MODEL_EMBEDDING_API_KEY"] = "mocked_api_key"
 
     knowledgebase = KnowledgeBase(index="test_index", backend="local")
@@ -217,6 +231,15 @@ def test_agent_empty_model_extra_config():
         agent.model_extra_config["extra_body"]
         == DEFAULT_MODEL_EXTRA_CONFIG["extra_body"]
     )
+
+
+@patch.dict("os.environ", {"MODEL_AGENT_API_KEY": "mock_api_key"})
+def test_agent_accepts_tool_thread_pool_config():
+    config = ToolThreadPoolConfig(max_workers=3)
+
+    agent = Agent(tool_thread_pool_config=config)
+
+    assert agent.tool_thread_pool_config == config
 
 
 @patch.dict("os.environ", {"MODEL_AGENT_API_KEY": "mock_api_key"})

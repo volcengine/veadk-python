@@ -19,6 +19,7 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+import requests
 
 os.environ["VOLCENGINE_ACCESS_KEY"] = "test_access_key"
 os.environ["VOLCENGINE_SECRET_KEY"] = "test_secret_key"
@@ -28,10 +29,17 @@ from veadk.integrations.ve_apig.ve_apig import APIGateway
 from veadk.integrations.ve_code_pipeline.ve_code_pipeline import VeCodePipeline
 from veadk.integrations.ve_faas.ve_faas import VeFaaS
 from veadk.utils.cloud_provider import (
+    agentkit_openapi_base,
     apmplus_otlp_endpoint,
     cp_openapi_host,
     default_region,
 )
+
+
+def test_agentkit_openapi_base_uses_byteplus_control_plane_domain() -> None:
+    assert agentkit_openapi_base("ap-southeast-1", "byteplus") == (
+        "https://agentkit.ap-southeast-1.byteplusapi.com"
+    )
 
 
 def test_apmplus_otlp_endpoint_uses_region() -> None:
@@ -61,6 +69,7 @@ def test_vefaas_create_function_uses_configured_project() -> None:
 
 def test_vefaas_deploy_cleans_created_resources_on_release_failure() -> None:
     service = object.__new__(VeFaaS)
+    service.find_app_id_by_name = Mock(return_value=None)
     service._create_function = Mock(return_value=("studio-app-fn", "function-id"))
     service._create_application = Mock(return_value="application-id")
     service._release_application = Mock(side_effect=RuntimeError("release failed"))
@@ -82,6 +91,7 @@ def test_vefaas_deploy_cleans_created_resources_on_release_failure() -> None:
 
 def test_vefaas_deploy_can_keep_failed_resources_for_inspection() -> None:
     service = object.__new__(VeFaaS)
+    service.find_app_id_by_name = Mock(return_value=None)
     service._create_function = Mock(return_value=("studio-app-fn", "function-id"))
     service._create_application = Mock(return_value="application-id")
     service._release_application = Mock(side_effect=RuntimeError("release failed"))
@@ -100,6 +110,53 @@ def test_vefaas_deploy_can_keep_failed_resources_for_inspection() -> None:
 
     service.delete.assert_not_called()
     service.delete_function.assert_not_called()
+
+
+def test_vefaas_deploy_updates_existing_application_in_place() -> None:
+    service = object.__new__(VeFaaS)
+    service.find_app_id_by_name = Mock(return_value="application-id")
+    service._get_application_status = Mock(
+        return_value=(
+            "deploy_success",
+            {
+                "Result": {
+                    "CloudResource": '{"framework":{"function":'
+                    '{"Id":"function-id","Name":"studio-app-fn"}}}'
+                }
+            },
+        )
+    )
+    service.update_application_code_bundle = Mock(
+        return_value="https://studio.example.com"
+    )
+    service._create_function = Mock()
+    service._create_application = Mock()
+
+    with patch.dict(
+        "veadk.config.veadk_environments",
+        {"VEADK_STUDIO_DEPLOY_ID": "deploy-id"},
+        clear=True,
+    ):
+        result = service.deploy(
+            "studio-app",
+            "/tmp/studio-bundle",
+            disable_gateway_cors=True,
+        )
+
+    assert result == (
+        "https://studio.example.com",
+        "application-id",
+        "function-id",
+    )
+    service.update_application_code_bundle.assert_called_once_with(
+        application_id="application-id",
+        function_id="function-id",
+        path="/tmp/studio-bundle",
+        environment_overrides={"VEADK_STUDIO_DEPLOY_ID": "deploy-id"},
+        disable_gateway_cors=True,
+    )
+    service._create_function.assert_not_called()
+    service._create_application.assert_not_called()
 
 
 def test_apig_uses_session_token() -> None:
@@ -233,6 +290,7 @@ def test_vefaas_application_route_skips_safe_configuration() -> None:
 
 def test_vefaas_deploy_can_disable_gateway_cors() -> None:
     service = object.__new__(VeFaaS)
+    service.find_app_id_by_name = Mock(return_value=None)
     cast(Any, service).apig_client = SimpleNamespace(
         list_gateways=Mock(return_value=SimpleNamespace(items=[]))
     )
@@ -293,6 +351,69 @@ def test_vefaas_code_upload_callback_uses_configured_region() -> None:
         session_token="",
         host="open.volcengineapi.com",
     )
+
+
+def test_vefaas_large_code_upload_uses_bounded_extended_timeout() -> None:
+    service = VeFaaS(
+        access_key="test_access_key",
+        secret_key="test_secret_key",
+        region="cn-shanghai",
+    )
+    service.client = Mock()
+    service.client.get_code_upload_address.return_value = Mock(
+        upload_address="https://example.com/upload"
+    )
+    archive_size = 64 * 1024 * 1024 + 1
+
+    with (
+        patch(
+            "veadk.integrations.ve_faas.ve_faas.zip_and_encode_folder",
+            return_value=(b"archive", archive_size, None),
+        ),
+        patch("veadk.integrations.ve_faas.ve_faas.requests.put") as upload,
+        patch("veadk.integrations.ve_faas.ve_faas.signed_request"),
+    ):
+        upload.return_value = Mock(status_code=200)
+        service._upload_and_mount_code("function-id", ".")
+
+    upload.assert_called_once_with(
+        url="https://example.com/upload",
+        data=b"archive",
+        headers={"Content-Type": "application/zip"},
+        timeout=(300, 1800),
+    )
+
+
+def test_vefaas_large_code_upload_retries_one_connection_interruption() -> None:
+    service = VeFaaS(
+        access_key="test_access_key",
+        secret_key="test_secret_key",
+        region="cn-shanghai",
+    )
+    service.client = Mock()
+    service.client.get_code_upload_address.return_value = Mock(
+        upload_address="https://example.com/upload"
+    )
+    archive_size = 64 * 1024 * 1024 + 1
+
+    with (
+        patch(
+            "veadk.integrations.ve_faas.ve_faas.zip_and_encode_folder",
+            return_value=(b"archive", archive_size, None),
+        ),
+        patch(
+            "veadk.integrations.ve_faas.ve_faas.requests.put",
+            side_effect=[requests.ConnectionError(), Mock(status_code=200)],
+        ) as upload,
+        patch("veadk.integrations.ve_faas.ve_faas.signed_request") as callback,
+        patch("veadk.integrations.ve_faas.ve_faas.time.sleep") as sleep,
+    ):
+        service._upload_and_mount_code("function-id", ".")
+
+    assert upload.call_count == 2
+    assert upload.call_args_list[0] == upload.call_args_list[1]
+    sleep.assert_called_once_with(1)
+    callback.assert_called_once()
 
 
 def test_vefaas_code_upload_callback_uses_byteplus_host() -> None:
