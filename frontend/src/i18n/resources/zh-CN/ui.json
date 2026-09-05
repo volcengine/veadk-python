@@ -1395,6 +1395,7 @@
     "totalItems": "共 {{count}} 项",
     "cannotLoadSpaces": "无法加载技能空间",
     "someSpacesFailed": "部分技能空间加载失败",
+    "degradedRelationWarning": "部分关联异常，已恢复可读取技能",
     "downloadZip": "下载 ZIP",
     "optimize": "优化",
     "closeSkillDetails": "关闭技能详情",

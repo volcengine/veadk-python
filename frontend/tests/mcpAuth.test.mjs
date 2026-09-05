@@ -40,6 +40,7 @@ const {
   configuredMcpEnvKeys,
   deploymentMcpSecretValues,
   mcpCredentialActionRequired,
+  mcpConfigurationConflict,
   mcpCredentialReuseValues,
   mcpAuthTokenInputValue,
   mcpUrlNeedsPathWarning,
@@ -235,6 +236,58 @@ test("supports replacing or explicitly removing auth after an MCP URL change", (
   assert.equal(removed.authTokenEnv, undefined);
   assert.equal(mcpCredentialActionRequired(removed), false);
   assert.deepEqual(mcpCredentialReuseValues(draft({ mcpTools: [removed] })), []);
+});
+
+test("finds duplicate MCP names and canonical endpoint URLs before deploy", () => {
+  assert.equal(
+    mcpConfigurationConflict(
+      draft({
+        mcpTools: [
+          { name: "orders", transport: "http", url: "https://one.example.com/mcp" },
+          { name: "orders", transport: "http", url: "https://two.example.com/mcp" },
+        ],
+      }),
+    ),
+    "duplicateName",
+  );
+  assert.equal(
+    mcpConfigurationConflict(
+      draft({
+        mcpTools: [
+          {
+            name: "orders-a",
+            transport: "http",
+            url: "https://MCP.example.com:443/orders/mcp/",
+          },
+          {
+            name: "orders-b",
+            transport: "http",
+            url: "https://mcp.example.com/orders/mcp",
+          },
+        ],
+      }),
+    ),
+    "duplicateUrl",
+  );
+  assert.equal(
+    mcpConfigurationConflict(
+      draft({
+        mcpTools: [
+          {
+            name: "orders-a",
+            transport: "http",
+            url: "https://mcp.example.com/orders/../mcp",
+          },
+          {
+            name: "orders-b",
+            transport: "http",
+            url: "https://mcp.example.com/mcp",
+          },
+        ],
+      }),
+    ),
+    null,
+  );
 });
 
 test("keeps unchanged reference-only credentials eligible for server resolution", () => {

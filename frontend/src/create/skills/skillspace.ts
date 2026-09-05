@@ -24,6 +24,8 @@ export interface SkillSpaceSkill {
   skillDescription: string;
   version: string;
   skillStatus: string;
+  lookupByName?: boolean;
+  degraded?: boolean;
 }
 export interface SkillDetail {
   skillId: string;
@@ -42,6 +44,8 @@ export interface SkillSpacePage<T> {
   totalCount: number;
   page: number;
   pageSize: number;
+  degraded?: boolean;
+  warnings?: string[];
 }
 
 export interface SkillSpacePageOptions {
@@ -128,18 +132,25 @@ export async function getSkillDetail(
 
 /** Convert a raw space skill listing into a selectable SkillHit. */
 export function toHit(space: SkillSpaceRef, s: SkillSpaceSkill): SkillHit {
+  const identity = skillLookupIdentity(s);
   return {
     source: "skillspace",
-    id: `ss:${space.id}/${s.skillId}/${s.version}`,
+    id: `ss:${space.id}/${identity}/${s.version}`,
     name: s.skillName,
     description: s.skillDescription,
     folder: s.skillName,
     skillSpaceId: space.id,
     skillSpaceName: space.name,
     skillSpaceRegion: space.region,
-    skillId: s.skillId,
+    skillId: identity,
     version: s.version,
   };
+}
+
+/** Use the authoritative ID when present; degraded SkillSpace results are
+ * deliberately addressable by name without inventing an ID. */
+export function skillLookupIdentity(skill: SkillSpaceSkill): string {
+  return skill.skillId || skill.skillName;
 }
 
 /** Download a SkillSpace skill package into ProjectFiles. The backend returns

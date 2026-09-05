@@ -36,6 +36,74 @@ function walkMcpTools(
   }
 }
 
+export type McpConfigurationConflict = "duplicateName" | "duplicateUrl";
+
+function canonicalMcpUrl(value: string | undefined): string | null {
+  try {
+    const raw = (value ?? "").trim();
+    const url = new URL(raw);
+    if (
+      (url.protocol !== "http:" && url.protocol !== "https:") ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash
+    ) {
+      return null;
+    }
+    const authorityStart = raw.indexOf("://") + 3;
+    const pathStart = raw.indexOf("/", authorityStart);
+    const path = (pathStart >= 0 ? raw.slice(pathStart) : "").replace(/\/+$/, "");
+    return `${url.protocol}//${url.host}${path}`;
+  } catch {
+    return null;
+  }
+}
+
+function canonicalMcpName(tool: McpTool, index: number): string {
+  let candidate = tool.name.trim();
+  if (!candidate) {
+    const url = canonicalMcpUrl(tool.url);
+    const segments = url?.split("/").filter(Boolean) ?? [];
+    candidate = segments[segments.length - 1] ?? "";
+  }
+  candidate = candidate
+    .replace(/[^A-Za-z0-9_.-]+/g, "_")
+    .replace(/^[_.-]+|[_.-]+$/g, "");
+  return candidate || `mcp_${index + 1}`;
+}
+
+/** Match the Sidecar's global name/URL uniqueness checks before deployment. */
+export function mcpConfigurationConflict(
+  root: AgentDraft,
+): McpConfigurationConflict | null {
+  const names = new Set<string>();
+  const urls = new Set<string>();
+  let conflict: McpConfigurationConflict | null = null;
+  const visit = (node: AgentDraft) => {
+    (node.mcpTools ?? []).forEach((tool, index) => {
+      if (conflict || tool.transport !== "http") return;
+      const name = canonicalMcpName(tool, index);
+      const url = canonicalMcpUrl(tool.url);
+      if (names.has(name)) {
+        conflict = "duplicateName";
+        return;
+      }
+      if (url && urls.has(url)) {
+        conflict = "duplicateUrl";
+        return;
+      }
+      names.add(name);
+      if (url) urls.add(url);
+    });
+    if (conflict) return;
+    node.subAgents.forEach(visit);
+    node.workflow?.nodes.forEach((workflowNode) => visit(workflowNode.agent));
+  };
+  visit(root);
+  return conflict;
+}
+
 /** Credential identifiers confirmed by the server for the published draft. */
 export function configuredMcpEnvKeys(root: AgentDraft): string[] {
   const keys = new Set<string>();

@@ -5,6 +5,8 @@ const TOOL_ARGUMENT_JSON_PATTERN =
   /Expecting (?:'[^']+'|\w+)(?: delimiter)?: line \d+ column \d+ \(char \d+\)/i;
 const RESOURCE_COLLECTION_EXPIRED_PATTERN =
   /Unknown or expired collection_id\s+'[^']+'\.\s*Call collect_resources first\./i;
+const MODEL_QUOTA_PATTERN =
+  /(?:RateLimitError|\bTPM\b|\bRPM\b|tokens? per minute|requests? per minute)[\s\S]*(?:\b429\b|limit|quota)|\b429\b[\s\S]*(?:model|RateLimitError|\bTPM\b|\bRPM\b)/i;
 
 function appendHint(message: string, hint: string): string {
   return message.includes(hint) ? message : `${message}\n\n${hint}`;
@@ -21,6 +23,8 @@ export function formatRunSseError(error: unknown): string {
     formatted = appendHint(formatted, adkT("runSse.toolArgumentHint"));
   } else if (RESOURCE_COLLECTION_EXPIRED_PATTERN.test(message)) {
     return appendHint(formatted, adkT("runSse.resourceCollectionExpiredHint"));
+  } else if (MODEL_QUOTA_PATTERN.test(message)) {
+    return appendHint(formatted, adkT("runSse.modelQuotaHint"));
   } else if (SESSION_NOT_FOUND_PATTERN.test(message)) {
     if (SESSION_DETAIL_PATTERN.test(message)) {
       formatted = appendHint(formatted, adkT("runSse.persistentMemoryHint"));

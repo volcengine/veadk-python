@@ -144,6 +144,108 @@ async def test_skill_catalog_lists_spaces_and_space_skills_from_studio_client(
 
 
 @pytest.mark.asyncio
+async def test_skill_catalog_recovers_readable_skills_from_dangling_relation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class DanglingRelationError(RuntimeError):
+        code = "ResourceNotFound.skill"
+
+    class FakeClient:
+        def list_skills_by_skill_space(self, request: object) -> SimpleNamespace:
+            del request
+            raise DanglingRelationError("ResourceNotFound.skill")
+
+        def get_skill_space(self, request: object) -> SimpleNamespace:
+            assert getattr(request, "id") == "space-1"
+            return SimpleNamespace(name="Writers")
+
+        def list_skills_by_space_id(self, request: object) -> SimpleNamespace:
+            assert getattr(request, "skill_space_id") == "space-1"
+            assert getattr(request, "skill_space_name") == "Writers"
+            return SimpleNamespace(
+                items=[SimpleNamespace(name="writer", description="basic")]
+            )
+
+        def get_skill_info(self, request: object) -> SimpleNamespace:
+            assert getattr(request, "skill_name") == "writer"
+            assert getattr(request, "skill_space_name") == "Writers"
+            return SimpleNamespace(
+                skill_name="writer",
+                description="Write content",
+                skill_md="# Writer",
+            )
+
+    catalog = skill_catalog.StudioSkillCatalog()
+    monkeypatch.setattr(catalog, "_client", lambda _region: FakeClient())
+
+    result = await catalog.list_skills(space_id="space-1", region="cn-beijing")
+
+    assert result == {
+        "items": [
+            {
+                "skillId": "",
+                "skillName": "writer",
+                "skillDescription": "Write content",
+                "version": "",
+                "skillStatus": "",
+                "lookupByName": True,
+                "degraded": True,
+            }
+        ],
+        "totalCount": 1,
+        "degraded": True,
+        "warnings": ["部分关联异常，已恢复可读取技能"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_skill_catalog_does_not_fallback_for_other_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeClient:
+        def list_skills_by_skill_space(self, request: object) -> SimpleNamespace:
+            del request
+            raise RuntimeError("AccessDenied")
+
+        def list_skills_by_space_id(self, request: object) -> SimpleNamespace:
+            del request
+            raise AssertionError("must not fallback")
+
+    catalog = skill_catalog.StudioSkillCatalog()
+    monkeypatch.setattr(catalog, "_client", lambda _region: FakeClient())
+
+    with pytest.raises(skill_catalog.StudioSkillCatalogError) as raised:
+        await catalog.list_skills(space_id="space-1", region="cn-beijing")
+
+    assert raised.value.status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_skill_catalog_requires_exact_missing_skill_error_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SimilarError(RuntimeError):
+        code = "ResourceNotFound.skillset"
+
+    class FakeClient:
+        def list_skills_by_skill_space(self, request: object) -> SimpleNamespace:
+            del request
+            raise SimilarError("ResourceNotFound.skill")
+
+        def list_skills_by_space_id(self, request: object) -> SimpleNamespace:
+            del request
+            raise AssertionError("must not fallback for a similar code")
+
+    catalog = skill_catalog.StudioSkillCatalog()
+    monkeypatch.setattr(catalog, "_client", lambda _region: FakeClient())
+
+    with pytest.raises(skill_catalog.StudioSkillCatalogError) as raised:
+        await catalog.list_skills(space_id="space-1", region="cn-beijing")
+
+    assert raised.value.status_code == 502
+
+
+@pytest.mark.asyncio
 async def test_skill_catalog_normalizes_public_findskill_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
