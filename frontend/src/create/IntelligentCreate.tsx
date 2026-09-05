@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   listModelOptions,
   type ModelOption,
 } from "../adk/client";
 import type { IntelligentDevelopmentReleaseRef } from "../blocks";
+import { localeCompatibleBackendText } from "../i18n/locales";
 import { isImeCompositionEvent } from "../ui/composerKeyboard";
 import {
   NewChatCompactSelect,
@@ -51,9 +53,9 @@ export interface IntelligentCreateBaseVersion {
 
 export type IntelligentPreparationStage = "preparing" | "starting";
 
-const PREPARATION_MESSAGES: Record<IntelligentPreparationStage, string> = {
-  preparing: "正在创建任务环境…",
-  starting: "环境已就绪，正在启动 Codex…",
+const PREPARATION_MESSAGE_KEYS: Record<IntelligentPreparationStage, string> = {
+  preparing: "intelligent.preparation.preparing",
+  starting: "intelligent.preparation.starting",
 };
 
 function isSelectableModel(model: ModelOption): boolean {
@@ -79,14 +81,15 @@ function IntelligentModelSelect({
   disabled,
   onRetry,
 }: IntelligentModelSelectProps) {
+  const { t } = useTranslation("create");
   return (
     <NewChatCompactSelect
-      label="模型"
+      label={t("intelligent.model.label")}
       hideLabel
       value={value}
       options={options}
       onChange={onChange}
-      placeholder="选择模型"
+      placeholder={t("intelligent.model.placeholder")}
       searchable
       loading={loading}
       error={error}
@@ -129,6 +132,7 @@ export function IntelligentGoalPanel({
   baseVersion?: IntelligentCreateBaseVersion;
   onClearBaseVersion?: () => void;
 }) {
+  const { t, i18n } = useTranslation("create");
   const [goal, setGoal] = useState("");
   const [models, setModels] = useState<ModelOption[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
@@ -151,7 +155,7 @@ export function IntelligentGoalPanel({
       description: [
         model.id,
         model.vendorName,
-        model.lifecycleStatus === "Retiring" ? "即将下线" : "",
+        model.lifecycleStatus === "Retiring" ? t("intelligent.model.retiring") : "",
       ]
         .filter(Boolean)
         .join(" · "),
@@ -163,16 +167,19 @@ export function IntelligentGoalPanel({
       options.unshift({
         value: displayModelId,
         label: displayModelId,
-        description: "当前配置",
+        description: t("intelligent.model.currentConfiguration"),
       });
     }
     return options;
-  }, [displayModelId, selectableModels]);
+  }, [displayModelId, selectableModels, t]);
   const unavailableReason = loading
-    ? "正在检查智能开发能力…"
+    ? t("intelligent.availability.checking")
     : capabilities?.enabled
       ? ""
-      : capabilities?.reason || (error ? "" : "当前无法使用智能模式，请返回后重试。");
+      : localeCompatibleBackendText(
+          capabilities?.reason,
+          i18n.resolvedLanguage || i18n.language,
+        ) || (error ? "" : t("intelligent.availability.unavailable"));
   const submitDisabled = loading || creating || unavailable || !goal.trim();
 
   useEffect(() => {
@@ -190,7 +197,7 @@ export function IntelligentGoalPanel({
       .catch((cause: unknown) => {
         if (!controller.signal.aborted) {
           setModelsError(
-            cause instanceof Error ? cause.message : "加载模型列表失败",
+            cause instanceof Error ? cause.message : t("intelligent.model.loadError"),
           );
         }
       })
@@ -198,7 +205,7 @@ export function IntelligentGoalPanel({
         if (!controller.signal.aborted) setModelsLoading(false);
       });
     return () => controller.abort();
-  }, [modelsReloadKey]);
+  }, [modelsReloadKey, t]);
 
   useEffect(() => {
     if (
@@ -247,29 +254,29 @@ export function IntelligentGoalPanel({
       <div className="ic-goal-heading">
         <span className="ic-create-icon-wrap"><IntelligentCreateIcon /></span>
         <div>
-          <h2>{baseVersion ? "继续优化项目" : "从目标开始"}</h2>
+          <h2>{baseVersion ? t("intelligent.goal.continueTitle") : t("intelligent.goal.title")}</h2>
         </div>
       </div>
       <p className="ic-goal-hint">
         {baseVersion
-          ? "说明这次要调整的内容，完成后会保存为新版本。"
-          : "只需说明 Agent 要解决的问题；如有影响结果的关键信息，会在开始前向你确认。"}
+          ? t("intelligent.goal.continueHint")
+          : t("intelligent.goal.hint")}
       </p>
       {baseVersion ? (
         <div className="ic-selected-base">
-          <span>基于</span>
+          <span>{t("intelligent.goal.basedOn")}</span>
           <strong title={`${baseVersion.projectName} · ${baseVersion.versionLabel}`}>
             {baseVersion.projectName} · {baseVersion.versionLabel}
           </strong>
           {onClearBaseVersion ? (
             <button type="button" onClick={onClearBaseVersion}>
-              取消选择
+              {t("intelligent.goal.clearSelection")}
             </button>
           ) : null}
         </div>
       ) : null}
       <label className="ic-goal-label" htmlFor="intelligent-goal">
-        {baseVersion ? "优化目标" : "目标描述"}
+        {baseVersion ? t("intelligent.goal.optimizationLabel") : t("intelligent.goal.label")}
       </label>
       <div className="ic-composer">
         <textarea
@@ -280,8 +287,8 @@ export function IntelligentGoalPanel({
           onChange={(event) => setGoal(event.target.value)}
           onKeyDown={onKeyDown}
           placeholder={baseVersion
-            ? "例如：增加数据来源标注，并在信息不足时先向用户确认"
-            : "例如：创建一个能读取销售数据、生成周报并校验输出格式的 Agent"}
+            ? t("intelligent.goal.optimizationPlaceholder")
+            : t("intelligent.goal.placeholder")}
           rows={6}
           disabled={loading || creating || unavailable}
           autoFocus
@@ -303,7 +310,7 @@ export function IntelligentGoalPanel({
           <div className="ic-action-buttons">
             {creating ? (
               <button type="button" className="ic-secondary" onClick={onCancel}>
-                取消
+                {t("common.cancel")}
               </button>
             ) : null}
             <button
@@ -313,7 +320,7 @@ export function IntelligentGoalPanel({
               disabled={submitDisabled}
               aria-busy={creating}
             >
-              {creating ? "准备中…" : baseVersion ? "开始优化" : "开始构建"}
+              {creating ? t("intelligent.actions.preparing") : baseVersion ? t("intelligent.actions.optimize") : t("intelligent.actions.build")}
             </button>
           </div>
         </div>
@@ -326,12 +333,12 @@ export function IntelligentGoalPanel({
           aria-atomic="true"
         >
           <div>
-            <strong>目标已收到，马上开始实现</strong>
+            <strong>{t("intelligent.preparation.accepted")}</strong>
             <TextShimmer as="p" duration={2.4} spread={18}>
-              {PREPARATION_MESSAGES[preparationStage]}
+              {t(PREPARATION_MESSAGE_KEYS[preparationStage])}
             </TextShimmer>
             <p className="ic-preparation-next">
-              接下来会先梳理目标和实现方式，再编写、运行和验证 Agent。
+              {t("intelligent.preparation.next")}
             </p>
           </div>
         </div>
@@ -361,6 +368,7 @@ export function IntelligentCreate({
   onDeploy,
   initialBaseVersion,
 }: IntelligentCreateProps) {
+  const { t } = useTranslation("create");
   const [baseVersion, setBaseVersion] = useState<IntelligentCreateBaseVersion | undefined>(
     initialBaseVersion,
   );
@@ -368,10 +376,10 @@ export function IntelligentCreate({
   return (
     <section className="ic-root" aria-labelledby="intelligent-create-title">
       <header className="ic-header">
-        <button type="button" className="ic-back" onClick={onBack}>返回</button>
+        <button type="button" className="ic-back" onClick={onBack}>{t("common.back")}</button>
         <div>
-          <h1 id="intelligent-create-title">智能模式</h1>
-          <p>描述目标后，沙箱中的 Codex 会判断你的意图，完成构建、调试和临时云端验证。</p>
+          <h1 id="intelligent-create-title">{t("intelligent.title")}</h1>
+          <p>{t("intelligent.subtitle")}</p>
         </div>
       </header>
 

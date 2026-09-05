@@ -21,7 +21,7 @@ async function importTsxBundle(relativePath) {
   const result = await build({
     entryPoints: [fileURLToPath(new URL(relativePath, import.meta.url))],
     bundle: true,
-    external: ["react"],
+    external: ["react", "react-i18next", "i18next"],
     format: "cjs",
     platform: "node",
     write: false,
@@ -33,6 +33,29 @@ async function importTsxBundle(relativePath) {
     module.exports,
   );
   return module.exports;
+}
+
+const conversationChinese = JSON.parse(readFileSync(
+  new URL("../src/i18n/resources/zh-CN/conversation.json", import.meta.url),
+  "utf8",
+));
+
+async function renderTokenUsage(React, renderToStaticMarkup, Component, props) {
+  const i18nextModule = require("i18next");
+  const i18next = (i18nextModule.default ?? i18nextModule).createInstance();
+  await i18next.init({
+    lng: "zh-CN",
+    fallbackLng: "zh-CN",
+    resources: { "zh-CN": { conversation: conversationChinese } },
+  });
+  const { I18nextProvider } = require("react-i18next");
+  return renderToStaticMarkup(
+    React.createElement(
+      I18nextProvider,
+      { i18n: i18next },
+      React.createElement(Component, props),
+    ),
+  );
 }
 
 test("tracks current context separately from cumulative session usage", async () => {
@@ -264,8 +287,7 @@ test("renders exactly one hundred accessible context cells", async () => {
   const { TokenUsageIndicator } = await importTsxBundle(
     "../src/ui/TokenUsageIndicator.tsx",
   );
-  const html = renderToStaticMarkup(
-    React.createElement(TokenUsageIndicator, {
+  const html = await renderTokenUsage(React, renderToStaticMarkup, TokenUsageIndicator, {
       cloudProvider: "volcengine",
       modelName: "doubao-seed-2-1-pro-260628",
       systemTokenEstimate: 2_560,
@@ -286,8 +308,7 @@ test("renders exactly one hundred accessible context cells", async () => {
           cachedContentTokenCount: 0,
         },
       },
-    }),
-  );
+    });
 
   assert.equal((html.match(/class="token-context-cell"/g) ?? []).length, 100);
   assert.match(html, /role="meter"/);
@@ -305,8 +326,7 @@ test("explains inseparable prompt tokens for legacy runtimes", async () => {
   const { TokenUsageIndicator } = await importTsxBundle(
     "../src/ui/TokenUsageIndicator.tsx",
   );
-  const html = renderToStaticMarkup(
-    React.createElement(TokenUsageIndicator, {
+  const html = await renderTokenUsage(React, renderToStaticMarkup, TokenUsageIndicator, {
       cloudProvider: "volcengine",
       modelName: "deepseek-v4-pro-260425",
       systemTokenEstimate: null,
@@ -327,8 +347,7 @@ test("explains inseparable prompt tokens for legacy runtimes", async () => {
           cachedContentTokenCount: 0,
         },
       },
-    }),
-  );
+    });
 
   assert.match(html, /系统与工具<\/dt><dd>未知<\/dd>/);
   assert.match(html, /提示词（含系统）/);
@@ -370,12 +389,13 @@ test("renders an accessible context meter immediately left of send", () => {
   assert.match(indicatorSource, /token-context-breakdown/);
   assert.match(indicatorSource, /token-context-summary/);
   assert.match(indicatorSource, /cell\.slices\.map/);
-  assert.match(indicatorSource, /系统与工具/);
-  assert.match(indicatorSource, /输入与历史/);
-  assert.match(indicatorSource, /输出与思考/);
-  assert.match(indicatorSource, /剩余/);
-  assert.match(indicatorSource, /估算/);
-  assert.match(indicatorSource, /当前 Runtime 未提供模型信息/);
+  assert.match(indicatorSource, /tokenUsage\.segments/);
+  assert.match(indicatorSource, /tokenUsage\.estimated/);
+  assert.match(indicatorSource, /tokenUsage\.unknownRuntime/);
+  assert.equal(conversationChinese.tokenUsage.segments.system, "系统与工具");
+  assert.equal(conversationChinese.tokenUsage.segments.input, "输入与历史");
+  assert.equal(conversationChinese.tokenUsage.segments.output, "输出与思考");
+  assert.equal(conversationChinese.tokenUsage.segments.remaining, "剩余");
   assert.match(indicatorSource, /rawPercentage > 0 && rawPercentage < 1/);
   assert.match(
     appSource,

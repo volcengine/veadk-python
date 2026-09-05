@@ -1,4 +1,5 @@
 import type { CloudRegion } from "./cloudProvider";
+import { adkT } from "./i18n";
 
 export type GitHubAutomationRegion = CloudRegion;
 
@@ -45,16 +46,16 @@ const FILE_PATH_PATTERN = /^[A-Za-z0-9._/-]+$/;
 
 function sanitizeGitHubError(status: number, payload: GitHubPayload | null, token: string): string {
   if (status === 401 || status === 403) {
-    return "GitHub Token 无效或没有仓库写入权限";
+    return adkT("github.invalidToken");
   }
   if (status === 404) {
-    return "仓库、分支或文件不存在，或 Token 无权访问";
+    return adkT("github.notFound");
   }
   if (status === 422) {
-    return "GitHub 拒绝了提交，请检查分支和文件状态";
+    return adkT("github.rejectedCommit");
   }
   const detail = String(payload?.message || "").split(token).join("***").trim();
-  return detail.slice(0, 240) || `GitHub 请求失败（HTTP ${status}）`;
+  return detail.slice(0, 240) || adkT("github.requestFailed", { status });
 }
 
 async function requestGitHub<T extends GitHubPayload | null>(
@@ -84,7 +85,7 @@ async function requestGitHub<T extends GitHubPayload | null>(
     });
   } catch (error) {
     if (options.signal.aborted) throw error;
-    throw new Error("连接 GitHub 失败，请检查网络后重试");
+    throw new Error(adkT("github.networkFailed"));
   }
 
   const payload = await response.json().catch(() => null) as T;
@@ -122,7 +123,7 @@ export function normalizeGitHubRepository(value: string): string {
     try {
       repositoryUrl = new URL(candidate);
     } catch {
-      throw new Error("GitHub Repo 格式应为 owner/repository");
+      throw new Error(adkT("github.invalidRepositoryFormat"));
     }
     if (
       repositoryUrl.protocol !== "https:"
@@ -132,13 +133,13 @@ export function normalizeGitHubRepository(value: string): string {
       || repositoryUrl.search
       || repositoryUrl.hash
     ) {
-      throw new Error("仅支持安全的 github.com 仓库地址");
+      throw new Error(adkT("github.insecureRepositoryUrl"));
     }
     candidate = repositoryUrl.pathname;
   }
   candidate = candidate.replace(/\.git$/, "").replace(/^\/+|\/+$/g, "");
   if (!REPOSITORY_PATTERN.test(candidate)) {
-    throw new Error("GitHub Repo 格式应为 owner/repository");
+    throw new Error(adkT("github.invalidRepositoryFormat"));
   }
   return candidate;
 }
@@ -151,7 +152,7 @@ export function normalizeRepositoryPath(value: string, fallback = "."): string {
     || !FILE_PATH_PATTERN.test(candidate)
     || parts.includes("..")
   ) {
-    throw new Error("Agent 项目目录必须是仓库内的安全相对路径");
+    throw new Error(adkT("github.unsafeProjectPath"));
   }
   return candidate.replace(/\/+$/, "") || ".";
 }
@@ -162,14 +163,14 @@ export async function createGitHubPullRequest(
 ): Promise<GitHubPullRequestResult> {
   const repository = normalizeGitHubRepository(spec.repository);
   const baseBranch = spec.baseBranch.trim() || "main";
-  if (!spec.token.trim()) throw new Error("GitHub Token 不能为空");
+  if (!spec.token.trim()) throw new Error(adkT("github.tokenRequired"));
   if (!BRANCH_PATTERN.test(baseBranch) || baseBranch.includes("..")) {
-    throw new Error("目标分支格式不正确");
+    throw new Error(adkT("github.invalidBaseBranch"));
   }
   if (!BRANCH_PATTERN.test(spec.branchPrefix)) {
-    throw new Error("发布分支格式不正确");
+    throw new Error(adkT("github.invalidPublishBranch"));
   }
-  if (!spec.files.length) throw new Error("没有需要提交的文件");
+  if (!spec.files.length) throw new Error(adkT("github.noFiles"));
 
   const files = spec.files.map((file) => ({
     ...file,
@@ -192,7 +193,7 @@ export async function createGitHubPullRequest(
     },
   );
   const baseSha = baseRef.payload.object?.sha;
-  if (!baseSha) throw new Error("目标分支缺少有效 Git SHA");
+  if (!baseSha) throw new Error(adkT("github.missingBaseSha"));
 
   const branch = createBranchName(spec.branchPrefix);
   await requestGitHub(`${repoPath}/git/refs`, {
@@ -216,10 +217,10 @@ export async function createGitHubPullRequest(
         },
       );
       if (file.mustBeNew && existing.status === 200) {
-        throw new Error(`目标仓库中已存在 ${file.path}，未覆盖现有文件`);
+        throw new Error(adkT("github.fileAlreadyExists", { path: file.path }));
       }
       if (existing.status === 200 && !existing.payload.sha) {
-        throw new Error(`目标路径 ${file.path} 不是可更新的文件`);
+        throw new Error(adkT("github.pathNotUpdatable", { path: file.path }));
       }
 
       await requestGitHub(`${repoPath}/contents/${encodedPath}`, {
@@ -249,7 +250,7 @@ export async function createGitHubPullRequest(
       },
     });
     if (!pullRequest.payload.number || !pullRequest.payload.html_url) {
-      throw new Error("GitHub 未返回有效的 Pull Request");
+      throw new Error(adkT("github.invalidPullRequest"));
     }
     branchCreated = false;
     return {

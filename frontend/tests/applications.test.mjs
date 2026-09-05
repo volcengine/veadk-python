@@ -100,12 +100,12 @@ test("places Automation below scheduled tasks without a beta badge", () => {
   assert.match(sidebarSource, /onApplications: \(\) => void/);
   assert.match(sidebarSource, /function ApplicationsIcon/);
   assert.equal((sidebarSource.match(/<circle /g) ?? []).length >= 4, true);
-  assert.match(sidebarSource, /aria-label="自动化"/);
-  assert.match(sidebarSource, /<span className="sidebar-nav-label">自动化<\/span>/);
+  assert.match(sidebarSource, /aria-label=\{t\("navigation\.automations"\)\}/);
+  assert.match(sidebarSource, /<span className="sidebar-nav-label">\{t\("navigation\.automations"\)\}<\/span>/);
   assert.doesNotMatch(sidebarSource, /sidebar-cronjobs-beta|>\s*Beta\s*</);
   const searchIndex = sidebarSource.indexOf("<SearchButton");
-  const cronJobsIndex = sidebarSource.indexOf('aria-label="定时任务"');
-  const applicationsIndex = sidebarSource.indexOf('aria-label="自动化"');
+  const cronJobsIndex = sidebarSource.indexOf('aria-label={t("navigation.cronjobs")}');
+  const applicationsIndex = sidebarSource.indexOf('aria-label={t("navigation.automations")}');
   assert.equal(searchIndex >= 0, true);
   assert.equal(searchIndex < cronJobsIndex, true);
   assert.equal(cronJobsIndex < applicationsIndex, true);
@@ -116,11 +116,11 @@ test("places Automation below scheduled tasks without a beta badge", () => {
 });
 
 test("renders category-filtered automations from independent capability modules", () => {
-  assert.match(applicationsSource, /<h1>自动化<\/h1>/);
-  assert.match(applicationsSource, /aria-label="搜索自动化"/);
-  assert.match(applicationsSource, /placeholder="搜索自动化"/);
-  assert.match(registrySource, /label: "研发"/);
-  assert.match(registrySource, /label: "消息渠道"/);
+  assert.match(applicationsSource, /<h1>\{t\("title"\)\}<\/h1>/);
+  assert.match(applicationsSource, /aria-label=\{t\("search"\)\}/);
+  assert.match(applicationsSource, /placeholder=\{t\("search"\)\}/);
+  assert.match(registrySource, /label: "Development"/);
+  assert.match(registrySource, /label: "Messaging channels"/);
   const registryListIndex = registrySource.indexOf("export const AUTOMATIONS");
   const templateIndex = registrySource.indexOf("templateProjectAutomation", registryListIndex);
   const deliveryIndex = registrySource.indexOf("runtimeDeliveryAutomation", registryListIndex);
@@ -130,13 +130,13 @@ test("renders category-filtered automations from independent capability modules"
   assert.equal(templateIndex < deliveryIndex, true);
   assert.equal(deliveryIndex < reviewIndex, true);
   assert.equal(reviewIndex < feishuIndex, true);
-  assert.match(templateSource, /在您的仓库中创建一个可持续交付到 AgentKit Runtime 的最简智能体/);
-  assert.match(deliverySource, /name: "AgentKit Runtime 持续交付"/);
-  assert.match(reviewSource, /name: "PR 自动评审"/);
-  assert.match(feishuSource, /name: "飞书机器人"/);
+  assert.match(templateSource, /name: "Import starter project"/);
+  assert.match(deliverySource, /name: "AgentKit Runtime delivery"/);
+  assert.match(reviewSource, /name: "Automated PR review"/);
+  assert.match(feishuSource, /name: "Feishu bot"/);
   assert.match(feishuSource, /badge: "Beta"/);
   assert.match(feishuSource, /category: "channels"/);
-  assert.match(feishuSource, /直接接入 AgentKit Runtime/);
+  assert.match(feishuSource, /connect its messages directly to AgentKit Runtime/);
   assert.match(applicationsSource, /application\.category === activeCategory/);
   assert.match(applicationsSource, /className="application-card"[\s\S]*?onClick=\{\(\) => onOpen\(application\.id\)\}/);
   assert.match(applicationsSource, /isCodingAgentsAutomationAvailable\(window\.location\.hostname\)/);
@@ -152,30 +152,30 @@ test("renders category-filtered automations from independent capability modules"
   assert.match(githubLogoSource, /GitHub's official mark/);
   assert.match(githubLogoSource, /fill="currentColor"/);
   assert.match(applicationsSource, /useDeferredValue\(query\)/);
-  assert.match(applicationsSource, /没有匹配的自动化/);
+  assert.match(applicationsSource, /t\("emptyTitle"\)/);
   assert.match(applicationsStyles, /grid-template-columns: repeat\(auto-fill, minmax\(min\(280px, 100%\), 1fr\)\)/);
 });
 
 test("GitHub detail keeps credentials ephemeral and exposes accessible submission states", () => {
   assert.match(githubSource, /getGitHubAutomation\(automation\)/);
-  assert.match(githubSource, /<h1>\{definition\.title\}<\/h1>/);
-  assert.match(githubSource, /aria-label="返回自动化列表"/);
+  assert.match(githubSource, /<h1>\{t\(`cards\.\$\{automation\}\.title`\)\}<\/h1>/);
+  assert.match(githubSource, /aria-label=\{t\("backToAutomations"\)\}/);
   assert.doesNotMatch(githubSource, /<h2>持续发布到 AgentKit Runtime<\/h2>/);
   assert.doesNotMatch(githubSource, /权限与安全|PR 记录|role="tablist"/);
   assert.match(githubSource, /type=\{showToken \? "text" : "password"\}/);
   assert.match(githubSource, /autoComplete="off"/);
-  assert.match(githubSource, /获取 Token/);
+  assert.match(githubSource, /t\("github\.getToken"\)/);
   assert.match(githubSource, /personal-access-tokens\/new/);
-  assert.match(githubSource, /required \? "必填" : "可选"/);
+  assert.match(githubSource, /required \? t\("github\.required"\) : t\("github\.optional"\)/);
   assert.match(githubSource, /definition\.fields\.map\(field\)/);
   assert.match(githubSource, /cloudRegionOptions\(cloudProvider\)/);
   assert.match(githubSource, /definition\.secrets\(\{ cloudProvider \}\)/);
   assert.doesNotMatch(githubSource, /automation === "review"|automation === "template"/);
   assert.match(templateSource, /normalizeRepositoryPath\(values\.projectPath, "agentkit-basic-agent"\)/);
   assert.match(reviewSource, /Sandbox Tool ID/);
-  assert.match(reviewSource, /模型 API 地址/);
+  assert.match(reviewSource, /Model API URL/);
   assert.match(githubSource, /className="pp-region-trigger"/);
-  assert.match(githubSource, /role="listbox" aria-label="地域"/);
+  assert.match(githubSource, /role="listbox" aria-label=\{t\("github\.region"\)\}/);
   assert.doesNotMatch(githubSource, /<select/);
   assert.match(appSource, /<GitHubIntegration[\s\S]*?cloudProvider=\{cloudProvider\}/);
   assert.match(templateSource, /cloudCredentialSecretLabels\(cloudProvider\)/);
@@ -204,7 +204,7 @@ test("GitHub detail keeps credentials ephemeral and exposes accessible submissio
     githubStyles,
     /\.github-region-picker \.pp-region-trigger,[\s\S]*?font-size: 14px;/,
   );
-  assert.match(githubSource, /提交 PR 中/);
+  assert.match(githubSource, /t\("github\.submitting"\)/);
   assert.match(githubSource, /role="alert"/);
   assert.match(githubSource, /event\.nativeEvent\.isComposing/);
   assert.doesNotMatch(githubSource, /localStorage|sessionStorage/);
@@ -214,6 +214,9 @@ test("GitHub detail keeps credentials ephemeral and exposes accessible submissio
   assert.match(deliverySource, /createGitHubPullRequest/);
   assert.match(templateSource, /createGitHubPullRequest/);
   assert.match(reviewSource, /createGitHubPullRequest/);
+  assert.match(templateSource, /automationT\("cards\.template\.pullRequest\.title"\)/);
+  assert.match(deliverySource, /automationT\("cards\.delivery\.pullRequest\.title"\)/);
+  assert.match(reviewSource, /automationT\("cards\.review\.pullRequest\.title"\)/);
   assert.doesNotMatch(apiSource, /\/web\/integrations\/github/);
   assert.doesNotMatch(cliFrontendSource, /frontend_github_integration/);
   assert.equal(
@@ -235,11 +238,11 @@ test("Feishu detail deploys a new basic Runtime from customer credentials", () =
   assert.match(feishuDetailSource, /label htmlFor="feishu-app-id"/);
   assert.match(feishuDetailSource, /label htmlFor="feishu-app-secret"/);
   assert.match(feishuDetailSource, /className="feishu-region-trigger"/);
-  assert.match(feishuDetailSource, /role="listbox"[\s\S]*?aria-label="部署地域"/);
-  assert.match(feishuDetailSource, /创建飞书机器人 Runtime/);
-  assert.match(feishuDetailSource, /App Secret 仅用于本次部署/);
+  assert.match(feishuDetailSource, /role="listbox"[\s\S]*?aria-label=\{t\("feishu\.region"\)\}/);
+  assert.match(feishuDetailSource, /t\("feishu\.create"\)/);
+  assert.match(feishuDetailSource, /t\("feishu\.credentials\.description"\)/);
   assert.match(feishuDetailSource, /cancelAgentkitDeployment/);
-  assert.match(feishuDetailSource, /window\.confirm\("取消部署将停止任务并清理已创建的 Runtime/);
+  assert.match(feishuDetailSource, /window\.confirm\(t\("feishu\.confirmCancel"\)\)/);
   assert.match(feishuDetailSource, /event\.nativeEvent\.isComposing/);
   assert.match(feishuDetailSource, /event\.key === "ArrowDown"/);
   assert.match(feishuDetailSource, /event\.key === "ArrowUp"/);
@@ -256,6 +259,8 @@ test("Feishu detail deploys a new basic Runtime from customer credentials", () =
   assert.match(feishuDeploymentSource, /FEISHU_APP_SECRET/);
   assert.match(feishuDeploymentSource, /minInstance: 1/);
   assert.match(feishuDeploymentSource, /maxInstance: 1/);
+  assert.match(feishuDeploymentSource, /automationT\("feishu\.generatedAgent\.description"\)/);
+  assert.match(feishuDeploymentSource, /automationT\("feishu\.generatedAgent\.instruction"\)/);
   assert.doesNotMatch(feishuDeploymentSource, /envValues/);
   assert.match(feishuStyles, /\.feishu-section-panel \{ width: 100%;/);
   assert.match(feishuStyles, /\.feishu-region-trigger \{[\s\S]*?height: 36px;[\s\S]*?font-size: 12px;/);
@@ -268,10 +273,10 @@ test("Website integration creates an Origin-bound embed token and chat loader", 
   assert.match(registrySource, /websiteIntegrationAutomation/);
   assert.match(appSource, /applicationsView === "website-integration"/);
   assert.match(appSource, /<WebsiteIntegration/);
-  assert.match(websiteIntegrationSource, /<h1>网站集成<\/h1>/);
-  assert.match(websiteIntegrationSource, /添加网站/);
+  assert.match(websiteIntegrationSource, /<h1>\{t\("title"\)\}<\/h1>/);
+  assert.match(websiteIntegrationSource, /t\("addWebsite"\)/);
   assert.match(websiteIntegrationSource, /AgentKit Runtime/);
-  assert.match(websiteIntegrationSource, /引入方法/);
+  assert.match(websiteIntegrationSource, /t\("embedMethod"\)/);
   assert.match(websiteIntegrationSource, /CopyButton/);
   assert.match(websiteIntegrationSource, /getRuntimes/);
   assert.match(websiteIntegrationSource, /probeRuntimeApps/);

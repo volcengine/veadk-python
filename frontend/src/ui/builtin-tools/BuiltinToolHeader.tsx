@@ -1,4 +1,5 @@
 import { TextShimmer } from "../text-shimmer/TextShimmer";
+import { useTranslation } from "react-i18next";
 import { ToolDisclosureIcon } from "./icons";
 import type { BuiltinToolDefinition } from "./registry";
 import "./builtin-tools.css";
@@ -16,8 +17,13 @@ export function BuiltinToolHeader({
   open: boolean;
   onToggle: () => void;
 }) {
+  const { t } = useTranslation("conversation");
   const Icon = definition.icon;
-  const statusLabel = label ?? (done ? definition.doneLabel : definition.runningLabel);
+  const fallback = done ? definition.doneLabel : definition.runningLabel;
+  const statusLabel = label ?? t(
+    `blocks.tools.${definition.name}.${done ? "done" : "running"}`,
+    { defaultValue: fallback },
+  );
 
   return (
     <button

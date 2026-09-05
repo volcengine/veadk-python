@@ -17,32 +17,34 @@ export function normalizeSkillError(reason: unknown, fallback: string): Error {
 }
 
 export function SkillErrorDetails({ error }: { error: Error }) {
+  const { t } = useTranslation("skills");
   const metadata = error as ErrorMetadata;
   const originalMessage = metadata.originalError?.message?.trim();
   const detailLines = [
     typeof metadata.status === "number"
       ? `HTTP ${metadata.status}${metadata.statusText ? ` ${metadata.statusText}` : ""}`
       : "",
-    metadata.code ? `错误码：${metadata.code}` : "",
-    metadata.originalError?.type ? `错误类型：${metadata.originalError.type}` : "",
+    metadata.code ? t("errorDetails.code", { code: metadata.code }) : "",
+    metadata.originalError?.type ? t("errorDetails.type", { type: metadata.originalError.type }) : "",
     metadata.originalError?.repr && metadata.originalError.repr !== originalMessage
-      ? `异常表示：${metadata.originalError.repr}`
+      ? t("errorDetails.representation", { value: metadata.originalError.repr })
       : "",
-    metadata.rawResponse?.trim() ? `服务端原始响应：\n${metadata.rawResponse.trim()}` : "",
+    metadata.rawResponse?.trim() ? t("errorDetails.rawResponse", { value: metadata.rawResponse.trim() }) : "",
   ].filter(Boolean);
 
   return (
     <div className="skill-error-details">
       <div className="skill-error-details__summary">{error.message}</div>
       {originalMessage ? (
-        <div className="skill-error-details__original">原始错误：{originalMessage}</div>
+        <div className="skill-error-details__original">{t("errorDetails.original", { message: originalMessage })}</div>
       ) : null}
       {detailLines.length > 0 ? (
         <details>
-          <summary>详细信息</summary>
+          <summary>{t("errorDetails.details")}</summary>
           <pre>{detailLines.join("\n")}</pre>
         </details>
       ) : null}
     </div>
   );
 }
+import { useTranslation } from "react-i18next";

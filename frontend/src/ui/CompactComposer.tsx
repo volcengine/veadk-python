@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 
 import { isImeCompositionEvent } from "./composerKeyboard";
 import { ComposerSendIcon } from "./icons/ComposerIcons";
@@ -19,12 +20,13 @@ export interface CompactComposerProps {
  */
 export function CompactComposer({
   value,
-  placeholder = "输入消息…",
+  placeholder,
   busy = false,
   disabled = false,
   onChange,
   onSubmit,
 }: CompactComposerProps) {
+  const { t } = useTranslation("conversation");
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const canSend = Boolean(value.trim()) && !busy && !disabled;
 
@@ -51,8 +53,8 @@ export function CompactComposer({
             rows={1}
             value={value}
             disabled={disabled}
-            placeholder={placeholder}
-            aria-label="输入消息"
+            placeholder={placeholder ?? t("composer.placeholder")}
+            aria-label={t("composer.inputAria")}
             onChange={(event) => onChange(event.target.value)}
             onKeyDown={(event) => {
               if (isImeCompositionEvent(event.nativeEvent)) return;
@@ -68,7 +70,7 @@ export function CompactComposer({
             type="submit"
             className="comp-send"
             disabled={!canSend}
-            aria-label={busy ? "正在生成" : "发送"}
+            aria-label={busy ? t("composer.generating") : t("composer.send")}
           >
             <ComposerSendIcon className="icon" />
           </button>

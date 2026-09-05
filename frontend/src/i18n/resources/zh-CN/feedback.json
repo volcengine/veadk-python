@@ -1,0 +1,56 @@
+{
+  "title": "问题反馈",
+  "descriptionLabel": "问题描述",
+  "commonIssues": "常见问题",
+  "cancel": "取消",
+  "done": "完成",
+  "submit": "提交反馈",
+  "submitting": "正在上报…",
+  "success": {
+    "title": "上报成功，感谢您的反馈",
+    "description": "AgentKit 团队会尽快查看您提交的问题。"
+  },
+  "dialog": {
+    "close": "关闭问题反馈",
+    "intro": "请选择遇到的问题，也可以补充具体表现。",
+    "privacy": "您的对话数据将会上报到 AgentKit 团队，请注意隐私保护。",
+    "descriptionPlaceholder": "请描述问题发生时的表现（选填）",
+    "issues": {
+      "slow": "执行速度慢",
+      "crash": "运行崩溃",
+      "incorrect": "结果不准确",
+      "tool_error": "工具调用失败",
+      "other": "其他问题"
+    }
+  },
+  "page": {
+    "description": "告诉我们您在使用 AgentKit Studio 时遇到的问题。",
+    "module": "所属模块",
+    "modules": {
+      "conversation": "对话",
+      "agents": "智能体",
+      "applications": "自动化",
+      "search": "搜索",
+      "other": "其他"
+    },
+    "commonIssuesMultiple": "常见问题（可多选）",
+    "issueTypes": "问题类型",
+    "issues": {
+      "page_slow": "页面加载慢",
+      "feature_unavailable": "功能无法使用",
+      "display_error": "页面显示异常",
+      "no_response": "操作无响应",
+      "other": "其他问题"
+    },
+    "descriptionPlaceholder": "请描述问题发生时的页面、操作和表现",
+    "quickAdd": "快捷补充",
+    "suggestionsLabel": "问题描述推荐",
+    "suggestions": {
+      "noResponse": "点击后没有反应",
+      "loading": "页面一直处于加载状态",
+      "incomplete": "部分内容显示不完整",
+      "error": "操作后出现错误提示"
+    },
+    "privacy": "您的数据将会上报到 AgentKit 团队，请注意隐私保护。"
+  }
+}

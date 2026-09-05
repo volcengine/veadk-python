@@ -53,7 +53,7 @@ test("asks homepage creation users for a publish Space only after generation", (
   assert.match(generationSource, /const needsPublishSpace = operation === "create" && !space/);
   assert.match(
     generationSource,
-    /active\.task\?\.state === "ready"[\s\S]*?needsPublishSpace[\s\S]*?<SkillConfigSelect[\s\S]*?label="上传到 Skill Space"/,
+    /active\.task\?\.state === "ready"[\s\S]*?needsPublishSpace[\s\S]*?<SkillConfigSelect[\s\S]*?label=\{t\("generation\.uploadToSpace"\)\}/,
   );
   assert.match(generationSource, /disabled=\{Boolean\(action\) \|\| Boolean\(publishedId\) \|\| !publishSpace\}/);
   assert.match(generationSource, /skillSpaceIds: \[publishSpace\.id\]/);
@@ -67,5 +67,5 @@ test("preserves the current Space for creation launched inside Skill Center", ()
   assert.match(skillCenterSource, /space=\{selectedSpace \?\? undefined\}/);
   assert.match(skillCenterSource, /availableSpaces=\{spaces\}/);
   assert.match(generationSource, /const publishSpace = space \?\? selectedPublishSpace/);
-  assert.match(generationSource, /operation === "optimize" \? "覆盖原 Skill" : needsPublishSpace \? "上传到 Skill Space" : "上传到当前空间"/);
+  assert.match(generationSource, /operation === "optimize" \? t\("generation\.overwrite"\) : needsPublishSpace \? t\("generation\.uploadToSelectedSpace"\) : t\("generation\.uploadToCurrentSpace"\)/);
 });

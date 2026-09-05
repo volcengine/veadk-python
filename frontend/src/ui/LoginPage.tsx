@@ -1,15 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowRight, Github, LogIn } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import type { SiteBranding } from "../adk/client";
 import { fetchProviders, loginTo, USERNAME_RE, type Provider } from "../adk/identity";
 import byteplusLogo from "../assets/byteplus.svg";
 import defaultSiteLogo from "../assets/logo.svg";
 import { TextShimmer } from "./text-shimmer/TextShimmer";
-
-const PROVIDER_POWERED_COPY = {
-  volcengine: "火山引擎 AgentKit 提供企业级 Agent 解决方案",
-  byteplus: "BytePlus AgentKit 提供企业级 Agent 解决方案",
-};
 
 const PROVIDER_LEGAL_URL = {
   volcengine: "https://docs.volcengine.com/docs/86681/1925174?lang=zh",
@@ -29,6 +25,7 @@ export interface LoginPageProps {
 }
 
 export function LoginPage({ branding, cloudProvider, onUsername }: LoginPageProps) {
+  const { t } = useTranslation("shell");
   const [providers, setProviders] = useState<Provider[] | null>(null);
   const [providerError, setProviderError] = useState("");
   const [providerAttempt, setProviderAttempt] = useState(0);
@@ -91,24 +88,31 @@ export function LoginPage({ branding, cloudProvider, onUsername }: LoginPageProp
             <div className="login-provider-error" role="alert">
               <p>{providerError}</p>
               <button type="button" onClick={() => setProviderAttempt((attempt) => attempt + 1)}>
-                重试
+                {t("login.retry")}
               </button>
             </div>
           ) : providers === null ? null : providers.length > 0 ? (
             <>
-              <p className="login-sub">登录以继续使用</p>
+              <p className="login-sub">{t("login.signInToContinue")}</p>
               <div className="login-providers">
                 {providers.map((p) => (
                   <button key={p.id} className="login-btn" onClick={() => loginTo(p.loginUrl)}>
                     {providerIcon(p.id)}
-                    <span>使用 {p.label} 登录</span>
+                    <span>
+                      {t("login.signInWith", {
+                        provider:
+                          p.id === "veidentity"
+                            ? t(`login.identityProvider.${cloudProvider}`)
+                            : p.label,
+                      })}
+                    </span>
                   </button>
                 ))}
               </div>
             </>
           ) : (
             <>
-              <p className="login-sub">输入一个用户名即可开始</p>
+              <p className="login-sub">{t("login.enterUsername")}</p>
               <form
                 className="login-name"
                 onSubmit={(e) => {
@@ -121,14 +125,14 @@ export function LoginPage({ branding, cloudProvider, onUsername }: LoginPageProp
                   className="login-name-input"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder="用户名（字母 + 数字，最多 16 位）"
+                  placeholder={t("login.usernamePlaceholder")}
                   maxLength={16}
                 />
                 <button
                   type="submit"
                   className="login-name-go"
                   disabled={!valid}
-                  aria-label="进入"
+                  aria-label={t("login.enter")}
                 >
                   <ArrowRight className="icon" />
                 </button>
@@ -136,26 +140,26 @@ export function LoginPage({ branding, cloudProvider, onUsername }: LoginPageProp
               {/* Always rendered so the error appearing doesn't shift the input;
                   the line's height is reserved via CSS min-height. */}
               <p className="login-hint" aria-live="polite">
-                {name && !valid ? "只能包含大小写字母和数字，最多 16 位。" : ""}
+                {name && !valid ? t("login.usernameInvalid") : ""}
               </p>
             </>
           )}
 
-          <p className="login-powered">{PROVIDER_POWERED_COPY[cloudProvider]}</p>
+          <p className="login-powered">{t(`login.powered.${cloudProvider}`)}</p>
           <p className="login-legal">
-            继续即表示你已阅读并同意 AgentKit{" "}
+            {t("login.legalPrefix")}{" "}
             <a
               href={PROVIDER_LEGAL_URL[cloudProvider]}
               target="_blank"
               rel="noreferrer"
             >
-              产品和服务条款
+              {t("login.terms")}
             </a>
           </p>
         </div>
       </main>
 
-      <footer className="login-footer">© 2026 VeADK. All rights reserved.</footer>
+      <footer className="login-footer">{t("login.copyright", { year: 2026 })}</footer>
     </div>
   );
 }

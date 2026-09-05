@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Loader2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { addConnection, remoteAppId } from "../adk/connections";
 
 /** Hand-drawn "connect remote agent" mark: a small node-link graph. */
@@ -25,10 +26,11 @@ function AddAgentKitIcon() {
 
 /** Sidebar entry that opens the "add AgentKit agent" form in the main panel. */
 export function AddAgentKitButton({ onClick }: { onClick: () => void }) {
+  const { t } = useTranslation("conversation");
   return (
     <button className="new-chat" onClick={onClick}>
       <AddAgentKitIcon />
-      添加 AgentKit 智能体
+      {t("addAgentKit.title")}
     </button>
   );
 }
@@ -42,6 +44,7 @@ export interface AddAgentKitViewProps {
 /** Form to register a remote AgentKit agent by URL + API key. On submit it
  *  enumerates the endpoint's apps over the ADK protocol and adds them. */
 export function AddAgentKitView({ onAdded, onCancel }: AddAgentKitViewProps) {
+  const { t } = useTranslation("conversation");
   const [url, setUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [name, setName] = useState("");
@@ -57,13 +60,13 @@ export function AddAgentKitView({ onAdded, onCancel }: AddAgentKitViewProps) {
     try {
       const conn = await addConnection(name, url, apiKey, name);
       if (conn.apps.length === 0) {
-        setError("连接成功，但该地址未发现任何 Agent（/list-apps 为空）。");
+        setError(t("addAgentKit.noAgents"));
         setBusy(false);
         return;
       }
       onAdded(remoteAppId(conn.id, conn.apps[0]));
     } catch (e) {
-      setError(`连接失败：${String(e)}。请检查 URL、API Key，以及该网关是否允许跨域。`);
+      setError(t("addAgentKit.connectionFailed", { error: String(e) }));
       setBusy(false);
     }
   }
@@ -71,14 +74,11 @@ export function AddAgentKitView({ onAdded, onCancel }: AddAgentKitViewProps) {
   return (
     <div className="addagent">
       <div className="addagent-card">
-        <h2 className="addagent-title">添加 AgentKit 智能体</h2>
-        <p className="addagent-sub">
-          填入 AgentKit 部署的访问地址与 API Key，将通过 ADK 协议连接，连接成功后其
-          Agent 会出现在左上角的下拉中。
-        </p>
+        <h2 className="addagent-title">{t("addAgentKit.title")}</h2>
+        <p className="addagent-sub">{t("addAgentKit.description")}</p>
 
         <label className="addagent-field">
-          <span className="addagent-label">访问地址 URL</span>
+          <span className="addagent-label">{t("addAgentKit.url")}</span>
           <input
             className="addagent-input"
             value={url}
@@ -95,17 +95,17 @@ export function AddAgentKitView({ onAdded, onCancel }: AddAgentKitViewProps) {
             type="password"
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
-            placeholder="以 Authorization: Bearer 方式连接"
+            placeholder={t("addAgentKit.apiKeyHint")}
           />
         </label>
 
         <label className="addagent-field">
-          <span className="addagent-label">显示名称（可选）</span>
+          <span className="addagent-label">{t("addAgentKit.displayName")}</span>
           <input
             className="addagent-input"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="默认取 URL 的主机名"
+            placeholder={t("addAgentKit.displayNameHint")}
           />
         </label>
 
@@ -113,11 +113,11 @@ export function AddAgentKitView({ onAdded, onCancel }: AddAgentKitViewProps) {
 
         <div className="addagent-actions">
           <button className="addagent-btn addagent-btn--ghost" onClick={onCancel} disabled={busy}>
-            取消
+            {t("addAgentKit.cancel")}
           </button>
           <button className="addagent-btn addagent-btn--primary" onClick={submit} disabled={!canSubmit}>
             {busy ? <Loader2 className="icon spin" /> : null}
-            {busy ? "连接中…" : "连接并添加"}
+            {busy ? t("addAgentKit.connecting") : t("addAgentKit.connect")}
           </button>
         </div>
       </div>

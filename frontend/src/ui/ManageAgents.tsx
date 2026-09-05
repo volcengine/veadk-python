@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Check,
   ChevronDown,
@@ -49,6 +50,7 @@ export function ManageAgentsView({
   currentRuntimeId,
   onConnect,
 }: ManageAgentsViewProps) {
+  const { t } = useTranslation("workspaceTools");
   const [runtimes, setRuntimes] = useState<ManagedRuntime[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -77,7 +79,7 @@ export function ManageAgentsView({
     } finally {
       setLoading(false);
     }
-  }, [regionFilter]);
+  }, [regionFilter, t]);
 
   useEffect(() => {
     void load();
@@ -108,7 +110,7 @@ export function ManageAgentsView({
           children: [],
         },
       ];
-      next.graphNote = "仅显示主 Agent（控制面信息）。";
+      next.graphNote = t("manageAgents.mainAgentOnly");
     }
     setDetails((p) => ({ ...p, [rt.runtimeId]: next }));
   }
@@ -121,7 +123,7 @@ export function ManageAgentsView({
 
   async function handleDelete(rt: ManagedRuntime) {
     if (deleting) return;
-    if (!window.confirm(`确定删除 Agent "${rt.name}"？该 Runtime 将被永久删除。`)) {
+    if (!window.confirm(t("manageAgents.deleteConfirm", { name: rt.name }))) {
       return;
     }
     setDeleting(rt.runtimeId);
@@ -153,9 +155,9 @@ export function ManageAgentsView({
     <div className="manage">
       <div className="manage-head">
         <div>
-          <h2 className="manage-title">管理 Agent</h2>
+          <h2 className="manage-title">{t("manageAgents.title")}</h2>
           <p className="manage-sub">
-            列出你有权管理的 AgentKit Runtime
+            {t("manageAgents.subtitle")}
           </p>
         </div>
         <div className="manage-head-actions">
@@ -169,8 +171,8 @@ export function ManageAgentsView({
               type="button"
               className="manage-region"
               onClick={() => setRegionMenuOpen((open) => !open)}
-              title="按区域筛选"
-              aria-label="区域筛选"
+              title={t("manageAgents.regionFilterTitle")}
+              aria-label={t("manageAgents.regionFilterAria")}
               aria-haspopup="listbox"
               aria-expanded={regionMenuOpen}
             >
@@ -185,7 +187,7 @@ export function ManageAgentsView({
                   className="menu-scrim"
                   onClick={() => setRegionMenuOpen(false)}
                 />
-                <div className="manage-region-menu" role="listbox" aria-label="区域">
+                <div className="manage-region-menu" role="listbox" aria-label={t("manageAgents.regionAria")}>
                   {regionOptions.map((region) => {
                     const selected = region.value === regionFilter;
                     return (
@@ -214,10 +216,10 @@ export function ManageAgentsView({
             className="manage-refresh"
             onClick={() => void load()}
             disabled={loading}
-            title="刷新"
+            title={t("manageAgents.refresh")}
           >
             <RefreshCw className={`icon ${loading ? "spin" : ""}`} />
-            刷新
+            {t("manageAgents.refresh")}
           </button>
         </div>
       </div>
@@ -226,10 +228,10 @@ export function ManageAgentsView({
 
       {loading ? (
         <div className="manage-empty">
-          <Loader2 className="icon spin" /> 加载中…
+          <Loader2 className="icon spin" /> {t("manageAgents.loading")}
         </div>
       ) : runtimes.length === 0 ? (
-        <div className="manage-empty">暂无你部署的 Agent。</div>
+        <div className="manage-empty">{t("manageAgents.empty")}</div>
       ) : (
         <ul className="manage-list">
           {runtimes.map((rt) => {
@@ -271,15 +273,15 @@ export function ManageAgentsView({
                         <Link2 className="icon" />
                       )}
                       {currentRuntimeId === rt.runtimeId
-                        ? "已连接"
-                        : "连接到此 Agent"}
+                        ? t("manageAgents.connected")
+                        : t("manageAgents.connect")}
                     </button>
                     <button
                       type="button"
                       className="manage-del"
                       onClick={() => void handleDelete(rt)}
                       disabled={deleting === rt.runtimeId}
-                      title="删除该 Runtime"
+                      title={t("manageAgents.deleteRuntime")}
                     >
                       {deleting === rt.runtimeId ? (
                         <Loader2 className="icon spin" />
@@ -307,13 +309,13 @@ export function ManageAgentsView({
                   <div className="manage-detail">
                     {!d || d.loading ? (
                       <div className="manage-detail-loading">
-                        <Loader2 className="icon spin" /> 读取详情…
+                        <Loader2 className="icon spin" /> {t("manageAgents.loadingDetail")}
                       </div>
                     ) : (
                       <>
                         {d.error && <div className="manage-error">{d.error}</div>}
                         {d.detail && <RuntimeDetailCard detail={d.detail} />}
-                        <div className="manage-tree-head">Agent 结构</div>
+                        <div className="manage-tree-head">{t("manageAgents.agentStructure")}</div>
                         {d.graphs && d.graphs.length > 0 ? (
                           d.graphs.map((g, i) => <AgentTree key={i} node={g} />)
                         ) : (
@@ -336,6 +338,7 @@ export function ManageAgentsView({
 const SENSITIVE_ENV_RE = /KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL/i;
 
 function EnvValue({ envKey, value }: { envKey: string; value: string }) {
+  const { t } = useTranslation("workspaceTools");
   const [revealed, setRevealed] = useState(false);
   if (!SENSITIVE_ENV_RE.test(envKey) || revealed) {
     return <code className="manage-env-v">{value}</code>;
@@ -344,8 +347,8 @@ function EnvValue({ envKey, value }: { envKey: string; value: string }) {
     <button
       type="button"
       className="manage-env-v manage-env-masked"
-      title="敏感值已隐藏，点击显示"
-      aria-label={`显示 ${envKey} 的值`}
+      title={t("manageAgents.secretHidden")}
+      aria-label={t("manageAgents.revealSecret", { key: envKey })}
       onClick={() => setRevealed(true)}
     >
       ••••••••
@@ -355,29 +358,42 @@ function EnvValue({ envKey, value }: { envKey: string; value: string }) {
 
 /** Renders the control-plane detail fields (model, resources, envs, ids). */
 function RuntimeDetailCard({ detail }: { detail: RuntimeDetail }) {
+  const { t, i18n } = useTranslation("workspaceTools");
+  const locale = i18n.resolvedLanguage || i18n.language;
   const r = detail.resources;
   const rows: [string, string][] = [];
-  if (detail.model) rows.push(["模型", detail.model]);
-  if (detail.description) rows.push(["描述", detail.description]);
-  if (detail.statusMessage) rows.push(["状态信息", detail.statusMessage]);
-  if (detail.project) rows.push(["Project", detail.project]);
-  if (detail.currentVersion != null) rows.push(["版本", String(detail.currentVersion)]);
+  if (detail.model) rows.push([t("manageAgents.fields.model"), detail.model]);
+  if (detail.description) rows.push([t("manageAgents.fields.description"), detail.description]);
+  if (detail.statusMessage) rows.push([t("manageAgents.fields.status"), detail.statusMessage]);
+  if (detail.project) rows.push([t("manageAgents.fields.project"), detail.project]);
+  if (detail.currentVersion != null) rows.push([
+    t("manageAgents.fields.version"),
+    String(detail.currentVersion),
+  ]);
   const res = [
     r.cpuMilli != null ? `CPU ${r.cpuMilli}m` : "",
-    r.memoryMb != null ? `内存 ${r.memoryMb}MB` : "",
+    r.memoryMb != null ? t("manageAgents.resource.memory", { value: r.memoryMb }) : "",
     r.minInstance != null || r.maxInstance != null
-      ? `实例 ${r.minInstance ?? "?"}~${r.maxInstance ?? "?"}`
+      ? t("manageAgents.resource.instances", {
+          min: r.minInstance ?? "?",
+          max: r.maxInstance ?? "?",
+        })
       : "",
-    r.maxConcurrency != null ? `并发 ${r.maxConcurrency}` : "",
+    r.maxConcurrency != null
+      ? t("manageAgents.resource.concurrency", { value: r.maxConcurrency })
+      : "",
   ]
     .filter(Boolean)
     .join(" · ");
-  if (res) rows.push(["资源", res]);
-  if (detail.memoryId) rows.push(["Memory", detail.memoryId]);
-  if (detail.toolId) rows.push(["Tool", detail.toolId]);
-  if (detail.knowledgeId) rows.push(["Knowledge", detail.knowledgeId]);
-  if (detail.mcpToolsetId) rows.push(["MCP Toolset", detail.mcpToolsetId]);
-  if (detail.updatedAt) rows.push(["更新时间", formatTime(detail.updatedAt)]);
+  if (res) rows.push([t("manageAgents.fields.resources"), res]);
+  if (detail.memoryId) rows.push([t("manageAgents.fields.memory"), detail.memoryId]);
+  if (detail.toolId) rows.push([t("manageAgents.fields.tool"), detail.toolId]);
+  if (detail.knowledgeId) rows.push([t("manageAgents.fields.knowledge"), detail.knowledgeId]);
+  if (detail.mcpToolsetId) rows.push([t("manageAgents.fields.mcpToolset"), detail.mcpToolsetId]);
+  if (detail.updatedAt) rows.push([
+    t("manageAgents.fields.updatedAt"),
+    formatTime(detail.updatedAt, locale),
+  ]);
 
   return (
     <div className="manage-detail-card">
@@ -391,7 +407,7 @@ function RuntimeDetailCard({ detail }: { detail: RuntimeDetail }) {
       </dl>
       {detail.envs.length > 0 && (
         <div className="manage-envs">
-          <div className="manage-envs-head">环境变量</div>
+          <div className="manage-envs-head">{t("manageAgents.environmentVariables")}</div>
           {detail.envs.map((e) => (
             <div key={e.key} className="manage-env">
               <code className="manage-env-k">{e.key}</code>
@@ -414,11 +430,12 @@ const TYPE_LABEL: Record<string, string> = {
 
 /** Recursive agent tree: name + type/model/tools, with nested sub-agents. */
 function AgentTree({ node, depth = 0 }: { node: AgentNode; depth?: number }) {
+  const { t } = useTranslation("workspaceTools");
   const modelName = modelNameFromRuntime(node.model);
   return (
     <div className="manage-tree" style={{ marginLeft: depth ? 16 : 0 }}>
       <div className="manage-tree-node">
-        <span className="manage-tree-name">{node.name || "(未命名)"}</span>
+        <span className="manage-tree-name">{node.name || t("manageAgents.unnamed")}</span>
         <span className="manage-tree-type">{TYPE_LABEL[node.type] || node.type}</span>
         {modelName && <span className="manage-tree-model">{modelName}</span>}
       </div>
@@ -448,9 +465,9 @@ function statusKind(status: string): "ok" | "warn" | "bad" | "muted" {
 }
 
 /** Format an ISO / epoch timestamp for display, tolerating either form. */
-function formatTime(raw: string): string {
+function formatTime(raw: string, locale?: string): string {
   const n = Number(raw);
   const d = Number.isFinite(n) && String(n) === raw ? new Date(n * 1000) : new Date(raw);
   if (Number.isNaN(d.getTime())) return raw;
-  return d.toLocaleString();
+  return d.toLocaleString(locale);
 }

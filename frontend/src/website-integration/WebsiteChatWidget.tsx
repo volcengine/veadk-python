@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import defaultSiteLogo from "../assets/logo.svg";
 import { parseSSE } from "../adk/sse";
@@ -72,7 +73,7 @@ function textTurn(text: string, role: "user" | "assistant"): Turn {
   };
 }
 
-function errorMessage(response: Response): Promise<string> {
+function errorMessage(response: Response, fallback: string): Promise<string> {
   return response.text().then((body) => {
     try {
       const detail = (JSON.parse(body) as { detail?: unknown }).detail;
@@ -80,15 +81,16 @@ function errorMessage(response: Response): Promise<string> {
     } catch {
       // Preserve the readable response body below.
     }
-    return body.trim() || `请求失败 (${response.status})`;
+    return body.trim() || fallback;
   });
 }
 
 export function WebsiteChatWidget({ studioOrigin, token }: WebsiteChatWidgetProps) {
+  const { t, i18n } = useTranslation("websiteIntegration");
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
   const [turns, setTurns] = useState<Turn[]>([
-    textTurn("您好，有什么可以帮您？", "assistant"),
+    textTurn(t("widget.greeting"), "assistant"),
   ]);
   const [sessionToken, setSessionToken] = useState("");
   const [bootstrapError, setBootstrapError] = useState("");
@@ -200,26 +202,34 @@ export function WebsiteChatWidget({ studioOrigin, token }: WebsiteChatWidgetProp
     const controller = new AbortController();
     void fetch(`${studioOrigin}/embed/session`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Accept-Language": i18n.resolvedLanguage || i18n.language,
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify({ token }),
       signal: controller.signal,
     })
       .then(async (response) => {
-        if (!response.ok) throw new Error(await errorMessage(response));
+        if (!response.ok) {
+          throw new Error(await errorMessage(
+            response,
+            t("widget.requestFailed", { status: response.status }),
+          ));
+        }
         return response.json() as Promise<BootstrapPayload>;
       })
       .then((payload) => {
-        if (!payload.sessionToken) throw new Error("无法建立对话会话");
+        if (!payload.sessionToken) throw new Error(t("widget.sessionFailed"));
         setSessionToken(payload.sessionToken);
       })
       .catch((cause: unknown) => {
         if (controller.signal.aborted) return;
         setBootstrapError(
-          cause instanceof Error ? cause.message : "当前网站未获得对话授权",
+          cause instanceof Error ? cause.message : t("widget.unauthorized"),
         );
       });
     return () => controller.abort();
-  }, [studioOrigin, token]);
+  }, [i18n.language, i18n.resolvedLanguage, studioOrigin, t, token]);
 
   useEffect(scrollToLatest, [busy, scrollToLatest, turns]);
 
@@ -274,6 +284,7 @@ export function WebsiteChatWidget({ studioOrigin, token }: WebsiteChatWidgetProp
       const response = await fetch(`${studioOrigin}/embed/run_sse`, {
         method: "POST",
         headers: {
+          "Accept-Language": i18n.resolvedLanguage || i18n.language,
           Authorization: `Bearer ${sessionToken}`,
           "Content-Type": "application/json",
         },
@@ -284,7 +295,10 @@ export function WebsiteChatWidget({ studioOrigin, token }: WebsiteChatWidgetProp
         }),
       });
       if (!response.ok || !response.body) {
-        throw new Error(await errorMessage(response));
+        throw new Error(await errorMessage(
+          response,
+          t("widget.requestFailed", { status: response.status }),
+        ));
       }
 
       let accumulator = emptyAcc();
@@ -310,7 +324,7 @@ export function WebsiteChatWidget({ studioOrigin, token }: WebsiteChatWidgetProp
         setTurns((current) => [...current.slice(0, -1), nextTurn]);
       }
     } catch (cause: unknown) {
-      const message = cause instanceof Error ? cause.message : "对话请求失败，请稍后重试";
+      const message = cause instanceof Error ? cause.message : t("widget.conversationFailed");
       setTurns((current) => [
         ...current.slice(0, -1),
         textTurn(message, "assistant"),
@@ -326,7 +340,7 @@ export function WebsiteChatWidget({ studioOrigin, token }: WebsiteChatWidgetProp
         ref={launcherRef}
         type="button"
         className="website-widget__launcher"
-        aria-label={open ? "关闭智能体对话" : "打开智能体对话"}
+        aria-label={open ? t("widget.close") : t("widget.open")}
         aria-expanded={open}
         onClick={() => {
           if (suppressClickRef.current) {
@@ -357,7 +371,7 @@ export function WebsiteChatWidget({ studioOrigin, token }: WebsiteChatWidgetProp
       <section
         ref={panelRef}
         className={`website-widget__panel${open ? " is-open" : ""}`}
-        aria-label="智能体对话面板"
+        aria-label={t("widget.panelLabel")}
         aria-hidden={!open}
       >
         <header className="website-widget__header">
@@ -366,14 +380,14 @@ export function WebsiteChatWidget({ studioOrigin, token }: WebsiteChatWidgetProp
               <SiteLogo studioOrigin={studioOrigin} />
             </span>
             <span className="website-widget__identity-copy">
-              <strong>智能体助手</strong>
-              <span>在线对话</span>
+              <strong>{t("widget.assistant")}</strong>
+              <span>{t("widget.online")}</span>
             </span>
           </div>
           <button
             type="button"
             className="website-widget__close"
-            aria-label="关闭对话"
+            aria-label={t("widget.close")}
             onClick={() => setOpen(false)}
           >
             <CloseIcon />

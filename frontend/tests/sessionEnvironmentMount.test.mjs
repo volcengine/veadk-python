@@ -102,7 +102,7 @@ test("prepare validates mount count, order, identities, and network failures", a
         sessionId: "session-1",
         environmentMounts: requested,
       }),
-      /挂载环境响应与请求不一致/,
+      /The environment mount response does not match the request/,
     );
 
     globalThis.fetch = async () => Response.json({ mounts: [...prepared].reverse() });
@@ -114,7 +114,7 @@ test("prepare validates mount count, order, identities, and network failures", a
         sessionId: "session-1",
         environmentMounts: requested,
       }),
-      /挂载环境响应与请求不一致/,
+      /The environment mount response does not match the request/,
     );
 
     globalThis.fetch = async () => Response.json({
@@ -131,7 +131,7 @@ test("prepare validates mount count, order, identities, and network failures", a
         sessionId: "session-1",
         environmentMounts: requested,
       }),
-      /挂载环境响应与请求不一致/,
+      /The environment mount response does not match the request/,
     );
 
     globalThis.fetch = async () => {
@@ -145,7 +145,7 @@ test("prepare validates mount count, order, identities, and network failures", a
         sessionId: "session-1",
         environmentMounts: requested,
       }),
-      /无法连接 Studio 服务，环境挂载未完成。请检查网络后重试。/,
+      /Unable to connect to Studio, so the environment was not mounted/,
     );
   } finally {
     globalThis.fetch = originalFetch;
@@ -185,8 +185,8 @@ test("environments are mounted dynamically after a Session exists", () => {
   assert.doesNotMatch(appSource, /draftEnvironmentMounts/);
   assert.match(appSource, /environmentMountsBySession/);
   assert.match(appSource, /const environmentMounts = createsSession\s*\? \[\]/);
-  assert.match(appSource, /if \(!sessionId\) throw new Error\("当前会话不存在，无法挂载环境。"\)/);
-  assert.match(appSource, /if \(!valid\) throw new Error\("所选环境已失效，请刷新后重新选择。"\)/);
+  assert.match(appSource, /if \(!sessionId\) throw new Error\(appText\("errors\.sessionMissingForMount"\)\)/);
+  assert.match(appSource, /if \(!valid\) throw new Error\(appText\("errors\.environmentExpired"\)\)/);
   assert.match(appSource, /setEnvironmentMountsBySession\(\(current\) => \(\{/);
   assert.match(appSource, /ENVIRONMENT_STUDIO_TOOL_IDS = \[[\s\S]*?"list_envs"[\s\S]*?"get_env_manifest"[\s\S]*?"execute_in_sandbox"[\s\S]*?"delegate_to_codex_sandbox"/);
   assert.match(appSource, /selections\.length > 0[\s\S]*?ENVIRONMENT_STUDIO_TOOL_IDS[\s\S]*?selectedIds\.filter/);
@@ -240,16 +240,16 @@ test("environment picker stays in Agent info below skills", () => {
   assert.match(pickerSource, /type="checkbox"/);
   assert.match(pickerSource, /className="session-environment-check"/);
   assert.match(stylesSource, /input:checked \+ \.session-environment-check/);
-  assert.match(pickerSource, /确认添加/);
+  assert.match(pickerSource, /t\("sessionEnvironment\.confirm"\)/);
   assert.match(pickerSource, /createPortal/);
-  assert.match(pickerSource, /选择工作区/);
+  assert.match(pickerSource, /t\("sessionEnvironment\.selectWorkspace", \{ name: workspace\.name \}\)/);
   assert.match(pickerSource, /workspaceEnvironmentMounts/);
-  assert.match(pickerSource, /已由工作区/);
+  assert.match(pickerSource, /t\("sessionEnvironment\.includedByWorkspaces"/);
   assert.match(pickerSource, /disabled=\{covered\}/);
   assert.match(pickerSource, /const nextMounts = environments\.flatMap/);
   assert.match(pickerSource, /await onConfirm\(nextMounts, \[\.\.\.draftWorkspaceIds\]\)/);
   assert.match(pickerSource, /await onConfirm[\s\S]*?onClose\(\)[\s\S]*?catch \(cause\)/);
-  assert.match(pickerSource, /submitting \? "正在挂载…" : "确认添加"/);
+  assert.match(pickerSource, /submitting \? t\("sessionEnvironment\.mounting"\) : t\("sessionEnvironment\.confirm"\)/);
   assert.match(pickerSource, /event\.key === "Escape" && !submitting/);
   assert.match(pickerSource, /studio-tool-dialog-scrim[\s\S]*?disabled=\{submitting\}/);
   assert.match(pickerSource, /studio-tool-dialog-close[\s\S]*?disabled=\{submitting\}/);
@@ -266,12 +266,13 @@ test("environment picker stays in Agent info below skills", () => {
   assert.match(transcriptSource, /workspaces=\{sessionWorkspaces\}/);
   assert.doesNotMatch(pickerSource, /仅对当前 Session 生效/);
   assert.doesNotMatch(pickerSource, /固定已添加的环境|环境集合已固定/);
-  assert.match(railSource, /<ModuleTitle title="环境"/);
+  assert.match(railSource, /<ModuleTitle title=\{t\("agentTopology\.environment"\)\}/);
   assert.match(railSource, /<SessionEnvironmentPicker/);
   assert.match(railSource, /tool\.custom && tool\.removable/);
   assert.match(railSource, /!managedIds\.has\(tool\.id\)/);
   assert.ok(
-    railSource.indexOf('title="环境"') > railSource.indexOf('title="技能"'),
+    railSource.indexOf('title={t("agentTopology.environment")}') >
+      railSource.indexOf('title={t("agentTopology.skills")}'),
     "environment section should follow skills",
   );
   assert.match(stylesSource, /\.session-environment-dialog__footer/);

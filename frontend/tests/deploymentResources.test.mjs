@@ -28,8 +28,8 @@ const clientSource = readFileSync(
 );
 
 test("places resource configuration immediately before environment variables", () => {
-  const resourceIndex = projectPreviewSource.indexOf(">资源配置<");
-  const environmentIndex = projectPreviewSource.indexOf("环境变量\n");
+  const resourceIndex = projectPreviewSource.indexOf('t("projectPreview.resourceConfiguration")');
+  const environmentIndex = projectPreviewSource.indexOf('t("projectPreview.environmentVariables")');
 
   assert.notEqual(resourceIndex, -1);
   assert.notEqual(environmentIndex, -1);
@@ -43,7 +43,7 @@ test("places resource configuration immediately before environment variables", (
 test("hides and omits resource configuration when updating a Runtime", () => {
   assert.match(
     projectPreviewSource,
-    /\{!isRuntimeUpdate && \([\s\S]*?>资源配置<[\s\S]*?<DeploymentResources/,
+    /\{!isRuntimeUpdate && \([\s\S]*?projectPreview\.resourceConfiguration[\s\S]*?<DeploymentResources/,
   );
   assert.match(
     projectPreviewSource,
@@ -56,11 +56,11 @@ test("hides and omits resource configuration when updating a Runtime", () => {
 });
 
 test("supports automatic, named, and existing TOS CR and CodePipeline resources", () => {
-  assert.match(resourceSource, /label: "自动创建"/);
-  assert.match(resourceSource, /label: "指定名称"/);
-  assert.match(resourceSource, /label: "选择已有"/);
-  assert.match(resourceSource, />TOS 存储桶</);
-  assert.match(resourceSource, />容器镜像仓库/);
+  assert.match(resourceSource, /deploymentResources\.mode\.auto/);
+  assert.match(resourceSource, /deploymentResources\.mode\.create/);
+  assert.match(resourceSource, /deploymentResources\.mode\.existing/);
+  assert.match(resourceSource, /deploymentResources\.tosBucket/);
+  assert.match(resourceSource, /deploymentResources\.containerRegistry/);
   assert.match(resourceSource, />CodePipeline/);
   assert.match(resourceSource, /kind: "cr-namespace"[\s\S]*?registry:/);
   assert.match(
@@ -74,13 +74,13 @@ test("supports automatic, named, and existing TOS CR and CodePipeline resources"
 
 test("shows AgentKit automatic resource naming rules", () => {
   assert.match(projectPreviewSource, /agentName=\{agentName \|\| project\.name/);
-  assert.match(resourceSource, /agentkit-platform-\{账号 ID\}/);
+  assert.match(resourceSource, /deploymentResources\.autoRegistry/);
   assert.match(resourceSource, /region\.startsWith\("cn-"\)/);
-  assert.match(resourceSource, /\{ label: "命名空间", name: "agentkit" \}/);
-  assert.match(resourceSource, /\$\{resolvedAgentName\}-\{4 位随机字符\}/);
+  assert.match(resourceSource, /label: t\("deploymentResources\.namespace"\), name: "agentkit"/);
+  assert.match(resourceSource, /deploymentResources\.autoRepositoryName/);
   assert.match(resourceSource, /agentkit-cli-workspace/);
   assert.match(resourceSource, /name: resolvedRuntimeName/);
-  assert.match(resourceSource, /Pipeline 与 Runtime 名称一致/);
+  assert.match(resourceSource, /deploymentResources\.pipelineNameNote/);
   assert.match(projectPreviewSource, /runtimeName=\{/);
 });
 
@@ -121,8 +121,8 @@ test("resource requests expose loading empty error retry and cancellation", () =
   assert.match(resourceSource, /new AbortController\(\)/);
   assert.match(resourceSource, /requestRef\.current\?\.abort\(\)/);
   assert.match(resourceSource, /role="alert"/);
-  assert.match(resourceSource, />重试</);
-  assert.match(resourceSource, /暂无可用资源/);
+  assert.match(resourceSource, /t\("common\.retry"\)/);
+  assert.match(resourceSource, /deploymentResources\.noAvailable/);
   assert.match(resourceSource, /aria-live="polite"/);
   assert.match(resourceStyles, /\.pp-resource-error/);
   assert.match(resourceStyles, /\.pp-resource-status/);
@@ -149,7 +149,7 @@ test("searches the complete cloud resource collection with request cancellation"
   assert.match(resourceSource, /searchValue=\{state\.search\}/);
   assert.match(resourceSource, /onSearchChange=\{state\.setSearch\}/);
   assert.match(deploymentSelectSource, /type="search"/);
-  assert.match(deploymentSelectSource, /aria-label=\{`搜索\$\{ariaLabel\}`\}/);
+  assert.match(deploymentSelectSource, /deploymentSelect\.searchAriaLabel/);
   assert.match(deploymentSelectSource, /selectedOption\?\.label \?\? \(value \? valueLabel/);
   assert.match(resourceSource, /valueLabel=\{value\.codePipeline\.pipelineName\}/);
 });

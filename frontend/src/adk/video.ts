@@ -6,6 +6,7 @@ import type {
   VideoResolution,
   VideoTaskMode,
 } from "../ui/new-chat-modes/video-types";
+import { adkT, withLocaleHeaders } from "./i18n";
 
 const VIDEO_API_ROOT = "/web/video";
 const VIDEO_ENHANCEMENT_TIMEOUT_MS = 180_000;
@@ -84,7 +85,7 @@ async function request(
 ): Promise<Response> {
   return fetch(withAuth(`${VIDEO_API_ROOT}${path}`), {
     ...init,
-    headers: withLocalUser(init.headers),
+    headers: withLocaleHeaders(withLocalUser(init.headers)),
     signal: requestSignal(init.signal, timeoutMs),
   });
 }
@@ -99,7 +100,7 @@ async function responseError(response: Response, fallback: string): Promise<Erro
   } catch {
     detail = raw.trim().slice(0, 500);
   }
-  return new Error(detail || `${fallback}（HTTP ${response.status}）`);
+  return new Error(detail || adkT("common.fallbackWithHttpStatus", { fallback, status: response.status }));
 }
 
 async function json<T>(response: Response, fallback: string): Promise<T> {
@@ -108,15 +109,15 @@ async function json<T>(response: Response, fallback: string): Promise<T> {
   try {
     return JSON.parse(raw) as T;
   } catch {
-    const contentType = response.headers.get("content-type") || "Content-Type 缺失";
-    throw new Error(`${fallback}：服务端返回非 JSON 响应（${contentType}）`);
+    const contentType = response.headers.get("content-type") || adkT("common.contentTypeMissing");
+    throw new Error(adkT("common.nonJsonResponse", { fallback, contentType }));
   }
 }
 
 export async function getVideoCapabilities(signal?: AbortSignal): Promise<VideoCapabilities> {
   return json(
     await request("/capabilities", { signal, headers: { Accept: "application/json" } }),
-    "加载视频模型能力失败",
+    adkT("video.loadCapabilitiesFailed"),
   );
 }
 
@@ -130,7 +131,7 @@ export async function uploadVideoAsset(
   form.set("role", kind);
   return json(
     await request("/assets", { method: "POST", body: form, signal }, TRANSFER_REQUEST_TIMEOUT_MS),
-    `上传${file.name}失败`,
+    adkT("video.uploadAssetFailed", { fileName: file.name }),
   );
 }
 
@@ -145,7 +146,7 @@ export async function enhanceVideoPrompt(
       body: JSON.stringify(payload),
       signal,
     }, VIDEO_ENHANCEMENT_TIMEOUT_MS),
-    "提示词优化失败",
+    adkT("video.enhancePromptFailed"),
   );
 }
 
@@ -160,7 +161,7 @@ export async function createVideoTask(
       body: JSON.stringify(payload),
       signal,
     }, TRANSFER_REQUEST_TIMEOUT_MS),
-    "创建视频生成任务失败",
+    adkT("video.createTaskFailed"),
   );
 }
 
@@ -173,7 +174,7 @@ export async function getVideoTask(
       signal,
       headers: { Accept: "application/json" },
     }),
-    "查询视频生成任务失败",
+    adkT("video.getTaskFailed"),
   );
 }
 
@@ -186,7 +187,7 @@ export async function downloadVideoTask(
     { signal, headers: { Accept: "video/*" } },
     TRANSFER_REQUEST_TIMEOUT_MS,
   );
-  if (!response.ok) throw await responseError(response, "下载生成视频失败");
+  if (!response.ok) throw await responseError(response, adkT("video.downloadFailed"));
   return response.blob();
 }
 

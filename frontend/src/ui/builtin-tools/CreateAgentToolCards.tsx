@@ -7,6 +7,8 @@ import {
   Users,
 } from "@openai/apps-sdk-ui/components/Icon";
 import { Popover } from "@openai/apps-sdk-ui/components/Popover";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import {
   filterCollectedResourcesByCategory,
   parseCollectedResources,
@@ -33,20 +35,12 @@ export interface CreateAgentToolCardProps {
   status: ToolExecutionStatus;
 }
 
-const RESOURCE_CATEGORIES: Array<{ value: ResourceCategory; label: string }> = [
-  { value: "skill_hub", label: "Skill Hub" },
-  { value: "skill_space", label: "AgentKit 技能中心" },
-  { value: "knowledge_base", label: "知识库" },
-  { value: "tool", label: "工具" },
+const RESOURCE_CATEGORIES: ResourceCategory[] = [
+  "skill_hub",
+  "skill_space",
+  "knowledge_base",
+  "tool",
 ];
-
-const AGENT_TYPE_LABELS: Record<string, string> = {
-  llm: "LLM Agent",
-  sequential: "顺序 Agent",
-  parallel: "并行 Agent",
-  loop: "循环 Agent",
-  workflow: "Workflow",
-};
 
 function AccordionChevron(props: SVGProps<SVGSVGElement>) {
   return (
@@ -78,11 +72,11 @@ function LoadingRows({ label }: { label: string }) {
   );
 }
 
-function resourceTypeLabel(resource: CreatedAgentResourceView) {
-  if (resource.kind === "tool") return "内置工具";
-  if (resource.kind === "knowledge_base") return "知识库";
+function resourceTypeLabel(resource: CreatedAgentResourceView, t: TFunction) {
+  if (resource.kind === "tool") return t("blocks.createAgents.builtinTool");
+  if (resource.kind === "knowledge_base") return t("blocks.createAgents.knowledgeBase");
   if (resource.source.startsWith("skill_hub:")) return "Skill Hub";
-  if (resource.source.startsWith("skill_space:")) return "AgentKit 技能中心";
+  if (resource.source.startsWith("skill_space:")) return t("blocks.createAgents.skillCenter");
   return "Skill";
 }
 
@@ -93,6 +87,7 @@ function AgentResourceList({
   label: string;
   resources: CreatedAgentResourceView[];
 }) {
+  const { t } = useTranslation("conversation");
   if (resources.length === 0) return null;
   return (
     <section className="create-agent-card__popover-section">
@@ -103,7 +98,7 @@ function AgentResourceList({
             <div className="create-agent-card__popover-item-heading">
               <strong>{resource.name}</strong>
               <Badge color="secondary" size="sm" variant="soft">
-                {resourceTypeLabel(resource)}
+                {resourceTypeLabel(resource, t)}
               </Badge>
             </div>
             {resource.description ? <p>{resource.description}</p> : null}
@@ -115,10 +110,11 @@ function AgentResourceList({
 }
 
 function PythonToolList({ tools }: { tools: PythonToolView[] }) {
+  const { t } = useTranslation("conversation");
   if (tools.length === 0) return null;
   return (
     <section className="create-agent-card__popover-section">
-      <h4>自写工具</h4>
+      <h4>{t("blocks.createAgents.selfAuthoredTools")}</h4>
       <Accordion.Root>
         {tools.map((tool, index) => (
           <Accordion.Item
@@ -133,7 +129,7 @@ function PythonToolList({ tools }: { tools: PythonToolView[] }) {
                   {tool.description ? <small>{tool.description}</small> : null}
                 </span>
                 <span className="create-agent-card__python-tool-meta">
-                  <Badge color="secondary" size="sm" variant="soft">自写工具</Badge>
+                  <Badge color="secondary" size="sm" variant="soft">{t("blocks.createAgents.selfAuthoredTools")}</Badge>
                   <AccordionChevron className="create-agent-card__python-tool-chevron" />
                 </span>
               </Accordion.Trigger>
@@ -141,10 +137,10 @@ function PythonToolList({ tools }: { tools: PythonToolView[] }) {
             <Accordion.Panel className="create-agent-card__python-tool-panel">
               {tool.dependencies.length > 0 ? (
                 <div className="create-agent-card__python-tool-dependencies">
-                  依赖：{tool.dependencies.join(", ")}
+                  {t("blocks.createAgents.dependencies", { items: tool.dependencies.join(", ") })}
                 </div>
               ) : null}
-              <pre tabIndex={0} aria-label={`${tool.name} 完整代码`}>
+              <pre tabIndex={0} aria-label={t("blocks.createAgents.fullCode", { name: tool.name })}>
                 <code>{tool.code}</code>
               </pre>
             </Accordion.Panel>
@@ -156,17 +152,18 @@ function PythonToolList({ tools }: { tools: PythonToolView[] }) {
 }
 
 function SubAgentList({ agents }: { agents: CreatedSubAgentView[] }) {
+  const { t } = useTranslation("conversation");
   if (agents.length === 0) return null;
   return (
     <section className="create-agent-card__popover-section">
-      <h4>Sub Agent</h4>
+      <h4>{t("blocks.createAgents.subAgents")}</h4>
       <div className="create-agent-card__popover-list">
         {agents.map((agent) => (
           <div className="create-agent-card__popover-item" key={agent.id}>
             <div className="create-agent-card__popover-item-heading">
               <strong>{agent.id}</strong>
               <Badge color="secondary" size="sm" variant="soft">
-                {AGENT_TYPE_LABELS[agent.type] ?? agent.type}
+                {t(`blocks.createAgents.agentTypes.${agent.type}`, { defaultValue: agent.type })}
               </Badge>
             </div>
             {agent.description ? <p>{agent.description}</p> : null}
@@ -188,12 +185,13 @@ function ResourceMetric({
   icon: ReactNode;
   children: ReactNode;
 }) {
+  const { t } = useTranslation("conversation");
   const metric = (
     <button
       className="create-agent-card__resource-metric"
       type="button"
       disabled={count === 0}
-      aria-label={`${label} ${count} 项`}
+      aria-label={t("blocks.createAgents.itemCount", { label, count })}
     >
       {icon}
       <span>{count}</span>
@@ -221,28 +219,41 @@ function ResourceMetric({
 }
 
 export function CollectResourcesCard({ response, status }: CreateAgentToolCardProps) {
-  const data = useMemo(() => parseCollectedResources(response), [response]);
-  const groups = useMemo(() => RESOURCE_CATEGORIES.map((item) => {
-    const group = filterCollectedResourcesByCategory(data, item.value);
+  const { t } = useTranslation("conversation");
+  const fallbackLabels = useMemo(() => ({
+    tool: t("blocks.createAgents.sourceLabels.tool"),
+    knowledge: t("blocks.createAgents.sourceLabels.knowledge"),
+    skillCenter: t("blocks.createAgents.sourceLabels.skillCenter"),
+    unknownSource: t("blocks.createAgents.sourceLabels.unknown"),
+    unnamedResource: t("blocks.createAgents.unnamedResource"),
+    unnamedAgent: t("blocks.createAgents.unnamedAgent"),
+  }), [t]);
+  const data = useMemo(
+    () => parseCollectedResources(response, fallbackLabels),
+    [fallbackLabels, response],
+  );
+  const groups = useMemo(() => RESOURCE_CATEGORIES.map((value) => {
+    const group = filterCollectedResourcesByCategory(data, value);
     return {
-      ...item,
+      value,
+      label: t(`blocks.createAgents.categories.${value}`),
       ...group,
       searchKeywords: [...new Set(
         group.sources.flatMap((source) => source.searchKeywords),
       )],
     };
-  }), [data]);
+  }), [data, t]);
   const failed = status === "failed";
   const error = failed ? toolResponseError(response) : "";
 
   return (
-    <section className="create-agent-tool-card" aria-label="召回资源信息">
+    <section className="create-agent-tool-card" aria-label={t("blocks.createAgents.collectionAria")}>
       {status === "running" ? (
-        <LoadingRows label="正在检索资源" />
+        <LoadingRows label={t("blocks.createAgents.retrieving")} />
       ) : failed ? (
         <div className="create-agent-card__message is-error" role="alert">
-          <span className="create-agent-card__message-title">资源检索未完成</span>
-          <span>{error || "请检查资源服务配置后重试。"}</span>
+          <span className="create-agent-card__message-title">{t("blocks.createAgents.retrievalFailed")}</span>
+          <span>{error || t("blocks.createAgents.checkConfig")}</span>
         </div>
       ) : (
         <Accordion.Root
@@ -261,7 +272,7 @@ export function CollectResourcesCard({ response, status }: CreateAgentToolCardPr
                   <span className="create-agent-card__accordion-meta">
                     <Badge color="secondary" size="sm" variant="soft">
                       {group.sources.length === 0
-                        ? group.value === "skill_hub" ? "未检索" : "未配置"
+                        ? group.value === "skill_hub" ? t("blocks.createAgents.notSearched") : t("blocks.createAgents.notConfigured")
                         : group.resources.length}
                     </Badge>
                     <AccordionChevron className="create-agent-card__accordion-chevron" />
@@ -272,12 +283,12 @@ export function CollectResourcesCard({ response, status }: CreateAgentToolCardPr
                 <div
                   className="create-agent-card__accordion-scroll"
                   role="region"
-                  aria-label={`${group.label}资源列表`}
+                  aria-label={t("blocks.createAgents.resourceList", { label: group.label })}
                   tabIndex={0}
                 >
                   {group.value === "skill_hub" && group.searchKeywords.length > 0 ? (
                     <div className="create-agent-card__search-keywords">
-                      <span>检索关键词</span>
+                      <span>{t("blocks.createAgents.searchKeywords")}</span>
                       <span>{group.searchKeywords.join("、")}</span>
                     </div>
                   ) : null}
@@ -309,9 +320,9 @@ export function CollectResourcesCard({ response, status }: CreateAgentToolCardPr
                       <p>
                         {group.sources.length === 0
                           ? group.value === "skill_hub"
-                            ? "未提供检索关键词，本次未检索 Skill Hub。"
-                            : `未配置 ${group.label}，本次未检索该来源。`
-                          : "本次检索未返回该类别的资源。"}
+                            ? t("blocks.createAgents.skillHubSkipped")
+                            : t("blocks.createAgents.sourceSkipped", { label: group.label })
+                          : t("blocks.createAgents.noResources")}
                       </p>
                       {group.sources
                         .filter((source) => source.message)
@@ -336,14 +347,26 @@ export function CollectResourcesCard({ response, status }: CreateAgentToolCardPr
 }
 
 export function CreateAgentsCard({ args, response, status }: CreateAgentToolCardProps) {
-  const data = useMemo(() => parseCreatedAgents(args, response), [args, response]);
+  const { t } = useTranslation("conversation");
+  const fallbackLabels = useMemo(() => ({
+    tool: t("blocks.createAgents.sourceLabels.tool"),
+    knowledge: t("blocks.createAgents.sourceLabels.knowledge"),
+    skillCenter: t("blocks.createAgents.sourceLabels.skillCenter"),
+    unknownSource: t("blocks.createAgents.sourceLabels.unknown"),
+    unnamedResource: t("blocks.createAgents.unnamedResource"),
+    unnamedAgent: t("blocks.createAgents.unnamedAgent"),
+  }), [t]);
+  const data = useMemo(
+    () => parseCreatedAgents(args, response, fallbackLabels),
+    [args, fallbackLabels, response],
+  );
   const topLevelError = status === "failed" ? toolResponseError(response) : "";
 
   return (
-    <section className="create-agent-tool-card is-agent-results" aria-label="创建 Agent 结果">
+    <section className="create-agent-tool-card is-agent-results" aria-label={t("blocks.createAgents.resultAria")}>
       {topLevelError ? (
         <div className="create-agent-card__message is-error" role="alert">
-          <span className="create-agent-card__message-title">Agent 创建未完成</span>
+          <span className="create-agent-card__message-title">{t("blocks.createAgents.creationFailed")}</span>
           <span>{topLevelError}</span>
         </div>
       ) : null}
@@ -365,7 +388,7 @@ export function CreateAgentsCard({ args, response, status }: CreateAgentToolCard
                   titleText={agent.name}
                   status={(
                     <Badge color="secondary" size="sm" variant="soft">
-                      {AGENT_TYPE_LABELS[agent.rootType] ?? agent.rootType}
+                      {t(`blocks.createAgents.agentTypes.${agent.rootType}`, { defaultValue: agent.rootType })}
                     </Badge>
                   )}
                 />
@@ -377,31 +400,31 @@ export function CreateAgentsCard({ args, response, status }: CreateAgentToolCard
                     {agentError}
                   </div>
                 ) : null}
-                <div className="create-agent-card__agent-resources" aria-label={`${agent.name} 具备的资源`}>
+                <div className="create-agent-card__agent-resources" aria-label={t("blocks.createAgents.agentResources", { name: agent.name })}>
                   <ResourceMetric
-                    label="Skill"
+                    label={t("blocks.createAgents.skill")}
                     count={agent.skills.length}
                     icon={<ToolsSkills aria-hidden="true" />}
                   >
-                    <AgentResourceList label="Skill" resources={agent.skills} />
+                    <AgentResourceList label={t("blocks.createAgents.skill")} resources={agent.skills} />
                   </ResourceMetric>
                   <ResourceMetric
-                    label="知识库"
+                    label={t("blocks.createAgents.knowledgeBase")}
                     count={agent.knowledgeBases.length}
                     icon={<ResourceLibraryIcon aria-hidden="true" />}
                   >
-                    <AgentResourceList label="知识库" resources={agent.knowledgeBases} />
+                    <AgentResourceList label={t("blocks.createAgents.knowledgeBase")} resources={agent.knowledgeBases} />
                   </ResourceMetric>
                   <ResourceMetric
-                    label="工具"
+                    label={t("blocks.createAgents.toolsLabel")}
                     count={toolCount}
                     icon={<Tools aria-hidden="true" />}
                   >
-                    <AgentResourceList label="内置工具" resources={agent.builtinTools} />
+                    <AgentResourceList label={t("blocks.createAgents.builtinTool")} resources={agent.builtinTools} />
                     <PythonToolList tools={agent.pythonTools} />
                   </ResourceMetric>
                   <ResourceMetric
-                    label="Sub Agent"
+                    label={t("blocks.createAgents.subAgents")}
                     count={agent.subAgentCount}
                     icon={<Users aria-hidden="true" />}
                   >
@@ -413,11 +436,11 @@ export function CreateAgentsCard({ args, response, status }: CreateAgentToolCard
           })}
         </div>
       ) : status === "running" ? (
-        <LoadingRows label="正在创建 Agent" />
+        <LoadingRows label={t("blocks.createAgents.creating")} />
       ) : (
         <div className="create-agent-card__message">
-          <span className="create-agent-card__message-title">没有可展示的 Agent</span>
-          <span>工具返回中未包含 Agent 配置或执行结果。</span>
+          <span className="create-agent-card__message-title">{t("blocks.createAgents.noAgents")}</span>
+          <span>{t("blocks.createAgents.noAgentResult")}</span>
         </div>
       )}
     </section>

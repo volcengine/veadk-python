@@ -1,3 +1,5 @@
+import { createT } from "./i18n";
+
 export interface RuntimeEnvSpec {
   key: string;
   required: boolean;
@@ -78,7 +80,7 @@ export function runtimeEnvDisplayRows(
     .map((spec) => ({
       ...spec,
       value: spec.serverManaged
-        ? spec.placeholder || "由服务端注入"
+        ? spec.placeholder || createT("helpers.deploymentEnv.serverInjected")
         : runtimeEnvValue(spec, values),
     }));
 }
@@ -125,7 +127,9 @@ export function runtimeEnvRequirementHint(
 ): string | undefined {
   const labels = runtimeEnvRequirementLabels(spec);
   const requirement = labels.length
-    ? `优化项「${labels.join("、")}」依赖此配置。`
+    ? createT("helpers.deploymentEnv.requirementHint", {
+        labels: labels.join(createT("helpers.deploymentEnv.listSeparator")),
+      })
     : "";
   return (
     [requirement, spec.help?.trim()].filter(Boolean).join(" ") || undefined
@@ -136,13 +140,20 @@ export function runtimeEnvMissingError(spec: RuntimeEnvSpec): string {
   if (spec.missingError?.trim()) return spec.missingError.trim();
   const labels = runtimeEnvRequirementLabels(spec);
   return labels.length
-    ? `优化项「${labels.join("、")}」依赖此配置，请填写 ${spec.key}。`
-    : `请填写 ${spec.comment || spec.key}（${spec.key}）。`;
+    ? createT("helpers.deploymentEnv.requiredBy", {
+        labels: labels.join(createT("helpers.deploymentEnv.listSeparator")),
+        key: spec.key,
+      })
+    : createT("helpers.deploymentEnv.required", {
+        label: spec.comment || spec.key,
+        key: spec.key,
+      });
 }
 
 export function runtimeEnvJsonError(
   spec: RuntimeEnvSpec,
   values: Record<string, string>,
+  invalidJsonMessage = createT("helpers.deploymentEnv.invalidJson"),
 ): string | undefined {
   if (spec.format !== "json") return undefined;
   const value = runtimeEnvValue(spec, values).trim();
@@ -151,7 +162,7 @@ export function runtimeEnvJsonError(
     JSON.parse(value);
     return undefined;
   } catch {
-    return "JSON 格式不正确";
+    return invalidJsonMessage;
   }
 }
 

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import type { AgentDraft } from "./types";
+import { createT } from "./i18n";
 
 export type McpGatewayEnvErrorReason =
   | "missing_http_tool"
@@ -26,15 +27,13 @@ export type McpGatewayEnvResolution =
       message: string;
     };
 
-const ERROR_MESSAGES: Record<McpGatewayEnvErrorReason, string> = {
-  missing_http_tool:
-    "请返回“添加 MCP 工具”并添加至少一个 HTTP MCP 服务；MCP 稳定性治理不支持 stdio 服务。",
-  missing_url:
-    "已添加的 HTTP MCP 工具缺少有效服务地址，请返回“添加 MCP 工具”补充后再发布。",
+const ERROR_MESSAGE_KEYS: Record<McpGatewayEnvErrorReason, string> = {
+  missing_http_tool: "helpers.mcpGateway.missingHttpTool",
+  missing_url: "helpers.mcpGateway.missingUrl",
 };
 
 function failure(reason: McpGatewayEnvErrorReason): McpGatewayEnvResolution {
-  return { ok: false, reason, message: ERROR_MESSAGES[reason] };
+  return { ok: false, reason, message: createT(ERROR_MESSAGE_KEYS[reason]) };
 }
 
 function isHttpUrl(value: string): boolean {

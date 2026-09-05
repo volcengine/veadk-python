@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Checkbox } from "@openai/apps-sdk-ui/components/Checkbox";
+import { useTranslation } from "react-i18next";
 import {
   SANDBOX_DISPLAY_NAME_MAX_LENGTH,
   type SandboxAgentKind,
@@ -8,7 +9,6 @@ import {
 import { SandboxAgentIcon } from "./icons/SandboxAgentIcons";
 
 export type SandboxLaunchState = "confirm" | "loading" | "error";
-const DEFAULT_SANDBOX_DISPLAY_NAME = "我的智能体";
 
 export interface SandboxLaunchDialogProps {
   open: boolean;
@@ -41,14 +41,15 @@ export function SandboxLaunchDialog({
   onCancel,
   onConfirm,
 }: SandboxLaunchDialogProps) {
+  const { t } = useTranslation("sandbox");
   const agentLabel = agentKind === "codex"
     ? "Codex"
     : agentKind === "deepseek-harness"
       ? "DeepSeek Harness"
       : agentKind === "openclaw" ? "OpenClaw" : "Hermes";
   const defaultDisplayName = agentKind === "codex"
-    ? DEFAULT_SANDBOX_DISPLAY_NAME
-    : `我的 ${agentLabel}`;
+    ? t("launch.defaultName")
+    : t("launch.namedDefault", { agent: agentLabel });
   const dialogRef = useRef<HTMLFormElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
@@ -105,10 +106,10 @@ export function SandboxLaunchDialog({
   const validDisplayName = displayName.trim();
   const validDiskGb = Number.isInteger(diskGb) && diskGb >= diskGbMin && diskGb <= diskGbMax;
   const title = loading
-    ? `正在创建 ${agentLabel} 智能体`
+    ? t("launch.creatingTitle", { agent: agentLabel })
     : state === "error"
-      ? "启动失败"
-      : `创建 ${agentLabel} 智能体`;
+      ? t("launch.failedTitle")
+      : t("launch.createTitle", { agent: agentLabel });
 
   return createPortal(
     <div
@@ -154,16 +155,16 @@ export function SandboxLaunchDialog({
           <h2 id="sandbox-dialog-title">{title}</h2>
           {state === "error" ? (
             <p id="sandbox-dialog-description" className="sandbox-dialog-error" role="alert">
-              {error || "AgentKit 沙箱初始化失败，请稍后重新尝试。"}
+              {error || t("launch.fallbackError")}
             </p>
           ) : loading ? (
             <p id="sandbox-dialog-description" aria-live="polite">
-              正在创建并等待 {agentLabel} 智能体就绪，这通常需要半分钟
+              {t("launch.creatingDescription", { agent: agentLabel })}
             </p>
           ) : null}
           <label className="sandbox-dialog-field">
             <span className="sandbox-dialog-field-label">
-              <span>智能体名称</span>
+              <span>{t("launch.name")}</span>
               <span aria-hidden="true">
                 {displayName.length}/{SANDBOX_DISPLAY_NAME_MAX_LENGTH}
               </span>
@@ -200,7 +201,7 @@ export function SandboxLaunchDialog({
           {storageMode === "disk" ? (
             <label className="sandbox-dialog-field sandbox-dialog-disk-field">
               <span className="sandbox-dialog-field-label">
-                <span>存储大小</span>
+                <span>{t("launch.storageSize")}</span>
                 <span>GiB</span>
               </span>
               <input
@@ -214,7 +215,7 @@ export function SandboxLaunchDialog({
                 onChange={(event) => setDiskGb(event.currentTarget.valueAsNumber)}
               />
               <span className="sandbox-dialog-field-help">
-                数据将持久化保存，可设置 {diskGbMin}–{diskGbMax} GiB。
+                {t("launch.storageHelp", { min: diskGbMin, max: diskGbMax })}
               </span>
             </label>
           ) : (
@@ -229,7 +230,7 @@ export function SandboxLaunchDialog({
                 checked={persistent}
                 disabled={loading || !persistentEnabled || persistentRequired}
                 onCheckedChange={setPersistent}
-                label="持久化"
+                label={t("launch.persistent")}
               />
               <p
                 id="sandbox-persistence-description"
@@ -239,17 +240,17 @@ export function SandboxLaunchDialog({
                 role={persistent ? undefined : "status"}
               >
                 {!persistentEnabled
-                  ? persistentReason || "当前环境不支持快照持久化"
+                  ? persistentReason || t("launch.persistenceUnsupported")
                   : persistent
-                  ? "保留智能体数据，后续可继续使用。"
-                  : "智能体将在 8 小时后清空"}
+                  ? t("launch.persistentHelp")
+                  : t("launch.temporaryHelp")}
               </p>
             </div>
           )}
         </div>
         <footer className="sandbox-dialog-actions">
           <button ref={cancelButtonRef} type="button" onClick={onCancel}>
-            {loading ? "取消创建" : "取消"}
+            {loading ? t("launch.cancelCreation") : t("common.cancel")}
           </button>
           {!loading && (
             <button
@@ -257,7 +258,7 @@ export function SandboxLaunchDialog({
               className="is-primary"
               disabled={!validDisplayName || (storageMode === "disk" && !validDiskGb)}
             >
-              {state === "error" ? "重新尝试" : "确认创建"}
+              {state === "error" ? t("launch.retry") : t("launch.confirm")}
             </button>
           )}
         </footer>

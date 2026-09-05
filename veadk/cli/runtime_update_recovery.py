@@ -70,6 +70,11 @@ _PUBLIC_RUNTIME_ENV_KEYS = frozenset(
         "MODEL_AGENT_API_BASE",
         "MODEL_AGENT_API_KEY_ID",
         "MODEL_AGENT_API_KEY_NAME",
+        # AgentKit code sandbox identifiers are resource metadata, not
+        # credentials. The update editor must restore them so a published
+        # Code Execution tool can be validated and released again.
+        "AGENTKIT_TOOL_ID",
+        "AGENTKIT_TOOL_REGION",
         "FEISHU_APP_ID",
         "FEISHU_APP_SECRET",
     }

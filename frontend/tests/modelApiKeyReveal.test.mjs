@@ -32,7 +32,7 @@ test("reveals a selected ModelArk API Key only after an explicit request", () =>
     /await revealModelApiKey\(\s*requestApiKeyId,\s*controller\.signal,?\s*\)/,
   );
   assert.match(previewSource, /value: response\.value/);
-  assert.match(previewSource, /由所选 API Key 注入/);
+  assert.match(previewSource, /t\("projectPreview\.injectedByApiKey"\)/);
 });
 
 test("supports hide, loading, error and retry states with accessible controls", () => {
@@ -40,9 +40,9 @@ test("supports hide, loading, error and retry states with accessible controls", 
   assert.match(previewSource, /status: "loading"/);
   assert.match(previewSource, /status: "visible"/);
   assert.match(previewSource, /status: "error"/);
-  assert.match(previewSource, /显示 API Key/);
-  assert.match(previewSource, /隐藏 API Key/);
-  assert.match(previewSource, /重试显示 API Key/);
+  assert.match(previewSource, /t\("projectPreview\.apiKey\.reveal"\)/);
+  assert.match(previewSource, /t\("projectPreview\.apiKey\.hide"\)/);
+  assert.match(previewSource, /t\("projectPreview\.apiKey\.retryReveal"\)/);
   assert.match(previewSource, /aria-label=\{modelApiKeyRevealLabel\}/);
   assert.match(previewSource, /title=\{modelApiKeyRevealLabel\}/);
   assert.match(previewSource, /function ModelApiKeyEyeIcon/);

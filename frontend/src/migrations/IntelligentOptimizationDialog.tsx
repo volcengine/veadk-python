@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
+import { useTranslation } from "react-i18next";
 import {
   IntelligentGoalPanel,
   type IntelligentCreateBaseVersion,
@@ -34,6 +35,7 @@ export function IntelligentOptimizationDialog({
   onClose,
   onCreate,
 }: IntelligentOptimizationDialogProps) {
+  const { t } = useTranslation("migrations");
   const titleId = useId();
   const dialogRef = useRef<HTMLElement>(null);
   const busy = preparationStage !== null;
@@ -44,12 +46,15 @@ export function IntelligentOptimizationDialog({
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
-    const previousFocus = document.activeElement instanceof HTMLElement
-      ? document.activeElement
-      : null;
+    const previousFocus =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
     document.body.style.overflow = "hidden";
     window.requestAnimationFrame(() => {
-      dialogRef.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
+      dialogRef.current
+        ?.querySelector<HTMLTextAreaElement>("textarea")
+        ?.focus();
     });
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -57,9 +62,11 @@ export function IntelligentOptimizationDialog({
         return;
       }
       if (event.key !== "Tab" || !dialogRef.current) return;
-      const focusable = [...dialogRef.current.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-      )].filter((item) => item.offsetParent !== null);
+      const focusable = [
+        ...dialogRef.current.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ].filter((item) => item.offsetParent !== null);
       if (focusable.length === 0) return;
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
@@ -96,7 +103,7 @@ export function IntelligentOptimizationDialog({
       >
         <header className="migration-optimize-dialog__header">
           <div>
-            <h2 id={titleId}>优化迁移项目</h2>
+            <h2 id={titleId}>{t("optimization.title")}</h2>
             <p title={baseVersion.projectName}>{baseVersion.projectName}</p>
           </div>
           <button
@@ -104,8 +111,8 @@ export function IntelligentOptimizationDialog({
             className="migration-optimize-dialog__close"
             onClick={onClose}
             disabled={busy}
-            aria-label="关闭优化窗口"
-            title="关闭"
+            aria-label={t("optimization.closeAria")}
+            title={t("common.close")}
           >
             <SourceCloseIcon />
           </button>

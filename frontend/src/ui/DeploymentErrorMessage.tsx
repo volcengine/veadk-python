@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Button, CopyButton } from "@openai/apps-sdk-ui/components/Button";
 import {
   ArrowRotateCcw,
@@ -12,7 +13,7 @@ export function DeploymentErrorMessage({
   message,
   className = "",
   onRetry,
-  retryLabel = "重试部署",
+  retryLabel,
   defaultExpanded = true,
 }: {
   message: string;
@@ -21,6 +22,8 @@ export function DeploymentErrorMessage({
   retryLabel?: string;
   defaultExpanded?: boolean;
 }) {
+  const { t } = useTranslation("ui");
+  const resolvedRetryLabel = retryLabel ?? t("deploymentError.retryDeployment");
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [retrying, setRetrying] = useState(false);
 
@@ -55,7 +58,7 @@ export function DeploymentErrorMessage({
             onClick={() => void retry()}
           >
             {!retrying && <ArrowRotateCcw />}
-            {retrying ? "重试中…" : retryLabel}
+            {retrying ? t("deploymentError.retrying") : resolvedRetryLabel}
           </Button>
         )}
         <Button
@@ -65,8 +68,8 @@ export function DeploymentErrorMessage({
           size="sm"
           uniform
           pill={false}
-          title={expanded ? "收起错误信息" : "展开完整错误信息"}
-          aria-label={expanded ? "收起错误信息" : "展开完整错误信息"}
+          title={expanded ? t("deploymentError.collapse") : t("deploymentError.expand")}
+          aria-label={expanded ? t("deploymentError.collapse") : t("deploymentError.expand")}
           onClick={() => setExpanded((value) => !value)}
         >
           {expanded ? <Collapse /> : <Expand />}
@@ -78,8 +81,8 @@ export function DeploymentErrorMessage({
           size="sm"
           uniform
           pill={false}
-          title="复制完整错误信息"
-          aria-label="复制完整错误信息"
+          title={t("deploymentError.copy")}
+          aria-label={t("deploymentError.copy")}
         >
           {({ copied }) => copied ? <Check /> : <Copy />}
         </CopyButton>

@@ -1,21 +1,24 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { TFunction } from "i18next";
 import { createPortal } from "react-dom";
+import { useTranslation } from "react-i18next";
 import type { StudioBffTool } from "../adk/client";
 import { BUILTIN_TOOLS } from "../create/veadkCatalog";
 import { ToolCapabilityIcon } from "./CapabilityIcons";
 
-const STUDIO_TOOL_LABELS: Record<string, string> = {
-  coding: "智能编程",
-  get_city_weather: "城市天气查询",
-  get_location_weather: "位置天气查询",
-  web_fetch: "网页内容获取",
+const STUDIO_TOOL_LABEL_KEYS: Record<string, string> = {
+  coding: "studioTools.labels.coding",
+  get_city_weather: "studioTools.labels.get_city_weather",
+  get_location_weather: "studioTools.labels.get_location_weather",
+  web_fetch: "studioTools.labels.web_fetch",
 };
 
-export function studioToolLabel(name: string): string {
+export function studioToolLabel(name: string, t: TFunction): string {
   const catalogTool = BUILTIN_TOOLS.find(
     (tool) => tool.id === name || tool.toolNames.includes(name),
   );
-  return STUDIO_TOOL_LABELS[name] ?? catalogTool?.label ?? name;
+  const labelKey = STUDIO_TOOL_LABEL_KEYS[name];
+  return labelKey ? t(labelKey) : catalogTool?.label ?? name;
 }
 
 function CloseIcon() {
@@ -54,6 +57,7 @@ export function StudioToolDialog({
   onChange: (selectedIds: string[]) => void;
   onClose: () => void;
 }) {
+  const { t } = useTranslation("workspaceTools");
   const [query, setQuery] = useState("");
   const selected = useMemo(() => new Set(selectedIds), [selectedIds]);
   const titleId = useRef(`studio-tool-${Math.random().toString(36).slice(2)}`);
@@ -90,7 +94,7 @@ export function StudioToolDialog({
       <button
         type="button"
         className="studio-tool-dialog-scrim"
-        aria-label="关闭弹窗"
+        aria-label={t("studioTools.closeDialog")}
         onClick={onClose}
       />
       <section
@@ -102,13 +106,13 @@ export function StudioToolDialog({
         <header className="studio-tool-dialog-head">
           <span className="studio-tool-dialog-mark"><ToolCapabilityIcon /></span>
           <div>
-            <h2 id={titleId.current}>添加 Studio 工具</h2>
-            <p>由 Studio BFF 为 {agentName} 的当前会话执行，Runtime 无需预装</p>
+            <h2 id={titleId.current}>{t("studioTools.title")}</h2>
+            <p>{t("studioTools.description", { agentName })}</p>
           </div>
           <button
             type="button"
             className="studio-tool-dialog-close"
-            aria-label="关闭添加 Studio 工具"
+            aria-label={t("studioTools.close")}
             onClick={onClose}
           >
             <CloseIcon />
@@ -119,19 +123,19 @@ export function StudioToolDialog({
             <SearchIcon />
             <input
               value={query}
-              aria-label="搜索 Studio 工具"
-              placeholder="搜索中文名称或工具标识"
+              aria-label={t("studioTools.searchAria")}
+              placeholder={t("studioTools.searchPlaceholder")}
               autoFocus
               onChange={(event) => setQuery(event.target.value)}
             />
           </label>
-          <div className="studio-tool-picker" role="list" aria-label="可用 Studio 工具">
+          <div className="studio-tool-picker" role="list" aria-label={t("studioTools.availableAria")}>
             {loading ? (
-              <div className="studio-tool-empty">正在读取 Studio 工具…</div>
+              <div className="studio-tool-empty">{t("studioTools.loading")}</div>
             ) : unavailableReason ? (
               <div className="studio-tool-empty">{unavailableReason}</div>
             ) : filteredTools.length === 0 ? (
-              <div className="studio-tool-empty">没有匹配的 Studio 工具</div>
+              <div className="studio-tool-empty">{t("studioTools.noMatch")}</div>
             ) : (
               filteredTools.map((tool) => {
                 const active = selected.has(tool.id);
@@ -139,7 +143,7 @@ export function StudioToolDialog({
                   <article key={tool.id} className="studio-tool-option" role="listitem">
                     <span className="studio-tool-option-icon"><ToolCapabilityIcon /></span>
                     <span className="studio-tool-option-copy">
-                      <strong>{tool.name || studioToolLabel(tool.id)}</strong>
+                      <strong>{tool.name || studioToolLabel(tool.id, t)}</strong>
                       <code>{tool.id}</code>
                       <span>{tool.description}</span>
                     </span>
@@ -149,7 +153,7 @@ export function StudioToolDialog({
                       aria-pressed={active}
                       onClick={() => toggle(tool.id)}
                     >
-                      {active ? "移除" : "添加"}
+                      {active ? t("studioTools.remove") : t("studioTools.add")}
                     </button>
                   </article>
                 );

@@ -58,6 +58,14 @@ const sandboxCommandsSource = readFileSync(
   new URL("../src/ui/sandboxCommands.ts", import.meta.url),
   "utf8",
 );
+const zhSandbox = JSON.parse(readFileSync(
+  new URL("../src/i18n/resources/zh-CN/sandbox.json", import.meta.url),
+  "utf8",
+));
+const enSandbox = JSON.parse(readFileSync(
+  new URL("../src/i18n/resources/en-US/sandbox.json", import.meta.url),
+  "utf8",
+));
 
 test("codex project handoff pairing code supports countdown, refresh, and status polling", () => {
   assert.match(
@@ -71,10 +79,8 @@ test("codex project handoff pairing code supports countdown, refresh, and status
   assert.match(dialogSource, /createCodexProjectHandoffPairing/);
   assert.match(sandboxClientSource, /getCodexProjectHandoffStatus/);
   assert.match(sandboxClientSource, /async function responseJson/);
-  assert.match(
-    sandboxClientSource,
-    /Studio 服务响应异常，请刷新后重试/,
-  );
+  assert.match(sandboxClientSource, /adkT\("common\.fallbackWithHttpStatus"/);
+  assert.match(sandboxClientSource, /adkT\("common\.fallbackWithDetail"/);
   assert.doesNotMatch(
     sandboxClientSource,
     /getCodexProjectHandoffStatus[\s\S]*?recordOf\(await response\.json\(\)\)/,
@@ -83,16 +89,17 @@ test("codex project handoff pairing code supports countdown, refresh, and status
   assert.match(dialogSource, /getCodexProjectHandoffStatus/);
   assert.match(dialogSource, /handoffStatus\.agentName/);
   assert.match(dialogSource, /formatPairingCountdown/);
-  assert.match(dialogSource, /配对码有效期剩余/);
-  assert.match(dialogSource, /刷新配对码/);
+  assert.match(dialogSource, /t\("handoff\.pairingRemaining"/);
+  assert.match(dialogSource, /t\("handoff\.refreshPairing"\)/);
   assert.doesNotMatch(dialogSource, /<dt>Studio 地址<\/dt>/);
 });
 
 test("the install step only asks Codex to install the Studio plugin", () => {
-  assert.match(dialogSource, /<h3>安装插件<\/h3>/);
-  assert.match(dialogSource, /复制安装提示词/);
-  assert.match(dialogSource, /复制安装命令/);
-  assert.match(dialogSource, /不要让我手动打开终端/);
+  assert.match(dialogSource, /t\("handoff\.installTitle"\)/);
+  assert.match(dialogSource, /t\("handoff\.copyInstallPrompt"\)/);
+  assert.match(dialogSource, /t\("handoff\.copyInstallCommand"\)/);
+  assert.match(zhSandbox.handoff.installPrompt, /不要让我手动打开终端/);
+  assert.match(enSandbox.handoff.installPrompt, /do not ask me to open a terminal manually/);
   assert.match(dialogSource, /function installPluginPrompt\(\): string/);
   assert.match(
     dialogSource,
@@ -113,9 +120,9 @@ test("the install step only asks Codex to install the Studio plugin", () => {
 test("the install step switches between Codex conversation and terminal tabs", () => {
   assert.match(dialogSource, /type InstallMethod = "conversation" \| "terminal"/);
   assert.match(dialogSource, /role="tablist"/);
-  assert.match(dialogSource, /aria-label="插件安装方式"/);
-  assert.match(dialogSource, /与 Codex 对话安装/);
-  assert.match(dialogSource, /从终端安装/);
+  assert.match(dialogSource, /aria-label=\{t\("handoff\.installMethodAria"\)\}/);
+  assert.match(dialogSource, /t\("handoff\.conversationInstall"\)/);
+  assert.match(dialogSource, /t\("handoff\.terminalInstall"\)/);
   assert.match(dialogSource, /role="tabpanel"/);
   assert.match(dialogSource, /ArrowRight/);
   assert.match(dialogSource, /ArrowLeft/);
@@ -166,12 +173,14 @@ test("the dialog does not expose plugin maintenance details", () => {
 });
 
 test("the handoff step generates a short cloud continuation prompt", () => {
-  assert.match(dialogSource, /<h3>任务接力<\/h3>/);
-  assert.match(dialogSource, /复制接力提示词/);
-  assert.match(dialogSource, /使用 AgentKit Studio Plugin 端云接力当前会话、项目和任务/);
-  assert.match(dialogSource, /Studio：\$\{studioUrl\}/);
-  assert.match(dialogSource, /配对码：\$\{pairing\.pairingCode\}/);
-  assert.match(dialogSource, /插件安装完成后复制/);
+  assert.match(dialogSource, /t\("handoff\.taskTitle"\)/);
+  assert.match(dialogSource, /t\("handoff\.copyHandoffPrompt"\)/);
+  assert.match(dialogSource, /sandboxT\("handoff\.prompt"/);
+  assert.match(zhSandbox.handoff.prompt, /使用 AgentKit Studio Plugin 端云接力当前会话、项目和任务/);
+  assert.match(zhSandbox.handoff.prompt, /Studio：\{\{studioUrl\}\}/);
+  assert.match(zhSandbox.handoff.prompt, /配对码：\{\{pairingCode\}\}/);
+  assert.match(zhSandbox.handoff.taskDescription, /插件安装完成后复制/);
+  assert.match(enSandbox.handoff.prompt, /Pairing code: \{\{pairingCode\}\}/);
   assert.doesNotMatch(dialogSource, /authorization_code/);
   assert.doesNotMatch(dialogSource, /repo: 当前工作目录/);
 });
@@ -179,10 +188,10 @@ test("the handoff step generates a short cloud continuation prompt", () => {
 test("the dialog uses the requested copy and normal body typography", () => {
   assert.match(
     dialogSource,
-    /按顺序复制两段提示词，Codex 会通过插件将您的本地任务接力到云端/,
+    /t\("handoff\.description"\)/,
   );
-  assert.match(dialogSource, /复制安装提示词/);
-  assert.match(dialogSource, /复制接力提示词/);
+  assert.match(dialogSource, /t\("handoff\.copyInstallPrompt"\)/);
+  assert.match(dialogSource, /t\("handoff\.copyHandoffPrompt"\)/);
   assert.match(
     dialogStyles,
     /\.sandbox-project-upload-prompt code\s*\{[\s\S]*?font-family:\s*inherit/,
@@ -200,7 +209,7 @@ test("the dialog title shows the Apps SDK UI Beta badge", () => {
   );
   assert.match(
     dialogSource,
-    /className="sandbox-project-upload-title-row"[\s\S]*?<h2 id="sandbox-project-upload-title">接力到云端继续执行<\/h2>[\s\S]*?<Badge[\s\S]*?className="sandbox-project-upload-beta"[\s\S]*?color="discovery"[\s\S]*?size="sm"[\s\S]*?pill[\s\S]*?>[\s\S]*?Beta[\s\S]*?<\/Badge>/,
+    /className="sandbox-project-upload-title-row"[\s\S]*?<h2 id="sandbox-project-upload-title">\{t\("handoff\.title"\)\}<\/h2>[\s\S]*?<Badge[\s\S]*?className="sandbox-project-upload-beta"[\s\S]*?color="discovery"[\s\S]*?size="sm"[\s\S]*?pill[\s\S]*?>[\s\S]*?Beta[\s\S]*?<\/Badge>/,
   );
   assert.match(
     dialogStyles,
@@ -213,17 +222,17 @@ test("the dialog title shows the Apps SDK UI Beta badge", () => {
 });
 
 test("handoff progress can open the Codex session as soon as it is running", () => {
-  assert.match(dialogSource, /等待端侧请求/);
-  assert.match(dialogSource, /创建云端 Session/);
-  assert.match(dialogSource, /恢复项目/);
-  assert.match(dialogSource, /发送续跑任务/);
-  assert.match(dialogSource, /进入 Codex/);
+  assert.match(dialogSource, /t\(`handoff\.steps\.\$\{step\.id\}`\)/);
+  assert.deepEqual(Object.keys(zhSandbox.handoff.steps), [
+    "request", "session", "restore", "continue",
+  ]);
+  assert.match(dialogSource, /t\("handoff\.enterCodex"\)/);
   assert.match(sandboxClientSource, /\| "running"/);
   assert.match(
     dialogSource,
     /\(handoffStatus\?\.state === "running" \|\|[\s\S]*?handoffStatus\?\.state === "completed"\)[\s\S]*?handoffStatus\.sessionId/,
   );
-  assert.match(dialogSource, /return "云端执行中"/);
+  assert.match(dialogSource, /return sandboxT\("handoff\.status\.running"\)/);
   assert.match(dialogSource, /onOpenSession/);
   assert.match(appSource, /async function openCodexHandoffSession/);
   assert.match(appSource, /await sandboxClient\.listSessions\(\)/);
@@ -299,7 +308,7 @@ test("install and handoff are fixed sequential steps with independent copy actio
   );
   assert.match(
     dialogSource,
-    /<h3>安装插件<\/h3>[\s\S]*?<h3>任务接力<\/h3>/,
+    /t\("handoff\.installTitle"\)[\s\S]*?t\("handoff\.taskTitle"\)/,
   );
   assert.match(dialogStyles, /\.sandbox-project-upload-prompt\s*\{[\s\S]*?min-height:\s*92px/);
   assert.match(dialogSource, /className="sandbox-project-upload-prompt"/);
@@ -318,7 +327,7 @@ test("handoff progress labels stay on one line without connector pressure", () =
 
 test("the Codex project handoff entry remains in the toolbar only", () => {
   assert.doesNotMatch(myAgentsSource, /本地Codex项目上传/);
-  assert.equal(myAgentsSource.match(/接力/g)?.length, 1);
+  assert.equal(myAgentsSource.match(/t\("myAgents\.handoff"\)/g)?.length, 1);
   assert.match(
     myAgentsStyles,
     /\.my-agent-create-secondary\s*\{[\s\S]*?height:\s*32px[\s\S]*?display:\s*inline-flex/,

@@ -17,6 +17,7 @@ import type {
   FrontendInvocation,
   MessageFeedbackState,
 } from "./adk/client";
+import { i18n } from "./i18n/runtime";
 import type { A2uiMessage } from "./a2ui/types";
 import type { SandboxTokenUsage } from "./adk/sandbox";
 import type { ProjectFile } from "./create/project";
@@ -469,7 +470,7 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
           transferAgentName(fc.args) ||
           ev.actions?.transferToAgent ||
           ev.actions?.transfer_to_agent ||
-          "未知 Agent";
+          i18n.t("app:common.unknownAgent");
         blocks.push({ kind: "agent-transfer", agentName, done: false });
       } else if (fc.name === REQUEST_EUC) {
         // MCP/tool OAuth: render a dedicated auth card instead of a tool row.
@@ -663,12 +664,15 @@ export function eventsToTurns(
 }
 
 /** First user message of a session, for the sidebar title. */
-export function sessionTitle(events: AdkEvent[] | undefined): string {
+export function sessionTitle(
+  events: AdkEvent[] | undefined,
+  fallback = i18n.t("app:titles.newConversation"),
+): string {
   for (const ev of events ?? []) {
     if (ev.author === "user" || ev.content?.role === "user") {
       const t = (ev.content?.parts ?? []).map((p) => p.text).find(Boolean);
       if (t) return t;
     }
   }
-  return "新会话";
+  return fallback;
 }

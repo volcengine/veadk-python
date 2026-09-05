@@ -1,4 +1,5 @@
 import { useId } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import type { CloudProvider } from "../adk/cloudProvider";
 import { contextWindowForModel } from "../adk/modelContextWindows";
 import {
@@ -15,16 +16,14 @@ interface TokenUsageIndicatorProps {
   systemTokenEstimate: number | null;
 }
 
-const integerFormat = new Intl.NumberFormat("zh-CN");
-
-function compactTokenCount(value: number): string {
+function compactTokenCount(value: number, integerFormat: Intl.NumberFormat): string {
   if (value >= 1_000) {
     return `${Number((value / 1_000).toFixed(1))}K`;
   }
   return integerFormat.format(value);
 }
 
-function summaryTokenCount(value: number): string {
+function summaryTokenCount(value: number, integerFormat: Intl.NumberFormat): string {
   if (value >= 1_000) {
     return `${Number((value / 1_000).toFixed(1))}K`;
   }
@@ -35,20 +34,16 @@ function summaryPercentage(value: number): string {
   return `${Number(value.toFixed(2))}%`;
 }
 
-const SEGMENT_LABELS: Record<ContextSegmentKind, string> = {
-  system: "系统与工具",
-  input: "输入与历史",
-  output: "输出与思考",
-  remaining: "剩余",
-};
-
 export function TokenUsageIndicator({
   cloudProvider,
   modelName,
   usage,
   systemTokenEstimate,
 }: TokenUsageIndicatorProps) {
+  const { t, i18n } = useTranslation("conversation");
   const tooltipId = useId();
+  const integerFormat = new Intl.NumberFormat(i18n.resolvedLanguage ?? i18n.language);
+  const segmentLabel = (kind: ContextSegmentKind) => t(`tokenUsage.segments.${kind}`);
   const contextWindow = contextWindowForModel(modelName, cloudProvider);
   const composition = contextWindow
     ? contextComposition({
@@ -71,19 +66,29 @@ export function TokenUsageIndicator({
     ? 0
     : Math.min(100, Math.max(0, rawPercentage));
   const remainingPercentage = 100 - ringPercentage;
-  const modelLabel = modelName.trim() || "模型信息未提供";
+  const modelLabel = modelName.trim() || t("tokenUsage.modelUnavailable");
   const inputSegmentLabel = systemTokenEstimate === null
-    ? "提示词（含系统）"
-    : SEGMENT_LABELS.input;
+    ? t("tokenUsage.promptWithSystem")
+    : segmentLabel("input");
   const overflowTokens = composition
     ? Math.max(0, composition.usedTokens - composition.contextWindow)
     : 0;
   const systemAriaLabel = systemTokenEstimate === null
-    ? "系统与工具占用未知"
-    : `系统与工具约 ${integerFormat.format(composition?.systemTokens ?? 0)} Token`;
+    ? t("tokenUsage.systemUnknown")
+    : t("tokenUsage.systemApprox", { count: integerFormat.format(composition?.systemTokens ?? 0) });
   const ariaLabel = composition
-    ? `上下文已使用 ${percentageLabel}%，${systemAriaLabel}，${inputSegmentLabel} ${integerFormat.format(composition.inputTokens)} Token，输出与思考 ${integerFormat.format(composition.outputTokens)} Token，剩余 ${integerFormat.format(composition.remainingTokens)} Token`
-    : `${modelLabel}，上下文窗口未知，会话累计使用 ${integerFormat.format(usage.cumulative.totalTokenCount)} Token`;
+    ? t("tokenUsage.ariaKnown", {
+        percentage: percentageLabel,
+        system: systemAriaLabel,
+        inputLabel: inputSegmentLabel,
+        input: integerFormat.format(composition.inputTokens),
+        output: integerFormat.format(composition.outputTokens),
+        remaining: integerFormat.format(composition.remainingTokens),
+      })
+    : t("tokenUsage.ariaUnknown", {
+        model: modelLabel,
+        count: integerFormat.format(usage.cumulative.totalTokenCount),
+      });
   const cells = composition ? buildContextGrid(composition) : [];
   const legend = composition
     ? [
@@ -129,14 +134,14 @@ export function TokenUsageIndicator({
         {composition ? (
           <>
             <div className="token-usage-tooltip__header">
-              <strong>上下文构成</strong>
-              <span>{percentageLabel}% 已用</span>
+              <strong>{t("tokenUsage.composition")}</strong>
+              <span>{t("tokenUsage.percentageUsed", { percentage: percentageLabel })}</span>
             </div>
             <div className="token-context-breakdown">
               <div
                 className="token-context-grid"
                 role="img"
-                aria-label="100 格上下文构成图，每格代表上下文窗口的百分之一"
+                aria-label={t("tokenUsage.gridAria")}
               >
                 {cells.map((cell) => (
                   <span
@@ -164,15 +169,15 @@ export function TokenUsageIndicator({
                       />
                       {item.kind === "input"
                         ? inputSegmentLabel
-                        : SEGMENT_LABELS[item.kind]}
+                        : segmentLabel(item.kind)}
                       {item.kind === "system" && systemTokenEstimate !== null
-                        ? <em>估算</em>
+                        ? <em>{t("tokenUsage.estimated")}</em>
                         : null}
                     </dt>
                     <dd>
                       {item.kind === "system" && systemTokenEstimate === null
-                        ? "未知"
-                        : `${item.kind === "system" ? "≈" : ""}${compactTokenCount(item.tokens)}`}
+                        ? t("tokenUsage.unknown")
+                        : `${item.kind === "system" ? "≈" : ""}${compactTokenCount(item.tokens, integerFormat)}`}
                     </dd>
                   </div>
                 ))}
@@ -180,28 +185,42 @@ export function TokenUsageIndicator({
             </div>
             <div className="token-context-summary">
               <div>
-                <strong>{summaryPercentage(ringPercentage)}</strong> 已用，剩余{" "}
-                <strong>{summaryPercentage(remainingPercentage)}</strong>
+                <Trans
+                  t={t}
+                  i18nKey="tokenUsage.summaryPercentage"
+                  values={{
+                    used: summaryPercentage(ringPercentage),
+                    remaining: summaryPercentage(remainingPercentage),
+                  }}
+                  components={{ strong: <strong /> }}
+                />
               </div>
               <div>
-                <strong>{summaryTokenCount(composition.usedTokens)}</strong> 已用，剩余{" "}
-                <strong>{summaryTokenCount(composition.remainingTokens)}</strong>，总计{" "}
-                <strong>{summaryTokenCount(composition.contextWindow)}</strong>
+                <Trans
+                  t={t}
+                  i18nKey="tokenUsage.summaryTokens"
+                  values={{
+                    used: summaryTokenCount(composition.usedTokens, integerFormat),
+                    remaining: summaryTokenCount(composition.remainingTokens, integerFormat),
+                    total: summaryTokenCount(composition.contextWindow, integerFormat),
+                  }}
+                  components={{ strong: <strong /> }}
+                />
               </div>
             </div>
             {overflowTokens > 0 ? (
               <div className="token-usage-tooltip__overflow">
-                已超出上下文 {compactTokenCount(overflowTokens)} Token
+                {t("tokenUsage.overflow", { count: compactTokenCount(overflowTokens, integerFormat) })}
               </div>
             ) : null}
           </>
         ) : (
           <>
-            <div className="token-usage-tooltip__title">上下文用量</div>
+            <div className="token-usage-tooltip__title">{t("tokenUsage.title")}</div>
             <div className="token-usage-tooltip__unknown">
               {modelName.trim()
-                ? "暂未收录该模型的上下文窗口"
-                : "当前 Runtime 未提供模型信息"}
+                ? t("tokenUsage.unknownModel")
+                : t("tokenUsage.unknownRuntime")}
             </div>
           </>
         )}

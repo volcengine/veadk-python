@@ -602,7 +602,7 @@ test("rejects unsupported or malformed persisted payloads", () => {
   const key = workspaceDraftsKey("alice");
   assert.throws(
     () => loadWorkspaceDrafts(memoryStorage({ [key]: "not-json" }), "alice"),
-    /无法读取本机草稿/,
+    /Could not read local drafts/,
   );
   assert.throws(
     () =>
@@ -610,7 +610,7 @@ test("rejects unsupported or malformed persisted payloads", () => {
         memoryStorage({ [key]: JSON.stringify({ version: 2, drafts: [] }) }),
         "alice",
       ),
-    /版本暂不受支持/,
+    /not supported/,
   );
 });
 
@@ -622,6 +622,6 @@ test("reports browser storage write failures with a recovery action", () => {
 
   assert.throws(
     () => writeWorkspaceDrafts(storage, "alice", []),
-    /删除不需要的草稿或清理此站点的浏览器存储后重试/,
+    /Delete unused drafts or clear this site's storage/,
   );
 });

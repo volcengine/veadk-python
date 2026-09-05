@@ -1,4 +1,12 @@
 import type { Block, CodexSandboxActivity } from "../../blocks";
+import { i18n } from "../../i18n/runtime";
+
+function codexT(key: string, options?: Record<string, unknown>): string {
+  return i18n.t(`blocks.codexProgress.${key}`, {
+    ns: "conversation",
+    ...options,
+  });
+}
 
 export interface CodexSandboxProgressEvent {
   id: string;
@@ -141,7 +149,7 @@ function parseNormalizedEvent(
       id,
       block: {
         kind: "plan",
-        title: asString(event.title) || "Codex 执行计划",
+        title: asString(event.title) || codexT("planTitle"),
         summary: text || undefined,
         items: plan.flatMap((value) => {
           const item = asRecord(value);
@@ -174,12 +182,12 @@ function parseNormalizedEvent(
     "status",
   ].includes(kind)) {
     const fallbackName = kind === "file_change" || kind === "fileChange"
-      ? "修改文件"
+      ? codexT("fallback.fileChange")
       : kind === "approval"
-        ? "等待操作批准"
+        ? codexT("fallback.approval")
         : kind === "status"
-          ? "Codex 状态"
-          : "运行命令";
+          ? codexT("fallback.status")
+          : codexT("fallback.command");
     const args = argumentsValue(event);
     const response = responseValue(event) ?? (kind === "status" ? text || undefined : undefined);
     return {
@@ -235,8 +243,11 @@ function parseRawCodexEvent(
       id,
       block: {
         kind: "plan",
-        title: "Codex 执行计划",
-        summary: `已完成 ${plan.filter((todo) => todo.status === "completed").length}/${plan.length} 项`,
+        title: codexT("planTitle"),
+        summary: codexT("planSummary", {
+          completed: plan.filter((todo) => todo.status === "completed").length,
+          total: plan.length,
+        }),
         items: plan,
         done: status !== "running",
       },
@@ -244,32 +255,30 @@ function parseRawCodexEvent(
   }
 
   if (itemType === "command_execution") {
-    const name = status === "running" ? "正在执行命令" : status === "failed" ? "命令执行失败" : "命令执行完成";
+    const name = codexT(`command.${status}`);
     return { id, block: toolBlock(name, id, status, argumentsValue(item ?? {}), responseValue(item ?? {})) };
   }
   if (itemType === "file_change") {
     const changes = Array.isArray(item?.changes) ? item.changes : [];
-    const subject = changes.length ? `${changes.length} 个项目文件` : "项目文件";
-    const name = status === "running" ? `正在更新${subject}` : status === "failed" ? `更新${subject}失败` : `已更新${subject}`;
+    const subject = changes.length
+      ? codexT("projectFiles", { count: changes.length })
+      : codexT("projectFile");
+    const name = codexT(`fileChange.${status}`, { subject });
     return { id, block: toolBlock(name, id, status, changes.length ? { changes } : undefined) };
   }
   if (itemType === "mcp_tool_call") {
-    const label = [asString(item?.server), asString(item?.tool)].filter(Boolean).join("/") || "外部工具";
-    const name = status === "running" ? `正在调用工具 ${label}` : status === "failed" ? `工具 ${label} 调用未完成` : `已调用工具 ${label}`;
+    const label = [asString(item?.server), asString(item?.tool)].filter(Boolean).join("/") || codexT("externalTool");
+    const name = codexT(`mcp.${status}`, { tool: label });
     const error = asRecord(item?.error);
     const response = item?.result !== undefined ? item.result : asString(error?.message) || undefined;
     return { id, block: toolBlock(name, id, status, item?.arguments, response) };
   }
   if (itemType === "collab_tool_call") {
     const operation = asString(item?.tool);
-    const labels: Record<string, [string, string, string]> = {
-      spawn_agent: ["正在启动子任务", "子任务已启动", "子任务启动失败"],
-      send_input: ["正在向子任务发送信息", "已向子任务发送信息", "向子任务发送信息失败"],
-      wait: ["正在等待子任务", "子任务等待已结束", "等待子任务失败"],
-      close_agent: ["正在结束子任务", "子任务已结束", "子任务结束失败"],
-    };
-    const names = labels[operation] ?? ["正在协调子任务", "子任务协作已完成", "子任务协作失败"];
-    const name = names[status === "running" ? 0 : status === "completed" ? 1 : 2];
+    const operationKey = ["spawn_agent", "send_input", "wait", "close_agent"].includes(operation)
+      ? operation
+      : "default";
+    const name = codexT(`collaboration.${operationKey}.${status}`);
     const args = Object.fromEntries(
       ["tool", "receiver_thread_ids", "prompt"]
         .filter((key) => item?.[key] !== undefined)
@@ -281,7 +290,7 @@ function parseRawCodexEvent(
     };
   }
   if (itemType === "web_search") {
-    const name = status === "running" ? "正在进行网络搜索" : status === "failed" ? "网络搜索未完成" : "已完成网络搜索";
+    const name = codexT(`webSearch.${status}`);
     const args = Object.fromEntries(
       ["query", "action"]
         .filter((key) => item?.[key] !== undefined)
@@ -291,8 +300,8 @@ function parseRawCodexEvent(
   }
   if (itemType === "error" || eventType === "error" || eventType === "turn.failed") {
     const error = asRecord(event.error);
-    const detail = asString(item?.message || event.message || error?.message) || "Codex 执行未完成。";
-    return { id, block: toolBlock("Codex 执行遇到错误", id, "failed", undefined, detail) };
+    const detail = asString(item?.message || event.message || error?.message) || codexT("errorDetail");
+    return { id, block: toolBlock(codexT("errorTitle"), id, "failed", undefined, detail) };
   }
   return null;
 }

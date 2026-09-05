@@ -7,8 +7,10 @@ import {
   useState,
 } from "react";
 import { Button } from "@openai/apps-sdk-ui/components/Button";
+import { useTranslation } from "react-i18next";
 
 export function CronJobFinalAnswer({ output }: { output: string }) {
+  const { t } = useTranslation("cronjobs");
   const contentId = useId();
   const contentRef = useRef<HTMLParagraphElement>(null);
   const expandedRef = useRef(false);
@@ -51,7 +53,7 @@ export function CronJobFinalAnswer({ output }: { output: string }) {
           aria-controls={contentId}
           onClick={() => setExpanded((value) => !value)}
         >
-          {expanded ? "收起" : "展开"}
+          {expanded ? t("actions.collapse") : t("actions.expand")}
         </Button>
       ) : null}
     </div>

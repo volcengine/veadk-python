@@ -1,4 +1,5 @@
 import { studioFetch } from "./client";
+import { adkT } from "./i18n";
 
 export interface WebsiteIntegrationRecord {
   id: string;
@@ -22,7 +23,7 @@ export interface CreateWebsiteIntegrationInput {
 async function responseError(response: Response, fallback: string): Promise<Error> {
   const payload = await response.json().catch(() => null) as { detail?: unknown } | null;
   const detail = typeof payload?.detail === "string" ? payload.detail : "";
-  return new Error(detail || `${fallback}（HTTP ${response.status}）`);
+  return new Error(detail || adkT("common.fallbackWithHttpStatus", { fallback, status: response.status }));
 }
 
 export async function listWebsiteIntegrations(
@@ -32,7 +33,7 @@ export async function listWebsiteIntegrations(
     cache: "no-store",
     signal,
   });
-  if (!response.ok) throw await responseError(response, "加载网站集成失败");
+  if (!response.ok) throw await responseError(response, adkT("websiteIntegration.listFailed"));
   const payload = await response.json() as { integrations?: WebsiteIntegrationRecord[] };
   return payload.integrations ?? [];
 }
@@ -45,7 +46,7 @@ export async function createWebsiteIntegration(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
-  if (!response.ok) throw await responseError(response, "创建网站集成失败");
+  if (!response.ok) throw await responseError(response, adkT("websiteIntegration.createFailed"));
   return response.json();
 }
 
@@ -54,5 +55,5 @@ export async function deleteWebsiteIntegration(id: string): Promise<void> {
     `/web/website-integrations/${encodeURIComponent(id)}`,
     { method: "DELETE" },
   );
-  if (!response.ok) throw await responseError(response, "删除网站集成失败");
+  if (!response.ok) throw await responseError(response, adkT("websiteIntegration.deleteFailed"));
 }

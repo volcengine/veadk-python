@@ -1,0 +1,237 @@
+{
+  "actions": {
+    "backToEvaluationCase": "返回评测案例",
+    "cancel": "取消",
+    "copied": "已复制",
+    "copy": "复制",
+    "exportConversation": "导出会话",
+    "retry": "重试"
+  },
+  "addAgent": {
+    "title": "您想以哪种方式添加 Agent 来运行？",
+    "subtitle": "选择最适合你的方式，下一步即可开始",
+    "quickCreate": {
+      "title": "从 0 快速创建",
+      "description": "用智能、自定义、模板或工作流的方式从零创建一个 Agent。"
+    },
+    "intelligent": {
+      "title": "智能模式",
+      "description": "描述目标，按你的意图构建、调试并验证 Agent。"
+    },
+    "package": {
+      "title": "从代码包添加和部署",
+      "description": "上传 Agent 项目压缩包，查看代码并直接部署到 AgentKit Runtime。"
+    },
+    "migrate": {
+      "title": "从存量迁移",
+      "description": "从您的 LangChain、Dify 等存量项目迁移至 AgentKit Runtime。"
+    }
+  },
+  "approval": {
+    "subject": {
+      "file": "文件修改",
+      "command": "命令执行"
+    },
+    "decision": {
+      "accept": "已允许本次{{subject}}",
+      "acceptForSession": "已在本会话中允许{{subject}}",
+      "decline": "已拒绝{{subject}}",
+      "cancel": "已取消{{subject}}审批"
+    },
+    "details": {
+      "command": "命令",
+      "grantRoot": "授权路径",
+      "cwd": "执行目录"
+    }
+  },
+  "common": {
+    "noDescription": "暂无描述",
+    "region": "地域",
+    "unknownAgent": "未知 Agent"
+  },
+  "conversation": {
+    "agentTransfer": "智能体移交",
+    "annotationHint": "模型回复；选中文字后可添加批注",
+    "continueBranch": "继续“{{branch}}”这个方向",
+    "emptyResponse": "本次没有返回可显示的内容。",
+    "subagentDescription": "正在执行主 Agent 移交的任务。"
+  },
+  "credentials": {
+    "title": "需要配置 {{provider}} AK/SK",
+    "prefix": "智能体工作台需要 {{provider}} 凭据才能使用。请在运行环境中设置",
+    "and": "与",
+    "suffix": "后重试。"
+  },
+  "dialogs": {
+    "buildRunning": {
+      "title": "当前构建仍在进行",
+      "description": "离开将停止本轮构建；当前会话仍会保留，可稍后从历史会话重新进入。",
+      "confirm": "停止并离开"
+    },
+    "deleteThread": {
+      "title": "删除 Codex 历史会话",
+      "description": "将删除“{{name}}”，并从历史会话中移除。",
+      "confirm": "确认删除"
+    },
+    "returnToCreate": {
+      "title": "返回创建首页？",
+      "description": "返回后当前填写的内容将会丢失，确定要返回吗？",
+      "confirm": "确定返回"
+    }
+  },
+  "errors": {
+    "additionalAgentDeleteFailures": "；另有 {{count}} 个失败",
+    "agentDeleteFailures": "{{count}} 个 Agent 删除失败：{{failures}}{{suffix}}",
+    "agentToolsMissing": "当前 Agent 缺少任务工具：{{tools}}",
+    "buildStopUnconfirmed": "已离开开发环境，但未能确认本轮构建已停止。任务可能仍在运行，请稍后从历史会话检查状态。",
+    "builtinAgentSendFailed": "内置智能体发送失败：{{message}}",
+    "bytePlusEvaluationUnsupported": "BytePlus 暂不支持 AgentKit 评测集",
+    "clipboardUnsupported": "当前浏览器不支持写入剪贴板。",
+    "cloudCodexEmptyReply": "云端 Codex 已结束，但没有生成回复，请重新发送任务。",
+    "cloudCodexSessionMissing": "云端 Codex Session 暂未出现在列表中，请稍后重试。",
+    "deploymentRuntimeIdMissing": "部署完成，但未返回 Runtime ID。",
+    "environmentExpired": "所选环境已失效，请刷新后重新选择。",
+    "environmentsLoadFailed": "读取环境失败",
+    "evaluationCaseSessionMissing": "这条案例缺少会话定位信息，无法跳转。",
+    "evaluationUnsupportedForReply": "当前回复暂不支持加入评测集",
+    "firstFrameRequired": "首尾帧生成需要先添加首帧图片。",
+    "incompletePromptOptimization": "提示词优化结果不完整，请重新优化后再试。",
+    "intelligentCapabilityCheckFailed": "智能开发能力检查失败（HTTP {{status}}）",
+    "intelligentSessionCreateFailed": "智能开发会话创建失败",
+    "invalidIntelligentCapability": "智能开发模型能力格式错误。",
+    "localBffToolsNotConfigured": "本地 Studio BFF 没有配置工具。",
+    "localToolsLoadFailed": "读取本地工具失败",
+    "loginPopupBlocked": "登录窗口被浏览器拦截，请允许弹出窗口后重试。",
+    "loginPopupClosed": "登录窗口已关闭，请重新登录以继续当前操作。",
+    "mediaTooLarge": "{{fileName}} 超出当前平台允许的素材大小。",
+    "mountEnvironmentFailed": "挂载环境失败",
+    "noConnectedSandbox": "当前没有已连接的 Sandbox。",
+    "noCreateAgentPermission": "当前账号没有添加 Agent 的权限。",
+    "noManageAgentPermission": "当前账号没有管理 Agent 的权限。",
+    "noOptimizationBaseline": "当前版本没有可对比的优化前版本。",
+    "oauthUrlMissing": "事件中没有授权地址。",
+    "onlyCloudAgentUpdatable": "仅支持更新已部署的云端智能体。",
+    "optimizationVersionMissing": "无法找到本次优化对应的项目版本，可能已被删除。",
+    "persistentStorageNotConfigured": "管理员未配置持久化存储",
+    "readDraftFailed": "无法读取本机草稿，请稍后重试。",
+    "runtimeAgentNameMissing": "Runtime 缺少智能体名称，无法更新。",
+    "runtimeBffToolsDisabled": "当前 Runtime Agent 未开启 BFF 工具能力。",
+    "runtimeDeploymentConfigUnavailable": "该 Runtime 的原发布配置不可恢复，无法安全更新。",
+    "runtimeMissingForConnection": "缺少 Runtime 信息，无法连接智能体。",
+    "runtimeRegionMissingForDelete": "Runtime 缺少地域信息，无法删除",
+    "runtimeRegionMissingForUpdate": "Runtime 缺少地域信息，无法更新。",
+    "runtimeUpdateUnsupported": "当前 Runtime 不支持原地更新。",
+    "sandboxRuntimeUnavailable": "当前 Agent 没有可用的 Sandbox Runtime。",
+    "sandboxToolsUnavailable": "当前 Studio BFF 未提供 Sandbox 执行工具。",
+    "saveDraftLocationRejected": "浏览器拒绝保存当前草稿位置，请检查站点存储权限后重试。",
+    "saveDraftRejected": "浏览器拒绝保存草稿，请稍后重试。",
+    "selectSkillToOptimize": "请先选择需要优化的 Skill。",
+    "sessionMissingForMount": "当前会话不存在，无法挂载环境。",
+    "sessionNotReady": "会话尚未就绪。",
+    "sessionUnavailable": "当前会话不可用，请关闭后重试。",
+    "sourceNotReady": "该源码尚未准备好，请返回对话继续处理。",
+    "textVideoRejectsReferences": "文生视频不使用参考素材，请先移除已添加的图片或视频。",
+    "videoEditRequiresVideo": "视频编辑需要先添加待编辑视频。",
+    "videoExtendRequiresVideo": "视频续写需要先添加基础视频。",
+    "videoGenerationFailed": "视频生成失败，请稍后重试。",
+    "videoModeUnsupported": "当前平台暂不支持所选视频任务模式。",
+    "videoPreviewMissing": "视频任务已完成，但服务端未返回预览地址。",
+    "videoReferenceRequired": "参考素材生视频需要至少添加一项参考图片或参考视频。"
+  },
+  "feedback": {
+    "like": "赞",
+    "removeLike": "取消点赞",
+    "dislike": "踩",
+    "removeDislike": "取消点踩",
+    "reportIssue": "问题反馈",
+    "traceFlameGraph": "Tracing 火焰图"
+  },
+  "greetings": {
+    "0": "今天想做点什么？",
+    "1": "有什么可以帮你的？",
+    "2": "需要我帮你查点什么吗？",
+    "3": "有问题尽管问我",
+    "4": "嗨，我们开始吧",
+    "5": "开始一段新对话吧",
+    "6": "今天想先解决哪件事？",
+    "7": "把你的想法告诉我吧",
+    "8": "我们从哪里开始？",
+    "9": "有什么任务交给我？",
+    "10": "准备好一起推进了吗？",
+    "11": "说说你现在最关心的问题",
+    "12": "今天也一起把事情做好",
+    "13": "我在，随时可以开始",
+    "intelligentDevelopment": "让灵感自由生长"
+  },
+  "loading": {
+    "agentCapabilities": "正在检查 Agent 能力…",
+    "session": "加载会话…"
+  },
+  "oauth": {
+    "cancelled": "授权已取消。",
+    "pasteCallbackUrl": "授权完成后，请粘贴回调页面（浏览器地址栏）的完整 URL：",
+    "popupBlocked": "弹窗被拦截，请允许弹窗后重试。",
+    "unsupportedUrl": "授权链接不是 http/https 地址，已阻止打开。"
+  },
+  "providers": {
+    "volcengine": "火山引擎"
+  },
+  "sandbox": {
+    "checkingPersistence": "正在检查持久化能力…",
+    "exitDevelopment": "退出开发环境",
+    "fileUploaded": "已上传文件到 Sandbox",
+    "filesUploaded": "已上传 {{count}} 个文件到 Sandbox",
+    "intelligentDevelopment": "智能开发",
+    "mode": {
+      "readOnly": "只读",
+      "workspaceWrite": "工作区写入",
+      "fullAccess": "完全访问"
+    },
+    "approvalPolicy": {
+      "untrusted": "仅不可信命令",
+      "onRequest": "按需审批",
+      "never": "不审批"
+    },
+    "reviewer": {
+      "user": "由我审批",
+      "autoReview": "自动审查"
+    },
+    "labels": {
+      "approvalPolicy": "审批策略",
+      "file": "文件",
+      "fileNumber": "文件 {{number}}",
+      "mode": "沙箱模式",
+      "networkAccess": "网络访问",
+      "reviewer": "审批方式",
+      "workingDirectory": "工作目录"
+    },
+    "network": {
+      "allowed": "允许",
+      "disabled": "关闭"
+    },
+    "permissionsUpdated": "已更新当前 Sandbox Session 的 Codex 权限",
+    "persistenceUnknown": "暂时无法确认持久化能力",
+    "stoppedReady": "已停止，可继续输入",
+    "uploadedFilesPrompt": "以下文件已上传到当前 Sandbox 工作空间，请在任务中使用：",
+    "workspaceUpdated": "已更新工作空间"
+  },
+  "titles": {
+    "addAgent": "添加智能体",
+    "addFromPackage": "从代码包添加",
+    "agent": "智能体",
+    "automations": "自动化",
+    "createAgent": "创建智能体",
+    "createSkill": "创建技能",
+    "cronJobs": "定时任务",
+    "issueFeedback": "问题反馈",
+    "library": "资源库",
+    "migrateAgent": "迁移智能体",
+    "newConversation": "新会话",
+    "optimizeSkill": "优化 {{name}}",
+    "search": "搜索",
+    "skill": "技能",
+    "skillLibrary": "技能库",
+    "systemInfo": "系统信息",
+    "updateAgent": "更新 {{name}}"
+  }
+}

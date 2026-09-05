@@ -3,6 +3,7 @@
 // the Vite dev proxy in development.
 
 import { withAuth } from "./auth";
+import { adkT, withLocaleHeaders } from "./i18n";
 import { isOAuthLoginRequired, withLocalUser } from "./identity";
 import {
   isAuthenticationRedirect,
@@ -416,7 +417,7 @@ async function apiFetch(
   const baseOpts = {
     ...init,
     ...(runtimeMethodOverride ? { method: "POST" } : {}),
-    headers: withLocalUser(init.headers),
+    headers: withLocaleHeaders(withLocalUser(init.headers)),
   };
   const send = () => {
     const opts = {
@@ -503,17 +504,17 @@ export async function httpErrorMessage(
   res: Response,
   fallback: string,
 ): Promise<string> {
-  const context = `${fallback}（HTTP ${res.status}）`;
+  const context = adkT("common.fallbackWithHttpStatus", { fallback, status: res.status });
   const text = await res.text().catch(() => "");
   if (!text) return context;
   try {
     const data = JSON.parse(text) as { detail?: unknown; error?: unknown };
     const detail = formatErrorDetail(data.detail ?? data.error);
     return detail
-      ? `${context}\n${detail}\n原始响应：\n${text}`
-      : `${context}\n原始响应：\n${text}`;
+      ? adkT("client.errorWithDetailAndRawResponse", { context, detail, response: text })
+      : adkT("client.errorWithRawResponse", { context, response: text });
   } catch {
-    return `${context}\n原始响应：\n${text}`;
+    return adkT("client.errorWithRawResponse", { context, response: text });
   }
 }
 
@@ -526,7 +527,7 @@ export async function listModelApiKeys(
     { signal, cache: "no-store" },
   );
   if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "加载 Ark API Key 失败"));
+    throw new Error(await httpErrorMessage(res, adkT("client.loadArkApiKeysFailed")));
   }
   return (await res.json()) as ModelApiKeysResponse;
 }
@@ -541,7 +542,7 @@ export async function revealModelApiKey(
     { method: "POST", signal, cache: "no-store" },
   );
   if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "加载 Ark API Key 失败"));
+    throw new Error(await httpErrorMessage(res, adkT("client.loadArkApiKeysFailed")));
   }
   return (await res.json()) as ModelApiKeyValueResponse;
 }
@@ -560,7 +561,7 @@ export async function listModelOptions(options?: {
     cache: "no-store",
   });
   if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "加载模型列表失败"));
+    throw new Error(await httpErrorMessage(res, adkT("client.loadModelsFailed")));
   }
   return (await res.json()) as ModelOptionsResponse;
 }
@@ -574,7 +575,7 @@ export async function listApps(): Promise<string[]> {
 /** A runtime exists but the current identity is not allowed to use it. */
 export class RuntimeAccessDeniedError extends Error {
   constructor() {
-    super("当前账号无权访问该 Runtime，请刷新列表或重新登录后重试。");
+    super(adkT("client.runtimeAccessDenied"));
     this.name = "RuntimeAccessDeniedError";
   }
 }
@@ -591,10 +592,8 @@ export class RuntimeProbeError extends Error {
   }
 }
 
-const PRIVATE_RUNTIME_UNREACHABLE_MESSAGE =
-  "Runtime 已部署成功，但当前 Studio 无法访问私网 Runtime。请使用已绑定相同 VPC 的 Studio 访问，或改用公网 / 公网+VPC 部署。";
-const RUNTIME_ENDPOINT_UNREACHABLE_MESSAGE =
-  "Runtime 已部署成功，但 Studio 暂时无法连接服务。网关域名可能仍在生效，或当前网络/DNS 无法访问该 Runtime，请稍后在智能体管理页重试连接。";
+const privateRuntimeUnreachableMessage = () => adkT("client.privateRuntimeUnavailable");
+const runtimeEndpointUnreachableMessage = () => adkT("client.runtimeTemporarilyUnavailable");
 const VOLCENGINE_RUNTIME_REGION_FALLBACKS = ["cn-beijing", "cn-shanghai"] as const;
 const RUNTIME_APPS_CACHE_TTL_MS = 30_000;
 const RUNTIME_METADATA_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -747,7 +746,7 @@ export async function fetchRemoteApps(
     ep?.runtimeId &&
     runtimeErrorCode === "runtime_private_endpoint_unreachable"
   ) {
-    throw new RuntimeProbeError(PRIVATE_RUNTIME_UNREACHABLE_MESSAGE);
+    throw new RuntimeProbeError(privateRuntimeUnreachableMessage());
   }
   if (
     ep?.runtimeId &&
@@ -758,29 +757,29 @@ export async function fetchRemoteApps(
       "runtime_json_timeout",
     ].includes(runtimeErrorCode)
   ) {
-    throw new RuntimeProbeError(RUNTIME_ENDPOINT_UNREACHABLE_MESSAGE, false, true);
+    throw new RuntimeProbeError(runtimeEndpointUnreachableMessage(), false, true);
   }
   if (ep?.runtimeId && res.status === 404) {
     throw new RuntimeProbeError(
-      "该 Runtime 的 Agent Server 未提供连接接口，请确认 Runtime 已就绪且版本兼容。",
+      adkT("client.runtimeConnectionUnsupported"),
       true,
       true,
     );
   }
   if (ep?.runtimeId && (res.status === 401 || res.status === 403)) {
     throw new RuntimeProbeError(
-      "Runtime 服务拒绝了连接请求，请检查 Runtime 的鉴权配置。",
+      adkT("client.runtimeConnectionDenied"),
     );
   }
   if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "读取 Agent 列表失败"));
+    throw new Error(await httpErrorMessage(res, adkT("client.listAgentsFailed")));
   }
   let payload: unknown;
   try {
     payload = await res.json();
   } catch {
     throw new RuntimeProbeError(
-      "Runtime /list-apps 返回了无法解析的 JSON 响应。",
+      adkT("client.invalidListAppsJson"),
     );
   }
   if (
@@ -788,7 +787,7 @@ export async function fetchRemoteApps(
     payload.some((app) => typeof app !== "string" || !app.trim())
   ) {
     throw new RuntimeProbeError(
-      "Runtime /list-apps 返回格式无效，应为非空字符串数组。",
+      adkT("client.invalidListAppsFormat"),
     );
   }
   const apps = payload.map((app) => app.trim());
@@ -815,9 +814,9 @@ export async function createSession(
     ep,
   );
   if (!res.ok) {
-    const fallback = `创建会话失败 (${res.status})`;
-    const detail = await httpErrorMessage(res, "创建会话失败");
-    throw new Error(detail === fallback ? fallback : `${fallback}：${detail}`);
+    const fallback = adkT("client.createSessionFailedWithStatus", { status: res.status });
+    const detail = await httpErrorMessage(res, adkT("client.createSessionFailed"));
+    throw new Error(detail === fallback ? fallback : adkT("common.fallbackWithDetail", { fallback, detail }));
   }
   const session = await res.json();
   return session.id;
@@ -845,8 +844,8 @@ export async function getSession(
     ep,
   );
   if (!res.ok) {
-    const detail = await httpErrorMessage(res, "读取会话失败");
-    throw new Error(`get session failed: ${res.status}：${detail}`);
+    const detail = await httpErrorMessage(res, adkT("client.getSessionFailed"));
+    throw new Error(adkT("client.getSessionFailedWithDetail", { status: res.status, detail }));
   }
   const session = (await res.json()) as AdkSession;
   if (ep.runtimeId) {
@@ -869,9 +868,9 @@ export async function submitMessageFeedback(args: {
 }): Promise<MessageFeedbackState> {
   const { app, ep } = resolve(args.appName);
   if (!ep.runtimeId) {
-    throw new Error("只有连接到 AgentKit Runtime 的会话支持反馈回流");
+    throw new Error(adkT("client.feedbackRuntimeOnly"));
   }
-  if (!ep.region) throw new Error("Runtime 缺少地域信息，无法提交反馈");
+  if (!ep.region) throw new Error(adkT("client.feedbackRegionMissing"));
   const res = await apiFetch(
     "/web/evaluation/feedback",
     {
@@ -892,7 +891,7 @@ export async function submitMessageFeedback(args: {
     TRANSFER_REQUEST_TIMEOUT_MS,
   );
   if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "提交反馈失败"));
+    throw new Error(await httpErrorMessage(res, adkT("client.submitFeedbackFailed")));
   }
   const feedback = (await res.json()) as MessageFeedbackState;
   const scope = feedbackCacheScope(
@@ -942,9 +941,9 @@ export async function getAgentFeedbackCases(args: {
           await res.json() as AgentFeedbackCasesResponse,
         );
       }
-      lastError = new Error(await httpErrorMessage(res, "读取评测集失败"));
+      lastError = new Error(await httpErrorMessage(res, adkT("client.loadEvaluationSetsFailed")));
     }
-    throw lastError ?? new Error("读取评测集失败");
+    throw lastError ?? new Error(adkT("client.loadEvaluationSetsFailed"));
   })();
   feedbackCasesCache.set(key, {
     ...existing,
@@ -982,9 +981,9 @@ export async function getAutomaticEvaluationStatuses(args: {
     if (res.ok) {
       return res.json() as Promise<AutomaticEvaluationStatusesResponse>;
     }
-    lastError = new Error(await httpErrorMessage(res, "读取自动评测状态失败"));
+    lastError = new Error(await httpErrorMessage(res, adkT("client.loadAutoEvaluationStatusFailed")));
   }
-  throw lastError ?? new Error("读取自动评测状态失败");
+  throw lastError ?? new Error(adkT("client.loadAutoEvaluationStatusFailed"));
 }
 
 export async function getAgentOptimizations(args: {
@@ -1001,9 +1000,9 @@ export async function getAgentOptimizations(args: {
     });
     const res = await apiFetch(`/web/evaluation/optimizations?${query.toString()}`);
     if (res.ok) return res.json() as Promise<AgentOptimizationsResponse>;
-    lastError = new Error(await httpErrorMessage(res, "读取优化项失败"));
+    lastError = new Error(await httpErrorMessage(res, adkT("client.loadOptimizationsFailed")));
   }
-  throw lastError ?? new Error("读取优化项失败");
+  throw lastError ?? new Error(adkT("client.loadOptimizationsFailed"));
 }
 
 export function getCachedAgentFeedbackCases(args: {
@@ -1169,9 +1168,9 @@ export async function deleteAgentFeedbackCases(args: {
       }
       return response;
     }
-    lastError = new Error(await httpErrorMessage(res, "删除评测案例失败"));
+    lastError = new Error(await httpErrorMessage(res, adkT("client.deleteEvaluationCaseFailed")));
   }
-  throw lastError ?? new Error("删除评测案例失败");
+  throw lastError ?? new Error(adkT("client.deleteEvaluationCaseFailed"));
 }
 
 export async function deleteSession(
@@ -1234,10 +1233,10 @@ async function fetchArtifactBlob(
   const params = version == null ? "" : `?version=${encodeURIComponent(version)}`;
   const path = `/apps/${encodeURIComponent(app)}/users/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(sessionId)}/artifacts/${encodeURIComponent(filename)}${params}`;
   const res = await apiFetch(path, {}, ep, TRANSFER_REQUEST_TIMEOUT_MS);
-  if (!res.ok) throw new Error(await httpErrorMessage(res, "下载文件失败"));
+  if (!res.ok) throw new Error(await httpErrorMessage(res, adkT("client.downloadFileFailed")));
   const part = (await res.json()) as AdkPart;
   const inline = part.inlineData ?? part.inline_data;
-  if (!inline?.data) throw new Error("文件内容不可用");
+  if (!inline?.data) throw new Error(adkT("client.fileUnavailable"));
   const bytes = decodeArtifactData(inline.data);
   const buffer = bytes.buffer.slice(
     bytes.byteOffset,
@@ -1300,7 +1299,7 @@ export async function uploadMedia(
     {},
     TRANSFER_REQUEST_TIMEOUT_MS,
   );
-  if (!res.ok) throw new Error(await httpErrorMessage(res, "文件上传失败"));
+  if (!res.ok) throw new Error(await httpErrorMessage(res, adkT("client.uploadFileFailed")));
   const media = (await res.json()) as {
     id: string;
     uri: string;
@@ -1378,7 +1377,7 @@ export async function getSessionTrace(
     if (endTimeMs) params.set("endTimeMs", String(Math.round(endTimeMs)));
     res = await apiFetch(`/web/runtime-trace?${params.toString()}`);
     if (res.status === 404) {
-      throw new Error("该 Agent 暂未开启链路观测，请到控制台打开后使用。");
+      throw new Error(adkT("client.traceDisabled"));
     }
   } else {
     res = await apiFetch(
@@ -1388,17 +1387,17 @@ export async function getSessionTrace(
     );
   }
   if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "加载调用链路失败"));
+    throw new Error(await httpErrorMessage(res, adkT("client.loadTraceFailed")));
   }
   const contentType = res.headers.get("content-type") ?? "";
   if (!contentType.includes("application/json")) {
-    const responseType = contentType.split(";", 1)[0] || "Content-Type 缺失";
+    const responseType = contentType.split(";", 1)[0] || adkT("client.contentTypeMissing");
     throw new Error(
-      `trace failed: 服务端返回了非 JSON 响应（${responseType}），请检查 Studio API 代理配置`,
+      adkT("client.traceNonJson", { contentType: responseType }),
     );
   }
   const spans = (await res.json()) as unknown;
-  if (!Array.isArray(spans)) throw new Error("trace failed: 返回格式无效");
+  if (!Array.isArray(spans)) throw new Error(adkT("client.invalidTraceFormat"));
   return spans as TraceSpan[];
 }
 
@@ -1411,11 +1410,11 @@ export async function submitIssueFeedback(
     body: JSON.stringify(report),
   });
   if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "问题反馈上报失败"));
+    throw new Error(await httpErrorMessage(res, adkT("client.submitIssueFeedbackFailed")));
   }
   const result = (await res.json()) as { submitted?: unknown };
   if (result.submitted !== true) {
-    throw new Error("问题反馈上报失败：服务端未确认提交结果");
+    throw new Error(adkT("client.issueFeedbackNotConfirmed"));
   }
   return { submitted: true };
 }
@@ -1550,7 +1549,7 @@ async function fetchRuntimeAgentInfo(
         knownApp ||
         freshCached?.apps[0] ||
         (await fetchRemoteApps("", "", ep))[0];
-      if (!app) throw new Error("该 Runtime 未提供可预览的 Agent。");
+      if (!app) throw new Error(adkT("client.noPreviewableAgent"));
       return fetchAgentInfo(app, ep);
     } catch (error) {
       if (
@@ -1562,7 +1561,7 @@ async function fetchRuntimeAgentInfo(
       lastError = error instanceof Error ? error : new Error(String(error));
     }
   }
-  throw lastError ?? new Error("该 Runtime 未提供可预览的 Agent。");
+  throw lastError ?? new Error(adkT("client.noPreviewableAgent"));
 }
 
 /** Read Agent metadata for a Runtime without connecting or persisting it. */
@@ -1669,7 +1668,7 @@ export async function componentSearch(
   });
   const res = await apiFetch(`/web/search?${params.toString()}`, {}, ep);
   if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "Agent 检索失败"));
+    throw new Error(await httpErrorMessage(res, adkT("client.agentSearchFailed")));
   }
   return res.json();
 }
@@ -1711,15 +1710,18 @@ export interface RunArgs {
   onRuntimeContext?: (context: RuntimeLogTarget) => void;
 }
 
-export const RUN_SSE_EMPTY_RESPONSE_ERROR =
-  formatRunSseError("HTTP 200，SSE 响应体为空。");
+export function runSseEmptyResponseError(): string {
+  return formatRunSseError(adkT("client.emptySseBody"));
+}
 
-export const RUN_SSE_INCOMPLETE_RESPONSE_ERROR =
-  formatRunSseError("HTTP 200，SSE 响应中没有可展示的模型回复。");
+export function runSseIncompleteResponseError(): string {
+  return formatRunSseError(adkT("client.noDisplayableSseReply"));
+}
 
 const RUN_SSE_FIRST_EVENT_TIMEOUT_MS = 30_000;
-export const RUN_SSE_FIRST_EVENT_TIMEOUT_ERROR =
-  formatRunSseError("30 秒内未收到首个 SSE 事件。");
+export function runSseFirstEventTimeoutError(): string {
+  return formatRunSseError(adkT("client.firstSseEventTimeout"));
+}
 
 interface RunSseFirstEventDeadline {
   signal?: AbortSignal;
@@ -1756,7 +1758,7 @@ function runSseFirstEventDeadline(
     if (deadlineCleared || controller.signal.aborted) return;
     didTimeout = true;
     deadlineCleared = true;
-    controller.abort(new Error(RUN_SSE_FIRST_EVENT_TIMEOUT_ERROR));
+    controller.abort(new Error(runSseFirstEventTimeoutError()));
   }, RUN_SSE_FIRST_EVENT_TIMEOUT_MS);
   signal?.addEventListener("abort", onAbort, { once: true });
 
@@ -1862,7 +1864,7 @@ export async function* runSSE({
     );
   } catch (error) {
     firstEventDeadline.cleanup();
-    if (firstEventDeadline.timedOut()) throw new Error(RUN_SSE_FIRST_EVENT_TIMEOUT_ERROR);
+    if (firstEventDeadline.timedOut()) throw new Error(runSseFirstEventTimeoutError());
     if (signal?.aborted || (error as Error)?.name === "AbortError") throw error;
     throw new Error(formatRunSseError(error));
   }
@@ -1874,9 +1876,9 @@ export async function* runSSE({
   if (runtimeContext) onRuntimeContext?.(runtimeContext);
   if (!res.ok) {
     firstEventDeadline.cleanup();
-    const detail = await httpErrorMessage(res, "运行会话失败");
+    const detail = await httpErrorMessage(res, adkT("client.runSessionFailed"));
     throw new Error(
-      formatRunSseError(`run_sse failed: ${res.status}：${detail}`),
+      formatRunSseError(adkT("client.runSseFailedWithDetail", { status: res.status, detail })),
     );
   }
   let receivedEvent = false;
@@ -1895,13 +1897,13 @@ export async function* runSSE({
       yield event;
     }
   } catch (error) {
-    if (firstEventDeadline.timedOut()) throw new Error(RUN_SSE_FIRST_EVENT_TIMEOUT_ERROR);
+    if (firstEventDeadline.timedOut()) throw new Error(runSseFirstEventTimeoutError());
     if (signal?.aborted || (error as Error)?.name === "AbortError") throw error;
     throw new Error(formatRunSseError(error));
   } finally {
     firstEventDeadline.cleanup();
   }
-  if (!receivedEvent) throw new Error(RUN_SSE_EMPTY_RESPONSE_ERROR);
+  if (!receivedEvent) throw new Error(runSseEmptyResponseError());
 }
 
 export interface DeployAgentkitResult {
@@ -1930,11 +1932,11 @@ export async function checkRuntimeNameAvailability(
     cache: "no-store",
   });
   if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "检查 Runtime 名称失败"));
+    throw new Error(await httpErrorMessage(res, adkT("client.checkRuntimeNameFailed")));
   }
   const value = (await res.json()) as { available?: unknown };
   if (typeof value.available !== "boolean") {
-    throw new Error("检查 Runtime 名称失败：服务返回格式错误");
+    throw new Error(adkT("client.invalidRuntimeNameCheck"));
   }
   return { available: value.available };
 }
@@ -2030,7 +2032,7 @@ export async function listDeploymentResources(
     { signal },
   );
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "加载云资源失败"));
+    throw new Error(await httpErrorMessage(response, adkT("client.loadCloudResourcesFailed")));
   }
   const payload = (await response.json()) as {
     serviceRegion?: unknown;
@@ -2048,7 +2050,7 @@ export async function listDeploymentResources(
     typeof payload.totalCount !== "number" ||
     typeof payload.hasMore !== "boolean"
   ) {
-    throw new Error("云资源列表响应格式无效");
+    throw new Error(adkT("client.invalidCloudResources"));
   }
   const items = payload.items.map((item) => {
     if (
@@ -2059,7 +2061,7 @@ export async function listDeploymentResources(
       typeof (item as DeploymentResource).region !== "string" ||
       typeof (item as DeploymentResource).status !== "string"
     ) {
-      throw new Error("云资源列表响应格式无效");
+      throw new Error(adkT("client.invalidCloudResources"));
     }
     return item as DeploymentResource;
   });
@@ -2129,10 +2131,10 @@ export function parsePreparedSessionEnvironmentMounts(
 ): PreparedSessionEnvironmentMount[] {
   const payload = value as { mounts?: unknown };
   if (!payload || typeof payload !== "object" || !Array.isArray(payload.mounts)) {
-    throw new Error("挂载环境响应格式无效");
+    throw new Error(adkT("client.invalidEnvironmentMount"));
   }
   if (payload.mounts.length !== expectedMounts.length) {
-    throw new Error("挂载环境响应与请求不一致");
+    throw new Error(adkT("client.environmentMountMismatch"));
   }
   return payload.mounts.map((item, index) => {
     const expected = expectedMounts[index];
@@ -2148,7 +2150,7 @@ export function parsePreparedSessionEnvironmentMounts(
       !item.mount_instance_id ||
       !item.sandbox_session_id
     ) {
-      throw new Error("挂载环境响应格式无效");
+      throw new Error(adkT("client.invalidEnvironmentMount"));
     }
     if (
       item.environment_id !== expected.environment_id ||
@@ -2156,7 +2158,7 @@ export function parsePreparedSessionEnvironmentMounts(
       (expected.mount_instance_id !== undefined &&
         item.mount_instance_id !== expected.mount_instance_id)
     ) {
-      throw new Error("挂载环境响应与请求不一致");
+      throw new Error(adkT("client.environmentMountMismatch"));
     }
     return item as PreparedSessionEnvironmentMount;
   });
@@ -2191,12 +2193,12 @@ export async function prepareSessionEnvironmentMounts({
     });
   } catch (error) {
     if (error instanceof TypeError) {
-      throw new Error("无法连接 Studio 服务，环境挂载未完成。请检查网络后重试。");
+      throw new Error(adkT("client.environmentMountNetworkFailed"));
     }
     throw error;
   }
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "挂载环境失败"));
+    throw new Error(await httpErrorMessage(response, adkT("client.environmentMountFailed")));
   }
   return parsePreparedSessionEnvironmentMounts(
     await response.json(),
@@ -2410,12 +2412,12 @@ export async function writeEnvironmentShareCode(
     typeof navigator === "undefined" ? undefined : navigator.clipboard,
 ): Promise<void> {
   if (!clipboard?.writeText) {
-    throw new Error("当前浏览器不支持写入剪贴板。");
+    throw new Error(adkT("client.clipboardUnsupported"));
   }
   try {
     await clipboard.writeText(shareCode);
   } catch {
-    throw new Error("无法写入剪贴板，请检查剪贴板权限。");
+    throw new Error(adkT("client.clipboardWriteFailed"));
   }
 }
 
@@ -2449,7 +2451,7 @@ export async function getSystemInfo(
 ): Promise<SystemInfoResponse> {
   const response = await apiFetch("/web/system-info", { signal });
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "加载系统信息失败"));
+    throw new Error(await httpErrorMessage(response, adkT("client.loadSystemInfoFailed")));
   }
   const payload = (await response.json()) as {
     storage?: { tosAddress?: unknown };
@@ -2459,7 +2461,7 @@ export async function getSystemInfo(
     typeof payload.storage?.tosAddress !== "string" ||
     !Array.isArray(payload.sandboxTools)
   ) {
-    throw new Error("系统信息响应格式无效");
+    throw new Error(adkT("client.invalidSystemInfo"));
   }
   const sandboxTools = payload.sandboxTools
     .map((item) => {
@@ -2475,7 +2477,7 @@ export async function getSystemInfo(
         typeof (item as SandboxToolInfo).modelEnvError !== "string" ||
         typeof (item as SandboxToolInfo).modelEnvErrorCode !== "string"
       ) {
-        throw new Error("系统信息响应格式无效");
+        throw new Error(adkT("client.invalidSystemInfo"));
       }
       return item as SandboxToolInfo;
     })
@@ -2501,7 +2503,7 @@ const ENVIRONMENT_BUILD_STATUSES = new Set<EnvironmentBuildStatus>([
 function environmentBuildVersion(value: unknown): EnvironmentBuildVersion | null {
   if (value === null) return null;
   if (!value || typeof value !== "object") {
-    throw new Error("环境构建响应格式无效");
+    throw new Error(adkT("client.invalidEnvironmentBuild"));
   }
   const candidate = value as EnvironmentBuildVersion;
   if (
@@ -2513,7 +2515,7 @@ function environmentBuildVersion(value: unknown): EnvironmentBuildVersion | null
     typeof candidate.updatedAt !== "string" ||
     (candidate.resources !== null && typeof candidate.resources !== "object")
   ) {
-    throw new Error("环境构建响应格式无效");
+    throw new Error(adkT("client.invalidEnvironmentBuild"));
   }
   const steps = Array.isArray(candidate.steps)
     ? candidate.steps.map((step) => {
@@ -2526,7 +2528,7 @@ function environmentBuildVersion(value: unknown): EnvironmentBuildVersion | null
         (step.startedAt !== null && typeof step.startedAt !== "string") ||
         (step.finishedAt !== null && typeof step.finishedAt !== "string")
       ) {
-        throw new Error("环境构建步骤响应格式无效");
+        throw new Error(adkT("client.invalidEnvironmentBuildStep"));
       }
       return step;
     })
@@ -2551,7 +2553,7 @@ function environmentBuildVersion(value: unknown): EnvironmentBuildVersion | null
 
 export function parseEnvironmentManifest(value: unknown): EnvironmentManifest {
   if (!value || typeof value !== "object") {
-    throw new Error("环境 Manifest 响应格式无效");
+    throw new Error(adkT("client.invalidEnvironmentManifest"));
   }
   const candidate = value as EnvironmentManifest;
   if (
@@ -2583,7 +2585,7 @@ export function parseEnvironmentManifest(value: unknown): EnvironmentManifest {
     typeof candidate.status.createdAt !== "string" ||
     typeof candidate.status.updatedAt !== "string"
   ) {
-    throw new Error("环境 Manifest 响应格式无效");
+    throw new Error(adkT("client.invalidEnvironmentManifest"));
   }
   return candidate;
 }
@@ -2593,7 +2595,7 @@ function environmentContainerRepository(
 ): EnvironmentContainerRepository | undefined {
   if (value === undefined || value === null) return undefined;
   if (!value || typeof value !== "object") {
-    throw new Error("环境镜像仓库响应格式无效");
+    throw new Error(adkT("client.invalidImageRepository"));
   }
   const candidate = value as Partial<EnvironmentContainerRepository>;
   if (
@@ -2602,7 +2604,7 @@ function environmentContainerRepository(
     typeof candidate.namespace !== "string" ||
     typeof candidate.repository !== "string"
   ) {
-    throw new Error("环境镜像仓库响应格式无效");
+    throw new Error(adkT("client.invalidImageRepository"));
   }
   return candidate as EnvironmentContainerRepository;
 }
@@ -2610,7 +2612,7 @@ function environmentContainerRepository(
 function environmentGitSource(value: unknown): EnvironmentGitSource | undefined {
   if (value === undefined || value === null) return undefined;
   if (!value || typeof value !== "object") {
-    throw new Error("环境代码仓库响应格式无效");
+    throw new Error(adkT("client.invalidCodeRepository"));
   }
   const candidate = value as Partial<EnvironmentGitSource>;
   if (
@@ -2618,7 +2620,7 @@ function environmentGitSource(value: unknown): EnvironmentGitSource | undefined 
     (candidate.ref !== undefined && typeof candidate.ref !== "string") ||
     typeof candidate.dockerfilePath !== "string"
   ) {
-    throw new Error("环境代码仓库响应格式无效");
+    throw new Error(adkT("client.invalidCodeRepository"));
   }
   return candidate as EnvironmentGitSource;
 }
@@ -2628,14 +2630,14 @@ function environmentImageSource(value: unknown): EnvironmentImageSource | undefi
   if (!repository) return undefined;
   const candidate = value as Partial<EnvironmentImageSource>;
   if (typeof candidate.reference !== "string") {
-    throw new Error("环境镜像来源响应格式无效");
+    throw new Error(adkT("client.invalidImageSource"));
   }
   return { ...repository, reference: candidate.reference };
 }
 
 function studioEnvironment(value: unknown): StudioEnvironment {
   if (!value || typeof value !== "object") {
-    throw new Error("环境响应格式无效");
+    throw new Error(adkT("client.invalidEnvironment"));
   }
   const candidate = value as StudioEnvironment & { baseEnvironment?: unknown };
   if (
@@ -2656,7 +2658,7 @@ function studioEnvironment(value: unknown): StudioEnvironment {
     typeof candidate.createdAt !== "string" ||
     typeof candidate.updatedAt !== "string"
   ) {
-    throw new Error("环境响应格式无效");
+    throw new Error(adkT("client.invalidEnvironment"));
   }
   return {
     ...candidate,
@@ -2675,7 +2677,7 @@ function studioEnvironment(value: unknown): StudioEnvironment {
 
 function studioWorkspace(value: unknown): StudioWorkspace {
   if (!value || typeof value !== "object") {
-    throw new Error("工作区响应格式无效");
+    throw new Error(adkT("client.invalidWorkspace"));
   }
   const candidate = value as StudioWorkspace;
   if (
@@ -2687,7 +2689,7 @@ function studioWorkspace(value: unknown): StudioWorkspace {
     typeof candidate.createdAt !== "string" ||
     typeof candidate.updatedAt !== "string"
   ) {
-    throw new Error("工作区响应格式无效");
+    throw new Error(adkT("client.invalidWorkspace"));
   }
   return candidate;
 }
@@ -2695,10 +2697,10 @@ function studioWorkspace(value: unknown): StudioWorkspace {
 export async function listWorkspaces(signal?: AbortSignal): Promise<StudioWorkspace[]> {
   const response = await apiFetch("/web/workspaces", { signal });
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "加载工作区失败"));
+    throw new Error(await httpErrorMessage(response, adkT("client.loadWorkspacesFailed")));
   }
   const payload = (await response.json()) as { items?: unknown };
-  if (!Array.isArray(payload.items)) throw new Error("工作区列表响应格式无效");
+  if (!Array.isArray(payload.items)) throw new Error(adkT("client.invalidWorkspaceList"));
   return payload.items.map(studioWorkspace);
 }
 
@@ -2715,7 +2717,7 @@ async function writeWorkspace(
     signal,
   });
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "保存工作区失败"));
+    throw new Error(await httpErrorMessage(response, adkT("client.saveWorkspaceFailed")));
   }
   return studioWorkspace(await response.json());
 }
@@ -2749,17 +2751,17 @@ export async function deleteWorkspace(
     { method: "DELETE", signal },
   );
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "删除工作区失败"));
+    throw new Error(await httpErrorMessage(response, adkT("client.deleteWorkspaceFailed")));
   }
 }
 
 export async function listEnvironments(signal?: AbortSignal): Promise<StudioEnvironment[]> {
   const response = await apiFetch("/web/v3/environments", { signal });
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "加载环境失败"));
+    throw new Error(await httpErrorMessage(response, adkT("client.loadEnvironmentsFailed")));
   }
   const payload = (await response.json()) as { items?: unknown };
-  if (!Array.isArray(payload.items)) throw new Error("环境列表响应格式无效");
+  if (!Array.isArray(payload.items)) throw new Error(adkT("client.invalidEnvironmentList"));
   return payload.items.map(studioEnvironment);
 }
 
@@ -2774,7 +2776,7 @@ export async function inspectEnvironmentRepository(
     signal,
   });
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "探查代码仓库失败"));
+    throw new Error(await httpErrorMessage(response, adkT("client.probeRepositoryFailed")));
   }
   const payload = (await response.json()) as Partial<EnvironmentRepositoryInspection>;
   if (
@@ -2784,7 +2786,7 @@ export async function inspectEnvironmentRepository(
     !Array.isArray(payload.dockerfiles) ||
     !payload.dockerfiles.every((item) => typeof item === "string")
   ) {
-    throw new Error("代码仓库探查响应格式无效");
+    throw new Error(adkT("client.invalidRepositoryProbe"));
   }
   return payload as EnvironmentRepositoryInspection;
 }
@@ -2798,11 +2800,11 @@ export async function exportEnvironmentShareCode(
     { method: "POST", signal },
   );
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "导出环境分享码失败"));
+    throw new Error(await httpErrorMessage(response, adkT("client.exportEnvironmentCodeFailed")));
   }
   const payload = (await response.json()) as Partial<EnvironmentShareCodeExport>;
   if (typeof payload.shareCode !== "string" || typeof payload.name !== "string") {
-    throw new Error("环境分享码响应格式无效");
+    throw new Error(adkT("client.invalidEnvironmentCode"));
   }
   return payload as EnvironmentShareCodeExport;
 }
@@ -2818,15 +2820,15 @@ export async function inspectEnvironmentShareCodes(
     signal,
   });
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "检测环境分享码失败"));
+    throw new Error(await httpErrorMessage(response, adkT("client.inspectEnvironmentCodeFailed")));
   }
   const payload = (await response.json()) as { items?: unknown };
   if (!Array.isArray(payload.items)) {
-    throw new Error("环境分享码检测响应格式无效");
+    throw new Error(adkT("client.invalidEnvironmentCodeInspection"));
   }
   return payload.items.map((value) => {
     if (!value || typeof value !== "object") {
-      throw new Error("环境分享码检测响应格式无效");
+      throw new Error(adkT("client.invalidEnvironmentCodeInspection"));
     }
     const candidate = value as {
       index?: unknown;
@@ -2846,7 +2848,7 @@ export async function inspectEnvironmentShareCodes(
       (candidate.name !== undefined && typeof candidate.name !== "string") ||
       (candidate.error !== undefined && typeof candidate.error !== "string")
     ) {
-      throw new Error("环境分享码检测响应格式无效");
+      throw new Error(adkT("client.invalidEnvironmentCodeInspection"));
     }
     return {
       index: candidate.index as number,
@@ -2868,15 +2870,15 @@ export async function importEnvironmentShareCodes(
     signal,
   });
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "导入环境分享码失败"));
+    throw new Error(await httpErrorMessage(response, adkT("client.importEnvironmentCodeFailed")));
   }
   const payload = (await response.json()) as { items?: unknown };
   if (!Array.isArray(payload.items)) {
-    throw new Error("环境分享码导入响应格式无效");
+    throw new Error(adkT("client.invalidEnvironmentCodeImport"));
   }
   return payload.items.map((value) => {
     if (!value || typeof value !== "object") {
-      throw new Error("环境分享码导入响应格式无效");
+      throw new Error(adkT("client.invalidEnvironmentCodeImport"));
     }
     const candidate = value as {
       index?: unknown;
@@ -2891,7 +2893,7 @@ export async function importEnvironmentShareCodes(
       (candidate.name !== undefined && typeof candidate.name !== "string") ||
       (candidate.error !== undefined && typeof candidate.error !== "string")
     ) {
-      throw new Error("环境分享码导入响应格式无效");
+      throw new Error(adkT("client.invalidEnvironmentCodeImport"));
     }
     return {
       index: candidate.index as number,
@@ -2922,12 +2924,12 @@ async function writeEnvironment(
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") throw error;
     if (error instanceof TypeError) {
-      throw new Error("无法连接 Studio 服务，请确认后端已启动后重试。");
+      throw new Error(adkT("client.studioUnavailable"));
     }
     throw error;
   }
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "保存环境失败"));
+    throw new Error(await httpErrorMessage(response, adkT("client.saveEnvironmentFailed")));
   }
   return studioEnvironment(await response.json());
 }
@@ -2961,7 +2963,7 @@ export async function deleteEnvironment(
     { method: "DELETE", signal },
   );
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "删除环境失败"));
+    throw new Error(await httpErrorMessage(response, adkT("client.deleteEnvironmentFailed")));
   }
 }
 
@@ -2974,10 +2976,10 @@ export async function buildEnvironment(
     { method: "POST", signal },
   );
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "启动环境构建失败"));
+    throw new Error(await httpErrorMessage(response, adkT("client.startEnvironmentBuildFailed")));
   }
   const result = environmentBuildVersion(await response.json());
-  if (!result) throw new Error("环境构建响应格式无效");
+  if (!result) throw new Error(adkT("client.invalidEnvironmentBuild"));
   return result;
 }
 
@@ -2992,10 +2994,10 @@ export async function getEnvironmentBuild(
     { signal: options.signal },
   );
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "读取环境构建详情失败"));
+    throw new Error(await httpErrorMessage(response, adkT("client.loadEnvironmentBuildFailed")));
   }
   const result = environmentBuildVersion(await response.json());
-  if (!result) throw new Error("环境构建响应格式无效");
+  if (!result) throw new Error(adkT("client.invalidEnvironmentBuild"));
   return result;
 }
 
@@ -3009,21 +3011,21 @@ export async function getEnvironmentManifest(
     { signal },
   );
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "读取环境 Manifest 失败"));
+    throw new Error(await httpErrorMessage(response, adkT("client.loadEnvironmentManifestFailed")));
   }
   return parseEnvironmentManifest(await response.json());
 }
 
 function environmentBuildResource(value: unknown): EnvironmentBuildResource {
   if (!value || typeof value !== "object") {
-    throw new Error("环境资源响应格式无效");
+    throw new Error(adkT("client.invalidEnvironmentResource"));
   }
   const candidate = value as EnvironmentBuildResource;
   if (
     (candidate.source !== "provided" && candidate.source !== "managed") ||
     typeof candidate.consoleUrl !== "string"
   ) {
-    throw new Error("环境资源响应格式无效");
+    throw new Error(adkT("client.invalidEnvironmentResource"));
   }
   return candidate;
 }
@@ -3033,14 +3035,14 @@ export async function getEnvironmentResources(
 ): Promise<EnvironmentResourcesResponse> {
   const response = await apiFetch("/web/v3/environment-resources", { signal });
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "加载环境构建资源失败"));
+    throw new Error(await httpErrorMessage(response, adkT("client.loadEnvironmentResourcesFailed")));
   }
   const payload = (await response.json()) as Partial<EnvironmentResourcesResponse>;
   if (
     (payload.provider !== "volcengine" && payload.provider !== "byteplus") ||
     typeof payload.region !== "string"
   ) {
-    throw new Error("环境资源响应格式无效");
+    throw new Error(adkT("client.invalidEnvironmentResource"));
   }
   return {
     provider: payload.provider,
@@ -3059,7 +3061,7 @@ export async function updateCodexSandboxToolModelEnv(
     { method: "POST", signal },
   );
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "更新 Codex Sandbox 失败"));
+    throw new Error(await httpErrorMessage(response, adkT("client.updateCodexSandboxFailed")));
   }
   const payload = (await response.json()) as {
     kind?: unknown;
@@ -3071,7 +3073,7 @@ export async function updateCodexSandboxToolModelEnv(
     typeof payload.toolId !== "string" ||
     typeof payload.updated !== "boolean"
   ) {
-    throw new Error("Codex Sandbox 更新响应格式无效");
+    throw new Error(adkT("client.invalidCodexSandboxUpdate"));
   }
   return payload as SandboxToolModelEnvUpdateResponse;
 }
@@ -3089,11 +3091,11 @@ export async function listIdentityUserPools(
 ): Promise<IdentityUserPool[]> {
   const response = await apiFetch("/web/identity/user-pools", { signal });
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "加载用户池失败"));
+    throw new Error(await httpErrorMessage(response, adkT("client.loadUserPoolsFailed")));
   }
   const payload = (await response.json()) as { items?: unknown };
   if (!Array.isArray(payload.items)) {
-    throw new Error("用户池列表响应格式无效");
+    throw new Error(adkT("client.invalidUserPoolList"));
   }
   return payload.items.map((item) => {
     if (
@@ -3105,7 +3107,7 @@ export async function listIdentityUserPools(
       typeof (item as IdentityUserPool).region !== "string" ||
       typeof (item as IdentityUserPool).isCurrent !== "boolean"
     ) {
-      throw new Error("用户池列表响应格式无效");
+      throw new Error(adkT("client.invalidUserPoolList"));
     }
     return item as IdentityUserPool;
   });
@@ -3201,6 +3203,8 @@ export interface DeployStage {
   level: "info" | "success" | "warning" | "error";
   phase: "build" | "deploy" | "publish" | string;
   message: string;
+  /** Stable server progress code used to localize provider-generated prose. */
+  messageCode?: string;
   pct?: number;
   runtimeName?: string;
   buildLog?: DeployBuildLogSnapshot;
@@ -3254,7 +3258,7 @@ async function githubCicdErrorFromResponse(
       return new GithubCicdPipelineError({ message: text });
     }
   }
-  return new GithubCicdPipelineError({ message: `同步 GitHub 代码失败 (${res.status})` });
+  return new GithubCicdPipelineError({ message: adkT("client.syncGithubFailed", { status: res.status }) });
 }
 
 export async function createGithubCicdPipeline(params: {
@@ -3547,7 +3551,7 @@ export async function deployAgentkitProject(
     opts?.onStage?.({
       level: "info",
       phase: "upload",
-      message: migrationSource ? "正在校验迁移产物" : "正在上传代码包",
+      message: migrationSource ? adkT("client.validatingMigrationArtifact") : adkT("client.uploadingCodePackage"),
       pct: 0,
     });
     res = await apiFetch(
@@ -3596,7 +3600,7 @@ export async function deployAgentkitProject(
     opts?.onStage?.({
       level: "success",
       phase: "upload",
-      message: migrationSource ? "迁移产物校验完成" : "代码包上传完成",
+      message: migrationSource ? adkT("client.migrationArtifactValidated") : adkT("client.codePackageUploaded"),
       pct: 100,
     });
   } catch (error) {
@@ -3604,7 +3608,7 @@ export async function deployAgentkitProject(
     throw error;
   }
   if (!res.ok) {
-    const detail = await httpErrorMessage(res, "部署失败");
+    const detail = await httpErrorMessage(res, adkT("client.deploymentFailed"));
     clearController();
     throw new Error(detail);
   }
@@ -3625,13 +3629,13 @@ export async function deployAgentkitProject(
   }
   clearController();
 
-  if (!final) throw new Error("部署失败：连接中断");
-  if (!final.success) throw new Error(final.error || "部署失败");
+  if (!final) throw new Error(adkT("client.deploymentDisconnected"));
+  if (!final.success) throw new Error(final.error || adkT("client.deploymentFailed"));
   if (!final.agentName) {
-    throw new Error("部署失败：返回缺少 Agent 名称");
+    throw new Error(adkT("client.deploymentMissingAgentName"));
   }
   if (!final.runtimeId && !final.url) {
-    throw new Error("部署失败：返回缺少 AgentKit 连接信息");
+    throw new Error(adkT("client.deploymentMissingConnection"));
   }
   // Older Studio servers returned the platform Runtime resource name in
   // `agentName` and did not send `runtimeName`. The request name is the stable
@@ -3664,7 +3668,7 @@ export async function cancelAgentkitDeployment(taskId: string): Promise<void> {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(text || `取消部署失败 (${res.status})`);
+    throw new Error(text || adkT("client.cancelDeploymentFailed", { status: res.status }));
   }
   deploymentControllers.get(taskId)?.abort();
   deploymentControllers.delete(taskId);
@@ -3686,7 +3690,7 @@ export async function getMyRuntimes(
   region = VOLCENGINE_DEFAULT_REGION,
 ): Promise<ManagedRuntime[]> {
   const res = await apiFetch(`/web/my-runtimes?region=${encodeURIComponent(region)}`);
-  if (!res.ok) throw new Error(`加载失败 (${res.status})`);
+  if (!res.ok) throw new Error(adkT("client.loadFailed", { status: res.status }));
   const d = (await res.json()) as { runtimes?: ManagedRuntime[] };
   return d.runtimes ?? [];
 }
@@ -3875,7 +3879,7 @@ export const DEFAULT_STUDIO_ACCESS: StudioAccess = {
 /** Resolve the signed-in user's Studio role and capabilities. */
 export async function getStudioAccess(): Promise<StudioAccess> {
   const res = await apiFetch("/web/access");
-  if (!res.ok) throw new Error(`加载权限失败 (${res.status})`);
+  if (!res.ok) throw new Error(adkT("client.loadPermissionsFailed", { status: res.status }));
   const access = (await res.json()) as StudioAccess;
   if (
     !["admin", "developer", "user"].includes(access.role) ||
@@ -3889,7 +3893,7 @@ export async function getStudioAccess(): Promise<StudioAccess> {
     typeof access.capabilities?.manageAgents !== "boolean" ||
     !["all", "mine"].includes(access.capabilities?.runtimeScope)
   ) {
-    throw new Error("权限服务返回了无法解析的响应");
+    throw new Error(adkT("client.invalidPermissionResponse"));
   }
   return access;
 }
@@ -3955,7 +3959,7 @@ export async function getStudioUpdateStatus(
   if (startedAt) params.set("startedAt", String(startedAt));
   const query = params.size ? `?${params.toString()}` : "";
   const res = await apiFetch(`/web/studio-update${query}`);
-  if (!res.ok) throw new Error(`检查 Studio 更新失败 (${res.status})`);
+  if (!res.ok) throw new Error(adkT("client.checkStudioUpdateFailed", { status: res.status }));
   return (await res.json()) as StudioUpdateStatus;
 }
 
@@ -3970,7 +3974,7 @@ export async function getStudioUpdatePermissions(): Promise<StudioUpdatePermissi
     } catch {
       detail = "";
     }
-    throw new Error(detail || `Studio 更新权限预检失败 (${res.status})`);
+    throw new Error(detail || adkT("client.studioUpdatePreflightFailed", { status: res.status }));
   }
   return (await res.json()) as StudioUpdatePermissionStatus;
 }
@@ -3995,7 +3999,7 @@ export async function startStudioUpdate(
     } catch {
       detail = "";
     }
-    throw new Error(detail || `提交 Studio 更新失败 (${res.status})`);
+    throw new Error(detail || adkT("client.submitStudioUpdateFailed", { status: res.status }));
   }
   return (await res.json()) as { version: string };
 }
@@ -4045,25 +4049,25 @@ export async function getAgentUsage({
   });
   const res = await apiFetch(`/web/agent-usage?${params.toString()}`, { signal });
   if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "加载 Agent 用量失败"));
+    throw new Error(await httpErrorMessage(res, adkT("client.loadAgentUsageFailed")));
   }
-  const contentType = res.headers.get("content-type") || "未提供";
+  const contentType = res.headers.get("content-type") || adkT("client.notProvided");
   const normalizedContentType = contentType.toLowerCase();
   if (
     !normalizedContentType.includes("application/json") &&
     !normalizedContentType.includes("+json")
   ) {
     throw new Error(
-      `加载 Agent 用量失败：服务端返回非 JSON 响应（HTTP ${res.status}，Content-Type: ${contentType}）。` +
-      "请确认当前服务以 Studio 模式启动，并检查代理或网关配置。",
+      adkT("client.agentUsageNonJson", { status: res.status, contentType }) +
+      adkT("client.checkStudioGateway"),
     );
   }
   try {
     return (await res.json()) as AgentUsageResponse;
   } catch {
     throw new Error(
-      `加载 Agent 用量失败：服务端返回了无法解析的 JSON（HTTP ${res.status}，Content-Type: ${contentType}）。` +
-      "请稍后重试；若问题持续，请检查代理或网关配置。",
+      adkT("client.agentUsageInvalidJson", { status: res.status, contentType }) +
+      adkT("client.retryCheckGateway"),
     );
   }
 }
@@ -4168,7 +4172,7 @@ function cronJobPath(jobId = ""): string {
 export async function listCronJobs(signal?: AbortSignal): Promise<CronJob[]> {
   const response = await apiFetch(cronJobPath(), { signal });
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "加载定时任务失败"));
+    throw new Error(await httpErrorMessage(response, adkT("client.loadCronJobsFailed")));
   }
   const data = (await response.json()) as CronJobListResponse | CronJob[];
   return Array.isArray(data) ? data : data.items ?? [];
@@ -4180,7 +4184,7 @@ export async function getCronJob(
 ): Promise<CronJob> {
   const response = await apiFetch(cronJobPath(jobId), { signal });
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "加载定时任务详情失败"));
+    throw new Error(await httpErrorMessage(response, adkT("client.loadCronJobFailed")));
   }
   return (await response.json()) as CronJob;
 }
@@ -4192,7 +4196,7 @@ export async function createCronJob(input: CronJobInput): Promise<CronJob> {
     body: JSON.stringify(input),
   });
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "创建定时任务失败"));
+    throw new Error(await httpErrorMessage(response, adkT("client.createCronJobFailed")));
   }
   return (await response.json()) as CronJob;
 }
@@ -4207,7 +4211,7 @@ export async function updateCronJob(
     body: JSON.stringify(input),
   });
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "更新定时任务失败"));
+    throw new Error(await httpErrorMessage(response, adkT("client.updateCronJobFailed")));
   }
   return (await response.json()) as CronJob;
 }
@@ -4222,7 +4226,7 @@ export async function setCronJobEnabled(
   });
   if (!response.ok) {
     throw new Error(
-      await httpErrorMessage(response, enabled ? "启用定时任务失败" : "暂停定时任务失败"),
+      await httpErrorMessage(response, enabled ? adkT("client.enableCronJobFailed") : adkT("client.pauseCronJobFailed")),
     );
   }
   return (await response.json()) as CronJob;
@@ -4231,7 +4235,7 @@ export async function setCronJobEnabled(
 export async function runCronJobNow(jobId: string): Promise<CronJobRun> {
   const response = await apiFetch(`${cronJobPath(jobId)}/run`, { method: "POST" });
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "立即执行定时任务失败"));
+    throw new Error(await httpErrorMessage(response, adkT("client.runCronJobFailed")));
   }
   return (await response.json()) as CronJobRun;
 }
@@ -4242,7 +4246,7 @@ export async function listCronJobRuns(
 ): Promise<CronJobRun[]> {
   const response = await apiFetch(`${cronJobPath(jobId)}/runs`, { signal });
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "加载执行历史失败"));
+    throw new Error(await httpErrorMessage(response, adkT("client.loadCronHistoryFailed")));
   }
   const data = (await response.json()) as CronJobRunListResponse | CronJobRun[];
   return Array.isArray(data) ? data : data.items ?? [];
@@ -4257,7 +4261,7 @@ export async function cancelCronJobRun(
     { method: "POST" },
   );
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "终止执行失败"));
+    throw new Error(await httpErrorMessage(response, adkT("client.stopCronRunFailed")));
   }
   return (await response.json()) as CronJobRun;
 }
@@ -4265,7 +4269,7 @@ export async function cancelCronJobRun(
 export async function deleteCronJob(jobId: string): Promise<void> {
   const response = await apiFetch(cronJobPath(jobId), { method: "DELETE" });
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "删除定时任务失败"));
+    throw new Error(await httpErrorMessage(response, adkT("client.deleteCronJobFailed")));
   }
 }
 
@@ -4306,7 +4310,7 @@ export async function getRuntimes(
     signal: opts.signal,
   });
   if (!res.ok) {
-    const detail = await httpErrorMessage(res, "加载 Runtime 失败");
+    const detail = await httpErrorMessage(res, adkT("client.loadRuntimeFailed"));
     throw new RuntimeListError(detail, res.status);
   }
   const d = (await res.json()) as Partial<RuntimePage>;
@@ -4391,7 +4395,7 @@ export async function getRuntimeStudioToolCapabilities(
   );
   if (!res.ok) {
     throw new RuntimeProbeError(
-      await httpErrorMessage(res, "读取本地工具失败"),
+      await httpErrorMessage(res, adkT("client.loadLocalToolsFailed")),
       false,
       true,
     );
@@ -4412,7 +4416,7 @@ export async function ensureRuntimeRouteChannel(
   );
   if (!res.ok) {
     throw new RuntimeProbeError(
-      await httpErrorMessage(res, "连接 Studio 动态路由失败"),
+      await httpErrorMessage(res, adkT("client.connectDynamicRouteFailed")),
       false,
       true,
     );
@@ -4440,23 +4444,23 @@ export async function probeRuntimeA2a(
     throw new RuntimeAccessDeniedError();
   }
   if (runtimeErrorCode === "runtime_private_endpoint_unreachable") {
-    throw new RuntimeProbeError(PRIVATE_RUNTIME_UNREACHABLE_MESSAGE);
+    throw new RuntimeProbeError(privateRuntimeUnreachableMessage());
   }
   if (
     ["runtime_proxy_connect_error", "runtime_proxy_timeout"].includes(
       runtimeErrorCode,
     )
   ) {
-    throw new RuntimeProbeError(RUNTIME_ENDPOINT_UNREACHABLE_MESSAGE);
+    throw new RuntimeProbeError(runtimeEndpointUnreachableMessage());
   }
   if (res.status === 404) return null;
   if (res.status === 401 || res.status === 403) {
     throw new RuntimeProbeError(
-      "Runtime 服务拒绝了 A2A 探测请求，请检查 Runtime 的鉴权配置。",
+      adkT("client.a2aProbeDenied"),
     );
   }
   if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "读取 A2A Agent Card 失败"));
+    throw new Error(await httpErrorMessage(res, adkT("client.loadA2aCardFailed")));
   }
   const payload = (await res.json().catch(() => null)) as Record<
     string,
@@ -4484,11 +4488,11 @@ export async function revealRuntimeApiKey(
     { method: "POST", cache: "no-store" },
   );
   if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "读取 Runtime API Key 失败"));
+    throw new Error(await httpErrorMessage(res, adkT("client.loadRuntimeApiKeyFailed")));
   }
   const payload = (await res.json()) as { apiKey?: unknown };
   if (typeof payload.apiKey !== "string" || !payload.apiKey) {
-    throw new Error("Runtime 未返回可用的 API Key");
+    throw new Error(adkT("client.runtimeApiKeyMissing"));
   }
   return payload.apiKey;
 }
@@ -4505,7 +4509,7 @@ export async function deleteRuntime(
   });
   if (!res.ok) {
     const t = await res.text().catch(() => "");
-    throw new Error(t || `删除失败 (${res.status})`);
+    throw new Error(t || adkT("client.deleteFailed", { status: res.status }));
   }
 }
 
@@ -4764,13 +4768,13 @@ export function invalidateRuntimeUpdateCapabilityCache(
 async function runtimeUpdateCapabilityErrorMessage(res: Response): Promise<string> {
   const payload = await res.json().catch(() => null) as { detail?: unknown } | null;
   const detail = typeof payload?.detail === "string" ? payload.detail : "";
-  if (res.status === 403) return "当前账号没有管理该 Runtime 的权限。";
+  if (res.status === 403) return adkT("client.runtimeManageForbidden");
   if (res.status === 404) {
     return detail === "runtime_not_found"
-      ? "该 Runtime 不存在或已被删除。"
-      : "当前账号无法访问该 Runtime。";
+      ? adkT("client.runtimeNotFound")
+      : adkT("client.runtimeUnavailable");
   }
-  return `检查 Runtime 更新能力失败（HTTP ${res.status}），请稍后重试。`;
+  return adkT("client.checkRuntimeUpdateFailed", { status: res.status });
 }
 
 /** Control-plane detail for a runtime (GetRuntime), for the 管理 Agent view. */
@@ -4816,9 +4820,9 @@ async function fetchRuntimeDetail(
       `/web/runtime-detail?runtimeId=${encodeURIComponent(runtimeId)}&region=${encodeURIComponent(candidate)}`,
     );
     if (res.ok) return res.json();
-    lastError = new Error(await httpErrorMessage(res, "加载 Runtime 详情失败"));
+    lastError = new Error(await httpErrorMessage(res, adkT("client.loadRuntimeDetailFailed")));
   }
-  throw lastError ?? new Error("加载 Runtime 详情失败");
+  throw lastError ?? new Error(adkT("client.loadRuntimeDetailFailed"));
 }
 
 /** Fetch a runtime's control-plane detail (config/status/envs). */
@@ -4891,7 +4895,7 @@ export async function generateAgentProject(
     body: JSON.stringify({ draft }),
   });
   if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "生成项目失败"));
+    throw new Error(await httpErrorMessage(res, adkT("client.generateProjectFailed")));
   }
   return res.json();
 }
@@ -4918,9 +4922,9 @@ export async function generateAgentDraftFromRequirement(
     GENERATED_AGENT_DRAFT_TIMEOUT_MS,
   );
   if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "生成 Agent 配置失败"));
+    throw new Error(await httpErrorMessage(res, adkT("client.generateAgentConfigFailed")));
   }
-  return parseJsonResponse<GeneratedAgentDraftResult>(res, "生成 Agent 配置失败");
+  return parseJsonResponse<GeneratedAgentDraftResult>(res, adkT("client.generateAgentConfigFailed"));
 }
 
 export async function createGeneratedAgentTestRun(
@@ -4937,9 +4941,9 @@ export async function createGeneratedAgentTestRun(
     }),
   });
   if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "创建调试运行失败"));
+    throw new Error(await httpErrorMessage(res, adkT("client.createDebugRunFailed")));
   }
-  return parseJsonResponse<GeneratedAgentTestRun>(res, "创建调试运行失败");
+  return parseJsonResponse<GeneratedAgentTestRun>(res, adkT("client.createDebugRunFailed"));
 }
 
 export async function createGeneratedAgentTestSession(
@@ -4952,9 +4956,9 @@ export async function createGeneratedAgentTestSession(
     body: JSON.stringify({ userId }),
   });
   if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "创建调试会话失败"));
+    throw new Error(await httpErrorMessage(res, adkT("client.createDebugSessionFailed")));
   }
-  const session = await parseJsonResponse<{ id: string }>(res, "创建调试会话失败");
+  const session = await parseJsonResponse<{ id: string }>(res, adkT("client.createDebugSessionFailed"));
   return session.id;
 }
 
@@ -4966,10 +4970,10 @@ export async function getGeneratedAgentTestTrace(
     `/web/generated-agent-test-runs/${encodeURIComponent(runId)}/trace/session/${encodeURIComponent(sessionId)}`,
   );
   if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "加载调试调用链路失败"));
+    throw new Error(await httpErrorMessage(res, adkT("client.loadDebugTraceFailed")));
   }
-  const spans = await parseJsonResponse<unknown>(res, "加载调试调用链路失败");
-  if (!Array.isArray(spans)) throw new Error("加载调试调用链路失败：返回格式无效");
+  const spans = await parseJsonResponse<unknown>(res, adkT("client.loadDebugTraceFailed"));
+  if (!Array.isArray(spans)) throw new Error(adkT("client.invalidDebugTrace"));
   return spans as TraceSpan[];
 }
 
@@ -5008,12 +5012,12 @@ export async function* runGeneratedAgentTestSSE({
     );
   } catch (error) {
     firstEventDeadline.cleanup();
-    if (firstEventDeadline.timedOut()) throw new Error(RUN_SSE_FIRST_EVENT_TIMEOUT_ERROR);
+    if (firstEventDeadline.timedOut()) throw new Error(runSseFirstEventTimeoutError());
     throw error;
   }
   if (!res.ok) {
     firstEventDeadline.cleanup();
-    throw new Error(await httpErrorMessage(res, "调试运行失败"));
+    throw new Error(await httpErrorMessage(res, adkT("client.debugRunFailed")));
   }
   try {
     for await (const evt of parseSSE(res)) {
@@ -5021,7 +5025,7 @@ export async function* runGeneratedAgentTestSSE({
       yield evt as AdkEvent;
     }
   } catch (error) {
-    if (firstEventDeadline.timedOut()) throw new Error(RUN_SSE_FIRST_EVENT_TIMEOUT_ERROR);
+    if (firstEventDeadline.timedOut()) throw new Error(runSseFirstEventTimeoutError());
     throw error;
   } finally {
     firstEventDeadline.cleanup();
@@ -5033,6 +5037,6 @@ export async function deleteGeneratedAgentTestRun(runId: string): Promise<void> 
     method: "DELETE",
   });
   if (!res.ok && res.status !== 404) {
-    throw new Error(await httpErrorMessage(res, "清理调试运行失败"));
+    throw new Error(await httpErrorMessage(res, adkT("client.cleanupDebugRunFailed")));
   }
 }

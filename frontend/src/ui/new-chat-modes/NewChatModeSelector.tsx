@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { AgentFaceIcon } from "../AgentFaceIcon";
 import {
   SandboxAgentIcon,
@@ -9,48 +10,48 @@ import "./new-chat-modes.css";
 
 interface ModeOption {
   value: NewChatMode;
-  label: string;
-  description: string;
+  labelKey: string;
+  descriptionKey: string;
 }
 
 const MODES: ModeOption[] = [
   {
     value: "agent",
-    label: "Agent",
-    description: "与当前选择的 Agent 对话",
+    labelKey: "mode.agent.label",
+    descriptionKey: "mode.agent.description",
   },
   {
     value: "temporary",
-    label: "内置智能体",
-    description: "使用平台提供的智能体",
+    labelKey: "mode.builtin.label",
+    descriptionKey: "mode.builtin.description",
   },
 ];
 
 const BUILTIN_AGENTS = [
   {
-    label: "Codex 智能体",
+    labelKey: "mode.codex.label",
     kind: "codex",
     value: "temporary",
-    description: "在沙箱中执行任务",
+    descriptionKey: "mode.codex.description",
   },
   {
-    label: "DeepSeek Harness",
+    labelKey: "mode.deepseekHarness.label",
     kind: "deepseek-harness",
     value: "deepseek-harness",
-    description: "打开 DeepSeek Harness 工作区",
+    descriptionKey: "mode.deepseekHarness.description",
   },
 ] satisfies Array<{
-  label: string;
+  labelKey: string;
   kind: SandboxAgentIconKind;
   value: NewChatMode;
-  description: string;
+  descriptionKey: string;
 }>;
 
 const UNAVAILABLE_BUILTIN_AGENTS = [
-  { label: "ArkClaw", kind: "openclaw" },
-  { label: "Hermes 智能体", kind: "hermes" },
+  { labelKey: "mode.arkClaw", kind: "openclaw" },
+  { labelKey: "mode.hermes", kind: "hermes" },
 ] satisfies Array<{
-  label: string;
+  labelKey: string;
   kind: SandboxAgentIconKind;
 }>;
 
@@ -94,6 +95,7 @@ export function NewChatModeSelector({
   temporaryEnabled,
   deepseekHarnessEnabled,
 }: NewChatModeSelectorProps) {
+  const { t } = useTranslation("newChat");
   const [open, setOpen] = useState(false);
   const [builtinOpen, setBuiltinOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(() => modeIndexForValue(value));
@@ -101,7 +103,7 @@ export function NewChatModeSelector({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const current = value === "agent" ? MODES[0] : MODES[1];
   const currentBuiltin = BUILTIN_AGENTS.find((agent) => agent.value === value);
-  const currentLabel = currentBuiltin?.label ?? current.label;
+  const currentLabel = t(currentBuiltin?.labelKey ?? current.labelKey);
 
   function modeEnabled(mode: ModeOption): boolean | undefined {
     if (mode.value === "temporary") {
@@ -124,9 +126,9 @@ export function NewChatModeSelector({
 
   function modeDescription(mode: ModeOption): string {
     const enabled = modeEnabled(mode);
-    if (enabled === undefined) return "正在检查配置";
-    if (!enabled) return "管理员未配置";
-    return mode.description;
+    if (enabled === undefined) return t("mode.checking");
+    if (!enabled) return t("mode.notConfigured");
+    return t(mode.descriptionKey);
   }
 
   useEffect(() => {
@@ -175,7 +177,7 @@ export function NewChatModeSelector({
         ref={triggerRef}
         type="button"
         className="new-chat-mode__trigger"
-        aria-label="选择新会话模式"
+        aria-label={t("mode.select")}
         aria-haspopup="listbox"
         aria-expanded={open}
         disabled={disabled}
@@ -213,7 +215,7 @@ export function NewChatModeSelector({
           <div
             className="new-chat-mode__menu"
             role="listbox"
-            aria-label="新会话模式"
+            aria-label={t("mode.select")}
             tabIndex={-1}
             onKeyDown={(event) => {
               if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -252,7 +254,7 @@ export function NewChatModeSelector({
                   <span className="new-chat-mode__option-icon"><ModeIcon mode={mode.value} /></span>
                   <span className="new-chat-mode__copy">
                     <span className="new-chat-mode__label">
-                      {mode.label}
+                      {t(mode.labelKey)}
                     </span>
                     <span>{modeDescription(mode)}</span>
                   </span>
@@ -267,7 +269,7 @@ export function NewChatModeSelector({
           </div>
 
           {builtinOpen ? (
-            <div className="new-chat-mode__submenu" role="menu" aria-label="内置智能体">
+            <div className="new-chat-mode__submenu" role="menu" aria-label={t("mode.builtin.label")}>
               {BUILTIN_AGENTS.map((agent) => {
                 const enabled = builtinEnabled(agent.value);
                 return (
@@ -281,24 +283,24 @@ export function NewChatModeSelector({
                   >
                     <SandboxAgentIcon kind={agent.kind} className="new-chat-mode__builtin-icon" />
                     <span className="new-chat-mode__copy">
-                      <span className="new-chat-mode__label">{agent.label}</span>
+                      <span className="new-chat-mode__label">{t(agent.labelKey)}</span>
                       <span>
                         {enabled === undefined
-                          ? "正在检查配置"
+                          ? t("mode.checking")
                           : enabled
-                            ? agent.description
-                            : "管理员未配置"}
+                            ? t(agent.descriptionKey)
+                            : t("mode.notConfigured")}
                       </span>
                     </span>
                   </button>
                 );
               })}
-              {UNAVAILABLE_BUILTIN_AGENTS.map(({ label, kind }) => (
-                <button key={label} type="button" role="menuitem" className="new-chat-mode__submenu-option" disabled>
+              {UNAVAILABLE_BUILTIN_AGENTS.map(({ labelKey, kind }) => (
+                <button key={labelKey} type="button" role="menuitem" className="new-chat-mode__submenu-option" disabled>
                   <SandboxAgentIcon kind={kind} className="new-chat-mode__builtin-icon" />
                   <span className="new-chat-mode__copy">
-                    <span className="new-chat-mode__label">{label}</span>
-                    <span>暂不可用</span>
+                    <span className="new-chat-mode__label">{t(labelKey)}</span>
+                    <span>{t("mode.unavailable")}</span>
                   </span>
                 </button>
               ))}

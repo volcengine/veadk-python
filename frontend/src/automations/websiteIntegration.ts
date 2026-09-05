@@ -5,6 +5,6 @@ export const websiteIntegrationAutomation: WebsiteIntegrationAutomationDefinitio
   kind: "website-integration",
   category: "channels",
   icon: "website-integration",
-  name: "网站集成",
-  description: "将 AgentKit Runtime 以悬浮聊天窗口嵌入网站。",
+  name: "Website integration",
+  description: "Embed an AgentKit Runtime on your website as a floating chat window.",
 };

@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useTranslation } from "react-i18next";
 import type {
   SessionEnvironmentMountSelection,
   StudioEnvironment,
@@ -112,6 +113,7 @@ function EnvironmentPickerDialog({
   ) => void | Promise<void>;
   onClose: () => void;
 }) {
+  const { t } = useTranslation("workspaceTools");
   const [query, setQuery] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
@@ -228,7 +230,7 @@ function EnvironmentPickerDialog({
       await onConfirm(nextMounts, [...draftWorkspaceIds]);
       onClose();
     } catch (cause) {
-      setSubmitError(cause instanceof Error ? cause.message : "挂载环境失败");
+      setSubmitError(cause instanceof Error ? cause.message : t("sessionEnvironment.mountFailed"));
     } finally {
       setSubmitting(false);
     }
@@ -239,7 +241,7 @@ function EnvironmentPickerDialog({
       <button
         type="button"
         className="studio-tool-dialog-scrim"
-        aria-label="关闭环境弹窗"
+        aria-label={t("sessionEnvironment.closeDialog")}
         disabled={submitting}
         onClick={onClose}
       />
@@ -252,13 +254,13 @@ function EnvironmentPickerDialog({
         <header className="studio-tool-dialog-head">
           <span className="studio-tool-dialog-mark"><EnvironmentIcon /></span>
           <div>
-            <h2 id={titleId}>添加环境</h2>
-            <p>选择当前会话允许 Agent 使用的 Sandbox 环境</p>
+            <h2 id={titleId}>{t("sessionEnvironment.addTitle")}</h2>
+            <p>{t("sessionEnvironment.description")}</p>
           </div>
           <button
             type="button"
             className="studio-tool-dialog-close"
-            aria-label="关闭添加环境"
+            aria-label={t("sessionEnvironment.closeAdd")}
             disabled={submitting}
             onClick={onClose}
           >
@@ -270,24 +272,24 @@ function EnvironmentPickerDialog({
             <SearchIcon />
             <input
               value={query}
-              aria-label="搜索环境"
-              placeholder="搜索环境名称或能力"
+              aria-label={t("sessionEnvironment.searchAria")}
+              placeholder={t("sessionEnvironment.searchPlaceholder")}
               autoFocus
               onChange={(event) => setQuery(event.target.value)}
             />
           </label>
-          <div className="studio-tool-picker session-environment-picker" role="group" aria-label="可用环境与工作区">
+          <div className="studio-tool-picker session-environment-picker" role="group" aria-label={t("sessionEnvironment.availableAria")}>
             {loading ? (
-              <div className="studio-tool-empty">正在读取可用环境…</div>
+              <div className="studio-tool-empty">{t("sessionEnvironment.loading")}</div>
             ) : error ? (
               <div className="studio-tool-empty">{error}</div>
             ) : filteredEnvironments.length === 0 && filteredWorkspaces.length === 0 ? (
-              <div className="studio-tool-empty">没有匹配的环境或工作区</div>
+              <div className="studio-tool-empty">{t("sessionEnvironment.noMatch")}</div>
             ) : (
               <>
                 {filteredWorkspaces.length > 0 && (
                   <section className="session-environment-picker__group" aria-labelledby={`${titleId}-workspaces`}>
-                    <h3 id={`${titleId}-workspaces`}>工作区</h3>
+                    <h3 id={`${titleId}-workspaces`}>{t("sessionEnvironment.workspaces")}</h3>
                     {filteredWorkspaces.map((workspace) => {
                       const mounts = workspaceEnvironmentMounts(workspace, environmentsById);
                       const active = draftWorkspaceIds.has(workspace.id);
@@ -297,14 +299,14 @@ function EnvironmentPickerDialog({
                           <span className="studio-tool-option-icon"><WorkspaceIcon /></span>
                           <span className="studio-tool-option-copy">
                             <strong>{workspace.name}</strong>
-                            <span>{workspace.description || "复用工作区中的全部可用环境"}</span>
-                            <small>{mounts.length} 个可用环境</small>
+                            <span>{workspace.description || t("sessionEnvironment.reuseAll")}</span>
+                            <small>{t("sessionEnvironment.availableEnvironmentCount", { count: mounts.length })}</small>
                           </span>
                           <input
                             type="checkbox"
                             checked={active}
                             disabled={disabled}
-                            aria-label={`选择工作区 ${workspace.name}`}
+                            aria-label={t("sessionEnvironment.selectWorkspace", { name: workspace.name })}
                             onChange={() => toggleWorkspace(workspace)}
                           />
                           <span className="session-environment-check" aria-hidden="true"><CheckIcon /></span>
@@ -315,7 +317,7 @@ function EnvironmentPickerDialog({
                 )}
                 {filteredEnvironments.length > 0 && (
                   <section className="session-environment-picker__group" aria-labelledby={`${titleId}-environments`}>
-                    <h3 id={`${titleId}-environments`}>环境</h3>
+                    <h3 id={`${titleId}-environments`}>{t("sessionEnvironment.environments")}</h3>
                     {filteredEnvironments.map((environment) => {
                       const mount = environmentMount(environment);
                       if (!mount) return null;
@@ -331,7 +333,11 @@ function EnvironmentPickerDialog({
                           <span className="studio-tool-option-copy">
                             <strong>{environment.name}</strong>
                             <span>{covered
-                              ? `已由工作区 ${coveringWorkspaces.map((workspace) => workspace.name).join("、")} 包含`
+                              ? t("sessionEnvironment.includedByWorkspaces", {
+                                  names: coveringWorkspaces
+                                    .map((workspace) => workspace.name)
+                                    .join(t("sessionEnvironment.nameSeparator")),
+                                })
                               : environment.description || environmentLanguageLabel(environment.language)}</span>
                             <small>{environmentLanguageLabel(environment.language)} · {mount.environment_version_id}</small>
                           </span>
@@ -339,7 +345,7 @@ function EnvironmentPickerDialog({
                             type="checkbox"
                             checked={active}
                             disabled={covered}
-                            aria-label={`选择环境 ${environment.name}`}
+                            aria-label={t("sessionEnvironment.selectEnvironment", { name: environment.name })}
                             onChange={() => toggle(environment)}
                           />
                           <span className="session-environment-check" aria-hidden="true"><CheckIcon /></span>
@@ -354,12 +360,15 @@ function EnvironmentPickerDialog({
         </div>
         <footer className="session-environment-dialog__footer">
           <span className={submitError ? "is-error" : ""} role={submitError ? "alert" : undefined}>
-            {submitError || `已选择 ${draftWorkspaceIds.size} 个工作区，覆盖 ${selectedKeys.size} 个环境`}
+            {submitError || t("sessionEnvironment.selectionSummary", {
+              workspaces: t("sessionEnvironment.selectedWorkspaceCount", { count: draftWorkspaceIds.size }),
+              environments: t("sessionEnvironment.coveredEnvironmentCount", { count: selectedKeys.size }),
+            })}
           </span>
           <div>
-            <button type="button" disabled={submitting} onClick={onClose}>取消</button>
+            <button type="button" disabled={submitting} onClick={onClose}>{t("sessionEnvironment.cancel")}</button>
             <button type="button" className="is-primary" disabled={loading || submitting || Boolean(error)} onClick={() => void confirm()}>
-              {submitting ? "正在挂载…" : "确认添加"}
+              {submitting ? t("sessionEnvironment.mounting") : t("sessionEnvironment.confirm")}
             </button>
           </div>
         </footer>
@@ -393,6 +402,7 @@ export function SessionEnvironmentPicker({
   ) => void | Promise<void>;
   onRefresh?: () => void | Promise<void>;
 }) {
+  const { t } = useTranslation("workspaceTools");
   const [open, setOpen] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [changeError, setChangeError] = useState("");
@@ -430,7 +440,7 @@ export function SessionEnvironmentPicker({
     try {
       await onChange(mounts, workspaceIds);
     } catch (cause) {
-      setChangeError(cause instanceof Error ? cause.message : "挂载环境失败");
+      setChangeError(cause instanceof Error ? cause.message : t("sessionEnvironment.mountFailed"));
     } finally {
       setUpdating(false);
     }
@@ -439,7 +449,7 @@ export function SessionEnvironmentPicker({
   return (
     <div className="session-environment-select">
       {value.length > 0 && (
-        <div className="session-environment-list" role="list" aria-label="已挂载环境">
+        <div className="session-environment-list" role="list" aria-label={t("sessionEnvironment.mountedAria")}>
           {selectedWorkspaces.map((workspace) => {
             const workspaceMountIds = new Set(
               workspaceEnvironmentMounts(workspace, environmentsById)
@@ -450,14 +460,14 @@ export function SessionEnvironmentPicker({
                 <span className="session-environment-item__icon"><WorkspaceIcon /></span>
                 <span className="session-environment-item__copy">
                   <strong>{workspace.name}</strong>
-                  <small>{workspaceMountIds.size} 个环境</small>
+                  <small>{t("sessionEnvironment.environmentCount", { count: workspaceMountIds.size })}</small>
                 </span>
                 {onChange && (
                   <button
                     type="button"
                     className="topo-remove-capability"
-                    aria-label={`移除工作区 ${workspace.name}`}
-                    title="移除"
+                    aria-label={t("sessionEnvironment.removeWorkspace", { name: workspace.name })}
+                    title={t("sessionEnvironment.remove")}
                     disabled={disabled || updating}
                     onClick={() => {
                       const otherWorkspaceIds = selectedWorkspaceIds.filter((id) => id !== workspace.id);
@@ -494,8 +504,8 @@ export function SessionEnvironmentPicker({
                   <button
                     type="button"
                     className="topo-remove-capability"
-                    aria-label={`移除环境 ${environment?.name ?? mount.environment_id}`}
-                    title="移除"
+                    aria-label={t("sessionEnvironment.removeEnvironment", { name: environment?.name ?? mount.environment_id })}
+                    title={t("sessionEnvironment.remove")}
                     disabled={disabled || updating}
                     onClick={() => void commitChange(
                       value.filter((item) => mountKey(item) !== mountKey(mount)),
@@ -515,7 +525,7 @@ export function SessionEnvironmentPicker({
           ref={addButtonRef}
           type="button"
           className="topo-capability-add-slot"
-          aria-label="添加环境"
+          aria-label={t("sessionEnvironment.add")}
           disabled={disabled || loading || updating}
           onClick={() => {
             setChangeError("");
@@ -524,7 +534,9 @@ export function SessionEnvironmentPicker({
           }}
         >
           <AddIcon />
-          <span>{value.length > 0 ? "添加更多环境" : "为当前 Session 添加环境"}</span>
+          <span>{value.length > 0
+            ? t("sessionEnvironment.addMore")
+            : t("sessionEnvironment.addForSession")}</span>
         </button>
       )}
       {changeError && (
@@ -533,8 +545,8 @@ export function SessionEnvironmentPicker({
       {(loading || error || environments.length === 0) && (
         <p className={error ? "is-error" : undefined} role={error ? "alert" : undefined}>
           {loading
-            ? "正在加载可用环境…"
-            : error || "暂无可用的 AIO Sandbox 环境。"}
+            ? t("sessionEnvironment.loadingAvailable")
+            : error || t("sessionEnvironment.empty")}
         </p>
       )}
       {open && (

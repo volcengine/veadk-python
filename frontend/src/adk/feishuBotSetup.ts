@@ -1,4 +1,5 @@
 import { httpErrorMessage, studioFetch } from "./client";
+import { adkT } from "./i18n";
 
 export type FeishuBotSetupStatus =
   | "waiting"
@@ -25,7 +26,7 @@ async function request(
     headers: { accept: "application/json", ...init.headers },
   });
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "飞书机器人自动配置失败"));
+    throw new Error(await httpErrorMessage(response, adkT("feishuBot.autoConfigureFailed")));
   }
   return response.json() as Promise<FeishuBotSetupSession>;
 }

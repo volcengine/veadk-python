@@ -46,6 +46,18 @@ const htmlSource = readFileSync(
   new URL("../index.html", import.meta.url),
   "utf8",
 );
+const mainSource = readFileSync(
+  new URL("../src/main.tsx", import.meta.url),
+  "utf8",
+);
+const shellZh = JSON.parse(readFileSync(
+  new URL("../src/i18n/resources/zh-CN/shell.json", import.meta.url),
+  "utf8",
+));
+const shellEn = JSON.parse(readFileSync(
+  new URL("../src/i18n/resources/en-US/shell.json", import.meta.url),
+  "utf8",
+));
 
 test("applies configured branding to the UI, document title, and favicon", () => {
   assert.match(clientSource, /title: "AgentKit Studio"/);
@@ -59,7 +71,7 @@ test("applies configured branding to the UI, document title, and favicon", () =>
   assert.match(sidebarSource, /width=\{20\}\s*height=\{20\}/);
   assert.match(
     sidebarSource,
-    /className="brand"[\s\S]*?onClick=\{onNewChat\}[\s\S]*?aria-label="返回首页"/,
+    /className="brand"[\s\S]*?onClick=\{onNewChat\}[\s\S]*?aria-label=\{t\("navigation\.home"\)\}/,
   );
   assert.match(loginSource, /width=\{20\}\s*height=\{20\}/);
   assert.match(loginSource, /import defaultSiteLogo from "\.\.\/assets\/logo\.svg"/);
@@ -69,10 +81,16 @@ test("applies configured branding to the UI, document title, and favicon", () =>
     loginSource,
     /<TextShimmer as="h1" className="login-title"[\s\S]*?\{branding\.title\}[\s\S]*?<\/TextShimmer>/,
   );
-  assert.match(loginSource, /<p className="login-sub">登录以继续使用<\/p>/);
-  assert.match(loginSource, /火山引擎 AgentKit 提供企业级 Agent 解决方案/);
-  assert.match(loginSource, /BytePlus AgentKit 提供企业级 Agent 解决方案/);
-  assert.match(loginSource, /继续即表示你已阅读并同意 AgentKit/);
+  assert.match(loginSource, /t\("login\.signInToContinue"\)/);
+  assert.match(loginSource, /p\.id === "veidentity"/);
+  assert.match(loginSource, /t\(`login\.identityProvider\.\$\{cloudProvider\}`\)/);
+  assert.equal(shellZh.login.identityProvider.volcengine, "火山引擎 Identity");
+  assert.equal(shellEn.login.identityProvider.volcengine, "Volcengine Identity");
+  assert.equal(shellZh.login.identityProvider.byteplus, "BytePlus Identity");
+  assert.equal(shellEn.login.identityProvider.byteplus, "BytePlus Identity");
+  assert.equal(shellZh.login.powered.volcengine, "火山引擎 AgentKit 提供企业级 Agent 解决方案");
+  assert.equal(shellEn.login.powered.byteplus, "BytePlus AgentKit provides enterprise-grade Agent solutions");
+  assert.match(loginSource, /t\("login\.legalPrefix"\)/);
   assert.match(loginSource, /https:\/\/docs\.volcengine\.com\/docs\/86681\/1925174\?lang=zh/);
   assert.match(loginSource, /https:\/\/docs\.byteplus\.com\/en\/docs\/legal/);
   assert.match(loginSource, /cloudProvider: "volcengine" \| "byteplus"/);
@@ -102,6 +120,13 @@ test("applies configured branding to the UI, document title, and favicon", () =>
     stylesSource,
     /\.brand-title\s*\{[\s\S]*?font-family:\s*"Byte Sans",\s*ui-sans-serif,/,
   );
+  assert.match(mainSource, /@fontsource\/inter\/latin-400\.css/);
+  assert.match(mainSource, /@fontsource\/inter\/latin-500\.css/);
+  assert.match(mainSource, /@fontsource\/inter\/latin-600\.css/);
+  assert.match(
+    stylesSource,
+    /html\[lang="en-US"\]\s*\{[\s\S]*?font-family:\s*"Inter",/,
+  );
   assert.match(
     stylesSource,
     /\.login-brand-logo,[\s\S]*?\.login-brand,[\s\S]*?\.login-title\s*\{[\s\S]*?cursor:\s*text;/,
@@ -115,7 +140,7 @@ test("global sidebar can collapse to a compact icon rail", () => {
   assert.match(sidebarSource, /const \[collapsed, setCollapsed\] = useState\(autoCollapsedRef\.current\)/);
   assert.match(sidebarSource, /query\.addEventListener\("change", handleViewportChange\)/);
   assert.match(sidebarSource, /autoCollapsedRef\.current = false;\s*setCollapsed\(\(value\) => !value\)/);
-  assert.match(sidebarSource, /aria-label=\{collapsed \? "展开侧边栏" : "收起侧边栏"\}/);
+  assert.match(sidebarSource, /aria-label=\{collapsed \? t\("navigation\.expand"\) : t\("navigation\.collapse"\)\}/);
   assert.match(
     stylesSource,
     /\.sidebar\s*\{[\s\S]*?width:\s*240px;[\s\S]*?background:\s*hsl\(var\(--sidebar\)\);/,
@@ -233,7 +258,7 @@ test("the main navbar owns the complete Agent selector", () => {
 test("history header offers a borderless new-session action", () => {
   assert.match(
     sidebarSource,
-    /className="history-new-chat"[\s\S]*?onClick=\{sandboxHistory\?\.onNew \?\? onNewChat\}[\s\S]*?aria-label="新建会话"/,
+    /className="history-new-chat"[\s\S]*?onClick=\{sandboxHistory\?\.onNew \?\? onNewChat\}[\s\S]*?aria-label=\{t\("history\.create"\)\}/,
   );
   assert.match(
     stylesSource,

@@ -1,5 +1,6 @@
 import { withAuth } from "./auth";
 import { withLocalUser } from "./identity";
+import { adkT, withLocaleHeaders } from "./i18n";
 import {
   DEFAULT_REQUEST_TIMEOUT_MS,
   requestSignal,
@@ -282,32 +283,32 @@ const ACTIVITY_PLAN_STATES = new Set<MigrationActivityPlanItem["status"]>([
 
 function record(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`${label}格式错误。`);
+    throw new Error(adkT("migrations.invalidFormat", { label }));
   }
   return value as Record<string, unknown>;
 }
 
 function stringArray(value: unknown, label: string): string[] {
   if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
-    throw new Error(`${label}格式错误。`);
+    throw new Error(adkT("migrations.invalidFormat", { label }));
   }
   return value;
 }
 
 function framework(value: unknown, label: string): MigrationFramework {
   if (typeof value !== "string" || !FRAMEWORKS.has(value as MigrationFramework)) {
-    throw new Error(`${label}格式错误。`);
+    throw new Error(adkT("migrations.invalidFormat", { label }));
   }
   return value as MigrationFramework;
 }
 
 function normalizeAnalysis(value: unknown): MigrationAnalysis {
-  const analysis = record(value, "迁移分析结果");
+  const analysis = record(value, adkT("migrations.labels.analysisResult"));
   const recommended =
     analysis.recommended === null
       ? null
-      : record(analysis.recommended, "迁移建议");
-  const boundary = record(analysis.boundary, "迁移边界");
+      : record(analysis.recommended, adkT("migrations.labels.recommendation"));
+  const boundary = record(analysis.boundary, adkT("migrations.labels.boundary"));
   if (
     analysis.schema_version !== 1 ||
     !["needs_input", "recommendation_ready", "unsupported"].includes(
@@ -320,7 +321,7 @@ function normalizeAnalysis(value: unknown): MigrationAnalysis {
     !Array.isArray(analysis.entries) ||
     !Array.isArray(analysis.questions)
   ) {
-    throw new Error("迁移分析结果格式错误。");
+    throw new Error(adkT("migrations.invalidAnalysisResult"));
   }
   return {
     schema_version: 1,
@@ -329,24 +330,24 @@ function normalizeAnalysis(value: unknown): MigrationAnalysis {
     input_sha256: analysis.input_sha256,
     summary: analysis.summary,
     frameworks: analysis.frameworks.map((item) => {
-      const candidate = record(item, "框架候选");
+      const candidate = record(item, adkT("migrations.labels.frameworkCandidate"));
       if (
         !["high", "medium", "low"].includes(String(candidate.confidence)) ||
         !Array.isArray(candidate.evidence)
       ) {
-        throw new Error("框架候选格式错误。");
+        throw new Error(adkT("migrations.invalidFrameworkCandidate"));
       }
       return {
-        id: framework(candidate.id, "框架候选"),
+        id: framework(candidate.id, adkT("migrations.labels.frameworkCandidate")),
         confidence: candidate.confidence as "high" | "medium" | "low",
         evidence: candidate.evidence.map((evidenceValue) => {
-          const evidence = record(evidenceValue, "分析证据");
+          const evidence = record(evidenceValue, adkT("migrations.labels.analysisEvidence"));
           if (
             typeof evidence.path !== "string" ||
             typeof evidence.line !== "number" ||
             typeof evidence.reason !== "string"
           ) {
-            throw new Error("分析证据格式错误。");
+            throw new Error(adkT("migrations.invalidAnalysisEvidence"));
           }
           return {
             path: evidence.path,
@@ -360,7 +361,7 @@ function normalizeAnalysis(value: unknown): MigrationAnalysis {
       recommended === null
         ? null
         : {
-            framework: framework(recommended.framework, "推荐框架"),
+            framework: framework(recommended.framework, adkT("migrations.labels.recommendedFramework")),
             entry:
               recommended.entry === null || typeof recommended.entry === "string"
                 ? recommended.entry
@@ -369,29 +370,29 @@ function normalizeAnalysis(value: unknown): MigrationAnalysis {
               typeof recommended.reason === "string" ? recommended.reason : "",
           },
     entries: analysis.entries.map((item) => {
-      const entry = record(item, "入口候选");
+      const entry = record(item, adkT("migrations.labels.entryCandidate"));
       if (typeof entry.value !== "string" || typeof entry.evidence !== "string") {
-        throw new Error("入口候选格式错误。");
+        throw new Error(adkT("migrations.invalidEntryCandidate"));
       }
       return {
         value: entry.value,
-        framework: framework(entry.framework, "入口框架"),
+        framework: framework(entry.framework, adkT("migrations.labels.entryFramework")),
         evidence: entry.evidence,
       };
     }),
     boundary: {
-      include: stringArray(boundary.include, "迁移包含范围"),
-      exclude: stringArray(boundary.exclude, "迁移排除范围"),
+      include: stringArray(boundary.include, adkT("migrations.labels.includeScope")),
+      exclude: stringArray(boundary.exclude, adkT("migrations.labels.excludeScope")),
     },
-    assumptions: stringArray(analysis.assumptions, "分析假设"),
+    assumptions: stringArray(analysis.assumptions, adkT("migrations.labels.assumptions")),
     questions: analysis.questions.map((item) => {
-      const question = record(item, "待确认问题");
+      const question = record(item, adkT("migrations.labels.question"));
       if (
         typeof question.id !== "string" ||
         typeof question.prompt !== "string" ||
         typeof question.required !== "boolean"
       ) {
-        throw new Error("待确认问题格式错误。");
+        throw new Error(adkT("migrations.invalidQuestion"));
       }
       return {
         id: question.id,
@@ -399,13 +400,13 @@ function normalizeAnalysis(value: unknown): MigrationAnalysis {
         required: question.required,
       };
     }),
-    warnings: stringArray(analysis.warnings, "迁移警告"),
+    warnings: stringArray(analysis.warnings, adkT("migrations.labels.analysisWarnings")),
   };
 }
 
 function normalizeTask(value: unknown): MigrationTask {
-  const task = record(value, "迁移会话");
-  const artifact = record(task.artifact, "迁移产物状态");
+  const task = record(value, adkT("migrations.labels.task"));
+  const artifact = record(task.artifact, adkT("migrations.labels.artifactStatus"));
   if (
     typeof task.id !== "string" ||
     typeof task.state !== "string" ||
@@ -422,7 +423,7 @@ function normalizeTask(value: unknown): MigrationTask {
     typeof task.canConfirm !== "boolean" ||
     typeof task.canStop !== "boolean"
   ) {
-    throw new Error("迁移会话格式错误。");
+    throw new Error(adkT("migrations.invalidTask"));
   }
   const normalized: MigrationTask = {
     id: task.id,
@@ -450,13 +451,13 @@ function normalizeTask(value: unknown): MigrationTask {
   }
   if (task.analysis !== undefined) normalized.analysis = normalizeAnalysis(task.analysis);
   if (task.analysisRef !== undefined) {
-    const reference = record(task.analysisRef, "分析结果引用");
+    const reference = record(task.analysisRef, adkT("migrations.labels.analysisReference"));
     if (
       typeof reference.attempt !== "number" ||
       typeof reference.sha256 !== "string" ||
       typeof reference.inputSha256 !== "string"
     ) {
-      throw new Error("分析结果引用格式错误。");
+      throw new Error(adkT("migrations.invalidAnalysisReference"));
     }
     normalized.analysisRef = {
       attempt: reference.attempt,
@@ -465,10 +466,10 @@ function normalizeTask(value: unknown): MigrationTask {
     };
   }
   if (task.confirmation !== undefined) {
-    const confirmation = record(task.confirmation, "迁移确认");
+    const confirmation = record(task.confirmation, adkT("migrations.labels.confirmation"));
     normalized.confirmation = {
       ...(confirmation.framework !== undefined
-        ? { framework: framework(confirmation.framework, "确认框架") }
+        ? { framework: framework(confirmation.framework, adkT("migrations.labels.confirmedFramework")) }
         : {}),
       ...(confirmation.entry === null || typeof confirmation.entry === "string"
         ? { entry: confirmation.entry }
@@ -479,7 +480,7 @@ function normalizeTask(value: unknown): MigrationTask {
     };
   }
   if (task.error !== undefined) {
-    const error = record(task.error, "迁移错误");
+    const error = record(task.error, adkT("migrations.labels.error"));
     normalized.error = {
       code: typeof error.code === "string" ? error.code : "MIGRATION_ERROR",
       message: typeof error.message === "string" ? error.message : task.message,
@@ -487,7 +488,7 @@ function normalizeTask(value: unknown): MigrationTask {
     };
   }
   if (task.persistence !== undefined) {
-    const persistence = record(task.persistence, "迁移源码保存状态");
+    const persistence = record(task.persistence, adkT("migrations.labels.sourcePersistence"));
     if (
       !["saving", "saved", "failed", "unavailable"].includes(String(persistence.state))
       || typeof persistence.message !== "string"
@@ -495,7 +496,7 @@ function normalizeTask(value: unknown): MigrationTask {
       || (persistence.versionId !== undefined && typeof persistence.versionId !== "string")
       || (persistence.retryable !== undefined && typeof persistence.retryable !== "boolean")
     ) {
-      throw new Error("迁移源码保存状态格式错误。");
+      throw new Error(adkT("migrations.invalidSourcePersistence"));
     }
     normalized.persistence = {
       state: persistence.state as "saving" | "saved" | "failed" | "unavailable",
@@ -515,19 +516,19 @@ function normalizeTask(value: unknown): MigrationTask {
 }
 
 function normalizeActivity(value: unknown): MigrationActivity {
-  const activity = record(value, "迁移执行动态");
+  const activity = record(value, adkT("migrations.labels.activity"));
   if (
     typeof activity.available !== "boolean" ||
     typeof activity.complete !== "boolean" ||
     !Array.isArray(activity.items)
   ) {
-    throw new Error("迁移执行动态格式错误。");
+    throw new Error(adkT("migrations.invalidActivity"));
   }
   return {
     available: activity.available,
     complete: activity.complete,
     items: activity.items.map((value) => {
-      const item = record(value, "迁移执行动态项");
+      const item = record(value, adkT("migrations.labels.activityItem"));
       if (
         typeof item.id !== "string" ||
         typeof item.kind !== "string" ||
@@ -537,17 +538,17 @@ function normalizeActivity(value: unknown): MigrationActivity {
         typeof item.title !== "string" ||
         (item.detail !== undefined && typeof item.detail !== "string")
       ) {
-        throw new Error("迁移执行动态项格式错误。");
+        throw new Error(adkT("migrations.invalidActivityItem"));
       }
       let tool: MigrationActivityTool | undefined;
       if (item.tool !== undefined) {
-        const value = record(item.tool, "迁移执行工具项");
+        const value = record(item.tool, adkT("migrations.labels.activityTool"));
         if (
           typeof value.name !== "string" ||
           (value.error !== undefined && typeof value.error !== "string") ||
           (value.exitCode !== undefined && !Number.isInteger(value.exitCode))
         ) {
-          throw new Error("迁移执行工具项格式错误。");
+          throw new Error(adkT("migrations.invalidActivityTool"));
         }
         tool = {
           name: value.name,
@@ -566,10 +567,10 @@ function normalizeActivity(value: unknown): MigrationActivity {
       let plan: MigrationActivityPlanItem[] | undefined;
       if (item.plan !== undefined) {
         if (!Array.isArray(item.plan)) {
-          throw new Error("迁移执行计划格式错误。");
+          throw new Error(adkT("migrations.invalidActivityPlan"));
         }
         plan = item.plan.map((value) => {
-          const planItem = record(value, "迁移执行计划项");
+          const planItem = record(value, adkT("migrations.labels.activityPlanItem"));
           if (
             typeof planItem.text !== "string" ||
             typeof planItem.status !== "string" ||
@@ -577,7 +578,7 @@ function normalizeActivity(value: unknown): MigrationActivity {
               planItem.status as MigrationActivityPlanItem["status"],
             )
           ) {
-            throw new Error("迁移执行计划项格式错误。");
+            throw new Error(adkT("migrations.invalidActivityPlanItem"));
           }
           return {
             text: planItem.text,
@@ -599,18 +600,18 @@ function normalizeActivity(value: unknown): MigrationActivity {
 }
 
 function normalizeArtifact(value: unknown): MigrationArtifact {
-  const artifact = record(value, "迁移产物");
-  const cli = record(artifact.cli, "CLI 信息");
-  const migration = record(artifact.migration, "迁移信息");
-  const startup = record(artifact.startup, "启动信息");
-  const environment = record(artifact.environment, "环境变量信息");
-  const verification = record(artifact.verification, "校验信息");
-  const report = record(artifact.report, "迁移报告");
-  const descriptor = record(artifact.artifact, "产物归档");
+  const artifact = record(value, adkT("migrations.labels.artifact"));
+  const cli = record(artifact.cli, adkT("migrations.labels.cli"));
+  const migration = record(artifact.migration, adkT("migrations.labels.migration"));
+  const startup = record(artifact.startup, adkT("migrations.labels.startup"));
+  const environment = record(artifact.environment, adkT("migrations.labels.environment"));
+  const verification = record(artifact.verification, adkT("migrations.labels.verification"));
+  const report = record(artifact.report, adkT("migrations.labels.report"));
+  const descriptor = record(artifact.artifact, adkT("migrations.labels.archive"));
   const environmentDefaults =
     environment.defaults === undefined
       ? {}
-      : record(environment.defaults, "环境变量默认值");
+      : record(environment.defaults, adkT("migrations.labels.environmentDefaults"));
   if (
     artifact.schema_version !== 1 ||
     !["succeeded", "succeeded_with_warnings", "partial"].includes(
@@ -631,15 +632,15 @@ function normalizeArtifact(value: unknown): MigrationArtifact {
     typeof descriptor.sha256 !== "string" ||
     typeof artifact.created_at !== "string"
   ) {
-    throw new Error("迁移产物格式错误。");
+    throw new Error(adkT("migrations.invalidArtifact"));
   }
   const requiredEnvironment = stringArray(
     environment.required,
-    "必需环境变量",
+    adkT("migrations.labels.requiredEnvironment"),
   );
   const optionalEnvironment = stringArray(
     environment.optional,
-    "可选环境变量",
+    adkT("migrations.labels.optionalEnvironment"),
   );
   const declaredEnvironment = new Set([
     ...requiredEnvironment,
@@ -648,7 +649,7 @@ function normalizeArtifact(value: unknown): MigrationArtifact {
   const normalizedEnvironmentDefaults = Object.fromEntries(
     Object.entries(environmentDefaults).map(([key, defaultValue]) => {
       if (!declaredEnvironment.has(key) || typeof defaultValue !== "string") {
-        throw new Error("环境变量默认值格式错误。");
+        throw new Error(adkT("migrations.invalidEnvironmentDefaults"));
       }
       return [key, defaultValue];
     }),
@@ -670,14 +671,14 @@ function normalizeArtifact(value: unknown): MigrationArtifact {
     },
     status: artifact.status as MigrationArtifact["status"],
     files: artifact.files.map((item) => {
-      const file = record(item, "迁移产物文件");
+      const file = record(item, adkT("migrations.labels.artifactFile"));
       if (
         typeof file.path !== "string" ||
         typeof file.size !== "number" ||
         typeof file.sha256 !== "string" ||
         typeof file.mode !== "string"
       ) {
-        throw new Error("迁移产物文件格式错误。");
+        throw new Error(adkT("migrations.invalidArtifactFile"));
       }
       return {
         path: file.path,
@@ -702,12 +703,12 @@ function normalizeArtifact(value: unknown): MigrationArtifact {
     verification: {
       status: verification.status as MigrationArtifact["verification"]["status"],
       checks: verification.checks.map((item) => {
-        const check = record(item, "迁移校验项");
+        const check = record(item, adkT("migrations.labels.verificationCheck"));
         if (
           typeof check.name !== "string" ||
           !["passed", "failed"].includes(String(check.status))
         ) {
-          throw new Error("迁移校验项格式错误。");
+          throw new Error(adkT("migrations.invalidVerificationCheck"));
         }
         return {
           name: check.name,
@@ -716,7 +717,7 @@ function normalizeArtifact(value: unknown): MigrationArtifact {
         };
       }),
     },
-    warnings: stringArray(artifact.warnings, "迁移产物警告"),
+    warnings: stringArray(artifact.warnings, adkT("migrations.labels.artifactWarnings")),
     report: { path: report.path },
     artifact: {
       path: "migration-result.zip",
@@ -734,7 +735,7 @@ async function request(
 ): Promise<Response> {
   return fetch(withAuth(`${API_ROOT}${path}`), {
     ...init,
-    headers: withLocalUser(init.headers),
+    headers: withLocaleHeaders(withLocalUser(init.headers)),
     signal: requestSignal(init.signal, timeoutMs),
   });
 }
@@ -758,7 +759,7 @@ function validationErrorDetail(value: unknown): string {
       return location ? `${location}: ${message}` : message;
     })
     .filter(Boolean)
-    .join("；");
+    .join(adkT("migrations.validationSeparator"));
 }
 
 async function errorFrom(
@@ -767,11 +768,11 @@ async function errorFrom(
 ): Promise<MigrationApiError> {
   const text = await response.text().catch(() => "");
   try {
-    const body = record(JSON.parse(text), "错误响应");
+    const body = record(JSON.parse(text), adkT("migrations.labels.errorResponse"));
     if (Array.isArray(body.detail)) {
       const detail = validationErrorDetail(body.detail);
       return new MigrationApiError(
-        detail ? `请求参数校验失败：${detail}` : fallback,
+        detail ? adkT("migrations.requestValidationFailed", { detail }) : fallback,
         response.status,
         "MIGRATION_REQUEST_INVALID",
         false,
@@ -791,7 +792,7 @@ async function errorFrom(
     }
     const detail =
       body.detail && typeof body.detail === "object"
-        ? record(body.detail, "错误详情")
+        ? record(body.detail, adkT("migrations.labels.errorDetail"))
         : body;
     return new MigrationApiError(
       typeof detail.message === "string" ? detail.message : fallback,
@@ -804,9 +805,9 @@ async function errorFrom(
   } catch {
     const contentType =
       response.headers.get("content-type")?.split(";", 1)[0] ||
-      "Content-Type 缺失";
+      adkT("common.contentTypeMissing");
     return new MigrationApiError(
-      `${fallback}（HTTP ${response.status}，Content-Type: ${contentType}）。请检查代理或网关配置。`,
+      adkT("migrations.gatewayError", { fallback, status: response.status, contentType }),
       response.status,
       "MIGRATION_ERROR",
       false,
@@ -821,7 +822,7 @@ async function json(response: Response, fallback: string): Promise<unknown> {
   const contentType = response.headers.get("content-type") ?? "";
   if (!contentType.includes("application/json")) {
     throw new MigrationApiError(
-      `${fallback}：服务端返回非 JSON 响应（HTTP ${response.status}）。请检查代理或网关配置。`,
+      adkT("migrations.nonJsonResponse", { fallback, status: response.status }),
       response.status,
       "MIGRATION_RESPONSE_INVALID",
       false,
@@ -837,9 +838,9 @@ export async function getMigrationCapabilities(
   const body = record(
     await json(
       await request("/capabilities", { signal }),
-      "读取迁移能力失败",
+      adkT("migrations.loadCapabilitiesFailed"),
     ),
-    "迁移能力",
+    adkT("migrations.labels.capabilities"),
   );
   if (
     typeof body.enabled !== "boolean" ||
@@ -848,19 +849,19 @@ export async function getMigrationCapabilities(
     typeof body.sessionTtlSeconds !== "number" ||
     !Array.isArray(body.frameworks)
   ) {
-    throw new Error("迁移能力格式错误。");
+    throw new Error(adkT("migrations.invalidCapabilities"));
   }
   const capability: MigrationCapabilities = {
     enabled: body.enabled,
     reason: body.reason,
     maxUploadBytes: body.maxUploadBytes,
     sessionTtlSeconds: body.sessionTtlSeconds,
-    frameworks: body.frameworks.map((item) => framework(item, "迁移框架")),
+    frameworks: body.frameworks.map((item) => framework(item, adkT("migrations.labels.framework"))),
   };
   if (body.model !== undefined) {
-    const model = record(body.model, "迁移模型能力");
+    const model = record(body.model, adkT("migrations.labels.modelCapabilities"));
     if (typeof model.configured !== "boolean" || typeof model.id !== "string") {
-      throw new Error("迁移模型能力格式错误。");
+      throw new Error(adkT("migrations.invalidModelCapabilities"));
     }
     capability.model = { configured: model.configured, id: model.id };
   }
@@ -871,10 +872,10 @@ export async function listMigrationTasks(
   signal?: AbortSignal,
 ): Promise<MigrationTask[]> {
   const body = record(
-    await json(await request("/tasks", { signal }), "读取迁移会话失败"),
-    "迁移会话列表",
+    await json(await request("/tasks", { signal }), adkT("migrations.loadTasksFailed")),
+    adkT("migrations.labels.taskList"),
   );
-  if (!Array.isArray(body.items)) throw new Error("迁移会话列表格式错误。");
+  if (!Array.isArray(body.items)) throw new Error(adkT("migrations.invalidTaskList"));
   return body.items.map(normalizeTask);
 }
 
@@ -902,7 +903,7 @@ export async function createMigrationTask(args: {
         },
         SESSION_START_TIMEOUT_MS,
       ),
-      "创建迁移会话失败",
+      adkT("migrations.createTaskFailed"),
     ),
   );
 }
@@ -924,7 +925,7 @@ export async function uploadMigrationSource(
         },
         SESSION_START_TIMEOUT_MS,
       ),
-      "上传迁移项目失败",
+      adkT("migrations.uploadProjectFailed"),
     ),
   );
 }
@@ -936,7 +937,7 @@ export async function getMigrationTask(
   return normalizeTask(
     await json(
       await request(`/tasks/${encodeURIComponent(taskId)}`, { signal }),
-      "读取迁移会话失败",
+      adkT("migrations.loadTasksFailed"),
     ),
   );
 }
@@ -951,7 +952,7 @@ export async function getMigrationActivity(
         `/tasks/${encodeURIComponent(taskId)}/activity`,
         { signal, cache: "no-store" },
       ),
-      "读取迁移执行动态失败",
+      adkT("migrations.loadActivityFailed"),
     ),
   );
 }
@@ -988,7 +989,7 @@ export async function confirmMigrationTask(args: {
         },
         SESSION_START_TIMEOUT_MS,
       ),
-      "启动迁移失败",
+      adkT("migrations.startFailed"),
     ),
   );
 }
@@ -1018,7 +1019,7 @@ export async function submitMigrationAnalysisAnswers(args: {
         },
         SESSION_START_TIMEOUT_MS,
       ),
-      "提交分析补充信息失败",
+      adkT("migrations.submitAnswersFailed"),
     ),
   );
 }
@@ -1033,7 +1034,7 @@ export async function stopMigrationTask(
         `/tasks/${encodeURIComponent(taskId)}/stop`,
         { method: "POST", signal },
       ),
-      "终止迁移失败",
+      adkT("migrations.stopFailed"),
     ),
   );
 }
@@ -1047,7 +1048,7 @@ export async function deleteMigrationTask(
       `/tasks/${encodeURIComponent(taskId)}`,
       { method: "DELETE", signal },
     ),
-    "删除迁移会话失败",
+    adkT("migrations.deleteTaskFailed"),
   );
 }
 
@@ -1061,7 +1062,7 @@ export async function getMigrationArtifact(
         `/tasks/${encodeURIComponent(taskId)}/artifact`,
         { signal },
       ),
-      "读取迁移产物失败",
+      adkT("migrations.loadArtifactFailed"),
     ),
   );
 }
@@ -1077,7 +1078,7 @@ export async function getMigrationArtifactFile(
     { signal },
     TRANSFER_REQUEST_TIMEOUT_MS,
   );
-  if (!response.ok) throw await errorFrom(response, "读取迁移产物文件失败");
+  if (!response.ok) throw await errorFrom(response, adkT("migrations.loadArtifactFileFailed"));
   return {
     blob: await response.blob(),
     mimeType:
@@ -1101,7 +1102,7 @@ export async function downloadMigrationArtifact(
     { signal },
     TRANSFER_REQUEST_TIMEOUT_MS,
   );
-  if (!response.ok) throw await errorFrom(response, "下载迁移产物失败");
+  if (!response.ok) throw await errorFrom(response, adkT("migrations.downloadArtifactFailed"));
   const url = URL.createObjectURL(await response.blob());
   const link = document.createElement("a");
   link.href = url;

@@ -91,7 +91,7 @@ test("dims the input and shows a spinner while generation is active", () => {
 test("names the planner model and preserves generation errors verbatim", () => {
   assert.match(
     createSource,
-    /placeholder=\{`描述目标，使用 \$\{plannerModelName\(cloudProvider\)\} 模型一键生成配置`\}/,
+    /placeholder=\{t\("traditional\.ai\.placeholder", \{[\s\S]*?model: plannerModelName\(cloudProvider\)/,
   );
   assert.match(
     createSource,
@@ -116,7 +116,7 @@ test("validates short generation requirements beside the input before requesting
   );
   assert.match(
     createSource,
-    /const aiRequirementError =[\s\S]*?"请至少输入 4 个字符。"/,
+    /const aiRequirementError =[\s\S]*?t\("traditional\.ai\.minimumLength", \{[\s\S]*?count: GENERATED_AGENT_REQUIREMENT_MIN_LENGTH/,
   );
   assert.ok(
     handler.indexOf(

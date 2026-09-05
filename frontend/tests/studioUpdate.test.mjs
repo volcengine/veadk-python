@@ -39,11 +39,11 @@ test("only administrators see an available Studio update as an immediate action"
   assert.match(featureNoticeSource, /canUpdate\?: boolean/);
   assert.match(
     featureNoticeSource,
-    /查看新特性[\s\S]*?\{canUpdate && <StudioUpdateControl variant="feature-link" \/>\}/,
+    /t\("featureNotice\.view"\)[\s\S]*?\{canUpdate && <StudioUpdateControl variant="feature-link" \/>\}/,
   );
   assert.match(
     controlSource,
-    /variant === "feature-link"[\s\S]*?<span>立即更新<\/span>/,
+    /variant === "feature-link"[\s\S]*?studioUpdate\.updateNow/,
   );
 });
 
@@ -117,13 +117,12 @@ test("update state survives refreshes and instance switches", () => {
 });
 
 test("Studio explains the update restart window", () => {
-  assert.match(controlSource, /<span>有新版更新<\/span>/);
-  assert.match(controlSource, /预计约 3–5 分钟完成更新与发布/);
-  assert.match(controlSource, /登录态不会受到影响/);
-  assert.match(controlSource, /<span>选择版本<\/span>/);
+  assert.match(controlSource, /studioUpdate\.newVersionAvailable/);
+  assert.match(controlSource, /studioUpdate\.confirmDescription/);
+  assert.match(controlSource, /studioUpdate\.selectVersion/);
   assert.match(controlSource, /splitReleaseNotes\(targetRelease\?\.changelog \?\? \[\]\)/);
   assert.match(controlSource, /targetReleaseNotes\.map/);
-  assert.match(controlSource, /暂无更新说明/);
+  assert.match(controlSource, /studioUpdate\.noChangelog/);
   assert.match(
     controlStyleSource,
     /\.studio-update-changelog ul\s*\{[\s\S]*?list-style:\s*disc outside;/,
@@ -142,10 +141,10 @@ test("Studio prechecks every OTA permission before starting cloud changes", () =
     controlSource,
     /const permissions = await getStudioUpdatePermissions\(\);[\s\S]*?startStudioUpdate\(targetVersion\)/,
   );
-  assert.match(controlSource, /尚未执行任何云资源变更/);
-  assert.match(controlSource, /打开已预填的 IAM 授权页面/);
-  assert.match(controlSource, /点击页面中的“发起调试”/);
-  assert.match(controlSource, /我已授权，重新检查/);
+  assert.match(controlSource, /studioUpdate\.missingPermissionCount/);
+  assert.match(controlSource, /studioUpdate\.openPrefilledAuthorization/);
+  assert.match(controlSource, /studioUpdate\.authorizationSteps\.debug/);
+  assert.match(controlSource, /studioUpdate\.authorizedRecheck/);
   assert.match(controlSource, /permissionStatus\.missingActions\.map/);
   assert.match(controlStyleSource, /studio-update-authorization-panel/);
 });
@@ -162,20 +161,18 @@ test("current and target release notes share semicolon bullet rendering", () => 
 });
 
 test("Studio exposes detailed update stages that can be reopened", () => {
-  assert.match(controlSource, /下载并校验完整更新包/);
-  assert.match(controlSource, /准备 VeFaaS Function 代码/);
-  assert.match(controlSource, /检查并补齐 Studio 云资源/);
-  assert.match(
-    controlSource,
-    /检查并补齐 Studio 云资源[\s\S]*?更新定时任务调度服务[\s\S]*?提交 Function 更新/,
-  );
-  assert.match(controlSource, /发布新 Revision 并重启服务/);
+  assert.match(controlSource, /"downloading"/);
+  assert.match(controlSource, /"preparing"/);
+  assert.match(controlSource, /"provisioning"/);
+  assert.match(controlSource, /"scheduler"/);
+  assert.match(controlSource, /"submitting"/);
+  assert.match(controlSource, /"publishing"/);
   assert.match(clientSource, /\| "scheduler"/);
   assert.match(controlSource, /unknownProgressStage/);
   assert.match(controlSource, /aria-current=\{active \? "step" : undefined\}/);
   assert.match(controlSource, /setDialogOpen\(true\)/);
-  assert.match(controlSource, /关闭此窗口不会停止更新/);
-  assert.match(controlSource, /后台运行/);
+  assert.match(controlSource, /studioUpdate\.backgroundHint/);
+  assert.match(controlSource, /studioUpdate\.runInBackground/);
   assert.match(clientSource, /progressStage:/);
   assert.match(controlStyleSource, /studio-update-progress-dot/);
 });
@@ -183,7 +180,7 @@ test("Studio exposes detailed update stages that can be reopened", () => {
 test("Studio renders bounded VeFaaS logs without stealing manual scroll", () => {
   assert.match(clientSource, /updateLogs: string\[\]/);
   assert.match(clientSource, /updateLogsVisible: boolean/);
-  assert.match(controlSource, /部署进度/);
+  assert.match(controlSource, /studioUpdate\.deploymentProgress/);
   assert.doesNotMatch(controlSource, /VeFaaS 实时部署日志/);
   assert.match(controlSource, /role="log"/);
   assert.match(controlSource, /aria-live="off"/);
@@ -221,8 +218,8 @@ test("Studio explains how to grant optional VeFaaS log permission", () => {
   assert.match(controlSource, /status\.updateLogsVisible !== false/g);
   assert.match(controlSource, /status\.updateLogsVisible === false/g);
   assert.match(controlSource, /vefaas:GetApplicationRevisionLog/);
-  assert.match(controlSource, /更新会继续/);
-  assert.match(controlSource, /前往 IAM 控制台配置权限/);
+  assert.match(controlSource, /studioUpdate\.logPermissionSuffix/);
+  assert.match(controlSource, /studioUpdate\.openIamConsole/);
   assert.match(controlSource, /href=\{status\.permissionConsoleUrl\}/);
   assert.match(clientSource, /permissionConsoleUrl: string/);
   assert.match(controlStyleSource, /studio-update-permission-notice/);

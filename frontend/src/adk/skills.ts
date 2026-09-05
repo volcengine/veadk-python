@@ -2,6 +2,7 @@ import { withAuth } from "./auth";
 import { withLocalUser } from "./identity";
 import { DEFAULT_REQUEST_TIMEOUT_MS, requestSignal, TRANSFER_REQUEST_TIMEOUT_MS } from "./timeout";
 import type { SkillSpacePage, SkillSpaceRef } from "../create/skills/skillspace";
+import { adkT, withLocaleHeaders } from "./i18n";
 
 const API_ROOT = "/web/skill-management";
 
@@ -28,7 +29,7 @@ export class SkillManagementApiError extends Error {
 async function request(path: string, init: RequestInit = {}, timeout = DEFAULT_REQUEST_TIMEOUT_MS) {
   return fetch(withAuth(`${API_ROOT}${path}`), {
     ...init,
-    headers: withLocalUser(init.headers),
+    headers: withLocaleHeaders(withLocalUser(init.headers)),
     signal: requestSignal(init.signal, timeout),
   });
 }
@@ -56,7 +57,7 @@ export async function skillApiErrorFromResponse(
       originalError = payload.detail.originalError;
     }
   } catch {
-    if (rawResponse.trim()) message = `${fallback}：${rawResponse.trim()}`;
+    if (rawResponse.trim()) message = adkT("common.fallbackWithDetail", { fallback, detail: rawResponse.trim() });
   }
   return new SkillManagementApiError(
     message,
@@ -90,7 +91,7 @@ export async function listManagedSkillSpaces(args: {
   if (args.project) params.set("project", args.project);
   return json(
     await request(`/spaces?${params}`, { signal: args.signal }),
-    "读取 Skill 空间失败",
+    adkT("skills.listSpacesFailed"),
   );
 }
 
@@ -106,7 +107,7 @@ export async function createSkillSpace(args: {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(args),
     }),
-    "创建 Skill 空间失败",
+    adkT("skills.createSpaceFailed"),
   );
 }
 
@@ -126,7 +127,7 @@ export async function updateSkillSpace(args: {
         region: args.region,
       }),
     }),
-    "更新 Skill 空间失败",
+    adkT("skills.updateSpaceFailed"),
   );
 }
 
@@ -140,7 +141,7 @@ export async function deleteSkillSpace(args: {
       `/spaces/${encodeURIComponent(args.spaceId)}?${params}`,
       { method: "DELETE" },
     ),
-    "删除 Skill 空间失败",
+    adkT("skills.deleteSpaceFailed"),
   );
 }
 
@@ -162,7 +163,7 @@ export async function uploadSkillArchive(args: {
       },
       TRANSFER_REQUEST_TIMEOUT_MS,
     ),
-    "上传 Skill 失败",
+    adkT("skills.uploadFailed"),
   );
 }
 
@@ -182,7 +183,7 @@ export async function validateSkillArchive(file: File): Promise<{
       },
       TRANSFER_REQUEST_TIMEOUT_MS,
     ),
-    "校验 Skill 失败",
+    adkT("skills.validateFailed"),
   );
 }
 
@@ -197,7 +198,7 @@ export async function deleteManagedSkill(args: {
       `/spaces/${encodeURIComponent(args.spaceId)}/skills/${encodeURIComponent(args.skillId)}?${params}`,
       { method: "DELETE" },
     ),
-    "删除 Skill 失败",
+    adkT("skills.deleteFailed"),
   );
 }
 
@@ -223,7 +224,7 @@ export async function getManagedSkillFiles(args: {
   if (args.skillName) params.set("skill_name", args.skillName);
   const result = await json<{ files: ManagedSkillFile[] }>(
     await request(`/spaces/${encodeURIComponent(args.spaceId)}/skills/${encodeURIComponent(args.skillId)}/files?${params}`),
-    "读取 Skill 文件失败",
+    adkT("skills.listFilesFailed"),
   );
   return Array.isArray(result.files) ? result.files : [];
 }
@@ -246,7 +247,7 @@ export async function downloadManagedSkillArchive(args: {
     {},
     TRANSFER_REQUEST_TIMEOUT_MS,
   );
-  if (!response.ok) await json(response, "下载 Skill 失败");
+  if (!response.ok) await json(response, adkT("skills.downloadFailed"));
   const disposition = response.headers.get("content-disposition") || "";
   const filename = disposition.match(/filename="([^"]+)"/)?.[1] || `${args.fallbackName}.zip`;
   const url = URL.createObjectURL(await response.blob());

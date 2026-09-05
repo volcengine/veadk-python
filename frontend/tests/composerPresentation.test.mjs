@@ -144,7 +144,7 @@ test("first message renders before session creation finishes", () => {
     /setTurnsFor\(sid,\s*\(current\)\s*=>\s*createsSession\s*\?\s*optimisticTurns\s*:\s*\[\.\.\.current,\s*\.\.\.optimisticTurns\],\s*\);[\s\S]*?setSessionId\(sid\);[\s\S]*?setInitializingSession\(false\);/,
   );
   assert.match(appSource, /const conversationBusy = busy \|\| initializingSession/);
-  assert.match(composerSource, /sessionInitializing \? "初始化中" : sessionId \|\| "—"/);
+  assert.match(composerSource, /sessionInitializing \? t\("composer\.initializing"\) : sessionId \|\| "—"/);
 });
 
 test("subsequent messages append to the active session transcript", () => {
@@ -163,14 +163,12 @@ test("new-session failure restores the submitted text", () => {
 });
 
 test("welcome screen offers a broader set of prompts", () => {
-  const greetings = appSource.match(/const GREETINGS = \[([\s\S]*?)\];/)?.[1] ?? "";
-  assert.ok((greetings.match(/"/g)?.length ?? 0) >= 20);
-  assert.match(greetings, /今天想先解决哪件事？/);
-  assert.match(greetings, /我在，随时可以开始/);
+  assert.match(appSource, /const GREETING_KEYS = Array\.from\(\{ length: 14 \}/);
+  assert.match(appSource, /const greeting = t\(greetingKey\)/);
 });
 
 test("shows full session titles on hover instead of internal ids", () => {
-  assert.match(sidebarSource, /title: sessionTitle\(session\.events\)/);
+  assert.match(sidebarSource, /title: sessionTitle\(session\.events, t\("history\.newConversation"\)\)/);
   assert.match(sidebarSource, /title=\{item\.title\}/);
   assert.doesNotMatch(sidebarSource, /title=\{item\.id\}/);
 });
@@ -178,7 +176,7 @@ test("shows full session titles on hover instead of internal ids", () => {
 test("renders a normal-font session id with an inline copy action", () => {
   assert.match(composerSource, /navigator\.clipboard\.writeText\(sessionId\)/);
   assert.match(composerSource, /className="composer-session-copy"/);
-  assert.match(composerSource, /复制会话 ID/);
+  assert.match(composerSource, /t\("composer\.copySessionId"\)/);
   assert.match(
     stylesSource,
     /\.composer-session-id\s*\{[^}]*font-family:\s*inherit/,
@@ -191,12 +189,12 @@ test("uses product-specific composer copy for Agent and sandbox sessions", () =>
     /<SandboxComposer[\s\S]*?appName=\{appName\}/,
   );
   assert.match(appSource, /agentName=\{appName \? labelOf\(appName\) : "Agent"\}/);
-  assert.match(composerSource, /`向 \$\{agentName\} 发消息…`/);
-  assert.match(composerSource, /请先选择智能体/);
+  assert.match(composerSource, /t\("composer\.messageAgentPlaceholder", \{ name: agentName \}\)/);
+  assert.match(composerSource, /t\("composer\.selectAgentFirst"\)/);
   assert.doesNotMatch(composerSource, /给智能体发消息/);
   assert.match(
     sandboxComposerSource,
-    /textOnly\s*\?\s*"继续说明你想实现或调整的内容"\s*:\s*"向 AgentKit 沙箱发送消息，输入 \/ 查看命令，输入 \$ 调用 Skill…"/,
+    /textOnly\s*\?\s*t\("composer\.continuePlaceholder"\)\s*:\s*t\("composer\.messagePlaceholder"\)/,
   );
 });
 

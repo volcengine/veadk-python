@@ -7747,6 +7747,7 @@ def _run_frontend_server(
             *,
             status: str,
             message: str,
+            message_code: str,
             snapshot: dict[str, Any] | None = None,
             error: str = "",
         ) -> dict[str, Any]:
@@ -7777,6 +7778,7 @@ def _run_frontend_server(
                 "level": "warning" if status == "error" else "info",
                 "phase": "build",
                 "message": message,
+                "messageCode": message_code,
                 "buildLog": payload,
             }
             if runtime_name:
@@ -7954,16 +7956,26 @@ def _run_frontend_server(
                 return _cp_log_event(
                     status="error",
                     message="暂时无法读取最终构建日志。",
+                    message_code="deploy.build.final_logs_unavailable",
                     error=_safe_exception_detail(log_error),
                 )
             if not str(snapshot.get("text") or ""):
                 return None
-            message = (
-                "构建镜像失败，已同步最终构建日志。"
-                if status == "error"
-                else "构建日志同步完成。"
+            failed = status == "error"
+            return _cp_log_event(
+                status=status,
+                message=(
+                    "构建镜像失败，已同步最终构建日志。"
+                    if failed
+                    else "构建日志同步完成。"
+                ),
+                message_code=(
+                    "deploy.build.failed_logs_synced"
+                    if failed
+                    else "deploy.build.logs_complete"
+                ),
+                snapshot=snapshot,
             )
-            return _cp_log_event(status=status, message=message, snapshot=snapshot)
 
         def _poll_cp_build_logs() -> None:
             last_text = ""
@@ -7979,6 +7991,7 @@ def _run_frontend_server(
                             _cp_log_event(
                                 status="running",
                                 message="正在构建镜像，已同步构建日志。",
+                                message_code="deploy.build.logs_syncing",
                                 snapshot=snapshot,
                             )
                         )
@@ -7989,6 +8002,7 @@ def _run_frontend_server(
                         _cp_log_event(
                             status="complete",
                             message="构建日志同步完成。",
+                            message_code="deploy.build.logs_complete",
                             snapshot={
                                 "text": last_text,
                                 "lineCount": len(last_text.splitlines()),
@@ -8008,6 +8022,7 @@ def _run_frontend_server(
                     _cp_log_event(
                         status="error",
                         message="暂时无法读取构建日志。",
+                        message_code="deploy.build.logs_unavailable",
                         error=_safe_exception_detail(log_error),
                     )
                 )

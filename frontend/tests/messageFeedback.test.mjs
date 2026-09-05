@@ -38,9 +38,9 @@ test("assistant feedback is tied to the final ADK event", () => {
 });
 
 test("feedback controls keep only the accessible rating actions", () => {
-  assert.match(appSource, /aria-label="赞"/);
-  assert.match(appSource, /aria-label="踩"/);
-  assert.doesNotMatch(appSource, /aria-label="查看评测案例"/);
+  assert.match(appSource, /aria-label=\{t\("feedback\.like"\)\}/);
+  assert.match(appSource, /aria-label=\{t\("feedback\.dislike"\)\}/);
+  assert.doesNotMatch(appSource, /aria-label=\{t\("feedback\.viewEvaluationCase"\)\}/);
   assert.doesNotMatch(appSource, /<ListTodo\b/);
   assert.match(appSource, /aria-pressed=/);
   assert.match(appSource, /filled=\{feedbackRating === "good"\}/);
@@ -92,8 +92,8 @@ test("BytePlus feedback buttons are visible but do not submit evaluation feedbac
     handler.indexOf('if (cloudProvider === "byteplus") return;') <
       handler.indexOf("await submitMessageFeedback"),
   );
-  assert.match(appSource, /aria-label="赞"/);
-  assert.match(appSource, /aria-label="踩"/);
+  assert.match(appSource, /aria-label=\{t\("feedback\.like"\)\}/);
+  assert.match(appSource, /aria-label=\{t\("feedback\.dislike"\)\}/);
 });
 
 test("chat feedback row has no evaluation case shortcut", () => {

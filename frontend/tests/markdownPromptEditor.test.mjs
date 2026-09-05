@@ -147,27 +147,27 @@ test("configuration form omits the redundant right-side step rail", () => {
 
 test("workspace uses one title and a bottom five-stage lifecycle", () => {
   const headerRule = createStyles.match(/\.cw-workspace-header\s*\{[^}]*\}/)?.[0] ?? "";
-  assert.match(createSource, /build:\s*"个性化您的智能体架构"/);
-  assert.match(createSource, /optimize:\s*"为您的智能体选择优化项"/);
-  assert.match(createSource, /validate:\s*"调试您的智能体"/);
-  assert.match(createSource, /environment:\s*"配置云上环境"/);
-  assert.match(createSource, /publish:\s*"准备好部署您的智能体"/);
-  assert.match(createSource, /<h1>\{WORKSPACE_TITLES\[mode\]\}<\/h1>/);
+  assert.match(createSource, /build:\s*"traditional\.workspace\.titles\.build"/);
+  assert.match(createSource, /optimize:\s*"traditional\.workspace\.titles\.optimize"/);
+  assert.match(createSource, /validate:\s*"traditional\.workspace\.titles\.validate"/);
+  assert.match(createSource, /environment:\s*"traditional\.workspace\.titles\.environment"/);
+  assert.match(createSource, /publish:\s*"traditional\.workspace\.titles\.publish"/);
+  assert.match(createSource, /<h1>\{t\(WORKSPACE_TITLES\[mode\]\)\}<\/h1>/);
   assert.doesNotMatch(createSource, /agentName=\{workspaceAgentName\(draft\)\}/);
   assert.match(headerRule, /display:\s*flex/);
   assert.match(headerRule, /justify-content:\s*center/);
   assert.match(headerRule, /align-items:\s*center/);
   assert.match(headerRule, /background:\s*transparent/);
   assert.doesNotMatch(createSource, />放弃编辑</);
-  assert.match(createSource, /\{ id: "build", label: "架构" \}/);
-  assert.match(createSource, /\{ id: "optimize", label: "优化" \}/);
-  assert.match(createSource, /\{ id: "validate", label: "调试" \}/);
-  assert.match(createSource, /\{ id: "environment", label: "环境" \}/);
-  assert.match(createSource, /\{ id: "publish", label: "发布" \}/);
+  assert.match(createSource, /\{ id: "build", label: "traditional\.workspace\.modes\.build" \}/);
+  assert.match(createSource, /\{ id: "optimize", label: "traditional\.workspace\.modes\.optimize" \}/);
+  assert.match(createSource, /\{ id: "validate", label: "traditional\.workspace\.modes\.validate" \}/);
+  assert.match(createSource, /\{ id: "environment", label: "traditional\.workspace\.modes\.environment" \}/);
+  assert.match(createSource, /\{ id: "publish", label: "traditional\.workspace\.modes\.publish" \}/);
   assert.match(createSource, /function WorkspaceLifecycleFooter/);
   assert.match(createSource, /className="cw-workspace-footer"/);
   assert.match(createSource, /className=\{`cw-workspace-nav-actions\$\{assistant/);
-  assert.match(createSource, /className="cw-workspace-progress" aria-label="Agent 创建进度"/);
+  assert.match(createSource, /className="cw-workspace-progress"[\s\S]*?aria-label=\{t\("traditional\.workspace\.progress"\)\}/);
   assert.match(createSource, /mode === "build" \? " is-placeholder" : ""/);
   assert.match(createSource, /id="cw-publish-primary-action"/);
   assert.match(
@@ -233,7 +233,7 @@ test("build-stage intelligent generation sits before next in the footer", () => 
   assert.match(createSource, /assistant\?: React\.ReactNode/);
   assert.match(
     createSource,
-    /<div className="cw-workspace-ai-slot">\{assistant\}<\/div>[\s\S]*?下一步/,
+    /<div className="cw-workspace-ai-slot">\{assistant\}<\/div>[\s\S]*?t\("common\.next"\)/,
   );
   assert.match(
     createSource,
@@ -290,7 +290,7 @@ test("debug variants configure and deploy their own model, description, and prom
   );
   assert.match(
     createSource,
-    /<span>描述<\/span>[\s\S]*?value=\{variant\.description\}[\s\S]*?<span>系统提示词<\/span>[\s\S]*?value=\{variant\.instruction\}/,
+    /<span>\{t\("common\.description"\)\}<\/span>[\s\S]*?value=\{variant\.description\}[\s\S]*?<span>\{t\("traditional\.basic\.systemPrompt"\)\}<\/span>[\s\S]*?value=\{variant\.instruction\}/,
   );
   assert.match(
     createSource,
@@ -371,9 +371,9 @@ test("leaving debug mode uses the shared Studio confirm dialog", () => {
   );
   assert.match(
     createSource,
-    /debugLeaveConfirmOpen && \([\s\S]*?<StudioConfirmDialog[\s\S]*?variant="warning"[\s\S]*?title="离开调试？"/,
+    /debugLeaveConfirmOpen && \([\s\S]*?<StudioConfirmDialog[\s\S]*?variant="warning"[\s\S]*?title=\{t\("traditional\.debug\.leaveTitle"\)\}/,
   );
-  assert.match(createSource, /confirmLabel=\{debugLeaveCleaning \? "清理中\.\.\." : "确定离开"\}/);
+  assert.match(createSource, /debugLeaveCleaning[\s\S]*?t\("traditional\.debug\.cleaning"\)[\s\S]*?t\("traditional\.debug\.confirmLeave"\)/);
   assert.match(createSource, /onConfirm=\{\(\) => void acceptDebugLeaveConfirm\(\)\}/);
 });
 
@@ -385,7 +385,7 @@ test("agent type is a form section with radio choices", () => {
   );
   assert.match(
     createSource,
-    /<RadioGroup<AgentType>[\s\S]*?aria-label="Agent 类型"/,
+    /<RadioGroup<AgentType>[\s\S]*?aria-label=\{t\("traditional\.agentTypes\.ariaLabel"\)\}/,
   );
   assert.match(createSource, /<RadioGroup\.Item[\s\S]*?className="cw-agent-type-control"/);
   assert.doesNotMatch(createSource, /type="radio"/);
@@ -421,7 +421,7 @@ test("build workspace has a validated primary path into optimization", () => {
   );
   assert.match(
     createSource,
-    /function WorkspaceLifecycleFooter[\s\S]*?className="cw-workspace-nav-button is-primary"[\s\S]*?>[\s\S]*?下一步/,
+    /function WorkspaceLifecycleFooter[\s\S]*?className="cw-workspace-nav-button is-primary"[\s\S]*?>[\s\S]*?t\("common\.next"\)/,
   );
   assert.match(
     createStyles,
@@ -471,20 +471,20 @@ test("agent name validation appears as soon as the selected name is edited or bl
 test("container agents require child agents before debug or publish", () => {
   assert.match(
     createSource,
-    /if \(isOrchestratorType\(n\.agentType\)\)[\s\S]*?return n\.subAgents\.length === 0 \? "缺少子 Agent" : null;/,
+    /if \(isOrchestratorType\(n\.agentType\)\)[\s\S]*?return n\.subAgents\.length === 0 \? "missingSubagent" : null;/,
   );
-  assert.match(createSource, /typeLabel: agentTypeMeta\(root\.agentType\)\.label/);
+  assert.match(createSource, /agentType: root\.agentType/);
   assert.match(
     createSource,
-    /function validationProblemMessage\(problem: TreeProblem\): string \{[\s\S]*?problem\.problem === "缺少子 Agent"[\s\S]*?`\$\{problem\.typeLabel\}至少需要添加一个子 Agent 后才能调试或发布。`/,
-  );
-  assert.match(
-    createSource,
-    /const sectionId =\s*problem\.problem === "缺少子 Agent" \? "type" : "basic"/,
+    /function validationProblemMessage\(problem: TreeProblem, t: TFunction\): string \{[\s\S]*?problem\.problem === "missingSubagent"[\s\S]*?t\("traditional\.validation\.missingSubagentDetail"/,
   );
   assert.match(
     createSource,
-    /<Section meta=\{metaOf\("type"\)\}>[\s\S]*?className="cw-agent-type-options"[\s\S]*?\{showErrors\s*&&\s*orchestrator\s*&&\s*node\.subAgents\.length === 0\s*&& \([\s\S]*?<span className="cw-error-text">[\s\S]*?validationProblemMessage\(\{[\s\S]*?typeLabel: agentTypeMeta\(node\.agentType\)\s*\.label,[\s\S]*?problem: "缺少子 Agent"/,
+    /const sectionId =\s*problem\.problem === "missingSubagent" \? "type" : "basic"/,
+  );
+  assert.match(
+    createSource,
+    /<Section meta=\{metaOf\("type"\)\}>[\s\S]*?className="cw-agent-type-options"[\s\S]*?\{showErrors\s*&&\s*orchestrator\s*&&\s*node\.subAgents\.length === 0\s*&& \([\s\S]*?<span className="cw-error-text">[\s\S]*?validationProblemMessage\(\{[\s\S]*?agentType: node\.agentType,[\s\S]*?problem: "missingSubagent"/,
   );
   assert.match(
     createSource,
@@ -512,14 +512,14 @@ test("debug workspace compares multiple configurations behind one shared input",
   assert.doesNotMatch(createSource, /className="cw-optimization-panel"/);
   assert.match(
     createSource,
-    /function DebugComparisonWorkspace[\s\S]*?aria-label="A\/B 调试工作台"/,
+    /function DebugComparisonWorkspace[\s\S]*?aria-label=\{t\("traditional\.debug\.ariaLabel"\)\}/,
   );
   assert.match(
     createSource,
-    /className="cw-ab-composer"[\s\S]*?className="cw-btn cw-btn-soft cw-ab-add"[\s\S]*?添加对照组/,
+    /className="cw-ab-composer"[\s\S]*?className="cw-btn cw-btn-soft cw-ab-add"[\s\S]*?t\("traditional\.debug\.addVariant"\)/,
   );
   assert.doesNotMatch(createSource, /快速调试|同一条输入将同时发送到全部对照组/);
-  assert.match(createSource, /className="cw-ab-config-trigger"[\s\S]*?测试配置/);
+  assert.match(createSource, /className="cw-ab-config-trigger"[\s\S]*?t\("traditional\.debug\.testConfiguration"\)/);
   assert.match(createSource, /cw-ab-card-inner\$\{variant\.configOpen \? " is-flipped" : ""\}/);
   assert.doesNotMatch(createSource, /variant\.optimizations/);
   assert.doesNotMatch(createSource, /className="cw-ab-optimizations"/);
@@ -529,10 +529,10 @@ test("debug workspace compares multiple configurations behind one shared input",
     createSource,
     /const completeDebugVariantConfig = \(id: string\) => \{[\s\S]*?if \(id === "baseline"\)[\s\S]*?void startDebugVariant\(id\);/,
   );
-  assert.match(createSource, /完成并启动/);
+  assert.match(createSource, /t\("traditional\.debug\.finishAndStart"\)/);
   assert.match(
     createSource,
-    /className="cw-ab-config-head-actions"[\s\S]*?className="cw-icon-btn cw-icon-danger cw-ab-config-remove"[\s\S]*?aria-label=\{`删除\$\{variant\.name\}`\}[\s\S]*?onClick=\{\(\) => onRemoveVariant\(variant\.id\)\}/,
+    /className="cw-ab-config-head-actions"[\s\S]*?className="cw-icon-btn cw-icon-danger cw-ab-config-remove"[\s\S]*?aria-label=\{t\("traditional\.debug\.deleteVariant", \{ name: variantName \}\)\}[\s\S]*?onClick=\{\(\) => onRemoveVariant\(variant\.id\)\}/,
   );
   assert.match(
     createSource,
@@ -547,9 +547,9 @@ test("debug workspace compares multiple configurations behind one shared input",
   assert.doesNotMatch(createSource, /name="debug-release-variant"|发布候选/);
   assert.match(
     createSource,
-    /className="cw-ab-deploy"[\s\S]*?onClick=\{\(\) => onUseVariant\(variant\.id\)\}[\s\S]*?使用该配置/,
+    /className="cw-ab-deploy"[\s\S]*?onClick=\{\(\) => onUseVariant\(variant\.id\)\}[\s\S]*?t\("traditional\.debug\.useConfiguration"\)/,
   );
-  assert.match(createSource, /className="cw-ab-ready-title"[\s\S]*?已就绪/);
+  assert.match(createSource, /className="cw-ab-ready-title"[\s\S]*?t\("traditional\.debug\.ready"\)/);
   assert.match(
     createSource,
     /className="cw-ab-start cw-ab-footer-start"[\s\S]*?onClick=\{\(\) => onStartVariant\(variant\.id\)\}[\s\S]*?\{startLabel\}/,
@@ -637,7 +637,7 @@ test("custom model connection settings stay visible without a disclosure", () =>
   assert.doesNotMatch(createSource, /modelAdvancedOpen/);
   assert.match(
     createSource,
-    /modelSource === "ark"[\s\S]*?服务商 Provider[\s\S]*?API Base[\s\S]*?API Key/,
+    /modelSource === "ark"[\s\S]*?t\("traditional\.model\.provider"\)[\s\S]*?API Base[\s\S]*?API Key/,
   );
 });
 
@@ -682,7 +682,7 @@ test("MCP tools stay directly visible and align with their field label", () => {
   assert.doesNotMatch(createSource, /moreToolTypesOpen|更多类型工具/);
   assert.match(
     createSource,
-    /className="cw-field cw-mcp-field"[\s\S]*?<label className="cw-label">MCP 工具<\/label>[\s\S]*?<McpToolEditor/,
+    /className="cw-field cw-mcp-field"[\s\S]*?<label className="cw-label">[\s\S]*?t\("traditional\.tools\.mcp"\)[\s\S]*?<\/label>[\s\S]*?<McpToolEditor/,
   );
   assert.match(
     createStyles,
@@ -697,7 +697,7 @@ test("leaving debug confirms and cleans every temporary environment", () => {
   );
   assert.match(
     createSource,
-    /离开调试页面后，当前环境将被清理。您可以通过重新启动环境进行新的测试。/,
+    /t\("traditional\.debug\.leaveDescription"\)/,
   );
   assert.match(
     createSource,
@@ -729,8 +729,8 @@ test("debug environment uses a dedicated hand-drawn run icon", () => {
 
 test("root Agent exposes a confirmed custom clear action", () => {
   assert.match(createSource, /function ClearAgentIcon/);
-  assert.match(createSource, /aria-label="清空根 Agent"/);
-  assert.match(createSource, /window\.confirm\("清空根 Agent/);
+  assert.match(createSource, /aria-label=\{t\("traditional\.actions\.clearRoot"\)\}/);
+  assert.match(createSource, /window\.confirm\(t\("traditional\.actions\.clearRootConfirmation"\)\)/);
   assert.match(createSource, /setDraft\(emptyDraft\(cloudProvider\)\)/);
 });
 
@@ -739,19 +739,19 @@ test("skill sources open in a fixed-height dialog above a six-row selected list"
     createSource,
     /从 Skill Hub、本地文件或 AgentKit SkillSpace 添加技能/,
   );
-  assert.match(skillSourcePickerSource, /label: "AgentKit Skills 中心"/);
-  assert.doesNotMatch(skillSourcePickerSource, /label: "SkillSpace"/);
-  assert.match(skillSourcePickerSource, /label: "火山 Find Skill 技能广场"/);
+  assert.match(skillSourcePickerSource, /labelKey: "skillSourcePicker\.tabs\.skillspace"/);
+  assert.doesNotMatch(skillSourcePickerSource, /labelKey: "SkillSpace"/);
+  assert.match(skillSourcePickerSource, /labelKey: "skillSourcePicker\.tabs\.skillhub"/);
   assert.match(skillHubSource, /const SEARCH_BASE = "\/harness\/skills\/findskill"/);
   assert.match(skillHubSource, /const DOWNLOAD_BASE = "\/skillhub\/v1\/skills"/);
   assert.match(skillSourcePickerSource, /function AgentKitSkillsIcon/);
   assert.match(
     skillSourcePickerSource,
-    /id: "skillspace",[\s\S]*?label: "AgentKit Skills 中心",[\s\S]*?icon: AgentKitSkillsIcon/,
+    /id: "skillspace",[\s\S]*?labelKey: "skillSourcePicker\.tabs\.skillspace",[\s\S]*?icon: AgentKitSkillsIcon/,
   );
   assert.match(
     skillSourcePickerSource,
-    /id: "local", label: "本地文件"[\s\S]*?id: "skillspace"[\s\S]*?label: "AgentKit Skills 中心"[\s\S]*?id: "skillhub"[\s\S]*?label: "火山 Find Skill 技能广场"/,
+    /id: "local"[\s\S]*?labelKey: "skillSourcePicker\.tabs\.local"[\s\S]*?id: "skillspace"[\s\S]*?labelKey: "skillSourcePicker\.tabs\.skillspace"[\s\S]*?id: "skillhub"[\s\S]*?labelKey: "skillSourcePicker\.tabs\.skillhub"/,
   );
   assert.match(
     skillSourcePickerSource,
@@ -763,10 +763,10 @@ test("skill sources open in a fixed-height dialog above a six-row selected list"
   );
   assert.match(
     skillSourcePickerSource,
-    /className="cw-skill-add"[\s\S]*?<span>\{addLabel\}<\/span>/,
+    /className="cw-skill-add"[\s\S]*?<span>\{resolvedAddLabel\}<\/span>/,
   );
   assert.match(skillSourcePickerSource, /role="dialog"[\s\S]*?aria-modal="true"/);
-  assert.match(skillSourcePickerSource, /<h3 id=\{titleId\}>\{addLabel\}<\/h3>/);
+  assert.match(skillSourcePickerSource, /<h3 id=\{titleId\}>\{resolvedAddLabel\}<\/h3>/);
   assert.match(
     skillSourcePickerSource,
     /className="cw-skill-sourcetabs"[\s\S]*?role="tablist"/,
@@ -802,7 +802,7 @@ test("skill sources open in a fixed-height dialog above a six-row selected list"
 
 test("local Skill folders and ZIP archives support drag and drop", () => {
   assert.doesNotMatch(localPickerSource, /上传文件夹|上传 \.zip/);
-  assert.match(localPickerSource, /拖入文件夹或 ZIP，自动识别 Skill/);
+  assert.match(localPickerSource, /t\("skills\.local\.dropLabel"\)/);
   assert.match(localPickerSource, /item\.webkitGetAsEntry\?\.\(\)/);
   assert.match(localPickerSource, /collectDroppedFiles/);
   assert.match(localPickerSource, /onDragEnter=\{onDragEnter\}/);
@@ -866,13 +866,13 @@ test("nested Agent forms omit root-only memory configuration", () => {
 });
 
 test("remote Agent configures only the AgentKit center", () => {
-  assert.match(createSource, /llm: "智能体"/);
-  assert.match(createSource, /sequential: "分步协作"/);
-  assert.match(createSource, /parallel: "同时处理"/);
-  assert.match(createSource, /loop: "循环执行"/);
-  assert.match(createSource, /a2a: "远程智能体"/);
+  assert.match(createSource, /llm: "traditional\.agentTypes\.llm\.label"/);
+  assert.match(createSource, /sequential: "traditional\.agentTypes\.sequential\.label"/);
+  assert.match(createSource, /parallel: "traditional\.agentTypes\.parallel\.label"/);
+  assert.match(createSource, /loop: "traditional\.agentTypes\.loop\.label"/);
+  assert.match(createSource, /a2a: "traditional\.agentTypes\.a2a\.label"/);
   assert.match(createSource, /<A2aSpaceSelect/);
-  assert.match(createSource, /请选择 AgentKit 智能体中心/);
+  assert.match(createSource, /t\("traditional\.resources\.selectAgentCenter"\)/);
   assert.doesNotMatch(createSource, /AgentKit 智能体中心 ID 为必填项/);
   assert.match(createSource, /A2A_REGISTRY_RUNTIME_ENV/);
   assert.doesNotMatch(
@@ -881,7 +881,7 @@ test("remote Agent configures only the AgentKit center", () => {
   );
   assert.match(
     createSource,
-    /aria-expanded=\{a2aRegistryAdvancedOpen\}[\s\S]*?<span>更多选项<\/span>[\s\S]*?\{a2aRegistryAdvancedOpen && \([\s\S]*?<RuntimeEnvFields/,
+    /aria-expanded=\{a2aRegistryAdvancedOpen\}[\s\S]*?<span>\{t\("traditional\.basic\.moreOptions"\)\}<\/span>[\s\S]*?\{a2aRegistryAdvancedOpen && \([\s\S]*?<RuntimeEnvFields/,
   );
   assert.match(
     createSource,
@@ -889,7 +889,7 @@ test("remote Agent configures only the AgentKit center", () => {
   );
   assert.match(
     createSource,
-    /远程 Agent 的名称、描述和能力来自中心返回的\s*Agent Card/,
+    /t\("traditional\.basic\.agentCenterHelp"\)/,
   );
   assert.match(
     createSource,
@@ -900,7 +900,7 @@ test("remote Agent configures only the AgentKit center", () => {
     /if \(isRootAgent && agentType === "a2a"\) return;/,
   );
   assert.match(createSource, /disabled=\{remoteTypeDisabled\}/);
-  assert.match(createSource, /远程智能体只能作为子步骤使用/);
+  assert.match(createSource, /t\("traditional\.agentTypes\.remoteChildOnly"\)/);
   assert.match(
     createSource,
     /className="cw-agent-type-disabled-hint"[\s\S]*?role="tooltip"/,
@@ -913,10 +913,10 @@ test("remote Agent configures only the AgentKit center", () => {
     createStyles,
     /\.cw-agent-type-disabled-hint\s*\{[\s\S]*?top:\s*calc\(100% \+ 17px\)/,
   );
-  assert.match(createSource, /\{!a2a && \(\s*<>[\s\S]*?Agent 名称/);
+  assert.match(createSource, /\{!a2a && \(\s*<>[\s\S]*?t\("traditional\.basic\.agentName"\)/);
   assert.match(
     createSource,
-    /if \(isRoot\) return "远程 Agent 只能作为子 Agent";/,
+    /if \(isRoot\) return "remoteRoot";/,
   );
   assert.doesNotMatch(createSource, /Agent Card 地址|远程 Agent 添加方式/);
   assert.doesNotMatch(createSource, /metaOf\("a2aCenter"\)/);
@@ -925,17 +925,17 @@ test("remote Agent configures only the AgentKit center", () => {
 test("memory is a directly visible configuration section", () => {
   assert.match(
     createSource,
-    /<Section meta=\{metaOf\("memory"\)\}>[\s\S]*?title="短期记忆"[\s\S]*?title="长期记忆"/,
+    /<Section meta=\{metaOf\("memory"\)\}>[\s\S]*?title=\{t\("traditional\.memory\.shortTerm"\)\}[\s\S]*?title=\{t\("traditional\.memory\.longTerm"\)\}/,
   );
-  assert.match(createSource, /desc="存储单会话上下文"/);
-  assert.match(createSource, /desc="存储跨会话上下文，通常使用向量化检索"/);
+  assert.match(createSource, /desc=\{t\("traditional\.memory\.shortTermDescription"\)\}/);
+  assert.match(createSource, /desc=\{t\("traditional\.memory\.longTermDescription"\)\}/);
   assert.match(
     createSource,
     /showDescription && <span className="cw-toggle-help">\{desc\}<\/span>/,
   );
   assert.match(
     createSource,
-    /title="短期记忆"[\s\S]*?desc="存储单会话上下文"[\s\S]*?showDescription[\s\S]*?title="长期记忆"[\s\S]*?desc="存储跨会话上下文，通常使用向量化检索"[\s\S]*?showDescription/,
+    /title=\{t\("traditional\.memory\.shortTerm"\)\}[\s\S]*?desc=\{t\("traditional\.memory\.shortTermDescription"\)\}[\s\S]*?showDescription[\s\S]*?title=\{t\("traditional\.memory\.longTerm"\)\}[\s\S]*?desc=\{t\("traditional\.memory\.longTermDescription"\)\}[\s\S]*?showDescription/,
   );
   assert.match(
     createStyles,

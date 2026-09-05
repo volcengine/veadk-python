@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useTranslation } from "react-i18next";
 import type { NewChatSkillAction } from "./types";
 import "./new-chat-workspace.css";
 
 const SKILL_ACTIONS = [
-  { value: "create", label: "技能生成" },
-  { value: "optimize", label: "技能优化" },
+  { value: "create", labelKey: "skill.actions.create" },
+  { value: "optimize", labelKey: "skill.actions.optimize" },
 ] as const;
 
 const HOVER_OPEN_DELAY_MS = 120;
@@ -37,6 +38,7 @@ export function NewChatSkillPicker({
   onChange,
   disabled = false,
 }: NewChatSkillPickerProps) {
+  const { t } = useTranslation("newChat");
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(() =>
     Math.max(0, SKILL_ACTIONS.findIndex((action) => action.value === value)),
@@ -158,7 +160,7 @@ export function NewChatSkillPicker({
         ref={triggerRef}
         type="button"
         className="new-chat-skill-picker__trigger"
-        aria-label="选择技能定制方式"
+        aria-label={t("skill.selectAction")}
         aria-haspopup="listbox"
         aria-expanded={open}
         disabled={disabled}
@@ -171,7 +173,7 @@ export function NewChatSkillPicker({
         }}
         onKeyDown={onKeyDown}
       >
-        <span>{current.label}</span>
+        <span>{t(current.labelKey)}</span>
         <ChevronIcon />
       </button>
 
@@ -179,7 +181,7 @@ export function NewChatSkillPicker({
         <div
           className="new-chat-skill-picker__menu"
           role="listbox"
-          aria-label="技能定制方式"
+          aria-label={t("skill.actionList")}
           tabIndex={-1}
           onKeyDown={onKeyDown}
         >
@@ -193,7 +195,7 @@ export function NewChatSkillPicker({
               onMouseEnter={() => setActiveIndex(index)}
               onClick={() => choose(index)}
             >
-              <span>{action.label}</span>
+              <span>{t(action.labelKey)}</span>
               {action.value === value ? <CheckIcon /> : null}
             </button>
           ))}

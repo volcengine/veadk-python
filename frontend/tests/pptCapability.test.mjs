@@ -19,8 +19,8 @@ test("mounts every selected generation task before its first run", () => {
 test("turns artifact deltas into previewable and downloadable PowerPoint cards", () => {
   assert.match(blocks, /kind: "artifact"/);
   assert.match(blocks, /artifactDelta \?\? ev\.actions\?\.artifact_delta/);
-  assert.match(renderer, /预览/);
-  assert.match(renderer, /下载/);
+  assert.match(renderer, /t\("blocks\.preview"\)/);
+  assert.match(renderer, /t\("blocks\.download"\)/);
   assert.match(renderer, /\.preview\.webp/);
   assert.match(client, /export async function downloadArtifact/);
   assert.match(client, /export async function previewArtifact/);

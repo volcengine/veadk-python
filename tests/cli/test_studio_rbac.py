@@ -3182,6 +3182,8 @@ def test_runtime_update_capability_supports_owned_unmanaged_runtime(
         SimpleNamespace(key="MODEL_AGENT_API_KEY", value="must-not-reach-browser"),
         SimpleNamespace(key="MODEL_AGENT_API_KEY_ID", value="ark-key-id"),
         SimpleNamespace(key="MODEL_AGENT_API_KEY_NAME", value="ark-key-name"),
+        SimpleNamespace(key="AGENTKIT_TOOL_ID", value="t-code-sandbox"),
+        SimpleNamespace(key="AGENTKIT_TOOL_REGION", value="cn-beijing"),
         SimpleNamespace(key="MCP_API_KEY", value="mcp-secret"),
         SimpleNamespace(
             key="MCP_SERVERS_JSON",
@@ -3419,6 +3421,8 @@ def test_runtime_update_capability_supports_owned_unmanaged_runtime(
         "envs": [
             {"key": "MODEL_AGENT_API_KEY_ID", "value": "ark-key-id"},
             {"key": "MODEL_AGENT_API_KEY_NAME", "value": "ark-key-name"},
+            {"key": "AGENTKIT_TOOL_ID", "value": "t-code-sandbox"},
+            {"key": "AGENTKIT_TOOL_REGION", "value": "cn-beijing"},
         ],
         "configuredEnvKeys": ["MCP_API_KEY", "PUBLISHED_INVENTORY_TOKEN"],
         "network": {

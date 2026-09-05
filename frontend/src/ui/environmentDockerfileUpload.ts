@@ -5,6 +5,23 @@ export interface DockerfileUploadResult {
   error: string;
 }
 
+type DockerfileTranslation = (key: string) => string;
+
+const DEFAULT_MESSAGES = {
+  baseImageRequired: "请填写基础镜像。",
+  duplicateFrom: "基础镜像已固定在第一行，请删除 Dockerfile 正文中的 FROM 指令。",
+  tooLarge: "Dockerfile 不能超过 128 KiB。",
+  empty: "Dockerfile 内容不能为空。",
+  missingFrom: "Dockerfile 缺少 FROM 指令。",
+} as const;
+
+function validationMessage(
+  key: keyof typeof DEFAULT_MESSAGES,
+  t?: DockerfileTranslation,
+): string {
+  return t?.(`environmentCenter.dockerfileValidation.${key}`) ?? DEFAULT_MESSAGES[key];
+}
+
 export function normalizeDockerfileContent(content: string): string {
   return content.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
 }
@@ -34,40 +51,48 @@ export function composeDockerfile(baseImage: string, body: string): string {
   return normalizedBody ? `${from}\n${normalizedBody}` : from;
 }
 
-export function validateDockerfileBody(body: string, baseImage: string): string {
-  if (!baseImage.trim()) return "请填写基础镜像。";
+export function validateDockerfileBody(
+  body: string,
+  baseImage: string,
+  t?: DockerfileTranslation,
+): string {
+  if (!baseImage.trim()) return validationMessage("baseImageRequired", t);
   if (/^\s*FROM(?:\s|$)/im.test(body)) {
-    return "基础镜像已固定在第一行，请删除 Dockerfile 正文中的 FROM 指令。";
+    return validationMessage("duplicateFrom", t);
   }
-  return validateDockerfileUpload(composeDockerfile(baseImage, body));
+  return validateDockerfileUpload(composeDockerfile(baseImage, body), undefined, t);
 }
 
 export function validateDockerfileUpload(
   content: string,
   byteSize = dockerfileByteSize(content),
+  t?: DockerfileTranslation,
 ): string {
   if (byteSize > MAX_DOCKERFILE_BYTES) {
-    return "Dockerfile 不能超过 128 KiB。";
+    return validationMessage("tooLarge", t);
   }
   if (!content.trim()) {
-    return "Dockerfile 内容不能为空。";
+    return validationMessage("empty", t);
   }
   if (!/^\s*FROM\s+\S+/im.test(content)) {
-    return "Dockerfile 缺少 FROM 指令。";
+    return validationMessage("missingFrom", t);
   }
   return "";
 }
 
-export async function readDockerfileUpload(file: File): Promise<DockerfileUploadResult> {
+export async function readDockerfileUpload(
+  file: File,
+  t?: DockerfileTranslation,
+): Promise<DockerfileUploadResult> {
   if (file.size > MAX_DOCKERFILE_BYTES) {
     return {
       content: "",
-      error: "Dockerfile 不能超过 128 KiB。",
+      error: validationMessage("tooLarge", t),
     };
   }
   const content = normalizeDockerfileContent(await file.text());
   return {
     content,
-    error: validateDockerfileUpload(content, file.size),
+    error: validateDockerfileUpload(content, file.size, t),
   };
 }

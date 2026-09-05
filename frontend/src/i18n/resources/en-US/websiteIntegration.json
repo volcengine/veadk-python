@@ -1,0 +1,43 @@
+{
+  "title": "Website integration",
+  "description": "Embed an AgentKit Runtime on your website as a floating chat window",
+  "backToAutomations": "Back to automations",
+  "addWebsite": "Add website",
+  "loadingRuntime": "Loading Runtime",
+  "selectRuntime": "Select Runtime",
+  "websiteDomain": "Website domain",
+  "domainPlaceholder": "For example, xxxx.com or localhost:5173",
+  "generating": "Generating",
+  "generateToken": "Generate token",
+  "addedWebsites": "Added websites",
+  "websiteCount_one": "{{count}} website",
+  "websiteCount_other": "{{count}} websites",
+  "loadingIntegrations": "Loading website integrations",
+  "delete": "Delete",
+  "emptyTitle": "No website integrations yet",
+  "emptyDescription": "Select a Runtime and enter a website domain to generate a token",
+  "embedMethod": "Embed instructions",
+  "embedInstructions": "Place this code before the closing body tag on your website",
+  "copied": "Copied",
+  "copyCode": "Copy code",
+  "embedHint": "Embed code will appear here after you add a website.",
+  "confirmDelete": "Delete the website integration for {{domain}}?",
+  "errors": {
+    "load": "Failed to load website integrations",
+    "create": "Failed to create website integration",
+    "delete": "Failed to delete website integration",
+    "noConversationalAgent": "No conversational Agent was found in this Runtime"
+  },
+  "widget": {
+    "requestFailed": "Request failed ({{status}})",
+    "greeting": "Hello. How can I help?",
+    "sessionFailed": "Could not start a chat session",
+    "unauthorized": "This website is not authorized to start a chat",
+    "conversationFailed": "The chat request failed. Try again shortly.",
+    "open": "Open Agent chat",
+    "close": "Close Agent chat",
+    "panelLabel": "Agent chat panel",
+    "assistant": "Agent assistant",
+    "online": "Online"
+  }
+}

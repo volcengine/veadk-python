@@ -23,6 +23,7 @@ import {
 } from "./githubFields";
 import { buildRuntimeDeliveryWorkflow } from "./runtimeDelivery";
 import type { GitHubAutomationDefinition } from "./types";
+import { automationT } from "./i18n";
 
 function joinRepositoryPath(directory: string, path: string): string {
   return directory === "." ? path : `${directory}/${path}`;
@@ -204,20 +205,20 @@ export const templateProjectAutomation: GitHubAutomationDefinition = {
   kind: "github",
   category: "development",
   icon: "github",
-  name: "模板项目导入",
-  description: "在您的仓库中创建一个可持续交付到 AgentKit Runtime 的最简智能体",
-  title: "模板项目导入",
-  subtitle: "把可直接启动 Studio 的 basic Agent 和持续交付配置加入仓库",
-  panel: "提交后将创建一个 PR，同时导入 basic 项目和 AgentKit Runtime 发布工作流。",
-  submitLabel: "导入模板并提交 PR",
+  name: "Import starter project",
+  description: "Create a minimal Agent project in your repository with continuous delivery to AgentKit Runtime.",
+  title: "Import starter project",
+  subtitle: "Add a ready-to-run basic Agent and continuous delivery configuration to your repository",
+  panel: "This creates a pull request containing the basic project and AgentKit Runtime delivery workflow.",
+  submitLabel: "Import template and create PR",
   fields: [
     repositoryField,
     baseBranchField,
     {
       name: "projectPath",
-      label: "Agent 项目目录",
+      label: "Agent project directory",
       placeholder: "agentkit-basic-agent",
-      help: "将在此目录新增 basic 项目；app.py 挂载完整 Studio App Server，并作为服务入口启动",
+      help: "The basic project will be added here; app.py mounts the complete Studio App Server and serves as the entry point",
       required: true,
     },
     runtimeNameField,
@@ -227,7 +228,7 @@ export const templateProjectAutomation: GitHubAutomationDefinition = {
     cloudProvider,
     { projectPath: "agentkit-basic-agent" },
   ),
-  regionHelp: "必须与目标 Runtime 所在地域一致",
+  regionHelp: "Must match the target Runtime region",
   secrets: ({ cloudProvider }) => cloudCredentialSecretLabels(cloudProvider),
   submit(values, context, signal) {
     const input = commonGitHubInput(values);
@@ -264,8 +265,10 @@ export const templateProjectAutomation: GitHubAutomationDefinition = {
         repository,
         files,
         branchPrefix: "feat/agentkit-basic-template",
-        title: "feat: 导入 AgentKit basic 模板",
-        description: `导入带有 AgentKit Studio App Server 的 basic Agent 项目，并添加持续发布到 AgentKit Runtime 的工作流。合并前请配置 ${cloudProviderDisplayName(context.cloudProvider)} Secrets。`,
+        title: automationT("cards.template.pullRequest.title"),
+        description: automationT("cards.template.pullRequest.description", {
+          provider: cloudProviderDisplayName(context.cloudProvider),
+        }),
       },
       signal,
     );

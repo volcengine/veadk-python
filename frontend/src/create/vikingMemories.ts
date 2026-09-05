@@ -2,6 +2,7 @@
 // signs requests with server-side cloud credentials.
 
 import { DEFAULT_REQUEST_TIMEOUT_MS, requestSignal } from "../adk/timeout";
+import { createT } from "./i18n";
 
 export interface VikingMemoryRef {
   id: string;
@@ -30,10 +31,10 @@ async function jfetch<T>(url: string): Promise<T> {
     signal: requestSignal(undefined, DEFAULT_REQUEST_TIMEOUT_MS),
   });
   if (res.status === 409) {
-    throw new Error("服务端未配置云厂商 AK/SK，无法访问 VikingDB 记忆库");
+    throw new Error(createT("helpers.vikingMemory.credentialsMissing"));
   }
   if (res.status === 401) {
-    throw new Error("请先登录以访问 VikingDB 记忆库");
+    throw new Error(createT("helpers.vikingMemory.loginRequired"));
   }
   if (!res.ok) {
     let detail = "";
@@ -43,7 +44,12 @@ async function jfetch<T>(url: string): Promise<T> {
     } catch {
       /* ignore */
     }
-    throw new Error(`请求失败 (${res.status})${detail ? ": " + detail : ""}`);
+    throw new Error(
+      createT("helpers.requestFailed", {
+        status: res.status,
+        detail: detail ? `: ${detail}` : "",
+      }),
+    );
   }
   return res.json() as Promise<T>;
 }

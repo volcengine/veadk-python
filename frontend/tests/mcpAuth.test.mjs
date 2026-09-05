@@ -142,11 +142,11 @@ test("wires the MCP URL-change credential choices into the editor and deploy pay
   );
   assert.match(
     customCreateSource,
-    /aria-invalid=\{mcpCredentialActionRequired\(t\)\}/,
+    /aria-invalid=\{mcpCredentialActionRequired\(tool\)\}/,
   );
-  assert.match(customCreateSource, />\s*沿用原凭证\s*</);
-  assert.match(customCreateSource, />\s*重新填写 Key\s*</);
-  assert.match(customCreateSource, />\s*新地址无需认证\s*</);
+  assert.match(customCreateSource, /t\("traditional\.mcp\.reuseCredential"\)/);
+  assert.match(customCreateSource, /t\("traditional\.mcp\.replaceCredential"\)/);
+  assert.match(customCreateSource, /t\("traditional\.mcp\.noAuth"\)/);
   assert.match(
     customCreateSource,
     /mcpCredentialReuses:\s*deploymentTarget[\s\S]*?mcpCredentialReuseValues\(draft\)/,

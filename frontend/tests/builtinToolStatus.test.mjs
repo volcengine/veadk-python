@@ -18,6 +18,10 @@ const registrySource = readFileSync(
   new URL("../src/ui/builtin-tools/registry.ts", import.meta.url),
   "utf8",
 );
+const conversationZhSource = readFileSync(
+  new URL("../src/i18n/resources/zh-CN/conversation.json", import.meta.url),
+  "utf8",
+);
 const headerSource = readFileSync(
   new URL("../src/ui/builtin-tools/BuiltinToolHeader.tsx", import.meta.url),
   "utf8",
@@ -43,9 +47,10 @@ const shimmerStylesSource = readFileSync(
   "utf8",
 );
 
-test("maps supported built-in tools to dedicated Chinese running and done labels", () => {
+test("maps supported built-in tools to localized running and done labels", () => {
   const expected = [
     ["web_search", "正在进行网络搜索", "已完成网络搜索"],
+    ["link_reader", "正在读取网页", "已完成网页读取"],
     ["image_generate", "正在生成图片", "已完成图片生成"],
     ["video_generate", "正在生成视频", "已完成视频生成"],
     ["ppt_generate", "正在生成 PPT", "已完成 PPT 生成"],
@@ -70,11 +75,11 @@ test("maps supported built-in tools to dedicated Chinese running and done labels
 
   for (const [name, running, done, failed] of expected) {
     assert.match(
-      registrySource,
-      new RegExp(`${name}:[\\s\\S]*?${running}[\\s\\S]*?${done}`),
+      conversationZhSource,
+      new RegExp(`"${name}"[\\s\\S]*?${running}[\\s\\S]*?${done}`),
     );
     if (failed) {
-      assert.match(registrySource, new RegExp(`${name}:[\\s\\S]*?${failed}`));
+      assert.match(conversationZhSource, new RegExp(`"${name}"[\\s\\S]*?${failed}`));
     }
   }
 });
@@ -89,16 +94,16 @@ test("renders built-in tool calls through the extensible dedicated header", () =
   assert.match(toolStylesSource, /data-tool-tone="search"/);
   assert.match(toolStylesSource, /data-tool-tone="skill"/);
   assert.match(blocksSource, /function loadSkillLabel/);
-  assert.match(blocksSource, /loadSkillLabel\(name, args\)/);
+  assert.match(blocksSource, /loadSkillLabel\(name, args, t\)/);
   assert.match(blocksSource, /builtinTool\.failedLabel/);
-  assert.match(blocksSource, /Agent 正在调整/);
+  assert.match(blocksSource, /t\("blocks\.agentAdjusting"\)/);
   assert.match(blocksSource, /createdAgentsHaveFailure\(args, response\)/);
   assert.match(blocksSource, /streaming \|\| hasLaterCreateAgentAttempt/);
   assert.match(
     blocksSource,
     /label=\{[\s\S]*?isAdjustingAgent[\s\S]*?done=\{done\}/,
   );
-  assert.match(blocksSource, /`使用 \$\{skillName\.trim\(\)\} 技能`/);
+  assert.match(blocksSource, /t\("blocks\.useSkill", \{ name: skillName\.trim\(\) \}\)/);
   assert.match(headerSource, /label\?: string/);
   assert.doesNotMatch(headerSource, /builtin-tool-state/);
   assert.doesNotMatch(

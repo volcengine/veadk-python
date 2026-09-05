@@ -8,6 +8,7 @@ import { createPortal } from "react-dom";
 import { Alert } from "@openai/apps-sdk-ui/components/Alert";
 import { Button } from "@openai/apps-sdk-ui/components/Button";
 import { Warning, X } from "@openai/apps-sdk-ui/components/Icon";
+import { useTranslation } from "react-i18next";
 
 type StudioConfirmVariant = "warning" | "danger";
 
@@ -29,13 +30,16 @@ export function StudioConfirmDialog({
   description,
   error,
   confirmLabel,
-  cancelLabel = "取消",
-  closeLabel = "关闭确认框",
+  cancelLabel: cancelLabelProp,
+  closeLabel: closeLabelProp,
   variant = "warning",
   busy = false,
   onCancel,
   onConfirm,
 }: StudioConfirmDialogProps) {
+  const { t } = useTranslation("shell");
+  const cancelLabel = cancelLabelProp ?? t("confirm.cancel");
+  const closeLabel = closeLabelProp ?? t("confirm.close");
   const titleId = useId();
   const descriptionId = useId();
   const cancelButtonRef = useRef<HTMLButtonElement>(null);

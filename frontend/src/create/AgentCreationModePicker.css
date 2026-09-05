@@ -243,6 +243,17 @@
     padding-inline: 16px;
   }
 
+  .agent-creation-mode-picker__feature-grid {
+    grid-auto-flow: row;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
+  }
+
+  .agent-creation-mode-picker__feature > span:last-child {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

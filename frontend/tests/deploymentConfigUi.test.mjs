@@ -34,7 +34,7 @@ const catalogSource = readFileSync(
 test("offers code execution with its sandbox configuration", () => {
   assert.match(
     catalogSource,
-    /id: "run_code"[\s\S]*?label: "代码执行"[\s\S]*?desc: "在沙箱中执行代码"/,
+    /id: "run_code"[\s\S]*?importLine: "from veadk\.tools\.builtin_tools\.run_code import run_code"/,
   );
   assert.match(
     catalogSource,
@@ -77,30 +77,30 @@ test("reuses the build canvas as a read-only expandable deployment preview", () 
     /className="pp-flow-dialog"[\s\S]*?<AgentBuildCanvas[\s\S]*?interactivePreview/,
   );
   assert.doesNotMatch(projectPreviewSource, /Agent 拓扑|pp-topology-pane/);
-  assert.match(projectPreviewSource, /导出 YAML/);
-  assert.match(projectPreviewSource, />\s*下载源代码\s*</);
+  assert.match(projectPreviewSource, /projectPreview\.exportYaml/);
+  assert.match(projectPreviewSource, /projectPreview\.downloadSource/);
   assert.match(
     projectPreviewSource,
     /className="pp-release-description"[\s\S]*?title=\{agentDraft\.description\}/,
   );
   assert.match(
     projectPreviewSource,
-    /<dt>Agent 数量<\/dt>/,
+    /projectPreview\.agentCount/,
   );
-  assert.match(projectPreviewSource, /<dt>模型<\/dt>/);
-  assert.match(projectPreviewSource, /<dt>描述<\/dt>/);
-  assert.match(projectPreviewSource, /<dt>系统提示词<\/dt>/);
-  assert.match(projectPreviewSource, /<dt>优化选项<\/dt>/);
+  assert.match(projectPreviewSource, /projectPreview\.model/);
+  assert.match(projectPreviewSource, /t\("common\.description"\)/);
+  assert.match(projectPreviewSource, /projectPreview\.systemPrompt/);
+  assert.match(projectPreviewSource, /projectPreview\.optimizations/);
   assert.match(
     projectPreviewSource,
-    /className="pp-flow-expand"[\s\S]*?aria-label="放大查看执行流程"[\s\S]*?<Maximize2 aria-hidden \/>/,
+    /className="pp-flow-expand"[\s\S]*?projectPreview\.expandFlow[\s\S]*?<Maximize2 aria-hidden \/>/,
   );
   assert.doesNotMatch(projectPreviewSource, /<span>放大查看<\/span>/);
   assert.match(
     projectPreviewStyles,
     /\.pp-release-preview\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\)[\s\S]*?\.pp-flow-thumbnail\s*\{[\s\S]*?height:\s*200px;/,
   );
-  assert.match(projectPreviewSource, /className="pp-release-card-head">Agent 概览/);
+  assert.match(projectPreviewSource, /className="pp-release-card-head">\{t\("projectPreview\.agentOverview"\)\}/);
   assert.match(
     projectPreviewSource,
     /\{!embedded && \(\s*<div className="pp-release-info">/,
@@ -153,7 +153,7 @@ test("keeps Runtime name help and errors below the input", () => {
   );
   assert.match(
     projectPreviewSource,
-    /默认根据 Root Agent 名称生成，并添加随机后缀避免重名/,
+    /projectPreview\.runtimeNameHint/,
   );
   assert.doesNotMatch(projectPreviewSource, /默认根据 Root Agent 名称生成。支持/);
 });
@@ -267,14 +267,14 @@ test("configures API Key or Identity user-pool authentication for deployment", (
     projectPreviewSource,
     /useState<DeployAuthentication\["type"\]>\("api_key"\)/,
   );
-  assert.match(projectPreviewSource, />访问鉴权</);
+  assert.match(projectPreviewSource, /projectPreview\.accessAuthentication/);
   assert.match(projectPreviewSource, /label: "API Key"/);
-  assert.match(projectPreviewSource, /label: "用户池"/);
-  assert.match(projectPreviewSource, /badge: pool\.isCurrent \? "当前用户池"/);
-  assert.match(projectPreviewSource, /当前 Studio/);
+  assert.match(projectPreviewSource, /projectPreview\.authentication\.userPool/);
+  assert.match(projectPreviewSource, /badge: pool\.isCurrent \? t\("projectPreview\.userPool\.current"\)/);
+  assert.match(projectPreviewSource, /projectPreview\.userPool\.currentHint/);
   assert.match(
     projectPreviewSource,
-    /className="pp-user-pool-error" role="alert"[\s\S]*?部署后无法从 Studio[\s\S]*?调用此 Runtime/,
+    /className="pp-user-pool-error" role="alert"[\s\S]*?projectPreview\.userPool\.mismatchHint/,
   );
   assert.match(projectPreviewSource, /role="listbox"/);
   assert.match(projectPreviewSource, /aria-selected=\{selected\}/);
@@ -295,15 +295,15 @@ test("configures API Key or Identity user-pool authentication for deployment", (
 });
 
 test("offers the AgentKit-backed remote Agent type", () => {
-  assert.match(agentTypeMetaSource, /label: "远程智能体"/);
+  assert.match(agentTypeMetaSource, /a2a: localizedAgentType\("a2a", Globe\)/);
   assert.match(
     agentTypeMetaSource,
     /export const AGENT_TYPES:[\s\S]*?AGENT_TYPE_META\.a2a/,
   );
-  assert.match(customCreateSource, /AgentKit 智能体中心/);
+  assert.match(customCreateSource, /t\("traditional\.basic\.agentCenter"\)/);
   assert.match(
     customCreateSource,
-    /remoteTypeDisabled\s*=\s*isRootAgent && t\.id === "a2a"/,
+    /remoteTypeDisabled\s*=\s*isRootAgent && agentType\.id === "a2a"/,
   );
 });
 
@@ -328,7 +328,7 @@ test("shows the total environment variable count beside the section title", () =
   );
   assert.match(
     projectPreviewSource,
-    /环境变量\s*<span className="pp-agent-child-count pp-env-count">\s*\{environmentVariableCount\} 项/,
+    /projectPreview\.environmentVariables[\s\S]*?projectPreview\.itemCount[\s\S]*?environmentVariableCount/,
   );
   assert.match(
     projectPreviewStyles,
@@ -348,11 +348,11 @@ test("keeps ordinary environment values visible while masking secrets", () => {
   );
   assert.match(
     projectPreviewSource,
-    /className="pp-env-value"\s*type="password"[\s\S]*?placeholder="必填，仅用于本次发布"/,
+    /className="pp-env-value"\s*type="password"[\s\S]*?projectPreview\.releaseOnlySecret/,
   );
   assert.match(
     projectPreviewSource,
-    /placeholder="名称"[\s\S]*?type="text"[\s\S]*?placeholder="值"/,
+    /placeholder=\{t\("common\.name"\)\}[\s\S]*?type="text"[\s\S]*?placeholder=\{t\("projectPreview\.value"\)\}/,
   );
 });
 
@@ -408,10 +408,10 @@ test("requires explicit confirmation before starting deployment", () => {
   assert.match(requestConfirmation, /setDeployConfirmOpen\(true\)/);
   assert.doesNotMatch(requestConfirmation, /await onDeploy/);
   assert.match(performDeployment, /await onDeploy/);
-  assert.match(projectPreviewSource, /将创建新的云端 Runtime/);
-  assert.match(projectPreviewSource, /将更新并发布到当前云端 Runtime/);
-  assert.match(projectPreviewSource, />\s*取消\s*</);
-  assert.match(projectPreviewSource, /isUpdate \? "确定更新" : "确定部署"/);
+  assert.match(projectPreviewSource, /projectPreview\.confirm\.deployDescription/);
+  assert.match(projectPreviewSource, /projectPreview\.confirm\.updateDescription/);
+  assert.match(projectPreviewSource, /t\("common\.cancel"\)/);
+  assert.match(projectPreviewSource, /isUpdate \? t\("projectPreview\.confirm\.update"\) : t\("projectPreview\.confirm\.deploy"\)/);
   assert.match(
     projectPreviewSource,
     /disabled=\{deploying \|\| isRuntimeUpdate \|\| !onDeployRegionChange\}/,
@@ -420,7 +420,7 @@ test("requires explicit confirmation before starting deployment", () => {
     projectPreviewSource,
     /disabled=\{deploying \|\| isRuntimeUpdate \|\| !onNetworkChange\}/,
   );
-  assert.match(projectPreviewSource, /现有 Runtime 的区域与网络模式保持不变。/);
+  assert.match(projectPreviewSource, /projectPreview\.networkPreserved/);
   assert.match(projectPreviewSource, /const networkMode = network\?\.mode \?\? "public"/);
   assert.match(
     projectPreviewSource,
@@ -431,7 +431,7 @@ test("requires explicit confirmation before starting deployment", () => {
 test("creates feedback evaluation sets by default and sends the deployment choice", () => {
   assert.match(
     projectPreviewSource,
-    /useState\(true\)[\s\S]*?<strong>自动创建评测集<\/strong>[\s\S]*?部署成功后，自动创建 Good Case 和 Bad Case 评测集。/,
+    /useState\(true\)[\s\S]*?projectPreview\.createEvaluationSets[\s\S]*?projectPreview\.createEvaluationSetsHint/,
   );
   assert.match(
     projectPreviewSource,
@@ -459,7 +459,7 @@ test("creates feedback evaluation sets by default and sends the deployment choic
   );
   assert.match(
     projectPreviewSource,
-    /effectiveCreateEvaluationSets[\s\S]*?\[\.\.\.deploymentStepsWithInstanceUpdate, EVALUATION_SET_STEP\][\s\S]*?: deploymentStepsWithInstanceUpdate/,
+    /effectiveCreateEvaluationSets[\s\S]*?\[\.\.\.deploymentStepsWithInstanceUpdate, \{ phase: "evaluation", label: t\("projectPreview\.steps\.createEvaluationSets"\) \}\][\s\S]*?: deploymentStepsWithInstanceUpdate/,
   );
   assert.match(
     projectPreviewSource,

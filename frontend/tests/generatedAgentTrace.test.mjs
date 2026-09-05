@@ -39,6 +39,6 @@ test("shows a per-variant trace action only after a completed debug turn", () =>
 test("trace drawer retries collecting traces and offers a manual retry", () => {
   assert.match(traceDrawerSource, /TRACE_COLLECTING_RETRIES/);
   assert.match(traceDrawerSource, /window\.setTimeout/);
-  assert.match(traceDrawerSource, /调用链路仍在采集中/);
-  assert.match(traceDrawerSource, /重新加载/);
+  assert.match(traceDrawerSource, /t\("trace\.errors\.collecting"\)/);
+  assert.match(traceDrawerSource, /t\("trace\.reload"\)/);
 });

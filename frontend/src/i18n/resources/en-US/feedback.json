@@ -1,0 +1,56 @@
+{
+  "title": "Report an issue",
+  "descriptionLabel": "Description",
+  "commonIssues": "Common issues",
+  "cancel": "Cancel",
+  "done": "Done",
+  "submit": "Submit feedback",
+  "submitting": "Submitting…",
+  "success": {
+    "title": "Feedback submitted. Thank you.",
+    "description": "The AgentKit team will review your report as soon as possible."
+  },
+  "dialog": {
+    "close": "Close issue report",
+    "intro": "Select the issues you encountered and add any useful details.",
+    "privacy": "Your conversation data will be shared with the AgentKit team. Please protect sensitive information.",
+    "descriptionPlaceholder": "Describe what happened (optional)",
+    "issues": {
+      "slow": "Slow execution",
+      "crash": "Runtime crash",
+      "incorrect": "Inaccurate result",
+      "tool_error": "Tool call failed",
+      "other": "Other issue"
+    }
+  },
+  "page": {
+    "description": "Tell us about a problem you encountered while using AgentKit Studio.",
+    "module": "Area",
+    "modules": {
+      "conversation": "Conversation",
+      "agents": "Agents",
+      "applications": "Automations",
+      "search": "Search",
+      "other": "Other"
+    },
+    "commonIssuesMultiple": "Common issues (select all that apply)",
+    "issueTypes": "Issue types",
+    "issues": {
+      "page_slow": "Page loads slowly",
+      "feature_unavailable": "Feature unavailable",
+      "display_error": "Display issue",
+      "no_response": "Action has no response",
+      "other": "Other issue"
+    },
+    "descriptionPlaceholder": "Describe the page, action, and what happened",
+    "quickAdd": "Quick add",
+    "suggestionsLabel": "Suggested descriptions",
+    "suggestions": {
+      "noResponse": "Nothing happens after I click",
+      "loading": "The page remains in a loading state",
+      "incomplete": "Some content is missing or clipped",
+      "error": "An error appears after the action"
+    },
+    "privacy": "Your data will be shared with the AgentKit team. Please protect sensitive information."
+  }
+}

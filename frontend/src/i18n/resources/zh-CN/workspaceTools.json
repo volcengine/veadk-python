@@ -1,0 +1,391 @@
+{
+  "artifactLibrary": {
+    "types": {
+      "all": "全部类型",
+      "document": "文档",
+      "image": "图片",
+      "video": "视频"
+    },
+    "previewArtifact": "预览 {{name}}",
+    "moreActions": "更多操作 {{name}}",
+    "actionMenu": "{{name}} 操作",
+    "download": "下载",
+    "downloading": "下载中",
+    "edit": "编辑信息",
+    "delete": "删除产物",
+    "previewFailed": "无法预览“{{name}}”：{{message}}",
+    "downloadStarted": "已开始下载 {{name}}",
+    "downloadFailed": "无法下载“{{name}}”：{{message}}",
+    "updated": "已更新 {{name}}",
+    "deleted": "已删除 {{name}}",
+    "deleteFailed": "无法删除“{{name}}”：{{message}}",
+    "typeFilter": "产物类型",
+    "searchAria": "搜索产物",
+    "searchPlaceholder": "搜索产物或会话",
+    "retry": "重试",
+    "close": "关闭",
+    "listAria": "产物列表",
+    "loadFailed": "产物加载失败",
+    "loadDetailFallback": "请检查存储配置后重试。",
+    "reload": "重新加载",
+    "noMatch": "没有找到匹配的产物",
+    "noArtifacts": "您还没有任何产物",
+    "searchHint": "请尝试搜索其他名称或切换类型",
+    "emptyHint": "聊天中生成的产物会自动显示在这里",
+    "columns": {
+      "name": "名称",
+      "source": "来源",
+      "updatedAt": "修改时间",
+      "actions": "操作"
+    },
+    "loadingMore": "正在加载更多产物",
+    "unknownTime": "时间未知",
+    "preview": {
+      "close": "关闭预览",
+      "meta": "{{type}} / 版本 {{version}}",
+      "loading": "正在加载预览",
+      "alt": "{{name}} 预览",
+      "loadFailed": "预览加载失败，请稍后重试或下载查看",
+      "unsupported": "当前格式暂不支持在线预览，请下载查看",
+      "sourceAria": "产物来源",
+      "agent": "智能体",
+      "session": "会话",
+      "tool": "生成工具",
+      "createdAt": "生成时间",
+      "fileSize": "文件大小",
+      "tags": "标签",
+      "viewSession": "查看会话"
+    },
+    "deleteDialog": {
+      "title": "删除产物？",
+      "description": "“{{name}}”将从产物库永久删除，聊天记录不会受到影响。",
+      "deleting": "删除中",
+      "confirm": "删除",
+      "close": "关闭删除确认框"
+    },
+    "api": {
+      "withStatus": "{{message}}（{{status}}）",
+      "listFailed": "读取产物库失败",
+      "syncFailed": "同步聊天产物失败",
+      "updateFailed": "更新产物失败",
+      "deleteFailed": "删除产物失败",
+      "downloadFailed": "下载产物失败"
+    }
+  },
+  "resourceMetadata": {
+    "unknownSource": "未知来源",
+    "unknownCreator": "未知创建者"
+  },
+  "artifactEdit": {
+    "nameRequired": "请输入产物名称",
+    "tooManyTags": "标签最多 {{max}} 个",
+    "tagTooLong": "单个标签不能超过 {{max}} 个字符",
+    "title": "编辑产物信息",
+    "subtitle": "内容文件不会被修改",
+    "close": "关闭编辑框",
+    "name": "名称",
+    "description": "描述",
+    "descriptionPlaceholder": "补充用途、版本或使用说明",
+    "tags": "标签",
+    "tagsPlaceholder": "使用逗号分隔，最多 {{max}} 个",
+    "cancel": "取消",
+    "saving": "保存中",
+    "save": "保存"
+  },
+  "codeBrowser": {
+    "change": {
+      "added": "新增",
+      "modified": "修改",
+      "deleted": "删除"
+    },
+    "noChanges": "两个版本的源码没有差异",
+    "chooseFile": "从左侧选择文件以查看代码",
+    "compareTitle": "版本对比",
+    "workspaceTitle": "源码工作区",
+    "projectFallback": "Agent 项目",
+    "switchTheme": "切换源码主题",
+    "switchThemeTitle": "切换为{{theme}}主题",
+    "themes": {
+      "dark": "深色",
+      "light": "浅色"
+    },
+    "closeWorkspace": "关闭源码工作区",
+    "close": "关闭",
+    "changedFiles": "变更文件",
+    "projectFiles": "项目文件",
+    "changes": "变更",
+    "files": "文件",
+    "openFiles": "打开的文件",
+    "noFileSelected": "未选择文件",
+    "comparisonDirection": "对比方向",
+    "before": "优化前",
+    "after": "优化后",
+    "loadingEditor": "正在加载编辑器…",
+    "changedFileCount_one": "{{count}} 个文件有变更",
+    "changedFileCount_other": "{{count}} 个文件有变更",
+    "fileCount_one": "{{count}} 个文件",
+    "fileCount_other": "{{count}} 个文件",
+    "lineCount_one": "{{count}} 行 · UTF-8",
+    "lineCount_other": "{{count}} 行 · UTF-8",
+    "viewSource": "查看源码",
+    "viewSourceAria": "查看和编辑项目源码"
+  },
+  "search": {
+    "nav": "搜索",
+    "selectAgent": "请选择 Agent",
+    "checkingCapabilities": "正在检测 Agent 能力",
+    "notMounted": "当前 Agent 未挂载{{label}}",
+    "sources": {
+      "session": "会话",
+      "web": "网络",
+      "knowledge": "知识库",
+      "memory": "长期记忆"
+    },
+    "webDescription": "通过 web_search 工具检索",
+    "backendLocal": "本地",
+    "failed": "搜索失败：{{message}}",
+    "placeholder": {
+      "selectAgent": "请先选择 Agent",
+      "web": "在网络中检索",
+      "knowledge": "在 {{name}} 中检索",
+      "knowledgeFallback": "当前 Agent 的知识库",
+      "memory": "在 {{name}} 中检索",
+      "memoryFallback": "当前用户的长期记忆",
+      "session": "在当前 Agent 的会话中检索"
+    },
+    "sourceTypeAria": "搜索类型：{{label}}",
+    "notSelected": "未选择",
+    "sourceType": "搜索类型",
+    "selectSource": "选择搜索类型",
+    "noAgentHint": "选择一个 Agent 后，即可检索会话、网络及其挂载的数据源。",
+    "loadingCapabilities": "正在读取当前 Agent 的检索能力…",
+    "sourceUnavailable": "当前 Agent 未挂载该数据源",
+    "instructions": {
+      "web": "输入关键词后回车或点击按钮，通过 web_search 工具检索。",
+      "knowledge": "输入问题，检索当前 Agent 挂载的知识库。",
+      "memory": "输入线索，检索当前用户跨会话保存的长期记忆。",
+      "session": "输入关键词后回车或点击按钮，搜索当前 Agent 的会话。"
+    },
+    "noResults": "未找到匹配“{{query}}”的结果。",
+    "knowledgeFragment": "知识片段 {{index}}",
+    "memoryFragment": "记忆片段 {{index}}"
+  },
+  "developerResources": {
+    "title": "开发者资源",
+    "sections": {
+      "documentation": {
+        "title": "相关链接",
+        "description": "查看开发文档与 AgentKit 常用入口"
+      },
+      "bestPractices": {
+        "title": "最佳实践",
+        "description": "参考开发、调试与部署经验"
+      },
+      "showcases": {
+        "title": "案例展示",
+        "description": "探索 AgentKit 应用案例"
+      }
+    },
+    "links": {
+      "veadkDocs": "VeADK 文档",
+      "cliDocs": "AgentKit CLI 文档",
+      "platformDocs": "AgentKit 平台文档",
+      "console": "AgentKit 控制台"
+    },
+    "articles": {
+      "veadkDevelopment": {
+        "title": "使用 VeADK 开发并部署智能体",
+        "description": "使用 VeADK 构建 Agent，并部署至 AgentKit 智能体运行时。"
+      },
+      "cliDevelopment": {
+        "title": "使用 AgentKit CLI 开发并部署智能体",
+        "description": "通过 AgentKit CLI 创建项目、调试 Agent，并完成部署。"
+      },
+      "coverAlt": "{{title}}文章封面"
+    },
+    "showcases": {
+      "researchAssistant": {
+        "title": "多智能体研究助手",
+        "description": "由多个专业 Agent 协同完成资料检索、分析和结论整理。"
+      },
+      "multimodalAnalysis": {
+        "title": "多模态内容分析",
+        "description": "在统一会话中理解图片、文档和视频内容。"
+      },
+      "customerService": {
+        "title": "智能客服工作台",
+        "description": "结合知识检索与工具调用处理复杂的客户服务任务。"
+      },
+      "webSearch": {
+        "title": "联网搜索 Agent",
+        "description": "检索实时网页内容，并将信息整理为可追溯的回答。"
+      },
+      "a2uiApp": {
+        "title": "A2UI 交互应用",
+        "description": "让 Agent 根据任务过程生成可交互的前端界面。"
+      },
+      "previewAlt": "{{title}}界面预览"
+    }
+  },
+  "library": {
+    "title": "资源库",
+    "untitledSession": "未命名会话",
+    "categoryAria": "资源库分类",
+    "regionAria": "区域",
+    "tabs": {
+      "skills": "技能库",
+      "knowledge": "知识库",
+      "artifacts": "产物"
+    }
+  },
+  "manageAgents": {
+    "title": "管理 Agent",
+    "subtitle": "列出你有权管理的 AgentKit Runtime",
+    "mainAgentOnly": "仅显示主 Agent（控制面信息）。",
+    "deleteConfirm": "确定删除 Agent \"{{name}}\"？该 Runtime 将被永久删除。",
+    "regionFilterTitle": "按区域筛选",
+    "regionFilterAria": "区域筛选",
+    "regionAria": "区域",
+    "refresh": "刷新",
+    "loading": "加载中…",
+    "empty": "暂无你部署的 Agent。",
+    "connected": "已连接",
+    "connect": "连接到此 Agent",
+    "deleteRuntime": "删除该 Runtime",
+    "loadingDetail": "读取详情…",
+    "agentStructure": "Agent 结构",
+    "secretHidden": "敏感值已隐藏，点击显示",
+    "revealSecret": "显示 {{key}} 的值",
+    "fields": {
+      "model": "模型",
+      "description": "描述",
+      "status": "状态信息",
+      "project": "项目",
+      "version": "版本",
+      "resources": "资源",
+      "memory": "记忆",
+      "tool": "工具",
+      "knowledge": "知识",
+      "mcpToolset": "MCP 工具集",
+      "updatedAt": "更新时间"
+    },
+    "resource": {
+      "memory": "内存 {{value}}MB",
+      "instances": "实例 {{min}}~{{max}}",
+      "concurrency": "并发 {{value}}"
+    },
+    "environmentVariables": "环境变量",
+    "unnamed": "（未命名）"
+  },
+  "agentTopology": {
+    "mainAgent": "主 Agent",
+    "subAgent": "子 Agent {{index}}",
+    "itemCount_one": "{{count}} 项",
+    "itemCount_other": "{{count}} 项",
+    "info": "Agent 信息",
+    "infoAndTopology": "Agent 信息与拓扑",
+    "loadingInfo": "正在读取 Agent 信息…",
+    "unnamedAgent": "未命名 Agent",
+    "tools": "工具",
+    "toolList": "工具列表",
+    "studioTool": "Studio Tool",
+    "removeTool": "移除工具 {{name}}",
+    "remove": "移除",
+    "notConfigured": "未配置",
+    "addStudioTool": "添加 Studio 工具",
+    "addStudioToolHere": "在此对话中添加 Studio 工具",
+    "skills": "技能",
+    "skillList": "技能列表",
+    "previewUnsupported": "暂不支持预览",
+    "sessionEnvironment": "会话环境",
+    "environment": "环境",
+    "agentCanvas": "Agent 画布",
+    "topology": "结构拓扑",
+    "viewCanvasFullscreen": "全屏查看 Agent 画布",
+    "viewFullscreen": "全屏查看",
+    "executionCanvas": "Agent 执行画布",
+    "fullscreenExecutionCanvas": "全屏 Agent 执行画布",
+    "closeFullscreenCanvas": "关闭全屏画布",
+    "close": "关闭",
+    "capabilitiesSubtitle": "能力与协作拓扑",
+    "closeInfo": "关闭 Agent 信息",
+    "infoUnavailable": "暂时无法读取 Agent 信息。"
+  },
+  "sessionEnvironment": {
+    "mountFailed": "挂载环境失败",
+    "closeDialog": "关闭环境弹窗",
+    "addTitle": "添加环境",
+    "description": "选择当前会话允许 Agent 使用的 Sandbox 环境",
+    "closeAdd": "关闭添加环境",
+    "searchAria": "搜索环境",
+    "searchPlaceholder": "搜索环境名称或能力",
+    "availableAria": "可用环境与工作区",
+    "loading": "正在读取可用环境…",
+    "noMatch": "没有匹配的环境或工作区",
+    "workspaces": "工作区",
+    "reuseAll": "复用工作区中的全部可用环境",
+    "availableEnvironmentCount_one": "{{count}} 个可用环境",
+    "availableEnvironmentCount_other": "{{count}} 个可用环境",
+    "selectWorkspace": "选择工作区 {{name}}",
+    "environments": "环境",
+    "includedByWorkspaces": "已由工作区 {{names}} 包含",
+    "nameSeparator": "、",
+    "selectEnvironment": "选择环境 {{name}}",
+    "selectedWorkspaceCount_one": "{{count}} 个工作区",
+    "selectedWorkspaceCount_other": "{{count}} 个工作区",
+    "coveredEnvironmentCount_one": "{{count}} 个环境",
+    "coveredEnvironmentCount_other": "{{count}} 个环境",
+    "selectionSummary": "已选择 {{workspaces}}，覆盖 {{environments}}",
+    "cancel": "取消",
+    "mounting": "正在挂载…",
+    "confirm": "确认添加",
+    "mountedAria": "已挂载环境",
+    "environmentCount_one": "{{count}} 个环境",
+    "environmentCount_other": "{{count}} 个环境",
+    "removeWorkspace": "移除工作区 {{name}}",
+    "remove": "移除",
+    "removeEnvironment": "移除环境 {{name}}",
+    "add": "添加环境",
+    "addMore": "添加更多环境",
+    "addForSession": "为当前 Session 添加环境",
+    "loadingAvailable": "正在加载可用环境…",
+    "empty": "暂无可用的 AIO Sandbox 环境。"
+  },
+  "agentKitCli": {
+    "loading": {
+      "searching": "正在查找已有环境",
+      "creating": "环境初始化中",
+      "connecting": "正在连接已有环境"
+    },
+    "initializationFailed": "AgentKit CLI 环境初始化失败，当前状态：{{status}}。",
+    "sessionExpired": "AgentKit CLI Session 不存在或已过期，请重试。",
+    "initializationTimeout": "AgentKit CLI 环境初始化超时，请稍后重试。",
+    "nonPersistent": "非持久化环境",
+    "recyclingHoursMinutes": "{{hours}} 小时 {{minutes}} 分钟后环境回收",
+    "recyclingMinutes": "{{minutes}} 分钟后环境回收",
+    "connectionError": "无法连接 Studio 服务，未收到服务端响应。\n原始错误：{{message}}",
+    "unavailable": "连接不可用",
+    "requestFailed": "AgentKit CLI 请求失败",
+    "retry": "重试",
+    "terminalTitle": "AgentKit CLI 终端"
+  },
+  "studioTools": {
+    "labels": {
+      "coding": "智能编程",
+      "get_city_weather": "城市天气查询",
+      "get_location_weather": "位置天气查询",
+      "web_fetch": "网页内容获取"
+    },
+    "closeDialog": "关闭弹窗",
+    "title": "添加 Studio 工具",
+    "description": "由 Studio BFF 为 {{agentName}} 的当前会话执行，Runtime 无需预装",
+    "close": "关闭添加 Studio 工具",
+    "searchAria": "搜索 Studio 工具",
+    "searchPlaceholder": "搜索名称或工具标识",
+    "availableAria": "可用 Studio 工具",
+    "loading": "正在读取 Studio 工具…",
+    "noMatch": "没有匹配的 Studio 工具",
+    "remove": "移除",
+    "add": "添加"
+  }
+}

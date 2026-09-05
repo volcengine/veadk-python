@@ -29,9 +29,9 @@ const { agentKitLinks } = await import(linksModuleUrl);
 test("account menu places issue feedback directly below system information", () => {
   assert.match(
     sidebarSource,
-    /系统信息[\s\S]*?问题反馈[\s\S]*?退出登录/,
+    /account\.systemInfo[\s\S]*?account\.language[\s\S]*?account\.issueFeedback[\s\S]*?account\.logout/,
   );
-  assert.match(sidebarSource, /onIssueFeedback\(\)/);
+  assert.match(sidebarSource, /onSelect=\{onIssueFeedback\}/);
   assert.doesNotMatch(sidebarSource, /AgentKitPromoCard/);
   assert.doesNotMatch(sidebarSource, /className=\{`sidebar-feedback/);
 });
@@ -54,18 +54,18 @@ test("promo renders one AgentKit welcome card with native actions", () => {
   );
   assert.match(promoSource, /import \{ X \} from "@openai\/apps-sdk-ui\/components\/Icon"/);
   assert.match(promoSource, /className=\{`agentkit-promo-card/);
-  assert.match(promoSource, /欢迎使用 AgentKit/);
+  assert.match(promoSource, /agentKitPromo\.title/);
   assert.match(
     promoSource,
-    /通过 AgentKit 平台快速构建与托管您的企业级智能体/,
+    /agentKitPromo\.description/,
   );
   assert.match(
     promoSource,
-    /<a[\s\S]*?href=\{links\.docs\}[\s\S]*?target="_blank"[\s\S]*?文档/,
+    /<a[\s\S]*?href=\{links\.docs\}[\s\S]*?target="_blank"[\s\S]*?agentKitPromo\.docs/,
   );
   assert.match(
     promoSource,
-    /<a[\s\S]*?href=\{links\.console\}[\s\S]*?target="_blank"[\s\S]*?控制台/,
+    /<a[\s\S]*?href=\{links\.console\}[\s\S]*?target="_blank"[\s\S]*?agentKitPromo\.console/,
   );
   assert.equal((promoSource.match(/<a/g) ?? []).length, 2);
   assert.doesNotMatch(promoSource, /ButtonLink|ArrowRight/);

@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent, type SVGProps } from "react";
+import type { TFunction } from "i18next";
+import { useTranslation } from "react-i18next";
 import {
   bindGithubCicdRuntime,
   createGithubCicdPipeline,
@@ -36,9 +38,9 @@ export interface PendingGithubCicdConfig {
   pipelineId?: string;
 }
 
-function githubRepoLabel(url: string): string {
+function githubRepoLabel(url: string, t: TFunction): string {
   const trimmed = url.trim();
-  if (!trimmed) return "GitHub 仓库";
+  if (!trimmed) return t("githubCicd.repository");
   const match = trimmed.match(
     /github\.com[:/](?<owner>[^/\s]+)\/(?<repo>[^/\s#?]+?)(?:\.git)?(?:[/?#].*)?$/,
   );
@@ -51,17 +53,17 @@ function normalizeBranch(value: string): string {
   return trimmed || "main";
 }
 
-function errorDetailFromUnknown(error: unknown): GithubCicdPipelineErrorDetail {
+function errorDetailFromUnknown(error: unknown, t: TFunction): GithubCicdPipelineErrorDetail {
   if (error instanceof GithubCicdPipelineError) return error.detail;
   if (error instanceof Error) return { message: error.message };
-  return { message: String(error || "同步 GitHub 代码失败") };
+  return { message: String(error || t("githubCicd.syncFailed")) };
 }
 
-function deliveryStatusLabel(result: GithubCicdPipelineResult): string {
-  if (result.status === "cicd-bound") return "已挂载";
-  if (result.status === "bound") return "已绑定";
-  if (result.status === "succeeded") return "已同步";
-  return result.status || "已创建";
+function deliveryStatusLabel(result: GithubCicdPipelineResult, t: TFunction): string {
+  if (result.status === "cicd-bound") return t("githubCicd.status.mounted");
+  if (result.status === "bound") return t("githubCicd.status.bound");
+  if (result.status === "succeeded") return t("githubCicd.status.synced");
+  return result.status || t("githubCicd.status.created");
 }
 
 function ExternalLinkIcon(props: SVGProps<SVGSVGElement>) {
@@ -115,6 +117,7 @@ export function GithubCicdPanel({
   onPendingCicdChange,
   onBindingChange,
 }: GithubCicdPanelProps) {
+  const { t } = useTranslation("ui");
   const [githubUrl, setGithubUrl] = useState("");
   const [githubToken, setGithubToken] = useState("");
   const [baseBranch, setBaseBranch] = useState("main");
@@ -149,7 +152,7 @@ export function GithubCicdPanel({
         onBindingChange?.(binding);
       })
       .catch((caught) => {
-        if (!cancelled) setError(errorDetailFromUnknown(caught));
+        if (!cancelled) setError(errorDetailFromUnknown(caught, t));
       })
       .finally(() => {
         if (!cancelled) setLoadingBinding(false);
@@ -157,7 +160,7 @@ export function GithubCicdPanel({
     return () => {
       cancelled = true;
     };
-  }, [onBindingChange, runtimeId]);
+  }, [onBindingChange, runtimeId, t]);
 
   useEffect(() => {
     if (!onPendingCicdChange) return;
@@ -207,7 +210,7 @@ export function GithubCicdPanel({
     volcengineSessionToken,
   ]);
 
-  const repoLabel = useMemo(() => githubRepoLabel(githubUrl), [githubUrl]);
+  const repoLabel = useMemo(() => githubRepoLabel(githubUrl, t), [githubUrl, t]);
   const resultGithub = result?.github;
   const resultRepo =
     resultGithub?.owner && resultGithub.repo
@@ -217,7 +220,7 @@ export function GithubCicdPanel({
   const resultRuntimeId = result?.runtimeId;
   const isCicdMode = mode === "cicd";
   const credentialProviderLabel =
-    cloudProvider === "byteplus" ? "BytePlus" : "火山";
+    cloudProvider === "byteplus" ? "BytePlus" : t("githubCicd.volcengine");
   const readonlyBinding = !showSetup && Boolean(runtimeId);
   const canSubmit =
     showSetup &&
@@ -232,11 +235,11 @@ export function GithubCicdPanel({
       : project.files.length > 0);
   const submitLabel = isCicdMode
     ? runtimeId
-      ? "挂载持续交付"
+      ? t("githubCicd.mountDelivery")
       : pendingCicdSelected
-        ? "已选择，部署时挂载"
-        : "部署时挂载持续交付"
-    : "同步代码";
+        ? t("githubCicd.selectedForDeployment")
+        : t("githubCicd.mountOnDeploy")
+    : t("githubCicd.syncCode");
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -310,7 +313,7 @@ export function GithubCicdPanel({
         setVolcengineSessionToken("");
       }
     } catch (caught) {
-      setError(errorDetailFromUnknown(caught));
+      setError(errorDetailFromUnknown(caught, t));
     } finally {
       setSubmitting(false);
     }
@@ -324,7 +327,7 @@ export function GithubCicdPanel({
     <section className="pp-config-section pp-github-cicd">
       <div className="pp-config-label pp-github-cicd-title">
         {showSetup ? (
-          <div className="pp-github-cicd-tabs" role="tablist" aria-label="GitHub 交付模式">
+          <div className="pp-github-cicd-tabs" role="tablist" aria-label={t("githubCicd.deliveryMode")}>
             <button
               type="button"
               className={mode === "source" ? "is-active" : ""}
@@ -332,7 +335,7 @@ export function GithubCicdPanel({
               aria-selected={mode === "source"}
               onClick={() => setMode("source")}
             >
-              GitHub 代码同步
+              {t("githubCicd.sourceSync")}
             </button>
             <button
               type="button"
@@ -341,16 +344,16 @@ export function GithubCicdPanel({
               aria-selected={mode === "cicd"}
               onClick={() => setMode("cicd")}
             >
-              挂载持续交付
+              {t("githubCicd.mountDelivery")}
             </button>
           </div>
         ) : (
-          <span>GitHub 交付</span>
+          <span>{t("githubCicd.delivery")}</span>
         )}
         {(submitting || loadingBinding) && (
           <span className="pp-github-cicd-status" role="status">
             <SpinnerIcon className="pp-ic spin" />
-            {loadingBinding ? "读取中" : "执行中"}
+            {loadingBinding ? t("githubCicd.loading") : t("githubCicd.running")}
           </span>
         )}
       </div>
@@ -358,16 +361,16 @@ export function GithubCicdPanel({
         <p className="pp-github-cicd-copy">
           {isCicdMode
             ? runtimeId
-              ? "写入 AgentKit Runtime GitHub Actions workflow，后续 GitHub 提交会更新绑定 Runtime。"
-              : "首次部署成功后初始化目标分支，后续 GitHub 提交会更新绑定 Runtime。"
-            : "Studio 会直接 push 到目标分支；该分支由 Studio 管理，远端冲突时同步会失败。Runtime 仍由部署按钮发布。"}
+              ? t("githubCicd.runtimeDeliveryHint")
+              : t("githubCicd.initialDeliveryHint")
+            : t("githubCicd.sourceSyncHint")}
         </p>
       )}
 
       {showSetup && (
         <form className="pp-github-cicd-form" onSubmit={handleSubmit}>
           <label className="pp-github-cicd-field">
-            <span>GitHub URL</span>
+            <span>{t("githubCicd.githubUrl")}</span>
             <input
               value={githubUrl}
               placeholder="https://github.com/org/repo"
@@ -380,11 +383,11 @@ export function GithubCicdPanel({
             />
           </label>
           <label className="pp-github-cicd-field">
-            <span>Token</span>
+            <span>{t("githubCicd.token")}</span>
             <input
               type="password"
               value={githubToken}
-              placeholder="repo 或 contents write 权限"
+              placeholder={t("githubCicd.tokenPlaceholder")}
               disabled={disabled || submitting}
               autoComplete="off"
               onChange={(event) => {
@@ -394,7 +397,7 @@ export function GithubCicdPanel({
             />
           </label>
           <label className="pp-github-cicd-field">
-            <span>目标分支</span>
+            <span>{t("githubCicd.targetBranch")}</span>
             <input
               value={baseBranch}
               placeholder="main"
@@ -413,7 +416,7 @@ export function GithubCicdPanel({
                 <input
                   type="password"
                   value={volcengineAccessKey}
-                  placeholder="用于写入 GitHub Actions Secret"
+                  placeholder={t("githubCicd.actionsSecretPlaceholder")}
                   disabled={disabled || submitting}
                   autoComplete="off"
                   onChange={(event) => {
@@ -427,7 +430,7 @@ export function GithubCicdPanel({
                 <input
                   type="password"
                   value={volcengineSecretKey}
-                  placeholder="用于写入 GitHub Actions Secret"
+                  placeholder={t("githubCicd.actionsSecretPlaceholder")}
                   disabled={disabled || submitting}
                   autoComplete="off"
                   onChange={(event) => {
@@ -437,11 +440,11 @@ export function GithubCicdPanel({
                 />
               </label>
               <label className="pp-github-cicd-field">
-                <span>{credentialProviderLabel} Session Token</span>
+                <span>{t("githubCicd.sessionToken", { provider: credentialProviderLabel })}</span>
                 <input
                   type="password"
                   value={volcengineSessionToken}
-                  placeholder="临时凭证可选"
+                  placeholder={t("githubCicd.sessionTokenPlaceholder")}
                   disabled={disabled || submitting}
                   autoComplete="off"
                   onChange={(event) => {
@@ -456,7 +459,7 @@ export function GithubCicdPanel({
             {submitting ? (
               <>
                 <SpinnerIcon className="pp-ic spin" />
-                同步中…
+                {t("githubCicd.syncing")}
               </>
             ) : (
               submitLabel
@@ -467,7 +470,7 @@ export function GithubCicdPanel({
 
       {pendingCicdSelected && !result && (
         <p className="pp-github-cicd-bound-note">
-          已选择挂载持续交付。点击部署后，Studio 会等待 Runtime 创建完成并初始化 GitHub 目标分支，初始化成功后才完成部署流程。
+          {t("githubCicd.pendingHint")}
         </p>
       )}
 
@@ -477,38 +480,38 @@ export function GithubCicdPanel({
             <strong>
               {result.cicd?.enabled
                 ? result.runtimeId
-                  ? "已挂载持续交付"
-                  : "已选择挂载持续交付"
+                  ? t("githubCicd.result.deliveryMounted")
+                  : t("githubCicd.result.deliverySelected")
                 : resultRuntimeId
-                  ? "已绑定 GitHub"
-                  : "代码已同步"}
+                  ? t("githubCicd.result.githubBound")
+                  : t("githubCicd.result.codeSynced")}
             </strong>
-            <span>{deliveryStatusLabel(result)}</span>
+            <span>{deliveryStatusLabel(result, t)}</span>
           </div>
           <dl className="pp-github-cicd-result-grid">
             <div>
-              <dt>仓库</dt>
+              <dt>{t("githubCicd.repository")}</dt>
               <dd>{resultRepo}</dd>
             </div>
             <div>
-              <dt>分支</dt>
+              <dt>{t("githubCicd.branch")}</dt>
               <dd>{resultBranch}</dd>
             </div>
             {resultRuntimeId && (
               <div>
-                <dt>Runtime</dt>
+                <dt>{t("githubCicd.runtime")}</dt>
                 <dd>{resultRuntimeId}</dd>
               </div>
             )}
             {resultGithub?.commitSha && (
               <div>
-                <dt>Commit</dt>
+                <dt>{t("githubCicd.commit")}</dt>
                 <dd>{resultGithub.commitSha.slice(0, 12)}</dd>
               </div>
             )}
             {result.cicd?.workflowPath && (
               <div>
-                <dt>Workflow</dt>
+                <dt>{t("githubCicd.workflow")}</dt>
                 <dd>{result.cicd.workflowPath}</dd>
               </div>
             )}
@@ -521,15 +524,15 @@ export function GithubCicdPanel({
                 rel="noopener noreferrer"
               >
                 <ExternalLinkIcon className="pp-ic" />
-                查看 PR
+                {t("githubCicd.viewPr")}
               </a>
             )}
           </div>
           {resultRuntimeId && (
             <p className="pp-github-cicd-bound-note">
               {result.cicd?.enabled
-                ? "目标分支提交会触发 Runtime 持续交付。"
-                : "更新并发布时会先同步当前源码到这个分支。"}
+                ? t("githubCicd.result.deliveryHint")
+                : t("githubCicd.result.boundHint")}
             </p>
           )}
         </div>
@@ -537,25 +540,25 @@ export function GithubCicdPanel({
 
       {error && (
         <div className="pp-github-cicd-error" role="alert">
-          <strong>创建失败</strong>
+          <strong>{t("githubCicd.createFailed")}</strong>
           <p>{error.message}</p>
           {(error.phase || error.runtimeId || error.logPath) && (
             <dl>
               {error.phase && (
                 <div>
-                  <dt>阶段</dt>
+                  <dt>{t("githubCicd.phase")}</dt>
                   <dd>{error.phase}</dd>
                 </div>
               )}
               {error.runtimeId && (
                 <div>
-                  <dt>Runtime</dt>
+                  <dt>{t("githubCicd.runtime")}</dt>
                   <dd>{error.runtimeId}</dd>
                 </div>
               )}
               {error.logPath && (
                 <div>
-                  <dt>日志</dt>
+                  <dt>{t("githubCicd.log")}</dt>
                   <dd>{error.logPath}</dd>
                 </div>
               )}

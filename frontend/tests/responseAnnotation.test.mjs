@@ -52,6 +52,14 @@ test("formats selected answer text and the annotation as one feedback comment", 
     formatResponseAnnotationComment("  第一段\n  第二段  ", "  这里的结论缺少依据。  "),
     "选中片段：第一段\n  第二段\n\n批注：这里的结论缺少依据。",
   );
+  assert.equal(
+    formatResponseAnnotationComment("selected text", "fix this", {
+      selectedExcerpt: "Selected excerpt",
+      annotation: "Annotation",
+      separator: ": ",
+    }),
+    "Selected excerpt: selected text\n\nAnnotation: fix this",
+  );
 });
 
 test("keeps the persisted feedback comment within the server limit", () => {
@@ -91,7 +99,7 @@ test("assistant selections open an accessible Apps SDK annotation popover", () =
   assert.match(componentSource, /@openai\/apps-sdk-ui\/components\/Popover/);
   assert.doesNotMatch(appSource, /onMouseUp=\{\(\) => queueResponseAnnotation/);
   assert.match(componentSource, /@openai\/apps-sdk-ui\/components\/Textarea/);
-  assert.match(componentSource, /aria-label="批注选中的模型回复"/);
+  assert.match(componentSource, /aria-label=\{t\("annotation\.ariaLabel"\)\}/);
   assert.match(componentSource, /role="alert"/);
   assert.match(helperSource, /selection\.isCollapsed/);
   assert.match(helperSource, /container\.contains\(anchorElement\)/);
@@ -106,7 +114,7 @@ test("assistant selections open an accessible Apps SDK annotation popover", () =
 test("annotation submission uses the explicit action without a keyboard shortcut", () => {
   assert.match(
     componentSource,
-    /<Button[\s\S]*?type="submit"[\s\S]*?>[\s\S]*?加入 Bad Case[\s\S]*?<\/Button>/,
+    /<Button[\s\S]*?type="submit"[\s\S]*?>[\s\S]*?t\("annotation\.submit"\)[\s\S]*?<\/Button>/,
   );
   assert.doesNotMatch(componentSource, /将保存为 Bad case/);
   assert.doesNotMatch(componentSource, />\s*加入评测集\s*</);
@@ -155,7 +163,7 @@ test("cancelling an annotation clears the selection without reopening the popove
   );
   assert.match(
     componentSource,
-    /onClick=\{dismiss\}[\s\S]*?>\s*取消\s*<\/Button>/,
+    /onClick=\{dismiss\}[\s\S]*?>[\s\S]*?t\("annotation\.cancel"\)[\s\S]*?<\/Button>/,
   );
 });
 
@@ -232,7 +240,7 @@ test("submits the annotation as a bad-case feedback sample", () => {
   assert.match(appSource, /rateAssistantTurn\(\s*target\.turn,\s*"bad"/);
   assert.match(
     appSource,
-    /rateAssistantTurn\([\s\S]*?formatResponseAnnotationComment\(target\.selectedText, note\)/,
+    /rateAssistantTurn\([\s\S]*?formatResponseAnnotationComment\(target\.selectedText, note, \{/,
   );
   assert.match(appSource, /cloudProvider !== "byteplus"/);
   assert.match(

@@ -32,7 +32,7 @@ test("loads built-in Sandbox, Skill, and Studio BFF capabilities independently",
   assert.match(appSource, /newChatCapabilities\.agentId === appName/);
   assert.doesNotMatch(appSource, /listSessionBuiltinTools|harnessResult/);
   assert.match(appSource, /ready:\s*true/);
-  assert.match(appSource, /正在检查 Agent 能力/);
+  assert.match(appSource, /loading\.agentCapabilities/);
   assert.match(appSource, /temporaryEnabled/);
   assert.match(appSource, /deepseekHarnessEnabled/);
   assert.match(appSource, /skillCustomizationEnabled/);
@@ -55,7 +55,7 @@ test("disables built-in Agents until configured", () => {
   assert.match(composerSource, /deepseekHarnessEnabled=\{deepseekHarnessEnabled\}/);
   assert.match(selectorSource, /temporaryEnabled\?: boolean/);
   assert.match(selectorSource, /deepseekHarnessEnabled\?: boolean/);
-  assert.match(selectorSource, /管理员未配置/);
+  assert.match(selectorSource, /t\("mode\.notConfigured"\)/);
   assert.match(selectorSource, /if \(temporaryEnabled === true \|\| deepseekHarnessEnabled === true\) return true/);
   assert.match(selectorSource, /return modeEnabled\(mode\) !== true/);
   assert.match(selectorSource, /if \(modeDisabled\(mode\)\) return/);

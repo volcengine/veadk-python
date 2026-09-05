@@ -1,7 +1,9 @@
 import { useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import type { Block } from "../../blocks";
 import { Blocks } from "../Blocks";
 import type { SkillWorkbenchActivity } from "../skill-workbench/types";
+import { skillT } from "./i18n";
 import "./SkillConversationStream.css";
 
 const ignoreAction = () => undefined;
@@ -27,10 +29,11 @@ function toConversationBlock(activity: ConversationActivity): Block {
       done: activity.status === "done",
     };
   }
-  throw new Error("不支持的 Skill 对话活动");
+  throw new Error(skillT("conversation.unsupportedActivity"));
 }
 
 export function SkillConversationStream({ activities }: { activities: SkillWorkbenchActivity[] }) {
+  const { t } = useTranslation("skills");
   const blocks = useMemo(
     () => activities.filter((activity) => activity.kind !== "status").map(toConversationBlock),
     [activities],
@@ -40,7 +43,7 @@ export function SkillConversationStream({ activities }: { activities: SkillWorkb
   return (
     <div
       className="skill-conversation"
-      aria-label="Skill 生成对话"
+      aria-label={t("conversation.ariaLabel")}
       aria-live="polite"
     >
       <Blocks blocks={blocks} onAction={ignoreAction} />

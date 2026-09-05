@@ -1,5 +1,6 @@
 import { withAuth } from "./auth";
 import { withLocalUser } from "./identity";
+import { adkT, withLocaleHeaders } from "./i18n";
 import type { SandboxAgentKind } from "./sandbox";
 import { requestSignal } from "./timeout";
 
@@ -23,15 +24,15 @@ async function getCapability(
   signal?: AbortSignal,
 ): Promise<NewChatModeCapability> {
   const response = await fetch(withAuth(path), {
-    headers: withLocalUser({ Accept: "application/json" }),
+    headers: withLocaleHeaders(withLocalUser({ Accept: "application/json" })),
     signal: requestSignal(signal, CAPABILITY_TIMEOUT_MS),
   });
   if (!response.ok) {
-    throw new Error(`读取会话模式能力失败（HTTP ${response.status}）`);
+    throw new Error(adkT("newChatCapabilities.loadFailed", { status: response.status }));
   }
   const payload = await response.json() as Record<string, unknown>;
   if (typeof payload.enabled !== "boolean") {
-    throw new Error("会话模式能力响应格式错误");
+    throw new Error(adkT("newChatCapabilities.invalidResponse"));
   }
   return {
     enabled: payload.enabled,

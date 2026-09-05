@@ -144,12 +144,30 @@ function resourceCategory(resource: Record<string, unknown>): ResourceCategory {
   return "skill_space";
 }
 
-function sourceLabel(source: string): string {
-  if (source === "veadk_builtin_tools") return "工具";
-  if (source === "agentkit_knowledge") return "AgentKit 知识库";
+export interface CreateAgentFallbackLabels {
+  tool: string;
+  knowledge: string;
+  skillCenter: string;
+  unknownSource: string;
+  unnamedResource: string;
+  unnamedAgent: string;
+}
+
+const DEFAULT_LABELS: CreateAgentFallbackLabels = {
+  tool: "Tools",
+  knowledge: "AgentKit Knowledge Base",
+  skillCenter: "AgentKit Skill Center",
+  unknownSource: "Unknown source",
+  unnamedResource: "Unnamed resource",
+  unnamedAgent: "Unnamed agent",
+};
+
+function sourceLabel(source: string, labels: CreateAgentFallbackLabels): string {
+  if (source === "veadk_builtin_tools") return labels.tool;
+  if (source === "agentkit_knowledge") return labels.knowledge;
   if (source.startsWith("skill_hub:")) return `Skill Hub ${source.slice(10)}`;
-  if (source.startsWith("skill_space:")) return `AgentKit 技能中心 ${source.slice(12)}`;
-  return source || "未知来源";
+  if (source.startsWith("skill_space:")) return `${labels.skillCenter} ${source.slice(12)}`;
+  return source || labels.unknownSource;
 }
 
 function sourceCategory(source: string): ResourceCategory {
@@ -159,7 +177,10 @@ function sourceCategory(source: string): ResourceCategory {
   return "skill_space";
 }
 
-export function parseCollectedResources(response: unknown): CollectedResourcesView {
+export function parseCollectedResources(
+  response: unknown,
+  labels: CreateAgentFallbackLabels = DEFAULT_LABELS,
+): CollectedResourcesView {
   const payload = unwrapPayload(response);
   const capabilities = asRecord(payload.capabilities) ?? {};
   const resources = asArray(payload.resources).flatMap((value) => {
@@ -172,7 +193,7 @@ export function parseCollectedResources(response: unknown): CollectedResourcesVi
       ref: asString(resource.ref),
       kind,
       category: resourceCategory(resource),
-      name: asString(resource.name) || asString(resource.ref) || "未命名资源",
+      name: asString(resource.name) || asString(resource.ref) || labels.unnamedResource,
       description: asString(resource.description),
       source: asString(resource.source),
       version: asString(resource.version),
@@ -189,7 +210,7 @@ export function parseCollectedResources(response: unknown): CollectedResourcesVi
     return [{
       source: name,
       category: sourceCategory(name),
-      label: sourceLabel(name),
+      label: sourceLabel(name, labels),
       status,
       count: asNumber(source.count),
       message: asString(source.message),
@@ -226,7 +247,11 @@ export function filterCollectedResourcesByCategory(
   };
 }
 
-export function parseCreatedAgents(args: unknown, response: unknown): CreatedAgentsView {
+export function parseCreatedAgents(
+  args: unknown,
+  response: unknown,
+  labels: CreateAgentFallbackLabels = DEFAULT_LABELS,
+): CreatedAgentsView {
   const input = unwrapPayload(args);
   const output = unwrapPayload(response);
   const results = new Map(
@@ -258,7 +283,7 @@ export function parseCreatedAgents(args: unknown, response: unknown): CreatedAge
     const subAgents = nodes
       .filter((node) => asString(node.id) !== rootId)
       .map((node) => ({
-        id: asString(node.id) || "未命名 Agent",
+        id: asString(node.id) || labels.unnamedAgent,
         type: asString(node.type) || "llm",
         description: asString(node.description),
       } satisfies CreatedSubAgentView));

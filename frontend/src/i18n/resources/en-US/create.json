@@ -1,0 +1,924 @@
+{
+  "common": {
+    "back": "Back",
+    "cancel": "Cancel",
+    "deploy": "Deploy",
+    "delete": "Delete",
+    "loading": "Loading…",
+    "next": "Next",
+    "notSupported": "Not supported",
+    "previous": "Previous",
+    "required": "Required",
+    "retry": "Retry",
+    "actions": "Actions",
+    "value": "Value",
+    "disabled": "Off",
+    "enabled": "Enabled",
+    "none": "None",
+    "close": "Close",
+    "name": "Name",
+    "description": "Description",
+    "send": "Send"
+  },
+  "yaml": {
+    "heading": "VeADK agent structure configuration",
+    "importHint": "Reload this file from Import YAML on the Create Agent page."
+  },
+  "validation": {
+    "agentName": {
+      "required": "Name is required",
+      "reserved": "user is reserved by Google ADK. Choose another name.",
+      "characters": "Start with a letter or underscore and use only letters, numbers, and underscores"
+    },
+    "runtimeName": {
+      "required": "Runtime name is required",
+      "characters": "Runtime name can contain only letters, numbers, underscores, and hyphens",
+      "length": "Runtime name must be 4–64 characters"
+    }
+  },
+  "defaults": {
+    "description": "A VeADK-powered assistant that understands user intent and uses the right tools to complete tasks.",
+    "instruction": "You are a professional and reliable assistant.\n\nYour goal is to understand the user's request accurately and provide clear, concise, and useful answers.\n\nGuidelines:\n- Ask clarifying questions when information is missing. Do not invent facts.\n- Use available tools when appropriate and explain key conclusions.\n- Maintain a polite, professional tone."
+  },
+  "helpers": {
+    "requestFailed": "Request failed ({{status}}){{detail}}",
+    "a2aSpaces": {
+      "credentialsMissing": "The server does not have cloud provider credentials configured, so AgentKit agent centers are unavailable",
+      "loginRequired": "Sign in to access AgentKit agent centers"
+    },
+    "vikingKnowledge": {
+      "credentialsMissing": "The server does not have cloud provider credentials configured, so VikingDB knowledge bases are unavailable",
+      "loginRequired": "Sign in to access VikingDB knowledge bases"
+    },
+    "vikingMemory": {
+      "credentialsMissing": "The server does not have cloud provider credentials configured, so VikingDB memory stores are unavailable",
+      "loginRequired": "Sign in to access VikingDB memory stores"
+    },
+    "mcpGateway": {
+      "missingHttpTool": "Go back to Add MCP tool and add at least one HTTP MCP service. MCP resilience does not support stdio services.",
+      "missingUrl": "An HTTP MCP tool is missing a valid service URL. Go back to Add MCP tool and complete it before publishing."
+    },
+    "customModel": {
+      "fallbackName": "Custom model",
+      "apiKeyLabel": "{{name}} model API Key"
+    },
+    "deploymentEnv": {
+      "serverInjected": "Provided by the server",
+      "selectedApiKeyPlaceholder": "Provided by the selected API Key",
+      "mcpInjectedComment": "Provided by the added MCP tools",
+      "restoredPlaceholder": "Securely restored by the Studio server",
+      "generatedMcpPlaceholder": "Generated from the added HTTP MCP tools",
+      "restoredHelp": "When updating, the Studio server merges MCP addresses and authentication without returning existing secrets to the browser.",
+      "mergedMcpHelp": "The Studio server merges MCP addresses and optional authentication without returning existing secrets to the browser.",
+      "listSeparator": ", ",
+      "requirementHint": "Required by the following optimizations: {{labels}}.",
+      "requiredBy": "Required by the following optimizations: {{labels}}. Enter {{key}}.",
+      "required": "Enter {{label}} ({{key}}).",
+      "invalidJson": "Invalid JSON format"
+    },
+    "drafts": {
+      "unsupportedVersion": "This local draft version is not supported. Upgrade Studio and try again.",
+      "invalidFormat": "The local draft data is invalid.",
+      "readFailed": "Could not read local drafts. The browser data may be corrupted.",
+      "quotaExceeded": "Browser storage is full, so the draft was not saved. Delete unused drafts or clear this site's storage, then try again.",
+      "writeRejected": "The browser blocked saving this draft. Check the site's storage permissions and try again."
+    },
+    "skills": {
+      "searchFailed": "Search failed ({{status}})",
+      "downloadFailed": "Skill download failed ({{status}})",
+      "agentKitRequestFailed": "AgentKit Skills request failed",
+      "missingManifest": "{{location}} is missing SKILL.md",
+      "invalidParentPath": "{{location}} contains an invalid parent path (..): {{path}}",
+      "invalidPath": "{{location}} contains an invalid path: {{path}}",
+      "localDescription": "Local skill",
+      "folderSource": "Folder",
+      "noManifest": "No SKILL.md was found in {{location}}"
+    },
+    "zip": {
+      "invalid": "Invalid zip: EOCD was not found",
+      "tooManyFiles": "A zip file cannot contain more than {{count}} files",
+      "tooLarge": "The extracted zip content is too large"
+    }
+  },
+  "intelligentDeployment": {
+    "back": "Back to development session",
+    "runtimeName": "Runtime name",
+    "runtimeNameExists": "This Runtime name already exists. Choose another name.",
+    "checkingRuntimeName": "Checking Runtime name",
+    "verifiedSource": "Verified source",
+    "deployableSource": "Deployable source",
+    "verifiedByCodex": "Verified by Codex in the cloud",
+    "entryPoint": "Entry point",
+    "files": "Files",
+    "artifact": "Artifact",
+    "validationReport": "Validation report",
+    "verifiedHint": "The server materializes source from the verified artifact. Browser files cannot replace it.",
+    "unverifiedHint": "The server securely materialized the source. Confirm the Runtime configuration before deploying.",
+    "env": {
+      "requiredPlaceholder": "Enter {{key}}",
+      "optionalPlaceholder": "Optional: {{key}}"
+    }
+  },
+  "codePackage": {
+    "name": "Code package",
+    "back": "Back to creation methods",
+    "reading": "Reading the code package",
+    "readingEllipsis": "Reading the code package…",
+    "uploadFirst": "Upload a code package first",
+    "uploadAriaLabel": "Code package upload",
+    "upload": "Upload code package",
+    "reupload": "Upload a different code package",
+    "uploadPrompt": "Upload a code package",
+    "filesRecognized": "{{count}} files found. Select this area to upload a different package.",
+    "dropHint": "Select or drop a .zip file up to 50 MB. Use app.py or declare an entry point in agentkit.yaml.",
+    "viewFiles": "View files",
+    "chooseFile": "Choose code package",
+    "errors": {
+      "invalidFormat": "Choose a .zip code package.",
+      "tooLarge": "The code package must be 50 MB or smaller.",
+      "invalidPath": "The archive contains an invalid path: {{name}}",
+      "empty": "The archive does not contain any deployable files.",
+      "tooManyFiles": "A code package cannot contain more than {{count}} files.",
+      "duplicateFile": "The code package contains a duplicate file: {{path}}",
+      "manifestParse": "Could not parse agentkit.yaml: {{detail}}",
+      "manifestRoot": "The root of agentkit.yaml must be an object.",
+      "manifestCommon": "common in agentkit.yaml must be an object.",
+      "entryPointType": "common.entry_point in agentkit.yaml must be a file path.",
+      "entryPointInvalid": "common.entry_point in agentkit.yaml is not a valid file path.",
+      "entryPointMissing": "The entry point declared in agentkit.yaml is missing from the code package: {{entryPoint}}",
+      "defaultEntryPointMissing": "The code package root must contain app.py, or common.entry_point in agentkit.yaml must declare an existing entry point."
+    }
+  },
+  "buildCanvas": {
+    "label": "Agent execution canvas",
+    "readOnlyLabel": "Read-only agent execution canvas",
+    "minimapLabel": "Execution flow minimap",
+    "controls": {
+      "ariaLabel": "Execution flow controls",
+      "zoomIn": "Zoom in",
+      "zoomOut": "Zoom out",
+      "fitView": "Fit view"
+    },
+    "rootAgent": "Main agent",
+    "unnamedStep": "Unnamed step",
+    "terminals": { "input": "User request", "output": "Final response" },
+    "edges": { "then": "Then", "continueLoop": "Continue loop", "call": "Call" },
+    "patterns": {
+      "llm": { "label": "Agent", "description": "Understand a task and complete one specific job" },
+      "sequential": { "label": "Sequential", "description": "Run internal steps one after another" },
+      "parallel": { "label": "Parallel", "description": "Run internal steps together, then combine their results" },
+      "loop": { "label": "Loop", "description": "Repeat internal steps until the stop condition is met" },
+      "a2a": { "label": "Remote agent", "description": "Call an existing remote agent" }
+    },
+    "actions": {
+      "insertHere": "Insert a step here",
+      "deleteNamed": "Delete {{name}}",
+      "deleteNode": "Delete node",
+      "addSubagent": "Add subagent",
+      "addParallelStep": "Add a parallel step",
+      "addLoopStep": "Add a loop step",
+      "addNextStep": "Add next step",
+      "addFirst": "Add at the beginning",
+      "addLast": "Add at the end"
+    }
+  },
+  "intelligent": {
+    "title": "Intelligent mode",
+    "subtitle": "Describe your goal and Codex will plan, build, debug, and temporarily validate the agent in a sandbox.",
+    "model": {
+      "label": "Model",
+      "placeholder": "Select a model",
+      "retiring": "Retiring soon",
+      "currentConfiguration": "Current configuration",
+      "loadError": "Failed to load models"
+    },
+    "availability": {
+      "checking": "Checking intelligent development availability…",
+      "unavailable": "Intelligent mode is currently unavailable. Go back and try again."
+    },
+    "goal": {
+      "title": "Start with a goal",
+      "continueTitle": "Continue improving the project",
+      "hint": "Describe the problem your agent should solve. We will ask about any details that could affect the result.",
+      "continueHint": "Describe what you want to change. The result will be saved as a new version.",
+      "basedOn": "Based on",
+      "clearSelection": "Clear selection",
+      "label": "Goal",
+      "optimizationLabel": "Optimization goal",
+      "placeholder": "For example: Build an agent that reads sales data, creates weekly reports, and validates the output format",
+      "optimizationPlaceholder": "For example: Cite data sources and ask the user when information is incomplete"
+    },
+    "actions": {
+      "preparing": "Preparing…",
+      "build": "Start building",
+      "optimize": "Start optimizing"
+    },
+    "preparation": {
+      "accepted": "Goal received. Implementation is starting now.",
+      "preparing": "Creating the task environment…",
+      "starting": "Environment ready. Starting Codex…",
+      "next": "Next, Codex will plan the approach, then build, run, and validate the agent."
+    }
+  },
+  "projectLibrary": {
+    "title": "Saved projects",
+    "description": "Continue improving an existing version, or view, download, and deploy its source.",
+    "refresh": "Refresh projects",
+    "checkingStorage": "Checking project storage…",
+    "unavailableTitle": "Projects are temporarily unavailable",
+    "storageCheckError": "Could not confirm project storage status. Try again shortly.",
+    "storageNotConfigured": "Project storage is not configured.",
+    "loadingMigrated": "Loading migrated projects…",
+    "loadingSaved": "Loading saved projects…",
+    "loadingVersions": "Loading project versions…",
+    "unknownTime": "Unknown time",
+    "sourceDownloaded": "Source downloaded.",
+    "projectSummary_one": "{{count}} version · Updated {{time}}",
+    "projectSummary_other": "{{count}} versions · Updated {{time}}",
+    "versionSummary_one": "{{time}} · {{count}} file",
+    "versionSummary_other": "{{time}} · {{count}} files",
+    "noVersionDescription": "No version description",
+    "latestVersion": "Latest version",
+    "verified": "Verified",
+    "pendingVerification": "Needs review",
+    "viewSource": "View source",
+    "download": "Download",
+    "downloading": "Downloading…",
+    "optimize": "Optimize",
+    "optimizeUnavailable": "Optimize, not supported",
+    "errors": {
+      "projects": "Could not load saved projects.",
+      "source": "Could not load project source.",
+      "versions": "Could not load project versions.",
+      "download": "Could not download the source.",
+      "prepareDeployment": "Could not prepare the source for deployment.",
+      "deleteVersion": "Could not delete the project version.",
+      "migrated": "Could not load migrated projects",
+      "saved": "Could not load saved projects"
+    },
+    "empty": {
+      "migratedTitle": "No migrated projects yet",
+      "savedTitle": "No saved projects yet",
+      "migratedDescription": "Source will be saved here after your first migration.",
+      "savedDescription": "Source will be saved here after your first build.",
+      "noVersions": "This project has no available versions."
+    },
+    "compare": {
+      "selected": "{{count}}/2 selected",
+      "selectedLabel": "Selected",
+      "select": "Select",
+      "view": "View comparison",
+      "start": "Compare versions"
+    },
+    "delete": {
+      "title": "Delete this version?",
+      "onlyVersion": "“{{name}}” has only one version. Deleting it will also remove the project. This cannot be undone.",
+      "description": "This version's source and validation records will be permanently deleted. Other versions are not affected.",
+      "confirm": "Delete version"
+    }
+  },
+  "modePicker": {
+    "title": "Choose how to create",
+    "subtitle": "Build your agent with the workflow that fits your needs",
+    "features": "Features",
+    "quick": {
+      "title": "Quick mode",
+      "description": "Delegate tasks to dynamically created subagents",
+      "features": {
+        "dynamicSubagents": "Dynamic subagents",
+        "autonomousPlanning": "Autonomous planning",
+        "collaboration": "Multi-agent collaboration",
+        "summary": "Automatic result summaries",
+        "skills": "Skills on demand",
+        "trace": "Traceable task execution"
+      }
+    },
+    "traditional": {
+      "title": "Advanced mode",
+      "description": "Customize your agent structure in detail",
+      "features": {
+        "visualConfig": "Visual configuration",
+        "migration": "Existing agent migration",
+        "debugging": "Live debugging",
+        "optimization": "Optional optimization",
+        "parameters": "Fine-grained controls"
+      }
+    }
+  },
+  "promptEditor": {
+    "placeholder": "Enter a system prompt. Type ## followed by a space to add a level-two heading…",
+    "toolbar": {
+      "undo": "Undo {{shortcut}}",
+      "redo": "Redo {{shortcut}}",
+      "paragraph": "Paragraph",
+      "quote": "Quote",
+      "heading": "Heading {{level}}",
+      "selectBlockType": "Select text style",
+      "blockType": "Text style",
+      "bold": "Bold",
+      "removeBold": "Remove bold",
+      "italic": "Italic",
+      "removeItalic": "Remove italic",
+      "bulletedList": "Bulleted list",
+      "numberedList": "Numbered list"
+    }
+  },
+  "skills": {
+    "local": {
+      "duplicatesSkipped": "Skipped duplicate skills: {{names}}",
+      "invalidDrop": "Drop a folder containing SKILL.md or a .zip file",
+      "readError": "Could not read the files: {{detail}}",
+      "dropLabel": "Drop a folder or ZIP file to detect skills automatically",
+      "hint": "Each skill must contain a SKILL.md file. Directories can contain multiple skills.",
+      "reading": "Reading files…",
+      "fileCount": "Local · {{count}} files"
+    },
+    "hub": {
+      "searchError": "Search failed. Try again shortly.",
+      "searchPlaceholder": "Search Volcano Find Skill, such as data analysis or PDF",
+      "search": "Search",
+      "searching": "Searching…",
+      "noResults": "No matching skills found. Try another keyword.",
+      "hint": "Search Volcano Find Skill by keyword. Selected skills are downloaded to the skills/ directory when the project is generated."
+    },
+    "space": {
+      "loadError": "Failed to load",
+      "loadingSpaces": "Loading AgentKit Skills centers…",
+      "noSpaces": "This account has no AgentKit Skills centers.",
+      "selectSpace": "Select an AgentKit Skills center",
+      "openConsole": "Open in the Volcano Engine console",
+      "loadingSkills": "Loading skills…",
+      "noSkills": "This AgentKit Skills center has no skills."
+    }
+  },
+  "workflow": {
+    "unnamedNode": "Unnamed node",
+    "editInstruction": "Select to edit instructions…",
+    "controls": {
+      "ariaLabel": "Workflow canvas controls",
+      "zoomIn": "Zoom in",
+      "zoomOut": "Zoom out",
+      "fitView": "Fit view"
+    },
+    "sections": {
+      "info": "Workflow information",
+      "execution": "Execution mode",
+      "nodes": "Nodes",
+      "nodeConfig": "Node configuration"
+    },
+    "types": {
+      "sequential": { "label": "Sequential", "description": "Run nodes one after another" },
+      "parallel": { "label": "Parallel", "description": "Run nodes at the same time" },
+      "loop": { "label": "Loop", "description": "Run nodes repeatedly" }
+    },
+    "placeholders": {
+      "description": "Describe what this workflow does…",
+      "agentDescription": "Describe what this agent does…",
+      "instruction": "You are…"
+    },
+    "errors": {
+      "workflowNameUnique": "The workflow name must be unique among agent node names",
+      "agentNameUnique": "Agent names must be unique within this workflow"
+    },
+    "dragHint": "Drag onto the canvas, or use the button below",
+    "agentNode": "Agent node",
+    "addNode": "Add node",
+    "connectHint": "Drag between node handles to define the execution order.",
+    "create": "Create workflow",
+    "deleteNode": "Delete node",
+    "nameHelp": "Use only letters, numbers, and underscores. Names must be unique.",
+    "instruction": "Instructions",
+    "tools": "Tools (comma-separated)",
+    "nodeId": "Node ID",
+    "empty": {
+      "selectNode": "Select a node to edit its configuration",
+      "summary": "{{nodes}} nodes · {{edges}} connections"
+    }
+  },
+  "workbench": {
+    "ariaLabel": "Quick mode creation",
+    "progress": "Quick mode creation progress",
+    "steps": {
+      "agent": { "label": "Agent", "title": "Basic information", "description": "Set the agent's name, purpose, behavior, and capabilities" },
+      "environment": { "label": "Environment", "title": "Configure the environment", "description": "Choose the default environment or a custom environment you have built" },
+      "deployment": { "label": "Deployment", "title": "Deployment preferences", "description": "Configure AgentKit cloud settings" }
+    },
+    "model": {
+      "label": "Model",
+      "source": "Model source",
+      "name": "Model name",
+      "provider": "Provider",
+      "volcengineArk": "Volcano Ark",
+      "custom": "Custom",
+      "gateway": "Model gateway",
+      "comingSoon": "Coming soon",
+      "currentApiKey": "Current API Key",
+      "loadingApiKeys": "Loading API Keys",
+      "selectApiKey": "Select an API Key",
+      "searchApiKeys": "Search API Key names",
+      "noApiKeys": "No API Keys available",
+      "loadingModels": "Loading models",
+      "selectModel": "Select a model",
+      "searchModels": "Search by name, Model ID, or provider",
+      "noModels": "No models available",
+      "apiKeyPlaceholder": "Enter a model API Key",
+      "credentialsLoadError": "Failed to load model credentials",
+      "modelsLoadError": "Failed to load models"
+    },
+    "identity": {
+      "unnamedPool": "Unnamed user pool",
+      "currentPool": "{{value}} (current user pool)",
+      "userPool": "User pool",
+      "loading": "Loading user pools",
+      "placeholder": "Select a user pool",
+      "search": "Search user pools",
+      "empty": "This account has no Identity user pools",
+      "currentHint": "This Studio's login JWT will be forwarded to the Runtime",
+      "mismatchHint": "The selected user pool is not used by this Studio, so the Studio will not be able to call the Runtime after deployment",
+      "selectionHint": "The user pool used by this Studio is marked in the list"
+    },
+    "agent": {
+      "namePlaceholder": "Enter an agent name",
+      "descriptionPlaceholder": "Describe what this agent can do",
+      "prompt": "Prompt",
+      "promptPlaceholder": "Define the role, goals, and behavior boundaries",
+      "skills": "Skills",
+      "addSkill": "Add skills"
+    },
+    "validation": {
+      "descriptionRequired": "Enter a description",
+      "promptRequired": "Enter a prompt",
+      "modelRequired": "Select a model",
+      "instanceIntegers": "Minimum instances must be an integer of 0 or greater, and maximum instances must be an integer greater than 0",
+      "instanceOrder": "Minimum instances cannot exceed maximum instances",
+      "userPoolRequired": "Select a user pool for Runtime authentication"
+    },
+    "deployment": {
+      "runtimeName": "Runtime name",
+      "runtimeNameUpdateHint": "The existing Runtime name is preserved during updates",
+      "runtimeNameHint": "Use only letters, numbers, underscores, and hyphens",
+      "region": "Deployment region",
+      "authentication": "Authentication",
+      "apiKeyDescription": "Default: access with the Runtime API Key",
+      "userPoolDescription": "Use a JWT issued by an Identity user pool",
+      "sessionStorage": "Session storage",
+      "inMemoryStorage": "Temporary in-memory storage",
+      "backends": { "sqlite": "SQLite file", "mysql": "MySQL", "postgresql": "PostgreSQL" },
+      "instances": "Instance settings",
+      "minInstances": "Minimum instances",
+      "maxInstances": "Maximum instances",
+      "inMemoryHint": "To prevent session loss across instances, keep the Runtime at 1–1 instances",
+      "networkMode": "Network mode",
+      "network": { "public": "Public", "private": "Private", "both": "Public and private" },
+      "subnetIds": "Subnet IDs (optional, comma-separated)",
+      "sharedInternet": "Shared public egress in the VPC",
+      "sharedInternetHint": "Allow private Runtimes to access the public internet through shared egress",
+      "evaluationSets": "Evaluation sets",
+      "createEvaluationSets": "Create evaluation sets automatically",
+      "evaluationSetsHint": "Create Good Case and Bad Case evaluation sets after deployment",
+      "resources": "Resource configuration",
+      "complete": "Deployment complete",
+      "preparing": "Preparing deployment…"
+    },
+    "environmentVariables": {
+      "title": "Environment variables",
+      "add": "Add variable",
+      "nameAriaLabel": "Environment variable name",
+      "valueAriaLabel": "Value for {{name}}",
+      "deleteNamed": "Delete {{name}}"
+    },
+    "actions": {
+      "updateAgain": "Update again",
+      "deployAgain": "Deploy again",
+      "updateAndPublish": "Update and publish"
+    }
+  },
+  "traditional": {
+    "actions": {
+      "addSubagent": "Add subagent",
+      "clearRoot": "Clear main agent",
+      "clearRootConfirmation": "Clear all settings and subagents from the main agent? This cannot be undone."
+    },
+    "workspace": {
+      "progress": "Agent creation progress",
+      "modes": { "build": "Build", "validate": "Debug", "optimize": "Optimize", "environment": "Environment", "publish": "Publish" },
+      "titles": {
+        "build": "Customize your agent architecture",
+        "validate": "Debug your agent",
+        "optimize": "Choose optimizations for your agent",
+        "environment": "Configure the cloud environment",
+        "publish": "Prepare your agent for deployment"
+      }
+    },
+    "sections": {
+      "type": { "label": "Agent type", "hint": "Choose an agent type" },
+      "basic": { "label": "Basic information", "hint": "Name, description, and system prompt" },
+      "model": { "label": "Model", "hint": "Model and service (optional)" },
+      "tools": { "label": "Tools", "hint": "Callable capabilities" },
+      "skills": { "label": "Skills", "hint": "Declarative skills" },
+      "knowledge": { "label": "Knowledge base", "hint": "External knowledge retrieval" },
+      "memory": { "label": "Memory", "hint": "Short-term and long-term memory" },
+      "subagents": { "label": "Subagents", "hint": "Nested collaboration" },
+      "review": { "label": "Finish", "hint": "Preview and create" }
+    },
+    "agentTypes": {
+      "ariaLabel": "Agent type",
+      "remoteChildOnly": "Remote agents can only be used as child steps",
+      "llm": { "label": "Agent", "fullLabel": "LLM agent", "description": "Uses an LLM to complete tasks autonomously" },
+      "sequential": { "label": "Sequential", "fullLabel": "Sequential agent", "description": "Runs subagents one after another" },
+      "parallel": { "label": "Parallel", "fullLabel": "Parallel agent", "description": "Runs subagents in parallel, then combines their results" },
+      "loop": { "label": "Loop", "fullLabel": "Loop agent", "description": "Repeats subagents until the stop condition is met" },
+      "a2a": { "label": "Remote agent", "fullLabel": "Remote agent", "description": "Calls a remote agent through the A2A protocol" }
+    },
+    "basic": {
+      "agentName": "Agent name",
+      "name": "Name",
+      "agentDescription": "Agent description",
+      "descriptionPlaceholder": "Briefly describe what this agent does so your team can identify it…",
+      "nameHelp": "Follow Google ADK naming rules and keep the name unique in the execution flow.",
+      "rootDescriptionHelp": "The full description is preserved and converted to a Runtime-compatible single line during deployment.",
+      "descriptionHelp": "The description appears in agent lists and selectors.",
+      "orchestratorHelp": "This is a collaboration container and does not answer directly. Add task steps on the canvas and drag them to reorder.",
+      "maxIterations": "Maximum iterations",
+      "maxIterationsHelp": "The loop repeats its subagents until the condition is met or this limit is reached.",
+      "agentCenter": "AgentKit agent center",
+      "agentCenterHelp": "The remote agent's name, description, and capabilities come from the Agent Card returned by the center. The system discovers and attaches matching agents for each task.",
+      "moreOptions": "More options",
+      "systemPrompt": "System prompt",
+      "loadingMarkdown": "Loading Markdown editor…",
+      "markdownHelp": "Markdown shortcuts are supported. For example, type ## followed by a space to create a level-two heading.",
+      "unnamed": "Unnamed",
+      "unnamedAgent": "Unnamed agent"
+    },
+    "validation": {
+      "remoteRoot": "A remote agent can only be a subagent",
+      "missingRegistry": "Select an AgentKit agent center",
+      "name": {
+        "required": "Name is required",
+        "reserved": "user is reserved by Google ADK. Choose another name.",
+        "characters": "Start with a letter or underscore and use only letters, numbers, and underscores"
+      },
+      "duplicateName": "Agent names must be unique within this structure",
+      "missingDescription": "Description is required",
+      "mcpAuthRequired": "Confirm how to handle authentication after changing the MCP address",
+      "missingSubagent": "A subagent is required",
+      "missingPrompt": "System prompt is required",
+      "missingSubagentDetail": "Add at least one subagent to {{type}} before debugging or publishing.",
+      "problem": "{{name}}: {{problem}}"
+    },
+    "ai": {
+      "ariaLabel": "Fill agent configuration with AI",
+      "minimumLength": "Enter at least {{count}} characters.",
+      "replaceConfirmation": "The generated configuration will replace the current canvas and settings. Continue?",
+      "placeholder": "Describe your goal and use {{model}} to generate the configuration",
+      "generate": "Generate",
+      "generating": "Generating",
+      "success": "Configuration generated",
+      "regenerate": "Generate again",
+      "failed": "Generation failed"
+    },
+    "debug": {
+      "ariaLabel": "Agent debugging workspace",
+      "unavailable": "This backend does not currently support generated-agent debug runs.",
+      "baseline": "Baseline",
+      "comparison": "Variant {{count}}",
+      "selectModel": "Select a model",
+      "enterDescription": "Enter a description",
+      "enterPrompt": "Enter a system prompt",
+      "duplicateConfiguration": "Test configurations must be unique",
+      "starting": "Starting…",
+      "applyAndRestart": "Apply and restart",
+      "restart": "Restart",
+      "start": "Start environment",
+      "defaultModel": "Default model",
+      "testConfiguration": "Test configuration",
+      "deleteVariant": "Delete {{name}}",
+      "deleteVariantGroup": "Delete comparison variant",
+      "creatingEnvironment": "Creating the test environment…",
+      "configurationChanged": "The configuration changed. Restart the environment.",
+      "ready": "Environment ready",
+      "readyHint": "Send a message to compare agent responses.",
+      "startHint": "Complete the configuration, then start the environment.",
+      "viewTraceNamed": "View the trace for {{name}}",
+      "traceUnavailable": "Send a message to view its trace",
+      "trace": "Trace",
+      "useConfiguration": "Use this configuration",
+      "finishConfiguration": "Finish configuration",
+      "finishAndStart": "Finish and start",
+      "currentAgentModel": "Current agent model",
+      "configurationHint": "Changes apply only to this comparison. Select this configuration to continue to deployment.",
+      "messagePlaceholder": "Send a message to the running test environments…",
+      "startOneFirst": "Start at least one test environment first",
+      "addVariant": "Add variant",
+      "traceTitle": "Trace · {{name}}",
+      "leaveTitle": "Leave debugging?",
+      "leaveDescription": "The current environments will be removed when you leave. You can start new environments when you return.",
+      "cleaning": "Cleaning up…",
+      "confirmLeave": "Leave",
+      "closeLeaveConfirmation": "Close leave-debugging confirmation"
+    },
+    "optimization": {
+      "ariaLabel": "Agent optimization options",
+      "scenario": "Optimization scenario",
+      "components": "Optimization components",
+      "bytePlusUnavailable": "Harness Sidecar optimizations are not available for BytePlus accounts yet. Leave all optimizations unselected to continue; regular BytePlus agents are not affected.",
+      "releaseScenario": "Optimization scenario: {{profile}}",
+      "profiles": {
+        "default": { "label": "Custom", "description": "Choose components as needed. The Sidecar stays off when none are selected." },
+        "ops": { "label": "Operations", "description": "For operations diagnostics, databases, logs, and monitoring MCP servers." }
+      },
+      "groups": { "quality": "Improve response quality", "cost": "Reduce runtime cost", "stability": "Improve runtime stability" },
+      "options": {
+        "context_engine": { "label": "Context management", "description": "Manage context assembly, task anchoring, and context budgets." },
+        "compressor": { "label": "Context and result compression", "description": "Compress long context and large tool results to reduce token usage." },
+        "verifier": { "label": "Response verification and repair", "description": "Verify evidence and responses, then repair or alert on failure." },
+        "long_run_control": { "label": "Goal task control", "description": "Manage progress, continuation, and completion conditions for Goal tasks." },
+        "mcp_resilience": { "label": "MCP resilience", "description": "Manage connections, timeouts, empty results, large responses, and call budgets. Includes read-only SQL protection by default." }
+      }
+    },
+    "model": {
+      "label": "Model",
+      "source": "Model source",
+      "volcanoArk": "Volcano Ark",
+      "volcengineArk": "Volcano Ark",
+      "bytePlusModelArk": "BytePlus ModelArk",
+      "custom": "Custom",
+      "gateway": "Model gateway",
+      "comingSoon": "Coming soon",
+      "configuration": "Model configuration",
+      "name": "Model name",
+      "provider": "Provider",
+      "liteLlmProviders": "LiteLLM providers",
+      "apiKeyPlaceholder": "Enter the model API Key",
+      "available": "Available",
+      "retiring": "Retiring soon",
+      "notActivated": "Not activated",
+      "unavailable": "Unavailable",
+      "apiKeyLoadError": "Failed to load Ark API Keys",
+      "loadingApiKeys": "Loading API Keys…",
+      "selectApiKey": "Select an API Key",
+      "currentApiKey": "Current API Key",
+      "apiKeyList": "API Key list",
+      "searchApiKey": "Search API Keys",
+      "searchApiKeyName": "Search API Key names",
+      "noApiKeys": "No API Keys available",
+      "noMatchingApiKey": "No matching API Keys",
+      "loading": "Loading models…",
+      "loaded": "{{count}} models loaded",
+      "loadError": "Failed to load models",
+      "selectModel": "Select a model",
+      "selectProviderModel": "Select a provider model",
+      "providerModels": "Provider models",
+      "search": "Search models",
+      "searchPlaceholder": "Search by name, Model ID, or provider",
+      "noMatches": "No matching models",
+      "empty": "No models available",
+      "unknownStatus": "Unknown status",
+      "refresh": "Refresh",
+      "refreshing": "Refreshing…",
+      "activate": "Activate",
+      "activateAction": "Open activation",
+      "currentConfiguration": "Current configuration"
+    },
+    "tools": {
+      "builtIn": "Built-in tools",
+      "builtInHelp": "Select VeADK capabilities. Imports and required environment variables are added automatically.",
+      "codeExecution": "Code execution configuration",
+      "codeExecutionHelp": "Select the AgentKit code execution sandbox.",
+      "mcp": "MCP tools"
+    },
+    "catalog": {
+      "web_search": { "label": "Web search", "description": "Get real-time information with Volcengine Web Search." },
+      "parallel_web_search": { "label": "Parallel web search", "description": "Run multiple search queries in parallel and combine the results faster." },
+      "link_reader": { "label": "Link reader", "description": "Fetch and read the main content from a URL." },
+      "web_scraper": { "label": "Web scraper", "description": "Crawl webpages into structured data. Requires the Scraper service." },
+      "image_generate": { "label": "Image generation", "description": "Generate images from text with Doubao Seedream." },
+      "image_edit": { "label": "Image editing", "description": "Edit or transform images with Doubao SeedEdit." },
+      "video_generate": { "label": "Video generation", "description": "Generate videos from text or images with Doubao Seedance, including task status queries." },
+      "text_to_speech": { "label": "Text to speech (TTS)", "description": "Convert text to speech with Volcengine Speech." },
+      "run_code": { "label": "Code execution", "description": "Run code in a sandbox." },
+      "vesearch": { "label": "VeSearch", "description": "Search with Volcengine VeSearch. Requires a bot endpoint." },
+      "links": {
+        "console": "Console",
+        "documentation": "Documentation"
+      },
+      "env": {
+        "modelAgentName": { "comment": "Model name" },
+        "embeddingModelName": { "comment": "Embedding model required by memory and knowledge bases" },
+        "vikingMemoryProject": { "comment": "VikingDB memory project" },
+        "vikingMemoryRegion": { "comment": "VikingDB memory region" },
+        "vikingMemoryType": { "comment": "Memory types" },
+        "feishuAppId": { "comment": "Feishu app ID" },
+        "feishuAppSecret": { "comment": "Feishu app secret", "placeholder": "Enter the app secret" },
+        "registrySpaceId": { "comment": "AgentKit agent center", "placeholder": "Select an agent center" },
+        "registryTopK": { "comment": "Number of agents to retrieve" },
+        "registryRegion": { "comment": "AgentKit agent center region" },
+        "registryEndpoint": { "comment": "AgentKit agent center OpenAPI endpoint" },
+        "agentKitToolId": { "comment": "Code execution sandbox ID" },
+        "agentKitToolRegion": { "comment": "AgentKit Tools region" },
+        "openVikingUrl": { "comment": "OpenViking service URL" },
+        "openVikingMemoryUserId": { "comment": "Memory owner ID", "help": "The user segment in viking://user/<this value>/peers/<request user>/memories. Use it to isolate agents, tenants, or business scenarios. The default is default." },
+        "openVikingMemoryPolicy": { "comment": "Memory policy", "help": "Controls memory extraction and isolation. Leave it blank to use the official default policy." },
+        "openVikingKnowledgeUserId": { "comment": "Knowledge base owner ID", "help": "Used in the default path viking://user/<this value>/resources/<knowledge base index>/ when no resource directory is configured. The default is default." },
+        "openVikingTargetUri": { "comment": "Knowledge base resource directory", "help": "Leave blank to generate it from the KnowledgeBase index. When provided, this OpenViking resource directory takes precedence." },
+        "tlsServiceName": { "comment": "TLS topic_id. Leave blank to create one automatically" }
+      }
+    },
+    "backends": {
+      "shortTerm": {
+        "local": { "label": "In-memory", "description": "Stored in the process without persistence. Best for development and debugging." }, "sqlite": { "label": "SQLite file", "description": "Persist data to a local .db file." }, "mysql": { "label": "MySQL", "description": "Persist data to MySQL." }, "postgresql": { "label": "PostgreSQL", "description": "Persist data to PostgreSQL." }
+      },
+      "longTerm": {
+        "local": { "label": "Local vector store", "description": "In-process llama-index vector store." }, "opensearch": { "label": "OpenSearch", "description": "Vector retrieval with OpenSearch." }, "redis": { "label": "Redis", "description": "Vector retrieval with Redis." }, "viking": { "label": "VikingDB Memory", "description": "VikingDB memory with user profile support." }, "openviking": { "label": "OpenViking Memory", "description": "Long-term memory that stores and retrieves preferences, events, and entities per user." }, "mem0": { "label": "Mem0", "description": "Managed memory from Mem0." }
+      },
+      "knowledge": {
+        "viking": { "label": "VikingDB Knowledge", "description": "VikingDB knowledge base." }, "opensearch": { "label": "OpenSearch", "description": "Vector retrieval with OpenSearch." }, "context_search": { "label": "Context Search", "description": "Volcengine Context Search without embedding configuration." }, "openviking": { "label": "OpenViking Knowledge", "description": "OpenViking resource-directory knowledge base without embedding configuration." }
+      }
+    },
+    "exporters": {
+      "apmplus": { "label": "APMPlus", "description": "Volcengine APMPlus application performance monitoring." },
+      "cozeloop": { "label": "CozeLoop", "description": "Distributed tracing with CozeLoop." },
+      "tls": { "label": "TLS (Log Service)", "description": "Export logs to Volcengine TLS." }
+    },
+    "knowledge": {
+      "title": "Knowledge base",
+      "description": "Enable external knowledge retrieval (RAG) so the agent can answer from your data.",
+      "backend": "Knowledge base backend",
+      "vikingDatabase": "VikingDB knowledge base"
+    },
+    "memory": {
+      "shortTerm": "Short-term memory",
+      "shortTermDescription": "Store context for one session",
+      "shortTermBackend": "Short-term memory backend",
+      "longTerm": "Long-term memory",
+      "longTermDescription": "Store context across sessions, usually with vector retrieval",
+      "longTermBackend": "Long-term memory backend",
+      "vikingDatabase": "VikingDB memory",
+      "autoSave": "Save sessions to long-term memory automatically",
+      "autoSaveDescription": "Write session content to long-term memory when a session ends."
+    },
+    "mcp": {
+      "removeTool": "Remove MCP tool",
+      "namePlaceholder": "Name (optional)",
+      "urlPlaceholder": "MCP service URL",
+      "pathWarning": "This address has no path. Confirm that it is the complete MCP service URL.",
+      "configuredPlaceholder": "Authentication is stored securely",
+      "tokenPlaceholder": "Bearer token (optional)",
+      "changedUrlWarning": "The MCP address changed. Choose how to handle the stored authentication.",
+      "reuseCredential": "Keep using it",
+      "replaceCredential": "Replace authentication",
+      "noAuth": "Use no authentication",
+      "reuseHint": "The stored authentication will be reused when you publish.",
+      "changeToReplace": "Replace instead",
+      "credentialConfigured": "Studio securely stores the authentication.",
+      "removeCredential": "Remove authentication",
+      "commandPlaceholder": "Command, such as npx",
+      "argsPlaceholder": "Arguments separated by spaces",
+      "stdioHint": "The stdio tool starts in the deployment environment. Make sure its command and dependencies are available.",
+      "addTool": "Add MCP tool"
+    },
+    "resources": {
+      "unnamedAgentCenter": "Unnamed agent center",
+      "unnamedKnowledgeBase": "Unnamed knowledge base",
+      "unnamedMemory": "Unnamed memory store",
+      "loadError": "Failed to load",
+      "loadingAgentCenters": "Loading agent centers…",
+      "agentCentersLoaded": "{{count}} agent centers loaded",
+      "noAgentCenters": "No agent centers available",
+      "noMatchingAgentCenters": "No matching agent centers",
+      "searchAgentKitCenter": "Search AgentKit agent centers",
+      "searchNameOrId": "Search by name or ID",
+      "selectAgentCenter": "Select an agent center",
+      "selectAgentKitCenter": "Select an AgentKit agent center",
+      "selectedAgentCenter": "Selected agent center",
+      "agentKitCenter": "AgentKit agent center",
+      "refreshAgentCenters": "Refresh agent centers",
+      "knowledgeBaseList": "Knowledge base list",
+      "knowledgeBasePlaceholder": "Select a knowledge base",
+      "loadingKnowledgeBases": "Loading knowledge bases…",
+      "knowledgeBasesLoaded": "{{count}} knowledge bases loaded",
+      "noKnowledgeBases": "No knowledge bases available",
+      "noMatchingKnowledgeBases": "No matching knowledge bases",
+      "searchKnowledgeBase": "Search knowledge bases",
+      "selectKnowledgeBase": "Select a knowledge base",
+      "refreshKnowledgeBases": "Refresh knowledge bases",
+      "memoryList": "Memory store list",
+      "memoryPlaceholder": "Select a memory store",
+      "loadingMemories": "Loading memory stores…",
+      "memoriesLoaded": "{{count}} memory stores loaded",
+      "noMemories": "No memory stores available",
+      "noMatchingMemories": "No matching memory stores",
+      "searchMemory": "Search memory stores",
+      "selectMemory": "Select a memory store",
+      "refreshMemories": "Refresh memory stores"
+    },
+    "env": {
+      "noAdditionalParameters": "This backend needs no additional runtime parameters.",
+      "invalidJson": "Enter valid JSON.",
+      "helpAriaLabel": "Help for {{label}}: {{help}}",
+      "openOpenViking": "Open OpenViking {{label}}",
+      "valuePlaceholder": "Enter a value",
+      "openVikingIndex": "OpenViking resource index",
+      "openVikingIndexHelp": "Leave blank to generate an index from the agent name, such as my_agent_kb. Without DATABASE_OPENVIKING_TARGET_URI, the default URI is viking://user/{knowledge base owner ID, or default}/resources/{resource index}/. When DATABASE_OPENVIKING_TARGET_URI is set, that complete URI is used instead.",
+      "openVikingIndexAriaLabel": "OpenViking resource index help: {{help}}"
+    },
+    "deployment": {
+      "vpcRequired": "Enter a VPC ID when using VPC networking.",
+      "apiKeyRequired": "Select the API Key used by the model.",
+      "invalidEnvName": "Invalid environment variable name: {{key}}",
+      "requiredEnv": "{{name}}: enter this required environment variable",
+      "generatingConfiguration": "Generating deployment configuration",
+      "runtimeNameExists": "This Runtime name already exists. Choose another name and try again.",
+      "preparing": "Preparing deployment",
+      "complete": "Deployment complete",
+      "failed": "Deployment failed",
+      "updateAndPublish": "Update and publish",
+      "stages": { "build": "Build image", "deploy": "Deploy Runtime", "publish": "Publish service", "running": "Deploying" }
+    },
+    "publish": {
+      "generating": "Generating publish configuration",
+      "validating": "Validating the agent structure and preparing the deployment snapshot…"
+    }
+  },
+  "template": {
+    "presets": {
+      "support": {
+        "name": "Customer support assistant",
+        "description": "Answer questions around the clock using your knowledge base and conversation history, with consistent and considerate responses.",
+        "instruction": "You are a professional and patient customer support assistant. Always use a courteous, friendly tone. Base answers on the knowledge base whenever possible. When the available information is insufficient, say so clearly and ask for the details you need instead of inventing an answer. Keep responses concise and well structured, and provide steps when useful.",
+        "subagents": {}
+      },
+      "analyst": {
+        "name": "Data analyst",
+        "description": "Run code for statistics and visualization with tracing enabled, so every analysis is observable and reproducible.",
+        "instruction": "You are a rigorous data analyst. Clarify the objective and definitions before cleaning, analyzing, and visualizing data with executable code. Explain assumptions and methods at each step, support conclusions with key evidence, and identify possible bias or limitations.",
+        "subagents": {}
+      },
+      "translator": {
+        "name": "Translation assistant",
+        "description": "Translate between Chinese and English accurately and naturally while preserving tone and terminology.",
+        "instruction": "You are a professional translator fluent in Chinese and English. Preserve the meaning of the source while producing natural language for the target audience. Keep proper nouns and technical terminology accurate and reflect the original tone and style. Return only the translation unless the user asks for an explanation.",
+        "subagents": {}
+      },
+      "coder": {
+        "name": "Coding assistant",
+        "description": "Write, debug, and refactor code, validate it by running tests, and produce clear, maintainable implementations.",
+        "instruction": "You are a senior software engineer. Write correct, clear, maintainable code that follows the conventions and best practices of the target language. When uncertain, run the code to validate the implementation, cover important edge cases, and add concise comments for complex logic.",
+        "subagents": {}
+      },
+      "researcher": {
+        "name": "Researcher",
+        "description": "Search primary sources online and combine them with knowledge and long-term memory to produce evidence-backed findings.",
+        "instruction": "You are a rigorous researcher. Break each question into key subproblems, collect multiple credible primary sources through web search, and cross-check the evidence before drawing conclusions. Cite sources, state uncertainty, distinguish facts from inference, and avoid overgeneralization.",
+        "subagents": {}
+      },
+      "research-team": {
+        "name": "Multi-agent research team",
+        "description": "Coordinate a researcher, analyst, and writer to produce an end-to-end research report.",
+        "instruction": "You coordinate a research team. Break down the user's research task, delegate search, analysis, and writing to the appropriate subagents, synthesize their work, and deliver a clear, evidence-backed report.",
+        "subagents": {
+          "0": {
+            "name": "Researcher",
+            "description": "Collect primary sources and data related to the topic online.",
+            "instruction": "You are the team's researcher. Find multiple credible sources about the topic, organize the key facts, data, and original citations, and hand them to the analyst without adding unsupported conclusions."
+          },
+          "1": {
+            "name": "Analyst",
+            "description": "Cross-check and synthesize the collected material.",
+            "instruction": "You are the team's analyst. Cross-check, compare, and synthesize the research material. Extract insights, identify contradictions and uncertainty, and produce a structured set of findings."
+          },
+          "2": {
+            "name": "Writer",
+            "description": "Turn the analysis into a clear report with reliable citations.",
+            "instruction": "You are the team's writer. Turn the analyst's findings into a clear, well-written report with consistent citations, ensuring every conclusion can be traced to a source."
+          }
+        }
+      }
+    },
+    "tags": {
+      "tools": "Tools",
+      "memory": "Memory",
+      "knowledgeBase": "Knowledge base",
+      "tracing": "Tracing",
+      "subagents": "{{count}} subagents"
+    },
+    "gallery": {
+      "title": "Create from a template",
+      "subtitle": "Choose a prebuilt agent template and customize it to fit your needs."
+    },
+    "detail": {
+      "back": "Back to templates",
+      "name": "Name",
+      "systemPrompt": "System prompt",
+      "model": "Model",
+      "tools": "Tools",
+      "memory": "Memory",
+      "knowledgeBase": "Knowledge base",
+      "tracing": "Tracing",
+      "subagents": "Subagents ({{count}})",
+      "create": "Create from this template",
+      "shortTermMemory": "Short-term",
+      "longTermMemory": "Long-term"
+    }
+  }
+}

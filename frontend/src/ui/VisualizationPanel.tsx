@@ -1,5 +1,6 @@
 import { memo, useState, type ReactNode } from "react";
 import { SegmentedControl } from "@openai/apps-sdk-ui/components/SegmentedControl";
+import { useTranslation } from "react-i18next";
 
 type VisualizationView = "preview" | "code";
 
@@ -18,11 +19,12 @@ function VisualizationPanelImpl({
   source,
   streaming = false,
 }: VisualizationPanelProps) {
+  const { t } = useTranslation("conversation");
   const [view, setView] = useState<VisualizationView>("preview");
   const activeView: VisualizationView = streaming ? "code" : view;
 
   return (
-    <section className="visualization-card" aria-label={`${label} 图表`}>
+    <section className="visualization-card" aria-label={t("visualization.cardAria", { label })}>
       <div className="visualization-card__toolbar">
         <SegmentedControl
           className="visualization-card__tabs"
@@ -30,16 +32,16 @@ function VisualizationPanelImpl({
           size="sm"
           gutterSize="sm"
           pill={false}
-          aria-label={`${label} 显示方式`}
+          aria-label={t("visualization.viewAria", { label })}
           onChange={(nextView) => {
             if (!streaming) setView(nextView);
           }}
         >
           <SegmentedControl.Option value="preview" disabled={streaming}>
-            预览
+            {t("visualization.preview")}
           </SegmentedControl.Option>
           <SegmentedControl.Option value="code">
-            代码
+            {t("visualization.code")}
           </SegmentedControl.Option>
         </SegmentedControl>
       </div>

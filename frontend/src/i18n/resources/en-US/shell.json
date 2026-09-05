@@ -1,0 +1,37 @@
+{
+  "login": {
+    "retry": "Try again",
+    "signInToContinue": "Sign in to continue",
+    "signInWith": "Sign in with {{provider}}",
+    "enterUsername": "Enter a username to get started",
+    "usernamePlaceholder": "Username (letters and numbers, up to 16 characters)",
+    "enter": "Continue",
+    "usernameInvalid": "Use letters and numbers only, up to 16 characters.",
+    "identityProvider": {
+      "volcengine": "Volcengine Identity",
+      "byteplus": "BytePlus Identity"
+    },
+    "powered": {
+      "volcengine": "Volcengine AgentKit provides enterprise-grade Agent solutions",
+      "byteplus": "BytePlus AgentKit provides enterprise-grade Agent solutions"
+    },
+    "legalPrefix": "By continuing, you acknowledge that you have read and agree to the AgentKit",
+    "terms": "Product and Service Terms",
+    "copyright": "© {{year}} VeADK. All rights reserved."
+  },
+  "authExpired": {
+    "title": "Your session has expired",
+    "description": "Your current edits are preserved. The previous action will continue after you sign in again.",
+    "waiting": "Waiting for sign-in…",
+    "signInAgain": "Sign in again"
+  },
+  "navbar": {
+    "breadcrumbs": "Breadcrumbs",
+    "selectAgent": "Select Agent",
+    "switchAgent": "Switch Agent"
+  },
+  "confirm": {
+    "cancel": "Cancel",
+    "close": "Close confirmation dialog"
+  }
+}

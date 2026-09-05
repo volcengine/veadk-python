@@ -43,12 +43,10 @@ test("exposes a GitHub CICD pipeline client without persisting tokens", () => {
 test("renders the GitHub CICD panel from the project deployment sidebar", () => {
   assert.match(projectPreviewSource, /GithubCicdPanel/);
   assert.match(projectPreviewSource, /cloudProvider=\{cloudProvider\}/);
-  assert.match(panelSource, /GitHub 代码同步/);
-  assert.match(panelSource, /挂载持续交付/);
-  assert.doesNotMatch(panelSource, /<span>GitHub 持续交付<\/span>/);
+  assert.match(panelSource, /githubCicd\.sourceSync/);
+  assert.match(panelSource, /githubCicd\.mountDelivery/);
   assert.doesNotMatch(panelSource, /disabled\s+title="下一阶段接入 GitHub Actions 持续交付"/);
   assert.match(panelSource, /createGithubDeliveryCicdPipeline/);
-  assert.match(panelSource, /挂载持续交付/);
   assert.match(panelSource, /workflowPath/);
   assert.match(panelSource, /githubUrl/);
   assert.match(panelSource, /githubToken/);
@@ -56,7 +54,7 @@ test("renders the GitHub CICD panel from the project deployment sidebar", () => 
   assert.match(panelSource, /volcengineAccessKey/);
   assert.match(panelSource, /volcengineSecretKey/);
   assert.match(panelSource, /credentialProviderLabel/);
-  assert.match(panelSource, /cloudProvider === "byteplus" \? "BytePlus" : "火山"/);
+  assert.match(panelSource, /cloudProvider === "byteplus" \? "BytePlus" : t\("githubCicd\.volcengine"\)/);
   assert.match(projectPreviewSource, /pendingGithubCicd\.volcengineAccessKey/);
   assert.match(projectPreviewSource, /pendingGithubCicd\.volcengineSecretKey/);
   assert.match(projectPreviewSource, /pendingGithubCicd\.cloudProvider/);
@@ -65,15 +63,15 @@ test("renders the GitHub CICD panel from the project deployment sidebar", () => 
   assert.doesNotMatch(clientSource, /localStorage[\s\S]{0,160}volcengineAccessKey/);
   assert.doesNotMatch(clientSource, /sessionStorage[\s\S]{0,160}volcengineAccessKey/);
   assert.match(panelSource, /onPendingCicdChange/);
-  assert.match(panelSource, /部署时挂载持续交付/);
-  assert.match(panelSource, /直接 push 到目标分支/);
-  assert.match(panelSource, /同步代码/);
+  assert.match(panelSource, /githubCicd\.mountOnDeploy/);
+  assert.match(panelSource, /githubCicd\.sourceSyncHint/);
+  assert.match(panelSource, /githubCicd\.syncCode/);
   assert.doesNotMatch(panelSource, /创建 PR/);
   assert.doesNotMatch(panelSource, /更新 PR/);
-  assert.match(panelSource, /首次部署成功后初始化目标分支/);
+  assert.match(panelSource, /githubCicd\.initialDeliveryHint/);
   assert.doesNotMatch(panelSource, /pendingResult/);
   assert.doesNotMatch(panelSource, /status:\s*"pending"/);
-  assert.match(panelSource, /已选择，部署时挂载/);
+  assert.match(panelSource, /githubCicd\.selectedForDeployment/);
   assert.doesNotMatch(panelSource, /挂载持续交付需要先部署 Runtime/);
   assert.match(panelSource, /result\?\.github/);
   assert.match(panelSource, /bindGithubCicdRuntime/);
@@ -85,8 +83,8 @@ test("renders the GitHub CICD panel from the project deployment sidebar", () => 
   assert.match(projectPreviewSource, /cloudProvider:\s*pendingGithubCicd\.cloudProvider/);
   assert.match(projectPreviewSource, /volcengineAccessKey:\s*pendingGithubCicd\.volcengineAccessKey/);
   assert.match(projectPreviewSource, /volcengineSecretKey:\s*pendingGithubCicd\.volcengineSecretKey/);
-  assert.match(projectPreviewSource, /GitHub 持续交付已初始化目标分支/);
-  assert.match(projectPreviewSource, /代码已提交到 GitHub，GitHub Actions 正在更新同一个 Runtime/);
+  assert.match(projectPreviewSource, /projectPreview\.task\.githubBranchInitialized/);
+  assert.match(projectPreviewSource, /projectPreview\.task\.githubUpdatingRuntime/);
   assert.doesNotMatch(projectPreviewSource, /GitHub 持续交付已写入初始化 PR/);
   assert.match(projectPreviewSource, /showSetup=\{!isRuntimeUpdate\}/);
 });

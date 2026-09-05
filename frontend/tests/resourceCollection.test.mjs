@@ -59,7 +59,7 @@ test("resource list pages compose the same shared layout and card primitives", (
 
 test("resource list pages share the same centered initial loading state", () => {
   assert.match(resourceSource, /export function ResourceLoadingState/);
-  assert.match(resourceSource, /资源加载中，请稍候/);
+  assert.match(resourceSource, /t\("resourceCollection\.loading"\)/);
   assert.match(resourceSource, /<LoadingIndicator size=\{16\} \/>/);
   assert.match(
     resourceStyles,
@@ -197,7 +197,7 @@ test("shared reveal actions expose domain-specific icons without forking card ma
   assert.match(resourceSource, /icon === "plus"[\s\S]*?<PlusLg18pxAdd/);
   assert.match(sources.sharedCard, /icon=\{action\.icon\}/);
   assert.match(sources.environments, /icon: "play"/);
-  assert.match(sources.environments, /title: "构建"/);
-  assert.match(sources.skills, /label: "添加技能", icon: "plus"/);
-  assert.match(sources.knowledge, /label: invalidProviderKey[\s\S]*?icon: "plus"/);
+  assert.match(sources.environments, /title: t\("environmentCenter\.build"\)/);
+  assert.match(sources.skills, /label: t\("skillCenter\.addSkill"\), icon: "plus"/);
+  assert.match(sources.knowledge, /label: invalidProviderKey[\s\S]*?t\("knowledge\.addData"\)[\s\S]*?icon: "plus"/);
 });

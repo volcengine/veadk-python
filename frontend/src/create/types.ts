@@ -43,6 +43,7 @@ export interface McpTool {
 // makes them available to external importers of "./types" unchanged.
 import type { SelectedSkill, SkillHit, SkillSource } from "./skills/types";
 import { DEFAULT_KB_BACKEND } from "./veadkCatalog";
+import { createT } from "./i18n";
 import {
   defaultModelName,
   VOLCENGINE_DEFAULT_MODEL_NAME,
@@ -199,21 +200,12 @@ export interface AgentDraft {
 // when the custom wizard opens. `DEFAULT_MODEL_NAME` mirrors veadk's
 // DEFAULT_MODEL_AGENT_NAME (veadk/consts.py).
 export const DEFAULT_MODEL_NAME = VOLCENGINE_DEFAULT_MODEL_NAME;
-const DEFAULT_DESCRIPTION =
-  "一个基于 VeADK 构建的智能助手，理解用户意图并调用合适的工具完成任务。";
-const DEFAULT_INSTRUCTION =
-  "你是一个专业、可靠的智能助手。\n\n" +
-  "你的目标是准确理解用户的需求，并给出条理清晰、简洁有用的回答。\n\n" +
-  "约束：\n" +
-  "- 信息不足时主动提问澄清，不要臆造事实。\n" +
-  "- 需要时合理调用可用的工具，并说明关键结论。\n" +
-  "- 保持礼貌、专业的语气。";
 
 export function emptyDraft(cloudProvider: CloudProvider = "volcengine"): AgentDraft {
   return {
     name: "",
-    description: DEFAULT_DESCRIPTION,
-    instruction: DEFAULT_INSTRUCTION,
+    description: createT("defaults.description"),
+    instruction: createT("defaults.instruction"),
     dynamicAgentDelegation: false,
     agentType: "llm",
     cloudProvider,

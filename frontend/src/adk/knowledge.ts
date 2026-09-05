@@ -4,6 +4,7 @@ import {
   requestSignal,
 } from "./timeout";
 import { withLocalUser } from "./identity";
+import { adkT, withLocaleHeaders } from "./i18n";
 export type { CloudProvider } from "./cloudProvider";
 
 export interface KnowledgeBaseItem {
@@ -176,7 +177,7 @@ export class KnowledgeRegionAggregateError extends Error {
 
   constructor(failures: KnowledgeRegionFailure[]) {
     super(failures.map(({ region, error }) => (
-      `${region}: ${error.message || "读取知识库失败"}`
+      `${region}: ${error.message || adkT("knowledge.loadFailed")}`
     )).join("\n"));
     this.name = "KnowledgeRegionAggregateError";
     this.failures = failures;
@@ -228,18 +229,19 @@ function looksLikeHtml(value: string): boolean {
 }
 
 function redactSensitiveText(value: string): string {
-  if (looksLikeHtml(value)) return "[HTML 内容已隐藏]";
+  if (looksLikeHtml(value)) return adkT("knowledge.htmlHidden");
+  const redacted = adkT("knowledge.redacted");
   return value
-    .replace(/\bBearer\s+[^\s,;]+/gi, "Bearer [已脱敏]")
-    .replace(/\b(?:set-)?cookie\s*:\s*[^\r\n]*/gi, "cookie: [已脱敏]")
-    .replace(/\bAKLT[A-Za-z0-9_-]{6,}\b/g, "[已脱敏]")
+    .replace(/\bBearer\s+[^\s,;]+/gi, `Bearer ${redacted}`)
+    .replace(/\b(?:set-)?cookie\s*:\s*[^\r\n]*/gi, `cookie: ${redacted}`)
+    .replace(/\bAKLT[A-Za-z0-9_-]{6,}\b/g, redacted)
     .replace(
       /((?:access[_-]?key(?:[_-]?id)?|secret(?:[_-]?(?:access)?[_-]?key)?|session[_-]?token|security[_-]?token|client[_-]?secret|api[_-]?key|authorization|cookie|[a-z0-9_-]*(?:password|secret|token)|credential|ak|sk)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;&]+)/gi,
-      "$1[已脱敏]",
+      `$1${redacted}`,
     )
     .replace(
       /([?&](?:access[_-]?key|api[_-]?key|client[_-]?secret|security[_-]?token|session[_-]?token|secret|token|password|authorization|cookie|credential)=)[^&#\s]+/gi,
-      "$1[已脱敏]",
+      `$1${redacted}`,
     );
 }
 
@@ -255,8 +257,8 @@ function sanitizeDiagnosticValue(
     return redactSensitiveText(value).slice(0, MAX_DIAGNOSTIC_TEXT);
   }
   if (typeof value !== "object") return undefined;
-  if (depth >= MAX_DIAGNOSTIC_DEPTH) return "[内容过深，已截断]";
-  if (seen.has(value)) return "[循环引用]";
+  if (depth >= MAX_DIAGNOSTIC_DEPTH) return adkT("knowledge.depthTruncated");
+  if (seen.has(value)) return adkT("knowledge.circularReference");
   seen.add(value);
   if (Array.isArray(value)) {
     return value.slice(0, MAX_DIAGNOSTIC_ITEMS).map((item) => (
@@ -268,7 +270,7 @@ function sanitizeDiagnosticValue(
     .slice(0, MAX_DIAGNOSTIC_ITEMS)
     .forEach(([key, item]) => {
       output[key] = isSensitiveDiagnosticKey(key)
-        ? "[已脱敏]"
+        ? adkT("knowledge.redacted")
         : sanitizeDiagnosticValue(item, depth + 1, seen);
     });
   return output;
@@ -282,7 +284,7 @@ function safeDiagnosticText(value: unknown): string {
   try {
     return JSON.stringify(sanitized).slice(0, MAX_DIAGNOSTIC_TEXT);
   } catch {
-    return "[诊断信息无法显示]";
+    return adkT("knowledge.diagnosticsUnavailable");
   }
 }
 
@@ -298,17 +300,17 @@ export function formatKnowledgeError(reason: unknown, fallback: string): string 
   }
   const message = redactSensitiveText(reason.message) || fallback;
   const context = [
-    Number.isFinite(reason.status) ? `状态码：${reason.status}` : "",
-    reason.errorCode ? `错误码：${redactSensitiveText(reason.errorCode)}` : "",
-    reason.requestId ? `请求 ID：${redactSensitiveText(reason.requestId)}` : "",
+    Number.isFinite(reason.status) ? adkT("knowledge.statusCode", { status: reason.status }) : "",
+    reason.errorCode ? adkT("knowledge.errorCode", { code: redactSensitiveText(reason.errorCode) }) : "",
+    reason.requestId ? adkT("knowledge.requestId", { requestId: redactSensitiveText(reason.requestId) }) : "",
   ].filter(Boolean).join(" · ");
   const diagnostics = safeDiagnosticText(reason.diagnostics);
   const detail = safeDiagnosticText(reason.detail);
   return [
     message,
     context,
-    diagnostics ? `诊断：${diagnostics}` : "",
-    detail && detail !== message ? `详情：${detail}` : "",
+    diagnostics ? adkT("knowledge.diagnostics", { diagnostics }) : "",
+    detail && detail !== message ? adkT("knowledge.detail", { detail }) : "",
   ].filter(Boolean).join("\n");
 }
 
@@ -440,7 +442,7 @@ async function knowledgeFetch<T>(
   init: RequestInit = {},
   timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
 ): Promise<T> {
-  const headers = withLocalUser(init.headers);
+  const headers = withLocaleHeaders(withLocalUser(init.headers));
   headers.set("accept", "application/json");
   if (init.body && !(init.body instanceof FormData)) {
     headers.set("content-type", "application/json");
@@ -471,14 +473,14 @@ async function knowledgeFetch<T>(
     parsedJson || contentType.startsWith("text/plain"),
   );
   const fallback = response.status === 401
-    ? "请先登录后再访问知识库"
+    ? adkT("knowledge.signInRequired")
     : response.status === 403
-      ? "你没有权限操作这个知识库"
+      ? adkT("knowledge.forbidden")
       : response.status === 404
-        ? "知识库或知识内容不存在"
+        ? adkT("knowledge.notFound")
         : response.status === 409
-          ? "知识库当前状态不允许执行此操作"
-          : `知识库请求失败 (${response.status})`;
+          ? adkT("knowledge.conflict")
+          : adkT("knowledge.requestFailed", { status: response.status });
   throw new KnowledgeRequestError(info.message || fallback, response.status, {
     errorCode: info.errorCode,
     requestId: info.requestId,
@@ -562,7 +564,7 @@ export async function listKnowledgeBasesAcrossRegions(options: {
         region,
         error: result.reason instanceof Error
           ? result.reason
-          : new Error("读取知识库失败"),
+          : new Error(adkT("knowledge.loadFailed")),
       });
       return;
     }
