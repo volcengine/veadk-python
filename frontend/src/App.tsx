@@ -2094,6 +2094,13 @@ export default function App() {
   const libraryPageTitle = libraryPageTitleState.kind === "key"
     ? t(libraryPageTitleState.key, { name: libraryPageTitleState.name })
     : libraryPageTitleState.title;
+  const handleLibraryPageTitleChange = useCallback((title: string) => {
+    setLibraryPageTitleState((current) =>
+      current.kind === "literal" && current.title === title
+        ? current
+        : { kind: "literal", title },
+    );
+  }, []);
   const [skillCenterLaunch, setSkillCenterLaunch] =
     useState<SkillCenterWorkspaceLaunch | null>(null);
   const [addAgent, setAddAgent] = useState(false);
@@ -5603,9 +5610,8 @@ export default function App() {
       ));
     } catch (cause) {
       if (controller.signal.aborted) return;
-      setSessionEnvironmentsError(
-        cause instanceof Error ? cause.message : appText("errors.environmentsLoadFailed"),
-      );
+      console.warn("Unable to refresh Studio environments and workspaces", cause);
+      setSessionEnvironmentsError(appText("errors.environmentsLoadFailed"));
     } finally {
       if (sessionEnvironmentLoadAbortRef.current === controller) {
         sessionEnvironmentLoadAbortRef.current = null;
@@ -6047,7 +6053,11 @@ export default function App() {
       target.turn,
       "bad",
       target.input,
-      formatResponseAnnotationComment(target.selectedText, note),
+      formatResponseAnnotationComment(target.selectedText, note, {
+        selectedExcerpt: t("conversation:annotation.selectedExcerptLabel"),
+        annotation: t("conversation:annotation.commentLabel"),
+        separator: t("conversation:annotation.commentSeparator"),
+      }),
       false,
     );
     if (errorMessage) throw new Error(errorMessage);
@@ -7397,10 +7407,7 @@ export default function App() {
                 studioRegion={studioRegion || defaultCloudRegion(cloudProvider)}
                 activeTab={libraryTab}
                 onTabChange={setLibraryTab}
-                onPageTitleChange={(title) => setLibraryPageTitleState({
-                  kind: "literal",
-                  title,
-                })}
+                onPageTitleChange={handleLibraryPageTitleChange}
                 skillInitialWorkspace={skillCenterLaunch}
                 onSkillInitialWorkspaceConsumed={() => setSkillCenterLaunch(null)}
                 artifactSources={appName

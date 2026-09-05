@@ -80,6 +80,7 @@
     "openType": "Open {{type}}"
   },
   "skill": {
+    "spaceAria": "Skill spaces",
     "configuration": "Skill customization settings",
     "actions": {
       "create": "Generate Skill",

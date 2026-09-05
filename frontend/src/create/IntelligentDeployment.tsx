@@ -200,7 +200,7 @@ export function IntelligentDeployment({
           <dl>
             <div><dt>{t("intelligentDeployment.entryPoint")}</dt><dd><code>{delivery.entryPoint}</code></dd></div>
             <div><dt>{t("intelligentDeployment.files")}</dt><dd>{delivery.fileCount}</dd></div>
-            <div><dt>Artifact</dt><dd><code>{delivery.artifactSha256.slice(0, 16)}</code></dd></div>
+            <div><dt>{t("intelligentDeployment.artifact")}</dt><dd><code>{delivery.artifactSha256.slice(0, 16)}</code></dd></div>
             <div><dt>{t("intelligentDeployment.validationReport")}</dt><dd><code>{delivery.validationReportSha256.slice(0, 16)}</code></dd></div>
           </dl>
           <p>

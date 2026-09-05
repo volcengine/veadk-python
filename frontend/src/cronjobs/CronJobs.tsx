@@ -371,7 +371,7 @@ function Drawer({
               />
             </label>
             <label className="cronjobs-field">
-              <span>Runtime Agent</span>
+              <span>{cronText("fields.runtimeAgent")}</span>
               <Select
                 value={draft.runtimeId}
                 options={runtimeOptions}
@@ -538,7 +538,7 @@ function JobDetail({
       </header>
       <div className="cronjobs-detail-scroll">
         <section className="cronjobs-summary-grid" aria-label={cronText("detail.configuration")}>
-          <dl><div><dt>{cronText("detail.status")}</dt><dd>{cronText(job.enabled ? "status.enabled" : "status.paused")}</dd></div><div><dt>{cronText("detail.nextRun")}</dt><dd>{job.enabled ? formatCronJobDate(job.nextRunAt) : "-"}</dd></div><div><dt>Runtime</dt><dd title={job.runtimeName}>{job.runtimeName}</dd></div><div><dt>{cronText("detail.region")}</dt><dd>{job.region}</dd></div></dl>
+          <dl><div><dt>{cronText("detail.status")}</dt><dd>{cronText(job.enabled ? "status.enabled" : "status.paused")}</dd></div><div><dt>{cronText("detail.nextRun")}</dt><dd>{job.enabled ? formatCronJobDate(job.nextRunAt) : "-"}</dd></div><div><dt>{cronText("detail.runtime")}</dt><dd title={job.runtimeName}>{job.runtimeName}</dd></div><div><dt>{cronText("detail.region")}</dt><dd>{job.region}</dd></div></dl>
           <div className="cronjobs-prompt"><span>{cronText("fields.prompt")}</span><p>{job.prompt}</p></div>
         </section>
         <section className="cronjobs-history">
@@ -547,7 +547,7 @@ function JobDetail({
             <div className="cronjobs-runs">
               {runs.map((run) => <article className="cronjobs-run" key={run.runId}>
                 <div className="cronjobs-run-main"><StatusBadge run={run} /><div><strong>{formatCronJobDate(run.startedAt || run.scheduledAt)}</strong><span>{cronText("history.duration", { duration: formatCronJobDuration(run) })}{run.runtimeVersion ? ` · Runtime v${run.runtimeVersion}` : ""}</span></div></div>
-                {run.sessionId ? <div className="cronjobs-run-meta"><span>Session</span><strong title={run.sessionId}>{run.sessionId}</strong></div> : null}
+                {run.sessionId ? <div className="cronjobs-run-meta"><span>{cronText("history.session")}</span><strong title={run.sessionId}>{run.sessionId}</strong></div> : null}
                 {run.output ? <div className="cronjobs-run-output"><span>{cronText("history.finalAnswer")}</span><CronJobFinalAnswer output={run.output} /></div> : null}
                 {run.error ? <div className="cronjobs-run-output is-error"><span>{cronText("history.errorDetails")}</span><DeploymentErrorMessage message={run.error} className="cronjobs-run-error-detail" defaultExpanded={false} onRetry={run.status === "failed" ? onRetryRun : undefined} retryLabel={cronText("actions.rerun")} /></div> : null}
                 {(run.status === "queued" || run.status === "running" || run.status === "retrying" || run.status === "pending") ? <Button type="button" className="cronjobs-run-cancel" color="danger" variant="soft" size="sm" pill={false} onClick={() => onCancel(run)} disabled={busy || Boolean(run.cancellationRequestedAt)} loading={Boolean(run.cancellationRequestedAt)}>{cronText(run.cancellationRequestedAt ? "actions.stopping" : run.status === "queued" ? "actions.cancelQueue" : "actions.stop")}</Button> : null}
@@ -594,7 +594,8 @@ export function CronJobs({ cloudProvider }: CronJobsProps) {
       setRuntimes(runtimePage.runtimes.filter((runtime) => runtime.status.toLowerCase() === "ready"));
     } catch (cause) {
       if (signal?.aborted) return;
-      setError(cause instanceof Error ? cause.message : String(cause));
+      console.warn("Unable to load scheduled tasks", cause);
+      setError(cronText("page.loadFailedDescription"));
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
@@ -613,7 +614,10 @@ export function CronJobs({ cloudProvider }: CronJobsProps) {
       const items = await listCronJobRuns(jobId, signal);
       if (!signal?.aborted) setRuns(items);
     } catch (cause) {
-      if (!signal?.aborted) setRunsError(cause instanceof Error ? cause.message : String(cause));
+      if (!signal?.aborted) {
+        console.warn("Unable to load scheduled-task history", cause);
+        setRunsError(cronText("history.loadFailedDescription"));
+      }
     } finally {
       if (!signal?.aborted) setRunsLoading(false);
     }

@@ -150,6 +150,8 @@
     "createdAt": "创建时间",
     "snapshotReason": "快照原因",
     "expiresAt": "过期时间",
+    "snapshotId": "快照 ID",
+    "sessionId": "会话 ID",
     "sourceSessionId": "来源 Session ID",
     "delete": "删除智能体",
     "waking": "唤醒中…",

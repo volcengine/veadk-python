@@ -80,6 +80,7 @@
     "openType": "打开 {{type}}"
   },
   "skill": {
+    "spaceAria": "技能空间",
     "configuration": "技能定制配置",
     "actions": {
       "create": "技能生成",

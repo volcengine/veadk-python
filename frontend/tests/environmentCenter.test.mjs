@@ -600,7 +600,8 @@ test("generates a Dockerfile from language and selected tools", async () => {
     assert.match(dockerfile, /^# Operating system: Ubuntu 22\.04$/m);
     assert.match(dockerfile, /^FROM ubuntu:22\.04$/m);
     assert.match(dockerfile, /^# Python 3\.12$/m);
-    assert.match(dockerfile, /^# VeADK: Agent 开发与运行框架$/m);
+    assert.match(dockerfile, /^# VeADK$/m);
+    assert.doesNotMatch(dockerfile, /[\u3400-\u9fff]/u);
     assert.match(dockerfile, /python -m pip install --upgrade veadk-python/);
     assert.match(dockerfile, /PIP_DEFAULT_TIMEOUT=300/);
     assert.match(dockerfile, /PIP_RETRIES=10/);
@@ -620,8 +621,8 @@ test("generates a Dockerfile from language and selected tools", async () => {
     assert.match(dockerfile, /lark-cli/);
     assert.match(dockerfile, /python -m playwright install chromium/);
     assert.doesNotMatch(dockerfile, /playwright install --with-deps/);
-    assert.match(dockerfile, /# lark-cli: 飞书开放平台命令行工具/);
-    assert.match(dockerfile, /# Playwright: 浏览器自动化与端到端测试/);
+    assert.match(dockerfile, /^# lark-cli$/m);
+    assert.match(dockerfile, /^# Playwright$/m);
   } finally {
     await server.close();
   }
@@ -713,7 +714,7 @@ test("generates every supported OS and Python combination with per-tool comments
         assert.equal(dockerfile.match(/apt-get install -y --no-install-recommends/g)?.length, 1);
         for (const category of model.ENVIRONMENT_CATEGORIES) {
           for (const option of category.options) {
-            assert.match(dockerfile, new RegExp(`^# ${option.label.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}:`, "m"));
+            assert.match(dockerfile, new RegExp(`^# ${option.label.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}$`, "m"));
           }
         }
       }

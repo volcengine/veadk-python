@@ -69,7 +69,8 @@ test("wires main and nested Studio surfaces into the browser title", () => {
   assert.match(appSource, /const newSessionTitle = t\("titles\.newConversation"\)/);
   assert.match(appSource, /applicationsView === "catalog"[\s\S]*?t\("titles\.automations"\)/);
   assert.match(appSource, /cronJobsView[\s\S]*?kind: "page", title: t\("titles\.cronJobs"\)/);
-  assert.match(appSource, /onPageTitleChange=\{\(title\) => setLibraryPageTitleState\(\{/);
+  assert.match(appSource, /const handleLibraryPageTitleChange = useCallback/);
+  assert.match(appSource, /onPageTitleChange=\{handleLibraryPageTitleChange\}/);
   assert.match(appSource, /setLibraryPageTitleState\(\{ kind: "key", key: "titles\.skillLibrary" \}\)/);
   assert.match(
     appSource,

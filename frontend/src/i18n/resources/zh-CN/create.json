@@ -16,8 +16,13 @@
     "enabled": "已开启",
     "none": "无",
     "close": "关闭",
+    "name": "名称",
     "description": "描述",
     "send": "发送"
+  },
+  "yaml": {
+    "heading": "VeADK Agent 结构配置",
+    "importHint": "可在「创建 Agent」页通过「导入 YAML」重新载入。"
   },
   "validation": {
     "agentName": {
@@ -105,6 +110,7 @@
     "verifiedByCodex": "已通过 Codex 云端验证",
     "entryPoint": "入口",
     "files": "文件",
+    "artifact": "构建产物",
     "validationReport": "验证报告",
     "verifiedHint": "源码由服务端从已验证交付物物化，浏览器文件不能替换。",
     "unverifiedHint": "源码已由服务端安全物化，部署前请确认 Runtime 配置。",

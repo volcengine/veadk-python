@@ -16,8 +16,13 @@
     "enabled": "Enabled",
     "none": "None",
     "close": "Close",
+    "name": "Name",
     "description": "Description",
     "send": "Send"
+  },
+  "yaml": {
+    "heading": "VeADK agent structure configuration",
+    "importHint": "Reload this file from Import YAML on the Create Agent page."
   },
   "validation": {
     "agentName": {
@@ -105,6 +110,7 @@
     "verifiedByCodex": "Verified by Codex in the cloud",
     "entryPoint": "Entry point",
     "files": "Files",
+    "artifact": "Artifact",
     "validationReport": "Validation report",
     "verifiedHint": "The server materializes source from the verified artifact. Browser files cannot replace it.",
     "unverifiedHint": "The server securely materialized the source. Confirm the Runtime configuration before deploying.",

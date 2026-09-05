@@ -25,7 +25,7 @@ test("renders Skill Space and Skill as one two-level picker", () => {
     controlsSource,
     /action === "create"[\s\S]*?: \([\s\S]*?label="空间"[\s\S]*?label="Skill"/,
   );
-  assert.match(pickerSource, /aria-label="Skill Space"/);
+  assert.match(pickerSource, /aria-label=\{t\("skill\.spaceAria"\)\}/);
   assert.match(pickerSource, /aria-label=\{t\("skill\.skillList", \{ space: activeSpaceLabel \}\)\}/);
   assert.match(pickerSource, /aria-haspopup="menu"/);
   assert.match(pickerSource, /role="menuitem"/);

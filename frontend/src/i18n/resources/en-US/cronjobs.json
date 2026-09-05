@@ -40,6 +40,7 @@
     "nextRun": "Next run",
     "pageLabel": "Scheduled task details",
     "region": "Region",
+    "runtime": "Runtime",
     "status": "Task status"
   },
   "drawer": {
@@ -63,6 +64,7 @@
     "prompt": "Execution prompt",
     "promptPlaceholder": "Enter the text to send to the Agent on every run",
     "runAt": "Run time",
+    "runtimeAgent": "Runtime Agent",
     "runtimeHelp": "The task always uses the Runtime's currently active version.",
     "runtimePlaceholder": "Select a Runtime Agent",
     "schedule": "Schedule",
@@ -81,6 +83,8 @@
     "errorDetails": "Error details",
     "finalAnswer": "Final answer",
     "loadFailed": "Unable to load run history",
+    "loadFailedDescription": "Check the Studio service and try again.",
+    "session": "Session",
     "title": "Run history"
   },
   "notices": {
@@ -97,6 +101,7 @@
     "filterLabel": "Filter scheduled tasks by status",
     "listLabel": "Scheduled task list",
     "loadFailed": "Unable to load scheduled tasks",
+    "loadFailedDescription": "Check the Studio service and try again.",
     "title": "Scheduled tasks"
   },
   "schedule": {

@@ -100,7 +100,7 @@ test("supports managed artifacts and preserves their source provenance", () => {
   assert.match(pageSource, /onOpenSource\?:/);
   assert.match(pageSource, /<StudioConfirmDialog/);
   assert.match(pageSource, /<ArtifactEditDialog/);
-  assert.match(pageSource, /<dt>Agent<\/dt>/);
+  assert.match(pageSource, /<dt>\{t\("artifactLibrary\.preview\.agent"\)\}<\/dt>/);
   assert.match(pageSource, /<dt>\{t\("artifactLibrary\.preview\.session"\)\}<\/dt>/);
   assert.match(pageSource, /<dt>\{t\("artifactLibrary\.preview\.tool"\)\}<\/dt>/);
   assert.match(modelSource, /agentId\?: string/);

@@ -1,1 +1,0 @@
-import{a as n}from"./mermaid.core-DVSovSUf.js";import{aB as o}from"../../app/index-BU_fBb4B.js";var d=n((t,e)=>{let a;return e==="sandbox"&&(a=o("#i"+t)),(e==="sandbox"?o(a.nodes()[0].contentDocument.body):o("body")).select(`[id="${t}"]`)},"getDiagramElement");export{d as g};

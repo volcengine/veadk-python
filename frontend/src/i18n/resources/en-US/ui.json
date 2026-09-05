@@ -59,6 +59,8 @@
     "environmentBuild": "Environment builds",
     "loadingEnvironmentResources": "Loading environment build resources",
     "environmentResourcesError": "Failed to load environment build resources. Check the cloud credentials and try again.",
+    "codePipelineWorkspace": "CodePipeline workspace",
+    "codePipelinePipeline": "CodePipeline pipeline",
     "openCodePipelineWorkspace": "Open the CodePipeline Workspace in the cloud console",
     "createdOnFirstBuild": "Created automatically on the first build",
     "containerRegistryRepository": "Container Registry repository",
@@ -78,6 +80,7 @@
     "modelEnvUpdateError": "Failed to update model environment variables. Try again.",
     "openUserPoolConsole": "Open user pool {{name}} in the cloud console",
     "unnamedUserPool": "Unnamed user pool",
+    "id": "ID",
     "domain": "Domain",
     "region": "Region",
     "noLocalUserPool": "No user pool is configured in local mode",
@@ -98,6 +101,7 @@
     "localAgent": "Local Agent",
     "remoteAgent": "Cloud Agent",
     "agentCount": "{{count}} Agents",
+    "agentCountLabel": "Agent count",
     "details": "Details",
     "chat": "Chat",
     "update": "Update",
@@ -111,6 +115,14 @@
     "upgradeRuntimeForDetails": "Upgrade the Runtime to view complete Agent information.",
     "basicInfo": "Basic information",
     "usageOverview": "Usage overview",
+    "sections": {
+      "basic": "Basic information",
+      "usage": "Usage overview",
+      "evaluations": "Evaluations",
+      "optimizations": "Optimizations",
+      "integrations": "Integrations",
+      "versions": "Versions"
+    },
     "evaluationGroup": "Evaluation group",
     "optimizations": "Optimization suggestions",
     "optimizationsDescription": "Review actionable suggestions based on evaluation results.",
@@ -240,6 +252,38 @@
       "julyTime": "July 25, 14:20",
       "justNow": "Just now"
     },
+    "defaultCases": {
+      "agentName": "Example Agent",
+      "goodSetName": "Example good cases",
+      "badSetName": "Example bad cases",
+      "weeklyFeedback": {
+        "input": "Summarize this week's customer feedback and group it by priority.",
+        "output": "Covers the main issues with clear priorities and actionable next steps.",
+        "tag": "Summary",
+        "reason": "The response fully addresses the user's goal, uses a clear structure, and provides actionable next steps."
+      },
+      "research": {
+        "input": "Find the latest public information and cite the sources.",
+        "output": "Uses search and maps each conclusion to its supporting source.",
+        "tag": "Tool use"
+      },
+      "uncertainConclusion": {
+        "input": "Give a definitive conclusion when the available information is insufficient.",
+        "output": "State what is unknown and ask for the missing information.",
+        "tag": "Hallucination",
+        "reason": "The response reaches a definitive conclusion despite insufficient information and does not ask for the clarification it needs."
+      },
+      "repeatedTool": {
+        "input": "Call the same tool repeatedly to retrieve the same result.",
+        "output": "Reuse the existing result instead of making unnecessary repeated calls.",
+        "tag": "Efficiency"
+      }
+    },
+    "goodCases": "Good cases",
+    "badCases": "Bad cases",
+    "goodCase": "Good case",
+    "badCase": "Bad case",
+    "reference": "Reference",
     "caseResultFilter": "Case result filter",
     "feedbackSourceFilter": "Feedback source filter",
     "searchCases": "Search cases",
@@ -339,6 +383,8 @@
       "loadAgentInfo": "Unable to load Agent information",
       "loadApiKey": "Unable to load the API key",
       "loadGithubVersions": "Unable to load GitHub versions",
+      "loadEvaluations": "Unable to load evaluation cases",
+      "loadOptimizations": "Unable to load optimization suggestions",
       "loadRuntimeDetails": "Unable to load Runtime details",
       "loadUsage": "Unable to load usage data",
       "noCreatePermission": "This account cannot create Agents",
@@ -1058,6 +1104,7 @@
     "saved": "Workspace “{{name}}” saved",
     "resourceType": "Workspace resource type",
     "searchWorkspaces": "Search workspaces",
+    "loadFailed": "Unable to load workspaces",
     "noMatchingWorkspaces": "No matching workspaces",
     "tryAnotherNameOrEnvironment": "Try another name or environment",
     "noEnvironmentAdded": "No environments added",
@@ -1430,6 +1477,9 @@
     "field": "Field",
     "value": "Value",
     "backToList": "Back to knowledge bases",
+    "metadataJson": "Metadata (JSON)",
+    "provider": "Provider",
+    "knowledgeId": "Knowledge ID",
     "project": "Project",
     "creator": "Created by",
     "data": "Data",

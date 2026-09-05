@@ -52,6 +52,14 @@ test("formats selected answer text and the annotation as one feedback comment", 
     formatResponseAnnotationComment("  第一段\n  第二段  ", "  这里的结论缺少依据。  "),
     "选中片段：第一段\n  第二段\n\n批注：这里的结论缺少依据。",
   );
+  assert.equal(
+    formatResponseAnnotationComment("selected text", "fix this", {
+      selectedExcerpt: "Selected excerpt",
+      annotation: "Annotation",
+      separator: ": ",
+    }),
+    "Selected excerpt: selected text\n\nAnnotation: fix this",
+  );
 });
 
 test("keeps the persisted feedback comment within the server limit", () => {
@@ -232,7 +240,7 @@ test("submits the annotation as a bad-case feedback sample", () => {
   assert.match(appSource, /rateAssistantTurn\(\s*target\.turn,\s*"bad"/);
   assert.match(
     appSource,
-    /rateAssistantTurn\([\s\S]*?formatResponseAnnotationComment\(target\.selectedText, note\)/,
+    /rateAssistantTurn\([\s\S]*?formatResponseAnnotationComment\(target\.selectedText, note, \{/,
   );
   assert.match(appSource, /cloudProvider !== "byteplus"/);
   assert.match(

@@ -73,8 +73,8 @@
   },
   "sse": {
     "truncatedData": "{{data}}…（已截断，共 {{count}} 个字符）",
-    "incompleteEvent": "Stream ended with an incomplete SSE event. 原始 data：{{data}}",
-    "invalidEventJson": "Failed to parse SSE event JSON. 原始 data：{{data}}"
+    "incompleteEvent": "SSE 流在事件完整返回前已结束。原始数据：{{data}}",
+    "invalidEventJson": "无法解析 SSE 事件中的 JSON。原始数据：{{data}}"
   },
   "identity": {
     "loadConfigNetworkFailed": "无法加载登录配置，请检查网络后重试。",
@@ -341,7 +341,7 @@
     "createSessionFailedWithStatus": "创建会话失败 ({{status}})",
     "createSessionFailed": "创建会话失败",
     "getSessionFailed": "读取会话失败",
-    "getSessionFailedWithDetail": "get session failed: {{status}}：{{detail}}",
+    "getSessionFailedWithDetail": "读取会话失败：{{status}}：{{detail}}",
     "feedbackRuntimeOnly": "只有连接到 AgentKit Runtime 的会话支持反馈回流",
     "feedbackRegionMissing": "Runtime 缺少地域信息，无法提交反馈",
     "submitFeedbackFailed": "提交反馈失败",
@@ -355,8 +355,8 @@
     "traceDisabled": "该 Agent 暂未开启链路观测，请到控制台打开后使用。",
     "loadTraceFailed": "加载调用链路失败",
     "contentTypeMissing": "Content-Type 缺失",
-    "traceNonJson": "trace failed: 服务端返回了非 JSON 响应（{{contentType}}），请检查 Studio API 代理配置",
-    "invalidTraceFormat": "trace failed: 返回格式无效",
+    "traceNonJson": "加载调用链路失败：服务端返回了非 JSON 响应（{{contentType}}），请检查 Studio API 代理配置",
+    "invalidTraceFormat": "加载调用链路失败：返回格式无效",
     "submitIssueFeedbackFailed": "问题反馈上报失败",
     "issueFeedbackNotConfirmed": "问题反馈上报失败：服务端未确认提交结果",
     "noPreviewableAgent": "该 Runtime 未提供可预览的 Agent。",
@@ -365,7 +365,7 @@
     "noDisplayableSseReply": "HTTP 200，SSE 响应中没有可展示的模型回复。",
     "firstSseEventTimeout": "30 秒内未收到首个 SSE 事件。",
     "runSessionFailed": "运行会话失败",
-    "runSseFailedWithDetail": "run_sse failed: {{status}}：{{detail}}",
+    "runSseFailedWithDetail": "运行会话失败：{{status}}：{{detail}}",
     "checkRuntimeNameFailed": "检查 Runtime 名称失败",
     "invalidRuntimeNameCheck": "检查 Runtime 名称失败：服务返回格式错误",
     "loadCloudResourcesFailed": "加载云资源失败",

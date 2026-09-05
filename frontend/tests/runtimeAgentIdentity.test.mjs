@@ -128,12 +128,15 @@ test("published draft instructions are not replaced by managed Runtime rules", (
   assert.equal(restored.instruction, "User-authored instruction.");
 });
 
-const managedRuntimeRules = ({ escaped = false } = {}) => {
+const managedRuntimeRules = ({
+  escaped = false,
+  heading = "动态子智能体协作规则：",
+} = {}) => {
   const collectResources = escaped ? "collect\\_resources" : "collect_resources";
   const createAgents = escaped ? "create\\_agents" : "create_agents";
   const handoffTo = escaped ? "handoff\\_to" : "handoff_to";
   return [
-    "动态子智能体协作规则：",
+    heading,
     `- 先调用 ${collectResources} 获取资源。`,
     `- 再调用 ${createAgents} 创建子智能体。`,
     `- 最后通过 ${handoffTo} 移交任务。`,
@@ -159,6 +162,18 @@ test("quick draft recovery strips Markdown-escaped managed Runtime rules", () =>
   });
 
   assert.equal(restored.instruction, "Escaped user prompt.");
+});
+
+test("quick draft recovery strips localized English managed Runtime rules", () => {
+  const restored = stripManagedRuntimeInstructions({
+    ...cachedRuntimeDraft("quick_agent"),
+    instruction: `English user prompt.\n\n${managedRuntimeRules({
+      heading: "Dynamic sub-agent collaboration rules:",
+    })}`,
+    dynamicAgentDelegation: true,
+  });
+
+  assert.equal(restored.instruction, "English user prompt.");
 });
 
 test("quick draft recovery truncates repeated managed rules at the first valid block", () => {

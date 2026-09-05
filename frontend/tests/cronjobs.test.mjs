@@ -73,6 +73,8 @@ test("renders the shared resource card list, independent-session form, details, 
     assert.match(modelSource, new RegExp(`${status}: "status\\.${status}"`));
   }
   assert.match(cronJobsSource, /cronText\("page\.loadFailed"\)/);
+  assert.match(cronJobsSource, /setError\(cronText\("page\.loadFailedDescription"\)\)/);
+  assert.match(cronJobsSource, /setRunsError\(cronText\("history\.loadFailedDescription"\)\)/);
   assert.match(cronJobsSource, /cronText\("actions\.createScheduledTask"\)/);
   assert.match(cronJobsSource, /cronText\("history\.emptyTitle"\)/);
   assert.match(cronJobsSource, /"actions\.stopRun"/);

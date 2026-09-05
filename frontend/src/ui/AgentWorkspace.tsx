@@ -134,96 +134,98 @@ interface EvaluationGroup {
   history: EvaluationRun[];
 }
 
-const DEFAULT_CASES: AgentCase[] = [
-  {
-    id: "case-1",
-    itemKey: "case-1",
-    kind: "good",
-    input: "总结本周客户反馈，并按优先级归类。",
-    output: "覆盖主要问题，给出清晰的优先级与下一步动作。",
-    referenceOutput: "覆盖主要问题，给出清晰的优先级与下一步动作。",
-    comment: "",
-    agentName: "示例 Agent",
-    sessionId: "",
-    messageId: "",
-    runtimeId: "",
-    invocationId: "",
-    userId: "",
-    createdAt: "2026-08-05T09:12:00+08:00",
-    evaluationSetId: "",
-    evaluationSetName: "示例 good case",
-    workspaceId: "",
-    tag: "总结",
-    source: "auto",
-    score: 0.92,
-    reason: "任务完整覆盖了用户目标，输出结构清晰，并给出了可执行的下一步动作。",
-  },
-  {
-    id: "case-2",
-    itemKey: "case-2",
-    kind: "good",
-    input: "查询最新公开资料并附上来源。",
-    output: "调用搜索工具，结论与引用一一对应。",
-    referenceOutput: "调用搜索工具，结论与引用一一对应。",
-    comment: "",
-    agentName: "示例 Agent",
-    sessionId: "",
-    messageId: "",
-    runtimeId: "",
-    invocationId: "",
-    userId: "",
-    createdAt: "2026-08-05T08:47:00+08:00",
-    evaluationSetId: "",
-    evaluationSetName: "示例 good case",
-    workspaceId: "",
-    tag: "工具调用",
-    source: "user",
-  },
-  {
-    id: "case-3",
-    itemKey: "case-3",
-    kind: "bad",
-    input: "在信息不足时直接给出确定结论。",
-    output: "应明确说明未知，并主动询问缺失信息。",
-    referenceOutput: "",
-    comment: "",
-    agentName: "示例 Agent",
-    sessionId: "",
-    messageId: "",
-    runtimeId: "",
-    invocationId: "",
-    userId: "",
-    createdAt: "2026-08-05T07:35:00+08:00",
-    evaluationSetId: "",
-    evaluationSetName: "示例 bad case",
-    workspaceId: "",
-    tag: "幻觉",
-    source: "auto",
-    score: 0.28,
-    reason: "信息不足时仍给出了确定结论，缺少必要的澄清步骤与不确定性说明。",
-  },
-  {
-    id: "case-4",
-    itemKey: "case-4",
-    kind: "bad",
-    input: "连续重复调用相同工具获取同一结果。",
-    output: "复用已有结果，避免无意义的重复调用。",
-    referenceOutput: "",
-    comment: "",
-    agentName: "示例 Agent",
-    sessionId: "",
-    messageId: "",
-    runtimeId: "",
-    invocationId: "",
-    userId: "",
-    createdAt: "2026-08-05T06:58:00+08:00",
-    evaluationSetId: "",
-    evaluationSetName: "示例 bad case",
-    workspaceId: "",
-    tag: "效率",
-    source: "user",
-  },
-];
+function buildDefaultCases(t: TFunction): AgentCase[] {
+  return [
+    {
+      id: "case-1",
+      itemKey: "case-1",
+      kind: "good",
+      input: t("agentWorkspace.defaultCases.weeklyFeedback.input"),
+      output: t("agentWorkspace.defaultCases.weeklyFeedback.output"),
+      referenceOutput: t("agentWorkspace.defaultCases.weeklyFeedback.output"),
+      comment: "",
+      agentName: t("agentWorkspace.defaultCases.agentName"),
+      sessionId: "",
+      messageId: "",
+      runtimeId: "",
+      invocationId: "",
+      userId: "",
+      createdAt: "2026-08-05T09:12:00+08:00",
+      evaluationSetId: "",
+      evaluationSetName: t("agentWorkspace.defaultCases.goodSetName"),
+      workspaceId: "",
+      tag: t("agentWorkspace.defaultCases.weeklyFeedback.tag"),
+      source: "auto",
+      score: 0.92,
+      reason: t("agentWorkspace.defaultCases.weeklyFeedback.reason"),
+    },
+    {
+      id: "case-2",
+      itemKey: "case-2",
+      kind: "good",
+      input: t("agentWorkspace.defaultCases.research.input"),
+      output: t("agentWorkspace.defaultCases.research.output"),
+      referenceOutput: t("agentWorkspace.defaultCases.research.output"),
+      comment: "",
+      agentName: t("agentWorkspace.defaultCases.agentName"),
+      sessionId: "",
+      messageId: "",
+      runtimeId: "",
+      invocationId: "",
+      userId: "",
+      createdAt: "2026-08-05T08:47:00+08:00",
+      evaluationSetId: "",
+      evaluationSetName: t("agentWorkspace.defaultCases.goodSetName"),
+      workspaceId: "",
+      tag: t("agentWorkspace.defaultCases.research.tag"),
+      source: "user",
+    },
+    {
+      id: "case-3",
+      itemKey: "case-3",
+      kind: "bad",
+      input: t("agentWorkspace.defaultCases.uncertainConclusion.input"),
+      output: t("agentWorkspace.defaultCases.uncertainConclusion.output"),
+      referenceOutput: "",
+      comment: "",
+      agentName: t("agentWorkspace.defaultCases.agentName"),
+      sessionId: "",
+      messageId: "",
+      runtimeId: "",
+      invocationId: "",
+      userId: "",
+      createdAt: "2026-08-05T07:35:00+08:00",
+      evaluationSetId: "",
+      evaluationSetName: t("agentWorkspace.defaultCases.badSetName"),
+      workspaceId: "",
+      tag: t("agentWorkspace.defaultCases.uncertainConclusion.tag"),
+      source: "auto",
+      score: 0.28,
+      reason: t("agentWorkspace.defaultCases.uncertainConclusion.reason"),
+    },
+    {
+      id: "case-4",
+      itemKey: "case-4",
+      kind: "bad",
+      input: t("agentWorkspace.defaultCases.repeatedTool.input"),
+      output: t("agentWorkspace.defaultCases.repeatedTool.output"),
+      referenceOutput: "",
+      comment: "",
+      agentName: t("agentWorkspace.defaultCases.agentName"),
+      sessionId: "",
+      messageId: "",
+      runtimeId: "",
+      invocationId: "",
+      userId: "",
+      createdAt: "2026-08-05T06:58:00+08:00",
+      evaluationSetId: "",
+      evaluationSetName: t("agentWorkspace.defaultCases.badSetName"),
+      workspaceId: "",
+      tag: t("agentWorkspace.defaultCases.repeatedTool.tag"),
+      source: "user",
+    },
+  ];
+}
 
 const DEFAULT_EVALUATION_GROUPS: EvaluationGroup[] = [
   {
@@ -275,6 +277,11 @@ const EVALUATION_TEXT_KEYS: Record<string, string> = {
 function evaluationText(value: string, t: TFunction): string {
   const key = EVALUATION_TEXT_KEYS[value];
   return key ? t(key) : value;
+}
+
+function localeCompatibleBackendText(value: string, locale: string): string {
+  const hasHanText = /\p{Script=Han}/u.test(value);
+  return locale.toLowerCase().startsWith("zh") === hasHanText ? value : "";
 }
 
 const AGENT_SECTIONS: AgentSection[] = [
@@ -662,11 +669,16 @@ function feedbackSetFor(
 
 function feedbackCasesFromResponse(
   response: AgentFeedbackCasesResponse,
+  t: TFunction,
 ): AgentCase[] {
   return response.items
     .map((item) => ({
       ...item,
-      tag: item.kind === "good" ? "Good case" : "Bad case",
+      tag: t(
+        item.kind === "good"
+          ? "agentWorkspace.goodCase"
+          : "agentWorkspace.badCase",
+      ),
     }))
     .sort((left, right) => (
       caseTimeValue(right.createdAt) - caseTimeValue(left.createdAt)
@@ -1321,6 +1333,18 @@ export function AgentWorkspace({
     updateCapability?.requestKey === updateCapabilityRequestKey
       ? updateCapability.value
       : cachedUpdateCapability;
+  const updateCapabilityReason = selectedUpdateCapability?.reason
+    ? localeCompatibleBackendText(
+        selectedUpdateCapability.reason,
+        i18n.resolvedLanguage || i18n.language,
+      )
+    : "";
+  const updateCapabilityWarnings = selectedUpdateCapability?.warnings.filter(
+    (warning) => localeCompatibleBackendText(
+      warning,
+      i18n.resolvedLanguage || i18n.language,
+    ),
+  ) ?? [];
   useEffect(() => {
     const requestId = updateCapabilityRequestRef.current + 1;
     updateCapabilityRequestRef.current = requestId;
@@ -1385,14 +1409,12 @@ export function AgentWorkspace({
           return;
         }
         pollTimer = window.setTimeout(() => loadCapability(false), 1_000);
-      }).catch((error: unknown) => {
+      }).catch(() => {
         if (
           requestId !== updateCapabilityRequestRef.current ||
           controller.signal.aborted
         ) return;
-        setUpdateCapabilityError(
-          error instanceof Error ? error.message : t("agentWorkspace.errors.checkUpdateCapability"),
-        );
+        setUpdateCapabilityError(t("agentWorkspace.errors.checkUpdateCapability"));
       }).finally(() => {
         if (
           requestId === updateCapabilityRequestRef.current &&
@@ -1514,10 +1536,10 @@ export function AgentWorkspace({
                 ? t("agentWorkspace.errors.updateCapabilityPending")
                 : selectedUpdateCapability.recoveryStatus !== "complete" &&
                     selectedUpdateCapability.recoveryStatus !== "draft-only"
-                  ? selectedUpdateCapability.reason ||
+                  ? updateCapabilityReason ||
                     t("agentWorkspace.errors.originalConfigUnavailable")
                 : !selectedUpdateCapability.canUpdate
-                  ? selectedUpdateCapability.reason || t("agentWorkspace.errors.updateUnsupported")
+                  ? updateCapabilityReason || t("agentWorkspace.errors.updateUnsupported")
                   : selectedUpdateCapability.agent?.appName
                     ? ""
                     : t("agentWorkspace.errors.agentInfoMissing");
@@ -1679,9 +1701,7 @@ export function AgentWorkspace({
           setDetailAgentInfoUnsupported(
             error instanceof RuntimeProbeError && error.unsupported,
           );
-          setDetailAgentInfoError(
-            error instanceof Error ? error.message : t("agentWorkspace.errors.loadAgentInfo"),
-          );
+          setDetailAgentInfoError(t("agentWorkspace.errors.loadAgentInfo"));
         }
       })
       .finally(() => {
@@ -1722,11 +1742,9 @@ export function AgentWorkspace({
       .then((response) => {
         if (!cancelled) setOptimizationGroups(response.groups);
       })
-      .catch((cause: unknown) => {
+      .catch(() => {
         if (!cancelled) {
-          setOptimizationsError(
-            cause instanceof Error ? cause.message : String(cause),
-          );
+          setOptimizationsError(t("agentWorkspace.errors.loadOptimizations"));
         }
       })
       .finally(() => {
@@ -1787,14 +1805,12 @@ export function AgentWorkspace({
         }
         setAgentUsage({ requestKey: agentUsageRequestKey, value: response });
       })
-      .catch((cause: unknown) => {
+      .catch(() => {
         if (
           requestId !== agentUsageRequestRef.current ||
           controller.signal.aborted
         ) return;
-        setAgentUsageError(
-          cause instanceof Error ? cause.message : t("agentWorkspace.errors.loadUsage"),
-        );
+        setAgentUsageError(t("agentWorkspace.errors.loadUsage"));
       })
       .finally(() => {
         if (requestId === agentUsageRequestRef.current) {
@@ -1886,12 +1902,10 @@ export function AgentWorkspace({
       .then((detail) => {
         if (!cancelled) setRuntimeDetail(detail);
       })
-      .catch((error: unknown) => {
+      .catch(() => {
         if (!cancelled && !cached) setRuntimeDetail(null);
         if (!cancelled) {
-          setRuntimeDetailError(
-            error instanceof Error ? error.message : t("agentWorkspace.errors.loadRuntimeDetails"),
-          );
+          setRuntimeDetailError(t("agentWorkspace.errors.loadRuntimeDetails"));
         }
       });
     return () => {
@@ -1918,12 +1932,10 @@ export function AgentWorkspace({
       .then((value) => {
         if (!cancelled) setGithubVersions(value);
       })
-      .catch((error: unknown) => {
+      .catch(() => {
         if (!cancelled) {
           setGithubVersions(null);
-          setGithubVersionsError(
-            error instanceof Error ? error.message : t("agentWorkspace.errors.loadGithubVersions"),
-          );
+          setGithubVersionsError(t("agentWorkspace.errors.loadGithubVersions"));
         }
       })
       .finally(() => {
@@ -1959,12 +1971,10 @@ export function AgentWorkspace({
       .then(([apiApps, a2a]) => {
         if (!cancelled) setIntegrationProbe({ requestKey, apiApps, a2a });
       })
-      .catch((error: unknown) => {
+      .catch(() => {
         if (!cancelled) {
           setIntegrationProbe(null);
-          setIntegrationError(
-            error instanceof Error ? error.message : t("agentWorkspace.errors.probeIntegration"),
-          );
+          setIntegrationError(t("agentWorkspace.errors.probeIntegration"));
         }
       })
       .finally(() => {
@@ -1993,7 +2003,7 @@ export function AgentWorkspace({
           pageSize: 100,
         })
       : null;
-    setFeedbackCases(cached ? feedbackCasesFromResponse(cached) : []);
+    setFeedbackCases(cached ? feedbackCasesFromResponse(cached, t) : []);
     setFeedbackSets(cached?.sets ?? []);
     setFeedbackCasesError("");
     setFeedbackCasesUnsupported(cached?.unsupportedMessage ?? "");
@@ -2015,12 +2025,12 @@ export function AgentWorkspace({
       .then((response) => {
         if (cancelled) return;
         setFeedbackSets(response.sets);
-        setFeedbackCases(feedbackCasesFromResponse(response));
+        setFeedbackCases(feedbackCasesFromResponse(response, t));
         setFeedbackCasesUnsupported(response.unsupportedMessage ?? "");
       })
-      .catch((cause) => {
+      .catch(() => {
         if (!cancelled) {
-          setFeedbackCasesError(cause instanceof Error ? cause.message : String(cause));
+          setFeedbackCasesError(t("agentWorkspace.errors.loadEvaluations"));
           setFeedbackCasesUnsupported("");
         }
       })
@@ -2039,6 +2049,7 @@ export function AgentWorkspace({
     selectedAgentInfo?.appName,
     selectedAgent?.region,
     selectedAgent?.runtimeId,
+    t,
   ]);
 
   async function createRollbackPr(version: GithubDeliveryVersion) {
@@ -2114,11 +2125,16 @@ export function AgentWorkspace({
     ) return null;
     return {
       ...feedbackCasePreview,
-      tag: feedbackCasePreview.kind === "good" ? "Good case" : "Bad case",
+      tag: t(
+        feedbackCasePreview.kind === "good"
+          ? "agentWorkspace.goodCase"
+          : "agentWorkspace.badCase",
+      ),
     };
-  }, [feedbackCasePreview, selectedAgent?.runtimeId, selectedAgentAppName]);
+  }, [feedbackCasePreview, selectedAgent?.runtimeId, selectedAgentAppName, t]);
+  const defaultCases = useMemo(() => buildDefaultCases(t), [t]);
   const cases = useMemo(() => {
-    if (!selectedAgent?.runtimeId) return DEFAULT_CASES;
+    if (!selectedAgent?.runtimeId) return defaultCases;
     if (!previewCase) return feedbackCases;
     return [
       previewCase,
@@ -2127,7 +2143,7 @@ export function AgentWorkspace({
         (!item.messageId || item.messageId !== previewCase.messageId)
       ),
     ];
-  }, [feedbackCases, previewCase, selectedAgent?.runtimeId]);
+  }, [defaultCases, feedbackCases, previewCase, selectedAgent?.runtimeId]);
   const visibleCases = cases.filter((item) => {
     if (item.kind !== caseFilter) return false;
     const source: AgentFeedbackSource = item.source === "auto" ? "auto" : "user";
@@ -2973,10 +2989,10 @@ export function AgentWorkspace({
                             ? t("agentWorkspace.restoringUpdateConfig")
                             : t("agentWorkspace.updateConfigUnavailable")}
                         </strong>
-                        {selectedUpdateCapability.reason && (
-                          <span>{selectedUpdateCapability.reason}</span>
+                        {updateCapabilityReason && (
+                          <span>{updateCapabilityReason}</span>
                         )}
-                        {selectedUpdateCapability.warnings.map((warning) => (
+                        {updateCapabilityWarnings.map((warning) => (
                           <span key={warning}>{warning}</span>
                         ))}
                       </div>
@@ -3039,7 +3055,7 @@ export function AgentWorkspace({
                             t("agentWorkspace.notAvailable")}
                         </dd>
                       </div>
-                      <div><dt>{t("agentWorkspace.agentCount")}</dt><dd>{selectedAgentInfo?.graph ? countNodes(selectedAgentInfo.graph) : countDraftNodes(draft)}</dd></div>
+                      <div><dt>{t("agentWorkspace.agentCountLabel")}</dt><dd>{selectedAgentInfo?.graph ? countNodes(selectedAgentInfo.graph) : countDraftNodes(draft)}</dd></div>
                       <div>
                         <dt>{t("agentSelector.tools")}</dt>
                         <dd className="aw-fact-badges">
@@ -3573,7 +3589,7 @@ export function AgentWorkspace({
                             onClick={() => focusCaseKind(kind)}
                           >
                             <strong>{count}</strong>
-                            <span>{kind === "good" ? "Good cases" : "Bad cases"}</span>
+                            <span>{t(kind === "good" ? "agentWorkspace.goodCases" : "agentWorkspace.badCases")}</span>
                           </button>
                         );
                       })}
@@ -3590,7 +3606,7 @@ export function AgentWorkspace({
                             aria-pressed={caseFilter === filter}
                             onClick={() => setCaseFilter(filter)}
                           >
-                            {filter === "good" ? "Good case" : "Bad case"}
+                            {t(filter === "good" ? "agentWorkspace.goodCase" : "agentWorkspace.badCase")}
                           </button>
                         ))}
                       </div>
@@ -4003,7 +4019,7 @@ function CaseTable({
                     className="aw-case-output-preview"
                     title={item.referenceOutput}
                   >
-                    Reference: {item.referenceOutput}
+                    {t("agentWorkspace.reference")}: {item.referenceOutput}
                   </small>
                 )}
                 {canExpand && (

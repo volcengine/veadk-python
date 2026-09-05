@@ -40,6 +40,7 @@
     "nextRun": "下次执行",
     "pageLabel": "定时任务详情",
     "region": "地域",
+    "runtime": "运行时",
     "status": "任务状态"
   },
   "drawer": {
@@ -63,6 +64,7 @@
     "prompt": "执行文本",
     "promptPlaceholder": "输入每次执行时发送给 Agent 的固定文本",
     "runAt": "执行时间",
+    "runtimeAgent": "运行时智能体",
     "runtimeHelp": "任务始终跟随该 Runtime 当前生效版本。",
     "runtimePlaceholder": "选择 Runtime Agent",
     "schedule": "执行计划",
@@ -81,6 +83,8 @@
     "errorDetails": "错误详情",
     "finalAnswer": "最终回答",
     "loadFailed": "无法加载执行历史",
+    "loadFailedDescription": "请检查 Studio 服务后重试。",
+    "session": "会话",
     "title": "执行历史"
   },
   "notices": {
@@ -97,6 +101,7 @@
     "filterLabel": "定时任务状态筛选",
     "listLabel": "定时任务列表",
     "loadFailed": "无法加载定时任务",
+    "loadFailedDescription": "请检查 Studio 服务后重试。",
     "title": "定时任务"
   },
   "schedule": {

@@ -164,7 +164,7 @@ test("system information page lists sandbox tools and the current identity user 
   assert.match(systemInfoSource, /t\("systemInfo\.userPool"\)/);
   assert.match(
     systemInfoSource,
-    /<dl className="system-info-pool"[\s\S]*?<dt>\{t\("common\.name"\)\}<\/dt>[\s\S]*?<dt>ID<\/dt>[\s\S]*?<dt>\{t\("systemInfo\.domain"\)\}<\/dt>[\s\S]*?<dt>\{t\("systemInfo\.region"\)\}<\/dt>[\s\S]*?<\/dl>/,
+    /<dl className="system-info-pool"[\s\S]*?<dt>\{t\("common\.name"\)\}<\/dt>[\s\S]*?<dt>\{t\("systemInfo\.id"\)\}<\/dt>[\s\S]*?<dt>\{t\("systemInfo\.domain"\)\}<\/dt>[\s\S]*?<dt>\{t\("systemInfo\.region"\)\}<\/dt>[\s\S]*?<\/dl>/,
   );
   assert.match(
     systemInfoSource,
@@ -303,7 +303,8 @@ test("system information shows environment CodePipeline and Container Registry r
   assert.match(clientSource, /getEnvironmentResources/);
   assert.match(clientSource, /\/web\/v3\/environment-resources/);
   assert.match(systemInfoSource, /t\("systemInfo\.environmentBuild"\)/);
-  assert.match(systemInfoSource, /CodePipeline Workspace/);
+  assert.match(systemInfoSource, /t\("systemInfo\.codePipelineWorkspace"\)/);
+  assert.match(systemInfoSource, /t\("systemInfo\.codePipelinePipeline"\)/);
   assert.match(systemInfoSource, /t\("systemInfo\.containerRegistryRepository"\)/);
   assert.match(systemInfoSource, /environmentResources\.codePipeline\.consoleUrl/);
   assert.match(systemInfoSource, /environmentResources\.containerRegistry\.consoleUrl/);

@@ -32,11 +32,11 @@
         "description": "导入带有 AgentKit Studio App Server 的 basic Agent 项目，并添加持续发布到 AgentKit Runtime 的工作流。合并前请配置 {{provider}} Secrets。"
       },
       "fields": {
-        "repository": { "label": "GitHub Repo", "placeholder": "owner/repository", "help": "支持 owner/repository 或完整 github.com URL" },
+        "repository": { "label": "GitHub 仓库", "placeholder": "owner/repository", "help": "支持 owner/repository 或完整 github.com URL" },
         "baseBranch": { "label": "目标分支", "placeholder": "main", "help": "留空时使用 main，PR 将以此分支为 base" },
         "projectPath": { "label": "Agent 项目目录", "placeholder": "agentkit-basic-agent", "help": "将在此目录新增 basic 项目；app.py 挂载完整 Studio App Server，并作为服务入口启动" },
         "runtimeName": { "label": "Runtime 名称", "placeholder": "support-agent", "help": "用于 AgentKit 发布配置" },
-        "runtimeId": { "label": "Runtime ID", "placeholder": "rt-xxxxxxxx", "help": "持续更新的目标 AgentKit Runtime" }
+        "runtimeId": { "label": "运行时 ID", "placeholder": "rt-xxxxxxxx", "help": "持续更新的目标 AgentKit Runtime" }
       }
     },
     "delivery": {
@@ -52,11 +52,11 @@
         "description": "新增 GitHub Actions 工作流，在目标分支更新时持续发布到 AgentKit Runtime。合并前请配置工作流所需的 {{provider}} Secrets。"
       },
       "fields": {
-        "repository": { "label": "GitHub Repo", "placeholder": "owner/repository", "help": "支持 owner/repository 或完整 github.com URL" },
+        "repository": { "label": "GitHub 仓库", "placeholder": "owner/repository", "help": "支持 owner/repository 或完整 github.com URL" },
         "baseBranch": { "label": "目标分支", "placeholder": "main", "help": "留空时使用 main，PR 将以此分支为 base" },
         "projectPath": { "label": "Agent 项目目录", "placeholder": ".", "help": "留空时使用仓库根目录；目录内需包含挂载完整 Studio App Server 的 app.py" },
         "runtimeName": { "label": "Runtime 名称", "placeholder": "support-agent", "help": "用于 AgentKit 发布配置" },
-        "runtimeId": { "label": "Runtime ID", "placeholder": "rt-xxxxxxxx", "help": "持续更新的目标 AgentKit Runtime" }
+        "runtimeId": { "label": "运行时 ID", "placeholder": "rt-xxxxxxxx", "help": "持续更新的目标 AgentKit Runtime" }
       }
     },
     "review": {
@@ -72,9 +72,9 @@
         "description": "新增 GitHub Actions 工作流，在隔离 Sandbox 中评审同仓库 PR，并将结果发布为 GitHub Review。合并前请配置工作流所需 Secrets。"
       },
       "fields": {
-        "repository": { "label": "GitHub Repo", "placeholder": "owner/repository", "help": "支持 owner/repository 或完整 github.com URL" },
+        "repository": { "label": "GitHub 仓库", "placeholder": "owner/repository", "help": "支持 owner/repository 或完整 github.com URL" },
         "baseBranch": { "label": "目标分支", "placeholder": "main", "help": "留空时使用 main，PR 将以此分支为 base" },
-        "sandboxToolId": { "label": "Sandbox Tool ID", "placeholder": "tool-xxxxxxxx", "help": "用于运行每次评审的 AgentKit CodeEnv" },
+        "sandboxToolId": { "label": "沙箱工具 ID", "placeholder": "tool-xxxxxxxx", "help": "用于运行每次评审的 AgentKit CodeEnv" },
         "modelName": { "label": "评审模型", "placeholder": "review-model", "help": "注入 Sandbox 的代码评审模型名称" },
         "modelBaseUrl": { "label": "模型 API 地址", "placeholder": "https://ark.example.com/api/v3", "help": "必须使用 OpenAI 兼容的 HTTPS 地址" }
       }
@@ -110,11 +110,11 @@
     "submitting": "提交 PR 中…",
     "validation": {
       "required": "此项不能为空",
-      "repository": "请输入 owner/repository 或完整 GitHub Repo URL",
+      "repository": "请输入 owner/repository 或完整 GitHub 仓库 URL",
       "baseBranch": "目标分支格式不正确",
       "projectPath": "请输入仓库内的相对目录",
-      "runtimeId": "Runtime ID 格式不正确",
-      "sandboxToolId": "Sandbox Tool ID 格式不正确",
+      "runtimeId": "运行时 ID 格式不正确",
+      "sandboxToolId": "沙箱工具 ID 格式不正确",
       "modelName": "模型名称格式不正确",
       "modelBaseUrlSafe": "请输入不含凭据、查询参数或锚点的 HTTPS 地址",
       "modelBaseUrl": "请输入有效的 HTTPS 地址",

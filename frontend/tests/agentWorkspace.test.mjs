@@ -39,6 +39,12 @@ const skillSourcePickerSource = readFileSync(
   new URL("../src/ui/SkillSourcePicker.tsx", import.meta.url),
   "utf8",
 );
+const enUiCatalog = JSON.parse(
+  readFileSync(new URL("../src/i18n/resources/en-US/ui.json", import.meta.url), "utf8"),
+);
+const zhUiCatalog = JSON.parse(
+  readFileSync(new URL("../src/i18n/resources/zh-CN/ui.json", import.meta.url), "utf8"),
+);
 
 test("Agent navigation uses the card page and keeps only detail workspace routes", () => {
   assert.match(appSource, /import \{[\s\S]*?AgentWorkspace[\s\S]*?\} from "\.\/ui\/AgentWorkspace"/);
@@ -776,7 +782,8 @@ test("introspection-only runtime updates are visibly blocked without treating em
     /selectedUpdateCapability\s*&&\s*!selectedUpdateCapability\.canUpdate\s*&&/,
   );
   assert.doesNotMatch(workspaceSource, /更新配置说明/);
-  assert.match(workspaceSource, /selectedUpdateCapability\.warnings\.map/);
+  assert.match(workspaceSource, /updateCapabilityWarnings\.map/);
+  assert.match(workspaceSource, /function localeCompatibleBackendText/);
   assert.match(workspaceStyles, /\.aw-update-recovery-notice\s*\{/);
   assert.match(workspaceStyles, /hsl\(42 92% 96%\)/);
   assert.doesNotMatch(
@@ -837,6 +844,15 @@ test("runtime update capability checks ignore aborted and stale selections", () 
   assert.match(workspaceSource, /updateCapabilityLoading[\s\S]*?loading-gap-spinner[\s\S]*?t\("agentWorkspace\.preparing"\)/);
   assert.match(workspaceSource, /aria-describedby=\{updateBlockedReason \? updateReasonId : undefined\}/);
   assert.match(workspaceSource, /className="aw-update-disabled-reason"[\s\S]*?role="tooltip"/);
+  const capabilityRequest = workspaceSource.slice(
+    workspaceSource.indexOf("const loadCapability = (initial: boolean) =>"),
+    workspaceSource.indexOf("loadCapability(true);"),
+  );
+  assert.match(
+    capabilityRequest,
+    /\.catch\(\(\) => \{[\s\S]*?setUpdateCapabilityError\(t\("agentWorkspace\.errors\.checkUpdateCapability"\)\)/,
+  );
+  assert.doesNotMatch(capabilityRequest, /error\.message/);
   assert.match(workspaceStyles, /\.aw-update-wrap\.is-disabled:hover \.aw-update-disabled-reason/);
   assert.match(workspaceStyles, /\.aw-update-wrap\.is-disabled:focus-visible \.aw-update-disabled-reason/);
 });
@@ -1053,8 +1069,12 @@ test("agent detail evaluation tab reads feedback datasets", () => {
   assert.match(workspaceSource, /const count = previewCase \? localCount : set\?\.itemCount \?\? localCount/);
   assert.doesNotMatch(workspaceSource, /Math\.max\(\s*set\?\.itemCount/);
   assert.match(workspaceSource, /loading=\{feedbackCasesLoading && visibleCases\.length === 0\}/);
-  assert.match(workspaceSource, /Good cases/);
-  assert.match(workspaceSource, /Bad cases/);
+  assert.match(workspaceSource, /"agentWorkspace\.goodCases"/);
+  assert.match(workspaceSource, /"agentWorkspace\.badCases"/);
+  assert.match(workspaceSource, /"agentWorkspace\.goodCase"/);
+  assert.match(workspaceSource, /"agentWorkspace\.badCase"/);
+  assert.doesNotMatch(workspaceSource, />Good cases</);
+  assert.doesNotMatch(workspaceSource, />Bad cases</);
   assert.match(
     workspaceSource,
     /<span>\{t\("agentWorkspace\.userInput"\)\}<\/span>[\s\S]*?<span>\{t\("agentWorkspace\.agentOutput"\)\}<\/span>[\s\S]*?<span>\{t\("agentWorkspace\.score"\)\}<\/span>[\s\S]*?<span>\{t\("agentWorkspace\.scoreReason"\)\}<\/span>[\s\S]*?<span className="aw-case-action-head">\{t\("skillCenter\.actions"\)\}<\/span>/,
@@ -1093,6 +1113,55 @@ test("agent detail evaluation tab reads feedback datasets", () => {
   assert.match(workspaceStyles, /\.aw-case-row\.is-focused/);
   assert.match(workspaceStyles, /\.aw-agent-tabs button[\s\S]*?font-size: 14px/);
   assert.match(workspaceStyles, /\.aw-case-error/);
+});
+
+test("Agent workspace-owned labels and sample cases are fully localized", () => {
+  const defaultCasesSource = workspaceSource.slice(
+    workspaceSource.indexOf("function buildDefaultCases"),
+    workspaceSource.indexOf("const DEFAULT_EVALUATION_GROUPS"),
+  );
+
+  assert.match(defaultCasesSource, /function buildDefaultCases\(t: TFunction\): AgentCase\[\]/);
+  assert.match(defaultCasesSource, /agentWorkspace\.defaultCases\.weeklyFeedback\.input/);
+  assert.match(defaultCasesSource, /agentWorkspace\.defaultCases\.repeatedTool\.output/);
+  assert.doesNotMatch(defaultCasesSource, /[\u3400-\u9fff]/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.agentCountLabel"\)/);
+  assert.doesNotMatch(workspaceSource, /<dt>\{t\("agentWorkspace\.agentCount"\)\}<\/dt>/);
+  assert.match(
+    workspaceSource,
+    /\{t\("agentWorkspace\.reference"\)\}: \{item\.referenceOutput\}/,
+  );
+  assert.doesNotMatch(workspaceSource, /Reference: \{item\.referenceOutput\}/);
+
+  for (const catalog of [enUiCatalog, zhUiCatalog]) {
+    assert.equal(typeof catalog.agentWorkspace.agentCountLabel, "string");
+    assert.equal(typeof catalog.agentWorkspace.goodCases, "string");
+    assert.equal(typeof catalog.agentWorkspace.badCases, "string");
+    assert.equal(typeof catalog.agentWorkspace.reference, "string");
+    assert.equal(typeof catalog.agentWorkspace.defaultCases.weeklyFeedback.input, "string");
+    assert.equal(typeof catalog.agentWorkspace.defaultCases.uncertainConclusion.reason, "string");
+  }
+  assert.match(enUiCatalog.agentWorkspace.defaultCases.weeklyFeedback.input, /customer feedback/i);
+  assert.match(zhUiCatalog.agentWorkspace.defaultCases.weeklyFeedback.input, /客户反馈/);
+});
+
+test("Agent detail request failures use localized messages instead of raw backend responses", () => {
+  assert.match(
+    workspaceSource,
+    /setAgentUsageError\(t\("agentWorkspace\.errors\.loadUsage"\)\)/,
+  );
+  assert.match(
+    workspaceSource,
+    /setFeedbackCasesError\(t\("agentWorkspace\.errors\.loadEvaluations"\)\)/,
+  );
+  assert.match(
+    workspaceSource,
+    /setOptimizationsError\(t\("agentWorkspace\.errors\.loadOptimizations"\)\)/,
+  );
+  assert.match(
+    workspaceSource,
+    /setIntegrationError\(t\("agentWorkspace\.errors\.probeIntegration"\)\)/,
+  );
 });
 
 test("agent detail exposes optimization recommendations between evaluations and integrations", () => {

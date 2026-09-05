@@ -104,7 +104,7 @@ export function SandboxAgentDetails({
             <dd>{wakeable ? session.reason || "—" : formatDate(session.expireAt, locale)}</dd>
           </div>
           <div className="is-wide">
-            <dt>{wakeable ? "Snapshot ID" : "Session ID"}</dt>
+            <dt>{t(wakeable ? "agentDetails.snapshotId" : "agentDetails.sessionId")}</dt>
             <dd>{wakeable ? session.snapshotId : resourceId}</dd>
           </div>
           {wakeable && session.sourceSessionId ? (

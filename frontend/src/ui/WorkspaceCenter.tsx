@@ -255,13 +255,14 @@ function WorkspaceList({ onEnvironment }: { onEnvironment: () => void }) {
       setEnvironments(nextEnvironments);
     }).catch((cause) => {
       if ((cause as Error)?.name !== "AbortError") {
-        setLoadError(cause instanceof Error ? cause.message : String(cause));
+        console.warn("Unable to load Studio workspaces", cause);
+        setLoadError(t("workspace.loadFailed"));
       }
     }).finally(() => {
       if (!controller.signal.aborted) setLoading(false);
     });
     return () => controller.abort();
-  }, [reloadKey]);
+  }, [reloadKey, t]);
 
   useEffect(() => {
     if (!statusMessage || statusError) return;

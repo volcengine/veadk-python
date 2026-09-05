@@ -1,5 +1,8 @@
 {
   "annotation": {
+    "selectedExcerptLabel": "Selected excerpt",
+    "commentLabel": "Annotation",
+    "commentSeparator": ": ",
     "successTitle": "Added to the Bad Case evaluation set",
     "successDescription": "This annotation is linked to the current question and the complete model response.",
     "done": "Done",
@@ -99,6 +102,7 @@
     "downloadFormat": "Download {{format}}"
   },
   "blocks": {
+    "unsupportedComponent": "Unsupported component: {{component}}",
     "sandboxIdentity": "Codex Sandbox execution identifiers",
     "useSkill": "Use the {{name}} skill",
     "thinkingDone": "Finished thinking",
@@ -173,6 +177,7 @@
     "createAgents": {
       "categories": { "skill_hub": "Skill Hub", "skill_space": "AgentKit Skill Center", "knowledge_base": "Knowledge base", "tool": "Tools" },
       "agentTypes": { "llm": "LLM Agent", "sequential": "Sequential Agent", "parallel": "Parallel Agent", "loop": "Loop Agent", "workflow": "Workflow" },
+      "subAgents": "Sub-agents",
       "builtinTool": "Built-in tool",
       "skillCenter": "AgentKit Skill Center",
       "selfAuthoredTools": "Custom tools",

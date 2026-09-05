@@ -313,7 +313,7 @@ export function NewChatSkillTargetPicker({
             if (event.pointerType === "mouse") setKeyboardNavigating(false);
           }}
         >
-          <div className="new-chat-agent-picker__menu" role="menu" aria-label="Skill Space">
+          <div className="new-chat-agent-picker__menu" role="menu" aria-label={t("skill.spaceAria")}>
             {spacesLoading && spaces.length === 0 ? (
               <div className="new-chat-agent-picker__status" role="status" aria-live="polite">
                 <span className="new-chat-agent-picker__spinner new-chat-skill-target-picker__spinner" aria-hidden="true" />

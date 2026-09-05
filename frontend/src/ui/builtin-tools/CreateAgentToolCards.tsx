@@ -156,7 +156,7 @@ function SubAgentList({ agents }: { agents: CreatedSubAgentView[] }) {
   if (agents.length === 0) return null;
   return (
     <section className="create-agent-card__popover-section">
-      <h4>Sub Agent</h4>
+      <h4>{t("blocks.createAgents.subAgents")}</h4>
       <div className="create-agent-card__popover-list">
         {agents.map((agent) => (
           <div className="create-agent-card__popover-item" key={agent.id}>

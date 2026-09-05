@@ -152,6 +152,17 @@ test("round-trips selected options in YAML and omits the unselected default", ()
   assert.doesNotMatch(yaml, /sql_readonly|bytedance-agentkit-harness-sidecar/);
 });
 
+test("supports localized YAML header comments", () => {
+  const yaml = draftToYaml(normalizeDraft({ name: "localized" }), {
+    heading: "VeADK agent structure configuration",
+    importHint: "Reload this file from Import YAML on the Create Agent page.",
+  });
+
+  assert.match(yaml, /^# VeADK agent structure configuration$/m);
+  assert.match(yaml, /^# Reload this file from Import YAML on the Create Agent page\.$/m);
+  assert.doesNotMatch(yaml, /[\u3400-\u9fff]/u);
+});
+
 test("uses this Studio release's integrated optimization metadata", () => {
   assert.match(harnessOptionsSource, /HARNESS_SIDECAR_OPTIONS/);
   assert.match(harnessOptionsSource, /HARNESS_SIDECAR_OPTION_GROUPS/);

@@ -26,6 +26,8 @@ test("manages reusable environments inside workspaces", () => {
   assert.match(workspaceSource, /deleteWorkspace/);
   assert.match(workspaceSource, /<EnvironmentCenter/);
   assert.match(workspaceSource, /label: t\("common\.environment"\)/);
+  assert.match(workspaceSource, /setLoadError\(t\("workspace\.loadFailed"\)\)/);
+  assert.doesNotMatch(workspaceSource, /setLoadError\(cause instanceof Error \? cause\.message/);
 });
 
 test("reads environment share codes during the environment tab gesture", () => {

@@ -594,7 +594,7 @@ function CreateKnowledgeDocumentDialog({ base, onClose, onCreated, onAssociation
                   <label><span>{t("knowledge.optionalType")}</span><input value={documentType} disabled={busy} maxLength={64} onChange={(event) => setDocumentType(event.target.value)} placeholder="pdf, docx, png" /></label>
                 </div>
               ) : null}
-              <label><span>Metadata（JSON）</span><textarea className="is-code" value={metadata} disabled={busy} onChange={(event) => setMetadata(event.target.value)} spellCheck={false} /></label>
+              <label><span>{t("knowledge.metadataJson")}</span><textarea className="is-code" value={metadata} disabled={busy} onChange={(event) => setMetadata(event.target.value)} spellCheck={false} /></label>
               <FormError message={error} />
             </div>
             <footer className="knowledge-dialog__actions">
@@ -637,7 +637,7 @@ function EditKnowledgeDocumentDialog({ base, item, onClose, onUpdated }: { base:
       <form onSubmit={(event) => void submit(event)}>
         <div className="knowledge-dialog__body">
           <label><span>{t("knowledge.knowledge")}</span><input value={item.name || item.id} disabled /></label>
-          <label><span>Metadata（JSON）</span><textarea autoFocus className="is-code knowledge-metadata-editor" value={metadata} onChange={(event) => setMetadata(event.target.value)} spellCheck={false} /></label>
+          <label><span>{t("knowledge.metadataJson")}</span><textarea autoFocus className="is-code knowledge-metadata-editor" value={metadata} onChange={(event) => setMetadata(event.target.value)} spellCheck={false} /></label>
           <FormError message={error} />
         </div>
         <footer className="knowledge-dialog__actions">
@@ -1359,8 +1359,8 @@ export function KnowledgeLibrary({
               content: (
                 <section className="knowledge-overview">
                   <ResourceDetailSummary className="knowledge-overview__summary">
-                    <div><dt>Provider</dt><dd>{selected.providerType || "-"}</dd></div>
-                    <div><dt>Knowledge ID</dt><dd className="knowledge-keyboard-reveal" tabIndex={0} title={selected.providerKnowledgeId}>{selected.providerKnowledgeId || "-"}</dd></div>
+                    <div><dt>{t("knowledge.provider")}</dt><dd>{selected.providerType || "-"}</dd></div>
+                    <div><dt>{t("knowledge.knowledgeId")}</dt><dd className="knowledge-keyboard-reveal" tabIndex={0} title={selected.providerKnowledgeId}>{selected.providerKnowledgeId || "-"}</dd></div>
                     <div><dt>{t("knowledge.project")}</dt><dd>{selected.projectName || "default"}</dd></div>
                     <div><dt>{t("knowledge.creator")}</dt><dd>{formatResourceSource(selected.ownerLabel)}</dd></div>
                     <div><dt>{t("skillCenter.updatedAt")}</dt><dd>{formatDate(selected.updatedAt, i18n.resolvedLanguage ?? i18n.language) || "-"}</dd></div>

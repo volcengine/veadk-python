@@ -1,5 +1,8 @@
 {
   "annotation": {
+    "selectedExcerptLabel": "选中片段",
+    "commentLabel": "批注",
+    "commentSeparator": "：",
     "successTitle": "已加入 Bad case 评测集",
     "successDescription": "这条批注已关联当前问题和完整模型回复。",
     "done": "完成",
@@ -99,6 +102,7 @@
     "downloadFormat": "下载 {{format}}"
   },
   "blocks": {
+    "unsupportedComponent": "不支持的组件：{{component}}",
     "sandboxIdentity": "Codex Sandbox 执行标识",
     "useSkill": "使用 {{name}} 技能",
     "thinkingDone": "已完成思考",
@@ -172,7 +176,8 @@
     },
     "createAgents": {
       "categories": { "skill_hub": "Skill Hub", "skill_space": "AgentKit 技能中心", "knowledge_base": "知识库", "tool": "工具" },
-      "agentTypes": { "llm": "LLM Agent", "sequential": "顺序 Agent", "parallel": "并行 Agent", "loop": "循环 Agent", "workflow": "Workflow" },
+      "agentTypes": { "llm": "LLM 智能体", "sequential": "顺序智能体", "parallel": "并行智能体", "loop": "循环智能体", "workflow": "工作流" },
+      "subAgents": "子智能体",
       "builtinTool": "内置工具",
       "skillCenter": "AgentKit 技能中心",
       "selfAuthoredTools": "自写工具",

@@ -6245,7 +6245,10 @@ export function CustomCreate({
                 onExportYaml={() =>
                   downloadText(
                     `${providerDraft.name || "agent"}.yaml`,
-                    draftToYaml(providerDraft),
+                    draftToYaml(providerDraft, {
+                      heading: t("yaml.heading"),
+                      importHint: t("yaml.importHint"),
+                    }),
                     "text/yaml",
                   )
                 }

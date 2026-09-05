@@ -150,6 +150,8 @@
     "createdAt": "Created at",
     "snapshotReason": "Snapshot reason",
     "expiresAt": "Expires at",
+    "snapshotId": "Snapshot ID",
+    "sessionId": "Session ID",
     "sourceSessionId": "Source Session ID",
     "delete": "Delete Agent",
     "waking": "Waking…",

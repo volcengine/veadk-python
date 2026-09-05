@@ -334,7 +334,7 @@ export function SystemInfo({
               ) : environmentResources ? (
                 <dl className="system-info-summary">
                   <div className="system-info-resource-row">
-                    <dt>CodePipeline Workspace</dt>
+                    <dt>{t("systemInfo.codePipelineWorkspace")}</dt>
                     <dd className="system-info-resource-value">
                       <ConsoleLink
                         href={environmentResources.codePipeline.consoleUrl || null}
@@ -347,7 +347,7 @@ export function SystemInfo({
                     </dd>
                   </div>
                   <div className="system-info-resource-row">
-                    <dt>CodePipeline Pipeline</dt>
+                    <dt>{t("systemInfo.codePipelinePipeline")}</dt>
                     <dd className="system-info-resource-value">
                       {environmentResources.codePipeline.pipelineName ||
                         environmentResources.codePipeline.pipelineId ||
@@ -523,7 +523,7 @@ export function SystemInfo({
                         </dd>
                       </div>
                       <div>
-                        <dt>ID</dt>
+                        <dt>{t("systemInfo.id")}</dt>
                         <dd>{pool.uid || "—"}</dd>
                       </div>
                       <div>

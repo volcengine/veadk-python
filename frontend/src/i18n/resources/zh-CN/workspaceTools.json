@@ -47,6 +47,7 @@
       "loadFailed": "预览加载失败，请稍后重试或下载查看",
       "unsupported": "当前格式暂不支持在线预览，请下载查看",
       "sourceAria": "产物来源",
+      "agent": "智能体",
       "session": "会话",
       "tool": "生成工具",
       "createdAt": "生成时间",
@@ -180,7 +181,7 @@
         "description": "参考开发、调试与部署经验"
       },
       "showcases": {
-        "title": "Showcases",
+        "title": "案例展示",
         "description": "探索 AgentKit 应用案例"
       }
     },
@@ -258,13 +259,13 @@
       "model": "模型",
       "description": "描述",
       "status": "状态信息",
-      "project": "Project",
+      "project": "项目",
       "version": "版本",
       "resources": "资源",
-      "memory": "Memory",
-      "tool": "Tool",
-      "knowledge": "Knowledge",
-      "mcpToolset": "MCP Toolset",
+      "memory": "记忆",
+      "tool": "工具",
+      "knowledge": "知识",
+      "mcpToolset": "MCP 工具集",
       "updatedAt": "更新时间"
     },
     "resource": {

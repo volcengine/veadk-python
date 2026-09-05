@@ -697,7 +697,7 @@ export function ArtifactLibrary({
                 ) : null}
                 <dl>
                   <div>
-                    <dt>Agent</dt>
+                    <dt>{t("artifactLibrary.preview.agent")}</dt>
                     <dd title={previewArtifact.agentName}>{previewArtifact.agentName}</dd>
                   </div>
                   <div>
