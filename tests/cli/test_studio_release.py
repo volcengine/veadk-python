@@ -657,6 +657,43 @@ def test_release_entrypoint_reads_deployed_provider() -> None:
     assert "python3 -m veadk.cli.studio_companion" in run_script
 
 
+def test_release_entrypoint_exports_exact_managed_cli_source() -> None:
+    full_script = studio_run_script(provider="volcengine")
+    thin_script = studio_run_script(
+        provider="volcengine",
+        runtime_manifest_filename="studio-runtime.json",
+    )
+
+    assert (
+        "unset VEADK_STUDIO_AGENTKIT_CLI_ARCHIVE "
+        "VEADK_STUDIO_AGENTKIT_CLI_RUNTIME_MANIFEST" in full_script
+    )
+    assert (
+        'export VEADK_STUDIO_AGENTKIT_CLI_ARCHIVE="$ROOT_DIR/'
+        'agentkit-linux-x64.tar.gz"' in full_script
+    )
+    assert "export VEADK_STUDIO_AGENTKIT_CLI_RUNTIME_MANIFEST=" not in full_script
+    assert (
+        'export VEADK_STUDIO_AGENTKIT_CLI_RUNTIME_MANIFEST="$ROOT_DIR/'
+        'studio-runtime.json"' in thin_script
+    )
+    assert "export VEADK_STUDIO_AGENTKIT_CLI_ARCHIVE=" not in thin_script
+
+
+def test_publisher_entrypoint_exports_exact_managed_cli_source() -> None:
+    full_script = publisher._studio_run_script()
+    thin_script = publisher._studio_run_script(thin=True)
+
+    assert (
+        'export VEADK_STUDIO_AGENTKIT_CLI_ARCHIVE="$ROOT_DIR/'
+        'agentkit-linux-x64.tar.gz"' in full_script
+    )
+    assert (
+        'export VEADK_STUDIO_AGENTKIT_CLI_RUNTIME_MANIFEST="$ROOT_DIR/'
+        'studio-runtime.json"' in thin_script
+    )
+
+
 def test_release_entrypoint_starts_companion_and_studio_concurrently() -> None:
     run_script = studio_run_script(provider="volcengine")
 
