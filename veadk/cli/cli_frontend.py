@@ -3742,6 +3742,25 @@ def _run_frontend_server(
         ("dev", "Dev Sandbox", "SANDBOX_DEV", False),
     )
 
+    from frontend.server.sandbox_updates import register_sandbox_update_routes
+    from veadk.cli.studio_sandbox_updates import SandboxToolUpdates
+
+    register_sandbox_update_routes(
+        app,
+        service=SandboxToolUpdates(
+            provider,
+            _skill_workbench_tools_client,
+            regions=sandbox_region_candidates(
+                os.getenv("AGENTKIT_SANDBOX_REGION"), provider=provider
+            ),
+        ),
+        require_admin=_require_studio_admin,
+        configured_tools=lambda: {
+            kind: (os.getenv(environment_key) or "").strip()
+            for kind, _label, environment_key, _snapshot in system_info_sandbox_tools
+        },
+    )
+
     def _default_model_env_state() -> dict[str, object]:
         return {
             "needsModelEnvUpdate": False,

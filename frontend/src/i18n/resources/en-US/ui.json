@@ -48,6 +48,13 @@
     "console": "Console"
   },
   "systemInfo": {
+    "checkUpdates": "Check for updates",
+    "checkingVersions": "Checking versions…",
+    "versionCheckError": "Unable to check sandbox versions. Check credentials, region and API permissions, then retry.",
+    "sandboxUpdateError": "Sandbox update failed. Refresh its status before retrying.",
+    "modelEnvRepairUnavailable": "Cannot repair model configuration. Check CODEX_API_KEY and CODEX_BASE_URL.",
+    "updateSandbox": "Update {{variant}}{{name}}",
+    "updatingSandbox": "Updating",
     "title": "System information",
     "description": "View the current Studio version and related infrastructure resources",
     "general": "General",

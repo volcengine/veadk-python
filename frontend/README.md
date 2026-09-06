@@ -5,6 +5,18 @@ server that `veadk frontend` launches — no separate backend.
 
 ## Features
 
+- **Sandbox updates** in System Information compare each Tool's current image
+  with `ListToolTypes` for its cloud provider and actual region. Volcengine and
+  BytePlus use their own credentials and API hosts; catalogs are cached for
+  60 seconds and fetched again before an update. Admins can update configured
+  prebuilt Tools with `UpdateTool.ImageUrl`. Codex and DeepSeek Harness share
+  update state when they reference the same Tool; snapshot Tools are checked
+  independently. Missing Codex `MODEL_AGENT_API_KEY` / `MODEL_AGENT_BASE_URL`
+  values are still backfilled from `CODEX_*`, preserving existing variables.
+  Completion requires Tool `Ready` and the target image; this does not verify
+  existing Sessions or rebuild their snapshots. BytePlus has automated coverage,
+  but its image update has not been verified against a live account.
+
 - **Streaming chat** over the ADK `/run_sse` event stream. While an Agent is
   generating, the composer exposes a stop control that cancels only the active
   response, preserves content already received, and immediately enables the

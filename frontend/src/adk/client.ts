@@ -5040,3 +5040,58 @@ export async function deleteGeneratedAgentTestRun(runId: string): Promise<void> 
     throw new Error(await httpErrorMessage(res, adkT("client.cleanupDebugRunFailed")));
   }
 }
+
+export interface SandboxImageState {
+  toolId: string;
+  error: string;
+  provider?: CloudProvider;
+  region?: string;
+  toolType?: string;
+  status?: string;
+  currentImage?: string;
+  latestImage?: string;
+  needsImageUpdate?: boolean;
+  needsModelEnvUpdate?: boolean;
+  canUpdateModelEnv?: boolean;
+  modelEnvError?: string;
+  canUpdate?: boolean;
+}
+
+function sandboxImageState(value: unknown): SandboxImageState {
+  if (!value || typeof value !== "object") throw new Error(adkT("client.invalidSandboxVersion"));
+  const row = value as SandboxImageState;
+  if (typeof row.toolId !== "string" || typeof row.error !== "string") {
+    throw new Error(adkT("client.invalidSandboxVersion"));
+  }
+  if (!row.error && (
+    (row.provider !== "volcengine" && row.provider !== "byteplus") ||
+    typeof row.region !== "string" || typeof row.status !== "string" ||
+    typeof row.currentImage !== "string" || typeof row.latestImage !== "string" ||
+    typeof row.needsImageUpdate !== "boolean" || typeof row.canUpdate !== "boolean" ||
+    typeof row.needsModelEnvUpdate !== "boolean" ||
+    typeof row.canUpdateModelEnv !== "boolean" || typeof row.modelEnvError !== "string"
+  )) throw new Error(adkT("client.invalidSandboxVersion"));
+  return row;
+}
+
+export async function getSandboxImageUpdates(signal?: AbortSignal): Promise<SandboxImageState[]> {
+  const response = await apiFetch("/web/system-info/sandbox-tools/updates", { signal });
+  if (!response.ok) throw new Error(await httpErrorMessage(response, adkT("client.loadSandboxVersionsFailed")));
+  const payload = await response.json() as { tools?: unknown };
+  if (!Array.isArray(payload.tools)) throw new Error(adkT("client.invalidSandboxVersion"));
+  return payload.tools.map(sandboxImageState);
+}
+
+export async function updateSandboxTool(kind: SandboxToolKind): Promise<{
+  updated: boolean;
+  state: SandboxImageState;
+}> {
+  const response = await apiFetch(
+    `/web/system-info/sandbox-tools/${encodeURIComponent(kind)}/update`,
+    { method: "POST" }, {}, 330_000,
+  );
+  if (!response.ok) throw new Error(await httpErrorMessage(response, adkT("client.updateSandboxFailed")));
+  const payload = await response.json() as { updated?: unknown; state?: unknown };
+  if (typeof payload.updated !== "boolean") throw new Error(adkT("client.invalidSandboxUpdate"));
+  return { updated: payload.updated, state: sandboxImageState(payload.state) };
+}

@@ -1,16 +1,15 @@
 import { useEffect, useRef, useState } from "react";
-import { RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import {
   getEnvironmentResources,
   getSystemInfo,
   listIdentityUserPools,
-  updateCodexSandboxToolModelEnv,
-  type CodexSandboxToolKind,
+  getSandboxImageUpdates,
+  updateSandboxTool,
+  type SandboxImageState,
   type IdentityUserPool,
   type EnvironmentResourcesResponse,
   type SandboxToolInfo,
-  type SandboxToolKind,
   type StudioRole,
 } from "../adk/client";
 import type { CloudProvider } from "../adk/cloudProvider";
@@ -65,8 +64,14 @@ function isMissingLocalCredentials(cause: unknown): boolean {
   );
 }
 
-function isCodexSandboxToolKind(kind: SandboxToolKind): kind is CodexSandboxToolKind {
-  return kind === "codex" || kind === "codex_snapshot";
+function SandboxUpdateIcon({ spinning }: { spinning: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"
+      aria-hidden="true" className={spinning ? "is-spinning" : ""}>
+      <path d="M19.5 9A8 8 0 0 0 5 6L3 9m0-5v5h5M4.5 15A8 8 0 0 0 19 18l2-3m0 5v-5h-5" />
+    </svg>
+  );
 }
 
 interface SandboxToolUpdateState {
@@ -105,8 +110,22 @@ export function SystemInfo({
   const [environmentResourcesReloadKey, setEnvironmentResourcesReloadKey] = useState(0);
   const mountedRef = useRef(false);
   const [sandboxToolUpdates, setSandboxToolUpdates] = useState<
-    Partial<Record<CodexSandboxToolKind, SandboxToolUpdateState>>
+    Record<string, SandboxToolUpdateState>
   >({});
+
+  const [imageStates, setImageStates] = useState<Record<string, SandboxImageState>>({});
+  const [imageError, setImageError] = useState("");
+  const [imageLoading, setImageLoading] = useState(true);
+  const pendingTools = useRef(new Set<string>());
+  const imageRequestVersion = useRef(0);
+  const scope = `${provider}:${region}`;
+  const scopeRef = useRef(scope);
+  scopeRef.current = scope;
+
+  useEffect(() => {
+    setImageStates({});
+    setSandboxToolUpdates({});
+  }, [scope]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -116,7 +135,7 @@ export function SystemInfo({
   }, []);
 
   function patchSandboxToolUpdate(
-    kind: CodexSandboxToolKind,
+    kind: string,
     patch: Partial<SandboxToolUpdateState>,
   ) {
     setSandboxToolUpdates((current) => ({
@@ -130,43 +149,57 @@ export function SystemInfo({
   }
 
   async function updateSandboxToolModelEnv(tool: SandboxToolInfo) {
-    if (!isCodexSandboxToolKind(tool.kind) || !tool.toolId) return;
-    const currentState =
-      sandboxToolUpdates[tool.kind] ?? defaultSandboxToolUpdateState();
-    if (currentState.busy) return;
-    patchSandboxToolUpdate(tool.kind, { busy: true, error: "", message: "" });
+    if (!tool.toolId || pendingTools.current.has(tool.toolId)) return;
+    const updateScope = scope;
+    pendingTools.current.add(tool.toolId);
+    imageRequestVersion.current += 1;
+    patchSandboxToolUpdate(tool.toolId, { busy: true, error: "", message: "" });
     try {
-      const result = await updateCodexSandboxToolModelEnv(tool.kind);
-      if (!mountedRef.current) return;
-      setSandboxTools((current) =>
-        current.map((item) =>
-          item.kind === tool.kind
-            ? {
-                ...item,
-                needsModelEnvUpdate: false,
-                canUpdateModelEnv: false,
-                modelEnvError: "",
-                modelEnvErrorCode: "",
-              }
-            : item,
-        ),
-      );
-      patchSandboxToolUpdate(tool.kind, {
-        busy: false,
-        error: "",
-        message: result.updated
-          ? t("systemInfo.modelEnvUpdated")
-          : t("systemInfo.modelEnvAlreadyCurrent"),
+      const result = await updateSandboxTool(tool.kind);
+      if (!mountedRef.current || scopeRef.current !== updateScope) return;
+      imageRequestVersion.current += 1;
+      setImageStates((current) => ({ ...current, [tool.toolId]: result.state }));
+      patchSandboxToolUpdate(tool.toolId, {
+        busy: false, error: "",
+        message: result.updated ? t("systemInfo.modelEnvUpdated") : t("systemInfo.modelEnvAlreadyCurrent"),
       });
     } catch (cause) {
-      if (!mountedRef.current) return;
-      patchSandboxToolUpdate(tool.kind, {
+      if (!mountedRef.current || scopeRef.current !== updateScope) return;
+      imageRequestVersion.current += 1;
+      patchSandboxToolUpdate(tool.toolId, {
         busy: false,
-        error: t("systemInfo.modelEnvUpdateError"),
+        error: t("systemInfo.sandboxUpdateError"),
         message: "",
       });
+    } finally {
+      pendingTools.current.delete(tool.toolId);
     }
   }
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    const controller = new AbortController();
+    const version = ++imageRequestVersion.current;
+    setImageError("");
+    setImageLoading(true);
+    void getSandboxImageUpdates(controller.signal).then((states) => {
+      if (controller.signal.aborted || version !== imageRequestVersion.current) return;
+      setImageStates(Object.fromEntries(states.map((state) => [state.toolId, state])));
+    }).catch(() => {
+      if (!controller.signal.aborted && version === imageRequestVersion.current) {
+        setImageError(t("systemInfo.versionCheckError"));
+      }
+    }).finally(() => {
+      if (!controller.signal.aborted) setImageLoading(false);
+    });
+    return () => controller.abort();
+  }, [isAdmin, provider, region, sandboxReloadKey]);
+
+  useEffect(() => {
+    if (!Object.values(imageStates).some((state) => state.status === "Updating" || state.status === "Creating")) return;
+    const timer = window.setTimeout(() => setSandboxReloadKey((key) => key + 1), 5000);
+    return () => window.clearTimeout(timer);
+  }, [imageStates]);
 
   useEffect(() => {
     if (!isAdmin) {
@@ -181,6 +214,7 @@ export function SystemInfo({
     setSandboxError("");
     void getSystemInfo(controller.signal)
       .then((systemInfo) => {
+        if (controller.signal.aborted) return;
         setTosAddress(systemInfo.storage.tosAddress);
         setSandboxTools(systemInfo.sandboxTools);
       })
@@ -192,7 +226,7 @@ export function SystemInfo({
         if (!controller.signal.aborted) setSandboxLoading(false);
       });
     return () => controller.abort();
-  }, [isAdmin, sandboxReloadKey]);
+  }, [isAdmin, provider, region, sandboxReloadKey]);
 
   useEffect(() => {
     if (!isAdmin) {
@@ -380,6 +414,10 @@ export function SystemInfo({
               aria-labelledby="sandbox-tool-title"
             >
               <h2 id="sandbox-tool-title">{t("systemInfo.sandboxInfo")}</h2>
+              <button type="button" className="system-info-refresh"
+                disabled={imageLoading} onClick={() => setSandboxReloadKey((key) => key + 1)}>
+                {imageLoading ? t("systemInfo.checkingVersions") : t("systemInfo.checkUpdates")}
+              </button>
               {sandboxLoading ? (
                 <div
                   className="system-info-loading"
@@ -400,21 +438,12 @@ export function SystemInfo({
                 </div>
               ) : (
                 <div className="system-info-tool-list">
+                  {imageError ? <span className="system-info-inline-error" role="alert">{imageError}</span> : null}
                   {sandboxTools.map((tool) => {
-                    const codexKind = isCodexSandboxToolKind(tool.kind)
-                      ? tool.kind
-                      : null;
-                    const updateState = codexKind
-                      ? sandboxToolUpdates[codexKind]
-                      : undefined;
-                    const updateVisible =
-                      codexKind !== null &&
-                      Boolean(tool.toolId) &&
-                      tool.needsModelEnvUpdate &&
-                      tool.canUpdateModelEnv;
-                    const inlineError = codexKind
-                      ? updateState?.error || tool.modelEnvError
-                      : "";
+                    const imageState = imageStates[tool.toolId];
+                    const updateState = sandboxToolUpdates[tool.toolId];
+                    const updateVisible = Boolean(tool.toolId) && Boolean(imageState?.canUpdate);
+                    const inlineError = updateState?.error || (imageState?.error ? t("systemInfo.versionCheckError") : imageState?.modelEnvError ? t("systemInfo.modelEnvRepairUnavailable") : "");
                     return (
                       <dl className="system-info-tool" key={tool.kind}>
                         <div className="system-info-resource-row">
@@ -430,7 +459,7 @@ export function SystemInfo({
                             <ConsoleLink
                               href={sandboxToolConsoleUrl(
                                 provider,
-                                region,
+                                imageState?.region || region,
                                 tool.toolId,
                               )}
                               label={t("systemInfo.openToolConsole", { name: tool.label })}
@@ -443,23 +472,27 @@ export function SystemInfo({
                                 className="system-info-resource-update"
                                 disabled={updateState?.busy}
                                 aria-busy={updateState?.busy || undefined}
-                                aria-label={t("systemInfo.updateModelEnv", {
+                                aria-label={t("systemInfo.updateSandbox", {
                                   name: tool.label,
                                   variant: tool.snapshot ? t("systemInfo.snapshotWithSpace") : "",
                                 })}
-                                title={t("systemInfo.updateModelEnv", {
+                                title={t("systemInfo.updateSandbox", {
                                   name: tool.label,
                                   variant: tool.snapshot ? t("systemInfo.snapshotWithSpace") : "",
                                 })}
                                 onClick={() => void updateSandboxToolModelEnv(tool)}
                               >
-                                <RefreshCw
-                                  aria-hidden="true"
-                                  className={updateState?.busy ? "is-spinning" : ""}
-                                />
+                                <SandboxUpdateIcon spinning={updateState?.busy || false} />
                               </button>
                             ) : null}
-                            {codexKind && updateState?.message ? (
+                            {imageState?.currentImage ? (
+                              <span className="system-info-inline-status" title={`${imageState.currentImage} → ${imageState.latestImage}`}>
+                                {imageState.currentImage.split(":").pop()}
+                                {imageState.needsImageUpdate ? ` → ${imageState.latestImage?.split(":").pop()}` : ""}
+                                {imageState.status === "Updating" ? ` · ${t("systemInfo.updatingSandbox")}` : ""}
+                              </span>
+                            ) : null}
+                            {updateState?.message ? (
                               <span className="system-info-inline-status" role="status">
                                 {updateState.message}
                               </span>
