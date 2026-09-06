@@ -37,6 +37,7 @@ from a2a.types import (
 from google.adk.a2a.converters.part_converter import convert_a2a_part_to_genai_part
 from google.genai import types
 
+from veadk.agents._sandbox_timeout import timeout
 from veadk.agents._sandbox_code import check_lease, event_for, observation
 from veadk.agents.agentkit_remote_sandbox_agent import SandboxAgentError
 
@@ -56,7 +57,7 @@ async def skill_events(
     async with httpx.AsyncClient(
         headers=headers, timeout=httpx.Timeout(30, connect=10), trust_env=False
     ) as http:
-        async with asyncio.timeout(agent.ready_timeout):
+        async with timeout(agent.ready_timeout):
             while True:
                 try:
                     response = await http.get(
@@ -215,7 +216,7 @@ async def skill_events(
             return events
 
         try:
-            async with asyncio.timeout(agent.request_timeout):
+            async with timeout(agent.request_timeout):
                 try:
                     async for response in client.send_message(
                         message,

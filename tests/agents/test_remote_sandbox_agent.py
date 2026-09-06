@@ -31,6 +31,7 @@ from google.genai import types
 from pydantic import PrivateAttr
 
 from veadk import Agent
+from veadk.agents._sandbox_timeout import timeout
 from veadk.agents.agentkit_remote_sandbox_agent import (
     AgentkitRemoteSandboxAgent,
     SandboxAgentError,
@@ -476,7 +477,8 @@ async def test_skill_a2a_preserves_tool_parts_and_context(streaming):
 
 
 @pytest.mark.asyncio
-async def test_cancelling_code_invocation_interrupts_remote_turn():
+@pytest.mark.parametrize("deadline", [False, True])
+async def test_cancelling_code_invocation_interrupts_remote_turn(deadline):
     fixture = CodeFixture()
     app = web.Application()
     app.router.add_route("*", "/{path:.*}", fixture.handle)
@@ -485,6 +487,7 @@ async def test_cancelling_code_invocation_interrupts_remote_turn():
             AgentkitRemoteSandboxAgent(
                 name="sandbox",
                 tool_type="CodeEnv",
+                request_timeout=1 if deadline else 900,
                 endpoint=str(server.make_url("/?route=fixture")),
             )
         )
@@ -496,9 +499,15 @@ async def test_cancelling_code_invocation_interrupts_remote_turn():
 
         running = asyncio.create_task(collect(runner, observe))
         await asyncio.wait_for(seen.wait(), 5)
-        running.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await running
+        if deadline:
+            events = await asyncio.wait_for(running, 5)
+            assert any(
+                "TimeoutError" in (event.error_message or "") for event in events
+            )
+        else:
+            running.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await running
         assert fixture.cancelled
         fixture.release.set()
 
@@ -558,7 +567,7 @@ async def test_skill_against_native_adk_a2a_server(streaming):
     )
     serving = asyncio.create_task(server.serve())
     try:
-        async with asyncio.timeout(10):
+        async with timeout(10):
             while not server.started:
                 if serving.done():
                     await serving

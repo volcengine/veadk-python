@@ -28,6 +28,7 @@ from google.adk.events import Event
 from google.genai import types
 from pydantic import Field, PrivateAttr, SecretStr
 
+from veadk.agents._sandbox_timeout import timeout
 from veadk.agents._sandbox_session import ensure_agentkit_session_lease
 from veadk.tools.builtin_tools._agentkit import (
     get_agentkit_credentials,
@@ -186,7 +187,7 @@ class AgentkitRemoteSandboxAgent(BaseAgent):
             )
         async with lock:
             try:
-                async with asyncio.timeout(self.ready_timeout * 2 + 60):
+                async with timeout(self.ready_timeout * 2 + 60):
                     kind, endpoint, physical, lease = await self._resolve(ctx, logical)
                     headers = await self._headers(ctx)
                 user_event = next(
@@ -213,7 +214,7 @@ class AgentkitRemoteSandboxAgent(BaseAgent):
                     previous = {"physical": physical}
                     self._contexts[logical] = previous
                 backend = code_events if kind == "CodeEnv" else skill_events
-                async with asyncio.timeout(self.request_timeout + self.ready_timeout):
+                async with timeout(self.request_timeout + self.ready_timeout):
                     async with aclosing(
                         backend(
                             agent=self,

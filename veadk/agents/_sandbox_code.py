@@ -24,6 +24,7 @@ from contextlib import suppress
 from google.adk.events import Event
 from google.genai import types
 
+from veadk.agents._sandbox_timeout import timeout
 from veadk.agents.agentkit_remote_sandbox_agent import SandboxAgentError, binding_key
 from veadk.tools.sandbox.codex_worker_client import CodexWorkerClient, CodexWorkerError
 
@@ -84,7 +85,7 @@ async def code_events(
     tools = {}
     async with CodexWorkerClient(endpoint, headers=headers) as client:
         try:
-            async with asyncio.timeout(agent.ready_timeout):
+            async with timeout(agent.ready_timeout):
                 while True:
                     try:
                         ready = await client.request("GET", "/readyz")
@@ -104,7 +105,7 @@ async def code_events(
                         "CodeEnv Sidecar protocol is incompatible; version 1 with tool_events is required"
                     )
             check_lease(agent, lease)
-            async with asyncio.timeout(agent.request_timeout):
+            async with timeout(agent.request_timeout):
                 sid = await client.create_session(binding)
                 started = await client.start_turn(sid, task, turn_key)
                 tid = started["turnId"]
