@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import warnings
+from contextlib import aclosing
 from typing import TYPE_CHECKING, AsyncGenerator, Dict, Literal, Optional, Union
 
 from google.adk.flows.llm_flows.base_llm_flow import BaseLlmFlow
@@ -873,8 +874,12 @@ class Agent(LlmAgent):
         stream, so the surrounding ``Runner`` is unaffected.
         """
         if self.runtime == "adk":
-            async for event in super()._run_async_impl(ctx):
-                yield event
+            # A transfer can close this wrapper before the LLM stream ends.
+            # Close it in the same task so tracing contexts do not leak into
+            # async-generator finalization or the receiving sub-agent.
+            async with aclosing(super()._run_async_impl(ctx)) as events:
+                async for event in events:
+                    yield event
             return
 
         from veadk.runtime import get_runtime
