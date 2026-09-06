@@ -983,6 +983,8 @@ async def test_skill_hub_catalog_name_remains_callable_when_manifest_name_differ
 async def test_agentkit_skill_is_hydrated_only_when_selected(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    monkeypatch.delenv("AGENTKIT_CLOUD_PROVIDER", raising=False)
+    monkeypatch.setenv("CLOUD_PROVIDER", "volcengine")
     skill = Skill(
         name="private-writer",
         description="Write private reports",
