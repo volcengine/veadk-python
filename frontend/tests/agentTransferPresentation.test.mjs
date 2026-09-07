@@ -18,11 +18,13 @@ const stylesSource = readFileSync(
 
 test("preserves the emitting Agent on history and live assistant turns", () => {
   assert.match(blocksModelSource, /author\?: string/);
-  assert.match(blocksModelSource, /last\.meta\?\.author !== author/);
-  assert.match(blocksModelSource, /meta\.author = author/);
-  assert.match(appSource, /currentStreamAuthor/);
-  assert.match(appSource, /last\.meta(?:\?\.|\.)author === currentStreamAuthor/);
-  assert.match(appSource, /author: currentStreamAuthor/);
+  assert.match(blocksModelSource, /createAssistantEventProjector/);
+  assert.match(blocksModelSource, /const active = new Map<string, ActiveAssistantTurn>/);
+  assert.match(blocksModelSource, /keyFor\(author, invocationId\)/);
+  assert.match(blocksModelSource, /upsertProjectedAssistantTurn/);
+  assert.match(appSource, /eventProjector\.project\(event\)/);
+  assert.match(appSource, /upsertProjectedAssistantTurn\(turns, projection\.turn\)/);
+  assert.doesNotMatch(appSource, /currentStreamAuthor/);
 });
 
 test("models transfer_to_agent without rendering a separate event row", () => {
