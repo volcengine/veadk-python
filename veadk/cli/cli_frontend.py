@@ -24,6 +24,7 @@ runtimes (the UI is still served).
 """
 
 import asyncio
+import base64
 import hashlib
 import json
 import os
@@ -529,6 +530,68 @@ def _studio_storage_environment(
     return {
         key: str(source[key]) for key in _STUDIO_STORAGE_ENV_KEYS if source.get(key)
     }
+
+
+def _github_app_review_environment(
+    source: Mapping[str, str | None],
+) -> dict[str, str]:
+    """Return GitHub App PR review settings safe to ship to the Studio runtime."""
+    from veadk.cli.github_app_pr_review import (
+        GITHUB_APP_ID_ENV,
+        GITHUB_APP_PRIVATE_KEY_B64_ENV,
+        GITHUB_APP_PRIVATE_KEY_ENV,
+        GITHUB_APP_PRIVATE_KEY_PATH_ENV,
+        GITHUB_APP_REVIEW_CREATOR_ENV,
+        GITHUB_APP_REVIEW_OWNER_ID_ENV,
+        GITHUB_APP_SLUG_ENV,
+        GITHUB_APP_WEBHOOK_SECRET_ENV,
+    )
+
+    def _value(key: str) -> str:
+        return str(os.getenv(key) or source.get(key) or "").strip()
+
+    environment = {
+        key: value
+        for key in (
+            GITHUB_APP_ID_ENV,
+            GITHUB_APP_SLUG_ENV,
+            GITHUB_APP_WEBHOOK_SECRET_ENV,
+            GITHUB_APP_REVIEW_OWNER_ID_ENV,
+            GITHUB_APP_REVIEW_CREATOR_ENV,
+        )
+        if (value := _value(key))
+    }
+
+    private_key_b64 = _value(GITHUB_APP_PRIVATE_KEY_B64_ENV)
+    if private_key_b64:
+        environment[GITHUB_APP_PRIVATE_KEY_B64_ENV] = private_key_b64
+        return environment
+
+    inline_private_key = str(
+        os.getenv(GITHUB_APP_PRIVATE_KEY_ENV)
+        or source.get(GITHUB_APP_PRIVATE_KEY_ENV)
+        or ""
+    )
+    if inline_private_key.strip():
+        environment[GITHUB_APP_PRIVATE_KEY_B64_ENV] = base64.b64encode(
+            inline_private_key.encode("utf-8")
+        ).decode("ascii")
+        return environment
+
+    private_key_path = _value(GITHUB_APP_PRIVATE_KEY_PATH_ENV)
+    if not private_key_path:
+        return environment
+    try:
+        private_key_bytes = Path(private_key_path).expanduser().read_bytes()
+    except OSError as error:
+        raise click.ClickException(
+            f"Failed to read {GITHUB_APP_PRIVATE_KEY_PATH_ENV} for Studio deploy: "
+            f"{error}"
+        ) from error
+    environment[GITHUB_APP_PRIVATE_KEY_B64_ENV] = base64.b64encode(
+        private_key_bytes
+    ).decode("ascii")
+    return environment
 
 
 def _byteplus_vefaas_application_name_suggestion(name: str) -> str:
@@ -10999,6 +11062,7 @@ def _run_frontend_server(
                     "/embed/session",
                     "/embed/run_sse",
                     "/web/auth-config",
+                    "/web/github/app/webhook",
                     "/web/site-logo",
                     "/web/sandbox/codex-project-handoff/sessions",
                     "/web/sandbox/codex-project-upload/sessions",
@@ -15138,6 +15202,7 @@ def frontend_deploy(
             vefaas_app_name,
         ),
     )
+    github_app_review_environment = _github_app_review_environment(veadk_environments)
 
     # SECURITY: VeFaaS._create_function uploads *everything* in veadk_environments
     # (i.e. the deployer's whole .env) as function env vars. The frontend must
@@ -15204,6 +15269,7 @@ def frontend_deploy(
         )
     veadk_environments.update(studio_storage_environment)
     veadk_environments.update(studio_environment_resource_environment)
+    veadk_environments.update(github_app_review_environment)
     if client_secret:
         veadk_environments["OAUTH2_CLIENT_SECRET"] = client_secret
     veadk_environments.update(sidecar_environment)

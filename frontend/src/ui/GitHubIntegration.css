@@ -117,12 +117,9 @@
 .github-result-message > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .github-result-message strong { color: hsl(145 55% 25%); font-size: 12.5px; font-weight: 650; }
 .github-result-message span { color: hsl(145 38% 31%); }
-.github-submit-message a,
-.github-history-item a { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; color: inherit; font-weight: 620; text-decoration: none; }
-.github-submit-message a:hover,
-.github-history-item a:hover { text-decoration: underline; }
-.github-submit-message svg,
-.github-history-item svg { width: 14px; height: 14px; }
+.github-submit-message a { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; color: inherit; font-weight: 620; text-decoration: none; }
+.github-submit-message a:hover { text-decoration: underline; }
+.github-submit-message svg { width: 14px; height: 14px; }
 .github-submit-message a.github-result-link { min-height: 30px; padding: 0 11px; border: 1px solid hsl(145 50% 31% / 0.28); border-radius: 7px; background: hsl(var(--background)); color: hsl(145 55% 25%); font-size: 12.5px; box-shadow: 0 1px 0 hsl(145 50% 31% / 0.08); }
 .github-submit-message a.github-result-link:hover { background: hsl(145 50% 31% / 0.08); text-decoration: none; }
 .github-submit-message a.github-result-link:focus-visible { outline: 2px solid hsl(var(--ring) / 0.35); outline-offset: 2px; }
@@ -195,7 +192,13 @@
 
 .github-app-install-link svg { width: 13px; height: 13px; }
 
-.github-app-repositories {
+.github-pr-review-sections {
+  display: grid;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.github-review-section {
   margin-top: 16px;
   padding: 14px 16px;
   border: 1px solid hsl(var(--border));
@@ -203,14 +206,18 @@
   background: hsl(var(--panel));
 }
 
-.github-app-repositories-header {
+.github-pr-review-sections .github-review-section {
+  margin-top: 0;
+}
+
+.github-review-section-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
 }
 
-.github-app-repositories-header h2 {
+.github-review-section-header h2 {
   margin: 0;
   color: hsl(var(--foreground));
   font-size: 13px;
@@ -218,14 +225,15 @@
   line-height: 1.4;
 }
 
-.github-app-repositories-header p {
+.github-review-section-header p {
   margin: 3px 0 0;
   color: hsl(var(--muted-foreground));
   font-size: 12.5px;
   line-height: 1.5;
 }
 
-.github-app-repositories-header button {
+.github-review-section-header button,
+.github-review-record-actions button {
   min-width: 68px;
   height: 32px;
   padding: 0 12px;
@@ -239,19 +247,27 @@
   font-weight: 600;
 }
 
-.github-app-repositories-header button:hover:not(:disabled) {
+.github-review-section-header button:hover:not(:disabled),
+.github-review-record-actions button:hover {
   background: hsl(var(--secondary));
 }
 
-.github-app-repositories-header button:focus-visible,
+.github-review-section-header button:focus-visible,
+.github-review-record-actions button:focus-visible,
 .github-review-switch:focus-visible {
   outline: 2px solid hsl(var(--ring) / 0.35);
   outline-offset: 2px;
 }
 
-.github-app-repositories-header button:disabled {
+.github-review-section-header button:disabled {
   cursor: wait;
   opacity: 0.56;
+}
+
+.github-review-section-body {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
 }
 
 .github-app-repository-list {
@@ -360,32 +376,12 @@
 .github-form-actions button:focus-visible { outline: 2px solid hsl(var(--ring) / 0.35); outline-offset: 2px; }
 .github-form-actions button:disabled { cursor: wait; opacity: 0.56; }
 
-.github-review-now {
-  margin-top: 28px;
-  padding-top: 24px;
-  border-top: 1px solid hsl(var(--border));
-}
-
-.github-review-now-copy {
-  max-width: 680px;
-  margin-bottom: 12px;
-}
-
-.github-review-now-copy h2 {
-  margin: 0;
-  color: hsl(var(--foreground));
-  font-size: 17px;
-  font-weight: 600;
-  line-height: 1.35;
-}
-
-.github-review-now-actions {
+.github-review-section-actions {
   display: flex;
   justify-content: flex-end;
-  margin-top: 16px;
 }
 
-.github-review-now-actions button {
+.github-review-section-actions button {
   min-width: 126px;
   height: 36px;
   padding: 0 15px;
@@ -400,9 +396,105 @@
   transition: background-color 160ms ease, opacity 160ms ease;
 }
 
-.github-review-now-actions button:hover:not(:disabled) { background: hsl(var(--foreground) / 0.84); }
-.github-review-now-actions button:focus-visible { outline: 2px solid hsl(var(--ring) / 0.35); outline-offset: 2px; }
-.github-review-now-actions button:disabled { cursor: wait; opacity: 0.56; }
+.github-review-section-actions button:hover:not(:disabled) { background: hsl(var(--foreground) / 0.84); }
+.github-review-section-actions button:focus-visible { outline: 2px solid hsl(var(--ring) / 0.35); outline-offset: 2px; }
+.github-review-section-actions button:disabled { cursor: wait; opacity: 0.56; }
+
+.github-review-record-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.github-review-record-row {
+  min-width: 0;
+  min-height: 58px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  box-sizing: border-box;
+  padding: 9px 10px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 7px;
+  background: hsl(var(--background));
+}
+
+.github-review-record-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.github-review-record-title {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.github-review-record-title a {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: hsl(var(--foreground));
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.github-review-record-title a:hover { text-decoration: underline; }
+.github-review-record-title a:focus-visible { outline: 2px solid hsl(var(--ring) / 0.35); outline-offset: 2px; border-radius: 4px; }
+.github-review-record-title a svg { width: 13px; height: 13px; flex: 0 0 auto; }
+
+.github-review-record-main > span {
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.github-review-record-status {
+  min-height: 20px;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  padding: 0 7px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 999px;
+  background: hsl(var(--muted) / 0.32);
+  color: hsl(var(--muted-foreground));
+  font-size: 10.5px;
+  font-weight: 650;
+  line-height: 1;
+}
+
+.github-review-record-status.is-started {
+  border-color: hsl(216 80% 52% / 0.24);
+  background: hsl(216 80% 52% / 0.08);
+  color: hsl(216 70% 36%);
+}
+
+.github-review-record-status.is-ignored {
+  border-color: hsl(44 76% 40% / 0.26);
+  background: hsl(44 90% 52% / 0.1);
+  color: hsl(38 72% 29%);
+}
+
+.github-review-record-status.is-failed {
+  border-color: hsl(var(--destructive) / 0.22);
+  background: hsl(var(--destructive) / 0.06);
+  color: hsl(var(--destructive));
+}
+
+.github-review-record-actions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
 
 @media (max-width: 680px) {
   .github-integration-page { padding: 20px 18px 0; }
@@ -410,10 +502,13 @@
   .github-form-actions { grid-template-columns: minmax(0, 1fr); }
   .github-app-card { align-items: stretch; flex-direction: column; }
   .github-app-install-link { width: 100%; box-sizing: border-box; }
-  .github-app-repositories-header,
-  .github-app-repository-row { align-items: stretch; flex-direction: column; }
-  .github-app-repositories-header button,
+  .github-review-section-header,
+  .github-app-repository-row,
+  .github-review-record-row { align-items: stretch; flex-direction: column; }
+  .github-review-section-header button,
   .github-review-switch { width: 100%; }
+  .github-review-record-title { align-items: flex-start; flex-direction: column; }
+  .github-review-record-actions button { width: 100%; }
   .github-secrets-header { align-items: flex-start; flex-direction: column; gap: 6px; }
   .github-field-label-row { align-items: flex-start; flex-direction: column; gap: 4px; }
   .github-result-message { align-items: stretch; flex-direction: column; }
@@ -421,7 +516,7 @@
   .github-secrets-note li { grid-template-columns: minmax(0, 1fr); gap: 3px; }
   .github-form-actions button { grid-column: 1; justify-self: stretch; }
   .github-form-actions button,
-  .github-review-now-actions button { width: 100%; }
+  .github-review-section-actions button { width: 100%; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -430,5 +525,5 @@
   .github-app-install-link,
   .github-review-switch,
   .github-form-actions button,
-  .github-review-now-actions button { transition: none; }
+  .github-review-section-actions button { transition: none; }
 }

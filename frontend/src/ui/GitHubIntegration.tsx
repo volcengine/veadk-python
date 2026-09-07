@@ -10,12 +10,14 @@ import {
 import {
   getGitHubAppConfig,
   getGitHubAppRepositories,
+  getGitHubPullRequestReviewRecords,
   startGitHubPullRequestReview,
   updateGitHubAppReviewRepositories,
   type GitHubAppConfig,
   type GitHubAppRepositoriesResult,
   type GitHubAppRepository,
   type GitHubPullRequestResult,
+  type GitHubPullRequestReviewRecord,
   type GitHubPullRequestReviewResult,
   normalizeGitHubRepository,
   repositoryFromGitHubPullRequestUrl,
@@ -48,6 +50,7 @@ type GitHubAppReviewSettings = Pick<
   GitHubAppRepositoriesResult,
   "reviewSettingsConfigured" | "reviewSettingsReason"
 >;
+type GitHubReviewRecordsSettings = GitHubAppReviewSettings;
 
 function BackIcon(props: SVGProps<SVGSVGElement>) {
   return (
@@ -141,6 +144,27 @@ function requiredMark(value: string, required: boolean) {
   return <span className="github-required-mark" aria-hidden="true">*</span>;
 }
 
+function reviewRecordStatusText(status: GitHubPullRequestReviewRecord["status"]): string {
+  if (status === "started") return "评审中";
+  if (status === "ignored") return "已忽略";
+  return "失败";
+}
+
+function reviewRecordTriggerText(trigger: GitHubPullRequestReviewRecord["trigger"]): string {
+  return trigger === "webhook" ? "自动触发" : "手动发起";
+}
+
+function reviewRecordTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 export function GitHubIntegration({
   automation,
   cloudProvider,
@@ -173,10 +197,15 @@ export function GitHubIntegration({
   const [githubAppRepositoriesError, setGitHubAppRepositoriesError] = useState("");
   const [githubAppReviewSettings, setGitHubAppReviewSettings] = useState<GitHubAppReviewSettings | null>(null);
   const [updatingRepository, setUpdatingRepository] = useState("");
+  const [reviewRecords, setReviewRecords] = useState<GitHubPullRequestReviewRecord[]>([]);
+  const [reviewRecordsLoading, setReviewRecordsLoading] = useState(isPullRequestReview);
+  const [reviewRecordsError, setReviewRecordsError] = useState("");
+  const [reviewRecordsSettings, setReviewRecordsSettings] = useState<GitHubReviewRecordsSettings | null>(null);
   const submitAbortRef = useRef<AbortController | null>(null);
   const reviewAbortRef = useRef<AbortController | null>(null);
   const githubAppAbortRef = useRef<AbortController | null>(null);
   const githubAppRepositoriesAbortRef = useRef<AbortController | null>(null);
+  const reviewRecordsAbortRef = useRef<AbortController | null>(null);
   const configuredRepositoryUrl = repositoryUrl(form.repository);
   const configuredRepository = configuredRepositoryUrl.replace("https://github.com/", "");
   const repositorySecretsUrl = configuredRepositoryUrl
@@ -195,6 +224,7 @@ export function GitHubIntegration({
     reviewAbortRef.current?.abort();
     githubAppAbortRef.current?.abort();
     githubAppRepositoriesAbortRef.current?.abort();
+    reviewRecordsAbortRef.current?.abort();
   }, []);
 
   useEffect(() => {
@@ -205,8 +235,12 @@ export function GitHubIntegration({
     setRegionMenuOpen(false);
     submitAbortRef.current?.abort();
     reviewAbortRef.current?.abort();
+    reviewRecordsAbortRef.current?.abort();
     setReviewResult(null);
     setReviewError("");
+    setReviewRecords([]);
+    setReviewRecordsError("");
+    setReviewRecordsSettings(null);
   }, [automation, cloudProvider, definition]);
 
   useEffect(() => {
@@ -220,10 +254,16 @@ export function GitHubIntegration({
       .then((config) => {
         if (githubAppAbortRef.current !== controller) return;
         setGitHubAppConfig(config);
+        if (!config.configured) {
+          setGitHubAppRepositoriesLoading(false);
+          setReviewRecordsLoading(false);
+        }
       })
       .catch((error) => {
         if (controller.signal.aborted || githubAppAbortRef.current !== controller) return;
         setGitHubAppError(error instanceof Error ? error.message : String(error));
+        setGitHubAppRepositoriesLoading(false);
+        setReviewRecordsLoading(false);
       })
       .finally(() => {
         if (githubAppAbortRef.current === controller) {
@@ -260,9 +300,37 @@ export function GitHubIntegration({
       });
   };
 
+  const refreshReviewRecords = () => {
+    reviewRecordsAbortRef.current?.abort();
+    const controller = new AbortController();
+    reviewRecordsAbortRef.current = controller;
+    setReviewRecordsLoading(true);
+    setReviewRecordsError("");
+    void getGitHubPullRequestReviewRecords(controller.signal)
+      .then((result) => {
+        if (reviewRecordsAbortRef.current !== controller) return;
+        setReviewRecords(result.records);
+        setReviewRecordsSettings({
+          reviewSettingsConfigured: result.reviewSettingsConfigured,
+          reviewSettingsReason: result.reviewSettingsReason,
+        });
+      })
+      .catch((error) => {
+        if (controller.signal.aborted || reviewRecordsAbortRef.current !== controller) return;
+        setReviewRecordsError(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => {
+        if (reviewRecordsAbortRef.current === controller) {
+          reviewRecordsAbortRef.current = null;
+          setReviewRecordsLoading(false);
+        }
+      });
+  };
+
   useEffect(() => {
     if (!isPullRequestReview || githubAppConfig?.configured !== true) return;
     refreshGitHubAppRepositories();
+    refreshReviewRecords();
   }, [githubAppConfig?.configured, isPullRequestReview]);
 
   const toggleRepositoryReview = async (repository: GitHubAppRepository) => {
@@ -391,6 +459,7 @@ export function GitHubIntegration({
       if (reviewAbortRef.current !== controller) return;
       setReviewResult(nextResult);
       setForm((current) => ({ ...current, token: "" }));
+      refreshReviewRecords();
       onOpenSandboxSession?.(nextResult.sessionId);
     } catch (error) {
       if (controller.signal.aborted || reviewAbortRef.current !== controller) return;
@@ -541,8 +610,8 @@ export function GitHubIntegration({
                   </a>
                 </div>
 
-                <section className="github-app-repositories" aria-labelledby="github-app-repositories-title">
-                  <div className="github-app-repositories-header">
+                <section className="github-review-section github-app-repositories" aria-labelledby="github-app-repositories-title">
+                  <div className="github-review-section-header">
                     <div>
                       <h2 id="github-app-repositories-title">已安装仓库</h2>
                       <p>只有开启评审的仓库会响应 GitHub webhook 自动触发。</p>
@@ -690,63 +759,127 @@ export function GitHubIntegration({
             )}
           </form>
           {isPullRequestReview ? (
-            <section className="github-review-now" aria-labelledby="github-review-now-title">
-              <div className="github-review-now-copy">
-                <h2 id="github-review-now-title">立即评审一个 PR</h2>
-              </div>
-              <div className="github-field">
-                <div className="github-field-label-row">
-                  <label htmlFor="github-pull-request-url">
-                    <span>Pull Request URL</span>
-                    {requiredMark(pullRequestUrl, true)}
-                  </label>
-                  <span className="github-field-note">会自动识别 PR 所属仓库</span>
+            <div className="github-pr-review-sections">
+              <section className="github-review-section github-review-now" aria-labelledby="github-review-now-title">
+                <div className="github-review-section-header">
+                  <div>
+                    <h2 id="github-review-now-title">立刻评审</h2>
+                    <p>输入已安装且已启用仓库的 PR URL，立即创建 Sandbox 评审任务。</p>
+                  </div>
                 </div>
-                <input
-                  id="github-pull-request-url"
-                  value={pullRequestUrl}
-                  onChange={(event) => {
-                    setPullRequestUrl(event.target.value);
-                    if (fieldErrors.pullRequestUrl) {
-                      setFieldErrors((current) => ({ ...current, pullRequestUrl: "" }));
-                    }
-                  }}
-                  onBlur={() => setFieldErrors((current) => ({
-                    ...current,
-                    pullRequestUrl: validateField("pullRequestUrl", pullRequestUrl, true),
-                  }))}
-                  placeholder="https://github.com/owner/repository/pull/123"
-                  aria-invalid={Boolean(fieldErrors.pullRequestUrl)}
-                  aria-describedby={fieldErrors.pullRequestUrl ? "github-pull-request-url-error" : undefined}
-                />
-                {fieldErrors.pullRequestUrl ? <span id="github-pull-request-url-error" className="github-field-error" role="alert">{fieldErrors.pullRequestUrl}</span> : null}
-                {!fieldErrors.pullRequestUrl && reviewRepository ? (
-                  <span className="github-field-help">
-                    {installedReviewRepository?.reviewEnabled
-                      ? `将使用 GitHub App 评审 ${installedReviewRepository.fullName}`
-                      : installedReviewRepository
-                        ? `请先在下方开启 ${installedReviewRepository.fullName} 的评审`
-                        : `PR URL 所属仓库 ${reviewRepository} 尚未安装 GitHub App`}
-                  </span>
-                ) : null}
-                {!fieldErrors.pullRequestUrl && !reviewRepository && enabledReviewRepositories.length > 0 ? (
-                  <span className="github-field-help">
-                    已启用仓库：{enabledReviewRepositories.map((repository) => repository.fullName).join("、")}
-                  </span>
-                ) : null}
-              </div>
-              {reviewError ? <div className="github-submit-message is-error" role="alert">{reviewError}</div> : null}
-              {reviewResult ? (
-                <div className="github-submit-message is-success" role="status">
-                  <span>已发起评审，Session {reviewResult.sessionId} 正在运行。</span>
+                <div className="github-review-section-body">
+                  <div className="github-field">
+                    <input
+                      id="github-pull-request-url"
+                      aria-label="Pull Request URL"
+                      value={pullRequestUrl}
+                      onChange={(event) => {
+                        setPullRequestUrl(event.target.value);
+                        if (fieldErrors.pullRequestUrl) {
+                          setFieldErrors((current) => ({ ...current, pullRequestUrl: "" }));
+                        }
+                      }}
+                      onBlur={() => setFieldErrors((current) => ({
+                        ...current,
+                        pullRequestUrl: validateField("pullRequestUrl", pullRequestUrl, true),
+                      }))}
+                      placeholder="https://github.com/owner/repository/pull/123"
+                      aria-invalid={Boolean(fieldErrors.pullRequestUrl)}
+                      aria-describedby={fieldErrors.pullRequestUrl ? "github-pull-request-url-error" : undefined}
+                    />
+                    {fieldErrors.pullRequestUrl ? <span id="github-pull-request-url-error" className="github-field-error" role="alert">{fieldErrors.pullRequestUrl}</span> : null}
+                    {!fieldErrors.pullRequestUrl && reviewRepository ? (
+                      <span className="github-field-help">
+                        {installedReviewRepository?.reviewEnabled
+                          ? `将使用 GitHub App 评审 ${installedReviewRepository.fullName}`
+                          : installedReviewRepository
+                            ? `请先在下方开启 ${installedReviewRepository.fullName} 的评审`
+                            : `PR URL 所属仓库 ${reviewRepository} 尚未安装 GitHub App`}
+                      </span>
+                    ) : null}
+                    {!fieldErrors.pullRequestUrl && !reviewRepository && enabledReviewRepositories.length > 0 ? (
+                      <span className="github-field-help">
+                        已启用仓库：{enabledReviewRepositories.map((repository) => repository.fullName).join("、")}
+                      </span>
+                    ) : null}
+                  </div>
+                  {reviewError ? <div className="github-submit-message is-error" role="alert">{reviewError}</div> : null}
+                  {reviewResult ? (
+                    <div className="github-submit-message is-success" role="status">
+                      <span>已发起评审，Session {reviewResult.sessionId} 正在运行。</span>
+                    </div>
+                  ) : null}
+                  <div className="github-review-section-actions">
+                    <button type="button" onClick={startReview} disabled={reviewSubmitting}>
+                      {reviewSubmitting ? "发起评审中…" : "立即发起评审"}
+                    </button>
+                  </div>
                 </div>
-              ) : null}
-              <div className="github-review-now-actions">
-                <button type="button" onClick={startReview} disabled={reviewSubmitting}>
-                  {reviewSubmitting ? "发起评审中…" : "立即发起评审"}
-                </button>
-              </div>
-            </section>
+              </section>
+
+              <section className="github-review-section github-review-records" aria-labelledby="github-review-records-title">
+                <div className="github-review-section-header">
+                  <div>
+                    <h2 id="github-review-records-title">评审记录</h2>
+                    <p>展示最近自动触发和手动发起的评审任务。</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={refreshReviewRecords}
+                    disabled={!githubAppConfig?.configured || reviewRecordsLoading}
+                  >
+                    {reviewRecordsLoading ? "刷新中..." : "刷新"}
+                  </button>
+                </div>
+                {reviewRecordsError ? (
+                  <div className="github-submit-message is-error" role="alert">{reviewRecordsError}</div>
+                ) : null}
+                {reviewRecordsSettings?.reviewSettingsConfigured === false && !reviewRecordsError ? (
+                  <div className="github-submit-message is-error" role="alert">
+                    {reviewRecordsSettings.reviewSettingsReason || "管理员未配置 Studio 持久化存储，无法读取评审记录。"}
+                  </div>
+                ) : null}
+                {reviewRecordsLoading && reviewRecords.length === 0 ? (
+                  <div className="github-app-repository-empty">正在读取 PR 评审记录...</div>
+                ) : null}
+                {!reviewRecordsLoading && reviewRecords.length === 0 && !reviewRecordsError ? (
+                  <div className="github-app-repository-empty">暂无 PR 评审记录。</div>
+                ) : null}
+                {reviewRecords.length > 0 ? (
+                  <div className="github-review-record-list">
+                    {reviewRecords.map((record) => (
+                      <div className="github-review-record-row" key={record.id}>
+                        <div className="github-review-record-main">
+                          <div className="github-review-record-title">
+                            <a href={record.pullRequestUrl} target="_blank" rel="noreferrer">
+                              {record.repository}#{record.pullRequestNumber}
+                              <ExternalIcon />
+                            </a>
+                            <span className={`github-review-record-status is-${record.status}`}>
+                              {reviewRecordStatusText(record.status)}
+                            </span>
+                          </div>
+                          <span>
+                            {reviewRecordTriggerText(record.trigger)}
+                            {record.action ? ` · ${record.action}` : ""}
+                            {" · "}
+                            {reviewRecordTime(record.createdAt)}
+                            {record.reason ? ` · ${record.reason}` : ""}
+                          </span>
+                        </div>
+                        <div className="github-review-record-actions">
+                          {record.sessionId && onOpenSandboxSession ? (
+                            <button type="button" onClick={() => onOpenSandboxSession(record.sessionId)}>
+                              打开 Session
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </section>
+            </div>
           ) : null}
         </section>
       </div>

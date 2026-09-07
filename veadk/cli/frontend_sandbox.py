@@ -81,7 +81,9 @@ from veadk.cli.github_app_pr_review import (
     GitHubAppClient,
     GitHubAppReviewError,
     GitHubAppReviewStorageUnavailable,
+    GitHubPullRequestReviewRecord,
     TosGitHubAppReviewRepositoryStore,
+    create_review_record,
     github_app_public_config,
     load_github_app_config,
     normalize_review_repository,
@@ -3556,6 +3558,15 @@ def mount_sandbox_routes(
             client_factory=github_app_review_storage_client_factory,
         )
 
+    async def _remember_github_review_record(
+        store: TosGitHubAppReviewRepositoryStore,
+        record: GitHubPullRequestReviewRecord,
+    ) -> None:
+        try:
+            await store.append_review_record(record)
+        except GitHubAppReviewError as error:
+            logger.warning("Failed to save GitHub PR review record: %s", error)
+
     async def _github_app_installed_repositories() -> list[dict[str, object]]:
         config = load_github_app_config()
         if config is None:
@@ -3723,8 +3734,30 @@ def mount_sandbox_routes(
             raise _github_app_http_error(error) from error
         return {"repositories": saved}
 
+    @app.get("/web/github/app/review-records")
+    async def _github_app_review_records(request: Request) -> dict[str, object]:
+        owner_resolver(request)
+        store = _github_app_review_store()
+        if store is None:
+            return {
+                "records": [],
+                "reviewSettingsConfigured": False,
+                "reviewSettingsReason": "管理员未配置 Studio 持久化存储，无法读取评审记录。",
+            }
+        try:
+            records = await store.review_records()
+        except GitHubAppReviewError as error:
+            raise _github_app_http_error(error) from error
+        return {
+            "records": [record.to_public_dict() for record in records],
+            "reviewSettingsConfigured": True,
+            "reviewSettingsReason": "",
+        }
+
     @app.post("/web/github/app/webhook", status_code=202)
     async def _github_app_webhook(request: Request) -> dict[str, object]:
+        store: TosGitHubAppReviewRepositoryStore | None = None
+        event = None
         try:
             config = load_github_app_config()
             if config is None:
@@ -3759,13 +3792,27 @@ def mount_sandbox_routes(
             )
             if event is None:
                 return {"status": "ignored", "reason": "unsupported-event"}
+            store = _github_app_review_store()
             if not event.should_review:
+                if store is not None:
+                    await _remember_github_review_record(
+                        store,
+                        create_review_record(
+                            repository=event.repository,
+                            pull_request_url=event.pull_request_url,
+                            pull_request_number=event.pull_request_number,
+                            status="ignored",
+                            trigger="webhook",
+                            delivery_id=event.delivery_id,
+                            action=event.action,
+                            reason="pull-request-not-reviewable",
+                        ),
+                    )
                 return {
                     "status": "ignored",
                     "reason": "pull-request-not-reviewable",
                     "action": event.action,
                 }
-            store = _github_app_review_store()
             if store is None:
                 return {
                     "status": "ignored",
@@ -3776,6 +3823,19 @@ def mount_sandbox_routes(
             if event.repository.casefold() not in {
                 repository.casefold() for repository in enabled
             }:
+                await _remember_github_review_record(
+                    store,
+                    create_review_record(
+                        repository=event.repository,
+                        pull_request_url=event.pull_request_url,
+                        pull_request_number=event.pull_request_number,
+                        status="ignored",
+                        trigger="webhook",
+                        delivery_id=event.delivery_id,
+                        action=event.action,
+                        reason="repository-review-disabled",
+                    ),
+                )
                 return {
                     "status": "ignored",
                     "reason": "repository-review-disabled",
@@ -3789,14 +3849,56 @@ def mount_sandbox_routes(
                 pull_request_url=event.pull_request_url,
                 installation_token=installation_token,
             )
+            await _remember_github_review_record(
+                store,
+                create_review_record(
+                    repository=event.repository,
+                    pull_request_url=event.pull_request_url,
+                    pull_request_number=event.pull_request_number,
+                    status="started",
+                    trigger="webhook",
+                    delivery_id=event.delivery_id,
+                    action=event.action,
+                    session_id=session.instance_id,
+                    display_name=session.display_name,
+                ),
+            )
             _schedule_github_pull_request_review_message(
                 session_id=session.instance_id,
                 owner_id=config.review_owner_id,
                 pull_request_url=event.pull_request_url,
             )
         except SandboxError as error:
+            if store is not None and event is not None:
+                await _remember_github_review_record(
+                    store,
+                    create_review_record(
+                        repository=event.repository,
+                        pull_request_url=event.pull_request_url,
+                        pull_request_number=event.pull_request_number,
+                        status="failed",
+                        trigger="webhook",
+                        delivery_id=event.delivery_id,
+                        action=event.action,
+                        reason=_safe_error_message(error),
+                    ),
+                )
             raise _http_error(error) from error
         except GitHubAppReviewError as error:
+            if store is not None and event is not None:
+                await _remember_github_review_record(
+                    store,
+                    create_review_record(
+                        repository=event.repository,
+                        pull_request_url=event.pull_request_url,
+                        pull_request_number=event.pull_request_number,
+                        status="failed",
+                        trigger="webhook",
+                        delivery_id=event.delivery_id,
+                        action=event.action,
+                        reason=str(error),
+                    ),
+                )
             raise _github_app_http_error(error) from error
 
         return {
@@ -3832,6 +3934,20 @@ def mount_sandbox_routes(
                 pull_request_url=pull_request_url,
                 installation_token=installation_token,
             )
+            store = _github_app_review_store()
+            if store is not None:
+                await _remember_github_review_record(
+                    store,
+                    create_review_record(
+                        repository=f"{owner}/{repo}",
+                        pull_request_url=pull_request_url,
+                        pull_request_number=int(_number),
+                        status="started",
+                        trigger="manual",
+                        session_id=session.instance_id,
+                        display_name=session.display_name,
+                    ),
+                )
         except SandboxError as error:
             raise _http_error(error) from error
         except GitHubAppReviewError as error:

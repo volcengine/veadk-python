@@ -734,6 +734,61 @@ def test_pull_request_review_always_uses_github_app_installation_token(
     }
 
 
+def test_pull_request_review_records_manual_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VEADK_GITHUB_APP_ID", "4830047")
+    monkeypatch.setenv("VEADK_GITHUB_APP_SLUG", "agentkit-veadk-studio")
+    monkeypatch.setenv("VEADK_GITHUB_APP_PRIVATE_KEY", "pem")
+    monkeypatch.setenv("VEADK_GITHUB_APP_WEBHOOK_SECRET", "secret")
+
+    class _FakeGitHubAppClient:
+        def __init__(self, config: object) -> None:
+            del config
+
+        async def repository_installation_id(self, owner: str, repo: str) -> int:
+            assert f"{owner}/{repo}" == "Rhosmarie/nice"
+            return 987
+
+        async def installation_token(self, installation_id: int) -> str:
+            assert installation_id == 987
+            return "app-installation-token"
+
+    monkeypatch.setattr(frontend_sandbox, "GitHubAppClient", _FakeGitHubAppClient)
+    gateway = _FakeGateway()
+    client = TestClient(
+        _app(gateway, github_app_review_storage_client=_FakeTosClient())
+    )
+
+    response = client.post(
+        "/web/github/pull-request-reviews",
+        json={"pullRequestUrl": "https://github.com/Rhosmarie/nice/pull/23"},
+        headers={"X-Test-User": "alice"},
+    )
+    records = client.get(
+        "/web/github/app/review-records",
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert response.status_code == 200
+    assert records.status_code == 200
+    assert records.json()["reviewSettingsConfigured"] is True
+    assert records.json()["records"][0] | {"id": "record-id", "createdAt": "now"} == {
+        "id": "record-id",
+        "repository": "Rhosmarie/nice",
+        "pullRequestUrl": "https://github.com/Rhosmarie/nice/pull/23",
+        "pullRequestNumber": 23,
+        "status": "started",
+        "trigger": "manual",
+        "createdAt": "now",
+        "deliveryId": "",
+        "action": "",
+        "sessionId": response.json()["sessionId"],
+        "displayName": response.json()["displayName"],
+        "reason": "",
+    }
+
+
 def test_github_app_webhook_starts_pull_request_review(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -801,6 +856,26 @@ def test_github_app_webhook_starts_pull_request_review(
 
     assert response.status_code == 202
     assert response.json()["status"] == "started"
+    records = client.get(
+        "/web/github/app/review-records",
+        headers={"X-Test-User": "alice"},
+    )
+    assert records.status_code == 200
+    record = records.json()["records"][0]
+    assert record | {"id": "record-id", "createdAt": "now"} == {
+        "id": "record-id",
+        "repository": "Rhosmarie/nice",
+        "pullRequestUrl": "https://github.com/Rhosmarie/nice/pull/23",
+        "pullRequestNumber": 23,
+        "status": "started",
+        "trigger": "webhook",
+        "createdAt": "now",
+        "deliveryId": "delivery-1",
+        "action": "opened",
+        "sessionId": response.json()["sessionId"],
+        "displayName": response.json()["displayName"],
+        "reason": "",
+    }
     assert ("installation", 456) in calls
     assert gateway.display_names[-1] == "PR Review: Rhosmarie/nice#23"
     assert gateway.envs[-1] == {
@@ -861,6 +936,16 @@ def test_github_app_webhook_ignores_disabled_repository(
         "reason": "repository-review-disabled",
         "repository": "Rhosmarie/nice",
     }
+    records = client.get(
+        "/web/github/app/review-records",
+        headers={"X-Test-User": "alice"},
+    )
+    assert records.status_code == 200
+    record = records.json()["records"][0]
+    assert record["status"] == "ignored"
+    assert record["trigger"] == "webhook"
+    assert record["reason"] == "repository-review-disabled"
+    assert record["pullRequestUrl"] == "https://github.com/Rhosmarie/nice/pull/23"
     assert gateway.created == 0
 
 

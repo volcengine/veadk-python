@@ -15,6 +15,24 @@ export interface GitHubPullRequestReviewResult {
   displayName: string;
 }
 
+export type GitHubPullRequestReviewRecordStatus = "started" | "ignored" | "failed";
+export type GitHubPullRequestReviewRecordTrigger = "manual" | "webhook";
+
+export interface GitHubPullRequestReviewRecord {
+  id: string;
+  repository: string;
+  pullRequestUrl: string;
+  pullRequestNumber: number;
+  status: GitHubPullRequestReviewRecordStatus;
+  trigger: GitHubPullRequestReviewRecordTrigger;
+  createdAt: string;
+  deliveryId: string;
+  action: string;
+  sessionId: string;
+  displayName: string;
+  reason: string;
+}
+
 export interface GitHubAppConfig {
   configured: boolean;
   appSlug: string;
@@ -33,6 +51,12 @@ export interface GitHubAppRepository {
 
 export interface GitHubAppRepositoriesResult {
   repositories: GitHubAppRepository[];
+  reviewSettingsConfigured: boolean;
+  reviewSettingsReason: string;
+}
+
+export interface GitHubPullRequestReviewRecordsResult {
+  records: GitHubPullRequestReviewRecord[];
   reviewSettingsConfigured: boolean;
   reviewSettingsReason: string;
 }
@@ -398,6 +422,47 @@ export async function getGitHubAppRepositories(
     throw new Error("GitHub App 仓库列表响应格式无效。");
   }
   return value as GitHubAppRepositoriesResult;
+}
+
+export async function getGitHubPullRequestReviewRecords(
+  signal: AbortSignal,
+): Promise<GitHubPullRequestReviewRecordsResult> {
+  const response = await studioFetch(
+    "/web/github/app/review-records",
+    {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      signal,
+    },
+  );
+  if (!response.ok) {
+    throw await responseErrorFromGitHubReview(response);
+  }
+  const value = (await response.json()) as Partial<GitHubPullRequestReviewRecordsResult>;
+  if (
+    !Array.isArray(value.records) ||
+    typeof value.reviewSettingsConfigured !== "boolean" ||
+    typeof value.reviewSettingsReason !== "string" ||
+    value.records.some((record) => (
+      typeof record !== "object" ||
+      record === null ||
+      typeof record.id !== "string" ||
+      typeof record.repository !== "string" ||
+      typeof record.pullRequestUrl !== "string" ||
+      typeof record.pullRequestNumber !== "number" ||
+      !["started", "ignored", "failed"].includes(String(record.status)) ||
+      !["manual", "webhook"].includes(String(record.trigger)) ||
+      typeof record.createdAt !== "string" ||
+      typeof record.deliveryId !== "string" ||
+      typeof record.action !== "string" ||
+      typeof record.sessionId !== "string" ||
+      typeof record.displayName !== "string" ||
+      typeof record.reason !== "string"
+    ))
+  ) {
+    throw new Error("PR 评审记录响应格式无效。");
+  }
+  return value as GitHubPullRequestReviewRecordsResult;
 }
 
 export async function updateGitHubAppReviewRepositories(

@@ -194,8 +194,15 @@ test("GitHub detail keeps credentials ephemeral and exposes accessible submissio
   assert.match(reviewSource, /GitHub App/);
   assert.match(githubSource, /getGitHubAppConfig/);
   assert.match(githubSource, /安装 GitHub App/);
-  assert.match(githubSource, /立即评审一个 PR/);
-  assert.match(githubSource, /会自动识别 PR 所属仓库/);
+  assert.match(githubSource, /立刻评审/);
+  assert.match(githubSource, /评审记录/);
+  assert.doesNotMatch(githubSource, /立即评审一个 PR/);
+  assert.match(githubSource, /getGitHubPullRequestReviewRecords/);
+  assert.match(githubSource, /reviewRecordStatusText/);
+  assert.match(githubSource, /reviewRecordTriggerText/);
+  assert.match(githubSource, /onOpenSandboxSession\(record\.sessionId\)/);
+  assert.match(githubSource, /aria-label="Pull Request URL"/);
+  assert.doesNotMatch(githubSource, /会自动识别 PR 所属仓库/);
   assert.match(githubSource, /repositoryFromGitHubPullRequestUrl\(pullRequestUrl\)/);
   assert.match(githubSource, /PR URL 所属仓库尚未安装 GitHub App/);
   assert.match(githubSource, /请先在下方开启 .* 的评审/);
@@ -250,12 +257,15 @@ test("GitHub detail keeps credentials ephemeral and exposes accessible submissio
   assert.match(apiSource, /Authorization: `Bearer \$\{options\.token\}`/);
   assert.match(apiSource, /export async function createGitHubPullRequest/);
   assert.match(apiSource, /export async function startGitHubPullRequestReview/);
+  assert.match(apiSource, /export async function getGitHubPullRequestReviewRecords/);
   assert.match(apiSource, /\/web\/github\/pull-request-reviews/);
+  assert.match(apiSource, /\/web\/github\/app\/review-records/);
   assert.match(apiSource, /import \{ studioFetch \} from "\.\/client"/);
   assert.match(
     apiSource,
     /const response = await studioFetch\(\s*"\/web\/github\/pull-request-reviews"/,
   );
+  assert.match(cliFrontendSource, /"\/web\/github\/app\/webhook"/);
   assert.match(deliverySource, /createGitHubPullRequest/);
   assert.match(templateSource, /createGitHubPullRequest/);
   assert.doesNotMatch(reviewSource, /createGitHubPullRequest/);

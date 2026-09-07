@@ -25,8 +25,10 @@ import time
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from hashlib import sha256
 from typing import Any
+from uuid import uuid4
 
 import httpx
 
@@ -41,7 +43,10 @@ GITHUB_APP_WEBHOOK_SECRET_ENV = "VEADK_GITHUB_APP_WEBHOOK_SECRET"
 GITHUB_APP_REVIEW_OWNER_ID_ENV = "VEADK_GITHUB_APP_REVIEW_OWNER_ID"
 GITHUB_APP_REVIEW_CREATOR_ENV = "VEADK_GITHUB_APP_REVIEW_CREATOR"
 GITHUB_APP_REVIEW_STORAGE_KEY = "veadk-studio/v1/github-pr-review/repositories.json"
+GITHUB_APP_REVIEW_HISTORY_KEY = "veadk-studio/v1/github-pr-review/history.json"
 _MAX_REVIEW_REPOSITORIES_BYTES = 64 * 1024
+_MAX_REVIEW_HISTORY_BYTES = 256 * 1024
+_MAX_REVIEW_HISTORY_ITEMS = 50
 
 
 class GitHubAppReviewError(RuntimeError):
@@ -105,6 +110,38 @@ class GitHubInstalledRepository:
         }
 
 
+@dataclass(frozen=True)
+class GitHubPullRequestReviewRecord:
+    record_id: str
+    repository: str
+    pull_request_url: str
+    pull_request_number: int
+    status: str
+    trigger: str
+    created_at: str
+    delivery_id: str = ""
+    action: str = ""
+    session_id: str = ""
+    display_name: str = ""
+    reason: str = ""
+
+    def to_public_dict(self) -> dict[str, object]:
+        return {
+            "id": self.record_id,
+            "repository": self.repository,
+            "pullRequestUrl": self.pull_request_url,
+            "pullRequestNumber": self.pull_request_number,
+            "status": self.status,
+            "trigger": self.trigger,
+            "createdAt": self.created_at,
+            "deliveryId": self.delivery_id,
+            "action": self.action,
+            "sessionId": self.session_id,
+            "displayName": self.display_name,
+            "reason": self.reason,
+        }
+
+
 class TosGitHubAppReviewRepositoryStore:
     """Persist GitHub App PR review enablement in Studio's private TOS bucket."""
 
@@ -114,18 +151,29 @@ class TosGitHubAppReviewRepositoryStore:
         bucket: str,
         client_factory: Callable[[], Any],
         key: str = GITHUB_APP_REVIEW_STORAGE_KEY,
+        history_key: str = GITHUB_APP_REVIEW_HISTORY_KEY,
     ) -> None:
         if not bucket.strip():
             raise ValueError("GitHub App review storage requires a bucket.")
         self._bucket = bucket.strip()
         self._client_factory = client_factory
         self._key = key.strip("/")
+        self._history_key = history_key.strip("/")
 
     async def enabled_repositories(self) -> set[str]:
         return await asyncio.to_thread(self._enabled_repositories)
 
     async def save_enabled_repositories(self, repositories: list[str]) -> list[str]:
         return await asyncio.to_thread(self._save_enabled_repositories, repositories)
+
+    async def review_records(self) -> list[GitHubPullRequestReviewRecord]:
+        return await asyncio.to_thread(self._review_records)
+
+    async def append_review_record(
+        self,
+        record: GitHubPullRequestReviewRecord,
+    ) -> GitHubPullRequestReviewRecord:
+        return await asyncio.to_thread(self._append_review_record, record)
 
     def _enabled_repositories(self) -> set[str]:
         client = self._client_factory()
@@ -187,6 +235,85 @@ class TosGitHubAppReviewRepositoryStore:
                 "无法保存 PR 自动评审仓库配置。"
             ) from error
         return normalized
+
+    def _review_records(self) -> list[GitHubPullRequestReviewRecord]:
+        payload = self._read_json_object(
+            self._history_key,
+            max_bytes=_MAX_REVIEW_HISTORY_BYTES,
+            not_found={},
+            invalid_message="PR 评审记录格式无效。",
+        )
+        records = payload.get("records")
+        if records is None:
+            return []
+        if not isinstance(records, list):
+            raise GitHubAppReviewStorageUnavailable("PR 评审记录格式无效。")
+        parsed: list[GitHubPullRequestReviewRecord] = []
+        for item in records:
+            if not isinstance(item, dict):
+                raise GitHubAppReviewStorageUnavailable("PR 评审记录格式无效。")
+            parsed.append(_review_record_from_payload(item))
+        return parsed[:_MAX_REVIEW_HISTORY_ITEMS]
+
+    def _append_review_record(
+        self,
+        record: GitHubPullRequestReviewRecord,
+    ) -> GitHubPullRequestReviewRecord:
+        records = [record, *self._review_records()]
+        deduped: list[GitHubPullRequestReviewRecord] = []
+        seen: set[str] = set()
+        for item in records:
+            if item.record_id in seen:
+                continue
+            seen.add(item.record_id)
+            deduped.append(item)
+            if len(deduped) >= _MAX_REVIEW_HISTORY_ITEMS:
+                break
+        content = json.dumps(
+            {"records": [item.to_public_dict() for item in deduped]},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        if len(content) > _MAX_REVIEW_HISTORY_BYTES:
+            raise GitHubAppReviewStorageUnavailable("PR 评审记录过大。")
+        try:
+            self._client_factory().put_object(
+                bucket=self._bucket,
+                key=self._history_key,
+                content=content,
+                content_length=len(content),
+                content_type="application/json",
+            )
+        except Exception as error:
+            raise GitHubAppReviewStorageUnavailable("无法保存 PR 评审记录。") from error
+        return record
+
+    def _read_json_object(
+        self,
+        key: str,
+        *,
+        max_bytes: int,
+        not_found: dict[str, Any],
+        invalid_message: str,
+    ) -> dict[str, Any]:
+        client = self._client_factory()
+        try:
+            response = client.get_object(bucket=self._bucket, key=key)
+        except Exception as error:
+            if _status_code(error) == 404:
+                return dict(not_found)
+            raise GitHubAppReviewStorageUnavailable(invalid_message) from error
+        content = response.read(max_bytes + 1)
+        if not isinstance(content, bytes) or len(content) > max_bytes:
+            raise GitHubAppReviewStorageUnavailable(invalid_message)
+        try:
+            payload = json.loads(content)
+        except (json.JSONDecodeError, UnicodeDecodeError) as error:
+            raise GitHubAppReviewStorageUnavailable(invalid_message) from error
+        if not isinstance(payload, dict):
+            raise GitHubAppReviewStorageUnavailable(invalid_message)
+        return payload
 
 
 def load_github_app_config() -> GitHubAppConfig | None:
@@ -308,6 +435,87 @@ def parse_pull_request_event(
         head_repository=head_repository,
         draft=bool(pull_request.get("draft")),
     )
+
+
+def create_review_record(
+    *,
+    repository: str,
+    pull_request_url: str,
+    pull_request_number: int,
+    status: str,
+    trigger: str,
+    delivery_id: str = "",
+    action: str = "",
+    session_id: str = "",
+    display_name: str = "",
+    reason: str = "",
+) -> GitHubPullRequestReviewRecord:
+    return GitHubPullRequestReviewRecord(
+        record_id=uuid4().hex,
+        repository=normalize_review_repository(repository),
+        pull_request_url=pull_request_url.strip(),
+        pull_request_number=pull_request_number,
+        status=_review_record_status(status),
+        trigger=_review_record_trigger(trigger),
+        created_at=datetime.now(timezone.utc)
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z"),
+        delivery_id=delivery_id.strip(),
+        action=action.strip(),
+        session_id=session_id.strip(),
+        display_name=display_name.strip(),
+        reason=reason.strip()[:240],
+    )
+
+
+def _review_record_from_payload(
+    payload: dict[str, Any],
+) -> GitHubPullRequestReviewRecord:
+    record_id = _payload_text(payload, "id")
+    repository = _payload_text(payload, "repository")
+    pull_request_url = _payload_text(payload, "pullRequestUrl")
+    pull_request_number = payload.get("pullRequestNumber")
+    created_at = _payload_text(payload, "createdAt")
+    if (
+        not record_id
+        or not repository
+        or not pull_request_url
+        or not isinstance(pull_request_number, int)
+        or pull_request_number <= 0
+        or not created_at
+    ):
+        raise GitHubAppReviewStorageUnavailable("PR 评审记录格式无效。")
+    return GitHubPullRequestReviewRecord(
+        record_id=record_id,
+        repository=normalize_review_repository(repository),
+        pull_request_url=pull_request_url,
+        pull_request_number=pull_request_number,
+        status=_review_record_status(_payload_text(payload, "status")),
+        trigger=_review_record_trigger(_payload_text(payload, "trigger")),
+        created_at=created_at,
+        delivery_id=_payload_text(payload, "deliveryId"),
+        action=_payload_text(payload, "action"),
+        session_id=_payload_text(payload, "sessionId"),
+        display_name=_payload_text(payload, "displayName"),
+        reason=_payload_text(payload, "reason")[:240],
+    )
+
+
+def _payload_text(payload: dict[str, Any], key: str) -> str:
+    value = payload.get(key)
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _review_record_status(value: str) -> str:
+    if value not in {"started", "ignored", "failed"}:
+        raise GitHubAppReviewStorageUnavailable("PR 评审记录状态无效。")
+    return value
+
+
+def _review_record_trigger(value: str) -> str:
+    if value not in {"manual", "webhook"}:
+        raise GitHubAppReviewStorageUnavailable("PR 评审记录触发方式无效。")
+    return value
 
 
 class GitHubAppClient:
