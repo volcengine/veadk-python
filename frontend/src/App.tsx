@@ -84,16 +84,17 @@ import {
   type IssueFeedbackModule,
 } from "./adk/issueFeedback";
 import {
-  applyEvent,
-  emptyAcc,
+  createAssistantEventProjector,
   eventsToTurns,
   sessionTitle,
+  upsertProjectedAssistantTurn,
   type Block,
   type IntelligentDevelopmentReleaseRef,
   type Turn,
   type TurnActivityDetail,
 } from "./blocks";
 import { i18n } from "./i18n";
+import { buildTranscriptRows } from "./transcriptRows";
 import { Sidebar, type SidebarPage } from "./ui/Sidebar";
 import { AgentInfoPanel } from "./ui/AgentTopology";
 import type { SkillCenterWorkspaceLaunch } from "./ui/SkillCenter";
@@ -565,6 +566,20 @@ function findAgentNode(node: AgentNode, name: string): AgentNode | undefined {
 
 function displayAgentName(name: string): string {
   return name.replace(/__[0-9a-f]{10}(?:__.*)?$/i, "");
+}
+
+function assistantTurnIsStreaming(
+  turn: Turn,
+  index: number,
+  turnCount: number,
+  conversationBusy: boolean,
+  presentingStream: boolean,
+): boolean {
+  return turn.meta?.streaming === true || (
+    turn.meta?.streaming !== false &&
+    index === turnCount - 1 &&
+    (conversationBusy || presentingStream)
+  );
 }
 
 function mentionableDescendants(node: AgentNode): AgentTarget[] {
@@ -2660,8 +2675,12 @@ export default function App() {
       const canRate = Boolean(
         responseAnnotationRuntimeAvailable && feedbackEventId && turnText(turn),
       );
-      const turnIsStreaming = index === turns.length - 1 && (
-        activeConversationBusy || presentingStream
+      const turnIsStreaming = assistantTurnIsStreaming(
+        turn,
+        index,
+        turns.length,
+        activeConversationBusy,
+        presentingStream,
       );
       contexts.set(index, {
         enabled: Boolean(
@@ -5072,9 +5091,17 @@ export default function App() {
         })),
       });
     if (text.trim()) userBlocks.push({ kind: "text", text });
+    const optimisticAssistantTurn: Turn = {
+      role: "assistant",
+      blocks: [],
+      meta: {
+        localId: `pending-${crypto.randomUUID()}`,
+        streaming: true,
+      },
+    };
     const optimisticTurns: Turn[] = [
       { role: "user", blocks: userBlocks, meta: { ts: Date.now() / 1000 } },
-      { role: "assistant", blocks: [] },
+      optimisticAssistantTurn,
     ];
     if (createsSession) {
       setPendingTurns(optimisticTurns);
@@ -5169,15 +5196,14 @@ export default function App() {
     setSeenAgentsBySession((m) => ({ ...m, [sid]: new Set() }));
     setExecPathBySession((m) => ({ ...m, [sid]: [] }));
 
+    const eventProjector = createAssistantEventProjector(
+      `${sid}-${crypto.randomUUID()}`,
+      optimisticAssistantTurn,
+    );
     let streamFailed = false;
     let streamError: unknown = null;
     try {
-      let acc = emptyAcc();
-      let currentStreamAuthor = "";
-      let tokens = 0;
-      let ts = Date.now() / 1000;
-      let eventId = "";
-      let invocationId = "";
+      let finalEventId = "";
       let hasCompletedReply = false;
       for await (const event of runSSE({
         appName,
@@ -5208,48 +5234,19 @@ export default function App() {
         }
         // Live topology: author + transfer/end signals, keyed by session.
         applyStreamSignals(sid, event);
-        const eventAuthor = event.author && event.author !== "user"
-          ? event.author
-          : "";
-        if (eventAuthor && eventAuthor !== currentStreamAuthor) {
-          currentStreamAuthor = eventAuthor;
-          acc = emptyAcc();
-        }
-        acc = applyEvent(acc, event);
-        const usage = event.usageMetadata ?? event.usage_metadata;
         addTokenUsageFor(appName, sid, event);
-        if (usage?.totalTokenCount) tokens = usage.totalTokenCount;
-        if (event.timestamp) ts = event.timestamp;
-        if (event.id) eventId = event.id;
-        const nextInvocationId = event.invocationId ?? event.invocation_id;
-        if (nextInvocationId) invocationId = nextInvocationId;
-        const blocks = acc.blocks;
+        const projection = eventProjector.project(event);
+        if (projection.ignored) continue;
         if (
-          event.partial !== true &&
-          turnHasVisibleContent({ role: "assistant", blocks })
+          projection.completed &&
+          turnHasVisibleContent(projection.turn)
         ) {
           hasCompletedReply = true;
+          finalEventId = projection.turn.meta?.eventId ?? finalEventId;
         }
-        const meta = {
-          author: currentStreamAuthor || undefined,
-          tokens: tokens || undefined,
-          ts,
-          eventId: eventId || undefined,
-          invocationId: invocationId || undefined,
-        };
-        setTurnsFor(sid, (t) => {
-          const next = t.slice();
-          const last = next[next.length - 1];
-          if (
-            last?.role === "assistant" &&
-            (!last.meta?.author || last.meta.author === currentStreamAuthor)
-          ) {
-            next[next.length - 1] = { ...last, blocks, meta };
-          } else {
-            next.push({ role: "assistant", blocks, meta });
-          }
-          return next;
-        });
+        setTurnsFor(sid, (turns) =>
+          upsertProjectedAssistantTurn(turns, projection.turn),
+        );
       }
       if (!ctrl.signal.aborted && !streamFailed && !hasCompletedReply) {
         streamFailed = true;
@@ -5276,7 +5273,7 @@ export default function App() {
           messageOperation?.succeed({ sessionId: String(sid) });
         }
       }
-      if (!ctrl.signal.aborted && !streamFailed && eventId) {
+      if (!ctrl.signal.aborted && !streamFailed && finalEventId) {
         automaticEvaluationStatusRefreshRef.current();
       }
     } catch (e) {
@@ -5299,6 +5296,11 @@ export default function App() {
         setError(e instanceof Error ? e.message : String(e));
       }
     } finally {
+      for (const unfinished of eventProjector.finish()) {
+        setTurnsFor(sid, (turns) =>
+          upsertProjectedAssistantTurn(turns, unfinished),
+        );
+      }
       if (
         !ctrl.signal.aborted &&
         streamFailed &&
@@ -5374,14 +5376,14 @@ export default function App() {
     const resumedPlatformTools = environmentMounts.length > 0
       ? [...new Set([...selectedStudioToolIds, ...ENVIRONMENT_STUDIO_TOOL_IDS])]
       : selectedStudioToolIds;
+    const eventProjector = createAssistantEventProjector(
+      `${sid}-${crypto.randomUUID()}`,
+      lastTurn?.role === "assistant"
+        ? { ...lastTurn, blocks: base }
+        : undefined,
+    );
     try {
-      let acc = emptyAcc();
-      let currentStreamAuthor = lastTurn?.meta?.author ?? "";
-      let currentBase = base;
-      let tokens = 0;
-      let ts = Date.now() / 1000;
-      let eventId = lastTurn?.meta?.eventId ?? "";
-      let invocationId = lastTurn?.meta?.invocationId ?? "";
+      let finalEventId = "";
       let hasCompletedReply = false;
       for await (const event of runSSE({
         appName,
@@ -5411,53 +5413,19 @@ export default function App() {
           break;
         }
         applyStreamSignals(sid, event);
-        const eventAuthor = event.author && event.author !== "user"
-          ? event.author
-          : "";
-        if (eventAuthor && eventAuthor !== currentStreamAuthor) {
-          currentStreamAuthor = eventAuthor;
-          currentBase = [];
-          acc = emptyAcc();
-        }
-        acc = applyEvent(acc, event);
-        const usage = event.usageMetadata ?? event.usage_metadata;
         addTokenUsageFor(appName, sid, event);
-        if (usage?.totalTokenCount) tokens = usage.totalTokenCount;
-        if (event.timestamp) ts = event.timestamp;
-        if (event.id) eventId = event.id;
-        const nextInvocationId = event.invocationId ?? event.invocation_id;
-        if (nextInvocationId) invocationId = nextInvocationId;
-        const blocks = [...currentBase, ...acc.blocks];
+        const projection = eventProjector.project(event);
+        if (projection.ignored) continue;
         if (
-          event.partial !== true &&
-          turnHasVisibleContent({ role: "assistant", blocks: acc.blocks })
+          projection.completed &&
+          turnHasVisibleContent(projection.turn)
         ) {
           hasCompletedReply = true;
+          finalEventId = projection.turn.meta?.eventId ?? finalEventId;
         }
-        setTurnsFor(sid, (t) => {
-          const next = t.slice();
-          const last = next[next.length - 1];
-          const meta = {
-            author: currentStreamAuthor || last?.meta?.author,
-            tokens: tokens || last?.meta?.tokens,
-            ts,
-            eventId: eventId || last?.meta?.eventId,
-            invocationId: invocationId || last?.meta?.invocationId,
-          };
-          if (
-            last?.role === "assistant" &&
-            (!last.meta?.author || last.meta.author === currentStreamAuthor)
-          ) {
-            next[next.length - 1] = {
-              ...last,
-              blocks,
-              meta,
-            };
-          } else {
-            next.push({ role: "assistant", blocks, meta });
-          }
-          return next;
-        });
+        setTurnsFor(sid, (turns) =>
+          upsertProjectedAssistantTurn(turns, projection.turn),
+        );
       }
       if (!ctrl.signal.aborted && !streamFailed && !hasCompletedReply) {
         streamFailed = true;
@@ -5466,7 +5434,7 @@ export default function App() {
         }
       }
       void refreshSessions(appName);
-      if (!ctrl.signal.aborted && !streamFailed && eventId) {
+      if (!ctrl.signal.aborted && !streamFailed && finalEventId) {
         automaticEvaluationStatusRefreshRef.current();
       }
     } catch (e) {
@@ -5479,6 +5447,11 @@ export default function App() {
         setError(e instanceof Error ? e.message : String(e));
       }
     } finally {
+      for (const unfinished of eventProjector.finish()) {
+        setTurnsFor(sid, (turns) =>
+          upsertProjectedAssistantTurn(turns, unfinished),
+        );
+      }
       if (streamAbortsRef.current.get(sid) === ctrl) streamAbortsRef.current.delete(sid);
       setStreaming(sid, false);
       finishStreamPresentation(sid);
@@ -7621,7 +7594,9 @@ export default function App() {
                   onWheel={onConversationWheel}
                   onTouchMove={onConversationTouchMove}
                 >
-                  {turns.map((turn, i) => {
+                  {buildTranscriptRows(turns, rootCapabilityNode).map((row) => {
+            const renderTurn = (i: number) => {
+            const turn = turns[i];
             const isLast = i === turns.length - 1;
             if (turn.role === "system") {
               return turn.activity ? (
@@ -7691,13 +7666,17 @@ export default function App() {
             const feedbackRating = turn.meta?.feedback?.rating ?? null;
             const feedbackEventId = turn.meta?.eventId ?? "";
             const feedbackPending = feedbackPendingIds.has(feedbackEventId);
+            const turnIsStreaming = assistantTurnIsStreaming(
+              turn,
+              i,
+              turns.length,
+              activeConversationBusy,
+              presentingStream,
+            );
             const canRate = Boolean(
               currentRuntime && feedbackEventId && turnText(turn),
             );
             const feedbackInput = canRate ? previousUserTurnText(turns, i) : "";
-            const turnIsStreaming = isLast && (
-              activeConversationBusy || presentingStream
-            );
             const canAnnotate = Boolean(
               canRate &&
               cloudProvider !== "byteplus" &&
@@ -7706,7 +7685,7 @@ export default function App() {
             );
             return (
               <motion.div
-                key={i}
+                key={turn.meta?.localId ?? i}
                 data-share-message-source="true"
                 data-response-annotation-index={i}
                 ref={(node) => {
@@ -7746,14 +7725,14 @@ export default function App() {
                   </>
                 )}
                 {pending ? (
-                  isLast && activeConversationBusy ? <ThinkingPlaceholder /> : null
+                  turnIsStreaming ? <ThinkingPlaceholder /> : null
                 ) : (
                   <>
                     <Blocks
                       appName={appName}
                       blocks={turn.blocks}
-                      streaming={isLast && (activeConversationBusy || presentingStream)}
-                      onStreamFrame={isLast ? followConversationStreamFrame : undefined}
+                      streaming={turnIsStreaming}
+                      onStreamFrame={turnIsStreaming ? followConversationStreamFrame : undefined}
                       onStreamComplete={
                         isLast && !activeConversationBusy && presentingStream
                           ? () => completeStreamPresentation(sessionId)
@@ -7777,13 +7756,13 @@ export default function App() {
                     />
                     {/* Finalized turn that produced no visible answer (e.g. only
                         thinking + an empty A2UI surface) — show a fallback note. */}
-                    {!(isLast && activeConversationBusy) && !turnHasVisibleContent(turn) && (
+                    {!turnIsStreaming && !turnHasVisibleContent(turn) && (
                       <div className="turn-empty">{t("conversation.emptyResponse")}</div>
                     )}
                     {/* Hide the actions/timestamp row while this turn is still
                         thinking/streaming or waiting on an OAuth card; reveal it
                         only once the reply is done. */}
-                    {!(isLast && activeConversationBusy) && !turnAwaitingAuth(turn) && (
+                    {!turnIsStreaming && !turnAwaitingAuth(turn) && (
                       <div className="turn-meta" data-share-image-exclude="true">
                         {sandboxSession && turn.meta?.sandboxUsage ? (
                           <SandboxTokenUsageRow usage={turn.meta.sandboxUsage} />
@@ -7889,6 +7868,22 @@ export default function App() {
                 )}
               </motion.div>
             );
+            };
+            if (row.parallelParent) {
+              return (
+                <div
+                  key={row.key}
+                  className="parallel-turn-group"
+                  data-parallel-agent-count={row.turnIndexes.length}
+                  role="group"
+                  tabIndex={row.turnIndexes.length > 3 ? 0 : undefined}
+                  aria-label={`${displayAgentName(row.parallelParent)} 并行执行结果`}
+                >
+                  {row.turnIndexes.map(renderTurn)}
+                </div>
+              );
+            }
+            return renderTurn(row.turnIndexes[0]);
           })}
                 </div>
                 {!sandboxSession && (

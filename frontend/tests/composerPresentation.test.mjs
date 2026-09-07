@@ -88,10 +88,10 @@ test("smoothly positions new turns and follows streamed output until interrupted
   );
   assert.match(
     appSource,
-    /streaming=\{isLast && \(activeConversationBusy \|\| presentingStream\)\}/,
+    /streaming=\{turnIsStreaming\}/,
   );
   assert.match(appSource, /finishStreamPresentation[\s\S]*?2400/);
-  assert.match(appSource, /onStreamFrame=\{isLast \? followConversationStreamFrame : undefined\}/);
+  assert.match(appSource, /onStreamFrame=\{turnIsStreaming \? followConversationStreamFrame : undefined\}/);
   assert.match(blocksSource, /!done \|\| streaming/);
 });
 
