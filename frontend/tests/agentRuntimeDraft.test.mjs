@@ -119,3 +119,77 @@ test("legacy runtime graph restores LLM agent loop runtime metadata", () => {
   assert.equal(restored.subAgents[0].runtime, "codex");
   assert.equal(restored.subAgents[1].runtime, "piagent");
 });
+
+test("byteplus runtime metadata survives YAML and cloud graph recovery", () => {
+  const draft = normalizeDraft({
+    name: "byteplus_runtime_root",
+    cloudProvider: "byteplus",
+    description: "Runtime root",
+    instruction: "Coordinate work.",
+    agentType: "loop",
+    subAgents: [
+      {
+        name: "coder",
+        cloudProvider: "byteplus",
+        description: "Writes code",
+        instruction: "Edit code.",
+        agentType: "llm",
+        runtime: "codex",
+      },
+      {
+        name: "operator",
+        cloudProvider: "byteplus",
+        description: "Runs tasks",
+        instruction: "Run tasks.",
+        agentType: "llm",
+        runtime: "piagent",
+      },
+    ],
+  });
+
+  const yaml = draftToYaml(draft, {
+    heading: "Test",
+    importHint: "Import again.",
+  });
+  assert.match(yaml, /runtime: codex/);
+  assert.match(yaml, /runtime: piagent/);
+
+  const restoredFromYaml = yamlToDraft(yaml);
+  assert.equal(restoredFromYaml.runtime, "adk");
+  assert.equal(restoredFromYaml.subAgents[0].runtime, "codex");
+  assert.equal(restoredFromYaml.subAgents[1].runtime, "piagent");
+
+  const restoredFromCloud = runtimeAgentDraftFromCloud(
+    {
+      appName: "byteplus_runtime_root",
+      graph: {
+        name: "byteplus_runtime_root",
+        type: "loop",
+        children: [
+          {
+            name: "coder",
+            type: "llm",
+            runtime: "codex",
+            model: "openai/gpt-5-codex",
+            children: [],
+          },
+          {
+            name: "operator",
+            type: "llm",
+            runtime: "piagent",
+            model: "openai/gpt-5",
+            children: [],
+          },
+        ],
+      },
+    },
+    "byteplus",
+  );
+
+  assert.equal(restoredFromCloud.cloudProvider, "byteplus");
+  assert.equal(restoredFromCloud.runtime, "adk");
+  assert.equal(restoredFromCloud.subAgents[0].cloudProvider, "byteplus");
+  assert.equal(restoredFromCloud.subAgents[0].runtime, "codex");
+  assert.equal(restoredFromCloud.subAgents[1].cloudProvider, "byteplus");
+  assert.equal(restoredFromCloud.subAgents[1].runtime, "piagent");
+});

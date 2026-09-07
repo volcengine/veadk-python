@@ -484,6 +484,77 @@ def test_byteplus_piagent_dockerfile_prefers_official_github_then_mirror() -> No
     )
 
 
+def test_byteplus_codex_runtime_uses_byteplus_image_and_dependencies() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(
+            name="byteplus-codex",
+            cloudProvider="byteplus",
+            runtime="codex",
+        )
+    )
+    files = _file_map(project)
+    agent_py = files["agents/byteplus_codex/agent.py"]
+    dockerfile = files["Dockerfile"]
+    requirements = files["requirements.txt"]
+
+    assert dockerfile.startswith(
+        "FROM agentkit-prod-public-ap-southeast-1.cr.bytepluses.com/"
+        "base/py-simple:python3.12-bookworm-slim-latest"
+    )
+    assert "RUN uv pip install -r requirements.txt" in dockerfile
+    assert "repo.huaweicloud.com" not in dockerfile
+    assert 'runtime="codex"' in agent_py
+    assert "'cloudProvider': 'byteplus'" in agent_py
+    assert "'runtime': 'codex'" in agent_py
+    assert "openai-codex==0.1.0b3" in requirements
+    assert "openai-codex-cli-bin==0.137.0a4" in requirements
+
+
+def test_byteplus_loop_root_with_piagent_child_preinstalls_binary_and_disables_bff_tools() -> (
+    None
+):
+    project = generate_project_from_draft(
+        AgentDraft(
+            name="byteplus-loop",
+            cloudProvider="byteplus",
+            agentType="loop",
+            subAgents=[
+                AgentDraft(
+                    name="worker",
+                    cloudProvider="byteplus",
+                    instruction="Work.",
+                    runtime="piagent",
+                )
+            ],
+        )
+    )
+    files = _file_map(project)
+    agent_py = files["agents/byteplus_loop/agent.py"]
+    app_py = files["app.py"]
+    dockerfile = files["Dockerfile"]
+
+    assert dockerfile.startswith(
+        "FROM agentkit-prod-public-ap-southeast-1.cr.bytepluses.com/"
+        "base/py-simple:python3.12-bookworm-slim-latest"
+    )
+    assert (
+        'PIAGENT_BINARY_BASE_URLS="https://github.com/earendil-works/pi/releases/download '
+        'https://ghfast.top/https://github.com/earendil-works/pi/releases/download"'
+        in dockerfile
+    )
+    assert "ENV PIAGENT_BINARY=/opt/piagent/pi/pi" in dockerfile
+    assert 'runtime="piagent"' in agent_py
+    assert "'cloudProvider': 'byteplus'" in agent_py
+    assert "'runtime': 'piagent'" in agent_py
+    assert 'os.environ.setdefault("PIAGENT_BINARY", "/opt/piagent/pi/pi")' in app_py
+    assert app_py.index('os.environ.setdefault("PIAGENT_BINARY"') < app_py.index(
+        "from agents.byteplus_loop.agent import"
+    )
+    assert '"enable_studio_tools": True' in app_py
+    assert 'if not hasattr(_root_tools, "append"):' in app_py
+    assert '_app_options["enable_studio_tools"] = False' in app_py
+
+
 def test_codegen_disables_studio_bff_tools_for_toolless_orchestrator_root() -> None:
     project = generate_project_from_draft(
         AgentDraft(
