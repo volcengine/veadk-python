@@ -196,10 +196,21 @@ test("GitHub detail keeps credentials ephemeral and exposes accessible submissio
   assert.match(githubSource, /安装 GitHub App/);
   assert.match(githubSource, /立刻评审/);
   assert.match(githubSource, /评审记录/);
+  assert.match(githubSource, /aria-label="搜索已安装仓库"/);
+  assert.match(githubSource, /搜索 owner 或仓库名/);
   assert.doesNotMatch(githubSource, /立即评审一个 PR/);
   assert.match(githubSource, /getGitHubPullRequestReviewRecords/);
+  assert.match(githubSource, /aria-label="已安装仓库分页"/);
+  assert.match(githubSource, /aria-label="评审记录分页"/);
+  assert.match(githubSource, /REVIEW_PAGE_SIZE/);
+  assert.doesNotMatch(githubSource, /showGitHubAppRepositoriesPagination[\s\S]*?githubAppRepositories\.length >= REVIEW_PAGE_SIZE/);
+  assert.doesNotMatch(githubSource, /showReviewRecordsPagination[\s\S]*?reviewRecords\.length >= REVIEW_PAGE_SIZE/);
   assert.match(githubSource, /reviewRecordStatusText/);
+  assert.match(githubSource, /已完成/);
   assert.match(githubSource, /reviewRecordTriggerText/);
+  assert.match(githubSource, /reviewRecordReasonText/);
+  assert.match(githubSource, /仓库未开启自动评审/);
+  assert.match(githubSource, /该 PR 事件不需要评审/);
   assert.match(githubSource, /onOpenSandboxSession\(record\.sessionId\)/);
   assert.match(githubSource, /aria-label="Pull Request URL"/);
   assert.doesNotMatch(githubSource, /会自动识别 PR 所属仓库/);
@@ -260,6 +271,10 @@ test("GitHub detail keeps credentials ephemeral and exposes accessible submissio
   assert.match(apiSource, /export async function getGitHubPullRequestReviewRecords/);
   assert.match(apiSource, /\/web\/github\/pull-request-reviews/);
   assert.match(apiSource, /\/web\/github\/app\/review-records/);
+  assert.match(apiSource, /hasNextPage/);
+  assert.match(apiSource, /pageSize/);
+  assert.match(apiSource, /"completed"/);
+  assert.match(apiSource, /params\.set\("q"/);
   assert.match(apiSource, /import \{ studioFetch \} from "\.\/client"/);
   assert.match(
     apiSource,

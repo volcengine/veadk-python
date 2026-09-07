@@ -12,7 +12,7 @@ import {
   getGitHubAppRepositories,
   getGitHubPullRequestReviewRecords,
   startGitHubPullRequestReview,
-  updateGitHubAppReviewRepositories,
+  updateGitHubAppReviewRepository,
   type GitHubAppConfig,
   type GitHubAppRepositoriesResult,
   type GitHubAppRepository,
@@ -51,6 +51,9 @@ type GitHubAppReviewSettings = Pick<
   "reviewSettingsConfigured" | "reviewSettingsReason"
 >;
 type GitHubReviewRecordsSettings = GitHubAppReviewSettings;
+type ReviewListKind = "repositories" | "records";
+
+const REVIEW_PAGE_SIZE = 10;
 
 function BackIcon(props: SVGProps<SVGSVGElement>) {
   return (
@@ -146,12 +149,25 @@ function requiredMark(value: string, required: boolean) {
 
 function reviewRecordStatusText(status: GitHubPullRequestReviewRecord["status"]): string {
   if (status === "started") return "评审中";
+  if (status === "completed") return "已完成";
   if (status === "ignored") return "已忽略";
   return "失败";
 }
 
 function reviewRecordTriggerText(trigger: GitHubPullRequestReviewRecord["trigger"]): string {
   return trigger === "webhook" ? "自动触发" : "手动发起";
+}
+
+function reviewRecordReasonText(record: GitHubPullRequestReviewRecord): string {
+  if (!record.reason) return "";
+  if (record.status !== "ignored") return record.reason;
+  if (record.reason === "repository-review-disabled") return "忽略原因：仓库未开启自动评审";
+  if (record.reason === "pull-request-not-reviewable") {
+    return "忽略原因：该 PR 事件不需要评审，仅评审新建、更新、重新打开和转为可评审的非 Draft、非 fork PR";
+  }
+  if (record.reason === "review-settings-unavailable") return "忽略原因：自动评审设置不可用";
+  if (record.reason === "unsupported-event") return "忽略原因：不是 Pull Request 事件";
+  return `忽略原因：${record.reason}`;
 }
 
 function reviewRecordTime(value: string): string {
@@ -163,6 +179,13 @@ function reviewRecordTime(value: string): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function paginationText(page: number, pageSize: number, count: number, hasNextPage: boolean): string {
+  if (count === 0) return `第 ${page} 页`;
+  const start = (page - 1) * pageSize + 1;
+  const end = start + count - 1;
+  return `第 ${page} 页 · ${start}-${end}${hasNextPage ? "+" : ""}`;
 }
 
 export function GitHubIntegration({
@@ -196,11 +219,17 @@ export function GitHubIntegration({
   const [githubAppRepositoriesLoading, setGitHubAppRepositoriesLoading] = useState(isPullRequestReview);
   const [githubAppRepositoriesError, setGitHubAppRepositoriesError] = useState("");
   const [githubAppReviewSettings, setGitHubAppReviewSettings] = useState<GitHubAppReviewSettings | null>(null);
+  const [githubAppRepositoriesPage, setGitHubAppRepositoriesPage] = useState(1);
+  const [githubAppRepositoriesHasNextPage, setGitHubAppRepositoriesHasNextPage] = useState(false);
+  const [githubAppRepositoryQueryInput, setGitHubAppRepositoryQueryInput] = useState("");
+  const [githubAppRepositoryQuery, setGitHubAppRepositoryQuery] = useState("");
   const [updatingRepository, setUpdatingRepository] = useState("");
   const [reviewRecords, setReviewRecords] = useState<GitHubPullRequestReviewRecord[]>([]);
   const [reviewRecordsLoading, setReviewRecordsLoading] = useState(isPullRequestReview);
   const [reviewRecordsError, setReviewRecordsError] = useState("");
   const [reviewRecordsSettings, setReviewRecordsSettings] = useState<GitHubReviewRecordsSettings | null>(null);
+  const [reviewRecordsPage, setReviewRecordsPage] = useState(1);
+  const [reviewRecordsHasNextPage, setReviewRecordsHasNextPage] = useState(false);
   const submitAbortRef = useRef<AbortController | null>(null);
   const reviewAbortRef = useRef<AbortController | null>(null);
   const githubAppAbortRef = useRef<AbortController | null>(null);
@@ -218,6 +247,10 @@ export function GitHubIntegration({
   const installedReviewRepository = reviewRepository
     ? githubAppRepositories.find((repository) => repository.fullName.toLowerCase() === reviewRepository.toLowerCase())
     : undefined;
+  const showGitHubAppRepositoriesPagination = githubAppRepositoriesPage > 1
+    || githubAppRepositoriesHasNextPage;
+  const showReviewRecordsPagination = reviewRecordsPage > 1
+    || reviewRecordsHasNextPage;
 
   useEffect(() => () => {
     submitAbortRef.current?.abort();
@@ -241,6 +274,12 @@ export function GitHubIntegration({
     setReviewRecords([]);
     setReviewRecordsError("");
     setReviewRecordsSettings(null);
+    setGitHubAppRepositoriesPage(1);
+    setGitHubAppRepositoriesHasNextPage(false);
+    setGitHubAppRepositoryQueryInput("");
+    setGitHubAppRepositoryQuery("");
+    setReviewRecordsPage(1);
+    setReviewRecordsHasNextPage(false);
   }, [automation, cloudProvider, definition]);
 
   useEffect(() => {
@@ -273,16 +312,23 @@ export function GitHubIntegration({
       });
   }, [isPullRequestReview]);
 
-  const refreshGitHubAppRepositories = () => {
+  const refreshGitHubAppRepositories = (page = githubAppRepositoriesPage, query = githubAppRepositoryQuery) => {
     githubAppRepositoriesAbortRef.current?.abort();
     const controller = new AbortController();
     githubAppRepositoriesAbortRef.current = controller;
     setGitHubAppRepositoriesLoading(true);
     setGitHubAppRepositoriesError("");
-    void getGitHubAppRepositories(controller.signal)
+    void getGitHubAppRepositories(controller.signal, { page, pageSize: REVIEW_PAGE_SIZE, query })
       .then((result) => {
         if (githubAppRepositoriesAbortRef.current !== controller) return;
+        if (result.repositories.length === 0 && result.page > 1) {
+          setGitHubAppRepositoriesPage(result.page - 1);
+          refreshGitHubAppRepositories(result.page - 1);
+          return;
+        }
         setGitHubAppRepositories(result.repositories);
+        setGitHubAppRepositoriesPage(result.page);
+        setGitHubAppRepositoriesHasNextPage(result.hasNextPage);
         setGitHubAppReviewSettings({
           reviewSettingsConfigured: result.reviewSettingsConfigured,
           reviewSettingsReason: result.reviewSettingsReason,
@@ -300,16 +346,23 @@ export function GitHubIntegration({
       });
   };
 
-  const refreshReviewRecords = () => {
+  const refreshReviewRecords = (page = reviewRecordsPage) => {
     reviewRecordsAbortRef.current?.abort();
     const controller = new AbortController();
     reviewRecordsAbortRef.current = controller;
     setReviewRecordsLoading(true);
     setReviewRecordsError("");
-    void getGitHubPullRequestReviewRecords(controller.signal)
+    void getGitHubPullRequestReviewRecords(controller.signal, { page, pageSize: REVIEW_PAGE_SIZE })
       .then((result) => {
         if (reviewRecordsAbortRef.current !== controller) return;
+        if (result.records.length === 0 && result.page > 1) {
+          setReviewRecordsPage(result.page - 1);
+          refreshReviewRecords(result.page - 1);
+          return;
+        }
         setReviewRecords(result.records);
+        setReviewRecordsPage(result.page);
+        setReviewRecordsHasNextPage(result.hasNextPage);
         setReviewRecordsSettings({
           reviewSettingsConfigured: result.reviewSettingsConfigured,
           reviewSettingsReason: result.reviewSettingsReason,
@@ -329,25 +382,48 @@ export function GitHubIntegration({
 
   useEffect(() => {
     if (!isPullRequestReview || githubAppConfig?.configured !== true) return;
-    refreshGitHubAppRepositories();
-    refreshReviewRecords();
+    refreshGitHubAppRepositories(1);
+    refreshReviewRecords(1);
   }, [githubAppConfig?.configured, isPullRequestReview]);
+
+  const searchGitHubAppRepositories = () => {
+    const query = githubAppRepositoryQueryInput.trim();
+    setGitHubAppRepositoryQuery(query);
+    setGitHubAppRepositoriesPage(1);
+    refreshGitHubAppRepositories(1, query);
+  };
+
+  const clearGitHubAppRepositorySearch = () => {
+    setGitHubAppRepositoryQueryInput("");
+    setGitHubAppRepositoryQuery("");
+    setGitHubAppRepositoriesPage(1);
+    refreshGitHubAppRepositories(1, "");
+  };
+
+  const changeReviewListPage = (kind: ReviewListKind, nextPage: number) => {
+    if (nextPage < 1) return;
+    if (kind === "repositories") {
+      setGitHubAppRepositoriesPage(nextPage);
+      refreshGitHubAppRepositories(nextPage, githubAppRepositoryQuery);
+      return;
+    }
+    setReviewRecordsPage(nextPage);
+    refreshReviewRecords(nextPage);
+  };
 
   const toggleRepositoryReview = async (repository: GitHubAppRepository) => {
     if (githubAppReviewSettings?.reviewSettingsConfigured !== true || updatingRepository) return;
-    const nextRepositories = githubAppRepositories.map((item) => (
-      item.fullName === repository.fullName
-        ? { ...item, reviewEnabled: !item.reviewEnabled }
-        : item
-    ));
-    const enabledRepositories = nextRepositories
-      .filter((item) => item.reviewEnabled)
-      .map((item) => item.fullName);
     const controller = new AbortController();
     setUpdatingRepository(repository.fullName);
     setGitHubAppRepositoriesError("");
     try {
-      const saved = await updateGitHubAppReviewRepositories(enabledRepositories, controller.signal);
+      const saved = await updateGitHubAppReviewRepository(
+        {
+          repository: repository.fullName,
+          reviewEnabled: !repository.reviewEnabled,
+        },
+        controller.signal,
+      );
       const savedLookup = new Set(saved.map((item) => item.toLowerCase()));
       setGitHubAppRepositories((current) => current.map((item) => ({
         ...item,
@@ -618,7 +694,7 @@ export function GitHubIntegration({
                     </div>
                     <button
                       type="button"
-                      onClick={refreshGitHubAppRepositories}
+                      onClick={() => refreshGitHubAppRepositories()}
                       disabled={!githubAppConfig?.configured || githubAppRepositoriesLoading}
                     >
                       {githubAppRepositoriesLoading ? "刷新中..." : "刷新"}
@@ -632,11 +708,46 @@ export function GitHubIntegration({
                       {githubAppReviewSettings.reviewSettingsReason || "管理员未配置 Studio 持久化存储，无法保存启用评审设置。"}
                     </div>
                   ) : null}
+                  <div className="github-app-repository-search">
+                    <input
+                      type="search"
+                      value={githubAppRepositoryQueryInput}
+                      onChange={(event) => setGitHubAppRepositoryQueryInput(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          searchGitHubAppRepositories();
+                        }
+                      }}
+                      placeholder="搜索 owner 或仓库名"
+                      aria-label="搜索已安装仓库"
+                    />
+                    <button
+                      type="button"
+                      onClick={searchGitHubAppRepositories}
+                      disabled={!githubAppConfig?.configured || githubAppRepositoriesLoading}
+                    >
+                      搜索
+                    </button>
+                    {githubAppRepositoryQuery ? (
+                      <button
+                        type="button"
+                        onClick={clearGitHubAppRepositorySearch}
+                        disabled={githubAppRepositoriesLoading}
+                      >
+                        清除
+                      </button>
+                    ) : null}
+                  </div>
                   {githubAppRepositoriesLoading && githubAppRepositories.length === 0 ? (
                     <div className="github-app-repository-empty">正在读取 GitHub App 安装仓库...</div>
                   ) : null}
                   {!githubAppRepositoriesLoading && githubAppRepositories.length === 0 && !githubAppRepositoriesError ? (
-                    <div className="github-app-repository-empty">GitHub App 尚未安装到任何仓库。</div>
+                    <div className="github-app-repository-empty">
+                      {githubAppRepositoryQuery
+                        ? `没有匹配 “${githubAppRepositoryQuery}” 的已安装仓库。`
+                        : "GitHub App 尚未安装到任何仓库。"}
+                    </div>
                   ) : null}
                   {githubAppRepositories.length > 0 ? (
                     <div className="github-app-repository-list">
@@ -665,6 +776,34 @@ export function GitHubIntegration({
                           </div>
                         );
                       })}
+                    </div>
+                  ) : null}
+                  {showGitHubAppRepositoriesPagination ? (
+                    <div className="github-list-pagination" aria-label="已安装仓库分页">
+                      <span>
+                        {paginationText(
+                          githubAppRepositoriesPage,
+                          REVIEW_PAGE_SIZE,
+                          githubAppRepositories.length,
+                          githubAppRepositoriesHasNextPage,
+                        )}
+                      </span>
+                      <div>
+                        <button
+                          type="button"
+                          onClick={() => changeReviewListPage("repositories", githubAppRepositoriesPage - 1)}
+                          disabled={githubAppRepositoriesPage <= 1 || githubAppRepositoriesLoading}
+                        >
+                          上一页
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => changeReviewListPage("repositories", githubAppRepositoriesPage + 1)}
+                          disabled={!githubAppRepositoriesHasNextPage || githubAppRepositoriesLoading}
+                        >
+                          下一页
+                        </button>
+                      </div>
                     </div>
                   ) : null}
                 </section>
@@ -825,7 +964,7 @@ export function GitHubIntegration({
                   </div>
                   <button
                     type="button"
-                    onClick={refreshReviewRecords}
+                    onClick={() => refreshReviewRecords()}
                     disabled={!githubAppConfig?.configured || reviewRecordsLoading}
                   >
                     {reviewRecordsLoading ? "刷新中..." : "刷新"}
@@ -847,35 +986,66 @@ export function GitHubIntegration({
                 ) : null}
                 {reviewRecords.length > 0 ? (
                   <div className="github-review-record-list">
-                    {reviewRecords.map((record) => (
-                      <div className="github-review-record-row" key={record.id}>
-                        <div className="github-review-record-main">
-                          <div className="github-review-record-title">
-                            <a href={record.pullRequestUrl} target="_blank" rel="noreferrer">
-                              {record.repository}#{record.pullRequestNumber}
-                              <ExternalIcon />
-                            </a>
-                            <span className={`github-review-record-status is-${record.status}`}>
-                              {reviewRecordStatusText(record.status)}
+                    {reviewRecords.map((record) => {
+                      const reasonText = reviewRecordReasonText(record);
+                      return (
+                        <div className="github-review-record-row" key={record.id}>
+                          <div className="github-review-record-main">
+                            <div className="github-review-record-title">
+                              <a href={record.pullRequestUrl} target="_blank" rel="noreferrer">
+                                {record.repository}#{record.pullRequestNumber}
+                                <ExternalIcon />
+                              </a>
+                              <span className={`github-review-record-status is-${record.status}`}>
+                                {reviewRecordStatusText(record.status)}
+                              </span>
+                            </div>
+                            <span>
+                              {reviewRecordTriggerText(record.trigger)}
+                              {record.action ? ` · ${record.action}` : ""}
+                              {" · "}
+                              {reviewRecordTime(record.createdAt)}
+                              {reasonText ? ` · ${reasonText}` : ""}
                             </span>
                           </div>
-                          <span>
-                            {reviewRecordTriggerText(record.trigger)}
-                            {record.action ? ` · ${record.action}` : ""}
-                            {" · "}
-                            {reviewRecordTime(record.createdAt)}
-                            {record.reason ? ` · ${record.reason}` : ""}
-                          </span>
+                          <div className="github-review-record-actions">
+                            {record.sessionId && onOpenSandboxSession ? (
+                              <button type="button" onClick={() => onOpenSandboxSession(record.sessionId)}>
+                                打开 Session
+                              </button>
+                            ) : null}
+                          </div>
                         </div>
-                        <div className="github-review-record-actions">
-                          {record.sessionId && onOpenSandboxSession ? (
-                            <button type="button" onClick={() => onOpenSandboxSession(record.sessionId)}>
-                              打开 Session
-                            </button>
-                          ) : null}
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
+                  </div>
+                ) : null}
+                {showReviewRecordsPagination ? (
+                  <div className="github-list-pagination" aria-label="评审记录分页">
+                    <span>
+                      {paginationText(
+                        reviewRecordsPage,
+                        REVIEW_PAGE_SIZE,
+                        reviewRecords.length,
+                        reviewRecordsHasNextPage,
+                      )}
+                    </span>
+                    <div>
+                      <button
+                        type="button"
+                        onClick={() => changeReviewListPage("records", reviewRecordsPage - 1)}
+                        disabled={reviewRecordsPage <= 1 || reviewRecordsLoading}
+                      >
+                        上一页
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => changeReviewListPage("records", reviewRecordsPage + 1)}
+                        disabled={!reviewRecordsHasNextPage || reviewRecordsLoading}
+                      >
+                        下一页
+                      </button>
+                    </div>
                   </div>
                 ) : null}
               </section>

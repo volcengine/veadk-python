@@ -64,7 +64,12 @@ from veadk.cli.frontend_sandbox import (
     mount_sandbox_agent_routes,
     mount_sandbox_routes,
 )
-from veadk.cli.github_app_pr_review import GitHubInstalledRepository
+from veadk.cli.github_app_pr_review import (
+    GITHUB_APP_REVIEW_HISTORY_KEY,
+    GitHubInstalledRepository,
+    TosGitHubAppReviewRepositoryStore,
+    create_review_record,
+)
 
 
 class _FakeCodex:
@@ -651,6 +656,9 @@ def test_github_app_repositories_include_review_enablement(
                 "reviewEnabled": True,
             }
         ],
+        "page": 1,
+        "pageSize": 10,
+        "hasNextPage": False,
         "reviewSettingsConfigured": True,
         "reviewSettingsReason": "",
     }
@@ -689,7 +697,152 @@ def test_github_app_repositories_report_missing_review_storage(
 
     assert response.status_code == 200
     assert response.json()["repositories"][0]["reviewEnabled"] is False
+    assert response.json()["page"] == 1
+    assert response.json()["pageSize"] == 10
+    assert response.json()["hasNextPage"] is False
     assert response.json()["reviewSettingsConfigured"] is False
+
+
+def test_github_app_repositories_are_paginated_in_studio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VEADK_GITHUB_APP_ID", "4830047")
+    monkeypatch.setenv("VEADK_GITHUB_APP_SLUG", "agentkit-veadk-studio")
+    monkeypatch.setenv("VEADK_GITHUB_APP_PRIVATE_KEY", "pem")
+    monkeypatch.setenv("VEADK_GITHUB_APP_WEBHOOK_SECRET", "secret")
+
+    class _FakeGitHubAppClient:
+        def __init__(self, config: object) -> None:
+            del config
+
+        async def installed_repositories(self) -> list[GitHubInstalledRepository]:
+            return [
+                GitHubInstalledRepository(
+                    installation_id=456,
+                    account="Rhosmarie",
+                    full_name=f"Rhosmarie/repo-{index:02d}",
+                    html_url=f"https://github.com/Rhosmarie/repo-{index:02d}",
+                    private=False,
+                )
+                for index in range(12)
+            ]
+
+    monkeypatch.setattr(frontend_sandbox, "GitHubAppClient", _FakeGitHubAppClient)
+    client = TestClient(
+        _app(_FakeGateway(), github_app_review_storage_client=_FakeTosClient())
+    )
+
+    response = client.get(
+        "/web/github/app/repositories?page=2&pageSize=10",
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["page"] == 2
+    assert payload["pageSize"] == 10
+    assert payload["hasNextPage"] is False
+    assert [item["fullName"] for item in payload["repositories"]] == [
+        "Rhosmarie/repo-10",
+        "Rhosmarie/repo-11",
+    ]
+
+
+def test_github_app_repositories_can_be_searched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VEADK_GITHUB_APP_ID", "4830047")
+    monkeypatch.setenv("VEADK_GITHUB_APP_SLUG", "agentkit-veadk-studio")
+    monkeypatch.setenv("VEADK_GITHUB_APP_PRIVATE_KEY", "pem")
+    monkeypatch.setenv("VEADK_GITHUB_APP_WEBHOOK_SECRET", "secret")
+
+    class _FakeGitHubAppClient:
+        def __init__(self, config: object) -> None:
+            del config
+
+        async def installed_repositories(self) -> list[GitHubInstalledRepository]:
+            return [
+                GitHubInstalledRepository(
+                    installation_id=456,
+                    account="Rhosmarie",
+                    full_name="Rhosmarie/nice",
+                    html_url="https://github.com/Rhosmarie/nice",
+                    private=False,
+                ),
+                GitHubInstalledRepository(
+                    installation_id=789,
+                    account="Other",
+                    full_name="Other/service",
+                    html_url="https://github.com/Other/service",
+                    private=True,
+                ),
+            ]
+
+    monkeypatch.setattr(frontend_sandbox, "GitHubAppClient", _FakeGitHubAppClient)
+    client = TestClient(
+        _app(_FakeGateway(), github_app_review_storage_client=_FakeTosClient())
+    )
+
+    response = client.get(
+        "/web/github/app/repositories?q=nice&page=1&pageSize=10",
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["hasNextPage"] is False
+    assert [item["fullName"] for item in payload["repositories"]] == ["Rhosmarie/nice"]
+
+
+def test_github_app_review_repository_toggle_preserves_other_enabled_repositories(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VEADK_GITHUB_APP_ID", "4830047")
+    monkeypatch.setenv("VEADK_GITHUB_APP_SLUG", "agentkit-veadk-studio")
+    monkeypatch.setenv("VEADK_GITHUB_APP_PRIVATE_KEY", "pem")
+    monkeypatch.setenv("VEADK_GITHUB_APP_WEBHOOK_SECRET", "secret")
+
+    class _FakeGitHubAppClient:
+        def __init__(self, config: object) -> None:
+            del config
+
+        async def installed_repositories(self) -> list[GitHubInstalledRepository]:
+            return [
+                GitHubInstalledRepository(
+                    installation_id=456,
+                    account="Rhosmarie",
+                    full_name=f"Rhosmarie/repo-{index:02d}",
+                    html_url=f"https://github.com/Rhosmarie/repo-{index:02d}",
+                    private=False,
+                )
+                for index in range(12)
+            ]
+
+    monkeypatch.setattr(frontend_sandbox, "GitHubAppClient", _FakeGitHubAppClient)
+    client = TestClient(
+        _app(_FakeGateway(), github_app_review_storage_client=_FakeTosClient())
+    )
+    assert (
+        client.put(
+            "/web/github/app/review-repositories",
+            json={"repositories": ["Rhosmarie/repo-00", "Rhosmarie/repo-10"]},
+            headers={"X-Test-User": "alice"},
+        ).status_code
+        == 200
+    )
+
+    response = client.put(
+        "/web/github/app/review-repositories",
+        json={"repository": "Rhosmarie/repo-11", "reviewEnabled": True},
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["repositories"] == [
+        "Rhosmarie/repo-00",
+        "Rhosmarie/repo-10",
+        "Rhosmarie/repo-11",
+    ]
 
 
 def test_pull_request_review_always_uses_github_app_installation_token(
@@ -773,7 +926,14 @@ def test_pull_request_review_records_manual_start(
     assert response.status_code == 200
     assert records.status_code == 200
     assert records.json()["reviewSettingsConfigured"] is True
-    assert records.json()["records"][0] | {"id": "record-id", "createdAt": "now"} == {
+    assert records.json()["page"] == 1
+    assert records.json()["pageSize"] == 10
+    assert records.json()["hasNextPage"] is False
+    assert records.json()["records"][0] | {
+        "id": "record-id",
+        "createdAt": "now",
+        "status": "started",
+    } == {
         "id": "record-id",
         "repository": "Rhosmarie/nice",
         "pullRequestUrl": "https://github.com/Rhosmarie/nice/pull/23",
@@ -787,6 +947,81 @@ def test_pull_request_review_records_manual_start(
         "displayName": response.json()["displayName"],
         "reason": "",
     }
+
+
+def test_pull_request_review_records_are_paginated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VEADK_GITHUB_APP_ID", "4830047")
+    monkeypatch.setenv("VEADK_GITHUB_APP_SLUG", "agentkit-veadk-studio")
+    monkeypatch.setenv("VEADK_GITHUB_APP_PRIVATE_KEY", "pem")
+    monkeypatch.setenv("VEADK_GITHUB_APP_WEBHOOK_SECRET", "secret")
+    storage = _FakeTosClient()
+    storage.objects[("studio-state", GITHUB_APP_REVIEW_HISTORY_KEY)] = json.dumps(
+        {
+            "records": [
+                {
+                    "id": f"record-{index}",
+                    "repository": "Rhosmarie/nice",
+                    "pullRequestUrl": f"https://github.com/Rhosmarie/nice/pull/{index}",
+                    "pullRequestNumber": index,
+                    "status": "started",
+                    "trigger": "manual",
+                    "createdAt": "2026-09-07T00:00:00Z",
+                    "deliveryId": "",
+                    "action": "",
+                    "sessionId": f"session-{index}",
+                    "displayName": f"PR Review {index}",
+                    "reason": "",
+                }
+                for index in range(1, 6)
+            ]
+        },
+        separators=(",", ":"),
+    ).encode()
+    client = TestClient(_app(_FakeGateway(), github_app_review_storage_client=storage))
+
+    response = client.get(
+        "/web/github/app/review-records?page=2&pageSize=2",
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["page"] == 2
+    assert payload["pageSize"] == 2
+    assert payload["hasNextPage"] is True
+    assert [item["id"] for item in payload["records"]] == ["record-3", "record-4"]
+
+
+def test_pull_request_review_record_status_can_be_completed() -> None:
+    storage = _FakeTosClient()
+    store = TosGitHubAppReviewRepositoryStore(
+        bucket="studio-state",
+        client_factory=lambda: storage,
+    )
+    record = create_review_record(
+        repository="Rhosmarie/nice",
+        pull_request_url="https://github.com/Rhosmarie/nice/pull/23",
+        pull_request_number=23,
+        status="started",
+        trigger="webhook",
+        session_id="remote-1",
+    )
+    asyncio.run(store.append_review_record(record))
+
+    updated = asyncio.run(
+        store.update_review_record_status(
+            record.record_id,
+            status="completed",
+        )
+    )
+
+    assert updated is not None
+    records = asyncio.run(store.review_records())
+    assert records[0].record_id == record.record_id
+    assert records[0].status == "completed"
+    assert records[0].session_id == "remote-1"
 
 
 def test_github_app_webhook_starts_pull_request_review(
@@ -862,7 +1097,7 @@ def test_github_app_webhook_starts_pull_request_review(
     )
     assert records.status_code == 200
     record = records.json()["records"][0]
-    assert record | {"id": "record-id", "createdAt": "now"} == {
+    assert record | {"id": "record-id", "createdAt": "now", "status": "started"} == {
         "id": "record-id",
         "repository": "Rhosmarie/nice",
         "pullRequestUrl": "https://github.com/Rhosmarie/nice/pull/23",

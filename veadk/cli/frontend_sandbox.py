@@ -81,6 +81,7 @@ from veadk.cli.github_app_pr_review import (
     GitHubAppClient,
     GitHubAppReviewError,
     GitHubAppReviewStorageUnavailable,
+    PageRequest,
     GitHubPullRequestReviewRecord,
     TosGitHubAppReviewRepositoryStore,
     create_review_record,
@@ -93,6 +94,9 @@ from veadk.cli.github_app_pr_review import (
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+_GITHUB_REVIEW_DEFAULT_PAGE_SIZE = 10
+_GITHUB_REVIEW_MAX_PAGE_SIZE = 50
 
 STUDIO_SANDBOX_TOOL_NAME = "veadk-studio-codex"
 STUDIO_SANDBOX_TTL_SECONDS = 28_800
@@ -3585,6 +3589,49 @@ def mount_sandbox_routes(
             for repository in repositories
         ]
 
+    def _github_review_page_request(request: Request) -> PageRequest:
+        def _int_query(name: str, default: int) -> int:
+            value = request.query_params.get(name)
+            if value is None:
+                return default
+            try:
+                return int(value)
+            except ValueError as error:
+                raise SandboxValidationError(f"{name} 必须是正整数。") from error
+
+        page = _int_query("page", 1)
+        page_size = _int_query("pageSize", _GITHUB_REVIEW_DEFAULT_PAGE_SIZE)
+        if page < 1:
+            raise SandboxValidationError("page 必须是正整数。")
+        if page_size < 1:
+            raise SandboxValidationError("pageSize 必须是正整数。")
+        return PageRequest(
+            page=page,
+            page_size=min(page_size, _GITHUB_REVIEW_MAX_PAGE_SIZE),
+        )
+
+    async def _github_app_installed_repositories_page(
+        page_request: PageRequest,
+        query: str = "",
+    ) -> dict[str, object]:
+        repositories = await _github_app_installed_repositories()
+        keyword = query.strip().casefold()
+        if keyword:
+            repositories = [
+                repository
+                for repository in repositories
+                if keyword in str(repository.get("fullName") or "").casefold()
+                or keyword in str(repository.get("account") or "").casefold()
+            ]
+        start = page_request.offset
+        end = start + page_request.page_size
+        return {
+            "repositories": repositories[start:end],
+            "page": page_request.page,
+            "pageSize": page_request.page_size,
+            "hasNextPage": end < len(repositories),
+        }
+
     async def _github_app_installation_token_for_pull_request(
         owner: str,
         repo: str,
@@ -3652,10 +3699,28 @@ def mount_sandbox_routes(
         session_id: str,
         owner_id: str,
         pull_request_url: str,
+        store: TosGitHubAppReviewRepositoryStore | None,
+        record_id: str,
     ) -> None:
         prompt = _GITHUB_PULL_REQUEST_REVIEW_PROMPT.format(
             pull_request_url=pull_request_url
         )
+
+        async def _update_status(status: str, reason: str = "") -> None:
+            if store is None or not record_id:
+                return
+            try:
+                await store.update_review_record_status(
+                    record_id,
+                    status=status,
+                    reason=reason,
+                )
+            except GitHubAppReviewError as error:
+                logger.warning(
+                    "Failed to update GitHub PR review record %s: %s",
+                    record_id,
+                    error,
+                )
 
         async def _run_review_message() -> None:
             try:
@@ -3665,7 +3730,9 @@ def mount_sandbox_routes(
                     prompt,
                 ):
                     pass
+                await _update_status("completed")
             except SandboxError as error:
+                await _update_status("failed", _safe_error_message(error))
                 logger.warning(
                     "GitHub pull request review message failed for session %s: %s",
                     session_id,
@@ -3683,12 +3750,18 @@ def mount_sandbox_routes(
     async def _github_app_repositories(request: Request) -> dict[str, object]:
         owner_resolver(request)
         try:
-            repositories = await _github_app_installed_repositories()
+            page_request = _github_review_page_request(request)
+            page_result = await _github_app_installed_repositories_page(
+                page_request,
+                request.query_params.get("q", ""),
+            )
         except GitHubAppReviewError as error:
             raise _github_app_http_error(error) from error
+        except SandboxError as error:
+            raise _http_error(error) from error
         storage_configured = _github_app_review_store() is not None
         return {
-            "repositories": repositories,
+            **page_result,
             "reviewSettingsConfigured": storage_configured,
             "reviewSettingsReason": ""
             if storage_configured
@@ -3708,11 +3781,31 @@ def mount_sandbox_routes(
         try:
             data = await _request_object(request)
             repositories = data.get("repositories")
-            if not isinstance(repositories, list) or any(
-                not isinstance(repository, str) for repository in repositories
-            ):
-                raise SandboxValidationError("启用评审仓库列表格式无效。")
-            normalized = [normalize_review_repository(item) for item in repositories]
+            repository = data.get("repository")
+            review_enabled = data.get("reviewEnabled")
+            if repository is not None or review_enabled is not None:
+                if not isinstance(repository, str) or not isinstance(
+                    review_enabled, bool
+                ):
+                    raise SandboxValidationError("启用评审仓库更新格式无效。")
+                normalized_repository = normalize_review_repository(repository)
+                current = await store.enabled_repositories()
+                updated = {
+                    item
+                    for item in current
+                    if item.casefold() != normalized_repository.casefold()
+                }
+                if review_enabled:
+                    updated.add(normalized_repository)
+                normalized = sorted(updated, key=str.casefold)
+            else:
+                if not isinstance(repositories, list) or any(
+                    not isinstance(repository, str) for repository in repositories
+                ):
+                    raise SandboxValidationError("启用评审仓库列表格式无效。")
+                normalized = [
+                    normalize_review_repository(item) for item in repositories
+                ]
             installed = await _github_app_installed_repositories()
             installed_lookup = {
                 str(repository.get("fullName") or "").casefold()
@@ -3741,15 +3834,24 @@ def mount_sandbox_routes(
         if store is None:
             return {
                 "records": [],
+                "page": 1,
+                "pageSize": _GITHUB_REVIEW_DEFAULT_PAGE_SIZE,
+                "hasNextPage": False,
                 "reviewSettingsConfigured": False,
                 "reviewSettingsReason": "管理员未配置 Studio 持久化存储，无法读取评审记录。",
             }
         try:
-            records = await store.review_records()
+            page_request = _github_review_page_request(request)
+            records, page_result = await store.review_records_page(page_request)
         except GitHubAppReviewError as error:
             raise _github_app_http_error(error) from error
+        except SandboxError as error:
+            raise _http_error(error) from error
         return {
             "records": [record.to_public_dict() for record in records],
+            "page": page_result.page,
+            "pageSize": page_result.page_size,
+            "hasNextPage": page_result.has_next_page,
             "reviewSettingsConfigured": True,
             "reviewSettingsReason": "",
         }
@@ -3849,24 +3951,24 @@ def mount_sandbox_routes(
                 pull_request_url=event.pull_request_url,
                 installation_token=installation_token,
             )
-            await _remember_github_review_record(
-                store,
-                create_review_record(
-                    repository=event.repository,
-                    pull_request_url=event.pull_request_url,
-                    pull_request_number=event.pull_request_number,
-                    status="started",
-                    trigger="webhook",
-                    delivery_id=event.delivery_id,
-                    action=event.action,
-                    session_id=session.instance_id,
-                    display_name=session.display_name,
-                ),
+            record = create_review_record(
+                repository=event.repository,
+                pull_request_url=event.pull_request_url,
+                pull_request_number=event.pull_request_number,
+                status="started",
+                trigger="webhook",
+                delivery_id=event.delivery_id,
+                action=event.action,
+                session_id=session.instance_id,
+                display_name=session.display_name,
             )
+            await _remember_github_review_record(store, record)
             _schedule_github_pull_request_review_message(
                 session_id=session.instance_id,
                 owner_id=config.review_owner_id,
                 pull_request_url=event.pull_request_url,
+                store=store,
+                record_id=record.record_id,
             )
         except SandboxError as error:
             if store is not None and event is not None:
@@ -3935,19 +4037,19 @@ def mount_sandbox_routes(
                 installation_token=installation_token,
             )
             store = _github_app_review_store()
+            record_id = ""
             if store is not None:
-                await _remember_github_review_record(
-                    store,
-                    create_review_record(
-                        repository=f"{owner}/{repo}",
-                        pull_request_url=pull_request_url,
-                        pull_request_number=int(_number),
-                        status="started",
-                        trigger="manual",
-                        session_id=session.instance_id,
-                        display_name=session.display_name,
-                    ),
+                record = create_review_record(
+                    repository=f"{owner}/{repo}",
+                    pull_request_url=pull_request_url,
+                    pull_request_number=int(_number),
+                    status="started",
+                    trigger="manual",
+                    session_id=session.instance_id,
+                    display_name=session.display_name,
                 )
+                record_id = record.record_id
+                await _remember_github_review_record(store, record)
         except SandboxError as error:
             raise _http_error(error) from error
         except GitHubAppReviewError as error:
@@ -3957,6 +4059,8 @@ def mount_sandbox_routes(
             session_id=session.instance_id,
             owner_id=owner_id,
             pull_request_url=pull_request_url,
+            store=store,
+            record_id=record_id,
         )
         return {
             "status": "started",

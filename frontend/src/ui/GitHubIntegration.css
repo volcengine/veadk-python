@@ -276,6 +276,64 @@
   margin-top: 12px;
 }
 
+.github-app-repository-search {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.github-app-repository-search input {
+  min-width: 0;
+  height: 34px;
+  box-sizing: border-box;
+  padding: 0 11px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 7px;
+  outline: 0;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 13px;
+}
+
+.github-app-repository-search input::placeholder {
+  color: hsl(var(--muted-foreground));
+}
+
+.github-app-repository-search input:focus {
+  border-color: hsl(var(--ring) / 0.62);
+  box-shadow: 0 0 0 2px hsl(var(--ring) / 0.12);
+}
+
+.github-app-repository-search button {
+  min-width: 58px;
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 7px;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.github-app-repository-search button:hover:not(:disabled) {
+  background: hsl(var(--secondary));
+}
+
+.github-app-repository-search button:focus-visible {
+  outline: 2px solid hsl(var(--ring) / 0.35);
+  outline-offset: 2px;
+}
+
+.github-app-repository-search button:disabled {
+  cursor: wait;
+  opacity: 0.56;
+}
+
 .github-app-repository-row {
   min-width: 0;
   min-height: 52px;
@@ -478,6 +536,12 @@
   color: hsl(216 70% 36%);
 }
 
+.github-review-record-status.is-completed {
+  border-color: hsl(145 58% 34% / 0.24);
+  background: hsl(145 60% 42% / 0.08);
+  color: hsl(145 55% 27%);
+}
+
 .github-review-record-status.is-ignored {
   border-color: hsl(44 76% 40% / 0.26);
   background: hsl(44 90% 52% / 0.1);
@@ -496,6 +560,52 @@
   flex: 0 0 auto;
 }
 
+.github-list-pagination {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.github-list-pagination > div {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.github-list-pagination button {
+  min-width: 64px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 7px;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.github-list-pagination button:hover:not(:disabled) {
+  background: hsl(var(--secondary));
+}
+
+.github-list-pagination button:focus-visible {
+  outline: 2px solid hsl(var(--ring) / 0.35);
+  outline-offset: 2px;
+}
+
+.github-list-pagination button:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
+}
+
 @media (max-width: 680px) {
   .github-integration-page { padding: 20px 18px 0; }
   .github-field-grid { grid-template-columns: minmax(0, 1fr); }
@@ -503,10 +613,15 @@
   .github-app-card { align-items: stretch; flex-direction: column; }
   .github-app-install-link { width: 100%; box-sizing: border-box; }
   .github-review-section-header,
+  .github-list-pagination,
   .github-app-repository-row,
   .github-review-record-row { align-items: stretch; flex-direction: column; }
   .github-review-section-header button,
+  .github-app-repository-search button,
+  .github-list-pagination button,
   .github-review-switch { width: 100%; }
+  .github-app-repository-search { grid-template-columns: minmax(0, 1fr); }
+  .github-list-pagination > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .github-review-record-title { align-items: flex-start; flex-direction: column; }
   .github-review-record-actions button { width: 100%; }
   .github-secrets-header { align-items: flex-start; flex-direction: column; gap: 6px; }
@@ -524,6 +639,8 @@
   .github-field input,
   .github-app-install-link,
   .github-review-switch,
+  .github-app-repository-search button,
+  .github-list-pagination button,
   .github-form-actions button,
   .github-review-section-actions button { transition: none; }
 }

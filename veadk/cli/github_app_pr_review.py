@@ -24,7 +24,7 @@ import os
 import time
 import asyncio
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from hashlib import sha256
 from typing import Any
@@ -47,6 +47,23 @@ GITHUB_APP_REVIEW_HISTORY_KEY = "veadk-studio/v1/github-pr-review/history.json"
 _MAX_REVIEW_REPOSITORIES_BYTES = 64 * 1024
 _MAX_REVIEW_HISTORY_BYTES = 256 * 1024
 _MAX_REVIEW_HISTORY_ITEMS = 50
+
+
+@dataclass(frozen=True)
+class PageRequest:
+    page: int
+    page_size: int
+
+    @property
+    def offset(self) -> int:
+        return (self.page - 1) * self.page_size
+
+
+@dataclass(frozen=True)
+class PageResult:
+    page: int
+    page_size: int
+    has_next_page: bool
 
 
 class GitHubAppReviewError(RuntimeError):
@@ -169,11 +186,31 @@ class TosGitHubAppReviewRepositoryStore:
     async def review_records(self) -> list[GitHubPullRequestReviewRecord]:
         return await asyncio.to_thread(self._review_records)
 
+    async def review_records_page(
+        self,
+        page_request: PageRequest,
+    ) -> tuple[list[GitHubPullRequestReviewRecord], PageResult]:
+        return await asyncio.to_thread(self._review_records_page, page_request)
+
     async def append_review_record(
         self,
         record: GitHubPullRequestReviewRecord,
     ) -> GitHubPullRequestReviewRecord:
         return await asyncio.to_thread(self._append_review_record, record)
+
+    async def update_review_record_status(
+        self,
+        record_id: str,
+        *,
+        status: str,
+        reason: str = "",
+    ) -> GitHubPullRequestReviewRecord | None:
+        return await asyncio.to_thread(
+            self._update_review_record_status,
+            record_id,
+            status=status,
+            reason=reason,
+        )
 
     def _enabled_repositories(self) -> set[str]:
         client = self._client_factory()
@@ -255,6 +292,19 @@ class TosGitHubAppReviewRepositoryStore:
             parsed.append(_review_record_from_payload(item))
         return parsed[:_MAX_REVIEW_HISTORY_ITEMS]
 
+    def _review_records_page(
+        self,
+        page_request: PageRequest,
+    ) -> tuple[list[GitHubPullRequestReviewRecord], PageResult]:
+        records = self._review_records()
+        start = page_request.offset
+        end = start + page_request.page_size
+        return records[start:end], PageResult(
+            page=page_request.page,
+            page_size=page_request.page_size,
+            has_next_page=end < len(records),
+        )
+
     def _append_review_record(
         self,
         record: GitHubPullRequestReviewRecord,
@@ -269,8 +319,41 @@ class TosGitHubAppReviewRepositoryStore:
             deduped.append(item)
             if len(deduped) >= _MAX_REVIEW_HISTORY_ITEMS:
                 break
+        self._write_review_records(deduped)
+        return record
+
+    def _update_review_record_status(
+        self,
+        record_id: str,
+        *,
+        status: str,
+        reason: str = "",
+    ) -> GitHubPullRequestReviewRecord | None:
+        normalized_status = _review_record_status(status)
+        records = self._review_records()
+        updated_record: GitHubPullRequestReviewRecord | None = None
+        updated_records: list[GitHubPullRequestReviewRecord] = []
+        for item in records:
+            if item.record_id == record_id:
+                updated_record = replace(
+                    item,
+                    status=normalized_status,
+                    reason=reason.strip()[:240],
+                )
+                updated_records.append(updated_record)
+            else:
+                updated_records.append(item)
+        if updated_record is None:
+            return None
+        self._write_review_records(updated_records)
+        return updated_record
+
+    def _write_review_records(
+        self,
+        records: list[GitHubPullRequestReviewRecord],
+    ) -> None:
         content = json.dumps(
-            {"records": [item.to_public_dict() for item in deduped]},
+            {"records": [item.to_public_dict() for item in records]},
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
@@ -287,7 +370,6 @@ class TosGitHubAppReviewRepositoryStore:
             )
         except Exception as error:
             raise GitHubAppReviewStorageUnavailable("无法保存 PR 评审记录。") from error
-        return record
 
     def _read_json_object(
         self,
@@ -507,7 +589,7 @@ def _payload_text(payload: dict[str, Any], key: str) -> str:
 
 
 def _review_record_status(value: str) -> str:
-    if value not in {"started", "ignored", "failed"}:
+    if value not in {"started", "completed", "ignored", "failed"}:
         raise GitHubAppReviewStorageUnavailable("PR 评审记录状态无效。")
     return value
 

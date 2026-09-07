@@ -15,7 +15,7 @@ export interface GitHubPullRequestReviewResult {
   displayName: string;
 }
 
-export type GitHubPullRequestReviewRecordStatus = "started" | "ignored" | "failed";
+export type GitHubPullRequestReviewRecordStatus = "started" | "completed" | "ignored" | "failed";
 export type GitHubPullRequestReviewRecordTrigger = "manual" | "webhook";
 
 export interface GitHubPullRequestReviewRecord {
@@ -49,13 +49,19 @@ export interface GitHubAppRepository {
   reviewEnabled: boolean;
 }
 
-export interface GitHubAppRepositoriesResult {
+export interface GitHubPagination {
+  page: number;
+  pageSize: number;
+  hasNextPage: boolean;
+}
+
+export interface GitHubAppRepositoriesResult extends GitHubPagination {
   repositories: GitHubAppRepository[];
   reviewSettingsConfigured: boolean;
   reviewSettingsReason: string;
 }
 
-export interface GitHubPullRequestReviewRecordsResult {
+export interface GitHubPullRequestReviewRecordsResult extends GitHubPagination {
   records: GitHubPullRequestReviewRecord[];
   reviewSettingsConfigured: boolean;
   reviewSettingsReason: string;
@@ -391,9 +397,15 @@ export async function getGitHubAppConfig(
 
 export async function getGitHubAppRepositories(
   signal: AbortSignal,
+  options: { page: number; pageSize: number; query?: string },
 ): Promise<GitHubAppRepositoriesResult> {
+  const params = new URLSearchParams({
+    page: String(options.page),
+    pageSize: String(options.pageSize),
+  });
+  if (options.query?.trim()) params.set("q", options.query.trim());
   const response = await studioFetch(
-    "/web/github/app/repositories",
+    `/web/github/app/repositories?${params.toString()}`,
     {
       method: "GET",
       headers: { Accept: "application/json" },
@@ -406,6 +418,9 @@ export async function getGitHubAppRepositories(
   const value = (await response.json()) as Partial<GitHubAppRepositoriesResult>;
   if (
     !Array.isArray(value.repositories) ||
+    typeof value.page !== "number" ||
+    typeof value.pageSize !== "number" ||
+    typeof value.hasNextPage !== "boolean" ||
     typeof value.reviewSettingsConfigured !== "boolean" ||
     typeof value.reviewSettingsReason !== "string" ||
     value.repositories.some((repository) => (
@@ -426,9 +441,14 @@ export async function getGitHubAppRepositories(
 
 export async function getGitHubPullRequestReviewRecords(
   signal: AbortSignal,
+  options: { page: number; pageSize: number },
 ): Promise<GitHubPullRequestReviewRecordsResult> {
+  const params = new URLSearchParams({
+    page: String(options.page),
+    pageSize: String(options.pageSize),
+  });
   const response = await studioFetch(
-    "/web/github/app/review-records",
+    `/web/github/app/review-records?${params.toString()}`,
     {
       method: "GET",
       headers: { Accept: "application/json" },
@@ -441,6 +461,9 @@ export async function getGitHubPullRequestReviewRecords(
   const value = (await response.json()) as Partial<GitHubPullRequestReviewRecordsResult>;
   if (
     !Array.isArray(value.records) ||
+    typeof value.page !== "number" ||
+    typeof value.pageSize !== "number" ||
+    typeof value.hasNextPage !== "boolean" ||
     typeof value.reviewSettingsConfigured !== "boolean" ||
     typeof value.reviewSettingsReason !== "string" ||
     value.records.some((record) => (
@@ -450,7 +473,7 @@ export async function getGitHubPullRequestReviewRecords(
       typeof record.repository !== "string" ||
       typeof record.pullRequestUrl !== "string" ||
       typeof record.pullRequestNumber !== "number" ||
-      !["started", "ignored", "failed"].includes(String(record.status)) ||
+      !["started", "completed", "ignored", "failed"].includes(String(record.status)) ||
       !["manual", "webhook"].includes(String(record.trigger)) ||
       typeof record.createdAt !== "string" ||
       typeof record.deliveryId !== "string" ||
@@ -487,6 +510,35 @@ export async function updateGitHubAppReviewRepositories(
     value.repositories.some((repository) => typeof repository !== "string")
   ) {
     throw new Error("GitHub App 启用仓库响应格式无效。");
+  }
+  return value.repositories;
+}
+
+export async function updateGitHubAppReviewRepository(
+  input: {
+    repository: string;
+    reviewEnabled: boolean;
+  },
+  signal: AbortSignal,
+): Promise<string[]> {
+  const response = await studioFetch(
+    "/web/github/app/review-repositories",
+    {
+      method: "PUT",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+      signal,
+    },
+  );
+  if (!response.ok) {
+    throw await responseErrorFromGitHubReview(response);
+  }
+  const value = (await response.json()) as { repositories?: unknown };
+  if (
+    !Array.isArray(value.repositories) ||
+    value.repositories.some((repository) => typeof repository !== "string")
+  ) {
+    throw new Error("GitHub App 评审仓库保存响应格式无效。");
   }
   return value.repositories;
 }
