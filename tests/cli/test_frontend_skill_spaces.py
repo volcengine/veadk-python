@@ -508,6 +508,73 @@ def test_list_skills_maps_existing_dto_and_pagination(
     assert request.page_size == 5
 
 
+def test_list_skills_recovers_name_addressable_items_from_dangling_relation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    class _DanglingRelationError(RuntimeError):
+        code = "ResourceNotFound.skill"
+
+    class _FakeSkillsClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def list_skills_by_skill_space(self, request: Any) -> SimpleNamespace:
+            _assert_sdk_call_is_off_event_loop()
+            del request
+            raise _DanglingRelationError("dangling relation")
+
+        def get_skill_space(self, request: Any) -> SimpleNamespace:
+            assert request.id == "space-1"
+            return SimpleNamespace(name="Writers")
+
+        def list_skills_by_space_id(self, request: Any) -> SimpleNamespace:
+            assert request.skill_space_id == "space-1"
+            assert request.skill_space_name == "Writers"
+            return SimpleNamespace(
+                items=[SimpleNamespace(name="writer", description="basic")]
+            )
+
+        def get_skill_info(self, request: Any) -> SimpleNamespace:
+            assert request.skill_name == "writer"
+            return SimpleNamespace(
+                skill_name="writer",
+                description="Write content",
+                skill_md="# Writer",
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.skills.client.AgentkitSkillsClient", _FakeSkillsClient
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/skill-spaces/space-1/skills",
+            params={"region": "cn-shanghai", "page": 1, "page_size": 5},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "items": [
+            {
+                "skillId": "",
+                "skillName": "writer",
+                "skillDescription": "Write content",
+                "version": "",
+                "skillStatus": "",
+                "lookupByName": True,
+                "degraded": True,
+            }
+        ],
+        "totalCount": 1,
+        "page": 1,
+        "pageSize": 5,
+        "degraded": True,
+        "warnings": ["部分关联异常，已恢复可读取技能"],
+    }
+
+
 def test_skill_space_errors_preserve_sdk_details(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -583,6 +650,52 @@ def test_get_skill_detail_runs_sdk_call_off_event_loop(
     assert region == "cn-shanghai"
     assert request.id == "skill-1"
     assert request.skill_version == "1.2.0"
+
+
+def test_get_skill_detail_uses_name_lookup_for_recovered_relation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    class _FakeSkillsClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def get_skill_version(self, request: Any) -> SimpleNamespace:
+            del request
+            raise AssertionError("degraded name lookup must not invent a version id")
+
+        def get_skill_info(self, request: Any) -> SimpleNamespace:
+            _assert_sdk_call_is_off_event_loop()
+            assert request.skill_name == "writer"
+            assert request.skill_space_name == "Writers"
+            assert request.skill_space_id == "space-1"
+            return SimpleNamespace(
+                skill_name="writer",
+                description="Write content",
+                skill_md="# Writer\n",
+                bucket_name="",
+                tos_path="",
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.skills.client.AgentkitSkillsClient", _FakeSkillsClient
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/skill-spaces/space-1/skills/writer",
+            params={
+                "region": "cn-shanghai",
+                "skill_name": "writer",
+                "skill_space_name": "Writers",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["name"] == "writer"
+    assert response.json()["skillMd"] == "# Writer\n"
+    assert response.json()["version"] == ""
 
 
 def test_get_skill_detail_falls_back_for_legacy_skill_type(

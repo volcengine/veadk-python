@@ -11,6 +11,7 @@ import { Check, Cloud, ExternalLink, Info, Loader2, Plus } from "lucide-react";
 import {
   listSkillSpaces,
   listSkillsInSpace,
+  skillLookupIdentity,
   toHit,
   getSkillSpaceConsoleUrl,
   type SkillSpaceRef,
@@ -99,13 +100,14 @@ export function SkillSpacePicker({
 
   const toggle = (skill: SkillSpaceSkill) => {
     if (!selectedSpace) return;
-    if (isSelected(skill.skillId, skill.version)) {
+    const skillIdentity = skillLookupIdentity(skill);
+    if (isSelected(skillIdentity, skill.version)) {
       onChange(
         selected.filter(
           (s) =>
             !(
               s.source === "skillspace" &&
-              s.skillId === skill.skillId &&
+              s.skillId === skillIdentity &&
               (s.version || "") === skill.version
             ),
         ),
@@ -194,10 +196,11 @@ export function SkillSpacePicker({
           ) : (
             <div className="cw-skill-results">
               {skills.map((sk) => {
-                const on = isSelected(sk.skillId, sk.version);
+                const identity = skillLookupIdentity(sk);
+                const on = isSelected(identity, sk.version);
                 return (
                   <button
-                    key={`${sk.skillId}/${sk.version}`}
+                    key={`${identity}/${sk.version}`}
                     type="button"
                     className={`cw-skill-result ${on ? "is-on" : ""}`}
                     onClick={() => toggle(sk)}

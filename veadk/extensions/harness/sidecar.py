@@ -119,8 +119,12 @@ def agentkit_cli_executable() -> str:
     """Resolve or securely bootstrap the pinned standalone AgentKit CLI."""
 
     from veadk.cli.agentkit_cli import AgentKitCliError, resolve_agentkit_cli
+    from veadk.cli.studio_companion import resolve_studio_managed_agentkit_cli
 
     try:
+        managed = resolve_studio_managed_agentkit_cli()
+        if managed is not None:
+            return str(managed)
         return str(resolve_agentkit_cli())
     except AgentKitCliError as error:
         raise HarnessSidecarDependencyError(

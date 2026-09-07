@@ -43,6 +43,7 @@ from veadk.cli.studio_companion import (
     required_agentkit_cli_version,
     validate_installed_agentkit_cli,
 )
+from veadk.cli.studio_dependencies import stage_studio_agentkit_cli_archive
 
 
 def _script(version: str = AGENTKIT_CLI_VERSION) -> bytes:
@@ -54,6 +55,7 @@ def _tar_bytes(
     *,
     member_name: str | None = None,
     member_type: bytes = tarfile.REGTYPE,
+    version: str = AGENTKIT_CLI_VERSION,
 ) -> bytes:
     output = BytesIO()
     with tarfile.open(fileobj=output, mode="w:gz") as archive:
@@ -61,7 +63,7 @@ def _tar_bytes(
         root.type = tarfile.DIRTYPE
         root.mode = 0o755
         archive.addfile(root)
-        content = _script()
+        content = _script(version)
         executable = tarfile.TarInfo(
             member_name or f"{artifact.archive_root}/{artifact.executable_name}"
         )
@@ -81,11 +83,38 @@ def _write_test_archive(
     *,
     member_name: str | None = None,
     member_type: bytes = tarfile.REGTYPE,
+    version: str = AGENTKIT_CLI_VERSION,
 ) -> AgentKitCliArtifact:
     base = agentkit_cli_artifact(system="Linux", machine="x86_64")
-    content = _tar_bytes(base, member_name=member_name, member_type=member_type)
+    content = _tar_bytes(
+        base,
+        member_name=member_name,
+        member_type=member_type,
+        version=version,
+    )
     path.write_bytes(content)
     return replace(base, sha256=hashlib.sha256(content).hexdigest())
+
+
+def test_staged_cli_archive_is_runtime_readable_under_secure_umask(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    base = agentkit_cli_artifact(system="Linux", machine="x86_64")
+    artifact = _write_test_archive(source / base.filename)
+    previous_umask = os.umask(0o077)
+    try:
+        target = stage_studio_agentkit_cli_archive(
+            destination,
+            source_dir=source,
+            artifact=artifact,
+        )
+    finally:
+        os.umask(previous_umask)
+
+    assert stat.S_IMODE(target.stat().st_mode) == 0o644
 
 
 @pytest.mark.parametrize(
@@ -430,6 +459,145 @@ def test_explicit_archive_overrides_stale_cli_environment(
     )
 
     assert resolved.read_bytes() == _script()
+
+
+def test_studio_managed_archive_repairs_later_sidecar_resolution_with_stale_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive = tmp_path / "agentkit-linux-x64.tar.gz"
+    artifact = _write_test_archive(archive)
+    stale_executable = tmp_path / "stale-ak"
+    stale_executable.write_text("#!/bin/sh\necho 'ak 0.1.0'\n", encoding="utf-8")
+    stale_executable.chmod(0o755)
+    monkeypatch.setenv(AGENTKIT_CLI_ENV, str(stale_executable))
+    monkeypatch.setenv(
+        "VEADK_STUDIO_AGENTKIT_CLI_ARCHIVE",
+        str(archive),
+    )
+    monkeypatch.setattr(agentkit_cli, "agentkit_cli_artifact", lambda: artifact)
+
+    resolved = studio_companion.resolve_studio_managed_agentkit_cli(
+        cache_root=tmp_path / "cache",
+    )
+
+    assert resolved is not None
+    assert resolved.read_bytes() == _script()
+
+
+def test_studio_release_discovers_bundle_archive_for_legacy_updater_entrypoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive = tmp_path / "agentkit-linux-x64.tar.gz"
+    artifact = _write_test_archive(archive)
+    stale_executable = tmp_path / "stale-ak"
+    stale_executable.write_text("#!/bin/sh\necho 'ak 0.1.0'\n", encoding="utf-8")
+    stale_executable.chmod(0o755)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "20260907120000")
+    monkeypatch.setenv(AGENTKIT_CLI_ENV, str(stale_executable))
+    monkeypatch.delenv(
+        "VEADK_STUDIO_AGENTKIT_CLI_ARCHIVE",
+        raising=False,
+    )
+    monkeypatch.delenv(
+        "VEADK_STUDIO_AGENTKIT_CLI_RUNTIME_MANIFEST",
+        raising=False,
+    )
+    monkeypatch.setattr(agentkit_cli, "agentkit_cli_artifact", lambda: artifact)
+
+    resolved = studio_companion.resolve_studio_managed_agentkit_cli(
+        cache_root=tmp_path / "cache",
+    )
+
+    assert resolved is not None
+    assert resolved.read_bytes() == _script()
+
+
+def test_non_studio_process_does_not_discover_archive_from_working_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive = tmp_path / "agentkit-linux-x64.tar.gz"
+    _write_test_archive(archive)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("VEADK_STUDIO_RELEASE_VERSION", raising=False)
+    monkeypatch.delenv(
+        "VEADK_STUDIO_AGENTKIT_CLI_ARCHIVE",
+        raising=False,
+    )
+    monkeypatch.delenv(
+        "VEADK_STUDIO_AGENTKIT_CLI_RUNTIME_MANIFEST",
+        raising=False,
+    )
+
+    assert (
+        studio_companion.resolve_studio_managed_agentkit_cli(
+            cache_root=tmp_path / "cache",
+        )
+        is None
+    )
+
+
+def test_studio_managed_archive_fails_closed_before_valid_legacy_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive = tmp_path / "agentkit-linux-x64.tar.gz"
+    artifact = _write_test_archive(archive)
+    archive.write_bytes(b"tampered")
+    valid_executable = tmp_path / "valid-ak"
+    valid_executable.write_bytes(_script())
+    valid_executable.chmod(0o755)
+    monkeypatch.setenv(AGENTKIT_CLI_ENV, str(valid_executable))
+    monkeypatch.setenv(
+        "VEADK_STUDIO_AGENTKIT_CLI_ARCHIVE",
+        str(archive),
+    )
+    monkeypatch.setattr(agentkit_cli, "agentkit_cli_artifact", lambda: artifact)
+
+    with pytest.raises(AgentKitCliError, match="checksum"):
+        studio_companion.resolve_studio_managed_agentkit_cli(
+            cache_root=tmp_path / "cache",
+        )
+
+
+def test_studio_managed_archive_rejects_wrong_cli_version(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive = tmp_path / "agentkit-linux-x64.tar.gz"
+    artifact = _write_test_archive(archive, version="0.51.0")
+    monkeypatch.setenv(
+        "VEADK_STUDIO_AGENTKIT_CLI_ARCHIVE",
+        str(archive),
+    )
+    monkeypatch.setattr(agentkit_cli, "agentkit_cli_artifact", lambda: artifact)
+
+    with pytest.raises(AgentKitCliError, match="pinned version"):
+        studio_companion.resolve_studio_managed_agentkit_cli(
+            cache_root=tmp_path / "cache",
+        )
+
+
+def test_studio_managed_cli_rejects_conflicting_bundle_sources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "VEADK_STUDIO_AGENTKIT_CLI_ARCHIVE",
+        str(tmp_path / "agentkit-linux-x64.tar.gz"),
+    )
+    monkeypatch.setenv(
+        "VEADK_STUDIO_AGENTKIT_CLI_RUNTIME_MANIFEST",
+        str(tmp_path / "studio-runtime.json"),
+    )
+
+    with pytest.raises(AgentKitCliError, match="either"):
+        studio_companion.resolve_studio_managed_agentkit_cli(
+            cache_root=tmp_path / "cache",
+        )
 
 
 def test_valid_explicit_cli_is_used_without_archive(

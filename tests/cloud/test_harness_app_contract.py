@@ -1017,7 +1017,11 @@ class TestHarnessConfig:
             },
         )
 
-    def test_agentkit_resolver_fetches_viking_knowledge_connection_info(self):
+    def test_agentkit_resolver_fetches_viking_knowledge_connection_info(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.delenv("AGENTKIT_CLOUD_PROVIDER", raising=False)
+        monkeypatch.setenv("CLOUD_PROVIDER", "volcengine")
         knowledge_requests = []
 
         class KnowledgeClient:

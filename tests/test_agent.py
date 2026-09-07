@@ -134,7 +134,7 @@ def test_agent_without_long_term_memory():
     assert load_memory not in agent.tools
 
 
-@patch("veadk.agent.LiteLlm")
+@patch("veadk.agent.RetryingLiteLlm")
 def test_agent_model_creation(mock_lite_llm):
     mock_model = Mock()
     mock_lite_llm.return_value = mock_model

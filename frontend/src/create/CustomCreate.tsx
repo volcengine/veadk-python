@@ -96,8 +96,10 @@ import {
   confirmMcpCredentialReuse,
   clearMcpConfiguredAuth,
   deploymentMcpSecretValues,
+  type McpConfigurationConflict,
   mcpAuthTokenInputValue,
   mcpCredentialActionRequired,
+  mcpConfigurationConflict,
   mcpCredentialReuseValues,
   mcpUrlNeedsPathWarning,
   prepareMcpAuth,
@@ -1909,12 +1911,18 @@ function VikingMemorySelect({
  * ---------------------------------------------------------------- */
 function McpToolEditor({
   tools,
+  conflict,
+  showConflict,
   onChange,
 }: {
   tools: McpTool[];
+  conflict: McpConfigurationConflict | null;
+  showConflict: boolean;
   onChange: (next: McpTool[]) => void;
 }) {
   const { t } = useTranslation("create");
+  const conflictErrorId = useId();
+  const visibleConflict = showConflict ? conflict : null;
   const update = (i: number, p: Partial<McpTool>) =>
     onChange(tools.map((tool, idx) => (idx === i ? { ...tool, ...p } : tool)));
 
@@ -1973,6 +1981,13 @@ function McpToolEditor({
 
                 <input
                   className="cw-input"
+                  data-validation-field="mcp-name"
+                  aria-invalid={visibleConflict === "duplicateName"}
+                  aria-describedby={
+                    visibleConflict === "duplicateName"
+                      ? conflictErrorId
+                      : undefined
+                  }
                   value={tool.name}
                   placeholder={t("traditional.mcp.namePlaceholder")}
                   onChange={(e) => update(i, { name: e.target.value })}
@@ -1982,6 +1997,13 @@ function McpToolEditor({
                   <>
                     <input
                       className="cw-input"
+                      data-validation-field="mcp-url"
+                      aria-invalid={visibleConflict === "duplicateUrl"}
+                      aria-describedby={
+                        visibleConflict === "duplicateUrl"
+                          ? conflictErrorId
+                          : undefined
+                      }
                       value={tool.url ?? ""}
                       placeholder={t("traditional.mcp.urlPlaceholder")}
                       onChange={(e) =>
@@ -2143,6 +2165,16 @@ function McpToolEditor({
             ))}
           </AnimatePresence>
         </div>
+      )}
+
+      {visibleConflict && (
+        <p className="cw-error-text" id={conflictErrorId} role="alert">
+          {t(
+            visibleConflict === "duplicateName"
+              ? "traditional.validation.mcpDuplicateName"
+              : "traditional.validation.mcpDuplicateUrl",
+          )}
+        </p>
       )}
 
       <button type="button" className="cw-add-sub" onClick={add}>
@@ -2324,6 +2356,8 @@ type NodeProblemCode =
   | "duplicateName"
   | "missingDescription"
   | "mcpAuthRequired"
+  | "mcpDuplicateName"
+  | "mcpDuplicateUrl"
   | "missingSubagent"
   | "missingPrompt";
 
@@ -2341,6 +2375,20 @@ function treeProblems(
   path: NodePath = [],
 ): TreeProblem[] {
   const out: TreeProblem[] = [];
+  if (path.length === 0) {
+    const conflict = mcpConfigurationConflict(root);
+    if (conflict) {
+      out.push({
+        path,
+        name: root.name.trim(),
+        agentType: root.agentType,
+        problem:
+          conflict === "duplicateName"
+            ? "mcpDuplicateName"
+            : "mcpDuplicateUrl",
+      });
+    }
+  }
   const remote = isA2aType(root.agentType);
   const p = nodeProblem(root, duplicateNames, path.length === 0);
   if (p) {
@@ -4080,6 +4128,7 @@ export function CustomCreate({
     [createBuiltinTools],
   );
   const mcpTools = node.mcpTools ?? [];
+  const mcpConflict = isRootAgent ? mcpConfigurationConflict(draft) : null;
   const selectedSkills = node.selectedSkills ?? [];
   const toggleBuiltin = (id: string) => {
     if (!createBuiltinToolIds.has(id)) return;
@@ -4188,7 +4237,13 @@ export function CustomCreate({
   );
 
   function focusValidationProblem(problem: TreeProblem) {
-    const sectionId = problem.problem === "missingSubagent" ? "type" : "basic";
+    const sectionId =
+      problem.problem === "mcpDuplicateName" ||
+      problem.problem === "mcpDuplicateUrl"
+        ? "tools"
+        : problem.problem === "missingSubagent"
+          ? "type"
+          : "basic";
     const section = sectionRefs.current[sectionId];
     section?.scrollIntoView({
       behavior: "smooth",
@@ -4196,16 +4251,20 @@ export function CustomCreate({
     });
 
     const field =
-      problem.problem === "missingDescription"
-        ? "description"
-        : problem.problem === "missingPrompt"
-          ? "instruction"
-          : problem.problem === "missingRegistry"
-            ? "a2a-registry"
-            : problem.problem === "missingSubagent" ||
-                problem.problem === "remoteRoot"
-              ? null
-              : "name";
+      problem.problem === "mcpDuplicateName"
+        ? "mcp-name"
+        : problem.problem === "mcpDuplicateUrl"
+          ? "mcp-url"
+          : problem.problem === "missingDescription"
+            ? "description"
+            : problem.problem === "missingPrompt"
+              ? "instruction"
+              : problem.problem === "missingRegistry"
+                ? "a2a-registry"
+                : problem.problem === "missingSubagent" ||
+                    problem.problem === "remoteRoot"
+                  ? null
+                  : "name";
     const fieldRoot = field
       ? section?.querySelector<HTMLElement>(
           `[data-validation-field="${field}"]`,
@@ -5792,6 +5851,8 @@ export function CustomCreate({
                                   </label>
                                   <McpToolEditor
                                     tools={mcpTools}
+                                    conflict={mcpConflict}
+                                    showConflict={showErrors}
                                     onChange={(next) =>
                                       patch({ mcpTools: next })
                                     }

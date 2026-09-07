@@ -43,7 +43,12 @@ def test_write_studio_package_bootstraps_the_preloaded_cli_archive(
     )
 
     run_script = (package / "run.sh").read_text(encoding="utf-8")
-    assert "VEADK_AGENTKIT_CLI" not in run_script
+    assert "export VEADK_AGENTKIT_CLI=" not in run_script
+    assert (
+        'export VEADK_STUDIO_AGENTKIT_CLI_ARCHIVE="$ROOT_DIR/'
+        'agentkit-linux-x64.tar.gz"' in run_script
+    )
+    assert "VEADK_STUDIO_AGENTKIT_CLI_RUNTIME_MANIFEST" in run_script
     assert '--archive "$ROOT_DIR/agentkit-linux-x64.tar.gz"' in run_script
 
 

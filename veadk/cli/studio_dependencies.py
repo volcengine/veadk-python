@@ -225,6 +225,7 @@ def stage_studio_agentkit_cli_archive(
         verify_agentkit_cli_archive(source, artifact)
         target.write_bytes(source.read_bytes())
     verify_agentkit_cli_archive(target, artifact)
+    target.chmod(0o644)
     return target
 
 

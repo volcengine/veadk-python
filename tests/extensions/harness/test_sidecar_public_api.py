@@ -67,6 +67,76 @@ def test_agentkit_cli_uses_secure_veadk_resolver(
     assert sidecar.agentkit_cli_executable() == str(executable)
 
 
+def test_agentkit_cli_reuses_studio_managed_bundle_source(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from veadk.cli import studio_companion
+
+    executable = tmp_path / "cache" / "ak"
+    executable.parent.mkdir()
+    executable.write_bytes(b"managed executable")
+    executable.chmod(0o755)
+    monkeypatch.setattr(
+        studio_companion,
+        "resolve_studio_managed_agentkit_cli",
+        lambda: executable,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "veadk.cli.agentkit_cli.resolve_agentkit_cli",
+        lambda: pytest.fail("managed Studio source must take precedence"),
+    )
+
+    assert sidecar.agentkit_cli_executable() == str(executable)
+
+
+def test_unchanged_agent_update_resolves_plan_with_studio_managed_cli(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from veadk.cli import studio_companion
+
+    executable = tmp_path / "ak"
+    executable.write_text(
+        "#!/bin/sh\n"
+        "printf '%s\\n' '"
+        '{"valid":true,"errors":[],"warnings":[],'
+        '"effective_components":["verifier"],"auto_added_components":[],'
+        '"activation_targets":{"model_proxy":{"enabled":true,'
+        '"components":["verifier"]},"mcp_gateway":{"enabled":false}},'
+        '"catalog_version":"catalog-v1","plan_hash":"plan-v1"}'
+        "'\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    monkeypatch.setattr(
+        studio_companion,
+        "resolve_studio_managed_agentkit_cli",
+        lambda: executable,
+    )
+    monkeypatch.setattr(
+        "veadk.cli.agentkit_cli.resolve_agentkit_cli",
+        lambda: pytest.fail("unchanged Studio update must reuse the managed CLI"),
+    )
+
+    class RuntimeApi:
+        sidecar_config_to_env = staticmethod(
+            lambda *_args, **_kwargs: {"HARNESS_SIDECAR_ENABLED": "true"}
+        )
+
+    monkeypatch.setattr(sidecar, "_sidecar_runtime_api", RuntimeApi)
+
+    env, plan = sidecar.studio_harness_runtime_env(
+        {"componentOverrides": {"verifier": True}},
+        transport="apig_runtime_port",
+    )
+
+    assert env["HARNESS_SIDECAR_ENABLED"] == "true"
+    assert env["HARNESS_SIDECAR_EXPECTED_PLAN_HASH"] == "plan-v1"
+    assert plan["planHash"] == "plan-v1"
+
+
 def test_agentkit_cli_never_selects_the_sdk_agentkit_console_script(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

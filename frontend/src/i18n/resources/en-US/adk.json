@@ -41,6 +41,7 @@
     "toolArgumentHint": "Tip: The model generated incomplete tool arguments. Send the request again.",
     "resourceCollectionExpiredHint": "Tip: This resource collection has expired. Send the task again so the system can collect the resources before creating the Agent.",
     "networkConfigurationHint": "Tip: Check network settings such as the shared public egress, then try again.",
+    "modelQuotaHint": "Tip: The model has reached its TPM/RPM quota. Try again later or increase the model quota.",
     "rawResponseLabel": "Raw response: "
   },
   "runtimeLogs": {
