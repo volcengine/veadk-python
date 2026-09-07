@@ -44,6 +44,10 @@ interface GitHubIntegrationProps {
 
 type FormFieldName = AutomationFieldName | "region" | "token";
 type FieldName = FormFieldName | "pullRequestUrl";
+type GitHubAppReviewSettings = Pick<
+  GitHubAppRepositoriesResult,
+  "reviewSettingsConfigured" | "reviewSettingsReason"
+>;
 
 function BackIcon(props: SVGProps<SVGSVGElement>) {
   return (
@@ -167,10 +171,7 @@ export function GitHubIntegration({
   const [githubAppRepositories, setGitHubAppRepositories] = useState<GitHubAppRepository[]>([]);
   const [githubAppRepositoriesLoading, setGitHubAppRepositoriesLoading] = useState(isPullRequestReview);
   const [githubAppRepositoriesError, setGitHubAppRepositoriesError] = useState("");
-  const [githubAppReviewSettings, setGitHubAppReviewSettings] = useState<Pick<GitHubAppRepositoriesResult, "reviewSettingsConfigured" | "reviewSettingsReason">>({
-    reviewSettingsConfigured: false,
-    reviewSettingsReason: "",
-  });
+  const [githubAppReviewSettings, setGitHubAppReviewSettings] = useState<GitHubAppReviewSettings | null>(null);
   const [updatingRepository, setUpdatingRepository] = useState("");
   const submitAbortRef = useRef<AbortController | null>(null);
   const reviewAbortRef = useRef<AbortController | null>(null);
@@ -265,7 +266,7 @@ export function GitHubIntegration({
   }, [githubAppConfig?.configured, isPullRequestReview]);
 
   const toggleRepositoryReview = async (repository: GitHubAppRepository) => {
-    if (!githubAppReviewSettings.reviewSettingsConfigured || updatingRepository) return;
+    if (githubAppReviewSettings?.reviewSettingsConfigured !== true || updatingRepository) return;
     const nextRepositories = githubAppRepositories.map((item) => (
       item.fullName === repository.fullName
         ? { ...item, reviewEnabled: !item.reviewEnabled }
@@ -557,7 +558,7 @@ export function GitHubIntegration({
                   {githubAppRepositoriesError ? (
                     <div className="github-submit-message is-error" role="alert">{githubAppRepositoriesError}</div>
                   ) : null}
-                  {!githubAppReviewSettings.reviewSettingsConfigured && !githubAppRepositoriesError ? (
+                  {githubAppReviewSettings?.reviewSettingsConfigured === false && !githubAppRepositoriesError ? (
                     <div className="github-submit-message is-error" role="alert">
                       {githubAppReviewSettings.reviewSettingsReason || "管理员未配置 Studio 持久化存储，无法保存启用评审设置。"}
                     </div>
@@ -572,7 +573,7 @@ export function GitHubIntegration({
                     <div className="github-app-repository-list">
                       {githubAppRepositories.map((repository) => {
                         const busy = updatingRepository === repository.fullName;
-                        const disabled = !githubAppReviewSettings.reviewSettingsConfigured || Boolean(updatingRepository);
+                        const disabled = githubAppReviewSettings?.reviewSettingsConfigured !== true || Boolean(updatingRepository);
                         return (
                           <div className="github-app-repository-row" key={repository.fullName}>
                             <div className="github-app-repository-main">

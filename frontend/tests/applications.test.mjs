@@ -199,6 +199,9 @@ test("GitHub detail keeps credentials ephemeral and exposes accessible submissio
   assert.match(githubSource, /repositoryFromGitHubPullRequestUrl\(pullRequestUrl\)/);
   assert.match(githubSource, /PR URL 所属仓库尚未安装 GitHub App/);
   assert.match(githubSource, /请先在下方开启 .* 的评审/);
+  assert.match(githubSource, /useState<GitHubAppReviewSettings \| null>\(null\)/);
+  assert.match(githubSource, /githubAppReviewSettings\?\.reviewSettingsConfigured === false/);
+  assert.doesNotMatch(githubSource, /!githubAppReviewSettings\.reviewSettingsConfigured/);
   assert.doesNotMatch(githubSource, /PR URL 必须属于上方填写的 GitHub Repo/);
   assert.doesNotMatch(githubSource, /fieldDefinition\.name === "repository"/);
   assert.doesNotMatch(githubSource, /className="github-field-note">必须属于上方 GitHub Repo/);
