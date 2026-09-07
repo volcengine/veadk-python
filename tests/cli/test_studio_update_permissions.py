@@ -182,6 +182,40 @@ def test_default_frontend_policy_satisfies_every_ota_permission() -> None:
     assert all(evaluated.values())
 
 
+def test_precheck_adds_function_resource_permission_to_authorization() -> None:
+    current = deepcopy(FRONTEND_DEPLOY_POLICY)
+    actions = current["Statement"][0]["Action"]
+    current["Statement"][0]["Action"] = [
+        action for action in actions if action != "vefaas:UpdateFunctionResource"
+    ]
+    principal = PrincipalPolicySet(
+        kind="role",
+        name="CustomerRole",
+        policies=(
+            AttachedPolicyDocument(
+                name="CustomerPolicy",
+                policy_type="Custom",
+                document=current,
+            ),
+        ),
+    )
+
+    report = StudioUpdatePermissionService(
+        provider="volcengine",
+        access_key="ak",
+        secret_key="sk",
+        inspector=_Inspector(principal),
+    ).check()
+
+    assert report.missing_actions == ("vefaas:UpdateFunctionResource",)
+    query = parse_qs(urlparse(report.authorization_url).query)
+    prefilled = json.loads(query["query"][0])
+    merged = json.loads(prefilled["NewPolicyDocument"])
+    assert evaluate_actions(["vefaas:UpdateFunctionResource"], [merged])[
+        "vefaas:UpdateFunctionResource"
+    ]
+
+
 def test_merge_policy_actions_preserves_unrelated_statements() -> None:
     original = {
         "Statement": [

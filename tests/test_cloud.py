@@ -14,6 +14,7 @@
 
 import os
 import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, Mock, patch
@@ -67,10 +68,28 @@ def test_vefaas_create_function_uses_configured_project() -> None:
     assert request.project_name == "studio-project"
 
 
+@pytest.mark.parametrize("provider", ["volcengine", "byteplus"])
+def test_vefaas_sets_only_minimum_instance(provider: str) -> None:
+    requests = []
+    service = object.__new__(VeFaaS)
+    service.provider = provider
+    service.client = SimpleNamespace(update_function_resource=requests.append)
+
+    service._set_function_min_instance("function-id")
+
+    assert len(requests) == 1
+    request = requests[0]
+    assert request.function_id == "function-id"
+    assert request.min_instance == 1
+    assert request.max_instance is None
+    assert request.reserved_frozen_instance is None
+
+
 def test_vefaas_deploy_cleans_created_resources_on_release_failure() -> None:
     service = object.__new__(VeFaaS)
     service.find_app_id_by_name = Mock(return_value=None)
     service._create_function = Mock(return_value=("studio-app-fn", "function-id"))
+    service._set_function_min_instance = Mock()
     service._create_application = Mock(return_value="application-id")
     service._release_application = Mock(side_effect=RuntimeError("release failed"))
     service.delete = Mock()
@@ -87,12 +106,14 @@ def test_vefaas_deploy_cleans_created_resources_on_release_failure() -> None:
 
     service.delete.assert_called_once_with("application-id")
     service.delete_function.assert_called_once_with("function-id")
+    service._set_function_min_instance.assert_not_called()
 
 
 def test_vefaas_deploy_can_keep_failed_resources_for_inspection() -> None:
     service = object.__new__(VeFaaS)
     service.find_app_id_by_name = Mock(return_value=None)
     service._create_function = Mock(return_value=("studio-app-fn", "function-id"))
+    service._set_function_min_instance = Mock()
     service._create_application = Mock(return_value="application-id")
     service._release_application = Mock(side_effect=RuntimeError("release failed"))
     service.delete = Mock()
@@ -110,6 +131,60 @@ def test_vefaas_deploy_can_keep_failed_resources_for_inspection() -> None:
 
     service.delete.assert_not_called()
     service.delete_function.assert_not_called()
+    service._set_function_min_instance.assert_not_called()
+
+
+def test_vefaas_update_code_uses_resource_updating_bundle_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "agent"
+    project.mkdir()
+    service = object.__new__(VeFaaS)
+    service.find_app_id_by_name = Mock(return_value="application-id")
+    service._get_application_status = Mock(
+        return_value=(
+            "deploy_success",
+            {
+                "Result": {
+                    "CloudResource": (
+                        '{"framework":{"function":{"Name":"studio-app-fn",'
+                        '"Id":"function-id"}}}'
+                    )
+                }
+            },
+        )
+    )
+    service._replace_application_code_bundle = Mock()
+    service._release_application = Mock(return_value="https://studio.example")
+    service._set_function_min_instance = Mock()
+    service.ensure_application_route_methods = Mock()
+
+    def _cookiecutter(*, output_dir: str, extra_context: dict, **_: object) -> None:
+        package = Path(output_dir) / str(extra_context["local_dir_name"])
+        (package / "src").mkdir(parents=True)
+
+    monkeypatch.setattr(
+        "veadk.integrations.ve_faas.ve_faas.formatted_timestamp", lambda: "stamp"
+    )
+    monkeypatch.setattr(
+        "veadk.integrations.ve_faas.ve_faas.tempfile.gettempdir",
+        lambda: str(tmp_path),
+    )
+    monkeypatch.setattr(
+        "veadk.integrations.ve_faas.ve_faas.cookiecutter", _cookiecutter
+    )
+
+    result = service._update_function_code("studio-app", str(project))
+
+    assert result == ("https://studio.example", "application-id", "function-id")
+    service._replace_application_code_bundle.assert_called_once_with(
+        function_id="function-id",
+        path=str(tmp_path / "agent_update_stamp" / "src"),
+        environment_overrides=None,
+        request_timeout=1800,
+    )
+    service._set_function_min_instance.assert_called_once_with("function-id")
 
 
 def test_vefaas_deploy_updates_existing_application_in_place() -> None:
@@ -297,6 +372,7 @@ def test_vefaas_deploy_can_disable_gateway_cors() -> None:
     service._create_function = Mock(return_value=("studio-app-fn", "function-id"))
     service._create_application = Mock(return_value="application-id")
     service._release_application = Mock(return_value="https://studio.example.com")
+    service._set_function_min_instance = Mock()
     service.ensure_application_route_methods = Mock()
 
     service.deploy(
@@ -312,6 +388,7 @@ def test_vefaas_deploy_can_disable_gateway_cors() -> None:
         "application-id",
         disable_cors=True,
     )
+    service._set_function_min_instance.assert_called_once_with("function-id")
 
 
 def test_vefaas_code_upload_callback_uses_configured_region() -> None:

@@ -81,6 +81,11 @@ STUDIO_UPDATE_PERMISSION_SPECS: tuple[PermissionSpec, ...] = (
         "Update Studio and scheduler Functions",
     ),
     _permission(
+        "vefaas:UpdateFunctionResource",
+        "设置 Studio 函数最小实例数",
+        "Set the Studio function minimum instance count",
+    ),
+    _permission(
         "vefaas:ReleaseApplication",
         "发布 Studio 应用新 Revision",
         "Release the new Studio revision",

@@ -517,9 +517,10 @@ class VeFaaS:
     ) -> str:
         """Replace an application's function bundle and release it.
 
-        Existing function settings are left untouched. When environment overrides
-        are provided, they are merged with the complete current environment before
-        updating the function.
+        Existing function settings are left untouched except that the minimum
+        instance count is set to one. When environment overrides are provided,
+        they are merged with the complete current environment before updating the
+        function.
 
         Args:
             application_id: Existing VeFaaS Application ID.
@@ -537,6 +538,7 @@ class VeFaaS:
             environment_overrides=environment_overrides,
         )
         url = self._release_application(application_id)
+        self._set_function_min_instance(function_id)
         if disable_gateway_cors:
             self.ensure_application_route_methods(
                 application_id,
@@ -557,13 +559,15 @@ class VeFaaS:
         Unlike :meth:`update_application_code_bundle`, this method does not wait for
         the new revision. It is intended for a function updating itself, because
         the current process may stop as soon as the control plane activates the
-        replacement revision.
+        replacement revision. The minimum instance count must be updated before
+        the release starts so a successful update always leaves one warm instance.
         """
         self._replace_application_code_bundle(
             function_id=function_id,
             path=path,
             environment_overrides=environment_overrides,
         )
+        self._set_function_min_instance(function_id)
         self._start_application_release(application_id)
 
     def _replace_application_code_bundle(
@@ -572,9 +576,12 @@ class VeFaaS:
         function_id: str,
         path: str,
         environment_overrides: dict[str, str] | None,
+        request_timeout: int | None = None,
     ) -> None:
         """Upload a bundle and update the Function without releasing it."""
         request_options: dict[str, Any] = {"id": function_id}
+        if request_timeout is not None:
+            request_options["request_timeout"] = request_timeout
         if environment_overrides:
             function = cast(
                 Any,
@@ -594,6 +601,15 @@ class VeFaaS:
         self._upload_and_mount_code(function_id, path)
         self.client.update_function(
             volcenginesdkvefaas.UpdateFunctionRequest(**request_options)
+        )
+
+    def _set_function_min_instance(self, function_id: str) -> None:
+        """Set only a Function's minimum instance count to one."""
+        self.client.update_function_resource(
+            volcenginesdkvefaas.UpdateFunctionResourceRequest(
+                function_id=function_id,
+                min_instance=1,
+            )
         )
 
     def _update_function_code(
@@ -670,17 +686,17 @@ class VeFaaS:
             else:
                 logger.warning("No requirements.txt found, using template default")
 
-            self._upload_and_mount_code(function_id, str(tmp_path / "src"))
-            self.client.update_function(
-                volcenginesdkvefaas.UpdateFunctionRequest(
-                    id=function_id,
-                    request_timeout=1800,  # Keep same timeout as deploy
-                )
+            self._replace_application_code_bundle(
+                function_id=function_id,
+                path=str(tmp_path / "src"),
+                environment_overrides=None,
+                request_timeout=1800,  # Keep same timeout as deploy
             )
             logger.info(
                 f"VeFaaS function {function_name} with ID {function_id} updated."
             )
             url = self._release_application(app_id)
+            self._set_function_min_instance(function_id)
             self.ensure_application_route_methods(app_id)
             logger.info(
                 f"VeFaaS application {application_name} with ID {app_id} released."
@@ -1014,6 +1030,7 @@ class VeFaaS:
             logger.info(f"VeFaaS application {name} with ID {app_id} created.")
             logger.info(f"Start to release VeFaaS application {app_id}.")
             url = self._release_application(app_id)
+            self._set_function_min_instance(function_id)
             self.ensure_application_route_methods(
                 app_id,
                 disable_cors=disable_gateway_cors,
