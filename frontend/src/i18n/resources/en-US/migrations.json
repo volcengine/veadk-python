@@ -209,46 +209,45 @@
   "evaluation": {
     "setup": {
       "title": "Migration effect evaluation",
-      "description": "Optional. After migration, compare behavior using real user questions.",
+      "description": "When enabled, the questions you add run automatically after migration to compare results before and after migration.",
       "on": "On",
       "off": "Off",
       "unavailable": "Migration effect evaluation is unavailable in this environment.",
-      "casesTitle": "What users will ask",
-      "casesDescription": "Only the user question is required. Expected outcome, criteria, and prior conversation are optional.",
-      "lockedTitle": "Evaluation cases locked",
-      "lockedDescription": "Cases cannot change after project upload starts, keeping this report reproducible."
+      "casesTitle": "Evaluation questions",
+      "casesDescription": "Add at least one question. Expected outcomes and requirements are optional.",
+      "configuredSummary": "{{count}} questions configured · {{preset}}",
+      "incompleteSummary": "{{count}} questions still need content · {{preset}}",
+      "editSettings": "Edit settings",
+      "viewSettings": "View settings",
+      "lockedTitle": "Evaluation questions locked",
+      "lockedDescription": "Questions cannot change after project upload starts, keeping this report reproducible.",
+      "closeAria": "Close evaluation settings",
+      "done": "Finish setup",
+      "close": "Close"
     },
     "bulk": {
       "open": "Paste multiple",
-      "label": "One user question per line",
+      "label": "Enter one question per line",
       "placeholder": "Check the status of today's orders\nSummarize the result in three points",
-      "preview": "{{count}} cases will be added",
-      "confirm": "Add cases"
+      "preview": "{{count}} questions will be added",
+      "confirm": "Add questions"
     },
     "case": {
-      "title": "Case {{index}}",
-      "add": "Add case",
-      "moveUp": "Move case {{index}} up",
-      "moveDown": "Move case {{index}} down",
+      "title": "Question {{index}}",
+      "add": "Add question",
+      "moveUp": "Move question {{index}} up",
+      "moveDown": "Move question {{index}} down",
       "copy": "Duplicate",
       "delete": "Delete",
-      "userInput": "What will the user ask?",
+      "userInput": "Question",
       "userInputPlaceholder": "For example: Check the status of today's orders",
-      "optional": "Additional details (optional)",
-      "expectedOutcome": "Expected outcome",
+      "expectedOutcome": "Expected outcome (optional)",
       "expectedOutcomePlaceholder": "Describe what the Agent should accomplish; exact wording is not required",
-      "criteria": "Evaluation criteria",
-      "addCriterion": "Add criterion",
-      "criterionLabel": "Evaluation criterion {{index}}",
+      "criteria": "Requirements (optional)",
+      "addCriterion": "Add requirement",
+      "criterionLabel": "Requirement {{index}}",
       "criterionPlaceholder": "For example: Include the order ID and current status",
-      "removeCriterion": "Remove evaluation criterion {{index}}",
-      "priorConversation": "Prior conversation",
-      "addMessage": "Add message",
-      "messageRole": "Role for prior message {{index}}",
-      "messageContent": "Content for prior message {{index}}",
-      "removeMessage": "Remove prior message {{index}}",
-      "userRole": "User",
-      "assistantRole": "Agent"
+      "removeCriterion": "Remove requirement {{index}}"
     },
     "advanced": {
       "title": "Advanced settings",
@@ -274,29 +273,27 @@
       "safety_refusal_fidelity": "Checks existing authorization, refusal, and sensitive-data boundaries."
     },
     "validation": {
-      "caseCount": "Keep between 1 and {{count}} evaluation cases.",
+      "caseCount": "Keep between 1 and {{count}} questions.",
       "dimensionRequired": "Select at least one evaluation dimension.",
-      "userInputRequired": "Enter what the user will ask.",
-      "messageCount": "A case can contain at most {{count}} conversation messages.",
-      "messageBytes": "Conversation text for one case cannot exceed 32 KiB.",
+      "userInputRequired": "Enter a question.",
+      "userInputBytes": "A question cannot exceed 32 KiB.",
       "expectedOutcomeBytes": "The expected outcome cannot exceed 16 KiB.",
-      "criteriaCount": "A case can contain at most {{count}} evaluation criteria.",
-      "criterionRequired": "Evaluation criteria cannot be empty.",
-      "criterionBytes": "One evaluation criterion cannot exceed 2 KiB.",
-      "messageRequired": "Prior conversation content cannot be empty.",
-      "datasetBytes": "The normalized evaluation dataset cannot exceed 10 MiB."
+      "criteriaCount": "A question can contain at most {{count}} requirements.",
+      "criterionRequired": "Requirements cannot be empty.",
+      "criterionBytes": "One requirement cannot exceed 2 KiB.",
+      "datasetBytes": "All evaluation questions cannot exceed 10 MiB."
     },
     "dataset": {
-      "invalidLockResponse": "The service did not confirm that evaluation cases were locked. Try again."
+      "invalidLockResponse": "The service did not confirm that evaluation questions were locked. Try again."
     },
     "state": {
       "disabled": "Evaluation is off",
-      "waiting_dataset": "Waiting for evaluation cases",
+      "waiting_dataset": "Waiting for evaluation questions",
       "pending": "Evaluation starts automatically after migration",
       "preparing": "Preparing the evaluation environment…",
       "waiting_environment": "Runtime environment variables are required",
       "deploying": "Deploying a temporary Runtime…",
-      "executing": "Replaying evaluation cases…",
+      "executing": "Running evaluation questions…",
       "judging": "Analyzing behavior differences…",
       "aggregating": "Aggregating evaluation results…",
       "cleaning": "Cleaning up the temporary Runtime…",
@@ -304,6 +301,16 @@
       "failed": "Evaluation incomplete",
       "blocked": "Evaluation requires attention before it can continue",
       "cancelled": "Evaluation cancelled"
+    },
+    "progress": {
+      "label": "Migration and migration effect evaluation progress",
+      "migration": "Migration",
+      "evaluation": "Migration effect evaluation",
+      "notStarted": "Not started",
+      "inProgress": "In progress",
+      "completed": "Complete",
+      "waitingConfiguration": "Waiting for setup",
+      "issue": "Needs attention"
     },
     "environment": {
       "description": "The migrated Agent needs these environment variables. Evaluation will continue in a temporary Runtime after submission.",
@@ -314,9 +321,6 @@
     "result": {
       "title": "Migration effect evaluation",
       "attempt": "Evaluation attempt {{attempt}}",
-      "progressLabel": "Migration and evaluation progress",
-      "migrationStage": "Migration complete",
-      "evaluationStage": "Effect evaluation",
       "pending": "Evaluation starts automatically after migration output is ready.",
       "retry": "Run evaluation again",
       "retrying": "Retrying…",
@@ -330,15 +334,15 @@
       "evidenceCoverage": "Evidence coverage",
       "coverageDetail": "{{scored}} of {{total}} dimensions evidenced",
       "executionSuccess": "Execution success",
-      "executionDetail": "{{succeeded}} of {{total}} cases completed",
+      "executionDetail": "{{succeeded}} of {{total}} questions completed",
       "naCount": "N/A count",
       "naDescription": "Insufficient evidence; excluded from scores",
       "gapDescription": "Migration gap summary",
-      "lowestScoringCases": "Lowest-scoring cases",
+      "lowestScoringCases": "Lowest-scoring questions",
       "executionFailures": "Execution issues",
       "criticalEvidence": "Critical evidence",
       "limitations": "Evaluation limitations",
-      "viewEvidence": "View results and evidence for {{count}} cases",
+      "viewEvidence": "View results and evidence for {{count}} questions",
       "outputTruncated": "Long output was truncated",
       "executionState": {
         "succeeded": "Execution completed",
@@ -355,7 +359,7 @@
       },
       "evidenceSource": {
         "user_reference": "Expected outcome",
-        "user_criteria": "User criteria",
+        "user_criteria": "Provided requirements",
         "source_contract": "Source contract",
         "observed_output": "Observed output",
         "deterministic_assertion": "Deterministic assertion"

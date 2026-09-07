@@ -11,7 +11,6 @@
 }
 
 .migration-evaluation-setup__switch-row,
-.migration-evaluation-editor__heading,
 .migration-evaluation-result > header {
   display: flex;
   align-items: center;
@@ -25,7 +24,6 @@
 }
 
 .migration-evaluation-setup__switch-row > div,
-.migration-evaluation-editor__heading > div:first-child,
 .migration-evaluation-result > header > div {
   min-width: 0;
   display: grid;
@@ -33,7 +31,6 @@
 }
 
 .migration-evaluation-setup__switch-row strong,
-.migration-evaluation-editor__heading strong,
 .migration-evaluation-result > header strong {
   color: hsl(var(--foreground));
   font-size: 13px;
@@ -41,7 +38,6 @@
 }
 
 .migration-evaluation-setup__switch-row span,
-.migration-evaluation-editor__heading span,
 .migration-evaluation-result > header span {
   color: hsl(var(--muted-foreground));
   font-size: 12px;
@@ -123,15 +119,31 @@
   color: hsl(var(--destructive));
 }
 
-.migration-evaluation-editor {
-  display: grid;
+.migration-evaluation-setup__summary {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 12px;
-  padding: 14px;
+  padding: 8px 14px;
   border-top: 1px solid hsl(var(--border));
   background: hsl(var(--canvas) / 0.34);
 }
 
-.migration-evaluation-editor__actions,
+.migration-evaluation-setup__summary > span {
+  min-width: 0;
+  overflow: hidden;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.migration-evaluation-setup__summary > button {
+  flex: 0 0 auto;
+}
+
+.migration-evaluation-drawer__toolbar,
 .migration-evaluation-case > header > div,
 .migration-evaluation-bulk__actions {
   display: flex;
@@ -139,7 +151,8 @@
   gap: 6px;
 }
 
-.migration-evaluation-editor button,
+.migration-evaluation-setup__summary button,
+.migration-evaluation-drawer button,
 .migration-evaluation-result button {
   min-height: 30px;
   padding: 0 10px;
@@ -152,22 +165,141 @@
   cursor: pointer;
 }
 
-.migration-evaluation-editor button:hover:not(:disabled),
+.migration-evaluation-setup__summary button:hover:not(:disabled),
+.migration-evaluation-drawer button:hover:not(:disabled),
 .migration-evaluation-result button:hover:not(:disabled) {
   background: hsl(var(--secondary));
 }
 
-.migration-evaluation-editor button:disabled,
+.migration-evaluation-setup__summary button:disabled,
+.migration-evaluation-drawer button:disabled,
 .migration-evaluation-result button:disabled {
   cursor: not-allowed;
   opacity: 0.5;
 }
 
-.migration-evaluation-editor button.is-primary,
+.migration-evaluation-drawer button.is-primary,
 .migration-evaluation-result button.is-primary {
   border-color: hsl(var(--primary));
   background: hsl(var(--primary));
   color: hsl(var(--primary-foreground));
+}
+
+.migration-evaluation-setup__summary button:focus-visible,
+.migration-evaluation-drawer button:focus-visible,
+.migration-evaluation-drawer summary:focus-visible,
+.migration-evaluation-result button:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 1px;
+}
+
+.migration-evaluation-drawer {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  justify-content: flex-end;
+  background: hsl(var(--foreground) / 0.24);
+  animation: migration-evaluation-backdrop-in 180ms ease-out;
+}
+
+.migration-evaluation-drawer > aside {
+  width: min(640px, 100vw);
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  border-left: 1px solid hsl(var(--border));
+  background: hsl(var(--panel));
+  box-shadow: -16px 0 36px hsl(var(--foreground) / 0.14);
+  animation: migration-evaluation-drawer-in 180ms ease-out;
+}
+
+.migration-evaluation-drawer__header,
+.migration-evaluation-drawer__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+  background: hsl(var(--panel));
+}
+
+.migration-evaluation-drawer__header {
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+.migration-evaluation-drawer__header > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.migration-evaluation-drawer__header strong {
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.migration-evaluation-drawer__header span,
+.migration-evaluation-drawer__footer > span {
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.migration-evaluation-drawer__close {
+  width: 32px;
+  min-width: 32px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+}
+
+.migration-evaluation-drawer__close svg {
+  width: 16px;
+  height: 16px;
+}
+
+.migration-evaluation-drawer__body {
+  min-height: 0;
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding: 16px 20px 24px;
+  overflow-y: auto;
+  background: hsl(var(--canvas) / 0.34);
+}
+
+.migration-evaluation-drawer__toolbar {
+  justify-content: flex-end;
+}
+
+.migration-evaluation-drawer__footer {
+  border-top: 1px solid hsl(var(--border));
+}
+
+.migration-evaluation-drawer__footer > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.migration-evaluation-drawer__footer > button {
+  min-height: 34px;
+  flex: 0 0 auto;
+  padding-inline: 16px;
+}
+
+@keyframes migration-evaluation-backdrop-in {
+  from { background: transparent; }
+}
+
+@keyframes migration-evaluation-drawer-in {
+  from { transform: translateX(24px); opacity: 0; }
 }
 
 .migration-evaluation-error-summary {
@@ -198,7 +330,6 @@
 .migration-evaluation-bulk textarea,
 .migration-evaluation-case textarea,
 .migration-evaluation-case input,
-.migration-evaluation-message-row select,
 .migration-evaluation-environment input {
   width: 100%;
   box-sizing: border-box;
@@ -219,7 +350,6 @@
 }
 
 .migration-evaluation-case input,
-.migration-evaluation-message-row select,
 .migration-evaluation-environment input {
   min-height: 36px;
   padding: 7px 9px;
@@ -228,7 +358,6 @@
 .migration-evaluation-bulk textarea:focus,
 .migration-evaluation-case textarea:focus,
 .migration-evaluation-case input:focus,
-.migration-evaluation-message-row select:focus,
 .migration-evaluation-environment input:focus {
   border-color: hsl(var(--ring));
   box-shadow: 0 0 0 2px hsl(var(--ring) / 0.15);
@@ -296,8 +425,7 @@
   display: block;
 }
 
-.migration-evaluation-list-row > button,
-.migration-evaluation-message-row > button {
+.migration-evaluation-list-row > button {
   width: 30px;
   padding: 0;
   display: inline-grid;
@@ -305,7 +433,6 @@
 }
 
 .migration-evaluation-case > label,
-.migration-evaluation-case__optional label,
 .migration-evaluation-environment label {
   display: grid;
   gap: 6px;
@@ -322,14 +449,12 @@
   font-size: 11px;
 }
 
-.migration-evaluation-case__optional,
 .migration-evaluation-advanced,
 .migration-evaluation-evidence {
   border-top: 1px solid hsl(var(--border));
   padding-top: 8px;
 }
 
-.migration-evaluation-case__optional > summary,
 .migration-evaluation-advanced > summary,
 .migration-evaluation-evidence > summary {
   color: hsl(var(--muted-foreground));
@@ -337,7 +462,6 @@
   cursor: pointer;
 }
 
-.migration-evaluation-case__optional[open],
 .migration-evaluation-advanced[open] {
   display: grid;
   gap: 12px;
@@ -359,20 +483,8 @@
   gap: 6px;
 }
 
-.migration-evaluation-list-row small,
-.migration-evaluation-message-row small {
+.migration-evaluation-list-row small {
   grid-column: 1 / -1;
-}
-
-.migration-evaluation-message-row {
-  display: grid;
-  grid-template-columns: 108px minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 6px;
-}
-
-.migration-evaluation-message-row textarea {
-  min-height: 54px;
 }
 
 .migration-evaluation-preset,
@@ -412,6 +524,89 @@
   line-height: 1.45;
 }
 
+.migration-evaluation-progress {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin-top: 8px;
+}
+
+.migration-evaluation-progress > div {
+  position: relative;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.migration-evaluation-progress > div + div::before {
+  position: absolute;
+  right: calc(100% + 7px);
+  width: 4px;
+  height: 1px;
+  background: hsl(var(--border));
+  content: "";
+}
+
+.migration-evaluation-progress > div > span {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  display: grid;
+  place-items: center;
+  border: 1px solid hsl(var(--border));
+  border-radius: 50%;
+  color: hsl(var(--muted-foreground));
+  font-size: 10px;
+}
+
+.migration-evaluation-progress > div > div {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.migration-evaluation-progress strong,
+.migration-evaluation-progress small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.migration-evaluation-progress strong {
+  color: hsl(var(--foreground));
+  font-size: 11px;
+  font-weight: 550;
+}
+
+.migration-evaluation-progress small {
+  color: hsl(var(--muted-foreground));
+  font-size: 10px;
+}
+
+.migration-evaluation-progress .is-active > span {
+  border-color: hsl(var(--primary));
+  color: hsl(var(--primary));
+}
+
+.migration-evaluation-progress .is-complete > span {
+  border-color: hsl(var(--primary));
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+}
+
+.migration-evaluation-progress .is-waiting > span {
+  border-color: hsl(38 78% 44% / 0.65);
+  color: hsl(38 78% 34%);
+}
+
+.migration-evaluation-progress .is-issue > span,
+.migration-evaluation-progress .is-issue small {
+  border-color: hsl(var(--destructive) / 0.5);
+  color: hsl(var(--destructive));
+}
+
 .migration-evaluation-result {
   display: grid;
   gap: 14px;
@@ -421,51 +616,6 @@
 .migration-evaluation-result > header small {
   color: hsl(var(--muted-foreground));
   font-size: 11px;
-}
-
-.migration-evaluation-stages {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 36px minmax(0, 1fr);
-  align-items: center;
-  gap: 8px;
-}
-
-.migration-evaluation-stages > div {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: hsl(var(--muted-foreground));
-}
-
-.migration-evaluation-stages > div > span {
-  width: 24px;
-  height: 24px;
-  display: grid;
-  place-items: center;
-  border: 1px solid hsl(var(--border));
-  border-radius: 50%;
-  font-size: 11px;
-}
-
-.migration-evaluation-stages > div.is-active,
-.migration-evaluation-stages > div.is-complete {
-  color: hsl(var(--foreground));
-}
-
-.migration-evaluation-stages > div.is-active > span {
-  border-color: hsl(var(--primary));
-  color: hsl(var(--primary));
-}
-
-.migration-evaluation-stages > div.is-complete > span {
-  border-color: hsl(var(--primary));
-  background: hsl(var(--primary));
-  color: hsl(var(--primary-foreground));
-}
-
-.migration-evaluation-stages > i {
-  height: 1px;
-  background: hsl(var(--border));
 }
 
 .migration-evaluation-environment,
@@ -715,18 +865,59 @@
 
 @media (max-width: 760px) {
   .migration-evaluation-setup__switch-row,
-  .migration-evaluation-editor__heading,
   .migration-evaluation-result > header {
     align-items: flex-start;
     flex-direction: column;
   }
 
-  .migration-evaluation-editor__actions {
-    width: 100%;
+  .migration-evaluation-setup__summary {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
-  .migration-evaluation-message-row {
-    grid-template-columns: 92px minmax(0, 1fr) auto;
+  .migration-evaluation-setup__summary > span {
+    width: 100%;
+    white-space: normal;
+  }
+
+  .migration-evaluation-drawer > aside {
+    width: 100%;
+    border-left: 0;
+    box-shadow: none;
+  }
+
+  .migration-evaluation-drawer__header,
+  .migration-evaluation-drawer__footer {
+    padding-inline: 16px;
+  }
+
+  .migration-evaluation-drawer__body {
+    padding: 14px 16px calc(24px + env(safe-area-inset-bottom));
+  }
+
+  .migration-evaluation-drawer__toolbar {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .migration-evaluation-case > header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .migration-evaluation-case > header > div {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .migration-evaluation-progress {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .migration-evaluation-progress > div + div::before {
+    display: none;
   }
 
   .migration-evaluation-report__dimensions {
@@ -744,5 +935,15 @@
 
   .migration-evaluation-report__findings {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .migration-evaluation-drawer,
+  .migration-evaluation-drawer > aside,
+  .migration-evaluation-switch > span,
+  .migration-evaluation-switch > span::after {
+    animation: none;
+    transition: none;
   }
 }

@@ -83,6 +83,7 @@ import {
   createMigrationEvaluationDraft,
   evaluationCasesFromDraft,
   evaluationDraftFromDataset,
+  MigrationEvaluationProgress,
   MigrationEvaluationResult,
   MigrationEvaluationSetup,
   validateMigrationEvaluationDraft,
@@ -1881,6 +1882,12 @@ export function MigrationWorkspace({
                   ? taskDisplayMessage(task)
                   : t("workspace.intro")}
               </p>
+              {task?.evaluation?.enabled || (!task && evaluationDraft.enabled) ? (
+                <MigrationEvaluationProgress
+                  taskState={task?.state ?? null}
+                  evaluation={task?.evaluation ?? null}
+                />
+              ) : null}
             </div>
             {task ? (
               <div className="migration-main__header-actions">

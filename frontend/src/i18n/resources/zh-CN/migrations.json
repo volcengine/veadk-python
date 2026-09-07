@@ -209,46 +209,45 @@
   "evaluation": {
     "setup": {
       "title": "迁移效果评测",
-      "description": "可选。迁移完成后，用真实用户问题对比迁移前后的行为。",
+      "description": "开启后，迁移完成会自动运行你添加的问题并对比迁移前后的结果。",
       "on": "已开启",
       "off": "未开启",
       "unavailable": "当前环境暂不支持迁移效果评测。",
-      "casesTitle": "用户会怎么问",
-      "casesDescription": "只需填写用户问题；期望结果、评测标准和历史对话均为可选。",
-      "lockedTitle": "评测用例已锁定",
-      "lockedDescription": "项目开始上传后，用例不再修改，以保证本次报告可复现。"
+      "casesTitle": "评测问题",
+      "casesDescription": "至少添加一个问题；期望结果和必须满足的要求可以不填。",
+      "configuredSummary": "已配置 {{count}} 个问题 · {{preset}}",
+      "incompleteSummary": "还有 {{count}} 个问题待填写 · {{preset}}",
+      "editSettings": "编辑设置",
+      "viewSettings": "查看设置",
+      "lockedTitle": "评测问题已锁定",
+      "lockedDescription": "项目开始上传后，这些问题不再修改，以保证本次报告可复现。",
+      "closeAria": "关闭评测设置",
+      "done": "完成配置",
+      "close": "关闭"
     },
     "bulk": {
       "open": "批量粘贴",
-      "label": "每行一个用户问题",
+      "label": "每行输入一个问题",
       "placeholder": "帮我查询今天的订单状态\n把结果整理成三点",
-      "preview": "将添加 {{count}} 个用例",
-      "confirm": "添加到用例"
+      "preview": "将添加 {{count}} 个问题",
+      "confirm": "添加问题"
     },
     "case": {
-      "title": "用例 {{index}}",
-      "add": "添加用例",
-      "moveUp": "上移用例 {{index}}",
-      "moveDown": "下移用例 {{index}}",
+      "title": "问题 {{index}}",
+      "add": "添加问题",
+      "moveUp": "上移问题 {{index}}",
+      "moveDown": "下移问题 {{index}}",
       "copy": "复制",
       "delete": "删除",
-      "userInput": "用户会怎么问",
+      "userInput": "问题",
       "userInputPlaceholder": "例如：请帮我查询今天的订单状态",
-      "optional": "补充信息（可选）",
-      "expectedOutcome": "期望结果",
+      "expectedOutcome": "期望结果（可选）",
       "expectedOutcomePlaceholder": "描述希望 Agent 完成什么，不要求逐字一致",
-      "criteria": "评测标准",
-      "addCriterion": "添加标准",
-      "criterionLabel": "评测标准 {{index}}",
+      "criteria": "必须满足的要求（可选）",
+      "addCriterion": "添加要求",
+      "criterionLabel": "必须满足的要求 {{index}}",
       "criterionPlaceholder": "例如：必须包含订单号和当前状态",
-      "removeCriterion": "删除评测标准 {{index}}",
-      "priorConversation": "历史对话",
-      "addMessage": "添加消息",
-      "messageRole": "历史消息 {{index}} 的角色",
-      "messageContent": "历史消息 {{index}} 的内容",
-      "removeMessage": "删除历史消息 {{index}}",
-      "userRole": "用户",
-      "assistantRole": "Agent"
+      "removeCriterion": "删除要求 {{index}}"
     },
     "advanced": {
       "title": "高级设置",
@@ -274,29 +273,27 @@
       "safety_refusal_fidelity": "检查已有授权、拒答和敏感信息边界是否保持。"
     },
     "validation": {
-      "caseCount": "请保留 1–{{count}} 个评测用例。",
+      "caseCount": "请保留 1–{{count}} 个问题。",
       "dimensionRequired": "请至少选择一个评测维度。",
-      "userInputRequired": "请填写用户会怎么问。",
-      "messageCount": "单个用例最多包含 {{count}} 条对话。",
-      "messageBytes": "单个用例的对话文本不能超过 32 KiB。",
+      "userInputRequired": "请输入问题。",
+      "userInputBytes": "单个问题不能超过 32 KiB。",
       "expectedOutcomeBytes": "期望结果不能超过 16 KiB。",
-      "criteriaCount": "单个用例最多包含 {{count}} 条评测标准。",
-      "criterionRequired": "评测标准不能为空。",
-      "criterionBytes": "单条评测标准不能超过 2 KiB。",
-      "messageRequired": "历史对话内容不能为空。",
-      "datasetBytes": "标准化后的评测数据集不能超过 10 MiB。"
+      "criteriaCount": "单个问题最多包含 {{count}} 条要求。",
+      "criterionRequired": "要求不能为空。",
+      "criterionBytes": "单条要求不能超过 2 KiB。",
+      "datasetBytes": "全部评测问题不能超过 10 MiB。"
     },
     "dataset": {
-      "invalidLockResponse": "服务未确认评测用例已锁定，请重试。"
+      "invalidLockResponse": "服务未确认评测问题已锁定，请重试。"
     },
     "state": {
       "disabled": "未开启评测",
-      "waiting_dataset": "等待填写评测用例",
+      "waiting_dataset": "等待填写评测问题",
       "pending": "迁移完成后自动开始评测",
       "preparing": "正在准备评测环境…",
       "waiting_environment": "需要补充运行所需的环境变量",
       "deploying": "正在部署临时 Runtime…",
-      "executing": "正在回放评测用例…",
+      "executing": "正在运行评测问题…",
       "judging": "正在分析迁移前后的行为差异…",
       "aggregating": "正在汇总评测结果…",
       "cleaning": "正在清理临时 Runtime…",
@@ -304,6 +301,16 @@
       "failed": "评测未完成",
       "blocked": "评测需要处理后才能继续",
       "cancelled": "评测已取消"
+    },
+    "progress": {
+      "label": "迁移与迁移效果评测进度",
+      "migration": "迁移",
+      "evaluation": "迁移效果评测",
+      "notStarted": "未开始",
+      "inProgress": "进行中",
+      "completed": "完成",
+      "waitingConfiguration": "等待配置",
+      "issue": "有问题"
     },
     "environment": {
       "description": "迁移后的 Agent 运行需要以下环境变量。填写后会在临时 Runtime 中继续评测。",
@@ -314,9 +321,6 @@
     "result": {
       "title": "迁移效果评测",
       "attempt": "第 {{attempt}} 次评测",
-      "progressLabel": "迁移与评测进度",
-      "migrationStage": "完成迁移",
-      "evaluationStage": "效果评测",
       "pending": "评测将在迁移产物准备完成后自动开始。",
       "retry": "重新评测",
       "retrying": "正在重试…",
@@ -330,15 +334,15 @@
       "evidenceCoverage": "证据覆盖率",
       "coverageDetail": "{{scored}} / {{total}} 个维度有证据",
       "executionSuccess": "执行成功率",
-      "executionDetail": "{{succeeded}} / {{total}} 个用例完成",
+      "executionDetail": "{{succeeded}} / {{total}} 个问题完成",
       "naCount": "N/A 数量",
       "naDescription": "证据不足，不计入分数",
       "gapDescription": "迁移差距说明",
-      "lowestScoringCases": "低分用例",
+      "lowestScoringCases": "低分问题",
       "executionFailures": "执行异常",
       "criticalEvidence": "Critical 证据",
       "limitations": "评测限制",
-      "viewEvidence": "查看 {{count}} 个用例的结果与证据",
+      "viewEvidence": "查看 {{count}} 个问题的结果与证据",
       "outputTruncated": "输出过长，已截断",
       "executionState": {
         "succeeded": "执行完成",
@@ -355,7 +359,7 @@
       },
       "evidenceSource": {
         "user_reference": "期望结果",
-        "user_criteria": "用户标准",
+        "user_criteria": "填写的要求",
         "source_contract": "源项目约束",
         "observed_output": "实际输出",
         "deterministic_assertion": "确定性断言"

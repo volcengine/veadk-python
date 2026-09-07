@@ -76,7 +76,7 @@ test("exposes a typed migration API with bounded transfer requests", () => {
   assert.match(source, /withLocalUser/);
 });
 
-test("adds optional migration effect evaluation without raising the basic input burden", () => {
+test("configures migration effect evaluation in a drawer with direct user-facing copy", () => {
   const workspace = readFileSync(workspaceUrl, "utf8");
   const evaluation = readFileSync(evaluationUrl, "utf8");
   const styles = readFileSync(evaluationStylesUrl, "utf8");
@@ -87,12 +87,24 @@ test("adds optional migration effect evaluation without raising the basic input 
   assert.match(evaluation, /userInput: ""/);
   assert.match(evaluation, /expectedOutcome: ""/);
   assert.match(evaluation, /criteria: \[\]/);
-  assert.match(evaluation, /priorMessages: \[\]/);
+  assert.doesNotMatch(evaluation, /EvaluationDraftMessage/);
+  assert.doesNotMatch(evaluation, /evaluation\.case\.priorConversation/);
+  assert.doesNotMatch(evaluation, /evaluation\.case\.addMessage/);
   assert.doesNotMatch(evaluation, /expectedTools|期望工具/);
   assert.match(evaluation, /t\("evaluation\.case\.userInput"\)/);
-  assert.match(evaluation, /t\("evaluation\.case\.optional"\)/);
   assert.match(evaluation, /role="switch"/);
+  assert.match(evaluation, /role="dialog"/);
+  assert.match(evaluation, /aria-modal="true"/);
+  assert.match(evaluation, /migration-evaluation-drawer/);
+  assert.match(evaluation, /migration-evaluation-drawer__toolbar/);
+  assert.doesNotMatch(evaluation, /migration-evaluation-editor__actions/);
+  assert.match(evaluation, /event\.key === "Escape"/);
+  assert.match(evaluation, /cancelAnimationFrame\(focusFrame\)/);
+  assert.match(evaluation, /\[drawerOpen, value\.enabled\]/);
+  assert.match(evaluation, /previousFocus/);
   assert.match(evaluation, /crypto\.randomUUID\(\)/);
+  assert.match(evaluation, /priorMessages: \[\]/);
+  assert.match(evaluation, /MigrationEvaluationProgress/);
   assert.match(evaluation, /MigrationEvaluationResult/);
   assert.match(evaluation, /score === null \? "N\/A"/);
   assert.match(evaluation, /report\.evidence_coverage\.rate/);
@@ -116,14 +128,25 @@ test("adds optional migration effect evaluation without raising the basic input 
       createFlow.indexOf("uploadMigrationSource"),
   );
   assert.match(workspace, /<MigrationEvaluationSetup/);
+  assert.match(workspace, /<MigrationEvaluationProgress/);
   assert.match(workspace, /<MigrationEvaluationResult/);
   assert.match(workspace, /isEvaluationPollingState/);
   assert.match(workspace, /resumeMigrationEvaluation/);
   assert.match(workspace, /retryMigrationEvaluation/);
   assert.match(workspace, /downloadMigrationEvaluationReport/);
   assert.match(styles, /@media \(max-width: 760px\)/);
-  assert.equal(zhResource.evaluation.setup.casesTitle, "用户会怎么问");
-  assert.equal(enResource.evaluation.setup.casesTitle, "What users will ask");
+  assert.equal(zhResource.evaluation.setup.casesTitle, "评测问题");
+  assert.equal(enResource.evaluation.setup.casesTitle, "Evaluation questions");
+  assert.equal(zhResource.evaluation.case.userInput, "问题");
+  assert.equal(zhResource.evaluation.case.criteria, "必须满足的要求（可选）");
+  assert.equal(
+    enResource.evaluation.result.evidenceSource.user_criteria,
+    "Provided requirements",
+  );
+  assert.doesNotMatch(
+    JSON.stringify(zhResource.evaluation),
+    /用户会怎么问|真实用户问题|历史对话|前置对话/,
+  );
   assert.match(zhResource.evaluation.result.scoreScale, /0–100/);
 });
 
