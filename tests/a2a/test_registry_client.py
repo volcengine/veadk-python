@@ -108,6 +108,86 @@ def _oauth_agent_card() -> dict:
     }
 
 
+def _agent_card_v1_managed_api_key() -> dict:
+    return {
+        "name": "Weather-A2A-Agent",
+        "description": "Weather agent",
+        "version": "1.0.0",
+        "supportedInterfaces": [
+            {
+                "url": " `https://example.test/a2a/v1` ",
+                "protocolBinding": "JSONRPC",
+                "protocolVersion": "1.0",
+            }
+        ],
+        "capabilities": {
+            "streaming": False,
+            "pushNotifications": False,
+            "extendedAgentCard": False,
+            "extensions": [
+                {
+                    "params": {
+                        "credentialProviderName": "sycTest",
+                        "poolName": "default",
+                    }
+                }
+            ],
+        },
+        "securitySchemes": {
+            "apiKeyAuth": {
+                "apiKeySecurityScheme": {
+                    "description": "ApiKey client credentials",
+                    "name": "Authorization",
+                    "location": "Header",
+                }
+            }
+        },
+        "securityRequirements": [
+            {
+                "schemes": {
+                    "apiKeyAuth": {
+                        "list": [],
+                    }
+                }
+            }
+        ],
+        "defaultInputModes": ["text/plain"],
+        "defaultOutputModes": ["text/plain"],
+        "skills": [
+            {
+                "id": "weather",
+                "name": "Weather",
+                "description": "Query weather",
+                "tags": ["weather"],
+            }
+        ],
+    }
+
+
+def _api_key_credential_provider_response() -> dict:
+    return {
+        "ResponseMetadata": {
+            "RequestId": "credential-provider-req",
+            "Action": "GetApiKeyCredentialProvider",
+            "Version": "2025-10-30",
+            "Service": "id",
+            "Region": "cn-beijing",
+        },
+        "Result": {
+            "Name": "sycTest",
+            "PoolName": "default",
+            "ApiKeyMetadata": [
+                {
+                    "Location": "Header",
+                    "ParameterName": "Authorization",
+                    "Prefix": "Bearer",
+                }
+            ],
+            "ApiKey": "123456",
+        },
+    }
+
+
 @patch.dict(
     "os.environ",
     {
@@ -248,6 +328,76 @@ def test_create_task_gets_agent_and_sends_message(post: Mock):
 
     serialized = json.dumps(result, ensure_ascii=False)
     assert "secret-token" not in serialized
+    assert "Authorization" not in serialized
+
+
+@patch.dict(
+    "os.environ",
+    {
+        "AGENTKIT_ACCESS_KEY": "ak-test",
+        "AGENTKIT_SECRET_KEY": "sk-test",
+    },
+    clear=False,
+)
+@patch("veadk.a2a.registry_client.requests.post")
+def test_create_task_supports_v1_agent_card_with_managed_api_key(post: Mock):
+    card = _agent_card_v1_managed_api_key()
+    post.side_effect = [
+        _mock_response(
+            {
+                "ResponseMetadata": {"RequestId": "get-req"},
+                "Result": {
+                    "Id": "agent-id",
+                    "Status": "running",
+                    "AgentCard": json.dumps(card),
+                },
+            }
+        ),
+        _mock_response(_api_key_credential_provider_response()),
+        _mock_response(
+            {
+                "result": {
+                    "kind": "message",
+                    "parts": [{"kind": "text", "text": "今天北京晴。"}],
+                }
+            }
+        ),
+    ]
+
+    result = create_task(
+        "Weather-A2A-Agent",
+        "北京天气",
+        config=AgentKitA2ARegistryConfig(
+            space_id="space-test",
+            endpoint="https://agentkit.cn-shanghai.volcengineapi.com/",
+            region="cn-shanghai",
+        ),
+    )
+
+    assert result["outcome"] == "success"
+    assert post.call_args_list[0].kwargs["params"]["Action"] == "GetA2aAgent"
+    assert post.call_args_list[1].args[0] == (
+        "https://id.cn-shanghai.volcengineapi.com/"
+    )
+    assert post.call_args_list[1].kwargs["params"] == {
+        "Action": "GetApiKeyCredentialProvider",
+        "Version": "2025-10-30",
+    }
+    assert json.loads(post.call_args_list[1].kwargs["data"].decode("utf-8")) == {
+        "Name": "sycTest",
+        "PoolName": "default",
+    }
+    assert (
+        "/cn-shanghai/id/request"
+        in post.call_args_list[1].kwargs["headers"]["Authorization"]
+    )
+    assert post.call_args_list[2].args[0] == "https://example.test/a2a/v1"
+    assert post.call_args_list[2].kwargs["headers"]["Authorization"] == (
+        "Bearer 123456"
+    )
+
+    serialized = json.dumps(result, ensure_ascii=False)
+    assert "123456" not in serialized
     assert "Authorization" not in serialized
 
 
@@ -561,6 +711,58 @@ def test_poll_task_returns_terminal_without_sleep(post: Mock, sleep: Mock):
     },
     clear=False,
 )
+@patch("veadk.a2a.registry_client.time.sleep")
+@patch("veadk.a2a.registry_client.requests.post")
+def test_poll_task_supports_v1_agent_card_with_managed_api_key(post: Mock, sleep: Mock):
+    card = _agent_card_v1_managed_api_key()
+    post.side_effect = [
+        _mock_response(
+            {
+                "ResponseMetadata": {"RequestId": "get-req"},
+                "Result": {
+                    "Id": "agent-id",
+                    "Status": "running",
+                    "AgentCard": json.dumps(card),
+                },
+            }
+        ),
+        _mock_response(_api_key_credential_provider_response()),
+        _mock_response(
+            {
+                "result": {
+                    "id": "task-1",
+                    "status": {"state": "completed"},
+                }
+            }
+        ),
+    ]
+
+    result = poll_task(
+        "Weather-A2A-Agent",
+        "task-1",
+        config=AgentKitA2ARegistryConfig(space_id="space-test"),
+    )
+
+    assert result["outcome"] == "success"
+    assert post.call_args_list[1].kwargs["params"]["Action"] == (
+        "GetApiKeyCredentialProvider"
+    )
+    assert post.call_args_list[2].args[0] == "https://example.test/a2a/v1"
+    assert post.call_args_list[2].kwargs["headers"]["Authorization"] == (
+        "Bearer 123456"
+    )
+    assert post.call_args_list[2].kwargs["json"]["method"] == "tasks/get"
+    sleep.assert_not_called()
+
+
+@patch.dict(
+    "os.environ",
+    {
+        "AGENTKIT_ACCESS_KEY": "ak-test",
+        "AGENTKIT_SECRET_KEY": "sk-test",
+    },
+    clear=False,
+)
 @patch("veadk.a2a.registry_client.requests.post")
 def test_registry_task_create_tool_forwards_tip_token(post: Mock):
     card = _agent_card()
@@ -739,6 +941,64 @@ def test_build_remote_a2a_agent_tools_searches_gets_and_sends(post: Mock):
     assert post.call_args_list[0].kwargs["params"]["Action"] == "SearchAgentCards"
     assert post.call_args_list[1].kwargs["params"]["Action"] == "GetA2aAgent"
     assert post.call_args_list[2].args[0] == "https://example.test/a2a"
+
+
+@patch.dict(
+    "os.environ",
+    {
+        "AGENTKIT_ACCESS_KEY": "ak-test",
+        "AGENTKIT_SECRET_KEY": "sk-test",
+    },
+    clear=False,
+)
+@patch("veadk.a2a.registry_client.requests.post")
+def test_dynamic_remote_a2a_tool_supports_v1_agent_card_with_managed_api_key(
+    post: Mock,
+):
+    card = _agent_card_v1_managed_api_key()
+    post.side_effect = [
+        _mock_response(
+            {
+                "ResponseMetadata": {"RequestId": "search-req"},
+                "Result": {"AgentCards": [json.dumps(card)], "TotalCount": 1},
+            }
+        ),
+        _mock_response(
+            {
+                "ResponseMetadata": {"RequestId": "get-req"},
+                "Result": {
+                    "Id": "agent-id",
+                    "Status": "running",
+                    "AgentCard": json.dumps(card),
+                },
+            }
+        ),
+        _mock_response(_api_key_credential_provider_response()),
+        _mock_response(
+            {
+                "result": {
+                    "kind": "message",
+                    "parts": [{"kind": "text", "text": "今天北京晴。"}],
+                }
+            }
+        ),
+    ]
+
+    tools = build_remote_a2a_agent_tools(
+        "北京天气", AgentKitA2ARegistryConfig(space_id="space-test")
+    )
+    result = tools[0](input="北京天气")
+
+    assert result["outcome"] == "success"
+    assert post.call_args_list[0].kwargs["params"]["Action"] == "SearchAgentCards"
+    assert post.call_args_list[1].kwargs["params"]["Action"] == "GetA2aAgent"
+    assert post.call_args_list[2].kwargs["params"]["Action"] == (
+        "GetApiKeyCredentialProvider"
+    )
+    assert post.call_args_list[3].args[0] == "https://example.test/a2a/v1"
+    assert post.call_args_list[3].kwargs["headers"]["Authorization"] == (
+        "Bearer 123456"
+    )
 
 
 @patch.dict(
