@@ -7,6 +7,7 @@ import { useTranslation } from "react-i18next";
 import {
   getSkillDetail,
   listSkillsInSpacePage,
+  skillLookupIdentity,
   type SkillDetail,
   type SkillSpaceRef,
   type SkillSpaceSkill,
@@ -491,6 +492,7 @@ export function SkillCenterView({
   const [skillTotal, setSkillTotal] = useState(0);
   const [skillsLoading, setSkillsLoading] = useState(false);
   const [skillsError, setSkillsError] = useState<Error | null>(null);
+  const [skillsDegraded, setSkillsDegraded] = useState(false);
   const [skillQuery, setSkillQuery] = useState("");
   const [detailSection, setDetailSection] = useState<SkillSpaceDetailSection>("overview");
   const [detailSkill, setDetailSkill] = useState<SkillSpaceSkill | null>(null);
@@ -721,6 +723,7 @@ export function SkillCenterView({
     if (!selectedSpace) {
       setSkills([]);
       setSkillTotal(0);
+      setSkillsDegraded(false);
       return;
     }
     let active = true;
@@ -736,11 +739,13 @@ export function SkillCenterView({
         if (!active) return;
         setSkills(result.items || []);
         setSkillTotal(result.totalCount || 0);
+        setSkillsDegraded(result.degraded === true);
       })
       .catch((error: unknown) => {
         if (!active) return;
         setSkills([]);
         setSkillTotal(0);
+        setSkillsDegraded(false);
         setSkillsError(normalizeSkillError(error, t("skillCenter.errors.loadSkills")));
       })
       .finally(() => {
@@ -762,6 +767,7 @@ export function SkillCenterView({
     setSelectedSpace(null);
     setSkills([]);
     setSkillTotal(0);
+    setSkillsDegraded(false);
     setDetailSection("overview");
     setSkillPage(1);
     setSkillQuery("");
@@ -779,6 +785,7 @@ export function SkillCenterView({
 
   const openDetail = async (skill: SkillSpaceSkill) => {
     if (!selectedSpace) return;
+    const skillIdentity = skillLookupIdentity(skill);
     const request = detailRequest.current + 1;
     detailRequest.current = request;
     setDetailSkill(skill);
@@ -789,7 +796,7 @@ export function SkillCenterView({
       const [result, files] = await Promise.all([
         getSkillDetail(
           selectedSpace.id,
-          skill.skillId,
+          skillIdentity,
           skill.version,
           selectedRegion,
           selectedSpace.projectName,
@@ -798,7 +805,7 @@ export function SkillCenterView({
         ),
         getManagedSkillFiles({
           spaceId: selectedSpace.id,
-          skillId: skill.skillId,
+          skillId: skillIdentity,
           version: skill.version,
           region: selectedRegion,
           skillSpaceName: selectedSpace.name,
@@ -822,7 +829,7 @@ export function SkillCenterView({
     if (!selectedSpace) return undefined;
     return {
       kind: "skill-center",
-      skillId: skill.skillId,
+      skillId: skillLookupIdentity(skill),
       version: skill.version,
       region: selectedRegion,
       projectName: selectedSpace.projectName,
@@ -942,6 +949,11 @@ export function SkillCenterView({
                         />
                       )}
                     />
+                    {skillsDegraded ? (
+                      <div className="skillcenter-inline-warning" role="status">
+                        {t("skillCenter.degradedRelationWarning")}
+                      </div>
+                    ) : null}
                     {skillsLoading && skills.length === 0 ? (
                       <ResourceLoadingState />
                     ) : skillsError && skills.length === 0 ? (
@@ -964,7 +976,7 @@ export function SkillCenterView({
                           <thead><tr><th scope="col">{t("skillCenter.skills")}</th><th scope="col">{t("agentSelector.status")}</th><th scope="col" className="skillcenter-table__actions-heading">{t("skillCenter.actions")}</th></tr></thead>
                           <tbody>
                             {visibleSkills.map((skill) => (
-                              <tr key={`${skill.skillId}:${skill.version}`}>
+                              <tr key={`${skillLookupIdentity(skill)}:${skill.version}`}>
                                 <td className="skillcenter-table__skill">
                                   <button type="button" onClick={() => void openDetail(skill)}>
                                     <span className="skillcenter-table__title-row">
@@ -980,7 +992,9 @@ export function SkillCenterView({
                                   <SandboxDisabledAction disabled={!capability?.enabled}>
                                     <button type="button" disabled={!capability?.enabled} onClick={() => startOptimization(skill)}>{t("skillCenter.optimize")}</button>
                                   </SandboxDisabledAction>
-                                  <button type="button" className="is-danger" disabled={deletingSkillId === skill.skillId} onClick={() => void removeSkill(skill)}>{deletingSkillId === skill.skillId ? t("common.deleting") : t("common.delete")}</button>
+                                  {!skill.lookupByName ? (
+                                    <button type="button" className="is-danger" disabled={deletingSkillId === skill.skillId} onClick={() => void removeSkill(skill)}>{deletingSkillId === skill.skillId ? t("common.deleting") : t("common.delete")}</button>
+                                  ) : null}
                                 </div></td>
                               </tr>
                             ))}
@@ -1149,7 +1163,7 @@ export function SkillCenterView({
           onOptimize={() => startOptimization(detailSkill)}
           onDownload={() => void downloadManagedSkillArchive({
             spaceId: selectedSpace.id,
-            skillId: detailSkill.skillId,
+            skillId: skillLookupIdentity(detailSkill),
             version: detailSkill.version,
             region: selectedRegion,
             fallbackName: detailSkill.skillName,

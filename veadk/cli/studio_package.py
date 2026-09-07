@@ -65,12 +65,19 @@ def studio_run_script(
         else '"${CLOUD_PROVIDER:-${AGENTKIT_CLOUD_PROVIDER:-volcengine}}"'
     )
     command = (
-        "exec python3 -m veadk.cli.cli studio "
+        "python3 -m veadk.cli.cli studio "
         f"--provider {provider_argument} --auth-mode frontend"
     )
     if site_logo_filename:
         command += f' --site-logo "$ROOT_DIR/{site_logo_filename}"'
     command += ' --host "$HOST" --port "$PORT"\n'
+    managed_source = (
+        "export VEADK_STUDIO_AGENTKIT_CLI_RUNTIME_MANIFEST="
+        f'"$ROOT_DIR/{runtime_manifest_filename}"\n'
+        if runtime_manifest_filename
+        else "export VEADK_STUDIO_AGENTKIT_CLI_ARCHIVE="
+        f'"$ROOT_DIR/{STUDIO_AGENTKIT_CLI_ARTIFACT.filename}"\n'
+    )
     companion = (
         "python3 -m veadk.cli.studio_companion "
         f'--runtime-manifest "$ROOT_DIR/{runtime_manifest_filename}" '
@@ -83,13 +90,27 @@ def studio_run_script(
         "#!/bin/bash\n"
         "set -ex\n"
         'ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"\n'
+        "unset VEADK_STUDIO_AGENTKIT_CLI_ARCHIVE "
+        "VEADK_STUDIO_AGENTKIT_CLI_RUNTIME_MANIFEST\n"
+        f"{managed_source}"
         'cd "$ROOT_DIR"\n'
         'if [ -d "output" ]; then cd ./output/; fi\n'
         "HOST=0.0.0.0\n"
         "PORT=${_FAAS_RUNTIME_PORT:-8000}\n"
         'export PYTHONPATH="./site-packages${PYTHONPATH:+:$PYTHONPATH}"\n'
-        f"{companion}"
-        f"{command}"
+        'trap \'kill "${COMPANION_PID:-}" "${STUDIO_PID:-}" '
+        "2>/dev/null || true' INT TERM\n"
+        f"{companion.rstrip()} &\n"
+        "COMPANION_PID=$!\n"
+        f"{command.rstrip()} &\n"
+        "STUDIO_PID=$!\n"
+        'if ! wait "$COMPANION_PID"; then\n'
+        '  kill "$STUDIO_PID" 2>/dev/null || true\n'
+        '  wait "$STUDIO_PID" 2>/dev/null || true\n'
+        "  exit 1\n"
+        "fi\n"
+        "COMPANION_PID=\n"
+        'wait "$STUDIO_PID"\n'
     )
 
 

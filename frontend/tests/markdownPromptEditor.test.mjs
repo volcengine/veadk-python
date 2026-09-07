@@ -480,7 +480,7 @@ test("container agents require child agents before debug or publish", () => {
   );
   assert.match(
     createSource,
-    /const sectionId =\s*problem\.problem === "missingSubagent" \? "type" : "basic"/,
+    /const sectionId =\s*problem\.problem === "mcpDuplicateName" \|\|[\s\S]*?problem\.problem === "mcpDuplicateUrl"[\s\S]*?\? "tools"[\s\S]*?: problem\.problem === "missingSubagent"[\s\S]*?\? "type"[\s\S]*?: "basic"/,
   );
   assert.match(
     createSource,

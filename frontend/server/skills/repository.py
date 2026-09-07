@@ -24,10 +24,118 @@ import stat
 import tempfile
 import zipfile
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .archive import SkillArchive
+
+DEGRADED_SKILLSPACE_WARNING = "部分关联异常，已恢复可读取技能"
+
+
+@dataclass(frozen=True)
+class SkillSpaceListResult:
+    items: tuple[dict[str, object], ...]
+    total_count: int
+    degraded: bool = False
+
+
+def _is_missing_skill_relation(error: BaseException) -> bool:
+    expected = "ResourceNotFound.skill"
+    for name in ("code", "error_code", "Code"):
+        if str(getattr(error, name, "") or "").strip() == expected:
+            return True
+    return False
+
+
+def list_skill_space_items(
+    client: Any,
+    skills_types: Any,
+    *,
+    space_id: str,
+    page: int = 1,
+    page_size: int = 100,
+) -> SkillSpaceListResult:
+    """List authoritative relations, recovering readable names only on one 404."""
+
+    try:
+        response = client.list_skills_by_skill_space(
+            skills_types.ListSkillsBySkillSpaceRequest(
+                SkillSpaceId=space_id,
+                PageNumber=page,
+                PageSize=page_size,
+            )
+        )
+    except Exception as relation_error:
+        if not _is_missing_skill_relation(relation_error):
+            raise
+        space = client.get_skill_space(skills_types.GetSkillSpaceRequest(Id=space_id))
+        space_name = str(getattr(space, "name", "") or "").strip()
+        if not space_name:
+            raise relation_error
+        fallback = client.list_skills_by_space_id(
+            skills_types.ListSkillsBySpaceIdRequest(
+                SkillSpaceId=space_id,
+                SkillSpaceName=space_name,
+            )
+        )
+        recovered: list[dict[str, object]] = []
+        for basic in list(getattr(fallback, "items", None) or []):
+            name = str(getattr(basic, "name", "") or "").strip()
+            if not name:
+                continue
+            try:
+                info = client.get_skill_info(
+                    skills_types.GetSkillInfoRequest(
+                        SkillName=name,
+                        SkillSpaceName=space_name,
+                        SkillSpaceId=space_id,
+                    )
+                )
+            except Exception as info_error:
+                if _is_missing_skill_relation(info_error):
+                    continue
+                raise
+            recovered.append(
+                {
+                    "skillId": "",
+                    "skillName": str(getattr(info, "skill_name", "") or name),
+                    "skillDescription": str(
+                        getattr(info, "description", "")
+                        or getattr(basic, "description", "")
+                        or ""
+                    ),
+                    "version": "",
+                    "skillStatus": "",
+                    "lookupByName": True,
+                    "degraded": True,
+                }
+            )
+        start = (page - 1) * page_size
+        return SkillSpaceListResult(
+            items=tuple(recovered[start : start + page_size]),
+            total_count=len(recovered),
+            degraded=True,
+        )
+
+    raw_items = list(getattr(response, "items", None) or [])
+    return SkillSpaceListResult(
+        items=tuple(
+            {
+                "skillId": str(getattr(item, "skill_id", "") or ""),
+                "skillName": str(getattr(item, "skill_name", "") or ""),
+                "skillDescription": str(getattr(item, "skill_description", "") or ""),
+                "version": str(getattr(item, "version", "") or ""),
+                "skillStatus": str(getattr(item, "skill_status", "") or ""),
+            }
+            for item in raw_items
+        ),
+        total_count=(
+            int(response.total_count)
+            if getattr(response, "total_count", None) is not None
+            else len(raw_items)
+        ),
+    )
 
 
 def _is_macos_metadata(path: PurePosixPath) -> bool:
@@ -84,6 +192,20 @@ def resolve_skill_response(
 ) -> Any:
     """Read either a managed Skill version or a legacy SkillSpace Skill."""
     from agentkit.sdk.skills import types as skills_types
+
+    if (
+        skill_space_name
+        and skill_name
+        and not version
+        and (not skill_id or skill_id == skill_name)
+    ):
+        return client.get_skill_info(
+            skills_types.GetSkillInfoRequest(
+                SkillName=skill_name,
+                SkillSpaceName=skill_space_name,
+                SkillSpaceId=space_id,
+            )
+        )
 
     try:
         return client.get_skill_version(
@@ -514,27 +636,21 @@ class AgentKitSkillRepository:
         page_size = 100
         expected = name.casefold()
         while True:
-            response = client.list_skills_by_skill_space(
-                skills_types.ListSkillsBySkillSpaceRequest(
-                    SkillSpaceId=space_id,
-                    PageNumber=page,
-                    PageSize=page_size,
-                )
+            result = list_skill_space_items(
+                client,
+                skills_types,
+                space_id=space_id,
+                page=page,
+                page_size=page_size,
             )
-            items = list(getattr(response, "items", None) or [])
+            items = list(result.items)
             if any(
-                AgentKitSkillRepository._skill_relation_name(item).casefold()
-                == expected
+                str(item.get("skillName") or "").casefold() == expected
                 for item in items
             ):
                 return True
-            total_count = getattr(response, "total_count", None)
-            if total_count is not None:
-                try:
-                    if page * page_size >= int(total_count):
-                        return False
-                except (TypeError, ValueError):
-                    pass
+            if page * page_size >= result.total_count:
+                return False
             if len(items) < page_size:
                 return False
             page += 1
@@ -568,4 +684,10 @@ class AgentKitSkillRepository:
         }
 
 
-__all__ = ["AgentKitSkillRepository", "SkillRepositoryError"]
+__all__ = [
+    "AgentKitSkillRepository",
+    "DEGRADED_SKILLSPACE_WARNING",
+    "SkillRepositoryError",
+    "SkillSpaceListResult",
+    "list_skill_space_items",
+]
