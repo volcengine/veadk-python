@@ -516,7 +516,7 @@ def test_submit_thin_release_falls_back_to_legacy_full_bundle_end_to_end(
         def __init__(self, **_kwargs: str) -> None:
             self.client = object()
 
-        def submit_application_code_bundle_update(self, **kwargs: Any) -> None:
+        def submit_application_code_bundle_update(self, **kwargs: Any) -> bool:
             package = Path(kwargs["path"])
             captured["full_selected"] = (package / "full-marker").read_text()
 
