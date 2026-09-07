@@ -18,7 +18,10 @@ from pathlib import Path
 
 import pytest
 
-from veadk.cli.studio_package import write_studio_package
+from veadk.cli.studio_package import (
+    build_local_studio_requirements,
+    write_studio_package,
+)
 from veadk.cli.studio_sidecar_prerequisites import (
     DEFAULT_SIDECAR_BASE_IMAGE,
     SIDECAR_BASE_IMAGE_ENV,
@@ -50,6 +53,99 @@ def test_write_studio_package_bootstraps_the_preloaded_cli_archive(
     )
     assert "VEADK_STUDIO_AGENTKIT_CLI_RUNTIME_MANIFEST" in run_script
     assert '--archive "$ROOT_DIR/agentkit-linux-x64.tar.gz"' in run_script
+
+
+def test_write_studio_update_package_bootstraps_cli_from_remote_artifact(
+    tmp_path: Path,
+) -> None:
+    package = tmp_path / "package"
+
+    write_studio_package(
+        package,
+        requirements="veadk-python\n",
+        site_logo=None,
+        provider="byteplus",
+        bundle_agentkit_cli=False,
+    )
+
+    run_script = (package / "run.sh").read_text(encoding="utf-8")
+    assert "studio_companion --provider byteplus" in run_script
+    assert "--archive" not in run_script
+    assert "--runtime-manifest" not in run_script
+    assert "export VEADK_STUDIO_AGENTKIT_CLI_ARCHIVE=" not in run_script
+    assert "export VEADK_STUDIO_AGENTKIT_CLI_RUNTIME_MANIFEST=" not in run_script
+
+
+def test_local_studio_update_skips_full_offline_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "source"
+    package = tmp_path / "package"
+    source_root.mkdir()
+    (source_root / "pyproject.toml").write_text("", encoding="utf-8")
+    (source_root / "uv.lock").write_text("", encoding="utf-8")
+    (source_root / "README.md").write_text("", encoding="utf-8")
+    (source_root / "LICENSE").write_text("", encoding="utf-8")
+    (source_root / "frontend").mkdir()
+    (source_root / "frontend" / "package.json").write_text("{}", encoding="utf-8")
+    (source_root / "frontend" / "package-lock.json").write_text("{}", encoding="utf-8")
+    (source_root / "veadk").mkdir()
+
+    monkeypatch.setattr(
+        "veadk.cli.studio_package._stage_wheel_source",
+        lambda _source, _assets, wheel_source: wheel_source.mkdir(parents=True),
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.shutil.which", lambda _: "/usr/bin/uv"
+    )
+
+    def _build(command: list[str], *, check: bool) -> None:
+        assert check is True
+        output_dir = Path(command[-1])
+        (output_dir / "veadk_python-test-py3-none-any.whl").write_bytes(b"wheel")
+
+    monkeypatch.setattr("veadk.cli.studio_package.subprocess.run", _build)
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.validate_studio_wheel", lambda *_args: None
+    )
+
+    def _stage_dependencies(destination: Path, **_: object) -> tuple[Path, ...]:
+        dependency = destination / "dependency-test-py3-none-any.whl"
+        dependency.write_bytes(b"dependency")
+        return (dependency,)
+
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.stage_studio_dependency_wheels",
+        _stage_dependencies,
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.stage_studio_dependency_sources",
+        lambda *_args, **_kwargs: pytest.fail("thin update staged source archives"),
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.stage_studio_agentkit_cli_archive",
+        lambda *_args, **_kwargs: pytest.fail("thin update staged the CLI archive"),
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.build_studio_offline_runtime",
+        lambda *_args, **_kwargs: pytest.fail("thin update built an offline runtime"),
+    )
+
+    requirements = build_local_studio_requirements(
+        source_root,
+        package,
+        provider="byteplus",
+        offline_runtime=False,
+    )
+
+    assert requirements == (
+        "./dependency-test-py3-none-any.whl\n./veadk_python-test-py3-none-any.whl\n"
+    )
+    assert sorted(path.name for path in package.iterdir()) == [
+        "dependency-test-py3-none-any.whl",
+        "veadk_python-test-py3-none-any.whl",
+    ]
 
 
 def test_project_keeps_native_cli_outside_python_distributions() -> None:

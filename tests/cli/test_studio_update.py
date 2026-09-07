@@ -449,9 +449,11 @@ def test_studio_update_preserves_branding_and_updates_existing_ids(
         *,
         frontend_assets: Path,
         provider: str,
+        offline_runtime: bool,
     ) -> str:
         captured["frontend"] = (frontend_assets / "index.html").read_text()
         captured["requirements_provider"] = provider
+        captured["offline_runtime"] = offline_runtime
         return "./veadk.whl\n"
 
     def _write_package(
@@ -460,11 +462,13 @@ def test_studio_update_preserves_branding_and_updates_existing_ids(
         requirements: str,
         site_logo: SiteLogo | None,
         provider: str = "volcengine",
+        bundle_agentkit_cli: bool = True,
     ) -> None:
         package_dir.mkdir(parents=True, exist_ok=True)
         (package_dir / "run.sh").write_text("run", encoding="utf-8")
         captured["requirements"] = requirements
         captured["logo"] = site_logo
+        captured["bundle_agentkit_cli"] = bundle_agentkit_cli
 
     monkeypatch.setattr(
         "veadk.cli.studio_package.build_frontend_assets", _build_frontend
@@ -508,8 +512,10 @@ def test_studio_update_preserves_branding_and_updates_existing_ids(
     assert result.exit_code == 0, result.output
     assert captured["frontend"] == "built"
     assert captured["requirements_provider"] == "volcengine"
+    assert captured["offline_runtime"] is False
     assert captured["requirements"] == "./veadk.whl\n"
     assert captured["logo"] == logo
+    assert captured["bundle_agentkit_cli"] is False
     assert captured["scope"] == {
         "access_key": "ak",
         "secret_key": "sk",
@@ -745,8 +751,10 @@ def test_studio_update_supports_byteplus_provider(
         *,
         frontend_assets: Path,
         provider: str,
+        offline_runtime: bool,
     ) -> str:
         captured["requirements_provider"] = provider
+        captured["offline_runtime"] = offline_runtime
         package_dir.mkdir(parents=True, exist_ok=True)
         return "./veadk.whl\n./pydantic.whl\n"
 
@@ -761,13 +769,18 @@ def test_studio_update_supports_byteplus_provider(
         requirements: str,
         site_logo: SiteLogo | None,
         provider: str,
+        bundle_agentkit_cli: bool,
     ) -> None:
         from veadk.cli.studio_package import studio_run_script
 
         captured["package_requirements"] = requirements
         captured["package_logo"] = site_logo
         captured["package_provider"] = provider
-        run_script = studio_run_script(provider=provider)  # type: ignore[arg-type]
+        captured["bundle_agentkit_cli"] = bundle_agentkit_cli
+        run_script = studio_run_script(
+            provider=provider,  # type: ignore[arg-type]
+            bundle_agentkit_cli=bundle_agentkit_cli,
+        )
         captured["run_script"] = run_script
         package_dir.mkdir(parents=True, exist_ok=True)
         (package_dir / "run.sh").write_text(run_script, encoding="utf-8")
@@ -805,7 +818,9 @@ def test_studio_update_supports_byteplus_provider(
 
     assert result.exit_code == 0, result.output
     assert captured["requirements_provider"] == "byteplus"
+    assert captured["offline_runtime"] is False
     assert captured["package_provider"] == "byteplus"
+    assert captured["bundle_agentkit_cli"] is False
     assert captured["package_requirements"] == "./veadk.whl\n./pydantic.whl\n"
     update = captured["update"]
     assert isinstance(update, dict)
@@ -976,6 +991,7 @@ def test_studio_update_explicit_branding_overrides_cloud_values(
         requirements: str,
         site_logo: SiteLogo | None,
         provider: str = "volcengine",
+        bundle_agentkit_cli: bool = True,
     ) -> None:
         package_dir.mkdir(parents=True, exist_ok=True)
         captured["logo"] = site_logo

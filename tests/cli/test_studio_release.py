@@ -506,6 +506,41 @@ def test_stage_dependency_wheels_prefers_domestic_mirrors(
     ]
 
 
+def test_stage_byteplus_dependency_wheels_prefers_primary_pypi(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    content = b"downloaded-wheel"
+    dependency = StudioDependencyWheel(
+        filename="downloaded.whl",
+        url="https://files.pythonhosted.org/packages/example/downloaded.whl",
+        sha256=hashlib.sha256(content).hexdigest(),
+    )
+    urls: list[str] = []
+
+    def _urlopen(url: str, *, timeout: int) -> io.BytesIO:
+        urls.append(url)
+        assert timeout == 60
+        return io.BytesIO(content)
+
+    monkeypatch.setattr(
+        "veadk.cli.studio_dependencies.studio_dependency_wheels",
+        lambda _provider, **_kwargs: (dependency,),
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_dependencies.urllib.request.urlopen",
+        _urlopen,
+    )
+
+    staged = stage_studio_dependency_wheels(
+        tmp_path / "destination",
+        provider="byteplus",
+    )
+
+    assert staged[0].read_bytes() == content
+    assert urls == [dependency.url]
+
+
 def test_write_dependency_manifest_uses_pinned_wheel_metadata(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

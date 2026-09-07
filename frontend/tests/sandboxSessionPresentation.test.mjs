@@ -192,6 +192,10 @@ test("sandbox agents expose detail deletion and reusable workspaces", () => {
   assert.match(workspaceSource, /t\("agentWorkspace\.main"\)/);
   assert.match(workspaceSource, /t\("agentWorkspace\.terminal"\)/);
   assert.match(workspaceSource, /sandboxClient\.launchAgentTerminal/);
+  assert.match(workspaceSource, /hidden=\{surface !== "main"\}/);
+  assert.match(workspaceSource, /hidden=\{surface !== "terminal"\}/);
+  assert.doesNotMatch(workspaceSource, /surface === "main"\s*\?\s*\(\s*<iframe/);
+  assert.match(workspaceStyles, /\.sandbox-agent-workspace-surface \[hidden\][\s\S]*?display: none/);
   assert.match(workspaceSource, /size="lg"/);
   assert.match(workspaceSource, /gutterSize="lg"/);
   assert.match(workspaceSource, /block/);
