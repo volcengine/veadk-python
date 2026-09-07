@@ -48,6 +48,13 @@
     "console": "控制台"
   },
   "systemInfo": {
+    "checkUpdates": "检查更新",
+    "checkingVersions": "正在检查版本…",
+    "versionCheckError": "查询沙箱版本失败，请检查凭据、区域及接口权限后重试",
+    "sandboxUpdateError": "Sandbox 更新失败，请刷新检查实际状态后重试",
+    "modelEnvRepairUnavailable": "无法补齐模型环境变量，请检查 CODEX_API_KEY 和 CODEX_BASE_URL",
+    "updateSandbox": "更新{{variant}}{{name}}",
+    "updatingSandbox": "更新中",
     "title": "系统信息",
     "description": "查看当前 Studio 版本及关联的基础资源",
     "general": "通用",

@@ -390,3 +390,16 @@
     opacity: 1;
   }
 }
+
+.system-info-refresh {
+  border: 0;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  font: inherit;
+  cursor: pointer;
+  padding: 4px 0;
+  margin-bottom: 8px;
+}
+.system-info-refresh:hover { color: hsl(var(--foreground)); }
+.system-info-refresh:disabled { cursor: wait; opacity: 0.6; }
+.system-info-refresh:focus-visible { outline: 2px solid hsl(var(--primary)); outline-offset: 2px; }

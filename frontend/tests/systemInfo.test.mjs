@@ -221,21 +221,15 @@ test("system information page lists sandbox tools and the current identity user 
     systemInfoSource,
     /tool\.snapshot \?\s*\(\s*<span className="system-info-tool-badge">\{t\("systemInfo\.snapshot"\)\}<\/span>\s*\)\s*: null/,
   );
-  assert.match(systemInfoSource, /function isCodexSandboxToolKind/);
-  assert.match(systemInfoSource, /kind === "codex" \|\| kind === "codex_snapshot"/);
   assert.match(systemInfoSource, /const updateVisible =/);
-  assert.match(systemInfoSource, /tool\.needsModelEnvUpdate/);
-  assert.match(systemInfoSource, /tool\.canUpdateModelEnv/);
-  assert.match(systemInfoSource, /tool\.modelEnvError/);
+  assert.match(systemInfoSource, /sandboxToolUpdates\[tool\.toolId\]/);
+  assert.match(systemInfoSource, /getSandboxImageUpdates/);
+  assert.match(systemInfoSource, /pendingTools\.current\.has\(tool\.toolId\)/);
   assert.doesNotMatch(systemInfoSource, /tool\.modelEnvErrorCode/);
-  assert.match(systemInfoSource, /setSandboxTools\(\(current\) =>/);
-  assert.match(systemInfoSource, /needsModelEnvUpdate: false/);
-  assert.match(systemInfoSource, /modelEnvErrorCode: ""/);
   assert.doesNotMatch(systemInfoSource, /has-action/);
   assert.doesNotMatch(systemInfoSource, /system-info-resource-actions/);
   assert.match(systemInfoSource, /className="system-info-resource-update"/);
-  assert.match(systemInfoSource, /RefreshCw/);
-  assert.match(systemInfoSource, /aria-label=\{t\("systemInfo\.updateModelEnv"/);
+  assert.match(systemInfoSource, /aria-label=\{t\("systemInfo\.updateSandbox"/);
   assert.doesNotMatch(systemInfoSource, /<span>更新<\/span>/);
   assert.match(systemInfoSource, /updateSandboxToolModelEnv\(tool\)/);
   assert.match(systemInfoSource, /result\.updated[\s\S]*?t\("systemInfo\.modelEnvUpdated"\)[\s\S]*?t\("systemInfo\.modelEnvAlreadyCurrent"\)/);

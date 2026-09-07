@@ -326,6 +326,10 @@
     "unsafeToolUrl": "{{label}} returned an unsafe URL."
   },
   "client": {
+    "invalidSandboxVersion": "Invalid sandbox version response",
+    "loadSandboxVersionsFailed": "Failed to check sandbox versions",
+    "updateSandboxFailed": "Failed to update sandbox",
+    "invalidSandboxUpdate": "Invalid sandbox update response",
     "errorWithDetailAndRawResponse": "{{context}}\n{{detail}}\nRaw response:\n{{response}}",
     "errorWithRawResponse": "{{context}}\nRaw response:\n{{response}}",
     "loadArkApiKeysFailed": "Failed to load Ark API keys",
