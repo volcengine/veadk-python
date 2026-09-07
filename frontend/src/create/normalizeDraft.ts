@@ -2,6 +2,7 @@ import {
   emptyDraft,
   type A2aRegistryConfig,
   type AgentDraft,
+  type AgentRuntime,
   type CloudCliToolId,
   type CustomTool,
   type HarnessSidecarIntent,
@@ -40,6 +41,7 @@ const TOOL_IDS = new Set([
   "vesearch",
 ]);
 const AGENT_TYPES = new Set(["llm", "sequential", "parallel", "loop", "a2a"]);
+const AGENT_RUNTIMES = new Set<AgentRuntime>(["adk", "codex", "piagent"]);
 const CLOUD_CLI_TOOL_IDS = new Set<CloudCliToolId>([
   "lark-cli",
   "github-cli",
@@ -112,6 +114,12 @@ function asAgentType(v: unknown): NonNullable<AgentDraft["agentType"]> {
     : "llm";
 }
 
+function asAgentRuntime(v: unknown): AgentRuntime {
+  return typeof v === "string" && AGENT_RUNTIMES.has(v as AgentRuntime)
+    ? (v as AgentRuntime)
+    : "adk";
+}
+
 function asCloudProvider(v: unknown): NonNullable<AgentDraft["cloudProvider"]> {
   return v === "byteplus" ? "byteplus" : "volcengine";
 }
@@ -176,6 +184,7 @@ function parseSubAgents(
       description: asString(so.description),
       instruction: asString(so.instruction),
       agentType,
+      runtime: agentType === "llm" ? asAgentRuntime(so.runtime) : "adk",
       maxIterations: asMaxIterations(so.maxIterations),
       a2aUrl: asString(so.a2aUrl),
       modelName: asString(so.modelName),
@@ -330,6 +339,7 @@ export function normalizeDraft(raw: unknown): AgentDraft {
     instruction: asString(o.instruction) || "You are a helpful assistant.",
     dynamicAgentDelegation: asBool(o.dynamicAgentDelegation),
     agentType,
+    runtime: agentType === "llm" ? asAgentRuntime(o.runtime) : "adk",
     maxIterations: asMaxIterations(o.maxIterations),
     a2aUrl: asString(o.a2aUrl),
     modelName: asString(o.modelName),

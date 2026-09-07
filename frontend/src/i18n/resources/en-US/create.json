@@ -530,6 +530,18 @@
       "loop": { "label": "Loop", "fullLabel": "Loop agent", "description": "Repeats subagents until the stop condition is met" },
       "a2a": { "label": "Remote agent", "fullLabel": "Remote agent", "description": "Calls a remote agent through the A2A protocol" }
     },
+    "runtime": {
+      "sectionLabel": "Runtime",
+      "sectionHint": "LLM agent execution runtime",
+      "label": "Runtime",
+      "ariaLabel": "Choose runtime",
+      "help": "Choose the execution runtime for this LLM agent. Configure model source and model parameters below.",
+      "options": {
+        "adk": { "label": "ADK", "description": "Use the default ADK execution runtime." },
+        "codex": { "label": "Codex", "description": "Use Codex as the agent execution runtime." },
+        "piagent": { "label": "PiAgent", "description": "Use PiAgent as the agent execution runtime." }
+      }
+    },
     "basic": {
       "agentName": "Agent name",
       "name": "Name",

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import ipaddress
 import socket
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from urllib.parse import urlparse
 
 from veadk.cli.generated_agent_catalog import (
@@ -63,6 +63,7 @@ _METADATA_IPS = {
     ipaddress.ip_address("169.254.169.254"),
 }
 
+IpAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 IpNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
 PrivateNetworkResolver = Callable[[], Sequence[IpNetwork]]
 
@@ -165,6 +166,8 @@ def _validate_node(
 
     if draft.agentType == "loop" and not (1 <= draft.maxIterations <= MAX_ITERATIONS):
         raise DebugPolicyError(f"maxIterations must be between 1 and {MAX_ITERATIONS}")
+    if draft.agentType != "llm" and draft.runtime != "adk":
+        raise DebugPolicyError("runtime can only be configured on LLM agents")
     if draft.agentType == "a2a":
         if not registry_backed_remote and not draft.a2aUrl.strip():
             raise DebugPolicyError("A2A URL is required")
@@ -303,7 +306,7 @@ def _endpoint_label(field_name: str) -> str:
 
 
 def _validate_target_ip(
-    ip: ipaddress._BaseAddress,
+    ip: IpAddress,
     *,
     field_name: str,
     private_network_resolver: PrivateNetworkResolver | None,
@@ -338,7 +341,7 @@ def _validate_target_ip(
 
 
 def _validate_catalog_ids(
-    name: str, values: list[str], catalog: dict[str, object]
+    name: str, values: list[str], catalog: Mapping[str, object]
 ) -> None:
     for value in values:
         if value not in catalog:

@@ -183,12 +183,13 @@ def _agent_node(
         ]
     mode = getattr(agent, "mode", None)
     instruction = getattr(agent, "instruction", "")
-    return {
+    agent_type = _agent_type(agent)
+    node = {
         "id": agent_id,
         "name": _display_name(agent_id, display_names),
         "description": getattr(agent, "description", "") or "",
         "instruction": instruction if isinstance(instruction, str) else "",
-        "type": _agent_type(agent),
+        "type": agent_type,
         "model": _model_name(getattr(agent, "model", "")),
         "tools": [
             _tool_label(tool)
@@ -201,6 +202,9 @@ def _agent_node(
         "mentionable": mode not in ("task", "single_turn"),
         "children": children,
     }
+    if agent_type == "llm":
+        node["runtime"] = str(getattr(agent, "runtime", "") or "adk")
+    return node
 
 
 def _get_feishu_channel_method(
@@ -924,8 +928,15 @@ def _configure_studio_tool_routes(
         return
 
     agent_tools = getattr(root_agent, "tools", None)
-    if agent_tools is None:
-        raise TypeError("Studio BFF tools require an Agent with a tools list.")
+    if not hasattr(agent_tools, "append"):
+        print(
+            "Studio BFF tools disabled because root agent "
+            f"{getattr(root_agent, 'name', '<unknown>')} has no tools list.",
+            flush=True,
+        )
+        mount_studio_channel_routes(app=app, enabled=False)
+        return
+    agent_tools = cast(list[Any], agent_tools)
     reserved_tool_names = {
         _tool_label(tool)
         for tool in agent_tools

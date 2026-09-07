@@ -1,5 +1,5 @@
 import type { CloudProvider } from "../adk/cloudProvider";
-import { emptyDraft, type AgentDraft } from "./types";
+import { emptyDraft, type AgentDraft, type AgentRuntime } from "./types";
 import { normalizeHarnessSidecarIntent } from "./harnessSidecarOptions";
 import { BUILTIN_TOOLS } from "./veadkCatalog";
 
@@ -13,10 +13,22 @@ export interface RuntimeAgentIntrospection {
   description?: string;
   instruction?: string;
   type?: AgentDraft["agentType"];
+  runtime?: AgentDraft["runtime"];
   model?: string;
   tools?: readonly string[];
   skills?: readonly { name: string }[];
   children?: readonly RuntimeAgentIntrospection[];
+}
+
+const AGENT_RUNTIMES = new Set<AgentRuntime>(["adk", "codex", "piagent"]);
+
+function runtimeFromValue(
+  value: unknown,
+  fallback: AgentRuntime = "adk",
+): AgentRuntime {
+  return typeof value === "string" && AGENT_RUNTIMES.has(value as AgentRuntime)
+    ? (value as AgentRuntime)
+    : fallback;
 }
 
 export interface RuntimeCloudAgent extends RuntimeAgentIntrospection {
@@ -120,6 +132,10 @@ export function applyRuntimeAgentIntrospection(
       ? editableDraft.instruction
       : (runtimeNode?.instruction ?? editableDraft.instruction),
     agentType,
+    runtime:
+      agentType === "llm"
+        ? runtimeFromValue(runtimeNode?.runtime, editableDraft.runtime ?? "adk")
+        : "adk",
     modelName: runtimeModel.modelName || editableDraft.modelName,
     modelProvider: runtimeModel.modelProvider || editableDraft.modelProvider,
     skills: runtimeNode?.skills?.map((skill) => skill.name) ?? editableDraft.skills,
@@ -200,6 +216,10 @@ function cloudDraftWithDefaults(
     description: draft.description ?? defaults.description,
     instruction: draft.instruction ?? defaults.instruction,
     agentType: draft.agentType ?? defaults.agentType,
+    runtime:
+      (draft.agentType ?? defaults.agentType) === "llm"
+        ? (draft.runtime ?? defaults.runtime ?? "adk")
+        : "adk",
     cloudProvider: provider,
     maxIterations: draft.maxIterations ?? defaults.maxIterations,
     a2aUrl: draft.a2aUrl ?? defaults.a2aUrl,
@@ -379,6 +399,10 @@ function cloudGraphToDraft(
     description: node.description ?? "",
     instruction: node.instruction || defaults.instruction,
     agentType: node.type ?? "llm",
+    runtime:
+      (node.type ?? "llm") === "llm"
+        ? runtimeFromValue(node.runtime, defaults.runtime ?? "adk")
+        : "adk",
     modelName: runtimeModel.modelName,
     modelProvider: runtimeModel.modelProvider,
     tools: runtimeTools.filter((name) => !builtinToolNames.has(name)),
@@ -412,6 +436,10 @@ export function runtimeAgentDraftFromCloud(
           description: agent.description ?? "",
           instruction: agent.instruction || emptyDraft(provider).instruction,
           agentType: agent.type ?? "llm",
+          runtime:
+            (agent.type ?? "llm") === "llm"
+              ? runtimeFromValue(agent.runtime)
+              : "adk",
           modelName: runtimeModel.modelName,
           modelProvider: runtimeModel.modelProvider,
           tools: [...(agent.tools ?? [])],

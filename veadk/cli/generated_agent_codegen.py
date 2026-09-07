@@ -81,6 +81,14 @@ _GITHUB_CLI_SHA256 = {
     "amd64": "a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112",
     "arm64": "73ea440ecad9c9e284429997ee6f93577bc6f7bc6fba357ef62c53ad8fb641a5",
 }
+_PIAGENT_VERSION = "0.80.6"
+_PIAGENT_SHA256 = "f7c383b3dbf336b97174249ef40baed86e295416af77a81ff5288ac17cb71839"
+_CODEX_RUNTIME_PACKAGES = (
+    "openai-codex==0.1.0b3",
+    "openai-codex-cli-bin==0.137.0a4",
+    "fastapi",
+    "uvicorn",
+)
 
 _DYNAMIC_AGENT_DELEGATION_RULES = """动态子智能体协作规则：
 - 对于问候、身份介绍、能力说明或可以直接完成的简单任务，直接回答，不要创建子智能体。
@@ -295,6 +303,7 @@ class AgentDraft(BaseModel):
     instruction: str = ""
     dynamicAgentDelegation: bool = False
     agentType: Literal["llm", "sequential", "parallel", "loop", "a2a"] = "llm"
+    runtime: Literal["adk", "codex", "piagent"] = "adk"
     maxIterations: int = 3
     a2aUrl: str = ""
     model: str = ""
@@ -463,6 +472,8 @@ def _safe_draft_payload(draft: AgentDraft) -> dict[str, Any]:
             node.pop("dynamicAgentDelegation", None)
         if node.get("cloudProvider") == "volcengine":
             node.pop("cloudProvider", None)
+        if node.get("agentType") != "llm" or node.get("runtime") == "adk":
+            node.pop("runtime", None)
         if node.get("modelSource") is None:
             node.pop("modelSource", None)
         if not str(node.get("longTermMemoryIndex") or "").strip():
@@ -871,6 +882,10 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
         kwargs.append(f"tools=[{', '.join(tool_exprs)}]")
     if draft.modelName.strip():
         kwargs.append(f"model_name={_py_str(draft.modelName.strip())}")
+    if draft.runtime != "adk":
+        kwargs.append(f"runtime={_py_str(draft.runtime)}")
+        if draft.runtime == "codex":
+            acc.extras.add("codex")
     is_custom_model = draft.modelSource == "custom" or (
         draft.modelSource is None
         and bool(draft.modelApiBase.strip())
@@ -1063,6 +1078,8 @@ def render_requirements(
     all_extras = set(extras)
     if include_feishu_channel:
         all_extras.add("extensions")
+    include_codex_runtime = "codex" in all_extras
+    all_extras.discard("codex")
     unique_extras = sorted(all_extras)
     extras_str = f"[{','.join(unique_extras)}]" if unique_extras else ""
     managed_sidecar = "harness-sidecar" in all_extras
@@ -1073,6 +1090,8 @@ def render_requirements(
         else "agentkit-sdk-python==0.8.4"
     )
     packages = [pkg, agentkit_sdk, "google-adk==2.1.0"]
+    if include_codex_runtime:
+        packages.extend(_CODEX_RUNTIME_PACKAGES)
     if include_feishu_channel:
         packages.extend(
             [
@@ -1131,13 +1150,26 @@ def _render_app_py(
     pkg: str,
     feishu_channel_enabled: bool,
     harness_sidecar_enabled: bool,
+    include_piagent: bool,
 ) -> str:
     lines = [
         _PYTHON_LICENSE_HEADER.rstrip(),
         "",
+        *(["import os"] if include_piagent else []),
         "from inspect import signature",
         "",
     ]
+    if include_piagent:
+        lines.extend(
+            [
+                "# AgentKit may not expose Dockerfile ENV values to the user function.",
+                "# Keep old veadk-python PiAgent installers on the preinstalled binary path.",
+                'os.environ.setdefault("PIAGENT_BINARY", "/opt/piagent/pi/pi")',
+                'os.environ.setdefault("PIAGENT_INSTALL_DIR", "/opt/piagent")',
+                'os.environ.setdefault("PIAGENT_AGENT_DIR", "/tmp/veadk-piagent-home")',
+                "",
+            ]
+        )
     if harness_sidecar_enabled:
         lines.append(
             f"from agents.{pkg}.agent import ("
@@ -1157,6 +1189,9 @@ def _render_app_py(
             f'    "enable_feishu": {feishu_channel_enabled!r},',
             '    "enable_studio_tools": True,',
             "}",
+            '_root_tools = getattr(root_agent, "tools", None)',
+            'if not hasattr(_root_tools, "append"):',
+            '    _app_options["enable_studio_tools"] = False',
             'if "agent_draft" in signature(create_agentkit_app).parameters:',
             '    _app_options["agent_draft"] = AGENT_DRAFT',
             "",
@@ -2161,9 +2196,228 @@ def _render_python_dependency_install(cloud_provider: str) -> str:
     return "RUN " + " || \\\n    ".join(attempts)
 
 
+def _draft_uses_runtime(draft: AgentDraft, runtime: str) -> bool:
+    if draft.agentType == "llm" and draft.runtime == runtime:
+        return True
+    return any(_draft_uses_runtime(sub_agent, runtime) for sub_agent in draft.subAgents)
+
+
+def _piagent_release_base_urls(cloud_provider: str) -> list[str]:
+    return _github_release_urls(cloud_provider, "earendil-works/pi")
+
+
+def _render_piagent_binary_install(cloud_provider: str) -> str:
+    base_urls = " ".join(_piagent_release_base_urls(cloud_provider))
+    return "\n".join(
+        [
+            'RUN PIAGENT_BINARY_VERSION="${PIAGENT_VERSION}" \\',
+            '    PIAGENT_BINARY_SHA256="${PIAGENT_SHA256}" \\',
+            f'    PIAGENT_BINARY_BASE_URLS="{base_urls}" \\',
+            "    python - <<'PY'",
+            "try:",
+            "    from veadk.runtime.piagent import installer as piagent_installer",
+            "",
+            "    if hasattr(piagent_installer, '_resolve_download_urls'):",
+            "        binary = piagent_installer.resolve_or_install_piagent_binary()",
+            "        print(f'Installed Pi binary to {binary}', flush=True)",
+            "        raise SystemExit(0)",
+            "",
+            "    print(",
+            "        'Installed veadk piagent installer does not support multi URL fallback.',",
+            "        flush=True,",
+            "    )",
+            "except ImportError as exc:",
+            "    print(f'Cannot import veadk piagent installer: {exc}', flush=True)",
+            "",
+            "import hashlib",
+            "import os",
+            "import platform",
+            "import re",
+            "import shutil",
+            "import stat",
+            "import tarfile",
+            "import tempfile",
+            "import urllib.request",
+            "import zipfile",
+            "from pathlib import Path",
+            "",
+            "install_dir = Path(os.environ.get('PIAGENT_INSTALL_DIR', '/opt/piagent')).expanduser()",
+            "binary_name = 'pi.exe' if platform.system().lower() == 'windows' else 'pi'",
+            "binary_path = install_dir / 'pi' / binary_name",
+            "",
+            "class InstallError(RuntimeError):",
+            "    pass",
+            "",
+            "def say(message):",
+            "    print(f'piagent binary install: {message}', flush=True)",
+            "",
+            "def env_list(name):",
+            "    return [item for item in re.split(r'[\\s,]+', os.environ.get(name, '').strip()) if item]",
+            "",
+            "def platform_archive():",
+            "    requested = os.environ.get('PIAGENT_BINARY_PLATFORM', '').strip().lower().replace('_', '-')",
+            "    if requested:",
+            "        normalized = requested",
+            "    else:",
+            "        system = platform.system().lower()",
+            "        machine = os.environ.get('TARGETARCH') or platform.machine().lower()",
+            "        arch = {'x86_64': 'amd64', 'amd64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64'}.get(machine, machine)",
+            "        normalized = f'{system}/{arch}'",
+            "    aliases = {",
+            "        'linux/amd64': ('linux/amd64', 'pi-linux-x64.tar.gz'),",
+            "        'linux-x64': ('linux/amd64', 'pi-linux-x64.tar.gz'),",
+            "        'linux/arm64': ('linux/arm64', 'pi-linux-arm64.tar.gz'),",
+            "        'linux-aarch64': ('linux/arm64', 'pi-linux-arm64.tar.gz'),",
+            "        'darwin/amd64': ('darwin/amd64', 'pi-darwin-x64.tar.gz'),",
+            "        'darwin-x64': ('darwin/amd64', 'pi-darwin-x64.tar.gz'),",
+            "        'darwin/arm64': ('darwin/arm64', 'pi-darwin-arm64.tar.gz'),",
+            "        'darwin-aarch64': ('darwin/arm64', 'pi-darwin-arm64.tar.gz'),",
+            "        'windows/amd64': ('windows/amd64', 'pi-windows-x64.zip'),",
+            "        'windows-x64': ('windows/amd64', 'pi-windows-x64.zip'),",
+            "    }",
+            "    if normalized not in aliases:",
+            "        raise InstallError(f'Unsupported PIAGENT_BINARY_PLATFORM {requested or normalized!r}')",
+            "    return aliases[normalized]",
+            "",
+            "def release_url(base_url, tag, archive_name):",
+            "    base = base_url.rstrip('/')",
+            "    if tag == 'latest' and base.endswith('/releases/download'):",
+            "        return f'{base[:-len(\"/download\")]}/latest/download/{archive_name}'",
+            "    return f'{base}/{tag}/{archive_name}'",
+            "",
+            "def archive_urls(archive_name):",
+            "    urls = env_list('PIAGENT_BINARY_URLS')",
+            "    if urls:",
+            "        return urls",
+            "    single = os.environ.get('PIAGENT_BINARY_URL', '').strip()",
+            "    if single:",
+            "        return [single]",
+            "    version = os.environ.get('PIAGENT_BINARY_VERSION', 'latest').strip() or 'latest'",
+            "    tag = 'latest' if version == 'latest' else version if version.startswith('v') else f'v{version}'",
+            "    bases = env_list('PIAGENT_BINARY_BASE_URLS')",
+            "    if bases:",
+            "        return [release_url(base, tag, archive_name) for base in bases]",
+            "    repo = os.environ.get('PIAGENT_BINARY_REPO', 'earendil-works/pi')",
+            "    if tag == 'latest':",
+            "        return [f'https://github.com/{repo}/releases/latest/download/{archive_name}']",
+            "    return [f'https://github.com/{repo}/releases/download/{tag}/{archive_name}']",
+            "",
+            "def archive_name_from_url(url, fallback):",
+            "    return Path(url.split('?', 1)[0]).name or fallback",
+            "",
+            "def download(url, archive_name):",
+            "    tmp_dir = Path(tempfile.mkdtemp(prefix='veadk-piagent-download-'))",
+            "    archive_path = tmp_dir / archive_name",
+            "    request = urllib.request.Request(url, headers={'User-Agent': 'veadk-piagent-installer/1.0'})",
+            "    timeout = int(os.environ.get('PIAGENT_BINARY_DOWNLOAD_TIMEOUT_SECONDS', '90'))",
+            "    with urllib.request.urlopen(request, timeout=timeout) as response:",
+            "        with archive_path.open('wb') as out:",
+            "            shutil.copyfileobj(response, out)",
+            "    return archive_path",
+            "",
+            "def verify_sha256(path, expected):",
+            "    digest = hashlib.sha256()",
+            "    with path.open('rb') as f:",
+            "        for chunk in iter(lambda: f.read(1024 * 1024), b''):",
+            "            digest.update(chunk)",
+            "    actual = digest.hexdigest()",
+            "    if actual.lower() != expected.strip().lower():",
+            "        raise InstallError(f'sha256 mismatch for {path.name}: expected {expected}, got {actual}')",
+            "",
+            "def safe_extract_tar(tar, extract_dir):",
+            "    root = extract_dir.resolve()",
+            "    for member in tar.getmembers():",
+            "        destination = (extract_dir / member.name).resolve()",
+            "        if root != destination and root not in destination.parents:",
+            "            raise InstallError(f'unsafe archive member path: {member.name}')",
+            "        if member.isdir():",
+            "            destination.mkdir(parents=True, exist_ok=True)",
+            "            continue",
+            "        if not member.isfile():",
+            "            continue",
+            "        source = tar.extractfile(member)",
+            "        if source is None:",
+            "            continue",
+            "        destination.parent.mkdir(parents=True, exist_ok=True)",
+            "        with source, destination.open('wb') as out:",
+            "            shutil.copyfileobj(source, out)",
+            "",
+            "def safe_extract_zip(zf, extract_dir):",
+            "    root = extract_dir.resolve()",
+            "    for member in zf.infolist():",
+            "        destination = (extract_dir / member.filename).resolve()",
+            "        if root != destination and root not in destination.parents:",
+            "            raise InstallError(f'unsafe archive member path: {member.filename}')",
+            "        if member.is_dir():",
+            "            destination.mkdir(parents=True, exist_ok=True)",
+            "            continue",
+            "        destination.parent.mkdir(parents=True, exist_ok=True)",
+            "        with zf.open(member) as source, destination.open('wb') as out:",
+            "            shutil.copyfileobj(source, out)",
+            "",
+            "def find_binary(root):",
+            "    names = {binary_name, 'pi', 'piagent', 'pi.exe'}",
+            "    for path in root.rglob('*'):",
+            "        if path.is_file() and path.name in names:",
+            "            return path",
+            "    return None",
+            "",
+            "def install_archive(archive_path):",
+            "    extract_dir = Path(tempfile.mkdtemp(prefix='veadk-piagent-extract-'))",
+            "    if tarfile.is_tarfile(archive_path):",
+            "        with tarfile.open(archive_path) as tar:",
+            "            safe_extract_tar(tar, extract_dir)",
+            "    elif zipfile.is_zipfile(archive_path):",
+            "        with zipfile.ZipFile(archive_path) as zf:",
+            "            safe_extract_zip(zf, extract_dir)",
+            "    else:",
+            "        bundle_dir = extract_dir / 'pi'",
+            "        bundle_dir.mkdir(parents=True, exist_ok=True)",
+            "        shutil.copy2(archive_path, bundle_dir / binary_name)",
+            "    candidate = find_binary(extract_dir)",
+            "    if candidate is None:",
+            "        raise InstallError(f'archive does not contain a pi executable: {archive_path}')",
+            "    target_dir = install_dir / 'pi'",
+            "    install_dir.mkdir(parents=True, exist_ok=True)",
+            "    if target_dir.exists():",
+            "        shutil.rmtree(target_dir)",
+            "    shutil.copytree(candidate.parent, target_dir)",
+            "    target = target_dir / binary_name",
+            "    target.chmod(target.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)",
+            "    return target",
+            "",
+            "platform_key, archive_name = platform_archive()",
+            "say(f'resolved platform {platform_key} to archive {archive_name}')",
+            "expected_sha256 = os.environ.get('PIAGENT_BINARY_SHA256', '')",
+            "urls = archive_urls(archive_name)",
+            "errors = []",
+            "for index, url in enumerate(urls, start=1):",
+            "    say(f'trying URL {index}/{len(urls)}: {url}')",
+            "    try:",
+            "        archive_path = download(url, archive_name_from_url(url, archive_name))",
+            "        if expected_sha256:",
+            "            verify_sha256(archive_path, expected_sha256)",
+            "        binary = install_archive(archive_path)",
+            "        say(f'installed Pi binary to {binary}')",
+            "        break",
+            "    except Exception as exc:",
+            "        detail = f'{url}: {type(exc).__name__}: {exc}'",
+            "        errors.append(detail)",
+            "        say(f'failed URL {index}/{len(urls)}: {type(exc).__name__}: {exc}')",
+            "else:",
+            "    raise SystemExit(",
+            "        f'Failed to install Pi binary into {install_dir}. '",
+            "        f'Tried {len(urls)} URL(s): ' + '; '.join(errors)",
+            "    )",
+            "PY",
+        ]
+    )
+
+
 def render_default_agentkit_dockerfile(
     cloud_provider: str,
     *,
+    include_piagent: bool = False,
     entry_point: str | None = None,
 ) -> str:
     """Render the canonical Dockerfile for ordinary Studio Agent deployments."""
@@ -2174,19 +2428,47 @@ def render_default_agentkit_dockerfile(
         else f'CMD ["python", {json.dumps(entry_point, ensure_ascii=False)}]'
     )
 
-    return "\n".join(
+    lines = [f"FROM {_AGENTKIT_BASE_IMAGES[cloud_provider]}"]
+    if include_piagent:
+        lines.extend(
+            [
+                "",
+                f"ARG PIAGENT_VERSION={_PIAGENT_VERSION}",
+                f"ARG PIAGENT_SHA256={_PIAGENT_SHA256}",
+            ]
+        )
+    env_line = (
+        "ENV UV_SYSTEM_PYTHON=1 UV_COMPILE_BYTECODE=1 "
+        "PYTHONUNBUFFERED=1 DOCKER_CONTAINER=1"
+    )
+    if include_piagent:
+        env_line += (
+            " PIAGENT_INSTALL_DIR=/opt/piagent "
+            "PIAGENT_AGENT_DIR=/tmp/veadk-piagent-home"
+        )
+    lines.extend(
         [
-            f"FROM {_AGENTKIT_BASE_IMAGES[cloud_provider]}",
             "",
             "# Configure AgentKit runtime defaults.",
-            (
-                "ENV UV_SYSTEM_PYTHON=1 UV_COMPILE_BYTECODE=1 "
-                "PYTHONUNBUFFERED=1 DOCKER_CONTAINER=1"
-            ),
+            env_line,
+            *(["ARG TARGETARCH"] if include_piagent else []),
             "",
             "# Install Python dependencies before copying the source for better layer caching.",
             "COPY requirements.txt requirements.txt",
             _render_python_dependency_install(cloud_provider),
+        ]
+    )
+    if include_piagent:
+        lines.extend(
+            [
+                "",
+                '# Install the PiAgent binary used by runtime="piagent" agents.',
+                _render_piagent_binary_install(cloud_provider),
+                "ENV PIAGENT_BINARY=/opt/piagent/pi/pi",
+            ]
+        )
+    lines.extend(
+        [
             "",
             "# Copy the Agent application and configure its runtime entrypoint.",
             "EXPOSE 8000",
@@ -2198,6 +2480,7 @@ def render_default_agentkit_dockerfile(
             "",
         ]
     )
+    return "\n".join(lines)
 
 
 def render_cloud_environment_dockerfile(draft: AgentDraft) -> str | None:
@@ -2220,7 +2503,8 @@ def render_cloud_environment_dockerfile(draft: AgentDraft) -> str | None:
         return draft.cloudEnvironment.dockerfile
 
     selected = set(draft.cloudEnvironment.cliTools)
-    if not selected and not draft.dynamicAgentDelegation:
+    include_piagent = _draft_uses_runtime(draft, "piagent")
+    if not selected and not draft.dynamicAgentDelegation and not include_piagent:
         return render_default_agentkit_dockerfile(draft.cloudProvider)
 
     system_packages = ["ca-certificates", "curl"]
@@ -2232,15 +2516,33 @@ def render_cloud_environment_dockerfile(draft: AgentDraft) -> str | None:
         f"FROM {_AGENTKIT_BASE_IMAGES[draft.cloudProvider]}",
         "",
         "# Configure AgentKit runtime defaults.",
-        "ENV UV_SYSTEM_PYTHON=1 UV_COMPILE_BYTECODE=1 PYTHONUNBUFFERED=1 DOCKER_CONTAINER=1",
-        "ARG TARGETARCH",
-        "",
-        "# Install system dependencies required by the selected tools.",
-        (
-            "RUN apt-get update && apt-get install -y --no-install-recommends "
-            f"{' '.join(system_packages)} && rm -rf /var/lib/apt/lists/*"
-        ),
     ]
+    if include_piagent:
+        blocks.extend(
+            [
+                f"ARG PIAGENT_VERSION={_PIAGENT_VERSION}",
+                f"ARG PIAGENT_SHA256={_PIAGENT_SHA256}",
+                "",
+            ]
+        )
+    env_line = "ENV UV_SYSTEM_PYTHON=1 UV_COMPILE_BYTECODE=1 PYTHONUNBUFFERED=1 DOCKER_CONTAINER=1"
+    if include_piagent:
+        env_line += (
+            " PIAGENT_INSTALL_DIR=/opt/piagent "
+            "PIAGENT_AGENT_DIR=/tmp/veadk-piagent-home"
+        )
+    blocks.extend(
+        [
+            env_line,
+            "ARG TARGETARCH",
+            "",
+            "# Install system dependencies required by the selected tools.",
+            (
+                "RUN apt-get update && apt-get install -y --no-install-recommends "
+                f"{' '.join(system_packages)} && rm -rf /var/lib/apt/lists/*"
+            ),
+        ]
+    )
     if "lark-cli" in selected:
         blocks.extend(
             [
@@ -2289,6 +2591,19 @@ def render_cloud_environment_dockerfile(draft: AgentDraft) -> str | None:
             "# Install Python dependencies before copying the source for better layer caching.",
             "COPY requirements.txt requirements.txt",
             _render_python_dependency_install(draft.cloudProvider),
+        ]
+    )
+    if include_piagent:
+        blocks.extend(
+            [
+                "",
+                '# Install the PiAgent binary used by runtime="piagent" agents.',
+                _render_piagent_binary_install(draft.cloudProvider),
+                "ENV PIAGENT_BINARY=/opt/piagent/pi/pi",
+            ]
+        )
+    blocks.extend(
+        [
             "",
             "# Copy the Agent application and configure its runtime entrypoint.",
             "EXPOSE 8000",
@@ -2324,6 +2639,7 @@ def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
     )
     acc.environment_skills = list(draft.cloudEnvironment.environmentSkills)
     feishu_channel_enabled = bool(draft.deployment.feishuEnabled)
+    include_piagent = _draft_uses_runtime(draft, "piagent")
     if feishu_channel_enabled:
         acc.env.extend(
             [
@@ -2443,6 +2759,7 @@ def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
         pkg,
         feishu_channel_enabled,
         harness_sidecar_enabled,
+        include_piagent,
     )
     files = [
         GeneratedFile(path="app.py", content=app_py),

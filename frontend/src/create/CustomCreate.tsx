@@ -39,6 +39,7 @@ import {
 import {
   type CreateModeProps,
   type AgentDraft,
+  type AgentRuntime,
   type CloudEnvironmentConfig,
   type HarnessSidecarOptionId,
   type HarnessSidecarProfileId,
@@ -256,6 +257,7 @@ function downloadText(filename: string, text: string, mime = "text/plain") {
 type StepId =
   | "type"
   | "basic"
+  | "runtime"
   | "model"
   | "tools"
   | "skills"
@@ -295,6 +297,13 @@ const STEPS: StepMeta[] = [
   { id: "subagents", label: "traditional.sections.subagents.label", hint: "traditional.sections.subagents.hint", icon: Boxes },
   { id: "review", label: "traditional.sections.review.label", hint: "traditional.sections.review.hint", icon: Rocket },
 ];
+
+const RUNTIME_SECTION: StepMeta = {
+  id: "runtime",
+  label: "traditional.runtime.sectionLabel",
+  hint: "traditional.runtime.sectionHint",
+  icon: Bot,
+};
 
 /** Root-only reset mark: a tilted eraser clearing the current draft. */
 function ClearAgentIcon({ className }: { className?: string }) {
@@ -404,6 +413,8 @@ const AGENT_TYPE_BAR_LABELS: Record<AgentType, string> = {
   loop: "traditional.agentTypes.loop.label",
   a2a: "traditional.agentTypes.a2a.label",
 };
+
+const AGENT_RUNTIME_OPTIONS: AgentRuntime[] = ["adk", "codex", "piagent"];
 
 const A2A_REGISTRY_ENV_TO_FIELD = {
   REGISTRY_SPACE_ID: "registrySpaceId",
@@ -4014,6 +4025,7 @@ export function CustomCreate({
     if (agentType === "a2a") {
       patch({
         agentType,
+        runtime: "adk",
         a2aRegistry: {
           ...(node.a2aRegistry ?? {
             registrySpaceId: "",
@@ -4028,6 +4040,7 @@ export function CustomCreate({
     }
     patch({
       agentType,
+      runtime: agentType === "llm" ? (node.runtime ?? "adk") : "adk",
       a2aRegistry: node.a2aRegistry
         ? { ...node.a2aRegistry, enabled: false }
         : undefined,
@@ -4155,6 +4168,9 @@ export function CustomCreate({
       modelSource: source,
       modelName: nextModelName,
     });
+  };
+  const selectAgentRuntime = (runtime: AgentRuntime) => {
+    patch({ runtime });
   };
 
   // Inline error flags for the selected node.
@@ -5610,6 +5626,52 @@ export function CustomCreate({
                 Root LLM agents additionally own memory and tracing. */}
                         {!orchestrator && !a2a && (
                           <>
+                            <Section meta={RUNTIME_SECTION}>
+                              <div className="cw-form">
+                                <div className="cw-field cw-agent-runtime-field">
+                                  <label className="cw-label">
+                                    {t("traditional.runtime.label")}
+                                  </label>
+                                  <RadioGroup<AgentRuntime>
+                                    className="cw-model-source-options cw-agent-runtime-options"
+                                    aria-label={t("traditional.runtime.ariaLabel")}
+                                    value={node.runtime ?? "adk"}
+                                    onChange={selectAgentRuntime}
+                                  >
+                                    {AGENT_RUNTIME_OPTIONS.map((runtime) => {
+                                      const on =
+                                        (node.runtime ?? "adk") === runtime;
+                                      return (
+                                        <div
+                                          key={runtime}
+                                          className={`cw-model-source-option cw-agent-runtime-option ${
+                                            on ? "is-on" : ""
+                                          }`}
+                                          title={t(
+                                            `traditional.runtime.options.${runtime}.description`,
+                                          )}
+                                        >
+                                          <RadioGroup.Item
+                                            value={runtime}
+                                            block
+                                            className="cw-model-source-control"
+                                          >
+                                            <span>
+                                              {t(
+                                                `traditional.runtime.options.${runtime}.label`,
+                                              )}
+                                            </span>
+                                          </RadioGroup.Item>
+                                        </div>
+                                      );
+                                    })}
+                                  </RadioGroup>
+                                  <span className="cw-help">
+                                    {t("traditional.runtime.help")}
+                                  </span>
+                                </div>
+                              </div>
+                            </Section>
                             <Section meta={metaOf("model")}>
                               <div className="cw-form">
                                 <div className="cw-field cw-model-source-field">

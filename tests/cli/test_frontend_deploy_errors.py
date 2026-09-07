@@ -21,6 +21,7 @@ from veadk.cli.cli_frontend import (
     _build_log_tail_has_error_marker,
     _cp_metadata_from_reporter_message,
     _deployment_target_key,
+    _download_cp_build_log_text,
     _extract_build_error_excerpt,
     _finalize_deploy_task,
     _has_active_deployment_target,
@@ -273,6 +274,49 @@ credentials received"""
     assert "requesting temporary upload credentials" in snapshot["text"]
     assert "credentials received" in snapshot["text"]
     assert snapshot["truncated"] is True
+
+
+def test_download_cp_build_log_text_reports_empty_step_log_urls() -> None:
+    class FakeCodePipeline:
+        def list_pipeline_run_stages_inner(
+            self,
+            *,
+            workspace_id: str,
+            pipeline_id: str,
+            pipeline_run_id: str,
+        ) -> dict[str, list[dict[str, object]]]:
+            assert workspace_id == "workspace-1"
+            assert pipeline_id == "pipeline-1"
+            assert pipeline_run_id == "run-1"
+            return {
+                "Items": [
+                    {
+                        "DisplayName": "构建镜像",
+                        "Tasks": [
+                            {
+                                "Id": "task-1",
+                                "TaskRunID": "task-run-1",
+                                "DisplayName": "镜像构建推送至镜像仓库",
+                                "Steps": [{"Name": "step-c5"}],
+                            }
+                        ],
+                    }
+                ]
+            }
+
+        def get_task_run_log_download_uri(self, **kwargs: str) -> str:
+            assert kwargs["step_name"] == "step-c5"
+            return ""
+
+    text = _download_cp_build_log_text(
+        FakeCodePipeline(),
+        workspace_id="workspace-1",
+        pipeline_id="pipeline-1",
+        pipeline_run_id="run-1",
+    )
+
+    assert "[构建镜像 / 镜像构建推送至镜像仓库 / step-c5]" in text
+    assert "empty log download URL" in text
 
 
 def test_cp_metadata_from_reporter_message_extracts_pipeline_and_run_ids() -> None:

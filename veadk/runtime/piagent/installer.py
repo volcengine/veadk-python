@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import os
 import platform
+import re
 import shutil
 import stat
 import tarfile
@@ -32,6 +33,7 @@ from veadk.utils.logger import get_logger
 logger = get_logger(__name__)
 
 _DEFAULT_REPO = "earendil-works/pi"
+_IMAGE_INSTALL_DIR = Path("/opt/piagent")
 
 
 class PiAgentInstallError(RuntimeError):
@@ -45,7 +47,8 @@ def resolve_or_install_piagent_binary() -> str:
 
     1. ``PIAGENT_BINARY`` points at a user-provided executable.
     2. ``PIAGENT_INSTALL_DIR/pi/pi`` is used as the managed cache.
-    3. Otherwise the Pi archive is downloaded and installed into that cache.
+    3. ``/opt/piagent/pi/pi`` is reused when a container image preinstalled Pi.
+    4. Otherwise the Pi archive is downloaded and installed into that cache.
     """
 
     configured = os.getenv("PIAGENT_BINARY")
@@ -57,24 +60,51 @@ def resolve_or_install_piagent_binary() -> str:
     if _is_executable(binary):
         return str(binary)
 
-    url, archive_name = _resolve_download_url()
-    logger.info(f"piagent runtime: installing Pi binary from {url}")
-    try:
-        archive_path = _download(url, archive_name)
-        expected_sha256 = os.getenv("PIAGENT_BINARY_SHA256")
-        if expected_sha256:
-            _verify_sha256(archive_path, expected_sha256)
-        _install_archive(archive_path, install_dir)
-    except Exception as e:  # noqa: BLE001
-        raise PiAgentInstallError(
-            f"Failed to install the Pi binary from {url} into {install_dir}: {e}. "
-            "Set PIAGENT_BINARY to an existing executable, or set "
-            "PIAGENT_BINARY_URL/PIAGENT_BINARY_SHA256 to a reachable archive. "
-            "For AgentKit deployments, preinstall Pi in the image and set "
-            "PIAGENT_BINARY to that path."
-        ) from e
+    if not os.getenv("PIAGENT_INSTALL_DIR"):
+        image_binary = _installed_binary_path(_IMAGE_INSTALL_DIR)
+        if _is_executable(image_binary):
+            return str(image_binary)
 
-    return _validate_executable(binary, "installed Pi binary")
+    urls, archive_name = _resolve_download_urls()
+    expected_sha256 = os.getenv("PIAGENT_BINARY_SHA256")
+    attempt_errors: list[str] = []
+    last_error: Exception | None = None
+    for index, url in enumerate(urls, start=1):
+        logger.info(f"piagent runtime: installing Pi binary from {url}")
+        _emit_install_status(f"trying URL {index}/{len(urls)}: {url}")
+        try:
+            archive_path = _download(url, _archive_name_from_url(url, archive_name))
+            if expected_sha256:
+                _verify_sha256(archive_path, expected_sha256)
+            _install_archive(archive_path, install_dir)
+            installed = _validate_executable(binary, "installed Pi binary")
+            _emit_install_status(f"installed Pi binary to {installed}")
+            return installed
+        except Exception as e:  # noqa: BLE001
+            last_error = e
+            detail = f"{url}: {type(e).__name__}: {e}"
+            attempt_errors.append(detail)
+            logger.warning(
+                f"piagent runtime: failed to install Pi binary from {detail}"
+            )
+            _emit_install_status(
+                f"failed URL {index}/{len(urls)}: {type(e).__name__}: {e}"
+            )
+
+    attempts = "; ".join(attempt_errors)
+    _emit_install_status(f"all URL attempts failed: {attempts}")
+    raise PiAgentInstallError(
+        f"Failed to install the Pi binary into {install_dir}. "
+        f"Tried {len(urls)} URL(s): {attempts}. "
+        "Set PIAGENT_BINARY to an existing executable, or set "
+        "PIAGENT_BINARY_URLS/PIAGENT_BINARY_URL/PIAGENT_BINARY_BASE_URLS and "
+        "PIAGENT_BINARY_SHA256 to reachable archives. For AgentKit deployments, "
+        "preinstall Pi in the image and set PIAGENT_BINARY to that path."
+    ) from last_error
+
+
+def _emit_install_status(message: str) -> None:
+    print(f"piagent runtime: {message}", flush=True)
 
 
 def _install_dir() -> Path:
@@ -102,10 +132,25 @@ def _binary_name() -> str:
 
 
 def _resolve_download_url() -> tuple[str, str]:
-    explicit = os.getenv("PIAGENT_BINARY_URL")
+    urls, archive_name = _resolve_download_urls()
+    return urls[0], _archive_name_from_url(urls[0], archive_name)
+
+
+def _resolve_download_urls() -> tuple[list[str], str]:
     platform_key, archive_name = resolve_platform_archive()
+    explicit_urls = _env_list("PIAGENT_BINARY_URLS")
+    if explicit_urls:
+        logger.debug(
+            f"piagent runtime: resolved platform {platform_key} to archive {archive_name}"
+        )
+        return explicit_urls, archive_name
+
+    explicit = os.getenv("PIAGENT_BINARY_URL")
     if explicit:
-        return explicit, Path(explicit.split("?", 1)[0]).name or archive_name
+        logger.debug(
+            f"piagent runtime: resolved platform {platform_key} to archive {archive_name}"
+        )
+        return [explicit], archive_name
 
     version = os.getenv("PIAGENT_BINARY_VERSION", "latest").strip()
     if not version:
@@ -115,16 +160,42 @@ def _resolve_download_url() -> tuple[str, str]:
     else:
         tag = version if version.startswith("v") else f"v{version}"
 
-    repo = os.getenv("PIAGENT_BINARY_REPO", _DEFAULT_REPO)
-    if tag == "latest":
-        url = f"https://github.com/{repo}/releases/latest/download/{archive_name}"
+    base_urls = _env_list("PIAGENT_BINARY_BASE_URLS")
+    if base_urls:
+        urls = [
+            _release_url_from_base(base_url, tag, archive_name)
+            for base_url in base_urls
+        ]
     else:
-        url = f"https://github.com/{repo}/releases/download/{tag}/{archive_name}"
+        repo = os.getenv("PIAGENT_BINARY_REPO", _DEFAULT_REPO)
+        if tag == "latest":
+            urls = [
+                f"https://github.com/{repo}/releases/latest/download/{archive_name}"
+            ]
+        else:
+            urls = [f"https://github.com/{repo}/releases/download/{tag}/{archive_name}"]
 
     logger.debug(
         f"piagent runtime: resolved platform {platform_key} to archive {archive_name}"
     )
-    return url, archive_name
+    return urls, archive_name
+
+
+def _env_list(name: str) -> list[str]:
+    value = os.getenv(name, "")
+    return [item for item in re.split(r"[\s,]+", value.strip()) if item]
+
+
+def _release_url_from_base(base_url: str, tag: str, archive_name: str) -> str:
+    base = base_url.rstrip("/")
+    if tag == "latest" and base.endswith("/releases/download"):
+        base = base[: -len("/download")]
+        return f"{base}/latest/download/{archive_name}"
+    return f"{base}/{tag}/{archive_name}"
+
+
+def _archive_name_from_url(url: str, fallback: str) -> str:
+    return Path(url.split("?", 1)[0]).name or fallback
 
 
 def resolve_platform_archive() -> tuple[str, str]:

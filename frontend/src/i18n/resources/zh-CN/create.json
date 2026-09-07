@@ -530,6 +530,18 @@
       "loop": { "label": "循环执行", "fullLabel": "循环型智能体", "description": "子 Agent 循环执行到满足条件" },
       "a2a": { "label": "远程智能体", "fullLabel": "远程 Agent", "description": "通过 A2A 协议调用远程 Agent" }
     },
+    "runtime": {
+      "sectionLabel": "运行配置",
+      "sectionHint": "LLM Agent 执行运行时",
+      "label": "运行时",
+      "ariaLabel": "选择运行时",
+      "help": "选择该 LLM Agent 使用的执行运行时。模型来源和模型参数在下方配置。",
+      "options": {
+        "adk": { "label": "ADK", "description": "使用默认 ADK 执行运行时。" },
+        "codex": { "label": "Codex", "description": "使用 Codex 作为 Agent 执行运行时。" },
+        "piagent": { "label": "PiAgent", "description": "使用 PiAgent 作为 Agent 执行运行时。" }
+      }
+    },
     "basic": {
       "agentName": "Agent 名称",
       "name": "名称",
