@@ -326,6 +326,10 @@
     "unsafeToolUrl": "{{label}} 返回了不安全的地址。"
   },
   "client": {
+    "invalidSandboxVersion": "沙箱版本响应格式无效",
+    "loadSandboxVersionsFailed": "查询沙箱版本失败",
+    "updateSandboxFailed": "更新 Sandbox 失败",
+    "invalidSandboxUpdate": "沙箱更新响应格式无效",
     "errorWithDetailAndRawResponse": "{{context}}\n{{detail}}\n原始响应：\n{{response}}",
     "errorWithRawResponse": "{{context}}\n原始响应：\n{{response}}",
     "loadArkApiKeysFailed": "加载 Ark API Key 失败",
