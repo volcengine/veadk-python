@@ -49,6 +49,7 @@ from veadk.tools.builtin_tools.create_agent.python_tools import compile_python_t
 from veadk.tools.builtin_tools.create_agent.resource_store import StoredResource
 from veadk.tools.builtin_tools.create_agent.sources import (
     AgentKitKnowledgePayload,
+    BuiltinToolResourceSource,
     CloudCredentials,
     SourceCollection,
 )
@@ -251,7 +252,7 @@ async def test_default_collection_includes_veadk_builtin_tools(monkeypatch) -> N
         "veadk.tools.builtin_tools.create_agent.sources.builtin_tools.list_builtin_tools",
         lambda: ["web_search", "run_code"],
     )
-    toolset = CreateAgentToolset()
+    toolset = CreateAgentToolset(resource_sources=[BuiltinToolResourceSource()])
 
     result = await toolset.collect_resources()
 
