@@ -30,6 +30,8 @@ from frontend.server.source_projects import (
     SourceProjectService,
 )
 
+from .evaluation.models import EvaluationDatasetBody, ResumeEvaluationBody
+from .evaluation.service import MigrationEvaluationService
 from .models import (
     ConfirmMigrationBody,
     CreateMigrationTaskBody,
@@ -56,6 +58,7 @@ def mount_migration_routes(
     owner_resolver: Callable[[Request], str],
     creator_resolver: Callable[[Request], str],
     project_service: SourceProjectService | None = None,
+    evaluation_service: MigrationEvaluationService | None = None,
 ) -> None:
     persistence_results: dict[tuple[str, str], dict[str, object]] = {}
     persistence_tasks: dict[tuple[str, str], asyncio.Task[dict[str, object]]] = {}
@@ -213,6 +216,77 @@ def mount_migration_routes(
             ),
         }
 
+    async def with_evaluation(
+        task: dict[str, object],
+        owner_id: str,
+        *,
+        advance: bool = False,
+    ) -> dict[str, object]:
+        task = await with_persistence(task, owner_id)
+        if evaluation_service is None:
+            return task
+        evaluation = task.get("evaluation")
+        try:
+            return await run_in_threadpool(
+                evaluation_service.attach,
+                task,
+                owner_id,
+                advance=advance,
+            )
+        except MigrationError as error:
+            if (
+                not isinstance(evaluation, dict)
+                or evaluation.get("enabled") is not True
+            ):
+                raise
+            logger.warning(
+                "Could not attach migration evaluation task_id=%s code=%s retryable=%s",
+                task.get("id") or "none",
+                error.code,
+                str(error.retryable).lower(),
+            )
+            detail = error.detail()
+        except Exception as error:
+            if (
+                not isinstance(evaluation, dict)
+                or evaluation.get("enabled") is not True
+            ):
+                raise
+            logger.exception(
+                "Unexpected migration evaluation failure task_id=%s error_type=%s",
+                task.get("id") or "none",
+                type(error).__name__,
+            )
+            detail = {
+                "code": "MIGRATION_EVALUATION_INTERNAL",
+                "message": "评测状态暂时不可用，请稍后重试。",
+                "retryable": True,
+            }
+        assert isinstance(evaluation, dict)
+        return {
+            **task,
+            "evaluation": {
+                "enabled": True,
+                "preset": evaluation.get("preset", "standard"),
+                "dimensions": evaluation.get("dimensions", []),
+                "state": "failed",
+                "message": "评测状态暂时不可用，迁移产物不受影响。",
+                "canResume": False,
+                "canRetry": False,
+                "error": detail,
+            },
+        }
+
+    def require_evaluation_service() -> MigrationEvaluationService:
+        if evaluation_service is None:
+            raise MigrationError(
+                "MIGRATION_EVALUATION_UNAVAILABLE",
+                "迁移效果评测服务尚未配置。",
+                status_code=503,
+                retryable=False,
+            )
+        return evaluation_service
+
     def start_watcher(task_id: str, owner_id: str) -> None:
         key = (owner_id, task_id)
         current = watchers.get(key)
@@ -240,8 +314,59 @@ def mount_migration_routes(
                         "partial",
                     }:
                         await ensure_persisted(task_id, owner_id)
-                        return
+                        if evaluation_service is None:
+                            return
+                        try:
+                            await run_in_threadpool(
+                                evaluation_service.advance,
+                                task_id,
+                                owner_id,
+                                task=task,
+                            )
+                            evaluation = await run_in_threadpool(
+                                evaluation_service.snapshot,
+                                task_id,
+                                owner_id,
+                                task=task,
+                            )
+                        except MigrationError as error:
+                            if error.retryable:
+                                continue
+                            logger.warning(
+                                "Migration evaluation watcher stopped task_id=%s "
+                                "code=%s",
+                                task_id,
+                                error.code,
+                            )
+                            return
+                        if evaluation.get("enabled") is not True or evaluation.get(
+                            "state"
+                        ) in {
+                            "disabled",
+                            "waiting_environment",
+                            "completed",
+                            "failed",
+                            "blocked",
+                            "cancelled",
+                        }:
+                            return
+                        continue
                     if state in {"failed", "cancelled", "expired"}:
+                        if evaluation_service is not None:
+                            try:
+                                await run_in_threadpool(
+                                    evaluation_service.advance,
+                                    task_id,
+                                    owner_id,
+                                    task=task,
+                                )
+                            except MigrationError as error:
+                                logger.warning(
+                                    "Could not cancel migration evaluation task_id=%s "
+                                    "code=%s",
+                                    task_id,
+                                    error.code,
+                                )
                         return
             finally:
                 watchers.pop(key, None)
@@ -251,7 +376,13 @@ def mount_migration_routes(
     @app.get("/web/agent-migrations/capabilities")
     async def capabilities(request: Request) -> dict[str, object]:
         owner_resolver(request)
-        return await invoke("capabilities", service.capabilities)
+        payload = await invoke("capabilities", service.capabilities)
+        if evaluation_service is not None:
+            payload = {
+                **payload,
+                "evaluation": evaluation_service.capabilities(),
+            }
+        return payload
 
     @app.get("/web/agent-migrations/tasks")
     async def list_tasks(request: Request) -> dict[str, list[dict[str, object]]]:
@@ -266,7 +397,7 @@ def mount_migration_routes(
                 **payload,
                 "items": await asyncio.gather(
                     *(
-                        with_persistence(item, owner_id)
+                        with_evaluation(item, owner_id)
                         for item in items
                         if isinstance(item, dict)
                     )
@@ -281,10 +412,16 @@ def mount_migration_routes(
     ) -> dict[str, object]:
         owner_id = owner_resolver(request)
         creator_name = creator_resolver(request)
-        return await invoke(
+        if body.evaluation.enabled:
+            await invoke(
+                "evaluation_availability",
+                lambda: require_evaluation_service().ensure_available(True),
+            )
+        task = await invoke(
             "create_task",
             lambda: service.create_task(body, owner_id, creator_name),
         )
+        return await with_evaluation(task, owner_id)
 
     @app.put("/web/agent-migrations/tasks/{task_id}/source")
     async def upload_source(
@@ -292,6 +429,15 @@ def mount_migration_routes(
         request: Request,
     ) -> dict[str, object]:
         owner_id = owner_resolver(request)
+        if evaluation_service is not None:
+            await invoke(
+                "evaluation_dataset_guard",
+                lambda: require_evaluation_service().assert_dataset_locked(
+                    task_id,
+                    owner_id,
+                ),
+                task_id=task_id,
+            )
         content_type = (
             request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
         )
@@ -341,11 +487,12 @@ def mount_migration_routes(
                     detail=too_large.detail(),
                 )
             content.extend(chunk)
-        return await invoke(
+        task = await invoke(
             "upload_source",
             lambda: service.upload_source(task_id, owner_id, bytes(content)),
             task_id=task_id,
         )
+        return await with_evaluation(task, owner_id)
 
     @app.get("/web/agent-migrations/tasks/{task_id}")
     async def get_task(
@@ -358,7 +505,11 @@ def mount_migration_routes(
             lambda: service.get_task(task_id, owner_id),
             task_id=task_id,
         )
-        return await with_persistence(task, owner_id)
+        decorated = await with_evaluation(task, owner_id, advance=True)
+        evaluation = decorated.get("evaluation")
+        if isinstance(evaluation, dict) and evaluation.get("enabled") is True:
+            start_watcher(task_id, owner_id)
+        return decorated
 
     @app.post("/web/agent-migrations/tasks/{task_id}/answers")
     async def submit_answers(
@@ -367,11 +518,12 @@ def mount_migration_routes(
         request: Request,
     ) -> dict[str, object]:
         owner_id = owner_resolver(request)
-        return await invoke(
+        task = await invoke(
             "submit_answers",
             lambda: service.submit_answers(task_id, owner_id, body),
             task_id=task_id,
         )
+        return await with_evaluation(task, owner_id)
 
     @app.post("/web/agent-migrations/tasks/{task_id}/confirm")
     async def confirm(
@@ -386,7 +538,7 @@ def mount_migration_routes(
             task_id=task_id,
         )
         start_watcher(task_id, owner_id)
-        return await with_persistence(task, owner_id)
+        return await with_evaluation(task, owner_id)
 
     @app.post("/web/agent-migrations/tasks/{task_id}/stop")
     async def stop(
@@ -394,11 +546,158 @@ def mount_migration_routes(
         request: Request,
     ) -> dict[str, object]:
         owner_id = owner_resolver(request)
-        return await invoke(
+        current: dict[str, object] | None = None
+        evaluation_enabled = False
+        if evaluation_service is not None:
+            current = await invoke(
+                "get_task_for_stop",
+                lambda: service.get_task(task_id, owner_id),
+                task_id=task_id,
+            )
+            assert current is not None
+            evaluation = current.get("evaluation")
+            evaluation_enabled = (
+                isinstance(evaluation, dict) and evaluation.get("enabled") is True
+            )
+            if current.get("canStop") is False and evaluation_enabled:
+                await invoke(
+                    "cancel_evaluation",
+                    lambda: require_evaluation_service().cancel(task_id, owner_id),
+                    task_id=task_id,
+                )
+                return await with_evaluation(current, owner_id)
+        task = await invoke(
             "stop",
             lambda: service.stop(task_id, owner_id),
             task_id=task_id,
         )
+        if evaluation_enabled:
+            try:
+                await run_in_threadpool(
+                    require_evaluation_service().cancel,
+                    task_id,
+                    owner_id,
+                )
+            except Exception as error:
+                logger.warning(
+                    "Could not cancel evaluation after stopping migration "
+                    "task_id=%s error_type=%s",
+                    task_id,
+                    type(error).__name__,
+                )
+        return await with_evaluation(task, owner_id, advance=True)
+
+    @app.put("/web/agent-migrations/tasks/{task_id}/evaluation/dataset")
+    async def put_evaluation_dataset(
+        task_id: str,
+        body: EvaluationDatasetBody,
+        request: Request,
+    ) -> dict[str, object]:
+        owner_id = owner_resolver(request)
+        return await invoke(
+            "put_evaluation_dataset",
+            lambda: require_evaluation_service().put_dataset(task_id, owner_id, body),
+            task_id=task_id,
+        )
+
+    @app.get("/web/agent-migrations/tasks/{task_id}/evaluation/dataset")
+    async def get_evaluation_dataset(
+        task_id: str,
+        request: Request,
+    ) -> dict[str, object]:
+        owner_id = owner_resolver(request)
+        return await invoke(
+            "get_evaluation_dataset",
+            lambda: require_evaluation_service().get_dataset(task_id, owner_id),
+            task_id=task_id,
+        )
+
+    @app.get("/web/agent-migrations/tasks/{task_id}/evaluation")
+    async def get_evaluation(
+        task_id: str,
+        request: Request,
+    ) -> dict[str, object]:
+        owner_id = owner_resolver(request)
+        evaluation = require_evaluation_service()
+        task = await invoke(
+            "get_task_for_evaluation",
+            lambda: service.get_task(task_id, owner_id),
+            task_id=task_id,
+        )
+        await invoke(
+            "advance_evaluation",
+            lambda: evaluation.advance(task_id, owner_id, task=task),
+            task_id=task_id,
+        )
+        return await invoke(
+            "get_evaluation",
+            lambda: evaluation.snapshot(task_id, owner_id, task=task),
+            task_id=task_id,
+        )
+
+    @app.get("/web/agent-migrations/tasks/{task_id}/evaluation/report")
+    async def get_evaluation_report(
+        task_id: str,
+        request: Request,
+    ) -> dict[str, object]:
+        owner_id = owner_resolver(request)
+        return await invoke(
+            "get_evaluation_report",
+            lambda: require_evaluation_service().get_report(task_id, owner_id),
+            task_id=task_id,
+        )
+
+    @app.get("/web/agent-migrations/tasks/{task_id}/evaluation/report/download")
+    async def download_evaluation_report(
+        task_id: str,
+        request: Request,
+    ) -> Response:
+        owner_id = owner_resolver(request)
+        content, filename = await invoke(
+            "download_evaluation_report",
+            lambda: require_evaluation_service().download_report(
+                task_id,
+                owner_id,
+            ),
+            task_id=task_id,
+        )
+        return Response(
+            content=content,
+            media_type="text/markdown; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Cache-Control": "no-store",
+            },
+        )
+
+    @app.post("/web/agent-migrations/tasks/{task_id}/evaluation/resume")
+    async def resume_evaluation(
+        task_id: str,
+        body: ResumeEvaluationBody,
+        request: Request,
+    ) -> dict[str, object]:
+        owner_id = owner_resolver(request)
+        payload = await invoke(
+            "resume_evaluation",
+            lambda: require_evaluation_service().resume(task_id, owner_id, body),
+            task_id=task_id,
+        )
+        start_watcher(task_id, owner_id)
+        return payload
+
+    @app.post("/web/agent-migrations/tasks/{task_id}/evaluation/retry")
+    async def retry_evaluation(
+        task_id: str,
+        request: Request,
+    ) -> dict[str, object]:
+        owner_id = owner_resolver(request)
+        payload = await invoke(
+            "retry_evaluation",
+            lambda: require_evaluation_service().retry(task_id, owner_id),
+            task_id=task_id,
+        )
+        start_watcher(task_id, owner_id)
+        return payload
 
     @app.get("/web/agent-migrations/tasks/{task_id}/activity")
     async def activity(

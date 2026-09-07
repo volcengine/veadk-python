@@ -34,6 +34,178 @@ export type MigrationTaskState =
   | "cancelled"
   | "expired";
 
+export type MigrationEvaluationDimensionId =
+  | "semantic_fidelity"
+  | "output_contract"
+  | "workflow_tool_fidelity"
+  | "context_memory_fidelity"
+  | "boundary_error_fidelity"
+  | "safety_refusal_fidelity";
+
+export type MigrationEvaluationState =
+  | "disabled"
+  | "waiting_dataset"
+  | "pending"
+  | "preparing"
+  | "waiting_environment"
+  | "deploying"
+  | "executing"
+  | "judging"
+  | "aggregating"
+  | "cleaning"
+  | "completed"
+  | "failed"
+  | "blocked"
+  | "cancelled";
+
+export interface MigrationEvaluationAsset {
+  schemaVersion: 1;
+  kind: "dataset" | "report";
+  assetId: string;
+  version: string;
+  versionId: string;
+  sha256: string;
+  sizeBytes: number;
+  size: number;
+  createdAt: string;
+  acl: "owner";
+  viewReady: boolean;
+  downloadReady: boolean;
+  caseCount?: number;
+  attempt?: number;
+}
+
+export interface MigrationEvaluationStatus {
+  enabled: boolean;
+  state: MigrationEvaluationState;
+  message: string;
+  preset?: "standard" | "custom";
+  dimensions?: MigrationEvaluationDimensionId[];
+  attempt?: number;
+  dataset?: MigrationEvaluationAsset;
+  report?: MigrationEvaluationAsset;
+  requiredEnvironment?: string[];
+  canResume?: boolean;
+  canRetry?: boolean;
+  error?: {
+    code: string;
+    message: string;
+    retryable: boolean;
+  };
+}
+
+export interface MigrationEvaluationMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface MigrationEvaluationCase {
+  caseId: string;
+  userInput: string;
+  expectedOutcome?: string | null;
+  criteria: string[];
+  priorMessages: MigrationEvaluationMessage[];
+}
+
+export interface MigrationEvaluationDataset {
+  locked: boolean;
+  asset?: MigrationEvaluationAsset;
+  cases: MigrationEvaluationCase[];
+}
+
+export interface MigrationEvaluationDimensionResult {
+  id: MigrationEvaluationDimensionId;
+  score: number | null;
+  reason: string;
+  evidence: string[];
+  evidence_sources: MigrationEvaluationEvidenceSource[];
+  severity: MigrationEvaluationSeverity;
+}
+
+export type MigrationEvaluationEvidenceSource =
+  | "user_reference"
+  | "user_criteria"
+  | "source_contract"
+  | "observed_output"
+  | "deterministic_assertion";
+
+export type MigrationEvaluationSeverity =
+  | "none"
+  | "low"
+  | "medium"
+  | "high"
+  | "critical"
+  | "unknown";
+
+export interface MigrationEvaluationExecutionError {
+  code: string;
+  message: string;
+}
+
+export interface MigrationEvaluationReport {
+  schema_version: 1;
+  task_id: string;
+  attempt: number;
+  dataset_sha256: string;
+  dataset_version: string;
+  artifact_sha256: string;
+  prompt_version: number;
+  model: {
+    id: string;
+    codex_version: string;
+    agentkit_cli_version: string;
+  };
+  dimensions: MigrationEvaluationDimensionId[];
+  dimension_weights: Partial<Record<MigrationEvaluationDimensionId, number>>;
+  cases: Array<{
+    case_id: string;
+    execution: {
+      state: "succeeded" | "failed";
+      error: MigrationEvaluationExecutionError | null;
+    };
+    output: {
+      text: string;
+      truncated: boolean;
+      original_bytes: number;
+      captured_bytes: number;
+    };
+    dimensions: MigrationEvaluationDimensionResult[];
+  }>;
+  summary: {
+    score: number | null;
+    dimensions: MigrationEvaluationDimensionResult[];
+  };
+  execution: {
+    total: number;
+    succeeded: number;
+    failed: number;
+    success_rate: number;
+  };
+  evidence_coverage: {
+    total: number;
+    scored: number;
+    na: number;
+    rate: number;
+  };
+  source_contract_only_case_count: number;
+  lowest_scoring_cases: Array<{ case_id: string; score: number }>;
+  execution_failures: Array<
+    { case_id: string } & MigrationEvaluationExecutionError
+  >;
+  critical_mismatches: Array<{
+    case_id: string;
+    dimension_id: MigrationEvaluationDimensionId;
+    severity: "critical";
+    reason: string;
+    evidence_sources: MigrationEvaluationEvidenceSource[];
+  }>;
+  migration_gap_description: string;
+  runtime_cleanup: { status: "confirmed" };
+  limitations: string[];
+  created_at: string;
+  asset: MigrationEvaluationAsset;
+}
+
 export interface MigrationCapabilities {
   enabled: boolean;
   reason: string;
@@ -45,6 +217,27 @@ export interface MigrationCapabilities {
   maxUploadBytes: number;
   sessionTtlSeconds: number;
   frameworks: MigrationFramework[];
+  evaluation?: {
+    available: boolean;
+    reason: string;
+    maxCases: number;
+    maxDatasetBytes: number;
+    maxMessagesPerCase: number;
+    maxMessagesBytes: number;
+    maxReferenceOutputBytes: number;
+    maxCriteria: number;
+    maxCriterionBytes: number;
+    maxCapturedOutputBytes: number;
+    inputMode: "page";
+    pageInputMethods: Array<"manual" | "bulk_paste">;
+    defaultPreset: "standard";
+    maximumSessionTtlSeconds: number;
+    dimensions: Array<{
+      id: MigrationEvaluationDimensionId;
+      label: string;
+      description: string;
+    }>;
+  };
 }
 
 export interface MigrationEvidence {
@@ -131,6 +324,7 @@ export interface MigrationTask {
     message: string;
     retryable?: boolean;
   };
+  evaluation?: MigrationEvaluationStatus;
 }
 
 export type MigrationActivityKind =
@@ -260,6 +454,49 @@ const TASK_STATES = new Set<MigrationTaskState>([
   "expired",
 ]);
 
+const EVALUATION_STATES = new Set<MigrationEvaluationState>([
+  "disabled",
+  "waiting_dataset",
+  "pending",
+  "preparing",
+  "waiting_environment",
+  "deploying",
+  "executing",
+  "judging",
+  "aggregating",
+  "cleaning",
+  "completed",
+  "failed",
+  "blocked",
+  "cancelled",
+]);
+
+const EVALUATION_DIMENSIONS = new Set<MigrationEvaluationDimensionId>([
+  "semantic_fidelity",
+  "output_contract",
+  "workflow_tool_fidelity",
+  "context_memory_fidelity",
+  "boundary_error_fidelity",
+  "safety_refusal_fidelity",
+]);
+
+const EVALUATION_EVIDENCE_SOURCES = new Set<MigrationEvaluationEvidenceSource>([
+  "user_reference",
+  "user_criteria",
+  "source_contract",
+  "observed_output",
+  "deterministic_assertion",
+]);
+
+const EVALUATION_SEVERITIES = new Set<MigrationEvaluationSeverity>([
+  "none",
+  "low",
+  "medium",
+  "high",
+  "critical",
+  "unknown",
+]);
+
 const ACTIVITY_KINDS = new Set<MigrationActivityKind>([
   "reasoning",
   "message",
@@ -289,17 +526,160 @@ function record(value: unknown, label: string): Record<string, unknown> {
 }
 
 function stringArray(value: unknown, label: string): string[] {
-  if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
+  if (
+    !Array.isArray(value) ||
+    !value.every((item) => typeof item === "string")
+  ) {
     throw new Error(adkT("migrations.invalidFormat", { label }));
   }
   return value;
 }
 
 function framework(value: unknown, label: string): MigrationFramework {
-  if (typeof value !== "string" || !FRAMEWORKS.has(value as MigrationFramework)) {
+  if (
+    typeof value !== "string" ||
+    !FRAMEWORKS.has(value as MigrationFramework)
+  ) {
     throw new Error(adkT("migrations.invalidFormat", { label }));
   }
   return value as MigrationFramework;
+}
+
+function evaluationDimension(
+  value: unknown,
+  label: string,
+): MigrationEvaluationDimensionId {
+  if (
+    typeof value !== "string" ||
+    !EVALUATION_DIMENSIONS.has(value as MigrationEvaluationDimensionId)
+  ) {
+    throw new Error(adkT("migrations.invalidFormat", { label }));
+  }
+  return value as MigrationEvaluationDimensionId;
+}
+
+function evaluationEvidenceSources(
+  value: unknown,
+): MigrationEvaluationEvidenceSource[] {
+  if (
+    !Array.isArray(value) ||
+    !value.every(
+      (item) =>
+        typeof item === "string" &&
+        EVALUATION_EVIDENCE_SOURCES.has(
+          item as MigrationEvaluationEvidenceSource,
+        ),
+    )
+  ) {
+    throw new Error(
+      adkT("migrations.invalidFormat", {
+        label: adkT("migrations.labels.evaluationEvidence"),
+      }),
+    );
+  }
+  return value as MigrationEvaluationEvidenceSource[];
+}
+
+function normalizeEvaluationAsset(value: unknown): MigrationEvaluationAsset {
+  const asset = record(value, adkT("migrations.labels.evaluationAsset"));
+  if (
+    asset.schemaVersion !== 1 ||
+    !["dataset", "report"].includes(String(asset.kind)) ||
+    typeof asset.assetId !== "string" ||
+    typeof asset.version !== "string" ||
+    typeof asset.versionId !== "string" ||
+    typeof asset.sha256 !== "string" ||
+    typeof asset.sizeBytes !== "number" ||
+    typeof asset.size !== "number" ||
+    typeof asset.createdAt !== "string" ||
+    asset.acl !== "owner" ||
+    typeof asset.viewReady !== "boolean" ||
+    typeof asset.downloadReady !== "boolean"
+  ) {
+    throw new Error(
+      adkT("migrations.invalidFormat", {
+        label: adkT("migrations.labels.evaluationAsset"),
+      }),
+    );
+  }
+  return {
+    schemaVersion: 1,
+    kind: asset.kind as "dataset" | "report",
+    assetId: asset.assetId,
+    version: asset.version,
+    versionId: asset.versionId,
+    sha256: asset.sha256,
+    sizeBytes: asset.sizeBytes,
+    size: asset.size,
+    createdAt: asset.createdAt,
+    acl: "owner",
+    viewReady: asset.viewReady,
+    downloadReady: asset.downloadReady,
+    ...(typeof asset.caseCount === "number"
+      ? { caseCount: asset.caseCount }
+      : {}),
+    ...(typeof asset.attempt === "number" ? { attempt: asset.attempt } : {}),
+  };
+}
+
+function normalizeEvaluation(value: unknown): MigrationEvaluationStatus {
+  const evaluation = record(value, adkT("migrations.labels.evaluation"));
+  if (
+    typeof evaluation.enabled !== "boolean" ||
+    typeof evaluation.state !== "string" ||
+    !EVALUATION_STATES.has(evaluation.state as MigrationEvaluationState) ||
+    typeof evaluation.message !== "string"
+  ) {
+    throw new Error(
+      adkT("migrations.invalidFormat", {
+        label: adkT("migrations.labels.evaluation"),
+      }),
+    );
+  }
+  const normalized: MigrationEvaluationStatus = {
+    enabled: evaluation.enabled,
+    state: evaluation.state as MigrationEvaluationState,
+    message: evaluation.message,
+  };
+  if (evaluation.preset === "standard" || evaluation.preset === "custom") {
+    normalized.preset = evaluation.preset;
+  }
+  if (Array.isArray(evaluation.dimensions)) {
+    normalized.dimensions = evaluation.dimensions.map((item) =>
+      evaluationDimension(item, adkT("migrations.labels.evaluationDimension")),
+    );
+  }
+  if (typeof evaluation.attempt === "number")
+    normalized.attempt = evaluation.attempt;
+  if (evaluation.dataset !== undefined) {
+    normalized.dataset = normalizeEvaluationAsset(evaluation.dataset);
+  }
+  if (evaluation.report !== undefined) {
+    normalized.report = normalizeEvaluationAsset(evaluation.report);
+  }
+  if (evaluation.requiredEnvironment !== undefined) {
+    normalized.requiredEnvironment = stringArray(
+      evaluation.requiredEnvironment,
+      adkT("migrations.labels.requiredEnvironment"),
+    );
+  }
+  if (typeof evaluation.canResume === "boolean")
+    normalized.canResume = evaluation.canResume;
+  if (typeof evaluation.canRetry === "boolean")
+    normalized.canRetry = evaluation.canRetry;
+  if (evaluation.error !== undefined) {
+    const error = record(evaluation.error, adkT("migrations.labels.error"));
+    normalized.error = {
+      code:
+        typeof error.code === "string"
+          ? error.code
+          : "MIGRATION_EVALUATION_ERROR",
+      message:
+        typeof error.message === "string" ? error.message : evaluation.message,
+      retryable: error.retryable === true,
+    };
+  }
+  return normalized;
 }
 
 function normalizeAnalysis(value: unknown): MigrationAnalysis {
@@ -308,7 +688,10 @@ function normalizeAnalysis(value: unknown): MigrationAnalysis {
     analysis.recommended === null
       ? null
       : record(analysis.recommended, adkT("migrations.labels.recommendation"));
-  const boundary = record(analysis.boundary, adkT("migrations.labels.boundary"));
+  const boundary = record(
+    analysis.boundary,
+    adkT("migrations.labels.boundary"),
+  );
   if (
     analysis.schema_version !== 1 ||
     !["needs_input", "recommendation_ready", "unsupported"].includes(
@@ -330,7 +713,10 @@ function normalizeAnalysis(value: unknown): MigrationAnalysis {
     input_sha256: analysis.input_sha256,
     summary: analysis.summary,
     frameworks: analysis.frameworks.map((item) => {
-      const candidate = record(item, adkT("migrations.labels.frameworkCandidate"));
+      const candidate = record(
+        item,
+        adkT("migrations.labels.frameworkCandidate"),
+      );
       if (
         !["high", "medium", "low"].includes(String(candidate.confidence)) ||
         !Array.isArray(candidate.evidence)
@@ -338,10 +724,16 @@ function normalizeAnalysis(value: unknown): MigrationAnalysis {
         throw new Error(adkT("migrations.invalidFrameworkCandidate"));
       }
       return {
-        id: framework(candidate.id, adkT("migrations.labels.frameworkCandidate")),
+        id: framework(
+          candidate.id,
+          adkT("migrations.labels.frameworkCandidate"),
+        ),
         confidence: candidate.confidence as "high" | "medium" | "low",
         evidence: candidate.evidence.map((evidenceValue) => {
-          const evidence = record(evidenceValue, adkT("migrations.labels.analysisEvidence"));
+          const evidence = record(
+            evidenceValue,
+            adkT("migrations.labels.analysisEvidence"),
+          );
           if (
             typeof evidence.path !== "string" ||
             typeof evidence.line !== "number" ||
@@ -361,9 +753,13 @@ function normalizeAnalysis(value: unknown): MigrationAnalysis {
       recommended === null
         ? null
         : {
-            framework: framework(recommended.framework, adkT("migrations.labels.recommendedFramework")),
+            framework: framework(
+              recommended.framework,
+              adkT("migrations.labels.recommendedFramework"),
+            ),
             entry:
-              recommended.entry === null || typeof recommended.entry === "string"
+              recommended.entry === null ||
+              typeof recommended.entry === "string"
                 ? recommended.entry
                 : null,
             reason:
@@ -371,20 +767,35 @@ function normalizeAnalysis(value: unknown): MigrationAnalysis {
           },
     entries: analysis.entries.map((item) => {
       const entry = record(item, adkT("migrations.labels.entryCandidate"));
-      if (typeof entry.value !== "string" || typeof entry.evidence !== "string") {
+      if (
+        typeof entry.value !== "string" ||
+        typeof entry.evidence !== "string"
+      ) {
         throw new Error(adkT("migrations.invalidEntryCandidate"));
       }
       return {
         value: entry.value,
-        framework: framework(entry.framework, adkT("migrations.labels.entryFramework")),
+        framework: framework(
+          entry.framework,
+          adkT("migrations.labels.entryFramework"),
+        ),
         evidence: entry.evidence,
       };
     }),
     boundary: {
-      include: stringArray(boundary.include, adkT("migrations.labels.includeScope")),
-      exclude: stringArray(boundary.exclude, adkT("migrations.labels.excludeScope")),
+      include: stringArray(
+        boundary.include,
+        adkT("migrations.labels.includeScope"),
+      ),
+      exclude: stringArray(
+        boundary.exclude,
+        adkT("migrations.labels.excludeScope"),
+      ),
     },
-    assumptions: stringArray(analysis.assumptions, adkT("migrations.labels.assumptions")),
+    assumptions: stringArray(
+      analysis.assumptions,
+      adkT("migrations.labels.assumptions"),
+    ),
     questions: analysis.questions.map((item) => {
       const question = record(item, adkT("migrations.labels.question"));
       if (
@@ -400,13 +811,19 @@ function normalizeAnalysis(value: unknown): MigrationAnalysis {
         required: question.required,
       };
     }),
-    warnings: stringArray(analysis.warnings, adkT("migrations.labels.analysisWarnings")),
+    warnings: stringArray(
+      analysis.warnings,
+      adkT("migrations.labels.analysisWarnings"),
+    ),
   };
 }
 
 function normalizeTask(value: unknown): MigrationTask {
   const task = record(value, adkT("migrations.labels.task"));
-  const artifact = record(task.artifact, adkT("migrations.labels.artifactStatus"));
+  const artifact = record(
+    task.artifact,
+    adkT("migrations.labels.artifactStatus"),
+  );
   if (
     typeof task.id !== "string" ||
     typeof task.state !== "string" ||
@@ -414,7 +831,8 @@ function normalizeTask(value: unknown): MigrationTask {
     typeof task.message !== "string" ||
     typeof task.sourceFileName !== "string" ||
     typeof task.instruction !== "string" ||
-    (typeof task.createdAt !== "string" && typeof task.createdAt !== "number") ||
+    (typeof task.createdAt !== "string" &&
+      typeof task.createdAt !== "number") ||
     typeof task.expiresAt !== "string" ||
     typeof task.sessionTtlSeconds !== "number" ||
     typeof task.canModify !== "boolean" ||
@@ -449,9 +867,13 @@ function normalizeTask(value: unknown): MigrationTask {
   if (typeof task.modelId === "string" && task.modelId.trim()) {
     normalized.modelId = task.modelId;
   }
-  if (task.analysis !== undefined) normalized.analysis = normalizeAnalysis(task.analysis);
+  if (task.analysis !== undefined)
+    normalized.analysis = normalizeAnalysis(task.analysis);
   if (task.analysisRef !== undefined) {
-    const reference = record(task.analysisRef, adkT("migrations.labels.analysisReference"));
+    const reference = record(
+      task.analysisRef,
+      adkT("migrations.labels.analysisReference"),
+    );
     if (
       typeof reference.attempt !== "number" ||
       typeof reference.sha256 !== "string" ||
@@ -466,10 +888,18 @@ function normalizeTask(value: unknown): MigrationTask {
     };
   }
   if (task.confirmation !== undefined) {
-    const confirmation = record(task.confirmation, adkT("migrations.labels.confirmation"));
+    const confirmation = record(
+      task.confirmation,
+      adkT("migrations.labels.confirmation"),
+    );
     normalized.confirmation = {
       ...(confirmation.framework !== undefined
-        ? { framework: framework(confirmation.framework, adkT("migrations.labels.confirmedFramework")) }
+        ? {
+            framework: framework(
+              confirmation.framework,
+              adkT("migrations.labels.confirmedFramework"),
+            ),
+          }
         : {}),
       ...(confirmation.entry === null || typeof confirmation.entry === "string"
         ? { entry: confirmation.entry }
@@ -488,13 +918,21 @@ function normalizeTask(value: unknown): MigrationTask {
     };
   }
   if (task.persistence !== undefined) {
-    const persistence = record(task.persistence, adkT("migrations.labels.sourcePersistence"));
+    const persistence = record(
+      task.persistence,
+      adkT("migrations.labels.sourcePersistence"),
+    );
     if (
-      !["saving", "saved", "failed", "unavailable"].includes(String(persistence.state))
-      || typeof persistence.message !== "string"
-      || (persistence.projectId !== undefined && typeof persistence.projectId !== "string")
-      || (persistence.versionId !== undefined && typeof persistence.versionId !== "string")
-      || (persistence.retryable !== undefined && typeof persistence.retryable !== "boolean")
+      !["saving", "saved", "failed", "unavailable"].includes(
+        String(persistence.state),
+      ) ||
+      typeof persistence.message !== "string" ||
+      (persistence.projectId !== undefined &&
+        typeof persistence.projectId !== "string") ||
+      (persistence.versionId !== undefined &&
+        typeof persistence.versionId !== "string") ||
+      (persistence.retryable !== undefined &&
+        typeof persistence.retryable !== "boolean")
     ) {
       throw new Error(adkT("migrations.invalidSourcePersistence"));
     }
@@ -511,6 +949,9 @@ function normalizeTask(value: unknown): MigrationTask {
         ? { retryable: persistence.retryable }
         : {}),
     };
+  }
+  if (task.evaluation !== undefined) {
+    normalized.evaluation = normalizeEvaluation(task.evaluation);
   }
   return normalized;
 }
@@ -570,7 +1011,10 @@ function normalizeActivity(value: unknown): MigrationActivity {
           throw new Error(adkT("migrations.invalidActivityPlan"));
         }
         plan = item.plan.map((value) => {
-          const planItem = record(value, adkT("migrations.labels.activityPlanItem"));
+          const planItem = record(
+            value,
+            adkT("migrations.labels.activityPlanItem"),
+          );
           if (
             typeof planItem.text !== "string" ||
             typeof planItem.status !== "string" ||
@@ -602,16 +1046,31 @@ function normalizeActivity(value: unknown): MigrationActivity {
 function normalizeArtifact(value: unknown): MigrationArtifact {
   const artifact = record(value, adkT("migrations.labels.artifact"));
   const cli = record(artifact.cli, adkT("migrations.labels.cli"));
-  const migration = record(artifact.migration, adkT("migrations.labels.migration"));
+  const migration = record(
+    artifact.migration,
+    adkT("migrations.labels.migration"),
+  );
   const startup = record(artifact.startup, adkT("migrations.labels.startup"));
-  const environment = record(artifact.environment, adkT("migrations.labels.environment"));
-  const verification = record(artifact.verification, adkT("migrations.labels.verification"));
+  const environment = record(
+    artifact.environment,
+    adkT("migrations.labels.environment"),
+  );
+  const verification = record(
+    artifact.verification,
+    adkT("migrations.labels.verification"),
+  );
   const report = record(artifact.report, adkT("migrations.labels.report"));
-  const descriptor = record(artifact.artifact, adkT("migrations.labels.archive"));
+  const descriptor = record(
+    artifact.artifact,
+    adkT("migrations.labels.archive"),
+  );
   const environmentDefaults =
     environment.defaults === undefined
       ? {}
-      : record(environment.defaults, adkT("migrations.labels.environmentDefaults"));
+      : record(
+          environment.defaults,
+          adkT("migrations.labels.environmentDefaults"),
+        );
   if (
     artifact.schema_version !== 1 ||
     !["succeeded", "succeeded_with_warnings", "partial"].includes(
@@ -661,7 +1120,9 @@ function normalizeArtifact(value: unknown): MigrationArtifact {
     migration: {
       engine: migration.engine as "structured" | "agentic",
       framework: migration.framework,
-      ...(typeof migration.entry === "string" ? { entry: migration.entry } : {}),
+      ...(typeof migration.entry === "string"
+        ? { entry: migration.entry }
+        : {}),
       ...(typeof migration.source_sha256 === "string"
         ? { source_sha256: migration.source_sha256 }
         : {}),
@@ -701,7 +1162,8 @@ function normalizeArtifact(value: unknown): MigrationArtifact {
       defaults: normalizedEnvironmentDefaults,
     },
     verification: {
-      status: verification.status as MigrationArtifact["verification"]["status"],
+      status:
+        verification.status as MigrationArtifact["verification"]["status"],
       checks: verification.checks.map((item) => {
         const check = record(item, adkT("migrations.labels.verificationCheck"));
         if (
@@ -717,7 +1179,10 @@ function normalizeArtifact(value: unknown): MigrationArtifact {
         };
       }),
     },
-    warnings: stringArray(artifact.warnings, adkT("migrations.labels.artifactWarnings")),
+    warnings: stringArray(
+      artifact.warnings,
+      adkT("migrations.labels.artifactWarnings"),
+    ),
     report: { path: report.path },
     artifact: {
       path: "migration-result.zip",
@@ -768,11 +1233,16 @@ async function errorFrom(
 ): Promise<MigrationApiError> {
   const text = await response.text().catch(() => "");
   try {
-    const body = record(JSON.parse(text), adkT("migrations.labels.errorResponse"));
+    const body = record(
+      JSON.parse(text),
+      adkT("migrations.labels.errorResponse"),
+    );
     if (Array.isArray(body.detail)) {
       const detail = validationErrorDetail(body.detail);
       return new MigrationApiError(
-        detail ? adkT("migrations.requestValidationFailed", { detail }) : fallback,
+        detail
+          ? adkT("migrations.requestValidationFailed", { detail })
+          : fallback,
         response.status,
         "MIGRATION_REQUEST_INVALID",
         false,
@@ -807,7 +1277,11 @@ async function errorFrom(
       response.headers.get("content-type")?.split(";", 1)[0] ||
       adkT("common.contentTypeMissing");
     return new MigrationApiError(
-      adkT("migrations.gatewayError", { fallback, status: response.status, contentType }),
+      adkT("migrations.gatewayError", {
+        fallback,
+        status: response.status,
+        contentType,
+      }),
       response.status,
       "MIGRATION_ERROR",
       false,
@@ -856,14 +1330,93 @@ export async function getMigrationCapabilities(
     reason: body.reason,
     maxUploadBytes: body.maxUploadBytes,
     sessionTtlSeconds: body.sessionTtlSeconds,
-    frameworks: body.frameworks.map((item) => framework(item, adkT("migrations.labels.framework"))),
+    frameworks: body.frameworks.map((item) =>
+      framework(item, adkT("migrations.labels.framework")),
+    ),
   };
   if (body.model !== undefined) {
-    const model = record(body.model, adkT("migrations.labels.modelCapabilities"));
+    const model = record(
+      body.model,
+      adkT("migrations.labels.modelCapabilities"),
+    );
     if (typeof model.configured !== "boolean" || typeof model.id !== "string") {
       throw new Error(adkT("migrations.invalidModelCapabilities"));
     }
     capability.model = { configured: model.configured, id: model.id };
+  }
+  if (body.evaluation !== undefined) {
+    const evaluation = record(
+      body.evaluation,
+      adkT("migrations.labels.evaluationCapabilities"),
+    );
+    if (
+      typeof evaluation.available !== "boolean" ||
+      typeof evaluation.reason !== "string" ||
+      typeof evaluation.maxCases !== "number" ||
+      typeof evaluation.maxDatasetBytes !== "number" ||
+      typeof evaluation.maxMessagesPerCase !== "number" ||
+      typeof evaluation.maxMessagesBytes !== "number" ||
+      typeof evaluation.maxReferenceOutputBytes !== "number" ||
+      typeof evaluation.maxCriteria !== "number" ||
+      typeof evaluation.maxCriterionBytes !== "number" ||
+      typeof evaluation.maxCapturedOutputBytes !== "number" ||
+      evaluation.inputMode !== "page" ||
+      !Array.isArray(evaluation.pageInputMethods) ||
+      !evaluation.pageInputMethods.every((item) =>
+        ["manual", "bulk_paste"].includes(String(item)),
+      ) ||
+      evaluation.defaultPreset !== "standard" ||
+      typeof evaluation.maximumSessionTtlSeconds !== "number" ||
+      !Array.isArray(evaluation.dimensions)
+    ) {
+      throw new Error(
+        adkT("migrations.invalidFormat", {
+          label: adkT("migrations.labels.evaluationCapabilities"),
+        }),
+      );
+    }
+    capability.evaluation = {
+      available: evaluation.available,
+      reason: evaluation.reason,
+      maxCases: evaluation.maxCases,
+      maxDatasetBytes: evaluation.maxDatasetBytes,
+      maxMessagesPerCase: evaluation.maxMessagesPerCase,
+      maxMessagesBytes: evaluation.maxMessagesBytes,
+      maxReferenceOutputBytes: evaluation.maxReferenceOutputBytes,
+      maxCriteria: evaluation.maxCriteria,
+      maxCriterionBytes: evaluation.maxCriterionBytes,
+      maxCapturedOutputBytes: evaluation.maxCapturedOutputBytes,
+      inputMode: "page",
+      pageInputMethods: evaluation.pageInputMethods as Array<
+        "manual" | "bulk_paste"
+      >,
+      defaultPreset: "standard",
+      maximumSessionTtlSeconds: evaluation.maximumSessionTtlSeconds,
+      dimensions: evaluation.dimensions.map((item) => {
+        const dimension = record(
+          item,
+          adkT("migrations.labels.evaluationDimension"),
+        );
+        if (
+          typeof dimension.label !== "string" ||
+          typeof dimension.description !== "string"
+        ) {
+          throw new Error(
+            adkT("migrations.invalidFormat", {
+              label: adkT("migrations.labels.evaluationDimension"),
+            }),
+          );
+        }
+        return {
+          id: evaluationDimension(
+            dimension.id,
+            adkT("migrations.labels.evaluationDimension"),
+          ),
+          label: dimension.label,
+          description: dimension.description,
+        };
+      }),
+    };
   }
   return capability;
 }
@@ -872,10 +1425,14 @@ export async function listMigrationTasks(
   signal?: AbortSignal,
 ): Promise<MigrationTask[]> {
   const body = record(
-    await json(await request("/tasks", { signal }), adkT("migrations.loadTasksFailed")),
+    await json(
+      await request("/tasks", { signal }),
+      adkT("migrations.loadTasksFailed"),
+    ),
     adkT("migrations.labels.taskList"),
   );
-  if (!Array.isArray(body.items)) throw new Error(adkT("migrations.invalidTaskList"));
+  if (!Array.isArray(body.items))
+    throw new Error(adkT("migrations.invalidTaskList"));
   return body.items.map(normalizeTask);
 }
 
@@ -884,6 +1441,11 @@ export async function createMigrationTask(args: {
   sourceFileName: string;
   instruction: string;
   modelId?: string;
+  evaluation?: {
+    enabled: true;
+    preset: "standard" | "custom";
+    dimensions?: MigrationEvaluationDimensionId[];
+  };
   signal?: AbortSignal;
 }): Promise<MigrationTask> {
   return normalizeTask(
@@ -898,6 +1460,7 @@ export async function createMigrationTask(args: {
             sourceFileName: args.sourceFileName,
             instruction: args.instruction,
             ...(args.modelId ? { modelId: args.modelId } : {}),
+            ...(args.evaluation ? { evaluation: args.evaluation } : {}),
           }),
           signal: args.signal,
         },
@@ -906,6 +1469,520 @@ export async function createMigrationTask(args: {
       adkT("migrations.createTaskFailed"),
     ),
   );
+}
+
+function normalizeEvaluationCase(value: unknown): MigrationEvaluationCase {
+  const item = record(value, adkT("migrations.labels.evaluationCase"));
+  if (
+    typeof item.caseId !== "string" ||
+    typeof item.userInput !== "string" ||
+    !Array.isArray(item.priorMessages) ||
+    !Array.isArray(item.criteria)
+  ) {
+    throw new Error(
+      adkT("migrations.invalidFormat", {
+        label: adkT("migrations.labels.evaluationCase"),
+      }),
+    );
+  }
+  return {
+    caseId: item.caseId,
+    userInput: item.userInput,
+    expectedOutcome:
+      item.expectedOutcome === null || typeof item.expectedOutcome === "string"
+        ? item.expectedOutcome
+        : null,
+    criteria: stringArray(
+      item.criteria,
+      adkT("migrations.labels.evaluationCriteria"),
+    ),
+    priorMessages: item.priorMessages.map((messageValue) => {
+      const message = record(
+        messageValue,
+        adkT("migrations.labels.evaluationMessage"),
+      );
+      if (
+        !["user", "assistant"].includes(String(message.role)) ||
+        typeof message.content !== "string"
+      ) {
+        throw new Error(
+          adkT("migrations.invalidFormat", {
+            label: adkT("migrations.labels.evaluationMessage"),
+          }),
+        );
+      }
+      return {
+        role: message.role as "user" | "assistant",
+        content: message.content,
+      };
+    }),
+  };
+}
+
+function normalizeEvaluationDataset(
+  value: unknown,
+): MigrationEvaluationDataset {
+  const dataset = record(value, adkT("migrations.labels.evaluationDataset"));
+  if (typeof dataset.locked !== "boolean" || !Array.isArray(dataset.cases)) {
+    throw new Error(
+      adkT("migrations.invalidFormat", {
+        label: adkT("migrations.labels.evaluationDataset"),
+      }),
+    );
+  }
+  return {
+    locked: dataset.locked,
+    cases: dataset.cases.map(normalizeEvaluationCase),
+    ...(dataset.asset !== undefined
+      ? { asset: normalizeEvaluationAsset(dataset.asset) }
+      : {}),
+  };
+}
+
+export async function putMigrationEvaluationDataset(
+  taskId: string,
+  cases: MigrationEvaluationCase[],
+  signal?: AbortSignal,
+): Promise<MigrationEvaluationDataset> {
+  return normalizeEvaluationDataset(
+    await json(
+      await request(
+        `/tasks/${encodeURIComponent(taskId)}/evaluation/dataset`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cases }),
+          signal,
+        },
+        TRANSFER_REQUEST_TIMEOUT_MS,
+      ),
+      adkT("migrations.evaluation.datasetSaveFailed"),
+    ),
+  );
+}
+
+export async function getMigrationEvaluationDataset(
+  taskId: string,
+  signal?: AbortSignal,
+): Promise<MigrationEvaluationDataset> {
+  return normalizeEvaluationDataset(
+    await json(
+      await request(`/tasks/${encodeURIComponent(taskId)}/evaluation/dataset`, {
+        signal,
+      }),
+      adkT("migrations.evaluation.datasetLoadFailed"),
+    ),
+  );
+}
+
+export async function getMigrationEvaluation(
+  taskId: string,
+  signal?: AbortSignal,
+): Promise<MigrationEvaluationStatus> {
+  return normalizeEvaluation(
+    await json(
+      await request(`/tasks/${encodeURIComponent(taskId)}/evaluation`, {
+        signal,
+      }),
+      adkT("migrations.evaluation.statusLoadFailed"),
+    ),
+  );
+}
+
+export async function resumeMigrationEvaluation(
+  taskId: string,
+  environment: Record<string, string>,
+  signal?: AbortSignal,
+): Promise<MigrationEvaluationStatus> {
+  return normalizeEvaluation(
+    await json(
+      await request(
+        `/tasks/${encodeURIComponent(taskId)}/evaluation/resume`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ environment }),
+          signal,
+        },
+        SESSION_START_TIMEOUT_MS,
+      ),
+      adkT("migrations.evaluation.resumeFailed"),
+    ),
+  );
+}
+
+export async function retryMigrationEvaluation(
+  taskId: string,
+  signal?: AbortSignal,
+): Promise<MigrationEvaluationStatus> {
+  return normalizeEvaluation(
+    await json(
+      await request(
+        `/tasks/${encodeURIComponent(taskId)}/evaluation/retry`,
+        { method: "POST", signal },
+        SESSION_START_TIMEOUT_MS,
+      ),
+      adkT("migrations.evaluation.retryFailed"),
+    ),
+  );
+}
+
+function isEvaluationScore(value: unknown): value is number | null {
+  return (
+    value === null ||
+    (typeof value === "number" &&
+      Number.isInteger(value) &&
+      value >= 0 &&
+      value <= 100)
+  );
+}
+
+function normalizeDimensionResult(
+  value: unknown,
+): MigrationEvaluationDimensionResult {
+  const result = record(
+    value,
+    adkT("migrations.labels.evaluationDimensionResult"),
+  );
+  if (
+    !isEvaluationScore(result.score) ||
+    typeof result.reason !== "string" ||
+    !Array.isArray(result.evidence) ||
+    !result.evidence.every((item) => typeof item === "string") ||
+    typeof result.severity !== "string" ||
+    !EVALUATION_SEVERITIES.has(
+      result.severity as MigrationEvaluationSeverity,
+    )
+  ) {
+    throw new Error(
+      adkT("migrations.invalidFormat", {
+        label: adkT("migrations.labels.evaluationDimensionResult"),
+      }),
+    );
+  }
+  return {
+    id: evaluationDimension(
+      result.id,
+      adkT("migrations.labels.evaluationDimension"),
+    ),
+    score: result.score as number | null,
+    reason: result.reason,
+    evidence: stringArray(
+      result.evidence,
+      adkT("migrations.labels.evaluationEvidence"),
+    ),
+    evidence_sources: evaluationEvidenceSources(result.evidence_sources),
+    severity: result.severity as MigrationEvaluationSeverity,
+  };
+}
+
+function evaluationCount(value: unknown, label: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    throw new Error(adkT("migrations.invalidFormat", { label }));
+  }
+  return value;
+}
+
+function evaluationPercentage(value: unknown, label: string): number {
+  const normalized = evaluationCount(value, label);
+  if (normalized > 100) {
+    throw new Error(adkT("migrations.invalidFormat", { label }));
+  }
+  return normalized;
+}
+
+function normalizeEvaluationExecutionError(
+  value: unknown,
+): MigrationEvaluationExecutionError {
+  const error = record(value, adkT("migrations.labels.error"));
+  if (typeof error.code !== "string" || typeof error.message !== "string") {
+    throw new Error(
+      adkT("migrations.invalidFormat", {
+        label: adkT("migrations.labels.error"),
+      }),
+    );
+  }
+  return { code: error.code, message: error.message };
+}
+
+export async function getMigrationEvaluationReport(
+  taskId: string,
+  signal?: AbortSignal,
+): Promise<MigrationEvaluationReport> {
+  const value = record(
+    await json(
+      await request(`/tasks/${encodeURIComponent(taskId)}/evaluation/report`, {
+        signal,
+      }),
+      adkT("migrations.evaluation.reportLoadFailed"),
+    ),
+    adkT("migrations.labels.evaluationReport"),
+  );
+  const summary = record(
+    value.summary,
+    adkT("migrations.labels.evaluationSummary"),
+  );
+  const model = record(value.model, adkT("migrations.labels.modelCapabilities"));
+  const execution = record(
+    value.execution,
+    adkT("migrations.labels.evaluationReport"),
+  );
+  const coverage = record(
+    value.evidence_coverage,
+    adkT("migrations.labels.evaluationReport"),
+  );
+  const cleanup = record(
+    value.runtime_cleanup,
+    adkT("migrations.labels.evaluationReport"),
+  );
+  const weights = record(
+    value.dimension_weights,
+    adkT("migrations.labels.evaluationReport"),
+  );
+  if (
+    value.schema_version !== 1 ||
+    typeof value.task_id !== "string" ||
+    typeof value.attempt !== "number" ||
+    typeof value.dataset_sha256 !== "string" ||
+    typeof value.dataset_version !== "string" ||
+    typeof value.artifact_sha256 !== "string" ||
+    typeof value.prompt_version !== "number" ||
+    !Number.isInteger(value.prompt_version) ||
+    value.prompt_version < 1 ||
+    typeof model.id !== "string" ||
+    typeof model.codex_version !== "string" ||
+    typeof model.agentkit_cli_version !== "string" ||
+    !Array.isArray(value.dimensions) ||
+    !Array.isArray(value.cases) ||
+    !Array.isArray(value.lowest_scoring_cases) ||
+    !Array.isArray(value.execution_failures) ||
+    !Array.isArray(value.critical_mismatches) ||
+    typeof value.migration_gap_description !== "string" ||
+    cleanup.status !== "confirmed" ||
+    !Array.isArray(value.limitations) ||
+    typeof value.created_at !== "string" ||
+    !isEvaluationScore(summary.score) ||
+    !Array.isArray(summary.dimensions)
+  ) {
+    throw new Error(
+      adkT("migrations.invalidFormat", {
+        label: adkT("migrations.labels.evaluationReport"),
+      }),
+    );
+  }
+  const dimensions = value.dimensions.map((item) =>
+    evaluationDimension(item, adkT("migrations.labels.evaluationDimension")),
+  );
+  const dimensionWeights = Object.fromEntries(
+    dimensions.map((dimension) => {
+      const weight = weights[dimension];
+      if (typeof weight !== "number" || weight <= 0) {
+        throw new Error(
+          adkT("migrations.invalidFormat", {
+            label: adkT("migrations.labels.evaluationReport"),
+          }),
+        );
+      }
+      return [dimension, weight];
+    }),
+  ) as Partial<Record<MigrationEvaluationDimensionId, number>>;
+  return {
+    schema_version: 1,
+    task_id: value.task_id,
+    attempt: value.attempt,
+    dataset_sha256: value.dataset_sha256,
+    dataset_version: value.dataset_version,
+    artifact_sha256: value.artifact_sha256,
+    prompt_version: value.prompt_version,
+    model: {
+      id: model.id,
+      codex_version: model.codex_version,
+      agentkit_cli_version: model.agentkit_cli_version,
+    },
+    dimensions,
+    dimension_weights: dimensionWeights,
+    cases: value.cases.map((caseValue) => {
+      const item = record(
+        caseValue,
+        adkT("migrations.labels.evaluationCaseResult"),
+      );
+      const output = record(
+        item.output,
+        adkT("migrations.labels.evaluationOutput"),
+      );
+      const caseExecution = record(
+        item.execution,
+        adkT("migrations.labels.evaluationCaseResult"),
+      );
+      if (
+        typeof item.case_id !== "string" ||
+        !Array.isArray(item.dimensions) ||
+        !["succeeded", "failed"].includes(String(caseExecution.state)) ||
+        (caseExecution.state === "succeeded" && caseExecution.error !== null) ||
+        (caseExecution.state === "failed" && caseExecution.error === null) ||
+        typeof output.text !== "string" ||
+        typeof output.truncated !== "boolean" ||
+        typeof output.original_bytes !== "number" ||
+        typeof output.captured_bytes !== "number"
+      ) {
+        throw new Error(
+          adkT("migrations.invalidFormat", {
+            label: adkT("migrations.labels.evaluationCaseResult"),
+          }),
+        );
+      }
+      return {
+        case_id: item.case_id,
+        execution: {
+          state: caseExecution.state as "succeeded" | "failed",
+          error:
+            caseExecution.error === null
+              ? null
+              : normalizeEvaluationExecutionError(caseExecution.error),
+        },
+        output: {
+          text: output.text,
+          truncated: output.truncated,
+          original_bytes: output.original_bytes,
+          captured_bytes: output.captured_bytes,
+        },
+        dimensions: item.dimensions.map(normalizeDimensionResult),
+      };
+    }),
+    summary: {
+      score: summary.score as number | null,
+      dimensions: summary.dimensions.map(normalizeDimensionResult),
+    },
+    execution: {
+      total: evaluationCount(
+        execution.total,
+        adkT("migrations.labels.evaluationReport"),
+      ),
+      succeeded: evaluationCount(
+        execution.succeeded,
+        adkT("migrations.labels.evaluationReport"),
+      ),
+      failed: evaluationCount(
+        execution.failed,
+        adkT("migrations.labels.evaluationReport"),
+      ),
+      success_rate: evaluationPercentage(
+        execution.success_rate,
+        adkT("migrations.labels.evaluationReport"),
+      ),
+    },
+    evidence_coverage: {
+      total: evaluationCount(
+        coverage.total,
+        adkT("migrations.labels.evaluationReport"),
+      ),
+      scored: evaluationCount(
+        coverage.scored,
+        adkT("migrations.labels.evaluationReport"),
+      ),
+      na: evaluationCount(
+        coverage.na,
+        adkT("migrations.labels.evaluationReport"),
+      ),
+      rate: evaluationPercentage(
+        coverage.rate,
+        adkT("migrations.labels.evaluationReport"),
+      ),
+    },
+    source_contract_only_case_count: evaluationCount(
+      value.source_contract_only_case_count,
+      adkT("migrations.labels.evaluationReport"),
+    ),
+    lowest_scoring_cases: value.lowest_scoring_cases.map((itemValue) => {
+      const item = record(
+        itemValue,
+        adkT("migrations.labels.evaluationCaseResult"),
+      );
+      if (typeof item.case_id !== "string" || !isEvaluationScore(item.score) || item.score === null) {
+        throw new Error(
+          adkT("migrations.invalidFormat", {
+            label: adkT("migrations.labels.evaluationCaseResult"),
+          }),
+        );
+      }
+      return { case_id: item.case_id, score: item.score };
+    }),
+    execution_failures: value.execution_failures.map((itemValue) => {
+      const item = record(
+        itemValue,
+        adkT("migrations.labels.evaluationCaseResult"),
+      );
+      if (typeof item.case_id !== "string") {
+        throw new Error(
+          adkT("migrations.invalidFormat", {
+            label: adkT("migrations.labels.evaluationCaseResult"),
+          }),
+        );
+      }
+      return {
+        case_id: item.case_id,
+        ...normalizeEvaluationExecutionError(item),
+      };
+    }),
+    critical_mismatches: value.critical_mismatches.map((itemValue) => {
+      const item = record(
+        itemValue,
+        adkT("migrations.labels.evaluationDimensionResult"),
+      );
+      if (
+        typeof item.case_id !== "string" ||
+        item.severity !== "critical" ||
+        typeof item.reason !== "string"
+      ) {
+        throw new Error(
+          adkT("migrations.invalidFormat", {
+            label: adkT("migrations.labels.evaluationDimensionResult"),
+          }),
+        );
+      }
+      return {
+        case_id: item.case_id,
+        dimension_id: evaluationDimension(
+          item.dimension_id,
+          adkT("migrations.labels.evaluationDimension"),
+        ),
+        severity: "critical" as const,
+        reason: item.reason,
+        evidence_sources: evaluationEvidenceSources(item.evidence_sources),
+      };
+    }),
+    migration_gap_description: value.migration_gap_description,
+    runtime_cleanup: { status: "confirmed" },
+    limitations: stringArray(
+      value.limitations,
+      adkT("migrations.labels.evaluationLimitations"),
+    ),
+    created_at: value.created_at,
+    asset: normalizeEvaluationAsset(value.asset),
+  };
+}
+
+export async function downloadMigrationEvaluationReport(
+  taskId: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await request(
+    `/tasks/${encodeURIComponent(taskId)}/evaluation/report/download`,
+    { signal },
+    TRANSFER_REQUEST_TIMEOUT_MS,
+  );
+  if (!response.ok) {
+    throw await errorFrom(
+      response,
+      adkT("migrations.evaluation.reportDownloadFailed"),
+    );
+  }
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = responseFilename(response, `${taskId}-evaluation-report.md`);
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
 }
 
 export async function uploadMigrationSource(
@@ -948,10 +2025,10 @@ export async function getMigrationActivity(
 ): Promise<MigrationActivity> {
   return normalizeActivity(
     await json(
-      await request(
-        `/tasks/${encodeURIComponent(taskId)}/activity`,
-        { signal, cache: "no-store" },
-      ),
+      await request(`/tasks/${encodeURIComponent(taskId)}/activity`, {
+        signal,
+        cache: "no-store",
+      }),
       adkT("migrations.loadActivityFailed"),
     ),
   );
@@ -1030,10 +2107,10 @@ export async function stopMigrationTask(
 ): Promise<MigrationTask> {
   return normalizeTask(
     await json(
-      await request(
-        `/tasks/${encodeURIComponent(taskId)}/stop`,
-        { method: "POST", signal },
-      ),
+      await request(`/tasks/${encodeURIComponent(taskId)}/stop`, {
+        method: "POST",
+        signal,
+      }),
       adkT("migrations.stopFailed"),
     ),
   );
@@ -1044,10 +2121,10 @@ export async function deleteMigrationTask(
   signal?: AbortSignal,
 ): Promise<void> {
   await json(
-    await request(
-      `/tasks/${encodeURIComponent(taskId)}`,
-      { method: "DELETE", signal },
-    ),
+    await request(`/tasks/${encodeURIComponent(taskId)}`, {
+      method: "DELETE",
+      signal,
+    }),
     adkT("migrations.deleteTaskFailed"),
   );
 }
@@ -1058,10 +2135,9 @@ export async function getMigrationArtifact(
 ): Promise<MigrationArtifact> {
   return normalizeArtifact(
     await json(
-      await request(
-        `/tasks/${encodeURIComponent(taskId)}/artifact`,
-        { signal },
-      ),
+      await request(`/tasks/${encodeURIComponent(taskId)}/artifact`, {
+        signal,
+      }),
       adkT("migrations.loadArtifactFailed"),
     ),
   );
@@ -1078,7 +2154,8 @@ export async function getMigrationArtifactFile(
     { signal },
     TRANSFER_REQUEST_TIMEOUT_MS,
   );
-  if (!response.ok) throw await errorFrom(response, adkT("migrations.loadArtifactFileFailed"));
+  if (!response.ok)
+    throw await errorFrom(response, adkT("migrations.loadArtifactFileFailed"));
   return {
     blob: await response.blob(),
     mimeType:
@@ -1102,7 +2179,8 @@ export async function downloadMigrationArtifact(
     { signal },
     TRANSFER_REQUEST_TIMEOUT_MS,
   );
-  if (!response.ok) throw await errorFrom(response, adkT("migrations.downloadArtifactFailed"));
+  if (!response.ok)
+    throw await errorFrom(response, adkT("migrations.downloadArtifactFailed"));
   const url = URL.createObjectURL(await response.blob());
   const link = document.createElement("a");
   link.href = url;

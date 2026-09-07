@@ -158,6 +158,7 @@
   "actions": {
     "stop": "Stop migration",
     "stopping": "Stopping…",
+    "cancel": "Cancel",
     "reload": "Reload",
     "refreshStatus": "Refresh status"
   },
@@ -204,6 +205,163 @@
     "consent": "By selecting “Confirm and start migration,” you confirm the migration scope, exclusions, and key assumptions above.",
     "starting": "Starting migration…",
     "start": "Confirm and start migration"
+  },
+  "evaluation": {
+    "setup": {
+      "title": "Migration effect evaluation",
+      "description": "Optional. After migration, compare behavior using real user questions.",
+      "on": "On",
+      "off": "Off",
+      "unavailable": "Migration effect evaluation is unavailable in this environment.",
+      "casesTitle": "What users will ask",
+      "casesDescription": "Only the user question is required. Expected outcome, criteria, and prior conversation are optional.",
+      "lockedTitle": "Evaluation cases locked",
+      "lockedDescription": "Cases cannot change after project upload starts, keeping this report reproducible."
+    },
+    "bulk": {
+      "open": "Paste multiple",
+      "label": "One user question per line",
+      "placeholder": "Check the status of today's orders\nSummarize the result in three points",
+      "preview": "{{count}} cases will be added",
+      "confirm": "Add cases"
+    },
+    "case": {
+      "title": "Case {{index}}",
+      "add": "Add case",
+      "moveUp": "Move case {{index}} up",
+      "moveDown": "Move case {{index}} down",
+      "copy": "Duplicate",
+      "delete": "Delete",
+      "userInput": "What will the user ask?",
+      "userInputPlaceholder": "For example: Check the status of today's orders",
+      "optional": "Additional details (optional)",
+      "expectedOutcome": "Expected outcome",
+      "expectedOutcomePlaceholder": "Describe what the Agent should accomplish; exact wording is not required",
+      "criteria": "Evaluation criteria",
+      "addCriterion": "Add criterion",
+      "criterionLabel": "Evaluation criterion {{index}}",
+      "criterionPlaceholder": "For example: Include the order ID and current status",
+      "removeCriterion": "Remove evaluation criterion {{index}}",
+      "priorConversation": "Prior conversation",
+      "addMessage": "Add message",
+      "messageRole": "Role for prior message {{index}}",
+      "messageContent": "Content for prior message {{index}}",
+      "removeMessage": "Remove prior message {{index}}",
+      "userRole": "User",
+      "assistantRole": "Agent"
+    },
+    "advanced": {
+      "title": "Advanced settings",
+      "standard": "Standard evaluation",
+      "standardDescription": "Evaluates semantics, output constraints, and workflow/tool behavior for most migrations.",
+      "custom": "Custom dimensions",
+      "customDescription": "Select one or more dimensions based on business risk."
+    },
+    "dimension": {
+      "semantic_fidelity": "Semantic fidelity",
+      "output_contract": "Output contract",
+      "workflow_tool_fidelity": "Workflow and tool fidelity",
+      "context_memory_fidelity": "Context and memory fidelity",
+      "boundary_error_fidelity": "Boundary and error fidelity",
+      "safety_refusal_fidelity": "Safety and refusal fidelity"
+    },
+    "dimensionDescription": {
+      "semantic_fidelity": "Checks whether intent, conclusions, and key facts remain consistent.",
+      "output_contract": "Checks required fields, structure, language, and formatting constraints.",
+      "workflow_tool_fidelity": "Checks observable workflow branches and tool-driven behavior.",
+      "context_memory_fidelity": "Checks supported multi-turn context and memory behavior.",
+      "boundary_error_fidelity": "Checks invalid input, missing information, and dependency failures.",
+      "safety_refusal_fidelity": "Checks existing authorization, refusal, and sensitive-data boundaries."
+    },
+    "validation": {
+      "caseCount": "Keep between 1 and {{count}} evaluation cases.",
+      "dimensionRequired": "Select at least one evaluation dimension.",
+      "userInputRequired": "Enter what the user will ask.",
+      "messageCount": "A case can contain at most {{count}} conversation messages.",
+      "messageBytes": "Conversation text for one case cannot exceed 32 KiB.",
+      "expectedOutcomeBytes": "The expected outcome cannot exceed 16 KiB.",
+      "criteriaCount": "A case can contain at most {{count}} evaluation criteria.",
+      "criterionRequired": "Evaluation criteria cannot be empty.",
+      "criterionBytes": "One evaluation criterion cannot exceed 2 KiB.",
+      "messageRequired": "Prior conversation content cannot be empty.",
+      "datasetBytes": "The normalized evaluation dataset cannot exceed 10 MiB."
+    },
+    "dataset": {
+      "invalidLockResponse": "The service did not confirm that evaluation cases were locked. Try again."
+    },
+    "state": {
+      "disabled": "Evaluation is off",
+      "waiting_dataset": "Waiting for evaluation cases",
+      "pending": "Evaluation starts automatically after migration",
+      "preparing": "Preparing the evaluation environment…",
+      "waiting_environment": "Runtime environment variables are required",
+      "deploying": "Deploying a temporary Runtime…",
+      "executing": "Replaying evaluation cases…",
+      "judging": "Analyzing behavior differences…",
+      "aggregating": "Aggregating evaluation results…",
+      "cleaning": "Cleaning up the temporary Runtime…",
+      "completed": "Evaluation completed",
+      "failed": "Evaluation incomplete",
+      "blocked": "Evaluation requires attention before it can continue",
+      "cancelled": "Evaluation cancelled"
+    },
+    "environment": {
+      "description": "The migrated Agent needs these environment variables. Evaluation will continue in a temporary Runtime after submission.",
+      "security": "Values are used only for this temporary evaluation and are not written to source, reports, or browser storage.",
+      "submit": "Submit and continue evaluation",
+      "submitting": "Submitting…"
+    },
+    "result": {
+      "title": "Migration effect evaluation",
+      "attempt": "Evaluation attempt {{attempt}}",
+      "progressLabel": "Migration and evaluation progress",
+      "migrationStage": "Migration complete",
+      "evaluationStage": "Effect evaluation",
+      "pending": "Evaluation starts automatically after migration output is ready.",
+      "retry": "Run evaluation again",
+      "retrying": "Retrying…",
+      "loadingReport": "Loading the evaluation report…",
+      "reportSummary": "Evaluation summary",
+      "reportVersion": "Dataset {{version}} · Prompt v{{prompt}}",
+      "downloadReport": "Download full report",
+      "downloadingReport": "Downloading…",
+      "overallScore": "Overall fidelity",
+      "scoreScale": "0–100; N/A when evidence is insufficient",
+      "evidenceCoverage": "Evidence coverage",
+      "coverageDetail": "{{scored}} of {{total}} dimensions evidenced",
+      "executionSuccess": "Execution success",
+      "executionDetail": "{{succeeded}} of {{total}} cases completed",
+      "naCount": "N/A count",
+      "naDescription": "Insufficient evidence; excluded from scores",
+      "gapDescription": "Migration gap summary",
+      "lowestScoringCases": "Lowest-scoring cases",
+      "executionFailures": "Execution issues",
+      "criticalEvidence": "Critical evidence",
+      "limitations": "Evaluation limitations",
+      "viewEvidence": "View results and evidence for {{count}} cases",
+      "outputTruncated": "Long output was truncated",
+      "executionState": {
+        "succeeded": "Execution completed",
+        "failed": "Execution issue"
+      },
+      "severityLabel": "Severity: {{severity}}",
+      "severity": {
+        "none": "None",
+        "low": "Low",
+        "medium": "Medium",
+        "high": "High",
+        "critical": "Critical",
+        "unknown": "Unknown"
+      },
+      "evidenceSource": {
+        "user_reference": "Expected outcome",
+        "user_criteria": "User criteria",
+        "source_contract": "Source contract",
+        "observed_output": "Observed output",
+        "deterministic_assertion": "Deterministic assertion"
+      },
+      "listSeparator": ", "
+    }
   },
   "errors": {
     "closeAria": "Dismiss error",

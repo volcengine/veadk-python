@@ -75,6 +75,7 @@ from .models import (
 
 MIGRATION_ROOT = "/home/gem/.studio/migration/v1"
 MIGRATION_SESSION_TTL_SECONDS = 60 * 60
+EVALUATION_SESSION_TTL_SECONDS = 2 * 60 * 60
 MIGRATION_UPLOAD_MAX_BYTES = SOURCE_PROJECT_MAX_BYTES
 MIGRATION_CLI_MIN_VERSION = "0.52.1"
 MIGRATION_UNSUPPORTED_MODEL_IDS = frozenset({"deepseek-v4-pro-260425"})
@@ -2164,6 +2165,7 @@ class MigrationService:
             "unsupportedModelIds": sorted(MIGRATION_UNSUPPORTED_MODEL_IDS),
             "maxUploadBytes": MIGRATION_UPLOAD_MAX_BYTES,
             "sessionTtlSeconds": MIGRATION_SESSION_TTL_SECONDS,
+            "evaluationSessionTtlSeconds": EVALUATION_SESSION_TTL_SECONDS,
             "frameworks": list(MIGRATION_FRAMEWORKS),
             "cli": {
                 "minimumVersion": MIGRATION_CLI_MIN_VERSION,
@@ -2387,6 +2389,7 @@ class MigrationService:
     @staticmethod
     def _validate_session_timing(
         session: MigrationSandboxSession,
+        expected_ttl_seconds: int,
     ) -> tuple[float, float]:
         created_at = _timestamp(session.created_at)
         expire_at = _timestamp(session.expire_at)
@@ -2394,11 +2397,11 @@ class MigrationService:
             created_at is None
             or expire_at is None
             or expire_at <= created_at
-            or expire_at - created_at != MIGRATION_SESSION_TTL_SECONDS
+            or expire_at - created_at != expected_ttl_seconds
         ):
             raise MigrationError(
                 "MIGRATION_SESSION_TIMING_INVALID",
-                "Dev Sandbox 未返回有效的一小时 Session 生命周期。",
+                "Dev Sandbox 未返回与迁移请求匹配的 Session 生命周期。",
                 status_code=502,
                 retryable=False,
             )
@@ -2425,25 +2428,32 @@ class MigrationService:
                 status_code=503,
             )
         task_id = body.task_id or f"migration-v1-{uuid.uuid4().hex}"
+        ttl_seconds = (
+            EVALUATION_SESSION_TTL_SECONDS
+            if body.evaluation.enabled
+            else MIGRATION_SESSION_TTL_SECONDS
+        )
         request = {
             "schema_version": 1,
             "task_id": task_id,
             "source_file_name": body.source_file_name,
             "instruction": body.instruction,
-            "session_ttl_seconds": MIGRATION_SESSION_TTL_SECONDS,
+            "session_ttl_seconds": ttl_seconds,
         }
         if body.model_id:
             request["model_id"] = body.model_id
+        if body.evaluation.enabled:
+            request["evaluation"] = body.evaluation.model_dump(mode="json")
         try:
             session = self._gateway.create_session(
                 task_id=task_id,
                 owner_id=owner_id,
                 creator_name=creator_name,
                 display_name="存量迁移",
-                ttl_seconds=MIGRATION_SESSION_TTL_SECONDS,
+                ttl_seconds=ttl_seconds,
                 model_id=body.model_id,
             )
-            self._validate_session_timing(session)
+            self._validate_session_timing(session, ttl_seconds)
             existing_request = self._read_json(
                 session,
                 _REQUEST_PATH,
@@ -2497,11 +2507,17 @@ class MigrationService:
         value: object,
         task_id: str,
     ) -> dict[str, object]:
+        evaluation = value.get("evaluation") if isinstance(value, dict) else None
+        expected_ttl_seconds = (
+            EVALUATION_SESSION_TTL_SECONDS
+            if isinstance(evaluation, dict) and evaluation.get("enabled") is True
+            else MIGRATION_SESSION_TTL_SECONDS
+        )
         try:
             return validate_migration_request(
                 value,
                 expected_task_id=task_id,
-                expected_ttl_seconds=MIGRATION_SESSION_TTL_SECONDS,
+                expected_ttl_seconds=expected_ttl_seconds,
             )
         except MigrationContractError as error:
             raise MigrationError(
@@ -2607,6 +2623,7 @@ class MigrationService:
             existing.get("source_file_name") != expected["source_file_name"]
             or existing.get("instruction") != expected["instruction"]
             or existing.get("model_id") != expected.get("model_id")
+            or existing.get("evaluation") != expected.get("evaluation")
             or existing.get("session_ttl_seconds") != expected["session_ttl_seconds"]
         ):
             raise MigrationError(
@@ -2772,6 +2789,15 @@ class MigrationService:
         request = request or {}
         expiry = self._session_expiry(session, request)
         artifact_status = self._artifact_status(artifact)
+        ttl_seconds = request.get("session_ttl_seconds")
+        if not isinstance(ttl_seconds, int):
+            created_at = _timestamp(session.created_at)
+            expire_at = _timestamp(session.expire_at)
+            ttl_seconds = (
+                int(expire_at - created_at)
+                if created_at is not None and expire_at is not None
+                else MIGRATION_SESSION_TTL_SECONDS
+            )
         payload: dict[str, object] = {
             "id": session.task_id,
             "state": state,
@@ -2780,7 +2806,7 @@ class MigrationService:
             "instruction": str(request.get("instruction") or ""),
             "createdAt": session.created_at or request.get("created_at") or "",
             "expiresAt": _iso_timestamp(expiry) if expiry is not None else "",
-            "sessionTtlSeconds": MIGRATION_SESSION_TTL_SECONDS,
+            "sessionTtlSeconds": ttl_seconds,
             "canModify": state == "awaiting_upload",
             "canUpload": state == "awaiting_upload",
             "canAnswer": state == "needs_input",
@@ -2790,6 +2816,8 @@ class MigrationService:
         }
         if request.get("model_id"):
             payload["modelId"] = str(request["model_id"])
+        if isinstance(request.get("evaluation"), dict):
+            payload["evaluation"] = request["evaluation"]
         if analysis is not None:
             payload["analysis"] = analysis
             payload["analysisRef"] = {
@@ -2815,7 +2843,10 @@ class MigrationService:
         self,
         session: MigrationSandboxSession,
     ) -> dict[str, object]:
-        _, expiry = self._validate_session_timing(session)
+        request = self._read_json(session, _REQUEST_PATH)
+        request = self._validated_request(request, session.task_id)
+        expected_ttl_seconds = int(request["session_ttl_seconds"])
+        _, expiry = self._validate_session_timing(session, expected_ttl_seconds)
         if self._clock() >= expiry:
             return self._task_payload(
                 session,
@@ -2835,8 +2866,6 @@ class MigrationService:
                     "retryable": False,
                 },
             )
-        request = self._read_json(session, _REQUEST_PATH)
-        request = self._validated_request(request, session.task_id)
         stopped = self._read_json(session, _STOPPED_PATH, optional=True)
         if stopped is not None:
             try:
@@ -3844,6 +3873,7 @@ class MigrationService:
 
 
 __all__ = [
+    "EVALUATION_SESSION_TTL_SECONDS",
     "MIGRATION_ROOT",
     "MIGRATION_SESSION_TTL_SECONDS",
     "MIGRATION_UPLOAD_MAX_BYTES",

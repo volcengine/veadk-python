@@ -191,6 +191,15 @@
     "loadArtifactFailed": "Failed to load the migration artifact",
     "loadArtifactFileFailed": "Failed to load the migration artifact file",
     "downloadArtifactFailed": "Failed to download the migration artifact",
+    "evaluation": {
+      "datasetSaveFailed": "Failed to save evaluation cases",
+      "datasetLoadFailed": "Failed to load evaluation cases",
+      "statusLoadFailed": "Failed to load evaluation status",
+      "resumeFailed": "Failed to continue evaluation",
+      "retryFailed": "Failed to retry evaluation",
+      "reportLoadFailed": "Failed to load the evaluation report",
+      "reportDownloadFailed": "Failed to download the evaluation report"
+    },
     "labels": {
       "analysisResult": "Migration analysis result",
       "recommendation": "Migration recommendation",
@@ -235,7 +244,22 @@
       "capabilities": "Migration capabilities",
       "framework": "Migration framework",
       "modelCapabilities": "Migration model capabilities",
-      "taskList": "Migration session list"
+      "taskList": "Migration session list",
+      "evaluationAsset": "Evaluation asset",
+      "evaluation": "Evaluation status",
+      "evaluationCapabilities": "Evaluation capabilities",
+      "evaluationDimension": "Evaluation dimension",
+      "evaluationCase": "Evaluation case",
+      "evaluationCriteria": "Evaluation criteria",
+      "evaluationMessage": "Evaluation conversation",
+      "evaluationDataset": "Evaluation dataset",
+      "evaluationDimensionResult": "Evaluation dimension result",
+      "evaluationEvidence": "Evaluation evidence",
+      "evaluationReport": "Evaluation report",
+      "evaluationSummary": "Evaluation summary",
+      "evaluationCaseResult": "Evaluation case result",
+      "evaluationOutput": "Evaluation output",
+      "evaluationLimitations": "Evaluation limitations"
     }
   },
   "sandbox": {

@@ -11,6 +11,14 @@ const stylesUrl = new URL(
   "../src/migrations/MigrationWorkspace.css",
   import.meta.url,
 );
+const evaluationUrl = new URL(
+  "../src/migrations/MigrationEvaluation.tsx",
+  import.meta.url,
+);
+const evaluationStylesUrl = new URL(
+  "../src/migrations/MigrationEvaluation.css",
+  import.meta.url,
+);
 const activityBlocksUrl = new URL(
   "../src/migrations/migrationActivityBlocks.ts",
   import.meta.url,
@@ -57,9 +65,66 @@ test("exposes a typed migration API with bounded transfer requests", () => {
   assert.match(source, /export async function getMigrationActivity/);
   assert.match(source, /export async function getMigrationArtifact/);
   assert.match(source, /export async function downloadMigrationArtifact/);
+  assert.match(source, /export async function putMigrationEvaluationDataset/);
+  assert.match(source, /export async function getMigrationEvaluation/);
+  assert.match(source, /export async function getMigrationEvaluationReport/);
+  assert.match(source, /export async function downloadMigrationEvaluationReport/);
+  assert.match(source, /export async function resumeMigrationEvaluation/);
+  assert.match(source, /export async function retryMigrationEvaluation/);
   assert.match(source, /TRANSFER_REQUEST_TIMEOUT_MS/);
   assert.match(source, /withAuth/);
   assert.match(source, /withLocalUser/);
+});
+
+test("adds optional migration effect evaluation without raising the basic input burden", () => {
+  const workspace = readFileSync(workspaceUrl, "utf8");
+  const evaluation = readFileSync(evaluationUrl, "utf8");
+  const styles = readFileSync(evaluationStylesUrl, "utf8");
+  const zhResource = JSON.parse(readFileSync(zhResourceUrl, "utf8"));
+  const enResource = JSON.parse(readFileSync(enResourceUrl, "utf8"));
+
+  assert.match(evaluation, /enabled: false/);
+  assert.match(evaluation, /userInput: ""/);
+  assert.match(evaluation, /expectedOutcome: ""/);
+  assert.match(evaluation, /criteria: \[\]/);
+  assert.match(evaluation, /priorMessages: \[\]/);
+  assert.doesNotMatch(evaluation, /expectedTools|期望工具/);
+  assert.match(evaluation, /t\("evaluation\.case\.userInput"\)/);
+  assert.match(evaluation, /t\("evaluation\.case\.optional"\)/);
+  assert.match(evaluation, /role="switch"/);
+  assert.match(evaluation, /crypto\.randomUUID\(\)/);
+  assert.match(evaluation, /MigrationEvaluationResult/);
+  assert.match(evaluation, /score === null \? "N\/A"/);
+  assert.match(evaluation, /report\.evidence_coverage\.rate/);
+  assert.match(evaluation, /report\.execution\.success_rate/);
+  assert.match(evaluation, /report\.lowest_scoring_cases/);
+  assert.match(evaluation, /onDownloadReport/);
+  assert.doesNotMatch(evaluation, /from "lucide-react"/);
+  assert.doesNotMatch(evaluation, />[↑↓×]</);
+  assert.doesNotMatch(evaluation, /[\p{Script=Han}]/u);
+
+  const createFlow = workspace.slice(
+    workspace.indexOf("async function createAndUpload"),
+    workspace.indexOf("async function uploadExistingTask"),
+  );
+  assert.ok(
+    createFlow.indexOf("createMigrationTask") <
+      createFlow.indexOf("lockEvaluationDataset"),
+  );
+  assert.ok(
+    createFlow.indexOf("lockEvaluationDataset") <
+      createFlow.indexOf("uploadMigrationSource"),
+  );
+  assert.match(workspace, /<MigrationEvaluationSetup/);
+  assert.match(workspace, /<MigrationEvaluationResult/);
+  assert.match(workspace, /isEvaluationPollingState/);
+  assert.match(workspace, /resumeMigrationEvaluation/);
+  assert.match(workspace, /retryMigrationEvaluation/);
+  assert.match(workspace, /downloadMigrationEvaluationReport/);
+  assert.match(styles, /@media \(max-width: 760px\)/);
+  assert.equal(zhResource.evaluation.setup.casesTitle, "用户会怎么问");
+  assert.equal(enResource.evaluation.setup.casesTitle, "What users will ask");
+  assert.match(zhResource.evaluation.result.scoreScale, /0–100/);
 });
 
 test("enables the existing migration entry and renders its workspace", () => {

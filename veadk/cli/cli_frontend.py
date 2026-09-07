@@ -3341,6 +3341,15 @@ def _run_frontend_server(
         return _request_role(request).is_admin
 
     from frontend.server.migration.gateway import MigrationSandboxGateway
+    from frontend.server.migration.evaluation.repository import (
+        TosMigrationEvaluationRepository,
+    )
+    from frontend.server.migration.evaluation.runner import (
+        SandboxMigrationEvaluationRunner,
+    )
+    from frontend.server.migration.evaluation.service import (
+        MigrationEvaluationService,
+    )
     from frontend.server.migration.routes import mount_migration_routes
     from frontend.server.migration.service import MigrationError, MigrationService
 
@@ -3364,23 +3373,34 @@ def _run_frontend_server(
     from frontend.server.storage.tos import create_tos_client_factory
 
     intelligent_project_service = None
+    migration_evaluation_repository = None
     intelligent_project_storage = StudioStorageConfig.from_env(provider)
     if intelligent_project_storage.configured:
+        studio_storage_client_factory = create_tos_client_factory(
+            intelligent_project_storage,
+            _resolve_ve_credentials,
+        )
         intelligent_project_service = IntelligentDevelopmentProjectService(
             TosIntelligentDevelopmentProjectRepository(
                 bucket=intelligent_project_storage.bucket,
-                client_factory=create_tos_client_factory(
-                    intelligent_project_storage,
-                    _resolve_ve_credentials,
-                ),
+                client_factory=studio_storage_client_factory,
             )
         )
-
-    migration_service = MigrationService(
-        MigrationSandboxGateway(
-            tools_client_factory=_sandbox_client,
-            region=os.getenv("AGENTKIT_SANDBOX_REGION"),
+        migration_evaluation_repository = TosMigrationEvaluationRepository(
+            bucket=intelligent_project_storage.bucket,
+            client_factory=studio_storage_client_factory,
         )
+
+    migration_gateway = MigrationSandboxGateway(
+        tools_client_factory=_sandbox_client,
+        region=os.getenv("AGENTKIT_SANDBOX_REGION"),
+    )
+    migration_service = MigrationService(migration_gateway)
+    migration_evaluation_service = MigrationEvaluationService(
+        migration_service,
+        migration_gateway,
+        repository=migration_evaluation_repository,
+        runner=SandboxMigrationEvaluationRunner(migration_gateway),
     )
     if not is_vestack_deployment:
         from frontend.server.workspace_tool import mount_workspace_upgrade_repair
@@ -3398,6 +3418,7 @@ def _run_frontend_server(
         owner_resolver=_migration_owner,
         creator_resolver=_migration_creator,
         project_service=intelligent_project_service,
+        evaluation_service=migration_evaluation_service,
     )
 
     if is_vestack_deployment:

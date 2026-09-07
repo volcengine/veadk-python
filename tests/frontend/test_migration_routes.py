@@ -110,7 +110,7 @@ class RouteService:
         self.calls.append(("delete", (task_id, owner_id)))
 
 
-def app_for(service: Any) -> FastAPI:
+def app_for(service: Any, evaluation_service: Any = None) -> FastAPI:
     app = FastAPI()
 
     def owner(request: Request) -> str:
@@ -121,8 +121,65 @@ def app_for(service: Any) -> FastAPI:
         service,
         owner_resolver=owner,
         creator_resolver=lambda _request: "Owner",
+        evaluation_service=evaluation_service,
     )
     return app
+
+
+class RouteEvaluationService:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple[object, ...]]] = []
+
+    def record(self, name: str, *values: object) -> dict[str, object]:
+        self.calls.append((name, values))
+        return {"operation": name}
+
+    def capabilities(self) -> dict[str, object]:
+        return {"available": True, "dimensions": []}
+
+    def ensure_available(self, enabled: bool) -> None:
+        self.calls.append(("ensure_available", (enabled,)))
+
+    def attach(
+        self,
+        task: dict[str, object],
+        owner_id: str,
+        *,
+        advance: bool = False,
+    ) -> dict[str, object]:
+        self.calls.append(("attach", (task, owner_id, advance)))
+        return {**task, "evaluation": {"enabled": True, "state": "pending"}}
+
+    def assert_dataset_locked(self, task_id: str, owner_id: str) -> None:
+        self.calls.append(("assert_dataset_locked", (task_id, owner_id)))
+
+    def put_dataset(self, task_id: str, owner_id: str, body: object):
+        return self.record("put_dataset", task_id, owner_id, body)
+
+    def get_dataset(self, task_id: str, owner_id: str):
+        return self.record("get_dataset", task_id, owner_id)
+
+    def advance(self, task_id: str, owner_id: str, *, task: object = None) -> None:
+        self.calls.append(("advance", (task_id, owner_id, task)))
+
+    def snapshot(self, task_id: str, owner_id: str, *, task: object = None):
+        return self.record("snapshot", task_id, owner_id, task)
+
+    def get_report(self, task_id: str, owner_id: str):
+        return self.record("get_report", task_id, owner_id)
+
+    def download_report(self, task_id: str, owner_id: str):
+        self.calls.append(("download_report", (task_id, owner_id)))
+        return b"# report\n", "evaluation.md"
+
+    def resume(self, task_id: str, owner_id: str, body: object):
+        return self.record("resume", task_id, owner_id, body)
+
+    def retry(self, task_id: str, owner_id: str):
+        return self.record("retry", task_id, owner_id)
+
+    def cancel(self, task_id: str, owner_id: str):
+        return self.record("cancel", task_id, owner_id)
 
 
 def app_for_with_projects(service: Any, project_service: Any) -> FastAPI:
@@ -223,6 +280,194 @@ def test_all_migration_routes_delegate_with_owner_and_return_artifacts() -> None
         "preview_file",
         "delete",
     ]
+
+
+def test_evaluation_routes_and_create_upload_guards_delegate_with_owner() -> None:
+    service = RouteService()
+    evaluation = RouteEvaluationService()
+    with TestClient(app_for(service, evaluation)) as client:
+        created = client.post(
+            "/web/agent-migrations/tasks",
+            json={
+                "taskId": TASK_ID,
+                "sourceFileName": "source.zip",
+                "evaluation": {"enabled": True},
+            },
+        )
+        dataset = client.put(
+            f"/web/agent-migrations/tasks/{TASK_ID}/evaluation/dataset",
+            json={"cases": [{"caseId": "case-1", "userInput": "hello"}]},
+        )
+        loaded_dataset = client.get(
+            f"/web/agent-migrations/tasks/{TASK_ID}/evaluation/dataset"
+        )
+        status = client.get(f"/web/agent-migrations/tasks/{TASK_ID}/evaluation")
+        report = client.get(f"/web/agent-migrations/tasks/{TASK_ID}/evaluation/report")
+        report_download = client.get(
+            f"/web/agent-migrations/tasks/{TASK_ID}/evaluation/report/download"
+        )
+        resumed = client.post(
+            f"/web/agent-migrations/tasks/{TASK_ID}/evaluation/resume",
+            json={"environment": {"ARK_API_KEY": "secret"}},
+        )
+        retried = client.post(f"/web/agent-migrations/tasks/{TASK_ID}/evaluation/retry")
+        uploaded = client.put(
+            f"/web/agent-migrations/tasks/{TASK_ID}/source",
+            headers={"content-type": "application/zip"},
+            content=b"zip",
+        )
+
+    assert all(
+        response.status_code == 200
+        for response in (
+            created,
+            dataset,
+            loaded_dataset,
+            status,
+            report,
+            report_download,
+            resumed,
+            retried,
+            uploaded,
+        )
+    )
+    names = [name for name, _ in evaluation.calls]
+    assert "ensure_available" in names
+    assert names.count("put_dataset") == 1
+    assert names.count("get_dataset") == 1
+    assert names.count("snapshot") >= 1
+    assert names.count("get_report") == 1
+    assert names.count("download_report") == 1
+    assert names.count("resume") == 1
+    assert names.count("retry") == 1
+    assert names.count("assert_dataset_locked") == 1
+    assert report_download.content == b"# report\n"
+    assert report_download.headers["cache-control"] == "no-store"
+    assert [name for name, _ in service.calls].index("create_task") < names.index(
+        "attach"
+    )
+
+
+@pytest.mark.parametrize("unexpected", [False, True])
+def test_evaluation_failures_do_not_hide_task_stop_or_artifact(
+    unexpected: bool,
+) -> None:
+    class DurableRouteService(RouteService):
+        @staticmethod
+        def task(task_id: str, state: str) -> dict[str, object]:
+            return {
+                "id": task_id,
+                "state": state,
+                "canStop": state == "running",
+                "artifact": {"downloadReady": True},
+                "evaluation": {
+                    "enabled": True,
+                    "preset": "standard",
+                    "dimensions": ["semantic_fidelity"],
+                },
+            }
+
+        def get_task(self, task_id: str, owner_id: str) -> dict[str, object]:
+            self.calls.append(("get_task", (task_id, owner_id)))
+            return self.task(task_id, "running")
+
+        def stop(self, task_id: str, owner_id: str) -> dict[str, object]:
+            self.calls.append(("stop", (task_id, owner_id)))
+            return self.task(task_id, "cancelled")
+
+        def artifact(self, task_id: str, owner_id: str) -> dict[str, object]:
+            self.calls.append(("artifact", (task_id, owner_id)))
+            return {"artifact": {"sha256": "a" * 64, "downloadReady": True}}
+
+    class FailingEvaluationService(RouteEvaluationService):
+        def attach(
+            self,
+            task: dict[str, object],
+            owner_id: str,
+            *,
+            advance: bool = False,
+        ) -> dict[str, object]:
+            self.calls.append(("attach", (task, owner_id, advance)))
+            if unexpected:
+                raise RuntimeError("evaluation bug")
+            raise MigrationError(
+                "MIGRATION_EVALUATION_STORAGE_UNAVAILABLE",
+                "evaluation storage unavailable",
+                status_code=503,
+                retryable=True,
+            )
+
+    service = DurableRouteService()
+    evaluation = FailingEvaluationService()
+    with TestClient(app_for(service, evaluation)) as client:
+        task = client.get(f"/web/agent-migrations/tasks/{TASK_ID}")
+        stopped = client.post(f"/web/agent-migrations/tasks/{TASK_ID}/stop")
+        artifact = client.get(f"/web/agent-migrations/tasks/{TASK_ID}/artifact")
+
+    assert task.status_code == 200
+    assert task.json()["state"] == "running"
+    assert stopped.status_code == 200
+    assert stopped.json()["state"] == "cancelled"
+    assert artifact.status_code == 200
+    assert artifact.json()["artifact"]["sha256"] == "a" * 64
+    expected_code = (
+        "MIGRATION_EVALUATION_INTERNAL"
+        if unexpected
+        else "MIGRATION_EVALUATION_STORAGE_UNAVAILABLE"
+    )
+    assert task.json()["evaluation"]["error"]["code"] == expected_code
+    assert stopped.json()["evaluation"]["error"]["code"] == expected_code
+    assert [name for name, _ in service.calls] == [
+        "get_task",
+        "get_task",
+        "stop",
+        "artifact",
+    ]
+    assert [name for name, _ in evaluation.calls].count("cancel") == 1
+    assert [values[2] for name, values in evaluation.calls if name == "attach"] == [
+        True,
+        True,
+    ]
+
+
+def test_stop_cancels_active_evaluation_after_migration_is_terminal() -> None:
+    class TerminalRouteService(RouteService):
+        def get_task(self, task_id: str, owner_id: str) -> dict[str, object]:
+            self.calls.append(("get_task", (task_id, owner_id)))
+            return {
+                "id": task_id,
+                "state": "succeeded",
+                "canStop": False,
+                "evaluation": {
+                    "enabled": True,
+                    "state": "executing",
+                },
+            }
+
+    class ActiveEvaluationService(RouteEvaluationService):
+        def attach(
+            self,
+            task: dict[str, object],
+            owner_id: str,
+            *,
+            advance: bool = False,
+        ) -> dict[str, object]:
+            self.calls.append(("attach", (task, owner_id, advance)))
+            return {
+                **task,
+                "evaluation": {"enabled": True, "state": "cancelled"},
+            }
+
+    service = TerminalRouteService()
+    evaluation = ActiveEvaluationService()
+    with TestClient(app_for(service, evaluation)) as client:
+        response = client.post(f"/web/agent-migrations/tasks/{TASK_ID}/stop")
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "succeeded"
+    assert response.json()["evaluation"]["state"] == "cancelled"
+    assert [name for name, _ in service.calls] == ["get_task"]
+    assert [name for name, _ in evaluation.calls] == ["cancel", "attach"]
 
 
 def test_terminal_task_saves_source_without_blocking_the_status_response() -> None:

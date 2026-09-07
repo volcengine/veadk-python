@@ -158,6 +158,7 @@
   "actions": {
     "stop": "终止迁移",
     "stopping": "正在终止…",
+    "cancel": "取消",
     "reload": "重新读取",
     "refreshStatus": "刷新状态"
   },
@@ -204,6 +205,163 @@
     "consent": "点击“确认并开始迁移”即确认上述迁移范围、排除项和关键假设。",
     "starting": "正在启动迁移…",
     "start": "确认并开始迁移"
+  },
+  "evaluation": {
+    "setup": {
+      "title": "迁移效果评测",
+      "description": "可选。迁移完成后，用真实用户问题对比迁移前后的行为。",
+      "on": "已开启",
+      "off": "未开启",
+      "unavailable": "当前环境暂不支持迁移效果评测。",
+      "casesTitle": "用户会怎么问",
+      "casesDescription": "只需填写用户问题；期望结果、评测标准和历史对话均为可选。",
+      "lockedTitle": "评测用例已锁定",
+      "lockedDescription": "项目开始上传后，用例不再修改，以保证本次报告可复现。"
+    },
+    "bulk": {
+      "open": "批量粘贴",
+      "label": "每行一个用户问题",
+      "placeholder": "帮我查询今天的订单状态\n把结果整理成三点",
+      "preview": "将添加 {{count}} 个用例",
+      "confirm": "添加到用例"
+    },
+    "case": {
+      "title": "用例 {{index}}",
+      "add": "添加用例",
+      "moveUp": "上移用例 {{index}}",
+      "moveDown": "下移用例 {{index}}",
+      "copy": "复制",
+      "delete": "删除",
+      "userInput": "用户会怎么问",
+      "userInputPlaceholder": "例如：请帮我查询今天的订单状态",
+      "optional": "补充信息（可选）",
+      "expectedOutcome": "期望结果",
+      "expectedOutcomePlaceholder": "描述希望 Agent 完成什么，不要求逐字一致",
+      "criteria": "评测标准",
+      "addCriterion": "添加标准",
+      "criterionLabel": "评测标准 {{index}}",
+      "criterionPlaceholder": "例如：必须包含订单号和当前状态",
+      "removeCriterion": "删除评测标准 {{index}}",
+      "priorConversation": "历史对话",
+      "addMessage": "添加消息",
+      "messageRole": "历史消息 {{index}} 的角色",
+      "messageContent": "历史消息 {{index}} 的内容",
+      "removeMessage": "删除历史消息 {{index}}",
+      "userRole": "用户",
+      "assistantRole": "Agent"
+    },
+    "advanced": {
+      "title": "高级设置",
+      "standard": "标准评测",
+      "standardDescription": "评估语义、输出约束和工作流/工具行为，适合多数迁移。",
+      "custom": "自定义维度",
+      "customDescription": "按业务风险选择一个或多个评测维度。"
+    },
+    "dimension": {
+      "semantic_fidelity": "语义一致性",
+      "output_contract": "输出约束",
+      "workflow_tool_fidelity": "工作流与工具一致性",
+      "context_memory_fidelity": "上下文与记忆一致性",
+      "boundary_error_fidelity": "边界与异常一致性",
+      "safety_refusal_fidelity": "安全与拒答一致性"
+    },
+    "dimensionDescription": {
+      "semantic_fidelity": "检查意图理解、结论和关键事实是否保持一致。",
+      "output_contract": "检查字段、结构、语言和格式约束是否保持。",
+      "workflow_tool_fidelity": "检查可观察的工作流分支和工具行为是否保持。",
+      "context_memory_fidelity": "检查可验证的多轮上下文和记忆行为。",
+      "boundary_error_fidelity": "检查无效输入、信息缺失和依赖失败时的行为。",
+      "safety_refusal_fidelity": "检查已有授权、拒答和敏感信息边界是否保持。"
+    },
+    "validation": {
+      "caseCount": "请保留 1–{{count}} 个评测用例。",
+      "dimensionRequired": "请至少选择一个评测维度。",
+      "userInputRequired": "请填写用户会怎么问。",
+      "messageCount": "单个用例最多包含 {{count}} 条对话。",
+      "messageBytes": "单个用例的对话文本不能超过 32 KiB。",
+      "expectedOutcomeBytes": "期望结果不能超过 16 KiB。",
+      "criteriaCount": "单个用例最多包含 {{count}} 条评测标准。",
+      "criterionRequired": "评测标准不能为空。",
+      "criterionBytes": "单条评测标准不能超过 2 KiB。",
+      "messageRequired": "历史对话内容不能为空。",
+      "datasetBytes": "标准化后的评测数据集不能超过 10 MiB。"
+    },
+    "dataset": {
+      "invalidLockResponse": "服务未确认评测用例已锁定，请重试。"
+    },
+    "state": {
+      "disabled": "未开启评测",
+      "waiting_dataset": "等待填写评测用例",
+      "pending": "迁移完成后自动开始评测",
+      "preparing": "正在准备评测环境…",
+      "waiting_environment": "需要补充运行所需的环境变量",
+      "deploying": "正在部署临时 Runtime…",
+      "executing": "正在回放评测用例…",
+      "judging": "正在分析迁移前后的行为差异…",
+      "aggregating": "正在汇总评测结果…",
+      "cleaning": "正在清理临时 Runtime…",
+      "completed": "评测已完成",
+      "failed": "评测未完成",
+      "blocked": "评测需要处理后才能继续",
+      "cancelled": "评测已取消"
+    },
+    "environment": {
+      "description": "迁移后的 Agent 运行需要以下环境变量。填写后会在临时 Runtime 中继续评测。",
+      "security": "这些值仅用于本次临时评测，不会写入源码、报告或浏览器存储。",
+      "submit": "提交并继续评测",
+      "submitting": "正在提交…"
+    },
+    "result": {
+      "title": "迁移效果评测",
+      "attempt": "第 {{attempt}} 次评测",
+      "progressLabel": "迁移与评测进度",
+      "migrationStage": "完成迁移",
+      "evaluationStage": "效果评测",
+      "pending": "评测将在迁移产物准备完成后自动开始。",
+      "retry": "重新评测",
+      "retrying": "正在重试…",
+      "loadingReport": "正在读取评测报告…",
+      "reportSummary": "评测摘要",
+      "reportVersion": "评测集 {{version}} · Prompt v{{prompt}}",
+      "downloadReport": "下载完整报告",
+      "downloadingReport": "正在下载…",
+      "overallScore": "综合一致性",
+      "scoreScale": "0–100；证据不足时显示 N/A",
+      "evidenceCoverage": "证据覆盖率",
+      "coverageDetail": "{{scored}} / {{total}} 个维度有证据",
+      "executionSuccess": "执行成功率",
+      "executionDetail": "{{succeeded}} / {{total}} 个用例完成",
+      "naCount": "N/A 数量",
+      "naDescription": "证据不足，不计入分数",
+      "gapDescription": "迁移差距说明",
+      "lowestScoringCases": "低分用例",
+      "executionFailures": "执行异常",
+      "criticalEvidence": "Critical 证据",
+      "limitations": "评测限制",
+      "viewEvidence": "查看 {{count}} 个用例的结果与证据",
+      "outputTruncated": "输出过长，已截断",
+      "executionState": {
+        "succeeded": "执行完成",
+        "failed": "执行异常"
+      },
+      "severityLabel": "严重度：{{severity}}",
+      "severity": {
+        "none": "无",
+        "low": "低",
+        "medium": "中",
+        "high": "高",
+        "critical": "Critical",
+        "unknown": "未知"
+      },
+      "evidenceSource": {
+        "user_reference": "期望结果",
+        "user_criteria": "用户标准",
+        "source_contract": "源项目约束",
+        "observed_output": "实际输出",
+        "deterministic_assertion": "确定性断言"
+      },
+      "listSeparator": "、"
+    }
   },
   "errors": {
     "closeAria": "关闭错误提示",

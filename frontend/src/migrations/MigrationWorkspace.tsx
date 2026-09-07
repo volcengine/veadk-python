@@ -12,13 +12,19 @@ import {
   confirmMigrationTask,
   createMigrationTask,
   downloadMigrationArtifact,
+  downloadMigrationEvaluationReport,
   getMigrationActivity,
   getMigrationArtifact,
   getMigrationArtifactFile,
   getMigrationCapabilities,
+  getMigrationEvaluationDataset,
+  getMigrationEvaluationReport,
   getMigrationTask,
   listMigrationTasks,
   MigrationApiError,
+  putMigrationEvaluationDataset,
+  resumeMigrationEvaluation,
+  retryMigrationEvaluation,
   stopMigrationTask,
   submitMigrationAnalysisAnswers,
   uploadMigrationSource,
@@ -26,6 +32,7 @@ import {
   type MigrationActivity,
   type MigrationArtifact,
   type MigrationCapabilities,
+  type MigrationEvaluationReport,
   type MigrationFramework,
   type MigrationTask,
 } from "../adk/migrations";
@@ -72,6 +79,15 @@ import {
   migrationDeploymentEnvDefaults,
 } from "./deploymentEnvironment";
 import { migrationActivityBlocks } from "./migrationActivityBlocks";
+import {
+  createMigrationEvaluationDraft,
+  evaluationCasesFromDraft,
+  evaluationDraftFromDataset,
+  MigrationEvaluationResult,
+  MigrationEvaluationSetup,
+  validateMigrationEvaluationDraft,
+  type MigrationEvaluationDraft,
+} from "./MigrationEvaluation";
 import { MigratedProjectsPage } from "./MigratedProjectsPage";
 import { i18n } from "../i18n/runtime";
 import "./MigrationWorkspace.css";
@@ -82,6 +98,21 @@ const ACTIVITY_POLL_INTERVAL_MS = 3_000;
 const LIST_POLL_INTERVAL_MS = 5_000;
 const MAX_VISIBLE_FILES = 500;
 const ignoreMigrationAction = () => undefined;
+
+function isEvaluationPollingState(task: MigrationTask): boolean {
+  return Boolean(
+    task.evaluation?.enabled &&
+      [
+        "pending",
+        "preparing",
+        "deploying",
+        "executing",
+        "judging",
+        "aggregating",
+        "cleaning",
+      ].includes(task.evaluation.state),
+  );
+}
 
 const FRAMEWORK_LABEL_KEYS: Record<MigrationFramework, string> = {
   langchain: "framework.langchain",
@@ -714,6 +745,7 @@ export function MigrationWorkspace({
   const locale = i18n.resolvedLanguage || i18n.language;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const preparedAnalysisRef = useRef("");
+  const evaluationDraftTaskRef = useRef("");
   const transferAbortRef = useRef<AbortController | null>(null);
   const [capability, setCapability] = useState<MigrationCapabilities | null>(
     null,
@@ -756,6 +788,19 @@ export function MigrationWorkspace({
   const [deploymentEnvValues, setDeploymentEnvValues] = useState<
     Record<string, string>
   >({});
+  const [evaluationDraft, setEvaluationDraft] =
+    useState<MigrationEvaluationDraft>(createMigrationEvaluationDraft);
+  const [evaluationErrors, setEvaluationErrors] = useState<
+    Record<string, string>
+  >({});
+  const [evaluationAction, setEvaluationAction] = useState<
+    "resume" | "retry" | "download" | ""
+  >("");
+  const [evaluationReport, setEvaluationReport] =
+    useState<MigrationEvaluationReport | null>(null);
+  const [evaluationReportLoading, setEvaluationReportLoading] = useState(false);
+  const [evaluationReportError, setEvaluationReportError] = useState("");
+  const [evaluationReportReload, setEvaluationReportReload] = useState(0);
   const task = selectedTask(tasks, selectedTaskId);
   const maxSourceBytes = capability?.maxUploadBytes ?? MAX_SOURCE_BYTES;
   const maxSourceSizeLabel = formatByteLimit(maxSourceBytes);
@@ -868,6 +913,17 @@ export function MigrationWorkspace({
     }
   }
 
+  function updateTaskEvaluation(
+    taskId: string,
+    evaluation: NonNullable<MigrationTask["evaluation"]>,
+  ) {
+    setTasks((current) =>
+      current.map((item) =>
+        item.id === taskId ? { ...item, evaluation } : item,
+      ),
+    );
+  }
+
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
@@ -950,7 +1006,12 @@ export function MigrationWorkspace({
   }, []);
 
   useEffect(() => {
-    if (!tasks.some((item) => isActiveState(item.state))) return;
+    if (
+      !tasks.some(
+        (item) => isActiveState(item.state) || isEvaluationPollingState(item),
+      )
+    )
+      return;
     const controller = new AbortController();
     const timer = window.setInterval(() => {
       void listMigrationTasks(controller.signal)
@@ -974,12 +1035,18 @@ export function MigrationWorkspace({
       controller.abort();
       window.clearInterval(timer);
     };
-  }, [tasks.some((item) => isActiveState(item.state))]);
+  }, [
+    tasks.some(
+      (item) => isActiveState(item.state) || isEvaluationPollingState(item),
+    ),
+  ]);
 
   useEffect(() => {
     if (
       !task ||
-      (!isActiveState(task.state) && task.persistence?.state !== "saving")
+      (!isActiveState(task.state) &&
+        task.persistence?.state !== "saving" &&
+        !isEvaluationPollingState(task))
     )
       return;
     const controller = new AbortController();
@@ -991,7 +1058,11 @@ export function MigrationWorkspace({
         setTasks((current) => upsertTask(current, next));
         setPollError("");
         setPollErrorRetryable(false);
-        if (isActiveState(next.state) || next.persistence?.state === "saving") {
+        if (
+          isActiveState(next.state) ||
+          next.persistence?.state === "saving" ||
+          isEvaluationPollingState(next)
+        ) {
           timer = window.setTimeout(() => void poll(), POLL_INTERVAL_MS);
         }
       } catch (cause) {
@@ -1010,7 +1081,12 @@ export function MigrationWorkspace({
       controller.abort();
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [task?.id, task?.state, task?.persistence?.state]);
+  }, [
+    task?.id,
+    task?.state,
+    task?.persistence?.state,
+    task?.evaluation?.state,
+  ]);
 
   useEffect(() => {
     const conversation = conversationRef.current;
@@ -1121,6 +1197,80 @@ export function MigrationWorkspace({
   }, [task?.id, task?.artifact.previewReady, artifactReload]);
 
   useEffect(() => {
+    setEvaluationErrors({});
+    if (!task?.evaluation?.enabled) {
+      evaluationDraftTaskRef.current = "";
+      setEvaluationDraft(createMigrationEvaluationDraft());
+      return;
+    }
+    const firstVisit = evaluationDraftTaskRef.current !== task.id;
+    evaluationDraftTaskRef.current = task.id;
+    if (!task.evaluation.dataset) {
+      if (firstVisit) {
+        const draft = createMigrationEvaluationDraft();
+        setEvaluationDraft({
+          ...draft,
+          enabled: true,
+          preset: task.evaluation.preset ?? "standard",
+          dimensions: task.evaluation.dimensions?.length
+            ? [...task.evaluation.dimensions]
+            : draft.dimensions,
+        });
+      }
+      return;
+    }
+    const controller = new AbortController();
+    void getMigrationEvaluationDataset(task.id, controller.signal)
+      .then((dataset) => {
+        if (controller.signal.aborted) return;
+        setEvaluationDraft(
+          evaluationDraftFromDataset(dataset, task.evaluation!),
+        );
+      })
+      .catch((cause: unknown) => {
+        if (controller.signal.aborted) return;
+        setEvaluationErrors({
+          root: cause instanceof Error ? cause.message : String(cause),
+        });
+      });
+    return () => controller.abort();
+  }, [task?.id, task?.evaluation?.dataset?.versionId]);
+
+  useEffect(() => {
+    setEvaluationReport(null);
+    setEvaluationReportError("");
+    setEvaluationReportLoading(false);
+    if (
+      !task?.evaluation?.enabled ||
+      task.evaluation.state !== "completed" ||
+      !task.evaluation.report
+    )
+      return;
+    const controller = new AbortController();
+    setEvaluationReportLoading(true);
+    void getMigrationEvaluationReport(task.id, controller.signal)
+      .then((report) => {
+        if (!controller.signal.aborted) setEvaluationReport(report);
+      })
+      .catch((cause: unknown) => {
+        if (!controller.signal.aborted) {
+          setEvaluationReportError(
+            cause instanceof Error ? cause.message : String(cause),
+          );
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setEvaluationReportLoading(false);
+      });
+    return () => controller.abort();
+  }, [
+    task?.id,
+    task?.evaluation?.state,
+    task?.evaluation?.report?.versionId,
+    evaluationReportReload,
+  ]);
+
+  useEffect(() => {
     if (!artifact) return;
     const defaults = migrationDeploymentEnvDefaults(artifact, cloudProvider);
     setDeploymentEnvValues((current) => {
@@ -1165,8 +1315,38 @@ export function MigrationWorkspace({
     selectFile(file);
   }
 
+  function validateEvaluationDraft(): boolean {
+    const unavailableMessage =
+      evaluationDraft.enabled && !capability?.evaluation?.available
+        ? capability?.evaluation?.reason || t("evaluation.setup.unavailable")
+        : "";
+    const validation = validateMigrationEvaluationDraft(
+      evaluationDraft,
+      unavailableMessage,
+      (key, options) => t(key, options),
+    );
+    setEvaluationErrors(validation.errors);
+    return validation.valid;
+  }
+
+  async function lockEvaluationDataset(
+    taskId: string,
+    signal: AbortSignal,
+  ): Promise<void> {
+    await putMigrationEvaluationDataset(
+      taskId,
+      evaluationCasesFromDraft(evaluationDraft),
+      signal,
+    );
+    const authoritative = await getMigrationTask(taskId, signal);
+    if (!signal.aborted) {
+      setTasks((current) => upsertTask(current, authoritative));
+    }
+  }
+
   async function createAndUpload() {
     if (!sourceFile || action || transferAbortRef.current) return;
+    if (!validateEvaluationDraft()) return;
     const controller = new AbortController();
     transferAbortRef.current = controller;
     const isCurrent = () =>
@@ -1181,11 +1361,25 @@ export function MigrationWorkspace({
         sourceFileName: sourceFile.name,
         instruction: "",
         modelId: selectedModelId || undefined,
+        evaluation: evaluationDraft.enabled
+          ? {
+              enabled: true,
+              preset: evaluationDraft.preset,
+              ...(evaluationDraft.preset === "custom"
+                ? { dimensions: evaluationDraft.dimensions }
+                : {}),
+            }
+          : undefined,
         signal: controller.signal,
       });
       if (!isCurrent()) return;
       setTasks((current) => upsertTask(current, created));
+      evaluationDraftTaskRef.current = created.id;
       setSelectedTaskId(created.id);
+      if (evaluationDraft.enabled) {
+        await lockEvaluationDataset(created.id, controller.signal);
+        if (!isCurrent()) return;
+      }
       setAction("upload");
       setCreateStartedAt(null);
       const uploaded = await uploadMigrationSource(
@@ -1228,6 +1422,9 @@ export function MigrationWorkspace({
     if (!task?.canUpload || !sourceFile || action || transferAbortRef.current) {
       return;
     }
+    if (task.evaluation?.enabled && !task.evaluation.dataset) {
+      if (!validateEvaluationDraft()) return;
+    }
     const controller = new AbortController();
     transferAbortRef.current = controller;
     const isCurrent = () =>
@@ -1235,6 +1432,10 @@ export function MigrationWorkspace({
     setAction("upload");
     setError("");
     try {
+      if (task.evaluation?.enabled && !task.evaluation.dataset) {
+        await lockEvaluationDataset(task.id, controller.signal);
+        if (!isCurrent()) return;
+      }
       const uploaded = await uploadMigrationSource(
         task.id,
         sourceFile,
@@ -1373,6 +1574,55 @@ export function MigrationWorkspace({
     }
   }
 
+  async function resumeEvaluation(environment: Record<string, string>) {
+    if (!task?.evaluation?.canResume || evaluationAction) return;
+    setEvaluationAction("resume");
+    setEvaluationReportError("");
+    try {
+      const evaluation = await resumeMigrationEvaluation(task.id, environment);
+      updateTaskEvaluation(task.id, evaluation);
+    } catch (cause) {
+      setEvaluationReportError(
+        cause instanceof Error ? cause.message : String(cause),
+      );
+      await reconcileTaskState(task.id, false);
+    } finally {
+      setEvaluationAction("");
+    }
+  }
+
+  async function retryEvaluation() {
+    if (!task?.evaluation?.canRetry || evaluationAction) return;
+    setEvaluationAction("retry");
+    setEvaluationReportError("");
+    try {
+      const evaluation = await retryMigrationEvaluation(task.id);
+      updateTaskEvaluation(task.id, evaluation);
+    } catch (cause) {
+      setEvaluationReportError(
+        cause instanceof Error ? cause.message : String(cause),
+      );
+      await reconcileTaskState(task.id, false);
+    } finally {
+      setEvaluationAction("");
+    }
+  }
+
+  async function downloadEvaluationReport() {
+    if (!task?.evaluation?.report?.downloadReady || evaluationAction) return;
+    setEvaluationAction("download");
+    setEvaluationReportError("");
+    try {
+      await downloadMigrationEvaluationReport(task.id);
+    } catch (cause) {
+      setEvaluationReportError(
+        cause instanceof Error ? cause.message : String(cause),
+      );
+    } finally {
+      setEvaluationAction("");
+    }
+  }
+
   function startNewMigration() {
     setPage("new");
     setFocusedProjectId("");
@@ -1386,6 +1636,12 @@ export function MigrationWorkspace({
     setArtifactErrorRetryable(false);
     setDeploymentOpen(false);
     setStopConfirmOpen(false);
+    evaluationDraftTaskRef.current = "";
+    setEvaluationDraft(createMigrationEvaluationDraft());
+    setEvaluationErrors({});
+    setEvaluationAction("");
+    setEvaluationReport(null);
+    setEvaluationReportError("");
     setSelectedModelId(
       capability?.model?.id.trim() || selectableModels[0]?.id || "",
     );
@@ -2035,6 +2291,23 @@ export function MigrationWorkspace({
             </section>
           ) : null}
 
+          {task?.evaluation?.enabled && isTerminalState(task.state) ? (
+            <MigrationEvaluationResult
+              evaluation={task.evaluation}
+              report={evaluationReport}
+              reportLoading={evaluationReportLoading}
+              reportError={evaluationReportError}
+              busy={Boolean(evaluationAction)}
+              reportDownloading={evaluationAction === "download"}
+              onResume={(environment) => void resumeEvaluation(environment)}
+              onRetry={() => void retryEvaluation()}
+              onReloadReport={() =>
+                setEvaluationReportReload((current) => current + 1)
+              }
+              onDownloadReport={() => void downloadEvaluationReport()}
+            />
+          ) : null}
+
           {pollError ? (
             <div className="migration-inline-error" role="alert">
               <span>
@@ -2168,6 +2441,18 @@ export function MigrationWorkspace({
                   {task ? t("upload.continue") : t("upload.start")}
                 </button>
               </div>
+              <MigrationEvaluationSetup
+                value={evaluationDraft}
+                onChange={(value) => {
+                  setEvaluationDraft(value);
+                  setEvaluationErrors({});
+                }}
+                capability={capability.evaluation}
+                disabled={composerBusy}
+                configLocked={Boolean(task)}
+                locked={Boolean(task?.evaluation?.dataset)}
+                errors={evaluationErrors}
+              />
               <input
                 ref={fileInputRef}
                 type="file"

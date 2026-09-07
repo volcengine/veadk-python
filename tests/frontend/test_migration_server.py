@@ -42,6 +42,7 @@ from frontend.server.migration.models import (
 )
 from frontend.server.migration.routes import mount_migration_routes
 from frontend.server.migration.service import (
+    EVALUATION_SESSION_TTL_SECONDS,
     MIGRATION_ROOT,
     MIGRATION_SESSION_TTL_SECONDS,
     MIGRATION_UNSUPPORTED_MODEL_IDS,
@@ -194,6 +195,7 @@ class FakeMigrationGateway:
         self.command_timeouts: list[tuple[str, int]] = []
         self.created: list[str] = []
         self.created_models: list[str | None] = []
+        self.created_ttls: list[int] = []
         self.deleted: list[str] = []
 
     def capabilities(self) -> dict[str, object]:
@@ -216,9 +218,13 @@ class FakeMigrationGateway:
     ) -> MigrationSandboxSession:
         assert creator_name == "Owner"
         assert display_name == "存量迁移"
-        assert ttl_seconds == MIGRATION_SESSION_TTL_SECONDS
+        assert ttl_seconds in {
+            MIGRATION_SESSION_TTL_SECONDS,
+            EVALUATION_SESSION_TTL_SECONDS,
+        }
         self.created.append(task_id)
         self.created_models.append(model_id)
+        self.created_ttls.append(ttl_seconds)
         existing = self.sessions.get(task_id)
         if existing is not None:
             return existing
@@ -230,7 +236,11 @@ class FakeMigrationGateway:
             region="cn-beijing",
             status="Ready",
             created_at="2099-01-01T00:00:00Z",
-            expire_at="2099-01-01T01:00:00Z",
+            expire_at=(
+                "2099-01-01T02:00:00Z"
+                if ttl_seconds == EVALUATION_SESSION_TTL_SECONDS
+                else "2099-01-01T01:00:00Z"
+            ),
             owner_id=owner_id,
         )
         self.sessions[task_id] = session
@@ -599,6 +609,7 @@ def test_migration_capability_and_session_contract_are_bounded() -> None:
         "unsupportedModelIds": ["deepseek-v4-pro-260425"],
         "maxUploadBytes": 20 * 1024 * 1024,
         "sessionTtlSeconds": 3600,
+        "evaluationSessionTtlSeconds": 7200,
         "frameworks": [
             "langchain",
             "langgraph",
@@ -636,7 +647,42 @@ def test_migration_capability_and_session_contract_are_bounded() -> None:
     assert "model_id" not in request
     assert "modelId" not in created
     assert gateway.created_models == [None]
+    assert gateway.created_ttls == [3600]
     assert "owner-1" not in json.dumps(request)
+
+
+def test_evaluation_enabled_task_uses_two_hour_session_and_locked_config() -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+
+    created = service.create_task(
+        CreateMigrationTaskBody.model_validate(
+            {
+                "sourceFileName": "support-agent.zip",
+                "evaluation": {"enabled": True},
+            }
+        ),
+        "owner-1",
+        "Owner",
+    )
+
+    task_id = str(created["id"])
+    request = json.loads(
+        gateway.files[(task_id, f"{MIGRATION_ROOT}/request/task.json")]
+    )
+    assert gateway.created_ttls == [7200]
+    assert created["sessionTtlSeconds"] == 7200
+    assert created["evaluation"] == {
+        "enabled": True,
+        "preset": "standard",
+        "dimensions": [
+            "semantic_fidelity",
+            "output_contract",
+            "workflow_tool_fidelity",
+        ],
+    }
+    assert request["session_ttl_seconds"] == 7200
+    assert request["evaluation"] == created["evaluation"]
 
 
 def test_selected_model_is_immutable_session_configuration() -> None:
