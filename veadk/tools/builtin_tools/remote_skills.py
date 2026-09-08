@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,7 +24,17 @@ from typing import Any, Callable
 
 from google.adk.tools import ToolContext
 
-from veadk.tools.builtin_tools.execute_skills import execute_skills
+from veadk.tools.builtin_tools.execute_skills import (
+    _A2A_MAX_POLL_INTERVAL,
+    _A2A_POLL_INTERVAL,
+    _A2A_TERMINAL_STATES,
+    _a2a_task_id,
+    _a2a_task_result_text,
+    _a2a_task_state,
+    _validate_timeout,
+)
+from veadk.tools.builtin_tools.invoke_skill import invoke_skill
+from veadk.tools.builtin_tools.poll_skill import poll_skill
 
 _REMOTE_SKILL_TIMEOUT = 1800
 
@@ -111,10 +122,54 @@ def _required_string(item: dict[str, Any], field: str) -> str:
     return value.strip()
 
 
+def execute_remote_skill(
+    workflow_prompt: str,
+    *,
+    tool_context: ToolContext | None = None,
+    timeout: int = _REMOTE_SKILL_TIMEOUT,
+    invoker: Callable[..., dict] = invoke_skill,
+    poller: Callable[..., dict] = poll_skill,
+) -> str:
+    """通过受控 invoke/poll 工具执行 RemoteSkill，并只返回最终文本结果。"""
+
+    if tool_context is None:
+        raise ValueError("tool_context is required for RemoteSkill execution")
+    _validate_timeout(timeout)
+
+    deadline = time.monotonic() + timeout
+    task = invoker(workflow_prompt, tool_context=tool_context, timeout=timeout)
+    task_id = _a2a_task_id(task)
+    poll_interval = _A2A_POLL_INTERVAL
+
+    while _a2a_task_state(task) not in _A2A_TERMINAL_STATES:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(
+                f"Timed out while waiting for RemoteSkill task {task_id}"
+            )
+        time.sleep(min(poll_interval, remaining))
+        task = poller(
+            task_id, tool_context=tool_context, timeout=max(1, int(remaining))
+        )
+        poll_interval = min(poll_interval * 2, _A2A_MAX_POLL_INTERVAL)
+
+    state = _a2a_task_state(task)
+    if state != "completed":
+        raise RuntimeError(
+            f"RemoteSkill task {task_id} ended with state {state}: "
+            f"{json.dumps(task, ensure_ascii=False)}"
+        )
+
+    text = _a2a_task_result_text(task)
+    if text:
+        return text
+    return json.dumps(task, ensure_ascii=False)
+
+
 def build_remote_skill_tools(
     definitions: list[RemoteSkillDefinition],
     *,
-    executor: Callable[..., str] = execute_skills,
+    executor: Callable[..., str] = execute_remote_skill,
 ) -> list[Callable[..., str]]:
     """把 RemoteSkill 描述转换成 Agent 可挂载的工具函数。"""
 
@@ -129,7 +184,7 @@ def _make_remote_skill_tool(
     *,
     executor: Callable[..., str],
 ) -> Callable[..., str]:
-    """为单个 RemoteSkill 生成工具函数，真正执行时统一复用 execute_skills。"""
+    """为单个 RemoteSkill 生成工具函数，真正执行时统一复用 invoke/poll。"""
 
     def remote_skill(
         query: str,

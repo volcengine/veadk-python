@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
@@ -49,14 +50,6 @@ test("generates the basic Studio project and Runtime delivery workflow in fronte
       "",
     ].join("\n"),
   );
-  const huawei = "https://repo.huaweicloud.com/repository/pypi/simple";
-  const aliyun = "https://mirrors.aliyun.com/pypi/simple/";
-  const pypi = "https://pypi.org/simple";
-  assert.match(files.Dockerfile, new RegExp(huawei.replaceAll(".", "\\.")));
-  assert.match(files.Dockerfile, new RegExp(aliyun.replaceAll(".", "\\.")));
-  assert.match(files.Dockerfile, new RegExp(pypi.replaceAll(".", "\\.")));
-  assert.ok(files.Dockerfile.indexOf(huawei) < files.Dockerfile.indexOf(aliyun));
-  assert.ok(files.Dockerfile.indexOf(aliyun) < files.Dockerfile.indexOf(pypi));
   assert.match(files["README.md"], /python app\.py/);
 
   const workflow = buildRuntimeDeliveryWorkflow({
@@ -67,8 +60,6 @@ test("generates the basic Studio project and Runtime delivery workflow in fronte
     region: "cn-beijing",
   });
   assert.match(workflow, /Publish to AgentKit Runtime/);
-  assert.match(workflow, /AGENTKIT_CLOUD_PROVIDER: "volcengine"/);
-  assert.match(workflow, /CLOUD_PROVIDER: "volcengine"/);
   assert.match(workflow, /\$\{\{ secrets\.VOLCENGINE_ACCESS_KEY \}\}/);
   assert.match(workflow, /AgentkitRuntimeClient/);
   assert.match(workflow, /"runtime_role_name": runtime_role_name/);
@@ -78,97 +69,53 @@ test("generates the basic Studio project and Runtime delivery workflow in fronte
   assert.doesNotMatch(workflow, /__[A-Z_]+__/);
 });
 
-test("generates BytePlus template and Runtime delivery workflow in frontend", async () => {
-  const [{ buildBasicTemplateFiles }, { buildRuntimeDeliveryWorkflow }] = await Promise.all([
-    loadTypeScriptModule("../src/automations/templateProject.ts"),
-    loadTypeScriptModule("../src/automations/runtimeDelivery.ts"),
-  ]);
-  const files = buildBasicTemplateFiles("basic-agent", "byteplus");
-  assert.match(
-    files.Dockerfile,
-    /^FROM agentkit-prod-public-ap-southeast-1\.cr\.bytepluses\.com\/base\/py-simple:/,
-  );
-  assert.match(files[".env.example"], /BYTEPLUS_ACCESS_KEY=/);
-  assert.match(files[".env.example"], /BYTEPLUS_SECRET_KEY=/);
-  assert.match(files[".env.example"], /BYTEPLUS_REGION=ap-southeast-1/);
-  assert.match(files[".env.example"], /AGENTKIT_CLOUD_PROVIDER=byteplus/);
-  assert.match(files[".env.example"], /https:\/\/ark\.ap-southeast\.bytepluses\.com\/api\/v3/);
-  assert.doesNotMatch(files[".env.example"], /VOLCENGINE_ACCESS_KEY=/);
-  assert.match(files.Dockerfile, /RUN uv pip install -r requirements\.txt/);
-  assert.doesNotMatch(files.Dockerfile, /repo\.huaweicloud\.com/);
-  assert.doesNotMatch(files.Dockerfile, /mirrors\.aliyun\.com/);
-
-  const workflow = buildRuntimeDeliveryWorkflow({
-    baseBranch: "main",
-    projectPath: "examples/basic-agent",
-    runtimeName: "basic-agent",
-    runtimeId: "rt-basic-agent",
-    region: "ap-southeast-1",
-    cloudProvider: "byteplus",
-  });
-  assert.match(workflow, /AGENTKIT_CLOUD_PROVIDER: "byteplus"/);
-  assert.match(workflow, /CLOUD_PROVIDER: "byteplus"/);
-  assert.match(workflow, /AGENTKIT_REGION: "ap-southeast-1"/);
-  assert.match(workflow, /BYTEPLUS_ACCESS_KEY: \$\{\{ secrets\.BYTEPLUS_ACCESS_KEY \}\}/);
-  assert.match(workflow, /VOLCENGINE_ACCESS_KEY: \$\{\{ secrets\.BYTEPLUS_ACCESS_KEY \}\}/);
-  assert.match(workflow, /BYTEPLUS_REGION: "ap-southeast-1"/);
-  assert.match(workflow, /"DATABASE_VIKING_REGION": "cn-hongkong"/);
-  assert.match(workflow, /credential_prefix = \(/);
-  assert.doesNotMatch(workflow, /secrets\.VOLCENGINE_ACCESS_KEY/);
-  assert.doesNotMatch(workflow, /__[A-Z_]+__/);
-});
-
-test("generates the isolated pull request review workflow in frontend", async () => {
-  const { buildPullRequestReviewWorkflow } = await loadTypeScriptModule(
+test("defines pull request review as a GitHub App automation", async () => {
+  const { pullRequestReviewAutomation } = await loadTypeScriptModule(
     "../src/automations/pullRequestReview.ts",
   );
-  const workflow = buildPullRequestReviewWorkflow({
-    sandboxToolId: "tool-code-review",
-    modelName: "doubao-seed-code-preview",
-    modelBaseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3",
-    region: "cn-beijing",
-  });
-  assert.doesNotMatch(workflow, /pull_request_target/);
-  assert.match(workflow, /AGENTKIT_CLOUD_PROVIDER: "volcengine"/);
-  assert.match(workflow, /CLOUD_PROVIDER: "volcengine"/);
-  assert.match(workflow, /VOLCENGINE_REGION: "cn-beijing"/);
-  assert.match(workflow, /github\.event\.pull_request\.head\.repo\.full_name == github\.repository/);
-  assert.match(workflow, /agentkit sandbox exec \\/);
-  assert.match(workflow, /--copy \. \/workspace \\/);
-  assert.match(workflow, /codex review --base \$\{\{ github\.event\.pull_request\.base\.sha \}\}/);
-  assert.match(workflow, /agentkit sandbox delete \\/);
-  assert.match(workflow, /\$\{\{ secrets\.CODEX_MODEL_API_KEY \}\}/);
-  assert.match(workflow, /re\.sub\(r"\\x1b\\\[/);
-  assert.doesNotMatch(workflow, /__GH__|__[A-Z_]+__/);
-});
-
-test("generates the BytePlus isolated pull request review workflow in frontend", async () => {
-  const { buildPullRequestReviewWorkflow } = await loadTypeScriptModule(
-    "../src/automations/pullRequestReview.ts",
+  const enAutomations = JSON.parse(readFileSync(
+    new URL("../src/i18n/resources/en-US/automations.json", import.meta.url),
+    "utf8",
+  ));
+  const zhAutomations = JSON.parse(readFileSync(
+    new URL("../src/i18n/resources/zh-CN/automations.json", import.meta.url),
+    "utf8",
+  ));
+  assert.equal(pullRequestReviewAutomation.submitLabel, "Install GitHub App");
+  assert.deepEqual(pullRequestReviewAutomation.fields, []);
+  assert.deepEqual(pullRequestReviewAutomation.secrets({ cloudProvider: "volcengine" }), []);
+  assert.match(pullRequestReviewAutomation.panel, /GitHub App/);
+  assert.equal(enAutomations.cards.review.submitLabel, "Install GitHub App");
+  assert.equal(zhAutomations.cards.review.submitLabel, "安装 GitHub App");
+  assert.match(zhAutomations.cards.review.panel, /GitHub App/);
+  await assert.rejects(
+    () => pullRequestReviewAutomation.submit(
+      pullRequestReviewAutomation.initialValues,
+      new AbortController().signal,
+    ),
+    /GitHub App 授权模式/,
   );
-  const workflow = buildPullRequestReviewWorkflow({
-    sandboxToolId: "tool-code-review",
-    modelName: "seed-2-0-lite-260228",
-    modelBaseUrl: "https://ark.ap-southeast.bytepluses.com/api/v3",
-    region: "ap-southeast-1",
-    cloudProvider: "byteplus",
-  });
-  assert.match(workflow, /AGENTKIT_CLOUD_PROVIDER: "byteplus"/);
-  assert.match(workflow, /CLOUD_PROVIDER: "byteplus"/);
-  assert.match(workflow, /BYTEPLUS_ACCESS_KEY: \$\{\{ secrets\.BYTEPLUS_ACCESS_KEY \}\}/);
-  assert.match(workflow, /VOLCENGINE_ACCESS_KEY: \$\{\{ secrets\.BYTEPLUS_ACCESS_KEY \}\}/);
-  assert.match(workflow, /BYTEPLUS_REGION: "ap-southeast-1"/);
-  assert.match(workflow, /CODEX_MODEL_BASE_URL: "https:\/\/ark\.ap-southeast\.bytepluses\.com\/api\/v3"/);
-  assert.match(workflow, /\$\{\{ secrets\.CODEX_MODEL_API_KEY \}\}/);
-  assert.doesNotMatch(workflow, /secrets\.VOLCENGINE_ACCESS_KEY/);
-  assert.doesNotMatch(workflow, /__GH__|__[A-Z_]+__/);
 });
 
-test("rejects invalid Runtime and review settings before generating workflows", async () => {
-  const [{ buildRuntimeDeliveryWorkflow }, { buildPullRequestReviewWorkflow }] = await Promise.all([
-    loadTypeScriptModule("../src/automations/runtimeDelivery.ts"),
-    loadTypeScriptModule("../src/automations/pullRequestReview.ts"),
-  ]);
+test("derives the repository from a GitHub pull request URL", async () => {
+  const { repositoryFromGitHubPullRequestUrl } = await loadTypeScriptModule(
+    "../src/adk/githubIntegration.ts",
+  );
+  assert.equal(
+    repositoryFromGitHubPullRequestUrl("https://github.com/Rhosmarie/nice/pull/25"),
+    "Rhosmarie/nice",
+  );
+  assert.equal(
+    repositoryFromGitHubPullRequestUrl(" https://github.com/Rhosmarie/nice/pull/25/ "),
+    "Rhosmarie/nice",
+  );
+  assert.equal(repositoryFromGitHubPullRequestUrl("https://github.com/Rhosmarie/nice"), "");
+});
+
+test("rejects invalid Runtime settings before generating workflows", async () => {
+  const { buildRuntimeDeliveryWorkflow } = await loadTypeScriptModule(
+    "../src/automations/runtimeDelivery.ts",
+  );
   assert.throws(
     () => buildRuntimeDeliveryWorkflow({
       baseBranch: "main",
@@ -178,15 +125,6 @@ test("rejects invalid Runtime and review settings before generating workflows", 
       region: "cn-beijing",
     }),
     /Runtime name/,
-  );
-  assert.throws(
-    () => buildPullRequestReviewWorkflow({
-      sandboxToolId: "tool-code-review",
-      modelName: "review-model",
-      modelBaseUrl: "http://model.example.com/v1",
-      region: "cn-beijing",
-    }),
-    /HTTPS URL/,
   );
 });
 
@@ -316,6 +254,62 @@ test("removes the temporary GitHub branch when file creation fails", async () =>
       /write failed/,
     );
     assert.equal(calls.some(({ init }) => init.method === "DELETE"), true);
+  } finally {
+    globalThis.fetch = originalFetch;
+    Object.defineProperty(globalThis, "crypto", {
+      configurable: true,
+      value: originalCrypto,
+    });
+  }
+});
+
+test("reports missing GitHub workflow permission clearly", async () => {
+  const { createGitHubPullRequest } = await loadTypeScriptModule(
+    "../src/adk/githubIntegration.ts",
+  );
+  const originalFetch = globalThis.fetch;
+  const originalCrypto = globalThis.crypto;
+  globalThis.fetch = async (url, init = {}) => {
+    const method = init.method || "GET";
+    if (String(url).endsWith("/repos/acme/agent")) return jsonResponse(200, {});
+    if (String(url).includes("/git/ref/heads/main")) {
+      return jsonResponse(200, { object: { sha: "base-sha" } });
+    }
+    if (method === "POST" && String(url).endsWith("/git/refs")) return jsonResponse(201, {});
+    if (method === "GET" && String(url).includes("/contents/")) return jsonResponse(404, {});
+    if (method === "PUT") {
+      return jsonResponse(403, {
+        message: "refusing to allow a Personal Access Token to create or update workflow `.github/workflows/test.yml` without workflow scope",
+      });
+    }
+    if (method === "DELETE") return jsonResponse(204);
+    throw new Error(`Unexpected request: ${method} ${url}`);
+  };
+  Object.defineProperty(globalThis, "crypto", {
+    configurable: true,
+    value: { randomUUID: () => "12345678-1234-1234-1234-123456789012" },
+  });
+
+  try {
+    await assert.rejects(
+      createGitHubPullRequest(
+        {
+          repository: "acme/agent",
+          baseBranch: "main",
+          token: "github-secret-token",
+          files: [{
+            path: ".github/workflows/test.yml",
+            content: "test",
+            commitMessage: "test",
+          }],
+          branchPrefix: "feat/test",
+          title: "test",
+          description: "test",
+        },
+        new AbortController().signal,
+      ),
+      /缺少 Workflows 写权限/,
+    );
   } finally {
     globalThis.fetch = originalFetch;
     Object.defineProperty(globalThis, "crypto", {

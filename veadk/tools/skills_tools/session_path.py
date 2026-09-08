@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import platform
 import tempfile
 from pathlib import Path
@@ -21,6 +22,16 @@ logger = get_logger(__name__)
 
 # Cache of initialized session paths to avoid re-creating symlinks
 _session_path_cache: dict[str, Path] = {}
+DEFAULT_SKILLS_WORK_DIR = Path("/home/gem/veadk_skills/sessions")
+
+
+def _get_base_path() -> Path:
+    configured = os.getenv("VEADK_SKILLS_WORK_DIR")
+    if configured:
+        return Path(configured).expanduser()
+    if platform.system() in ("Linux", "Darwin"):  # Linux or macOS
+        return DEFAULT_SKILLS_WORK_DIR
+    return Path(tempfile.gettempdir()) / "veadk"
 
 
 def initialize_session_path(session_id: str) -> Path:
@@ -31,7 +42,7 @@ def initialize_session_path(session_id: str) -> Path:
     to the skills directory.
 
     Directory structure:
-        /tmp/veadk/{session_id}/
+        /home/gem/veadk_skills/sessions/{session_id}/
         ├── skills/     -> symlink to skills_directory (read-only shared skills)
         ├── uploads/    -> staged user files (temporary)
         └── outputs/    -> generated files for return
@@ -47,13 +58,7 @@ def initialize_session_path(session_id: str) -> Path:
     if session_id in _session_path_cache:
         return _session_path_cache[session_id]
 
-    # Initialize new session path
-    if platform.system() in ("Linux", "Darwin"):  # Linux or macOS
-        base_path = Path("/tmp") / "veadk"
-    else:  # Windows
-        base_path = Path(tempfile.gettempdir()) / "veadk"
-
-    session_path = base_path / session_id
+    session_path = _get_base_path() / session_id
 
     # Create working directories
     (session_path / "skills").mkdir(parents=True, exist_ok=True)

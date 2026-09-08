@@ -17,13 +17,14 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import re
 import time
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import replace
+from hashlib import sha256
 from types import SimpleNamespace
-from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from fastapi import FastAPI, HTTPException, Request
@@ -37,8 +38,6 @@ from veadk.cli.agentkit_session_metadata import (
 from veadk.cli.codex_app_server import (
     CodexAppServerError,
     CodexAppServerEvent,
-    CodexAppServerTransportError,
-    CodexAppServerTurnTimeoutError,
     CodexDirectoryEntry,
     CodexDirectoryListing,
     CodexImportedImage,
@@ -61,16 +60,15 @@ from veadk.cli.frontend_sandbox import (
     SandboxConversationService,
     SandboxProvisioningError,
     SandboxSessionNotFoundError,
-    SandboxTransportError,
-    SandboxTurnTimeoutError,
     SandboxValidationError,
     mount_sandbox_agent_routes,
     mount_sandbox_routes,
 )
-from veadk.cli.frontend_sandbox_managed_tool_vestack import (
-    VeStackAgentkitSandboxGateway,
-    VeStackManagedTool,
-    VeStackManagedToolSpec,
+from veadk.cli.github_app_pr_review import (
+    GITHUB_APP_REVIEW_HISTORY_KEY,
+    GitHubInstalledRepository,
+    TosGitHubAppReviewRepositoryStore,
+    create_review_record,
 )
 
 
@@ -322,8 +320,6 @@ class _FakeGateway:
         self.envs: list[dict[str, str] | None] = []
         self.deleted: list[SandboxCloudSession] = []
         self.deleted_snapshots: list[SandboxCloudSnapshot] = []
-        self.deleted_managed_tools: list[VeStackManagedTool] = []
-        self.created_managed_tool_specs: list[VeStackManagedToolSpec] = []
         self.thread_ids: list[str] = []
         self.connections: list[_FakeCodex] = []
         self.sessions: dict[str, SandboxCloudSession] = {
@@ -341,45 +337,6 @@ class _FakeGateway:
             )
         }
         self.snapshots: dict[str, SandboxCloudSnapshot] = {}
-        self.managed_tools: dict[str, VeStackManagedTool] = {}
-
-    async def list_managed_tools(
-        self, agent_kind: str, owner_id: str | None = None
-    ) -> list[VeStackManagedTool]:
-        return [
-            tool
-            for tool in self.managed_tools.values()
-            if tool.agent_kind == agent_kind
-            and (owner_id is None or tool.created_by == owner_id)
-        ]
-
-    async def create_managed_tool(
-        self,
-        spec: VeStackManagedToolSpec,
-        *,
-        display_name: str,
-        owner_id: str,
-        creator_name: str,
-        agent_kind: str,
-    ) -> VeStackManagedTool:
-        self.created_managed_tool_specs.append(spec)
-        tool = VeStackManagedTool(
-            tool_id=f"managed-tool-{len(self.managed_tools) + 1}",
-            name=f"VeADK-{agent_kind}",
-            region="e70",
-            status="Ready",
-            created_at="2026-09-01T08:00:00Z",
-            display_name=display_name,
-            created_by=owner_id,
-            creator_name=creator_name,
-            agent_kind=agent_kind,
-        )
-        self.managed_tools[tool.tool_id] = tool
-        return tool
-
-    async def delete_managed_tool(self, tool: VeStackManagedTool) -> None:
-        self.deleted_managed_tools.append(tool)
-        self.managed_tools.pop(tool.tool_id, None)
 
     async def get_tool(self, tool_id: str) -> SimpleNamespace:
         self.tool_ids.append(tool_id)
@@ -483,49 +440,55 @@ class _FakeGateway:
         return None
 
 
-def test_managed_tool_api_is_only_on_vestack_gateway() -> None:
-    assert not hasattr(AgentkitSandboxGateway, "create_managed_tool")
-    assert not hasattr(AgentkitSandboxGateway, "list_managed_tools")
-    assert not hasattr(AgentkitSandboxGateway, "delete_managed_tool")
-    assert hasattr(VeStackAgentkitSandboxGateway, "create_managed_tool")
-    assert hasattr(VeStackAgentkitSandboxGateway, "list_managed_tools")
-    assert hasattr(VeStackAgentkitSandboxGateway, "delete_managed_tool")
+class _FakeTosObject:
+    def __init__(self, content: bytes) -> None:
+        self._content = content
+
+    def read(self, limit: int = -1) -> bytes:
+        if limit < 0:
+            return self._content
+        return self._content[:limit]
 
 
-def test_agent_surface_capability_rejects_missing_malformed_and_wrong_version(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY", raising=False)
-    assert not frontend_sandbox._valid_agent_surface_capability(
-        "token", "hermes", "session-1"
-    )
+class _FakeTosNotFound(Exception):
+    status_code = 404
 
-    monkeypatch.setenv("VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY", "test-signing-key")
-    assert not frontend_sandbox._valid_agent_surface_capability(
-        "malformed", "hermes", "session-1"
-    )
-    token = frontend_sandbox._agent_surface_capability("hermes", "session-1")
-    assert frontend_sandbox._valid_agent_surface_capability(
-        token, "hermes", "session-1"
-    )
-    _version, remainder = token.split(".", 1)
-    assert not frontend_sandbox._valid_agent_surface_capability(
-        f"wrong.{remainder}", "hermes", "session-1"
-    )
+
+class _FakeTosClient:
+    def __init__(self) -> None:
+        self.objects: dict[tuple[str, str], bytes] = {}
+
+    def get_object(self, *, bucket: str, key: str) -> _FakeTosObject:
+        try:
+            return _FakeTosObject(self.objects[(bucket, key)])
+        except KeyError as error:
+            raise _FakeTosNotFound() from error
+
+    def put_object(
+        self,
+        *,
+        bucket: str,
+        key: str,
+        content: bytes,
+        content_length: int,
+        content_type: str,
+    ) -> None:
+        assert content_length == len(content)
+        assert content_type == "application/json"
+        self.objects[(bucket, key)] = content
 
 
 def _app(
     gateway: _FakeGateway,
     tool_id: str | None = "tool-studio",
     snapshot_tool_id: str | None = "tool-studio-snapshot",
-    managed_tool_spec: VeStackManagedToolSpec | None = None,
+    github_app_review_storage_client: _FakeTosClient | None = None,
 ) -> FastAPI:
     app = FastAPI()
     service = SandboxConversationService(
         gateway,
         tool_id=tool_id,
         snapshot_tool_id=snapshot_tool_id,
-        managed_tool_spec=managed_tool_spec,
     )
 
     def _owner(request: Request) -> str:
@@ -546,6 +509,14 @@ def _app(
         _owner,
         admin_resolver=_admin,
         creator_resolver=_creator,
+        github_app_review_storage_bucket=(
+            "studio-state" if github_app_review_storage_client is not None else ""
+        ),
+        github_app_review_storage_client_factory=(
+            (lambda: github_app_review_storage_client)
+            if github_app_review_storage_client is not None
+            else None
+        ),
     )
     return app
 
@@ -554,8 +525,6 @@ def _agent_app(
     gateway: _FakeGateway,
     *,
     snapshot_tool_ids: dict[str, str] | None = None,
-    agentkit_cli_tool_id: str | None = "tool-dev",
-    hermes_managed_tool_spec: VeStackManagedToolSpec | None = None,
 ) -> FastAPI:
     if snapshot_tool_ids is None:
         snapshot_tool_ids = {
@@ -580,18 +549,6 @@ def _agent_app(
     mount_sandbox_agent_routes(
         app,
         {
-            "agentkit-cli": SandboxAgentSessionService(
-                gateway,
-                kind="agentkit-cli",
-                tool_id=agentkit_cli_tool_id,
-                filter_agent_kind=True,
-                display_name_prefix="akcli-",
-                allow_admin_cross_owner=False,
-                terminal_initial_command="clear; agentkit --help; agentkit --version",
-                unconfigured_message=(
-                    "管理员未配置 AgentKit Dev Sandbox，请配置后再使用"
-                ),
-            ),
             "deepseek-harness": SandboxAgentSessionService(
                 gateway,
                 kind="deepseek-harness",
@@ -609,13 +566,8 @@ def _agent_app(
             "hermes": SandboxAgentSessionService(
                 gateway,
                 kind="hermes",
-                tool_id=None if hermes_managed_tool_spec else "tool-hermes",
-                snapshot_tool_id=(
-                    None
-                    if hermes_managed_tool_spec
-                    else snapshot_tool_ids.get("hermes")
-                ),
-                managed_tool_spec=hermes_managed_tool_spec,
+                tool_id="tool-hermes",
+                snapshot_tool_id=snapshot_tool_ids.get("hermes"),
             ),
         },
         _owner,
@@ -623,375 +575,6 @@ def _agent_app(
         _creator,
     )
     return app
-
-
-def test_hermes_managed_tool_mode_creates_one_tool_per_agent() -> None:
-    gateway = _FakeGateway()
-    spec = VeStackManagedToolSpec(
-        tool_type="Station-Hermes",
-        model_agent_name="ep-deepseek-test",
-        model_agent_api_base="http://modelcenter.example:6789",
-        model_agent_api_key="test-model-key",
-        model_agent_model_id="ep-deepseek-test",
-        role_name="VeADKFrontendServiceRole",
-    )
-    alice_headers = {
-        "X-Test-User": "tenant-alice",
-        "X-Test-Creator": "alice@example.com",
-    }
-    with TestClient(_agent_app(gateway, hermes_managed_tool_spec=spec)) as client:
-        capabilities = client.get("/web/hermes/capabilities", headers=alice_headers)
-        created = client.post(
-            "/web/hermes/sessions",
-            headers=alice_headers,
-            json={"displayName": "Alice Hermes", "persistent": False, "diskGb": 32},
-        )
-        session_id = created.json()["sessionId"]
-        alice_list = client.get("/web/hermes/sessions", headers=alice_headers)
-        other_list = client.get(
-            "/web/hermes/sessions", headers={"X-Test-User": "tenant-bob"}
-        )
-        admin_list = client.get(
-            "/web/hermes/sessions",
-            headers={"X-Test-User": "admin", "X-Test-Role": "admin"},
-        )
-        deleted = client.delete(
-            f"/web/hermes/sessions/{session_id}", headers=alice_headers
-        )
-
-    assert capabilities.status_code == 200
-    assert capabilities.json() == {
-        "enabled": True,
-        "reason": "",
-        "persistentEnabled": True,
-        "persistentReason": "",
-        "persistentRequired": True,
-        "storageMode": "disk",
-        "diskGbDefault": 10,
-        "diskGbMin": 5,
-        "diskGbMax": 100,
-    }
-    assert created.status_code == 200
-    assert created.json()["displayName"] == "Alice Hermes"
-    assert created.json()["createdBy"] == "alice@example.com"
-    assert created.json()["persistent"] is True
-    assert len(gateway.created_managed_tool_specs) == 1
-    assert gateway.created_managed_tool_specs[0].disk_gb == 32
-    assert gateway.tool_ids[-2:] == ["managed-tool-1", "managed-tool-1"]
-    assert [item["sessionId"] for item in alice_list.json()["sessions"]] == [session_id]
-    assert other_list.json() == {"sessions": []}
-    assert [item["sessionId"] for item in admin_list.json()["sessions"]] == [session_id]
-    assert deleted.json() == {"deleted": True}
-    assert gateway.managed_tools == {}
-    assert [tool.tool_id for tool in gateway.deleted_managed_tools] == [
-        "managed-tool-1"
-    ]
-
-
-def test_codex_managed_tool_mode_creates_codeenv_tool_per_agent() -> None:
-    gateway = _FakeGateway()
-    spec = VeStackManagedToolSpec(
-        tool_type="CodeEnv",
-        role_name="VeADKFrontendServiceRole",
-    )
-    alice_headers = {
-        "X-Test-User": "tenant-alice",
-        "X-Test-Creator": "alice@example.com",
-    }
-    with TestClient(_app(gateway, managed_tool_spec=spec)) as client:
-        capabilities = client.get("/web/sandbox/capabilities", headers=alice_headers)
-        created = client.post(
-            "/web/sandbox/sessions",
-            headers=alice_headers,
-            json={"displayName": "Alice Codex", "persistent": False, "diskGb": 20},
-        )
-        session_id = created.json()["sessionId"]
-        alice_list = client.get("/web/sandbox/sessions", headers=alice_headers)
-        other_list = client.get(
-            "/web/sandbox/sessions", headers={"X-Test-User": "tenant-bob"}
-        )
-        deleted = client.delete(
-            f"/web/sandbox/sessions/{session_id}", headers=alice_headers
-        )
-
-    assert capabilities.status_code == 200
-    assert capabilities.json() == {
-        "enabled": True,
-        "reason": "",
-        "persistentEnabled": True,
-        "persistentReason": "",
-        "persistentRequired": True,
-        "storageMode": "disk",
-        "diskGbDefault": 10,
-        "diskGbMin": 5,
-        "diskGbMax": 100,
-        "endpointExportEnabled": True,
-    }
-    assert created.status_code == 200
-    assert created.json()["displayName"] == "Alice Codex"
-    assert created.json()["createdBy"] == "alice@example.com"
-    assert created.json()["persistent"] is True
-    assert len(gateway.created_managed_tool_specs) == 1
-    assert gateway.created_managed_tool_specs[0].disk_gb == 20
-    assert [item["sessionId"] for item in alice_list.json()["sessions"]] == [session_id]
-    assert other_list.json() == {"sessions": []}
-    assert deleted.json() == {"deleted": True}
-    assert gateway.managed_tools == {}
-
-
-@pytest.mark.parametrize("disk_gb", [4, 101, 10.5, True, "10"])
-def test_managed_tool_mode_rejects_invalid_disk_size(disk_gb: object) -> None:
-    gateway = _FakeGateway()
-    spec = VeStackManagedToolSpec(
-        tool_type="Station-Hermes",
-        role_name="VeADKFrontendServiceRole",
-    )
-
-    with TestClient(_agent_app(gateway, hermes_managed_tool_spec=spec)) as client:
-        response = client.post(
-            "/web/hermes/sessions",
-            headers={"X-Test-User": "alice"},
-            json={"displayName": "Hermes", "diskGb": disk_gb},
-        )
-
-    assert response.status_code == 422
-    assert gateway.created_managed_tool_specs == []
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("spec", "expected_model_agent_name", "expected_port"),
-    [
-        (
-            VeStackManagedToolSpec(
-                tool_type="CodeEnv",
-                role_name="VeADKFrontendServiceRole",
-                port=8642,
-                disk_gb=24,
-            ),
-            None,
-            8642,
-        ),
-        (
-            VeStackManagedToolSpec(
-                tool_type="Station-Hermes",
-                role_name="VeADKFrontendServiceRole",
-                model_agent_name="ep-deepseek-test",
-                model_agent_api_base="http://modelcenter.example:6789",
-                model_agent_api_key="test-model-key",
-                model_agent_model_id="ep-deepseek-test",
-                port=4500,
-                disk_gb=32,
-            ),
-            "ep-deepseek-test",
-            4500,
-        ),
-    ],
-)
-async def test_gateway_sends_console_equivalent_model_environment_for_hermes(
-    monkeypatch: pytest.MonkeyPatch,
-    spec: VeStackManagedToolSpec,
-    expected_model_agent_name: str | None,
-    expected_port: int,
-) -> None:
-    requests: list[dict[str, object]] = []
-    gateway = VeStackAgentkitSandboxGateway(object(), region_candidates=("e70",))
-
-    async def _call(method_name: str, request: object, *, region: str = "") -> object:
-        assert region == "e70"
-        if method_name == "create_tool":
-            requests.append(request.model_dump(by_alias=True, exclude_none=True))
-            return SimpleNamespace(tool_id="managed-tool-1")
-        assert method_name == "get_tool"
-        return SimpleNamespace(
-            tool_id="managed-tool-1",
-            name="VeADK-Test",
-            status="Ready",
-            tags=[],
-        )
-
-    monkeypatch.setattr(gateway, "_call", _call)
-
-    await gateway.create_managed_tool(
-        spec,
-        display_name="测试智能体",
-        owner_id="tenant-alice",
-        creator_name="alice@example.com",
-        agent_kind=("hermes" if spec.tool_type == "Station-Hermes" else "codex"),
-    )
-
-    assert requests[0]["ToolType"] == spec.tool_type
-    assert requests[0]["Port"] == expected_port
-    assert requests[0].get("ModelAgentName") == expected_model_agent_name
-    envs = {item["Key"]: item["Value"] for item in requests[0]["Envs"]}
-    assert envs["DiskGb"] == str(spec.disk_gb)
-    if spec.tool_type == "Station-Hermes":
-        assert envs == {
-            "DiskGb": "32",
-            "MODEL_AGENT_API_BASE": "http://modelcenter.example:6789",
-            "MODEL_AGENT_API_KEY": "test-model-key",
-            "MODEL_AGENT_MODEL_ID": "ep-deepseek-test",
-        }
-
-
-@pytest.mark.asyncio
-async def test_vestack_gateway_lists_owned_managed_tools_across_pages(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    gateway = VeStackAgentkitSandboxGateway(object(), region_candidates=("region-a",))
-    requests: list[dict[str, object]] = []
-
-    async def _call(method_name: str, request: object, *, region: str = "") -> object:
-        assert method_name == "list_tools"
-        assert region == "region-a"
-        payload = request.model_dump(by_alias=True, exclude_none=True)
-        requests.append(payload)
-        page = len(requests)
-        return SimpleNamespace(
-            tools=[
-                SimpleNamespace(
-                    tool_id=f"tool-{page}",
-                    name=f"Tool {page}",
-                    status="Ready",
-                    created_at=f"2026-09-0{page}T00:00:00Z",
-                    tags=[
-                        {"Key": "veadk_display_name", "Value": f"Agent {page}"},
-                        SimpleNamespace(key="veadk_owner", value="owner-1"),
-                        {"key": "veadk_creator_name", "value": "Alice"},
-                        {"Key": "veadk_agent_kind", "Value": "hermes"},
-                    ],
-                )
-            ],
-            next_token="next" if page == 1 else "",
-        )
-
-    monkeypatch.setattr(gateway, "_call", _call)
-
-    tools = await gateway.list_managed_tools("hermes", owner_id="owner-1")
-
-    assert [tool.tool_id for tool in tools] == ["tool-2", "tool-1"]
-    assert tools[0].display_name == "Agent 2"
-    assert tools[0].created_by == "owner-1"
-    assert tools[0].creator_name == "Alice"
-    assert tools[0].agent_kind == "hermes"
-    assert "NextToken" not in requests[0]
-    assert requests[1]["NextToken"] == "next"
-    assert len(requests[0]["TagFilters"]) == 3
-
-
-@pytest.mark.asyncio
-async def test_vestack_gateway_retries_not_found_region_for_managed_tools(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    gateway = VeStackAgentkitSandboxGateway(
-        object(), region_candidates=("region-a", "region-b")
-    )
-    regions: list[str] = []
-
-    async def _call(method_name: str, request: object, *, region: str = "") -> object:
-        del method_name, request
-        regions.append(region)
-        if region == "region-a":
-            raise RuntimeError("InvalidResource.NotFound")
-        return SimpleNamespace(tools=[], next_token="")
-
-    monkeypatch.setattr(gateway, "_call", _call)
-
-    assert await gateway.list_managed_tools("codex") == []
-    assert regions == ["region-a", "region-b"]
-
-
-@pytest.mark.asyncio
-async def test_vestack_gateway_reports_managed_tool_failures(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    gateway = VeStackAgentkitSandboxGateway(object(), region_candidates=("region-a",))
-
-    async def _list_error(*_args: object, **_kwargs: object) -> object:
-        raise RuntimeError("AccessDenied")
-
-    monkeypatch.setattr(gateway, "_call", _list_error)
-    with pytest.raises(SandboxProvisioningError, match="AccessDenied"):
-        await gateway.list_managed_tools("hermes")
-
-    async def _create_without_id(
-        method_name: str, request: object, *, region: str = ""
-    ) -> object:
-        del request, region
-        assert method_name == "create_tool"
-        return SimpleNamespace(tool_id="")
-
-    monkeypatch.setattr(gateway, "_call", _create_without_id)
-    with pytest.raises(SandboxProvisioningError, match="缺少 ToolId"):
-        await gateway.create_managed_tool(
-            VeStackManagedToolSpec(tool_type="CodeEnv", role_name="role"),
-            display_name="Codex",
-            owner_id="owner-1",
-            creator_name="Alice",
-            agent_kind="codex",
-        )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("terminal_status", ["Failed", "Building"])
-async def test_vestack_gateway_reports_failed_or_timed_out_tool_creation(
-    monkeypatch: pytest.MonkeyPatch,
-    terminal_status: str,
-) -> None:
-    gateway = VeStackAgentkitSandboxGateway(object(), region_candidates=("region-a",))
-    monkeypatch.setattr(
-        "veadk.cli.frontend_sandbox_managed_tool_vestack._READY_ATTEMPTS", 2
-    )
-
-    async def _sleep(_seconds: float) -> None:
-        return None
-
-    monkeypatch.setattr(
-        "veadk.cli.frontend_sandbox_managed_tool_vestack.asyncio.sleep", _sleep
-    )
-
-    async def _call(method_name: str, request: object, *, region: str = "") -> object:
-        del request, region
-        if method_name == "create_tool":
-            return SimpleNamespace(tool_id="tool-1")
-        return SimpleNamespace(
-            tool_id="tool-1",
-            name="Tool",
-            status=terminal_status,
-            tags=[],
-        )
-
-    monkeypatch.setattr(gateway, "_call", _call)
-    expected = "当前状态：failed" if terminal_status == "Failed" else "创建超时"
-    with pytest.raises(SandboxProvisioningError, match=expected):
-        await gateway.create_managed_tool(
-            VeStackManagedToolSpec(tool_type="CodeEnv", role_name="role"),
-            display_name="Codex",
-            owner_id="owner-1",
-            creator_name="Alice",
-            agent_kind="codex",
-        )
-
-
-@pytest.mark.asyncio
-async def test_vestack_gateway_delete_is_idempotent_and_wraps_errors(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    gateway = VeStackAgentkitSandboxGateway(object())
-    tool = VeStackManagedTool(tool_id="tool-1", name="Tool", region="region-a")
-
-    async def _not_found(*_args: object, **_kwargs: object) -> object:
-        raise RuntimeError("InvalidResource.NotFound")
-
-    monkeypatch.setattr(gateway, "_call", _not_found)
-    await gateway.delete_managed_tool(tool)
-
-    async def _denied(*_args: object, **_kwargs: object) -> object:
-        raise RuntimeError("AccessDenied")
-
-    monkeypatch.setattr(gateway, "_call", _denied)
-    with pytest.raises(SandboxProvisioningError, match="AccessDenied"):
-        await gateway.delete_managed_tool(tool)
 
 
 def test_sandbox_route_response_types_resolve_in_openapi() -> None:
@@ -1002,6 +585,690 @@ def test_sandbox_route_response_types_resolve_in_openapi() -> None:
 
         assert schema["openapi"]
         assert schema["paths"]
+
+
+def test_github_app_config_reports_install_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VEADK_GITHUB_APP_ID", "4830047")
+    monkeypatch.setenv("VEADK_GITHUB_APP_SLUG", "agentkit-veadk-studio")
+    monkeypatch.setenv("VEADK_GITHUB_APP_PRIVATE_KEY", "pem")
+    monkeypatch.setenv("VEADK_GITHUB_APP_WEBHOOK_SECRET", "secret")
+    client = TestClient(_app(_FakeGateway()))
+
+    response = client.get("/web/github/app/config", headers={"X-Test-User": "alice"})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "configured": True,
+        "appSlug": "agentkit-veadk-studio",
+        "installUrl": "https://github.com/apps/agentkit-veadk-studio/installations/new",
+        "reason": "",
+    }
+
+
+def test_github_app_repositories_include_review_enablement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VEADK_GITHUB_APP_ID", "4830047")
+    monkeypatch.setenv("VEADK_GITHUB_APP_SLUG", "agentkit-veadk-studio")
+    monkeypatch.setenv("VEADK_GITHUB_APP_PRIVATE_KEY", "pem")
+    monkeypatch.setenv("VEADK_GITHUB_APP_WEBHOOK_SECRET", "secret")
+
+    class _FakeGitHubAppClient:
+        def __init__(self, config: object) -> None:
+            del config
+
+        async def installed_repositories(self) -> list[GitHubInstalledRepository]:
+            return [
+                GitHubInstalledRepository(
+                    installation_id=456,
+                    account="Rhosmarie",
+                    full_name="Rhosmarie/nice",
+                    html_url="https://github.com/Rhosmarie/nice",
+                    private=False,
+                )
+            ]
+
+    monkeypatch.setattr(frontend_sandbox, "GitHubAppClient", _FakeGitHubAppClient)
+    storage = _FakeTosClient()
+    client = TestClient(_app(_FakeGateway(), github_app_review_storage_client=storage))
+
+    save_response = client.put(
+        "/web/github/app/review-repositories",
+        json={"repositories": ["Rhosmarie/nice"]},
+        headers={"X-Test-User": "alice"},
+    )
+    list_response = client.get(
+        "/web/github/app/repositories",
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert save_response.status_code == 200
+    assert save_response.json() == {"repositories": ["Rhosmarie/nice"]}
+    assert list_response.status_code == 200
+    assert list_response.json() == {
+        "repositories": [
+            {
+                "installationId": 456,
+                "account": "Rhosmarie",
+                "fullName": "Rhosmarie/nice",
+                "htmlUrl": "https://github.com/Rhosmarie/nice",
+                "private": False,
+                "reviewEnabled": True,
+            }
+        ],
+        "page": 1,
+        "pageSize": 10,
+        "hasNextPage": False,
+        "reviewSettingsConfigured": True,
+        "reviewSettingsReason": "",
+    }
+
+
+def test_github_app_repositories_report_missing_review_storage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VEADK_GITHUB_APP_ID", "4830047")
+    monkeypatch.setenv("VEADK_GITHUB_APP_SLUG", "agentkit-veadk-studio")
+    monkeypatch.setenv("VEADK_GITHUB_APP_PRIVATE_KEY", "pem")
+    monkeypatch.setenv("VEADK_GITHUB_APP_WEBHOOK_SECRET", "secret")
+
+    class _FakeGitHubAppClient:
+        def __init__(self, config: object) -> None:
+            del config
+
+        async def installed_repositories(self) -> list[GitHubInstalledRepository]:
+            return [
+                GitHubInstalledRepository(
+                    installation_id=456,
+                    account="Rhosmarie",
+                    full_name="Rhosmarie/nice",
+                    html_url="https://github.com/Rhosmarie/nice",
+                    private=False,
+                )
+            ]
+
+    monkeypatch.setattr(frontend_sandbox, "GitHubAppClient", _FakeGitHubAppClient)
+    client = TestClient(_app(_FakeGateway()))
+
+    response = client.get(
+        "/web/github/app/repositories",
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["repositories"][0]["reviewEnabled"] is False
+    assert response.json()["page"] == 1
+    assert response.json()["pageSize"] == 10
+    assert response.json()["hasNextPage"] is False
+    assert response.json()["reviewSettingsConfigured"] is False
+
+
+def test_github_app_repositories_are_paginated_in_studio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VEADK_GITHUB_APP_ID", "4830047")
+    monkeypatch.setenv("VEADK_GITHUB_APP_SLUG", "agentkit-veadk-studio")
+    monkeypatch.setenv("VEADK_GITHUB_APP_PRIVATE_KEY", "pem")
+    monkeypatch.setenv("VEADK_GITHUB_APP_WEBHOOK_SECRET", "secret")
+
+    class _FakeGitHubAppClient:
+        def __init__(self, config: object) -> None:
+            del config
+
+        async def installed_repositories(self) -> list[GitHubInstalledRepository]:
+            return [
+                GitHubInstalledRepository(
+                    installation_id=456,
+                    account="Rhosmarie",
+                    full_name=f"Rhosmarie/repo-{index:02d}",
+                    html_url=f"https://github.com/Rhosmarie/repo-{index:02d}",
+                    private=False,
+                )
+                for index in range(12)
+            ]
+
+    monkeypatch.setattr(frontend_sandbox, "GitHubAppClient", _FakeGitHubAppClient)
+    client = TestClient(
+        _app(_FakeGateway(), github_app_review_storage_client=_FakeTosClient())
+    )
+
+    response = client.get(
+        "/web/github/app/repositories?page=2&pageSize=10",
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["page"] == 2
+    assert payload["pageSize"] == 10
+    assert payload["hasNextPage"] is False
+    assert [item["fullName"] for item in payload["repositories"]] == [
+        "Rhosmarie/repo-10",
+        "Rhosmarie/repo-11",
+    ]
+
+
+def test_github_app_repositories_can_be_searched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VEADK_GITHUB_APP_ID", "4830047")
+    monkeypatch.setenv("VEADK_GITHUB_APP_SLUG", "agentkit-veadk-studio")
+    monkeypatch.setenv("VEADK_GITHUB_APP_PRIVATE_KEY", "pem")
+    monkeypatch.setenv("VEADK_GITHUB_APP_WEBHOOK_SECRET", "secret")
+
+    class _FakeGitHubAppClient:
+        def __init__(self, config: object) -> None:
+            del config
+
+        async def installed_repositories(self) -> list[GitHubInstalledRepository]:
+            return [
+                GitHubInstalledRepository(
+                    installation_id=456,
+                    account="Rhosmarie",
+                    full_name="Rhosmarie/nice",
+                    html_url="https://github.com/Rhosmarie/nice",
+                    private=False,
+                ),
+                GitHubInstalledRepository(
+                    installation_id=789,
+                    account="Other",
+                    full_name="Other/service",
+                    html_url="https://github.com/Other/service",
+                    private=True,
+                ),
+            ]
+
+    monkeypatch.setattr(frontend_sandbox, "GitHubAppClient", _FakeGitHubAppClient)
+    client = TestClient(
+        _app(_FakeGateway(), github_app_review_storage_client=_FakeTosClient())
+    )
+
+    response = client.get(
+        "/web/github/app/repositories?q=nice&page=1&pageSize=10",
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["hasNextPage"] is False
+    assert [item["fullName"] for item in payload["repositories"]] == ["Rhosmarie/nice"]
+
+
+def test_github_app_review_repository_toggle_preserves_other_enabled_repositories(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VEADK_GITHUB_APP_ID", "4830047")
+    monkeypatch.setenv("VEADK_GITHUB_APP_SLUG", "agentkit-veadk-studio")
+    monkeypatch.setenv("VEADK_GITHUB_APP_PRIVATE_KEY", "pem")
+    monkeypatch.setenv("VEADK_GITHUB_APP_WEBHOOK_SECRET", "secret")
+
+    class _FakeGitHubAppClient:
+        def __init__(self, config: object) -> None:
+            del config
+
+        async def installed_repositories(self) -> list[GitHubInstalledRepository]:
+            return [
+                GitHubInstalledRepository(
+                    installation_id=456,
+                    account="Rhosmarie",
+                    full_name=f"Rhosmarie/repo-{index:02d}",
+                    html_url=f"https://github.com/Rhosmarie/repo-{index:02d}",
+                    private=False,
+                )
+                for index in range(12)
+            ]
+
+    monkeypatch.setattr(frontend_sandbox, "GitHubAppClient", _FakeGitHubAppClient)
+    client = TestClient(
+        _app(_FakeGateway(), github_app_review_storage_client=_FakeTosClient())
+    )
+    assert (
+        client.put(
+            "/web/github/app/review-repositories",
+            json={"repositories": ["Rhosmarie/repo-00", "Rhosmarie/repo-10"]},
+            headers={"X-Test-User": "alice"},
+        ).status_code
+        == 200
+    )
+
+    response = client.put(
+        "/web/github/app/review-repositories",
+        json={"repository": "Rhosmarie/repo-11", "reviewEnabled": True},
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["repositories"] == [
+        "Rhosmarie/repo-00",
+        "Rhosmarie/repo-10",
+        "Rhosmarie/repo-11",
+    ]
+
+
+def test_pull_request_review_always_uses_github_app_installation_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VEADK_GITHUB_APP_ID", "4830047")
+    monkeypatch.setenv("VEADK_GITHUB_APP_SLUG", "agentkit-veadk-studio")
+    monkeypatch.setenv("VEADK_GITHUB_APP_PRIVATE_KEY", "pem")
+    monkeypatch.setenv("VEADK_GITHUB_APP_WEBHOOK_SECRET", "secret")
+    calls: list[tuple[str, object]] = []
+
+    class _FakeGitHubAppClient:
+        def __init__(self, config: object) -> None:
+            calls.append(("init", config))
+
+        async def repository_installation_id(self, owner: str, repo: str) -> int:
+            calls.append(("repository", f"{owner}/{repo}"))
+            return 987
+
+        async def installation_token(self, installation_id: int) -> str:
+            calls.append(("installation", installation_id))
+            return "app-installation-token"
+
+    monkeypatch.setattr(frontend_sandbox, "GitHubAppClient", _FakeGitHubAppClient)
+    gateway = _FakeGateway()
+    client = TestClient(_app(gateway))
+
+    response = client.post(
+        "/web/github/pull-request-reviews",
+        json={"pullRequestUrl": "https://github.com/Rhosmarie/nice/pull/23"},
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "started"
+    assert ("repository", "Rhosmarie/nice") in calls
+    assert ("installation", 987) in calls
+    assert gateway.envs[-1] == {
+        "GITHUB_TOKEN": "app-installation-token",
+        "GH_PROMPT_DISABLED": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+
+
+def test_pull_request_review_records_manual_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VEADK_GITHUB_APP_ID", "4830047")
+    monkeypatch.setenv("VEADK_GITHUB_APP_SLUG", "agentkit-veadk-studio")
+    monkeypatch.setenv("VEADK_GITHUB_APP_PRIVATE_KEY", "pem")
+    monkeypatch.setenv("VEADK_GITHUB_APP_WEBHOOK_SECRET", "secret")
+
+    class _FakeGitHubAppClient:
+        def __init__(self, config: object) -> None:
+            del config
+
+        async def repository_installation_id(self, owner: str, repo: str) -> int:
+            assert f"{owner}/{repo}" == "Rhosmarie/nice"
+            return 987
+
+        async def installation_token(self, installation_id: int) -> str:
+            assert installation_id == 987
+            return "app-installation-token"
+
+    monkeypatch.setattr(frontend_sandbox, "GitHubAppClient", _FakeGitHubAppClient)
+    gateway = _FakeGateway()
+    client = TestClient(
+        _app(gateway, github_app_review_storage_client=_FakeTosClient())
+    )
+
+    response = client.post(
+        "/web/github/pull-request-reviews",
+        json={"pullRequestUrl": "https://github.com/Rhosmarie/nice/pull/23"},
+        headers={"X-Test-User": "alice"},
+    )
+    records = client.get(
+        "/web/github/app/review-records",
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert response.status_code == 200
+    assert records.status_code == 200
+    assert records.json()["reviewSettingsConfigured"] is True
+    assert records.json()["page"] == 1
+    assert records.json()["pageSize"] == 10
+    assert records.json()["hasNextPage"] is False
+    assert records.json()["records"][0] | {
+        "id": "record-id",
+        "createdAt": "now",
+        "status": "started",
+    } == {
+        "id": "record-id",
+        "repository": "Rhosmarie/nice",
+        "pullRequestUrl": "https://github.com/Rhosmarie/nice/pull/23",
+        "pullRequestNumber": 23,
+        "status": "started",
+        "trigger": "manual",
+        "createdAt": "now",
+        "deliveryId": "",
+        "action": "",
+        "sessionId": response.json()["sessionId"],
+        "displayName": response.json()["displayName"],
+        "reason": "",
+    }
+
+
+def test_pull_request_review_records_are_paginated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VEADK_GITHUB_APP_ID", "4830047")
+    monkeypatch.setenv("VEADK_GITHUB_APP_SLUG", "agentkit-veadk-studio")
+    monkeypatch.setenv("VEADK_GITHUB_APP_PRIVATE_KEY", "pem")
+    monkeypatch.setenv("VEADK_GITHUB_APP_WEBHOOK_SECRET", "secret")
+    storage = _FakeTosClient()
+    storage.objects[("studio-state", GITHUB_APP_REVIEW_HISTORY_KEY)] = json.dumps(
+        {
+            "records": [
+                {
+                    "id": f"record-{index}",
+                    "repository": "Rhosmarie/nice",
+                    "pullRequestUrl": f"https://github.com/Rhosmarie/nice/pull/{index}",
+                    "pullRequestNumber": index,
+                    "status": "started",
+                    "trigger": "manual",
+                    "createdAt": "2026-09-07T00:00:00Z",
+                    "deliveryId": "",
+                    "action": "",
+                    "sessionId": f"session-{index}",
+                    "displayName": f"PR Review {index}",
+                    "reason": "",
+                }
+                for index in range(1, 6)
+            ]
+        },
+        separators=(",", ":"),
+    ).encode()
+    client = TestClient(_app(_FakeGateway(), github_app_review_storage_client=storage))
+
+    response = client.get(
+        "/web/github/app/review-records?page=2&pageSize=2",
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["page"] == 2
+    assert payload["pageSize"] == 2
+    assert payload["hasNextPage"] is True
+    assert [item["id"] for item in payload["records"]] == ["record-3", "record-4"]
+
+
+def test_pull_request_review_record_status_can_be_completed() -> None:
+    storage = _FakeTosClient()
+    store = TosGitHubAppReviewRepositoryStore(
+        bucket="studio-state",
+        client_factory=lambda: storage,
+    )
+    record = create_review_record(
+        repository="Rhosmarie/nice",
+        pull_request_url="https://github.com/Rhosmarie/nice/pull/23",
+        pull_request_number=23,
+        status="started",
+        trigger="webhook",
+        session_id="remote-1",
+    )
+    asyncio.run(store.append_review_record(record))
+
+    updated = asyncio.run(
+        store.update_review_record_status(
+            record.record_id,
+            status="completed",
+        )
+    )
+
+    assert updated is not None
+    records = asyncio.run(store.review_records())
+    assert records[0].record_id == record.record_id
+    assert records[0].status == "completed"
+    assert records[0].session_id == "remote-1"
+
+
+def test_github_app_webhook_starts_pull_request_review(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VEADK_GITHUB_APP_ID", "4830047")
+    monkeypatch.setenv("VEADK_GITHUB_APP_SLUG", "agentkit-veadk-studio")
+    monkeypatch.setenv("VEADK_GITHUB_APP_PRIVATE_KEY", "pem")
+    monkeypatch.setenv("VEADK_GITHUB_APP_WEBHOOK_SECRET", "secret")
+    calls: list[tuple[str, object]] = []
+
+    class _FakeGitHubAppClient:
+        def __init__(self, config: object) -> None:
+            calls.append(("init", config))
+
+        async def installed_repositories(self) -> list[GitHubInstalledRepository]:
+            return [
+                GitHubInstalledRepository(
+                    installation_id=456,
+                    account="Rhosmarie",
+                    full_name="Rhosmarie/nice",
+                    html_url="https://github.com/Rhosmarie/nice",
+                    private=False,
+                )
+            ]
+
+        async def installation_token(self, installation_id: int) -> str:
+            calls.append(("installation", installation_id))
+            return "webhook-installation-token"
+
+    monkeypatch.setattr(frontend_sandbox, "GitHubAppClient", _FakeGitHubAppClient)
+    storage = _FakeTosClient()
+    gateway = _FakeGateway()
+    client = TestClient(_app(gateway, github_app_review_storage_client=storage))
+    assert (
+        client.put(
+            "/web/github/app/review-repositories",
+            json={"repositories": ["Rhosmarie/nice"]},
+            headers={"X-Test-User": "alice"},
+        ).status_code
+        == 200
+    )
+    payload = {
+        "action": "opened",
+        "installation": {"id": 456},
+        "repository": {"full_name": "Rhosmarie/nice"},
+        "pull_request": {
+            "number": 23,
+            "html_url": "https://github.com/Rhosmarie/nice/pull/23",
+            "draft": False,
+            "head": {"repo": {"full_name": "Rhosmarie/nice"}},
+        },
+    }
+    body = json.dumps(payload, separators=(",", ":")).encode()
+    signature = "sha256=" + hmac.new(b"secret", body, sha256).hexdigest()
+
+    response = client.post(
+        "/web/github/app/webhook",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-GitHub-Event": "pull_request",
+            "X-GitHub-Delivery": "delivery-1",
+            "X-Hub-Signature-256": signature,
+        },
+    )
+
+    assert response.status_code == 202
+    assert response.json()["status"] == "started"
+    records = client.get(
+        "/web/github/app/review-records",
+        headers={"X-Test-User": "alice"},
+    )
+    assert records.status_code == 200
+    record = records.json()["records"][0]
+    assert record | {"id": "record-id", "createdAt": "now", "status": "started"} == {
+        "id": "record-id",
+        "repository": "Rhosmarie/nice",
+        "pullRequestUrl": "https://github.com/Rhosmarie/nice/pull/23",
+        "pullRequestNumber": 23,
+        "status": "started",
+        "trigger": "webhook",
+        "createdAt": "now",
+        "deliveryId": "delivery-1",
+        "action": "opened",
+        "sessionId": response.json()["sessionId"],
+        "displayName": response.json()["displayName"],
+        "reason": "",
+    }
+    assert ("installation", 456) in calls
+    assert gateway.display_names[-1] == "PR Review: Rhosmarie/nice#23"
+    assert gateway.envs[-1] == {
+        "GITHUB_TOKEN": "webhook-installation-token",
+        "GH_PROMPT_DISABLED": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+
+
+def test_github_app_webhook_ignores_disabled_repository(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VEADK_GITHUB_APP_ID", "4830047")
+    monkeypatch.setenv("VEADK_GITHUB_APP_SLUG", "agentkit-veadk-studio")
+    monkeypatch.setenv("VEADK_GITHUB_APP_PRIVATE_KEY", "pem")
+    monkeypatch.setenv("VEADK_GITHUB_APP_WEBHOOK_SECRET", "secret")
+
+    class _FakeGitHubAppClient:
+        def __init__(self, config: object) -> None:
+            del config
+
+        async def installation_token(self, installation_id: int) -> str:
+            raise AssertionError("disabled repositories must not request tokens")
+
+    monkeypatch.setattr(frontend_sandbox, "GitHubAppClient", _FakeGitHubAppClient)
+    gateway = _FakeGateway()
+    client = TestClient(
+        _app(gateway, github_app_review_storage_client=_FakeTosClient())
+    )
+    payload = {
+        "action": "opened",
+        "installation": {"id": 456},
+        "repository": {"full_name": "Rhosmarie/nice"},
+        "pull_request": {
+            "number": 23,
+            "html_url": "https://github.com/Rhosmarie/nice/pull/23",
+            "draft": False,
+            "head": {"repo": {"full_name": "Rhosmarie/nice"}},
+        },
+    }
+    body = json.dumps(payload, separators=(",", ":")).encode()
+    signature = "sha256=" + hmac.new(b"secret", body, sha256).hexdigest()
+
+    response = client.post(
+        "/web/github/app/webhook",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-GitHub-Event": "pull_request",
+            "X-GitHub-Delivery": "delivery-1",
+            "X-Hub-Signature-256": signature,
+        },
+    )
+
+    assert response.status_code == 202
+    assert response.json() == {
+        "status": "ignored",
+        "reason": "repository-review-disabled",
+        "repository": "Rhosmarie/nice",
+    }
+    records = client.get(
+        "/web/github/app/review-records",
+        headers={"X-Test-User": "alice"},
+    )
+    assert records.status_code == 200
+    record = records.json()["records"][0]
+    assert record["status"] == "ignored"
+    assert record["trigger"] == "webhook"
+    assert record["reason"] == "repository-review-disabled"
+    assert record["pullRequestUrl"] == "https://github.com/Rhosmarie/nice/pull/23"
+    assert gateway.created == 0
+
+
+def test_github_app_webhook_retries_pr_review_connect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VEADK_GITHUB_APP_ID", "4830047")
+    monkeypatch.setenv("VEADK_GITHUB_APP_SLUG", "agentkit-veadk-studio")
+    monkeypatch.setenv("VEADK_GITHUB_APP_PRIVATE_KEY", "pem")
+    monkeypatch.setenv("VEADK_GITHUB_APP_WEBHOOK_SECRET", "secret")
+    monkeypatch.setattr(
+        frontend_sandbox,
+        "_GITHUB_PR_REVIEW_CONNECT_RETRY_SECONDS",
+        0,
+    )
+
+    class _FakeGitHubAppClient:
+        def __init__(self, config: object) -> None:
+            del config
+
+        async def installed_repositories(self) -> list[GitHubInstalledRepository]:
+            return [
+                GitHubInstalledRepository(
+                    installation_id=456,
+                    account="Rhosmarie",
+                    full_name="Rhosmarie/nice",
+                    html_url="https://github.com/Rhosmarie/nice",
+                    private=False,
+                )
+            ]
+
+        async def installation_token(self, installation_id: int) -> str:
+            assert installation_id == 456
+            return "webhook-installation-token"
+
+    class _FlakyGateway(_FakeGateway):
+        def __init__(self) -> None:
+            super().__init__()
+            self.open_codex_calls = 0
+
+        async def open_codex(self, session: SandboxCloudSession) -> _FakeCodex:
+            self.open_codex_calls += 1
+            if self.open_codex_calls == 1:
+                raise frontend_sandbox.SandboxInvocationError(
+                    "server rejected WebSocket connection: HTTP 200"
+                )
+            return await super().open_codex(session)
+
+    monkeypatch.setattr(frontend_sandbox, "GitHubAppClient", _FakeGitHubAppClient)
+    storage = _FakeTosClient()
+    gateway = _FlakyGateway()
+    client = TestClient(_app(gateway, github_app_review_storage_client=storage))
+    assert (
+        client.put(
+            "/web/github/app/review-repositories",
+            json={"repositories": ["Rhosmarie/nice"]},
+            headers={"X-Test-User": "alice"},
+        ).status_code
+        == 200
+    )
+    payload = {
+        "action": "opened",
+        "installation": {"id": 456},
+        "repository": {"full_name": "Rhosmarie/nice"},
+        "pull_request": {
+            "number": 23,
+            "html_url": "https://github.com/Rhosmarie/nice/pull/23",
+            "draft": False,
+            "head": {"repo": {"full_name": "Rhosmarie/nice"}},
+        },
+    }
+    body = json.dumps(payload, separators=(",", ":")).encode()
+    signature = "sha256=" + hmac.new(b"secret", body, sha256).hexdigest()
+
+    response = client.post(
+        "/web/github/app/webhook",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-GitHub-Event": "pull_request",
+            "X-GitHub-Delivery": "delivery-1",
+            "X-Hub-Signature-256": signature,
+        },
+    )
+
+    assert response.status_code == 202
+    assert response.json()["status"] == "started"
+    assert gateway.open_codex_calls == 2
 
 
 @pytest.mark.parametrize(
@@ -1119,341 +1386,6 @@ def test_deepseek_harness_reuses_codex_tools_and_has_its_own_surface() -> None:
     assert opened.json()["webuiUrl"].endswith("/deepseek-harness/")
     assert gateway.agent_kinds == ["deepseek-harness"]
     assert "tool-studio-snapshot" in gateway.tool_ids
-
-
-def test_hermes_surface_targets_the_native_dashboard_port_proxy() -> None:
-    service = SandboxAgentSessionService(
-        _FakeGateway(),
-        kind="hermes",
-        tool_id="tool-hermes",
-        surface_path="/proxy/4500/",
-    )
-
-    assert service.surface_path == "/proxy/4500/"
-
-
-@pytest.mark.asyncio
-async def test_agent_surface_capability_resolves_across_replicas(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY", "shared-test-key")
-    gateway = _FakeGateway()
-    first = SandboxAgentSessionService(
-        gateway,
-        kind="hermes",
-        tool_id="tool-studio",
-    )
-    second = SandboxAgentSessionService(
-        gateway,
-        kind="hermes",
-        tool_id="tool-studio",
-    )
-    created = await first.create(
-        "alice",
-        display_name="Hermes",
-        creator_name="alice@example.com",
-        persistent=False,
-    )
-    cloud, token = await first.open(created.instance_id, "alice")
-
-    target = await second.resolve_surface_proxy_target(created.instance_id, token)
-
-    assert target.endpoint == cloud.endpoint
-    with pytest.raises(PermissionError):
-        await second.resolve_surface_proxy_target(created.instance_id, f"{token}x")
-
-
-@pytest.mark.asyncio
-async def test_agent_surface_capability_accepts_previous_valid_token_after_reopen(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY", "shared-test-key")
-    now = [1_000]
-    monkeypatch.setattr(frontend_sandbox.time, "time", lambda: now[0])
-    gateway = _FakeGateway()
-    service = SandboxAgentSessionService(
-        gateway,
-        kind="hermes",
-        tool_id="tool-studio",
-    )
-    created = await service.create(
-        "alice",
-        display_name="Hermes",
-        creator_name="alice@example.com",
-        persistent=False,
-    )
-    cloud, previous_token = await service.open(created.instance_id, "alice")
-    now[0] += 1
-    _, current_token = await service.open(created.instance_id, "alice")
-
-    assert previous_token != current_token
-    target = await service.resolve_surface_proxy_target(
-        created.instance_id,
-        previous_token,
-    )
-
-    assert target.endpoint == cloud.endpoint
-    with pytest.raises(PermissionError):
-        await service.resolve_surface_proxy_target(
-            created.instance_id,
-            f"{previous_token}x",
-        )
-
-
-@pytest.mark.asyncio
-async def test_managed_agent_recovers_tool_mapping_on_another_replica(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    gateway = _FakeGateway()
-    gateway.managed_tools = {
-        "stale-tool": VeStackManagedTool(
-            tool_id="stale-tool", name="Stale", agent_kind="hermes"
-        ),
-        "managed-tool": VeStackManagedTool(
-            tool_id="managed-tool",
-            name="Hermes",
-            display_name="Recovered Hermes",
-            created_by="alice",
-            creator_name="Alice",
-            agent_kind="hermes",
-        ),
-    }
-    gateway.sessions["remote-managed"] = replace(
-        gateway.sessions["remote-existing"],
-        tool_id="managed-tool",
-        instance_id="remote-managed",
-        display_name="",
-        creator_name="",
-        agent_kind="",
-    )
-    original_list_sessions = gateway.list_sessions
-
-    async def _list_sessions(
-        tool_id: str, username: str | None = None
-    ) -> list[SandboxCloudSession]:
-        if tool_id == "stale-tool":
-            raise SandboxProvisioningError("stale")
-        return await original_list_sessions(tool_id, username)
-
-    monkeypatch.setattr(gateway, "list_sessions", _list_sessions)
-    service = SandboxAgentSessionService(
-        gateway,
-        kind="hermes",
-        tool_id=None,
-        managed_tool_spec=VeStackManagedToolSpec(
-            tool_type="Station-Hermes", role_name="role", port=4500
-        ),
-    )
-
-    cloud = await service._cloud_session("remote-managed")
-
-    assert cloud.display_name == "Recovered Hermes"
-    assert cloud.creator_name == "Alice"
-    assert cloud.agent_kind == "hermes"
-    assert cloud.persistent is True
-
-
-@pytest.mark.asyncio
-async def test_managed_agent_list_skips_retiring_and_racy_tools() -> None:
-    attempted_tool_ids: list[str] = []
-
-    class _RacyGateway(_FakeGateway):
-        async def list_sessions(
-            self,
-            tool_id: str,
-            username: str | None = None,
-        ) -> list[SandboxCloudSession]:
-            attempted_tool_ids.append(tool_id)
-            if tool_id == "managed-tool-racy":
-                raise SandboxProvisioningError("AgentKit ListSessions InternalError")
-            return await super().list_sessions(tool_id, username)
-
-    gateway = _RacyGateway()
-    gateway.managed_tools = {
-        "managed-tool-ready": VeStackManagedTool(
-            tool_id="managed-tool-ready",
-            name="VeADK-Hermes-ready",
-            status="Ready",
-            display_name="Ready Hermes",
-            created_by="alice",
-            agent_kind="hermes",
-        ),
-        "managed-tool-deleting": VeStackManagedTool(
-            tool_id="managed-tool-deleting",
-            name="VeADK-Hermes-deleting",
-            status="Deleting",
-            display_name="Deleting Hermes",
-            created_by="alice",
-            agent_kind="hermes",
-        ),
-        "managed-tool-racy": VeStackManagedTool(
-            tool_id="managed-tool-racy",
-            name="VeADK-Hermes-racy",
-            status="Ready",
-            display_name="Racy Hermes",
-            created_by="alice",
-            agent_kind="hermes",
-        ),
-    }
-    gateway.sessions = {
-        "session-ready": SandboxCloudSession(
-            tool_id="managed-tool-ready",
-            instance_id="session-ready",
-            user_session_id="ready",
-            endpoint="https://sandbox.example/?Authorization=secret",
-            status="Ready",
-            created_by="alice",
-        )
-    }
-    service = SandboxAgentSessionService(
-        gateway,
-        kind="hermes",
-        managed_tool_spec=VeStackManagedToolSpec(
-            tool_type="Station-Hermes",
-            role_name="VeADKFrontendServiceRole",
-        ),
-    )
-
-    sessions = await service.list_sessions("alice")
-
-    assert [session.instance_id for session in sessions] == ["session-ready"]
-    assert "managed-tool-deleting" not in attempted_tool_ids
-    assert "managed-tool-racy" in attempted_tool_ids
-
-
-@pytest.mark.asyncio
-async def test_agent_terminal_restores_workspace_across_replicas(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY", "shared-test-key")
-    gateway = _FakeGateway()
-    first = SandboxAgentSessionService(
-        gateway,
-        kind="hermes",
-        tool_id="tool-studio",
-    )
-    second = SandboxAgentSessionService(
-        gateway,
-        kind="hermes",
-        tool_id="tool-studio",
-    )
-    created = await first.create(
-        "alice",
-        display_name="Hermes",
-        creator_name="alice@example.com",
-        persistent=False,
-    )
-    await first.open(created.instance_id, "alice")
-
-    async def _terminal_url(
-        endpoint: str,
-        session_id: str,
-        *,
-        direct: bool = False,
-    ) -> tuple[str, str]:
-        assert endpoint == created.endpoint
-        assert session_id == created.instance_id
-        assert direct is True
-        return "https://sandbox.example/terminal", "shell-1"
-
-    monkeypatch.setattr(
-        "veadk.cli.frontend_sandbox.terminal_launch_url",
-        _terminal_url,
-    )
-
-    url, shell_session_id, token = await second.launch_terminal(
-        created.instance_id,
-        "alice",
-    )
-
-    assert url == "https://sandbox.example/terminal"
-    assert shell_session_id == "shell-1"
-    target = await first.resolve_surface_proxy_target(created.instance_id, token)
-    assert target.endpoint == created.endpoint
-
-
-def test_agentkit_cli_uses_dev_tool_and_isolates_admin_by_owner() -> None:
-    gateway = _FakeGateway()
-    alice_headers = {
-        "X-Test-User": "tenant-alice",
-        "X-Test-Creator": "alice",
-    }
-    bob_admin_headers = {
-        "X-Test-User": "tenant-bob",
-        "X-Test-Creator": "bob",
-        "X-Test-Role": "admin",
-    }
-    with TestClient(_agent_app(gateway)) as client:
-        created = client.post(
-            "/web/agentkit-cli/sessions",
-            headers=alice_headers,
-            json={"displayName": "untrusted", "persistent": False},
-        )
-        session_id = created.json()["sessionId"]
-        alice_sessions = client.get(
-            "/web/agentkit-cli/sessions",
-            headers=alice_headers,
-        )
-        bob_sessions = client.get(
-            "/web/agentkit-cli/sessions",
-            headers=bob_admin_headers,
-        )
-        bob_open = client.post(
-            f"/web/agentkit-cli/sessions/{session_id}/open",
-            headers=bob_admin_headers,
-        )
-        alice_open = client.post(
-            f"/web/agentkit-cli/sessions/{session_id}/open",
-            headers=alice_headers,
-        )
-        terminal = client.post(
-            f"/web/agentkit-cli/sessions/{session_id}/terminal",
-            headers=alice_headers,
-        )
-
-    assert created.status_code == 200
-    assert created.json()["displayName"] == "akcli-alice"
-    assert created.json()["toolName"] == "agentkit-cli"
-    assert created.json()["persistent"] is False
-    assert gateway.tool_ids.count("tool-dev") >= 1
-    assert gateway.agent_kinds == ["agentkit-cli"]
-    assert [item["sessionId"] for item in alice_sessions.json()["sessions"]] == [
-        session_id
-    ]
-    assert bob_sessions.json() == {"sessions": []}
-    assert bob_open.status_code == 404
-    assert alice_open.status_code == 200
-    assert terminal.status_code == 200
-    assert "shellSessionId" not in terminal.json()
-    terminal_query = parse_qs(urlsplit(terminal.json()["url"]).query)
-    assert terminal_query["command"] == ["clear; agentkit --help; agentkit --version"]
-    assert terminal_query["font_size"] == ["12"]
-    assert terminal.json()["url"].startswith(
-        f"/web/sandbox/proxy/{session_id}/terminal/terminal?"
-    )
-
-
-def test_agentkit_cli_reports_unconfigured_dev_sandbox(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("SANDBOX_DEV", raising=False)
-    gateway = _FakeGateway()
-    with TestClient(_agent_app(gateway, agentkit_cli_tool_id=None)) as client:
-        capabilities = client.get(
-            "/web/agentkit-cli/capabilities",
-            headers={"X-Test-User": "alice"},
-        )
-        sessions = client.get(
-            "/web/agentkit-cli/sessions",
-            headers={"X-Test-User": "alice"},
-        )
-
-    message = "管理员未配置 AgentKit Dev Sandbox，请配置后再使用"
-    assert capabilities.status_code == 200
-    assert capabilities.json()["enabled"] is False
-    assert capabilities.json()["reason"] == message
-    assert sessions.status_code == 503
-    assert sessions.json()["detail"]["message"] == message
 
 
 @pytest.mark.parametrize("kind", ["openclaw", "hermes"])
@@ -1763,49 +1695,6 @@ def test_sandbox_routes_list_create_connect_and_disconnect() -> None:
     assert disconnected.json() == {"disconnected": True}
     assert gateway.deleted == []
     assert session_id == "remote-1"
-
-
-def test_sandbox_message_stream_hides_internal_assistant_final_event() -> None:
-    class _FinalEventCodex(_FakeCodex):
-        async def stream_turn(
-            self, prompt: str, skill_ids: tuple[str, ...] = ()
-        ) -> AsyncIterator[CodexAppServerEvent]:
-            del prompt, skill_ids
-            yield CodexAppServerEvent(
-                kind="text",
-                item_id="message-final",
-                text="最终答复",
-            )
-            yield CodexAppServerEvent(
-                kind="assistant_final",
-                item_id="message-final",
-                status="done",
-                text="最终答复",
-            )
-
-    class _FinalEventGateway(_FakeGateway):
-        async def open_codex(self, session: SandboxCloudSession) -> _FakeCodex:
-            del session
-            connection = _FinalEventCodex(self.thread_ids)
-            self.connections.append(connection)
-            return connection
-
-    with TestClient(_app(_FinalEventGateway())) as client:
-        connected = client.post(
-            "/web/sandbox/sessions/remote-existing/connect",
-            headers={"X-Test-User": "alice"},
-        )
-        response = client.post(
-            "/web/sandbox/sessions/remote-existing/messages",
-            headers={"X-Test-User": "alice"},
-            json={"message": "hello"},
-        )
-
-    assert connected.status_code == 200
-    assert response.status_code == 200
-    assert response.text.count('event: delta\ndata: {"text": "最终答复"}') == 1
-    assert '"kind": "assistant_final"' not in response.text
-    assert "event: done" in response.text
 
 
 @pytest.mark.asyncio
@@ -3272,6 +3161,7 @@ async def test_service_passes_allowed_session_environment_to_gateway() -> None:
         "MODEL_BASE_URL": "https://ark.cn-beijing.volces.com/api/v3",
         "ANTHROPIC_BASE_URL": "https://ark.cn-beijing.volces.com/api/v3",
         "CODEX_CONFIG_TOML": 'model = "doubao-seed-2-1-pro-260628"',
+        "GH_TOKEN": "github-secret-token",
     }
 
     await service.create(
@@ -3826,58 +3716,6 @@ def test_sse_error_has_an_explicit_done_frame() -> None:
 
     assert "event: error" in response.text
     assert 'event: done\ndata: {"reason": "failed"}' in response.text
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("source_error", "expected_error"),
-    [
-        (
-            CodexAppServerTurnTimeoutError("turn inactive"),
-            SandboxTurnTimeoutError,
-        ),
-        (
-            CodexAppServerTransportError("connection closed"),
-            SandboxTransportError,
-        ),
-        (CodexAppServerError("turn failed"), frontend_sandbox.SandboxInvocationError),
-    ],
-)
-async def test_stream_message_preserves_codex_failure_category(
-    source_error: CodexAppServerError,
-    expected_error: type[frontend_sandbox.SandboxInvocationError],
-) -> None:
-    class _CategorizedFailureCodex(_FakeCodex):
-        async def stream_turn(
-            self, prompt: str, skill_ids: tuple[str, ...] = ()
-        ) -> AsyncIterator[CodexAppServerEvent]:
-            del prompt, skill_ids
-            if False:
-                yield CodexAppServerEvent()
-            raise source_error
-
-    class _CategorizedFailureGateway(_FakeGateway):
-        async def open_codex(self, session: SandboxCloudSession) -> _FakeCodex:
-            del session
-            connection = _CategorizedFailureCodex(self.thread_ids)
-            self.connections.append(connection)
-            return connection
-
-    service = SandboxConversationService(
-        _CategorizedFailureGateway(),
-        tool_id="tool-studio",
-    )
-    await service.connect("remote-existing", "alice")
-
-    with pytest.raises(expected_error):
-        _ = [
-            event
-            async for event in service.stream_message(
-                "remote-existing",
-                "alice",
-                "continue",
-            )
-        ]
 
 
 def test_sse_error_includes_redacted_exception_chain() -> None:

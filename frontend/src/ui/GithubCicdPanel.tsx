@@ -106,6 +106,28 @@ function SpinnerIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+function GithubTokenEyeIcon({
+  hidden,
+  ...props
+}: SVGProps<SVGSVGElement> & { hidden: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      {...props}
+    >
+      <path d="M2.5 10s2.6-4 7.5-4 7.5 4 7.5 4-2.6 4-7.5 4-7.5-4-7.5-4Z" />
+      <circle cx="10" cy="10" r="1.8" />
+      {hidden ? <path d="m4 4 12 12" /> : null}
+    </svg>
+  );
+}
+
 export function GithubCicdPanel({
   project,
   region,
@@ -130,6 +152,7 @@ export function GithubCicdPanel({
   const [result, setResult] = useState<GithubCicdPipelineResult | null>(null);
   const [error, setError] = useState<GithubCicdPipelineErrorDetail | null>(null);
   const [pendingCicdSelected, setPendingCicdSelected] = useState(false);
+  const [showGithubToken, setShowGithubToken] = useState(false);
 
   useEffect(() => {
     if (binding?.pipelineId || binding?.runtimeId || binding?.status) {
@@ -383,18 +406,43 @@ export function GithubCicdPanel({
             />
           </label>
           <label className="pp-github-cicd-field">
-            <span>{t("githubCicd.token")}</span>
-            <input
-              type="password"
-              value={githubToken}
-              placeholder={t("githubCicd.tokenPlaceholder")}
-              disabled={disabled || submitting}
-              autoComplete="off"
-              onChange={(event) => {
-                setPendingCicdSelected(false);
-                setGithubToken(event.currentTarget.value);
-              }}
-            />
+            <span className="pp-github-token-label-row">
+              <span>{t("githubCicd.token")}</span>
+              <a
+                href="https://github.com/settings/personal-access-tokens/new?name=VeADK%20Studio&description=Sync%20AgentKit%20Studio%20source&contents=write"
+                target="_blank"
+                rel="noreferrer"
+              >
+                {t("githubCicd.getToken")}
+                <ExternalLinkIcon className="pp-ic" />
+              </a>
+            </span>
+            <span className="pp-github-token-input">
+              <input
+                type={showGithubToken ? "text" : "password"}
+                value={githubToken}
+                placeholder={t("githubCicd.tokenPlaceholder")}
+                disabled={disabled || submitting}
+                autoComplete="off"
+                aria-describedby="pp-github-token-help"
+                onChange={(event) => {
+                  setPendingCicdSelected(false);
+                  setGithubToken(event.currentTarget.value);
+                }}
+              />
+              <button
+                type="button"
+                disabled={disabled || submitting}
+                onClick={() => setShowGithubToken((current) => !current)}
+                aria-label={showGithubToken ? t("githubCicd.hideToken") : t("githubCicd.showToken")}
+                title={showGithubToken ? t("githubCicd.hideToken") : t("githubCicd.showToken")}
+              >
+                <GithubTokenEyeIcon hidden={!showGithubToken} />
+              </button>
+            </span>
+            <small id="pp-github-token-help" className="pp-github-token-help">
+              {t("githubCicd.tokenHelp")}
+            </small>
           </label>
           <label className="pp-github-cicd-field">
             <span>{t("githubCicd.targetBranch")}</span>

@@ -20,8 +20,6 @@ import asyncio
 import base64
 import binascii
 import contextlib
-import hashlib
-import hmac
 import json
 import os
 import posixpath
@@ -31,9 +29,8 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Annotated, Any, Protocol
+from typing import Annotated, Any, Protocol
 
-import httpx
 from fastapi import File, Request, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -69,7 +66,6 @@ from veadk.cli.codex_app_server import (
     CodexTokenUsage,
     approval_decision_from_payload,
     permission_settings_from_payload,
-    sandbox_service_url,
 )
 from veadk.cli.frontend_sandbox_proxy import (
     SANDBOX_UPLOAD_MAX_BYTES,
@@ -78,26 +74,34 @@ from veadk.cli.frontend_sandbox_proxy import (
     mount_sandbox_proxy_routes,
     proxy_cookie_name,
     proxy_prefix,
-    terminal_initial_command_url,
     terminal_launch_url,
     upload_sandbox_file,
+)
+from veadk.cli.github_app_pr_review import (
+    GitHubAppClient,
+    GitHubAppReviewError,
+    GitHubAppReviewStorageUnavailable,
+    PageRequest,
+    GitHubPullRequestReviewRecord,
+    TosGitHubAppReviewRepositoryStore,
+    create_review_record,
+    github_app_public_config,
+    load_github_app_config,
+    normalize_review_repository,
+    parse_pull_request_event,
+    verify_webhook_signature,
 )
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-if TYPE_CHECKING:
-    from veadk.cli.frontend_sandbox_managed_tool_vestack import (
-        VeStackManagedTool,
-        VeStackManagedToolSpec,
-    )
+_GITHUB_REVIEW_DEFAULT_PAGE_SIZE = 10
+_GITHUB_REVIEW_MAX_PAGE_SIZE = 50
 
 STUDIO_SANDBOX_TOOL_NAME = "veadk-studio-codex"
 STUDIO_SANDBOX_TTL_SECONDS = 28_800
 STUDIO_SANDBOX_MAX_ACTIVE = 20
 STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH = SESSION_DISPLAY_NAME_MAX_LENGTH
-STUDIO_SANDBOX_DISK_GB_MIN = 5
-STUDIO_SANDBOX_DISK_GB_MAX = 100
 _SANDBOX_CHAT_TOOL_ENV = "SANDBOX_CHAT_CODEX"
 _SANDBOX_CHAT_SNAPSHOT_TOOL_ENV = "SANDBOX_CHAT_CODEX_SNAPSHOT"
 _SANDBOX_ENDPOINT_EXPORT_ENV = "STUDIO_EXPOSE_SANDBOX_ENDPOINT"
@@ -110,21 +114,18 @@ _CODEX_PROJECT_HANDOFF_PAIRING_MIN_TTL_SECONDS = 60
 _CODEX_PROJECT_HANDOFF_PAIRING_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
 _CODEX_PROJECT_HANDOFF_PAIRING_LENGTH = 8
 _SANDBOX_AGENT_TOOL_ENVS = {
-    "agentkit-cli": ("SANDBOX_DEV",),
+    "agentkit-cli": ("SANDBOX_AGENTKIT_CLI_TOOL",),
     "deepseek-harness": (_SANDBOX_CHAT_TOOL_ENV,),
     "openclaw": ("SANDBOX_CHAT_OPENCLAW", "SANDBOX_OPENCLAW_TOOL"),
     "hermes": ("SANDBOX_CHAT_HERMES", "SANDBOX_HERMES_TOOL"),
 }
 _SANDBOX_AGENT_SNAPSHOT_TOOL_ENVS = {
+    "agentkit-cli": "SANDBOX_AGENTKIT_CLI_SNAPSHOT",
     "deepseek-harness": _SANDBOX_CHAT_SNAPSHOT_TOOL_ENV,
     "openclaw": "SANDBOX_CHAT_OPENCLAW_SNAPSHOT",
     "hermes": "SANDBOX_CHAT_HERMES_SNAPSHOT",
 }
 _SANDBOX_CODEX_AGENT_KIND = "codex"
-_AGENT_SURFACE_READY_ATTEMPTS = 90
-_AGENT_SURFACE_READY_INTERVAL_SECONDS = 2
-_AGENT_SURFACE_SIGNING_KEY_ENV = "VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY"
-_AGENT_SURFACE_CAPABILITY_VERSION = "v1"
 _CREATE_SESSION_START_FAIL_CODE = "ErrCreateSessionFail"
 _SESSION_NOT_FOUND_CODE = "InvalidResource.NotFound"
 _ACTIVE_SESSION_STATUSES = {"creating", "pending", "running", "ready", "starting"}
@@ -150,6 +151,8 @@ _CODEX_PROJECT_HANDOFF_HISTORY_IMAGE_MIME_TYPES = frozenset(
     {"image/png", "image/jpeg", "image/gif", "image/webp"}
 )
 _CODEX_PROJECT_HANDOFF_CONTINUATION_MAX_CHARACTERS = 20_000
+_GITHUB_PR_REVIEW_CONNECT_ATTEMPTS = 3
+_GITHUB_PR_REVIEW_CONNECT_RETRY_SECONDS = 2.0
 _CODEX_PROJECT_HANDOFF_FIRST_EVENT_TIMEOUT_SECONDS = 120
 _CODEX_PROJECT_HANDOFF_PROGRESS_HEARTBEAT_SECONDS = 15
 _CODEX_PROJECT_HANDOFF_PERMISSIONS = CodexPermissionSettings(
@@ -167,6 +170,10 @@ _SESSION_CREATE_ENV_ALLOWLIST = frozenset(
         "CODEX_CONFIG_TOML",
         "CODEX_MODEL",
         "CODEX_MODEL_CATALOG_JSON",
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "GH_PROMPT_DISABLED",
+        "GIT_TERMINAL_PROMPT",
         "MODEL_BASE_URL",
         "OPENCODE_BASE_URL",
         "OPENCODE_MODEL",
@@ -180,6 +187,18 @@ _SESSION_MODEL_ENV_KEYS = frozenset(
     }
 )
 _SESSION_CODEX_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
+_GITHUB_PULL_REQUEST_URL_RE = re.compile(
+    r"^https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/pull/([1-9][0-9]*)/?$"
+)
+_GITHUB_PULL_REQUEST_REVIEW_PROMPT = """请评审这个 Pull Request：{pull_request_url}
+
+要求：
+1.你需要遵守GitHub Skill，通过GitHubCLI获取PR信息、diff和必要的上下文
+2.遵守Code-Review Skill的规范，对PR进行CodeReview
+3.GitHub CLI 已通过 GitHub App installation token 授权；禁止执行 gh auth login、禁止请求设备码或浏览器授权。如果 gh 提示需要登录，请直接报告 GitHub App token 不可用或权限不足。
+4.不要修改仓库文件，不要执行破坏性命令。
+5.评审完成后，必须使用 GitHub CLI 将评审结论评论到这个 Pull Request。
+6.执行结束后，请告知我你都进行了哪些操作，给出明确且清晰的反馈"""
 
 
 class SandboxError(RuntimeError):
@@ -241,13 +260,13 @@ class SandboxInvocationError(SandboxError):
 
 
 class SandboxTransportError(SandboxInvocationError):
-    """The connection to the coding agent ended unexpectedly."""
+    """The coding agent transport disconnected during a conversation turn."""
 
     code = "SANDBOX_TRANSPORT_FAILED"
 
 
 class SandboxTurnTimeoutError(SandboxInvocationError):
-    """The coding agent exceeded the configured inactivity timeout."""
+    """The coding agent turn stopped after exceeding its inactivity timeout."""
 
     code = "SANDBOX_TURN_TIMEOUT"
 
@@ -295,16 +314,6 @@ def _safe_error_message(error: object) -> str:
     raw_message = "\n".join(parts) if parts else str(error).strip()
     message = _redact_public_text(raw_message, maximum=20_000)
     return message or type(error).__name__
-
-
-def _sandbox_invocation_error(error: CodexAppServerError) -> SandboxInvocationError:
-    """Preserve actionable Codex failure categories at the Sandbox boundary."""
-    message = _safe_error_message(error)
-    if isinstance(error, CodexAppServerTurnTimeoutError):
-        return SandboxTurnTimeoutError(message)
-    if isinstance(error, CodexAppServerTransportError):
-        return SandboxTransportError(message)
-    return SandboxInvocationError(message)
 
 
 def _is_agentkit_tool_quota_error(error: BaseException) -> bool:
@@ -692,19 +701,6 @@ class SandboxCloudSnapshot:
     created_by: str = ""
 
 
-def _managed_tool_disk_gb(value: object, default: int) -> int:
-    """Validate the persistent disk size used by an independent Tool."""
-    disk_gb = default if value is None else value
-    if isinstance(disk_gb, bool) or not isinstance(disk_gb, int):
-        raise SandboxValidationError("diskGb 必须是整数。")
-    if not STUDIO_SANDBOX_DISK_GB_MIN <= disk_gb <= STUDIO_SANDBOX_DISK_GB_MAX:
-        raise SandboxValidationError(
-            "diskGb 必须在 "
-            f"{STUDIO_SANDBOX_DISK_GB_MIN} 到 {STUDIO_SANDBOX_DISK_GB_MAX} GiB 之间。"
-        )
-    return disk_gb
-
-
 def _restorable_snapshots(
     sessions: list[SandboxCloudSession],
     snapshots: list[SandboxCloudSnapshot],
@@ -789,51 +785,6 @@ def _session_matches_agent_kind(
     if actual == agent_kind:
         return True
     return include_legacy and not actual
-
-
-def _agent_surface_capability(kind: str, session_id: str) -> str:
-    """Issue a replica-safe capability without exposing the cloud endpoint."""
-    signing_key = os.getenv(_AGENT_SURFACE_SIGNING_KEY_ENV, "").strip()
-    if not signing_key:
-        return secrets.token_urlsafe(32)
-    expires_at = int(time.time()) + STUDIO_SANDBOX_TTL_SECONDS
-    payload = f"{_AGENT_SURFACE_CAPABILITY_VERSION}.{expires_at}"
-    message = f"veadk-agent-surface\0{kind}\0{session_id}\0{payload}".encode()
-    signature = hmac.new(signing_key.encode(), message, hashlib.sha256).digest()
-    encoded_signature = base64.urlsafe_b64encode(signature).decode().rstrip("=")
-    return f"{payload}.{encoded_signature}"
-
-
-def _valid_agent_surface_capability(
-    token: str,
-    kind: str,
-    session_id: str,
-) -> bool:
-    signing_key = os.getenv(_AGENT_SURFACE_SIGNING_KEY_ENV, "").strip()
-    if not signing_key or not token:
-        return False
-    try:
-        version, raw_expiry, encoded_signature = token.split(".", 2)
-        expires_at = int(raw_expiry)
-    except (TypeError, ValueError):
-        return False
-    now = int(time.time())
-    if (
-        version != _AGENT_SURFACE_CAPABILITY_VERSION
-        or expires_at < now
-        or expires_at > now + STUDIO_SANDBOX_TTL_SECONDS + 60
-    ):
-        return False
-    payload = f"{version}.{expires_at}"
-    message = f"veadk-agent-surface\0{kind}\0{session_id}\0{payload}".encode()
-    expected = (
-        base64.urlsafe_b64encode(
-            hmac.new(signing_key.encode(), message, hashlib.sha256).digest()
-        )
-        .decode()
-        .rstrip("=")
-    )
-    return secrets.compare_digest(encoded_signature, expected)
 
 
 @dataclass
@@ -1021,28 +972,6 @@ class SandboxCloudGateway(Protocol):
     async def get_tool(self, tool_id: str) -> Any:
         """Read one configured Sandbox Tool."""
         raise NotImplementedError
-
-    async def list_managed_tools(
-        self, agent_kind: str, owner_id: str | None = None
-    ) -> list[VeStackManagedTool]:
-        """List Studio-created per-agent Tools, optionally by owner."""
-        raise NotImplementedError  # pragma: no cover - Protocol declaration
-
-    async def create_managed_tool(
-        self,
-        spec: VeStackManagedToolSpec,
-        *,
-        display_name: str,
-        owner_id: str,
-        creator_name: str,
-        agent_kind: str,
-    ) -> VeStackManagedTool:
-        """Create and wait for one independent Studio-owned Tool."""
-        raise NotImplementedError  # pragma: no cover - Protocol declaration
-
-    async def delete_managed_tool(self, tool: VeStackManagedTool) -> None:
-        """Delete one Studio-created per-agent Tool."""
-        raise NotImplementedError  # pragma: no cover - Protocol declaration
 
     async def list_sessions(
         self, tool_id: str, username: str | None = None
@@ -1656,14 +1585,13 @@ class SandboxConversationService:
         tool_id: str | None = None,
         snapshot_tool_id: str | None = None,
         agent_kind: str = _SANDBOX_CODEX_AGENT_KIND,
-        managed_tool_spec: VeStackManagedToolSpec | None = None,
+        managed_tool_spec: Any | None = None,
     ) -> None:
         self._gateway = gateway
         self._configured_tool_id = (tool_id or "").strip()
         self._configured_snapshot_tool_id = (snapshot_tool_id or "").strip()
         self._agent_kind = agent_kind
         self._managed_tool_spec = managed_tool_spec
-        self._managed_tools_by_session: dict[str, VeStackManagedTool] = {}
         self._sessions: dict[tuple[str, str], SandboxConversation] = {}
         self._registry_lock = asyncio.Lock()
         self._sessions_starting = 0
@@ -1671,36 +1599,26 @@ class SandboxConversationService:
     def capabilities(self) -> dict[str, object]:
         """Report whether the dedicated Codex Tool is configured."""
         tools = self._tools()
-        enabled = self._managed_tool_spec is not None or bool(tools.configured)
-        if self._managed_tool_spec is not None:
-            return {
-                "enabled": enabled,
-                "reason": "" if enabled else "管理员未配置",
-                "persistentEnabled": True,
-                "persistentReason": "",
-                "persistentRequired": True,
-                "storageMode": "disk",
-                "diskGbDefault": self._managed_tool_spec.disk_gb,
-                "diskGbMin": STUDIO_SANDBOX_DISK_GB_MIN,
-                "diskGbMax": STUDIO_SANDBOX_DISK_GB_MAX,
-                "endpointExportEnabled": _sandbox_endpoint_export_enabled(),
-            }
-        persistent_enabled = bool(tools.persistent)
-        return {
+        enabled = bool(tools.configured)
+        capability: dict[str, object] = {
             "enabled": enabled,
             "reason": "" if enabled else "管理员未配置",
-            "persistentEnabled": persistent_enabled,
-            "persistentReason": (
-                ""
-                if persistent_enabled
-                else (
-                    "当前环境仅支持独立 Tool"
-                    if self._managed_tool_spec is not None
-                    else "管理员未配置快照版 Tool"
-                )
-            ),
+            "persistentEnabled": bool(tools.persistent),
+            "persistentReason": "" if tools.persistent else "管理员未配置快照版 Tool",
             "endpointExportEnabled": _sandbox_endpoint_export_enabled(),
         }
+        if self._managed_tool_spec is not None:
+            capability.update(
+                {
+                    "storageMode": "disk",
+                    "diskGbDefault": int(
+                        getattr(self._managed_tool_spec, "disk_gb", 10) or 10
+                    ),
+                    "diskGbMin": 1,
+                    "diskGbMax": 100,
+                }
+            )
+        return capability
 
     def _tools(self) -> SandboxToolPair:
         return SandboxToolPair(
@@ -1725,38 +1643,8 @@ class SandboxConversationService:
         """Read the configured transient or snapshot Sandbox Tool."""
         return await self._gateway.get_tool(self._tool_id(persistent=persistent))
 
-    async def _managed_tool_for_session(
-        self, session_id: str
-    ) -> VeStackManagedTool | None:
-        cached = self._managed_tools_by_session.get(session_id)
-        if cached is not None:
-            return cached
-        for tool in await self._gateway.list_managed_tools(self._agent_kind):
-            try:
-                sessions = await self._gateway.list_sessions(tool.tool_id)
-            except SandboxError:
-                continue
-            for session in sessions:
-                self._managed_tools_by_session[session.instance_id] = tool
-                if session.instance_id == session_id:
-                    return tool
-        return None
-
     async def _cloud_session(self, session_id: str) -> SandboxCloudSession:
         """Find a Session across the configured transient and snapshot Tools."""
-        if self._managed_tool_spec is not None:
-            tool = await self._managed_tool_for_session(session_id)
-            if tool is None:
-                raise SandboxSessionNotFoundError("AgentKit Session 不存在或已过期。")
-            cloud = await self._gateway.get_session(tool.tool_id, session_id)
-            return replace(
-                cloud,
-                display_name=cloud.display_name or tool.display_name,
-                created_by=cloud.created_by or tool.created_by,
-                creator_name=cloud.creator_name or tool.creator_name,
-                agent_kind=cloud.agent_kind or tool.agent_kind or self._agent_kind,
-                persistent=True,
-            )
         tools = self._tools()
         if not tools.configured:
             self._tool_id()
@@ -1779,30 +1667,6 @@ class SandboxConversationService:
         self, owner_id: str, *, is_admin: bool = False
     ) -> list[SandboxCloudSession]:
         """List the configured account's Sessions without exposing Endpoints."""
-        if self._managed_tool_spec is not None:
-            managed_tools = await self._gateway.list_managed_tools(
-                self._agent_kind,
-                None if is_admin else owner_id,
-            )
-            sessions: dict[str, SandboxCloudSession] = {}
-            for tool in managed_tools:
-                for session in await self._gateway.list_sessions(tool.tool_id):
-                    self._managed_tools_by_session[session.instance_id] = tool
-                    sessions[session.instance_id] = replace(
-                        session,
-                        display_name=session.display_name or tool.display_name,
-                        created_by=session.created_by or tool.created_by,
-                        creator_name=session.creator_name or tool.creator_name,
-                        agent_kind=(
-                            session.agent_kind or tool.agent_kind or self._agent_kind
-                        ),
-                        persistent=True,
-                    )
-            return sorted(
-                sessions.values(),
-                key=lambda session: session.created_at,
-                reverse=True,
-            )
         tools = self._tools()
         if not tools.configured:
             self._tool_id()
@@ -1831,8 +1695,6 @@ class SandboxConversationService:
         self, owner_id: str, *, is_admin: bool = False
     ) -> list[SandboxCloudSnapshot]:
         del owner_id
-        if self._managed_tool_spec is not None:
-            return []
         tools = self._tools()
         if not is_admin or not tools.persistent:
             return []
@@ -1910,7 +1772,6 @@ class SandboxConversationService:
         creator_name: str = "",
         persistent: object = True,
         envs: Mapping[str, str] | None = None,
-        disk_gb: object = None,
     ) -> SandboxCloudSession:
         """Create a cloud Session without opening a conversation connection."""
         if not isinstance(display_name, str):
@@ -1942,6 +1803,7 @@ class SandboxConversationService:
                 session_envs[key] = normalized
             if not session_envs:
                 session_envs = None
+        tool_id = self._tool_id(persistent=persistent)
         await self.cleanup_expired()
         async with self._registry_lock:
             if len(self._sessions) + self._sessions_starting >= (
@@ -1950,51 +1812,17 @@ class SandboxConversationService:
                 raise SandboxCapacityError("Sandbox 创建或连接数已达上限，请稍后重试。")
             self._sessions_starting += 1
         try:
-            managed_tool: VeStackManagedTool | None = None
-            if self._managed_tool_spec is not None:
-                managed_spec = replace(
-                    self._managed_tool_spec,
-                    disk_gb=_managed_tool_disk_gb(
-                        disk_gb,
-                        self._managed_tool_spec.disk_gb,
-                    ),
-                )
-                managed_tool = await self._gateway.create_managed_tool(
-                    managed_spec,
-                    display_name=display_name,
-                    owner_id=owner_id,
-                    creator_name=creator_name,
-                    agent_kind=self._agent_kind,
-                )
-                tool_id = managed_tool.tool_id
-            else:
-                tool_id = self._tool_id(persistent=persistent)
-            try:
-                created = await self._gateway.create_session(
-                    tool_id,
-                    display_name,
-                    owner_id,
-                    creator_name,
-                    self._agent_kind,
-                    **({"envs": session_envs} if session_envs else {}),
-                )
-                authoritative = await self._gateway.get_session(
-                    tool_id, created.instance_id
-                )
-            except Exception:
-                if managed_tool is not None:
-                    await self._gateway.delete_managed_tool(managed_tool)
-                raise
-            if managed_tool is not None:
-                self._managed_tools_by_session[created.instance_id] = managed_tool
-                return replace(
-                    authoritative,
-                    display_name=authoritative.display_name or display_name,
-                    created_by=authoritative.created_by or owner_id,
-                    creator_name=authoritative.creator_name or creator_name,
-                    agent_kind=authoritative.agent_kind or self._agent_kind,
-                    persistent=True,
-                )
+            created = await self._gateway.create_session(
+                tool_id,
+                display_name,
+                owner_id,
+                creator_name,
+                self._agent_kind,
+                **({"envs": session_envs} if session_envs else {}),
+            )
+            authoritative = await self._gateway.get_session(
+                tool_id, created.instance_id
+            )
             return _session_for_tools(
                 replace(
                     authoritative,
@@ -2096,11 +1924,7 @@ class SandboxConversationService:
                     session.pending_prompt = prompt
                     session.pending_prompt_timestamp = int(time.time() * 1_000)
                     try:
-                        if (
-                            turn_permissions is None
-                            and turn_timeout_seconds is None
-                            and turn_output_schema is None
-                        ):
+                        if turn_permissions is None and turn_timeout_seconds is None:
                             events = (
                                 session.codex.stream_turn(prompt, skill_ids)
                                 if skill_ids
@@ -2147,9 +1971,17 @@ class SandboxConversationService:
                     finally:
                         session.pending_prompt = ""
                         session.pending_prompt_timestamp = 0
+            except CodexAppServerTurnTimeoutError as error:
+                if listening:
+                    queue.put_nowait(
+                        SandboxTurnTimeoutError(_safe_error_message(error))
+                    )
+            except CodexAppServerTransportError as error:
+                if listening:
+                    queue.put_nowait(SandboxTransportError(_safe_error_message(error)))
             except CodexAppServerError as error:
                 if listening:
-                    queue.put_nowait(_sandbox_invocation_error(error))
+                    queue.put_nowait(SandboxInvocationError(_safe_error_message(error)))
             except asyncio.CancelledError:
                 raise
             except Exception as error:  # noqa: BLE001 - background task boundary
@@ -2640,11 +2472,6 @@ class SandboxConversationService:
         is_admin: bool = False,
     ) -> None:
         """Delete a cloud Session and close its local bridge when connected."""
-        managed_tool = (
-            await self._managed_tool_for_session(session_id)
-            if self._managed_tool_spec is not None
-            else None
-        )
         key = (owner_id, session_id)
         if not is_admin and any(
             candidate_id == session_id and candidate_owner != owner_id
@@ -2670,9 +2497,6 @@ class SandboxConversationService:
                 async with candidate.lock:
                     await candidate.codex.close()
         await self._gateway.delete_session(cloud)
-        if managed_tool is not None:
-            self._managed_tools_by_session.pop(session_id, None)
-            await self._gateway.delete_managed_tool(managed_tool)
 
     async def cleanup_expired(self) -> None:
         """Drop local connections that exceeded their remote TTL window."""
@@ -2714,6 +2538,7 @@ class SandboxAgentSessionService:
         kind: str,
         tool_id: str | None = None,
         snapshot_tool_id: str | None = None,
+        managed_tool_spec: Any | None = None,
         surface_path: str | None = None,
         filter_agent_kind: bool = False,
         display_name_prefix: str = "",
@@ -2722,93 +2547,27 @@ class SandboxAgentSessionService:
         surface_start_command: str = "",
         surface_ready_path: str = "",
         unconfigured_message: str = "",
-        managed_tool_spec: VeStackManagedToolSpec | None = None,
     ) -> None:
         if kind not in _SANDBOX_AGENT_TOOL_ENVS:
             raise ValueError(f"Unsupported Studio sandbox agent kind: {kind}")
         self._gateway = gateway
         self.kind = kind
         surface = (surface_path or f"/{kind}/").strip()
-        normalized_surface = f"/{surface.strip('/')}"
-        self.surface_path = (
-            normalized_surface
-            if normalized_surface.lower().endswith((".html", ".htm"))
-            else f"{normalized_surface}/"
-        )
+        self.surface_path = f"/{surface.strip('/')}/"
         self._filter_agent_kind = filter_agent_kind
-        self._display_name_prefix = display_name_prefix.strip()
-        self.allow_admin_cross_owner = allow_admin_cross_owner
-        self._terminal_initial_command = terminal_initial_command.strip()
-        self._surface_start_command = surface_start_command.strip()
-        self._surface_ready_path = surface_ready_path.strip()
-        self._unconfigured_message = unconfigured_message.strip()
-        self._managed_tool_spec = managed_tool_spec
         self._configured_tool_id = (tool_id or "").strip()
         self._configured_snapshot_tool_id = (snapshot_tool_id or "").strip()
+        self._managed_tool_spec = managed_tool_spec
+        self._display_name_prefix = display_name_prefix
+        self._allow_admin_cross_owner = allow_admin_cross_owner
+        self._terminal_initial_command = terminal_initial_command
+        self._surface_start_command = surface_start_command
+        self._surface_ready_path = surface_ready_path
+        self._unconfigured_message = unconfigured_message
         self._workspaces: dict[
             tuple[str, str], tuple[SandboxCloudSession, str, float]
         ] = {}
         self._created_session_ids: set[str] = set()
-        self._managed_tools_by_session: dict[str, VeStackManagedTool] = {}
-        self._surface_start_locks: dict[str, asyncio.Lock] = {}
-
-    async def _surface_is_ready(self, endpoint: str) -> bool:
-        if not self._surface_ready_path:
-            return True
-        try:
-            async with httpx.AsyncClient(
-                timeout=5,
-                follow_redirects=False,
-                trust_env=False,
-            ) as client:
-                response = await client.get(
-                    sandbox_service_url(endpoint, self._surface_ready_path),
-                    headers={"accept": "text/html"},
-                )
-        except (httpx.HTTPError, TypeError, ValueError):
-            return False
-        return 200 <= response.status_code < 300
-
-    async def _ensure_surface_ready(self, cloud: SandboxCloudSession) -> None:
-        if not self._surface_start_command or not self._surface_ready_path:
-            return
-        lock = self._surface_start_locks.setdefault(
-            cloud.instance_id,
-            asyncio.Lock(),
-        )
-        async with lock:
-            if await self._surface_is_ready(cloud.endpoint):
-                return
-            try:
-                async with httpx.AsyncClient(
-                    timeout=15,
-                    follow_redirects=False,
-                    trust_env=False,
-                ) as client:
-                    response = await client.post(
-                        sandbox_service_url(cloud.endpoint, "/v1/shell/exec"),
-                        headers={"content-type": "application/json"},
-                        json={
-                            "id": "",
-                            "exec_dir": "/home/gem/.hermes",
-                            "command": self._surface_start_command,
-                            "timeout": 5,
-                            "hard_timeout": 15,
-                            "strict": True,
-                        },
-                    )
-            except (httpx.HTTPError, TypeError, ValueError) as error:
-                raise SandboxInvocationError("无法启动 Hermes Dashboard。") from error
-            if response.status_code < 200 or response.status_code >= 300:
-                raise SandboxInvocationError(
-                    f"Hermes Dashboard 启动服务返回 HTTP {response.status_code}。"
-                )
-            for attempt in range(_AGENT_SURFACE_READY_ATTEMPTS):
-                if await self._surface_is_ready(cloud.endpoint):
-                    return
-                if attempt + 1 < _AGENT_SURFACE_READY_ATTEMPTS:
-                    await asyncio.sleep(_AGENT_SURFACE_READY_INTERVAL_SECONDS)
-            raise SandboxInvocationError("Hermes Dashboard 启动超时，请稍后重试。")
 
     def _tools(self) -> SandboxToolPair:
         transient = self._configured_tool_id
@@ -2821,79 +2580,42 @@ class SandboxAgentSessionService:
                 ),
                 "",
             )
-        snapshot_env = _SANDBOX_AGENT_SNAPSHOT_TOOL_ENVS.get(self.kind, "")
-        persistent = self._configured_snapshot_tool_id or (
-            (os.getenv(snapshot_env) or "").strip() if snapshot_env else ""
+        persistent = (
+            self._configured_snapshot_tool_id
+            or (os.getenv(_SANDBOX_AGENT_SNAPSHOT_TOOL_ENVS[self.kind]) or "").strip()
         )
         return SandboxToolPair(transient=transient, persistent=persistent)
 
     def _tool_id(self, *, persistent: bool = False, required: bool = True) -> str:
         tool_id = self._tools().select(persistent)
         if required and not tool_id:
-            if self._unconfigured_message:
-                raise SandboxConfigurationError(self._unconfigured_message)
             detail = "快照版 " if persistent else ""
             raise SandboxConfigurationError(f"管理员未配置{detail}Sandbox Tool。")
         return tool_id
 
     def capabilities(self) -> dict[str, object]:
         tools = self._tools()
-        enabled = self._managed_tool_spec is not None or bool(tools.configured)
-        if self._managed_tool_spec is not None:
-            return {
-                "enabled": enabled,
-                "reason": ""
-                if enabled
-                else (self._unconfigured_message or "管理员未配置"),
-                "persistentEnabled": True,
-                "persistentReason": "",
-                "persistentRequired": True,
-                "storageMode": "disk",
-                "diskGbDefault": self._managed_tool_spec.disk_gb,
-                "diskGbMin": STUDIO_SANDBOX_DISK_GB_MIN,
-                "diskGbMax": STUDIO_SANDBOX_DISK_GB_MAX,
-            }
-        persistent_enabled = bool(tools.persistent)
-        return {
+        enabled = bool(tools.configured)
+        capability: dict[str, object] = {
             "enabled": enabled,
-            "reason": "" if enabled else (self._unconfigured_message or "管理员未配置"),
-            "persistentEnabled": persistent_enabled,
-            "persistentReason": (
-                "" if persistent_enabled else "当前环境仅支持独立 Tool"
-            ),
+            "reason": "" if enabled else self._unconfigured_message or "管理员未配置",
+            "persistentEnabled": bool(tools.persistent),
+            "persistentReason": "" if tools.persistent else "管理员未配置快照版 Tool",
         }
-
-    async def _managed_tool_for_session(
-        self, session_id: str
-    ) -> VeStackManagedTool | None:
-        cached = self._managed_tools_by_session.get(session_id)
-        if cached is not None:
-            return cached
-        for tool in await self._gateway.list_managed_tools(self.kind):
-            try:
-                sessions = await self._gateway.list_sessions(tool.tool_id)
-            except SandboxError:
-                continue
-            for session in sessions:
-                self._managed_tools_by_session[session.instance_id] = tool
-                if session.instance_id == session_id:
-                    return tool
-        return None
+        if self._managed_tool_spec is not None:
+            capability.update(
+                {
+                    "storageMode": "disk",
+                    "diskGbDefault": int(
+                        getattr(self._managed_tool_spec, "disk_gb", 10) or 10
+                    ),
+                    "diskGbMin": 1,
+                    "diskGbMax": 100,
+                }
+            )
+        return capability
 
     async def _cloud_session(self, session_id: str) -> SandboxCloudSession:
-        if self._managed_tool_spec is not None:
-            tool = await self._managed_tool_for_session(session_id)
-            if tool is None:
-                raise SandboxSessionNotFoundError("AgentKit Session 不存在或已过期。")
-            cloud = await self._gateway.get_session(tool.tool_id, session_id)
-            return replace(
-                cloud,
-                display_name=cloud.display_name or tool.display_name,
-                created_by=cloud.created_by or tool.created_by,
-                creator_name=cloud.creator_name or tool.creator_name,
-                agent_kind=cloud.agent_kind or tool.agent_kind or self.kind,
-                persistent=True,
-            )
         tools = self._tools()
         if not tools.configured:
             self._tool_id()
@@ -2917,49 +2639,6 @@ class SandboxAgentSessionService:
     async def list_sessions(
         self, owner_id: str, *, is_admin: bool = False
     ) -> list[SandboxCloudSession]:
-        if self._managed_tool_spec is not None:
-            managed_tools = await self._gateway.list_managed_tools(
-                self.kind,
-                None if is_admin else owner_id,
-            )
-            sessions: dict[str, SandboxCloudSession] = {}
-            for tool in managed_tools:
-                if tool.status.lower() in {"deleting", "deleted"}:
-                    self._managed_tools_by_session = {
-                        session_id: cached_tool
-                        for session_id, cached_tool in self._managed_tools_by_session.items()
-                        if cached_tool.tool_id != tool.tool_id
-                    }
-                    continue
-                try:
-                    found = await self._gateway.list_sessions(tool.tool_id)
-                except SandboxError as error:
-                    # Tool deletion is asynchronous. ListTools can briefly return
-                    # a stale Ready item after its Session data plane has already
-                    # disappeared, where ListSessions reports InternalError. One
-                    # retiring Tool must not make every managed agent unavailable.
-                    logger.warning(
-                        "Skipping %s Tool %s while listing Sessions: %s",
-                        self.kind,
-                        tool.tool_id,
-                        type(error).__name__,
-                    )
-                    continue
-                for session in found:
-                    self._managed_tools_by_session[session.instance_id] = tool
-                    sessions[session.instance_id] = replace(
-                        session,
-                        display_name=session.display_name or tool.display_name,
-                        created_by=session.created_by or tool.created_by,
-                        creator_name=session.creator_name or tool.creator_name,
-                        agent_kind=session.agent_kind or tool.agent_kind or self.kind,
-                        persistent=True,
-                    )
-            return sorted(
-                sessions.values(),
-                key=lambda session: session.created_at,
-                reverse=True,
-            )
         tools = self._tools()
         if not tools.configured:
             self._tool_id()
@@ -2990,8 +2669,6 @@ class SandboxAgentSessionService:
         self, owner_id: str, *, is_admin: bool = False
     ) -> list[SandboxCloudSnapshot]:
         del owner_id
-        if self._managed_tool_spec is not None:
-            return []
         tools = self._tools()
         if not is_admin or not tools.persistent:
             return []
@@ -3068,63 +2745,16 @@ class SandboxAgentSessionService:
         display_name: object = "",
         creator_name: str = "",
         persistent: object = True,
-        disk_gb: object = None,
     ) -> SandboxCloudSession:
         if not isinstance(display_name, str):
             raise SandboxValidationError("智能体名称必须是文本。")
-        if self._display_name_prefix:
-            identity = creator_name.strip() or owner_id
-            identity_limit = max(
-                0,
-                STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH - len(self._display_name_prefix),
-            )
-            display_name = f"{self._display_name_prefix}{identity[:identity_limit]}"
-        else:
-            display_name = display_name.strip()
+        display_name = display_name.strip()
         if len(display_name) > STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH:
             raise SandboxValidationError(
                 f"智能体名称不能超过 {STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH} 个字符。"
             )
         if not isinstance(persistent, bool):
             raise SandboxValidationError("persistent 必须是布尔值。")
-        if self._managed_tool_spec is not None:
-            managed_spec = replace(
-                self._managed_tool_spec,
-                disk_gb=_managed_tool_disk_gb(
-                    disk_gb,
-                    self._managed_tool_spec.disk_gb,
-                ),
-            )
-            tool = await self._gateway.create_managed_tool(
-                managed_spec,
-                display_name=display_name,
-                owner_id=owner_id,
-                creator_name=creator_name,
-                agent_kind=self.kind,
-            )
-            try:
-                created = await self._gateway.create_session(
-                    tool.tool_id,
-                    display_name,
-                    owner_id,
-                    creator_name,
-                    self.kind,
-                )
-                authoritative = await self._gateway.get_session(
-                    tool.tool_id, created.instance_id
-                )
-            except Exception:
-                await self._gateway.delete_managed_tool(tool)
-                raise
-            self._managed_tools_by_session[created.instance_id] = tool
-            return replace(
-                authoritative,
-                display_name=authoritative.display_name or display_name,
-                created_by=authoritative.created_by or owner_id,
-                creator_name=authoritative.creator_name or creator_name,
-                agent_kind=authoritative.agent_kind or self.kind,
-                persistent=True,
-            )
         tool_id = self._tool_id(persistent=persistent)
         created = await self._gateway.create_session(
             tool_id,
@@ -3156,8 +2786,7 @@ class SandboxAgentSessionService:
             raise SandboxSessionUnavailableError(
                 f"AgentKit Session 尚未就绪，当前状态：{status}。"
             )
-        await self._ensure_surface_ready(cloud)
-        token = _agent_surface_capability(self.kind, session_id)
+        token = secrets.token_urlsafe(32)
         self._workspaces[(owner_id, session_id)] = (
             cloud,
             token,
@@ -3173,11 +2802,6 @@ class SandboxAgentSessionService:
         is_admin: bool = False,
     ) -> None:
         """Delete one managed cloud Session and revoke its local workspace."""
-        managed_tool = (
-            await self._managed_tool_for_session(session_id)
-            if self._managed_tool_spec is not None
-            else None
-        )
         if not is_admin and any(
             candidate_id == session_id and candidate_owner != owner_id
             for candidate_owner, candidate_id in self._workspaces
@@ -3197,47 +2821,20 @@ class SandboxAgentSessionService:
         }
         self._created_session_ids.discard(session_id)
         await self._gateway.delete_session(cloud)
-        if managed_tool is not None:
-            self._managed_tools_by_session.pop(session_id, None)
-            await self._gateway.delete_managed_tool(managed_tool)
 
     async def launch_terminal(
         self,
         session_id: str,
         owner_id: str,
-        *,
-        is_admin: bool = False,
     ) -> tuple[str, str, str]:
-        """Create a shell, restoring replica-local state when necessary."""
+        """Create a shell for an opened branded Session."""
+        cloud, token, _expires_at = self._workspace(session_id, owner_id)
         try:
-            cloud, token, _expires_at = self._workspace(session_id, owner_id)
-        except SandboxSessionNotFoundError:
-            cloud = await self._cloud_session(session_id)
-            _require_session_access(cloud, owner_id, is_admin=is_admin)
-            if cloud.status.lower() != "ready" or not cloud.endpoint:
-                status = cloud.status or "Unknown"
-                raise SandboxSessionUnavailableError(
-                    f"AgentKit Session 尚未就绪，当前状态：{status}。"
-                )
-            token = _agent_surface_capability(self.kind, session_id)
-            self._workspaces[(owner_id, session_id)] = (
-                cloud,
-                token,
-                time.monotonic() + STUDIO_SANDBOX_TTL_SECONDS,
+            url, shell_session_id = await terminal_launch_url(
+                cloud.endpoint,
+                session_id,
+                direct=True,
             )
-        try:
-            if self._terminal_initial_command:
-                url = terminal_initial_command_url(
-                    session_id,
-                    self._terminal_initial_command,
-                )
-                shell_session_id = ""
-            else:
-                url, shell_session_id = await terminal_launch_url(
-                    cloud.endpoint,
-                    session_id,
-                    direct=True,
-                )
         except (RuntimeError, TypeError, ValueError) as error:
             raise SandboxInvocationError(_safe_error_message(error)) from error
         return url, shell_session_id, token
@@ -3259,27 +2856,6 @@ class SandboxAgentSessionService:
         if found:
             raise PermissionError("invalid managed agent proxy capability")
         raise KeyError(session_id)
-
-    async def resolve_surface_proxy_target(
-        self,
-        session_id: str,
-        token: str,
-    ) -> SandboxProxyTarget:
-        """Resolve a WebUI capability on any Studio replica."""
-        try:
-            return self.resolve_proxy_target(session_id, token)
-        except (KeyError, PermissionError):
-            # A different replica, or a later open on this replica, may have a
-            # different still-valid capability cached for the same Session.
-            # Fall back to the shared HMAC signature instead of treating the
-            # replica-local cache as authoritative.
-            pass
-        if not _valid_agent_surface_capability(token, self.kind, session_id):
-            raise PermissionError("invalid managed agent surface capability")
-        cloud = await self._cloud_session(session_id)
-        if cloud.status.lower() != "ready" or not cloud.endpoint:
-            raise KeyError(session_id)
-        return SandboxProxyTarget(endpoint=cloud.endpoint)
 
     def _workspace(
         self,
@@ -3350,12 +2926,8 @@ def mount_sandbox_agent_routes(
             raise HTTPException(status_code=404, detail="未知的沙箱智能体类型。")
         return service
 
-    def _is_admin(service: SandboxAgentSessionService, request: Request) -> bool:
-        return bool(
-            service.allow_admin_cross_owner
-            and admin_resolver
-            and admin_resolver(request)
-        )
+    def _is_admin(request: Request) -> bool:
+        return bool(admin_resolver and admin_resolver(request))
 
     def _http_error(error: SandboxError) -> HTTPException:
         status_code = 500
@@ -3415,10 +2987,9 @@ def mount_sandbox_agent_routes(
     ) -> dict[str, object]:
         try:
             owner_id = owner_resolver(request)
-            service = _service(kind)
-            sessions, snapshots = await service.list_resources(
+            sessions, snapshots = await _service(kind).list_resources(
                 owner_id,
-                is_admin=_is_admin(service, request),
+                is_admin=_is_admin(request),
                 auto_resume_snapshots=_request_auto_resume_snapshots(
                     request,
                     default=True,
@@ -3461,7 +3032,6 @@ def mount_sandbox_agent_routes(
                 data.get("displayName", ""),
                 creator_resolver(request) if creator_resolver else owner_id,
                 data.get("persistent", True),
-                data.get("diskGb"),
             )
         except SandboxError as error:
             raise _http_error(error) from error
@@ -3475,11 +3045,10 @@ def mount_sandbox_agent_routes(
     ) -> dict[str, object]:
         owner_id = owner_resolver(request)
         try:
-            service = _service(kind)
-            session = await service.resume_snapshot(
+            session = await _service(kind).resume_snapshot(
                 snapshot_id,
                 owner_id,
-                is_admin=_is_admin(service, request),
+                is_admin=_is_admin(request),
             )
         except SandboxError as error:
             raise _http_error(error) from error
@@ -3492,11 +3061,10 @@ def mount_sandbox_agent_routes(
         request: Request,
     ) -> dict[str, bool]:
         try:
-            service = _service(kind)
-            await service.delete_snapshot(
+            await _service(kind).delete_snapshot(
                 snapshot_id,
                 owner_resolver(request),
-                is_admin=_is_admin(service, request),
+                is_admin=_is_admin(request),
             )
         except SandboxError as error:
             raise _http_error(error) from error
@@ -3514,7 +3082,7 @@ def mount_sandbox_agent_routes(
             session, token = await service.open(
                 session_id,
                 owner_id,
-                is_admin=_is_admin(service, request),
+                is_admin=_is_admin(request),
             )
         except SandboxError as error:
             raise _http_error(error) from error
@@ -3531,11 +3099,10 @@ def mount_sandbox_agent_routes(
         request: Request,
     ) -> dict[str, bool]:
         try:
-            service = _service(kind)
-            await service.delete(
+            await _service(kind).delete(
                 session_id,
                 owner_resolver(request),
-                is_admin=_is_admin(service, request),
+                is_admin=_is_admin(request),
             )
         except SandboxError as error:
             raise _http_error(error) from error
@@ -3548,18 +3115,13 @@ def mount_sandbox_agent_routes(
         request: Request,
     ) -> JSONResponse:
         try:
-            service = _service(kind)
-            url, shell_session_id, token = await service.launch_terminal(
+            url, shell_session_id, token = await _service(kind).launch_terminal(
                 session_id,
                 owner_resolver(request),
-                is_admin=_is_admin(service, request),
             )
         except SandboxError as error:
             raise _http_error(error) from error
-        payload = {"url": url}
-        if shell_session_id:
-            payload["shellSessionId"] = shell_session_id
-        response = JSONResponse(payload)
+        response = JSONResponse({"url": url, "shellSessionId": shell_session_id})
         response.headers["Cache-Control"] = "no-store"
         forwarded_protocol = (
             request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip()
@@ -3575,12 +3137,12 @@ def mount_sandbox_agent_routes(
         )
         return response
 
-    async def _surface_target(
+    def _surface_target(
         kind: str,
         session_id: str,
         token: str,
     ) -> SandboxProxyTarget:
-        return await _service(kind).resolve_surface_proxy_target(session_id, token)
+        return _service(kind).resolve_proxy_target(session_id, token)
 
     mount_agent_surface_proxy_routes(app, _surface_target)
 
@@ -3592,6 +3154,8 @@ def mount_sandbox_routes(
     proxy_target_resolver: Callable[[str, str], SandboxProxyTarget] | None = None,
     admin_resolver: Callable[[Any], bool] | None = None,
     creator_resolver: Callable[[Any], str] | None = None,
+    github_app_review_storage_bucket: str = "",
+    github_app_review_storage_client_factory: Callable[[], Any] | None = None,
 ) -> None:
     """Mount Studio HTTP routes for reusable Sandbox Sessions."""
     from fastapi import HTTPException
@@ -3987,30 +3551,548 @@ def mount_sandbox_routes(
     async def _start_sandbox_session(request: Request) -> dict[str, object]:
         owner_id = owner_resolver(request)
         try:
-            body = await request.body()
-            if body:
-                try:
-                    data = json.loads(body)
-                except (json.JSONDecodeError, UnicodeDecodeError) as error:
-                    raise SandboxValidationError(
-                        "创建智能体的请求不是有效 JSON。"
-                    ) from error
-                if not isinstance(data, dict):
-                    raise SandboxValidationError("创建智能体的请求格式无效。")
-            else:
-                data = {}
+            data = await _request_object(request)
             session = await service.create(
                 owner_id,
                 data.get("displayName", ""),
                 creator_resolver(request) if creator_resolver else owner_id,
                 data.get("persistent", True),
-                disk_gb=data.get("diskGb"),
+                envs=data.get("envs") if "envs" in data else None,
             )
         except SandboxError as error:
             raise _http_error(error) from error
         return {
             **_public_session(session, owner_id),
             "toolName": STUDIO_SANDBOX_TOOL_NAME,
+        }
+
+    def _github_app_http_error(
+        error: GitHubAppReviewError,
+        *,
+        status_code: int = 503,
+    ) -> HTTPException:
+        return HTTPException(
+            status_code=status_code,
+            detail={
+                "code": "GITHUB_APP_REVIEW_ERROR",
+                "message": str(error),
+                "retryable": False,
+            },
+        )
+
+    def _github_app_review_store() -> TosGitHubAppReviewRepositoryStore | None:
+        bucket = github_app_review_storage_bucket.strip()
+        if not bucket or github_app_review_storage_client_factory is None:
+            return None
+        return TosGitHubAppReviewRepositoryStore(
+            bucket=bucket,
+            client_factory=github_app_review_storage_client_factory,
+        )
+
+    async def _remember_github_review_record(
+        store: TosGitHubAppReviewRepositoryStore,
+        record: GitHubPullRequestReviewRecord,
+    ) -> None:
+        try:
+            await store.append_review_record(record)
+        except GitHubAppReviewError as error:
+            logger.warning("Failed to save GitHub PR review record: %s", error)
+
+    async def _github_app_installed_repositories() -> list[dict[str, object]]:
+        config = load_github_app_config()
+        if config is None:
+            raise GitHubAppReviewError("管理员未配置 GitHub App。")
+        client = GitHubAppClient(config)
+        repositories = await client.installed_repositories()
+        store = _github_app_review_store()
+        enabled_repositories: set[str] = set()
+        if store is not None:
+            enabled_repositories = await store.enabled_repositories()
+        enabled_lookup = {repository.casefold() for repository in enabled_repositories}
+        return [
+            repository.to_public_dict(
+                review_enabled=repository.full_name.casefold() in enabled_lookup
+            )
+            for repository in repositories
+        ]
+
+    def _github_review_page_request(request: Request) -> PageRequest:
+        def _int_query(name: str, default: int) -> int:
+            value = request.query_params.get(name)
+            if value is None:
+                return default
+            try:
+                return int(value)
+            except ValueError as error:
+                raise SandboxValidationError(f"{name} 必须是正整数。") from error
+
+        page = _int_query("page", 1)
+        page_size = _int_query("pageSize", _GITHUB_REVIEW_DEFAULT_PAGE_SIZE)
+        if page < 1:
+            raise SandboxValidationError("page 必须是正整数。")
+        if page_size < 1:
+            raise SandboxValidationError("pageSize 必须是正整数。")
+        return PageRequest(
+            page=page,
+            page_size=min(page_size, _GITHUB_REVIEW_MAX_PAGE_SIZE),
+        )
+
+    async def _github_app_installed_repositories_page(
+        page_request: PageRequest,
+        query: str = "",
+    ) -> dict[str, object]:
+        repositories = await _github_app_installed_repositories()
+        keyword = query.strip().casefold()
+        if keyword:
+            repositories = [
+                repository
+                for repository in repositories
+                if keyword in str(repository.get("fullName") or "").casefold()
+                or keyword in str(repository.get("account") or "").casefold()
+            ]
+        start = page_request.offset
+        end = start + page_request.page_size
+        return {
+            "repositories": repositories[start:end],
+            "page": page_request.page,
+            "pageSize": page_request.page_size,
+            "hasNextPage": end < len(repositories),
+        }
+
+    async def _github_app_installation_token_for_pull_request(
+        owner: str,
+        repo: str,
+    ) -> str:
+        config = load_github_app_config()
+        if config is None:
+            raise GitHubAppReviewError("管理员未配置 GitHub App。")
+        client = GitHubAppClient(config)
+        installation_id = await client.repository_installation_id(owner, repo)
+        return await client.installation_token(installation_id)
+
+    async def _create_github_pull_request_review_session(
+        *,
+        owner_id: str,
+        creator_name: str,
+        pull_request_url: str,
+        installation_token: str,
+    ) -> SandboxCloudSession:
+        match = _GITHUB_PULL_REQUEST_URL_RE.fullmatch(pull_request_url)
+        if match is None:
+            raise SandboxValidationError("请输入完整的 GitHub Pull Request URL。")
+        owner, repo, number = match.groups()
+        session = await service.create(
+            owner_id,
+            f"PR Review: {owner}/{repo}#{number}",
+            creator_name,
+            False,
+            envs={
+                "GITHUB_TOKEN": installation_token,
+                "GH_PROMPT_DISABLED": "1",
+                "GIT_TERMINAL_PROMPT": "0",
+            },
+        )
+        await _connect_github_pull_request_review_session(
+            session.instance_id,
+            owner_id,
+        )
+        return session
+
+    async def _connect_github_pull_request_review_session(
+        session_id: str,
+        owner_id: str,
+    ) -> None:
+        last_error: SandboxInvocationError | None = None
+        for attempt in range(_GITHUB_PR_REVIEW_CONNECT_ATTEMPTS):
+            try:
+                await service.connect(session_id, owner_id, is_admin=False)
+                return
+            except SandboxInvocationError as error:
+                last_error = error
+                if attempt + 1 >= _GITHUB_PR_REVIEW_CONNECT_ATTEMPTS:
+                    break
+                logger.info(
+                    "Retrying GitHub PR review sandbox connection for session %s "
+                    "after startup failure: %s",
+                    session_id,
+                    _safe_error_message(error),
+                )
+                await asyncio.sleep(_GITHUB_PR_REVIEW_CONNECT_RETRY_SECONDS)
+        if last_error is not None:
+            raise last_error
+
+    def _schedule_github_pull_request_review_message(
+        *,
+        session_id: str,
+        owner_id: str,
+        pull_request_url: str,
+        store: TosGitHubAppReviewRepositoryStore | None,
+        record_id: str,
+    ) -> None:
+        prompt = _GITHUB_PULL_REQUEST_REVIEW_PROMPT.format(
+            pull_request_url=pull_request_url
+        )
+
+        async def _update_status(status: str, reason: str = "") -> None:
+            if store is None or not record_id:
+                return
+            try:
+                await store.update_review_record_status(
+                    record_id,
+                    status=status,
+                    reason=reason,
+                )
+            except GitHubAppReviewError as error:
+                logger.warning(
+                    "Failed to update GitHub PR review record %s: %s",
+                    record_id,
+                    error,
+                )
+
+        async def _run_review_message() -> None:
+            try:
+                async for _event in service.stream_message(
+                    session_id,
+                    owner_id,
+                    prompt,
+                ):
+                    pass
+                await _update_status("completed")
+            except SandboxError as error:
+                await _update_status("failed", _safe_error_message(error))
+                logger.warning(
+                    "GitHub pull request review message failed for session %s: %s",
+                    session_id,
+                    _safe_error_message(error),
+                )
+
+        asyncio.create_task(_run_review_message())
+
+    @app.get("/web/github/app/config")
+    async def _github_app_config(request: Request) -> dict[str, object]:
+        owner_resolver(request)
+        return github_app_public_config()
+
+    @app.get("/web/github/app/repositories")
+    async def _github_app_repositories(request: Request) -> dict[str, object]:
+        owner_resolver(request)
+        try:
+            page_request = _github_review_page_request(request)
+            page_result = await _github_app_installed_repositories_page(
+                page_request,
+                request.query_params.get("q", ""),
+            )
+        except GitHubAppReviewError as error:
+            raise _github_app_http_error(error) from error
+        except SandboxError as error:
+            raise _http_error(error) from error
+        storage_configured = _github_app_review_store() is not None
+        return {
+            **page_result,
+            "reviewSettingsConfigured": storage_configured,
+            "reviewSettingsReason": ""
+            if storage_configured
+            else "管理员未配置 Studio 持久化存储，无法保存启用评审设置。",
+        }
+
+    @app.put("/web/github/app/review-repositories")
+    async def _github_app_review_repositories(request: Request) -> dict[str, object]:
+        owner_resolver(request)
+        store = _github_app_review_store()
+        if store is None:
+            raise _github_app_http_error(
+                GitHubAppReviewStorageUnavailable(
+                    "管理员未配置 Studio 持久化存储，无法保存启用评审设置。"
+                )
+            )
+        try:
+            data = await _request_object(request)
+            repositories = data.get("repositories")
+            repository = data.get("repository")
+            review_enabled = data.get("reviewEnabled")
+            if repository is not None or review_enabled is not None:
+                if not isinstance(repository, str) or not isinstance(
+                    review_enabled, bool
+                ):
+                    raise SandboxValidationError("启用评审仓库更新格式无效。")
+                normalized_repository = normalize_review_repository(repository)
+                current = await store.enabled_repositories()
+                updated = {
+                    item
+                    for item in current
+                    if item.casefold() != normalized_repository.casefold()
+                }
+                if review_enabled:
+                    updated.add(normalized_repository)
+                normalized = sorted(updated, key=str.casefold)
+            else:
+                if not isinstance(repositories, list) or any(
+                    not isinstance(repository, str) for repository in repositories
+                ):
+                    raise SandboxValidationError("启用评审仓库列表格式无效。")
+                normalized = [
+                    normalize_review_repository(item) for item in repositories
+                ]
+            installed = await _github_app_installed_repositories()
+            installed_lookup = {
+                str(repository.get("fullName") or "").casefold()
+                for repository in installed
+            }
+            unknown = [
+                repository
+                for repository in normalized
+                if repository.casefold() not in installed_lookup
+            ]
+            if unknown:
+                raise SandboxValidationError(
+                    "GitHub App 未安装到这些仓库：" + "、".join(unknown)
+                )
+            saved = await store.save_enabled_repositories(normalized)
+        except SandboxError as error:
+            raise _http_error(error) from error
+        except GitHubAppReviewError as error:
+            raise _github_app_http_error(error) from error
+        return {"repositories": saved}
+
+    @app.get("/web/github/app/review-records")
+    async def _github_app_review_records(request: Request) -> dict[str, object]:
+        owner_resolver(request)
+        store = _github_app_review_store()
+        if store is None:
+            return {
+                "records": [],
+                "page": 1,
+                "pageSize": _GITHUB_REVIEW_DEFAULT_PAGE_SIZE,
+                "hasNextPage": False,
+                "reviewSettingsConfigured": False,
+                "reviewSettingsReason": "管理员未配置 Studio 持久化存储，无法读取评审记录。",
+            }
+        try:
+            page_request = _github_review_page_request(request)
+            records, page_result = await store.review_records_page(page_request)
+        except GitHubAppReviewError as error:
+            raise _github_app_http_error(error) from error
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return {
+            "records": [record.to_public_dict() for record in records],
+            "page": page_result.page,
+            "pageSize": page_result.page_size,
+            "hasNextPage": page_result.has_next_page,
+            "reviewSettingsConfigured": True,
+            "reviewSettingsReason": "",
+        }
+
+    @app.post("/web/github/app/webhook", status_code=202)
+    async def _github_app_webhook(request: Request) -> dict[str, object]:
+        store: TosGitHubAppReviewRepositoryStore | None = None
+        event = None
+        try:
+            config = load_github_app_config()
+            if config is None:
+                raise GitHubAppReviewError("管理员未配置 GitHub App。")
+            body = await request.body()
+            signature = request.headers.get("X-Hub-Signature-256", "")
+            if not verify_webhook_signature(
+                body,
+                signature,
+                config.webhook_secret,
+            ):
+                raise HTTPException(
+                    status_code=401,
+                    detail={
+                        "code": "GITHUB_WEBHOOK_SIGNATURE_INVALID",
+                        "message": "GitHub webhook 签名无效。",
+                        "retryable": False,
+                    },
+                )
+            try:
+                payload = json.loads(body) if body else {}
+            except (json.JSONDecodeError, UnicodeDecodeError) as error:
+                raise SandboxValidationError(
+                    "GitHub webhook 不是有效 JSON。"
+                ) from error
+            if not isinstance(payload, dict):
+                raise SandboxValidationError("GitHub webhook 必须是 JSON 对象。")
+            event = parse_pull_request_event(
+                payload,
+                event_name=request.headers.get("X-GitHub-Event", ""),
+                delivery_id=request.headers.get("X-GitHub-Delivery", ""),
+            )
+            if event is None:
+                return {"status": "ignored", "reason": "unsupported-event"}
+            store = _github_app_review_store()
+            if not event.should_review:
+                if store is not None:
+                    await _remember_github_review_record(
+                        store,
+                        create_review_record(
+                            repository=event.repository,
+                            pull_request_url=event.pull_request_url,
+                            pull_request_number=event.pull_request_number,
+                            status="ignored",
+                            trigger="webhook",
+                            delivery_id=event.delivery_id,
+                            action=event.action,
+                            reason="pull-request-not-reviewable",
+                        ),
+                    )
+                return {
+                    "status": "ignored",
+                    "reason": "pull-request-not-reviewable",
+                    "action": event.action,
+                }
+            if store is None:
+                return {
+                    "status": "ignored",
+                    "reason": "review-settings-unavailable",
+                    "repository": event.repository,
+                }
+            enabled = await store.enabled_repositories()
+            if event.repository.casefold() not in {
+                repository.casefold() for repository in enabled
+            }:
+                await _remember_github_review_record(
+                    store,
+                    create_review_record(
+                        repository=event.repository,
+                        pull_request_url=event.pull_request_url,
+                        pull_request_number=event.pull_request_number,
+                        status="ignored",
+                        trigger="webhook",
+                        delivery_id=event.delivery_id,
+                        action=event.action,
+                        reason="repository-review-disabled",
+                    ),
+                )
+                return {
+                    "status": "ignored",
+                    "reason": "repository-review-disabled",
+                    "repository": event.repository,
+                }
+            client = GitHubAppClient(config)
+            installation_token = await client.installation_token(event.installation_id)
+            session = await _create_github_pull_request_review_session(
+                owner_id=config.review_owner_id,
+                creator_name=config.review_creator_name,
+                pull_request_url=event.pull_request_url,
+                installation_token=installation_token,
+            )
+            record = create_review_record(
+                repository=event.repository,
+                pull_request_url=event.pull_request_url,
+                pull_request_number=event.pull_request_number,
+                status="started",
+                trigger="webhook",
+                delivery_id=event.delivery_id,
+                action=event.action,
+                session_id=session.instance_id,
+                display_name=session.display_name,
+            )
+            await _remember_github_review_record(store, record)
+            _schedule_github_pull_request_review_message(
+                session_id=session.instance_id,
+                owner_id=config.review_owner_id,
+                pull_request_url=event.pull_request_url,
+                store=store,
+                record_id=record.record_id,
+            )
+        except SandboxError as error:
+            if store is not None and event is not None:
+                await _remember_github_review_record(
+                    store,
+                    create_review_record(
+                        repository=event.repository,
+                        pull_request_url=event.pull_request_url,
+                        pull_request_number=event.pull_request_number,
+                        status="failed",
+                        trigger="webhook",
+                        delivery_id=event.delivery_id,
+                        action=event.action,
+                        reason=_safe_error_message(error),
+                    ),
+                )
+            raise _http_error(error) from error
+        except GitHubAppReviewError as error:
+            if store is not None and event is not None:
+                await _remember_github_review_record(
+                    store,
+                    create_review_record(
+                        repository=event.repository,
+                        pull_request_url=event.pull_request_url,
+                        pull_request_number=event.pull_request_number,
+                        status="failed",
+                        trigger="webhook",
+                        delivery_id=event.delivery_id,
+                        action=event.action,
+                        reason=str(error),
+                    ),
+                )
+            raise _github_app_http_error(error) from error
+
+        return {
+            "status": "started",
+            "sessionId": session.instance_id,
+            "displayName": session.display_name,
+            "deliveryId": event.delivery_id,
+        }
+
+    @app.post("/web/github/pull-request-reviews")
+    async def _start_github_pull_request_review(
+        request: Request,
+    ) -> dict[str, object]:
+        owner_id = owner_resolver(request)
+        creator_name = creator_resolver(request) if creator_resolver else owner_id
+        try:
+            data = await _request_object(request)
+            pull_request_url = data.get("pullRequestUrl")
+            if not isinstance(pull_request_url, str):
+                raise SandboxValidationError("Pull Request URL 必须是文本。")
+            pull_request_url = pull_request_url.strip()
+            match = _GITHUB_PULL_REQUEST_URL_RE.fullmatch(pull_request_url)
+            if match is None:
+                raise SandboxValidationError("请输入完整的 GitHub Pull Request URL。")
+            owner, repo, _number = match.groups()
+            installation_token = await _github_app_installation_token_for_pull_request(
+                owner,
+                repo,
+            )
+            session = await _create_github_pull_request_review_session(
+                owner_id=owner_id,
+                creator_name=creator_name,
+                pull_request_url=pull_request_url,
+                installation_token=installation_token,
+            )
+            store = _github_app_review_store()
+            record_id = ""
+            if store is not None:
+                record = create_review_record(
+                    repository=f"{owner}/{repo}",
+                    pull_request_url=pull_request_url,
+                    pull_request_number=int(_number),
+                    status="started",
+                    trigger="manual",
+                    session_id=session.instance_id,
+                    display_name=session.display_name,
+                )
+                record_id = record.record_id
+                await _remember_github_review_record(store, record)
+        except SandboxError as error:
+            raise _http_error(error) from error
+        except GitHubAppReviewError as error:
+            raise _github_app_http_error(error) from error
+
+        _schedule_github_pull_request_review_message(
+            session_id=session.instance_id,
+            owner_id=owner_id,
+            pull_request_url=pull_request_url,
+            store=store,
+            record_id=record_id,
+        )
+        return {
+            "status": "started",
+            "sessionId": session.instance_id,
+            "displayName": session.display_name,
         }
 
     @app.post("/web/sandbox/snapshots/{snapshot_id}/resume")
@@ -4371,8 +4453,6 @@ def mount_sandbox_routes(
             async for event in service.stream_message(
                 session_id, owner_id, prompt, skill_ids
             ):
-                if event.kind == "assistant_final":
-                    continue
                 if event.kind == "text":
                     payload = {"text": event.text}
                     yield f"event: delta\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"

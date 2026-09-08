@@ -740,8 +740,8 @@ def test_release_entrypoint_parallel_startup_fails_closed(
         '  while [ ! -f "$FAKE_STATE/studio-started" ]; do sleep 0.01; done\n'
         '  exit "$FAKE_COMPANION_EXIT"\n'
         "fi\n"
-        'touch "$FAKE_STATE/studio-started"\n'
         "trap 'touch \"$FAKE_STATE/studio-terminated\"; exit 0' TERM\n"
+        'touch "$FAKE_STATE/studio-started"\n'
         'while [ ! -f "$FAKE_STATE/companion-started" ]; do sleep 0.01; done\n'
         'if [ "$FAKE_COMPANION_EXIT" != 0 ]; then\n'
         "  while true; do sleep 1; done\n"
