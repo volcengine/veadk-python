@@ -7249,6 +7249,7 @@ def _run_frontend_server(
         from frontend.server.deployment_source import (
             DeploymentSourceError,
             ensure_default_agentkit_dockerfile,
+            resolve_agentkit_entry_point,
             write_inline_source,
         )
         from frontend.server.intelligent_development_source import (
@@ -7262,13 +7263,18 @@ def _run_frontend_server(
 
         temp_dir = tempfile.mkdtemp(prefix=f"agentkit_deploy_{agent_name}_")
         base = PathlibPath(temp_dir).resolve()
+        migration_deployment_source = source.get("kind") == "migration"
         try:
-            if source.get("kind") == "migration":
-                entry_point = await asyncio.to_thread(
+            if migration_deployment_source:
+                migration_startup_entry_point = await asyncio.to_thread(
                     migration_service.materialize_deployment,
                     migration_task_id,
                     owner_id or "local",
                     base,
+                )
+                entry_point = resolve_agentkit_entry_point(
+                    base,
+                    fallback=migration_startup_entry_point,
                 )
                 trusted_agent_name = agent_name
             elif trusted_intelligent_source:
@@ -7283,7 +7289,15 @@ def _run_frontend_server(
                     service=intelligent_development_service,
                     project_service=intelligent_project_service,
                 )
-                entry_point = materialized.entry_point
+                migration_deployment_source = materialized.producer == "migration"
+                entry_point = (
+                    resolve_agentkit_entry_point(
+                        base,
+                        fallback=materialized.entry_point,
+                    )
+                    if migration_deployment_source
+                    else materialized.entry_point
+                )
                 trusted_agent_name = materialized.agent_name
             else:
                 entry_point = write_inline_source(base, files)
@@ -7324,7 +7338,11 @@ def _run_frontend_server(
             raise
 
         if not use_managed_sidecar_release:
-            ensure_default_agentkit_dockerfile(base, provider)
+            ensure_default_agentkit_dockerfile(
+                base,
+                provider,
+                entry_point=entry_point if migration_deployment_source else None,
+            )
 
         if use_managed_sidecar_release:
             try:
