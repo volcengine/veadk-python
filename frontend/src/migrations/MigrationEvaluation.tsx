@@ -5,7 +5,6 @@ import type {
   MigrationEvaluationCase,
   MigrationEvaluationDataset,
   MigrationEvaluationDimensionId,
-  MigrationEvaluationReport,
   MigrationEvaluationStatus,
   MigrationTaskState,
 } from "../adk/migrations";
@@ -1012,7 +1011,7 @@ export function MigrationEvaluationProgress({
 
 interface ResultProps {
   evaluation: MigrationEvaluationStatus;
-  report: MigrationEvaluationReport | null;
+  report: string | null;
   reportLoading: boolean;
   reportError: string;
   busy: boolean;
@@ -1023,8 +1022,71 @@ interface ResultProps {
   onDownloadReport: () => void;
 }
 
-function scoreLabel(score: number | null): string {
-  return score === null ? "N/A" : String(score);
+const EVALUATION_EXECUTION_STATES = [
+  "preparing",
+  "deploying",
+  "executing",
+  "judging",
+  "aggregating",
+] as const;
+
+function EvaluationExecutionProgress({
+  evaluation,
+}: {
+  evaluation: MigrationEvaluationStatus;
+}) {
+  const { t } = useTranslation("migrations");
+  const currentIndex = EVALUATION_EXECUTION_STATES.indexOf(
+    evaluation.state as (typeof EVALUATION_EXECUTION_STATES)[number],
+  );
+  const caseCount = evaluation.dataset?.caseCount ?? 0;
+  const dimensionCount = evaluation.dimensions?.length ?? 0;
+  const details = {
+    preparing: t("evaluation.execution.preparingDetail", { count: caseCount }),
+    deploying: t("evaluation.execution.deployingDetail", {
+      runtime: evaluation.runtimeName || t("evaluation.execution.runtimeFallback"),
+    }),
+    executing: t("evaluation.execution.executingDetail", { count: caseCount }),
+    judging: t("evaluation.execution.judgingDetail", {
+      cases: caseCount,
+      dimensions: dimensionCount,
+    }),
+    aggregating: t("evaluation.execution.aggregatingDetail"),
+  } satisfies Record<(typeof EVALUATION_EXECUTION_STATES)[number], string>;
+  return (
+    <div
+      className="migration-evaluation-execution"
+    >
+      <div
+        className="migration-evaluation-execution__summary"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        <TextShimmer>{t(`evaluation.state.${evaluation.state}`)}</TextShimmer>
+        <small>{details[EVALUATION_EXECUTION_STATES[currentIndex]]}</small>
+      </div>
+      <ol>
+        {EVALUATION_EXECUTION_STATES.map((state, index) => {
+          const tone =
+            index < currentIndex
+              ? "complete"
+              : index === currentIndex
+                ? "active"
+                : "pending";
+          return (
+            <li key={state} className={`is-${tone}`}>
+              <span aria-hidden="true">{index + 1}</span>
+              <div>
+                <strong>{t(`evaluation.execution.${state}`)}</strong>
+                <small>{details[state]}</small>
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
 }
 
 export function MigrationEvaluationResult({
@@ -1041,6 +1103,13 @@ export function MigrationEvaluationResult({
 }: ResultProps) {
   const { t } = useTranslation("migrations");
   const [environment, setEnvironment] = useState<Record<string, string>>({});
+  const required = evaluation.environment?.required ?? [];
+  const optional = evaluation.environment?.optional ?? [];
+  const environmentKeys = [...required, ...optional];
+  const environmentSignature = environmentKeys.join("\0");
+  useEffect(() => {
+    setEnvironment({});
+  }, [environmentSignature]);
   if (!evaluation.enabled) return null;
   const active = [
     "preparing",
@@ -1049,9 +1118,7 @@ export function MigrationEvaluationResult({
     "judging",
     "aggregating",
   ].includes(evaluation.state);
-  const required = evaluation.requiredEnvironment ?? [];
   const environmentReady = required.every((key) => Boolean(environment[key]));
-  const stateMessage = t(`evaluation.state.${evaluation.state}`);
   return (
     <section
       className="migration-evaluation-result"
@@ -1062,7 +1129,6 @@ export function MigrationEvaluationResult({
           <strong id="migration-evaluation-result-title">
             {t("evaluation.result.title")}
           </strong>
-          <span>{stateMessage}</span>
         </div>
         {evaluation.attempt ? (
           <small>
@@ -1070,21 +1136,25 @@ export function MigrationEvaluationResult({
           </small>
         ) : null}
       </header>
-      {active ? <TextShimmer>{stateMessage}</TextShimmer> : null}
+      {active ? <EvaluationExecutionProgress evaluation={evaluation} /> : null}
       {evaluation.state === "pending" ? (
         <p>{t("evaluation.result.pending")}</p>
       ) : null}
       {evaluation.state === "waiting_environment" ? (
         <div className="migration-evaluation-environment">
           <p>{t("evaluation.environment.description")}</p>
-          {required.map((key) => (
+          {environmentKeys.map((key) => (
             <label key={key}>
               <span>
                 {key}
-                <b aria-hidden="true">*</b>
+                {required.includes(key) ? (
+                  <b aria-hidden="true">*</b>
+                ) : (
+                  <small>{t("evaluation.environment.optional")}</small>
+                )}
               </span>
               <input
-                type="password"
+                type="text"
                 value={environment[key] ?? ""}
                 onChange={(event) =>
                   setEnvironment((current) => ({
@@ -1093,8 +1163,8 @@ export function MigrationEvaluationResult({
                   }))
                 }
                 autoComplete="off"
-                required
-                aria-required="true"
+                required={required.includes(key)}
+                aria-required={required.includes(key)}
                 disabled={busy}
               />
             </label>
@@ -1103,7 +1173,13 @@ export function MigrationEvaluationResult({
           <button
             type="button"
             className="is-primary"
-            onClick={() => onResume(environment)}
+            onClick={() =>
+              onResume(
+                Object.fromEntries(
+                  Object.entries(environment).filter(([, value]) => value),
+                ),
+              )
+            }
             disabled={busy || !environmentReady}
           >
             {busy
@@ -1140,191 +1216,28 @@ export function MigrationEvaluationResult({
             </button>
           </div>
         ) : report ? (
-          <div className="migration-evaluation-report">
+          <div className="migration-evaluation-report-html">
             <div className="migration-evaluation-report__toolbar">
               <div>
-                <strong>{t("evaluation.result.reportSummary")}</strong>
-                <small>
-                  {t("evaluation.result.reportVersion", {
-                    version: report.dataset_version,
-                    prompt: report.prompt_version,
-                  })}
-                </small>
+                <strong>{t("evaluation.result.reportTitle")}</strong>
+                <small>{t("evaluation.result.reportHtmlDescription")}</small>
               </div>
               <button
                 type="button"
                 onClick={onDownloadReport}
-                disabled={busy || !report.asset.downloadReady}
+                disabled={busy || !evaluation.report?.downloadReady}
               >
                 {reportDownloading
                   ? t("evaluation.result.downloadingReport")
                   : t("evaluation.result.downloadReport")}
               </button>
             </div>
-            <div className="migration-evaluation-report__metrics">
-              <article className="is-primary">
-                <span>{t("evaluation.result.overallScore")}</span>
-                <strong>{scoreLabel(report.summary.score)}</strong>
-                <small>{t("evaluation.result.scoreScale")}</small>
-              </article>
-              <article>
-                <span>{t("evaluation.result.evidenceCoverage")}</span>
-                <strong>{report.evidence_coverage.rate}%</strong>
-                <small>
-                  {t("evaluation.result.coverageDetail", {
-                    scored: report.evidence_coverage.scored,
-                    total: report.evidence_coverage.total,
-                  })}
-                </small>
-              </article>
-              <article>
-                <span>{t("evaluation.result.executionSuccess")}</span>
-                <strong>{report.execution.success_rate}%</strong>
-                <small>
-                  {t("evaluation.result.executionDetail", {
-                    succeeded: report.execution.succeeded,
-                    total: report.execution.total,
-                  })}
-                </small>
-              </article>
-              <article>
-                <span>{t("evaluation.result.naCount")}</span>
-                <strong>{report.evidence_coverage.na}</strong>
-                <small>{t("evaluation.result.naDescription")}</small>
-              </article>
-            </div>
-            <div className="migration-evaluation-report__dimensions">
-              {report.summary.dimensions.map((dimension) => (
-                <article key={dimension.id}>
-                  <span>{t(`evaluation.dimension.${dimension.id}`)}</span>
-                  <strong>{scoreLabel(dimension.score)}</strong>
-                  <p>{dimension.reason}</p>
-                </article>
-              ))}
-            </div>
-            <div className="migration-evaluation-gap">
-              <strong>{t("evaluation.result.gapDescription")}</strong>
-              <p>{report.migration_gap_description}</p>
-            </div>
-            {report.lowest_scoring_cases.length ||
-            report.execution_failures.length ||
-            report.critical_mismatches.length ? (
-              <div className="migration-evaluation-report__findings">
-                {report.lowest_scoring_cases.length ? (
-                  <section>
-                    <strong>{t("evaluation.result.lowestScoringCases")}</strong>
-                    <ul>
-                      {report.lowest_scoring_cases.map((item) => (
-                        <li key={item.case_id}>
-                          <span>{item.case_id}</span>
-                          <b>{item.score}</b>
-                        </li>
-                      ))}
-                    </ul>
-                  </section>
-                ) : null}
-                {report.execution_failures.length ? (
-                  <section>
-                    <strong>{t("evaluation.result.executionFailures")}</strong>
-                    <ul>
-                      {report.execution_failures.map((item) => (
-                        <li key={item.case_id}>
-                          <span>{item.case_id}</span>
-                          <small>{item.message}</small>
-                        </li>
-                      ))}
-                    </ul>
-                  </section>
-                ) : null}
-                {report.critical_mismatches.length ? (
-                  <section>
-                    <strong>{t("evaluation.result.criticalEvidence")}</strong>
-                    <ul>
-                      {report.critical_mismatches.map((item) => (
-                        <li key={`${item.case_id}-${item.dimension_id}`}>
-                          <span>
-                            {item.case_id} · {t(`evaluation.dimension.${item.dimension_id}`)}
-                          </span>
-                          <small>{item.reason}</small>
-                        </li>
-                      ))}
-                    </ul>
-                  </section>
-                ) : null}
-              </div>
-            ) : null}
-            {report.limitations.length ? (
-              <div className="migration-evaluation-limitations">
-                <strong>{t("evaluation.result.limitations")}</strong>
-                <ul>
-                  {report.limitations.map((item) => (
-                    <li key={item}>{item}</li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-            <details className="migration-evaluation-evidence">
-              <summary>
-                {t("evaluation.result.viewEvidence", {
-                  count: report.cases.length,
-                })}
-              </summary>
-              {report.cases.map((item, index) => (
-                <article key={item.case_id}>
-                  <header>
-                    <strong>
-                      {t("evaluation.case.title", { index: index + 1 })}
-                    </strong>
-                    <span>
-                      <small>
-                        {t(`evaluation.result.executionState.${item.execution.state}`)}
-                      </small>
-                      {item.output.truncated ? (
-                        <small>{t("evaluation.result.outputTruncated")}</small>
-                      ) : null}
-                    </span>
-                  </header>
-                  {item.execution.error ? (
-                    <p className="migration-evaluation-evidence__error">
-                      {item.execution.error.message}
-                    </p>
-                  ) : null}
-                  <pre>{item.output.text}</pre>
-                  <ul>
-                    {item.dimensions.map((dimension) => (
-                      <li key={dimension.id}>
-                        <strong>
-                          {t(`evaluation.dimension.${dimension.id}`)} ·{" "}
-                          {scoreLabel(dimension.score)}
-                        </strong>
-                        <span>{dimension.reason}</span>
-                        <small>
-                          {t("evaluation.result.severityLabel", {
-                            severity: t(
-                              `evaluation.result.severity.${dimension.severity}`,
-                            ),
-                          })}
-                          {dimension.evidence_sources.length
-                            ? ` · ${dimension.evidence_sources
-                                .map((source) =>
-                                  t(`evaluation.result.evidenceSource.${source}`),
-                                )
-                                .join(t("evaluation.result.listSeparator"))}`
-                            : ""}
-                        </small>
-                        {dimension.evidence.length ? (
-                          <ul>
-                            {dimension.evidence.map((evidence) => (
-                              <li key={evidence}>{evidence}</li>
-                            ))}
-                          </ul>
-                        ) : null}
-                      </li>
-                    ))}
-                  </ul>
-                </article>
-              ))}
-            </details>
+            <iframe
+              className="migration-evaluation-report-html__preview"
+              title={t("evaluation.result.reportPreviewTitle")}
+              srcDoc={report}
+              sandbox=""
+            />
           </div>
         ) : null
       ) : null}

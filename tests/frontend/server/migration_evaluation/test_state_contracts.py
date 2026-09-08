@@ -162,12 +162,31 @@ def test_all_required_evaluation_states_are_registered() -> None:
 
 def test_status_requires_environment_names_errors_and_report_by_state() -> None:
     validate_evaluation_status(
-        _status("waiting_environment", required_environment=["ARK_API_KEY"]),
+        _status(
+            "waiting_environment",
+            environment={"required": ["ARK_API_KEY"], "optional": ["TZ"]},
+        ),
         expected_task_id=TASK_ID,
     )
-    with pytest.raises(EvaluationContractError, match="required environment"):
+    with pytest.raises(EvaluationContractError, match="environment descriptor"):
         validate_evaluation_status(
             _status("waiting_environment"), expected_task_id=TASK_ID
+        )
+    with pytest.raises(EvaluationContractError, match="environment descriptor"):
+        validate_evaluation_status(
+            _status(
+                "waiting_environment",
+                environment={"required": ["ARK_API_KEY"], "optional": ["ARK_API_KEY"]},
+            ),
+            expected_task_id=TASK_ID,
+        )
+    with pytest.raises(EvaluationContractError, match="environment descriptor"):
+        validate_evaluation_status(
+            _status(
+                "waiting_environment",
+                environment={"required": ["1INVALID"], "optional": []},
+            ),
+            expected_task_id=TASK_ID,
         )
     with pytest.raises(EvaluationContractError, match="missing an error"):
         validate_evaluation_status(_status("failed"), expected_task_id=TASK_ID)

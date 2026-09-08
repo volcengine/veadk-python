@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import logging
 import re
@@ -76,7 +77,6 @@ EVALUATION_DATASET_PATH = f"{EVALUATION_ROOT}/dataset/data.jsonl"
 EVALUATION_DATASET_MANIFEST_PATH = f"{EVALUATION_ROOT}/dataset/manifest.json"
 EVALUATION_STATUS_PATH = f"{EVALUATION_ROOT}/control/status.json"
 EVALUATION_REPORT_PATH = f"{EVALUATION_ROOT}/report/report.json"
-EVALUATION_REPORT_MARKDOWN_PATH = f"{EVALUATION_ROOT}/report/report.md"
 EVALUATION_SECRET_PATH = f"{EVALUATION_ROOT}/secrets/environment.json"
 EVALUATION_RUNNER_DIAGNOSTICS_ROOT = f"{EVALUATION_ROOT}/diagnostics"
 MINIMUM_REMOTE_WRITE_REMAINING_SECONDS = 20 * 60
@@ -122,7 +122,7 @@ class _EvaluationStatus(TypedDict):
     state: str
     message: str
     updated_at: str
-    required_environment: NotRequired[list[str]]
+    environment: NotRequired[dict[str, list[str]]]
     runtime_name: NotRequired[str]
     error: NotRequired[dict[str, object]]
     report_asset: NotRequired[dict[str, object]]
@@ -491,8 +491,10 @@ class MigrationEvaluationService:
             payload["dataset"] = manifest["asset"]
         if status is not None:
             payload["attempt"] = status["attempt"]
-            if "required_environment" in status:
-                payload["requiredEnvironment"] = status["required_environment"]
+            if "environment" in status:
+                payload["environment"] = status["environment"]
+            if "runtime_name" in status:
+                payload["runtimeName"] = status["runtime_name"]
             if "error" in status:
                 payload["error"] = status["error"]
             if "report_asset" in status:
@@ -568,22 +570,16 @@ class MigrationEvaluationService:
             return
         artifact = self._migration.artifact(task_id, owner_id)
         artifact_sha256 = self._artifact_sha256(task_id, owner_id, artifact=artifact)
-        environment = artifact.get("environment")
-        required = (
-            [str(item) for item in environment.get("required", [])]
-            if isinstance(environment, dict)
-            and isinstance(environment.get("required"), list)
-            else []
-        )
+        environment = self._evaluation_environment(artifact)
         attempt = int(status.get("attempt") or 0) + 1 if status else 1
-        if required:
+        if environment["required"] or environment["optional"]:
             self._write_status(
                 session,
                 task_id=task_id,
                 attempt=attempt,
                 state="waiting_environment",
                 message="请补充临时部署所需的环境变量",
-                required_environment=required,
+                environment=environment,
             )
             return
         self._start(
@@ -609,17 +605,18 @@ class MigrationEvaluationService:
         assert status is not None
         if status["state"] != "waiting_environment":
             return self.snapshot(task_id, owner_id, task=task)
-        required_environment = status.get("required_environment")
-        assert required_environment is not None
-        required = set(required_environment)
+        environment = status.get("environment")
+        assert environment is not None
+        required = set(environment["required"])
+        allowed = required | set(environment["optional"])
         supplied = set(body.environment)
-        if supplied != required:
+        if not required.issubset(supplied) or not supplied.issubset(allowed):
             missing = sorted(required - supplied)
-            extra = sorted(supplied - required)
+            extra = sorted(supplied - allowed)
             detail = "、".join(missing or extra)
             raise MigrationError(
                 "MIGRATION_EVALUATION_ENVIRONMENT_MISMATCH",
-                f"请只填写全部必需环境变量：{detail}",
+                f"请填写全部必需环境变量，且不要提交未声明的变量：{detail}",
                 status_code=400,
                 retryable=False,
             )
@@ -675,22 +672,16 @@ class MigrationEvaluationService:
             owner_id,
             artifact=artifact,
         )
-        environment = artifact.get("environment")
-        required = (
-            [str(item) for item in environment.get("required", [])]
-            if isinstance(environment, dict)
-            and isinstance(environment.get("required"), list)
-            else []
-        )
+        environment = self._evaluation_environment(artifact)
         next_attempt = attempt + 1
-        if required:
+        if environment["required"] or environment["optional"]:
             self._write_status(
                 session,
                 task_id=task_id,
                 attempt=next_attempt,
                 state="waiting_environment",
                 message="请补充临时部署所需的环境变量",
-                required_environment=required,
+                environment=environment,
             )
         else:
             self._start(
@@ -749,12 +740,12 @@ class MigrationEvaluationService:
         )
         return self.snapshot(task_id, owner_id, task=task)
 
-    def get_report(
+    def _load_report_html(
         self,
         task_id: str,
         owner_id: str,
         version_id: str,
-    ) -> dict[str, object]:
+    ) -> tuple[EvaluationAssetMetadata, bytes]:
         if _ASSET_VERSION_ID_RE.fullmatch(version_id) is None:
             raise MigrationError(
                 "MIGRATION_EVALUATION_REPORT_REFERENCE_INVALID",
@@ -770,33 +761,14 @@ class MigrationEvaluationService:
                 kind="report",
                 version_id=version_id,
             )
-            value = json.loads(content)
-            if not isinstance(value, dict):
+            if metadata.attempt is None:
                 raise EvaluationAssetIntegrityError("评测报告格式无效。")
-            dimensions = value.get("dimensions")
-            dataset_sha256 = value.get("dataset_sha256")
-            artifact_sha256 = value.get("artifact_sha256")
-            if (
-                metadata.attempt is None
-                or not isinstance(dimensions, list)
-                or not all(isinstance(item, str) for item in dimensions)
-                or not isinstance(dataset_sha256, str)
-                or not isinstance(artifact_sha256, str)
-            ):
+            decoded = content.decode("utf-8")
+            if not decoded.startswith("<!doctype html>"):
                 raise EvaluationAssetIntegrityError("评测报告格式无效。")
-            report = validate_evaluation_report(
-                value,
-                expected_task_id=task_id,
-                expected_attempt=metadata.attempt,
-                expected_dataset_sha256=dataset_sha256,
-                expected_artifact_sha256=artifact_sha256,
-                expected_dimensions=dimensions,
-            )
         except (
             EvaluationAssetNotFound,
             EvaluationAssetIntegrityError,
-            EvaluationContractError,
-            json.JSONDecodeError,
             UnicodeDecodeError,
         ) as error:
             raise MigrationError(
@@ -812,7 +784,7 @@ class MigrationEvaluationService:
                 status_code=503,
                 retryable=True,
             ) from error
-        return {**report, "asset": metadata.public()}
+        return metadata, content
 
     def download_report(
         self,
@@ -820,10 +792,18 @@ class MigrationEvaluationService:
         owner_id: str,
         version_id: str,
     ) -> tuple[bytes, str]:
-        report = self.get_report(task_id, owner_id, version_id)
-        content = self._report_markdown(report).encode("utf-8")
-        attempt = cast(int, report["attempt"])
-        return content, f"migration-evaluation-{attempt}.md"
+        metadata, content = self._load_report_html(task_id, owner_id, version_id)
+        assert metadata.attempt is not None
+        return content, f"migration-evaluation-{metadata.attempt}.html"
+
+    def preview_report(
+        self,
+        task_id: str,
+        owner_id: str,
+        version_id: str,
+    ) -> bytes:
+        _metadata, content = self._load_report_html(task_id, owner_id, version_id)
+        return content
 
     def _start(
         self,
@@ -976,7 +956,7 @@ class MigrationEvaluationService:
         assert isinstance(config_dimensions, list)
         try:
             report_value = json.loads(content)
-            validate_evaluation_report(
+            validated_report = validate_evaluation_report(
                 report_value,
                 expected_task_id=task_id,
                 expected_attempt=int(status["attempt"]),
@@ -1001,7 +981,8 @@ class MigrationEvaluationService:
                 status_code=502,
                 retryable=True,
             ) from error
-        digest = hashlib.sha256(content).hexdigest()
+        report_content = self._report_html(validated_report).encode("utf-8")
+        digest = hashlib.sha256(report_content).hexdigest()
         assert self._repository is not None
         try:
             metadata = self._repository.commit_report(
@@ -1009,7 +990,7 @@ class MigrationEvaluationService:
                 task_id=task_id,
                 version_id=digest[:32],
                 sha256=digest,
-                content=content,
+                content=report_content,
                 attempt=int(status["attempt"]),
                 created_at=str(report_value["created_at"]),
             )
@@ -1143,7 +1124,7 @@ class MigrationEvaluationService:
         attempt: int,
         state: str,
         message: str,
-        required_environment: list[str] | None = None,
+        environment: dict[str, list[str]] | None = None,
         runtime_name: str | None = None,
         report_asset: dict[str, object] | None = None,
     ) -> None:
@@ -1155,8 +1136,8 @@ class MigrationEvaluationService:
             "message": message,
             "updated_at": self._now(),
         }
-        if required_environment is not None:
-            value["required_environment"] = required_environment
+        if environment is not None:
+            value["environment"] = environment
         if runtime_name:
             value["runtime_name"] = runtime_name
         if report_asset is not None:
@@ -1375,7 +1356,7 @@ class MigrationEvaluationService:
         }
 
     @staticmethod
-    def _report_markdown(report: dict[str, object]) -> str:
+    def _report_html(report: dict[str, object]) -> str:
         summary = report.get("summary")
         execution = report.get("execution")
         coverage = report.get("evidence_coverage")
@@ -1385,44 +1366,84 @@ class MigrationEvaluationService:
         assert isinstance(coverage, dict)
         assert isinstance(model, dict)
         score = summary.get("score")
+
+        def escape(value: object) -> str:
+            return html.escape(str(value), quote=True)
+
         score_text = "N/A" if score is None else f"{score}/100"
-        lines = [
-            "# 迁移效果评测报告",
-            "",
-            f"- 任务：`{report['task_id']}`",
-            f"- 评测集：`{report['dataset_version']}` / `{report['dataset_sha256']}`",
-            f"- 迁移产物：`{report['artifact_sha256']}`",
-            f"- 模型：`{model['id']}`",
-            f"- Codex：`{model['codex_version']}`",
-            f"- AgentKit CLI：`{model['agentkit_cli_version']}`",
-            f"- Prompt 版本：`{report['prompt_version']}`",
-            f"- 综合一致性：{score_text}",
-            f"- 证据覆盖率：{coverage['rate']}%",
-            f"- 执行成功率：{execution['success_rate']}%",
-            "",
-            "## 维度结果",
-            "",
-        ]
+        labels = {item.id: item.label for item in EVALUATION_DIMENSIONS}
+        dimension_cards: list[str] = []
         dimensions = summary.get("dimensions")
         assert isinstance(dimensions, list)
         for item in dimensions:
             assert isinstance(item, dict)
             item_score = item.get("score")
             item_score_text = "N/A" if item_score is None else f"{item_score}/100"
-            lines.append(f"- `{item['id']}`：{item_score_text}；{item['reason']}")
-        lines.extend(
-            [
-                "",
-                "## 迁移差距与限制",
-                "",
-                str(report["migration_gap_description"]),
-            ]
-        )
+            dimension_cards.append(
+                '<article class="dimension"><span>'
+                f"{escape(labels.get(str(item['id']), str(item['id'])))}</span>"
+                f"<strong>{escape(item_score_text)}</strong>"
+                f"<p>{escape(item['reason'])}</p></article>"
+            )
         limitations = report.get("limitations")
         assert isinstance(limitations, list)
-        lines.extend(f"- {item}" for item in limitations)
-        lines.append("")
-        return "\n".join(lines)
+        limitation_html = "".join(f"<li>{escape(item)}</li>" for item in limitations)
+        cases = report.get("cases")
+        assert isinstance(cases, list)
+        case_html: list[str] = []
+        for index, case in enumerate(cases, start=1):
+            assert isinstance(case, dict)
+            output = cast(dict[str, object], case["output"])
+            execution_result = cast(dict[str, object], case["execution"])
+            results = cast(list[dict[str, object]], case["dimensions"])
+            result_html = []
+            for result in results:
+                result_score = result.get("score")
+                result_score_text = (
+                    "N/A" if result_score is None else f"{result_score}/100"
+                )
+                evidence = cast(list[object], result.get("evidence", []))
+                evidence_html = "".join(f"<li>{escape(item)}</li>" for item in evidence)
+                result_html.append(
+                    '<section class="case-dimension"><header><strong>'
+                    f"{escape(labels.get(str(result['id']), str(result['id'])))}</strong>"
+                    f"<b>{escape(result_score_text)}</b></header><p>{escape(result['reason'])}</p>"
+                    f"{'<ul>' + evidence_html + '</ul>' if evidence_html else ''}</section>"
+                )
+            error = execution_result.get("error")
+            error_html = ""
+            if isinstance(error, dict):
+                error_html = f'<p class="error">{escape(error.get("message", ""))}</p>'
+            case_html.append(
+                f'<details class="case"><summary><span>问题 {index} · {escape(case["case_id"])}</span>'
+                f"<b>{escape(execution_result['state'])}</b></summary>{error_html}"
+                f"<h3>Agent 输出</h3><pre>{escape(output['text'])}</pre>"
+                f'<div class="case-dimensions">{"".join(result_html)}</div></details>'
+            )
+        return f"""<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>迁移效果评测报告</title><style>
+:root{{color-scheme:light;font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#18212f;background:#f6f8fb}}*{{box-sizing:border-box}}body{{margin:0}}main{{max-width:1080px;margin:auto;padding:32px}}header.hero{{display:flex;justify-content:space-between;gap:24px;align-items:start;margin-bottom:20px}}h1{{font-size:26px;margin:0 0 8px}}.muted,small{{color:#647084}}code{{overflow-wrap:anywhere}}.meta{{display:grid;gap:5px;font-size:12px;color:#647084}}.metrics,.dimensions{{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));margin:16px 0}}.metric,.dimension,.panel,.case{{border:1px solid #dfe4ec;border-radius:12px;background:#fff}}.metric{{padding:16px}}.metric span,.dimension span{{display:block;color:#647084;font-size:12px}}.metric strong{{display:block;font-size:28px;margin-top:6px}}.dimension{{padding:14px}}.dimension strong{{display:block;font-size:20px;margin:5px 0}}p{{line-height:1.6}}.panel{{padding:16px;margin:16px 0}}.panel h2{{font-size:16px;margin:0 0 8px}}.case{{margin:10px 0;padding:0 14px}}.case summary{{display:flex;justify-content:space-between;gap:12px;padding:14px 0;cursor:pointer}}.case h3{{font-size:13px}}pre{{max-height:320px;overflow:auto;padding:12px;border-radius:8px;background:#f2f4f7;white-space:pre-wrap;word-break:break-word}}.case-dimensions{{display:grid;gap:8px;margin:12px 0 16px}}.case-dimension{{padding:10px;border:1px solid #e6eaf0;border-radius:8px}}.case-dimension header{{display:flex;justify-content:space-between}}.case-dimension p,.case-dimension li{{font-size:12px;color:#526075}}.error{{color:#b42318}}@media(max-width:600px){{main{{padding:18px}}header.hero{{display:block}}}}
+</style></head><body><main><header class="hero"><div><h1>迁移效果评测报告</h1><p class="muted">第 {escape(report["attempt"])} 次评测 · {escape(report["created_at"])}</p></div><div class="meta"><code>{escape(report["task_id"])}</code><span>评测集 {escape(report["dataset_version"])}</span><span>Prompt v{escape(report["prompt_version"])}</span></div></header>
+<section class="metrics"><article class="metric"><span>综合一致性</span><strong>{escape(score_text)}</strong></article><article class="metric"><span>证据覆盖率</span><strong>{escape(coverage["rate"])}%</strong><small>{escape(coverage["scored"])} / {escape(coverage["total"])} 个维度</small></article><article class="metric"><span>执行成功率</span><strong>{escape(execution["success_rate"])}%</strong><small>{escape(execution["succeeded"])} / {escape(execution["total"])} 个问题</small></article></section>
+<section class="dimensions">{"".join(dimension_cards)}</section><section class="panel"><h2>迁移差距说明</h2><p>{escape(report["migration_gap_description"])}</p></section>
+{f'<section class="panel"><h2>评测限制</h2><ul>{limitation_html}</ul></section>' if limitation_html else ""}
+<section><h2>问题结果与证据</h2>{"".join(case_html)}</section><section class="panel meta"><span>模型：{escape(model["id"])}</span><span>Codex：{escape(model["codex_version"])}</span><span>AgentKit CLI：{escape(model["agentkit_cli_version"])}</span><span>迁移产物：<code>{escape(report["artifact_sha256"])}</code></span></section>
+</main></body></html>"""
+
+    @staticmethod
+    def _evaluation_environment(
+        artifact: dict[str, object],
+    ) -> dict[str, list[str]]:
+        value = artifact.get("environment")
+        if not isinstance(value, dict):
+            return {"required": [], "optional": []}
+        return {
+            field: [str(item) for item in value.get(field, [])]
+            if isinstance(value.get(field), list)
+            else []
+            for field in ("required", "optional")
+        }
 
     @staticmethod
     def _runtime_name(task_id: str, attempt: int) -> str:
@@ -1456,7 +1477,6 @@ class MigrationEvaluationService:
 __all__ = [
     "EVALUATION_DATASET_MANIFEST_PATH",
     "EVALUATION_DATASET_PATH",
-    "EVALUATION_REPORT_MARKDOWN_PATH",
     "EVALUATION_REPORT_PATH",
     "EVALUATION_ROOT",
     "EVALUATION_RUNNER_DIAGNOSTICS_ROOT",

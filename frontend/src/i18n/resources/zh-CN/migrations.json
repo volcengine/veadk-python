@@ -317,8 +317,22 @@
     "environment": {
       "description": "迁移后的 Agent 运行需要以下环境变量。填写后会在临时 Runtime 中继续评测。",
       "security": "这些值仅用于本次临时评测，不会写入源码、报告或浏览器存储。",
+      "optional": "可选",
       "submit": "提交并继续评测",
       "submitting": "正在提交…"
+    },
+    "execution": {
+      "preparing": "准备评测环境",
+      "preparingDetail": "读取迁移产物和 {{count}} 个评测问题",
+      "deploying": "部署临时 Runtime",
+      "deployingDetail": "创建 {{runtime}} 并安装运行依赖",
+      "runtimeFallback": "隔离运行环境",
+      "executing": "执行评测问题",
+      "executingDetail": "运行 {{count}} 个问题并记录 Agent 输出",
+      "judging": "分析行为差异",
+      "judgingDetail": "按 {{dimensions}} 个维度分析 {{cases}} 个问题的结果与证据",
+      "aggregating": "生成评测报告",
+      "aggregatingDetail": "汇总分数、证据和异常并生成 HTML 报告"
     },
     "result": {
       "title": "迁移效果评测",
@@ -327,6 +341,9 @@
       "retry": "重新评测",
       "retrying": "正在重试…",
       "loadingReport": "正在读取评测报告…",
+      "reportTitle": "HTML 评测报告",
+      "reportHtmlDescription": "可直接在页面中预览，也可以下载后离线查看。",
+      "reportPreviewTitle": "迁移效果评测报告预览",
       "reportSummary": "评测摘要",
       "reportVersion": "评测集 {{version}} · Prompt v{{prompt}}",
       "downloadReport": "下载完整报告",

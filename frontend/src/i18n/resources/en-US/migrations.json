@@ -317,8 +317,22 @@
     "environment": {
       "description": "The migrated Agent needs these environment variables. Evaluation will continue in a temporary Runtime after submission.",
       "security": "Values are used only for this temporary evaluation and are not written to source, reports, or browser storage.",
+      "optional": "Optional",
       "submit": "Submit and continue evaluation",
       "submitting": "Submitting…"
+    },
+    "execution": {
+      "preparing": "Prepare evaluation environment",
+      "preparingDetail": "Read the migration output and {{count}} evaluation questions",
+      "deploying": "Deploy temporary Runtime",
+      "deployingDetail": "Create {{runtime}} and install runtime dependencies",
+      "runtimeFallback": "isolated runtime",
+      "executing": "Run evaluation questions",
+      "executingDetail": "Run {{count}} questions and capture Agent output",
+      "judging": "Analyze behavior differences",
+      "judgingDetail": "Analyze results and evidence for {{cases}} questions across {{dimensions}} dimensions",
+      "aggregating": "Generate evaluation report",
+      "aggregatingDetail": "Aggregate scores, evidence, and issues into an HTML report"
     },
     "result": {
       "title": "Migration effect evaluation",
@@ -327,6 +341,9 @@
       "retry": "Run evaluation again",
       "retrying": "Retrying…",
       "loadingReport": "Loading the evaluation report…",
+      "reportTitle": "HTML evaluation report",
+      "reportHtmlDescription": "Preview it here or download it for offline viewing.",
+      "reportPreviewTitle": "Migration effect evaluation report preview",
       "reportSummary": "Evaluation summary",
       "reportVersion": "Dataset {{version}} · Prompt v{{prompt}}",
       "downloadReport": "Download full report",

@@ -106,10 +106,13 @@ test("configures migration effect evaluation in a drawer with direct user-facing
   assert.match(evaluation, /priorMessages: \[\]/);
   assert.match(evaluation, /MigrationEvaluationProgress/);
   assert.match(evaluation, /MigrationEvaluationResult/);
-  assert.match(evaluation, /score === null \? "N\/A"/);
-  assert.match(evaluation, /report\.evidence_coverage\.rate/);
-  assert.match(evaluation, /report\.execution\.success_rate/);
-  assert.match(evaluation, /report\.lowest_scoring_cases/);
+  assert.match(evaluation, /EvaluationExecutionProgress/);
+  assert.match(evaluation, /evaluation\.execution\.executingDetail/);
+  assert.match(evaluation, /type="text"/);
+  assert.doesNotMatch(evaluation, /type="password"/);
+  assert.match(evaluation, /environment\?\.optional/);
+  assert.match(evaluation, /srcDoc=\{report\}/);
+  assert.match(evaluation, /sandbox=""/);
   assert.match(evaluation, /onDownloadReport/);
   assert.doesNotMatch(evaluation, /from "lucide-react"/);
   assert.doesNotMatch(evaluation, />[↑↓×]</);

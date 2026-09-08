@@ -35,6 +35,7 @@ EVALUATION_EVIDENCE_MAX_BYTES = 2 * 1024
 EVALUATION_LIMITATION_MAX_BYTES = 4 * 1024
 _VERSION_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_ENVIRONMENT_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 EVALUATION_EVIDENCE_SOURCES = frozenset(
     {
         "user_reference",
@@ -158,7 +159,7 @@ def validate_evaluation_status(
             "updated_at",
         },
         optional={
-            "required_environment",
+            "environment",
             "runtime_name",
             "error",
             "report_asset",
@@ -178,19 +179,29 @@ def validate_evaluation_status(
     ):
         raise EvaluationContractError("invalid evaluation status")
     _timestamp(value.get("updated_at"))
-    required_environment = value.get("required_environment")
+    environment = value.get("environment")
     if state == "waiting_environment":
-        if (
-            not isinstance(required_environment, list)
-            or not required_environment
-            or any(
-                not isinstance(item, str) or not item for item in required_environment
-            )
-            or len(set(required_environment)) != len(required_environment)
-        ):
-            raise EvaluationContractError("invalid required environment")
-    elif required_environment is not None:
-        raise EvaluationContractError("unexpected required environment")
+        if not isinstance(environment, dict):
+            raise EvaluationContractError("invalid environment descriptor")
+        _exact_keys(environment, required={"required", "optional"})
+        names: list[str] = []
+        for field in ("required", "optional"):
+            items = environment.get(field)
+            if (
+                not isinstance(items, list)
+                or len(items) > 500
+                or any(
+                    not isinstance(item, str)
+                    or _ENVIRONMENT_KEY_RE.fullmatch(item) is None
+                    for item in items
+                )
+            ):
+                raise EvaluationContractError("invalid environment descriptor")
+            names.extend(cast(list[str], items))
+        if not names or len(set(names)) != len(names):
+            raise EvaluationContractError("invalid environment descriptor")
+    elif environment is not None:
+        raise EvaluationContractError("unexpected environment descriptor")
     error = value.get("error")
     if state in {"failed", "blocked"}:
         if not isinstance(error, dict):

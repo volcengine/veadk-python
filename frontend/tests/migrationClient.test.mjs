@@ -47,6 +47,7 @@ const {
   getMigrationArtifact,
   getMigrationCapabilities,
   getMigrationEvaluationReport,
+  getMigrationEvaluation,
   getMigrationTask,
   MigrationApiError,
   putMigrationEvaluationDataset,
@@ -185,7 +186,7 @@ test("sends an optional migration model without changing legacy requests", async
   assert.equal(Object.hasOwn(bodies[1], "modelId"), false);
 });
 
-test("creates, locks, and reads a migration effect evaluation without expected tools", async (t) => {
+test("creates, locks, and reads an HTML migration effect report without expected tools", async (t) => {
   const previousFetch = globalThis.fetch;
   t.after(() => {
     globalThis.fetch = previousFetch;
@@ -236,73 +237,15 @@ test("creates, locks, and reads a migration effect evaluation without expected t
         },
       ],
     },
-    {
-      schema_version: 1,
-      task_id: "task-1",
-      attempt: 1,
-      dataset_sha256: asset.sha256,
-      dataset_version: asset.sha256.slice(0, 32),
-      artifact_sha256: "b".repeat(64),
-      prompt_version: 1,
-      model: {
-        id: "doubao-seed-2-1-pro-260628",
-        codex_version: "codex-cli 0.139.0",
-        agentkit_cli_version: "0.52.16",
-      },
-      dimensions: ["semantic_fidelity"],
-      dimension_weights: { semantic_fidelity: 1 },
-      cases: [
-        {
-          case_id: "case-1",
-          execution: { state: "succeeded", error: null },
-          output: {
-            text: "订单已发货",
-            truncated: false,
-            original_bytes: 15,
-            captured_bytes: 15,
-          },
-          dimensions: [
-            {
-              id: "semantic_fidelity",
-              score: 92,
-              reason: "核心行为一致",
-              evidence: ["订单状态一致"],
-              evidence_sources: ["observed_output"],
-              severity: "none",
-            },
-          ],
-        },
-      ],
-      summary: {
-        score: 92,
-        dimensions: [
-          {
-            id: "semantic_fidelity",
-            score: 92,
-            reason: "一个用例可评分",
-            evidence: [],
-            evidence_sources: ["observed_output"],
-            severity: "none",
-          },
-        ],
-      },
-      execution: { total: 1, succeeded: 1, failed: 0, success_rate: 100 },
-      evidence_coverage: { total: 1, scored: 1, na: 0, rate: 100 },
-      source_contract_only_case_count: 0,
-      lowest_scoring_cases: [{ case_id: "case-1", score: 92 }],
-      execution_failures: [],
-      critical_mismatches: [],
-      migration_gap_description: "未发现关键迁移差距。",
-      limitations: [],
-      created_at: "2026-09-07T08:10:00Z",
-      asset: { ...asset, kind: "report", attempt: 1 },
-    },
+    "<!doctype html><html><body><h1>迁移效果评测报告</h1></body></html>",
   ];
   globalThis.fetch = async (url, init = {}) => {
     requests.push({ url: String(url), init });
-    return new Response(JSON.stringify(responses.shift()), {
+    const body = responses.shift();
+    const html = typeof body === "string";
+    return new Response(html ? body : JSON.stringify(body), {
       status: 200,
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": html ? "text/html" : "application/json" },
     });
   };
 
@@ -325,7 +268,8 @@ test("creates, locks, and reads a migration effect evaluation without expected t
 
   assert.equal(created.evaluation.state, "waiting_dataset");
   assert.equal(dataset.locked, true);
-  assert.equal(report.summary.score, 92);
+  assert.match(report, /<!doctype html>/);
+  assert.match(report, /迁移效果评测报告/);
   assert.deepEqual(JSON.parse(requests[0].init.body).evaluation, {
     enabled: true,
     preset: "standard",
@@ -338,6 +282,35 @@ test("creates, locks, and reads a migration effect evaluation without expected t
     requests[2].url,
     /\/evaluation\/report\?versionId=a{32}$/,
   );
+});
+
+test("preserves required and optional evaluation environment variables", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+  });
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        enabled: true,
+        state: "waiting_environment",
+        message: "请补充环境变量",
+        environment: {
+          required: ["MODEL_AGENT_API_KEY"],
+          optional: ["MODEL_AGENT_API_BASE", "TZ"],
+        },
+        canResume: true,
+        canRetry: false,
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+
+  const status = await getMigrationEvaluation("task-1");
+
+  assert.deepEqual(status.environment, {
+    required: ["MODEL_AGENT_API_KEY"],
+    optional: ["MODEL_AGENT_API_BASE", "TZ"],
+  });
 });
 
 test("accepts the migration default model while preserving legacy capabilities", async (t) => {

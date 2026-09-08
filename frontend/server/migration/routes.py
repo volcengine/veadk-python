@@ -636,16 +636,24 @@ def mount_migration_routes(
             max_length=32,
             pattern=r"^[0-9a-f]{32}$",
         ),
-    ) -> dict[str, object]:
+    ) -> Response:
         owner_id = owner_resolver(request)
-        return await invoke(
+        content = await invoke(
             "get_evaluation_report",
-            lambda: require_evaluation_service().get_report(
+            lambda: require_evaluation_service().preview_report(
                 task_id,
                 owner_id,
                 version_id,
             ),
             task_id=task_id,
+        )
+        return Response(
+            content=content,
+            media_type="text/html; charset=utf-8",
+            headers={
+                "Cache-Control": "no-store",
+                "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'self'",
+            },
         )
 
     @app.get("/web/agent-migrations/tasks/{task_id}/evaluation/report/download")
@@ -671,7 +679,7 @@ def mount_migration_routes(
         )
         return Response(
             content=content,
-            media_type="text/markdown; charset=utf-8",
+            media_type="text/html; charset=utf-8",
             headers={
                 "Content-Disposition": f'attachment; filename="{filename}"',
                 "Cache-Control": "no-store",

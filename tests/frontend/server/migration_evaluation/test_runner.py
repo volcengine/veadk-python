@@ -152,7 +152,6 @@ def test_start_uploads_non_secret_assets_and_background_command() -> None:
     assert config["execution_results_path"].endswith(
         "/attempt-1/execution-results.jsonl"
     )
-    assert config["report_markdown_path"].endswith("/report/report.md")
     assert config["dimension_definitions"][0]["default_weight"] == 1
     assert config["remote_write_not_after"] == 1_788_777_600.0
     assert config["agentkit_config"]["common"]["agent_name"] == "migrated-agent"
@@ -368,7 +367,6 @@ def test_runner_main_completes_with_python_stdlib_and_fake_cli_boundaries(
     artifact = tmp_path / "artifact.zip"
     status = tmp_path / "status.json"
     report = tmp_path / "report.json"
-    report_markdown = tmp_path / "report.md"
     diagnostics = tmp_path / "diagnostics.log"
     judge_schema_path = tmp_path / "judge-schema.json"
     judge_schema_path.write_text("{}", encoding="utf-8")
@@ -413,7 +411,6 @@ def test_runner_main_completes_with_python_stdlib_and_fake_cli_boundaries(
         "dataset_path": str(dataset),
         "status_path": str(status),
         "report_path": str(report),
-        "report_markdown_path": str(report_markdown),
         "judge_schema_path": str(judge_schema_path),
         "project_path": str(project),
         "work_path": str(work),
@@ -458,7 +455,6 @@ def test_runner_main_completes_with_python_stdlib_and_fake_cli_boundaries(
 
     assert json.loads(status.read_text())["state"] == "aggregating"
     assert json.loads(report.read_text())["execution"]["succeeded"] == 1
-    assert report_markdown.is_file()
     assert not environment_secret.exists()
     assert not cloud_secret.exists()
     assert any(command[:2] == ["ak", "launch"] for command in commands)

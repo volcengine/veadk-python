@@ -129,6 +129,7 @@ class FakeMigration:
             },
         }
         self.required: list[str] = []
+        self.optional: list[str] = []
 
     def get_task(self, task_id: str, owner_id: str) -> dict[str, object]:
         assert task_id == TASK_ID and owner_id == "owner"
@@ -140,7 +141,10 @@ class FakeMigration:
         self.artifact_calls += 1
         return {
             "artifact": {"sha256": ARTIFACT_SHA256},
-            "environment": {"required": self.required},
+            "environment": {
+                "required": self.required,
+                "optional": self.optional,
+            },
         }
 
 
@@ -359,35 +363,43 @@ def test_terminal_migration_waits_for_required_environment_without_starting() ->
     service.put_dataset(TASK_ID, "owner", _body())
     _ready(migration)
     migration.required = ["ARK_API_KEY"]
+    migration.optional = ["TZ"]
 
     service.advance(TASK_ID, "owner")
     snapshot = service.snapshot(TASK_ID, "owner")
     attached = service.attach(migration.task, "owner")
 
     assert snapshot["state"] == "waiting_environment"
-    assert snapshot["requiredEnvironment"] == ["ARK_API_KEY"]
+    assert snapshot["environment"] == {
+        "required": ["ARK_API_KEY"],
+        "optional": ["TZ"],
+    }
     assert snapshot["canResume"] is True
     assert attached["canStop"] is True
     assert runner.starts == []
 
 
-def test_resume_uses_transient_secret_file_without_exposing_values() -> None:
+def test_resume_accepts_optional_environment_without_exposing_values() -> None:
     service, migration, gateway, _repository, runner = _service()
     service.put_dataset(TASK_ID, "owner", _body())
     _ready(migration)
     migration.required = ["ARK_API_KEY"]
+    migration.optional = ["TZ"]
     service.advance(TASK_ID, "owner")
 
     snapshot = service.resume(
         TASK_ID,
         "owner",
-        ResumeEvaluationBody(environment={"ARK_API_KEY": "secret-value"}),
+        ResumeEvaluationBody(
+            environment={"ARK_API_KEY": "secret-value", "TZ": "Asia/Shanghai"}
+        ),
     )
 
     assert snapshot["state"] == "preparing"
     assert "secret-value" not in json.dumps(snapshot)
     assert json.loads(gateway.files[EVALUATION_SECRET_PATH]) == {
-        "ARK_API_KEY": "secret-value"
+        "ARK_API_KEY": "secret-value",
+        "TZ": "Asia/Shanghai",
     }
     assert all("secret-value" not in command for _, command in gateway.commands)
     assert runner.starts[0]["secret_path"] == EVALUATION_SECRET_PATH
@@ -549,6 +561,12 @@ def test_aggregating_report_is_validated_persisted_and_then_completed() -> None:
     status.update(state="aggregating", message="正在汇总")
     gateway.files[EVALUATION_STATUS_PATH] = json.dumps(status).encode()
     report = _report(dataset["asset"]["sha256"])  # type: ignore[index]
+    unsafe_output = "<script>alert(1)</script>"
+    report["cases"][0]["output"].update(  # type: ignore[index]
+        text=unsafe_output,
+        original_bytes=len(unsafe_output.encode()),
+        captured_bytes=len(unsafe_output.encode()),
+    )
     gateway.files[EVALUATION_REPORT_PATH] = json.dumps(
         report,
         ensure_ascii=False,
@@ -561,8 +579,8 @@ def test_aggregating_report_is_validated_persisted_and_then_completed() -> None:
     task_reads = migration.get_task_calls
     artifact_reads = migration.artifact_calls
     session_reads = gateway.find_session_calls
-    loaded = service.get_report(TASK_ID, "owner", version_id)  # type: ignore[arg-type]
-    markdown, filename = service.download_report(
+    preview = service.preview_report(TASK_ID, "owner", version_id)  # type: ignore[arg-type]
+    downloaded, filename = service.download_report(
         TASK_ID,
         "owner",
         version_id,  # type: ignore[arg-type]
@@ -570,12 +588,14 @@ def test_aggregating_report_is_validated_persisted_and_then_completed() -> None:
 
     assert snapshot["state"] == "completed"
     assert snapshot["report"]["kind"] == "report"  # type: ignore[index]
-    assert loaded["summary"] == report["summary"]
-    assert loaded["asset"] == snapshot["report"]
-    assert filename == "migration-evaluation-1.md"
-    assert "# 迁移效果评测报告" in markdown.decode()
-    assert "AgentKit CLI：`0.52.16`" in markdown.decode()
-    assert "通过" not in markdown.decode()
+    assert filename == "migration-evaluation-1.html"
+    assert preview == downloaded
+    assert "<!doctype html>" in downloaded.decode()
+    assert "AgentKit CLI：0.52.16" in downloaded.decode()
+    assert "问题结果与证据" in downloaded.decode()
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in downloaded.decode()
+    assert "<script>alert(1)</script>" not in downloaded.decode()
+    assert "通过" not in downloaded.decode()
     assert migration.get_task_calls == task_reads
     assert migration.artifact_calls == artifact_reads
     assert gateway.find_session_calls == session_reads
@@ -651,15 +671,19 @@ def test_retry_with_required_environment_returns_directly_to_input() -> None:
 
     assert waiting["state"] == "waiting_environment"
     assert waiting["attempt"] == 2
-    assert waiting["requiredEnvironment"] == ["ARK_API_KEY"]
+    assert waiting["environment"] == {
+        "required": ["ARK_API_KEY"],
+        "optional": [],
+    }
     assert [start["attempt"] for start in runner.starts] == [1]
 
 
-def test_environment_payload_must_match_required_keys_exactly() -> None:
+def test_environment_payload_requires_declared_keys_and_rejects_unknown_keys() -> None:
     service, migration, _gateway, _repository, _runner = _service()
     service.put_dataset(TASK_ID, "owner", _body())
     _ready(migration)
     migration.required = ["ARK_API_KEY"]
+    migration.optional = ["TZ"]
     service.advance(TASK_ID, "owner")
 
     with pytest.raises(MigrationError, match="全部必需"):
@@ -668,3 +692,10 @@ def test_environment_payload_must_match_required_keys_exactly() -> None:
             "owner",
             ResumeEvaluationBody(environment={"OTHER": "value"}),
         )
+
+    resumed = service.resume(
+        TASK_ID,
+        "owner",
+        ResumeEvaluationBody(environment={"ARK_API_KEY": "value"}),
+    )
+    assert resumed["state"] == "preparing"

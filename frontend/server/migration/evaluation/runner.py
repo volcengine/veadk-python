@@ -36,7 +36,6 @@ from ..gateway import (
 from ..service import MIGRATION_ROOT, MigrationError
 from .service import (
     EVALUATION_DATASET_PATH,
-    EVALUATION_REPORT_MARKDOWN_PATH,
     EVALUATION_REPORT_PATH,
     EVALUATION_ROOT,
     EVALUATION_STATUS_PATH,
@@ -1203,43 +1202,6 @@ def runner_source() -> str:
             }
 
 
-        def report_markdown(report):
-            score = report["summary"]["score"]
-            score_text = "N/A" if score is None else f"{score}/100"
-            lines = [
-                "# 迁移效果评测报告",
-                "",
-                f"- 任务：`{report['task_id']}`",
-                f"- 评测集：`{report['dataset_version']}` / `{report['dataset_sha256']}`",
-                f"- 迁移产物：`{report['artifact_sha256']}`",
-                f"- 模型：`{report['model']['id']}`",
-                f"- Codex：`{report['model']['codex_version']}`",
-                f"- AgentKit CLI：`{report['model']['agentkit_cli_version']}`",
-                f"- Prompt 版本：`{report['prompt_version']}`",
-                f"- 综合一致性：{score_text}",
-                f"- 证据覆盖率：{report['evidence_coverage']['rate']}%",
-                f"- 执行成功率：{report['execution']['success_rate']}%",
-                "",
-                "## 维度结果",
-                "",
-            ]
-            for dimension in report["summary"]["dimensions"]:
-                current = "N/A" if dimension["score"] is None else f"{dimension['score']}/100"
-                lines.append(f"- `{dimension['id']}`：{current}；{dimension['reason']}")
-            lines.extend(
-                [
-                    "",
-                    "## 迁移差距与限制",
-                    "",
-                    report["migration_gap_description"],
-                ]
-            )
-            for limitation in report["limitations"]:
-                lines.append(f"- {limitation}")
-            lines.append("")
-            return "\n".join(lines)
-
-
         def main(config_path):
             config = json.loads(Path(config_path).read_text(encoding="utf-8"))
             project = Path(config["project_path"])
@@ -1349,10 +1311,6 @@ def runner_source() -> str:
                     contract,
                 )
                 atomic_json(config["report_path"], report)
-                Path(config["report_markdown_path"]).write_text(
-                    report_markdown(report),
-                    encoding="utf-8",
-                )
                 diagnostic(config, "report_ready")
                 status(config, "aggregating", "正在保存不可变评测报告")
             except Exception as error:
@@ -1465,7 +1423,6 @@ class SandboxMigrationEvaluationRunner:
             "dataset_path": EVALUATION_DATASET_PATH,
             "status_path": EVALUATION_STATUS_PATH,
             "report_path": EVALUATION_REPORT_PATH,
-            "report_markdown_path": EVALUATION_REPORT_MARKDOWN_PATH,
             "judge_schema_path": _JUDGE_SCHEMA_PATH,
             "project_path": f"{MIGRATION_ROOT}/output/veadk",
             "work_path": work_path,

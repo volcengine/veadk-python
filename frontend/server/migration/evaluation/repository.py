@@ -207,7 +207,7 @@ class TosMigrationEvaluationRepository:
                 content,
                 "application/x-ndjson"
                 if metadata.kind == "dataset"
-                else "application/json",
+                else "text/html; charset=utf-8",
                 limit,
             )
             try:
@@ -303,7 +303,7 @@ class TosMigrationEvaluationRepository:
 
     @staticmethod
     def _content_name(kind: Literal["dataset", "report"]) -> str:
-        return "data.jsonl" if kind == "dataset" else "report.json"
+        return "data.jsonl" if kind == "dataset" else "report.html"
 
     @staticmethod
     def _validate_metadata(metadata: EvaluationAssetMetadata) -> None:

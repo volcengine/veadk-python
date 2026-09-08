@@ -126,7 +126,7 @@ def test_dataset_is_owner_scoped_immutable_and_marker_is_written_last() -> None:
 def test_report_is_a_separate_versioned_asset() -> None:
     tos = FakeTos()
     repository = _repository(tos)
-    content = b'{"schema_version":1,"state":"completed"}'
+    content = b"<!doctype html><title>Evaluation report</title>"
     digest = hashlib.sha256(content).hexdigest()
 
     metadata = repository.commit_report(
@@ -142,7 +142,7 @@ def test_report_is_a_separate_versioned_asset() -> None:
     assert metadata.kind == "report"
     assert metadata.attempt == 2
     assert any(
-        "/reports/" in key and key.endswith("report.json") for key in tos.objects
+        "/reports/" in key and key.endswith("report.html") for key in tos.objects
     )
     assert not any("/datasets/" in key for key in tos.objects)
 

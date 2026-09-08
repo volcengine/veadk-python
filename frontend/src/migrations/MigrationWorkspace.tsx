@@ -32,7 +32,6 @@ import {
   type MigrationActivity,
   type MigrationArtifact,
   type MigrationCapabilities,
-  type MigrationEvaluationReport,
   type MigrationEvaluationDataset,
   type MigrationFramework,
   type MigrationTask,
@@ -801,8 +800,7 @@ export function MigrationWorkspace({
     taskId: string;
     message: string;
   } | null>(null);
-  const [evaluationReport, setEvaluationReport] =
-    useState<MigrationEvaluationReport | null>(null);
+  const [evaluationReport, setEvaluationReport] = useState<string | null>(null);
   const [evaluationReportLoading, setEvaluationReportLoading] = useState(false);
   const [evaluationReportError, setEvaluationReportError] = useState("");
   const [evaluationReportReload, setEvaluationReportReload] = useState(0);

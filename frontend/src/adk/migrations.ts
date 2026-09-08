@@ -83,7 +83,11 @@ export interface MigrationEvaluationStatus {
   attempt?: number;
   dataset?: MigrationEvaluationAsset;
   report?: MigrationEvaluationAsset;
-  requiredEnvironment?: string[];
+  environment?: {
+    required: string[];
+    optional: string[];
+  };
+  runtimeName?: string;
   canResume?: boolean;
   canRetry?: boolean;
   error?: {
@@ -110,98 +114,6 @@ export interface MigrationEvaluationDataset {
   locked: boolean;
   asset?: MigrationEvaluationAsset;
   cases: MigrationEvaluationCase[];
-}
-
-export interface MigrationEvaluationDimensionResult {
-  id: MigrationEvaluationDimensionId;
-  score: number | null;
-  reason: string;
-  evidence: string[];
-  evidence_sources: MigrationEvaluationEvidenceSource[];
-  severity: MigrationEvaluationSeverity;
-}
-
-export type MigrationEvaluationEvidenceSource =
-  | "user_reference"
-  | "user_criteria"
-  | "source_contract"
-  | "observed_output"
-  | "deterministic_assertion";
-
-export type MigrationEvaluationSeverity =
-  | "none"
-  | "low"
-  | "medium"
-  | "high"
-  | "critical"
-  | "unknown";
-
-export interface MigrationEvaluationExecutionError {
-  code: string;
-  message: string;
-}
-
-export interface MigrationEvaluationReport {
-  schema_version: 1;
-  task_id: string;
-  attempt: number;
-  dataset_sha256: string;
-  dataset_version: string;
-  artifact_sha256: string;
-  prompt_version: number;
-  model: {
-    id: string;
-    codex_version: string;
-    agentkit_cli_version: string;
-  };
-  dimensions: MigrationEvaluationDimensionId[];
-  dimension_weights: Partial<Record<MigrationEvaluationDimensionId, number>>;
-  cases: Array<{
-    case_id: string;
-    execution: {
-      state: "succeeded" | "failed";
-      error: MigrationEvaluationExecutionError | null;
-    };
-    output: {
-      text: string;
-      truncated: boolean;
-      original_bytes: number;
-      captured_bytes: number;
-    };
-    dimensions: MigrationEvaluationDimensionResult[];
-  }>;
-  summary: {
-    score: number | null;
-    dimensions: MigrationEvaluationDimensionResult[];
-  };
-  execution: {
-    total: number;
-    succeeded: number;
-    failed: number;
-    success_rate: number;
-  };
-  evidence_coverage: {
-    total: number;
-    scored: number;
-    na: number;
-    rate: number;
-  };
-  source_contract_only_case_count: number;
-  lowest_scoring_cases: Array<{ case_id: string; score: number }>;
-  execution_failures: Array<
-    { case_id: string } & MigrationEvaluationExecutionError
-  >;
-  critical_mismatches: Array<{
-    case_id: string;
-    dimension_id: MigrationEvaluationDimensionId;
-    severity: "critical";
-    reason: string;
-    evidence_sources: MigrationEvaluationEvidenceSource[];
-  }>;
-  migration_gap_description: string;
-  limitations: string[];
-  created_at: string;
-  asset: MigrationEvaluationAsset;
 }
 
 export interface MigrationCapabilities {
@@ -477,23 +389,6 @@ const EVALUATION_DIMENSIONS = new Set<MigrationEvaluationDimensionId>([
   "safety_refusal_fidelity",
 ]);
 
-const EVALUATION_EVIDENCE_SOURCES = new Set<MigrationEvaluationEvidenceSource>([
-  "user_reference",
-  "user_criteria",
-  "source_contract",
-  "observed_output",
-  "deterministic_assertion",
-]);
-
-const EVALUATION_SEVERITIES = new Set<MigrationEvaluationSeverity>([
-  "none",
-  "low",
-  "medium",
-  "high",
-  "critical",
-  "unknown",
-]);
-
 const ACTIVITY_KINDS = new Set<MigrationActivityKind>([
   "reasoning",
   "message",
@@ -553,28 +448,6 @@ function evaluationDimension(
     throw new Error(adkT("migrations.invalidFormat", { label }));
   }
   return value as MigrationEvaluationDimensionId;
-}
-
-function evaluationEvidenceSources(
-  value: unknown,
-): MigrationEvaluationEvidenceSource[] {
-  if (
-    !Array.isArray(value) ||
-    !value.every(
-      (item) =>
-        typeof item === "string" &&
-        EVALUATION_EVIDENCE_SOURCES.has(
-          item as MigrationEvaluationEvidenceSource,
-        ),
-    )
-  ) {
-    throw new Error(
-      adkT("migrations.invalidFormat", {
-        label: adkT("migrations.labels.evaluationEvidence"),
-      }),
-    );
-  }
-  return value as MigrationEvaluationEvidenceSource[];
 }
 
 function normalizeEvaluationAsset(value: unknown): MigrationEvaluationAsset {
@@ -654,12 +527,41 @@ function normalizeEvaluation(value: unknown): MigrationEvaluationStatus {
   if (evaluation.report !== undefined) {
     normalized.report = normalizeEvaluationAsset(evaluation.report);
   }
-  if (evaluation.requiredEnvironment !== undefined) {
-    normalized.requiredEnvironment = stringArray(
-      evaluation.requiredEnvironment,
+  if (evaluation.environment !== undefined) {
+    const environment = record(
+      evaluation.environment,
+      adkT("migrations.labels.environment"),
+    );
+    const required = stringArray(
+      environment.required,
       adkT("migrations.labels.requiredEnvironment"),
     );
+    const optional = stringArray(
+      environment.optional,
+      adkT("migrations.labels.optionalEnvironment"),
+    );
+    const names = [...required, ...optional];
+    if (
+      evaluation.state !== "waiting_environment" ||
+      names.length === 0 ||
+      new Set(names).size !== names.length
+    ) {
+      throw new Error(
+        adkT("migrations.invalidFormat", {
+          label: adkT("migrations.labels.environment"),
+        }),
+      );
+    }
+    normalized.environment = { required, optional };
+  } else if (evaluation.state === "waiting_environment") {
+    throw new Error(
+      adkT("migrations.invalidFormat", {
+        label: adkT("migrations.labels.environment"),
+      }),
+    );
   }
+  if (typeof evaluation.runtimeName === "string")
+    normalized.runtimeName = evaluation.runtimeName;
   if (typeof evaluation.canResume === "boolean")
     normalized.canResume = evaluation.canResume;
   if (typeof evaluation.canRetry === "boolean")
@@ -1624,335 +1526,27 @@ export async function retryMigrationEvaluation(
   );
 }
 
-function isEvaluationScore(value: unknown): value is number | null {
-  return (
-    value === null ||
-    (typeof value === "number" &&
-      Number.isInteger(value) &&
-      value >= 0 &&
-      value <= 100)
-  );
-}
-
-function normalizeDimensionResult(
-  value: unknown,
-): MigrationEvaluationDimensionResult {
-  const result = record(
-    value,
-    adkT("migrations.labels.evaluationDimensionResult"),
-  );
-  if (
-    !isEvaluationScore(result.score) ||
-    typeof result.reason !== "string" ||
-    !Array.isArray(result.evidence) ||
-    !result.evidence.every((item) => typeof item === "string") ||
-    typeof result.severity !== "string" ||
-    !EVALUATION_SEVERITIES.has(
-      result.severity as MigrationEvaluationSeverity,
-    )
-  ) {
-    throw new Error(
-      adkT("migrations.invalidFormat", {
-        label: adkT("migrations.labels.evaluationDimensionResult"),
-      }),
-    );
-  }
-  return {
-    id: evaluationDimension(
-      result.id,
-      adkT("migrations.labels.evaluationDimension"),
-    ),
-    score: result.score as number | null,
-    reason: result.reason,
-    evidence: stringArray(
-      result.evidence,
-      adkT("migrations.labels.evaluationEvidence"),
-    ),
-    evidence_sources: evaluationEvidenceSources(result.evidence_sources),
-    severity: result.severity as MigrationEvaluationSeverity,
-  };
-}
-
-function evaluationCount(value: unknown, label: string): number {
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
-    throw new Error(adkT("migrations.invalidFormat", { label }));
-  }
-  return value;
-}
-
-function evaluationPercentage(value: unknown, label: string): number {
-  const normalized = evaluationCount(value, label);
-  if (normalized > 100) {
-    throw new Error(adkT("migrations.invalidFormat", { label }));
-  }
-  return normalized;
-}
-
-function normalizeEvaluationExecutionError(
-  value: unknown,
-): MigrationEvaluationExecutionError {
-  const error = record(value, adkT("migrations.labels.error"));
-  if (typeof error.code !== "string" || typeof error.message !== "string") {
-    throw new Error(
-      adkT("migrations.invalidFormat", {
-        label: adkT("migrations.labels.error"),
-      }),
-    );
-  }
-  return { code: error.code, message: error.message };
-}
-
 export async function getMigrationEvaluationReport(
   taskId: string,
   versionId: string,
   signal?: AbortSignal,
-): Promise<MigrationEvaluationReport> {
-  const value = record(
-    await json(
-      await request(
-        `/tasks/${encodeURIComponent(taskId)}/evaluation/report?versionId=${encodeURIComponent(versionId)}`,
-        { signal },
-      ),
+): Promise<string> {
+  const response = await request(
+    `/tasks/${encodeURIComponent(taskId)}/evaluation/report?versionId=${encodeURIComponent(versionId)}`,
+    { signal },
+  );
+  if (!response.ok) {
+    throw await errorFrom(
+      response,
       adkT("migrations.evaluation.reportLoadFailed"),
-    ),
-    adkT("migrations.labels.evaluationReport"),
-  );
-  const summary = record(
-    value.summary,
-    adkT("migrations.labels.evaluationSummary"),
-  );
-  const model = record(value.model, adkT("migrations.labels.modelCapabilities"));
-  const execution = record(
-    value.execution,
-    adkT("migrations.labels.evaluationReport"),
-  );
-  const coverage = record(
-    value.evidence_coverage,
-    adkT("migrations.labels.evaluationReport"),
-  );
-  const weights = record(
-    value.dimension_weights,
-    adkT("migrations.labels.evaluationReport"),
-  );
-  if (
-    value.schema_version !== 1 ||
-    typeof value.task_id !== "string" ||
-    typeof value.attempt !== "number" ||
-    typeof value.dataset_sha256 !== "string" ||
-    typeof value.dataset_version !== "string" ||
-    typeof value.artifact_sha256 !== "string" ||
-    typeof value.prompt_version !== "number" ||
-    !Number.isInteger(value.prompt_version) ||
-    value.prompt_version < 1 ||
-    typeof model.id !== "string" ||
-    typeof model.codex_version !== "string" ||
-    typeof model.agentkit_cli_version !== "string" ||
-    !Array.isArray(value.dimensions) ||
-    !Array.isArray(value.cases) ||
-    !Array.isArray(value.lowest_scoring_cases) ||
-    !Array.isArray(value.execution_failures) ||
-    !Array.isArray(value.critical_mismatches) ||
-    typeof value.migration_gap_description !== "string" ||
-    !Array.isArray(value.limitations) ||
-    typeof value.created_at !== "string" ||
-    !isEvaluationScore(summary.score) ||
-    !Array.isArray(summary.dimensions)
-  ) {
-    throw new Error(
-      adkT("migrations.invalidFormat", {
-        label: adkT("migrations.labels.evaluationReport"),
-      }),
     );
   }
-  const dimensions = value.dimensions.map((item) =>
-    evaluationDimension(item, adkT("migrations.labels.evaluationDimension")),
-  );
-  const dimensionWeights = Object.fromEntries(
-    dimensions.map((dimension) => {
-      const weight = weights[dimension];
-      if (typeof weight !== "number" || weight <= 0) {
-        throw new Error(
-          adkT("migrations.invalidFormat", {
-            label: adkT("migrations.labels.evaluationReport"),
-          }),
-        );
-      }
-      return [dimension, weight];
-    }),
-  ) as Partial<Record<MigrationEvaluationDimensionId, number>>;
-  return {
-    schema_version: 1,
-    task_id: value.task_id,
-    attempt: value.attempt,
-    dataset_sha256: value.dataset_sha256,
-    dataset_version: value.dataset_version,
-    artifact_sha256: value.artifact_sha256,
-    prompt_version: value.prompt_version,
-    model: {
-      id: model.id,
-      codex_version: model.codex_version,
-      agentkit_cli_version: model.agentkit_cli_version,
-    },
-    dimensions,
-    dimension_weights: dimensionWeights,
-    cases: value.cases.map((caseValue) => {
-      const item = record(
-        caseValue,
-        adkT("migrations.labels.evaluationCaseResult"),
-      );
-      const output = record(
-        item.output,
-        adkT("migrations.labels.evaluationOutput"),
-      );
-      const caseExecution = record(
-        item.execution,
-        adkT("migrations.labels.evaluationCaseResult"),
-      );
-      if (
-        typeof item.case_id !== "string" ||
-        !Array.isArray(item.dimensions) ||
-        !["succeeded", "failed"].includes(String(caseExecution.state)) ||
-        (caseExecution.state === "succeeded" && caseExecution.error !== null) ||
-        (caseExecution.state === "failed" && caseExecution.error === null) ||
-        typeof output.text !== "string" ||
-        typeof output.truncated !== "boolean" ||
-        typeof output.original_bytes !== "number" ||
-        typeof output.captured_bytes !== "number"
-      ) {
-        throw new Error(
-          adkT("migrations.invalidFormat", {
-            label: adkT("migrations.labels.evaluationCaseResult"),
-          }),
-        );
-      }
-      return {
-        case_id: item.case_id,
-        execution: {
-          state: caseExecution.state as "succeeded" | "failed",
-          error:
-            caseExecution.error === null
-              ? null
-              : normalizeEvaluationExecutionError(caseExecution.error),
-        },
-        output: {
-          text: output.text,
-          truncated: output.truncated,
-          original_bytes: output.original_bytes,
-          captured_bytes: output.captured_bytes,
-        },
-        dimensions: item.dimensions.map(normalizeDimensionResult),
-      };
-    }),
-    summary: {
-      score: summary.score as number | null,
-      dimensions: summary.dimensions.map(normalizeDimensionResult),
-    },
-    execution: {
-      total: evaluationCount(
-        execution.total,
-        adkT("migrations.labels.evaluationReport"),
-      ),
-      succeeded: evaluationCount(
-        execution.succeeded,
-        adkT("migrations.labels.evaluationReport"),
-      ),
-      failed: evaluationCount(
-        execution.failed,
-        adkT("migrations.labels.evaluationReport"),
-      ),
-      success_rate: evaluationPercentage(
-        execution.success_rate,
-        adkT("migrations.labels.evaluationReport"),
-      ),
-    },
-    evidence_coverage: {
-      total: evaluationCount(
-        coverage.total,
-        adkT("migrations.labels.evaluationReport"),
-      ),
-      scored: evaluationCount(
-        coverage.scored,
-        adkT("migrations.labels.evaluationReport"),
-      ),
-      na: evaluationCount(
-        coverage.na,
-        adkT("migrations.labels.evaluationReport"),
-      ),
-      rate: evaluationPercentage(
-        coverage.rate,
-        adkT("migrations.labels.evaluationReport"),
-      ),
-    },
-    source_contract_only_case_count: evaluationCount(
-      value.source_contract_only_case_count,
-      adkT("migrations.labels.evaluationReport"),
-    ),
-    lowest_scoring_cases: value.lowest_scoring_cases.map((itemValue) => {
-      const item = record(
-        itemValue,
-        adkT("migrations.labels.evaluationCaseResult"),
-      );
-      if (typeof item.case_id !== "string" || !isEvaluationScore(item.score) || item.score === null) {
-        throw new Error(
-          adkT("migrations.invalidFormat", {
-            label: adkT("migrations.labels.evaluationCaseResult"),
-          }),
-        );
-      }
-      return { case_id: item.case_id, score: item.score };
-    }),
-    execution_failures: value.execution_failures.map((itemValue) => {
-      const item = record(
-        itemValue,
-        adkT("migrations.labels.evaluationCaseResult"),
-      );
-      if (typeof item.case_id !== "string") {
-        throw new Error(
-          adkT("migrations.invalidFormat", {
-            label: adkT("migrations.labels.evaluationCaseResult"),
-          }),
-        );
-      }
-      return {
-        case_id: item.case_id,
-        ...normalizeEvaluationExecutionError(item),
-      };
-    }),
-    critical_mismatches: value.critical_mismatches.map((itemValue) => {
-      const item = record(
-        itemValue,
-        adkT("migrations.labels.evaluationDimensionResult"),
-      );
-      if (
-        typeof item.case_id !== "string" ||
-        item.severity !== "critical" ||
-        typeof item.reason !== "string"
-      ) {
-        throw new Error(
-          adkT("migrations.invalidFormat", {
-            label: adkT("migrations.labels.evaluationDimensionResult"),
-          }),
-        );
-      }
-      return {
-        case_id: item.case_id,
-        dimension_id: evaluationDimension(
-          item.dimension_id,
-          adkT("migrations.labels.evaluationDimension"),
-        ),
-        severity: "critical" as const,
-        reason: item.reason,
-        evidence_sources: evaluationEvidenceSources(item.evidence_sources),
-      };
-    }),
-    migration_gap_description: value.migration_gap_description,
-    limitations: stringArray(
-      value.limitations,
-      adkT("migrations.labels.evaluationLimitations"),
-    ),
-    created_at: value.created_at,
-    asset: normalizeEvaluationAsset(value.asset),
-  };
+  const contentType = response.headers.get("Content-Type") ?? "";
+  const content = await response.text();
+  if (!contentType.toLowerCase().includes("text/html") || !content.trim()) {
+    throw new Error(adkT("migrations.evaluation.reportLoadFailed"));
+  }
+  return content;
 }
 
 export async function downloadMigrationEvaluationReport(
@@ -1974,7 +1568,7 @@ export async function downloadMigrationEvaluationReport(
   const url = URL.createObjectURL(await response.blob());
   const link = document.createElement("a");
   link.href = url;
-  link.download = responseFilename(response, `${taskId}-evaluation-report.md`);
+  link.download = responseFilename(response, `${taskId}-evaluation-report.html`);
   link.click();
   window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
 }

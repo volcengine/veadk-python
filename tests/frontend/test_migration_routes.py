@@ -165,12 +165,13 @@ class RouteEvaluationService:
     def snapshot(self, task_id: str, owner_id: str, *, task: object = None):
         return self.record("snapshot", task_id, owner_id, task)
 
-    def get_report(self, task_id: str, owner_id: str, version_id: str):
-        return self.record("get_report", task_id, owner_id, version_id)
+    def preview_report(self, task_id: str, owner_id: str, version_id: str):
+        self.calls.append(("preview_report", (task_id, owner_id, version_id)))
+        return b"<!doctype html><title>report</title>"
 
     def download_report(self, task_id: str, owner_id: str, version_id: str):
         self.calls.append(("download_report", (task_id, owner_id, version_id)))
-        return b"# report\n", "evaluation.md"
+        return b"<!doctype html><title>report</title>", "evaluation.html"
 
     def resume(self, task_id: str, owner_id: str, body: object):
         return self.record("resume", task_id, owner_id, body)
@@ -340,13 +341,20 @@ def test_evaluation_routes_delegate_without_blocking_upload_or_status_reads() ->
     assert names.count("put_dataset") == 1
     assert names.count("get_dataset") == 1
     assert names.count("snapshot") >= 1
-    assert names.count("get_report") == 1
+    assert names.count("preview_report") == 1
     assert names.count("download_report") == 1
     assert names.count("resume") == 1
     assert names.count("retry") == 1
     assert names.count("assert_dataset_locked") == 0
     assert names.count("advance") == 0
-    assert report_download.content == b"# report\n"
+    assert report.content.startswith(b"<!doctype html>")
+    assert report.headers["content-type"].startswith("text/html")
+    assert "default-src 'none'" in report.headers["content-security-policy"]
+    assert report_download.content.startswith(b"<!doctype html>")
+    assert report_download.headers["content-type"].startswith("text/html")
+    assert report_download.headers["content-disposition"] == (
+        'attachment; filename="evaluation.html"'
+    )
     assert report_download.headers["cache-control"] == "no-store"
     assert [name for name, _ in service.calls].index("create_task") < names.index(
         "attach"
