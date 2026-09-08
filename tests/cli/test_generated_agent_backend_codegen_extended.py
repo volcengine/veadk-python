@@ -1217,11 +1217,24 @@ def test_cloud_generated_debug_preserves_mcp_connection_error(
     assert response.json()["detail"] == original_detail
 
 
-def test_generated_debug_recovers_unchanged_published_mcp_credential_before_discovery(
+@pytest.mark.parametrize(
+    ("credential_storage", "edited_url", "expected_status", "expect_credential"),
+    [
+        ("reference-env", "https://8.8.8.8/mcp", 200, True),
+        ("servers-json", "https://8.8.8.8/mcp", 200, True),
+        ("servers-json", "https://8.8.8.8/changed-mcp", 422, False),
+    ],
+)
+def test_generated_debug_applies_published_mcp_credential_contract_before_discovery(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    credential_storage: str,
+    edited_url: str,
+    expected_status: int,
+    expect_credential: bool,
 ) -> None:
     from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+    from veadk.cli.generated_agent_mcp import McpDebugConnectionError
 
     credential_reference = "MCP_LEGACY_AGENT_JVMDIAG_AUTH_TOKEN"
     credential_value = "server-retained-debug-secret"
@@ -1238,12 +1251,28 @@ def test_generated_debug_recovers_unchanged_published_mcp_credential_before_disc
             }
         ],
     }
+    runtime_envs = [SimpleNamespace(key=credential_reference, value=credential_value)]
+    if credential_storage == "servers-json":
+        runtime_envs = [
+            SimpleNamespace(
+                key="MCP_SERVERS_JSON",
+                value=json.dumps(
+                    [
+                        {
+                            "name": "jvmdiag",
+                            "url": "https://8.8.8.8/mcp",
+                            "headers": {"Authorization": f"Bearer {credential_value}"},
+                        }
+                    ]
+                ),
+            )
+        ]
     runtime = SimpleNamespace(
         runtime_id="runtime-debug-mcp",
         runtime_name="legacy-agent-runtime",
         current_version_number=3,
         tags=[],
-        envs=[SimpleNamespace(key=credential_reference, value=credential_value)],
+        envs=runtime_envs,
         network_configurations=[
             SimpleNamespace(
                 endpoint="https://runtime.example.com",
@@ -1266,6 +1295,8 @@ def test_generated_debug_recovers_unchanged_published_mcp_credential_before_disc
 
     async def capture_mcp_discovery(draft, env_values=None):
         captured_discovery_env.update(env_values or {})
+        if not expect_credential:
+            raise McpDebugConnectionError("changed MCP endpoint rejected")
         return draft
 
     monkeypatch.setattr(
@@ -1304,17 +1335,22 @@ def test_generated_debug_recovers_unchanged_published_mcp_credential_before_disc
     )
 
     with TestClient(app) as client:
+        edited_draft = json.loads(json.dumps(published_draft))
+        edited_draft["mcpTools"][0]["url"] = edited_url
         response = client.post(
             "/web/generated-agent-test-runs",
             json={
-                "draft": published_draft,
+                "draft": edited_draft,
                 "runtimeId": runtime.runtime_id,
                 "runtimeRegion": "cn-shanghai",
             },
         )
 
-    assert response.status_code == 200, response.text
-    assert captured_discovery_env[credential_reference] == credential_value
+    assert response.status_code == expected_status, response.text
+    if expect_credential:
+        assert captured_discovery_env[credential_reference] == credential_value
+    else:
+        assert credential_reference not in captured_discovery_env
     assert credential_value not in response.text
 
 
