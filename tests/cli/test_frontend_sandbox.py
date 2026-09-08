@@ -25,6 +25,7 @@ from collections.abc import AsyncIterator, Mapping
 from dataclasses import replace
 from hashlib import sha256
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from fastapi import FastAPI, HTTPException, Request
@@ -55,6 +56,7 @@ from veadk.cli.frontend_sandbox import (
     AgentkitSandboxGateway,
     SandboxAgentSessionService,
     SandboxCloudSession,
+    SandboxCloudGateway,
     SandboxCloudSnapshot,
     SandboxConfigurationError,
     SandboxConversationService,
@@ -1550,6 +1552,15 @@ def test_managed_agent_admin_listing_auto_resumes_current_kind_snapshots() -> No
             headers={"X-Test-User": "admin", "X-Test-Role": "admin"},
         )
 
+        assert admin.json()["restoringSnapshots"] is True
+        assert "resumed-snapshot-openclaw" not in {
+            item["sessionId"] for item in admin.json()["sessions"]
+        }
+        admin = client.get(
+            "/web/openclaw/sessions",
+            headers={"X-Test-User": "admin", "X-Test-Role": "admin"},
+        )
+
     assert ordinary.status_code == 200
     assert "snapshots" not in ordinary.json()
     assert "resumed-snapshot-openclaw" in {
@@ -2690,6 +2701,15 @@ def test_sandbox_admin_listing_auto_resumes_snapshots() -> None:
             headers={"X-Test-User": "admin", "X-Test-Role": "admin"},
         )
 
+        assert admin.json()["restoringSnapshots"] is True
+        assert "resumed-snapshot-alice" not in {
+            item["sessionId"] for item in admin.json()["sessions"]
+        }
+        admin = client.get(
+            "/web/sandbox/sessions",
+            headers={"X-Test-User": "admin", "X-Test-Role": "admin"},
+        )
+
     assert ordinary.status_code == 200
     assert "snapshots" not in ordinary.json()
     assert "resumed-snapshot-alice" in {
@@ -3793,3 +3813,220 @@ async def test_cancelled_create_is_deleted_after_sdk_call_finishes(
     assert len(created) == 1
     assert created[0].tool_id == "tool-1"
     assert created[0].envs is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["codex", "hermes"])
+async def test_snapshot_listing_does_not_wait_for_background_resume(kind: str) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    class SlowGateway(_FakeGateway):
+        async def resume_snapshot(
+            self, snapshot: SandboxCloudSnapshot
+        ) -> SandboxCloudSession:
+            nonlocal calls
+            calls += 1
+            started.set()
+            await release.wait()
+            return await super().resume_snapshot(snapshot)
+
+    gateway = SlowGateway()
+    gateway.snapshots["old"] = SandboxCloudSnapshot(
+        tool_id="persistent",
+        snapshot_id="old",
+        session_id="expired",
+        user_session_id="user-old",
+        status="Ready",
+    )
+    service = (
+        SandboxConversationService(
+            cast(SandboxCloudGateway, gateway),
+            tool_id="transient",
+            snapshot_tool_id="persistent",
+        )
+        if kind == "codex"
+        else SandboxAgentSessionService(
+            cast(SandboxCloudGateway, gateway),
+            kind=kind,
+            tool_id="transient",
+            snapshot_tool_id="persistent",
+        )
+    )
+    try:
+        sessions, snapshots = await asyncio.wait_for(
+            service.list_resources("admin", is_admin=True, auto_resume_snapshots=True),
+            timeout=0.5,
+        )
+        assert sessions == snapshots == []
+        assert service.snapshot_recovery.running
+        await started.wait()
+        gateway.sessions["starting"] = SandboxCloudSession(
+            tool_id="persistent",
+            instance_id="starting",
+            user_session_id="user-old",
+            endpoint="https://starting.example",
+            status="Starting",
+        )
+        visible, hidden = await service.list_resources(
+            "admin", is_admin=True, auto_resume_snapshots=True
+        )
+        assert visible == hidden == []
+        assert calls == 1
+        release.set()
+        await asyncio.gather(*service.snapshot_recovery.tasks.values())
+        sessions, snapshots = await service.list_resources(
+            "admin", is_admin=True, auto_resume_snapshots=True
+        )
+        assert [session.instance_id for session in sessions] == ["resumed-old"]
+        assert snapshots == []
+        assert not service.snapshot_recovery.running
+    finally:
+        release.set()
+        await service.snapshot_recovery.close()
+
+
+@pytest.mark.asyncio
+async def test_failed_snapshot_recovery_is_cooled_down_and_capped(monkeypatch) -> None:
+    now = 0.0
+    monkeypatch.setattr(frontend_sandbox.time, "monotonic", lambda: now)
+    recovery = frontend_sandbox.SandboxSnapshotRecovery()
+    snapshot = SandboxCloudSnapshot(
+        tool_id="tool",
+        snapshot_id="bad",
+        session_id="expired",
+        user_session_id="user",
+        status="Ready",
+    )
+    calls = 0
+
+    async def fail(snapshot: SandboxCloudSnapshot) -> SandboxCloudSession:
+        nonlocal calls
+        calls += 1
+        raise SandboxProvisioningError("not restorable")
+
+    for attempt in range(3):
+        recovery.schedule([snapshot], fail)
+        await asyncio.gather(*recovery.tasks.values())
+        assert calls == attempt + 1
+        assert recovery.paused is (attempt == 2)
+        assert not recovery.running
+        recovery.schedule([snapshot], fail)
+        assert not recovery.running
+        now += 3600
+    recovery.schedule([snapshot], fail)
+    assert not recovery.running
+    assert calls == 3
+    assert recovery.paused
+    # A removed or already-live snapshot must not leave a stale warning.
+    recovery.schedule([], fail)
+    assert not recovery.paused
+    recovery.schedule([snapshot], fail)
+    assert recovery.paused
+    await recovery.close()
+
+
+@pytest.mark.asyncio
+async def test_background_recovery_limits_concurrency_and_cleans_up() -> None:
+    recovery = frontend_sandbox.SandboxSnapshotRecovery()
+    snapshots = [
+        SandboxCloudSnapshot(
+            tool_id="tool",
+            snapshot_id=str(index),
+            session_id=str(index),
+            user_session_id=str(index),
+            status="Ready",
+            created_at=str(index),
+        )
+        for index in range(5)
+    ]
+    release = asyncio.Event()
+    calls: list[str] = []
+
+    async def resume(snapshot: SandboxCloudSnapshot) -> SandboxCloudSession:
+        calls.append(snapshot.snapshot_id)
+        await release.wait()
+        raise SandboxProvisioningError("cancelled before reaching this")
+
+    recovery.schedule(snapshots, resume)
+    await asyncio.sleep(0)
+    recovery.schedule(snapshots, resume)
+    assert len(recovery.tasks) == 5
+    assert len(calls) == 3
+    await recovery.close()
+    assert not recovery.running
+    assert recovery.tasks == {}
+
+
+@pytest.mark.asyncio
+async def test_background_recovery_only_attempts_latest_snapshot_per_session() -> None:
+    recovery = frontend_sandbox.SandboxSnapshotRecovery()
+    old = SandboxCloudSnapshot(
+        tool_id="tool",
+        snapshot_id="old",
+        session_id="expired",
+        user_session_id="same-user",
+        status="Ready",
+        created_at="2026-01-01",
+    )
+    new = replace(old, snapshot_id="new", created_at="2026-02-01")
+    release = asyncio.Event()
+    calls: list[str] = []
+
+    async def resume(snapshot: SandboxCloudSnapshot) -> SandboxCloudSession:
+        calls.append(snapshot.snapshot_id)
+        await release.wait()
+        raise SandboxProvisioningError("not restorable")
+
+    recovery.schedule([old, new], resume)
+    await asyncio.sleep(0)
+    recovery.schedule([old], resume)
+    assert calls == ["new"]
+    release.set()
+    await asyncio.gather(*recovery.tasks.values())
+    # A failed latest snapshot must not fall back through older snapshots.
+    recovery.schedule([old, new], resume)
+    assert not recovery.running
+    await recovery.close()
+
+
+@pytest.mark.parametrize("kind", ["sandbox", "hermes"])
+def test_paused_snapshot_notice_is_admin_only_and_clears_when_removed(
+    monkeypatch, kind: str
+) -> None:
+    gateway = _FakeGateway()
+    tool_id = "tool-studio-snapshot" if kind == "sandbox" else "tool-hermes-snapshot"
+    gateway.snapshots["paused"] = SandboxCloudSnapshot(
+        tool_id=tool_id,
+        snapshot_id="paused",
+        session_id="expired",
+        user_session_id="historical-user",
+        status="Ready",
+    )
+    original_schedule = frontend_sandbox.SandboxSnapshotRecovery.schedule
+
+    def previously_failed(recovery, snapshots, resume):
+        # Model the state left by three failed background attempts.
+        for snapshot in snapshots:
+            key = (snapshot.region, snapshot.tool_id, snapshot.snapshot_id)
+            recovery._failures[key] = (3, 0.0)
+        original_schedule(recovery, snapshots, resume)
+
+    monkeypatch.setattr(
+        frontend_sandbox.SandboxSnapshotRecovery, "schedule", previously_failed
+    )
+    app = _app(gateway) if kind == "sandbox" else _agent_app(gateway)
+    admin = {"X-Test-User": "admin", "X-Test-Role": "admin"}
+    with TestClient(app) as client:
+        for _ in range(2):
+            response = client.get(f"/web/{kind}/sessions", headers=admin)
+            assert response.status_code == 200
+            assert response.json()["snapshotRecoveryPaused"] is True
+            assert "restoringSnapshots" not in response.json()
+            assert "snapshots" not in response.json()
+        ordinary = client.get(f"/web/{kind}/sessions", headers={"X-Test-User": "alice"})
+        assert "snapshotRecoveryPaused" not in ordinary.json()
+        gateway.snapshots.clear()
+        refreshed = client.get(f"/web/{kind}/sessions", headers=admin)
+        assert "snapshotRecoveryPaused" not in refreshed.json()

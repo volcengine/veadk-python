@@ -119,6 +119,9 @@ export function NewChatAgentPicker({
   const [nextToken, setNextToken] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [restoringSandboxType, setRestoringSandboxType] = useState<AgentType | null>(null);
+  const [pausedSandboxType, setPausedSandboxType] = useState<AgentType | null>(null);
+  const [sandboxPollVersion, setSandboxPollVersion] = useState(0);
   const [connectingRuntimeId, setConnectingRuntimeId] = useState("");
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -141,6 +144,12 @@ export function NewChatAgentPicker({
       window.clearTimeout(hoverCloseTimerRef.current);
       hoverCloseTimerRef.current = null;
     }
+    requestIdRef.current += 1;
+    sandboxAbortRef.current?.abort();
+    setLoadedSandboxType(null);
+    setRestoringSandboxType(null);
+    setPausedSandboxType(null);
+    setLoading(false);
     setOpen(false);
     setActiveType(null);
     setKeyboardPanel("types");
@@ -188,31 +197,47 @@ export function NewChatAgentPicker({
 
   const loadSandboxSessions = useCallback(async (
     type: Exclude<AgentType, "general">,
+    background = false,
   ) => {
     sandboxAbortRef.current?.abort();
     const controller = new AbortController();
     sandboxAbortRef.current = controller;
     const requestId = ++requestIdRef.current;
-    setLoading(true);
+    if (!background) {
+      setLoading(true);
+      setSandboxSessions([]);
+      setRestoringSandboxType(null);
+      setPausedSandboxType(null);
+    }
     setError("");
-    setSandboxSessions([]);
+    let restoring = false;
+    let paused = false;
+    const onRecoveryStatus = (isRestoring: boolean, isPaused: boolean) => {
+      restoring = isRestoring;
+      paused = isPaused;
+    };
     try {
       const sessions = type === "codex"
         ? await sandboxClient.listSessions({
             signal: controller.signal,
             autoResumeSnapshots: true,
+            onRecoveryStatus,
           })
         : await sandboxClient.listAgentSessions(type, {
             signal: controller.signal,
             autoResumeSnapshots: true,
+            onRecoveryStatus,
           });
       if (requestIdRef.current !== requestId) return;
       setSandboxSessions(sessions);
+      setRestoringSandboxType(restoring ? type : null);
+      setPausedSandboxType(paused ? type : null);
       setLoadedSandboxType(type);
-      setActiveRuntimeIndex(0);
+      if (!background) setActiveRuntimeIndex(0);
     } catch (cause) {
       if ((cause as Error)?.name === "AbortError") return;
       if (requestIdRef.current !== requestId) return;
+      setRestoringSandboxType(null);
       const typeKey = AGENT_TYPES.find((item) => item.id === type)?.labelKey;
       setError(formatRequestError(
         cause,
@@ -222,9 +247,18 @@ export function NewChatAgentPicker({
       setLoadedSandboxType(type);
     } finally {
       if (sandboxAbortRef.current === controller) sandboxAbortRef.current = null;
-      if (requestIdRef.current === requestId) setLoading(false);
+      if (requestIdRef.current === requestId) {
+        setLoading(false);
+        setSandboxPollVersion((value) => value + 1);
+      }
     }
   }, [t]);
+
+  useEffect(() => {
+    if (!open || !activeType || activeType === "general" || restoringSandboxType !== activeType) return;
+    const timer = window.setTimeout(() => void loadSandboxSessions(activeType, true), 3000);
+    return () => window.clearTimeout(timer);
+  }, [open, activeType, restoringSandboxType, sandboxPollVersion, loadSandboxSessions]);
 
   useEffect(() => {
     if (agentsSource === "local" || !open || activeType !== "general" || runtimes.length > 0 || loading || error) return;
@@ -649,6 +683,12 @@ export function NewChatAgentPicker({
                 ) : null}
               </>
             )}
+            {activeType !== "general" && (restoringSandboxType === activeType || pausedSandboxType === activeType) ? (
+              <div className="new-chat-agent-picker__recovery-hint" role="status">
+                {restoringSandboxType === activeType ? <div>{t("agentPicker.restoringHistory")}</div> : null}
+                {pausedSandboxType === activeType ? <div>{t("agentPicker.recoveryPaused")}</div> : null}
+              </div>
+            ) : null}
             </div>
           ) : null}
         </div>

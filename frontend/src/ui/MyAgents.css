@@ -374,3 +374,8 @@
   }
 
 }
+
+.my-agent-recovery-notice {
+  flex-direction: column;
+  gap: 4px;
+}

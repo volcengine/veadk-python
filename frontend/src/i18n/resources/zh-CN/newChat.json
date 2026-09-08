@@ -49,6 +49,8 @@
     "unavailable": "暂不可用"
   },
   "agentPicker": {
+    "recoveryPaused": "部分历史智能体多次恢复失败，已暂停自动恢复。",
+    "restoringHistory": "部分历史智能体正在恢复，恢复后将自动显示。",
     "select": "选择智能体",
     "typesLabel": "智能体类型",
     "listLabel": "{{type}}列表",

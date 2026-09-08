@@ -743,28 +743,104 @@ def _request_auto_resume_snapshots(request: Request, *, default: bool = False) -
     }
 
 
-async def _auto_resume_snapshot_batch(
-    snapshots: list[SandboxCloudSnapshot],
-    resume: Callable[[SandboxCloudSnapshot], Awaitable[SandboxCloudSession]],
-) -> None:
-    if not snapshots:
-        return
-    semaphore = asyncio.Semaphore(_AUTO_RESUME_SNAPSHOT_CONCURRENCY)
+class SandboxSnapshotRecovery:
+    """Service-owned background restores, bounded and deduplicated per process.
 
-    async def _resume(snapshot: SandboxCloudSnapshot) -> None:
-        async with semaphore:
-            try:
+    Failure cooldowns and successful snapshot IDs last for this service's lifetime;
+    they are deliberately not a distributed job queue.
+    """
+
+    def __init__(self) -> None:
+        self.tasks: dict[tuple[str, str, str], asyncio.Task[None]] = {}
+        self._failures: dict[tuple[str, str, str], tuple[int, float]] = {}
+        self._completed: set[tuple[str, str, str]] = set()
+        self._candidate_keys: set[tuple[str, str, str]] = set()
+        self._sessions_in_progress: set[tuple[str, str, str]] = set()
+        self._semaphore = asyncio.Semaphore(_AUTO_RESUME_SNAPSHOT_CONCURRENCY)
+
+    @property
+    def running(self) -> bool:
+        return any(not task.done() for task in self.tasks.values())
+
+    @property
+    def paused(self) -> bool:
+        return any(
+            self._failures.get(key, (0, 0.0))[0] >= 3 for key in self._candidate_keys
+        )
+
+    def schedule(
+        self,
+        snapshots: list[SandboxCloudSnapshot],
+        resume: Callable[[SandboxCloudSnapshot], Awaitable[SandboxCloudSession]],
+    ) -> None:
+        # Keep only the newest snapshot for each logical Session in this batch.
+        seen: set[tuple[str, str, str]] = set()
+        candidate_keys: set[tuple[str, str, str]] = set()
+        for snapshot in sorted(
+            snapshots, key=lambda item: item.created_at, reverse=True
+        ):
+            session_key = (
+                snapshot.region,
+                snapshot.tool_id,
+                snapshot.user_session_id or snapshot.session_id or snapshot.snapshot_id,
+            )
+            if session_key in seen:
+                continue
+            seen.add(session_key)
+            key = (snapshot.region, snapshot.tool_id, snapshot.snapshot_id)
+            candidate_keys.add(key)
+            failures, retry_at = self._failures.get(key, (0, 0.0))
+            if (
+                key in self.tasks
+                or session_key in self._sessions_in_progress
+                or key in self._completed
+                or failures >= 3
+                or time.monotonic() < retry_at
+            ):
+                continue
+            self._sessions_in_progress.add(session_key)
+            self.tasks[key] = asyncio.create_task(
+                self._resume(key, session_key, snapshot, resume)
+            )
+        self._candidate_keys = candidate_keys
+
+    async def _resume(
+        self,
+        key: tuple[str, str, str],
+        session_key: tuple[str, str, str],
+        snapshot: SandboxCloudSnapshot,
+        resume: Callable[[SandboxCloudSnapshot], Awaitable[SandboxCloudSession]],
+    ) -> None:
+        try:
+            async with self._semaphore:
                 await resume(snapshot)
-            except Exception as error:  # noqa: BLE001
-                logger.warning(
-                    "Failed to auto-resume Sandbox snapshot snapshot_id=%s "
-                    "session_id=%s error_type=%s",
-                    snapshot.snapshot_id,
-                    snapshot.session_id,
-                    type(error).__name__,
-                )
+            self._completed.add(key)
+            self._failures.pop(key, None)
+        except Exception as error:  # noqa: BLE001 - background task boundary
+            failures = self._failures.get(key, (0, 0.0))[0] + 1
+            self._failures[key] = (
+                failures,
+                time.monotonic() + (300 if failures == 1 else 1800),
+            )
+            logger.warning(
+                "Failed to auto-resume Sandbox snapshot snapshot_id=%s "
+                "session_id=%s attempt=%s error_type=%s",
+                snapshot.snapshot_id,
+                snapshot.session_id,
+                failures,
+                type(error).__name__,
+            )
+        finally:
+            self.tasks.pop(key, None)
+            self._sessions_in_progress.discard(session_key)
 
-    await asyncio.gather(*(_resume(snapshot) for snapshot in snapshots))
+    async def close(self) -> None:
+        tasks = list(self.tasks.values())
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        self.tasks.clear()
+        self._sessions_in_progress.clear()
 
 
 def _session_for_tools(
@@ -1588,6 +1664,7 @@ class SandboxConversationService:
         managed_tool_spec: Any | None = None,
     ) -> None:
         self._gateway = gateway
+        self.snapshot_recovery = SandboxSnapshotRecovery()
         self._configured_tool_id = (tool_id or "").strip()
         self._configured_snapshot_tool_id = (snapshot_tool_id or "").strip()
         self._agent_kind = agent_kind
@@ -1712,12 +1789,15 @@ class SandboxConversationService:
             self.list_snapshots(owner_id, is_admin=is_admin),
         )
         restorable = _restorable_snapshots(sessions, snapshots)
-        if auto_resume_snapshots and is_admin and restorable:
-            await _auto_resume_snapshot_batch(
-                restorable,
-                self._resume_snapshot,
-            )
-            return await self.list_sessions(owner_id, is_admin=is_admin), []
+        if auto_resume_snapshots:
+            if is_admin:
+                self.snapshot_recovery.schedule(restorable, self._resume_snapshot)
+            # Restoring/expired resources stay hidden until their data plane is ready.
+            return [
+                session
+                for session in sessions
+                if session.status.lower() in {"ready", "running"} and session.endpoint
+            ], []
         return sessions, restorable
 
     async def _resume_snapshot(
@@ -2551,6 +2631,7 @@ class SandboxAgentSessionService:
         if kind not in _SANDBOX_AGENT_TOOL_ENVS:
             raise ValueError(f"Unsupported Studio sandbox agent kind: {kind}")
         self._gateway = gateway
+        self.snapshot_recovery = SandboxSnapshotRecovery()
         self.kind = kind
         surface = (surface_path or f"/{kind}/").strip()
         self.surface_path = f"/{surface.strip('/')}/"
@@ -2686,12 +2767,15 @@ class SandboxAgentSessionService:
             self.list_snapshots(owner_id, is_admin=is_admin),
         )
         restorable = _restorable_snapshots(sessions, snapshots)
-        if auto_resume_snapshots and is_admin and restorable:
-            await _auto_resume_snapshot_batch(
-                restorable,
-                self._resume_snapshot,
-            )
-            return await self.list_sessions(owner_id, is_admin=is_admin), []
+        if auto_resume_snapshots:
+            if is_admin:
+                self.snapshot_recovery.schedule(restorable, self._resume_snapshot)
+            # Restoring/expired resources stay hidden until their data plane is ready.
+            return [
+                session
+                for session in sessions
+                if session.status.lower() in {"ready", "running"} and session.endpoint
+            ], []
         return sessions, restorable
 
     async def _resume_snapshot(
@@ -2920,6 +3004,13 @@ def mount_sandbox_agent_routes(
         mount_agent_surface_proxy_routes,
     )
 
+    async def _stop_snapshot_recovery() -> None:
+        await asyncio.gather(
+            *(service.snapshot_recovery.close() for service in services.values())
+        )
+
+    app.router.on_shutdown.append(_stop_snapshot_recovery)
+
     def _service(kind: str) -> SandboxAgentSessionService:
         service = services.get(kind)
         if service is None:
@@ -2987,7 +3078,11 @@ def mount_sandbox_agent_routes(
     ) -> dict[str, object]:
         try:
             owner_id = owner_resolver(request)
-            sessions, snapshots = await _service(kind).list_resources(
+            service = _service(kind)
+            # A restore may finish while the cloud list is in flight. Keep polling
+            # for one more response so that a stale list cannot hide its result.
+            was_restoring = service.snapshot_recovery.running
+            sessions, snapshots = await service.list_resources(
                 owner_id,
                 is_admin=_is_admin(request),
                 auto_resume_snapshots=_request_auto_resume_snapshots(
@@ -3000,8 +3095,12 @@ def mount_sandbox_agent_routes(
         result: dict[str, object] = {
             "sessions": [
                 _public_session(session, kind, owner_id) for session in sessions
-            ]
+            ],
         }
+        if _is_admin(request) and (was_restoring or service.snapshot_recovery.running):
+            result["restoringSnapshots"] = True
+        if _is_admin(request) and service.snapshot_recovery.paused:
+            result["snapshotRecoveryPaused"] = True
         if snapshots:
             result["snapshots"] = [
                 _public_snapshot(snapshot, kind, owner_id) for snapshot in snapshots
@@ -3527,6 +3626,9 @@ def mount_sandbox_routes(
     async def _list_sandbox_sessions(request: Request) -> dict[str, object]:
         try:
             owner_id = owner_resolver(request)
+            # A restore may finish while the cloud list is in flight. Keep polling
+            # for one more response so that a stale list cannot hide its result.
+            was_restoring = service.snapshot_recovery.running
             sessions, snapshots = await service.list_resources(
                 owner_id,
                 is_admin=_is_admin(request),
@@ -3538,8 +3640,12 @@ def mount_sandbox_routes(
         except SandboxError as error:
             raise _http_error(error) from error
         result: dict[str, object] = {
-            "sessions": [_public_session(session, owner_id) for session in sessions]
+            "sessions": [_public_session(session, owner_id) for session in sessions],
         }
+        if _is_admin(request) and (was_restoring or service.snapshot_recovery.running):
+            result["restoringSnapshots"] = True
+        if _is_admin(request) and service.snapshot_recovery.paused:
+            result["snapshotRecoveryPaused"] = True
         if snapshots:
             result["snapshots"] = [
                 _public_snapshot(snapshot, STUDIO_SANDBOX_TOOL_NAME, owner_id)
@@ -4878,6 +4984,7 @@ def mount_sandbox_routes(
             cleanup_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await cleanup_task
+        await service.snapshot_recovery.close()
         await service.close_all()
 
     app.router.on_startup.append(_start_cleanup)

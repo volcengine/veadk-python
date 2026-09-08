@@ -945,3 +945,23 @@ it natively. Each component lives in its own self-registering directory under
 view, so a catalog/renderer mismatch never breaks the page. To add a component,
 drop a folder there (frontend) and declare it in the agent's catalog (backend —
 see `veadk.a2ui.BaseA2UICatalog`).
+
+### 历史沙箱后台恢复
+
+智能体列表及新会话选择器只展示已就绪的存活沙箱。启用
+`autoResumeSnapshots=true` 的列表请求会在后台启动快照恢复，不等待恢复完成；
+响应中的可选字段 `restoringSnapshots: true` 表示仍有任务。页面仅在有任务时，等每次
+请求完成后再过 3 秒刷新，保留已有列表，并显示“部分历史智能体正在恢复，恢复后将自动显示。”。
+恢复完成后通过 Session Metadata 展示正常卡片，不展示恢复中的快照卡片。
+
+恢复仍沿用管理员权限范围，并使用配置的快照 Tool 查询历史快照。显式
+`autoResumeSnapshots=false` 保留只查询 Session 和快照的接口行为。
+后台任务在服务关闭时取消，同一服务内最多并发恢复 3 个快照，同一会话不会重复启动。
+失败后分别冷却 5 分钟、30 分钟，后续列表请求可触发重试；累计失败 3 次后停止自动尝试。
+失败详情仅记后端日志，冷却中的项目不保持页面轮询或恢复提示。
+仍存在的最新可恢复快照累计失败 3 次后，管理员列表响应返回
+`snapshotRecoveryPaused: true`，底部显示“部分历史智能体多次恢复失败，已暂停自动恢复。”。
+暂停提示可与恢复中提示同时显示，所有恢复任务结束后仍保留，但不会触发持续轮询。
+快照已消失、已有存活会话或被新快照替代时，下次列表查询会清除对应的暂停提示。
+去重、成功记录和失败次数均为进程内状态，服务重启后重置，多副本之间不共享；
+需要跨副本或跨重启保证时，应改用共享持久化任务状态。

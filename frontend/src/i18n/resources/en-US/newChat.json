@@ -49,6 +49,8 @@
     "unavailable": "Unavailable"
   },
   "agentPicker": {
+    "recoveryPaused": "Some historical agents could not be restored after multiple attempts. Automatic recovery is paused.",
+    "restoringHistory": "Some historical agents are being restored and will appear automatically.",
     "select": "Select Agent",
     "typesLabel": "Agent types",
     "listLabel": "{{type}} list",

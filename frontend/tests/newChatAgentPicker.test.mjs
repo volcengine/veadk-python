@@ -205,3 +205,12 @@ test("shows request context and backend detail for every picker error", () => {
   assert.match(pickerSource, /t\("agentPicker\.openType", \{ type: activeTypeLabel \}\)/);
   assert.match(pickerStyles, /\.new-chat-agent-picker__error > span,[\s\S]*?white-space: pre-wrap/);
 });
+
+test("polls background restores only while their picker panel is open", () => {
+  assert.match(pickerSource, /if \(!open \|\| !activeType \|\| activeType === "general" \|\| restoringSandboxType !== activeType\) return/);
+  assert.match(pickerSource, /loadSandboxSessions\(activeType, true\)/);
+  assert.match(pickerSource, /clearTimeout\(timer\)/);
+  assert.match(pickerSource, /if \(!background\) \{\s*setLoading\(true\);\s*setSandboxSessions\(\[\]\)/);
+  assert.match(pickerSource, /if \(!background\) setActiveRuntimeIndex\(0\)/);
+  assert.match(pickerSource, /role="status">[\s\S]*?\{t\("agentPicker.restoringHistory"\)\}/);
+});

@@ -669,6 +669,9 @@ export function MyAgents({
   const [sandboxAgents, setSandboxAgents] = useState<MyAgentCardData[]>([]);
   const [loadingSandboxAgents, setLoadingSandboxAgents] = useState(false);
   const [sandboxError, setSandboxError] = useState("");
+  const [restoringSandboxType, setRestoringSandboxType] = useState<AgentType | null>(null);
+  const [pausedSandboxType, setPausedSandboxType] = useState<AgentType | null>(null);
+  const [sandboxPollVersion, setSandboxPollVersion] = useState(0);
   const [connectingAgentId, setConnectingAgentId] = useState("");
   const [runtimeCompatibility, setRuntimeCompatibility] = useState<
     Record<string, RuntimeCompatibility>
@@ -890,29 +893,39 @@ export function MyAgents({
     runtimeCompatibilityAbortRef.current.clear();
   }, []);
 
-  const fetchSandboxAgents = useCallback(async (type: Exclude<AgentType, "general">) => {
+  const fetchSandboxAgents = useCallback(async (type: Exclude<AgentType, "general">, background = false) => {
     sandboxAbortRef.current?.abort();
     const controller = new AbortController();
     sandboxAbortRef.current = controller;
     const requestId = ++sandboxRequestRef.current;
-    setLoadingSandboxAgents(true);
+    if (!background) setLoadingSandboxAgents(true);
     setSandboxError("");
-    setSandboxAgents([]);
+    let restoring = false;
+    let paused = false;
+    const onRecoveryStatus = (isRestoring: boolean, isPaused: boolean) => {
+      restoring = isRestoring;
+      paused = isPaused;
+    };
     try {
       const sessions = type === "codex"
         ? await sandboxClient.listSessions({
             signal: controller.signal,
             autoResumeSnapshots: true,
+            onRecoveryStatus,
           })
         : await sandboxClient.listAgentSessions(type, {
             signal: controller.signal,
             autoResumeSnapshots: true,
+            onRecoveryStatus,
           });
       if (sandboxRequestRef.current !== requestId) return;
+      setRestoringSandboxType(restoring ? type : null);
+      setPausedSandboxType(paused ? type : null);
       setSandboxAgents(sessions.map((session) => sandboxToAgent(session, t)));
     } catch (cause) {
       if ((cause as Error)?.name === "AbortError") return;
       if (sandboxRequestRef.current !== requestId) return;
+      setRestoringSandboxType(null);
       setSandboxError(formatRequestError(
         cause,
         t("myAgents.loadAgentType", { type: t(`myAgents.agentTypes.${type}`) }),
@@ -922,12 +935,21 @@ export function MyAgents({
       if (sandboxAbortRef.current === controller) sandboxAbortRef.current = null;
       if (sandboxRequestRef.current === requestId) {
         setLoadingSandboxAgents(false);
+        setSandboxPollVersion((value) => value + 1);
       }
     }
   }, [t]);
 
+  useEffect(() => {
+    if (activeType === "general" || restoringSandboxType !== activeType) return;
+    const timer = window.setTimeout(() => void fetchSandboxAgents(activeType, true), 3000);
+    return () => window.clearTimeout(timer);
+  }, [activeType, restoringSandboxType, sandboxPollVersion, fetchSandboxAgents]);
+
   function selectAgentType(type: AgentType) {
     if (type === activeType) return;
+    setRestoringSandboxType(null);
+    setPausedSandboxType(null);
     if (type === "general") {
       runtimeRequestRef.current += 1;
       setRuntimeAgents([]);
@@ -1345,6 +1367,12 @@ export function MyAgents({
             )}
           </div>
         )}
+        {activeType !== "general" && (restoringSandboxType === activeType || pausedSandboxType === activeType) ? (
+          <div className="my-agent-load-more my-agent-recovery-notice" role="status">
+            {restoringSandboxType === activeType ? <span>{t("myAgents.restoringHistory")}</span> : null}
+            {pausedSandboxType === activeType ? <span>{t("myAgents.recoveryPaused")}</span> : null}
+          </div>
+        ) : null}
       </ResourceResults>
       {draftToDelete ? (
         <StudioConfirmDialog

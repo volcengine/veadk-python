@@ -348,3 +348,47 @@ test("requests snapshot auto-resume when listing sandbox agents", async (t) => {
     },
   ]);
 });
+
+test("reports background recovery status without waiting and preserves explicit false", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = previousFetch; });
+  const requests = [];
+  const statuses = [];
+  globalThis.fetch = async (url) => {
+    requests.push(url);
+    return new Response(JSON.stringify({
+      sessions: [],
+      ...(requests.length === 1 ? { restoringSnapshots: true } : {}),
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  assert.deepEqual(await sandboxClient.listAgentSessions("hermes", {
+    autoResumeSnapshots: true, onRecoveryStatus: (value) => statuses.push(value),
+  }), []);
+  assert.deepEqual(await sandboxClient.listSessions({
+    autoResumeSnapshots: false, onRecoveryStatus: (value) => statuses.push(value),
+  }), []);
+  assert.deepEqual(statuses, [true, false]);
+  assert.deepEqual(requests, [
+    "/web/hermes/sessions?autoResumeSnapshots=true",
+    "/web/sandbox/sessions?autoResumeSnapshots=false",
+  ]);
+});
+
+test("reports paused recovery independently of running tasks and resets absent flags", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = previousFetch; });
+  const responses = [
+    { sessions: [], restoringSnapshots: true, snapshotRecoveryPaused: true },
+    { sessions: [], snapshotRecoveryPaused: true },
+    { sessions: [] },
+  ];
+  globalThis.fetch = async () => new Response(JSON.stringify(responses.shift()), {
+    status: 200, headers: { "Content-Type": "application/json" },
+  });
+  const states = [];
+  const options = { onRecoveryStatus: (running, paused) => states.push([running, paused]) };
+  await sandboxClient.listAgentSessions("hermes", options);
+  await sandboxClient.listSessions(options);
+  await sandboxClient.listAgentSessions("hermes", options);
+  assert.deepEqual(states, [[true, true], [false, true], [false, false]]);
+});

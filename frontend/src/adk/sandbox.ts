@@ -226,6 +226,7 @@ export interface SandboxRequestOptions {
 
 export interface SandboxListOptions extends SandboxRequestOptions {
   autoResumeSnapshots?: boolean;
+  onRecoveryStatus?: (restoring: boolean, paused: boolean) => void;
 }
 
 export interface SandboxStartOptions extends SandboxRequestOptions {
@@ -496,6 +497,8 @@ interface SessionResponse {
 }
 
 interface ListSessionsResponse {
+  restoringSnapshots?: boolean;
+  snapshotRecoveryPaused?: boolean;
   sessions?: SessionResponse[];
   snapshots?: SnapshotResponse[];
 }
@@ -697,8 +700,8 @@ function parseSnapshot(
 }
 
 function sandboxListUrl(base: string, options?: SandboxListOptions): string {
-  if (!options?.autoResumeSnapshots) return base;
-  const params = new URLSearchParams({ autoResumeSnapshots: "true" });
+  if (options?.autoResumeSnapshots === undefined) return base;
+  const params = new URLSearchParams({ autoResumeSnapshots: String(options.autoResumeSnapshots) });
   return `${base}?${params.toString()}`;
 }
 
@@ -1217,6 +1220,7 @@ function createSandboxClient(
     if (data.snapshots !== undefined && !Array.isArray(data.snapshots)) {
       throw new Error(adkT("sandbox.invalidSnapshotList"));
     }
+    options.onRecoveryStatus?.(data.restoringSnapshots === true, data.snapshotRecoveryPaused === true);
     return [
       ...data.sessions.map((session) => parseSession(session)),
       ...(data.snapshots ?? []).map((snapshot) => parseSnapshot(snapshot)),
@@ -1273,6 +1277,7 @@ function createSandboxClient(
     if (data.snapshots !== undefined && !Array.isArray(data.snapshots)) {
       throw new Error(adkT("sandbox.invalidKindSnapshotList", { kind }));
     }
+    options.onRecoveryStatus?.(data.restoringSnapshots === true, data.snapshotRecoveryPaused === true);
     return [
       ...data.sessions.map((session) => parseSession(session, kind)),
       ...(data.snapshots ?? []).map((snapshot) => parseSnapshot(snapshot, kind)),

@@ -183,7 +183,7 @@ test("clears stale sandbox cards as soon as the Agent type changes", () => {
   );
   assert.match(
     pageSource,
-    /const fetchSandboxAgents[\s\S]*?setLoadingSandboxAgents\(true\)[\s\S]*?setSandboxAgents\(\[\]\)[\s\S]*?await sandboxClient/,
+    /const fetchSandboxAgents[\s\S]*?if \(!background\) setLoadingSandboxAgents\(true\)[\s\S]*?await sandboxClient/,
   );
   assert.match(
     pageSource,
@@ -824,4 +824,15 @@ test("authenticated users land on a new chat without a selected Agent", () => {
     /function onUsername[\s\S]*?startNewChat\(\);[\s\S]*?setAppName\(""\)[\s\S]*?setMyAgents\(false\)/,
   );
   assert.doesNotMatch(appSource, /defaultViewAppliedRef/);
+});
+
+test("refreshes background restores without clearing cards and stops polling on navigation", () => {
+  const fetchBody = pageSource.slice(pageSource.indexOf("const fetchSandboxAgents"), pageSource.indexOf("function selectAgentType"));
+  assert.doesNotMatch(fetchBody, /setSandboxAgents\(\[\]\)/);
+  assert.match(fetchBody, /sandboxRequestRef\.current !== requestId/);
+  assert.match(fetchBody, /setRestoringSandboxType\(restoring \? type : null\)/);
+  assert.match(fetchBody, /restoringSandboxType !== activeType/);
+  assert.match(fetchBody, /fetchSandboxAgents\(activeType, true\)/);
+  assert.match(fetchBody, /clearTimeout\(timer\)/);
+  assert.match(pageSource, /role="status">[\s\S]*?\{t\("myAgents.restoringHistory"\)\}/);
 });

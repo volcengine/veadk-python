@@ -1318,6 +1318,8 @@
     }
   },
   "myAgents": {
+    "recoveryPaused": "部分历史智能体多次恢复失败，已暂停自动恢复。",
+    "restoringHistory": "部分历史智能体正在恢复，恢复后将自动显示。",
     "agent": "智能体",
     "agentTypes": {
       "general": "通用智能体",
