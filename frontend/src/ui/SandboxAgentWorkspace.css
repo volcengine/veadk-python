@@ -115,6 +115,10 @@
   background: hsl(var(--panel));
 }
 
+.sandbox-agent-workspace-surface [hidden] {
+  display: none;
+}
+
 .sandbox-agent-workspace-state {
   display: grid;
   height: 100%;

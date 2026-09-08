@@ -444,3 +444,46 @@ def test_hermes_proxy_forwards_the_session_token(
 
     assert response.status_code == 200
     assert forwarded_headers[0]["x-hermes-session-token"] == "hermes-session-token"
+
+
+def test_agent_surface_proxy_reuses_one_http_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created = 0
+    requests = 0
+    closed = 0
+
+    class _Client:
+        def __init__(self, **_: object) -> None:
+            nonlocal created
+            created += 1
+
+        async def request(self, _method: str, _url: str, **_: object) -> httpx.Response:
+            nonlocal requests
+            requests += 1
+            return httpx.Response(
+                200,
+                content=b"ok",
+                headers={"content-type": "text/plain"},
+            )
+
+        async def aclose(self) -> None:
+            nonlocal closed
+            closed += 1
+
+    monkeypatch.setattr("veadk.cli.frontend_agent_proxy.httpx.AsyncClient", _Client)
+    app = FastAPI()
+    mount_agent_surface_proxy_routes(
+        app,
+        lambda *_args: SandboxProxyTarget(endpoint="https://sandbox.example/"),
+    )
+
+    with TestClient(app) as client:
+        first = client.get("/web/hermes/sessions/session-1/surface/token-1/api/first")
+        second = client.get("/web/hermes/sessions/session-1/surface/token-1/api/second")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert created == 1
+    assert requests == 2
+    assert closed == 1

@@ -108,28 +108,29 @@ export function SandboxAgentWorkspace({
       </header>
 
       <div className="sandbox-agent-workspace-surface">
-        {surface === "main" ? (
+        <iframe
+          src={workspace.webuiUrl}
+          title={t("agentWorkspace.mainTitle", { agent: label })}
+          allow="clipboard-read; clipboard-write"
+          hidden={surface !== "main"}
+        />
+        {terminalUrl ? (
           <iframe
-            src={workspace.webuiUrl}
-            title={t("agentWorkspace.mainTitle", { agent: label })}
-            allow="clipboard-read; clipboard-write"
+            src={terminalUrl}
+            title={t("agentWorkspace.terminalTitle", { agent: label })}
+            hidden={surface !== "terminal"}
           />
-        ) : terminalLoading ? (
+        ) : surface === "terminal" && terminalLoading ? (
           <div className="sandbox-agent-workspace-state" role="status">
             {t("agentWorkspace.openingTerminal")}
           </div>
-        ) : terminalError ? (
+        ) : surface === "terminal" && terminalError ? (
           <div className="sandbox-agent-workspace-state is-error" role="alert">
             <p>{terminalError}</p>
             <button type="button" onClick={() => void openTerminal()}>
               {t("common.tryAgain")}
             </button>
           </div>
-        ) : terminalUrl ? (
-          <iframe
-            src={terminalUrl}
-            title={t("agentWorkspace.terminalTitle", { agent: label })}
-          />
         ) : null}
       </div>
     </section>

@@ -15810,6 +15810,7 @@ def frontend_update(
                 package_dir,
                 frontend_assets=frontend_assets,
                 provider=provider_id,
+                offline_runtime=False,
             )
         except ValueError as error:
             raise click.ClickException(str(error)) from error
@@ -15819,6 +15820,7 @@ def frontend_update(
                 requirements=requirements,
                 site_logo=branding_logo,
                 provider=provider_id,
+                bundle_agentkit_cli=False,
             )
         except ValueError as error:
             raise click.ClickException(
