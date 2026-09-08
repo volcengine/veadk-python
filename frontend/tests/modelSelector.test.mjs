@@ -146,6 +146,16 @@ test("cross-provider fallback editor hides env internals and keeps rows on blur"
   assert.match(modelFallbackFieldsSource, /modelApiKeyEnv: fallbackApiKeyEnv/);
 });
 
+test("cross-provider fallback editor keeps row identity stable while typing model names", () => {
+  assert.doesNotMatch(modelFallbackFieldsSource, /key=\{`\$\{fallbackValue/);
+  assert.match(modelFallbackFieldsSource, /const rowKey =/);
+  assert.match(
+    modelFallbackFieldsSource,
+    /endpoint-\$\{fallbackApiKeyEnv\}-\$\{index\}/,
+  );
+  assert.match(modelFallbackFieldsSource, /key=\{rowKey\}/);
+});
+
 test("selected ModelArk API Key is resolved only by the Studio server", () => {
   assert.match(clientSource, /export async function revealModelApiKey/);
   assert.doesNotMatch(customCreateSource, /getModelApiKeyValue\(/);

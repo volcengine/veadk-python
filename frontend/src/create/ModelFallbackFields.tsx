@@ -136,12 +136,16 @@ export function ModelFallbackFields({
                   ? modelFallbackApiKeyEnv(agentName, index, values, endpoint)
                   : defaultModelFallbackApiKeyEnv(agentName, index);
               const secretValue = secretValues?.[fallbackApiKeyEnv] ?? "";
+              const rowKey =
+                endpoint
+                  ? `endpoint-${fallbackApiKeyEnv}-${index}`
+                  : `same-provider-${index}`;
               return (
                 <div
                   className={`model-fallback-fields__item${
                     endpoint ? " is-endpoint" : ""
                   }`}
-                  key={`${fallbackValue || "empty"}-${index}`}
+                  key={rowKey}
                 >
                   <div className="model-fallback-fields__toolbar">
                     <div
