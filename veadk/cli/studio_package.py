@@ -57,6 +57,7 @@ def studio_run_script(
     *,
     provider: CloudProvider | None = DEFAULT_CLOUD_PROVIDER,
     runtime_manifest_filename: str | None = None,
+    bundle_agentkit_cli: bool = True,
 ) -> str:
     """Return the authenticated VeFaaS entrypoint used by Studio."""
     provider_argument = (
@@ -71,21 +72,30 @@ def studio_run_script(
     if site_logo_filename:
         command += f' --site-logo "$ROOT_DIR/{site_logo_filename}"'
     command += ' --host "$HOST" --port "$PORT"\n'
-    managed_source = (
-        "export VEADK_STUDIO_AGENTKIT_CLI_RUNTIME_MANIFEST="
-        f'"$ROOT_DIR/{runtime_manifest_filename}"\n'
-        if runtime_manifest_filename
-        else "export VEADK_STUDIO_AGENTKIT_CLI_ARCHIVE="
-        f'"$ROOT_DIR/{STUDIO_AGENTKIT_CLI_ARTIFACT.filename}"\n'
-    )
-    companion = (
-        "python3 -m veadk.cli.studio_companion "
-        f'--runtime-manifest "$ROOT_DIR/{runtime_manifest_filename}" '
-        f"--provider {provider_argument}\n"
-        if runtime_manifest_filename
-        else "python3 -m veadk.cli.studio_companion "
-        f'--archive "$ROOT_DIR/{STUDIO_AGENTKIT_CLI_ARTIFACT.filename}"\n'
-    )
+    if runtime_manifest_filename:
+        managed_source = (
+            "export VEADK_STUDIO_AGENTKIT_CLI_RUNTIME_MANIFEST="
+            f'"$ROOT_DIR/{runtime_manifest_filename}"\n'
+        )
+        companion = (
+            "python3 -m veadk.cli.studio_companion "
+            f'--runtime-manifest "$ROOT_DIR/{runtime_manifest_filename}" '
+            f"--provider {provider_argument}\n"
+        )
+    elif bundle_agentkit_cli:
+        managed_source = (
+            "export VEADK_STUDIO_AGENTKIT_CLI_ARCHIVE="
+            f'"$ROOT_DIR/{STUDIO_AGENTKIT_CLI_ARTIFACT.filename}"\n'
+        )
+        companion = (
+            "python3 -m veadk.cli.studio_companion "
+            f'--archive "$ROOT_DIR/{STUDIO_AGENTKIT_CLI_ARTIFACT.filename}"\n'
+        )
+    else:
+        managed_source = ""
+        companion = (
+            f"python3 -m veadk.cli.studio_companion --provider {provider_argument}\n"
+        )
     return (
         "#!/bin/bash\n"
         "set -ex\n"
@@ -154,6 +164,7 @@ def write_studio_package(
     requirements: str,
     site_logo: SiteLogo | None,
     provider: CloudProvider | None = DEFAULT_CLOUD_PROVIDER,
+    bundle_agentkit_cli: bool = True,
 ) -> None:
     """Write the Studio entrypoint, requirements, and optional logo."""
     package_dir.mkdir(parents=True, exist_ok=True)
@@ -164,6 +175,7 @@ def write_studio_package(
         studio_run_script(
             logo_filename,
             provider=provider,
+            bundle_agentkit_cli=bundle_agentkit_cli,
         ),
         encoding="utf-8",
         newline="\n",
@@ -181,8 +193,14 @@ def build_local_studio_requirements(
     frontend_assets: Path | None = None,
     dependency_wheels: Path | None = None,
     provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
+    offline_runtime: bool = True,
 ) -> str:
-    """Build a local VeADK wheel and return its offline requirements."""
+    """Build a local VeADK wheel and return exact deployment requirements.
+
+    Release and first-deploy callers retain the fully offline Runtime. Ordinary
+    source updates can opt into the smaller historical package contract: the
+    local VeADK wheel plus the few provider-specific compatibility wheels.
+    """
     _validate_source_checkout(source_root)
     package_dir.mkdir(parents=True, exist_ok=True)
     wheel_source = package_dir / "wheel-source"
@@ -216,6 +234,18 @@ def build_local_studio_requirements(
         raise ValueError("Local source build produced no veadk wheel.")
     validate_studio_wheel(wheels[0], wheel_source)
 
+    shutil.rmtree(package_dir / "wheel-source", ignore_errors=True)
+    if not offline_runtime:
+        dependencies = stage_studio_dependency_wheels(
+            package_dir,
+            source_dir=dependency_wheels,
+            provider=provider,
+        )
+        return "".join(
+            f"./{name}\n"
+            for name in (*(path.name for path in dependencies), wheels[0].name)
+        )
+
     prepared_dependencies = package_dir / ".studio-runtime-inputs"
     prepared_dependencies.mkdir()
     dependency_sources = stage_studio_dependency_sources(
@@ -227,7 +257,6 @@ def build_local_studio_requirements(
         source_dir=dependency_wheels,
     )
 
-    shutil.rmtree(package_dir / "wheel-source", ignore_errors=True)
     requirements = build_studio_offline_runtime(
         source_root,
         package_dir,

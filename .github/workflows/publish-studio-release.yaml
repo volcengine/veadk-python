@@ -22,7 +22,7 @@ on:
         required: true
         type: string
       thin_bundles:
-        description: Publish provider-local thin bundles (requires server opt-in)
+        description: Publish Volcengine thin bundles (BytePlus remains full-only)
         required: true
         default: false
         type: boolean
@@ -246,9 +246,11 @@ jobs:
       matrix:
         include:
           - provider: volcengine
+            thin_bundles: ${{ inputs.thin_bundles }}
             url_secret: STUDIO_RELEASE_SERVER_URL
             key_secret: STUDIO_RELEASE_SERVER_API_KEY
           - provider: byteplus
+            thin_bundles: false
             url_secret: BYTEPLUS_STUDIO_RELEASE_SERVER_URL
             key_secret: BYTEPLUS_STUDIO_RELEASE_SERVER_API_KEY
     runs-on: ubuntu-latest
@@ -259,7 +261,7 @@ jobs:
       RELEASE_SERVER_URL: ${{ secrets[matrix.url_secret] }}
       RELEASE_SERVER_API_KEY: ${{ secrets[matrix.key_secret] }}
       RELEASE_VERSION: ${{ needs.release-context.outputs.version }}
-      RELEASE_THIN_BUNDLES: ${{ inputs.thin_bundles }}
+      RELEASE_THIN_BUNDLES: ${{ matrix.thin_bundles }}
 
     steps:
       - name: Validate release server configuration
