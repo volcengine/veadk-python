@@ -928,13 +928,15 @@ function DeploymentProgressCard({
   const progress = task.status === "success"
     ? 100
     : Math.max(6, Math.min(100, task.pct ?? 6));
-  const title = task.status === "running"
-    ? t("agentWorkspace.deployStatus.running")
-    : task.status === "success"
-      ? t("agentWorkspace.deployStatus.success")
-      : task.status === "error"
-        ? t("agentWorkspace.deployStatus.error")
-        : t("agentWorkspace.deployStatus.cancelled");
+  const title = task.status === "running" && task.statusUnconfirmed
+    ? t("agentWorkspace.deployStatus.unconfirmed")
+    : task.status === "running"
+      ? t("agentWorkspace.deployStatus.running")
+      : task.status === "success"
+        ? t("agentWorkspace.deployStatus.success")
+        : task.status === "error"
+          ? t("agentWorkspace.deployStatus.error")
+          : t("agentWorkspace.deployStatus.cancelled");
 
   return (
     <section
@@ -944,7 +946,9 @@ function DeploymentProgressCard({
       <div className="aw-deploy-progress-head">
         <div>
           <span className="aw-deploy-progress-icon" aria-hidden>
-            {task.status === "running" ? (
+            {task.status === "running" && task.statusUnconfirmed ? (
+              <CircleAlert />
+            ) : task.status === "running" ? (
               <Loader2 className="spin" />
             ) : task.status === "success" ? (
               <CircleCheck />
@@ -959,7 +963,11 @@ function DeploymentProgressCard({
             <p>{task.runtimeName}</p>
           </div>
         </div>
-        <strong>{task.status === "running" ? `${Math.round(progress)}%` : task.label}</strong>
+        <strong>
+          {task.status === "running" && !task.statusUnconfirmed
+            ? `${Math.round(progress)}%`
+            : task.label}
+        </strong>
       </div>
 
       <div
@@ -989,7 +997,7 @@ function DeploymentProgressCard({
                 {status === "done" ? (
                   <Check />
                 ) : status === "active" ? (
-                  <Loader2 className="spin" />
+                  task.statusUnconfirmed ? <CircleAlert /> : <Loader2 className="spin" />
                 ) : status === "failed" ? (
                   <CircleX />
                 ) : (
