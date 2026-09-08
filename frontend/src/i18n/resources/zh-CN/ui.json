@@ -359,6 +359,7 @@
     },
     "deployStatus": {
       "running": "正在部署",
+      "unconfirmed": "部署状态待确认",
       "success": "部署完成",
       "error": "部署失败",
       "cancelled": "部署已取消"
@@ -1035,7 +1036,7 @@
       "deployedNotConnected": "部署完成，暂未连接",
       "cancelled": "已取消",
       "cancelledHint": "部署已取消，相关 Runtime 资源已请求销毁。",
-      "buildStatusUnconfirmed": "构建状态待确认",
+      "deploymentStatusUnconfirmed": "部署状态待确认",
       "deploymentFailed": "部署失败",
       "buildFailedHint": "构建镜像失败，详见构建日志。"
     },
@@ -1093,8 +1094,7 @@
       "runtimeNameExists": "Runtime 名称已存在，请修改后重试。",
       "deployedButGithubMountFailed": "部署成功，但挂载 GitHub 持续交付失败：{{message}}",
       "deployedButGithubBindFailed": "部署成功，但绑定 GitHub 失败：{{message}}",
-      "buildStatusUnconfirmed": "构建任务已经提交，但暂时无法确认最终状态。请稍后在 Code Pipeline 查看构建结果，避免重复部署。",
-      "buildStatusUnconfirmedWithDetail": "构建状态待确认：{{message}}",
+      "deploymentStatusUnconfirmed": "连接已中断，当前无法确认部署最终状态。任务可能仍在云端运行，请到 AgentKit 或 Code Pipeline 查看同一任务，避免重复部署。",
       "failedAtStage": "{{action}}失败（{{stage}}阶段）：{{message}}",
       "noAgentAtEndpoint": "连接成功，但该地址未发现任何 Agent（/list-apps 为空）。",
       "addAgent": "添加 Agent 失败：{{message}}",

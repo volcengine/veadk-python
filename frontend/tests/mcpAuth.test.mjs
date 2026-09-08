@@ -210,6 +210,41 @@ test("requires an explicit credential decision when a published MCP URL changes"
   );
 });
 
+test("submits an explicit reuse decision for an unnamed MCP without inventing a browser identity", () => {
+  const published = {
+    name: "",
+    transport: "http",
+    url: "https://old-mcp.example.com/vtrace",
+    authTokenEnv: "MCP_SALES_AGENT_TOOL_1_AUTH_TOKEN",
+    credentialConfigured: true,
+    credentialSourceUrl: "https://old-mcp.example.com/vtrace",
+    credentialSourceAuthTokenEnv: "MCP_SALES_AGENT_TOOL_1_AUTH_TOKEN",
+  };
+
+  const changed = updateMcpUrlInput(
+    published,
+    "https://new-mcp.example.com/mcp",
+  );
+  const reused = confirmMcpCredentialReuse(changed);
+
+  assert.deepEqual(mcpCredentialReuseValues(draft({ mcpTools: [reused] })), [
+    {
+      agentName: "sales-agent",
+      name: "",
+      url: "https://new-mcp.example.com/mcp",
+      sourceAuthTokenEnv: "MCP_SALES_AGENT_TOOL_1_AUTH_TOKEN",
+    },
+  ]);
+});
+
+test("describes the MCP suffix check instead of claiming every address has no path", () => {
+  for (const locale of ["zh-CN", "en-US"]) {
+    const warning = createMessages[locale].traditional.mcp.pathWarning;
+    assert.match(warning, /\/mcp/);
+    assert.doesNotMatch(warning, /没有路径|has no path/i);
+  }
+});
+
 test("supports replacing or explicitly removing auth after an MCP URL change", () => {
   const changed = updateMcpUrlInput(
     {
