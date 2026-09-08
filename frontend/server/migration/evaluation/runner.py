@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import shlex
 import textwrap
 
@@ -38,6 +39,7 @@ from .dimensions import EVALUATION_DIMENSIONS
 
 _RUNNER_PATH = f"{EVALUATION_ROOT}/assets/evaluation_runner.py"
 _JUDGE_SCHEMA_PATH = f"{EVALUATION_ROOT}/assets/judge-schema.json"
+logger = logging.getLogger(__name__)
 
 
 def judge_schema() -> dict[str, object]:
@@ -1423,7 +1425,14 @@ class SandboxMigrationEvaluationRunner:
                 operation="evaluation_cancel",
                 timeout_seconds=30,
             )
-        except Exception:
+        except Exception as error:
+            logger.warning(
+                "Evaluation cancellation command failed task_id=%s "
+                "runtime_name=%s error_type=%s",
+                session.task_id,
+                runtime_name,
+                type(error).__name__,
+            )
             return False
         return (
             self.reconcile_cleanup(session, runtime_name=runtime_name)
@@ -1480,7 +1489,14 @@ class SandboxMigrationEvaluationRunner:
                 operation="evaluation_cleanup_reconcile",
                 timeout_seconds=360,
             )
-        except Exception:
+        except Exception as error:
+            logger.warning(
+                "Evaluation Runtime cleanup reconciliation failed task_id=%s "
+                "runtime_name=%s error_type=%s",
+                session.task_id,
+                runtime_name,
+                type(error).__name__,
+            )
             return False
         return True
 

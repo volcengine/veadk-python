@@ -283,13 +283,17 @@
       "criterionBytes": "单条要求不能超过 2 KiB。",
       "datasetBytes": "全部评测问题不能超过 10 MiB。"
     },
-    "dataset": {
-      "invalidLockResponse": "服务未确认评测问题已锁定，请重试。"
+  "dataset": {
+    "invalidLockResponse": "服务未确认评测问题已保存，请重试。",
+    "saveWarning": "评测问题暂未保存，不影响迁移；迁移效果评测会等待保存成功后再开始。",
+    "retrySave": "重新保存评测问题",
+    "saving": "正在保存…"
     },
     "state": {
       "disabled": "未开启评测",
       "waiting_dataset": "等待填写评测问题",
-      "pending": "迁移完成后自动开始评测",
+    "pending": "迁移完成后自动开始评测",
+    "retrying": "正在清理临时 Runtime 并准备重试…",
       "preparing": "正在准备评测环境…",
       "waiting_environment": "需要补充运行所需的环境变量",
       "deploying": "正在部署临时 Runtime…",

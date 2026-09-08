@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import time
 from collections.abc import Callable
@@ -78,6 +79,7 @@ EVALUATION_REPORT_MARKDOWN_PATH = f"{EVALUATION_ROOT}/report/report.md"
 EVALUATION_SECRET_PATH = f"{EVALUATION_ROOT}/secrets/environment.json"
 EVALUATION_RUNNER_DIAGNOSTICS_ROOT = f"{EVALUATION_ROOT}/diagnostics"
 MINIMUM_REMOTE_WRITE_REMAINING_SECONDS = 20 * 60
+logger = logging.getLogger(__name__)
 _TASK_ID_RE = re.compile(r"^migration-v1-[0-9a-f]{32}$")
 _TERMINAL_MIGRATION_STATES = {
     "succeeded",
@@ -94,6 +96,7 @@ _ACTIVE_EVALUATION_STATES = {
 }
 _CANCELLABLE_EVALUATION_STATES = _ACTIVE_EVALUATION_STATES | {
     "pending",
+    "retrying",
     "waiting_environment",
     "aggregating",
 }
@@ -263,6 +266,29 @@ class MigrationEvaluationService:
                     "message": "未启用迁移效果评测",
                 },
             }
+        if str(task.get("state") or "") not in (
+            _TERMINAL_MIGRATION_STATES | _STOPPED_MIGRATION_STATES
+        ):
+            state = (
+                "waiting_dataset"
+                if task.get("state") == "awaiting_upload"
+                else "pending"
+            )
+            message = (
+                "请添加并保存评测问题"
+                if state == "waiting_dataset"
+                else "迁移完成后自动开始评测"
+            )
+            snapshot: dict[str, object] = {
+                "enabled": True,
+                "preset": evaluation.get("preset", "standard"),
+                "dimensions": evaluation.get("dimensions", []),
+                "state": state,
+                "message": message,
+                "canResume": False,
+                "canRetry": False,
+            }
+            return {**task, "evaluation": snapshot}
         if advance:
             self.advance(task_id, owner_id, task=task)
         snapshot = self.snapshot(task_id, owner_id, task=task)
@@ -270,27 +296,6 @@ class MigrationEvaluationService:
             snapshot.get("state") in _CANCELLABLE_EVALUATION_STATES
         )
         return {**task, "canStop": can_stop, "evaluation": snapshot}
-
-    def assert_dataset_locked(self, task_id: str, owner_id: str) -> None:
-        task = self._migration.get_task(task_id, owner_id)
-        evaluation = task.get("evaluation")
-        if not isinstance(evaluation, dict) or evaluation.get("enabled") is not True:
-            return
-        config = self._require_enabled(task)
-        if (
-            self._manifest(
-                self._session(task_id, owner_id),
-                expected_config=config,
-                optional=True,
-            )
-            is None
-        ):
-            raise MigrationError(
-                "MIGRATION_EVALUATION_DATASET_REQUIRED",
-                "请先填写并锁定至少一个评测用例，再上传项目 ZIP。",
-                status_code=409,
-                retryable=False,
-            )
 
     def put_dataset(
         self,
@@ -301,10 +306,10 @@ class MigrationEvaluationService:
         self.ensure_available(True)
         task = self._migration.get_task(task_id, owner_id)
         config = self._require_enabled(task)
-        if task.get("state") != "awaiting_upload" or task.get("canUpload") is not True:
+        if str(task.get("state") or "") in _STOPPED_MIGRATION_STATES:
             raise MigrationError(
                 "MIGRATION_EVALUATION_DATASET_LOCKED",
-                "项目上传后不能再修改评测数据集。",
+                "迁移已结束，不能再保存评测问题。",
                 status_code=409,
                 retryable=False,
             )
@@ -327,7 +332,7 @@ class MigrationEvaluationService:
             asset = existing["asset"]
             assert isinstance(asset, dict)
             if asset.get("sha256") == normalized.sha256:
-                return self.get_dataset(task_id, owner_id)
+                return self._dataset_payload(asset, normalized.content)
             raise MigrationError(
                 "MIGRATION_EVALUATION_DATASET_LOCKED",
                 "评测数据集已锁定，不能覆盖；请新建迁移任务。",
@@ -380,20 +385,15 @@ class MigrationEvaluationService:
             normalized.content,
             media_type="application/x-ndjson",
         )
+        # Publish the manifest last. The watcher cannot start an evaluation until
+        # the dataset is durable in the Session; a missing status means pending.
         self._put(
             session,
             EVALUATION_DATASET_MANIFEST_PATH,
             self._json_bytes(manifest),
             media_type="application/json",
         )
-        self._write_status(
-            session,
-            task_id=task_id,
-            attempt=0,
-            state="pending",
-            message="评测数据集已锁定，等待迁移产物",
-        )
-        return self.get_dataset(task_id, owner_id)
+        return self._dataset_payload(metadata.public(), normalized.content)
 
     def get_dataset(self, task_id: str, owner_id: str) -> dict[str, object]:
         task = self._migration.get_task(task_id, owner_id)
@@ -441,6 +441,17 @@ class MigrationEvaluationService:
                 status_code=503,
                 retryable=True,
             ) from error
+        return {
+            "locked": True,
+            "asset": asset,
+            "cases": [self._public_case(line) for line in content.splitlines()],
+        }
+
+    def _dataset_payload(
+        self,
+        asset: dict[str, object],
+        content: bytes,
+    ) -> dict[str, object]:
         return {
             "locked": True,
             "asset": asset,
@@ -515,6 +526,34 @@ class MigrationEvaluationService:
             return
         status = self._status(session, task_id, optional=True)
         state = str(status.get("state") or "pending") if status else "pending"
+        if state == "retrying":
+            assert status is not None
+            runtime_name = str(status.get("runtime_name") or "")
+            if runtime_name:
+                assert self._runner is not None
+                if not self._runner.reconcile_cleanup(
+                    session,
+                    runtime_name=runtime_name,
+                ):
+                    logger.warning(
+                        "Evaluation retry cleanup was not confirmed task_id=%s "
+                        "attempt=%s runtime_name=%s",
+                        task_id,
+                        status["attempt"],
+                        runtime_name,
+                    )
+                    self._write_failure(
+                        session,
+                        task_id=task_id,
+                        attempt=int(status["attempt"]),
+                        state="blocked",
+                        code="MIGRATION_EVALUATION_CLEANUP_UNCONFIRMED",
+                        message="临时 Runtime 清理尚未确认，请重新评测。",
+                        retryable=True,
+                        runtime_name=runtime_name,
+                    )
+                    return
+            state = "pending"
         if state == "aggregating":
             assert status is not None
             self._persist_report(
@@ -653,7 +692,7 @@ class MigrationEvaluationService:
 
     def retry(self, task_id: str, owner_id: str) -> dict[str, object]:
         task = self._migration.get_task(task_id, owner_id)
-        self._require_enabled(task)
+        config = self._require_enabled(task)
         session = self._session(task_id, owner_id)
         status = self._status(session, task_id)
         assert status is not None
@@ -670,24 +709,24 @@ class MigrationEvaluationService:
                 retryable=False,
             )
         runtime_name = str(status.get("runtime_name") or "")
-        if runtime_name:
-            assert self._runner is not None
-            if not self._runner.reconcile_cleanup(session, runtime_name=runtime_name):
-                raise MigrationError(
-                    "MIGRATION_EVALUATION_CLEANUP_UNCONFIRMED",
-                    "临时 Runtime 清理尚未确认，请稍后重试。",
-                    status_code=409,
-                    retryable=True,
-                )
         self._write_status(
             session,
             task_id=task_id,
             attempt=int(status["attempt"]),
-            state="pending",
-            message="正在准备重试评测",
+            state="retrying",
+            message="正在清理临时 Runtime 并准备重试",
+            runtime_name=runtime_name or None,
         )
-        self.advance(task_id, owner_id, task=task)
-        return self.snapshot(task_id, owner_id, task=task)
+        return {
+            "enabled": True,
+            "preset": config["preset"],
+            "dimensions": config["dimensions"],
+            "state": "retrying",
+            "message": "正在清理临时 Runtime 并准备重试",
+            "attempt": int(status["attempt"]),
+            "canResume": False,
+            "canRetry": False,
+        }
 
     def cancel(self, task_id: str, owner_id: str) -> dict[str, object]:
         task = self._migration.get_task(task_id, owner_id)

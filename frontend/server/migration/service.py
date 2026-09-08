@@ -1732,8 +1732,7 @@ def _start_analysis_command(task_id: str, attempt: int) -> str:
             ),
             "code=$?",
             (
-                f'if [ "$code" -eq 0 ] && '
-                f"python3 -c {extract_agent_message} "
+                f"if python3 -c {extract_agent_message} "
                 f"{shlex.quote(log_path)} {shlex.quote(result_tmp)} && "
                 f"python3 -c {validate_json} "
                 f"{shlex.quote(result_tmp)}; then"
@@ -1742,6 +1741,7 @@ def _start_analysis_command(task_id: str, attempt: int) -> str:
                 f"  analysis_result_status=$(python3 -c {read_result_status} "
                 f"{shlex.quote(result_tmp)})"
             ),
+            "  code=0",
             f"  mv {shlex.quote(result_tmp)} {shlex.quote(_ANALYSIS_RESULT_PATH)}",
             '  if [ "$analysis_result_status" = "recommendation_ready" ]; then',
             f"    {_atomic_json_command(_ANALYSIS_STATUS_PATH, ready_status)}",

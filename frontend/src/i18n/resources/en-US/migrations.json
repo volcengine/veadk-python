@@ -283,13 +283,17 @@
       "criterionBytes": "One requirement cannot exceed 2 KiB.",
       "datasetBytes": "All evaluation questions cannot exceed 10 MiB."
     },
-    "dataset": {
-      "invalidLockResponse": "The service did not confirm that evaluation questions were locked. Try again."
+  "dataset": {
+    "invalidLockResponse": "The service did not confirm that evaluation questions were saved. Try again.",
+    "saveWarning": "Evaluation questions were not saved. Migration continues, and evaluation will wait until saving succeeds.",
+    "retrySave": "Save evaluation questions again",
+    "saving": "Saving…"
     },
     "state": {
       "disabled": "Evaluation is off",
       "waiting_dataset": "Waiting for evaluation questions",
-      "pending": "Evaluation starts automatically after migration",
+    "pending": "Evaluation starts automatically after migration",
+    "retrying": "Cleaning up the temporary Runtime and preparing to retry…",
       "preparing": "Preparing the evaluation environment…",
       "waiting_environment": "Runtime environment variables are required",
       "deploying": "Deploying a temporary Runtime…",

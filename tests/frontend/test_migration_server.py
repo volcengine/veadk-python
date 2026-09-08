@@ -52,6 +52,7 @@ from frontend.server.migration.service import (
     _activity_payload,
     _activity_secret_values,
     _analysis_result_message,
+    _start_analysis_command,
     _codex_event_extractor,
     _parse_activity_log,
     _public_environment_defaults,
@@ -2769,6 +2770,15 @@ def test_codex_analysis_uses_the_last_completed_agent_message(
 
     assert extracted.returncode == 0, extracted.stderr
     assert json.loads(result.read_text(encoding="utf-8")) == {"attempt": 2}
+
+
+def test_codex_analysis_accepts_a_valid_final_message_after_nonzero_cli_exit() -> None:
+    command = _start_analysis_command("migration-v1-" + "1" * 32, 1)
+
+    assert 'if [ "$code" -eq 0 ] &&' not in command
+    assert "python3 -c" in command
+    assert "analysis_result_status=" in command
+    assert "code=0" in command
 
 
 def test_codex_analysis_rejects_an_event_stream_without_an_agent_message(

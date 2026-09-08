@@ -46,6 +46,7 @@ export type MigrationEvaluationState =
   | "disabled"
   | "waiting_dataset"
   | "pending"
+  | "retrying"
   | "preparing"
   | "waiting_environment"
   | "deploying"
@@ -458,6 +459,7 @@ const EVALUATION_STATES = new Set<MigrationEvaluationState>([
   "disabled",
   "waiting_dataset",
   "pending",
+  "retrying",
   "preparing",
   "waiting_environment",
   "deploying",

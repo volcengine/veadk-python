@@ -146,6 +146,7 @@ def test_all_required_evaluation_states_are_registered() -> None:
         "disabled",
         "waiting_dataset",
         "pending",
+        "retrying",
         "preparing",
         "waiting_environment",
         "deploying",
@@ -286,3 +287,21 @@ def test_report_enforces_utf8_byte_limits(
             expected_artifact_sha256=ARTIFACT_SHA256,
             expected_dimensions=DIMENSIONS,
         )
+
+
+def test_retrying_is_a_valid_non_terminal_evaluation_state() -> None:
+    assert "retrying" in EVALUATION_STATES
+    task_id = "migration-v1-" + "1" * 32
+    status = validate_evaluation_status(
+        {
+            "schema_version": 1,
+            "task_id": task_id,
+            "attempt": 1,
+            "state": "retrying",
+            "message": "正在清理并准备重试",
+            "updated_at": "2026-09-07T10:00:00Z",
+            "runtime_name": "migration-eval-111111111111-a1",
+        },
+        expected_task_id=task_id,
+    )
+    assert status["state"] == "retrying"

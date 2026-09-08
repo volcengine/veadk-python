@@ -88,6 +88,7 @@ EVALUATION_STATES = frozenset(
         "disabled",
         "waiting_dataset",
         "pending",
+        "retrying",
         "preparing",
         "waiting_environment",
         "deploying",
@@ -102,6 +103,7 @@ EVALUATION_STATES = frozenset(
     }
 )
 _ACTIVE_STATES = {
+    "retrying",
     "preparing",
     "deploying",
     "executing",

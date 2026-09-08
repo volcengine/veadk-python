@@ -945,6 +945,7 @@ function evaluationProgressState(
   }
   if (
     [
+      "retrying",
       "preparing",
       "deploying",
       "executing",
@@ -1044,6 +1045,7 @@ export function MigrationEvaluationResult({
   const [environment, setEnvironment] = useState<Record<string, string>>({});
   if (!evaluation.enabled) return null;
   const active = [
+    "retrying",
     "preparing",
     "deploying",
     "executing",

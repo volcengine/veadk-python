@@ -33,6 +33,7 @@ import {
   type MigrationArtifact,
   type MigrationCapabilities,
   type MigrationEvaluationReport,
+  type MigrationEvaluationDataset,
   type MigrationFramework,
   type MigrationTask,
 } from "../adk/migrations";
@@ -105,6 +106,7 @@ function isEvaluationPollingState(task: MigrationTask): boolean {
     task.evaluation?.enabled &&
       [
         "pending",
+        "retrying",
         "preparing",
         "deploying",
         "executing",
@@ -795,8 +797,12 @@ export function MigrationWorkspace({
     Record<string, string>
   >({});
   const [evaluationAction, setEvaluationAction] = useState<
-    "resume" | "retry" | "download" | ""
+    "dataset" | "resume" | "retry" | "download" | ""
   >("");
+  const [evaluationDatasetSaveError, setEvaluationDatasetSaveError] = useState<{
+    taskId: string;
+    message: string;
+  } | null>(null);
   const [evaluationReport, setEvaluationReport] =
     useState<MigrationEvaluationReport | null>(null);
   const [evaluationReportLoading, setEvaluationReportLoading] = useState(false);
@@ -920,7 +926,12 @@ export function MigrationWorkspace({
   ) {
     setTasks((current) =>
       current.map((item) =>
-        item.id === taskId ? { ...item, evaluation } : item,
+        item.id === taskId
+          ? {
+              ...item,
+              evaluation: { ...item.evaluation, ...evaluation },
+            }
+          : item,
       ),
     );
   }
@@ -1330,19 +1341,70 @@ export function MigrationWorkspace({
     return validation.valid;
   }
 
-  async function lockEvaluationDataset(
+  async function saveEvaluationDataset(
     taskId: string,
     signal: AbortSignal,
-  ): Promise<void> {
-    await putMigrationEvaluationDataset(
+  ): Promise<MigrationEvaluationDataset> {
+    const dataset = await putMigrationEvaluationDataset(
       taskId,
       evaluationCasesFromDraft(evaluationDraft),
       signal,
     );
-    const authoritative = await getMigrationTask(taskId, signal);
-    if (!signal.aborted) {
-      setTasks((current) => upsertTask(current, authoritative));
+    if (!dataset.locked || !dataset.asset) {
+      throw new Error(t("evaluation.dataset.invalidLockResponse"));
     }
+    return dataset;
+  }
+
+  function applySavedEvaluationDataset(
+    taskId: string,
+    dataset: MigrationEvaluationDataset,
+  ) {
+    if (!dataset.asset) return;
+    setTasks((current) =>
+      current.map((item) => {
+        if (item.id !== taskId || !item.evaluation?.enabled) return item;
+        return {
+          ...item,
+          evaluation: {
+            ...item.evaluation,
+            state:
+              item.evaluation.state === "waiting_dataset"
+                ? "pending"
+                : item.evaluation.state,
+            message:
+              item.evaluation.state === "waiting_dataset"
+                ? t("evaluation.state.pending")
+                : item.evaluation.message,
+            dataset: dataset.asset,
+          },
+        };
+      }),
+    );
+    setEvaluationDatasetSaveError((current) =>
+      current?.taskId === taskId ? null : current,
+    );
+  }
+
+  function recordEvaluationDatasetSaveFailure(taskId: string, cause: unknown) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    setEvaluationDatasetSaveError({ taskId, message });
+    setTasks((current) =>
+      current.map((item) =>
+        item.id === taskId && item.evaluation?.enabled
+          ? {
+              ...item,
+              evaluation: {
+                ...item.evaluation,
+                state: "waiting_dataset",
+                message: t("evaluation.dataset.saveWarning"),
+                canResume: false,
+                canRetry: false,
+              },
+            }
+          : item,
+      ),
+    );
   }
 
   async function createAndUpload() {
@@ -1377,19 +1439,23 @@ export function MigrationWorkspace({
       setTasks((current) => upsertTask(current, created));
       evaluationDraftTaskRef.current = created.id;
       setSelectedTaskId(created.id);
-      if (evaluationDraft.enabled) {
-        await lockEvaluationDataset(created.id, controller.signal);
-        if (!isCurrent()) return;
-      }
       setAction("upload");
       setCreateStartedAt(null);
-      const uploaded = await uploadMigrationSource(
-        created.id,
-        sourceFile,
-        controller.signal,
-      );
+      const [uploadResult, datasetResult] = await Promise.allSettled([
+        uploadMigrationSource(created.id, sourceFile, controller.signal),
+        evaluationDraft.enabled
+          ? saveEvaluationDataset(created.id, controller.signal)
+          : Promise.resolve(null),
+      ]);
       if (!isCurrent()) return;
+      if (uploadResult.status === "rejected") throw uploadResult.reason;
+      const uploaded = uploadResult.value;
       setTasks((current) => upsertTask(current, uploaded));
+      if (datasetResult.status === "fulfilled" && datasetResult.value) {
+        applySavedEvaluationDataset(created.id, datasetResult.value);
+      } else if (datasetResult.status === "rejected") {
+        recordEvaluationDatasetSaveFailure(created.id, datasetResult.reason);
+      }
       setSourceFile(null);
     } catch (cause) {
       if (!isCurrent()) return;
@@ -1433,17 +1499,21 @@ export function MigrationWorkspace({
     setAction("upload");
     setError("");
     try {
-      if (task.evaluation?.enabled && !task.evaluation.dataset) {
-        await lockEvaluationDataset(task.id, controller.signal);
-        if (!isCurrent()) return;
-      }
-      const uploaded = await uploadMigrationSource(
-        task.id,
-        sourceFile,
-        controller.signal,
-      );
+      const [uploadResult, datasetResult] = await Promise.allSettled([
+        uploadMigrationSource(task.id, sourceFile, controller.signal),
+        task.evaluation?.enabled && !task.evaluation.dataset
+          ? saveEvaluationDataset(task.id, controller.signal)
+          : Promise.resolve(null),
+      ]);
       if (!isCurrent()) return;
+      if (uploadResult.status === "rejected") throw uploadResult.reason;
+      const uploaded = uploadResult.value;
       setTasks((current) => upsertTask(current, uploaded));
+      if (datasetResult.status === "fulfilled" && datasetResult.value) {
+        applySavedEvaluationDataset(task.id, datasetResult.value);
+      } else if (datasetResult.status === "rejected") {
+        recordEvaluationDatasetSaveFailure(task.id, datasetResult.reason);
+      }
       setSourceFile(null);
     } catch (cause) {
       if (!isCurrent()) return;
@@ -1609,6 +1679,21 @@ export function MigrationWorkspace({
     }
   }
 
+  async function retryEvaluationDatasetSave() {
+    if (!task?.evaluation?.enabled || evaluationAction) return;
+    if (!validateEvaluationDraft()) return;
+    const controller = new AbortController();
+    setEvaluationAction("dataset");
+    try {
+      const dataset = await saveEvaluationDataset(task.id, controller.signal);
+      applySavedEvaluationDataset(task.id, dataset);
+    } catch (cause) {
+      recordEvaluationDatasetSaveFailure(task.id, cause);
+    } finally {
+      setEvaluationAction("");
+    }
+  }
+
   async function downloadEvaluationReport() {
     if (!task?.evaluation?.report?.downloadReady || evaluationAction) return;
     setEvaluationAction("download");
@@ -1641,6 +1726,7 @@ export function MigrationWorkspace({
     setEvaluationDraft(createMigrationEvaluationDraft());
     setEvaluationErrors({});
     setEvaluationAction("");
+    setEvaluationDatasetSaveError(null);
     setEvaluationReport(null);
     setEvaluationReportError("");
     setSelectedModelId(
@@ -1887,6 +1973,22 @@ export function MigrationWorkspace({
                   taskState={task?.state ?? null}
                   evaluation={task?.evaluation ?? null}
                 />
+              ) : null}
+              {task && evaluationDatasetSaveError?.taskId === task.id ? (
+                <div className="migration-inline-error" role="alert">
+                  <span>
+                    {t("evaluation.dataset.saveWarning")} {evaluationDatasetSaveError.message}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void retryEvaluationDatasetSave()}
+                    disabled={evaluationAction === "dataset"}
+                  >
+                    {evaluationAction === "dataset"
+                      ? t("evaluation.dataset.saving")
+                      : t("evaluation.dataset.retrySave")}
+                  </button>
+                </div>
               ) : null}
             </div>
             {task ? (

@@ -282,7 +282,7 @@ def test_all_migration_routes_delegate_with_owner_and_return_artifacts() -> None
     ]
 
 
-def test_evaluation_routes_and_create_upload_guards_delegate_with_owner() -> None:
+def test_evaluation_routes_delegate_without_blocking_upload_or_status_reads() -> None:
     service = RouteService()
     evaluation = RouteEvaluationService()
     with TestClient(app_for(service, evaluation)) as client:
@@ -340,12 +340,52 @@ def test_evaluation_routes_and_create_upload_guards_delegate_with_owner() -> Non
     assert names.count("download_report") == 1
     assert names.count("resume") == 1
     assert names.count("retry") == 1
-    assert names.count("assert_dataset_locked") == 1
+    assert names.count("assert_dataset_locked") == 0
+    assert names.count("advance") == 0
     assert report_download.content == b"# report\n"
     assert report_download.headers["cache-control"] == "no-store"
     assert [name for name, _ in service.calls].index("create_task") < names.index(
         "attach"
     )
+
+
+def test_retry_starts_background_evaluation_watcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class TerminalService(RouteService):
+        def get_task(self, task_id: str, owner_id: str) -> dict[str, object]:
+            self.calls.append(("get_task", (task_id, owner_id)))
+            return {
+                "id": task_id,
+                "state": "succeeded",
+                "evaluation": {"enabled": True},
+            }
+
+    class CompletingEvaluation(RouteEvaluationService):
+        def snapshot(self, task_id: str, owner_id: str, *, task: object = None):
+            return {
+                "enabled": True,
+                "state": "completed",
+                "message": "done",
+            }
+
+    async def immediate_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(routes.asyncio, "sleep", immediate_sleep)
+    service = TerminalService()
+    evaluation = CompletingEvaluation()
+    with TestClient(app_for(service, evaluation)) as client:
+        response = client.post(
+            f"/web/agent-migrations/tasks/{TASK_ID}/evaluation/retry"
+        )
+        for _ in range(100):
+            if any(name == "advance" for name, _ in evaluation.calls):
+                break
+            time.sleep(0.001)
+
+    assert response.status_code == 200
+    assert any(name == "advance" for name, _ in evaluation.calls)
 
 
 @pytest.mark.parametrize("unexpected", [False, True])
@@ -425,8 +465,8 @@ def test_evaluation_failures_do_not_hide_task_stop_or_artifact(
     ]
     assert [name for name, _ in evaluation.calls].count("cancel") == 1
     assert [values[2] for name, values in evaluation.calls if name == "attach"] == [
-        True,
-        True,
+        False,
+        False,
     ]
 
 

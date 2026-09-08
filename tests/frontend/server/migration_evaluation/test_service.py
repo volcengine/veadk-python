@@ -67,9 +67,11 @@ class FakeGateway:
         )
         self.files: dict[str, bytes] = {}
         self.commands: list[tuple[str, str]] = []
+        self.find_session_calls = 0
 
     def find_session(self, task_id: str, owner_id: str) -> MigrationSandboxSession:
         assert task_id == TASK_ID and owner_id == "owner"
+        self.find_session_calls += 1
         return self.session
 
     def put_file(
@@ -139,6 +141,7 @@ class FakeMigration:
 class FakeRepository:
     def __init__(self) -> None:
         self.assets: dict[tuple[str, str], tuple[EvaluationAssetMetadata, bytes]] = {}
+        self.load_calls = 0
 
     def commit_dataset(self, **kwargs: Any) -> EvaluationAssetMetadata:
         metadata = EvaluationAssetMetadata(
@@ -171,6 +174,7 @@ class FakeRepository:
         return metadata
 
     def load(self, *, kind: str, version_id: str, **_kwargs: Any):
+        self.load_calls += 1
         return self.assets[(kind, version_id)]
 
 
@@ -178,6 +182,7 @@ class FakeRunner:
     def __init__(self) -> None:
         self.starts: list[dict[str, object]] = []
         self.cleanup = True
+        self.cleanup_calls: list[str] = []
         self.cancellations: list[dict[str, object]] = []
 
     def start(
@@ -213,6 +218,7 @@ class FakeRunner:
     ) -> bool:
         assert session.task_id == TASK_ID
         assert runtime_name
+        self.cleanup_calls.append(runtime_name)
         return self.cleanup
 
     def cancel(
@@ -257,11 +263,9 @@ def _ready(migration: FakeMigration) -> None:
     }
 
 
-def test_dataset_is_locked_before_upload_and_exact_retry_is_idempotent() -> None:
-    service, _migration, _gateway, _repository, _runner = _service()
+def test_dataset_save_is_idempotent_without_repository_read_back() -> None:
+    service, _migration, gateway, repository, _runner = _service()
 
-    with pytest.raises(MigrationError, match="先填写并锁定"):
-        service.assert_dataset_locked(TASK_ID, "owner")
     first = service.put_dataset(TASK_ID, "owner", _body())
     second = service.put_dataset(TASK_ID, "owner", _body())
 
@@ -276,7 +280,38 @@ def test_dataset_is_locked_before_upload_and_exact_retry_is_idempotent() -> None
             "criteria": [],
         }
     ]
-    service.assert_dataset_locked(TASK_ID, "owner")
+    assert repository.load_calls == 0
+    assert EVALUATION_STATUS_PATH not in gateway.files
+
+
+def test_dataset_can_be_saved_after_upload_starts_before_evaluation() -> None:
+    service, migration, _gateway, repository, _runner = _service()
+    migration.task = {
+        **migration.task,
+        "state": "analyzing",
+        "canUpload": False,
+    }
+
+    dataset = service.put_dataset(TASK_ID, "owner", _body())
+
+    assert dataset["locked"] is True
+    assert repository.load_calls == 0
+
+
+def test_non_terminal_attach_does_not_read_remote_evaluation_files() -> None:
+    service, migration, gateway, _repository, _runner = _service()
+    migration.task = {
+        **migration.task,
+        "state": "analyzing",
+        "canUpload": False,
+        "canStop": True,
+    }
+
+    attached = service.attach(migration.task, "owner", advance=True)
+
+    assert attached["evaluation"]["state"] == "pending"  # type: ignore[index]
+    assert attached["canStop"] is True
+    assert gateway.find_session_calls == 0
 
 
 def test_normalized_dataset_limit_is_returned_as_bounded_client_error(
@@ -555,6 +590,62 @@ def test_missing_report_becomes_a_retryable_terminal_state() -> None:
     snapshot = service.snapshot(TASK_ID, "owner")
     assert snapshot["state"] == "failed"
     assert snapshot["canRetry"] is True
+
+
+def _mark_retryable_runner_failure(
+    service: MigrationEvaluationService,
+    migration: FakeMigration,
+    gateway: FakeGateway,
+) -> None:
+    service.put_dataset(TASK_ID, "owner", _body())
+    _ready(migration)
+    service.advance(TASK_ID, "owner")
+    gateway.files[f"{EVALUATION_RUNNER_DIAGNOSTICS_ROOT}/runner-1-exit.json"] = (
+        json.dumps(
+            {"schema_version": 1, "exit_code": 17, "finished_at": int(NOW)}
+        ).encode()
+    )
+    service.advance(TASK_ID, "owner")
+
+
+def test_retry_queues_cleanup_without_waiting_for_runtime() -> None:
+    service, migration, gateway, _repository, runner = _service()
+    _mark_retryable_runner_failure(service, migration, gateway)
+
+    queued = service.retry(TASK_ID, "owner")
+
+    assert queued["state"] == "retrying"
+    assert queued["canRetry"] is False
+    assert runner.cleanup_calls == []
+    assert len(runner.starts) == 1
+
+
+def test_retrying_advance_cleans_up_then_starts_next_attempt() -> None:
+    service, migration, gateway, _repository, runner = _service()
+    _mark_retryable_runner_failure(service, migration, gateway)
+    service.retry(TASK_ID, "owner")
+
+    service.advance(TASK_ID, "owner")
+
+    assert runner.cleanup_calls == ["migration-eval-111111111111-a1"]
+    assert [start["attempt"] for start in runner.starts] == [1, 2]
+    assert service.snapshot(TASK_ID, "owner")["state"] == "preparing"
+
+
+def test_retrying_cleanup_failure_becomes_retryable_block() -> None:
+    service, migration, gateway, _repository, runner = _service()
+    _mark_retryable_runner_failure(service, migration, gateway)
+    service.retry(TASK_ID, "owner")
+    runner.cleanup = False
+
+    service.advance(TASK_ID, "owner")
+
+    snapshot = service.snapshot(TASK_ID, "owner")
+    assert snapshot["state"] == "blocked"
+    assert snapshot["canRetry"] is True
+    assert snapshot["error"]["code"] == (  # type: ignore[index]
+        "MIGRATION_EVALUATION_CLEANUP_UNCONFIRMED"
+    )
 
 
 def test_environment_payload_must_match_required_keys_exactly() -> None:

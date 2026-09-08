@@ -343,6 +343,7 @@ def mount_migration_routes(
                             "state"
                         ) in {
                             "disabled",
+                            "waiting_dataset",
                             "waiting_environment",
                             "completed",
                             "failed",
@@ -429,15 +430,6 @@ def mount_migration_routes(
         request: Request,
     ) -> dict[str, object]:
         owner_id = owner_resolver(request)
-        if evaluation_service is not None:
-            await invoke(
-                "evaluation_dataset_guard",
-                lambda: require_evaluation_service().assert_dataset_locked(
-                    task_id,
-                    owner_id,
-                ),
-                task_id=task_id,
-            )
         content_type = (
             request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
         )
@@ -505,7 +497,7 @@ def mount_migration_routes(
             lambda: service.get_task(task_id, owner_id),
             task_id=task_id,
         )
-        decorated = await with_evaluation(task, owner_id, advance=True)
+        decorated = await with_evaluation(task, owner_id)
         evaluation = decorated.get("evaluation")
         if isinstance(evaluation, dict) and evaluation.get("enabled") is True:
             start_watcher(task_id, owner_id)
@@ -585,7 +577,7 @@ def mount_migration_routes(
                     task_id,
                     type(error).__name__,
                 )
-        return await with_evaluation(task, owner_id, advance=True)
+        return await with_evaluation(task, owner_id)
 
     @app.put("/web/agent-migrations/tasks/{task_id}/evaluation/dataset")
     async def put_evaluation_dataset(
@@ -594,11 +586,13 @@ def mount_migration_routes(
         request: Request,
     ) -> dict[str, object]:
         owner_id = owner_resolver(request)
-        return await invoke(
+        payload = await invoke(
             "put_evaluation_dataset",
             lambda: require_evaluation_service().put_dataset(task_id, owner_id, body),
             task_id=task_id,
         )
+        start_watcher(task_id, owner_id)
+        return payload
 
     @app.get("/web/agent-migrations/tasks/{task_id}/evaluation/dataset")
     async def get_evaluation_dataset(
@@ -624,16 +618,13 @@ def mount_migration_routes(
             lambda: service.get_task(task_id, owner_id),
             task_id=task_id,
         )
-        await invoke(
-            "advance_evaluation",
-            lambda: evaluation.advance(task_id, owner_id, task=task),
-            task_id=task_id,
-        )
-        return await invoke(
+        payload = await invoke(
             "get_evaluation",
             lambda: evaluation.snapshot(task_id, owner_id, task=task),
             task_id=task_id,
         )
+        start_watcher(task_id, owner_id)
+        return payload
 
     @app.get("/web/agent-migrations/tasks/{task_id}/evaluation/report")
     async def get_evaluation_report(

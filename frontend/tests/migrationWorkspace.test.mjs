@@ -121,12 +121,21 @@ test("configures migration effect evaluation in a drawer with direct user-facing
   );
   assert.ok(
     createFlow.indexOf("createMigrationTask") <
-      createFlow.indexOf("lockEvaluationDataset"),
+      createFlow.indexOf("Promise.allSettled"),
   );
-  assert.ok(
-    createFlow.indexOf("lockEvaluationDataset") <
-      createFlow.indexOf("uploadMigrationSource"),
+  assert.match(
+    createFlow,
+    /Promise\.allSettled\(\[[\s\S]*?uploadMigrationSource[\s\S]*?saveEvaluationDataset/,
   );
+  const datasetSaveFlow = workspace.slice(
+    workspace.indexOf("async function saveEvaluationDataset"),
+    workspace.indexOf("function applySavedEvaluationDataset"),
+  );
+  assert.doesNotMatch(datasetSaveFlow, /getMigrationTask/);
+  assert.match(workspace, /recordEvaluationDatasetSaveFailure/);
+  assert.match(workspace, /retryEvaluationDatasetSave/);
+  assert.match(workspace, /evaluation\.dataset\.retrySave/);
+  assert.match(workspace, /"retrying"/);
   assert.match(workspace, /<MigrationEvaluationSetup/);
   assert.match(workspace, /<MigrationEvaluationProgress/);
   assert.match(workspace, /<MigrationEvaluationResult/);
