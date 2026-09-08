@@ -18,9 +18,12 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Any
 
-from google.adk.skills import Frontmatter, load_skill_from_dir
+from google.adk.skills import Frontmatter
 from google.adk.skills import Skill as ADKSkill
+from google.adk.skills import models as adk_skill_models
+from google.adk.skills import _utils as adk_skill_utils
 
 try:
     from google.adk.skills import SkillRegistry
@@ -75,7 +78,7 @@ class VeSkillRegistry(SkillRegistry):
             skill,
             cache_dir=self.cache_dir,
         )
-        return await asyncio.to_thread(load_skill_from_dir, skill_dir)
+        return await asyncio.to_thread(load_compatible_adk_skill_from_dir, skill_dir)
 
     def search_tool_description(self) -> str | None:
         return (
@@ -98,3 +101,60 @@ class VeSkillRegistry(SkillRegistry):
             if skill.name == name:
                 return skill
         return None
+
+
+def load_compatible_adk_skill_from_dir(skill_dir: str | Path) -> ADKSkill:
+    """Load an ADK skill while tolerating community frontmatter extensions."""
+    resolved_skill_dir = Path(skill_dir).resolve()
+    parsed, body, _ = adk_skill_utils._parse_skill_md(resolved_skill_dir)
+    frontmatter = _compatible_frontmatter(parsed)
+
+    if resolved_skill_dir.name != frontmatter.name:
+        raise ValueError(
+            f"Skill name '{frontmatter.name}' does not match directory"
+            f" name '{resolved_skill_dir.name}'."
+        )
+
+    references = adk_skill_utils._load_dir(resolved_skill_dir / "references")
+    assets = adk_skill_utils._load_dir(resolved_skill_dir / "assets")
+    raw_scripts = adk_skill_utils._load_dir(resolved_skill_dir / "scripts")
+    scripts = {
+        name: adk_skill_models.Script(src=content)
+        for name, content in raw_scripts.items()
+    }
+
+    return adk_skill_models.Skill(
+        frontmatter=frontmatter,
+        instructions=body,
+        resources=adk_skill_models.Resources(
+            references=references,
+            assets=assets,
+            scripts=scripts,
+        ),
+    )
+
+
+def _compatible_frontmatter(parsed: dict[str, Any]) -> Frontmatter:
+    metadata = parsed.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    else:
+        metadata = dict(metadata)
+
+    frontmatter_data: dict[str, Any] = {
+        "name": parsed.get("name"),
+        "description": parsed.get("description"),
+        "metadata": metadata,
+    }
+    for key in ("license", "compatibility", "allowed-tools"):
+        value = parsed.get(key)
+        if isinstance(value, str):
+            frontmatter_data[key] = value
+        elif value is not None:
+            metadata.setdefault(key, value)
+
+    for key, value in parsed.items():
+        if key not in frontmatter_data and key not in metadata:
+            metadata[key] = value
+
+    return Frontmatter.model_validate(frontmatter_data)
