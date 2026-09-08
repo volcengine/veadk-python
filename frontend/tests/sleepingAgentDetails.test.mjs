@@ -23,7 +23,7 @@ const built = await build({
       } }; }
     ` }));
     b.onResolve({ filter: /\/adk\/sandbox$/ }, () => ({ path: "status", namespace: "mock-status" }));
-    b.onLoad({ filter: /.*/, namespace: "mock-status" }, () => ({ contents: 'export const sandboxStatusLabel = status => status === "Wakeable" ? "已休眠" : "异常";' }));
+    b.onLoad({ filter: /.*/, namespace: "mock-status" }, () => ({ contents: 'export const sandboxCardStatus = status => ["ready", "running", "wakeable"].includes(status.toLowerCase()) ? "ready" : status; export const sandboxStatusLabel = status => status === "ready" ? "就绪" : "异常";' }));
     b.onLoad({ filter: /\.css$/ }, () => ({ contents: "", loader: "js" }));
   } }],
 });
@@ -55,7 +55,9 @@ test("sleeping agent shows wake progress, blocks duplicate actions, and allows r
   const view = await mount({ onOpen() { calls++; return calls === 1 ? new Promise((_, reject) => { fail = reject; }) : Promise.resolve(); } });
   try {
     assert.match(view.document.body.textContent, /Alice/);
-    assert.match(view.document.body.textContent, /已休眠/);
+    assert.match(view.document.body.textContent, /该智能体已休眠/);
+    const status = [...view.document.querySelectorAll("dt")].find(node => node.textContent === "状态");
+    assert.equal(status.nextElementSibling.textContent, "就绪");
     assert.doesNotMatch(view.document.body.textContent, /快照|Snapshot|Session|Tool|sandbox/i);
     const open = view.document.querySelector(".sandbox-agent-open");
     await act(async () => open.click());
@@ -78,6 +80,8 @@ test("failed saved agents remain deletable with agent-only confirmation", async 
   const view = await mount({ async onDelete() { deletes++; } }, "Failed");
   try {
     assert.ok(view.document.querySelector(".sandbox-agent-open").disabled);
+    const status = [...view.document.querySelectorAll("dt")].find(node => node.textContent === "状态");
+    assert.equal(status.nextElementSibling.textContent, "异常");
     await act(async () => view.document.querySelector(".sandbox-agent-delete").click());
     const confirm = view.document.querySelector('[role="alertdialog"]');
     assert.match(confirm.textContent, /删除智能体/);

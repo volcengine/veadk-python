@@ -952,8 +952,8 @@ Agent categories query live Sessions and Session snapshots without restoring the
 including legacy requests with `autoResumeSnapshots=true`. Studio presents the
 latest saved record for each logical agent, unless a live Session already
 represents it. Live and wakeable cards share the Ready label and styling; saved
-records show Never expires. The details view retains the precise state and
-explains when opening requires waking the agent. Snapshot `SessionMetadata` supplies its display
+records show Never expires. Details use the same Ready label and explain
+separately when opening requires waking the agent. Snapshot `SessionMetadata` supplies its display
 name, creator and agent kind, including on SDK versions that omit this field.
 Owners can list, wake and delete their own records; administrators can also manage
 legacy records without owner metadata. Records with a different agent kind are

@@ -1,7 +1,7 @@
 import { TextShimmer } from "./text-shimmer/TextShimmer";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { sandboxStatusLabel, type SandboxAgentResource } from "../adk/sandbox";
+import { sandboxCardStatus, sandboxStatusLabel, type SandboxAgentResource } from "../adk/sandbox";
 import { PageBackButton } from "./PageBackButton";
 import "./SandboxAgentDetails.css";
 
@@ -93,7 +93,7 @@ export function SandboxAgentDetails({
       <div className="sandbox-agent-detail-panel">
         <dl>
           <div><dt>{t("agentDetails.type")}</dt><dd>{label}</dd></div>
-          <div><dt>{t("agentDetails.status")}</dt><dd>{sandboxStatusLabel(session.status)}</dd></div>
+          <div><dt>{t("agentDetails.status")}</dt><dd>{sandboxStatusLabel(sandboxCardStatus(session.status))}</dd></div>
           <div><dt>{t("agentDetails.createdBy")}</dt><dd>{session.createdBy?.trim() || t("common.unknownSource")}</dd></div>
           <div><dt>{t("agentDetails.createdAt")}</dt><dd>{formatDate(session.createdAt, locale)}</dd></div>
           {!wakeable ? <div><dt>{t("agentDetails.expiresAt")}</dt><dd>{formatDate(session.expireAt, locale)}</dd></div> : null}

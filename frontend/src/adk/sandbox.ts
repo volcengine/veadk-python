@@ -18,7 +18,7 @@ export const CODEX_PROJECT_HANDOFF_PAIRING_TTL_SECONDS = 60 * 60;
 export const SANDBOX_DISPLAY_NAME_MAX_LENGTH = 40;
 export type SandboxAgentKind = "deepseek-harness" | "openclaw" | "hermes";
 
-/** List cards describe availability; details retain the underlying state. */
+/** Present agent availability without changing the underlying lifecycle state. */
 export function sandboxCardStatus(status: string): string {
   const normalized = status.trim().toLowerCase();
   return ["ready", "running", "wakeable"].includes(normalized) ? "ready" : normalized;
