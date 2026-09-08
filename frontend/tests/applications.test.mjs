@@ -211,7 +211,8 @@ test("GitHub detail keeps credentials ephemeral and exposes accessible submissio
   assert.match(githubSource, /reviewRecordReasonText/);
   assert.match(githubSource, /仓库未开启自动评审/);
   assert.match(githubSource, /该 PR 事件不需要评审/);
-  assert.match(githubSource, /onOpenSandboxSession\(record\.sessionId\)/);
+  assert.match(githubSource, /record\.status === "completed" \? "" : record\.sessionId/);
+  assert.match(githubSource, /onOpenSandboxSession\(reviewSessionId\)/);
   assert.match(githubSource, /aria-label="Pull Request URL"/);
   assert.doesNotMatch(githubSource, /会自动识别 PR 所属仓库/);
   assert.match(githubSource, /repositoryFromGitHubPullRequestUrl\(pullRequestUrl\)/);

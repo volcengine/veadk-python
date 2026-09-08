@@ -988,6 +988,7 @@ export function GitHubIntegration({
                   <div className="github-review-record-list">
                     {reviewRecords.map((record) => {
                       const reasonText = reviewRecordReasonText(record);
+                      const reviewSessionId = record.status === "completed" ? "" : record.sessionId;
                       return (
                         <div className="github-review-record-row" key={record.id}>
                           <div className="github-review-record-main">
@@ -1009,8 +1010,8 @@ export function GitHubIntegration({
                             </span>
                           </div>
                           <div className="github-review-record-actions">
-                            {record.sessionId && onOpenSandboxSession ? (
-                              <button type="button" onClick={() => onOpenSandboxSession(record.sessionId)}>
+                            {reviewSessionId && onOpenSandboxSession ? (
+                              <button type="button" onClick={() => onOpenSandboxSession(reviewSessionId)}>
                                 打开 Session
                               </button>
                             ) : null}
