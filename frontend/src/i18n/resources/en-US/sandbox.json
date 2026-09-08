@@ -143,7 +143,7 @@
   },
   "agentDetails": {
     "back": "Back to Agents",
-    "subtitle": "{{agent}} AgentKit Session details",
+    "subtitle": "{{agent}} agent details",
     "type": "Agent type",
     "status": "Status",
     "createdBy": "Created by",
@@ -161,9 +161,12 @@
     "wake": "Wake Agent",
     "open": "Open Agent",
     "deleteTitle": "Delete Agent?",
-    "deleteDescription": "This will delete “{{name}}” and its AgentKit {{resource}}. This action cannot be undone.",
+    "deleteDescription": "Delete “{{name}}” and its saved data? This cannot be undone.",
     "deleting": "Deleting…",
-    "confirmDelete": "Delete"
+    "confirmDelete": "Delete",
+    "sleepingHint": "This agent is asleep. Waking it before opening may take some time.",
+    "wakingHint": "Waking the agent. This may take some time.",
+    "agentId": "Agent ID"
   },
   "agentWorkspace": {
     "back": "Back to Agents",

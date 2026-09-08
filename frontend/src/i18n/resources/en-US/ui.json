@@ -1338,7 +1338,7 @@
     "remainingTime": "Time remaining",
     "expiringSoon": "Expiring soon",
     "sandboxRemaining": "{{hours}} hr {{minutes}} min",
-    "wakeable": "Wakeable",
+    "wakeable": "Asleep",
     "neverExpires": "Never expires",
     "editDraftNamed": "Edit draft {{name}}",
     "viewProgress": "View progress",
@@ -1381,7 +1381,7 @@
     },
     "sandboxStatus": {
       "ready": "Ready",
-      "wakeable": "Wakeable",
+      "wakeable": "Asleep",
       "creating": "Creating",
       "starting": "Starting",
       "initializing": "Starting",
@@ -1394,7 +1394,8 @@
       "deleting": "Deleting",
       "deleted": "Deleted",
       "unknown": "Unknown status"
-    }
+    },
+    "wakingHint": "Waking the agent. This may take some time."
   },
   "skillCenter": {
     "library": "Skill library",

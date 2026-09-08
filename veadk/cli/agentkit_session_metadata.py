@@ -83,6 +83,17 @@ class _ListSessionsResponseCompat(tools_types.ToolsBaseModel):
     )
 
 
+class _SnapshotInfoCompat(tools_types.SnapshotsForListSessionSnapshots):
+    session_metadata: list[_SessionMetadata] | None = Field(
+        default=None, alias="SessionMetadata"
+    )
+
+
+class _ListSessionSnapshotsResponseCompat(tools_types.ToolsBaseModel):
+    next_token: str | None = Field(default=None, alias="NextToken")
+    snapshots: list[_SnapshotInfoCompat] | None = Field(default=None, alias="Snapshots")
+
+
 def _model_supports_alias(model: Any, alias: str) -> bool:
     fields = getattr(model, "model_fields", {})
     return any(getattr(field, "alias", None) == alias for field in fields.values())
@@ -207,6 +218,7 @@ def call_session_client(client: Any, method_name: str, request: Any) -> Any:
     native_response_model: Any | None = None
     compat_response_model: Any | None = None
     api_action = ""
+    metadata_alias = "Metadata"
     if method_name == "get_session":
         native_response_model = tools_types.GetSessionResponse
         compat_response_model = _GetSessionResponseCompat
@@ -216,11 +228,17 @@ def call_session_client(client: Any, method_name: str, request: Any) -> Any:
         compat_response_model = _ListSessionsResponseCompat
         api_action = "ListSessions"
 
+    elif method_name == "list_session_snapshots":
+        native_response_model = tools_types.SnapshotsForListSessionSnapshots
+        compat_response_model = _ListSessionSnapshotsResponseCompat
+        api_action = "ListSessionSnapshots"
+        metadata_alias = "SessionMetadata"
+
     invoke_api = getattr(client, "_invoke_api", None)
     if (
         native_response_model is not None
         and compat_response_model is not None
-        and not _model_supports_alias(native_response_model, "Metadata")
+        and not _model_supports_alias(native_response_model, metadata_alias)
         and callable(invoke_api)
     ):
         return invoke_api(
@@ -233,7 +251,9 @@ def call_session_client(client: Any, method_name: str, request: Any) -> Any:
 
 def _metadata_string(value: Any, expected_key: str) -> str:
     """Extract one string metadata value from a Session response."""
-    metadata = getattr(value, "metadata", None)
+    metadata = getattr(value, "session_metadata", None)
+    if metadata is None:
+        metadata = getattr(value, "metadata", None)
     if not isinstance(metadata, (list, tuple)):
         return ""
     for item in metadata:

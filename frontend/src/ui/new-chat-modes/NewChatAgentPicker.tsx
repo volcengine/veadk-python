@@ -1,3 +1,4 @@
+import { TextShimmer } from "../text-shimmer/TextShimmer";
 import { useCallback, useEffect, useRef, useState, type SVGProps } from "react";
 import { EmptyMessage } from "@openai/apps-sdk-ui/components/EmptyMessage";
 import { useTranslation } from "react-i18next";
@@ -10,6 +11,7 @@ import {
 import {
   sandboxClient,
   sandboxStatusLabel,
+  sandboxCardStatus,
   type SandboxAgentResource,
 } from "../../adk/sandbox";
 import { formatRequestError } from "../../adk/requestError";
@@ -200,11 +202,11 @@ export function NewChatAgentPicker({
       const sessions = type === "codex"
         ? await sandboxClient.listSessions({
             signal: controller.signal,
-            autoResumeSnapshots: true,
+            autoResumeSnapshots: false,
           })
         : await sandboxClient.listAgentSessions(type, {
             signal: controller.signal,
-            autoResumeSnapshots: true,
+            autoResumeSnapshots: false,
           });
       if (requestIdRef.current !== requestId) return;
       setSandboxSessions(sessions);
@@ -343,7 +345,7 @@ export function NewChatAgentPicker({
   }
 
   async function chooseSandboxSession(session: SandboxAgentResource) {
-    if (connectingRuntimeId) return;
+    if (connectingRuntimeId || !["ready", "wakeable"].includes(session.status.toLowerCase())) return;
     setConnectingRuntimeId(session.id);
     setError("");
     try {
@@ -506,6 +508,8 @@ export function NewChatAgentPicker({
               </EmptyMessage>
             ) : activeType !== "general" ? (
               <div className="new-chat-agent-picker__runtime-list">
+                {sandboxSessions.some((session) => session.resourceType === "snapshot" && session.id === connectingRuntimeId)
+                  ? <p className="new-chat-agent-picker__wake-note" role="status"><TextShimmer>{t("agentPicker.wakingHint")}</TextShimmer></p> : null}
                 {sandboxSessions.map((session, index) => {
                   const connecting = connectingRuntimeId === session.id;
                   const wakeable = session.resourceType === "snapshot";
@@ -517,7 +521,7 @@ export function NewChatAgentPicker({
                       aria-selected={false}
                       aria-busy={connecting || undefined}
                       className={`new-chat-agent-picker__runtime${keyboardNavigating && keyboardPanel === "runtimes" && activeRuntimeIndex === index ? " is-keyboard-active" : ""}`}
-                      disabled={Boolean(connectingRuntimeId)}
+                      disabled={Boolean(connectingRuntimeId) || !["ready", "wakeable"].includes(session.status.toLowerCase())}
                       title={`${session.displayName || activeTypeLabel} · ${session.id}`}
                       onMouseEnter={() => setActiveRuntimeIndex(index)}
                       onClick={() => void chooseSandboxSession(session)}
@@ -530,7 +534,7 @@ export function NewChatAgentPicker({
                       <small>
                         {connecting
                           ? (wakeable ? t("agentPicker.waking") : t("agentPicker.opening"))
-                          : sandboxStatusLabel(session.status)}
+                          : sandboxStatusLabel(sandboxCardStatus(session.status))}
                       </small>
                     </button>
                   );

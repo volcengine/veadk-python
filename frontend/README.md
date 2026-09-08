@@ -945,3 +945,26 @@ it natively. Each component lives in its own self-registering directory under
 view, so a catalog/renderer mismatch never breaks the page. To add a component,
 drop a folder there (frontend) and declare it in the agent's catalog (backend —
 see `veadk.a2ui.BaseA2UICatalog`).
+
+### Sleeping agents
+
+Agent categories query live Sessions and Session snapshots without restoring them,
+including legacy requests with `autoResumeSnapshots=true`. Studio presents the
+latest saved record for each logical agent, unless a live Session already
+represents it. Live and wakeable cards share the Ready label and styling; saved
+records show Never expires. Details use the same Ready label and explain
+separately when opening requires waking the agent. Snapshot `SessionMetadata` supplies its display
+name, creator and agent kind, including on SDK versions that omit this field.
+Owners can list, wake and delete their own records; administrators can also manage
+legacy records without owner metadata. Records with a different agent kind are
+excluded when kinds share a Tool.
+
+Opening a sleeping agent explicitly restores it and then opens its normal entry
+point. The UI explains the wait using “waking” language and permits retry after a
+failure. Same-agent wake requests are serialized within a service instance, and
+retries check for an existing live Session. This is not a distributed lock.
+Deleting a sleeping agent requires confirmation and sends `ToolId` and `SnapshotId`
+to `DeleteSessionSnapshot`; it deletes the selected saved record only. If that
+logical agent has older records, the next latest record can appear on refresh.
+Failed records remain visible for deletion but cannot be opened. The UI uses
+agent terminology rather than exposing these control-plane resource types.

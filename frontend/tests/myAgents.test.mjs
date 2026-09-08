@@ -203,11 +203,11 @@ test("renders only account-backed Runtime and Sandbox agents", () => {
   );
   assert.match(
     pageSource,
-    /sandboxClient\.listSessions\(\{[\s\S]*?signal: controller\.signal,[\s\S]*?autoResumeSnapshots: true,[\s\S]*?\}\)/,
+    /sandboxClient\.listSessions\(\{[\s\S]*?signal: controller\.signal,[\s\S]*?autoResumeSnapshots: false,[\s\S]*?\}\)/,
   );
   assert.match(
     pageSource,
-    /sandboxClient\.listAgentSessions\(type, \{[\s\S]*?signal: controller\.signal,[\s\S]*?autoResumeSnapshots: true,[\s\S]*?\}\)/,
+    /sandboxClient\.listAgentSessions\(type, \{[\s\S]*?signal: controller\.signal,[\s\S]*?autoResumeSnapshots: false,[\s\S]*?\}\)/,
   );
   assert.match(pageSource, /sessions\.map\(\(session\) => sandboxToAgent\(session, t\)\)/);
 });

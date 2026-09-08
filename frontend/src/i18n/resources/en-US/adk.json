@@ -237,7 +237,7 @@
   "sandbox": {
     "status": {
       "ready": "Ready",
-      "wakeable": "Wakeable",
+      "wakeable": "Asleep",
       "creating": "Creating",
       "starting": "Starting",
       "pending": "Pending",
@@ -276,9 +276,9 @@
     "missingSessionForTerminal": "The AgentKit session for the terminal is missing.",
     "openTerminalFailed": "Unable to open the {{kind}} terminal.",
     "deleteAgentFailed": "Unable to delete the {{kind}} agent.",
-    "missingSnapshot": "The AgentKit snapshot to wake is missing.",
-    "resumeSnapshotFailed": "Unable to wake the agent from its snapshot. Try again later.",
-    "deleteSnapshotFailed": "Unable to delete the agent snapshot.",
+    "missingSnapshot": "The agent to wake was not found.",
+    "resumeSnapshotFailed": "Unable to wake the agent. Try again later.",
+    "deleteSnapshotFailed": "Unable to delete the agent. Try again later.",
     "missingSessionToConnect": "The AgentKit session to connect is missing.",
     "connectCodexFailed": "Unable to connect to the Codex agent. Try again later.",
     "sessionNotReady": "The AgentKit session is not ready. Current status: {{status}}.",
