@@ -39,25 +39,25 @@
 .model-fallback-fields__type {
   display: inline-grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 3px;
-  padding: 3px;
-  border: 1px solid hsl(var(--border) / 0.8);
-  border-radius: 7px;
-  background: hsl(var(--muted) / 0.28);
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid hsl(var(--border) / 0.7);
+  border-radius: 8px;
+  background: hsl(var(--muted) / 0.18);
 }
 
 .model-fallback-fields__type button {
-  min-height: 26px;
+  min-height: 24px;
   border: 0;
-  border-radius: 5px;
+  border-radius: 6px;
   background: transparent;
   color: hsl(var(--muted-foreground));
   cursor: pointer;
   font: inherit;
-  font-size: 12px;
-  font-weight: 550;
+  font-size: 11.5px;
+  font-weight: 500;
   line-height: 1.3;
-  padding: 0 8px;
+  padding: 0 7px;
   white-space: nowrap;
 }
 
@@ -70,31 +70,28 @@
 .model-fallback-fields__type button.is-on {
   background: hsl(var(--background));
   color: hsl(var(--foreground));
-  box-shadow: 0 0 0 1px hsl(var(--border) / 0.9);
+  box-shadow: 0 0 0 1px hsl(var(--border) / 0.72);
 }
 
-.model-fallback-fields__same-provider {
-  min-width: 0;
-}
-
-.model-fallback-fields__endpoint {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.model-fallback-fields__endpoint label {
+.model-fallback-fields__model-name,
+.model-fallback-fields__field {
   display: grid;
   min-width: 0;
   gap: 4px;
 }
 
-.model-fallback-fields__endpoint label > span {
+.model-fallback-fields__field-label {
   color: hsl(var(--foreground));
   font-size: 11.5px;
   font-weight: 500;
   line-height: 1.35;
+}
+
+.model-fallback-fields__endpoint-details {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
 }
 
 .model-fallback-fields__input {
@@ -200,7 +197,7 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .model-fallback-fields__endpoint {
+  .model-fallback-fields__endpoint-details {
     grid-template-columns: minmax(0, 1fr);
   }
 

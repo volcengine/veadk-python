@@ -136,16 +136,13 @@ export function ModelFallbackFields({
                   ? modelFallbackApiKeyEnv(agentName, index, values, endpoint)
                   : defaultModelFallbackApiKeyEnv(agentName, index);
               const secretValue = secretValues?.[fallbackApiKeyEnv] ?? "";
-              const rowKey =
-                endpoint
-                  ? `endpoint-${fallbackApiKeyEnv}-${index}`
-                  : `same-provider-${index}`;
+              const modelInputId = `${id}-${index}-model`;
               return (
                 <div
                   className={`model-fallback-fields__item${
                     endpoint ? " is-endpoint" : ""
                   }`}
-                  key={rowKey}
+                  key={`fallback-row-${index}`}
                 >
                   <div className="model-fallback-fields__toolbar">
                     <div
@@ -199,9 +196,12 @@ export function ModelFallbackFields({
                       {t(`${variant}.model.removeFallback`)}
                     </button>
                   </div>
-                  {!endpoint ? (
-                    <div className="model-fallback-fields__same-provider">
-                      {renderSameProviderField ? (
+                  <div className="model-fallback-fields__model-name">
+                    <span className="model-fallback-fields__field-label">
+                      {t(`${variant}.model.name`)}
+                    </span>
+                    {!endpoint ? (
+                      renderSameProviderField ? (
                         renderSameProviderField({
                           index,
                           value: fallbackValue,
@@ -210,7 +210,7 @@ export function ModelFallbackFields({
                         })
                       ) : (
                         <input
-                          id={`${id}-${index}`}
+                          id={modelInputId}
                           className={inputClassName}
                           value={fallbackValue}
                           placeholder={t(`${variant}.model.fallbackPlaceholder`)}
@@ -218,27 +218,29 @@ export function ModelFallbackFields({
                             replaceFallback(index, event.currentTarget.value)
                           }
                         />
-                      )}
-                    </div>
-                  ) : (
-                    <div className="model-fallback-fields__endpoint">
-                      <label>
-                        <span>{t(`${variant}.model.name`)}</span>
-                        <input
-                          className={inputClassName}
-                          value={endpoint.modelName}
-                          placeholder={t(`${variant}.model.fallbackPlaceholder`)}
-                          onChange={(event) =>
-                            replaceFallback(index, {
-                              ...endpoint,
-                              modelName: event.currentTarget.value,
-                              modelApiKeyEnv: fallbackApiKeyEnv,
-                            })
-                          }
-                        />
-                      </label>
-                      <label>
-                        <span>{t(`${variant}.model.provider`)}</span>
+                      )
+                    ) : (
+                      <input
+                        id={modelInputId}
+                        className={inputClassName}
+                        value={endpoint.modelName}
+                        placeholder={t(`${variant}.model.fallbackPlaceholder`)}
+                        onChange={(event) =>
+                          replaceFallback(index, {
+                            ...endpoint,
+                            modelName: event.currentTarget.value,
+                            modelApiKeyEnv: fallbackApiKeyEnv,
+                          })
+                        }
+                      />
+                    )}
+                  </div>
+                  {endpoint ? (
+                    <div className="model-fallback-fields__endpoint-details">
+                      <label className="model-fallback-fields__field">
+                        <span className="model-fallback-fields__field-label">
+                          {t(`${variant}.model.provider`)}
+                        </span>
                         <input
                           className={inputClassName}
                           value={endpoint.modelProvider ?? ""}
@@ -252,8 +254,10 @@ export function ModelFallbackFields({
                           }
                         />
                       </label>
-                      <label>
-                        <span>API Base</span>
+                      <label className="model-fallback-fields__field">
+                        <span className="model-fallback-fields__field-label">
+                          API Base
+                        </span>
                         <input
                           className={inputClassName}
                           value={endpoint.modelApiBase ?? ""}
@@ -267,8 +271,10 @@ export function ModelFallbackFields({
                           }
                         />
                       </label>
-                      <label>
-                        <span>API Key</span>
+                      <label className="model-fallback-fields__field">
+                        <span className="model-fallback-fields__field-label">
+                          API Key
+                        </span>
                         <input
                           className={inputClassName}
                           type="password"
@@ -288,7 +294,7 @@ export function ModelFallbackFields({
                         />
                       </label>
                     </div>
-                  )}
+                  ) : null}
                 </div>
               );
             })}
