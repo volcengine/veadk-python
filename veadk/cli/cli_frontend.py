@@ -4451,6 +4451,7 @@ def _run_frontend_server(
         debug_runtime_env_from_draft,
         generate_project_from_draft,
         normalize_and_validate_draft,
+        prepare_mcp_auth,
     )
     from veadk.cli.generated_agent_security import (
         DebugPolicyError,
@@ -5077,10 +5078,15 @@ def _run_frontend_server(
         *,
         debug: bool,
         owner_id: str = "local",
+        validated_test_request: GeneratedAgentTestRunRequest | None = None,
+        debug_mcp_env_values: Mapping[str, str] | None = None,
     ) -> tuple[GeneratedProject, AgentDraft]:
         try:
             if debug:
-                req = GeneratedAgentTestRunRequest.model_validate(data)
+                req = (
+                    validated_test_request
+                    or GeneratedAgentTestRunRequest.model_validate(data)
+                )
             else:
                 req = GeneratedAgentProjectRequest.model_validate(data)
             draft = normalize_and_validate_draft(req.draft)
@@ -5099,7 +5105,18 @@ def _run_frontend_server(
                         else _cloud_studio_private_networks
                     ),
                 )
-                draft = await resolve_debug_mcp_endpoints(draft)
+                if debug_mcp_env_values:
+                    draft = prepare_mcp_auth(draft)
+                    mcp_env_values = dict(draft.deployment.envValues)
+                    for key, value in debug_mcp_env_values.items():
+                        if value and not mcp_env_values.get(key):
+                            mcp_env_values[key] = value
+                    draft = await resolve_debug_mcp_endpoints(
+                        draft,
+                        mcp_env_values,
+                    )
+                else:
+                    draft = await resolve_debug_mcp_endpoints(draft)
             else:
                 validate_project_policy(draft)
             project = generate_project_from_draft(draft)
@@ -5658,10 +5675,99 @@ def _run_frontend_server(
         temp_dir = ""
         proc = None
         try:
+            try:
+                test_request = GeneratedAgentTestRunRequest.model_validate(data)
+            except ValidationError as error:
+                raise HTTPException(status_code=422, detail=error.errors()) from error
+
+            runtime_envs: dict[str, str] = {}
+            debug_mcp_env_values: dict[str, str] = {}
+            runtime_id = test_request.runtimeId.strip()
+            runtime_region = _coerce_cloud_region(test_request.runtimeRegion)
+            if runtime_id:
+                edited_draft = test_request.draft.model_dump(
+                    mode="json",
+                    by_alias=True,
+                    exclude_none=True,
+                )
+                requested_references = mcp_auth_environment_keys(edited_draft)
+                requested_env_values = test_request.draft.deployment.envValues
+                stored_references = tuple(
+                    reference
+                    for reference in requested_references
+                    if not requested_env_values.get(reference)
+                )
+                if stored_references:
+                    (
+                        update_capability,
+                        runtime,
+                    ) = await _runtime_update_capability_details(
+                        request,
+                        runtime_id=runtime_id,
+                        region=runtime_region,
+                    )
+                else:
+                    update_capability = {}
+                    runtime = await asyncio.to_thread(
+                        _authorized_runtime,
+                        request,
+                        runtime_id,
+                        runtime_region,
+                        coded_access_error=True,
+                    )
+                runtime_envs = {
+                    str(item.key): str(item.value or "")
+                    for item in (getattr(runtime, "envs", None) or [])
+                    if getattr(item, "key", None)
+                    and not _is_debug_protected_model_env(str(item.key))
+                }
+                published_agent = update_capability.get("agent")
+                published_draft = (
+                    published_agent.get("draft")
+                    if isinstance(published_agent, Mapping)
+                    else None
+                )
+                if stored_references and isinstance(published_draft, Mapping):
+                    published_environment = _legacy_runtime_environment(runtime)
+                    published_references = mcp_auth_environment_keys(published_draft)
+                    published_reference_values = {
+                        reference: published_environment[reference]
+                        for reference in published_references
+                        if published_environment.get(reference)
+                    }
+                    if set(published_references).difference(published_reference_values):
+                        try:
+                            recovery, recovered_values = _legacy_mcp_state(
+                                runtime,
+                                runtime_region,
+                            )
+                            published_reference_values.update(
+                                mcp_secret_values_for_draft_references(
+                                    draft=published_draft,
+                                    recovery=recovery,
+                                    recovered_values=recovered_values,
+                                )
+                            )
+                        except LegacyRecoveryError as error:
+                            logger.info(
+                                "debug MCP credential recovery unavailable "
+                                "runtime_id=%s region=%s code=%s",
+                                runtime_id,
+                                runtime_region,
+                                error.code,
+                            )
+                    debug_mcp_env_values = retained_mcp_secret_values(
+                        published_draft=published_draft,
+                        edited_draft=edited_draft,
+                        published_reference_values=published_reference_values,
+                    )
+
             project, draft = await _generate_project_and_draft_from_request(
                 data,
                 debug=True,
                 owner_id=owner_id or "local",
+                validated_test_request=test_request,
+                debug_mcp_env_values=debug_mcp_env_values,
             )
             sidecar_env: dict[str, str] = {}
             sidecar_plan: dict[str, Any] | None = None
@@ -5698,25 +5804,6 @@ def _run_frontend_server(
                         status_code=409,
                         detail="Harness Sidecar 配置已更新，请重新解析后再启动调试。",
                     )
-            runtime_envs: dict[str, str] = {}
-            runtime_id = str(data.get("runtimeId") or "").strip()
-            if runtime_id:
-                runtime_region = (
-                    str(data.get("runtimeRegion") or "cn-beijing").strip()
-                    or "cn-beijing"
-                )
-                runtime = _authorized_runtime(
-                    request,
-                    runtime_id,
-                    runtime_region,
-                    coded_access_error=True,
-                )
-                runtime_envs = {
-                    str(item.key): str(item.value or "")
-                    for item in (getattr(runtime, "envs", None) or [])
-                    if getattr(item, "key", None)
-                    and not _is_debug_protected_model_env(str(item.key))
-                }
             temp_dir = tempfile.mkdtemp(prefix="veadk_generated_agent_test_")
             app_name = _write_generated_project(project, temp_dir)
             staged_environment_skills = ""
