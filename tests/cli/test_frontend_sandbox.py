@@ -25,6 +25,7 @@ from collections.abc import AsyncIterator, Mapping
 from dataclasses import replace
 from hashlib import sha256
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from fastapi import FastAPI, HTTPException, Request
@@ -56,6 +57,7 @@ from veadk.cli.frontend_sandbox import (
     SandboxAgentSessionService,
     SandboxCloudSession,
     SandboxCloudSnapshot,
+    SandboxCloudGateway,
     SandboxConfigurationError,
     SandboxConversationService,
     SandboxProvisioningError,
@@ -1500,7 +1502,9 @@ def test_managed_agent_snapshot_is_listed_resumed_and_deleted() -> None:
         )
 
     assert alice_list.status_code == 200
-    assert "snapshots" not in alice_list.json()
+    assert [item["snapshotId"] for item in alice_list.json()["snapshots"]] == [
+        "snapshot-alice"
+    ]
     assert {item["snapshotId"] for item in admin_list.json()["snapshots"]} == {
         "snapshot-alice",
         "snapshot-bob",
@@ -1513,7 +1517,7 @@ def test_managed_agent_snapshot_is_listed_resumed_and_deleted() -> None:
     assert [item.snapshot_id for item in gateway.deleted_snapshots] == ["snapshot-bob"]
 
 
-def test_managed_agent_admin_listing_auto_resumes_current_kind_snapshots() -> None:
+def test_managed_agent_listing_never_resumes_snapshots() -> None:
     gateway = _FakeGateway()
     gateway.snapshots["snapshot-openclaw"] = SandboxCloudSnapshot(
         tool_id="tool-openclaw-snapshot",
@@ -1542,21 +1546,22 @@ def test_managed_agent_admin_listing_auto_resumes_current_kind_snapshots() -> No
 
     with TestClient(_agent_app(gateway)) as client:
         ordinary = client.get(
-            "/web/openclaw/sessions",
+            "/web/openclaw/sessions?autoResumeSnapshots=true",
             headers={"X-Test-User": "alice"},
         )
         admin = client.get(
-            "/web/openclaw/sessions",
+            "/web/openclaw/sessions?autoResumeSnapshots=true",
             headers={"X-Test-User": "admin", "X-Test-Role": "admin"},
         )
 
     assert ordinary.status_code == 200
-    assert "snapshots" not in ordinary.json()
-    assert "resumed-snapshot-openclaw" in {
-        item["sessionId"] for item in admin.json()["sessions"]
+    assert "snapshot-openclaw" in {
+        item["snapshotId"] for item in ordinary.json()["snapshots"]
     }
-    assert "snapshots" not in admin.json()
-    assert "resumed-snapshot-hermes" not in gateway.sessions
+    assert "snapshot-openclaw" in {
+        item["snapshotId"] for item in admin.json()["snapshots"]
+    }
+    assert not any(key.startswith("resumed-") for key in gateway.sessions)
 
 
 def test_managed_agent_routes_enforce_username_scope() -> None:
@@ -2581,7 +2586,7 @@ def test_codex_project_handoff_rejects_invalid_and_expired_pairing_code(
     assert gateway.created == 0
 
 
-def test_sandbox_snapshot_is_wakeable_for_admin_only() -> None:
+def test_sandbox_snapshot_is_wakeable_for_owner_and_admin() -> None:
     gateway = _FakeGateway()
     gateway.snapshots["snapshot-alice"] = SandboxCloudSnapshot(
         tool_id="tool-studio-snapshot",
@@ -2642,18 +2647,21 @@ def test_sandbox_snapshot_is_wakeable_for_admin_only() -> None:
             headers={"X-Test-User": "admin", "X-Test-Role": "admin"},
         )
 
-    assert "snapshots" not in alice_list.json()
+    assert [item["snapshotId"] for item in alice_list.json()["snapshots"]] == [
+        "snapshot-alice"
+    ]
     assert {item["snapshotId"] for item in admin_list.json()["snapshots"]} == {
         "snapshot-alice",
         "snapshot-bob",
+        "snapshot-failed",
     }
-    assert resumed.status_code == 404
+    assert resumed.status_code == 200
     assert admin_resumed.json()["sessionId"] == "resumed-snapshot-alice"
     assert admin_resumed.json()["persistent"] is True
     assert deleted.json() == {"deleted": True}
 
 
-def test_sandbox_admin_listing_auto_resumes_snapshots() -> None:
+def test_sandbox_listing_never_resumes_snapshots() -> None:
     gateway = _FakeGateway()
     gateway.snapshots["snapshot-alice"] = SandboxCloudSnapshot(
         tool_id="tool-studio-snapshot",
@@ -2682,21 +2690,22 @@ def test_sandbox_admin_listing_auto_resumes_snapshots() -> None:
 
     with TestClient(_app(gateway)) as client:
         ordinary = client.get(
-            "/web/sandbox/sessions",
+            "/web/sandbox/sessions?autoResumeSnapshots=true",
             headers={"X-Test-User": "alice"},
         )
         admin = client.get(
-            "/web/sandbox/sessions",
+            "/web/sandbox/sessions?autoResumeSnapshots=true",
             headers={"X-Test-User": "admin", "X-Test-Role": "admin"},
         )
 
     assert ordinary.status_code == 200
-    assert "snapshots" not in ordinary.json()
-    assert "resumed-snapshot-alice" in {
-        item["sessionId"] for item in admin.json()["sessions"]
+    assert "snapshot-alice" in {
+        item["snapshotId"] for item in ordinary.json()["snapshots"]
     }
-    assert "snapshots" not in admin.json()
-    assert "resumed-snapshot-failed" not in gateway.sessions
+    assert "snapshot-alice" in {
+        item["snapshotId"] for item in admin.json()["snapshots"]
+    }
+    assert not any(key.startswith("resumed-") for key in gateway.sessions)
 
 
 def test_sandbox_list_scope_follows_user_role() -> None:
@@ -2736,11 +2745,13 @@ def test_sandbox_list_scope_follows_user_role() -> None:
         "alice",
         "bob",
     }
-    assert gateway.usernames[-7:] == [
+    assert gateway.usernames[-9:] == [
         "alice",
         "alice",
+        None,
         "bob",
         "bob",
+        None,
         None,
         None,
         None,
@@ -3793,3 +3804,156 @@ async def test_cancelled_create_is_deleted_after_sdk_call_finishes(
     assert len(created) == 1
     assert created[0].tool_id == "tool-1"
     assert created[0].envs is None
+
+
+@pytest.mark.asyncio
+async def test_snapshot_metadata_survives_older_sdk_and_scopes_cards() -> None:
+    class Client:
+        def _invoke_api(self, *, api_action, request, response_type):
+            assert api_action == "ListSessionSnapshots"
+            return response_type.model_validate(
+                {
+                    "Snapshots": [
+                        {
+                            "SnapshotId": "snap-metadata",
+                            "SessionId": "expired",
+                            "UserSessionId": "logical",
+                            "Status": "Ready",
+                            "SessionMetadata": [
+                                {"Key": "Username", "Value": "alice", "Type": ""},
+                                {
+                                    "Key": "veadk_display_name",
+                                    "Value": "测试的60秒智能体",
+                                    "Type": "",
+                                },
+                                {
+                                    "Key": "veadk_creator_name",
+                                    "Value": "Alice",
+                                    "Type": "",
+                                },
+                                {
+                                    "Key": "veadk_agent_kind",
+                                    "Value": "hermes",
+                                    "Type": "",
+                                },
+                            ],
+                        }
+                    ]
+                }
+            )
+
+    gateway = AgentkitSandboxGateway(Client())
+    snapshots = await gateway.list_snapshots("shared")
+    snapshot = snapshots[0]
+    assert snapshot.display_name == "测试的60秒智能体"
+    assert snapshot.created_by == "alice"
+    assert snapshot.creator_name == "Alice"
+    assert snapshot.agent_kind == "hermes"
+    fake = _FakeGateway()
+    fake.snapshots[snapshot.snapshot_id] = snapshot
+    fake.snapshots["legacy"] = replace(
+        snapshot, snapshot_id="legacy", created_by="", agent_kind=""
+    )
+    hermes = SandboxAgentSessionService(
+        cast(SandboxCloudGateway, fake),
+        kind="hermes",
+        tool_id="shared",
+        snapshot_tool_id="shared",
+    )
+    other = SandboxAgentSessionService(
+        cast(SandboxCloudGateway, fake),
+        kind="openclaw",
+        tool_id="shared",
+        snapshot_tool_id="shared",
+    )
+    assert await hermes.list_snapshots("alice") == [snapshot]
+    assert await hermes.list_snapshots("bob") == []
+    assert {
+        s.snapshot_id for s in await hermes.list_snapshots("admin", is_admin=True)
+    } == {"snap-metadata", "legacy"}
+    assert snapshot not in await other.list_snapshots("admin", is_admin=True)
+    with pytest.raises(SandboxSessionNotFoundError):
+        await hermes.delete_snapshot(snapshot.snapshot_id, "bob")
+    assert not fake.deleted_snapshots
+    await hermes.delete_snapshot(snapshot.snapshot_id, "alice")
+    assert fake.deleted_snapshots == [snapshot]
+
+
+def test_snapshot_cards_deduplicate_latest_and_live_session_per_tool() -> None:
+    snapshot = SandboxCloudSnapshot(
+        tool_id="tool",
+        snapshot_id="new",
+        session_id="old-session",
+        user_session_id="logical",
+        status="Ready",
+        created_at="2026-09-08",
+    )
+    older = replace(snapshot, snapshot_id="old", created_at="2026-09-07")
+    unrelated = replace(snapshot, tool_id="other-tool", snapshot_id="other")
+    assert frontend_sandbox._snapshot_cards([], [older, snapshot, unrelated]) == [
+        snapshot,
+        unrelated,
+    ]
+    session = SandboxCloudSession(
+        tool_id="tool",
+        instance_id="live",
+        user_session_id="logical",
+        status="Ready",
+        endpoint="https://example.invalid",
+    )
+    assert frontend_sandbox._snapshot_cards([session], [snapshot, unrelated]) == [
+        unrelated
+    ]
+
+
+@pytest.mark.asyncio
+async def test_snapshot_wake_is_serialized_and_retry_reuses_live_session() -> None:
+    class Gateway(_FakeGateway):
+        wake_calls = 0
+
+        async def resume_snapshot(self, snapshot):
+            self.wake_calls += 1
+            await asyncio.sleep(0)
+            return await super().resume_snapshot(snapshot)
+
+    gateway = Gateway()
+    gateway.snapshots["sleeping"] = SandboxCloudSnapshot(
+        tool_id="tool-hermes-snapshot",
+        snapshot_id="sleeping",
+        session_id="expired",
+        user_session_id="logical",
+        status="Ready",
+        created_by="alice",
+        agent_kind="hermes",
+    )
+    service = SandboxAgentSessionService(
+        cast(SandboxCloudGateway, gateway),
+        kind="hermes",
+        tool_id="tool-hermes",
+        snapshot_tool_id="tool-hermes-snapshot",
+    )
+    first, second = await asyncio.gather(
+        service.resume_snapshot("sleeping", "alice"),
+        service.resume_snapshot("sleeping", "alice"),
+    )
+    assert first.instance_id == second.instance_id
+    assert gateway.wake_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_delete_snapshot_sends_exact_control_plane_identifiers() -> None:
+    calls = []
+
+    class Client:
+        def delete_session_snapshot(self, request):
+            calls.append(request.model_dump(by_alias=True, exclude_none=True))
+            return SimpleNamespace()
+
+    snapshot = SandboxCloudSnapshot(
+        tool_id="tool-history",
+        snapshot_id="snap-history",
+        session_id="expired",
+        user_session_id="logical",
+    )
+    await AgentkitSandboxGateway(Client()).delete_snapshot(snapshot)
+    assert calls == [{"ToolId": "tool-history", "SnapshotId": "snap-history"}]

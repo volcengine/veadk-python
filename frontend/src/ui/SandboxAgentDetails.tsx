@@ -1,3 +1,4 @@
+import { TextShimmer } from "./text-shimmer/TextShimmer";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { sandboxStatusLabel, type SandboxAgentResource } from "../adk/sandbox";
@@ -94,23 +95,15 @@ export function SandboxAgentDetails({
           <div><dt>{t("agentDetails.type")}</dt><dd>{label}</dd></div>
           <div><dt>{t("agentDetails.status")}</dt><dd>{sandboxStatusLabel(session.status)}</dd></div>
           <div><dt>{t("agentDetails.createdBy")}</dt><dd>{session.createdBy?.trim() || t("common.unknownSource")}</dd></div>
-          <div>
-            <dt>{wakeable ? t("agentDetails.snapshotStatus") : t("agentDetails.toolType")}</dt>
-            <dd>{wakeable ? session.snapshotStatus || "—" : session.toolType || "—"}</dd>
-          </div>
           <div><dt>{t("agentDetails.createdAt")}</dt><dd>{formatDate(session.createdAt, locale)}</dd></div>
-          <div>
-            <dt>{wakeable ? t("agentDetails.snapshotReason") : t("agentDetails.expiresAt")}</dt>
-            <dd>{wakeable ? session.reason || "—" : formatDate(session.expireAt, locale)}</dd>
-          </div>
-          <div className="is-wide">
-            <dt>{t(wakeable ? "agentDetails.snapshotId" : "agentDetails.sessionId")}</dt>
-            <dd>{wakeable ? session.snapshotId : resourceId}</dd>
-          </div>
-          {wakeable && session.sourceSessionId ? (
-            <div className="is-wide"><dt>{t("agentDetails.sourceSessionId")}</dt><dd>{session.sourceSessionId}</dd></div>
-          ) : null}
+          {!wakeable ? <div><dt>{t("agentDetails.expiresAt")}</dt><dd>{formatDate(session.expireAt, locale)}</dd></div> : null}
+          <div className="is-wide"><dt>{t("agentDetails.agentId")}</dt><dd>{resourceId}</dd></div>
         </dl>
+        {wakeable && session.status.toLowerCase() === "wakeable" ? (
+          <p className="sandbox-agent-wake-note" role={opening ? "status" : undefined}>
+            {opening ? <TextShimmer>{t("agentDetails.wakingHint")}</TextShimmer> : t("agentDetails.sleepingHint")}
+          </p>
+        ) : null}
         <footer>
           <button
             type="button"
@@ -123,7 +116,7 @@ export function SandboxAgentDetails({
           <button
             type="button"
             className="sandbox-agent-open"
-            disabled={opening || deleting}
+            disabled={opening || deleting || !["ready", "wakeable"].includes(session.status.toLowerCase())}
             aria-busy={opening || undefined}
             onClick={() => void openAgent()}
           >
@@ -153,7 +146,6 @@ export function SandboxAgentDetails({
             <div className="confirm-text">
               {t("agentDetails.deleteDescription", {
                 name: agentName,
-                resource: wakeable ? "Snapshot" : "Session",
               })}
             </div>
             <div className="confirm-actions">

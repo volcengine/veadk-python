@@ -1338,7 +1338,7 @@
     "remainingTime": "剩余时间",
     "expiringSoon": "即将清空",
     "sandboxRemaining": "{{hours}} 小时 {{minutes}} 分钟",
-    "wakeable": "可唤醒",
+    "wakeable": "已休眠",
     "neverExpires": "永不过期",
     "editDraftNamed": "编辑草稿 {{name}}",
     "viewProgress": "查看进度",
@@ -1381,7 +1381,7 @@
     },
     "sandboxStatus": {
       "ready": "就绪",
-      "wakeable": "可唤醒",
+      "wakeable": "已休眠",
       "creating": "创建中",
       "starting": "启动中",
       "initializing": "启动中",
@@ -1394,7 +1394,9 @@
       "deleting": "删除中",
       "deleted": "已删除",
       "unknown": "未知状态"
-    }
+    },
+    "sleepingHint": "该智能体已休眠，进入时需要唤醒，可能需要一些时间。",
+    "wakingHint": "正在唤醒智能体，可能需要一些时间。"
   },
   "skillCenter": {
     "library": "技能库",

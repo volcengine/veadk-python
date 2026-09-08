@@ -143,7 +143,7 @@
   },
   "agentDetails": {
     "back": "返回智能体列表",
-    "subtitle": "{{agent}} AgentKit Session 详情",
+    "subtitle": "{{agent}} 智能体详情",
     "type": "智能体类型",
     "status": "状态",
     "createdBy": "创建人",
@@ -161,9 +161,12 @@
     "wake": "唤醒智能体",
     "open": "打开智能体",
     "deleteTitle": "删除智能体？",
-    "deleteDescription": "将删除“{{name}}”及其 AgentKit {{resource}}，此操作无法撤销。",
+    "deleteDescription": "将删除“{{name}}”及其保存的数据，此操作无法撤销。",
     "deleting": "删除中…",
-    "confirmDelete": "确认删除"
+    "confirmDelete": "确认删除",
+    "sleepingHint": "该智能体已休眠，进入时需要唤醒，可能需要一些时间。",
+    "wakingHint": "正在唤醒智能体，可能需要一些时间。",
+    "agentId": "智能体 ID"
   },
   "agentWorkspace": {
     "back": "返回智能体列表",

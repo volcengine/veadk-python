@@ -697,8 +697,8 @@ function parseSnapshot(
 }
 
 function sandboxListUrl(base: string, options?: SandboxListOptions): string {
-  if (!options?.autoResumeSnapshots) return base;
-  const params = new URLSearchParams({ autoResumeSnapshots: "true" });
+  if (options?.autoResumeSnapshots === undefined) return base;
+  const params = new URLSearchParams({ autoResumeSnapshots: String(options.autoResumeSnapshots) });
   return `${base}?${params.toString()}`;
 }
 

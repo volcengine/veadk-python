@@ -237,7 +237,7 @@
   "sandbox": {
     "status": {
       "ready": "就绪",
-      "wakeable": "可唤醒",
+      "wakeable": "已休眠",
       "creating": "创建中",
       "starting": "启动中",
       "pending": "等待中",
@@ -276,9 +276,9 @@
     "missingSessionForTerminal": "缺少要打开 Terminal 的 AgentKit Session。",
     "openTerminalFailed": "无法打开 {{kind}} Terminal。",
     "deleteAgentFailed": "无法删除 {{kind}} 智能体。",
-    "missingSnapshot": "缺少要唤醒的 AgentKit Snapshot。",
-    "resumeSnapshotFailed": "无法从快照唤醒智能体，请稍后重试。",
-    "deleteSnapshotFailed": "无法删除智能体快照。",
+    "missingSnapshot": "未找到要唤醒的智能体。",
+    "resumeSnapshotFailed": "无法唤醒智能体，请稍后重试。",
+    "deleteSnapshotFailed": "无法删除智能体，请稍后重试。",
     "missingSessionToConnect": "缺少要连接的 AgentKit Session。",
     "connectCodexFailed": "无法连接 Codex 智能体，请稍后重试。",
     "sessionNotReady": "AgentKit Session 尚未就绪，当前状态：{{status}}。",

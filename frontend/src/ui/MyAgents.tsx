@@ -1,3 +1,4 @@
+import { TextShimmer } from "./text-shimmer/TextShimmer";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SVGProps } from "react";
 import { EmptyMessage } from "@openai/apps-sdk-ui/components/EmptyMessage";
@@ -349,6 +350,7 @@ function AgentCard({
   compatibility,
   onRetryCompatibility,
   connecting,
+  connectError,
   connected,
   deploymentTask,
   nowMs,
@@ -363,6 +365,7 @@ function AgentCard({
   compatibility?: RuntimeCompatibility;
   onRetryCompatibility?: (agent: MyAgentCardData) => void;
   connecting?: boolean;
+  connectError?: string;
   connected?: boolean;
   deploymentTask?: DeploymentTaskUpdate;
   nowMs: number;
@@ -388,13 +391,13 @@ function AgentCard({
       else onViewDetails?.(agent);
       return;
     }
-    if (!actionable) return;
+    if (!actionable && !agent.sandbox) return;
     if (deploymentTask) onViewDeploymentTask?.(deploymentTask);
     else onViewDetails?.(agent);
   };
   const cardTargetEnabled = agent.draft
     ? Boolean(deploymentTask ? onViewDeploymentTask : onViewDetails)
-    : actionable && Boolean(deploymentTask ? onViewDeploymentTask : onViewDetails);
+    : (actionable || Boolean(agent.sandbox)) && Boolean(deploymentTask ? onViewDeploymentTask : onViewDetails);
   const cardTargetLabel = agent.draft
     ? deploymentTask
       ? t("myAgents.viewDeploymentProgress", { name: agent.name })
@@ -588,6 +591,10 @@ function AgentCard({
             </Tooltip>
           ) : null}
       />
+      {connectError ? <p className="my-agent-wake-note" role="alert">{connectError}</p> : null}
+      {wakeable && actionable ? <p className="my-agent-wake-note" role={connecting ? "status" : undefined}>
+        {connecting ? <TextShimmer>{t("myAgents.wakingHint")}</TextShimmer> : t("myAgents.sleepingHint")}
+      </p> : null}
       {!agent.sandbox ? (
         <ResourceCardDescription>{agent.description}</ResourceCardDescription>
       ) : null}
@@ -670,6 +677,7 @@ export function MyAgents({
   const [loadingSandboxAgents, setLoadingSandboxAgents] = useState(false);
   const [sandboxError, setSandboxError] = useState("");
   const [connectingAgentId, setConnectingAgentId] = useState("");
+  const [connectErrors, setConnectErrors] = useState<Record<string, string>>({});
   const [runtimeCompatibility, setRuntimeCompatibility] = useState<
     Record<string, RuntimeCompatibility>
   >({});
@@ -902,11 +910,11 @@ export function MyAgents({
       const sessions = type === "codex"
         ? await sandboxClient.listSessions({
             signal: controller.signal,
-            autoResumeSnapshots: true,
+            autoResumeSnapshots: false,
           })
         : await sandboxClient.listAgentSessions(type, {
             signal: controller.signal,
-            autoResumeSnapshots: true,
+            autoResumeSnapshots: false,
           });
       if (sandboxRequestRef.current !== requestId) return;
       setSandboxAgents(sessions.map((session) => sandboxToAgent(session, t)));
@@ -1000,6 +1008,7 @@ export function MyAgents({
   const useAgent = useCallback(async (agent: MyAgentCardData) => {
     if (connectingAgentId) return;
     setConnectingAgentId(agent.id);
+    setConnectErrors((current) => ({ ...current, [agent.id]: "" }));
     try {
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       if (agent.sandbox) {
@@ -1007,6 +1016,8 @@ export function MyAgents({
       } else {
         await onUseAgent(agent);
       }
+    } catch (cause) {
+      setConnectErrors((current) => ({ ...current, [agent.id]: cause instanceof Error ? cause.message : String(cause) }));
     } finally {
       setConnectingAgentId("");
     }
@@ -1320,6 +1331,7 @@ export function MyAgents({
                       }
                     } : undefined}
                     connecting={agent.id === connectingAgentId}
+                    connectError={connectErrors[agent.id]}
                     connected={agent.runtime?.runtimeId === connectedRuntimeId}
                     onEditDraft={onEditDraft}
                     onDeleteDraft={setDraftToDelete}
