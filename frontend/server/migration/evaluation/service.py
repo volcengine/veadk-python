@@ -115,6 +115,12 @@ class _EvaluationManifest(TypedDict):
     asset: dict[str, object]
 
 
+class _EvaluationEnvironment(TypedDict):
+    required: list[str]
+    optional: list[str]
+    defaults: dict[str, str]
+
+
 class _EvaluationStatus(TypedDict):
     schema_version: int
     task_id: str
@@ -122,7 +128,7 @@ class _EvaluationStatus(TypedDict):
     state: str
     message: str
     updated_at: str
-    environment: NotRequired[dict[str, list[str]]]
+    environment: NotRequired[_EvaluationEnvironment]
     runtime_name: NotRequired[str]
     error: NotRequired[dict[str, object]]
     report_asset: NotRequired[dict[str, object]]
@@ -1124,7 +1130,7 @@ class MigrationEvaluationService:
         attempt: int,
         state: str,
         message: str,
-        environment: dict[str, list[str]] | None = None,
+        environment: _EvaluationEnvironment | None = None,
         runtime_name: str | None = None,
         report_asset: dict[str, object] | None = None,
     ) -> None:
@@ -1434,15 +1440,34 @@ class MigrationEvaluationService:
     @staticmethod
     def _evaluation_environment(
         artifact: dict[str, object],
-    ) -> dict[str, list[str]]:
+    ) -> _EvaluationEnvironment:
         value = artifact.get("environment")
         if not isinstance(value, dict):
-            return {"required": [], "optional": []}
-        return {
+            return {"required": [], "optional": [], "defaults": {}}
+        names = {
             field: [str(item) for item in value.get(field, [])]
             if isinstance(value.get(field), list)
             else []
             for field in ("required", "optional")
+        }
+        declared = set(names["required"] + names["optional"])
+        source_defaults = value.get("defaults")
+        defaults = (
+            {
+                str(key): item
+                for key, item in source_defaults.items()
+                if isinstance(key, str)
+                and key in declared
+                and isinstance(item, str)
+                and item
+            }
+            if isinstance(source_defaults, dict)
+            else {}
+        )
+        return {
+            "required": names["required"],
+            "optional": names["optional"],
+            "defaults": defaults,
         }
 
     @staticmethod

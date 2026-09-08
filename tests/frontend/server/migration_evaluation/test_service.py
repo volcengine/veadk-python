@@ -130,6 +130,7 @@ class FakeMigration:
         }
         self.required: list[str] = []
         self.optional: list[str] = []
+        self.defaults: dict[str, str] = {}
 
     def get_task(self, task_id: str, owner_id: str) -> dict[str, object]:
         assert task_id == TASK_ID and owner_id == "owner"
@@ -144,6 +145,7 @@ class FakeMigration:
             "environment": {
                 "required": self.required,
                 "optional": self.optional,
+                "defaults": self.defaults,
             },
         }
 
@@ -364,6 +366,7 @@ def test_terminal_migration_waits_for_required_environment_without_starting() ->
     _ready(migration)
     migration.required = ["ARK_API_KEY"]
     migration.optional = ["TZ"]
+    migration.defaults = {"TZ": "Asia/Shanghai"}
 
     service.advance(TASK_ID, "owner")
     snapshot = service.snapshot(TASK_ID, "owner")
@@ -373,6 +376,7 @@ def test_terminal_migration_waits_for_required_environment_without_starting() ->
     assert snapshot["environment"] == {
         "required": ["ARK_API_KEY"],
         "optional": ["TZ"],
+        "defaults": {"TZ": "Asia/Shanghai"},
     }
     assert snapshot["canResume"] is True
     assert attached["canStop"] is True
@@ -674,6 +678,7 @@ def test_retry_with_required_environment_returns_directly_to_input() -> None:
     assert waiting["environment"] == {
         "required": ["ARK_API_KEY"],
         "optional": [],
+        "defaults": {},
     }
     assert [start["attempt"] for start in runner.starts] == [1]
 

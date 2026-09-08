@@ -298,6 +298,10 @@ test("preserves required and optional evaluation environment variables", async (
         environment: {
           required: ["MODEL_AGENT_API_KEY"],
           optional: ["MODEL_AGENT_API_BASE", "TZ"],
+          defaults: {
+            MODEL_AGENT_API_BASE: "https://ark.example/api/v3",
+            TZ: "Asia/Shanghai",
+          },
         },
         canResume: true,
         canRetry: false,
@@ -310,6 +314,10 @@ test("preserves required and optional evaluation environment variables", async (
   assert.deepEqual(status.environment, {
     required: ["MODEL_AGENT_API_KEY"],
     optional: ["MODEL_AGENT_API_BASE", "TZ"],
+    defaults: {
+      MODEL_AGENT_API_BASE: "https://ark.example/api/v3",
+      TZ: "Asia/Shanghai",
+    },
   });
 });
 

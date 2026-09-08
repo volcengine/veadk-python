@@ -183,7 +183,7 @@ def validate_evaluation_status(
     if state == "waiting_environment":
         if not isinstance(environment, dict):
             raise EvaluationContractError("invalid environment descriptor")
-        _exact_keys(environment, required={"required", "optional"})
+        _exact_keys(environment, required={"required", "optional", "defaults"})
         names: list[str] = []
         for field in ("required", "optional"):
             items = environment.get(field)
@@ -199,6 +199,20 @@ def validate_evaluation_status(
                 raise EvaluationContractError("invalid environment descriptor")
             names.extend(cast(list[str], items))
         if not names or len(set(names)) != len(names):
+            raise EvaluationContractError("invalid environment descriptor")
+        defaults = environment.get("defaults")
+        if (
+            not isinstance(defaults, dict)
+            or len(defaults) > 500
+            or any(
+                not isinstance(key, str)
+                or key not in names
+                or not isinstance(item, str)
+                or not item
+                or len(item.encode("utf-8")) > 64 * 1024
+                for key, item in defaults.items()
+            )
+        ):
             raise EvaluationContractError("invalid environment descriptor")
     elif environment is not None:
         raise EvaluationContractError("unexpected environment descriptor")

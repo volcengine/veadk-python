@@ -86,6 +86,7 @@ export interface MigrationEvaluationStatus {
   environment?: {
     required: string[];
     optional: string[];
+    defaults: Record<string, string>;
   };
   runtimeName?: string;
   canResume?: boolean;
@@ -541,10 +542,17 @@ function normalizeEvaluation(value: unknown): MigrationEvaluationStatus {
       adkT("migrations.labels.optionalEnvironment"),
     );
     const names = [...required, ...optional];
+    const defaults = record(
+      environment.defaults,
+      adkT("migrations.labels.environmentDefaults"),
+    );
     if (
       evaluation.state !== "waiting_environment" ||
       names.length === 0 ||
-      new Set(names).size !== names.length
+      new Set(names).size !== names.length ||
+      Object.entries(defaults).some(
+        ([key, value]) => !names.includes(key) || typeof value !== "string",
+      )
     ) {
       throw new Error(
         adkT("migrations.invalidFormat", {
@@ -552,7 +560,11 @@ function normalizeEvaluation(value: unknown): MigrationEvaluationStatus {
         }),
       );
     }
-    normalized.environment = { required, optional };
+    normalized.environment = {
+      required,
+      optional,
+      defaults: defaults as Record<string, string>,
+    };
   } else if (evaluation.state === "waiting_environment") {
     throw new Error(
       adkT("migrations.invalidFormat", {

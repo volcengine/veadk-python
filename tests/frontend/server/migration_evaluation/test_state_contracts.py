@@ -164,7 +164,11 @@ def test_status_requires_environment_names_errors_and_report_by_state() -> None:
     validate_evaluation_status(
         _status(
             "waiting_environment",
-            environment={"required": ["ARK_API_KEY"], "optional": ["TZ"]},
+            environment={
+                "required": ["ARK_API_KEY"],
+                "optional": ["TZ"],
+                "defaults": {"TZ": "Asia/Shanghai"},
+            },
         ),
         expected_task_id=TASK_ID,
     )
@@ -176,7 +180,11 @@ def test_status_requires_environment_names_errors_and_report_by_state() -> None:
         validate_evaluation_status(
             _status(
                 "waiting_environment",
-                environment={"required": ["ARK_API_KEY"], "optional": ["ARK_API_KEY"]},
+                environment={
+                    "required": ["ARK_API_KEY"],
+                    "optional": ["ARK_API_KEY"],
+                    "defaults": {},
+                },
             ),
             expected_task_id=TASK_ID,
         )
@@ -184,7 +192,23 @@ def test_status_requires_environment_names_errors_and_report_by_state() -> None:
         validate_evaluation_status(
             _status(
                 "waiting_environment",
-                environment={"required": ["1INVALID"], "optional": []},
+                environment={
+                    "required": ["1INVALID"],
+                    "optional": [],
+                    "defaults": {},
+                },
+            ),
+            expected_task_id=TASK_ID,
+        )
+    with pytest.raises(EvaluationContractError, match="environment descriptor"):
+        validate_evaluation_status(
+            _status(
+                "waiting_environment",
+                environment={
+                    "required": ["ARK_API_KEY"],
+                    "optional": ["TZ"],
+                    "defaults": {"UNDECLARED": "value"},
+                },
             ),
             expected_task_id=TASK_ID,
         )

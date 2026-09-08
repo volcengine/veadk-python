@@ -284,6 +284,7 @@ def _judge_config(tmp_path: Path) -> dict[str, Any]:
         "thread_path": str(result_root / "thread.json"),
         "batch_root_path": str(result_root / "batches"),
         "execution_results_path": str(result_root / "execution-results.jsonl"),
+        "diagnostic_path": str(tmp_path / "diagnostics.log"),
     }
 
 
@@ -565,6 +566,66 @@ def test_judge_retry_resumes_thread_started_by_failed_turn(tmp_path: Path) -> No
     assert len(commands) == 2
     resume_index = commands[1].index("resume")
     assert commands[1][resume_index + 1] == "thread-recovery"
+
+
+def test_judge_accepts_valid_output_after_nonzero_cli_exit(tmp_path: Path) -> None:
+    namespace = _runner_namespace()
+    config = _judge_config(tmp_path)
+    commands: list[list[str]] = []
+
+    def run_capped(args: list[str], **_kwargs: object) -> tuple[int, bytes, int]:
+        commands.append(args)
+        events = _judge_events("thread-complete", ["case-1"])
+        return 1, events, len(events)
+
+    namespace["run_capped"] = run_capped
+    result = namespace["judge_batch"](
+        config,
+        0,
+        [_case("case-1")],
+        {"case-1": _observation("one")},
+        None,
+        {},
+    )
+
+    assert result[0]["case_id"] == "case-1"
+    assert len(commands) == 1
+    diagnostics = Path(config["diagnostic_path"]).read_text(encoding="utf-8")
+    assert "judge_output_accepted_after_nonzero_exit" in diagnostics
+
+
+def test_judge_retries_share_one_total_time_budget(tmp_path: Path) -> None:
+    namespace = _runner_namespace()
+    config = _judge_config(tmp_path)
+    timeouts: list[float] = []
+    monotonic_values = iter([0.0, 0.0, 250.0])
+
+    class FakeTime:
+        @staticmethod
+        def monotonic() -> float:
+            return next(monotonic_values)
+
+    def run_capped(_args: list[str], **kwargs: object) -> tuple[int, bytes, int]:
+        timeouts.append(float(kwargs["timeout"]))
+        events = (
+            json.dumps({"type": "thread.started", "thread_id": "thread-budget"}) + "\n"
+        ).encode()
+        return 0, events, len(events)
+
+    namespace["time"] = FakeTime
+    namespace["run_capped"] = run_capped
+
+    with pytest.raises(RuntimeError, match="output is missing"):
+        namespace["judge_batch"](
+            config,
+            0,
+            [_case("case-1")],
+            {"case-1": _observation("one")},
+            None,
+            {},
+        )
+
+    assert timeouts == pytest.approx([300.0, 50.0])
 
 
 def test_judge_resumes_persisted_thread_after_runner_restart(tmp_path: Path) -> None:

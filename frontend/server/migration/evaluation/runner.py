@@ -964,7 +964,13 @@ def runner_source() -> str:
             if thread_id is None and batch_start > 0:
                 raise RuntimeError("judge thread record is missing")
             last_error = None
+            deadline = time.monotonic() + JUDGE_TIMEOUT
             for _ in range(2):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    diagnostic(config, "judge_time_budget_exhausted")
+                    last_error = RuntimeError("evaluation judge time budget exhausted")
+                    break
                 command = [
                     "codex",
                     "exec",
@@ -981,13 +987,25 @@ def runner_source() -> str:
                     command.append("-")
                 else:
                     command.extend(["resume", thread_id, "-"])
-                code, events, _ = run_capped(
-                    command,
-                    cwd=Path(config["project_path"]),
-                    env=env,
-                    timeout=JUDGE_TIMEOUT,
-                    input_text=prompt,
-                )
+                try:
+                    code, events, _ = run_capped(
+                        command,
+                        cwd=Path(config["project_path"]),
+                        env=env,
+                        timeout=remaining,
+                        input_text=prompt,
+                    )
+                except RuntimeError as error:
+                    diagnostic(
+                        config,
+                        (
+                            "judge_command_timed_out"
+                            if str(error) == "command timed out"
+                            else "judge_command_failed"
+                        ),
+                        error_type=type(error).__name__,
+                    )
+                    raise
                 event_thread_id, message = codex_events(events)
                 if thread_id is None and event_thread_id is not None:
                     thread_id = event_thread_id
@@ -998,28 +1016,39 @@ def runner_source() -> str:
                     and event_thread_id != thread_id
                 ):
                     raise RuntimeError("judge resumed a different thread")
+                if message is not None and thread_id is not None:
+                    try:
+                        result = json.loads(message)
+                        returned = validate_judged_cases(
+                            config,
+                            cases,
+                            result.get("cases") if isinstance(result, dict) else None,
+                            observations,
+                        )
+                    except (ValueError, RuntimeError) as error:
+                        diagnostic(
+                            config,
+                            "judge_output_rejected",
+                            error_type=type(error).__name__,
+                        )
+                        last_error = error
+                        continue
+                    if code != 0:
+                        diagnostic(
+                            config,
+                            "judge_output_accepted_after_nonzero_exit",
+                        )
+                    save_batch_result(config, batch_start, cases, returned)
+                    return returned
                 if code != 0:
+                    diagnostic(config, "judge_process_failed")
                     last_error = RuntimeError("evaluation judge failed")
-                    continue
-                if message is None:
+                elif message is None:
+                    diagnostic(config, "judge_output_missing")
                     last_error = RuntimeError("judge output is missing")
-                    continue
-                if thread_id is None:
+                else:
+                    diagnostic(config, "judge_thread_missing")
                     last_error = RuntimeError("judge thread id is missing")
-                    continue
-                try:
-                    result = json.loads(message)
-                    returned = validate_judged_cases(
-                        config,
-                        cases,
-                        result.get("cases") if isinstance(result, dict) else None,
-                        observations,
-                    )
-                except (ValueError, RuntimeError) as error:
-                    last_error = error
-                    continue
-                save_batch_result(config, batch_start, cases, returned)
-                return returned
             assert last_error is not None
             raise last_error
 

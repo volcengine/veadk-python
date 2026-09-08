@@ -9,6 +9,7 @@ import type {
   MigrationTaskState,
 } from "../adk/migrations";
 import { TextShimmer } from "../ui/text-shimmer/TextShimmer";
+import { initialEvaluationEnvironmentValues } from "./evaluationEnvironment";
 import { CloseIcon } from "./MigrationIcons";
 import "./MigrationEvaluation.css";
 
@@ -1102,13 +1103,18 @@ export function MigrationEvaluationResult({
   onDownloadReport,
 }: ResultProps) {
   const { t } = useTranslation("migrations");
-  const [environment, setEnvironment] = useState<Record<string, string>>({});
+  const [environment, setEnvironment] = useState<Record<string, string>>(() =>
+    initialEvaluationEnvironmentValues(evaluation.environment),
+  );
   const required = evaluation.environment?.required ?? [];
   const optional = evaluation.environment?.optional ?? [];
   const environmentKeys = [...required, ...optional];
-  const environmentSignature = environmentKeys.join("\0");
+  const environmentSignature = JSON.stringify([
+    environmentKeys,
+    evaluation.environment?.defaults ?? {},
+  ]);
   useEffect(() => {
-    setEnvironment({});
+    setEnvironment(initialEvaluationEnvironmentValues(evaluation.environment));
   }, [environmentSignature]);
   if (!evaluation.enabled) return null;
   const active = [
