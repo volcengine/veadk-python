@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+import ast
 import hmac
 import json
 import re
@@ -24,9 +25,11 @@ import time
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import replace
 from hashlib import sha256
+from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
+import httpx
 import pytest
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
@@ -72,6 +75,63 @@ from veadk.cli.github_app_pr_review import (
     TosGitHubAppReviewRepositoryStore,
     create_review_record,
 )
+
+
+@pytest.mark.parametrize("is_vestack_deployment", [False, True])
+@pytest.mark.asyncio
+async def test_hermes_cli_surface_configuration_isolated_by_deployment(
+    is_vestack_deployment: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Evaluate the real CLI registration without booting Studio or cloud clients.
+    source = Path(frontend_sandbox.__file__).with_name("cli_frontend.py")
+    tree = ast.parse(source.read_text())
+    registrations = [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "sandbox_agent_services"
+            for target in node.targets
+        )
+    ]
+    assert len(registrations) == 1
+    registration = registrations[0]
+    hermes_call = next(
+        value
+        for key, value in zip(registration.keys, registration.values)
+        if isinstance(key, ast.Constant) and key.value == "hermes"
+    )
+    service = eval(
+        compile(ast.Expression(hermes_call), str(source), "eval"),
+        {
+            "SandboxAgentSessionService": SandboxAgentSessionService,
+            "sandbox_gateway": _FakeGateway(),
+            "sandbox_chat_hermes_tool_id": "tool-hermes",
+            "sandbox_chat_hermes_snapshot_tool_id": "tool-hermes-snapshot",
+            "hermes_managed_tool_spec": None,
+            "is_vestack_deployment": is_vestack_deployment,
+            "os": SimpleNamespace(getenv=lambda _: ""),
+        },
+    )
+    if is_vestack_deployment:
+        assert service.surface_path == "/proxy/4500/"
+        assert service._surface_ready_path == "/proxy/4500/"
+        assert "hermes dashboard" in service._surface_start_command
+        assert "--port 4500" in service._surface_start_command
+    else:
+        assert service.surface_path == "/hermes/"
+        assert service._surface_ready_path == ""
+        assert service._surface_start_command == ""
+
+        def unexpected_http_client(*args, **kwargs):
+            pytest.fail("Public-cloud Hermes must not start or probe Dashboard")
+
+        monkeypatch.setattr(httpx, "AsyncClient", unexpected_http_client)
+        created = await service.create("alice")
+        opened, token = await service.open(created.instance_id, "alice")
+        assert opened.instance_id == created.instance_id
+        assert token
 
 
 class _FakeCodex:

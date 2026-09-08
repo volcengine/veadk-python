@@ -3501,15 +3501,17 @@ def _run_frontend_server(
             tool_id=sandbox_chat_hermes_tool_id,
             snapshot_tool_id=sandbox_chat_hermes_snapshot_tool_id,
             managed_tool_spec=hermes_managed_tool_spec,
-            surface_path="/proxy/4500/",
+            surface_path="/proxy/4500/" if is_vestack_deployment else None,
             surface_start_command=(
                 "if ! curl -fsS --max-time 2 http://127.0.0.1:4500/ "
                 ">/dev/null 2>&1; then "
                 "nohup /home/gem/.local/bin/hermes dashboard "
                 "--host 127.0.0.1 --port 4500 --no-open "
                 ">/home/gem/.hermes/dashboard.log 2>&1 & fi"
+                if is_vestack_deployment
+                else ""
             ),
-            surface_ready_path="/proxy/4500/",
+            surface_ready_path="/proxy/4500/" if is_vestack_deployment else "",
             unconfigured_message=(
                 "管理员未配置 Hermes 模型或 IAM Role。"
                 if hermes_managed_tool_spec is None
