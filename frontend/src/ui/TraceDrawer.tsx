@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@openai/apps-sdk-ui/components/Button";
 import { ChevronRight, Loader2, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import {
   getGeneratedAgentTestTrace,
   getSessionTrace,
@@ -43,22 +44,6 @@ function traceErrorState(message: string): Exclude<TraceLoadState, "loading" | "
   if (/HTTP 40[13]/.test(message) || message.includes("无权限读取 APMPlus")) return "forbidden";
   return "error";
 }
-
-const TRACE_ERROR_MESSAGES: Record<Exclude<TraceLoadState, "loading" | "ready">, string> = {
-  collecting: "调用链路仍在采集中，请稍候。",
-  disabled: "该 Agent 未开启链路观测，请到控制台开启后重试。",
-  forbidden: "当前账号无权读取 APMPlus 调用链路，请联系管理员补充只读权限。",
-  error: "调用链路加载失败，请稍后重试。",
-};
-
-const TRACE_STATUS_LABELS: Record<TraceLoadState, string> = {
-  loading: "加载中",
-  ready: "",
-  collecting: "采集中",
-  disabled: "未开启",
-  forbidden: "权限不足",
-  error: "加载失败",
-};
 
 function buildTree(spans: TraceSpan[]) {
   const byId = new Map<SpanId, TraceSpan>();
@@ -134,8 +119,9 @@ export function TraceDrawer({
   sessionId,
   endTimeMs,
   onClose,
-  title = "调用链路观测",
+  title,
 }: TraceDrawerProps) {
+  const { t } = useTranslation("conversation");
   const [spans, setSpans] = useState<TraceSpan[] | null>(null);
   const [loadState, setLoadState] = useState<TraceLoadState>("loading");
   const [loadRevision, setLoadRevision] = useState(0);
@@ -211,44 +197,44 @@ export function TraceDrawer({
       <aside className="drawer drawer--trace">
         <header className="drawer-head">
           <div>
-            <div className="drawer-title">{title}</div>
+            <div className="drawer-title">{title ?? t("trace.title")}</div>
             <div className="drawer-sub">
               {loadState === "ready" && spans
-                ? `${spans.length} 个调用 · ${totalMs.toFixed(1)} ms`
-                : TRACE_STATUS_LABELS[loadState]}
+                ? t("trace.callCount", { count: spans.length, duration: totalMs.toFixed(1) })
+                : t(`trace.statuses.${loadState}`)}
             </div>
           </div>
-          <button className="drawer-close" onClick={onClose} aria-label="关闭">
+          <button className="drawer-close" onClick={onClose} aria-label={t("trace.close")}>
             <X className="icon" />
           </button>
         </header>
 
         {loadState === "loading" && (
           <div className="drawer-loading">
-            <Loader2 className="icon spin" /> 加载调用链路…
+            <Loader2 className="icon spin" /> {t("trace.loading")}
           </div>
         )}
         {loadState === "collecting" && (
           <div className="drawer-loading" role="status" aria-live="polite">
             <Loader2 className="icon spin" />
-            <span>{TRACE_ERROR_MESSAGES.collecting}</span>
+            <span>{t("trace.errors.collecting")}</span>
             <Button type="button" color="secondary" variant="outline" size="sm" pill={false} onClick={retry}>
-              立即重试
+              {t("trace.retryNow")}
             </Button>
           </div>
         )}
         {(loadState === "disabled" || loadState === "forbidden" || loadState === "error") && (
           <div className="drawer-empty trace-state" role="alert">
-            <span>{TRACE_ERROR_MESSAGES[loadState]}</span>
+            <span>{t(`trace.errors.${loadState}`)}</span>
             {loadState === "error" && (
               <Button type="button" color="secondary" variant="outline" size="sm" pill={false} onClick={retry}>
-                重新加载
+                {t("trace.reload")}
               </Button>
             )}
           </div>
         )}
         {loadState === "ready" && spans && spans.length === 0 && (
-          <div className="drawer-empty">该会话暂无调用链路（可能尚未产生调用）。</div>
+          <div className="drawer-empty">{t("trace.empty")}</div>
         )}
 
         {rows.length > 0 && (
@@ -303,7 +289,7 @@ export function TraceDrawer({
                     {fmtMs(selected.end_time - selected.start_time)}
                   </div>
 
-                  <div className="td-section">属性</div>
+                  <div className="td-section">{t("trace.attributes")}</div>
                   <div className="td-props">
                     {attrs(selected)
                       .filter((a) => !a.long)
@@ -325,7 +311,7 @@ export function TraceDrawer({
                     ))}
                 </>
               ) : (
-                <div className="drawer-empty">选择左侧的一个调用查看详情</div>
+                <div className="drawer-empty">{t("trace.selectCall")}</div>
               )}
             </div>
           </div>

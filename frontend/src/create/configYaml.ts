@@ -8,6 +8,16 @@ import { normalizeDraft } from "./normalizeDraft";
 import { prepareMcpAuth } from "./mcpAuth";
 import type { AgentDraft } from "./types";
 
+interface ConfigYamlLabels {
+  heading: string;
+  importHint: string;
+}
+
+const DEFAULT_CONFIG_YAML_LABELS: ConfigYamlLabels = {
+  heading: "VeADK Agent 结构配置",
+  importHint: "可在「创建 Agent」页通过「导入 YAML」重新载入。",
+};
+
 /** Build a clean, minimal config object (omit empty/false fields). */
 function toConfig(draft: AgentDraft, root = true): Record<string, unknown> {
   const o: Record<string, unknown> = {
@@ -164,7 +174,10 @@ function toConfig(draft: AgentDraft, root = true): Record<string, unknown> {
   return o;
 }
 
-export function draftToYaml(draft: AgentDraft): string {
+export function draftToYaml(
+  draft: AgentDraft,
+  labels: ConfigYamlLabels = DEFAULT_CONFIG_YAML_LABELS,
+): string {
   const prepared = prepareMcpAuth(draft);
   const envValues = {
     ...(prepared.draft.deployment?.envValues ?? {}),
@@ -178,8 +191,8 @@ export function draftToYaml(draft: AgentDraft): string {
     },
   };
   return (
-    "# VeADK Agent 结构配置\n" +
-    "# 可在「创建 Agent」页通过「导入 YAML」重新载入。\n" +
+    `# ${labels.heading}\n` +
+    `# ${labels.importHint}\n` +
     stringify(toConfig(exportDraft))
   );
 }

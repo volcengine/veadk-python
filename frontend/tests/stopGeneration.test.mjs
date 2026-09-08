@@ -141,7 +141,7 @@ test("intelligent stop waits for backend cleanup, preserves output, and remains 
   );
   assert.match(
     sendSource,
-    /const stopWait = sandboxStopWaitRef\.current[\s\S]*?const cleanupConfirmed = await stopWait\.promise[\s\S]*?if \(cleanupConfirmed\)[\s\S]*?appendSandboxActivity\([\s\S]*?"已停止，可继续输入"/,
+    /const stopWait = sandboxStopWaitRef\.current[\s\S]*?const cleanupConfirmed = await stopWait\.promise[\s\S]*?if \(cleanupConfirmed\)[\s\S]*?appendSandboxActivity\([\s\S]*?appText\("sandbox\.stoppedReady"\)/,
   );
   assert.doesNotMatch(
     sendSource,
@@ -158,7 +158,7 @@ test("standard Composer turns its enabled send control into an accessible stop c
   assert.match(composerSource, /const canStop = busy && Boolean\(onStop\)/);
   assert.match(composerSource, /disabled=\{canStop \? false : !canSend\}/);
   assert.match(composerSource, /onClick=\{canStop \? onStop : submitComposer\}/);
-  assert.match(composerSource, /aria-label=\{\s*canStop\s*\? "停止生成"/);
+  assert.match(composerSource, /aria-label=\{\s*canStop\s*\? t\("composer\.stopGenerating"\)/);
   assert.match(composerSource, /canStop \? \(\s*<ComposerStopIcon/);
   assert.match(composerSource, /<ComposerSendIcon/);
   const importSection = composerSource.slice(
@@ -173,7 +173,10 @@ test("Sandbox Composer exposes the same stop state without stopping unrelated co
   assert.match(sandboxComposerSource, /const canStop = busy && Boolean\(onStop\)/);
   assert.match(sandboxComposerSource, /disabled=\{canStop \? false : !canSend\}/);
   assert.match(sandboxComposerSource, /onClick=\{canStop \? onStop/);
-  assert.match(sandboxComposerSource, /aria-label=\{canStop \? "停止生成" : "发送"\}/);
+  assert.match(
+    sandboxComposerSource,
+    /aria-label=\{canStop \? t\("composer\.stop"\) : t\("composer\.send"\)\}/,
+  );
   assert.match(sandboxComposerSource, /canStop \? \(\s*<SandboxStopIcon/);
   assert.match(sandboxComposerSource, /busy \? \(\s*<SandboxSpinnerIcon/);
 });

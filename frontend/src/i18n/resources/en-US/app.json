@@ -1,0 +1,237 @@
+{
+  "actions": {
+    "backToEvaluationCase": "Back to evaluation case",
+    "cancel": "Cancel",
+    "copied": "Copied",
+    "copy": "Copy",
+    "exportConversation": "Export conversation",
+    "retry": "Retry"
+  },
+  "addAgent": {
+    "title": "How would you like to add an Agent?",
+    "subtitle": "Choose the approach that best fits your project.",
+    "quickCreate": {
+      "title": "Create from scratch",
+      "description": "Build an Agent with intelligent, custom, template, or workflow modes."
+    },
+    "intelligent": {
+      "title": "Intelligent mode",
+      "description": "Describe your goal, then build, debug, and validate the Agent interactively."
+    },
+    "package": {
+      "title": "Add and deploy a code package",
+      "description": "Upload an Agent project archive, review the code, and deploy it to AgentKit Runtime."
+    },
+    "migrate": {
+      "title": "Migrate an existing project",
+      "description": "Migrate an existing LangChain, Dify, or similar project to AgentKit Runtime."
+    }
+  },
+  "approval": {
+    "subject": {
+      "file": "file changes",
+      "command": "command execution"
+    },
+    "decision": {
+      "accept": "Allowed {{subject}} once",
+      "acceptForSession": "Allowed {{subject}} for this session",
+      "decline": "Declined {{subject}}",
+      "cancel": "Cancelled approval for {{subject}}"
+    },
+    "details": {
+      "command": "Command",
+      "grantRoot": "Authorized path",
+      "cwd": "Working directory"
+    }
+  },
+  "common": {
+    "noDescription": "No description",
+    "region": "Region",
+    "unknownAgent": "Unknown Agent"
+  },
+  "conversation": {
+    "agentTransfer": "Agent handoff",
+    "annotationHint": "Model response; select text to add an annotation",
+    "continueBranch": "Continue with “{{branch}}”",
+    "emptyResponse": "This response has no displayable content.",
+    "subagentDescription": "Working on a task handed off by the primary Agent."
+  },
+  "credentials": {
+    "title": "Configure {{provider}} credentials",
+    "prefix": "Agent Workspace requires {{provider}} credentials. Set",
+    "and": "and",
+    "suffix": "in the runtime environment, then retry."
+  },
+  "dialogs": {
+    "buildRunning": {
+      "title": "A build is still running",
+      "description": "Leaving will stop this build. The session will remain available in your history.",
+      "confirm": "Stop and leave"
+    },
+    "deleteThread": {
+      "title": "Delete Codex session",
+      "description": "Delete “{{name}}” and remove it from your session history?",
+      "confirm": "Delete"
+    },
+    "returnToCreate": {
+      "title": "Return to the create page?",
+      "description": "Your current entries will be lost.",
+      "confirm": "Return"
+    }
+  },
+  "errors": {
+    "additionalAgentDeleteFailures": "; {{count}} more failed",
+    "agentDeleteFailures": "Failed to delete {{count}} Agents: {{failures}}{{suffix}}",
+    "agentToolsMissing": "This Agent is missing required tools: {{tools}}",
+    "buildStopUnconfirmed": "You left the development environment, but Studio could not confirm that the build stopped. It may still be running; check its status in session history later.",
+    "builtinAgentSendFailed": "Failed to send to the built-in Agent: {{message}}",
+    "bytePlusEvaluationUnsupported": "AgentKit evaluation sets are not currently supported on BytePlus",
+    "clipboardUnsupported": "This browser does not support writing to the clipboard.",
+    "cloudCodexEmptyReply": "The cloud Codex task ended without a response. Send the task again.",
+    "cloudCodexSessionMissing": "The cloud Codex session has not appeared in the list yet. Try again shortly.",
+    "deploymentRuntimeIdMissing": "Deployment completed without returning a Runtime ID.",
+    "environmentExpired": "The selected environment is no longer available. Refresh and select it again.",
+    "environmentsLoadFailed": "Failed to load environments",
+    "evaluationCaseSessionMissing": "This evaluation case has no session reference and cannot be opened.",
+    "evaluationUnsupportedForReply": "This response cannot be added to an evaluation set",
+    "firstFrameRequired": "Add a first-frame image before generating from first and last frames.",
+    "incompletePromptOptimization": "The prompt optimization result is incomplete. Run the optimization again.",
+    "intelligentCapabilityCheckFailed": "Failed to check intelligent development capabilities (HTTP {{status}})",
+    "intelligentSessionCreateFailed": "Failed to create the intelligent development session",
+    "invalidIntelligentCapability": "The intelligent development capability response is invalid.",
+    "localBffToolsNotConfigured": "No tools are configured for the local Studio BFF.",
+    "localToolsLoadFailed": "Failed to load local tools",
+    "loginPopupBlocked": "The browser blocked the sign-in window. Allow pop-ups and try again.",
+    "loginPopupClosed": "The sign-in window was closed. Sign in again to continue.",
+    "mediaTooLarge": "{{fileName}} exceeds this platform's media size limit.",
+    "mountEnvironmentFailed": "Failed to mount the environment",
+    "noConnectedSandbox": "No Sandbox is currently connected.",
+    "noCreateAgentPermission": "Your account does not have permission to add Agents.",
+    "noManageAgentPermission": "Your account does not have permission to manage Agents.",
+    "noOptimizationBaseline": "There is no pre-optimization version available for comparison.",
+    "oauthUrlMissing": "The event does not include an authorization URL.",
+    "onlyCloudAgentUpdatable": "Only deployed cloud Agents can be updated.",
+    "optimizationVersionMissing": "The project version for this optimization could not be found. It may have been deleted.",
+    "persistentStorageNotConfigured": "Persistent storage has not been configured by an administrator",
+    "readDraftFailed": "Unable to read local drafts. Try again.",
+    "runtimeAgentNameMissing": "The Runtime is missing an Agent name and cannot be updated.",
+    "runtimeBffToolsDisabled": "BFF tool capabilities are not enabled for this Runtime Agent.",
+    "runtimeDeploymentConfigUnavailable": "The Runtime's original deployment configuration cannot be restored, so it cannot be updated safely.",
+    "runtimeMissingForConnection": "Runtime information is missing, so the Agent cannot be connected.",
+    "runtimeRegionMissingForDelete": "The Runtime is missing region information and cannot be deleted.",
+    "runtimeRegionMissingForUpdate": "The Runtime is missing region information and cannot be updated.",
+    "runtimeUpdateUnsupported": "This Runtime does not support in-place updates.",
+    "sandboxRuntimeUnavailable": "This Agent does not have an available Sandbox Runtime.",
+    "sandboxToolsUnavailable": "The current Studio BFF does not provide Sandbox execution tools.",
+    "saveDraftLocationRejected": "The browser could not save the current draft location. Check site storage permissions and try again.",
+    "saveDraftRejected": "The browser could not save the draft. Try again.",
+    "selectSkillToOptimize": "Select a Skill to optimize first.",
+    "sessionMissingForMount": "The current session does not exist, so an environment cannot be mounted.",
+    "sessionNotReady": "The session is not ready yet.",
+    "sessionUnavailable": "The current session is unavailable. Close it and try again.",
+    "sourceNotReady": "The source is not ready yet. Return to the conversation to continue.",
+    "textVideoRejectsReferences": "Text-to-video does not use reference media. Remove the images or videos first.",
+    "videoEditRequiresVideo": "Add the video you want to edit first.",
+    "videoExtendRequiresVideo": "Add a source video before extending it.",
+    "videoGenerationFailed": "Video generation failed. Try again later.",
+    "videoModeUnsupported": "The selected video mode is not supported on this platform.",
+    "videoPreviewMissing": "The video task completed, but the server did not return a preview URL.",
+    "videoReferenceRequired": "Add at least one reference image or video."
+  },
+  "feedback": {
+    "like": "Like",
+    "removeLike": "Remove like",
+    "dislike": "Dislike",
+    "removeDislike": "Remove dislike",
+    "reportIssue": "Report an issue",
+    "traceFlameGraph": "Tracing flame graph"
+  },
+  "greetings": {
+    "0": "What would you like to work on today?",
+    "1": "How can I help?",
+    "2": "What would you like me to look into?",
+    "3": "Ask me anything",
+    "4": "Hi, let's get started",
+    "5": "Start a new conversation",
+    "6": "What should we tackle first?",
+    "7": "Tell me what you have in mind",
+    "8": "Where should we begin?",
+    "9": "What can I help you with?",
+    "10": "Ready to move this forward?",
+    "11": "What's most important right now?",
+    "12": "Let's get something done today",
+    "13": "I'm ready when you are",
+    "intelligentDevelopment": "Give your ideas room to grow"
+  },
+  "loading": {
+    "agentCapabilities": "Checking Agent capabilities…",
+    "session": "Loading session…"
+  },
+  "oauth": {
+    "cancelled": "Authorization was cancelled.",
+    "pasteCallbackUrl": "After authorization, paste the full callback URL from your browser's address bar:",
+    "popupBlocked": "The browser blocked the authorization window. Allow pop-ups and try again.",
+    "unsupportedUrl": "The authorization URL is not HTTP or HTTPS and was blocked."
+  },
+  "providers": {
+    "volcengine": "Volcengine"
+  },
+  "sandbox": {
+    "checkingPersistence": "Checking persistent storage…",
+    "exitDevelopment": "Exit development",
+    "fileUploaded": "Uploaded a file to the Sandbox",
+    "filesUploaded": "Uploaded {{count}} files to the Sandbox",
+    "intelligentDevelopment": "Intelligent development",
+    "mode": {
+      "readOnly": "Read only",
+      "workspaceWrite": "Workspace write",
+      "fullAccess": "Full access"
+    },
+    "approvalPolicy": {
+      "untrusted": "Untrusted commands only",
+      "onRequest": "Ask when needed",
+      "never": "Never ask"
+    },
+    "reviewer": {
+      "user": "Ask me",
+      "autoReview": "Automatic review"
+    },
+    "labels": {
+      "approvalPolicy": "Approval policy",
+      "file": "File",
+      "fileNumber": "File {{number}}",
+      "mode": "Sandbox mode",
+      "networkAccess": "Network access",
+      "reviewer": "Approval method",
+      "workingDirectory": "Working directory"
+    },
+    "network": {
+      "allowed": "Allowed",
+      "disabled": "Off"
+    },
+    "permissionsUpdated": "Updated Codex permissions for this Sandbox session",
+    "persistenceUnknown": "Unable to verify persistent storage",
+    "stoppedReady": "Stopped. You can continue typing.",
+    "uploadedFilesPrompt": "The following files were uploaded to the current Sandbox workspace. Use them in this task:",
+    "workspaceUpdated": "Workspace updated"
+  },
+  "titles": {
+    "addAgent": "Add Agent",
+    "addFromPackage": "Add from code package",
+    "agent": "Agent",
+    "automations": "Automations",
+    "createAgent": "Create Agent",
+    "createSkill": "Create Skill",
+    "cronJobs": "Cronjob",
+    "issueFeedback": "Issue feedback",
+    "library": "Library",
+    "migrateAgent": "Migrate Agent",
+    "newConversation": "New conversation",
+    "optimizeSkill": "Optimize {{name}}",
+    "search": "Search",
+    "skill": "Skill",
+    "skillLibrary": "Skill library",
+    "systemInfo": "System information",
+    "updateAgent": "Update {{name}}"
+  }
+}

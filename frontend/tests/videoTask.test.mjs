@@ -1,19 +1,20 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { Buffer } from "node:buffer";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
-import ts from "typescript";
+import { build } from "esbuild";
 
-const source = readFileSync(
-  new URL("../src/ui/new-chat-modes/video-task.ts", import.meta.url),
-  "utf8",
-);
-const { outputText } = ts.transpileModule(source, {
-  compilerOptions: {
-    module: ts.ModuleKind.ES2022,
-    target: ts.ScriptTarget.ES2022,
-  },
+const result = await build({
+  entryPoints: [fileURLToPath(new URL("../src/ui/new-chat-modes/video-task.ts", import.meta.url))],
+  bundle: true,
+  format: "esm",
+  platform: "node",
+  target: "node20",
+  write: false,
 });
-const moduleUrl = `data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`;
+const moduleUrl = `data:text/javascript;base64,${Buffer.from(
+  result.outputFiles[0].contents,
+).toString("base64")}`;
 const {
   createVideoGenerationTask,
   currentVideoTaskStatus,
@@ -45,8 +46,8 @@ function createTask() {
 
 test("derives the two visible progress steps from real task state", () => {
   const optimizing = createTask();
-  assert.equal(currentVideoTaskStatus(optimizing), "提示词优化中");
-  assert.deepEqual(videoTaskSteps(optimizing).map((step) => step.status), ["active", "pending"]);
+  assert.equal(currentVideoTaskStatus(optimizing, "zh-CN"), "提示词优化中");
+  assert.deepEqual(videoTaskSteps(optimizing, "zh-CN").map((step) => step.status), ["active", "pending"]);
 
   const generating = updateVideoGenerationTask(optimizing, {
     type: "optimization_succeeded",
@@ -54,8 +55,9 @@ test("derives the two visible progress steps from real task state", () => {
     resolvedMode: "text_to_video",
     enhancerModel: "enhancer-from-server",
   });
-  assert.equal(currentVideoTaskStatus(generating), "文生视频进行中");
-  assert.deepEqual(videoTaskSteps(generating).map((step) => step.status), ["done", "active"]);
+  assert.equal(currentVideoTaskStatus(generating, "zh-CN"), "文生视频进行中");
+  assert.equal(currentVideoTaskStatus(generating, "en-US"), "Text-to-video in progress");
+  assert.deepEqual(videoTaskSteps(generating, "zh-CN").map((step) => step.status), ["done", "active"]);
 
   const success = updateVideoGenerationTask(generating, {
     type: "generation_succeeded",
@@ -65,8 +67,8 @@ test("derives the two visible progress steps from real task state", () => {
       mimeType: "video/mp4",
     },
   });
-  assert.equal(currentVideoTaskStatus(success), "视频生成完成");
-  assert.deepEqual(videoTaskSteps(success).map((step) => step.label), [
+  assert.equal(currentVideoTaskStatus(success, "zh-CN"), "视频生成完成");
+  assert.deepEqual(videoTaskSteps(success, "zh-CN").map((step) => step.label), [
     "提示词优化完成",
     "文生视频已完成",
   ]);
@@ -88,21 +90,23 @@ test("preserves the real provider phase without inventing a percentage", () => {
 
   assert.equal(task.providerStatus, "queued");
   assert.equal(task.generationStartedAt, 10_000);
-  assert.equal(currentVideoTaskStatus(task), "文生视频排队中");
+  assert.equal(currentVideoTaskStatus(task, "zh-CN"), "文生视频排队中");
 
   task = updateVideoGenerationTask(task, {
     type: "generation_status_changed",
     providerStatus: "running",
   });
   assert.equal(task.providerStatus, "running");
-  assert.equal(currentVideoTaskStatus(task), "文生视频生成中");
+  assert.equal(currentVideoTaskStatus(task, "zh-CN"), "文生视频生成中");
 });
 
 test("formats elapsed generation time for the progress display", () => {
-  assert.equal(formatVideoTaskElapsed(0), "0秒");
-  assert.equal(formatVideoTaskElapsed(59_900), "59秒");
-  assert.equal(formatVideoTaskElapsed(65_000), "1分05秒");
-  assert.equal(formatVideoTaskElapsed(3_725_000), "1小时02分");
+  assert.equal(formatVideoTaskElapsed(0, "zh-CN"), "0秒");
+  assert.equal(formatVideoTaskElapsed(59_900, "zh-CN"), "59秒");
+  assert.equal(formatVideoTaskElapsed(65_000, "zh-CN"), "1分05秒");
+  assert.equal(formatVideoTaskElapsed(3_725_000, "zh-CN"), "1小时02分");
+  assert.equal(formatVideoTaskElapsed(65_000, "en-US"), "1m 05s");
+  assert.equal(formatVideoTaskElapsed(3_725_000, "en-US"), "1h 02m");
 });
 
 test("generation retry keeps enhanced prompt and uploaded assets", () => {
@@ -141,14 +145,14 @@ test("optimization failure exposes a retryable first step", () => {
     stage: "optimization",
     error: "增强服务不可用",
   });
-  assert.deepEqual(videoTaskSteps(failed).map((step) => step.status), ["failed", "pending"]);
+  assert.deepEqual(videoTaskSteps(failed, "zh-CN").map((step) => step.status), ["failed", "pending"]);
   const retried = updateVideoGenerationTask(failed, {
     type: "retry",
     stage: "optimization",
   });
   assert.equal(retried.status, "optimizing");
   assert.equal(retried.error, "");
-  assert.equal(currentVideoTaskStatus(retried), "提示词优化中");
+  assert.equal(currentVideoTaskStatus(retried, "zh-CN"), "提示词优化中");
 });
 
 test("generation failure preserves the complete provider error", () => {

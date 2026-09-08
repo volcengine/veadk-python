@@ -17,6 +17,7 @@ import type {
   FrontendInvocation,
   MessageFeedbackState,
 } from "./adk/client";
+import { i18n } from "./i18n/runtime";
 import type { A2uiMessage } from "./a2ui/types";
 import type { SandboxTokenUsage } from "./adk/sandbox";
 import type { ProjectFile } from "./create/project";
@@ -149,6 +150,7 @@ export interface Acc {
 export interface TurnMeta {
   author?: string;
   localId?: string;
+  streaming?: boolean;
   tokens?: number;
   ts?: number; // epoch seconds
   eventId?: string;
@@ -240,6 +242,18 @@ function codexDirectAnswer(response: unknown): string {
   const result = response as Record<string, unknown>;
   if (result.ok !== true || typeof result.message !== "string") return "";
   return result.message.trim();
+}
+
+interface ActiveAssistantTurn {
+  acc: Acc;
+  localId: string;
+  meta: TurnMeta;
+}
+
+export interface AssistantEventProjection {
+  turn: Turn;
+  completed: boolean;
+  ignored?: boolean;
 }
 
 const fnCall = (p: AdkPart) => p.functionCall ?? p.function_call;
@@ -469,7 +483,7 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
           transferAgentName(fc.args) ||
           ev.actions?.transferToAgent ||
           ev.actions?.transfer_to_agent ||
-          "未知 Agent";
+          i18n.t("app:common.unknownAgent");
         blocks.push({ kind: "agent-transfer", agentName, done: false });
       } else if (fc.name === REQUEST_EUC) {
         // MCP/tool OAuth: render a dedicated auth card instead of a tool row.
@@ -582,13 +596,172 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
   return { blocks, liveStart, pendingCodexProgress };
 }
 
+function completesAssistantResponse(ev: AdkEvent, blocks: Block[]): boolean {
+  if (ev.partial === true) return false;
+  const parts = ev.content?.parts ?? [];
+  const hasFinalAnswerPart = parts.some((part) => {
+    const text = visiblePartText(part);
+    return (
+      (!part.thought && typeof text === "string" && text.trim().length > 0) ||
+      attachmentsFromParts([part]).length > 0
+    );
+  });
+  const hasA2ui = parts.some((part) => {
+    const response = fnResp(part);
+    return response?.name === A2UI_TOOL &&
+      Array.isArray(response.response?.[VALIDATED_JSON_KEY]) &&
+      response.response[VALIDATED_JSON_KEY].length > 0;
+  });
+  const artifactDelta = ev.actions?.artifactDelta ?? ev.actions?.artifact_delta;
+  const hasArtifact = Boolean(artifactDelta && Object.keys(artifactDelta).length > 0);
+  const agentEnded = Boolean(
+    ev.actions?.endOfAgent ?? ev.actions?.end_of_agent ?? ev.actions?.escalate
+  );
+  const hasAnswerBlock = blocks.some((block) =>
+    block.kind === "text" ||
+    block.kind === "attachment" ||
+    block.kind === "artifact" ||
+    block.kind === "a2ui" ||
+    block.kind === "delivery"
+  );
+  return hasFinalAnswerPart || hasA2ui || hasArtifact || (agentEnded && hasAnswerBlock);
+}
+
+function eventAffectsAssistantTurn(ev: AdkEvent): boolean {
+  const artifactDelta = ev.actions?.artifactDelta ?? ev.actions?.artifact_delta;
+  if (artifactDelta && Object.keys(artifactDelta).length > 0) return true;
+  return (ev.content?.parts ?? []).some((part) =>
+    Boolean(
+      visiblePartText(part) ||
+      attachmentsFromParts([part]).length > 0 ||
+      fnCall(part) ||
+      fnResp(part)
+    )
+  );
+}
+
+/** Keep one mutable stream accumulator per active Agent response. Parallel
+ *  Agents can interleave token events, so a single "current author" loses
+ *  content and creates one turn per author switch. A completed response closes
+ *  only that author's accumulator, allowing Loop Agents to start a later turn
+ *  with the same author. */
+export function createAssistantEventProjector(
+  localIdPrefix = "adk-stream",
+  initialTurn?: Turn,
+) {
+  let sequence = 0;
+  const active = new Map<string, ActiveAssistantTurn>();
+  let seededKey: string | undefined;
+
+  const keyFor = (author: string, invocationId: string) =>
+    `${invocationId}\u0000${author}`;
+
+  if (initialTurn?.role === "assistant") {
+    const author = initialTurn.meta?.author ?? "";
+    const invocationId = initialTurn.meta?.invocationId ?? "";
+    const localId = initialTurn.meta?.localId ?? `${localIdPrefix}-${sequence++}`;
+    const acc = emptyAcc();
+    acc.blocks = initialTurn.blocks;
+    acc.liveStart = initialTurn.blocks.length;
+    seededKey = keyFor(author, invocationId);
+    active.set(seededKey, {
+      acc,
+      localId,
+      meta: {
+        ...initialTurn.meta,
+        localId,
+        streaming: true,
+        eventId: undefined,
+      },
+    });
+  }
+
+  return {
+    project(ev: AdkEvent): AssistantEventProjection {
+      const author = ev.author && ev.author !== "user" ? ev.author : "";
+      const invocationId = ev.invocationId ?? ev.invocation_id ?? "";
+      const key = keyFor(author, invocationId);
+      let state = active.get(key);
+      if (!state && seededKey) {
+        const seeded = active.get(seededKey);
+        if (seeded && (!seeded.meta.author || seeded.meta.author === author)) {
+          active.delete(seededKey);
+          seededKey = undefined;
+          state = seeded;
+        }
+      }
+      if (!state && !eventAffectsAssistantTurn(ev)) {
+        return {
+          turn: { role: "assistant", blocks: [] },
+          completed: false,
+          ignored: true,
+        };
+      }
+      if (!state) {
+        const localId = `${localIdPrefix}-${sequence++}`;
+        state = {
+          acc: emptyAcc(),
+          localId,
+          meta: { author: author || undefined, invocationId: invocationId || undefined },
+        };
+      }
+
+      state.acc = applyEvent(state.acc, ev);
+      const usage = ev.usageMetadata ?? ev.usage_metadata;
+      const completed = completesAssistantResponse(ev, state.acc.blocks);
+      state.meta = {
+        ...state.meta,
+        author: author || state.meta.author,
+        localId: state.localId,
+        streaming: !completed,
+        tokens: usage?.totalTokenCount || state.meta.tokens,
+        ts: ev.timestamp || state.meta.ts,
+        invocationId: invocationId || state.meta.invocationId,
+        eventId: completed && ev.id ? ev.id : state.meta.eventId,
+      };
+      const turn: Turn = {
+        role: "assistant",
+        blocks: state.acc.blocks,
+        meta: state.meta,
+      };
+      if (completed) {
+        active.delete(key);
+        seededKey = undefined;
+      } else {
+        active.set(key, state);
+      }
+      return { turn, completed };
+    },
+
+    finish(): Turn[] {
+      const turns = [...active.values()].map((state): Turn => ({
+        role: "assistant",
+        blocks: state.acc.blocks,
+        meta: { ...state.meta, streaming: false },
+      }));
+      active.clear();
+      return turns;
+    },
+  };
+}
+
+export function upsertProjectedAssistantTurn(turns: Turn[], projected: Turn): Turn[] {
+  const localId = projected.meta?.localId;
+  if (!localId) return [...turns, projected];
+  const index = turns.findIndex((turn) => turn.meta?.localId === localId);
+  if (index < 0) return [...turns, projected];
+  const next = turns.slice();
+  next[index] = projected;
+  return next;
+}
+
 /** Replay stored session events into chat turns (for history). */
 export function eventsToTurns(
   events: AdkEvent[],
   sessionState: Record<string, unknown> = {},
 ): Turn[] {
-  const turns: Turn[] = [];
-  let acc = emptyAcc();
+  let turns: Turn[] = [];
+  let projector = createAssistantEventProjector("adk-history");
   for (const ev of events) {
     // Classify by author only: function-response events are authored by the
     // agent but carry content.role === "user", so a role-based check would
@@ -616,38 +789,26 @@ export function eventsToTurns(
       const invocation = invocationFromParts(parts);
       // Skip pure function-response turns (no text/files) — they're internal.
       if (!text && !files.length && !invocation) {
-        acc = emptyAcc();
         continue;
+      }
+      for (const unfinished of projector.finish()) {
+        turns = upsertProjectedAssistantTurn(turns, unfinished);
       }
       const blocks: Block[] = [];
       if (invocation) blocks.push({ kind: "invocation", value: invocation });
       if (files.length) blocks.push({ kind: "attachment", files });
       if (text) blocks.push({ kind: "text", text });
       turns.push({ role: "user", blocks, meta: { ts: ev.timestamp } });
-      acc = emptyAcc();
+      projector = createAssistantEventProjector("adk-history");
     } else {
-      const author = ev.author ?? "";
-      let last = turns[turns.length - 1];
-      if (
-        !last ||
-        last.role !== "assistant" ||
-        (author && last.meta?.author !== author)
-      ) {
-        last = { role: "assistant", blocks: [], meta: { author: author || undefined } };
-        turns.push(last);
-        acc = emptyAcc();
+      const projection = projector.project(ev);
+      if (!projection.ignored) {
+        turns = upsertProjectedAssistantTurn(turns, projection.turn);
       }
-      acc = applyEvent(acc, ev);
-      last.blocks = acc.blocks;
-      const usage = ev.usageMetadata ?? ev.usage_metadata;
-      const meta = (last.meta ??= {});
-      if (author) meta.author = author;
-      if (usage?.totalTokenCount) meta.tokens = usage.totalTokenCount;
-      if (ev.timestamp) meta.ts = ev.timestamp;
-      if (ev.id) meta.eventId = ev.id;
-      const invocationId = ev.invocationId ?? ev.invocation_id;
-      if (invocationId) meta.invocationId = invocationId;
     }
+  }
+  for (const unfinished of projector.finish()) {
+    turns = upsertProjectedAssistantTurn(turns, unfinished);
   }
   for (const turn of turns) {
     const meta = turn.meta;
@@ -663,12 +824,15 @@ export function eventsToTurns(
 }
 
 /** First user message of a session, for the sidebar title. */
-export function sessionTitle(events: AdkEvent[] | undefined): string {
+export function sessionTitle(
+  events: AdkEvent[] | undefined,
+  fallback = i18n.t("app:titles.newConversation"),
+): string {
   for (const ev of events ?? []) {
     if (ev.author === "user" || ev.content?.role === "user") {
       const t = (ev.content?.parts ?? []).map((p) => p.text).find(Boolean);
       if (t) return t;
     }
   }
-  return "新会话";
+  return fallback;
 }

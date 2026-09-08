@@ -40,6 +40,7 @@ const {
   configuredMcpEnvKeys,
   deploymentMcpSecretValues,
   mcpCredentialActionRequired,
+  mcpConfigurationConflict,
   mcpCredentialReuseValues,
   mcpAuthTokenInputValue,
   mcpUrlNeedsPathWarning,
@@ -61,6 +62,17 @@ const configYamlSource = readFileSync(
 const customCreateSource = readFileSync(
   new URL("../src/create/CustomCreate.tsx", import.meta.url),
   "utf8",
+);
+const createMessages = Object.fromEntries(
+  ["zh-CN", "en-US"].map((locale) => [
+    locale,
+    JSON.parse(
+      readFileSync(
+        new URL(`../src/i18n/resources/${locale}/create.json`, import.meta.url),
+        "utf8",
+      ),
+    ),
+  ]),
 );
 
 test("moves MCP tokens to deterministic collision-safe environment variables", () => {
@@ -142,11 +154,11 @@ test("wires the MCP URL-change credential choices into the editor and deploy pay
   );
   assert.match(
     customCreateSource,
-    /aria-invalid=\{mcpCredentialActionRequired\(t\)\}/,
+    /aria-invalid=\{mcpCredentialActionRequired\(tool\)\}/,
   );
-  assert.match(customCreateSource, />\s*沿用原凭证\s*</);
-  assert.match(customCreateSource, />\s*重新填写 Key\s*</);
-  assert.match(customCreateSource, />\s*新地址无需认证\s*</);
+  assert.match(customCreateSource, /t\("traditional\.mcp\.reuseCredential"\)/);
+  assert.match(customCreateSource, /t\("traditional\.mcp\.replaceCredential"\)/);
+  assert.match(customCreateSource, /t\("traditional\.mcp\.noAuth"\)/);
   assert.match(
     customCreateSource,
     /mcpCredentialReuses:\s*deploymentTarget[\s\S]*?mcpCredentialReuseValues\(draft\)/,
@@ -235,6 +247,117 @@ test("supports replacing or explicitly removing auth after an MCP URL change", (
   assert.equal(removed.authTokenEnv, undefined);
   assert.equal(mcpCredentialActionRequired(removed), false);
   assert.deepEqual(mcpCredentialReuseValues(draft({ mcpTools: [removed] })), []);
+});
+
+test("finds duplicate MCP names and canonical endpoint URLs before deploy", () => {
+  assert.equal(
+    mcpConfigurationConflict(
+      draft({
+        mcpTools: [
+          { name: "orders", transport: "http", url: "https://one.example.com/mcp" },
+          { name: "orders", transport: "http", url: "https://two.example.com/mcp" },
+        ],
+      }),
+    ),
+    "duplicateName",
+  );
+  assert.equal(
+    mcpConfigurationConflict(
+      draft({
+        mcpTools: [
+          {
+            name: "orders-a",
+            transport: "http",
+            url: "https://MCP.example.com:443/orders/mcp/",
+          },
+          {
+            name: "orders-b",
+            transport: "http",
+            url: "https://mcp.example.com/orders/mcp",
+          },
+        ],
+      }),
+    ),
+    "duplicateUrl",
+  );
+  assert.equal(
+    mcpConfigurationConflict(
+      draft({
+        mcpTools: [
+          {
+            name: "orders-a",
+            transport: "http",
+            url: "https://mcp.example.com/orders/../mcp",
+          },
+          {
+            name: "orders-b",
+            transport: "http",
+            url: "https://mcp.example.com/mcp",
+          },
+        ],
+      }),
+    ),
+    null,
+  );
+});
+
+test("shows and focuses duplicate MCP validation before any publish work", () => {
+  assert.equal(
+    createMessages["zh-CN"].traditional.validation.mcpDuplicateName,
+    "MCP 名称重复，请为每个服务使用唯一名称",
+  );
+  assert.equal(
+    createMessages["en-US"].traditional.validation.mcpDuplicateUrl,
+    "Remove the duplicate MCP endpoint before publishing",
+  );
+  assert.match(
+    customCreateSource,
+    /data-validation-field="mcp-name"[\s\S]*?aria-invalid=\{visibleConflict === "duplicateName"\}/,
+  );
+  assert.match(
+    customCreateSource,
+    /data-validation-field="mcp-url"[\s\S]*?aria-invalid=\{visibleConflict === "duplicateUrl"\}/,
+  );
+  assert.match(
+    customCreateSource,
+    /visibleConflict && \([\s\S]*?className="cw-error-text"[\s\S]*?role="alert"[\s\S]*?traditional\.validation\.mcpDuplicateName[\s\S]*?traditional\.validation\.mcpDuplicateUrl/,
+  );
+
+  const focusStart = customCreateSource.indexOf(
+    "function focusValidationProblem(problem: TreeProblem)",
+  );
+  const focusEnd = customCreateSource.indexOf(
+    "const requireCompleteDraft",
+    focusStart,
+  );
+  const focusSource = customCreateSource.slice(focusStart, focusEnd);
+  assert.match(focusSource, /mcpDuplicateName[\s\S]*?mcpDuplicateUrl[\s\S]*?"tools"/);
+  assert.match(focusSource, /mcpDuplicateName[\s\S]*?"mcp-name"/);
+  assert.match(focusSource, /mcpDuplicateUrl[\s\S]*?"mcp-url"/);
+
+  const publishStart = customCreateSource.indexOf(
+    "const materializePublishRelease",
+  );
+  const publishEnd = customCreateSource.indexOf(
+    "const openOptimization",
+    publishStart,
+  );
+  const publishSource = customCreateSource.slice(publishStart, publishEnd);
+  assert.ok(
+    publishSource.indexOf("if (!requireCompleteDraft())") <
+      publishSource.indexOf("generateAgentProject("),
+    "duplicate MCP validation must block navigation before publish generation",
+  );
+
+  const deployStart = customCreateSource.indexOf(
+    "const deployFromNewWorkbench",
+  );
+  const deploySource = customCreateSource.slice(deployStart);
+  assert.ok(
+    deploySource.indexOf("if (!requireCompleteDraft()) return") <
+      deploySource.indexOf("handleDeploy("),
+    "duplicate MCP validation must return before the deployment call",
+  );
 });
 
 test("keeps unchanged reference-only credentials eligible for server resolution", () => {

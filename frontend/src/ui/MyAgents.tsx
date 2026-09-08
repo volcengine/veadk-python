@@ -5,6 +5,8 @@ import { ArrowRotateCw, Explore } from "@openai/apps-sdk-ui/components/Icon";
 import { Badge } from "@openai/apps-sdk-ui/components/Badge";
 import { Button } from "@openai/apps-sdk-ui/components/Button";
 import { Tooltip } from "@openai/apps-sdk-ui/components/Tooltip";
+import type { TFunction } from "i18next";
+import { useTranslation } from "react-i18next";
 
 import {
   invalidateRuntimeUpdateCapabilityCache,
@@ -27,7 +29,6 @@ import {
 } from "../adk/cloudProvider";
 import {
   sandboxClient,
-  sandboxStatusLabel,
   type SandboxAgentResource,
   type SandboxAgentKind,
 } from "../adk/sandbox";
@@ -88,17 +89,13 @@ export type AgentType =
   | "openclaw"
   | "hermes";
 
-const AGENT_TYPES: Array<{ id: AgentType; label: string }> = [
-  { id: "general", label: "通用智能体" },
-  { id: "codex", label: "Codex" },
-  { id: "deepseek-harness", label: "DeepSeek" },
-  { id: "openclaw", label: "OpenClaw" },
-  { id: "hermes", label: "Hermes" },
+const AGENT_TYPES: AgentType[] = [
+  "general",
+  "codex",
+  "deepseek-harness",
+  "openclaw",
+  "hermes",
 ];
-const AGENT_TYPE_OPTIONS: Array<ResourceFilterOption<AgentType>> = AGENT_TYPES.map(({ id, label }) => ({
-  value: id,
-  label,
-}));
 const RUNTIME_PAGE_SIZE = 24;
 const RUNTIME_PAGE_CACHE_TTL_MS = 30_000;
 const RUNTIME_COMPATIBILITY_TIMEOUT_MS = 7_000;
@@ -111,10 +108,6 @@ interface RuntimeCompatibility {
   status: RuntimeCompatibilityStatus;
   message: string;
 }
-const RUNTIME_COMPATIBILITY_CHECKING_MESSAGE =
-  "正在请求 Runtime /list-apps，以确认该智能体是否支持 Studio 对话。";
-const RUNTIME_COMPATIBILITY_EMPTY_MESSAGE =
-  "Runtime /list-apps 未返回可用的 Agent，暂时无法连接对话。";
 const runtimePageRequests = new Map<
   string,
   Promise<{ runtimes: CloudRuntime[]; nextToken: string }>
@@ -132,10 +125,13 @@ function runtimeCompatibilityKey(agent: MyAgentCardData): string {
     : "";
 }
 
-function runtimeCompatibilityFailure(error: unknown): RuntimeCompatibility {
+function runtimeCompatibilityFailure(
+  error: unknown,
+  t: TFunction<"ui">,
+): RuntimeCompatibility {
   const message = error instanceof Error && error.message.trim()
     ? error.message.trim()
-    : "Runtime /list-apps 请求失败，未返回可识别的错误信息。";
+    : t("myAgents.compatibility.unknownError");
   return {
     status: error instanceof RuntimeProbeError && error.unsupported
       ? "unsupported"
@@ -209,24 +205,25 @@ export function formatCardUpdateLabel(value: string, nowMs = Date.now()): string
 export function formatSandboxRemainingTime(
   expireAt: string,
   nowMs = Date.now(),
+  t: TFunction<"ui">,
 ): string {
   const expireTime = Date.parse(expireAt);
   if (!Number.isFinite(expireTime) || expireTime - nowMs < 60_000) {
-    return "即将清空";
+    return t("myAgents.expiringSoon");
   }
   const remainingMinutes = Math.ceil((expireTime - nowMs) / 60_000);
   const hours = Math.floor(remainingMinutes / 60);
   const minutes = remainingMinutes % 60;
-  return `${hours} 小时 ${minutes} 分钟`;
+  return t("myAgents.sandboxRemaining", { hours, minutes });
 }
 
-function runtimeToAgent(runtime: CloudRuntime): MyAgentCardData {
+function runtimeToAgent(runtime: CloudRuntime, t: TFunction<"ui">): MyAgentCardData {
   return {
     id: runtime.runtimeId,
     name: runtime.name,
-    description: runtime.description?.trim() || "暂无描述",
+    description: runtime.description?.trim() || t("common.noDescription"),
     createdAt: runtime.createdAt ?? "",
-    specificationLabel: "创建人",
+    specificationLabel: t("myAgents.creator"),
     specification: formatResourceCreator(runtime.author),
     isMine: runtime.isMine,
     runtime: {
@@ -238,13 +235,16 @@ function runtimeToAgent(runtime: CloudRuntime): MyAgentCardData {
   };
 }
 
-function sandboxToAgent(session: SandboxAgentResource): MyAgentCardData {
+function sandboxToAgent(session: SandboxAgentResource, t: TFunction<"ui">): MyAgentCardData {
+  const normalizedStatus = session.status.trim().toLowerCase();
   return {
     id: session.id,
-    name: session.displayName || `${session.toolName} 智能体`,
-    description: sandboxStatusLabel(session.status),
+    name: session.displayName || t("myAgents.namedAgent", { name: session.toolName }),
+    description: t(`myAgents.sandboxStatus.${normalizedStatus}`, {
+      defaultValue: t("myAgents.sandboxStatus.unknown"),
+    }),
     createdAt: session.createdAt,
-    specificationLabel: "创建人",
+    specificationLabel: t("myAgents.creator"),
     specification: formatResourceCreator(session.createdBy),
     isMine: session.isMine,
     region: session.region,
@@ -252,14 +252,14 @@ function sandboxToAgent(session: SandboxAgentResource): MyAgentCardData {
   };
 }
 
-function draftToAgent(item: WorkspaceAgentDraft): MyAgentCardData {
+function draftToAgent(item: WorkspaceAgentDraft, t: TFunction<"ui">): MyAgentCardData {
   return {
     id: item.id,
-    name: item.draft.name || "未命名 Agent",
-    description: item.draft.description?.trim() || "暂无描述",
+    name: item.draft.name || t("agentSelector.unnamedAgent"),
+    description: item.draft.description?.trim() || t("common.noDescription"),
     createdAt: new Date(item.updatedAt).toISOString(),
-    specificationLabel: "存储位置",
-    specification: "当前浏览器",
+    specificationLabel: t("myAgents.storageLocation"),
+    specification: t("myAgents.currentBrowser"),
     isMine: true,
     region: item.deploymentTarget?.region,
     draft: item,
@@ -269,6 +269,7 @@ function draftToAgent(item: WorkspaceAgentDraft): MyAgentCardData {
 function runtimeDetailTargetForCard(
   agent: MyAgentCardData,
   runtimeAgents: MyAgentCardData[],
+  t: TFunction<"ui">,
 ): MyAgentCardData | null {
   if (!agent.draft) return agent;
   const target = agent.draft.deploymentTarget;
@@ -282,7 +283,7 @@ function runtimeDetailTargetForCard(
     name: target.name || agent.name,
     description: agent.description,
     createdAt: agent.createdAt,
-    specificationLabel: "地域",
+    specificationLabel: t("myAgents.region"),
     specification: target.region,
     isMine: true,
     runtime: {
@@ -306,12 +307,13 @@ async function loadRuntimeAgents(
   region: string,
   nextToken: string,
   onList: (agents: MyAgentCardData[]) => void,
+  t: TFunction<"ui">,
   signal?: AbortSignal,
 ): Promise<string> {
   const requestKey = `${runtimeScope}:${region}:${nextToken}`;
   const cached = runtimePageCache.get(requestKey);
   if (cached && cached.expiresAt > Date.now()) {
-    onList(cached.page.runtimes.map(runtimeToAgent));
+    onList(cached.page.runtimes.map((runtime) => runtimeToAgent(runtime, t)));
     return cached.page.nextToken;
   }
   if (cached) runtimePageCache.delete(requestKey);
@@ -335,7 +337,7 @@ async function loadRuntimeAgents(
     page,
     expiresAt: Date.now() + RUNTIME_PAGE_CACHE_TTL_MS,
   });
-  onList(page.runtimes.map(runtimeToAgent));
+  onList(page.runtimes.map((runtime) => runtimeToAgent(runtime, t)));
   return page.nextToken;
 }
 
@@ -368,6 +370,7 @@ function AgentCard({
   onEditDraft?: (draft: WorkspaceAgentDraft) => void;
   onDeleteDraft?: (draft: WorkspaceAgentDraft) => void;
 }) {
+  const { t, i18n } = useTranslation("ui");
   const sandboxStatus = agent.sandbox?.status.toLowerCase();
   const wakeable = agent.sandbox?.resourceType === "snapshot";
   const actionable = Boolean(
@@ -394,11 +397,11 @@ function AgentCard({
     : actionable && Boolean(deploymentTask ? onViewDeploymentTask : onViewDetails);
   const cardTargetLabel = agent.draft
     ? deploymentTask
-      ? `查看 ${agent.name} 部署进度`
-      : `查看 ${agent.name} Runtime 详情`
+      ? t("myAgents.viewDeploymentProgress", { name: agent.name })
+      : t("myAgents.viewRuntimeDetails", { name: agent.name })
     : deploymentTask
-      ? `查看 ${agent.name} 部署进度`
-      : `查看 ${agent.name} 详情`;
+      ? t("myAgents.viewDeploymentProgress", { name: agent.name })
+      : t("myAgents.viewDetails", { name: agent.name });
   return (
     <ResourceCard
       className={connecting ? "my-agent-card is-connecting" : "my-agent-card"}
@@ -417,18 +420,18 @@ function AgentCard({
               className: "my-agent-region",
             },
             {
-              label: "时间",
-              value: formatCardUpdateLabel(agent.createdAt, nowMs),
+              label: t("myAgents.time"),
+              value: formatRelativeTimeLabel(agent.createdAt, nowMs, i18n.resolvedLanguage ?? i18n.language),
               hideLabel: true,
               className: "my-agent-created-at",
             },
             ...(agent.sandbox ? [{
-              label: "剩余时间",
+              label: t("myAgents.remainingTime"),
               value: agent.sandbox.resourceType === "snapshot"
-                ? "可唤醒"
+                ? t("myAgents.wakeable")
                 : agent.sandbox.persistent
-                  ? "永不过期"
-                  : formatSandboxRemainingTime(agent.sandbox.expireAt, nowMs),
+                  ? t("myAgents.neverExpires")
+                  : formatSandboxRemainingTime(agent.sandbox.expireAt, nowMs, t),
               className: `my-agent-expiry${
                 agent.sandbox.resourceType === "session" && agent.sandbox.persistent
                   ? ""
@@ -442,20 +445,20 @@ function AgentCard({
         <>
           <ResourceCardAction
             aria-label={deploymentTask
-              ? `查看 ${agent.name} 部署进度`
-              : `编辑草稿 ${agent.name}`}
+              ? t("myAgents.viewDeploymentProgress", { name: agent.name })
+              : t("myAgents.editDraftNamed", { name: agent.name })}
             onClick={() => deploymentTask
               ? onViewDeploymentTask?.(deploymentTask)
               : onEditDraft?.(agent.draft!)}
           >
-            {deploymentTask ? "查看进度" : "编辑"}
+            {deploymentTask ? t("myAgents.viewProgress") : t("common.edit")}
           </ResourceCardAction>
           <ResourceCardAction
             tone="danger"
-            aria-label={`删除草稿 ${agent.name}`}
+            aria-label={t("myAgents.deleteDraftNamed", { name: agent.name })}
             onClick={() => onDeleteDraft?.(agent.draft!)}
           >
-            删除
+            {t("common.delete")}
           </ResourceCardAction>
         </>
       ) : compatibilityFailed || incompatible ? (
@@ -464,11 +467,11 @@ function AgentCard({
           color="primary"
           size="sm"
           pill={false}
-          aria-label={`重新检测 ${agent.name} 的对话兼容性`}
+          aria-label={t("myAgents.recheckCompatibility", { name: agent.name })}
           onClick={() => onRetryCompatibility?.(agent)}
         >
           <ArrowRotateCw />
-          重试
+          {t("common.retry")}
         </Button>
       ) : (
         <ResourceCardRevealAction
@@ -476,16 +479,16 @@ function AgentCard({
           disabled={!actionable || checkingCompatibility || incompatible || connecting || connected}
           aria-busy={connecting || undefined}
           label={connected
-            ? `${agent.name} 已连接`
+            ? t("myAgents.connectedNamed", { name: agent.name })
             : wakeable
-              ? `唤醒 ${agent.name} 并开始对话`
-              : `与 ${agent.name} 对话`}
+              ? t("myAgents.wakeAndChat", { name: agent.name })
+              : t("myAgents.chatWith", { name: agent.name })}
           onClick={() => void onUse?.(agent)}
         >
           {connecting ? (
             <>
               <span className="my-agent-use-spinner" aria-hidden="true" />
-              <span className="sr-only">{wakeable ? "唤醒中" : "连接中"}</span>
+              <span className="sr-only">{wakeable ? t("myAgents.waking") : t("agentSelector.connecting")}</span>
             </>
           ) : (
             <AgentUseIcon />
@@ -505,9 +508,9 @@ function AgentCard({
         ) : undefined}
         status={agent.draft ? (
           deploymentTask ? (
-            <span className="my-agent-deploying-badge">部署中</span>
+            <span className="my-agent-deploying-badge">{t("myAgents.deploying")}</span>
           ) : (
-            <span className="my-agent-draft-badge">草稿</span>
+            <span className="my-agent-draft-badge">{t("myAgents.draft")}</span>
           )
           ) : agent.sandbox ? (
             <span
@@ -518,7 +521,7 @@ function AgentCard({
               {agent.description}
             </span>
           ) : agent.runtime && deploymentTask ? (
-            <span className="my-agent-deploying-badge">部署中</span>
+            <span className="my-agent-deploying-badge">{t("myAgents.deploying")}</span>
           ) : checkingCompatibility ? (
             <Tooltip
               content={compatibility?.message}
@@ -537,7 +540,7 @@ function AgentCard({
                   pill
                 >
                   <span className="my-agent-compatibility-spinner" aria-hidden="true" />
-                  <span>检测中</span>
+                  <span>{t("myAgents.checking")}</span>
                 </Badge>
               </span>
             </Tooltip>
@@ -558,7 +561,7 @@ function AgentCard({
                   size="sm"
                   pill
                 >
-                  不支持对话
+                  {t("myAgents.chatUnsupported")}
                 </Badge>
               </span>
             </Tooltip>
@@ -579,7 +582,7 @@ function AgentCard({
                   size="sm"
                   pill
                 >
-                  检测失败
+                  {t("myAgents.checkFailed")}
                 </Badge>
               </span>
             </Tooltip>
@@ -645,6 +648,7 @@ export function MyAgents({
   onEditDraft,
   onDeleteDraft,
 }: MyAgentsProps) {
+  const { t } = useTranslation("ui");
   const resultsRef = useRef<HTMLElement>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const runtimeRequestRef = useRef(0);
@@ -671,6 +675,11 @@ export function MyAgents({
   >({});
   const [draftToDelete, setDraftToDelete] = useState<WorkspaceAgentDraft | null>(null);
   const [remainingTimeNow, setRemainingTimeNow] = useState(() => Date.now());
+  const agentTypeOptions = useMemo<Array<ResourceFilterOption<AgentType>>>(() =>
+    AGENT_TYPES.map((id) => ({
+      value: id,
+      label: t(`myAgents.agentTypes.${id}`),
+    })), [t]);
   const regionFilterOptions = useMemo<Array<ResourceFilterOption<string>>>(() => {
     const providerOptions: Array<ResourceFilterOption<string>> =
       cloudRegionOptions(cloudProvider);
@@ -697,7 +706,10 @@ export function MyAgents({
     return () => window.clearInterval(timer);
   }, []);
 
-  const draftAgents = useMemo(() => drafts.map(draftToAgent), [drafts]);
+  const draftAgents = useMemo(
+    () => drafts.map((draft) => draftToAgent(draft, t)),
+    [drafts, t],
+  );
   const activeDeploymentTasks = useMemo(() => {
     const byId = new Map<string, DeploymentTaskUpdate>();
     const byDraftId = new Map<string, DeploymentTaskUpdate>();
@@ -743,14 +755,14 @@ export function MyAgents({
     return loadRuntimeAgents(ownership, region, token, (agents) => {
       if (runtimeRequestRef.current !== requestId) return;
       setRuntimeAgents((current) => reset ? agents : [...current, ...agents]);
-    }, controller.signal)
+    }, t, controller.signal)
       .then((nextToken) => {
         if (runtimeRequestRef.current === requestId) setRuntimeNextToken(nextToken);
       })
       .catch((cause) => {
         if (runtimeRequestRef.current !== requestId) return;
         if (isAbortError(cause)) return;
-        setRuntimeError(formatRequestError(cause, "加载通用智能体", "GET /web/runtimes"));
+        setRuntimeError(formatRequestError(cause, t("myAgents.loadGeneralAgents"), "GET /web/runtimes"));
       })
       .finally(() => {
         if (runtimeRequestRef.current === requestId) setLoadingRuntimes(false);
@@ -758,7 +770,7 @@ export function MyAgents({
           runtimeListAbortRef.current = null;
         }
       });
-  }, [ownership, region]);
+  }, [ownership, region, t]);
 
   useEffect(() => {
     if (activeType !== "general") return;
@@ -823,12 +835,12 @@ export function MyAgents({
         if (!key) continue;
         const connected = agent.runtime?.runtimeId === connectedRuntimeId;
         if (connected && next[key]?.status !== "compatible") {
-          next[key] = { status: "compatible", message: "Runtime 支持 Studio 对话。" };
+          next[key] = { status: "compatible", message: t("myAgents.compatibility.supported") };
           changed = true;
         } else if (!connected && !next[key]) {
           next[key] = {
             status: "checking",
-            message: RUNTIME_COMPATIBILITY_CHECKING_MESSAGE,
+            message: t("myAgents.compatibility.checking"),
           };
           changed = true;
         }
@@ -853,14 +865,14 @@ export function MyAgents({
         setRuntimeCompatibility((current) => ({
           ...current,
           [key]: apps && apps.length > 0
-            ? { status: "compatible", message: "Runtime 支持 Studio 对话。" }
-            : { status: "unsupported", message: RUNTIME_COMPATIBILITY_EMPTY_MESSAGE },
+            ? { status: "compatible", message: t("myAgents.compatibility.supported") }
+            : { status: "unsupported", message: t("myAgents.compatibility.empty") },
         }));
       } catch (error) {
         if (controller.signal.aborted || (error as Error)?.name === "AbortError") return;
         setRuntimeCompatibility((current) => ({
           ...current,
-          [key]: runtimeCompatibilityFailure(error),
+          [key]: runtimeCompatibilityFailure(error, t),
         }));
       } finally {
         if (runtimeCompatibilityAbortRef.current.get(key) === controller) {
@@ -868,7 +880,7 @@ export function MyAgents({
         }
       }
     });
-  }, [activeType, connectedRuntimeId, region, runtimeAgents]);
+  }, [activeType, connectedRuntimeId, region, runtimeAgents, t]);
 
   useEffect(() => () => {
     runtimeListAbortRef.current?.abort();
@@ -897,13 +909,13 @@ export function MyAgents({
             autoResumeSnapshots: true,
           });
       if (sandboxRequestRef.current !== requestId) return;
-      setSandboxAgents(sessions.map(sandboxToAgent));
+      setSandboxAgents(sessions.map((session) => sandboxToAgent(session, t)));
     } catch (cause) {
       if ((cause as Error)?.name === "AbortError") return;
       if (sandboxRequestRef.current !== requestId) return;
       setSandboxError(formatRequestError(
         cause,
-        `加载 ${AGENT_TYPES.find((item) => item.id === type)?.label ?? type}`,
+        t("myAgents.loadAgentType", { type: t(`myAgents.agentTypes.${type}`) }),
         `GET /web/${type === "codex" ? "sandbox" : type}/sessions`,
       ));
     } finally {
@@ -912,7 +924,7 @@ export function MyAgents({
         setLoadingSandboxAgents(false);
       }
     }
-  }, []);
+  }, [t]);
 
   function selectAgentType(type: AgentType) {
     if (type === activeType) return;
@@ -1008,7 +1020,7 @@ export function MyAgents({
       ...current,
       [key]: {
         status: "checking",
-        message: RUNTIME_COMPATIBILITY_CHECKING_MESSAGE,
+        message: t("myAgents.compatibility.checking"),
       },
     }));
     runtimeCompatibilityAbortRef.current.get(key)?.abort();
@@ -1027,21 +1039,21 @@ export function MyAgents({
       setRuntimeCompatibility((current) => ({
         ...current,
         [key]: apps && apps.length > 0
-          ? { status: "compatible", message: "Runtime 支持 Studio 对话。" }
-          : { status: "unsupported", message: RUNTIME_COMPATIBILITY_EMPTY_MESSAGE },
+          ? { status: "compatible", message: t("myAgents.compatibility.supported") }
+          : { status: "unsupported", message: t("myAgents.compatibility.empty") },
       }));
     } catch (error) {
       if (controller.signal.aborted || isAbortError(error)) return;
       setRuntimeCompatibility((current) => ({
         ...current,
-        [key]: runtimeCompatibilityFailure(error),
+        [key]: runtimeCompatibilityFailure(error, t),
       }));
     } finally {
       if (runtimeCompatibilityAbortRef.current.get(key) === controller) {
         runtimeCompatibilityAbortRef.current.delete(key);
       }
     }
-  }, []);
+  }, [t]);
 
   const prepareRuntimeUpdate = useCallback((agent: MyAgentCardData) => {
     const runtime = agent.runtime;
@@ -1133,8 +1145,9 @@ export function MyAgents({
     };
   }, [activeType, canUpdate, deploymentTaskForAgent, visibleAgents]);
 
-  const activeTypeInfo = AGENT_TYPES.find((type) => type.id === activeType);
-  const activeLabel = activeTypeInfo?.label ?? "智能体";
+  const activeLabel = t(`myAgents.agentTypes.${activeType}`, {
+    defaultValue: t("myAgents.agent"),
+  });
   const showInitialLoading = activeType === "general"
     ? loadingRuntimes && runtimeAgents.length === 0 && draftAgents.length === 0
     : loadingSandboxAgents && sandboxAgents.length === 0;
@@ -1153,41 +1166,41 @@ export function MyAgents({
     Boolean(onOpenCodexProjectUpload);
 
   return (
-    <ResourcePageShell className="my-agents-page" aria-label="智能体">
-      <ResourcePageHeader title="智能体" className="my-agents-header" />
+    <ResourcePageShell className="my-agents-page" aria-label={t("myAgents.agent")}>
+      <ResourcePageHeader title={t("myAgents.agent")} className="my-agents-header" />
 
       <ResourceToolbar className="my-agent-toolbar">
         <ResourceTabs
           idPrefix="my-agent-ownership"
-          ariaLabel="创建人筛选"
+          ariaLabel={t("myAgents.creatorFilter")}
           value={ownership}
           items={[
-            { id: "all", label: "全部", disabled: runtimeScope === "mine" },
-            { id: "mine", label: "我创建的" },
+            { id: "all", label: t("common.all"), disabled: runtimeScope === "mine" },
+            { id: "mine", label: t("agentSelector.createdByMe") },
           ]}
           onChange={selectOwnership}
         />
         <div className="resource-toolbar__actions">
           <ResourceFilterSelect
             id="my-agent-type-filter"
-            ariaLabel="智能体类型"
+            ariaLabel={t("myAgents.agentType")}
             value={activeType}
-            options={AGENT_TYPE_OPTIONS}
+            options={agentTypeOptions}
             onChange={selectAgentType}
           />
           <ResourceFilterSelect
             id="my-agent-region-filter"
-            ariaLabel="区域"
+            ariaLabel={t("myAgents.region")}
             value={region}
             options={regionFilterOptions}
             onChange={selectRegion}
           />
           <ResourceSearch
             className="my-agent-search"
-            aria-label="搜索智能体"
+            aria-label={t("myAgents.searchAgents")}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="搜索"
+            placeholder={t("common.search")}
           />
           {showCodexProjectUpload ? (
             <button
@@ -1196,7 +1209,7 @@ export function MyAgents({
               onClick={onOpenCodexProjectUpload}
             >
               <HandoffIcon />
-              <span>接力</span>
+              <span>{t("myAgents.handoff")}</span>
             </button>
           ) : null}
         </div>
@@ -1205,7 +1218,7 @@ export function MyAgents({
       <ResourceResults
         className="my-agent-results"
         ref={resultsRef}
-        aria-label={`${activeLabel}列表`}
+        aria-label={t("myAgents.agentList", { type: activeLabel })}
       >
         {showInitialLoading ? (
           <ResourceLoadingState />
@@ -1222,7 +1235,7 @@ export function MyAgents({
                 }
               }}
             >
-              重新加载
+              {t("common.reload")}
             </button>
           </div>
         ) : showEmpty && !createAgent ? (
@@ -1232,8 +1245,8 @@ export function MyAgents({
                 <EmptyMessage.Icon>
                   <Explore />
                 </EmptyMessage.Icon>
-                <EmptyMessage.Title>没有匹配的智能体</EmptyMessage.Title>
-                <EmptyMessage.Description>请尝试调整搜索或筛选条件</EmptyMessage.Description>
+                <EmptyMessage.Title>{t("myAgents.noMatchingAgents")}</EmptyMessage.Title>
+                <EmptyMessage.Description>{t("myAgents.adjustSearch")}</EmptyMessage.Description>
               </EmptyMessage>
             </div>
           ) : activeType !== "general" ? (
@@ -1243,7 +1256,7 @@ export function MyAgents({
                   <AgentTypeIcon type={activeType} />
                 </EmptyMessage.Icon>
                 <EmptyMessage.Title className="my-agent-sandbox-empty-title">
-                  暂无 {activeLabel}
+                  {t("myAgents.noAgentType", { type: activeLabel })}
                 </EmptyMessage.Title>
               </EmptyMessage>
             </div>
@@ -1253,9 +1266,9 @@ export function MyAgents({
                 <EmptyMessage.Icon>
                   <AgentFaceIcon />
                 </EmptyMessage.Icon>
-                <EmptyMessage.Title>暂无通用智能体</EmptyMessage.Title>
+                <EmptyMessage.Title>{t("myAgents.noGeneralAgents")}</EmptyMessage.Title>
                 <EmptyMessage.Description>
-                  创建一个通用智能体，开始构建和对话
+                  {t("myAgents.createGeneralAgentDescription")}
                 </EmptyMessage.Description>
               </EmptyMessage>
             </div>
@@ -1266,7 +1279,7 @@ export function MyAgents({
               <div className="my-agent-inline-error" role="alert">
                 <span>{runtimeError}</span>
                 <button type="button" onClick={() => void fetchRuntimePage("", true)}>
-                  重新加载
+                  {t("common.reload")}
                 </button>
               </div>
             ) : null}
@@ -1274,15 +1287,15 @@ export function MyAgents({
               {createAgent ? (
                 <ResourceCreateCard
                   className="my-agent-create-card"
-                  aria-label={`创建${activeLabel}`}
+                  aria-label={t("myAgents.createAgentType", { type: activeLabel })}
                   onClick={createAgent}
                   icon={<AddIcon />}
                 >
-                  创建智能体
+                  {t("myAgents.createAgent")}
                 </ResourceCreateCard>
               ) : null}
               {visibleAgents.map((agent) => {
-                const detailTarget = runtimeDetailTargetForCard(agent, runtimeAgents);
+                const detailTarget = runtimeDetailTargetForCard(agent, runtimeAgents, t);
                 return (
                   <AgentCard
                     key={agent.id}
@@ -1294,7 +1307,7 @@ export function MyAgents({
                     compatibility={agent.runtime
                       ? runtimeCompatibility[runtimeCompatibilityKey(agent)] ?? {
                           status: "checking",
-                          message: RUNTIME_COMPATIBILITY_CHECKING_MESSAGE,
+                          message: t("myAgents.compatibility.checking"),
                         }
                       : undefined}
                     onRetryCompatibility={retryRuntimeCompatibility}
@@ -1323,21 +1336,23 @@ export function MyAgents({
             {loadingRuntimes ? (
               <>
                 <span className="my-agent-loading-mark" aria-hidden="true" />
-                <span>正在加载更多智能体</span>
+                <span>{t("myAgents.loadingMore")}</span>
               </>
             ) : runtimeNextToken ? (
-              <span>继续下滑加载更多</span>
+              <span>{t("myAgents.scrollForMore")}</span>
             ) : (
-              <span>已加载全部智能体</span>
+              <span>{t("myAgents.allLoaded")}</span>
             )}
           </div>
         )}
       </ResourceResults>
       {draftToDelete ? (
         <StudioConfirmDialog
-          title="删除草稿？"
-          description={`删除后将无法恢复“${draftToDelete.draft.name || "未命名 Agent"}”。`}
-          confirmLabel="删除草稿"
+          title={t("myAgents.deleteDraftTitle")}
+          description={t("myAgents.deleteDraftDescription", {
+            name: draftToDelete.draft.name || t("agentSelector.unnamedAgent"),
+          })}
+          confirmLabel={t("myAgents.deleteDraft")}
           variant="danger"
           onCancel={() => setDraftToDelete(null)}
           onConfirm={() => {

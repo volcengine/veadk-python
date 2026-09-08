@@ -8,6 +8,8 @@ import {
   type SVGProps,
 } from "react";
 import { createPortal } from "react-dom";
+import { useTranslation } from "react-i18next";
+import { i18n } from "../i18n/runtime";
 import { TextShimmer } from "./text-shimmer/TextShimmer";
 import "./ShareMessageDialog.css";
 
@@ -191,7 +193,7 @@ function createConversationExport(targetTurn: HTMLElement): HTMLElement {
 
   const exportNote = document.createElement("p");
   exportNote.className = "share-message-export-note";
-  exportNote.textContent = "上述会话由 AgentKit Studio 导出，仅供参考";
+  exportNote.textContent = i18n.t("share.exportNote", { ns: "conversation" });
   exportRoot.append(exportNote);
 
   document.body.append(exportRoot);
@@ -378,7 +380,7 @@ function canvasBlob(canvas: HTMLCanvasElement): Promise<Blob> {
   return new Promise((resolve, reject) => {
     canvas.toBlob((blob) => {
       if (blob) resolve(blob);
-      else reject(new Error("图片生成失败，请重试。"));
+      else reject(new Error(i18n.t("share.imageFailed", { ns: "conversation" })));
     }, "image/png");
   });
 }
@@ -398,7 +400,7 @@ async function splitExportChunk(
       canvas.width = width;
       canvas.height = page.height;
       const context = canvas.getContext("2d");
-      if (!context) throw new Error("浏览器无法生成会话图片，请重试。");
+      if (!context) throw new Error(i18n.t("share.browserUnsupported", { ns: "conversation" }));
       context.drawImage(
         bitmap,
         0,
@@ -463,7 +465,7 @@ async function generateShareImages(
             animation: "none",
           },
         });
-        if (!blob) throw new Error("图片生成失败，请重试。");
+        if (!blob) throw new Error(i18n.t("share.imageFailed", { ns: "conversation" }));
         pages.push(...(await splitExportChunk(blob, width, chunk)));
       } finally {
         exportChunk.remove();
@@ -622,6 +624,7 @@ export function ShareMessageDialog({
   targetTurn,
   onClose,
 }: ShareMessageDialogProps) {
+  const { t } = useTranslation("conversation");
   const titleId = useId();
   const descriptionId = useId();
   const formatLabelId = useId();
@@ -702,7 +705,7 @@ export function ShareMessageDialog({
         await waitForDialogPaint();
         if (disposed) return;
         const pages = await generateShareImages(targetTurn);
-        if (pages.length === 0) throw new Error("图片生成失败，请重试。");
+        if (pages.length === 0) throw new Error(t("share.imageFailed"));
         objectUrl = URL.createObjectURL(pages[0].blob);
         if (disposed) {
           URL.revokeObjectURL(objectUrl);
@@ -733,7 +736,7 @@ export function ShareMessageDialog({
     setError("");
     try {
       if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
-        throw new Error("当前浏览器不支持复制图片，请下载后使用。");
+        throw new Error(t("share.copyUnsupported"));
       }
       await navigator.clipboard.write([
         new ClipboardItem({ "image/png": firstPage.blob }),
@@ -798,7 +801,7 @@ export function ShareMessageDialog({
       }
     } catch (cause) {
       if (mountedRef.current) {
-        setError(cause instanceof Error ? cause.message : "导出失败，请重试。");
+        setError(cause instanceof Error ? cause.message : t("share.exportFailed"));
       }
     } finally {
       if (mountedRef.current) setDownloadState("idle");
@@ -825,17 +828,15 @@ export function ShareMessageDialog({
       >
         <header className="share-message-head">
           <div>
-            <h2 id={titleId}>导出会话</h2>
-            <p id={descriptionId}>
-              选择格式并下载截至当前回复的全部输入与输出。
-            </p>
+            <h2 id={titleId}>{t("share.title")}</h2>
+            <p id={descriptionId}>{t("share.description")}</p>
           </div>
           <button
             ref={closeButtonRef}
             type="button"
             className="share-message-close"
-            aria-label="关闭"
-            title="关闭"
+            aria-label={t("share.close")}
+            title={t("share.close")}
             onClick={onClose}
           >
             <CloseIcon />
@@ -845,26 +846,26 @@ export function ShareMessageDialog({
         <div className="share-message-body">
           {generationState === "generating" ? (
             <div className="share-message-generating" role="status">
-              <TextShimmer>正在生成导出内容…</TextShimmer>
+              <TextShimmer>{t("share.generatingContent")}</TextShimmer>
             </div>
           ) : generationState === "error" ? (
             <div className="share-message-failure">
-              <p role="alert">{error || "图片生成失败，请重试。"}</p>
+              <p role="alert">{error || t("share.imageFailed")}</p>
               <button
                 type="button"
                 onClick={() => setGenerationAttempt((attempt) => attempt + 1)}
               >
-                重试生成
+                {t("share.retry")}
               </button>
             </div>
           ) : (
             <figure className="share-message-preview">
               <figcaption className="share-message-preview-meta">
-                预览第 1 页，共 {imagePages.length} 页
+                {t("share.previewPage", { count: imagePages.length })}
               </figcaption>
               <img
                 src={imageUrl}
-                alt={`会话导出内容第 1 页，共 ${imagePages.length} 页`}
+                alt={t("share.previewAlt", { count: imagePages.length })}
               />
             </figure>
           )}
@@ -877,7 +878,7 @@ export function ShareMessageDialog({
 
         <div className="share-message-options">
           <span id={formatLabelId} className="share-message-format-label">
-            导出格式
+            {t("share.format")}
           </span>
           <div
             className="share-message-format"
@@ -906,7 +907,7 @@ export function ShareMessageDialog({
         <footer className="share-message-actions">
           <span className="share-message-download-status" aria-live="polite">
             {downloadState === "downloading"
-              ? `正在生成 ${exportFormat.toUpperCase()}…`
+              ? t("share.generatingFormat", { format: exportFormat.toUpperCase() })
               : ""}
           </span>
           {exportFormat === "png" && (
@@ -920,14 +921,14 @@ export function ShareMessageDialog({
               }
             >
               {copyState === "copying"
-                ? "正在复制…"
+                ? t("share.copying")
                 : copyState === "copied"
                   ? imagePages.length > 1
-                    ? "已复制第一页"
-                    : "已复制"
+                    ? t("share.copiedFirst")
+                    : t("share.copied")
                   : imagePages.length > 1
-                    ? "复制第一页"
-                    : "复制图片"}
+                    ? t("share.copyFirst")
+                    : t("share.copyImage")}
             </button>
           )}
           <button
@@ -941,10 +942,10 @@ export function ShareMessageDialog({
             }
           >
             {downloadState === "downloading"
-              ? "正在生成…"
+              ? t("share.generating")
               : exportFormat === "png" && imagePages.length > 1
-                ? `下载 PNG 压缩包（${imagePages.length} 页）`
-                : `下载 ${exportFormat.toUpperCase()}`}
+                ? t("share.downloadArchive", { count: imagePages.length })
+                : t("share.downloadFormat", { format: exportFormat.toUpperCase() })}
           </button>
         </footer>
       </section>

@@ -428,13 +428,13 @@ export function buildEnvironmentDockerfile(
     "",
     "WORKDIR /workspace",
     "",
-    "# VeADK: Agent 开发与运行框架",
+    "# VeADK",
     "RUN python -m pip install --upgrade veadk-python",
   );
 
   let browserInstalled = false;
   for (const option of selected) {
-    lines.push("", `# ${option.label}: ${option.description}`);
+    lines.push("", `# ${option.label}`);
     if (option.id === "opencli") {
       lines.push(
         "RUN node_arch=\"$(dpkg --print-architecture)\" \\",

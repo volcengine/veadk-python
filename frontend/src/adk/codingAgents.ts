@@ -1,4 +1,5 @@
 import { studioFetch } from "./client";
+import { adkT } from "./i18n";
 import { BOOT_REQUEST_TIMEOUT_MS, DEFAULT_REQUEST_TIMEOUT_MS } from "./timeout";
 
 export type CodingAgentId = "trae" | "claude-code" | "codex";
@@ -75,7 +76,7 @@ async function codingAgentFetch<T>(
     } catch {
       // The status below is still useful when the server returns no JSON body.
     }
-    throw new Error(detail || `请求失败 (${response.status})`);
+    throw new Error(detail || adkT("common.requestFailed", { status: response.status }));
   }
   return response.json() as Promise<T>;
 }

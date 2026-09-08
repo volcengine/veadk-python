@@ -35,7 +35,6 @@ from google.adk.agents.context_cache_config import ContextCacheConfig
 from google.adk.agents.llm_agent import InstructionProvider, ToolUnion
 from google.adk.agents.run_config import ToolThreadPoolConfig
 from google.adk.examples.base_example_provider import BaseExampleProvider
-from google.adk.models.lite_llm import LiteLlm
 from pydantic import ConfigDict, Field
 from typing_extensions import Any
 
@@ -47,6 +46,7 @@ from veadk.memory.long_term_memory import (
     MemoryAutoSavePolicyInput,
 )
 from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.models.retrying_lite_llm import RetryingLiteLlm
 from veadk.processors import BaseRunProcessor, NoOpRunProcessor
 from veadk.prompts.agent_default_prompt import (
     DEFAULT_DESCRIPTION,
@@ -320,7 +320,7 @@ class Agent(LlmAgent):
                     **self.model_extra_config,
                 )
             else:
-                self.model = LiteLlm(
+                self.model = RetryingLiteLlm(
                     model=f"{self.model_provider}/{model_name}",
                     api_key=self.model_api_key,
                     api_base=self.model_api_base,

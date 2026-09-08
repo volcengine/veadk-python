@@ -59,11 +59,11 @@ test("renders Runtime instance inputs with memory-aware and Sidecar-safe default
   assert.match(projectPreviewSource, /min < 0/);
   assert.match(
     projectPreviewSource,
-    /最小实例数必须为大于等于 0 的整数，最大实例数必须为大于 0 的整数。/,
+    /t\("projectPreview\.errors\.instanceRangeInteger"\)/,
   );
   assert.match(
     projectPreviewSource,
-    /inMemorySession \|\| sidecarEnabled[\s\S]*?className="pp-instance-note"[\s\S]*?Harness Sidecar 首期仅支持单实例，Runtime 固定为 1～1[\s\S]*?为避免多实例间会话丢失，推荐将 Runtime 固定为 1～1/,
+    /inMemorySession \|\| sidecarEnabled[\s\S]*?className="pp-instance-note"[\s\S]*?projectPreview\.sidecarSingleInstance[\s\S]*?projectPreview\.inMemorySingleInstance/,
   );
   assert.match(
     projectPreviewStyles,
@@ -74,34 +74,34 @@ test("renders Runtime instance inputs with memory-aware and Sidecar-safe default
 test("renders the Runtime update progress step conditionally", () => {
   assert.match(
     projectPreviewSource,
-    /deploymentStepsWithInstanceUpdate = needsInstanceUpdate[\s\S]*?\[\.\.\.baseDeploymentSteps, INSTANCE_UPDATE_STEP\][\s\S]*?: baseDeploymentSteps[\s\S]*?deploymentStepsBeforeGithub = effectiveCreateEvaluationSets[\s\S]*?EVALUATION_SET_STEP[\s\S]*?pendingGithubCicd[\s\S]*?GITHUB_SYNC_STEP/,
+    /deploymentStepsWithInstanceUpdate = needsInstanceUpdate[\s\S]*?\[\.\.\.baseDeploymentSteps, \{ phase: "update", label: t\("projectPreview\.steps\.updateInstances"\) \}\][\s\S]*?: baseDeploymentSteps[\s\S]*?deploymentStepsBeforeGithub = effectiveCreateEvaluationSets[\s\S]*?projectPreview\.steps\.createEvaluationSets[\s\S]*?pendingGithubCicd[\s\S]*?projectPreview\.steps\.syncCode/,
   );
   assert.match(
     workspaceSource,
-    /if \(task\.instanceRange\) steps\.push\(instanceUpdateStep\(task\.instanceRange\)\)/,
+    /if \(task\.instanceRange\) steps\.push\(instanceUpdateStep\(task\.instanceRange, t\)\)/,
   );
   assert.match(
     workspaceSource,
-    /if \(task\.instanceRange\)[\s\S]*?if \(task\.createEvaluationSets\) steps\.push\(EVALUATION_SET_STEP\);[\s\S]*?if \(task\.githubDelivery\) steps\.push\(GITHUB_DELIVERY_STEP\)[\s\S]*?steps\.push\(DEPLOYMENT_STEPS\[DEPLOYMENT_STEPS\.length - 1\]\)/,
+    /if \(task\.instanceRange\)[\s\S]*?if \(task\.createEvaluationSets\)[\s\S]*?agentWorkspace\.deploymentSteps\.evaluation[\s\S]*?if \(task\.githubDelivery\)[\s\S]*?agentWorkspace\.deploymentSteps\.github[\s\S]*?steps\.push\(baseSteps\[baseSteps\.length - 1\]\)/,
   );
   assert.match(
     workspaceSource,
-    /phase: "update"[\s\S]*?label: "更新实例配置"[\s\S]*?将 Runtime 实例数调整为 \$\{range\.min\}～\$\{range\.max\}/,
+    /phase: "update"[\s\S]*?label: t\("agentWorkspace\.deploymentSteps\.update\.label"\)[\s\S]*?description: t\("agentWorkspace\.deploymentSteps\.update\.description", range\)/,
   );
 });
 
 test("renders the evaluation-set progress step only when selected", () => {
   assert.match(
     projectPreviewSource,
-    /phase: "evaluation"[\s\S]*?label: "创建评测集"/,
+    /phase: "evaluation"[\s\S]*?label: t\("projectPreview\.steps\.createEvaluationSets"\)/,
   );
   assert.match(
     projectPreviewSource,
-    /createEvaluationSets[\s\S]*?\[\.\.\.deploymentStepsWithInstanceUpdate, EVALUATION_SET_STEP\][\s\S]*?: deploymentStepsWithInstanceUpdate/,
+    /effectiveCreateEvaluationSets[\s\S]*?\[\.\.\.deploymentStepsWithInstanceUpdate, \{ phase: "evaluation", label: t\("projectPreview\.steps\.createEvaluationSets"\) \}\][\s\S]*?: deploymentStepsWithInstanceUpdate/,
   );
   assert.match(
     workspaceSource,
-    /task\.createEvaluationSets[\s\S]*?EVALUATION_SET_STEP/,
+    /task\.createEvaluationSets[\s\S]*?agentWorkspace\.deploymentSteps\.evaluation/,
   );
 });
 

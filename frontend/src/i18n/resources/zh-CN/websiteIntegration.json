@@ -1,0 +1,43 @@
+{
+  "title": "网站集成",
+  "description": "将 AgentKit Runtime 以悬浮聊天窗口嵌入网站",
+  "backToAutomations": "返回自动化列表",
+  "addWebsite": "添加网站",
+  "loadingRuntime": "正在加载 Runtime",
+  "selectRuntime": "选择 Runtime",
+  "websiteDomain": "网站域名",
+  "domainPlaceholder": "例如 xxxx.com 或 localhost:5173",
+  "generating": "正在生成",
+  "generateToken": "生成 Token",
+  "addedWebsites": "已添加网站",
+  "websiteCount_one": "{{count}} 个",
+  "websiteCount_other": "{{count}} 个",
+  "loadingIntegrations": "正在加载网站集成",
+  "delete": "删除",
+  "emptyTitle": "还没有网站集成",
+  "emptyDescription": "选择 Runtime 并输入网站域名即可生成 Token",
+  "embedMethod": "引入方法",
+  "embedInstructions": "将下面代码放到网页的 body 结束标签前",
+  "copied": "已复制",
+  "copyCode": "复制代码",
+  "embedHint": "添加网站后会在这里生成引入代码。",
+  "confirmDelete": "确定删除 {{domain}} 的网站集成吗？",
+  "errors": {
+    "load": "加载网站集成失败",
+    "create": "创建网站集成失败",
+    "delete": "删除网站集成失败",
+    "noConversationalAgent": "该 Runtime 暂未发现可对话的 Agent"
+  },
+  "widget": {
+    "requestFailed": "请求失败 ({{status}})",
+    "greeting": "您好，有什么可以帮您？",
+    "sessionFailed": "无法建立对话会话",
+    "unauthorized": "当前网站未获得对话授权",
+    "conversationFailed": "对话请求失败，请稍后重试",
+    "open": "打开智能体对话",
+    "close": "关闭智能体对话",
+    "panelLabel": "智能体对话面板",
+    "assistant": "智能体助手",
+    "online": "在线对话"
+  }
+}

@@ -2,6 +2,7 @@ import { memo, useEffect, useRef, useState } from "react";
 import type { ECharts, EChartsOption } from "echarts";
 import { parseEChartsOption } from "./echartsOption";
 import { TextShimmer } from "./text-shimmer/TextShimmer";
+import { useTranslation } from "react-i18next";
 
 type EChartsApi = typeof import("echarts");
 
@@ -20,9 +21,10 @@ function loadECharts(): Promise<EChartsApi> {
 }
 
 function EChartsDiagramImpl({ source }: EChartsDiagramProps) {
+  const { t } = useTranslation("conversation");
   const containerRef = useRef<HTMLDivElement>(null);
   const [ready, setReady] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<"invalid" | "render" | "">("");
 
   useEffect(() => {
     let cancelled = false;
@@ -38,7 +40,7 @@ function EChartsDiagramImpl({ source }: EChartsDiagramProps) {
       );
       setError("");
     } catch {
-      setError("ECharts 配置不是有效且安全的数据对象，请切换到代码检查内容。");
+      setError("invalid");
       return;
     }
 
@@ -57,7 +59,7 @@ function EChartsDiagramImpl({ source }: EChartsDiagramProps) {
       .catch(() => {
         chart?.dispose();
         chart = undefined;
-        if (!cancelled) setError("图表暂时无法渲染，请切换到代码检查内容。");
+        if (!cancelled) setError("render");
       });
 
     return () => {
@@ -71,17 +73,19 @@ function EChartsDiagramImpl({ source }: EChartsDiagramProps) {
     <div
       className={`echarts-diagram${error ? " echarts-diagram--error" : ""}`}
       role="img"
-      aria-label="ECharts 图表预览"
+      aria-label={t("visualization.echartsAria")}
       aria-busy={!ready && !error}
     >
       <div ref={containerRef} className="echarts-diagram__canvas" hidden={Boolean(error)} />
       {!ready && !error ? (
         <div className="echarts-diagram__state" aria-live="polite">
-          <TextShimmer duration={2.2} spread={15}>正在渲染图表…</TextShimmer>
+          <TextShimmer duration={2.2} spread={15}>{t("visualization.rendering")}</TextShimmer>
         </div>
       ) : null}
       {error ? (
-        <p className="echarts-diagram__error" role="alert">{error}</p>
+        <p className="echarts-diagram__error" role="alert">
+          {t(error === "invalid" ? "visualization.invalidEcharts" : "visualization.renderFailed")}
+        </p>
       ) : null}
     </div>
   );

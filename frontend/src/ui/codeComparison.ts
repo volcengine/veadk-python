@@ -1,4 +1,5 @@
 import type { ProjectFile } from "../create/project";
+import { workspaceToolsT } from "./workspaceToolsI18n";
 
 export type CodeChangeStatus = "added" | "modified" | "deleted";
 
@@ -33,7 +34,5 @@ export function compareProjectFiles(
 }
 
 export function codeChangeLabel(status: CodeChangeStatus): string {
-  if (status === "added") return "新增";
-  if (status === "deleted") return "删除";
-  return "修改";
+  return workspaceToolsT(`codeBrowser.change.${status}`);
 }

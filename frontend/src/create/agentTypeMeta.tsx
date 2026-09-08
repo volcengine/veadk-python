@@ -1,5 +1,6 @@
 import type { ComponentType, SVGProps } from "react";
 import { GitBranch, Globe, Repeat, Split } from "lucide-react";
+import { createT } from "./i18n";
 import type { AgentDraft } from "./types";
 
 export type AgentTypeId = NonNullable<AgentDraft["agentType"]>;
@@ -32,37 +33,28 @@ function LlmIcon({ className, ...props }: SVGProps<SVGSVGElement>) {
   );
 }
 
+function localizedAgentType(
+  id: AgentTypeId,
+  icon: ComponentType<SVGProps<SVGSVGElement>>,
+): AgentTypeMeta {
+  return {
+    id,
+    get label() {
+      return createT(`traditional.agentTypes.${id}.fullLabel`);
+    },
+    get desc() {
+      return createT(`traditional.agentTypes.${id}.description`);
+    },
+    icon,
+  };
+}
+
 const AGENT_TYPE_META: Record<AgentTypeId, AgentTypeMeta> = {
-  llm: {
-    id: "llm",
-    label: "LLM 智能体",
-    desc: "大模型驱动，自主完成任务",
-    icon: LlmIcon,
-  },
-  sequential: {
-    id: "sequential",
-    label: "顺序型智能体",
-    desc: "子 Agent 按顺序依次执行",
-    icon: GitBranch,
-  },
-  parallel: {
-    id: "parallel",
-    label: "并行型智能体",
-    desc: "子 Agent 并行执行后汇总",
-    icon: Split,
-  },
-  loop: {
-    id: "loop",
-    label: "循环型智能体",
-    desc: "子 Agent 循环执行到满足条件",
-    icon: Repeat,
-  },
-  a2a: {
-    id: "a2a",
-    label: "远程智能体",
-    desc: "通过 A2A 协议调用远程 Agent",
-    icon: Globe,
-  },
+  llm: localizedAgentType("llm", LlmIcon),
+  sequential: localizedAgentType("sequential", GitBranch),
+  parallel: localizedAgentType("parallel", Split),
+  loop: localizedAgentType("loop", Repeat),
+  a2a: localizedAgentType("a2a", Globe),
 };
 
 /** Agent kinds selectable in the create wizard. */

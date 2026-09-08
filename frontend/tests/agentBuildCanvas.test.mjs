@@ -38,8 +38,8 @@ test("keeps the React Flow MiniMap implementation disabled for now", () => {
   assert.match(source, /abc-minimap-node-agent/);
 });
 
-test("labels LLM nodes as 智能体", () => {
-  assert.match(source, /llm:\s*\{[\s\S]*?label:\s*"智能体"/);
+test("labels LLM nodes through the create translation catalog", () => {
+  assert.match(source, /llm:\s*\{[\s\S]*?labelKey:\s*"buildCanvas\.patterns\.llm\.label"/);
   assert.doesNotMatch(source, /label:\s*"执行步骤"/);
 });
 
@@ -82,7 +82,7 @@ test("renders the root LLM agent as a child-capable container", () => {
     source,
     /type === "llm" && \(path\.length === 0 \|\| agent\.subAgents\.length > 0\)/,
   );
-  assert.match(source, /type === "llm"\s*\?\s*"添加子 Agent"/);
+  assert.match(source, /type === "llm"[\s\S]*?t\("buildCanvas\.actions\.addSubagent"\)/);
   assert.match(source, /<small>\{data\.description\}<\/small>/);
 });
 
@@ -99,10 +99,10 @@ test("keeps boundary insertion controls inside the group container", () => {
   assert.match(source, /type !== "parallel" &&/);
   assert.match(source, /className="abc-group-boundary-actions"/);
   assert.match(source, /className="abc-group-boundary-add is-start nodrag nopan"/);
-  assert.match(source, /aria-label="添加到最前"/);
+  assert.match(source, /aria-label=\{t\("buildCanvas\.actions\.addFirst"\)\}/);
   assert.match(source, /actions\.onInsert\(data\.path!, 0\)/);
   assert.match(source, /className="abc-group-boundary-add is-end nodrag nopan"/);
-  assert.match(source, /aria-label="添加到最后"/);
+  assert.match(source, /aria-label=\{t\("buildCanvas\.actions\.addLast"\)\}/);
   assert.match(source, /className="abc-group-add abc-group-add-empty nodrag nopan"/);
   assert.match(cssSource, /\.abc-group-boundary-actions\s*\{/);
   assert.match(cssSource, /\.abc-group-boundary-add\s*\{/);
@@ -120,7 +120,7 @@ test("uses a single bottom add action for parallel groups", () => {
 test("uses the agent description as a two-line subtitle without count badges", () => {
   assert.match(
     source,
-    /description: agent\.description\.trim\(\) \|\| PATTERN_COPY\[type\]\.description/,
+    /description: agent\.description\.trim\(\) \|\| t\(PATTERN_COPY\[type\]\.descriptionKey\)/,
   );
   assert.match(source, /<small>\{data\.description\}<\/small>/);
   assert.doesNotMatch(source, /data\.childCount && <small>/);
@@ -137,15 +137,15 @@ test("uses the agent description as a two-line subtitle without count badges", (
 });
 
 test("uses distinct restrained type colors and removes the LLM node icon", () => {
-  assert.match(source, /loop:\s*\{[\s\S]*?label:\s*"循环执行"/);
+  assert.match(source, /loop:\s*\{[\s\S]*?labelKey:\s*"buildCanvas\.patterns\.loop\.label"/);
   assert.match(source, /\{type !== "llm" && \(/);
   assert.match(customCreateSource, /<Section meta=\{metaOf\("type"\)\}>/);
   assert.match(
     customCreateSource,
-    /<RadioGroup<AgentType>[\s\S]*?aria-label="Agent 类型"/,
+    /<RadioGroup<AgentType>[\s\S]*?aria-label=\{t\("traditional\.agentTypes\.ariaLabel"\)\}/,
   );
   assert.match(customCreateSource, /<RadioGroup\.Item/);
-  assert.match(customCreateSource, /data-agent-type=\{t\.id\}/);
+  assert.match(customCreateSource, /data-agent-type=\{agentType\.id\}/);
 });
 
 test("supports a read-only preview without mutation affordances", () => {
@@ -225,8 +225,8 @@ test("read-only canvas retries fitting until it has dimensions", () => {
 });
 
 test("uses concise labels for child agent basics", () => {
-  assert.match(customCreateSource, /\{isRootAgent \? "Agent 名称" : "名称"\}/);
-  assert.match(customCreateSource, /\{isRootAgent \? "描述" : "智能体描述"\}/);
+  assert.match(customCreateSource, /traditional\.basic\.agentName/);
+  assert.match(customCreateSource, /traditional\.basic\.agentDescription/);
   assert.doesNotMatch(customCreateSource, /"步骤名称"|"任务说明"/);
 });
 

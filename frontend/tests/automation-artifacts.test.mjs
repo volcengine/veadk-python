@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
@@ -72,10 +73,21 @@ test("defines pull request review as a GitHub App automation", async () => {
   const { pullRequestReviewAutomation } = await loadTypeScriptModule(
     "../src/automations/pullRequestReview.ts",
   );
-  assert.equal(pullRequestReviewAutomation.submitLabel, "安装 GitHub App");
+  const enAutomations = JSON.parse(readFileSync(
+    new URL("../src/i18n/resources/en-US/automations.json", import.meta.url),
+    "utf8",
+  ));
+  const zhAutomations = JSON.parse(readFileSync(
+    new URL("../src/i18n/resources/zh-CN/automations.json", import.meta.url),
+    "utf8",
+  ));
+  assert.equal(pullRequestReviewAutomation.submitLabel, "Install GitHub App");
   assert.deepEqual(pullRequestReviewAutomation.fields, []);
   assert.deepEqual(pullRequestReviewAutomation.secrets({ cloudProvider: "volcengine" }), []);
   assert.match(pullRequestReviewAutomation.panel, /GitHub App/);
+  assert.equal(enAutomations.cards.review.submitLabel, "Install GitHub App");
+  assert.equal(zhAutomations.cards.review.submitLabel, "安装 GitHub App");
+  assert.match(zhAutomations.cards.review.panel, /GitHub App/);
   await assert.rejects(
     () => pullRequestReviewAutomation.submit(
       pullRequestReviewAutomation.initialValues,
@@ -112,7 +124,7 @@ test("rejects invalid Runtime settings before generating workflows", async () =>
       runtimeId: "rt-agent",
       region: "cn-beijing",
     }),
-    /Runtime 名称/,
+    /Runtime name/,
   );
 });
 
@@ -123,7 +135,7 @@ test("normalizes supported GitHub repository forms and rejects unsafe paths", as
   assert.equal(normalizeGitHubRepository("https://www.github.com/acme/agent.git"), "acme/agent");
   assert.equal(normalizeGitHubRepository("git@github.com:acme/agent.git"), "acme/agent");
   assert.throws(() => normalizeGitHubRepository("https://example.com/acme/agent"), /github\.com/);
-  assert.throws(() => normalizeRepositoryPath("../escape"), /安全相对路径/);
+  assert.throws(() => normalizeRepositoryPath("../escape"), /safe relative path/);
 });
 
 test("creates a GitHub pull request directly without persisting the token", async () => {

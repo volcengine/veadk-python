@@ -1,4 +1,5 @@
 import { type MouseEvent, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@openai/apps-sdk-ui/components/Button";
 import { X } from "@openai/apps-sdk-ui/components/Icon";
 import type { CloudProvider } from "../adk/cloudProvider";
@@ -10,6 +11,7 @@ export interface AgentKitPromoCardProps {
 }
 
 export function AgentKitPromoCard({ cloudProvider }: AgentKitPromoCardProps) {
+  const { t } = useTranslation("ui");
   const [dismissed, setDismissed] = useState(false);
   const [hoverSuppressed, setHoverSuppressed] = useState(false);
   const links = agentKitLinks(cloudProvider);
@@ -24,7 +26,7 @@ export function AgentKitPromoCard({ cloudProvider }: AgentKitPromoCardProps) {
   return (
     <section
       className={`agentkit-promo-card${hoverSuppressed ? " is-hover-suppressed" : ""}`}
-      aria-label="AgentKit 快速入口"
+      aria-label={t("agentKitPromo.ariaLabel")}
       onMouseLeave={() => setHoverSuppressed(false)}
     >
       <Button
@@ -34,16 +36,16 @@ export function AgentKitPromoCard({ cloudProvider }: AgentKitPromoCardProps) {
         size="3xs"
         uniform
         pill={false}
-        aria-label="关闭 AgentKit 欢迎卡片"
-        title="关闭"
+        aria-label={t("agentKitPromo.closeAriaLabel")}
+        title={t("common.close")}
         onClick={() => setDismissed(true)}
       >
         <X aria-hidden="true" />
       </Button>
 
-      <h2 className="agentkit-promo-title">欢迎使用 AgentKit</h2>
+      <h2 className="agentkit-promo-title">{t("agentKitPromo.title")}</h2>
       <p className="agentkit-promo-description">
-        通过 AgentKit 平台快速构建与托管您的企业级智能体
+        {t("agentKitPromo.description")}
       </p>
 
       <div className="agentkit-promo-actions">
@@ -52,20 +54,20 @@ export function AgentKitPromoCard({ cloudProvider }: AgentKitPromoCardProps) {
           href={links.docs}
           target="_blank"
           rel="noreferrer"
-          aria-label="打开 AgentKit 文档，在新窗口打开"
+          aria-label={t("agentKitPromo.docsAriaLabel")}
           onClick={handleActionClick}
         >
-          文档
+          {t("agentKitPromo.docs")}
         </a>
         <a
           className="agentkit-promo-action is-console"
           href={links.console}
           target="_blank"
           rel="noreferrer"
-          aria-label="打开 AgentKit 控制台，在新窗口打开"
+          aria-label={t("agentKitPromo.consoleAriaLabel")}
           onClick={handleActionClick}
         >
-          控制台
+          {t("agentKitPromo.console")}
         </a>
       </div>
     </section>

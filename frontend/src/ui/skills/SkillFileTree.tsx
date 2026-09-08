@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { parseDocument, stringify } from "yaml";
 import { Markdown } from "../Markdown";
 import CodeEditor from "../CodeEditor";
@@ -152,6 +153,7 @@ function downloadFile(file: PreviewFile) {
 }
 
 export function SkillFileTree({ files }: { files: PreviewFile[] }) {
+  const { t, i18n } = useTranslation("skills");
   const tree = useMemo(() => buildTree(files), [files]);
   const [activePath, setActivePath] = useState(files[0]?.path || "");
   const [markdownMode, setMarkdownMode] = useState<"preview" | "source">("preview");
@@ -166,7 +168,7 @@ export function SkillFileTree({ files }: { files: PreviewFile[] }) {
 
   return (
     <div className="skill-file-browser">
-      <aside className="skill-file-tree" aria-label="Skill 文件树">
+      <aside className="skill-file-tree" aria-label={t("fileTree.ariaLabel")}>
         <FileRows
           nodes={tree}
           depth={0}
@@ -182,25 +184,25 @@ export function SkillFileTree({ files }: { files: PreviewFile[] }) {
               <div>
                 {markdown ? (
                   <button type="button" onClick={() => setMarkdownMode((mode) => mode === "preview" ? "source" : "preview")}>
-                    {markdownMode === "preview" ? "查看源码" : "查看预览"}
+                    {markdownMode === "preview" ? t("fileTree.viewSource") : t("fileTree.viewPreview")}
                   </button>
                 ) : null}
-                <button type="button" disabled={active.content === undefined} onClick={() => downloadFile(active)}>下载</button>
+                <button type="button" disabled={active.content === undefined} onClick={() => downloadFile(active)}>{t("fileTree.download")}</button>
               </div>
             </header>
             <div className="skill-file-preview__body">
               {active.kind === "binary" || active.content === undefined ? (
                 <div className="skill-file-preview__binary">
-                  <strong>二进制文件</strong>
-                  <span>{active.size.toLocaleString()} 字节</span>
-                  <span>当前接口仅返回文件元数据，可单独下载原文件。</span>
+                  <strong>{t("fileTree.binaryFile")}</strong>
+                  <span>{t("fileTree.bytes", { value: new Intl.NumberFormat(i18n.resolvedLanguage).format(active.size) })}</span>
+                  <span>{t("fileTree.binaryDescription")}</span>
                 </div>
               ) : image ? (
                 <img src={active.content.startsWith("data:") ? active.content : `data:image/svg+xml;charset=utf-8,${encodeURIComponent(active.content)}`} alt={active.path} />
               ) : markdown && markdownMode === "preview" ? (
                 <div className="skill-file-preview__markdown">
                   {markdownDocument.frontmatter.length > 0 ? (
-                    <dl className="skill-file-preview__frontmatter" aria-label="Skill 元数据">
+                    <dl className="skill-file-preview__frontmatter" aria-label={t("fileTree.metadata")}>
                       {markdownDocument.frontmatter.map((item) => (
                         <div key={item.key}>
                           <dt>{item.key}</dt>
@@ -217,7 +219,7 @@ export function SkillFileTree({ files }: { files: PreviewFile[] }) {
             </div>
           </>
         ) : (
-          <div className="skill-file-preview__binary">暂无文件</div>
+          <div className="skill-file-preview__binary">{t("fileTree.noFiles")}</div>
         )}
       </section>
     </div>

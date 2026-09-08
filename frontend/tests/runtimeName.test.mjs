@@ -1,19 +1,20 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { Buffer } from "node:buffer";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
-import ts from "typescript";
+import { build } from "esbuild";
 
-const source = readFileSync(
-  new URL("../src/create/runtimeName.ts", import.meta.url),
-  "utf8",
-);
-const { outputText } = ts.transpileModule(source, {
-  compilerOptions: {
-    module: ts.ModuleKind.ES2022,
-    target: ts.ScriptTarget.ES2022,
-  },
+const result = await build({
+  entryPoints: [
+    fileURLToPath(new URL("../src/create/runtimeName.ts", import.meta.url)),
+  ],
+  bundle: true,
+  format: "esm",
+  platform: "node",
+  target: "node20",
+  write: false,
 });
-const moduleUrl = `data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`;
+const moduleUrl = `data:text/javascript;base64,${Buffer.from(result.outputFiles[0].contents).toString("base64")}`;
 const {
   generateRuntimeName,
   normalizeRuntimeName,
@@ -59,10 +60,10 @@ test("validates manual Runtime names without rewriting them", () => {
   assert.equal(runtimeNameProblem("runtime_name-01"), null);
   assert.equal(runtimeNameProblem("a".repeat(64)), null);
 
-  assert.match(runtimeNameProblem(""), /必填/);
-  assert.match(runtimeNameProblem("abc"), /4-64/);
-  assert.match(runtimeNameProblem("a".repeat(65)), /4-64/);
-  assert.match(runtimeNameProblem("中文 runtime"), /只能包含/);
-  assert.match(runtimeNameProblem("runtime.name"), /只能包含/);
-  assert.match(runtimeNameProblem(" runtime_name "), /只能包含/);
+  assert.match(runtimeNameProblem(""), /required/);
+  assert.match(runtimeNameProblem("abc"), /4[–-]64/);
+  assert.match(runtimeNameProblem("a".repeat(65)), /4[–-]64/);
+  assert.match(runtimeNameProblem("中文 runtime"), /only/);
+  assert.match(runtimeNameProblem("runtime.name"), /only/);
+  assert.match(runtimeNameProblem(" runtime_name "), /only/);
 });

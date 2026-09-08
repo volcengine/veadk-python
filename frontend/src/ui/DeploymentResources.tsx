@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { TFunction } from "i18next";
+import { useTranslation } from "react-i18next";
 import {
   listDeploymentResources,
   type DeploymentResource,
@@ -7,30 +9,33 @@ import {
   type DeployResources,
   type EnvironmentContainerRepository,
 } from "../adk/client";
+import { i18n } from "../i18n";
 import {
   DeploymentSelect,
   type DeploymentSelectOption,
 } from "./DeploymentSelect";
 import "./DeploymentResources.css";
 
-const RESOURCE_MODE_OPTIONS: DeploymentSelectOption[] = [
-  {
-    value: "auto",
-    label: "自动创建",
-    description: "部署时自动创建所需资源",
-    badge: "推荐",
-  },
-  {
-    value: "create",
-    label: "指定名称",
-    description: "使用指定名称创建或复用资源",
-  },
-  {
-    value: "existing",
-    label: "选择已有",
-    description: "从当前账号的已有资源中选择",
-  },
-];
+function resourceModeOptions(t: TFunction): DeploymentSelectOption[] {
+  return [
+    {
+      value: "auto",
+      label: t("deploymentResources.mode.auto"),
+      description: t("deploymentResources.mode.autoDescription"),
+      badge: t("deploymentResources.mode.recommended"),
+    },
+    {
+      value: "create",
+      label: t("deploymentResources.mode.create"),
+      description: t("deploymentResources.mode.createDescription"),
+    },
+    {
+      value: "existing",
+      label: t("deploymentResources.mode.existing"),
+      description: t("deploymentResources.mode.existingDescription"),
+    },
+  ];
+}
 
 export const DEFAULT_DEPLOY_RESOURCES: DeployResources = {
   tos: { mode: "auto" },
@@ -206,6 +211,7 @@ function ResourcePicker({
   valueField?: "id" | "name";
   onChange: (resource: DeploymentResource) => void;
 }) {
+  const { t } = useTranslation("ui");
   const options = useMemo(
     () => resourceOptions(state.items, valueField),
     [state.items, valueField],
@@ -216,14 +222,14 @@ function ResourcePicker({
         ariaLabel={ariaLabel}
         value={value}
         valueLabel={valueLabel}
-        placeholder={state.loading ? "正在加载…" : "请选择已有资源"}
+        placeholder={state.loading ? t("common.loading") : t("deploymentResources.selectExisting")}
         options={options}
         disabled={disabled || Boolean(state.error)}
         searchValue={state.search}
-        searchPlaceholder="搜索资源名称"
+        searchPlaceholder={t("deploymentResources.searchResource")}
         loading={state.loading}
         hasMore={state.hasMore}
-        emptyMessage={state.search.trim() ? "未找到匹配资源" : "暂无可用资源"}
+        emptyMessage={state.search.trim() ? t("deploymentResources.noMatch") : t("deploymentResources.noAvailable")}
         onSearchChange={state.setSearch}
         onLoadMore={state.loadMore}
         onChange={(selectedValue) => {
@@ -238,20 +244,23 @@ function ResourcePicker({
       ) : state.error ? (
         <div className="pp-resource-error" role="alert">
           <span>{state.error}</span>
-          <button type="button" onClick={state.reload}>重试</button>
+          <button type="button" onClick={state.reload}>{t("common.retry")}</button>
         </div>
       ) : state.loading && state.items.length === 0 ? (
         <span className="pp-resource-status" aria-live="polite">
-          {state.search.trim() ? "正在搜索云资源…" : "正在加载云资源…"}
+          {state.search.trim() ? t("deploymentResources.searching") : t("deploymentResources.loading")}
         </span>
       ) : state.items.length === 0 ? (
         <span className="pp-resource-status">
-          {state.search.trim() ? "未找到匹配资源。" : "暂无可用资源。"}
+          {state.search.trim() ? t("deploymentResources.noMatchSentence") : t("deploymentResources.noAvailableSentence")}
         </span>
       ) : state.serviceRegion ? (
         <span className="pp-resource-status">
-          实际服务区域：{state.serviceRegion} · 已加载 {state.items.length}
-          {state.totalCount > 0 ? `/${state.totalCount}` : ""}
+          {t("deploymentResources.loadedSummary", {
+            region: state.serviceRegion,
+            loaded: state.items.length,
+            total: state.totalCount > 0 ? `/${state.totalCount}` : "",
+          })}
         </span>
       ) : null}
     </div>
@@ -269,6 +278,7 @@ export function ContainerRepositorySelector({
   disabled?: boolean;
   onChange: (value: EnvironmentContainerRepository) => void;
 }) {
+  const { t } = useTranslation("ui");
   const registryList = useDeploymentResourceList(
     region ? { kind: "cr-registry", region } : null,
   );
@@ -298,9 +308,9 @@ export function ContainerRepositorySelector({
   return (
     <div className="pp-resource-fields pp-resource-fields-three environment-repository-fields">
       <label className="pp-resource-field">
-        <span>Registry 实例</span>
+        <span>{t("deploymentResources.registryInstance")}</span>
         <ResourcePicker
-          ariaLabel="镜像仓库 Registry 实例"
+          ariaLabel={t("deploymentResources.registryAriaLabel")}
           value={current.registry}
           valueLabel={current.registry}
           state={registryList}
@@ -315,14 +325,14 @@ export function ContainerRepositorySelector({
         />
       </label>
       <label className="pp-resource-field">
-        <span>Namespace</span>
+        <span>{t("deploymentResources.namespace")}</span>
         <ResourcePicker
-          ariaLabel="镜像仓库 Namespace"
+          ariaLabel={t("deploymentResources.namespaceAriaLabel")}
           value={current.namespace}
           valueLabel={current.namespace}
           state={namespaceList}
           disabled={disabled || !current.registry}
-          disabledMessage={!current.registry ? "请先选择 Registry 实例。" : undefined}
+          disabledMessage={!current.registry ? t("deploymentResources.selectRegistryFirst") : undefined}
           valueField="name"
           onChange={(resource) => onChange({
             ...current,
@@ -333,17 +343,17 @@ export function ContainerRepositorySelector({
         />
       </label>
       <label className="pp-resource-field">
-        <span>镜像仓库</span>
+        <span>{t("deploymentResources.repository")}</span>
         <ResourcePicker
-          ariaLabel="已有镜像仓库"
+          ariaLabel={t("deploymentResources.existingRepository")}
           value={current.repository}
           valueLabel={current.repository}
           state={repositoryList}
           disabled={disabled || !current.registry || !current.namespace}
           disabledMessage={!current.registry
-            ? "请先选择 Registry 实例。"
+            ? t("deploymentResources.selectRegistryFirst")
             : !current.namespace
-              ? "请先选择 Namespace。"
+              ? t("deploymentResources.selectNamespaceFirst")
               : undefined}
           valueField="name"
           onChange={(resource) => onChange({
@@ -368,14 +378,15 @@ function ModeField({
   disabled: boolean;
   onChange: (mode: DeploymentResourceMode) => void;
 }) {
+  const { t } = useTranslation("ui");
   return (
     <label className="pp-resource-field pp-resource-mode">
-      <span>配置方式</span>
+      <span>{t("deploymentResources.configurationMode")}</span>
       <DeploymentSelect
-        ariaLabel={`${resource}配置方式`}
+        ariaLabel={t("deploymentResources.configurationModeAriaLabel", { resource })}
         value={value}
-        placeholder="请选择配置方式"
-        options={RESOURCE_MODE_OPTIONS}
+        placeholder={t("deploymentResources.selectConfigurationMode")}
+        options={resourceModeOptions(t)}
         disabled={disabled}
         onChange={(mode) => onChange(mode as DeploymentResourceMode)}
       />
@@ -417,9 +428,10 @@ function AutomaticResourceNames({
   items: { label: string; name: string }[];
   note?: string;
 }) {
+  const { t } = useTranslation("ui");
   return (
     <div className="pp-resource-auto-names">
-      <span>自动创建名称</span>
+      <span>{t("deploymentResources.automaticNames")}</span>
       <dl>
         {items.map((item) => (
           <div key={item.label}>
@@ -435,7 +447,7 @@ function AutomaticResourceNames({
 
 export function deploymentResourcesError(resources: DeployResources): string | null {
   if (resources.tos.mode !== "auto" && !resources.tos.bucket?.trim()) {
-    return "请填写或选择 TOS 存储桶。";
+    return i18n.t("ui:deploymentResources.validation.tos");
   }
   if (
     resources.cr.mode !== "auto" &&
@@ -443,21 +455,21 @@ export function deploymentResourcesError(resources: DeployResources): string | n
       !resources.cr.namespace?.trim() ||
       !resources.cr.repository?.trim())
   ) {
-    return "请完整填写或选择 CR 实例、命名空间和镜像仓库。";
+    return i18n.t("ui:deploymentResources.validation.cr");
   }
   if (
     resources.codePipeline.mode !== "auto" &&
     (!resources.codePipeline.workspaceName?.trim() ||
       !resources.codePipeline.pipelineName?.trim())
   ) {
-    return "请完整填写或选择 CodePipeline Workspace 和 Pipeline。";
+    return i18n.t("ui:deploymentResources.validation.codePipeline");
   }
   if (
     resources.codePipeline.mode === "existing" &&
     (!resources.codePipeline.workspaceId?.trim() ||
       !resources.codePipeline.pipelineId?.trim())
   ) {
-    return "请选择已有的 CodePipeline Workspace 和兼容 Pipeline。";
+    return i18n.t("ui:deploymentResources.validation.existingCodePipeline");
   }
   return null;
 }
@@ -479,12 +491,13 @@ export function DeploymentResources({
   validationError: string | null;
   onChange: (resources: DeployResources) => void;
 }) {
+  const { t } = useTranslation("ui");
   const resolvedAgentName = agentName.trim() || "agentkit-app";
   const resolvedRuntimeName = runtimeName.trim() || resolvedAgentName;
   const automaticBucketName =
     region && region !== "cn-beijing"
-      ? `agentkit-platform-{账号 ID}-${region.startsWith("cn-") ? region.slice(3) : region}`
-      : "agentkit-platform-{账号 ID}";
+      ? t("deploymentResources.autoBucketWithRegion", { region: region.startsWith("cn-") ? region.slice(3) : region })
+      : t("deploymentResources.autoBucket");
   const tosList = useDeploymentResourceList(
     value.tos.mode === "existing" ? { kind: "tos-bucket", region } : null,
   );
@@ -527,28 +540,28 @@ export function DeploymentResources({
   return (
     <div className="pp-resource-list">
       <div className="pp-resource-item">
-        <div className="pp-resource-name">TOS 存储桶</div>
+        <div className="pp-resource-name">{t("deploymentResources.tosBucket")}</div>
         <div className="pp-resource-grid">
           <ModeField
-            resource="TOS 存储桶"
+            resource={t("deploymentResources.tosBucket")}
             value={value.tos.mode}
             disabled={disabled}
             onChange={(mode) => patch({ tos: { mode } })}
           />
           {value.tos.mode === "create" && (
             <TextField
-              label="存储桶名称"
+              label={t("deploymentResources.bucketName")}
               value={value.tos.bucket ?? ""}
-              placeholder="输入存储桶名称"
+              placeholder={t("deploymentResources.bucketNamePlaceholder")}
               disabled={disabled}
               onChange={(bucket) => patch({ tos: { ...value.tos, bucket } })}
             />
           )}
           {value.tos.mode === "existing" && (
             <label className="pp-resource-field">
-              <span>已有存储桶</span>
+              <span>{t("deploymentResources.existingBucket")}</span>
               <ResourcePicker
-                ariaLabel="已有 TOS 存储桶"
+                ariaLabel={t("deploymentResources.existingTosBucket")}
                 value={value.tos.bucket ?? ""}
                 valueLabel={value.tos.bucket}
                 state={tosList}
@@ -562,16 +575,16 @@ export function DeploymentResources({
           {value.tos.mode === "auto" && (
             <AutomaticResourceNames
               items={[
-                { label: "存储桶", name: automaticBucketName },
+                { label: t("deploymentResources.bucket"), name: automaticBucketName },
               ]}
-              note="账号 ID 在部署时按当前云账号解析。"
+              note={t("deploymentResources.accountIdResolved")}
             />
           )}
         </div>
       </div>
 
       <div className="pp-resource-item">
-        <div className="pp-resource-name">容器镜像仓库（CR）</div>
+        <div className="pp-resource-name">{t("deploymentResources.containerRegistry")}</div>
         <div className="pp-resource-grid">
           <ModeField
             resource="CR"
@@ -582,23 +595,23 @@ export function DeploymentResources({
           {value.cr.mode === "create" && (
             <div className="pp-resource-fields pp-resource-fields-three">
               <TextField
-                label="实例名称"
+                label={t("deploymentResources.instanceName")}
                 value={value.cr.instance ?? ""}
-                placeholder="CR 实例"
+                placeholder={t("deploymentResources.crInstance")}
                 disabled={disabled}
                 onChange={(instance) => patch({ cr: { ...value.cr, instance } })}
               />
               <TextField
-                label="命名空间"
+                label={t("deploymentResources.namespace")}
                 value={value.cr.namespace ?? ""}
-                placeholder="命名空间"
+                placeholder={t("deploymentResources.namespace")}
                 disabled={disabled}
                 onChange={(namespace) => patch({ cr: { ...value.cr, namespace } })}
               />
               <TextField
-                label="镜像仓库"
+                label={t("deploymentResources.repository")}
                 value={value.cr.repository ?? ""}
-                placeholder="镜像仓库"
+                placeholder={t("deploymentResources.repository")}
                 disabled={disabled}
                 onChange={(repository) => patch({ cr: { ...value.cr, repository } })}
               />
@@ -607,9 +620,9 @@ export function DeploymentResources({
           {value.cr.mode === "existing" && (
             <div className="pp-resource-fields pp-resource-fields-three">
               <label className="pp-resource-field">
-                <span>CR 实例</span>
+                <span>{t("deploymentResources.crInstance")}</span>
                 <ResourcePicker
-                  ariaLabel="已有 CR 实例"
+                  ariaLabel={t("deploymentResources.existingCrInstance")}
                   value={value.cr.instance ?? ""}
                   valueLabel={value.cr.instance}
                   state={registryList}
@@ -623,9 +636,9 @@ export function DeploymentResources({
                 />
               </label>
               <label className="pp-resource-field">
-                <span>命名空间</span>
+                <span>{t("deploymentResources.namespace")}</span>
                 <ResourcePicker
-                  ariaLabel="已有 CR 命名空间"
+                  ariaLabel={t("deploymentResources.existingCrNamespace")}
                   value={value.cr.namespace ?? ""}
                   valueLabel={value.cr.namespace}
                   state={namespaceList}
@@ -643,9 +656,9 @@ export function DeploymentResources({
                 />
               </label>
               <label className="pp-resource-field">
-                <span>镜像仓库</span>
+                <span>{t("deploymentResources.repository")}</span>
                 <ResourcePicker
-                  ariaLabel="已有 CR 镜像仓库"
+                  ariaLabel={t("deploymentResources.existingCrRepository")}
                   value={value.cr.repository ?? ""}
                   valueLabel={value.cr.repository}
                   state={repositoryList}
@@ -663,14 +676,14 @@ export function DeploymentResources({
           {value.cr.mode === "auto" && (
             <AutomaticResourceNames
               items={[
-                { label: "CR 实例", name: "agentkit-platform-{账号 ID}" },
-                { label: "命名空间", name: "agentkit" },
+                { label: t("deploymentResources.crInstance"), name: t("deploymentResources.autoRegistry") },
+                { label: t("deploymentResources.namespace"), name: "agentkit" },
                 {
-                  label: "镜像仓库",
-                  name: `${resolvedAgentName}-{4 位随机字符}`,
+                  label: t("deploymentResources.repository"),
+                  name: t("deploymentResources.autoRepositoryName", { name: resolvedAgentName }),
                 },
               ]}
-              note="账号 ID 在部署时解析，镜像仓库的随机字符在部署时生成。"
+              note={t("deploymentResources.registryNameNote")}
             />
           )}
         </div>
@@ -688,18 +701,18 @@ export function DeploymentResources({
           {value.codePipeline.mode === "create" && (
             <div className="pp-resource-fields">
               <TextField
-                label="Workspace 名称"
+                label={t("deploymentResources.workspaceName")}
                 value={value.codePipeline.workspaceName ?? ""}
-                placeholder="Workspace 名称"
+                placeholder={t("deploymentResources.workspaceName")}
                 disabled={disabled}
                 onChange={(workspaceName) =>
                   patch({ codePipeline: { ...value.codePipeline, workspaceName } })
                 }
               />
               <TextField
-                label="Pipeline 名称"
+                label={t("deploymentResources.pipelineName")}
                 value={value.codePipeline.pipelineName ?? ""}
-                placeholder="Pipeline 名称"
+                placeholder={t("deploymentResources.pipelineName")}
                 disabled={disabled}
                 onChange={(pipelineName) =>
                   patch({ codePipeline: { ...value.codePipeline, pipelineName } })
@@ -710,9 +723,9 @@ export function DeploymentResources({
           {value.codePipeline.mode === "existing" && (
             <div className="pp-resource-fields">
               <label className="pp-resource-field">
-                <span>Workspace</span>
+                <span>{t("deploymentResources.workspace")}</span>
                 <ResourcePicker
-                  ariaLabel="已有 CodePipeline Workspace"
+                  ariaLabel={t("deploymentResources.existingWorkspace")}
                   value={value.codePipeline.workspaceId ?? ""}
                   valueLabel={value.codePipeline.workspaceName}
                   state={workspaceList}
@@ -729,9 +742,9 @@ export function DeploymentResources({
                 />
               </label>
               <label className="pp-resource-field">
-                <span>兼容 Pipeline</span>
+                <span>{t("deploymentResources.compatiblePipeline")}</span>
                 <ResourcePicker
-                  ariaLabel="已有 AgentKit CodePipeline"
+                  ariaLabel={t("deploymentResources.existingPipeline")}
                   value={value.codePipeline.pipelineId ?? ""}
                   valueLabel={value.codePipeline.pipelineName}
                   state={pipelineList}
@@ -752,13 +765,13 @@ export function DeploymentResources({
           {value.codePipeline.mode === "auto" && (
             <AutomaticResourceNames
               items={[
-                { label: "Workspace", name: "agentkit-cli-workspace" },
+                { label: t("deploymentResources.workspace"), name: "agentkit-cli-workspace" },
                 {
-                  label: "Pipeline",
+                  label: t("deploymentResources.pipeline"),
                   name: resolvedRuntimeName,
                 },
               ]}
-              note="Pipeline 与 Runtime 名称一致。"
+              note={t("deploymentResources.pipelineNameNote")}
             />
           )}
         </div>

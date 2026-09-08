@@ -1,0 +1,217 @@
+{
+  "common": {
+    "back": "Back",
+    "close": "Close"
+  },
+  "optimization": {
+    "title": "Optimize migrated project",
+    "closeAria": "Close optimization dialog"
+  },
+  "projects": {
+    "title": "Migrated projects",
+    "description": "Manage migrated source versions or continue optimizing any version.",
+    "libraryTitle": "Projects and versions",
+    "libraryDescription": "View, download, deploy, or compare source versions, or continue optimizing any version.",
+    "emptyTitle": "No migrated projects yet",
+    "emptyDescription": "Migrated source code will be saved here automatically."
+  },
+  "framework": {
+    "langchain": "LangChain",
+    "langgraph": "LangGraph",
+    "adk": "Google ADK",
+    "strands": "Strands",
+    "agentcore": "AgentCore",
+    "dify": "Dify",
+    "any": "Any (universal migration)"
+  },
+  "state": {
+    "awaitingUpload": "Awaiting upload",
+    "analyzing": "Analyzing",
+    "needsInput": "Needs input",
+    "analysisReady": "Awaiting confirmation",
+    "migrating": "Migrating",
+    "validating": "Validating",
+    "packaging": "Packaging",
+    "succeeded": "Completed",
+    "succeededWithWarnings": "Completed with notices",
+    "partial": "Partially completed",
+    "failed": "Failed",
+    "cancelled": "Stopped",
+    "expired": "Expired"
+  },
+  "task": {
+    "partialReady": "Migration output is ready, but delivery is incomplete. Review the migration notices.",
+    "readyWithWarnings": "Migration output is ready. Review the migration notices.",
+    "ready": "Migration output is ready."
+  },
+  "verification": {
+    "passed": "Output verification passed",
+    "failed": "Output verification failed",
+    "degraded": "Output verification incomplete"
+  },
+  "transfer": {
+    "session": "Create migration environment",
+    "upload": "Upload project",
+    "analysis": "Analyze project"
+  },
+  "validation": {
+    "agentNameRequired": "Enter an Agent name",
+    "agentNameInvalid": "Agent names must be 1–63 characters, contain only lowercase letters, numbers, and hyphens, and start and end with a letter or number"
+  },
+  "duration": {
+    "seconds": "{{seconds}} sec",
+    "minutesSeconds": "{{minutes}} min {{seconds}} sec"
+  },
+  "expiry": {
+    "savedUnaffected": "Saved projects are unaffected",
+    "savingUnaffected": "Source is being saved and will be unaffected once complete",
+    "activeDetail": "Task history and temporary output will become unavailable after expiration",
+    "oneHour": "Temporary migration environment is retained for 1 hour",
+    "ended": "Temporary migration environment has ended",
+    "savedAvailable": "Saved projects remain available to view, download, deploy, or optimize",
+    "unavailable": "Task history and temporary output are no longer available",
+    "countdown": "Temporary migration environment ends in {{minutes}} min {{seconds}} sec",
+    "expiredSavedMessage": "The temporary migration environment has ended. Saved projects are unaffected.",
+    "expiredMessage": "The temporary migration environment has ended. Task history and temporary output are no longer available."
+  },
+  "analysis": {
+    "recommended": "Recommended migration method",
+    "scope": "Migration scope",
+    "excluded": "Out of scope",
+    "viewEvidence": "View analysis evidence",
+    "viewAssumptions": "View key assumptions",
+    "viewSourceEvidence": "View source evidence"
+  },
+  "activity": {
+    "ariaLabel": "Codex activity",
+    "title": "Codex activity",
+    "startingAnalysis": "Codex is starting the analysis…",
+    "startingMigration": "Codex is starting the migration…",
+    "loadError": "Codex activity is temporarily unavailable. The current task is unaffected."
+  },
+  "artifact": {
+    "title": "Migration output",
+    "fileTooLarge": "This file exceeds 2 MiB. Download the complete output to view it.",
+    "unsupportedPreview": "This file cannot be previewed here. Download the complete output to view it.",
+    "filesAria": "Migration output files",
+    "searchAria": "Search output files",
+    "searchPlaceholder": "Search files",
+    "limit": "Showing the first {{count}} items. Search for a specific file.",
+    "noSelection": "No file selected",
+    "noPreview": "No files available to preview.",
+    "loadingFile": "Loading output file…",
+    "startupFile": "Startup file",
+    "fileCountLabel": "Files",
+    "saved": "Source has been saved. You can view, download, deploy, or optimize it.",
+    "saving": "Output is ready and the source version is being saved.",
+    "deployReady": "Output is available to preview, download, and deploy. Waiting for source save status.",
+    "deployUnavailable": "Output is available to preview and download, but its current delivery status does not support deployment.",
+    "viewProjects": "View migrated projects",
+    "downloading": "Downloading…",
+    "downloadZip": "Download ZIP",
+    "deployTitle": "Deploy migration output",
+    "deployUnavailableTitle": "Current delivery status does not support deployment",
+    "deployRuntime": "Deploy to Runtime",
+    "fileCount": "{{count}} files",
+    "startup": "Startup file {{module}}",
+    "loading": "Loading migration output…"
+  },
+  "model": {
+    "retiring": "Retiring soon",
+    "currentDefault": "Current default model",
+    "loadError": "Failed to load models",
+    "label": "Model",
+    "placeholder": "Select a model"
+  },
+  "upload": {
+    "zipOnly": "Select a local project in .zip format.",
+    "invalidName": "The ZIP file name is invalid. Rename the file and select it again.",
+    "tooLarge": "The project ZIP cannot exceed {{size}}.",
+    "empty": "The project ZIP cannot be empty.",
+    "removeAria": "Remove project ZIP",
+    "reselectPrompt": "Select the project ZIP again",
+    "selectPrompt": "Select or drop a local project ZIP",
+    "reselect": "Select again",
+    "selectZip": "Select ZIP",
+    "continue": "Continue upload",
+    "start": "Start migration",
+    "inputAria": "Select a local project ZIP",
+    "retention": "The temporary migration environment is retained for 1 hour after creation. Successfully saved source versions are unaffected."
+  },
+  "deployment": {
+    "requiredPlaceholder": "Enter {{key}}",
+    "optionalPlaceholder": "Optional: {{key}}",
+    "notReady": "Migration output is not ready yet.",
+    "back": "Back to migration results"
+  },
+  "workspace": {
+    "backToAddAgent": "Back to Add Agent",
+    "title": "Migrate existing project",
+    "newMigration": "New migration",
+    "recent": "Recent migrations",
+    "sessionsAria": "Migration sessions",
+    "loadingSessions": "Loading migration sessions…",
+    "noSessions": "No migration sessions",
+    "heading": "Migrate an existing Agent project",
+    "intro": "Upload a local project ZIP. Codex will first perform a read-only analysis, then ask you to confirm the migration method."
+  },
+  "actions": {
+    "stop": "Stop migration",
+    "stopping": "Stopping…",
+    "reload": "Reload",
+    "refreshStatus": "Refresh status"
+  },
+  "capability": {
+    "unavailable": "Migration is currently unavailable",
+    "defaultReason": "Dev Sandbox is currently unavailable. Contact your administrator to check the configuration."
+  },
+  "conversation": {
+    "requestZip": "Provide a local project ZIP. After upload, I’ll identify the framework, entry point, and migration boundaries, then ask you to confirm the migration method before making changes.",
+    "zipHint": "Only local ZIP files are supported, up to {{size}}. The migration environment is retained for 1 hour after creation.",
+    "creatingSandbox": "Creating Dev Sandbox",
+    "initializing": "Initializing the migration workspace and checking AgentKit CLI, Codex, and migration capabilities. The project will upload automatically when the environment is ready.",
+    "elapsed": "Elapsed: {{duration}}",
+    "uploadThenAnalyze": "Read-only analysis will start automatically after the ZIP upload completes.",
+    "analyzing": "Codex is identifying the framework, entry point, and migration boundaries. No migration changes are being made.",
+    "migrationLocked": "Attachments and migration settings cannot be changed while migration is running. Wait for the task to finish or stop it.",
+    "analysisPaused": "Read-only analysis is paused. Answer only the questions below. After submission, analysis will continue in the same environment without starting the migration.",
+    "analysisComplete": "Read-only analysis is complete. Review the recommendation and confirm the final migration method.",
+    "awaitingUpload": "The migration environment is ready. Select the local ZIP again to continue uploading.",
+    "expiredTitle": "Migration environment expired",
+    "expiredDescription": "Migration content and output can no longer be previewed, downloaded, or deployed. If the Runtime deployment completed, return to the Agents page to continue using it.",
+    "unsupportedTitle": "This ZIP cannot be migrated yet",
+    "unsupportedHint": "Update the project as instructed, then create a new migration and upload it again.",
+    "failedTitle": "Migration incomplete",
+    "cancelled": "This migration was stopped. Create a new migration and upload the project again."
+  },
+  "questions": {
+    "ariaLabel": "Provide project analysis details",
+    "title": "Additional information needed for analysis",
+    "description": "The attachment stays locked; submitting continues read-only analysis only",
+    "submitting": "Continuing analysis…",
+    "submit": "Submit and continue analysis"
+  },
+  "confirmation": {
+    "ariaLabel": "Confirm migration method",
+    "title": "Confirm migration method",
+    "description": "Migration starts only after confirmation",
+    "framework": "Migration method",
+    "frameworkPlaceholder": "Select a migration method",
+    "agentName": "Agent name",
+    "entry": "Project entry point",
+    "entryPlaceholder": "Select a project entry point",
+    "entryExample": "For example, agent.py:agent",
+    "consent": "By selecting “Confirm and start migration,” you confirm the migration scope, exclusions, and key assumptions above.",
+    "starting": "Starting migration…",
+    "start": "Confirm and start migration"
+  },
+  "errors": {
+    "closeAria": "Dismiss error",
+    "loadFailed": "Could not load migration data. Try again.",
+    "refreshFailed": "Could not refresh the migration status. Try again."
+  },
+  "stopDialog": {
+    "title": "Stop the current migration?",
+    "description": "Stopping ends the current analysis or migration process. Completed steps will not continue."
+  }
+}

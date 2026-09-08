@@ -4,6 +4,7 @@
 // that file further.
 
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Check, Info, Loader2, Plus, Search } from "lucide-react";
 import { searchSkills } from "./skills/skillhub";
 import type { SelectedSkill, SkillHit } from "./skills/types";
@@ -16,6 +17,7 @@ export function SkillHubPicker({
   selected: SelectedSkill[];
   onChange: (next: SelectedSkill[]) => void;
 }) {
+  const { t } = useTranslation("create");
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SkillHit[]>([]);
   const [loading, setLoading] = useState(false);
@@ -52,7 +54,7 @@ export function SkillHubPicker({
       const hits = await searchSkills(q);
       setResults(hits);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "搜索失败，请稍后重试。");
+      setError(e instanceof Error ? e.message : t("skills.hub.searchError"));
       setResults([]);
     } finally {
       setLoading(false);
@@ -70,7 +72,7 @@ export function SkillHubPicker({
     }
     const t = setTimeout(() => runSearch(q), 300);
     return () => clearTimeout(t);
-  }, [query]);
+  }, [query, t]);
 
   return (
     <div className="cw-skillhub">
@@ -80,7 +82,7 @@ export function SkillHubPicker({
           <input
             className="cw-input cw-skill-input"
             value={query}
-            placeholder="搜索火山 Find Skill 技能广场，例如 数据分析、PDF…"
+            placeholder={t("skills.hub.searchPlaceholder")}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
@@ -101,7 +103,7 @@ export function SkillHubPicker({
           ) : (
             <Search className="cw-i" />
           )}
-          搜索
+          {t("skills.hub.search")}
         </button>
       </div>
 
@@ -114,7 +116,7 @@ export function SkillHubPicker({
 
       {loading && results.length === 0 ? (
         <p className="cw-empty-line cw-skill-loading" role="status">
-          <Loader2 className="cw-i cw-spin" /> 正在搜索…
+          <Loader2 className="cw-i cw-spin" /> {t("skills.hub.searching")}
         </p>
       ) : results.length > 0 ? (
         <div className="cw-skill-results">
@@ -151,11 +153,11 @@ export function SkillHubPicker({
           })}
         </div>
       ) : searched && !error ? (
-        <p className="cw-empty-line">没有找到匹配的技能，换个关键词试试。</p>
+        <p className="cw-empty-line">{t("skills.hub.noResults")}</p>
       ) : (
         !searched && (
           <p className="cw-empty-line">
-            输入关键词搜索火山 Find Skill 技能广场，所选技能会在生成项目时下载到 skills/ 目录。
+            {t("skills.hub.hint")}
           </p>
         )
       )}

@@ -168,13 +168,14 @@ function isoTimestamp(value: number | undefined, fallback: number): string {
 
 export function collectArtifactIngestCandidates(
   sources: readonly ArtifactSessionSource[],
+  sessionTitleFallback?: string,
 ): ArtifactIngestCandidate[] {
   const candidates: ArtifactIngestCandidate[] = [];
   const seen = new Set<string>();
   for (const source of sources) {
     for (const session of source.sessions) {
       const updatedAt = timestampMillis(session.lastUpdateTime, Date.now());
-      const title = sessionTitle(session.events);
+      const title = sessionTitle(session.events, sessionTitleFallback);
       for (const event of session.events ?? []) {
         for (const response of functionResponse(event)) {
           const toolName = response?.name ?? "";
@@ -227,6 +228,8 @@ export function artifactPreviewModeFor(filename: string): ArtifactPreviewMode {
 
 export function collectArtifactLibraryItems(
   sources: readonly ArtifactSessionSource[],
+  sessionTitleFallback?: string,
+  locale = "en-US",
 ): ArtifactLibraryItem[] {
   const items: ArtifactLibraryItem[] = [];
 
@@ -259,7 +262,7 @@ export function collectArtifactLibraryItems(
           appName: source.appName,
           agentId: source.agentId,
           sessionId: session.id,
-          sessionTitle: sessionTitle(session.events),
+          sessionTitle: sessionTitle(session.events, sessionTitleFallback),
           agentName: source.agentName?.trim() || source.appName,
           sessionUpdatedAt,
           name: record.filename,
@@ -281,26 +284,30 @@ export function collectArtifactLibraryItems(
   }
 
   return items.sort((left, right) =>
-    right.createdAt - left.createdAt || left.name.localeCompare(right.name, "zh-CN"),
+    right.createdAt - left.createdAt || left.name.localeCompare(right.name, locale),
   );
 }
 
-export function formatArtifactTime(value: number): string {
-  if (!value) return "时间未知";
+export function formatArtifactTime(
+  value: number,
+  locale: string,
+  unknownLabel: string,
+): string {
+  if (!value) return unknownLabel;
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "时间未知";
+  if (Number.isNaN(date.getTime())) return unknownLabel;
   const now = new Date();
   const sameDay = date.getFullYear() === now.getFullYear()
     && date.getMonth() === now.getMonth()
     && date.getDate() === now.getDate();
   if (sameDay) {
-    return new Intl.DateTimeFormat("zh-CN", {
+    return new Intl.DateTimeFormat(locale, {
       hour: "2-digit",
       minute: "2-digit",
       hour12: false,
     }).format(date);
   }
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat(locale, {
     month: "numeric",
     day: "numeric",
     hour: "2-digit",

@@ -41,8 +41,8 @@ test("BFF tool discovery keeps a stable hook order across login", () => {
 
 test("Agent information owns BFF tool selection and Composer stays unchanged", () => {
   assert.match(railSource, /<StudioToolDialog/);
-  assert.match(railSource, /在此对话中添加 Studio 工具/);
-  assert.match(dialogSource, /aria-label="搜索 Studio 工具"/);
+  assert.match(railSource, /t\("agentTopology\.addStudioToolHere"\)/);
+  assert.match(dialogSource, /aria-label=\{t\("studioTools\.searchAria"\)\}/);
   assert.match(dialogSource, /aria-pressed=\{active\}/);
   assert.doesNotMatch(composerSource, /StudioToolPicker|StudioToolChips|studioTools/);
 });

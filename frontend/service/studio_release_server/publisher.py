@@ -994,6 +994,13 @@ def _build_local_requirements(
 
 
 def _studio_run_script(*, thin: bool = False) -> str:
+    managed_source = (
+        "export VEADK_STUDIO_AGENTKIT_CLI_RUNTIME_MANIFEST="
+        f'"$ROOT_DIR/{_STUDIO_RUNTIME_MANIFEST}"\n'
+        if thin
+        else "export VEADK_STUDIO_AGENTKIT_CLI_ARCHIVE="
+        f'"$ROOT_DIR/{_AGENTKIT_CLI_ARCHIVE}"\n'
+    )
     companion = (
         "python3 -m veadk.cli.studio_companion "
         f'--runtime-manifest "$ROOT_DIR/{_STUDIO_RUNTIME_MANIFEST}" '
@@ -1006,6 +1013,9 @@ def _studio_run_script(*, thin: bool = False) -> str:
         "#!/bin/bash\n"
         "set -ex\n"
         'ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"\n'
+        "unset VEADK_STUDIO_AGENTKIT_CLI_ARCHIVE "
+        "VEADK_STUDIO_AGENTKIT_CLI_RUNTIME_MANIFEST\n"
+        f"{managed_source}"
         'cd "$ROOT_DIR"\n'
         'if [ -d "output" ]; then cd ./output/; fi\n'
         "HOST=0.0.0.0\n"

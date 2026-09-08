@@ -4,32 +4,28 @@ import {
   type FormEvent,
   type SVGProps,
 } from "react";
+import { useTranslation } from "react-i18next";
 import type { IssueFeedbackIssue } from "../adk/issueFeedback";
 import type { IssueFeedbackModule } from "../adk/issueFeedback";
 import "./PlatformFeedback.css";
 
-const MODULE_OPTIONS: { value: IssueFeedbackModule; label: string }[] = [
-  { value: "conversation", label: "对话" },
-  { value: "agents", label: "智能体" },
-  { value: "applications", label: "自动化" },
-  { value: "search", label: "搜索" },
-  { value: "other", label: "其他" },
+const MODULE_OPTIONS: IssueFeedbackModule[] = [
+  "conversation",
+  "agents",
+  "applications",
+  "search",
+  "other",
 ];
 
-const ISSUE_OPTIONS: { value: IssueFeedbackIssue; label: string }[] = [
-  { value: "page_slow", label: "页面加载慢" },
-  { value: "feature_unavailable", label: "功能无法使用" },
-  { value: "display_error", label: "页面显示异常" },
-  { value: "no_response", label: "操作无响应" },
-  { value: "other", label: "其他问题" },
+const ISSUE_OPTIONS: IssueFeedbackIssue[] = [
+  "page_slow",
+  "feature_unavailable",
+  "display_error",
+  "no_response",
+  "other",
 ];
 
-const DESCRIPTION_SUGGESTIONS = [
-  "点击后没有反应",
-  "页面一直处于加载状态",
-  "部分内容显示不完整",
-  "操作后出现错误提示",
-];
+const DESCRIPTION_SUGGESTIONS = ["noResponse", "loading", "incomplete", "error"] as const;
 
 interface PlatformFeedbackProps {
   initialModule: IssueFeedbackModule;
@@ -61,6 +57,7 @@ export function PlatformFeedback({
   initialModule,
   onSubmit,
 }: PlatformFeedbackProps) {
+  const { t } = useTranslation("feedback");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [selectedIssues, setSelectedIssues] = useState<Set<IssueFeedbackIssue>>(
     () => new Set(),
@@ -113,8 +110,8 @@ export function PlatformFeedback({
   return (
     <div className="platform-feedback-page">
       <header className="platform-feedback-header">
-        <h1>问题反馈</h1>
-        <p>告诉我们您在使用 AgentKit Studio 时遇到的问题。</p>
+        <h1>{t("title")}</h1>
+        <p>{t("page.description")}</p>
       </header>
 
       <div className="platform-feedback-scroll">
@@ -129,8 +126,8 @@ export function PlatformFeedback({
               <CheckIcon />
             </span>
             <div>
-              <h2 id="feedback-success-title">上报成功，感谢您的反馈</h2>
-              <p>AgentKit 团队会尽快查看您提交的问题。</p>
+              <h2 id="feedback-success-title">{t("success.title")}</h2>
+              <p>{t("success.description")}</p>
             </div>
           </section>
         ) : (
@@ -140,18 +137,18 @@ export function PlatformFeedback({
           >
             <section className="platform-feedback-section">
               <div className="platform-feedback-section-heading">
-                <h2>所属模块</h2>
+                <h2>{t("page.module")}</h2>
               </div>
-              <div className="platform-feedback-pills" aria-label="所属模块">
+              <div className="platform-feedback-pills" aria-label={t("page.module")}>
                 {MODULE_OPTIONS.map((option) => (
                   <button
-                    key={option.value}
+                    key={option}
                     type="button"
-                    aria-pressed={module === option.value}
-                    onClick={() => setModule(option.value)}
+                    aria-pressed={module === option}
+                    onClick={() => setModule(option)}
                     disabled={busy}
                   >
-                    {option.label}
+                    {t(`page.modules.${option}`)}
                   </button>
                 ))}
               </div>
@@ -159,17 +156,17 @@ export function PlatformFeedback({
 
             <section className="platform-feedback-section">
               <div className="platform-feedback-suggestions">
-                <span>常见问题（可多选）</span>
-                <div className="platform-feedback-pills" aria-label="问题类型">
+                <span>{t("page.commonIssuesMultiple")}</span>
+                <div className="platform-feedback-pills" aria-label={t("page.issueTypes")}>
                   {ISSUE_OPTIONS.map((issue) => (
                     <button
-                      key={issue.value}
+                      key={issue}
                       type="button"
-                      aria-pressed={selectedIssues.has(issue.value)}
-                      onClick={() => toggleIssue(issue.value)}
+                      aria-pressed={selectedIssues.has(issue)}
+                      onClick={() => toggleIssue(issue)}
                       disabled={busy}
                     >
-                      {issue.label}
+                      {t(`page.issues.${issue}`)}
                     </button>
                   ))}
                 </div>
@@ -178,36 +175,39 @@ export function PlatformFeedback({
 
             <section className="platform-feedback-section">
               <label className="platform-feedback-field">
-                <span>问题描述</span>
+                <span>{t("descriptionLabel")}</span>
                 <textarea
                   ref={textareaRef}
                   value={description}
                   onChange={(event) => setDescription(event.target.value)}
-                  placeholder="请描述问题发生时的页面、操作和表现"
+                  placeholder={t("page.descriptionPlaceholder")}
                   maxLength={4000}
                   rows={6}
                   disabled={busy}
                 />
               </label>
               <div className="platform-feedback-suggestions">
-                <span>快捷补充</span>
-                <div className="platform-feedback-pills" aria-label="问题描述推荐">
-                  {DESCRIPTION_SUGGESTIONS.map((suggestion) => (
+                <span>{t("page.quickAdd")}</span>
+                <div className="platform-feedback-pills" aria-label={t("page.suggestionsLabel")}>
+                  {DESCRIPTION_SUGGESTIONS.map((suggestionKey) => {
+                    const suggestion = t(`page.suggestions.${suggestionKey}`);
+                    return (
                     <button
-                      key={suggestion}
+                      key={suggestionKey}
                       type="button"
                       onClick={() => applySuggestion(suggestion)}
                       disabled={busy}
                     >
                       {suggestion}
                     </button>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             </section>
 
             <p className="platform-feedback-privacy" role="alert">
-              您的数据将会上报到 AgentKit 团队，请注意隐私保护。
+              {t("page.privacy")}
             </p>
             {error && (
               <p className="platform-feedback-error" role="alert">{error}</p>
@@ -215,7 +215,7 @@ export function PlatformFeedback({
 
             <div className="platform-feedback-actions">
               <button type="submit" disabled={!canSubmit || busy}>
-                {busy ? "正在上报…" : "提交反馈"}
+                {busy ? t("submitting") : t("submit")}
               </button>
             </div>
           </form>

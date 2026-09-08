@@ -16,6 +16,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { motion } from "motion/react";
+import { useTranslation } from "react-i18next";
 import {
   clearMessageFeedbackCache,
   createSession,
@@ -40,7 +41,7 @@ import {
   listModelOptions,
   listSessions,
   prepareSessionEnvironmentMounts,
-  RUN_SSE_INCOMPLETE_RESPONSE_ERROR,
+  runSseIncompleteResponseError,
   runSSE,
   refreshAgentFeedbackCases,
   submitIssueFeedback,
@@ -83,15 +84,17 @@ import {
   type IssueFeedbackModule,
 } from "./adk/issueFeedback";
 import {
-  applyEvent,
-  emptyAcc,
+  createAssistantEventProjector,
   eventsToTurns,
   sessionTitle,
+  upsertProjectedAssistantTurn,
   type Block,
   type IntelligentDevelopmentReleaseRef,
   type Turn,
   type TurnActivityDetail,
 } from "./blocks";
+import { i18n } from "./i18n";
+import { buildTranscriptRows } from "./transcriptRows";
 import { Sidebar, type SidebarPage } from "./ui/Sidebar";
 import { AgentInfoPanel } from "./ui/AgentTopology";
 import type { SkillCenterWorkspaceLaunch } from "./ui/SkillCenter";
@@ -108,7 +111,6 @@ import { EnvironmentCenter } from "./ui/EnvironmentCenter";
 import { WorkspaceCenter } from "./ui/WorkspaceCenter";
 import { Applications, type ApplicationId } from "./ui/Applications";
 import { CronJobs } from "./cronjobs/CronJobs";
-import { getAutomation } from "./automations/registry";
 import { SystemInfo } from "./ui/SystemInfo";
 import { DeveloperResources } from "./ui/DeveloperResources";
 import { GitHubIntegration } from "./ui/GitHubIntegration";
@@ -566,6 +568,20 @@ function displayAgentName(name: string): string {
   return name.replace(/__[0-9a-f]{10}(?:__.*)?$/i, "");
 }
 
+function assistantTurnIsStreaming(
+  turn: Turn,
+  index: number,
+  turnCount: number,
+  conversationBusy: boolean,
+  presentingStream: boolean,
+): boolean {
+  return turn.meta?.streaming === true || (
+    turn.meta?.streaming !== false &&
+    index === turnCount - 1 &&
+    (conversationBusy || presentingStream)
+  );
+}
+
 function mentionableDescendants(node: AgentNode): AgentTarget[] {
   const targets: AgentTarget[] = [];
   for (const child of node.children) {
@@ -735,7 +751,7 @@ function TraceIcon() {
 /** Format an epoch-seconds timestamp as Beijing (Asia/Shanghai) time. */
 function fmtTime(ts?: number): string {
   if (!ts) return "";
-  return new Date(ts * 1000).toLocaleString("zh-CN", {
+  return new Date(ts * 1000).toLocaleString(i18n.resolvedLanguage ?? i18n.language, {
     timeZone: "Asia/Shanghai",
     hour12: false,
     month: "2-digit",
@@ -808,12 +824,12 @@ function runOAuthPopup(authUri: string): Promise<string> {
       // Invalid URLs are rejected with unsupported schemes below.
     }
     if (protocol !== "http:" && protocol !== "https:") {
-      reject(new Error("授权链接不是 http/https 地址，已阻止打开。"));
+      reject(new Error(appText("oauth.unsupportedUrl")));
       return;
     }
     const popup = window.open(authUri, "veadk_oauth", "width=520,height=720");
     if (!popup) {
-      reject(new Error("弹窗被拦截，请允许弹窗后重试。"));
+      reject(new Error(appText("oauth.popupBlocked")));
       return;
     }
     let done = false;
@@ -842,14 +858,12 @@ function runOAuthPopup(authUri: string): Promise<string> {
       if (done) return;
       if (popup.closed) {
         cleanup();
-        const pasted = window.prompt(
-          "授权完成后，请粘贴回调页面（浏览器地址栏）的完整 URL：",
-        );
+        const pasted = window.prompt(appText("oauth.pasteCallbackUrl"));
         if (pasted && pasted.trim()) {
           done = true;
           resolve(pasted.trim());
         } else {
-          reject(new Error("授权已取消。"));
+          reject(new Error(appText("oauth.cancelled")));
         }
         return;
       }
@@ -888,7 +902,7 @@ function CopyButton({ text }: { text: string }) {
   return (
     <button
       className="icon-btn"
-      title={copied ? "已复制" : "复制"}
+      title={copied ? appText("actions.copied") : appText("actions.copy")}
       disabled={!text}
       onClick={async () => {
         if (!text) return;
@@ -915,8 +929,8 @@ function ShareMessageButton({
     <button
       type="button"
       className="icon-btn"
-      aria-label="导出会话"
-      title="导出会话"
+      aria-label={appText("actions.exportConversation")}
+      title={appText("actions.exportConversation")}
       onClick={onClick}
     >
       <Share className="icon" aria-hidden="true" />
@@ -928,23 +942,12 @@ function ShareMessageButton({
 import "./a2ui/components";
 
 
-const GREETINGS = [
-  "今天想做点什么？",
-  "有什么可以帮你的？",
-  "需要我帮你查点什么吗？",
-  "有问题尽管问我",
-  "嗨，我们开始吧",
-  "开始一段新对话吧",
-  "今天想先解决哪件事？",
-  "把你的想法告诉我吧",
-  "我们从哪里开始？",
-  "有什么任务交给我？",
-  "准备好一起推进了吗？",
-  "说说你现在最关心的问题",
-  "今天也一起把事情做好",
-  "我在，随时可以开始",
-];
-const pickGreeting = () => GREETINGS[Math.floor(Math.random() * GREETINGS.length)];
+const GREETING_KEYS = Array.from({ length: 14 }, (_, index) => `greetings.${index}`);
+const pickGreetingKey = () => GREETING_KEYS[Math.floor(Math.random() * GREETING_KEYS.length)];
+
+function appText(key: string, options?: Record<string, unknown>): string {
+  return i18n.t(key, { ns: "app", ...options });
+}
 
 function releaseAttachmentPreviews(items: Attachment[]) {
   for (const item of items) {
@@ -964,38 +967,37 @@ function browserMimeType(file: File) {
   return "application/octet-stream";
 }
 
-const SANDBOX_MODE_LABELS: Record<SandboxPermissions["sandboxMode"], string> = {
-  "read-only": "只读",
-  "workspace-write": "工作区写入",
-  "danger-full-access": "完全访问",
+const SANDBOX_MODE_LABEL_KEYS: Record<SandboxPermissions["sandboxMode"], string> = {
+  "read-only": "sandbox.mode.readOnly",
+  "workspace-write": "sandbox.mode.workspaceWrite",
+  "danger-full-access": "sandbox.mode.fullAccess",
 };
 
-const SANDBOX_APPROVAL_POLICY_LABELS: Record<
+const SANDBOX_APPROVAL_POLICY_LABEL_KEYS: Record<
   SandboxPermissions["approvalPolicy"],
   string
 > = {
-  untrusted: "仅不可信命令",
-  "on-request": "按需审批",
-  never: "不审批",
+  untrusted: "sandbox.approvalPolicy.untrusted",
+  "on-request": "sandbox.approvalPolicy.onRequest",
+  never: "sandbox.approvalPolicy.never",
 };
 
-const SANDBOX_REVIEWER_LABELS: Record<
+const SANDBOX_REVIEWER_LABEL_KEYS: Record<
   SandboxPermissions["approvalsReviewer"],
   string
 > = {
-  user: "由我审批",
-  auto_review: "自动审查",
+  user: "sandbox.reviewer.user",
+  auto_review: "sandbox.reviewer.autoReview",
 };
 
 function approvalActivityTitle(
   approval: SandboxApproval,
   decision: SandboxApprovalDecision,
 ): string {
-  const subject = approval.kind === "file" ? "文件修改" : "命令执行";
-  if (decision === "accept") return `已允许本次${subject}`;
-  if (decision === "acceptForSession") return `已在本会话中允许${subject}`;
-  if (decision === "decline") return `已拒绝${subject}`;
-  return `已取消${subject}审批`;
+  const subject = appText(
+    approval.kind === "file" ? "approval.subject.file" : "approval.subject.command",
+  );
+  return appText(`approval.decision.${decision}`, { subject });
 }
 
 function approvalActivityDetails(
@@ -1003,17 +1005,17 @@ function approvalActivityDetails(
 ): TurnActivityDetail[] {
   const details: TurnActivityDetail[] = [];
   if (approval.command?.trim()) {
-    details.push({ label: "命令", value: approval.command.trim(), code: true });
+    details.push({ label: appText("approval.details.command"), value: approval.command.trim(), code: true });
   }
   if (approval.grantRoot?.trim()) {
     details.push({
-      label: "授权路径",
+      label: appText("approval.details.grantRoot"),
       value: approval.grantRoot.trim(),
       code: true,
     });
   }
   if (approval.cwd?.trim()) {
-    details.push({ label: "执行目录", value: approval.cwd.trim(), code: true });
+    details.push({ label: appText("approval.details.cwd"), value: approval.cwd.trim(), code: true });
   }
   return details;
 }
@@ -1098,6 +1100,7 @@ function sessionUsageKey(app: string, session: string): string {
 }
 
 export default function App() {
+  const { t } = useTranslation("app");
   const [apps, setApps] = useState<string[]>([]);
   const [appName, setAppName] = useState("");
   const [sessions, setSessions] = useState<AdkSession[]>([]);
@@ -1362,7 +1365,7 @@ export default function App() {
   const resolveIntelligentDeliveryComparison = useCallback(
     async (delivery: IntelligentDevelopmentReleaseRef) => {
       if (!delivery.projectId || !delivery.versionId || !delivery.parentVersionId) {
-        throw new Error("当前版本没有可对比的优化前版本。");
+        throw new Error(appText("errors.noOptimizationBaseline"));
       }
       const versions = await fetchIntelligentDevelopmentVersions(delivery.projectId);
       const targetVersion = versions.find(
@@ -1372,7 +1375,7 @@ export default function App() {
         (version) => version.versionId === delivery.parentVersionId,
       );
       if (!targetVersion || !baseVersion) {
-        throw new Error("无法找到本次优化对应的项目版本，可能已被删除。");
+        throw new Error(appText("errors.optimizationVersionMissing"));
       }
       const [base, target] = await Promise.all([
         fetchIntelligentDevelopmentVersionSource(baseVersion),
@@ -1606,7 +1609,7 @@ export default function App() {
       }
 
       if (!current.optimizedPrompt || !current.resolvedMode) {
-        throw new Error("提示词优化结果不完整，请重新优化后再试。");
+        throw new Error(appText("errors.incompletePromptOptimization"));
       }
 
       const created = await createVideoTask({
@@ -1636,11 +1639,11 @@ export default function App() {
           });
         }
         if (remote.status === "failed") {
-          throw new Error(remote.error || "视频生成失败，请稍后重试。");
+          throw new Error(remote.error || appText("errors.videoGenerationFailed"));
         }
         if (remote.status === "succeeded") {
           if (!remote.videoUrl) {
-            throw new Error("视频任务已完成，但服务端未返回预览地址。");
+            throw new Error(appText("errors.videoPreviewMissing"));
           }
           commitVideoTask(localId, runId, {
             type: "generation_succeeded",
@@ -1674,11 +1677,11 @@ export default function App() {
       return;
     }
     if (config.taskMode === "video_editing" && !config.referenceVideo) {
-      setError("视频编辑需要先添加待编辑视频。");
+      setError(appText("errors.videoEditRequiresVideo"));
       return;
     }
     if (config.taskMode === "video_extension" && !config.referenceVideo) {
-      setError("视频续写需要先添加基础视频。");
+      setError(appText("errors.videoExtendRequiresVideo"));
       return;
     }
     if (
@@ -1686,18 +1689,18 @@ export default function App() {
       !config.referenceImage &&
       !config.referenceVideo
     ) {
-      setError("参考素材生视频需要至少添加一项参考图片或参考视频。");
+      setError(appText("errors.videoReferenceRequired"));
       return;
     }
     if (
       config.taskMode === "text_to_video" &&
       (config.referenceImage || config.referenceVideo || config.firstFrame || config.lastFrame)
     ) {
-      setError("文生视频不使用参考素材，请先移除已添加的图片或视频。");
+      setError(appText("errors.textVideoRejectsReferences"));
       return;
     }
     if (config.taskMode === "first_last_frame" && !config.firstFrame) {
-      setError("首尾帧生成需要先添加首帧图片。");
+      setError(appText("errors.firstFrameRequired"));
       return;
     }
     if (
@@ -1705,22 +1708,19 @@ export default function App() {
       config.taskMode !== "auto" &&
       !capabilities.supportedModes.includes(config.taskMode)
     ) {
-      setError("当前平台暂不支持所选视频任务模式。");
+      setError(appText("errors.videoModeUnsupported"));
       return;
     }
     const assets = videoAssetsForConfig(config);
     if (assets.length > 0 && !capabilities.assetStorageAvailable) {
-      setError(
-        capabilities.assetStorageUnavailableReason ||
-          "管理员未配置持久化存储",
-      );
+      setError(appText("errors.persistentStorageNotConfigured"));
       return;
     }
     const oversized = assets.find(
       ({ file }) => capabilities.maxAssetBytes > 0 && file.size > capabilities.maxAssetBytes,
     );
     if (oversized) {
-      setError(`${oversized.file.name} 超出当前平台允许的素材大小。`);
+      setError(appText("errors.mediaTooLarge", { fileName: oversized.file.name }));
       return;
     }
 
@@ -1787,7 +1787,8 @@ export default function App() {
   }, [appName, sessionId]);
   const [traceOpen, setTraceOpen] = useState(false);
   const [traceEndTimeMs, setTraceEndTimeMs] = useState<number>();
-  const [greeting, setGreeting] = useState(pickGreeting);
+  const [greetingKey, setGreetingKey] = useState(pickGreetingKey);
+  const greeting = t(greetingKey);
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
   const [authExpired, setAuthExpired] = useState(false);
   const [authRecoveryChecking, setAuthRecoveryChecking] = useState(false);
@@ -1931,7 +1932,7 @@ export default function App() {
         if (!status.busy) {
           const lastMessage = snapshot?.messages[snapshot.messages.length - 1];
           if (lastMessage?.role === "user") {
-            setError("云端 Codex 已结束，但没有生成回复，请重新发送任务。");
+            setError(appText("errors.cloudCodexEmptyReply"));
           }
           return;
         }
@@ -2098,7 +2099,20 @@ export default function App() {
   const [hasCreds, setHasCreds] = useState(true);
   const [skillCenter, setSkillCenter] = useState(false);
   const [libraryTab, setLibraryTab] = useState<LibraryTab>("skills");
-  const [libraryPageTitle, setLibraryPageTitle] = useState("技能库");
+  const [libraryPageTitleState, setLibraryPageTitleState] = useState<
+    | { kind: "key"; key: string; name?: string }
+    | { kind: "literal"; title: string }
+  >({ kind: "key", key: "titles.skillLibrary" });
+  const libraryPageTitle = libraryPageTitleState.kind === "key"
+    ? t(libraryPageTitleState.key, { name: libraryPageTitleState.name })
+    : libraryPageTitleState.title;
+  const handleLibraryPageTitleChange = useCallback((title: string) => {
+    setLibraryPageTitleState((current) =>
+      current.kind === "literal" && current.title === title
+        ? current
+        : { kind: "literal", title },
+    );
+  }, []);
   const [skillCenterLaunch, setSkillCenterLaunch] =
     useState<SkillCenterWorkspaceLaunch | null>(null);
   const [addAgent, setAddAgent] = useState(false);
@@ -2217,7 +2231,7 @@ export default function App() {
         writeWorkspaceDrafts(localStorage, userId, next);
       } catch (cause) {
         setDraftStorageError(
-          cause instanceof Error ? cause.message : "浏览器拒绝保存草稿，请稍后重试。",
+          cause instanceof Error ? cause.message : appText("errors.saveDraftRejected"),
         );
         return false;
       }
@@ -2352,7 +2366,7 @@ export default function App() {
       setDraftStorageError("");
     } catch (cause) {
       setDraftStorageError(
-        cause instanceof Error ? cause.message : "无法读取本机草稿，请稍后重试。",
+        cause instanceof Error ? cause.message : appText("errors.readDraftFailed"),
       );
     }
     savedAgentDraftsRef.current = nextDrafts;
@@ -2385,7 +2399,7 @@ export default function App() {
       }
     } catch {
       setDraftStorageError(
-        "浏览器拒绝保存当前草稿位置，请检查站点存储权限后重试。",
+        appText("errors.saveDraftLocationRejected"),
       );
     }
   }, [createView, editingDraftId, userId]);
@@ -2419,7 +2433,7 @@ export default function App() {
     const failures: string[] = [];
     for (const agent of targets) {
       try {
-        if (!agent.region) throw new Error("Runtime 缺少地域信息，无法删除");
+        if (!agent.region) throw new Error(appText("errors.runtimeRegionMissingForDelete"));
         await deleteRuntime(agent.runtimeId, agent.region);
         removeRuntimeConnection(agent.runtimeId);
         deletedRuntimeIds.add(agent.runtimeId);
@@ -2503,8 +2517,14 @@ export default function App() {
 
     if (failures.length > 0) {
       const shown = failures.slice(0, 3).join("；");
-      const suffix = failures.length > 3 ? `；另有 ${failures.length - 3} 个失败` : "";
-      throw new Error(`${failures.length} 个 Agent 删除失败：${shown}${suffix}`);
+      const suffix = failures.length > 3
+        ? appText("errors.additionalAgentDeleteFailures", { count: failures.length - 3 })
+        : "";
+      throw new Error(appText("errors.agentDeleteFailures", {
+        count: failures.length,
+        failures: shown,
+        suffix,
+      }));
     }
   }, [agentDetailTarget, appName, commitWorkspaceDrafts, connections, exitAgentDetailContext, userId]);
 
@@ -2595,7 +2615,7 @@ export default function App() {
 
   const finishDeployment = useCallback(
     async (result: DeployResult) => {
-      if (!result.runtimeId) throw new Error("部署完成，但未返回 Runtime ID。");
+      if (!result.runtimeId) throw new Error(appText("errors.deploymentRuntimeIdMissing"));
       const completedDraftId = editingDraftId;
       if (completedDraftId) {
         removeWorkspaceDraft(completedDraftId);
@@ -2655,8 +2675,12 @@ export default function App() {
       const canRate = Boolean(
         responseAnnotationRuntimeAvailable && feedbackEventId && turnText(turn),
       );
-      const turnIsStreaming = index === turns.length - 1 && (
-        activeConversationBusy || presentingStream
+      const turnIsStreaming = assistantTurnIsStreaming(
+        turn,
+        index,
+        turns.length,
+        activeConversationBusy,
+        presentingStream,
       );
       contexts.set(index, {
         enabled: Boolean(
@@ -2863,7 +2887,7 @@ export default function App() {
     const loginWindow = openLoginWindow();
     if (!loginWindow) {
       authRecoveryActiveRef.current = false;
-      setAuthRecoveryError("登录窗口被浏览器拦截，请允许弹出窗口后重试。");
+      setAuthRecoveryError(appText("errors.loginPopupBlocked"));
       return;
     }
     setAuthRecoveryChecking(true);
@@ -2887,7 +2911,7 @@ export default function App() {
           // The gateway may return its login page until the popup completes.
         }
         if (loginWindow.closed) {
-          setAuthRecoveryError("登录窗口已关闭，请重新登录以继续当前操作。");
+          setAuthRecoveryError(appText("errors.loginPopupClosed"));
           return;
         }
       }
@@ -2935,7 +2959,7 @@ export default function App() {
         if (controller.signal.aborted) return;
         if (!delivery.deployable) {
           setIntelligentCapabilitiesError(
-            "该源码尚未准备好，请返回对话继续处理。",
+            appText("errors.sourceNotReady"),
           );
           return;
         }
@@ -2971,7 +2995,7 @@ export default function App() {
       signal: controller.signal,
     })
       .then(async (response) => {
-        if (!response.ok) throw new Error(`智能开发能力检查失败（HTTP ${response.status}）`);
+        if (!response.ok) throw new Error(appText("errors.intelligentCapabilityCheckFailed", { status: response.status }));
         return response.json() as Promise<{
           enabled?: unknown;
           reason?: unknown;
@@ -2992,7 +3016,7 @@ export default function App() {
         };
         if (value.model !== undefined) {
           if (typeof value.model !== "object" || value.model === null) {
-            throw new Error("智能开发模型能力格式错误。");
+            throw new Error(appText("errors.invalidIntelligentCapability"));
           }
           const model = value.model as { configured?: unknown; id?: unknown };
           if (typeof model.configured === "boolean" && typeof model.id === "string") {
@@ -3001,7 +3025,7 @@ export default function App() {
               id: model.id,
             };
           } else {
-            throw new Error("智能开发模型能力格式错误。");
+            throw new Error(appText("errors.invalidIntelligentCapability"));
           }
         }
         setIntelligentCapabilities(capability);
@@ -3165,54 +3189,54 @@ export default function App() {
   let documentTitleTarget: StudioDocumentTitleTarget = { kind: "home" };
   if (authStatus === "authenticated") {
     if (platformFeedbackOrigin !== null) {
-      documentTitleTarget = { kind: "page", title: "问题反馈" };
+      documentTitleTarget = { kind: "page", title: t("titles.issueFeedback") };
     } else if (systemInfo) {
-      documentTitleTarget = { kind: "page", title: "系统信息" };
+      documentTitleTarget = { kind: "page", title: t("titles.systemInfo") };
     } else if (cronJobsView) {
-      documentTitleTarget = { kind: "page", title: "定时任务" };
+      documentTitleTarget = { kind: "page", title: t("titles.cronJobs") };
     } else if (applicationsView) {
       documentTitleTarget = {
         kind: "page",
         title: applicationsView === "catalog"
-          ? "自动化"
-          : getAutomation(applicationsView).name,
+          ? t("titles.automations")
+          : t(`cards.${applicationsView}.name`, { ns: "automations" }),
       };
     } else if (sandboxAgentWorkspace) {
       documentTitleTarget = {
         kind: "page",
-        title: sandboxAgentWorkspace.session.displayName || "智能体",
+        title: sandboxAgentWorkspace.session.displayName || t("titles.agent"),
       };
     } else if (sandboxAgentDetailTarget) {
       documentTitleTarget = {
         kind: "page",
-        title: sandboxAgentDetailTarget.displayName || "智能体",
+        title: sandboxAgentDetailTarget.displayName || t("titles.agent"),
       };
     } else if (myAgents || manageAgents) {
       documentTitleTarget = {
         kind: "page",
-        title: agentDetailTarget?.name || "智能体",
+        title: agentDetailTarget?.name || t("titles.agent"),
       };
     } else if (addMenu) {
-      documentTitleTarget = { kind: "page", title: "创建智能体" };
+      documentTitleTarget = { kind: "page", title: t("titles.createAgent") };
     } else if (searchView) {
-      documentTitleTarget = { kind: "page", title: "搜索" };
+      documentTitleTarget = { kind: "page", title: t("titles.search") };
     } else if (addAgent) {
-      documentTitleTarget = { kind: "page", title: "添加智能体" };
+      documentTitleTarget = { kind: "page", title: t("titles.addAgent") };
     } else if (skillCenter) {
       documentTitleTarget = {
         kind: "page",
-        title: libraryPageTitle || "资源库",
+        title: libraryPageTitle || t("titles.library"),
       };
     } else if (createView) {
       documentTitleTarget = {
         kind: "page",
         title: createView === "custom"
           ? runtimeUpdateTarget?.name
-            ? `更新 ${runtimeUpdateTarget.name}`
-            : "创建智能体"
+            ? t("titles.updateAgent", { name: runtimeUpdateTarget.name })
+            : t("titles.createAgent")
           : createView === "package"
-            ? "从代码包添加"
-            : "迁移智能体",
+            ? t("titles.addFromPackage")
+            : t("titles.migrateAgent"),
       };
     } else if (sandboxSession) {
       const activeThread = sandboxCommands.threads.find(
@@ -3226,8 +3250,9 @@ export default function App() {
       };
     } else if (sessionId) {
       const activeSession = sessions.find((session) => session.id === sessionId);
-      const activeSessionTitle = sessionTitle(activeSession?.events);
-      documentTitleTarget = activeSessionTitle === "新会话"
+      const newSessionTitle = t("titles.newConversation");
+      const activeSessionTitle = sessionTitle(activeSession?.events, newSessionTitle);
+      documentTitleTarget = activeSessionTitle === newSessionTitle
         ? { kind: "home" }
         : { kind: "conversation", title: activeSessionTitle };
     }
@@ -3631,7 +3656,7 @@ export default function App() {
     setSandboxLaunchState("confirm");
     setSandboxLaunchKind(kind);
     setSandboxLaunchPersistentEnabled(false);
-    setSandboxLaunchPersistentReason("正在检查持久化能力…");
+    setSandboxLaunchPersistentReason(appText("sandbox.checkingPersistence"));
     setSandboxLaunchPersistentRequired(false);
     setSandboxLaunchStorageMode("snapshot");
     setSandboxLaunchDiskGbDefault(10);
@@ -3657,7 +3682,7 @@ export default function App() {
       .catch((cause) => {
         if ((cause as Error)?.name === "AbortError") return;
         setSandboxLaunchPersistentEnabled(false);
-        setSandboxLaunchPersistentReason("暂时无法确认持久化能力");
+        setSandboxLaunchPersistentReason(appText("sandbox.persistenceUnknown"));
       });
     setSandboxLaunchFromAgents(fromAgents);
     setSandboxLaunchOpen(true);
@@ -3908,7 +3933,7 @@ export default function App() {
         resource.id === sessionId,
     );
     if (!session) {
-      throw new Error("云端 Codex Session 暂未出现在列表中，请稍后重试。");
+      throw new Error(appText("errors.cloudCodexSessionMissing"));
     }
     await openSandboxAgent(session, "my_agents");
     setSandboxProjectUploadOpen(false);
@@ -4070,7 +4095,7 @@ export default function App() {
     setError("");
     try {
       if (!navigator.clipboard?.writeText) {
-        throw new Error("当前浏览器不支持写入剪贴板。");
+        throw new Error(appText("errors.clipboardUnsupported"));
       }
       const exported = await sandboxClient.getEndpoint(activeSession.id);
       await navigator.clipboard.writeText(exported.endpoint);
@@ -4107,23 +4132,25 @@ export default function App() {
       );
       appendSandboxActivity(
         activeSession.id,
-        "已更新当前 Sandbox Session 的 Codex 权限",
+        appText("sandbox.permissionsUpdated"),
         [
           {
-            label: "沙箱模式",
-            value: SANDBOX_MODE_LABELS[permissions.sandboxMode],
+            label: appText("sandbox.labels.mode"),
+            value: appText(SANDBOX_MODE_LABEL_KEYS[permissions.sandboxMode]),
           },
           {
-            label: "审批策略",
-            value: SANDBOX_APPROVAL_POLICY_LABELS[permissions.approvalPolicy],
+            label: appText("sandbox.labels.approvalPolicy"),
+            value: appText(SANDBOX_APPROVAL_POLICY_LABEL_KEYS[permissions.approvalPolicy]),
           },
           {
-            label: "审批方式",
-            value: SANDBOX_REVIEWER_LABELS[permissions.approvalsReviewer],
+            label: appText("sandbox.labels.reviewer"),
+            value: appText(SANDBOX_REVIEWER_LABEL_KEYS[permissions.approvalsReviewer]),
           },
           {
-            label: "网络访问",
-            value: permissions.networkAccess ? "允许" : "关闭",
+            label: appText("sandbox.labels.networkAccess"),
+            value: appText(
+              permissions.networkAccess ? "sandbox.network.allowed" : "sandbox.network.disabled",
+            ),
           },
         ],
       );
@@ -4142,7 +4169,7 @@ export default function App() {
   const browseSandboxDirectories = useCallback(
     async (path: string) => {
       const activeSessionId = sandboxSession?.id;
-      if (!activeSessionId) throw new Error("当前没有已连接的 Sandbox。");
+      if (!activeSessionId) throw new Error(appText("errors.noConnectedSandbox"));
       return sandboxClientForSession.listDirectories(activeSessionId, path);
     },
     [sandboxSession?.id],
@@ -4170,8 +4197,8 @@ export default function App() {
       sandboxCommands.invalidateSkills();
       appendSandboxActivity(
         activeSession.id,
-        "已更新工作空间",
-        [{ label: "工作目录", value: applied, code: true }],
+        appText("sandbox.workspaceUpdated"),
+        [{ label: appText("sandbox.labels.workingDirectory"), value: applied, code: true }],
       );
       if (sandboxSessionIdRef.current === activeSession.id) {
         setSandboxWorkspaceOpen(false);
@@ -4289,10 +4316,12 @@ export default function App() {
         appendSandboxActivity(
           activeSession.id,
           uploadedFiles.length === 1
-            ? "已上传文件到 Sandbox"
-            : `已上传 ${uploadedFiles.length} 个文件到 Sandbox`,
+            ? appText("sandbox.fileUploaded")
+            : appText("sandbox.filesUploaded", { count: uploadedFiles.length }),
           uploadedFiles.map((uploaded, index) => ({
-            label: uploadedFiles.length === 1 ? "文件" : `文件 ${index + 1}`,
+            label: uploadedFiles.length === 1
+              ? appText("sandbox.labels.file")
+              : appText("sandbox.labels.fileNumber", { number: index + 1 }),
             value: uploaded.path,
             code: true,
           })),
@@ -4381,7 +4410,7 @@ export default function App() {
     void interrupt.catch(() => {
       if (!sandboxSessionIdRef.current) {
         setError(
-          "已离开开发环境，但未能确认本轮构建已停止。任务可能仍在运行，请稍后从历史会话检查状态。",
+          appText("errors.buildStopUnconfirmed"),
         );
       }
     });
@@ -4450,7 +4479,7 @@ export default function App() {
     const prompt = uploadedPaths.length > 0
       ? [
           visiblePrompt,
-          "以下文件已上传到当前 Sandbox 工作空间，请在任务中使用：",
+          appText("sandbox.uploadedFilesPrompt"),
           ...uploadedPaths.map((path) => `- ${path}`),
         ].filter(Boolean).join("\n\n")
       : visiblePrompt;
@@ -4626,11 +4655,11 @@ export default function App() {
         setError(
           activeSession.intelligentDevelopment
             ? intelligentDevelopmentErrorMessage(messageError)
-            : `内置智能体发送失败：${
-                messageError instanceof Error
+            : appText("errors.builtinAgentSendFailed", {
+                message: messageError instanceof Error
                   ? messageError.message
-                  : String(messageError)
-              }`,
+                  : String(messageError),
+              }),
         );
       }
     } finally {
@@ -4646,7 +4675,7 @@ export default function App() {
               (turn) =>
                 turn.meta?.localId !== assistantTurnId || turn.blocks.length > 0,
             ));
-            appendSandboxActivity(activeSession.id, "已停止，可继续输入");
+            appendSandboxActivity(activeSession.id, appText("sandbox.stoppedReady"));
           }
         }
         sandboxMessageAbortRef.current = null;
@@ -4693,7 +4722,7 @@ export default function App() {
   function startNewChat() {
     exitSandboxSession();
     setError("");
-    setGreeting(pickGreeting());
+    setGreetingKey(pickGreetingKey());
     setNewChatMode("agent");
     setNewChatTask(null);
     setNewChatSkillTarget(null);
@@ -4807,7 +4836,9 @@ export default function App() {
     } catch (cause) {
       if ((cause as Error)?.name !== "AbortError") {
         setIntelligentCapabilitiesError(
-          cause instanceof Error ? cause.message : "智能开发会话创建失败",
+          cause instanceof Error
+            ? cause.message
+            : appText("errors.intelligentSessionCreateFailed"),
         );
       }
     } finally {
@@ -4883,7 +4914,7 @@ export default function App() {
 
   async function openFeedbackCaseInStudio(item: AgentFeedbackCase) {
     if (!item.sessionId || !item.messageId) {
-      setError("这条案例缺少会话定位信息，无法跳转。");
+      setError(appText("errors.evaluationCaseSessionMissing"));
       return;
     }
     setSearchView(false);
@@ -5113,9 +5144,17 @@ export default function App() {
         })),
       });
     if (text.trim()) userBlocks.push({ kind: "text", text });
+    const optimisticAssistantTurn: Turn = {
+      role: "assistant",
+      blocks: [],
+      meta: {
+        localId: `pending-${crypto.randomUUID()}`,
+        streaming: true,
+      },
+    };
     const optimisticTurns: Turn[] = [
       { role: "user", blocks: userBlocks, meta: { ts: Date.now() / 1000 } },
-      { role: "assistant", blocks: [] },
+      optimisticAssistantTurn,
     ];
     if (createsSession) {
       setPendingTurns(optimisticTurns);
@@ -5167,7 +5206,7 @@ export default function App() {
             ),
           });
         }
-        setError(`当前 Agent 缺少任务工具：${missingTools.join("、")}`);
+        setError(appText("errors.agentToolsMissing", { tools: missingTools.join(", ") }));
         return;
       }
       if (studioToolRuntime) {
@@ -5210,15 +5249,14 @@ export default function App() {
     setSeenAgentsBySession((m) => ({ ...m, [sid]: new Set() }));
     setExecPathBySession((m) => ({ ...m, [sid]: [] }));
 
+    const eventProjector = createAssistantEventProjector(
+      `${sid}-${crypto.randomUUID()}`,
+      optimisticAssistantTurn,
+    );
     let streamFailed = false;
     let streamError: unknown = null;
     try {
-      let acc = emptyAcc();
-      let currentStreamAuthor = "";
-      let tokens = 0;
-      let ts = Date.now() / 1000;
-      let eventId = "";
-      let invocationId = "";
+      let finalEventId = "";
       let hasCompletedReply = false;
       for await (const event of runSSE({
         appName,
@@ -5249,54 +5287,25 @@ export default function App() {
         }
         // Live topology: author + transfer/end signals, keyed by session.
         applyStreamSignals(sid, event);
-        const eventAuthor = event.author && event.author !== "user"
-          ? event.author
-          : "";
-        if (eventAuthor && eventAuthor !== currentStreamAuthor) {
-          currentStreamAuthor = eventAuthor;
-          acc = emptyAcc();
-        }
-        acc = applyEvent(acc, event);
-        const usage = event.usageMetadata ?? event.usage_metadata;
         addTokenUsageFor(appName, sid, event);
-        if (usage?.totalTokenCount) tokens = usage.totalTokenCount;
-        if (event.timestamp) ts = event.timestamp;
-        if (event.id) eventId = event.id;
-        const nextInvocationId = event.invocationId ?? event.invocation_id;
-        if (nextInvocationId) invocationId = nextInvocationId;
-        const blocks = acc.blocks;
+        const projection = eventProjector.project(event);
+        if (projection.ignored) continue;
         if (
-          event.partial !== true &&
-          turnHasVisibleContent({ role: "assistant", blocks })
+          projection.completed &&
+          turnHasVisibleContent(projection.turn)
         ) {
           hasCompletedReply = true;
+          finalEventId = projection.turn.meta?.eventId ?? finalEventId;
         }
-        const meta = {
-          author: currentStreamAuthor || undefined,
-          tokens: tokens || undefined,
-          ts,
-          eventId: eventId || undefined,
-          invocationId: invocationId || undefined,
-        };
-        setTurnsFor(sid, (t) => {
-          const next = t.slice();
-          const last = next[next.length - 1];
-          if (
-            last?.role === "assistant" &&
-            (!last.meta?.author || last.meta.author === currentStreamAuthor)
-          ) {
-            next[next.length - 1] = { ...last, blocks, meta };
-          } else {
-            next.push({ role: "assistant", blocks, meta });
-          }
-          return next;
-        });
+        setTurnsFor(sid, (turns) =>
+          upsertProjectedAssistantTurn(turns, projection.turn),
+        );
       }
       if (!ctrl.signal.aborted && !streamFailed && !hasCompletedReply) {
         streamFailed = true;
-        streamError = RUN_SSE_INCOMPLETE_RESPONSE_ERROR;
+        streamError = runSseIncompleteResponseError();
         if (viewSidRef.current === sid) {
-          setError(RUN_SSE_INCOMPLETE_RESPONSE_ERROR);
+          setError(runSseIncompleteResponseError());
         }
       }
       void refreshSessions(appName);
@@ -5317,7 +5326,7 @@ export default function App() {
           messageOperation?.succeed({ sessionId: String(sid) });
         }
       }
-      if (!ctrl.signal.aborted && !streamFailed && eventId) {
+      if (!ctrl.signal.aborted && !streamFailed && finalEventId) {
         automaticEvaluationStatusRefreshRef.current();
       }
     } catch (e) {
@@ -5340,6 +5349,11 @@ export default function App() {
         setError(e instanceof Error ? e.message : String(e));
       }
     } finally {
+      for (const unfinished of eventProjector.finish()) {
+        setTurnsFor(sid, (turns) =>
+          upsertProjectedAssistantTurn(turns, unfinished),
+        );
+      }
       if (
         !ctrl.signal.aborted &&
         streamFailed &&
@@ -5377,8 +5391,8 @@ export default function App() {
    *  exchanges the code for a token and resumes the paused tool call. The
    *  continuation streams into the same assistant turn. */
   async function onAuth(block: Extract<Block, { kind: "auth" }>) {
-    if (!block.authUri) throw new Error("事件中没有授权地址。");
-    if (!appName || !userId || !sessionId) throw new Error("会话尚未就绪。");
+    if (!block.authUri) throw new Error(appText("errors.oauthUrlMissing"));
+    if (!appName || !userId || !sessionId) throw new Error(appText("errors.sessionNotReady"));
     const sid = sessionId;
     const callbackUrl = await runOAuthPopup(block.authUri);
     const response = withAuthResponseUri(block.authConfig, callbackUrl);
@@ -5415,14 +5429,14 @@ export default function App() {
     const resumedPlatformTools = environmentMounts.length > 0
       ? [...new Set([...selectedStudioToolIds, ...ENVIRONMENT_STUDIO_TOOL_IDS])]
       : selectedStudioToolIds;
+    const eventProjector = createAssistantEventProjector(
+      `${sid}-${crypto.randomUUID()}`,
+      lastTurn?.role === "assistant"
+        ? { ...lastTurn, blocks: base }
+        : undefined,
+    );
     try {
-      let acc = emptyAcc();
-      let currentStreamAuthor = lastTurn?.meta?.author ?? "";
-      let currentBase = base;
-      let tokens = 0;
-      let ts = Date.now() / 1000;
-      let eventId = lastTurn?.meta?.eventId ?? "";
-      let invocationId = lastTurn?.meta?.invocationId ?? "";
+      let finalEventId = "";
       let hasCompletedReply = false;
       for await (const event of runSSE({
         appName,
@@ -5452,62 +5466,28 @@ export default function App() {
           break;
         }
         applyStreamSignals(sid, event);
-        const eventAuthor = event.author && event.author !== "user"
-          ? event.author
-          : "";
-        if (eventAuthor && eventAuthor !== currentStreamAuthor) {
-          currentStreamAuthor = eventAuthor;
-          currentBase = [];
-          acc = emptyAcc();
-        }
-        acc = applyEvent(acc, event);
-        const usage = event.usageMetadata ?? event.usage_metadata;
         addTokenUsageFor(appName, sid, event);
-        if (usage?.totalTokenCount) tokens = usage.totalTokenCount;
-        if (event.timestamp) ts = event.timestamp;
-        if (event.id) eventId = event.id;
-        const nextInvocationId = event.invocationId ?? event.invocation_id;
-        if (nextInvocationId) invocationId = nextInvocationId;
-        const blocks = [...currentBase, ...acc.blocks];
+        const projection = eventProjector.project(event);
+        if (projection.ignored) continue;
         if (
-          event.partial !== true &&
-          turnHasVisibleContent({ role: "assistant", blocks: acc.blocks })
+          projection.completed &&
+          turnHasVisibleContent(projection.turn)
         ) {
           hasCompletedReply = true;
+          finalEventId = projection.turn.meta?.eventId ?? finalEventId;
         }
-        setTurnsFor(sid, (t) => {
-          const next = t.slice();
-          const last = next[next.length - 1];
-          const meta = {
-            author: currentStreamAuthor || last?.meta?.author,
-            tokens: tokens || last?.meta?.tokens,
-            ts,
-            eventId: eventId || last?.meta?.eventId,
-            invocationId: invocationId || last?.meta?.invocationId,
-          };
-          if (
-            last?.role === "assistant" &&
-            (!last.meta?.author || last.meta.author === currentStreamAuthor)
-          ) {
-            next[next.length - 1] = {
-              ...last,
-              blocks,
-              meta,
-            };
-          } else {
-            next.push({ role: "assistant", blocks, meta });
-          }
-          return next;
-        });
+        setTurnsFor(sid, (turns) =>
+          upsertProjectedAssistantTurn(turns, projection.turn),
+        );
       }
       if (!ctrl.signal.aborted && !streamFailed && !hasCompletedReply) {
         streamFailed = true;
         if (viewSidRef.current === sid) {
-          setError(RUN_SSE_INCOMPLETE_RESPONSE_ERROR);
+          setError(runSseIncompleteResponseError());
         }
       }
       void refreshSessions(appName);
-      if (!ctrl.signal.aborted && !streamFailed && eventId) {
+      if (!ctrl.signal.aborted && !streamFailed && finalEventId) {
         automaticEvaluationStatusRefreshRef.current();
       }
     } catch (e) {
@@ -5520,6 +5500,11 @@ export default function App() {
         setError(e instanceof Error ? e.message : String(e));
       }
     } finally {
+      for (const unfinished of eventProjector.finish()) {
+        setTurnsFor(sid, (turns) =>
+          upsertProjectedAssistantTurn(turns, unfinished),
+        );
+      }
       if (streamAbortsRef.current.get(sid) === ctrl) streamAbortsRef.current.delete(sid);
       setStreaming(sid, false);
       finishStreamPresentation(sid);
@@ -5585,7 +5570,7 @@ export default function App() {
       .catch((cause) => {
         if (cancelled) return;
         setStudioToolsError(
-          cause instanceof Error ? cause.message : "读取本地工具失败",
+          cause instanceof Error ? cause.message : appText("errors.localToolsLoadFailed"),
         );
       })
       .finally(() => {
@@ -5648,9 +5633,8 @@ export default function App() {
       ));
     } catch (cause) {
       if (controller.signal.aborted) return;
-      setSessionEnvironmentsError(
-        cause instanceof Error ? cause.message : "读取环境失败",
-      );
+      console.warn("Unable to refresh Studio environments and workspaces", cause);
+      setSessionEnvironmentsError(appText("errors.environmentsLoadFailed"));
     } finally {
       if (sessionEnvironmentLoadAbortRef.current === controller) {
         sessionEnvironmentLoadAbortRef.current = null;
@@ -5696,7 +5680,7 @@ export default function App() {
       <div className="boot boot-error">
         <p>{authError}</p>
         <button type="button" onClick={resolveAuth}>
-          重试
+          {t("actions.retry")}
         </button>
       </div>
     );
@@ -5807,15 +5791,15 @@ export default function App() {
     selections: SessionEnvironmentMountSelection[],
     workspaceIds: string[] = [],
   ): Promise<void> => {
-    if (!sessionId) throw new Error("当前会话不存在，无法挂载环境。");
+    if (!sessionId) throw new Error(appText("errors.sessionMissingForMount"));
     const valid = selections.every((selection) => sessionEnvironments.some((environment) =>
       environment.id === selection.environment_id &&
       environment.latestVersion?.versionId === selection.environment_version_id
     ));
-    if (!valid) throw new Error("所选环境已失效，请刷新后重新选择。");
+    if (!valid) throw new Error(appText("errors.environmentExpired"));
     if (selections.length > 0) {
       if (!studioToolRuntime) {
-        throw new Error("当前 Agent 没有可用的 Sandbox Runtime。");
+        throw new Error(appText("errors.sandboxRuntimeUnavailable"));
       }
       setSessionEnvironmentsError("");
       try {
@@ -5827,7 +5811,7 @@ export default function App() {
           environmentMounts: selections,
         });
       } catch (cause) {
-        const message = cause instanceof Error ? cause.message : "挂载环境失败";
+        const message = cause instanceof Error ? cause.message : appText("errors.mountEnvironmentFailed");
         throw new Error(message);
       }
     }
@@ -5855,13 +5839,13 @@ export default function App() {
   const studioToolsUnavailableReason = studioToolsError
     ? studioToolsError
     : studioToolCapabilities && !studioToolCapabilities.enabled
-      ? "本地 Studio BFF 没有配置工具。"
+      ? t("errors.localBffToolsNotConfigured")
       : studioToolCapabilities && !studioToolCapabilities.supported
-        ? "当前 Runtime Agent 未开启 BFF 工具能力。"
+        ? t("errors.runtimeBffToolsDisabled")
         : "";
   const sessionEnvironmentsUnavailableReason = sessionEnvironmentsError
     || (!studioToolsLoading && studioToolCapabilities && !canMountSessionEnvironment
-      ? "当前 Studio BFF 未提供 Sandbox 执行工具。"
+      ? t("errors.sandboxToolsUnavailable")
       : "");
   const connectedRuntimeId = currentRuntime?.runtimeId ?? "";
   const currentRuntimeAppName = currentConn
@@ -5876,7 +5860,7 @@ export default function App() {
   }): Promise<void> => {
     const target = issueFeedbackTarget;
     const sid = sessionId;
-    if (!target || !sid) throw new Error("当前会话不可用，请关闭后重试。");
+    if (!target || !sid) throw new Error(appText("errors.sessionUnavailable"));
     const invocationId = target.turn.meta?.invocationId ?? "";
     const sessionTrace = connectedRuntimeId
       ? []
@@ -5949,10 +5933,10 @@ export default function App() {
     const eventId = turn.meta?.eventId;
     const sid = sessionId;
     if (!eventId || !sid || !currentRuntime) {
-      return "当前回复暂不支持加入评测集";
+      return appText("errors.evaluationUnsupportedForReply");
     }
     if (cloudProvider === "byteplus") {
-      return "BytePlus 暂不支持 AgentKit 评测集";
+      return appText("errors.bytePlusEvaluationUnsupported");
     }
     const output = turnText(turn);
     const previousFeedback = turn.meta?.feedback;
@@ -6092,7 +6076,11 @@ export default function App() {
       target.turn,
       "bad",
       target.input,
-      formatResponseAnnotationComment(target.selectedText, note),
+      formatResponseAnnotationComment(target.selectedText, note, {
+        selectedExcerpt: t("conversation:annotation.selectedExcerptLabel"),
+        annotation: t("conversation:annotation.commentLabel"),
+        separator: t("conversation:annotation.commentSeparator"),
+      }),
       false,
     );
     if (errorMessage) throw new Error(errorMessage);
@@ -6176,7 +6164,7 @@ export default function App() {
 
   const openAgentCreateFromMyAgents = (region: string) => {
     if (!canCreateRuntimeAgents) {
-      setError("当前账号没有添加 Agent 的权限。");
+      setError(appText("errors.noCreateAgentPermission"));
       return;
     }
     setMyAgents(false);
@@ -6193,7 +6181,7 @@ export default function App() {
     agent: MyAgentCardData,
     source: AgentConnectSource,
   ): Promise<string> => {
-    if (!agent.runtime) throw new Error("缺少 Runtime 信息，无法连接智能体。");
+    if (!agent.runtime) throw new Error(appText("errors.runtimeMissingForConnection"));
     const operation = beginAgentConnect({
       targetId: String(agent.runtime.runtimeId),
       agentKind: "runtime",
@@ -6276,7 +6264,7 @@ export default function App() {
     kind: "codex" | SandboxAgentKind,
   ) => {
     if (!canCreatePersonalAgents) {
-      setError("当前账号没有创建智能体的权限。");
+      setError(appText("errors.noCreateAgentPermission"));
       return;
     }
     openSandboxLaunch(kind, true);
@@ -6556,7 +6544,7 @@ export default function App() {
         })}
         onQuickCreate={() => requestIntelligentNavigation(() => {
           if (!canCreateRuntimeAgents) {
-            setError("当前账号没有添加 Agent 的权限。");
+            setError(appText("errors.noCreateAgentPermission"));
             return;
           }
           if (sandboxSession) exitSandboxSession();
@@ -6601,13 +6589,13 @@ export default function App() {
           setCronJobsView(false);
           setSkillCenterLaunch(null);
           setLibraryTab("skills");
-          setLibraryPageTitle("技能库");
+          setLibraryPageTitleState({ kind: "key", key: "titles.skillLibrary" });
           setSkillCenter(true);
           setError("");
         })}
         onAddAgent={() => requestIntelligentNavigation(() => {
           if (!canCreateRuntimeAgents) {
-            setError("当前账号没有添加 Agent 的权限。");
+            setError(appText("errors.noCreateAgentPermission"));
             return;
           }
           if (sandboxSession) exitSandboxSession();
@@ -6690,7 +6678,7 @@ export default function App() {
               <SandboxSessionWarning
                 agentName={
                   sandboxSession.intelligentDevelopment
-                    ? "智能开发"
+                    ? t("sandbox.intelligentDevelopment")
                     : sandboxSession.toolName === "codex"
                       ? "Codex"
                       : sandboxSession.toolName === "deepseek-harness"
@@ -6706,7 +6694,7 @@ export default function App() {
                 }
                 exitLabel={
                   sandboxSession.intelligentDevelopment
-                    ? "退出开发环境"
+                    ? t("sandbox.exitDevelopment")
                     : undefined
                 }
                 onExit={() => requestIntelligentNavigation(
@@ -6792,7 +6780,7 @@ export default function App() {
                   } else {
                     const target = newChatSkillTarget;
                     if (!target) {
-                      setError("请先选择需要优化的 Skill。");
+                      setError(appText("errors.selectSkillToOptimize"));
                       return;
                     }
                     launch = {
@@ -6816,10 +6804,14 @@ export default function App() {
                   setError("");
                   setSkillCenterLaunch(launch);
                   setLibraryTab("skills");
-                  setLibraryPageTitle(
+                  setLibraryPageTitleState(
                     launch.operation === "create"
-                      ? "创建技能"
-                      : `优化 ${launch.source?.name || "技能"}`,
+                      ? { kind: "key", key: "titles.createSkill" }
+                      : {
+                          kind: "key",
+                          key: "titles.optimizeSkill",
+                          name: launch.source?.name || t("titles.skill"),
+                        },
                   );
                   setSkillCenter(true);
                   return;
@@ -6905,9 +6897,9 @@ export default function App() {
                     {
                       id: runtime.runtimeId,
                       name: runtime.name,
-                      description: runtime.description?.trim() || "暂无描述",
+                      description: runtime.description?.trim() || t("common.noDescription"),
                       createdAt: runtime.createdAt ?? "",
-                      specificationLabel: "地域",
+                      specificationLabel: t("common.region"),
                       specification: formatCloudRegion(
                         runtime.region,
                         cloudProvider,
@@ -7010,7 +7002,7 @@ export default function App() {
             )}
             {loadingSession && (
               <div className="session-loading">
-                <Loader2 className="icon spin" /> 加载会话…
+                <Loader2 className="icon spin" /> {t("loading.session")}
               </div>
             )}
             {feedbackCaseReturnAgentId &&
@@ -7023,7 +7015,7 @@ export default function App() {
                 <div className="case-return-bar">
                   <button type="button" onClick={returnToFeedbackCases}>
                     <ArrowLeft aria-hidden />
-                    <span>返回评测案例</span>
+                    <span>{t("actions.backToEvaluationCase")}</span>
                   </button>
                 </div>
               )}
@@ -7167,7 +7159,7 @@ export default function App() {
                 onFeedbackCasesDeleted={clearDeletedFeedbackCases}
                 onCreateAgent={() => {
                   if (!canCreateRuntimeAgents) {
-                    setError("当前账号没有添加 Agent 的权限。");
+                    setError(appText("errors.noCreateAgentPermission"));
                     return;
                   }
                   exitAgentDetailContext();
@@ -7185,11 +7177,11 @@ export default function App() {
                 }}
                 onUpdateAgent={async (capability) => {
                   if (!canManageAgents && !canCreateRuntimeAgents) {
-                    setError("当前账号没有管理 Agent 的权限。");
+                    setError(appText("errors.noManageAgentPermission"));
                     return;
                   }
                   if (!capability.canUpdate) {
-                    setError(capability.reason || "当前 Runtime 不支持原地更新。");
+                    setError(capability.reason || appText("errors.runtimeUpdateUnsupported"));
                     return;
                   }
                   if (
@@ -7198,20 +7190,20 @@ export default function App() {
                   ) {
                     setError(
                       capability.reason ||
-                        "该 Runtime 的原发布配置不可恢复，无法安全更新。",
+                        appText("errors.runtimeDeploymentConfigUnavailable"),
                     );
                     return;
                   }
                   if (!capability.runtime.runtimeId) {
-                    setError("仅支持更新已部署的云端智能体。");
+                    setError(appText("errors.onlyCloudAgentUpdatable"));
                     return;
                   }
                   if (!capability.runtime.region) {
-                    setError("Runtime 缺少地域信息，无法更新。");
+                    setError(appText("errors.runtimeRegionMissingForUpdate"));
                     return;
                   }
                   if (!capability.agent?.appName) {
-                    setError("Runtime 缺少智能体名称，无法更新。");
+                    setError(appText("errors.runtimeAgentNameMissing"));
                     return;
                   }
                   const runtimeAgent = capability.agent;
@@ -7354,14 +7346,14 @@ export default function App() {
               />
             ) : showAddMenu ? (
               <StackCards
-                title="您想以哪种方式添加 Agent 来运行？"
-                sub="选择最适合你的方式，下一步即可开始"
+                title={t("addAgent.title")}
+                sub={t("addAgent.subtitle")}
                 cards={[
                   {
                     key: "scratch",
                     icon: ScratchIcon,
-                    title: "从 0 快速创建",
-                    desc: "用智能 / 自定义 / 模板 / 工作流的方式从零创建一个 Agent。",
+                    title: t("addAgent.quickCreate.title"),
+                    desc: t("addAgent.quickCreate.description"),
                     onClick: () => {
                       setAddMenu(false);
                       setImportedDraft(null);
@@ -7378,8 +7370,8 @@ export default function App() {
                   {
                     key: "intelligent",
                     icon: ScratchIcon,
-                    title: "智能模式",
-                    desc: "描述目标，按你的意图构建、调试并验证 Agent。",
+                    title: t("addAgent.intelligent.title"),
+                    desc: t("addAgent.intelligent.description"),
                     onClick: () => {
                       setAddMenu(false);
                       setImportedDraft(null);
@@ -7395,8 +7387,8 @@ export default function App() {
                   {
                     key: "package",
                     icon: PackageIcon,
-                    title: "从代码包添加和部署",
-                    desc: "上传 Agent 项目压缩包，查看代码并直接部署到 AgentKit Runtime。",
+                    title: t("addAgent.package.title"),
+                    desc: t("addAgent.package.description"),
                     onClick: () => {
                       setAddMenu(false);
                       setImportedDraft(null);
@@ -7406,8 +7398,8 @@ export default function App() {
                   {
                     key: "migration",
                     icon: MigrationIcon,
-                    title: "从存量迁移",
-                    desc: "从您的 LangChain / Dify 等存量项目迁移至 AgentKit Runtime",
+                    title: t("addAgent.migrate.title"),
+                    desc: t("addAgent.migrate.description"),
                     onClick: () => {
                       setAddMenu(false);
                       setImportedDraft(null);
@@ -7441,7 +7433,7 @@ export default function App() {
                 studioRegion={studioRegion || defaultCloudRegion(cloudProvider)}
                 activeTab={libraryTab}
                 onTabChange={setLibraryTab}
-                onPageTitleChange={setLibraryPageTitle}
+                onPageTitleChange={handleLibraryPageTitleChange}
                 skillInitialWorkspace={skillCenterLaunch}
                 onSkillInitialWorkspaceConsumed={() => setSkillCenterLaunch(null)}
                 artifactSources={appName
@@ -7475,24 +7467,26 @@ export default function App() {
                 }}
               >
                 <div style={{ fontSize: 18, fontWeight: 600 }}>
-                  需要配置{cloudProvider === "byteplus" ? "BytePlus" : "火山引擎"} AK/SK
+                  {t("credentials.title", {
+                    provider: cloudProvider === "byteplus" ? "BytePlus" : t("providers.volcengine"),
+                  })}
                 </div>
                 <div style={{ maxWidth: 420, lineHeight: 1.6 }}>
-                  智能体工作台需要
-                  {cloudProvider === "byteplus" ? " BytePlus " : " Volcengine "}
-                  凭据才能使用。请在运行环境中设置{" "}
+                  {t("credentials.prefix", {
+                    provider: cloudProvider === "byteplus" ? "BytePlus" : "Volcengine",
+                  })}{" "}
                   <code>
                     {cloudProvider === "byteplus"
                       ? "BYTEPLUS_ACCESS_KEY"
                       : "VOLCENGINE_ACCESS_KEY"}
                   </code>{" "}
-                  与{" "}
+                  {" "}{t("credentials.and")}{" "}
                   <code>
                     {cloudProvider === "byteplus"
                       ? "BYTEPLUS_SECRET_KEY"
                       : "VOLCENGINE_SECRET_KEY"}
                   </code>{" "}
-                  后重试。
+                  {" "}{t("credentials.suffix")}
                 </div>
               </div>
             ) : intelligentDeployment ? (
@@ -7628,7 +7622,7 @@ export default function App() {
               />
             ) : turns.length === 0 && !newChatCapabilitiesReady ? (
               <div className="session-loading">
-                <Loader2 className="icon spin" /> 正在检查 Agent 能力…
+                <Loader2 className="icon spin" /> {t("loading.agentCapabilities")}
               </div>
             ) : turns.length === 0 ? (
               <div
@@ -7640,7 +7634,7 @@ export default function App() {
                     <NewChatFeatureNotice canUpdate={access.role === "admin"} />
                     <h1 className="welcome-title">
                       {sandboxSession
-                        ? "让灵感自由生长"
+                        ? t("greetings.intelligentDevelopment")
                         : greeting}
                     </h1>
                   </div>
@@ -7656,7 +7650,9 @@ export default function App() {
                   onWheel={onConversationWheel}
                   onTouchMove={onConversationTouchMove}
                 >
-                  {turns.map((turn, i) => {
+                  {buildTranscriptRows(turns, rootCapabilityNode).map((row) => {
+            const renderTurn = (i: number) => {
+            const turn = turns[i];
             const isLast = i === turns.length - 1;
             if (turn.role === "system") {
               return turn.activity ? (
@@ -7717,7 +7713,7 @@ export default function App() {
             );
             const agentDisplayName = displayAgentName(agentNode?.name || agentAuthor);
             const agentDescription = agentNode?.description ||
-              (isSubAgent ? "正在执行主 Agent 移交的任务。" : "");
+              (isSubAgent ? t("conversation.subagentDescription") : "");
             if (
               turn.blocks.length > 0 &&
               turn.blocks.every((block) => block.kind === "agent-transfer")
@@ -7726,13 +7722,17 @@ export default function App() {
             const feedbackRating = turn.meta?.feedback?.rating ?? null;
             const feedbackEventId = turn.meta?.eventId ?? "";
             const feedbackPending = feedbackPendingIds.has(feedbackEventId);
+            const turnIsStreaming = assistantTurnIsStreaming(
+              turn,
+              i,
+              turns.length,
+              activeConversationBusy,
+              presentingStream,
+            );
             const canRate = Boolean(
               currentRuntime && feedbackEventId && turnText(turn),
             );
             const feedbackInput = canRate ? previousUserTurnText(turns, i) : "";
-            const turnIsStreaming = isLast && (
-              activeConversationBusy || presentingStream
-            );
             const canAnnotate = Boolean(
               canRate &&
               cloudProvider !== "byteplus" &&
@@ -7741,7 +7741,7 @@ export default function App() {
             );
             return (
               <motion.div
-                key={i}
+                key={turn.meta?.localId ?? i}
                 data-share-message-source="true"
                 data-response-annotation-index={i}
                 ref={(node) => {
@@ -7760,7 +7760,7 @@ export default function App() {
                 ].filter(Boolean).join(" ")}
                 tabIndex={canAnnotate ? 0 : undefined}
                 aria-label={canAnnotate
-                  ? "模型回复；选中文字后可添加批注"
+                  ? t("conversation.annotationHint")
                   : undefined}
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -7771,7 +7771,7 @@ export default function App() {
                     <div className="subagent-run-label">
                       <span className="subagent-run-handoff">
                         <CornerDownRight />
-                        <span>智能体移交</span>
+                        <span>{t("conversation.agentTransfer")}</span>
                       </span>
                       <span className="subagent-run-title">{agentDisplayName}</span>
                     </div>
@@ -7781,14 +7781,14 @@ export default function App() {
                   </>
                 )}
                 {pending ? (
-                  isLast && activeConversationBusy ? <ThinkingPlaceholder /> : null
+                  turnIsStreaming ? <ThinkingPlaceholder /> : null
                 ) : (
                   <>
                     <Blocks
                       appName={appName}
                       blocks={turn.blocks}
-                      streaming={isLast && (activeConversationBusy || presentingStream)}
-                      onStreamFrame={isLast ? followConversationStreamFrame : undefined}
+                      streaming={turnIsStreaming}
+                      onStreamFrame={turnIsStreaming ? followConversationStreamFrame : undefined}
                       onStreamComplete={
                         isLast && !activeConversationBusy && presentingStream
                           ? () => completeStreamPresentation(sessionId)
@@ -7807,18 +7807,18 @@ export default function App() {
                       onDownloadDelivery={downloadIntelligentDelivery}
                       onDeployDelivery={setIntelligentDeployment}
                       onBranchSelect={(branch) => {
-                        setInput(`继续“${branch.label}”这个方向`);
+                        setInput(t("conversation.continueBranch", { branch: branch.label }));
                       }}
                     />
                     {/* Finalized turn that produced no visible answer (e.g. only
                         thinking + an empty A2UI surface) — show a fallback note. */}
-                    {!(isLast && activeConversationBusy) && !turnHasVisibleContent(turn) && (
-                      <div className="turn-empty">本次没有返回可显示的内容。</div>
+                    {!turnIsStreaming && !turnHasVisibleContent(turn) && (
+                      <div className="turn-empty">{t("conversation.emptyResponse")}</div>
                     )}
                     {/* Hide the actions/timestamp row while this turn is still
                         thinking/streaming or waiting on an OAuth card; reveal it
                         only once the reply is done. */}
-                    {!(isLast && activeConversationBusy) && !turnAwaitingAuth(turn) && (
+                    {!turnIsStreaming && !turnAwaitingAuth(turn) && (
                       <div className="turn-meta" data-share-image-exclude="true">
                         {sandboxSession && turn.meta?.sandboxUsage ? (
                           <SandboxTokenUsageRow usage={turn.meta.sandboxUsage} />
@@ -7833,10 +7833,12 @@ export default function App() {
                                     ? " feedback-btn--good"
                                     : ""
                                 }`}
-                                aria-label="赞"
+                                aria-label={t("feedback.like")}
                                 aria-pressed={feedbackRating === "good"}
                                 aria-busy={feedbackPending}
-                                title={feedbackRating === "good" ? "取消点赞" : "赞"}
+                                title={feedbackRating === "good"
+                                  ? t("feedback.removeLike")
+                                  : t("feedback.like")}
                                 disabled={feedbackPending}
                                 onClick={() => void rateAssistantTurn(
                                   turn,
@@ -7856,10 +7858,12 @@ export default function App() {
                                     ? " feedback-btn--bad"
                                     : ""
                                 }`}
-                                aria-label="踩"
+                                aria-label={t("feedback.dislike")}
                                 aria-pressed={feedbackRating === "bad"}
                                 aria-busy={feedbackPending}
-                                title={feedbackRating === "bad" ? "取消点踩" : "踩"}
+                                title={feedbackRating === "bad"
+                                  ? t("feedback.removeDislike")
+                                  : t("feedback.dislike")}
                                 disabled={feedbackPending}
                                 onClick={() => void rateAssistantTurn(
                                   turn,
@@ -7879,8 +7883,8 @@ export default function App() {
                               <button
                                 type="button"
                                 className="icon-btn"
-                                aria-label="问题反馈"
-                                title="问题反馈"
+                                aria-label={t("feedback.reportIssue")}
+                                title={t("feedback.reportIssue")}
                                 onClick={() => setIssueFeedbackTarget({
                                   turn,
                                   input: previousUserTurnText(turns, i),
@@ -7891,7 +7895,7 @@ export default function App() {
                               <button
                                 type="button"
                                 className="icon-btn"
-                                title="Tracing 火焰图"
+                                title={t("feedback.traceFlameGraph")}
                                 onClick={() => {
                                   setTraceEndTimeMs(
                                     turn.meta?.ts ? turn.meta.ts * 1000 : Date.now(),
@@ -7920,6 +7924,22 @@ export default function App() {
                 )}
               </motion.div>
             );
+            };
+            if (row.parallelParent) {
+              return (
+                <div
+                  key={row.key}
+                  className="parallel-turn-group"
+                  data-parallel-agent-count={row.turnIndexes.length}
+                  role="group"
+                  tabIndex={row.turnIndexes.length > 3 ? 0 : undefined}
+                  aria-label={`${displayAgentName(row.parallelParent)} 并行执行结果`}
+                >
+                  {row.turnIndexes.map(renderTurn)}
+                </div>
+              );
+            }
+            return renderTurn(row.turnIndexes[0]);
           })}
                 </div>
                 {!sandboxSession && (
@@ -8030,9 +8050,9 @@ export default function App() {
 
       {intelligentLeaveOpen ? (
         <StudioConfirmDialog
-          title="当前构建仍在进行"
-          description="离开将停止本轮构建；当前会话仍会保留，可稍后从历史会话重新进入。"
-          confirmLabel="停止并离开"
+          title={t("dialogs.buildRunning.title")}
+          description={t("dialogs.buildRunning.description")}
+          confirmLabel={t("dialogs.buildRunning.confirm")}
           variant="warning"
           onCancel={() => {
             pendingIntelligentNavigationRef.current = null;
@@ -8044,13 +8064,13 @@ export default function App() {
 
       {sandboxThreadDeleteTarget ? (
         <StudioConfirmDialog
-          title="删除 Codex 历史会话"
-          description={`将删除“${
-            sandboxThreadDeleteTarget.name ||
-            sandboxThreadDeleteTarget.preview ||
-            `Thread ${sandboxThreadDeleteTarget.id.slice(0, 8)}`
-          }”，并从历史会话中移除。`}
-          confirmLabel="确认删除"
+          title={t("dialogs.deleteThread.title")}
+          description={t("dialogs.deleteThread.description", {
+            name: sandboxThreadDeleteTarget.name ||
+              sandboxThreadDeleteTarget.preview ||
+              `Thread ${sandboxThreadDeleteTarget.id.slice(0, 8)}`,
+          })}
+          confirmLabel={t("dialogs.deleteThread.confirm")}
           variant="danger"
           busy={sandboxCommands.threadActionId === sandboxThreadDeleteTarget.id}
           onCancel={() => {
@@ -8146,11 +8166,11 @@ export default function App() {
       {confirmLeave && (
         <div className="confirm-scrim" onClick={() => setConfirmLeave(false)}>
           <div className="confirm-box" onClick={(e) => e.stopPropagation()}>
-            <div className="confirm-title">返回创建首页？</div>
-            <div className="confirm-text">返回后当前填写的内容将会丢失，确定要返回吗？</div>
+            <div className="confirm-title">{t("dialogs.returnToCreate.title")}</div>
+            <div className="confirm-text">{t("dialogs.returnToCreate.description")}</div>
             <div className="confirm-actions">
               <button className="confirm-btn" onClick={() => setConfirmLeave(false)}>
-                取消
+                {t("actions.cancel")}
               </button>
               <button
                 className="confirm-btn confirm-btn--danger"
@@ -8162,7 +8182,7 @@ export default function App() {
                   setConfirmLeave(false);
                 }}
               >
-                确定返回
+                {t("dialogs.returnToCreate.confirm")}
               </button>
             </div>
           </div>

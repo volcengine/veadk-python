@@ -55,28 +55,25 @@ test("creation and deployment keep friendly context and the original error", () 
   );
   assert.match(
     clientSource,
-    /if \(!res\.ok\) \{[\s\S]*?httpErrorMessage\(res, "部署失败"\)[\s\S]*?throw new Error\(detail\)/,
+    /if \(!res\.ok\) \{[\s\S]*?httpErrorMessage\(res, adkT\("client\.deploymentFailed"\)\)[\s\S]*?throw new Error\(detail\)/,
   );
   assert.match(
     clientSource,
-    /if \(!final\.success\) throw new Error\(final\.error \|\| "部署失败"\)/,
+    /if \(!final\.success\) throw new Error\(final\.error \|\| adkT\("client\.deploymentFailed"\)\)/,
   );
   assert.match(
     projectPreviewSource,
-    /<DeploymentErrorMessage[\s\S]*?className="pp-error"[\s\S]*?\$\{deployError\}/,
+    /<DeploymentErrorMessage[\s\S]*?className="pp-error"[\s\S]*?message=\{[\s\S]*?deployError/,
   );
-  assert.match(
-    clientSource,
-    /const context = `\$\{fallback\}（HTTP \$\{res\.status\}）`/,
-  );
-  assert.match(clientSource, /原始响应：\\n\$\{text\}/);
+  assert.match(clientSource, /adkT\("common\.fallbackWithHttpStatus"/);
+  assert.match(clientSource, /adkT\("client\.errorWithRawResponse"/);
   assert.match(
     projectPreviewSource,
-    /label: buildStatusUnconfirmed[\s\S]*?"构建状态待确认"[\s\S]*?"部署失败"[\s\S]*?message: buildStatusUnconfirmed[\s\S]*?failedInBuild[\s\S]*?\.\.\.\(buildLog/,
+    /label: buildStatusUnconfirmed[\s\S]*?t\("projectPreview\.task\.buildStatusUnconfirmed"\)[\s\S]*?t\("projectPreview\.task\.deploymentFailed"\)[\s\S]*?message: buildStatusUnconfirmed[\s\S]*?failedInBuild[\s\S]*?\.\.\.\(buildLog/,
   );
   assert.match(
     projectPreviewSource,
-    /failedInBuild[\s\S]*?"构建镜像失败，详见构建日志。"[\s\S]*?failedInGithub[\s\S]*?"挂载 GitHub 持续交付失败，详见 GitHub 日志。"[\s\S]*?: message/,
+    /failedInBuild[\s\S]*?t\("projectPreview\.task\.buildFailedHint"\)[\s\S]*?failedInGithub[\s\S]*?t\("projectPreview\.task\.githubMountFailedHint"\)[\s\S]*?: message/,
   );
   assert.match(
     projectPreviewSource,
@@ -98,7 +95,7 @@ test("creation and deployment keep friendly context and the original error", () 
   );
   assert.match(
     projectPreviewSource,
-    /deployError === BUILD_STATUS_CONFIRMATION_ERROR_MESSAGE[\s\S]*?`构建状态待确认：\$\{deployError\}`/,
+    /deployError === BUILD_STATUS_CONFIRMATION_ERROR_MESSAGE[\s\S]*?t\("projectPreview\.errors\.buildStatusUnconfirmedWithDetail"/,
   );
 });
 
@@ -107,16 +104,16 @@ test("generated-agent debug requests preserve backend error details", () => {
     clientSource,
     /if \(typeof detail === "string"\) return detail/,
   );
-  for (const fallback of [
-    "创建调试运行失败",
-    "创建调试会话失败",
-    "加载调试调用链路失败",
-    "调试运行失败",
-    "清理调试运行失败",
+  for (const fallbackKey of [
+    "createDebugRunFailed",
+    "createDebugSessionFailed",
+    "loadDebugTraceFailed",
+    "debugRunFailed",
+    "cleanupDebugRunFailed",
   ]) {
     assert.match(
       clientSource,
-      new RegExp(`new Error\\(await httpErrorMessage\\(res, "${fallback}"\\)\\)`),
+      new RegExp(`new Error\\(await httpErrorMessage\\(res, adkT\\("client\\.${fallbackKey}"\\)\\)\\)`),
     );
   }
 });

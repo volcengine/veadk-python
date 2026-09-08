@@ -49,6 +49,12 @@ const appSource = readFileSync(
   new URL("../src/App.tsx", import.meta.url),
   "utf8",
 );
+const enUiCatalog = JSON.parse(
+  readFileSync(new URL("../src/i18n/resources/en-US/ui.json", import.meta.url), "utf8"),
+);
+const zhUiCatalog = JSON.parse(
+  readFileSync(new URL("../src/i18n/resources/zh-CN/ui.json", import.meta.url), "utf8"),
+);
 
 function draft(overrides = {}) {
   return {
@@ -168,8 +174,8 @@ test("adds an Apps SDK UI environment step before publishing", () => {
     createSource,
     /type WorkspaceMode =[\s\S]*?\| "environment"[\s\S]*?\| "publish";/,
   );
-  assert.match(createSource, /\{ id: "environment", label: "环境" \}/);
-  assert.match(createSource, /environment:\s*"配置云上环境"/);
+  assert.match(createSource, /\{ id: "environment", label: "traditional\.workspace\.modes\.environment" \}/);
+  assert.match(createSource, /environment:\s*"traditional\.workspace\.titles\.environment"/);
   assert.match(
     createSource,
     /workspaceMode === "environment"[\s\S]*?<CloudEnvironmentConfigurator/,
@@ -178,8 +184,8 @@ test("adds an Apps SDK UI environment step before publishing", () => {
   assert.match(environmentSource, /optionClassName\?: string/);
   assert.match(environmentSource, /optionClassName=\{optionClassName\}/);
   assert.match(environmentSource, /listEnvironments\(controller\.signal\)/);
-  assert.match(environmentSource, /label: "默认环境"/);
-  assert.match(environmentSource, /使用 AgentKit 默认运行环境/);
+  assert.match(environmentSource, /label: t\("cloudEnvironment\.defaultLabel"\)/);
+  assert.match(environmentSource, /description: t\("cloudEnvironment\.defaultDescription"\)/);
   assert.match(
     environmentSource,
     /onChange\(\{ environmentId: "", environmentVersionId: "" \}\)/,
@@ -193,8 +199,8 @@ test("adds an Apps SDK UI environment step before publishing", () => {
     /disabled: environment\.latestVersion\?\.status !== "available"/,
   );
   assert.match(environmentSource, /environmentVersionId: versionId/);
-  assert.match(environmentSource, /正在加载环境/);
-  assert.match(environmentSource, /环境加载失败/);
+  assert.match(environmentSource, /t\("cloudEnvironment\.loading"\)/);
+  assert.match(environmentSource, /t\("cloudEnvironment\.loadFailed"\)/);
   assert.match(environmentSource, /isPersistenceStorageUnavailableError/);
   assert.match(environmentSource, /message\.includes\("HTTP 503"\)/);
   assert.match(
@@ -205,13 +211,13 @@ test("adds an Apps SDK UI environment step before publishing", () => {
     environmentSource,
     /onChangeRef\.current\(\{\s*environmentId: "",\s*environmentVersionId: "",?\s*\}\)/,
   );
-  assert.match(environmentSource, /部署 Runtime 时的默认基础镜像/);
+  assert.match(environmentSource, /t\("cloudEnvironment\.selectionHint"\)/);
   assert.match(environmentSource, /cloud-env-guidance--fallback/);
   assert.match(
     environmentStyles,
     /\.cloud-env-guidance\.cloud-env-guidance--fallback\s*\{[^}]*color:\s*hsl\(var\(--destructive\)\)/,
   );
-  assert.match(environmentSource, /暂无自定义环境/);
+  assert.match(environmentSource, /t\("cloudEnvironment\.emptyFallback"\)/);
   assert.match(environmentSource, /selectedEnvironment\.selectedSkills/);
   assert.doesNotMatch(environmentSource, /CloudEnvironmentAdvancedTrigger/);
   assert.doesNotMatch(environmentSource, /CodeEditor/);
@@ -237,6 +243,30 @@ test("keeps selected environment details responsive", () => {
   );
   assert.match(environmentStyles, /@media \(max-width: 700px\)/);
   assert.match(environmentStyles, /grid-template-columns: minmax\(0, 1fr\)/);
-  assert.match(environmentSource, /searchPlaceholder="搜索环境"/);
-  assert.match(environmentSource, /searchEmptyMessage="没有匹配的环境"/);
+  assert.match(environmentSource, /searchPlaceholder=\{t\("cloudEnvironment\.search"\)\}/);
+  assert.match(environmentSource, /searchEmptyMessage=\{t\("cloudEnvironment\.noMatches"\)\}/);
+});
+
+test("localizes every selectable cloud environment status", () => {
+  const statuses = [
+    "notBuilt",
+    "preparing",
+    "queued",
+    "building",
+    "scanning",
+    "available",
+    "failed",
+  ];
+
+  for (const [locale, catalog] of [["en-US", enUiCatalog], ["zh-CN", zhUiCatalog]]) {
+    for (const status of statuses) {
+      const label = catalog.cloudEnvironment.status[status];
+      assert.equal(typeof label, "string", `${locale} is missing ${status}`);
+      assert.ok(label.trim(), `${locale} has an empty ${status} label`);
+      assert.notEqual(label, `cloudEnvironment.status.${status}`);
+    }
+  }
+
+  assert.equal(enUiCatalog.cloudEnvironment.status.available, "Available");
+  assert.equal(zhUiCatalog.cloudEnvironment.status.available, "可用");
 });

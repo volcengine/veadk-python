@@ -5,6 +5,7 @@ import {
   type DeployStage,
 } from "../../adk/client";
 import { emptyDraft, type AgentDraft } from "../../create/types";
+import { automationT } from "../i18n";
 
 export interface FeishuBotDeploymentRequest {
   agentName: string;
@@ -19,9 +20,8 @@ export function buildFeishuBotDraft(agentName: string): AgentDraft {
   return {
     ...emptyDraft(),
     name: agentName,
-    description: "一个通过飞书接收消息并提供帮助的智能助手。",
-    instruction:
-      "你是一个通过飞书为用户提供帮助的智能助手。准确理解用户问题，给出简洁、可靠的回答；信息不足时先提问澄清，不要臆造事实。",
+    description: automationT("feishu.generatedAgent.description"),
+    instruction: automationT("feishu.generatedAgent.instruction"),
     deployment: { feishuEnabled: true },
   };
 }

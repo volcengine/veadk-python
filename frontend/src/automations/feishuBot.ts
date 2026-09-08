@@ -5,7 +5,7 @@ export const feishuBotAutomation: FeishuAutomationDefinition = {
   kind: "feishu",
   category: "channels",
   icon: "feishu",
-  name: "飞书机器人",
+  name: "Feishu bot",
   badge: "Beta",
-  description: "创建飞书机器人，并将消息直接接入 AgentKit Runtime。",
+  description: "Create a Feishu bot and connect its messages directly to AgentKit Runtime.",
 };

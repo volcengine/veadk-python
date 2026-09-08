@@ -1,5 +1,6 @@
 import { memo, useEffect, useRef, useState } from "react";
 import { TextShimmer } from "./text-shimmer/TextShimmer";
+import { useTranslation } from "react-i18next";
 
 type MermaidApi = (typeof import("mermaid"))["default"];
 type BindFunctions = (element: Element) => void;
@@ -41,6 +42,7 @@ function renderMermaid(source: string): Promise<RenderedDiagram> {
 }
 
 function MermaidDiagramImpl({ source }: MermaidDiagramProps) {
+  const { t } = useTranslation("conversation");
   const containerRef = useRef<HTMLDivElement>(null);
   const [rendered, setRendered] = useState<RenderedDiagram | null>(null);
   const [failed, setFailed] = useState(false);
@@ -73,7 +75,7 @@ function MermaidDiagramImpl({ source }: MermaidDiagramProps) {
     return (
       <div className="mermaid-diagram mermaid-diagram--error">
         <p className="mermaid-diagram__error" role="alert">
-          图表暂时无法渲染，请切换到代码查看 Mermaid 内容。
+          {t("visualization.mermaidFailed")}
         </p>
       </div>
     );
@@ -82,7 +84,7 @@ function MermaidDiagramImpl({ source }: MermaidDiagramProps) {
   if (!rendered) {
     return (
       <div className="mermaid-diagram mermaid-diagram--loading" aria-live="polite">
-        <TextShimmer duration={2.2} spread={15}>正在渲染图表…</TextShimmer>
+        <TextShimmer duration={2.2} spread={15}>{t("visualization.rendering")}</TextShimmer>
       </div>
     );
   }
@@ -92,7 +94,7 @@ function MermaidDiagramImpl({ source }: MermaidDiagramProps) {
       ref={containerRef}
       className="mermaid-diagram"
       role="img"
-      aria-label="Mermaid 图表预览"
+      aria-label={t("visualization.mermaidAria")}
       dangerouslySetInnerHTML={{ __html: rendered.svg }}
     />
   );

@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState, type SVGProps } from "react";
 import { createPortal } from "react-dom";
+import { useTranslation } from "react-i18next";
 import {
   currentVideoTaskStatus,
   formatVideoTaskElapsed,
@@ -80,6 +81,7 @@ export function NewChatVideoTaskDialog({
   onRetry,
   onDownload,
 }: NewChatVideoTaskDialogProps) {
+  const { t, i18n } = useTranslation("newChat");
   const titleId = useId();
   const dialogRef = useRef<HTMLElement>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
@@ -151,24 +153,30 @@ export function NewChatVideoTaskDialog({
 
   if (!open || !task) return null;
 
-  const steps = videoTaskSteps(task);
+  const locale = i18n.resolvedLanguage ?? i18n.language;
+  const steps = videoTaskSteps(task, locale);
   const running = task.status === "optimizing" || task.status === "generating";
   const retryLabel =
-    task.errorStage === "optimization" ? "重试提示词优化" : "重试视频生成";
-  const taskLabel = videoTaskModeLabel(task.resolvedMode ?? task.requestedMode);
+    task.errorStage === "optimization"
+      ? t("video.task.retryOptimization")
+      : t("video.task.retryGeneration");
+  const taskLabel = videoTaskModeLabel(
+    task.resolvedMode ?? task.requestedMode,
+    locale,
+  );
   const requiresModelActivation = task.error.includes("尚未开通");
-  const activeStatus = currentVideoTaskStatus(task);
+  const activeStatus = currentVideoTaskStatus(task, locale);
   const elapsed = task.generationStartedAt === null
     ? ""
-    : formatVideoTaskElapsed(clockMs - task.generationStartedAt);
+    : formatVideoTaskElapsed(clockMs - task.generationStartedAt, locale);
   const providerPhase = task.providerStatus === "queued"
-    ? "等待模型调度"
+    ? t("video.task.providerQueued")
     : task.providerStatus === "running"
-      ? "模型生成中"
-      : "正在提交任务";
+      ? t("video.task.providerRunning")
+      : t("video.task.providerSubmitting");
   const generationHint = task.providerStatus === "queued"
-    ? "任务已提交，模型开始处理后状态会自动更新"
-    : "这可能持续数分钟，完成后将在这里显示视频预览";
+    ? t("video.task.queuedHint")
+    : t("video.task.runningHint");
 
   return createPortal(
     <div
@@ -188,7 +196,7 @@ export function NewChatVideoTaskDialog({
         <header className="new-chat-video-task-dialog__head">
           <div>
             <h2 ref={titleRef} id={titleId} tabIndex={-1}>
-              视频生成任务
+              {t("video.task.title")}
             </h2>
             <p>
               {taskLabel} · {task.generationModel}
@@ -198,7 +206,7 @@ export function NewChatVideoTaskDialog({
             type="button"
             className="new-chat-video-task-dialog__close"
             onClick={onClose}
-            aria-label="关闭视频生成任务弹窗"
+            aria-label={t("video.task.closeAria")}
           >
             <CloseIcon />
           </button>
@@ -207,7 +215,7 @@ export function NewChatVideoTaskDialog({
         <div className="new-chat-video-task-dialog__body">
           <ol
             className="new-chat-video-task-steps"
-            aria-label="视频生成进度"
+            aria-label={t("video.task.progressAria")}
             aria-live="polite"
             aria-atomic="true"
           >
@@ -234,7 +242,7 @@ export function NewChatVideoTaskDialog({
               className="new-chat-video-task-prompt"
               aria-labelledby={`${titleId}-prompt`}
             >
-              <h3 id={`${titleId}-prompt`}>优化后的提示词</h3>
+              <h3 id={`${titleId}-prompt`}>{t("video.task.optimizedPrompt")}</h3>
               <p>{task.optimizedPrompt}</p>
             </section>
           ) : null}
@@ -253,14 +261,16 @@ export function NewChatVideoTaskDialog({
               <div
                 className="new-chat-video-task-progress"
                 role="progressbar"
-                aria-label={`${taskLabel}处理进度`}
-                aria-valuetext={`${activeStatus}${elapsed ? `，已等待${elapsed}` : ""}`}
+                aria-label={t("video.task.processingAria", { task: taskLabel })}
+                aria-valuetext={elapsed
+                  ? t("video.task.waitingAria", { status: activeStatus, elapsed })
+                  : activeStatus}
               >
                 <span aria-hidden="true" />
               </div>
               <div className="new-chat-video-task-progress__meta">
                 <span>{providerPhase}</span>
-                {elapsed ? <span>已等待 {elapsed}</span> : null}
+                {elapsed ? <span>{t("video.task.elapsed", { elapsed })}</span> : null}
               </div>
               <span>{generationHint}</span>
             </div>
@@ -271,7 +281,7 @@ export function NewChatVideoTaskDialog({
                 controls
                 playsInline
                 preload="metadata"
-                aria-label="生成结果预览"
+                aria-label={t("video.task.previewAria")}
               />
             </div>
           ) : null}
@@ -280,12 +290,12 @@ export function NewChatVideoTaskDialog({
         <footer className="new-chat-video-task-dialog__actions">
           <p>
             {running
-              ? "可以关闭弹窗，任务会继续在后台运行"
+              ? t("video.task.backgroundHint")
               : task.status === "success"
-                ? "视频已生成，可预览或下载"
+                ? t("video.task.successHint")
                 : requiresModelActivation
-                  ? "请先在模型控制台开通服务，再重试生成"
-                  : "修正问题后可重试当前步骤"}
+                  ? t("video.task.activationHint")
+                  : t("video.task.retryHint")}
           </p>
           <div>
             <button
@@ -293,7 +303,7 @@ export function NewChatVideoTaskDialog({
               className="new-chat-video-task-button"
               onClick={onClose}
             >
-              关闭
+              {t("video.task.close")}
             </button>
             {task.status === "error" ? (
               <button
@@ -310,7 +320,7 @@ export function NewChatVideoTaskDialog({
                 onClick={onDownload}
               >
                 <DownloadIcon />
-                下载视频
+                {t("video.task.download")}
               </button>
             ) : null}
           </div>

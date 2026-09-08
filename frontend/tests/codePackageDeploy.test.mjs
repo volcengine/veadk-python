@@ -46,7 +46,7 @@ const zipSource = readFileSync(
 test("offers code package deployment beside scratch creation", () => {
   assert.match(
     appSource,
-    /key: "package"[\s\S]*?title: "从代码包添加和部署"/,
+    /key: "package"[\s\S]*?title: t\("addAgent\.package\.title"\)/,
   );
   assert.match(appSource, /icon: PackageIcon/);
   assert.doesNotMatch(appSource, /import \{ FileArchive \} from "lucide-react"/);
@@ -79,7 +79,7 @@ test("uses thin hand-drawn icons for all add-agent options", () => {
 test("shows existing-project migration as an enabled option", () => {
   assert.match(
     appSource,
-    /key: "migration"[\s\S]*?title: "从存量迁移"[\s\S]*?desc: "从您的 LangChain \/ Dify 等存量项目迁移至 AgentKit Runtime"[\s\S]*?setCreateView\("migration"\)/,
+    /key: "migration"[\s\S]*?title: t\("addAgent\.migrate\.title"\)[\s\S]*?desc: t\("addAgent\.migrate\.description"\)[\s\S]*?setCreateView\("migration"\)/,
   );
   assert.doesNotMatch(
     appSource,
@@ -102,16 +102,19 @@ test("validates and previews uploaded zip projects before deployment", () => {
   assert.match(packageCreateSource, /app\.py/);
   assert.match(
     packageCreateSource,
-    /可使用 app\.py，或由 agentkit\.yaml 声明入口/,
+    /t\("codePackage\.errors\.defaultEntryPointMissing"\)/,
   );
   assert.match(packageCreateSource, /maxUncompressedBytes: MAX_PACKAGE_BYTES/);
   assert.match(zipSource, /options\.maxUncompressedBytes/);
   assert.match(packageCreateSource, /deploymentPrimaryPane=/);
   assert.match(packageCreateSource, /className="package-source-pane"/);
-  assert.match(packageCreateSource, /请上传代码包/);
+  assert.match(packageCreateSource, /t\("codePackage\.uploadPrompt"\)/);
   assert.doesNotMatch(packageCreateSource, /<FileArchive/);
   assert.match(packageCreateSource, /role="button"/);
-  assert.match(packageCreateSource, /aria-label=\{project \? "重新上传代码包" : "上传代码包"\}/);
+  assert.match(
+    packageCreateSource,
+    /aria-label=\{project \? t\("codePackage\.reupload"\) : t\("codePackage\.upload"\)\}/,
+  );
   assert.doesNotMatch(packageCreateSource, />选择压缩包</);
   assert.match(packageCreateSource, /onChange=\{setProject\}/);
 });
@@ -119,23 +122,23 @@ test("validates and previews uploaded zip projects before deployment", () => {
 test("shows upload, image build, runtime creation, and publish progress", () => {
   assert.match(
     projectPreviewSource,
-    /deploymentPrimaryPane\s*\?\s*CODE_PACKAGE_DEPLOY_STEPS\s*:\s*DEPLOY_STEPS/,
+    /deploymentPrimaryPane\s*\?\s*codePackageDeploySteps\(t\)\s*:\s*deploySteps\(t\)/,
   );
   assert.match(
     projectPreviewSource,
-    /phase: "upload", label: "上传代码包"/,
+    /phase: "upload", label: t\("projectPreview\.steps\.uploadPackage"\)/,
   );
   assert.match(
     projectPreviewSource,
-    /phase: "build", label: "镜像打包"/,
+    /phase: "build", label: t\("projectPreview\.steps\.packageImage"\)/,
   );
   assert.match(
     projectPreviewSource,
-    /phase: "deploy", label: "创建 Runtime"/,
+    /phase: "deploy", label: t\("projectPreview\.steps\.createRuntime"\)/,
   );
   assert.match(clientSource, /phase: "upload"/);
-  assert.match(clientSource, /正在上传代码包/);
-  assert.match(clientSource, /正在校验迁移产物/);
+  assert.match(clientSource, /adkT\("client\.uploadingCodePackage"\)/);
+  assert.match(clientSource, /adkT\("client\.validatingMigrationArtifact"\)/);
 });
 
 test("passes the selected region and network to AgentKit deployment", () => {
@@ -157,7 +160,7 @@ test("uses the shared deployment lifecycle for uploaded packages", () => {
 test("hides message channels for code package deployment", () => {
   assert.match(
     projectPreviewSource,
-    /!deploymentPrimaryPane\s*&&\s*\([\s\S]*?消息渠道/,
+    /!deploymentPrimaryPane\s*&&\s*\([\s\S]*?t\("projectPreview\.messageChannels"\)/,
   );
 });
 
@@ -174,13 +177,16 @@ test("centers code package deployment in a single configuration column", () => {
     projectPreviewStyles,
     /\.pp-root\.is-deploy\.has-primary-pane \.pp-config-head,[\s\S]*?\.pp-config-actions\s*\{[\s\S]*?border:\s*0/,
   );
-  assert.match(packageCreateSource, /className="package-source-label">代码包/);
+  assert.match(
+    packageCreateSource,
+    /className="package-source-label">\{t\("codePackage\.name"\)\}/,
+  );
   assert.match(packageCreateStyles, /\.package-dropzone\s*\{[\s\S]*?min-height:\s*152px/);
 });
 
 test("uses a themed region menu and a centered icon-free deploy button", () => {
   assert.match(projectPreviewSource, /className="pp-region-trigger"/);
-  assert.match(projectPreviewSource, /role="listbox" aria-label="部署区域"/);
+  assert.match(projectPreviewSource, /role="listbox" aria-label=\{t\("projectPreview\.deployRegion"\)\}/);
   assert.match(
     projectPreviewStyles,
     /\.pp-root\.is-deploy\.has-primary-pane \.pp-config-actions\s*\{[\s\S]*?justify-content:\s*center/,

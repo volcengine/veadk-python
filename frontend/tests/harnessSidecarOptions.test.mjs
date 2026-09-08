@@ -152,22 +152,32 @@ test("round-trips selected options in YAML and omits the unselected default", ()
   assert.doesNotMatch(yaml, /sql_readonly|bytedance-agentkit-harness-sidecar/);
 });
 
+test("supports localized YAML header comments", () => {
+  const yaml = draftToYaml(normalizeDraft({ name: "localized" }), {
+    heading: "VeADK agent structure configuration",
+    importHint: "Reload this file from Import YAML on the Create Agent page.",
+  });
+
+  assert.match(yaml, /^# VeADK agent structure configuration$/m);
+  assert.match(yaml, /^# Reload this file from Import YAML on the Create Agent page\.$/m);
+  assert.doesNotMatch(yaml, /[\u3400-\u9fff]/u);
+});
+
 test("uses this Studio release's integrated optimization metadata", () => {
   assert.match(harnessOptionsSource, /HARNESS_SIDECAR_OPTIONS/);
   assert.match(harnessOptionsSource, /HARNESS_SIDECAR_OPTION_GROUPS/);
   assert.match(harnessOptionsSource, /HARNESS_SIDECAR_PROFILES/);
-  assert.match(harnessOptionsSource, /自定义/);
-  assert.match(harnessOptionsSource, /运维场景/);
-  assert.match(harnessOptionsSource, /Goal任务控制/);
-  assert.match(harnessOptionsSource, /默认包含 SQL 只读保护/);
+  assert.match(harnessOptionsSource, /traditional\.optimization\.profiles\.default\.label/);
+  assert.match(harnessOptionsSource, /traditional\.optimization\.profiles\.ops\.label/);
+  assert.match(harnessOptionsSource, /traditional\.optimization\.options\.\$\{id\}\.label/);
+  assert.match(harnessOptionsSource, /traditional\.optimization\.options\.\$\{id\}\.description/);
   assert.doesNotMatch(customCreateSource, /getHarnessSidecarCatalog/);
   assert.doesNotMatch(customCreateSource, /resolveHarnessSidecarSelection/);
   assert.doesNotMatch(harnessOptionsSource, /sql_readonly\s*:/);
   assert.match(customCreateSource, /function HarnessOptimizationWorkspace/);
-  assert.match(customCreateSource, /优化场景/);
-  assert.match(customCreateSource, /aria-label="优化场景"/);
+  assert.match(customCreateSource, /traditional\.optimization\.scenario/);
   assert.doesNotMatch(customCreateSource, /不启用|value="none"/);
-  assert.match(customCreateSource, /<strong>\{item\.displayName\}<\/strong>/);
+  assert.match(customCreateSource, /traditional\.optimization\.options\.\$\{item\.id\}\.label/);
   assert.match(customCreateSource, /onProfileChange/);
   assert.match(customCreateSource, /harnessProfileDefaultOptimizations/);
 });
@@ -176,7 +186,7 @@ test("fails fast with a clear BytePlus Sidecar notice without blocking ordinary 
   assert.equal(harnessSidecarProviderNotice("volcengine"), null);
   assert.match(
     harnessSidecarProviderNotice("byteplus"),
-    /BytePlus 账号暂不支持 Harness Sidecar 优化项/,
+    /not available/,
   );
   assert.match(
     customCreateSource,
@@ -219,9 +229,9 @@ test("places the Harness optimization page immediately before environment setup"
   );
   assert.match(
     customCreateSource,
-    /\{ id: "build", label: "架构" \},\s*\{ id: "validate", label: "调试" \},\s*\{ id: "optimize", label: "优化" \},\s*\{ id: "environment", label: "环境" \},\s*\{ id: "publish", label: "发布" \}/,
+    /\{ id: "build", label: "traditional\.workspace\.modes\.build" \},\s*\{ id: "validate", label: "traditional\.workspace\.modes\.validate" \},\s*\{ id: "optimize", label: "traditional\.workspace\.modes\.optimize" \},\s*\{ id: "environment", label: "traditional\.workspace\.modes\.environment" \},\s*\{ id: "publish", label: "traditional\.workspace\.modes\.publish" \}/,
   );
-  assert.match(customCreateSource, /optimize:\s*"为您的智能体选择优化项"/);
+  assert.match(customCreateSource, /optimize:\s*"traditional\.workspace\.titles\.optimize"/);
   assert.doesNotMatch(customCreateSource, /为您的智能体选择一些优化项/);
   assert.ok(
     customCreateSource.indexOf('{workspaceMode === "validate"') <
@@ -331,7 +341,7 @@ test("marks a running variant stale when the draft optimization selection change
     customCreateSource,
     /const stale = Boolean\([\s\S]*?runtimeSnapshot !==[\s\S]*?debugVariantSnapshot\(draftSnapshot, variant\)/,
   );
-  assert.match(customCreateSource, /配置已变更，请重新启动此环境/);
+  assert.match(customCreateSource, /traditional\.debug\.configurationChanged/);
 });
 
 test("applies scenario defaults while allowing an empty custom selection", () => {
@@ -340,11 +350,11 @@ test("applies scenario defaults while allowing an empty custom selection", () =>
     /const updateHarnessOptimizationProfile = \([\s\S]*?harnessProfileDefaultOptimizations\(profile\)/,
   );
   assert.doesNotMatch(customCreateSource, /!harnessOptimizationProfile/);
-  assert.match(harnessOptionsSource, /不勾选时不启动 Sidecar/);
-  assert.match(customCreateSource, /优化场景：\$\{harnessSidecarProfileLabel/);
+  assert.match(harnessOptionsSource, /traditional\.optimization\.profiles\.default\.description/);
+  assert.match(customCreateSource, /traditional\.optimization\.releaseScenario/);
   assert.match(
     customCreateSource,
-    /harnessOptimizations\.map\(\s*harnessSidecarOptionLabel,?\s*\)/,
+    /harnessOptimizations\.map\(\(id\) =>\s*t\(`traditional\.optimization\.options\.\$\{id\}\.label`\)/,
   );
   assert.match(
     customCreateSource,

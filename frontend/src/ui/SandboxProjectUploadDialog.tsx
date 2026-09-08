@@ -8,11 +8,13 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { Badge } from "@openai/apps-sdk-ui/components/Badge";
+import { useTranslation } from "react-i18next";
 import {
   sandboxClient,
   type CodexProjectHandoffPairing,
   type CodexProjectHandoffStatus,
 } from "../adk/sandbox";
+import { sandboxT } from "./sandboxI18n";
 import "./SandboxProjectUploadDialog.css";
 
 type InstallMethod = "conversation" | "terminal";
@@ -36,11 +38,10 @@ function trimStudioUrl(value: string): string {
 
 function codexHandoffPrompt(pairing: CodexProjectHandoffPairing): string {
   const studioUrl = trimStudioUrl(pairing.studioUrl);
-  return [
-    "使用 AgentKit Studio Plugin 端云接力当前会话、项目和任务。请直接执行，不要让我手动打开终端。",
-    `Studio：${studioUrl}`,
-    `配对码：${pairing.pairingCode}`,
-  ].join("\n");
+  return sandboxT("handoff.prompt", {
+    studioUrl,
+    pairingCode: pairing.pairingCode,
+  });
 }
 
 function installPluginCommand(): string {
@@ -53,10 +54,7 @@ function installPluginCommand(): string {
 }
 
 function installPluginPrompt(): string {
-  return [
-    "请安装 AgentKit Studio Plugin。请直接执行以下安装命令，不要让我手动打开终端。",
-    `安装命令：${installPluginCommand()}`,
-  ].join("\n");
+  return sandboxT("handoff.installPrompt", { command: installPluginCommand() });
 }
 
 function CloseIcon(props: SVGProps<SVGSVGElement>) {
@@ -145,14 +143,13 @@ type ProgressState = "pending" | "active" | "done" | "failed";
 
 interface HandoffProgressStep {
   id: "request" | "session" | "restore" | "continue";
-  label: string;
 }
 
 const HANDOFF_PROGRESS_STEPS: readonly HandoffProgressStep[] = [
-  { id: "request", label: "等待端侧请求" },
-  { id: "session", label: "创建云端 Session" },
-  { id: "restore", label: "恢复项目" },
-  { id: "continue", label: "发送续跑任务" },
+  { id: "request" },
+  { id: "session" },
+  { id: "restore" },
+  { id: "continue" },
 ];
 
 function progressRank(status: CodexProjectHandoffStatus): number {
@@ -195,19 +192,19 @@ function progressStepState(
 function handoffStatusLabel(status: CodexProjectHandoffStatus): string {
   switch (status.state) {
     case "issued":
-      return "等待请求";
+      return sandboxT("handoff.status.issued");
     case "creating":
-      return "正在创建 Session";
+      return sandboxT("handoff.status.creating");
     case "session-created":
-      return "正在迁移项目";
+      return sandboxT("handoff.status.sessionCreated");
     case "continuing":
-      return "正在启动云端任务";
+      return sandboxT("handoff.status.continuing");
     case "running":
-      return "云端执行中";
+      return sandboxT("handoff.status.running");
     case "completed":
-      return "接力完成";
+      return sandboxT("handoff.status.completed");
     case "failed":
-      return "接力失败";
+      return sandboxT("handoff.status.failed");
   }
 }
 
@@ -217,6 +214,7 @@ export function SandboxProjectUploadDialog({
   onRefreshAgents,
   onOpenSession,
 }: SandboxProjectUploadDialogProps) {
+  const { t, i18n } = useTranslation("sandbox");
   const dialogRef = useRef<HTMLElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const onCloseRef = useRef(onClose);
@@ -236,11 +234,14 @@ export function SandboxProjectUploadDialog({
   const [copyTarget, setCopyTarget] = useState<CopyTarget>("");
   onCloseRef.current = onClose;
 
-  const installPrompt = useMemo(() => installPluginPrompt(), []);
+  const installPrompt = useMemo(
+    () => installPluginPrompt(),
+    [i18n.resolvedLanguage],
+  );
   const installCommand = useMemo(() => installPluginCommand(), []);
   const handoffPrompt = useMemo(
     () => pairing ? codexHandoffPrompt(pairing) : "",
-    [pairing],
+    [i18n.resolvedLanguage, pairing],
   );
 
   useEffect(() => {
@@ -381,7 +382,7 @@ export function SandboxProjectUploadDialog({
     setCopyTarget(target);
     try {
       if (!navigator.clipboard?.writeText) {
-        throw new Error("当前浏览器不支持写入剪贴板。");
+        throw new Error(t("handoff.clipboardUnsupported"));
       }
       await navigator.clipboard.writeText(value);
       if (copyTimerRef.current !== undefined) {
@@ -463,7 +464,7 @@ export function SandboxProjectUploadDialog({
         <header className="sandbox-project-upload-head">
           <div>
             <div className="sandbox-project-upload-title-row">
-              <h2 id="sandbox-project-upload-title">接力到云端继续执行</h2>
+              <h2 id="sandbox-project-upload-title">{t("handoff.title")}</h2>
               <Badge
                 className="sandbox-project-upload-beta"
                 color="discovery"
@@ -474,7 +475,7 @@ export function SandboxProjectUploadDialog({
               </Badge>
             </div>
             <p id="sandbox-project-upload-description">
-              按顺序复制两段提示词，Codex 会通过插件将您的本地任务接力到云端
+              {t("handoff.description")}
             </p>
           </div>
           <button
@@ -482,7 +483,7 @@ export function SandboxProjectUploadDialog({
             type="button"
             className="sandbox-project-upload-close"
             onClick={onClose}
-            aria-label="关闭本地迁移引导"
+            aria-label={t("handoff.closeAria")}
           >
             <CloseIcon />
           </button>
@@ -498,7 +499,7 @@ export function SandboxProjectUploadDialog({
                   onClick={() => setPairingRetryKey((current) => current + 1)}
                 >
                   <RefreshIcon />
-                  重试
+                  {t("common.retry")}
                 </button>
               ) : null}
             </div>
@@ -508,8 +509,8 @@ export function SandboxProjectUploadDialog({
             <div className="sandbox-project-upload-stage-head">
               <span className="sandbox-project-upload-stage-number">1</span>
               <div>
-                <h3>安装插件</h3>
-                <p>首次使用时，请选择一种安装方式。</p>
+                <h3>{t("handoff.installTitle")}</h3>
+                <p>{t("handoff.installDescription")}</p>
               </div>
               <button
                 type="button"
@@ -525,17 +526,17 @@ export function SandboxProjectUploadDialog({
                   ? <CheckIcon />
                   : <CopyIcon />}
                 {copyTarget === `install-${installMethod}`
-                  ? "已复制"
+                  ? t("handoff.copied")
                   : installMethod === "conversation"
-                    ? "复制安装提示词"
-                    : "复制安装命令"}
+                    ? t("handoff.copyInstallPrompt")
+                    : t("handoff.copyInstallCommand")}
               </button>
             </div>
 
             <div
               className={`sandbox-project-upload-install-tabs is-${installMethod}`}
               role="tablist"
-              aria-label="插件安装方式"
+              aria-label={t("handoff.installMethodAria")}
             >
               <span aria-hidden="true" />
               <button
@@ -548,7 +549,7 @@ export function SandboxProjectUploadDialog({
                 onClick={() => setInstallMethod("conversation")}
                 onKeyDown={handleInstallTabKeyDown}
               >
-                与 Codex 对话安装
+                {t("handoff.conversationInstall")}
               </button>
               <button
                 id="sandbox-project-upload-install-terminal-tab"
@@ -560,7 +561,7 @@ export function SandboxProjectUploadDialog({
                 onClick={() => setInstallMethod("terminal")}
                 onKeyDown={handleInstallTabKeyDown}
               >
-                从终端安装
+                {t("handoff.terminalInstall")}
               </button>
             </div>
 
@@ -582,8 +583,8 @@ export function SandboxProjectUploadDialog({
             <div className="sandbox-project-upload-stage-head">
               <span className="sandbox-project-upload-stage-number">2</span>
               <div>
-                <h3>任务接力</h3>
-                <p>插件安装完成后复制，Codex 会迁移当前项目并继续执行任务。</p>
+                <h3>{t("handoff.taskTitle")}</h3>
+                <p>{t("handoff.taskDescription")}</p>
               </div>
               <button
                 type="button"
@@ -591,17 +592,19 @@ export function SandboxProjectUploadDialog({
                 disabled={!handoffPrompt || loading || copyTarget !== ""}
               >
                 {copyTarget === "handoff" ? <CheckIcon /> : <CopyIcon />}
-                {copyTarget === "handoff" ? "已复制" : "复制接力提示词"}
+                {copyTarget === "handoff"
+                  ? t("handoff.copied")
+                  : t("handoff.copyHandoffPrompt")}
               </button>
             </div>
 
             <div className="sandbox-project-upload-pairing-notice" role="status">
               <span>
                 {loading
-                  ? "正在生成新的配对码"
+                  ? t("handoff.generatingPairing")
                   : pairingExpired
-                    ? "配对码已过期"
-                    : <>配对码有效期剩余 <time>{countdown}</time></>}
+                    ? t("handoff.pairingExpired")
+                    : t("handoff.pairingRemaining", { countdown })}
               </span>
               <button
                 type="button"
@@ -609,19 +612,21 @@ export function SandboxProjectUploadDialog({
                 onClick={() => setPairingRetryKey((current) => current + 1)}
               >
                 <RefreshIcon />
-                {loading ? "刷新中" : "刷新配对码"}
+                {loading ? t("handoff.refreshing") : t("handoff.refreshPairing")}
               </button>
             </div>
 
             <div className="sandbox-project-upload-prompt">
               {loading ? (
                 <div className="sandbox-project-upload-loading" role="status">
-                  <i aria-hidden="true" />正在生成配对码
+                  <i aria-hidden="true" />{t("handoff.pairingLoading")}
                 </div>
               ) : handoffPrompt ? (
                 <pre tabIndex={0}><code>{handoffPrompt}</code></pre>
               ) : (
-                <div className="sandbox-project-upload-loading">配对码尚未生成。</div>
+                <div className="sandbox-project-upload-loading">
+                  {t("handoff.pairingUnavailable")}
+                </div>
               )}
             </div>
 
@@ -629,21 +634,21 @@ export function SandboxProjectUploadDialog({
               <section
                 className="sandbox-project-upload-progress"
                 aria-live="polite"
-                aria-label="端云接力状态"
+                aria-label={t("handoff.statusAria")}
               >
                 <header>
                   <div>
-                    <span>接力状态</span>
+                    <span>{t("handoff.statusTitle")}</span>
                     {handoffStatus.state !== "issued" ? (
                       <p>
-                        已收到{handoffStatus.agentName
-                          ? `“${handoffStatus.agentName}”`
-                          : handoffStatus.projectName
-                            ? `“${handoffStatus.projectName}”`
-                            : "当前项目"}的端云接力请求
+                        {handoffStatus.agentName || handoffStatus.projectName
+                          ? t("handoff.requestReceivedNamed", {
+                              name: handoffStatus.agentName || handoffStatus.projectName,
+                            })
+                          : t("handoff.requestReceivedCurrent")}
                       </p>
                     ) : (
-                      <p>复制接力提示词后，Codex 的请求会显示在这里。</p>
+                      <p>{t("handoff.requestHelp")}</p>
                     )}
                   </div>
                   <strong data-state={handoffStatus.state}>
@@ -659,7 +664,7 @@ export function SandboxProjectUploadDialog({
                           {state === "done" ? <CheckIcon /> : null}
                           {state === "failed" ? <CloseIcon /> : null}
                         </span>
-                        <span>{step.label}</span>
+                        <span>{t(`handoff.steps.${step.id}`)}</span>
                       </li>
                     );
                   })}
@@ -676,7 +681,7 @@ export function SandboxProjectUploadDialog({
 
         <footer className="sandbox-project-upload-actions">
           <button type="button" onClick={onClose}>
-            关闭
+            {t("common.close")}
           </button>
           {(handoffStatus?.state === "running" ||
             handoffStatus?.state === "completed") &&
@@ -687,7 +692,7 @@ export function SandboxProjectUploadDialog({
               disabled={enteringSession}
               onClick={() => void enterCodexSession()}
             >
-              {enteringSession ? "正在进入" : "进入 Codex"}
+              {enteringSession ? t("handoff.entering") : t("handoff.enterCodex")}
             </button>
           ) : null}
         </footer>

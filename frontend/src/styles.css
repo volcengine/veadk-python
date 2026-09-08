@@ -43,6 +43,12 @@
     "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
 }
 
+html[lang="en-US"] {
+  font-family:
+    "Inter", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+}
+
 * { box-sizing: border-box; }
 html, body, #root {
   height: 100%;
@@ -1439,7 +1445,46 @@ body {
 .turn--subagent:has(> .turn-meta) { padding-bottom: 0; }
 .turn--subagent:has(> .turn-meta)::before { bottom: 44px; }
 .transcript.is-streaming > .turn--subagent:last-child { min-height: 0; }
+.parallel-turn-group { display: contents; }
+@media (min-width: 1100px) {
+  .parallel-turn-group {
+    width: min(1180px, calc(100% - 16px));
+    max-width: 1180px;
+    margin: 0 auto 22px;
+    padding: 22px 2px 6px;
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: calc((100% - 32px) / 3);
+    gap: 16px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-inline: contain;
+    scroll-snap-type: inline proximity;
+    scrollbar-width: thin;
+  }
+  .parallel-turn-group > .turn--subagent {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+    margin: 0;
+    scroll-snap-align: start;
+  }
+  .parallel-turn-group[data-parallel-agent-count="1"] {
+    grid-auto-columns: min(768px, 100%);
+    justify-content: center;
+  }
+  .parallel-turn-group[data-parallel-agent-count="2"] {
+    grid-auto-columns: calc((100% - 16px) / 2);
+  }
+  .parallel-turn-group:focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+  }
+}
 .turn--assistant:has(.create-agent-tool-card.is-agent-results):has(+ .turn--subagent) > .turn-meta {
+  display: none;
+}
+.turn--assistant:has(.create-agent-tool-card.is-agent-results):has(+ .parallel-turn-group) > .turn-meta {
   display: none;
 }
 .subagent-run-label {
@@ -5569,6 +5614,9 @@ a.search-result { text-decoration: none; color: inherit; }
   font-weight: 600;
   font-size: 15px;
   letter-spacing: -0.01em;
+  font-family:
+    "Byte Sans", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
 }
 .login-main { flex: 1; display: flex; align-items: center; justify-content: center; padding: 0 24px; }
 .login-card { width: 100%; max-width: 420px; }
@@ -5578,6 +5626,9 @@ a.search-result { text-decoration: none; color: inherit; }
   font-weight: 700;
   line-height: 1.2;
   letter-spacing: -0.02em;
+  font-family:
+    "Byte Sans", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
 }
 .login-sub { margin: 0 0 28px; color: hsl(var(--muted-foreground)); font-size: 15px; }
 .login-btn {

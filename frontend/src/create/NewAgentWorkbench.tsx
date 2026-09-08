@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { Button } from "@openai/apps-sdk-ui/components/Button";
 import {
@@ -23,6 +24,7 @@ import {
   type ModelApiKeyOption,
   type ModelOption,
 } from "../adk/client";
+import { localizeDeployStageMessage } from "../adk/deploymentI18n";
 import {
   cloudRegionOptions,
   defaultModelApiBase,
@@ -147,28 +149,10 @@ function sessionStorageForBackend(
 
 const WIZARD_STEPS: Array<{
   id: WizardStep;
-  label: string;
-  title: string;
-  description: string;
 }> = [
-  {
-    id: "agent",
-    label: "智能体",
-    title: "基本信息",
-    description: "设置智能体的名称、用途、行为方式与能力",
-  },
-  {
-    id: "environment",
-    label: "执行环境",
-    title: "配置执行环境",
-    description: "选择默认环境或已构建的自定义环境",
-  },
-  {
-    id: "deployment",
-    label: "部署偏好",
-    title: "部署偏好",
-    description: "定义 AgentKit 云上参数",
-  },
+  { id: "agent" },
+  { id: "environment" },
+  { id: "deployment" },
 ];
 
 function NativeModelPicker({
@@ -204,6 +188,7 @@ function NativeModelPicker({
   onCustomApiKeyChange: (value: string) => void;
   onLoadingChange: (loading: boolean) => void;
 }) {
+  const { t } = useTranslation("create");
   const [apiKeys, setApiKeys] = useState<ModelApiKeyOption[]>([]);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [loadingKeys, setLoadingKeys] = useState(true);
@@ -231,14 +216,14 @@ function NativeModelPicker({
       })
       .catch((cause) => {
         if (!controller.signal.aborted) {
-          setError(cause instanceof Error ? cause.message : "模型凭据加载失败");
+          setError(cause instanceof Error ? cause.message : t("workbench.model.credentialsLoadError"));
         }
       })
       .finally(() => {
         if (!controller.signal.aborted) setLoadingKeys(false);
       });
     return () => controller.abort();
-  }, [apiKeyId, apiKeyName, cloudProvider, onApiKeyChange, source]);
+  }, [apiKeyId, apiKeyName, cloudProvider, onApiKeyChange, source, t]);
 
   useEffect(() => {
     if (source !== "ark" || !apiKeyId) {
@@ -257,7 +242,7 @@ function NativeModelPicker({
       })
       .catch((cause) => {
         if (!controller.signal.aborted) {
-          setError(cause instanceof Error ? cause.message : "模型列表加载失败");
+          setError(cause instanceof Error ? cause.message : t("workbench.model.modelsLoadError"));
         }
       })
       .finally(() => {
@@ -267,7 +252,7 @@ function NativeModelPicker({
         }
       });
     return () => controller.abort();
-  }, [apiKeyId, cloudProvider, source]);
+  }, [apiKeyId, cloudProvider, source, t]);
 
   useEffect(() => {
     onLoadingChange(
@@ -288,13 +273,13 @@ function NativeModelPicker({
   const sourceOptions: Option[] = [
     {
       value: "ark",
-      label: cloudProvider === "byteplus" ? "BytePlus ModelArk" : "火山方舟",
+      label: cloudProvider === "byteplus" ? "BytePlus ModelArk" : t("workbench.model.volcengineArk"),
     },
-    { value: "custom", label: "自定义" },
+    { value: "custom", label: t("workbench.model.custom") },
     {
       value: "gateway",
-      label: "模型网关",
-      description: "待上线",
+      label: t("workbench.model.gateway"),
+      description: t("workbench.model.comingSoon"),
       disabled: true,
     },
   ];
@@ -305,7 +290,7 @@ function NativeModelPicker({
   if (apiKeyId && !apiKeyOptions.some((option) => option.value === apiKeyId)) {
     apiKeyOptions.unshift({
       value: apiKeyId,
-      label: apiKeyName || "当前 API Key",
+      label: apiKeyName || t("workbench.model.currentApiKey"),
     });
   }
 
@@ -330,11 +315,11 @@ function NativeModelPicker({
 
   return (
     <div className="new-agent-workbench__model-group">
-      <span className="new-agent-workbench__model-group-label">模型</span>
+      <span className="new-agent-workbench__model-group-label">{t("workbench.model.label")}</span>
       <div className="new-agent-workbench__model-fields">
         <label className="new-agent-workbench__field new-agent-workbench__model-field">
           <span className="new-agent-workbench__model-field-label">
-            模型来源
+            {t("workbench.model.source")}
           </span>
           <Select
             value={source}
@@ -356,10 +341,10 @@ function NativeModelPicker({
                 value={apiKeyId ?? ""}
                 options={apiKeyOptions}
                 loading={loadingKeys}
-                loadingPlaceholder="正在加载 API Key"
-                placeholder="选择 API Key"
-                searchPlaceholder="搜索 API Key 名称"
-                searchEmptyMessage="暂无可用 API Key"
+                loadingPlaceholder={t("workbench.model.loadingApiKeys")}
+                placeholder={t("workbench.model.selectApiKey")}
+                searchPlaceholder={t("workbench.model.searchApiKeys")}
+                searchEmptyMessage={t("workbench.model.noApiKeys")}
                 size="xl"
                 triggerClassName="new-agent-workbench__select-trigger"
                 optionClassName={SELECT_OPTION_CLASS_NAME}
@@ -375,16 +360,16 @@ function NativeModelPicker({
             </label>
             <label className="new-agent-workbench__field new-agent-workbench__model-field">
               <span className="new-agent-workbench__model-field-label">
-                模型<span className="new-agent-workbench__required">*</span>
+                {t("workbench.model.label")}<span className="new-agent-workbench__required">*</span>
               </span>
               <Select
                 value={value}
                 options={modelOptions}
                 loading={loadingModels}
-                loadingPlaceholder="正在加载模型"
-                placeholder="选择模型"
-                searchPlaceholder="搜索名称、Model ID 或服务商"
-                searchEmptyMessage="没有可用的模型"
+                loadingPlaceholder={t("workbench.model.loadingModels")}
+                placeholder={t("workbench.model.selectModel")}
+                searchPlaceholder={t("workbench.model.searchModels")}
+                searchEmptyMessage={t("workbench.model.noModels")}
                 size="xl"
                 triggerClassName="new-agent-workbench__select-trigger"
                 optionClassName={`${SELECT_OPTION_CLASS_NAME} new-agent-workbench__model-option`}
@@ -400,7 +385,7 @@ function NativeModelPicker({
           <>
             <label className="new-agent-workbench__field new-agent-workbench__model-field">
               <span className="new-agent-workbench__model-field-label">
-                模型名称<span className="new-agent-workbench__required">*</span>
+                {t("workbench.model.name")}<span className="new-agent-workbench__required">*</span>
               </span>
               <Input
                 value={value}
@@ -414,7 +399,7 @@ function NativeModelPicker({
             </label>
             <label className="new-agent-workbench__field new-agent-workbench__model-field">
               <span className="new-agent-workbench__model-field-label">
-                服务商 Provider
+                {t("workbench.model.provider")}
               </span>
               <Input
                 value={provider}
@@ -447,7 +432,7 @@ function NativeModelPicker({
               <Input
                 type="password"
                 value={customApiKey}
-                placeholder="请输入模型 API Key"
+                placeholder={t("workbench.model.apiKeyPlaceholder")}
                 autoComplete="new-password"
                 size="xl"
                 gutterSize="md"
@@ -478,6 +463,7 @@ function IdentityUserPoolField({
   disabled: boolean;
   onChange: (uid: string) => void;
 }) {
+  const { t } = useTranslation("create");
   const [pools, setPools] = useState<IdentityUserPool[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -512,28 +498,28 @@ function IdentityUserPoolField({
         .sort((left, right) => Number(right.isCurrent) - Number(left.isCurrent))
         .map((pool) => ({
           value: pool.uid,
-          label: pool.name.trim() || "未命名用户池",
+          label: pool.name.trim() || t("workbench.identity.unnamedPool"),
           description: pool.isCurrent
-            ? `${pool.domain || pool.uid}（当前用户池）`
+            ? t("workbench.identity.currentPool", { value: pool.domain || pool.uid })
             : pool.domain || pool.uid,
         })),
-    [pools],
+    [pools, t],
   );
   const selectedPool = pools.find((pool) => pool.uid === value);
 
   return (
     <div className="new-agent-workbench__field">
       <span>
-        用户池<span className="new-agent-workbench__required">*</span>
+        {t("workbench.identity.userPool")}<span className="new-agent-workbench__required">*</span>
       </span>
       <Select
         value={value}
         options={options}
         loading={loading}
-        loadingPlaceholder="正在加载用户池"
-        placeholder="请选择用户池"
-        searchPlaceholder="搜索用户池"
-        searchEmptyMessage="当前账号下暂无 Identity 用户池"
+        loadingPlaceholder={t("workbench.identity.loading")}
+        placeholder={t("workbench.identity.placeholder")}
+        searchPlaceholder={t("workbench.identity.search")}
+        searchEmptyMessage={t("workbench.identity.empty")}
         size="xl"
         pill={false}
         disabled={disabled || Boolean(error)}
@@ -551,21 +537,20 @@ function IdentityUserPoolField({
             pill={false}
             onClick={() => setReloadKey((key) => key + 1)}
           >
-            重试
+            {t("common.retry")}
           </Button>
         </div>
       ) : selectedPool?.isCurrent ? (
         <small className="new-agent-workbench__helper-text">
-          当前 Studio 的登录 JWT 将透传访问此 Runtime
+          {t("workbench.identity.currentHint")}
         </small>
       ) : selectedPool ? (
         <small className="new-agent-workbench__error">
-          所选用户池不是当前 Studio 使用的用户池，部署后无法从 Studio 调用此
-          Runtime
+          {t("workbench.identity.mismatchHint")}
         </small>
       ) : (
         <small className="new-agent-workbench__helper-text">
-          当前 Studio 使用的用户池已在列表中标注
+          {t("workbench.identity.selectionHint")}
         </small>
       )}
     </div>
@@ -591,6 +576,7 @@ function EnvironmentVariableRow({
   onValueChange: (value: string) => void;
   onRemove: () => void;
 }) {
+  const { t } = useTranslation("create");
   const [draftName, setDraftName] = useState(name);
 
   useEffect(() => setDraftName(name), [name]);
@@ -612,7 +598,7 @@ function EnvironmentVariableRow({
     >
       <div className="new-agent-workbench__env-cell" role="cell">
         <Input
-          aria-label="环境变量名称"
+          aria-label={t("workbench.environmentVariables.nameAriaLabel")}
           value={draftName}
           title={locked ? name : undefined}
           size="xl"
@@ -628,7 +614,7 @@ function EnvironmentVariableRow({
       </div>
       <div className="new-agent-workbench__env-cell" role="cell">
         <Input
-          aria-label={`${name} 的值`}
+          aria-label={t("workbench.environmentVariables.valueAriaLabel", { name })}
           value={value}
           size="xl"
           gutterSize="md"
@@ -642,7 +628,7 @@ function EnvironmentVariableRow({
       <div className="new-agent-workbench__env-action" role="cell">
         {locked ? (
           required ? (
-            <span className="new-agent-workbench__required" aria-label="必填">
+            <span className="new-agent-workbench__required" aria-label={t("common.required")}>
               *
             </span>
           ) : null
@@ -653,7 +639,7 @@ function EnvironmentVariableRow({
             size="lg"
             uniform
             pill={false}
-            aria-label={`删除 ${name}`}
+            aria-label={t("workbench.environmentVariables.deleteNamed", { name })}
             onClick={onRemove}
           >
             <Trash aria-hidden />
@@ -688,6 +674,7 @@ export function NewAgentWorkbench({
   onNetworkChange,
   onDeploy,
 }: NewAgentWorkbenchProps) {
+  const { t } = useTranslation("create");
   const reduceMotion = useReducedMotion();
   const [step, setStep] = useState<WizardStep>("agent");
   const [isLeaving, setIsLeaving] = useState(false);
@@ -723,8 +710,15 @@ export function NewAgentWorkbench({
   const [panelFades, setPanelFades] = useState({ top: false, bottom: false });
   const panelRef = useRef<HTMLDivElement>(null);
   const stepIndex = WIZARD_STEPS.findIndex((item) => item.id === step);
-  const stepMeta = WIZARD_STEPS[stepIndex];
-  const nameProblem = agentNameProblem(draft.name);
+  const stepMeta = {
+    ...WIZARD_STEPS[stepIndex],
+    label: t(`workbench.steps.${step}.label`),
+    title: t(`workbench.steps.${step}.title`),
+    description: t(`workbench.steps.${step}.description`),
+  };
+  const nameProblem = agentNameProblem(draft.name, (key) =>
+    t(`validation.agentName.${key}`),
+  );
   const nameInvalid = nameProblem !== null;
   const descriptionMissing = !draft.description.trim();
   const instructionMissing = !draft.instruction.trim();
@@ -858,16 +852,16 @@ export function NewAgentWorkbench({
       max < 1
     ) {
       setDeploymentValidationError(
-        "最小实例数必须为大于等于 0 的整数，最大实例数必须为大于 0 的整数",
+        t("workbench.validation.instanceIntegers"),
       );
       return;
     }
     if (min > max) {
-      setDeploymentValidationError("最小实例数不能大于最大实例数");
+      setDeploymentValidationError(t("workbench.validation.instanceOrder"));
       return;
     }
     if (authenticationType === "user_pool" && !userPoolUid) {
-      setDeploymentValidationError("请选择用于 Runtime 鉴权的用户池");
+      setDeploymentValidationError(t("workbench.validation.userPoolRequired"));
       return;
     }
     const resourcesError = deploymentResourcesError(deployResources);
@@ -907,7 +901,7 @@ export function NewAgentWorkbench({
       }}
       onAnimationComplete={finishPageTransition}
     >
-      <main className="new-agent-workbench__main" aria-label="快速模式创建">
+      <main className="new-agent-workbench__main" aria-label={t("workbench.ariaLabel")}>
         <section
           className="new-agent-workbench__form"
           aria-labelledby="new-agent-workbench-title"
@@ -944,7 +938,7 @@ export function NewAgentWorkbench({
                     >
                       <span className="new-agent-workbench__field-heading">
                         <span>
-                          名称
+                          {t("common.name")}
                           <span className="new-agent-workbench__required">
                             *
                           </span>
@@ -958,7 +952,7 @@ export function NewAgentWorkbench({
                         gutterSize="md"
                         pill={false}
                         invalid={showNameError && nameInvalid}
-                        placeholder="输入智能体名称"
+                        placeholder={t("workbench.agent.namePlaceholder")}
                         aria-describedby={
                           showNameError && nameProblem
                             ? "new-agent-workbench-name-error"
@@ -985,7 +979,7 @@ export function NewAgentWorkbench({
                       data-validation-field="description"
                     >
                       <span>
-                        描述
+                        {t("common.description")}
                         <span className="new-agent-workbench__required">*</span>
                       </span>
                       <Textarea
@@ -996,7 +990,7 @@ export function NewAgentWorkbench({
                         size="xl"
                         gutterSize="md"
                         invalid={showAgentErrors && descriptionMissing}
-                        placeholder="说明这个智能体可以做什么"
+                        placeholder={t("workbench.agent.descriptionPlaceholder")}
                         onChange={(event) =>
                           onDraftPatch({
                             description: event.currentTarget.value,
@@ -1005,7 +999,7 @@ export function NewAgentWorkbench({
                       />
                       {showAgentErrors && descriptionMissing ? (
                         <small className="new-agent-workbench__error">
-                          请输入描述
+                          {t("workbench.validation.descriptionRequired")}
                         </small>
                       ) : null}
                     </label>
@@ -1014,7 +1008,7 @@ export function NewAgentWorkbench({
                       data-validation-field="instruction"
                     >
                       <span>
-                        提示词
+                        {t("workbench.agent.prompt")}
                         <span className="new-agent-workbench__required">*</span>
                       </span>
                       <Textarea
@@ -1025,7 +1019,7 @@ export function NewAgentWorkbench({
                         size="xl"
                         gutterSize="md"
                         invalid={showAgentErrors && instructionMissing}
-                        placeholder="定义角色、目标和行为边界"
+                        placeholder={t("workbench.agent.promptPlaceholder")}
                         onChange={(event) =>
                           onDraftPatch({
                             instruction: event.currentTarget.value,
@@ -1034,7 +1028,7 @@ export function NewAgentWorkbench({
                       />
                       {showAgentErrors && instructionMissing ? (
                         <small className="new-agent-workbench__error">
-                          请输入提示词
+                          {t("workbench.validation.promptRequired")}
                         </small>
                       ) : null}
                     </label>
@@ -1074,17 +1068,17 @@ export function NewAgentWorkbench({
                     />
                     {showAgentErrors && modelMissing ? (
                       <p className="new-agent-workbench__error" role="alert">
-                        请选择模型
+                        {t("workbench.validation.modelRequired")}
                       </p>
                     ) : null}
                     <div className="new-agent-workbench__field">
-                      <span>技能</span>
+                      <span>{t("workbench.agent.skills")}</span>
                       <SkillSourcePicker
                         selected={draft.selectedSkills ?? []}
                         onChange={onSelectedSkillsChange}
                         cloudProvider={cloudProvider}
                         disabled={deploying}
-                        addLabel="添加技能"
+                        addLabel={t("workbench.agent.addSkill")}
                         showSelectedCount={false}
                       />
                     </div>
@@ -1129,7 +1123,7 @@ export function NewAgentWorkbench({
                   >
                     <label className="new-agent-workbench__field">
                       <span>
-                        Runtime 名称
+                        {t("workbench.deployment.runtimeName")}
                         <span className="new-agent-workbench__required">*</span>
                       </span>
                       <Input
@@ -1145,13 +1139,13 @@ export function NewAgentWorkbench({
                       />
                       <small className="new-agent-workbench__helper-text">
                         {isRuntimeUpdate
-                          ? "更新时保持现有 Runtime 名称不变"
-                          : "仅支持英文字母、数字、下划线和连字符"}
+                          ? t("workbench.deployment.runtimeNameUpdateHint")
+                          : t("workbench.deployment.runtimeNameHint")}
                       </small>
                     </label>
                     <label className="new-agent-workbench__field">
                       <span>
-                        发布区域
+                        {t("workbench.deployment.region")}
                         <span className="new-agent-workbench__required">*</span>
                       </span>
                       <Select
@@ -1170,7 +1164,7 @@ export function NewAgentWorkbench({
 
                     <div className="new-agent-workbench__deployment-section">
                       <label className="new-agent-workbench__field">
-                        <span>鉴权方式</span>
+                        <span>{t("workbench.deployment.authentication")}</span>
                         <Select
                           value={authenticationType}
                           options={[
@@ -1178,12 +1172,12 @@ export function NewAgentWorkbench({
                               value: "api_key",
                               label: "API Key",
                               description:
-                                "默认方式，使用 Runtime API Key 访问",
+                                t("workbench.deployment.apiKeyDescription"),
                             },
                             {
                               value: "user_pool",
-                              label: "用户池",
-                              description: "使用 Identity 用户池签发的 JWT",
+                              label: t("workbench.identity.userPool"),
+                              description: t("workbench.deployment.userPoolDescription"),
                             },
                           ]}
                           size="xl"
@@ -1213,15 +1207,15 @@ export function NewAgentWorkbench({
 
                     <div className="new-agent-workbench__deployment-section">
                       <label className="new-agent-workbench__field">
-                        <span>会话存储</span>
+                        <span>{t("workbench.deployment.sessionStorage")}</span>
                         <Select
                           value={sessionBackend}
                           options={STM_BACKENDS.map((option) => ({
                             value: option.id,
                             label:
                               option.id === "local"
-                                ? "In-memory 临时存储"
-                                : option.label,
+                                ? t("workbench.deployment.inMemoryStorage")
+                                : t(`workbench.deployment.backends.${option.id}`, { defaultValue: option.label }),
                           }))}
                           size="xl"
                           triggerClassName="new-agent-workbench__select-trigger"
@@ -1247,12 +1241,12 @@ export function NewAgentWorkbench({
 
                     <div className="new-agent-workbench__deployment-section">
                       <strong className="new-agent-workbench__section-title">
-                        实例设置
+                        {t("workbench.deployment.instances")}
                       </strong>
                       <div className="new-agent-workbench__instance-fields">
                         <label className="new-agent-workbench__field">
                           <span className="new-agent-workbench__model-field-label">
-                            最小实例数
+                            {t("workbench.deployment.minInstances")}
                           </span>
                           <Input
                             type="number"
@@ -1271,7 +1265,7 @@ export function NewAgentWorkbench({
                         </label>
                         <label className="new-agent-workbench__field">
                           <span className="new-agent-workbench__model-field-label">
-                            最大实例数
+                            {t("workbench.deployment.maxInstances")}
                           </span>
                           <Input
                             type="number"
@@ -1291,20 +1285,20 @@ export function NewAgentWorkbench({
                       </div>
                       {sessionStorage === "in-memory" ? (
                         <small className="new-agent-workbench__helper-text">
-                          为避免多实例间会话丢失，推荐将 Runtime 固定为 1～1
+                          {t("workbench.deployment.inMemoryHint")}
                         </small>
                       ) : null}
                     </div>
 
                     <div className="new-agent-workbench__deployment-section">
                       <label className="new-agent-workbench__field">
-                        <span>网络模式</span>
+                        <span>{t("workbench.deployment.networkMode")}</span>
                         <Select
                           value={networkMode}
                           options={[
-                            { value: "public", label: "公网" },
-                            { value: "private", label: "私网" },
-                            { value: "both", label: "公网与私网" },
+                            { value: "public", label: t("workbench.deployment.network.public") },
+                            { value: "private", label: t("workbench.deployment.network.private") },
+                            { value: "both", label: t("workbench.deployment.network.both") },
                           ]}
                           size="xl"
                           triggerClassName="new-agent-workbench__select-trigger"
@@ -1347,7 +1341,7 @@ export function NewAgentWorkbench({
                               />
                             </label>
                             <label className="new-agent-workbench__field">
-                              <span>子网 ID（可选，多个用逗号分隔）</span>
+                              <span>{t("workbench.deployment.subnetIds")}</span>
                               <Input
                                 value={network?.subnetIds ?? ""}
                                 size="xl"
@@ -1365,8 +1359,8 @@ export function NewAgentWorkbench({
                           </div>
                           <div className="new-agent-workbench__switch-row">
                             <div>
-                              <strong>VPC 内共享公网出口</strong>
-                              <span>允许私网 Runtime 通过共享出口访问公网</span>
+                              <strong>{t("workbench.deployment.sharedInternet")}</strong>
+                              <span>{t("workbench.deployment.sharedInternetHint")}</span>
                             </div>
                             <Switch
                               checked={!!network?.enableSharedInternetAccess}
@@ -1376,7 +1370,7 @@ export function NewAgentWorkbench({
                                   enableSharedInternetAccess,
                                 })
                               }
-                              aria-label="VPC 内共享公网出口"
+                              aria-label={t("workbench.deployment.sharedInternet")}
                             />
                           </div>
                         </>
@@ -1386,19 +1380,19 @@ export function NewAgentWorkbench({
                     {cloudProvider !== "byteplus" ? (
                       <div className="new-agent-workbench__deployment-section">
                         <strong className="new-agent-workbench__section-title">
-                          评测集
+                          {t("workbench.deployment.evaluationSets")}
                         </strong>
                         <div className="new-agent-workbench__switch-row">
                           <div>
-                            <strong>自动创建评测集</strong>
+                            <strong>{t("workbench.deployment.createEvaluationSets")}</strong>
                             <span>
-                              部署成功后自动创建 Good Case 和 Bad Case 评测集
+                              {t("workbench.deployment.evaluationSetsHint")}
                             </span>
                           </div>
                           <Switch
                             checked={createEvaluationSets}
                             onCheckedChange={setCreateEvaluationSets}
-                            aria-label="自动创建评测集"
+                            aria-label={t("workbench.deployment.createEvaluationSets")}
                           />
                         </div>
                       </div>
@@ -1406,7 +1400,7 @@ export function NewAgentWorkbench({
 
                     <div className="new-agent-workbench__deployment-section">
                       <strong className="new-agent-workbench__section-title">
-                        资源配置
+                        {t("workbench.deployment.resources")}
                       </strong>
                       <DeploymentResources
                         value={deployResources}
@@ -1426,7 +1420,7 @@ export function NewAgentWorkbench({
                     <div className="new-agent-workbench__deployment-section">
                       <div className="new-agent-workbench__env-head">
                         <strong className="new-agent-workbench__section-title">
-                          环境变量
+                          {t("workbench.environmentVariables.title")}
                         </strong>
                         <Button
                           color="secondary"
@@ -1436,21 +1430,21 @@ export function NewAgentWorkbench({
                           onClick={addEnv}
                         >
                           <Plus aria-hidden />
-                          添加变量
+                          {t("workbench.environmentVariables.add")}
                         </Button>
                       </div>
                       <div
                         className="new-agent-workbench__env-table"
                         role="table"
-                        aria-label="环境变量"
+                        aria-label={t("workbench.environmentVariables.title")}
                       >
                         <div
                           className="new-agent-workbench__env-table-head"
                           role="row"
                         >
-                          <span role="columnheader">名称</span>
-                          <span role="columnheader">值</span>
-                          <span role="columnheader">操作</span>
+                          <span role="columnheader">{t("common.name")}</span>
+                          <span role="columnheader">{t("common.value")}</span>
+                          <span role="columnheader">{t("common.actions")}</span>
                         </div>
                         <div
                           className="new-agent-workbench__env-table-body"
@@ -1491,7 +1485,7 @@ export function NewAgentWorkbench({
                               className="new-agent-workbench__empty-row new-agent-workbench__env-table-empty"
                               role="row"
                             >
-                              <span role="cell">无</span>
+                              <span role="cell">{t("common.none")}</span>
                             </div>
                           ) : null}
                         </div>
@@ -1515,8 +1509,8 @@ export function NewAgentWorkbench({
                       >
                         {deploySucceeded ? <CheckCircle aria-hidden /> : null}
                         <span>
-                          {deployStage?.message ||
-                            (deploySucceeded ? "部署已完成" : "正在准备部署…")}
+                          {(deployStage ? localizeDeployStageMessage(deployStage) : "") ||
+                            (deploySucceeded ? t("workbench.deployment.complete") : t("workbench.deployment.preparing"))}
                         </span>
                         {typeof deployStage?.pct === "number" ? (
                           <strong>{Math.round(deployStage.pct)}%</strong>
@@ -1555,7 +1549,7 @@ export function NewAgentWorkbench({
                 onClick={goBack}
               >
                 <ChevronLeft aria-hidden />
-                {stepIndex === 0 ? "返回" : "上一步"}
+                {stepIndex === 0 ? t("common.back") : t("common.previous")}
               </Button>
 
               <Button
@@ -1571,12 +1565,12 @@ export function NewAgentWorkbench({
                 {step === "deployment"
                   ? deploySucceeded
                     ? isRuntimeUpdate
-                      ? "再次更新"
-                      : "重新部署"
+                      ? t("workbench.actions.updateAgain")
+                      : t("workbench.actions.deployAgain")
                     : isRuntimeUpdate
-                      ? "更新并发布"
-                      : "部署"
-                  : "下一步"}
+                      ? t("workbench.actions.updateAndPublish")
+                      : t("common.deploy")
+                  : t("common.next")}
               </Button>
             </motion.div>
           </AnimatePresence>
@@ -1585,15 +1579,15 @@ export function NewAgentWorkbench({
 
       <footer className="new-agent-workbench__footer">
         <div className="new-agent-workbench__footer-inner">
-          <nav aria-label="快速模式创建进度">
+          <nav aria-label={t("workbench.progress")}>
             <ol className="new-agent-workbench__progress">
               {WIZARD_STEPS.map((item, index) => (
                 <li
                   key={item.id}
                   className={index === stepIndex ? "is-active" : ""}
                   aria-current={index === stepIndex ? "step" : undefined}
-                  aria-label={item.label}
-                  title={item.label}
+                  aria-label={t(`workbench.steps.${item.id}.label`)}
+                  title={t(`workbench.steps.${item.id}.label`)}
                 >
                   <span aria-hidden="true" />
                 </li>

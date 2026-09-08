@@ -70,7 +70,7 @@ test("parses Codex Studio tool progress and normalizes terminal statuses", () =>
         id: "command-1",
         block: {
           kind: "tool",
-          name: "运行命令",
+          name: "Run command",
           callId: "command-1",
           args: { command: "pytest -q", cwd: "/workspace" },
           response: { output: "1 failed", exitCode: 1 },
@@ -149,7 +149,7 @@ test("upserts reasoning and keeps ordered detailed Codex output", () => {
         id: "files-1",
         block: {
           kind: "tool",
-          name: "修改文件",
+          name: "Modify files",
           callId: "files-1",
           args: { changes: [{ path: "agent.py", kind: "update" }] },
           response: undefined,
@@ -566,7 +566,7 @@ test("parses native Codex item events using the repository activity convention",
     id: "command-2",
     block: {
       kind: "tool",
-      name: "命令执行完成",
+      name: "Command completed",
       callId: "command-2",
       args: { command: "npm test" },
       response: { output: "16 passed", exitCode: 0 },
@@ -588,7 +588,7 @@ test("parses native Codex item events using the repository activity convention",
   }));
   assert.ok(plan);
   assert.equal(plan.event.block.kind, "plan");
-  assert.equal(plan.event.block.summary, "已完成 1/2 项");
+  assert.equal(plan.event.block.summary, "1/2 completed");
 });
 
 test("wires Codex progress into the active outer tool and renders the nested card", () => {

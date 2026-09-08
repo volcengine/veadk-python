@@ -11,11 +11,11 @@ test("conversation reports a completed stream that has no final displayable repl
   assert.match(appSource, /let hasCompletedReply = false/);
   assert.match(
     appSource,
-    /event\.partial !== true &&[\s\S]*?turnHasVisibleContent\(\{ role: "assistant", blocks \}\)[\s\S]*?hasCompletedReply = true/,
+    /projection\.completed &&[\s\S]*?turnHasVisibleContent\(projection\.turn\)[\s\S]*?hasCompletedReply = true/,
   );
   assert.match(
     appSource,
-    /!ctrl\.signal\.aborted && !streamFailed && !hasCompletedReply[\s\S]*?RUN_SSE_INCOMPLETE_RESPONSE_ERROR[\s\S]*?setError/,
+    /!ctrl\.signal\.aborted && !streamFailed && !hasCompletedReply[\s\S]*?runSseIncompleteResponseError\(\)[\s\S]*?setError/,
   );
   assert.match(
     appSource,
@@ -43,11 +43,11 @@ test("function-response recovery rejects partial-only and empty resumed streams"
   assert.match(onAuthSource, /let streamFailed = false;[\s\S]*?let hasCompletedReply = false/);
   assert.match(
     onAuthSource,
-    /event\.partial !== true &&[\s\S]*?turnHasVisibleContent\(\{ role: "assistant", blocks: acc\.blocks \}\)[\s\S]*?hasCompletedReply = true/,
+    /projection\.completed &&[\s\S]*?turnHasVisibleContent\(projection\.turn\)[\s\S]*?hasCompletedReply = true/,
   );
   assert.match(
     onAuthSource,
-    /!ctrl\.signal\.aborted && !streamFailed && !hasCompletedReply[\s\S]*?RUN_SSE_INCOMPLETE_RESPONSE_ERROR[\s\S]*?setError/,
+    /!ctrl\.signal\.aborted && !streamFailed && !hasCompletedReply[\s\S]*?runSseIncompleteResponseError\(\)[\s\S]*?setError/,
   );
   assert.match(onAuthSource, /catch \(e\) \{\s*streamFailed = true;/);
   assert.match(onAuthSource, /setError\(e instanceof Error \? e\.message : String\(e\)\)/);

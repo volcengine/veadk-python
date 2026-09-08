@@ -21,6 +21,7 @@ import type {
   SkillWorkbenchTask,
   SkillWorkbenchTaskSummary,
 } from "./types";
+import { skillT } from "../skills/i18n";
 
 const API_ROOT = "/web/skill-workbench";
 
@@ -45,7 +46,7 @@ export class SkillWorkbenchApiError extends Error {
 
 function record(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`${label}格式错误。`);
+    throw new Error(skillT("api.invalidFormat", { label }));
   }
   return value as Record<string, unknown>;
 }
@@ -53,7 +54,7 @@ function record(value: unknown, label: string): Record<string, unknown> {
 function optionalIdentifier(value: unknown, label: string): string | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== "string" || !value.trim() || value.trim().length > 256) {
-    throw new Error(`${label}格式错误。`);
+    throw new Error(skillT("api.invalidFormat", { label }));
   }
   return value.trim();
 }
@@ -68,7 +69,7 @@ function optionalRecoveryStatus(
     value === "failed" ||
     value === "unknown"
   ) return value;
-  throw new Error("Skill 恢复点状态格式错误。");
+  throw new Error(skillT("api.invalidFormat", { label: skillT("api.recoveryStatus") }));
 }
 
 async function request(
@@ -86,9 +87,9 @@ async function request(
 async function errorFrom(response: Response, fallback: string): Promise<Error> {
   const text = await response.text().catch(() => "");
   try {
-    const body = record(JSON.parse(text), "错误响应");
+    const body = record(JSON.parse(text), skillT("api.errorResponse"));
     const detail = body.detail && typeof body.detail === "object"
-      ? record(body.detail, "错误详情")
+      ? record(body.detail, skillT("api.errorDetails"))
       : body;
     return new SkillWorkbenchApiError(
       typeof detail.message === "string" ? detail.message : fallback,
@@ -104,9 +105,9 @@ async function errorFrom(response: Response, fallback: string): Promise<Error> {
   } catch {
     const contentType =
       response.headers.get("content-type")?.split(";", 1)[0] ||
-      "Content-Type 缺失";
+      skillT("api.missingContentType");
     return new SkillWorkbenchApiError(
-      `${fallback}（HTTP ${response.status}，Content-Type: ${contentType}）。请检查代理或网关配置。`,
+      skillT("api.gatewayError", { fallback, status: response.status, contentType }),
       response.status,
       "SKILL_WORKBENCH_ERROR",
       false,
@@ -121,9 +122,9 @@ async function json(response: Response, fallback: string): Promise<unknown> {
   if (!response.ok) throw await errorFrom(response, fallback);
   const type = response.headers.get("content-type") ?? "";
   if (!type.includes("application/json")) {
-    const responseType = type.split(";", 1)[0] || "Content-Type 缺失";
+    const responseType = type.split(";", 1)[0] || skillT("api.missingContentType");
     throw new Error(
-      `${fallback}：服务端返回非 JSON 响应（HTTP ${response.status}，Content-Type: ${responseType}），请检查代理或网关配置。`,
+      skillT("api.nonJson", { fallback, status: response.status, contentType: responseType }),
     );
   }
   return response.json();
@@ -132,16 +133,16 @@ async function json(response: Response, fallback: string): Promise<unknown> {
 function normalizeActivities(value: unknown): SkillWorkbenchActivity[] {
   if (!Array.isArray(value)) return [];
   return value.map((item) => {
-    const activity = record(item, "Skill 会话活动");
+    const activity = record(item, skillT("api.activity"));
     const kind = activity.kind;
     const status = activity.status;
     if (
       typeof activity.id !== "string" ||
       !["status", "thinking", "message", "tool"].includes(String(kind)) ||
       !["running", "done"].includes(String(status))
-    ) throw new Error("Skill 会话活动格式错误。");
+    ) throw new Error(skillT("api.invalidActivity"));
     if (kind === "tool") {
-      if (typeof activity.name !== "string") throw new Error("Skill 工具活动格式错误。");
+      if (typeof activity.name !== "string") throw new Error(skillT("api.invalidToolActivity"));
       return {
         id: activity.id,
         kind,
@@ -151,7 +152,7 @@ function normalizeActivities(value: unknown): SkillWorkbenchActivity[] {
         ...(activity.output !== undefined ? { response: activity.output } : {}),
       };
     }
-    if (typeof activity.text !== "string") throw new Error("Skill 文本活动格式错误。");
+    if (typeof activity.text !== "string") throw new Error(skillT("api.invalidTextActivity"));
     return {
       id: activity.id,
       kind: kind as "status" | "thinking" | "message",
@@ -165,7 +166,7 @@ function normalizePublication(
   value: unknown,
 ): (SkillWorkbenchPublishResult & { revision: number }) | undefined {
   if (value === undefined || value === null) return undefined;
-  const publication = record(value, "Skill 发布结果");
+  const publication = record(value, skillT("api.publication"));
   if (
     typeof publication.revision !== "number" ||
     typeof publication.skillId !== "string" ||
@@ -175,7 +176,7 @@ function normalizePublication(
     (publication.disposition !== "create-new" && publication.disposition !== "update-source") ||
     !isSupportedCloudRegion(publication.region) ||
     typeof publication.projectName !== "string"
-  ) throw new Error("Skill 发布结果格式错误。");
+  ) throw new Error(skillT("api.invalidFormat", { label: skillT("api.publication") }));
   return {
     revision: publication.revision,
     skillId: publication.skillId,
@@ -188,24 +189,24 @@ function normalizePublication(
 }
 
 function normalizeTask(value: unknown): SkillWorkbenchTask {
-  const task = record(value, "Skill 会话");
+  const task = record(value, skillT("api.task"));
   if (
     typeof task.jobId !== "string" ||
     (task.operation !== "create" && task.operation !== "optimize") ||
     typeof task.intent !== "string" ||
     typeof task.revision !== "number" ||
     typeof task.state !== "string"
-  ) throw new Error("Skill 会话格式错误。");
+  ) throw new Error(skillT("api.invalidFormat", { label: skillT("api.task") }));
   const files = Array.isArray(task.files)
     ? task.files.flatMap((item) => {
-        const file = record(item, "Skill 文件");
+        const file = record(item, skillT("api.file"));
         return typeof file.path === "string" && typeof file.size === "number"
           ? [{ path: file.path, size: file.size }]
           : [];
       })
     : [];
   const allowedStates = ["running", "ready", "failed", "cancelled", "expired", "published"];
-  if (!allowedStates.includes(task.state)) throw new Error("Skill 会话状态无法识别。");
+  if (!allowedStates.includes(task.state)) throw new Error(skillT("api.unknownTaskState"));
   const toolId = optionalIdentifier(task.toolId, "Tool ID");
   const sessionId = optionalIdentifier(task.sessionId, "Session ID");
   const recoveryStatus = optionalRecoveryStatus(task.recoveryStatus);
@@ -257,8 +258,8 @@ export async function getSkillWorkbenchCapability(
 ): Promise<SkillWorkbenchCapability> {
   const body = record(await json(
     await request("/capabilities", { signal }),
-    "读取 Skill 工作台能力失败",
-  ), "Skill 工作台能力");
+    skillT("api.loadCapability"),
+  ), skillT("api.capability"));
   return {
     enabled: body.enabled === true,
     reason: typeof body.reason === "string" ? body.reason : "",
@@ -294,10 +295,10 @@ export async function reserveSkillWorkbenchTask(
 ): Promise<{ jobId: string; reservedAt: number }> {
   const value = record(await json(
     await request("/tasks/reservations", { method: "POST", signal }),
-    "准备 Skill 会话失败",
-  ), "Skill 会话引用");
+    skillT("api.prepareTask"),
+  ), skillT("api.taskReference"));
   if (typeof value.jobId !== "string" || typeof value.reservedAt !== "number") {
-    throw new Error("Skill 会话引用格式错误。");
+    throw new Error(skillT("api.invalidFormat", { label: skillT("api.taskReference") }));
   }
   return { jobId: value.jobId, reservedAt: value.reservedAt };
 }
@@ -329,7 +330,7 @@ export async function createSkillWorkbenchTask(args: {
       },
       TRANSFER_REQUEST_TIMEOUT_MS,
     );
-    return normalizeTask(await json(response, "开始优化 Skill 失败"));
+    return normalizeTask(await json(response, skillT("api.startOptimization")));
   }
   const response = await request("/tasks", {
     method: "POST",
@@ -356,11 +357,11 @@ export async function createSkillWorkbenchTask(args: {
     }),
     signal: args.signal,
   }, TRANSFER_REQUEST_TIMEOUT_MS);
-  return normalizeTask(await json(response, "开始 Skill 会话失败"));
+  return normalizeTask(await json(response, skillT("api.startTask")));
 }
 
 function normalizeTaskSummary(value: unknown): SkillWorkbenchTaskSummary {
-  const task = record(value, "Skill 会话摘要");
+  const task = record(value, skillT("api.taskSummary"));
   const allowedStates = ["running", "ready", "failed", "cancelled", "expired", "published"];
   if (
     typeof task.jobId !== "string" ||
@@ -370,7 +371,7 @@ function normalizeTaskSummary(value: unknown): SkillWorkbenchTaskSummary {
     typeof task.state !== "string" ||
     !allowedStates.includes(task.state) ||
     typeof task.createdAt !== "number"
-  ) throw new Error("Skill 会话摘要格式错误。");
+  ) throw new Error(skillT("api.invalidFormat", { label: skillT("api.taskSummary") }));
   const recoveryStatus = optionalRecoveryStatus(task.recoveryStatus);
   return {
     jobId: task.jobId,
@@ -398,9 +399,9 @@ export async function listSkillWorkbenchTasks(
   const query = params.size > 0 ? `?${params.toString()}` : "";
   const body = record(await json(
     await request(`/tasks${query}`, { signal }),
-    "读取 Skill 会话列表失败",
-  ), "Skill 会话列表");
-  if (!Array.isArray(body.tasks)) throw new Error("Skill 会话列表格式错误。");
+    skillT("api.loadTaskList"),
+  ), skillT("api.taskList"));
+  if (!Array.isArray(body.tasks)) throw new Error(skillT("api.invalidTaskList"));
   return body.tasks.map(normalizeTaskSummary);
 }
 
@@ -410,7 +411,7 @@ export async function getSkillWorkbenchTask(
 ): Promise<SkillWorkbenchTask> {
   return normalizeTask(await json(
     await request(`/tasks/${encodeURIComponent(jobId)}`, { signal }),
-    "读取 Skill 会话失败",
+    skillT("api.loadTask"),
   ));
 }
 
@@ -426,8 +427,8 @@ export async function getSkillWorkbenchArtifact(
       `/tasks/${encodeURIComponent(jobId)}/artifact?${params.toString()}`,
       { signal },
     ),
-    "读取 Skill 产物失败",
-  ), "Skill 产物");
+    skillT("api.loadArtifact"),
+  ), skillT("api.artifact"));
   if (
     artifact.jobId !== jobId ||
     artifact.revision !== expectedRevision ||
@@ -438,14 +439,14 @@ export async function getSkillWorkbenchArtifact(
     typeof artifact.name !== "string" ||
     typeof artifact.description !== "string" ||
     !Array.isArray(artifact.files)
-  ) throw new Error("Skill 产物格式错误。");
+  ) throw new Error(skillT("api.invalidFormat", { label: skillT("api.artifact") }));
   const files = artifact.files.map((item) => {
-    const file = record(item, "Skill 产物文件");
+    const file = record(item, skillT("api.artifactFile"));
     if (
       typeof file.path !== "string" ||
       typeof file.size !== "number" ||
       typeof file.content !== "string"
-    ) throw new Error("Skill 产物文件格式错误。");
+    ) throw new Error(skillT("api.invalidFormat", { label: skillT("api.artifactFile") }));
     return { path: file.path, size: file.size, content: file.content };
   });
   return {
@@ -471,7 +472,7 @@ export async function refineSkillWorkbenchTask(args: {
       expectedRevision: args.expectedRevision,
     }),
   }, TRANSFER_REQUEST_TIMEOUT_MS);
-  return normalizeTask(await json(response, "继续调整 Skill 失败"));
+  return normalizeTask(await json(response, skillT("api.refine")));
 }
 
 export async function stopSkillWorkbenchTask(args: {
@@ -483,7 +484,7 @@ export async function stopSkillWorkbenchTask(args: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ expectedRevision: args.expectedRevision }),
   });
-  return normalizeTask(await json(response, "停止当前 Skill 任务失败"));
+  return normalizeTask(await json(response, skillT("api.stop")));
 }
 
 export async function publishSkillWorkbenchTask(args: {
@@ -513,12 +514,12 @@ export async function publishSkillWorkbenchTask(args: {
     }),
     signal: args.signal,
   }, 0);
-  if (!response.ok) throw await errorFrom(response, "发布 Skill 失败");
+  if (!response.ok) throw await errorFrom(response, skillT("api.publish"));
   const contentType = response.headers.get("content-type") ?? "";
   if (!contentType.includes("application/x-ndjson")) {
-    throw new Error("发布 Skill 失败：服务端返回了非 NDJSON 响应。");
+    throw new Error(skillT("api.nonNdjson"));
   }
-  if (!response.body) throw new Error("发布 Skill 失败：服务端没有返回进度流。");
+  if (!response.body) throw new Error(skillT("api.missingStream"));
 
   const phases = new Set([
     "preparing",
@@ -534,13 +535,13 @@ export async function publishSkillWorkbenchTask(args: {
 
   const consumeLine = (line: string) => {
     if (!line.trim()) return;
-    const event = record(JSON.parse(line), "发布进度");
+    const event = record(JSON.parse(line), skillT("api.publishProgress"));
     if (event.type === "progress") {
       if (
         typeof event.phase !== "string" ||
         !phases.has(event.phase) ||
         typeof event.message !== "string"
-      ) throw new Error("发布进度格式错误。");
+      ) throw new Error(skillT("api.invalidPublishProgress"));
       args.onProgress?.({
         phase: event.phase as SkillWorkbenchPublishProgress["phase"],
         message: event.message,
@@ -548,9 +549,9 @@ export async function publishSkillWorkbenchTask(args: {
       return;
     }
     if (event.type === "error") {
-      const detail = record(event.error, "发布错误");
+      const detail = record(event.error, skillT("api.publishError"));
       throw new SkillWorkbenchApiError(
-        typeof detail.message === "string" ? detail.message : "发布 Skill 失败",
+        typeof detail.message === "string" ? detail.message : skillT("api.publish"),
         500,
         typeof detail.code === "string" ? detail.code : "SKILL_PUBLISH_FAILED",
         detail.retryable === true,
@@ -561,8 +562,8 @@ export async function publishSkillWorkbenchTask(args: {
         JSON.stringify(event.error),
       );
     }
-    if (event.type !== "complete") throw new Error("未知的发布进度事件。");
-    const value = record(event.result, "发布结果");
+    if (event.type !== "complete") throw new Error(skillT("api.unknownPublishEvent"));
+    const value = record(event.result, skillT("api.publishResult"));
     if (
       typeof value.skillId !== "string" ||
       typeof value.version !== "string" ||
@@ -571,7 +572,7 @@ export async function publishSkillWorkbenchTask(args: {
       (value.disposition !== "create-new" && value.disposition !== "update-source") ||
       !isSupportedCloudRegion(value.region) ||
       typeof value.projectName !== "string"
-    ) throw new Error("发布结果格式错误。");
+    ) throw new Error(skillT("api.invalidFormat", { label: skillT("api.publishResult") }));
     result = {
       skillId: value.skillId,
       version: value.version,
@@ -592,9 +593,7 @@ export async function publishSkillWorkbenchTask(args: {
   }
   consumeLine(buffered);
   if (!result) {
-    throw new Error(
-      "发布进度流提前结束，无法确认发布结果。请刷新技能中心确认状态。",
-    );
+    throw new Error(skillT("api.streamEnded"));
   }
   return result;
 }
@@ -602,7 +601,7 @@ export async function publishSkillWorkbenchTask(args: {
 export async function deleteSkillWorkbenchTask(jobId: string): Promise<void> {
   await json(
     await request(`/tasks/${encodeURIComponent(jobId)}`, { method: "DELETE" }),
-    "删除 Skill 会话失败",
+    skillT("api.deleteTask"),
   );
 }
 
@@ -619,7 +618,7 @@ export async function downloadSkillWorkbenchTask(
     {},
     TRANSFER_REQUEST_TIMEOUT_MS,
   );
-  if (!response.ok) throw await errorFrom(response, "下载 Skill 失败");
+  if (!response.ok) throw await errorFrom(response, skillT("api.download"));
   const disposition = response.headers.get("content-disposition") ?? "";
   const filename = disposition.match(/filename="([^"]+)"/)?.[1] ?? "skill.zip";
   const url = URL.createObjectURL(await response.blob());

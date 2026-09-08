@@ -308,7 +308,7 @@ test("current intelligent release can be absent or restored", async (t) => {
   });
   await assert.rejects(
     fetchCurrentIntelligentDevelopmentRelease("dev-1"),
-    /源码快照的响应格式无效/,
+    /The source snapshot response has an invalid format/,
   );
 });
 
@@ -388,11 +388,11 @@ test("intelligent development errors preserve specific recovery guidance", async
 
   assert.equal(
     intelligentDevelopmentErrorMessage(new DOMException("timed out", "TimeoutError")),
-    "等待开发环境响应超时。任务可能仍在运行，请稍后重新进入当前会话查看状态。",
+    "The development environment timed out. The task may still be running; reopen this session later to check its status.",
   );
   assert.equal(
     intelligentDevelopmentErrorMessage(new TypeError("Failed to fetch")),
-    "与开发环境的连接已中断。任务可能仍在运行，请稍后重新进入当前会话查看状态。",
+    "The connection to the development environment was interrupted. The task may still be running; reopen this session later to check its status.",
   );
   assert.match(
     appSource,
@@ -654,16 +654,16 @@ test("delivery card separates deployability from verification", () => {
   assert.match(releaseInterface, /verified: boolean/);
   assert.match(releaseInterface, /validationSummary: string/);
   assert.doesNotMatch(releaseInterface, /releasePath|validationReportPath|url|localStorage/i);
-  assert.match(blocksUiSource, /查看源码/);
-  assert.match(blocksUiSource, /下载源码/);
-  assert.match(blocksUiSource, /手动部署到 Runtime/);
+  assert.match(blocksUiSource, /t\("blocks\.viewSource"\)/);
+  assert.match(blocksUiSource, /t\("blocks\.downloadSource"\)/);
+  assert.match(blocksUiSource, /t\("blocks\.manualDeploy"\)/);
   assert.match(blocksUiSource, /busyAction === "download"/);
   assert.match(
     blocksUiSource,
     /async function download\(\)[\s\S]*?catch[\s\S]*?finally \{[\s\S]*?setBusyAction\(null\)/,
   );
   assert.match(blocksUiSource, /disabled=\{\s*!value\.deployable/);
-  assert.match(blocksUiSource, /源码已准备好，可查看、下载或部署/);
+  assert.match(blocksUiSource, /t\("blocks\.sourceReady"\)/);
   assert.doesNotMatch(blocksUiSource, /验证尚未确认：/);
   assert.match(
     blocksUiSource,
@@ -686,7 +686,7 @@ test("delivery card separates deployability from verification", () => {
     deploymentClientSource,
     /acknowledgeUnverified\?: true/,
   );
-  assert.match(deploymentSource, /可部署源码/);
+  assert.match(deploymentSource, /t\("intelligentDeployment\.deployableSource"\)/);
   assert.doesNotMatch(deploymentSource, /部署未完整验证的源码|完整验证尚未确认/);
   assert.doesNotMatch(sharedStyles, /\.trusted-source-pane__badge\.is-warning/);
   assert.match(appSource, /if \(!delivery\.deployable\)/);
@@ -717,11 +717,11 @@ test("delivery card clears browser download handoff feedback", () => {
   assert.match(blocksUiSource, /const DOWNLOAD_STATUS_DURATION_MS = 3_000/);
   assert.match(
     blocksUiSource,
-    /busyAction === "download" \? "正在准备…" : "下载源码"/,
+    /busyAction === "download" \? t\("blocks\.preparing"\) : t\("blocks\.downloadSource"\)/,
   );
   assert.match(
     blocksUiSource,
-    /setDownloadStatus\(\{ message: "已开始下载" \}\)/,
+    /setDownloadStatus\(\{ message: t\("blocks\.downloadStarted"\) \}\)/,
   );
   assert.match(
     blocksUiSource,
@@ -995,7 +995,7 @@ test("durable project source rejects a mismatched stored identity", async () => 
         "a".repeat(64),
         "b".repeat(64),
       ),
-      /源码快照的响应格式无效/,
+      /The source snapshot response has an invalid format/,
     );
   } finally {
     globalThis.fetch = originalFetch;
@@ -1065,11 +1065,11 @@ test("intelligent release download rejects invalid responses and remains retryab
   try {
     await assert.rejects(
       downloadIntelligentDevelopmentRelease(candidate),
-      /不是 ZIP 文件/,
+      /The source download response is not a ZIP file/,
     );
     await assert.rejects(
       downloadIntelligentDevelopmentRelease(candidate),
-      /大小与发布记录不一致/,
+      /The source archive size does not match the published record/,
     );
     await assert.rejects(
       downloadIntelligentDevelopmentRelease(candidate),
@@ -1104,7 +1104,7 @@ test("intelligent goal input shares IME handling and semantic responsive styles"
   assert.match(createSource, /listModelOptions\(\{/);
   assert.match(
     createSource,
-    /function IntelligentModelSelect\([\s\S]*?<NewChatCompactSelect[\s\S]*?label="模型"[\s\S]*?hideLabel[\s\S]*?searchable/,
+    /function IntelligentModelSelect\([\s\S]*?<NewChatCompactSelect[\s\S]*?label=\{t\("intelligent\.model\.label"\)\}[\s\S]*?hideLabel[\s\S]*?searchable/,
   );
   assert.match(
     createSource,
@@ -1129,7 +1129,7 @@ test("intelligent goal input shares IME handling and semantic responsive styles"
   );
   assert.match(
     createSource,
-    /value: displayModelId,[\s\S]*?label: displayModelId,[\s\S]*?description: "当前配置"/,
+    /value: displayModelId,[\s\S]*?label: displayModelId,[\s\S]*?description: t\("intelligent\.model\.currentConfiguration"\)/,
   );
   assert.doesNotMatch(
     createSource,
@@ -1214,24 +1214,24 @@ test("intelligent preparation acknowledges the goal and exposes cancellable prog
 
   const idle = render(null);
   assert.match(
-    appSource,
-    /描述目标，按你的意图构建、调试并验证 Agent。/,
+    createSource,
+    /t\("intelligent\.goal\.hint"\)/,
   );
   assert.match(
     idle,
-    /描述目标后，沙箱中的 Codex 会判断你的意图，完成构建、调试和临时云端验证。/,
+    /Describe the problem your agent should solve/,
   );
   assert.match(
     idle,
-    /只需说明 Agent 要解决的问题；如有影响结果的关键信息，会在开始前向你确认。/,
+    /<label class="ic-goal-label"[^>]*>Goal<\/label>/,
   );
   assert.doesNotMatch(idle, /开发环境最多保留 8 小时/);
   assert.doesNotMatch(idle, /可在当前任务中持续优化/);
   assert.match(
     idle,
-    /placeholder="例如：创建一个能读取销售数据、生成周报并校验输出格式的 Agent"/,
+    /placeholder="For example: Build an agent that reads sales data, creates weekly reports, and validates the output format"/,
   );
-  assert.match(idle, /aria-label="模型：doubao-default-model"/);
+  assert.match(idle, /aria-label="compactSelect\.selection"/);
   assert.match(idle, />doubao-default-model</);
   assert.doesNotMatch(
     createSource,
@@ -1241,14 +1241,14 @@ test("intelligent preparation acknowledges the goal and exposes cancellable prog
   const preparing = render("preparing");
   assert.match(preparing, /role="status"/);
   assert.match(preparing, /aria-live="polite"/);
-  assert.match(preparing, /目标已收到，马上开始实现/);
-  assert.match(preparing, /正在创建任务环境/);
-  assert.match(preparing, /接下来会先梳理目标和实现方式，再编写、运行和验证 Agent/);
-  assert.match(preparing, />取消</);
+  assert.match(preparing, /Goal received\. Implementation is starting now\./);
+  assert.match(preparing, /Creating the task environment/);
+  assert.match(preparing, /Next, Codex will plan the approach/);
+  assert.match(preparing, />Cancel</);
   assert.match(preparing, /<textarea[^>]*disabled/);
 
   const starting = render("starting");
-  assert.match(starting, /环境已就绪，正在启动 Codex/);
+  assert.match(starting, /Environment ready\. Starting Codex/);
 });
 
 test("intelligent project versions preserve existing style and cover async states", () => {
@@ -1264,20 +1264,20 @@ test("intelligent project versions preserve existing style and cover async state
   assert.match(projectLibrarySource, /useState\(true\)/);
   assert.match(projectLibrarySource, /fetchIntelligentDevelopmentProjects\(controller\.signal\)/);
   assert.match(projectLibrarySource, /return \(\) => controller\.abort\(\)/);
-  assert.match(projectLibrarySource, /已保存项目/);
-  assert.match(projectLibrarySource, /正在检查项目存储/);
-  assert.match(projectLibrarySource, /还没有已保存的项目/);
-  assert.match(projectLibrarySource, /无法读取已保存项目/);
-  assert.match(projectLibrarySource, /完成首次构建后，源码会自动保存在这里/);
+  assert.match(projectLibrarySource, /t\("projectLibrary\.title"\)/);
+  assert.match(projectLibrarySource, /t\("projectLibrary\.checkingStorage"\)/);
+  assert.match(projectLibrarySource, /t\("projectLibrary\.empty\.savedTitle"\)/);
+  assert.match(projectLibrarySource, /t\("projectLibrary\.errors\.saved"\)/);
+  assert.match(projectLibrarySource, /t\("projectLibrary\.empty\.savedDescription"\)/);
   assert.match(
     projectLibrarySource,
-    /versionError && projectVersions\.length > 0[\s\S]*?className="ic-version-error"[\s\S]*?>重试</,
+    /versionError && projectVersions\.length > 0[\s\S]*?className="ic-version-error"[\s\S]*?t\("common\.retry"\)/,
   );
   assert.match(
     projectLibrarySource,
     /aria-busy=\{versionsLoading === project\.projectId \|\| undefined\}/,
   );
-  assert.match(projectLibrarySource, /StudioConfirmDialog[\s\S]*?title="删除这个版本？"/);
+  assert.match(projectLibrarySource, /StudioConfirmDialog[\s\S]*?title=\{t\("projectLibrary\.delete\.title"\)\}/);
   assert.match(projectLibrarySource, /CodeBrowserDialog[\s\S]*?readOnly/);
   assert.match(projectLibrarySource, /aria-expanded=\{expanded\}/);
   assert.match(projectLibrarySource, /feedback\.kind === "error" \? "alert" : "status"/);
@@ -1289,22 +1289,22 @@ test("intelligent project versions preserve existing style and cover async state
 test("saved project actions stay compact, destructive, and resilient to long content", () => {
   assert.match(
     projectLibrarySource,
-    /aria-label="刷新项目列表"[\s\S]*?<SourceRefreshIcon \/>/,
+    /aria-label=\{t\("projectLibrary\.refresh"\)\}[\s\S]*?<SourceRefreshIcon \/>/,
   );
   assert.doesNotMatch(projectLibrarySource, />刷新<\/button>/);
   assert.match(
     projectLibrarySource,
-    /<Button\s+type="button"\s+className="ic-version-delete"\s+color="danger"\s+variant="ghost"[\s\S]*?>[\s\S]*?删除[\s\S]*?<\/Button>/,
+    /<Button\s+type="button"\s+className="ic-version-delete"\s+color="danger"\s+variant="ghost"[\s\S]*?>[\s\S]*?t\("common\.delete"\)[\s\S]*?<\/Button>/,
   );
   assert.match(
     projectLibrarySource,
-    /StudioConfirmDialog[\s\S]*?title="删除这个版本？"[\s\S]*?variant="danger"/,
+    /StudioConfirmDialog[\s\S]*?title=\{t\("projectLibrary\.delete\.title"\)\}[\s\S]*?variant="danger"/,
   );
   assert.match(
     projectLibrarySource,
     /<Tooltip[\s\S]*?content=\{versionSummary\}[\s\S]*?className="ic-version-description"/,
   );
-  assert.match(projectLibrarySource, />去优化<\/button>/);
+  assert.match(projectLibrarySource, /t\("projectLibrary\.optimize"\)/);
   assert.doesNotMatch(projectLibrarySource, />继续优化<\/button>/);
   assert.doesNotMatch(projectLibrarySource, /版本已删除|项目已删除/);
   assert.doesNotMatch(projectLibrarySource, /已选择“\$\{project\.name\}”/);
@@ -1346,15 +1346,15 @@ test("migration optimization only enables Any and Dify project lineages", async 
   );
   assert.equal(
     migrationOptimizationUnavailableReason("migration", [version("langchain")]),
-    "暂不支持",
+    "Not supported",
   );
   assert.equal(
     migrationOptimizationUnavailableReason("migration", []),
-    "暂不支持",
+    "Not supported",
   );
   assert.match(
     projectLibrarySource,
-    /<Tooltip[\s\S]*?content=\{optimizationUnavailableReason\}[\s\S]*?暂不支持/,
+    /<Tooltip[\s\S]*?content=\{optimizationUnavailableReason\}[\s\S]*?t\("projectLibrary\.optimizeUnavailable"\)/,
   );
   assert.match(
     projectLibrarySource,
@@ -1368,12 +1368,12 @@ test("version comparison controls align with project titles and expose clear sel
     /<div className="ic-project-summary">([\s\S]*?)\{expanded \? \(/,
   )?.[1] ?? "";
   assert.match(projectSummary, /className="ic-project-compare-actions"/);
-  assert.match(projectSummary, />对比版本<\/button>/);
+  assert.match(projectSummary, /t\("projectLibrary\.compare\.start"\)/);
   assert.doesNotMatch(projectLibrarySource, /className="ic-version-compare-toolbar"/);
   assert.match(projectLibrarySource, /is-compare-selected/);
   assert.match(projectLibrarySource, /className="ic-version-compare-box"/);
   assert.match(projectLibrarySource, /<CompareCheckIcon \/>/);
-  assert.match(projectLibrarySource, /isCompareSelected \? "已选择" : "选择"/);
+  assert.match(projectLibrarySource, /isCompareSelected \? t\("projectLibrary\.compare\.selectedLabel"\) : t\("projectLibrary\.compare\.select"\)/);
   assert.match(
     createStyles,
     /\.ic-project-compare-actions \{[\s\S]*?display: flex;[\s\S]*?flex-shrink: 0;/,
@@ -1394,12 +1394,12 @@ test("version comparison controls align with project titles and expose clear sel
 
 test("source workspace exposes version comparison and scoped light and dark themes", () => {
   assert.match(codeBrowserSource, /compareProjectFiles/);
-  assert.match(codeBrowserSource, /aria-label="切换源码主题"/);
+  assert.match(codeBrowserSource, /aria-label=\{t\("codeBrowser\.switchTheme"\)\}/);
   assert.match(codeBrowserSource, /CodeDiffEditor/);
   assert.match(codeBrowserStyles, /\.code-browser-dialog\.is-dark/);
-  assert.match(projectLibrarySource, /对比版本/);
-  assert.match(projectLibrarySource, /查看对比/);
-  assert.match(blocksUiSource, /查看本次变更/);
+  assert.match(projectLibrarySource, /t\("projectLibrary\.compare\.start"\)/);
+  assert.match(projectLibrarySource, /t\("projectLibrary\.compare\.view"\)/);
+  assert.match(blocksUiSource, /t\("blocks\.viewChanges"\)/);
 });
 
 test("intelligent preparation ends before the first build turn and resets on navigation", () => {
@@ -1456,15 +1456,15 @@ test("intelligent conversation keeps the Studio visual language and stable contr
     sandboxSessionStyles,
     /\.sandbox-session-warning button \{[^}]*white-space: nowrap/,
   );
-  assert.match(sandboxSessionSource, /exitLabel = "退出当前智能体"/);
+  assert.match(sandboxSessionSource, /exitLabel \?\? t\("session\.exit"\)/);
   assert.match(
     sandboxSessionSource,
-    /`远端开发环境最长保留 8 小时，将于 \$\{expiryLabel\} 到期（\$\{remaining\}）；到期后清除对话和文件。`/,
+    /t\("session\.expiryWarning", \{ expiry: expiryLabel, remaining \}\)/,
   );
   assert.doesNotMatch(sandboxSessionSource, /Thread 与文件/);
   assert.match(
     appSource,
-    /exitLabel=\{[\s\S]*?sandboxSession\.intelligentDevelopment[\s\S]*?\? "退出开发环境"[\s\S]*?: undefined[\s\S]*?\}/,
+    /exitLabel=\{[\s\S]*?sandboxSession\.intelligentDevelopment[\s\S]*?\? t\("sandbox\.exitDevelopment"\)[\s\S]*?: undefined[\s\S]*?\}/,
   );
 });
 
@@ -1487,7 +1487,7 @@ test("authentication does not load Codex sessions into the global Sidebar", () =
     appSource,
     /function requestIntelligentNavigation[\s\S]*?sandboxSession\?\.intelligentDevelopment && sandboxBusy[\s\S]*?setIntelligentLeaveOpen\(true\)/,
   );
-  assert.match(appSource, /离开将停止本轮构建；当前会话仍会保留/);
+  assert.match(appSource, /description=\{t\("dialogs\.buildRunning\.description"\)\}/);
 });
 
 test("leaving an active intelligent build does not wait for remote cleanup", () => {
@@ -1519,8 +1519,8 @@ test("verified delivery uses repository-owned visuals and user-facing copy", () 
   assert.match(deliveryIconSource, /aria-hidden="true"/);
   assert.doesNotMatch(deliveryIconSource, /lucide-react|<img|data:image/);
   assert.match(blocksUiSource, /<DeliveryVerifiedIcon \/>/);
-  assert.match(blocksUiSource, /<dt>文件数<\/dt>/);
-  assert.match(blocksUiSource, /项检查通过/);
+  assert.match(blocksUiSource, /<dt>\{t\("blocks\.fileCount"\)\}<\/dt>/);
+  assert.match(blocksUiSource, /t\("blocks\.checksPassed"/);
 });
 
 // Keep the construction under test explicit: intelligent mode is configured once,

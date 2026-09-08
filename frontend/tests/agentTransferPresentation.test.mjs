@@ -18,11 +18,13 @@ const stylesSource = readFileSync(
 
 test("preserves the emitting Agent on history and live assistant turns", () => {
   assert.match(blocksModelSource, /author\?: string/);
-  assert.match(blocksModelSource, /last\.meta\?\.author !== author/);
-  assert.match(blocksModelSource, /meta\.author = author/);
-  assert.match(appSource, /currentStreamAuthor/);
-  assert.match(appSource, /last\.meta(?:\?\.|\.)author === currentStreamAuthor/);
-  assert.match(appSource, /author: currentStreamAuthor/);
+  assert.match(blocksModelSource, /createAssistantEventProjector/);
+  assert.match(blocksModelSource, /const active = new Map<string, ActiveAssistantTurn>/);
+  assert.match(blocksModelSource, /keyFor\(author, invocationId\)/);
+  assert.match(blocksModelSource, /upsertProjectedAssistantTurn/);
+  assert.match(appSource, /eventProjector\.project\(event\)/);
+  assert.match(appSource, /upsertProjectedAssistantTurn\(turns, projection\.turn\)/);
+  assert.doesNotMatch(appSource, /currentStreamAuthor/);
 });
 
 test("models transfer_to_agent without rendering a separate event row", () => {
@@ -36,7 +38,7 @@ test("models transfer_to_agent without rendering a separate event row", () => {
 test("groups child Agent work in an identified muted execution card", () => {
   assert.match(appSource, /className="subagent-run-label"/);
   assert.match(appSource, /className="subagent-run-handoff"/);
-  assert.match(appSource, /<span>智能体移交<\/span>/);
+  assert.match(appSource, /<span>\{t\("conversation\.agentTransfer"\)\}<\/span>/);
   assert.match(appSource, /className="subagent-run-title">\{agentDisplayName\}/);
   assert.match(appSource, /className="subagent-run-description"/);
   assert.match(appSource, /turn--subagent/);

@@ -8,10 +8,10 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { useTranslation } from "react-i18next";
 import type { AgentProject, ProjectFile } from "../create/project";
 import type { CodeWorkspaceTheme } from "./CodeEditor";
 import {
-  codeChangeLabel,
   compareProjectFiles,
   type CodeChangeStatus,
 } from "./codeComparison";
@@ -103,6 +103,7 @@ export function CodeBrowserDialog({
   readOnly = false,
   comparison,
 }: CodeBrowserDialogProps) {
+  const { t } = useTranslation("workspaceTools");
   const titleId = useId();
   const dialogRef = useRef<HTMLElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -201,7 +202,7 @@ export function CodeBrowserDialog({
     if (!status) return null;
     return (
       <span className={`code-browser-change is-${status}`}>
-        {codeChangeLabel(status)}
+        {t(`codeBrowser.change.${status}`)}
       </span>
     );
   }
@@ -260,8 +261,8 @@ export function CodeBrowserDialog({
 
   const nextTheme = theme === "light" ? "dark" : "light";
   const emptyMessage = comparison
-    ? "两个版本的源码没有差异"
-    : "从左侧选择文件以查看代码";
+    ? t("codeBrowser.noChanges")
+    : t("codeBrowser.chooseFile");
 
   return createPortal(
     <div
@@ -281,8 +282,11 @@ export function CodeBrowserDialog({
           <div className="code-browser-title-wrap">
             <span className="code-browser-title-icon"><SourceCodeIcon /></span>
             <div>
-              <h2 id={titleId}>{comparison ? "版本对比" : "源码工作区"}</h2>
-              <p title={project.name}>{project.name || "Agent 项目"}</p>
+              <h2 id={titleId}>{comparison
+                ? t("codeBrowser.compareTitle")
+                : t("codeBrowser.workspaceTitle")}
+              </h2>
+              <p title={project.name}>{project.name || t("codeBrowser.projectFallback")}</p>
             </div>
           </div>
           <div className="code-browser-head-actions">
@@ -290,8 +294,10 @@ export function CodeBrowserDialog({
               type="button"
               className="code-browser-icon-button"
               onClick={() => setTheme(nextTheme)}
-              aria-label="切换源码主题"
-              title={`切换为${nextTheme === "dark" ? "深色" : "浅色"}主题`}
+              aria-label={t("codeBrowser.switchTheme")}
+              title={t("codeBrowser.switchThemeTitle", {
+                theme: t(`codeBrowser.themes.${nextTheme}`),
+              })}
             >
               {theme === "light" ? <SourceDarkThemeIcon /> : <SourceLightThemeIcon />}
             </button>
@@ -300,8 +306,8 @@ export function CodeBrowserDialog({
               type="button"
               className="code-browser-icon-button"
               onClick={onClose}
-              aria-label="关闭源码工作区"
-              title="关闭"
+              aria-label={t("codeBrowser.closeWorkspace")}
+              title={t("codeBrowser.close")}
             >
               <SourceCloseIcon />
             </button>
@@ -309,9 +315,12 @@ export function CodeBrowserDialog({
         </header>
 
         <div className="code-browser-workspace">
-          <aside className="code-browser-sidebar" aria-label={comparison ? "变更文件" : "项目文件"}>
+          <aside className="code-browser-sidebar" aria-label={comparison
+            ? t("codeBrowser.changedFiles")
+            : t("codeBrowser.projectFiles")}
+          >
             <div className="code-browser-sidebar-head">
-              <span>{comparison ? "变更" : "文件"}</span>
+              <span>{comparison ? t("codeBrowser.changes") : t("codeBrowser.files")}</span>
               <span>{displayFiles.length}</span>
             </div>
             <div className="code-browser-tree">
@@ -324,7 +333,7 @@ export function CodeBrowserDialog({
           </aside>
 
           <main className="code-browser-main">
-            <div className="code-browser-tabs" role="tablist" aria-label="打开的文件">
+            <div className="code-browser-tabs" role="tablist" aria-label={t("codeBrowser.openFiles")}>
               {selectedFile ? (
                 <div className="code-browser-tab" role="tab" aria-selected="true">
                   <SourceFileIcon />
@@ -335,17 +344,17 @@ export function CodeBrowserDialog({
             </div>
             <div className="code-browser-path">
               <SourceFileIcon />
-              <span>{selectedFile?.path ?? "未选择文件"}</span>
+              <span>{selectedFile?.path ?? t("codeBrowser.noFileSelected")}</span>
             </div>
             {comparison ? (
-              <div className="code-browser-diff-labels" aria-label="对比方向">
-                <span>{comparison.baseLabel ?? "优化前"}</span>
-                <span>{comparison.targetLabel ?? "优化后"}</span>
+              <div className="code-browser-diff-labels" aria-label={t("codeBrowser.comparisonDirection")}>
+                <span>{comparison.baseLabel ?? t("codeBrowser.before")}</span>
+                <span>{comparison.targetLabel ?? t("codeBrowser.after")}</span>
               </div>
             ) : null}
             <div className="code-browser-editor">
               {selectedFile ? (
-                <Suspense fallback={<div className="code-browser-empty">正在加载编辑器…</div>}>
+                <Suspense fallback={<div className="code-browser-empty">{t("codeBrowser.loadingEditor")}</div>}>
                   {selectedChange ? (
                     <CodeDiffEditor
                       before={selectedChange.before}
@@ -368,8 +377,14 @@ export function CodeBrowserDialog({
               )}
             </div>
             <footer className="code-browser-statusbar">
-              <span>{comparison ? `${changes.length} 个文件有变更` : `${project.files.length} 个文件`}</span>
-              <span>{selectedFile ? `${lineCount(selectedFile.content)} 行 · UTF-8` : "UTF-8"}</span>
+              <span>{comparison
+                ? t("codeBrowser.changedFileCount", { count: changes.length })
+                : t("codeBrowser.fileCount", { count: project.files.length })}
+              </span>
+              <span>{selectedFile
+                ? t("codeBrowser.lineCount", { count: lineCount(selectedFile.content) })
+                : "UTF-8"}
+              </span>
             </footer>
           </main>
         </div>
@@ -391,9 +406,11 @@ export function ProjectCodeBrowser({
   project,
   onChange,
   className = "",
-  label = "查看源码",
+  label,
 }: ProjectCodeBrowserProps) {
+  const { t } = useTranslation("workspaceTools");
   const [open, setOpen] = useState(false);
+  const displayLabel = label ?? t("codeBrowser.viewSource");
 
   return (
     <>
@@ -401,11 +418,11 @@ export function ProjectCodeBrowser({
         type="button"
         className={`code-browser-trigger ${className}`.trim()}
         onClick={() => setOpen(true)}
-        aria-label="查看和编辑项目源码"
-        title={label}
+        aria-label={t("codeBrowser.viewSourceAria")}
+        title={displayLabel}
       >
         <SourceCodeIcon />
-        <span>{label}</span>
+        <span>{displayLabel}</span>
       </button>
       <CodeBrowserDialog
         project={project}

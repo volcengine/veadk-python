@@ -15,6 +15,7 @@ import {
 } from "../../adk/timeout";
 import type { SkillHit, SelectedSkill } from "./types";
 import { unzip } from "./zip";
+import { createT } from "../i18n";
 
 const DOWNLOAD_BASE = "/skillhub/v1/skills";
 const SEARCH_BASE = "/harness/skills/findskill";
@@ -44,7 +45,9 @@ export async function searchSkills(
     headers: { accept: "application/json" },
     signal: requestSignal(undefined, DEFAULT_REQUEST_TIMEOUT_MS),
   });
-  if (!res.ok) throw new Error(`搜索失败 (${res.status})`);
+  if (!res.ok) {
+    throw new Error(createT("helpers.skills.searchFailed", { status: res.status }));
+  }
   const data = (await res.json()) as { items?: RawSkill[] };
   return (data.items ?? []).map((s) => ({
     source: "skillhub" as const,
@@ -70,7 +73,9 @@ export async function downloadSkillHubSkill(
   const res = await fetch(url, {
     signal: requestSignal(undefined, TRANSFER_REQUEST_TIMEOUT_MS),
   });
-  if (!res.ok) throw new Error(`下载技能失败 (${res.status})`);
+  if (!res.ok) {
+    throw new Error(createT("helpers.skills.downloadFailed", { status: res.status }));
+  }
   const buf = new Uint8Array(await res.arrayBuffer());
   const entries = await unzip(buf);
   const folder = s.folder || slug.split("/").pop() || "skill";

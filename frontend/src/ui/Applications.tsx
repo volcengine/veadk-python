@@ -1,4 +1,5 @@
 import { useDeferredValue, useMemo, useState, type SVGProps } from "react";
+import { useTranslation } from "react-i18next";
 
 import {
   AUTOMATION_CATEGORIES,
@@ -50,6 +51,7 @@ function WebsiteIntegrationIcon(props: SVGProps<SVGSVGElement>) {
 }
 
 export function Applications({ onOpen }: ApplicationsProps) {
+  const { t } = useTranslation("automations");
   const [activeCategory, setActiveCategory] = useState("development");
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
@@ -58,34 +60,34 @@ export function Applications({ onOpen }: ApplicationsProps) {
     return AUTOMATIONS.filter(
       (application) => application.category === activeCategory,
     ).filter((application) =>
-      !normalized || `${application.name} ${application.description}`.toLocaleLowerCase().includes(normalized),
+      !normalized || `${t(`cards.${application.id}.name`)} ${t(`cards.${application.id}.description`)}`.toLocaleLowerCase().includes(normalized),
     );
-  }, [activeCategory, deferredQuery]);
+  }, [activeCategory, deferredQuery, t]);
   const activeCategoryLabel = AUTOMATION_CATEGORIES.find(
     (category) => category.id === activeCategory,
-  )?.label;
+  )?.id;
   const codingAgentsAvailable = isCodingAgentsAutomationAvailable(window.location.hostname);
 
   return (
     <div className="applications-page">
       <header className="applications-header">
         <div>
-          <h1>自动化</h1>
-          <p>连接研发工具，为智能体扩展自动化工作流</p>
+          <h1>{t("title")}</h1>
+          <p>{t("description")}</p>
         </div>
         <label className="applications-search">
           <SearchIcon />
           <input
             type="search"
-            aria-label="搜索自动化"
+            aria-label={t("search")}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="搜索自动化"
+            placeholder={t("search")}
           />
         </label>
       </header>
 
-      <nav className="applications-categories" aria-label="自动化分类">
+      <nav className="applications-categories" aria-label={t("categoriesLabel")}>
         {AUTOMATION_CATEGORIES.map((category) => (
           <button
             type="button"
@@ -94,12 +96,12 @@ export function Applications({ onOpen }: ApplicationsProps) {
             aria-pressed={activeCategory === category.id}
             onClick={() => setActiveCategory(category.id)}
           >
-            {category.label}
+            {t(`categories.${category.id}`)}
           </button>
         ))}
       </nav>
 
-      <section className="applications-results" aria-label={`${activeCategoryLabel}自动化列表`}>
+      <section className="applications-results" aria-label={t("resultsLabel", { category: t(`categories.${activeCategoryLabel}`) })}>
         {visibleApplications.length ? (
           <div className="applications-grid">
             {visibleApplications.map((application) => {
@@ -117,7 +119,7 @@ export function Applications({ onOpen }: ApplicationsProps) {
                     type="button"
                     className="application-card"
                     onClick={() => onOpen(application.id)}
-                    aria-label={`打开${application.name}`}
+                    aria-label={t("open", { name: t(`cards.${application.id}.name`) })}
                     disabled={disabled}
                   >
                     {application.icon === "feishu" ? (
@@ -136,17 +138,17 @@ export function Applications({ onOpen }: ApplicationsProps) {
                     )}
                     <div className="application-card-copy">
                       <div className="application-card-title">
-                        <h2>{application.name}</h2>
+                        <h2>{t(`cards.${application.id}.name`)}</h2>
                         {application.badge ? (
-                          <span className={`application-card-badge is-${application.badgeTone || "default"}`}>{application.badge}</span>
+                          <span className={`application-card-badge is-${application.badgeTone || "default"}`}>{t(`cards.${application.id}.badge`, { defaultValue: application.badge })}</span>
                         ) : null}
                       </div>
-                      <p>{application.description}</p>
+                      <p>{t(`cards.${application.id}.description`)}</p>
                     </div>
                   </button>
                   {disabled ? (
                     <span id={tooltipId} className="application-card-tooltip" role="tooltip">
-                      仅本地部署可用
+                      {t("localOnly")}
                     </span>
                   ) : null}
                 </div>
@@ -156,8 +158,8 @@ export function Applications({ onOpen }: ApplicationsProps) {
         ) : (
           <div className="applications-empty" role="status">
             <SearchIcon />
-            <h2>没有匹配的自动化</h2>
-            <p>请尝试搜索其他名称</p>
+            <h2>{t("emptyTitle")}</h2>
+            <p>{t("emptyDescription")}</p>
           </div>
         )}
       </section>

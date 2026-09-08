@@ -33,7 +33,10 @@ test("each Runtime row has two-line metadata and explicit actions", () => {
   assert.match(selectorSource, /onClick=\{\(\) => togglePreview\(rt\)\}/);
   assert.match(selectorSource, /previewed && \([\s\S]*?<RuntimePreviewPanel/);
   assert.match(selectorSource, /role="tablist"/);
-  assert.match(selectorSource, /Agent 信息[\s\S]*?Runtime 信息/);
+  assert.match(
+    selectorSource,
+    /t\("agentSelector\.agentInfo"\)[\s\S]*?t\("agentSelector\.runtimeInfo"\)/,
+  );
   assert.match(
     selectorSource,
     /getCachedRuntimeAgentInfo\(runtimeId, runtimeRegion\)/,
@@ -73,23 +76,23 @@ test("Runtime rows scroll above a permanently pinned pager", () => {
   );
 });
 
-test("Runtime metadata failures use bounded, actionable Chinese messages", () => {
+test("Runtime metadata failures use bounded, actionable localized messages", () => {
   assert.match(
     clientSource,
-    /getRuntimes[\s\S]*?httpErrorMessage\(res, "加载 Runtime 失败"\)/,
+    /getRuntimes[\s\S]*?httpErrorMessage\(res, adkT\("client\.loadRuntimeFailed"\)\)/,
   );
   assert.match(
     clientSource,
-    /httpErrorMessage\(res, "读取 Agent 列表失败"\)/,
+    /httpErrorMessage\(res, adkT\("client\.listAgentsFailed"\)\)/,
   );
   assert.match(
     clientSource,
-    /httpErrorMessage\(res, "加载 Runtime 详情失败"\)/,
+    /httpErrorMessage\(res, adkT\("client\.loadRuntimeDetailFailed"\)\)/,
   );
-  assert.match(selectorSource, /该 Runtime 已不存在或列表信息已过期，请刷新列表后重试。/);
-  assert.match(selectorSource, /当前账号无权访问该 Runtime，请检查所属 Project 和访问权限。/);
-  assert.match(selectorSource, /该 Agent Server 版本暂不支持信息预览。/);
-  assert.match(selectorSource, /该 Runtime 暂时无法访问，请确认其状态为“就绪”后重试。/);
+  assert.match(selectorSource, /t\("agentSelector\.errors\.notFound"\)/);
+  assert.match(selectorSource, /t\("agentSelector\.errors\.accessDenied"\)/);
+  assert.match(selectorSource, /t\("agentSelector\.errors\.previewUnsupported"\)/);
+  assert.match(selectorSource, /t\("agentSelector\.errors\.unavailable"\)/);
   assert.match(
     stylesSource,
     /\.agentsel-error\s*\{[^}]*max-width:\s*100%;[^}]*overflow-wrap:\s*anywhere;/,
@@ -100,11 +103,12 @@ test("Agent information includes structure, capabilities, and mounted components
   assert.match(clientSource, /components\?: AgentComponent\[\]/);
   assert.match(clientSource, /skills:\s*info\.skills \?\? \[\]/);
   assert.match(clientSource, /subAgents:\s*info\.subAgents \?\? \[\]/);
-  assert.match(selectorSource, /title="子 Agent"/);
-  assert.match(selectorSource, /title="工具"/);
-  assert.match(selectorSource, /<SkillCapabilityIcon \/>[\s\S]*?技能/);
-  assert.match(selectorSource, /<Boxes className="icon" \/>[\s\S]*?挂载组件/);
-  assert.match(selectorSource, /COMPONENT_KIND_LABELS/);
+  assert.match(selectorSource, /title=\{t\("agentSelector\.subagents"\)\}/);
+  assert.match(selectorSource, /title=\{t\("agentSelector\.tools"\)\}/);
+  assert.match(selectorSource, /<SkillCapabilityIcon \/>[\s\S]*?t\("agentSelector\.skills"\)/);
+  assert.match(selectorSource, /<Boxes className="icon" \/>[\s\S]*?t\("agentSelector\.mountedComponents"\)/);
+  assert.match(selectorSource, /const COMPONENT_KINDS = new Set/);
+  assert.match(selectorSource, /t\(`agentSelector\.componentKinds\.\$\{normalized\}`\)/);
   assert.doesNotMatch(selectorSource, /\b(?:Sparkles|Wrench)\b/);
   assert.match(capabilityIconSource, /function ToolCapabilityIcon/);
   assert.match(capabilityIconSource, /function SkillCapabilityIcon/);
@@ -118,9 +122,8 @@ test("Runtime rows and detail use the custom live-execution mark", () => {
 });
 
 test("Runtime status labels are localized without exposing region controls", () => {
-  assert.match(selectorSource, /ready:\s*"就绪"/);
-  assert.match(selectorSource, /unreleased:\s*"未发布"/);
-  assert.match(selectorSource, /runtimeStatusLabel\(rt\.status\)/);
+  assert.match(selectorSource, /t\(`agentSelector\.runtimeStatus\.\$\{key\}`\)/);
+  assert.match(selectorSource, /runtimeStatusLabel\(rt\.status, t\)/);
   assert.doesNotMatch(selectorSource, /RegionFilter|REGION_OPTIONS|regionLabel/);
   assert.doesNotMatch(selectorSource, /按部署地域筛选|\["区域"/);
   assert.doesNotMatch(stylesSource, /\.agentsel-regions/);

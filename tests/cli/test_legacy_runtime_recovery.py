@@ -36,7 +36,7 @@ from veadk.cli.legacy_runtime_recovery import (
     ImageReference,
     LegacyRecoveryError,
     merge_mcp_recoveries,
-    mcp_editor_draft_with_credentials,
+    mcp_editor_draft_without_credentials,
     mcp_secret_values_from_runtime_environment,
     mcp_secret_values_from_toolset,
     OciImageInspector,
@@ -304,41 +304,38 @@ def test_mcp_servers_json_recovers_public_shape_without_headers() -> None:
         }
     ) == {reference: raw_secret}
 
-    editor_draft = mcp_editor_draft_with_credentials(
+    editor_draft = mcp_editor_draft_without_credentials(
         {
             "name": "root-agent",
-            "mcpTools": [dict(recovery.tools[0])],
+            "mcpTools": [{**dict(recovery.tools[0]), "authToken": raw_secret}],
             "subAgents": [],
         },
-        {reference: raw_secret, "UNREFERENCED_SECRET": "must-not-be-returned"},
     )
-    assert editor_draft["mcpTools"][0]["authToken"] == raw_secret
-    assert "UNREFERENCED_SECRET" not in json.dumps(editor_draft)
+    assert "authToken" not in editor_draft["mcpTools"][0]
+    assert raw_secret not in json.dumps(editor_draft)
 
 
-def test_structured_mcp_servers_allow_shared_url_with_distinct_names() -> None:
-    raw = build_sidecar_mcp_servers_json(
-        draft={
-            "name": "root-agent",
-            "mcpTools": [
-                {
-                    "name": "orders",
-                    "transport": "http",
-                    "url": "https://mcp.example.com/shared",
-                },
-                {
-                    "name": "inventory",
-                    "transport": "http",
-                    "url": "https://mcp.example.com/shared",
-                },
-            ],
-            "subAgents": [],
-        },
-        secret_values={},
-    )
-    assert [item["name"] for item in json.loads(raw)] == ["orders", "inventory"]
-    recovered = recover_mcp_from_runtime_environment({"MCP_SERVERS_JSON": raw})
-    assert [item["name"] for item in recovered.tools] == ["orders", "inventory"]
+def test_structured_mcp_servers_reject_shared_url_with_distinct_names() -> None:
+    with pytest.raises(LegacyRecoveryError, match="legacy_mcp_url_duplicate"):
+        build_sidecar_mcp_servers_json(
+            draft={
+                "name": "root-agent",
+                "mcpTools": [
+                    {
+                        "name": "orders",
+                        "transport": "http",
+                        "url": "https://mcp.example.com/shared",
+                    },
+                    {
+                        "name": "inventory",
+                        "transport": "http",
+                        "url": "https://mcp.example.com/shared",
+                    },
+                ],
+                "subAgents": [],
+            },
+            secret_values={},
+        )
 
 
 def test_mcp_urls_reuses_opaque_api_key_marker() -> None:
@@ -1111,6 +1108,95 @@ def test_sidecar_mcp_servers_json_canonicalizes_legacy_display_name() -> None:
             "headers": {"Authorization": "Bearer replacement-secret"},
         }
     ]
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        (
+            "https://MCP.example.com:443/orders/mcp/",
+            "https://mcp.example.com/orders/mcp",
+        ),
+        (
+            "http://mcp.example.com:80/orders/mcp",
+            "http://MCP.example.com/orders/mcp/",
+        ),
+    ],
+)
+def test_sidecar_mcp_servers_json_rejects_canonical_duplicate_urls(
+    first: str,
+    second: str,
+) -> None:
+    with pytest.raises(LegacyRecoveryError, match="legacy_mcp_url_duplicate"):
+        build_sidecar_mcp_servers_json(
+            draft={
+                "name": "root",
+                "mcpTools": [
+                    {"name": "orders-a", "transport": "http", "url": first},
+                    {"name": "orders-b", "transport": "http", "url": second},
+                ],
+            },
+            secret_values={},
+        )
+
+
+def test_sidecar_mcp_servers_json_rejects_duplicate_names_separately() -> None:
+    with pytest.raises(LegacyRecoveryError, match="legacy_mcp_name_duplicate"):
+        build_sidecar_mcp_servers_json(
+            draft={
+                "name": "root",
+                "mcpTools": [
+                    {
+                        "name": "orders",
+                        "transport": "http",
+                        "url": "https://one.example.com/mcp",
+                    },
+                    {
+                        "name": "orders",
+                        "transport": "http",
+                        "url": "https://two.example.com/mcp",
+                    },
+                ],
+            },
+            secret_values={},
+        )
+
+
+def test_sidecar_mcp_servers_json_preserves_deployment_url_spelling() -> None:
+    source_url = "https://MCP.example.com:443/orders/mcp/"
+
+    value = build_sidecar_mcp_servers_json(
+        draft={
+            "name": "root",
+            "mcpTools": [{"name": "orders", "transport": "http", "url": source_url}],
+        },
+        secret_values={},
+    )
+
+    assert json.loads(value)[0]["url"] == source_url
+
+
+def test_sidecar_mcp_servers_json_does_not_normalize_path_segments() -> None:
+    value = build_sidecar_mcp_servers_json(
+        draft={
+            "name": "root",
+            "mcpTools": [
+                {
+                    "name": "orders-a",
+                    "transport": "http",
+                    "url": "https://mcp.example.com/orders/../mcp",
+                },
+                {
+                    "name": "orders-b",
+                    "transport": "http",
+                    "url": "https://mcp.example.com/mcp",
+                },
+            ],
+        },
+        secret_values={},
+    )
+
+    assert len(json.loads(value)) == 2
 
 
 @pytest.mark.parametrize(

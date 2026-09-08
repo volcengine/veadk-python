@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import type { TFunction } from "i18next";
+import { useTranslation } from "react-i18next";
 import {
   getStudioUpdateStatus,
   getStudioUpdatePermissions,
@@ -34,37 +36,30 @@ type VisibleUpdateStage = Exclude<
   "idle" | "complete" | "error"
 >;
 
-const UPDATE_STEP_LABELS = {
-  permissions: "预检 OTA 所需权限",
-  resolving: "读取目标版本信息",
-  downloading: "下载并校验完整更新包",
-  preparing: "准备 VeFaaS Function 代码",
-  provisioning: "检查并补齐 Studio 云资源",
-  scheduler: "更新定时任务调度服务",
-  submitting: "提交 Function 更新",
-  publishing: "发布新 Revision 并重启服务",
-} satisfies Record<VisibleUpdateStage, string>;
+const UPDATE_STAGES: VisibleUpdateStage[] = [
+  "permissions",
+  "resolving",
+  "downloading",
+  "preparing",
+  "provisioning",
+  "scheduler",
+  "submitting",
+  "publishing",
+];
 
-const UPDATE_STEPS = (
-  Object.entries(UPDATE_STEP_LABELS) as Array<[VisibleUpdateStage, string]>
-).map(([id, label]) => ({ id, label }));
+function updateStageLabel(stage: string, t: TFunction, detailed = false): string {
+  const key = detailed && UPDATE_STAGES.includes(stage as VisibleUpdateStage)
+    ? `studioUpdate.steps.${stage}`
+    : `studioUpdate.stages.${stage}`;
+  return t(key, { defaultValue: stage || t("studioUpdate.stages.unknown") });
+}
 
-const UPDATE_STAGE_LABELS: Record<string, string> = {
-  ...UPDATE_STEP_LABELS,
-  permissions: "预检 OTA 权限",
-  resolving: "读取版本信息",
-  downloading: "下载更新包",
-  preparing: "准备 Function 代码",
-  provisioning: "补齐 Studio 云资源",
-  submitting: "提交 Function 更新",
-  publishing: "发布 Revision",
-  checking: "检查更新",
-  unknown: "未知阶段",
-};
-
-function formatElapsed(seconds: number) {
-  if (seconds < 60) return `${seconds} 秒`;
-  return `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
+function formatElapsed(seconds: number, t: TFunction) {
+  if (seconds < 60) return t("studioUpdate.duration.seconds", { count: seconds });
+  return t("studioUpdate.duration.minutesSeconds", {
+    minutes: Math.floor(seconds / 60),
+    seconds: seconds % 60,
+  });
 }
 
 function releaseReached(current: string, target: string) {
@@ -169,14 +164,16 @@ function ExternalLinkIcon() {
 }
 
 function StudioUpdateLogPermissionNotice({ href }: { href: string }) {
+  const { t } = useTranslation("ui");
   return (
     <div className="studio-update-permission-notice" role="status">
       <p>
-        无法读取 VeFaaS 发布日志。Function 角色缺少
-        <code>vefaas:GetApplicationRevisionLog</code> 权限，更新会继续。
+        {t("studioUpdate.logPermissionPrefix")}
+        <code>vefaas:GetApplicationRevisionLog</code>
+        {t("studioUpdate.logPermissionSuffix")}
       </p>
       <a href={href} target="_blank" rel="noreferrer">
-        前往 IAM 控制台配置权限
+        {t("studioUpdate.openIamConsole")}
         <ExternalLinkIcon />
       </a>
     </div>
@@ -194,6 +191,7 @@ function StudioUpdateLog({
   copyState: LogCopyState;
   onCopy: (lines: string[]) => void;
 }) {
+  const { t } = useTranslation("ui");
   const scrollRef = useRef<HTMLDivElement>(null);
   const followRef = useRef(true);
   const [visibleLines, setVisibleLines] = useState(lines);
@@ -208,12 +206,12 @@ function StudioUpdateLog({
   }, [visibleLines]);
 
   return (
-    <section className="studio-update-live-log" aria-label="部署进度">
+    <section className="studio-update-live-log" aria-label={t("studioUpdate.deploymentProgress")}>
       <div className="studio-update-log-header">
         <span>
           <i className={`is-${phase}`} aria-hidden />
-          部署进度
-          <small>{phase === "active" ? "实时" : phase === "complete" ? "已完成" : "已停止"}</small>
+          {t("studioUpdate.deploymentProgress")}
+          <small>{phase === "active" ? t("studioUpdate.live") : phase === "complete" ? t("studioUpdate.completed") : t("studioUpdate.stopped")}</small>
         </span>
         <button
           type="button"
@@ -221,10 +219,10 @@ function StudioUpdateLog({
           disabled={!visibleLines.length}
         >
           {copyState === "copied"
-            ? "已复制"
+            ? t("studioUpdate.copied")
             : copyState === "error"
-              ? "复制失败"
-              : "复制日志"}
+              ? t("studioUpdate.copyFailed")
+              : t("studioUpdate.copyLog")}
         </button>
       </div>
       <div
@@ -243,7 +241,7 @@ function StudioUpdateLog({
         {visibleLines.length ? (
           visibleLines.map((line, index) => <div key={`${index}-${line}`}>{line}</div>)
         ) : (
-          <p>{phase === "active" ? "等待 VeFaaS 返回更新日志…" : "本次更新未返回发布日志"}</p>
+          <p>{phase === "active" ? t("studioUpdate.waitingForLogs") : t("studioUpdate.noLogs")}</p>
         )}
       </div>
     </section>
@@ -255,6 +253,7 @@ export function StudioUpdateControl({
 }: {
   variant?: "default" | "feature-link";
 }) {
+  const { t } = useTranslation("ui");
   const [initialPending] = useState<PendingStudioUpdate | null>(loadPendingUpdate);
   const [status, setStatus] = useState<StudioUpdateStatus | null>(null);
   const [phase, setPhase] = useState<UpdatePhase>(
@@ -355,7 +354,7 @@ export function StudioUpdateControl({
             handoffTargetRef.current = "";
             setPhase("published");
             setDialogOpen(true);
-            setMessage("Studio 已更新，新 Revision 已接管服务");
+            setMessage(t("studioUpdate.messages.updated"));
             return;
           }
           completionDetectedAtRef.current = 0;
@@ -363,14 +362,14 @@ export function StudioUpdateControl({
             window.clearInterval(timer);
             clearPendingUpdate();
             setPhase("error");
-            setMessage(next.message || "Studio 更新失败");
+            setMessage(next.message || t("studioUpdate.messages.failed"));
             return;
           }
           if (Date.now() - startedAtRef.current > RELEASE_TIMEOUT_MS) {
             window.clearInterval(timer);
             clearPendingUpdate();
             setPhase("error");
-            setMessage("等待 VeFaaS 发布超时，请稍后重新检查版本");
+            setMessage(t("studioUpdate.messages.timeout"));
           }
         })
         .catch(() => {
@@ -378,7 +377,7 @@ export function StudioUpdateControl({
         });
     }, RELEASE_POLL_INTERVAL_MS);
     return () => window.clearInterval(timer);
-  }, [phase, refresh]);
+  }, [phase, refresh, t]);
 
   useEffect(() => {
     if (phase !== "idle" || status?.state !== "updating") return;
@@ -435,19 +434,19 @@ export function StudioUpdateControl({
       const result = await startStudioUpdate(targetVersion);
       targetVersionRef.current = result.version;
       persistPendingUpdate(result.version, startedAtRef.current);
-      setMessage("更新已提交，正在等待 VeFaaS 发布新版本");
+      setMessage(t("studioUpdate.messages.submitted"));
     } catch (error) {
       if (
         error instanceof TypeError ||
         (error instanceof Error &&
           (error.name === "TimeoutError" || error.name === "AbortError"))
       ) {
-        setMessage("连接已切换，正在确认新版本状态");
+        setMessage(t("studioUpdate.messages.connectionSwitched"));
         return;
       }
       clearPendingUpdate();
       setPhase("error");
-      const fallbackMessage = error instanceof Error ? error.message : "Studio 更新失败";
+      const fallbackMessage = error instanceof Error ? error.message : t("studioUpdate.messages.failed");
       try {
         const next = await refresh();
         setMessage(next.message || fallbackMessage);
@@ -462,9 +461,11 @@ export function StudioUpdateControl({
     : (status.errorLog || status.progressMessage || message)
         .split("\n")
         .filter(Boolean);
-  const currentUpdateStepIndex = UPDATE_STEPS.findIndex(
-    (item) => item.id === status.progressStage,
-  );
+  const updateSteps = UPDATE_STAGES.map((id) => ({
+    id,
+    label: updateStageLabel(id, t, true),
+  }));
+  const currentUpdateStepIndex = updateSteps.findIndex((item) => item.id === status.progressStage);
   const unknownProgressStage =
     phase === "submitting" &&
     status.progressStage !== "idle" &&
@@ -499,14 +500,14 @@ export function StudioUpdateControl({
         }
         title={
           phase === "checking-permissions"
-            ? "正在检查 OTA 权限"
+            ? t("studioUpdate.checkingPermissions")
             : phase === "permission"
-              ? "需要 IAM 授权"
+              ? t("studioUpdate.authorizationRequired")
               : phase === "submitting"
-            ? "正在更新 Studio"
+            ? t("studioUpdate.updating")
             : phase === "published"
-              ? "Studio 已更新"
-              : `更新 Studio 至 ${status.latestVersion}`
+              ? t("studioUpdate.updated")
+              : t("studioUpdate.updateToVersion", { version: status.latestVersion })
         }
         onClick={() => {
           if (phase === "published") {
@@ -529,19 +530,19 @@ export function StudioUpdateControl({
           <StudioUpdateIcon className="studio-update-icon" />
         )}
         {phase === "checking-permissions" ? (
-          <TextShimmer as="span">检查更新权限</TextShimmer>
+          <TextShimmer as="span">{t("studioUpdate.checkPermissions")}</TextShimmer>
         ) : phase === "permission" ? (
-          <span>需要授权</span>
+          <span>{t("studioUpdate.authorizationNeeded")}</span>
         ) : phase === "submitting" ? (
-          <TextShimmer as="span">正在更新</TextShimmer>
+          <TextShimmer as="span">{t("studioUpdate.updatingShort")}</TextShimmer>
         ) : phase === "published" ? (
-          <span>刷新使用新版</span>
+          <span>{t("studioUpdate.refreshForNewVersion")}</span>
         ) : phase === "error" ? (
-          <span>更新失败</span>
+          <span>{t("studioUpdate.updateFailed")}</span>
         ) : variant === "feature-link" ? (
-          <span>立即更新</span>
+          <span>{t("studioUpdate.updateNow")}</span>
         ) : (
-          <span>有新版更新</span>
+          <span>{t("studioUpdate.newVersionAvailable")}</span>
         )}
       </button>
 
@@ -563,47 +564,46 @@ export function StudioUpdateControl({
             </div>
             <div id="studio-update-title" className="confirm-title">
               {phase === "error"
-                ? "Studio 更新失败"
+                ? t("studioUpdate.dialog.failed")
                 : phase === "checking-permissions"
-                  ? "正在检查更新权限"
+                  ? t("studioUpdate.dialog.checkingPermissions")
                   : phase === "permission"
-                    ? "需要 IAM 授权"
+                    ? t("studioUpdate.dialog.authorizationRequired")
                 : phase === "submitting"
-                  ? "正在更新 Studio"
+                  ? t("studioUpdate.dialog.updating")
                   : phase === "published"
-                    ? "Studio 更新完成"
-                    : "发现新版本"}
+                    ? t("studioUpdate.dialog.completed")
+                    : t("studioUpdate.dialog.newVersion")}
             </div>
             {phase === "checking-permissions" ? (
               <div className="studio-update-permission-checking" role="status">
-                <TextShimmer as="p">正在核对 OTA 与定时任务所需的全部 IAM 权限…</TextShimmer>
-                <p>权限全部满足后才会开始下载、更新或发布云资源。</p>
+                <TextShimmer as="p">{t("studioUpdate.permissionCheck")}</TextShimmer>
+                <p>{t("studioUpdate.permissionCheckHint")}</p>
               </div>
             ) : phase === "permission" && permissionStatus ? (
               <div className="studio-update-authorization-panel">
                 <p className="confirm-text">
-                  当前 Function 角色缺少 {permissionStatus.missingActions.length} 项
-                  OTA 更新权限，尚未执行任何云资源变更。
+                  {t("studioUpdate.missingPermissionCount", { count: permissionStatus.missingActions.length })}
                 </p>
                 <dl className="studio-update-authorization-principal">
                   <div>
-                    <dt>Function 角色</dt>
-                    <dd>{permissionStatus.principalName || "当前运行角色"}</dd>
+                    <dt>{t("studioUpdate.functionRole")}</dt>
+                    <dd>{permissionStatus.principalName || t("studioUpdate.currentRole")}</dd>
                   </div>
                   {permissionStatus.policyName && (
                     <div>
-                      <dt>将更新策略</dt>
+                      <dt>{t("studioUpdate.policyToUpdate")}</dt>
                       <dd>{permissionStatus.policyName}</dd>
                     </div>
                   )}
                 </dl>
                 <ol className="studio-update-authorization-steps">
-                  <li>打开授权页面，确认已预填的策略名称和完整策略内容。</li>
-                  <li>点击页面中的“发起调试”，完成策略更新。</li>
-                  <li>返回此窗口，点击“我已授权，重新检查”。</li>
+                  <li>{t("studioUpdate.authorizationSteps.open")}</li>
+                  <li>{t("studioUpdate.authorizationSteps.debug")}</li>
+                  <li>{t("studioUpdate.authorizationSteps.return")}</li>
                 </ol>
                 <div className="studio-update-missing-actions">
-                  <span>缺少的权限</span>
+                  <span>{t("studioUpdate.missingPermissions")}</span>
                   <ul>
                     {permissionStatus.missingActions.map((action) => (
                       <li key={action}><code>{action}</code></li>
@@ -617,13 +617,13 @@ export function StudioUpdateControl({
                   rel="noreferrer"
                 >
                   {permissionStatus.authorizationUrl
-                    ? "打开已预填的 IAM 授权页面"
-                    : "前往 IAM 控制台手动配置"}
+                    ? t("studioUpdate.openPrefilledAuthorization")
+                    : t("studioUpdate.openIamManually")}
                   <ExternalLinkIcon />
                 </a>
                 {!permissionStatus.authorizationUrl && (
                   <p className="studio-update-authorization-note">
-                    当前角色没有唯一可安全更新的自定义策略，请由管理员将上述权限加入该角色。
+                    {t("studioUpdate.noSafePolicy")}
                   </p>
                 )}
               </div>
@@ -632,16 +632,14 @@ export function StudioUpdateControl({
                 <p className="confirm-text studio-update-error">{message}</p>
                 <dl className="studio-update-error-meta">
                   <div>
-                    <dt>失败阶段</dt>
+                    <dt>{t("studioUpdate.failedStage")}</dt>
                     <dd>
-                      {UPDATE_STAGE_LABELS[status.errorStage] ||
-                        status.errorStage ||
-                        "未知阶段"}
+                      {updateStageLabel(status.errorStage, t)}
                     </dd>
                   </div>
                   <div>
-                    <dt>错误 ID</dt>
-                    <dd>{status.errorId || "未生成"}</dd>
+                    <dt>{t("studioUpdate.errorId")}</dt>
+                    <dd>{status.errorId || t("studioUpdate.notGenerated")}</dd>
                   </div>
                 </dl>
                 {status.updateLogsVisible !== false && (
@@ -664,7 +662,7 @@ export function StudioUpdateControl({
                     target="_blank"
                     rel="noreferrer"
                   >
-                    前往 VeFaaS 控制台查看 Function 日志
+                    {t("studioUpdate.openFunctionLogs")}
                     <ExternalLinkIcon />
                   </a>
                 )}
@@ -673,31 +671,31 @@ export function StudioUpdateControl({
               <div className="studio-update-progress-body">
                 <div className="studio-update-progress-summary">
                   <div>
-                    <span>目标版本</span>
+                    <span>{t("studioUpdate.targetVersion")}</span>
                     <strong>{targetVersionRef.current || targetVersion}</strong>
                   </div>
                   <div>
-                    <span>{phase === "published" ? "更新状态" : "已用时"}</span>
+                    <span>{phase === "published" ? t("studioUpdate.updateStatus") : t("studioUpdate.elapsed")}</span>
                     <strong>
-                      {phase === "published" ? "已完成" : formatElapsed(elapsedSeconds)}
+                      {phase === "published" ? t("studioUpdate.completed") : formatElapsed(elapsedSeconds, t)}
                     </strong>
                   </div>
                 </div>
-                <ol className="studio-update-progress" aria-label="Studio 更新进度">
+                <ol className="studio-update-progress" aria-label={t("studioUpdate.progressAriaLabel")}>
                   {unknownProgressStage && (
                     <li className="is-active" aria-current="step">
                       <span className="studio-update-progress-dot" aria-hidden />
                       <div>
                         <span>
-                          {UPDATE_STAGE_LABELS[status.progressStage] || "正在处理更新"}
+                          {updateStageLabel(status.progressStage, t) || t("studioUpdate.processingUpdate")}
                         </span>
                         <TextShimmer as="small">
-                          {status.progressMessage || message || "正在处理"}
+                          {status.progressMessage || message || t("studioUpdate.processing")}
                         </TextShimmer>
                       </div>
                     </li>
                   )}
-                  {UPDATE_STEPS.map((step, index) => {
+                  {updateSteps.map((step, index) => {
                     const completed =
                       phase === "published" || index < currentUpdateStepIndex;
                     const active =
@@ -713,7 +711,7 @@ export function StudioUpdateControl({
                           <span>{step.label}</span>
                           {active && (
                             <TextShimmer as="small">
-                              {status.progressMessage || message || "正在处理"}
+                              {status.progressMessage || message || t("studioUpdate.processing")}
                             </TextShimmer>
                           )}
                         </div>
@@ -735,21 +733,20 @@ export function StudioUpdateControl({
                   />
                 )}
                 <p className="studio-update-progress-note">
-                  发布阶段会短暂中断连接；关闭此窗口不会停止更新，可随时点击右上角按钮重新查看。
+                  {t("studioUpdate.backgroundHint")}
                 </p>
               </div>
             ) : (
               <>
                 <p className="confirm-text">
-                  更新会重启 Studio 服务，预计约 3–5 分钟完成更新与发布。期间正在进行的对话、
-                  流式响应或部署任务可能中断，登录态不会受到影响。
+                  {t("studioUpdate.confirmDescription")}
                 </p>
                 <div className="studio-update-field" ref={versionPickerRef}>
-                  <span>选择版本</span>
+                  <span>{t("studioUpdate.selectVersion")}</span>
                   <button
                     type="button"
                     className="studio-update-version-trigger"
-                    aria-label="选择版本"
+                    aria-label={t("studioUpdate.selectVersion")}
                     aria-haspopup="listbox"
                     aria-expanded={versionMenuOpen}
                     onClick={() => setVersionMenuOpen((open) => !open)}
@@ -767,7 +764,7 @@ export function StudioUpdateControl({
                     <div
                       className="studio-update-version-menu"
                       role="listbox"
-                      aria-label="选择版本"
+                      aria-label={t("studioUpdate.selectVersion")}
                     >
                       {releases.map((release) => {
                         const selected = release.version === targetVersion;
@@ -795,20 +792,20 @@ export function StudioUpdateControl({
                 </div>
                 <dl className="studio-update-versions">
                   <div>
-                    <dt>当前版本</dt>
+                    <dt>{t("studioUpdate.currentVersion")}</dt>
                     <dd>{status.currentVersion}</dd>
                   </div>
                   <div>
-                    <dt>目标版本</dt>
+                    <dt>{t("studioUpdate.targetVersion")}</dt>
                     <dd>{targetVersion}</dd>
                   </div>
                   <div>
-                    <dt>Commit</dt>
+                    <dt>{t("studioUpdate.commit")}</dt>
                     <dd>{(targetRelease?.gitSha || status.latestGitSha).slice(0, 8)}</dd>
                   </div>
                 </dl>
                 <section className="studio-update-changelog" aria-labelledby="studio-update-changelog-title">
-                  <div id="studio-update-changelog-title">更新内容</div>
+                  <div id="studio-update-changelog-title">{t("studioUpdate.changelog")}</div>
                   {targetReleaseNotes.length ? (
                     <ul>
                       {targetReleaseNotes.map((item) => (
@@ -816,7 +813,7 @@ export function StudioUpdateControl({
                       ))}
                     </ul>
                   ) : (
-                    <p>暂无更新说明</p>
+                    <p>{t("studioUpdate.noChangelog")}</p>
                   )}
                 </section>
               </>
@@ -835,10 +832,10 @@ export function StudioUpdateControl({
                 }}
               >
                 {phase === "submitting"
-                  ? "后台运行"
+                  ? t("studioUpdate.runInBackground")
                   : phase === "confirm"
-                    ? "取消"
-                    : "关闭"}
+                    ? t("common.cancel")
+                    : t("common.close")}
               </button>
               {phase === "confirm" && (
                 <button
@@ -846,7 +843,7 @@ export function StudioUpdateControl({
                   className="confirm-btn studio-update-confirm"
                   onClick={() => void beginUpdate()}
                 >
-                  立即更新
+                  {t("studioUpdate.updateNow")}
                 </button>
               )}
               {phase === "permission" && (
@@ -855,7 +852,7 @@ export function StudioUpdateControl({
                   className="confirm-btn studio-update-confirm"
                   onClick={() => void beginUpdate()}
                 >
-                  我已授权，重新检查
+                  {t("studioUpdate.authorizedRecheck")}
                 </button>
               )}
               {phase === "error" && (
@@ -864,7 +861,7 @@ export function StudioUpdateControl({
                   className="confirm-btn studio-update-confirm"
                   onClick={retryUpdate}
                 >
-                  重新尝试
+                  {t("studioUpdate.tryAgain")}
                 </button>
               )}
             </div>

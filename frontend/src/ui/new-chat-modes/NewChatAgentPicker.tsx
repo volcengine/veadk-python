@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type SVGProps } from "react";
 import { EmptyMessage } from "@openai/apps-sdk-ui/components/EmptyMessage";
+import { useTranslation } from "react-i18next";
 
 import {
   getRuntimes,
@@ -25,15 +26,15 @@ type AgentType =
 
 interface AgentTypeOption {
   id: AgentType;
-  label: string;
+  labelKey: string;
 }
 
 const AGENT_TYPES: AgentTypeOption[] = [
-  { id: "general", label: "通用智能体" },
-  { id: "codex", label: "Codex 智能体" },
-  { id: "deepseek-harness", label: "DeepSeek Harness" },
-  { id: "openclaw", label: "OpenClaw 智能体" },
-  { id: "hermes", label: "Hermes 智能体" },
+  { id: "general", labelKey: "agentPicker.types.general" },
+  { id: "codex", labelKey: "agentPicker.types.codex" },
+  { id: "deepseek-harness", labelKey: "agentPicker.types.deepseekHarness" },
+  { id: "openclaw", labelKey: "agentPicker.types.openclaw" },
+  { id: "hermes", labelKey: "agentPicker.types.hermes" },
 ];
 
 const PAGE_SIZE = 15;
@@ -105,6 +106,7 @@ export function NewChatAgentPicker({
   onSelectRuntime,
   onSelectSandboxSession,
 }: NewChatAgentPickerProps) {
+  const { t } = useTranslation("newChat");
   const [open, setOpen] = useState(false);
   const [activeType, setActiveType] = useState<AgentType | null>(null);
   const [activeTypeIndex, setActiveTypeIndex] = useState(0);
@@ -125,7 +127,10 @@ export function NewChatAgentPicker({
   const sandboxAbortRef = useRef<AbortController | null>(null);
   const hoverOpenTimerRef = useRef<number | null>(null);
   const hoverCloseTimerRef = useRef<number | null>(null);
-  const activeTypeLabel = AGENT_TYPES.find((item) => item.id === activeType)?.label ?? "智能体";
+  const activeTypeKey = AGENT_TYPES.find((item) => item.id === activeType)?.labelKey;
+  const activeTypeLabel = activeTypeKey
+    ? t(activeTypeKey)
+    : t("agentPicker.types.agent");
 
   const close = useCallback((returnFocus = false) => {
     if (hoverOpenTimerRef.current !== null) {
@@ -158,7 +163,7 @@ export function NewChatAgentPicker({
         }),
         new Promise<never>((_, reject) => {
           timeoutId = window.setTimeout(() => {
-            reject(new Error("加载智能体超时（15 秒），请检查网络或 Runtime 服务后重试"));
+            reject(new Error(t("agentPicker.runtimeTimeout")));
           }, RUNTIME_LOAD_TIMEOUT_MS);
         }),
       ]);
@@ -174,12 +179,12 @@ export function NewChatAgentPicker({
       setActiveRuntimeIndex(0);
     } catch (cause) {
       if (requestIdRef.current !== requestId) return;
-      setError(formatRequestError(cause, "加载通用智能体", "GET /web/runtimes"));
+      setError(formatRequestError(cause, t("agentPicker.loadGeneral"), "GET /web/runtimes"));
     } finally {
       window.clearTimeout(timeoutId);
       if (requestIdRef.current === requestId) setLoading(false);
     }
-  }, [runtimeScope]);
+  }, [runtimeScope, t]);
 
   const loadSandboxSessions = useCallback(async (
     type: Exclude<AgentType, "general">,
@@ -208,13 +213,18 @@ export function NewChatAgentPicker({
     } catch (cause) {
       if ((cause as Error)?.name === "AbortError") return;
       if (requestIdRef.current !== requestId) return;
-      setError(formatRequestError(cause, `加载 ${AGENT_TYPES.find((item) => item.id === type)?.label ?? type}`, `GET /web/${type === "codex" ? "sandbox" : type}/sessions`));
+      const typeKey = AGENT_TYPES.find((item) => item.id === type)?.labelKey;
+      setError(formatRequestError(
+        cause,
+        t("agentPicker.loadType", { type: typeKey ? t(typeKey) : type }),
+        `GET /web/${type === "codex" ? "sandbox" : type}/sessions`,
+      ));
       setLoadedSandboxType(type);
     } finally {
       if (sandboxAbortRef.current === controller) sandboxAbortRef.current = null;
       if (requestIdRef.current === requestId) setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     if (agentsSource === "local" || !open || activeType !== "general" || runtimes.length > 0 || loading || error) return;
@@ -312,7 +322,7 @@ export function NewChatAgentPicker({
       await onSelectRuntime(runtime);
       close(true);
     } catch (cause) {
-      setError(formatRequestError(cause, "连接通用智能体"));
+      setError(formatRequestError(cause, t("agentPicker.connectGeneral")));
     } finally {
       setConnectingRuntimeId("");
     }
@@ -326,7 +336,7 @@ export function NewChatAgentPicker({
       await onSelectLocalApp(app);
       close(true);
     } catch (cause) {
-      setError(formatRequestError(cause, "打开本地智能体"));
+      setError(formatRequestError(cause, t("agentPicker.openLocal")));
     } finally {
       setConnectingRuntimeId("");
     }
@@ -340,7 +350,7 @@ export function NewChatAgentPicker({
       await onSelectSandboxSession(session);
       close(true);
     } catch (cause) {
-      setError(formatRequestError(cause, `打开 ${activeTypeLabel}`));
+      setError(formatRequestError(cause, t("agentPicker.openType", { type: activeTypeLabel })));
     } finally {
       setConnectingRuntimeId("");
     }
@@ -403,7 +413,7 @@ export function NewChatAgentPicker({
         ref={triggerRef}
         type="button"
         className="new-chat-agent-picker__trigger"
-        aria-label="选择智能体"
+        aria-label={t("agentPicker.select")}
         aria-haspopup="menu"
         aria-expanded={open}
         disabled={disabled}
@@ -421,8 +431,8 @@ export function NewChatAgentPicker({
           }
         }}
       >
-        <span title={selectedAgentName || "选择智能体"}>
-          {selectedAgentName || "选择智能体"}
+        <span title={selectedAgentName || t("agentPicker.select")}>
+          {selectedAgentName || t("agentPicker.select")}
         </span>
         <ChevronIcon className="new-chat-agent-picker__trigger-chevron" />
       </button>
@@ -437,7 +447,7 @@ export function NewChatAgentPicker({
             if (event.pointerType === "mouse") setKeyboardNavigating(false);
           }}
         >
-          <div className="new-chat-agent-picker__menu" role="menu" aria-label="智能体类型">
+          <div className="new-chat-agent-picker__menu" role="menu" aria-label={t("agentPicker.typesLabel")}>
             {AGENT_TYPES.map((type, index) => (
               <button
                 key={type.id}
@@ -453,7 +463,7 @@ export function NewChatAgentPicker({
                 }}
               >
                 <AgentTypeIcon type={type.id} />
-                <span>{type.label}</span>
+                <span>{t(type.labelKey)}</span>
                 <ChevronIcon className="new-chat-agent-picker__nested-chevron" />
               </button>
             ))}
@@ -463,18 +473,18 @@ export function NewChatAgentPicker({
             <div
               className="new-chat-agent-picker__submenu"
               role="listbox"
-              aria-label={`${activeTypeLabel}列表`}
+              aria-label={t("agentPicker.listLabel", { type: activeTypeLabel })}
             >
             {activeType !== "general" && loading && sandboxSessions.length === 0 ? (
               <div className="new-chat-agent-picker__status" role="status" aria-live="polite">
                 <span className="new-chat-agent-picker__spinner" aria-hidden="true" />
-                正在加载智能体
+                {t("agentPicker.loading")}
               </div>
             ) : activeType !== "general" && error && sandboxSessions.length === 0 ? (
               <div className="new-chat-agent-picker__error" role="alert">
                 <span>{error}</span>
                 <button type="button" onClick={() => void loadSandboxSessions(activeType)}>
-                  重新加载
+                  {t("agentPicker.reload")}
                 </button>
               </div>
             ) : activeType !== "general" && sandboxSessions.length === 0 ? (
@@ -487,11 +497,11 @@ export function NewChatAgentPicker({
                 </EmptyMessage.Icon>
                 <EmptyMessage.Title>
                   <span className="new-chat-agent-picker__empty-title">
-                    暂无 {activeTypeLabel}
+                    {t("agentPicker.empty", { type: activeTypeLabel })}
                   </span>
                 </EmptyMessage.Title>
                 <EmptyMessage.Description>
-                  请前往智能体页创建
+                  {t("agentPicker.createHint")}
                 </EmptyMessage.Description>
               </EmptyMessage>
             ) : activeType !== "general" ? (
@@ -519,7 +529,7 @@ export function NewChatAgentPicker({
                       <span>{session.displayName || activeTypeLabel}</span>
                       <small>
                         {connecting
-                          ? (wakeable ? "正在唤醒" : "正在打开")
+                          ? (wakeable ? t("agentPicker.waking") : t("agentPicker.opening"))
                           : sandboxStatusLabel(session.status)}
                       </small>
                     </button>
@@ -533,11 +543,11 @@ export function NewChatAgentPicker({
                 </EmptyMessage.Icon>
                 <EmptyMessage.Title>
                   <span className="new-chat-agent-picker__empty-title">
-                    暂无本地智能体
+                    {t("agentPicker.emptyLocal")}
                   </span>
                 </EmptyMessage.Title>
                 <EmptyMessage.Description>
-                  请检查当前 Studio 启动目录
+                  {t("agentPicker.localHint")}
                 </EmptyMessage.Description>
               </EmptyMessage>
             ) : agentsSource === "local" ? (
@@ -561,7 +571,7 @@ export function NewChatAgentPicker({
                       <AgentFaceIcon className="new-chat-agent-picker__runtime-icon" />
                       <span>{app}</span>
                       {connecting ? (
-                        <small>正在打开</small>
+                        <small>{t("agentPicker.opening")}</small>
                       ) : selected ? (
                         <CheckIcon className="new-chat-agent-picker__check" />
                       ) : null}
@@ -573,13 +583,13 @@ export function NewChatAgentPicker({
             ) : loading && runtimes.length === 0 ? (
               <div className="new-chat-agent-picker__status" role="status" aria-live="polite">
                 <span className="new-chat-agent-picker__spinner" aria-hidden="true" />
-                正在加载智能体
+                {t("agentPicker.loading")}
               </div>
             ) : error && runtimes.length === 0 ? (
               <div className="new-chat-agent-picker__error" role="alert">
                 <span>{error}</span>
                 <button type="button" onClick={() => void loadRuntimes("", true)}>
-                  重新加载
+                  {t("agentPicker.reload")}
                 </button>
               </div>
             ) : runtimes.length === 0 ? (
@@ -589,11 +599,11 @@ export function NewChatAgentPicker({
                 </EmptyMessage.Icon>
                 <EmptyMessage.Title>
                   <span className="new-chat-agent-picker__empty-title">
-                    暂无通用智能体
+                    {t("agentPicker.emptyGeneral")}
                   </span>
                 </EmptyMessage.Title>
                 <EmptyMessage.Description>
-                  请前往智能体页创建
+                  {t("agentPicker.createHint")}
                 </EmptyMessage.Description>
               </EmptyMessage>
             ) : (
@@ -618,7 +628,7 @@ export function NewChatAgentPicker({
                         <AgentFaceIcon className="new-chat-agent-picker__runtime-icon" />
                         <span>{runtime.name}</span>
                         {connecting ? (
-                          <small>正在连接</small>
+                          <small>{t("agentPicker.connecting")}</small>
                         ) : selected ? (
                           <CheckIcon className="new-chat-agent-picker__check" />
                         ) : null}
@@ -634,7 +644,7 @@ export function NewChatAgentPicker({
                     disabled={loading || Boolean(connectingRuntimeId)}
                     onClick={() => void loadRuntimes(nextToken)}
                   >
-                    {loading ? "加载中" : "加载更多"}
+                    {loading ? t("agentPicker.loadingMore") : t("agentPicker.loadMore")}
                   </button>
                 ) : null}
               </>

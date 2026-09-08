@@ -24,8 +24,9 @@
 .new-chat-workspace-tabs__tab {
   position: relative;
   display: inline-flex;
-  flex: 0 0 104px;
-  width: 104px;
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 104px;
   min-height: 34px;
   align-items: center;
   justify-content: center;

@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { SegmentedControl } from "@openai/apps-sdk-ui/components/SegmentedControl";
+import { useTranslation } from "react-i18next";
 import {
   sandboxClient,
   sandboxStatusLabel,
   type SandboxAgentWorkspace as SandboxAgentWorkspaceData,
 } from "../adk/sandbox";
-import { formatResourceSource } from "./resourceMetadata";
 import "./SandboxAgentWorkspace.css";
 
 export function SandboxAgentWorkspace({
@@ -15,6 +15,7 @@ export function SandboxAgentWorkspace({
   workspace: SandboxAgentWorkspaceData;
   onBack: () => void;
 }) {
+  const { t } = useTranslation("sandbox");
   const [surface, setSurface] = useState<"main" | "terminal">("main");
   const [terminalUrl, setTerminalUrl] = useState("");
   const [terminalLoading, setTerminalLoading] = useState(false);
@@ -22,6 +23,8 @@ export function SandboxAgentWorkspace({
   const label = workspace.kind === "deepseek-harness"
     ? "DeepSeek Harness"
     : workspace.kind === "openclaw" ? "OpenClaw" : "Hermes";
+  const agentName = workspace.session.displayName ||
+    t("common.agentFallback", { agent: label });
 
   useEffect(() => {
     setSurface("main");
@@ -52,7 +55,7 @@ export function SandboxAgentWorkspace({
     <section className="sandbox-agent-workspace">
       <header>
         <div className="sandbox-agent-workspace-title">
-          <button type="button" onClick={onBack} aria-label="返回智能体列表">
+          <button type="button" onClick={onBack} aria-label={t("agentWorkspace.back")}>
             <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
               <path
                 d="m14.5 6-6 6 6 6"
@@ -64,9 +67,13 @@ export function SandboxAgentWorkspace({
             </svg>
           </button>
           <div>
-            <h1>{workspace.session.displayName || `${label} 智能体`}</h1>
+            <h1>{agentName}</h1>
             <p>
-              <span>创建人 {formatResourceSource(workspace.session.createdBy)}</span>
+              <span>
+                {t("agentWorkspace.createdBy", {
+                  creator: workspace.session.createdBy?.trim() || t("common.unknownSource"),
+                })}
+              </span>
               <span
                 className="sandbox-agent-workspace-status"
                 data-ready={
@@ -85,17 +92,17 @@ export function SandboxAgentWorkspace({
           gutterSize="lg"
           block
           pill={false}
-          aria-label="智能体工作区"
+          aria-label={t("agentWorkspace.ariaLabel")}
           onChange={(nextSurface) => {
             if (nextSurface === "terminal") void openTerminal();
             else setSurface("main");
           }}
         >
           <SegmentedControl.Option value="main">
-            主界面
+            {t("agentWorkspace.main")}
           </SegmentedControl.Option>
           <SegmentedControl.Option value="terminal">
-            终端
+            {t("agentWorkspace.terminal")}
           </SegmentedControl.Option>
         </SegmentedControl>
       </header>
@@ -104,20 +111,25 @@ export function SandboxAgentWorkspace({
         {surface === "main" ? (
           <iframe
             src={workspace.webuiUrl}
-            title={`${label} 主界面`}
+            title={t("agentWorkspace.mainTitle", { agent: label })}
             allow="clipboard-read; clipboard-write"
           />
         ) : terminalLoading ? (
           <div className="sandbox-agent-workspace-state" role="status">
-            正在打开终端…
+            {t("agentWorkspace.openingTerminal")}
           </div>
         ) : terminalError ? (
           <div className="sandbox-agent-workspace-state is-error" role="alert">
             <p>{terminalError}</p>
-            <button type="button" onClick={() => void openTerminal()}>重新尝试</button>
+            <button type="button" onClick={() => void openTerminal()}>
+              {t("common.tryAgain")}
+            </button>
           </div>
         ) : terminalUrl ? (
-          <iframe src={terminalUrl} title={`${label} 终端`} />
+          <iframe
+            src={terminalUrl}
+            title={t("agentWorkspace.terminalTitle", { agent: label })}
+          />
         ) : null}
       </div>
     </section>

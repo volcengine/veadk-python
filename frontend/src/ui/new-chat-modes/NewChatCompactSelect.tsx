@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useTranslation } from "react-i18next";
 import "./new-chat-workspace.css";
 
 export interface NewChatCompactSelectOption {
@@ -53,6 +54,7 @@ export function NewChatCompactSelect({
   searchable = false,
   onRetry,
 }: NewChatCompactSelectProps) {
+  const { t } = useTranslation("newChat");
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
@@ -192,7 +194,7 @@ export function NewChatCompactSelect({
 
   const showLoading = loading && options.length === 0;
   const displayLabel = showLoading
-    ? "加载中…"
+    ? t("compactSelect.loading")
     : selected?.label || placeholder;
 
   return (
@@ -211,7 +213,7 @@ export function NewChatCompactSelect({
         ref={triggerRef}
         type="button"
         className="new-chat-compact-select__trigger"
-        aria-label={`${label}：${displayLabel}`}
+        aria-label={t("compactSelect.selection", { label, value: displayLabel })}
         aria-haspopup="listbox"
         aria-expanded={open}
         disabled={disabled}
@@ -237,11 +239,11 @@ export function NewChatCompactSelect({
         <div className="new-chat-compact-select__menu">
           {searchable && options.length > 0 ? (
             <label className="new-chat-compact-select__search">
-              <span className="sr-only">搜索{label}</span>
+              <span className="sr-only">{t("compactSelect.searchLabel", { label })}</span>
               <input
                 ref={searchRef}
                 value={query}
-                placeholder={`搜索${label}`}
+                placeholder={t("compactSelect.searchPlaceholder", { label })}
                 onChange={(event) => {
                   setQuery(event.currentTarget.value);
                   setActiveIndex(0);
@@ -252,14 +254,16 @@ export function NewChatCompactSelect({
 
           <div className="new-chat-compact-select__list" role="listbox" aria-label={label}>
             {loading && options.length === 0 ? (
-              <div className="new-chat-compact-select__status" role="status">正在加载…</div>
+              <div className="new-chat-compact-select__status" role="status">{t("compactSelect.loading")}</div>
             ) : error ? (
               <div className="new-chat-compact-select__status is-error" role="alert">
                 <span>{error}</span>
-                {onRetry ? <button type="button" onClick={onRetry}>重试</button> : null}
+                {onRetry ? <button type="button" onClick={onRetry}>{t("compactSelect.retry")}</button> : null}
               </div>
             ) : visibleOptions.length === 0 ? (
-              <div className="new-chat-compact-select__status">{query ? "没有匹配项" : "暂无可选项"}</div>
+              <div className="new-chat-compact-select__status">
+                {query ? t("compactSelect.noMatches") : t("compactSelect.noOptions")}
+              </div>
             ) : visibleOptions.map((option, index) => (
               <button
                 key={option.value}

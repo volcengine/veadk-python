@@ -25,6 +25,8 @@ globalThis.window = {
 };
 globalThis.sessionStorage = memoryStorage();
 globalThis.localStorage = memoryStorage();
+globalThis.localStorage.setItem("agentkit.studio.locale", "zh-CN");
+globalThis.window.localStorage = globalThis.localStorage;
 
 const result = await build({
   entryPoints: [

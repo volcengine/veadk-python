@@ -14,7 +14,7 @@ export async function* parseSSE(
   const rawDataExcerpt = (data: string): string => {
     const limit = 500;
     return data.length > limit
-      ? `${data.slice(0, limit)}…（已截断，共 ${data.length} 个字符）`
+      ? adkT("sse.truncatedData", { data: data.slice(0, limit), count: data.length })
       : data;
   };
 
@@ -31,11 +31,11 @@ export async function* parseSSE(
       const rawData = rawDataExcerpt(data);
       if (final) {
         throw new Error(
-          `Stream ended with an incomplete SSE event. 原始 data：${rawData}`,
+          adkT("sse.incompleteEvent", { data: rawData }),
         );
       }
       throw new Error(
-        `Failed to parse SSE event JSON. 原始 data：${rawData}`,
+        adkT("sse.invalidEventJson", { data: rawData }),
       );
     }
   };
@@ -71,3 +71,4 @@ export async function* parseSSE(
     }
   }
 }
+import { adkT } from "./i18n";

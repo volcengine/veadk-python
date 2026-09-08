@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { Button } from "@openai/apps-sdk-ui/components/Button";
 import { motion, useReducedMotion } from "motion/react";
+import { useTranslation } from "react-i18next";
 import { ResourceIdentityMark } from "../ui/ResourceCollection";
 
 import "./AgentCreationModePicker.css";
@@ -127,6 +128,7 @@ export function AgentCreationModePicker({
   onSelectVulcan,
   onSelectTraditional,
 }: AgentCreationModePickerProps) {
+  const { t } = useTranslation("create");
   const reduceMotion = useReducedMotion();
   const [isLeaving, setIsLeaving] = useState(false);
   const pendingSelectionRef = useRef<(() => void) | null>(null);
@@ -164,8 +166,8 @@ export function AgentCreationModePicker({
         aria-labelledby="agent-creation-mode-picker-title"
       >
         <header className="agent-creation-mode-picker__header">
-          <h1 id="agent-creation-mode-picker-title">选择创建方式</h1>
-          <p>以不同模式构建您的智能体</p>
+          <h1 id="agent-creation-mode-picker-title">{t("modePicker.title")}</h1>
+          <p>{t("modePicker.subtitle")}</p>
         </header>
 
         <div className="agent-creation-mode-picker__options">
@@ -181,14 +183,14 @@ export function AgentCreationModePicker({
             <span className="agent-creation-mode-picker__card-header">
               <ResourceIdentityMark
                 className="agent-creation-mode-picker__avatar is-vulcan"
-                seed="快速模式"
+                seed={t("modePicker.quick.title")}
               />
               <span className="agent-creation-mode-picker__card-copy">
                 <span className="agent-creation-mode-picker__card-title">
-                  快速模式
+                  {t("modePicker.quick.title")}
                 </span>
                 <span className="agent-creation-mode-picker__card-description">
-                  动态派生子智能体自主完成任务
+                  {t("modePicker.quick.description")}
                 </span>
               </span>
             </span>
@@ -197,43 +199,43 @@ export function AgentCreationModePicker({
               aria-hidden="true"
             />
             <span className="agent-creation-mode-picker__features">
-              <span>特性</span>
+              <span>{t("modePicker.features")}</span>
               <span className="agent-creation-mode-picker__feature-grid">
                 <span className="agent-creation-mode-picker__feature">
                   <span className="agent-creation-mode-picker__feature-icon">
                     <FeatureIcon name="branch" />
                   </span>
-                  <span>动态派生子智能体</span>
+                  <span>{t("modePicker.quick.features.dynamicSubagents")}</span>
                 </span>
                 <span className="agent-creation-mode-picker__feature">
                   <span className="agent-creation-mode-picker__feature-icon">
                     <FeatureIcon name="plan" />
                   </span>
-                  <span>自主规划执行</span>
+                  <span>{t("modePicker.quick.features.autonomousPlanning")}</span>
                 </span>
                 <span className="agent-creation-mode-picker__feature">
                   <span className="agent-creation-mode-picker__feature-icon">
                     <FeatureIcon name="collaborate" />
                   </span>
-                  <span>多智能体协作</span>
+                  <span>{t("modePicker.quick.features.collaboration")}</span>
                 </span>
                 <span className="agent-creation-mode-picker__feature">
                   <span className="agent-creation-mode-picker__feature-icon">
                     <FeatureIcon name="summary" />
                   </span>
-                  <span>自动汇总结果</span>
+                  <span>{t("modePicker.quick.features.summary")}</span>
                 </span>
                 <span className="agent-creation-mode-picker__feature">
                   <span className="agent-creation-mode-picker__feature-icon">
                     <FeatureIcon name="skills" />
                   </span>
-                  <span>按需调用技能</span>
+                  <span>{t("modePicker.quick.features.skills")}</span>
                 </span>
                 <span className="agent-creation-mode-picker__feature">
                   <span className="agent-creation-mode-picker__feature-icon">
                     <FeatureIcon name="trace" />
                   </span>
-                  <span>任务过程可追踪</span>
+                  <span>{t("modePicker.quick.features.trace")}</span>
                 </span>
               </span>
             </span>
@@ -251,14 +253,14 @@ export function AgentCreationModePicker({
             <span className="agent-creation-mode-picker__card-header">
               <ResourceIdentityMark
                 className="agent-creation-mode-picker__avatar is-traditional"
-                seed="传统模式"
+                seed={t("modePicker.traditional.title")}
               />
               <span className="agent-creation-mode-picker__card-copy">
                 <span className="agent-creation-mode-picker__card-title">
-                  传统模式
+                  {t("modePicker.traditional.title")}
                 </span>
                 <span className="agent-creation-mode-picker__card-description">
-                  高度自定义您的智能体结构
+                  {t("modePicker.traditional.description")}
                 </span>
               </span>
             </span>
@@ -267,37 +269,37 @@ export function AgentCreationModePicker({
               aria-hidden="true"
             />
             <span className="agent-creation-mode-picker__features">
-              <span>特性</span>
+              <span>{t("modePicker.features")}</span>
               <span className="agent-creation-mode-picker__feature-grid">
                 <span className="agent-creation-mode-picker__feature">
                   <span className="agent-creation-mode-picker__feature-icon">
                     <FeatureIcon name="structure" />
                   </span>
-                  <span>可视化配置</span>
+                  <span>{t("modePicker.traditional.features.visualConfig")}</span>
                 </span>
                 <span className="agent-creation-mode-picker__feature">
                   <span className="agent-creation-mode-picker__feature-icon">
                     <FeatureIcon name="model" />
                   </span>
-                  <span>存量智能体迁移</span>
+                  <span>{t("modePicker.traditional.features.migration")}</span>
                 </span>
                 <span className="agent-creation-mode-picker__feature">
                   <span className="agent-creation-mode-picker__feature-icon">
                     <FeatureIcon name="environment" />
                   </span>
-                  <span>实时调试</span>
+                  <span>{t("modePicker.traditional.features.debugging")}</span>
                 </span>
                 <span className="agent-creation-mode-picker__feature">
                   <span className="agent-creation-mode-picker__feature-icon">
                     <FeatureIcon name="deploy" />
                   </span>
-                  <span>可选性能优化</span>
+                  <span>{t("modePicker.traditional.features.optimization")}</span>
                 </span>
                 <span className="agent-creation-mode-picker__feature">
                   <span className="agent-creation-mode-picker__feature-icon">
                     <FeatureIcon name="workflow" />
                   </span>
-                  <span>精细参数控制</span>
+                  <span>{t("modePicker.traditional.features.parameters")}</span>
                 </span>
               </span>
             </span>

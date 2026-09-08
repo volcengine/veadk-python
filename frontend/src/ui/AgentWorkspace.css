@@ -3067,6 +3067,29 @@
   .aw-readonly-config {
     grid-template-columns: minmax(0, 1fr);
   }
+
+  .aw-version-row {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .aw-version-row p {
+    grid-column: 1;
+    overflow-wrap: anywhere;
+  }
+
+  .aw-version-row small,
+  .aw-version-row span,
+  .aw-version-row em {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .aw-version-actions {
+    align-items: flex-start;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -25,8 +25,8 @@ test("renders Skill Space and Skill as one two-level picker", () => {
     controlsSource,
     /action === "create"[\s\S]*?: \([\s\S]*?label="空间"[\s\S]*?label="Skill"/,
   );
-  assert.match(pickerSource, /aria-label="Skill Space"/);
-  assert.match(pickerSource, /aria-label=\{`\$\{activeSpaceLabel\} Skill 列表`\}/);
+  assert.match(pickerSource, /aria-label=\{t\("skill\.spaceAria"\)\}/);
+  assert.match(pickerSource, /aria-label=\{t\("skill\.skillList", \{ space: activeSpaceLabel \}\)\}/);
   assert.match(pickerSource, /aria-haspopup="menu"/);
   assert.match(pickerSource, /role="menuitem"/);
   assert.match(pickerSource, /role="option"/);
@@ -44,7 +44,7 @@ test("loads spaces first and Skills for the active Space without stale updates",
   assert.match(controlsSource, /if \(!cancelled\) setSkills\(items\)/);
   assert.match(pickerSource, /onActivateSpace\(nextSpace\.id\)/);
   assert.match(pickerSource, /onSelect\(activeSpace, skill\)/);
-  assert.match(pickerSource, /selectedSkillLabel \|\| "选择 Skill"/);
+  assert.match(pickerSource, /selectedSkillLabel \|\| t\("skill\.select"\)/);
 });
 
 test("supports hover, click, keyboard navigation, and focus return", () => {
@@ -66,9 +66,9 @@ test("keeps loading, empty, error, retry, and reduced-motion states local", () =
   assert.match(pickerSource, /new-chat-skill-target-picker__spinner/);
   assert.match(pickerSource, /role="status"/);
   assert.match(pickerSource, /role="alert"/);
-  assert.match(pickerSource, /重新加载/);
-  assert.match(pickerSource, /暂无 Skill Space/);
-  assert.match(pickerSource, /暂无 Skill/);
+  assert.match(pickerSource, /t\("skill\.reload"\)/);
+  assert.match(pickerSource, /t\("skill\.emptySpaces"\)/);
+  assert.match(pickerSource, /t\("skill\.emptySkills"\)/);
   assert.match(
     pickerStyles,
     /@media \(prefers-reduced-motion: reduce\)[\s\S]*?animation:\s*none/,

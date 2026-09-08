@@ -6,6 +6,7 @@ import {
   type DragEvent,
   type ReactNode,
 } from "react";
+import type { TFunction } from "i18next";
 import {
   ArrowRight,
   Check,
@@ -22,6 +23,7 @@ import {
 } from "lucide-react";
 import { Alert } from "@openai/apps-sdk-ui/components/Alert";
 import { Button } from "@openai/apps-sdk-ui/components/Button";
+import { useTranslation } from "react-i18next";
 import {
   deleteAgentFeedbackCases,
   createGithubDeliveryRollbackPr,
@@ -59,6 +61,7 @@ import {
   type RuntimeUpdateCapability,
 } from "../adk/client";
 import type { AgentEntry } from "../adk/connections";
+import { localizeDeployStageMessage } from "../adk/deploymentI18n";
 import { AgentBuildCanvas } from "../create/AgentBuildCanvas";
 import {
   modelNameFromRuntime,
@@ -73,6 +76,7 @@ import {
 import type { AgentDraft } from "../create/types";
 import type { WorkspaceAgentDraft } from "../create/agentDraftStorage";
 import { BUILTIN_TOOLS } from "../create/veadkCatalog";
+import { localeCompatibleBackendText } from "../i18n/locales";
 import type { DeploymentTaskUpdate } from "./ProjectPreview";
 import { Markdown } from "./Markdown";
 import { ResourceDetailLayout } from "./ResourceCollection";
@@ -132,96 +136,98 @@ interface EvaluationGroup {
   history: EvaluationRun[];
 }
 
-const DEFAULT_CASES: AgentCase[] = [
-  {
-    id: "case-1",
-    itemKey: "case-1",
-    kind: "good",
-    input: "总结本周客户反馈，并按优先级归类。",
-    output: "覆盖主要问题，给出清晰的优先级与下一步动作。",
-    referenceOutput: "覆盖主要问题，给出清晰的优先级与下一步动作。",
-    comment: "",
-    agentName: "示例 Agent",
-    sessionId: "",
-    messageId: "",
-    runtimeId: "",
-    invocationId: "",
-    userId: "",
-    createdAt: "2026-08-05T09:12:00+08:00",
-    evaluationSetId: "",
-    evaluationSetName: "示例 good case",
-    workspaceId: "",
-    tag: "总结",
-    source: "auto",
-    score: 0.92,
-    reason: "任务完整覆盖了用户目标，输出结构清晰，并给出了可执行的下一步动作。",
-  },
-  {
-    id: "case-2",
-    itemKey: "case-2",
-    kind: "good",
-    input: "查询最新公开资料并附上来源。",
-    output: "调用搜索工具，结论与引用一一对应。",
-    referenceOutput: "调用搜索工具，结论与引用一一对应。",
-    comment: "",
-    agentName: "示例 Agent",
-    sessionId: "",
-    messageId: "",
-    runtimeId: "",
-    invocationId: "",
-    userId: "",
-    createdAt: "2026-08-05T08:47:00+08:00",
-    evaluationSetId: "",
-    evaluationSetName: "示例 good case",
-    workspaceId: "",
-    tag: "工具调用",
-    source: "user",
-  },
-  {
-    id: "case-3",
-    itemKey: "case-3",
-    kind: "bad",
-    input: "在信息不足时直接给出确定结论。",
-    output: "应明确说明未知，并主动询问缺失信息。",
-    referenceOutput: "",
-    comment: "",
-    agentName: "示例 Agent",
-    sessionId: "",
-    messageId: "",
-    runtimeId: "",
-    invocationId: "",
-    userId: "",
-    createdAt: "2026-08-05T07:35:00+08:00",
-    evaluationSetId: "",
-    evaluationSetName: "示例 bad case",
-    workspaceId: "",
-    tag: "幻觉",
-    source: "auto",
-    score: 0.28,
-    reason: "信息不足时仍给出了确定结论，缺少必要的澄清步骤与不确定性说明。",
-  },
-  {
-    id: "case-4",
-    itemKey: "case-4",
-    kind: "bad",
-    input: "连续重复调用相同工具获取同一结果。",
-    output: "复用已有结果，避免无意义的重复调用。",
-    referenceOutput: "",
-    comment: "",
-    agentName: "示例 Agent",
-    sessionId: "",
-    messageId: "",
-    runtimeId: "",
-    invocationId: "",
-    userId: "",
-    createdAt: "2026-08-05T06:58:00+08:00",
-    evaluationSetId: "",
-    evaluationSetName: "示例 bad case",
-    workspaceId: "",
-    tag: "效率",
-    source: "user",
-  },
-];
+function buildDefaultCases(t: TFunction): AgentCase[] {
+  return [
+    {
+      id: "case-1",
+      itemKey: "case-1",
+      kind: "good",
+      input: t("agentWorkspace.defaultCases.weeklyFeedback.input"),
+      output: t("agentWorkspace.defaultCases.weeklyFeedback.output"),
+      referenceOutput: t("agentWorkspace.defaultCases.weeklyFeedback.output"),
+      comment: "",
+      agentName: t("agentWorkspace.defaultCases.agentName"),
+      sessionId: "",
+      messageId: "",
+      runtimeId: "",
+      invocationId: "",
+      userId: "",
+      createdAt: "2026-08-05T09:12:00+08:00",
+      evaluationSetId: "",
+      evaluationSetName: t("agentWorkspace.defaultCases.goodSetName"),
+      workspaceId: "",
+      tag: t("agentWorkspace.defaultCases.weeklyFeedback.tag"),
+      source: "auto",
+      score: 0.92,
+      reason: t("agentWorkspace.defaultCases.weeklyFeedback.reason"),
+    },
+    {
+      id: "case-2",
+      itemKey: "case-2",
+      kind: "good",
+      input: t("agentWorkspace.defaultCases.research.input"),
+      output: t("agentWorkspace.defaultCases.research.output"),
+      referenceOutput: t("agentWorkspace.defaultCases.research.output"),
+      comment: "",
+      agentName: t("agentWorkspace.defaultCases.agentName"),
+      sessionId: "",
+      messageId: "",
+      runtimeId: "",
+      invocationId: "",
+      userId: "",
+      createdAt: "2026-08-05T08:47:00+08:00",
+      evaluationSetId: "",
+      evaluationSetName: t("agentWorkspace.defaultCases.goodSetName"),
+      workspaceId: "",
+      tag: t("agentWorkspace.defaultCases.research.tag"),
+      source: "user",
+    },
+    {
+      id: "case-3",
+      itemKey: "case-3",
+      kind: "bad",
+      input: t("agentWorkspace.defaultCases.uncertainConclusion.input"),
+      output: t("agentWorkspace.defaultCases.uncertainConclusion.output"),
+      referenceOutput: "",
+      comment: "",
+      agentName: t("agentWorkspace.defaultCases.agentName"),
+      sessionId: "",
+      messageId: "",
+      runtimeId: "",
+      invocationId: "",
+      userId: "",
+      createdAt: "2026-08-05T07:35:00+08:00",
+      evaluationSetId: "",
+      evaluationSetName: t("agentWorkspace.defaultCases.badSetName"),
+      workspaceId: "",
+      tag: t("agentWorkspace.defaultCases.uncertainConclusion.tag"),
+      source: "auto",
+      score: 0.28,
+      reason: t("agentWorkspace.defaultCases.uncertainConclusion.reason"),
+    },
+    {
+      id: "case-4",
+      itemKey: "case-4",
+      kind: "bad",
+      input: t("agentWorkspace.defaultCases.repeatedTool.input"),
+      output: t("agentWorkspace.defaultCases.repeatedTool.output"),
+      referenceOutput: "",
+      comment: "",
+      agentName: t("agentWorkspace.defaultCases.agentName"),
+      sessionId: "",
+      messageId: "",
+      runtimeId: "",
+      invocationId: "",
+      userId: "",
+      createdAt: "2026-08-05T06:58:00+08:00",
+      evaluationSetId: "",
+      evaluationSetName: t("agentWorkspace.defaultCases.badSetName"),
+      workspaceId: "",
+      tag: t("agentWorkspace.defaultCases.repeatedTool.tag"),
+      source: "user",
+    },
+  ];
+}
 
 const DEFAULT_EVALUATION_GROUPS: EvaluationGroup[] = [
   {
@@ -251,30 +257,52 @@ const DEFAULT_EVALUATION_GROUPS: EvaluationGroup[] = [
   },
 ];
 
-const AGENT_SECTIONS: Array<{ id: AgentSection; label: string }> = [
-  { id: "basic", label: "基本信息" },
-  { id: "usage", label: "用量统计" },
-  { id: "evaluations", label: "评测集" },
-  { id: "optimizations", label: "优化项" },
-  { id: "integrations", label: "接入方法" },
-  { id: "versions", label: "版本" },
+const EVALUATION_TEXT_KEYS: Record<string, string> = {
+  "核心能力回归": "agentWorkspace.evaluationDefaults.coreRegression",
+  "安全与幻觉检查": "agentWorkspace.evaluationDefaults.safetyCheck",
+  "核心回归集": "agentWorkspace.evaluationDefaults.coreSet",
+  "安全边界集": "agentWorkspace.evaluationDefaults.safetySet",
+  "工具调用集": "agentWorkspace.evaluationDefaults.toolSet",
+  "综合质量评估器": "agentWorkspace.evaluationDefaults.qualityEvaluator",
+  "事实一致性评估器": "agentWorkspace.evaluationDefaults.factualEvaluator",
+  "工具调用评估器": "agentWorkspace.evaluationDefaults.toolEvaluator",
+  "回答质量": "agentWorkspace.evaluationDefaults.responseQuality",
+  "事实准确性": "agentWorkspace.evaluationDefaults.factualAccuracy",
+  "工具调用": "agentWorkspace.evaluationDefaults.toolUse",
+  "响应效率": "agentWorkspace.evaluationDefaults.responseEfficiency",
+  "今天 10:32": "agentWorkspace.evaluationDefaults.todayTime",
+  "昨天 16:08": "agentWorkspace.evaluationDefaults.yesterdayTime",
+  "7 月 25 日 14:20": "agentWorkspace.evaluationDefaults.julyTime",
+  "刚刚": "agentWorkspace.evaluationDefaults.justNow",
+};
+
+function evaluationText(value: string, t: TFunction): string {
+  const key = EVALUATION_TEXT_KEYS[value];
+  return key ? t(key) : value;
+}
+
+const AGENT_SECTIONS: AgentSection[] = [
+  "basic",
+  "usage",
+  "evaluations",
+  "optimizations",
+  "integrations",
+  "versions",
 ];
 
 const AGENT_USAGE_PAGE_SIZE = 20;
-const AGENT_USAGE_DATE_FORMATTER = new Intl.DateTimeFormat("zh-CN", {
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-  hour: "2-digit",
-  minute: "2-digit",
-  hour12: false,
-});
-
-function formatAgentUsageTime(value: string): string {
+function formatAgentUsageTime(value: string, locale: string, t: TFunction): string {
   const timestamp = Date.parse(value);
   return Number.isNaN(timestamp)
-    ? "暂未提供"
-    : AGENT_USAGE_DATE_FORMATTER.format(timestamp);
+    ? t("agentWorkspace.notProvided")
+    : new Intl.DateTimeFormat(locale, {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      }).format(timestamp);
 }
 
 const INTEGRATION_PROTOCOLS: Array<{
@@ -320,23 +348,26 @@ function normalizeRuntimeA2aEndpoint(
   }
 }
 
-function authTypeLabel(authType?: RuntimeDetail["authType"]): string {
+function authTypeLabel(
+  authType: RuntimeDetail["authType"] | undefined,
+  t: TFunction,
+): string {
   if (authType === "key_auth") return "API Key";
   if (authType === "custom_jwt") return "OAuth / JWT";
-  if (authType === "none") return "无需鉴权";
-  return "暂无";
+  if (authType === "none") return t("agentWorkspace.noAuthentication");
+  return t("agentWorkspace.notAvailable");
 }
 
-function githubRuntimeStatusLabel(status?: string): string {
-  if (status === "published") return "已发布";
-  if (status === "publishing") return "发布中";
-  if (status === "failed") return "发布失败";
-  if (status === "pending") return "等待发布";
-  return "未知";
+function githubRuntimeStatusLabel(status: string | undefined, t: TFunction): string {
+  if (status === "published") return t("agentWorkspace.githubStatus.published");
+  if (status === "publishing") return t("agentWorkspace.githubStatus.publishing");
+  if (status === "failed") return t("agentWorkspace.githubStatus.failed");
+  if (status === "pending") return t("agentWorkspace.githubStatus.pending");
+  return t("agentWorkspace.githubStatus.unknown");
 }
 
-function githubVersionTitle(version: GithubDeliveryVersion): string {
-  if (version.changeType === "rollback") return "回退事件";
+function githubVersionTitle(version: GithubDeliveryVersion, t: TFunction): string {
+  if (version.changeType === "rollback") return t("agentWorkspace.rollbackEvent");
   return version.version;
 }
 
@@ -472,10 +503,11 @@ function IntegrationApiKey({
   error: string;
   onToggle: () => void;
 }) {
-  if (!available) return "暂无";
-  if (authType === "none") return "无需 API Key";
-  if (authType === "custom_jwt") return "使用 OAuth / JWT";
-  if (authType !== "key_auth") return "暂无";
+  const { t } = useTranslation("ui");
+  if (!available) return t("agentWorkspace.notAvailable");
+  if (authType === "none") return t("agentWorkspace.noApiKeyRequired");
+  if (authType === "custom_jwt") return t("agentWorkspace.usesOauthJwt");
+  if (authType !== "key_auth") return t("agentWorkspace.notAvailable");
   return (
     <span className="aw-integration-secret">
       <span className="aw-integration-secret-value" aria-live="polite">
@@ -484,8 +516,8 @@ function IntegrationApiKey({
       <button
         type="button"
         className="aw-integration-secret-toggle"
-        aria-label={visible ? "隐藏 API Key" : "显示 API Key"}
-        title={visible ? "隐藏 API Key" : "显示 API Key"}
+        aria-label={visible ? t("agentWorkspace.hideApiKey") : t("agentWorkspace.showApiKey")}
+        title={visible ? t("agentWorkspace.hideApiKey") : t("agentWorkspace.showApiKey")}
         disabled={loading}
         onClick={onToggle}
       >
@@ -513,6 +545,7 @@ function IntegrationPanel({
   fields: Array<{ label: string; value: ReactNode }>;
   example: string;
 }) {
+  const { t } = useTranslation("ui");
   return (
     <section
       className={`aw-integration-panel${available && example ? " has-example" : ""}`}
@@ -527,13 +560,13 @@ function IntegrationPanel({
         {fields.map((field) => (
           <div key={field.label}>
             <dt>{field.label}</dt>
-            <dd>{field.value || "暂无"}</dd>
+            <dd>{field.value || t("agentWorkspace.notAvailable")}</dd>
           </div>
         ))}
       </dl>
       {available && example && (
         <section className="aw-integration-example">
-          <h4>Python 示例</h4>
+          <h4>{t("agentWorkspace.pythonExample")}</h4>
           <Markdown
             text={example}
             className="aw-integration-example-code"
@@ -586,10 +619,10 @@ function caseTimeValue(value: string): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function formatCaseTime(value: string): string {
+function formatCaseTime(value: string, locale: string, t: TFunction): string {
   const time = caseTimeValue(value);
-  if (!time) return "时间未知";
-  return new Intl.DateTimeFormat("zh-CN", {
+  if (!time) return t("agentWorkspace.unknownTime");
+  return new Intl.DateTimeFormat(locale, {
     month: "numeric",
     day: "numeric",
     hour: "2-digit",
@@ -597,31 +630,31 @@ function formatCaseTime(value: string): string {
   }).format(new Date(time));
 }
 
-function formatCaseScore(item: AgentCase): string {
+function formatCaseScore(item: AgentCase, t: TFunction): string {
   if (typeof item.score !== "number") return "—";
   if (!Number.isFinite(item.score)) return "—";
-  return `${Math.round(item.score * 100)} 分`;
+  return t("agentWorkspace.scoreValue", { score: Math.round(item.score * 100) });
 }
 
-function optimizationPriorityLabel(priority: OptimizationPriority): string {
-  if (priority === "high") return "高";
-  if (priority === "medium") return "中";
-  return "低";
+function optimizationPriorityLabel(priority: OptimizationPriority, t: TFunction): string {
+  return t(`agentWorkspace.priority.${priority}`);
 }
 
-const OPTIMIZATION_MODULE_LABELS: Record<OptimizationModule, string> = {
-  agent_structure: "Agent 结构",
-  prompt: "提示词",
-  tool: "工具",
-  knowledge: "知识库",
-  memory: "记忆",
-  workflow: "工作流",
-  other: "其他",
+const OPTIMIZATION_MODULE_KEYS: Record<OptimizationModule, string> = {
+  agent_structure: "agentWorkspace.modules.agentStructure",
+  prompt: "agentWorkspace.modules.prompt",
+  tool: "agentWorkspace.modules.tool",
+  knowledge: "agentWorkspace.modules.knowledge",
+  memory: "agentWorkspace.modules.memory",
+  workflow: "agentWorkspace.modules.workflow",
+  other: "agentWorkspace.modules.other",
 };
 
-function optimizationModuleLabel(group: OptimizationGroup): string {
-  if (group.module === "other") return group.customModule?.trim() || "其他";
-  return OPTIMIZATION_MODULE_LABELS[group.module];
+function optimizationModuleLabel(group: OptimizationGroup, t: TFunction): string {
+  if (group.module === "other") {
+    return group.customModule?.trim() || t("agentWorkspace.modules.other");
+  }
+  return t(OPTIMIZATION_MODULE_KEYS[group.module]);
 }
 
 function feedbackSetFor(
@@ -633,11 +666,16 @@ function feedbackSetFor(
 
 function feedbackCasesFromResponse(
   response: AgentFeedbackCasesResponse,
+  t: TFunction,
 ): AgentCase[] {
   return response.items
     .map((item) => ({
       ...item,
-      tag: item.kind === "good" ? "Good case" : "Bad case",
+      tag: t(
+        item.kind === "good"
+          ? "agentWorkspace.goodCase"
+          : "agentWorkspace.badCase",
+      ),
     }))
     .sort((left, right) => (
       caseTimeValue(right.createdAt) - caseTimeValue(left.createdAt)
@@ -661,49 +699,45 @@ function canvasDraftKey(draft: AgentDraft): string {
   return JSON.stringify(visit(draft));
 }
 
-const DEPLOYMENT_STEPS = [
-  { phase: "prepare", label: "准备部署", description: "校验配置并创建部署任务" },
-  { phase: "build", label: "构建镜像", description: "生成运行环境与智能体代码" },
-  { phase: "deploy", label: "部署服务", description: "创建并启动 AgentKit Runtime" },
-  { phase: "publish", label: "发布服务", description: "等待服务就绪并生成访问地址" },
-  { phase: "complete", label: "部署完成", description: "智能体已可以正常使用" },
-] as const;
-const EVALUATION_SET_STEP = {
-  phase: "evaluation",
-  label: "创建评测集",
-  description: "自动创建 Good Case 和 Bad Case 评测集",
-} as const;
-const GITHUB_DELIVERY_STEP = {
-  phase: "github",
-  label: "挂载 GitHub 持续交付",
-  description: "初始化目标分支与 GitHub Actions workflow",
-} as const;
-function instanceUpdateStep(range: { min: number; max: number }) {
+function baseDeploymentSteps(t: TFunction) {
+  return [
+    { phase: "prepare", label: t("agentWorkspace.deploymentSteps.prepare.label"), description: t("agentWorkspace.deploymentSteps.prepare.description") },
+    { phase: "build", label: t("agentWorkspace.deploymentSteps.build.label"), description: t("agentWorkspace.deploymentSteps.build.description") },
+    { phase: "deploy", label: t("agentWorkspace.deploymentSteps.deploy.label"), description: t("agentWorkspace.deploymentSteps.deploy.description") },
+    { phase: "publish", label: t("agentWorkspace.deploymentSteps.publish.label"), description: t("agentWorkspace.deploymentSteps.publish.description") },
+    { phase: "complete", label: t("agentWorkspace.deploymentSteps.complete.label"), description: t("agentWorkspace.deploymentSteps.complete.description") },
+  ];
+}
+function instanceUpdateStep(range: { min: number; max: number }, t: TFunction) {
   return {
     phase: "update",
-    label: "更新实例配置",
-    description: `将 Runtime 实例数调整为 ${range.min}～${range.max}`,
-  } as const;
+    label: t("agentWorkspace.deploymentSteps.update.label"),
+    description: t("agentWorkspace.deploymentSteps.update.description", range),
+  };
 }
-const BUILD_STEP_INDEX = DEPLOYMENT_STEPS.findIndex((step) => step.phase === "build");
 
-function deploymentSteps(task: DeploymentTaskUpdate): Array<{
+function deploymentSteps(task: DeploymentTaskUpdate, t: TFunction): Array<{
   phase: string;
   label: string;
   description: string;
 }> {
+  const baseSteps = baseDeploymentSteps(t);
   const steps: Array<{ phase: string; label: string; description: string }> = [
-    ...DEPLOYMENT_STEPS.slice(0, -1),
+    ...baseSteps.slice(0, -1),
   ];
-  if (task.instanceRange) steps.push(instanceUpdateStep(task.instanceRange));
-  if (task.createEvaluationSets) steps.push(EVALUATION_SET_STEP);
-  if (task.githubDelivery) steps.push(GITHUB_DELIVERY_STEP);
-  steps.push(DEPLOYMENT_STEPS[DEPLOYMENT_STEPS.length - 1]);
+  if (task.instanceRange) steps.push(instanceUpdateStep(task.instanceRange, t));
+  if (task.createEvaluationSets) {
+    steps.push({ phase: "evaluation", label: t("agentWorkspace.deploymentSteps.evaluation.label"), description: t("agentWorkspace.deploymentSteps.evaluation.description") });
+  }
+  if (task.githubDelivery) {
+    steps.push({ phase: "github", label: t("agentWorkspace.deploymentSteps.github.label"), description: t("agentWorkspace.deploymentSteps.github.description") });
+  }
+  steps.push(baseSteps[baseSteps.length - 1]);
   return steps;
 }
 
-function deploymentStepIndex(task: DeploymentTaskUpdate): number {
-  const steps = deploymentSteps(task);
+function deploymentStepIndex(task: DeploymentTaskUpdate, t: TFunction): number {
+  const steps = deploymentSteps(task, t);
   if (task.status === "success") return steps.length - 1;
   const phase = task.phase ?? ({
     准备部署: "prepare",
@@ -718,10 +752,10 @@ function deploymentStepIndex(task: DeploymentTaskUpdate): number {
   return index < 0 ? 0 : index;
 }
 
-function formatBuildLogTime(updatedAt: number): string {
+function formatBuildLogTime(updatedAt: number, locale: string): string {
   if (!updatedAt) return "";
   try {
-    return new Intl.DateTimeFormat("zh-CN", {
+    return new Intl.DateTimeFormat(locale, {
       hour: "2-digit",
       minute: "2-digit",
       second: "2-digit",
@@ -749,6 +783,7 @@ function DeploymentStepLog({
   copyLabel: string;
   defaultPendingMessage: string;
 }) {
+  const { t, i18n } = useTranslation("ui");
   const logTextRef = useRef<HTMLPreElement | null>(null);
   const shouldAutoExpand = Boolean(log?.status !== "complete" && autoExpand);
   const [expanded, setExpanded] = useState(shouldAutoExpand);
@@ -773,22 +808,22 @@ function DeploymentStepLog({
 
   if (!log || (!log.text && log.status !== "error" && !log.pendingMessage)) return null;
 
-  const updatedAt = formatBuildLogTime(log.updatedAt);
+  const updatedAt = formatBuildLogTime(log.updatedAt, i18n.resolvedLanguage ?? i18n.language);
   const statusLabel = log.status === "complete"
-    ? "已同步"
+    ? t("agentWorkspace.logStatus.synced")
     : log.status === "error"
-      ? "读取失败"
-      : "同步中";
+      ? t("agentWorkspace.logStatus.failed")
+      : t("agentWorkspace.logStatus.syncing");
   const truncationLabel = log.omittedEarly
-    ? "已省略早期日志"
+    ? t("agentWorkspace.logStatus.earlyOmitted")
     : log.snapshotTruncated
-      ? "仅显示最近的构建日志"
+      ? t("agentWorkspace.logStatus.recentOnly")
       : log.truncated
-        ? "已省略部分日志"
+        ? t("agentWorkspace.logStatus.partiallyOmitted")
         : "";
   const meta = [
     statusLabel,
-    log.lineCount ? `${log.lineCount} 行` : "",
+    log.lineCount ? t("agentWorkspace.logLines", { count: log.lineCount }) : "",
     truncationLabel,
     updatedAt,
   ].filter(Boolean).join(" · ");
@@ -819,18 +854,18 @@ function DeploymentStepLog({
               type="button"
               onClick={() => setExpanded((value) => !value)}
             >
-              {expanded ? "收起" : "展开"}
+              {expanded ? t("common.collapse") : t("common.expand")}
             </button>
           )}
           {hasLogText && (
             <button
               type="button"
               onClick={() => void copyLog()}
-              aria-label={copied ? `已复制${copyLabel}` : `复制${copyLabel}`}
-              title={copied ? "已复制" : `复制${copyLabel}`}
+              aria-label={copied ? t("agentWorkspace.copiedLabel", { label: copyLabel }) : t("agentWorkspace.copyLabel", { label: copyLabel })}
+              title={copied ? t("agentWorkspace.copied") : t("agentWorkspace.copyLabel", { label: copyLabel })}
             >
               {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
-              <span>{copied ? "已复制" : "复制"}</span>
+              <span>{copied ? t("agentWorkspace.copied") : t("agentWorkspace.copy")}</span>
             </button>
           )}
         </div>
@@ -845,23 +880,25 @@ function DeploymentStepLog({
 }
 
 function DeploymentBuildLog({ task }: { task: DeploymentTaskUpdate }) {
+  const { t } = useTranslation("ui");
   return (
     <DeploymentStepLog
       log={task.buildLog}
       autoExpand={Boolean(
         task.buildLog?.status !== "complete"
         && (task.status === "running" || task.status === "error")
-        && deploymentStepIndex(task) === BUILD_STEP_INDEX,
+        && deploymentStepIndex(task, t) === 1,
       )}
-      title="构建日志"
-      ariaLabel="构建日志"
-      copyLabel="构建日志"
-      defaultPendingMessage="正在等待构建日志…"
+      title={t("agentWorkspace.buildLog")}
+      ariaLabel={t("agentWorkspace.buildLog")}
+      copyLabel={t("agentWorkspace.buildLog")}
+      defaultPendingMessage={t("agentWorkspace.waitingBuildLog")}
     />
   );
 }
 
 function DeploymentGithubLog({ task }: { task: DeploymentTaskUpdate }) {
+  const { t } = useTranslation("ui");
   return (
     <DeploymentStepLog
       log={task.githubLog}
@@ -870,10 +907,10 @@ function DeploymentGithubLog({ task }: { task: DeploymentTaskUpdate }) {
         && (task.status === "running" || task.status === "error")
         && task.phase === "github",
       )}
-      title="GitHub 挂载日志"
-      ariaLabel="GitHub 持续交付挂载日志"
-      copyLabel="GitHub 挂载日志"
-      defaultPendingMessage="正在等待 GitHub 挂载日志…"
+      title={t("agentWorkspace.githubMountLog")}
+      ariaLabel={t("agentWorkspace.githubDeliveryMountLog")}
+      copyLabel={t("agentWorkspace.githubMountLog")}
+      defaultPendingMessage={t("agentWorkspace.waitingGithubMountLog")}
     />
   );
 }
@@ -885,18 +922,19 @@ function DeploymentProgressCard({
   task: DeploymentTaskUpdate;
   onReturnToEdit?: () => void;
 }) {
-  const steps = deploymentSteps(task);
-  const currentIndex = deploymentStepIndex(task);
+  const { t } = useTranslation("ui");
+  const steps = deploymentSteps(task, t);
+  const currentIndex = deploymentStepIndex(task, t);
   const progress = task.status === "success"
     ? 100
     : Math.max(6, Math.min(100, task.pct ?? 6));
   const title = task.status === "running"
-    ? "正在部署"
+    ? t("agentWorkspace.deployStatus.running")
     : task.status === "success"
-      ? "部署完成"
+      ? t("agentWorkspace.deployStatus.success")
       : task.status === "error"
-        ? "部署失败"
-        : "部署已取消";
+        ? t("agentWorkspace.deployStatus.error")
+        : t("agentWorkspace.deployStatus.cancelled");
 
   return (
     <section
@@ -927,7 +965,7 @@ function DeploymentProgressCard({
       <div
         className="aw-deploy-progress-track"
         role="progressbar"
-        aria-label="部署进度"
+        aria-label={t("agentWorkspace.deploymentProgress")}
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={Math.round(progress)}
@@ -942,7 +980,9 @@ function DeploymentProgressCard({
             : index === currentIndex
               ? task.status === "running" ? "active" : "failed"
               : "pending";
-          const message = index === currentIndex ? task.message : undefined;
+          const message = index === currentIndex
+            ? localizeDeployStageMessage(task)
+            : undefined;
           return (
             <li key={step.phase} className={`is-${status}`}>
               <span className="aw-deploy-step-marker" aria-hidden>
@@ -980,7 +1020,7 @@ function DeploymentProgressCard({
             type="button"
             className="studio-update-action"
             onClick={onReturnToEdit}
-          >返回编辑</button>
+          >{t("agentWorkspace.returnToEdit")}</button>
         </div>
       )}
     </section>
@@ -1053,6 +1093,7 @@ export function AgentWorkspace({
   onUpdateAgent,
   onEditDraft,
 }: AgentWorkspaceProps) {
+  const { t, i18n } = useTranslation("ui");
   const [view, setView] = useState<WorkspaceView>("library");
   const [section, setSection] = useState<AgentSection>("basic");
   const [activeAgentId, setActiveAgentId] = useState("");
@@ -1235,9 +1276,13 @@ export function AgentWorkspace({
       : null;
   const selectedAgentAppName =
     selectedAgentInfo?.appName || selectedAgent?.runtimeApp || selectedAgent?.app || "";
-  const visibleAgentSections = canViewUsage && selectedAgent?.runtimeId
+  const visibleAgentSectionIds = canViewUsage && selectedAgent?.runtimeId
     ? AGENT_SECTIONS
-    : AGENT_SECTIONS.filter((item) => item.id !== "usage");
+    : AGENT_SECTIONS.filter((item) => item !== "usage");
+  const visibleAgentSections = visibleAgentSectionIds.map((id) => ({
+    id,
+    label: t(`agentWorkspace.sections.${id}`),
+  }));
   const agentUsageRequestKey = JSON.stringify([
     selectedAgent?.runtimeId ?? "",
     selectedAgent?.region ?? "cn-beijing",
@@ -1287,6 +1332,18 @@ export function AgentWorkspace({
     updateCapability?.requestKey === updateCapabilityRequestKey
       ? updateCapability.value
       : cachedUpdateCapability;
+  const updateCapabilityReason = selectedUpdateCapability?.reason
+    ? localeCompatibleBackendText(
+        selectedUpdateCapability.reason,
+        i18n.resolvedLanguage || i18n.language,
+      )
+    : "";
+  const updateCapabilityWarnings = selectedUpdateCapability?.warnings.filter(
+    (warning) => localeCompatibleBackendText(
+      warning,
+      i18n.resolvedLanguage || i18n.language,
+    ),
+  ) ?? [];
   useEffect(() => {
     const requestId = updateCapabilityRequestRef.current + 1;
     updateCapabilityRequestRef.current = requestId;
@@ -1337,7 +1394,7 @@ export function AgentWorkspace({
             value.agent?.appName !== capabilityRuntimeAppName) ||
           (value.canUpdate && !value.agent?.appName)
         ) {
-          setUpdateCapabilityError("Runtime 更新能力响应与当前选择不匹配。");
+          setUpdateCapabilityError(t("agentWorkspace.errors.updateCapabilityMismatch"));
           return;
         }
         setUpdateCapability({ requestKey: updateCapabilityRequestKey, value });
@@ -1346,19 +1403,17 @@ export function AgentWorkspace({
         pollAttempts += 1;
         if (pollAttempts >= maxPollAttempts) {
           setUpdateCapabilityError(
-            "更新配置仍在后台恢复，请稍后点击重试。",
+            t("agentWorkspace.errors.updateConfigRestoring"),
           );
           return;
         }
         pollTimer = window.setTimeout(() => loadCapability(false), 1_000);
-      }).catch((error: unknown) => {
+      }).catch(() => {
         if (
           requestId !== updateCapabilityRequestRef.current ||
           controller.signal.aborted
         ) return;
-        setUpdateCapabilityError(
-          error instanceof Error ? error.message : "检查 Runtime 更新能力失败。",
-        );
+        setUpdateCapabilityError(t("agentWorkspace.errors.checkUpdateCapability"));
       }).finally(() => {
         if (
           requestId === updateCapabilityRequestRef.current &&
@@ -1409,7 +1464,7 @@ export function AgentWorkspace({
     selectedDraft?.draft.name ||
     selectedPendingTask?.agentName ||
     selectedPendingTask?.agentDraft?.name ||
-    "未选择智能体";
+    t("agentWorkspace.noAgentSelected");
   const selectedEvaluationGroup = evaluationGroups.find(
     (group) => group.id === activeEvaluationGroupId,
   );
@@ -1465,28 +1520,28 @@ export function AgentWorkspace({
       )
     : [];
   const updateBlockedReason = selectedDraft
-    ? canCreate ? "" : "当前账号没有新建 Agent 的权限。"
+    ? canCreate ? "" : t("agentWorkspace.errors.noCreatePermission")
     : !canUpdate
-      ? "当前账号没有管理 Agent 的权限。"
+      ? t("agentWorkspace.errors.noManagePermission")
       : !selectedAgent?.runtimeId
-        ? "仅支持更新已部署的云端智能体。"
+        ? t("agentWorkspace.errors.cloudOnlyUpdate")
         : !selectedAgent.region
-          ? "Runtime 缺少地域信息，无法更新。"
+          ? t("agentWorkspace.errors.runtimeRegionMissing")
           : updateCapabilityLoading
-            ? "正在检查 Runtime 更新配置。"
+            ? t("agentWorkspace.errors.checkingUpdateConfig")
             : updateCapabilityError
               ? updateCapabilityError
               : !selectedUpdateCapability
-                ? "尚未完成 Runtime 更新能力检查。"
+                ? t("agentWorkspace.errors.updateCapabilityPending")
                 : selectedUpdateCapability.recoveryStatus !== "complete" &&
                     selectedUpdateCapability.recoveryStatus !== "draft-only"
-                  ? selectedUpdateCapability.reason ||
-                    "该 Runtime 的原发布配置不可恢复，无法安全更新。"
+                  ? updateCapabilityReason ||
+                    t("agentWorkspace.errors.originalConfigUnavailable")
                 : !selectedUpdateCapability.canUpdate
-                  ? selectedUpdateCapability.reason || "当前 Runtime 不支持原地更新。"
+                  ? updateCapabilityReason || t("agentWorkspace.errors.updateUnsupported")
                   : selectedUpdateCapability.agent?.appName
                     ? ""
-                    : "Runtime 更新能力响应缺少智能体信息。";
+                    : t("agentWorkspace.errors.agentInfoMissing");
   const updateReasonId = "aw-update-disabled-reason";
   const toolNames = useMemo(() => {
     if (selectedAgentInfo) return selectedAgentInfo.tools;
@@ -1645,9 +1700,7 @@ export function AgentWorkspace({
           setDetailAgentInfoUnsupported(
             error instanceof RuntimeProbeError && error.unsupported,
           );
-          setDetailAgentInfoError(
-            error instanceof Error ? error.message : "加载 Agent 信息失败。",
-          );
+          setDetailAgentInfoError(t("agentWorkspace.errors.loadAgentInfo"));
         }
       })
       .finally(() => {
@@ -1688,11 +1741,9 @@ export function AgentWorkspace({
       .then((response) => {
         if (!cancelled) setOptimizationGroups(response.groups);
       })
-      .catch((cause: unknown) => {
+      .catch(() => {
         if (!cancelled) {
-          setOptimizationsError(
-            cause instanceof Error ? cause.message : String(cause),
-          );
+          setOptimizationsError(t("agentWorkspace.errors.loadOptimizations"));
         }
       })
       .finally(() => {
@@ -1748,19 +1799,17 @@ export function AgentWorkspace({
           response.appName !== appName ||
           response.page !== agentUsagePage
         ) {
-          setAgentUsageError("用量响应与当前 Agent 不匹配，请重试。");
+          setAgentUsageError(t("agentWorkspace.errors.usageMismatch"));
           return;
         }
         setAgentUsage({ requestKey: agentUsageRequestKey, value: response });
       })
-      .catch((cause: unknown) => {
+      .catch(() => {
         if (
           requestId !== agentUsageRequestRef.current ||
           controller.signal.aborted
         ) return;
-        setAgentUsageError(
-          cause instanceof Error ? cause.message : "加载 Agent 用量失败。",
-        );
+        setAgentUsageError(t("agentWorkspace.errors.loadUsage"));
       })
       .finally(() => {
         if (requestId === agentUsageRequestRef.current) {
@@ -1827,7 +1876,7 @@ export function AgentWorkspace({
       setRevealedApiKey(null);
       setApiKeyVisible(false);
       setApiKeyError(
-        error instanceof Error ? error.message : "读取 Runtime API Key 失败。",
+        error instanceof Error ? error.message : t("agentWorkspace.errors.loadApiKey"),
       );
     } finally {
       if (requestId === apiKeyRequestRef.current) setApiKeyLoading(false);
@@ -1852,12 +1901,10 @@ export function AgentWorkspace({
       .then((detail) => {
         if (!cancelled) setRuntimeDetail(detail);
       })
-      .catch((error: unknown) => {
+      .catch(() => {
         if (!cancelled && !cached) setRuntimeDetail(null);
         if (!cancelled) {
-          setRuntimeDetailError(
-            error instanceof Error ? error.message : "加载 Runtime 详情失败。",
-          );
+          setRuntimeDetailError(t("agentWorkspace.errors.loadRuntimeDetails"));
         }
       });
     return () => {
@@ -1884,12 +1931,10 @@ export function AgentWorkspace({
       .then((value) => {
         if (!cancelled) setGithubVersions(value);
       })
-      .catch((error: unknown) => {
+      .catch(() => {
         if (!cancelled) {
           setGithubVersions(null);
-          setGithubVersionsError(
-            error instanceof Error ? error.message : "读取 GitHub 版本失败。",
-          );
+          setGithubVersionsError(t("agentWorkspace.errors.loadGithubVersions"));
         }
       })
       .finally(() => {
@@ -1925,12 +1970,10 @@ export function AgentWorkspace({
       .then(([apiApps, a2a]) => {
         if (!cancelled) setIntegrationProbe({ requestKey, apiApps, a2a });
       })
-      .catch((error: unknown) => {
+      .catch(() => {
         if (!cancelled) {
           setIntegrationProbe(null);
-          setIntegrationError(
-            error instanceof Error ? error.message : "探测集成方式失败。",
-          );
+          setIntegrationError(t("agentWorkspace.errors.probeIntegration"));
         }
       })
       .finally(() => {
@@ -1959,7 +2002,7 @@ export function AgentWorkspace({
           pageSize: 100,
         })
       : null;
-    setFeedbackCases(cached ? feedbackCasesFromResponse(cached) : []);
+    setFeedbackCases(cached ? feedbackCasesFromResponse(cached, t) : []);
     setFeedbackSets(cached?.sets ?? []);
     setFeedbackCasesError("");
     setFeedbackCasesUnsupported(cached?.unsupportedMessage ?? "");
@@ -1981,12 +2024,12 @@ export function AgentWorkspace({
       .then((response) => {
         if (cancelled) return;
         setFeedbackSets(response.sets);
-        setFeedbackCases(feedbackCasesFromResponse(response));
+        setFeedbackCases(feedbackCasesFromResponse(response, t));
         setFeedbackCasesUnsupported(response.unsupportedMessage ?? "");
       })
-      .catch((cause) => {
+      .catch(() => {
         if (!cancelled) {
-          setFeedbackCasesError(cause instanceof Error ? cause.message : String(cause));
+          setFeedbackCasesError(t("agentWorkspace.errors.loadEvaluations"));
           setFeedbackCasesUnsupported("");
         }
       })
@@ -2005,6 +2048,7 @@ export function AgentWorkspace({
     selectedAgentInfo?.appName,
     selectedAgent?.region,
     selectedAgent?.runtimeId,
+    t,
   ]);
 
   async function createRollbackPr(version: GithubDeliveryVersion) {
@@ -2022,7 +2066,7 @@ export function AgentWorkspace({
       setGithubVersions(refreshed);
     } catch (error) {
       setGithubVersionsError(
-        error instanceof Error ? error.message : "回退版本失败。",
+        error instanceof Error ? error.message : t("agentWorkspace.errors.rollbackVersion"),
       );
     } finally {
       setRollbackCommit("");
@@ -2080,11 +2124,16 @@ export function AgentWorkspace({
     ) return null;
     return {
       ...feedbackCasePreview,
-      tag: feedbackCasePreview.kind === "good" ? "Good case" : "Bad case",
+      tag: t(
+        feedbackCasePreview.kind === "good"
+          ? "agentWorkspace.goodCase"
+          : "agentWorkspace.badCase",
+      ),
     };
-  }, [feedbackCasePreview, selectedAgent?.runtimeId, selectedAgentAppName]);
+  }, [feedbackCasePreview, selectedAgent?.runtimeId, selectedAgentAppName, t]);
+  const defaultCases = useMemo(() => buildDefaultCases(t), [t]);
   const cases = useMemo(() => {
-    if (!selectedAgent?.runtimeId) return DEFAULT_CASES;
+    if (!selectedAgent?.runtimeId) return defaultCases;
     if (!previewCase) return feedbackCases;
     return [
       previewCase,
@@ -2093,7 +2142,7 @@ export function AgentWorkspace({
         (!item.messageId || item.messageId !== previewCase.messageId)
       ),
     ];
-  }, [feedbackCases, previewCase, selectedAgent?.runtimeId]);
+  }, [defaultCases, feedbackCases, previewCase, selectedAgent?.runtimeId]);
   const visibleCases = cases.filter((item) => {
     if (item.kind !== caseFilter) return false;
     const source: AgentFeedbackSource = item.source === "auto" ? "auto" : "user";
@@ -2177,8 +2226,8 @@ export function AgentWorkspace({
       items.length === 0
     ) return;
     const confirmText = items.length === 1
-      ? "确定删除这条反馈案例？原始聊天记录不会被删除。"
-      : `确定删除选中的 ${items.length} 条反馈案例？原始聊天记录不会被删除。`;
+      ? t("agentWorkspace.deleteOneCaseConfirm")
+      : t("agentWorkspace.deleteCasesConfirm", { count: items.length });
     if (!window.confirm(confirmText)) return;
     const ids = items.map((item) => item.id);
     const idSet = new Set(ids);
@@ -2320,16 +2369,21 @@ export function AgentWorkspace({
     setDeleteConfirmTarget({
       kind: "selection",
       title: runtimeCount === 1 && draftCount === 0
-        ? "删除 Agent？"
+        ? t("agentWorkspace.deleteAgentTitle")
         : runtimeCount === 0 && draftCount === 1
-          ? "删除草稿？"
-          : "删除所选项目？",
+          ? t("myAgents.deleteDraftTitle")
+          : t("agentWorkspace.deleteSelectedTitle"),
       description: runtimeCount === 1 && draftCount === 0
-        ? `"${selectedDeletableAgents[0].label}" 对应的云端 Runtime 将被永久删除，此操作不可撤销。`
+        ? t("agentWorkspace.deleteAgentDescription", { name: selectedDeletableAgents[0].label })
         : runtimeCount === 0 && draftCount === 1
-          ? `"${selectedDeletableDrafts[0].draft.name || "未命名 Agent"}" 将从本地草稿中删除。`
-          : `将删除选中的 ${selectedDeleteCount} 个项目。${runtimeCount > 0 ? `${runtimeCount} 个云端 Runtime 将被永久删除，此操作不可撤销。` : "草稿删除后无法恢复。"}`,
-      confirmLabel: runtimeCount === 0 && draftCount === 1 ? "删除草稿" : "删除所选",
+          ? t("agentWorkspace.deleteDraftDescription", { name: selectedDeletableDrafts[0].draft.name || t("agentSelector.unnamedAgent") })
+          : t("agentWorkspace.deleteSelectionDescription", {
+              count: selectedDeleteCount,
+              warning: runtimeCount > 0
+                ? t("agentWorkspace.runtimeDeletionWarning", { count: runtimeCount })
+                : t("agentWorkspace.draftDeletionWarning"),
+            }),
+      confirmLabel: runtimeCount === 0 && draftCount === 1 ? t("myAgents.deleteDraft") : t("agentWorkspace.deleteSelected"),
       agents: selectedDeletableAgents,
       drafts: selectedDeletableDrafts,
     });
@@ -2343,7 +2397,7 @@ export function AgentWorkspace({
       if (deleteConfirmTarget.kind === "selection") {
         const { agents: agentsToDelete, drafts: draftsToDelete } = deleteConfirmTarget;
         if (agentsToDelete.length > 0) {
-          if (!onDeleteAgents) throw new Error("当前页面不支持删除已部署 Agent。");
+          if (!onDeleteAgents) throw new Error(t("agentWorkspace.errors.deleteDeployedUnsupported"));
           await onDeleteAgents(agentsToDelete);
         }
         if (draftsToDelete.length > 0) {
@@ -2359,11 +2413,11 @@ export function AgentWorkspace({
           setActiveDraftId("");
         }
       } else if (deleteConfirmTarget.kind === "agent") {
-        if (!onDeleteAgents) throw new Error("当前页面不支持删除已部署 Agent。");
+        if (!onDeleteAgents) throw new Error(t("agentWorkspace.errors.deleteDeployedUnsupported"));
         await onDeleteAgents([deleteConfirmTarget.agent]);
         if (activeAgentId === deleteConfirmTarget.agent.id) setActiveAgentId("");
       } else {
-        if (!onDeleteDrafts) throw new Error("当前页面不支持删除草稿。");
+        if (!onDeleteDrafts) throw new Error(t("agentWorkspace.errors.deleteDraftUnsupported"));
         onDeleteDrafts([deleteConfirmTarget.draft]);
         if (activeDraftId === deleteConfirmTarget.draft.id) setActiveDraftId("");
       }
@@ -2380,22 +2434,22 @@ export function AgentWorkspace({
     setDeleteError("");
     setDeleteConfirmTarget({
       kind: "agent",
-      title: "删除 Agent？",
-      description: `"${agent.label}" 对应的云端 Runtime 将被永久删除，此操作不可撤销。`,
-      confirmLabel: "删除 Agent",
+      title: t("agentWorkspace.deleteAgentTitle"),
+      description: t("agentWorkspace.deleteAgentDescription", { name: agent.label }),
+      confirmLabel: t("agentWorkspace.deleteAgent"),
       agent,
     });
   };
 
   const deleteSingleDraft = (draftItem: WorkspaceAgentDraft) => {
     if (!onDeleteDrafts || deletingAgents) return;
-    const name = draftItem.draft.name || "未命名 Agent";
+    const name = draftItem.draft.name || t("agentSelector.unnamedAgent");
     setDeleteError("");
     setDeleteConfirmTarget({
       kind: "draft",
-      title: "删除草稿？",
-      description: `"${name}" 将从本地草稿中删除。`,
-      confirmLabel: "删除草稿",
+      title: t("myAgents.deleteDraftTitle"),
+      description: t("agentWorkspace.deleteDraftDescription", { name }),
+      confirmLabel: t("myAgents.deleteDraft"),
       draft: draftItem,
     });
   };
@@ -2404,7 +2458,7 @@ export function AgentWorkspace({
     const id = `eval-${Date.now()}`;
     const nextGroup: EvaluationGroup = {
       id,
-      name: `新评测组 ${evaluationGroups.length + 1}`,
+      name: t("agentWorkspace.newEvaluationGroupName", { count: evaluationGroups.length + 1 }),
       agentIds: [],
       caseSet: "核心回归集",
       evaluator: "综合质量评估器",
@@ -2422,7 +2476,7 @@ export function AgentWorkspace({
       history: [
         {
           id: `run-${Date.now()}`,
-          createdAt: "刚刚",
+          createdAt: t("agentWorkspace.evaluationDefaults.justNow"),
           score: 86 + (group.history.length % 7),
           status: "completed",
         },
@@ -2434,7 +2488,7 @@ export function AgentWorkspace({
   return (
     <>
     <div className={`aw-root${detailOnly ? " is-detail-only" : ""}`}>
-      <nav className="aw-view-tabs" aria-label="智能体工作台">
+      <nav className="aw-view-tabs" aria-label={t("agentWorkspace.workspace")}>
         <button
           type="button"
           className={view === "library" ? "is-active" : ""}
@@ -2444,7 +2498,7 @@ export function AgentWorkspace({
             setQuery("");
           }}
         >
-          智能体库
+          {t("agentWorkspace.library")}
         </button>
         <button
           type="button"
@@ -2455,7 +2509,7 @@ export function AgentWorkspace({
             setQuery("");
           }}
         >
-          评测
+          {t("agentWorkspace.evaluation")}
         </button>
       </nav>
 
@@ -2467,14 +2521,14 @@ export function AgentWorkspace({
             node?.toggleAttribute("inert", view === "evaluation");
           }}
         >
-        <aside className="aw-sidebar" aria-label={view === "library" ? "智能体列表" : "评测组列表"}>
+        <aside className="aw-sidebar" aria-label={view === "library" ? t("agentWorkspace.agentList") : t("agentWorkspace.evaluationGroupList")}>
           <label className="aw-search">
             <Search aria-hidden />
             <input
               value={query}
               onChange={(event) => setQuery(event.currentTarget.value)}
-              placeholder={view === "library" ? "搜索智能体" : "搜索评测组"}
-              aria-label={view === "library" ? "搜索智能体" : "搜索评测组"}
+              placeholder={view === "library" ? t("myAgents.searchAgents") : t("agentWorkspace.searchEvaluationGroups")}
+              aria-label={view === "library" ? t("myAgents.searchAgents") : t("agentWorkspace.searchEvaluationGroups")}
             />
           </label>
           <button
@@ -2484,21 +2538,21 @@ export function AgentWorkspace({
             disabled={view === "library" && !canCreate}
           >
             <Plus aria-hidden />
-            <span>{view === "library" ? "新建 Agent" : "新建评测组"}</span>
+            <span>{view === "library" ? t("agentWorkspace.newAgent") : t("agentWorkspace.newEvaluationGroup")}</span>
           </button>
           {view === "library" && (onDeleteAgents || onDeleteDrafts) && (
             <div className={`aw-selection-toolbar${selectionMode ? " is-active" : ""}`}>
               {selectionMode ? (
                 <>
                   <span className="aw-selection-count">
-                    已选 {selectedDeleteCount} 个
+                    {t("agentWorkspace.selectedCount", { count: selectedDeleteCount })}
                   </span>
                   <button
                     type="button"
                     onClick={selectAllListedAgents}
                     disabled={deletableItemCount === 0 || deletingAgents}
                   >
-                    全选
+                    {t("agentWorkspace.selectAll")}
                   </button>
                   <button
                     type="button"
@@ -2506,14 +2560,14 @@ export function AgentWorkspace({
                     onClick={() => void deleteSelectedItems()}
                     disabled={selectedDeleteCount === 0 || deletingAgents}
                   >
-                    {deletingAgents ? "删除中…" : "删除所选"}
+                    {deletingAgents ? t("common.deleting") : t("agentWorkspace.deleteSelected")}
                   </button>
                   <button
                     type="button"
                     onClick={clearAgentSelection}
                     disabled={deletingAgents}
                   >
-                    取消
+                    {t("common.cancel")}
                   </button>
                 </>
               ) : (
@@ -2525,7 +2579,7 @@ export function AgentWorkspace({
                   }}
                   disabled={deletableItemCount === 0}
                 >
-                  选择
+                  {t("common.select")}
                 </button>
               )}
             </div>
@@ -2536,7 +2590,7 @@ export function AgentWorkspace({
           <div className="aw-agent-list">
             {view === "evaluation" ? (
               filteredEvaluationGroups.length === 0 ? (
-                <div className="aw-list-empty">没有匹配的评测组</div>
+                <div className="aw-list-empty">{t("agentWorkspace.noMatchingEvaluationGroups")}</div>
               ) : (
                 filteredEvaluationGroups.map((group) => (
                   <button
@@ -2546,24 +2600,24 @@ export function AgentWorkspace({
                     onClick={() => setActiveEvaluationGroupId(group.id)}
                   >
                     <span className="aw-agent-copy aw-eval-group-copy">
-                      <strong>{group.name}</strong>
-                      <small>{group.agentIds.length} 个智能体 · {group.history.length} 次运行</small>
+                      <strong>{evaluationText(group.name, t)}</strong>
+                      <small>{t("agentWorkspace.groupStats", { agents: group.agentIds.length, runs: group.history.length })}</small>
                     </span>
                     <ArrowRight aria-hidden />
                   </button>
                 ))
               )
             ) : loadingAgents && listedAgents.length === 0 && filteredDrafts.length === 0 ? (
-              <div className="aw-list-empty">正在读取云端智能体…</div>
+              <div className="aw-list-empty">{t("agentWorkspace.loadingCloudAgents")}</div>
             ) : agentsError && listedAgents.length === 0 && filteredDrafts.length === 0 ? (
               <div className="aw-list-empty aw-list-error">
                 <span>{agentsError}</span>
                 {onRetryAgents && (
-                  <button type="button" onClick={onRetryAgents}>重试</button>
+                  <button type="button" onClick={onRetryAgents}>{t("common.retry")}</button>
                 )}
               </div>
             ) : listedAgents.length === 0 && filteredDrafts.length === 0 ? (
-              <div className="aw-list-empty">没有匹配的智能体</div>
+              <div className="aw-list-empty">{t("myAgents.noMatchingAgents")}</div>
             ) : (
               <>
                 {filteredDrafts.map((item) => {
@@ -2609,12 +2663,12 @@ export function AgentWorkspace({
                       )}
                       <span className="aw-agent-copy">
                         <span className="aw-agent-name-row">
-                          <strong>{item.draft.name || "未命名 Agent"}</strong>
+                          <strong>{item.draft.name || t("agentSelector.unnamedAgent")}</strong>
                           <span className={`aw-draft-badge${task?.status === "running" ? " is-deploying" : ""}`}>
-                            {task?.status === "running" ? "部署中" : "草稿"}
+                            {task?.status === "running" ? t("myAgents.deploying") : t("myAgents.draft")}
                           </span>
                         </span>
-                        <small>{item.deploymentTarget ? "待更新" : "尚未发布"}</small>
+                        <small>{item.deploymentTarget ? t("agentWorkspace.updatePending") : t("agentWorkspace.notPublished")}</small>
                       </span>
                       <ArrowRight aria-hidden />
                     </button>
@@ -2631,21 +2685,21 @@ export function AgentWorkspace({
                   const canDeleteAgent = agent.canDelete === true;
                   const statusBadge =
                     runtimeTask?.status === "running"
-                      ? { label: "部署中", className: " is-deploying" }
+                      ? { label: t("myAgents.deploying"), className: " is-deploying" }
                     : runtimeTask?.status === "error"
-                      ? { label: "失败", className: " is-error" }
+                      ? { label: t("agentWorkspace.failed"), className: " is-error" }
                       : runtimeTask?.status === "cancelled"
-                        ? { label: "已取消", className: " is-muted" }
+                        ? { label: t("agentWorkspace.cancelled"), className: " is-muted" }
                         : updateDraft
-                          ? { label: "待更新", className: "" }
+                          ? { label: t("agentWorkspace.updatePending"), className: "" }
                           : null;
                 const metaText = runtimeTask?.status === "running"
-                  ? "正在更新部署"
+                  ? t("agentWorkspace.updatingDeployment")
                   : updateDraft
-                    ? "待更新"
+                    ? t("agentWorkspace.updatePending")
                     : agent.remote
-                      ? agent.host || "远程智能体"
-                      : "本地智能体";
+                      ? agent.host || t("agentWorkspace.remoteAgent")
+                      : t("agentWorkspace.localAgent");
                 const agentItemClass = [
                   "aw-agent-item",
                   "aw-agent-item--sortable",
@@ -2764,7 +2818,7 @@ export function AgentWorkspace({
             )}
           </div>
           <div className="aw-list-count">
-            共 {view === "library" ? agents.length + standaloneDraftCount : evaluationGroups.length} 个
+            {t("agentWorkspace.totalCount", { count: view === "library" ? agents.length + standaloneDraftCount : evaluationGroups.length })}
           </div>
         </aside>
 
@@ -2778,11 +2832,11 @@ export function AgentWorkspace({
           />
         ) : view === "evaluation" ? (
           <main className="aw-main aw-empty-selection">
-            <p>未选择评测组</p>
+            <p>{t("agentWorkspace.noEvaluationGroupSelected")}</p>
           </main>
         ) : !selectedAgent && !selectedDraft && !selectedPendingTask ? (
           <main className="aw-main aw-empty-selection">
-            <p>未选择智能体</p>
+            <p>{t("agentWorkspace.noAgentSelected")}</p>
           </main>
         ) : (
           <main className={`aw-main${deploymentInProgress ? " is-deploying" : ""}${detailOnly ? " resource-page" : ""}`}>
@@ -2791,8 +2845,8 @@ export function AgentWorkspace({
                 <div className="aw-detail-loading-card">
                   <span className="loading-gap-spinner" aria-hidden="true" />
                   <span>
-                    <strong>正在加载智能体</strong>
-                    <small>正在读取配置与运行信息…</small>
+                    <strong>{t("agentWorkspace.loadingAgent")}</strong>
+                    <small>{t("agentWorkspace.loadingAgentDescription")}</small>
                   </span>
                 </div>
               </div>
@@ -2802,8 +2856,8 @@ export function AgentWorkspace({
                 <div className="aw-detail-loading-card">
                   <span className="loading-gap-spinner" aria-hidden="true" />
                   <span>
-                    <strong>正在探测接入方式</strong>
-                    <small>正在确认 API Server 与 A2A…</small>
+                    <strong>{t("agentWorkspace.probingIntegration")}</strong>
+                    <small>{t("agentWorkspace.probingIntegrationDescription")}</small>
                   </span>
                 </div>
               </div>
@@ -2811,15 +2865,15 @@ export function AgentWorkspace({
             <ResourceDetailLayout
               className="aw-agent-detail"
               title={selectedName}
-              description={draft.description || (loadingAgentInfo || (detailOnly && !detailAgentInfoResolved) ? "正在读取智能体信息…" : "暂无描述")}
+              description={draft.description || (loadingAgentInfo || (detailOnly && !detailAgentInfoResolved) ? t("agentWorkspace.loadingAgentInfo") : t("common.noDescription"))}
               identitySeed={selectedName}
-              backLabel="返回智能体列表"
+              backLabel={t("agentWorkspace.backToAgentList")}
               onBack={detailOnly ? onBack : undefined}
               meta={(
                 <>
                   {displayCurrentVersion != null && <span className="aw-agent-meta">v{displayCurrentVersion}</span>}
-                  {selectedDraft && <span className="aw-agent-meta">草稿</span>}
-                  {selectedAgentUpdateDraft && <span className="aw-agent-meta">待更新</span>}
+                  {selectedDraft && <span className="aw-agent-meta">{t("myAgents.draft")}</span>}
+                  {selectedAgentUpdateDraft && <span className="aw-agent-meta">{t("agentWorkspace.updatePending")}</span>}
                   {!selectedAgent && !selectedDraft && selectedPendingTask && (
                     <span className="aw-agent-meta">{selectedPendingTask.label}</span>
                   )}
@@ -2841,11 +2895,11 @@ export function AgentWorkspace({
                         if (draftToDelete) deleteSingleDraft(draftToDelete);
                       }}
                       disabled={deletingAgents}
-                      aria-label="删除草稿"
-                      title="删除草稿"
+                      aria-label={t("myAgents.deleteDraft")}
+                      title={t("myAgents.deleteDraft")}
                     >
                       <Trash2 aria-hidden />
-                      <span>删除草稿</span>
+                      <span>{t("myAgents.deleteDraft")}</span>
                     </Button>
                   )}
                   {selectedAgent?.canDelete && (
@@ -2857,11 +2911,11 @@ export function AgentWorkspace({
                       pill={false}
                       onClick={() => void deleteSingleAgent(selectedAgent)}
                       disabled={deletingAgents}
-                      aria-label="删除 Agent"
-                      title="删除 Agent"
+                      aria-label={t("agentWorkspace.deleteAgent")}
+                      title={t("agentWorkspace.deleteAgent")}
                     >
                       <Trash2 aria-hidden />
-                      <span>{deletingAgents ? "删除中…" : "删除 Agent"}</span>
+                      <span>{deletingAgents ? t("common.deleting") : t("agentWorkspace.deleteAgent")}</span>
                     </Button>
                   )}
                 </>
@@ -2892,8 +2946,8 @@ export function AgentWorkspace({
                       className="aw-detail-fetch-alert"
                       color="warning"
                       variant="soft"
-                      title="部分信息暂不可用"
-                      description="当前 Runtime 暂不支持 Studio 详情接口。升级 Runtime 后可查看完整信息。"
+                      title={t("agentWorkspace.partialInfoUnavailable")}
+                      description={t("agentWorkspace.upgradeRuntimeForDetails")}
                     />
                   )}
                   {((detailAgentInfoError && !detailAgentInfoUnsupported) ||
@@ -2902,8 +2956,8 @@ export function AgentWorkspace({
                       className="aw-detail-fetch-alert"
                       color="danger"
                       variant="soft"
-                      title="详情加载失败"
-                      description="暂时无法读取完整的 Agent 或 Runtime 信息，请稍后重试。"
+                      title={t("agentWorkspace.detailLoadFailed")}
+                      description={t("agentWorkspace.detailLoadFailedDescription")}
                       actions={(
                         <Button
                           type="button"
@@ -2913,7 +2967,7 @@ export function AgentWorkspace({
                           pill={false}
                           onClick={() => setDetailReloadToken((value) => value + 1)}
                         >
-                          重试
+                          {t("common.retry")}
                         </Button>
                       )}
                     />
@@ -2931,46 +2985,46 @@ export function AgentWorkspace({
                       >
                         <strong>
                           {selectedUpdateCapability.recoveryStatus === "preparing"
-                            ? "正在后台恢复更新配置"
-                            : "已检测到运行中的智能体，但原发布配置不可恢复"}
+                            ? t("agentWorkspace.restoringUpdateConfig")
+                            : t("agentWorkspace.updateConfigUnavailable")}
                         </strong>
-                        {selectedUpdateCapability.reason && (
-                          <span>{selectedUpdateCapability.reason}</span>
+                        {updateCapabilityReason && (
+                          <span>{updateCapabilityReason}</span>
                         )}
-                        {selectedUpdateCapability.warnings.map((warning) => (
+                        {updateCapabilityWarnings.map((warning) => (
                           <span key={warning}>{warning}</span>
                         ))}
                       </div>
                     )}
                   <section className="aw-deployment-panel aw-settings-card">
                     <div className="aw-section-head">
-                      <div><h3>部署配置</h3><p>配置目标环境与网络访问方式。</p></div>
+                      <div><h3>{t("agentWorkspace.deploymentConfig")}</h3><p>{t("agentWorkspace.deploymentConfigDescription")}</p></div>
                     </div>
                     <dl className="aw-readonly-config">
                       <div>
-                        <dt>运行状态</dt>
+                        <dt>{t("agentWorkspace.runtimeStatus")}</dt>
                         <dd className={runtimeDetail?.status.toLowerCase() === "ready" ? "is-ready" : undefined}>
                           {runtimeDetail?.status.toLowerCase() === "ready" && <span className="aw-status-dot" />}
-                          {runtimeDetail?.status || "读取中…"}
+                          {runtimeDetail?.status || t("agentWorkspace.loading")}
                         </dd>
                       </div>
                       <div>
-                        <dt>部署区域</dt>
-                        <dd>{runtimeDetail?.region || selectedAgent?.region || deploymentTask?.region || "暂未提供"}</dd>
+                        <dt>{t("agentWorkspace.deploymentRegion")}</dt>
+                        <dd>{runtimeDetail?.region || selectedAgent?.region || deploymentTask?.region || t("agentWorkspace.notAvailable")}</dd>
                       </div>
                       <div>
-                        <dt>网络访问</dt>
+                        <dt>{t("agentWorkspace.networkAccess")}</dt>
                         <dd>
                           {runtimeDetail?.networkTypes.length
                             ? runtimeDetail.networkTypes.join(" / ")
-                            : "暂未提供"}
+                            : t("agentWorkspace.notAvailable")}
                         </dd>
                       </div>
                     </dl>
                   </section>
                   <section className="aw-canvas-card">
                     <div className="aw-card-head">
-                      <strong>执行流程</strong>
+                      <strong>{t("agentWorkspace.executionFlow")}</strong>
                     </div>
                     <div className="aw-canvas">
                       <AgentBuildCanvas
@@ -2989,99 +3043,99 @@ export function AgentWorkspace({
                   </section>
                   <section className="aw-details-card">
                     <div className="aw-card-head">
-                      <strong>详细信息</strong>
+                      <strong>{t("agentWorkspace.details")}</strong>
                     </div>
                     <dl className="aw-facts">
                       <div>
-                        <dt>模型</dt>
+                        <dt>{t("agentSelector.model")}</dt>
                         <dd>
                           {modelNameFromRuntime(selectedAgentInfo?.model) ||
                             draft.modelName ||
-                            "暂未提供"}
+                            t("agentWorkspace.notAvailable")}
                         </dd>
                       </div>
-                      <div><dt>智能体数量</dt><dd>{selectedAgentInfo?.graph ? countNodes(selectedAgentInfo.graph) : countDraftNodes(draft)}</dd></div>
+                      <div><dt>{t("agentWorkspace.agentCountLabel")}</dt><dd>{selectedAgentInfo?.graph ? countNodes(selectedAgentInfo.graph) : countDraftNodes(draft)}</dd></div>
                       <div>
-                        <dt>工具</dt>
+                        <dt>{t("agentSelector.tools")}</dt>
                         <dd className="aw-fact-badges">
-                          {toolNames.length ? toolNames.map((name) => <span key={name}>{name}</span>) : "暂无"}
+                          {toolNames.length ? toolNames.map((name) => <span key={name}>{name}</span>) : t("agentWorkspace.none")}
                         </dd>
                       </div>
                       <div>
-                        <dt>技能</dt>
+                        <dt>{t("agentSelector.skills")}</dt>
                         <dd className="aw-fact-badges">
                           {skillNames === null
-                            ? "暂不支持预览"
+                            ? t("agentSelector.previewUnsupported")
                             : skillNames.length
                               ? skillNames.map((name) => <span key={name}>{name}</span>)
-                              : "暂无"}
+                              : t("agentWorkspace.none")}
                         </dd>
                       </div>
                       <div>
-                        <dt>当前版本</dt>
+                        <dt>{t("systemInfo.currentVersion")}</dt>
                         <dd>
                           {displayCurrentVersion != null
                             ? `v${displayCurrentVersion}`
-                            : "暂未提供"}
+                            : t("agentWorkspace.notAvailable")}
                         </dd>
                       </div>
                       <div>
-                        <dt>状态</dt>
+                        <dt>{t("agentSelector.status")}</dt>
                         <dd>
                           {selectedDraft
-                            ? "草稿"
+                            ? t("myAgents.draft")
                             : deploymentTask?.status === "error"
-                              ? "部署失败"
+                              ? t("agentWorkspace.deploymentFailed")
                               : deploymentTask?.status === "cancelled"
-                                ? "已取消"
+                                ? t("agentWorkspace.cancelled")
                                 : selectedAgentUpdateDraft
-                                  ? "待更新"
-                                  : <><span className="aw-status-dot" />可用</>}
+                                  ? t("agentWorkspace.updatePending")
+                                  : <><span className="aw-status-dot" />{t("skillCenter.status.available")}</>}
                         </dd>
                       </div>
                     </dl>
                   </section>
                   <section
                     className="aw-sidecar-panel aw-settings-card"
-                    aria-label="已选择的优化项"
+                    aria-label={t("agentWorkspace.selectedOptimizations")}
                   >
                     <div className="aw-section-head">
                       <div>
-                        <h3>已选择的优化项</h3>
-                        <p>发布时选择的智能体优化项。</p>
+                        <h3>{t("agentWorkspace.selectedOptimizations")}</h3>
+                        <p>{t("agentWorkspace.selectedOptimizationsDescription")}</p>
                       </div>
                     </div>
                     <dl className="aw-readonly-config">
                       <div>
-                        <dt>配置状态</dt>
+                        <dt>{t("agentWorkspace.configurationStatus")}</dt>
                         <dd className={publishedHarnessSidecar?.enabled ? "is-ready" : undefined}>
                           {publishedHarnessSidecar
                             ? publishedHarnessSidecar.enabled
-                              ? <><span className="aw-status-dot" />已启用</>
-                              : "未启用"
-                            : "未记录"}
+                              ? <><span className="aw-status-dot" />{t("skillCenter.status.enabled")}</>
+                              : t("skillCenter.status.inactive")
+                            : t("agentWorkspace.notRecorded")}
                         </dd>
                       </div>
                       <div>
-                        <dt>优化场景</dt>
+                        <dt>{t("agentWorkspace.optimizationProfile")}</dt>
                         <dd>
                           {publishedHarnessSidecar
                             ? harnessSidecarProfileLabel(publishedHarnessSidecar.profile)
-                            : "旧版本未保存此配置"}
+                            : t("agentWorkspace.legacyConfigMissing")}
                         </dd>
                       </div>
                       <div>
-                        <dt>已选优化项</dt>
+                        <dt>{t("agentWorkspace.selectedOptimizations")}</dt>
                         <dd className="aw-fact-badges">
                           {!publishedHarnessSidecar
-                            ? "旧版本未保存此配置"
+                            ? t("agentWorkspace.legacyConfigMissing")
                             : publishedHarnessOptimizations.length
                               ? publishedHarnessOptimizations.map((optionId) => (
                                   <span key={optionId}>
                                     {harnessSidecarOptionLabel(optionId)}
                                   </span>
                                 ))
-                              : "未选择"}
+                              : t("agentWorkspace.noneSelected")}
                         </dd>
                       </div>
                     </dl>
@@ -3094,11 +3148,11 @@ export function AgentWorkspace({
                   aria-busy={agentUsageLoading}
                 >
                   <div className="aw-usage-intro">
-                    <h3>使用概览</h3>
+                    <h3>{t("agentWorkspace.usageOverview")}</h3>
                   </div>
                   {agentUsageLoading && !selectedAgentUsage && (
                     <div className="aw-usage-state" role="status" aria-live="polite">
-                      <TextShimmer as="span">正在加载用量统计</TextShimmer>
+                      <TextShimmer as="span">{t("agentWorkspace.loadingUsage")}</TextShimmer>
                     </div>
                   )}
                   {agentUsageError && (
@@ -3108,7 +3162,7 @@ export function AgentWorkspace({
                         type="button"
                         onClick={() => setAgentUsageReloadToken((value) => value + 1)}
                       >
-                        重试
+                        {t("common.retry")}
                       </button>
                     </div>
                   )}
@@ -3117,57 +3171,57 @@ export function AgentWorkspace({
                     !selectedAgentUsage &&
                     !selectedAgentAppName && (
                       <div className="aw-usage-state">
-                        当前 Runtime 未返回可用的 Agent 应用名称，暂时无法读取用量。
+                        {t("agentWorkspace.usageUnavailable")}
                       </div>
                     )}
                   {selectedAgentUsage && (
                     <>
-                      <dl className="aw-usage-summary" aria-label="Agent 用量摘要">
+                      <dl className="aw-usage-summary" aria-label={t("agentWorkspace.usageSummary")}>
                         <div>
-                          <dt>总调用次数</dt>
-                          <dd>{selectedAgentUsage.totalInvocations.toLocaleString("zh-CN")}</dd>
+                          <dt>{t("agentWorkspace.totalCalls")}</dt>
+                          <dd>{selectedAgentUsage.totalInvocations.toLocaleString(i18n.resolvedLanguage ?? i18n.language)}</dd>
                         </div>
                         <div>
-                          <dt>使用用户数</dt>
-                          <dd>{selectedAgentUsage.totalUsers.toLocaleString("zh-CN")}</dd>
+                          <dt>{t("agentWorkspace.userCount")}</dt>
+                          <dd>{selectedAgentUsage.totalUsers.toLocaleString(i18n.resolvedLanguage ?? i18n.language)}</dd>
                         </div>
                       </dl>
                       <div className="aw-usage-users-head">
-                        <h3>用户明细</h3>
+                        <h3>{t("agentWorkspace.userDetails")}</h3>
                         {agentUsageLoading && (
                           <TextShimmer as="span" role="status" aria-live="polite">
-                            正在刷新
+                            {t("agentWorkspace.refreshing")}
                           </TextShimmer>
                         )}
                       </div>
                       {selectedAgentUsage.users.length === 0 ? (
                         <div className="aw-usage-state">
-                          暂无使用记录。用户成功调用后将在这里显示。
+                          {t("agentWorkspace.noUsage")}
                         </div>
                       ) : (
                         <div className="aw-usage-table-wrap">
                           <table className="aw-usage-table">
-                            <caption>当前 Agent 的使用用户列表</caption>
+                            <caption>{t("agentWorkspace.usageUserList")}</caption>
                             <thead>
                               <tr>
-                                <th scope="col">用户</th>
-                                <th scope="col">调用次数</th>
-                                <th scope="col">最近使用</th>
+                                <th scope="col">{t("agentWorkspace.user")}</th>
+                                <th scope="col">{t("agentWorkspace.callCount")}</th>
+                                <th scope="col">{t("agentWorkspace.lastUsed")}</th>
                               </tr>
                             </thead>
                             <tbody>
                               {selectedAgentUsage.users.map((user) => (
                                 <tr key={user.userId}>
                                   <td>
-                                    <strong>{user.displayName || user.userId || "未知用户"}</strong>
+                                    <strong>{user.displayName || user.userId || t("agentWorkspace.unknownUser")}</strong>
                                     {user.displayName && user.userId && (
                                       <small title={user.userId}>{user.userId}</small>
                                     )}
                                   </td>
-                                  <td>{user.invocationCount.toLocaleString("zh-CN")}</td>
+                                  <td>{user.invocationCount.toLocaleString(i18n.resolvedLanguage ?? i18n.language)}</td>
                                   <td>
                                     <time dateTime={user.lastUsedAt}>
-                                      {formatAgentUsageTime(user.lastUsedAt)}
+                                      {formatAgentUsageTime(user.lastUsedAt, i18n.resolvedLanguage ?? i18n.language, t)}
                                     </time>
                                   </td>
                                 </tr>
@@ -3177,16 +3231,16 @@ export function AgentWorkspace({
                         </div>
                       )}
                       {selectedAgentUsage.totalPages > 1 && (
-                        <nav className="aw-usage-pagination" aria-label="用量用户列表分页">
+                        <nav className="aw-usage-pagination" aria-label={t("agentWorkspace.usagePagination")}>
                           <button
                             type="button"
                             disabled={agentUsageLoading || selectedAgentUsage.page <= 1}
                             onClick={() => setAgentUsagePage((page) => Math.max(1, page - 1))}
                           >
-                            上一页
+                            {t("common.previousPage")}
                           </button>
                           <span aria-live="polite">
-                            第 {selectedAgentUsage.page} / {selectedAgentUsage.totalPages} 页
+                            {t("agentWorkspace.pageOf", { page: selectedAgentUsage.page, total: selectedAgentUsage.totalPages })}
                           </span>
                           <button
                             type="button"
@@ -3196,7 +3250,7 @@ export function AgentWorkspace({
                             }
                             onClick={() => setAgentUsagePage((page) => page + 1)}
                           >
-                            下一页
+                            {t("common.nextPage")}
                           </button>
                         </nav>
                       )}
@@ -3207,15 +3261,15 @@ export function AgentWorkspace({
               {section === "versions" && (
                 <section className="aw-version-stack">
                   <div className="aw-integration-intro">
-                    <h3>GitHub 交付版本</h3>
+                    <h3>{t("agentWorkspace.githubVersions")}</h3>
                     <p>
                       {githubVersions?.cicd?.enabled
-                        ? "展示当前 Runtime 绑定 GitHub 后由 Studio 记录的版本与 PR。"
-                        : "未挂载 GitHub 时仅展示 Studio 当前版本。"}
+                        ? t("agentWorkspace.githubVersionsDescription")
+                        : t("agentWorkspace.currentVersionOnly")}
                     </p>
                   </div>
                   {githubVersionsLoading && (
-                    <div className="aw-case-empty">正在读取版本…</div>
+                    <div className="aw-case-empty">{t("agentWorkspace.loadingVersions")}</div>
                   )}
                   {githubVersionsError && (
                     <div className="aw-integration-error" role="alert">
@@ -3229,7 +3283,7 @@ export function AgentWorkspace({
                             ).then(setGithubVersions)
                           }
                         >
-                          重试
+                          {t("common.retry")}
                         </button>
                       )}
                     </div>
@@ -3248,11 +3302,12 @@ export function AgentWorkspace({
                           !== githubVersions.currentCommitSha && (
                           <div className="aw-integration-notice" role="status">
                             <span>
-                              源码已合入 main，Runtime 仍在
+                              {t("agentWorkspace.sourceMergedRuntimeStill")}
                               {githubRuntimeStatusLabel(
                                 githubVersions.latestSourceRuntimeStatus,
+                                t,
                               )}
-                              ；当前线上版本保持在最近一次发布成功的版本。
+                              {t("agentWorkspace.currentProductionVersionHint")}
                             </span>
                           </div>
                         )}
@@ -3272,30 +3327,30 @@ export function AgentWorkspace({
                               key={`${version.version}-${commitSha || version.createdAt}`}
                             >
                               <div>
-                                <strong>{githubVersionTitle(version)}</strong>
-                                <small>{version.createdAt || "暂无时间"}</small>
+                                <strong>{githubVersionTitle(version, t)}</strong>
+                                <small>{version.createdAt || t("agentWorkspace.noTime")}</small>
                               </div>
                               <div>
-                                <span>PR 链接</span>
+                                <span>{t("agentWorkspace.prLink")}</span>
                                 {version.pullRequestUrl ? (
                                   <a
                                     href={version.pullRequestUrl}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                   >
-                                    查看 PR
+                                    {t("agentWorkspace.viewPr")}
                                   </a>
                                 ) : (
-                                  <em>无 PR</em>
+                                  <em>{t("agentWorkspace.noPr")}</em>
                                 )}
                               </div>
                               <div>
-                                <span>提交人</span>
+                                <span>{t("agentWorkspace.author")}</span>
                                 <em>{version.author || "Studio"}</em>
                               </div>
                               <div>
-                                <span>发布状态</span>
-                                <em>{githubRuntimeStatusLabel(runtimeStatus)}</em>
+                                <span>{t("agentWorkspace.publishStatus")}</span>
+                                <em>{githubRuntimeStatusLabel(runtimeStatus, t)}</em>
                               </div>
                               <div className="aw-version-actions">
                                 <button
@@ -3306,8 +3361,8 @@ export function AgentWorkspace({
                                   onClick={() => void createRollbackPr(version)}
                                 >
                                   {rollbackCommit === commitSha
-                                    ? "回退中…"
-                                    : "回退到此版本"}
+                                    ? t("agentWorkspace.rollingBack")
+                                    : t("agentWorkspace.rollbackToVersion")}
                                 </button>
                                 {version.workflowRunUrl && (
                                   <a
@@ -3315,7 +3370,7 @@ export function AgentWorkspace({
                                     target="_blank"
                                     rel="noopener noreferrer"
                                   >
-                                    查看发布
+                                    {t("agentWorkspace.viewRelease")}
                                   </a>
                                 )}
                               </div>
@@ -3328,11 +3383,11 @@ export function AgentWorkspace({
                             <strong>
                               {displayCurrentVersion != null
                                 ? `v${displayCurrentVersion}`
-                                : "暂无版本"}
+                                : t("agentWorkspace.noVersion")}
                             </strong>
-                            <small>{runtimeDetail?.updatedAt || "暂无时间"}</small>
+                            <small>{runtimeDetail?.updatedAt || t("agentWorkspace.noTime")}</small>
                           </div>
-                          <p>未挂载 GitHub 时仅展示 Studio 当前版本。</p>
+                          <p>{t("agentWorkspace.currentVersionOnly")}</p>
                         </article>
                       )}
                     </div>
@@ -3342,8 +3397,8 @@ export function AgentWorkspace({
               {section === "integrations" && (
                 <div className="aw-integration-stack">
                   <div className="aw-integration-intro">
-                    <h3>接入方式</h3>
-                    <p>仅展示当前 Runtime 可确认的公开协议与地址。</p>
+                    <h3>{t("agentWorkspace.integrationMethods")}</h3>
+                    <p>{t("agentWorkspace.integrationDescription")}</p>
                   </div>
                   {integrationError && (
                     <div className="aw-integration-error" role="alert">
@@ -3352,7 +3407,7 @@ export function AgentWorkspace({
                         type="button"
                         onClick={() => setIntegrationReloadToken((value) => value + 1)}
                       >
-                        重试
+                        {t("common.retry")}
                       </button>
                     </div>
                   )}
@@ -3363,7 +3418,7 @@ export function AgentWorkspace({
                           integrationProtocol === "a2a" ? " is-a2a" : ""
                         }`}
                         role="tablist"
-                        aria-label="接入协议"
+                        aria-label={t("agentWorkspace.integrationProtocol")}
                       >
                         <span
                           className="aw-integration-protocol-slider"
@@ -3421,21 +3476,21 @@ export function AgentWorkspace({
                                 : "",
                             },
                             {
-                              label: "发现接口",
+                              label: t("agentWorkspace.discoveryEndpoint"),
                               value: apiIntegrationAvailable
                                 ? endpointPath(runtimeEndpoint, "/list-apps")
                                 : "",
                             },
                             {
-                              label: "调用接口",
+                              label: t("agentWorkspace.invocationEndpoint"),
                               value: apiIntegrationAvailable
                                 ? endpointPath(runtimeEndpoint, "/run_sse")
                                 : "",
                             },
                             {
-                              label: "鉴权方式",
+                              label: t("agentWorkspace.authentication"),
                               value: apiIntegrationAvailable
-                                ? authTypeLabel(runtimeDetail?.authType)
+                                ? authTypeLabel(runtimeDetail?.authType, t)
                                 : "",
                             },
                             {
@@ -3481,13 +3536,13 @@ export function AgentWorkspace({
                                 : "",
                             },
                             {
-                              label: "调用地址",
+                              label: t("agentWorkspace.invocationUrl"),
                               value: a2aEndpoint,
                             },
                             {
-                              label: "鉴权方式",
+                              label: t("agentWorkspace.authentication"),
                               value: a2aIntegrationAvailable
-                                ? authTypeLabel(runtimeDetail?.authType)
+                                ? authTypeLabel(runtimeDetail?.authType, t)
                                 : "",
                             },
                             {
@@ -3533,7 +3588,7 @@ export function AgentWorkspace({
                             onClick={() => focusCaseKind(kind)}
                           >
                             <strong>{count}</strong>
-                            <span>{kind === "good" ? "Good cases" : "Bad cases"}</span>
+                            <span>{t(kind === "good" ? "agentWorkspace.goodCases" : "agentWorkspace.badCases")}</span>
                           </button>
                         );
                       })}
@@ -3541,7 +3596,7 @@ export function AgentWorkspace({
                   )}
                   <div className="aw-case-filter-bar">
                     <div className="aw-case-filter-stack">
-                      <div className="aw-case-filters" aria-label="案例结果筛选">
+                      <div className="aw-case-filters" aria-label={t("agentWorkspace.caseResultFilter")}>
                         {(["good", "bad"] as const).map((filter) => (
                           <button
                             type="button"
@@ -3550,11 +3605,11 @@ export function AgentWorkspace({
                             aria-pressed={caseFilter === filter}
                             onClick={() => setCaseFilter(filter)}
                           >
-                            {filter === "good" ? "Good case" : "Bad case"}
+                            {t(filter === "good" ? "agentWorkspace.goodCase" : "agentWorkspace.badCase")}
                           </button>
                         ))}
                       </div>
-                      <div className="aw-case-source-filters" aria-label="回流方式筛选">
+                      <div className="aw-case-source-filters" aria-label={t("agentWorkspace.feedbackSourceFilter")}>
                         {(["auto", "user"] as const).map((source) => (
                           <button
                             type="button"
@@ -3563,7 +3618,7 @@ export function AgentWorkspace({
                             aria-pressed={caseSourceFilter === source}
                             onClick={() => setCaseSourceFilter(source)}
                           >
-                            {source === "auto" ? "自动回流" : "手动回流"}
+                            {source === "auto" ? t("agentWorkspace.automaticFeedback") : t("agentWorkspace.manualFeedback")}
                           </button>
                         ))}
                       </div>
@@ -3574,8 +3629,8 @@ export function AgentWorkspace({
                         type="search"
                         value={caseQuery}
                         onChange={(event) => setCaseQuery(event.currentTarget.value)}
-                        placeholder="搜索用户输入、期望行为或标签"
-                        aria-label="搜索评测案例"
+                        placeholder={t("agentWorkspace.searchCasesPlaceholder")}
+                        aria-label={t("agentWorkspace.searchCases")}
                       />
                     </label>
                   </div>
@@ -3584,14 +3639,14 @@ export function AgentWorkspace({
                       {caseSelectionMode ? (
                         <>
                           <span className="aw-selection-count">
-                            已选 {selectedVisibleCases.length} 条
+                            {t("agentWorkspace.selectedCaseCount", { count: selectedVisibleCases.length })}
                           </span>
                           <button
                             type="button"
                             onClick={selectAllVisibleCases}
                             disabled={visibleCases.length === 0 || deletingCases}
                           >
-                            全选当前
+                            {t("agentWorkspace.selectAllVisible")}
                           </button>
                           <button
                             type="button"
@@ -3599,14 +3654,14 @@ export function AgentWorkspace({
                             onClick={() => void deleteCases(selectedVisibleCases)}
                             disabled={selectedVisibleCases.length === 0 || deletingCases}
                           >
-                            {deletingCases ? "删除中…" : "删除所选"}
+                            {deletingCases ? t("common.deleting") : t("agentWorkspace.deleteSelected")}
                           </button>
                           <button
                             type="button"
                             onClick={clearCaseSelection}
                             disabled={deletingCases}
                           >
-                            取消
+                            {t("common.cancel")}
                           </button>
                         </>
                       ) : (
@@ -3618,7 +3673,7 @@ export function AgentWorkspace({
                           }}
                           disabled={visibleCases.length === 0 || deletingCases}
                         >
-                          选择案例
+                          {t("agentWorkspace.selectCases")}
                         </button>
                       )}
                     </div>
@@ -3651,13 +3706,13 @@ export function AgentWorkspace({
               {section === "optimizations" && (
                 <section className="aw-optimizations">
                   <div className="aw-optimization-intro">
-                    <h3>优化项</h3>
-                    <p>根据评测结果汇总需要优先处理的改进建议。</p>
+                    <h3>{t("agentWorkspace.optimizations")}</h3>
+                    <p>{t("agentWorkspace.optimizationsDescription")}</p>
                   </div>
                   {optimizationsLoading ? (
                     <div className="aw-optimization-state" role="status">
                       <span className="loading-gap-spinner" aria-hidden="true" />
-                      <span>正在读取优化项</span>
+                      <span>{t("agentWorkspace.loadingOptimizations")}</span>
                     </div>
                   ) : optimizationsError ? (
                     <div className="aw-optimization-state is-error" role="alert">
@@ -3666,14 +3721,14 @@ export function AgentWorkspace({
                         type="button"
                         onClick={() => setOptimizationsReloadToken((value) => value + 1)}
                       >
-                        重试
+                        {t("common.retry")}
                       </button>
                     </div>
                   ) : optimizationGroups.length > 0 ? (
                     <OptimizationTable groups={optimizationGroups} />
                   ) : (
                     <div className="aw-optimization-state">
-                      暂无优化项，自动评测完成后会在这里生成建议。
+                      {t("agentWorkspace.noOptimizations")}
                     </div>
                   )}
                 </section>
@@ -3688,7 +3743,7 @@ export function AgentWorkspace({
                     onClick={() => onTalkAgent?.(selectedAgent)}
                   >
                     <MessageCircle aria-hidden />
-                    <span>去对话</span>
+                    <span>{t("agentWorkspace.chat")}</span>
                   </button>
                 )}
                 <span
@@ -3716,12 +3771,12 @@ export function AgentWorkspace({
                           className="loading-gap-spinner aw-update-spinner"
                           aria-hidden="true"
                         />
-                        <span>准备中</span>
+                        <span>{t("agentWorkspace.preparing")}</span>
                       </>
                     ) : selectedDraft || selectedAgentUpdateDraft ? (
-                      "继续编辑"
+                      t("agentWorkspace.continueEditing")
                     ) : (
-                      "更新"
+                      t("agentWorkspace.update")
                     )}
                   </button>
                   {updateBlockedReason && (
@@ -3740,7 +3795,7 @@ export function AgentWorkspace({
                 ) : null,
               }))}
               activeSectionKey={section}
-              navigationLabel="智能体详情"
+              navigationLabel={t("agentWorkspace.agentDetails")}
               onSectionChange={setSection}
             />
           </main>
@@ -3748,7 +3803,7 @@ export function AgentWorkspace({
         </div>
         {view === "evaluation" && (
           <div className="aw-evaluation-glass" role="status">
-            <span>敬请期待</span>
+            <span>{t("agentWorkspace.comingSoon")}</span>
           </div>
         )}
       </div>
@@ -3758,8 +3813,8 @@ export function AgentWorkspace({
         variant="danger"
         title={deleteConfirmTarget.title}
         description={deleteConfirmTarget.description}
-        confirmLabel={deletingAgents ? "删除中..." : deleteConfirmTarget.confirmLabel}
-        closeLabel="关闭删除确认"
+        confirmLabel={deletingAgents ? t("common.deleting") : deleteConfirmTarget.confirmLabel}
+        closeLabel={t("agentWorkspace.closeDeleteConfirmation")}
         busy={deletingAgents}
         onCancel={() => setDeleteConfirmTarget(null)}
         onConfirm={() => void confirmDeleteTarget()}
@@ -3770,14 +3825,15 @@ export function AgentWorkspace({
 }
 
 function OptimizationTable({ groups }: { groups: OptimizationGroup[] }) {
+  const { t } = useTranslation("ui");
   return (
     <div className="aw-optimization-table-wrap">
       <table className="aw-optimization-table">
         <thead>
           <tr>
-            <th scope="col">修复优先级</th>
-            <th scope="col">建议优化模块</th>
-            <th scope="col">优化建议和理由</th>
+            <th scope="col">{t("agentWorkspace.fixPriority")}</th>
+            <th scope="col">{t("agentWorkspace.suggestedModule")}</th>
+            <th scope="col">{t("agentWorkspace.suggestionAndReason")}</th>
           </tr>
         </thead>
         <tbody>
@@ -3787,12 +3843,12 @@ function OptimizationTable({ groups }: { groups: OptimizationGroup[] }) {
             >
               <td>
                 <span className={`aw-priority is-${group.priority}`}>
-                  {optimizationPriorityLabel(group.priority)}
+                  {optimizationPriorityLabel(group.priority, t)}
                 </span>
               </td>
               <td>
                 <span className="aw-optimization-module">
-                  {optimizationModuleLabel(group)}
+                  {optimizationModuleLabel(group, t)}
                 </span>
               </td>
               <td>
@@ -3867,27 +3923,28 @@ function CaseTable({
   onDeleteCase?: (item: AgentCase) => void;
   onRetry?: () => void;
 }) {
+  const { t, i18n } = useTranslation("ui");
   return (
     <div className="aw-case-table">
       <div className="aw-case-row aw-case-row-head">
-        <span>用户输入</span>
-        <span>Agent 输出</span>
-        <span>评分</span>
-        <span>评分理由</span>
-        <span className="aw-case-action-head">操作</span>
+        <span>{t("agentWorkspace.userInput")}</span>
+        <span>{t("agentWorkspace.agentOutput")}</span>
+        <span>{t("agentWorkspace.score")}</span>
+        <span>{t("agentWorkspace.scoreReason")}</span>
+        <span className="aw-case-action-head">{t("skillCenter.actions")}</span>
       </div>
       {loading ? (
-        <div className="aw-case-empty">正在读取 AgentKit 评测集…</div>
+        <div className="aw-case-empty">{t("agentWorkspace.loadingEvaluationSet")}</div>
       ) : error ? (
         <div className="aw-case-empty aw-case-error">
           <span>{error}</span>
-          {onRetry && <button type="button" onClick={onRetry}>重试</button>}
+          {onRetry && <button type="button" onClick={onRetry}>{t("common.retry")}</button>}
         </div>
       ) : notice ? (
         <div className="aw-case-empty">{notice}</div>
       ) : cases.length === 0 ? (
         <div className="aw-case-empty">
-          {runtimeBacked ? "暂无用户反馈案例" : "没有匹配的案例"}
+          {runtimeBacked ? t("agentWorkspace.noFeedbackCases") : t("agentWorkspace.noMatchingCases")}
         </div>
       ) : (
         cases.map((item) => {
@@ -3931,7 +3988,7 @@ function CaseTable({
                 }
               }}
             >
-              <div className="aw-case-text aw-case-cell" data-label="用户输入">
+              <div className="aw-case-text aw-case-cell" data-label={t("agentWorkspace.userInput")}>
                 <span className="aw-case-title-line">
                   {selectionMode && canDeleteCase && (
                     <span
@@ -3939,10 +3996,10 @@ function CaseTable({
                       aria-hidden="true"
                     />
                   )}
-                  <strong title={item.input}>{item.input || "无用户输入"}</strong>
+                  <strong title={item.input}>{item.input || t("agentWorkspace.noUserInput")}</strong>
                 </span>
-                {showComment && <small title={item.comment}>备注：{item.comment}</small>}
-                <small className="aw-case-time">{formatCaseTime(item.createdAt)}</small>
+                {showComment && <small title={item.comment}>{t("agentWorkspace.note")}{item.comment}</small>}
+                <small className="aw-case-time">{formatCaseTime(item.createdAt, i18n.resolvedLanguage ?? i18n.language, t)}</small>
                 {(item.userId || item.sessionId) && (
                   <small title={[item.userId, item.sessionId].filter(Boolean).join(" · ")}>
                     {[item.userId, item.sessionId].filter(Boolean).join(" · ")}
@@ -3951,17 +4008,17 @@ function CaseTable({
               </div>
               <div
                 className={`aw-case-output aw-case-cell${isExpanded ? " is-expanded" : ""}`}
-                data-label="Agent 输出"
+                data-label={t("agentWorkspace.agentOutput")}
               >
                 <p className="aw-case-output-preview" title={item.output}>
-                  {item.output || "无可见回复"}
+                  {item.output || t("agentWorkspace.noVisibleResponse")}
                 </p>
                 {item.referenceOutput && (
                   <small
                     className="aw-case-output-preview"
                     title={item.referenceOutput}
                   >
-                    Reference: {item.referenceOutput}
+                    {t("agentWorkspace.reference")}: {item.referenceOutput}
                   </small>
                 )}
                 {canExpand && (
@@ -3973,22 +4030,22 @@ function CaseTable({
                       onToggleExpanded?.(item.id);
                     }}
                   >
-                    {isExpanded ? "收起" : "展开"}
+                    {isExpanded ? t("common.collapse") : t("common.expand")}
                   </button>
                 )}
               </div>
-              <div className="aw-case-score aw-case-cell" data-label="评分">
-                {formatCaseScore(item)}
+              <div className="aw-case-score aw-case-cell" data-label={t("agentWorkspace.score")}>
+                {formatCaseScore(item, t)}
               </div>
               <div
                 className={`aw-case-reason aw-case-cell${isExpanded ? " is-expanded" : ""}`}
-                data-label="评分理由"
+                data-label={t("agentWorkspace.scoreReason")}
               >
                 <p title={item.reason || undefined}>
                   {item.reason || "—"}
                 </p>
               </div>
-              <div className="aw-case-actions aw-case-cell" data-label="操作">
+              <div className="aw-case-actions aw-case-cell" data-label={t("skillCenter.actions")}>
                 {canDeleteCase && (
                   <button
                     type="button"
@@ -3998,8 +4055,8 @@ function CaseTable({
                       onDeleteCase?.(item);
                     }}
                     disabled={deleting}
-                    title="删除反馈案例"
-                    aria-label="删除反馈案例"
+                    title={t("agentWorkspace.deleteFeedbackCase")}
+                    aria-label={t("agentWorkspace.deleteFeedbackCase")}
                   >
                     <DeleteCaseIcon />
                   </button>
@@ -4026,6 +4083,7 @@ function EvaluationWorkspace({
   onChange: (group: EvaluationGroup) => void;
   onRun: (group: EvaluationGroup) => void;
 }) {
+  const { t } = useTranslation("ui");
   const [section, setSection] = useState<EvaluationSection>("config");
   const selectedAgents = group.agentIds
     .map((id) => agents.find((agent) => agent.id === id))
@@ -4056,45 +4114,45 @@ function EvaluationWorkspace({
     <main className="aw-main">
       <div className="aw-eval-head">
         <div>
-          <div className="aw-agent-title-row"><h2>{group.name}</h2><span>评测组</span></div>
-          <p>{selectedAgents.length} 个参评智能体 · {group.caseSet} · {group.history.length} 次运行</p>
+          <div className="aw-agent-title-row"><h2>{evaluationText(group.name, t)}</h2><span>{t("agentWorkspace.evaluationGroup")}</span></div>
+          <p>{t("agentWorkspace.evaluationGroupStats", { agents: selectedAgents.length, caseSet: evaluationText(group.caseSet, t), runs: group.history.length })}</p>
         </div>
         <button type="button" className="aw-run" onClick={() => onRun(group)} disabled>
-          <FlaskConical aria-hidden />开始评测
+          <FlaskConical aria-hidden />{t("agentWorkspace.startEvaluation")}
         </button>
       </div>
-      <nav className="aw-agent-tabs" aria-label="评测组详情">
-        <button type="button" className={section === "config" ? "is-active" : ""} aria-pressed={section === "config"} onClick={() => setSection("config")} disabled>评测配置</button>
-        <button type="button" className={section === "history" ? "is-active" : ""} aria-pressed={section === "history"} onClick={() => setSection("history")} disabled>历史结果</button>
+      <nav className="aw-agent-tabs" aria-label={t("agentWorkspace.evaluationGroupDetails")}>
+        <button type="button" className={section === "config" ? "is-active" : ""} aria-pressed={section === "config"} onClick={() => setSection("config")} disabled>{t("agentWorkspace.evaluationConfig")}</button>
+        <button type="button" className={section === "history" ? "is-active" : ""} aria-pressed={section === "history"} onClick={() => setSection("history")} disabled>{t("agentWorkspace.historyResults")}</button>
       </nav>
       <div className="aw-content">
         {section === "config" ? (
           <div className="aw-eval-setup">
             <section className="aw-eval-block">
-              <div className="aw-card-head"><strong>参评智能体</strong><span>已选择 {selectedAgents.length} 个</span></div>
+              <div className="aw-card-head"><strong>{t("agentWorkspace.participatingAgents")}</strong><span>{t("agentWorkspace.selectedCount", { count: selectedAgents.length })}</span></div>
               <div className="aw-eval-agent-grid">
                 {agents.map((agent) => (
                   <label key={agent.id}>
                     <input type="checkbox" checked={group.agentIds.includes(agent.id)} onChange={() => toggleAgent(agent.id)} />
-                    <span><strong>{agent.label}</strong><small>{agent.remote ? "远程" : "本地"}</small></span>
+                    <span><strong>{agent.label}</strong><small>{agent.remote ? t("agentWorkspace.remote") : t("agentWorkspace.local")}</small></span>
                   </label>
                 ))}
               </div>
             </section>
             <div className="aw-eval-setting-grid">
               <section className="aw-eval-block">
-                <div className="aw-card-head"><strong>评测资源</strong></div>
+                <div className="aw-card-head"><strong>{t("agentWorkspace.evaluationResources")}</strong></div>
                 <div className="aw-eval-fields">
-                  <label><span>评测集</span><select value={group.caseSet} onChange={(event) => onChange({ ...group, caseSet: event.currentTarget.value })}><option>核心回归集</option><option>安全边界集</option><option>工具调用集</option></select><small>{cases.length} 条案例</small></label>
-                  <label><span>评估器</span><select value={group.evaluator} onChange={(event) => onChange({ ...group, evaluator: event.currentTarget.value })}><option>综合质量评估器</option><option>事实一致性评估器</option><option>工具调用评估器</option></select></label>
-                  <label><span>并发数</span><select value={group.concurrency} onChange={(event) => onChange({ ...group, concurrency: event.currentTarget.value })}><option value="2">2</option><option value="4">4</option><option value="8">8</option></select></label>
+                  <label><span>{t("agentWorkspace.evaluationSet")}</span><select value={group.caseSet} onChange={(event) => onChange({ ...group, caseSet: event.currentTarget.value })}><option value="核心回归集">{t("agentWorkspace.evaluationDefaults.coreSet")}</option><option value="安全边界集">{t("agentWorkspace.evaluationDefaults.safetySet")}</option><option value="工具调用集">{t("agentWorkspace.evaluationDefaults.toolSet")}</option></select><small>{t("agentWorkspace.caseCount", { count: cases.length })}</small></label>
+                  <label><span>{t("agentWorkspace.evaluator")}</span><select value={group.evaluator} onChange={(event) => onChange({ ...group, evaluator: event.currentTarget.value })}><option value="综合质量评估器">{t("agentWorkspace.evaluationDefaults.qualityEvaluator")}</option><option value="事实一致性评估器">{t("agentWorkspace.evaluationDefaults.factualEvaluator")}</option><option value="工具调用评估器">{t("agentWorkspace.evaluationDefaults.toolEvaluator")}</option></select></label>
+                  <label><span>{t("agentWorkspace.concurrency")}</span><select value={group.concurrency} onChange={(event) => onChange({ ...group, concurrency: event.currentTarget.value })}><option value="2">2</option><option value="4">4</option><option value="8">8</option></select></label>
                 </div>
               </section>
               <section className="aw-eval-block">
-                <div className="aw-card-head"><strong>评测指标</strong><span>已选择 {group.metrics.length} 项</span></div>
+                <div className="aw-card-head"><strong>{t("agentWorkspace.evaluationMetrics")}</strong><span>{t("agentWorkspace.selectedMetricCount", { count: group.metrics.length })}</span></div>
                 <div className="aw-metric-list">
                   {metrics.map((metric) => (
-                    <label key={metric}><input type="checkbox" checked={group.metrics.includes(metric)} onChange={() => toggleMetric(metric)} /><span>{metric}</span></label>
+                    <label key={metric}><input type="checkbox" checked={group.metrics.includes(metric)} onChange={() => toggleMetric(metric)} /><span>{evaluationText(metric, t)}</span></label>
                   ))}
                 </div>
               </section>
@@ -4102,16 +4160,16 @@ function EvaluationWorkspace({
           </div>
         ) : (
           <section className="aw-eval-history">
-            <div className="aw-section-head"><div><h3>历史结果</h3><p>查看该评测组历次运行的总体表现。</p></div></div>
+            <div className="aw-section-head"><div><h3>{t("agentWorkspace.historyResults")}</h3><p>{t("agentWorkspace.historyDescription")}</p></div></div>
             {group.history.length === 0 ? (
-              <div className="aw-results-empty"><strong>暂无历史结果</strong><span>完成首次评测后，结果会出现在这里。</span></div>
+              <div className="aw-results-empty"><strong>{t("agentWorkspace.noHistory")}</strong><span>{t("agentWorkspace.noHistoryDescription")}</span></div>
             ) : (
               <div className="aw-history-list">
                 {group.history.map((run, index) => (
                   <button type="button" key={run.id}>
-                    <span><strong>评测运行 #{group.history.length - index}</strong><small>{run.createdAt} · {selectedAgents.length} 个智能体</small></span>
-                    <span className="aw-history-score"><strong>{run.score}</strong><small>综合得分</small></span>
-                    <span className="aw-complete"><Check />已完成</span>
+                    <span><strong>{t("agentWorkspace.evaluationRun", { index: group.history.length - index })}</strong><small>{t("agentWorkspace.evaluationRunMeta", { time: evaluationText(run.createdAt, t), agents: selectedAgents.length })}</small></span>
+                    <span className="aw-history-score"><strong>{run.score}</strong><small>{t("agentWorkspace.overallScore")}</small></span>
+                    <span className="aw-complete"><Check />{t("agentWorkspace.completed")}</span>
                     <ArrowRight aria-hidden />
                   </button>
                 ))}

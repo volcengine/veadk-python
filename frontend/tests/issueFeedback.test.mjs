@@ -28,9 +28,11 @@ const iconSource = read("../src/ui/icons/FeedbackIcons.tsx");
 const sidebarSource = read("../src/ui/Sidebar.tsx");
 const platformSource = read("../src/ui/PlatformFeedback.tsx");
 const platformStyles = read("../src/ui/PlatformFeedback.css");
+const feedbackEnglish = JSON.parse(read("../src/i18n/resources/en-US/feedback.json"));
+const feedbackChinese = JSON.parse(read("../src/i18n/resources/zh-CN/feedback.json"));
 
 test("assistant action row opens issue feedback for the selected turn", () => {
-  assert.match(appSource, /aria-label="问题反馈"/);
+  assert.match(appSource, /aria-label=\{t\("feedback\.reportIssue"\)\}/);
   assert.match(appSource, /<IssueFeedbackIcon/);
   assert.match(appSource, /setIssueFeedbackTarget\(\{/);
   assert.match(appSource, /input: previousUserTurnText\(turns, i\)/);
@@ -40,17 +42,13 @@ test("assistant action row opens issue feedback for the selected turn", () => {
 });
 
 test("dialog explains privacy, supports issue chips, and shows success feedback", () => {
-  assert.match(
-    dialogSource,
-    /您的对话数据将会上报到 AgentKit 团队，请注意隐私保护。/,
-  );
-  assert.match(dialogSource, /执行速度慢/);
-  assert.match(dialogSource, /运行崩溃/);
-  assert.match(dialogSource, /工具调用失败/);
-  assert.match(dialogSource, /aria-pressed=\{selectedIssues\.has\(issue\.value\)\}/);
+  assert.match(dialogSource, /useTranslation\("feedback"\)/);
+  assert.match(dialogSource, /t\("dialog\.privacy"\)/);
+  assert.match(dialogSource, /t\(`dialog\.issues\.\$\{issue\}`\)/);
+  assert.match(dialogSource, /aria-pressed=\{selectedIssues\.has\(issue\)\}/);
   assert.match(dialogSource, /<textarea/);
   assert.match(dialogSource, /role="alert"/);
-  assert.match(dialogSource, /上报成功，感谢您的反馈/);
+  assert.match(dialogSource, /t\("success\.description"\)/);
   assert.doesNotMatch(dialogSource, /navigator\.clipboard/);
   assert.doesNotMatch(dialogSource, /Trace ID/);
   assert.match(
@@ -85,10 +83,7 @@ test("remote runtime trace 404 explains that tracing must be enabled", () => {
   assert.match(clientSource, /if \(ep\.runtimeId\)/);
   assert.match(clientSource, /\/web\/runtime-trace/);
   assert.match(clientSource, /String\(Math\.round\(endTimeMs\)\)/);
-  assert.match(
-    clientSource,
-    /该 Agent 暂未开启链路观测，请到控制台打开后使用。/,
-  );
+  assert.match(clientSource, /adkT\("client\.traceDisabled"\)/);
 });
 
 test("trace loading state is centered in the drawer content area", () => {
@@ -102,24 +97,27 @@ test("trace loading state is centered in the drawer content area", () => {
 test("sidebar opens a platform feedback page with suggested issue pills", () => {
   assert.match(sidebarSource, /className="sidebar-footer"/);
   assert.match(sidebarSource, /onIssueFeedback/);
-  assert.match(sidebarSource, /系统信息[\s\S]*?问题反馈[\s\S]*?退出登录/);
+  assert.match(
+    sidebarSource,
+    /account\.systemInfo[\s\S]*?account\.language[\s\S]*?account\.issueFeedback[\s\S]*?account\.logout/,
+  );
   assert.doesNotMatch(sidebarSource, /AgentKitPromoCard/);
   assert.doesNotMatch(sidebarSource, /className="sidebar-cronjobs-beta"/);
   assert.match(appSource, /initialModule=\{issueFeedbackModuleForPage\(platformFeedbackOrigin\)\}/);
   assert.match(appSource, /source: "platform"/);
   assert.match(appSource, /module: feedback\.module/);
   assert.match(appSource, /contextTurns\.flatMap\(issueFeedbackToolCalls\)/);
-  assert.match(platformSource, /<h1>问题反馈<\/h1>/);
-  assert.match(platformSource, /所属模块/);
-  assert.match(platformSource, /module === option\.value/);
+  assert.match(platformSource, /useTranslation\("feedback"\)/);
+  assert.match(platformSource, /<h1>\{t\("title"\)\}<\/h1>/);
+  assert.match(platformSource, /t\("page\.module"\)/);
+  assert.match(platformSource, /module === option/);
   assert.doesNotMatch(platformSource, /请简要说明您遇到的问题/);
   assert.doesNotMatch(platformSource, /const \[problem, setProblem\]/);
-  assert.match(platformSource, /页面加载慢/);
-  assert.match(platformSource, /功能无法使用/);
-  assert.match(platformSource, /快捷补充/);
-  assert.match(platformSource, /问题描述推荐/);
-  assert.match(platformSource, /您的数据将会上报到 AgentKit 团队，请注意隐私保护。/);
-  assert.match(platformSource, /上报成功，感谢您的反馈/);
+  assert.match(platformSource, /t\(`page\.issues\.\$\{issue\}`\)/);
+  assert.match(platformSource, /t\("page\.quickAdd"\)/);
+  assert.match(platformSource, /t\("page\.suggestionsLabel"\)/);
+  assert.match(platformSource, /t\("page\.privacy"\)/);
+  assert.match(platformSource, /t\("success\.description"\)/);
   assert.doesNotMatch(platformSource, /navigator\.clipboard/);
   assert.doesNotMatch(platformSource, /Trace ID/);
   assert.match(platformStyles, /color:\s*hsl\(var\(--destructive\)\)/);
@@ -130,4 +128,19 @@ test("sidebar opens a platform feedback page with suggested issue pills", () => 
     platformStyles,
     /\.platform-feedback-form,\s*\.platform-feedback-success\s*\{\s*width:/,
   );
+});
+
+test("feedback catalogs preserve the complete Chinese experience and provide English", () => {
+  assert.equal(feedbackChinese.title, "问题反馈");
+  assert.equal(feedbackChinese.dialog.issues.slow, "执行速度慢");
+  assert.equal(feedbackChinese.page.issues.feature_unavailable, "功能无法使用");
+  assert.equal(feedbackChinese.page.quickAdd, "快捷补充");
+  assert.equal(
+    feedbackChinese.dialog.privacy,
+    "您的对话数据将会上报到 AgentKit 团队，请注意隐私保护。",
+  );
+  assert.equal(feedbackChinese.success.title, "上报成功，感谢您的反馈");
+  assert.equal(feedbackEnglish.title, "Report an issue");
+  assert.equal(feedbackEnglish.dialog.issues.tool_error, "Tool call failed");
+  assert.equal(feedbackEnglish.page.suggestionsLabel, "Suggested descriptions");
 });

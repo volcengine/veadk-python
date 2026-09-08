@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import type { TFunction } from "i18next";
+import { useTranslation } from "react-i18next";
 import { ExternalLink, Globe, Loader2, MessageSquare } from "lucide-react";
 import { search, type SearchResult, type SearchSource } from "../adk/search";
 import type { AgentInfo } from "../adk/client";
@@ -47,16 +49,17 @@ export function SearchButton({
   active?: boolean;
   onClick: () => void;
 }) {
+  const { t } = useTranslation("workspaceTools");
   return (
     <button
       className={`new-chat${active ? " is-active" : ""}`}
       onClick={onClick}
-      aria-label="搜索"
+      aria-label={t("search.nav")}
       aria-current={active ? "page" : undefined}
-      title="搜索"
+      title={t("search.nav")}
     >
       <SidebarSearchIcon className="icon" />
-      <span className="sidebar-nav-label">搜索</span>
+      <span className="sidebar-nav-label">{t("search.nav")}</span>
     </button>
   );
 }
@@ -73,42 +76,48 @@ function sourceOptions(
   appId: string,
   agentInfo: AgentInfo | null,
   capabilitiesLoading: boolean,
+  t: TFunction,
 ): SourceOption[] {
   const hasAgent = Boolean(appId);
   const mounted = new Set(agentInfo?.searchSources ?? []);
   const unavailable = (label: string) => !hasAgent
-    ? "请选择 Agent"
+    ? t("search.selectAgent")
     : capabilitiesLoading
-      ? "正在检测 Agent 能力"
-      : `当前 Agent 未挂载${label}`;
+      ? t("search.checkingCapabilities")
+      : t("search.notMounted", { label });
   return [
-    { id: "session", label: "会话", ready: hasAgent, unavailableLabel: "请选择 Agent" },
+    {
+      id: "session",
+      label: t("search.sources.session"),
+      ready: hasAgent,
+      unavailableLabel: t("search.selectAgent"),
+    },
     {
       id: "web",
-      label: "网络",
+      label: t("search.sources.web"),
       ready: hasAgent && mounted.has("web"),
-      description: "通过 web_search 工具检索",
-      unavailableLabel: unavailable(" web_search 工具"),
+      description: t("search.webDescription"),
+      unavailableLabel: unavailable(" web_search"),
     },
     {
       id: "knowledge",
-      label: "知识库",
+      label: t("search.sources.knowledge"),
       ready: hasAgent && mounted.has("knowledge"),
-      unavailableLabel: unavailable("知识库"),
+      unavailableLabel: unavailable(t("search.sources.knowledge")),
     },
     {
       id: "memory",
-      label: "长期记忆",
+      label: t("search.sources.memory"),
       ready: hasAgent && mounted.has("memory"),
-      unavailableLabel: unavailable("长期记忆"),
+      unavailableLabel: unavailable(t("search.sources.memory")),
     },
   ];
 }
 
-function searchBackendLabel(backend: string): string {
+function searchBackendLabel(backend: string, t: TFunction): string {
   const labels: Record<string, string> = {
     context_search: "Context Search",
-    local: "本地",
+    local: t("search.backendLocal"),
     mem0: "Mem0",
     milvus: "Milvus",
     opensearch: "OpenSearch",
@@ -120,9 +129,9 @@ function searchBackendLabel(backend: string): string {
   return labels[backend.toLowerCase()] ?? backend;
 }
 
-function fmt(ts?: number): string {
+function fmt(ts: number | undefined, locale: string): string {
   if (!ts) return "";
-  return new Date(ts * 1000).toLocaleString("zh-CN", {
+  return new Date(ts * 1000).toLocaleString(locale, {
     timeZone: "Asia/Shanghai",
     month: "2-digit",
     day: "2-digit",
@@ -149,6 +158,8 @@ export function SearchView({
   agentLabel,
   onOpenSession,
 }: SearchViewProps) {
+  const { t, i18n } = useTranslation("workspaceTools");
+  const locale = i18n.resolvedLanguage || i18n.language;
   const [source, setSource] = useState<SearchSource>("session");
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -158,7 +169,7 @@ export function SearchView({
   const [sourceMenuOpen, setSourceMenuOpen] = useState(false);
   const reqRef = useRef(0);
   const sourcePickerRef = useRef<HTMLDivElement>(null);
-  const sources = sourceOptions(appId, agentInfo, capabilitiesLoading);
+  const sources = sourceOptions(appId, agentInfo, capabilitiesLoading, t);
   const selectedSource = sources.find((item) => item.id === source);
   const retrievalComponent =
     source === "knowledge"
@@ -206,7 +217,7 @@ export function SearchView({
       outcome = await search(src, qq, { userId, appId });
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
-      outcome = { results: [], note: `搜索失败：${message}` };
+      outcome = { results: [], note: t("search.failed", { message }) };
     }
     if (id !== reqRef.current) return; // superseded by a newer search
     setResults(outcome.results);
@@ -236,16 +247,20 @@ export function SearchView({
 
   const ready = Boolean(selectedSource?.ready);
   const placeholder = !appId
-    ? "请先选择 Agent"
+    ? t("search.placeholder.selectAgent")
     : source === "web"
-      ? "在网络中检索"
+      ? t("search.placeholder.web")
       : source === "knowledge"
-        ? `在 ${retrievalComponent?.name ?? "当前 Agent 的知识库"} 中检索`
+        ? t("search.placeholder.knowledge", {
+            name: retrievalComponent?.name ?? t("search.placeholder.knowledgeFallback"),
+          })
         : source === "memory"
-          ? `在 ${retrievalComponent?.name ?? "当前用户的长期记忆"} 中检索`
-          : "在当前 Agent 的会话中检索";
+          ? t("search.placeholder.memory", {
+              name: retrievalComponent?.name ?? t("search.placeholder.memoryFallback"),
+            })
+          : t("search.placeholder.session");
   const selectedBackend = retrievalComponent?.backend
-    ? searchBackendLabel(retrievalComponent.backend)
+    ? searchBackendLabel(retrievalComponent.backend, t)
     : "";
 
   return (
@@ -255,17 +270,19 @@ export function SearchView({
           <button
             className="search-source-picker"
             type="button"
-            aria-label={`搜索类型：${selectedSource?.label ?? "未选择"}`}
+            aria-label={t("search.sourceTypeAria", {
+              label: selectedSource?.label ?? t("search.notSelected"),
+            })}
             aria-haspopup="listbox"
             aria-expanded={sourceMenuOpen}
             onClick={() => setSourceMenuOpen((open) => !open)}
           >
-            <span>{selectedSource?.label ?? "搜索类型"}</span>
+            <span>{selectedSource?.label ?? t("search.sourceType")}</span>
             {selectedBackend && <small>{selectedBackend}</small>}
             <SourceChevron open={sourceMenuOpen} />
           </button>
           {sourceMenuOpen && (
-            <div className="search-source-menu" role="listbox" aria-label="选择搜索类型">
+            <div className="search-source-menu" role="listbox" aria-label={t("search.selectSource")}>
               {sources.map((option) => {
                 const component =
                   option.id === "knowledge"
@@ -282,7 +299,7 @@ export function SearchView({
                 const detail = component
                   ? [
                       component.name,
-                      component.backend ? searchBackendLabel(component.backend) : "",
+                      component.backend ? searchBackendLabel(component.backend, t) : "",
                     ]
                       .filter(Boolean)
                       .join(" · ")
@@ -325,7 +342,7 @@ export function SearchView({
           className="search-go"
           onClick={() => void doSearch(query, source)}
           disabled={!query.trim() || busy}
-          aria-label="搜索"
+          aria-label={t("search.nav")}
         >
           {busy ? <Loader2 className="icon spin" /> : <SearchGlyph className="icon" />}
         </button>
@@ -335,27 +352,35 @@ export function SearchView({
         {!ready ? (
           <div className="search-empty">
             {!appId
-              ? "选择一个 Agent 后，即可检索会话、网络及其挂载的数据源。"
+              ? t("search.noAgentHint")
               : capabilitiesLoading
-                ? "正在读取当前 Agent 的检索能力…"
-                : (selectedSource?.unavailableLabel ?? "当前 Agent 未挂载该数据源")}
+                ? t("search.loadingCapabilities")
+                : (selectedSource?.unavailableLabel ?? t("search.sourceUnavailable"))}
           </div>
         ) : !searched ? (
           <div className="search-empty">
             {source === "web"
-              ? "输入关键词后回车或点击按钮，通过 web_search 工具检索。"
+              ? t("search.instructions.web")
               : source === "knowledge"
-                ? "输入问题，检索当前 Agent 挂载的知识库。"
+                ? t("search.instructions.knowledge")
                 : source === "memory"
-                  ? "输入线索，检索当前用户跨会话保存的长期记忆。"
-                  : "输入关键词后回车或点击按钮，搜索当前 Agent 的会话。"}
+                  ? t("search.instructions.memory")
+                  : t("search.instructions.session")}
           </div>
         ) : busy ? null : note ? (
           <div className="search-empty">{note}</div>
         ) : results.length === 0 && searched ? (
-          <div className="search-empty">未找到匹配「{query.trim()}」的结果。</div>
+          <div className="search-empty">{t("search.noResults", { query: query.trim() })}</div>
         ) : (
-          results.map((r, i) => <ResultRow key={i} result={r} agentLabel={agentLabel} onOpen={onOpenSession} />)
+          results.map((r, index) => (
+            <ResultRow
+              key={index}
+              result={r}
+              agentLabel={agentLabel}
+              onOpen={onOpenSession}
+              locale={locale}
+            />
+          ))
         )}
       </div>
     </div>
@@ -367,11 +392,14 @@ function ResultRow({
   result,
   agentLabel,
   onOpen,
+  locale,
 }: {
   result: SearchResult;
   agentLabel: (id: string) => string;
   onOpen: (appId: string, sessionId: string) => void;
+  locale: string;
 }) {
+  const { t } = useTranslation("workspaceTools");
   switch (result.type) {
     case "session":
       return (
@@ -382,7 +410,7 @@ function ResultRow({
               <span className="search-result-title">{result.title}</span>
               <span className="search-result-meta">
                 {agentLabel(result.appId)}
-                {result.ts ? ` · ${fmt(result.ts)}` : ""}
+                {result.ts ? ` · ${fmt(result.ts, locale)}` : ""}
               </span>
             </div>
             <div className="search-result-snippet">{result.snippet}</div>
@@ -416,10 +444,10 @@ function ResultRow({
           <RetrievalResultIcon source="knowledge" />
           <div className="search-result-body">
             <div className="search-result-head">
-              <span className="search-result-title">知识片段 {result.index + 1}</span>
+              <span className="search-result-title">{t("search.knowledgeFragment", { index: result.index + 1 })}</span>
               <span className="search-result-meta">
                 {result.sourceName}
-                {result.sourceType ? ` · ${searchBackendLabel(result.sourceType)}` : ""}
+                {result.sourceType ? ` · ${searchBackendLabel(result.sourceType, t)}` : ""}
               </span>
             </div>
             <div className="search-result-snippet search-result-snippet-expanded">
@@ -434,11 +462,11 @@ function ResultRow({
           <RetrievalResultIcon source="memory" />
           <div className="search-result-body">
             <div className="search-result-head">
-              <span className="search-result-title">记忆片段 {result.index + 1}</span>
+              <span className="search-result-title">{t("search.memoryFragment", { index: result.index + 1 })}</span>
               <span className="search-result-meta">
                 {result.sourceName}
-                {result.sourceType ? ` · ${searchBackendLabel(result.sourceType)}` : ""}
-                {result.ts ? ` · ${fmt(result.ts)}` : ""}
+                {result.sourceType ? ` · ${searchBackendLabel(result.sourceType, t)}` : ""}
+                {result.ts ? ` · ${fmt(result.ts, locale)}` : ""}
               </span>
             </div>
             <div className="search-result-snippet search-result-snippet-expanded">

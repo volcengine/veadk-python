@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 export interface SkillConfigOption {
   value: string;
@@ -39,9 +40,11 @@ export function SkillConfigSelect({
   disabled = false,
   allowCustom = false,
   required = false,
-  placeholder = "请选择",
+  placeholder,
   error,
 }: SkillConfigSelectProps) {
+  const { t } = useTranslation("skills");
+  const effectivePlaceholder = placeholder ?? t("configSelect.placeholder");
   const listboxId = useId();
   const labelId = useId();
   const errorId = useId();
@@ -152,7 +155,7 @@ export function SkillConfigSelect({
             aria-required={required}
             aria-invalid={Boolean(error)}
             aria-describedby={error ? errorId : undefined}
-            placeholder={placeholder}
+            placeholder={effectivePlaceholder}
             onChange={(event) => {
               onChange(event.target.value);
               setActiveIndex(0);
@@ -186,7 +189,7 @@ export function SkillConfigSelect({
             type="button"
             className="skill-config-select__toggle"
             disabled={disabled || options.length === 0}
-            aria-label={open ? "收起模型选项" : "展开模型选项"}
+            aria-label={open ? t("configSelect.collapseOptions") : t("configSelect.expandOptions")}
             onClick={() => {
               if (open) close();
               else openAt(0);
@@ -221,7 +224,7 @@ export function SkillConfigSelect({
           }}
         >
           <span className={selected ? undefined : "is-placeholder"} title={selected?.label}>
-            {selected?.label || (options.length === 0 ? "暂无可用选项" : placeholder)}
+            {selected?.label || (options.length === 0 ? t("configSelect.noOptions") : effectivePlaceholder)}
           </span>
           <SelectChevronIcon />
         </button>
@@ -236,7 +239,7 @@ export function SkillConfigSelect({
         >
           {visibleOptions.length === 0 ? (
             <div className="skill-config-select__empty" role="status">
-              没有匹配项，可直接使用当前模型 ID
+              {t("configSelect.noMatches")}
             </div>
           ) : null}
           {visibleOptions.map((option, index) => {

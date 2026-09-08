@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { useTranslation } from "react-i18next";
 
 import {
   cancelFeishuBotSetup,
@@ -55,6 +56,7 @@ export function FeishuDeploymentCard({
   onToggle,
   onCredentialsChange,
 }: FeishuDeploymentCardProps) {
+  const { t } = useTranslation("ui");
   const [mode, setMode] = useState<ConfigurationMode>("automatic");
   const [session, setSession] = useState<FeishuBotSetupSession | null>(null);
   const [requesting, setRequesting] = useState(false);
@@ -174,18 +176,18 @@ export function FeishuDeploymentCard({
             <img src={feishuLogo} alt="" />
           </span>
           <span className="fdc-front-copy">
-            <strong>飞书</strong>
+            <strong>{t("feishuDeployment.name")}</strong>
             <small>
               {updating
-                ? "正在启用并更新配置…"
-                : "接收消息并通过飞书机器人回复"}
+                ? t("feishuDeployment.enabling")
+                : t("feishuDeployment.description")}
             </small>
           </span>
         </button>
 
         <section
           className="fdc-face fdc-back"
-          aria-label="飞书配置"
+          aria-label={t("feishuDeployment.configuration")}
           aria-hidden={!enabled}
           onKeyDown={(event) => {
             if (event.key === "Escape") {
@@ -195,7 +197,7 @@ export function FeishuDeploymentCard({
           }}
         >
           <div className="fdc-toolbar">
-            <div className="fdc-tabs" role="tablist" aria-label="飞书配置方式">
+            <div className="fdc-tabs" role="tablist" aria-label={t("feishuDeployment.configurationMode")}>
               <button
                 ref={automaticTabRef}
                 id={automaticTabId}
@@ -207,7 +209,7 @@ export function FeishuDeploymentCard({
                 onClick={() => setMode("automatic")}
                 onKeyDown={handleTabKeyDown}
               >
-                自动配置
+                {t("feishuDeployment.automatic")}
               </button>
               <button
                 ref={manualTabRef}
@@ -220,7 +222,7 @@ export function FeishuDeploymentCard({
                 onClick={() => setMode("manual")}
                 onKeyDown={handleTabKeyDown}
               >
-                手动配置
+                {t("feishuDeployment.manual")}
               </button>
             </div>
             <button
@@ -230,7 +232,7 @@ export function FeishuDeploymentCard({
               disabled={!enabled || updating}
               tabIndex={enabled ? 0 : -1}
             >
-              {updating ? "取消中…" : "取消"}
+              {updating ? t("feishuDeployment.cancelling") : t("common.cancel")}
             </button>
           </div>
 
@@ -247,8 +249,8 @@ export function FeishuDeploymentCard({
                     <FeishuQrCodeIcon />
                   </span>
                   <span className="fdc-state-copy">
-                    <strong>扫码创建</strong>
-                    <small>授权后自动回填凭据</small>
+                    <strong>{t("feishuDeployment.scanToCreate")}</strong>
+                    <small>{t("feishuDeployment.scanDescription")}</small>
                   </span>
                   <button
                     type="button"
@@ -260,10 +262,10 @@ export function FeishuDeploymentCard({
                     {requesting ? (
                       <>
                         <FeishuSpinnerIcon className="fdc-spinner" />
-                        生成中…
+                        {t("common.generating")}
                       </>
                     ) : (
-                      "生成二维码"
+                      t("feishuDeployment.generateQrCode")
                     )}
                   </button>
                 </div>
@@ -273,12 +275,12 @@ export function FeishuDeploymentCard({
                   <div className="fdc-qr-surface">
                     <img
                       src={session.qrCodeDataUrl}
-                      alt="飞书机器人配置二维码"
+                      alt={t("feishuDeployment.qrCodeAlt")}
                     />
                   </div>
                   <div className="fdc-waiting-copy">
-                    <strong>飞书扫码确认</strong>
-                    <small>{formatCountdown(session.expiresAt)} 后失效</small>
+                    <strong>{t("feishuDeployment.scanToConfirm")}</strong>
+                    <small>{t("feishuDeployment.expiresIn", { time: formatCountdown(session.expiresAt) })}</small>
                     <button
                       type="button"
                       className="fdc-secondary"
@@ -287,7 +289,7 @@ export function FeishuDeploymentCard({
                       disabled={!enabled || requesting}
                     >
                       <FeishuRefreshIcon />
-                      刷新
+                      {t("common.refresh")}
                     </button>
                   </div>
                 </div>
@@ -298,15 +300,15 @@ export function FeishuDeploymentCard({
                     <FeishuCheckIcon />
                   </span>
                   <span className="fdc-state-copy">
-                    <strong>机器人已创建</strong>
-                    <small>应用凭据已自动回填</small>
+                    <strong>{t("feishuDeployment.created")}</strong>
+                    <small>{t("feishuDeployment.credentialsFilled")}</small>
                   </span>
                   <button
                     type="button"
                     className="fdc-secondary"
                     onClick={() => setMode("manual")}
                   >
-                    查看
+                    {t("common.view")}
                   </button>
                 </div>
               )}
@@ -316,10 +318,10 @@ export function FeishuDeploymentCard({
                   <span className="fdc-state-copy">
                     <strong>
                       {automaticState === "expired"
-                        ? "二维码已失效"
-                        : "自动配置失败"}
+                        ? t("feishuDeployment.qrCodeExpired")
+                        : t("feishuDeployment.automaticFailed")}
                     </strong>
-                    <small>{session?.message || "请重新生成二维码。"}</small>
+                    <small>{session?.message || t("feishuDeployment.regenerateQrCode")}</small>
                   </span>
                   <button
                     type="button"
@@ -328,7 +330,7 @@ export function FeishuDeploymentCard({
                     onClick={() => void generateQrCode()}
                     disabled={!enabled || requesting}
                   >
-                    重试
+                    {t("common.retry")}
                   </button>
                 </div>
               )}
@@ -386,6 +388,7 @@ function CredentialFields({
   onShowSecretChange,
   onCredentialsChange,
 }: CredentialFieldsProps) {
+  const { t } = useTranslation("ui");
   return (
     <div className="fdc-fields">
       <label>
@@ -395,7 +398,7 @@ function CredentialFields({
           readOnly={readOnly}
           disabled={!interactive}
           placeholder={
-            appIdConfigured ? "已配置，留空沿用" : "cli_xxxxxxxxxxxxxxxx"
+            appIdConfigured ? t("feishuDeployment.configuredPlaceholder") : "cli_xxxxxxxxxxxxxxxx"
           }
           autoComplete="off"
           onChange={(event) =>
@@ -412,14 +415,14 @@ function CredentialFields({
             readOnly={readOnly}
             disabled={!interactive}
             placeholder={
-              appSecretConfigured ? "已配置，留空沿用" : "请输入 App Secret"
+              appSecretConfigured ? t("feishuDeployment.configuredPlaceholder") : t("feishuDeployment.appSecretPlaceholder")
             }
             autoComplete="off"
             onChange={(event) => onCredentialsChange(appId, event.target.value)}
           />
           <button
             type="button"
-            aria-label={showSecret ? "隐藏 App Secret" : "显示 App Secret"}
+            aria-label={showSecret ? t("feishuDeployment.hideSecret") : t("feishuDeployment.showSecret")}
             onClick={() => onShowSecretChange(!showSecret)}
             tabIndex={interactive ? 0 : -1}
           >

@@ -1,19 +1,26 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { Buffer } from "node:buffer";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
-import ts from "typescript";
+import { build } from "esbuild";
 
-const source = readFileSync(
-  new URL("../src/adk/runSseError.ts", import.meta.url),
-  "utf8",
-);
-const { outputText } = ts.transpileModule(source, {
-  compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2020 },
+globalThis.localStorage = { getItem: () => "zh-CN" };
+globalThis.window = { localStorage: globalThis.localStorage };
+
+const result = await build({
+  entryPoints: [fileURLToPath(new URL("../src/adk/runSseError.ts", import.meta.url))],
+  bundle: true,
+  format: "esm",
+  platform: "node",
+  target: "node20",
+  write: false,
 });
-const moduleUrl = `data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`;
+const moduleUrl = `data:text/javascript;base64,${Buffer.from(result.outputFiles[0].contents).toString("base64")}`;
 const { formatRunSseError } = await import(moduleUrl);
 
 const NETWORK_HINT = "提示：请检查共享公网出口等网络配置，然后重试。";
+const MODEL_QUOTA_HINT =
+  "提示：模型当前触发了 TPM/RPM 配额限制，请稍后重试或提高模型配额。";
 
 test("adds memory guidance only when the response says the session is missing", () => {
   const error = "run_sse failed: 404：Session not found: session-1";
@@ -79,6 +86,15 @@ test("does not claim that a model error was caused by public egress", () => {
   assert.ok(formatted.startsWith(`原始响应：${error}`));
   assert.ok(formatted.endsWith(NETWORK_HINT));
   assert.doesNotMatch(formatted, /Runtime 可能|无法访问模型服务|导致/);
+});
+
+test("shows model quota guidance for LiteLLM 429 without a network hint", () => {
+  const error =
+    "litellm.RateLimitError: TPM limit exceeded (HTTP 429) for model endpoint";
+  const formatted = formatRunSseError(error);
+  assert.ok(formatted.startsWith(`原始响应：${error}`));
+  assert.ok(formatted.endsWith(MODEL_QUOTA_HINT));
+  assert.doesNotMatch(formatted, /共享公网出口/);
 });
 
 test("does not duplicate an original-response label provided by HTTP handling", () => {

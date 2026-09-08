@@ -1,0 +1,45 @@
+{
+  "account": {
+    "defaultUser": "User",
+    "shortcuts": "Quick access",
+    "tryCli": "Try AgentKit CLI",
+    "developerResources": "Developer resources",
+    "systemInfo": "System information",
+    "language": "Language",
+    "issueFeedback": "Report an issue",
+    "logout": "Sign out",
+    "roles": {
+      "admin": "Administrator",
+      "developer": "Developer",
+      "user": "User"
+    }
+  },
+  "navigation": {
+    "home": "Back to home",
+    "expand": "Expand sidebar",
+    "collapse": "Collapse sidebar",
+    "label": "Main navigation",
+    "newChat": "New chat",
+    "agents": "Agents",
+    "workspaces": "Workspaces",
+    "library": "Library",
+    "cronjobs": "Cronjob",
+    "automations": "Automations"
+  },
+  "history": {
+    "title": "Chat history",
+    "newConversation": "New conversation",
+    "create": "New chat",
+    "loading": "Loading chat history…",
+    "empty": "No conversations yet",
+    "current": "Current",
+    "manage": "Manage conversation: {{title}}",
+    "more": "More",
+    "delete": "Delete",
+    "loadingMore": "Loading…",
+    "loadMore": "Load more",
+    "evaluatingTitle": "Running automatic evaluation",
+    "evaluating": "Evaluating",
+    "generating": "Generating"
+  }
+}

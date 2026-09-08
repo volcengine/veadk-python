@@ -37,6 +37,7 @@ from veadk.cli.cli_frontend import (
     _anchor_environment_registry,
     _create_runtime_with_description_fallback,
     _is_malformed_runtime_description_error,
+    _mcp_deployment_error_detail,
     _normalize_runtime_description,
     _prepare_managed_sidecar_runtime_envs,
     _run_frontend_server,
@@ -45,6 +46,8 @@ from veadk.cli.cli_frontend import (
     _runtime_environment_tags,
     studio,
 )
+
+
 from veadk.cli.studio_rbac import (
     StudioAccessPolicy,
     StudioPrincipal,
@@ -53,6 +56,24 @@ from veadk.cli.studio_rbac import (
     runtime_attribution,
     runtime_belongs_to,
 )
+
+
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        ("legacy_mcp_name_duplicate", "MCP 名称重复"),
+        ("legacy_mcp_url_duplicate", "MCP 地址重复"),
+        ("legacy_mcp_url_invalid", "MCP 地址无效"),
+        ("legacy_mcp_credential_missing", "缺少可用凭证"),
+        ("legacy_mcp_reuse_source_missing", "无法沿用原 MCP 凭证"),
+        ("legacy_platform_mcp_read_only", "Skill 或 MCP 配置已变化"),
+    ],
+)
+def test_mcp_deployment_error_details_are_actionable(
+    code: str,
+    expected: str,
+) -> None:
+    assert expected in _mcp_deployment_error_detail(code)
 
 
 def test_runtime_environment_tags_round_trip_and_default_legacy_compatibility() -> None:
@@ -3217,6 +3238,8 @@ def test_runtime_update_capability_supports_owned_unmanaged_runtime(
         SimpleNamespace(key="MODEL_AGENT_API_KEY", value="must-not-reach-browser"),
         SimpleNamespace(key="MODEL_AGENT_API_KEY_ID", value="ark-key-id"),
         SimpleNamespace(key="MODEL_AGENT_API_KEY_NAME", value="ark-key-name"),
+        SimpleNamespace(key="AGENTKIT_TOOL_ID", value="t-code-sandbox"),
+        SimpleNamespace(key="AGENTKIT_TOOL_REGION", value="cn-beijing"),
         SimpleNamespace(key="MCP_API_KEY", value="mcp-secret"),
         SimpleNamespace(
             key="MCP_SERVERS_JSON",
@@ -3430,10 +3453,8 @@ def test_runtime_update_capability_supports_owned_unmanaged_runtime(
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
     assert cached_response.status_code == 200
-    assert (
-        cached_response.json()["agent"]["draft"]["mcpTools"][0]["authToken"]
-        == "mcp-secret-rotated"
-    )
+    assert "authToken" not in (cached_response.json()["agent"]["draft"]["mcpTools"][0])
+    assert "mcp-secret-rotated" not in cached_response.text
     payload = response.json()
     assert payload["canUpdate"] is True
     assert payload["recoveryStatus"] == "draft-only"
@@ -3454,6 +3475,8 @@ def test_runtime_update_capability_supports_owned_unmanaged_runtime(
         "envs": [
             {"key": "MODEL_AGENT_API_KEY_ID", "value": "ark-key-id"},
             {"key": "MODEL_AGENT_API_KEY_NAME", "value": "ark-key-name"},
+            {"key": "AGENTKIT_TOOL_ID", "value": "t-code-sandbox"},
+            {"key": "AGENTKIT_TOOL_REGION", "value": "cn-beijing"},
         ],
         "configuredEnvKeys": ["MCP_API_KEY", "PUBLISHED_INVENTORY_TOKEN"],
         "network": {
@@ -3465,14 +3488,16 @@ def test_runtime_update_capability_supports_owned_unmanaged_runtime(
     }
     assert payload["agent"]["appName"] == "selected-agent"
     assert payload["agent"]["draft"]["mcpTools"][0]["name"] == "orders"
-    assert [item["authToken"] for item in payload["agent"]["draft"]["mcpTools"]] == [
-        "mcp-secret",
-        "structured-secret",
+    assert [item["authTokenEnv"] for item in payload["agent"]["draft"]["mcpTools"]] == [
+        "MCP_API_KEY",
+        "PUBLISHED_INVENTORY_TOKEN",
     ]
     assert payload["agent"]["draft"]["selectedSkills"][0]["name"] == ("ops-skill")
     for protected in (
         "must-not-reach-browser",
         "custom-secret",
+        "mcp-secret",
+        "structured-secret",
     ):
         assert protected not in response.text
     assert requested_paths[:2] == [
@@ -4384,10 +4409,11 @@ def test_legacy_runtime_capability_recovers_environment_and_agentkit_toolset(
         "orders",
         "inventory",
     ]
-    assert [item["authToken"] for item in payload["agent"]["draft"]["mcpTools"]] == [
-        "environment-secret",
-        "toolset-secret",
-    ]
+    assert all(
+        "authToken" not in item for item in payload["agent"]["draft"]["mcpTools"]
+    )
+    assert "environment-secret" not in response.text
+    assert "toolset-secret" not in response.text
     assert len(payload["runtime"]["configuredEnvKeys"]) == 2
     assert control_plane_fallback.status_code == 200
     fallback_payload = control_plane_fallback.json()
@@ -4412,9 +4438,12 @@ def test_legacy_runtime_capability_recovers_environment_and_agentkit_toolset(
         }
     ]
     assert any("原样保留" in item for item in fallback_payload["warnings"])
-    assert [
-        item["authToken"] for item in fallback_payload["agent"]["draft"]["mcpTools"]
-    ] == ["environment-secret", "toolset-secret"]
+    assert all(
+        "authToken" not in item
+        for item in fallback_payload["agent"]["draft"]["mcpTools"]
+    )
+    assert "environment-secret" not in control_plane_fallback.text
+    assert "toolset-secret" not in control_plane_fallback.text
 
 
 def test_update_deployment_rejects_missing_stale_or_wrong_base_snapshot(
@@ -4772,8 +4801,8 @@ def test_source_preserving_update_ignores_browser_source_and_keeps_secrets_out_o
         )
         assert capability.status_code == 200
         draft = capability.json()["agent"]["draft"]
-        assert draft["mcpTools"][0]["authToken"] == "retained-secret"
-        draft["mcpTools"][0].pop("authToken")
+        assert "authToken" not in draft["mcpTools"][0]
+        assert "retained-secret" not in capability.text
         draft["instruction"] = "browser-overwrite-must-be-ignored"
         draft["selectedSkills"] = [
             {
@@ -5089,8 +5118,8 @@ def test_source_preserving_sidecar_update_reuses_exact_image_via_sdk(
             "long_run_control": False,
             "mcp_resilience": True,
         }
-        assert draft["mcpTools"][0]["authToken"] == "sidecar-test-secret"
-        draft["mcpTools"][0].pop("authToken")
+        assert "authToken" not in draft["mcpTools"][0]
+        assert "sidecar-test-secret" not in capability.text
         with client.stream(
             "POST",
             "/web/deploy-agentkit",
@@ -5362,8 +5391,9 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
             "FEISHU_APP_SECRET" not in capability.json()["runtime"]["configuredEnvKeys"]
         )
         recovered_mcp = capability.json()["agent"]["draft"]["mcpTools"][0]
-        assert recovered_mcp["authToken"] == "preserved-secret"
+        assert "authToken" not in recovered_mcp
         assert recovered_mcp["authTokenEnv"] == ("MCP_UPDATED_AGENT_ORDERS_AUTH_TOKEN")
+        assert "preserved-secret" not in capability.text
         remove_mcp_credential = (
             provider == "volcengine" and has_resource_tags and evaluation_error is None
         )
@@ -6327,8 +6357,12 @@ def test_sidecar_update_resolves_or_explicitly_reuses_stored_mcp_credentials(
         assert capability.status_code == 200
         assert capability.json()["canUpdate"] is True
         draft = capability.json()["agent"]["draft"]
-        assert draft["mcpTools"][0]["authToken"] == "stored-test-credential"
-        draft["mcpTools"][0].pop("authToken")
+        assert "authToken" not in draft["mcpTools"][0]
+        assert draft["mcpTools"][0]["authTokenEnv"] == (
+            "MCP_STORED_MCP_AGENT_ORDERS_AUTH_TOKEN"
+        )
+        assert "stored-test-credential" not in json.dumps(capability.json())
+        draft["mcpTools"][0].pop("authToken", None)
         draft["mcpTools"][0]["url"] = expected_url
         payload = {
             "name": agent_name,

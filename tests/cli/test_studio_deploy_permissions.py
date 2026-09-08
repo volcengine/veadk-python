@@ -38,7 +38,7 @@ def test_default_studio_deploy_requires_all_reachable_actions() -> None:
     specs = _default_specs()
     actions = [spec.action for spec in specs]
 
-    assert len(actions) == 44
+    assert len(actions) == 45
     assert len(actions) == len(set(actions))
     assert "id:CreateUserPool" in actions
     assert "iam:UpdatePolicy" in actions
@@ -47,6 +47,7 @@ def test_default_studio_deploy_requires_all_reachable_actions() -> None:
     assert "apig:CreateGateway" in actions
     assert "apig:UpdateRoute" in actions
     assert "vefaas:CreateApplication" in actions
+    assert "vefaas:UpdateFunctionResource" in actions
     assert "vefaas:CreateTimer" in actions
     assert "vefaas:ListTriggers" in actions
     assert "vefaas:UpdateTimer" in actions

@@ -66,17 +66,18 @@ test("falls back to a stable brand for empty dynamic title data", () => {
 
 test("wires main and nested Studio surfaces into the browser title", () => {
   assert.match(appSource, /formatStudioDocumentTitle\(\s*siteBranding\.title/);
-  assert.match(appSource, /activeSessionTitle === "新会话"[\s\S]*?kind: "home"/);
-  assert.match(appSource, /getAutomation\(applicationsView\)\.name/);
-  assert.match(appSource, /cronJobsView[\s\S]*?kind: "page", title: "定时任务"/);
-  assert.match(appSource, /onPageTitleChange=\{setLibraryPageTitle\}/);
-  assert.match(appSource, /setLibraryPageTitle\("技能库"\)/);
+  assert.match(appSource, /const newSessionTitle = t\("titles\.newConversation"\)/);
+  assert.match(appSource, /applicationsView === "catalog"[\s\S]*?t\("titles\.automations"\)/);
+  assert.match(appSource, /cronJobsView[\s\S]*?kind: "page", title: t\("titles\.cronJobs"\)/);
+  assert.match(appSource, /const handleLibraryPageTitleChange = useCallback/);
+  assert.match(appSource, /onPageTitleChange=\{handleLibraryPageTitleChange\}/);
+  assert.match(appSource, /setLibraryPageTitleState\(\{ kind: "key", key: "titles\.skillLibrary" \}\)/);
   assert.match(
     appSource,
-    /setLibraryPageTitle\(\s*launch\.operation === "create"[\s\S]*?"创建技能"[\s\S]*?`优化 /,
+    /setLibraryPageTitleState\([\s\S]*?launch\.operation === "create"[\s\S]*?key: "titles\.createSkill"[\s\S]*?key: "titles\.optimizeSkill"/,
   );
   assert.match(librarySource, /onPageTitleChange\?\.\(activeTitle\)/);
   assert.match(librarySource, /onPageTitleChange=\{setSkillPageTitle\}/);
-  assert.match(skillCenterSource, /workspace\.operation === "create"[\s\S]*?"创建技能"/);
+  assert.match(skillCenterSource, /workspaceTitle \|\| selectedSpace\?\.name \|\| t\("skillCenter\.library"\)/);
   assert.match(skillCenterSource, /if \(active\) onPageTitleChange\?\.\(pageTitle\)/);
 });

@@ -154,17 +154,17 @@ test("expands and collapses a genuinely overflowing final answer", async () => {
     assert.ok(paragraph);
     assert.ok(button);
     assert.equal(button.type, "button");
-    assert.equal(button.textContent?.trim(), "展开");
+    assert.equal(button.textContent?.trim(), "actions.expand");
     assert.equal(button.getAttribute("aria-expanded"), "false");
     assert.equal(button.getAttribute("aria-controls"), paragraph.id);
 
     await view.act(async () => button.click());
-    assert.equal(button.textContent?.trim(), "收起");
+    assert.equal(button.textContent?.trim(), "actions.collapse");
     assert.equal(button.getAttribute("aria-expanded"), "true");
     assert.match(paragraph.parentElement?.className ?? "", /is-expanded/);
 
     await view.act(async () => button.click());
-    assert.equal(button.textContent?.trim(), "展开");
+    assert.equal(button.textContent?.trim(), "actions.expand");
     assert.equal(button.getAttribute("aria-expanded"), "false");
     assert.doesNotMatch(paragraph.parentElement?.className ?? "", /is-expanded/);
   } finally {

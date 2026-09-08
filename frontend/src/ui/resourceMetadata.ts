@@ -1,14 +1,13 @@
-export const UNKNOWN_RESOURCE_SOURCE = "未知来源";
-export const UNKNOWN_RESOURCE_CREATOR = "未知创建者";
+import { workspaceToolsT } from "./workspaceToolsI18n";
 
 export function formatResourceSource(
   value: string | null | undefined,
 ): string {
-  return value?.trim() || UNKNOWN_RESOURCE_SOURCE;
+  return value?.trim() || workspaceToolsT("resourceMetadata.unknownSource");
 }
 
 export function formatResourceCreator(
   value: string | null | undefined,
 ): string {
-  return value?.trim() || UNKNOWN_RESOURCE_CREATOR;
+  return value?.trim() || workspaceToolsT("resourceMetadata.unknownCreator");
 }

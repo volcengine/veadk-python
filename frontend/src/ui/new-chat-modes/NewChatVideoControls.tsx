@@ -6,6 +6,7 @@ import {
   type SVGProps,
 } from "react";
 import { motion, useReducedMotion } from "motion/react";
+import { useTranslation } from "react-i18next";
 import { NewChatCompactSelect } from "./NewChatCompactSelect";
 import {
   VIDEO_ASPECT_RATIO_OPTIONS,
@@ -102,6 +103,7 @@ export function NewChatInlineAssetInput({
   kind,
   label,
 }: NewChatInlineAssetInputProps) {
+  const { t } = useTranslation("newChat");
   const inputId = useId();
   const [previewUrl, setPreviewUrl] = useState("");
 
@@ -132,7 +134,7 @@ export function NewChatInlineAssetInput({
         accept={`${kind}/*`}
         disabled={disabled}
         required
-        aria-label={`上传${label}`}
+        aria-label={t("video.controls.upload", { label })}
         onChange={handleFileChange}
       />
       <label
@@ -140,7 +142,9 @@ export function NewChatInlineAssetInput({
         htmlFor={inputId}
         title={
           unavailableReason ||
-          (asset ? `更换${label}：${asset.name}` : `上传${label}`)
+          (asset
+            ? t("video.controls.replaceFile", { label, name: asset.name })
+            : t("video.controls.upload", { label }))
         }
       >
         {previewUrl && kind === "image" ? (
@@ -164,7 +168,7 @@ export function NewChatInlineAssetInput({
         <button
           className="new-chat-inline-video__remove"
           type="button"
-          aria-label={`移除${label} ${asset.name}`}
+          aria-label={t("video.controls.removeFile", { label, name: asset.name })}
           disabled={disabled}
           onClick={() => onChange(null)}
         >
@@ -176,11 +180,12 @@ export function NewChatInlineAssetInput({
 }
 
 function ModelLoadingSpinner() {
+  const { t } = useTranslation("newChat");
   return (
     <span
       className="new-chat-video-model-spinner"
       role="status"
-      aria-label="正在加载增强模型"
+      aria-label={t("video.controls.loadingEnhancer")}
     />
   );
 }
@@ -194,6 +199,7 @@ function VideoAssetInput({
   disabled,
   kind,
 }: VideoAssetInputProps) {
+  const { t } = useTranslation("newChat");
   const inputId = useId();
 
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
@@ -219,7 +225,7 @@ function VideoAssetInput({
         <span className="new-chat-video-asset__copy">
           <span className="new-chat-video-asset__title">
             {label}
-            <small>可选</small>
+            <small>{t("video.controls.optional")}</small>
           </span>
           <span
             className={`new-chat-video-asset__value${asset ? " is-selected" : ""}`}
@@ -229,14 +235,14 @@ function VideoAssetInput({
           </span>
         </span>
         <span className="new-chat-video-asset__action">
-          {asset ? "更换" : "添加"}
+          {asset ? t("video.controls.replace") : t("video.controls.add")}
         </span>
       </label>
       {asset ? (
         <button
           className="new-chat-video-asset__remove"
           type="button"
-          aria-label={`移除${label} ${asset.name}`}
+          aria-label={t("video.controls.removeFile", { label, name: asset.name })}
           disabled={disabled}
           onClick={() => onChange(null)}
         >
@@ -257,6 +263,7 @@ export function NewChatVideoControls({
   modelsError = "",
   disabled = false,
 }: NewChatVideoControlsProps) {
+  const { t } = useTranslation("newChat");
   const reduceMotion = useReducedMotion();
 
   function update<K extends keyof NewChatVideoConfig>(
@@ -274,7 +281,7 @@ export function NewChatVideoControls({
   return (
     <motion.section
       className="new-chat-video-controls"
-      aria-label="视频创作配置"
+      aria-label={t("video.controls.label")}
       initial={reduceMotion ? false : { opacity: 0, y: -12, scaleY: 0.96 }}
       animate={{ opacity: 1, y: 0, scaleY: 1 }}
       exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -8, scaleY: 0.98 }}
@@ -286,10 +293,10 @@ export function NewChatVideoControls({
       <div className="new-chat-video-controls__parameters">
         <div className="new-chat-video-controls__field">
           <NewChatCompactSelect
-            label="比例"
+            label={t("video.controls.aspectRatio")}
             value={config.aspectRatio}
             options={VIDEO_ASPECT_RATIO_OPTIONS}
-            placeholder="选择比例"
+            placeholder={t("video.controls.selectAspectRatio")}
             disabled={disabled}
             onChange={(value) =>
               update("aspectRatio", value as VideoAspectRatio)
@@ -299,10 +306,10 @@ export function NewChatVideoControls({
 
         <div className="new-chat-video-controls__field">
           <NewChatCompactSelect
-            label="清晰度"
+            label={t("video.controls.resolution")}
             value={config.resolution}
             options={VIDEO_RESOLUTION_OPTIONS}
-            placeholder="选择清晰度"
+            placeholder={t("video.controls.selectResolution")}
             disabled={disabled}
             onChange={(value) => update("resolution", value as VideoResolution)}
           />
@@ -312,8 +319,8 @@ export function NewChatVideoControls({
           className={`new-chat-video-duration${disabled ? " is-disabled" : ""}`}
         >
           <span className="new-chat-video-duration__header">
-            <span>时长</span>
-            <output>{config.durationSeconds}s</output>
+            <span>{t("video.controls.duration")}</span>
+            <output>{t("video.controls.durationShort", { count: config.durationSeconds })}</output>
           </span>
           <input
             type="range"
@@ -322,7 +329,7 @@ export function NewChatVideoControls({
             step="1"
             value={config.durationSeconds}
             disabled={disabled}
-            aria-label={`视频时长：${config.durationSeconds} 秒`}
+            aria-label={t("video.controls.durationAria", { count: config.durationSeconds })}
             onChange={(event) =>
               update("durationSeconds", Number(event.currentTarget.value))
             }
@@ -335,8 +342,8 @@ export function NewChatVideoControls({
       >
         {firstLastFrameMode ? (
           <VideoAssetInput
-            label="尾帧"
-            helper="添加视频结束画面"
+            label={t("video.controls.lastFrame")}
+            helper={t("video.controls.lastFrameHelper")}
             accept="image/*"
             asset={config.lastFrame}
             disabled={assetInputsDisabled}
@@ -347,12 +354,14 @@ export function NewChatVideoControls({
           <>
             <VideoAssetInput
               label={
-                videoEditingMode || videoExtensionMode ? "辅助图片" : "参考图片"
+                videoEditingMode || videoExtensionMode
+                  ? t("video.controls.assistImage")
+                  : t("video.controls.referenceImage")
               }
               helper={
                 videoEditingMode || videoExtensionMode
-                  ? "用于补充画面参考"
-                  : "支持常见图片格式"
+                  ? t("video.controls.assistImageHelper")
+                  : t("video.controls.imageHelper")
               }
               accept="image/*"
               asset={config.referenceImage}
@@ -362,8 +371,8 @@ export function NewChatVideoControls({
             />
             {videoEditingMode || videoExtensionMode ? null : (
               <VideoAssetInput
-                label="参考视频"
-                helper="支持常见视频格式"
+                label={t("video.controls.referenceVideo")}
+                helper={t("video.controls.videoHelper")}
                 accept="video/*"
                 asset={config.referenceVideo}
                 disabled={assetInputsDisabled}
@@ -386,9 +395,9 @@ export function NewChatVideoControls({
         {modelsLoading ? (
           <ModelLoadingSpinner />
         ) : enhancerModel ? (
-          <>使用 {enhancerModel} 模型进行意图识别和提示词增强</>
+          <>{t("video.controls.enhancerHint", { model: enhancerModel })}</>
         ) : (
-          "增强模型不可用"
+          t("video.controls.enhancerUnavailable")
         )}
       </p>
     </motion.section>

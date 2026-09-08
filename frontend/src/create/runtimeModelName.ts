@@ -290,7 +290,10 @@ function cloudDraftWithDefaults(
   };
 }
 
-const MANAGED_RUNTIME_INSTRUCTION_HEADING = "动态子智能体协作规则：";
+const MANAGED_RUNTIME_INSTRUCTION_HEADINGS = [
+  "动态子智能体协作规则：",
+  "Dynamic sub-agent collaboration rules:",
+] as const;
 const MANAGED_RUNTIME_INSTRUCTION_SIGNATURES = [
   "collect_resources",
   "create_agents",
@@ -302,18 +305,17 @@ function normalizeMarkdownEscapes(value: string): string {
 }
 
 function stripManagedInstructionBlock(instruction: string): string {
-  const headingOffsets: number[] = [];
-  let searchOffset = 0;
-
-  while (searchOffset < instruction.length) {
-    const headingOffset = instruction.indexOf(
-      MANAGED_RUNTIME_INSTRUCTION_HEADING,
-      searchOffset,
-    );
-    if (headingOffset < 0) break;
-    headingOffsets.push(headingOffset);
-    searchOffset = headingOffset + MANAGED_RUNTIME_INSTRUCTION_HEADING.length;
-  }
+  const headingOffsets = MANAGED_RUNTIME_INSTRUCTION_HEADINGS.flatMap((heading) => {
+    const offsets: number[] = [];
+    let searchOffset = 0;
+    while (searchOffset < instruction.length) {
+      const headingOffset = instruction.indexOf(heading, searchOffset);
+      if (headingOffset < 0) break;
+      offsets.push(headingOffset);
+      searchOffset = headingOffset + heading.length;
+    }
+    return offsets;
+  }).sort((left, right) => left - right);
 
   const managedBlockOffset = headingOffsets.find((headingOffset, index) => {
     const nextHeadingOffset = headingOffsets[index + 1] ?? instruction.length;

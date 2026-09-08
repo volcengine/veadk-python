@@ -1,3 +1,5 @@
+import { createT } from "./i18n";
+
 const RUNTIME_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
 const RUNTIME_NAME_MIN_LENGTH = 4;
 const RUNTIME_NAME_MAX_LENGTH = 64;
@@ -63,16 +65,20 @@ export function resolveRuntimeName(
 }
 
 /** Return the CreateRuntime name validation error, or null when valid. */
-export function runtimeNameProblem(name: string): string | null {
-  if (!name) return "Runtime 名称为必填项";
+export function runtimeNameProblem(
+  name: string,
+  translate: (key: string) => string = (key) =>
+    createT(`validation.runtimeName.${key}`),
+): string | null {
+  if (!name) return translate("required");
   if (!RUNTIME_NAME_PATTERN.test(name)) {
-    return "Runtime 名称只能包含英文字母、数字、下划线和连字符";
+    return translate("characters");
   }
   if (
     name.length < RUNTIME_NAME_MIN_LENGTH ||
     name.length > RUNTIME_NAME_MAX_LENGTH
   ) {
-    return "Runtime 名称长度须为 4-64 个字符";
+    return translate("length");
   }
   return null;
 }

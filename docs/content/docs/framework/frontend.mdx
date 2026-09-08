@@ -518,3 +518,15 @@ export function RevenueChart({ node, ctx }: ComponentRendererProps) {
 <Callout type="info">
   未注册渲染器的未知组件会回退到可折叠的 JSON 视图，因此目录与渲染器不匹配也不会导致界面崩溃。
 </Callout>
+
+
+## 沙箱版本更新
+
+管理员可在「系统信息 → 沙箱信息」检查沙箱版本。Studio 按云厂商和沙箱实际区域
+查询发布镜像，展示当前版本和目标版本；存在差异时可点击对应沙箱的更新按钮。
+Volcengine 和 BytePlus 使用各自的凭据及接口，镜像目录不会跨厂商、区域复用。
+
+Codex 和 DeepSeek Harness 共用 Tool 时，两处同步显示更新状态，只需更新一次。
+快照版使用对应的 Tool 单独检查。Codex 缺失的模型环境变量仍会从原 `CODEX_*`
+配置补齐。更新完成表示 Tool 已就绪且镜像匹配目标版本，不代表已有 Session 或
+历史快照已切换镜像。版本查询失败可点击「检查更新」重试。

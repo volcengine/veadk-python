@@ -2,6 +2,7 @@ import { withAuth } from "./auth";
 import type { CloudProvider } from "./cloudProvider";
 import { withLocalUser } from "./identity";
 import { parseSSE } from "./sse";
+import { adkT, withLocaleHeaders } from "./i18n";
 
 const INSTANCE_HEADER = "X-Studio-FaaS-Instance";
 const REQUEST_ID_HEADER = "X-Studio-FaaS-Request-Id";
@@ -96,8 +97,8 @@ function isRuntimeLogEvent(value: unknown): value is RuntimeLogEvent {
 export function runtimeLogErrorText(error: Omit<RuntimeLogErrorEvent, "type">): string {
   const lines = [error.message];
   const metadata = [
-    error.statusCode ? `HTTP 状态码：${error.statusCode}` : "",
-    error.errorCode ? `错误码：${error.errorCode}` : "",
+    error.statusCode ? adkT("runtimeLogs.httpStatus", { status: error.statusCode }) : "",
+    error.errorCode ? adkT("runtimeLogs.errorCode", { code: error.errorCode }) : "",
     error.requestId ? `Request ID：${error.requestId}` : "",
   ].filter(Boolean);
   if (metadata.length > 0) lines.push(metadata.join("\n"));
@@ -106,7 +107,7 @@ export function runtimeLogErrorText(error: Omit<RuntimeLogErrorEvent, "type">): 
     error.responseBody &&
     !error.detail?.includes(error.responseBody)
   ) {
-    lines.push(`云端响应正文：\n${error.responseBody}`);
+    lines.push(adkT("runtimeLogs.cloudResponseBody", { body: error.responseBody }));
   }
   return lines.join("\n\n");
 }
@@ -167,17 +168,17 @@ export async function* streamRuntimeLogs({
       `/web/runtime-logs/${encodeURIComponent(runtimeId)}/stream?${query.toString()}`,
     ),
     {
-      headers: withLocalUser({ Accept: "text/event-stream" }),
+      headers: withLocaleHeaders(withLocalUser({ Accept: "text/event-stream" })),
       cache: "no-store",
       signal,
     },
   );
   if (!response.ok) {
-    throw new Error(`读取实例日志失败：${await responseError(response)}`);
+    throw new Error(adkT("runtimeLogs.loadFailedWithDetail", { detail: await responseError(response) }));
   }
   for await (const value of parseSSE(response)) {
     if (!isRuntimeLogEvent(value)) {
-      throw new Error("读取实例日志失败：服务返回格式无效");
+      throw new Error(adkT("runtimeLogs.invalidFormat"));
     }
     yield value;
   }

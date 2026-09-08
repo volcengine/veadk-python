@@ -12,6 +12,7 @@ import {
   RuntimeProbeError,
   runtimeRegionCandidates,
 } from "./client";
+import { adkT } from "./i18n";
 
 export interface RemoteConnection {
   id: string;
@@ -170,7 +171,7 @@ async function connectRuntimeOnce(
     removeRuntimeConnection(runtimeId);
     if (unsupportedError) throw unsupportedError;
     throw new RuntimeProbeError(
-      "该 Runtime 暂不支持连接，请确认服务已正常运行。",
+      adkT("connections.runtimeUnsupported"),
       true,
       true,
     );

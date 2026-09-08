@@ -18,7 +18,7 @@ test("uses the Apps SDK loading indicator in the session action slot", () => {
   );
   assert.match(
     sidebarSource,
-    /className="history-action-slot"[\s\S]*?className="history-streaming-indicator"[\s\S]*?size=\{12\}[\s\S]*?aria-label="正在生成"[\s\S]*?className="history-more"/,
+    /className="history-action-slot"[\s\S]*?className="history-streaming-indicator"[\s\S]*?size=\{12\}[\s\S]*?aria-label=\{t\("history\.generating"\)\}[\s\S]*?className="history-more"/,
   );
   assert.doesNotMatch(sidebarSource, /className="history-streaming"/);
   assert.doesNotMatch(stylesSource, /#22c55e|history-pulse/);

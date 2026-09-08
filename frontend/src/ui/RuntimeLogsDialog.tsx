@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { CopyButton } from "@openai/apps-sdk-ui/components/Button";
 import { Check, Copy } from "@openai/apps-sdk-ui/components/Icon";
+import { useTranslation } from "react-i18next";
 import type { CloudProvider } from "../adk/cloudProvider";
 import {
   runtimeConsoleUrl,
@@ -43,10 +44,11 @@ function RuntimeLogErrorDetails({
   error: string;
   onRetry: () => void;
 }) {
+  const { t } = useTranslation("conversation");
   return (
     <div className="runtime-logs-error-detail" role="alert">
       <div className="runtime-logs-error-head">
-        <strong>云端日志错误</strong>
+        <strong>{t("runtimeLogs.errorTitle")}</strong>
         <div className="runtime-logs-error-actions">
           <CopyButton
             className="runtime-logs-error-copy"
@@ -56,13 +58,13 @@ function RuntimeLogErrorDetails({
             size="sm"
             uniform
             pill={false}
-            title="复制完整错误信息"
-            aria-label="复制完整错误信息"
+            title={t("runtimeLogs.copyError")}
+            aria-label={t("runtimeLogs.copyError")}
           >
             {({ copied }) => copied ? <Check /> : <Copy />}
           </CopyButton>
           <button className="runtime-logs-error-retry" type="button" onClick={onRetry}>
-            重试
+            {t("runtimeLogs.retry")}
           </button>
         </div>
       </div>
@@ -84,6 +86,7 @@ export function RuntimeLogsDialog({
   target: RuntimeLogTarget;
   onClose: () => void;
 }) {
+  const { t } = useTranslation("conversation");
   const titleId = useId();
   const dialogRef = useRef<HTMLElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -210,13 +213,7 @@ export function RuntimeLogsDialog({
       ? runtimeConsoleUrl(provider, target.region, target.runtimeId, resolvedInstanceName)
       : ""
   );
-  const statusLabel = status === "live"
-    ? "实时"
-    : status === "connecting"
-      ? "连接中"
-      : status === "retrying"
-        ? "重连中"
-        : "未连接";
+  const statusLabel = t(`runtimeLogs.statuses.${status}`);
 
   if (!open) return null;
   return createPortal(
@@ -241,14 +238,14 @@ export function RuntimeLogsDialog({
             <SandboxTerminalIcon />
           </span>
           <div className="runtime-logs-heading">
-            <h2 id={titleId}>实例日志</h2>
-            <p>当前对话请求所在的 VeFaaS 实例</p>
+            <h2 id={titleId}>{t("runtimeLogs.title")}</h2>
+            <p>{t("runtimeLogs.description")}</p>
           </div>
           <button
             ref={closeRef}
             type="button"
             className="runtime-logs-close"
-            aria-label="关闭实例日志"
+            aria-label={t("runtimeLogs.close")}
             onClick={onClose}
           >
             <SandboxCloseIcon />
@@ -260,7 +257,7 @@ export function RuntimeLogsDialog({
             <i aria-hidden="true" />
             {statusLabel}
           </span>
-          <span className="runtime-logs-instance-label">实例 ID</span>
+          <span className="runtime-logs-instance-label">{t("runtimeLogs.instanceId")}</span>
           {resolvedInstanceName && resolvedConsoleUrl ? (
             <a
               className="runtime-logs-instance-link"
@@ -273,11 +270,11 @@ export function RuntimeLogsDialog({
               <ExternalLinkIcon />
             </a>
           ) : (
-            <span className="runtime-logs-instance-empty">等待实例</span>
+            <span className="runtime-logs-instance-empty">{t("runtimeLogs.waitingInstance")}</span>
           )}
           {target.requestId ? (
             <span className="runtime-logs-request" title={target.requestId}>
-              请求 {target.requestId}
+              {t("runtimeLogs.request", { id: target.requestId })}
             </span>
           ) : null}
         </div>
@@ -286,7 +283,7 @@ export function RuntimeLogsDialog({
           ref={logRef}
           className="runtime-logs-output"
           role="log"
-          aria-label="VeFaaS 实例实时日志"
+          aria-label={t("runtimeLogs.ariaLabel")}
           aria-live="off"
           onScroll={(event) => {
             const element = event.currentTarget;
@@ -297,14 +294,14 @@ export function RuntimeLogsDialog({
           {!target.instanceName && !sessionId ? (
             <div className="runtime-logs-empty">
               <SandboxTerminalIcon />
-              <strong>尚未捕获到实例</strong>
-              <span>发送一条消息后，这里会显示实际处理请求的实例和实时日志。</span>
+              <strong>{t("runtimeLogs.notCapturedTitle")}</strong>
+              <span>{t("runtimeLogs.notCapturedDescription")}</span>
             </div>
           ) : status === "connecting" && !logs ? (
             <div className="runtime-logs-empty">
               <SandboxSpinnerIcon className="spin" />
-              <strong>正在连接实例日志</strong>
-              <span>正在通过 Studio BFF 建立安全日志流。</span>
+              <strong>{t("runtimeLogs.connectingTitle")}</strong>
+              <span>{t("runtimeLogs.connectingDescription")}</span>
             </div>
           ) : error && !logs ? (
             <RuntimeLogErrorDetails
@@ -313,8 +310,8 @@ export function RuntimeLogsDialog({
             />
           ) : lines.length === 0 || (lines.length === 1 && lines[0].text === "") ? (
             <div className="runtime-logs-empty">
-              <strong>暂无日志</strong>
-              <span>已连接实例，等待新的日志输出。</span>
+              <strong>{t("runtimeLogs.emptyTitle")}</strong>
+              <span>{t("runtimeLogs.emptyDescription")}</span>
             </div>
           ) : (
             <>
@@ -342,7 +339,7 @@ export function RuntimeLogsDialog({
         </div>
 
         <footer className="runtime-logs-foot">
-          <span>日志自动刷新，仅保留最近 {MAX_RENDERED_LINES} 行</span>
+          <span>{t("runtimeLogs.retention", { count: MAX_RENDERED_LINES })}</span>
         </footer>
       </section>
     </div>,

@@ -130,6 +130,29 @@ _BUILD_ERROR_MARKERS = (
 )
 
 
+def _mcp_deployment_error_detail(code: str) -> str:
+    """Map server-only MCP validation codes to safe, actionable HTTP 409s."""
+
+    if code == "legacy_mcp_name_duplicate":
+        return "MCP 名称重复，请为每个 HTTP MCP 服务使用唯一名称。"
+    if code == "legacy_mcp_url_duplicate":
+        return "MCP 地址重复，请删除重复服务后再发布。"
+    if code == "legacy_mcp_url_invalid":
+        return "MCP 地址无效，请填写完整的 HTTP 或 HTTPS 服务地址。"
+    if code == "legacy_mcp_credential_missing":
+        return "MCP 缺少可用凭证，请重新填写 Key 或确认沿用原凭证。"
+    if code in {
+        "legacy_mcp_reuse_source_missing",
+        "legacy_mcp_reuse_identity_changed",
+        "legacy_mcp_reuse_input_invalid",
+        "legacy_mcp_reuse_input_duplicate",
+    }:
+        return "无法沿用原 MCP 凭证，请重新打开详情后重新确认或填写 Key。"
+    if code == "legacy_platform_mcp_read_only":
+        return "运行版本中的 Skill 或 MCP 配置已变化，请重新打开详情并确认最新配置后再更新。"
+    return "Harness Sidecar MCP 配置无效，请检查名称、地址与认证后重试。"
+
+
 def _capture_process_env(keys: Iterable[str]) -> Callable[[], None]:
     original = {key: os.environ.get(key) for key in keys}
 
@@ -3821,6 +3844,25 @@ def _run_frontend_server(
         ("dev", "Dev Sandbox", "SANDBOX_DEV", False),
     )
 
+    from frontend.server.sandbox_updates import register_sandbox_update_routes
+    from veadk.cli.studio_sandbox_updates import SandboxToolUpdates
+
+    register_sandbox_update_routes(
+        app,
+        service=SandboxToolUpdates(
+            provider,
+            _skill_workbench_tools_client,
+            regions=sandbox_region_candidates(
+                os.getenv("AGENTKIT_SANDBOX_REGION"), provider=provider
+            ),
+        ),
+        require_admin=_require_studio_admin,
+        configured_tools=lambda: {
+            kind: (os.getenv(environment_key) or "").strip()
+            for kind, _label, environment_key, _snapshot in system_info_sandbox_tools
+        },
+    )
+
     def _default_model_env_state() -> dict[str, object]:
         return {
             "needsModelEnvUpdate": False,
@@ -4443,8 +4485,8 @@ def _run_frontend_server(
         ImageReference,
         LegacyRecoveryError,
         merge_mcp_recoveries,
+        mcp_editor_draft_without_credentials,
         mcp_reuse_supplied_credentials,
-        mcp_editor_draft_with_credentials,
         mcp_secret_values_for_draft_references,
         mcp_secret_values_from_runtime_environment,
         mcp_secret_values_from_toolset,
@@ -6948,20 +6990,7 @@ def _run_frontend_server(
                         )
                         raise HTTPException(
                             status_code=409,
-                            detail=(
-                                "MCP 地址变化后缺少可用凭证，请重新填写 Key 或"
-                                "明确选择沿用原凭证。"
-                                if error.code
-                                in {
-                                    "legacy_mcp_credential_missing",
-                                    "legacy_mcp_reuse_source_missing",
-                                    "legacy_mcp_reuse_identity_changed",
-                                }
-                                else (
-                                    "运行版本中的 Skill 或 MCP 配置已变化，"
-                                    "请重新打开详情并确认最新配置后再更新。"
-                                )
-                            ),
+                            detail=_mcp_deployment_error_detail(error.code),
                         ) from error
                 tagged_resources = deployment_resources_from_tags(
                     _runtime_tags(existing_runtime)
@@ -7011,10 +7040,7 @@ def _run_frontend_server(
                         )
                         raise HTTPException(
                             status_code=409,
-                            detail=(
-                                "无法确认要沿用的原 MCP 凭证，请重新打开详情后"
-                                "重新填写 Key。"
-                            ),
+                            detail=_mcp_deployment_error_detail(error.code),
                         ) from error
             except HTTPException:
                 raise
@@ -7364,15 +7390,7 @@ def _run_frontend_server(
                     )
                     raise HTTPException(
                         status_code=409,
-                        detail=(
-                            "已保存的 MCP 凭证无法解析，请重新打开更新页面；"
-                            "若地址已变化，请重新填写 Key 或确认沿用原凭证。"
-                            if error.code == "legacy_mcp_credential_missing"
-                            else (
-                                "Harness Sidecar 仅支持配置明确的 HTTP MCP 服务，"
-                                "请检查 MCP 地址与认证后重试。"
-                            )
-                        ),
+                        detail=_mcp_deployment_error_detail(error.code),
                     ) from error
             elif source_preserving_mcp_owner == "application":
                 runtime_envs.update(source_preserving_mcp_secrets)
@@ -7407,15 +7425,7 @@ def _run_frontend_server(
                 )
                 raise HTTPException(
                     status_code=409,
-                    detail=(
-                        "已保存的 MCP 凭证无法解析，请重新打开更新页面；"
-                        "若地址已变化，请重新填写 Key 或确认沿用原凭证。"
-                        if error.code == "legacy_mcp_credential_missing"
-                        else (
-                            "Harness Sidecar 仅支持配置明确的 HTTP MCP 服务，"
-                            "请检查 MCP 地址与认证后重试。"
-                        )
-                    ),
+                    detail=_mcp_deployment_error_detail(error.code),
                 ) from error
             for key in (
                 "MCP_SERVERS_JSON",
@@ -7826,6 +7836,7 @@ def _run_frontend_server(
             *,
             status: str,
             message: str,
+            message_code: str,
             snapshot: dict[str, Any] | None = None,
             error: str = "",
         ) -> dict[str, Any]:
@@ -7856,6 +7867,7 @@ def _run_frontend_server(
                 "level": "warning" if status == "error" else "info",
                 "phase": "build",
                 "message": message,
+                "messageCode": message_code,
                 "buildLog": payload,
             }
             if runtime_name:
@@ -8033,16 +8045,26 @@ def _run_frontend_server(
                 return _cp_log_event(
                     status="error",
                     message="暂时无法读取最终构建日志。",
+                    message_code="deploy.build.final_logs_unavailable",
                     error=_safe_exception_detail(log_error),
                 )
             if not str(snapshot.get("text") or ""):
                 return None
-            message = (
-                "构建镜像失败，已同步最终构建日志。"
-                if status == "error"
-                else "构建日志同步完成。"
+            failed = status == "error"
+            return _cp_log_event(
+                status=status,
+                message=(
+                    "构建镜像失败，已同步最终构建日志。"
+                    if failed
+                    else "构建日志同步完成。"
+                ),
+                message_code=(
+                    "deploy.build.failed_logs_synced"
+                    if failed
+                    else "deploy.build.logs_complete"
+                ),
+                snapshot=snapshot,
             )
-            return _cp_log_event(status=status, message=message, snapshot=snapshot)
 
         def _poll_cp_build_logs() -> None:
             last_text = ""
@@ -8058,6 +8080,7 @@ def _run_frontend_server(
                             _cp_log_event(
                                 status="running",
                                 message="正在构建镜像，已同步构建日志。",
+                                message_code="deploy.build.logs_syncing",
                                 snapshot=snapshot,
                             )
                         )
@@ -8068,6 +8091,7 @@ def _run_frontend_server(
                         _cp_log_event(
                             status="complete",
                             message="构建日志同步完成。",
+                            message_code="deploy.build.logs_complete",
                             snapshot={
                                 "text": last_text,
                                 "lineCount": len(last_text.splitlines()),
@@ -8087,6 +8111,7 @@ def _run_frontend_server(
                     _cp_log_event(
                         status="error",
                         message="暂时无法读取构建日志。",
+                        message_code="deploy.build.logs_unavailable",
                         error=_safe_exception_detail(log_error),
                     )
                 )
@@ -12203,57 +12228,21 @@ def _run_frontend_server(
         *,
         region: str,
     ) -> dict[str, Any]:
-        """Return one authorized editor response without caching credentials."""
+        """Return the sanitized editor response; credentials stay server-side."""
 
-        payload, runtime = result
+        del region
+        payload, _runtime = result
         agent = payload.get("agent")
-        if not payload.get("canUpdate") or not isinstance(agent, Mapping):
+        if not isinstance(agent, Mapping):
             return payload
-        recovered_draft = agent.get("draft")
-        if not isinstance(recovered_draft, Mapping):
+        draft = agent.get("draft")
+        if not isinstance(draft, Mapping):
             return payload
-        references = set(mcp_auth_environment_keys(recovered_draft))
-        if not references:
-            return payload
-        environment = _legacy_runtime_environment(runtime)
-        editor_secrets = {
-            reference: environment[reference]
-            for reference in references
-            if environment.get(reference)
-        }
-        missing_references = references.difference(editor_secrets)
-        if missing_references:
-            mcp_recovery, recovered_values = await asyncio.to_thread(
-                _legacy_mcp_state,
-                runtime,
-                region,
-            )
-            editor_secrets.update(
-                {
-                    reference: recovered_values[reference]
-                    for reference in missing_references
-                    if recovered_values.get(reference)
-                }
-            )
-            editor_secrets.update(
-                {
-                    reference: value
-                    for reference, value in mcp_secret_values_for_draft_references(
-                        draft=recovered_draft,
-                        recovery=mcp_recovery,
-                        recovered_values=recovered_values,
-                    ).items()
-                    if reference in missing_references
-                }
-            )
         return {
             **payload,
             "agent": {
                 **agent,
-                "draft": mcp_editor_draft_with_credentials(
-                    recovered_draft,
-                    editor_secrets,
-                ),
+                "draft": mcp_editor_draft_without_credentials(draft),
             },
         }
 
@@ -13610,6 +13599,8 @@ def _run_frontend_server(
 
     from frontend.server.skills.repository import (
         AgentKitSkillRepository,
+        DEGRADED_SKILLSPACE_WARNING,
+        list_skill_space_items,
         resolve_skill_response,
     )
     from frontend.server.skills.routes import _convert_error, mount_skill_routes
@@ -13701,19 +13692,19 @@ def _run_frontend_server(
     ):
         """List skills in one SkillSpace (relation view: id/name/description/
         version/status per skill)."""
-        from agentkit.sdk.skills.types import ListSkillsBySkillSpaceRequest
+        from agentkit.sdk.skills import types as skills_types
 
         del project  # SkillSpace ID is already globally scoped by AgentKit.
         region = _coerce_studio_resource_region(region)
         try:
             client = _skills_client(region)
-            resp = await asyncio.to_thread(
-                client.list_skills_by_skill_space,
-                ListSkillsBySkillSpaceRequest(
-                    SkillSpaceId=space_id,
-                    PageNumber=page,
-                    PageSize=page_size,
-                ),
+            result = await asyncio.to_thread(
+                list_skill_space_items,
+                client,
+                skills_types,
+                space_id=space_id,
+                page=page,
+                page_size=page_size,
             )
         except HTTPException:
             raise
@@ -13724,24 +13715,18 @@ def _run_frontend_server(
             )
             raise _convert_error(e) from e
 
-        items = list(resp.items or [])
-        return {
-            "items": [
-                {
-                    "skillId": r.skill_id or "",
-                    "skillName": r.skill_name or "",
-                    "skillDescription": r.skill_description or "",
-                    "version": r.version or "",
-                    "skillStatus": r.skill_status or "",
-                }
-                for r in items
-            ],
-            "totalCount": (
-                resp.total_count if resp.total_count is not None else len(items)
-            ),
+        payload = {
+            "items": list(result.items),
+            "totalCount": result.total_count,
             "page": page,
             "pageSize": page_size,
         }
+        if result.degraded:
+            payload.update(
+                degraded=True,
+                warnings=[DEGRADED_SKILLSPACE_WARNING],
+            )
+        return payload
 
     @app.get("/web/skill-spaces/{space_id}/skills/{skill_id}")
     async def _web_get_skill_detail(

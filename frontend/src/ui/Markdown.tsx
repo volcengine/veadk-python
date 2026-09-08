@@ -2,6 +2,7 @@ import { Children, isValidElement, memo, useState, type ReactNode } from "react"
 import { Maximize2, X, Download } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { PhotoView } from "react-photo-view";
+import { useTranslation } from "react-i18next";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import rehypeRaw from "rehype-raw";
@@ -82,6 +83,7 @@ function MarkdownImpl({
   allowRawHtml?: boolean;
   streaming?: boolean;
 }) {
+  const { t } = useTranslation("conversation");
   const [videoViewerOpen, setVideoViewerOpen] = useState<VideoData | null>(null);
 
   // Extract video src from props or source children
@@ -166,7 +168,7 @@ function MarkdownImpl({
                   <button
                     type="button"
                     className="video-preview-trigger"
-                    aria-label={`点击播放视频: ${linkText}`}
+                    aria-label={t("markdown.playVideo", { name: linkText })}
                     onClick={() => setVideoViewerOpen({ src: videoSrc, title: linkText })}
                   >
                     <video
@@ -204,7 +206,7 @@ function MarkdownImpl({
                 <button
                   type="button"
                   className="image-preview-trigger"
-                  aria-label={`放大预览：${alt || "图片"}`}
+                  aria-label={t("markdown.enlargeImage", { name: alt || t("markdown.image") })}
                 >
                   {image}
                   <span className="image-preview-hint" aria-hidden="true">
@@ -235,7 +237,7 @@ function MarkdownImpl({
                 <button
                   type="button"
                   className="video-preview-trigger"
-                  aria-label="点击放大视频"
+                  aria-label={t("markdown.enlargeVideo")}
                   onClick={() => setVideoViewerOpen({ src: videoSrc })}
                 >
                   <video
@@ -264,7 +266,7 @@ function MarkdownImpl({
           className="video-viewer-backdrop"
           role="dialog"
           aria-modal="true"
-          aria-label="视频预览"
+          aria-label={t("markdown.videoPreview")}
           onClick={() => setVideoViewerOpen(null)}
         >
           <div className="video-viewer" onClick={(e) => e.stopPropagation()}>
@@ -276,8 +278,8 @@ function MarkdownImpl({
                 <a
                   href={videoViewerOpen.src}
                   download={videoViewerOpen.title || getVideoFilename(videoViewerOpen.src)}
-                  aria-label="下载视频"
-                  title="下载视频"
+                  aria-label={t("markdown.downloadVideo")}
+                  title={t("markdown.downloadVideo")}
                   className="video-viewer-download"
                 >
                   <Download />
@@ -285,7 +287,7 @@ function MarkdownImpl({
                 <button
                   type="button"
                   className="video-viewer-close"
-                  aria-label="关闭"
+                  aria-label={t("markdown.close")}
                   onClick={() => setVideoViewerOpen(null)}
                 >
                   <X />

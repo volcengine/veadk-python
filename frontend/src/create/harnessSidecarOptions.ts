@@ -4,6 +4,7 @@ import type {
   HarnessSidecarOptionId,
   HarnessSidecarProfileId,
 } from "./types";
+import { createT } from "./i18n";
 
 export interface HarnessSidecarOption {
   id: HarnessSidecarOptionId;
@@ -25,48 +26,46 @@ export interface HarnessSidecarOptionGroup {
   componentIds: readonly HarnessSidecarOptionId[];
 }
 
+function localizedOption(id: HarnessSidecarOptionId): HarnessSidecarOption {
+  return {
+    id,
+    get displayName() {
+      return createT(`traditional.optimization.options.${id}.label`);
+    },
+    get description() {
+      return createT(`traditional.optimization.options.${id}.description`);
+    },
+  };
+}
+
 export const HARNESS_SIDECAR_OPTIONS: readonly HarnessSidecarOption[] = [
-  {
-    id: "context_engine",
-    displayName: "上下文治理",
-    description: "治理上下文组装、任务锚定和上下文预算。",
-  },
-  {
-    id: "compressor",
-    displayName: "上下文与结果压缩",
-    description: "压缩长上下文和大型工具结果，降低 Token 成本。",
-  },
-  {
-    id: "verifier",
-    displayName: "回答校验与修复",
-    description: "校验证据和回答，在失败时执行修复或告警。",
-  },
-  {
-    id: "long_run_control",
-    displayName: "Goal任务控制",
-    description: "管理 Goal 任务的进度、续跑和结束条件。",
-  },
-  {
-    id: "mcp_resilience",
-    displayName: "MCP 稳定性治理",
-    description: "治理连接、超时、空结果、大返回和调用预算；默认包含 SQL 只读保护。",
-  },
+  localizedOption("context_engine"),
+  localizedOption("compressor"),
+  localizedOption("verifier"),
+  localizedOption("long_run_control"),
+  localizedOption("mcp_resilience"),
 ];
 
 export const HARNESS_SIDECAR_OPTION_GROUPS: readonly HarnessSidecarOptionGroup[] = [
   {
     id: "quality",
-    displayName: "提升回答质量",
+    get displayName() {
+      return createT("traditional.optimization.groups.quality");
+    },
     componentIds: ["context_engine", "verifier"],
   },
   {
     id: "cost",
-    displayName: "降低运行成本",
+    get displayName() {
+      return createT("traditional.optimization.groups.cost");
+    },
     componentIds: ["compressor"],
   },
   {
     id: "stability",
-    displayName: "增强运行稳定性",
+    get displayName() {
+      return createT("traditional.optimization.groups.stability");
+    },
     componentIds: ["long_run_control", "mcp_resilience"],
   },
 ];
@@ -74,14 +73,11 @@ export const HARNESS_SIDECAR_OPTION_GROUPS: readonly HarnessSidecarOptionGroup[]
 export const HARNESS_SIDECAR_OPTION_IDS: HarnessSidecarOptionId[] =
   HARNESS_SIDECAR_OPTIONS.map((item) => item.id);
 
-export const BYTEPLUS_HARNESS_SIDECAR_UNAVAILABLE_MESSAGE =
-  "BytePlus 账号暂不支持 Harness Sidecar 优化项。请保持优化项为空后继续部署，普通 BytePlus 智能体不受影响。";
-
 export function harnessSidecarProviderNotice(
   cloudProvider: "volcengine" | "byteplus",
 ): string | null {
   return cloudProvider === "byteplus"
-    ? BYTEPLUS_HARNESS_SIDECAR_UNAVAILABLE_MESSAGE
+    ? createT("traditional.optimization.bytePlusUnavailable")
     : null;
 }
 
@@ -97,15 +93,23 @@ const ENABLED_RUNTIME_ENV_VALUES = new Set(["1", "true", "yes", "on"]);
 export const HARNESS_SIDECAR_PROFILES: readonly HarnessSidecarProfile[] = [
   {
     id: "default",
-    displayName: "自定义",
-    description: "按需选择组件，不勾选时不启动 Sidecar。",
+    get displayName() {
+      return createT("traditional.optimization.profiles.default.label");
+    },
+    get description() {
+      return createT("traditional.optimization.profiles.default.description");
+    },
     defaultComponents: [],
     autoAddedComponents: [],
   },
   {
     id: "ops",
-    displayName: "运维场景",
-    description: "适用于运维诊断、数据库、日志和监控 MCP。",
+    get displayName() {
+      return createT("traditional.optimization.profiles.ops.label");
+    },
+    get description() {
+      return createT("traditional.optimization.profiles.ops.description");
+    },
     defaultComponents: [
       "context_engine",
       "verifier",
