@@ -18,6 +18,10 @@ const configYamlSource = readFileSync(
   new URL("../src/create/configYaml.ts", import.meta.url),
   "utf8",
 );
+const modelFallbackFieldsSource = readFileSync(
+  new URL("../src/create/ModelFallbackFields.tsx", import.meta.url),
+  "utf8",
+);
 const modelSource = readFileSync(
   new URL("../src/create/modelSource.ts", import.meta.url),
   "utf8",
@@ -55,7 +59,7 @@ test("ModelArk picker exposes search, status, loading, empty and retry states", 
   assert.match(clientSource, /`\/web\/model-api-keys\$\{refresh/);
   assert.doesNotMatch(customCreateSource, /<select[\s\S]*cw-model-key-select/);
   assert.match(customCreateSource, /function CatalogSelect/);
-  assert.equal(customCreateSource.match(/<CatalogSelect/g)?.length, 2);
+  assert.equal(customCreateSource.match(/<CatalogSelect/g)?.length, 3);
   assert.match(customCreateSource, /triggerAriaLabel=\{t\("traditional\.model\.selectApiKey"\)\}/);
   assert.match(customCreateSource, /menuAriaLabel=\{t\("traditional\.model\.apiKeyList"\)\}/);
   assert.match(customCreateSource, /searchPlaceholder=\{t\("traditional\.model\.searchApiKeyName"\)\}/);
@@ -108,10 +112,38 @@ test("ModelArk picker refreshes by API Key without exposing internal Key IDs", (
   );
 });
 
-test("selecting a ModelArk model updates only the model name", () => {
+test("selecting a ModelArk model updates model fallback state only", () => {
   const picker = customCreateSource.match(/<ModelOptionSelect[\s\S]*?\/>/)?.[0] ?? "";
-  assert.match(picker, /onChange=\{\(modelName\) =>\s*patch\(\{ modelName \}\)\s*\}/);
+  assert.match(picker, /onChange=\{\(modelName\) =>\s*patch\(\{[\s\S]*?modelName,/);
+  assert.match(picker, /modelFallbacks: normalizeModelFallbacks/);
   assert.doesNotMatch(picker, /modelProvider/);
+});
+
+test("custom creation supports ordered same-provider fallback models", () => {
+  assert.match(customCreateSource, /<ModelFallbackFields/);
+  assert.match(customCreateSource, /primaryModelName=\{node\.modelName \?\? ""\}/);
+  assert.match(
+    customCreateSource,
+    /modelSource === "custom" && \(\s*<ModelFallbackFields/,
+  );
+  assert.match(configYamlSource, /modelFallbacks = normalizeModelFallbacks/);
+});
+
+test("ModelArk fallback models use the provider model dropdown", () => {
+  assert.match(customCreateSource, /fallbackModelsForSearch/);
+  assert.match(customCreateSource, /fallbackSearchQuery/);
+  assert.match(customCreateSource, /onFallbacksChange=\{\(modelFallbacks\)/);
+  assert.match(
+    customCreateSource,
+    /t\("traditional\.model\.fallbackPlaceholder"\)/,
+  );
+});
+
+test("cross-provider fallback editor hides env internals and keeps rows on blur", () => {
+  assert.doesNotMatch(modelFallbackFieldsSource, /model\.apiKeyEnv/);
+  assert.doesNotMatch(modelFallbackFieldsSource, /invalidApiKeyEnv/);
+  assert.doesNotMatch(modelFallbackFieldsSource, /onBlur=\{normalizeCurrentValue\}/);
+  assert.match(modelFallbackFieldsSource, /modelApiKeyEnv: fallbackApiKeyEnv/);
 });
 
 test("selected ModelArk API Key is resolved only by the Studio server", () => {

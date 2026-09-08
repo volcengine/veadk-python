@@ -223,8 +223,13 @@ server that `veadk frontend` launches — no separate backend.
   update form and remain in the signed-in user's browser draft so a resumed
   draft shows the same editable values. Disabling Feishu during an update
   removes both Runtime variables; leaving it enabled preserves or replaces
-  them with the submitted values. Long descriptions and prompts
-  scroll within bounded editors, while the sidebar stays pinned to the
+  them with the submitted values. Model configuration supports ordered fallback
+  models. Same-provider fallbacks stay compact and are emitted through the
+  existing `model_name=[primary, ...fallbacks]` contract; cross-provider
+  fallbacks are emitted as `ModelFallbackEndpoint` entries and reference API
+  keys by Runtime environment variable name so secret values stay out of YAML,
+  source, and local browser drafts. Long descriptions and
+  prompts scroll within bounded editors, while the sidebar stays pinned to the
   viewport. On narrow desktop windows, the structure, configuration, and debug
   panels stack vertically instead of squeezing the form. The deployment page
   pairs an inspectable Agent topology with a vertically aligned action rail for

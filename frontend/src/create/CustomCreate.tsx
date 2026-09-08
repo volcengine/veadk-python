@@ -42,6 +42,7 @@ import {
   type CloudEnvironmentConfig,
   type HarnessSidecarOptionId,
   type HarnessSidecarProfileId,
+  type ModelFallbackDraft,
   type McpTool,
   emptyDraft,
 } from "./types";
@@ -121,6 +122,11 @@ import {
   type ModelSource,
 } from "./modelSource";
 import { resolveRuntimeName, runtimeNameProblem } from "./runtimeName";
+import {
+  normalizeModelFallbacks,
+  sameProviderModelFallbacks,
+} from "./modelFallbacks";
+import { ModelFallbackFields } from "./ModelFallbackFields";
 import type { AgentProject } from "./project";
 import { AgentBuildCanvas } from "./AgentBuildCanvas";
 import {
@@ -963,18 +969,28 @@ function CatalogSelect({
 
 function ModelOptionSelect({
   value,
+  fallbacks,
   cloudProvider,
+  agentName,
   apiKeyId,
   apiKeyName,
+  customModelSecretValues,
   onApiKeyChange,
   onChange,
+  onFallbacksChange,
+  onCustomModelSecretChange,
 }: {
   value: string;
+  fallbacks: ModelFallbackDraft[];
   cloudProvider: CloudProvider;
+  agentName: string;
   apiKeyId?: string;
   apiKeyName?: string;
+  customModelSecretValues: Record<string, string>;
   onApiKeyChange: (key: ModelApiKeyOption) => void;
   onChange: (modelId: string) => void;
+  onFallbacksChange: (fallbacks: ModelFallbackDraft[]) => void;
+  onCustomModelSecretChange: (key: string, value: string) => void;
 }) {
   const { t } = useTranslation("create");
   const [apiKeys, setApiKeys] = useState<ModelApiKeyOption[]>([]);
@@ -987,6 +1003,7 @@ function ModelOptionSelect({
   const [keySelectionRevision, setKeySelectionRevision] = useState(0);
   const [apiKeySearchQuery, setApiKeySearchQuery] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
+  const [fallbackSearchQuery, setFallbackSearchQuery] = useState("");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1101,6 +1118,39 @@ function ModelOptionSelect({
   const providerLabel =
     cloudProvider === "byteplus" ? "BytePlus ModelArk" : t("traditional.model.volcengineArk");
   const activationConsoleUrl = modelActivationConsoleUrl(cloudProvider);
+  const normalizedFallbacks = normalizeModelFallbacks(
+    normalizedValue,
+    fallbacks,
+  );
+  const selectedFallbacks = new Set(
+    sameProviderModelFallbacks(normalizedValue, normalizedFallbacks),
+  );
+  const fallbackModelsForSearch = (currentValue: string) => {
+    const currentModelId = currentValue.trim();
+    return visibleModels.filter((model) => {
+      const modelId = model.id.trim();
+      const alreadySelected =
+        modelId !== currentModelId && selectedFallbacks.has(modelId);
+      const primarySelected = modelId !== currentModelId && modelId === normalizedValue;
+      return (
+        !alreadySelected &&
+        !primarySelected &&
+        localPickerMatches(fallbackSearchQuery, [
+          model.displayName,
+          model.id,
+          model.name,
+          model.vendorName,
+          model.activationState,
+          model.lifecycleStatus,
+        ])
+      );
+    });
+  };
+  const updateFallback = (index: number, modelName: string) => {
+    const next = [...fallbacks];
+    next[index] = modelName;
+    onFallbacksChange(normalizeModelFallbacks(normalizedValue, next));
+  };
 
   return (
     <div className="cw-a2a-space-picker cw-model-picker">
@@ -1277,6 +1327,153 @@ function ModelOptionSelect({
             </button>
           </div>
         </div>
+        <ModelFallbackFields
+          variant="traditional"
+          embedded
+          primaryModelName={normalizedValue}
+          agentName={agentName}
+          value={fallbacks}
+          secretValues={customModelSecretValues}
+          onChange={onFallbacksChange}
+          onSecretChange={onCustomModelSecretChange}
+          renderSameProviderField={({ index, value: fallbackValue }) => {
+            const selectedFallbackModel = visibleModels.find(
+              (model) => model.id === fallbackValue.trim(),
+            );
+            const fallbackOptions = fallbackModelsForSearch(fallbackValue);
+            const showUnknownFallback = Boolean(
+              fallbackValue.trim() &&
+                !selectedFallbackModel &&
+                localPickerMatches(fallbackSearchQuery, [fallbackValue]),
+            );
+            const fallbackLabel = selectedFallbackModel
+              ? `${selectedFallbackModel.displayName} (${selectedFallbackModel.id})`
+              : fallbackValue || t("traditional.model.fallbackPlaceholder");
+            return (
+              <CatalogSelect
+                selectedLabel={fallbackLabel}
+                placeholder={!fallbackValue.trim()}
+                disabled={loading || !apiKeyId}
+                triggerAriaLabel={t("traditional.model.selectProviderModel", {
+                  provider: providerLabel,
+                })}
+                menuAriaLabel={t("traditional.model.providerModels", {
+                  provider: providerLabel,
+                })}
+                searchAriaLabel={t("traditional.model.search")}
+                searchValue={fallbackSearchQuery}
+                searchPlaceholder={t("traditional.model.searchPlaceholder")}
+                onSearchChange={setFallbackSearchQuery}
+                empty={!showUnknownFallback && fallbackOptions.length === 0}
+                emptyLabel={t("traditional.model.noMatches")}
+                triggerClassName="cw-model-trigger"
+                optionsClassName="cw-model-options"
+                renderOptions={(closeMenu) => (
+                  <>
+                    {showUnknownFallback && (
+                      <button
+                        type="button"
+                        role="option"
+                        aria-selected
+                        className="cw-a2a-space-option cw-model-option is-selected"
+                        onClick={() => {
+                          updateFallback(index, fallbackValue);
+                          closeMenu();
+                        }}
+                      >
+                        <span className="cw-model-option-copy">
+                          <strong>
+                            {t("traditional.model.currentConfiguration")}
+                          </strong>
+                          <small>{fallbackValue}</small>
+                        </span>
+                        <span className="cw-model-status is-unknown">
+                          {t("traditional.model.unknownStatus")}
+                        </span>
+                      </button>
+                    )}
+                    {fallbackOptions.map((model) => {
+                      const selected = model.id === fallbackValue.trim();
+                      const selectable = isModelSelectable(model);
+                      const activationRequired =
+                        !selectable && model.activationState !== "Available";
+                      if (activationRequired) {
+                        return (
+                          <button
+                            key={model.id}
+                            type="button"
+                            role="option"
+                            aria-selected={false}
+                            className="cw-a2a-space-option cw-model-option is-activation-link"
+                            title={t("traditional.model.activate", {
+                              provider: providerLabel,
+                              model: model.displayName,
+                            })}
+                            onClick={() => {
+                              window.open(
+                                activationConsoleUrl,
+                                "_blank",
+                                "noopener,noreferrer",
+                              );
+                              closeMenu();
+                            }}
+                          >
+                            <span className="cw-model-option-copy">
+                              <strong>{model.displayName}</strong>
+                              <small>
+                                {model.id}
+                                {model.vendorName ? ` · ${model.vendorName}` : ""}
+                              </small>
+                            </span>
+                            <span className="cw-model-status is-unavailable">
+                              {t("traditional.model.activateAction")}
+                            </span>
+                          </button>
+                        );
+                      }
+                      return (
+                        <button
+                          key={model.id}
+                          type="button"
+                          role="option"
+                          aria-selected={selected}
+                          disabled={!selectable}
+                          className={`cw-a2a-space-option cw-model-option ${
+                            selected ? "is-selected" : ""
+                          }`}
+                          title={`${model.displayName} (${model.id})`}
+                          onClick={() => {
+                            updateFallback(index, model.id);
+                            closeMenu();
+                          }}
+                        >
+                          <span className="cw-model-option-copy">
+                            <strong>{model.displayName}</strong>
+                            <small>
+                              {model.id}
+                              {model.vendorName ? ` · ${model.vendorName}` : ""}
+                            </small>
+                          </span>
+                          <span
+                            className={`cw-model-status ${
+                              model.available
+                                ? "is-available"
+                                : model.lifecycleStatus === "Retiring"
+                                  ? "is-retiring"
+                                  : "is-unavailable"
+                            }`}
+                          >
+                            {t(modelAvailabilityKey(model))}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </>
+                )}
+              />
+            );
+          }}
+        />
       </div>
       {error ? (
         <div className="cw-banner cw-a2a-space-error" role="alert">
@@ -3789,6 +3986,17 @@ export function CustomCreate({
         draft.deployment?.runtimeNameCustomized,
       );
   const transientModelSecretValues = customModelSecretValues;
+  const patchCustomModelSecret = useCallback((key: string, value: string) => {
+    setCustomModelSecretValues((current) => {
+      const next = { ...current };
+      if (value) {
+        next[key] = value;
+      } else {
+        delete next[key];
+      }
+      return next;
+    });
+  }, []);
   useEffect(() => {
     setDraft((current) => draftForCloudProvider(current, cloudProvider));
   }, [cloudProvider]);
@@ -4154,6 +4362,10 @@ export function CustomCreate({
     patch({
       modelSource: source,
       modelName: nextModelName,
+      modelFallbacks:
+        source === "custom" && modelSource === "ark"
+          ? []
+          : normalizeModelFallbacks(nextModelName, node.modelFallbacks),
     });
   };
 
@@ -5232,13 +5444,12 @@ export function CustomCreate({
             ? (customModelSecretValues[selectedCustomModelCredential.key] ?? "")
             : ""
         }
+        customModelSecretValues={customModelSecretValues}
         onCustomModelApiKeyChange={(value) => {
           if (!selectedCustomModelCredential) return;
-          setCustomModelSecretValues((current) => ({
-            ...current,
-            [selectedCustomModelCredential.key]: value,
-          }));
+          patchCustomModelSecret(selectedCustomModelCredential.key, value);
         }}
+        onCustomModelSecretChange={patchCustomModelSecret}
         onSelectedSkillsChange={(selectedSkills) =>
           setDraft((current) => ({ ...current, selectedSkills }))
         }
@@ -5675,10 +5886,15 @@ export function CustomCreate({
                                     </label>
                                     <ModelOptionSelect
                                       value={node.modelName ?? ""}
+                                      fallbacks={node.modelFallbacks ?? []}
                                       cloudProvider={cloudProvider}
+                                      agentName={node.name}
                                       apiKeyId={draft.deployment?.modelApiKeyId}
                                       apiKeyName={
                                         draft.deployment?.modelApiKeyName
+                                      }
+                                      customModelSecretValues={
+                                        customModelSecretValues
                                       }
                                       onApiKeyChange={(key) =>
                                         setDraft((current) => ({
@@ -5693,7 +5909,19 @@ export function CustomCreate({
                                         }))
                                       }
                                       onChange={(modelName) =>
-                                        patch({ modelName })
+                                        patch({
+                                          modelName,
+                                          modelFallbacks: normalizeModelFallbacks(
+                                            modelName,
+                                            node.modelFallbacks,
+                                          ),
+                                        })
+                                      }
+                                      onFallbacksChange={(modelFallbacks) =>
+                                        patch({ modelFallbacks })
+                                      }
+                                      onCustomModelSecretChange={
+                                        patchCustomModelSecret
                                       }
                                     />
                                   </div>
@@ -5707,7 +5935,13 @@ export function CustomCreate({
                                         className="cw-input"
                                         value={node.modelName ?? ""}
                                         onChange={(e) =>
-                                          patch({ modelName: e.target.value })
+                                          patch({
+                                            modelName: e.target.value,
+                                            modelFallbacks: normalizeModelFallbacks(
+                                              e.target.value,
+                                              node.modelFallbacks,
+                                            ),
+                                          })
                                         }
                                       />
                                     </div>
@@ -5778,17 +6012,27 @@ export function CustomCreate({
                                             return;
                                           const value =
                                             event.currentTarget.value;
-                                          setCustomModelSecretValues(
-                                            (current) => ({
-                                              ...current,
-                                              [selectedCustomModelCredential.key]:
-                                                value,
-                                            }),
+                                          patchCustomModelSecret(
+                                            selectedCustomModelCredential.key,
+                                            value,
                                           );
                                         }}
                                       />
                                     </div>
                                   </>
+                                )}
+                                {modelSource === "custom" && (
+                                  <ModelFallbackFields
+                                    variant="traditional"
+                                    primaryModelName={node.modelName ?? ""}
+                                    agentName={node.name}
+                                    value={node.modelFallbacks ?? []}
+                                    secretValues={customModelSecretValues}
+                                    onChange={(modelFallbacks) =>
+                                      patch({ modelFallbacks })
+                                    }
+                                    onSecretChange={patchCustomModelSecret}
+                                  />
                                 )}
                               </div>
                             </Section>
@@ -6269,12 +6513,7 @@ export function CustomCreate({
                 deploymentEnv={deploymentEnv.specs}
                 requiredSecretEnv={customModelCredentials}
                 requiredSecretEnvValues={customModelSecretValues}
-                onRequiredSecretEnvChange={(key, value) =>
-                  setCustomModelSecretValues((current) => ({
-                    ...current,
-                    [key]: value,
-                  }))
-                }
+                onRequiredSecretEnvChange={patchCustomModelSecret}
                 deploymentEnvValues={{
                   ...providerDraft.deployment?.envValues,
                   ...customModelSecretValues,

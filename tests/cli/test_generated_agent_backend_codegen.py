@@ -1145,6 +1145,70 @@ def test_codegen_custom_model_endpoint_reads_agent_specific_key() -> None:
     )
 
 
+def test_codegen_model_fallbacks_emit_ordered_model_name_list() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(
+            name="Fallback Agent",
+            instruction="You are helpful.",
+            modelName="primary-model",
+            modelFallbacks=[
+                " fallback-a ",
+                "",
+                "primary-model",
+                "fallback-b",
+                "fallback-a",
+            ],
+        )
+    )
+    files = {file.path: file.content for file in project.files}
+    agent_py = files["agents/fallback_agent/agent.py"]
+
+    assert 'model_name="primary-model"' in agent_py
+    assert 'model_fallbacks=["fallback-a", "fallback-b"]' in agent_py
+    assert "'modelFallbacks': ['fallback-a', 'fallback-b']" in agent_py
+
+
+def test_codegen_model_fallbacks_emit_endpoint_configs() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(
+            name="Fallback Agent",
+            instruction="You are helpful.",
+            modelName="primary-model",
+            modelFallbacks=[
+                " fallback-a ",
+                {
+                    "modelName": "gpt-4o-mini",
+                    "modelProvider": "openai",
+                    "modelApiBase": "https://api.openai.com/v1",
+                    "modelApiKeyEnv": "OPENAI_BACKUP_API_KEY",
+                },
+                " fallback-b ",
+            ],
+        )
+    )
+    files = {file.path: file.content for file in project.files}
+    agent_py = files["agents/fallback_agent/agent.py"]
+
+    assert "from veadk import ModelFallbackEndpoint" in agent_py
+    assert 'model_name="primary-model"' in agent_py
+    assert (
+        'model_fallbacks=["fallback-a", '
+        'ModelFallbackEndpoint(model_name="gpt-4o-mini", '
+        'model_provider="openai", model_api_base="https://api.openai.com/v1", '
+        'model_api_key_env="OPENAI_BACKUP_API_KEY"), "fallback-b"]'
+    ) in agent_py
+    assert (
+        "OPENAI_BACKUP_API_KEY=replace-with-your-own-model-api-key"
+        in files[".env.example"]
+    )
+    assert (
+        "'modelFallbacks': ['fallback-a', {'modelName': 'gpt-4o-mini', "
+        "'modelProvider': 'openai', "
+        "'modelApiBase': 'https://api.openai.com/v1', "
+        "'modelApiKeyEnv': 'OPENAI_BACKUP_API_KEY'}, 'fallback-b']"
+    ) in agent_py
+
+
 def test_codegen_custom_model_agents_use_distinct_key_env_names() -> None:
     project = generate_project_from_draft(
         AgentDraft(

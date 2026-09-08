@@ -1,5 +1,9 @@
 import type { AgentDraft } from "./types";
 import { createT } from "./i18n";
+import {
+  defaultModelFallbackApiKeyEnv,
+  isModelFallbackEndpoint,
+} from "./modelFallbacks";
 
 export interface CustomModelCredentialRequirement {
   key: string;
@@ -62,14 +66,15 @@ export function customModelEnvironmentBindings(
   const used = new Set<string>();
 
   const visit = (node: AgentDraft) => {
+    const segment = envSegment(node.name, "AGENT");
+    const isLlmNode = node.agentType === undefined || node.agentType === "llm";
     if (
-      node.agentType === "llm" &&
+      isLlmNode &&
       node.modelSource !== "ark" &&
       (node.modelSource === "custom" ||
         (!!node.modelApiBase?.trim() &&
           !isProviderModelApiBase(node.modelApiBase, officialBaseUrl)))
     ) {
-      const segment = envSegment(node.name, "AGENT");
       const provider = node.modelProvider?.trim() ?? "";
       const apiBase = node.modelApiBase?.trim() ?? "";
       const providerKey = provider
@@ -93,6 +98,29 @@ export function customModelEnvironmentBindings(
         }),
       });
     }
+    if (!isLlmNode) {
+      node.subAgents.forEach(visit);
+      return;
+    }
+    node.modelFallbacks?.forEach((fallback, index) => {
+      if (!isModelFallbackEndpoint(fallback)) return;
+      const modelName = fallback.modelName.trim();
+      if (!modelName) return;
+      const explicitKey = fallback.modelApiKeyEnv?.trim() ?? "";
+      const apiKeyKey =
+        explicitKey ||
+        nextEnvName(defaultModelFallbackApiKeyEnv(node.name, index), used);
+      used.add(apiKeyKey);
+      bindings.push({
+        apiKeyKey,
+        provider: fallback.modelProvider?.trim() ?? "",
+        apiBase: fallback.modelApiBase?.trim() ?? "",
+        label: createT("helpers.customModel.fallbackApiKeyLabel", {
+          name: node.name.trim() || createT("helpers.customModel.fallbackName"),
+          model: modelName,
+        }),
+      });
+    });
     node.subAgents.forEach(visit);
   };
 
@@ -108,4 +136,19 @@ export function customModelCredentialRequirements(
   return customModelEnvironmentBindings(root, officialBaseUrl).map(
     ({ apiKeyKey, label }) => ({ key: apiKeyKey, label }),
   );
+}
+
+export function referencedModelFallbackApiKeyEnvKeys(root: AgentDraft): string[] {
+  const keys = new Set<string>();
+  const visit = (node: AgentDraft) => {
+    for (const fallback of node.modelFallbacks ?? []) {
+      if (!isModelFallbackEndpoint(fallback)) continue;
+      const key = fallback.modelApiKeyEnv?.trim() ?? "";
+      if (key) keys.add(key);
+    }
+    node.subAgents.forEach(visit);
+    node.workflow?.nodes.forEach((workflowNode) => visit(workflowNode.agent));
+  };
+  visit(root);
+  return [...keys];
 }

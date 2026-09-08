@@ -20,7 +20,14 @@ import re
 from pprint import pformat
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from veadk.cli.generated_agent_catalog import (
     A2A_REGISTRY_ENV,
@@ -171,6 +178,60 @@ class A2ARegistryConfig(BaseModel):
         return str(value)
 
 
+class ModelFallbackEndpointDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    modelName: str = Field(
+        default="",
+        validation_alias=AliasChoices("modelName", "model_name", "model"),
+    )
+    modelProvider: str = Field(
+        default="",
+        validation_alias=AliasChoices("modelProvider", "model_provider", "provider"),
+    )
+    modelApiBase: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "modelApiBase",
+            "model_api_base",
+            "apiBase",
+            "api_base",
+            "baseUrl",
+            "base_url",
+        ),
+    )
+    modelApiKeyEnv: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "modelApiKeyEnv",
+            "model_api_key_env",
+            "apiKeyEnv",
+            "api_key_env",
+        ),
+    )
+
+    @field_validator(
+        "modelName",
+        "modelProvider",
+        "modelApiBase",
+        "modelApiKeyEnv",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_string(cls, value: Any) -> str:
+        if value is None:
+            return ""
+        return str(value)
+
+    @field_validator("modelApiKeyEnv")
+    @classmethod
+    def _validate_api_key_env(cls, value: str) -> str:
+        value = value.strip()
+        if value and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
+            raise ValueError("modelApiKeyEnv must be a valid environment variable name")
+        return value
+
+
 class SelectedSkill(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -299,6 +360,7 @@ class AgentDraft(BaseModel):
     model: str = ""
     modelSource: Literal["ark", "custom"] | None = None
     modelName: str = ""
+    modelFallbacks: list[str | ModelFallbackEndpointDraft] = Field(default_factory=list)
     modelProvider: str = ""
     modelApiBase: str = ""
     tools: list[str] = Field(default_factory=list)
@@ -328,12 +390,20 @@ class AgentDraft(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _ignore_retired_a2ui_option(cls, value: Any) -> Any:
-        """Accept old Studio drafts without carrying A2UI into generation."""
-        if not isinstance(value, dict) or "enableA2ui" not in value:
+    def _normalize_legacy_options(cls, value: Any) -> Any:
+        """Accept old Studio drafts without carrying retired fields into generation."""
+        if not isinstance(value, dict):
             return value
         normalized = value.copy()
-        normalized.pop("enableA2ui")
+        normalized.pop("enableA2ui", None)
+        raw_model_name = normalized.get("modelName")
+        if isinstance(raw_model_name, list):
+            normalized["modelName"] = raw_model_name[0] if raw_model_name else ""
+            raw_fallbacks = normalized.get("modelFallbacks")
+            normalized["modelFallbacks"] = [
+                *raw_model_name[1:],
+                *(raw_fallbacks if isinstance(raw_fallbacks, list) else []),
+            ]
         return normalized
 
     @field_validator("maxIterations", mode="before")
@@ -343,6 +413,69 @@ class AgentDraft(BaseModel):
             return int(value)
         except Exception:
             return 3
+
+    @field_validator("modelName", mode="before")
+    @classmethod
+    def _coerce_model_name(cls, value: Any) -> str:
+        if value is None:
+            return ""
+        return str(value)
+
+    @field_validator("modelFallbacks", mode="before")
+    @classmethod
+    def _coerce_model_fallbacks(
+        cls, value: Any
+    ) -> list[str | dict[str, Any] | ModelFallbackEndpointDraft]:
+        if not isinstance(value, list):
+            return []
+        return [
+            item if isinstance(item, (dict, ModelFallbackEndpointDraft)) else str(item)
+            for item in value
+            if item is not None
+        ]
+
+    @model_validator(mode="after")
+    def _normalize_model_fallbacks(self) -> "AgentDraft":
+        primary = self.modelName.strip()
+        seen = {primary} if primary else set()
+        fallbacks: list[str | ModelFallbackEndpointDraft] = []
+        for fallback in self.modelFallbacks:
+            if isinstance(fallback, str):
+                fallback_name = fallback.strip()
+                if not fallback_name or fallback_name in seen:
+                    continue
+                seen.add(fallback_name)
+                fallbacks.append(fallback_name)
+                continue
+            fallback_name = fallback.modelName.strip()
+            provider = fallback.modelProvider.strip()
+            api_base = fallback.modelApiBase.strip()
+            api_key_env = fallback.modelApiKeyEnv.strip()
+            if not fallback_name:
+                continue
+            if not provider and not api_base and not api_key_env:
+                if fallback_name in seen:
+                    continue
+                seen.add(fallback_name)
+                fallbacks.append(fallback_name)
+                continue
+            key = "\0".join(
+                ["endpoint", fallback_name, provider, api_base, api_key_env]
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            fallbacks.append(
+                ModelFallbackEndpointDraft(
+                    modelName=fallback_name,
+                    modelProvider=provider,
+                    modelApiBase=api_base,
+                    modelApiKeyEnv=api_key_env,
+                )
+            )
+        self.modelName = primary
+        self.modelFallbacks = fallbacks
+        return self
 
 
 class GeneratedAgentProjectRequest(BaseModel):
@@ -464,6 +597,8 @@ def _safe_draft_payload(draft: AgentDraft) -> dict[str, Any]:
             node.pop("cloudProvider", None)
         if node.get("modelSource") is None:
             node.pop("modelSource", None)
+        if not node.get("modelFallbacks"):
+            node.pop("modelFallbacks", None)
         if not str(node.get("longTermMemoryIndex") or "").strip():
             node.pop("longTermMemoryIndex", None)
         cloud_environment = node.get("cloudEnvironment")
@@ -550,6 +685,50 @@ def _py_str(value: str) -> str:
         (value or "").replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
     )
     return f'"{escaped}"'
+
+
+def _model_name_value(draft: AgentDraft) -> str:
+    primary = draft.modelName.strip()
+    if not primary:
+        return ""
+    return primary
+
+
+def _model_fallback_exprs(acc: _Acc, draft: AgentDraft) -> list[str]:
+    exprs: list[str] = []
+    agent_segment = _env_segment(draft.name, "AGENT")
+    for index, fallback in enumerate(draft.modelFallbacks):
+        if isinstance(fallback, str):
+            model_name = fallback.strip()
+            if model_name:
+                exprs.append(_py_str(model_name))
+            continue
+        model_name = fallback.modelName.strip()
+        if not model_name:
+            continue
+        kwargs = [f"model_name={_py_str(model_name)}"]
+        if fallback.modelProvider.strip():
+            kwargs.append(f"model_provider={_py_str(fallback.modelProvider.strip())}")
+        if fallback.modelApiBase.strip():
+            kwargs.append(f"model_api_base={_py_str(fallback.modelApiBase.strip())}")
+        api_key_env = fallback.modelApiKeyEnv.strip() or _next_env_name(
+            f"FALLBACK_MODEL_{agent_segment}_{index + 1}_API_KEY",
+            acc.used_env_names,
+        )
+        if api_key_env:
+            acc.used_env_names.add(api_key_env)
+            acc.env.append(
+                EnvVar(
+                    api_key_env,
+                    True,
+                    "replace-with-your-own-model-api-key",
+                    f"{draft.name.strip() or 'Fallback model'} fallback "
+                    f"{model_name} API Key",
+                )
+            )
+            kwargs.append(f"model_api_key_env={_py_str(api_key_env)}")
+        exprs.append("ModelFallbackEndpoint(" + ", ".join(kwargs) + ")")
+    return exprs
 
 
 def _py_triple(value: str) -> str:
@@ -868,8 +1047,9 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
 
     if tool_exprs:
         kwargs.append(f"tools=[{', '.join(tool_exprs)}]")
-    if draft.modelName.strip():
-        kwargs.append(f"model_name={_py_str(draft.modelName.strip())}")
+    model_name_value = _model_name_value(draft)
+    if model_name_value:
+        kwargs.append(f"model_name={_py_str(model_name_value)}")
     is_custom_model = draft.modelSource == "custom" or (
         draft.modelSource is None
         and bool(draft.modelApiBase.strip())
@@ -927,6 +1107,15 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
             kwargs.append(f"model_provider={_py_str(draft.modelProvider.strip())}")
         if draft.modelApiBase.strip():
             kwargs.append(f"model_api_base={_py_str(draft.modelApiBase.strip())}")
+
+    model_fallback_exprs = _model_fallback_exprs(acc, draft)
+    if model_fallback_exprs:
+        if any(
+            isinstance(fallback, ModelFallbackEndpointDraft)
+            for fallback in draft.modelFallbacks
+        ):
+            _add_import(acc, "from veadk import ModelFallbackEndpoint")
+        kwargs.append("model_fallbacks=[" + ", ".join(model_fallback_exprs) + "]")
 
     if draft.memory.shortTerm:
         backend = STM_BY_ID.get(draft.shortTermBackend or "local")
@@ -1981,6 +2170,7 @@ def debug_runtime_env_from_draft(draft: AgentDraft) -> dict[str, str]:
 
     def visit(node: AgentDraft) -> None:
         nonlocal ark_model_name, uses_ark_model
+        agent_segment = _env_segment(node.name, "AGENT")
         is_custom_model = node.modelSource == "custom" or (
             node.modelSource is None
             and bool(node.modelApiBase.strip())
@@ -1990,7 +2180,6 @@ def debug_runtime_env_from_draft(draft: AgentDraft) -> dict[str, str]:
             )
         )
         if is_custom_model:
-            agent_segment = _env_segment(node.name, "AGENT")
             if node.modelProvider.strip():
                 provider_env = _next_env_name(
                     f"CUSTOM_MODEL_{agent_segment}_PROVIDER",
@@ -2014,6 +2203,15 @@ def debug_runtime_env_from_draft(draft: AgentDraft) -> dict[str, str]:
             uses_ark_model = True
             if not ark_model_name:
                 ark_model_name = node.modelName.strip()
+        for index, fallback in enumerate(node.modelFallbacks):
+            if isinstance(fallback, ModelFallbackEndpointDraft):
+                allowed_keys.add(
+                    fallback.modelApiKeyEnv.strip()
+                    or _next_env_name(
+                        f"FALLBACK_MODEL_{agent_segment}_{index + 1}_API_KEY",
+                        allowed_keys,
+                    )
+                )
         for tool_id in node.builtinTools:
             tool = TOOL_BY_ID.get(tool_id)
             if tool:

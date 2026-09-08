@@ -136,6 +136,36 @@ test("derives distinct transient credential names for custom model agents", () =
   );
 });
 
+test("derives transient credential names for cross-provider fallback models", () => {
+  const draft = {
+    name: "Agent",
+    agentType: "llm",
+    modelName: "primary",
+    modelFallbacks: [
+      "same-provider-backup",
+      {
+        modelName: "gpt-4o-mini",
+        modelProvider: "openai",
+        modelApiBase: "https://api.openai.com/v1",
+        modelApiKeyEnv: "OPENAI_BACKUP_API_KEY",
+      },
+    ],
+    subAgents: [],
+  };
+  assert.deepEqual(
+    customModelCredentialRequirements(
+      draft,
+      "https://ark.cn-beijing.volces.com/api/v3/",
+    ),
+    [
+      {
+        key: "OPENAI_BACKUP_API_KEY",
+        label: "Agent fallback model gpt-4o-mini API Key",
+      },
+    ],
+  );
+});
+
 test("does not request custom credentials for Ark-backed agents", () => {
   assert.deepEqual(
     customModelCredentialRequirements(
