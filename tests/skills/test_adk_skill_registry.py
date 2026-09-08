@@ -202,6 +202,87 @@ def test_registry_get_skill_fetches_remote_list_every_time(
     assert second.instructions == "Body v2."
 
 
+def test_registry_get_skill_loads_community_frontmatter_extensions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    skill_dir = tmp_path / "novel-storyboard"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: novel-storyboard
+version: 1.3.0
+description: |
+  给 AI 短剧出分镜。
+allowed-tools:
+  - Read
+  - Write
+  - Bash
+  - Task
+  - Glob
+triggers:
+  - novel-storyboard
+  - 分镜
+  - storyboard
+metadata:
+  license: Apache-2.0
+  requires:
+    bins:
+      - node
+    optional:
+      - codex
+  runtimes:
+    - claude-code
+    - codex
+---
+## novel-storyboard
+
+Skill body.
+""",
+        encoding="utf-8",
+    )
+    remote_skill = VeADKSkill(
+        name="novel-storyboard",
+        description="Storyboard skill.",
+        path="novel-storyboard",
+        skill_space_id="sp-test",
+        id="skill-novel-storyboard",
+        source_type="skillhub",
+        version_id="v1",
+    )
+
+    monkeypatch.setattr(
+        registry_module,
+        "load_skills_from_cloud",
+        lambda skill_source_id: [remote_skill],
+    )
+    monkeypatch.setattr(
+        registry_module,
+        "materialize_remote_skill",
+        lambda skill, *, cache_dir=None: skill_dir,
+    )
+
+    registry = VeSkillRegistry(skill_source_id="sp-test", cache_dir=tmp_path)
+    skill = asyncio.run(registry.get_skill(name="novel-storyboard"))
+
+    assert skill.name == "novel-storyboard"
+    assert "Skill body." in skill.instructions
+    assert skill.frontmatter.allowed_tools is None
+    assert skill.frontmatter.metadata["allowed-tools"] == [
+        "Read",
+        "Write",
+        "Bash",
+        "Task",
+        "Glob",
+    ]
+    assert skill.frontmatter.metadata["triggers"] == [
+        "novel-storyboard",
+        "分镜",
+        "storyboard",
+    ]
+    assert skill.frontmatter.metadata["requires"]["bins"] == ["node"]
+
+
 def test_registry_get_skill_raises_when_name_is_missing(
     monkeypatch: pytest.MonkeyPatch,
 ):
