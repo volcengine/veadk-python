@@ -863,6 +863,7 @@ class SandboxCodexConnection(Protocol):
         *,
         permissions: CodexPermissionSettings | None = None,
         timeout_seconds: float | None = None,
+        output_schema: dict[str, object] | None = None,
     ) -> AsyncIterator[CodexAppServerEvent]:
         """Run and stream one turn."""
         if False:
@@ -1908,6 +1909,7 @@ class SandboxConversationService:
         *,
         turn_permissions: CodexPermissionSettings | None = None,
         turn_timeout_seconds: float | None = None,
+        turn_output_schema: dict[str, object] | None = None,
     ) -> AsyncIterator[SandboxStreamEvent]:
         session = self._owned(session_id, owner_id)
         if session.background_turn is not None and not session.background_turn.done():
@@ -1934,6 +1936,7 @@ class SandboxConversationService:
                                 skill_ids,
                                 permissions=turn_permissions,
                                 timeout_seconds=turn_timeout_seconds,
+                                output_schema=turn_output_schema,
                             )
                         async for event in events:
                             if event.kind and listening:
