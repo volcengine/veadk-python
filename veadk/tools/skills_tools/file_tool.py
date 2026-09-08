@@ -30,7 +30,7 @@ def read_file_tool(file_path: str, offset: int, limit: int, tool_context: ToolCo
     Reads a file from the filesystem with line numbers.
 
     Working directory structure:
-        /tmp/veadk/{session_id}/
+        /home/gem/veadk_skills/sessions/{session_id}/
         ├── skills/     -> all skills are available here (read-only).
         ├── uploads/    -> staged user files (temporary)
         └── outputs/    -> generated files for return
@@ -97,7 +97,7 @@ def write_file_tool(file_path: str, content: str, tool_context: ToolContext):
     Writes content to a file on the filesystem.
 
     Working directory structure:
-        /tmp/veadk/{session_id}/
+        /home/gem/veadk_skills/sessions/{session_id}/
         ├── skills/     -> all skills are available here (read-only).
         ├── uploads/    -> staged user files (temporary)
         └── outputs/    -> generated files for return
@@ -151,7 +151,7 @@ def edit_file_tool(
     """Edit files by replacing exact string matches.
 
     Working directory structure:
-        /tmp/veadk/{session_id}/
+        /home/gem/veadk_skills/sessions/{session_id}/
         ├── skills/     -> all skills are available here (read-only).
         ├── uploads/    -> staged user files (temporary)
         └── outputs/    -> generated files for return

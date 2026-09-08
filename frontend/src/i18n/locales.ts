@@ -47,9 +47,11 @@ function storedLocale(): SupportedLocale | null {
 }
 
 function browserLocales(): readonly string[] {
-  if (typeof navigator === "undefined") return [];
-  if (navigator.languages.length > 0) return navigator.languages;
-  return navigator.language ? [navigator.language] : [];
+  if (typeof window === "undefined") return [];
+  const browserNavigator = window.navigator;
+  if (!browserNavigator) return [];
+  if (browserNavigator.languages.length > 0) return browserNavigator.languages;
+  return browserNavigator.language ? [browserNavigator.language] : [];
 }
 
 export function detectLocale(): SupportedLocale {

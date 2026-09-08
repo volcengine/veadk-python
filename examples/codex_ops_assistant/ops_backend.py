@@ -203,7 +203,7 @@ def _generate_log_lines(day: date, rng: random.Random) -> list[tuple[datetime, s
                     ts,
                     _sidecar_line(
                         ts,
-                        "health_check ok cluster=checkout-api upstream=10.4.2.17:8080",
+                        "health_check ok cluster=checkout-api upstream=192.0.2.17:8080",
                     ),
                 )
             )

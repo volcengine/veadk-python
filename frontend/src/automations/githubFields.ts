@@ -100,7 +100,6 @@ export function initialAutomationValues(
     projectPath: ".",
     runtimeName: "",
     runtimeId: "",
-    sandboxToolId: "",
     modelName: "",
     modelBaseUrl: defaultReviewModelBaseUrl(provider),
     region: defaultCloudRegion(provider),

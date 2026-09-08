@@ -25,7 +25,20 @@ from pathlib import Path
 from unittest.mock import patch
 
 
-def _load_remote_skills_module(execute_skills=lambda *_args, **_kwargs: ""):
+def _load_remote_skills_module(
+    *,
+    invoke_skill=lambda *_args, **_kwargs: {
+        "kind": "task",
+        "id": "task-1",
+        "status": {"state": "working"},
+    },
+    poll_skill=lambda *_args, **_kwargs: {
+        "kind": "task",
+        "id": "task-1",
+        "status": {"state": "completed"},
+        "artifacts": [{"parts": [{"kind": "text", "text": "remote result"}]}],
+    },
+):
     module_path = (
         Path(__file__).resolve().parents[3]
         / "veadk"
@@ -48,7 +61,38 @@ def _load_remote_skills_module(execute_skills=lambda *_args, **_kwargs: ""):
     fake_builtin_tools = types.ModuleType("veadk.tools.builtin_tools")
     fake_builtin_tools.__path__ = []  # type: ignore[attr-defined]
     fake_execute_skills = types.ModuleType("veadk.tools.builtin_tools.execute_skills")
-    fake_execute_skills.execute_skills = execute_skills
+    fake_execute_skills._A2A_MAX_POLL_INTERVAL = 16.0
+    fake_execute_skills._A2A_POLL_INTERVAL = 2.0
+    fake_execute_skills._A2A_TERMINAL_STATES = frozenset(
+        {
+            "completed",
+            "failed",
+            "canceled",
+            "rejected",
+            "input-required",
+            "auth-required",
+        }
+    )
+    fake_execute_skills._a2a_task_id = lambda task: task["id"]
+    fake_execute_skills._a2a_task_result_text = lambda task: "".join(
+        part["text"]
+        for artifact in task.get("artifacts", [])
+        for part in artifact.get("parts", [])
+        if isinstance(part.get("text"), str)
+    )
+    fake_execute_skills._a2a_task_state = lambda task: task.get("status", {}).get(
+        "state"
+    )
+
+    def fake_validate_timeout(timeout):
+        if type(timeout) is not int or not 1 <= timeout <= 1800:
+            raise ValueError("timeout must be an integer between 1 and 1800 seconds")
+
+    fake_execute_skills._validate_timeout = fake_validate_timeout
+    fake_invoke_skill = types.ModuleType("veadk.tools.builtin_tools.invoke_skill")
+    fake_invoke_skill.invoke_skill = invoke_skill
+    fake_poll_skill = types.ModuleType("veadk.tools.builtin_tools.poll_skill")
+    fake_poll_skill.poll_skill = poll_skill
 
     stub_modules = {
         "google": fake_google,
@@ -58,6 +102,8 @@ def _load_remote_skills_module(execute_skills=lambda *_args, **_kwargs: ""):
         "veadk.tools": fake_tools,
         "veadk.tools.builtin_tools": fake_builtin_tools,
         "veadk.tools.builtin_tools.execute_skills": fake_execute_skills,
+        "veadk.tools.builtin_tools.invoke_skill": fake_invoke_skill,
+        "veadk.tools.builtin_tools.poll_skill": fake_poll_skill,
     }
 
     with patch.dict(sys.modules, stub_modules):
@@ -148,14 +194,14 @@ class RemoteSkillsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "input_schema"):
             module.load_remote_skill_definitions(json.dumps(manifest))
 
-    def test_remote_skill_tool_reuses_execute_skills(self) -> None:
+    def test_remote_skill_tool_allows_custom_executor(self) -> None:
         calls = []
 
-        def fake_execute_skills(workflow_prompt, **kwargs):
+        def fake_executor(workflow_prompt, **kwargs):
             calls.append((workflow_prompt, kwargs))
             return "remote result"
 
-        module = _load_remote_skills_module(execute_skills=fake_execute_skills)
+        module = _load_remote_skills_module()
         definition = module.RemoteSkillDefinition(
             name="report_writer",
             description="生成技术报告",
@@ -163,7 +209,7 @@ class RemoteSkillsTest(unittest.TestCase):
             timeout=300,
         )
 
-        tool = module.build_remote_skill_tools([definition])[0]
+        tool = module.build_remote_skill_tools([definition], executor=fake_executor)[0]
         result = tool("写一份设计", {"format": "doc"}, object())
 
         self.assertEqual("remote result", result)
@@ -176,6 +222,50 @@ class RemoteSkillsTest(unittest.TestCase):
         self.assertEqual("写一份设计", query_input["query"])
         self.assertEqual({"format": "doc"}, query_input["arguments"])
         self.assertEqual(300, kwargs["timeout"])
+
+    def test_remote_skill_tool_uses_invoke_poll_by_default(self) -> None:
+        calls = []
+
+        def fake_invoke_skill(workflow_prompt, **kwargs):
+            calls.append(("invoke", workflow_prompt, kwargs))
+            return {
+                "kind": "task",
+                "id": "task-1",
+                "status": {"state": "working"},
+            }
+
+        def fake_poll_skill(task_id, **kwargs):
+            calls.append(("poll", task_id, kwargs))
+            return {
+                "kind": "task",
+                "id": "task-1",
+                "status": {"state": "completed"},
+                "artifacts": [{"parts": [{"kind": "text", "text": "done"}]}],
+            }
+
+        module = _load_remote_skills_module(
+            invoke_skill=fake_invoke_skill,
+            poll_skill=fake_poll_skill,
+        )
+        definition = module.RemoteSkillDefinition(
+            name="report_writer",
+            description="生成技术报告",
+            input_schema={"type": "object"},
+            timeout=300,
+        )
+
+        with patch.object(module.time, "sleep") as sleep:
+            tool = module.build_remote_skill_tools([definition])[0]
+            result = tool("写一份设计", {"format": "doc"}, object())
+
+        self.assertEqual("done", result)
+        self.assertEqual("invoke", calls[0][0])
+        self.assertEqual("poll", calls[1][0])
+        self.assertEqual("task-1", calls[1][1])
+        self.assertEqual(300, calls[0][2]["timeout"])
+        self.assertGreaterEqual(calls[1][2]["timeout"], 1)
+        self.assertLessEqual(calls[1][2]["timeout"], 300)
+        sleep.assert_called_once_with(2.0)
 
     def test_remote_skill_tool_signature_hides_context_as_optional(self) -> None:
         module = _load_remote_skills_module()

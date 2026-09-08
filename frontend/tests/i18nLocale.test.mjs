@@ -34,6 +34,7 @@ function mockBrowser({ storedLocale = null, languages = [] } = {}) {
       localStorage: {
         getItem: (key) => (key === LOCALE_STORAGE_KEY ? storedLocale : null),
       },
+      navigator: { language: languages[0] ?? "", languages },
     },
   });
   Object.defineProperty(globalThis, "navigator", {

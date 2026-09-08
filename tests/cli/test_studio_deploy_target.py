@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import base64
 import threading
 import zipfile
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -1177,6 +1178,96 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     assert callback["skip_consent_enabled"] is True
     assert "configured_user_pool" not in captured
     assert "Preserved the existing Identity user pool login settings." in result.output
+
+
+def test_studio_deploy_uploads_github_app_review_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    private_key = "-----BEGIN PRIVATE KEY-----\ntest-key\n-----END PRIVATE KEY-----\n"
+    private_key_path = tmp_path / "github-app.pem"
+    private_key_path.write_text(private_key, encoding="utf-8")
+
+    monkeypatch.setenv("VEADK_GITHUB_APP_ID", "4830047")
+    monkeypatch.setenv("VEADK_GITHUB_APP_SLUG", "agentkit-veadk-studio")
+    monkeypatch.setenv("VEADK_GITHUB_APP_PRIVATE_KEY_PATH", str(private_key_path))
+    monkeypatch.setenv("VEADK_GITHUB_APP_WEBHOOK_SECRET", "webhook-secret")
+    monkeypatch.setenv("VEADK_GITHUB_APP_REVIEW_OWNER_ID", "github-owner")
+    monkeypatch.setenv("VEADK_GITHUB_APP_REVIEW_CREATOR", "GitHub App")
+
+    class _FakeCloudAgentEngine:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def deploy(self, **_: object) -> SimpleNamespace:
+            return SimpleNamespace(
+                vefaas_endpoint="https://studio.example.com",
+                vefaas_application_id="app-id",
+                vefaas_function_id="",
+            )
+
+    monkeypatch.setattr(
+        "veadk.cloud.cloud_agent_engine.CloudAgentEngine", _FakeCloudAgentEngine
+    )
+    monkeypatch.setattr(
+        "veadk.cli.cli_frontend._resolve_studio_identity_region",
+        lambda **kwargs: kwargs["deployment_region"],
+    )
+    monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient.register_callback_for_user_pool_client",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient.configure_user_pool_for_idp_only",
+        lambda *_args, **_kwargs: None,
+    )
+
+    result = CliRunner().invoke(
+        studio,
+        [
+            "deploy",
+            "--user-pool-id",
+            "pool-id",
+            "--allowed-client-id",
+            "client-id",
+            "--vefaas-app-name",
+            "studio-app",
+            "--sandbox-dev-tool-id",
+            "dev-env-id",
+            "--sandbox-chat-codex-tool-id",
+            "chat-code-env-id",
+            "--sandbox-chat-openclaw-tool-id",
+            "openclaw-tool-id",
+            "--sandbox-chat-hermes-tool-id",
+            "hermes-tool-id",
+            "--sandbox-chat-codex-snapshot-tool-id",
+            "chat-code-env-snapshot-id",
+            "--sandbox-chat-openclaw-snapshot-tool-id",
+            "openclaw-snapshot-tool-id",
+            "--sandbox-chat-hermes-snapshot-tool-id",
+            "hermes-snapshot-tool-id",
+            "--iam-role",
+            "trn:iam::role/test",
+            "--gateway-name",
+            "gateway",
+            "--volcengine-access-key",
+            "ak",
+            "--volcengine-secret-key",
+            "sk",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert veadk_environments["VEADK_GITHUB_APP_ID"] == "4830047"
+    assert veadk_environments["VEADK_GITHUB_APP_SLUG"] == "agentkit-veadk-studio"
+    assert veadk_environments["VEADK_GITHUB_APP_WEBHOOK_SECRET"] == "webhook-secret"
+    assert veadk_environments["VEADK_GITHUB_APP_REVIEW_OWNER_ID"] == "github-owner"
+    assert veadk_environments["VEADK_GITHUB_APP_REVIEW_CREATOR"] == "GitHub App"
+    assert veadk_environments["VEADK_GITHUB_APP_PRIVATE_KEY_B64"] == (
+        base64.b64encode(private_key.encode("utf-8")).decode("ascii")
+    )
+    assert "VEADK_GITHUB_APP_PRIVATE_KEY_PATH" not in veadk_environments
+    assert "VEADK_GITHUB_APP_PRIVATE_KEY" not in veadk_environments
 
 
 def test_studio_deploy_persists_studio_context_environment(

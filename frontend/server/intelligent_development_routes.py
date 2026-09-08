@@ -1386,6 +1386,7 @@ def mount_intelligent_development_routes(
                     ),
                     turn_permissions=_BUILDER_PERMISSIONS,
                     turn_timeout_seconds=_BUILDER_TURN_TIMEOUT_SECONDS,
+                    turn_output_schema=None,
                 ):
                     progress = _command_progress(event)
                     if progress is not None and progress not in emitted_progress:

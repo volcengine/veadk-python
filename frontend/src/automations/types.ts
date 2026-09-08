@@ -25,7 +25,6 @@ export type AutomationFieldName =
   | "projectPath"
   | "runtimeName"
   | "runtimeId"
-  | "sandboxToolId"
   | "modelName"
   | "modelBaseUrl";
 
@@ -35,7 +34,6 @@ export interface AutomationFormValues {
   projectPath: string;
   runtimeName: string;
   runtimeId: string;
-  sandboxToolId: string;
   modelName: string;
   modelBaseUrl: string;
   region: GitHubAutomationRegion;

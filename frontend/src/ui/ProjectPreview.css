@@ -1267,6 +1267,93 @@
   font-weight: 560;
 }
 
+.pp-github-token-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.pp-github-token-label-row > span {
+  min-width: 0;
+}
+
+.pp-github-token-label-row > a {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: hsl(var(--primary));
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.pp-github-token-label-row > a:hover {
+  text-decoration: underline;
+}
+
+.pp-github-token-label-row > a:focus-visible {
+  outline: 2px solid hsl(var(--ring) / 0.35);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.pp-github-token-label-row > a .pp-ic {
+  width: 13px;
+  height: 13px;
+}
+
+.pp-github-token-input {
+  position: relative;
+}
+
+.pp-github-token-input input {
+  padding-right: 42px;
+}
+
+.pp-github-token-input button {
+  position: absolute;
+  top: 3px;
+  right: 4px;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+}
+
+.pp-github-token-input button:hover:not(:disabled) {
+  background: hsl(var(--muted) / 0.55);
+  color: hsl(var(--foreground));
+}
+
+.pp-github-token-input button:focus-visible {
+  outline: 2px solid hsl(var(--ring) / 0.3);
+}
+
+.pp-github-token-input button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.pp-github-token-input button svg {
+  width: 17px;
+  height: 17px;
+}
+
+.pp-github-token-help {
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
 .pp-github-cicd-submit {
   grid-column: 1 / -1;
   align-self: end;

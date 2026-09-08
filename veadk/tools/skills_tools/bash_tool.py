@@ -39,9 +39,9 @@ async def bash_tool(
 
     Execute bash commands in the skills environment with local shell.
     Working Directory & Structure:
-    - Commands run in a temporary session directory: /tmp/veadk/{session_id}/
+    - Commands run in a temporary session directory: /home/gem/veadk_skills/sessions/{session_id}/
     - Working directory structure:
-        /tmp/veadk/{session_id}/
+        /home/gem/veadk_skills/sessions/{session_id}/
         ├── skills/     -> all skills are available here (read-only).
         ├── uploads/    -> staged user files (temporary)
         └── outputs/    -> generated files for return
