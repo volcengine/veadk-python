@@ -88,14 +88,12 @@ EVALUATION_STATES = frozenset(
         "disabled",
         "waiting_dataset",
         "pending",
-        "retrying",
         "preparing",
         "waiting_environment",
         "deploying",
         "executing",
         "judging",
         "aggregating",
-        "cleaning",
         "completed",
         "failed",
         "blocked",
@@ -103,13 +101,11 @@ EVALUATION_STATES = frozenset(
     }
 )
 _ACTIVE_STATES = {
-    "retrying",
     "preparing",
     "deploying",
     "executing",
     "judging",
     "aggregating",
-    "cleaning",
 }
 
 
@@ -324,7 +320,6 @@ def validate_evaluation_report(
             "execution_failures",
             "critical_mismatches",
             "migration_gap_description",
-            "runtime_cleanup",
             "limitations",
             "created_at",
         },
@@ -365,7 +360,7 @@ def validate_evaluation_report(
     weights = value.get("dimension_weights")
     if (
         not isinstance(weights, dict)
-        or list(weights) != expected_dimensions
+        or set(weights) != set(expected_dimensions)
         or any(
             isinstance(weight, bool)
             or not isinstance(weight, (int, float))
@@ -578,9 +573,6 @@ def _validate_report_aggregates(
         or len(gap.encode("utf-8")) > EVALUATION_REASON_MAX_BYTES
     ):
         raise EvaluationContractError("invalid migration gap description")
-    cleanup = value.get("runtime_cleanup")
-    if cleanup != {"status": "confirmed"}:
-        raise EvaluationContractError("runtime cleanup is not confirmed")
 
 
 def _percentage(numerator: int, denominator: int) -> int:

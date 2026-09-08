@@ -945,13 +945,11 @@ function evaluationProgressState(
   }
   if (
     [
-      "retrying",
       "preparing",
       "deploying",
       "executing",
       "judging",
       "aggregating",
-      "cleaning",
     ].includes(evaluation.state)
   ) {
     return {
@@ -1045,13 +1043,11 @@ export function MigrationEvaluationResult({
   const [environment, setEnvironment] = useState<Record<string, string>>({});
   if (!evaluation.enabled) return null;
   const active = [
-    "retrying",
     "preparing",
     "deploying",
     "executing",
     "judging",
     "aggregating",
-    "cleaning",
   ].includes(evaluation.state);
   const required = evaluation.requiredEnvironment ?? [];
   const environmentReady = required.every((key) => Boolean(environment[key]));

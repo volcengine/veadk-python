@@ -293,7 +293,6 @@ test("creates, locks, and reads a migration effect evaluation without expected t
       execution_failures: [],
       critical_mismatches: [],
       migration_gap_description: "未发现关键迁移差距。",
-      runtime_cleanup: { status: "confirmed" },
       limitations: [],
       created_at: "2026-09-07T08:10:00Z",
       asset: { ...asset, kind: "report", attempt: 1 },
@@ -322,7 +321,7 @@ test("creates, locks, and reads a migration effect evaluation without expected t
       priorMessages: [],
     },
   ]);
-  const report = await getMigrationEvaluationReport("task-1");
+  const report = await getMigrationEvaluationReport("task-1", "a".repeat(32));
 
   assert.equal(created.evaluation.state, "waiting_dataset");
   assert.equal(dataset.locked, true);
@@ -335,7 +334,10 @@ test("creates, locks, and reads a migration effect evaluation without expected t
   assert.equal(datasetBody.cases[0].userInput, "查询订单状态");
   assert.equal(Object.hasOwn(datasetBody.cases[0], "expectedTools"), false);
   assert.match(requests[1].url, /\/evaluation\/dataset$/);
-  assert.match(requests[2].url, /\/evaluation\/report$/);
+  assert.match(
+    requests[2].url,
+    /\/evaluation\/report\?versionId=a{32}$/,
+  );
 });
 
 test("accepts the migration default model while preserving legacy capabilities", async (t) => {

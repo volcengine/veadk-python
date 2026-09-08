@@ -46,14 +46,12 @@ export type MigrationEvaluationState =
   | "disabled"
   | "waiting_dataset"
   | "pending"
-  | "retrying"
   | "preparing"
   | "waiting_environment"
   | "deploying"
   | "executing"
   | "judging"
   | "aggregating"
-  | "cleaning"
   | "completed"
   | "failed"
   | "blocked"
@@ -201,7 +199,6 @@ export interface MigrationEvaluationReport {
     evidence_sources: MigrationEvaluationEvidenceSource[];
   }>;
   migration_gap_description: string;
-  runtime_cleanup: { status: "confirmed" };
   limitations: string[];
   created_at: string;
   asset: MigrationEvaluationAsset;
@@ -459,14 +456,12 @@ const EVALUATION_STATES = new Set<MigrationEvaluationState>([
   "disabled",
   "waiting_dataset",
   "pending",
-  "retrying",
   "preparing",
   "waiting_environment",
   "deploying",
   "executing",
   "judging",
   "aggregating",
-  "cleaning",
   "completed",
   "failed",
   "blocked",
@@ -1709,13 +1704,15 @@ function normalizeEvaluationExecutionError(
 
 export async function getMigrationEvaluationReport(
   taskId: string,
+  versionId: string,
   signal?: AbortSignal,
 ): Promise<MigrationEvaluationReport> {
   const value = record(
     await json(
-      await request(`/tasks/${encodeURIComponent(taskId)}/evaluation/report`, {
-        signal,
-      }),
+      await request(
+        `/tasks/${encodeURIComponent(taskId)}/evaluation/report?versionId=${encodeURIComponent(versionId)}`,
+        { signal },
+      ),
       adkT("migrations.evaluation.reportLoadFailed"),
     ),
     adkT("migrations.labels.evaluationReport"),
@@ -1731,10 +1728,6 @@ export async function getMigrationEvaluationReport(
   );
   const coverage = record(
     value.evidence_coverage,
-    adkT("migrations.labels.evaluationReport"),
-  );
-  const cleanup = record(
-    value.runtime_cleanup,
     adkT("migrations.labels.evaluationReport"),
   );
   const weights = record(
@@ -1760,7 +1753,6 @@ export async function getMigrationEvaluationReport(
     !Array.isArray(value.execution_failures) ||
     !Array.isArray(value.critical_mismatches) ||
     typeof value.migration_gap_description !== "string" ||
-    cleanup.status !== "confirmed" ||
     !Array.isArray(value.limitations) ||
     typeof value.created_at !== "string" ||
     !isEvaluationScore(summary.score) ||
@@ -1954,7 +1946,6 @@ export async function getMigrationEvaluationReport(
       };
     }),
     migration_gap_description: value.migration_gap_description,
-    runtime_cleanup: { status: "confirmed" },
     limitations: stringArray(
       value.limitations,
       adkT("migrations.labels.evaluationLimitations"),
@@ -1966,10 +1957,11 @@ export async function getMigrationEvaluationReport(
 
 export async function downloadMigrationEvaluationReport(
   taskId: string,
+  versionId: string,
   signal?: AbortSignal,
 ): Promise<void> {
   const response = await request(
-    `/tasks/${encodeURIComponent(taskId)}/evaluation/report/download`,
+    `/tasks/${encodeURIComponent(taskId)}/evaluation/report/download?versionId=${encodeURIComponent(versionId)}`,
     { signal },
     TRANSFER_REQUEST_TIMEOUT_MS,
   );

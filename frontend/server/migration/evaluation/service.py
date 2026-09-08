@@ -20,6 +20,7 @@ import hashlib
 import json
 import logging
 import re
+import shlex
 import time
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -81,6 +82,7 @@ EVALUATION_RUNNER_DIAGNOSTICS_ROOT = f"{EVALUATION_ROOT}/diagnostics"
 MINIMUM_REMOTE_WRITE_REMAINING_SECONDS = 20 * 60
 logger = logging.getLogger(__name__)
 _TASK_ID_RE = re.compile(r"^migration-v1-[0-9a-f]{32}$")
+_ASSET_VERSION_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _TERMINAL_MIGRATION_STATES = {
     "succeeded",
     "succeeded_with_warnings",
@@ -92,11 +94,9 @@ _ACTIVE_EVALUATION_STATES = {
     "deploying",
     "executing",
     "judging",
-    "cleaning",
 }
 _CANCELLABLE_EVALUATION_STATES = _ACTIVE_EVALUATION_STATES | {
     "pending",
-    "retrying",
     "waiting_environment",
     "aggregating",
 }
@@ -177,20 +177,12 @@ class EvaluationRunner(Protocol):
         secret_path: str | None,
     ) -> None: ...
 
-    def reconcile_cleanup(
-        self,
-        session: MigrationSandboxSession,
-        *,
-        runtime_name: str,
-    ) -> bool: ...
-
-    def cancel(
+    def stop(
         self,
         session: MigrationSandboxSession,
         *,
         attempt: int,
-        runtime_name: str | None,
-    ) -> bool: ...
+    ) -> None: ...
 
 
 class MigrationEvaluationService:
@@ -526,34 +518,6 @@ class MigrationEvaluationService:
             return
         status = self._status(session, task_id, optional=True)
         state = str(status.get("state") or "pending") if status else "pending"
-        if state == "retrying":
-            assert status is not None
-            runtime_name = str(status.get("runtime_name") or "")
-            if runtime_name:
-                assert self._runner is not None
-                if not self._runner.reconcile_cleanup(
-                    session,
-                    runtime_name=runtime_name,
-                ):
-                    logger.warning(
-                        "Evaluation retry cleanup was not confirmed task_id=%s "
-                        "attempt=%s runtime_name=%s",
-                        task_id,
-                        status["attempt"],
-                        runtime_name,
-                    )
-                    self._write_failure(
-                        session,
-                        task_id=task_id,
-                        attempt=int(status["attempt"]),
-                        state="blocked",
-                        code="MIGRATION_EVALUATION_CLEANUP_UNCONFIRMED",
-                        message="临时 Runtime 清理尚未确认，请重新评测。",
-                        retryable=True,
-                        runtime_name=runtime_name,
-                    )
-                    return
-            state = "pending"
         if state == "aggregating":
             assert status is not None
             self._persist_report(
@@ -644,12 +608,7 @@ class MigrationEvaluationService:
         status = self._status(session, task_id)
         assert status is not None
         if status["state"] != "waiting_environment":
-            raise MigrationError(
-                "MIGRATION_EVALUATION_NOT_WAITING_ENVIRONMENT",
-                "当前评测不处于等待环境变量状态。",
-                status_code=409,
-                retryable=False,
-            )
+            return self.snapshot(task_id, owner_id, task=task)
         required_environment = status.get("required_environment")
         assert required_environment is not None
         required = set(required_environment)
@@ -667,18 +626,22 @@ class MigrationEvaluationService:
         manifest = self._manifest(session, expected_config=config)
         assert manifest is not None
         artifact_sha256 = self._artifact_sha256(task_id, owner_id)
-        self._put(
-            session,
-            EVALUATION_SECRET_PATH,
-            self._json_bytes(body.environment),
-            media_type="application/json",
-        )
-        self._execute(
-            session,
-            f"chmod 600 {EVALUATION_SECRET_PATH}",
-            operation="evaluation_protect_environment",
-            timeout_seconds=30,
-        )
+        try:
+            self._put(
+                session,
+                EVALUATION_SECRET_PATH,
+                self._json_bytes(body.environment),
+                media_type="application/json",
+            )
+            self._execute(
+                session,
+                f"chmod 600 {EVALUATION_SECRET_PATH}",
+                operation="evaluation_protect_environment",
+                timeout_seconds=30,
+            )
+        except Exception:
+            self._delete_environment_file(session, EVALUATION_SECRET_PATH)
+            raise
         self._start(
             session,
             task_id=task_id,
@@ -702,31 +665,44 @@ class MigrationEvaluationService:
             or not isinstance(error, dict)
             or error.get("retryable") is not True
         ):
-            raise MigrationError(
-                "MIGRATION_EVALUATION_RETRY_NOT_ALLOWED",
-                "当前评测不能重试。",
-                status_code=409,
-                retryable=False,
-            )
-        runtime_name = str(status.get("runtime_name") or "")
-        self._write_status(
-            session,
-            task_id=task_id,
-            attempt=int(status["attempt"]),
-            state="retrying",
-            message="正在清理临时 Runtime 并准备重试",
-            runtime_name=runtime_name or None,
+            return self.snapshot(task_id, owner_id, task=task)
+        attempt = int(status["attempt"])
+        manifest = self._manifest(session, expected_config=config)
+        assert manifest is not None
+        artifact = self._migration.artifact(task_id, owner_id)
+        artifact_sha256 = self._artifact_sha256(
+            task_id,
+            owner_id,
+            artifact=artifact,
         )
-        return {
-            "enabled": True,
-            "preset": config["preset"],
-            "dimensions": config["dimensions"],
-            "state": "retrying",
-            "message": "正在清理临时 Runtime 并准备重试",
-            "attempt": int(status["attempt"]),
-            "canResume": False,
-            "canRetry": False,
-        }
+        environment = artifact.get("environment")
+        required = (
+            [str(item) for item in environment.get("required", [])]
+            if isinstance(environment, dict)
+            and isinstance(environment.get("required"), list)
+            else []
+        )
+        next_attempt = attempt + 1
+        if required:
+            self._write_status(
+                session,
+                task_id=task_id,
+                attempt=next_attempt,
+                state="waiting_environment",
+                message="请补充临时部署所需的环境变量",
+                required_environment=required,
+            )
+        else:
+            self._start(
+                session,
+                task_id=task_id,
+                attempt=next_attempt,
+                config=config,
+                manifest=manifest,
+                artifact_sha256=artifact_sha256,
+                secret_path=None,
+            )
+        return self.snapshot(task_id, owner_id, task=task)
 
     def cancel(self, task_id: str, owner_id: str) -> dict[str, object]:
         task = self._migration.get_task(task_id, owner_id)
@@ -749,29 +725,15 @@ class MigrationEvaluationService:
                 retryable=False,
             )
         attempt = int(status.get("attempt") or 0) if status else 0
-        runtime_name = str(status.get("runtime_name") or "") if status else ""
         if attempt > 0:
             assert self._runner is not None
-            cleanup_confirmed = self._runner.cancel(
-                session,
-                attempt=attempt,
-                runtime_name=runtime_name or None,
-            )
-            if not cleanup_confirmed:
-                self._write_failure(
-                    session,
-                    task_id=task_id,
-                    attempt=attempt,
-                    state="blocked",
-                    code="MIGRATION_EVALUATION_CLEANUP_UNCONFIRMED",
-                    message="评测进程已停止，但临时 Runtime 清理尚未确认。",
-                    retryable=True,
-                    runtime_name=runtime_name or None,
-                )
+            try:
+                self._runner.stop(session, attempt=attempt)
+            except Exception:
                 raise MigrationError(
-                    "MIGRATION_EVALUATION_CLEANUP_UNCONFIRMED",
-                    "评测进程已停止，但临时 Runtime 清理尚未确认。",
-                    status_code=409,
+                    "MIGRATION_EVALUATION_STOP_FAILED",
+                    "评测进程未能停止，请重试。",
+                    status_code=502,
                     retryable=True,
                 )
         self._write_status(
@@ -787,18 +749,17 @@ class MigrationEvaluationService:
         )
         return self.snapshot(task_id, owner_id, task=task)
 
-    def get_report(self, task_id: str, owner_id: str) -> dict[str, object]:
-        task = self._migration.get_task(task_id, owner_id)
-        config = self._require_enabled(task)
-        session = self._session(task_id, owner_id)
-        status = self._status(session, task_id)
-        assert status is not None
-        asset = status.get("report_asset")
-        if status["state"] != "completed" or not isinstance(asset, dict):
+    def get_report(
+        self,
+        task_id: str,
+        owner_id: str,
+        version_id: str,
+    ) -> dict[str, object]:
+        if _ASSET_VERSION_ID_RE.fullmatch(version_id) is None:
             raise MigrationError(
-                "MIGRATION_EVALUATION_REPORT_NOT_READY",
-                "评测报告尚未生成。",
-                status_code=409,
+                "MIGRATION_EVALUATION_REPORT_REFERENCE_INVALID",
+                "评测报告引用无效。",
+                status_code=400,
                 retryable=False,
             )
         assert self._repository is not None
@@ -807,22 +768,37 @@ class MigrationEvaluationService:
                 owner_id=owner_id,
                 task_id=task_id,
                 kind="report",
-                version_id=str(asset["versionId"]),
+                version_id=version_id,
             )
-            if metadata.public() != asset:
-                raise EvaluationAssetIntegrityError("评测报告状态与持久化资产不一致。")
             value = json.loads(content)
-            manifest = self._manifest(session, expected_config=config)
-            assert manifest is not None
+            if not isinstance(value, dict):
+                raise EvaluationAssetIntegrityError("评测报告格式无效。")
+            dimensions = value.get("dimensions")
+            dataset_sha256 = value.get("dataset_sha256")
+            artifact_sha256 = value.get("artifact_sha256")
+            if (
+                metadata.attempt is None
+                or not isinstance(dimensions, list)
+                or not all(isinstance(item, str) for item in dimensions)
+                or not isinstance(dataset_sha256, str)
+                or not isinstance(artifact_sha256, str)
+            ):
+                raise EvaluationAssetIntegrityError("评测报告格式无效。")
             report = validate_evaluation_report(
                 value,
                 expected_task_id=task_id,
-                expected_attempt=int(status["attempt"]),
-                expected_dataset_sha256=str(manifest["asset"]["sha256"]),
-                expected_artifact_sha256=self._artifact_sha256(task_id, owner_id),
-                expected_dimensions=config["dimensions"],
+                expected_attempt=metadata.attempt,
+                expected_dataset_sha256=dataset_sha256,
+                expected_artifact_sha256=artifact_sha256,
+                expected_dimensions=dimensions,
             )
-        except (EvaluationAssetNotFound, EvaluationAssetIntegrityError) as error:
+        except (
+            EvaluationAssetNotFound,
+            EvaluationAssetIntegrityError,
+            EvaluationContractError,
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+        ) as error:
             raise MigrationError(
                 "MIGRATION_EVALUATION_REPORT_INVALID",
                 "评测报告完整性校验失败。",
@@ -836,14 +812,15 @@ class MigrationEvaluationService:
                 status_code=503,
                 retryable=True,
             ) from error
-        return {**report, "asset": asset}
+        return {**report, "asset": metadata.public()}
 
     def download_report(
         self,
         task_id: str,
         owner_id: str,
+        version_id: str,
     ) -> tuple[bytes, str]:
-        report = self.get_report(task_id, owner_id)
+        report = self.get_report(task_id, owner_id, version_id)
         content = self._report_markdown(report).encode("utf-8")
         attempt = cast(int, report["attempt"])
         return content, f"migration-evaluation-{attempt}.md"
@@ -861,6 +838,8 @@ class MigrationEvaluationService:
     ) -> None:
         remaining = self._remaining_seconds(session)
         if remaining < MINIMUM_REMOTE_WRITE_REMAINING_SECONDS:
+            if secret_path is not None:
+                self._delete_environment_file(session, secret_path)
             self._write_failure(
                 session,
                 task_id=task_id,
@@ -894,7 +873,23 @@ class MigrationEvaluationService:
                 artifact_sha256=artifact_sha256,
                 secret_path=secret_path,
             )
+        except MigrationError as error:
+            if secret_path is not None:
+                self._delete_environment_file(session, secret_path)
+            self._write_failure(
+                session,
+                task_id=task_id,
+                attempt=attempt,
+                state="failed",
+                code=error.code,
+                message=str(error),
+                retryable=error.retryable,
+                runtime_name=runtime_name,
+            )
+            raise
         except Exception as error:
+            if secret_path is not None:
+                self._delete_environment_file(session, secret_path)
             self._write_failure(
                 session,
                 task_id=task_id,
@@ -911,6 +906,33 @@ class MigrationEvaluationService:
                 status_code=502,
                 retryable=True,
             ) from error
+
+    def _delete_environment_file(
+        self,
+        session: MigrationSandboxSession,
+        path: str,
+    ) -> None:
+        script = (
+            "import os\n"
+            f"path={path!r}\n"
+            "try:\n"
+            "    os.unlink(path)\n"
+            "except FileNotFoundError:\n"
+            "    pass\n"
+        )
+        try:
+            self._execute(
+                session,
+                f"python3 -c {shlex.quote(script)}",
+                operation="evaluation_delete_environment",
+                timeout_seconds=30,
+            )
+        except Exception as error:
+            logger.warning(
+                "Could not delete evaluation environment file task_id=%s error_type=%s",
+                session.task_id,
+                type(error).__name__,
+            )
 
     def _persist_report(
         self,
@@ -1358,12 +1380,10 @@ class MigrationEvaluationService:
         execution = report.get("execution")
         coverage = report.get("evidence_coverage")
         model = report.get("model")
-        cleanup = report.get("runtime_cleanup")
         assert isinstance(summary, dict)
         assert isinstance(execution, dict)
         assert isinstance(coverage, dict)
         assert isinstance(model, dict)
-        assert isinstance(cleanup, dict)
         score = summary.get("score")
         score_text = "N/A" if score is None else f"{score}/100"
         lines = [
@@ -1379,7 +1399,6 @@ class MigrationEvaluationService:
             f"- 综合一致性：{score_text}",
             f"- 证据覆盖率：{coverage['rate']}%",
             f"- 执行成功率：{execution['success_rate']}%",
-            f"- Runtime 清理：{cleanup['status']}",
             "",
             "## 维度结果",
             "",

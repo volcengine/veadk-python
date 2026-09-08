@@ -16,17 +16,24 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import json
 import logging
+import math
 import shlex
 import textwrap
+from typing import TypeAlias
+
+import yaml
+from yaml.events import AliasEvent, CollectionEndEvent, CollectionStartEvent, NodeEvent
 
 from ..gateway import (
     EVALUATION_START_MARKER,
     MigrationGateway,
+    MigrationRemoteFileNotFound,
     MigrationSandboxSession,
 )
-from ..service import MIGRATION_ROOT
+from ..service import MIGRATION_ROOT, MigrationError
 from .service import (
     EVALUATION_DATASET_PATH,
     EVALUATION_REPORT_MARKDOWN_PATH,
@@ -39,7 +46,98 @@ from .dimensions import EVALUATION_DIMENSIONS
 
 _RUNNER_PATH = f"{EVALUATION_ROOT}/assets/evaluation_runner.py"
 _JUDGE_SCHEMA_PATH = f"{EVALUATION_ROOT}/assets/judge-schema.json"
+_PROJECT_CONFIG_PATHS = (
+    f"{MIGRATION_ROOT}/output/veadk/agentkit.yaml",
+    f"{MIGRATION_ROOT}/output/veadk/.agentkit/agentkit.yaml",
+)
+AGENTKIT_CONFIG_MAX_BYTES = 1024 * 1024
+_AGENTKIT_CONFIG_MAX_DEPTH = 32
+_AGENTKIT_CONFIG_MAX_NODES = 10_000
+CloudCredentialResolver: TypeAlias = Callable[[], tuple[str, str, str | None]]
 logger = logging.getLogger(__name__)
+
+
+class AgentkitConfigError(ValueError):
+    """The migrated AgentKit config cannot be safely normalized to JSON."""
+
+
+def _normalize_json_value(
+    value: object,
+    *,
+    depth: int,
+    nodes: list[int],
+) -> object:
+    nodes[0] += 1
+    if nodes[0] > _AGENTKIT_CONFIG_MAX_NODES:
+        raise AgentkitConfigError("agentkit config has too many values")
+    if depth > _AGENTKIT_CONFIG_MAX_DEPTH:
+        raise AgentkitConfigError("agentkit config is too deep")
+    if value is None or type(value) in {str, int, bool}:
+        return value
+    if type(value) is float:
+        if not math.isfinite(value):
+            raise AgentkitConfigError("agentkit config contains a non-finite number")
+        return value
+    if isinstance(value, list):
+        return [
+            _normalize_json_value(item, depth=depth + 1, nodes=nodes) for item in value
+        ]
+    if isinstance(value, dict):
+        if any(type(key) is not str for key in value):
+            raise AgentkitConfigError("agentkit config keys must be strings")
+        return {
+            key: _normalize_json_value(item, depth=depth + 1, nodes=nodes)
+            for key, item in value.items()
+        }
+    raise AgentkitConfigError("agentkit config contains a non-JSON value")
+
+
+def normalize_agentkit_config(content: bytes) -> dict[str, object]:
+    """Parse untrusted YAML once at the Studio boundary and return bounded JSON."""
+
+    if len(content) > AGENTKIT_CONFIG_MAX_BYTES:
+        raise AgentkitConfigError("agentkit config is too large")
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise AgentkitConfigError("agentkit config is not UTF-8") from error
+    depth = 0
+    event_nodes = 0
+    try:
+        for event in yaml.parse(text, Loader=yaml.SafeLoader):
+            if isinstance(event, AliasEvent) or (
+                isinstance(event, NodeEvent) and event.anchor is not None
+            ):
+                raise AgentkitConfigError("agentkit config aliases are not allowed")
+            if isinstance(event, NodeEvent):
+                event_nodes += 1
+                if event_nodes > _AGENTKIT_CONFIG_MAX_NODES:
+                    raise AgentkitConfigError("agentkit config has too many values")
+                tag = getattr(event, "tag", None)
+                if isinstance(tag, str) and not tag.startswith("tag:yaml.org,2002:"):
+                    raise AgentkitConfigError("agentkit config tags are not allowed")
+            if isinstance(event, CollectionStartEvent):
+                depth += 1
+                if depth > _AGENTKIT_CONFIG_MAX_DEPTH:
+                    raise AgentkitConfigError("agentkit config is too deep")
+            elif isinstance(event, CollectionEndEvent):
+                depth -= 1
+        parsed = yaml.safe_load(text)
+    except AgentkitConfigError:
+        raise
+    except (RecursionError, yaml.YAMLError) as error:
+        raise AgentkitConfigError("agentkit config is malformed") from error
+    normalized = _normalize_json_value(parsed, depth=0, nodes=[0])
+    if not isinstance(normalized, dict):
+        raise AgentkitConfigError("agentkit config must be an object")
+    encoded = json.dumps(
+        normalized,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    if len(encoded) > AGENTKIT_CONFIG_MAX_BYTES:
+        raise AgentkitConfigError("normalized agentkit config is too large")
+    return normalized
 
 
 def judge_schema() -> dict[str, object]:
@@ -121,15 +219,13 @@ def runner_source() -> str:
         import json
         import os
         import shutil
+        import stat
         import subprocess
         import sys
         import threading
         import time
-        import tomllib
         from datetime import datetime, timezone
         from pathlib import Path
-
-        import yaml
 
         OUTPUT_LIMIT = 64 * 1024
         RAW_LIMIT = 16 * 1024 * 1024
@@ -218,8 +314,23 @@ def runner_source() -> str:
             if not path:
                 return {}
             secret_path = Path(path)
+            descriptor = None
             try:
-                value = json.loads(secret_path.read_text(encoding="utf-8"))
+                descriptor = os.open(
+                    secret_path,
+                    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                )
+                metadata = os.fstat(descriptor)
+                if not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(
+                    metadata.st_mode
+                ) != 0o600:
+                    raise PermissionError("credential file integrity check failed")
+                with os.fdopen(
+                    descriptor,
+                    encoding="utf-8",
+                    closefd=False,
+                ) as stream:
+                    value = json.load(stream)
                 if not isinstance(value, dict) or any(
                     not isinstance(key, str) or not isinstance(item, str)
                     for key, item in value.items()
@@ -227,10 +338,42 @@ def runner_source() -> str:
                     raise ValueError("invalid environment payload")
                 return value
             finally:
+                if descriptor is not None:
+                    os.close(descriptor)
                 try:
                     secret_path.unlink()
                 except FileNotFoundError:
                     pass
+
+
+        def load_cloud_credentials(path):
+            values = load_secrets(path)
+            expected = {"accessKeyId", "secretAccessKey"}
+            if not expected.issubset(values) or not set(values).issubset(
+                expected | {"sessionToken"}
+            ):
+                raise ValueError("invalid cloud credential payload")
+            access_key = values["accessKeyId"]
+            secret_key = values["secretAccessKey"]
+            session_token = values.get("sessionToken")
+            if not access_key or not secret_key:
+                raise ValueError("incomplete cloud credential payload")
+            environment = {
+                "VOLCENGINE_ACCESS_KEY": access_key,
+                "VOLCENGINE_SECRET_KEY": secret_key,
+                "BYTEPLUS_ACCESS_KEY": access_key,
+                "BYTEPLUS_SECRET_KEY": secret_key,
+            }
+            if session_token:
+                environment.update(
+                    {
+                        "VOLCENGINE_SESSION_TOKEN": session_token,
+                        "VOLC_SESSIONTOKEN": session_token,
+                        "BYTEPLUS_SESSION_TOKEN": session_token,
+                    }
+                )
+            values.clear()
+            return environment
 
 
         def run_capped(args, *, cwd, env, timeout, input_text=None, limit=RAW_LIMIT):
@@ -273,17 +416,8 @@ def runner_source() -> str:
             return code, bytes(kept), total
 
 
-        def project_config(project):
-            candidates = [project / "agentkit.yaml", project / ".agentkit" / "agentkit.yaml"]
-            for candidate in candidates:
-                if candidate.is_file():
-                    return candidate
-            raise RuntimeError("migrated project does not contain agentkit.yaml")
-
-
         def temporary_config(config, secrets, work):
-            project = Path(config["project_path"])
-            raw = yaml.safe_load(project_config(project).read_text(encoding="utf-8"))
+            raw = json.loads(json.dumps(config["agentkit_config"]))
             if not isinstance(raw, dict):
                 raise RuntimeError("invalid agentkit.yaml")
             common = raw.setdefault("common", {})
@@ -314,7 +448,10 @@ def runner_source() -> str:
                 strategy["runtime_envs"] = strategy_env
             strategy_env.update(secrets)
             target = work / "agentkit-evaluation.yaml"
-            target.write_text(yaml.safe_dump(raw, allow_unicode=True, sort_keys=False), encoding="utf-8")
+            target.write_text(
+                json.dumps(raw, ensure_ascii=False, separators=(",", ":")),
+                encoding="utf-8",
+            )
             target.chmod(0o600)
             return target
 
@@ -596,13 +733,7 @@ def runner_source() -> str:
                 value = str(env.get(key) or "").strip()
                 if value:
                     return truncate_utf8(value, 512)
-            config_path = Path.home() / ".codex" / "config.toml"
-            try:
-                value = tomllib.loads(config_path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                return "default"
-            model = value.get("model") if isinstance(value, dict) else None
-            return truncate_utf8(model, 512) if isinstance(model, str) and model else "default"
+            return "default"
 
 
         def codex_events(events):
@@ -1067,7 +1198,6 @@ def runner_source() -> str:
                 ],
                 "critical_mismatches": critical_mismatches,
                 "migration_gap_description": gap_description,
-                "runtime_cleanup": {"status": "pending"},
                 "limitations": limitations,
                 "created_at": now(),
             }
@@ -1089,7 +1219,6 @@ def runner_source() -> str:
                 f"- 综合一致性：{score_text}",
                 f"- 证据覆盖率：{report['evidence_coverage']['rate']}%",
                 f"- 执行成功率：{report['execution']['success_rate']}%",
-                f"- Runtime 清理：{report['runtime_cleanup']['status']}",
                 "",
                 "## 维度结果",
                 "",
@@ -1116,16 +1245,20 @@ def runner_source() -> str:
             project = Path(config["project_path"])
             work = Path(config["work_path"])
             work.mkdir(parents=True, exist_ok=True)
-            secrets = load_secrets(config.get("secret_path"))
+            secrets = {}
+            cloud_environment = {}
             env = dict(os.environ)
-            env.update(secrets)
-            env.update({"CI": "1", "NO_COLOR": "1"})
-            report_ready = False
-            failure = None
             config_file = None
-            report = None
             try:
                 diagnostic(config, "runner_started")
+                secrets = load_secrets(config.get("secret_path"))
+                cloud_environment = load_cloud_credentials(
+                    config["cloud_credential_path"]
+                )
+                env.update(secrets)
+                env.update(cloud_environment)
+                env.update({"CI": "1", "NO_COLOR": "1"})
+                diagnostic(config, "credentials_loaded")
                 if time.time() >= config["remote_write_not_after"]:
                     raise RuntimeError("insufficient session time for deployment")
                 dataset_content = Path(config["dataset_path"]).read_bytes()
@@ -1220,8 +1353,8 @@ def runner_source() -> str:
                     report_markdown(report),
                     encoding="utf-8",
                 )
-                report_ready = True
                 diagnostic(config, "report_ready")
+                status(config, "aggregating", "正在保存不可变评测报告")
             except Exception as error:
                 diagnostic(
                     config,
@@ -1233,70 +1366,60 @@ def runner_source() -> str:
                     "message": "临时部署或评测执行失败，请重试。",
                     "retryable": True,
                 }
+                status(config, "failed", failure["message"], error=failure)
             finally:
                 secrets.clear()
+                cloud_environment.clear()
                 if config_file is not None:
                     try:
                         config_file.unlink()
                     except FileNotFoundError:
                         pass
-                status(config, "cleaning", "正在清理临时 Runtime")
                 cleanup_confirmed = cleanup_runtime(env, config["runtime_name"])
                 shutil.rmtree(work, ignore_errors=True)
                 if not cleanup_confirmed:
-                    if report is not None:
-                        report["runtime_cleanup"] = {"status": "cleanup_required"}
-                        atomic_json(config["report_path"], report)
-                        Path(config["report_markdown_path"]).write_text(
-                            report_markdown(report),
-                            encoding="utf-8",
-                        )
                     diagnostic(config, "runtime_cleanup_unconfirmed")
-                    status(
-                        config,
-                        "blocked",
-                        "临时 Runtime 清理尚未确认，请重试清理。",
-                        error={
-                            "code": "MIGRATION_EVALUATION_CLEANUP_UNCONFIRMED",
-                            "message": "临时 Runtime 清理尚未确认，请重试清理。",
-                            "retryable": True,
-                        },
-                    )
-                elif failure is not None:
-                    diagnostic(config, "runtime_cleanup_confirmed")
-                    status(config, "failed", failure["message"], error=failure)
-                elif report_ready:
-                    assert report is not None
-                    report["runtime_cleanup"] = {"status": "confirmed"}
-                    atomic_json(config["report_path"], report)
-                    Path(config["report_markdown_path"]).write_text(
-                        report_markdown(report),
-                        encoding="utf-8",
-                    )
-                    diagnostic(config, "runtime_cleanup_confirmed")
-                    status(config, "aggregating", "正在保存不可变评测报告")
                 else:
-                    status(
-                        config,
-                        "failed",
-                        "评测未生成报告，请重试。",
-                        error={
-                            "code": "MIGRATION_EVALUATION_REPORT_MISSING",
-                            "message": "评测未生成报告，请重试。",
-                            "retryable": True,
-                        },
-                    )
+                    diagnostic(config, "runtime_cleanup_confirmed")
+
+
+        def cleanup_only(config_path):
+            config = json.loads(Path(config_path).read_text(encoding="utf-8"))
+            env = dict(os.environ)
+            cloud_environment = load_cloud_credentials(config["cloud_credential_path"])
+            env.update(cloud_environment)
+            env.update({"CI": "1", "NO_COLOR": "1"})
+            try:
+                confirmed = cleanup_runtime(env, config["runtime_name"])
+                diagnostic(
+                    config,
+                    "runtime_cleanup_confirmed"
+                    if confirmed
+                    else "runtime_cleanup_unconfirmed",
+                )
+            finally:
+                cloud_environment.clear()
+            raise SystemExit(0 if confirmed else 1)
 
 
         if __name__ == "__main__":
-            main(sys.argv[1])
+            if sys.argv[1:2] == ["--cleanup"]:
+                cleanup_only(sys.argv[2])
+            else:
+                main(sys.argv[1])
         """
     ).lstrip()
 
 
 class SandboxMigrationEvaluationRunner:
-    def __init__(self, gateway: MigrationGateway) -> None:
+    def __init__(
+        self,
+        gateway: MigrationGateway,
+        *,
+        resolve_credentials: CloudCredentialResolver,
+    ) -> None:
         self._gateway = gateway
+        self._resolve_credentials = resolve_credentials
 
     def start(
         self,
@@ -1313,6 +1436,9 @@ class SandboxMigrationEvaluationRunner:
         config_path = f"{EVALUATION_ROOT}/control/runner-{attempt}.json"
         work_path = f"{EVALUATION_ROOT}/attempts/{attempt}"
         result_path = f"{EVALUATION_ROOT}/results/attempt-{attempt}"
+        cloud_credential_path = self._cloud_credential_path(attempt)
+        agentkit_config = self._agentkit_config(session)
+        cloud_credentials = self._cloud_credentials()
         registry = {item.id: item for item in EVALUATION_DIMENSIONS}
         config = {
             "schema_version": 1,
@@ -1348,42 +1474,64 @@ class SandboxMigrationEvaluationRunner:
             "execution_results_path": f"{result_path}/execution-results.jsonl",
             "diagnostic_path": f"{EVALUATION_ROOT}/diagnostics/evaluation.log",
             "secret_path": secret_path,
+            "cloud_credential_path": cloud_credential_path,
+            "agentkit_config": agentkit_config,
             "remote_write_not_after": self._expiry_epoch(session)
             - MINIMUM_REMOTE_WRITE_REMAINING_SECONDS,
         }
-        self._put(
-            session, _RUNNER_PATH, runner_source().encode("utf-8"), "text/x-python"
-        )
-        self._put(
-            session,
-            _JUDGE_SCHEMA_PATH,
-            json.dumps(judge_schema(), separators=(",", ":")).encode("utf-8"),
-            "application/json",
-        )
-        self._put(
-            session,
-            config_path,
-            json.dumps(config, ensure_ascii=False, separators=(",", ":")).encode(
-                "utf-8"
-            ),
-            "application/json",
-        )
-        self._gateway.execute_bash(
-            session,
-            self._start_command(attempt, config_path),
-            operation="start_evaluation",
-            timeout_seconds=30,
-        )
+        try:
+            self._put(
+                session,
+                cloud_credential_path,
+                cloud_credentials,
+                "application/json",
+            )
+            self._protect_cloud_credentials(session, cloud_credential_path)
+            self._put(
+                session,
+                _RUNNER_PATH,
+                runner_source().encode("utf-8"),
+                "text/x-python",
+            )
+            self._put(
+                session,
+                _JUDGE_SCHEMA_PATH,
+                json.dumps(judge_schema(), separators=(",", ":")).encode("utf-8"),
+                "application/json",
+            )
+            self._put(
+                session,
+                config_path,
+                json.dumps(
+                    config,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ).encode("utf-8"),
+                "application/json",
+            )
+            self._gateway.execute_bash(
+                session,
+                self._start_command(attempt, config_path),
+                operation="start_evaluation",
+                timeout_seconds=30,
+            )
+        except Exception:
+            self._delete_remote_file(
+                session,
+                cloud_credential_path,
+                operation="evaluation_delete_cloud_credentials",
+            )
+            raise
 
-    def cancel(
+    def stop(
         self,
         session: MigrationSandboxSession,
         *,
         attempt: int,
-        runtime_name: str | None,
-    ) -> bool:
+    ) -> None:
         pid_path = f"{EVALUATION_ROOT}/control/runner-{attempt}.pid"
         lock_path = f"{EVALUATION_ROOT}/control/runner-{attempt}.lock"
+        config_path = f"{EVALUATION_ROOT}/control/runner-{attempt}.json"
         script = textwrap.dedent(
             f"""
             import os
@@ -1418,87 +1566,160 @@ class SandboxMigrationEvaluationRunner:
             Path({lock_path!r}).rmdir() if Path({lock_path!r}).is_dir() else None
             """
         ).strip()
+        stop_command = "python3 - <<'PY'\n" + script + "\nPY"
+        cleanup_command = self._cleanup_command(attempt, config_path)
+        command = "\n".join(
+            [
+                "set -e",
+                stop_command,
+                "(",
+                cleanup_command,
+                ") || true",
+            ]
+        )
+        try:
+            self._put(
+                session,
+                self._cloud_credential_path(attempt),
+                self._cloud_credentials(),
+                "application/json",
+            )
+            self._protect_cloud_credentials(
+                session,
+                self._cloud_credential_path(attempt),
+            )
+        except Exception as error:
+            logger.warning(
+                "Evaluation cleanup credentials unavailable task_id=%s "
+                "attempt=%s error_type=%s",
+                session.task_id,
+                attempt,
+                type(error).__name__,
+            )
         try:
             self._gateway.execute_bash(
                 session,
-                "python3 - <<'PY'\n" + script + "\nPY",
+                command,
                 operation="evaluation_cancel",
                 timeout_seconds=30,
             )
         except Exception as error:
             logger.warning(
                 "Evaluation cancellation command failed task_id=%s "
-                "runtime_name=%s error_type=%s",
+                "attempt=%s error_type=%s",
                 session.task_id,
-                runtime_name,
+                attempt,
                 type(error).__name__,
             )
-            return False
-        return (
-            self.reconcile_cleanup(session, runtime_name=runtime_name)
-            if runtime_name
-            else True
-        )
+            raise
 
-    def reconcile_cleanup(
+    def _agentkit_config(
         self,
         session: MigrationSandboxSession,
-        *,
-        runtime_name: str,
-    ) -> bool:
-        script = textwrap.dedent(
-            f"""
-            import json
-            import subprocess
-            import sys
-            import time
+    ) -> dict[str, object]:
+        for path in _PROJECT_CONFIG_PATHS:
+            try:
+                content = self._gateway.get_file(
+                    session,
+                    path,
+                    max_bytes=AGENTKIT_CONFIG_MAX_BYTES,
+                )
+            except MigrationRemoteFileNotFound:
+                continue
+            try:
+                return normalize_agentkit_config(content)
+            except AgentkitConfigError as error:
+                raise MigrationError(
+                    "MIGRATION_EVALUATION_AGENTKIT_CONFIG_INVALID",
+                    "迁移产物的 agentkit.yaml 无效，无法部署评测 Runtime。",
+                    status_code=422,
+                    retryable=False,
+                ) from error
+        raise MigrationError(
+            "MIGRATION_EVALUATION_AGENTKIT_CONFIG_MISSING",
+            "迁移产物缺少 agentkit.yaml，无法部署评测 Runtime。",
+            status_code=422,
+            retryable=False,
+        )
 
-            name = {runtime_name!r}
-            for _ in range(6):
-                listed = subprocess.run(
-                    ["ak", "runtime", "list", "--project", "default", "--json"],
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
-                )
-                if listed.returncode != 0:
-                    time.sleep(5)
-                    continue
-                values = json.loads(listed.stdout)
-                matches = [item for item in values if item.get("name") == name]
-                if not matches:
-                    raise SystemExit(0)
-                if len(matches) > 1:
-                    raise SystemExit(2)
-                runtime_id = matches[0].get("runtimeId") or matches[0].get("runtime_id")
-                subprocess.run(
-                    ["ak", "runtime", "delete", str(runtime_id), "--yes"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    timeout=180,
-                )
-                time.sleep(5)
-            raise SystemExit(1)
-            """
-        ).strip()
-        command = "python3 - <<'PY'\n" + script + "\nPY"
+    def _cloud_credentials(self) -> bytes:
+        try:
+            access_key, secret_key, session_token = self._resolve_credentials()
+        except Exception as error:
+            raise MigrationError(
+                "MIGRATION_EVALUATION_CLOUD_CREDENTIALS_UNAVAILABLE",
+                "Studio 云身份不可用，无法部署评测 Runtime，请联系管理员检查 IAM 配置。",
+                status_code=503,
+                retryable=False,
+            ) from error
+        if (
+            not access_key
+            or not secret_key
+            or any(
+                "\x00" in value
+                for value in (access_key, secret_key, session_token or "")
+            )
+        ):
+            raise MigrationError(
+                "MIGRATION_EVALUATION_CLOUD_CREDENTIALS_UNAVAILABLE",
+                "Studio 云身份不可用，无法部署评测 Runtime，请联系管理员检查 IAM 配置。",
+                status_code=503,
+                retryable=False,
+            )
+        payload = {
+            "accessKeyId": access_key,
+            "secretAccessKey": secret_key,
+        }
+        if session_token:
+            payload["sessionToken"] = session_token
+        return json.dumps(payload, separators=(",", ":")).encode("utf-8")
+
+    def _protect_cloud_credentials(
+        self,
+        session: MigrationSandboxSession,
+        path: str,
+    ) -> None:
+        self._gateway.execute_bash(
+            session,
+            f"chmod 600 {shlex.quote(path)}",
+            operation="evaluation_protect_cloud_credentials",
+            timeout_seconds=30,
+        )
+
+    def _delete_remote_file(
+        self,
+        session: MigrationSandboxSession,
+        path: str,
+        *,
+        operation: str,
+    ) -> None:
+        script = (
+            "import os\n"
+            f"path={path!r}\n"
+            "try:\n"
+            "    os.unlink(path)\n"
+            "except FileNotFoundError:\n"
+            "    pass\n"
+        )
         try:
             self._gateway.execute_bash(
                 session,
-                command,
-                operation="evaluation_cleanup_reconcile",
-                timeout_seconds=360,
+                f"python3 -c {shlex.quote(script)}",
+                operation=operation,
+                timeout_seconds=30,
             )
         except Exception as error:
             logger.warning(
-                "Evaluation Runtime cleanup reconciliation failed task_id=%s "
-                "runtime_name=%s error_type=%s",
+                "Could not delete evaluation credential file task_id=%s "
+                "operation=%s error_type=%s",
                 session.task_id,
-                runtime_name,
+                operation,
                 type(error).__name__,
             )
-            return False
-        return True
+
+    @staticmethod
+    def _cloud_credential_path(attempt: int) -> str:
+        return f"{EVALUATION_ROOT}/secrets/cloud-{attempt}.json"
 
     def _put(
         self,
@@ -1537,10 +1758,6 @@ class SandboxMigrationEvaluationRunner:
         return "\n".join(
             [
                 "set -euo pipefail",
-                "command -v ak >/dev/null",
-                "command -v codex >/dev/null",
-                "command -v python3 >/dev/null",
-                "python3 -c 'import yaml'",
                 f"mkdir -p {shlex.quote(EVALUATION_ROOT + '/control')} {shlex.quote(EVALUATION_ROOT + '/diagnostics')}",
                 f'if test -s {shlex.quote(pid_path)} && kill -0 "$(cat {shlex.quote(pid_path)})" 2>/dev/null; then',
                 f"  printf '%s\\n' {shlex.quote(EVALUATION_START_MARKER)}",
@@ -1554,7 +1771,41 @@ class SandboxMigrationEvaluationRunner:
                 "pid=$!",
                 f"printf '%s\\n' \"$pid\" > {shlex.quote(pid_path)}.tmp",
                 f"mv {shlex.quote(pid_path)}.tmp {shlex.quote(pid_path)}",
-                'kill -0 "$pid"',
+                f"printf '%s\\n' {shlex.quote(EVALUATION_START_MARKER)}",
+            ]
+        )
+
+    @staticmethod
+    def _cleanup_command(attempt: int, config_path: str) -> str:
+        lock_path = f"{EVALUATION_ROOT}/control/cleanup-{attempt}.lock"
+        exit_path = f"{EVALUATION_ROOT}/diagnostics/cleanup-{attempt}-exit.json"
+        inner = "\n".join(
+            [
+                "set +e",
+                (
+                    f"python3 {shlex.quote(_RUNNER_PATH)} --cleanup "
+                    f"{shlex.quote(config_path)}"
+                ),
+                "code=$?",
+                "finished_at=$(python3 -c 'import time; print(int(time.time()))')",
+                (
+                    f'printf \'%s\\n\' "{{\\"schema_version\\":1,'
+                    f'\\"exit_code\\":$code,\\"finished_at\\":$finished_at}}" > '
+                    f"{shlex.quote(exit_path)}.tmp"
+                ),
+                f"mv {shlex.quote(exit_path)}.tmp {shlex.quote(exit_path)}",
+                f"rmdir {shlex.quote(lock_path)} 2>/dev/null || true",
+                'exit "$code"',
+            ]
+        )
+        return "\n".join(
+            [
+                "set -euo pipefail",
+                "command -v ak >/dev/null",
+                "command -v python3 >/dev/null",
+                f"if ! mkdir {shlex.quote(lock_path)} 2>/dev/null; then exit 0; fi",
+                f"setsid bash -c {shlex.quote(inner)} </dev/null >/dev/null 2>&1 &",
+                'kill -0 "$!"',
                 f"printf '%s\\n' {shlex.quote(EVALUATION_START_MARKER)}",
             ]
         )

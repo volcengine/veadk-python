@@ -15,18 +15,24 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
+import time
 from typing import Any
 
 import pytest
 
 from frontend.server.migration.evaluation.runner import (
+    AGENTKIT_CONFIG_MAX_BYTES,
+    AgentkitConfigError,
     SandboxMigrationEvaluationRunner,
     judge_schema,
+    normalize_agentkit_config,
     runner_source,
 )
 from frontend.server.migration.evaluation.service import EVALUATION_ROOT
 from frontend.server.migration.gateway import MigrationSandboxSession
+from frontend.server.migration.service import MIGRATION_ROOT, MigrationError
 
 TASK_ID = "migration-v1-" + "1" * 32
 DATASET_SHA256 = "a" * 64
@@ -35,7 +41,16 @@ ARTIFACT_SHA256 = "b" * 64
 
 class FakeGateway:
     def __init__(self) -> None:
-        self.files: dict[str, bytes] = {}
+        self.files: dict[str, bytes] = {
+            f"{MIGRATION_ROOT}/output/veadk/agentkit.yaml": (
+                b"common:\n"
+                b"  agent_name: migrated-agent\n"
+                b"  launch_type: cloud\n"
+                b"launch_types:\n"
+                b"  cloud:\n"
+                b"    region: cn-beijing\n"
+            )
+        }
         self.commands: list[tuple[str, str, int]] = []
 
     def put_file(
@@ -48,6 +63,17 @@ class FakeGateway:
     ) -> None:
         assert media_type
         self.files[path] = content
+
+    def get_file(
+        self,
+        _session: MigrationSandboxSession,
+        path: str,
+        *,
+        max_bytes: int,
+    ) -> bytes:
+        content = self.files[path]
+        assert len(content) <= max_bytes
+        return content
 
     def execute_bash(
         self,
@@ -93,11 +119,19 @@ def test_uploaded_runner_source_compiles_and_has_bounded_security_contracts() ->
     assert "def load_execution_results" in source
     assert "evidence_sources" in source
     assert "severity" in source
+    assert 'status(config, "cleaning"' not in source
+    assert "MIGRATION_EVALUATION_CLEANUP_UNCONFIRMED" not in source
+    assert "import yaml" not in source
+    assert "import tomllib" not in source
+    assert "cloud_credential_path" in source
 
 
 def test_start_uploads_non_secret_assets_and_background_command() -> None:
     gateway = FakeGateway()
-    runner = SandboxMigrationEvaluationRunner(gateway)  # type: ignore[arg-type]
+    runner = SandboxMigrationEvaluationRunner(  # type: ignore[arg-type]
+        gateway,
+        resolve_credentials=lambda: ("cloud-ak", "cloud-sk", "cloud-token"),
+    )
 
     runner.start(
         _session(),
@@ -121,11 +155,86 @@ def test_start_uploads_non_secret_assets_and_background_command() -> None:
     assert config["report_markdown_path"].endswith("/report/report.md")
     assert config["dimension_definitions"][0]["default_weight"] == 1
     assert config["remote_write_not_after"] == 1_788_777_600.0
+    assert config["agentkit_config"]["common"]["agent_name"] == "migrated-agent"
     assert "secret-value" not in json.dumps(config)
-    assert gateway.commands[0][0] == "start_evaluation"
-    assert "setsid bash" in gateway.commands[0][1]
-    assert "VEADK_MIGRATION_EVALUATION_STARTED_V1" in gateway.commands[0][1]
-    assert "import yaml" in gateway.commands[0][1]
+    assert "cloud-ak" not in json.dumps(config)
+    assert [operation for operation, _, _ in gateway.commands] == [
+        "evaluation_protect_cloud_credentials",
+        "start_evaluation",
+    ]
+    assert "chmod 600" in gateway.commands[0][1]
+    assert "setsid bash" in gateway.commands[1][1]
+    assert "VEADK_MIGRATION_EVALUATION_STARTED_V1" in gateway.commands[1][1]
+    assert "import yaml" not in gateway.commands[1][1]
+    assert all("cloud-sk" not in command for _, command, _ in gateway.commands)
+
+
+def test_agentkit_yaml_is_normalized_to_bounded_json() -> None:
+    normalized = normalize_agentkit_config(
+        b"common:\n"
+        b"  agent_name: demo\n"
+        b"  launch_type: cloud\n"
+        b"launch_types:\n"
+        b"  cloud:\n"
+        b"    build_timeout: 1200\n"
+    )
+
+    assert normalized == {
+        "common": {"agent_name": "demo", "launch_type": "cloud"},
+        "launch_types": {"cloud": {"build_timeout": 1200}},
+    }
+    json.dumps(normalized)
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        b"common: [\n",
+        b"common: &shared {launch_type: cloud}\ncopy: *shared\n",
+        b"common: !custom value\n",
+        b"1: value\n",
+        b"created_at: 2026-09-08\n",
+        ("value: " + "[" * 40 + "0" + "]" * 40 + "\n").encode(),
+    ],
+)
+def test_agentkit_yaml_rejects_unsafe_or_non_json_values(content: bytes) -> None:
+    with pytest.raises(AgentkitConfigError):
+        normalize_agentkit_config(content)
+
+
+def test_agentkit_yaml_rejects_oversized_input() -> None:
+    with pytest.raises(AgentkitConfigError, match="too large"):
+        normalize_agentkit_config(b"x" * (AGENTKIT_CONFIG_MAX_BYTES + 1))
+
+
+def test_missing_cloud_credentials_fails_before_remote_start() -> None:
+    gateway = FakeGateway()
+
+    def missing_credentials() -> tuple[str, str, str | None]:
+        raise RuntimeError("credentials unavailable")
+
+    runner = SandboxMigrationEvaluationRunner(  # type: ignore[arg-type]
+        gateway,
+        resolve_credentials=missing_credentials,
+    )
+
+    with pytest.raises(
+        MigrationError,
+        match="云身份",
+    ) as raised:
+        runner.start(
+            _session(),
+            task_id=TASK_ID,
+            attempt=1,
+            runtime_name="migration-eval-111111111111-a1",
+            dimensions=["semantic_fidelity"],
+            dataset_sha256=DATASET_SHA256,
+            artifact_sha256=ARTIFACT_SHA256,
+            secret_path=None,
+        )
+
+    assert raised.value.code == "MIGRATION_EVALUATION_CLOUD_CREDENTIALS_UNAVAILABLE"
+    assert gateway.commands == []
 
 
 def test_judge_schema_requires_nullable_zero_to_one_raw_scores_and_evidence() -> None:
@@ -234,6 +343,127 @@ def _observation(text: str) -> dict[str, object]:
             "captured_bytes": len(encoded),
         },
     }
+
+
+def test_credential_file_requires_mode_600_and_is_one_shot(tmp_path: Path) -> None:
+    namespace = _runner_namespace()
+    secret = tmp_path / "secret.json"
+    secret.write_text('{"TOKEN":"value"}', encoding="utf-8")
+    secret.chmod(0o644)
+
+    with pytest.raises(PermissionError, match="integrity"):
+        namespace["load_secrets"](str(secret))
+
+    assert not secret.exists()
+
+
+def test_runner_main_completes_with_python_stdlib_and_fake_cli_boundaries(
+    tmp_path: Path,
+) -> None:
+    namespace = _runner_namespace()
+    project = tmp_path / "project"
+    project.mkdir()
+    work = tmp_path / "work"
+    dataset = tmp_path / "dataset.jsonl"
+    artifact = tmp_path / "artifact.zip"
+    status = tmp_path / "status.json"
+    report = tmp_path / "report.json"
+    report_markdown = tmp_path / "report.md"
+    diagnostics = tmp_path / "diagnostics.log"
+    judge_schema_path = tmp_path / "judge-schema.json"
+    judge_schema_path.write_text("{}", encoding="utf-8")
+    case = {
+        "case_id": "case-1",
+        "messages": [{"role": "user", "content": "hello"}],
+        "reference_output": None,
+        "criteria": [],
+    }
+    dataset.write_text(json.dumps(case) + "\n", encoding="utf-8")
+    artifact.write_bytes(b"artifact")
+    environment_secret = tmp_path / "environment.json"
+    environment_secret.write_text(
+        '{"MODEL_AGENT_API_KEY":"model-key"}', encoding="utf-8"
+    )
+    environment_secret.chmod(0o600)
+    cloud_secret = tmp_path / "cloud.json"
+    cloud_secret.write_text(
+        '{"accessKeyId":"cloud-ak","secretAccessKey":"cloud-sk"}',
+        encoding="utf-8",
+    )
+    cloud_secret.chmod(0o600)
+    result_root = tmp_path / "results"
+    config = {
+        "schema_version": 1,
+        "task_id": TASK_ID,
+        "attempt": 1,
+        "runtime_name": "migration-eval-111111111111-a1",
+        "dimensions": ["semantic_fidelity"],
+        "dimension_definitions": [
+            {
+                "id": "semantic_fidelity",
+                "name": "语义与任务效果",
+                "definition": "定义",
+                "scoring_rule": "规则",
+                "default_weight": 1,
+            }
+        ],
+        "dataset_sha256": hashlib.sha256(dataset.read_bytes()).hexdigest(),
+        "artifact_sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+        "artifact_path": str(artifact),
+        "dataset_path": str(dataset),
+        "status_path": str(status),
+        "report_path": str(report),
+        "report_markdown_path": str(report_markdown),
+        "judge_schema_path": str(judge_schema_path),
+        "project_path": str(project),
+        "work_path": str(work),
+        "thread_path": str(result_root / "thread.json"),
+        "batch_root_path": str(result_root / "batches"),
+        "execution_results_path": str(result_root / "execution-results.jsonl"),
+        "diagnostic_path": str(diagnostics),
+        "secret_path": str(environment_secret),
+        "cloud_credential_path": str(cloud_secret),
+        "agentkit_config": {
+            "common": {"agent_name": "demo", "launch_type": "cloud"},
+            "launch_types": {"cloud": {"region": "cn-beijing"}},
+        },
+        "remote_write_not_after": time.time() + 3600,
+    }
+    config_path = tmp_path / "runner.json"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    commands: list[list[str]] = []
+
+    def run_capped(args: list[str], **_kwargs: object) -> tuple[int, bytes, int]:
+        commands.append(args)
+        if args[-1:] == ["--version"]:
+            output = b"test-version"
+        elif args[:2] == ["ak", "launch"]:
+            output = b"deployed"
+        elif args[:3] == ["ak", "invoke", "run"]:
+            output = b'{"output":"hello"}\n'
+        elif args[0] == "codex":
+            output = _judge_events("thread-1", ["case-1"])
+        else:
+            raise AssertionError(args)
+        return 0, output, len(output)
+
+    runtime_reads = iter(
+        [None, {"runtimeId": "r-test", "name": config["runtime_name"]}]
+    )
+    namespace["run_capped"] = run_capped
+    namespace["runtime_by_name"] = lambda *_args, **_kwargs: next(runtime_reads)
+    namespace["cleanup_runtime"] = lambda *_args, **_kwargs: True
+
+    namespace["main"](str(config_path))
+
+    assert json.loads(status.read_text())["state"] == "aggregating"
+    assert json.loads(report.read_text())["execution"]["succeeded"] == 1
+    assert report_markdown.is_file()
+    assert not environment_secret.exists()
+    assert not cloud_secret.exists()
+    assert any(command[:2] == ["ak", "launch"] for command in commands)
+    assert any(command[:3] == ["ak", "invoke", "run"] for command in commands)
+    assert any(command[0] == "codex" for command in commands)
 
 
 def test_judge_batches_resume_one_bound_thread_and_reuse_cached_batch(
@@ -393,32 +623,27 @@ def test_judge_rejects_persisted_thread_with_different_artifact_binding(
         )
 
 
-def test_cleanup_reconciliation_requires_successful_runtime_listing() -> None:
+def test_stop_schedules_detached_cleanup_without_waiting_for_runtime_deletion() -> None:
     gateway = FakeGateway()
-    runner = SandboxMigrationEvaluationRunner(gateway)  # type: ignore[arg-type]
-
-    assert runner.reconcile_cleanup(
-        _session(), runtime_name="migration-eval-111111111111-a1"
+    runner = SandboxMigrationEvaluationRunner(  # type: ignore[arg-type]
+        gateway,
+        resolve_credentials=lambda: ("cloud-ak", "cloud-sk", None),
     )
-    operation, command, timeout = gateway.commands[0]
-    assert operation == "evaluation_cleanup_reconcile"
-    assert timeout == 360
-    assert 'runtime", "list' in command
-    assert 'runtime", "delete' in command
 
-
-def test_cancel_stops_the_runner_before_reconciling_runtime_cleanup() -> None:
-    gateway = FakeGateway()
-    runner = SandboxMigrationEvaluationRunner(gateway)  # type: ignore[arg-type]
-
-    assert runner.cancel(
+    runner.stop(
         _session(),
         attempt=2,
-        runtime_name="migration-eval-111111111111-a2",
     )
 
     assert [operation for operation, _, _ in gateway.commands] == [
+        "evaluation_protect_cloud_credentials",
         "evaluation_cancel",
-        "evaluation_cleanup_reconcile",
     ]
-    assert "runner-2.pid" in gateway.commands[0][1]
+    operation, command, timeout = gateway.commands[1]
+    assert operation == "evaluation_cancel"
+    assert timeout == 30
+    assert "runner-2.pid" in command
+    assert "--cleanup" in command
+    assert "runner-2.json" in command
+    assert "setsid bash" in command
+    assert ") || true" in command

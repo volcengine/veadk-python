@@ -630,11 +630,21 @@ def mount_migration_routes(
     async def get_evaluation_report(
         task_id: str,
         request: Request,
+        version_id: str = Query(
+            alias="versionId",
+            min_length=32,
+            max_length=32,
+            pattern=r"^[0-9a-f]{32}$",
+        ),
     ) -> dict[str, object]:
         owner_id = owner_resolver(request)
         return await invoke(
             "get_evaluation_report",
-            lambda: require_evaluation_service().get_report(task_id, owner_id),
+            lambda: require_evaluation_service().get_report(
+                task_id,
+                owner_id,
+                version_id,
+            ),
             task_id=task_id,
         )
 
@@ -642,6 +652,12 @@ def mount_migration_routes(
     async def download_evaluation_report(
         task_id: str,
         request: Request,
+        version_id: str = Query(
+            alias="versionId",
+            min_length=32,
+            max_length=32,
+            pattern=r"^[0-9a-f]{32}$",
+        ),
     ) -> Response:
         owner_id = owner_resolver(request)
         content, filename = await invoke(
@@ -649,6 +665,7 @@ def mount_migration_routes(
             lambda: require_evaluation_service().download_report(
                 task_id,
                 owner_id,
+                version_id,
             ),
             task_id=task_id,
         )

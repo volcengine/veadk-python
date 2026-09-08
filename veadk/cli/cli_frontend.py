@@ -3400,7 +3400,10 @@ def _run_frontend_server(
         migration_service,
         migration_gateway,
         repository=migration_evaluation_repository,
-        runner=SandboxMigrationEvaluationRunner(migration_gateway),
+        runner=SandboxMigrationEvaluationRunner(
+            migration_gateway,
+            resolve_credentials=_resolve_ve_credentials,
+        ),
     )
     if not is_vestack_deployment:
         from frontend.server.workspace_tool import mount_workspace_upgrade_repair

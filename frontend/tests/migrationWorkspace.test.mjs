@@ -135,7 +135,9 @@ test("configures migration effect evaluation in a drawer with direct user-facing
   assert.match(workspace, /recordEvaluationDatasetSaveFailure/);
   assert.match(workspace, /retryEvaluationDatasetSave/);
   assert.match(workspace, /evaluation\.dataset\.retrySave/);
-  assert.match(workspace, /"retrying"/);
+  assert.match(workspace, /"preparing"/);
+  assert.match(workspace, /"aggregating"/);
+  assert.doesNotMatch(workspace, /"retrying"|"cleaning"/);
   assert.match(workspace, /<MigrationEvaluationSetup/);
   assert.match(workspace, /<MigrationEvaluationProgress/);
   assert.match(workspace, /<MigrationEvaluationResult/);

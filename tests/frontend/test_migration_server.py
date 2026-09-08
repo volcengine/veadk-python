@@ -4111,6 +4111,34 @@ def test_broken_session_does_not_fail_the_entire_task_list() -> None:
     assert broken["error"]["retryable"] is False
 
 
+def test_retryable_session_read_does_not_fake_a_failed_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    service.create_task(
+        CreateMigrationTaskBody(sourceFileName="support-agent.zip"),
+        "owner-1",
+        "Owner",
+    )
+
+    def fail_temporarily(_session: MigrationSandboxSession) -> dict[str, object]:
+        raise MigrationError(
+            "MIGRATION_REMOTE_READ_FAILED",
+            "远端状态暂时不可读。",
+            status_code=502,
+            retryable=True,
+        )
+
+    monkeypatch.setattr(service, "_task_from_session", fail_temporarily)
+
+    with pytest.raises(MigrationError) as raised:
+        service.list_tasks("owner-1")
+
+    assert raised.value.code == "MIGRATION_REMOTE_READ_FAILED"
+    assert raised.value.retryable is True
+
+
 def test_invalid_analysis_keeps_immutable_request_metadata_in_task_list() -> None:
     gateway = FakeMigrationGateway()
     service = MigrationService(gateway)

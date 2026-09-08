@@ -108,11 +108,15 @@ class FakeGateway:
     ) -> dict[str, object]:
         assert timeout_seconds > 0
         self.commands.append((operation, command))
+        if operation == "evaluation_delete_environment":
+            self.files.pop(EVALUATION_SECRET_PATH, None)
         return {"exit_code": 0}
 
 
 class FakeMigration:
     def __init__(self) -> None:
+        self.get_task_calls = 0
+        self.artifact_calls = 0
         self.task: dict[str, object] = {
             "id": TASK_ID,
             "state": "awaiting_upload",
@@ -128,10 +132,12 @@ class FakeMigration:
 
     def get_task(self, task_id: str, owner_id: str) -> dict[str, object]:
         assert task_id == TASK_ID and owner_id == "owner"
+        self.get_task_calls += 1
         return self.task
 
     def artifact(self, task_id: str, owner_id: str) -> dict[str, object]:
         assert task_id == TASK_ID and owner_id == "owner"
+        self.artifact_calls += 1
         return {
             "artifact": {"sha256": ARTIFACT_SHA256},
             "environment": {"required": self.required},
@@ -181,9 +187,7 @@ class FakeRepository:
 class FakeRunner:
     def __init__(self) -> None:
         self.starts: list[dict[str, object]] = []
-        self.cleanup = True
-        self.cleanup_calls: list[str] = []
-        self.cancellations: list[dict[str, object]] = []
+        self.stops: list[int] = []
 
     def start(
         self,
@@ -210,27 +214,14 @@ class FakeRunner:
             }
         )
 
-    def reconcile_cleanup(
-        self,
-        session: MigrationSandboxSession,
-        *,
-        runtime_name: str,
-    ) -> bool:
-        assert session.task_id == TASK_ID
-        assert runtime_name
-        self.cleanup_calls.append(runtime_name)
-        return self.cleanup
-
-    def cancel(
+    def stop(
         self,
         session: MigrationSandboxSession,
         *,
         attempt: int,
-        runtime_name: str | None,
-    ) -> bool:
+    ) -> None:
         assert session.task_id == TASK_ID
-        self.cancellations.append({"attempt": attempt, "runtime_name": runtime_name})
-        return self.cleanup
+        self.stops.append(attempt)
 
 
 def _service(*, remaining: int = 3600):
@@ -403,6 +394,45 @@ def test_resume_uses_transient_secret_file_without_exposing_values() -> None:
     assert runner.starts[0]["artifact_sha256"] == ARTIFACT_SHA256
 
 
+def test_duplicate_resume_returns_authoritative_state_without_starting_twice() -> None:
+    service, migration, _gateway, _repository, runner = _service()
+    service.put_dataset(TASK_ID, "owner", _body())
+    _ready(migration)
+    migration.required = ["ARK_API_KEY"]
+    service.advance(TASK_ID, "owner")
+    body = ResumeEvaluationBody(environment={"ARK_API_KEY": "secret-value"})
+
+    first = service.resume(TASK_ID, "owner", body)
+    replay = service.resume(TASK_ID, "owner", body)
+
+    assert first["state"] == "preparing"
+    assert replay == first
+    assert len(runner.starts) == 1
+
+
+def test_start_failure_deletes_transient_environment_file() -> None:
+    service, migration, gateway, _repository, runner = _service()
+    service.put_dataset(TASK_ID, "owner", _body())
+    _ready(migration)
+    migration.required = ["ARK_API_KEY"]
+    service.advance(TASK_ID, "owner")
+
+    def fail_start(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("bootstrap failed")
+
+    runner.start = fail_start  # type: ignore[method-assign]
+    with pytest.raises(MigrationError) as raised:
+        service.resume(
+            TASK_ID,
+            "owner",
+            ResumeEvaluationBody(environment={"ARK_API_KEY": "secret-value"}),
+        )
+
+    assert raised.value.code == "MIGRATION_EVALUATION_START_FAILED"
+    assert EVALUATION_SECRET_PATH not in gateway.files
+    assert gateway.commands[-1][0] == "evaluation_delete_environment"
+
+
 def test_new_remote_writes_are_blocked_below_twenty_minutes() -> None:
     service, migration, _gateway, _repository, runner = _service(remaining=1199)
     service.put_dataset(TASK_ID, "owner", _body())
@@ -504,7 +534,6 @@ def _report(dataset_sha256: str) -> dict[str, object]:
         "execution_failures": [],
         "critical_mismatches": [],
         "migration_gap_description": "差距详情见案例证据。",
-        "runtime_cleanup": {"status": "confirmed"},
         "limitations": [],
         "created_at": "2026-09-07T10:00:00Z",
     }
@@ -528,8 +557,16 @@ def test_aggregating_report_is_validated_persisted_and_then_completed() -> None:
 
     service.advance(TASK_ID, "owner")
     snapshot = service.snapshot(TASK_ID, "owner")
-    loaded = service.get_report(TASK_ID, "owner")
-    markdown, filename = service.download_report(TASK_ID, "owner")
+    version_id = snapshot["report"]["versionId"]  # type: ignore[index]
+    task_reads = migration.get_task_calls
+    artifact_reads = migration.artifact_calls
+    session_reads = gateway.find_session_calls
+    loaded = service.get_report(TASK_ID, "owner", version_id)  # type: ignore[arg-type]
+    markdown, filename = service.download_report(
+        TASK_ID,
+        "owner",
+        version_id,  # type: ignore[arg-type]
+    )
 
     assert snapshot["state"] == "completed"
     assert snapshot["report"]["kind"] == "report"  # type: ignore[index]
@@ -539,9 +576,12 @@ def test_aggregating_report_is_validated_persisted_and_then_completed() -> None:
     assert "# 迁移效果评测报告" in markdown.decode()
     assert "AgentKit CLI：`0.52.16`" in markdown.decode()
     assert "通过" not in markdown.decode()
+    assert migration.get_task_calls == task_reads
+    assert migration.artifact_calls == artifact_reads
+    assert gateway.find_session_calls == session_reads
 
 
-def test_cancel_stops_active_runner_and_requires_confirmed_cleanup() -> None:
+def test_cancel_stops_active_runner_without_waiting_for_runtime_cleanup() -> None:
     service, migration, _gateway, _repository, runner = _service()
     service.put_dataset(TASK_ID, "owner", _body())
     _ready(migration)
@@ -550,28 +590,7 @@ def test_cancel_stops_active_runner_and_requires_confirmed_cleanup() -> None:
     cancelled = service.cancel(TASK_ID, "owner")
 
     assert cancelled["state"] == "cancelled"
-    assert runner.cancellations == [
-        {
-            "attempt": 1,
-            "runtime_name": "migration-eval-111111111111-a1",
-        }
-    ]
-
-
-def test_cancel_exposes_cleanup_uncertainty_as_retryable_block() -> None:
-    service, migration, _gateway, _repository, runner = _service()
-    service.put_dataset(TASK_ID, "owner", _body())
-    _ready(migration)
-    service.advance(TASK_ID, "owner")
-    runner.cleanup = False
-
-    with pytest.raises(MigrationError) as raised:
-        service.cancel(TASK_ID, "owner")
-
-    assert raised.value.code == "MIGRATION_EVALUATION_CLEANUP_UNCONFIRMED"
-    snapshot = service.snapshot(TASK_ID, "owner")
-    assert snapshot["state"] == "blocked"
-    assert snapshot["canRetry"] is True
+    assert runner.stops == [1]
 
 
 def test_missing_report_becomes_a_retryable_terminal_state() -> None:
@@ -608,44 +627,32 @@ def _mark_retryable_runner_failure(
     service.advance(TASK_ID, "owner")
 
 
-def test_retry_queues_cleanup_without_waiting_for_runtime() -> None:
+def test_retry_starts_next_attempt_without_cleanup_or_intermediate_state() -> None:
     service, migration, gateway, _repository, runner = _service()
     _mark_retryable_runner_failure(service, migration, gateway)
 
     queued = service.retry(TASK_ID, "owner")
 
-    assert queued["state"] == "retrying"
+    assert queued["state"] == "preparing"
     assert queued["canRetry"] is False
-    assert runner.cleanup_calls == []
-    assert len(runner.starts) == 1
-
-
-def test_retrying_advance_cleans_up_then_starts_next_attempt() -> None:
-    service, migration, gateway, _repository, runner = _service()
-    _mark_retryable_runner_failure(service, migration, gateway)
-    service.retry(TASK_ID, "owner")
-
-    service.advance(TASK_ID, "owner")
-
-    assert runner.cleanup_calls == ["migration-eval-111111111111-a1"]
     assert [start["attempt"] for start in runner.starts] == [1, 2]
-    assert service.snapshot(TASK_ID, "owner")["state"] == "preparing"
+
+    replay = service.retry(TASK_ID, "owner")
+    assert replay == queued
+    assert [start["attempt"] for start in runner.starts] == [1, 2]
 
 
-def test_retrying_cleanup_failure_becomes_retryable_block() -> None:
+def test_retry_with_required_environment_returns_directly_to_input() -> None:
     service, migration, gateway, _repository, runner = _service()
     _mark_retryable_runner_failure(service, migration, gateway)
-    service.retry(TASK_ID, "owner")
-    runner.cleanup = False
+    migration.required = ["ARK_API_KEY"]
 
-    service.advance(TASK_ID, "owner")
+    waiting = service.retry(TASK_ID, "owner")
 
-    snapshot = service.snapshot(TASK_ID, "owner")
-    assert snapshot["state"] == "blocked"
-    assert snapshot["canRetry"] is True
-    assert snapshot["error"]["code"] == (  # type: ignore[index]
-        "MIGRATION_EVALUATION_CLEANUP_UNCONFIRMED"
-    )
+    assert waiting["state"] == "waiting_environment"
+    assert waiting["attempt"] == 2
+    assert waiting["requiredEnvironment"] == ["ARK_API_KEY"]
+    assert [start["attempt"] for start in runner.starts] == [1]
 
 
 def test_environment_payload_must_match_required_keys_exactly() -> None:

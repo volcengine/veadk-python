@@ -165,11 +165,11 @@ class RouteEvaluationService:
     def snapshot(self, task_id: str, owner_id: str, *, task: object = None):
         return self.record("snapshot", task_id, owner_id, task)
 
-    def get_report(self, task_id: str, owner_id: str):
-        return self.record("get_report", task_id, owner_id)
+    def get_report(self, task_id: str, owner_id: str, version_id: str):
+        return self.record("get_report", task_id, owner_id, version_id)
 
-    def download_report(self, task_id: str, owner_id: str):
-        self.calls.append(("download_report", (task_id, owner_id)))
+    def download_report(self, task_id: str, owner_id: str, version_id: str):
+        self.calls.append(("download_report", (task_id, owner_id, version_id)))
         return b"# report\n", "evaluation.md"
 
     def resume(self, task_id: str, owner_id: str, body: object):
@@ -302,9 +302,13 @@ def test_evaluation_routes_delegate_without_blocking_upload_or_status_reads() ->
             f"/web/agent-migrations/tasks/{TASK_ID}/evaluation/dataset"
         )
         status = client.get(f"/web/agent-migrations/tasks/{TASK_ID}/evaluation")
-        report = client.get(f"/web/agent-migrations/tasks/{TASK_ID}/evaluation/report")
+        report = client.get(
+            f"/web/agent-migrations/tasks/{TASK_ID}/evaluation/report",
+            params={"versionId": "a" * 32},
+        )
         report_download = client.get(
-            f"/web/agent-migrations/tasks/{TASK_ID}/evaluation/report/download"
+            f"/web/agent-migrations/tasks/{TASK_ID}/evaluation/report/download",
+            params={"versionId": "a" * 32},
         )
         resumed = client.post(
             f"/web/agent-migrations/tasks/{TASK_ID}/evaluation/resume",

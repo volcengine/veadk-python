@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from frontend.server.migration.evaluation.contracts import (
@@ -135,7 +137,6 @@ def _report() -> dict[str, object]:
         "execution_failures": [],
         "critical_mismatches": [],
         "migration_gap_description": "差距详情见案例证据。",
-        "runtime_cleanup": {"status": "confirmed"},
         "limitations": ["历史 assistant 消息仅作为裁判证据。"],
         "created_at": "2026-09-07T10:00:00Z",
     }
@@ -146,14 +147,12 @@ def test_all_required_evaluation_states_are_registered() -> None:
         "disabled",
         "waiting_dataset",
         "pending",
-        "retrying",
         "preparing",
         "waiting_environment",
         "deploying",
         "executing",
         "judging",
         "aggregating",
-        "cleaning",
         "completed",
         "failed",
         "blocked",
@@ -245,6 +244,34 @@ def test_report_accepts_na_and_recomputes_scores_deterministically() -> None:
         )
 
 
+def test_report_accepts_json_object_keys_in_serialized_order() -> None:
+    report = json.loads(json.dumps(_report(), sort_keys=True))
+
+    validate_evaluation_report(
+        report,
+        expected_task_id=TASK_ID,
+        expected_attempt=1,
+        expected_dataset_sha256=SHA256,
+        expected_artifact_sha256=ARTIFACT_SHA256,
+        expected_dimensions=DIMENSIONS,
+    )
+
+
+def test_report_rejects_runtime_cleanup_as_non_evaluation_data() -> None:
+    report = _report()
+    report["runtime_cleanup"] = {"status": "confirmed"}
+
+    with pytest.raises(EvaluationContractError, match="fields"):
+        validate_evaluation_report(
+            report,
+            expected_task_id=TASK_ID,
+            expected_attempt=1,
+            expected_dataset_sha256=SHA256,
+            expected_artifact_sha256=ARTIFACT_SHA256,
+            expected_dimensions=DIMENSIONS,
+        )
+
+
 def test_report_enforces_output_capture_limit_and_dimension_order() -> None:
     report = _report()
     report["cases"][0]["output"] = {  # type: ignore[index]
@@ -289,19 +316,18 @@ def test_report_enforces_utf8_byte_limits(
         )
 
 
-def test_retrying_is_a_valid_non_terminal_evaluation_state() -> None:
-    assert "retrying" in EVALUATION_STATES
+def test_retrying_is_not_a_terminal_evaluation_state() -> None:
+    assert "retrying" not in EVALUATION_STATES
     task_id = "migration-v1-" + "1" * 32
-    status = validate_evaluation_status(
-        {
-            "schema_version": 1,
-            "task_id": task_id,
-            "attempt": 1,
-            "state": "retrying",
-            "message": "正在清理并准备重试",
-            "updated_at": "2026-09-07T10:00:00Z",
-            "runtime_name": "migration-eval-111111111111-a1",
-        },
-        expected_task_id=task_id,
-    )
-    assert status["state"] == "retrying"
+    with pytest.raises(EvaluationContractError):
+        validate_evaluation_status(
+            {
+                "schema_version": 1,
+                "task_id": task_id,
+                "attempt": 1,
+                "state": "retrying",
+                "message": "正在准备重新评测",
+                "updated_at": "2026-09-07T10:00:00Z",
+            },
+            expected_task_id=task_id,
+        )

@@ -106,13 +106,11 @@ function isEvaluationPollingState(task: MigrationTask): boolean {
     task.evaluation?.enabled &&
       [
         "pending",
-        "retrying",
         "preparing",
         "deploying",
         "executing",
         "judging",
         "aggregating",
-        "cleaning",
       ].includes(task.evaluation.state),
   );
 }
@@ -1260,7 +1258,11 @@ export function MigrationWorkspace({
       return;
     const controller = new AbortController();
     setEvaluationReportLoading(true);
-    void getMigrationEvaluationReport(task.id, controller.signal)
+    void getMigrationEvaluationReport(
+      task.id,
+      task.evaluation.report.versionId,
+      controller.signal,
+    )
       .then((report) => {
         if (!controller.signal.aborted) setEvaluationReport(report);
       })
@@ -1699,7 +1701,10 @@ export function MigrationWorkspace({
     setEvaluationAction("download");
     setEvaluationReportError("");
     try {
-      await downloadMigrationEvaluationReport(task.id);
+      await downloadMigrationEvaluationReport(
+        task.id,
+        task.evaluation.report.versionId,
+      );
     } catch (cause) {
       setEvaluationReportError(
         cause instanceof Error ? cause.message : String(cause),

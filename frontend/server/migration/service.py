@@ -2724,6 +2724,14 @@ class MigrationService:
             try:
                 tasks.append(self._task_from_session(session))
             except MigrationError as error:
+                if error.retryable:
+                    logger.warning(
+                        "Could not read one migration Session; leaving the "
+                        "current task list unchanged task_id=%s code=%s",
+                        session.task_id,
+                        error.code,
+                    )
+                    raise
                 logger.warning(
                     "Ignoring invalid state for one migration Session "
                     "task_id=%s code=%s retryable=%s",
