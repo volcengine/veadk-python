@@ -90,6 +90,7 @@ import {
   type GithubCicdPipelineResult,
 } from "../adk/client";
 import { localizeDeployStageMessage } from "../adk/deploymentI18n";
+import { isDeploymentStatusUnconfirmedError } from "../adk/deploymentStatus";
 import {
   beginAgentDeploy,
   beginAgentSourceDownload,
@@ -159,16 +160,6 @@ const DEPLOY_PHASE_ORDER: Record<string, number> = {
   complete: 7,
   github: 8,
 };
-
-export const BUILD_STATUS_CONFIRMATION_ERROR_MESSAGE =
-  "__BUILD_STATUS_CONFIRMATION_UNCONFIRMED__";
-
-export function isBuildStatusConfirmationError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /RunPipeline result could not be reconciled|Polling build status failed/i.test(
-    message,
-  );
-}
 
 function advanceDeploymentPhase(
   current: string | undefined,
@@ -609,6 +600,8 @@ export interface DeploymentTaskUpdate {
   region: string;
   startedAt: number;
   status: "running" | "success" | "error" | "cancelled";
+  /** The request may still be running, but this browser cannot confirm it. */
+  statusUnconfirmed?: boolean;
   phase?: string;
   label: string;
   message?: string;
@@ -921,6 +914,8 @@ export function ProjectPreview({
   const [adding, setAdding] = useState(false);
   const [newPath, setNewPath] = useState("");
   const [deploying, setDeploying] = useState(false);
+  const [deploymentStatusUnconfirmed, setDeploymentStatusUnconfirmed] =
+    useState(false);
   const [deployConfirmOpen, setDeployConfirmOpen] = useState(false);
   const [flowPreviewOpen, setFlowPreviewOpen] = useState(false);
   const [feishuUpdating, setFeishuUpdating] = useState(false);
@@ -1435,7 +1430,13 @@ export function ProjectPreview({
   );
 
   async function requestDeploymentConfirmation() {
-    if (!onDeploy || deploying || runtimeNameChecking || deployDisabled) return;
+    if (
+      !onDeploy ||
+      deploying ||
+      deploymentStatusUnconfirmed ||
+      runtimeNameChecking ||
+      deployDisabled
+    ) return;
     if (runtimeNameError) {
       setDeployError(runtimeNameError);
       return;
@@ -1559,7 +1560,7 @@ export function ProjectPreview({
   }
 
   async function performDeployment() {
-    if (!onDeploy || deploying) return;
+    if (!onDeploy || deploying || deploymentStatusUnconfirmed) return;
     if (runtimeNameError) {
       setDeployConfirmOpen(false);
       setDeployError(runtimeNameError);
@@ -1574,6 +1575,7 @@ export function ProjectPreview({
     const envs = deployEnvVars();
     if (mountedRef.current) {
       setDeployError(null);
+      setDeploymentStatusUnconfirmed(false);
       setDeployResult(null);
       setStageMap({});
       setActivePhase(null);
@@ -1992,12 +1994,35 @@ export function ProjectPreview({
         });
         return;
       }
-      const buildStatusUnconfirmed =
-        latestPhase === "build" && isBuildStatusConfirmationError(err);
-      const displayMessage = buildStatusUnconfirmed
-        ? BUILD_STATUS_CONFIRMATION_ERROR_MESSAGE
-        : message;
-      if (mountedRef.current) setDeployError(displayMessage);
+      const statusUnconfirmed = isDeploymentStatusUnconfirmedError(err);
+      if (statusUnconfirmed) {
+        if (mountedRef.current) {
+          setDeployError(null);
+          setDeployResult(null);
+          setDeploymentStatusUnconfirmed(true);
+        }
+        operation.fail({
+          failedPhase: telemetryDeployPhase(latestPhase),
+          ...classifyTelemetryError(err, { phase: latestPhase }),
+          errorMessage: safeTelemetryErrorMessage(err),
+        });
+        onDeploymentTaskChange?.({
+          id: taskId,
+          agentName: taskAgentName,
+          runtimeName: taskRuntimeName,
+          runtimeId: deploymentRuntimeId,
+          region: deployRegion,
+          startedAt: taskStartedAt,
+          status: "running",
+          statusUnconfirmed: true,
+          phase: latestPhase,
+          label: t("projectPreview.task.deploymentStatusUnconfirmed"),
+          message: t("projectPreview.errors.deploymentStatusUnconfirmed"),
+          ...(latestBuildLog ? { buildLog: latestBuildLog } : {}),
+        });
+        return;
+      }
+      if (mountedRef.current) setDeployError(message);
       if (mountedRef.current) setDeployResult(null);
       const buildLog = finalizeBuildFailureLog();
       operation.fail({
@@ -2016,21 +2041,17 @@ export function ProjectPreview({
         startedAt: taskStartedAt,
         status: "error",
         phase: latestPhase,
-        label: buildStatusUnconfirmed ? t("projectPreview.task.buildStatusUnconfirmed") : t("projectPreview.task.deploymentFailed"),
-        message: buildStatusUnconfirmed
-          ? t("projectPreview.errors.buildStatusUnconfirmed")
-          : failedInBuild
-            ? t("projectPreview.task.buildFailedHint")
-            : failedInGithub
-              ? t("projectPreview.task.githubMountFailedHint")
-              : message,
+        label: t("projectPreview.task.deploymentFailed"),
+        message: failedInBuild
+          ? t("projectPreview.task.buildFailedHint")
+          : failedInGithub
+            ? t("projectPreview.task.githubMountFailedHint")
+            : message,
         ...(buildLog ? { buildLog } : terminalBuildLogUpdate("complete")),
         ...(failedInGithub
           ? { githubDelivery: true, githubLog: latestGithubLog }
           : {}),
-        ...(buildStatusUnconfirmed
-          ? {}
-          : { retry: requestDeploymentConfirmation }),
+        retry: requestDeploymentConfirmation,
       });
     } finally {
       if (mountedRef.current) setDeploying(false);
@@ -3185,29 +3206,28 @@ export function ProjectPreview({
                 <DeploymentErrorMessage
                   className="pp-error"
                   message={
-                    deployError === BUILD_STATUS_CONFIRMATION_ERROR_MESSAGE
-                      ? t("projectPreview.errors.buildStatusUnconfirmedWithDetail", {
-                          message: t("projectPreview.errors.buildStatusUnconfirmed"),
+                    activePhase
+                      ? t("projectPreview.errors.failedAtStage", {
+                          action: isRuntimeUpdate ? t("projectPreview.update") : t("projectPreview.deploy"),
+                          stage: deploymentSteps.find(
+                            (step) => step.phase === activePhase,
+                          )?.label ?? activePhase,
+                          message: deployError,
                         })
-                      : activePhase
-                        ? t("projectPreview.errors.failedAtStage", {
-                            action: isRuntimeUpdate ? t("projectPreview.update") : t("projectPreview.deploy"),
-                            stage: deploymentSteps.find(
-                              (step) => step.phase === activePhase,
-                            )?.label ?? activePhase,
-                            message: deployError,
-                          })
-                        : deployError
+                      : deployError
                   }
-                  onRetry={
-                    deployError === BUILD_STATUS_CONFIRMATION_ERROR_MESSAGE
-                      ? undefined
-                      : requestDeploymentConfirmation
-                  }
+                  onRetry={requestDeploymentConfirmation}
                   retryLabel={
                     isRuntimeUpdate ? t("projectPreview.retryUpdate") : t("projectPreview.retryDeploy")
                   }
                 />
+              )}
+
+              {deploymentStatusUnconfirmed && (
+                <div className="pp-status-unconfirmed" role="status">
+                  <strong>{t("projectPreview.task.deploymentStatusUnconfirmed")}</strong>
+                  <span>{t("projectPreview.errors.deploymentStatusUnconfirmed")}</span>
+                </div>
               )}
 
               {deployResult && (
@@ -3284,6 +3304,7 @@ export function ProjectPreview({
                       onClick={requestDeploymentConfirmation}
                       disabled={
                         deploying ||
+                        deploymentStatusUnconfirmed ||
                         runtimeNameChecking ||
                         feishuUpdating ||
                         deployDisabled ||
@@ -3294,11 +3315,13 @@ export function ProjectPreview({
                     >
                       {deploying
                         ? t("projectPreview.actionInProgress", { action: deploymentActionLabel })
-                        : runtimeNameChecking
-                          ? t("projectPreview.checkingName")
-                        : deployError
-                          ? t("projectPreview.retryAction", { action: deploymentActionLabel })
-                          : deploymentActionLabel}
+                        : deploymentStatusUnconfirmed
+                          ? t("projectPreview.task.deploymentStatusUnconfirmed")
+                          : runtimeNameChecking
+                            ? t("projectPreview.checkingName")
+                            : deployError
+                              ? t("projectPreview.retryAction", { action: deploymentActionLabel })
+                              : deploymentActionLabel}
                     </button>,
                     deploymentActionTarget,
                   )
@@ -3309,6 +3332,7 @@ export function ProjectPreview({
                 onClick={requestDeploymentConfirmation}
                 disabled={
                   deploying ||
+                  deploymentStatusUnconfirmed ||
                   runtimeNameChecking ||
                   feishuUpdating ||
                   deployDisabled ||
@@ -3319,11 +3343,13 @@ export function ProjectPreview({
               >
                 {deploying
                   ? t("projectPreview.actionInProgress", { action: deploymentActionLabel })
-                  : runtimeNameChecking
-                    ? t("projectPreview.checkingName")
-                  : deployError
-                    ? t("projectPreview.retryAction", { action: deploymentActionLabel })
-                    : deploymentActionLabel}
+                  : deploymentStatusUnconfirmed
+                    ? t("projectPreview.task.deploymentStatusUnconfirmed")
+                    : runtimeNameChecking
+                      ? t("projectPreview.checkingName")
+                      : deployError
+                        ? t("projectPreview.retryAction", { action: deploymentActionLabel })
+                        : deploymentActionLabel}
               </button>
                   )}
             </div>

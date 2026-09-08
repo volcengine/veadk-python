@@ -8,6 +8,7 @@ on:
       - 'frontend/**'
       - 'tests/cli/test_generated_agent_harness_sidecar.py'
       - 'tests/cli/test_managed_sidecar_source.py'
+      - 'tests/cli/test_legacy_runtime_recovery.py'
       - 'tests/cli/test_generated_agent_backend_codegen_extended.py'
       - 'tests/cli/test_studio_rbac.py'
       - 'tests/extensions/harness/**'
@@ -15,6 +16,7 @@ on:
       - 'veadk/cli/generated_agent_codegen.py'
       - 'veadk/cli/cli_frontend.py'
       - 'veadk/cli/managed_sidecar_source.py'
+      - 'veadk/cli/legacy_runtime_recovery.py'
       - 'veadk/extensions/harness/**'
       - 'veadk/integrations/agentkit/app.py'
       - 'pyproject.toml'
@@ -24,6 +26,7 @@ on:
       - 'frontend/**'
       - 'tests/cli/test_generated_agent_harness_sidecar.py'
       - 'tests/cli/test_managed_sidecar_source.py'
+      - 'tests/cli/test_legacy_runtime_recovery.py'
       - 'tests/cli/test_generated_agent_backend_codegen_extended.py'
       - 'tests/cli/test_studio_rbac.py'
       - 'tests/extensions/harness/**'
@@ -31,6 +34,7 @@ on:
       - 'veadk/cli/generated_agent_codegen.py'
       - 'veadk/cli/cli_frontend.py'
       - 'veadk/cli/managed_sidecar_source.py'
+      - 'veadk/cli/legacy_runtime_recovery.py'
       - 'veadk/extensions/harness/**'
       - 'veadk/integrations/agentkit/app.py'
       - 'pyproject.toml'
@@ -73,6 +77,15 @@ jobs:
           python -m coverage report \
             --include='*/veadk/extensions/harness/sidecar.py' \
             --fail-under=91 --show-missing
+
+      - name: Verify customer Studio Agent-update regressions
+        run: |
+          python -m pytest -q \
+            tests/cli/test_legacy_runtime_recovery.py::test_changed_unnamed_mcp_url_reuses_same_published_tool_slot \
+            tests/cli/test_legacy_runtime_recovery.py::test_changed_unnamed_mcp_url_rejects_moved_credential_slot
+          python -m pytest -q \
+            tests/cli/test_studio_rbac.py::test_sidecar_update_resolves_or_explicitly_reuses_stored_mcp_credentials \
+            -k changed-unnamed-explicit-reuse
 
       - name: Install frontend dependencies
         working-directory: frontend

@@ -970,6 +970,108 @@ def test_changed_mcp_url_requires_explicit_server_validated_reuse() -> None:
     )[0]["headers"] == {"Authorization": "Bearer retained-secret"}
 
 
+def test_changed_unnamed_mcp_url_reuses_same_published_tool_slot() -> None:
+    published = {
+        "name": "root",
+        "mcpTools": [
+            {
+                "name": "",
+                "transport": "http",
+                "url": "https://old-mcp.example.com/vtrace",
+                "authTokenEnv": "MCP_ROOT_TOOL_1_AUTH_TOKEN",
+            }
+        ],
+    }
+    edited = {
+        "name": "root",
+        "mcpTools": [
+            {
+                "name": "",
+                "transport": "http",
+                "url": "https://new-mcp.example.com/mcp",
+                "authTokenEnv": "MCP_ROOT_TOOL_1_AUTH_TOKEN",
+            }
+        ],
+    }
+
+    reuse = mcp_reuse_supplied_credentials(
+        published_draft=published,
+        edited_draft=edited,
+        published_reference_values={
+            "MCP_ROOT_TOOL_1_AUTH_TOKEN": "retained-secret",
+        },
+        reuse_requests=[
+            {
+                "agentName": "root",
+                "name": "",
+                "url": "https://new-mcp.example.com/mcp",
+                "sourceAuthTokenEnv": "MCP_ROOT_TOOL_1_AUTH_TOKEN",
+            }
+        ],
+    )
+
+    assert reuse == (
+        {
+            "agentName": "root",
+            "name": "",
+            "url": "https://new-mcp.example.com/mcp",
+            "value": "retained-secret",
+        },
+    )
+
+
+def test_changed_unnamed_mcp_url_rejects_moved_credential_slot() -> None:
+    published = {
+        "name": "root",
+        "mcpTools": [
+            {
+                "name": "",
+                "transport": "http",
+                "url": "https://old-mcp.example.com/vtrace",
+                "authTokenEnv": "MCP_ROOT_TOOL_1_AUTH_TOKEN",
+            },
+            {
+                "name": "public",
+                "transport": "http",
+                "url": "https://public-mcp.example.com/mcp",
+            },
+        ],
+    }
+    edited = {
+        "name": "root",
+        "mcpTools": [
+            {
+                "name": "public",
+                "transport": "http",
+                "url": "https://public-mcp.example.com/mcp",
+            },
+            {
+                "name": "",
+                "transport": "http",
+                "url": "https://new-mcp.example.com/mcp",
+                "authTokenEnv": "MCP_ROOT_TOOL_1_AUTH_TOKEN",
+            },
+        ],
+    }
+
+    with pytest.raises(LegacyRecoveryError, match="reuse_identity_changed"):
+        mcp_reuse_supplied_credentials(
+            published_draft=published,
+            edited_draft=edited,
+            published_reference_values={
+                "MCP_ROOT_TOOL_1_AUTH_TOKEN": "retained-secret",
+            },
+            reuse_requests=[
+                {
+                    "agentName": "root",
+                    "name": "",
+                    "url": "https://new-mcp.example.com/mcp",
+                    "sourceAuthTokenEnv": "MCP_ROOT_TOOL_1_AUTH_TOKEN",
+                }
+            ],
+        )
+
+
 def test_mcp_reuse_rejects_a_different_published_tool() -> None:
     published = {
         "name": "root",

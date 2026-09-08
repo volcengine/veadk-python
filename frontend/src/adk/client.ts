@@ -18,6 +18,11 @@ import {
 import { parseSSE } from "./sse";
 import { normalizeRuntimeDescription } from "./runtimeDescription";
 import {
+  DeploymentStatusUnconfirmedError,
+  isDeploymentAbortError,
+  isDeploymentStatusUnconfirmedError,
+} from "./deploymentStatus";
+import {
   DEFAULT_REQUEST_TIMEOUT_MS,
   requestSignal,
   TRANSFER_REQUEST_TIMEOUT_MS,
@@ -3605,7 +3610,8 @@ export async function deployAgentkitProject(
     });
   } catch (error) {
     clearController();
-    throw error;
+    if (isDeploymentAbortError(error)) throw error;
+    throw new DeploymentStatusUnconfirmedError({ taskId, cause: error });
   }
   if (!res.ok) {
     const detail = await httpErrorMessage(res, adkT("client.deploymentFailed"));
@@ -3625,12 +3631,19 @@ export async function deployAgentkitProject(
     }
   } catch (error) {
     clearController();
-    throw error;
+    if (isDeploymentAbortError(error)) throw error;
+    throw new DeploymentStatusUnconfirmedError({ taskId, cause: error });
   }
   clearController();
 
-  if (!final) throw new Error(adkT("client.deploymentDisconnected"));
-  if (!final.success) throw new Error(final.error || adkT("client.deploymentFailed"));
+  if (!final) throw new DeploymentStatusUnconfirmedError({ taskId });
+  if (!final.success) {
+    const error = new Error(final.error || adkT("client.deploymentFailed"));
+    if (isDeploymentStatusUnconfirmedError(error)) {
+      throw new DeploymentStatusUnconfirmedError({ taskId, cause: error });
+    }
+    throw error;
+  }
   if (!final.agentName) {
     throw new Error(adkT("client.deploymentMissingAgentName"));
   }

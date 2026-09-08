@@ -59,7 +59,7 @@ test("creation and deployment keep friendly context and the original error", () 
   );
   assert.match(
     clientSource,
-    /if \(!final\.success\) throw new Error\(final\.error \|\| adkT\("client\.deploymentFailed"\)\)/,
+    /if \(!final\.success\) \{[\s\S]*?isDeploymentStatusUnconfirmedError\(error\)[\s\S]*?throw error/,
   );
   assert.match(
     projectPreviewSource,
@@ -69,34 +69,33 @@ test("creation and deployment keep friendly context and the original error", () 
   assert.match(clientSource, /adkT\("client\.errorWithRawResponse"/);
   assert.match(
     projectPreviewSource,
-    /label: buildStatusUnconfirmed[\s\S]*?t\("projectPreview\.task\.buildStatusUnconfirmed"\)[\s\S]*?t\("projectPreview\.task\.deploymentFailed"\)[\s\S]*?message: buildStatusUnconfirmed[\s\S]*?failedInBuild[\s\S]*?\.\.\.\(buildLog/,
+    /const statusUnconfirmed = isDeploymentStatusUnconfirmedError\(err\)[\s\S]*?status: "running"[\s\S]*?statusUnconfirmed: true[\s\S]*?deploymentStatusUnconfirmed/,
   );
   assert.match(
     projectPreviewSource,
     /failedInBuild[\s\S]*?t\("projectPreview\.task\.buildFailedHint"\)[\s\S]*?failedInGithub[\s\S]*?t\("projectPreview\.task\.githubMountFailedHint"\)[\s\S]*?: message/,
   );
   assert.match(
-    projectPreviewSource,
-    /isBuildStatusConfirmationError[\s\S]*?RunPipeline result could not be reconciled[\s\S]*?Polling build status failed/,
+    clientSource,
+    /catch \(error\) \{[\s\S]*?isDeploymentAbortError\(error\)[\s\S]*?new DeploymentStatusUnconfirmedError\(\{ taskId, cause: error \}\)/,
   );
-  assert.doesNotMatch(
-    projectPreviewSource.match(
-      /export function isBuildStatusConfirmationError[\s\S]*?\n}/,
-    )?.[0] ?? "",
-    /network error|fetch failed|Volcengine request timed out/i,
+  assert.match(
+    clientSource,
+    /if \(!final\) throw new DeploymentStatusUnconfirmedError\(\{ taskId \}\)/,
   );
   assert.match(
     projectPreviewSource,
-    /buildStatusUnconfirmed[\s\S]*?BUILD_STATUS_CONFIRMATION_ERROR_MESSAGE[\s\S]*?failedInBuild/,
+    /statusUnconfirmed[\s\S]*?latestBuildLog \? \{ buildLog: latestBuildLog \}[\s\S]*?return;[\s\S]*?finalizeBuildFailureLog\(\)/,
   );
   assert.match(
     projectPreviewSource,
-    /deployError === BUILD_STATUS_CONFIRMATION_ERROR_MESSAGE[\s\S]*?undefined[\s\S]*?: requestDeploymentConfirmation/,
+    /deploymentStatusUnconfirmed && \([\s\S]*?className="pp-status-unconfirmed"[\s\S]*?role="status"/,
   );
   assert.match(
     projectPreviewSource,
-    /deployError === BUILD_STATUS_CONFIRMATION_ERROR_MESSAGE[\s\S]*?t\("projectPreview\.errors\.buildStatusUnconfirmedWithDetail"/,
+    /disabled=\{[\s\S]*?deploying \|\|[\s\S]*?deploymentStatusUnconfirmed/,
   );
+  assert.doesNotMatch(projectPreviewSource, /BUILD_STATUS_CONFIRMATION_ERROR_MESSAGE/);
 });
 
 test("generated-agent debug requests preserve backend error details", () => {
