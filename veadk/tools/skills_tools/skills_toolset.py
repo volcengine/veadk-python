@@ -14,7 +14,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 try:
     from typing_extensions import override
@@ -56,7 +56,13 @@ class SkillsToolset(BaseToolset):
     file manipulation, and command execution.
     """
 
-    def __init__(self, skills: Dict[str, Skill], skills_mode: str) -> None:
+    def __init__(
+        self,
+        skills: Dict[str, Skill],
+        skills_mode: str,
+        *,
+        tool_wrapper: Optional[Callable[[BaseTool], BaseTool]] = None,
+    ) -> None:
         """Initialize the skills toolset.
 
         Args:
@@ -76,6 +82,9 @@ class SkillsToolset(BaseToolset):
             "register_skills": FunctionTool(register_skills_tool),
             "update_check_list": FunctionTool(update_check_list),
         }
+
+        if tool_wrapper is not None:
+            self._tools = {key: tool_wrapper(tool) for key, tool in self._tools.items()}
 
     @override
     async def get_tools(
