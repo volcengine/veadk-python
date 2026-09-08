@@ -6171,6 +6171,7 @@ def test_sidecar_deployment_uses_agentkit_cli_structured_release(
     [
         ("unchanged-reference", "https://mcp.example.test/orders/mcp", 200),
         ("changed-explicit-reuse", "https://new-mcp.example.test/orders/mcp", 200),
+        ("changed-unnamed-explicit-reuse", "https://new-mcp.example.test/mcp", 200),
         ("changed-without-decision", "https://new-mcp.example.test/orders/mcp", 409),
     ],
 )
@@ -6185,6 +6186,19 @@ def test_sidecar_update_resolves_or_explicitly_reuses_stored_mcp_credentials(
     from veadk.extensions.harness import sidecar
 
     agent_name = "stored_mcp_agent"
+    unnamed = mode == "changed-unnamed-explicit-reuse"
+    published_tool_name = "" if unnamed else "orders"
+    published_runtime_name = "vtrace" if unnamed else "orders"
+    published_url = (
+        "https://mcp.example.test/vtrace"
+        if unnamed
+        else "https://mcp.example.test/orders/mcp"
+    )
+    auth_reference = (
+        "MCP_STORED_MCP_AGENT_TOOL_1_AUTH_TOKEN"
+        if unnamed
+        else "MCP_STORED_MCP_AGENT_ORDERS_AUTH_TOKEN"
+    )
     runtime = _runtime_with_public_endpoint(_runtime("stored-mcp-runtime", "developer"))
     runtime.current_version_number = 3
     runtime.status = "Ready"
@@ -6209,8 +6223,8 @@ def test_sidecar_update_resolves_or_explicitly_reuses_stored_mcp_credentials(
             value=json.dumps(
                 [
                     {
-                        "name": "orders",
-                        "url": "https://mcp.example.test/orders/mcp",
+                        "name": published_runtime_name,
+                        "url": published_url,
                         "headers": {"Authorization": "Bearer stored-test-credential"},
                     }
                 ]
@@ -6229,10 +6243,10 @@ def test_sidecar_update_resolves_or_explicitly_reuses_stored_mcp_credentials(
         "instruction": "Use orders MCP.",
         "mcpTools": [
             {
-                "name": "orders",
+                "name": published_tool_name,
                 "transport": "http",
-                "url": "https://mcp.example.test/orders/mcp",
-                "authTokenEnv": "MCP_STORED_MCP_AGENT_ORDERS_AUTH_TOKEN",
+                "url": published_url,
+                "authTokenEnv": auth_reference,
             }
         ],
         "harnessSidecar": {
@@ -6358,9 +6372,7 @@ def test_sidecar_update_resolves_or_explicitly_reuses_stored_mcp_credentials(
         assert capability.json()["canUpdate"] is True
         draft = capability.json()["agent"]["draft"]
         assert "authToken" not in draft["mcpTools"][0]
-        assert draft["mcpTools"][0]["authTokenEnv"] == (
-            "MCP_STORED_MCP_AGENT_ORDERS_AUTH_TOKEN"
-        )
+        assert draft["mcpTools"][0]["authTokenEnv"] == auth_reference
         assert "stored-test-credential" not in json.dumps(capability.json())
         draft["mcpTools"][0].pop("authToken", None)
         draft["mcpTools"][0]["url"] = expected_url
@@ -6396,13 +6408,13 @@ def test_sidecar_update_resolves_or_explicitly_reuses_stored_mcp_credentials(
             ],
             "config": {"region": "cn-shanghai", "projectName": "default"},
         }
-        if mode == "changed-explicit-reuse":
+        if mode in {"changed-explicit-reuse", "changed-unnamed-explicit-reuse"}:
             payload["mcpCredentialReuses"] = [
                 {
                     "agentName": agent_name,
-                    "name": "orders",
+                    "name": published_tool_name,
                     "url": expected_url,
-                    "sourceAuthTokenEnv": ("MCP_STORED_MCP_AGENT_ORDERS_AUTH_TOKEN"),
+                    "sourceAuthTokenEnv": auth_reference,
                 }
             ]
         response = client.post(
@@ -6427,7 +6439,7 @@ def test_sidecar_update_resolves_or_explicitly_reuses_stored_mcp_credentials(
     structured_key = structured_value.removeprefix("${").removesuffix("}")
     assert json.loads(captured["env"][structured_key]) == [
         {
-            "name": "orders",
+            "name": "mcp" if unnamed else "orders",
             "url": expected_url,
             "headers": {"Authorization": "Bearer stored-test-credential"},
         }

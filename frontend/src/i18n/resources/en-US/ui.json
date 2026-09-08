@@ -359,6 +359,7 @@
     },
     "deployStatus": {
       "running": "Deploying",
+      "unconfirmed": "Deployment status unconfirmed",
       "success": "Deployment complete",
       "error": "Deployment failed",
       "cancelled": "Deployment cancelled"
@@ -1039,7 +1040,7 @@
       "deployedNotConnected": "Deployed, not connected yet",
       "cancelled": "Cancelled",
       "cancelledHint": "Deployment was cancelled and the Runtime resources were requested for deletion.",
-      "buildStatusUnconfirmed": "Build status unconfirmed",
+      "deploymentStatusUnconfirmed": "Deployment status unconfirmed",
       "deploymentFailed": "Deployment failed",
       "buildFailedHint": "Image build failed. See the build log for details."
     },
@@ -1097,8 +1098,7 @@
       "runtimeNameExists": "This Runtime name already exists. Change it and try again.",
       "deployedButGithubMountFailed": "Deployment succeeded, but enabling GitHub continuous delivery failed: {{message}}",
       "deployedButGithubBindFailed": "Deployment succeeded, but binding GitHub failed: {{message}}",
-      "buildStatusUnconfirmed": "The build was submitted, but its final status could not be confirmed. Check the result in CodePipeline later to avoid a duplicate deployment.",
-      "buildStatusUnconfirmedWithDetail": "Build status unconfirmed: {{message}}",
+      "deploymentStatusUnconfirmed": "The connection was interrupted, so the final deployment status cannot be confirmed. The task may still be running in the cloud. Check the same task in AgentKit or CodePipeline and avoid a duplicate deployment.",
       "failedAtStage": "{{action}} failed during {{stage}}: {{message}}",
       "noAgentAtEndpoint": "Connected successfully, but no Agents were found at this endpoint (/list-apps is empty).",
       "addAgent": "Failed to add Agent: {{message}}",

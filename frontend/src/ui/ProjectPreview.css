@@ -2265,6 +2265,20 @@
   line-height: 1.5;
 }
 
+.pp-status-unconfirmed {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 14px 18px;
+  padding: 10px 11px;
+  border: 1px solid hsl(42 90% 45% / 0.25);
+  border-radius: 5px;
+  background: hsl(42 90% 50% / 0.07);
+  color: hsl(35 82% 34%);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
 .pp-deploy-result {
   margin: 14px 18px 18px;
   padding: 14px;

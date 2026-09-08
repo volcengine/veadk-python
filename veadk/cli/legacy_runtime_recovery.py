@@ -803,6 +803,59 @@ def _mcp_tool_bindings(
     return bindings
 
 
+def _mcp_reuse_bindings(
+    draft: Mapping[str, Any],
+) -> dict[
+    str,
+    tuple[tuple[str, str, str], str, tuple[str, ...], int],
+]:
+    """Describe the server-trusted source slot for each credential reference.
+
+    Empty MCP display names are canonicalized from their URL for Runtime use,
+    so that canonical name is intentionally not a stable editor identity when
+    the user changes the URL.  The Agent graph path and list position provide
+    the stable fallback only for an unnamed tool; explicit names keep the
+    stricter name-based contract.
+    """
+
+    bindings: dict[
+        str,
+        tuple[tuple[str, str, str], str, tuple[str, ...], int],
+    ] = {}
+    for agent_name, (parent_path, node) in _draft_node_index(draft).items():
+        raw_tools = node.get("mcpTools")
+        if raw_tools is None:
+            continue
+        if not isinstance(raw_tools, list):
+            raise LegacyRecoveryError("legacy_overlay_mcp_invalid")
+        for index, raw_tool in enumerate(raw_tools):
+            if not isinstance(raw_tool, Mapping):
+                raise LegacyRecoveryError("legacy_overlay_mcp_invalid")
+            if str(raw_tool.get("transport") or "http") != "http":
+                continue
+            reference = str(raw_tool.get("authTokenEnv") or "").strip()
+            if not reference:
+                continue
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", reference) is None:
+                raise LegacyRecoveryError("legacy_mcp_auth_reference_invalid")
+            if reference in bindings:
+                raise LegacyRecoveryError("legacy_mcp_auth_reference_duplicate")
+            url = _safe_mcp_url(raw_tool.get("url"))
+            raw_name = str(raw_tool.get("name") or "").strip()
+            identity = (
+                agent_name,
+                _mcp_name(raw_name, url, index),
+                _canonical_mcp_url_key(url),
+            )
+            bindings[reference] = (
+                identity,
+                raw_name,
+                (*parent_path, agent_name),
+                index,
+            )
+    return bindings
+
+
 def _validated_secret(value: Any) -> str:
     secret = str(value or "")
     if (
@@ -1410,19 +1463,21 @@ def mcp_reuse_supplied_credentials(
     another tool can never be selected through a browser-provided reference.
     """
 
-    published = _mcp_tool_bindings(published_draft)
-    edited = _mcp_tool_bindings(edited_draft)
+    published = _mcp_reuse_bindings(published_draft)
+    edited = _mcp_reuse_bindings(edited_draft)
     supplied: list[dict[str, str]] = []
     seen: set[tuple[str, str, str]] = set()
     for index, request in enumerate(reuse_requests):
         if index >= 256 or not isinstance(request, Mapping):
             raise LegacyRecoveryError("legacy_mcp_reuse_input_invalid")
         source_reference = str(request.get("sourceAuthTokenEnv") or "").strip()
-        source_identity = published.get(source_reference)
-        edited_identity = edited.get(source_reference)
+        source_binding = published.get(source_reference)
+        edited_binding = edited.get(source_reference)
         secret = str(published_reference_values.get(source_reference) or "")
-        if source_identity is None or edited_identity is None or not secret:
+        if source_binding is None or edited_binding is None or not secret:
             raise LegacyRecoveryError("legacy_mcp_reuse_source_missing")
+        source_identity, source_raw_name, source_path, source_index = source_binding
+        edited_identity, edited_raw_name, edited_path, edited_index = edited_binding
         raw_credential = {
             "agentName": str(request.get("agentName") or "").strip(),
             "name": str(request.get("name") or "").strip(),
@@ -1436,10 +1491,20 @@ def mcp_reuse_supplied_credentials(
         if len(canonical) != 1:
             raise LegacyRecoveryError("legacy_mcp_reuse_input_invalid")
         requested_identity = next(iter(canonical))
-        if edited_identity != requested_identity or (
+        same_named_tool = bool(source_raw_name and edited_raw_name) and (
             source_identity[0],
             source_identity[1],
-        ) != (requested_identity[0], requested_identity[1]):
+        ) == (requested_identity[0], requested_identity[1])
+        same_unnamed_slot = (
+            not source_raw_name
+            and not edited_raw_name
+            and source_path == edited_path
+            and source_index == edited_index
+            and source_identity[0] == requested_identity[0]
+        )
+        if edited_identity != requested_identity or not (
+            same_named_tool or same_unnamed_slot
+        ):
             raise LegacyRecoveryError("legacy_mcp_reuse_identity_changed")
         if requested_identity in seen:
             raise LegacyRecoveryError("legacy_mcp_reuse_input_duplicate")

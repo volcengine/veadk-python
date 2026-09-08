@@ -493,7 +493,7 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   assert.match(projectPreviewSource, /setActivePhase\(latestPhase\)/);
   assert.match(
     projectPreviewSource,
-    /label: buildStatusUnconfirmed[\s\S]*?t\("projectPreview\.task\.buildStatusUnconfirmed"\)[\s\S]*?t\("projectPreview\.task\.deploymentFailed"\)[\s\S]*?message: buildStatusUnconfirmed[\s\S]*?failedInBuild[\s\S]*?\.\.\.\(buildLog/,
+    /const statusUnconfirmed = isDeploymentStatusUnconfirmedError\(err\)[\s\S]*?status: "running"[\s\S]*?statusUnconfirmed: true[\s\S]*?deploymentStatusUnconfirmed/,
   );
   assert.match(projectPreviewSource, /const failedInGithub = latestPhase === "github" && Boolean\(latestGithubLog\)/);
   assert.match(projectPreviewSource, /failedInBuild[\s\S]*?t\("projectPreview\.task\.buildFailedHint"\)[\s\S]*?failedInGithub[\s\S]*?t\("projectPreview\.task\.githubMountFailedHint"\)/);
@@ -530,6 +530,14 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   assert.match(
     workspaceSource,
     /const deploymentDraft = deploymentTask\?\.draftId[\s\S]*?drafts\.find\(\(item\) => item\.id === deploymentTask\.draftId\)[\s\S]*?deploymentTask\.agentDraft/,
+  );
+  assert.match(
+    workspaceSource,
+    /task\.status === "running" && task\.statusUnconfirmed[\s\S]*?agentWorkspace\.deployStatus\.unconfirmed/,
+  );
+  assert.match(
+    workspaceSource,
+    /task\.status === "running" && !task\.statusUnconfirmed[\s\S]*?Math\.round\(progress\)/,
   );
   assert.match(
     workspaceSource,

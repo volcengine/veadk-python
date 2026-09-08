@@ -1599,13 +1599,25 @@ class SandboxConversationService:
         """Report whether the dedicated Codex Tool is configured."""
         tools = self._tools()
         enabled = bool(tools.configured)
-        return {
+        capability: dict[str, object] = {
             "enabled": enabled,
             "reason": "" if enabled else "管理员未配置",
             "persistentEnabled": bool(tools.persistent),
             "persistentReason": "" if tools.persistent else "管理员未配置快照版 Tool",
             "endpointExportEnabled": _sandbox_endpoint_export_enabled(),
         }
+        if self._managed_tool_spec is not None:
+            capability.update(
+                {
+                    "storageMode": "disk",
+                    "diskGbDefault": int(
+                        getattr(self._managed_tool_spec, "disk_gb", 10) or 10
+                    ),
+                    "diskGbMin": 1,
+                    "diskGbMax": 100,
+                }
+            )
+        return capability
 
     def _tools(self) -> SandboxToolPair:
         return SandboxToolPair(
@@ -2581,12 +2593,24 @@ class SandboxAgentSessionService:
     def capabilities(self) -> dict[str, object]:
         tools = self._tools()
         enabled = bool(tools.configured)
-        return {
+        capability: dict[str, object] = {
             "enabled": enabled,
             "reason": "" if enabled else self._unconfigured_message or "管理员未配置",
             "persistentEnabled": bool(tools.persistent),
             "persistentReason": "" if tools.persistent else "管理员未配置快照版 Tool",
         }
+        if self._managed_tool_spec is not None:
+            capability.update(
+                {
+                    "storageMode": "disk",
+                    "diskGbDefault": int(
+                        getattr(self._managed_tool_spec, "disk_gb", 10) or 10
+                    ),
+                    "diskGbMin": 1,
+                    "diskGbMax": 100,
+                }
+            )
+        return capability
 
     async def _cloud_session(self, session_id: str) -> SandboxCloudSession:
         tools = self._tools()
