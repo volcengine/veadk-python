@@ -168,7 +168,7 @@ def test_local_studio_mounts_snapshot_tools_into_sandbox_services() -> None:
         "            tool_id=sandbox_chat_hermes_tool_id,\n"
         "            snapshot_tool_id=sandbox_chat_hermes_snapshot_tool_id,\n"
         "            managed_tool_spec=hermes_managed_tool_spec,\n"
-        '            surface_path="/proxy/4500/",\n'
+        '            surface_path="/proxy/4500/" if is_vestack_deployment else None,\n'
     ) in source
 
 
