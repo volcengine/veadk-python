@@ -222,3 +222,11 @@
   .new-chat-agent-picker__trigger-chevron { transition: none; }
   .new-chat-agent-picker__spinner { animation: none; }
 }
+
+.new-chat-agent-picker__wake-note {
+  margin: 0;
+  padding: 8px 12px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.5;
+}

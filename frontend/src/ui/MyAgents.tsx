@@ -1,3 +1,4 @@
+import { TextShimmer } from "./text-shimmer/TextShimmer";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SVGProps } from "react";
 import { EmptyMessage } from "@openai/apps-sdk-ui/components/EmptyMessage";
@@ -29,6 +30,7 @@ import {
 } from "../adk/cloudProvider";
 import {
   sandboxClient,
+  sandboxCardStatus,
   type SandboxAgentResource,
   type SandboxAgentKind,
 } from "../adk/sandbox";
@@ -236,7 +238,7 @@ function runtimeToAgent(runtime: CloudRuntime, t: TFunction<"ui">): MyAgentCardD
 }
 
 function sandboxToAgent(session: SandboxAgentResource, t: TFunction<"ui">): MyAgentCardData {
-  const normalizedStatus = session.status.trim().toLowerCase();
+  const normalizedStatus = sandboxCardStatus(session.status);
   return {
     id: session.id,
     name: session.displayName || t("myAgents.namedAgent", { name: session.toolName }),
@@ -349,6 +351,7 @@ function AgentCard({
   compatibility,
   onRetryCompatibility,
   connecting,
+  connectError,
   connected,
   deploymentTask,
   nowMs,
@@ -363,6 +366,7 @@ function AgentCard({
   compatibility?: RuntimeCompatibility;
   onRetryCompatibility?: (agent: MyAgentCardData) => void;
   connecting?: boolean;
+  connectError?: string;
   connected?: boolean;
   deploymentTask?: DeploymentTaskUpdate;
   nowMs: number;
@@ -388,13 +392,13 @@ function AgentCard({
       else onViewDetails?.(agent);
       return;
     }
-    if (!actionable) return;
+    if (!actionable && !agent.sandbox) return;
     if (deploymentTask) onViewDeploymentTask?.(deploymentTask);
     else onViewDetails?.(agent);
   };
   const cardTargetEnabled = agent.draft
     ? Boolean(deploymentTask ? onViewDeploymentTask : onViewDetails)
-    : actionable && Boolean(deploymentTask ? onViewDeploymentTask : onViewDetails);
+    : (actionable || Boolean(agent.sandbox)) && Boolean(deploymentTask ? onViewDeploymentTask : onViewDetails);
   const cardTargetLabel = agent.draft
     ? deploymentTask
       ? t("myAgents.viewDeploymentProgress", { name: agent.name })
@@ -427,13 +431,11 @@ function AgentCard({
             },
             ...(agent.sandbox ? [{
               label: t("myAgents.remainingTime"),
-              value: agent.sandbox.resourceType === "snapshot"
-                ? t("myAgents.wakeable")
-                : agent.sandbox.persistent
-                  ? t("myAgents.neverExpires")
-                  : formatSandboxRemainingTime(agent.sandbox.expireAt, nowMs, t),
+              value: agent.sandbox.resourceType === "snapshot" || agent.sandbox.persistent
+                ? t("myAgents.neverExpires")
+                : formatSandboxRemainingTime(agent.sandbox.expireAt, nowMs, t),
               className: `my-agent-expiry${
-                agent.sandbox.resourceType === "session" && agent.sandbox.persistent
+                agent.sandbox.resourceType === "snapshot" || agent.sandbox.persistent
                   ? ""
                   : " is-expiring"
               }`,
@@ -515,8 +517,7 @@ function AgentCard({
           ) : agent.sandbox ? (
             <span
               className="my-agent-status-label"
-              data-ready={agent.sandbox.status.toLowerCase() === "ready" || undefined}
-              data-wakeable={wakeable || undefined}
+              data-ready={sandboxCardStatus(agent.sandbox.status) === "ready" || undefined}
             >
               {agent.description}
             </span>
@@ -588,6 +589,14 @@ function AgentCard({
             </Tooltip>
           ) : null}
       />
+      {connectError ? (
+        <Tooltip content={connectError} contentClassName="my-agent-error-tooltip" maxWidth={360} interactive>
+          <p className="my-agent-wake-note" role="alert" tabIndex={0}>{connectError}</p>
+        </Tooltip>
+      ) : null}
+      {wakeable && connecting ? <p className="my-agent-wake-note" role="status">
+        <TextShimmer>{t("myAgents.wakingHint")}</TextShimmer>
+      </p> : null}
       {!agent.sandbox ? (
         <ResourceCardDescription>{agent.description}</ResourceCardDescription>
       ) : null}
@@ -670,6 +679,7 @@ export function MyAgents({
   const [loadingSandboxAgents, setLoadingSandboxAgents] = useState(false);
   const [sandboxError, setSandboxError] = useState("");
   const [connectingAgentId, setConnectingAgentId] = useState("");
+  const [connectErrors, setConnectErrors] = useState<Record<string, string>>({});
   const [runtimeCompatibility, setRuntimeCompatibility] = useState<
     Record<string, RuntimeCompatibility>
   >({});
@@ -902,11 +912,11 @@ export function MyAgents({
       const sessions = type === "codex"
         ? await sandboxClient.listSessions({
             signal: controller.signal,
-            autoResumeSnapshots: true,
+            autoResumeSnapshots: false,
           })
         : await sandboxClient.listAgentSessions(type, {
             signal: controller.signal,
-            autoResumeSnapshots: true,
+            autoResumeSnapshots: false,
           });
       if (sandboxRequestRef.current !== requestId) return;
       setSandboxAgents(sessions.map((session) => sandboxToAgent(session, t)));
@@ -1000,6 +1010,7 @@ export function MyAgents({
   const useAgent = useCallback(async (agent: MyAgentCardData) => {
     if (connectingAgentId) return;
     setConnectingAgentId(agent.id);
+    setConnectErrors((current) => ({ ...current, [agent.id]: "" }));
     try {
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       if (agent.sandbox) {
@@ -1007,6 +1018,8 @@ export function MyAgents({
       } else {
         await onUseAgent(agent);
       }
+    } catch (cause) {
+      setConnectErrors((current) => ({ ...current, [agent.id]: cause instanceof Error ? cause.message : String(cause) }));
     } finally {
       setConnectingAgentId("");
     }
@@ -1320,6 +1333,7 @@ export function MyAgents({
                       }
                     } : undefined}
                     connecting={agent.id === connectingAgentId}
+                    connectError={connectErrors[agent.id]}
                     connected={agent.runtime?.runtimeId === connectedRuntimeId}
                     onEditDraft={onEditDraft}
                     onDeleteDraft={setDraftToDelete}

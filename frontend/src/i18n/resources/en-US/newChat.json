@@ -77,7 +77,8 @@
     "loadType": "Load {{type}}",
     "connectGeneral": "Connect to General Agent",
     "openLocal": "Open local Agent",
-    "openType": "Open {{type}}"
+    "openType": "Open {{type}}",
+    "wakingHint": "Waking the agent. This may take some time."
   },
   "skill": {
     "spaceAria": "Skill spaces",

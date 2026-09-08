@@ -151,3 +151,11 @@
     border-bottom: 0;
   }
 }
+
+.sandbox-agent-wake-note {
+  margin: 0;
+  padding: 12px 24px;
+  color: hsl(var(--muted-foreground));
+  font-size: 13px;
+  line-height: 1.5;
+}
