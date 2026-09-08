@@ -102,18 +102,22 @@ export function runtimeEnvVars(
 export function firstMissingRuntimeEnv(
   specs: RuntimeEnvSpec[],
   values: Record<string, string>,
+  configuredKeys: readonly string[] = [],
 ): RuntimeEnvSpec | undefined {
-  return missingRuntimeEnvs(specs, values)[0];
+  return missingRuntimeEnvs(specs, values, configuredKeys)[0];
 }
 
 export function missingRuntimeEnvs(
   specs: RuntimeEnvSpec[],
   values: Record<string, string>,
+  configuredKeys: readonly string[] = [],
 ): RuntimeEnvSpec[] {
+  const configured = new Set(configuredKeys);
   return specs.filter(
     (spec) =>
       spec.required &&
       !spec.serverManaged &&
+      !configured.has(spec.key) &&
       !runtimeEnvValue(spec, values).trim(),
   );
 }

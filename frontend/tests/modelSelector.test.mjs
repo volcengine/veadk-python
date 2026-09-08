@@ -22,8 +22,16 @@ const modelFallbackFieldsSource = readFileSync(
   new URL("../src/create/ModelFallbackFields.tsx", import.meta.url),
   "utf8",
 );
+const newAgentWorkbenchSource = readFileSync(
+  new URL("../src/create/NewAgentWorkbench.tsx", import.meta.url),
+  "utf8",
+);
 const modelSource = readFileSync(
   new URL("../src/create/modelSource.ts", import.meta.url),
+  "utf8",
+);
+const modelApiBaseSource = readFileSync(
+  new URL("../src/create/modelApiBase.ts", import.meta.url),
   "utf8",
 );
 const cloudProviderSource = readFileSync(
@@ -144,6 +152,8 @@ test("cross-provider fallback editor hides env internals and keeps rows on blur"
   assert.doesNotMatch(modelFallbackFieldsSource, /invalidApiKeyEnv/);
   assert.doesNotMatch(modelFallbackFieldsSource, /onBlur=\{normalizeCurrentValue\}/);
   assert.match(modelFallbackFieldsSource, /modelApiKeyEnv: fallbackApiKeyEnv/);
+  assert.match(modelFallbackFieldsSource, /configuredSecretEnvKeys/);
+  assert.match(modelFallbackFieldsSource, /configuredSecret[\s\S]*?"••••••"/);
 });
 
 test("fallback editor keeps row identity stable while switching provider type", () => {
@@ -212,6 +222,18 @@ test("custom model fields stay visible and link to LiteLLM providers", () => {
     /<label className="cw-label">\{t\("traditional\.model\.name"\)\}<\/label>[\s\S]{0,300}placeholder=/,
   );
   assert.doesNotMatch(customCreateSource, /留空或使用当前云的官方 Ark 地址时/);
+});
+
+test("custom model API base fields validate absolute HTTP URLs", () => {
+  assert.match(modelApiBaseSource, /isValidModelApiBaseUrl/);
+  assert.match(modelApiBaseSource, /url\.protocol === "https:"/);
+  assert.match(modelApiBaseSource, /url\.protocol === "http:"/);
+  assert.match(customCreateSource, /isValidModelApiBaseUrl\(\s*node\.modelApiBase/);
+  assert.match(newAgentWorkbenchSource, /isValidModelApiBaseUrl\(apiBase\)/);
+  assert.match(modelFallbackFieldsSource, /isValidModelApiBaseUrl\(endpoint\.modelApiBase\)/);
+  assert.match(customCreateSource, /traditional\.model\.invalidApiBase/);
+  assert.match(newAgentWorkbenchSource, /workbench\.model\.invalidApiBase/);
+  assert.match(modelFallbackFieldsSource, /\$\{variant\}\.model\.invalidApiBase/);
 });
 
 test("a newly selected custom model starts empty without changing saved custom drafts", () => {

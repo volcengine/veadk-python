@@ -47,6 +47,7 @@ import {
   sameProviderModelFallbacks,
 } from "./modelFallbacks";
 import { ModelFallbackFields } from "./ModelFallbackFields";
+import { isValidModelApiBaseUrl } from "./modelApiBase";
 import { STM_BACKENDS, type EnvVar } from "./veadkCatalog";
 import type {
   AgentDraft,
@@ -75,6 +76,8 @@ export interface NewAgentWorkbenchProps {
   onModelApiKeyChange: (key: ModelApiKeyOption) => void;
   customModelApiKey: string;
   customModelSecretValues: Record<string, string>;
+  customModelApiKeyConfigured?: boolean;
+  configuredRuntimeEnvKeys?: readonly string[];
   onCustomModelApiKeyChange: (value: string) => void;
   onCustomModelSecretChange: (key: string, value: string) => void;
   onSelectedSkillsChange: (skills: SelectedSkill[]) => void;
@@ -174,6 +177,8 @@ function NativeModelPicker({
   apiBase,
   customApiKey,
   customModelSecretValues,
+  customModelApiKeyConfigured,
+  configuredRuntimeEnvKeys,
   fallbacks,
   onSourceChange,
   onApiKeyChange,
@@ -195,6 +200,8 @@ function NativeModelPicker({
   apiBase: string;
   customApiKey: string;
   customModelSecretValues: Record<string, string>;
+  customModelApiKeyConfigured?: boolean;
+  configuredRuntimeEnvKeys?: readonly string[];
   fallbacks: ModelFallbackDraft[];
   onSourceChange: (source: ModelSource) => void;
   onApiKeyChange: (key: ModelApiKeyOption) => void;
@@ -366,6 +373,7 @@ function NativeModelPicker({
     next[index] = modelName;
     onModelFallbacksChange(normalizeModelFallbacks(value, next));
   };
+  const apiBaseInvalid = !isValidModelApiBaseUrl(apiBase);
 
   return (
     <div className="new-agent-workbench__model-group">
@@ -440,6 +448,7 @@ function NativeModelPicker({
               agentName={agentName}
               value={fallbacks}
               secretValues={customModelSecretValues}
+              configuredSecretEnvKeys={configuredRuntimeEnvKeys}
               onChange={onModelFallbacksChange}
               onSecretChange={onCustomModelSecretChange}
               renderSameProviderField={({ index, value: fallbackValue }) => (
@@ -499,13 +508,21 @@ function NativeModelPicker({
                 API Base
               </span>
               <Input
+                type="url"
+                inputMode="url"
                 value={apiBase}
                 placeholder={defaultModelApiBase(cloudProvider)}
+                invalid={apiBaseInvalid}
                 size="xl"
                 gutterSize="md"
                 pill={false}
                 onChange={(event) => onApiBaseChange(event.currentTarget.value)}
               />
+              {apiBaseInvalid ? (
+                <small className="new-agent-workbench__error">
+                  {t("workbench.model.invalidApiBase")}
+                </small>
+              ) : null}
             </label>
             <label className="new-agent-workbench__field new-agent-workbench__model-field">
               <span className="new-agent-workbench__model-field-label">
@@ -514,7 +531,11 @@ function NativeModelPicker({
               <Input
                 type="password"
                 value={customApiKey}
-                placeholder={t("workbench.model.apiKeyPlaceholder")}
+                placeholder={
+                  customModelApiKeyConfigured && !customApiKey
+                    ? "••••••"
+                    : t("workbench.model.apiKeyPlaceholder")
+                }
                 autoComplete="new-password"
                 size="xl"
                 gutterSize="md"
@@ -530,6 +551,7 @@ function NativeModelPicker({
               agentName={agentName}
               value={fallbacks}
               secretValues={customModelSecretValues}
+              configuredSecretEnvKeys={configuredRuntimeEnvKeys}
               onChange={onModelFallbacksChange}
               onSecretChange={onCustomModelSecretChange}
             />
@@ -758,6 +780,8 @@ export function NewAgentWorkbench({
   onModelApiKeyChange,
   customModelApiKey,
   customModelSecretValues,
+  customModelApiKeyConfigured,
+  configuredRuntimeEnvKeys,
   onCustomModelApiKeyChange,
   onCustomModelSecretChange,
   onSelectedSkillsChange,
@@ -1136,6 +1160,10 @@ export function NewAgentWorkbench({
                       apiBase={draft.modelApiBase ?? ""}
                       customApiKey={customModelApiKey}
                       customModelSecretValues={customModelSecretValues}
+                      customModelApiKeyConfigured={
+                        customModelApiKeyConfigured
+                      }
+                      configuredRuntimeEnvKeys={configuredRuntimeEnvKeys}
                       fallbacks={draft.modelFallbacks ?? []}
                       onSourceChange={(source) => {
                         setModelDataLoading(source === "ark");

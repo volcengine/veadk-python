@@ -51,6 +51,9 @@ const {
 } = await loadTypeScriptModule(
   "../src/create/modelFallbacks.ts",
 );
+const { isValidModelApiBaseUrl } = await loadTypeScriptModule(
+  "../src/create/modelApiBase.ts",
+);
 const { draftToYaml, yamlToDraft } = await loadCommonJsTypeScriptModule(
   "../src/create/configYaml.ts",
 );
@@ -66,6 +69,15 @@ test("normalizes same-provider model fallback order", () => {
     ]),
     ["fallback-a", "fallback-b"],
   );
+});
+
+test("validates custom model API base URLs", () => {
+  assert.equal(isValidModelApiBaseUrl(""), true);
+  assert.equal(isValidModelApiBaseUrl("https://api.example.com/v1"), true);
+  assert.equal(isValidModelApiBaseUrl("http://localhost:11434/v1"), true);
+  assert.equal(isValidModelApiBaseUrl("api.example.com/v1"), false);
+  assert.equal(isValidModelApiBaseUrl("ftp://api.example.com/v1"), false);
+  assert.equal(isValidModelApiBaseUrl("https://user:pass@example.com/v1"), false);
 });
 
 test("normalizes cross-provider model fallback endpoints", () => {

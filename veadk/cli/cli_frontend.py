@@ -4476,6 +4476,7 @@ def _run_frontend_server(
         assess_legacy_recovered_agent,
         assess_runtime_update_agent,
         mcp_auth_environment_keys,
+        model_environment_keys,
         sanitize_runtime_agent_info,
         sanitize_runtime_environment,
     )
@@ -6377,6 +6378,17 @@ def _run_frontend_server(
                 )
             requested_runtime_envs[key] = str(item.get("value") or "")
         if source_preserving_requested and requested_runtime_envs:
+            allowed_source_preserving_envs = (
+                set(model_environment_keys(requested_draft))
+                if isinstance(requested_draft, Mapping)
+                else set()
+            )
+            disallowed_envs = set(requested_runtime_envs).difference(
+                allowed_source_preserving_envs
+            )
+        else:
+            disallowed_envs = set()
+        if disallowed_envs:
             raise HTTPException(
                 status_code=400,
                 detail=("保留源码更新不接受通用环境变量，请重新打开智能体详情后重试。"),
@@ -11779,7 +11791,9 @@ def _run_frontend_server(
             if getattr(item, "key", None)
         )
         configured = set(environment_view.configured_env_keys)
-        references = mcp_auth_environment_keys(draft)
+        mcp_references = mcp_auth_environment_keys(draft)
+        model_references = model_environment_keys(draft)
+        references = (*mcp_references, *model_references)
         missing = set(references).difference(configured)
         if missing:
             try:

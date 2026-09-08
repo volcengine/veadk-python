@@ -18,6 +18,7 @@ import json
 from veadk.cli.runtime_update_recovery import (
     assess_runtime_update_agent,
     mcp_auth_environment_keys,
+    model_environment_keys,
     sanitize_runtime_agent_info,
     sanitize_runtime_environment,
 )
@@ -142,6 +143,51 @@ def test_mcp_auth_environment_keys_walks_the_complete_agent_tree() -> None:
         "MCP_SHARED_TOKEN",
         "MCP_CHILD_TOKEN",
         "MCP_WORKFLOW_TOKEN",
+    )
+
+
+def test_model_environment_keys_include_custom_and_fallback_secrets() -> None:
+    keys = model_environment_keys(
+        {
+            "name": "Root Agent",
+            "agentType": "llm",
+            "modelSource": "custom",
+            "modelProvider": "openai",
+            "modelApiBase": "https://api.openai.com/v1",
+            "modelFallbacks": [
+                "same-provider-backup",
+                {
+                    "modelName": "claude-3-haiku",
+                    "modelProvider": "anthropic",
+                    "modelApiBase": "https://api.anthropic.com/v1",
+                    "modelApiKeyEnv": "ANTHROPIC_BACKUP_API_KEY",
+                },
+                {
+                    "modelName": "gemini-1.5-flash",
+                    "modelProvider": "gemini",
+                    "modelApiBase": "https://generativelanguage.googleapis.com/v1beta",
+                },
+            ],
+            "subAgents": [
+                {
+                    "name": "Child Agent",
+                    "agentType": "llm",
+                    "modelSource": "custom",
+                    "modelApiBase": "https://models.example.com/v1",
+                    "modelFallbacks": [],
+                }
+            ],
+        }
+    )
+
+    assert keys == (
+        "CUSTOM_MODEL_ROOT_AGENT_PROVIDER",
+        "CUSTOM_MODEL_ROOT_AGENT_API_BASE",
+        "CUSTOM_MODEL_ROOT_AGENT_API_KEY",
+        "ANTHROPIC_BACKUP_API_KEY",
+        "FALLBACK_MODEL_ROOT_AGENT_3_API_KEY",
+        "CUSTOM_MODEL_CHILD_AGENT_API_BASE",
+        "CUSTOM_MODEL_CHILD_AGENT_API_KEY",
     )
 
 

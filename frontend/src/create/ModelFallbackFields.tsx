@@ -9,6 +9,7 @@ import {
   nextModelFallbackApiKeyEnv,
   normalizeModelFallbacks,
 } from "./modelFallbacks";
+import { isValidModelApiBaseUrl } from "./modelApiBase";
 import type { ModelFallbackDraft, ModelFallbackEndpointDraft } from "./types";
 import "./ModelFallbackFields.css";
 
@@ -41,6 +42,7 @@ export function ModelFallbackFields({
   agentName,
   value,
   secretValues,
+  configuredSecretEnvKeys,
   embedded,
   onChange,
   onSecretChange,
@@ -51,6 +53,7 @@ export function ModelFallbackFields({
   agentName?: string;
   value?: ModelFallbackDraft[];
   secretValues?: Record<string, string>;
+  configuredSecretEnvKeys?: readonly string[];
   embedded?: boolean;
   onChange: (fallbacks: ModelFallbackDraft[]) => void;
   onSecretChange?: (key: string, value: string) => void;
@@ -61,6 +64,7 @@ export function ModelFallbackFields({
   const { t } = useTranslation("create");
   const id = useId();
   const values = value ?? [];
+  const configuredSecretEnvKeySet = new Set(configuredSecretEnvKeys ?? []);
   const primary = (primaryModelName ?? "").trim();
   const fieldClassName =
     embedded
@@ -136,7 +140,12 @@ export function ModelFallbackFields({
                   ? modelFallbackApiKeyEnv(agentName, index, values, endpoint)
                   : defaultModelFallbackApiKeyEnv(agentName, index);
               const secretValue = secretValues?.[fallbackApiKeyEnv] ?? "";
+              const configuredSecret =
+                configuredSecretEnvKeySet.has(fallbackApiKeyEnv);
               const modelInputId = `${id}-${index}-model`;
+              const apiBaseInvalid =
+                endpoint !== null &&
+                !isValidModelApiBaseUrl(endpoint.modelApiBase);
               return (
                 <div
                   className={`model-fallback-fields__item${
@@ -260,8 +269,11 @@ export function ModelFallbackFields({
                         </span>
                         <input
                           className={inputClassName}
+                          type="url"
+                          inputMode="url"
                           value={endpoint.modelApiBase ?? ""}
                           placeholder="https://api.example.com/v1"
+                          aria-invalid={apiBaseInvalid}
                           onChange={(event) =>
                             replaceFallback(index, {
                               ...endpoint,
@@ -270,6 +282,11 @@ export function ModelFallbackFields({
                             })
                           }
                         />
+                        {apiBaseInvalid ? (
+                          <span className="model-fallback-fields__error">
+                            {t(`${variant}.model.invalidApiBase`)}
+                          </span>
+                        ) : null}
                       </label>
                       <label className="model-fallback-fields__field">
                         <span className="model-fallback-fields__field-label">
@@ -279,7 +296,11 @@ export function ModelFallbackFields({
                           className={inputClassName}
                           type="password"
                           value={secretValue}
-                          placeholder={t(`${variant}.model.apiKeyPlaceholder`)}
+                          placeholder={
+                            configuredSecret && !secretValue
+                              ? "••••••"
+                              : t(`${variant}.model.apiKeyPlaceholder`)
+                          }
                           autoComplete="new-password"
                           onChange={(event) => {
                             replaceFallback(index, {

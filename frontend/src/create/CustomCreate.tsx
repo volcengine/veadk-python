@@ -192,6 +192,7 @@ import {
   customModelCredentialRequirements,
   customModelEnvironmentBindings,
 } from "./customModelCredentials";
+import { isValidModelApiBaseUrl } from "./modelApiBase";
 import "./CustomCreate.css";
 
 const MarkdownPromptEditor = lazy(() => import("./MarkdownPromptEditor"));
@@ -975,6 +976,7 @@ function ModelOptionSelect({
   apiKeyId,
   apiKeyName,
   customModelSecretValues,
+  configuredRuntimeEnvKeys,
   onApiKeyChange,
   onChange,
   onFallbacksChange,
@@ -987,6 +989,7 @@ function ModelOptionSelect({
   apiKeyId?: string;
   apiKeyName?: string;
   customModelSecretValues: Record<string, string>;
+  configuredRuntimeEnvKeys?: readonly string[];
   onApiKeyChange: (key: ModelApiKeyOption) => void;
   onChange: (modelId: string) => void;
   onFallbacksChange: (fallbacks: ModelFallbackDraft[]) => void;
@@ -1334,6 +1337,7 @@ function ModelOptionSelect({
           agentName={agentName}
           value={fallbacks}
           secretValues={customModelSecretValues}
+          configuredSecretEnvKeys={configuredRuntimeEnvKeys}
           onChange={onFallbacksChange}
           onSecretChange={onCustomModelSecretChange}
           renderSameProviderField={({ index, value: fallbackValue }) => {
@@ -3215,6 +3219,37 @@ function debugRuntimeDraft(
   };
 }
 
+function modelRuntimeEnvKeys(
+  draft: AgentDraft,
+  cloudProvider: CloudProvider,
+): Set<string> {
+  const keys = new Set<string>();
+  for (const binding of customModelEnvironmentBindings(
+    draft,
+    defaultModelApiBase(cloudProvider),
+  )) {
+    for (const key of [
+      binding.providerKey,
+      binding.apiBaseKey,
+      binding.apiKeyKey,
+    ]) {
+      if (key) keys.add(key);
+    }
+  }
+  return keys;
+}
+
+function sourcePreservingModelEnvVars(
+  draft: AgentDraft,
+  cloudProvider: CloudProvider,
+  envs: { key: string; value: string }[] | undefined,
+): { key: string; value: string }[] {
+  const allowedKeys = modelRuntimeEnvKeys(draft, cloudProvider);
+  return (envs ?? []).filter(
+    ({ key, value }) => allowedKeys.has(key) && value.trim(),
+  );
+}
+
 function debugSnapshotKey(
   draft: AgentDraft,
   transientEnvValues: Record<string, string> = {},
@@ -3977,6 +4012,11 @@ export function CustomCreate({
   const [customModelSecretValues, setCustomModelSecretValues] = useState<
     Record<string, string>
   >(initialState.customModelSecretValues);
+  const configuredRuntimeEnvKeys = deploymentTarget?.configuredRuntimeEnvKeys ?? [];
+  const configuredRuntimeEnvKeySet = useMemo(
+    () => new Set(configuredRuntimeEnvKeys),
+    [configuredRuntimeEnvKeys],
+  );
   const configuredRuntimeName = draft.deployment?.runtimeName ?? "";
   const deploymentRuntimeName = deploymentTarget
     ? deploymentTarget.name
@@ -4432,6 +4472,12 @@ export function CustomCreate({
       requirement.label === createT("helpers.customModel.apiKeyLabel", {
         name: node.name.trim() || createT("helpers.customModel.fallbackName"),
       }),
+  );
+  const selectedCustomModelApiKeyConfigured = selectedCustomModelCredential
+    ? configuredRuntimeEnvKeySet.has(selectedCustomModelCredential.key)
+    : false;
+  const customModelApiBaseInvalid = !isValidModelApiBaseUrl(
+    node.modelApiBase,
   );
 
   const updateNewWorkbenchModelApiKey = useCallback(
@@ -5002,7 +5048,9 @@ export function CustomCreate({
           deploymentTarget || mcpGatewayManaged ? codegenDraft(draft) : undefined,
         updateEtag: deploymentTarget?.etag,
         baseRuntimeVersion: deploymentTarget?.currentVersion,
-        envs: sourcePreserving ? [] : options?.envs,
+        envs: sourcePreserving
+          ? sourcePreservingModelEnvVars(draft, cloudProvider, options?.envs)
+          : options?.envs,
         mcpSecretValues: sourcePreserving
           ? sourcePreservingMcpSecretValues(draft)
           : mcpGatewayManaged
@@ -5142,7 +5190,11 @@ export function CustomCreate({
     const activeEnvSpecs = deploymentDraft.deployment?.feishuEnabled
       ? [...activeDeploymentEnv.specs, ...FEISHU_ENV]
       : activeDeploymentEnv.specs;
-    const missingEnv = firstMissingRuntimeEnv(activeEnvSpecs, allEnvValues);
+    const missingEnv = firstMissingRuntimeEnv(
+      activeEnvSpecs,
+      allEnvValues,
+      configuredRuntimeEnvKeys,
+    );
     if (missingEnv) {
       setNewWorkbenchDeployError(
         t("traditional.deployment.requiredEnv", {
@@ -5445,6 +5497,8 @@ export function CustomCreate({
             : ""
         }
         customModelSecretValues={customModelSecretValues}
+        customModelApiKeyConfigured={selectedCustomModelApiKeyConfigured}
+        configuredRuntimeEnvKeys={configuredRuntimeEnvKeys}
         onCustomModelApiKeyChange={(value) => {
           if (!selectedCustomModelCredential) return;
           patchCustomModelSecret(selectedCustomModelCredential.key, value);
@@ -5896,6 +5950,9 @@ export function CustomCreate({
                                       customModelSecretValues={
                                         customModelSecretValues
                                       }
+                                      configuredRuntimeEnvKeys={
+                                        configuredRuntimeEnvKeys
+                                      }
                                       onApiKeyChange={(key) =>
                                         setDraft((current) => ({
                                           ...current,
@@ -5977,16 +6034,28 @@ export function CustomCreate({
                                       </label>
                                       <input
                                         className="cw-input"
+                                        type="url"
+                                        inputMode="url"
                                         value={node.modelApiBase ?? ""}
                                         placeholder={defaultModelApiBase(
                                           cloudProvider,
                                         )}
+                                        aria-invalid={
+                                          customModelApiBaseInvalid
+                                        }
                                         onChange={(e) =>
                                           patch({
                                             modelApiBase: e.target.value,
                                           })
                                         }
                                       />
+                                      {customModelApiBaseInvalid ? (
+                                        <span className="cw-env-error">
+                                          {t(
+                                            "traditional.model.invalidApiBase",
+                                          )}
+                                        </span>
+                                      ) : null}
                                     </div>
                                     <div className="cw-field">
                                       <label className="cw-label">
@@ -6003,9 +6072,21 @@ export function CustomCreate({
                                               ] ?? "")
                                             : ""
                                         }
-                                        placeholder={t(
-                                          "traditional.model.apiKeyPlaceholder",
-                                        )}
+                                        placeholder={
+                                          selectedCustomModelApiKeyConfigured &&
+                                          !(
+                                            selectedCustomModelCredential
+                                              ? customModelSecretValues[
+                                                  selectedCustomModelCredential
+                                                    .key
+                                                ]
+                                              : ""
+                                          )
+                                            ? "••••••"
+                                            : t(
+                                                "traditional.model.apiKeyPlaceholder",
+                                              )
+                                        }
                                         autoComplete="new-password"
                                         onChange={(event) => {
                                           if (!selectedCustomModelCredential)
@@ -6028,6 +6109,7 @@ export function CustomCreate({
                                     agentName={node.name}
                                     value={node.modelFallbacks ?? []}
                                     secretValues={customModelSecretValues}
+                                    configuredSecretEnvKeys={configuredRuntimeEnvKeys}
                                     onChange={(modelFallbacks) =>
                                       patch({ modelFallbacks })
                                     }

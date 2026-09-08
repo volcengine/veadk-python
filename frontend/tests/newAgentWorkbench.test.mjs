@@ -679,7 +679,7 @@ test("final step exposes deployment progress and error feedback", () => {
   );
   assert.match(
     customCreateSource,
-    /firstMissingRuntimeEnv\(activeEnvSpecs, allEnvValues\)/,
+    /firstMissingRuntimeEnv\(\s*activeEnvSpecs,\s*allEnvValues,\s*configuredRuntimeEnvKeys,\s*\)/,
   );
   assert.match(
     customCreateSource,

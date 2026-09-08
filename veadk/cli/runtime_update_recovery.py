@@ -32,6 +32,7 @@ from urllib.parse import urlsplit
 from pydantic import ValidationError
 
 from veadk.cli.generated_agent_codegen import AgentDraft
+from veadk.cli.studio_model_catalog import is_provider_modelark_base_url
 
 __all__ = [
     "RuntimeEnvironmentView",
@@ -39,6 +40,7 @@ __all__ = [
     "assess_legacy_recovered_agent",
     "assess_runtime_update_agent",
     "mcp_auth_environment_keys",
+    "model_environment_keys",
     "sanitize_runtime_agent_info",
     "sanitize_runtime_environment",
 ]
@@ -149,6 +151,20 @@ def _safe_public_environment_value(key: str, value: str) -> bool:
         and not parsed.query
         and not parsed.fragment
     )
+
+
+def _env_segment(value: str, fallback: str) -> str:
+    segment = re.sub(r"[^A-Z0-9]+", "_", (value or "").strip().upper())
+    return segment.strip("_") or fallback
+
+
+def _next_env_name(base: str, used: set[str]) -> str:
+    if base not in used:
+        return base
+    suffix = 2
+    while f"{base}_{suffix}" in used:
+        suffix += 1
+    return f"{base}_{suffix}"
 
 
 def sanitize_runtime_environment(
@@ -324,6 +340,121 @@ def mcp_auth_environment_keys(draft: Mapping[str, Any]) -> tuple[str, ...]:
                         visit(child, depth=depth + 1)
 
     visit(draft, depth=0)
+    return tuple(keys)
+
+
+def model_environment_keys(draft: Mapping[str, Any]) -> tuple[str, ...]:
+    """Return Model API environment names referenced by a Studio draft tree.
+
+    These are identifiers only.  They let the update UI distinguish already
+    configured secrets from missing ones without exposing credential values.
+    """
+
+    keys: list[str] = []
+    seen: set[str] = set()
+    used: set[str] = {
+        "MODEL_AGENT_NAME",
+        "MODEL_NAME",
+        "MODEL_AGENT_PROVIDER",
+        "MODEL_AGENT_API_BASE",
+        "MODEL_AGENT_API_KEY",
+        "MODEL_AGENT_API_KEY_ID",
+        "MODEL_AGENT_API_KEY_NAME",
+    }
+
+    def add(key: str) -> None:
+        if key and _ENV_NAME_RE.fullmatch(key) and key not in seen:
+            seen.add(key)
+            keys.append(key)
+
+    def add_allocated(base: str) -> str:
+        key = _next_env_name(base, used)
+        used.add(key)
+        add(key)
+        return key
+
+    def visit(node: Mapping[str, Any], *, depth: int, cloud_provider: str) -> None:
+        if depth > _MAX_AGENT_GRAPH_DEPTH:
+            return
+        node_provider = (
+            "byteplus" if node.get("cloudProvider") == "byteplus" else cloud_provider
+        )
+        name = str(node.get("name") or "")
+        agent_segment = _env_segment(name, "AGENT")
+        agent_type = str(node.get("agentType") or "llm")
+        model_source = str(node.get("modelSource") or "")
+        model_api_base = str(node.get("modelApiBase") or "").strip()
+        is_custom_model = agent_type == "llm" and (
+            model_source == "custom"
+            or (
+                not model_source
+                and bool(model_api_base)
+                and not is_provider_modelark_base_url(node_provider, model_api_base)
+            )
+        )
+        if is_custom_model:
+            if str(node.get("modelProvider") or "").strip():
+                add_allocated(f"CUSTOM_MODEL_{agent_segment}_PROVIDER")
+            if model_api_base:
+                add_allocated(f"CUSTOM_MODEL_{agent_segment}_API_BASE")
+            add_allocated(f"CUSTOM_MODEL_{agent_segment}_API_KEY")
+
+        fallbacks = node.get("modelFallbacks")
+        if isinstance(fallbacks, list):
+            for index, fallback in enumerate(fallbacks[:_MAX_INTROSPECTION_ITEMS]):
+                if not isinstance(fallback, Mapping):
+                    continue
+                model_name = str(
+                    fallback.get("modelName")
+                    or fallback.get("model_name")
+                    or fallback.get("model")
+                    or ""
+                ).strip()
+                if not model_name:
+                    continue
+                endpoint_configured = any(
+                    str(fallback.get(key) or fallback.get(alias) or "").strip()
+                    for key, alias in (
+                        ("modelProvider", "model_provider"),
+                        ("modelApiBase", "model_api_base"),
+                        ("modelApiKeyEnv", "model_api_key_env"),
+                    )
+                )
+                if not endpoint_configured:
+                    continue
+                explicit = str(
+                    fallback.get("modelApiKeyEnv")
+                    or fallback.get("model_api_key_env")
+                    or fallback.get("apiKeyEnv")
+                    or fallback.get("api_key_env")
+                    or ""
+                ).strip()
+                if explicit and _ENV_NAME_RE.fullmatch(explicit):
+                    used.add(explicit)
+                    add(explicit)
+                    continue
+                add_allocated(f"FALLBACK_MODEL_{agent_segment}_{index + 1}_API_KEY")
+
+        children = node.get("subAgents")
+        if isinstance(children, list):
+            for child in children[:_MAX_INTROSPECTION_ITEMS]:
+                if isinstance(child, Mapping):
+                    visit(child, depth=depth + 1, cloud_provider=node_provider)
+        workflow = node.get("workflow")
+        if isinstance(workflow, Mapping):
+            workflow_nodes = workflow.get("nodes")
+            if isinstance(workflow_nodes, list):
+                for workflow_node in workflow_nodes[:_MAX_INTROSPECTION_ITEMS]:
+                    if not isinstance(workflow_node, Mapping):
+                        continue
+                    child = workflow_node.get("agent")
+                    if isinstance(child, Mapping):
+                        visit(child, depth=depth + 1, cloud_provider=node_provider)
+
+    root_provider = (
+        "byteplus" if draft.get("cloudProvider") == "byteplus" else "volcengine"
+    )
+    visit(draft, depth=0, cloud_provider=root_provider)
     return tuple(keys)
 
 
