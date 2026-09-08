@@ -589,7 +589,11 @@ function AgentCard({
             </Tooltip>
           ) : null}
       />
-      {connectError ? <p className="my-agent-wake-note" role="alert">{connectError}</p> : null}
+      {connectError ? (
+        <Tooltip content={connectError} contentClassName="my-agent-error-tooltip" maxWidth={360} interactive>
+          <p className="my-agent-wake-note" role="alert" tabIndex={0}>{connectError}</p>
+        </Tooltip>
+      ) : null}
       {wakeable && connecting ? <p className="my-agent-wake-note" role="status">
         <TextShimmer>{t("myAgents.wakingHint")}</TextShimmer>
       </p> : null}

@@ -377,5 +377,21 @@
 }
 
 .my-agent-wake-note[role="alert"] {
+  position: relative;
+  z-index: 2;
+  min-width: 0;
+  min-height: 0;
+  max-height: 3em;
+  display: -webkit-box;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   color: hsl(var(--destructive));
+}
+
+.my-agent-error-tooltip {
+  max-height: min(320px, 60vh);
+  overflow: auto;
+  overflow-wrap: anywhere;
 }
