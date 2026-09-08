@@ -1402,10 +1402,13 @@ def test_code_package_manifest_entry_point_reaches_agentkit_sdk(
     tmp_path: Path,
 ) -> None:
     captured_config: dict[str, Any] = {}
+    captured_dockerfile = ""
 
     def launch(*, config_file: str, **_kwargs: Any) -> SimpleNamespace:
+        nonlocal captured_dockerfile
         config_path = Path(config_file)
         captured_config.update(yaml.safe_load(config_path.read_text()))
+        captured_dockerfile = (config_path.parent / "Dockerfile").read_text()
         assert (config_path.parent / "runtime" / "main.py").read_text() == (
             "app = object()\n"
         )
@@ -1462,6 +1465,7 @@ def test_code_package_manifest_entry_point_reaches_agentkit_sdk(
     assert response.status_code == 200
     assert frames[-1]["success"] is True
     assert captured_config["common"]["entry_point"] == "runtime/main.py"
+    assert 'CMD ["python", "-m", "app"]' in captured_dockerfile
 
 
 def test_migration_deployment_materializes_owned_session_source_server_side(
@@ -1472,6 +1476,7 @@ def test_migration_deployment_materializes_owned_session_source_server_side(
     from veadk.config import veadk_environments
 
     captured_config: dict[str, Any] = {}
+    captured_dockerfile = ""
     materialized: dict[str, str] = {}
 
     def materialize(
@@ -1481,15 +1486,42 @@ def test_migration_deployment_materializes_owned_session_source_server_side(
         target: Path,
     ) -> str:
         materialized.update(task_id=task_id, owner_id=owner_id)
-        entry = target / "runtime" / "migrated.py"
-        entry.parent.mkdir(parents=True)
-        entry.write_text("app = object()\n", encoding="utf-8")
+        configured_entry = target / "bailian-test-workflow-agent.py"
+        configured_entry.write_text("app = object()\n", encoding="utf-8")
+        startup_entry = target / "runtime" / "migrated.py"
+        startup_entry.parent.mkdir(parents=True)
+        startup_entry.write_text("app = object()\n", encoding="utf-8")
+        (target / "agentkit.yaml").write_text(
+            "common:\n"
+            "  agent_name: bailian-test-workflow-agent\n"
+            "  entry_point: bailian-test-workflow-agent.py\n"
+            "  description: AgentKit project bailian-test-workflow-agent - Agent Server App\n"
+            "  language: Python\n"
+            '  language_version: "3.12"\n'
+            "  agent_type: WebServer App\n"
+            "  dependencies_file: requirements.txt\n"
+            "  launch_type: cloud\n",
+            encoding="utf-8",
+        )
+        nested_dockerfile = target / ".agentkit" / "Dockerfile"
+        nested_dockerfile.parent.mkdir()
+        nested_dockerfile.write_text(
+            'FROM example.com/nested:latest\nCMD ["python", "wrong.py"]\n',
+            encoding="utf-8",
+        )
         return "runtime/migrated.py"
 
     def launch(*, config_file: str, **_kwargs: Any) -> SimpleNamespace:
+        nonlocal captured_dockerfile
         config_path = Path(config_file)
         captured_config.update(yaml.safe_load(config_path.read_text()))
+        captured_dockerfile = (config_path.parent / "Dockerfile").read_text()
+        assert (config_path.parent / "bailian-test-workflow-agent.py").is_file()
         assert (config_path.parent / "runtime" / "migrated.py").is_file()
+        assert (
+            'CMD ["python", "wrong.py"]'
+            in (config_path.parent / ".agentkit" / "Dockerfile").read_text()
+        )
         assert not (config_path.parent / "browser.py").exists()
         return SimpleNamespace(
             success=True,
@@ -1560,13 +1592,143 @@ def test_migration_deployment_materializes_owned_session_source_server_side(
         "task_id": "migration-v1-" + "1" * 32,
         "owner_id": "developer",
     }
-    assert captured_config["common"]["entry_point"] == "runtime/migrated.py"
+    assert captured_config["common"]["entry_point"] == "bailian-test-workflow-agent.py"
+    assert 'CMD ["python", "bailian-test-workflow-agent.py"]' in captured_dockerfile
     runtime_envs = captured_config["launch_types"]["cloud"]["runtime_envs"]
     assert runtime_envs["MODEL_AGENT_NAME"] == "doubao-seed-2-1-pro-260628"
     assert runtime_envs["MODEL_NAME"] == "doubao-seed-2-1-pro-260628"
     assert runtime_envs["MODEL_AGENT_API_BASE"] == (
         "https://ark.cn-beijing.volces.com/api/v3"
     )
+
+
+@pytest.mark.parametrize(
+    ("producer", "expected_command"),
+    [
+        (
+            "migration",
+            'CMD ["python", "bailian-test-workflow-agent.py"]',
+        ),
+        (
+            "intelligent-development",
+            'CMD ["python", "-m", "app"]',
+        ),
+    ],
+)
+def test_saved_project_deployment_scopes_manifest_entry_point_to_migrations(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    producer: str,
+    expected_command: str,
+) -> None:
+    from veadk.config import veadk_environments
+
+    captured_config: dict[str, Any] = {}
+    captured_dockerfile = ""
+    materialized: dict[str, str] = {}
+
+    async def materialize(
+        target: Path,
+        source: dict[str, str],
+        *,
+        owner_id: str,
+        **_kwargs: Any,
+    ) -> SimpleNamespace:
+        materialized.update(
+            kind=source["kind"],
+            project_id=source["projectId"],
+            version_id=source["versionId"],
+            owner_id=owner_id,
+        )
+        configured_entry = target / "bailian-test-workflow-agent.py"
+        configured_entry.write_text("app = object()\n", encoding="utf-8")
+        startup_entry = target / "runtime" / "migrated.py"
+        startup_entry.parent.mkdir()
+        startup_entry.write_text("app = object()\n", encoding="utf-8")
+        (target / "agentkit.yaml").write_text(
+            "common:\n"
+            "  agent_name: bailian-test-workflow-agent\n"
+            "  entry_point: bailian-test-workflow-agent.py\n",
+            encoding="utf-8",
+        )
+        return SimpleNamespace(
+            agent_name="bailian-test-workflow-agent",
+            entry_point="runtime/migrated.py",
+            producer=producer,
+        )
+
+    def launch(*, config_file: str, **_kwargs: Any) -> SimpleNamespace:
+        nonlocal captured_dockerfile
+        config_path = Path(config_file)
+        captured_config.update(yaml.safe_load(config_path.read_text()))
+        captured_dockerfile = (config_path.parent / "Dockerfile").read_text()
+        assert (config_path.parent / "bailian-test-workflow-agent.py").is_file()
+        return SimpleNamespace(
+            success=True,
+            error=None,
+            deploy_result=SimpleNamespace(
+                endpoint_url="https://runtime.example.com",
+                metadata={
+                    "runtime_id": "runtime-saved-migration",
+                    "runtime_name": "saved-migration-agent",
+                    "runtime_endpoint": "https://runtime.example.com",
+                    "runtime_apikey": "secret",
+                },
+            ),
+        )
+
+    monkeypatch.setattr(
+        "frontend.server.intelligent_development_source."
+        "materialize_intelligent_development_source",
+        materialize,
+    )
+    monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
+    monkeypatch.setitem(veadk_environments, "MODEL_AGENT_API_KEY", "test-model-key")
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+
+    with (
+        TestClient(app) as client,
+        client.stream(
+            "POST",
+            "/web/deploy-agentkit",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "name": "saved-migration-agent",
+                "files": [],
+                "source": {
+                    "kind": "intelligentDevelopment",
+                    "sessionId": "session-saved-migration",
+                    "projectId": "project-saved-migration",
+                    "versionId": "version-saved-migration",
+                    "artifactSha256": "a" * 64,
+                    "validationReportSha256": "b" * 64,
+                },
+                "config": {"region": "cn-beijing", "projectName": "default"},
+                "createEvaluationSets": False,
+            },
+        ) as response,
+    ):
+        frames = [
+            json.loads(line.removeprefix("data: "))
+            for line in response.iter_lines()
+            if line.startswith("data: ")
+        ]
+
+    assert response.status_code == 200
+    assert frames[-1]["success"] is True
+    assert materialized == {
+        "kind": "intelligentDevelopment",
+        "project_id": "project-saved-migration",
+        "version_id": "version-saved-migration",
+        "owner_id": "developer",
+    }
+    expected_entry_point = (
+        "bailian-test-workflow-agent.py"
+        if producer == "migration"
+        else "runtime/migrated.py"
+    )
+    assert captured_config["common"]["entry_point"] == expected_entry_point
+    assert expected_command in captured_dockerfile
 
 
 def test_migration_deployment_rejection_removes_temporary_source(
