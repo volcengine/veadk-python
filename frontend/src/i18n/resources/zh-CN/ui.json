@@ -1395,7 +1395,6 @@
       "deleted": "已删除",
       "unknown": "未知状态"
     },
-    "sleepingHint": "该智能体已休眠，进入时需要唤醒，可能需要一些时间。",
     "wakingHint": "正在唤醒智能体，可能需要一些时间。"
   },
   "skillCenter": {

@@ -78,7 +78,6 @@
     "connectGeneral": "连接通用智能体",
     "openLocal": "打开本地智能体",
     "openType": "打开 {{type}}",
-    "sleepingHint": "该智能体已休眠，进入时需要唤醒，可能需要一些时间。",
     "wakingHint": "正在唤醒智能体，可能需要一些时间。"
   },
   "skill": {

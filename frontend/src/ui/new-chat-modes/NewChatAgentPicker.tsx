@@ -11,6 +11,7 @@ import {
 import {
   sandboxClient,
   sandboxStatusLabel,
+  sandboxCardStatus,
   type SandboxAgentResource,
 } from "../../adk/sandbox";
 import { formatRequestError } from "../../adk/requestError";
@@ -521,7 +522,7 @@ export function NewChatAgentPicker({
                       aria-busy={connecting || undefined}
                       className={`new-chat-agent-picker__runtime${keyboardNavigating && keyboardPanel === "runtimes" && activeRuntimeIndex === index ? " is-keyboard-active" : ""}`}
                       disabled={Boolean(connectingRuntimeId) || !["ready", "wakeable"].includes(session.status.toLowerCase())}
-                      title={wakeable ? t("agentPicker.sleepingHint") : `${session.displayName || activeTypeLabel} · ${session.id}`}
+                      title={`${session.displayName || activeTypeLabel} · ${session.id}`}
                       onMouseEnter={() => setActiveRuntimeIndex(index)}
                       onClick={() => void chooseSandboxSession(session)}
                     >
@@ -533,7 +534,7 @@ export function NewChatAgentPicker({
                       <small>
                         {connecting
                           ? (wakeable ? t("agentPicker.waking") : t("agentPicker.opening"))
-                          : sandboxStatusLabel(session.status)}
+                          : sandboxStatusLabel(sandboxCardStatus(session.status))}
                       </small>
                     </button>
                   );

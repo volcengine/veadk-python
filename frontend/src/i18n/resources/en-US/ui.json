@@ -1395,7 +1395,6 @@
       "deleted": "Deleted",
       "unknown": "Unknown status"
     },
-    "sleepingHint": "This agent is asleep. Waking it before opening may take some time.",
     "wakingHint": "Waking the agent. This may take some time."
   },
   "skillCenter": {

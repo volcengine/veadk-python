@@ -78,7 +78,6 @@
     "connectGeneral": "Connect to General Agent",
     "openLocal": "Open local Agent",
     "openType": "Open {{type}}",
-    "sleepingHint": "This agent is asleep. Waking it before opening may take some time.",
     "wakingHint": "Waking the agent. This may take some time."
   },
   "skill": {

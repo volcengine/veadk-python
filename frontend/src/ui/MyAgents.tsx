@@ -30,6 +30,7 @@ import {
 } from "../adk/cloudProvider";
 import {
   sandboxClient,
+  sandboxCardStatus,
   type SandboxAgentResource,
   type SandboxAgentKind,
 } from "../adk/sandbox";
@@ -237,7 +238,7 @@ function runtimeToAgent(runtime: CloudRuntime, t: TFunction<"ui">): MyAgentCardD
 }
 
 function sandboxToAgent(session: SandboxAgentResource, t: TFunction<"ui">): MyAgentCardData {
-  const normalizedStatus = session.status.trim().toLowerCase();
+  const normalizedStatus = sandboxCardStatus(session.status);
   return {
     id: session.id,
     name: session.displayName || t("myAgents.namedAgent", { name: session.toolName }),
@@ -430,13 +431,11 @@ function AgentCard({
             },
             ...(agent.sandbox ? [{
               label: t("myAgents.remainingTime"),
-              value: agent.sandbox.resourceType === "snapshot"
-                ? t("myAgents.wakeable")
-                : agent.sandbox.persistent
-                  ? t("myAgents.neverExpires")
-                  : formatSandboxRemainingTime(agent.sandbox.expireAt, nowMs, t),
+              value: agent.sandbox.resourceType === "snapshot" || agent.sandbox.persistent
+                ? t("myAgents.neverExpires")
+                : formatSandboxRemainingTime(agent.sandbox.expireAt, nowMs, t),
               className: `my-agent-expiry${
-                agent.sandbox.resourceType === "session" && agent.sandbox.persistent
+                agent.sandbox.resourceType === "snapshot" || agent.sandbox.persistent
                   ? ""
                   : " is-expiring"
               }`,
@@ -518,8 +517,7 @@ function AgentCard({
           ) : agent.sandbox ? (
             <span
               className="my-agent-status-label"
-              data-ready={agent.sandbox.status.toLowerCase() === "ready" || undefined}
-              data-wakeable={wakeable || undefined}
+              data-ready={sandboxCardStatus(agent.sandbox.status) === "ready" || undefined}
             >
               {agent.description}
             </span>
@@ -592,8 +590,8 @@ function AgentCard({
           ) : null}
       />
       {connectError ? <p className="my-agent-wake-note" role="alert">{connectError}</p> : null}
-      {wakeable && actionable ? <p className="my-agent-wake-note" role={connecting ? "status" : undefined}>
-        {connecting ? <TextShimmer>{t("myAgents.wakingHint")}</TextShimmer> : t("myAgents.sleepingHint")}
+      {wakeable && connecting ? <p className="my-agent-wake-note" role="status">
+        <TextShimmer>{t("myAgents.wakingHint")}</TextShimmer>
       </p> : null}
       {!agent.sandbox ? (
         <ResourceCardDescription>{agent.description}</ResourceCardDescription>
