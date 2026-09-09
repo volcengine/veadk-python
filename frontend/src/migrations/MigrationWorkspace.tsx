@@ -80,6 +80,10 @@ import {
 } from "./deploymentEnvironment";
 import { migrationActivityBlocks } from "./migrationActivityBlocks";
 import {
+  isMigrationEnvironmentExpired,
+  migrationHistoryStatus,
+} from "./migrationHistoryStatus";
+import {
   createMigrationEvaluationDraft,
   evaluationCasesFromDraft,
   evaluationDraftFromDataset,
@@ -172,37 +176,6 @@ interface PreviewState {
   text?: string;
   imageUrl?: string;
   error?: string;
-}
-
-function stateLabel(state: MigrationTask["state"]): string {
-  switch (state) {
-    case "awaiting_upload":
-      return migrationText("state.awaitingUpload");
-    case "analyzing":
-      return migrationText("state.analyzing");
-    case "needs_input":
-      return migrationText("state.needsInput");
-    case "analysis_ready":
-      return migrationText("state.analysisReady");
-    case "migrating":
-      return migrationText("state.migrating");
-    case "validating":
-      return migrationText("state.validating");
-    case "packaging":
-      return migrationText("state.packaging");
-    case "succeeded":
-      return migrationText("state.succeeded");
-    case "succeeded_with_warnings":
-      return migrationText("state.succeededWithWarnings");
-    case "partial":
-      return migrationText("state.partial");
-    case "failed":
-      return migrationText("state.failed");
-    case "cancelled":
-      return migrationText("state.cancelled");
-    case "expired":
-      return migrationText("state.expired");
-  }
 }
 
 function taskDisplayMessage(task: MigrationTask): string {
@@ -379,7 +352,7 @@ function migrationExpiryCopy(
       detail: activeDetail,
     };
   }
-  if (task.state === "expired" || now >= expiry) {
+  if (isMigrationEnvironmentExpired(task, now)) {
     return {
       title: migrationText("expiry.ended"),
       detail: sourceSaved
@@ -394,39 +367,6 @@ function migrationExpiryCopy(
     title: migrationText("expiry.countdown", { minutes, seconds }),
     detail: activeDetail,
   };
-}
-
-function expireTasksAtDeadline(
-  tasks: MigrationTask[],
-  now: number,
-): MigrationTask[] {
-  let changed = false;
-  const next = tasks.map((task) => {
-    if (task.state === "expired") return task;
-    const expiry = new Date(task.expiresAt).getTime();
-    if (!Number.isFinite(expiry) || now < expiry) return task;
-    changed = true;
-    const sourceSaved = task.persistence?.state === "saved";
-    return {
-      ...task,
-      state: "expired" as const,
-      message: sourceSaved
-        ? migrationText("expiry.expiredSavedMessage")
-        : migrationText("expiry.expiredMessage"),
-      canModify: false,
-      canUpload: false,
-      canAnswer: false,
-      canConfirm: false,
-      canStop: false,
-      artifact: {
-        state: "none",
-        previewReady: false,
-        downloadReady: false,
-        deployReady: false,
-      },
-    };
-  });
-  return changed ? next : tasks;
 }
 
 function upsertTask(
@@ -806,6 +746,14 @@ export function MigrationWorkspace({
   const [evaluationReportError, setEvaluationReportError] = useState("");
   const [evaluationActionError, setEvaluationActionError] = useState("");
   const task = selectedTask(tasks, selectedTaskId);
+  const taskEnvironmentExpired = task
+    ? isMigrationEnvironmentExpired(task, now)
+    : false;
+  const hasPollableTasks = tasks.some(
+    (item) =>
+      !isMigrationEnvironmentExpired(item, now) &&
+      (isActiveState(item.state) || isEvaluationPollingState(item)),
+  );
   const maxSourceBytes = capability?.maxUploadBytes ?? MAX_SOURCE_BYTES;
   const maxSourceSizeLabel = formatByteLimit(maxSourceBytes);
   const unsupportedMigrationModelIds = useMemo(
@@ -1007,20 +955,13 @@ export function MigrationWorkspace({
 
   useEffect(() => {
     const timer = window.setInterval(() => {
-      const currentNow = Date.now();
-      setNow(currentNow);
-      setTasks((current) => expireTasksAtDeadline(current, currentNow));
+      setNow(Date.now());
     }, 1_000);
     return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
-    if (
-      !tasks.some(
-        (item) => isActiveState(item.state) || isEvaluationPollingState(item),
-      )
-    )
-      return;
+    if (!hasPollableTasks) return;
     const controller = new AbortController();
     const timer = window.setInterval(() => {
       void listMigrationTasks(controller.signal)
@@ -1044,15 +985,12 @@ export function MigrationWorkspace({
       controller.abort();
       window.clearInterval(timer);
     };
-  }, [
-    tasks.some(
-      (item) => isActiveState(item.state) || isEvaluationPollingState(item),
-    ),
-  ]);
+  }, [hasPollableTasks]);
 
   useEffect(() => {
     if (
       !task ||
+      taskEnvironmentExpired ||
       (!isActiveState(task.state) &&
         task.persistence?.state !== "saving" &&
         !isEvaluationPollingState(task))
@@ -1068,9 +1006,10 @@ export function MigrationWorkspace({
         setPollError("");
         setPollErrorRetryable(false);
         if (
-          isActiveState(next.state) ||
-          next.persistence?.state === "saving" ||
-          isEvaluationPollingState(next)
+          !isMigrationEnvironmentExpired(next, Date.now()) &&
+          (isActiveState(next.state) ||
+            next.persistence?.state === "saving" ||
+            isEvaluationPollingState(next))
         ) {
           timer = window.setTimeout(() => void poll(), POLL_INTERVAL_MS);
         }
@@ -1095,6 +1034,7 @@ export function MigrationWorkspace({
     task?.state,
     task?.persistence?.state,
     task?.evaluation?.state,
+    taskEnvironmentExpired,
   ]);
 
   useEffect(() => {
@@ -1111,7 +1051,7 @@ export function MigrationWorkspace({
   }, [task?.id]);
 
   useEffect(() => {
-    if (!task || !shouldShowCodexActivity(task)) {
+    if (!task || taskEnvironmentExpired || !shouldShowCodexActivity(task)) {
       return;
     }
 
@@ -1124,7 +1064,11 @@ export function MigrationWorkspace({
         if (controller.signal.aborted) return;
         setActivity(next);
         setActivityError("");
-        if (!next.complete && isActiveState(task.state)) {
+        if (
+          !next.complete &&
+          !taskEnvironmentExpired &&
+          isActiveState(task.state)
+        ) {
           timer = window.setTimeout(
             () => void poll(),
             ACTIVITY_POLL_INTERVAL_MS,
@@ -1134,6 +1078,7 @@ export function MigrationWorkspace({
         if (controller.signal.aborted) return;
         setActivityError(t("activity.loadError"));
         if (
+          !taskEnvironmentExpired &&
           isActiveState(task.state) &&
           cause instanceof MigrationApiError &&
           cause.retryable
@@ -1157,6 +1102,7 @@ export function MigrationWorkspace({
     task?.state,
     task?.analysisRef?.sha256,
     task?.confirmation?.framework,
+    taskEnvironmentExpired,
     t,
   ]);
 
@@ -1186,7 +1132,7 @@ export function MigrationWorkspace({
     setArtifactErrorRetryable(false);
     setDeploymentOpen(false);
     setDeploymentEnvValues({});
-    if (!task?.artifact.previewReady) return;
+    if (!task?.artifact.previewReady || taskEnvironmentExpired) return;
     const controller = new AbortController();
     void getMigrationArtifact(task.id, controller.signal)
       .then((next) => {
@@ -1203,7 +1149,12 @@ export function MigrationWorkspace({
         }
       });
     return () => controller.abort();
-  }, [task?.id, task?.artifact.previewReady, artifactReload]);
+  }, [
+    task?.id,
+    task?.artifact.previewReady,
+    taskEnvironmentExpired,
+    artifactReload,
+  ]);
 
   useEffect(() => {
     setEvaluationErrors({});
@@ -1595,7 +1546,7 @@ export function MigrationWorkspace({
   }
 
   async function stopTask() {
-    if (!task?.canStop || action) return;
+    if (!task?.canStop || taskEnvironmentExpired || action) return;
     setAction("stop");
     setError("");
     try {
@@ -1615,7 +1566,8 @@ export function MigrationWorkspace({
   }
 
   async function downloadArtifact() {
-    if (!task?.artifact.downloadReady || action) return;
+    if (!task?.artifact.downloadReady || taskEnvironmentExpired || action)
+      return;
     setAction("download");
     setError("");
     try {
@@ -1882,7 +1834,7 @@ export function MigrationWorkspace({
 
   const composerFile = sourceFile;
   const composerBusy = action === "create" || action === "upload";
-  const showComposer = !task || task.canUpload;
+  const showComposer = !task || (task.canUpload && !taskEnvironmentExpired);
   const expiryCopy = task ? migrationExpiryCopy(task, now) : null;
 
   return (
@@ -1932,34 +1884,53 @@ export function MigrationWorkspace({
                 {t("workspace.noSessions")}
               </p>
             ) : (
-              tasks.map((item) => (
-                <button
-                  type="button"
-                  key={item.id}
-                  className={item.id === selectedTaskId ? "is-active" : ""}
-                  aria-current={
-                    page === "new" && item.id === selectedTaskId
-                      ? "page"
-                      : undefined
-                  }
-                  disabled={composerBusy}
-                  onClick={() => {
-                    setPage("new");
-                    setSelectedTaskId(item.id);
-                    setError("");
-                    setPollError("");
-                    setPollErrorRetryable(false);
-                  }}
-                >
-                  <span>{sourceStem(item.sourceFileName)}</span>
-                  <small>
-                    <span data-state={item.state}>
-                      {stateLabel(item.state)}
-                    </span>
-                    <time>{formatDate(item.createdAt)}</time>
-                  </small>
-                </button>
-              ))
+              tasks.map((item) => {
+                const status = migrationHistoryStatus(item);
+                const environmentExpired = isMigrationEnvironmentExpired(
+                  item,
+                  now,
+                );
+                const statusLabel = migrationText(status.labelKey);
+                return (
+                  <button
+                    type="button"
+                    key={item.id}
+                    className={item.id === selectedTaskId ? "is-active" : ""}
+                    aria-current={
+                      page === "new" && item.id === selectedTaskId
+                        ? "page"
+                        : undefined
+                    }
+                    disabled={composerBusy}
+                    onClick={() => {
+                      setPage("new");
+                      setSelectedTaskId(item.id);
+                      setError("");
+                      setPollError("");
+                      setPollErrorRetryable(false);
+                    }}
+                  >
+                    <span>{sourceStem(item.sourceFileName)}</span>
+                    <small>
+                      <span className="migration-history__status">
+                        <span
+                          className="migration-history__status-label"
+                          data-tone={status.tone}
+                          title={statusLabel}
+                        >
+                          {statusLabel}
+                        </span>
+                        {environmentExpired ? (
+                          <span className="migration-history__expiry-badge">
+                            {t("historyStatus.environmentExpired")}
+                          </span>
+                        ) : null}
+                      </span>
+                      <time>{formatDate(item.createdAt)}</time>
+                    </small>
+                  </button>
+                );
+              })
             )}
           </nav>
         </aside>
@@ -2013,7 +1984,7 @@ export function MigrationWorkspace({
             </div>
             {task ? (
               <div className="migration-main__header-actions">
-                {task?.canStop ? (
+                {task?.canStop && !taskEnvironmentExpired ? (
                   <button
                     type="button"
                     className="migration-stop-button"
@@ -2330,7 +2301,10 @@ export function MigrationWorkspace({
             </section>
           ) : null}
 
-          {task && isTerminalState(task.state) && task.artifact.previewReady ? (
+          {task &&
+          isTerminalState(task.state) &&
+          ((task.artifact.previewReady && !taskEnvironmentExpired) ||
+            task.persistence?.state === "saved") ? (
             <section className="migration-result">
               <header>
                 <div>
@@ -2360,7 +2334,11 @@ export function MigrationWorkspace({
                   <button
                     type="button"
                     onClick={() => void downloadArtifact()}
-                    disabled={!task.artifact.downloadReady || Boolean(action)}
+                    disabled={
+                      taskEnvironmentExpired ||
+                      !task.artifact.downloadReady ||
+                      Boolean(action)
+                    }
                   >
                     <DownloadIcon />
                     <span>{action === "download" ? t("artifact.downloading") : t("artifact.downloadZip")}</span>
@@ -2369,9 +2347,15 @@ export function MigrationWorkspace({
                     type="button"
                     className="is-primary"
                     onClick={() => setDeploymentOpen(true)}
-                    disabled={!task.artifact.deployReady || !artifact}
+                    disabled={
+                      taskEnvironmentExpired ||
+                      !task.artifact.deployReady ||
+                      !artifact
+                    }
                     title={
-                      task.artifact.deployReady
+                      taskEnvironmentExpired
+                        ? t("expiry.ended")
+                        : task.artifact.deployReady
                         ? t("artifact.deployTitle")
                         : t("artifact.deployUnavailableTitle")
                     }
@@ -2387,7 +2371,15 @@ export function MigrationWorkspace({
                   <p>{task.persistence.message}</p>
                 </div>
               ) : null}
-              {artifactError ? (
+              {taskEnvironmentExpired ? (
+                <div className="migration-system-state">
+                  <p>
+                    {task.persistence?.state === "saved"
+                      ? t("expiry.savedAvailable")
+                      : t("expiry.unavailable")}
+                  </p>
+                </div>
+              ) : artifactError ? (
                 <div className="migration-system-state is-error" role="alert">
                   <p>{artifactError}</p>
                   {artifactErrorRetryable ? (

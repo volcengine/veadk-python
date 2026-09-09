@@ -39,6 +39,17 @@
     "cancelled": "已终止",
     "expired": "已过期"
   },
+  "historyStatus": {
+    "evaluationPending": "待评测",
+    "evaluationRunning": "评测中",
+    "waitingDataset": "待保存评测问题",
+    "waitingEnvironment": "待补充环境变量",
+    "evaluationFailed": "迁移完成，评测未完成",
+    "evaluationBlocked": "迁移完成，评测待处理",
+    "evaluationCancelled": "迁移完成，评测已取消",
+    "resultUnavailable": "结果不可用",
+    "environmentExpired": "环境已过期"
+  },
   "task": {
     "partialReady": "迁移产物已生成，但交付不完整，请查看迁移提示。",
     "readyWithWarnings": "迁移产物已生成，请查看迁移提示。",

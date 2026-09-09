@@ -166,14 +166,50 @@
   line-height: 1.35;
 }
 
-.migration-history nav small span[data-state="failed"],
-.migration-history nav small span[data-state="expired"] {
+.migration-history__status {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.migration-history__status-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.migration-history__status-label[data-tone="error"] {
   color: hsl(var(--destructive));
 }
 
-.migration-history nav small span[data-state="succeeded"],
-.migration-history nav small span[data-state="succeeded_with_warnings"] {
+.migration-history__status-label[data-tone="success"] {
   color: hsl(150 52% 34%);
+}
+
+.migration-history__status-label[data-tone="warning"] {
+  color: hsl(35 72% 36%);
+}
+
+.migration-history__status-label[data-tone="active"] {
+  color: hsl(var(--foreground));
+}
+
+.migration-history__expiry-badge {
+  flex-shrink: 0;
+  padding: 1px 4px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 4px;
+  color: hsl(var(--muted-foreground));
+  font-size: 9.5px;
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.migration-history nav time {
+  flex-shrink: 0;
 }
 
 .migration-history__empty {

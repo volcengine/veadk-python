@@ -335,8 +335,13 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
   );
   assert.match(source, /artifactErrorRetryable/);
   assert.match(source, /t\("actions\.reload"\)/);
-  assert.match(source, /function expireTasksAtDeadline/);
-  assert.match(source, /setTasks\(\(current\) => expireTasksAtDeadline/);
+  assert.doesNotMatch(source, /function expireTasksAtDeadline/);
+  assert.doesNotMatch(source, /state: "expired" as const/);
+  assert.match(source, /migrationHistoryStatus\(item\)/);
+  assert.match(source, /isMigrationEnvironmentExpired\(item,/);
+  assert.match(source, /className="migration-history__status-label"/);
+  assert.match(source, /className="migration-history__expiry-badge"/);
+  assert.match(source, /t\("historyStatus\.environmentExpired"\)/);
   assert.match(source, /function migrationExpiryCopy/);
   assert.match(source, /migrationText\("expiry\.countdown"/);
   assert.match(source, /migrationText\("expiry\.savedUnaffected"\)/);
@@ -354,7 +359,11 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
     source,
     /artifact\.files\.map\(\(file\) => \(\{[\s\S]*?content: ""/,
   );
-  assert.match(source, /migrationText\("expiry\.expiredSavedMessage"\)/);
+  assert.doesNotMatch(
+    styles,
+    /data-state="expired"[\s\S]*?var\(--destructive\)/,
+  );
+  assert.match(styles, /\.migration-history__expiry-badge/);
   assert.match(source, /function taskDisplayMessage/);
   assert.match(source, /migrationText\("task\.readyWithWarnings"\)/);
   assert.match(

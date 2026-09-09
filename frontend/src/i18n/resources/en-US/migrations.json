@@ -39,6 +39,17 @@
     "cancelled": "Stopped",
     "expired": "Expired"
   },
+  "historyStatus": {
+    "evaluationPending": "Evaluation pending",
+    "evaluationRunning": "Evaluating",
+    "waitingDataset": "Evaluation questions pending",
+    "waitingEnvironment": "Environment variables required",
+    "evaluationFailed": "Migrated, evaluation incomplete",
+    "evaluationBlocked": "Migrated, evaluation needs attention",
+    "evaluationCancelled": "Migrated, evaluation cancelled",
+    "resultUnavailable": "Result unavailable",
+    "environmentExpired": "Environment expired"
+  },
   "task": {
     "partialReady": "Migration output is ready, but delivery is incomplete. Review the migration notices.",
     "readyWithWarnings": "Migration output is ready. Review the migration notices.",
