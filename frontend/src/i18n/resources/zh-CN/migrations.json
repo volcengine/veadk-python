@@ -252,9 +252,10 @@
     "advanced": {
       "title": "高级设置",
       "standard": "标准评测",
-      "standardDescription": "评估语义、输出约束和工作流/工具行为，适合多数迁移。",
+      "standardDescription": "默认包含语义一致性、输出约束、工作流与工具一致性 3 个维度，适合多数迁移。",
       "custom": "自定义维度",
-      "customDescription": "按业务风险选择一个或多个评测维度。"
+      "customDescription": "按业务风险选择一个或多个评测维度。",
+      "lockedDescription": "项目开始上传后，评测方式和维度不再修改。"
     },
     "dimension": {
       "semantic_fidelity": "语义一致性",
@@ -342,7 +343,11 @@
       "retrying": "正在重试…",
       "loadingReport": "正在读取评测报告…",
       "reportTitle": "HTML 评测报告",
-      "reportHtmlDescription": "可直接在页面中预览，也可以下载后离线查看。",
+      "reportHtmlDescription": "点击查看时加载报告，也可以下载后离线查看。",
+      "viewReport": "查看报告",
+      "reportDrawerDescription": "迁移前后行为差异、分数与证据",
+      "closeReport": "关闭",
+      "closeReportAria": "关闭评测报告",
       "reportPreviewTitle": "迁移效果评测报告预览",
       "reportSummary": "评测摘要",
       "reportVersion": "评测集 {{version}} · Prompt v{{prompt}}",

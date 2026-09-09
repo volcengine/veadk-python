@@ -217,6 +217,10 @@
   animation: migration-evaluation-drawer-in 180ms ease-out;
 }
 
+.migration-evaluation-drawer > aside.is-report {
+  width: min(960px, 100vw);
+}
+
 .migration-evaluation-drawer__header,
 .migration-evaluation-drawer__footer {
   display: flex;
@@ -292,6 +296,17 @@
   min-height: 34px;
   flex: 0 0 auto;
   padding-inline: 16px;
+}
+
+.migration-evaluation-report-drawer__actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.migration-evaluation-report-drawer__actions > button {
+  min-height: 34px;
 }
 
 @keyframes migration-evaluation-backdrop-in {
@@ -449,19 +464,21 @@
 }
 
 .migration-evaluation-advanced {
-  border-top: 1px solid hsl(var(--border));
-  padding-top: 8px;
-}
-
-.migration-evaluation-advanced > summary {
-  color: hsl(var(--muted-foreground));
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.migration-evaluation-advanced[open] {
+  min-width: 0;
+  margin: 0;
   display: grid;
   gap: 12px;
+  padding: 12px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 9px;
+  background: hsl(var(--background));
+}
+
+.migration-evaluation-advanced > legend {
+  padding: 0 4px;
+  color: hsl(var(--foreground));
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .migration-evaluation-list-field {
@@ -490,16 +507,60 @@
   gap: 8px;
 }
 
+.migration-evaluation-preset,
+.migration-evaluation-dimensions {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .migration-evaluation-preset label,
 .migration-evaluation-dimensions label {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: start;
   gap: 8px;
-  padding: 9px;
+  min-width: 0;
+  padding: 10px;
   border: 1px solid hsl(var(--border));
   border-radius: 8px;
-  background: hsl(var(--background));
+  background: hsl(var(--panel));
+  cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease;
+}
+
+.migration-evaluation-preset label:hover,
+.migration-evaluation-dimensions label:hover {
+  background: hsl(var(--secondary));
+}
+
+.migration-evaluation-preset label:focus-within,
+.migration-evaluation-dimensions label:focus-within {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 1px;
+}
+
+.migration-evaluation-preset label.is-selected,
+.migration-evaluation-dimensions label.is-selected {
+  border-color: hsl(var(--primary) / 0.52);
+  background: hsl(var(--primary) / 0.06);
+}
+
+.migration-evaluation-preset input,
+.migration-evaluation-dimensions input {
+  margin-top: 2px;
+  accent-color: hsl(var(--primary));
+}
+
+.migration-evaluation-preset input:disabled,
+.migration-evaluation-dimensions input:disabled {
+  cursor: not-allowed;
+}
+
+.migration-evaluation-preset label:has(input:disabled),
+.migration-evaluation-dimensions label:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.66;
 }
 
 .migration-evaluation-preset span,
@@ -516,6 +577,12 @@
 
 .migration-evaluation-preset small,
 .migration-evaluation-dimensions small {
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.migration-evaluation-advanced__locked {
   color: hsl(var(--muted-foreground));
   font-size: 11px;
   line-height: 1.45;
@@ -728,35 +795,54 @@
   opacity: 0.64;
 }
 
-.migration-evaluation-report-html {
-  display: grid;
-  gap: 14px;
-}
-
 .migration-evaluation-report-html__preview {
   width: 100%;
-  min-height: 720px;
+  height: 100%;
+  min-height: 640px;
   border: 1px solid hsl(var(--border));
   border-radius: 10px;
-  background: #f6f8fb;
+  background: hsl(var(--canvas));
 }
 
-.migration-evaluation-report__toolbar {
+.migration-evaluation-report-actions {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  padding: 12px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 9px;
+  background: hsl(var(--canvas) / 0.32);
 }
 
-.migration-evaluation-report__toolbar > div {
+.migration-evaluation-report-actions > div:first-child {
+  min-width: 0;
   display: grid;
   gap: 2px;
 }
 
-.migration-evaluation-report__toolbar small {
+.migration-evaluation-report-actions > div:last-child {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.migration-evaluation-report-actions strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.migration-evaluation-report-actions small {
   color: hsl(var(--muted-foreground));
   font-size: 11px;
   overflow-wrap: anywhere;
+}
+
+.migration-evaluation-drawer > aside.is-report
+  .migration-evaluation-drawer__body {
+  grid-template-rows: minmax(0, 1fr);
+  align-content: stretch;
 }
 
 @media (max-width: 760px) {
@@ -795,8 +881,13 @@
     grid-template-columns: 1fr;
   }
 
+  .migration-evaluation-preset,
+  .migration-evaluation-dimensions {
+    grid-template-columns: 1fr;
+  }
+
   .migration-evaluation-report-html__preview {
-    min-height: 620px;
+    min-height: 520px;
   }
 
   .migration-evaluation-drawer__toolbar {
@@ -824,9 +915,16 @@
     display: none;
   }
 
-  .migration-evaluation-report__toolbar {
+  .migration-evaluation-report-actions,
+  .migration-evaluation-drawer__footer {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .migration-evaluation-report-actions > div:last-child,
+  .migration-evaluation-report-drawer__actions {
+    width: 100%;
+    flex-wrap: wrap;
   }
 
 }

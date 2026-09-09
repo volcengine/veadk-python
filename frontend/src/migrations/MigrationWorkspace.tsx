@@ -747,6 +747,7 @@ export function MigrationWorkspace({
   const preparedAnalysisRef = useRef("");
   const evaluationDraftTaskRef = useRef("");
   const transferAbortRef = useRef<AbortController | null>(null);
+  const evaluationReportAbortRef = useRef<AbortController | null>(null);
   const [capability, setCapability] = useState<MigrationCapabilities | null>(
     null,
   );
@@ -803,7 +804,7 @@ export function MigrationWorkspace({
   const [evaluationReport, setEvaluationReport] = useState<string | null>(null);
   const [evaluationReportLoading, setEvaluationReportLoading] = useState(false);
   const [evaluationReportError, setEvaluationReportError] = useState("");
-  const [evaluationReportReload, setEvaluationReportReload] = useState(0);
+  const [evaluationActionError, setEvaluationActionError] = useState("");
   const task = selectedTask(tasks, selectedTaskId);
   const maxSourceBytes = capability?.maxUploadBytes ?? MAX_SOURCE_BYTES;
   const maxSourceSizeLabel = formatByteLimit(maxSourceBytes);
@@ -1245,42 +1246,23 @@ export function MigrationWorkspace({
   }, [task?.id, task?.evaluation?.dataset?.versionId]);
 
   useEffect(() => {
+    evaluationReportAbortRef.current?.abort();
+    evaluationReportAbortRef.current = null;
     setEvaluationReport(null);
     setEvaluationReportError("");
+    setEvaluationActionError("");
     setEvaluationReportLoading(false);
-    if (
-      !task?.evaluation?.enabled ||
-      task.evaluation.state !== "completed" ||
-      !task.evaluation.report
-    )
-      return;
-    const controller = new AbortController();
-    setEvaluationReportLoading(true);
-    void getMigrationEvaluationReport(
-      task.id,
-      task.evaluation.report.versionId,
-      controller.signal,
-    )
-      .then((report) => {
-        if (!controller.signal.aborted) setEvaluationReport(report);
-      })
-      .catch((cause: unknown) => {
-        if (!controller.signal.aborted) {
-          setEvaluationReportError(
-            cause instanceof Error ? cause.message : String(cause),
-          );
-        }
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setEvaluationReportLoading(false);
-      });
-    return () => controller.abort();
   }, [
     task?.id,
-    task?.evaluation?.state,
     task?.evaluation?.report?.versionId,
-    evaluationReportReload,
   ]);
+
+  useEffect(
+    () => () => {
+      evaluationReportAbortRef.current?.abort();
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!artifact) return;
@@ -1648,12 +1630,12 @@ export function MigrationWorkspace({
   async function resumeEvaluation(environment: Record<string, string>) {
     if (!task?.evaluation?.canResume || evaluationAction) return;
     setEvaluationAction("resume");
-    setEvaluationReportError("");
+    setEvaluationActionError("");
     try {
       const evaluation = await resumeMigrationEvaluation(task.id, environment);
       updateTaskEvaluation(task.id, evaluation);
     } catch (cause) {
-      setEvaluationReportError(
+      setEvaluationActionError(
         cause instanceof Error ? cause.message : String(cause),
       );
       await reconcileTaskState(task.id, false);
@@ -1665,12 +1647,12 @@ export function MigrationWorkspace({
   async function retryEvaluation() {
     if (!task?.evaluation?.canRetry || evaluationAction) return;
     setEvaluationAction("retry");
-    setEvaluationReportError("");
+    setEvaluationActionError("");
     try {
       const evaluation = await retryMigrationEvaluation(task.id);
       updateTaskEvaluation(task.id, evaluation);
     } catch (cause) {
-      setEvaluationReportError(
+      setEvaluationActionError(
         cause instanceof Error ? cause.message : String(cause),
       );
       await reconcileTaskState(task.id, false);
@@ -1694,17 +1676,51 @@ export function MigrationWorkspace({
     }
   }
 
+  async function loadEvaluationReport() {
+    if (
+      !task?.evaluation?.report?.viewReady ||
+      task.evaluation.state !== "completed" ||
+      evaluationReportLoading ||
+      evaluationReport
+    )
+      return;
+    evaluationReportAbortRef.current?.abort();
+    const controller = new AbortController();
+    evaluationReportAbortRef.current = controller;
+    setEvaluationReportLoading(true);
+    setEvaluationReportError("");
+    try {
+      const report = await getMigrationEvaluationReport(
+        task.id,
+        task.evaluation.report.versionId,
+        controller.signal,
+      );
+      if (!controller.signal.aborted) setEvaluationReport(report);
+    } catch (cause) {
+      if (!controller.signal.aborted) {
+        setEvaluationReportError(
+          cause instanceof Error ? cause.message : String(cause),
+        );
+      }
+    } finally {
+      if (evaluationReportAbortRef.current === controller) {
+        evaluationReportAbortRef.current = null;
+        setEvaluationReportLoading(false);
+      }
+    }
+  }
+
   async function downloadEvaluationReport() {
     if (!task?.evaluation?.report?.downloadReady || evaluationAction) return;
     setEvaluationAction("download");
-    setEvaluationReportError("");
+    setEvaluationActionError("");
     try {
       await downloadMigrationEvaluationReport(
         task.id,
         task.evaluation.report.versionId,
       );
     } catch (cause) {
-      setEvaluationReportError(
+      setEvaluationActionError(
         cause instanceof Error ? cause.message : String(cause),
       );
     } finally {
@@ -1732,6 +1748,7 @@ export function MigrationWorkspace({
     setEvaluationDatasetSaveError(null);
     setEvaluationReport(null);
     setEvaluationReportError("");
+    setEvaluationActionError("");
     setSelectedModelId(
       capability?.model?.id.trim() || selectableModels[0]?.id || "",
     );
@@ -2409,13 +2426,12 @@ export function MigrationWorkspace({
               report={evaluationReport}
               reportLoading={evaluationReportLoading}
               reportError={evaluationReportError}
+              actionError={evaluationActionError}
               busy={Boolean(evaluationAction)}
               reportDownloading={evaluationAction === "download"}
               onResume={(environment) => void resumeEvaluation(environment)}
               onRetry={() => void retryEvaluation()}
-              onReloadReport={() =>
-                setEvaluationReportReload((current) => current + 1)
-              }
+              onLoadReport={() => void loadEvaluationReport()}
               onDownloadReport={() => void downloadEvaluationReport()}
             />
           ) : null}

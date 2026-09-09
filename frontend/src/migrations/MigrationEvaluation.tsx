@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { useTranslation } from "react-i18next";
 import type {
   MigrationCapabilities,
@@ -224,52 +230,34 @@ export function validateMigrationEvaluationDraft(
   return { valid: Object.keys(errors).length === 0, errors };
 }
 
-interface SetupProps {
-  value: MigrationEvaluationDraft;
-  onChange: (value: MigrationEvaluationDraft) => void;
-  capability: MigrationCapabilities["evaluation"];
-  disabled: boolean;
-  configLocked?: boolean;
-  locked?: boolean;
-  errors: Record<string, string>;
+interface EvaluationDrawerProps {
+  titleId: string;
+  title: string;
+  description: string;
+  closeLabel: string;
+  onClose: () => void;
+  children: ReactNode;
+  footer: ReactNode;
+  variant?: "settings" | "report";
 }
 
-export function MigrationEvaluationSetup({
-  value,
-  onChange,
-  capability,
-  disabled,
-  configLocked = false,
-  locked = false,
-  errors,
-}: SetupProps) {
-  const { t } = useTranslation("migrations");
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [bulkOpen, setBulkOpen] = useState(false);
-  const [bulkText, setBulkText] = useState("");
+function MigrationEvaluationDrawer({
+  titleId,
+  title,
+  description,
+  closeLabel,
+  onClose,
+  children,
+  footer,
+  variant = "settings",
+}: EvaluationDrawerProps) {
   const drawerRef = useRef<HTMLElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
-  const bulkQuestions = useMemo(
-    () =>
-      bulkText
-        .split(/\r?\n/)
-        .map((item) => item.trim())
-        .filter(Boolean),
-    [bulkText],
-  );
-  const incompleteCases = value.cases.filter(
-    (item) => !item.userInput.trim(),
-  ).length;
-  const closeDrawer = () => setDrawerOpen(false);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
-    if (value.enabled && Object.keys(errors).length > 0) {
-      setDrawerOpen(true);
-    }
-  }, [errors, value.enabled]);
-
-  useEffect(() => {
-    if (!drawerOpen || !value.enabled) return;
     previousFocusRef.current =
       document.activeElement instanceof HTMLElement
         ? document.activeElement
@@ -277,24 +265,20 @@ export function MigrationEvaluationSetup({
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const focusFrame = window.requestAnimationFrame(() => {
-      drawerRef.current
-        ?.querySelector<HTMLElement>("[data-evaluation-drawer-initial]")
-        ?.focus();
+      closeButtonRef.current?.focus();
     });
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        closeDrawer();
+        onCloseRef.current();
         return;
       }
       if (event.key !== "Tab") return;
       const focusable = Array.from(
         drawerRef.current?.querySelectorAll<HTMLElement>(
-          'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
+          'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
         ) ?? [],
-      ).filter(
-        (element) => !element.hidden && element.getClientRects().length > 0,
-      );
+      ).filter((element) => !element.hidden);
       if (!focusable.length) {
         event.preventDefault();
         return;
@@ -321,7 +305,86 @@ export function MigrationEvaluationSetup({
       const previousFocus = previousFocusRef.current;
       if (previousFocus?.isConnected) previousFocus.focus();
     };
-  }, [drawerOpen, value.enabled]);
+  }, []);
+
+  return (
+    <div
+      className="migration-evaluation-drawer"
+      onMouseDown={(event) => {
+        if (event.currentTarget === event.target) onClose();
+      }}
+    >
+      <aside
+        ref={drawerRef}
+        className={`is-${variant}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+      >
+        <header className="migration-evaluation-drawer__header">
+          <div>
+            <strong id={titleId}>{title}</strong>
+            <span>{description}</span>
+          </div>
+          <button
+            ref={closeButtonRef}
+            type="button"
+            className="migration-evaluation-drawer__close"
+            onClick={onClose}
+            aria-label={closeLabel}
+          >
+            <CloseIcon />
+          </button>
+        </header>
+        <div className="migration-evaluation-drawer__body">{children}</div>
+        <footer className="migration-evaluation-drawer__footer">{footer}</footer>
+      </aside>
+    </div>
+  );
+}
+
+interface SetupProps {
+  value: MigrationEvaluationDraft;
+  onChange: (value: MigrationEvaluationDraft) => void;
+  capability: MigrationCapabilities["evaluation"];
+  disabled: boolean;
+  configLocked?: boolean;
+  locked?: boolean;
+  errors: Record<string, string>;
+}
+
+export function MigrationEvaluationSetup({
+  value,
+  onChange,
+  capability,
+  disabled,
+  configLocked = false,
+  locked = false,
+  errors,
+}: SetupProps) {
+  const { t } = useTranslation("migrations");
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkText, setBulkText] = useState("");
+  const bulkQuestions = useMemo(
+    () =>
+      bulkText
+        .split(/\r?\n/)
+        .map((item) => item.trim())
+        .filter(Boolean),
+    [bulkText],
+  );
+  const incompleteCases = value.cases.filter(
+    (item) => !item.userInput.trim(),
+  ).length;
+  const closeDrawer = () => setDrawerOpen(false);
+
+  useEffect(() => {
+    if (value.enabled && Object.keys(errors).length > 0) {
+      setDrawerOpen(true);
+    }
+  }, [errors, value.enabled]);
+
   const updateCase = (caseId: string, update: Partial<EvaluationDraftCase>) => {
     onChange({
       ...value,
@@ -348,6 +411,7 @@ export function MigrationEvaluationSetup({
     onChange({ ...value, dimensions: ordered });
   };
   const unavailable = !capability?.available;
+  const configurationReadOnly = locked || configLocked;
   const presetLabel = t(`evaluation.advanced.${value.preset}`);
   const summary = incompleteCases
     ? t("evaluation.setup.incompleteSummary", {
@@ -417,42 +481,142 @@ export function MigrationEvaluationSetup({
         </div>
       ) : null}
       {value.enabled && drawerOpen ? (
-        <div
-          className="migration-evaluation-drawer"
-          onMouseDown={(event) => {
-            if (event.currentTarget === event.target) closeDrawer();
-          }}
-        >
-          <aside
-            ref={drawerRef}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="migration-evaluation-drawer-title"
-          >
-            <header className="migration-evaluation-drawer__header">
-              <div>
-                <strong id="migration-evaluation-drawer-title">
-                  {locked
-                    ? t("evaluation.setup.lockedTitle")
-                    : t("evaluation.setup.casesTitle")}
-                </strong>
-                <span>
-                  {locked
-                    ? t("evaluation.setup.lockedDescription")
-                    : t("evaluation.setup.casesDescription")}
-                </span>
-              </div>
+        <MigrationEvaluationDrawer
+          titleId="migration-evaluation-drawer-title"
+          title={
+            locked
+              ? t("evaluation.setup.lockedTitle")
+              : t("evaluation.setup.casesTitle")
+          }
+          description={
+            locked
+              ? t("evaluation.setup.lockedDescription")
+              : t("evaluation.setup.casesDescription")
+          }
+          closeLabel={t("evaluation.setup.closeAria")}
+          onClose={closeDrawer}
+          footer={
+            <>
+              <span>{summary}</span>
               <button
                 type="button"
-                className="migration-evaluation-drawer__close"
+                className="is-primary"
                 onClick={closeDrawer}
-                aria-label={t("evaluation.setup.closeAria")}
-                data-evaluation-drawer-initial
               >
-                <CloseIcon />
+                {locked
+                  ? t("evaluation.setup.close")
+                  : t("evaluation.setup.done")}
               </button>
-            </header>
-            <div className="migration-evaluation-drawer__body">
+            </>
+          }
+        >
+              <fieldset className="migration-evaluation-advanced">
+                <legend>{t("evaluation.advanced.title")}</legend>
+                <div
+                  className="migration-evaluation-preset"
+                  role="radiogroup"
+                  aria-label={t("evaluation.advanced.title")}
+                >
+                  <label
+                    className={value.preset === "standard" ? "is-selected" : ""}
+                  >
+                    <input
+                      type="radio"
+                      name="migration-evaluation-preset"
+                      value="standard"
+                      checked={value.preset === "standard"}
+                      onChange={() =>
+                        onChange({
+                          ...value,
+                          preset: "standard",
+                          dimensions: [...STANDARD_DIMENSIONS],
+                        })
+                      }
+                      disabled={disabled || configurationReadOnly}
+                    />
+                    <span>
+                      <strong>{t("evaluation.advanced.standard")}</strong>
+                      <small>
+                        {t("evaluation.advanced.standardDescription")}
+                      </small>
+                    </span>
+                  </label>
+                  <label
+                    className={value.preset === "custom" ? "is-selected" : ""}
+                  >
+                    <input
+                      type="radio"
+                      name="migration-evaluation-preset"
+                      value="custom"
+                      checked={value.preset === "custom"}
+                      onChange={() => onChange({ ...value, preset: "custom" })}
+                      disabled={disabled || configurationReadOnly}
+                    />
+                    <span>
+                      <strong>{t("evaluation.advanced.custom")}</strong>
+                      <small>
+                        {t("evaluation.advanced.customDescription")}
+                      </small>
+                    </span>
+                  </label>
+                </div>
+                {value.preset === "custom" ? (
+                  <div
+                    className="migration-evaluation-dimensions"
+                    aria-describedby={
+                      errors.dimensions
+                        ? "migration-evaluation-dimensions-error"
+                        : undefined
+                    }
+                  >
+                    {(capability?.dimensions ?? []).map((dimension) => (
+                      <label
+                        key={dimension.id}
+                        className={
+                          value.dimensions.includes(dimension.id)
+                            ? "is-selected"
+                            : ""
+                        }
+                      >
+                        <input
+                          type="checkbox"
+                          checked={value.dimensions.includes(dimension.id)}
+                          onChange={() => toggleDimension(dimension.id)}
+                          disabled={
+                            disabled ||
+                            configurationReadOnly ||
+                            (value.dimensions.length === 1 &&
+                              value.dimensions.includes(dimension.id))
+                          }
+                        />
+                        <span>
+                          <strong>
+                            {t(`evaluation.dimension.${dimension.id}`)}
+                          </strong>
+                          <small>
+                            {t(
+                              `evaluation.dimensionDescription.${dimension.id}`,
+                            )}
+                          </small>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                ) : null}
+                {configurationReadOnly ? (
+                  <small className="migration-evaluation-advanced__locked">
+                    {t("evaluation.advanced.lockedDescription")}
+                  </small>
+                ) : null}
+                {errors.dimensions ? (
+                  <small
+                    id="migration-evaluation-dimensions-error"
+                    role="alert"
+                  >
+                    {errors.dimensions}
+                  </small>
+                ) : null}
+              </fieldset>
               {!locked ? (
                 <div className="migration-evaluation-drawer__toolbar">
                   <button
@@ -777,105 +941,7 @@ export function MigrationEvaluationSetup({
                   );
                 })}
               </div>
-              {!locked && !configLocked ? (
-                <details className="migration-evaluation-advanced">
-                  <summary>{t("evaluation.advanced.title")}</summary>
-                  <div className="migration-evaluation-preset">
-                    <label>
-                      <input
-                        type="radio"
-                        name="migration-evaluation-preset"
-                        value="standard"
-                        checked={value.preset === "standard"}
-                        onChange={() =>
-                          onChange({
-                            ...value,
-                            preset: "standard",
-                            dimensions: [...STANDARD_DIMENSIONS],
-                          })
-                        }
-                        disabled={disabled}
-                      />
-                      <span>
-                        <strong>{t("evaluation.advanced.standard")}</strong>
-                        <small>
-                          {t("evaluation.advanced.standardDescription")}
-                        </small>
-                      </span>
-                    </label>
-                    <label>
-                      <input
-                        type="radio"
-                        name="migration-evaluation-preset"
-                        value="custom"
-                        checked={value.preset === "custom"}
-                        onChange={() => onChange({ ...value, preset: "custom" })}
-                        disabled={disabled}
-                      />
-                      <span>
-                        <strong>{t("evaluation.advanced.custom")}</strong>
-                        <small>
-                          {t("evaluation.advanced.customDescription")}
-                        </small>
-                      </span>
-                    </label>
-                  </div>
-                  {value.preset === "custom" ? (
-                    <div
-                      className="migration-evaluation-dimensions"
-                      aria-describedby={
-                        errors.dimensions
-                          ? "migration-evaluation-dimensions-error"
-                          : undefined
-                      }
-                    >
-                      {(capability?.dimensions ?? []).map((dimension) => (
-                        <label key={dimension.id}>
-                          <input
-                            type="checkbox"
-                            checked={value.dimensions.includes(dimension.id)}
-                            onChange={() => toggleDimension(dimension.id)}
-                            disabled={
-                              disabled ||
-                              (value.dimensions.length === 1 &&
-                                value.dimensions.includes(dimension.id))
-                            }
-                          />
-                          <span>
-                            <strong>
-                              {t(`evaluation.dimension.${dimension.id}`)}
-                            </strong>
-                            <small>
-                              {t(
-                                `evaluation.dimensionDescription.${dimension.id}`,
-                              )}
-                            </small>
-                          </span>
-                        </label>
-                      ))}
-                    </div>
-                  ) : null}
-                  {errors.dimensions ? (
-                    <small
-                      id="migration-evaluation-dimensions-error"
-                      role="alert"
-                    >
-                      {errors.dimensions}
-                    </small>
-                  ) : null}
-                </details>
-              ) : null}
-            </div>
-            <footer className="migration-evaluation-drawer__footer">
-              <span>{summary}</span>
-              <button type="button" className="is-primary" onClick={closeDrawer}>
-                {locked
-                  ? t("evaluation.setup.close")
-                  : t("evaluation.setup.done")}
-              </button>
-            </footer>
-          </aside>
-        </div>
+        </MigrationEvaluationDrawer>
       ) : null}
     </section>
   );
@@ -1015,11 +1081,12 @@ interface ResultProps {
   report: string | null;
   reportLoading: boolean;
   reportError: string;
+  actionError: string;
   busy: boolean;
   reportDownloading: boolean;
   onResume: (environment: Record<string, string>) => void;
   onRetry: () => void;
-  onReloadReport: () => void;
+  onLoadReport: () => void;
   onDownloadReport: () => void;
 }
 
@@ -1095,14 +1162,16 @@ export function MigrationEvaluationResult({
   report,
   reportLoading,
   reportError,
+  actionError,
   busy,
   reportDownloading,
   onResume,
   onRetry,
-  onReloadReport,
+  onLoadReport,
   onDownloadReport,
 }: ResultProps) {
   const { t } = useTranslation("migrations");
+  const [reportOpen, setReportOpen] = useState(false);
   const [environment, setEnvironment] = useState<Record<string, string>>(() =>
     initialEvaluationEnvironmentValues(evaluation.environment),
   );
@@ -1116,6 +1185,9 @@ export function MigrationEvaluationResult({
   useEffect(() => {
     setEnvironment(initialEvaluationEnvironmentValues(evaluation.environment));
   }, [environmentSignature]);
+  useEffect(() => {
+    setReportOpen(false);
+  }, [evaluation.report?.versionId]);
   if (!evaluation.enabled) return null;
   const active = [
     "preparing",
@@ -1206,46 +1278,95 @@ export function MigrationEvaluationResult({
           ) : null}
         </div>
       ) : null}
-      {reportError && evaluation.state !== "completed" ? (
+      {actionError ? (
         <div className="migration-evaluation-failure" role="alert">
-          <span>{reportError}</span>
+          <span>{actionError}</span>
         </div>
       ) : null}
       {evaluation.state === "completed" ? (
-        reportLoading ? (
-          <TextShimmer>{t("evaluation.result.loadingReport")}</TextShimmer>
-        ) : reportError ? (
-          <div className="migration-evaluation-failure" role="alert">
-            <span>{reportError}</span>
-            <button type="button" onClick={onReloadReport}>
-              {t("actions.reload")}
+        <div className="migration-evaluation-report-actions">
+          <div>
+            <strong>{t("evaluation.result.reportTitle")}</strong>
+            <small>{t("evaluation.result.reportHtmlDescription")}</small>
+          </div>
+          <div>
+            <button
+              type="button"
+              className="is-primary"
+              onClick={() => {
+                setReportOpen(true);
+                onLoadReport();
+              }}
+              disabled={!evaluation.report?.viewReady}
+            >
+              {t("evaluation.result.viewReport")}
+            </button>
+            <button
+              type="button"
+              onClick={onDownloadReport}
+              disabled={busy || !evaluation.report?.downloadReady}
+            >
+              {reportDownloading
+                ? t("evaluation.result.downloadingReport")
+                : t("evaluation.result.downloadReport")}
             </button>
           </div>
-        ) : report ? (
-          <div className="migration-evaluation-report-html">
-            <div className="migration-evaluation-report__toolbar">
-              <div>
-                <strong>{t("evaluation.result.reportTitle")}</strong>
-                <small>{t("evaluation.result.reportHtmlDescription")}</small>
+        </div>
+      ) : null}
+      {evaluation.state === "completed" && reportOpen ? (
+        <MigrationEvaluationDrawer
+          titleId="migration-evaluation-report-drawer-title"
+          title={t("evaluation.result.reportTitle")}
+          description={t("evaluation.result.reportDrawerDescription")}
+          closeLabel={t("evaluation.result.closeReportAria")}
+          onClose={() => setReportOpen(false)}
+          variant="report"
+          footer={
+            <>
+              <span>{t("evaluation.result.reportHtmlDescription")}</span>
+              <div className="migration-evaluation-report-drawer__actions">
+                <button
+                  type="button"
+                  onClick={onDownloadReport}
+                  disabled={busy || !evaluation.report?.downloadReady}
+                >
+                  {reportDownloading
+                    ? t("evaluation.result.downloadingReport")
+                    : t("evaluation.result.downloadReport")}
+                </button>
+                <button
+                  type="button"
+                  className="is-primary"
+                  onClick={() => setReportOpen(false)}
+                >
+                  {t("evaluation.result.closeReport")}
+                </button>
               </div>
+            </>
+          }
+        >
+          {reportLoading || (!report && !reportError) ? (
+            <TextShimmer>{t("evaluation.result.loadingReport")}</TextShimmer>
+          ) : reportError ? (
+            <div className="migration-evaluation-failure" role="alert">
+              <span>{reportError}</span>
               <button
                 type="button"
-                onClick={onDownloadReport}
-                disabled={busy || !evaluation.report?.downloadReady}
+                onClick={onLoadReport}
+                disabled={reportLoading}
               >
-                {reportDownloading
-                  ? t("evaluation.result.downloadingReport")
-                  : t("evaluation.result.downloadReport")}
+                {t("actions.reload")}
               </button>
             </div>
+          ) : (
             <iframe
               className="migration-evaluation-report-html__preview"
               title={t("evaluation.result.reportPreviewTitle")}
-              srcDoc={report}
+              srcDoc={report ?? ""}
               sandbox=""
             />
-          </div>
-        ) : null
+          )}
+        </MigrationEvaluationDrawer>
       ) : null}
     </section>
   );

@@ -252,9 +252,10 @@
     "advanced": {
       "title": "Advanced settings",
       "standard": "Standard evaluation",
-      "standardDescription": "Evaluates semantics, output constraints, and workflow/tool behavior for most migrations.",
+      "standardDescription": "Uses 3 dimensions by default: semantic fidelity, output constraints, and workflow/tool fidelity.",
       "custom": "Custom dimensions",
-      "customDescription": "Select one or more dimensions based on business risk."
+      "customDescription": "Select one or more dimensions based on business risk.",
+      "lockedDescription": "The evaluation method and dimensions cannot change after upload starts."
     },
     "dimension": {
       "semantic_fidelity": "Semantic fidelity",
@@ -342,7 +343,11 @@
       "retrying": "Retrying…",
       "loadingReport": "Loading the evaluation report…",
       "reportTitle": "HTML evaluation report",
-      "reportHtmlDescription": "Preview it here or download it for offline viewing.",
+      "reportHtmlDescription": "The report loads when you open it, or you can download it for offline viewing.",
+      "viewReport": "View report",
+      "reportDrawerDescription": "Behavior differences, scores, and evidence before and after migration",
+      "closeReport": "Close",
+      "closeReportAria": "Close evaluation report",
       "reportPreviewTitle": "Migration effect evaluation report preview",
       "reportSummary": "Evaluation summary",
       "reportVersion": "Dataset {{version}} · Prompt v{{prompt}}",

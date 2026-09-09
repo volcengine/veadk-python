@@ -148,8 +148,12 @@ See [deployment and operation](service/studio_release_notifier/README.md).
   existing 40-character limit without shortening the saved project name.
   An optional migration-effect evaluation is off by default; when enabled,
   users can enter 1–100 evaluation cases by hand or bulk paste, while expected
-  outcomes and criteria remain optional. The locked dataset and final
-  Markdown/JSON report are stored as immutable owner-only TOS assets.
+  outcomes and criteria remain optional.
+  Standard evaluation uses three dimensions; users can instead select custom
+  dimensions before upload. The locked dataset and final HTML report are stored
+  as immutable owner-only TOS assets. The report is fetched and rendered in a
+  side drawer only after the user selects “View report,” and remains available
+  for download.
 - **Reasoning & tool calls** shown inline (collapsible "thinking", tool blocks).
 - **Agent context rail** keeps the selected Agent's description, model, tools,
   skills, and optional live multi-Agent topology together in the conversation's

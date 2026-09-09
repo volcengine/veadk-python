@@ -97,10 +97,20 @@ test("configures migration effect evaluation in a drawer with direct user-facing
   assert.match(evaluation, /aria-modal="true"/);
   assert.match(evaluation, /migration-evaluation-drawer/);
   assert.match(evaluation, /migration-evaluation-drawer__toolbar/);
+  assert.match(evaluation, /<fieldset className="migration-evaluation-advanced">/);
+  assert.doesNotMatch(
+    evaluation,
+    /<details className="migration-evaluation-advanced">/,
+  );
+  assert.ok(
+    evaluation.indexOf('className="migration-evaluation-advanced"') <
+      evaluation.indexOf('className="migration-evaluation-cases"'),
+    "evaluation method should appear before the question list",
+  );
   assert.doesNotMatch(evaluation, /migration-evaluation-editor__actions/);
   assert.match(evaluation, /event\.key === "Escape"/);
   assert.match(evaluation, /cancelAnimationFrame\(focusFrame\)/);
-  assert.match(evaluation, /\[drawerOpen, value\.enabled\]/);
+  assert.match(evaluation, /onCloseRef/);
   assert.match(evaluation, /previousFocus/);
   assert.match(evaluation, /crypto\.randomUUID\(\)/);
   assert.match(evaluation, /priorMessages: \[\]/);
@@ -111,8 +121,11 @@ test("configures migration effect evaluation in a drawer with direct user-facing
   assert.match(evaluation, /type="text"/);
   assert.doesNotMatch(evaluation, /type="password"/);
   assert.match(evaluation, /environment\?\.optional/);
-  assert.match(evaluation, /srcDoc=\{report\}/);
+  assert.match(evaluation, /srcDoc=\{report \?\? ""\}/);
   assert.match(evaluation, /sandbox=""/);
+  assert.match(evaluation, /evaluation\.result\.viewReport/);
+  assert.match(evaluation, /reportOpen/);
+  assert.match(evaluation, /onLoadReport/);
   assert.match(evaluation, /onDownloadReport/);
   assert.doesNotMatch(evaluation, /from "lucide-react"/);
   assert.doesNotMatch(evaluation, />[↑↓×]</);
@@ -148,6 +161,16 @@ test("configures migration effect evaluation in a drawer with direct user-facing
   assert.match(workspace, /resumeMigrationEvaluation/);
   assert.match(workspace, /retryMigrationEvaluation/);
   assert.match(workspace, /downloadMigrationEvaluationReport/);
+  assert.match(workspace, /async function loadEvaluationReport/);
+  assert.match(
+    workspace,
+    /onLoadReport=\{\(\) => void loadEvaluationReport\(\)\}/,
+  );
+  const reportResetEffect = workspace.slice(
+    workspace.indexOf("setEvaluationReport(null)"),
+    workspace.indexOf("setEvaluationReport(null)") + 900,
+  );
+  assert.doesNotMatch(reportResetEffect, /getMigrationEvaluationReport/);
   assert.match(styles, /@media \(max-width: 760px\)/);
   assert.equal(zhResource.evaluation.setup.casesTitle, "评测问题");
   assert.equal(enResource.evaluation.setup.casesTitle, "Evaluation questions");
