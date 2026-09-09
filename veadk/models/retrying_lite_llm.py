@@ -78,6 +78,18 @@ class RetryingLiteLlm(LiteLlm):
 
     def __init__(self, *, model: str, **kwargs: Any) -> None:
         super().__init__(model=model, **kwargs)
+        self._fallbacks_template = copy.deepcopy(
+            getattr(self, "_additional_args", {}).get("fallbacks")
+        )
+
+    def _refresh_fallbacks(self) -> None:
+        """Give LiteLLM a fresh fallback list for each call.
+
+        LiteLLM's lightweight fallback helper mutates dict fallback entries when
+        selecting their model. Keep VeADK's model object reusable across turns.
+        """
+        if self._fallbacks_template is not None:
+            self._additional_args["fallbacks"] = copy.deepcopy(self._fallbacks_template)
 
     @override
     async def generate_content_async(
@@ -88,6 +100,7 @@ class RetryingLiteLlm(LiteLlm):
         retry_request = copy.deepcopy(llm_request)
         emitted = False
         try:
+            self._refresh_fallbacks()
             async for response in super().generate_content_async(
                 llm_request,
                 stream=stream,
@@ -106,6 +119,7 @@ class RetryingLiteLlm(LiteLlm):
             )
             await asyncio.sleep(delay)
 
+        self._refresh_fallbacks()
         async for response in super().generate_content_async(
             retry_request,
             stream=stream,

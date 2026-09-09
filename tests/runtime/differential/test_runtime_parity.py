@@ -667,3 +667,21 @@ def test_explicit_field_snapshot_survives_clone() -> None:
     assert explicit_fields(clone) == explicit_fields(agent)
     # The real contract: the clone still validates.
     check_agent_runtime_support(clone, "codex")
+
+
+def test_model_fallbacks_warn_for_external_runtime(caplog) -> None:
+    from veadk import Agent
+    from veadk.runtime.compat import reset_warning_state
+
+    reset_warning_state()
+    agent = Agent(
+        name="codex_agent_with_fallbacks",
+        model_name="scripted-model",
+        model_api_base="https://backend.invalid/v1",
+        model_api_key="backend-key",
+        model_fallbacks=["backup-model"],
+        runtime="codex",
+    )
+
+    assert agent.model_fallbacks == ["backup-model"]
+    assert "drops Agent(model_fallbacks=...)" in caplog.text

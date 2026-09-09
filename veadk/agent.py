@@ -35,7 +35,7 @@ from google.adk.agents.context_cache_config import ContextCacheConfig
 from google.adk.agents.llm_agent import InstructionProvider, ToolUnion
 from google.adk.agents.run_config import ToolThreadPoolConfig
 from google.adk.examples.base_example_provider import BaseExampleProvider
-from pydantic import ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from typing_extensions import Any
 
 from veadk.config import settings
@@ -75,6 +75,117 @@ patch_adk_sync_tool_thread_pool()
 logger = get_logger(__name__)
 
 
+class ModelFallbackEndpoint(BaseModel):
+    """A LiteLLM fallback endpoint with independent provider credentials."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    model_name: str = Field(validation_alias=AliasChoices("model_name", "model"))
+    model_provider: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("model_provider", "provider"),
+    )
+    model_api_base: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("model_api_base", "api_base", "base_url"),
+    )
+    model_api_key: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("model_api_key", "api_key"),
+    )
+    model_api_key_env: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("model_api_key_env", "api_key_env"),
+    )
+    model_extra_config: dict[str, Any] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("model_extra_config", "extra_config"),
+    )
+
+
+ModelFallbackConfig = Union[str, ModelFallbackEndpoint]
+
+
+def _qualified_model_name(provider: str | None, model_name: str) -> str:
+    model = model_name.strip()
+    normalized_provider = (provider or "").strip()
+    if not normalized_provider:
+        return model
+    prefix = f"{normalized_provider}/"
+    if model.startswith(prefix):
+        return model
+    return f"{prefix}{model}"
+
+
+def _endpoint_model_name(
+    endpoint: ModelFallbackEndpoint,
+    *,
+    default_provider: str,
+) -> str:
+    if endpoint.model_provider:
+        return _qualified_model_name(endpoint.model_provider, endpoint.model_name)
+    model = endpoint.model_name.strip()
+    if "/" in model:
+        return model
+    return _qualified_model_name(default_provider, model)
+
+
+def _resolve_model_api_key(endpoint: ModelFallbackEndpoint) -> str | None:
+    if endpoint.model_api_key:
+        return endpoint.model_api_key
+    if endpoint.model_api_key_env:
+        value = os.getenv(endpoint.model_api_key_env)
+        if value:
+            return value
+        logger.warning(
+            "Model fallback api key env `%s` is not set; LiteLLM will use its "
+            "provider defaults if available.",
+            endpoint.model_api_key_env,
+        )
+    return None
+
+
+def _merged_fallback_extra_config(
+    base_extra_config: dict[str, Any],
+    endpoint_extra_config: dict[str, Any],
+) -> dict[str, Any]:
+    extra = dict(endpoint_extra_config)
+    for key in ("extra_headers", "extra_body"):
+        value = extra.get(key)
+        base_value = base_extra_config.get(key)
+        if isinstance(value, dict) and isinstance(base_value, dict):
+            extra[key] = {**base_value, **value}
+    return extra
+
+
+def _build_litellm_fallback(
+    fallback: ModelFallbackConfig,
+    *,
+    default_provider: str,
+    base_extra_config: dict[str, Any],
+) -> str | dict[str, Any]:
+    if isinstance(fallback, str):
+        return _qualified_model_name(default_provider, fallback)
+
+    values = _merged_fallback_extra_config(
+        base_extra_config=base_extra_config,
+        endpoint_extra_config=fallback.model_extra_config,
+    )
+    fallback_provider = (fallback.model_provider or "").strip()
+    is_cross_provider = bool(
+        fallback_provider and fallback_provider != default_provider
+    )
+    values["model"] = _endpoint_model_name(
+        fallback,
+        default_provider=default_provider,
+    )
+    if fallback.model_api_key or fallback.model_api_key_env or is_cross_provider:
+        values["api_key"] = _resolve_model_api_key(fallback)
+    if fallback.model_api_base or is_cross_provider:
+        values["api_base"] = fallback.model_api_base
+    return values
+
+
 class Agent(LlmAgent):
     """LLM-based Agent with Volcengine capabilities.
 
@@ -91,6 +202,8 @@ class Agent(LlmAgent):
         model_provider (str): Provider of the model (e.g., openai).
         model_api_base (str): The base URL of the model API.
         model_api_key (str): The API key for accessing the model.
+        model_fallbacks (list): LiteLLM fallback models or endpoints tried
+            after the primary model fails.
         model_extra_config (dict): Extra configurations to include in model requests.
         tool_thread_pool_config (Optional[ToolThreadPoolConfig]): Default thread
             pool config for synchronous tool execution.
@@ -131,6 +244,13 @@ class Agent(LlmAgent):
     """Name of the ARK API key to resolve the value from (defaults to env
     MODEL_AGENT_API_KEY_NAME). A key value always wins over a key name, so this
     is ignored when `model_api_key` or the MODEL_AGENT_API_KEY env is set."""
+    model_fallbacks: list[ModelFallbackConfig] = Field(default_factory=list)
+    """Fallback models passed to LiteLLM.
+
+    Strings are interpreted as same-provider model names. Use
+    ``ModelFallbackEndpoint`` or a matching dict when a fallback needs its own
+    provider, API base, API key, or LiteLLM parameters.
+    """
     model_extra_config: dict = Field(default_factory=dict)
     tool_thread_pool_config: Optional[ToolThreadPoolConfig] = None
 
@@ -290,13 +410,14 @@ class Agent(LlmAgent):
         logger.info(f"Model extra config: {self.model_extra_config}")
 
         if not self.model:
-            fallbacks = None
+            fallbacks: list[str | dict[str, Any]] = []
             if isinstance(self.model_name, list):
                 if self.model_name:
                     model_name = self.model_name[0]
-                    fallbacks = [
-                        f"{self.model_provider}/{m}" for m in self.model_name[1:]
-                    ]
+                    fallbacks.extend(
+                        _qualified_model_name(self.model_provider, m)
+                        for m in self.model_name[1:]
+                    )
                     logger.info(
                         f"Using primary model: {model_name}, with fallbacks: {self.model_name[1:]}"
                     )
@@ -308,14 +429,35 @@ class Agent(LlmAgent):
             else:
                 model_name = self.model_name
 
+            if self.model_fallbacks:
+                fallbacks.extend(
+                    _build_litellm_fallback(
+                        fallback,
+                        default_provider=self.model_provider,
+                        base_extra_config=self.model_extra_config,
+                    )
+                    for fallback in self.model_fallbacks
+                )
+
+            litellm_fallbacks = fallbacks or None
+
             if self.enable_responses:
+                unsupported_fallbacks = [
+                    fallback for fallback in fallbacks if not isinstance(fallback, str)
+                ]
+                if unsupported_fallbacks:
+                    raise ValueError(
+                        "Endpoint model_fallbacks are only supported when "
+                        "enable_responses=False. Ark Responses fallbacks must be "
+                        "same-provider model names."
+                    )
                 from veadk.models.ark_llm import ArkLlm
 
                 self.model = ArkLlm(
                     model=f"{self.model_provider}/{model_name}",
                     api_key=self.model_api_key,
                     api_base=self.model_api_base,
-                    fallbacks=fallbacks,
+                    fallbacks=litellm_fallbacks,
                     enable_responses_cache=self.enable_responses_cache,
                     **self.model_extra_config,
                 )
@@ -324,13 +466,18 @@ class Agent(LlmAgent):
                     model=f"{self.model_provider}/{model_name}",
                     api_key=self.model_api_key,
                     api_base=self.model_api_base,
-                    fallbacks=fallbacks,
+                    fallbacks=litellm_fallbacks,
                     **self.model_extra_config,
                 )
             logger.debug(
                 f"LiteLLM client created with config: {self.model_extra_config}"
             )
         else:
+            if self.model_fallbacks:
+                logger.warning(
+                    "Agent(model_fallbacks=...) is ignored when Agent(model=...) "
+                    "is provided. Configure fallbacks on the custom model object."
+                )
             logger.warning(
                 "You are trying to use your own LiteLLM client, some default request headers may be missing."
             )
