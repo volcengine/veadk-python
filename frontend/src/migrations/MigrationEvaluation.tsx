@@ -413,14 +413,19 @@ export function MigrationEvaluationSetup({
   const unavailable = !capability?.available;
   const configurationReadOnly = locked || configLocked;
   const presetLabel = t(`evaluation.advanced.${value.preset}`);
+  const dimensionSummary = t("evaluation.setup.dimensionSummary", {
+    count: value.dimensions.length,
+  });
   const summary = incompleteCases
     ? t("evaluation.setup.incompleteSummary", {
         count: incompleteCases,
         preset: presetLabel,
+        dimensions: dimensionSummary,
       })
     : t("evaluation.setup.configuredSummary", {
         count: value.cases.length,
         preset: presetLabel,
+        dimensions: dimensionSummary,
       });
   return (
     <section
@@ -549,7 +554,13 @@ export function MigrationEvaluationSetup({
                       name="migration-evaluation-preset"
                       value="custom"
                       checked={value.preset === "custom"}
-                      onChange={() => onChange({ ...value, preset: "custom" })}
+                      onChange={() =>
+                        onChange({
+                          ...value,
+                          preset: "custom",
+                          dimensions: [],
+                        })
+                      }
                       disabled={disabled || configurationReadOnly}
                     />
                     <span>

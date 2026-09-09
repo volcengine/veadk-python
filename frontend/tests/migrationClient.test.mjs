@@ -186,6 +186,56 @@ test("sends an optional migration model without changing legacy requests", async
   assert.equal(Object.hasOwn(bodies[1], "modelId"), false);
 });
 
+test("submits only the explicitly selected custom evaluation dimensions", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+  });
+  const selected = ["semantic_fidelity", "safety_refusal_fidelity"];
+  let requestBody;
+  globalThis.fetch = async (_url, init) => {
+    requestBody = JSON.parse(init.body);
+    return new Response(
+      JSON.stringify(
+        migrationTask({
+          sessionTtlSeconds: 7200,
+          evaluation: {
+            enabled: true,
+            preset: "custom",
+            dimensions: selected,
+            state: "waiting_dataset",
+            message: "请添加并锁定评测用例",
+            canResume: false,
+            canRetry: false,
+          },
+        }),
+      ),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+  };
+
+  const created = await createMigrationTask({
+    taskId: `migration-v1-${"1".repeat(32)}`,
+    sourceFileName: "source.zip",
+    instruction: "",
+    evaluation: {
+      enabled: true,
+      preset: "custom",
+      dimensions: selected,
+    },
+  });
+
+  assert.deepEqual(requestBody.evaluation, {
+    enabled: true,
+    preset: "custom",
+    dimensions: selected,
+  });
+  assert.deepEqual(created.evaluation.dimensions, selected);
+});
+
 test("creates, locks, and reads an HTML migration effect report without expected tools", async (t) => {
   const previousFetch = globalThis.fetch;
   t.after(() => {

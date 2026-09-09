@@ -484,7 +484,11 @@ def test_finished_runner_cannot_leave_an_active_evaluation_stuck() -> None:
     assert "17" in snapshot["error"]["message"]  # type: ignore[index]
 
 
-def _report(dataset_sha256: str) -> dict[str, object]:
+def _report(
+    dataset_sha256: str,
+    dimensions: list[str] | None = None,
+) -> dict[str, object]:
+    dimensions = dimensions or DIMENSIONS
     results = [
         {
             "id": dimension,
@@ -494,7 +498,7 @@ def _report(dataset_sha256: str) -> dict[str, object]:
             "evidence_sources": ["observed_output"],
             "severity": "low",
         }
-        for dimension in DIMENSIONS
+        for dimension in dimensions
     ]
     return {
         "schema_version": 1,
@@ -509,8 +513,8 @@ def _report(dataset_sha256: str) -> dict[str, object]:
             "codex_version": "codex-cli 0.139.0",
             "agentkit_cli_version": "0.52.16",
         },
-        "dimensions": DIMENSIONS,
-        "dimension_weights": {dimension: 1 for dimension in DIMENSIONS},
+        "dimensions": dimensions,
+        "dimension_weights": {dimension: 1 for dimension in dimensions},
         "cases": [
             {
                 "case_id": "case-1",
@@ -535,7 +539,7 @@ def _report(dataset_sha256: str) -> dict[str, object]:
                     "evidence_sources": ["observed_output"],
                     "severity": "low",
                 }
-                for dimension in DIMENSIONS
+                for dimension in dimensions
             ],
         },
         "execution": {
@@ -544,7 +548,12 @@ def _report(dataset_sha256: str) -> dict[str, object]:
             "failed": 0,
             "success_rate": 100,
         },
-        "evidence_coverage": {"total": 3, "scored": 3, "na": 0, "rate": 100},
+        "evidence_coverage": {
+            "total": len(dimensions),
+            "scored": len(dimensions),
+            "na": 0,
+            "rate": 100,
+        },
         "source_contract_only_case_count": 0,
         "lowest_scoring_cases": [{"case_id": "case-1", "score": 80}],
         "execution_failures": [],
@@ -603,6 +612,44 @@ def test_aggregating_report_is_validated_persisted_and_then_completed() -> None:
     assert migration.get_task_calls == task_reads
     assert migration.artifact_calls == artifact_reads
     assert gateway.find_session_calls == session_reads
+
+
+def test_custom_dimensions_remain_exact_from_manifest_to_html_report() -> None:
+    service, migration, gateway, _repository, runner = _service()
+    selected = ["semantic_fidelity", "safety_refusal_fidelity"]
+    migration.task["evaluation"] = {
+        "enabled": True,
+        "preset": "custom",
+        "dimensions": selected,
+    }
+    dataset = service.put_dataset(TASK_ID, "owner", _body())
+    manifest = json.loads(gateway.files[EVALUATION_DATASET_MANIFEST_PATH])
+    assert manifest["preset"] == "custom"
+    assert manifest["dimensions"] == selected
+
+    _ready(migration)
+    service.advance(TASK_ID, "owner")
+    assert runner.starts[0]["dimensions"] == selected
+
+    status = json.loads(gateway.files[EVALUATION_STATUS_PATH])
+    status.update(state="aggregating", message="正在汇总")
+    gateway.files[EVALUATION_STATUS_PATH] = json.dumps(status).encode()
+    gateway.files[EVALUATION_REPORT_PATH] = json.dumps(
+        _report(dataset["asset"]["sha256"], selected),  # type: ignore[index]
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode()
+
+    service.advance(TASK_ID, "owner")
+    snapshot = service.snapshot(TASK_ID, "owner")
+    version_id = snapshot["report"]["versionId"]  # type: ignore[index]
+    content, _filename = service.download_report(TASK_ID, "owner", version_id)
+    report_html = content.decode()
+
+    assert "本次评测维度" in report_html
+    assert "语义与任务效果、安全与拒答" in report_html
+    assert "输出格式" not in report_html
+    assert "工作流与工具效果" not in report_html
 
 
 def test_cancel_stops_active_runner_without_waiting_for_runtime_cleanup() -> None:

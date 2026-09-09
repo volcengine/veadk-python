@@ -187,18 +187,28 @@ test("selects a custom evaluation method before editing questions", async () => 
     const custom = view.document.querySelector('input[value="custom"]');
     await view.act(async () => custom.click());
     assert.equal(custom.checked, true);
-    assert.equal(
-      view.document.querySelectorAll(".migration-evaluation-dimensions input")
-        .length,
-      dimensionIds.length,
-    );
-
     const dimensionInputs = view.document.querySelectorAll(
       '.migration-evaluation-dimensions input[type="checkbox"]',
+    );
+    assert.equal(dimensionInputs.length, dimensionIds.length);
+    assert.equal(
+      [...dimensionInputs].filter((input) => input.checked).length,
+      0,
+      "custom mode must require an explicit dimension choice",
     );
     const safety = dimensionInputs[dimensionInputs.length - 1];
     await view.act(async () => safety.click());
     assert.equal(safety.checked, true);
+    assert.equal(
+      [...dimensionInputs].filter((input) => input.checked).length,
+      1,
+    );
+    assert.match(
+      view.container.querySelector(
+        ".migration-evaluation-setup__summary",
+      ).textContent,
+      /1 个维度/,
+    );
 
     const dialog = view.document.querySelector('[role="dialog"]');
     const dialogButtons = dialog.querySelectorAll("button:not([disabled])");

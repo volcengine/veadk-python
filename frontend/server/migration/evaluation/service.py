@@ -1378,6 +1378,11 @@ class MigrationEvaluationService:
 
         score_text = "N/A" if score is None else f"{score}/100"
         labels = {item.id: item.label for item in EVALUATION_DIMENSIONS}
+        report_dimensions = report.get("dimensions")
+        assert isinstance(report_dimensions, list)
+        selected_dimension_text = "、".join(
+            labels.get(str(item), str(item)) for item in report_dimensions
+        )
         dimension_cards: list[str] = []
         dimensions = summary.get("dimensions")
         assert isinstance(dimensions, list)
@@ -1432,6 +1437,7 @@ class MigrationEvaluationService:
 :root{{color-scheme:light;font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#18212f;background:#f6f8fb}}*{{box-sizing:border-box}}body{{margin:0}}main{{max-width:1080px;margin:auto;padding:32px}}header.hero{{display:flex;justify-content:space-between;gap:24px;align-items:start;margin-bottom:20px}}h1{{font-size:26px;margin:0 0 8px}}.muted,small{{color:#647084}}code{{overflow-wrap:anywhere}}.meta{{display:grid;gap:5px;font-size:12px;color:#647084}}.metrics,.dimensions{{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));margin:16px 0}}.metric,.dimension,.panel,.case{{border:1px solid #dfe4ec;border-radius:12px;background:#fff}}.metric{{padding:16px}}.metric span,.dimension span{{display:block;color:#647084;font-size:12px}}.metric strong{{display:block;font-size:28px;margin-top:6px}}.dimension{{padding:14px}}.dimension strong{{display:block;font-size:20px;margin:5px 0}}p{{line-height:1.6}}.panel{{padding:16px;margin:16px 0}}.panel h2{{font-size:16px;margin:0 0 8px}}.case{{margin:10px 0;padding:0 14px}}.case summary{{display:flex;justify-content:space-between;gap:12px;padding:14px 0;cursor:pointer}}.case h3{{font-size:13px}}pre{{max-height:320px;overflow:auto;padding:12px;border-radius:8px;background:#f2f4f7;white-space:pre-wrap;word-break:break-word}}.case-dimensions{{display:grid;gap:8px;margin:12px 0 16px}}.case-dimension{{padding:10px;border:1px solid #e6eaf0;border-radius:8px}}.case-dimension header{{display:flex;justify-content:space-between}}.case-dimension p,.case-dimension li{{font-size:12px;color:#526075}}.error{{color:#b42318}}@media(max-width:600px){{main{{padding:18px}}header.hero{{display:block}}}}
 </style></head><body><main><header class="hero"><div><h1>迁移效果评测报告</h1><p class="muted">第 {escape(report["attempt"])} 次评测 · {escape(report["created_at"])}</p></div><div class="meta"><code>{escape(report["task_id"])}</code><span>评测集 {escape(report["dataset_version"])}</span><span>Prompt v{escape(report["prompt_version"])}</span></div></header>
 <section class="metrics"><article class="metric"><span>综合一致性</span><strong>{escape(score_text)}</strong></article><article class="metric"><span>证据覆盖率</span><strong>{escape(coverage["rate"])}%</strong><small>{escape(coverage["scored"])} / {escape(coverage["total"])} 个维度</small></article><article class="metric"><span>执行成功率</span><strong>{escape(execution["success_rate"])}%</strong><small>{escape(execution["succeeded"])} / {escape(execution["total"])} 个问题</small></article></section>
+<section class="panel"><h2>本次评测维度</h2><p>{escape(selected_dimension_text)}</p></section>
 <section class="dimensions">{"".join(dimension_cards)}</section><section class="panel"><h2>迁移差距说明</h2><p>{escape(report["migration_gap_description"])}</p></section>
 {f'<section class="panel"><h2>评测限制</h2><ul>{limitation_html}</ul></section>' if limitation_html else ""}
 <section><h2>问题结果与证据</h2>{"".join(case_html)}</section><section class="panel meta"><span>模型：{escape(model["id"])}</span><span>Codex：{escape(model["codex_version"])}</span><span>AgentKit CLI：{escape(model["agentkit_cli_version"])}</span><span>迁移产物：<code>{escape(report["artifact_sha256"])}</code></span></section>
