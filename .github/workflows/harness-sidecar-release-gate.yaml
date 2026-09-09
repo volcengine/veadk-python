@@ -78,14 +78,16 @@ jobs:
             --include='*/veadk/extensions/harness/sidecar.py' \
             --fail-under=91 --show-missing
 
-      - name: Verify customer Studio Agent-update regressions
+      - name: Verify Studio six-case lifecycle and credential regressions
         run: |
           python -m pytest -q \
-            tests/cli/test_legacy_runtime_recovery.py::test_changed_unnamed_mcp_url_reuses_same_published_tool_slot \
-            tests/cli/test_legacy_runtime_recovery.py::test_changed_unnamed_mcp_url_rejects_moved_credential_slot
+            tests/cli/test_legacy_runtime_recovery.py -k 'six_case_ or changed_unnamed_mcp_url'
           python -m pytest -q \
-            tests/cli/test_studio_rbac.py::test_sidecar_update_resolves_or_explicitly_reuses_stored_mcp_credentials \
-            -k changed-unnamed-explicit-reuse
+            tests/cli/test_generated_agent_backend_codegen_extended.py::test_generated_debug_applies_published_mcp_credential_contract_before_discovery \
+            tests/cli/test_studio_rbac.py::test_new_deployment_only_updates_non_default_instance_range \
+            tests/cli/test_studio_rbac.py::test_sidecar_deployment_uses_agentkit_cli_structured_release \
+            tests/cli/test_studio_rbac.py::test_application_owned_mcp_update_routes_cover_reuse_and_additions \
+            tests/cli/test_studio_rbac.py::test_sidecar_update_resolves_or_explicitly_reuses_stored_mcp_credentials
 
       - name: Install frontend dependencies
         working-directory: frontend

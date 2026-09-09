@@ -4493,6 +4493,7 @@ def _run_frontend_server(
         mcp_secret_values_for_draft_references,
         mcp_secret_values_from_runtime_environment,
         mcp_secret_values_from_toolset,
+        mcp_supplied_secret_values_by_reference,
         OciImageInspector,
         pin_source_image,
         preserve_runtime_skills,
@@ -5684,6 +5685,15 @@ def _run_frontend_server(
             debug_mcp_env_values: dict[str, str] = {}
             runtime_id = test_request.runtimeId.strip()
             runtime_region = _coerce_cloud_region(test_request.runtimeRegion)
+            reuse_requests = tuple(
+                item.model_dump(mode="json")
+                for item in test_request.mcpCredentialReuses
+            )
+            if reuse_requests and not runtime_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="MCP credential reuse requires a Runtime update target",
+                )
             if runtime_id:
                 edited_draft = test_request.draft.model_dump(
                     mode="json",
@@ -5697,7 +5707,7 @@ def _run_frontend_server(
                     for reference in requested_references
                     if not requested_env_values.get(reference)
                 )
-                if stored_references:
+                if stored_references or reuse_requests:
                     (
                         update_capability,
                         runtime,
@@ -5727,7 +5737,18 @@ def _run_frontend_server(
                     if isinstance(published_agent, Mapping)
                     else None
                 )
-                if stored_references and isinstance(published_draft, Mapping):
+                if (stored_references or reuse_requests) and not isinstance(
+                    published_draft, Mapping
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail=_mcp_deployment_error_detail(
+                            "legacy_mcp_reuse_source_missing"
+                        ),
+                    )
+                if (stored_references or reuse_requests) and isinstance(
+                    published_draft, Mapping
+                ):
                     published_environment = _legacy_runtime_environment(runtime)
                     published_references = mcp_auth_environment_keys(published_draft)
                     published_reference_values = {
@@ -5761,6 +5782,25 @@ def _run_frontend_server(
                         edited_draft=edited_draft,
                         published_reference_values=published_reference_values,
                     )
+                    if reuse_requests:
+                        try:
+                            supplied_credentials = mcp_reuse_supplied_credentials(
+                                published_draft=published_draft,
+                                edited_draft=edited_draft,
+                                published_reference_values=(published_reference_values),
+                                reuse_requests=reuse_requests,
+                            )
+                            debug_mcp_env_values.update(
+                                mcp_supplied_secret_values_by_reference(
+                                    edited_draft=edited_draft,
+                                    supplied_credentials=supplied_credentials,
+                                )
+                            )
+                        except LegacyRecoveryError as error:
+                            raise HTTPException(
+                                status_code=409,
+                                detail=_mcp_deployment_error_detail(error.code),
+                            ) from error
 
             project, draft = await _generate_project_and_draft_from_request(
                 data,
@@ -6688,27 +6728,27 @@ def _run_frontend_server(
                 set(sidecar_plan.get("effectiveComponents") or [])
                 & {"mcp_gateway", "mcp_resilience", "sql_readonly"}
             )
-            if sidecar_mcp_enabled and not source_preserving_requested:
-                if not isinstance(requested_draft, Mapping):
-                    raise HTTPException(
-                        status_code=400,
-                        detail=(
-                            "MCP 稳定性治理缺少可验证的 MCP 配置，请重新打开发布页面。"
-                        ),
-                    )
-                try:
-                    canonical_requested_draft = AgentDraft.model_validate(
-                        requested_draft
-                    ).model_dump(mode="json")
-                except ValidationError as error:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="MCP 稳定性治理配置无效，请返回 MCP 工具步骤检查。",
-                    ) from error
             if not source_preserving_requested:
                 sidecar_base_image = managed_studio_sidecar_base_image(
                     os.getenv(SIDECAR_BASE_IMAGE_ENV, "")
                 )
+        if (
+            sidecar_mcp_enabled or requested_mcp_credential_reuses
+        ) and not source_preserving_requested:
+            if not isinstance(requested_draft, Mapping):
+                raise HTTPException(
+                    status_code=400,
+                    detail="MCP 凭证复用缺少可验证的 MCP 配置，请重新打开发布页面。",
+                )
+            try:
+                canonical_requested_draft = AgentDraft.model_validate(
+                    requested_draft
+                ).model_dump(mode="json")
+            except ValidationError as error:
+                raise HTTPException(
+                    status_code=400,
+                    detail="MCP 配置无效，请返回 MCP 工具步骤检查。",
+                ) from error
         if (
             requested_mcp_secret_values
             and not source_preserving_requested
@@ -6717,15 +6757,6 @@ def _run_frontend_server(
             raise HTTPException(
                 status_code=400,
                 detail="MCP credential identity submission requires managed Sidecar MCP",
-            )
-        if (
-            requested_mcp_credential_reuses
-            and not source_preserving_requested
-            and not sidecar_mcp_enabled
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail="MCP credential reuse requires managed Sidecar MCP",
             )
         if not source_preserving_requested:
             _validate_harness_sidecar_project_files(files, enabled=sidecar_enabled)
@@ -6800,6 +6831,7 @@ def _run_frontend_server(
         published_draft: Mapping[str, Any] = {}
         published_mcp_reference_values: dict[str, str] = {}
         explicit_mcp_reuse_credentials: tuple[dict[str, str], ...] = ()
+        explicit_mcp_reuse_env_values: dict[str, str] = {}
         source_preserving_draft: dict[str, Any] | None = None
         source_preserving_source_image = ""
         source_preserving_mcp_secrets: dict[str, str] = {}
@@ -6904,6 +6936,24 @@ def _run_frontend_server(
                             region,
                             error.code,
                         )
+                if (
+                    not source_preserving_requested
+                    and canonical_requested_draft is None
+                    and isinstance(requested_draft, Mapping)
+                    and any(
+                        field in requested_draft
+                        for field in ("mcpTools", "subAgents", "workflow")
+                    )
+                ):
+                    try:
+                        canonical_requested_draft = AgentDraft.model_validate(
+                            requested_draft
+                        ).model_dump(mode="json")
+                    except ValidationError as error:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="MCP 配置无效，请返回 MCP 工具步骤检查。",
+                        ) from error
                 allowed_remove_runtime_env_keys = set(
                     mcp_auth_environment_keys(published_draft)
                 )
@@ -7119,9 +7169,43 @@ def _run_frontend_server(
                             published_reference_values=(published_mcp_reference_values),
                             reuse_requests=requested_mcp_credential_reuses,
                         )
+                        reused_mcp_env_values = mcp_supplied_secret_values_by_reference(
+                            edited_draft=canonical_requested_draft,
+                            supplied_credentials=explicit_mcp_reuse_credentials,
+                        )
+                        if not sidecar_mcp_enabled:
+                            retained_mcp_env_values = retained_mcp_secret_values(
+                                published_draft=published_draft,
+                                edited_draft=canonical_requested_draft,
+                                published_reference_values=(
+                                    published_mcp_reference_values
+                                ),
+                            )
+                            retained_mcp_env_values = {
+                                reference: value
+                                for reference, value in retained_mcp_env_values.items()
+                                if reference not in requested_remove_runtime_env_keys
+                            }
+                            explicit_mcp_reuse_env_values = {
+                                **retained_mcp_env_values,
+                                **reused_mcp_env_values,
+                            }
+                            requested_references = set(
+                                mcp_auth_environment_keys(canonical_requested_draft)
+                            )
+                            available_references = {
+                                reference
+                                for reference, value in requested_runtime_envs.items()
+                                if value
+                            }
+                            available_references.update(explicit_mcp_reuse_env_values)
+                            if requested_references.difference(available_references):
+                                raise LegacyRecoveryError(
+                                    "legacy_mcp_credential_missing"
+                                )
                     except LegacyRecoveryError as error:
                         logger.info(
-                            "managed Sidecar MCP credential reuse rejected "
+                            "MCP credential update rejected "
                             "runtime_id=%s region=%s code=%s",
                             runtime_id,
                             region,
@@ -7543,6 +7627,13 @@ def _run_frontend_server(
             ):
                 runtime_envs.pop(key, None)
             runtime_envs["MCP_SERVERS_JSON"] = structured_mcp
+        elif canonical_requested_draft is not None and existing_runtime is not None:
+            for key in ("MCP_SERVERS_JSON", "MCP_URLS", "MCP_API_KEY"):
+                runtime_envs.pop(key, None)
+            for key in mcp_auth_environment_keys(published_draft):
+                if key not in extra_runtime_envs:
+                    runtime_envs.pop(key, None)
+            runtime_envs.update(explicit_mcp_reuse_env_values)
         explicit_model_key_requested = bool(
             extra_runtime_envs.get("MODEL_AGENT_API_KEY", "").strip()
         )

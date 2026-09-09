@@ -1224,17 +1224,39 @@ def test_cloud_generated_debug_preserves_mcp_connection_error(
         "edited_url",
         "expected_status",
         "expect_credential",
+        "explicit_reuse",
+        "has_published_draft",
     ),
     [
-        ("reference-env", "jvmdiag", "https://8.8.8.8/mcp", 200, True),
-        ("reference-env", "", "https://8.8.8.8/mcp", 200, True),
-        ("servers-json", "jvmdiag", "https://8.8.8.8/mcp", 200, True),
-        ("servers-json", "", "https://8.8.8.8/mcp", 200, True),
+        ("reference-env", "jvmdiag", "https://8.8.8.8/mcp", 200, True, False, True),
+        ("reference-env", "", "https://8.8.8.8/mcp", 200, True, False, True),
+        ("servers-json", "jvmdiag", "https://8.8.8.8/mcp", 200, True, False, True),
+        ("servers-json", "", "https://8.8.8.8/mcp", 200, True, False, True),
         (
             "servers-json",
             "jvmdiag",
             "https://8.8.8.8/changed-mcp",
             422,
+            False,
+            False,
+            True,
+        ),
+        (
+            "servers-json",
+            "",
+            "https://8.8.8.8/changed-mcp",
+            200,
+            True,
+            True,
+            True,
+        ),
+        (
+            "reference-env",
+            "",
+            "https://8.8.8.8/changed-mcp",
+            409,
+            False,
+            True,
             False,
         ),
     ],
@@ -1247,6 +1269,8 @@ def test_generated_debug_applies_published_mcp_credential_contract_before_discov
     edited_url: str,
     expected_status: int,
     expect_credential: bool,
+    explicit_reuse: bool,
+    has_published_draft: bool,
 ) -> None:
     from agentkit.sdk.runtime.client import AgentkitRuntimeClient
     from veadk.cli.generated_agent_mcp import McpDebugConnectionError
@@ -1324,13 +1348,15 @@ def test_generated_debug_applies_published_mcp_credential_contract_before_discov
             if url.endswith("/list-apps"):
                 return _FakeResponse(json_data=["legacy_agent"])
             if url.endswith("/web/agent-info/legacy_agent"):
-                return _FakeResponse(
-                    json_data={
-                        "name": "legacy_agent",
-                        "description": "Existing Agent",
-                        "draft": published_draft,
-                    }
-                )
+                agent_info: dict[str, Any] = {
+                    "name": "legacy_agent",
+                    "description": "Existing Agent",
+                }
+                if has_published_draft:
+                    agent_info["draft"] = published_draft
+                return _FakeResponse(json_data=agent_info)
+            if url.endswith("/web/agent-draft/legacy_agent"):
+                return _FakeResponse(status_code=404)
             raise AssertionError(f"unexpected Runtime request path: {url}")
 
     monkeypatch.setenv("_FAAS_FUNC_ID", "function-test")
@@ -1352,13 +1378,23 @@ def test_generated_debug_applies_published_mcp_credential_contract_before_discov
     with TestClient(app) as client:
         edited_draft = json.loads(json.dumps(published_draft))
         edited_draft["mcpTools"][0]["url"] = edited_url
+        payload = {
+            "draft": edited_draft,
+            "runtimeId": runtime.runtime_id,
+            "runtimeRegion": "cn-shanghai",
+        }
+        if explicit_reuse:
+            payload["mcpCredentialReuses"] = [
+                {
+                    "agentName": "legacy_agent",
+                    "name": tool_name,
+                    "url": edited_url,
+                    "sourceAuthTokenEnv": credential_reference,
+                }
+            ]
         response = client.post(
             "/web/generated-agent-test-runs",
-            json={
-                "draft": edited_draft,
-                "runtimeId": runtime.runtime_id,
-                "runtimeRegion": "cn-shanghai",
-            },
+            json=payload,
         )
 
     assert response.status_code == expected_status, response.text
