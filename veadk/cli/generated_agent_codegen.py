@@ -352,12 +352,25 @@ class GeneratedAgentProjectRequest(BaseModel):
     draft: AgentDraft
 
 
+class McpCredentialReuseRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    agentName: str
+    name: str
+    url: str
+    sourceAuthTokenEnv: str
+
+
 class GeneratedAgentTestRunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     draft: AgentDraft
     runtimeId: str = ""
     runtimeRegion: str = "cn-beijing"
+    mcpCredentialReuses: list[McpCredentialReuseRequest] = Field(
+        default_factory=list,
+        max_length=256,
+    )
 
 
 class _Acc:

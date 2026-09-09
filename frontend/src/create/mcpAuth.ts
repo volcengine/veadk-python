@@ -194,7 +194,7 @@ export function mcpUrlNeedsPathWarning(value: string): boolean {
   if (!value.trim()) return false;
   try {
     const path = new URL(value).pathname.replace(/\/+$/, "");
-    return !path.endsWith("/mcp");
+    return path === "";
   } catch {
     return false;
   }

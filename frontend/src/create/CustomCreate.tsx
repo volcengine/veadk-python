@@ -4503,6 +4503,7 @@ export function CustomCreate({
           ? {
               runtimeId: deploymentTarget.runtimeId,
               region: deploymentTarget.region,
+              mcpCredentialReuses: mcpCredentialReuseValues(variantDraft),
             }
           : undefined,
       );

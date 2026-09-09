@@ -5813,6 +5813,245 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
 
 
 @pytest.mark.parametrize(
+    ("lifecycle_case", "credential_storage", "explicit_reuse"),
+    [
+        ("change-url", "reference-env", True),
+        ("change-url", "reference-env", False),
+        ("change-url", "servers-json", True),
+        ("change-url", "servers-json", False),
+        ("add-first", "reference-env", False),
+        ("add-second", "reference-env", False),
+        ("add-second", "servers-json", False),
+    ],
+)
+def test_application_owned_mcp_update_routes_cover_reuse_and_additions(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    lifecycle_case: str,
+    credential_storage: str,
+    explicit_reuse: bool,
+) -> None:
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+    agent_name = "ordinary-mcp-agent"
+    credential_reference = "MCP_ORDINARY_MCP_AGENT_TOOL_1_AUTH_TOKEN"
+    credential_value = "server-retained-route-test-secret"
+    added_credential_reference = "MCP_ORDINARY_MCP_AGENT_INVENTORY_AUTH_TOKEN"
+    added_credential_value = "new-route-test-secret"
+    old_url = "https://old-mcp.example.test/vtrace"
+    new_url = "https://new-mcp.example.test/mcp"
+    runtime = _runtime_with_public_endpoint(
+        _runtime("ordinary-mcp-runtime", "developer", managed=False)
+    )
+    runtime.current_version_number = 3
+    runtime.status = "Ready"
+    runtime.role_name = "runtime-role"
+    runtime.artifact_url = ""
+    runtime.envs = (
+        []
+        if lifecycle_case == "add-first"
+        else [SimpleNamespace(key=credential_reference, value=credential_value)]
+    )
+    if credential_storage == "servers-json" and lifecycle_case != "add-first":
+        runtime.envs = [
+            SimpleNamespace(
+                key="MCP_SERVERS_JSON",
+                value=json.dumps(
+                    [
+                        {
+                            "name": (
+                                "vtrace" if lifecycle_case == "change-url" else "orders"
+                            ),
+                            "url": old_url,
+                            "headers": {"Authorization": f"Bearer {credential_value}"},
+                        }
+                    ]
+                ),
+            )
+        ]
+    published_mcp_tools = []
+    if lifecycle_case != "add-first":
+        published_mcp_tools = [
+            {
+                "name": "" if lifecycle_case == "change-url" else "orders",
+                "transport": "http",
+                "url": old_url,
+                "authTokenEnv": credential_reference,
+            }
+        ]
+    published_draft = {
+        "name": agent_name,
+        "description": "Ordinary MCP update",
+        "instruction": "Use the configured MCP.",
+        "mcpTools": published_mcp_tools,
+    }
+    captured_config: dict[str, Any] = {}
+    update_requests: list[Any] = []
+
+    def get_runtime(_self: Any, _request: Any) -> SimpleNamespace:
+        runtime.current_version_number = 4 if update_requests else 3
+        return runtime
+
+    def update_runtime(_self: Any, request: Any) -> SimpleNamespace:
+        update_requests.append(request)
+        return SimpleNamespace(runtime_id=runtime.runtime_id)
+
+    def launch(*, config_file: str, **_kwargs: Any) -> SimpleNamespace:
+        captured_config.update(yaml.safe_load(Path(config_file).read_text()))
+        update_runtime(
+            object(),
+            SimpleNamespace(tags=[], apmplus_enable=False),
+        )
+        return SimpleNamespace(
+            success=True,
+            error=None,
+            deploy_result=SimpleNamespace(
+                endpoint_url="https://runtime.example.test",
+                metadata={
+                    "runtime_id": runtime.runtime_id,
+                    "runtime_name": runtime.name,
+                    "runtime_endpoint": "https://runtime.example.test",
+                    "runtime_apikey": "test-only-api-key",
+                },
+            ),
+        )
+
+    class RuntimeAsyncClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> "RuntimeAsyncClient":
+            return self
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+        async def request(
+            self,
+            _method: str,
+            url: str,
+            **_kwargs: Any,
+        ) -> _RuntimeJsonResponse:
+            if url.endswith("/list-apps"):
+                return _RuntimeJsonResponse([agent_name])
+            assert url.endswith(f"/web/agent-info/{agent_name}")
+            return _RuntimeJsonResponse(
+                {
+                    "name": agent_name,
+                    "draft": published_draft,
+                }
+            )
+
+    monkeypatch.setattr(AgentkitRuntimeClient, "get_runtime", get_runtime)
+    monkeypatch.setattr(AgentkitRuntimeClient, "update_runtime", update_runtime)
+    monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
+    monkeypatch.setattr("httpx.AsyncClient", RuntimeAsyncClient)
+    monkeypatch.setenv("VEADK_STUDIO_ACCOUNT_ID", "test-account")
+    monkeypatch.setattr(
+        "veadk.auth.veauth.ark_veauth.get_ark_token",
+        lambda **_kwargs: "test-only-model-key",
+    )
+    monkeypatch.setattr(
+        "veadk.cli.cli_frontend._sync_volcengine_runtime_tags",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "agentkit.utils.template_utils.render_template",
+        lambda template: template.replace("{{account_id}}", "test-account"),
+    )
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+    headers = {"X-VeADK-Local-User": "developer"}
+
+    with TestClient(app) as client:
+        capability = client.get(
+            "/web/runtime-update-capability",
+            params={
+                "runtimeId": runtime.runtime_id,
+                "region": "cn-shanghai",
+                "appName": agent_name,
+            },
+            headers=headers,
+        )
+        assert capability.status_code == 200
+        edited_draft = capability.json()["agent"]["draft"]
+        if lifecycle_case == "change-url":
+            edited_draft["mcpTools"][0]["url"] = new_url
+        else:
+            edited_draft["mcpTools"].append(
+                {
+                    "name": "orders" if lifecycle_case == "add-first" else "inventory",
+                    "transport": "http",
+                    "url": new_url,
+                    "authTokenEnv": (
+                        credential_reference
+                        if lifecycle_case == "add-first"
+                        else added_credential_reference
+                    ),
+                }
+            )
+        payload = {
+            "name": agent_name,
+            "runtimeId": runtime.runtime_id,
+            "appName": agent_name,
+            "draft": edited_draft,
+            "updateEtag": capability.json()["etag"],
+            "baseRuntimeVersion": 3,
+            "createEvaluationSets": False,
+            "files": [{"path": "app.py", "content": "app = object()\n"}],
+            "config": {"region": "cn-shanghai", "projectName": "default"},
+        }
+        if lifecycle_case == "add-first":
+            payload["envs"] = [
+                {"key": credential_reference, "value": added_credential_value}
+            ]
+        elif lifecycle_case == "add-second":
+            payload["envs"] = [
+                {
+                    "key": added_credential_reference,
+                    "value": added_credential_value,
+                }
+            ]
+        elif explicit_reuse:
+            payload["mcpCredentialReuses"] = [
+                {
+                    "agentName": agent_name,
+                    "name": "",
+                    "url": new_url,
+                    "sourceAuthTokenEnv": credential_reference,
+                }
+            ]
+        response = client.post(
+            "/web/deploy-agentkit",
+            headers=headers,
+            json=payload,
+        )
+        frames = [
+            json.loads(line.removeprefix("data: "))
+            for line in response.iter_lines()
+            if line.startswith("data: ")
+        ]
+
+    if lifecycle_case == "change-url" and not explicit_reuse:
+        assert response.status_code == 409
+        assert "重新填写 Key 或确认沿用原凭证" in response.json()["detail"]
+        assert captured_config == {}
+        assert credential_value not in response.text
+        return
+
+    assert response.status_code == 200
+    assert frames[-1]["success"] is True
+    assert credential_value not in json.dumps(frames)
+    runtime_envs = captured_config["launch_types"]["cloud"]["runtime_envs"]
+    assert credential_reference in runtime_envs, sorted(runtime_envs)
+    assert runtime_envs[credential_reference] == (
+        added_credential_value if lifecycle_case == "add-first" else credential_value
+    )
+    if lifecycle_case == "add-second":
+        assert runtime_envs[added_credential_reference] == added_credential_value
+    assert "MCP_SERVERS_JSON" not in runtime_envs
+
+
+@pytest.mark.parametrize(
     (
         "session_storage",
         "min_instance",

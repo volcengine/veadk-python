@@ -4942,7 +4942,16 @@ export async function generateAgentDraftFromRequirement(
 
 export async function createGeneratedAgentTestRun(
   draft: AgentDraft,
-  runtime?: { runtimeId: string; region: string },
+  runtime?: {
+    runtimeId: string;
+    region: string;
+    mcpCredentialReuses?: Array<{
+      agentName: string;
+      name: string;
+      url: string;
+      sourceAuthTokenEnv: string;
+    }>;
+  },
 ): Promise<GeneratedAgentTestRun> {
   const res = await apiFetch("/web/generated-agent-test-runs", {
     method: "POST",
@@ -4951,6 +4960,7 @@ export async function createGeneratedAgentTestRun(
       draft,
       runtimeId: runtime?.runtimeId,
       runtimeRegion: runtime?.region,
+      mcpCredentialReuses: runtime?.mcpCredentialReuses,
     }),
   });
   if (!res.ok) {
