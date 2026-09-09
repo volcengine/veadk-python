@@ -239,6 +239,7 @@ def _build_skill_from_space_item(
         skill_space_id=skill_space_id,
         bucket_name=item.get("BucketName"),
         id=item.get("SkillId"),
+        version_id=item.get("Version") or item.get("SkillVersion"),
     )
 
 
