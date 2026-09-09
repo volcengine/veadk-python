@@ -21,7 +21,9 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from google.adk.agents import Agent as AdkAgent
+from google.adk.agents import LoopAgent, ParallelAgent, SequentialAgent
 from google.adk.agents.base_agent import BaseAgent
+from google.adk.apps.app import App
 from google.adk.plugins.base_plugin import BasePlugin
 
 import veadk
@@ -243,6 +245,46 @@ def test_create_agentkit_app_uses_runtime_bff_tool_opt_in(
         tool for tool in root_agent.tools if isinstance(tool, StudioExternalToolset)
     ]
     assert bool(studio_toolsets) is enabled
+
+
+@pytest.mark.parametrize("workflow_type", [SequentialAgent, ParallelAgent, LoopAgent])
+@pytest.mark.parametrize("use_app", [False, True])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_workflow_roots_disable_studio_tools(
+    monkeypatch: pytest.MonkeyPatch,
+    workflow_type: type[BaseAgent],
+    use_app: bool,
+    enabled: bool,
+) -> None:
+    class SessionAgentServer(_FakeAgentServer):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self.session_service = object()
+
+    monkeypatch.setattr(agentkit_app, "AgentkitAgentServerApp", SessionAgentServer)
+
+    def existing_tool() -> str:
+        return "ok"
+
+    child = AdkAgent(name="worker", tools=[existing_tool])
+    root = workflow_type(name="workflow", sub_agents=[child])
+    kwargs = (
+        {"app": App(name="workflow_app", root_agent=root)}
+        if use_app
+        else {"root_agent": root}
+    )
+    app = agentkit_app.create_agentkit_app(**kwargs, enable_studio_tools=enabled)
+    client = TestClient(app)
+
+    assert client.get("/harness/studio-channel/v1/capabilities").json() == {
+        "enabled": False,
+        "protocol": "studio-tool-channel/1",
+        "transports": [],
+    }
+    paths = {getattr(route, "path", "") for route in app.routes}
+    assert "/harness/studio-channel/v1/http-runs" not in paths
+    assert child.tools == [existing_tool]
+    assert existing_tool() == "ok"
 
 
 @pytest.mark.parametrize("enabled", [False, True])

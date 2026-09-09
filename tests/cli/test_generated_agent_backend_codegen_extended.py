@@ -252,6 +252,20 @@ def test_retired_a2ui_option_is_accepted_but_not_generated() -> None:
     assert "[a2ui]" not in files["requirements.txt"]
 
 
+@pytest.mark.parametrize("agent_type", ["llm", "sequential", "parallel", "loop"])
+def test_codegen_studio_tools_follow_root_type(agent_type: str) -> None:
+    draft = AgentDraft.model_validate(
+        {
+            "name": "workflow",
+            "agentType": agent_type,
+            "subAgents": [{"name": "worker", "agentType": "llm"}],
+        }
+    )
+    files = _file_map(generate_project_from_draft(draft))
+    expected = agent_type == "llm"
+    assert f'"enable_studio_tools": {expected!r}' in files["app.py"]
+
+
 def test_codegen_preserves_agent_display_names_for_topology() -> None:
     project = generate_project_from_draft(
         AgentDraft(
