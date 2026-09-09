@@ -1218,17 +1218,32 @@ def test_cloud_generated_debug_preserves_mcp_connection_error(
 
 
 @pytest.mark.parametrize(
-    ("credential_storage", "edited_url", "expected_status", "expect_credential"),
+    (
+        "credential_storage",
+        "tool_name",
+        "edited_url",
+        "expected_status",
+        "expect_credential",
+    ),
     [
-        ("reference-env", "https://8.8.8.8/mcp", 200, True),
-        ("servers-json", "https://8.8.8.8/mcp", 200, True),
-        ("servers-json", "https://8.8.8.8/changed-mcp", 422, False),
+        ("reference-env", "jvmdiag", "https://8.8.8.8/mcp", 200, True),
+        ("reference-env", "", "https://8.8.8.8/mcp", 200, True),
+        ("servers-json", "jvmdiag", "https://8.8.8.8/mcp", 200, True),
+        ("servers-json", "", "https://8.8.8.8/mcp", 200, True),
+        (
+            "servers-json",
+            "jvmdiag",
+            "https://8.8.8.8/changed-mcp",
+            422,
+            False,
+        ),
     ],
 )
 def test_generated_debug_applies_published_mcp_credential_contract_before_discovery(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     credential_storage: str,
+    tool_name: str,
     edited_url: str,
     expected_status: int,
     expect_credential: bool,
@@ -1244,7 +1259,7 @@ def test_generated_debug_applies_published_mcp_credential_contract_before_discov
         "instruction": "Use the diagnostic MCP.",
         "mcpTools": [
             {
-                "name": "jvmdiag",
+                "name": tool_name,
                 "transport": "http",
                 "url": "https://8.8.8.8/mcp",
                 "authTokenEnv": credential_reference,
@@ -1259,7 +1274,7 @@ def test_generated_debug_applies_published_mcp_credential_contract_before_discov
                 value=json.dumps(
                     [
                         {
-                            "name": "jvmdiag",
+                            "name": tool_name or "mcp",
                             "url": "https://8.8.8.8/mcp",
                             "headers": {"Authorization": f"Bearer {credential_value}"},
                         }
