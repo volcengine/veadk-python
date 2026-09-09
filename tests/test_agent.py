@@ -21,7 +21,7 @@ from google.adk.agents.run_config import ToolThreadPoolConfig
 from google.adk.models.lite_llm import LiteLlm
 from google.adk.tools import load_memory
 
-from veadk import Agent
+from veadk import Agent, ModelFallbackEndpoint
 from veadk.consts import (
     DEFAULT_AGENT_NAME,
     DEFAULT_MODEL_AGENT_API_BASE,
@@ -31,6 +31,7 @@ from veadk.consts import (
 )
 from veadk.knowledgebase import KnowledgeBase
 from veadk.memory.long_term_memory import LongTermMemory
+from veadk.models.retrying_lite_llm import RetryingLiteLlm
 from veadk.tools import load_knowledgebase_tool
 from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
 
@@ -187,6 +188,138 @@ def test_agent_configures_responses_model_fallbacks(mock_ark_llm):
     assert mock_ark_llm.call_args.kwargs["fallbacks"] == [
         "openai/fallback-model-1",
         "openai/fallback-model-2",
+    ]
+
+
+@patch("veadk.agent.RetryingLiteLlm")
+def test_agent_configures_cross_provider_litellm_fallbacks(mock_lite_llm, monkeypatch):
+    monkeypatch.setenv("BACKUP_MODEL_API_KEY", "backup-key")
+
+    Agent(
+        model_name="primary-model",
+        model_provider="ark",
+        model_api_key="primary-key",
+        model_api_base="https://ark.example.com/api/v3",
+        model_fallbacks=[
+            {
+                "model_provider": "openai",
+                "model_name": "gpt-4o-mini",
+                "model_api_base": "https://api.openai.com/v1",
+                "model_api_key_env": "BACKUP_MODEL_API_KEY",
+                "model_extra_config": {
+                    "extra_headers": {"x-fallback": "1"},
+                    "temperature": 0.1,
+                },
+            }
+        ],
+    )
+
+    assert mock_lite_llm.call_args.kwargs["model"] == "ark/primary-model"
+    assert mock_lite_llm.call_args.kwargs["fallbacks"] == [
+        {
+            "model": "openai/gpt-4o-mini",
+            "api_key": "backup-key",
+            "api_base": "https://api.openai.com/v1",
+            "extra_headers": {
+                **DEFAULT_MODEL_EXTRA_CONFIG["extra_headers"],
+                "x-fallback": "1",
+            },
+            "temperature": 0.1,
+        }
+    ]
+
+
+@patch("veadk.agent.RetryingLiteLlm")
+def test_agent_combines_legacy_and_explicit_litellm_fallbacks(mock_lite_llm):
+    Agent(
+        model_name=["primary-model", "same-provider-a"],
+        model_provider="ark",
+        model_api_key="primary-key",
+        model_api_base="https://ark.example.com/api/v3",
+        model_fallbacks=[
+            "same-provider-b",
+            ModelFallbackEndpoint(
+                model_provider="anthropic",
+                model_name="claude-3-5-haiku-latest",
+                model_api_key="anthropic-key",
+            ),
+        ],
+    )
+
+    assert mock_lite_llm.call_args.kwargs["fallbacks"] == [
+        "ark/same-provider-a",
+        "ark/same-provider-b",
+        {
+            "model": "anthropic/claude-3-5-haiku-latest",
+            "api_key": "anthropic-key",
+            "api_base": None,
+        },
+    ]
+
+
+@patch("veadk.agent.RetryingLiteLlm")
+def test_agent_accepts_litellm_style_fallback_dict(mock_lite_llm):
+    Agent(
+        model_name="primary-model",
+        model_provider="ark",
+        model_api_key="primary-key",
+        model_api_base="https://ark.example.com/api/v3",
+        model_fallbacks=[
+            {
+                "model": "openai/gpt-4o-mini",
+                "api_key": "openai-key",
+                "api_base": "https://api.openai.com/v1",
+            }
+        ],
+    )
+
+    assert mock_lite_llm.call_args.kwargs["fallbacks"] == [
+        {
+            "model": "openai/gpt-4o-mini",
+            "api_key": "openai-key",
+            "api_base": "https://api.openai.com/v1",
+        }
+    ]
+
+
+def test_agent_rejects_endpoint_fallbacks_for_responses_model():
+    with pytest.raises(ValueError, match="Endpoint model_fallbacks"):
+        Agent(
+            model_name="primary-model",
+            model_provider="ark",
+            model_api_key="primary-key",
+            model_api_base="https://ark.example.com/api/v3",
+            enable_responses=True,
+            model_fallbacks=[
+                {
+                    "model_provider": "openai",
+                    "model_name": "gpt-4o-mini",
+                }
+            ],
+        )
+
+
+def test_retrying_litellm_refreshes_mutable_fallbacks_between_calls():
+    model = RetryingLiteLlm(
+        model="ark/primary",
+        fallbacks=[
+            {
+                "model": "openai/fallback",
+                "api_key": "fallback-key",
+                "api_base": "https://fallback.example.com/v1",
+            }
+        ],
+    )
+
+    model._additional_args["fallbacks"][0].pop("model")
+    model._refresh_fallbacks()
+
+    assert model._additional_args["fallbacks"] == [
+        {
+            "model": "openai/fallback",
+            "api_key": "fallback-key",
+            "api_base": "https://fallback.example.com/v1",
+        }
     ]
 
 
