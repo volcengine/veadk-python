@@ -1161,7 +1161,8 @@ def test_local_generated_debug_allows_private_mcp(
     monkeypatch.delenv("VEADK_STUDIO_FUNCTION_ID", raising=False)
     monkeypatch.delenv("_FAAS_FUNC_ID", raising=False)
 
-    async def keep_mcp_endpoints(draft):
+    async def keep_mcp_endpoints(draft, env_values=None):
+        assert env_values == {}
         return draft
 
     monkeypatch.setattr(
@@ -1249,8 +1250,9 @@ def test_cloud_generated_debug_preserves_mcp_connection_error(
     monkeypatch.setenv("_FAAS_FUNC_ID", "function-test")
     original_detail = "MCP 工具 `offline` 连接失败：原始连接错误"
 
-    async def fail_mcp_discovery(draft):
+    async def fail_mcp_discovery(draft, env_values=None):
         del draft
+        assert env_values == {}
         raise McpDebugConnectionError(original_detail)
 
     monkeypatch.setattr(
@@ -1291,6 +1293,7 @@ def test_cloud_generated_debug_preserves_mcp_connection_error(
         "expect_credential",
         "explicit_reuse",
         "has_published_draft",
+        "submitted_credential",
     ),
     [
         (
@@ -1302,6 +1305,18 @@ def test_cloud_generated_debug_preserves_mcp_connection_error(
             True,
             False,
             True,
+            False,
+        ),
+        (
+            "reference-env",
+            "jvmdiag",
+            "https://8.8.8.8/mcp",
+            "https://8.8.8.8/mcp",
+            200,
+            True,
+            False,
+            True,
+            True,
         ),
         (
             "reference-env",
@@ -1312,6 +1327,7 @@ def test_cloud_generated_debug_preserves_mcp_connection_error(
             True,
             False,
             True,
+            False,
         ),
         (
             "servers-json",
@@ -1322,6 +1338,7 @@ def test_cloud_generated_debug_preserves_mcp_connection_error(
             True,
             False,
             True,
+            False,
         ),
         (
             "servers-json",
@@ -1332,6 +1349,7 @@ def test_cloud_generated_debug_preserves_mcp_connection_error(
             True,
             False,
             True,
+            False,
         ),
         (
             "servers-json",
@@ -1342,6 +1360,7 @@ def test_cloud_generated_debug_preserves_mcp_connection_error(
             False,
             False,
             True,
+            False,
         ),
         (
             "missing",
@@ -1352,6 +1371,18 @@ def test_cloud_generated_debug_preserves_mcp_connection_error(
             False,
             False,
             True,
+            False,
+        ),
+        (
+            "missing",
+            "",
+            "https://8.8.8.8/mysqldiag",
+            "https://8.8.8.8/mysqldiag",
+            200,
+            True,
+            False,
+            True,
+            True,
         ),
         (
             "servers-json",
@@ -1362,6 +1393,7 @@ def test_cloud_generated_debug_preserves_mcp_connection_error(
             True,
             True,
             True,
+            False,
         ),
         (
             "reference-env",
@@ -1371,6 +1403,7 @@ def test_cloud_generated_debug_preserves_mcp_connection_error(
             409,
             False,
             True,
+            False,
             False,
         ),
         (
@@ -1382,6 +1415,7 @@ def test_cloud_generated_debug_preserves_mcp_connection_error(
             False,
             True,
             True,
+            False,
         ),
     ],
 )
@@ -1396,12 +1430,16 @@ def test_generated_debug_applies_published_mcp_credential_contract_before_discov
     expect_credential: bool,
     explicit_reuse: bool,
     has_published_draft: bool,
+    submitted_credential: bool,
 ) -> None:
     from agentkit.sdk.runtime.client import AgentkitRuntimeClient
     from veadk.cli.generated_agent_mcp import McpDebugConnectionError
 
     credential_reference = "MCP_LEGACY_AGENT_JVMDIAG_AUTH_TOKEN"
     credential_value = "server-retained-debug-secret"
+    submitted_credential_value = "browser-submitted-debug-secret"
+    secondary_credential_reference = "MCP_LEGACY_AGENT_ATHENA_AUTH_TOKEN"
+    secondary_credential_value = "browser-submitted-secondary-secret"
     published_draft = {
         "name": "legacy_agent",
         "description": "Existing Agent",
@@ -1512,6 +1550,22 @@ def test_generated_debug_applies_published_mcp_credential_contract_before_discov
             "runtimeId": runtime.runtime_id,
             "runtimeRegion": "cn-shanghai",
         }
+        if submitted_credential:
+            edited_draft["mcpTools"].append(
+                {
+                    "name": "athena",
+                    "transport": "http",
+                    "url": "https://8.8.4.4/athena-mcp",
+                    "authTokenEnv": secondary_credential_reference,
+                }
+            )
+            edited_draft["deployment"] = {
+                "envValues": {
+                    credential_reference: submitted_credential_value,
+                    secondary_credential_reference: secondary_credential_value,
+                    "UNRELATED_SECRET": "must-not-reach-mcp-discovery",
+                }
+            }
         if explicit_reuse:
             payload["mcpCredentialReuses"] = [
                 {
@@ -1535,12 +1589,23 @@ def test_generated_debug_applies_published_mcp_credential_contract_before_discov
         assert "LegacyRecoveryError" not in response.text
         assert "错误 ID" not in response.text
     if expect_credential:
-        assert captured_discovery_env[credential_reference] == credential_value
+        expected_credential = (
+            submitted_credential_value if submitted_credential else credential_value
+        )
+        assert captured_discovery_env[credential_reference] == expected_credential
+        if submitted_credential:
+            assert (
+                captured_discovery_env[secondary_credential_reference]
+                == secondary_credential_value
+            )
+        assert "UNRELATED_SECRET" not in captured_discovery_env
     else:
         assert credential_reference not in captured_discovery_env
-    if credential_storage == "missing":
+    if credential_storage == "missing" and not submitted_credential:
         assert "缺少可用凭证" in response.json()["detail"]
     assert credential_value not in response.text
+    assert submitted_credential_value not in response.text
+    assert secondary_credential_value not in response.text
 
 
 def test_debug_text_redacts_environment_and_inline_markers(
