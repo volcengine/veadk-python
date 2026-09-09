@@ -3752,50 +3752,39 @@
   line-height: 1.5;
   color: hsl(var(--muted-foreground));
 }
-.cw-mcp-auth-state {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-height: 32px;
-  padding: 7px 10px;
-  border: 1px solid hsl(var(--border));
-  border-radius: 8px;
-  background: hsl(var(--muted));
-  color: hsl(var(--muted-foreground));
-  font-size: 12px;
-  line-height: 1.45;
+.cw-mcp-token-field {
+  position: relative;
 }
-.cw-mcp-auth-state button {
-  flex: 0 0 auto;
-  min-height: 28px;
-  padding: 0 9px;
-  border: 1px solid hsl(var(--border));
+.cw-mcp-token-field .cw-input {
+  padding-right: 40px;
+}
+.cw-mcp-token-toggle {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
   border-radius: 6px;
-  background: hsl(var(--panel));
-  color: hsl(var(--foreground));
+  background: transparent;
+  color: hsl(var(--muted-foreground));
   cursor: pointer;
-  font: inherit;
+  place-items: center;
+  transform: translateY(-50%);
 }
-.cw-mcp-auth-state button:hover {
-  background: hsl(var(--accent));
+.cw-mcp-token-toggle:hover {
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
 }
-.cw-mcp-auth-state button:focus-visible {
+.cw-mcp-token-toggle:focus-visible {
   outline: 2px solid hsl(var(--primary));
   outline-offset: 1px;
 }
-.cw-mcp-auth-state.is-warning {
-  align-items: flex-start;
-  border-color: hsl(var(--destructive) / 0.35);
-  background: hsl(var(--destructive) / 0.06);
-  color: hsl(var(--foreground));
-}
-.cw-mcp-auth-actions {
-  display: flex;
-  flex: 0 0 auto;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 6px;
+.cw-mcp-token-toggle svg {
+  width: 16px;
+  height: 16px;
 }
 .cw-mcp-warning {
   display: flex;

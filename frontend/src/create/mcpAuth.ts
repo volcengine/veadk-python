@@ -1,4 +1,4 @@
-import type { AgentDraft, McpTool } from "./types";
+import type { AgentDraft, McpCredentialValue, McpTool } from "./types";
 
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const ENV_REFERENCE = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
@@ -134,7 +134,6 @@ export function removedConfiguredMcpEnvKeys(
 }
 
 export function mcpAuthTokenInputValue(tool: McpTool): string {
-  if (tool.credentialUpdate === "pending") return "";
   if (tool.authToken) return tool.authToken;
   if (tool.credentialConfigured) return "";
   const envName = configuredEnvName(tool);
@@ -143,20 +142,11 @@ export function mcpAuthTokenInputValue(tool: McpTool): string {
 
 export function updateMcpAuthTokenInput(tool: McpTool, value: string): McpTool {
   if (!value) {
-    if (tool.authToken) {
-      const next = { ...tool, credentialConfigured: false };
-      delete next.authToken;
-      delete next.authTokenEnv;
-      return next;
-    }
-    if (tool.credentialConfigured) {
-      const next = { ...tool };
-      delete next.authToken;
-      return next;
-    }
-    const next = { ...tool };
+    const next = { ...tool, credentialConfigured: false };
     delete next.authToken;
     delete next.authTokenEnv;
+    delete next.credentialSourceUrl;
+    delete next.credentialSourceAuthTokenEnv;
     return next;
   }
   const reference = value.trim().match(ENV_REFERENCE);
@@ -166,9 +156,6 @@ export function updateMcpAuthTokenInput(tool: McpTool, value: string): McpTool {
       authTokenEnv: reference[1],
       credentialConfigured:
         tool.credentialConfigured && configuredEnvName(tool) === reference[1],
-      ...(tool.credentialSourceUrl
-        ? { credentialUpdate: "replace" as const }
-        : {}),
     };
     delete next.authToken;
     return next;
@@ -177,17 +164,7 @@ export function updateMcpAuthTokenInput(tool: McpTool, value: string): McpTool {
     ...tool,
     authToken: value,
     credentialConfigured: false,
-    ...(tool.credentialSourceUrl
-      ? { credentialUpdate: "replace" as const }
-      : {}),
   };
-}
-
-export function clearMcpConfiguredAuth(tool: McpTool): McpTool {
-  const next = { ...tool, credentialConfigured: false };
-  delete next.authToken;
-  delete next.authTokenEnv;
-  return next;
 }
 
 export function mcpUrlNeedsPathWarning(value: string): boolean {
@@ -212,86 +189,68 @@ export interface SourcePreservingMcpSecretValue {
   value: string;
 }
 
-export interface McpCredentialReuseValue {
-  agentName: string;
-  name: string;
-  url: string;
-  sourceAuthTokenEnv: string;
-}
-
 function normalizedMcpIdentityUrl(value: string | undefined): string {
   return (value ?? "").trim().replace(/\/+$/, "");
 }
 
-/** Whether a changed published endpoint still needs an explicit auth choice. */
-export function mcpCredentialActionRequired(tool: McpTool): boolean {
-  return tool.credentialUpdate === "pending";
-}
-
-/** Change an MCP URL without silently replaying a published credential. */
+/** Change an MCP URL while retaining the explicit token shown in the editor. */
 export function updateMcpUrlInput(tool: McpTool, value: string): McpTool {
-  const sourceUrl =
-    tool.credentialSourceUrl ??
-    (tool.credentialConfigured ? tool.url?.trim() ?? "" : "");
-  const sourceAuthTokenEnv =
-    tool.credentialSourceAuthTokenEnv ??
-    (tool.credentialConfigured ? configuredEnvName(tool) : "");
-  if (!sourceUrl || !sourceAuthTokenEnv) return { ...tool, url: value };
-
-  if (
-    normalizedMcpIdentityUrl(value) === normalizedMcpIdentityUrl(sourceUrl)
-  ) {
-    const restored: McpTool = {
-      ...tool,
-      url: value,
-      authTokenEnv: sourceAuthTokenEnv,
-      credentialConfigured: true,
-      credentialSourceUrl: sourceUrl,
-      credentialSourceAuthTokenEnv: sourceAuthTokenEnv,
-    };
-    delete restored.authToken;
-    delete restored.credentialUpdate;
-    return restored;
-  }
-
-  const changed: McpTool = {
-    ...tool,
-    url: value,
-    authTokenEnv: sourceAuthTokenEnv,
-    credentialConfigured: false,
-    credentialSourceUrl: sourceUrl,
-    credentialSourceAuthTokenEnv: sourceAuthTokenEnv,
-    credentialUpdate: "pending",
-  };
-  delete changed.authToken;
-  return changed;
+  return { ...tool, url: value };
 }
 
-export function confirmMcpCredentialReuse(tool: McpTool): McpTool {
-  if (!tool.credentialSourceAuthTokenEnv) return tool;
-  return {
-    ...tool,
-    authTokenEnv: tool.credentialSourceAuthTokenEnv,
-    credentialConfigured: false,
-    credentialUpdate: "reuse",
-  };
-}
+/** Add authorized credential values to the editor without mutating the source. */
+export function hydrateMcpCredentialValues(
+  root: AgentDraft,
+  credentials: readonly McpCredentialValue[],
+): AgentDraft {
+  const bySlot = new Map(
+    credentials.map((credential) => [
+      [
+        credential.agentName.trim(),
+        credential.authTokenEnv.trim(),
+        normalizedMcpIdentityUrl(credential.url),
+      ].join("\u0000"),
+      credential.value,
+    ]),
+  );
 
-export function replaceMcpCredentialForChangedUrl(tool: McpTool): McpTool {
-  const next: McpTool = {
-    ...tool,
-    credentialConfigured: false,
-    credentialUpdate: "replace",
-  };
-  delete next.authToken;
-  delete next.authTokenEnv;
-  return next;
-}
+  const visit = (node: AgentDraft): AgentDraft => ({
+    ...node,
+    mcpTools: (node.mcpTools ?? []).map((tool) => {
+      const reference = configuredEnvName(tool);
+      if (!reference) return tool;
+      const value = bySlot.get(
+        [
+          node.name.trim(),
+          reference,
+          normalizedMcpIdentityUrl(tool.url),
+        ].join("\u0000"),
+      );
+      return value
+        ? {
+            ...tool,
+            authToken: value,
+            credentialConfigured: true,
+            credentialSourceUrl: tool.url?.trim() ?? "",
+            credentialSourceAuthTokenEnv: reference,
+          }
+        : tool;
+    }),
+    subAgents: node.subAgents.map(visit),
+    ...(node.workflow
+      ? {
+          workflow: {
+            ...node.workflow,
+            nodes: node.workflow.nodes.map((workflowNode) => ({
+              ...workflowNode,
+              agent: visit(workflowNode.agent),
+            })),
+          },
+        }
+      : {}),
+  });
 
-export function removeMcpCredentialForChangedUrl(tool: McpTool): McpTool {
-  const next = replaceMcpCredentialForChangedUrl(tool);
-  next.credentialUpdate = "remove";
-  return next;
+  return visit(root);
 }
 
 /** New deployment credentials resolved from the MCP editor's prior inputs. */
@@ -359,35 +318,6 @@ export function sourcePreservingMcpSecretValues(
   return values;
 }
 
-/** Explicitly confirmed reuse decisions; contains references, never secrets. */
-export function mcpCredentialReuseValues(
-  root: AgentDraft,
-): McpCredentialReuseValue[] {
-  const values: McpCredentialReuseValue[] = [];
-  const visit = (node: AgentDraft) => {
-    for (const tool of node.mcpTools ?? []) {
-      const sourceAuthTokenEnv =
-        tool.credentialSourceAuthTokenEnv?.trim() ?? "";
-      if (
-        tool.transport === "http" &&
-        tool.credentialUpdate === "reuse" &&
-        sourceAuthTokenEnv
-      ) {
-        values.push({
-          agentName: node.name.trim(),
-          name: tool.name.trim(),
-          url: tool.url?.trim() ?? "",
-          sourceAuthTokenEnv,
-        });
-      }
-    }
-    node.subAgents.forEach(visit);
-    node.workflow?.nodes.forEach((workflowNode) => visit(workflowNode.agent));
-  };
-  visit(root);
-  return values;
-}
-
 /** Replace transient MCP tokens with stable environment-variable references. */
 export function prepareMcpAuth(root: AgentDraft): PreparedMcpAuth {
   const used = new Set<string>();
@@ -415,7 +345,6 @@ export function prepareMcpAuth(root: AgentDraft): PreparedMcpAuth {
       delete prepared.credentialConfigured;
       delete prepared.credentialSourceUrl;
       delete prepared.credentialSourceAuthTokenEnv;
-      delete prepared.credentialUpdate;
       if (envName) prepared.authTokenEnv = envName;
       else delete prepared.authTokenEnv;
       return prepared;
