@@ -30,6 +30,7 @@ import json
 import os
 import queue
 import re
+import shlex
 import shutil
 import sys
 import tempfile
@@ -51,6 +52,10 @@ from pydantic import BaseModel, Field
 from frontend.server.agentkit_clients import create_agentkit_client
 from veadk.cli.agentkit_sandbox_region import is_agentkit_resource_not_found
 from veadk.cli.frontend_branding import normalize_site_title, resolve_site_logo
+from veadk.cli.generated_agent_sidecar_runtime import (
+    GeneratedAgentSidecarRuntimeUnavailable,
+    installed_harness_sidecar_runtime_command,
+)
 from veadk.cli.managed_sidecar_source import (
     ManagedSidecarSourceError,
     stage_managed_sidecar_veadk_source,
@@ -4648,7 +4653,18 @@ def _run_frontend_server(
                     "当前 Studio Runtime 尚未完成 Harness Sidecar APIG 自调用绑定。"
                 ),
             }
-        return {"available": True, "reason": ""}
+        try:
+            runtime_command = installed_harness_sidecar_runtime_command()
+        except GeneratedAgentSidecarRuntimeUnavailable:
+            return {
+                "available": False,
+                "reason": "当前 Studio 环境未安装 Harness Sidecar 调试运行时。",
+            }
+        return {
+            "available": True,
+            "reason": "",
+            "runtimeCommand": runtime_command,
+        }
 
     def _harness_sidecar_deployment_capability() -> dict[str, Any]:
         from veadk.cli.agentkit_cli import AgentKitCliError, agentkit_cli_artifact
@@ -5942,6 +5958,15 @@ def _run_frontend_server(
                             "HARNESS_SIDECAR_APIG_API_KEY"
                         ],
                     }
+                )
+                runtime_command = capability.get("runtimeCommand")
+                if not isinstance(runtime_command, tuple) or not runtime_command:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="当前 Studio 环境未安装 Harness Sidecar 调试运行时。",
+                    )
+                sidecar_env["AGENTKIT_HARNESS_RUNTIME_COMMAND"] = shlex.join(
+                    str(item) for item in runtime_command
                 )
                 requested_plan_hash = draft.harnessSidecar.planHash or ""
                 if (

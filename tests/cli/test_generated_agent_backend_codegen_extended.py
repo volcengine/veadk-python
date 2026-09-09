@@ -19,6 +19,7 @@ import ipaddress
 import io
 import json
 import secrets
+import shlex
 import socket
 import sys
 import zipfile
@@ -2068,6 +2069,15 @@ def test_generated_agent_sidecar_debug_uses_runtime_apig_and_active_plan(
     monkeypatch.setenv("VEADK_STUDIO_HARNESS_SIDECAR_DEBUG_ENABLED", "true")
     monkeypatch.setenv("HARNESS_SIDECAR_APIG_ENDPOINT", runtime_endpoint)
     monkeypatch.setenv("HARNESS_SIDECAR_APIG_API_KEY", runtime_key)
+    monkeypatch.setattr(
+        cli_frontend,
+        "installed_harness_sidecar_runtime_command",
+        lambda: (
+            sys.executable,
+            "-m",
+            "veadk.cli.generated_agent_sidecar_runtime",
+        ),
+    )
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr("platform.machine", lambda: "x86_64")
     monkeypatch.setattr(
@@ -2143,6 +2153,11 @@ def test_generated_agent_sidecar_debug_uses_runtime_apig_and_active_plan(
     assert run_response.status_code == 200
     assert run_response.json()["planHash"] == "sha256:test-plan"
     process_env = _FakeProcess.created[-1].env
+    assert shlex.split(process_env["AGENTKIT_HARNESS_RUNTIME_COMMAND"]) == [
+        sys.executable,
+        "-m",
+        "veadk.cli.generated_agent_sidecar_runtime",
+    ]
     assert process_env["HARNESS_SIDECAR_TRANSPORT"] == "apig_runtime_port"
     assert process_env["HARNESS_SIDECAR_APIG_ENDPOINT"] == runtime_endpoint
     assert process_env["HARNESS_SIDECAR_APIG_API_KEY"] == runtime_key
@@ -2157,6 +2172,92 @@ def test_generated_agent_sidecar_debug_uses_runtime_apig_and_active_plan(
             "X-Faas-Proxy-Port": "18788",
         },
     ]
+
+
+def test_generated_agent_sidecar_debug_fails_before_runner_without_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    if sys.version_info[:2] != (3, 12):
+        pytest.skip("managed Sidecar debug Runtime requires CPython 3.12")
+
+    from veadk.extensions.harness import sidecar
+
+    captured: dict[str, Any] = {}
+    _FakeProcess.created.clear()
+    monkeypatch.setenv("VEADK_STUDIO_HARNESS_SIDECAR_DEBUG_ENABLED", "true")
+    monkeypatch.setenv(
+        "HARNESS_SIDECAR_APIG_ENDPOINT",
+        "https://runtime.example.com",
+    )
+    monkeypatch.setenv("HARNESS_SIDECAR_APIG_API_KEY", "fixture-runtime-key")
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr("platform.machine", lambda: "x86_64")
+
+    def missing_runtime() -> tuple[str, ...]:
+        raise cli_frontend.GeneratedAgentSidecarRuntimeUnavailable
+
+    monkeypatch.setattr(
+        cli_frontend,
+        "installed_harness_sidecar_runtime_command",
+        missing_runtime,
+    )
+    monkeypatch.setattr(
+        sidecar,
+        "studio_harness_runtime_env",
+        lambda *_args, **_kwargs: pytest.fail(
+            "missing runtime must fail before Sidecar environment generation"
+        ),
+    )
+    monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "test-ak")
+    monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "test-sk")
+    monkeypatch.setattr("dotenv.find_dotenv", lambda *args, **kwargs: "")
+    monkeypatch.setattr(
+        "uvicorn.run",
+        lambda app, **kwargs: captured.setdefault("app", app),
+    )
+
+    _run_frontend_server(
+        agents_dir=str(tmp_path),
+        frontend_dir=None,
+        site_logo=None,
+        site_title=None,
+        host="127.0.0.1",
+        port=8765,
+        dev=True,
+        vite=True,
+        oauth2_user_pool=None,
+        oauth2_user_pool_client=None,
+        oauth2_user_pool_uid=None,
+        oauth2_user_pool_client_uid=None,
+        oauth2_redirect_uri=None,
+        oauth2_provider=None,
+        oauth2_provider_label=None,
+        auth_mode="frontend",
+        generated_agent_test_run_ttl=60,
+        open_browser=False,
+    )
+    monkeypatch.setattr("subprocess.Popen", _FakeProcess)
+
+    with TestClient(captured["app"]) as client:
+        run_response = client.post(
+            "/web/generated-agent-test-runs",
+            json={
+                "draft": {
+                    "name": "sidecar-agent",
+                    "instruction": "Answer briefly.",
+                    "harnessSidecar": {
+                        "componentOverrides": {"mcp_resilience": True},
+                    },
+                }
+            },
+        )
+
+    assert run_response.status_code == 409
+    assert run_response.json() == {
+        "detail": "当前 Studio 环境未安装 Harness Sidecar 调试运行时。"
+    }
+    assert _FakeProcess.created == []
 
 
 def test_generated_agent_debug_allows_large_skill_projects(
