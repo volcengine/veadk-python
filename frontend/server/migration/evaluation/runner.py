@@ -965,7 +965,14 @@ def runner_source() -> str:
                 raise RuntimeError("judge thread record is missing")
             last_error = None
             deadline = time.monotonic() + JUDGE_TIMEOUT
-            for _ in range(2):
+            batch_number = batch_start // 10 + 1
+            for judge_attempt in range(1, 3):
+                if judge_attempt > 1:
+                    status(
+                        config,
+                        "judging",
+                        f"正在重新分析第 {batch_number} 批 · 第 {judge_attempt} 次",
+                    )
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     diagnostic(config, "judge_time_budget_exhausted")
@@ -1174,10 +1181,10 @@ def runner_source() -> str:
             )
             case_scores.sort(key=lambda item: (item["score"], item["case_id"]))
             gap_description = (
-                f"报告记录了 {len(critical_mismatches)} 个 critical 严重度证据项，详情见案例证据。"
+                f"报告记录了 {len(critical_mismatches)} 个 critical 严重度证据项，详情见用例证据。"
                 if critical_mismatches
                 else (
-                    "迁移差距与限制已按维度记录在案例证据中。"
+                    "迁移差距与限制已按维度记录在用例证据中。"
                     if scored_slots
                     else "当前证据不足以形成可量化的迁移差距描述。"
                 )
@@ -1279,10 +1286,11 @@ def runner_source() -> str:
                         env=env,
                     ),
                 }
-                status(config, "deploying", "正在构建并部署临时 Runtime")
+                status(config, "deploying", "正在检查临时 Runtime")
                 runtime = runtime_by_name(env, config["runtime_name"])
                 if runtime is None:
                     diagnostic(config, "runtime_deploy_started")
+                    status(config, "deploying", "正在部署临时 Runtime")
                     code, _, _ = run_capped(
                         [
                             "ak",
@@ -1304,11 +1312,15 @@ def runner_source() -> str:
                 runtime_id = str(runtime.get("runtimeId") or runtime.get("runtime_id") or "")
                 if not runtime_id:
                     raise RuntimeError("temporary runtime id is missing")
-                status(config, "executing", "正在执行评测用例")
                 observations = load_execution_results(config, cases)
-                for case in cases:
+                for case_index, case in enumerate(cases, start=1):
                     if case["case_id"] in observations:
                         continue
+                    status(
+                        config,
+                        "executing",
+                        f"正在执行用例 {case_index}/{len(cases)} · 已完成 {len(observations)}",
+                    )
                     observations[case["case_id"]] = execute_case(
                         config,
                         case,
@@ -1316,11 +1328,25 @@ def runner_source() -> str:
                         env,
                     )
                     save_execution_results(config, cases, observations)
+                    succeeded = sum(
+                        item["state"] == "succeeded" for item in observations.values()
+                    )
+                    status(
+                        config,
+                        "executing",
+                        f"已执行 {len(observations)}/{len(cases)} · 成功 {succeeded} · 失败 {len(observations) - succeeded}",
+                    )
                 diagnostic(config, "execution_checkpoint_complete")
-                status(config, "judging", "正在依据迁移前后证据评分")
                 contract = source_contract(project)
                 judged = []
-                for index in range(0, len(cases), 10):
+                batch_total = (len(cases) + 9) // 10
+                for batch_number, index in enumerate(range(0, len(cases), 10), start=1):
+                    batch_end = min(index + 10, len(cases))
+                    status(
+                        config,
+                        "judging",
+                        f"正在分析第 {batch_number}/{batch_total} 批 · 用例 {index + 1}–{batch_end} · {len(config['dimensions'])} 个维度",
+                    )
                     judged.extend(
                         judge_batch(
                             config,
@@ -1331,6 +1357,7 @@ def runner_source() -> str:
                             env,
                         )
                     )
+                status(config, "aggregating", "正在汇总评分与证据")
                 report = build_report(
                     config,
                     cases,
@@ -1341,7 +1368,7 @@ def runner_source() -> str:
                 )
                 atomic_json(config["report_path"], report)
                 diagnostic(config, "report_ready")
-                status(config, "aggregating", "正在保存不可变评测报告")
+                status(config, "aggregating", "正在生成 HTML 评测报告")
             except Exception as error:
                 diagnostic(
                     config,

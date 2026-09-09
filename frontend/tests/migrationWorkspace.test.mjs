@@ -114,7 +114,6 @@ test("configures migration effect evaluation in a drawer with direct user-facing
   assert.match(evaluation, /previousFocus/);
   assert.match(evaluation, /crypto\.randomUUID\(\)/);
   assert.match(evaluation, /priorMessages: \[\]/);
-  assert.match(evaluation, /MigrationEvaluationProgress/);
   assert.match(evaluation, /MigrationEvaluationResult/);
   assert.match(evaluation, /EvaluationExecutionProgress/);
   assert.match(evaluation, /evaluation\.execution\.executingDetail/);
@@ -155,8 +154,11 @@ test("configures migration effect evaluation in a drawer with direct user-facing
   assert.match(workspace, /"aggregating"/);
   assert.doesNotMatch(workspace, /"retrying"|"cleaning"/);
   assert.match(workspace, /<MigrationEvaluationSetup/);
-  assert.match(workspace, /<MigrationEvaluationProgress/);
   assert.match(workspace, /<MigrationEvaluationResult/);
+  assert.match(workspace, /role="tablist"/);
+  assert.match(workspace, /role=\{hasEvaluationTab \? "tabpanel" : "log"\}/);
+  assert.match(workspace, /evaluation\.tabs\.migration/);
+  assert.match(workspace, /evaluation\.tabs\.evaluation/);
   assert.match(workspace, /isEvaluationPollingState/);
   assert.match(workspace, /resumeMigrationEvaluation/);
   assert.match(workspace, /retryMigrationEvaluation/);
@@ -172,9 +174,9 @@ test("configures migration effect evaluation in a drawer with direct user-facing
   );
   assert.doesNotMatch(reportResetEffect, /getMigrationEvaluationReport/);
   assert.match(styles, /@media \(max-width: 760px\)/);
-  assert.equal(zhResource.evaluation.setup.casesTitle, "评测问题");
-  assert.equal(enResource.evaluation.setup.casesTitle, "Evaluation questions");
-  assert.equal(zhResource.evaluation.case.userInput, "问题");
+  assert.equal(zhResource.evaluation.setup.casesTitle, "评测用例");
+  assert.equal(enResource.evaluation.setup.casesTitle, "Evaluation cases");
+  assert.equal(zhResource.evaluation.case.userInput, "用户输入");
   assert.equal(zhResource.evaluation.case.criteria, "必须满足的要求（可选）");
   assert.equal(
     enResource.evaluation.result.evidenceSource.user_criteria,
@@ -182,7 +184,7 @@ test("configures migration effect evaluation in a drawer with direct user-facing
   );
   assert.doesNotMatch(
     JSON.stringify(zhResource.evaluation),
-    /用户会怎么问|真实用户问题|历史对话|前置对话/,
+    /用户会怎么问|真实用户问题|历史对话|前置对话|评测问题|个问题|问题结果/,
   );
   assert.match(zhResource.evaluation.result.scoreScale, /0–100/);
 });
@@ -452,8 +454,8 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
     /className="migration-main__header-actions"[\s\S]*?task\?\.canStop[\s\S]*?t\("actions\.stop"\)/,
   );
   assert.doesNotMatch(source, /className="migration-running-actions"/);
-  assert.match(source, /role="log"/);
-  assert.match(source, /aria-live="polite"/);
+  assert.match(source, /role=\{hasEvaluationTab \? "tabpanel" : "log"\}/);
+  assert.match(source, /aria-live=\{activeTaskTab === "migration" \? "polite" : undefined\}/);
   assert.match(source, /ProjectPreview/);
   assert.match(source, /StudioConfirmDialog/);
   assert.doesNotMatch(source, /window\.confirm/);

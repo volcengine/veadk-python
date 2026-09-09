@@ -266,6 +266,7 @@ def _judge_config(tmp_path: Path) -> dict[str, Any]:
     return {
         "task_id": TASK_ID,
         "attempt": 1,
+        "runtime_name": "migration-eval-test-a1",
         "dimensions": ["semantic_fidelity"],
         "dimension_definitions": [
             {
@@ -285,6 +286,7 @@ def _judge_config(tmp_path: Path) -> dict[str, Any]:
         "batch_root_path": str(result_root / "batches"),
         "execution_results_path": str(result_root / "execution-results.jsonl"),
         "diagnostic_path": str(tmp_path / "diagnostics.log"),
+        "status_path": str(tmp_path / "status.json"),
     }
 
 
@@ -430,6 +432,7 @@ def test_runner_main_completes_with_python_stdlib_and_fake_cli_boundaries(
     config_path = tmp_path / "runner.json"
     config_path.write_text(json.dumps(config), encoding="utf-8")
     commands: list[list[str]] = []
+    progress: list[tuple[str, str]] = []
 
     def run_capped(args: list[str], **_kwargs: object) -> tuple[int, bytes, int]:
         commands.append(args)
@@ -451,6 +454,18 @@ def test_runner_main_completes_with_python_stdlib_and_fake_cli_boundaries(
     namespace["run_capped"] = run_capped
     namespace["runtime_by_name"] = lambda *_args, **_kwargs: next(runtime_reads)
     namespace["cleanup_runtime"] = lambda *_args, **_kwargs: True
+    write_status = namespace["status"]
+
+    def capture_status(
+        status_config: dict[str, Any],
+        state: str,
+        message: str,
+        **kwargs: object,
+    ) -> None:
+        progress.append((state, message))
+        write_status(status_config, state, message, **kwargs)
+
+    namespace["status"] = capture_status
 
     namespace["main"](str(config_path))
 
@@ -461,6 +476,10 @@ def test_runner_main_completes_with_python_stdlib_and_fake_cli_boundaries(
     assert any(command[:2] == ["ak", "launch"] for command in commands)
     assert any(command[:3] == ["ak", "invoke", "run"] for command in commands)
     assert any(command[0] == "codex" for command in commands)
+    assert ("executing", "正在执行用例 1/1 · 已完成 0") in progress
+    assert ("executing", "已执行 1/1 · 成功 1 · 失败 0") in progress
+    assert ("judging", "正在分析第 1/1 批 · 用例 1–1 · 1 个维度") in progress
+    assert ("aggregating", "正在生成 HTML 评测报告") in progress
 
 
 def test_judge_batches_resume_one_bound_thread_and_reuse_cached_batch(

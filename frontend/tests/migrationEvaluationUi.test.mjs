@@ -341,3 +341,70 @@ test("loads and renders the HTML report only after the user opens it", async () 
     await view.cleanup();
   }
 });
+
+test("shows all evaluation steps and the current server-reported action", async () => {
+  const evaluation = {
+    enabled: true,
+    state: "executing",
+    message: "正在执行用例 2/3 · 已完成 1",
+    preset: "standard",
+    dimensions: dimensionIds.slice(0, 3),
+    attempt: 1,
+    dataset: { caseCount: 3 },
+  };
+  const view = await mount((React, props) =>
+    React.createElement(MigrationEvaluationResult, {
+      evaluation,
+      report: null,
+      reportLoading: false,
+      reportError: "",
+      actionError: "",
+      busy: false,
+      reportDownloading: false,
+      onResume() {},
+      onRetry() {},
+      onLoadReport() {},
+      onDownloadReport() {},
+      ...props,
+    }),
+  );
+  try {
+    await view.render();
+    const steps = view.document.querySelectorAll(
+      ".migration-evaluation-execution li",
+    );
+    assert.equal(steps.length, 5);
+    const active = view.document.querySelector(
+      ".migration-evaluation-execution li.is-active",
+    );
+    assert.match(active.textContent, /执行用例/);
+    assert.match(active.textContent, /正在执行用例 2\/3 · 已完成 1/);
+    assert.equal(
+      view.document.querySelectorAll(
+        ".migration-evaluation-execution li.is-complete",
+      ).length,
+      2,
+    );
+
+    await view.render({
+      evaluation: {
+        ...evaluation,
+        state: "pending",
+        message: "等待迁移完成",
+      },
+    });
+    assert.equal(
+      view.document.querySelectorAll(".migration-evaluation-execution li")
+        .length,
+      5,
+    );
+    assert.match(
+      view.document.querySelector(
+        ".migration-evaluation-execution li.is-waiting",
+      ).textContent,
+      /等待迁移完成/,
+    );
+  } finally {
+    await view.cleanup();
+  }
+});

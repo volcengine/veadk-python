@@ -10,6 +10,15 @@
   overflow: hidden;
 }
 
+.migration-evaluation-setup.is-compact {
+  margin-top: 0;
+}
+
+.migration-evaluation-setup.is-compact .migration-evaluation-setup__summary {
+  min-height: 48px;
+  border-top: 0;
+}
+
 .migration-evaluation-setup__switch-row,
 .migration-evaluation-result > header {
   display: flex;
@@ -163,6 +172,10 @@
   font: inherit;
   font-size: 12px;
   cursor: pointer;
+}
+
+.migration-evaluation-result button {
+  min-height: 34px;
 }
 
 .migration-evaluation-setup__summary button:hover:not(:disabled),
@@ -588,89 +601,6 @@
   line-height: 1.45;
 }
 
-.migration-evaluation-progress {
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  margin-top: 8px;
-}
-
-.migration-evaluation-progress > div {
-  position: relative;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.migration-evaluation-progress > div + div::before {
-  position: absolute;
-  right: calc(100% + 7px);
-  width: 4px;
-  height: 1px;
-  background: hsl(var(--border));
-  content: "";
-}
-
-.migration-evaluation-progress > div > span {
-  width: 20px;
-  height: 20px;
-  flex: 0 0 20px;
-  display: grid;
-  place-items: center;
-  border: 1px solid hsl(var(--border));
-  border-radius: 50%;
-  color: hsl(var(--muted-foreground));
-  font-size: 10px;
-}
-
-.migration-evaluation-progress > div > div {
-  min-width: 0;
-  display: flex;
-  align-items: baseline;
-  gap: 5px;
-}
-
-.migration-evaluation-progress strong,
-.migration-evaluation-progress small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.migration-evaluation-progress strong {
-  color: hsl(var(--foreground));
-  font-size: 11px;
-  font-weight: 550;
-}
-
-.migration-evaluation-progress small {
-  color: hsl(var(--muted-foreground));
-  font-size: 10px;
-}
-
-.migration-evaluation-progress .is-active > span {
-  border-color: hsl(var(--primary));
-  color: hsl(var(--primary));
-}
-
-.migration-evaluation-progress .is-complete > span {
-  border-color: hsl(var(--primary));
-  background: hsl(var(--primary));
-  color: hsl(var(--primary-foreground));
-}
-
-.migration-evaluation-progress .is-waiting > span {
-  border-color: hsl(38 78% 44% / 0.65);
-  color: hsl(38 78% 34%);
-}
-
-.migration-evaluation-progress .is-issue > span,
-.migration-evaluation-progress .is-issue small {
-  border-color: hsl(var(--destructive) / 0.5);
-  color: hsl(var(--destructive));
-}
-
 .migration-evaluation-result {
   display: grid;
   gap: 14px;
@@ -717,29 +647,20 @@
 
 .migration-evaluation-execution {
   display: grid;
-  gap: 12px;
-  padding: 12px;
+  padding: 4px 12px;
   border: 1px solid hsl(var(--border));
-  border-radius: 9px;
-  background: hsl(var(--canvas) / 0.32);
+  border-radius: 10px;
+  background: hsl(var(--background));
 }
 
-.migration-evaluation-execution__summary {
-  display: grid;
-  gap: 3px;
-}
-
-.migration-evaluation-execution__summary small,
 .migration-evaluation-execution li small {
   color: hsl(var(--muted-foreground));
-  font-size: 11px;
-  line-height: 1.45;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .migration-evaluation-execution ol {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 8px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -749,23 +670,26 @@
   min-width: 0;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  align-items: start;
-  gap: 7px;
-  padding: 8px;
-  border: 1px solid hsl(var(--border));
-  border-radius: 8px;
-  background: hsl(var(--background));
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 10px 8px;
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+.migration-evaluation-execution li:last-child {
+  border-bottom: 0;
 }
 
 .migration-evaluation-execution li > span {
-  width: 18px;
-  height: 18px;
+  width: 22px;
+  height: 22px;
   display: grid;
   place-items: center;
   border: 1px solid hsl(var(--border));
   border-radius: 50%;
   color: hsl(var(--muted-foreground));
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .migration-evaluation-execution li > div {
@@ -774,13 +698,26 @@
   gap: 3px;
 }
 
+.migration-evaluation-execution li header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .migration-evaluation-execution li strong {
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
 }
 
+.migration-evaluation-execution li b {
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
 .migration-evaluation-execution li.is-active {
-  border-color: hsl(var(--primary) / 0.42);
   background: hsl(var(--primary) / 0.06);
 }
 
@@ -791,8 +728,13 @@
   color: hsl(var(--primary-foreground));
 }
 
+.migration-evaluation-execution li.is-waiting > span {
+  border-color: hsl(38 78% 44% / 0.65);
+  color: hsl(38 78% 34%);
+}
+
 .migration-evaluation-execution li.is-pending {
-  opacity: 0.64;
+  color: hsl(var(--muted-foreground));
 }
 
 .migration-evaluation-report-html__preview {
@@ -877,10 +819,6 @@
     padding: 14px 16px calc(24px + env(safe-area-inset-bottom));
   }
 
-  .migration-evaluation-execution ol {
-    grid-template-columns: 1fr;
-  }
-
   .migration-evaluation-preset,
   .migration-evaluation-dimensions {
     grid-template-columns: 1fr;
@@ -903,16 +841,6 @@
   .migration-evaluation-case > header > div {
     width: 100%;
     flex-wrap: wrap;
-  }
-
-  .migration-evaluation-progress {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  .migration-evaluation-progress > div + div::before {
-    display: none;
   }
 
   .migration-evaluation-report-actions,

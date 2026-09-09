@@ -87,7 +87,6 @@ import {
   createMigrationEvaluationDraft,
   evaluationCasesFromDraft,
   evaluationDraftFromDataset,
-  MigrationEvaluationProgress,
   MigrationEvaluationResult,
   MigrationEvaluationSetup,
   validateMigrationEvaluationDraft,
@@ -116,6 +115,19 @@ function isEvaluationPollingState(task: MigrationTask): boolean {
         "aggregating",
       ].includes(task.evaluation.state),
   );
+}
+
+function evaluationTabStatusKey(task: MigrationTask): string {
+  const state = task.evaluation?.state;
+  if (!state || state === "pending") return "evaluation.tabs.waitingMigration";
+  if (["waiting_dataset", "waiting_environment"].includes(state)) {
+    return "evaluation.tabs.waitingConfiguration";
+  }
+  if (["preparing", "deploying", "executing", "judging", "aggregating"].includes(state)) {
+    return "evaluation.tabs.running";
+  }
+  if (state === "completed") return "evaluation.tabs.completed";
+  return "evaluation.tabs.issue";
 }
 
 const FRAMEWORK_LABEL_KEYS: Record<MigrationFramework, string> = {
@@ -684,6 +696,8 @@ export function MigrationWorkspace({
   const { t, i18n } = useTranslation("migrations");
   const locale = i18n.resolvedLanguage || i18n.language;
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const migrationTabRef = useRef<HTMLButtonElement>(null);
+  const evaluationTabRef = useRef<HTMLButtonElement>(null);
   const preparedAnalysisRef = useRef("");
   const evaluationDraftTaskRef = useRef("");
   const transferAbortRef = useRef<AbortController | null>(null);
@@ -695,6 +709,9 @@ export function MigrationWorkspace({
   const [page, setPage] = useState<"new" | "projects">(initialPage);
   const [focusedProjectId, setFocusedProjectId] = useState(initialProjectId);
   const [selectedTaskId, setSelectedTaskId] = useState("");
+  const [activeTaskTab, setActiveTaskTab] = useState<"migration" | "evaluation">(
+    "migration",
+  );
   const [sourceFile, setSourceFile] = useState<File | null>(null);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [selectedModelId, setSelectedModelId] = useState("");
@@ -1040,9 +1057,14 @@ export function MigrationWorkspace({
   useEffect(() => {
     const conversation = conversationRef.current;
     if (!conversation) return;
-    conversation.scrollTop = conversation.scrollHeight;
+    conversation.scrollTop =
+      activeTaskTab === "evaluation" ? 0 : conversation.scrollHeight;
     handleConversationScroll();
-  }, [selectedTaskId, conversationRef, handleConversationScroll]);
+  }, [activeTaskTab, selectedTaskId, conversationRef, handleConversationScroll]);
+
+  useEffect(() => {
+    setActiveTaskTab("migration");
+  }, [selectedTaskId]);
 
   useEffect(() => {
     setActivity(null);
@@ -1836,6 +1858,7 @@ export function MigrationWorkspace({
   const composerBusy = action === "create" || action === "upload";
   const showComposer = !task || (task.canUpload && !taskEnvironmentExpired);
   const expiryCopy = task ? migrationExpiryCopy(task, now) : null;
+  const hasEvaluationTab = Boolean(task?.evaluation?.enabled);
 
   return (
     <>
@@ -1949,6 +1972,7 @@ export function MigrationWorkspace({
           />
         ) : (
           <main className="migration-main">
+            <div className="migration-main__top">
             <header className="migration-main__header">
             <div>
               <h2>
@@ -1959,28 +1983,6 @@ export function MigrationWorkspace({
                   ? taskDisplayMessage(task)
                   : t("workspace.intro")}
               </p>
-              {task?.evaluation?.enabled || (!task && evaluationDraft.enabled) ? (
-                <MigrationEvaluationProgress
-                  taskState={task?.state ?? null}
-                  evaluation={task?.evaluation ?? null}
-                />
-              ) : null}
-              {task && evaluationDatasetSaveError?.taskId === task.id ? (
-                <div className="migration-inline-error" role="alert">
-                  <span>
-                    {t("evaluation.dataset.saveWarning")} {evaluationDatasetSaveError.message}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => void retryEvaluationDatasetSave()}
-                    disabled={evaluationAction === "dataset"}
-                  >
-                    {evaluationAction === "dataset"
-                      ? t("evaluation.dataset.saving")
-                      : t("evaluation.dataset.retrySave")}
-                  </button>
-                </div>
-              ) : null}
             </div>
             {task ? (
               <div className="migration-main__header-actions">
@@ -2004,13 +2006,72 @@ export function MigrationWorkspace({
             ) : null}
             </header>
 
+            {hasEvaluationTab && task ? (
+              <nav
+                className="migration-task-tabs"
+                role="tablist"
+                aria-label={t("evaluation.tabs.label")}
+              >
+                <button
+                  ref={migrationTabRef}
+                  id="migration-task-tab"
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTaskTab === "migration"}
+                  aria-controls="migration-task-panel"
+                  tabIndex={activeTaskTab === "migration" ? 0 : -1}
+                  className={activeTaskTab === "migration" ? "is-active" : ""}
+                  onClick={() => setActiveTaskTab("migration")}
+                  onKeyDown={(event) => {
+                    if (event.key !== "ArrowRight") return;
+                    event.preventDefault();
+                    setActiveTaskTab("evaluation");
+                    evaluationTabRef.current?.focus();
+                  }}
+                >
+                  {t("evaluation.tabs.migration")}
+                </button>
+                <button
+                  ref={evaluationTabRef}
+                  id="evaluation-task-tab"
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTaskTab === "evaluation"}
+                  aria-controls="evaluation-task-panel"
+                  tabIndex={activeTaskTab === "evaluation" ? 0 : -1}
+                  className={activeTaskTab === "evaluation" ? "is-active" : ""}
+                  onClick={() => setActiveTaskTab("evaluation")}
+                  onKeyDown={(event) => {
+                    if (event.key !== "ArrowLeft") return;
+                    event.preventDefault();
+                    setActiveTaskTab("migration");
+                    migrationTabRef.current?.focus();
+                  }}
+                >
+                  <span>{t("evaluation.tabs.evaluation")}</span>
+                  <small>{t(evaluationTabStatusKey(task))}</small>
+                </button>
+              </nav>
+            ) : null}
+            </div>
+
           <div
-            className="migration-conversation"
-            role="log"
-            aria-live="polite"
+            id={activeTaskTab === "evaluation" ? "evaluation-task-panel" : "migration-task-panel"}
+            className={`migration-conversation${activeTaskTab === "evaluation" ? " is-evaluation" : ""}`}
+            role={hasEvaluationTab ? "tabpanel" : "log"}
+            aria-labelledby={
+              hasEvaluationTab
+                ? activeTaskTab === "evaluation"
+                  ? "evaluation-task-tab"
+                  : "migration-task-tab"
+                : undefined
+            }
+            aria-live={activeTaskTab === "migration" ? "polite" : undefined}
             ref={conversationRef}
             onScroll={handleConversationScroll}
           >
+          {activeTaskTab === "migration" ? (
+            <>
           {!capability?.enabled && !loading ? (
             <div className="migration-system-state is-error" role="alert">
               <strong>{t("capability.unavailable")}</strong>
@@ -2412,20 +2473,49 @@ export function MigrationWorkspace({
             </section>
           ) : null}
 
-          {task?.evaluation?.enabled && isTerminalState(task.state) ? (
-            <MigrationEvaluationResult
-              evaluation={task.evaluation}
-              report={evaluationReport}
-              reportLoading={evaluationReportLoading}
-              reportError={evaluationReportError}
-              actionError={evaluationActionError}
-              busy={Boolean(evaluationAction)}
-              reportDownloading={evaluationAction === "download"}
-              onResume={(environment) => void resumeEvaluation(environment)}
-              onRetry={() => void retryEvaluation()}
-              onLoadReport={() => void loadEvaluationReport()}
-              onDownloadReport={() => void downloadEvaluationReport()}
-            />
+            </>
+          ) : task?.evaluation?.enabled ? (
+            <div className="migration-evaluation-tab">
+              <MigrationEvaluationSetup
+                value={evaluationDraft}
+                onChange={setEvaluationDraft}
+                capability={capability?.evaluation}
+                disabled={Boolean(evaluationAction)}
+                configLocked
+                locked={Boolean(task.evaluation.dataset)}
+                compact
+                errors={evaluationErrors}
+              />
+              {evaluationDatasetSaveError?.taskId === task.id ? (
+                <div className="migration-inline-error" role="alert">
+                  <span>
+                    {t("evaluation.dataset.saveWarning")} {evaluationDatasetSaveError.message}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void retryEvaluationDatasetSave()}
+                    disabled={evaluationAction === "dataset"}
+                  >
+                    {evaluationAction === "dataset"
+                      ? t("evaluation.dataset.saving")
+                      : t("evaluation.dataset.retrySave")}
+                  </button>
+                </div>
+              ) : null}
+              <MigrationEvaluationResult
+                evaluation={task.evaluation}
+                report={evaluationReport}
+                reportLoading={evaluationReportLoading}
+                reportError={evaluationReportError}
+                actionError={evaluationActionError}
+                busy={Boolean(evaluationAction)}
+                reportDownloading={evaluationAction === "download"}
+                onResume={(environment) => void resumeEvaluation(environment)}
+                onRetry={() => void retryEvaluation()}
+                onLoadReport={() => void loadEvaluationReport()}
+                onDownloadReport={() => void downloadEvaluationReport()}
+              />
+            </div>
           ) : null}
 
           {pollError ? (
@@ -2473,7 +2563,7 @@ export function MigrationWorkspace({
           ) : null}
           </div>
 
-          {showComposer && capability?.enabled ? (
+          {activeTaskTab === "migration" && showComposer && capability?.enabled ? (
             <div className="migration-composer">
               <div
                 className={`migration-composer__box${dragging ? " is-dragging" : ""}`}

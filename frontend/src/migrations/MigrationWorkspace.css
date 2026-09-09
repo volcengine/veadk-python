@@ -228,6 +228,11 @@
   background: hsl(var(--background));
 }
 
+.migration-main__top {
+  min-width: 0;
+  background: hsl(var(--panel));
+}
+
 .migration-projects-page__content {
   min-height: 0;
   overflow-y: auto;
@@ -250,6 +255,60 @@
   padding: 10px 28px;
   border-bottom: 1px solid hsl(var(--border));
   background: hsl(var(--panel));
+}
+
+.migration-task-tabs {
+  min-height: 44px;
+  display: flex;
+  align-items: stretch;
+  gap: 26px;
+  padding: 0 28px;
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+.migration-task-tabs button {
+  position: relative;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  font: inherit;
+  font-size: 14px;
+  font-weight: 580;
+  cursor: pointer;
+  transition: color 160ms ease;
+}
+
+.migration-task-tabs button:hover,
+.migration-task-tabs button.is-active {
+  color: hsl(var(--foreground));
+}
+
+.migration-task-tabs button.is-active::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  border-radius: 999px;
+  background: hsl(var(--foreground));
+  content: "";
+}
+
+.migration-task-tabs button:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+
+.migration-task-tabs button small {
+  color: hsl(var(--muted-foreground));
+  font-size: 10.5px;
+  font-weight: 500;
+  white-space: nowrap;
 }
 
 .migration-main__header > div {
@@ -340,6 +399,25 @@
   overflow-y: auto;
   padding: 32px clamp(24px, 3vw, 48px) 44px;
   scrollbar-gutter: stable;
+}
+
+.migration-conversation.is-evaluation {
+  background: hsl(var(--canvas) / 0.34);
+}
+
+.migration-evaluation-tab {
+  width: min(100%, 920px);
+  min-width: 0;
+  display: grid;
+  gap: 16px;
+  box-sizing: border-box;
+  margin: 0 auto;
+}
+
+.migration-evaluation-tab > .migration-inline-error {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0;
 }
 
 .migration-turn,
@@ -1364,6 +1442,10 @@
   }
 
   .migration-main__header {
+    padding-inline: 18px;
+  }
+
+  .migration-task-tabs {
     padding-inline: 18px;
   }
 

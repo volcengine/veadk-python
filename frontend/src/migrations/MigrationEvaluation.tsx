@@ -12,7 +12,6 @@ import type {
   MigrationEvaluationDataset,
   MigrationEvaluationDimensionId,
   MigrationEvaluationStatus,
-  MigrationTaskState,
 } from "../adk/migrations";
 import { TextShimmer } from "../ui/text-shimmer/TextShimmer";
 import { initialEvaluationEnvironmentValues } from "./evaluationEnvironment";
@@ -350,6 +349,7 @@ interface SetupProps {
   disabled: boolean;
   configLocked?: boolean;
   locked?: boolean;
+  compact?: boolean;
   errors: Record<string, string>;
 }
 
@@ -360,6 +360,7 @@ export function MigrationEvaluationSetup({
   disabled,
   configLocked = false,
   locked = false,
+  compact = false,
   errors,
 }: SetupProps) {
   const { t } = useTranslation("migrations");
@@ -429,10 +430,11 @@ export function MigrationEvaluationSetup({
       });
   return (
     <section
-      className="migration-evaluation-setup"
-      aria-labelledby="migration-evaluation-title"
+      className={`migration-evaluation-setup${compact ? " is-compact" : ""}`}
+      aria-labelledby={compact ? undefined : "migration-evaluation-title"}
+      aria-label={compact ? t("evaluation.setup.title") : undefined}
     >
-      <div className="migration-evaluation-setup__switch-row">
+      {!compact ? <div className="migration-evaluation-setup__switch-row">
         <div>
           <strong id="migration-evaluation-title">
             {t("evaluation.setup.title")}
@@ -461,8 +463,8 @@ export function MigrationEvaluationSetup({
               : t("evaluation.setup.off")}
           </b>
         </label>
-      </div>
-      {unavailable ? (
+      </div> : null}
+      {unavailable && !compact ? (
         <p
           id="migration-evaluation-unavailable"
           className="migration-evaluation-hint is-error"
@@ -958,135 +960,6 @@ export function MigrationEvaluationSetup({
   );
 }
 
-type EvaluationProgressTone =
-  | "not-started"
-  | "active"
-  | "complete"
-  | "waiting"
-  | "issue";
-
-interface EvaluationProgressState {
-  tone: EvaluationProgressTone;
-  label: string;
-}
-
-function migrationProgressState(
-  state: MigrationTaskState | null,
-  translate: EvaluationTranslate,
-): EvaluationProgressState {
-  if (!state || state === "awaiting_upload") {
-    return {
-      tone: "not-started",
-      label: translate("evaluation.progress.notStarted"),
-    };
-  }
-  if (["needs_input", "analysis_ready"].includes(state)) {
-    return {
-      tone: "waiting",
-      label: translate("evaluation.progress.waitingConfiguration"),
-    };
-  }
-  if (["analyzing", "migrating", "validating", "packaging"].includes(state)) {
-    return {
-      tone: "active",
-      label: translate("evaluation.progress.inProgress"),
-    };
-  }
-  if (["succeeded", "succeeded_with_warnings"].includes(state)) {
-    return {
-      tone: "complete",
-      label: translate("evaluation.progress.completed"),
-    };
-  }
-  return {
-    tone: "issue",
-    label: translate("evaluation.progress.issue"),
-  };
-}
-
-function evaluationProgressState(
-  evaluation: MigrationEvaluationStatus | null,
-  translate: EvaluationTranslate,
-): EvaluationProgressState {
-  if (!evaluation || ["disabled", "pending"].includes(evaluation.state)) {
-    return {
-      tone: "not-started",
-      label: translate("evaluation.progress.notStarted"),
-    };
-  }
-  if (["waiting_dataset", "waiting_environment"].includes(evaluation.state)) {
-    return {
-      tone: "waiting",
-      label: translate("evaluation.progress.waitingConfiguration"),
-    };
-  }
-  if (
-    [
-      "preparing",
-      "deploying",
-      "executing",
-      "judging",
-      "aggregating",
-    ].includes(evaluation.state)
-  ) {
-    return {
-      tone: "active",
-      label: translate("evaluation.progress.inProgress"),
-    };
-  }
-  if (evaluation.state === "completed") {
-    return {
-      tone: "complete",
-      label: translate("evaluation.progress.completed"),
-    };
-  }
-  return {
-    tone: "issue",
-    label: translate("evaluation.progress.issue"),
-  };
-}
-
-export function MigrationEvaluationProgress({
-  taskState,
-  evaluation,
-}: {
-  taskState: MigrationTaskState | null;
-  evaluation: MigrationEvaluationStatus | null;
-}) {
-  const { t } = useTranslation("migrations");
-  const migration = migrationProgressState(taskState, t);
-  const effectEvaluation = evaluationProgressState(evaluation, t);
-  const stages = [
-    {
-      id: "migration",
-      title: t("evaluation.progress.migration"),
-      ...migration,
-    },
-    {
-      id: "evaluation",
-      title: t("evaluation.progress.evaluation"),
-      ...effectEvaluation,
-    },
-  ];
-  return (
-    <div
-      className="migration-evaluation-progress"
-      role="group"
-      aria-label={t("evaluation.progress.label")}
-    >
-      {stages.map((stage, index) => (
-        <div key={stage.id} className={`is-${stage.tone}`}>
-          <span aria-hidden="true">{index + 1}</span>
-          <div>
-            <strong>{stage.title}</strong>
-            <small>{stage.label}</small>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 interface ResultProps {
   evaluation: MigrationEvaluationStatus;
   report: string | null;
@@ -1118,6 +991,10 @@ function EvaluationExecutionProgress({
   const currentIndex = EVALUATION_EXECUTION_STATES.indexOf(
     evaluation.state as (typeof EVALUATION_EXECUTION_STATES)[number],
   );
+  const completed = evaluation.state === "completed";
+  const waiting = ["pending", "waiting_dataset", "waiting_environment"].includes(
+    evaluation.state,
+  );
   const caseCount = evaluation.dataset?.caseCount ?? 0;
   const dimensionCount = evaluation.dimensions?.length ?? 0;
   const details = {
@@ -1135,30 +1012,39 @@ function EvaluationExecutionProgress({
   return (
     <div
       className="migration-evaluation-execution"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
     >
-      <div
-        className="migration-evaluation-execution__summary"
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-      >
-        <TextShimmer>{t(`evaluation.state.${evaluation.state}`)}</TextShimmer>
-        <small>{details[EVALUATION_EXECUTION_STATES[currentIndex]]}</small>
-      </div>
       <ol>
         {EVALUATION_EXECUTION_STATES.map((state, index) => {
           const tone =
-            index < currentIndex
+            completed || index < currentIndex
               ? "complete"
               : index === currentIndex
                 ? "active"
+                : waiting && index === 0
+                  ? "waiting"
                 : "pending";
+          const status =
+            tone === "complete"
+              ? t("evaluation.execution.complete")
+              : tone === "active"
+                ? t("evaluation.execution.running")
+                : t("evaluation.execution.waiting");
+          const currentDetail =
+            tone === "active" || tone === "waiting"
+              ? evaluation.message || details[state]
+              : "";
           return (
             <li key={state} className={`is-${tone}`}>
               <span aria-hidden="true">{index + 1}</span>
               <div>
-                <strong>{t(`evaluation.execution.${state}`)}</strong>
-                <small>{details[state]}</small>
+                <header>
+                  <strong>{t(`evaluation.execution.${state}`)}</strong>
+                  <b>{status}</b>
+                </header>
+                {currentDetail ? <small>{currentDetail}</small> : null}
               </div>
             </li>
           );
@@ -1200,13 +1086,6 @@ export function MigrationEvaluationResult({
     setReportOpen(false);
   }, [evaluation.report?.versionId]);
   if (!evaluation.enabled) return null;
-  const active = [
-    "preparing",
-    "deploying",
-    "executing",
-    "judging",
-    "aggregating",
-  ].includes(evaluation.state);
   const environmentReady = required.every((key) => Boolean(environment[key]));
   return (
     <section
@@ -1225,10 +1104,7 @@ export function MigrationEvaluationResult({
           </small>
         ) : null}
       </header>
-      {active ? <EvaluationExecutionProgress evaluation={evaluation} /> : null}
-      {evaluation.state === "pending" ? (
-        <p>{t("evaluation.result.pending")}</p>
-      ) : null}
+      <EvaluationExecutionProgress evaluation={evaluation} />
       {evaluation.state === "waiting_environment" ? (
         <div className="migration-evaluation-environment">
           <p>{t("evaluation.environment.description")}</p>

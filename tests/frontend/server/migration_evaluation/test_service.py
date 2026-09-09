@@ -605,7 +605,8 @@ def test_aggregating_report_is_validated_persisted_and_then_completed() -> None:
     assert preview == downloaded
     assert "<!doctype html>" in downloaded.decode()
     assert "AgentKit CLI：0.52.16" in downloaded.decode()
-    assert "问题结果与证据" in downloaded.decode()
+    assert "用例结果与证据" in downloaded.decode()
+    assert "个问题" not in downloaded.decode()
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in downloaded.decode()
     assert "<script>alert(1)</script>" not in downloaded.decode()
     assert "通过" not in downloaded.decode()
