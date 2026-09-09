@@ -4560,6 +4560,7 @@ def test_legacy_runtime_capability_recovers_environment_and_agentkit_toolset(
                             "name": "legacy-agent",
                             "instruction": "Published instruction",
                             "type": "llm",
+                            "runtime": "codex",
                             "children": [],
                         },
                     }
@@ -4623,6 +4624,7 @@ def test_legacy_runtime_capability_recovers_environment_and_agentkit_toolset(
     assert payload["canUpdate"] is True
     assert payload["editMode"] == "source-preserving"
     assert payload["recoverySource"] == "legacy-runtime"
+    assert payload["agent"]["draft"]["runtime"] == "codex"
     assert payload["agent"]["sourceImage"].endswith("@sha256:" + "a" * 64)
     assert [item["name"] for item in payload["agent"]["draft"]["mcpTools"]] == [
         "orders",
@@ -4639,6 +4641,7 @@ def test_legacy_runtime_capability_recovers_environment_and_agentkit_toolset(
     assert fallback_payload["canUpdate"] is True
     assert fallback_payload["recoveryStatus"] == "complete"
     assert fallback_payload["editMode"] == "source-preserving"
+    assert fallback_payload["agent"]["draft"]["runtime"] == "codex"
     assert fallback_payload["agent"]["sourceImage"].endswith("@sha256:" + "b" * 64)
     assert fallback_payload["agent"]["draft"]["selectedSkills"] == [
         {

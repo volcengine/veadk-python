@@ -9,6 +9,7 @@ export interface RuntimeModelConfiguration {
 }
 
 export interface RuntimeAgentIntrospection {
+  id?: string;
   name?: string;
   description?: string;
   instruction?: string;
@@ -17,6 +18,7 @@ export interface RuntimeAgentIntrospection {
   model?: string;
   tools?: readonly string[];
   skills?: readonly { name: string }[];
+  path?: readonly string[];
   children?: readonly RuntimeAgentIntrospection[];
 }
 
@@ -29,6 +31,46 @@ function runtimeFromValue(
   return typeof value === "string" && AGENT_RUNTIMES.has(value as AgentRuntime)
     ? (value as AgentRuntime)
     : fallback;
+}
+
+function runtimeNodeIdentityKeys(
+  node: Pick<RuntimeAgentIntrospection, "id" | "name" | "path"> | AgentDraft,
+): string[] {
+  const keys = [
+    "id" in node ? node.id : undefined,
+    node.name,
+    "path" in node && Array.isArray(node.path)
+      ? node.path[node.path.length - 1]
+      : undefined,
+  ]
+    .map((value) => value?.trim())
+    .filter((value): value is string => Boolean(value));
+  return Array.from(new Set(keys));
+}
+
+function matchingRuntimeChild(
+  draftChild: AgentDraft,
+  runtimeChildren: readonly RuntimeAgentIntrospection[],
+  index: number,
+  usedIndexes: Set<number>,
+): RuntimeAgentIntrospection | undefined {
+  const draftKeys = new Set(runtimeNodeIdentityKeys(draftChild));
+  if (draftKeys.size > 0) {
+    const matchedIndex = runtimeChildren.findIndex(
+      (runtimeChild, runtimeIndex) =>
+        !usedIndexes.has(runtimeIndex) &&
+        runtimeNodeIdentityKeys(runtimeChild).some((key) => draftKeys.has(key)),
+    );
+    if (matchedIndex >= 0) {
+      usedIndexes.add(matchedIndex);
+      return runtimeChildren[matchedIndex];
+    }
+  }
+  if (index < runtimeChildren.length && !usedIndexes.has(index)) {
+    usedIndexes.add(index);
+    return runtimeChildren[index];
+  }
+  return undefined;
 }
 
 export interface RuntimeCloudAgent extends RuntimeAgentIntrospection {
@@ -113,6 +155,7 @@ export function applyRuntimeAgentIntrospection(
     runtimeNode?.model || fallbackRoot?.model,
   );
   const runtimeChildren = runtimeNode?.children ?? [];
+  const usedRuntimeChildIndexes = new Set<number>();
   const runtimeAgentType = runtimeNode?.type;
   const agentType =
     editableDraft.agentType === "a2a" &&
@@ -142,7 +185,7 @@ export function applyRuntimeAgentIntrospection(
     subAgents: editableDraft.subAgents.map((child, index) =>
       applyRuntimeAgentIntrospection(
         child,
-        runtimeChildren[index],
+        matchingRuntimeChild(child, runtimeChildren, index, usedRuntimeChildIndexes),
         undefined,
         preserveDraftInstruction,
       ),

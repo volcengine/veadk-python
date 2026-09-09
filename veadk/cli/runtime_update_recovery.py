@@ -81,6 +81,7 @@ _PUBLIC_RUNTIME_ENV_KEYS = frozenset(
 )
 _URL_RUNTIME_ENV_KEYS = frozenset({"MODEL_AGENT_API_BASE"})
 _AGENT_TYPES = frozenset({"llm", "sequential", "parallel", "loop", "a2a"})
+_AGENT_RUNTIMES = frozenset({"adk", "codex", "piagent"})
 _SEARCH_SOURCES = frozenset({"knowledge", "memory", "web"})
 _COMPONENT_FIELDS = ("kind", "name", "description", "backend", "source")
 _MAX_INTROSPECTION_ITEMS = 256
@@ -331,6 +332,11 @@ def _optional_text(value: Any) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def _safe_agent_runtime(value: Any) -> str | None:
+    runtime = _optional_text(value)
+    return runtime if runtime in _AGENT_RUNTIMES else None
+
+
 def _safe_string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
@@ -383,6 +389,9 @@ def _safe_graph_node(value: Any, *, depth: int = 0) -> dict[str, Any] | None:
     agent_type = _optional_text(value.get("type"))
     if agent_type in _AGENT_TYPES:
         node["type"] = agent_type
+    runtime = _safe_agent_runtime(value.get("runtime"))
+    if agent_type == "llm" and runtime is not None:
+        node["runtime"] = runtime
     if isinstance(value.get("tools"), list):
         node["tools"] = _safe_string_list(value.get("tools"))
     if isinstance(value.get("skills"), list):
@@ -401,6 +410,88 @@ def _safe_graph_node(value: Any, *, depth: int = 0) -> dict[str, Any] | None:
             if (child := _safe_graph_node(item, depth=depth + 1)) is not None
         ]
     return node
+
+
+def _node_identity_keys(node: Mapping[str, Any]) -> tuple[str, ...]:
+    keys: list[str] = []
+    for field in ("id", "name"):
+        value = _optional_text(node.get(field))
+        if value:
+            keys.append(value)
+    path = node.get("path")
+    if isinstance(path, list) and path:
+        tail = path[-1]
+        if isinstance(tail, str) and tail:
+            keys.append(tail)
+    return tuple(dict.fromkeys(keys))
+
+
+def _matching_graph_child(
+    draft_child: Mapping[str, Any],
+    graph_children: list[Any],
+    *,
+    index: int,
+    used_indexes: set[int],
+) -> Mapping[str, Any] | None:
+    draft_keys = set(_node_identity_keys(draft_child))
+    if draft_keys:
+        for graph_index, graph_child in enumerate(graph_children):
+            if graph_index in used_indexes or not isinstance(graph_child, Mapping):
+                continue
+            if draft_keys.intersection(_node_identity_keys(graph_child)):
+                used_indexes.add(graph_index)
+                return graph_child
+    if index < len(graph_children) and index not in used_indexes:
+        graph_child = graph_children[index]
+        if isinstance(graph_child, Mapping):
+            used_indexes.add(index)
+            return graph_child
+    return None
+
+
+def _apply_graph_runtime_defaults(
+    draft_node: dict[str, Any],
+    graph_node: Mapping[str, Any] | None,
+    *,
+    depth: int = 0,
+) -> None:
+    if graph_node is None or depth > _MAX_AGENT_GRAPH_DEPTH:
+        return
+    draft_agent_type = _optional_text(draft_node.get("agentType"))
+    graph_agent_type = _optional_text(graph_node.get("type"))
+    agent_type = draft_agent_type or graph_agent_type or "llm"
+    runtime = _safe_agent_runtime(graph_node.get("runtime"))
+    if agent_type == "llm" and runtime is not None:
+        draft_node["runtime"] = runtime
+
+    raw_draft_children = draft_node.get("subAgents")
+    raw_graph_children = graph_node.get("children")
+    if not isinstance(raw_draft_children, list) or not isinstance(
+        raw_graph_children, list
+    ):
+        return
+    used_graph_indexes: set[int] = set()
+    for index, draft_child in enumerate(raw_draft_children[:_MAX_INTROSPECTION_ITEMS]):
+        if not isinstance(draft_child, dict):
+            continue
+        graph_child = _matching_graph_child(
+            draft_child,
+            raw_graph_children[:_MAX_INTROSPECTION_ITEMS],
+            index=index,
+            used_indexes=used_graph_indexes,
+        )
+        _apply_graph_runtime_defaults(draft_child, graph_child, depth=depth + 1)
+
+
+def _draft_with_graph_runtime_defaults(
+    raw_draft: Any,
+    graph: Any,
+) -> Any:
+    if not isinstance(raw_draft, Mapping) or not isinstance(graph, Mapping):
+        return raw_draft
+    draft = copy.deepcopy(dict(raw_draft))
+    _apply_graph_runtime_defaults(draft, graph)
+    return draft
 
 
 def sanitize_runtime_agent_info(agent_info: Mapping[str, Any]) -> dict[str, Any]:
@@ -512,7 +603,9 @@ def assess_legacy_recovered_agent(
             agent=safe_agent,
         )
     try:
-        draft = _validated_sanitized_draft(recovered_draft)
+        draft = _validated_sanitized_draft(
+            _draft_with_graph_runtime_defaults(recovered_draft, safe_agent.get("graph"))
+        )
     except ValidationError as error:
         logger.info(
             "legacy Runtime draft validation rejected issues=%s",
@@ -625,7 +718,9 @@ def assess_runtime_update_agent(
         )
 
     try:
-        draft = _validated_sanitized_draft(raw_draft)
+        draft = _validated_sanitized_draft(
+            _draft_with_graph_runtime_defaults(raw_draft, safe_agent.get("graph"))
+        )
     except (RecursionError, TypeError, ValueError):
         return RuntimeUpdateRecovery(
             can_update=False,

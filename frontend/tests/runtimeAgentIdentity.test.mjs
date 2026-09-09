@@ -128,6 +128,64 @@ test("published draft instructions are not replaced by managed Runtime rules", (
   assert.equal(restored.instruction, "User-authored instruction.");
 });
 
+test("Runtime update hydrates missing draft runtimes from graph identity", () => {
+  const restored = runtimeAgentDraftFromCloud(
+    {
+      appName: "loop_app",
+      name: "loop_agent",
+      draft: {
+        name: "loop_agent",
+        description: "loop description",
+        instruction: "coordinate workers",
+        agentType: "loop",
+        tools: [],
+        skills: [],
+        memory: { shortTerm: false, longTerm: false },
+        knowledgebase: false,
+        tracing: false,
+        subAgents: [
+          {
+            ...cachedRuntimeDraft("runner"),
+            runtime: undefined,
+          },
+          {
+            ...cachedRuntimeDraft("coder"),
+            runtime: undefined,
+          },
+        ],
+      },
+      graph: {
+        id: "root",
+        name: "loop_agent",
+        type: "loop",
+        children: [
+          {
+            id: "coder",
+            name: "Coder",
+            type: "llm",
+            runtime: "codex",
+            children: [],
+          },
+          {
+            id: "runner",
+            name: "Runner",
+            type: "llm",
+            runtime: "piagent",
+            children: [],
+          },
+        ],
+      },
+    },
+    "volcengine",
+  );
+
+  assert.equal(restored.agentType, "loop");
+  assert.equal(restored.subAgents[0].name, "Runner");
+  assert.equal(restored.subAgents[0].runtime, "piagent");
+  assert.equal(restored.subAgents[1].name, "Coder");
+  assert.equal(restored.subAgents[1].runtime, "codex");
+});
+
 const managedRuntimeRules = ({
   escaped = false,
   heading = "动态子智能体协作规则：",

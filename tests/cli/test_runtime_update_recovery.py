@@ -216,6 +216,96 @@ def test_runtime_agent_info_keeps_only_read_only_introspection_fields() -> None:
         assert protected not in serialized
 
 
+def test_runtime_agent_info_preserves_safe_llm_runtime_in_graph() -> None:
+    sanitized = sanitize_runtime_agent_info(
+        {
+            "name": "published-agent",
+            "graph": {
+                "id": "root",
+                "name": "published-agent",
+                "type": "loop",
+                "runtime": "codex",
+                "children": [
+                    {
+                        "id": "writer",
+                        "name": "writer",
+                        "type": "llm",
+                        "runtime": "codex",
+                    },
+                    {
+                        "id": "reviewer",
+                        "name": "reviewer",
+                        "type": "llm",
+                        "runtime": "piagent",
+                    },
+                    {
+                        "id": "unsafe",
+                        "name": "unsafe",
+                        "type": "llm",
+                        "runtime": "shell",
+                    },
+                ],
+            },
+        }
+    )
+
+    graph = sanitized["graph"]
+    assert "runtime" not in graph
+    assert graph["children"][0]["runtime"] == "codex"
+    assert graph["children"][1]["runtime"] == "piagent"
+    assert "runtime" not in graph["children"][2]
+
+
+def test_agent_info_draft_recovers_llm_runtime_from_graph() -> None:
+    recovery = assess_runtime_update_agent(
+        agent_info={
+            "name": "loop-agent",
+            "graph": {
+                "id": "root",
+                "name": "loop-agent",
+                "type": "loop",
+                "children": [
+                    {
+                        "id": "coder",
+                        "name": "Coder",
+                        "type": "llm",
+                        "runtime": "codex",
+                    },
+                    {
+                        "id": "runner",
+                        "name": "Runner",
+                        "type": "llm",
+                        "runtime": "piagent",
+                    },
+                ],
+            },
+            "draft": {
+                "name": "loop-agent",
+                "agentType": "loop",
+                "subAgents": [
+                    {
+                        "name": "Runner",
+                        "agentType": "llm",
+                    },
+                    {
+                        "name": "Coder",
+                        "agentType": "llm",
+                    },
+                ],
+            },
+        },
+        fallback_draft=None,
+        fallback_available=False,
+        runtime_id="runtime-loop",
+        current_version=2,
+    )
+
+    assert recovery.can_update is True
+    assert recovery.agent["draft"]["agentType"] == "loop"
+    assert recovery.agent["draft"]["subAgents"][0]["runtime"] == "piagent"
+    assert recovery.agent["draft"]["subAgents"][1]["runtime"] == "codex"
+
+
 def test_workflow_snapshot_drops_unrecognized_fields_before_returning_to_browser() -> (
     None
 ):

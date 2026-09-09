@@ -11693,7 +11693,7 @@ def _run_frontend_server(
             agent_type = "llm"
         raw_children = node.get("children")
         children: list[Any] = raw_children if isinstance(raw_children, list) else []
-        return {
+        draft = {
             "name": str(node.get("name") or "legacy-agent"),
             "description": str(node.get("description") or ""),
             "instruction": str(node.get("instruction") or ""),
@@ -11714,6 +11714,10 @@ def _run_frontend_server(
                 if isinstance(child, Mapping)
             ],
         }
+        runtime = str(node.get("runtime") or "")
+        if agent_type == "llm" and runtime in {"adk", "codex", "piagent"}:
+            draft["runtime"] = runtime
+        return draft
 
     def _legacy_harness_intent(environment: Mapping[str, str]) -> dict[str, Any] | None:
         enabled = str(environment.get("HARNESS_SIDECAR_ENABLED") or "").strip().lower()
