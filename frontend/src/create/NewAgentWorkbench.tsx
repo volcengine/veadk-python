@@ -698,7 +698,7 @@ export function NewAgentWorkbench({
   const [maxInstance, setMaxInstance] = useState(
     sessionStorage === "in-memory" ? "1" : "5",
   );
-  const [createEvaluationSets, setCreateEvaluationSets] = useState(true);
+  const [createEvaluationSets, setCreateEvaluationSets] = useState(false);
   const [deployResources, setDeployResources] = useState<DeployResources>(
     DEFAULT_DEPLOY_RESOURCES,
   );

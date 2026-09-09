@@ -1217,6 +1217,158 @@ def test_cloud_generated_debug_preserves_mcp_connection_error(
     assert response.json()["detail"] == original_detail
 
 
+@pytest.mark.parametrize(
+    (
+        "credential_storage",
+        "tool_name",
+        "edited_url",
+        "expected_status",
+        "expect_credential",
+    ),
+    [
+        ("reference-env", "jvmdiag", "https://8.8.8.8/mcp", 200, True),
+        ("reference-env", "", "https://8.8.8.8/mcp", 200, True),
+        ("servers-json", "jvmdiag", "https://8.8.8.8/mcp", 200, True),
+        ("servers-json", "", "https://8.8.8.8/mcp", 200, True),
+        (
+            "servers-json",
+            "jvmdiag",
+            "https://8.8.8.8/changed-mcp",
+            422,
+            False,
+        ),
+    ],
+)
+def test_generated_debug_applies_published_mcp_credential_contract_before_discovery(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    credential_storage: str,
+    tool_name: str,
+    edited_url: str,
+    expected_status: int,
+    expect_credential: bool,
+) -> None:
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+    from veadk.cli.generated_agent_mcp import McpDebugConnectionError
+
+    credential_reference = "MCP_LEGACY_AGENT_JVMDIAG_AUTH_TOKEN"
+    credential_value = "server-retained-debug-secret"
+    published_draft = {
+        "name": "legacy_agent",
+        "description": "Existing Agent",
+        "instruction": "Use the diagnostic MCP.",
+        "mcpTools": [
+            {
+                "name": tool_name,
+                "transport": "http",
+                "url": "https://8.8.8.8/mcp",
+                "authTokenEnv": credential_reference,
+            }
+        ],
+    }
+    runtime_envs = [SimpleNamespace(key=credential_reference, value=credential_value)]
+    if credential_storage == "servers-json":
+        runtime_envs = [
+            SimpleNamespace(
+                key="MCP_SERVERS_JSON",
+                value=json.dumps(
+                    [
+                        {
+                            "name": tool_name or "mcp",
+                            "url": "https://8.8.8.8/mcp",
+                            "headers": {"Authorization": f"Bearer {credential_value}"},
+                        }
+                    ]
+                ),
+            )
+        ]
+    runtime = SimpleNamespace(
+        runtime_id="runtime-debug-mcp",
+        runtime_name="legacy-agent-runtime",
+        current_version_number=3,
+        tags=[],
+        envs=runtime_envs,
+        network_configurations=[
+            SimpleNamespace(
+                endpoint="https://runtime.example.com",
+                network_type="public",
+            )
+        ],
+        authorizer_configuration=SimpleNamespace(
+            key_auth=SimpleNamespace(api_key="runtime-api-key"),
+            custom_jwt_authorizer=None,
+        ),
+    )
+
+    monkeypatch.setattr(
+        AgentkitRuntimeClient,
+        "get_runtime",
+        lambda _self, _request: runtime,
+    )
+
+    captured_discovery_env: dict[str, str] = {}
+
+    async def capture_mcp_discovery(draft, env_values=None):
+        captured_discovery_env.update(env_values or {})
+        if not expect_credential:
+            raise McpDebugConnectionError("changed MCP endpoint rejected")
+        return draft
+
+    monkeypatch.setattr(
+        "veadk.cli.generated_agent_mcp.resolve_debug_mcp_endpoints",
+        capture_mcp_discovery,
+    )
+
+    class RuntimeDebugClient(_FakeAsyncClient):
+        async def request(self, _method: str, url: str, **_kwargs: Any):
+            if url.endswith("/list-apps"):
+                return _FakeResponse(json_data=["legacy_agent"])
+            if url.endswith("/web/agent-info/legacy_agent"):
+                return _FakeResponse(
+                    json_data={
+                        "name": "legacy_agent",
+                        "description": "Existing Agent",
+                        "draft": published_draft,
+                    }
+                )
+            raise AssertionError(f"unexpected Runtime request path: {url}")
+
+    monkeypatch.setenv("_FAAS_FUNC_ID", "function-test")
+    app = _generated_debug_app(monkeypatch, tmp_path)
+    _FakeProcess.created.clear()
+    _FakeAsyncClient.listed_apps = ["legacy_agent"]
+    monkeypatch.setattr("subprocess.Popen", _FakeProcess)
+    monkeypatch.setattr("httpx.AsyncClient", RuntimeDebugClient)
+    real_socket = socket.socket
+    monkeypatch.setattr(
+        "socket.socket",
+        lambda *args, **kwargs: (
+            real_socket(*args, **kwargs)
+            if len(args) >= 4 or "fileno" in kwargs
+            else _FakeSocket(*args, **kwargs)
+        ),
+    )
+
+    with TestClient(app) as client:
+        edited_draft = json.loads(json.dumps(published_draft))
+        edited_draft["mcpTools"][0]["url"] = edited_url
+        response = client.post(
+            "/web/generated-agent-test-runs",
+            json={
+                "draft": edited_draft,
+                "runtimeId": runtime.runtime_id,
+                "runtimeRegion": "cn-shanghai",
+            },
+        )
+
+    assert response.status_code == expected_status, response.text
+    if expect_credential:
+        assert captured_discovery_env[credential_reference] == credential_value
+    else:
+        assert credential_reference not in captured_discovery_env
+    assert credential_value not in response.text
+
+
 def test_debug_text_redacts_environment_and_inline_markers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

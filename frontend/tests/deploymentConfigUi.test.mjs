@@ -22,6 +22,10 @@ const customCreateSource = readFileSync(
   new URL("../src/create/CustomCreate.tsx", import.meta.url),
   "utf8",
 );
+const newAgentWorkbenchSource = readFileSync(
+  new URL("../src/create/NewAgentWorkbench.tsx", import.meta.url),
+  "utf8",
+);
 const agentTypeMetaSource = readFileSync(
   new URL("../src/create/agentTypeMeta.tsx", import.meta.url),
   "utf8",
@@ -428,10 +432,14 @@ test("requires explicit confirmation before starting deployment", () => {
   );
 });
 
-test("creates feedback evaluation sets by default and sends the deployment choice", () => {
+test("leaves feedback evaluation sets off by default in both deployment workbenches", () => {
   assert.match(
     projectPreviewSource,
-    /useState\(true\)[\s\S]*?projectPreview\.createEvaluationSets[\s\S]*?projectPreview\.createEvaluationSetsHint/,
+    /const \[createEvaluationSets, setCreateEvaluationSets\] = useState\(false\);/,
+  );
+  assert.match(
+    newAgentWorkbenchSource,
+    /const \[createEvaluationSets, setCreateEvaluationSets\] = useState\(false\);/,
   );
   assert.match(
     projectPreviewSource,
