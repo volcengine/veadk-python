@@ -30,6 +30,7 @@ import {
 import type { AgentProject } from "../create/project";
 import type {
   AgentDraft,
+  McpCredentialValue,
   NetworkConfig,
   SelectedSkill,
 } from "../create/types";
@@ -4580,6 +4581,57 @@ export interface RuntimeUpdateCapability {
     draft?: AgentDraft;
     sourceImage?: string;
   } | null;
+}
+
+/** Fetch the exact MCP credentials for one authorized update snapshot. */
+export async function getRuntimeMcpCredentials({
+  runtimeId,
+  region,
+  appName,
+  etag,
+  signal,
+}: {
+  runtimeId: string;
+  region: string;
+  appName: string;
+  etag: string;
+  signal?: AbortSignal;
+}): Promise<McpCredentialValue[]> {
+  const res = await apiFetch("/web/runtime-mcp-credentials", {
+    method: "POST",
+    cache: "no-store",
+    signal,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ runtimeId, region, appName, etag }),
+  });
+  if (!res.ok) {
+    throw new Error(
+      await httpErrorMessage(res, adkT("client.loadMcpCredentialsFailed")),
+    );
+  }
+  const payload = (await res.json().catch(() => null)) as {
+    credentials?: unknown;
+  } | null;
+  if (!Array.isArray(payload?.credentials)) {
+    throw new Error(adkT("client.invalidMcpCredentials"));
+  }
+  return payload.credentials.map((item) => {
+    if (!item || typeof item !== "object") {
+      throw new Error(adkT("client.invalidMcpCredentials"));
+    }
+    const raw = item as Record<string, unknown>;
+    const credential = {
+      agentName: raw.agentName,
+      name: raw.name,
+      url: raw.url,
+      authTokenEnv: raw.authTokenEnv,
+      value: raw.value,
+    };
+    if (Object.values(credential).some((value) => typeof value !== "string")) {
+      throw new Error(adkT("client.invalidMcpCredentials"));
+    }
+    return credential as McpCredentialValue;
+  });
 }
 
 interface RuntimeUpdateCapabilityRequest {

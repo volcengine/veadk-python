@@ -1237,6 +1237,15 @@ class _DeleteFeedbackCasesRequest(BaseModel):
     item_ids: list[str] = Field(alias="itemIds", min_length=1, max_length=100)
 
 
+class _RuntimeMcpCredentialsRequest(BaseModel):
+    """Exact update snapshot whose MCP credentials should enter the editor."""
+
+    runtime_id: str = Field(alias="runtimeId", min_length=1, max_length=128)
+    region: str = Field(default="", min_length=0, max_length=64)
+    app_name: str = Field(alias="appName", min_length=1, max_length=128)
+    etag: str = Field(min_length=1, max_length=256)
+
+
 def _mount_session_trace_route(app: Any, memory_exporter: Any) -> None:
     """Expose the session trace endpoint used by the VeADK frontend."""
 
@@ -4557,6 +4566,7 @@ def _run_frontend_server(
         ImageReference,
         LegacyRecoveryError,
         merge_mcp_recoveries,
+        mcp_editor_credential_values,
         mcp_editor_draft_without_credentials,
         mcp_reuse_supplied_credentials,
         mcp_secret_values_for_draft_references,
@@ -12752,6 +12762,81 @@ def _run_frontend_server(
         return JSONResponse(
             await _runtime_update_editor_payload(result, region=region),
             headers=no_store_headers,
+        )
+
+    @app.post("/web/runtime-mcp-credentials")
+    async def _web_runtime_mcp_credentials(
+        credential_request: _RuntimeMcpCredentialsRequest,
+        request: Request,
+    ) -> Response:
+        """Restore MCP values only for one authorized, immutable edit snapshot."""
+
+        _require_agent_management(request)
+        region = _coerce_cloud_region(credential_request.region)
+        try:
+            payload, runtime = await _runtime_update_capability_details(
+                request,
+                runtime_id=credential_request.runtime_id,
+                region=region,
+                app_name=credential_request.app_name,
+            )
+            if (
+                not payload.get("canUpdate")
+                or payload.get("recoveryStatus") not in {"complete", "draft-only"}
+                or payload.get("etag") != credential_request.etag
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Runtime 更新快照已变化，请重新打开智能体详情。",
+                )
+            agent = payload.get("agent")
+            draft = agent.get("draft") if isinstance(agent, Mapping) else None
+            if not isinstance(draft, Mapping):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Runtime 的 MCP 配置无法恢复，请重新打开智能体详情。",
+                )
+
+            references = mcp_auth_environment_keys(draft)
+            environment = _legacy_runtime_environment(runtime)
+            recovered_values = {
+                reference: environment[reference]
+                for reference in references
+                if environment.get(reference)
+            }
+            if set(references).difference(recovered_values):
+                recovery, legacy_values = _legacy_mcp_state(runtime, region)
+                recovered_values.update(
+                    mcp_secret_values_for_draft_references(
+                        draft=draft,
+                        recovery=recovery,
+                        recovered_values=legacy_values,
+                    )
+                )
+            if set(references).difference(recovered_values):
+                raise LegacyRecoveryError("legacy_mcp_credential_missing")
+            credentials = mcp_editor_credential_values(
+                draft=draft,
+                recovered_values=recovered_values,
+            )
+        except HTTPException:
+            raise
+        except LegacyRecoveryError as error:
+            logger.info(
+                "MCP editor credential recovery unavailable runtime_id=%s "
+                "region=%s code=%s",
+                credential_request.runtime_id,
+                region,
+                error.code,
+            )
+            raise HTTPException(
+                status_code=409,
+                detail="Runtime 的 MCP 认证信息无法恢复，请重新配置 Key 后重试。",
+            ) from error
+
+        return JSONResponse(
+            {"credentials": credentials},
+            headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
         )
 
     @app.post("/web/evaluation/feedback")

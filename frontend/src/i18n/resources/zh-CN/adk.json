@@ -510,6 +510,8 @@
     "loadA2aCardFailed": "读取 A2A Agent Card 失败",
     "loadRuntimeApiKeyFailed": "读取 Runtime API Key 失败",
     "runtimeApiKeyMissing": "Runtime 未返回可用的 API Key",
+    "loadMcpCredentialsFailed": "读取 MCP 认证信息失败",
+    "invalidMcpCredentials": "Studio 返回的 MCP 认证信息格式无效",
     "deleteFailed": "删除失败 ({{status}})",
     "runtimeManageForbidden": "当前账号没有管理该 Runtime 的权限。",
     "runtimeNotFound": "该 Runtime 不存在或已被删除。",

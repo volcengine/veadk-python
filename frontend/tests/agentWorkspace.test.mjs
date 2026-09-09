@@ -700,6 +700,8 @@ test("runtime updates use the Agent selected in management instead of the active
   assert.match(clientSource, /network: NetworkConfig/);
   assert.match(clientSource, /agent\?:\s*\{[\s\S]*?\}\s*\| null/);
   assert.match(clientSource, /export function getRuntimeUpdateCapability/);
+  assert.match(clientSource, /export async function getRuntimeMcpCredentials/);
+  assert.match(clientSource, /\/web\/runtime-mcp-credentials/);
   assert.match(clientSource, /\/web\/runtime-update-capability\?\$\{params\.toString\(\)\}/);
   assert.match(clientSource, /new URLSearchParams\(\{ runtimeId, region \}\)/);
   assert.match(clientSource, /if \(appName\) params\.set\("appName", appName\)/);
@@ -733,14 +735,7 @@ test("runtime updates use the Agent selected in management instead of the active
     customCreateSource,
     /removeRuntimeEnvKeys:\s*deploymentTarget[\s\S]*?removedConfiguredMcpEnvKeys\([\s\S]*?deploymentTarget\.configuredMcpEnvKeys[\s\S]*?draft/,
   );
-  assert.match(
-    customCreateSource,
-    /onClick=\{\(\) =>[\s\S]*?onChange\([\s\S]*?tools\.map\([\s\S]*?clearMcpConfiguredAuth\(tool\)/,
-  );
-  assert.doesNotMatch(
-    customCreateSource,
-    /update\(i,\s*clearMcpConfiguredAuth\(/,
-  );
+  assert.doesNotMatch(customCreateSource, /clearMcpConfiguredAuth/);
 
   const handlerStart = appSource.indexOf("onUpdateAgent={async (capability) =>");
   const handlerEnd = appSource.indexOf("onEditDraft=", handlerStart);
@@ -765,9 +760,16 @@ test("runtime updates use the Agent selected in management instead of the active
   );
   assert.doesNotMatch(handler, /draftEnvValues|selectedAgentUpdateDraft\?\.draft/);
   assert.match(handler, /hydrateRuntimeModelSelection\(/);
+  assert.match(handler, /await getRuntimeMcpCredentials\(/);
+  assert.match(handler, /hydrateMcpCredentialValues\(/);
+  assert.ok(
+    handler.indexOf("hydrateMcpCredentialValues(") <
+      handler.indexOf("setImportedDraft("),
+    "MCP credentials must be restored before the editor opens",
+  );
   assert.match(
     handler,
-    /setCustomCreationSurface\([\s\S]*?classifiedDraft\.dynamicAgentDelegation === true[\s\S]*?\? "vulcan"[\s\S]*?: "traditional"/,
+    /setCustomCreationSurface\([\s\S]*?editorDraft\.dynamicAgentDelegation === true[\s\S]*?\? "vulcan"[\s\S]*?: "traditional"/,
   );
   assert.match(handler, /network:\s*capability\.runtime\.network/);
   assert.match(handler, /etag:\s*capability\.etag/);

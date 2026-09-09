@@ -29,12 +29,19 @@ export interface McpTool {
   credentialSourceUrl?: string;
   /** Original published credential reference. Editor-only and never a value. */
   credentialSourceAuthTokenEnv?: string;
-  /** Explicit decision required after the published endpoint identity changes. */
-  credentialUpdate?: "pending" | "reuse" | "replace" | "remove";
   /** stdio transport: the command to launch (e.g. "npx"). */
   command?: string;
   /** stdio transport: command args (e.g. ["-y", "@playwright/mcp@latest"]). */
   args?: string[];
+}
+
+/** One server-authorized MCP credential restored into the in-memory editor. */
+export interface McpCredentialValue {
+  agentName: string;
+  name: string;
+  url: string;
+  authTokenEnv: string;
+  value: string;
 }
 
 // Import and re-export the multi-source SelectedSkill (and related types) from

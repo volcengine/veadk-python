@@ -3693,6 +3693,32 @@ def test_runtime_update_capability_supports_owned_unmanaged_runtime(
             },
             headers={"X-VeADK-Local-User": "developer"},
         )
+        credential_request = {
+            "runtimeId": runtime.runtime_id,
+            "region": "cn-beijing",
+            "appName": "selected-agent",
+            "etag": response.json()["etag"],
+        }
+        credentials = client.post(
+            "/web/runtime-mcp-credentials",
+            json=credential_request,
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+        stale_credentials = client.post(
+            "/web/runtime-mcp-credentials",
+            json={**credential_request, "etag": "stale-update-snapshot"},
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+        forbidden_credentials = client.post(
+            "/web/runtime-mcp-credentials",
+            json=credential_request,
+            headers={"X-VeADK-Local-User": "other-developer"},
+        )
+        no_permission_credentials = client.post(
+            "/web/runtime-mcp-credentials",
+            json=credential_request,
+            headers={"X-VeADK-Local-User": "viewer"},
+        )
         runtime.envs = [
             *[
                 item
@@ -3765,6 +3791,30 @@ def test_runtime_update_capability_supports_owned_unmanaged_runtime(
 
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
+    assert credentials.status_code == 200
+    assert credentials.headers["cache-control"] == "no-store"
+    assert credentials.headers["pragma"] == "no-cache"
+    assert credentials.json() == {
+        "credentials": [
+            {
+                "agentName": "selected-agent",
+                "name": "orders",
+                "url": "https://mcp.example.com/mcp",
+                "authTokenEnv": "MCP_API_KEY",
+                "value": "mcp-secret",
+            },
+            {
+                "agentName": "selected-agent",
+                "name": "inventory",
+                "url": "https://mcp.example.com/inventory",
+                "authTokenEnv": "PUBLISHED_INVENTORY_TOKEN",
+                "value": "structured-secret",
+            },
+        ]
+    }
+    assert stale_credentials.status_code == 409
+    assert forbidden_credentials.status_code == 404
+    assert no_permission_credentials.status_code == 403
     assert cached_response.status_code == 200
     assert "authToken" not in (cached_response.json()["agent"]["draft"]["mcpTools"][0])
     assert "mcp-secret-rotated" not in cached_response.text
