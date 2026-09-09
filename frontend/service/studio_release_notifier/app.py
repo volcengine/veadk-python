@@ -62,7 +62,7 @@ def escape_markdown(value: str) -> str:
 def build_card(release: Release, *, preview: bool = False) -> dict[str, Any]:
     header: dict[str, Any] = {
         "template": "blue",
-        "title": {"tag": "plain_text", "content": "Studio · Release Note"},
+        "title": {"tag": "plain_text", "content": "AgentKit Studio 新版本发布"},
         "subtitle": {
             "tag": "plain_text",
             "content": f"{release.version}  ·  {release.date}",
