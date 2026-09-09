@@ -763,7 +763,7 @@
       "removeTool": "删除 MCP 工具",
       "namePlaceholder": "名称（可选）",
       "urlPlaceholder": "MCP 服务地址",
-      "pathWarning": "此地址未以 /mcp 结尾，请确认它是完整的 MCP 服务地址。",
+      "pathWarning": "当前填写的是网关根地址。仅当根路径就是 MCP Endpoint 时可直接使用；否则请补充完整服务路径。",
       "configuredPlaceholder": "已安全保存认证信息",
       "tokenPlaceholder": "Bearer Token（可选）",
       "changedUrlWarning": "MCP 地址已变化，请确认如何处理已保存的认证信息。",

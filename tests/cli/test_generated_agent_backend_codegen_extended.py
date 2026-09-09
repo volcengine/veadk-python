@@ -1235,21 +1235,103 @@ def test_cloud_generated_debug_preserves_mcp_connection_error(
     (
         "credential_storage",
         "tool_name",
+        "published_url",
         "edited_url",
         "expected_status",
         "expect_credential",
+        "explicit_reuse",
+        "has_published_draft",
     ),
     [
-        ("reference-env", "jvmdiag", "https://8.8.8.8/mcp", 200, True),
-        ("reference-env", "", "https://8.8.8.8/mcp", 200, True),
-        ("servers-json", "jvmdiag", "https://8.8.8.8/mcp", 200, True),
-        ("servers-json", "", "https://8.8.8.8/mcp", 200, True),
+        (
+            "reference-env",
+            "jvmdiag",
+            "https://8.8.8.8/mcp",
+            "https://8.8.8.8/mcp",
+            200,
+            True,
+            False,
+            True,
+        ),
+        (
+            "reference-env",
+            "",
+            "https://8.8.8.8/mcp",
+            "https://8.8.8.8/mcp",
+            200,
+            True,
+            False,
+            True,
+        ),
         (
             "servers-json",
             "jvmdiag",
-            "https://8.8.8.8/changed-mcp",
-            422,
+            "https://8.8.8.8/mcp",
+            "https://8.8.8.8/mcp",
+            200,
+            True,
             False,
+            True,
+        ),
+        (
+            "servers-json",
+            "",
+            "https://8.8.8.8/mcp",
+            "https://8.8.8.8/mcp",
+            200,
+            True,
+            False,
+            True,
+        ),
+        (
+            "servers-json",
+            "jvmdiag",
+            "https://8.8.8.8/mcp",
+            "https://8.8.8.8/changed-mcp",
+            409,
+            False,
+            False,
+            True,
+        ),
+        (
+            "missing",
+            "",
+            "https://8.8.8.8/mysqldiag",
+            "https://8.8.8.8/mysqldiag",
+            409,
+            False,
+            False,
+            True,
+        ),
+        (
+            "servers-json",
+            "",
+            "https://8.8.8.8/mcp",
+            "https://8.8.8.8/changed-mcp",
+            200,
+            True,
+            True,
+            True,
+        ),
+        (
+            "reference-env",
+            "",
+            "https://8.8.8.8/mcp",
+            "https://8.8.8.8/changed-mcp",
+            409,
+            False,
+            True,
+            False,
+        ),
+        (
+            "reference-env",
+            "",
+            "https://8.8.8.8/mcp?legacy=1",
+            "https://8.8.8.8/changed-mcp",
+            409,
+            False,
+            True,
+            True,
         ),
     ],
 )
@@ -1258,9 +1340,12 @@ def test_generated_debug_applies_published_mcp_credential_contract_before_discov
     tmp_path: Path,
     credential_storage: str,
     tool_name: str,
+    published_url: str,
     edited_url: str,
     expected_status: int,
     expect_credential: bool,
+    explicit_reuse: bool,
+    has_published_draft: bool,
 ) -> None:
     from agentkit.sdk.runtime.client import AgentkitRuntimeClient
     from veadk.cli.generated_agent_mcp import McpDebugConnectionError
@@ -1275,7 +1360,7 @@ def test_generated_debug_applies_published_mcp_credential_contract_before_discov
             {
                 "name": tool_name,
                 "transport": "http",
-                "url": "https://8.8.8.8/mcp",
+                "url": published_url,
                 "authTokenEnv": credential_reference,
             }
         ],
@@ -1289,13 +1374,15 @@ def test_generated_debug_applies_published_mcp_credential_contract_before_discov
                     [
                         {
                             "name": tool_name or "mcp",
-                            "url": "https://8.8.8.8/mcp",
+                            "url": published_url,
                             "headers": {"Authorization": f"Bearer {credential_value}"},
                         }
                     ]
                 ),
             )
         ]
+    elif credential_storage == "missing":
+        runtime_envs = []
     runtime = SimpleNamespace(
         runtime_id="runtime-debug-mcp",
         runtime_name="legacy-agent-runtime",
@@ -1321,8 +1408,10 @@ def test_generated_debug_applies_published_mcp_credential_contract_before_discov
     )
 
     captured_discovery_env: dict[str, str] = {}
+    discovery_calls: list[bool] = []
 
     async def capture_mcp_discovery(draft, env_values=None):
+        discovery_calls.append(True)
         captured_discovery_env.update(env_values or {})
         if not expect_credential:
             raise McpDebugConnectionError("changed MCP endpoint rejected")
@@ -1338,13 +1427,15 @@ def test_generated_debug_applies_published_mcp_credential_contract_before_discov
             if url.endswith("/list-apps"):
                 return _FakeResponse(json_data=["legacy_agent"])
             if url.endswith("/web/agent-info/legacy_agent"):
-                return _FakeResponse(
-                    json_data={
-                        "name": "legacy_agent",
-                        "description": "Existing Agent",
-                        "draft": published_draft,
-                    }
-                )
+                agent_info: dict[str, Any] = {
+                    "name": "legacy_agent",
+                    "description": "Existing Agent",
+                }
+                if has_published_draft:
+                    agent_info["draft"] = published_draft
+                return _FakeResponse(json_data=agent_info)
+            if url.endswith("/web/agent-draft/legacy_agent"):
+                return _FakeResponse(status_code=404)
             raise AssertionError(f"unexpected Runtime request path: {url}")
 
     monkeypatch.setenv("_FAAS_FUNC_ID", "function-test")
@@ -1366,20 +1457,39 @@ def test_generated_debug_applies_published_mcp_credential_contract_before_discov
     with TestClient(app) as client:
         edited_draft = json.loads(json.dumps(published_draft))
         edited_draft["mcpTools"][0]["url"] = edited_url
+        payload = {
+            "draft": edited_draft,
+            "runtimeId": runtime.runtime_id,
+            "runtimeRegion": "cn-shanghai",
+        }
+        if explicit_reuse:
+            payload["mcpCredentialReuses"] = [
+                {
+                    "agentName": "legacy_agent",
+                    "name": tool_name,
+                    "url": edited_url,
+                    "sourceAuthTokenEnv": credential_reference,
+                }
+            ]
         response = client.post(
             "/web/generated-agent-test-runs",
-            json={
-                "draft": edited_draft,
-                "runtimeId": runtime.runtime_id,
-                "runtimeRegion": "cn-shanghai",
-            },
+            json=payload,
         )
 
     assert response.status_code == expected_status, response.text
+    if expected_status != 200:
+        assert _FakeProcess.created == []
+    assert bool(discovery_calls) is (expected_status in {200, 422})
+    if "?" in published_url:
+        assert "MCP 地址无效" in response.json()["detail"]
+        assert "LegacyRecoveryError" not in response.text
+        assert "错误 ID" not in response.text
     if expect_credential:
         assert captured_discovery_env[credential_reference] == credential_value
     else:
         assert credential_reference not in captured_discovery_env
+    if credential_storage == "missing":
+        assert "缺少可用凭证" in response.json()["detail"]
     assert credential_value not in response.text
 
 

@@ -63,6 +63,10 @@ test("offers code execution with its sandbox configuration", () => {
   );
   assert.match(
     customCreateSource,
+    /createGeneratedAgentTestRun\([\s\S]*?debugRuntimeDraft\(variantDraft, transientModelSecretValues\)[\s\S]*?mcpCredentialReuseValues\(variantDraft\)/,
+  );
+  assert.match(
+    customCreateSource,
     /if \(isImeCompositionEvent\(e\.nativeEvent\)\) return;[\s\S]*?e\.key === "Enter"/,
   );
 });

@@ -237,11 +237,11 @@ test("submits an explicit reuse decision for an unnamed MCP without inventing a 
   ]);
 });
 
-test("describes the MCP suffix check instead of claiming every address has no path", () => {
+test("describes the MCP root-path check without requiring a /mcp suffix", () => {
   for (const locale of ["zh-CN", "en-US"]) {
     const warning = createMessages[locale].traditional.mcp.pathWarning;
-    assert.match(warning, /\/mcp/);
-    assert.doesNotMatch(warning, /没有路径|has no path/i);
+    assert.match(warning, /根地址|root address/i);
+    assert.doesNotMatch(warning, /必须|must|\/mcp/i);
   }
 });
 
@@ -607,13 +607,15 @@ test("resolves new Sidecar MCP credentials from prior tool inputs only", () => {
   );
 });
 
-test("warns about non-standard MCP paths without rewriting them", () => {
+test("warns only for a gateway root and accepts custom MCP endpoint paths", () => {
   assert.equal(mcpUrlNeedsPathWarning("https://example.com/mcp"), false);
   assert.equal(
     mcpUrlNeedsPathWarning("https://example.com/gateway/mcp/?region=cn"),
     false,
   );
-  assert.equal(mcpUrlNeedsPathWarning("https://example.com/custom-path"), true);
+  assert.equal(mcpUrlNeedsPathWarning("https://example.com/mysqldiag"), false);
+  assert.equal(mcpUrlNeedsPathWarning("https://example.com/athena-mcp"), false);
+  assert.equal(mcpUrlNeedsPathWarning("https://example.com/"), true);
 });
 
 test("YAML export preserves MCP tokens as runtime environment values", () => {
