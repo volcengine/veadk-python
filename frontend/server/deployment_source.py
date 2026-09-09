@@ -49,8 +49,16 @@ class DeploymentSourceError(ValueError):
     """Deployment source does not satisfy the trusted package contract."""
 
 
-def ensure_default_agentkit_dockerfile(base: Path, cloud_provider: str) -> bool:
-    """Add Studio's canonical Dockerfile when a deployment has no custom one."""
+def ensure_default_agentkit_dockerfile(
+    base: Path,
+    cloud_provider: str,
+    *,
+    entry_point: str | None = None,
+) -> bool:
+    """Add Studio's canonical Dockerfile when a deployment has no custom one.
+
+    When provided, ``entry_point`` is used as the Python startup script.
+    """
 
     dockerfile = base / "Dockerfile"
     if dockerfile.exists():
@@ -59,7 +67,10 @@ def ensure_default_agentkit_dockerfile(base: Path, cloud_provider: str) -> bool:
     from veadk.cli.generated_agent_codegen import render_default_agentkit_dockerfile
 
     dockerfile.write_text(
-        render_default_agentkit_dockerfile(cloud_provider),
+        render_default_agentkit_dockerfile(
+            cloud_provider,
+            entry_point=entry_point,
+        ),
         encoding="utf-8",
     )
     return True
@@ -102,26 +113,26 @@ def _is_macos_metadata(relative: str) -> bool:
     )
 
 
-def _configured_entry_point(base: Path) -> str:
+def _configured_entry_point(base: Path, *, fallback: str) -> str:
     manifest_path = base / "agentkit.yaml"
     if not manifest_path.is_file():
-        return _DEFAULT_ENTRY_POINT
+        return fallback
     try:
         manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, yaml.YAMLError) as error:
         raise DeploymentSourceError(f"agentkit.yaml 无法解析：{error}") from error
     if manifest is None:
-        return _DEFAULT_ENTRY_POINT
+        return fallback
     if not isinstance(manifest, Mapping):
         raise DeploymentSourceError("agentkit.yaml 根节点必须是对象。")
     common = manifest.get("common")
     if common is None:
-        return _DEFAULT_ENTRY_POINT
+        return fallback
     if not isinstance(common, Mapping):
         raise DeploymentSourceError("agentkit.yaml 的 common 必须是对象。")
     value = common.get("entry_point")
     if value is None:
-        return _DEFAULT_ENTRY_POINT
+        return fallback
     return _relative_path(value, field="agentkit.yaml common.entry_point")
 
 
@@ -130,6 +141,20 @@ def _require_entry_point(base: Path, entry_point: str) -> str:
     if not target.is_file() or target.is_symlink():
         raise DeploymentSourceError(f"部署入口文件不存在：{entry_point}")
     return entry_point
+
+
+def resolve_agentkit_entry_point(
+    base: Path,
+    *,
+    fallback: str = _DEFAULT_ENTRY_POINT,
+) -> str:
+    """Resolve and validate the root AgentKit manifest's Python entry point."""
+
+    safe_fallback = _relative_path(fallback, field="部署入口文件")
+    return _require_entry_point(
+        base,
+        _configured_entry_point(base, fallback=safe_fallback),
+    )
 
 
 def _reject_path_collisions(paths: set[str]) -> None:
@@ -211,7 +236,7 @@ def write_inline_source(base: Path, files: object) -> str:
         target = _target(base, relative)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
-    return _require_entry_point(base, _configured_entry_point(base))
+    return resolve_agentkit_entry_point(base)
 
 
 def _manifest_files(manifest: object) -> tuple[dict[str, tuple[int, str]], str]:
@@ -306,5 +331,6 @@ def extract_migration_source(
 __all__ = [
     "DeploymentSourceError",
     "extract_migration_source",
+    "resolve_agentkit_entry_point",
     "write_inline_source",
 ]

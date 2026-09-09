@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pprint import pformat
 from typing import Any, Literal
@@ -2160,8 +2161,18 @@ def _render_python_dependency_install(cloud_provider: str) -> str:
     return "RUN " + " || \\\n    ".join(attempts)
 
 
-def render_default_agentkit_dockerfile(cloud_provider: str) -> str:
+def render_default_agentkit_dockerfile(
+    cloud_provider: str,
+    *,
+    entry_point: str | None = None,
+) -> str:
     """Render the canonical Dockerfile for ordinary Studio Agent deployments."""
+
+    startup_command = (
+        'CMD ["python", "-m", "app"]'
+        if entry_point is None
+        else f'CMD ["python", {json.dumps(entry_point, ensure_ascii=False)}]'
+    )
 
     return "\n".join(
         [
@@ -2183,7 +2194,7 @@ def render_default_agentkit_dockerfile(cloud_provider: str) -> str:
             "WORKDIR /app",
             "COPY . .",
             "",
-            'CMD ["python", "-m", "app"]',
+            startup_command,
             "",
         ]
     )
