@@ -5801,6 +5801,16 @@ def _run_frontend_server(
                             status_code=409,
                             detail=_mcp_deployment_error_detail(error.code),
                         ) from error
+                    unresolved_references = set(stored_references).difference(
+                        debug_mcp_env_values
+                    )
+                    if unresolved_references:
+                        raise HTTPException(
+                            status_code=409,
+                            detail=_mcp_deployment_error_detail(
+                                "legacy_mcp_credential_missing"
+                            ),
+                        )
 
             project, draft = await _generate_project_and_draft_from_request(
                 data,

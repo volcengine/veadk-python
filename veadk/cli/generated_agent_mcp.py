@@ -17,7 +17,9 @@
 from __future__ import annotations
 
 from contextlib import suppress
+from typing import Iterator
 
+import httpx
 from google.adk.tools.mcp_tool.mcp_session_manager import (
     StreamableHTTPConnectionParams,
 )
@@ -28,6 +30,74 @@ from veadk.cli.generated_agent_codegen import AgentDraft, McpTool, prepare_mcp_a
 
 class McpDebugConnectionError(ValueError):
     """Raised when a configured MCP server cannot expose tools for debugging."""
+
+
+class _McpNoToolsError(RuntimeError):
+    """Internal marker for an endpoint that completed discovery without tools."""
+
+
+def _error_tree(error: BaseException) -> Iterator[BaseException]:
+    pending = [error]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        marker = id(current)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        yield current
+        grouped = getattr(current, "exceptions", ())
+        if isinstance(grouped, tuple) and all(
+            isinstance(item, BaseException) for item in grouped
+        ):
+            pending.extend(grouped)
+        if current.__cause__ is not None:
+            pending.append(current.__cause__)
+        if current.__context__ is not None:
+            pending.append(current.__context__)
+
+
+def _mcp_debug_failure_kind(error: BaseException) -> str:
+    failures = tuple(_error_tree(error))
+    statuses = {
+        int(getattr(getattr(item, "response", None), "status_code", 0) or 0)
+        for item in failures
+    }
+    if statuses & {401, 403}:
+        return "auth"
+    if statuses & {404, 405, 410}:
+        return "endpoint"
+    if 429 in statuses:
+        return "rate_limit"
+    if any(500 <= status <= 599 for status in statuses):
+        return "upstream"
+    if any(isinstance(item, _McpNoToolsError) for item in failures):
+        return "empty"
+    if any(isinstance(item, httpx.TimeoutException) for item in failures):
+        return "timeout"
+    if any(isinstance(item, (httpx.NetworkError, OSError)) for item in failures):
+        return "network"
+    return "protocol"
+
+
+def _mcp_debug_failure_detail(name: str, error: BaseException) -> str:
+    reason = {
+        "auth": "认证被服务拒绝。请确认 Token 与该 Endpoint 匹配。",
+        "endpoint": (
+            "地址未提供可用的 Streamable HTTP MCP 服务。"
+            "请确认完整 Endpoint（包括业务路径）。"
+        ),
+        "rate_limit": "服务当前限流，请稍后重试。",
+        "upstream": "服务暂时不可用。请稍后重试，或检查 MCP 服务状态。",
+        "empty": "连接成功，但未发现可用工具。",
+        "timeout": "连接超时。请确认网络可达，并检查服务响应时间。",
+        "network": "网络连接失败。请确认域名、网络和 TLS 配置。",
+        "protocol": "服务响应不符合 Streamable HTTP MCP 协议。",
+    }[_mcp_debug_failure_kind(error)]
+    return (
+        f"MCP 工具 `{name}` 连接失败：{reason}"
+        "调试环境尚未启动；该错误发生在 MCP 连接预检阶段，与 Sidecar 无关。"
+    )
 
 
 async def _list_mcp_tools(
@@ -49,7 +119,7 @@ async def _list_mcp_tools(
     try:
         tools = await toolset.get_tools()
         if not tools:
-            raise ConnectionError("MCP server returned no tools")
+            raise _McpNoToolsError
     finally:
         with suppress(Exception):
             await toolset.close()
@@ -62,16 +132,11 @@ async def _resolve_http_mcp_tool(
     url = tool.url.strip()
     try:
         await _list_mcp_tools(tool, url, env_values)
-    except Exception:
-        pass
+    except Exception as error:
+        name = tool.name.strip() or "未命名 MCP"
+        raise McpDebugConnectionError(_mcp_debug_failure_detail(name, error)) from None
     else:
         return tool.model_copy(update={"url": url})
-
-    name = tool.name.strip() or "未命名 MCP"
-    raise McpDebugConnectionError(
-        f"MCP 工具 `{name}` 连接失败：无法通过 Streamable HTTP 完成工具发现。"
-        "请确认 URL 指向实际 MCP Endpoint，并检查 Token。"
-    ) from None
 
 
 async def resolve_debug_mcp_endpoints(

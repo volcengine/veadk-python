@@ -1274,7 +1274,17 @@ def test_cloud_generated_debug_preserves_mcp_connection_error(
             "jvmdiag",
             "https://8.8.8.8/mcp",
             "https://8.8.8.8/changed-mcp",
-            422,
+            409,
+            False,
+            False,
+            True,
+        ),
+        (
+            "missing",
+            "",
+            "https://8.8.8.8/mysqldiag",
+            "https://8.8.8.8/mysqldiag",
+            409,
             False,
             False,
             True,
@@ -1357,6 +1367,8 @@ def test_generated_debug_applies_published_mcp_credential_contract_before_discov
                 ),
             )
         ]
+    elif credential_storage == "missing":
+        runtime_envs = []
     runtime = SimpleNamespace(
         runtime_id="runtime-debug-mcp",
         runtime_name="legacy-agent-runtime",
@@ -1382,8 +1394,10 @@ def test_generated_debug_applies_published_mcp_credential_contract_before_discov
     )
 
     captured_discovery_env: dict[str, str] = {}
+    discovery_calls: list[bool] = []
 
     async def capture_mcp_discovery(draft, env_values=None):
+        discovery_calls.append(True)
         captured_discovery_env.update(env_values or {})
         if not expect_credential:
             raise McpDebugConnectionError("changed MCP endpoint rejected")
@@ -1451,6 +1465,7 @@ def test_generated_debug_applies_published_mcp_credential_contract_before_discov
     assert response.status_code == expected_status, response.text
     if expected_status != 200:
         assert _FakeProcess.created == []
+    assert bool(discovery_calls) is (expected_status in {200, 422})
     if "?" in published_url:
         assert "MCP 地址无效" in response.json()["detail"]
         assert "LegacyRecoveryError" not in response.text
@@ -1459,6 +1474,8 @@ def test_generated_debug_applies_published_mcp_credential_contract_before_discov
         assert captured_discovery_env[credential_reference] == credential_value
     else:
         assert credential_reference not in captured_discovery_env
+    if credential_storage == "missing":
+        assert "缺少可用凭证" in response.json()["detail"]
     assert credential_value not in response.text
 
 

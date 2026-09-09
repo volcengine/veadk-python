@@ -763,7 +763,7 @@
       "removeTool": "Remove MCP tool",
       "namePlaceholder": "Name (optional)",
       "urlPlaceholder": "MCP service URL",
-      "pathWarning": "This address does not end with /mcp. Confirm that it is the complete MCP service URL.",
+      "pathWarning": "This is a gateway root address. Use it only when the root path is the MCP endpoint; otherwise include the complete service path.",
       "configuredPlaceholder": "Authentication is stored securely",
       "tokenPlaceholder": "Bearer token (optional)",
       "changedUrlWarning": "The MCP address changed. Choose how to handle the stored authentication.",
