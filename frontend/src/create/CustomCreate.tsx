@@ -94,18 +94,12 @@ import {
 import { localPickerMatches } from "./localPickerSearch";
 import { draftToYaml } from "./configYaml";
 import {
-  confirmMcpCredentialReuse,
-  clearMcpConfiguredAuth,
   deploymentMcpSecretValues,
   type McpConfigurationConflict,
   mcpAuthTokenInputValue,
-  mcpCredentialActionRequired,
   mcpConfigurationConflict,
-  mcpCredentialReuseValues,
   mcpUrlNeedsPathWarning,
   prepareMcpAuth,
-  removeMcpCredentialForChangedUrl,
-  replaceMcpCredentialForChangedUrl,
   removedConfiguredMcpEnvKeys,
   sourcePreservingMcpSecretValues,
   updateMcpAuthTokenInput,
@@ -2118,6 +2112,34 @@ function VikingMemorySelect({
  * (http / stdio) and shows the matching fields. http -> url + optional
  * bearer token; stdio -> command + space-separated args. Optional name.
  * ---------------------------------------------------------------- */
+function McpTokenVisibilityIcon({ hidden }: { hidden: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {hidden ? (
+        <>
+          <path d="M3 3l18 18" />
+          <path d="M9.7 6.95A9.7 9.7 0 0 1 12 6.68c5.9 0 9.25 5.32 9.25 5.32a16 16 0 0 1-2.28 2.85" />
+          <path d="M14.35 14.55A3.25 3.25 0 0 1 9.5 10.2" />
+          <path d="M6.25 8.12A16.4 16.4 0 0 0 2.75 12S6.1 17.32 12 17.32c.8 0 1.55-.1 2.25-.27" />
+        </>
+      ) : (
+        <>
+          <path d="M2.75 12s3.35-5.25 9.25-5.25S21.25 12 21.25 12 17.9 17.25 12 17.25 2.75 12 2.75 12Z" />
+          <circle cx="12" cy="12" r="2.5" />
+        </>
+      )}
+    </svg>
+  );
+}
+
 function McpToolEditor({
   tools,
   conflict,
@@ -2131,11 +2153,20 @@ function McpToolEditor({
 }) {
   const { t } = useTranslation("create");
   const conflictErrorId = useId();
+  const [revealedTokenIndex, setRevealedTokenIndex] = useState<number | null>(
+    null,
+  );
   const visibleConflict = showConflict ? conflict : null;
   const update = (i: number, p: Partial<McpTool>) =>
     onChange(tools.map((tool, idx) => (idx === i ? { ...tool, ...p } : tool)));
 
-  const remove = (i: number) => onChange(tools.filter((_, idx) => idx !== i));
+  const remove = (i: number) => {
+    setRevealedTokenIndex((current) => {
+      if (current == null || current < i) return current;
+      return current === i ? null : current - 1;
+    });
+    onChange(tools.filter((_, idx) => idx !== i));
+  };
 
   const add = () =>
     onChange([...tools, { name: "", transport: "http", url: "" }]);
@@ -2233,119 +2264,49 @@ function McpToolEditor({
                         </span>
                       </p>
                     )}
-                    <input
-                      className="cw-input"
-                      aria-invalid={mcpCredentialActionRequired(tool)}
-                      value={mcpAuthTokenInputValue(tool)}
-                      placeholder={
-                        tool.credentialConfigured && !tool.authToken
-                          ? t("traditional.mcp.configuredPlaceholder")
-                          : t("traditional.mcp.tokenPlaceholder")
-                      }
-                      onChange={(e) =>
-                        onChange(
-                          tools.map((tool, index) =>
-                            index === i
-                              ? updateMcpAuthTokenInput(tool, e.target.value)
-                              : tool,
-                          ),
-                        )
-                      }
-                    />
-                    {tool.credentialUpdate === "pending" && (
-                      <div
-                        className="cw-mcp-auth-state is-warning"
-                        role="alert"
+                    <div className="cw-mcp-token-field">
+                      <input
+                        className="cw-input"
+                        type={revealedTokenIndex === i ? "text" : "password"}
+                        value={mcpAuthTokenInputValue(tool)}
+                        placeholder={t("traditional.mcp.tokenPlaceholder")}
+                        autoComplete="new-password"
+                        spellCheck={false}
+                        onChange={(e) =>
+                          onChange(
+                            tools.map((tool, index) =>
+                              index === i
+                                ? updateMcpAuthTokenInput(tool, e.target.value)
+                                : tool,
+                            ),
+                          )
+                        }
+                      />
+                      <button
+                        type="button"
+                        className="cw-mcp-token-toggle"
+                        aria-label={
+                          revealedTokenIndex === i
+                            ? t("traditional.mcp.hideToken")
+                            : t("traditional.mcp.showToken")
+                        }
+                        title={
+                          revealedTokenIndex === i
+                            ? t("traditional.mcp.hideToken")
+                            : t("traditional.mcp.showToken")
+                        }
+                        aria-pressed={revealedTokenIndex === i}
+                        onClick={() =>
+                          setRevealedTokenIndex((current) =>
+                            current === i ? null : i,
+                          )
+                        }
                       >
-                        <span>
-                          {t("traditional.mcp.changedUrlWarning")}
-                        </span>
-                        <div className="cw-mcp-auth-actions">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              onChange(
-                                tools.map((tool, index) =>
-                                  index === i
-                                    ? confirmMcpCredentialReuse(tool)
-                                    : tool,
-                                ),
-                              )
-                            }
-                          >
-                            {t("traditional.mcp.reuseCredential")}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              onChange(
-                                tools.map((tool, index) =>
-                                  index === i
-                                    ? replaceMcpCredentialForChangedUrl(tool)
-                                    : tool,
-                                ),
-                              )
-                            }
-                          >
-                            {t("traditional.mcp.replaceCredential")}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              onChange(
-                                tools.map((tool, index) =>
-                                  index === i
-                                    ? removeMcpCredentialForChangedUrl(tool)
-                                    : tool,
-                                ),
-                              )
-                            }
-                          >
-                            {t("traditional.mcp.noAuth")}
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                    {tool.credentialUpdate === "reuse" && (
-                      <div className="cw-mcp-auth-state" role="status">
-                        <span>{t("traditional.mcp.reuseHint")}</span>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            onChange(
-                              tools.map((tool, index) =>
-                                index === i
-                                  ? replaceMcpCredentialForChangedUrl(tool)
-                                  : tool,
-                              ),
-                            )
-                          }
-                        >
-                          {t("traditional.mcp.changeToReplace")}
-                        </button>
-                      </div>
-                    )}
-                    {tool.credentialConfigured &&
-                      !tool.authToken &&
-                      !tool.credentialUpdate && (
-                      <div className="cw-mcp-auth-state" role="status">
-                        <span>{t("traditional.mcp.credentialConfigured")}</span>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            onChange(
-                              tools.map((tool, index) =>
-                                index === i
-                                  ? clearMcpConfiguredAuth(tool)
-                                  : tool,
-                              ),
-                            )
-                          }
-                        >
-                          {t("traditional.mcp.removeCredential")}
-                        </button>
-                      </div>
-                    )}
+                        <McpTokenVisibilityIcon
+                          hidden={revealedTokenIndex !== i}
+                        />
+                      </button>
+                    </div>
                   </>
                 ) : (
                   <>
@@ -2548,9 +2509,6 @@ function nodeProblem(
   if (nameProblem) return nameProblem as NodeProblemCode;
   if (duplicateNames.has(n.name)) return "duplicateName";
   if (n.description.trim().length === 0) return "missingDescription";
-  if ((n.mcpTools ?? []).some(mcpCredentialActionRequired)) {
-    return "mcpAuthRequired";
-  }
   if (isOrchestratorType(n.agentType))
     return n.subAgents.length === 0 ? "missingSubagent" : null;
   return n.instruction.trim().length === 0 ? "missingPrompt" : null;
@@ -2564,7 +2522,6 @@ type NodeProblemCode =
   | "name.characters"
   | "duplicateName"
   | "missingDescription"
-  | "mcpAuthRequired"
   | "mcpDuplicateName"
   | "mcpDuplicateUrl"
   | "missingSubagent"
@@ -4864,7 +4821,6 @@ export function CustomCreate({
           ? {
               runtimeId: deploymentTarget.runtimeId,
               region: deploymentTarget.region,
-              mcpCredentialReuses: mcpCredentialReuseValues(variantDraft),
             }
           : undefined,
       );
@@ -5160,9 +5116,6 @@ export function CustomCreate({
           : mcpGatewayManaged
             ? deploymentMcpSecretValues(draft)
             : undefined,
-        mcpCredentialReuses: deploymentTarget
-          ? mcpCredentialReuseValues(draft)
-          : undefined,
         removeRuntimeEnvKeys: deploymentTarget
           ? [
               ...removedConfiguredMcpEnvKeys(

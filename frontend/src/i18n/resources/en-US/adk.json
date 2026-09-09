@@ -510,6 +510,8 @@
     "loadA2aCardFailed": "Failed to load the A2A Agent Card",
     "loadRuntimeApiKeyFailed": "Failed to load the Runtime API key",
     "runtimeApiKeyMissing": "The Runtime did not return a usable API key",
+    "loadMcpCredentialsFailed": "Failed to load MCP authentication",
+    "invalidMcpCredentials": "Studio returned invalid MCP authentication data",
     "deleteFailed": "Delete failed ({{status}})",
     "runtimeManageForbidden": "This account cannot manage the Runtime.",
     "runtimeNotFound": "The Runtime does not exist or has been deleted.",
