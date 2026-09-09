@@ -56,7 +56,11 @@ class SkillsToolset(BaseToolset):
     file manipulation, and command execution.
     """
 
-    def __init__(self, skills: Dict[str, Skill], skills_mode: str) -> None:
+    def __init__(
+        self,
+        skills: Dict[str, Skill],
+        skills_mode: str,
+    ) -> None:
         """Initialize the skills toolset.
 
         Args:
@@ -67,7 +71,12 @@ class SkillsToolset(BaseToolset):
 
         self.skills_mode = skills_mode
 
-        self._tools = {
+        self._refresh_state = None
+        self._tools = self.build_tools(skills)
+
+    def build_tools(self, skills):
+        """Build a candidate tool collection without changing the active one."""
+        tools = {
             "skills": SkillsTool(skills),
             "read_file": FunctionTool(read_file_tool),
             "write_file": FunctionTool(write_file_tool),
@@ -76,6 +85,32 @@ class SkillsToolset(BaseToolset):
             "register_skills": FunctionTool(register_skills_tool),
             "update_check_list": FunctionTool(update_check_list),
         }
+
+        return {key: self.wrap_tool(tool) for key, tool in tools.items()}
+
+    async def prepare_skills(self, skills, callback_context):
+        """Adapt loaded results before publishing the refreshed skill view."""
+        return skills
+
+    def on_source_error(self, source, error, previous):
+        """Retain the last successful result of a configured, failing source."""
+        return previous
+
+    def status(self):
+        state = self._refresh_state
+        skills = self._tools["skills"].skills if state is not None else {}
+        return {
+            "ready": state is not None and state.instruction is not None,
+            "issues": list(state.issues) if state is not None else [],
+            "loaded_skills": [
+                {"name": skill.name, "id": skill.id, "version": skill.version_id}
+                for skill in skills.values()
+            ],
+        }
+
+    def wrap_tool(self, tool: BaseTool) -> BaseTool:
+        """Override to instrument tools while preserving their declarations."""
+        return tool
 
     @override
     async def get_tools(

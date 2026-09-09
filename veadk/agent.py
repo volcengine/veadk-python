@@ -557,7 +557,7 @@ class Agent(LlmAgent):
                 else:
                     self.after_agent_callback = save_session_to_long_term_memory
 
-        if self.skills:
+        if self.skills or self.enable_dynamic_load_skills:
             self.load_skills()
             if self.enable_skills_checklist:
                 logger.info("Skills checklist enabled")
@@ -657,17 +657,7 @@ class Agent(LlmAgent):
         )
 
     def load_skills(self):
-        from pathlib import Path
-
-        from veadk.skills.check_skills_callback import check_skills
-        from veadk.skills.skill import Skill
-        from veadk.skills.utils import (
-            load_skills_from_cloud,
-            load_skills_from_directory,
-        )
-        from veadk.tools.skills_tools.skills_toolset import SkillsToolset
-
-        self.skills_dict: Dict[str, Skill] = {}
+        from veadk.skills.check_skills_callback import check_skills, initialize_skills
 
         # Determine skills_mode if not set
         if not self.skills_mode:
@@ -756,58 +746,7 @@ class Agent(LlmAgent):
             warnings.warn(warning_message, DeprecationWarning, stacklevel=2)
             logger.warning(warning_message)
 
-        for item in self.skills:
-            if not item or str(item).strip() == "":
-                continue
-            path = Path(item)
-            if path.exists() and path.is_dir():
-                for skill in load_skills_from_directory(path):
-                    self.skills_dict[skill.name] = skill
-            else:
-                for skill in load_skills_from_cloud(item):
-                    self.skills_dict[skill.name] = skill
-        if self.skills_dict:
-            self.instruction += "\nYou have the following skills:\n"
-
-            self._skills_with_checklist = self.skills_dict
-
-            has_checklist = False
-            for skill in self.skills_dict.values():
-                self.instruction += (
-                    f"- name: {skill.name}\n- description: {skill.description}\n\n"
-                )
-                if skill.checklist:
-                    has_checklist = True
-
-            if has_checklist:
-                self.instruction += (
-                    "Some skills have a checklist that you must complete step by step. "
-                    "Use the `update_check_list` tool to mark each item as completed.\n\n"
-                )
-
-            if self.skills_mode not in [
-                "skills_sandbox",
-                "aio_sandbox",
-                "local",
-            ]:
-                raise ValueError(
-                    f"Unsupported skill mode {self.skills_mode}, use `skills_sandbox`, `aio_sandbox` or `local` instead."
-                )
-
-            if self.skills_mode == "skills_sandbox":
-                self.instruction += (
-                    "You can use the skills by calling the `execute_skills` tool.\n\n"
-                )
-
-            if self.skills_mode == "local":
-                self.instruction += (
-                    "You can use the skills by calling the `skills_tool` tool.\n\n"
-                )
-
-        else:
-            logger.warning("No skills loaded.")
-
-        self.tools.append(SkillsToolset(self.skills_dict, self.skills_mode))
+        initialize_skills(self)
 
         if self.enable_dynamic_load_skills:
             if self.before_agent_callback:
