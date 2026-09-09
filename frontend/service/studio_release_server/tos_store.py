@@ -34,6 +34,9 @@ from frontend.service.studio_release_server.models import (
 _IAM_CREDENTIAL_PATH = Path("/var/run/secrets/iam/credential")
 _MAX_DEPENDENCY_WHEEL_BYTES = 128 * 1024 * 1024
 _PYPI_FILE_HOST = "https://files.pythonhosted.org"
+_AGENTKIT_CLI_ARCHIVE_URL_PREFIX = (
+    "https://agentkit-cli.tos-cn-beijing.volces.com/0.52.18/"
+)
 _PYPI_MIRROR_HOSTS = (
     "https://pypi.tuna.tsinghua.edu.cn",
     "https://mirrors.aliyun.com/pypi",
@@ -347,7 +350,7 @@ class TosDependencyStore:
                         "Studio dependency manifest is invalid."
                     ) from error
                 if filename == "agentkit-linux-x64.tar.gz" and not url.startswith(
-                    "https://agentkit-cli.tos-cn-beijing.volces.com/0.52.14/"
+                    _AGENTKIT_CLI_ARCHIVE_URL_PREFIX
                 ):
                     raise ValueError("Studio dependency manifest is invalid.")
                 filenames.add(filename)
