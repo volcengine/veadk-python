@@ -5777,13 +5777,13 @@ def _run_frontend_server(
                                 runtime_region,
                                 error.code,
                             )
-                    debug_mcp_env_values = retained_mcp_secret_values(
-                        published_draft=published_draft,
-                        edited_draft=edited_draft,
-                        published_reference_values=published_reference_values,
-                    )
-                    if reuse_requests:
-                        try:
+                    try:
+                        debug_mcp_env_values = retained_mcp_secret_values(
+                            published_draft=published_draft,
+                            edited_draft=edited_draft,
+                            published_reference_values=(published_reference_values),
+                        )
+                        if reuse_requests:
                             supplied_credentials = mcp_reuse_supplied_credentials(
                                 published_draft=published_draft,
                                 edited_draft=edited_draft,
@@ -5796,11 +5796,11 @@ def _run_frontend_server(
                                     supplied_credentials=supplied_credentials,
                                 )
                             )
-                        except LegacyRecoveryError as error:
-                            raise HTTPException(
-                                status_code=409,
-                                detail=_mcp_deployment_error_detail(error.code),
-                            ) from error
+                    except LegacyRecoveryError as error:
+                        raise HTTPException(
+                            status_code=409,
+                            detail=_mcp_deployment_error_detail(error.code),
+                        ) from error
 
             project, draft = await _generate_project_and_draft_from_request(
                 data,

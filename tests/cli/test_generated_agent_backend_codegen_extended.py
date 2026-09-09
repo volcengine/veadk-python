@@ -1221,6 +1221,7 @@ def test_cloud_generated_debug_preserves_mcp_connection_error(
     (
         "credential_storage",
         "tool_name",
+        "published_url",
         "edited_url",
         "expected_status",
         "expect_credential",
@@ -1228,13 +1229,50 @@ def test_cloud_generated_debug_preserves_mcp_connection_error(
         "has_published_draft",
     ),
     [
-        ("reference-env", "jvmdiag", "https://8.8.8.8/mcp", 200, True, False, True),
-        ("reference-env", "", "https://8.8.8.8/mcp", 200, True, False, True),
-        ("servers-json", "jvmdiag", "https://8.8.8.8/mcp", 200, True, False, True),
-        ("servers-json", "", "https://8.8.8.8/mcp", 200, True, False, True),
+        (
+            "reference-env",
+            "jvmdiag",
+            "https://8.8.8.8/mcp",
+            "https://8.8.8.8/mcp",
+            200,
+            True,
+            False,
+            True,
+        ),
+        (
+            "reference-env",
+            "",
+            "https://8.8.8.8/mcp",
+            "https://8.8.8.8/mcp",
+            200,
+            True,
+            False,
+            True,
+        ),
         (
             "servers-json",
             "jvmdiag",
+            "https://8.8.8.8/mcp",
+            "https://8.8.8.8/mcp",
+            200,
+            True,
+            False,
+            True,
+        ),
+        (
+            "servers-json",
+            "",
+            "https://8.8.8.8/mcp",
+            "https://8.8.8.8/mcp",
+            200,
+            True,
+            False,
+            True,
+        ),
+        (
+            "servers-json",
+            "jvmdiag",
+            "https://8.8.8.8/mcp",
             "https://8.8.8.8/changed-mcp",
             422,
             False,
@@ -1244,6 +1282,7 @@ def test_cloud_generated_debug_preserves_mcp_connection_error(
         (
             "servers-json",
             "",
+            "https://8.8.8.8/mcp",
             "https://8.8.8.8/changed-mcp",
             200,
             True,
@@ -1253,11 +1292,22 @@ def test_cloud_generated_debug_preserves_mcp_connection_error(
         (
             "reference-env",
             "",
+            "https://8.8.8.8/mcp",
             "https://8.8.8.8/changed-mcp",
             409,
             False,
             True,
             False,
+        ),
+        (
+            "reference-env",
+            "",
+            "https://8.8.8.8/mcp?legacy=1",
+            "https://8.8.8.8/changed-mcp",
+            409,
+            False,
+            True,
+            True,
         ),
     ],
 )
@@ -1266,6 +1316,7 @@ def test_generated_debug_applies_published_mcp_credential_contract_before_discov
     tmp_path: Path,
     credential_storage: str,
     tool_name: str,
+    published_url: str,
     edited_url: str,
     expected_status: int,
     expect_credential: bool,
@@ -1285,7 +1336,7 @@ def test_generated_debug_applies_published_mcp_credential_contract_before_discov
             {
                 "name": tool_name,
                 "transport": "http",
-                "url": "https://8.8.8.8/mcp",
+                "url": published_url,
                 "authTokenEnv": credential_reference,
             }
         ],
@@ -1299,7 +1350,7 @@ def test_generated_debug_applies_published_mcp_credential_contract_before_discov
                     [
                         {
                             "name": tool_name or "mcp",
-                            "url": "https://8.8.8.8/mcp",
+                            "url": published_url,
                             "headers": {"Authorization": f"Bearer {credential_value}"},
                         }
                     ]
@@ -1398,6 +1449,12 @@ def test_generated_debug_applies_published_mcp_credential_contract_before_discov
         )
 
     assert response.status_code == expected_status, response.text
+    if expected_status != 200:
+        assert _FakeProcess.created == []
+    if "?" in published_url:
+        assert "MCP 地址无效" in response.json()["detail"]
+        assert "LegacyRecoveryError" not in response.text
+        assert "错误 ID" not in response.text
     if expect_credential:
         assert captured_discovery_env[credential_reference] == credential_value
     else:
