@@ -79,6 +79,7 @@ import {
   firstMissingRuntimeEnv,
   firstInvalidRuntimeEnv,
   runtimeEnvConfiguration,
+  runtimeDebugEnvVars,
   runtimeEnvJsonError,
   runtimeEnvVars,
   type RuntimeEnvConfiguration,
@@ -3196,10 +3197,11 @@ function debugRuntimeDraft(
       modelApiKeyId: draft.deployment?.modelApiKeyId ?? "",
       modelApiKeyName: draft.deployment?.modelApiKeyName ?? "",
       envValues: Object.fromEntries(
-        runtimeEnvVars(runtimeEnv.specs, values).map(({ key, value }) => [
-          key,
-          value,
-        ]),
+        runtimeDebugEnvVars(
+          runtimeEnv.specs,
+          values,
+          prepareMcpAuth(draft).envValues,
+        ).map(({ key, value }) => [key, value]),
       ),
     },
   };
