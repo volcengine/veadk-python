@@ -1,0 +1,67 @@
+[
+  {
+    "file": "donjayamanne.githistory-0.6.20.vsix",
+    "url": "https://open-vsx.org/api/donjayamanne/githistory/0.6.20/file/donjayamanne.githistory-0.6.20.vsix",
+    "sha256": "aaea597276f089922e5b785f5c1ca1f1bef523ee17d6766889b67c0c76c35104"
+  },
+  {
+    "file": "codezombiech.gitignore-0.10.0.vsix",
+    "url": "https://open-vsx.org/api/codezombiech/gitignore/0.10.0/file/codezombiech.gitignore-0.10.0.vsix",
+    "sha256": "0c13696b23838c6523f1e4eba8427bc5a3082f50cd8ee63072f3e0335fb4e95b"
+  },
+  {
+    "file": "unifiedjs.vscode-mdx-1.8.18.vsix",
+    "url": "https://open-vsx.org/api/unifiedjs/vscode-mdx/1.8.18/file/unifiedjs.vscode-mdx-1.8.18.vsix",
+    "sha256": "1e3c27c6c66d11ab2333362ec4a6255741a57ca6d226b33315308beaff634c85"
+  },
+  {
+    "file": "ggfincke.vsc-mdx-preview-1.7.0.vsix",
+    "url": "https://open-vsx.org/api/ggfincke/vsc-mdx-preview/1.7.0/file/ggfincke.vsc-mdx-preview-1.7.0.vsix",
+    "sha256": "de677b31a443ade525bf2ec8d28d4ab03112bfc8647fa55a3c23b8f30e89a7ed"
+  },
+  {
+    "file": "ms-python.python-2026.4.0.vsix",
+    "url": "https://open-vsx.org/api/ms-python/python/2026.4.0/file/ms-python.python-2026.4.0.vsix",
+    "sha256": "232aeafb01f069824fdd92d3e628c1c442bbcfa1d3cc945ff97076340bb2b4a6"
+  },
+  {
+    "file": "detachhead.basedpyright-1.40.0.vsix",
+    "url": "https://open-vsx.org/api/detachhead/basedpyright/1.40.0/file/detachhead.basedpyright-1.40.0.vsix",
+    "sha256": "67e47122039ab2a687dd31e470eaa282093efefe7ad20f502c76331b8d058333"
+  },
+  {
+    "file": "ms-python.debugpy-2026.6.0-linux-x64.vsix",
+    "url": "https://open-vsx.org/api/ms-python/debugpy/linux-x64/2026.6.0/file/ms-python.debugpy-2026.6.0@linux-x64.vsix",
+    "sha256": "c7744af4bf72978f5792624a71c80e2b622a1118574fada3a903d70ac03d5bca"
+  },
+  {
+    "file": "charliermarsh.ruff-2026.78.0-linux-x64.vsix",
+    "url": "https://open-vsx.org/api/charliermarsh/ruff/linux-x64/2026.78.0/file/charliermarsh.ruff-2026.78.0@linux-x64.vsix",
+    "sha256": "d127e787181cc2cfcd939ee5175515ec3421da9ab9389945a5168f1e14920258"
+  },
+  {
+    "file": "tamasfe.even-better-toml-0.21.2.vsix",
+    "url": "https://open-vsx.org/api/tamasfe/even-better-toml/0.21.2/file/tamasfe.even-better-toml-0.21.2.vsix",
+    "sha256": "f3dc44f1c551edef397a79f0f8c5db4066c6a547e210b5c3cec4400bf173b008"
+  },
+  {
+    "file": "MapleMono-Woff2.zip",
+    "url": "https://github.com/subframe7536/maple-font/releases/download/v7.9/MapleMono-Woff2.zip",
+    "sha256": "5e38e83b007e7157c253c3f57c0a6f80415378f4859d43eb3cf4b1d858001681"
+  },
+  {
+    "file": "MS-CEINTL.vscode-language-pack-zh-hans-1.104.0.vsix",
+    "url": "https://open-vsx.org/api/MS-CEINTL/vscode-language-pack-zh-hans/1.104.0/file/MS-CEINTL.vscode-language-pack-zh-hans-1.104.0.vsix",
+    "sha256": "eed5d80fb1b319f35ad984bbaa78e4122c43c9dcee1df8780fd8c30fcea9fe09"
+  },
+  {
+    "file": "blesh-0.4.0-devel3.tar.xz",
+    "url": "https://github.com/akinomyoga/ble.sh/releases/download/v0.4.0-devel3/ble-0.4.0-devel3.tar.xz",
+    "sha256": "c8612ee612bc6b10dbfd6e85c6cbdfd7caf152a12d1f9de22ea0a9d735b3080c"
+  },
+  {
+    "file": "codex-0.139.0-linux-arm64.tgz",
+    "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.139.0-linux-arm64.tgz",
+    "sha256": "6195677e4ba51f22a9a1b5f0e2a01a255a42a5755b740123ce68f530ed2dd3ca"
+  }
+]

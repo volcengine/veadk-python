@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+studio_code_home="${STUDIO_CODE_SERVER_HOME:-/home/gem/.local/share/studio-code-server}"
+case "${VSCODE_LANG:-zh-CN}" in
+  zh-CN|zh-cn) export VSCODE_LANG=zh-CN; studio_locale=zh-cn ;;
+  en|en-US|en-us) export VSCODE_LANG=en; studio_locale=en ;;
+  *) echo 'VSCODE_LANG must be zh-CN or en' >&2; exit 2 ;;
+esac
+if [ -x "$studio_code_home/current/bin/code-server" ]; then
+  exec "$studio_code_home/current/bin/code-server" --extensions-dir /home/gem/.local/share/code-server/extensions --locale "$studio_locale" "$@"
+fi
+exec /opt/studio-sandbox/base-code-server --extensions-dir /home/gem/.local/share/code-server/extensions --locale "$studio_locale" "$@"

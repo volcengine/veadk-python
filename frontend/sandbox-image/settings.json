@@ -1,0 +1,47 @@
+{
+  "workbench.colorTheme": "Default Dark Modern",
+  "workbench.preferredDarkColorTheme": "Default Dark Modern",
+  "window.autoDetectColorScheme": false,
+  "workbench.startupEditor": "none",
+  "workbench.secondarySideBar.defaultVisibility": "hidden",
+  "editor.fontFamily": "'Maple Mono', monospace",
+  "editor.fontSize": 15,
+  "window.menuBarVisibility": "visible",
+  "window.titleBarStyle": "custom",
+  "terminal.integrated.defaultProfile.linux": "bash",
+  "terminal.integrated.profiles.linux": {
+    "bash": {
+      "path": "/bin/bash"
+    }
+  },
+  "editor.fontLigatures": true,
+  "editor.semanticHighlighting.enabled": true,
+  "terminal.integrated.fontFamily": "'Maple Mono', monospace",
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+  "python.terminal.activateEnvironment": true,
+  "python.useEnvironmentsExtension": false,
+  "python.languageServer": "None",
+  "basedpyright.analysis.autoSearchPaths": true,
+  "basedpyright.analysis.typeCheckingMode": "standard",
+  "files.associations": {
+    "*.py": "python",
+    "*.mdx": "mdx"
+  },
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.formatOnSave": true
+  },
+  "extensions.autoUpdate": false,
+  "extensions.autoCheckUpdates": false,
+  "files.watcherExclude": {
+    "**/.venv/**": true,
+    "**/__pycache__/**": true,
+    "**/node_modules/**": true,
+    "/opt/python3.12/**": true,
+    "/opt/studio-sandbox/venv/**": true,
+    "/opt/agentkit-code-env/venv/**": true
+  },
+  "files.exclude": {
+    "**/.git": false
+  }
+}

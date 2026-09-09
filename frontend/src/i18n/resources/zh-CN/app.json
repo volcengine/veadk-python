@@ -232,6 +232,11 @@
     "skill": "技能",
     "skillLibrary": "技能库",
     "systemInfo": "系统信息",
-    "updateAgent": "更新 {{name}}"
+    "updateAgent": "更新 {{name}}",
+    "codeProjects": "代码项目"
+  },
+  "workspaceProjectEntry": {
+    "title": "从工作区新建",
+    "description": "创建和管理代码项目，在 VS Code 中编写和调试"
   }
 }

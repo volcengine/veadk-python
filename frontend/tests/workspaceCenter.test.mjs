@@ -5,6 +5,7 @@ import test from "node:test";
 const appSource = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
 const sidebarSource = readFileSync(new URL("../src/ui/Sidebar.tsx", import.meta.url), "utf8");
 const workspaceSource = readFileSync(new URL("../src/ui/WorkspaceCenter.tsx", import.meta.url), "utf8");
+const collectionSource = readFileSync(new URL("../src/ui/WorkspaceCollectionLayout.tsx", import.meta.url), "utf8");
 const clientSource = readFileSync(new URL("../src/adk/client.ts", import.meta.url), "utf8");
 
 test("adds one workspace sidebar entry with the former environment icon", () => {
@@ -14,7 +15,7 @@ test("adds one workspace sidebar entry with the former environment icon", () => 
   assert.match(sidebarSource, /aria-label=\{t\("navigation\.workspaces"\)\}/);
   assert.match(sidebarSource, /<Box className="icon" \/>/);
   assert.doesNotMatch(sidebarSource, />环境<\/span>/);
-  assert.match(appSource, /<WorkspaceCenter cloudProvider=\{cloudProvider\} \/>/);
+  assert.match(appSource, /<WorkspaceCenter cloudProvider=\{cloudProvider\}[^>]*onProjects=/);
 });
 
 test("manages reusable environments inside workspaces", () => {
@@ -25,7 +26,7 @@ test("manages reusable environments inside workspaces", () => {
   assert.match(workspaceSource, /updateWorkspace/);
   assert.match(workspaceSource, /deleteWorkspace/);
   assert.match(workspaceSource, /<EnvironmentCenter/);
-  assert.match(workspaceSource, /label: t\("common\.environment"\)/);
+  assert.match(collectionSource, /label: t\("common\.environment"\)/);
   assert.match(workspaceSource, /setLoadError\(t\("workspace\.loadFailed"\)\)/);
   assert.doesNotMatch(workspaceSource, /setLoadError\(cause instanceof Error \? cause\.message/);
 });

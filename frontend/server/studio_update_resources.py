@@ -142,6 +142,19 @@ def reconcile_studio_update_resources(
     function, environment = _function_state(function_client, function_id)
     overrides: dict[str, str] = {}
 
+    from frontend.server.workspace_tool import workspace_update_environment
+
+    overrides.update(
+        workspace_update_environment(
+            environment,
+            provider=provider,
+            region=region,
+            access_key=access_key,
+            secret_key=secret_key,
+            session_token=session_token,
+        )
+    )
+
     from veadk.cli.studio_knowledge_signing import (
         STUDIO_KNOWLEDGE_SIGNING_KEY_ENV,
         resolve_studio_knowledge_signing_key,

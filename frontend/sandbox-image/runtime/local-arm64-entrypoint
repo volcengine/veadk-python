@@ -1,0 +1,10 @@
+#!/bin/bash
+set -euo pipefail
+# Local Apple Silicon preview only; the cloud entrypoint remains /opt/gem/run.sh
+export CODEX_REAL_BIN=/usr/local/libexec/codex-arm64-local
+for candidate in /opt/fnm/node-versions/*/installation/bin/codex; do
+  if [ -L "$candidate" ]; then
+    ln -sfn /usr/local/bin/codex "$candidate"
+  fi
+done
+exec /opt/gem/run.sh "$@"

@@ -11,21 +11,21 @@
     "add": "添加",
     "manage": "管理",
     "environment": "环境",
-    "noDescription": "暂无描述"
-    ,"refresh": "刷新",
+    "noDescription": "暂无描述",
+    "refresh": "刷新",
     "close": "关闭",
     "retry": "重试",
     "loading": "加载中…",
     "previousPage": "上一页",
-    "nextPage": "下一页"
-    ,"edit": "编辑",
+    "nextPage": "下一页",
+    "edit": "编辑",
     "all": "全部",
-    "search": "搜索"
-    ,"cancel": "取消",
+    "search": "搜索",
+    "cancel": "取消",
     "view": "查看",
     "viewDetails": "查看详情",
-    "deleting": "删除中…"
-    ,"create": "创建",
+    "deleting": "删除中…",
+    "create": "创建",
     "creating": "创建中",
     "adding": "添加中",
     "generating": "生成中",
@@ -34,8 +34,8 @@
     "loadFailed": "加载失败",
     "select": "选择",
     "collapse": "收起",
-    "expand": "展开"
-    ,"none": "无"
+    "expand": "展开",
+    "none": "无"
   },
   "agentKitPromo": {
     "ariaLabel": "AgentKit 快速入口",
@@ -204,7 +204,11 @@
     "fixPriority": "优先级",
     "suggestedModule": "建议模块",
     "suggestionAndReason": "建议与原因",
-    "priority": { "high": "高", "medium": "中", "low": "低" },
+    "priority": {
+      "high": "高",
+      "medium": "中",
+      "low": "低"
+    },
     "modules": {
       "agentStructure": "Agent 结构",
       "prompt": "提示词",
@@ -365,14 +369,38 @@
       "cancelled": "部署已取消"
     },
     "deploymentSteps": {
-      "prepare": { "label": "准备部署", "description": "校验配置并创建部署任务" },
-      "build": { "label": "构建镜像", "description": "生成运行环境与智能体代码" },
-      "deploy": { "label": "部署服务", "description": "创建并启动 AgentKit Runtime" },
-      "publish": { "label": "发布服务", "description": "等待服务就绪并生成访问地址" },
-      "complete": { "label": "部署完成", "description": "智能体已可以正常使用" },
-      "evaluation": { "label": "创建评测集", "description": "自动创建 Good Case 和 Bad Case 评测集" },
-      "github": { "label": "挂载 GitHub 持续交付", "description": "初始化目标分支与 GitHub Actions workflow" },
-      "update": { "label": "更新实例配置", "description": "将 Runtime 实例数调整为 {{min}}～{{max}}" }
+      "prepare": {
+        "label": "准备部署",
+        "description": "校验配置并创建部署任务"
+      },
+      "build": {
+        "label": "构建镜像",
+        "description": "生成运行环境与智能体代码"
+      },
+      "deploy": {
+        "label": "部署服务",
+        "description": "创建并启动 AgentKit Runtime"
+      },
+      "publish": {
+        "label": "发布服务",
+        "description": "等待服务就绪并生成访问地址"
+      },
+      "complete": {
+        "label": "部署完成",
+        "description": "智能体已可以正常使用"
+      },
+      "evaluation": {
+        "label": "创建评测集",
+        "description": "自动创建 Good Case 和 Bad Case 评测集"
+      },
+      "github": {
+        "label": "挂载 GitHub 持续交付",
+        "description": "初始化目标分支与 GitHub Actions workflow"
+      },
+      "update": {
+        "label": "更新实例配置",
+        "description": "将 Runtime 实例数调整为 {{min}}～{{max}}"
+      }
     },
     "githubStatus": {
       "published": "已发布",
@@ -453,10 +481,22 @@
     "clipboardReadError": "未能读取剪贴板。请允许剪贴板权限，或点击“导入环境”后手动粘贴分享码。",
     "clipboardUnsupported": "当前浏览器无法自动读取剪贴板；请点击“导入环境”后手动粘贴分享码。",
     "creation": {
-      "custom": { "label": "自定义配置", "description": "通过表单选择基础环境、Python、工具和技能" },
-      "dockerfile": { "label": "自定义 Dockerfile", "description": "上传或直接编辑 Dockerfile" },
-      "git": { "label": "从代码仓库构建", "description": "探查公开仓库并通过 CodePipeline 构建" },
-      "image": { "label": "使用已有镜像", "description": "绑定由外部流水线交付的 CR 镜像" }
+      "custom": {
+        "label": "自定义配置",
+        "description": "通过表单选择基础环境、Python、工具和技能"
+      },
+      "dockerfile": {
+        "label": "自定义 Dockerfile",
+        "description": "上传或直接编辑 Dockerfile"
+      },
+      "git": {
+        "label": "从代码仓库构建",
+        "description": "探查公开仓库并通过 CodePipeline 构建"
+      },
+      "image": {
+        "label": "使用已有镜像",
+        "description": "绑定由外部流水线交付的 CR 镜像"
+      }
     },
     "baseDescriptions": {
       "aio-sandbox": "内置 Sandbox Shell 能力 · Ubuntu 22.04",
@@ -684,7 +724,12 @@
     "commit": "提交",
     "workflow": "工作流",
     "syncFailed": "同步 GitHub 代码失败",
-    "status": { "mounted": "已挂载", "bound": "已绑定", "synced": "已同步", "created": "已创建" },
+    "status": {
+      "mounted": "已挂载",
+      "bound": "已绑定",
+      "synced": "已同步",
+      "created": "已创建"
+    },
     "volcengine": "火山引擎",
     "mountDelivery": "挂载持续交付",
     "selectedForDeployment": "已选择，部署时挂载",
@@ -835,7 +880,10 @@
       "checking": "检查更新",
       "unknown": "未知阶段"
     },
-    "duration": { "seconds": "{{count}} 秒", "minutesSeconds": "{{minutes}} 分 {{seconds}} 秒" },
+    "duration": {
+      "seconds": "{{count}} 秒",
+      "minutesSeconds": "{{minutes}} 分 {{seconds}} 秒"
+    },
     "logPermissionPrefix": "无法读取 VeFaaS 发布日志。Function 角色缺少 ",
     "logPermissionSuffix": " 权限，更新会继续。",
     "openIamConsole": "前往 IAM 控制台配置权限",
@@ -954,7 +1002,10 @@
     "network": "网络",
     "networkPreserved": "现有 Runtime 的区域与网络模式保持不变。",
     "networkMode": "网络模式",
-    "networkModes": { "public": "公网", "both": "公网 + VPC" },
+    "networkModes": {
+      "public": "公网",
+      "both": "公网 + VPC"
+    },
     "subnetId": "子网 ID",
     "subnetHint": "可选，多个用逗号分隔",
     "sharedInternetAccess": "VPC 内共享公网出口",
@@ -1148,7 +1199,8 @@
     "deleteDescription": "确定删除工作区“{{name}}”吗？环境本身不会被删除。",
     "deleted": "已删除工作区“{{name}}”",
     "clipboardPermissionError": "未能读取剪贴板。请允许剪贴板权限，或点击“导入环境”后手动粘贴分享码。",
-    "clipboardUnsupported": "当前浏览器无法自动读取剪贴板；请点击“导入环境”后手动粘贴分享码。"
+    "clipboardUnsupported": "当前浏览器无法自动读取剪贴板；请点击“导入环境”后手动粘贴分享码。",
+    "codeProjects": "代码项目"
   },
   "resourceCollection": {
     "back": "返回",

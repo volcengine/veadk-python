@@ -1,3 +1,4 @@
+import { WorkspaceCollectionLayout } from "./WorkspaceCollectionLayout";
 import {
   useDeferredValue,
   useEffect,
@@ -33,12 +34,9 @@ import {
   ResourceDetailSummary,
   ResourceGrid,
   ResourceLoadingState,
-  ResourcePageHeader,
   ResourcePageShell,
   ResourceResults,
   ResourceSearch,
-  ResourceTabs,
-  ResourceToolbar,
 } from "./ResourceCollection";
 import { StudioConfirmDialog } from "./StudioConfirmDialog";
 import {
@@ -229,7 +227,7 @@ function WorkspaceEditor({
   );
 }
 
-function WorkspaceList({ onEnvironment }: { onEnvironment: () => void }) {
+function WorkspaceList({ onEnvironment, onProjects }: { onEnvironment: () => void; onProjects?: () => void }) {
   const { t, i18n } = useTranslation("ui");
   const [workspaces, setWorkspaces] = useState<StudioWorkspace[]>([]);
   const [environments, setEnvironments] = useState<StudioEnvironment[]>([]);
@@ -313,30 +311,14 @@ function WorkspaceList({ onEnvironment }: { onEnvironment: () => void }) {
   }
 
   return (
-    <ResourcePageShell className="workspace-center" aria-label={t("workspace.title")}>
-      <ResourcePageHeader title={t("workspace.title")} />
-      <ResourceToolbar>
-        <ResourceTabs
-          items={[
-            { id: "workspaces", label: t("workspace.title") },
-            { id: "environments", label: t("common.environment") },
-          ]}
-          value="workspaces"
-          onChange={(value) => {
-            if (value === "environments") onEnvironment();
-          }}
-          ariaLabel={t("workspace.resourceType")}
-          idPrefix="workspace-center"
-        />
-        <div className="resource-toolbar__actions">
+    <WorkspaceCollectionLayout section="workspaces" onEnvironment={onEnvironment} onProjects={onProjects} actions={<>
           {statusMessage ? (
             <span className={`workspace-status${statusError ? " is-error" : ""}`} role={statusError ? "alert" : "status"} aria-live="polite">
               {statusMessage}
             </span>
           ) : null}
           <ResourceSearch aria-label={t("workspace.searchWorkspaces")} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("workspace.searchWorkspaces")} />
-        </div>
-      </ResourceToolbar>
+    </>}>
       <ResourceResults aria-live="polite">
         {loading ? (
           <ResourceLoadingState />
@@ -412,13 +394,13 @@ function WorkspaceList({ onEnvironment }: { onEnvironment: () => void }) {
           }}
         />
       ) : null}
-    </ResourcePageShell>
+    </WorkspaceCollectionLayout>
   );
 }
 
-export function WorkspaceCenter({ cloudProvider }: { cloudProvider: CloudProvider }) {
+export function WorkspaceCenter({ cloudProvider, onProjects, initialSection = "workspaces" }: { cloudProvider: CloudProvider; onProjects?: () => void; initialSection?: "workspaces" | "environments" }) {
+  const [section, setSection] = useState<"workspaces" | "environments">(initialSection);
   const { t } = useTranslation("ui");
-  const [section, setSection] = useState<"workspaces" | "environments">("workspaces");
   const [clipboardImport, setClipboardImport] = useState<EnvironmentClipboardImportRequest | null>(null);
   const [clipboardReadError, setClipboardReadError] = useState("");
   const clipboardRequestKeyRef = useRef(0);
@@ -467,10 +449,11 @@ export function WorkspaceCenter({ cloudProvider }: { cloudProvider: CloudProvide
       <EnvironmentCenter
         cloudProvider={cloudProvider}
         onWorkspace={() => setSection("workspaces")}
+        onProjects={onProjects}
         clipboardImport={clipboardImport}
         clipboardReadError={clipboardReadError}
       />
     );
   }
-  return <WorkspaceList onEnvironment={openEnvironments} />;
+  return <WorkspaceList onEnvironment={openEnvironments} onProjects={onProjects} />;
 }

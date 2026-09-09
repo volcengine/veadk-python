@@ -161,14 +161,36 @@
     },
     "rootAgent": "Main agent",
     "unnamedStep": "Unnamed step",
-    "terminals": { "input": "User request", "output": "Final response" },
-    "edges": { "then": "Then", "continueLoop": "Continue loop", "call": "Call" },
+    "terminals": {
+      "input": "User request",
+      "output": "Final response"
+    },
+    "edges": {
+      "then": "Then",
+      "continueLoop": "Continue loop",
+      "call": "Call"
+    },
     "patterns": {
-      "llm": { "label": "Agent", "description": "Understand a task and complete one specific job" },
-      "sequential": { "label": "Sequential", "description": "Run internal steps one after another" },
-      "parallel": { "label": "Parallel", "description": "Run internal steps together, then combine their results" },
-      "loop": { "label": "Loop", "description": "Repeat internal steps until the stop condition is met" },
-      "a2a": { "label": "Remote agent", "description": "Call an existing remote agent" }
+      "llm": {
+        "label": "Agent",
+        "description": "Understand a task and complete one specific job"
+      },
+      "sequential": {
+        "label": "Sequential",
+        "description": "Run internal steps one after another"
+      },
+      "parallel": {
+        "label": "Parallel",
+        "description": "Run internal steps together, then combine their results"
+      },
+      "loop": {
+        "label": "Loop",
+        "description": "Repeat internal steps until the stop condition is met"
+      },
+      "a2a": {
+        "label": "Remote agent",
+        "description": "Call an existing remote agent"
+      }
     },
     "actions": {
       "insertHere": "Insert a step here",
@@ -367,9 +389,18 @@
       "nodeConfig": "Node configuration"
     },
     "types": {
-      "sequential": { "label": "Sequential", "description": "Run nodes one after another" },
-      "parallel": { "label": "Parallel", "description": "Run nodes at the same time" },
-      "loop": { "label": "Loop", "description": "Run nodes repeatedly" }
+      "sequential": {
+        "label": "Sequential",
+        "description": "Run nodes one after another"
+      },
+      "parallel": {
+        "label": "Parallel",
+        "description": "Run nodes at the same time"
+      },
+      "loop": {
+        "label": "Loop",
+        "description": "Run nodes repeatedly"
+      }
     },
     "placeholders": {
       "description": "Describe what this workflow does…",
@@ -399,9 +430,21 @@
     "ariaLabel": "Quick mode creation",
     "progress": "Quick mode creation progress",
     "steps": {
-      "agent": { "label": "Agent", "title": "Basic information", "description": "Set the agent's name, purpose, behavior, and capabilities" },
-      "environment": { "label": "Environment", "title": "Configure the environment", "description": "Choose the default environment or a custom environment you have built" },
-      "deployment": { "label": "Deployment", "title": "Deployment preferences", "description": "Configure AgentKit cloud settings" }
+      "agent": {
+        "label": "Agent",
+        "title": "Basic information",
+        "description": "Set the agent's name, purpose, behavior, and capabilities"
+      },
+      "environment": {
+        "label": "Environment",
+        "title": "Configure the environment",
+        "description": "Choose the default environment or a custom environment you have built"
+      },
+      "deployment": {
+        "label": "Deployment",
+        "title": "Deployment preferences",
+        "description": "Configure AgentKit cloud settings"
+      }
     },
     "model": {
       "label": "Model",
@@ -463,13 +506,21 @@
       "userPoolDescription": "Use a JWT issued by an Identity user pool",
       "sessionStorage": "Session storage",
       "inMemoryStorage": "Temporary in-memory storage",
-      "backends": { "sqlite": "SQLite file", "mysql": "MySQL", "postgresql": "PostgreSQL" },
+      "backends": {
+        "sqlite": "SQLite file",
+        "mysql": "MySQL",
+        "postgresql": "PostgreSQL"
+      },
       "instances": "Instance settings",
       "minInstances": "Minimum instances",
       "maxInstances": "Maximum instances",
       "inMemoryHint": "To prevent session loss across instances, keep the Runtime at 1–1 instances",
       "networkMode": "Network mode",
-      "network": { "public": "Public", "private": "Private", "both": "Public and private" },
+      "network": {
+        "public": "Public",
+        "private": "Private",
+        "both": "Public and private"
+      },
       "subnetIds": "Subnet IDs (optional, comma-separated)",
       "sharedInternet": "Shared public egress in the VPC",
       "sharedInternetHint": "Allow private Runtimes to access the public internet through shared egress",
@@ -501,7 +552,13 @@
     },
     "workspace": {
       "progress": "Agent creation progress",
-      "modes": { "build": "Build", "validate": "Debug", "optimize": "Optimize", "environment": "Environment", "publish": "Publish" },
+      "modes": {
+        "build": "Build",
+        "validate": "Debug",
+        "optimize": "Optimize",
+        "environment": "Environment",
+        "publish": "Publish"
+      },
       "titles": {
         "build": "Customize your agent architecture",
         "validate": "Debug your agent",
@@ -511,24 +568,71 @@
       }
     },
     "sections": {
-      "type": { "label": "Agent type", "hint": "Choose an agent type" },
-      "basic": { "label": "Basic information", "hint": "Name, description, and system prompt" },
-      "model": { "label": "Model", "hint": "Model and service (optional)" },
-      "tools": { "label": "Tools", "hint": "Callable capabilities" },
-      "skills": { "label": "Skills", "hint": "Declarative skills" },
-      "knowledge": { "label": "Knowledge base", "hint": "External knowledge retrieval" },
-      "memory": { "label": "Memory", "hint": "Short-term and long-term memory" },
-      "subagents": { "label": "Subagents", "hint": "Nested collaboration" },
-      "review": { "label": "Finish", "hint": "Preview and create" }
+      "type": {
+        "label": "Agent type",
+        "hint": "Choose an agent type"
+      },
+      "basic": {
+        "label": "Basic information",
+        "hint": "Name, description, and system prompt"
+      },
+      "model": {
+        "label": "Model",
+        "hint": "Model and service (optional)"
+      },
+      "tools": {
+        "label": "Tools",
+        "hint": "Callable capabilities"
+      },
+      "skills": {
+        "label": "Skills",
+        "hint": "Declarative skills"
+      },
+      "knowledge": {
+        "label": "Knowledge base",
+        "hint": "External knowledge retrieval"
+      },
+      "memory": {
+        "label": "Memory",
+        "hint": "Short-term and long-term memory"
+      },
+      "subagents": {
+        "label": "Subagents",
+        "hint": "Nested collaboration"
+      },
+      "review": {
+        "label": "Finish",
+        "hint": "Preview and create"
+      }
     },
     "agentTypes": {
       "ariaLabel": "Agent type",
       "remoteChildOnly": "Remote agents can only be used as child steps",
-      "llm": { "label": "Agent", "fullLabel": "LLM agent", "description": "Uses an LLM to complete tasks autonomously" },
-      "sequential": { "label": "Sequential", "fullLabel": "Sequential agent", "description": "Runs subagents one after another" },
-      "parallel": { "label": "Parallel", "fullLabel": "Parallel agent", "description": "Runs subagents in parallel, then combines their results" },
-      "loop": { "label": "Loop", "fullLabel": "Loop agent", "description": "Repeats subagents until the stop condition is met" },
-      "a2a": { "label": "Remote agent", "fullLabel": "Remote agent", "description": "Calls a remote agent through the A2A protocol" }
+      "llm": {
+        "label": "Agent",
+        "fullLabel": "LLM agent",
+        "description": "Uses an LLM to complete tasks autonomously"
+      },
+      "sequential": {
+        "label": "Sequential",
+        "fullLabel": "Sequential agent",
+        "description": "Runs subagents one after another"
+      },
+      "parallel": {
+        "label": "Parallel",
+        "fullLabel": "Parallel agent",
+        "description": "Runs subagents in parallel, then combines their results"
+      },
+      "loop": {
+        "label": "Loop",
+        "fullLabel": "Loop agent",
+        "description": "Repeats subagents until the stop condition is met"
+      },
+      "a2a": {
+        "label": "Remote agent",
+        "fullLabel": "Remote agent",
+        "description": "Calls a remote agent through the A2A protocol"
+      }
     },
     "basic": {
       "agentName": "Agent name",
@@ -626,16 +730,41 @@
       "bytePlusUnavailable": "Harness Sidecar optimizations are not available for BytePlus accounts yet. Leave all optimizations unselected to continue; regular BytePlus agents are not affected.",
       "releaseScenario": "Optimization scenario: {{profile}}",
       "profiles": {
-        "default": { "label": "Custom", "description": "Choose components as needed. The Sidecar stays off when none are selected." },
-        "ops": { "label": "Operations", "description": "For operations diagnostics, databases, logs, and monitoring MCP servers." }
+        "default": {
+          "label": "Custom",
+          "description": "Choose components as needed. The Sidecar stays off when none are selected."
+        },
+        "ops": {
+          "label": "Operations",
+          "description": "For operations diagnostics, databases, logs, and monitoring MCP servers."
+        }
       },
-      "groups": { "quality": "Improve response quality", "cost": "Reduce runtime cost", "stability": "Improve runtime stability" },
+      "groups": {
+        "quality": "Improve response quality",
+        "cost": "Reduce runtime cost",
+        "stability": "Improve runtime stability"
+      },
       "options": {
-        "context_engine": { "label": "Context management", "description": "Manage context assembly, task anchoring, and context budgets." },
-        "compressor": { "label": "Context and result compression", "description": "Compress long context and large tool results to reduce token usage." },
-        "verifier": { "label": "Response verification and repair", "description": "Verify evidence and responses, then repair or alert on failure." },
-        "long_run_control": { "label": "Goal task control", "description": "Manage progress, continuation, and completion conditions for Goal tasks." },
-        "mcp_resilience": { "label": "MCP resilience", "description": "Manage connections, timeouts, empty results, large responses, and call budgets. Includes read-only SQL protection by default." }
+        "context_engine": {
+          "label": "Context management",
+          "description": "Manage context assembly, task anchoring, and context budgets."
+        },
+        "compressor": {
+          "label": "Context and result compression",
+          "description": "Compress long context and large tool results to reduce token usage."
+        },
+        "verifier": {
+          "label": "Response verification and repair",
+          "description": "Verify evidence and responses, then repair or alert on failure."
+        },
+        "long_run_control": {
+          "label": "Goal task control",
+          "description": "Manage progress, continuation, and completion conditions for Goal tasks."
+        },
+        "mcp_resilience": {
+          "label": "MCP resilience",
+          "description": "Manage connections, timeouts, empty results, large responses, and call budgets. Includes read-only SQL protection by default."
+        }
       }
     },
     "model": {
@@ -690,57 +819,193 @@
       "mcp": "MCP tools"
     },
     "catalog": {
-      "web_search": { "label": "Web search", "description": "Get real-time information with Volcengine Web Search." },
-      "parallel_web_search": { "label": "Parallel web search", "description": "Run multiple search queries in parallel and combine the results faster." },
-      "link_reader": { "label": "Link reader", "description": "Fetch and read the main content from a URL." },
-      "web_scraper": { "label": "Web scraper", "description": "Crawl webpages into structured data. Requires the Scraper service." },
-      "image_generate": { "label": "Image generation", "description": "Generate images from text with Doubao Seedream." },
-      "image_edit": { "label": "Image editing", "description": "Edit or transform images with Doubao SeedEdit." },
-      "video_generate": { "label": "Video generation", "description": "Generate videos from text or images with Doubao Seedance, including task status queries." },
-      "text_to_speech": { "label": "Text to speech (TTS)", "description": "Convert text to speech with Volcengine Speech." },
-      "run_code": { "label": "Code execution", "description": "Run code in a sandbox." },
-      "vesearch": { "label": "VeSearch", "description": "Search with Volcengine VeSearch. Requires a bot endpoint." },
+      "web_search": {
+        "label": "Web search",
+        "description": "Get real-time information with Volcengine Web Search."
+      },
+      "parallel_web_search": {
+        "label": "Parallel web search",
+        "description": "Run multiple search queries in parallel and combine the results faster."
+      },
+      "link_reader": {
+        "label": "Link reader",
+        "description": "Fetch and read the main content from a URL."
+      },
+      "web_scraper": {
+        "label": "Web scraper",
+        "description": "Crawl webpages into structured data. Requires the Scraper service."
+      },
+      "image_generate": {
+        "label": "Image generation",
+        "description": "Generate images from text with Doubao Seedream."
+      },
+      "image_edit": {
+        "label": "Image editing",
+        "description": "Edit or transform images with Doubao SeedEdit."
+      },
+      "video_generate": {
+        "label": "Video generation",
+        "description": "Generate videos from text or images with Doubao Seedance, including task status queries."
+      },
+      "text_to_speech": {
+        "label": "Text to speech (TTS)",
+        "description": "Convert text to speech with Volcengine Speech."
+      },
+      "run_code": {
+        "label": "Code execution",
+        "description": "Run code in a sandbox."
+      },
+      "vesearch": {
+        "label": "VeSearch",
+        "description": "Search with Volcengine VeSearch. Requires a bot endpoint."
+      },
       "links": {
         "console": "Console",
         "documentation": "Documentation"
       },
       "env": {
-        "modelAgentName": { "comment": "Model name" },
-        "embeddingModelName": { "comment": "Embedding model required by memory and knowledge bases" },
-        "vikingMemoryProject": { "comment": "VikingDB memory project" },
-        "vikingMemoryRegion": { "comment": "VikingDB memory region" },
-        "vikingMemoryType": { "comment": "Memory types" },
-        "feishuAppId": { "comment": "Feishu app ID" },
-        "feishuAppSecret": { "comment": "Feishu app secret", "placeholder": "Enter the app secret" },
-        "registrySpaceId": { "comment": "AgentKit agent center", "placeholder": "Select an agent center" },
-        "registryTopK": { "comment": "Number of agents to retrieve" },
-        "registryRegion": { "comment": "AgentKit agent center region" },
-        "registryEndpoint": { "comment": "AgentKit agent center OpenAPI endpoint" },
-        "agentKitToolId": { "comment": "Code execution sandbox ID" },
-        "agentKitToolRegion": { "comment": "AgentKit Tools region" },
-        "openVikingUrl": { "comment": "OpenViking service URL" },
-        "openVikingMemoryUserId": { "comment": "Memory owner ID", "help": "The user segment in viking://user/<this value>/peers/<request user>/memories. Use it to isolate agents, tenants, or business scenarios. The default is default." },
-        "openVikingMemoryPolicy": { "comment": "Memory policy", "help": "Controls memory extraction and isolation. Leave it blank to use the official default policy." },
-        "openVikingKnowledgeUserId": { "comment": "Knowledge base owner ID", "help": "Used in the default path viking://user/<this value>/resources/<knowledge base index>/ when no resource directory is configured. The default is default." },
-        "openVikingTargetUri": { "comment": "Knowledge base resource directory", "help": "Leave blank to generate it from the KnowledgeBase index. When provided, this OpenViking resource directory takes precedence." },
-        "tlsServiceName": { "comment": "TLS topic_id. Leave blank to create one automatically" }
+        "modelAgentName": {
+          "comment": "Model name"
+        },
+        "embeddingModelName": {
+          "comment": "Embedding model required by memory and knowledge bases"
+        },
+        "vikingMemoryProject": {
+          "comment": "VikingDB memory project"
+        },
+        "vikingMemoryRegion": {
+          "comment": "VikingDB memory region"
+        },
+        "vikingMemoryType": {
+          "comment": "Memory types"
+        },
+        "feishuAppId": {
+          "comment": "Feishu app ID"
+        },
+        "feishuAppSecret": {
+          "comment": "Feishu app secret",
+          "placeholder": "Enter the app secret"
+        },
+        "registrySpaceId": {
+          "comment": "AgentKit agent center",
+          "placeholder": "Select an agent center"
+        },
+        "registryTopK": {
+          "comment": "Number of agents to retrieve"
+        },
+        "registryRegion": {
+          "comment": "AgentKit agent center region"
+        },
+        "registryEndpoint": {
+          "comment": "AgentKit agent center OpenAPI endpoint"
+        },
+        "agentKitToolId": {
+          "comment": "Code execution sandbox ID"
+        },
+        "agentKitToolRegion": {
+          "comment": "AgentKit Tools region"
+        },
+        "openVikingUrl": {
+          "comment": "OpenViking service URL"
+        },
+        "openVikingMemoryUserId": {
+          "comment": "Memory owner ID",
+          "help": "The user segment in viking://user/<this value>/peers/<request user>/memories. Use it to isolate agents, tenants, or business scenarios. The default is default."
+        },
+        "openVikingMemoryPolicy": {
+          "comment": "Memory policy",
+          "help": "Controls memory extraction and isolation. Leave it blank to use the official default policy."
+        },
+        "openVikingKnowledgeUserId": {
+          "comment": "Knowledge base owner ID",
+          "help": "Used in the default path viking://user/<this value>/resources/<knowledge base index>/ when no resource directory is configured. The default is default."
+        },
+        "openVikingTargetUri": {
+          "comment": "Knowledge base resource directory",
+          "help": "Leave blank to generate it from the KnowledgeBase index. When provided, this OpenViking resource directory takes precedence."
+        },
+        "tlsServiceName": {
+          "comment": "TLS topic_id. Leave blank to create one automatically"
+        }
       }
     },
     "backends": {
       "shortTerm": {
-        "local": { "label": "In-memory", "description": "Stored in the process without persistence. Best for development and debugging." }, "sqlite": { "label": "SQLite file", "description": "Persist data to a local .db file." }, "mysql": { "label": "MySQL", "description": "Persist data to MySQL." }, "postgresql": { "label": "PostgreSQL", "description": "Persist data to PostgreSQL." }
+        "local": {
+          "label": "In-memory",
+          "description": "Stored in the process without persistence. Best for development and debugging."
+        },
+        "sqlite": {
+          "label": "SQLite file",
+          "description": "Persist data to a local .db file."
+        },
+        "mysql": {
+          "label": "MySQL",
+          "description": "Persist data to MySQL."
+        },
+        "postgresql": {
+          "label": "PostgreSQL",
+          "description": "Persist data to PostgreSQL."
+        }
       },
       "longTerm": {
-        "local": { "label": "Local vector store", "description": "In-process llama-index vector store." }, "opensearch": { "label": "OpenSearch", "description": "Vector retrieval with OpenSearch." }, "redis": { "label": "Redis", "description": "Vector retrieval with Redis." }, "viking": { "label": "VikingDB Memory", "description": "VikingDB memory with user profile support." }, "openviking": { "label": "OpenViking Memory", "description": "Long-term memory that stores and retrieves preferences, events, and entities per user." }, "mem0": { "label": "Mem0", "description": "Managed memory from Mem0." }
+        "local": {
+          "label": "Local vector store",
+          "description": "In-process llama-index vector store."
+        },
+        "opensearch": {
+          "label": "OpenSearch",
+          "description": "Vector retrieval with OpenSearch."
+        },
+        "redis": {
+          "label": "Redis",
+          "description": "Vector retrieval with Redis."
+        },
+        "viking": {
+          "label": "VikingDB Memory",
+          "description": "VikingDB memory with user profile support."
+        },
+        "openviking": {
+          "label": "OpenViking Memory",
+          "description": "Long-term memory that stores and retrieves preferences, events, and entities per user."
+        },
+        "mem0": {
+          "label": "Mem0",
+          "description": "Managed memory from Mem0."
+        }
       },
       "knowledge": {
-        "viking": { "label": "VikingDB Knowledge", "description": "VikingDB knowledge base." }, "opensearch": { "label": "OpenSearch", "description": "Vector retrieval with OpenSearch." }, "context_search": { "label": "Context Search", "description": "Volcengine Context Search without embedding configuration." }, "openviking": { "label": "OpenViking Knowledge", "description": "OpenViking resource-directory knowledge base without embedding configuration." }
+        "viking": {
+          "label": "VikingDB Knowledge",
+          "description": "VikingDB knowledge base."
+        },
+        "opensearch": {
+          "label": "OpenSearch",
+          "description": "Vector retrieval with OpenSearch."
+        },
+        "context_search": {
+          "label": "Context Search",
+          "description": "Volcengine Context Search without embedding configuration."
+        },
+        "openviking": {
+          "label": "OpenViking Knowledge",
+          "description": "OpenViking resource-directory knowledge base without embedding configuration."
+        }
       }
     },
     "exporters": {
-      "apmplus": { "label": "APMPlus", "description": "Volcengine APMPlus application performance monitoring." },
-      "cozeloop": { "label": "CozeLoop", "description": "Distributed tracing with CozeLoop." },
-      "tls": { "label": "TLS (Log Service)", "description": "Export logs to Volcengine TLS." }
+      "apmplus": {
+        "label": "APMPlus",
+        "description": "Volcengine APMPlus application performance monitoring."
+      },
+      "cozeloop": {
+        "label": "CozeLoop",
+        "description": "Distributed tracing with CozeLoop."
+      },
+      "tls": {
+        "label": "TLS (Log Service)",
+        "description": "Export logs to Volcengine TLS."
+      }
     },
     "knowledge": {
       "title": "Knowledge base",
@@ -835,7 +1100,12 @@
       "complete": "Deployment complete",
       "failed": "Deployment failed",
       "updateAndPublish": "Update and publish",
-      "stages": { "build": "Build image", "deploy": "Deploy Runtime", "publish": "Publish service", "running": "Deploying" }
+      "stages": {
+        "build": "Build image",
+        "deploy": "Deploy Runtime",
+        "publish": "Publish service",
+        "running": "Deploying"
+      }
     },
     "publish": {
       "generating": "Generating publish configuration",
@@ -922,5 +1192,41 @@
       "shortTermMemory": "Short-term",
       "longTermMemory": "Long-term"
     }
+  },
+  "workspace": {
+    "checkingExpiry": "Checking expiry",
+    "waitingRecovery": "Waiting for recovery",
+    "listFailed": "Could not load projects",
+    "recoveryFailed": "Could not restore the workspace. Try again",
+    "operationFailed": "Project operation failed. Try again",
+    "title": "Code projects",
+    "back": "Back to code projects",
+    "restart": "This development environment will restart in {{countdown}}. Save your work regularly",
+    "expiresAt": "Expires at {{date}}",
+    "exitFullscreen": "Exit full screen",
+    "fullscreen": "Full screen",
+    "exitFullscreenHint": "Exit full screen (Esc)",
+    "recovering": "Restoring your workspace. Your project will reopen automatically",
+    "retry": "Retry connection",
+    "search": "Search code projects",
+    "newTitle": "New code project",
+    "new": "New project",
+    "readingStats": "Loading project details",
+    "createdAt": "Created",
+    "opening": "Opening",
+    "unknownCreatedAt": "Creation time unknown",
+    "open": "Open project",
+    "empty": "No matching code projects",
+    "close": "Close new project",
+    "name": "Project name",
+    "placeholder": "e.g. my-agent",
+    "nameHelp": "Start with a letter and use letters, numbers, underscores or hyphens, up to 64 characters",
+    "cancel": "Cancel",
+    "create": "Create project",
+    "files_one": "{{count}} file",
+    "files_other": "{{count}} files",
+    "directories_one": "{{count}} directory",
+    "directories_other": "{{count}} directories",
+    "separator": ", "
   }
 }
