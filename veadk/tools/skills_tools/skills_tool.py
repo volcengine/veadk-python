@@ -261,24 +261,42 @@ class SkillsTool(BaseTool):
                     return f"Error: Failed to install skill '{skill_name}': {exc}"
 
             else:
-                # 3. Use the local skill
-                # Create symlink to skills directory
-                skills_mount = Path(skill.path)
+                # Refresh an existing link when a configured local source moves.
+                skills_mount = Path(skill.path).resolve()
                 skills_link = skill_dir / skill_name
-                if skills_mount.exists() and not skills_link.exists():
-                    try:
-                        skills_link.symlink_to(skills_mount)
-                        logger.debug(
-                            f"Created symlink: {skills_link} -> {skills_mount}"
+                try:
+                    if Path(skill_name).name != skill_name or skill_name in {".", ".."}:
+                        raise ValueError("Skill name must be a single directory name")
+                    if not skills_mount.is_dir():
+                        raise FileNotFoundError(
+                            "Configured local skill directory is missing"
                         )
-                    except FileExistsError:
-                        # Symlink already exists (race condition from concurrent session setup)
-                        pass
-                    except Exception as e:
-                        # Log but don't fail - skills can still be accessed via absolute path
-                        logger.warning(
-                            f"Failed to create skills symlink for {str(skills_mount)}: {e}"
+                    if skills_link.exists() and not skills_link.is_symlink():
+                        raise FileExistsError(
+                            "Skill destination is not a managed symlink"
                         )
+                    if (
+                        not skills_link.is_symlink()
+                        or skills_link.resolve() != skills_mount
+                    ):
+                        with tempfile.TemporaryDirectory(
+                            prefix=".skill-link-", dir=working_dir
+                        ) as temp:
+                            staging = Path(temp) / "link"
+                            staging.symlink_to(skills_mount)
+                            os.replace(staging, skills_link)
+                        logger.info(
+                            "Updated local skill link: %s -> %s",
+                            skills_link,
+                            skills_mount,
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to link local skill '%s': %s",
+                        skill_name,
+                        type(exc).__name__,
+                    )
+                    return f"Error: Failed to link local skill '{skill_name}': {exc}"
 
         skill_file = self._find_skill_file(skill_dir, skill_name)
         if not skill_file.exists():

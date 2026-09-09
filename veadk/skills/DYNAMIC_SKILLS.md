@@ -1,60 +1,38 @@
-# Dynamic local-execution skills
+# Dynamic legacy skills
 
-`Agent(skills=[local_directory, space_id], skills_mode="local",
-enable_dynamic_load_skills=True)` refreshes configured sources before each
-invocation. The default remains false. Comma-separated spaces and provider
-routing use the existing loader. Space versions are provider-bound versions,
-not an independent client-side latest-version policy.
+The existing `Agent(skills=[local_directory, space_id], skills_mode="local",
+enable_dynamic_load_skills=True)` option registers `check_skills` as a before-agent
+callback. Its default remains false. It works without a sandbox subclass.
 
-An instance lock covers the complete async event stream, including callbacks
-and closure. Agents do not share refresh state. This is not a cross-process
-filesystem lock. Realtime/live execution is not covered.
+Each callback reads the current `Agent.skills`, including replaced directories,
+added/removed spaces, and an empty list. Comma-separated spaces use the existing
+provider routing. Provider versions remain authoritative; there is no additional
+client-side latest-version policy.
 
-Metadata and package-locator changes construct a candidate Toolset before
-publication. Unchanged results retain the tools. Names render in stable order;
-version-only changes do not add generation IDs or timestamps to the prompt.
-Local SKILL.md content changes invalidate the execution view; arbitrary scripts
-and concurrent filesystem writes are not snapshotted. The prompt asks the model
-to reload instructions each turn; conversation history is not rewritten. Prompt
-stability alone does not establish provider-side prefix-cache hits.
+State is held by the existing SkillsToolset instance, with its baseline recorded
+during initialization. Changes include local SKILL.md content, source identity,
+package path, bucket, version and metadata. A path-only change replaces execution
+tools without rewriting an otherwise identical skills prompt. Stable name ordering
+avoids prompt churn when a provider reorders results. The base instruction and
+other callback text are preserved, including callable instructions.
 
-A failed SDK source retains its previous result by default, exposing a sanitized
-entry in `agent.skills_status["issues"]`. Use
-`skills_refresh_failure_policy="omit"` to omit it instead. A successful empty
-result removes the source's skills. Initial failures have nothing to retain.
+A failed source retains its previous successful result; successful empty responses
+remove it. Sources removed from configuration cannot reappear from retained state.
+`SkillsToolset.status()` reports safe error types and loaded names/IDs/versions.
+The next successful refresh clears failures. Tool construction finishes before the
+new skill dictionary, checklist view and tools are published.
 
-## External results and instrumentation
+Applications can subclass SkillsToolset's named `prepare_skills`, `wrap_tool`,
+and `on_source_error` methods to adapt results and instrumentation. Rebuilding tools
+uses the same instance, so instrumentation is preserved. There are no new Agent
+callable parameters, execution overrides, or runtime binding/discovery components.
 
-`skills_transform` accepts a synchronous or asynchronous callable:
-
-```python
-async def merge_skills(sdk_skills, invocation_context):
-    return combine(sdk_skills, await external_source.refresh())
-
-agent = Agent(
-    name="example",
-    skills=["/path/to/skills", "ss-example"],
-    skills_mode="local",
-    enable_dynamic_load_skills=True,
-    skills_transform=merge_skills,
-    skill_tool_wrapper=instrument_tool,
-)
-```
-
-The transform receives copies of SDK Skill objects and returns the complete
-merged list before one publication. It runs every invocation, even if SDK-source
-refresh is disabled, and owns external-source precedence/errors. Duplicate names
-are rejected. Transform or wrapper errors abort preparation before publication.
-Construction prepares only SDK sources; external transforms first run at
-invocation time.
-
-`skill_tool_wrapper(tool)` returns a BaseTool and runs on every new Toolset,
-keeping instrumentation after refresh. Preserve names, declarations and behavior.
-The public SkillsToolset constructor also accepts `tool_wrapper=`. No private
-tool dictionary mutation or monkey patch is needed.
-
-These hooks apply to the legacy local-execution SkillsToolset path, not arbitrary
-tools or ADK SkillRegistry implementations.
+This callback does **not** lock the full execution of a shared Agent. Applications
+that run a mutable Agent concurrently must coordinate that execution themselves.
+The Playground sandbox does so in its own SkillSandboxAgent. Realtime/live flows,
+arbitrary local script writes, and remote objects overwritten without any locator
+or metadata change are not snapshotted. Prompt stability is not a guarantee of
+provider-side prefix-cache hits, and earlier conversation messages are not rewritten.
 
 ## Downloaded archive layout
 

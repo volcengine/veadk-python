@@ -16,15 +16,7 @@ from __future__ import annotations
 
 import os
 import warnings
-from typing import (
-    TYPE_CHECKING,
-    AsyncGenerator,
-    Callable,
-    Dict,
-    Literal,
-    Optional,
-    Union,
-)
+from typing import TYPE_CHECKING, AsyncGenerator, Dict, Literal, Optional, Union
 
 from google.adk.flows.llm_flows.base_llm_flow import BaseLlmFlow
 
@@ -43,7 +35,7 @@ from google.adk.agents.context_cache_config import ContextCacheConfig
 from google.adk.agents.llm_agent import InstructionProvider, ToolUnion
 from google.adk.agents.run_config import ToolThreadPoolConfig
 from google.adk.examples.base_example_provider import BaseExampleProvider
-from pydantic import ConfigDict, Field, PrivateAttr
+from pydantic import ConfigDict, Field
 from typing_extensions import Any
 
 from veadk.config import settings
@@ -198,18 +190,6 @@ class Agent(LlmAgent):
     enable_dataset_gen: bool = False
 
     enable_dynamic_load_skills: bool = False
-    # The transform receives SDK-loaded skills and the invocation context. It may
-    # asynchronously merge external results; it must return the complete list.
-    skills_transform: Optional[Callable] = Field(default=None, exclude=True)
-    skill_tool_wrapper: Optional[Callable] = Field(default=None, exclude=True)
-    skills_refresh_failure_policy: Literal["retain", "omit"] = "retain"
-    _skill_runtime: Any = PrivateAttr(default=None)
-
-    @property
-    def skills_status(self) -> dict:
-        """Safe per-source refresh status, without performing network requests."""
-        return self._skill_runtime.status() if self._skill_runtime else {"issues": []}
-
     enable_skills_checklist: bool = False
     _skills_with_checklist: Dict[str, Any] = {}
 
@@ -430,7 +410,7 @@ class Agent(LlmAgent):
                 else:
                     self.after_agent_callback = save_session_to_long_term_memory
 
-        if self.skills or self.skills_transform or self.enable_dynamic_load_skills:
+        if self.skills or self.enable_dynamic_load_skills:
             self.load_skills()
             if self.enable_skills_checklist:
                 logger.info("Skills checklist enabled")
@@ -530,16 +510,7 @@ class Agent(LlmAgent):
         )
 
     def load_skills(self):
-        from pathlib import Path
-
-        from veadk.skills.skill import Skill
-        from veadk.skills.utils import (
-            load_skills_from_cloud,
-            load_skills_from_directory,
-        )
-        from veadk.tools.skills_tools.skills_toolset import SkillsToolset
-
-        self.skills_dict: Dict[str, Skill] = {}
+        from veadk.skills.check_skills_callback import check_skills, initialize_skills
 
         # Determine skills_mode if not set
         if not self.skills_mode:
@@ -615,15 +586,6 @@ class Agent(LlmAgent):
                     )
             logger.info(f"Determined skills_mode: {self.skills_mode}")
 
-        if self.skills_mode == "local" and (
-            self.enable_dynamic_load_skills or self.skills_transform
-        ):
-            from veadk.skills.runtime import SkillRuntime
-
-            self._skill_runtime = SkillRuntime(self)
-            self._skill_runtime.initialize()
-            return
-
         if self.skills_mode == "local":
             warning_message = (
                 "Agent(skills=..., skills_mode='local') is deprecated for legacy "
@@ -637,67 +599,17 @@ class Agent(LlmAgent):
             warnings.warn(warning_message, DeprecationWarning, stacklevel=2)
             logger.warning(warning_message)
 
-        for item in self.skills:
-            if not item or str(item).strip() == "":
-                continue
-            path = Path(item)
-            if path.exists() and path.is_dir():
-                for skill in load_skills_from_directory(path):
-                    self.skills_dict[skill.name] = skill
-            else:
-                for skill in load_skills_from_cloud(item):
-                    self.skills_dict[skill.name] = skill
-        if self.skills_dict:
-            self.instruction += "\nYou have the following skills:\n"
-
-            self._skills_with_checklist = self.skills_dict
-
-            has_checklist = False
-            for skill in self.skills_dict.values():
-                self.instruction += (
-                    f"- name: {skill.name}\n- description: {skill.description}\n\n"
-                )
-                if skill.checklist:
-                    has_checklist = True
-
-            if has_checklist:
-                self.instruction += (
-                    "Some skills have a checklist that you must complete step by step. "
-                    "Use the `update_check_list` tool to mark each item as completed.\n\n"
-                )
-
-            if self.skills_mode not in [
-                "skills_sandbox",
-                "aio_sandbox",
-                "local",
-            ]:
-                raise ValueError(
-                    f"Unsupported skill mode {self.skills_mode}, use `skills_sandbox`, `aio_sandbox` or `local` instead."
-                )
-
-            if self.skills_mode == "skills_sandbox":
-                self.instruction += (
-                    "You can use the skills by calling the `execute_skills` tool.\n\n"
-                )
-
-            if self.skills_mode == "local":
-                self.instruction += (
-                    "You can use the skills by calling the `skills_tool` tool.\n\n"
-                )
-
-        else:
-            logger.warning("No skills loaded.")
-
-        self.tools.append(SkillsToolset(self.skills_dict, self.skills_mode))
+        initialize_skills(self)
 
         if self.enable_dynamic_load_skills:
-            # Preserve the remote-execution modes' existing callback behavior.
-            from veadk.skills.check_skills_callback import check_skills
-
-            callbacks = self.before_agent_callback
-            if callbacks:
-                callbacks = callbacks if isinstance(callbacks, list) else [callbacks]
-                self.before_agent_callback = [*callbacks, check_skills]
+            if self.before_agent_callback:
+                if isinstance(self.before_agent_callback, list):
+                    self.before_agent_callback.append(check_skills)
+                else:
+                    self.before_agent_callback = [
+                        self.before_agent_callback,
+                        check_skills,
+                    ]
             else:
                 self.before_agent_callback = check_skills
 
@@ -802,22 +714,6 @@ class Agent(LlmAgent):
                 logger.debug(f"Enable supervisor flow for agent: {self.name}")
                 return SupervisorAutoFlow(supervised_agent=self)
             return AutoFlow()
-
-    async def run_async(self, parent_context):
-        """Keep a mutable skill view pinned for the complete invocation stream."""
-        from contextlib import aclosing
-
-        runtime = self._skill_runtime
-        if runtime is None:
-            async with aclosing(super().run_async(parent_context)) as events:
-                async for event in events:
-                    yield event
-            return
-        async with runtime.lock:
-            await runtime.prepare(parent_context)
-            async with aclosing(super().run_async(parent_context)) as events:
-                async for event in events:
-                    yield event
 
     async def _run_async_impl(
         self, ctx: "InvocationContext"
