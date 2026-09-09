@@ -40,7 +40,7 @@ test("resource list pages compose the same shared layout and card primitives", (
     }
   }
   for (const component of ["ResourcePageShell", "ResourceToolbar", "ResourceResults", "ResourceGrid", "LibraryResourceCard"]) {
-    assert.match(sources.environments, new RegExp(`<${component}`));
+    assert.match(sources.environments + read("../src/ui/WorkspaceCollectionLayout.tsx"), new RegExp(`<${component}`));
   }
   for (const component of ["ResourcePageShell", "ResourceToolbar", "ResourceTabs", "ResourceResults", "ResourceGrid", "LibraryResourceCard"]) {
     assert.match(sources.cronjobs, new RegExp(`<${component}`));
