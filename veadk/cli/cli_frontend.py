@@ -5933,8 +5933,10 @@ def _run_frontend_server(
                 validated_test_request=test_request,
                 debug_mcp_env_values=debug_mcp_env_values,
             )
+            debug_runtime_env = debug_runtime_env_from_draft(draft)
             sidecar_env: dict[str, str] = {}
             sidecar_plan: dict[str, Any] | None = None
+            sidecar_mcp_references: tuple[str, ...] = ()
             if draft.harnessSidecar and draft.harnessSidecar.enabled:
                 capability = _harness_sidecar_debug_capability()
                 if not capability["available"]:
@@ -5977,6 +5979,40 @@ def _run_frontend_server(
                         status_code=409,
                         detail="Harness Sidecar 配置已更新，请重新解析后再启动调试。",
                     )
+                effective_components = {
+                    str(item) for item in sidecar_plan.get("effectiveComponents") or []
+                }
+                if "mcp_resilience" in effective_components:
+                    sidecar_mcp_draft = draft.model_dump(
+                        mode="json",
+                        by_alias=True,
+                        exclude_none=True,
+                    )
+                    try:
+                        structured_mcp = build_sidecar_mcp_servers_json(
+                            draft=sidecar_mcp_draft,
+                            secret_values={
+                                **debug_runtime_env,
+                                **debug_mcp_env_values,
+                            },
+                        )
+                    except LegacyRecoveryError as error:
+                        raise HTTPException(
+                            status_code=409,
+                            detail=_mcp_deployment_error_detail(error.code),
+                        ) from error
+                    if not json.loads(structured_mcp):
+                        raise HTTPException(
+                            status_code=409,
+                            detail=(
+                                "已选择 MCP 稳定性治理，请配置至少一个 HTTP MCP "
+                                "服务地址后重新启动调试。"
+                            ),
+                        )
+                    sidecar_env["MCP_SERVERS_JSON"] = structured_mcp
+                    sidecar_mcp_references = mcp_auth_environment_keys(
+                        sidecar_mcp_draft
+                    )
             temp_dir = tempfile.mkdtemp(prefix="veadk_generated_agent_test_")
             app_name = _write_generated_project(project, temp_dir)
             staged_environment_skills = ""
@@ -6011,7 +6047,9 @@ def _run_frontend_server(
                 if key.startswith("HARNESS_"):
                     runner_env.pop(key)
             runner_env.update(sidecar_env)
-            runner_env.update(debug_runtime_env_from_draft(draft))
+            runner_env.update(debug_runtime_env)
+            for reference in sidecar_mcp_references:
+                runner_env.pop(reference, None)
             selected_api_key_id = draft.deployment.modelApiKeyId.strip()
             selected_api_key_name = draft.deployment.modelApiKeyName.strip()
 
