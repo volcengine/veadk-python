@@ -5186,18 +5186,29 @@ def _run_frontend_server(
                         else _cloud_studio_private_networks
                     ),
                 )
-                if debug_mcp_env_values:
-                    draft = prepare_mcp_auth(draft)
-                    mcp_env_values = dict(draft.deployment.envValues)
-                    for key, value in debug_mcp_env_values.items():
-                        if value and not mcp_env_values.get(key):
-                            mcp_env_values[key] = value
-                    draft = await resolve_debug_mcp_endpoints(
-                        draft,
-                        mcp_env_values,
-                    )
-                else:
-                    draft = await resolve_debug_mcp_endpoints(draft)
+                draft = prepare_mcp_auth(draft)
+                prepared_payload = draft.model_dump(
+                    mode="json",
+                    by_alias=True,
+                    exclude_none=True,
+                )
+                prepared_references = mcp_auth_environment_keys(prepared_payload)
+                mcp_env_values = {
+                    reference: draft.deployment.envValues[reference]
+                    for reference in prepared_references
+                    if draft.deployment.envValues.get(reference)
+                }
+                for key, value in (debug_mcp_env_values or {}).items():
+                    if (
+                        key in prepared_references
+                        and value
+                        and not mcp_env_values.get(key)
+                    ):
+                        mcp_env_values[key] = value
+                draft = await resolve_debug_mcp_endpoints(
+                    draft,
+                    mcp_env_values,
+                )
             else:
                 validate_project_policy(draft)
             project = generate_project_from_draft(draft)
@@ -5762,7 +5773,19 @@ def _run_frontend_server(
                 raise HTTPException(status_code=422, detail=error.errors()) from error
 
             runtime_envs: dict[str, str] = {}
-            debug_mcp_env_values: dict[str, str] = {}
+            edited_draft = test_request.draft.model_dump(
+                mode="json",
+                by_alias=True,
+                exclude_none=True,
+            )
+            requested_references = mcp_auth_environment_keys(edited_draft)
+            requested_env_values = test_request.draft.deployment.envValues
+            submitted_mcp_env_values = {
+                reference: requested_env_values[reference]
+                for reference in requested_references
+                if requested_env_values.get(reference)
+            }
+            debug_mcp_env_values = dict(submitted_mcp_env_values)
             runtime_id = test_request.runtimeId.strip()
             runtime_region = _coerce_cloud_region(test_request.runtimeRegion)
             reuse_requests = tuple(
@@ -5775,13 +5798,6 @@ def _run_frontend_server(
                     detail="MCP credential reuse requires a Runtime update target",
                 )
             if runtime_id:
-                edited_draft = test_request.draft.model_dump(
-                    mode="json",
-                    by_alias=True,
-                    exclude_none=True,
-                )
-                requested_references = mcp_auth_environment_keys(edited_draft)
-                requested_env_values = test_request.draft.deployment.envValues
                 stored_references = tuple(
                     reference
                     for reference in requested_references
@@ -5858,7 +5874,7 @@ def _run_frontend_server(
                                 error.code,
                             )
                     try:
-                        debug_mcp_env_values = retained_mcp_secret_values(
+                        recovered_mcp_env_values = retained_mcp_secret_values(
                             published_draft=published_draft,
                             edited_draft=edited_draft,
                             published_reference_values=(published_reference_values),
@@ -5870,12 +5886,14 @@ def _run_frontend_server(
                                 published_reference_values=(published_reference_values),
                                 reuse_requests=reuse_requests,
                             )
-                            debug_mcp_env_values.update(
+                            recovered_mcp_env_values.update(
                                 mcp_supplied_secret_values_by_reference(
                                     edited_draft=edited_draft,
                                     supplied_credentials=supplied_credentials,
                                 )
                             )
+                        recovered_mcp_env_values.update(submitted_mcp_env_values)
+                        debug_mcp_env_values = recovered_mcp_env_values
                     except LegacyRecoveryError as error:
                         raise HTTPException(
                             status_code=409,
