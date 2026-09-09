@@ -2103,6 +2103,14 @@ def test_generated_agent_sidecar_debug_uses_runtime_apig_and_active_plan(
         lambda app, **kwargs: captured.setdefault("app", app),
     )
 
+    async def preserve_debug_mcp_endpoints(draft, env_values=None):
+        return draft
+
+    monkeypatch.setattr(
+        "veadk.cli.generated_agent_mcp.resolve_debug_mcp_endpoints",
+        preserve_debug_mcp_endpoints,
+    )
+
     _run_frontend_server(
         agents_dir=str(tmp_path),
         frontend_dir=None,
@@ -2143,8 +2151,28 @@ def test_generated_agent_sidecar_debug_uses_runtime_apig_and_active_plan(
                 "draft": {
                     "name": "sidecar-agent",
                     "instruction": "Answer briefly.",
+                    "mcpTools": [
+                        {
+                            "name": "catalog",
+                            "transport": "http",
+                            "url": "https://mcp.example.test/catalog/mcp",
+                            "authTokenEnv": "MCP_CATALOG_AUTH_TOKEN",
+                        },
+                        {
+                            "name": "fulfillment",
+                            "transport": "http",
+                            "url": "https://mcp.example.test/fulfillment/mcp",
+                            "authTokenEnv": "MCP_FULFILLMENT_AUTH_TOKEN",
+                        },
+                    ],
                     "harnessSidecar": {
                         "componentOverrides": {"mcp_resilience": True},
+                    },
+                    "deployment": {
+                        "envValues": {
+                            "MCP_CATALOG_AUTH_TOKEN": "catalog-test-token",
+                            "MCP_FULFILLMENT_AUTH_TOKEN": ("fulfillment-test-token"),
+                        }
                     },
                 }
             },
@@ -2161,6 +2189,20 @@ def test_generated_agent_sidecar_debug_uses_runtime_apig_and_active_plan(
     assert process_env["HARNESS_SIDECAR_TRANSPORT"] == "apig_runtime_port"
     assert process_env["HARNESS_SIDECAR_APIG_ENDPOINT"] == runtime_endpoint
     assert process_env["HARNESS_SIDECAR_APIG_API_KEY"] == runtime_key
+    assert json.loads(process_env["MCP_SERVERS_JSON"]) == [
+        {
+            "name": "catalog",
+            "url": "https://mcp.example.test/catalog/mcp",
+            "headers": {"Authorization": "Bearer catalog-test-token"},
+        },
+        {
+            "name": "fulfillment",
+            "url": "https://mcp.example.test/fulfillment/mcp",
+            "headers": {"Authorization": "Bearer fulfillment-test-token"},
+        },
+    ]
+    assert "MCP_CATALOG_AUTH_TOKEN" not in process_env
+    assert "MCP_FULFILLMENT_AUTH_TOKEN" not in process_env
     assert runtime_key not in run_response.text
     assert _FakeAsyncClient.gateway_requests == [
         {
