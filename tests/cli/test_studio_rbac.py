@@ -1277,6 +1277,63 @@ def test_byteplus_deploy_agentkit_uses_iam_file_for_sdk_templates(
     assert os.environ.get("BYTEPLUS_ACCESS_KEY") is None
 
 
+def test_volcengine_deploy_omits_feedback_evaluation_sets_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    evaluation_set_calls = 0
+
+    def launch(*, config_file: str, **_kwargs: Any) -> SimpleNamespace:
+        assert Path(config_file).is_file()
+        return SimpleNamespace(
+            success=True,
+            error=None,
+            deploy_result=SimpleNamespace(
+                endpoint_url="https://runtime.example.com",
+                metadata={
+                    "runtime_id": "runtime-default-evaluation-off",
+                    "runtime_name": "default-evaluation-off",
+                    "runtime_endpoint": "https://runtime.example.com",
+                    "runtime_apikey": "secret",
+                },
+            ),
+        )
+
+    async def initialize_evaluation_sets(**_kwargs: Any) -> list[str]:
+        nonlocal evaluation_set_calls
+        evaluation_set_calls += 1
+        return ["unexpected"]
+
+    monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
+    monkeypatch.setattr(
+        "frontend.server.evaluation_automation.datasets.ensure_feedback_sets",
+        initialize_evaluation_sets,
+    )
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+
+    with TestClient(app) as client:
+        with client.stream(
+            "POST",
+            "/web/deploy-agentkit",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "name": "default-evaluation-off",
+                "files": [{"path": "app.py", "content": "app = object()\n"}],
+                "config": {"region": "cn-beijing", "projectName": "default"},
+            },
+        ) as response:
+            frames = [
+                json.loads(line.removeprefix("data: "))
+                for line in response.iter_lines()
+                if line.startswith("data: ")
+            ]
+
+    assert response.status_code == 200
+    assert frames[-1]["success"] is True
+    assert not [frame for frame in frames if frame.get("phase") == "evaluation"]
+    assert evaluation_set_calls == 0
+
+
 def test_migration_routes_require_agent_management_role(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -5442,6 +5499,7 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
                 "removeRuntimeEnvKeys": remove_runtime_env_keys,
                 "files": [{"path": "app.py", "content": "app = object()\n"}],
                 "config": {"region": region, "projectName": "default"},
+                "createEvaluationSets": True,
                 "authentication": {"type": "api_key"},
                 "im": {"feishu": {"enabled": not remove_feishu_credentials}},
                 "envs": requested_envs,

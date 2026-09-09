@@ -966,7 +966,7 @@ export function ProjectPreview({
   const [maxInstance, setMaxInstance] = useState(
     inMemorySession || sidecarEnabled ? "1" : "5",
   );
-  const [createEvaluationSets, setCreateEvaluationSets] = useState(true);
+  const [createEvaluationSets, setCreateEvaluationSets] = useState(false);
   const supportsEvaluationSets = cloudProvider !== "byteplus";
   const effectiveCreateEvaluationSets =
     supportsEvaluationSets && createEvaluationSets;
