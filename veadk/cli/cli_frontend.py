@@ -6531,7 +6531,7 @@ def _run_frontend_server(
         trusted_intelligent_source = source.get("kind") == "intelligentDevelopment"
         config = data.get("config", {})
         task_id = str(data.get("taskId") or f"deploy-{id(request)}").strip()
-        create_evaluation_sets = data.get("createEvaluationSets", True)
+        create_evaluation_sets = data.get("createEvaluationSets", False)
         author, owner_id = runtime_attribution(principal)
         environment_ref = (
             data.get("environment") if isinstance(data.get("environment"), dict) else {}
