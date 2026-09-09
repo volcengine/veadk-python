@@ -49,12 +49,15 @@ from veadk.agent_metadata import (
 from veadk.agent_search import search_agent_component
 from veadk.cli.frontend_invocation import FrontendInvocationPlugin
 from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.utils.logger import get_logger
 
 if TYPE_CHECKING:
     from agentkit.identity import RuntimeIdentity  # pyright: ignore[reportMissingImports]
 
     from veadk.runner import Runner
 
+
+logger = get_logger(__name__)
 
 _MAX_AGENT_GRAPH_DEPTH = 8
 _SERVER_STATE_KEY = "_veadk_agentkit_server"
@@ -915,6 +918,14 @@ def _configure_studio_tool_routes(
         mount_studio_channel_routes,
     )
 
+    if enabled and isinstance(root_agent, (SequentialAgent, ParallelAgent, LoopAgent)):
+        logger.warning(
+            "Disabling Studio BFF tools for workflow root agent "
+            f"{root_agent.name!r} ({type(root_agent).__name__}); "
+            "workflow roots do not support tool calls."
+        )
+        enabled = False
+
     if not enabled:
         mount_studio_channel_routes(app=app, enabled=False)
         return
@@ -1001,7 +1012,8 @@ def create_agentkit_app(
         enable_studio_tools: Whether to mount the generic Runtime host for
             Studio BFF-owned dynamic tools. Tool manifests and executors remain
             in the Studio BFF and are exposed only during explicitly selected
-            Studio-channel runs.
+            Studio-channel runs. Automatically disabled for SequentialAgent,
+            ParallelAgent, and LoopAgent roots.
         enable_studio_routes: Whether to mount the generic Runtime host for
             Studio BFF-owned dynamic HTTP routes. Route handlers remain in the
             Studio BFF and are never loaded into the Runtime process. Enabled

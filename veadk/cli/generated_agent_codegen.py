@@ -1131,6 +1131,7 @@ def _render_app_py(
     pkg: str,
     feishu_channel_enabled: bool,
     harness_sidecar_enabled: bool,
+    studio_tools_enabled: bool,
 ) -> str:
     lines = [
         _PYTHON_LICENSE_HEADER.rstrip(),
@@ -1155,7 +1156,7 @@ def _render_app_py(
             "",
             "_app_options = {",
             f'    "enable_feishu": {feishu_channel_enabled!r},',
-            '    "enable_studio_tools": True,',
+            f'    "enable_studio_tools": {studio_tools_enabled!r},',
             "}",
             'if "agent_draft" in signature(create_agentkit_app).parameters:',
             '    _app_options["agent_draft"] = AGENT_DRAFT',
@@ -2443,6 +2444,7 @@ def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
         pkg,
         feishu_channel_enabled,
         harness_sidecar_enabled,
+        studio_tools_enabled=draft.agentType not in {"sequential", "parallel", "loop"},
     )
     files = [
         GeneratedFile(path="app.py", content=app_py),
