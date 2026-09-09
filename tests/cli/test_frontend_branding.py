@@ -180,6 +180,16 @@ def test_studio_deploy_bundles_logo_and_optional_title(
         "veadk.cli.frontend_skill_creator.ensure_skill_creator_model_credential",
         lambda **_: None,
     )
+    workspace_calls = []
+
+    def provision_workspace(**kwargs):
+        workspace_calls.append(kwargs)
+        return "studio-workspace-tool"
+
+    monkeypatch.setattr(
+        "frontend.server.workspace_tool.provision_workspace_tool",
+        provision_workspace,
+    )
     monkeypatch.setattr(
         "frontend.service.studio_scheduler.deploy.deploy_scheduler",
         lambda *_args, **_kwargs: (
@@ -212,6 +222,10 @@ def test_studio_deploy_bundles_logo_and_optional_title(
     result = CliRunner().invoke(studio, args + title_args)
 
     assert result.exit_code == 0, result.output
+    assert len(workspace_calls) == 1
+    assert workspace_calls[0]["provider"] == "volcengine"
+    assert workspace_calls[0]["access_key"] == "ak"
+    assert environments["STUDIO_WORKSPACE_TOOL_ID"] == "studio-workspace-tool"
     assert captured["logo"] == _PNG
     assert '--site-logo "$ROOT_DIR/site-logo.png"' in str(captured["run_script"])
     if expected_site_title is None:
