@@ -78,6 +78,7 @@ def _root_agent() -> BaseAgent:
     root = SimpleNamespace(
         name="agent",
         description="Customer support",
+        runtime="codex",
         model=SimpleNamespace(model="doubao-model"),
         tools=[SimpleNamespace(name="search_orders")],
         sub_agents=[child],
@@ -116,6 +117,7 @@ def test_create_agentkit_app_preserves_platform_route_contract() -> None:
             "description": "Customer support",
             "instruction": "",
             "type": "llm",
+            "runtime": "codex",
             "model": "doubao-model",
             "tools": ["search_orders"],
             "skills": [],
@@ -129,6 +131,7 @@ def test_create_agentkit_app_preserves_platform_route_contract() -> None:
                     "description": "Handles orders",
                     "instruction": "",
                     "type": "llm",
+                    "runtime": "adk",
                     "model": "child-model",
                     "tools": [],
                     "skills": [],
@@ -243,6 +246,40 @@ def test_create_agentkit_app_uses_runtime_bff_tool_opt_in(
         tool for tool in root_agent.tools if isinstance(tool, StudioExternalToolset)
     ]
     assert bool(studio_toolsets) is enabled
+
+
+def test_create_agentkit_app_disables_runtime_bff_tools_for_toolless_root(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SessionAgentServer(_FakeAgentServer):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self.session_service = object()
+
+    monkeypatch.setattr(agentkit_app, "AgentkitAgentServerApp", SessionAgentServer)
+    root_agent = cast(
+        BaseAgent,
+        SimpleNamespace(
+            name="loop_root",
+            description="Runs child agents",
+            model="",
+            sub_agents=[],
+        ),
+    )
+
+    app = agentkit_app.create_agentkit_app(
+        root_agent,
+        enable_studio_tools=True,
+    )
+    client = TestClient(app)
+    capability = client.get("/harness/studio-channel/v1/capabilities")
+
+    assert capability.status_code == 200
+    assert capability.json() == {
+        "enabled": False,
+        "protocol": "studio-tool-channel/1",
+        "transports": [],
+    }
 
 
 @pytest.mark.parametrize("enabled", [False, True])

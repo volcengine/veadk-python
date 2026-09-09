@@ -111,6 +111,7 @@ export type HarnessSidecarOptionId =
   | "mcp_resilience";
 
 export type HarnessSidecarProfileId = "default" | "ops";
+export type AgentRuntime = "adk" | "codex" | "piagent";
 
 export interface HarnessSidecarIntent {
   enabled: boolean;
@@ -136,6 +137,8 @@ export interface AgentDraft {
    * A2A center. Defaults to "llm" when absent.
    */
   agentType?: "llm" | "sequential" | "parallel" | "loop" | "a2a";
+  /** Inner execution loop used by an LLM Agent. Defaults to "adk". */
+  runtime?: AgentRuntime;
   /** Cloud provider selected by the Studio shell. */
   cloudProvider?: CloudProvider;
   /** Max iterations for a "loop" orchestrator (LoopAgent.max_iterations). */
@@ -208,6 +211,7 @@ export function emptyDraft(cloudProvider: CloudProvider = "volcengine"): AgentDr
     instruction: createT("defaults.instruction"),
     dynamicAgentDelegation: false,
     agentType: "llm",
+    runtime: "adk",
     cloudProvider,
     maxIterations: 3,
     a2aUrl: "",

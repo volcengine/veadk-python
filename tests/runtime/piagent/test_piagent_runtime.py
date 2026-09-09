@@ -43,6 +43,7 @@ from veadk.runtime.piagent import installer
 from veadk.runtime.piagent.client import PiAgentRpcClient
 from veadk.runtime.piagent.config import PiAgentConfig, PiAgentModelConfig
 from veadk.runtime.piagent.installer import (
+    PiAgentInstallError,
     resolve_or_install_piagent_binary,
     resolve_platform_archive,
 )
@@ -204,6 +205,22 @@ for raw in sys.stdin:
     )
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
     return path
+
+
+def _make_pi_archive(tmp_path: Path) -> Path:
+    archive_root = tmp_path / "archive-root"
+    archive_pi = archive_root / "pi"
+    archive_pi.mkdir(parents=True)
+    archive_binary = archive_pi / "pi"
+    archive_binary.write_text("#!/bin/sh\n", encoding="utf-8")
+    archive_binary.chmod(archive_binary.stat().st_mode | stat.S_IXUSR)
+    (archive_pi / "theme").mkdir()
+    (archive_pi / "theme" / "dark.json").write_text("{}", encoding="utf-8")
+
+    archive = tmp_path / "pi-linux-x64.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        tar.add(archive_pi, arcname="pi")
+    return archive
 
 
 def _make_fake_pi_with_argv_capture(tmp_path):
@@ -371,6 +388,13 @@ def _clear_piagent_config_env(monkeypatch) -> None:
         "PIAGENT_TOOL_ALLOWLIST",
         "PIAGENT_EXCLUDE_TOOLS",
         "PIAGENT_PROJECT_TRUST",
+        "PIAGENT_BINARY",
+        "PIAGENT_BINARY_URL",
+        "PIAGENT_BINARY_URLS",
+        "PIAGENT_BINARY_BASE_URLS",
+        "PIAGENT_BINARY_SHA256",
+        "PIAGENT_BINARY_VERSION",
+        "PIAGENT_BINARY_REPO",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -881,20 +905,25 @@ def test_resolve_pi_binary_uses_install_dir_cache(tmp_path, monkeypatch):
     assert resolve_or_install_piagent_binary() == str(binary)
 
 
+def test_resolve_pi_binary_uses_image_preinstall_dir(tmp_path, monkeypatch):
+    install_dir = tmp_path / "cache"
+    image_install_dir = tmp_path / "opt" / "piagent"
+    binary = image_install_dir / "pi" / "pi"
+    binary.parent.mkdir(parents=True)
+    binary.write_text("#!/bin/sh\n", encoding="utf-8")
+    binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.delenv("PIAGENT_BINARY", raising=False)
+    monkeypatch.delenv("PIAGENT_INSTALL_DIR", raising=False)
+    monkeypatch.setattr(installer, "_install_dir", lambda: install_dir)
+    monkeypatch.setattr(installer, "_IMAGE_INSTALL_DIR", image_install_dir)
+    monkeypatch.setattr(installer, "_download", lambda *_args: install_dir / "nope")
+
+    assert resolve_or_install_piagent_binary() == str(binary)
+
+
 def test_resolve_pi_binary_installs_into_install_dir(tmp_path, monkeypatch):
     install_dir = tmp_path / "install"
-    archive_root = tmp_path / "archive-root"
-    archive_pi = archive_root / "pi"
-    archive_pi.mkdir(parents=True)
-    archive_binary = archive_pi / "pi"
-    archive_binary.write_text("#!/bin/sh\n", encoding="utf-8")
-    archive_binary.chmod(archive_binary.stat().st_mode | stat.S_IXUSR)
-    (archive_pi / "theme").mkdir()
-    (archive_pi / "theme" / "dark.json").write_text("{}", encoding="utf-8")
-
-    archive = tmp_path / "pi-linux-x64.tar.gz"
-    with tarfile.open(archive, "w:gz") as tar:
-        tar.add(archive_pi, arcname="pi")
+    archive = _make_pi_archive(tmp_path)
 
     monkeypatch.delenv("PIAGENT_BINARY", raising=False)
     monkeypatch.setenv("PIAGENT_INSTALL_DIR", str(install_dir))
@@ -911,6 +940,68 @@ def test_resolve_pi_binary_installs_into_install_dir(tmp_path, monkeypatch):
     assert (install_dir / "pi" / "theme" / "dark.json").read_text(
         encoding="utf-8"
     ) == "{}"
+
+
+def test_resolve_pi_binary_falls_back_across_configured_urls(
+    tmp_path, monkeypatch, capsys
+):
+    install_dir = tmp_path / "install"
+    archive = _make_pi_archive(tmp_path)
+    urls = [
+        "https://mirror.example.invalid/pi-linux-x64.tar.gz",
+        "https://github.example.invalid/pi-linux-x64.tar.gz",
+    ]
+
+    _clear_piagent_config_env(monkeypatch)
+    monkeypatch.setenv("PIAGENT_INSTALL_DIR", str(install_dir))
+    monkeypatch.setenv("PIAGENT_BINARY_URLS", "\n".join(urls))
+
+    calls: list[tuple[str, str]] = []
+
+    def fake_download(url, archive_name):
+        calls.append((url, archive_name))
+        if url == urls[0]:
+            raise OSError("mirror unavailable")
+        return archive
+
+    monkeypatch.setattr(installer, "_download", fake_download)
+
+    assert resolve_or_install_piagent_binary() == str(install_dir / "pi" / "pi")
+    assert calls == [(urls[0], "pi-linux-x64.tar.gz"), (urls[1], "pi-linux-x64.tar.gz")]
+    output = capsys.readouterr().out
+    assert f"trying URL 1/2: {urls[0]}" in output
+    assert "failed URL 1/2: OSError: mirror unavailable" in output
+    assert f"trying URL 2/2: {urls[1]}" in output
+    assert f"installed Pi binary to {install_dir / 'pi' / 'pi'}" in output
+
+
+def test_resolve_pi_binary_reports_all_failed_urls(tmp_path, monkeypatch, capsys):
+    urls = [
+        "https://mirror.example.invalid/pi-linux-x64.tar.gz",
+        "https://github.example.invalid/pi-linux-x64.tar.gz",
+    ]
+
+    _clear_piagent_config_env(monkeypatch)
+    monkeypatch.setenv("PIAGENT_INSTALL_DIR", str(tmp_path / "install"))
+    monkeypatch.setenv("PIAGENT_BINARY_URLS", " ".join(urls))
+
+    def fake_download(url, archive_name):
+        raise OSError(f"cannot reach {archive_name}")
+
+    monkeypatch.setattr(installer, "_download", fake_download)
+
+    with pytest.raises(PiAgentInstallError) as excinfo:
+        resolve_or_install_piagent_binary()
+
+    message = str(excinfo.value)
+    assert "Tried 2 URL(s)" in message
+    assert urls[0] in message
+    assert urls[1] in message
+    assert "cannot reach pi-linux-x64.tar.gz" in message
+    output = capsys.readouterr().out
+    assert "failed URL 1/2: OSError: cannot reach pi-linux-x64.tar.gz" in output
+    assert "failed URL 2/2: OSError: cannot reach pi-linux-x64.tar.gz" in output
+    assert "all URL attempts failed" in output
 
 
 @pytest.mark.asyncio

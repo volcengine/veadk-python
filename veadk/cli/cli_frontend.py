@@ -993,6 +993,73 @@ def _sanitize_build_log_snapshot(
     }
 
 
+def _download_cp_build_log_text(
+    cp_client: Any,
+    *,
+    workspace_id: str,
+    pipeline_id: str,
+    pipeline_run_id: str,
+) -> str:
+    """Download available Code Pipeline step logs, preserving unavailable details."""
+    import requests
+
+    stages_data = cp_client.list_pipeline_run_stages_inner(
+        workspace_id=workspace_id,
+        pipeline_id=pipeline_id,
+        pipeline_run_id=pipeline_run_id,
+    )
+    parts: list[str] = []
+    unavailable_parts: list[str] = []
+    for stage in stages_data.get("Items", []):
+        stage_name = str(stage.get("DisplayName") or stage.get("Name") or "stage")
+        for task in stage.get("Tasks", []):
+            task_id = str(task.get("Id") or "")
+            task_run_id = str(task.get("TaskRunID") or "")
+            task_name = str(task.get("DisplayName") or task.get("Name") or "task")
+            if not task_id or not task_run_id:
+                continue
+            for step in task.get("Steps", []):
+                step_name = str(step.get("Name") or "")
+                if not step_name:
+                    continue
+                header = f"[{stage_name} / {task_name} / {step_name}]"
+                try:
+                    log_url = str(
+                        cp_client.get_task_run_log_download_uri(
+                            workspace_id=workspace_id,
+                            pipeline_id=pipeline_id,
+                            pipeline_run_id=pipeline_run_id,
+                            task_run_id=task_run_id,
+                            task_id=task_id,
+                            step_name=step_name,
+                        )
+                        or ""
+                    ).strip()
+                    if not log_url:
+                        unavailable_parts.append(
+                            f"{header}\n"
+                            "[log unavailable] Code Pipeline returned an empty "
+                            "log download URL for this step."
+                        )
+                        continue
+                    response = requests.get(log_url, timeout=20)
+                    response.raise_for_status()
+                except requests.RequestException as log_error:
+                    logger.debug(
+                        "skip Code Pipeline step log download %s/%s/%s: %s",
+                        stage_name,
+                        task_name,
+                        step_name,
+                        log_error,
+                    )
+                    unavailable_parts.append(f"{header}\n[log unavailable] {log_error}")
+                    continue
+                content = response.text.strip("\n")
+                if content:
+                    parts.append(f"{header}\n{content}")
+    return "\n\n".join(parts or unavailable_parts)
+
+
 def _cp_metadata_from_reporter_message(message: object) -> dict[str, str]:
     """Extract Code Pipeline identifiers from AgentKit reporter messages."""
     text = _ANSI_ESCAPE_RE.sub("", str(message or "")).strip()
@@ -8032,64 +8099,6 @@ def _run_frontend_server(
                 task_state["cp_pipeline_id"] = pipeline_id
             return pipeline_id
 
-        def _download_cp_build_log_text(
-            cp_client,
-            *,
-            workspace_id: str,
-            pipeline_id: str,
-            pipeline_run_id: str,
-        ) -> str:
-            import requests
-
-            stages_data = cp_client.list_pipeline_run_stages_inner(
-                workspace_id=workspace_id,
-                pipeline_id=pipeline_id,
-                pipeline_run_id=pipeline_run_id,
-            )
-            parts: list[str] = []
-            for stage in stages_data.get("Items", []):
-                stage_name = str(
-                    stage.get("DisplayName") or stage.get("Name") or "stage"
-                )
-                for task in stage.get("Tasks", []):
-                    task_id = str(task.get("Id") or "")
-                    task_run_id = str(task.get("TaskRunID") or "")
-                    task_name = str(
-                        task.get("DisplayName") or task.get("Name") or "task"
-                    )
-                    if not task_id or not task_run_id:
-                        continue
-                    for step in task.get("Steps", []):
-                        step_name = str(step.get("Name") or "")
-                        if not step_name:
-                            continue
-                        try:
-                            log_url = cp_client.get_task_run_log_download_uri(
-                                workspace_id=workspace_id,
-                                pipeline_id=pipeline_id,
-                                pipeline_run_id=pipeline_run_id,
-                                task_run_id=task_run_id,
-                                task_id=task_id,
-                                step_name=step_name,
-                            )
-                            response = requests.get(log_url, timeout=20)
-                            response.raise_for_status()
-                        except requests.RequestException as log_error:
-                            logger.debug(
-                                "skip Code Pipeline step log download %s/%s/%s: %s",
-                                stage_name,
-                                task_name,
-                                step_name,
-                                log_error,
-                            )
-                            continue
-                        content = response.text.strip("\n")
-                        if content:
-                            parts.append(
-                                f"[{stage_name} / {task_name} / {step_name}]\n{content}"
-                            )
-            return "\n\n".join(parts)
-
         def _new_cp_client():
             from agentkit.toolkit.volcengine.code_pipeline import VeCodePipeline
 
@@ -11684,7 +11693,7 @@ def _run_frontend_server(
             agent_type = "llm"
         raw_children = node.get("children")
         children: list[Any] = raw_children if isinstance(raw_children, list) else []
-        return {
+        draft = {
             "name": str(node.get("name") or "legacy-agent"),
             "description": str(node.get("description") or ""),
             "instruction": str(node.get("instruction") or ""),
@@ -11705,6 +11714,10 @@ def _run_frontend_server(
                 if isinstance(child, Mapping)
             ],
         }
+        runtime = str(node.get("runtime") or "")
+        if agent_type == "llm" and runtime in {"adk", "codex", "piagent"}:
+            draft["runtime"] = runtime
+        return draft
 
     def _legacy_harness_intent(environment: Mapping[str, str]) -> dict[str, Any] | None:
         enabled = str(environment.get("HARNESS_SIDECAR_ENABLED") or "").strip().lower()

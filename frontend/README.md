@@ -66,6 +66,11 @@ server that `veadk frontend` launches — no separate backend.
   Deployable source can be sent to Runtime manually; an incomplete verification
   report requires an explicit confirmation. No separate “start verification”
   action is required.
+- **Agent runtime selection**: custom Studio Agent drafts can choose the inner
+  execution loop for each LLM Agent: the default ADK loop, Codex, or PiAgent.
+  Generated projects preserve the selection in `Agent(runtime=...)`, add the
+  Codex runtime packages when needed, and preinstall the PiAgent binary in the
+  generated Dockerfile for cloud deployment.
 - **Existing Agent migration**: upload a local project ZIP for read-only
   analysis, confirm the detected framework and entry point, then migrate and
   validate it in a temporary Sandbox. Successful migration source is saved as

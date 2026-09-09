@@ -70,7 +70,7 @@ from veadk.cli.generated_agent_skills import (
 # syntax or selected snippets.
 _MINIMAL_FRONTEND_GOLDEN = {
     "Dockerfile": "0b643795fc79f04b0aaff219ff513c9ca65a05e1af0f0b54d47e45ecf5305137",
-    "app.py": "48a85b8eaa87d836e6dabc41bae6bdc0c587e1d55093bc8aaa7bcb62a362ad21",
+    "app.py": "f93fa89bc2aaa18b84f7c0a25aa46dd8ad9eb773839297dc3d95533988f65387",
     "agents/__init__.py": "a6449a6cac3bfda8b834ea39ea95ca2f8d0471ac480e1e876313d7398eea59ba",
     "agents/demo_agent/agent.py": "3c28f3e63f185d1ee8402d58b62c8654cf18fe4180a1f348abaa63547d91446c",
     "agents/demo_agent/__init__.py": "ba3abbb199bbae74dc75151a44ba53a557e5f47d509835950ca756346c5a9582",
@@ -82,7 +82,7 @@ _MINIMAL_FRONTEND_GOLDEN = {
 
 _FULL_FRONTEND_GOLDEN = {
     "Dockerfile": "0b643795fc79f04b0aaff219ff513c9ca65a05e1af0f0b54d47e45ecf5305137",
-    "app.py": "47c87fd54ac00e208030a7a370f0dbd52a872a9adf8ecd2e2e4f2e1b56188854",
+    "app.py": "e4d7ca54e705aab82575d195fa9f7e59fc873ad9fe8ef19cb619bc20aaf81667",
     "agents/__init__.py": "a6449a6cac3bfda8b834ea39ea95ca2f8d0471ac480e1e876313d7398eea59ba",
     "agents/full_agent/agent.py": "35560cfa5ea93955244482d727c8f8369599fa5b9560ba1f3804df7273e245ce",
     "agents/full_agent/__init__.py": "ba3abbb199bbae74dc75151a44ba53a557e5f47d509835950ca756346c5a9582",
@@ -269,6 +269,9 @@ def test_codegen_preserves_agent_display_names_for_topology() -> None:
     assert "AGENT_DISPLAY_NAMES" in app_py
     assert "AGENT_DRAFT" in app_py
     assert '"enable_studio_tools": True' in app_py
+    assert '_root_tools = getattr(root_agent, "tools", None)' in app_py
+    assert 'if not hasattr(_root_tools, "append"):' in app_py
+    assert '_app_options["enable_studio_tools"] = False' in app_py
     assert '"agent_draft" in signature(create_agentkit_app).parameters' in app_py
     assert '_app_options["agent_draft"] = AGENT_DRAFT' in app_py
     assert '@app.get("/web/agent-info/{app_name}")' in app_py
@@ -405,6 +408,168 @@ def test_orchestrator_codegen(
         assert extra in agent_py
 
 
+def test_llm_runtime_codegen_supports_codex_and_piagent_loop_children() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(
+            name="runtime-root",
+            agentType="loop",
+            maxIterations=3,
+            subAgents=[
+                AgentDraft(name="coder", instruction="Edit code.", runtime="codex"),
+                AgentDraft(
+                    name="reviewer",
+                    instruction="Review code.",
+                    runtime="piagent",
+                ),
+            ],
+        )
+    )
+    files = _file_map(project)
+    agent_py = files["agents/runtime_root/agent.py"]
+    app_py = files["app.py"]
+
+    assert "agent = LoopAgent(" in agent_py
+    assert "agent_sub_1 = Agent(" in agent_py
+    assert 'runtime="codex"' in agent_py
+    assert "agent_sub_2 = Agent(" in agent_py
+    assert 'runtime="piagent"' in agent_py
+    assert "'runtime': 'codex'" in agent_py
+    assert "'runtime': 'piagent'" in agent_py
+    assert "openai-codex==0.1.0b3" in files["requirements.txt"]
+    assert "openai-codex-cli-bin==0.137.0a4" in files["requirements.txt"]
+    assert "veadk-python==1.1.9" in files["requirements.txt"]
+    assert "ARG PIAGENT_VERSION=0.80.6" in files["Dockerfile"]
+    assert "PIAGENT_AGENT_DIR=/tmp/veadk-piagent-home" in files["Dockerfile"]
+    assert (
+        'PIAGENT_BINARY_BASE_URLS="https://ghfast.top/https://github.com/earendil-works/pi/releases/download '
+        'https://github.com/earendil-works/pi/releases/download"' in files["Dockerfile"]
+    )
+    assert (
+        "from veadk.runtime.piagent import installer as piagent_installer"
+        in files["Dockerfile"]
+    )
+    assert "hasattr(piagent_installer, '_resolve_download_urls')" in files["Dockerfile"]
+    assert (
+        "Installed veadk piagent installer does not support multi URL fallback."
+        in files["Dockerfile"]
+    )
+    assert "piagent binary install: {message}" in files["Dockerfile"]
+    assert "Tried {len(urls)} URL(s)" in files["Dockerfile"]
+    assert "ENV PIAGENT_BINARY=/opt/piagent/pi/pi" in files["Dockerfile"]
+    assert 'os.environ.setdefault("PIAGENT_BINARY", "/opt/piagent/pi/pi")' in app_py
+    assert 'os.environ.setdefault("PIAGENT_INSTALL_DIR", "/opt/piagent")' in app_py
+    assert (
+        'os.environ.setdefault("PIAGENT_AGENT_DIR", "/tmp/veadk-piagent-home")'
+        in app_py
+    )
+    assert app_py.index('os.environ.setdefault("PIAGENT_BINARY"') < app_py.index(
+        "from agents.runtime_root.agent import"
+    )
+
+
+def test_byteplus_piagent_dockerfile_prefers_official_github_then_mirror() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(
+            name="byteplus-piagent",
+            cloudProvider="byteplus",
+            runtime="piagent",
+        )
+    )
+    dockerfile = _file_map(project)["Dockerfile"]
+
+    assert (
+        'PIAGENT_BINARY_BASE_URLS="https://github.com/earendil-works/pi/releases/download '
+        'https://ghfast.top/https://github.com/earendil-works/pi/releases/download"'
+        in dockerfile
+    )
+
+
+def test_byteplus_codex_runtime_uses_byteplus_image_and_dependencies() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(
+            name="byteplus-codex",
+            cloudProvider="byteplus",
+            runtime="codex",
+        )
+    )
+    files = _file_map(project)
+    agent_py = files["agents/byteplus_codex/agent.py"]
+    dockerfile = files["Dockerfile"]
+    requirements = files["requirements.txt"]
+
+    assert dockerfile.startswith(
+        "FROM agentkit-prod-public-ap-southeast-1.cr.bytepluses.com/"
+        "base/py-simple:python3.12-bookworm-slim-latest"
+    )
+    assert "RUN uv pip install -r requirements.txt" in dockerfile
+    assert "repo.huaweicloud.com" not in dockerfile
+    assert 'runtime="codex"' in agent_py
+    assert "'cloudProvider': 'byteplus'" in agent_py
+    assert "'runtime': 'codex'" in agent_py
+    assert "openai-codex==0.1.0b3" in requirements
+    assert "openai-codex-cli-bin==0.137.0a4" in requirements
+
+
+def test_byteplus_loop_root_with_piagent_child_preinstalls_binary_and_disables_bff_tools() -> (
+    None
+):
+    project = generate_project_from_draft(
+        AgentDraft(
+            name="byteplus-loop",
+            cloudProvider="byteplus",
+            agentType="loop",
+            subAgents=[
+                AgentDraft(
+                    name="worker",
+                    cloudProvider="byteplus",
+                    instruction="Work.",
+                    runtime="piagent",
+                )
+            ],
+        )
+    )
+    files = _file_map(project)
+    agent_py = files["agents/byteplus_loop/agent.py"]
+    app_py = files["app.py"]
+    dockerfile = files["Dockerfile"]
+
+    assert dockerfile.startswith(
+        "FROM agentkit-prod-public-ap-southeast-1.cr.bytepluses.com/"
+        "base/py-simple:python3.12-bookworm-slim-latest"
+    )
+    assert (
+        'PIAGENT_BINARY_BASE_URLS="https://github.com/earendil-works/pi/releases/download '
+        'https://ghfast.top/https://github.com/earendil-works/pi/releases/download"'
+        in dockerfile
+    )
+    assert "ENV PIAGENT_BINARY=/opt/piagent/pi/pi" in dockerfile
+    assert 'runtime="piagent"' in agent_py
+    assert "'cloudProvider': 'byteplus'" in agent_py
+    assert "'runtime': 'piagent'" in agent_py
+    assert 'os.environ.setdefault("PIAGENT_BINARY", "/opt/piagent/pi/pi")' in app_py
+    assert app_py.index('os.environ.setdefault("PIAGENT_BINARY"') < app_py.index(
+        "from agents.byteplus_loop.agent import"
+    )
+    assert '"enable_studio_tools": True' in app_py
+    assert 'if not hasattr(_root_tools, "append"):' in app_py
+    assert '_app_options["enable_studio_tools"] = False' in app_py
+
+
+def test_codegen_disables_studio_bff_tools_for_toolless_orchestrator_root() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(
+            name="loop-root",
+            agentType="loop",
+            subAgents=[AgentDraft(name="worker", instruction="Work")],
+        )
+    )
+    app_py = _file_map(project)["app.py"]
+
+    assert '"enable_studio_tools": True' in app_py
+    assert 'if not hasattr(_root_tools, "append"):' in app_py
+    assert '_app_options["enable_studio_tools"] = False' in app_py
+
+
 @pytest.mark.parametrize(
     "draft",
     [
@@ -413,6 +578,7 @@ def test_orchestrator_codegen(
         AgentDraft(name="demo", knowledgebaseBackend="unknown"),
         AgentDraft(name="demo", tracingExporters=["unknown"]),
         AgentDraft(name="demo", agentType="loop", maxIterations=MAX_ITERATIONS + 1),
+        AgentDraft(name="demo", agentType="loop", runtime="codex"),
     ],
 )
 def test_security_rejects_unsupported_component_configuration(

@@ -44,6 +44,9 @@ function toConfig(draft: AgentDraft, root = true): Record<string, unknown> {
   o.name = draft.name;
   o.description = draft.description;
   o.instruction = draft.instruction;
+  if (draft.agentType === "llm" && draft.runtime && draft.runtime !== "adk") {
+    o.runtime = draft.runtime;
+  }
   if (draft.agentType === "loop") o.maxIterations = draft.maxIterations ?? 3;
   if (draft.modelName?.trim()) o.modelName = draft.modelName.trim();
   if (draft.modelSource) o.modelSource = draft.modelSource;
