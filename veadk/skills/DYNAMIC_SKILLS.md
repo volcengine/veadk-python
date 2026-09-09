@@ -55,3 +55,22 @@ tool dictionary mutation or monkey patch is needed.
 
 These hooks apply to the legacy local-execution SkillsToolset path, not arbitrary
 tools or ADK SkillRegistry implementations.
+
+## Downloaded archive layout
+
+Space and SkillHub archives are downloaded and extracted in a temporary directory.
+Both a root `SKILL.md` and a wrapping directory containing `SKILL.md` install as
+`skills/<skill_name>/SKILL.md`, with resources alongside it. The root file takes
+precedence; otherwise the shallowest candidate wins, with path order breaking
+ties. Multiple candidates and deeper layouts produce a warning rather than a
+rejection. Only the selected skill root and its descendants are installed.
+
+Extraction and UTF-8 readability checks finish before an existing installation
+is moved aside. A failed replacement restores the old installation. ZIPs and
+staging files are cleaned on success and failure; successful installs also remove
+the legacy `skills/<skill_name>.zip`. Layout selection, destination, fallback,
+success, and failure are logged. A failed rollback retains a backup and logs its
+location. This does not provide cross-process atomicity or crash recovery.
+
+Skill names remain the installation key; this does not change duplicate-name
+selection or remove files spilled into the shared skills directory by old versions.
