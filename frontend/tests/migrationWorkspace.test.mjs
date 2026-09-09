@@ -105,6 +105,11 @@ test("keeps new migration and migrated projects as parallel workspace pages", ()
   assert.match(projects, /onCreate=\{onOptimize\}/);
   assert.match(projects, /onDownload=\{onDownload\}/);
   assert.match(projects, /onDeploy=\{onDeploy\}/);
+  assert.match(source, /migrationTaskId: task\.id/);
+  assert.match(
+    appSource,
+    /onDeploySavedVersion=\{\(delivery\) => \{[\s\S]*?setIntelligentDeployment\(delivery\)/,
+  );
   assert.match(
     appSource,
     /initialPage=\{migrationProjectReturn \? "projects" : "new"\}/,

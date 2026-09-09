@@ -35,6 +35,7 @@ from frontend.server.intelligent_development_projects import (
     IntelligentDevelopmentVersion,
     IntelligentDevelopmentVersionIntegrityError,
     IntelligentDevelopmentVersionNotFound,
+    SourceVersionProducer,
 )
 from frontend.server.sandbox_remote import SandboxRemoteTransport
 from frontend.server.source_project_limits import (
@@ -107,6 +108,7 @@ class TrustedDeploymentSource:
     environment_required: tuple[str, ...] = ()
     environment_optional: tuple[str, ...] = ()
     environment_defaults: tuple[tuple[str, str], ...] = ()
+    producer: SourceVersionProducer = "intelligent-development"
 
 
 @dataclass(frozen=True)
@@ -362,6 +364,7 @@ async def _materialize_intelligent_development_source(
                 tuple(stored_metadata.environment.required),
                 tuple(stored_metadata.environment.optional),
                 tuple(sorted(stored_metadata.environment.defaults.items())),
+                producer=stored_metadata.producer,
             ),
             artifact,
         )
@@ -466,6 +469,11 @@ async def _materialize_intelligent_development_source(
             source_files,
             project_id if isinstance(project_id, str) else "",
             version_id if isinstance(version_id, str) else "",
+            producer=(
+                stored_metadata.producer
+                if stored_metadata is not None
+                else "intelligent-development"
+            ),
         ),
         artifact,
     )

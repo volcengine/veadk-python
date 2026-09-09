@@ -476,6 +476,111 @@ async def test_materializes_stored_version_without_live_sandbox(
 
 
 @pytest.mark.asyncio
+async def test_materialized_stored_migration_retains_its_producer(
+    tmp_path: Path,
+) -> None:
+    configured_entry = "bailian-test-workflow-agent.py"
+    startup_entry = "runtime/migrated.py"
+    artifact = _zip(
+        [
+            (
+                "agentkit.yaml",
+                (
+                    "common:\n"
+                    "  agent_name: bailian-test-workflow-agent\n"
+                    f"  entry_point: {configured_entry}\n"
+                ).encode(),
+            ),
+            (configured_entry, b"app = object()\n"),
+            (startup_entry, b"app = object()\n"),
+        ]
+    )
+    artifact_digest = _digest(artifact)
+    result_value = {
+        "schema_version": 1,
+        "run_id": SESSION_ID,
+        "cli": {"name": "agentkit-cli", "version": "0.52.1"},
+        "status": "succeeded",
+        "created_at": "2026-08-26T00:00:00Z",
+        "migration": {
+            "framework": "any",
+            "engine": "agentic",
+            "source_sha256": "2" * 64,
+            "provenance_sha256": "3" * 64,
+        },
+        "startup": {"module": startup_entry, "object": "app"},
+        "environment": {"required": [], "optional": []},
+        "verification": {"status": "passed", "checks": []},
+        "warnings": [],
+        "report": {"path": "agentkit.yaml"},
+        "artifact": {
+            "path": "migration-result.zip",
+            "sha256": artifact_digest,
+            "size": len(artifact),
+        },
+        "files": [],
+    }
+    with zipfile.ZipFile(io.BytesIO(artifact)) as archive:
+        result_value["files"] = [
+            {
+                "path": info.filename,
+                "size": info.file_size,
+                "sha256": _digest(archive.read(info)),
+                "mode": "0644",
+            }
+            for info in archive.infolist()
+        ]
+    report = _json_bytes(result_value)
+    report_digest = _digest(report)
+    version = IntelligentDevelopmentVersion(
+        producer="migration",
+        projectId="a" * 32,
+        versionId="b" * 32,
+        sourceSessionId=SESSION_ID,
+        createdAt=datetime(2026, 8, 26, tzinfo=timezone.utc),
+        intentSummary="迁移 Agent",
+        acceptanceCriteria=[],
+        artifactSha256=artifact_digest,
+        validationReportSha256=report_digest,
+        artifactSize=len(artifact),
+        fileCount=3,
+        agentName="bailian-test-workflow-agent",
+        entryPoint=startup_entry,
+        verified=True,
+        validationSummary="迁移校验通过",
+        gateSummary=[],
+        validatedAt="2026-08-26T00:00:00Z",
+    )
+    project_service = cast(
+        IntelligentDevelopmentProjectService,
+        SimpleNamespace(
+            load_version=AsyncMock(
+                return_value=StoredDevelopmentVersion(version, artifact, report)
+            )
+        ),
+    )
+
+    result = await materialize_intelligent_development_source(
+        tmp_path,
+        {
+            "kind": "intelligentDevelopment",
+            "sessionId": SESSION_ID,
+            "projectId": "a" * 32,
+            "versionId": "b" * 32,
+            "artifactSha256": artifact_digest,
+            REPORT_DIGEST_FIELD: report_digest,
+        },
+        owner_id=OWNER_ID,
+        service=None,
+        project_service=project_service,
+    )
+
+    assert result.producer == "migration"
+    assert result.entry_point == startup_entry
+    assert (tmp_path / configured_entry).is_file()
+
+
+@pytest.mark.asyncio
 async def test_current_preview_distinguishes_no_delivery_and_validates_current_release(
     tmp_path: Path,
 ) -> None:
