@@ -47,7 +47,7 @@ permissions:
   contents: read
 
 jobs:
-  gate:
+  python:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -56,43 +56,74 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
+
+      - name: Install Python test dependencies
+        run: python -m pip install -e '.[dev]'
+
+      - name: Run Python Sidecar checks in parallel
+        shell: bash
+        run: |
+          set -euo pipefail
+          checks=(coverage lifecycle credentials)
+          pids=()
+          (
+            python -m pytest -q \
+              tests/extensions/harness/test_studio_sidecar.py \
+              tests/extensions/harness/test_sidecar_public_api.py \
+              tests/extensions/harness/test_extension.py \
+              tests/cli/test_generated_agent_harness_sidecar.py \
+              tests/cli/test_managed_sidecar_source.py \
+              tests/integrations/agentkit/test_app.py \
+              tests/cli/test_studio_rbac.py::test_sidecar_deployment_uses_agentkit_cli_structured_release \
+              tests/cli/test_generated_agent_backend_codegen_extended.py::test_generated_agent_sidecar_debug_uses_runtime_apig_and_active_plan \
+              --cov=. --cov-branch --cov-report= --cov-fail-under=0
+            python -m coverage report \
+              --include='*/veadk/extensions/harness/sidecar.py' \
+              --fail-under=91 --show-missing
+          ) > "$RUNNER_TEMP/sidecar-coverage.log" 2>&1 &
+          pids+=("$!")
+          (
+            python -m pytest -q \
+              tests/cli/test_legacy_runtime_recovery.py -k 'six_case_ or changed_unnamed_mcp_url'
+          ) > "$RUNNER_TEMP/sidecar-lifecycle.log" 2>&1 &
+          pids+=("$!")
+          (
+            python -m pytest -q \
+              tests/cli/test_generated_agent_mcp.py \
+              tests/cli/test_generated_agent_backend_codegen_extended.py::test_generated_debug_applies_published_mcp_credential_contract_before_discovery \
+              tests/cli/test_studio_rbac.py::test_new_deployment_only_updates_non_default_instance_range \
+              tests/cli/test_studio_rbac.py::test_sidecar_deployment_uses_agentkit_cli_structured_release \
+              tests/cli/test_studio_rbac.py::test_application_owned_mcp_update_routes_cover_reuse_and_additions \
+              tests/cli/test_studio_rbac.py::test_sidecar_update_resolves_or_explicitly_reuses_stored_mcp_credentials
+          ) > "$RUNNER_TEMP/sidecar-credentials.log" 2>&1 &
+          pids+=("$!")
+
+          status=0
+          for index in "${!pids[@]}"; do
+            if ! wait "${pids[$index]}"; then
+              status=1
+            fi
+            echo "::group::Python Sidecar ${checks[$index]}"
+            cat "$RUNNER_TEMP/sidecar-${checks[$index]}.log"
+            echo "::endgroup::"
+          done
+          exit "$status"
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22.17.0
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-
-      - name: Install Python test dependencies
-        run: python -m pip install -e '.[dev]'
-
-      - name: Enforce public Python Sidecar coverage above 90 percent
-        run: |
-          python -m pytest -q \
-            tests/extensions/harness/test_studio_sidecar.py \
-            tests/extensions/harness/test_sidecar_public_api.py \
-            tests/extensions/harness/test_extension.py \
-            tests/cli/test_generated_agent_harness_sidecar.py \
-            tests/cli/test_managed_sidecar_source.py \
-            tests/integrations/agentkit/test_app.py \
-            tests/cli/test_studio_rbac.py::test_sidecar_deployment_uses_agentkit_cli_structured_release \
-            tests/cli/test_generated_agent_backend_codegen_extended.py::test_generated_agent_sidecar_debug_uses_runtime_apig_and_active_plan \
-            --cov=. --cov-branch --cov-report= --cov-fail-under=0
-          python -m coverage report \
-            --include='*/veadk/extensions/harness/sidecar.py' \
-            --fail-under=91 --show-missing
-
-      - name: Verify Studio six-case lifecycle and credential regressions
-        run: |
-          python -m pytest -q \
-            tests/cli/test_legacy_runtime_recovery.py -k 'six_case_ or changed_unnamed_mcp_url'
-          python -m pytest -q \
-            tests/cli/test_generated_agent_mcp.py \
-            tests/cli/test_generated_agent_backend_codegen_extended.py::test_generated_debug_applies_published_mcp_credential_contract_before_discovery \
-            tests/cli/test_studio_rbac.py::test_new_deployment_only_updates_non_default_instance_range \
-            tests/cli/test_studio_rbac.py::test_sidecar_deployment_uses_agentkit_cli_structured_release \
-            tests/cli/test_studio_rbac.py::test_application_owned_mcp_update_routes_cover_reuse_and_additions \
-            tests/cli/test_studio_rbac.py::test_sidecar_update_resolves_or_explicitly_reuses_stored_mcp_credentials
 
       - name: Install frontend dependencies
         working-directory: frontend
@@ -105,3 +136,17 @@ jobs:
       - name: Verify frontend Sidecar integration
         working-directory: frontend
         run: npm test
+
+  gate:
+    if: always()
+    needs: [python, frontend]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every Sidecar check to pass
+        env:
+          PYTHON_RESULT: ${{ needs.python.result }}
+          FRONTEND_RESULT: ${{ needs.frontend.result }}
+        run: |
+          test "$PYTHON_RESULT" = success
+          test "$FRONTEND_RESULT" = success
