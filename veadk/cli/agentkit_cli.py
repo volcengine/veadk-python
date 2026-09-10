@@ -37,7 +37,7 @@ import urllib.request
 import zipfile
 from typing import Any
 
-AGENTKIT_CLI_VERSION = "0.52.14"
+AGENTKIT_CLI_VERSION = "0.52.18"
 # Direct bootstrap uses the one verified public upstream. Provider-local Studio
 # bundles materialize this archive through their signed runtime manifest instead.
 AGENTKIT_CLI_RELEASE_HOST = "agentkit-cli.tos-cn-beijing.volces.com"
@@ -82,35 +82,35 @@ AGENTKIT_CLI_ARTIFACTS = {
     "linux-x64": AgentKitCliArtifact(
         platform_key="linux-x64",
         filename="agentkit-linux-x64.tar.gz",
-        sha256="4e76e32c60473b5037c331a7c74bb99b1c23b62eb8ce26379d3a8c41af38a64e",
+        sha256="4439d14b4be6ccb90f6eea896adf959ffef4ab4983f41e449d80c79d4cd95de3",
         archive_root=f"agentkit-{AGENTKIT_CLI_VERSION}-linux-x64",
         executable_name="ak",
     ),
     "linux-arm64": AgentKitCliArtifact(
         platform_key="linux-arm64",
         filename="agentkit-linux-arm64.tar.gz",
-        sha256="cbd9af81c6f591ef677a296ebb905ed11a3bfc09808362a656fba3e9e2d8f430",
+        sha256="d5a0b5e2d08c78c1eda750f3b16ed7b3742bc041c0b67a66277a84d0b49bf5d8",
         archive_root=f"agentkit-{AGENTKIT_CLI_VERSION}-linux-arm64",
         executable_name="ak",
     ),
     "darwin-x64": AgentKitCliArtifact(
         platform_key="darwin-x64",
         filename="agentkit-darwin-x64.tar.gz",
-        sha256="4b775f760b8e5fd8302e9eb92e7ac21aa28b284d5d76a649778c136732285e2e",
+        sha256="42b4e2ddd4ba03b02fb73723048a002545dc1c0ec8e2bb741bcde16f1cf8c6f0",
         archive_root=f"agentkit-{AGENTKIT_CLI_VERSION}-darwin-x64",
         executable_name="ak",
     ),
     "darwin-arm64": AgentKitCliArtifact(
         platform_key="darwin-arm64",
         filename="agentkit-darwin-arm64.tar.gz",
-        sha256="c282b707f025d5732d114220a6956004762dd58abe39f4ccaaf360b73f80c480",
+        sha256="8dec4b59e3716cb616894ad118c667c2d44e477a500b0228b48681125b24c991",
         archive_root=f"agentkit-{AGENTKIT_CLI_VERSION}-darwin-arm64",
         executable_name="ak",
     ),
     "windows-x64": AgentKitCliArtifact(
         platform_key="windows-x64",
         filename="agentkit-windows-x64.zip",
-        sha256="4737ff064edf73eb3901d485e3f543a88a916e39e44efd1aca5681fc89af6665",
+        sha256="cd4fd09de40c4f34d231288b25771ef3d2785e4d6b02031e3c1205ff1ca682e6",
         archive_root=f"agentkit-{AGENTKIT_CLI_VERSION}-windows-x64",
         executable_name="ak.exe",
     ),
