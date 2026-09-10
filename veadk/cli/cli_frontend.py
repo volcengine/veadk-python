@@ -6461,6 +6461,28 @@ def _run_frontend_server(
                 status_code=409,
                 detail="更新页面缺少可验证的配置草稿，请重新打开智能体详情。",
             )
+
+        def _draft_has_model_fallbacks(value: Any) -> bool:
+            if not isinstance(value, Mapping):
+                return False
+            raw_fallbacks = value.get("modelFallbacks")
+            if isinstance(raw_fallbacks, list) and len(raw_fallbacks) > 0:
+                return True
+            raw_sub_agents = value.get("subAgents")
+            if isinstance(raw_sub_agents, list):
+                return any(
+                    _draft_has_model_fallbacks(child) for child in raw_sub_agents
+                )
+            return False
+
+        if source_preserving_requested and _draft_has_model_fallbacks(requested_draft):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "当前 Runtime 使用保留源码更新模式，不支持模型 fallback。"
+                    "请重新生成标准项目并使用 veadk-python >= 1.1.10 后部署。"
+                ),
+            )
         raw_remove_runtime_env_keys = data.get("removeRuntimeEnvKeys", [])
         if not isinstance(raw_remove_runtime_env_keys, list) or any(
             not isinstance(key, str)
@@ -12009,8 +12031,125 @@ def _run_frontend_server(
                 )
             except LegacyRecoveryError:
                 pass
-        editable_keys = [*references, "FEISHU_APP_SECRET"]
+        editable_keys = [
+            *references,
+            *_model_credential_environment_keys(draft, provider),
+            "FEISHU_APP_SECRET",
+        ]
         return [key for key in editable_keys if key in configured]
+
+    def _model_env_segment(value: Any, fallback: str) -> str:
+        segment = re.sub(r"[^A-Z0-9]+", "_", str(value or "").strip().upper())
+        return segment.strip("_") or fallback
+
+    def _next_model_env_name(base: str, used: set[str]) -> str:
+        if base not in used:
+            return base
+        suffix = 2
+        while f"{base}_{suffix}" in used:
+            suffix += 1
+        return f"{base}_{suffix}"
+
+    def _valid_model_env_name(value: str) -> bool:
+        return re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value) is not None
+
+    def _model_fallback_api_key_env(fallback: Mapping[str, Any]) -> str:
+        for key in (
+            "modelApiKeyEnv",
+            "model_api_key_env",
+            "apiKeyEnv",
+            "api_key_env",
+        ):
+            value = str(fallback.get(key) or "").strip()
+            if value and _valid_model_env_name(value):
+                return value
+        return ""
+
+    def _model_credential_environment_keys(
+        draft: Mapping[str, Any],
+        cloud_provider: CloudProvider,
+    ) -> list[str]:
+        keys: list[str] = []
+        used: set[str] = set()
+
+        def remember(key: str) -> None:
+            if key and key not in used:
+                keys.append(key)
+            if key:
+                used.add(key)
+
+        def reserve(key: str) -> None:
+            if key:
+                used.add(key)
+
+        def visit(node: Mapping[str, Any]) -> None:
+            agent_segment = _model_env_segment(node.get("name"), "AGENT")
+            agent_type = str(node.get("agentType") or "llm").strip() or "llm"
+            is_llm_node = agent_type == "llm"
+            model_source = str(node.get("modelSource") or "").strip()
+            model_api_base = str(node.get("modelApiBase") or "").strip()
+            is_custom_model = is_llm_node and (
+                model_source == "custom"
+                or (
+                    not model_source
+                    and bool(model_api_base)
+                    and not is_provider_modelark_base_url(
+                        cloud_provider,
+                        model_api_base,
+                    )
+                )
+            )
+            if is_custom_model:
+                if str(node.get("modelProvider") or "").strip():
+                    reserve(
+                        _next_model_env_name(
+                            f"CUSTOM_MODEL_{agent_segment}_PROVIDER",
+                            used,
+                        )
+                    )
+                if model_api_base:
+                    reserve(
+                        _next_model_env_name(
+                            f"CUSTOM_MODEL_{agent_segment}_API_BASE",
+                            used,
+                        )
+                    )
+                remember(
+                    _next_model_env_name(
+                        f"CUSTOM_MODEL_{agent_segment}_API_KEY",
+                        used,
+                    )
+                )
+            if is_llm_node:
+                raw_fallbacks = node.get("modelFallbacks")
+                fallbacks = raw_fallbacks if isinstance(raw_fallbacks, list) else []
+                for index, fallback in enumerate(fallbacks):
+                    if not isinstance(fallback, Mapping):
+                        continue
+                    model_name = str(
+                        fallback.get("modelName")
+                        or fallback.get("model_name")
+                        or fallback.get("model")
+                        or ""
+                    ).strip()
+                    if not model_name:
+                        continue
+                    explicit_key = _model_fallback_api_key_env(fallback)
+                    remember(
+                        explicit_key
+                        or _next_model_env_name(
+                            f"FALLBACK_MODEL_{agent_segment}_{index + 1}_API_KEY",
+                            used,
+                        )
+                    )
+            raw_children = node.get("subAgents")
+            children = raw_children if isinstance(raw_children, list) else []
+            for child in children:
+                if isinstance(child, Mapping):
+                    visit(child)
+
+        visit(draft)
+        return keys
 
     def _runtime_update_result(
         runtime: Any,

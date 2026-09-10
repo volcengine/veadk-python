@@ -15,6 +15,7 @@ import {
   HARNESS_SIDECAR_OPTION_IDS,
   normalizeHarnessSidecarIntent,
 } from "./harnessSidecarOptions";
+import { normalizeDraftModelNames } from "./modelFallbacks";
 
 const STM_IDS = new Set(["local", "sqlite", "mysql", "postgresql"]);
 const LTM_IDS = new Set([
@@ -169,6 +170,7 @@ function parseSubAgents(
     const parsedType = asAgentType(so.agentType);
     const agentType =
       a2aRegistry.enabled && parsedType === "llm" ? "a2a" : parsedType;
+    const modelNames = normalizeDraftModelNames(so.modelName, so.modelFallbacks);
     return {
       ...emptyDraft(childCloudProvider),
       cloudProvider: childCloudProvider,
@@ -178,7 +180,8 @@ function parseSubAgents(
       agentType,
       maxIterations: asMaxIterations(so.maxIterations),
       a2aUrl: asString(so.a2aUrl),
-      modelName: asString(so.modelName),
+      modelName: modelNames.modelName,
+      modelFallbacks: modelNames.modelFallbacks,
       modelSource:
         so.modelSource === "custom" || so.modelSource === "ark"
           ? so.modelSource
@@ -302,6 +305,7 @@ export function normalizeDraft(raw: unknown): AgentDraft {
   const agentType =
     a2aRegistry.enabled && parsedType === "llm" ? "a2a" : parsedType;
   const cloudProvider = asCloudProvider(o.cloudProvider);
+  const modelNames = normalizeDraftModelNames(o.modelName, o.modelFallbacks);
 
   const mcpTools = Array.isArray(o.mcpTools)
     ? (o.mcpTools as unknown[])
@@ -332,7 +336,8 @@ export function normalizeDraft(raw: unknown): AgentDraft {
     agentType,
     maxIterations: asMaxIterations(o.maxIterations),
     a2aUrl: asString(o.a2aUrl),
-    modelName: asString(o.modelName),
+    modelName: modelNames.modelName,
+    modelFallbacks: modelNames.modelFallbacks,
     modelSource:
       o.modelSource === "custom" || o.modelSource === "ark"
         ? o.modelSource

@@ -490,11 +490,12 @@ def test_all_os_language_combinations_generate_buildable_commented_dockerfiles(
     assert 'Acquire::ForceIPv4 "true"' in dockerfile
     assert dockerfile.count("apt-get update") == 1
     assert dockerfile.count("apt-get install -y --no-install-recommends") == 1
+    assert "git \\" in dockerfile
     assert "# VeADK:" in dockerfile
     assert "# lxml-html-clean:" in dockerfile
     assert (
         '"veadk-python[a2ui,database,eval,extensions,harness,harness-sidecar,pdf,speech]'
-        '>=1.1.1"' in dockerfile
+        '==1.1.10"' in dockerfile
     )
     assert '"agentkit-sdk-python==0.8.4"' in dockerfile
     assert '"starlette<1.0.0"' in dockerfile

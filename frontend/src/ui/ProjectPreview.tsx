@@ -1467,7 +1467,9 @@ export function ProjectPreview({
       return;
     }
     const missingSecret = requiredSecretEnv.find(
-      (env) => !(effectiveSecretEnvValues[env.key] ?? "").trim(),
+      (env) =>
+        !(effectiveSecretEnvValues[env.key] ?? "").trim() &&
+        !configuredRuntimeEnvKeySet.has(env.key),
     );
     if (missingSecret) {
       setSecretEnvErrorKey(missingSecret.key);
@@ -1478,6 +1480,7 @@ export function ProjectPreview({
     const missingFeatureEnvs = missingRuntimeEnvs(
       deploymentEnv,
       deploymentEnvValues,
+      configuredRuntimeEnvKeys,
     );
     const missingManagedModelEnv = deploymentEnv.find(
       (env) =>
@@ -3059,6 +3062,9 @@ export function ProjectPreview({
                         {requiredSecretEnv.map((env) => {
                           const invalid = secretEnvErrorKey === env.key;
                           const errorId = `${env.key.toLowerCase()}-error`;
+                          const value = effectiveSecretEnvValues[env.key] ?? "";
+                          const configuredSecret =
+                            configuredRuntimeEnvKeySet.has(env.key);
                           return (
                             <div
                               className="pp-env-row pp-env-row-derived"
@@ -3076,8 +3082,12 @@ export function ProjectPreview({
                                   id={env.key}
                                   className="pp-env-value"
                                   type="password"
-                                  value={effectiveSecretEnvValues[env.key] ?? ""}
-                                  placeholder={t("projectPreview.releaseOnlySecret")}
+                                  value={value}
+                                  placeholder={
+                                    configuredSecret && !value
+                                      ? "••••••"
+                                      : t("projectPreview.releaseOnlySecret")
+                                  }
                                   disabled={deploying}
                                   autoComplete="new-password"
                                   spellCheck={false}
@@ -3110,7 +3120,11 @@ export function ProjectPreview({
                                   </span>
                                 )}
                               </div>
-                              <span className="pp-env-source">{t("projectPreview.thisRelease")}</span>
+                              <span className="pp-env-source">
+                                {configuredSecret && !value.trim()
+                                  ? t("projectPreview.synced")
+                                  : t("projectPreview.thisRelease")}
+                              </span>
                             </div>
                           );
                         })}

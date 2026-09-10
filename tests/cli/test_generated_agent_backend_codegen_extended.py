@@ -69,26 +69,26 @@ from veadk.cli.generated_agent_skills import (
 # These hashes lock the complete generated project contents, not just Python
 # syntax or selected snippets.
 _MINIMAL_FRONTEND_GOLDEN = {
-    "Dockerfile": "0b643795fc79f04b0aaff219ff513c9ca65a05e1af0f0b54d47e45ecf5305137",
+    "Dockerfile": "d260ed284c060834ef0ddb36cd5438a116259d9884e1997127ff36c7721ad95d",
     "app.py": "48a85b8eaa87d836e6dabc41bae6bdc0c587e1d55093bc8aaa7bcb62a362ad21",
     "agents/__init__.py": "a6449a6cac3bfda8b834ea39ea95ca2f8d0471ac480e1e876313d7398eea59ba",
     "agents/demo_agent/agent.py": "3c28f3e63f185d1ee8402d58b62c8654cf18fe4180a1f348abaa63547d91446c",
     "agents/demo_agent/__init__.py": "ba3abbb199bbae74dc75151a44ba53a557e5f47d509835950ca756346c5a9582",
     "agents/demo_agent/dynamic_a2a.py": "d136f27d6a77439708c415686a3d167f2ad2fb9a96a5f8a0751916b09d46e364",
     ".env.example": "ec3258da9bef4e74333376d8554c265ccb12a4a1e5d4e1e1b0acdf5c9ae93ab6",
-    "requirements.txt": "a66e74d4c0b91cc4cc036f6026599a787056ea72a034d857bedd92fddc6d779f",
+    "requirements.txt": "4ea7bbfb42b69c10c7bc705b09a0aeeff188444aa6c5a667832f116e6a592a3e",
     "README.md": "a34208314cf9061c02662028d7a9dd97448e6b73c1d732cb4aeaa8f70dbbc684",
 }
 
 _FULL_FRONTEND_GOLDEN = {
-    "Dockerfile": "0b643795fc79f04b0aaff219ff513c9ca65a05e1af0f0b54d47e45ecf5305137",
+    "Dockerfile": "d260ed284c060834ef0ddb36cd5438a116259d9884e1997127ff36c7721ad95d",
     "app.py": "47c87fd54ac00e208030a7a370f0dbd52a872a9adf8ecd2e2e4f2e1b56188854",
     "agents/__init__.py": "a6449a6cac3bfda8b834ea39ea95ca2f8d0471ac480e1e876313d7398eea59ba",
     "agents/full_agent/agent.py": "35560cfa5ea93955244482d727c8f8369599fa5b9560ba1f3804df7273e245ce",
     "agents/full_agent/__init__.py": "ba3abbb199bbae74dc75151a44ba53a557e5f47d509835950ca756346c5a9582",
     "agents/full_agent/dynamic_a2a.py": "d136f27d6a77439708c415686a3d167f2ad2fb9a96a5f8a0751916b09d46e364",
     ".env.example": "2bfd3afda4e661fbb71588ec5f0d584ce6682363cacc81b0394f8da09f7977e8",
-    "requirements.txt": "63eb2d042226abfb78238725727c6a13724472a1f55d84d55f3fa79cd07be9eb",
+    "requirements.txt": "425851dbaf40b1408367e35d952e47706124411124648b71f532fed05fa6a588",
     "README.md": "1bf4dc889c7d1076f50784d253b53412ba7c49bcb69a5d948f9092dbbecb18ac",
 }
 

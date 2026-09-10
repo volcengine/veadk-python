@@ -1149,12 +1149,12 @@ def test_current_user_pool_deployment_forwards_studio_jwt_to_run_sse(
     assert response.headers["cache-control"] == "no-cache, no-transform"
     assert response.headers["x-accel-buffering"] == "no"
     assert frames[-1]["success"] is True
-    huawei = "https://repo.huaweicloud.com/repository/pypi/simple"
-    aliyun = "https://mirrors.aliyun.com/pypi/simple/"
+    tencent = "https://mirrors.cloud.tencent.com/pypi/simple"
+    ustc = "https://pypi.mirrors.ustc.edu.cn/simple"
     pypi = "https://pypi.org/simple"
     assert (
-        captured_dockerfile.index(huawei)
-        < captured_dockerfile.index(aliyun)
+        captured_dockerfile.index(tencent)
+        < captured_dockerfile.index(ustc)
         < captured_dockerfile.index(pypi)
     )
     cloud = captured_config["launch_types"]["cloud"]
@@ -3475,6 +3475,15 @@ def test_runtime_update_capability_supports_owned_unmanaged_runtime(
                 '"headers":{"Authorization":"Bearer structured-secret"}}]'
             ),
         ),
+        SimpleNamespace(
+            key="CUSTOM_MODEL_SELECTED_AGENT_API_KEY",
+            value="custom-model-secret",
+        ),
+        SimpleNamespace(key="OPENAI_BACKUP_API_KEY", value="fallback-secret"),
+        SimpleNamespace(
+            key="FALLBACK_MODEL_SELECTED_AGENT_2_API_KEY",
+            value="implicit-fallback-secret",
+        ),
         SimpleNamespace(key="CUSTOM_TOKEN", value="custom-secret"),
     ]
     legacy_runtime = _runtime_with_public_endpoint(
@@ -3555,6 +3564,23 @@ def test_runtime_update_capability_supports_owned_unmanaged_runtime(
                         "name": "selected-agent",
                         "description": "Existing Agent",
                         "instruction": "Keep the published configuration.",
+                        "modelSource": "custom",
+                        "modelName": "primary-custom-model",
+                        "modelProvider": "openai",
+                        "modelApiBase": "https://api.openai.com/v1",
+                        "modelFallbacks": [
+                            {
+                                "modelName": "gpt-4o-mini",
+                                "modelProvider": "openai",
+                                "modelApiBase": "https://api.openai.com/v1",
+                                "modelApiKeyEnv": "OPENAI_BACKUP_API_KEY",
+                            },
+                            {
+                                "modelName": "claude-3-haiku",
+                                "modelProvider": "anthropic",
+                                "modelApiBase": "https://api.anthropic.com/v1",
+                            },
+                        ],
                         "mcpTools": [
                             {
                                 "name": "orders",
@@ -3705,7 +3731,13 @@ def test_runtime_update_capability_supports_owned_unmanaged_runtime(
             {"key": "AGENTKIT_TOOL_ID", "value": "t-code-sandbox"},
             {"key": "AGENTKIT_TOOL_REGION", "value": "cn-beijing"},
         ],
-        "configuredEnvKeys": ["MCP_API_KEY", "PUBLISHED_INVENTORY_TOKEN"],
+        "configuredEnvKeys": [
+            "MCP_API_KEY",
+            "PUBLISHED_INVENTORY_TOKEN",
+            "CUSTOM_MODEL_SELECTED_AGENT_API_KEY",
+            "OPENAI_BACKUP_API_KEY",
+            "FALLBACK_MODEL_SELECTED_AGENT_2_API_KEY",
+        ],
         "network": {
             "mode": "both",
             "vpcId": "vpc-existing",
@@ -3725,6 +3757,9 @@ def test_runtime_update_capability_supports_owned_unmanaged_runtime(
         "custom-secret",
         "mcp-secret",
         "structured-secret",
+        "custom-model-secret",
+        "fallback-secret",
+        "implicit-fallback-secret",
     ):
         assert protected not in response.text
     assert requested_paths[:2] == [
@@ -5079,6 +5114,14 @@ def test_source_preserving_update_ignores_browser_source_and_keeps_secrets_out_o
                 "envs": [{"key": "UNRELATED_SECRET", "value": "must-not-pass"}],
             },
         )
+        fallback_model_change = client.post(
+            "/web/deploy-agentkit",
+            headers=headers,
+            json={
+                **update_payload,
+                "draft": {**draft, "modelFallbacks": ["backup-model"]},
+            },
+        )
         with client.stream(
             "POST",
             "/web/deploy-agentkit",
@@ -5093,6 +5136,8 @@ def test_source_preserving_update_ignores_browser_source_and_keeps_secrets_out_o
 
     assert generic_env.status_code == 400
     assert "不接受通用环境变量" in generic_env.json()["detail"]
+    assert fallback_model_change.status_code == 409
+    assert "模型 fallback" in fallback_model_change.json()["detail"]
     assert response.status_code == 200
     assert frames[-1]["success"] is True
     assert captured["dockerfile"].splitlines()[0].endswith("@sha256:" + "b" * 64)
@@ -5740,18 +5785,18 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
     assert cloud["runtime_role_name"] == "runtime-role"
     assert cloud["image_tag"] == "veadk-v4"
     if provider == "volcengine":
-        huawei = "https://repo.huaweicloud.com/repository/pypi/simple"
-        aliyun = "https://mirrors.aliyun.com/pypi/simple/"
+        tencent = "https://mirrors.cloud.tencent.com/pypi/simple"
+        ustc = "https://pypi.mirrors.ustc.edu.cn/simple"
         pypi = "https://pypi.org/simple"
         assert (
-            captured_dockerfile.index(huawei)
-            < captured_dockerfile.index(aliyun)
+            captured_dockerfile.index(tencent)
+            < captured_dockerfile.index(ustc)
             < captured_dockerfile.index(pypi)
         )
     else:
         assert "RUN uv pip install -r requirements.txt" in captured_dockerfile
-        assert "repo.huaweicloud.com" not in captured_dockerfile
-        assert "mirrors.aliyun.com" not in captured_dockerfile
+        assert "mirrors.cloud.tencent.com" not in captured_dockerfile
+        assert "pypi.mirrors.ustc.edu.cn" not in captured_dockerfile
     assert cloud["runtime_auth_type"] == "custom_jwt"
     assert cloud["runtime_jwt_discovery_url"] == (
         "https://studio.example.com/.well-known/openid-configuration"
@@ -5969,17 +6014,32 @@ def test_application_owned_mcp_update_routes_cover_reuse_and_additions(
     )
     app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
     headers = {"X-VeADK-Local-User": "developer"}
+    capability_params = {
+        "runtimeId": runtime.runtime_id,
+        "region": "cn-shanghai",
+        "appName": agent_name,
+        "currentVersion": runtime.current_version_number,
+    }
 
-    with TestClient(app) as client:
-        capability = client.get(
+    def get_completed_capability(client: TestClient) -> httpx.Response:
+        response = client.get(
             "/web/runtime-update-capability",
-            params={
-                "runtimeId": runtime.runtime_id,
-                "region": "cn-shanghai",
-                "appName": agent_name,
-            },
+            params=capability_params,
             headers=headers,
         )
+        for _ in range(5):
+            if response.status_code != 202:
+                return response
+            time.sleep(0.05)
+            response = client.get(
+                "/web/runtime-update-capability",
+                params=capability_params,
+                headers=headers,
+            )
+        return response
+
+    with TestClient(app) as client:
+        capability = get_completed_capability(client)
         assert capability.status_code == 200
         edited_draft = capability.json()["agent"]["draft"]
         if lifecycle_case == "change-url":

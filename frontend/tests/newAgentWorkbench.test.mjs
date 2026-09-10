@@ -70,6 +70,17 @@ test("the app-level create entry asks for a mode before either creation flow", (
   assert.doesNotMatch(workbenchSource, /className="cw-/);
 });
 
+test("runtime updates hide fallback controls outside regenerate mode", () => {
+  assert.match(
+    customCreateSource,
+    /const showModelFallbacks =\s*!deploymentTarget \|\| deploymentTarget\.editMode === "regenerate"/,
+  );
+  assert.match(customCreateSource, /showModelFallbacks=\{showModelFallbacks\}/);
+  assert.match(workbenchSource, /showModelFallbacks\?: boolean/);
+  assert.match(workbenchSource, /showModelFallbacks = true/);
+  assert.match(workbenchSource, /showModelFallbacks \? \(\s*<ModelFallbackFields/);
+});
+
 test("workspace drafts restore the creation mode they were saved with", () => {
   assert.match(
     appSource,
@@ -360,7 +371,22 @@ test("quick-mode next action stays disabled while model data is loading", () => 
   assert.match(workbenchSource, /onLoadingChange=\{setModelDataLoading\}/);
   assert.match(
     workbenchSource,
-    /disabled=\{[\s\S]*?deploying \|\| \(step === "agent" && modelDataLoading\)[\s\S]*?\}/,
+    /disabled=\{[\s\S]*?deploying \|\|[\s\S]*?step === "agent"[\s\S]*?modelDataLoading \|\| showModelApiKeyError[\s\S]*?\}/,
+  );
+});
+
+test("quick-mode requires a model API key before continuing", () => {
+  assert.match(
+    workbenchSource,
+    /missingCustomModelCredentialRequirement\([\s\S]*?draft,[\s\S]*?defaultModelApiBase\(cloudProvider\),[\s\S]*?customModelSecretValues,[\s\S]*?configuredRuntimeEnvKeys/,
+  );
+  assert.match(
+    workbenchSource,
+    /const modelApiKeyMissing =[\s\S]*?modelSource === "ark"[\s\S]*?!draft\.deployment\?\.modelApiKeyId\?\.trim\(\)[\s\S]*?Boolean\(missingCustomModelCredential\)/,
+  );
+  assert.match(
+    workbenchSource,
+    /t\("workbench\.validation\.apiKeyRequired"\)/,
   );
 });
 
@@ -679,7 +705,7 @@ test("final step exposes deployment progress and error feedback", () => {
   );
   assert.match(
     customCreateSource,
-    /firstMissingRuntimeEnv\(activeEnvSpecs, allEnvValues\)/,
+    /firstMissingRuntimeEnv\(\s*activeEnvSpecs,\s*allEnvValues,\s*configuredRuntimeEnvKeys,\s*\)/,
   );
   assert.match(
     customCreateSource,

@@ -54,6 +54,8 @@ from veadk.tools.builtin_tools.create_agent.models import (
     LegacyAgentBlueprint,
 )
 
+VEADK_REQUIREMENT = "veadk-python==1.1.10"
+
 
 def test_old_files_request_shape_is_rejected() -> None:
     payload = {
@@ -86,7 +88,7 @@ def test_minimal_codegen_agent_py_compiles(tmp_path) -> None:
         file.content for file in project.files if file.path == "requirements.txt"
     )
     assert requirements == (
-        "veadk-python==1.1.9\n"
+        f"{VEADK_REQUIREMENT}\n"
         "agentkit-sdk-python==0.8.4\n"
         "google-adk==2.1.0\n"
         "starlette==0.52.1\n"
@@ -94,10 +96,10 @@ def test_minimal_codegen_agent_py_compiles(tmp_path) -> None:
     dockerfile = next(
         file.content for file in project.files if file.path == "Dockerfile"
     )
-    huawei = "https://repo.huaweicloud.com/repository/pypi/simple"
-    aliyun = "https://mirrors.aliyun.com/pypi/simple/"
+    tencent = "https://mirrors.cloud.tencent.com/pypi/simple"
+    ustc = "https://pypi.mirrors.ustc.edu.cn/simple"
     pypi = "https://pypi.org/simple"
-    assert dockerfile.index(huawei) < dockerfile.index(aliyun) < dockerfile.index(pypi)
+    assert dockerfile.index(tencent) < dockerfile.index(ustc) < dockerfile.index(pypi)
 
     for file in project.files:
         if file.path.endswith(".py"):
@@ -137,12 +139,11 @@ def test_quick_mode_codegen_adds_dynamic_agent_toolset_and_managed_rules() -> No
     assert "create_agents" in agent_py
     assert "handoff_to" in agent_py
     assert "'dynamicAgentDelegation': True" in agent_py
-    assert "veadk-python==1.1.9\n" in requirements
-    assert "github.com/volcengine/veadk-python" not in requirements
-    huawei = "https://repo.huaweicloud.com/repository/pypi/simple"
-    aliyun = "https://mirrors.aliyun.com/pypi/simple/"
+    assert f"{VEADK_REQUIREMENT}\n" in requirements
+    tencent = "https://mirrors.cloud.tencent.com/pypi/simple"
+    ustc = "https://pypi.mirrors.ustc.edu.cn/simple"
     pypi = "https://pypi.org/simple"
-    assert dockerfile.index(huawei) < dockerfile.index(aliyun) < dockerfile.index(pypi)
+    assert dockerfile.index(tencent) < dockerfile.index(ustc) < dockerfile.index(pypi)
 
     compat_py = next(
         file.content
@@ -762,7 +763,7 @@ def test_traditional_codegen_does_not_add_dynamic_agent_capability() -> None:
     assert "CreateAgentToolset" not in agent_py
     assert "动态子智能体协作规则" not in agent_py
     assert "dynamicAgentDelegation" not in agent_py
-    assert "veadk-python==1.1.9" in requirements
+    assert VEADK_REQUIREMENT in requirements
 
 
 def test_codegen_environment_image_adds_skills_without_replacing_agent_skills() -> None:
@@ -930,16 +931,16 @@ def test_codegen_cloud_environment_uses_provider_base_image(
     assert 'CMD ["python", "-m", "app"]' in files["Dockerfile"]
     dockerfile = files["Dockerfile"]
     if cloud_provider == "volcengine":
-        huawei = "https://repo.huaweicloud.com/repository/pypi/simple"
-        aliyun = "https://mirrors.aliyun.com/pypi/simple/"
+        tencent = "https://mirrors.cloud.tencent.com/pypi/simple"
+        ustc = "https://pypi.mirrors.ustc.edu.cn/simple"
         pypi = "https://pypi.org/simple"
         assert (
-            dockerfile.index(huawei) < dockerfile.index(aliyun) < dockerfile.index(pypi)
+            dockerfile.index(tencent) < dockerfile.index(ustc) < dockerfile.index(pypi)
         )
     else:
         assert "RUN uv pip install -r requirements.txt" in dockerfile
-        assert "repo.huaweicloud.com" not in dockerfile
-        assert "mirrors.aliyun.com" not in dockerfile
+        assert "mirrors.cloud.tencent.com" not in dockerfile
+        assert "pypi.mirrors.ustc.edu.cn" not in dockerfile
 
 
 def test_codegen_cloud_environment_installs_github_cli_for_both_architectures() -> None:
@@ -1143,6 +1144,70 @@ def test_codegen_custom_model_endpoint_reads_agent_specific_key() -> None:
         "CUSTOM_MODEL_CUSTOM_AGENT_API_KEY=replace-with-your-own-model-api-key"
         in files[".env.example"]
     )
+
+
+def test_codegen_model_fallbacks_emit_ordered_model_name_list() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(
+            name="Fallback Agent",
+            instruction="You are helpful.",
+            modelName="primary-model",
+            modelFallbacks=[
+                " fallback-a ",
+                "",
+                "primary-model",
+                "fallback-b",
+                "fallback-a",
+            ],
+        )
+    )
+    files = {file.path: file.content for file in project.files}
+    agent_py = files["agents/fallback_agent/agent.py"]
+
+    assert 'model_name="primary-model"' in agent_py
+    assert 'model_fallbacks=["fallback-a", "fallback-b"]' in agent_py
+    assert "'modelFallbacks': ['fallback-a', 'fallback-b']" in agent_py
+
+
+def test_codegen_model_fallbacks_emit_endpoint_configs() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(
+            name="Fallback Agent",
+            instruction="You are helpful.",
+            modelName="primary-model",
+            modelFallbacks=[
+                " fallback-a ",
+                {
+                    "modelName": "gpt-4o-mini",
+                    "modelProvider": "openai",
+                    "modelApiBase": "https://api.openai.com/v1",
+                    "modelApiKeyEnv": "OPENAI_BACKUP_API_KEY",
+                },
+                " fallback-b ",
+            ],
+        )
+    )
+    files = {file.path: file.content for file in project.files}
+    agent_py = files["agents/fallback_agent/agent.py"]
+
+    assert "from veadk import ModelFallbackEndpoint" in agent_py
+    assert 'model_name="primary-model"' in agent_py
+    assert (
+        'model_fallbacks=["fallback-a", '
+        'ModelFallbackEndpoint(model_name="gpt-4o-mini", '
+        'model_provider="openai", model_api_base="https://api.openai.com/v1", '
+        'model_api_key_env="OPENAI_BACKUP_API_KEY"), "fallback-b"]'
+    ) in agent_py
+    assert (
+        "OPENAI_BACKUP_API_KEY=replace-with-your-own-model-api-key"
+        in files[".env.example"]
+    )
+    assert (
+        "'modelFallbacks': ['fallback-a', {'modelName': 'gpt-4o-mini', "
+        "'modelProvider': 'openai', "
+        "'modelApiBase': 'https://api.openai.com/v1', "
+        "'modelApiKeyEnv': 'OPENAI_BACKUP_API_KEY'}, 'fallback-b']"
+    ) in agent_py
 
 
 def test_codegen_custom_model_agents_use_distinct_key_env_names() -> None:
