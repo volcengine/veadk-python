@@ -2406,7 +2406,7 @@ def test_agentkit_gateway_waits_for_running_bash_command(
     assert calls[2][1]["stderr_offset"] == 2
 
 
-def test_agentkit_gateway_accepts_confirmed_background_launch(
+def test_agentkit_gateway_accepts_migration_dispatch_without_polling_output(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[dict[str, object]] = []
@@ -2420,8 +2420,8 @@ def test_agentkit_gateway_accepts_confirmed_background_launch(
                     "session_id": "bash-session",
                     "command_id": "command-1",
                     "status": "running",
-                    "stdout": "VEADK_MIGRATION_ANALYSIS_STARTED_V1\n",
-                    "offset": 36,
+                    "stdout": "",
+                    "offset": 0,
                     "stderr_offset": 0,
                 }
             }
@@ -2433,6 +2433,8 @@ def test_agentkit_gateway_accepts_confirmed_background_launch(
         timeout: object,
     ) -> Response:
         calls.append({"json": json, "timeout": timeout})
+        if len(calls) > 1:
+            raise AssertionError("background dispatch must not poll command output")
         return Response()
 
     monkeypatch.setattr("frontend.server.migration.gateway.requests.post", post)
@@ -2455,8 +2457,8 @@ def test_agentkit_gateway_accepts_confirmed_background_launch(
 
     result = gateway.execute_bash(
         session,
-        "start-analysis",
-        operation="start_analysis",
+        "start-migration",
+        operation="start_migration",
         timeout_seconds=30,
     )
 
@@ -2465,7 +2467,7 @@ def test_agentkit_gateway_accepts_confirmed_background_launch(
     assert calls[0]["json"] == {
         "timeout": 1,
         "hard_timeout": 30,
-        "command": "start-analysis",
+        "command": "start-migration",
     }
 
 
@@ -2528,8 +2530,10 @@ def test_agentkit_gateway_rejects_unsuccessful_bash_terminal_states(
     assert raised.value.retryable is False
 
 
+@pytest.mark.parametrize("operation", ["prepare_source", "start_migration"])
 def test_agentkit_gateway_rejects_incomplete_running_bash_identity(
     monkeypatch: pytest.MonkeyPatch,
+    operation: str,
 ) -> None:
     class Response:
         status_code = 200
@@ -2569,7 +2573,7 @@ def test_agentkit_gateway_rejects_incomplete_running_bash_identity(
         gateway.execute_bash(
             session,
             "prepare-project",
-            operation="prepare_source",
+            operation=operation,
             timeout_seconds=120,
         )
 
@@ -3058,6 +3062,31 @@ def test_confirmed_migration_uses_the_one_cli_contract(
         assert 'export MODEL_AGENT_NAME="$CODEX_MODEL"' in command
     else:
         assert "CODEX_API_KEY" not in command
+
+
+def test_confirm_returns_after_dispatch_without_refreshing_remote_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, _ = create_uploaded_task(service)
+    mark_analysis_ready(gateway, task_id, framework="dify", entry=None)
+    body = confirmation_body(
+        gateway,
+        task_id,
+        framework="dify",
+        entry=None,
+    )
+
+    def unexpected_refresh(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise AssertionError("confirm must not refresh remote state after dispatch")
+
+    monkeypatch.setattr(service, "get_task", unexpected_refresh)
+
+    started = service.confirm(task_id, "owner-1", body)
+
+    assert started["state"] == "migrating"
+    assert gateway.commands[-1][1] == "start_migration"
 
 
 def test_analysis_answers_reject_missing_or_unknown_question_ids() -> None:
@@ -3837,6 +3866,73 @@ def test_recent_process_exit_waits_for_remote_delivery_state_visibility() -> Non
     assert expired_settle_window["error"]["code"] == "MIGRATION_DELIVERY_MISSING"
 
 
+def test_recent_process_exit_preserves_visible_active_delivery_state() -> None:
+    now = datetime(2026, 8, 11, 8, 30, tzinfo=timezone.utc).timestamp()
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway, clock=lambda: now)
+    task_id, _ = create_uploaded_task(service)
+    mark_analysis_ready(gateway, task_id)
+    service.confirm(
+        task_id,
+        "owner-1",
+        confirmation_body(gateway, task_id),
+    )
+    gateway.files[
+        (task_id, f"{MIGRATION_ROOT}/diagnostics/migration/process-exit.json")
+    ] = json.dumps(
+        {"schema_version": 1, "exit_code": 0, "finished_at": int(now)}
+    ).encode()
+
+    task = MigrationService(
+        gateway,
+        clock=lambda: now + 29,
+    ).get_task(task_id, "owner-1")
+
+    assert task["state"] == "migrating"
+    assert task["message"] == "正在迁移项目"
+
+
+@pytest.mark.parametrize(
+    ("exit_code", "expected_code"),
+    [
+        (0, "MIGRATION_DELIVERY_MISSING"),
+        (1, "MIGRATION_PROCESS_FAILED"),
+    ],
+)
+def test_process_exit_overrides_stale_active_delivery_after_settle_window(
+    exit_code: int,
+    expected_code: str,
+) -> None:
+    now = datetime(2026, 8, 11, 8, 30, tzinfo=timezone.utc).timestamp()
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway, clock=lambda: now)
+    task_id, _ = create_uploaded_task(service)
+    mark_analysis_ready(gateway, task_id)
+    service.confirm(
+        task_id,
+        "owner-1",
+        confirmation_body(gateway, task_id),
+    )
+    gateway.files[
+        (task_id, f"{MIGRATION_ROOT}/diagnostics/migration/process-exit.json")
+    ] = json.dumps(
+        {
+            "schema_version": 1,
+            "exit_code": exit_code,
+            "finished_at": int(now),
+        }
+    ).encode()
+
+    task = MigrationService(
+        gateway,
+        clock=lambda: now + 30,
+    ).get_task(task_id, "owner-1")
+
+    assert task["state"] == "failed"
+    assert task["error"]["code"] == expected_code
+    assert task["error"]["retryable"] is False
+
+
 def test_started_migration_waits_for_its_first_delivery_status() -> None:
     gateway = FakeMigrationGateway()
     service = MigrationService(gateway)
@@ -3988,6 +4084,9 @@ def test_terminal_delivery_preserves_cli_deployment_readiness(state: str) -> Non
             }
         ).encode()
     )
+    gateway.files[
+        (task_id, f"{MIGRATION_ROOT}/diagnostics/migration/process-exit.json")
+    ] = json.dumps({"schema_version": 1, "exit_code": 1}).encode()
 
     task = service.get_task(task_id, "owner-1")
 

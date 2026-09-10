@@ -2897,6 +2897,7 @@ class MigrationService:
                 session.task_id,
             )
         delivery = self._read_json(session, _DELIVERY_STATUS_PATH, optional=True)
+        delivery_state = ""
         if delivery is not None:
             try:
                 delivery = validate_delivery_status(
@@ -2909,13 +2910,14 @@ class MigrationService:
                     "迁移交付状态无效。",
                     status_code=502,
                 ) from error
-            state = str(delivery["state"])
+            delivery_state = str(delivery["state"])
+        if delivery is not None and delivery_state not in _ACTIVE_STATES:
             return self._task_payload(
                 session,
                 request,
-                state=state,
+                state=delivery_state,
                 message=_DELIVERY_MESSAGES.get(
-                    state,
+                    delivery_state,
                     str(delivery.get("message") or "迁移未完成"),
                 ),
                 artifact=delivery.get("artifact"),
@@ -2926,6 +2928,19 @@ class MigrationService:
         if process_exit is not None:
             process_exit = self._validated_process_exit(process_exit)
             if self._process_exit_is_settling(process_exit):
+                if delivery is not None:
+                    return self._task_payload(
+                        session,
+                        request,
+                        state=delivery_state,
+                        message=_DELIVERY_MESSAGES.get(
+                            delivery_state,
+                            str(delivery.get("message") or "正在迁移项目"),
+                        ),
+                        artifact=delivery.get("artifact"),
+                        confirmation=confirmation,
+                        error=delivery.get("error"),
+                    )
                 return self._task_payload(
                     session,
                     request,
@@ -2958,6 +2973,19 @@ class MigrationService:
                     "message": "AgentKit CLI 未生成完整的迁移交付状态。",
                     "retryable": False,
                 },
+            )
+        if delivery is not None:
+            return self._task_payload(
+                session,
+                request,
+                state=delivery_state,
+                message=_DELIVERY_MESSAGES.get(
+                    delivery_state,
+                    str(delivery.get("message") or "正在迁移项目"),
+                ),
+                artifact=delivery.get("artifact"),
+                confirmation=confirmation,
+                error=delivery.get("error"),
             )
         if confirmation is not None:
             return self._task_payload(
@@ -3433,7 +3461,13 @@ class MigrationService:
             operation="start_migration",
             timeout_seconds=_FILE_OPERATION_TIMEOUT_SECONDS,
         )
-        return self.get_task(task_id, owner_id)
+        return self._task_payload(
+            session,
+            request,
+            state="migrating",
+            message="正在启动 AgentKit CLI 迁移",
+            confirmation=confirmation,
+        )
 
     def stop(self, task_id: str, owner_id: str) -> dict[str, object]:
         session = self._session(task_id, owner_id)
