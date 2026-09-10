@@ -18,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       changelog:
-        description: User-facing Studio release summary
+        description: User-facing Studio updates, separated by semicolons
         required: true
         type: string
       thin_bundles:
@@ -405,3 +405,60 @@ jobs:
               raise SystemExit(1)
           print(json.dumps(terminal["result"], ensure_ascii=False, indent=2))
           PY
+
+  notify:
+    name: Notify Studio release subscribers
+    needs: [release-context, publish]
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.repository == 'volcengine/veadk-python' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: studio-release
+    steps:
+      - name: Send release card to Feishu groups
+        env:
+          WEBHOOK_URL: ${{ secrets.STUDIO_RELEASE_WEBHOOK_URL }}
+          WEBHOOK_KEY: ${{ secrets.STUDIO_RELEASE_WEBHOOK_KEY }}
+          RELEASE_VERSION: ${{ needs.release-context.outputs.version }}
+          RELEASE_CHANGELOG: ${{ inputs.changelog }}
+        run: |
+          python3 - <<'PYTHON'
+          import json
+          import os
+          import time
+          import urllib.error
+          import urllib.request
+
+          url = os.environ["WEBHOOK_URL"]
+          key = os.environ["WEBHOOK_KEY"]
+          if not url.startswith("https://") or len(key) < 32:
+              raise SystemExit("Studio release Webhook secrets are missing or invalid")
+          version = os.environ["RELEASE_VERSION"]
+          payload = json.dumps({
+              "version": version,
+              "date": f"{version[:4]}.{version[4:6]}.{version[6:8]}",
+              "changelog": os.environ["RELEASE_CHANGELOG"],
+          }).encode()
+          for attempt in range(3):
+              request = urllib.request.Request(url, data=payload, method="POST", headers={
+                  "Content-Type": "application/json", "X-API-Key": key,
+              })
+              try:
+                  with urllib.request.urlopen(request, timeout=190) as response:
+                      result = json.load(response)
+                  print(json.dumps(result, ensure_ascii=False))
+                  if result.get("ok") is not True:
+                      raise SystemExit("Release notification was not delivered to every group")
+                  break
+              except urllib.error.HTTPError as error:
+                  print(f"Notification HTTP status: {error.code}")
+                  if error.code < 500 and error.code != 429:
+                      raise SystemExit("Check Webhook configuration and bot group membership") from None
+              except (OSError, urllib.error.URLError):
+                  print("Notification request interrupted")
+              if attempt == 2:
+                  raise SystemExit("Release succeeded, but notification failed after three attempts")
+              time.sleep(5 * (attempt + 1))
+          PYTHON

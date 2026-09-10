@@ -3,6 +3,13 @@
 A React web UI for VeADK / Google ADK agents. It talks to the standard ADK API
 server that `veadk frontend` launches — no separate backend.
 
+## Release notifications
+
+The release workflow sends one Feishu card after both cloud providers finish
+publishing. A separate VeFaaS Webhook discovers the app bot’s group memberships
+and persists delivery results to avoid duplicate notifications on retries.
+See [deployment and operation](service/studio_release_notifier/README.md).
+
 ## Features
 
 - **Sandbox updates** in System Information compare each Tool's current image
