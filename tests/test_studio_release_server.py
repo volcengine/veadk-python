@@ -50,10 +50,23 @@ from frontend.service.studio_release_server import app as release_app
 from frontend.service.studio_release_server import builder as release_builder
 from frontend.service.studio_release_server import deploy as release_deploy
 from frontend.service.studio_release_server import publisher as release_publisher
+from frontend.service.studio_release_server import tos_store as release_tos_store
 from frontend.service.studio_release_server.tos_store import (
     TosDependencyStore,
     TosJobStore,
 )
+from veadk.cli.agentkit_cli import agentkit_cli_artifact
+
+
+def test_release_server_agentkit_cli_pin_matches_veadk() -> None:
+    artifact = agentkit_cli_artifact(system="Linux", machine="x86_64")
+
+    assert release_publisher._AGENTKIT_CLI_ARCHIVE == artifact.filename
+    assert release_publisher._AGENTKIT_CLI_ARCHIVE_SHA256 == artifact.sha256
+    assert (
+        release_tos_store._AGENTKIT_CLI_ARCHIVE_URL_PREFIX
+        == artifact.url.removesuffix(artifact.filename)
+    )
 
 
 def _write_test_wheel(
@@ -1610,7 +1623,7 @@ def test_tos_dependency_store_populates_and_reuses_cached_wheel(
                         "filename": "agentkit-linux-x64.tar.gz",
                         "url": (
                             "https://agentkit-cli.tos-cn-beijing.volces.com/"
-                            "0.52.14/agentkit-linux-x64.tar.gz"
+                            "0.52.18/agentkit-linux-x64.tar.gz"
                         ),
                         "sha256": digest,
                     }
@@ -1707,7 +1720,7 @@ def test_builder_generates_dependency_manifest_from_release_source(
                             "filename": "agentkit-linux-x64.tar.gz",
                             "url": (
                                 "https://agentkit-cli.tos-cn-beijing.volces.com/"
-                                "0.52.14/agentkit-linux-x64.tar.gz"
+                                "0.52.18/agentkit-linux-x64.tar.gz"
                             ),
                             "sha256": "b" * 64,
                         }
@@ -1757,7 +1770,7 @@ def test_tos_dependency_store_rejects_download_with_wrong_checksum(
                         "filename": "agentkit-linux-x64.tar.gz",
                         "url": (
                             "https://agentkit-cli.tos-cn-beijing.volces.com/"
-                            "0.52.14/agentkit-linux-x64.tar.gz"
+                            "0.52.18/agentkit-linux-x64.tar.gz"
                         ),
                         "sha256": "b" * 64,
                     }
