@@ -10,12 +10,16 @@ import {
   fetchIntelligentDevelopmentProjects,
   fetchIntelligentDevelopmentVersions,
   fetchIntelligentDevelopmentVersionSource,
+  renameIntelligentDevelopmentProject,
+  renameIntelligentDevelopmentVersion,
   type IntelligentDevelopmentProject,
   type IntelligentDevelopmentVersion,
 } from "../adk/intelligentDevelopment";
 import { CodeBrowserDialog } from "../ui/CodeBrowserDialog";
 import { SourceRefreshIcon } from "../ui/icons/SourceWorkspaceIcons";
 import { StudioConfirmDialog } from "../ui/StudioConfirmDialog";
+import { EditArtifactIcon } from "../ui/icons/LibraryIcons";
+import { SourceNameDialog } from "./SourceNameDialog";
 import { TextShimmer } from "../ui/text-shimmer/TextShimmer";
 import type {
   IntelligentCreateBaseVersion,
@@ -137,6 +141,10 @@ interface IntelligentProjectLibraryProps {
   initialProjectId?: string;
 }
 
+type NameTarget =
+  | { kind: "project"; projectId: string; name: string }
+  | { kind: "version"; projectId: string; versionId: string; name: string };
+
 export function IntelligentProjectLibrary({
   capabilities,
   capabilitiesLoading,
@@ -176,6 +184,10 @@ export function IntelligentProjectLibrary({
     version: IntelligentDevelopmentVersion;
   } | null>(null);
   const [deleteError, setDeleteError] = useState("");
+  const [nameTarget, setNameTarget] = useState<NameTarget | null>(null);
+  const [nameError, setNameError] = useState("");
+  const nameRequest = useRef<AbortController | null>(null);
+  const dataRevision = useRef(0);
   const [browserDelivery, setBrowserDelivery] =
     useState<IntelligentDevelopmentReleaseRef | null>(null);
   const [browserComparison, setBrowserComparison] = useState<{
@@ -191,8 +203,19 @@ export function IntelligentProjectLibrary({
   const storageEnabled = capabilities?.projectStorageEnabled === true;
 
   useEffect(() => {
+    setNameTarget(null);
+    setNameError("");
+    setBusyAction((current) => current === "rename" ? "" : current);
+    return () => {
+      nameRequest.current?.abort();
+      nameRequest.current = null;
+    };
+  }, [origin]);
+
+  useEffect(() => {
     if (!storageEnabled) return;
     const controller = new AbortController();
+    const revision = dataRevision.current;
     setProjectsLoading(true);
     setProjectsError("");
     const request = origin === "intelligent-development"
@@ -200,7 +223,7 @@ export function IntelligentProjectLibrary({
       : fetchIntelligentDevelopmentProjects(controller.signal, origin);
     void request
       .then((items) => {
-        if (!controller.signal.aborted) setProjects(items);
+        if (!controller.signal.aborted && revision === dataRevision.current) setProjects(items);
       })
       .catch((cause) => {
         if (!controller.signal.aborted) {
@@ -229,11 +252,12 @@ export function IntelligentProjectLibrary({
   useEffect(() => {
     if (!selectedProjectId || !storageEnabled) return;
     const controller = new AbortController();
+    const revision = dataRevision.current;
     setVersionsLoading(selectedProjectId);
     setVersionsError((current) => ({ ...current, [selectedProjectId]: "" }));
     void fetchIntelligentDevelopmentVersions(selectedProjectId, controller.signal)
       .then((items) => {
-        if (!controller.signal.aborted) {
+        if (!controller.signal.aborted && revision === dataRevision.current) {
           setVersions((current) => ({ ...current, [selectedProjectId]: items }));
         }
       })
@@ -257,6 +281,47 @@ export function IntelligentProjectLibrary({
     name: browserDelivery?.agentName ?? "Agent",
     files: browserDelivery?.files ?? [],
   }), [browserDelivery]);
+
+  function versionLabel(version: IntelligentDevelopmentVersion, latest = false): string {
+    if (version.name) return version.name;
+    const time = formatVersionTime(version.createdAt, locale, t("projectLibrary.unknownTime"));
+    if (origin === "migration") return t("projectLibrary.defaultVersionName", { time });
+    return latest ? t("projectLibrary.latestVersion") : time;
+  }
+
+  async function saveName(name: string) {
+    if (!nameTarget || busyAction || nameRequest.current) return;
+    const target = nameTarget;
+    const controller = new AbortController();
+    nameRequest.current = controller;
+    setBusyAction("rename");
+    setNameError("");
+    try {
+      if (target.kind === "project") {
+        const updated = await renameIntelligentDevelopmentProject(target.projectId, name, controller.signal);
+        if (controller.signal.aborted) return;
+        setProjects((current) => current.map((project) => project.projectId === target.projectId
+          ? { ...project, name: updated.name } : project));
+      } else {
+        const updated = await renameIntelligentDevelopmentVersion(target.projectId, target.versionId, name, controller.signal);
+        if (controller.signal.aborted) return;
+        setVersions((current) => ({ ...current, [target.projectId]: (current[target.projectId] ?? [])
+          .map((version) => version.versionId === target.versionId ? { ...version, name: updated.name } : version) }));
+      }
+      dataRevision.current += 1;
+      setNameTarget(null);
+      setFeedback({ kind: "status", text: t("projectLibrary.rename.updated") });
+      setProjectsRefresh((value) => value + 1);
+      setVersionsRefresh((value) => value + 1);
+    } catch (cause) {
+      if (!controller.signal.aborted) {
+        setNameError(cause instanceof Error ? cause.message : t("projectLibrary.rename.failed"));
+      }
+    } finally {
+      if (nameRequest.current === controller) nameRequest.current = null;
+      if (!controller.signal.aborted) setBusyAction("");
+    }
+  }
 
   function selectBaseVersion(
     project: IntelligentDevelopmentProject,
@@ -344,8 +409,8 @@ export function IntelligentProjectLibrary({
       ]);
       setBrowserComparison({
         base,
-        baseLabel: formatVersionTime(selected[0].createdAt, locale, t("projectLibrary.unknownTime")),
-        targetLabel: formatVersionTime(selected[1].createdAt, locale, t("projectLibrary.unknownTime")),
+        baseLabel: versionLabel(selected[0]),
+        targetLabel: versionLabel(selected[1]),
       });
       setBrowserDelivery(target);
     } catch (cause) {
@@ -546,6 +611,21 @@ export function IntelligentProjectLibrary({
                         </span>
                       </span>
                     </button>
+                    {origin === "migration" ? (
+                      <Tooltip compact content={t("projectLibrary.rename.projectTitle")}>
+                        <button
+                          type="button"
+                          className="cw-icon-btn ic-name-edit"
+                          aria-label={t("projectLibrary.rename.projectTitle")}
+                          title={t("projectLibrary.rename.projectTitle")}
+                          disabled={Boolean(busyAction)}
+                          onClick={() => {
+                            setNameError("");
+                            setNameTarget({ kind: "project", projectId: project.projectId, name: project.name });
+                          }}
+                        ><EditArtifactIcon /></button>
+                      </Tooltip>
+                    ) : null}
                     {expanded && projectVersions.length >= 2 ? (
                       <div className="ic-project-compare-actions">
                         {projectComparison ? (
@@ -612,7 +692,9 @@ export function IntelligentProjectLibrary({
                           <p className="ic-version-empty">{t("projectLibrary.empty.noVersions")}</p>
                         ) : (
                           <ul className="ic-version-list">
-                            {projectVersions.map((version, index) => {
+                            {projectVersions.map((version) => {
+                              const isLatest = version.versionId === project.latestVersionId;
+                              const name = versionLabel(version, isLatest);
                               const versionSummary = version.intentSummary
                                 || version.validationSummary
                                 || t("projectLibrary.noVersionDescription");
@@ -647,11 +729,28 @@ export function IntelligentProjectLibrary({
                                   ) : null}
                                   <div className="ic-version-copy">
                                     <div>
-                                      <strong>
-                                        {index === 0
-                                          ? t("projectLibrary.latestVersion")
-                                          : formatVersionTime(version.createdAt, locale, t("projectLibrary.unknownTime"))}
-                                      </strong>
+                                      <Tooltip content={name} compact>
+                                        <strong className="ic-version-name" tabIndex={0}>{name}</strong>
+                                      </Tooltip>
+                                      {origin === "migration" ? (
+                                        <Tooltip compact content={t("projectLibrary.rename.versionTitle")}>
+                                          <button
+                                            type="button"
+                                            className="cw-icon-btn ic-name-edit"
+                                            aria-label={t("projectLibrary.rename.versionTitle")}
+                                            title={t("projectLibrary.rename.versionTitle")}
+                                            disabled={Boolean(busyAction)}
+                                            onClick={() => {
+                                              setNameError("");
+                                              setNameTarget({ kind: "version", projectId: project.projectId,
+                                                versionId: version.versionId, name });
+                                            }}
+                                          ><EditArtifactIcon /></button>
+                                        </Tooltip>
+                                      ) : null}
+                                      {origin === "migration" && isLatest
+                                        ? <span className="ic-version-status">{t("projectLibrary.latestVersion")}</span>
+                                        : null}
                                       <span className={`ic-version-status${version.verified ? " is-verified" : ""}`}>
                                         {version.verified ? t("projectLibrary.verified") : t("projectLibrary.pendingVerification")}
                                       </span>
@@ -731,9 +830,7 @@ export function IntelligentProjectLibrary({
                                         onClick={() => selectBaseVersion(
                                           project,
                                           version.versionId,
-                                          version.versionId === project.latestVersionId
-                                            ? t("projectLibrary.latestVersion")
-                                            : formatVersionTime(version.createdAt, locale, t("projectLibrary.unknownTime")),
+                                          versionLabel(version, isLatest),
                                         )}
                                         disabled={creating || Boolean(busyAction)}
                                       >{t("projectLibrary.optimize")}</button>
@@ -795,6 +892,16 @@ export function IntelligentProjectLibrary({
         onChange={() => undefined}
         readOnly
       />
+      {nameTarget ? (
+        <SourceNameDialog
+          kind={nameTarget.kind}
+          initialName={nameTarget.name}
+          busy={busyAction === "rename"}
+          error={nameError}
+          onClose={() => { if (!nameRequest.current) setNameTarget(null); }}
+          onSave={(name) => void saveName(name)}
+        />
+      ) : null}
       {deleteTarget ? (
         <StudioConfirmDialog
           title={t("projectLibrary.delete.title")}

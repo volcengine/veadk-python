@@ -47,6 +47,7 @@ from .repository import (
     IntelligentDevelopmentProjectStorageUnavailable,
     TosIntelligentDevelopmentProjectRepository,
 )
+from .models import SourceVersionView
 
 _MAX_ARTIFACT_BYTES = SOURCE_PROJECT_MAX_BYTES
 _MAX_REPORT_BYTES = SOURCE_PROJECT_MAX_REPORT_BYTES
@@ -72,8 +73,20 @@ class IntelligentDevelopmentProjectService:
 
     async def list_versions(
         self, owner_id: str, project_id: str
-    ) -> list[IntelligentDevelopmentVersion]:
+    ) -> list[SourceVersionView]:
         return await self.repository.list_versions(owner_id, project_id)
+
+    async def rename_project(
+        self, owner_id: str, project_id: str, name: str
+    ) -> IntelligentDevelopmentProject:
+        return await self.repository.rename_project(owner_id, project_id, name)
+
+    async def rename_version(
+        self, owner_id: str, project_id: str, version_id: str, name: str
+    ) -> SourceVersionView:
+        return await self.repository.rename_version(
+            owner_id, project_id, version_id, name
+        )
 
     async def get_version(
         self, owner_id: str, project_id: str, version_id: str

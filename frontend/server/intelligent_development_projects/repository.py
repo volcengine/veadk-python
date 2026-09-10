@@ -21,6 +21,7 @@ import hashlib
 import logging
 import re
 from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import Any, TypeVar
 from urllib.parse import quote
 
@@ -37,6 +38,8 @@ from .models import (
     IntelligentDevelopmentSessionBinding,
     IntelligentDevelopmentVersion,
     SourceProjectOrigin,
+    SourceNameRecord,
+    SourceVersionView,
     StoredDevelopmentVersion,
 )
 
@@ -97,8 +100,20 @@ class TosIntelligentDevelopmentProjectRepository:
 
     async def list_versions(
         self, owner_id: str, project_id: str
-    ) -> list[IntelligentDevelopmentVersion]:
+    ) -> list[SourceVersionView]:
         return await self._run(self._list_versions, owner_id, project_id)
+
+    async def rename_project(
+        self, owner_id: str, project_id: str, name: str
+    ) -> IntelligentDevelopmentProject:
+        return await self._run(self._rename_project, owner_id, project_id, name)
+
+    async def rename_version(
+        self, owner_id: str, project_id: str, version_id: str, name: str
+    ) -> SourceVersionView:
+        return await self._run(
+            self._rename_version, owner_id, project_id, version_id, name
+        )
 
     async def get_version(
         self, owner_id: str, project_id: str, version_id: str
@@ -207,6 +222,11 @@ class TosIntelligentDevelopmentProjectRepository:
                         "version_count": len(versions),
                     }
                 )
+            display_key = (
+                f"{self._project_prefix(owner_id, project.project_id)}/display.json"
+            )
+            if display_key in keys:
+                project = self._with_project_name(client, owner_id, project)
             projects.append(project)
         return sorted(
             projects,
@@ -238,16 +258,15 @@ class TosIntelligentDevelopmentProjectRepository:
             ) from error
         if project.owner_id != owner_id or project.project_id != project_id:
             raise IntelligentDevelopmentProjectNotFound("项目不存在或已被删除。")
-        return project
+        return self._with_project_name(self._client_factory(), owner_id, project)
 
-    def _list_versions(
-        self, owner_id: str, project_id: str
-    ) -> list[IntelligentDevelopmentVersion]:
+    def _list_versions(self, owner_id: str, project_id: str) -> list[SourceVersionView]:
         _ = self._get_project(owner_id, project_id)
         client = self._client_factory()
         prefix = f"{self._project_prefix(owner_id, project_id)}/versions/"
-        versions: list[IntelligentDevelopmentVersion] = []
-        for key in self._list_keys(client, prefix):
+        versions: list[SourceVersionView] = []
+        keys = self._list_keys(client, prefix)
+        for key in keys:
             if not key.endswith("/version.json"):
                 continue
             try:
@@ -262,7 +281,16 @@ class TosIntelligentDevelopmentProjectRepository:
                 raise IntelligentDevelopmentVersionIntegrityError(
                     "项目版本归属校验失败。"
                 )
-            versions.append(version)
+            display_key = f"{self._version_prefix(owner_id, project_id, version.version_id)}/display.json"
+            display = (
+                self._read_name(client, display_key) if display_key in keys else None
+            )
+            versions.append(
+                SourceVersionView(
+                    **version.model_dump(),
+                    name=display.name if display else None,
+                )
+            )
         return sorted(
             versions,
             key=lambda item: (item.created_at, item.version_id),
@@ -444,7 +472,7 @@ class TosIntelligentDevelopmentProjectRepository:
                         [key for key in created_keys if key != marker_key],
                     )
             raise
-        return project
+        return self._with_project_name(client, owner_id, project)
 
     def _delete_version(
         self, owner_id: str, project_id: str, version_id: str
@@ -499,7 +527,16 @@ class TosIntelligentDevelopmentProjectRepository:
                 )
             raise
 
-        for key in (f"{prefix}/source.zip", f"{prefix}/validation.json"):
+        cleanup_keys = [
+            f"{prefix}/source.zip",
+            f"{prefix}/validation.json",
+            f"{prefix}/display.json",
+        ]
+        if updated is None:
+            cleanup_keys.append(
+                f"{self._project_prefix(owner_id, project_id)}/display.json"
+            )
+        for key in cleanup_keys:
             try:
                 client.delete_object(bucket=self.bucket, key=key)
             except Exception:
@@ -509,6 +546,63 @@ class TosIntelligentDevelopmentProjectRepository:
                     exc_info=True,
                 )
         return updated
+
+    def _read_name(self, client: Any, key: str) -> SourceNameRecord | None:
+        try:
+            content = self._read_object(client, key, _MAX_JSON_BYTES)
+        except Exception as error:
+            if _status_code(error) == 404:
+                return None
+            raise
+        try:
+            return SourceNameRecord.model_validate_json(content)
+        except ValidationError as error:
+            raise IntelligentDevelopmentVersionIntegrityError(
+                "名称记录格式无效。"
+            ) from error
+
+    def _with_project_name(
+        self, client: Any, owner_id: str, project: IntelligentDevelopmentProject
+    ) -> IntelligentDevelopmentProject:
+        display = self._read_name(
+            client,
+            f"{self._project_prefix(owner_id, project.project_id)}/display.json",
+        )
+        return project.model_copy(update={"name": display.name}) if display else project
+
+    def _rename_project(
+        self, owner_id: str, project_id: str, name: str
+    ) -> IntelligentDevelopmentProject:
+        project = self._get_project(owner_id, project_id)
+        self._require_migrated_project(project)
+        display = SourceNameRecord(name=name, updatedAt=datetime.now(timezone.utc))
+        self._put_json(
+            self._client_factory(),
+            f"{self._project_prefix(owner_id, project_id)}/display.json",
+            display,
+        )
+        return project.model_copy(update={"name": display.name})
+
+    def _rename_version(
+        self, owner_id: str, project_id: str, version_id: str, name: str
+    ) -> SourceVersionView:
+        project = self._get_project(owner_id, project_id)
+        self._require_migrated_project(project)
+        version = self._get_version(owner_id, project_id, version_id)
+        display = SourceNameRecord(name=name, updatedAt=datetime.now(timezone.utc))
+        self._put_json(
+            self._client_factory(),
+            f"{self._version_prefix(owner_id, project_id, version_id)}/display.json",
+            display,
+        )
+        return SourceVersionView(**version.model_dump(), name=display.name)
+
+    @staticmethod
+    def _require_migrated_project(project: IntelligentDevelopmentProject) -> None:
+        if project.origin != "migration":
+            raise IntelligentDevelopmentProjectConflict(
+                "当前仅支持修改已迁移项目的名称。"
+            )
 
     def _put_binding(self, binding: IntelligentDevelopmentSessionBinding) -> None:
         self._put_json(
