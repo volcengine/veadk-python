@@ -6004,17 +6004,32 @@ def test_application_owned_mcp_update_routes_cover_reuse_and_additions(
     )
     app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
     headers = {"X-VeADK-Local-User": "developer"}
+    capability_params = {
+        "runtimeId": runtime.runtime_id,
+        "region": "cn-shanghai",
+        "appName": agent_name,
+        "currentVersion": runtime.current_version_number,
+    }
 
-    with TestClient(app) as client:
-        capability = client.get(
+    def get_completed_capability(client: TestClient) -> httpx.Response:
+        response = client.get(
             "/web/runtime-update-capability",
-            params={
-                "runtimeId": runtime.runtime_id,
-                "region": "cn-shanghai",
-                "appName": agent_name,
-            },
+            params=capability_params,
             headers=headers,
         )
+        for _ in range(5):
+            if response.status_code != 202:
+                return response
+            time.sleep(0.05)
+            response = client.get(
+                "/web/runtime-update-capability",
+                params=capability_params,
+                headers=headers,
+            )
+        return response
+
+    with TestClient(app) as client:
+        capability = get_completed_capability(client)
         assert capability.status_code == 200
         edited_draft = capability.json()["agent"]["draft"]
         if lifecycle_case == "change-url":
