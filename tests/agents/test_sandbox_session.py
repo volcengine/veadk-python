@@ -20,7 +20,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
-from veadk.agents import _sandbox_session as sessions
+from veadk.agents._remote_sandbox import session as sessions
 
 
 def info(sid="old", user="logical", seconds=3600, status="Ready"):

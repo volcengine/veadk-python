@@ -24,9 +24,12 @@ from contextlib import suppress
 from google.adk.events import Event
 from google.genai import types
 
-from veadk.agents._sandbox_timeout import timeout
+from veadk.agents._remote_sandbox.timeout import timeout
 from veadk.agents.agentkit_remote_sandbox_agent import SandboxAgentError, binding_key
-from veadk.tools.sandbox.codex_worker_client import CodexWorkerClient, CodexWorkerError
+from veadk.agents._remote_sandbox.codex_worker_client import (
+    CodexWorkerClient,
+    CodexWorkerError,
+)
 
 
 def observation(value, secrets=()):

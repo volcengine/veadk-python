@@ -31,7 +31,7 @@ from google.genai import types
 from pydantic import PrivateAttr
 
 from veadk import Agent
-from veadk.agents._sandbox_timeout import timeout
+from veadk.agents._remote_sandbox.timeout import timeout
 from veadk.agents.agentkit_remote_sandbox_agent import (
     AgentkitRemoteSandboxAgent,
     SandboxAgentError,
@@ -264,7 +264,7 @@ def test_private_discovery_errors_and_constructor_is_lazy():
     agent = AgentkitRemoteSandboxAgent(name="sandbox", tool_id="private")
     with (
         patch(
-            "veadk.agents.agentkit_remote_sandbox_agent.get_agentkit_credentials",
+            "veadk.agents._remote_sandbox.client.get_agentkit_credentials",
             return_value=("fake-ak", "fake-sk", {}),
         ),
         patch("agentkit.sdk.tools.client.AgentkitToolsClient") as client,
@@ -622,3 +622,116 @@ async def test_concurrent_users_have_distinct_worker_binding_keys():
         assert {e.invocation_id for e in first}.isdisjoint(
             {e.invocation_id for e in second}
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("example_name", ["single_agent", "multi_agents"])
+async def test_example_through_agentkit_server(capsys, monkeypatch, example_name):
+    """The example client sees live tools and reuses an AgentKit HTTP session."""
+    import importlib.util
+    from pathlib import Path
+    import socket
+
+    import httpx
+    import uvicorn
+    from agentkit.apps import AgentkitAgentServerApp
+
+    example = Path(__file__).resolve().parents[2] / "examples/17_remote_sandbox_agent"
+    from google.adk.cli.utils.agent_loader import AgentLoader
+
+    monkeypatch.setenv("MODEL_AGENT_API_KEY", "fixture")
+    monkeypatch.setenv("AGENTKIT_TOOL_TYPE", "CodeEnv")
+    root = AgentLoader(str(example)).load_agent(example_name)
+    if example_name == "multi_agents":
+        root.model = ParentModel()
+    sandbox = root.sub_agents[0] if root.sub_agents else root
+    spec = importlib.util.spec_from_file_location(
+        f"{example_name}_client", example / example_name / "client.py"
+    )
+    client_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(client_module)
+    display_event = client_module.EventPrinter()
+    worker = CodeFixture()
+    app = web.Application()
+    app.router.add_route("*", "/{path:.*}", worker.handle)
+    async with TestServer(app) as remote:
+        sandbox.endpoint = str(remote.make_url("/?route=fixture"))
+        sandbox.tool_type = "CodeEnv"
+        application = AgentkitAgentServerApp(agent=root)
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        server = uvicorn.Server(
+            uvicorn.Config(
+                application.app, host="127.0.0.1", port=port, log_level="error"
+            )
+        )
+        serving = asyncio.create_task(server.serve())
+        try:
+            async with timeout(15):
+                while not server.started:
+                    if serving.done():
+                        await serving
+                    await asyncio.sleep(0.05)
+                async with httpx.AsyncClient(
+                    base_url=f"http://127.0.0.1:{port}"
+                ) as client:
+                    sid = await client_module.session_id_for(
+                        client, root.name, "fixture"
+                    )
+                    for _ in range(2):
+                        assert (
+                            await client_module.session_id_for(
+                                client, root.name, "fixture", sid
+                            )
+                            == sid
+                        )
+                        worker.release.clear()
+                        events = []
+                        final = False
+                        async for event in client_module.stream_events(
+                            client,
+                            app_name=root.name,
+                            user_id="fixture",
+                            session_id=sid,
+                            task="Compute 2 + 3",
+                        ):
+                            events.append(event)
+                            final = display_event(event) or final
+                            if any(
+                                "functionCall" in p and event["author"] == sandbox.name
+                                for p in event.get("content", {}).get("parts", [])
+                            ):
+                                worker.release.set()
+                        assert final
+                        assert worker.release.is_set()
+                        assert any(e["author"] == sandbox.name for e in events)
+                        assert all(
+                            e["author"] in {root.name, sandbox.name} for e in events
+                        )
+                    if example_name == "multi_agents":
+                        assert root.model._calls > 0
+                    assert worker.starts == 2
+                    assert len(set(worker.session_keys)) == 1
+                    worker.fail = True
+                    with pytest.raises(RuntimeError, match="fixture failure"):
+                        async for event in client_module.stream_events(
+                            client,
+                            app_name=root.name,
+                            user_id="fixture",
+                            session_id=sid,
+                            task="Fail this task",
+                        ):
+                            display_event(event)
+                    with pytest.raises(httpx.HTTPStatusError):
+                        await client_module.session_id_for(
+                            client, root.name, "other-user", sid
+                        )
+            output = capsys.readouterr().out
+            assert "[tool]" in output
+            assert "[tool result]" in output
+            assert "[answer] Answer: 5" in output
+        finally:
+            worker.release.set()
+            server.should_exit = True
+            await asyncio.wait_for(serving, 10)

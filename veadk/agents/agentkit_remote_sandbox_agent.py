@@ -28,10 +28,10 @@ from google.adk.events import Event
 from google.genai import types
 from pydantic import Field, PrivateAttr, SecretStr
 
-from veadk.agents._sandbox_timeout import timeout
-from veadk.agents._sandbox_session import ensure_agentkit_session_lease
+from veadk.agents._remote_sandbox.client import create_agentkit_client
+from veadk.agents._remote_sandbox.timeout import timeout
+from veadk.agents._remote_sandbox.session import ensure_agentkit_session_lease
 from veadk.tools.builtin_tools._agentkit import (
-    get_agentkit_credentials,
     get_agentkit_endpoint_config,
     resolve_agentkit_tool_id,
 )
@@ -78,17 +78,9 @@ class AgentkitRemoteSandboxAgent(BaseAgent):
             )
 
     def _discover_type(self, tool_id, state):
-        from agentkit.sdk.tools.client import AgentkitToolsClient
         from agentkit.sdk.tools.types import GetToolRequest
 
-        _, region, _, _ = get_agentkit_endpoint_config()
-        ak, sk, headers = get_agentkit_credentials(state)
-        result = AgentkitToolsClient(
-            access_key=ak,
-            secret_key=sk,
-            region=region,
-            session_token=headers.get("X-Security-Token", ""),
-        ).get_tool(GetToolRequest(ToolId=tool_id))
+        result = create_agentkit_client(state).get_tool(GetToolRequest(ToolId=tool_id))
         if result.tool_type not in {"Skill", "CodeEnv"}:
             raise SandboxAgentError(
                 "GetTool must return Skill or CodeEnv; specify tool_type explicitly for a compatible custom tool"
@@ -163,8 +155,8 @@ class AgentkitRemoteSandboxAgent(BaseAgent):
         return headers
 
     async def _run_async_impl(self, ctx):
-        from veadk.agents._sandbox_code import code_events
-        from veadk.agents._sandbox_skill import skill_events
+        from veadk.agents._remote_sandbox.code import code_events
+        from veadk.agents._remote_sandbox.skill import skill_events
 
         logical = binding_key(
             ctx.app_name,

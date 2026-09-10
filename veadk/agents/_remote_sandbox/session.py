@@ -23,10 +23,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Optional
-from veadk.tools.builtin_tools._agentkit import (
-    get_agentkit_credentials,
-    get_agentkit_endpoint_config,
-)
+from veadk.agents._remote_sandbox.client import create_agentkit_client
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -322,7 +319,6 @@ def ensure_agentkit_session_lease(
 ) -> AgentKitSessionLease:
     """Resolve a live Session lease for a stable logical UserSessionId."""
     from agentkit.sdk.tools import types as tools_types
-    from agentkit.sdk.tools.client import AgentkitToolsClient
 
     if not 60 <= ttl <= 86400:
         raise ValueError("ttl must be between 60 and 86400 seconds")
@@ -336,14 +332,7 @@ def ensure_agentkit_session_lease(
         raise ValueError("poll_interval must be greater than 0")
 
     required_ttl = min(86400, max(ttl, int(min_remaining_seconds + ready_timeout) + 1))
-    _, region, _, _ = get_agentkit_endpoint_config()
-    ak, sk, header = get_agentkit_credentials(tool_state)
-    client = AgentkitToolsClient(
-        access_key=ak,
-        secret_key=sk,
-        region=region,
-        session_token=header.get("X-Security-Token", ""),
-    )
+    client = create_agentkit_client(tool_state)
 
     with _session_lock(tool_id, tool_user_session_id):
         session = _get_or_create_agentkit_session(

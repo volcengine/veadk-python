@@ -37,8 +37,8 @@ from a2a.types import (
 from google.adk.a2a.converters.part_converter import convert_a2a_part_to_genai_part
 from google.genai import types
 
-from veadk.agents._sandbox_timeout import timeout
-from veadk.agents._sandbox_code import check_lease, event_for, observation
+from veadk.agents._remote_sandbox.timeout import timeout
+from veadk.agents._remote_sandbox.code import check_lease, event_for, observation
 from veadk.agents.agentkit_remote_sandbox_agent import SandboxAgentError
 
 _ACTIVE = {TaskState.submitted, TaskState.working}
