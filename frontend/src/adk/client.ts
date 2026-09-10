@@ -4976,6 +4976,7 @@ export interface GeneratedAgentDraftResult {
 }
 
 const GENERATED_AGENT_DRAFT_TIMEOUT_MS = 190_000;
+const GENERATED_AGENT_TEST_RUN_TIMEOUT_MS = 120_000;
 
 export async function generateAgentDraftFromRequirement(
   requirement: string,
@@ -5009,16 +5010,21 @@ export async function createGeneratedAgentTestRun(
     }>;
   },
 ): Promise<GeneratedAgentTestRun> {
-  const res = await apiFetch("/web/generated-agent-test-runs", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      draft,
-      runtimeId: runtime?.runtimeId,
-      runtimeRegion: runtime?.region,
-      mcpCredentialReuses: runtime?.mcpCredentialReuses,
-    }),
-  });
+  const res = await apiFetch(
+    "/web/generated-agent-test-runs",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        draft,
+        runtimeId: runtime?.runtimeId,
+        runtimeRegion: runtime?.region,
+        mcpCredentialReuses: runtime?.mcpCredentialReuses,
+      }),
+    },
+    {},
+    GENERATED_AGENT_TEST_RUN_TIMEOUT_MS,
+  );
   if (!res.ok) {
     throw new Error(await httpErrorMessage(res, adkT("client.createDebugRunFailed")));
   }

@@ -50,3 +50,24 @@ test("chat, deployment, and debug streams explicitly disable deadlines", () => {
   assert.match(deployment, /\{\},\s+0,/);
   assert.match(debug, /\{\},\s+0,/);
 });
+
+test("generated-agent creation deadline exceeds both backend readiness windows", () => {
+  const declaration = clientSource.match(
+    /const GENERATED_AGENT_TEST_RUN_TIMEOUT_MS = ([\d_]+);/,
+  );
+  assert.ok(declaration, "generated-agent creation needs a dedicated deadline");
+  const timeoutMs = Number(declaration[1].replaceAll("_", ""));
+  assert.ok(
+    timeoutMs > 60_000,
+    "the client must outlive both sequential 30-second backend readiness windows",
+  );
+
+  const createRun = functionSource(
+    "export async function createGeneratedAgentTestRun",
+    "export async function createGeneratedAgentTestSession",
+  );
+  assert.match(
+    createRun,
+    /apiFetch\([\s\S]*?\},\s*\{\},\s*GENERATED_AGENT_TEST_RUN_TIMEOUT_MS,\s*\)/,
+  );
+});
