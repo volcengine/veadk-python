@@ -1011,8 +1011,13 @@ agent terminology rather than exposing these control-plane resource types.
 `/opt/gem/run.sh`，不再注入编辑器补丁。火山引擎默认中文，BytePlus 默认英文，
 模型配置沿用相应云环境的 Studio 配置。
 
+部署时 Studio Sandbox 与其他 Sandbox Tool 并行创建，并自动获取模型凭据，
+注入 `MODEL_AGENT_NAME`、`MODEL_AGENT_BASE_URL` 和 `MODEL_AGENT_API_KEY`。
+可通过 `--studio-sandbox-tool-id t-xxx` 或环境变量 `STUDIO_WORKSPACE_TOOL_ID`
+指定已配置好的持久化 Tool，此时直接复用，不重新创建或修改配置。
 部署通过 `STUDIO_WORKSPACE_TOOL_ID` 绑定工作区，系统信息显示对应 Tool ID。
-`veadk studio update` 和前端更新都会自动补齐缺失的持久化工作区 Tool，并保存绑定。
+`veadk studio update` 和前端更新都会自动补齐缺失的持久化工作区 Tool，
+配置上述模型凭据并保存绑定，火山引擎和 BytePlus 均适用。
 已有 Tool ID 时保留绑定，避免切换个人项目存储；创建失败时更新报错，不忽略失败。
 从尚不支持补建的旧版本更新时，新版本首次启动会在后台补建并保存函数环境中的 Tool ID。
 补建期间代码项目暂不可用，失败会记录日志，可检查权限后重试更新。

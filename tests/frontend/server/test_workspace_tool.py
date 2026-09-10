@@ -194,3 +194,58 @@ def test_old_release_startup_persists_binding_without_replacing_function_env(
     )
     client.update_function.assert_not_called()
     client.release.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "provider,region",
+    [
+        ("volcengine", "cn-beijing"),
+        ("volcengine", "cn-shanghai"),
+        ("byteplus", "ap-southeast-1"),
+    ],
+)
+def test_missing_workspace_update_injects_model_credentials(
+    monkeypatch, provider, region
+):
+    from types import SimpleNamespace
+
+    from frontend.server import workspace_tool
+
+    captured = {}
+    credentials = {
+        "access_key": "test-ak",
+        "secret_key": "test-sk",
+        "session_token": "test-session",
+        "region": region,
+    }
+
+    class Client:
+        def __init__(self, **kwargs):
+            assert kwargs == credentials
+
+        def list_tools(self, request):
+            return SimpleNamespace(tools=[])
+
+        def create_tool(self, request):
+            captured["request"] = request
+            return SimpleNamespace(tool_id="t-configured")
+
+        def get_tool(self, request):
+            return SimpleNamespace(status="Ready")
+
+    def get_token(**kwargs):
+        assert kwargs == {**credentials, "cloud_provider": provider}
+        return "test-model-token"
+
+    monkeypatch.setattr("agentkit.sdk.tools.client.AgentkitToolsClient", Client)
+    monkeypatch.setattr("veadk.auth.veauth.ark_veauth.get_ark_token", get_token)
+    result = workspace_tool.workspace_update_environment(
+        {}, provider=provider, **credentials
+    )
+    assert result == {"STUDIO_WORKSPACE_TOOL_ID": "t-configured"}
+    request = captured["request"]
+    env = {item.key: item.value for item in request.envs}
+    assert env["MODEL_AGENT_API_KEY"] == "test-model-token"
+    assert env["MODEL_AGENT_NAME"]
+    assert env["MODEL_AGENT_BASE_URL"].startswith("https://")
+    assert request.enable_snapshot is True
