@@ -494,5 +494,27 @@
   },
   "jsonResponse": {
     "nonJson": "{{fallback}}: the server returned a non-JSON response (HTTP {{status}}, {{contentType}}){{detail}}"
+  },
+  "workspaceProjects": {
+    "busy": "The workspace is busy. Try again shortly",
+    "notFound": "Workspace not found",
+    "duplicates": "Multiple personal workspace sessions were found. Contact your administrator",
+    "timeout": "Workspace recovery timed out. Your projects are retained. Try again",
+    "unavailable": "The workspace cannot be restored right now. Your projects are retained. Try again",
+    "persistence": "Persistence is not enabled for this Sandbox. Check the workspace configuration",
+    "startup": "Workspace startup failed. Check the Sandbox status",
+    "exists": "This project already exists. Open it from the project list",
+    "directory": "Project directory not found",
+    "configuration": "Configure the workspace Sandbox image first",
+    "state": "Could not check workspace status. Try again",
+    "list": "Could not restore the workspace or load projects. Try again",
+    "create": "Project initialization failed. Check that the image is available and try again",
+    "open": "Could not restore the workspace or open the project. Try again",
+    "connection": "Could not connect to the workspace. Try again",
+    "invalidWorkspaceUrl": "The workspace returned an invalid URL",
+    "operation": "Project operation failed. Try again",
+    "invalidProjectUrl": "The project URL is invalid",
+    "listFallback": "Could not load projects",
+    "connectionState": "Could not connect to the workspace. Try again"
   }
 }

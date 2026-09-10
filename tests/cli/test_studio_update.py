@@ -530,6 +530,7 @@ def test_studio_update_preserves_branding_and_updates_existing_ids(
     assert update["function_id"] == "function-app-id"
     assert update["disable_gateway_cors"] is True
     assert update["environment_overrides"] == {
+        "STUDIO_WORKSPACE_TOOL_ID": "studio-workspace-tool",
         "AGENTKIT_SANDBOX_REGION": "cn-beijing",
         "VEADK_STUDIO_CRONJOB_SCHEDULER_BASE": "studio-app",
         "VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY": ANY,
@@ -545,6 +546,7 @@ def test_studio_update_preserves_branding_and_updates_existing_ids(
     assert scheduler_call["provider"] == "volcengine"
     assert scheduler_call["project"] == "default"
     assert scheduler_call["environment_overrides"] == {
+        "STUDIO_WORKSPACE_TOOL_ID": "studio-workspace-tool",
         "AGENTKIT_SANDBOX_REGION": "cn-beijing",
         "VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY": ANY,
         "VEADK_STUDIO_HARNESS_SIDECAR_BASE_IMAGE": (
@@ -845,6 +847,7 @@ def test_studio_update_supports_byteplus_provider(
         "provider": "byteplus",
     }
     assert update["environment_overrides"] == {
+        "STUDIO_WORKSPACE_TOOL_ID": "studio-workspace-tool",
         "AGENTKIT_SANDBOX_REGION": "ap-southeast-1",
         "CLOUD_PROVIDER": "byteplus",
         "AGENTKIT_CLOUD_PROVIDER": "byteplus",
@@ -1042,6 +1045,7 @@ def test_studio_update_explicit_branding_overrides_cloud_values(
     update = captured["update"]
     assert isinstance(update, dict)
     assert update["environment_overrides"] == {
+        "STUDIO_WORKSPACE_TOOL_ID": "studio-workspace-tool",
         "AGENTKIT_SANDBOX_REGION": "cn-beijing",
         "VEADK_SITE_TITLE": "新标题",
         "VEADK_STUDIO_CRONJOB_SCHEDULER_BASE": "studio-app",
@@ -1111,6 +1115,7 @@ def test_studio_update_only_overrides_explicit_sandbox_tool_id(
 
     assert result.exit_code == 0, result.output
     assert captured["environment_overrides"] == {
+        "STUDIO_WORKSPACE_TOOL_ID": "studio-workspace-tool",
         "AGENTKIT_SANDBOX_REGION": "cn-beijing",
         "SANDBOX_CHAT_CODEX": "chat-tool-new",
         "SANDBOX_CHAT_CODEX_SNAPSHOT": "chat-snapshot-tool-new",
@@ -1280,6 +1285,7 @@ def test_volcengine_studio_update_repairs_missing_snapshot_tools_and_oauth_callb
     assert {str(call["provider"]) for call in agent_credentials} == {"volcengine"}
     overrides = captured["environment_overrides"]
     assert overrides == {
+        "STUDIO_WORKSPACE_TOOL_ID": "studio-workspace-tool",
         "AGENTKIT_SANDBOX_REGION": "cn-beijing",
         "VEADK_STUDIO_DEPLOY_ID": "stddep_update",
         "VEADK_STUDIO_USER_POOL_ID": "legacy-user-pool",
@@ -1900,3 +1906,11 @@ def test_update_application_code_bundle_does_not_read_or_replace_environment(
     assert request.id == "function-id"
     assert request.envs is None
     assert request.request_timeout is None
+
+
+@pytest.fixture(autouse=True)
+def _workspace_tool_provisioning(monkeypatch):
+    monkeypatch.setattr(
+        "frontend.server.workspace_tool.provision_workspace_tool",
+        lambda **kwargs: "studio-workspace-tool",
+    )

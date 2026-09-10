@@ -11,21 +11,21 @@
     "add": "Add",
     "manage": "Manage",
     "environment": "Environment",
-    "noDescription": "No description"
-    ,"refresh": "Refresh",
+    "noDescription": "No description",
+    "refresh": "Refresh",
     "close": "Close",
     "retry": "Retry",
     "loading": "Loading…",
     "previousPage": "Previous page",
-    "nextPage": "Next page"
-    ,"edit": "Edit",
+    "nextPage": "Next page",
+    "edit": "Edit",
     "all": "All",
-    "search": "Search"
-    ,"cancel": "Cancel",
+    "search": "Search",
+    "cancel": "Cancel",
     "view": "View",
     "viewDetails": "View details",
-    "deleting": "Deleting…"
-    ,"create": "Create",
+    "deleting": "Deleting…",
+    "create": "Create",
     "creating": "Creating",
     "adding": "Adding",
     "generating": "Generating",
@@ -34,8 +34,8 @@
     "loadFailed": "Failed to load",
     "select": "Select",
     "collapse": "Collapse",
-    "expand": "Expand"
-    ,"none": "None"
+    "expand": "Expand",
+    "none": "None"
   },
   "agentKitPromo": {
     "ariaLabel": "AgentKit shortcuts",
@@ -204,7 +204,11 @@
     "fixPriority": "Priority",
     "suggestedModule": "Suggested module",
     "suggestionAndReason": "Suggestion and rationale",
-    "priority": { "high": "High", "medium": "Medium", "low": "Low" },
+    "priority": {
+      "high": "High",
+      "medium": "Medium",
+      "low": "Low"
+    },
     "modules": {
       "agentStructure": "Agent structure",
       "prompt": "Prompt",
@@ -365,14 +369,38 @@
       "cancelled": "Deployment cancelled"
     },
     "deploymentSteps": {
-      "prepare": { "label": "Prepare deployment", "description": "Validate the configuration and create a deployment task" },
-      "build": { "label": "Build image", "description": "Generate the runtime environment and Agent code" },
-      "deploy": { "label": "Deploy service", "description": "Create and start the AgentKit Runtime" },
-      "publish": { "label": "Publish service", "description": "Wait for the service and generate its access URL" },
-      "complete": { "label": "Deployment complete", "description": "The Agent is ready to use" },
-      "evaluation": { "label": "Create evaluation sets", "description": "Create Good Case and Bad Case evaluation sets automatically" },
-      "github": { "label": "Connect GitHub delivery", "description": "Initialize the target branch and GitHub Actions workflow" },
-      "update": { "label": "Update instance configuration", "description": "Set Runtime instances to {{min}}–{{max}}" }
+      "prepare": {
+        "label": "Prepare deployment",
+        "description": "Validate the configuration and create a deployment task"
+      },
+      "build": {
+        "label": "Build image",
+        "description": "Generate the runtime environment and Agent code"
+      },
+      "deploy": {
+        "label": "Deploy service",
+        "description": "Create and start the AgentKit Runtime"
+      },
+      "publish": {
+        "label": "Publish service",
+        "description": "Wait for the service and generate its access URL"
+      },
+      "complete": {
+        "label": "Deployment complete",
+        "description": "The Agent is ready to use"
+      },
+      "evaluation": {
+        "label": "Create evaluation sets",
+        "description": "Create Good Case and Bad Case evaluation sets automatically"
+      },
+      "github": {
+        "label": "Connect GitHub delivery",
+        "description": "Initialize the target branch and GitHub Actions workflow"
+      },
+      "update": {
+        "label": "Update instance configuration",
+        "description": "Set Runtime instances to {{min}}–{{max}}"
+      }
     },
     "githubStatus": {
       "published": "Published",
@@ -453,10 +481,22 @@
     "clipboardReadError": "Could not read the clipboard. Allow clipboard access, or open Import environment and paste the share code manually.",
     "clipboardUnsupported": "This browser cannot read the clipboard automatically. Open Import environment and paste the share code manually.",
     "creation": {
-      "custom": { "label": "Custom configuration", "description": "Select the base environment, Python, tools, and skills in a form" },
-      "dockerfile": { "label": "Custom Dockerfile", "description": "Upload or edit a Dockerfile directly" },
-      "git": { "label": "Build from a repository", "description": "Inspect a public repository and build it with CodePipeline" },
-      "image": { "label": "Use an existing image", "description": "Connect a CR image delivered by an external pipeline" }
+      "custom": {
+        "label": "Custom configuration",
+        "description": "Select the base environment, Python, tools, and skills in a form"
+      },
+      "dockerfile": {
+        "label": "Custom Dockerfile",
+        "description": "Upload or edit a Dockerfile directly"
+      },
+      "git": {
+        "label": "Build from a repository",
+        "description": "Inspect a public repository and build it with CodePipeline"
+      },
+      "image": {
+        "label": "Use an existing image",
+        "description": "Connect a CR image delivered by an external pipeline"
+      }
     },
     "baseDescriptions": {
       "aio-sandbox": "Built-in Sandbox Shell capabilities · Ubuntu 22.04",
@@ -684,7 +724,12 @@
     "commit": "Commit",
     "workflow": "Workflow",
     "syncFailed": "Failed to sync GitHub code",
-    "status": { "mounted": "Mounted", "bound": "Bound", "synced": "Synced", "created": "Created" },
+    "status": {
+      "mounted": "Mounted",
+      "bound": "Bound",
+      "synced": "Synced",
+      "created": "Created"
+    },
     "volcengine": "Volcengine",
     "mountDelivery": "Enable continuous delivery",
     "selectedForDeployment": "Selected for deployment",
@@ -835,7 +880,10 @@
       "checking": "Check for updates",
       "unknown": "Unknown stage"
     },
-    "duration": { "seconds": "{{count}} seconds", "minutesSeconds": "{{minutes}} min {{seconds}} sec" },
+    "duration": {
+      "seconds": "{{count}} seconds",
+      "minutesSeconds": "{{minutes}} min {{seconds}} sec"
+    },
     "logPermissionPrefix": "Unable to read VeFaaS release logs. The Function role lacks ",
     "logPermissionSuffix": "; the update will continue.",
     "openIamConsole": "Configure permission in the IAM console",
@@ -954,7 +1002,10 @@
     "network": "Network",
     "networkPreserved": "The existing Runtime region and network mode are preserved.",
     "networkMode": "Network mode",
-    "networkModes": { "public": "Public", "both": "Public + VPC" },
+    "networkModes": {
+      "public": "Public",
+      "both": "Public + VPC"
+    },
     "subnetId": "Subnet ID",
     "subnetHint": "Optional; separate multiple IDs with commas",
     "sharedInternetAccess": "Shared public internet access in the VPC",
@@ -1148,7 +1199,8 @@
     "deleteDescription": "Delete workspace “{{name}}”? Its environments will not be deleted.",
     "deleted": "Workspace “{{name}}” deleted",
     "clipboardPermissionError": "Could not read the clipboard. Allow clipboard access, or open Import environment and paste the share code manually.",
-    "clipboardUnsupported": "This browser cannot read the clipboard automatically. Open Import environment and paste the share code manually."
+    "clipboardUnsupported": "This browser cannot read the clipboard automatically. Open Import environment and paste the share code manually.",
+    "codeProjects": "Code projects"
   },
   "resourceCollection": {
     "back": "Back",

@@ -2089,6 +2089,7 @@ export type SandboxToolKind =
   | "openclaw_snapshot"
   | "hermes"
   | "hermes_snapshot"
+  | "studio_workspace"
   | "dev";
 export type CodexSandboxToolKind = Extract<
   SandboxToolKind,

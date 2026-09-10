@@ -642,6 +642,7 @@ def test_system_info_lists_configured_sandbox_tool_ids(
     monkeypatch.setenv("SANDBOX_CHAT_OPENCLAW_SNAPSHOT", "tool-openclaw-snapshot")
     monkeypatch.setenv("SANDBOX_CHAT_HERMES_SNAPSHOT", "tool-hermes-snapshot")
     monkeypatch.setenv("SANDBOX_DEV", "tool-dev")
+    monkeypatch.setenv("STUDIO_WORKSPACE_TOOL_ID", "tool-workspace")
     monkeypatch.setenv("VEADK_STUDIO_TOS_BUCKET", "teststudio")
     monkeypatch.setenv("VEADK_STUDIO_TOS_REGION", "cn-beijing")
     app = _create_studio_app(
@@ -740,6 +741,13 @@ def test_system_info_lists_configured_sandbox_tool_ids(
                 "label": "Dev Sandbox",
                 "toolId": "tool-dev",
                 "snapshot": False,
+                **default_model_env_state,
+            },
+            {
+                "kind": "studio_workspace",
+                "label": "Studio Sandbox",
+                "toolId": "tool-workspace",
+                "snapshot": True,
                 **default_model_env_state,
             },
         ],

@@ -161,14 +161,36 @@
     },
     "rootAgent": "主 Agent",
     "unnamedStep": "未命名步骤",
-    "terminals": { "input": "用户请求", "output": "最终回复" },
-    "edges": { "then": "然后", "continueLoop": "继续循环", "call": "调用" },
+    "terminals": {
+      "input": "用户请求",
+      "output": "最终回复"
+    },
+    "edges": {
+      "then": "然后",
+      "continueLoop": "继续循环",
+      "call": "调用"
+    },
     "patterns": {
-      "llm": { "label": "智能体", "description": "理解任务并直接完成一个具体工作" },
-      "sequential": { "label": "分步协作", "description": "内部步骤按照顺序依次执行" },
-      "parallel": { "label": "同时处理", "description": "内部步骤同时工作，完成后统一汇总" },
-      "loop": { "label": "循环执行", "description": "重复执行内部步骤，直到满足停止条件" },
-      "a2a": { "label": "远程智能体", "description": "调用已经存在的远程 Agent" }
+      "llm": {
+        "label": "智能体",
+        "description": "理解任务并直接完成一个具体工作"
+      },
+      "sequential": {
+        "label": "分步协作",
+        "description": "内部步骤按照顺序依次执行"
+      },
+      "parallel": {
+        "label": "同时处理",
+        "description": "内部步骤同时工作，完成后统一汇总"
+      },
+      "loop": {
+        "label": "循环执行",
+        "description": "重复执行内部步骤，直到满足停止条件"
+      },
+      "a2a": {
+        "label": "远程智能体",
+        "description": "调用已经存在的远程 Agent"
+      }
     },
     "actions": {
       "insertHere": "在这里插入步骤",
@@ -367,9 +389,18 @@
       "nodeConfig": "节点配置"
     },
     "types": {
-      "sequential": { "label": "顺序", "description": "节点依次执行" },
-      "parallel": { "label": "并行", "description": "节点同时执行" },
-      "loop": { "label": "循环", "description": "节点循环执行" }
+      "sequential": {
+        "label": "顺序",
+        "description": "节点依次执行"
+      },
+      "parallel": {
+        "label": "并行",
+        "description": "节点同时执行"
+      },
+      "loop": {
+        "label": "循环",
+        "description": "节点循环执行"
+      }
     },
     "placeholders": {
       "description": "这个工作流做什么…",
@@ -399,9 +430,21 @@
     "ariaLabel": "快速模式创建",
     "progress": "快速模式创建进度",
     "steps": {
-      "agent": { "label": "智能体", "title": "基本信息", "description": "设置智能体的名称、用途、行为方式与能力" },
-      "environment": { "label": "执行环境", "title": "配置执行环境", "description": "选择默认环境或已构建的自定义环境" },
-      "deployment": { "label": "部署偏好", "title": "部署偏好", "description": "定义 AgentKit 云上参数" }
+      "agent": {
+        "label": "智能体",
+        "title": "基本信息",
+        "description": "设置智能体的名称、用途、行为方式与能力"
+      },
+      "environment": {
+        "label": "执行环境",
+        "title": "配置执行环境",
+        "description": "选择默认环境或已构建的自定义环境"
+      },
+      "deployment": {
+        "label": "部署偏好",
+        "title": "部署偏好",
+        "description": "定义 AgentKit 云上参数"
+      }
     },
     "model": {
       "label": "模型",
@@ -463,13 +506,21 @@
       "userPoolDescription": "使用 Identity 用户池签发的 JWT",
       "sessionStorage": "会话存储",
       "inMemoryStorage": "In-memory 临时存储",
-      "backends": { "sqlite": "SQLite 文件", "mysql": "MySQL", "postgresql": "PostgreSQL" },
+      "backends": {
+        "sqlite": "SQLite 文件",
+        "mysql": "MySQL",
+        "postgresql": "PostgreSQL"
+      },
       "instances": "实例设置",
       "minInstances": "最小实例数",
       "maxInstances": "最大实例数",
       "inMemoryHint": "为避免多实例间会话丢失，推荐将 Runtime 固定为 1～1",
       "networkMode": "网络模式",
-      "network": { "public": "公网", "private": "私网", "both": "公网与私网" },
+      "network": {
+        "public": "公网",
+        "private": "私网",
+        "both": "公网与私网"
+      },
       "subnetIds": "子网 ID（可选，多个用逗号分隔）",
       "sharedInternet": "VPC 内共享公网出口",
       "sharedInternetHint": "允许私网 Runtime 通过共享出口访问公网",
@@ -501,7 +552,13 @@
     },
     "workspace": {
       "progress": "Agent 创建进度",
-      "modes": { "build": "架构", "validate": "调试", "optimize": "优化", "environment": "环境", "publish": "发布" },
+      "modes": {
+        "build": "架构",
+        "validate": "调试",
+        "optimize": "优化",
+        "environment": "环境",
+        "publish": "发布"
+      },
       "titles": {
         "build": "个性化您的智能体架构",
         "validate": "调试您的智能体",
@@ -511,24 +568,71 @@
       }
     },
     "sections": {
-      "type": { "label": "Agent 类型", "hint": "选择 Agent 类型" },
-      "basic": { "label": "基本信息", "hint": "名称、描述与系统提示词" },
-      "model": { "label": "模型配置", "hint": "模型与服务（可选）" },
-      "tools": { "label": "工具", "hint": "可调用的能力" },
-      "skills": { "label": "技能", "hint": "声明式技能" },
-      "knowledge": { "label": "知识库", "hint": "外部知识检索" },
-      "memory": { "label": "记忆", "hint": "短期与长期记忆" },
-      "subagents": { "label": "子 Agent", "hint": "嵌套协作" },
-      "review": { "label": "完成", "hint": "预览并创建" }
+      "type": {
+        "label": "Agent 类型",
+        "hint": "选择 Agent 类型"
+      },
+      "basic": {
+        "label": "基本信息",
+        "hint": "名称、描述与系统提示词"
+      },
+      "model": {
+        "label": "模型配置",
+        "hint": "模型与服务（可选）"
+      },
+      "tools": {
+        "label": "工具",
+        "hint": "可调用的能力"
+      },
+      "skills": {
+        "label": "技能",
+        "hint": "声明式技能"
+      },
+      "knowledge": {
+        "label": "知识库",
+        "hint": "外部知识检索"
+      },
+      "memory": {
+        "label": "记忆",
+        "hint": "短期与长期记忆"
+      },
+      "subagents": {
+        "label": "子 Agent",
+        "hint": "嵌套协作"
+      },
+      "review": {
+        "label": "完成",
+        "hint": "预览并创建"
+      }
     },
     "agentTypes": {
       "ariaLabel": "Agent 类型",
       "remoteChildOnly": "远程智能体只能作为子步骤使用",
-      "llm": { "label": "智能体", "fullLabel": "LLM 智能体", "description": "大模型驱动，自主完成任务" },
-      "sequential": { "label": "分步协作", "fullLabel": "顺序型智能体", "description": "子 Agent 按顺序依次执行" },
-      "parallel": { "label": "同时处理", "fullLabel": "并行型智能体", "description": "子 Agent 并行执行后汇总" },
-      "loop": { "label": "循环执行", "fullLabel": "循环型智能体", "description": "子 Agent 循环执行到满足条件" },
-      "a2a": { "label": "远程智能体", "fullLabel": "远程 Agent", "description": "通过 A2A 协议调用远程 Agent" }
+      "llm": {
+        "label": "智能体",
+        "fullLabel": "LLM 智能体",
+        "description": "大模型驱动，自主完成任务"
+      },
+      "sequential": {
+        "label": "分步协作",
+        "fullLabel": "顺序型智能体",
+        "description": "子 Agent 按顺序依次执行"
+      },
+      "parallel": {
+        "label": "同时处理",
+        "fullLabel": "并行型智能体",
+        "description": "子 Agent 并行执行后汇总"
+      },
+      "loop": {
+        "label": "循环执行",
+        "fullLabel": "循环型智能体",
+        "description": "子 Agent 循环执行到满足条件"
+      },
+      "a2a": {
+        "label": "远程智能体",
+        "fullLabel": "远程 Agent",
+        "description": "通过 A2A 协议调用远程 Agent"
+      }
     },
     "basic": {
       "agentName": "Agent 名称",
@@ -626,16 +730,41 @@
       "bytePlusUnavailable": "BytePlus 账号暂不支持 Harness Sidecar 优化项。请保持优化项为空后继续部署，普通 BytePlus 智能体不受影响。",
       "releaseScenario": "优化场景：{{profile}}",
       "profiles": {
-        "default": { "label": "自定义", "description": "按需选择组件，不勾选时不启动 Sidecar。" },
-        "ops": { "label": "运维场景", "description": "适用于运维诊断、数据库、日志和监控 MCP。" }
+        "default": {
+          "label": "自定义",
+          "description": "按需选择组件，不勾选时不启动 Sidecar。"
+        },
+        "ops": {
+          "label": "运维场景",
+          "description": "适用于运维诊断、数据库、日志和监控 MCP。"
+        }
       },
-      "groups": { "quality": "提升回答质量", "cost": "降低运行成本", "stability": "增强运行稳定性" },
+      "groups": {
+        "quality": "提升回答质量",
+        "cost": "降低运行成本",
+        "stability": "增强运行稳定性"
+      },
       "options": {
-        "context_engine": { "label": "上下文治理", "description": "治理上下文组装、任务锚定和上下文预算。" },
-        "compressor": { "label": "上下文与结果压缩", "description": "压缩长上下文和大型工具结果，降低 Token 成本。" },
-        "verifier": { "label": "回答校验与修复", "description": "校验证据和回答，在失败时执行修复或告警。" },
-        "long_run_control": { "label": "Goal 任务控制", "description": "管理 Goal 任务的进度、续跑和结束条件。" },
-        "mcp_resilience": { "label": "MCP 稳定性治理", "description": "治理连接、超时、空结果、大返回和调用预算；默认包含 SQL 只读保护。" }
+        "context_engine": {
+          "label": "上下文治理",
+          "description": "治理上下文组装、任务锚定和上下文预算。"
+        },
+        "compressor": {
+          "label": "上下文与结果压缩",
+          "description": "压缩长上下文和大型工具结果，降低 Token 成本。"
+        },
+        "verifier": {
+          "label": "回答校验与修复",
+          "description": "校验证据和回答，在失败时执行修复或告警。"
+        },
+        "long_run_control": {
+          "label": "Goal 任务控制",
+          "description": "管理 Goal 任务的进度、续跑和结束条件。"
+        },
+        "mcp_resilience": {
+          "label": "MCP 稳定性治理",
+          "description": "治理连接、超时、空结果、大返回和调用预算；默认包含 SQL 只读保护。"
+        }
       }
     },
     "model": {
@@ -690,57 +819,193 @@
       "mcp": "MCP 工具"
     },
     "catalog": {
-      "web_search": { "label": "联网搜索", "description": "火山引擎 Web Search，获取实时信息。" },
-      "parallel_web_search": { "label": "并行联网搜索", "description": "并行发起多条搜索查询，更快汇总。" },
-      "link_reader": { "label": "网页读取", "description": "抓取并阅读给定链接的正文内容。" },
-      "web_scraper": { "label": "网页爬取", "description": "结构化爬取网页（需要 Scraper 服务）。" },
-      "image_generate": { "label": "图像生成", "description": "文生图（Doubao Seedream）。" },
-      "image_edit": { "label": "图像编辑", "description": "图生图 / 编辑（Doubao SeedEdit）。" },
-      "video_generate": { "label": "视频生成", "description": "文/图生视频（Doubao Seedance），含任务查询。" },
-      "text_to_speech": { "label": "语音合成 (TTS)", "description": "把文本转成语音（火山语音）。" },
-      "run_code": { "label": "代码执行", "description": "在沙箱中执行代码。" },
-      "vesearch": { "label": "VeSearch 智能搜索", "description": "火山 VeSearch（需要 bot 端点）。" },
+      "web_search": {
+        "label": "联网搜索",
+        "description": "火山引擎 Web Search，获取实时信息。"
+      },
+      "parallel_web_search": {
+        "label": "并行联网搜索",
+        "description": "并行发起多条搜索查询，更快汇总。"
+      },
+      "link_reader": {
+        "label": "网页读取",
+        "description": "抓取并阅读给定链接的正文内容。"
+      },
+      "web_scraper": {
+        "label": "网页爬取",
+        "description": "结构化爬取网页（需要 Scraper 服务）。"
+      },
+      "image_generate": {
+        "label": "图像生成",
+        "description": "文生图（Doubao Seedream）。"
+      },
+      "image_edit": {
+        "label": "图像编辑",
+        "description": "图生图 / 编辑（Doubao SeedEdit）。"
+      },
+      "video_generate": {
+        "label": "视频生成",
+        "description": "文/图生视频（Doubao Seedance），含任务查询。"
+      },
+      "text_to_speech": {
+        "label": "语音合成 (TTS)",
+        "description": "把文本转成语音（火山语音）。"
+      },
+      "run_code": {
+        "label": "代码执行",
+        "description": "在沙箱中执行代码。"
+      },
+      "vesearch": {
+        "label": "VeSearch 智能搜索",
+        "description": "火山 VeSearch（需要 bot 端点）。"
+      },
       "links": {
         "console": "控制台",
         "documentation": "文档"
       },
       "env": {
-        "modelAgentName": { "comment": "模型名称" },
-        "embeddingModelName": { "comment": "向量化模型（记忆/知识库需要）" },
-        "vikingMemoryProject": { "comment": "VikingDB 记忆库项目" },
-        "vikingMemoryRegion": { "comment": "VikingDB 记忆库地域" },
-        "vikingMemoryType": { "comment": "记忆类型" },
-        "feishuAppId": { "comment": "飞书应用 App ID" },
-        "feishuAppSecret": { "comment": "飞书应用 App Secret", "placeholder": "输入 App Secret" },
-        "registrySpaceId": { "comment": "AgentKit 智能体中心", "placeholder": "请选择智能体中心" },
-        "registryTopK": { "comment": "召回 Agent 数量" },
-        "registryRegion": { "comment": "AgentKit 智能体中心地域" },
-        "registryEndpoint": { "comment": "AgentKit 智能体中心 OpenAPI 地址" },
-        "agentKitToolId": { "comment": "代码执行沙箱 ID" },
-        "agentKitToolRegion": { "comment": "AgentKit Tools 地域" },
-        "openVikingUrl": { "comment": "OpenViking 服务地址" },
-        "openVikingMemoryUserId": { "comment": "记忆归属 ID", "help": "对应 viking://user/<此值>/peers/<请求用户>/memories 中的 user 段；用于隔离 Agent、租户或业务场景，默认 default。" },
-        "openVikingMemoryPolicy": { "comment": "记忆策略", "help": "记忆的抽取策略和隔离策略，不填写时使用官方默认策略。" },
-        "openVikingKnowledgeUserId": { "comment": "知识库归属 ID", "help": "未配置资源目录时用于默认路径 viking://user/<此值>/resources/<知识库索引>/，默认 default。" },
-        "openVikingTargetUri": { "comment": "知识库资源目录", "help": "留空时由 KnowledgeBase index 自动生成；填写后直接检索该 OpenViking 资源目录，优先级最高。" },
-        "tlsServiceName": { "comment": "TLS topic_id，留空自动创建" }
+        "modelAgentName": {
+          "comment": "模型名称"
+        },
+        "embeddingModelName": {
+          "comment": "向量化模型（记忆/知识库需要）"
+        },
+        "vikingMemoryProject": {
+          "comment": "VikingDB 记忆库项目"
+        },
+        "vikingMemoryRegion": {
+          "comment": "VikingDB 记忆库地域"
+        },
+        "vikingMemoryType": {
+          "comment": "记忆类型"
+        },
+        "feishuAppId": {
+          "comment": "飞书应用 App ID"
+        },
+        "feishuAppSecret": {
+          "comment": "飞书应用 App Secret",
+          "placeholder": "输入 App Secret"
+        },
+        "registrySpaceId": {
+          "comment": "AgentKit 智能体中心",
+          "placeholder": "请选择智能体中心"
+        },
+        "registryTopK": {
+          "comment": "召回 Agent 数量"
+        },
+        "registryRegion": {
+          "comment": "AgentKit 智能体中心地域"
+        },
+        "registryEndpoint": {
+          "comment": "AgentKit 智能体中心 OpenAPI 地址"
+        },
+        "agentKitToolId": {
+          "comment": "代码执行沙箱 ID"
+        },
+        "agentKitToolRegion": {
+          "comment": "AgentKit Tools 地域"
+        },
+        "openVikingUrl": {
+          "comment": "OpenViking 服务地址"
+        },
+        "openVikingMemoryUserId": {
+          "comment": "记忆归属 ID",
+          "help": "对应 viking://user/<此值>/peers/<请求用户>/memories 中的 user 段；用于隔离 Agent、租户或业务场景，默认 default。"
+        },
+        "openVikingMemoryPolicy": {
+          "comment": "记忆策略",
+          "help": "记忆的抽取策略和隔离策略，不填写时使用官方默认策略。"
+        },
+        "openVikingKnowledgeUserId": {
+          "comment": "知识库归属 ID",
+          "help": "未配置资源目录时用于默认路径 viking://user/<此值>/resources/<知识库索引>/，默认 default。"
+        },
+        "openVikingTargetUri": {
+          "comment": "知识库资源目录",
+          "help": "留空时由 KnowledgeBase index 自动生成；填写后直接检索该 OpenViking 资源目录，优先级最高。"
+        },
+        "tlsServiceName": {
+          "comment": "TLS topic_id，留空自动创建"
+        }
       }
     },
     "backends": {
       "shortTerm": {
-        "local": { "label": "本地内存", "description": "进程内，不持久化。适合开发调试。" }, "sqlite": { "label": "SQLite 文件", "description": "持久化到本地 .db 文件。" }, "mysql": { "label": "MySQL", "description": "持久化到 MySQL。" }, "postgresql": { "label": "PostgreSQL", "description": "持久化到 PostgreSQL。" }
+        "local": {
+          "label": "本地内存",
+          "description": "进程内，不持久化。适合开发调试。"
+        },
+        "sqlite": {
+          "label": "SQLite 文件",
+          "description": "持久化到本地 .db 文件。"
+        },
+        "mysql": {
+          "label": "MySQL",
+          "description": "持久化到 MySQL。"
+        },
+        "postgresql": {
+          "label": "PostgreSQL",
+          "description": "持久化到 PostgreSQL。"
+        }
       },
       "longTerm": {
-        "local": { "label": "本地向量库", "description": "进程内 llama-index 向量库。" }, "opensearch": { "label": "OpenSearch", "description": "OpenSearch 向量检索。" }, "redis": { "label": "Redis", "description": "Redis 向量检索。" }, "viking": { "label": "VikingDB Memory", "description": "VikingDB 记忆库（支持用户画像）。" }, "openviking": { "label": "OpenViking Memory", "description": "OpenViking 长期记忆，按用户维度保存和检索偏好、事件与实体。" }, "mem0": { "label": "Mem0", "description": "Mem0 托管记忆服务。" }
+        "local": {
+          "label": "本地向量库",
+          "description": "进程内 llama-index 向量库。"
+        },
+        "opensearch": {
+          "label": "OpenSearch",
+          "description": "OpenSearch 向量检索。"
+        },
+        "redis": {
+          "label": "Redis",
+          "description": "Redis 向量检索。"
+        },
+        "viking": {
+          "label": "VikingDB Memory",
+          "description": "VikingDB 记忆库（支持用户画像）。"
+        },
+        "openviking": {
+          "label": "OpenViking Memory",
+          "description": "OpenViking 长期记忆，按用户维度保存和检索偏好、事件与实体。"
+        },
+        "mem0": {
+          "label": "Mem0",
+          "description": "Mem0 托管记忆服务。"
+        }
       },
       "knowledge": {
-        "viking": { "label": "VikingDB Knowledge", "description": "VikingDB 知识库。" }, "opensearch": { "label": "OpenSearch", "description": "OpenSearch 向量检索。" }, "context_search": { "label": "Context Search", "description": "火山 Context Search 引擎（无需向量化）。" }, "openviking": { "label": "OpenViking Knowledge", "description": "OpenViking 资源目录知识库，无需向量化模型配置。" }
+        "viking": {
+          "label": "VikingDB Knowledge",
+          "description": "VikingDB 知识库。"
+        },
+        "opensearch": {
+          "label": "OpenSearch",
+          "description": "OpenSearch 向量检索。"
+        },
+        "context_search": {
+          "label": "Context Search",
+          "description": "火山 Context Search 引擎（无需向量化）。"
+        },
+        "openviking": {
+          "label": "OpenViking Knowledge",
+          "description": "OpenViking 资源目录知识库，无需向量化模型配置。"
+        }
       }
     },
     "exporters": {
-      "apmplus": { "label": "APMPlus", "description": "火山 APMPlus 应用性能监控。" },
-      "cozeloop": { "label": "CozeLoop", "description": "扣子 CozeLoop 链路观测。" },
-      "tls": { "label": "TLS (日志服务)", "description": "火山 TLS 日志服务导出。" }
+      "apmplus": {
+        "label": "APMPlus",
+        "description": "火山 APMPlus 应用性能监控。"
+      },
+      "cozeloop": {
+        "label": "CozeLoop",
+        "description": "扣子 CozeLoop 链路观测。"
+      },
+      "tls": {
+        "label": "TLS (日志服务)",
+        "description": "火山 TLS 日志服务导出。"
+      }
     },
     "knowledge": {
       "title": "知识库",
@@ -835,7 +1100,12 @@
       "complete": "部署完成",
       "failed": "部署失败",
       "updateAndPublish": "更新并发布",
-      "stages": { "build": "构建镜像", "deploy": "部署 Runtime", "publish": "发布服务", "running": "部署中" }
+      "stages": {
+        "build": "构建镜像",
+        "deploy": "部署 Runtime",
+        "publish": "发布服务",
+        "running": "部署中"
+      }
     },
     "publish": {
       "generating": "正在生成发布配置",
@@ -922,5 +1192,41 @@
       "shortTermMemory": "短期",
       "longTermMemory": "长期"
     }
+  },
+  "workspace": {
+    "checkingExpiry": "确认有效期中",
+    "waitingRecovery": "等待恢复",
+    "listFailed": "读取项目列表失败",
+    "recoveryFailed": "工作区恢复失败，请重试",
+    "operationFailed": "项目操作失败，请重试",
+    "title": "代码项目",
+    "back": "返回代码项目",
+    "restart": "本开发环境将在 {{countdown}} 后重启，请随时保存数据",
+    "expiresAt": "有效期至 {{date}}",
+    "exitFullscreen": "退出全屏",
+    "fullscreen": "全屏",
+    "exitFullscreenHint": "退出全屏（Esc）",
+    "recovering": "正在恢复工作区，完成后将自动返回项目",
+    "retry": "重试连接",
+    "search": "搜索代码项目",
+    "newTitle": "新建代码项目",
+    "new": "新建项目",
+    "readingStats": "正在读取项目统计",
+    "createdAt": "创建时间",
+    "opening": "正在打开",
+    "unknownCreatedAt": "创建时间未知",
+    "open": "打开项目",
+    "empty": "没有匹配的代码项目",
+    "close": "关闭新建项目",
+    "name": "项目名称",
+    "placeholder": "例如 my-agent",
+    "nameHelp": "以英文字母开头，可包含字母、数字、下划线和连字符，最多 64 个字符",
+    "cancel": "取消",
+    "create": "创建项目",
+    "files_one": "{{count}} 个文件",
+    "files_other": "{{count}} 个文件",
+    "directories_one": "{{count}} 个目录",
+    "directories_other": "{{count}} 个目录",
+    "separator": "，"
   }
 }

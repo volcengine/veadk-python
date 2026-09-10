@@ -1,3 +1,4 @@
+import { WorkspaceCollectionLayout } from "./WorkspaceCollectionLayout";
 import {
   useCallback,
   useDeferredValue,
@@ -40,12 +41,9 @@ import {
   ResourceDetailLayout,
   ResourceGrid,
   ResourceLoadingState,
-  ResourcePageHeader,
   ResourcePageShell,
   ResourceResults,
   ResourceSearch,
-  ResourceTabs,
-  ResourceToolbar,
 } from "./ResourceCollection";
 import { StudioConfirmDialog } from "./StudioConfirmDialog";
 import { StudioBuildProgress } from "./StudioBuildProgress";
@@ -2025,11 +2023,13 @@ function EnvironmentEditor({
 export function EnvironmentCenter({
   cloudProvider = "volcengine",
   onWorkspace,
+  onProjects,
   clipboardImport = null,
   clipboardReadError = "",
 }: {
   cloudProvider?: CloudProvider;
   onWorkspace?: () => void;
+  onProjects?: () => void;
   clipboardImport?: EnvironmentClipboardImportRequest | null;
   clipboardReadError?: string;
 }) {
@@ -2303,27 +2303,7 @@ export function EnvironmentCenter({
   }
 
   return (
-    <ResourcePageShell className="environment-center" aria-label={t("environmentCenter.title")}>
-      <ResourcePageHeader
-        title={t("environmentCenter.title")}
-      />
-
-      <ResourceToolbar className="environment-toolbar">
-        {onWorkspace ? (
-          <ResourceTabs
-            items={[
-              { id: "workspaces", label: t("workspace.title") },
-              { id: "environments", label: t("environmentCenter.title") },
-            ]}
-            value="environments"
-            onChange={(value) => {
-              if (value === "workspaces") onWorkspace();
-            }}
-            ariaLabel={t("workspace.resourceType")}
-            idPrefix="environment-center"
-          />
-        ) : null}
-        <div className="resource-toolbar__actions">
+    <WorkspaceCollectionLayout section="environments" className="environment-center" onWorkspace={onWorkspace} onProjects={onProjects} actions={<>
           {statusMessage ? (
             <span className={`environment-status${statusError ? " is-error" : ""}`} role={statusError ? "alert" : "status"} aria-live="polite">
               {statusMessage}
@@ -2335,8 +2315,7 @@ export function EnvironmentCenter({
             onChange={(event) => setQuery(event.target.value)}
             placeholder={t("environmentCenter.search")}
           />
-        </div>
-      </ResourceToolbar>
+    </>}>
 
       {clipboardMessage ? (
         <div className="environment-clipboard-notice" role="alert">
@@ -2483,6 +2462,6 @@ export function EnvironmentCenter({
           onImported={handleImportedEnvironments}
         />
       ) : null}
-    </ResourcePageShell>
+    </WorkspaceCollectionLayout>
   );
 }

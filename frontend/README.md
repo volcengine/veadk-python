@@ -17,6 +17,20 @@ server that `veadk frontend` launches — no separate backend.
   existing Sessions or rebuild their snapshots. BytePlus has automated coverage,
   but its image update has not been verified against a live account.
 
+- **Code projects**: open 工作区 → 代码项目 or 从工作区新建 to name,
+  create and reopen projects. Each user has one persistent cloud Sandbox;
+  projects are directories under `/home/gem/Projects`. Creating another project
+  reuses the same Session and opening a project changes VS Code's `folder` path.
+  The image initializes Git, `AGENTS.md` and a Python environment per project.
+  The dedicated Private Tool must enable snapshots. Studio reuses the user's
+  stable cloud session identity and automatically restores its latest ready
+  snapshot after hibernation, rather than creating an empty replacement.
+  Project lists are read from the Sandbox filesystem and survive Studio restarts.
+  The editor opens directly at `/code-server/`; signed routing parameters remain
+  private/no-store. Returning to management keeps the editor mounted, while
+  switching directories opens the selected project directly. Volcengine
+  defaults to Chinese and BytePlus to English.
+
 - **Streaming chat** over the ADK `/run_sse` event stream. While an Agent is
   generating, the composer exposes a stop control that cancels only the active
   response, preserves content already received, and immediately enables the
@@ -495,6 +509,11 @@ cd frontend && npm run dev  # http://localhost:5173
 The Vite development server proxies the ADK API routes, including the
 `/dev/apps/.../debug/trace` session-trace endpoint, to the backend on port 8000.
 
+For code projects, configure `STUDIO_WORKSPACE_TOOL_ID` with a dedicated
+snapshot-enabled Tool in the selected provider and region. The former
+single-project `/web/workspace-preview/session` preview is replaced by the
+personal-workspace project APIs.
+
 ## Branding
 
 Set a custom title (up to six characters) and a local or remote image logo when
@@ -968,3 +987,42 @@ to `DeleteSessionSnapshot`; it deletes the selected saved record only. If that
 logical agent has older records, the next latest record can appear on refresh.
 Failed records remain visible for deletion but cannot be opened. The UI uses
 agent terminology rather than exposing these control-plane resource types.
+
+### Studio Sandbox 工作区
+
+`veadk studio deploy` 默认创建或复用启用持久化快照的 Studio Sandbox Tool，
+新建规格为 8 核 CPU、16 GB 内存，更新时自动补建也使用相同规格，
+按云环境和地域选择 `studio-sandbox-1.0.1` 镜像：
+
+| 云环境 | 地域 | 镜像 |
+| --- | --- | --- |
+| 火山引擎 | cn-beijing | `enterprise-public-cn-beijing.cr.volces.com/vefaas-public/agentkit-sandbox:studio-sandbox-1.0.1` |
+| 火山引擎 | cn-shanghai | `enterprise-cn-shanghai-cn-shanghai.cr.volces.com/vefaas-public/agentkit-sandbox:studio-sandbox-1.0.1` |
+| BytePlus | ap-southeast-1 | `enterprise-public-ap-southeast-1.cr.volces.com/vefaas-public/agentkit-sandbox:studio-sandbox-1.0.1` |
+
+可通过 `STUDIO_WORKSPACE_IMAGE` 指定区域可访问的其他镜像。启动命令使用镜像内的
+`/opt/gem/run.sh`，不再注入编辑器补丁。火山引擎默认中文，BytePlus 默认英文，
+模型配置沿用相应云环境的 Studio 配置。
+
+部署通过 `STUDIO_WORKSPACE_TOOL_ID` 绑定工作区，系统信息显示对应 Tool ID。
+`veadk studio update` 和前端更新都会自动补齐缺失的持久化工作区 Tool，并保存绑定。
+已有 Tool ID 时保留绑定，避免切换个人项目存储；创建失败时更新报错，不忽略失败。
+从尚不支持补建的旧版本更新时，新版本首次启动会在后台补建并保存函数环境中的 Tool ID。
+补建期间代码项目暂不可用，失败会记录日志，可检查权限后重试更新。
+每位用户的项目共用自己的持久化 Session，打开项目时剩余不足一小时会通过
+`SetSessionTtl` 续期为八小时。标题栏显示倒计时，项目管理右侧支持全屏展开；
+内嵌浏览器使用当前页面的可用空间。
+
+### 工作区项目模板
+
+默认模板位于 `frontend/server/templates/python-agent/`，由 Studio 在创建项目时传入
+Sandbox。修改这些模板只需要更新 Studio，不需要重建镜像，也不会覆盖已有项目。
+`${project_name}` 和 `${agent_name}` 在创建时替换为项目名和合法 Python Agent 名。
+
+新镜像的 `studio-project-create NAME --json --template-stdin` 从标准输入接收
+`{"version":1,"files":{"main.py":"...","README.md":"..."}}` 格式的 UTF-8 文件项目，
+支持子目录。最多 256 个文件、1 MiB，不接受绝对路径、父目录跳转或 `.git`、`.venv`
+文件。工具仅将模板写入新项目，保留离线 Python 环境初始化和 `git init`。
+模板中的新依赖不会自动安装，运行环境依赖仍由镜像管理。
+
+其他地域需要显式设置 `STUDIO_WORKSPACE_IMAGE`，避免错误使用跨地域镜像。

@@ -147,6 +147,7 @@ import {
 import { IntelligentDeployment } from "./create/IntelligentDeployment";
 import { CustomCreate } from "./create/CustomCreate";
 import { AgentCreationModePicker } from "./create/AgentCreationModePicker";
+import { WorkspaceCreate, WorkspaceCreateIcon } from "./create/WorkspaceCreate";
 import { CodePackageCreate } from "./create/CodePackageCreate";
 import { MigrationWorkspace } from "./migrations/MigrationWorkspace";
 import type { AgentDraft } from "./create/types";
@@ -362,7 +363,7 @@ async function loadHydratedSessions(
   );
 }
 
-type CreateView = "custom" | "package" | "migration" | null;
+type CreateView = "custom" | "package" | "migration" | "workspace" | null;
 type AppView = CreateView | "intelligent";
 type CustomCreateMode = "custom" | "yaml_import";
 type StudioPageId =
@@ -2126,6 +2127,9 @@ export default function App() {
   const [importedDraft, setImportedDraft] = useState<AgentDraft | null>(null);
   const [customCreateMode, setCustomCreateMode] =
     useState<CustomCreateMode>("custom");
+  const [workspaceLandingSection, setWorkspaceLandingSection] = useState<"workspaces" | "environments">("workspaces");
+  const [workspacePreviewOpened, setWorkspacePreviewOpened] = useState(false);
+  const [workspaceCreateRequest, setWorkspaceCreateRequest] = useState(0);
   const [savedAgentDrafts, setSavedAgentDrafts] = useState<WorkspaceAgentDraft[]>([]);
   const savedAgentDraftsRef = useRef<WorkspaceAgentDraft[]>([]);
   const pendingWorkspaceDraftRef = useRef<WorkspaceAgentDraft | null>(null);
@@ -3236,7 +3240,9 @@ export default function App() {
             : t("titles.createAgent")
           : createView === "package"
             ? t("titles.addFromPackage")
-            : t("titles.migrateAgent"),
+            : createView === "workspace"
+              ? t("titles.codeProjects")
+              : t("titles.migrateAgent"),
       };
     } else if (sandboxSession) {
       const activeThread = sandboxCommands.threads.find(
@@ -6448,7 +6454,7 @@ export default function App() {
         ? "feedback"
         : environmentView
           ? "environments"
-        : workspaceView
+        : workspaceView || visibleCreateView === "workspace"
           ? "workspaces"
         : skillCenter
           ? "library"
@@ -6478,7 +6484,7 @@ export default function App() {
       ? "feedback"
       : environmentView
         ? "environments"
-      : workspaceView
+      : workspaceView || visibleCreateView === "workspace"
         ? "workspaces"
       : skillCenter
         ? "library"
@@ -7020,7 +7026,20 @@ export default function App() {
                 </div>
               )}
 
-            {systemInfo ? (
+            {workspacePreviewOpened && canCreateRuntimeAgents && (
+              <WorkspaceCreate
+                key={`${userId}-${cloudProvider}`}
+                active={visibleCreateView === "workspace"}
+                createRequest={workspaceCreateRequest}
+                onReturnToProjects={() => { setAddMenu(false); setWorkspaceView(false); setCreateView("workspace"); }}
+                onBack={(section = "workspaces") => {
+                  setCreateView(null);
+                  setWorkspaceLandingSection(section);
+                  setWorkspaceView(true);
+                }}
+              />
+            )}
+            {visibleCreateView === "workspace" ? null : systemInfo ? (
               <SystemInfo
                 version={version}
                 localMode={agentsSource === "local"}
@@ -7039,7 +7058,11 @@ export default function App() {
             ) : environmentView ? (
               <EnvironmentCenter cloudProvider={cloudProvider} />
             ) : workspaceView ? (
-              <WorkspaceCenter cloudProvider={cloudProvider} />
+              <WorkspaceCenter cloudProvider={cloudProvider} initialSection={workspaceLandingSection} onProjects={canCreateRuntimeAgents ? () => {
+                setWorkspaceView(false);
+                setWorkspacePreviewOpened(true);
+                setCreateView("workspace");
+              } : undefined} />
             ) : cronJobsView ? (
               <CronJobs cloudProvider={cloudProvider} />
             ) : applicationsView === "coding-agents" ? (
@@ -7393,6 +7416,21 @@ export default function App() {
                       setAddMenu(false);
                       setImportedDraft(null);
                       setCreateView("package");
+                    },
+                  },
+                  {
+                    key: "workspace",
+                    icon: WorkspaceCreateIcon,
+                    title: t("workspaceProjectEntry.title"),
+                    desc: t("workspaceProjectEntry.description"),
+                    onClick: () => {
+                      setAddMenu(false);
+                      setImportedDraft(null);
+                      setRuntimeUpdateTarget(null);
+                      setWorkspacePreviewOpened(true);
+                      setWorkspaceView(false);
+                      setWorkspaceCreateRequest(value => value + 1);
+                      setCreateView("workspace");
                     },
                   },
                   {

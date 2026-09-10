@@ -295,6 +295,16 @@ def test_studio_deploy_checks_serverless_role_with_custom_function_role(
         "veadk.cli.frontend_skill_creator.ensure_skill_creator_model_credential",
         lambda **_: None,
     )
+    workspace_calls = []
+
+    def provision_workspace(**kwargs):
+        workspace_calls.append(kwargs)
+        return "studio-workspace-tool"
+
+    monkeypatch.setattr(
+        "frontend.server.workspace_tool.provision_workspace_tool",
+        provision_workspace,
+    )
     monkeypatch.setattr(
         "frontend.service.studio_scheduler.deploy.deploy_scheduler",
         lambda *_args, **_kwargs: (
@@ -327,4 +337,7 @@ def test_studio_deploy_checks_serverless_role_with_custom_function_role(
     )
 
     assert result.exit_code == 0, result.output
+    assert len(workspace_calls) == 1
+    assert workspace_calls[0]["provider"] == "volcengine"
+    assert workspace_calls[0]["access_key"] == "ak"
     assert checked_credentials == [("ak", "sk", "", "volcengine")]

@@ -2614,3 +2614,11 @@ def test_studio_deploy_from_source_writes_lf_run_script(
     assert captured["run_script"].startswith(b"#!/bin/bash\n")
     assert b"\r\n" not in captured["run_script"]
     assert b"/bin/bash\r" not in captured["run_script"]
+
+
+@pytest.fixture(autouse=True)
+def _workspace_tool_provisioning(monkeypatch):
+    monkeypatch.setattr(
+        "frontend.server.workspace_tool.provision_workspace_tool",
+        lambda **kwargs: "studio-workspace-tool",
+    )

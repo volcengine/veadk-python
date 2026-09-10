@@ -29,6 +29,7 @@ def _client(
     *,
     role: str = "trn:iam::123:role/CustomerStudioRole",
 ) -> SimpleNamespace:
+    environment = {"STUDIO_WORKSPACE_TOOL_ID": "existing-workspace", **environment}
     return SimpleNamespace(
         get_function=lambda _request: SimpleNamespace(
             role=role,
@@ -129,6 +130,10 @@ def test_reconcile_studio_update_resources_reuses_existing_resources(
 def test_reconcile_studio_update_resources_provisions_missing_resources(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        "frontend.server.workspace_tool.provision_workspace_tool",
+        lambda **kwargs: "workspace-tool",
+    )
     storage_calls: list[dict[str, Any]] = []
     tool_calls: list[dict[str, Any]] = []
 
@@ -158,13 +163,16 @@ def test_reconcile_studio_update_resources_provisions_missing_resources(
         region="ap-southeast-1",
         application_id="application-id",
         function_id="function-id",
-        function_client=_client({"SANDBOX_CHAT_CODEX": "existing-tool"}),
+        function_client=_client(
+            {"SANDBOX_CHAT_CODEX": "existing-tool", "STUDIO_WORKSPACE_TOOL_ID": ""}
+        ),
         access_key="ak",
         secret_key="sk",
         session_token="token",
     )
 
     assert overrides == {
+        "STUDIO_WORKSPACE_TOOL_ID": "workspace-tool",
         "VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY": "generated-key",
         "VEADK_STUDIO_TOS_BUCKET": "studio-bucket",
         "VEADK_STUDIO_TOS_REGION": "ap-southeast-1",
@@ -181,7 +189,10 @@ def test_reconcile_studio_update_resources_provisions_missing_resources(
             "access_key": "ak",
             "secret_key": "sk",
             "session_token": "token",
-            "source": {"SANDBOX_CHAT_CODEX": "existing-tool"},
+            "source": {
+                "SANDBOX_CHAT_CODEX": "existing-tool",
+                "STUDIO_WORKSPACE_TOOL_ID": "",
+            },
         }
     ]
     assert {call["kind"] for call in tool_calls} == {"codex", "openclaw", "hermes"}

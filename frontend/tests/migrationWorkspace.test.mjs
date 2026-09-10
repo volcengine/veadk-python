@@ -65,7 +65,7 @@ test("exposes a typed migration API with bounded transfer requests", () => {
 test("enables the existing migration entry and renders its workspace", () => {
   assert.match(
     appSource,
-    /type CreateView = "custom" \| "package" \| "migration" \| null/,
+    /type CreateView = "custom" \| "package" \| "migration" \| "workspace" \| null/,
   );
   assert.match(
     appSource,

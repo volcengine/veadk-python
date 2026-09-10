@@ -494,5 +494,27 @@
   },
   "jsonResponse": {
     "nonJson": "{{fallback}}：服务端返回非 JSON 响应（HTTP {{status}}，{{contentType}}）{{detail}}"
+  },
+  "workspaceProjects": {
+    "busy": "工作区正在处理较多请求，请稍后重试",
+    "notFound": "工作区不存在",
+    "duplicates": "检测到多个个人工作区会话，请联系管理员处理",
+    "timeout": "工作区恢复超时，项目仍保留，请重试",
+    "unavailable": "工作区暂时无法恢复，原项目仍保留，请重试",
+    "persistence": "当前 Sandbox 未启用持久化快照，请检查工作区配置",
+    "startup": "个人工作区启动失败，请检查 Sandbox 状态",
+    "exists": "项目名称已存在，请从项目列表打开",
+    "directory": "项目目录不存在",
+    "configuration": "请先配置工作区 Sandbox 镜像",
+    "state": "暂时无法确认工作区状态，请重试",
+    "list": "恢复工作区或读取项目列表失败，请重试",
+    "create": "项目初始化失败，请确认镜像可用后重试",
+    "open": "恢复工作区或打开项目失败，请重试",
+    "connection": "工作区暂时无法连接，请重试",
+    "invalidWorkspaceUrl": "工作区返回了无效的访问地址",
+    "operation": "项目操作失败，请重试",
+    "invalidProjectUrl": "项目访问地址无效",
+    "listFallback": "读取项目列表失败",
+    "connectionState": "暂时无法连接工作区，请重试"
   }
 }
