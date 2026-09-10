@@ -47,10 +47,10 @@ def test_default_agentkit_dockerfile_uses_volcengine_fallbacks(
 
     dockerfile = (tmp_path / "Dockerfile").read_text(encoding="utf-8")
     assert 'CMD ["python", "-m", "app"]' in dockerfile
-    huawei = "https://repo.huaweicloud.com/repository/pypi/simple"
-    aliyun = "https://mirrors.aliyun.com/pypi/simple/"
+    tencent = "https://mirrors.cloud.tencent.com/pypi/simple"
+    ustc = "https://pypi.mirrors.ustc.edu.cn/simple"
     pypi = "https://pypi.org/simple"
-    assert dockerfile.index(huawei) < dockerfile.index(aliyun) < dockerfile.index(pypi)
+    assert dockerfile.index(tencent) < dockerfile.index(ustc) < dockerfile.index(pypi)
 
 
 def test_default_agentkit_dockerfile_preserves_custom_file(tmp_path: Path) -> None:
@@ -97,8 +97,8 @@ def test_default_agentkit_dockerfile_keeps_byteplus_default_index(
 
     dockerfile = (tmp_path / "Dockerfile").read_text(encoding="utf-8")
     assert "RUN uv pip install -r requirements.txt" in dockerfile
-    assert "repo.huaweicloud.com" not in dockerfile
-    assert "mirrors.aliyun.com" not in dockerfile
+    assert "mirrors.cloud.tencent.com" not in dockerfile
+    assert "pypi.mirrors.ustc.edu.cn" not in dockerfile
 
 
 def test_inline_source_uses_manifest_entry_and_keeps_app_py_fallback(

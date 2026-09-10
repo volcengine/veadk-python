@@ -40,12 +40,20 @@ import {
 import { DeploymentErrorMessage } from "../ui/DeploymentErrorMessage";
 import { SkillSourcePicker } from "../ui/SkillSourcePicker";
 import { agentNameProblem } from "./agentNameValidation";
+import { missingCustomModelCredentialRequirement } from "./customModelCredentials";
 import type { SelectedSkill } from "./skills/types";
 import { resolvedModelSource, type ModelSource } from "./modelSource";
+import {
+  normalizeModelFallbacks,
+  sameProviderModelFallbacks,
+} from "./modelFallbacks";
+import { ModelFallbackFields } from "./ModelFallbackFields";
+import { isValidModelApiBaseUrl } from "./modelApiBase";
 import { STM_BACKENDS, type EnvVar } from "./veadkCatalog";
 import type {
   AgentDraft,
   CloudEnvironmentConfig,
+  ModelFallbackDraft,
   NetworkConfig,
 } from "./types";
 import "./NewAgentWorkbench.css";
@@ -68,7 +76,11 @@ export interface NewAgentWorkbenchProps {
   ) => void;
   onModelApiKeyChange: (key: ModelApiKeyOption) => void;
   customModelApiKey: string;
+  customModelSecretValues: Record<string, string>;
+  customModelApiKeyConfigured?: boolean;
+  configuredRuntimeEnvKeys?: readonly string[];
   onCustomModelApiKeyChange: (value: string) => void;
+  onCustomModelSecretChange: (key: string, value: string) => void;
   onSelectedSkillsChange: (skills: SelectedSkill[]) => void;
   onCloudEnvironmentChange: (environment: CloudEnvironmentConfig) => void;
   onDeployRegionChange: (region: string) => void;
@@ -158,34 +170,50 @@ const WIZARD_STEPS: Array<{
 function NativeModelPicker({
   cloudProvider,
   source,
+  agentName,
   value,
   apiKeyId,
   apiKeyName,
   provider,
   apiBase,
   customApiKey,
+  customModelSecretValues,
+  customModelApiKeyConfigured,
+  configuredRuntimeEnvKeys,
+  fallbacks,
+  showMissingApiKeyErrors,
   onSourceChange,
   onApiKeyChange,
   onModelNameChange,
+  onModelFallbacksChange,
   onProviderChange,
   onApiBaseChange,
   onCustomApiKeyChange,
+  onCustomModelSecretChange,
   onLoadingChange,
 }: {
   cloudProvider: CloudProvider;
   source: ModelSource;
+  agentName: string;
   value: string;
   apiKeyId?: string;
   apiKeyName?: string;
   provider: string;
   apiBase: string;
   customApiKey: string;
+  customModelSecretValues: Record<string, string>;
+  customModelApiKeyConfigured?: boolean;
+  configuredRuntimeEnvKeys?: readonly string[];
+  fallbacks: ModelFallbackDraft[];
+  showMissingApiKeyErrors?: boolean;
   onSourceChange: (source: ModelSource) => void;
   onApiKeyChange: (key: ModelApiKeyOption) => void;
   onModelNameChange: (modelName: string) => void;
+  onModelFallbacksChange: (fallbacks: ModelFallbackDraft[]) => void;
   onProviderChange: (provider: string) => void;
   onApiBaseChange: (apiBase: string) => void;
   onCustomApiKeyChange: (value: string) => void;
+  onCustomModelSecretChange: (key: string, value: string) => void;
   onLoadingChange: (loading: boolean) => void;
 }) {
   const { t } = useTranslation("create");
@@ -312,6 +340,43 @@ function NativeModelPicker({
     }
     return available;
   }, [models, value]);
+  const selectedFallbacks = useMemo(
+    () =>
+      new Set(
+        sameProviderModelFallbacks(value, fallbacks).map((modelName) =>
+          modelName.trim(),
+        ),
+      ),
+    [fallbacks, value],
+  );
+  const modelOptionsForFallback = (currentValue: string) => {
+    const currentModelName = currentValue.trim();
+    const options = modelOptions.filter((option) => {
+      const optionValue = option.value.trim();
+      const selectedElsewhere =
+        optionValue !== currentModelName && selectedFallbacks.has(optionValue);
+      const primarySelected =
+        optionValue !== currentModelName && optionValue === value.trim();
+      return !selectedElsewhere && !primarySelected;
+    });
+    if (
+      currentModelName &&
+      !options.some((option) => option.value === currentModelName)
+    ) {
+      options.unshift({
+        value: currentModelName,
+        label: currentModelName,
+        metadata: t("workbench.model.currentConfiguration"),
+      });
+    }
+    return options;
+  };
+  const updateFallback = (index: number, modelName: string) => {
+    const next = [...fallbacks];
+    next[index] = modelName;
+    onModelFallbacksChange(normalizeModelFallbacks(value, next));
+  };
+  const apiBaseInvalid = !isValidModelApiBaseUrl(apiBase);
 
   return (
     <div className="new-agent-workbench__model-group">
@@ -380,6 +445,36 @@ function NativeModelPicker({
                 onChange={(option) => onModelNameChange(option.value)}
               />
             </label>
+            <ModelFallbackFields
+              variant="workbench"
+              primaryModelName={value}
+              agentName={agentName}
+              value={fallbacks}
+              secretValues={customModelSecretValues}
+              configuredSecretEnvKeys={configuredRuntimeEnvKeys}
+              showMissingApiKeyErrors={showMissingApiKeyErrors}
+              onChange={onModelFallbacksChange}
+              onSecretChange={onCustomModelSecretChange}
+              renderSameProviderField={({ index, value: fallbackValue }) => (
+                <Select
+                  value={fallbackValue}
+                  options={modelOptionsForFallback(fallbackValue)}
+                  loading={loadingModels}
+                  loadingPlaceholder={t("workbench.model.loadingModels")}
+                  placeholder={t("workbench.model.fallbackPlaceholder")}
+                  searchPlaceholder={t("workbench.model.searchModels")}
+                  searchEmptyMessage={t("workbench.model.noModels")}
+                  size="xl"
+                  triggerClassName="new-agent-workbench__select-trigger"
+                  optionClassName={`${SELECT_OPTION_CLASS_NAME} new-agent-workbench__model-option`}
+                  OptionView={ModelSelectOptionView}
+                  searchPredicate={modelSelectSearchPredicate}
+                  pill={false}
+                  disabled={!apiKeyId || loadingModels}
+                  onChange={(option) => updateFallback(index, option.value)}
+                />
+              )}
+            />
           </>
         ) : (
           <>
@@ -417,13 +512,21 @@ function NativeModelPicker({
                 API Base
               </span>
               <Input
+                type="url"
+                inputMode="url"
                 value={apiBase}
                 placeholder={defaultModelApiBase(cloudProvider)}
+                invalid={apiBaseInvalid}
                 size="xl"
                 gutterSize="md"
                 pill={false}
                 onChange={(event) => onApiBaseChange(event.currentTarget.value)}
               />
+              {apiBaseInvalid ? (
+                <small className="new-agent-workbench__error">
+                  {t("workbench.model.invalidApiBase")}
+                </small>
+              ) : null}
             </label>
             <label className="new-agent-workbench__field new-agent-workbench__model-field">
               <span className="new-agent-workbench__model-field-label">
@@ -432,7 +535,11 @@ function NativeModelPicker({
               <Input
                 type="password"
                 value={customApiKey}
-                placeholder={t("workbench.model.apiKeyPlaceholder")}
+                placeholder={
+                  customModelApiKeyConfigured && !customApiKey
+                    ? "••••••"
+                    : t("workbench.model.apiKeyPlaceholder")
+                }
                 autoComplete="new-password"
                 size="xl"
                 gutterSize="md"
@@ -442,6 +549,17 @@ function NativeModelPicker({
                 }
               />
             </label>
+            <ModelFallbackFields
+              variant="workbench"
+              primaryModelName={value}
+              agentName={agentName}
+              value={fallbacks}
+              secretValues={customModelSecretValues}
+              configuredSecretEnvKeys={configuredRuntimeEnvKeys}
+              showMissingApiKeyErrors={showMissingApiKeyErrors}
+              onChange={onModelFallbacksChange}
+              onSecretChange={onCustomModelSecretChange}
+            />
           </>
         )}
         {error ? (
@@ -666,7 +784,11 @@ export function NewAgentWorkbench({
   onDeploymentPatch,
   onModelApiKeyChange,
   customModelApiKey,
+  customModelSecretValues,
+  customModelApiKeyConfigured,
+  configuredRuntimeEnvKeys,
   onCustomModelApiKeyChange,
+  onCustomModelSecretChange,
   onSelectedSkillsChange,
   onCloudEnvironmentChange,
   onDeployRegionChange,
@@ -716,6 +838,8 @@ export function NewAgentWorkbench({
     title: t(`workbench.steps.${step}.title`),
     description: t(`workbench.steps.${step}.description`),
   };
+  const showAgentErrors = showErrors || agentValidationVisible;
+  const showNameError = showAgentErrors || nameValidationTouched;
   const nameProblem = agentNameProblem(draft.name, (key) =>
     t(`validation.agentName.${key}`),
   );
@@ -724,8 +848,26 @@ export function NewAgentWorkbench({
   const instructionMissing = !draft.instruction.trim();
   const modelSource = resolvedModelSource(draft, cloudProvider);
   const modelMissing = !draft.modelName?.trim();
+  const missingCustomModelCredential = useMemo(
+    () =>
+      missingCustomModelCredentialRequirement(
+        draft,
+        defaultModelApiBase(cloudProvider),
+        customModelSecretValues,
+        configuredRuntimeEnvKeys,
+      ),
+    [
+      cloudProvider,
+      configuredRuntimeEnvKeys,
+      customModelSecretValues,
+      draft,
+    ],
+  );
   const modelApiKeyMissing =
-    modelSource === "ark" && !draft.deployment?.modelApiKeyId?.trim();
+    (modelSource === "ark" && !draft.deployment?.modelApiKeyId?.trim()) ||
+    Boolean(missingCustomModelCredential);
+  const showModelApiKeyError =
+    modelApiKeyMissing && (showAgentErrors || !modelDataLoading);
   const agentHasErrors =
     nameInvalid ||
     descriptionMissing ||
@@ -887,9 +1029,6 @@ export function NewAgentWorkbench({
     });
   };
 
-  const showAgentErrors = showErrors || agentValidationVisible;
-  const showNameError = showAgentErrors || nameValidationTouched;
-
   return (
     <motion.div
       className={`new-agent-workbench${isLeaving ? " is-leaving" : ""}`}
@@ -1035,27 +1174,52 @@ export function NewAgentWorkbench({
                     <NativeModelPicker
                       cloudProvider={cloudProvider}
                       source={modelSource}
+                      agentName={draft.name}
                       value={draft.modelName ?? ""}
                       apiKeyId={draft.deployment?.modelApiKeyId}
                       apiKeyName={draft.deployment?.modelApiKeyName}
                       provider={draft.modelProvider ?? ""}
                       apiBase={draft.modelApiBase ?? ""}
                       customApiKey={customModelApiKey}
+                      customModelSecretValues={customModelSecretValues}
+                      customModelApiKeyConfigured={
+                        customModelApiKeyConfigured
+                      }
+                      configuredRuntimeEnvKeys={configuredRuntimeEnvKeys}
+                      fallbacks={draft.modelFallbacks ?? []}
+                      showMissingApiKeyErrors={showModelApiKeyError}
                       onSourceChange={(source) => {
                         setModelDataLoading(source === "ark");
+                        const nextModelName =
+                          source === "custom" && modelSource === "ark"
+                            ? ""
+                            : source === "ark" && !draft.modelName?.trim()
+                              ? defaultModelName(cloudProvider)
+                              : draft.modelName;
                         onDraftPatch({
                           modelSource: source,
-                          modelName:
+                          modelName: nextModelName,
+                          modelFallbacks:
                             source === "custom" && modelSource === "ark"
-                              ? ""
-                              : source === "ark" && !draft.modelName?.trim()
-                                ? defaultModelName(cloudProvider)
-                                : draft.modelName,
+                              ? []
+                              : normalizeModelFallbacks(
+                                  nextModelName,
+                                  draft.modelFallbacks,
+                                ),
                         });
                       }}
                       onApiKeyChange={onModelApiKeyChange}
                       onModelNameChange={(modelName) =>
-                        onDraftPatch({ modelName })
+                        onDraftPatch({
+                          modelName,
+                          modelFallbacks: normalizeModelFallbacks(
+                            modelName,
+                            draft.modelFallbacks,
+                          ),
+                        })
+                      }
+                      onModelFallbacksChange={(modelFallbacks) =>
+                        onDraftPatch({ modelFallbacks })
                       }
                       onProviderChange={(modelProvider) =>
                         onDraftPatch({ modelProvider })
@@ -1064,11 +1228,17 @@ export function NewAgentWorkbench({
                         onDraftPatch({ modelApiBase })
                       }
                       onCustomApiKeyChange={onCustomModelApiKeyChange}
+                      onCustomModelSecretChange={onCustomModelSecretChange}
                       onLoadingChange={setModelDataLoading}
                     />
                     {showAgentErrors && modelMissing ? (
                       <p className="new-agent-workbench__error" role="alert">
                         {t("workbench.validation.modelRequired")}
+                      </p>
+                    ) : null}
+                    {showModelApiKeyError ? (
+                      <p className="new-agent-workbench__error" role="alert">
+                        {t("workbench.validation.apiKeyRequired")}
                       </p>
                     ) : null}
                     <div className="new-agent-workbench__field">
@@ -1558,7 +1728,9 @@ export function NewAgentWorkbench({
                 pill={false}
                 loading={deploying}
                 disabled={
-                  deploying || (step === "agent" && modelDataLoading)
+                  deploying ||
+                  (step === "agent" &&
+                    (modelDataLoading || showModelApiKeyError))
                 }
                 onClick={continueWizard}
               >

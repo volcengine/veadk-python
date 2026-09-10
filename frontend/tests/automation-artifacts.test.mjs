@@ -41,7 +41,7 @@ test("generates the basic Studio project and Runtime delivery workflow in fronte
   assert.equal(
     files["requirements.txt"],
     [
-      "veadk-python==1.1.9",
+      "veadk-python==1.1.10",
       "agentkit-sdk-python==0.8.4",
       "google-adk==2.1.0",
       "lark-channel-sdk==1.2.0",

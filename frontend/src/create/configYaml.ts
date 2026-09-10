@@ -6,6 +6,7 @@ import { parse, stringify } from "yaml";
 import { a2aRegistryDefaults } from "./veadkCatalog";
 import { normalizeDraft } from "./normalizeDraft";
 import { prepareMcpAuth } from "./mcpAuth";
+import { normalizeModelFallbacks } from "./modelFallbacks";
 import type { AgentDraft } from "./types";
 
 interface ConfigYamlLabels {
@@ -45,7 +46,15 @@ function toConfig(draft: AgentDraft, root = true): Record<string, unknown> {
   o.description = draft.description;
   o.instruction = draft.instruction;
   if (draft.agentType === "loop") o.maxIterations = draft.maxIterations ?? 3;
-  if (draft.modelName?.trim()) o.modelName = draft.modelName.trim();
+  const primaryModelName = draft.modelName?.trim() ?? "";
+  const modelFallbacks = normalizeModelFallbacks(
+    primaryModelName,
+    draft.modelFallbacks,
+  );
+  if (primaryModelName) {
+    o.modelName = primaryModelName;
+    if (modelFallbacks.length) o.modelFallbacks = modelFallbacks;
+  }
   if (draft.modelSource) o.modelSource = draft.modelSource;
   if (draft.modelSource !== "ark") {
     if (draft.modelProvider?.trim()) o.modelProvider = draft.modelProvider.trim();

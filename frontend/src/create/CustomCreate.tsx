@@ -42,6 +42,7 @@ import {
   type CloudEnvironmentConfig,
   type HarnessSidecarOptionId,
   type HarnessSidecarProfileId,
+  type ModelFallbackDraft,
   type McpTool,
   emptyDraft,
 } from "./types";
@@ -121,6 +122,11 @@ import {
   type ModelSource,
 } from "./modelSource";
 import { resolveRuntimeName, runtimeNameProblem } from "./runtimeName";
+import {
+  normalizeModelFallbacks,
+  sameProviderModelFallbacks,
+} from "./modelFallbacks";
+import { ModelFallbackFields } from "./ModelFallbackFields";
 import type { AgentProject } from "./project";
 import { AgentBuildCanvas } from "./AgentBuildCanvas";
 import {
@@ -185,7 +191,9 @@ import { applyEvent, emptyAcc, type Block } from "../blocks";
 import {
   customModelCredentialRequirements,
   customModelEnvironmentBindings,
+  missingCustomModelCredentialRequirement,
 } from "./customModelCredentials";
+import { isValidModelApiBaseUrl } from "./modelApiBase";
 import "./CustomCreate.css";
 
 const MarkdownPromptEditor = lazy(() => import("./MarkdownPromptEditor"));
@@ -963,18 +971,32 @@ function CatalogSelect({
 
 function ModelOptionSelect({
   value,
+  fallbacks,
   cloudProvider,
+  agentName,
   apiKeyId,
   apiKeyName,
+  customModelSecretValues,
+  configuredRuntimeEnvKeys,
+  showMissingApiKeyErrors,
   onApiKeyChange,
   onChange,
+  onFallbacksChange,
+  onCustomModelSecretChange,
 }: {
   value: string;
+  fallbacks: ModelFallbackDraft[];
   cloudProvider: CloudProvider;
+  agentName: string;
   apiKeyId?: string;
   apiKeyName?: string;
+  customModelSecretValues: Record<string, string>;
+  configuredRuntimeEnvKeys?: readonly string[];
+  showMissingApiKeyErrors?: boolean;
   onApiKeyChange: (key: ModelApiKeyOption) => void;
   onChange: (modelId: string) => void;
+  onFallbacksChange: (fallbacks: ModelFallbackDraft[]) => void;
+  onCustomModelSecretChange: (key: string, value: string) => void;
 }) {
   const { t } = useTranslation("create");
   const [apiKeys, setApiKeys] = useState<ModelApiKeyOption[]>([]);
@@ -987,6 +1009,7 @@ function ModelOptionSelect({
   const [keySelectionRevision, setKeySelectionRevision] = useState(0);
   const [apiKeySearchQuery, setApiKeySearchQuery] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
+  const [fallbackSearchQuery, setFallbackSearchQuery] = useState("");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1101,6 +1124,39 @@ function ModelOptionSelect({
   const providerLabel =
     cloudProvider === "byteplus" ? "BytePlus ModelArk" : t("traditional.model.volcengineArk");
   const activationConsoleUrl = modelActivationConsoleUrl(cloudProvider);
+  const normalizedFallbacks = normalizeModelFallbacks(
+    normalizedValue,
+    fallbacks,
+  );
+  const selectedFallbacks = new Set(
+    sameProviderModelFallbacks(normalizedValue, normalizedFallbacks),
+  );
+  const fallbackModelsForSearch = (currentValue: string) => {
+    const currentModelId = currentValue.trim();
+    return visibleModels.filter((model) => {
+      const modelId = model.id.trim();
+      const alreadySelected =
+        modelId !== currentModelId && selectedFallbacks.has(modelId);
+      const primarySelected = modelId !== currentModelId && modelId === normalizedValue;
+      return (
+        !alreadySelected &&
+        !primarySelected &&
+        localPickerMatches(fallbackSearchQuery, [
+          model.displayName,
+          model.id,
+          model.name,
+          model.vendorName,
+          model.activationState,
+          model.lifecycleStatus,
+        ])
+      );
+    });
+  };
+  const updateFallback = (index: number, modelName: string) => {
+    const next = [...fallbacks];
+    next[index] = modelName;
+    onFallbacksChange(normalizeModelFallbacks(normalizedValue, next));
+  };
 
   return (
     <div className="cw-a2a-space-picker cw-model-picker">
@@ -1277,6 +1333,155 @@ function ModelOptionSelect({
             </button>
           </div>
         </div>
+        <ModelFallbackFields
+          variant="traditional"
+          embedded
+          primaryModelName={normalizedValue}
+          agentName={agentName}
+          value={fallbacks}
+          secretValues={customModelSecretValues}
+          configuredSecretEnvKeys={configuredRuntimeEnvKeys}
+          showMissingApiKeyErrors={showMissingApiKeyErrors}
+          onChange={onFallbacksChange}
+          onSecretChange={onCustomModelSecretChange}
+          renderSameProviderField={({ index, value: fallbackValue }) => {
+            const selectedFallbackModel = visibleModels.find(
+              (model) => model.id === fallbackValue.trim(),
+            );
+            const fallbackOptions = fallbackModelsForSearch(fallbackValue);
+            const showUnknownFallback = Boolean(
+              fallbackValue.trim() &&
+                !selectedFallbackModel &&
+                localPickerMatches(fallbackSearchQuery, [fallbackValue]),
+            );
+            const fallbackLabel = selectedFallbackModel
+              ? `${selectedFallbackModel.displayName} (${selectedFallbackModel.id})`
+              : fallbackValue || t("traditional.model.fallbackPlaceholder");
+            return (
+              <CatalogSelect
+                selectedLabel={fallbackLabel}
+                placeholder={!fallbackValue.trim()}
+                disabled={loading || !apiKeyId}
+                triggerAriaLabel={t("traditional.model.selectProviderModel", {
+                  provider: providerLabel,
+                })}
+                menuAriaLabel={t("traditional.model.providerModels", {
+                  provider: providerLabel,
+                })}
+                searchAriaLabel={t("traditional.model.search")}
+                searchValue={fallbackSearchQuery}
+                searchPlaceholder={t("traditional.model.searchPlaceholder")}
+                onSearchChange={setFallbackSearchQuery}
+                empty={!showUnknownFallback && fallbackOptions.length === 0}
+                emptyLabel={t("traditional.model.noMatches")}
+                triggerClassName="cw-model-trigger"
+                optionsClassName="cw-model-options"
+                renderOptions={(closeMenu) => (
+                  <>
+                    {showUnknownFallback && (
+                      <button
+                        type="button"
+                        role="option"
+                        aria-selected
+                        className="cw-a2a-space-option cw-model-option is-selected"
+                        onClick={() => {
+                          updateFallback(index, fallbackValue);
+                          closeMenu();
+                        }}
+                      >
+                        <span className="cw-model-option-copy">
+                          <strong>
+                            {t("traditional.model.currentConfiguration")}
+                          </strong>
+                          <small>{fallbackValue}</small>
+                        </span>
+                        <span className="cw-model-status is-unknown">
+                          {t("traditional.model.unknownStatus")}
+                        </span>
+                      </button>
+                    )}
+                    {fallbackOptions.map((model) => {
+                      const selected = model.id === fallbackValue.trim();
+                      const selectable = isModelSelectable(model);
+                      const activationRequired =
+                        !selectable && model.activationState !== "Available";
+                      if (activationRequired) {
+                        return (
+                          <button
+                            key={model.id}
+                            type="button"
+                            role="option"
+                            aria-selected={false}
+                            className="cw-a2a-space-option cw-model-option is-activation-link"
+                            title={t("traditional.model.activate", {
+                              provider: providerLabel,
+                              model: model.displayName,
+                            })}
+                            onClick={() => {
+                              window.open(
+                                activationConsoleUrl,
+                                "_blank",
+                                "noopener,noreferrer",
+                              );
+                              closeMenu();
+                            }}
+                          >
+                            <span className="cw-model-option-copy">
+                              <strong>{model.displayName}</strong>
+                              <small>
+                                {model.id}
+                                {model.vendorName ? ` · ${model.vendorName}` : ""}
+                              </small>
+                            </span>
+                            <span className="cw-model-status is-unavailable">
+                              {t("traditional.model.activateAction")}
+                            </span>
+                          </button>
+                        );
+                      }
+                      return (
+                        <button
+                          key={model.id}
+                          type="button"
+                          role="option"
+                          aria-selected={selected}
+                          disabled={!selectable}
+                          className={`cw-a2a-space-option cw-model-option ${
+                            selected ? "is-selected" : ""
+                          }`}
+                          title={`${model.displayName} (${model.id})`}
+                          onClick={() => {
+                            updateFallback(index, model.id);
+                            closeMenu();
+                          }}
+                        >
+                          <span className="cw-model-option-copy">
+                            <strong>{model.displayName}</strong>
+                            <small>
+                              {model.id}
+                              {model.vendorName ? ` · ${model.vendorName}` : ""}
+                            </small>
+                          </span>
+                          <span
+                            className={`cw-model-status ${
+                              model.available
+                                ? "is-available"
+                                : model.lifecycleStatus === "Retiring"
+                                  ? "is-retiring"
+                                  : "is-unavailable"
+                            }`}
+                          >
+                            {t(modelAvailabilityKey(model))}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </>
+                )}
+              />
+            );
+          }}
+        />
       </div>
       {error ? (
         <div className="cw-banner cw-a2a-space-error" role="alert">
@@ -2424,6 +2629,27 @@ function validationProblemMessage(problem: TreeProblem, t: TFunction): string {
   });
 }
 
+function firstArkModelPath(
+  root: AgentDraft,
+  cloudProvider: CloudProvider,
+  path: NodePath = [],
+): NodePath | null {
+  const isLlmNode = root.agentType === undefined || root.agentType === "llm";
+  if (isLlmNode && resolvedModelSource(root, cloudProvider) === "ark") {
+    return path;
+  }
+  if (!nodeAcceptsChildren(root)) return null;
+  for (let index = 0; index < root.subAgents.length; index += 1) {
+    const match = firstArkModelPath(
+      root.subAgents[index],
+      cloudProvider,
+      [...path, index],
+    );
+    if (match) return match;
+  }
+  return null;
+}
+
 /** Count the root Agent and every nested sub-Agent in the draft. */
 function countDraftAgents(root: AgentDraft): number {
   return (
@@ -3016,6 +3242,37 @@ function debugRuntimeDraft(
       ),
     },
   };
+}
+
+function modelRuntimeEnvKeys(
+  draft: AgentDraft,
+  cloudProvider: CloudProvider,
+): Set<string> {
+  const keys = new Set<string>();
+  for (const binding of customModelEnvironmentBindings(
+    draft,
+    defaultModelApiBase(cloudProvider),
+  )) {
+    for (const key of [
+      binding.providerKey,
+      binding.apiBaseKey,
+      binding.apiKeyKey,
+    ]) {
+      if (key) keys.add(key);
+    }
+  }
+  return keys;
+}
+
+function sourcePreservingModelEnvVars(
+  draft: AgentDraft,
+  cloudProvider: CloudProvider,
+  envs: { key: string; value: string }[] | undefined,
+): { key: string; value: string }[] {
+  const allowedKeys = modelRuntimeEnvKeys(draft, cloudProvider);
+  return (envs ?? []).filter(
+    ({ key, value }) => allowedKeys.has(key) && value.trim(),
+  );
 }
 
 function debugSnapshotKey(
@@ -3616,12 +3873,14 @@ function WorkspaceHeader({ mode }: { mode: WorkspaceMode }) {
 function WorkspaceLifecycleFooter({
   mode,
   busy,
+  nextDisabled,
   onChange,
   assistant,
   accessory,
 }: {
   mode: WorkspaceMode;
   busy: boolean;
+  nextDisabled?: boolean;
   onChange: (mode: WorkspaceMode) => void;
   assistant?: React.ReactNode;
   accessory?: React.ReactNode;
@@ -3661,7 +3920,7 @@ function WorkspaceLifecycleFooter({
           <button
             type="button"
             className="cw-workspace-nav-button is-primary"
-            disabled={!nextMode || busy}
+            disabled={!nextMode || busy || nextDisabled}
             onClick={() => nextMode && onChange(nextMode.id)}
           >
             {t("common.next")}
@@ -3780,6 +4039,11 @@ export function CustomCreate({
   const [customModelSecretValues, setCustomModelSecretValues] = useState<
     Record<string, string>
   >(initialState.customModelSecretValues);
+  const configuredRuntimeEnvKeys = deploymentTarget?.configuredRuntimeEnvKeys ?? [];
+  const configuredRuntimeEnvKeySet = useMemo(
+    () => new Set(configuredRuntimeEnvKeys),
+    [configuredRuntimeEnvKeys],
+  );
   const configuredRuntimeName = draft.deployment?.runtimeName ?? "";
   const deploymentRuntimeName = deploymentTarget
     ? deploymentTarget.name
@@ -3789,6 +4053,17 @@ export function CustomCreate({
         draft.deployment?.runtimeNameCustomized,
       );
   const transientModelSecretValues = customModelSecretValues;
+  const patchCustomModelSecret = useCallback((key: string, value: string) => {
+    setCustomModelSecretValues((current) => {
+      const next = { ...current };
+      if (value) {
+        next[key] = value;
+      } else {
+        delete next[key];
+      }
+      return next;
+    });
+  }, []);
   useEffect(() => {
     setDraft((current) => draftForCloudProvider(current, cloudProvider));
   }, [cloudProvider]);
@@ -4154,6 +4429,10 @@ export function CustomCreate({
     patch({
       modelSource: source,
       modelName: nextModelName,
+      modelFallbacks:
+        source === "custom" && modelSource === "ark"
+          ? []
+          : normalizeModelFallbacks(nextModelName, node.modelFallbacks),
     });
   };
 
@@ -4215,11 +4494,47 @@ export function CustomCreate({
       ),
     [cloudProvider, providerDraft],
   );
+  const arkModelPath = useMemo(
+    () => firstArkModelPath(providerDraft, cloudProvider),
+    [cloudProvider, providerDraft],
+  );
+  const missingCustomModelCredential = useMemo(
+    () =>
+      missingCustomModelCredentialRequirement(
+        providerDraft,
+        defaultModelApiBase(cloudProvider),
+        customModelSecretValues,
+        configuredRuntimeEnvKeys,
+      ),
+    [
+      cloudProvider,
+      configuredRuntimeEnvKeys,
+      customModelSecretValues,
+      providerDraft,
+    ],
+  );
+  const arkModelApiKeyMissing =
+    arkModelPath !== null && !providerDraft.deployment?.modelApiKeyId?.trim();
+  const modelCredentialMissing =
+    arkModelApiKeyMissing || Boolean(missingCustomModelCredential);
   const selectedCustomModelCredential = customModelCredentials.find(
     (requirement) =>
       requirement.label === createT("helpers.customModel.apiKeyLabel", {
         name: node.name.trim() || createT("helpers.customModel.fallbackName"),
       }),
+  );
+  const selectedCustomModelApiKeyConfigured = selectedCustomModelCredential
+    ? configuredRuntimeEnvKeySet.has(selectedCustomModelCredential.key)
+    : false;
+  const selectedCustomModelApiKeyMissing =
+    modelSource === "custom" &&
+    selectedCustomModelCredential !== undefined &&
+    !customModelSecretValues[selectedCustomModelCredential.key]?.trim() &&
+    !selectedCustomModelApiKeyConfigured;
+  const selectedArkModelApiKeyMissing =
+    modelSource === "ark" && !providerDraft.deployment?.modelApiKeyId?.trim();
+  const customModelApiBaseInvalid = !isValidModelApiBaseUrl(
+    node.modelApiBase,
   );
 
   const updateNewWorkbenchModelApiKey = useCallback(
@@ -4280,17 +4595,57 @@ export function CustomCreate({
     focusTarget?.focus({ preventScroll: true });
   }
 
-  const requireCompleteDraft = () => {
-    if (canFinish) return true;
-    setShowErrors(true);
-    setValidationPulse((pulse) => pulse + 1);
-    if (problems[0]) {
-      setSelectedPath(problems[0].path);
+  function focusModelCredential(path: NodePath) {
+    setSelectedPath(path);
+    window.requestAnimationFrame(() => {
       window.requestAnimationFrame(() => {
-        window.requestAnimationFrame(() => focusValidationProblem(problems[0]));
+        const section = sectionRefs.current.model;
+        section?.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+        const fieldRoot =
+          section?.querySelector<HTMLElement>(
+            '[data-validation-field="model-api-key"]',
+          ) ?? section;
+        const focusTarget = fieldRoot?.matches(
+          'input, textarea, button:not([disabled]), [contenteditable="true"], [tabindex]:not([tabindex="-1"])',
+        )
+          ? fieldRoot
+          : fieldRoot?.querySelector<HTMLElement>(
+              'input, textarea, button:not([disabled]), [contenteditable="true"], [tabindex]:not([tabindex="-1"])',
+            );
+        focusTarget?.focus({ preventScroll: true });
       });
+    });
+  }
+
+  const requireCompleteDraft = () => {
+    if (!canFinish) {
+      setShowErrors(true);
+      setValidationPulse((pulse) => pulse + 1);
+      if (problems[0]) {
+        setSelectedPath(problems[0].path);
+        window.requestAnimationFrame(() => {
+          window.requestAnimationFrame(() =>
+            focusValidationProblem(problems[0]),
+          );
+        });
+      }
+      return false;
     }
-    return false;
+    if (modelCredentialMissing) {
+      setShowErrors(true);
+      setValidationPulse((pulse) => pulse + 1);
+      focusModelCredential(
+        arkModelApiKeyMissing
+          ? (arkModelPath ?? [])
+          : (missingCustomModelCredential?.path ?? []),
+      );
+      return false;
+    }
+    setBuildErr("");
+    return true;
   };
 
   const cleanupDebugRuns = async () => {
@@ -4791,7 +5146,9 @@ export function CustomCreate({
           deploymentTarget || mcpGatewayManaged ? codegenDraft(draft) : undefined,
         updateEtag: deploymentTarget?.etag,
         baseRuntimeVersion: deploymentTarget?.currentVersion,
-        envs: sourcePreserving ? [] : options?.envs,
+        envs: sourcePreserving
+          ? sourcePreservingModelEnvVars(draft, cloudProvider, options?.envs)
+          : options?.envs,
         mcpSecretValues: sourcePreserving
           ? sourcePreservingMcpSecretValues(draft)
           : mcpGatewayManaged
@@ -4931,7 +5288,11 @@ export function CustomCreate({
     const activeEnvSpecs = deploymentDraft.deployment?.feishuEnabled
       ? [...activeDeploymentEnv.specs, ...FEISHU_ENV]
       : activeDeploymentEnv.specs;
-    const missingEnv = firstMissingRuntimeEnv(activeEnvSpecs, allEnvValues);
+    const missingEnv = firstMissingRuntimeEnv(
+      activeEnvSpecs,
+      allEnvValues,
+      configuredRuntimeEnvKeys,
+    );
     if (missingEnv) {
       setNewWorkbenchDeployError(
         t("traditional.deployment.requiredEnv", {
@@ -5233,13 +5594,14 @@ export function CustomCreate({
             ? (customModelSecretValues[selectedCustomModelCredential.key] ?? "")
             : ""
         }
+        customModelSecretValues={customModelSecretValues}
+        customModelApiKeyConfigured={selectedCustomModelApiKeyConfigured}
+        configuredRuntimeEnvKeys={configuredRuntimeEnvKeys}
         onCustomModelApiKeyChange={(value) => {
           if (!selectedCustomModelCredential) return;
-          setCustomModelSecretValues((current) => ({
-            ...current,
-            [selectedCustomModelCredential.key]: value,
-          }));
+          patchCustomModelSecret(selectedCustomModelCredential.key, value);
         }}
+        onCustomModelSecretChange={patchCustomModelSecret}
         onSelectedSkillsChange={(selectedSkills) =>
           setDraft((current) => ({ ...current, selectedSkills }))
         }
@@ -5670,17 +6032,29 @@ export function CustomCreate({
                                   </RadioGroup>
                                 </div>
                                 {modelSource === "ark" ? (
-                                  <div className="cw-field">
+                                  <div
+                                    className="cw-field"
+                                    data-validation-field="model-api-key"
+                                  >
                                     <label className="cw-label">
                                       {t("traditional.model.configuration")}
                                     </label>
                                     <ModelOptionSelect
                                       value={node.modelName ?? ""}
+                                      fallbacks={node.modelFallbacks ?? []}
                                       cloudProvider={cloudProvider}
+                                      agentName={node.name}
                                       apiKeyId={draft.deployment?.modelApiKeyId}
                                       apiKeyName={
                                         draft.deployment?.modelApiKeyName
                                       }
+                                      customModelSecretValues={
+                                        customModelSecretValues
+                                      }
+                                      configuredRuntimeEnvKeys={
+                                        configuredRuntimeEnvKeys
+                                      }
+                                      showMissingApiKeyErrors={showErrors}
                                       onApiKeyChange={(key) =>
                                         setDraft((current) => ({
                                           ...current,
@@ -5694,9 +6068,32 @@ export function CustomCreate({
                                         }))
                                       }
                                       onChange={(modelName) =>
-                                        patch({ modelName })
+                                        patch({
+                                          modelName,
+                                          modelFallbacks: normalizeModelFallbacks(
+                                            modelName,
+                                            node.modelFallbacks,
+                                          ),
+                                        })
+                                      }
+                                      onFallbacksChange={(modelFallbacks) =>
+                                        patch({ modelFallbacks })
+                                      }
+                                      onCustomModelSecretChange={
+                                        patchCustomModelSecret
                                       }
                                     />
+                                    {showErrors &&
+                                    selectedArkModelApiKeyMissing ? (
+                                      <span
+                                        className="cw-error-text"
+                                        role="alert"
+                                      >
+                                        {t(
+                                          "traditional.deployment.apiKeyRequired",
+                                        )}
+                                      </span>
+                                    ) : null}
                                   </div>
                                 ) : (
                                   <>
@@ -5708,7 +6105,13 @@ export function CustomCreate({
                                         className="cw-input"
                                         value={node.modelName ?? ""}
                                         onChange={(e) =>
-                                          patch({ modelName: e.target.value })
+                                          patch({
+                                            modelName: e.target.value,
+                                            modelFallbacks: normalizeModelFallbacks(
+                                              e.target.value,
+                                              node.modelFallbacks,
+                                            ),
+                                          })
                                         }
                                       />
                                     </div>
@@ -5744,23 +6147,40 @@ export function CustomCreate({
                                       </label>
                                       <input
                                         className="cw-input"
+                                        type="url"
+                                        inputMode="url"
                                         value={node.modelApiBase ?? ""}
                                         placeholder={defaultModelApiBase(
                                           cloudProvider,
                                         )}
+                                        aria-invalid={
+                                          customModelApiBaseInvalid
+                                        }
                                         onChange={(e) =>
                                           patch({
                                             modelApiBase: e.target.value,
                                           })
                                         }
                                       />
+                                      {customModelApiBaseInvalid ? (
+                                        <span className="cw-env-error">
+                                          {t(
+                                            "traditional.model.invalidApiBase",
+                                          )}
+                                        </span>
+                                      ) : null}
                                     </div>
-                                    <div className="cw-field">
+                                    <div
+                                      className="cw-field"
+                                      data-validation-field="model-api-key"
+                                    >
                                       <label className="cw-label">
                                         API Key
                                       </label>
                                       <input
-                                        className="cw-input"
+                                        className={`cw-input ${invalidClass(
+                                          selectedCustomModelApiKeyMissing,
+                                        )}`}
                                         type="password"
                                         value={
                                           selectedCustomModelCredential
@@ -5770,26 +6190,61 @@ export function CustomCreate({
                                               ] ?? "")
                                             : ""
                                         }
-                                        placeholder={t(
-                                          "traditional.model.apiKeyPlaceholder",
-                                        )}
+                                        placeholder={
+                                          selectedCustomModelApiKeyConfigured &&
+                                          !(
+                                            selectedCustomModelCredential
+                                              ? customModelSecretValues[
+                                                  selectedCustomModelCredential
+                                                    .key
+                                                ]
+                                              : ""
+                                          )
+                                            ? "••••••"
+                                            : t(
+                                                "traditional.model.apiKeyPlaceholder",
+                                              )
+                                        }
                                         autoComplete="new-password"
                                         onChange={(event) => {
                                           if (!selectedCustomModelCredential)
                                             return;
                                           const value =
                                             event.currentTarget.value;
-                                          setCustomModelSecretValues(
-                                            (current) => ({
-                                              ...current,
-                                              [selectedCustomModelCredential.key]:
-                                                value,
-                                            }),
+                                          patchCustomModelSecret(
+                                            selectedCustomModelCredential.key,
+                                            value,
                                           );
                                         }}
                                       />
+                                      {showErrors &&
+                                      selectedCustomModelApiKeyMissing ? (
+                                        <span
+                                          className="cw-error-text"
+                                          role="alert"
+                                        >
+                                          {t(
+                                            "traditional.deployment.apiKeyRequired",
+                                          )}
+                                        </span>
+                                      ) : null}
                                     </div>
                                   </>
+                                )}
+                                {modelSource === "custom" && (
+                                  <ModelFallbackFields
+                                    variant="traditional"
+                                    primaryModelName={node.modelName ?? ""}
+                                    agentName={node.name}
+                                    value={node.modelFallbacks ?? []}
+                                    secretValues={customModelSecretValues}
+                                    configuredSecretEnvKeys={configuredRuntimeEnvKeys}
+                                    showMissingApiKeyErrors={showErrors}
+                                    onChange={(modelFallbacks) =>
+                                      patch({ modelFallbacks })
+                                    }
+                                    onSecretChange={patchCustomModelSecret}
+                                  />
                                 )}
                               </div>
                             </Section>
@@ -6270,12 +6725,7 @@ export function CustomCreate({
                 deploymentEnv={deploymentEnv.specs}
                 requiredSecretEnv={customModelCredentials}
                 requiredSecretEnvValues={customModelSecretValues}
-                onRequiredSecretEnvChange={(key, value) =>
-                  setCustomModelSecretValues((current) => ({
-                    ...current,
-                    [key]: value,
-                  }))
-                }
+                onRequiredSecretEnvChange={patchCustomModelSecret}
                 deploymentEnvValues={{
                   ...providerDraft.deployment?.envValues,
                   ...customModelSecretValues,
@@ -6329,6 +6779,7 @@ export function CustomCreate({
       <WorkspaceLifecycleFooter
         mode={workspaceMode}
         busy={building}
+        nextDisabled={workspaceMode === "build" && modelCredentialMissing && showErrors}
         onChange={handleWorkspaceChange}
         assistant={workspaceMode === "build" ? aiComposer : undefined}
       />

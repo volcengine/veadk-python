@@ -31,6 +31,7 @@ const {
 const {
   customModelCredentialRequirements,
   isProviderModelApiBase,
+  missingCustomModelCredentialRequirement,
 } = await loadTypeScriptModule("../src/create/customModelCredentials.ts");
 const {
   A2A_REGISTRY_DEFAULTS,
@@ -136,6 +137,75 @@ test("derives distinct transient credential names for custom model agents", () =
   );
 });
 
+test("derives transient credential names for cross-provider fallback models", () => {
+  const draft = {
+    name: "Agent",
+    agentType: "llm",
+    modelName: "primary",
+    modelFallbacks: [
+      "same-provider-backup",
+      {
+        modelName: "gpt-4o-mini",
+        modelProvider: "openai",
+        modelApiBase: "https://api.openai.com/v1",
+        modelApiKeyEnv: "OPENAI_BACKUP_API_KEY",
+      },
+    ],
+    subAgents: [],
+  };
+  assert.deepEqual(
+    customModelCredentialRequirements(
+      draft,
+      "https://ark.cn-beijing.volces.com/api/v3/",
+    ),
+    [
+      {
+        key: "OPENAI_BACKUP_API_KEY",
+        label: "Agent fallback model gpt-4o-mini API Key",
+      },
+    ],
+  );
+});
+
+test("finds the first missing transient model credential with its agent path", () => {
+  const draft = {
+    name: "Root",
+    agentType: "sequential",
+    subAgents: [
+      {
+        name: "Worker",
+        agentType: "llm",
+        modelSource: "custom",
+        modelName: "gpt-4o-mini",
+        modelApiBase: "https://api.openai.com/v1",
+        subAgents: [],
+      },
+    ],
+  };
+  assert.deepEqual(
+    missingCustomModelCredentialRequirement(
+      draft,
+      "https://ark.cn-beijing.volces.com/api/v3/",
+      {},
+      [],
+    ),
+    {
+      key: "CUSTOM_MODEL_WORKER_API_KEY",
+      label: "Worker model API Key",
+      path: [0],
+    },
+  );
+  assert.equal(
+    missingCustomModelCredentialRequirement(
+      draft,
+      "https://ark.cn-beijing.volces.com/api/v3/",
+      {},
+      ["CUSTOM_MODEL_WORKER_API_KEY"],
+    ),
+    null,
+  );
+});
+
 test("does not request custom credentials for Ark-backed agents", () => {
   assert.deepEqual(
     customModelCredentialRequirements(
@@ -163,7 +233,11 @@ test("keeps custom model credentials transient on the publish page", () => {
   );
   assert.match(
     projectPreviewSource,
-    /requiredSecretEnv\.map[\s\S]*?type="password"[\s\S]*?projectPreview\.releaseOnlySecret/,
+    /requiredSecretEnv\.map[\s\S]*?type="password"[\s\S]*?configuredSecret[\s\S]*?"••••••"/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /configuredRuntimeEnvKeySet\.has\(env\.key\)/,
   );
   assert.match(projectPreviewSource, /role="alert"/);
   assert.doesNotMatch(customCreateSource, /envValues:\s*customModelCredentials/);
@@ -357,6 +431,10 @@ test("explains optimization dependencies and reports every missing runtime setti
       MCP_API_KEY: "test-key",
     }),
     [],
+  );
+  assert.deepEqual(
+    missingRuntimeEnvs(specs, {}, ["MCP_API_KEY"]).map((spec) => spec.key),
+    ["MCP_URLS"],
   );
 
   const derivedSpec = {
