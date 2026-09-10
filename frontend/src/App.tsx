@@ -2640,8 +2640,7 @@ export default function App() {
       }));
     }
     updateDeploymentTask(linkedTask);
-    openDeploymentDetail(linkedTask);
-  }, [editingDraftId, flushPendingWorkspaceDraft, openDeploymentDetail, updateDeploymentTask]);
+  }, [editingDraftId, flushPendingWorkspaceDraft, updateDeploymentTask]);
 
   const finishDeployment = useCallback(
     async (result: DeployResult) => {

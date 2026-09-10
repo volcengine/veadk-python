@@ -501,10 +501,6 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
     projectPreviewSource,
     /await onDeploymentComplete\?\.\(result\)[\s\S]*?catch \(error\)[\s\S]*?error instanceof RuntimeProbeError[\s\S]*?status: "success"[\s\S]*?label: t\("projectPreview\.task\.deployedNotConnected"\)[\s\S]*?message: error\.message/,
   );
-  assert.match(
-    appSource,
-    /const startDeployment = useCallback[\s\S]*?flushPendingWorkspaceDraft\(\)[\s\S]*?draftId: editingDraftId[\s\S]*?updateDeploymentTask\(linkedTask\)[\s\S]*?openDeploymentDetail\(linkedTask\)/,
-  );
   assert.doesNotMatch(workspaceSource, /aw-deployment-focus/);
   assert.match(
     workspaceSource,
@@ -586,6 +582,20 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
     appSource,
     /const finishDeployment = useCallback[\s\S]*?removeWorkspaceDraft\(completedDraftId\)[\s\S]*?setEditingDraftId\(""\)[\s\S]*?await connectRuntime\([\s\S]*?waitForReady: true/,
   );
+});
+
+test("starting a deployment persists the task without leaving the active editor", () => {
+  const startDeploymentSource = appSource.slice(
+    appSource.indexOf("const startDeployment = useCallback"),
+    appSource.indexOf("const finishDeployment = useCallback"),
+  );
+
+  assert.match(
+    startDeploymentSource,
+    /flushPendingWorkspaceDraft\(\)[\s\S]*?draftId: editingDraftId[\s\S]*?updateDeploymentTask\(linkedTask\)/,
+  );
+  assert.doesNotMatch(startDeploymentSource, /openDeploymentDetail\(/);
+  assert.match(appSource, /onViewDeploymentTask=\{openDeploymentDetail\}/);
 });
 
 test("runtime update deployments stay on the existing agent row", () => {
