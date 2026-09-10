@@ -1,0 +1,39 @@
+{
+  "name": "studio-welcome",
+  "displayName": "Studio Welcome",
+  "description": "Start and manage Agent projects in Studio",
+  "version": "0.1.3",
+  "publisher": "studio-tools",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "main": "./extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "studio.openTerminals",
+        "title": "Studio: Open Bash and Codex / 打开终端"
+      },
+      {
+        "command": "studio.welcome",
+        "title": "Studio: Welcome / 欢迎页"
+      }
+    ],
+    "configuration": {
+      "title": "Studio",
+      "properties": {
+        "studio.showWelcomeOnStartup": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show Studio welcome page when opening the editor"
+        }
+      }
+    }
+  }
+}

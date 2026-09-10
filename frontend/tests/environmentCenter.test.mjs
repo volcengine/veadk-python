@@ -77,9 +77,9 @@ test("uses Apps SDK UI controls and shared Studio patterns", () => {
   assert.match(environmentSource, /@openai\/apps-sdk-ui\/components\/Input/);
   assert.match(environmentSource, /@openai\/apps-sdk-ui\/components\/Select/);
   assert.match(environmentSource, /@openai\/apps-sdk-ui\/components\/Textarea/);
-  assert.match(environmentSource, /<ResourcePageShell className="environment-center"/);
-  assert.match(environmentSource, /<ResourcePageHeader/);
-  assert.match(environmentSource, /<ResourceToolbar className="environment-toolbar">/);
+  assert.match(environmentSource, /<WorkspaceCollectionLayout section="environments" className="environment-center"/);
+  assert.match(readFileSync(new URL("../src/ui/WorkspaceCollectionLayout.tsx", import.meta.url), "utf8"), /<ResourcePageHeader/);
+  assert.match(readFileSync(new URL("../src/ui/WorkspaceCollectionLayout.tsx", import.meta.url), "utf8"), /<ResourceToolbar>/);
   assert.match(environmentSource, /<ResourceSearch/);
   assert.match(environmentSource, /<ResourceResults/);
   assert.match(environmentSource, /<ResourceGrid>/);

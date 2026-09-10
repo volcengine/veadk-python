@@ -838,6 +838,15 @@ def mount_intelligent_development_routes(
 ) -> None:
     """Mount the Codex-gated SANDBOX_DEV surface."""
 
+    from frontend.server.workspace_preview import mount_workspace_preview_routes
+
+    mount_workspace_preview_routes(
+        app,
+        service._gateway,
+        owner_resolver,
+        creator_resolver,
+    )
+
     delegated = FastAPI()
     task_locks: dict[tuple[str, str], asyncio.Lock] = {}
     task_locks_guard = asyncio.Lock()

@@ -3350,6 +3350,15 @@ def _run_frontend_server(
             region=os.getenv("AGENTKIT_SANDBOX_REGION"),
         )
     )
+    if not is_vestack_deployment:
+        from frontend.server.workspace_tool import mount_workspace_upgrade_repair
+
+        mount_workspace_upgrade_repair(
+            app,
+            provider=provider,
+            resolve_credentials=_resolve_ve_credentials,
+        )
+
     # Register exact migration routes before the dynamic sandbox-agent routes.
     mount_migration_routes(
         app,
@@ -3844,6 +3853,7 @@ def _run_frontend_server(
             True,
         ),
         ("dev", "Dev Sandbox", "SANDBOX_DEV", False),
+        ("studio_workspace", "Studio Sandbox", "STUDIO_WORKSPACE_TOOL_ID", True),
     )
 
     from frontend.server.sandbox_updates import register_sandbox_update_routes
@@ -14991,18 +15001,8 @@ def frontend_deploy(
     auto_storage = not str(
         veadk_environments.get("VEADK_STUDIO_TOS_BUCKET") or ""
     ).strip()
-    auto_sandbox_tools = any(
-        not tool_id
-        for tool_id in (
-            sandbox_dev_tool_id,
-            sandbox_chat_codex_tool_id,
-            sandbox_chat_openclaw_tool_id,
-            sandbox_chat_hermes_tool_id,
-            sandbox_chat_codex_snapshot_tool_id,
-            sandbox_chat_openclaw_snapshot_tool_id,
-            sandbox_chat_hermes_snapshot_tool_id,
-        )
-    )
+    # Studio always provisions its persistent workspace Tool.
+    auto_sandbox_tools = True
     from veadk.cli.studio_deploy_permissions import (
         IAM_CONFIG_URLS,
         required_permission_specs,
@@ -15379,6 +15379,24 @@ def frontend_deploy(
     hermes_snapshot_tool_id = resolved_sandbox_tool_ids.get("hermes_snapshot", "")
     dev_tool_id = resolved_sandbox_tool_ids.get("dev", "")
 
+    from frontend.server.workspace_tool import provision_workspace_tool
+
+    click.echo("Preparing persistent Studio Sandbox Tool…")
+    try:
+        workspace_tool_id = provision_workspace_tool(
+            provider=provider_id,
+            region=region,
+            access_key=ak,
+            secret_key=sk,
+            session_token=session_token or "",
+        )
+    except Exception as error:
+        detail = _safe_exception_detail(error, secrets=(ak, sk, session_token))
+        raise click.ClickException(
+            f"Failed to provision Studio Sandbox Tool: {detail}"
+        ) from error
+    click.echo(f"Studio Sandbox Tool is ready: {workspace_tool_id}")
+
     knowledge_signing_key = resolve_studio_knowledge_signing_key(
         {
             STUDIO_KNOWLEDGE_SIGNING_KEY_ENV: (
@@ -15445,6 +15463,7 @@ def frontend_deploy(
     veadk_environments["SANDBOX_CHAT_HERMES"] = hermes_tool_id
     veadk_environments["SANDBOX_CHAT_HERMES_SNAPSHOT"] = hermes_snapshot_tool_id
     veadk_environments["SANDBOX_DEV"] = dev_tool_id
+    veadk_environments["STUDIO_WORKSPACE_TOOL_ID"] = workspace_tool_id
     veadk_environments["AGENTKIT_SANDBOX_REGION"] = region
     veadk_environments["VEADK_STUDIO_UPDATE_BUCKET"] = studio_update_bucket
     veadk_environments["VEADK_STUDIO_UPDATE_PREFIX"] = studio_update_prefix
@@ -15714,6 +15733,7 @@ def frontend_deploy(
             click.echo("   Cloud resources configured for this Studio:")
             for kind, tool_id in resolved_sandbox_tool_ids.items():
                 click.echo(f"   [{sandbox_tool_labels[kind]}]: {tool_id}")
+            click.echo(f"   [Studio Sandbox]: {workspace_tool_id}")
             click.echo(f"   TOS (private): https://{storage_config.object_host}")
             click.echo(f"   user pool id: {user_pool_id}")
             click.echo(f"   client id: {allowed_client_id}")
@@ -16499,6 +16519,26 @@ def frontend_update(
                 environment_overrides["SANDBOX_DEV"] = str(
                     byteplus_sandbox_tool_ids["dev"] or ""
                 )
+        from frontend.server.workspace_tool import workspace_update_environment
+
+        click.echo("Checking persistent Studio Sandbox Tool…")
+        try:
+            environment_overrides.update(
+                workspace_update_environment(
+                    current_env,
+                    provider=provider_id,
+                    region=target.region,
+                    access_key=ak,
+                    secret_key=sk,
+                    session_token=session_token or "",
+                )
+            )
+        except Exception as error:
+            detail = _safe_exception_detail(error, secrets=(ak, sk, session_token))
+            raise click.ClickException(
+                f"Failed to provision Studio Sandbox Tool: {detail}"
+            ) from error
+
         if branding_title is not None:
             environment_overrides["VEADK_SITE_TITLE"] = branding_title
         if sandbox_dev_tool_id is not None:

@@ -232,6 +232,11 @@
     "skill": "Skill",
     "skillLibrary": "Skill library",
     "systemInfo": "System information",
-    "updateAgent": "Update {{name}}"
+    "updateAgent": "Update {{name}}",
+    "codeProjects": "Code projects"
+  },
+  "workspaceProjectEntry": {
+    "title": "Create from workspace",
+    "description": "Create and manage code projects, then develop and debug in VS Code"
   }
 }
