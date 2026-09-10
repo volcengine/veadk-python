@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
   type ReactNode,
+  type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
@@ -34,6 +35,8 @@ interface DialogShellProps {
   subtitle?: string;
   icon: ReactNode;
   className?: string;
+  busy?: boolean;
+  initialFocusRef?: RefObject<HTMLElement | null>;
   onClose: () => void;
   children: ReactNode;
 }
@@ -45,6 +48,8 @@ export function DialogShell({
   subtitle,
   icon,
   className = "",
+  busy = false,
+  initialFocusRef,
   onClose,
   children,
 }: DialogShellProps) {
@@ -54,6 +59,8 @@ export function DialogShell({
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
 
   useEffect(() => {
     if (!open) return;
@@ -62,11 +69,11 @@ export function DialogShell({
       : null;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    closeRef.current?.focus();
+    (initialFocusRef?.current ?? closeRef.current)?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        onCloseRef.current();
+        if (!busyRef.current) onCloseRef.current();
         return;
       }
       if (event.key !== "Tab") return;
@@ -76,7 +83,10 @@ export function DialogShell({
           'button:not(:disabled), input:not(:disabled), iframe, [tabindex]:not([tabindex="-1"])',
         ) ?? [],
       );
-      if (focusable.length === 0) return;
+      if (focusable.length === 0) {
+        event.preventDefault();
+        return;
+      }
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
       if (event.shiftKey && document.activeElement === first) {
@@ -93,7 +103,7 @@ export function DialogShell({
       window.removeEventListener("keydown", onKeyDown);
       previousFocusRef.current?.focus();
     };
-  }, [open]);
+  }, [open, initialFocusRef]);
 
   if (!open && !keepMounted) return null;
   return createPortal(
@@ -101,7 +111,7 @@ export function DialogShell({
       className="sandbox-control-backdrop"
       hidden={!open}
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
+        if (event.target === event.currentTarget && !busy) onClose();
       }}
     >
       <section
@@ -109,6 +119,7 @@ export function DialogShell({
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
+        aria-busy={busy || undefined}
       >
         <header className="sandbox-control-head">
           <span className="sandbox-control-head-icon" aria-hidden="true">
@@ -123,6 +134,8 @@ export function DialogShell({
             type="button"
             className="sandbox-control-close"
             aria-label={t("common.closeDialog", { title })}
+            title={t("common.closeDialog", { title })}
+            disabled={busy}
             onClick={onClose}
           >
             <SandboxCloseIcon />

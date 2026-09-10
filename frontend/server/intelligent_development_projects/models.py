@@ -19,8 +19,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
+import unicodedata
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from frontend.server.source_project_limits import (
     SOURCE_PROJECT_MAX_BYTES,
@@ -29,6 +30,32 @@ from frontend.server.source_project_limits import (
 
 SourceProjectOrigin = Literal["intelligent-development", "migration"]
 SourceVersionProducer = Literal["intelligent-development", "migration"]
+
+
+class SourceNameUpdate(BaseModel):
+    """User-editable display text; never a path, executable, or Agent identity."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    name: str = Field(strict=True, min_length=1, max_length=128)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def normalize_name(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        if any(
+            character in "<>"
+            or unicodedata.category(character) in {"Cc", "Cf", "Cs", "Zl", "Zp"}
+            for character in value
+        ):
+            raise ValueError("名称不能包含控制字符、不可见格式字符或 < >。")
+        return unicodedata.normalize("NFC", value).strip()
+
+
+class SourceNameRecord(SourceNameUpdate):
+    schema_version: Literal["1"] = Field(default="1", alias="schemaVersion")
+    updated_at: datetime = Field(alias="updatedAt")
 
 
 class SourceVersionEnvironment(BaseModel):
@@ -95,6 +122,12 @@ class IntelligentDevelopmentVersion(BaseModel):
         default="", alias="migrationFramework", max_length=128
     )
     migration_engine: str = Field(default="", alias="migrationEngine", max_length=64)
+
+
+class SourceVersionView(IntelligentDevelopmentVersion):
+    """Read-only API view; never serialize this as an immutable version marker."""
+
+    name: str | None = None
 
 
 class IntelligentDevelopmentSessionBinding(BaseModel):

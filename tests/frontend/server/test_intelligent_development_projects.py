@@ -14,13 +14,17 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 import hashlib
 import io
+import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from frontend.server import intelligent_development_source as source_module
@@ -35,8 +39,12 @@ from frontend.server.intelligent_development_projects import (
     TosIntelligentDevelopmentProjectRepository,
 )
 from frontend.server.intelligent_development_projects import service as service_module
+from frontend.server.intelligent_development_projects import routes as routes_module
 from frontend.server.intelligent_development_projects import (
     repository as repository_module,
+)
+from frontend.server.intelligent_development_projects.routes import (
+    mount_intelligent_development_project_routes,
 )
 from frontend.server.intelligent_development_source import TrustedDevelopmentArtifact
 from veadk.cli.frontend_sandbox import SandboxSessionUnavailableError
@@ -124,6 +132,317 @@ def _version(
         gateSummary=["local-checks"],
         validatedAt=created_at.isoformat(),
     )
+
+
+@pytest.fixture
+def name_store():
+    tos = FakeTos()
+    repository = _repository(tos)
+    service = IntelligentDevelopmentProjectService(repository)
+    artifact = b"source archive"
+    report = b'{"status":"passed"}'
+    version = _version(
+        version_id="b" * 32,
+        artifact=artifact,
+        report=report,
+        created_at=datetime(2026, 9, 10, 8, tzinfo=timezone.utc),
+    )
+    project = asyncio.run(
+        repository.commit_version(
+            "owner",
+            "Original project",
+            version,
+            artifact,
+            report,
+            project_origin="migration",
+        )
+    )
+    app = FastAPI()
+    mount_intelligent_development_project_routes(
+        app,
+        prefix="/projects-api",
+        owner_resolver=lambda request: request.headers.get("x-test-owner", "owner"),
+        project_service=service,
+    )
+    with TestClient(app) as client:
+        yield SimpleNamespace(
+            tos=tos,
+            repository=repository,
+            service=service,
+            client=client,
+            project=project,
+            version=version,
+            artifact=artifact,
+            report=report,
+            url=f"/projects-api/projects/{project.project_id}",
+        )
+
+
+def test_names_are_durable_display_metadata_without_changing_source(name_store):
+    store = name_store
+    original = dict(store.tos.objects)
+    response = store.client.patch(store.url, json={"name": "  新项目 Cafe\u0301  "})
+    assert response.status_code == 200
+    assert response.json()["project"]["name"] == "新项目 Café"
+    assert "ownerId" not in response.json()["project"]
+    version_url = f"{store.url}/versions/{store.version.version_id}"
+    response = store.client.patch(version_url, json={"name": "生产版 & '稳定'"})
+    assert response.status_code == 200
+    assert response.json()["version"]["name"] == "生产版 & '稳定'"
+    projects = store.client.get("/projects-api/projects?origin=migration").json()
+    assert projects["projects"][0]["name"] == "新项目 Café"
+    versions = store.client.get(f"{store.url}/versions").json()["versions"]
+    assert versions[0]["name"] == "生产版 & '稳定'"
+    assert versions[0]["agentName"] == store.version.agent_name
+    assert all(store.tos.objects[key] == value for key, value in original.items())
+    assert len(store.tos.objects) == len(original) + 2
+    assert (
+        "name"
+        not in asyncio.run(
+            store.service.get_version(
+                "owner",
+                store.project.project_id,
+                store.version.version_id,
+            )
+        ).model_dump()
+    )
+    binding = asyncio.run(
+        store.service.create_binding(
+            owner_id="owner",
+            session_id="new-optimization",
+            display_name="ignored",
+            project_id=store.project.project_id,
+        )
+    )
+    assert binding.project_name == "新项目 Café"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "",
+        "   ",
+        "名" * 129,
+        "😀" * 129,
+        "line\n",
+        "\tname",
+        "name\x00",
+        "name\x7f",
+        "name\u0085",
+        "name\u202e",
+        "name\u2066",
+        "name\u200b",
+        "name\u2028",
+        "name\u2029",
+        "<script>alert(1)</script>",
+        "name>",
+        "\ud800",
+        None,
+        42,
+        ["name"],
+    ],
+)
+@pytest.mark.parametrize("version", [False, True])
+def test_name_api_rejects_unsafe_or_invalid_text_without_writing(
+    name_store, name, version
+):
+    store = name_store
+    original = dict(store.tos.objects)
+    url = f"{store.url}/versions/{store.version.version_id}" if version else store.url
+    response = store.client.patch(
+        url,
+        content=json.dumps({"name": name}),
+        headers={"Content-Type": "application/json"},
+    )
+    assert response.status_code == 422
+    assert store.tos.objects == original
+
+
+@pytest.mark.parametrize(
+    "name", ["名" * 128, "😀" * 128, "e\u0301" * 128, "../a; $value & 'b'"]
+)
+def test_name_limits_count_normalized_unicode_characters(name_store, name):
+    response = name_store.client.patch(name_store.url, json={"name": name})
+    assert response.status_code == 200
+    assert len(response.json()["project"]["name"]) <= 128
+
+
+@pytest.mark.parametrize(
+    "body,status", [("{", 422), ("[]", 422), ("null", 422), ("x" * 4097, 413)]
+)
+@pytest.mark.parametrize("version", [False, True])
+def test_name_request_parsing_is_bounded_and_does_not_reflect_input(
+    name_store, body, status, version
+):
+    store = name_store
+    original = dict(store.tos.objects)
+    url = f"{store.url}/versions/{store.version.version_id}" if version else store.url
+    response = store.client.patch(
+        url, content=body, headers={"Content-Type": "application/json"}
+    )
+    assert response.status_code == status
+    assert "x" * 256 not in response.text
+    assert store.tos.objects == original
+
+
+@pytest.mark.parametrize("version", [False, True])
+def test_name_api_rejects_deeply_nested_json(name_store, version):
+    original = dict(name_store.tos.objects)
+    url = (
+        f"{name_store.url}/versions/{name_store.version.version_id}"
+        if version
+        else name_store.url
+    )
+    response = name_store.client.patch(
+        url,
+        content="[" * 1500 + "]" * 1500,
+        headers={"Content-Type": "application/json"},
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "SOURCE_PROJECT_NAME_INVALID"
+    assert name_store.tos.objects == original
+
+
+@pytest.mark.parametrize("version", [False, True])
+def test_name_api_handles_parser_recursion_errors_without_reflecting_input(
+    name_store, monkeypatch: pytest.MonkeyPatch, version
+):
+    original = dict(name_store.tos.objects)
+    # CPython versions have different JSON recursion limits. Exercise the
+    # parser failure contract even when this interpreter accepts the nesting.
+    parser = Mock(side_effect=RecursionError("untrusted input must not be echoed"))
+    monkeypatch.setattr(routes_module, "json", SimpleNamespace(loads=parser))
+    url = (
+        f"{name_store.url}/versions/{name_store.version.version_id}"
+        if version
+        else name_store.url
+    )
+    response = name_store.client.patch(url, json={"name": "New name"})
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "SOURCE_PROJECT_NAME_INVALID"
+    assert "untrusted input" not in response.text
+    parser.assert_called_once()
+    assert name_store.tos.objects == original
+
+
+def test_name_api_enforces_owner_resource_and_field_boundaries(name_store):
+    store = name_store
+    original = dict(store.tos.objects)
+    for suffix in ("", f"/versions/{store.version.version_id}"):
+        response = store.client.patch(
+            store.url + suffix,
+            json={"name": "Other"},
+            headers={"x-test-owner": "someone-else"},
+        )
+        assert response.status_code == 404
+        response = store.client.patch(
+            store.url + suffix, json={"name": "Other", "agentName": "changed"}
+        )
+        assert response.status_code == 422
+    response = store.client.patch(
+        f"{store.url}/versions/{'c' * 32}", json={"name": "Other"}
+    )
+    assert response.status_code == 404
+    assert store.tos.objects == original
+    summary_key = next(
+        key for key in store.tos.objects if key.endswith("/summary.json")
+    )
+    store.tos.objects[summary_key] = (
+        store.project.model_copy(
+            update={"origin": "intelligent-development"},
+        )
+        .model_dump_json(by_alias=True)
+        .encode()
+    )
+    assert store.client.patch(store.url, json={"name": "Other"}).status_code == 409
+    assert (
+        store.client.patch(
+            f"{store.url}/versions/{store.version.version_id}", json={"name": "Other"}
+        ).status_code
+        == 409
+    )
+
+
+@pytest.mark.parametrize("version", [False, True])
+def test_name_errors_preserve_existing_data_and_do_not_hide_corruption(
+    name_store, version
+):
+    store = name_store
+    url = f"{store.url}/versions/{store.version.version_id}" if version else store.url
+    assert store.client.patch(url, json={"name": "Saved"}).status_code == 200
+    store.tos.fail_put_suffix = "/display.json"
+    response = store.client.patch(url, json={"name": "Failed"})
+    assert response.status_code == 503
+    assert response.json()["detail"]["retryable"] is True
+    store.tos.fail_put_suffix = ""
+    list_url = (
+        f"{store.url}/versions"
+        if version
+        else "/projects-api/projects?origin=migration"
+    )
+    listing = store.client.get(list_url).json()
+    assert listing["versions" if version else "projects"][0]["name"] == "Saved"
+    display_key = next(
+        key for key in store.tos.objects if key.endswith("/display.json")
+    )
+    store.tos.objects[display_key] = b'{"name":"<script>"}'
+    assert store.client.get(list_url).status_code == 502
+
+
+def test_names_survive_commit_retries_and_new_versions_then_are_cleaned_on_delete(
+    name_store,
+):
+    store = name_store
+    version_url = f"{store.url}/versions/{store.version.version_id}"
+    assert (
+        store.client.patch(store.url, json={"name": "Renamed project"}).status_code
+        == 200
+    )
+    assert store.client.patch(version_url, json={"name": "Baseline"}).status_code == 200
+    repeated = asyncio.run(
+        store.repository.commit_version(
+            "owner",
+            "Original project",
+            store.version,
+            store.artifact,
+            store.report,
+            project_origin="migration",
+        )
+    )
+    assert repeated.name == "Renamed project"
+    second = store.version.model_copy(
+        update={
+            "version_id": "c" * 32,
+            "parent_version_id": store.version.version_id,
+            "created_at": datetime(2026, 9, 10, 9, tzinfo=timezone.utc),
+        }
+    )
+    asyncio.run(
+        store.repository.commit_version(
+            "owner",
+            "Old binding name",
+            second,
+            store.artifact,
+            store.report,
+        )
+    )
+    versions = store.client.get(f"{store.url}/versions").json()["versions"]
+    assert [item["versionId"] for item in versions] == [
+        second.version_id,
+        store.version.version_id,
+    ]
+    assert versions[0]["name"] is None
+    assert versions[1]["name"] == "Baseline"
+    assert store.client.delete(version_url).status_code == 200
+    assert not any(
+        f"/versions/{store.version.version_id}/" in key for key in store.tos.objects
+    )
+    assert (
+        store.client.delete(f"{store.url}/versions/{second.version_id}").status_code
+        == 200
+    )
+    assert not store.tos.objects
+    assert store.client.patch(store.url, json={"name": "Resurrect"}).status_code == 404
 
 
 def test_version_metadata_enforces_shared_project_limits() -> None:

@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import tempfile
@@ -24,6 +25,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
+from pydantic import ValidationError
 
 from frontend.server.deployment_source import DeploymentSourceError
 from frontend.server.intelligent_development_source import (
@@ -35,7 +37,7 @@ from frontend.server.intelligent_development_source import (
     materialize_intelligent_development_preview,
 )
 
-from .models import SourceProjectOrigin
+from .models import SourceNameUpdate, SourceProjectOrigin
 from .repository import (
     IntelligentDevelopmentProjectConflict,
     IntelligentDevelopmentProjectNotFound,
@@ -154,6 +156,28 @@ def _materialization_http_error(error: Exception) -> HTTPException:
     raise TypeError("Unsupported intelligent-development source error") from error
 
 
+async def _name_update(request: Request) -> SourceNameUpdate:
+    # Bound parsing and never reflect hostile text (including lone surrogates)
+    # in FastAPI's default validation response.
+    content = bytearray()
+    async for chunk in request.stream():
+        if len(content) + len(chunk) > 4096:
+            raise HTTPException(status_code=413, detail="名称请求过大。")
+        content.extend(chunk)
+    try:
+        return SourceNameUpdate.model_validate(json.loads(content))
+    except (ValueError, ValidationError, RecursionError) as error:
+        # Excessive JSON nesting can hit the interpreter's recursion limit
+        # before schema validation, particularly on CPython 3.10.
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "SOURCE_PROJECT_NAME_INVALID",
+                "message": "请仅提交 name 字段；名称须为 1～128 个字符，不能包含控制字符、不可见格式字符或 < >。",
+            },
+        ) from error
+
+
 def mount_intelligent_development_project_routes(
     app: FastAPI,
     *,
@@ -191,6 +215,36 @@ def mount_intelligent_development_project_routes(
                 for project in projects
             ]
         }
+
+    @app.patch(f"{prefix}/projects/{{project_id}}")
+    async def _rename_project(project_id: str, request: Request) -> dict[str, object]:
+        owner = owner_resolver(request)
+        service = configured_service()
+        update = await _name_update(request)
+        try:
+            project = await service.rename_project(owner, project_id, update.name)
+        except PROJECT_EXCEPTIONS as error:
+            raise project_http_error(error) from error
+        return {
+            "project": project.model_dump(
+                by_alias=True, mode="json", exclude={"owner_id"}
+            )
+        }
+
+    @app.patch(f"{prefix}/projects/{{project_id}}/versions/{{version_id}}")
+    async def _rename_version(
+        project_id: str, version_id: str, request: Request
+    ) -> dict[str, object]:
+        owner = owner_resolver(request)
+        service = configured_service()
+        update = await _name_update(request)
+        try:
+            version = await service.rename_version(
+                owner, project_id, version_id, update.name
+            )
+        except PROJECT_EXCEPTIONS as error:
+            raise project_http_error(error) from error
+        return {"version": version.model_dump(by_alias=True, mode="json")}
 
     @app.get(f"{prefix}/projects/{{project_id}}/versions")
     async def _project_versions(
