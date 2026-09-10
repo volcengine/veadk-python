@@ -1985,15 +1985,16 @@ def _start_migration_command(
             ),
         ]
     )
-    inner_lines = [
-        "set +e",
-        *validation_model_env,
-        f"{cli} > {shlex.quote(log_path)} 2>&1",
-        "code=$?",
-    ]
     inner = "\n".join(
         [
-            *inner_lines,
+            "set +e",
+            "(",
+            "set -e",
+            *validation_model_env,
+            *structured_copy,
+            cli,
+            f") > {shlex.quote(log_path)} 2>&1",
+            "code=$?",
             "finished_at=$(python3 -c 'import time; print(int(time.time()))')",
             (
                 f'printf \'%s\\n\' "{{\\"schema_version\\":1,'
@@ -2063,7 +2064,6 @@ def _start_migration_command(
             ),
             f"test -d {shlex.quote(_PROJECT_PATH)}",
             f"mkdir -p {shlex.quote(f'{MIGRATION_ROOT}/workspace')}",
-            *structured_copy,
             f"setsid bash -c {shlex.quote(inner)} </dev/null >/dev/null 2>&1 &",
             "pid=$!",
             f"printf '%s\\n' \"$pid\" > {shlex.quote(pid_path)}.tmp",
@@ -2772,14 +2772,29 @@ class MigrationService:
         return self._task_from_session(self._session(task_id, owner_id))
 
     @staticmethod
-    def _artifact_status(value: object = None) -> dict[str, object]:
+    def _artifact_status(
+        value: object = None,
+        *,
+        state: str = "",
+        confirmation: dict[str, object] | None = None,
+    ) -> dict[str, object]:
         data = value if isinstance(value, dict) else {}
-        return {
+        status = {
             "state": str(data.get("state") or "none"),
             "previewReady": bool(data.get("preview_ready")),
             "downloadReady": bool(data.get("download_ready")),
             "deployReady": bool(data.get("deploy_ready")),
         }
+        if (
+            state in {"succeeded", "succeeded_with_warnings"}
+            and status["state"] == "ready"
+            and status["previewReady"]
+            and status["downloadReady"]
+            and isinstance(confirmation, dict)
+            and confirmation.get("execution_model") == "structured"
+        ):
+            status["deployReady"] = True
+        return status
 
     def _task_payload(
         self,
@@ -2796,7 +2811,11 @@ class MigrationService:
     ) -> dict[str, object]:
         request = request or {}
         expiry = self._session_expiry(session, request)
-        artifact_status = self._artifact_status(artifact)
+        artifact_status = self._artifact_status(
+            artifact,
+            state=state,
+            confirmation=confirmation,
+        )
         ttl_seconds = request.get("session_ttl_seconds")
         if not isinstance(ttl_seconds, int):
             created_at = _timestamp(session.created_at)

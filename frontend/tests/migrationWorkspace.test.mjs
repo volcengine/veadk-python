@@ -285,6 +285,32 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
   assert.match(source, /listMigrationTasks/);
   assert.match(source, /getMigrationTask/);
   assert.match(source, /confirmMigrationTask/);
+  const confirmMigration = source.match(
+    /async function confirmMigration\(\) \{[\s\S]*?\n  \}\n\n  async function stopTask/,
+  )?.[0];
+  assert.ok(confirmMigration);
+  assert.ok(
+    confirmMigration.indexOf("migrationStartingTask") <
+      confirmMigration.indexOf("await confirmMigrationTask"),
+    "the workspace should enter the migration phase before launch confirmation returns",
+  );
+  assert.match(
+    confirmMigration,
+    /catch \(cause\) \{[\s\S]*?await reconcileTaskState\(task\.id\)[\s\S]*?authoritative\.state !== "analysis_ready"[\s\S]*?setError/,
+    "a failed launch should restore the authoritative task before surfacing the error",
+  );
+  assert.match(source, /function migrationStartingTask/);
+  assert.match(source, /state: "migrating"/);
+  assert.match(source, /canConfirm: false/);
+  assert.match(source, /canStop: false/);
+  assert.match(
+    source,
+    /if \(!hasPollableTasks \|\| action === "confirm"\) return;/,
+  );
+  assert.match(
+    source,
+    /if \([\s\S]*?action === "confirm"[\s\S]*?!task \|\|[\s\S]*?taskEnvironmentExpired/,
+  );
   assert.match(source, /stopMigrationTask/);
   assert.match(source, /getMigrationActivity/);
   assert.match(source, /function MigrationActivityFeed/);

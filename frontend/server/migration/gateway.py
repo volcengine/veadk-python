@@ -756,6 +756,15 @@ class MigrationSandboxGateway:
             )
             return status, exit_code
 
+        def background_launch_confirmed(
+            data: dict[str, object],
+            status: str,
+        ) -> bool:
+            if status != "running" or not start_marker:
+                return False
+            output = f"{data.get('stdout') or ''}\n{data.get('stderr') or ''}"
+            return start_marker in output
+
         try:
             response = requests.post(
                 build_bash_exec_url(endpoint),
@@ -780,7 +789,7 @@ class MigrationSandboxGateway:
         stderr_offset = data.get("stderr_offset", 0)
 
         while status == "running":
-            if operation == "start_migration" and session_id and command_id:
+            if background_launch_confirmed(data, status):
                 data["status"] = "accepted"
                 data["exit_code"] = 0
                 return data

@@ -262,6 +262,29 @@ function isActiveState(state: MigrationTask["state"]): boolean {
   return ["analyzing", "migrating", "validating", "packaging"].includes(state);
 }
 
+function migrationStartingTask(
+  task: MigrationTask,
+  framework: MigrationFramework,
+  entry: string | null,
+  appName: string,
+): MigrationTask {
+  return {
+    ...task,
+    state: "migrating",
+    message: migrationText("confirmation.starting"),
+    canModify: false,
+    canUpload: false,
+    canAnswer: false,
+    canConfirm: false,
+    canStop: false,
+    confirmation: {
+      framework,
+      entry,
+      app_name: appName,
+    },
+  };
+}
+
 function isTerminalState(state: MigrationTask["state"]): boolean {
   return [
     "succeeded",
@@ -978,7 +1001,7 @@ export function MigrationWorkspace({
   }, []);
 
   useEffect(() => {
-    if (!hasPollableTasks) return;
+    if (!hasPollableTasks || action === "confirm") return;
     const controller = new AbortController();
     const timer = window.setInterval(() => {
       void listMigrationTasks(controller.signal)
@@ -1002,10 +1025,11 @@ export function MigrationWorkspace({
       controller.abort();
       window.clearInterval(timer);
     };
-  }, [hasPollableTasks]);
+  }, [action, hasPollableTasks]);
 
   useEffect(() => {
     if (
+      action === "confirm" ||
       !task ||
       taskEnvironmentExpired ||
       (!isActiveState(task.state) &&
@@ -1052,6 +1076,7 @@ export function MigrationWorkspace({
     task?.persistence?.state,
     task?.evaluation?.state,
     taskEnvironmentExpired,
+    action,
   ]);
 
   useEffect(() => {
@@ -1544,14 +1569,29 @@ export function MigrationWorkspace({
 
   async function confirmMigration() {
     if (!task?.analysisRef || !canConfirm) return;
+    const confirmedEntry = STRUCTURED_FRAMEWORKS.has(framework)
+      ? entry.trim()
+      : null;
+    const confirmedAppName = appName.trim();
     setAction("confirm");
     setError("");
+    setTasks((current) =>
+      upsertTask(
+        current,
+        migrationStartingTask(
+          task,
+          framework,
+          confirmedEntry,
+          confirmedAppName,
+        ),
+      ),
+    );
     try {
       const next = await confirmMigrationTask({
         taskId: task.id,
         framework,
-        entry: STRUCTURED_FRAMEWORKS.has(framework) ? entry.trim() : undefined,
-        appName: appName.trim(),
+        entry: confirmedEntry || undefined,
+        appName: confirmedAppName,
         instruction: "",
         analysisAttempt: task.analysisRef.attempt,
         analysisSha256: task.analysisRef.sha256,

@@ -2406,25 +2406,44 @@ def test_agentkit_gateway_waits_for_running_bash_command(
     assert calls[2][1]["stderr_offset"] == 2
 
 
-def test_agentkit_gateway_accepts_migration_dispatch_without_polling_output(
+def test_agentkit_gateway_waits_for_confirmed_migration_launch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[dict[str, object]] = []
+    responses = [
+        {
+            "data": {
+                "session_id": "bash-session",
+                "command_id": "command-1",
+                "status": "running",
+                "stdout": "",
+                "offset": 0,
+                "stderr_offset": 0,
+            }
+        },
+        {
+            "data": {
+                "session_id": "bash-session",
+                "command": {
+                    "command_id": "command-1",
+                    "status": "running",
+                    "exit_code": None,
+                },
+                "stdout": "VEADK_MIGRATION_EXECUTION_STARTED_V1\n",
+                "offset": 39,
+                "stderr_offset": 0,
+            }
+        },
+    ]
 
     class Response:
         status_code = 200
 
+        def __init__(self, payload: dict[str, object]) -> None:
+            self._payload = payload
+
         def json(self) -> dict[str, object]:
-            return {
-                "data": {
-                    "session_id": "bash-session",
-                    "command_id": "command-1",
-                    "status": "running",
-                    "stdout": "",
-                    "offset": 0,
-                    "stderr_offset": 0,
-                }
-            }
+            return self._payload
 
     def post(
         _url: str,
@@ -2433,9 +2452,7 @@ def test_agentkit_gateway_accepts_migration_dispatch_without_polling_output(
         timeout: object,
     ) -> Response:
         calls.append({"json": json, "timeout": timeout})
-        if len(calls) > 1:
-            raise AssertionError("background dispatch must not poll command output")
-        return Response()
+        return Response(responses.pop(0))
 
     monkeypatch.setattr("frontend.server.migration.gateway.requests.post", post)
     gateway = MigrationSandboxGateway(
@@ -2463,12 +2480,92 @@ def test_agentkit_gateway_accepts_migration_dispatch_without_polling_output(
     )
 
     assert result["status"] == "accepted"
-    assert len(calls) == 1
+    assert len(calls) == 2
     assert calls[0]["json"] == {
         "timeout": 1,
         "hard_timeout": 30,
         "command": "start-migration",
     }
+    assert calls[1]["json"] == {
+        "session_id": "bash-session",
+        "command_id": "command-1",
+        "offset": 0,
+        "stderr_offset": 0,
+        "wait": True,
+        "wait_timeout": 30,
+    }
+
+
+def test_agentkit_gateway_observes_migration_launch_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = [
+        {
+            "data": {
+                "session_id": "bash-session",
+                "command_id": "command-1",
+                "status": "running",
+                "stdout": "",
+                "offset": 0,
+                "stderr_offset": 0,
+            }
+        },
+        {
+            "data": {
+                "session_id": "bash-session",
+                "command": {
+                    "command_id": "command-1",
+                    "status": "completed",
+                    "exit_code": 1,
+                },
+                "stdout": "",
+                "stderr": "failed to launch migration",
+                "offset": 0,
+                "stderr_offset": 27,
+            }
+        },
+    ]
+
+    class Response:
+        status_code = 200
+
+        def __init__(self, payload: dict[str, object]) -> None:
+            self._payload = payload
+
+        def json(self) -> dict[str, object]:
+            return self._payload
+
+    monkeypatch.setattr(
+        "frontend.server.migration.gateway.requests.post",
+        lambda *_args, **_kwargs: Response(responses.pop(0)),
+    )
+    gateway = MigrationSandboxGateway(
+        tool_id="tool-dev",
+        region="cn-beijing",
+        tools_client_factory=lambda region: None,
+    )
+    session = MigrationSandboxSession(
+        tool_id="tool-dev",
+        session_id="session-1",
+        task_id="migration-v1-" + "1" * 32,
+        endpoint="https://sandbox.invalid/proxy",
+        region="cn-beijing",
+        status="Ready",
+        created_at="2026-08-11T08:00:00Z",
+        expire_at="2026-08-11T09:00:00Z",
+        owner_id="owner-1",
+    )
+
+    with pytest.raises(MigrationGatewayError) as raised:
+        gateway.execute_bash(
+            session,
+            "start-migration",
+            operation="start_migration",
+            timeout_seconds=30,
+        )
+
+    assert raised.value.code == "MIGRATION_REMOTE_EXEC_FAILED"
+    assert responses == []
 
 
 @pytest.mark.parametrize(
@@ -3161,7 +3258,7 @@ def test_analysis_answers_reject_missing_or_unknown_question_ids() -> None:
     ) == 1
 
 
-def test_structured_migration_runs_in_the_isolated_delivery_project() -> None:
+def test_structured_migration_prepares_the_delivery_project_in_the_background() -> None:
     gateway = FakeMigrationGateway()
     service = MigrationService(gateway)
     task_id, _ = create_uploaded_task(service)
@@ -3176,9 +3273,21 @@ def test_structured_migration_runs_in_the_isolated_delivery_project() -> None:
     command = gateway.commands[-1][2]
     assert f"ak migrate {MIGRATION_ROOT}/output/veadk --framework langchain" in command
     assert "--output ." in command
-    assert (
+    copy_command = (
         f"cp -a {MIGRATION_ROOT}/workspace/source {MIGRATION_ROOT}/output/veadk"
-    ) in command
+    )
+    background_launch = command[
+        command.index("setsid bash -c ") : command.index(
+            " </dev/null >/dev/null 2>&1 &"
+        )
+    ]
+    outer_launch = (
+        command[: command.index("setsid bash -c ")]
+        + command[command.index(" </dev/null >/dev/null 2>&1 &") :]
+    )
+    assert copy_command in background_launch
+    assert copy_command not in outer_launch
+    assert "process-exit.json" in background_launch
 
 
 def test_structured_migration_does_not_prepare_a_verification_runtime() -> None:
@@ -3518,7 +3627,7 @@ def test_service_recovers_terminal_state_and_verified_artifact_from_session() ->
 
 
 @pytest.mark.parametrize(
-    ("delivery_state", "verification", "deploy_ready"),
+    ("delivery_state", "verification", "cli_deploy_ready", "deploy_ready"),
     [
         (
             "succeeded",
@@ -3526,6 +3635,7 @@ def test_service_recovers_terminal_state_and_verified_artifact_from_session() ->
                 "status": "passed",
                 "checks": [{"name": "import", "status": "passed"}],
             },
+            False,
             True,
         ),
         (
@@ -3541,13 +3651,15 @@ def test_service_recovers_terminal_state_and_verified_artifact_from_session() ->
                 ],
             },
             False,
+            False,
         ),
     ],
 )
-def test_materialize_deployment_honors_cli_readiness_and_verifies_owner(
+def test_materialize_deployment_applies_structured_terminal_readiness(
     tmp_path: Path,
     delivery_state: str,
     verification: dict[str, object],
+    cli_deploy_ready: bool,
     deploy_ready: bool,
 ) -> None:
     gateway = FakeMigrationGateway()
@@ -3623,7 +3735,7 @@ def test_materialize_deployment_honors_cli_readiness_and_verifies_owner(
                 "state": "ready",
                 "preview_ready": True,
                 "download_ready": True,
-                "deploy_ready": deploy_ready,
+                "deploy_ready": cli_deploy_ready,
             },
             "updated_at": "2026-08-11T08:20:00Z",
         }
@@ -4051,11 +4163,8 @@ def test_terminal_delivery_requires_a_ready_artifact_contract() -> None:
     assert raised.value.retryable is False
 
 
-@pytest.mark.parametrize(
-    "state",
-    ["succeeded", "succeeded_with_warnings", "partial"],
-)
-def test_terminal_delivery_preserves_cli_deployment_readiness(state: str) -> None:
+@pytest.mark.parametrize("state", ["succeeded", "succeeded_with_warnings"])
+def test_structured_success_is_deployable_without_cli_verification(state: str) -> None:
     gateway = FakeMigrationGateway()
     service = MigrationService(gateway)
     task_id, _ = create_uploaded_task(service)
@@ -4095,8 +4204,46 @@ def test_terminal_delivery_preserves_cli_deployment_readiness(state: str) -> Non
         "state": "ready",
         "previewReady": True,
         "downloadReady": True,
-        "deployReady": False,
+        "deployReady": True,
     }
+
+
+@pytest.mark.parametrize("cli_deploy_ready", [False, True])
+def test_agentic_success_preserves_cli_deployment_readiness(
+    cli_deploy_ready: bool,
+) -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, _ = create_uploaded_task(service)
+    mark_analysis_ready(gateway, task_id, framework="any", entry=None)
+    service.confirm(
+        task_id,
+        "owner-1",
+        confirmation_body(gateway, task_id, framework="any", entry=None),
+    )
+    gateway.files[(task_id, f"{MIGRATION_ROOT}/delivery/migration-status.json")] = (
+        json.dumps(
+            {
+                "schema_version": 1,
+                "run_id": task_id,
+                "sequence": 4,
+                "state": "succeeded",
+                "phase": "completed",
+                "message": "Migration artifact is ready",
+                "artifact": {
+                    "state": "ready",
+                    "preview_ready": True,
+                    "download_ready": True,
+                    "deploy_ready": cli_deploy_ready,
+                },
+                "updated_at": "2026-08-11T08:20:00Z",
+            }
+        ).encode()
+    )
+
+    task = service.get_task(task_id, "owner-1")
+
+    assert task["artifact"]["deployReady"] is cli_deploy_ready
 
 
 def test_partial_delivery_cannot_advertise_deployment_readiness() -> None:
