@@ -166,7 +166,9 @@ async def _name_update(request: Request) -> SourceNameUpdate:
         content.extend(chunk)
     try:
         return SourceNameUpdate.model_validate(json.loads(content))
-    except (ValueError, ValidationError) as error:
+    except (ValueError, ValidationError, RecursionError) as error:
+        # Excessive JSON nesting can hit the interpreter's recursion limit
+        # before schema validation, particularly on CPython 3.10.
         raise HTTPException(
             status_code=422,
             detail={
