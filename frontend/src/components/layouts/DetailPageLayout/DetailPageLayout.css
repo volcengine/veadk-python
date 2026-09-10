@@ -1,0 +1,36 @@
+@font-face { font-family: "Fragment Mono"; src: url("./assets/fragment-mono.ttf") format("truetype"); font-style: normal; font-weight: 400; font-display: swap; }
+@font-face { font-family: "Didact Gothic"; src: url("./assets/didact-gothic.ttf") format("truetype"); font-style: normal; font-weight: 400; font-display: swap; }
+
+/* Figma 813:398700 — canvas coordinates in the 1440 × 1080 frame */
+.studio-detail-page-layout { position: relative; isolation: isolate; box-sizing: border-box; width: 1440px; height: 1080px; overflow: hidden; border-radius: 16px; background: var(--studio-surface-page, #0c0c0c); color: var(--studio-text-primary, #dbdee7); font-family: "Century Gothic", sans-serif; font-weight: 400; font-synthesis: none; }
+.studio-detail-page-layout__glow { position: absolute; z-index: -1; left: 280px; top: -159px; width: 579px; height: 192px; border-radius: 50%; background: rgba(232,230,252,.2); filter: blur(72px); pointer-events: none; }
+.studio-detail-page-layout__sidebar { position: absolute; inset: 0 auto 0 0; width: 240px; background: var(--studio-surface-sidebar-overlay, rgba(255,255,255,.02)); }
+.studio-detail-page-layout__back { position: absolute; left: 320px; top: 60px; height: 24px; }
+.studio-detail-page-layout__header { position: absolute; left: 320px; top: 104px; width: 1042px; height: 60px; }
+.studio-detail-page-layout__tabs { position: absolute; left: 324px; top: 196px; width: 1040px; height: 28px; }
+.studio-detail-page-layout__content { position: absolute; left: 320px; top: 252px; width: 1044px; }
+.studio-detail-page-layout__runtime-title { position: absolute; left: 325px; top: 858px; margin: 0; font-family: "Fragment Mono", monospace; font-size: 14px; font-weight: 400; line-height: 21px; color: var(--studio-text-muted, rgba(219,222,231,.4)); }
+.studio-detail-page-layout__runtime { position: absolute; left: 320px; top: 893px; width: 1044px; height: 163px; border-radius: 16px; background: var(--studio-surface-metric, rgba(32,33,36,.39)); }
+.studio-detail-sidebar { position: relative; width: 240px; height: 1080px; }
+.studio-detail-sidebar__brand { box-sizing: border-box; display: flex; align-items: center; justify-content: space-between; width: 240px; height: 64px; padding: 0 8px 0 16px; }
+.studio-detail-sidebar__brand > span { display: flex; align-items: center; gap: 6px; font-family: "Didact Gothic", sans-serif; font-size: 18px; line-height: 25.2px; color: white; }
+.studio-detail-sidebar__brand > span > img { width: 22px; height: 22px; }
+.studio-detail-sidebar button { cursor: pointer; }
+.studio-detail-sidebar__brand > button { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 99px; background: transparent; }
+.studio-detail-sidebar__brand > button > img { width: 20px; height: 20px; }
+.studio-detail-sidebar__navigation { display: flex; flex-direction: column; gap: 20px; padding: 0 8px; }
+.studio-detail-sidebar__items { display: flex; flex-direction: column; gap: 4px; }
+.studio-detail-sidebar .studio-sidebar-item__icon > img { display: block; width: 16px; height: 16px; }
+.studio-detail-sidebar .studio-detail-sidebar__tracked { letter-spacing: .182px; }
+.studio-detail-sidebar .studio-detail-sidebar__new-task { letter-spacing: 0; }
+.studio-detail-sidebar__task { box-sizing: border-box; display: flex; align-items: center; justify-content: space-between; width: 224px; height: 36px; padding: 7px 10px 7px 37px; font-size: 14px; line-height: 22px; letter-spacing: .182px; color: var(--studio-text-secondary, rgba(219,222,231,.6)); white-space: nowrap; }
+.studio-detail-sidebar__task > img { width: 13px; height: 13px; flex-shrink: 0; }
+.studio-detail-sidebar__promo { position: absolute; left: 12px; top: 956px; }
+.studio-detail-sidebar__footer { position: absolute; left: 17px; top: 1040px; display: flex; align-items: center; justify-content: space-between; width: 206px; height: 24px; }
+.studio-detail-sidebar__user { display: flex; align-items: center; gap: 6px; color: var(--studio-text-secondary, rgba(219,222,231,.6)); font-size: 14px; line-height: 22px; letter-spacing: .042px; }
+.studio-detail-sidebar__user > span { position: relative; display: block; width: 24px; height: 24px; overflow: hidden; border-radius: 50%; }
+.studio-detail-sidebar__user img { position: absolute; left: -3px; top: -2px; width: 30px; height: 28px; object-fit: cover; }
+.studio-detail-sidebar__account-actions { display: flex; align-items: center; gap: 11px; }
+.studio-detail-sidebar__account-actions > button { display: grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0; background: transparent; }
+.studio-detail-sidebar__account-actions > button > img { width: 16px; height: 16px; }
+.studio-detail-sidebar__account-actions > .studio-detail-sidebar__update { display: flex; align-items: center; justify-content: center; width: 65px; height: 22px; border-radius: 26px; background: var(--studio-surface-update, rgba(255,255,255,.25)); color: white; font-family: "Century Gothic", sans-serif; font-size: 12px; line-height: 18px; }

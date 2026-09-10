@@ -1354,3 +1354,11 @@ Sandbox。修改这些模板只需要更新 Studio，不需要重建镜像，也
 模板中的新依赖不会自动安装，运行环境依赖仍由镜像管理。
 
 其他地域需要显式设置 `STUDIO_WORKSPACE_IMAGE`，避免错误使用跨地域镜像。
+
+## 统一组件库与预览
+
+共享组件目录见 [组件库说明](src/components/README.md)，预览目录见
+[Components Preview](src/components-preview/README.md)
+
+运行 `npm run dev:components` 打开独立组件预览页，按基础组件、复合组件和布局分组浏览 Figma 组件
+具体组件与 Figma 样式将在设计稿提供后接入

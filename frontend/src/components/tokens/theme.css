@@ -1,0 +1,108 @@
+/* Dark values follow the component library's Figma references */
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+  --studio-bg-canvas: #101013;
+  --studio-bg-panel: #111111;
+  --studio-bg-elevated: #1c1c1e;
+  --studio-bg-sidebar: #18181b;
+  --studio-bg-track: #0c0c0d;
+  --studio-bg-secondary: #262626;
+  --studio-bg-promo: #030303;
+  --studio-text-primary: #dbdee7;
+  --studio-text-secondary: rgba(219, 222, 231, 0.6);
+  --studio-text-tertiary: #7a7880;
+  --studio-text-strong: #ffffff;
+  --studio-text-subtle: #b8b7c3;
+  --studio-action-primary-bg: #ffffff;
+  --studio-action-primary-text: #101013;
+  --studio-border-default: rgba(255, 255, 255, 0.2);
+  --studio-border-subtle: rgba(219, 222, 231, 0.15);
+  --studio-border-input: rgba(219, 222, 231, 0.21);
+  --studio-fill-subtle: rgba(219, 222, 231, 0.05);
+  --studio-fill-hover: rgba(255, 255, 255, 0.06);
+  --studio-fill-selected: rgba(170, 163, 225, 0.1);
+  --studio-focus-ring: #ffffff;
+  --studio-warning: #dd6800;
+}
+
+/* Light palette uses the same semantic roles and component geometry */
+[data-theme="light"] {
+  color-scheme: light;
+  --studio-bg-canvas: #ffffff;
+  --studio-bg-panel: #ffffff;
+  --studio-bg-elevated: #ffffff;
+  --studio-bg-sidebar: #ffffff;
+  --studio-bg-track: #ffffff;
+  --studio-bg-secondary: #ffffff;
+  --studio-bg-promo: #ffffff;
+  --studio-text-primary: #24242b;
+  --studio-text-secondary: rgba(36, 36, 43, 0.65);
+  --studio-text-tertiary: #777580;
+  --studio-text-strong: #101013;
+  --studio-text-subtle: #666471;
+  --studio-action-primary-bg: #202026;
+  --studio-action-primary-text: #ffffff;
+  --studio-border-default: rgba(36, 36, 43, 0.18);
+  --studio-border-subtle: rgba(36, 36, 43, 0.12);
+  --studio-border-input: rgba(36, 36, 43, 0.2);
+  --studio-fill-subtle: rgba(36, 36, 43, 0.04);
+  --studio-fill-hover: rgba(36, 36, 43, 0.06);
+  --studio-fill-selected: rgba(111, 102, 165, 0.12);
+  --studio-focus-ring: #47414f;
+  --studio-warning: #a74600;
+}
+
+:root {
+  --studio-font-family-ui: "Century Gothic", sans-serif;
+  --studio-font-family-code: "JetBrains Mono", monospace;
+  --studio-font-size-xs: 12px;
+  --studio-font-size-sm: 13px;
+  --studio-font-size-md: 14px;
+  --studio-font-size-lg: 16px;
+  --studio-font-size-xl: 20px;
+  --studio-font-size-2xl: 24px;
+  --studio-line-height-xs: 18px;
+  --studio-line-height-sm: 20px;
+  --studio-line-height-md: 22px;
+  --studio-line-height-lg: 24px;
+  --studio-font-weight-regular: 400;
+  --studio-font-weight-bold: 700;
+  --studio-size-icon-xs: 10px;
+  --studio-size-icon-sm: 14px;
+  --studio-size-icon-md: 16px;
+  --studio-size-icon-lg: 20px;
+  --studio-size-control-xs: 26px;
+  --studio-size-control-sm: 32px;
+  --studio-size-control-md: 36px;
+  --studio-size-control-lg: 40px;
+  --studio-size-sidebar: 240px;
+  --studio-size-resource-card: 336px;
+  --studio-radius-sm: 6px;
+  --studio-radius-md: 8px;
+  --studio-radius-lg: 12px;
+  --studio-radius-xl: 16px;
+  --studio-radius-2xl: 20px;
+  --studio-radius-pill: 999px;
+  --studio-space-1: 2px;
+  --studio-space-2: 4px;
+  --studio-space-3: 8px;
+  --studio-space-4: 12px;
+  --studio-space-5: 16px;
+  --studio-space-6: 20px;
+  --studio-space-7: 24px;
+  --studio-space-8: 32px;
+  --studio-motion-duration-fast: 140ms;
+  --studio-motion-duration-normal: 160ms;
+  --studio-motion-duration-slow: 240ms;
+  --studio-motion-easing-standard: cubic-bezier(0.2, 0, 0, 1);
+  --studio-motion-easing-enter: cubic-bezier(0, 0, 0.2, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --studio-motion-duration-fast: 0ms;
+    --studio-motion-duration-normal: 0ms;
+    --studio-motion-duration-slow: 0ms;
+  }
+}

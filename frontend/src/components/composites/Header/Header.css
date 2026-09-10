@@ -1,0 +1,152 @@
+/* Figma: Ig6wLTUxhfAxb20bKrXqh1 / 813:399281 */
+.studio-header {
+  box-sizing: border-box;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 1042px;
+  height: 60px;
+  color: var(--studio-text-primary, #dbdee7);
+  font-family: "Century Gothic", sans-serif;
+  font-style: normal;
+  font-weight: 400;
+  font-synthesis: none;
+}
+
+.studio-header__identity {
+  display: flex;
+  flex: 1 1 0;
+  align-items: center;
+  gap: 20px;
+  min-width: 0;
+}
+
+.studio-header__avatar {
+  position: relative;
+  flex: 0 0 60px;
+  width: 60px;
+  height: 60px;
+  overflow: hidden;
+  border-radius: 100px;
+  background: #0015ff;
+}
+
+.studio-header__avatar-background,
+.studio-header__avatar-shade {
+  position: absolute;
+  left: -2.2177734375px;
+  top: -2.499835968px;
+  width: 62.767856598px;
+  height: 63.333332062px;
+}
+
+.studio-header__avatar-background {
+  object-fit: cover;
+  transform: scaleY(-1);
+}
+
+.studio-header__avatar-shade {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.studio-header__avatar-letter {
+  position: absolute;
+  left: 14.16650390625px;
+  top: 14.16650390625px;
+  width: 33.333332062px;
+  height: 33.333332062px;
+}
+
+.studio-header__content {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 5px;
+  min-width: 0;
+}
+
+.studio-header__heading {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  height: 32px;
+}
+
+.studio-header__title {
+  margin: 0;
+  color: var(--studio-text-primary, #dbdee7);
+  font: inherit;
+  font-size: 26px;
+  line-height: 32px;
+  letter-spacing: 0.078px;
+  white-space: nowrap;
+}
+
+.studio-header__status {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 80px;
+  height: 23px;
+  padding: 2.5px 10.5px;
+  border-radius: 40px;
+  box-shadow: inset 0 0 0 0.5px var(--studio-border-default, rgba(255, 255, 255, 0.2));
+  color: var(--studio-text-primary, #dbdee7);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 18px;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+.studio-header__status > img {
+  display: block;
+  width: 7px;
+  height: 7px;
+}
+
+.studio-header__description {
+  width: 100%;
+  margin: 0;
+  overflow: hidden;
+  color: var(--studio-text-secondary, rgba(219, 222, 231, 0.6));
+  font-size: 14px;
+  line-height: 21px;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.studio-header__actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 12px;
+}
+
+.studio-header .studio-button {
+  width: 80px;
+  height: 36px;
+  padding: 7px 12px;
+}
+
+.studio-header .studio-button__icon {
+  flex-basis: 16px;
+  width: 16px;
+  height: 16px;
+}
+
+.studio-header .studio-button__icon > img {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+.studio-header .studio-header__chat {
+  font-family: "PingFang SC", sans-serif;
+  box-shadow: inset 0 0 0 0.5px var(--studio-text-subtle, #b8b7c3);
+}

@@ -1,0 +1,46 @@
+@font-face {
+  font-family: "Resource Didact Gothic";
+  src: url("../../components/layouts/ResourcePageLayout/assets/DidactGothic-Regular.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+.resource-page-preview-banner { position: relative; width: 1040px; height: 160px; overflow: hidden; border-radius: 16px; background: #e9e9e9; }
+.resource-page-preview-banner__background { position: absolute; left: -4px; top: -270px; width: 1044px; height: 585px; }
+.resource-page-preview-banner__background img { width: 100%; height: 100%; object-fit: cover; }
+.resource-page-preview-banner__background::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90.167532deg, rgba(57,28,24,.56) 1.7991%, transparent 50.857%, rgba(0,0,0,.56) 99.915%); }
+.resource-page-preview-banner__copy { position: absolute; left: 34px; top: 29px; width: 604px; }
+.resource-page-preview-banner__copy h3 { width: max-content; height: 35.2133px; margin: 0 0 0 7.48486px; color: white; font: 400 24px/36px "Resource Didact Gothic", sans-serif; transform: skewX(-12deg) scaleY(.97815); transform-origin: left top; }
+.resource-page-preview-banner__copy p { margin: 2px 0 16px; color: rgba(255,255,255,.6); font-size: 14px; line-height: 21px; }
+.resource-page-preview-banner .resource-page-preview-banner__button { width: 136px; height: 37px; border: 1px solid rgba(255,255,255,.8); border-radius: 12px; padding: 7px 12px; gap: 10px; background: rgba(255,255,255,.1); backdrop-filter: blur(3.5px); color: rgba(255,255,255,.6); line-height: 21px; }
+.resource-page-preview-banner__button .studio-button__icon img { width: 16px; height: 16px; }
+.resource-page-preview-banner__agent { position: absolute; left: 778px; top: 26px; width: 61.725px; height: 62.125px; }
+.resource-page-preview-banner__agent-label { position: absolute; left: 761px; top: 90px; color: white; font-family: "PingFang SC", sans-serif; font-size: 14px; font-weight: 500; line-height: 22px; }
+.resource-page-preview-banner__decoration { position: absolute; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(255,255,255,.11); opacity: .3; border-radius: 12px; }
+.resource-page-preview-banner__decoration--left { left: 671.94px; top: 87.94px; width: 58.565px; height: 58.565px; box-sizing: border-box; transform: rotate(-26.29deg); }
+.resource-page-preview-banner__decoration--left img { width: 25px; height: 25px; transform: rotate(-3.71deg); }
+.resource-page-preview-banner__decoration--right { left: 894.012px; top: 94.012px; width: 58px; height: 58px; box-sizing: border-box; transform: rotate(45deg); }
+.resource-page-preview-banner__decoration--right img { width: 26px; height: 26px; }
+.resource-page-preview-banner__branches { position: absolute; left: 714.5px; top: 116.5px; width: 187px; height: 60px; }
+.resource-page-preview-search { display: flex; align-items: center; gap: 4px; box-sizing: border-box; width: 248px; height: 32px; padding: 0 8.5px; border-radius: 8px; background: var(--studio-bg-elevated, #1c1c1e); box-shadow: inset 0 0 0 .5px var(--studio-border-input, rgba(219,222,231,.21)); }
+.resource-page-preview-search > img { width: 12.25px; height: 12.25px; margin: .875px; }
+.resource-page-preview-search input { min-width: 0; width: 100%; padding: 0; border: 0; outline: none; background: transparent; color: var(--studio-text-primary, #dbdee7); font: 400 13px/22px "Century Gothic", sans-serif; letter-spacing: .039px; }
+.resource-page-preview-search input::placeholder { color: var(--studio-text-tertiary, #7a7880); opacity: 1; }
+.resource-page-preview-search:focus-within { outline: auto; }
+.resource-page-preview-create { width: 138px; }
+.resource-page-preview-create .studio-button__icon img { width: 16px; height: 16px; }
+.resource-page-preview-card { position: relative; }
+.resource-page-preview-avatar { position: absolute; width: 37px; height: 37px; left: -.5px; top: -.5px; }
+.resource-page-preview-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.resource-page-preview-avatar span { position: absolute; inset: 0; background: rgba(0,0,0,.4); }
+.resource-page-preview-avatar--gear { width: 54px; height: 50px; left: -8.5px; top: -6.5px; }
+.resource-page-preview-avatar--flipped { width: 38px; height: 38px; left: -1.5px; top: -1.5px; transform: scaleY(-1); }
+.resource-page-preview-avatar--large { width: 38px; height: 38px; left: -1.5px; top: -1.5px; }
+.resource-page-preview-avatar--query { width: 38px; height: 38px; left: -1.5px; top: -1.5px; }
+.resource-page-preview-avatar--query span { background: rgba(0,0,0,.3); }
+.resource-page-preview-avatar--support { width: 39px; height: 39px; left: -1.5px; top: -1.5px; transform: scaleX(-1); }
+.resource-page-preview-avatar-letter { position: absolute; left: 8px; top: 8px; width: 20px; height: 20px; }
+.resource-page-preview-tag { position: absolute; top: 25.5px; display: flex; align-items: center; box-sizing: border-box; height: 22px; padding: 0 6px; border-radius: 6px; box-shadow: inset 0 0 0 .5px rgba(210,209,224,.3); color: var(--studio-text-primary, #dbdee7); font-size: 12px; line-height: 18px; }
+.resource-page-preview-tag--gearsync { left: 149.5px; width: 52px; }
+.resource-page-preview-tag--supporthub { left: 164.5px; width: 77px; }
+.resource-page-preview-draft { position: absolute; right: 20.5px; top: 25.5px; display: flex; align-items: center; height: 22px; color: #dd6800; font: 400 12px/18px "Resource Didact Gothic", sans-serif; }

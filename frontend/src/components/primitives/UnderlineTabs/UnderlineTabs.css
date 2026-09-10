@@ -1,0 +1,81 @@
+/* Figma: Ig6wLTUxhfAxb20bKrXqh1 / 813:399365 */
+.studio-underline-tabs {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+  box-sizing: border-box;
+  width: 100%;
+  height: 28px;
+  isolation: isolate;
+}
+
+.studio-underline-tabs::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 0.5px;
+  background: rgba(219, 222, 231, 0.09);
+  content: "";
+  z-index: -1;
+}
+
+.studio-underline-tabs__tab {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  max-width: 200px;
+  height: 28px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #dbdee7;
+  font-family: "Century Gothic", sans-serif;
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 400;
+  font-synthesis: none;
+  line-height: 1.3;
+  letter-spacing: 0;
+  text-align: left;
+  opacity: 0.4;
+  cursor: pointer;
+  transition: opacity 140ms ease;
+}
+
+.studio-underline-tabs__tab[aria-selected="true"] {
+  opacity: 1;
+}
+
+.studio-underline-tabs[data-indicator-ready]::before {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: var(--tab-indicator-width);
+  height: 1.5px;
+  background: #dbdee7;
+  transform: translateX(var(--tab-indicator-left));
+  transition: transform 160ms ease, width 160ms ease;
+  pointer-events: none;
+  content: "";
+}
+
+@media (hover: hover) {
+  .studio-underline-tabs__tab[aria-selected="false"]:hover { opacity: 0.7; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .studio-underline-tabs__tab,
+  .studio-underline-tabs[data-indicator-ready]::before { transition: none; }
+}
+
+.studio-underline-tabs__label {
+  min-width: 0;
+  height: 100%;
+  overflow-wrap: anywhere;
+}

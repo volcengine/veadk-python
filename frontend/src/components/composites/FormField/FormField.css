@@ -1,0 +1,24 @@
+/* Figma: Ig6wLTUxhfAxb20bKrXqh1 / 740:309614 */
+.studio-form-field {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  width: 432px;
+  max-width: 100%;
+}
+
+.studio-form-field__label {
+  display: block;
+  margin: 0;
+  padding: 0;
+  color: var(--studio-text-primary, #dbdee7);
+  font-family: "Century Gothic", sans-serif;
+  font-size: 14px;
+  font-style: normal;
+  font-weight: 400;
+  font-synthesis: none;
+  line-height: 22px;
+  letter-spacing: 0;
+}

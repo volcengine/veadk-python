@@ -1,0 +1,12 @@
+/* Exact item frame widths from Figma node 849:443534 */
+.pill-tabs-preview-specimen > :nth-child(1) {
+  width: 90px;
+}
+
+.pill-tabs-preview-specimen > :nth-child(2) {
+  width: 91px;
+}
+
+.pill-tabs-preview-specimen > :nth-child(3) {
+  width: 111px;
+}

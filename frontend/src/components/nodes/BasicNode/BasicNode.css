@@ -1,0 +1,79 @@
+/* Figma: Ig6wLTUxhfAxb20bKrXqh1 / 740:291164 */
+.studio-basic-node {
+  position: relative;
+  box-sizing: border-box;
+  width: 129px;
+  height: 51px;
+  padding: 0.5px;
+  overflow: hidden;
+  border-radius: 16px;
+  background: var(--studio-surface-node, rgba(38, 38, 46, 0.37));
+  box-shadow: inset 0 0 0 0.5px var(--studio-border-default, rgba(255, 255, 255, 0.2));
+  backdrop-filter: blur(15px);
+  color: var(--studio-text-primary, #dbdee7);
+  font-family: "Century Gothic", sans-serif;
+  font-size: 14px;
+  font-style: normal;
+  font-weight: 400;
+  font-synthesis: none;
+  line-height: 22px;
+  letter-spacing: 0;
+}
+
+.studio-basic-node__glow {
+  position: absolute;
+  left: 49.3px;
+  top: -20.2px;
+  width: 170.61756px;
+  height: 96.716414px;
+  max-width: none;
+  pointer-events: none;
+}
+
+.studio-basic-node__surface {
+  position: relative;
+  box-sizing: border-box;
+  width: 100%;
+  height: 50px;
+  padding: 6px 8px;
+  overflow: hidden;
+  border-radius: 16px;
+  backdrop-filter: blur(6.45px);
+}
+
+.studio-basic-node__row {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 38px;
+  padding-block: 1px;
+  border-radius: 6px;
+}
+
+.studio-basic-node__icon {
+  box-sizing: border-box;
+  display: flex;
+  flex: 0 0 36px;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+  background: var(--studio-surface-node-body, rgba(37, 37, 42, 0.48));
+  box-shadow: inset 0 0 0 0.5px var(--studio-border-default, rgba(255, 255, 255, 0.2));
+  backdrop-filter: blur(15px);
+}
+
+.studio-basic-node__icon > svg,
+.studio-basic-node__icon > img {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+.studio-basic-node__title {
+  flex: 0 0 auto;
+  text-align: center;
+  white-space: nowrap;
+}

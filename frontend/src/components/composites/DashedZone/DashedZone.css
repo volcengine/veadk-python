@@ -1,0 +1,62 @@
+/* Figma: Ig6wLTUxhfAxb20bKrXqh1 / 849:443867 */
+.studio-dashed-zone {
+  position: relative;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 380px;
+  height: 68px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--studio-surface-dashed, rgba(255, 255, 255, 0.03));
+}
+
+.studio-dashed-zone__border {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.studio-dashed-zone__border rect {
+  width: calc(100% - 1px);
+  height: calc(100% - 1px);
+  fill: none;
+  stroke: var(--studio-border-dashed, rgba(255, 255, 255, 0.15));
+  stroke-width: 1px;
+  stroke-dasharray: 2 2;
+}
+
+.studio-dashed-zone__button {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  gap: 4px;
+  min-width: 72px;
+  height: 32px;
+  margin: 0;
+  padding: 5px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--studio-text-primary, #dbdee7);
+  font-family: "Century Gothic", sans-serif;
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 400;
+  font-synthesis: none;
+  line-height: 16px;
+  letter-spacing: 0;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.studio-dashed-zone__icon {
+  display: block;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+}

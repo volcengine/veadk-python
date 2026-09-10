@@ -1,0 +1,128 @@
+/* Component-specific theme colors; dark values preserve the supplied Figma nodes */
+:root, [data-theme="dark"] {
+  --studio-surface-input: #111112;
+  --studio-text-input: #c2c5cc;
+  --studio-text-preview: #a1a1aa;
+  --studio-text-counter: #737a87;
+  --studio-text-muted: rgba(219,222,231,.4);
+  --studio-text-dim: rgba(219,222,231,.5);
+  --studio-text-count: rgba(255,255,255,.6);
+  --studio-surface-page: #0c0c0c;
+  --studio-surface-modal: #1a1a1d;
+  --studio-surface-metric: rgba(32,33,36,.39);
+  --studio-surface-node: rgba(38,38,46,.37);
+  --studio-surface-node-selected: rgba(38,38,46,.45);
+  --studio-surface-node-body: rgba(37,37,42,.48);
+  --studio-surface-node-body-selected: rgba(69,70,83,.29);
+  --studio-surface-count: rgba(17,17,17,.54);
+  --studio-surface-dashed: rgba(255,255,255,.03);
+  --studio-border-dashed: rgba(255,255,255,.15);
+  --studio-border-control: rgba(219,222,231,.2);
+  --studio-border-emphasis: rgba(219,222,231,.7);
+  --studio-surface-checkbox: rgba(17,17,18,.7);
+  --studio-surface-status: rgba(235,235,245,.1);
+  --studio-surface-item: rgba(229,229,229,.06);
+  --studio-surface-item-icon: rgba(0,0,0,.31);
+  --studio-surface-glass-group: rgba(28,28,30,.2);
+  --studio-surface-glass-button: rgba(45,45,45,.2);
+  --studio-surface-sidebar-overlay: rgba(255,255,255,.02);
+  --studio-surface-update: rgba(255,255,255,.25);
+  --studio-code-text: #abb2bf;
+  --studio-code-line-number: #5c6370;
+  --studio-code-comment: #7f848e;
+  --studio-code-keyword: #c678dd;
+  --studio-code-string: #98c379;
+  --studio-code-function: #61afef;
+  --studio-code-number: #d19a66;
+  --studio-code-variable: #e06c75;
+  --studio-code-constant: #e5c07b;
+  --studio-action-hover: #e9e9ec;
+  --studio-action-active: #dbdee7;
+  --studio-secondary-hover: #323234;
+  --studio-secondary-active: #3b3b3e;
+}
+
+[data-theme="light"] {
+  --studio-surface-input: #ffffff;
+  --studio-text-input: #24262b;
+  --studio-text-preview: #626571;
+  --studio-text-counter: #737a87;
+  --studio-text-muted: #767b87;
+  --studio-text-dim: #686d79;
+  --studio-text-count: #555b67;
+  --studio-surface-page: #ffffff;
+  --studio-surface-modal: #ffffff;
+  --studio-surface-metric: #ffffff;
+  --studio-surface-node: #ffffff;
+  --studio-surface-node-selected: rgba(248,250,255,.9);
+  --studio-surface-node-body: #ffffff;
+  --studio-surface-node-body-selected: rgba(239,243,255,.72);
+  --studio-surface-count: #ffffff;
+  --studio-surface-dashed: #ffffff;
+  --studio-border-dashed: rgba(16,16,19,.2);
+  --studio-border-control: rgba(16,16,19,.24);
+  --studio-border-emphasis: rgba(16,16,19,.65);
+  --studio-surface-checkbox: #ffffff;
+  --studio-surface-status: #ffffff;
+  --studio-surface-item: #ffffff;
+  --studio-surface-item-icon: #ffffff;
+  --studio-surface-glass-group: #ffffff;
+  --studio-surface-glass-button: #ffffff;
+  --studio-surface-sidebar-overlay: #ffffff;
+  --studio-surface-update: rgba(16,16,19,.1);
+  --studio-code-text: #383a42;
+  --studio-code-line-number: #8b8e98;
+  --studio-code-comment: #69717e;
+  --studio-code-keyword: #a626a4;
+  --studio-code-string: #397300;
+  --studio-code-function: #0066a8;
+  --studio-code-number: #986801;
+  --studio-code-variable: #b52a3a;
+  --studio-code-constant: #986801;
+  --studio-action-hover: #303039;
+  --studio-action-active: #44444f;
+  --studio-secondary-hover: #e3e5eb;
+  --studio-secondary-active: #d8dce4;
+}
+
+/* Kept separate from animation-owned component files */
+[data-theme="light"] .studio-button--primary { background: var(--studio-action-primary-bg); color: var(--studio-action-primary-text); }
+[data-theme="light"] .studio-button--secondary { background: var(--studio-bg-secondary); color: var(--studio-text-strong); }
+[data-theme="light"] .studio-button--ghost { color: var(--studio-text-secondary); }
+[data-theme="light"] .studio-button--primary:not(:disabled):hover { background: var(--studio-action-hover); }
+[data-theme="light"] .studio-button--primary:not(:disabled):active { background: var(--studio-action-active); }
+[data-theme="light"] .studio-button--secondary:not(:disabled):hover { background: var(--studio-secondary-hover); }
+[data-theme="light"] .studio-button--secondary:not(:disabled):active { background: var(--studio-secondary-active); }
+[data-theme="light"] .studio-button--ghost:not(:disabled):hover { color: var(--studio-text-primary); }
+[data-theme="light"] .studio-button--ghost:not(:disabled):active { color: var(--studio-text-strong); }
+[data-theme="light"] .studio-underline-tabs__tab, [data-theme="light"] .studio-filter-tabs > button { color: var(--studio-text-primary); }
+[data-theme="light"] .studio-underline-tabs::after { background: color-mix(in srgb, var(--studio-text-primary) 9%, transparent); }
+[data-theme="light"] .studio-underline-tabs__tab[aria-selected="true"]::after,
+[data-theme="light"] .studio-underline-tabs[data-indicator-ready]::before { background: var(--studio-text-primary); }
+[data-theme="light"] .studio-pill-tabs { background: var(--studio-bg-track); }
+[data-theme="light"] .studio-pill-tabs__tab { color: var(--studio-text-tertiary); }
+[data-theme="light"] .studio-pill-tabs__tab[aria-selected="true"] { color: var(--studio-text-primary); }
+[data-theme="light"] .studio-pill-tabs[data-indicator-ready]::before { background: var(--studio-fill-selected); }
+[data-theme="light"] .studio-pill-tabs__tab[aria-selected="false"]:hover { color: var(--studio-text-primary); background: var(--studio-fill-hover); }
+
+[data-theme="light"] .studio-textarea,
+[data-theme="light"] .studio-select { background: var(--studio-surface-input); box-shadow: inset 0 0 0 .5px var(--studio-border-input); }
+[data-theme="light"] .studio-switch__track { background: #d2d6df; }
+[data-theme="light"] .studio-switch__input:checked + .studio-switch__track { background: var(--studio-action-primary-bg); }
+[data-theme="light"] .studio-canvas-background { background: #ffffff; }
+[data-theme="light"] .studio-canvas-background__dots { background-image: radial-gradient(circle at 1px 1px, rgba(16,16,19,.12) 1px, transparent 1px); }
+[data-theme="light"] .studio-detail-sidebar__brand > span,
+[data-theme="light"] .studio-detail-sidebar__account-actions > .studio-detail-sidebar__update { color: var(--studio-text-primary); }
+[data-theme="light"] .studio-promo-card { background: #ffffff; }
+[data-theme="light"] .studio-glass-icon-button::before,
+[data-theme="light"] .studio-glass-icon-button-group::before { background: linear-gradient(135deg, rgba(255,255,255,.9), rgba(16,16,19,.12) 45%, rgba(16,16,19,.08) 65%, rgba(255,255,255,.8)); }
+
+/* Only monochrome UI glyphs change; artwork, avatars, status colors and glows stay intact */
+[data-theme="light"] :is(.studio-agent-node__heading, .studio-agent-node__counts, .studio-basic-node__icon, .studio-dashed-zone__button, .studio-form-label-row__action, .studio-code-block__header, .studio-glass-icon-button, .studio-glass-icon-button-group, .studio-header__edit, .studio-card-layout__icon, .studio-card-layout__close, .studio-modal-layout__close, .studio-item__action, .studio-detail-sidebar__brand, .studio-detail-sidebar__account-actions, .studio-sidebar-item__icon, .detail-page-preview__back, .resource-page-preview-search) img {
+  filter: brightness(.32);
+}
+[data-theme="light"] .studio-select__arrow,
+[data-theme="light"] .studio-textarea__resizer,
+[data-theme="light"] .studio-pill-tag[aria-pressed="false"] .studio-pill-tag__state img { filter: brightness(.45); }
+[data-theme="light"] .studio-header__chat .studio-button__icon img { filter: brightness(0) invert(1); }
+[data-theme="light"] .studio-checkbox__checkmark { filter: brightness(.15); }

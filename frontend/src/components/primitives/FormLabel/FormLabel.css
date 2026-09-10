@@ -1,0 +1,17 @@
+/* Figma 632:252853 */
+.studio-form-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  color: var(--studio-text-secondary, rgba(219, 222, 231, .6));
+  font-family: "Century Gothic", sans-serif;
+  font-size: 13px;
+  font-weight: 400;
+  font-synthesis: none;
+  line-height: 22px;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+.studio-form-label__required { flex: 0 0 6px; width: 6px; height: 6px; }

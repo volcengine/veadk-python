@@ -12,7 +12,8 @@
     "test:webui-assets": "node scripts/verifyBuiltAssets.mjs",
     "test:visualizations": "node scripts/testVisualizationCompatibility.mjs",
     "test:harness-sidecar-coverage": "vitest run --coverage -c vitest.harness-sidecar.config.ts",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "dev:components": "vite --config vite.components.config.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

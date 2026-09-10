@@ -1,0 +1,26 @@
+.sidebar-preview-specimen {
+  display: flex;
+  flex-direction: column;
+  width: 224px;
+  max-width: 100%;
+}
+
+.sidebar-preview-examples {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 40px;
+}
+
+.sidebar-preview-state-title {
+  margin: 0 0 16px;
+  color: var(--studio-text-preview, #a1a1aa);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 20px;
+}
+
+/* Figma 817:442000: 36px items separated by 4px */
+.sidebar-preview-specimen > .studio-sidebar-item + .studio-sidebar-item {
+  margin-top: 4px;
+}

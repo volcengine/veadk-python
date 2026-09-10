@@ -1,0 +1,45 @@
+/* Figma 849:443301 */
+.studio-info-card {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 14px;
+  width: 249.75px;
+  padding: 20px 24px;
+  border-radius: 14px;
+  background: var(--studio-surface-metric, rgba(32, 33, 36, .39));
+  color: var(--studio-text-primary, #dbdee7);
+}
+.studio-info-card__title {
+  width: 100%;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: "Century Gothic", sans-serif;
+  font-size: 12px;
+  font-weight: 400;
+  font-synthesis: none;
+  line-height: 15px;
+  opacity: .6;
+}
+.studio-info-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  min-width: 0;
+  font-family: "JetBrains Mono", monospace;
+  font-weight: 400;
+  font-synthesis: none;
+}
+.studio-info-card__value, .studio-info-card__description {
+  width: 100%;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.studio-info-card__value { font-size: 24px; line-height: 36px; letter-spacing: -1.44px; }
+.studio-info-card__description { font-size: 12px; line-height: 16px; color: var(--studio-text-secondary, rgba(219, 222, 231, .6)); }

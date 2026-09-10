@@ -1,0 +1,128 @@
+/* Figma: Ig6wLTUxhfAxb20bKrXqh1 / 631:247425 */
+.studio-resource-card {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 20px;
+  width: 336px;
+  height: 169px;
+  padding: 18.5px 20.5px;
+  border-radius: 16px;
+  background: var(--studio-bg-panel, #111111);
+  box-shadow: inset 0 0 0 0.5px var(--studio-border-default, rgba(255, 255, 255, 0.2));
+  color: var(--studio-text-primary, #dbdee7);
+  font-family: "Century Gothic", sans-serif;
+  font-style: normal;
+  font-weight: 400;
+  font-synthesis: none;
+  letter-spacing: 0;
+}
+
+.studio-resource-card__content {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.studio-resource-card__heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  min-width: 0;
+}
+
+.studio-resource-card__avatar {
+  position: relative;
+  flex: 0 0 36px;
+  width: 36px;
+  height: 36px;
+  overflow: hidden;
+  border-radius: 60px;
+  background: #32353a;
+}
+
+.studio-resource-card__avatar-background,
+.studio-resource-card__avatar-shade {
+  position: absolute;
+  left: -0.5px;
+  top: -0.5px;
+  width: 37px;
+  height: 37px;
+  object-fit: cover;
+}
+
+.studio-resource-card__avatar-shade {
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.studio-resource-card__avatar-letter {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  width: 20px;
+  height: 20px;
+}
+
+.studio-resource-card__title {
+  margin: 0;
+  overflow: hidden;
+  color: var(--studio-text-primary, #dbdee7);
+  font: inherit;
+  font-size: 16px;
+  line-height: 24px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.studio-resource-card__description {
+  display: -webkit-box;
+  width: 100%;
+  height: 40px;
+  margin: 0;
+  overflow: hidden;
+  color: var(--studio-text-secondary, rgba(219, 222, 231, 0.6));
+  font-size: 13px;
+  line-height: 19.5px;
+  text-overflow: ellipsis;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.studio-resource-card__footer {
+  display: flex;
+  flex: 0 0 28px;
+  align-items: center;
+  width: 100%;
+  height: 28px;
+}
+
+.studio-resource-card__metadata {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--studio-text-secondary, rgba(219, 222, 231, 0.6));
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.studio-resource-card__divider {
+  position: relative;
+  flex: 0 0 0;
+  width: 0;
+  height: 12px;
+}
+
+.studio-resource-card__divider img {
+  position: absolute;
+  left: -5.5px;
+  top: 5.5px;
+  width: 12px;
+  height: 1px;
+  transform: rotate(90deg);
+}
