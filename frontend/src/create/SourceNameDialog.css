@@ -1,0 +1,22 @@
+.source-name-dialog {
+  width: min(420px, calc(100vw - 40px));
+}
+
+.source-name-dialog .sandbox-control-head {
+  grid-template-columns: minmax(0, 1fr) 32px;
+  padding-inline: 18px;
+}
+
+.source-name-dialog .sandbox-control-head-icon { display: none; }
+.source-name-dialog .sandbox-control-head h2 { font-size: 17px; font-weight: 600; }
+.source-name-dialog form { min-height: 0; overflow: auto; }
+.source-name-body { display: grid; gap: 8px; }
+.source-name-body .cw-label,
+.source-name-body .cw-help,
+.source-name-body .cw-error-text { margin: 0; }
+.source-name-dialog .source-name-body p.cw-help { display: block; font-size: 12px; }
+.source-name-body .cw-input { height: 36px; padding-block: 0; }
+.source-name-actions .source-name-save { flex: 0 0 36px; width: 36px; height: 36px; padding: 0; }
+.source-name-actions .source-name-save svg { width: 18px; height: 18px; }
+.source-name-count { margin-right: auto; color: hsl(var(--muted-foreground)); font-size: 12px; }
+.source-name-dialog .sandbox-control-close:disabled { opacity: .5; cursor: default; }

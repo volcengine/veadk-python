@@ -226,6 +226,27 @@ test("text-only intelligent client uses its fixed endpoint and omits skills", as
   ]);
 });
 
+test("optimization session titles fit the session limit without changing project identity", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = previousFetch; });
+  const requests = [];
+  globalThis.fetch = async (_url, init) => {
+    requests.push(JSON.parse(init.body));
+    return Response.json({ sessionId: "dev-1", status: "Creating" });
+  };
+  const projectName = "迁移项目🚀".repeat(24);
+  await intelligentDevelopmentClient.startSession({
+    displayName: `  ${projectName}  `,
+    projectId: "project-1",
+    baseVersionId: "version-1",
+  });
+  assert.deepEqual(requests, [{
+    displayName: Array.from(projectName).slice(0, 40).join(""),
+    projectId: "project-1",
+    baseVersionId: "version-1",
+  }]);
+});
+
 test("intelligent reconnect parses the restored conversation snapshot", async (t) => {
   const previousFetch = globalThis.fetch;
   t.after(() => {

@@ -135,6 +135,10 @@
     "requestFailed": "Knowledge base request failed ({{status}})"
   },
   "intelligentDevelopment": {
+    "invalidName": "Names must contain 1–128 characters, without control or invisible formatting characters, or < >.",
+    "renameProjectFailed": "Unable to update the project name",
+    "renameVersionFailed": "Unable to update the version name",
+    "invalidNameUpdateResponse": "The name update response does not match the request. Refresh and try again.",
     "invalidSourceSnapshot": "The source snapshot response has an invalid format.",
     "invalidProjectList": "The project list response has an invalid format.",
     "invalidProjectVersion": "The project version response has an invalid format.",

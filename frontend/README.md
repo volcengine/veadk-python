@@ -95,6 +95,15 @@ See [deployment and operation](service/studio_release_notifier/README.md).
   versions; any version can be restored into the intelligent-development flow
   for another intent-driven iteration after the temporary migration environment
   has ended.
+  Pencil icons beside project and version names open the existing-style name
+  dialog; the check icon saves and the close icon cancels. Names are normalized
+  and trimmed, allow 1–128 Unicode characters, and reject control/invisible
+  formatting characters and `<` / `>` on both client and server. They are plain
+  display text: renaming never changes source archives, validation reports,
+  version IDs/order, the latest-version marker, or deployed Runtime names.
+  Historical names remain compatible; optional display metadata is stored
+  separately from immutable versions. Optimization session titles retain the
+  existing 40-character limit without shortening the saved project name.
 - **Reasoning & tool calls** shown inline (collapsible "thinking", tool blocks).
 - **Agent context rail** keeps the selected Agent's description, model, tools,
   skills, and optional live multi-Agent topology together in the conversation's
