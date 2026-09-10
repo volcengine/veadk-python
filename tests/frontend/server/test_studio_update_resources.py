@@ -130,10 +130,27 @@ def test_reconcile_studio_update_resources_reuses_existing_resources(
 def test_reconcile_studio_update_resources_provisions_missing_resources(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    workspace_models = []
+
+    def workspace_tool(client, image, provider, model_environment):
+        assert provider == "byteplus"
+        workspace_models.append(model_environment)
+        return "workspace-tool"
+
+    def model_token(**kwargs):
+        assert kwargs == {
+            "cloud_provider": "byteplus",
+            "region": "ap-southeast-1",
+            "access_key": "ak",
+            "secret_key": "sk",
+            "session_token": "token",
+        }
+        return "test-workspace-model-token"
+
     monkeypatch.setattr(
-        "frontend.server.workspace_tool.provision_workspace_tool",
-        lambda **kwargs: "workspace-tool",
+        "frontend.server.workspace_tool.ensure_workspace_tool", workspace_tool
     )
+    monkeypatch.setattr("veadk.auth.veauth.ark_veauth.get_ark_token", model_token)
     storage_calls: list[dict[str, Any]] = []
     tool_calls: list[dict[str, Any]] = []
 
@@ -171,6 +188,10 @@ def test_reconcile_studio_update_resources_provisions_missing_resources(
         session_token="token",
     )
 
+    assert len(workspace_models) == 1
+    assert workspace_models[0]["MODEL_AGENT_API_KEY"] == "test-workspace-model-token"
+    assert workspace_models[0]["MODEL_AGENT_NAME"]
+    assert workspace_models[0]["MODEL_AGENT_BASE_URL"].startswith("https://")
     assert overrides == {
         "STUDIO_WORKSPACE_TOOL_ID": "workspace-tool",
         "VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY": "generated-key",

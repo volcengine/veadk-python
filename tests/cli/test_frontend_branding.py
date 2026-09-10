@@ -108,11 +108,13 @@ def test_resolve_site_logo_downloads_network_image(
     ("title_args", "expected_site_title"),
     [([], None), (["--site-title", "火山助手"], "火山助手")],
 )
+@pytest.mark.parametrize("workspace_id", [None, "existing-studio-tool"])
 def test_studio_deploy_bundles_logo_and_optional_title(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     title_args: list[str],
     expected_site_title: str | None,
+    workspace_id: str | None,
 ) -> None:
     logo_path = tmp_path / "logo.png"
     logo_path.write_bytes(_PNG)
@@ -180,9 +182,28 @@ def test_studio_deploy_bundles_logo_and_optional_title(
         "veadk.cli.frontend_skill_creator.ensure_skill_creator_model_credential",
         lambda **_: None,
     )
+    from threading import Event
+
+    workspace_started = Event()
+    other_tool_started = Event()
+
+    def create_code_tool(**kwargs):
+        other_tool_started.set()
+        if workspace_id is None:
+            assert workspace_started.wait(5), "Studio Sandbox must start concurrently"
+        return f"auto-{kwargs['name']}"
+
+    monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.ensure_studio_code_env_tool",
+        create_code_tool,
+    )
     workspace_calls = []
 
     def provision_workspace(**kwargs):
+        workspace_started.set()
+        assert other_tool_started.wait(5), (
+            "Other tools must not wait for Studio Sandbox"
+        )
         workspace_calls.append(kwargs)
         return "studio-workspace-tool"
 
@@ -219,13 +240,20 @@ def test_studio_deploy_bundles_logo_and_optional_title(
         "--site-logo",
         str(logo_path),
     ]
+    if workspace_id:
+        args.extend(["--studio-sandbox-tool-id", workspace_id])
     result = CliRunner().invoke(studio, args + title_args)
 
     assert result.exit_code == 0, result.output
-    assert len(workspace_calls) == 1
-    assert workspace_calls[0]["provider"] == "volcengine"
-    assert workspace_calls[0]["access_key"] == "ak"
-    assert environments["STUDIO_WORKSPACE_TOOL_ID"] == "studio-workspace-tool"
+    if workspace_id:
+        assert workspace_calls == []
+        assert environments["STUDIO_WORKSPACE_TOOL_ID"] == workspace_id
+    else:
+        assert len(workspace_calls) == 1
+        assert workspace_calls[0]["provider"] == "volcengine"
+        assert workspace_calls[0]["access_key"] == "ak"
+        assert environments["STUDIO_WORKSPACE_TOOL_ID"] == "studio-workspace-tool"
+        assert "Studio Sandbox Tool and model credentials are ready" in result.output
     assert captured["logo"] == _PNG
     assert '--site-logo "$ROOT_DIR/site-logo.png"' in str(captured["run_script"])
     if expected_site_title is None:

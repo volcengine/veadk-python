@@ -14568,6 +14568,13 @@ def _resolve_studio_cloud_credentials(
     help="Comma-separated Studio developer usernames or OAuth emails.",
 )
 @click.option(
+    "--studio-sandbox-tool-id",
+    default=None,
+    envvar="STUDIO_WORKSPACE_TOOL_ID",
+    help="Existing persistent Studio Sandbox Tool ID. Omit to create and "
+    "configure one alongside the other sandbox tools.",
+)
+@click.option(
     "--sandbox-dev-tool-id",
     "sandbox_dev_tool_id",
     default=None,
@@ -14687,6 +14694,7 @@ def frontend_deploy(
     site_title: str | None,
     studio_admins: str | None,
     studio_developers: str | None,
+    studio_sandbox_tool_id: str | None,
     sandbox_dev_tool_id: str | None,
     sandbox_chat_codex_tool_id: str | None,
     sandbox_chat_openclaw_tool_id: str | None,
@@ -15001,8 +15009,18 @@ def frontend_deploy(
     auto_storage = not str(
         veadk_environments.get("VEADK_STUDIO_TOS_BUCKET") or ""
     ).strip()
-    # Studio always provisions its persistent workspace Tool.
-    auto_sandbox_tools = True
+    auto_sandbox_tools = not all(
+        (
+            studio_sandbox_tool_id,
+            sandbox_dev_tool_id,
+            sandbox_chat_codex_tool_id,
+            sandbox_chat_codex_snapshot_tool_id,
+            sandbox_chat_openclaw_tool_id,
+            sandbox_chat_openclaw_snapshot_tool_id,
+            sandbox_chat_hermes_tool_id,
+            sandbox_chat_hermes_snapshot_tool_id,
+        )
+    )
     from veadk.cli.studio_deploy_permissions import (
         IAM_CONFIG_URLS,
         required_permission_specs,
@@ -15243,8 +15261,27 @@ def frontend_deploy(
         click.echo(f"Creating AgentKit {label} Tool '{tool_names[0]}'…")
         missing_sandbox_tools[kind] = tool_names
 
-    if missing_sandbox_tools:
-        with ThreadPoolExecutor(max_workers=len(missing_sandbox_tools)) as executor:
+    from frontend.server.workspace_tool import provision_workspace_tool
+
+    workspace_tool_id = (studio_sandbox_tool_id or "").strip()
+    if workspace_tool_id:
+        click.echo(f"Using configured Studio Sandbox Tool '{workspace_tool_id}'.")
+
+    if missing_sandbox_tools or not workspace_tool_id:
+        with ThreadPoolExecutor(max_workers=len(missing_sandbox_tools) + 1) as executor:
+            workspace_future = None
+            if not workspace_tool_id:
+                click.echo(
+                    "Preparing persistent Studio Sandbox Tool and model credentials…"
+                )
+                workspace_future = executor.submit(
+                    provision_workspace_tool,
+                    provider=provider_id,
+                    region=region,
+                    access_key=ak,
+                    secret_key=sk,
+                    session_token=session_token or "",
+                )
             tool_futures = {}
             for kind, tool_names in missing_sandbox_tools.items():
                 if tool_futures:
@@ -15303,6 +15340,24 @@ def frontend_deploy(
                         f"Underlying error:\n{detail}"
                     ) from error
                 click.echo(f"AgentKit {label} Tool is ready.")
+
+            if workspace_future is not None:
+                try:
+                    workspace_tool_id = workspace_future.result()
+                    if not workspace_tool_id:
+                        raise RuntimeError(
+                            "Studio Sandbox provisioning returned no Tool ID"
+                        )
+                except Exception as error:
+                    detail = _safe_exception_detail(
+                        error, secrets=(ak, sk, session_token)
+                    )
+                    raise click.ClickException(
+                        f"Failed to provision Studio Sandbox Tool and model credentials: {detail}"
+                    ) from error
+                click.echo(
+                    f"Studio Sandbox Tool and model credentials are ready: {workspace_tool_id}"
+                )
 
     from veadk.cli.frontend_skill_creator import (
         ensure_skill_creator_model_credential,
@@ -15378,24 +15433,6 @@ def frontend_deploy(
     hermes_tool_id = resolved_sandbox_tool_ids.get("hermes", "")
     hermes_snapshot_tool_id = resolved_sandbox_tool_ids.get("hermes_snapshot", "")
     dev_tool_id = resolved_sandbox_tool_ids.get("dev", "")
-
-    from frontend.server.workspace_tool import provision_workspace_tool
-
-    click.echo("Preparing persistent Studio Sandbox Tool…")
-    try:
-        workspace_tool_id = provision_workspace_tool(
-            provider=provider_id,
-            region=region,
-            access_key=ak,
-            secret_key=sk,
-            session_token=session_token or "",
-        )
-    except Exception as error:
-        detail = _safe_exception_detail(error, secrets=(ak, sk, session_token))
-        raise click.ClickException(
-            f"Failed to provision Studio Sandbox Tool: {detail}"
-        ) from error
-    click.echo(f"Studio Sandbox Tool is ready: {workspace_tool_id}")
 
     knowledge_signing_key = resolve_studio_knowledge_signing_key(
         {
