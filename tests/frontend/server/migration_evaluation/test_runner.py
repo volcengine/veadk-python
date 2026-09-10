@@ -31,7 +31,10 @@ from frontend.server.migration.evaluation.runner import (
     runner_source,
 )
 from frontend.server.migration.evaluation.service import EVALUATION_ROOT
-from frontend.server.migration.gateway import MigrationSandboxSession
+from frontend.server.migration.gateway import (
+    MigrationRemoteFileNotFound,
+    MigrationSandboxSession,
+)
 from frontend.server.migration.service import MIGRATION_ROOT, MigrationError
 
 TASK_ID = "migration-v1-" + "1" * 32
@@ -71,7 +74,10 @@ class FakeGateway:
         *,
         max_bytes: int,
     ) -> bytes:
-        content = self.files[path]
+        try:
+            content = self.files[path]
+        except KeyError as error:
+            raise MigrationRemoteFileNotFound(path) from error
         assert len(content) <= max_bytes
         return content
 
@@ -154,6 +160,7 @@ def test_start_uploads_non_secret_assets_and_background_command() -> None:
     )
     assert config["dimension_definitions"][0]["default_weight"] == 1
     assert config["remote_write_not_after"] == 1_788_777_600.0
+    assert config["agentkit_config_protocol"] == "legacy"
     assert config["agentkit_config"]["common"]["agent_name"] == "migrated-agent"
     assert "secret-value" not in json.dumps(config)
     assert "cloud-ak" not in json.dumps(config)
@@ -166,6 +173,62 @@ def test_start_uploads_non_secret_assets_and_background_command() -> None:
     assert "VEADK_MIGRATION_EVALUATION_STARTED_V1" in gateway.commands[1][1]
     assert "import yaml" not in gateway.commands[1][1]
     assert all("cloud-sk" not in command for _, command, _ in gateway.commands)
+
+
+def test_start_prefers_root_agentkit_yaml_when_both_protocols_exist() -> None:
+    gateway = FakeGateway()
+    gateway.files[f"{MIGRATION_ROOT}/output/veadk/.agentkit/agentkit.yaml"] = (
+        b"name: structured-agent\n"
+    )
+    runner = SandboxMigrationEvaluationRunner(  # type: ignore[arg-type]
+        gateway,
+        resolve_credentials=lambda: ("cloud-ak", "cloud-sk", None),
+    )
+
+    runner.start(
+        _session(),
+        task_id=TASK_ID,
+        attempt=1,
+        runtime_name="migration-eval-111111111111-a1",
+        dimensions=["semantic_fidelity"],
+        dataset_sha256=DATASET_SHA256,
+        artifact_sha256=ARTIFACT_SHA256,
+        secret_path=None,
+    )
+
+    config = json.loads(gateway.files[f"{EVALUATION_ROOT}/control/runner-1.json"])
+    assert config["agentkit_config_protocol"] == "legacy"
+    assert config["agentkit_config"]["common"]["agent_name"] == "migrated-agent"
+
+
+def test_start_uses_structured_protocol_when_only_dot_agentkit_yaml_exists() -> None:
+    gateway = FakeGateway()
+    gateway.files.pop(f"{MIGRATION_ROOT}/output/veadk/agentkit.yaml")
+    gateway.files[f"{MIGRATION_ROOT}/output/veadk/.agentkit/agentkit.yaml"] = (
+        b"name: structured-agent\n"
+        b"project: default\n"
+        b"envs:\n"
+        b"  MODEL_AGENT_API_KEY: ${MODEL_AGENT_API_KEY:?required}\n"
+    )
+    runner = SandboxMigrationEvaluationRunner(  # type: ignore[arg-type]
+        gateway,
+        resolve_credentials=lambda: ("cloud-ak", "cloud-sk", None),
+    )
+
+    runner.start(
+        _session(),
+        task_id=TASK_ID,
+        attempt=1,
+        runtime_name="migration-eval-111111111111-a1",
+        dimensions=["semantic_fidelity"],
+        dataset_sha256=DATASET_SHA256,
+        artifact_sha256=ARTIFACT_SHA256,
+        secret_path=None,
+    )
+
+    config = json.loads(gateway.files[f"{EVALUATION_ROOT}/control/runner-1.json"])
+    assert config["agentkit_config_protocol"] == "structured"
+    assert config["agentkit_config"]["name"] == "structured-agent"
 
 
 def test_agentkit_yaml_is_normalized_to_bounded_json() -> None:
@@ -359,8 +422,187 @@ def test_credential_file_requires_mode_600_and_is_one_shot(tmp_path: Path) -> No
     assert not secret.exists()
 
 
+def test_structured_config_is_staged_with_runtime_name_and_environment_refs(
+    tmp_path: Path,
+) -> None:
+    namespace = _runner_namespace()
+    project = tmp_path / "project"
+    (project / ".agentkit").mkdir(parents=True)
+    (project / "agent.py").write_text("agent = object()\n", encoding="utf-8")
+    original = {
+        "name": "strands",
+        "cloud_provider": "volcengine",
+        "region": "cn-beijing",
+        "project": "migration-project",
+        "dockerfile": ".agentkit/Dockerfile",
+        "runtime": {"memory_mb": 2048},
+        "envs": {
+            "MODEL_AGENT_API_KEY": "${MODEL_AGENT_API_KEY:?required}",
+            "OPTIONAL_VALUE": "current",
+        },
+        "infrastructure": {"container_registry": {"instance_name": "Auto"}},
+    }
+    source_config = project / ".agentkit" / "agentkit.yaml"
+    source_config.write_text(json.dumps(original), encoding="utf-8")
+    config = {
+        "agentkit_config_protocol": "structured",
+        "agentkit_config": original,
+        "project_path": str(project),
+        "runtime_name": "migration-eval-test-a2",
+    }
+
+    deployment = namespace["temporary_config"](
+        config,
+        {"MODEL_AGENT_API_KEY": "model-secret", "OPTIONAL_VALUE": "override"},
+        tmp_path / "work",
+    )
+
+    staged_project = Path(deployment["project_path"])
+    staged = json.loads(
+        (staged_project / ".agentkit" / "agentkit.yaml").read_text(encoding="utf-8")
+    )
+    assert deployment == {
+        "protocol": "structured",
+        "project_path": staged_project,
+        "project_name": "migration-project",
+        "config_file": staged_project / ".agentkit" / "agentkit.yaml",
+    }
+    assert staged["name"] == "migration-eval-test-a2"
+    assert staged["envs"]["MODEL_AGENT_API_KEY"] == "${MODEL_AGENT_API_KEY}"
+    assert staged["envs"]["OPTIONAL_VALUE"] == "${OPTIONAL_VALUE}"
+    assert "model-secret" not in json.dumps(staged)
+    assert json.loads(source_config.read_text(encoding="utf-8")) == original
+
+
+def test_structured_deploy_and_invoke_use_current_agentkit_cli(tmp_path: Path) -> None:
+    namespace = _runner_namespace()
+    project = tmp_path / "project"
+    project.mkdir()
+    deployment = {
+        "protocol": "structured",
+        "project_path": project,
+        "project_name": "default",
+        "config_file": project / ".agentkit" / "agentkit.yaml",
+    }
+    commands: list[tuple[list[str], Path, bool]] = []
+
+    def run_capped(
+        args: list[str],
+        *,
+        cwd: Path,
+        include_stderr: bool = False,
+        **_kwargs: object,
+    ) -> tuple[int, bytes, int]:
+        commands.append((args, cwd, include_stderr))
+        if args[:2] == ["agentkit", "release"]:
+            output = b"deployed"
+        else:
+            output = b'{"output":"final answer"}\n'
+        return 0, output, len(output)
+
+    namespace["run_capped"] = run_capped
+    code, output = namespace["deploy_runtime"](
+        deployment,
+        {},
+    )
+    captured = namespace["invoke_case"](
+        {"task_id": TASK_ID, "remote_write_not_after": time.time() + 60},
+        {
+            "case_id": "case-1",
+            "messages": [{"role": "user", "content": "hello"}],
+        },
+        "r-structured",
+        {},
+        deployment,
+    )
+
+    assert (code, output) == (0, b"deployed")
+    assert commands[0] == (
+        [
+            "agentkit",
+            "release",
+        ],
+        project,
+        True,
+    )
+    assert commands[1] == (
+        [
+            "agentkit",
+            "invoke",
+            "run",
+            "hello",
+            "--runtime-id",
+            "r-structured",
+            "--headers",
+            json.dumps(
+                {
+                    "user_id": "migration-evaluation",
+                    "session_id": f"{TASK_ID}-case-1",
+                },
+                separators=(",", ":"),
+            ),
+            "--raw",
+        ],
+        project,
+        True,
+    )
+    assert captured["text"] == "final answer"
+
+
+def test_command_diagnostics_redact_all_runtime_and_cloud_secret_values() -> None:
+    namespace = _runner_namespace()
+    detail = namespace["redact_command_output"](
+        b"deploy failed: model-secret cloud-secret",
+        {"MODEL_KEY": "model-secret", "CLOUD_KEY": "cloud-secret"},
+    )
+
+    assert detail == "deploy failed: <redacted> <redacted>"
+
+
+def test_command_diagnostics_keep_the_failure_tail() -> None:
+    namespace = _runner_namespace()
+    detail = namespace["redact_command_output"](
+        b"build progress\n" + b"x" * 4096 + b"\nModuleNotFoundError: model-secret",
+        {"MODEL_KEY": "model-secret"},
+    )
+
+    assert detail.endswith("ModuleNotFoundError: <redacted>")
+    assert len(detail.encode("utf-8")) <= 2048
+
+
+@pytest.mark.parametrize(
+    ("protocol", "agentkit_config", "deploy_prefix", "invoke_prefix"),
+    [
+        (
+            "legacy",
+            {
+                "common": {"agent_name": "demo", "launch_type": "cloud"},
+                "launch_types": {"cloud": {"region": "cn-beijing"}},
+            },
+            ["ak", "launch"],
+            ["ak", "invoke", "run"],
+        ),
+        (
+            "structured",
+            {
+                "name": "demo",
+                "region": "cn-beijing",
+                "project": "default",
+                "runtime": {"memory_mb": 2048},
+                "envs": {"MODEL_AGENT_API_KEY": "${MODEL_AGENT_API_KEY:?required}"},
+                "infrastructure": {"container_registry": {"instance_name": "Auto"}},
+            },
+            ["agentkit", "release"],
+            ["agentkit", "invoke"],
+        ),
+    ],
+)
 def test_runner_main_completes_with_python_stdlib_and_fake_cli_boundaries(
     tmp_path: Path,
+    protocol: str,
+    agentkit_config: dict[str, object],
+    deploy_prefix: list[str],
+    invoke_prefix: list[str],
 ) -> None:
     namespace = _runner_namespace()
     project = tmp_path / "project"
@@ -423,10 +665,8 @@ def test_runner_main_completes_with_python_stdlib_and_fake_cli_boundaries(
         "diagnostic_path": str(diagnostics),
         "secret_path": str(environment_secret),
         "cloud_credential_path": str(cloud_secret),
-        "agentkit_config": {
-            "common": {"agent_name": "demo", "launch_type": "cloud"},
-            "launch_types": {"cloud": {"region": "cn-beijing"}},
-        },
+        "agentkit_config_protocol": protocol,
+        "agentkit_config": agentkit_config,
         "remote_write_not_after": time.time() + 3600,
     }
     config_path = tmp_path / "runner.json"
@@ -438,9 +678,9 @@ def test_runner_main_completes_with_python_stdlib_and_fake_cli_boundaries(
         commands.append(args)
         if args[-1:] == ["--version"]:
             output = b"test-version"
-        elif args[:2] == ["ak", "launch"]:
+        elif args[: len(deploy_prefix)] == deploy_prefix:
             output = b"deployed"
-        elif args[:3] == ["ak", "invoke", "run"]:
+        elif args[: len(invoke_prefix)] == invoke_prefix:
             output = b'{"output":"hello"}\n'
         elif args[0] == "codex":
             output = _judge_events("thread-1", ["case-1"])
@@ -473,8 +713,8 @@ def test_runner_main_completes_with_python_stdlib_and_fake_cli_boundaries(
     assert json.loads(report.read_text())["execution"]["succeeded"] == 1
     assert not environment_secret.exists()
     assert not cloud_secret.exists()
-    assert any(command[:2] == ["ak", "launch"] for command in commands)
-    assert any(command[:3] == ["ak", "invoke", "run"] for command in commands)
+    assert any(command[: len(deploy_prefix)] == deploy_prefix for command in commands)
+    assert any(command[: len(invoke_prefix)] == invoke_prefix for command in commands)
     assert any(command[0] == "codex" for command in commands)
     assert ("executing", "正在执行用例 1/1 · 已完成 0") in progress
     assert ("executing", "已执行 1/1 · 成功 1 · 失败 0") in progress

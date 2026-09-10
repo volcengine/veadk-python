@@ -283,12 +283,23 @@ def runner_source() -> str:
             temporary.replace(target)
 
 
-        def diagnostic(config, event, *, error_type=None):
+        def diagnostic(
+            config,
+            event,
+            *,
+            error_type=None,
+            detail=None,
+            exit_code=None,
+        ):
             path = Path(config["diagnostic_path"])
             path.parent.mkdir(parents=True, exist_ok=True)
             value = {"at": now(), "event": event}
             if error_type:
                 value["error_type"] = str(error_type)[:128]
+            if detail:
+                value["detail"] = str(detail)[:2048]
+            if exit_code is not None:
+                value["exit_code"] = int(exit_code)
             existing = path.read_bytes() if path.is_file() else b""
             line = json.dumps(value, separators=(",", ":")).encode("utf-8") + b"\n"
             path.write_bytes((existing + line)[-64 * 1024 :])
@@ -375,14 +386,23 @@ def runner_source() -> str:
             return environment
 
 
-        def run_capped(args, *, cwd, env, timeout, input_text=None, limit=RAW_LIMIT):
+        def run_capped(
+            args,
+            *,
+            cwd,
+            env,
+            timeout,
+            input_text=None,
+            limit=RAW_LIMIT,
+            include_stderr=False,
+        ):
             process = subprocess.Popen(
                 args,
                 cwd=cwd,
                 env=env,
                 stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.STDOUT if include_stderr else subprocess.DEVNULL,
             )
             kept = bytearray()
             total = 0
@@ -415,10 +435,47 @@ def runner_source() -> str:
             return code, bytes(kept), total
 
 
+        def config_project_name(config):
+            if config.get("agentkit_config_protocol") != "structured":
+                return "default"
+            project = config.get("agentkit_config", {}).get("project")
+            if isinstance(project, str) and project.strip():
+                return project.strip()
+            return "default"
+
+
         def temporary_config(config, secrets, work):
             raw = json.loads(json.dumps(config["agentkit_config"]))
             if not isinstance(raw, dict):
                 raise RuntimeError("invalid agentkit.yaml")
+            protocol = config.get("agentkit_config_protocol")
+            work.mkdir(parents=True, exist_ok=True)
+            if protocol == "structured":
+                source_project = Path(config["project_path"])
+                deploy_project = work / "deploy-project"
+                shutil.rmtree(deploy_project, ignore_errors=True)
+                shutil.copytree(source_project, deploy_project, symlinks=True)
+                raw["name"] = config["runtime_name"]
+                environment = raw.setdefault("envs", {})
+                if not isinstance(environment, dict):
+                    raise RuntimeError("invalid structured envs config")
+                for key in secrets:
+                    environment[key] = "${" + key + "}"
+                target = deploy_project / ".agentkit" / "agentkit.yaml"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(
+                    json.dumps(raw, ensure_ascii=False, separators=(",", ":")),
+                    encoding="utf-8",
+                )
+                target.chmod(0o600)
+                return {
+                    "protocol": protocol,
+                    "project_path": deploy_project,
+                    "project_name": config_project_name(config),
+                    "config_file": target,
+                }
+            if protocol != "legacy":
+                raise RuntimeError("unsupported agentkit config protocol")
             common = raw.setdefault("common", {})
             if not isinstance(common, dict):
                 raise RuntimeError("invalid common config")
@@ -452,7 +509,57 @@ def runner_source() -> str:
                 encoding="utf-8",
             )
             target.chmod(0o600)
-            return target
+            return {
+                "protocol": protocol,
+                "project_path": Path(config["project_path"]),
+                "project_name": "default",
+                "config_file": target,
+            }
+
+
+        def redact_command_output(output, sensitive):
+            text = output.decode("utf-8", errors="replace")
+            values = sorted(
+                {str(value) for value in sensitive.values() if str(value)},
+                key=len,
+                reverse=True,
+            )
+            for value in values:
+                text = text.replace(value, "<redacted>")
+            text = "".join(
+                character
+                for character in text
+                if character in "\n\t" or ord(character) >= 32
+            )
+            encoded = text.strip().encode("utf-8")
+            if len(encoded) <= 2048:
+                return encoded.decode("utf-8")
+            return "…\n" + encoded[-2044:].decode("utf-8", errors="ignore")
+
+
+        def deploy_runtime(deployment, env):
+            if deployment["protocol"] == "structured":
+                args = [
+                    "agentkit",
+                    "release",
+                ]
+            else:
+                args = [
+                    "ak",
+                    "launch",
+                    "--config-file",
+                    str(deployment["config_file"]),
+                    "--preflight-mode",
+                    "fail",
+                ]
+            code, output, _ = run_capped(
+                args,
+                cwd=deployment["project_path"],
+                env=env,
+                timeout=1800,
+                include_stderr=True,
+            )
+            return code, output
 
 
         def runtime_list(env, project):
@@ -634,9 +741,9 @@ def runner_source() -> str:
             atomic_jsonl(config["execution_results_path"], ordered)
 
 
-        def execute_case(config, case, runtime_id, env):
+        def execute_case(config, case, runtime_id, env, deployment):
             try:
-                output = invoke_case(config, case, runtime_id, env)
+                output = invoke_case(config, case, runtime_id, env, deployment)
                 state = "succeeded"
                 error = None
             except Exception:
@@ -656,7 +763,7 @@ def runner_source() -> str:
             }
 
 
-        def invoke_case(config, case, runtime_id, env):
+        def invoke_case(config, case, runtime_id, env, deployment):
             headers = json.dumps(
                 {
                     "user_id": "migration-evaluation",
@@ -670,8 +777,20 @@ def runner_source() -> str:
                     continue
                 if time.time() >= config["remote_write_not_after"]:
                     raise RuntimeError("insufficient session time for another invocation")
-                code, raw, total = run_capped(
-                    [
+                if deployment["protocol"] == "structured":
+                    args = [
+                        "agentkit",
+                        "invoke",
+                        "run",
+                        str(message.get("content") or ""),
+                        "--runtime-id",
+                        runtime_id,
+                        "--headers",
+                        headers,
+                        "--raw",
+                    ]
+                else:
+                    args = [
                         "ak",
                         "invoke",
                         "run",
@@ -681,14 +800,18 @@ def runner_source() -> str:
                         "--headers",
                         headers,
                         "--raw",
-                    ],
-                    cwd=Path(config["project_path"]),
+                    ]
+                code, raw, total = run_capped(
+                    args,
+                    cwd=deployment["project_path"],
                     env=env,
                     timeout=INVOKE_TIMEOUT,
+                    include_stderr=deployment["protocol"] == "structured",
                 )
                 if code != 0:
                     raise RuntimeError("runtime invocation failed")
-                last = captured_output(extract_text(raw), raw_truncated=total > len(raw))
+                extracted = extract_text(raw)
+                last = captured_output(extracted, raw_truncated=total > len(raw))
             if last is None:
                 raise RuntimeError("evaluation case has no user message")
             return last
@@ -1247,6 +1370,8 @@ def runner_source() -> str:
             cloud_environment = {}
             env = dict(os.environ)
             config_file = None
+            deployment = None
+            runtime_project = config_project_name(config)
             try:
                 diagnostic(config, "runner_started")
                 secrets = load_secrets(config.get("secret_path"))
@@ -1272,7 +1397,14 @@ def runner_source() -> str:
                 ]
                 if not 1 <= len(cases) <= 100:
                     raise RuntimeError("invalid evaluation case count")
-                config_file = temporary_config(config, secrets, work)
+                deployment = temporary_config(config, secrets, work)
+                config_file = deployment["config_file"]
+                runtime_project = deployment["project_name"]
+                cli_name = (
+                    "agentkit"
+                    if deployment["protocol"] == "structured"
+                    else "ak"
+                )
                 metadata = {
                     "id": codex_model_id(env),
                     "codex_version": command_version(
@@ -1281,32 +1413,38 @@ def runner_source() -> str:
                         env=env,
                     ),
                     "agentkit_cli_version": command_version(
-                        ["ak", "--version"],
-                        project=project,
+                        [cli_name, "--version"],
+                        project=deployment["project_path"],
                         env=env,
                     ),
                 }
                 status(config, "deploying", "正在检查临时 Runtime")
-                runtime = runtime_by_name(env, config["runtime_name"])
+                runtime = runtime_by_name(
+                    env,
+                    config["runtime_name"],
+                    runtime_project,
+                )
                 if runtime is None:
                     diagnostic(config, "runtime_deploy_started")
                     status(config, "deploying", "正在部署临时 Runtime")
-                    code, _, _ = run_capped(
-                        [
-                            "ak",
-                            "launch",
-                            "--config-file",
-                            str(config_file),
-                            "--preflight-mode",
-                            "fail",
-                        ],
-                        cwd=project,
-                        env=env,
-                        timeout=1800,
-                    )
+                    code, output = deploy_runtime(deployment, env)
                     if code != 0:
+                        diagnostic(
+                            config,
+                            "runtime_deploy_failed",
+                            error_type="CommandExit",
+                            detail=redact_command_output(
+                                output,
+                                {**secrets, **cloud_environment},
+                            ),
+                            exit_code=code,
+                        )
                         raise RuntimeError("temporary runtime deployment failed")
-                    runtime = runtime_by_name(env, config["runtime_name"])
+                    runtime = runtime_by_name(
+                        env,
+                        config["runtime_name"],
+                        runtime_project,
+                    )
                 if runtime is None:
                     raise RuntimeError("temporary runtime was not found after deployment")
                 runtime_id = str(runtime.get("runtimeId") or runtime.get("runtime_id") or "")
@@ -1326,6 +1464,7 @@ def runner_source() -> str:
                         case,
                         runtime_id,
                         env,
+                        deployment,
                     )
                     save_execution_results(config, cases, observations)
                     succeeded = sum(
@@ -1389,7 +1528,11 @@ def runner_source() -> str:
                         config_file.unlink()
                     except FileNotFoundError:
                         pass
-                cleanup_confirmed = cleanup_runtime(env, config["runtime_name"])
+                cleanup_confirmed = cleanup_runtime(
+                    env,
+                    config["runtime_name"],
+                    runtime_project,
+                )
                 shutil.rmtree(work, ignore_errors=True)
                 if not cleanup_confirmed:
                     diagnostic(config, "runtime_cleanup_unconfirmed")
@@ -1400,11 +1543,16 @@ def runner_source() -> str:
         def cleanup_only(config_path):
             config = json.loads(Path(config_path).read_text(encoding="utf-8"))
             env = dict(os.environ)
+            runtime_project = config_project_name(config)
             cloud_environment = load_cloud_credentials(config["cloud_credential_path"])
             env.update(cloud_environment)
             env.update({"CI": "1", "NO_COLOR": "1"})
             try:
-                confirmed = cleanup_runtime(env, config["runtime_name"])
+                confirmed = cleanup_runtime(
+                    env,
+                    config["runtime_name"],
+                    runtime_project,
+                )
                 diagnostic(
                     config,
                     "runtime_cleanup_confirmed"
@@ -1451,7 +1599,7 @@ class SandboxMigrationEvaluationRunner:
         work_path = f"{EVALUATION_ROOT}/attempts/{attempt}"
         result_path = f"{EVALUATION_ROOT}/results/attempt-{attempt}"
         cloud_credential_path = self._cloud_credential_path(attempt)
-        agentkit_config = self._agentkit_config(session)
+        agentkit_config_protocol, agentkit_config = self._agentkit_config(session)
         cloud_credentials = self._cloud_credentials()
         registry = {item.id: item for item in EVALUATION_DIMENSIONS}
         config = {
@@ -1488,6 +1636,7 @@ class SandboxMigrationEvaluationRunner:
             "diagnostic_path": f"{EVALUATION_ROOT}/diagnostics/evaluation.log",
             "secret_path": secret_path,
             "cloud_credential_path": cloud_credential_path,
+            "agentkit_config_protocol": agentkit_config_protocol,
             "agentkit_config": agentkit_config,
             "remote_write_not_after": self._expiry_epoch(session)
             - MINIMUM_REMOTE_WRITE_REMAINING_SECONDS,
@@ -1629,8 +1778,12 @@ class SandboxMigrationEvaluationRunner:
     def _agentkit_config(
         self,
         session: MigrationSandboxSession,
-    ) -> dict[str, object]:
-        for path in _PROJECT_CONFIG_PATHS:
+    ) -> tuple[str, dict[str, object]]:
+        for protocol, path in zip(
+            ("legacy", "structured"),
+            _PROJECT_CONFIG_PATHS,
+            strict=True,
+        ):
             try:
                 content = self._gateway.get_file(
                     session,
@@ -1640,7 +1793,7 @@ class SandboxMigrationEvaluationRunner:
             except MigrationRemoteFileNotFound:
                 continue
             try:
-                return normalize_agentkit_config(content)
+                return protocol, normalize_agentkit_config(content)
             except AgentkitConfigError as error:
                 raise MigrationError(
                     "MIGRATION_EVALUATION_AGENTKIT_CONFIG_INVALID",
