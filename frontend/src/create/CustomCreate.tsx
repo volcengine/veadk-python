@@ -978,6 +978,7 @@ function ModelOptionSelect({
   apiKeyName,
   customModelSecretValues,
   configuredRuntimeEnvKeys,
+  showFallbacks = true,
   showMissingApiKeyErrors,
   onApiKeyChange,
   onChange,
@@ -992,6 +993,7 @@ function ModelOptionSelect({
   apiKeyName?: string;
   customModelSecretValues: Record<string, string>;
   configuredRuntimeEnvKeys?: readonly string[];
+  showFallbacks?: boolean;
   showMissingApiKeyErrors?: boolean;
   onApiKeyChange: (key: ModelApiKeyOption) => void;
   onChange: (modelId: string) => void;
@@ -1333,96 +1335,126 @@ function ModelOptionSelect({
             </button>
           </div>
         </div>
-        <ModelFallbackFields
-          variant="traditional"
-          embedded
-          primaryModelName={normalizedValue}
-          agentName={agentName}
-          value={fallbacks}
-          secretValues={customModelSecretValues}
-          configuredSecretEnvKeys={configuredRuntimeEnvKeys}
-          showMissingApiKeyErrors={showMissingApiKeyErrors}
-          onChange={onFallbacksChange}
-          onSecretChange={onCustomModelSecretChange}
-          renderSameProviderField={({ index, value: fallbackValue }) => {
-            const selectedFallbackModel = visibleModels.find(
-              (model) => model.id === fallbackValue.trim(),
-            );
-            const fallbackOptions = fallbackModelsForSearch(fallbackValue);
-            const showUnknownFallback = Boolean(
-              fallbackValue.trim() &&
-                !selectedFallbackModel &&
-                localPickerMatches(fallbackSearchQuery, [fallbackValue]),
-            );
-            const fallbackLabel = selectedFallbackModel
-              ? `${selectedFallbackModel.displayName} (${selectedFallbackModel.id})`
-              : fallbackValue || t("traditional.model.fallbackPlaceholder");
-            return (
-              <CatalogSelect
-                selectedLabel={fallbackLabel}
-                placeholder={!fallbackValue.trim()}
-                disabled={loading || !apiKeyId}
-                triggerAriaLabel={t("traditional.model.selectProviderModel", {
-                  provider: providerLabel,
-                })}
-                menuAriaLabel={t("traditional.model.providerModels", {
-                  provider: providerLabel,
-                })}
-                searchAriaLabel={t("traditional.model.search")}
-                searchValue={fallbackSearchQuery}
-                searchPlaceholder={t("traditional.model.searchPlaceholder")}
-                onSearchChange={setFallbackSearchQuery}
-                empty={!showUnknownFallback && fallbackOptions.length === 0}
-                emptyLabel={t("traditional.model.noMatches")}
-                triggerClassName="cw-model-trigger"
-                optionsClassName="cw-model-options"
-                renderOptions={(closeMenu) => (
-                  <>
-                    {showUnknownFallback && (
-                      <button
-                        type="button"
-                        role="option"
-                        aria-selected
-                        className="cw-a2a-space-option cw-model-option is-selected"
-                        onClick={() => {
-                          updateFallback(index, fallbackValue);
-                          closeMenu();
-                        }}
-                      >
-                        <span className="cw-model-option-copy">
-                          <strong>
-                            {t("traditional.model.currentConfiguration")}
-                          </strong>
-                          <small>{fallbackValue}</small>
-                        </span>
-                        <span className="cw-model-status is-unknown">
-                          {t("traditional.model.unknownStatus")}
-                        </span>
-                      </button>
-                    )}
-                    {fallbackOptions.map((model) => {
-                      const selected = model.id === fallbackValue.trim();
-                      const selectable = isModelSelectable(model);
-                      const activationRequired =
-                        !selectable && model.activationState !== "Available";
-                      if (activationRequired) {
+        {showFallbacks ? (
+          <ModelFallbackFields
+            variant="traditional"
+            embedded
+            primaryModelName={normalizedValue}
+            agentName={agentName}
+            value={fallbacks}
+            secretValues={customModelSecretValues}
+            configuredSecretEnvKeys={configuredRuntimeEnvKeys}
+            showMissingApiKeyErrors={showMissingApiKeyErrors}
+            onChange={onFallbacksChange}
+            onSecretChange={onCustomModelSecretChange}
+            renderSameProviderField={({ index, value: fallbackValue }) => {
+              const selectedFallbackModel = visibleModels.find(
+                (model) => model.id === fallbackValue.trim(),
+              );
+              const fallbackOptions = fallbackModelsForSearch(fallbackValue);
+              const showUnknownFallback = Boolean(
+                fallbackValue.trim() &&
+                  !selectedFallbackModel &&
+                  localPickerMatches(fallbackSearchQuery, [fallbackValue]),
+              );
+              const fallbackLabel = selectedFallbackModel
+                ? `${selectedFallbackModel.displayName} (${selectedFallbackModel.id})`
+                : fallbackValue || t("traditional.model.fallbackPlaceholder");
+              return (
+                <CatalogSelect
+                  selectedLabel={fallbackLabel}
+                  placeholder={!fallbackValue.trim()}
+                  disabled={loading || !apiKeyId}
+                  triggerAriaLabel={t("traditional.model.selectProviderModel", {
+                    provider: providerLabel,
+                  })}
+                  menuAriaLabel={t("traditional.model.providerModels", {
+                    provider: providerLabel,
+                  })}
+                  searchAriaLabel={t("traditional.model.search")}
+                  searchValue={fallbackSearchQuery}
+                  searchPlaceholder={t("traditional.model.searchPlaceholder")}
+                  onSearchChange={setFallbackSearchQuery}
+                  empty={!showUnknownFallback && fallbackOptions.length === 0}
+                  emptyLabel={t("traditional.model.noMatches")}
+                  triggerClassName="cw-model-trigger"
+                  optionsClassName="cw-model-options"
+                  renderOptions={(closeMenu) => (
+                    <>
+                      {showUnknownFallback && (
+                        <button
+                          type="button"
+                          role="option"
+                          aria-selected
+                          className="cw-a2a-space-option cw-model-option is-selected"
+                          onClick={() => {
+                            updateFallback(index, fallbackValue);
+                            closeMenu();
+                          }}
+                        >
+                          <span className="cw-model-option-copy">
+                            <strong>
+                              {t("traditional.model.currentConfiguration")}
+                            </strong>
+                            <small>{fallbackValue}</small>
+                          </span>
+                          <span className="cw-model-status is-unknown">
+                            {t("traditional.model.unknownStatus")}
+                          </span>
+                        </button>
+                      )}
+                      {fallbackOptions.map((model) => {
+                        const selected = model.id === fallbackValue.trim();
+                        const selectable = isModelSelectable(model);
+                        const activationRequired =
+                          !selectable && model.activationState !== "Available";
+                        if (activationRequired) {
+                          return (
+                            <button
+                              key={model.id}
+                              type="button"
+                              role="option"
+                              aria-selected={false}
+                              className="cw-a2a-space-option cw-model-option is-activation-link"
+                              title={t("traditional.model.activate", {
+                                provider: providerLabel,
+                                model: model.displayName,
+                              })}
+                              onClick={() => {
+                                window.open(
+                                  activationConsoleUrl,
+                                  "_blank",
+                                  "noopener,noreferrer",
+                                );
+                                closeMenu();
+                              }}
+                            >
+                              <span className="cw-model-option-copy">
+                                <strong>{model.displayName}</strong>
+                                <small>
+                                  {model.id}
+                                  {model.vendorName ? ` · ${model.vendorName}` : ""}
+                                </small>
+                              </span>
+                              <span className="cw-model-status is-unavailable">
+                                {t("traditional.model.activateAction")}
+                              </span>
+                            </button>
+                          );
+                        }
                         return (
                           <button
                             key={model.id}
                             type="button"
                             role="option"
-                            aria-selected={false}
-                            className="cw-a2a-space-option cw-model-option is-activation-link"
-                            title={t("traditional.model.activate", {
-                              provider: providerLabel,
-                              model: model.displayName,
-                            })}
+                            aria-selected={selected}
+                            disabled={!selectable}
+                            className={`cw-a2a-space-option cw-model-option ${
+                              selected ? "is-selected" : ""
+                            }`}
+                            title={`${model.displayName} (${model.id})`}
                             onClick={() => {
-                              window.open(
-                                activationConsoleUrl,
-                                "_blank",
-                                "noopener,noreferrer",
-                              );
+                              updateFallback(index, model.id);
                               closeMenu();
                             }}
                           >
@@ -1433,55 +1465,27 @@ function ModelOptionSelect({
                                 {model.vendorName ? ` · ${model.vendorName}` : ""}
                               </small>
                             </span>
-                            <span className="cw-model-status is-unavailable">
-                              {t("traditional.model.activateAction")}
+                            <span
+                              className={`cw-model-status ${
+                                model.available
+                                  ? "is-available"
+                                  : model.lifecycleStatus === "Retiring"
+                                    ? "is-retiring"
+                                    : "is-unavailable"
+                              }`}
+                            >
+                              {t(modelAvailabilityKey(model))}
                             </span>
                           </button>
                         );
-                      }
-                      return (
-                        <button
-                          key={model.id}
-                          type="button"
-                          role="option"
-                          aria-selected={selected}
-                          disabled={!selectable}
-                          className={`cw-a2a-space-option cw-model-option ${
-                            selected ? "is-selected" : ""
-                          }`}
-                          title={`${model.displayName} (${model.id})`}
-                          onClick={() => {
-                            updateFallback(index, model.id);
-                            closeMenu();
-                          }}
-                        >
-                          <span className="cw-model-option-copy">
-                            <strong>{model.displayName}</strong>
-                            <small>
-                              {model.id}
-                              {model.vendorName ? ` · ${model.vendorName}` : ""}
-                            </small>
-                          </span>
-                          <span
-                            className={`cw-model-status ${
-                              model.available
-                                ? "is-available"
-                                : model.lifecycleStatus === "Retiring"
-                                  ? "is-retiring"
-                                  : "is-unavailable"
-                            }`}
-                          >
-                            {t(modelAvailabilityKey(model))}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </>
-                )}
-              />
-            );
-          }}
-        />
+                      })}
+                    </>
+                  )}
+                />
+              );
+            }}
+          />
+        ) : null}
       </div>
       {error ? (
         <div className="cw-banner cw-a2a-space-error" role="alert">
@@ -4486,6 +4490,8 @@ export function CustomCreate({
       ),
     [deploymentTarget?.editMode, providerDraft],
   );
+  const showModelFallbacks =
+    !deploymentTarget || deploymentTarget.editMode === "regenerate";
   const customModelCredentials = useMemo(
     () =>
       customModelCredentialRequirements(
@@ -5597,6 +5603,7 @@ export function CustomCreate({
         customModelSecretValues={customModelSecretValues}
         customModelApiKeyConfigured={selectedCustomModelApiKeyConfigured}
         configuredRuntimeEnvKeys={configuredRuntimeEnvKeys}
+        showModelFallbacks={showModelFallbacks}
         onCustomModelApiKeyChange={(value) => {
           if (!selectedCustomModelCredential) return;
           patchCustomModelSecret(selectedCustomModelCredential.key, value);
@@ -6054,6 +6061,7 @@ export function CustomCreate({
                                       configuredRuntimeEnvKeys={
                                         configuredRuntimeEnvKeys
                                       }
+                                      showFallbacks={showModelFallbacks}
                                       showMissingApiKeyErrors={showErrors}
                                       onApiKeyChange={(key) =>
                                         setDraft((current) => ({
@@ -6231,7 +6239,7 @@ export function CustomCreate({
                                     </div>
                                   </>
                                 )}
-                                {modelSource === "custom" && (
+                                {modelSource === "custom" && showModelFallbacks && (
                                   <ModelFallbackFields
                                     variant="traditional"
                                     primaryModelName={node.modelName ?? ""}

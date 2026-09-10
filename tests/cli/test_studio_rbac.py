@@ -5114,6 +5114,14 @@ def test_source_preserving_update_ignores_browser_source_and_keeps_secrets_out_o
                 "envs": [{"key": "UNRELATED_SECRET", "value": "must-not-pass"}],
             },
         )
+        fallback_model_change = client.post(
+            "/web/deploy-agentkit",
+            headers=headers,
+            json={
+                **update_payload,
+                "draft": {**draft, "modelFallbacks": ["backup-model"]},
+            },
+        )
         with client.stream(
             "POST",
             "/web/deploy-agentkit",
@@ -5128,6 +5136,8 @@ def test_source_preserving_update_ignores_browser_source_and_keeps_secrets_out_o
 
     assert generic_env.status_code == 400
     assert "不接受通用环境变量" in generic_env.json()["detail"]
+    assert fallback_model_change.status_code == 409
+    assert "模型 fallback" in fallback_model_change.json()["detail"]
     assert response.status_code == 200
     assert frames[-1]["success"] is True
     assert captured["dockerfile"].splitlines()[0].endswith("@sha256:" + "b" * 64)

@@ -70,6 +70,17 @@ test("the app-level create entry asks for a mode before either creation flow", (
   assert.doesNotMatch(workbenchSource, /className="cw-/);
 });
 
+test("runtime updates hide fallback controls outside regenerate mode", () => {
+  assert.match(
+    customCreateSource,
+    /const showModelFallbacks =\s*!deploymentTarget \|\| deploymentTarget\.editMode === "regenerate"/,
+  );
+  assert.match(customCreateSource, /showModelFallbacks=\{showModelFallbacks\}/);
+  assert.match(workbenchSource, /showModelFallbacks\?: boolean/);
+  assert.match(workbenchSource, /showModelFallbacks = true/);
+  assert.match(workbenchSource, /showModelFallbacks \? \(\s*<ModelFallbackFields/);
+});
+
 test("workspace drafts restore the creation mode they were saved with", () => {
   assert.match(
     appSource,

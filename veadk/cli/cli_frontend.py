@@ -6461,6 +6461,28 @@ def _run_frontend_server(
                 status_code=409,
                 detail="更新页面缺少可验证的配置草稿，请重新打开智能体详情。",
             )
+
+        def _draft_has_model_fallbacks(value: Any) -> bool:
+            if not isinstance(value, Mapping):
+                return False
+            raw_fallbacks = value.get("modelFallbacks")
+            if isinstance(raw_fallbacks, list) and len(raw_fallbacks) > 0:
+                return True
+            raw_sub_agents = value.get("subAgents")
+            if isinstance(raw_sub_agents, list):
+                return any(
+                    _draft_has_model_fallbacks(child) for child in raw_sub_agents
+                )
+            return False
+
+        if source_preserving_requested and _draft_has_model_fallbacks(requested_draft):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "当前 Runtime 使用保留源码更新模式，不支持模型 fallback。"
+                    "请重新生成标准项目并使用 veadk-python >= 1.1.10 后部署。"
+                ),
+            )
         raw_remove_runtime_env_keys = data.get("removeRuntimeEnvKeys", [])
         if not isinstance(raw_remove_runtime_env_keys, list) or any(
             not isinstance(key, str)

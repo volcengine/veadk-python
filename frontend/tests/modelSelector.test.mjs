@@ -132,12 +132,15 @@ test("custom creation supports ordered same-provider fallback models", () => {
   assert.match(customCreateSource, /primaryModelName=\{node\.modelName \?\? ""\}/);
   assert.match(
     customCreateSource,
-    /modelSource === "custom" && \(\s*<ModelFallbackFields/,
+    /modelSource === "custom" && showModelFallbacks && \(\s*<ModelFallbackFields/,
   );
   assert.match(configYamlSource, /modelFallbacks = normalizeModelFallbacks/);
 });
 
 test("ModelArk fallback models use the provider model dropdown", () => {
+  assert.match(customCreateSource, /showFallbacks = true/);
+  assert.match(customCreateSource, /showFallbacks \? \(\s*<ModelFallbackFields/);
+  assert.match(customCreateSource, /showFallbacks=\{showModelFallbacks\}/);
   assert.match(customCreateSource, /fallbackModelsForSearch/);
   assert.match(customCreateSource, /fallbackSearchQuery/);
   assert.match(customCreateSource, /onFallbacksChange=\{\(modelFallbacks\)/);

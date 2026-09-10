@@ -79,6 +79,7 @@ export interface NewAgentWorkbenchProps {
   customModelSecretValues: Record<string, string>;
   customModelApiKeyConfigured?: boolean;
   configuredRuntimeEnvKeys?: readonly string[];
+  showModelFallbacks?: boolean;
   onCustomModelApiKeyChange: (value: string) => void;
   onCustomModelSecretChange: (key: string, value: string) => void;
   onSelectedSkillsChange: (skills: SelectedSkill[]) => void;
@@ -181,6 +182,7 @@ function NativeModelPicker({
   customModelApiKeyConfigured,
   configuredRuntimeEnvKeys,
   fallbacks,
+  showModelFallbacks = true,
   showMissingApiKeyErrors,
   onSourceChange,
   onApiKeyChange,
@@ -205,6 +207,7 @@ function NativeModelPicker({
   customModelApiKeyConfigured?: boolean;
   configuredRuntimeEnvKeys?: readonly string[];
   fallbacks: ModelFallbackDraft[];
+  showModelFallbacks?: boolean;
   showMissingApiKeyErrors?: boolean;
   onSourceChange: (source: ModelSource) => void;
   onApiKeyChange: (key: ModelApiKeyOption) => void;
@@ -445,36 +448,38 @@ function NativeModelPicker({
                 onChange={(option) => onModelNameChange(option.value)}
               />
             </label>
-            <ModelFallbackFields
-              variant="workbench"
-              primaryModelName={value}
-              agentName={agentName}
-              value={fallbacks}
-              secretValues={customModelSecretValues}
-              configuredSecretEnvKeys={configuredRuntimeEnvKeys}
-              showMissingApiKeyErrors={showMissingApiKeyErrors}
-              onChange={onModelFallbacksChange}
-              onSecretChange={onCustomModelSecretChange}
-              renderSameProviderField={({ index, value: fallbackValue }) => (
-                <Select
-                  value={fallbackValue}
-                  options={modelOptionsForFallback(fallbackValue)}
-                  loading={loadingModels}
-                  loadingPlaceholder={t("workbench.model.loadingModels")}
-                  placeholder={t("workbench.model.fallbackPlaceholder")}
-                  searchPlaceholder={t("workbench.model.searchModels")}
-                  searchEmptyMessage={t("workbench.model.noModels")}
-                  size="xl"
-                  triggerClassName="new-agent-workbench__select-trigger"
-                  optionClassName={`${SELECT_OPTION_CLASS_NAME} new-agent-workbench__model-option`}
-                  OptionView={ModelSelectOptionView}
-                  searchPredicate={modelSelectSearchPredicate}
-                  pill={false}
-                  disabled={!apiKeyId || loadingModels}
-                  onChange={(option) => updateFallback(index, option.value)}
-                />
-              )}
-            />
+            {showModelFallbacks ? (
+              <ModelFallbackFields
+                variant="workbench"
+                primaryModelName={value}
+                agentName={agentName}
+                value={fallbacks}
+                secretValues={customModelSecretValues}
+                configuredSecretEnvKeys={configuredRuntimeEnvKeys}
+                showMissingApiKeyErrors={showMissingApiKeyErrors}
+                onChange={onModelFallbacksChange}
+                onSecretChange={onCustomModelSecretChange}
+                renderSameProviderField={({ index, value: fallbackValue }) => (
+                  <Select
+                    value={fallbackValue}
+                    options={modelOptionsForFallback(fallbackValue)}
+                    loading={loadingModels}
+                    loadingPlaceholder={t("workbench.model.loadingModels")}
+                    placeholder={t("workbench.model.fallbackPlaceholder")}
+                    searchPlaceholder={t("workbench.model.searchModels")}
+                    searchEmptyMessage={t("workbench.model.noModels")}
+                    size="xl"
+                    triggerClassName="new-agent-workbench__select-trigger"
+                    optionClassName={`${SELECT_OPTION_CLASS_NAME} new-agent-workbench__model-option`}
+                    OptionView={ModelSelectOptionView}
+                    searchPredicate={modelSelectSearchPredicate}
+                    pill={false}
+                    disabled={!apiKeyId || loadingModels}
+                    onChange={(option) => updateFallback(index, option.value)}
+                  />
+                )}
+              />
+            ) : null}
           </>
         ) : (
           <>
@@ -549,17 +554,19 @@ function NativeModelPicker({
                 }
               />
             </label>
-            <ModelFallbackFields
-              variant="workbench"
-              primaryModelName={value}
-              agentName={agentName}
-              value={fallbacks}
-              secretValues={customModelSecretValues}
-              configuredSecretEnvKeys={configuredRuntimeEnvKeys}
-              showMissingApiKeyErrors={showMissingApiKeyErrors}
-              onChange={onModelFallbacksChange}
-              onSecretChange={onCustomModelSecretChange}
-            />
+            {showModelFallbacks ? (
+              <ModelFallbackFields
+                variant="workbench"
+                primaryModelName={value}
+                agentName={agentName}
+                value={fallbacks}
+                secretValues={customModelSecretValues}
+                configuredSecretEnvKeys={configuredRuntimeEnvKeys}
+                showMissingApiKeyErrors={showMissingApiKeyErrors}
+                onChange={onModelFallbacksChange}
+                onSecretChange={onCustomModelSecretChange}
+              />
+            ) : null}
           </>
         )}
         {error ? (
@@ -787,6 +794,7 @@ export function NewAgentWorkbench({
   customModelSecretValues,
   customModelApiKeyConfigured,
   configuredRuntimeEnvKeys,
+  showModelFallbacks = true,
   onCustomModelApiKeyChange,
   onCustomModelSecretChange,
   onSelectedSkillsChange,
@@ -1187,6 +1195,7 @@ export function NewAgentWorkbench({
                       }
                       configuredRuntimeEnvKeys={configuredRuntimeEnvKeys}
                       fallbacks={draft.modelFallbacks ?? []}
+                      showModelFallbacks={showModelFallbacks}
                       showMissingApiKeyErrors={showModelApiKeyError}
                       onSourceChange={(source) => {
                         setModelDataLoading(source === "ark");
