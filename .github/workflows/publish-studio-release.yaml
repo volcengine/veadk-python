@@ -56,6 +56,11 @@ jobs:
       (github.event_name == 'pull_request' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      PIP_INDEX_URL: https://pypi.org/simple
+      UV_DEFAULT_INDEX: https://pypi.org/simple
+      npm_config_registry: https://registry.npmjs.org
+      npm_config_replace_registry_host: always
 
     steps:
       - name: Check out release source
@@ -67,6 +72,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
+            frontend/service/studio_release_server/offline_runtime.py
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -77,37 +87,108 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          prune-cache: false
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+
+      - name: Cache pinned Studio build inputs
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/studio-release-inputs
+          key: studio-release-inputs-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('veadk/cli/studio_dependencies.py', 'veadk/cli/agentkit_cli.py') }}
 
       - name: Validate frozen Studio runtime lock
         run: uv lock --check
 
       - name: Build and validate Studio bundle
-        env:
-          PIP_INDEX_URL: https://mirrors.aliyun.com/pypi/simple/
-          UV_DEFAULT_INDEX: https://mirrors.aliyun.com/pypi/simple/
-          npm_config_registry: https://registry.npmmirror.com
-          npm_config_replace_registry_host: always
         run: |
           set -euo pipefail
           output_dir="$RUNNER_TEMP/studio-release-output"
           version="$(TZ=Asia/Shanghai date +%Y%m%d%H%M%S)"
           export output_dir version
           uv run --frozen --group dev python - <<'PY'
+          import hashlib
           import json
           import os
+          import time
+          import urllib.request
+          from concurrent.futures import ThreadPoolExecutor
           from pathlib import Path
 
+          from veadk.cli.agentkit_cli import download_agentkit_cli_archive
+          from veadk.cli.studio_dependencies import (
+              STUDIO_AGENTKIT_CLI_ARTIFACT,
+              STUDIO_DEPENDENCY_SOURCES,
+          )
+          from veadk.cli.studio_package import build_frontend_assets
           from veadk.cli.studio_release import build_studio_release
+
+
+          def prepare_dependency(dependency, destination):
+              target = destination / dependency.filename
+              if target.is_file():
+                  if hashlib.sha256(target.read_bytes()).hexdigest() == dependency.sha256:
+                      print(f"Using cached {dependency.filename}", flush=True)
+                      return
+                  target.unlink()
+              started = time.monotonic()
+              if dependency == STUDIO_AGENTKIT_CLI_ARTIFACT:
+                  download_agentkit_cli_archive(target, dependency)
+              else:
+                  with urllib.request.urlopen(dependency.url, timeout=120) as response:
+                      content = response.read(128 * 1024 * 1024 + 1)
+                  if len(content) > 128 * 1024 * 1024:
+                      raise ValueError(f"{dependency.filename} exceeds 128 MiB")
+                  if hashlib.sha256(content).hexdigest() != dependency.sha256:
+                      raise ValueError(f"{dependency.filename} checksum mismatch")
+                  target.write_bytes(content)
+              print(
+                  f"Prepared {dependency.filename} in {time.monotonic() - started:.1f}s",
+                  flush=True,
+              )
+
 
           source_root = Path(os.environ["GITHUB_WORKSPACE"])
           output_dir = Path(os.environ["output_dir"])
+          frontend_assets = Path(os.environ["RUNNER_TEMP"]) / "studio-release-frontend"
+          dependency_inputs = Path(os.environ["RUNNER_TEMP"]) / "studio-release-inputs"
+          dependency_inputs.mkdir(parents=True, exist_ok=True)
+          changelog = ("Pull request release validation",)
+          started = time.monotonic()
+          with ThreadPoolExecutor(max_workers=5) as executor:
+              preparation = [
+                  executor.submit(
+                      build_frontend_assets,
+                      source_root,
+                      frontend_assets,
+                      changelog=changelog,
+                  )
+              ]
+              for dependency in (*STUDIO_DEPENDENCY_SOURCES, STUDIO_AGENTKIT_CLI_ARTIFACT):
+                  preparation.append(
+                      executor.submit(
+                          prepare_dependency,
+                          dependency,
+                          dependency_inputs,
+                      )
+                  )
+              for future in preparation:
+                  future.result()
+          print(f"Build inputs ready in {time.monotonic() - started:.1f}s", flush=True)
+          started = time.monotonic()
           bundle, manifest = build_studio_release(
               source_root=source_root,
               output_dir=output_dir,
               version=os.environ["version"],
               git_sha=os.environ["GITHUB_SHA"],
-              changelog=("Pull request release validation",),
+              changelog=changelog,
+              frontend_assets=frontend_assets,
+              dependency_wheels=dependency_inputs,
           )
+          print(f"Bundle built in {time.monotonic() - started:.1f}s", flush=True)
           print(
               json.dumps(
                   {
@@ -130,8 +211,6 @@ jobs:
         env:
           BYTEPLUS_ACCESS_KEY: smoke
           BYTEPLUS_SECRET_KEY: smoke
-          PIP_INDEX_URL: https://mirrors.aliyun.com/pypi/simple/
-          UV_DEFAULT_INDEX: https://mirrors.aliyun.com/pypi/simple/
           VOLCENGINE_ACCESS_KEY: smoke
           VOLCENGINE_SECRET_KEY: smoke
         run: |
