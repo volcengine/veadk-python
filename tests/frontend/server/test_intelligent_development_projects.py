@@ -20,7 +20,7 @@ import hashlib
 import io
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi import FastAPI
@@ -39,6 +39,7 @@ from frontend.server.intelligent_development_projects import (
     TosIntelligentDevelopmentProjectRepository,
 )
 from frontend.server.intelligent_development_projects import service as service_module
+from frontend.server.intelligent_development_projects import routes as routes_module
 from frontend.server.intelligent_development_projects import (
     repository as repository_module,
 )
@@ -284,14 +285,43 @@ def test_name_request_parsing_is_bounded_and_does_not_reflect_input(
     assert store.tos.objects == original
 
 
-def test_name_api_rejects_deeply_nested_json(name_store):
+@pytest.mark.parametrize("version", [False, True])
+def test_name_api_rejects_deeply_nested_json(name_store, version):
     original = dict(name_store.tos.objects)
+    url = (
+        f"{name_store.url}/versions/{name_store.version.version_id}"
+        if version
+        else name_store.url
+    )
     response = name_store.client.patch(
-        name_store.url,
+        url,
         content="[" * 1500 + "]" * 1500,
         headers={"Content-Type": "application/json"},
     )
     assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "SOURCE_PROJECT_NAME_INVALID"
+    assert name_store.tos.objects == original
+
+
+@pytest.mark.parametrize("version", [False, True])
+def test_name_api_handles_parser_recursion_errors_without_reflecting_input(
+    name_store, monkeypatch: pytest.MonkeyPatch, version
+):
+    original = dict(name_store.tos.objects)
+    # CPython versions have different JSON recursion limits. Exercise the
+    # parser failure contract even when this interpreter accepts the nesting.
+    parser = Mock(side_effect=RecursionError("untrusted input must not be echoed"))
+    monkeypatch.setattr(routes_module, "json", SimpleNamespace(loads=parser))
+    url = (
+        f"{name_store.url}/versions/{name_store.version.version_id}"
+        if version
+        else name_store.url
+    )
+    response = name_store.client.patch(url, json={"name": "New name"})
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "SOURCE_PROJECT_NAME_INVALID"
+    assert "untrusted input" not in response.text
+    parser.assert_called_once()
     assert name_store.tos.objects == original
 
 
