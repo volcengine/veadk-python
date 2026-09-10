@@ -135,6 +135,10 @@
     "requestFailed": "知识库请求失败 ({{status}})"
   },
   "intelligentDevelopment": {
+    "invalidName": "名称须为 1～128 个字符，不能包含控制字符、不可见格式字符或 < >。",
+    "renameProjectFailed": "修改项目名称失败",
+    "renameVersionFailed": "修改版本名称失败",
+    "invalidNameUpdateResponse": "名称更新响应与请求不一致，请刷新后重试。",
     "invalidSourceSnapshot": "源码快照的响应格式无效。",
     "invalidProjectList": "项目列表的响应格式无效。",
     "invalidProjectVersion": "项目版本的响应格式无效。",

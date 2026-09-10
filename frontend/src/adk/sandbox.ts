@@ -1230,13 +1230,17 @@ function createSandboxClient(
   },
 
   async startSession(options = {}) {
+    const displayName = options.displayName?.trim() ?? "";
     const response = await studioFetch(
       api,
       {
         method: "POST",
         headers: sandboxHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
-          displayName: options.displayName?.trim() ?? "",
+          // Project display names allow more characters than session titles.
+          displayName: config.textOnly && options.projectId
+            ? Array.from(displayName).slice(0, SANDBOX_DISPLAY_NAME_MAX_LENGTH).join("")
+            : displayName,
           ...(options.modelId?.trim() ? { modelId: options.modelId.trim() } : {}),
           ...(config.textOnly && options.projectId
             ? {

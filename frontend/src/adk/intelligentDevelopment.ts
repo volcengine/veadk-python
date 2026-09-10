@@ -2,6 +2,7 @@ import type { IntelligentDevelopmentReleaseRef } from "../blocks";
 import { studioFetch } from "./client";
 import { adkT } from "./i18n";
 import { TRANSFER_REQUEST_TIMEOUT_MS } from "./timeout";
+import { normalizeSourceName, sourceNameError } from "./sourceProjectName";
 
 export interface IntelligentDevelopmentProject {
   schemaVersion: "1";
@@ -19,6 +20,7 @@ export interface IntelligentDevelopmentProject {
 
 export interface IntelligentDevelopmentVersion {
   schemaVersion: "1";
+  name?: string | null;
   producer?: "intelligent-development" | "migration";
   projectId: string;
   versionId: string;
@@ -181,6 +183,8 @@ function parseVersion(value: unknown): IntelligentDevelopmentVersion {
   const environmentDefaults = record(environment?.defaults);
   if (
     item?.schemaVersion !== "1"
+    || (item.name !== undefined && item.name !== null
+      && (typeof item.name !== "string" || sourceNameError(item.name) !== null))
     || typeof item.projectId !== "string"
     || typeof item.versionId !== "string"
     || !(item.parentVersionId === null || typeof item.parentVersionId === "string")
@@ -260,6 +264,47 @@ export async function fetchIntelligentDevelopmentVersions(
     throw new Error(adkT("intelligentDevelopment.invalidProjectVersion"));
   }
   return body.versions.map(parseVersion);
+}
+
+export async function renameIntelligentDevelopmentProject(
+  projectId: string,
+  name: string,
+  signal?: AbortSignal,
+): Promise<IntelligentDevelopmentProject> {
+  if (sourceNameError(name)) throw new Error(adkT("intelligentDevelopment.invalidName"));
+  const response = await studioFetch(
+    `/web/intelligent-development/projects/${encodeURIComponent(projectId)}`,
+    { method: "PATCH", headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ name: normalizeSourceName(name) }), signal },
+  );
+  if (!response.ok) throw await responseError(response, adkT("intelligentDevelopment.renameProjectFailed"));
+  const body = record(await responseJson(response, adkT("intelligentDevelopment.invalidNameUpdateResponse")));
+  const project = parseProject(body?.project);
+  if (project.projectId !== projectId || project.name !== normalizeSourceName(name)) {
+    throw new Error(adkT("intelligentDevelopment.invalidNameUpdateResponse"));
+  }
+  return project;
+}
+
+export async function renameIntelligentDevelopmentVersion(
+  projectId: string,
+  versionId: string,
+  name: string,
+  signal?: AbortSignal,
+): Promise<IntelligentDevelopmentVersion> {
+  if (sourceNameError(name)) throw new Error(adkT("intelligentDevelopment.invalidName"));
+  const response = await studioFetch(
+    `/web/intelligent-development/projects/${encodeURIComponent(projectId)}/versions/${encodeURIComponent(versionId)}`,
+    { method: "PATCH", headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ name: normalizeSourceName(name) }), signal },
+  );
+  if (!response.ok) throw await responseError(response, adkT("intelligentDevelopment.renameVersionFailed"));
+  const body = record(await responseJson(response, adkT("intelligentDevelopment.invalidNameUpdateResponse")));
+  const version = parseVersion(body?.version);
+  if (version.projectId !== projectId || version.versionId !== versionId || version.name !== normalizeSourceName(name)) {
+    throw new Error(adkT("intelligentDevelopment.invalidNameUpdateResponse"));
+  }
+  return version;
 }
 
 export async function deleteIntelligentDevelopmentVersion(
