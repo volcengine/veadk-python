@@ -52,3 +52,18 @@ Switch 关闭状态沿用开启状态尺寸移动圆点；Checkbox 选中图标�
 玻璃按钮使用 CSS 透明背景、backdrop-filter 和边缘高光，独立 SVG 仅用于图标；CSS 对 Figma GLASS 折射效果为近似实现
 ModalLayout 顶部光效和 CanvasBackground 点阵使用 CSS 实现
 Select 展开样式、浅色主题与动效属于基于现有设计的交互扩展
+
+## AI APP
+
+PromptInput（602:44016）为 720 × 150，使用 Didact Gothic、20px 圆角及 CSS 玻璃发送按钮，图标来自原稿 SVG
+支持受控和非受控输入、发送回调、禁用及 sending 状态，发送由按钮触发，文本框保留原生换行行为
+
+Item 合集增加 compact 变体（602:44003），尺寸 229.33 × 68，图标 22px，渐变描边透明度 26% → 13%
+Tabs 合集增加 GlassTabs（607:220149），原稿双选项尺寸 196 × 36，使用独立样式，支持键盘导航与平滑指示器
+
+SingleLinePromptInput（779:366073）为 652 × 56，92px 圆角，无外框描边和阴影；Century Gothic 16px / 26px，36px 渐变描边发送按钮，20px 原稿箭头
+
+基础组件增加 Divider（855:464899）：397px 宽、0.5px 线条，白色 20% 透明度，中段均匀、两端渐隐
+Dropdown（855:464896）为 394 × 28，支持点击及键盘激活展开/收起，160ms 过渡和减少动态效果偏好；children 为内容插槽，预览使用空白区域
+
+Label 增加可关闭变体（788:392375），GitHub 示例 97 × 26，16px 图标与关闭按钮，支持 onDismiss 回调

@@ -5,6 +5,9 @@ export function ItemPreview() {
     <section aria-labelledby="item-preview-title">
       <h2 id="item-preview-title" className="component-preview-title">Item</h2>
       <Item title="Platform-hosted storage" description="Auto-save. Cleared 24 hours after the session ends" />
+      <div style={{ marginTop: 32 }}>
+        <Item variant="compact" title="Upload code" description="View and one-click deploy" />
+      </div>
     </section>
   );
 }

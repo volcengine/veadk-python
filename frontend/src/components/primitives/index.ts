@@ -11,3 +11,7 @@ export * from "./PillTag";
 export * from "./FormLabel";
 export * from "./Textarea";
 export * from "./Select";
+
+export * from "./GlassTabs";
+export * from "./Divider";
+export * from "./Dropdown";

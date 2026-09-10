@@ -63,3 +63,28 @@
   width: 14px;
   height: 14px;
 }
+
+/* Figma 788:392375 */
+.studio-label--dismissible { gap: 4px; }
+.studio-label__dismiss {
+  display: grid;
+  place-items: center;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.studio-label__dismiss > span {
+  display: block;
+  width: 16px;
+  height: 16px;
+  background: currentColor;
+  mask-size: contain;
+  mask-repeat: no-repeat;
+}
+.studio-label__dismiss:focus-visible { outline: 1px solid var(--studio-focus-ring); outline-offset: 1px; }

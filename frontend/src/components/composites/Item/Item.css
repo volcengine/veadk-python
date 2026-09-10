@@ -1,3 +1,5 @@
+@import "../../tokens/didact-gothic.css";
+
 /* Figma: 788:392505 */
 .studio-item {
   box-sizing: border-box;
@@ -53,3 +55,44 @@
 }
 button.studio-item__action { cursor: pointer; }
 .studio-item img { display: block; flex-shrink: 0; }
+
+/* Figma 602:44003: compact item with a translucent gradient border */
+.studio-item-compact {
+  --item-compact-fill: rgba(255, 255, 255, .02);
+  --item-compact-icon: #131315;
+  --item-compact-icon-color: #ebebf5;
+  --item-compact-border: 255, 255, 255;
+  box-sizing: border-box;
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 229.3333435px;
+  min-height: 68px;
+  padding: 12px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: var(--item-compact-fill);
+  color: var(--studio-text-primary, #dbdee7);
+  font: 400 14px/22px "Studio Didact Gothic", sans-serif;
+  text-align: left;
+}
+.studio-item-compact::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  padding: 1px;
+  border-radius: inherit;
+  background: linear-gradient(167.82deg, rgba(var(--item-compact-border), .26) 21%, rgba(var(--item-compact-border), .13) 79%);
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+}
+.studio-item-compact__icon { display: grid; place-items: center; flex: 0 0 42px; height: 42px; border-radius: 12px; background: var(--item-compact-icon); }
+.studio-item-compact__code { display: block; width: 22px; height: 22px; background: var(--item-compact-icon-color); mask-size: contain; mask-repeat: no-repeat; }
+.studio-item-compact__content { display: flex; flex: 1; min-width: 0; flex-direction: column; }
+.studio-item-compact__title { opacity: .6; }
+.studio-item-compact__description { opacity: .4; font-size: 13px; line-height: 20px; overflow-wrap: break-word; }
+button.studio-item-compact { cursor: pointer; }
+button.studio-item-compact:focus-visible { outline: 2px solid var(--studio-focus-ring); outline-offset: 2px; }
+[data-theme="light"] .studio-item-compact { --item-compact-fill: #fff; --item-compact-icon: #fff; --item-compact-icon-color: var(--studio-text-primary); --item-compact-border: 36, 36, 43; }

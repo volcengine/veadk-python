@@ -1,0 +1,19 @@
+/* Figma 855:464899 */
+.studio-divider {
+  --divider-rgb: 255, 255, 255;
+  position: relative;
+  width: 397px;
+  height: 0;
+  flex: none;
+  border: 0;
+}
+.studio-divider::before {
+  content: "";
+  position: absolute;
+  top: -.5px;
+  left: 0;
+  width: 100%;
+  height: .5px;
+  background: linear-gradient(90deg, rgba(var(--divider-rgb), 0), rgba(var(--divider-rgb), .2) 25%, rgba(var(--divider-rgb), .2) 75%, rgba(var(--divider-rgb), 0));
+}
+[data-theme="light"] .studio-divider { --divider-rgb: 36, 36, 43; }

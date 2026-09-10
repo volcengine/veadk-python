@@ -4,3 +4,4 @@ export * from "./primitives"
 export * from "./composites"
 export * from "./layouts"
 export * from "./nodes";
+export * from "./ai-app";

@@ -1,0 +1,46 @@
+/* Figma 779:366073: outer stroke and shadow are explicitly hidden */
+.studio-single-line-prompt {
+  --prompt-border-rgb: 255, 255, 255;
+  --prompt-glass-rgb: 255, 255, 255;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  width: 652px;
+  height: 56px;
+  padding: 10px 10px 10px 16px;
+  border: 0;
+  border-radius: 92px;
+  overflow: hidden;
+  background: rgba(16, 16, 17, .78);
+  box-shadow: none;
+}
+.studio-single-line-prompt__text {
+  box-sizing: border-box;
+  display: block;
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  background: transparent;
+  box-shadow: none;
+  color: var(--studio-text-primary, #dbdee7);
+  font: 400 16px/26px "Century Gothic", sans-serif;
+  font-synthesis: none;
+  letter-spacing: 0;
+}
+.studio-single-line-prompt__text::placeholder { color: var(--studio-text-tertiary, #7a7880); opacity: 1; }
+.studio-single-line-prompt > .studio-prompt-input__send {
+  flex: 0 0 36px;
+  width: 36px;
+  height: 36px;
+  color: var(--studio-text-primary, #dbdee7);
+}
+[data-theme="light"] .studio-single-line-prompt {
+  --prompt-border-rgb: 36, 36, 43;
+  --prompt-glass-rgb: 36, 36, 43;
+  background: #ffffff;
+}

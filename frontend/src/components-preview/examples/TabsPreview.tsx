@@ -1,3 +1,4 @@
+import { GlassTabsPreview } from "./GlassTabsPreview";
 import { UnderlineTabsPreview } from "./UnderlineTabsPreview";
 import { PillTabsPreview } from "./PillTabsPreview";
 import { FilterTabsPreview } from "./FilterTabsPreview";
@@ -7,5 +8,6 @@ export function TabsPreview() {
     <UnderlineTabsPreview />
     <PillTabsPreview />
     <FilterTabsPreview />
+    <GlassTabsPreview />
   </div>;
 }
