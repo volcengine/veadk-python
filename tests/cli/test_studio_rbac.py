@@ -15,6 +15,7 @@
 """Tests for Studio role and Runtime ownership policy."""
 
 import base64
+import hashlib
 import itertools
 import json
 import logging
@@ -5274,7 +5275,7 @@ def test_source_preserving_update_ignores_browser_source_and_keeps_secrets_out_o
     assert captured["config"]["launch_types"]["cloud"]["cr_repo_name"] == ("legacy")
 
 
-def test_source_preserving_sidecar_update_reuses_exact_image_via_sdk(
+def test_source_preserving_legacy_ops_update_reuses_exact_image_via_sdk(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -5294,7 +5295,7 @@ def test_source_preserving_sidecar_update_reuses_exact_image_via_sdk(
     )
     runtime.envs = [
         SimpleNamespace(key="HARNESS_SIDECAR_ENABLED", value="true"),
-        SimpleNamespace(key="HARNESS_PROFILE", value="default"),
+        SimpleNamespace(key="HARNESS_PROFILE", value="ops"),
         SimpleNamespace(
             key="HARNESS_SIDECAR_CATALOG_VERSION",
             value="2026.07.1",
@@ -5312,7 +5313,7 @@ def test_source_preserving_sidecar_update_reuses_exact_image_via_sdk(
         ),
         SimpleNamespace(
             key="HARNESS_SIDECAR_EXPECTED_PLAN_HASH",
-            value="sha256:test-plan",
+            value="sha256:published-plan",
         ),
         SimpleNamespace(
             key="MCP_SERVERS_JSON",
@@ -5503,6 +5504,47 @@ def test_source_preserving_sidecar_update_reuses_exact_image_via_sdk(
         }
         assert "authToken" not in draft["mcpTools"][0]
         assert "sidecar-test-secret" not in capability.text
+        submitted_sidecar = {
+            **draft["harnessSidecar"],
+            "componentOverrides": {
+                "context_engine": True,
+                "compressor": False,
+                "verifier": True,
+                "long_run_control": True,
+                "mcp_resilience": True,
+            },
+            "catalogVersion": "2026.09.1",
+            "planHash": "sha256:test-plan",
+        }
+        draft["harnessSidecar"] = submitted_sidecar
+        changed_sidecar = {
+            **submitted_sidecar,
+            "componentOverrides": {
+                "context_engine": True,
+                "compressor": True,
+                "verifier": True,
+                "long_run_control": True,
+                "mcp_resilience": True,
+            },
+        }
+        changed_selection = client.post(
+            "/web/deploy-agentkit",
+            headers=headers,
+            json={
+                "name": "sidecar-agent",
+                "runtimeId": runtime.runtime_id,
+                "appName": "sidecar-agent",
+                "editMode": "source-preserving",
+                "draft": draft,
+                "harnessSidecar": changed_sidecar,
+                "updateEtag": capability.json()["etag"],
+                "baseRuntimeVersion": 9,
+                "minInstance": 1,
+                "maxInstance": 1,
+                "files": [{"path": "app.py", "content": "must-be-ignored\n"}],
+                "config": {"region": "cn-shanghai", "projectName": "default"},
+            },
+        )
         with client.stream(
             "POST",
             "/web/deploy-agentkit",
@@ -5513,7 +5555,7 @@ def test_source_preserving_sidecar_update_reuses_exact_image_via_sdk(
                 "appName": "sidecar-agent",
                 "editMode": "source-preserving",
                 "draft": draft,
-                "harnessSidecar": draft["harnessSidecar"],
+                "harnessSidecar": submitted_sidecar,
                 "updateEtag": capability.json()["etag"],
                 "baseRuntimeVersion": 9,
                 "minInstance": 1,
@@ -5528,6 +5570,10 @@ def test_source_preserving_sidecar_update_reuses_exact_image_via_sdk(
                 if line.startswith("data: ")
             ]
 
+    assert changed_selection.status_code == 409
+    assert changed_selection.json()["detail"] == (
+        "Harness Sidecar 组件选择已变化，请重新打开详情并确认后再更新。"
+    )
     assert response.status_code == 200
     assert frames[-1]["success"] is True
     assert captured["dockerfile"].splitlines()[0].endswith("@sha256:" + "c" * 64)
@@ -5545,6 +5591,85 @@ def test_source_preserving_sidecar_update_reuses_exact_image_via_sdk(
         "agentkit"
     )
     assert captured["config"]["launch_types"]["cloud"]["cr_repo_name"] == ("sidecar")
+
+
+def test_deployment_status_recovers_completed_update_from_fresh_instance(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+    task_id = "deploy-recovery-task"
+    runtime = _runtime_with_public_endpoint(
+        _runtime("runtime-developer", "developer", managed=True)
+    )
+    runtime.name = "recovered-runtime"
+    runtime.status = "Ready"
+    runtime.current_version_number = 4
+    runtime.tags.append(
+        SimpleNamespace(
+            key="veadk:deployment-task-sha256",
+            value=hashlib.sha256(task_id.encode()).hexdigest(),
+        )
+    )
+    monkeypatch.setattr(
+        AgentkitRuntimeClient,
+        "get_runtime",
+        lambda _self, _request: runtime,
+    )
+    monkeypatch.setattr(
+        "agentkit.toolkit.sdk.launch",
+        lambda **_kwargs: pytest.fail("status recovery must not replay deployment"),
+    )
+
+    # A newly constructed app has an empty process-local deployment task table.
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/deploy-agentkit/status",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "taskId": task_id,
+                "runtimeId": runtime.runtime_id,
+                "runtimeName": runtime.name,
+                "appName": "updated-agent",
+                "region": "cn-shanghai",
+                "baseRuntimeVersion": 3,
+            },
+        )
+        superseded = client.post(
+            "/web/deploy-agentkit/status",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "taskId": "different-deployment-task",
+                "runtimeId": runtime.runtime_id,
+                "runtimeName": runtime.name,
+                "appName": "updated-agent",
+                "region": "cn-shanghai",
+                "baseRuntimeVersion": 3,
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "done": True,
+        "success": True,
+        "agentName": "updated-agent",
+        "runtimeName": runtime.name,
+        "url": "https://runtime.example.com",
+        "apikey": "runtime-key",
+        "runtimeId": runtime.runtime_id,
+        "consoleUrl": (
+            "https://console.volcengine.com/agentkit/"
+            "region:agentkit+cn-shanghai/runtime?projectName=default"
+        ),
+        "region": "cn-shanghai",
+        "version": 4,
+    }
+    assert superseded.status_code == 200
+    assert superseded.json()["done"] is True
+    assert superseded.json()["success"] is False
+    assert "其他部署" in superseded.json()["error"]
 
 
 @pytest.mark.parametrize(
@@ -5818,6 +5943,7 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
             headers={"X-VeADK-Local-User": "developer"},
             json={
                 "name": "updated-agent",
+                "taskId": "update-deployment-task",
                 "description": "Updated\n description 🤖",
                 "runtimeId": runtime.runtime_id,
                 "appName": "updated-agent",
@@ -5967,6 +6093,10 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
         assert "cp_pipeline_name" not in cloud
     assert captured_config["common"]["description"] == "Updated description"
     updated_tags = {tag.key: tag.value for tag in update_requests[-1].tags}
+    assert (
+        updated_tags["veadk:deployment-task-sha256"]
+        == hashlib.sha256(b"update-deployment-task").hexdigest()
+    )
     assert updated_tags["veadk:environment-id"] == "default"
     assert "veadk:environment-version" not in updated_tags
     assert updated_tags["veadk:owner"] == "developer"

@@ -19,6 +19,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
+import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -34,12 +36,13 @@ from frontend.service.studio_release_server.models import (
 _IAM_CREDENTIAL_PATH = Path("/var/run/secrets/iam/credential")
 _MAX_DEPENDENCY_WHEEL_BYTES = 128 * 1024 * 1024
 _PYPI_FILE_HOST = "https://files.pythonhosted.org"
-_AGENTKIT_CLI_ARCHIVE_URL_PREFIX = (
-    "https://agentkit-cli.tos-cn-beijing.volces.com/0.52.18/"
-)
 _PYPI_MIRROR_HOSTS = (
     "https://pypi.tuna.tsinghua.edu.cn",
     "https://mirrors.aliyun.com/pypi",
+)
+_AGENTKIT_CLI_RELEASE_HOST = "agentkit-cli.tos-cn-beijing.volces.com"
+_AGENTKIT_CLI_VERSION_PATTERN = re.compile(
+    r"^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)" r"(?:[-+][0-9A-Za-z.-]+)?$"
 )
 
 
@@ -349,13 +352,34 @@ class TosDependencyStore:
                     raise ValueError(
                         "Studio dependency manifest is invalid."
                     ) from error
-                if filename == "agentkit-linux-x64.tar.gz" and not url.startswith(
-                    _AGENTKIT_CLI_ARCHIVE_URL_PREFIX
+                if filename == "agentkit-linux-x64.tar.gz" and not (
+                    self._valid_agentkit_cli_url(url, filename)
                 ):
                     raise ValueError("Studio dependency manifest is invalid.")
                 filenames.add(filename)
                 dependencies.append((filename, url, sha256.lower()))
         return tuple(dependencies)
+
+    @staticmethod
+    def _valid_agentkit_cli_url(url: str, filename: str) -> bool:
+        """Validate one manifest-pinned CLI source without pinning its version."""
+        try:
+            parsed = urllib.parse.urlsplit(url)
+            path_parts = parsed.path.split("/")
+            version = path_parts[1] if len(path_parts) == 3 else ""
+            return bool(
+                parsed.scheme == "https"
+                and parsed.netloc == _AGENTKIT_CLI_RELEASE_HOST
+                and parsed.username is None
+                and parsed.password is None
+                and parsed.port is None
+                and not parsed.query
+                and not parsed.fragment
+                and path_parts == ["", version, filename]
+                and _AGENTKIT_CLI_VERSION_PATTERN.fullmatch(version)
+            )
+        except ValueError:
+            return False
 
     def _cache_key(self, filename: str, sha256: str) -> str:
         prefix = self._settings.job_prefix.strip().strip("/")

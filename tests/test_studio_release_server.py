@@ -63,9 +63,9 @@ def test_release_server_agentkit_cli_pin_matches_veadk() -> None:
 
     assert release_publisher._AGENTKIT_CLI_ARCHIVE == artifact.filename
     assert release_publisher._AGENTKIT_CLI_ARCHIVE_SHA256 == artifact.sha256
-    assert (
-        release_tos_store._AGENTKIT_CLI_ARCHIVE_URL_PREFIX
-        == artifact.url.removesuffix(artifact.filename)
+    assert release_tos_store.TosDependencyStore._valid_agentkit_cli_url(
+        artifact.url,
+        artifact.filename,
     )
 
 
@@ -1653,6 +1653,99 @@ def test_tos_dependency_store_populates_and_reuses_cached_wheel(
     assert [path.read_bytes() for path in first] == [content, content]
     assert [path.read_bytes() for path in second] == [content, content]
     assert downloads == 2
+
+
+def test_tos_dependency_store_accepts_manifest_pinned_agentkit_cli_version(
+    tmp_path: Path,
+) -> None:
+    manifest = tmp_path / "dependencies.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "wheels": [
+                    {
+                        "filename": "dependency.whl",
+                        "url": "https://example.com/dependency.whl",
+                        "sha256": "a" * 64,
+                    }
+                ],
+                "artifacts": [
+                    {
+                        "filename": "agentkit-linux-x64.tar.gz",
+                        "url": (
+                            "https://agentkit-cli.tos-cn-beijing.volces.com/"
+                            "0.52.18/agentkit-linux-x64.tar.gz"
+                        ),
+                        "sha256": "b" * 64,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    store = TosDependencyStore(
+        _settings(),
+        client_factory=lambda: _DependencyCacheClient(),
+    )
+
+    dependencies = store._load_manifest(manifest)
+
+    assert dependencies[-1] == (
+        "agentkit-linux-x64.tar.gz",
+        (
+            "https://agentkit-cli.tos-cn-beijing.volces.com/"
+            "0.52.18/agentkit-linux-x64.tar.gz"
+        ),
+        "b" * 64,
+    )
+
+
+@pytest.mark.parametrize(
+    "url",
+    (
+        "http://agentkit-cli.tos-cn-beijing.volces.com/0.52.18/agentkit-linux-x64.tar.gz",
+        "https://example.com/0.52.18/agentkit-linux-x64.tar.gz",
+        "https://agentkit-cli.tos-cn-beijing.volces.com.evil.invalid/0.52.18/agentkit-linux-x64.tar.gz",
+        "https://agentkit-cli.tos-cn-beijing.volces.com/latest/agentkit-linux-x64.tar.gz",
+        "https://agentkit-cli.tos-cn-beijing.volces.com/0.52.18/other.tar.gz",
+        "https://agentkit-cli.tos-cn-beijing.volces.com/0.52.18/nested/agentkit-linux-x64.tar.gz",
+        "https://agentkit-cli.tos-cn-beijing.volces.com/0.52.18/agentkit-linux-x64.tar.gz?download=1",
+        "https://agentkit-cli.tos-cn-beijing.volces.com/0.52.18/agentkit-linux-x64.tar.gz#fragment",
+    ),
+)
+def test_tos_dependency_store_rejects_untrusted_agentkit_cli_url(
+    tmp_path: Path,
+    url: str,
+) -> None:
+    manifest = tmp_path / "dependencies.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "wheels": [
+                    {
+                        "filename": "dependency.whl",
+                        "url": "https://example.com/dependency.whl",
+                        "sha256": "a" * 64,
+                    }
+                ],
+                "artifacts": [
+                    {
+                        "filename": "agentkit-linux-x64.tar.gz",
+                        "url": url,
+                        "sha256": "b" * 64,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    store = TosDependencyStore(
+        _settings(),
+        client_factory=lambda: _DependencyCacheClient(),
+    )
+
+    with pytest.raises(ValueError, match="manifest is invalid"):
+        store._load_manifest(manifest)
 
 
 def test_builder_restores_manifest_dependencies_from_cache(tmp_path: Path) -> None:

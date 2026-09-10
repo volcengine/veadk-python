@@ -155,6 +155,8 @@ def _mcp_deployment_error_detail(code: str) -> str:
         return "无法沿用原 MCP 凭证，请重新打开详情后重新确认或填写 Key。"
     if code == "legacy_platform_mcp_read_only":
         return "运行版本中的 Skill 或 MCP 配置已变化，请重新打开详情并确认最新配置后再更新。"
+    if code == "legacy_overlay_sidecar_intent_changed":
+        return "Harness Sidecar 组件选择已变化，请重新打开详情并确认后再更新。"
     return "Harness Sidecar MCP 配置无效，请检查名称、地址与认证后重试。"
 
 
@@ -216,6 +218,7 @@ _LOCAL_ADK_RUN_PATHS = frozenset({"/run", "/run_sse"})
 _CP_BUILD_LOG_ERROR_TAIL_CHECK_CHARS = 1024
 _DEPLOY_STREAM_HEARTBEAT_SECONDS = 15.0
 _DEPLOY_STREAM_POLL_SECONDS = 0.1
+_RUNTIME_DEPLOYMENT_TASK_TAG = "veadk:deployment-task-sha256"
 _AGENTKIT_RUNTIME_READY_TIMEOUT_MS = "900000"
 _DEPLOY_PHASE_ORDER = {"build": 0, "deploy": 1, "publish": 2, "update": 3}
 _DEPLOY_PHASE_MARKERS = (
@@ -919,6 +922,12 @@ def _deployment_target_key(
         runtime_name.strip(),
         region.strip(),
     )
+
+
+def _deployment_task_fingerprint(task_id: str) -> str:
+    """Return the non-secret Runtime marker used for cross-instance recovery."""
+
+    return hashlib.sha256(task_id.encode("utf-8")).hexdigest()
 
 
 def _has_active_deployment_target(
@@ -4597,6 +4606,7 @@ def _run_frontend_server(
         resolve_studio_harness_sidecar_selection,
         studio_harness_deployment_config,
         studio_harness_runtime_env,
+        studio_harness_selectable_intent_signature,
     )
     from veadk.cli.studio_sidecar_prerequisites import (
         SIDECAR_BASE_IMAGE_ENV,
@@ -7204,7 +7214,9 @@ def _run_frontend_server(
                         published_sidecar_intent = normalize_studio_harness_intent(
                             published_draft.get("harnessSidecar")
                         )
-                        if published_sidecar_intent != sidecar_intent:
+                        if studio_harness_selectable_intent_signature(
+                            published_sidecar_intent
+                        ) != studio_harness_selectable_intent_signature(sidecar_intent):
                             raise LegacyRecoveryError(
                                 "legacy_overlay_sidecar_intent_changed"
                             )
@@ -7458,6 +7470,7 @@ def _run_frontend_server(
         runtime_tag_values.update(
             {
                 "veadk:managed": "true",
+                _RUNTIME_DEPLOYMENT_TASK_TAG: _deployment_task_fingerprint(task_id),
                 **({"veadk:author": author} if author else {}),
                 **({"veadk:owner": owner_id} if owner_id else {}),
                 **deployment_resource_tag_values,
@@ -9550,6 +9563,116 @@ def _run_frontend_server(
             region,
         )
         return runtime
+
+    @app.post("/web/deploy-agentkit/status")
+    async def _deployment_status(request: Request):
+        """Recover an accepted Runtime update through cloud-authoritative state."""
+
+        principal = _require_agent_management(request)
+        data = await request.json()
+        task_id = str(data.get("taskId") or "").strip()
+        runtime_id = str(data.get("runtimeId") or "").strip()
+        runtime_name = str(data.get("runtimeName") or "").strip()
+        app_name = str(data.get("appName") or "").strip()
+        region = _coerce_cloud_region(str(data.get("region") or ""))
+        project_name = str(data.get("projectName") or "default").strip() or "default"
+        base_version = data.get("baseRuntimeVersion")
+        if not task_id:
+            raise HTTPException(status_code=400, detail="taskId is required")
+
+        with _deploy_tasks_lock:
+            local_task = _deploy_tasks.get(task_id)
+            if local_task is not None:
+                local_owner_id = str(local_task.get("owner_id") or "")
+                if _request_role(request) != StudioRole.ADMIN and (
+                    principal is None or local_owner_id != principal.owner_id
+                ):
+                    raise HTTPException(
+                        status_code=404,
+                        detail="Deployment task not found",
+                    )
+                return {
+                    "done": False,
+                    "status": "running",
+                    "runtimeId": str(local_task.get("runtime_id") or runtime_id),
+                    "runtimeName": str(local_task.get("runtime_name") or runtime_name),
+                    "region": str(local_task.get("region") or region),
+                }
+
+        if (
+            not runtime_id
+            or not app_name
+            or isinstance(base_version, bool)
+            or not isinstance(base_version, int)
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Runtime update recovery metadata is incomplete",
+            )
+
+        runtime = _authorized_runtime(
+            request,
+            runtime_id,
+            region,
+            coded_access_error=True,
+        )
+        tags = _runtime_tags(runtime)
+        current_version = getattr(runtime, "current_version_number", None)
+        current_status = str(getattr(runtime, "status", "") or "")
+        expected_fingerprint = _deployment_task_fingerprint(task_id)
+        actual_fingerprint = tags.get(_RUNTIME_DEPLOYMENT_TASK_TAG, "")
+        if (
+            isinstance(current_version, bool)
+            or not isinstance(current_version, int)
+            or current_version <= base_version
+        ):
+            return {
+                "done": False,
+                "status": "running",
+                "runtimeId": runtime_id,
+                "runtimeName": runtime_name,
+                "region": region,
+            }
+        if not secrets.compare_digest(actual_fingerprint, expected_fingerprint):
+            return {
+                "done": True,
+                "success": False,
+                "error": (
+                    "Runtime 已被其他部署更新，无法确认本次部署结果，"
+                    "请刷新详情核对线上版本。"
+                ),
+                "phase": "publish",
+            }
+        if current_status != "Ready":
+            return {
+                "done": False,
+                "status": "running",
+                "runtimeId": runtime_id,
+                "runtimeName": runtime_name,
+                "region": region,
+            }
+
+        _rt_conn_cache.pop((region, runtime_id), None)
+        endpoint, runtime_api_key, _auth_type, _network_type = _resolve_runtime_conn(
+            runtime_id,
+            region,
+            runtime,
+        )
+        return {
+            "done": True,
+            "success": True,
+            "agentName": app_name,
+            "runtimeName": str(getattr(runtime, "name", "") or runtime_name),
+            "url": endpoint,
+            "apikey": runtime_api_key,
+            "runtimeId": runtime_id,
+            "consoleUrl": (
+                "https://console.volcengine.com/agentkit/"
+                f"region:agentkit+{region}/runtime?projectName={project_name}"
+            ),
+            "region": region,
+            "version": current_version,
+        }
 
     runtime_log_service = RuntimeLogService(
         provider=provider,

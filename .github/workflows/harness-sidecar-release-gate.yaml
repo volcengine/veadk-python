@@ -15,6 +15,8 @@ on:
       - 'tests/cli/test_studio_rbac.py'
       - 'tests/extensions/harness/**'
       - 'tests/integrations/agentkit/test_app.py'
+      - 'tests/test_harness_sidecar_release_gate.py'
+      - 'tests/test_studio_release_server.py'
       - 'veadk/cli/generated_agent_codegen.py'
       - 'veadk/cli/generated_agent_mcp.py'
       - 'veadk/cli/generated_agent_sidecar_runtime.py'
@@ -37,6 +39,8 @@ on:
       - 'tests/cli/test_studio_rbac.py'
       - 'tests/extensions/harness/**'
       - 'tests/integrations/agentkit/test_app.py'
+      - 'tests/test_harness_sidecar_release_gate.py'
+      - 'tests/test_studio_release_server.py'
       - 'veadk/cli/generated_agent_codegen.py'
       - 'veadk/cli/generated_agent_mcp.py'
       - 'veadk/cli/generated_agent_sidecar_runtime.py'
@@ -51,9 +55,10 @@ permissions:
   contents: read
 
 jobs:
-  python:
+  backend-gate:
+    name: Backend gate
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 3
     steps:
       - uses: actions/checkout@v4
 
@@ -72,7 +77,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          checks=(coverage lifecycle credentials)
+          checks=(coverage lifecycle credentials release)
           pids=()
           (
             python -m pytest -q \
@@ -100,11 +105,21 @@ jobs:
             python -m pytest -q \
               tests/cli/test_generated_agent_mcp.py \
               tests/cli/test_generated_agent_backend_codegen_extended.py::test_generated_debug_applies_published_mcp_credential_contract_before_discovery \
+              tests/cli/test_studio_rbac.py::test_deployment_status_recovers_completed_update_from_fresh_instance \
               tests/cli/test_studio_rbac.py::test_new_deployment_only_updates_non_default_instance_range \
               tests/cli/test_studio_rbac.py::test_sidecar_deployment_uses_agentkit_cli_structured_release \
+              tests/cli/test_studio_rbac.py::test_source_preserving_legacy_ops_update_reuses_exact_image_via_sdk \
               tests/cli/test_studio_rbac.py::test_application_owned_mcp_update_routes_cover_reuse_and_additions \
               tests/cli/test_studio_rbac.py::test_sidecar_update_resolves_or_explicitly_reuses_stored_mcp_credentials
           ) > "$RUNNER_TEMP/sidecar-credentials.log" 2>&1 &
+          pids+=("$!")
+          (
+            python -m pytest -q \
+              tests/test_studio_release_server.py::test_release_server_agentkit_cli_pin_matches_veadk \
+              tests/test_studio_release_server.py::test_tos_dependency_store_accepts_manifest_pinned_agentkit_cli_version \
+              tests/test_studio_release_server.py::test_tos_dependency_store_rejects_untrusted_agentkit_cli_url \
+              tests/test_harness_sidecar_release_gate.py
+          ) > "$RUNNER_TEMP/sidecar-release.log" 2>&1 &
           pids+=("$!")
 
           status=0
@@ -118,9 +133,10 @@ jobs:
           done
           exit "$status"
 
-  frontend:
+  frontend-gate:
+    name: Frontend gate
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 3
     steps:
       - uses: actions/checkout@v4
 
@@ -143,15 +159,18 @@ jobs:
         run: npm test
 
   gate:
-    if: always()
-    needs: [python, frontend]
+    name: Gate
+    if: ${{ always() }}
+    needs:
+      - backend-gate
+      - frontend-gate
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 1
     steps:
-      - name: Require every Sidecar check to pass
+      - name: Require both parallel gates
         env:
-          PYTHON_RESULT: ${{ needs.python.result }}
-          FRONTEND_RESULT: ${{ needs.frontend.result }}
+          BACKEND_RESULT: ${{ needs.backend-gate.result }}
+          FRONTEND_RESULT: ${{ needs.frontend-gate.result }}
         run: |
-          test "$PYTHON_RESULT" = success
+          test "$BACKEND_RESULT" = success
           test "$FRONTEND_RESULT" = success

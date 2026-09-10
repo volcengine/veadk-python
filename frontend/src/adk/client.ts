@@ -21,6 +21,7 @@ import {
   DeploymentStatusUnconfirmedError,
   isDeploymentAbortError,
   isDeploymentStatusUnconfirmedError,
+  pollDeploymentRecovery,
 } from "./deploymentStatus";
 import {
   DEFAULT_REQUEST_TIMEOUT_MS,
@@ -3224,6 +3225,16 @@ interface DeployFrame extends Partial<DeployAgentkitResult> {
   phase?: string;
 }
 
+class DeploymentRecoveryHttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "DeploymentRecoveryHttpError";
+  }
+}
+
 const deploymentControllers = new Map<string, AbortController>();
 
 function parseGithubCicdErrorDetail(detail: unknown): GithubCicdPipelineErrorDetail | null {
@@ -3551,8 +3562,60 @@ export async function deployAgentkitProject(
       deploymentControllers.delete(taskId);
     }
   };
+  const recoverFinal = async (cause?: unknown): Promise<DeployFrame> => {
+    if (isDeploymentAbortError(cause)) throw cause;
+    if (
+      !taskId ||
+      !opts?.runtimeId ||
+      typeof opts.baseRuntimeVersion !== "number"
+    ) {
+      throw new DeploymentStatusUnconfirmedError({ taskId, cause });
+    }
+    const recovered = await pollDeploymentRecovery<DeployFrame>({
+      signal: controller?.signal,
+      shouldRetry: (error) =>
+        !(error instanceof DeploymentRecoveryHttpError) ||
+        error.status === 404 ||
+        error.status === 408 ||
+        error.status === 429 ||
+        error.status >= 500,
+      load: async (signal) => {
+        const statusResponse = await apiFetch(
+          "/web/deploy-agentkit/status",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            signal,
+            body: JSON.stringify({
+              taskId,
+              runtimeId: opts.runtimeId,
+              runtimeName: opts.runtimeName,
+              appName: opts.appName ?? name,
+              region: config.region,
+              projectName: config.projectName,
+              baseRuntimeVersion: opts.baseRuntimeVersion,
+            }),
+          },
+          {},
+          30_000,
+        );
+        if (!statusResponse.ok) {
+          throw new DeploymentRecoveryHttpError(
+            statusResponse.status,
+            await httpErrorMessage(statusResponse, adkT("client.deploymentFailed")),
+          );
+        }
+        return statusResponse.json() as Promise<DeployFrame>;
+      },
+    });
+    if (!recovered) {
+      throw new DeploymentStatusUnconfirmedError({ taskId, cause });
+    }
+    return recovered;
+  };
 
-  let res: Response;
+  let res: Response | null = null;
+  let final: DeployFrame | null = null;
   try {
     const migrationSource = Boolean(opts?.migrationTaskId);
     opts?.onStage?.({
@@ -3611,34 +3674,45 @@ export async function deployAgentkitProject(
       pct: 100,
     });
   } catch (error) {
-    clearController();
-    if (isDeploymentAbortError(error)) throw error;
-    throw new DeploymentStatusUnconfirmedError({ taskId, cause: error });
+    try {
+      final = await recoverFinal(error);
+    } finally {
+      clearController();
+    }
   }
-  if (!res.ok) {
+  if (res && !res.ok) {
     const detail = await httpErrorMessage(res, adkT("client.deploymentFailed"));
     clearController();
     throw new Error(detail);
   }
 
-  let final: DeployFrame | null = null;
-  try {
-    for await (const raw of parseSSE(res)) {
-      const ev = raw as DeployFrame & DeployStage;
-      if (ev && ev.done) {
-        final = ev;
-        break;
+  if (res) {
+    try {
+      for await (const raw of parseSSE(res)) {
+        const ev = raw as DeployFrame & DeployStage;
+        if (ev && ev.done) {
+          final = ev;
+          break;
+        }
+        if (ev && ev.message) opts?.onStage?.(ev);
       }
-      if (ev && ev.message) opts?.onStage?.(ev);
+    } catch (error) {
+      try {
+        final = await recoverFinal(error);
+      } finally {
+        clearController();
+      }
     }
-  } catch (error) {
-    clearController();
-    if (isDeploymentAbortError(error)) throw error;
-    throw new DeploymentStatusUnconfirmedError({ taskId, cause: error });
   }
-  clearController();
-
-  if (!final) throw new DeploymentStatusUnconfirmedError({ taskId });
+  if (!final) {
+    try {
+      final = await recoverFinal();
+    } finally {
+      clearController();
+    }
+  } else {
+    clearController();
+  }
   if (!final.success) {
     const error = new Error(final.error || adkT("client.deploymentFailed"));
     if (isDeploymentStatusUnconfirmedError(error)) {
