@@ -47,7 +47,6 @@ class AgentBuilder:
             for sub_agent_config in agent_config["sub_agents"]:
                 agent = self._build(sub_agent_config)
                 sub_agents.append(agent)
-            agent_config.pop("sub_agents")
 
         tools = []
         if agent_config.get("tools", []):
@@ -58,10 +57,16 @@ class AgentBuilder:
                 func = getattr(module, func_name)
 
                 tools.append(func)
-            agent_config.pop("tools")
+
+        # Filter out special fields that will be passed explicitly
+        # to avoid modifying the original config and parameter conflicts
+        config_for_init = {
+            k: v for k, v in agent_config.items()
+            if k not in ["sub_agents", "tools"]
+        }
 
         agent_cls = AGENT_TYPES[agent_config["type"]]
-        agent = agent_cls(**agent_config, sub_agents=sub_agents, tools=tools)
+        agent = agent_cls(**config_for_init, sub_agents=sub_agents, tools=tools)
 
         logger.debug("Build agent done.")
 
