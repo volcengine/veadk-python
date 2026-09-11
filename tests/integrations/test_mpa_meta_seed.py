@@ -21,6 +21,7 @@ from veadk.integrations.mpa.mpa_meta_seed import (
     REQUIRED_META_FIELDS,
     MpaMetaSeedError,
     mpa_meta_table,
+    overwrite_mpa_meta,
     seed_mpa_meta,
 )
 
@@ -146,3 +147,94 @@ def test_seed_requires_mpa_agent_id() -> None:
     engine = _engine()
     with pytest.raises(MpaMetaSeedError, match="mpa_agent_id"):
         seed_mpa_meta(engine, mpa_agent_id="  ", values=_complete_values())
+
+
+def test_two_phase_overwrite_replaces_placeholders(monkeypatch) -> None:
+    """AC-19: phase-1 pre-seed with placeholders, phase-2 overwrites them.
+
+    Phase 1 writes a complete row (ready=true) using non-empty placeholders so
+    the runtime skips GetMpaInstanceConf at first start. Phase 2 overwrites the
+    placeholder fields with the real deploy-resolved values.
+    """
+    engine = _engine()
+    placeholder = {
+        "account_id": "2100000001",
+        "resource_account_id": "2100000001",
+        "runtime_id": "pending",
+        "public_endpoint": "https://pending.invalid",
+        "private_endpoint": "https://pending.invalid",
+        "runtime_api_key": "pending",
+        "apig_instance_id": "pending",
+    }
+    seed_mpa_meta(engine, mpa_agent_id="mi-1", values=placeholder)
+    # All seven fields present -> ready.
+    row = _row(engine, "mi-1")
+    for field in REQUIRED_META_FIELDS:
+        assert row[field]
+
+    # Phase 2: overwrite the placeholder fields with real values.
+    overwrite_mpa_meta(
+        engine,
+        mpa_agent_id="mi-1",
+        values={
+            "runtime_id": "r-real",
+            "public_endpoint": "https://real.example.com",
+            "private_endpoint": "https://real.example.com",
+            "runtime_api_key": "rk-real",
+            "apig_instance_id": "gw-real",
+        },
+    )
+    row = _row(engine, "mi-1")
+    assert row["runtime_id"] == "r-real"
+    assert row["public_endpoint"] == "https://real.example.com"
+    assert row["runtime_api_key"] == "rk-real"
+    assert row["apig_instance_id"] == "gw-real"
+    # account fields untouched.
+    assert row["account_id"] == "2100000001"
+
+
+def test_overwrite_skips_empty_values_keeping_placeholders() -> None:
+    """FR-19: empty resolved values must not clear phase-1 placeholders.
+
+    Regression for the real E2E bug: an unresolved apig_instance_id came back
+    empty and overwrote the placeholder, breaking mpa_instance_conf_ready.
+    """
+    engine = _engine()
+    placeholder = {
+        "account_id": "2112682748",
+        "resource_account_id": "2112682748",
+        "runtime_id": "pending",
+        "public_endpoint": "https://pending.invalid",
+        "private_endpoint": "https://pending.invalid",
+        "runtime_api_key": "pending",
+        "apig_instance_id": "pending",
+    }
+    seed_mpa_meta(engine, mpa_agent_id="mi-1", values=placeholder)
+
+    # Real values known for all but apig_instance_id (resolution failed -> "").
+    overwrite_mpa_meta(
+        engine,
+        mpa_agent_id="mi-1",
+        values={
+            "runtime_id": "r-real",
+            "public_endpoint": "https://real.example.com",
+            "private_endpoint": "https://real.example.com",
+            "runtime_api_key": "rk-real",
+            "apig_instance_id": "",  # unresolved -> must be skipped
+        },
+    )
+    row = _row(engine, "mi-1")
+    assert row["runtime_id"] == "r-real"
+    # Placeholder preserved so the seven-field readiness stays satisfied.
+    assert row["apig_instance_id"] == "pending"
+    for field in REQUIRED_META_FIELDS:
+        assert str(row[field]).strip()
+
+
+def test_overwrite_requires_existing_row() -> None:
+    """overwrite on a missing row is a clear error (phase-2 without phase-1)."""
+    engine = _engine()
+    with pytest.raises(MpaMetaSeedError, match="not found|no row|missing"):
+        overwrite_mpa_meta(
+            engine, mpa_agent_id="mi-absent", values={"runtime_id": "r-x"}
+        )

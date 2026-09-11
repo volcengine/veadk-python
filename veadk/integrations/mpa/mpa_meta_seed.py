@@ -198,3 +198,76 @@ def seed_mpa_meta(
             .one()
         )
     return dict(row)
+
+
+def overwrite_mpa_meta(
+    engine: Engine,
+    *,
+    mpa_agent_id: str,
+    values: dict[str, Any],
+) -> dict[str, Any]:
+    """Overwrite ``mpa_meta`` fields on an existing row with **non-empty** values.
+
+    Used after the runtime is Ready to swap phase-1 placeholders
+    (runtime_id/endpoints/api_key/apig_instance_id) for the real
+    deploy-resolved values. Empty resolved values are intentionally skipped so
+    they never clear a phase-1 placeholder — the seven required fields must stay
+    non-empty for ``mpa_instance_conf_ready`` (FR-19). The row must already exist
+    (created in phase 1).
+
+    Args:
+        engine: A synchronous SQLAlchemy engine.
+        mpa_agent_id: The ``mi-*`` instance id (primary key). Required.
+        values: Field values to overwrite; empty values are ignored.
+
+    Returns:
+        The resulting row as a dict.
+    """
+    mpa_agent_id = (mpa_agent_id or "").strip()
+    if not mpa_agent_id:
+        raise MpaMetaSeedError("mpa_agent_id is required")
+
+    # Only overwrite with non-empty values; empty resolved fields keep the
+    # phase-1 placeholder so readiness (7 non-empty fields) is never broken.
+    sanitized = {
+        key: str(values.get(key) or "").strip()
+        for key in _SEEDABLE_COLUMNS
+        if key in values and str(values.get(key) or "").strip()
+    }
+
+    metadata.create_all(engine, tables=[mpa_meta_table])
+
+    now = _utc_now()
+    with engine.begin() as conn:
+        existing = (
+            conn.execute(
+                select(mpa_meta_table).where(
+                    mpa_meta_table.c.mpa_agent_id == mpa_agent_id
+                )
+            )
+            .mappings()
+            .first()
+        )
+        if not existing:
+            raise MpaMetaSeedError(
+                f"overwrite_mpa_meta: no row found for {mpa_agent_id}; "
+                "phase-1 seed must run first"
+            )
+        if sanitized:
+            updates = dict(sanitized)
+            updates["updated_at"] = now
+            conn.execute(
+                mpa_meta_table.update()
+                .where(mpa_meta_table.c.mpa_agent_id == mpa_agent_id)
+                .values(**updates)
+            )
+        row = (
+            conn.execute(
+                select(mpa_meta_table).where(
+                    mpa_meta_table.c.mpa_agent_id == mpa_agent_id
+                )
+            )
+            .mappings()
+            .one()
+        )
+    return dict(row)
