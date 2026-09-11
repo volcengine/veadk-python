@@ -4105,6 +4105,10 @@ export interface CloudRuntime {
   isMine: boolean;
   /** Server-authorized deletion capability for this managed Runtime. */
   canDelete: boolean;
+  canManage?: boolean;
+  canPublish?: boolean;
+  visibility?: "private" | "enterprise";
+  reviewStatus?: "pending" | "approved" | "returned" | "withdrawn" | "";
 }
 
 export type CronJobScheduleType = "once" | "daily" | "weekly" | "cron";

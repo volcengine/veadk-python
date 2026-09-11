@@ -9,10 +9,13 @@ const require = createRequire(import.meta.url);
 const React = require("react");
 const {act} = React;
 const translations = JSON.parse(readFileSync(new URL("../src/i18n/resources/zh-CN/reviews.json", import.meta.url), "utf8"));
+const agentTranslations = JSON.parse(readFileSync(new URL("../src/i18n/resources/zh-CN/agentReviews.json", import.meta.url), "utf8"));
 const mocks = {
-  "react-i18next": `const resources = ${JSON.stringify(translations)};
-    const t = (key, options = {}) => { const value = key.split('.').reduce((obj, part) => obj?.[part], resources); return (typeof value === 'string' ? value : key).replace(/{{(\\w+)}}/g, (_, name) => options[name] ?? ''); };
-    export const useTranslation = () => ({t, i18n:{language:'zh-CN'}});`,
+  "react-i18next": `const catalog = { reviews: ${JSON.stringify(translations)}, agentReviews: ${JSON.stringify(agentTranslations)} };
+    const translate = (namespace) => (key, options = {}) => { const resources = catalog[namespace]; const value = key.split('.').reduce((obj, part) => obj?.[part], resources); return (typeof value === 'string' ? value : key).replace(/{{(\\w+)}}/g, (_, name) => options[name] ?? ''); };
+    const translators = Object.fromEntries(Object.keys(catalog).map(key => [key, translate(key)]));
+    export const useTranslation = (namespace = "reviews") => ({t: translators[namespace], i18n:{language:'zh-CN'}});`,
+  "../adk/agentReviews": `export const listAgentReviews = (...args) => globalThis.agentReviewApi.list(...args); export const readAgentReview = (...args) => globalThis.agentReviewApi.read(...args); export const changeAgentReview = (...args) => globalThis.agentReviewApi.change(...args);`,
   "../adk/skills": `export const listSkillReviews = (...args) => globalThis.reviewApi.list(...args); export const getSkillReviewFiles = (...args) => globalThis.reviewApi.files(...args); export const decideSkillReview = (...args) => globalThis.reviewApi.decide(...args);`,
   "../adk/reviewScores": `export const getReviewScore = (...args) => globalThis.scoreApi.get(...args); export const retryReviewScore = (...args) => globalThis.scoreApi.retry(...args);`,
   "../ui/text-shimmer/TextShimmer": `import {createElement as h} from 'react'; export const TextShimmer = ({children}) => h('span',null,children);`,
@@ -388,4 +391,35 @@ test('completed reports retain their score and display persistence errors in ful
     assert.ok(document.querySelector('a[download]'));
     assert.equal(button('重新评分'),undefined);
   }finally{await close();}
+});
+
+
+test('the Agent tab loads real applications and persists an approval independently of Skills', async () => {
+  const person = {id:'developer', name:'智能体开发者', avatarUrl:'', email:''};
+  let application = {id:'agent-request', runtimeId:'runtime-agent', region:'cn-beijing', status:'pending', snapshot:{name:'会议助手', description:'整理会议行动项', version:1, model:'demo-model'}, submitter:person, submittedAt:'2026-09-11T08:00:00Z', message:'请审核', reviewer:null, reviewedAt:'', reason:'', comment:'', published:false};
+  let calls = 0;
+  globalThis.agentReviewApi = {
+    list: async () => { calls++; return {items:[application]}; },
+    read: async () => ({application}),
+    change: async (runtimeId, action, body) => {
+      assert.equal(runtimeId, 'runtime-agent');
+      assert.equal(action, 'decision');
+      assert.equal(body.applicationId, application.id);
+      application = {...application, status:body.decision, published:true, reviewer:{...person,name:'审核管理员'}, reviewedAt:'2026-09-11T09:00:00Z', comment:body.comment};
+      return application;
+    },
+  };
+  const close = await mount({list:async()=>({items:requests})});
+  try {
+    assert.equal(calls, 0);
+    await act(async()=>button('智能体').click());
+    assert.equal(calls, 1);
+    assert.match(document.body.textContent, /会议助手/);
+    assert.doesNotMatch(document.body.textContent, /申请人甲/);
+    await act(async()=>button('查看并审批').click());
+    await act(async()=>button('通过').click());
+    assert.equal(application.status, 'approved');
+    assert.match(document.body.textContent, /审核管理员/);
+    assert.ok(calls >= 2);
+  } finally { await close(); }
 });

@@ -12,6 +12,37 @@ See [deployment and operation](service/studio_release_notifier/README.md).
 
 ## Features
 
+- **Agent publication review**: Developers deploy privately and apply from an
+  Agent card. The review center's Agent tab lets administrators inspect the
+  submitted Runtime metadata, approve with an optional comment, or return with
+  a required reason. Administrators can also publish directly. The applicant
+  sees the reviewer name/avatar, decision time, comment and return reason
+
+  Agent review is independent of SkillSpaces. Runtime `TagResources` writes
+  `veadk:visibility`, `veadk:review:status`, `veadk:review:id` and bounded compressed
+  metadata chunks; each write is read back before reporting success. Identity
+  comes from the authenticated principal, with display profiles resolved through
+  the configured Identity user pool. Cloud error bodies and request IDs are
+  returned intact. The repository uses provider-scoped clients for Volcengine
+  and BytePlus
+
+  Only an approved Runtime tagged enterprise-visible is shared. Other users can
+  use it through the server proxy and access their own conversations; management,
+  logs, credentials and other users' sessions remain restricted. Pending Agents
+  must be withdrawn before editing/deleting; published Agents must be unpublished
+  first. Unpublishing revokes subsequent shared proxy requests, including when
+  connection credentials were cached. An already running stream is not terminated
+
+  This first iteration stores the latest application on each Runtime and
+  replaces it on resubmission. Review covers name, description, model and Runtime
+  configuration metadata, not source files or automatic scoring. A configuration
+  fingerprint rejects approval if the submitted Runtime has changed. Version
+  upgrades, public-version selection and archived application history are deferred.
+  Studio guards do not prevent direct cloud changes; concurrent decisions are
+  serialized within one process, without a cross-replica transaction. The record
+  uses at most 16 chunks plus four control tags and rejects submissions exceeding
+  the cloud's tag limits
+
 - **Skill publication requests**: Each personal Skill version can be submitted
   from its action row. Studio copies its archive into an independent Skill in
   `studio_review_space`, preserving the original name and writing the signed-in

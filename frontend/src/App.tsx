@@ -7090,7 +7090,7 @@ export default function App() {
             ) : developerResourcesView ? (
               <DeveloperResources cloudProvider={cloudProvider} />
             ) : reviewCenterView ? (
-              <ReviewCenter role={access.role} cloudProvider={cloudProvider} />
+              <ReviewCenter role={access.role} cloudProvider={cloudProvider} onAgentChanged={() => invalidateRuntimeAgentCache()} />
             ) : platformFeedbackOrigin !== null ? (
               <PlatformFeedback
                 initialModule={issueFeedbackModuleForPage(platformFeedbackOrigin)}

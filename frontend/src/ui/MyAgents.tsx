@@ -1,3 +1,4 @@
+import { AgentReviewDialog } from "../agent-reviews/AgentReviewDialog";
 import { TextShimmer } from "./text-shimmer/TextShimmer";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SVGProps } from "react";
@@ -79,6 +80,10 @@ export interface MyAgentCardData {
     region: string;
     currentVersion?: number | null;
     canDelete: boolean;
+    canManage?: boolean;
+    canPublish?: boolean;
+    visibility?: "private" | "enterprise";
+    reviewStatus?: string;
   };
   sandbox?: SandboxAgentResource;
   draft?: WorkspaceAgentDraft;
@@ -233,6 +238,10 @@ function runtimeToAgent(runtime: CloudRuntime, t: TFunction<"ui">): MyAgentCardD
       region: runtime.region,
       currentVersion: runtime.currentVersion,
       canDelete: runtime.canDelete,
+      canManage: runtime.canManage,
+      canPublish: runtime.canPublish,
+      visibility: runtime.visibility,
+      reviewStatus: runtime.reviewStatus,
     },
   };
 }
@@ -345,6 +354,7 @@ async function loadRuntimeAgents(
 
 function AgentCard({
   agent,
+  onReview,
   onUse,
   onViewDetails,
   onPrepareUpdate,
@@ -360,6 +370,7 @@ function AgentCard({
   onDeleteDraft,
 }: {
   agent: MyAgentCardData;
+  onReview?: (agent: MyAgentCardData) => void;
   onUse?: (agent: MyAgentCardData) => Promise<void>;
   onViewDetails?: (agent: MyAgentCardData) => void;
   onPrepareUpdate?: (agent: MyAgentCardData) => void;
@@ -600,6 +611,13 @@ function AgentCard({
       {!agent.sandbox ? (
         <ResourceCardDescription>{agent.description}</ResourceCardDescription>
       ) : null}
+      {agent.runtime ? <div className="agent-review-card-controls">
+        <span className="agent-review-card-status">{t(agent.runtime.visibility === "enterprise" ? "enterprise" : "private", { ns: "agentReviews" })}</span>
+        {agent.runtime.canManage ? <button type="button" className="agent-review-card-action" onClick={(event) => { event.stopPropagation(); onReview?.(agent); }}>
+          {t(agent.runtime.reviewStatus ? "details" : agent.runtime.canPublish ? "publish" : "submit", { ns: "agentReviews" })}
+          {agent.runtime.reviewStatus ? ` · ${t(`status.${agent.runtime.reviewStatus}`, { ns: "agentReviews" })}` : ""}
+        </button> : null}
+      </div> : null}
     </ResourceCard>
   );
 }
@@ -666,6 +684,7 @@ export function MyAgents({
   const sandboxAbortRef = useRef<AbortController | null>(null);
   const runtimeCompatibilityAbortRef = useRef<Map<string, AbortController>>(new Map());
   const configuredRegion = resolveAgentRegion(studioRegion, cloudProvider);
+  const [reviewTarget, setReviewTarget] = useState<MyAgentCardData | null>(null);
   const [query, setQuery] = useState("");
   const [ownership, setOwnership] = useState<RuntimeScope>(
     runtimeScope === "mine" ? "mine" : "all",
@@ -1313,6 +1332,7 @@ export function MyAgents({
                   <AgentCard
                     key={agent.id}
                     agent={agent}
+                    onReview={setReviewTarget}
                     deploymentTask={deploymentTaskForAgent(agent)}
                     nowMs={remainingTimeNow}
                     onViewDeploymentTask={onViewDeploymentTask}
@@ -1324,8 +1344,8 @@ export function MyAgents({
                         }
                       : undefined}
                     onRetryCompatibility={retryRuntimeCompatibility}
-                    onPrepareUpdate={prepareRuntimeUpdate}
-                    onViewDetails={detailTarget ? () => {
+                    onPrepareUpdate={agent.runtime?.canManage === false || agent.runtime?.visibility === "enterprise" || agent.runtime?.reviewStatus === "pending" ? undefined : prepareRuntimeUpdate}
+                    onViewDetails={detailTarget && agent.runtime?.canManage !== false ? () => {
                       if (detailTarget.sandbox) {
                         onViewSandboxAgentDetails(detailTarget.sandbox);
                       } else {
@@ -1360,6 +1380,13 @@ export function MyAgents({
           </div>
         )}
       </ResourceResults>
+      {reviewTarget?.runtime ? <AgentReviewDialog
+        key={`${reviewTarget.runtime.region}:${reviewTarget.runtime.runtimeId}`}
+        runtimeId={reviewTarget.runtime.runtimeId} region={reviewTarget.runtime.region}
+        name={reviewTarget.name} canPublish={reviewTarget.runtime.canPublish === true}
+        onClose={() => setReviewTarget(null)}
+        onChanged={() => { invalidateRuntimeAgentCache(); void fetchRuntimePage("", true); }}
+      /> : null}
       {draftToDelete ? (
         <StudioConfirmDialog
           title={t("myAgents.deleteDraftTitle")}

@@ -2435,7 +2435,7 @@ def test_unlisted_identity_is_a_regular_user() -> None:
         "createAgents": False,
         "createPersonalAgents": True,
         "manageAgents": False,
-        "runtimeScope": "mine",
+        "runtimeScope": "all",
     }
 
 
@@ -2538,7 +2538,7 @@ def test_access_endpoint_resolves_local_roles_and_blocks_user_management(
         "createAgents": False,
         "createPersonalAgents": True,
         "manageAgents": False,
-        "runtimeScope": "mine",
+        "runtimeScope": "all",
     }
     assert user.json()["telemetry"]["userId"] == "reader"
     assert user.json()["telemetry"]["accountId"] == "2100123456"
@@ -2990,12 +2990,12 @@ def test_non_admin_runtime_list_uses_one_owner_filtered_request(
 
     with TestClient(app) as client:
         developer = client.get(
-            "/web/runtimes?scope=all&page_size=1&region=cn-beijing",
+            "/web/runtimes?scope=mine&page_size=1&region=cn-beijing",
             headers={"X-VeADK-Local-User": "developer"},
         )
         developer_call_count = runtime_calls
         reader = client.get(
-            "/web/runtimes?scope=all&page_size=10&region=cn-beijing",
+            "/web/runtimes?scope=mine&page_size=10&region=cn-beijing",
             headers={"X-VeADK-Local-User": "reader"},
         )
         admin = client.get(
@@ -7296,3 +7296,214 @@ def test_update_deployment_rejects_incompatible_runtime_before_launch(
         "该 Runtime 包含多个 Agent，暂不支持原地更新。"
     )
     assert launched is False
+
+
+@pytest.mark.parametrize(
+    "provider,region", [("volcengine", "cn-beijing"), ("byteplus", "ap-southeast-1")]
+)
+def test_agent_review_flow_enforces_shared_use_and_private_management(
+    monkeypatch, tmp_path, provider, region
+):
+    from copy import deepcopy
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+    from frontend.server.agent_reviews.tags import runtime_tags
+
+    runtime = _runtime_with_public_endpoint(_runtime("runtime-review", "developer"))
+    runtime.envs = [
+        SimpleNamespace(key="MODEL_AGENT_API_KEY", value="never-in-review-payload")
+    ]
+    runtime.current_version_number = 1
+    writes = []
+    monkeypatch.setenv("BYTEPLUS_ACCESS_KEY", "test-ak")
+    monkeypatch.setenv("BYTEPLUS_SECRET_KEY", "test-sk")
+    monkeypatch.setattr(
+        AgentkitRuntimeClient, "get_runtime", lambda *args: deepcopy(runtime)
+    )
+    monkeypatch.setattr(
+        AgentkitRuntimeClient,
+        "list_runtimes",
+        lambda *args: SimpleNamespace(
+            agent_kit_runtimes=[deepcopy(runtime)], next_token=""
+        ),
+    )
+
+    def tag(_self, *, api_action, request, response_type):
+        assert api_action == "TagResources"
+        body = request.model_dump(by_alias=True)
+        assert body["ResourceType"] == "runtime"
+        assert body["ResourceIds"] == [runtime.runtime_id]
+        assert len(body["Tags"]) <= 20
+        values = {
+            **runtime_tags(runtime),
+            **{item["Key"]: item["Value"] for item in body["Tags"]},
+        }
+        runtime.tags = [
+            SimpleNamespace(key=key, value=value) for key, value in values.items()
+        ]
+        writes.append(body)
+        return response_type()
+
+    monkeypatch.setattr(AgentkitRuntimeClient, "_invoke_api", tag)
+
+    class ReviewProxyStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b'["demo"]'
+
+    class ReviewProxyClient(httpx.AsyncClient):
+        def __init__(self, **kwargs):
+            kwargs["transport"] = httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    stream=ReviewProxyStream(),
+                    headers={"content-type": "application/json"},
+                )
+            )
+            super().__init__(**kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", ReviewProxyClient)
+    app = _create_studio_app(
+        monkeypatch, tmp_path, admins="admin", developers="developer", provider=provider
+    )
+    owner = {"X-VeADK-Local-User": "developer"}
+    admin = {"X-VeADK-Local-User": "admin"}
+    user = {"X-VeADK-Local-User": "reader"}
+    base = "/web/agent-reviews/runtime-review"
+    query = {"region": region}
+    with TestClient(app) as client:
+
+        def catalog():
+            response = client.get(
+                "/web/runtimes", params={**query, "scope": "all"}, headers=user
+            )
+            assert response.status_code == 200, response.text
+            return response.json()["runtimes"]
+
+        assert not catalog()
+        assert (
+            client.post(base + "/submit", json=query, headers=user).status_code == 403
+        )
+        submitted = client.post(
+            base + "/submit", json={**query, "message": "请审核"}, headers=owner
+        )
+        assert submitted.status_code == 200, submitted.text
+        assert "never-in-review-payload" not in submitted.text
+        assert submitted.json()["snapshot"]["version"] == runtime.current_version_number
+        assert (
+            client.get("/web/agent-reviews", params=query, headers=user).status_code
+            == 403
+        )
+        assert (
+            len(
+                client.get("/web/agent-reviews", params=query, headers=admin).json()[
+                    "items"
+                ]
+            )
+            == 1
+        )
+        assert (
+            client.post(
+                "/web/delete-runtime",
+                json={**query, "runtimeId": runtime.runtime_id},
+                headers=owner,
+            ).status_code
+            == 409
+        )
+        assert (
+            client.get(
+                "/web/runtime-update-capability",
+                params={**query, "runtimeId": runtime.runtime_id},
+                headers=owner,
+            ).status_code
+            == 409
+        )
+        returned = client.post(
+            base + "/decision",
+            json={
+                **query,
+                "applicationId": submitted.json()["id"],
+                "decision": "returned",
+                "reason": "请补充使用说明\n和示例",
+                "comment": "谢谢",
+            },
+            headers=admin,
+        )
+        assert returned.status_code == 200, returned.text
+        assert returned.json()["reason"] == "请补充使用说明\n和示例"
+        assert (
+            client.get(base, params=query, headers=owner).json()["application"][
+                "reviewer"
+            ]["name"]
+            == "admin"
+        )
+        submitted = client.post(base + "/submit", json=query, headers=owner)
+        approved = client.post(
+            base + "/decision",
+            json={
+                **query,
+                "applicationId": submitted.json()["id"],
+                "decision": "approved",
+                "comment": "通过",
+            },
+            headers=admin,
+        )
+        assert approved.status_code == 200, approved.text
+        assert approved.json()["reviewedAt"]
+        public = catalog()
+        assert len(public) == 1
+        assert public[0]["canManage"] is False and public[0]["canDelete"] is False
+        assert public[0]["visibility"] == "enterprise"
+        for route in ["/web/runtime-detail", "/web/runtime-api-key/reveal"]:
+            method = client.post if "reveal" in route else client.get
+            assert (
+                method(
+                    route,
+                    params={**query, "runtimeId": runtime.runtime_id},
+                    headers=user,
+                ).status_code
+                == 404
+            )
+        proxy = f"/web/runtime-proxy/{runtime.runtime_id}"
+        assert (
+            client.get(proxy + "/list-apps", params=query, headers=user).status_code
+            == 200
+        )
+        assert (
+            client.get(
+                proxy + "/apps/demo/users/reader/sessions", params=query, headers=user
+            ).status_code
+            == 200
+        )
+        assert (
+            client.get(
+                proxy + "/apps/demo/users/developer/sessions",
+                params=query,
+                headers=user,
+            ).status_code
+            == 403
+        )
+        assert (
+            client.get(
+                proxy + "/web/runtime-detail", params=query, headers=user
+            ).status_code
+            == 403
+        )
+        assert (
+            client.post(
+                proxy + "/run_sse",
+                params=query,
+                json={"user_id": "developer"},
+                headers=user,
+            ).status_code
+            == 403
+        )
+        assert (
+            client.post(base + "/unpublish", json=query, headers=owner).status_code
+            == 200
+        )
+        assert not catalog()
+        # Cached Runtime connection credentials cannot retain revoked access
+        assert (
+            client.get(proxy + "/list-apps", params=query, headers=user).status_code
+            == 404
+        )
+    assert writes

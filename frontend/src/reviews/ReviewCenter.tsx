@@ -1,3 +1,4 @@
+import { AgentReviewCenter } from "../agent-reviews/AgentReviewCenter";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { Dialog } from "@base-ui/react/dialog";
 import { Button } from "@openai/apps-sdk-ui/components/Button";
@@ -101,9 +102,10 @@ function ReviewDetails({ application, cloudProvider, onClose, onDecision, onScor
   );
 }
 
-function ReviewCenterContent({ cloudProvider }: { cloudProvider: CloudProvider }) {
+function ReviewCenterContent({ cloudProvider, onAgentChanged }: { cloudProvider: CloudProvider; onAgentChanged?: () => void }) {
   const { t, i18n } = useTranslation("reviews");
   const [applications, setApplications] = useState<ReviewApplication[]>([]);
+  const [agentPendingCount, setAgentPendingCount] = useState<number | null>(null);
   const [kind, setKind] = useState<ReviewKind>("skill");
   const [region, setRegion] = useState<string>(defaultCloudRegion(cloudProvider));
   const [loading, setLoading] = useState(true);
@@ -169,10 +171,11 @@ function ReviewCenterContent({ cloudProvider }: { cloudProvider: CloudProvider }
       <ResourcePageHeader title={t("title")} />
       <ResourceToolbar>
         <ResourceTabs idPrefix="review" ariaLabel={t("category")} value={kind}
-          items={(["skill", "agent"] as const).map((item) => ({ id: item, label: <>{t(`kind.${item}`)}<span className="review-tab-count">{applications.filter((application) => application.kind === item && (application.status === "pending" || application.status === "approving")).length}</span></>, panelId: "review-requests-panel" }))}
+          items={(["skill", "agent"] as const).map((item) => ({ id: item, label: <>{t(`kind.${item}`)}{item === "agent" ? agentPendingCount === null ? null : <span className="review-tab-count">{agentPendingCount}</span> : <span className="review-tab-count">{applications.filter((application) => application.kind === item && (application.status === "pending" || application.status === "approving")).length}</span>}</>, panelId: "review-requests-panel" }))}
           onChange={(next) => { setKind(next); setStatus("all"); setQuery(""); setSelected(null); }} />
       </ResourceToolbar>
       <div className="review-center__panel" id="review-requests-panel" role="tabpanel" aria-labelledby={`review-${kind}-tab`}>
+        {kind === "agent" ? <AgentReviewCenter cloudProvider={cloudProvider} onPendingCountChange={setAgentPendingCount} onChanged={onAgentChanged} /> : <>
         {kind === "skill" && error ? <div role="alert"><SkillErrorDetails error={error} /><button type="button" onClick={() => setRevision((value) => value + 1)}>{t("space.retry")}</button></div> : null}
         {notice ? <p role="status" className="review-notice">{notice}</p> : null}
         <ResourceDataTable rows={visible} rowKey={(item) => item.id} columns={columns}
@@ -183,6 +186,7 @@ function ReviewCenterContent({ cloudProvider }: { cloudProvider: CloudProvider }
           </>}
           emptyLabel={kind === "skill" && loading ? <ResourceLoadingState /> : kind === "skill" && error ? null : <div className="review-empty"><strong>{t(hasFilters ? "empty.filteredTitle" : "empty.title")}</strong><span>{t(hasFilters ? "empty.filteredDescription" : "empty.description")}</span>{hasFilters ? <button type="button" onClick={() => { setQuery(""); setStatus("all"); }}>{t("actions.clearFilters")}</button> : null}</div>} />
         <div className="review-center__count">{t("total", { count: visible.length })}</div>
+        </>}
       </div>
       {selected ? <ReviewDetails key={selected.id} application={selected} cloudProvider={cloudProvider} onClose={() => setSelected(null)} onDecision={(value) => openDecision(selected, value, true)} onScoreChanged={(score, requested) => {
         const aiReview = reviewScoreSummary(score);
@@ -201,10 +205,10 @@ function ReviewCenterContent({ cloudProvider }: { cloudProvider: CloudProvider }
   );
 }
 
-export function ReviewCenter({ role, cloudProvider }: { role: StudioRole; cloudProvider: CloudProvider }) {
+export function ReviewCenter({ role, cloudProvider, onAgentChanged }: { role: StudioRole; cloudProvider: CloudProvider; onAgentChanged?: () => void }) {
   const { t } = useTranslation("reviews");
   if (role !== "admin" && role !== "super_admin") {
     return <ResourcePageShell className="review-center"><ResourcePageHeader title={t("title")} /><p role="status">{t("adminOnly")}</p></ResourcePageShell>;
   }
-  return <ReviewCenterContent key={cloudProvider} cloudProvider={cloudProvider} />;
+  return <ReviewCenterContent key={cloudProvider} cloudProvider={cloudProvider} onAgentChanged={onAgentChanged} />;
 }
