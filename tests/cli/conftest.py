@@ -15,6 +15,15 @@
 from __future__ import annotations
 
 import pytest
+from unittest.mock import MagicMock
+
+
+@pytest.fixture(autouse=True)
+def _stub_studio_runtime_role(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    """Keep deployment tests isolated from live Runtime IAM operations"""
+    resolver = MagicMock(return_value="shared-runtime-role")
+    monkeypatch.setattr("frontend.server.runtime_iam.ensure_runtime_role", resolver)
+    return resolver
 
 
 @pytest.fixture(autouse=True)

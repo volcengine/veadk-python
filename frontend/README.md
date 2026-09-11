@@ -37,6 +37,16 @@ See [deployment and operation](service/studio_release_notifier/README.md).
   Studio's ADK chat protocol. Sessions require persistent storage to survive
   container replacement, and multiple replicas require appropriate session routing.
 
+- **Runtime IAM role reuse**: ordinary and quick Agent creation reuse the first
+  role with the `AgentKitDefaultRuntimeAccess` system policy in the selected
+  cloud account, including roles on later IAM result pages. If none matches,
+  Studio creates `AgentKit_Runtime_Default_ServiceRole_<7 random characters>`
+  with only that policy. Existing roles keep all their current permissions;
+  quick creation no longer adds `AgentKitFullAccess`. Lookup errors stop the
+  deployment instead of triggering role creation. This applies to Volcengine
+  and BytePlus; existing Runtime updates and Sidecar deployments keep their
+  existing role behavior
+
 - **Sandbox updates** in System Information compare each Tool's current image
   with `ListToolTypes` for its cloud provider and actual region. Volcengine and
   BytePlus use their own credentials and API hosts; catalogs are cached for
