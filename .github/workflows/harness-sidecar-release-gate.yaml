@@ -108,7 +108,9 @@ jobs:
               tests/cli/test_studio_rbac.py::test_deployment_status_recovers_completed_update_from_fresh_instance \
               tests/cli/test_studio_rbac.py::test_new_deployment_only_updates_non_default_instance_range \
               tests/cli/test_studio_rbac.py::test_sidecar_deployment_uses_agentkit_cli_structured_release \
-              tests/cli/test_studio_rbac.py::test_source_preserving_legacy_ops_update_reuses_exact_image_via_sdk \
+              tests/cli/test_studio_rbac.py::test_source_preserving_output_repository_migrates_only_tagless_runtimes \
+              tests/cli/test_studio_rbac.py::test_source_preserving_update_ignores_browser_source_and_keeps_secrets_out_of_build \
+              tests/cli/test_studio_rbac.py::test_source_preserving_legacy_ops_update_migrates_output_repository_via_sdk \
               tests/cli/test_studio_rbac.py::test_application_owned_mcp_update_routes_cover_reuse_and_additions \
               tests/cli/test_studio_rbac.py::test_sidecar_update_resolves_or_explicitly_reuses_stored_mcp_credentials
           ) > "$RUNNER_TEMP/sidecar-credentials.log" 2>&1 &
