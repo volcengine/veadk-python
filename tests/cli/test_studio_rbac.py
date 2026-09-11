@@ -58,6 +58,49 @@ from veadk.cli.studio_rbac import (
 )
 
 
+@pytest.mark.parametrize("provider", ["volcengine", "byteplus"])
+def test_runtime_role_lookup_failure_finishes_deployment_and_allows_retry(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    _stub_studio_runtime_role,
+    provider: str,
+) -> None:
+    monkeypatch.setenv("BYTEPLUS_ACCESS_KEY", "test-ak")
+    monkeypatch.setenv("BYTEPLUS_SECRET_KEY", "test-sk")
+    _stub_studio_runtime_role.side_effect = RuntimeError("IAM role lookup denied")
+    monkeypatch.setattr(
+        "agentkit.toolkit.sdk.launch",
+        lambda **_kwargs: pytest.fail("IAM failure must stop deployment before launch"),
+    )
+    app = _create_studio_app(
+        monkeypatch, tmp_path, developers="developer", provider=provider
+    )
+    with TestClient(app) as client:
+        for _ in range(2):
+            response = client.post(
+                "/web/deploy-agentkit",
+                headers={"X-VeADK-Local-User": "developer"},
+                json={
+                    "name": "role-lookup-test",
+                    "taskId": "role-lookup-task",
+                    "createEvaluationSets": False,
+                    "envs": [{"key": "MODEL_AGENT_API_KEY", "value": "test-only-key"}],
+                    "files": [{"path": "app.py", "content": "app = object()\n"}],
+                    "config": {"region": "cn-beijing"},
+                },
+            )
+            assert response.status_code == 200
+            frames = [
+                json.loads(line.removeprefix("data: "))
+                for line in response.iter_lines()
+                if line.startswith("data: ")
+            ]
+            assert frames[-1]["done"] is True
+            assert frames[-1]["success"] is False
+            assert "IAM role lookup denied" in frames[-1]["error"]
+    assert _stub_studio_runtime_role.call_count == 2
+
+
 @pytest.mark.parametrize(
     ("code", "expected"),
     [
@@ -5452,6 +5495,7 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
     has_resource_tags: bool,
     provider: str,
     region: str,
+    _stub_studio_runtime_role,
 ) -> None:
     from agentkit.sdk.runtime.client import AgentkitRuntimeClient
 
@@ -5783,6 +5827,7 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
     assert cloud["runtime_id"] == runtime.runtime_id
     assert cloud["runtime_name"] == runtime.name
     assert cloud["runtime_role_name"] == "runtime-role"
+    _stub_studio_runtime_role.assert_not_called()
     assert cloud["image_tag"] == "veadk-v4"
     if provider == "volcengine":
         tencent = "https://mirrors.cloud.tencent.com/pypi/simple"
@@ -6135,6 +6180,7 @@ def test_application_owned_mcp_update_routes_cover_reuse_and_additions(
         ("persistent", 1, 5, False, True),
     ],
 )
+@pytest.mark.parametrize("provider", ["volcengine", "byteplus"])
 def test_new_deployment_only_updates_non_default_instance_range(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -6143,6 +6189,8 @@ def test_new_deployment_only_updates_non_default_instance_range(
     max_instance: int,
     expects_update: bool,
     quick_mode: bool,
+    provider: str,
+    _stub_studio_runtime_role,
 ) -> None:
     from agentkit.sdk.runtime.client import AgentkitRuntimeClient
 
@@ -6150,7 +6198,6 @@ def test_new_deployment_only_updates_non_default_instance_range(
     update_requests: list[Any] = []
     create_requests: list[Any] = []
     captured_config: dict[str, Any] = {}
-    full_access_calls: list[dict[str, Any]] = []
 
     def create_runtime(_self: Any, request: Any) -> SimpleNamespace:
         create_requests.append(request)
@@ -6188,14 +6235,11 @@ def test_new_deployment_only_updates_non_default_instance_range(
     monkeypatch.setattr(AgentkitRuntimeClient, "update_runtime", update_runtime)
     monkeypatch.setattr(AgentkitRuntimeClient, "get_runtime", get_runtime)
     monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
-    monkeypatch.setattr(
-        "veadk.cli.agentkit_runtime_iam.ensure_quick_runtime_full_access",
-        lambda role_name, **kwargs: full_access_calls.append(
-            {"role_name": role_name, **kwargs}
-        )
-        or True,
+    monkeypatch.setenv("BYTEPLUS_ACCESS_KEY", "test-ak")
+    monkeypatch.setenv("BYTEPLUS_SECRET_KEY", "test-sk")
+    app = _create_studio_app(
+        monkeypatch, tmp_path, developers="developer", provider=provider
     )
-    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
 
     with TestClient(app) as client:
         with client.stream(
@@ -6275,21 +6319,15 @@ def test_new_deployment_only_updates_non_default_instance_range(
     assert bool(update_requests) is expects_update
     assert all(request.apmplus_enable is True for request in update_requests)
     assert any(frame.get("phase") == "update" for frame in frames) is expects_update
-    assert bool(full_access_calls) is quick_mode
-    if quick_mode:
-        assert full_access_calls == [
-            {
-                "role_name": "AgentKit_Runtime_Default_ServiceRole_test",
-                "access_key": "test-ak",
-                "secret_key": "test-sk",
-                "session_token": None,
-                "provider": "volcengine",
-            }
-        ]
-        assert any(
-            frame.get("message") == "快速模式 Runtime 已具备 AgentKit 资源访问权限"
-            for frame in frames
-        )
+    assert captured_config["launch_types"]["cloud"]["runtime_role_name"] == (
+        "shared-runtime-role"
+    )
+    _stub_studio_runtime_role.assert_called_once_with(
+        access_key="test-ak",
+        secret_key="test-sk",
+        session_token=None,
+        provider=provider,
+    )
     if expects_update:
         request = update_requests[0]
         assert request.runtime_id == runtime_id
@@ -6383,6 +6421,7 @@ def test_new_deployment_rejects_invalid_instance_range(
 def test_sidecar_deployment_uses_agentkit_cli_structured_release(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    _stub_studio_runtime_role,
 ) -> None:
     from agentkit.sdk.runtime.client import AgentkitRuntimeClient
     from veadk.cli.studio_sidecar_prerequisites import DEFAULT_SIDECAR_BASE_IMAGE
@@ -6616,6 +6655,7 @@ def test_sidecar_deployment_uses_agentkit_cli_structured_release(
     assert frames[-1]["agentName"] == agent_name
     assert frames[-1]["runtimeName"] == runtime_name
     assert captured["command"] == ["/fake/agentkit", "release", "--json"]
+    _stub_studio_runtime_role.assert_not_called()
     assert captured["managed_base_in_env"] is True
     assert captured["create_only"] is True
     assert captured["cli_env"]["AGENTKIT_RUNTIME_READY_TIMEOUT_MS"] == "900000"
