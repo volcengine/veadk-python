@@ -22,6 +22,7 @@ including any secret material.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -58,6 +59,7 @@ class VerificationResult:
 def verify_instance(
     public_endpoint: str,
     *,
+    api_key: str = "",
     client: httpx.Client | None = None,
     timeout: float = _DEFAULT_TIMEOUT_SECONDS,
 ) -> VerificationResult:
@@ -65,6 +67,8 @@ def verify_instance(
 
     Args:
         public_endpoint: The released public base URL.
+        api_key: When set, sent as ``Authorization: Bearer <api_key>`` so
+            key-auth runtimes (the AgentKit default) return 200 instead of 401.
         client: Optional injected ``httpx.Client`` (used by tests). When omitted
             a short-timeout client is created and closed here.
         timeout: Per-request timeout in seconds when creating the client.
@@ -76,16 +80,30 @@ def verify_instance(
     base = public_endpoint.rstrip("/")
     owns_client = client is None
     http = client or httpx.Client(timeout=timeout)
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key.strip() else {}
     failures: list[str] = []
     statuses: dict[str, int | str] = {}
     try:
         for suffix, label in _PROBES:
             url = f"{base}{suffix}"
             try:
-                response = http.get(url)
+                response = http.get(url, headers=headers)
                 statuses[label] = response.status_code
                 if not 200 <= response.status_code < 300:
                     failures.append(f"{label}(status={response.status_code})")
+                elif label == "agent-card":
+                    try:
+                        card_url = str(response.json().get("url") or "")
+                    except (ValueError, AttributeError):
+                        card_url = ""
+                    card_host = urlsplit(card_url).hostname or ""
+                    expected_host = urlsplit(base).hostname or ""
+                    if (
+                        not card_url
+                        or "<pending-endpoint>" in card_url
+                        or card_host != expected_host
+                    ):
+                        failures.append("agent-card-url(stale-or-foreign)")
             except httpx.HTTPError as exc:
                 statuses[label] = "error"
                 # Only the exception type is recorded to avoid leaking URLs/creds.

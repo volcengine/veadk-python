@@ -1,48 +1,73 @@
-# 功能验证 Case 执行报告（dev-loop 步骤 7）
+# 功能验证 Case 执行报告（dev-loop 步骤 7 与步骤 10）
 
 > 执行日期：2026-09-11
 > 分支：`feat/mpa-agent-oneclick-provision`
-> 被测范围：`veadk/cli/cli_mpa.py`、`veadk/integrations/mpa/*`、`veadk/integrations/ve_faas/ve_faas.py`（deploy_image 扩展）
+> 被测范围：`veadk mpa create`、`veadk/integrations/mpa/*`、真实 AgentKit Tool/Runtime、Studio A2A。
 
-## 执行汇总
+## 1. 执行汇总
 
-| Case | 需求 | 命令 / 操作 | 结果 | 证据 |
-| --- | --- | --- | --- | --- |
-| VC-1 | FR-1 | `uv run veadk mpa --help` + `uv run veadk --help` | pass | 见下「VC-1」 |
-| VC-2 | FR-2 | `pytest -k missing_required_param_named_error` | pass | test_cli_mpa |
-| VC-3 | FR-2/8 | `pytest -k prompts_hidden_for_feishu_secret` | pass | test_cli_mpa |
-| VC-4 | FR-3 | `pytest test_ve_faas_deploy_image_key_auth -k with_key_auth` | pass | test_ve_faas_deploy_image_key_auth |
-| VC-5 | FR-3/AC-10 | `pytest -k compat_returns_three_tuple` | pass | 兼容守卫，3 元组不变 |
-| VC-6 | FR-4 | `pytest -k seed_writes_seven_required_fields` | pass | test_mpa_meta_seed |
-| VC-7 | FR-4/11 | `pytest -k seed_private_can_mirror_public` | pass | private==public |
-| VC-8 | FR-4 | `pytest -k seed_aborts_when_required_field_unresolved` | pass | 写前中止、无行 |
-| VC-9 | FR-4 | `pytest -k idempotent / fills_only_empty` | pass | 非空不覆盖 |
-| VC-10 | FR-5/10/11 | `pytest test_mpa_provision_env` | pass | IDENTITY_STARTUP_ENABLED=false + csi-<account_id> |
-| VC-11 | FR-6 | `pytest -k verify_fails_*` | pass | readiness/agent-card 失败即 fail |
-| VC-12 | FR-6 | `pytest -k verify_passes_when_all_probes_ok` | pass | 三探测全通过 |
-| VC-13 | FR-7 | `pytest -k full_flow_orchestration` + dry-run 输出 | pass | agent-card.json + endpoint 出现在输出 |
-| VC-14 | FR-8 | `uv run veadk mpa create ... --dry-run` | pass | 见下「VC-14」，密钥掩码 |
-| VC-17 | 边界 | 参数缺失/连接前置校验（dry-run 不触发部署/播种） | pass | dry-run 断言 deploy/seed 零调用 |
-| VC-15 | FR-9 | `git -C mpa-agent status --porcelain` | pass | 见下「VC-15」，空输出 |
-| VC-16 | FR-9 | `uv run pytest tests/cli` | pass | 见「回归」 |
-| VC-18 | FR-7 | 真机 Studio A2A 聊天 | deferred | 需真实云部署，见步骤 15 |
-| VC-19 | 回归 | 不同 session 不同沙箱 | deferred | 同上（运行时既有行为，代码未改动） |
-| VC-20 | 回归 | 飞书拉群 | deferred | 同上 |
+| Case | 结果 | 证据 / 说明 |
+| --- | --- | --- |
+| VC-1..17 | pass | CLI 注册、参数/secret、VeFaaS 兼容、两阶段 `mpa_meta`、env、key-auth probes、dry-run、回归均由单测/CLI 测试覆盖 |
+| VC-18 Studio A2A 聊天 | blocked | Runtime/worker 可执行，但两个 A2A 请求最终均返回 `failed`：`The session has been modified in storage since it was loaded` |
+| VC-19 不同 session 不同沙箱 | pass（资源隔离层） | 两个不同 A2A context 映射到 `cw_sess_872f64f2f00b` 与 `cw_sess_bdf3758b4ddd` |
+| VC-20 飞书拉群 | blocked/not_run | 未提供飞书凭据/机器人安装；Runtime 共享网关没有客户 `apig_instance_id` |
+| VC-21 自动身份与独立资源 | pass | Agent `mi-tyfybtw8nnzc`，Tool `t-yeuugdts00zn6n5iqhin`，Runtime `r-yeuugf44qob21078l38i` |
+| VC-22 缺 Tool 输入无副作用 | pass | 参数前置校验测试确认 SkillSpace/DB/Tool/Runtime 零调用 |
+| VC-23 worker 模型选择 | pass | `MPA_CODEX_WORKER_DEFAULT_MODEL=doubao-seed-2-0-pro-260215`；两个 worker turn 模型 HTTP 200、命令 exit code 0、binding completed |
+| VC-24 重试幂等 | pass | 同名 Tool/Runtime 复用；非 Ready Tool 等待；重名歧义失败；Runtime 更新等待新版 Ready |
+| VC-25 APIG 完整性 | pass（fail-closed） | 真实 Runtime：`GatewayMode=Shared`、`GatewayInstanceId=""`；endpoint 不匹配账户 gateway；CLI 拒绝 finalize，支持显式 `--apig-instance-id` |
 
-单测级：25/25 通过（`test_ve_faas_deploy_image_key_auth` 3 + `test_mpa_meta_seed` 6 + `test_mpa_provision_env` 6 + `test_mpa_verify` 4 + `test_cli_mpa` 6）。
+## 2. 真机资源与状态
 
-## VC-1（命令注册）
+- Account：`2112682748`。
+- Agent：`mi-tyfybtw8nnzc`。
+- Tool：`t-yeuugdts00zn6n5iqhin`。
+- Runtime：`r-yeuugf44qob21078l38i`，version 4，Ready。
+- Public endpoint：`https://s6rrc31qdjfa7m90q4opi.apigateway-cn-beijing.volceapi.com`。
+- Runtime 外层 APIG key auth 可用；`A2A_TIP_VERIFY_ENABLED=false` 解决镜像内部无 TIP issuer 时的 401，同时不取消外层 key auth。
+- 数据库现有行仍为 `apig_instance_id=pending`；由于无法获得真实客户 APIG id，不能把它视为 finalize 成功。
 
-`veadk mpa --help` 列出 `create`；`veadk --help` 同时列出 `mpa` 与既有 `deploy/studio/agentkit/harness/...`，无缺失。
+## 3. Studio A2A 与沙箱证据
 
-## VC-14（dry-run 密钥掩码）
+指定模型后，两个独立 context 都成功进入不同 worker session：
 
-`--dry-run` 输出运行时 env（掩码后）：`MODEL_AGENT_API_KEY=m***********`、`OPENVIKING_API_KEY=o********`、`PGPASSWORD=p********`；`CLAW_SPACE_ID=csi-2100000001`、`IDENTITY_STARTUP_ENABLED=false`、`MPA_CODEX_WORKER_ENDPOINT_PREFERENCE=public`；并列出 7 个待播种 `mpa_meta` 字段。结尾声明「no cloud or database changes were made」。明文 `pg-secret`/`model-secret`/`ov-secret` 未出现。
+| Turn | Worker session | Worker 结果 | A2A 最终结果 |
+| --- | --- | --- | --- |
+| `turn_f896d856f1c1` | `cw_sess_872f64f2f00b` | completed，命令 exit code 0 | failed：ADK session revision 冲突 |
+| `turn_fe422c33aa56` | `cw_sess_bdf3758b4ddd` | completed，命令 exit code 0 | failed：ADK session revision 冲突 |
 
-## VC-15（mpa-agent 零改动）
+结论：VC-19 的 session→sandbox 隔离得到真实证明，VC-23 的模型路由/worker 执行通过；但 VC-18 要求的是 Studio 收到成功聊天结果，因此必须保持 blocked。根因位于指定 mpa-agent image 的 PostgreSQL ADK session revision 协调：持久事件推进了 session revision，而 A2A runner 仍持有旧快照。veadk 不应吞掉或伪装该失败。
 
-`git -C ~/workspace/bytedance/mpa/mpa-agent status --porcelain` 输出为空 —— 本变更未触碰 mpa-agent 仓库。
+## 4. APIG 与飞书阻断
 
-## 真机 Case（VC-18/19/20）说明
+控制面原始字段为 `GatewayMode=Shared`、`GatewayInstanceId=""`。public endpoint 前缀 `s6rrc31qdjfa7m90q4opi` 也不匹配账户中的 APIG gateway id。因此：
 
-VC-18/19/20 需要一次真实 `veadk mpa create` 部署（真实云凭据 + 可达 PostgreSQL/OpenViking + Studio）。这些属于运行时既有行为（本变更未修改 mpa-agent 的 A2A/沙箱/飞书路径），在步骤 15（门禁+E2E）由用户在真实环境执行并回填脱敏证据。
+- CLI 不再回退选择任意 serverless gateway；
+- 可用 `--apig-instance-id` 显式传入 IM routing 对应的专属客户 gateway；
+- 未取得真实 id 时，phase-2 `mpa_meta` finalize 失败并保留占位；
+- 飞书验证同时缺少 Feishu App 凭据/机器人安装，VC-20 不可执行。
+
+此外，`arkclaw:ListResources` 对 `clawspace/csi-2112682748` 返回 403，MCP discovery 会 fallback；这是飞书/集成能力的权限风险，不影响已证明的 Tool/worker 执行。
+
+## 5. OpenViking 说明
+
+提供的 OpenViking endpoint 与当前 bearer OpenViking Server API 契约不兼容，因此本次真实 Runtime 未注入该配置。PostgreSQL/OpenViking 均按设计作为外部既有资源，不由 CLI 创建。
+
+## 6. 回归与门禁
+
+- 第二轮 review 后定向 Tool/Runtime：13 passed。
+- gateway/CLI + Runtime：22 passed。
+- targeted ruff：All checks passed。
+- 完整 MPA suite：57 passed。
+- 完整 `tests/cli`：1282 passed，4 skipped（36 条依赖弃用 warning，无失败）。
+- `uv run pre-commit run --files <本功能文件>`：ruff check、ruff format、Detect hardcoded secrets 全部通过。系统 PATH 无独立 `pre-commit`，因此使用仓库虚拟环境入口；门禁内容相同。
+
+## 7. 验收结论
+
+- 创建编排、动态 Tool/Agent ID、Runtime Ready、模型路由、不同 session 不同 sandbox：通过。
+- APIG 绑定：实现通过 fail-closed 验证；真实共享网关缺少客户 APIG id，需显式适配或控制面能力。
+- Studio 交互聊天：blocked（指定镜像 ADK session revision 冲突）。
+- 飞书拉群：blocked/not_run（凭据/机器人安装 + 专属客户 APIG 缺失）。
+
+因此本次交付可提交 veadk 编排实现与风险证据，但不得宣称 mpa-agent 全链路 E2E 已通过。

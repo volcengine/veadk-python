@@ -213,5 +213,14 @@ agentkit.yaml
 agentkit*.yaml
 .agentkit/
 
+# veadk mpa create config (contains PG/model/OpenViking/Feishu secrets).
+# Only the committed *.example.yaml template is allowed.
+mpa-create.config.yaml
+mpa-create.config*.yaml
+!mpa-create.config.example.yaml
+**/mpa-create.config.yaml
+**/mpa-create.config*.yaml
+!**/mpa-create.config.example.yaml
+
 # PiAgent release archives are downloaded and verified during image builds.
 examples/piagent_with_mcp/vendor/pi-*.tar.gz

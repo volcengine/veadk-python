@@ -2,7 +2,7 @@
 
 > Related design: `2026-09-10-mpa-agent-oneclick-provision-design.md` (`approved`)
 > Purpose: dev-loop step 2 up-front design and step 7 execution — executable verification cases.
-> Status: `designed` (not executed yet; step 7 fills the results back into this table).
+> Status: `executed-with-blockers` (unit/CLI green; real results recorded in §3.1).
 
 ## 1. Evidence retention
 
@@ -18,7 +18,7 @@
 | FR-2 | VC-2, VC-3 | unit/CLI |
 | FR-3 | VC-4 (key-auth deploy), VC-5 (AC-10 compat guard) | unit |
 | FR-4 | VC-6, VC-7, VC-8, VC-9 | unit |
-| FR-5 | VC-10 | unit |
+| FR-5 | VC-10, VC-23 | unit + real |
 | FR-6 | VC-11, VC-12 | unit |
 | FR-7 | VC-13 (output guidance), VC-18 (real Studio chat) | unit + real |
 | FR-8 | VC-3 (hidden input), VC-14 (dry-run masking) | unit/CLI |
@@ -26,8 +26,10 @@
 | FR-10 | VC-10 (IDENTITY_STARTUP_ENABLED=false + csi-<account_id>) | unit |
 | FR-11 | VC-7 (private mirrors public) | unit |
 | key regression | VC-16, VC-19 (distinct sessions → distinct sandboxes), VC-20 (Feishu group chat) | regression + real |
+| FR-12/13 | VC-21 (generated identity + dedicated Tool/Runtime), VC-22 (missing Tool input has no writes), VC-24 (retry idempotency) | unit/CLI |
+| FR-18 | VC-25 (APIG id resolution fails closed) | unit + real |
 
-Every P0/P1 requirement (FR-1..FR-11) is covered by at least one case.
+Every P0/P1 requirement (FR-1..FR-19) is covered by at least one case.
 
 ## 3. Case details
 
@@ -51,7 +53,7 @@ Every P0/P1 requirement (FR-1..FR-11) is covered by at least one case.
 - **VC-10 (FR-5/10/11 env assembly)**
   - Command: `uv run pytest tests/cli/test_cli_mpa.py -k env`
   - Input: omit `--claw-space-id`, omit `IDENTITY_STARTUP_ENABLED`.
-  - Expected: assembled env contains all mpa-agent startup keys (`MODEL_AGENT_*`, `PG*`, `MPA_SESSION_MEMORY_BACKEND`, `OPENVIKING_*` if provided, `AGENTKIT_TOOL_ID`, `MPA_AGENT_ID`); `IDENTITY_STARTUP_ENABLED=false`; `CLAW_SPACE_ID=csi-<account_id>`; endpoint keys use public.
+  - Expected: assembled env contains all mpa-agent startup keys; `IDENTITY_STARTUP_ENABLED=false`; `A2A_TIP_VERIFY_ENABLED=false` (no TIP issuer, APIG key auth remains mandatory); `MPA_CODEX_WORKER_DEFAULT_MODEL=<model-name>`; `CLAW_SPACE_ID=csi-<account_id>`; endpoint keys use public.
   - Pass: key set equals the expected set; no secret appears in any log string.
   - Evidence: `evidence/VC-10.log`.
 
@@ -127,15 +129,54 @@ Every P0/P1 requirement (FR-1..FR-11) is covered by at least one case.
   - Expected: group session reused; reply delivered.
   - Evidence: inbound/outbound envelope summary (redacted).
 
+### Generated identity and dedicated resources
+
+- **VC-21 (FR-12/13 generated identity and per-agent resources)**
+  - Command: `uv run pytest tests/cli/test_cli_mpa.py -k generated_identity`
+  - Input: omit `--mpa-agent-id` and `--agentkit-tool-id`; provide `--tool-image`.
+  - Expected: `mi-<12 lowercase alnum>` is used in output/env; Tool name maps `-` to `_`; Runtime name equals the generated id; CreateTool precedes CreateRuntime; two invocations differ.
+  - Pass: all assertions hold and each invocation binds its own returned `t-*`.
+
+- **VC-22 (FR-12 missing Tool input has no writes)**
+  - Command: `uv run pytest tests/cli/test_cli_mpa.py -k missing_tool_input`
+  - Input: runtime mode with neither `--tool-image` nor `--agentkit-tool-id`.
+  - Expected: named CLI error before SkillSpace, database, Tool, or Runtime calls.
+  - Pass: every side-effect stub is called zero times.
+
+- **VC-23 (FR-5 delegated worker model selection)**
+  - Steps: create an instance with `--model-name <model>` and trigger one real `sandbox_task`.
+  - Expected: worker usage events report `<model>` instead of `auto`; the model proxy returns 2xx and the command reaches terminal `completed`.
+  - Pass: the binding has `last_run_status=completed`, no `codex_turn_failed`, and at least one usage event has the configured model and `statusCode=200`.
+  - Evidence: redacted binding/event summary; never persist the model API key.
+
+- **VC-24 (FR-13 retry idempotency)**
+  - Command: `uv run pytest tests/integrations/test_mpa_tool.py tests/integrations/test_mpa_runtime.py`.
+  - Expected: an exact-name Tool/Runtime is reused and converged; a non-Ready Tool is awaited; duplicate exact names fail instead of selecting arbitrarily; Runtime updates wait for a newer Ready version.
+  - Pass: no duplicate create call and all assertions hold.
+
+- **VC-25 (FR-18 APIG id integrity)**
+  - Command: `uv run pytest tests/cli/test_cli_mpa.py -k gateway`.
+  - Expected: an endpoint-derived gateway is accepted only when it embeds exactly one listed gateway id; AgentKit shared-gateway endpoints fail closed unless `--apig-instance-id` supplies the dedicated customer APIG used for IM routing.
+  - Pass: no arbitrary account gateway or `pending` placeholder is finalized into `mpa_meta`.
+
+## 3.1 Real E2E result (2026-09-11)
+
+- Runtime `r-yeuugf44qob21078l38i`, Tool `t-yeuugdts00zn6n5iqhin`, mpa-agent image tag `20260908154102-d34fdab`.
+- VC-23 passed after setting `MPA_CODEX_WORKER_DEFAULT_MODEL`: two fresh contexts used the configured model, returned model HTTP 200, executed `printf` with exit code 0, and persisted `invocation.completed`.
+- VC-19 isolation passed at the resource layer: contexts `a2ce8ec0-...` and `e7279624-...` mapped to distinct worker sessions `cw_sess_872f64f2f00b` and `cw_sess_bdf3758b4ddd`.
+- VC-18 remains **blocked at the protocol result boundary**: both A2A requests returned `failed` with `The session has been modified in storage since it was loaded`, even though their worker bindings and commands completed. The selected image lets Codex durable events advance the PostgreSQL ADK session while the A2A runner still owns a stale session snapshot. This is an mpa-agent image/session-projection defect, not a Tool creation or model-routing failure.
+- VC-20 was not run because Feishu credentials/bot installation were not provided; the existing `arkclaw:ListResources` denial also remains a documented permission risk for MCP discovery.
+- VC-25 exposed a second VC-20 blocker: the real Runtime reports `GatewayMode=Shared` and an empty `GatewayInstanceId`; its public endpoint prefix does not match any customer APIG id. The previous row therefore retained `apig_instance_id=pending`. The CLI now fails closed and accepts an explicit dedicated `--apig-instance-id`; automatic customer-gateway allocation remains unresolved.
+
 ## 4. Execution plan
 
 1. Unit level (VC-1..VC-14, VC-17): stub cloud SDK + SQLite/in-memory `mpa_meta`, run per TDD task.
 2. Regression (VC-15, VC-16): run once after implementation.
-3. Real (VC-18, VC-19, VC-20): after one real `veadk mpa create` deploy, verify in Studio and a Feishu group; retain redacted evidence.
+3. Real (VC-18, VC-19, VC-20, VC-23): after one real `veadk mpa create` deploy, verify in Studio and a Feishu group; retain redacted evidence.
 4. On failure: P0/P1 case failure returns to T-8..T-12 to fix implementation, or to this list to fix the case (recording the reason), then rerun affected cases.
 
 ## 5. Exit gate
 
-- All P0/P1 cases mapped to FR-1..FR-11 pass.
+- All unit/CLI P0/P1 cases mapped to FR-1..FR-19 pass.
 - VC-15/VC-16 regression passes (does not break mpa-agent or existing commands).
-- Real VC-18 passes; VC-19/VC-20 pass or carry an explicit risk note with user confirmation.
+- Real VC-18 and VC-20 remain blocked as documented in §3.1; VC-19 and VC-23 pass.
