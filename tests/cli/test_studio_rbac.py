@@ -4093,7 +4093,8 @@ def test_slow_runtime_proxy_authorization_does_not_starve_capability_budget(
             ),
             headers=headers,
         )
-        assert proxy_started.wait(timeout=1.0)
+        # Allow worker startup on busy CI hosts before measuring request latency
+        assert proxy_started.wait(timeout=10.0)
 
         started_at = time.monotonic()
         pending = client.get(
