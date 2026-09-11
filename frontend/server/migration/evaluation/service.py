@@ -1405,6 +1405,7 @@ class MigrationEvaluationService:
         for index, case in enumerate(cases, start=1):
             assert isinstance(case, dict)
             output = cast(dict[str, object], case["output"])
+            runtime_observation = cast(dict[str, object], case["runtime_observation"])
             execution_result = cast(dict[str, object], case["execution"])
             results = cast(list[dict[str, object]], case["dimensions"])
             result_html = []
@@ -1425,16 +1426,36 @@ class MigrationEvaluationService:
             error_html = ""
             if isinstance(error, dict):
                 error_html = f'<p class="error">{escape(error.get("message", ""))}</p>'
+            runtime_text = str(runtime_observation["text"])
+            runtime_size = (
+                f"{escape(runtime_observation['captured_bytes'])} / "
+                f"{escape(runtime_observation['original_bytes'])} 字节"
+            )
+            if runtime_observation["truncated"] is True:
+                runtime_size += " · 已截断"
+            runtime_html = (
+                '<details class="runtime-observation"><summary>'
+                "<span>Runtime 原始可观察数据</span>"
+                f"<small>{runtime_size}</small></summary>"
+                f"<pre>{escape(runtime_text)}</pre></details>"
+                if runtime_text
+                else (
+                    '<details class="runtime-observation"><summary>'
+                    "<span>Runtime 原始可观察数据</span>"
+                    "<small>未采集到数据</small></summary></details>"
+                )
+            )
             case_html.append(
                 f'<details class="case"><summary><span>用例 {index} · {escape(case["case_id"])}</span>'
                 f"<b>{escape(execution_result['state'])}</b></summary>{error_html}"
                 f"<h3>Agent 输出</h3><pre>{escape(output['text'])}</pre>"
+                f"{runtime_html}"
                 f'<div class="case-dimensions">{"".join(result_html)}</div></details>'
             )
         return f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>迁移效果评测报告</title><style>
-:root{{color-scheme:light;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;color:#18212f;background:#f6f8fb}}*{{box-sizing:border-box}}body{{margin:0}}main{{max-width:1080px;margin:auto;padding:32px}}header.hero{{display:flex;justify-content:space-between;gap:24px;align-items:start;margin-bottom:20px}}h1{{font-size:26px;margin:0 0 8px}}.muted,small{{color:#647084}}code{{overflow-wrap:anywhere}}.meta{{display:grid;gap:5px;font-size:12px;color:#647084}}.metrics,.dimensions{{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));margin:16px 0}}.metric,.dimension,.panel,.case{{border:1px solid #dfe4ec;border-radius:12px;background:#fff}}.metric{{padding:16px}}.metric span,.dimension span{{display:block;color:#647084;font-size:12px}}.metric strong{{display:block;font-size:28px;margin-top:6px}}.dimension{{padding:14px}}.dimension strong{{display:block;font-size:20px;margin:5px 0}}p{{line-height:1.6}}.panel{{padding:16px;margin:16px 0}}.panel h2{{font-size:16px;margin:0 0 8px}}.case{{margin:10px 0;padding:0 14px}}.case summary{{display:flex;justify-content:space-between;gap:12px;padding:14px 0;cursor:pointer}}.case h3{{font-size:13px}}pre{{max-height:320px;overflow:auto;padding:12px;border-radius:8px;background:#f2f4f7;white-space:pre-wrap;word-break:break-word}}.case-dimensions{{display:grid;gap:8px;margin:12px 0 16px}}.case-dimension{{padding:10px;border:1px solid #e6eaf0;border-radius:8px}}.case-dimension header{{display:flex;justify-content:space-between}}.case-dimension p,.case-dimension li{{font-size:12px;color:#526075}}.error{{color:#b42318}}@media(max-width:600px){{main{{padding:18px}}header.hero{{display:block}}}}
+:root{{color-scheme:light;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;color:#18212f;background:#f6f8fb}}*{{box-sizing:border-box}}body{{margin:0}}main{{max-width:1080px;margin:auto;padding:32px}}header.hero{{display:flex;justify-content:space-between;gap:24px;align-items:start;margin-bottom:20px}}h1{{font-size:26px;margin:0 0 8px}}.muted,small{{color:#647084}}code{{overflow-wrap:anywhere}}.meta{{display:grid;gap:5px;font-size:12px;color:#647084}}.metrics,.dimensions{{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));margin:16px 0}}.metric,.dimension,.panel,.case{{border:1px solid #dfe4ec;border-radius:12px;background:#fff}}.metric{{padding:16px}}.metric span,.dimension span{{display:block;color:#647084;font-size:12px}}.metric strong{{display:block;font-size:28px;margin-top:6px}}.dimension{{padding:14px}}.dimension strong{{display:block;font-size:20px;margin:5px 0}}p{{line-height:1.6}}.panel{{padding:16px;margin:16px 0}}.panel h2{{font-size:16px;margin:0 0 8px}}.case{{margin:10px 0;padding:0 14px}}.case summary{{display:flex;justify-content:space-between;gap:12px;padding:14px 0;cursor:pointer}}.case h3{{font-size:13px}}pre{{max-height:320px;overflow:auto;padding:12px;border-radius:8px;background:#f2f4f7;white-space:pre-wrap;word-break:break-word}}.runtime-observation{{margin:12px 0;border:1px solid #e6eaf0;border-radius:8px}}.runtime-observation summary{{padding:10px 12px;font-size:12px}}.runtime-observation pre{{max-height:240px;margin:0 10px 10px}}.case-dimensions{{display:grid;gap:8px;margin:12px 0 16px}}.case-dimension{{padding:10px;border:1px solid #e6eaf0;border-radius:8px}}.case-dimension header{{display:flex;justify-content:space-between}}.case-dimension p,.case-dimension li{{font-size:12px;color:#526075}}.error{{color:#b42318}}@media(max-width:600px){{main{{padding:18px}}header.hero{{display:block}}}}
 </style></head><body><main><header class="hero"><div><h1>迁移效果评测报告</h1><p class="muted">第 {escape(report["attempt"])} 次评测 · {escape(report["created_at"])}</p></div><div class="meta"><code>{escape(report["task_id"])}</code><span>评测集 {escape(report["dataset_version"])}</span><span>Prompt v{escape(report["prompt_version"])}</span></div></header>
 <section class="metrics"><article class="metric"><span>综合一致性</span><strong>{escape(score_text)}</strong></article><article class="metric"><span>证据覆盖率</span><strong>{escape(coverage["rate"])}%</strong><small>{escape(coverage["scored"])} / {escape(coverage["total"])} 个维度</small></article><article class="metric"><span>执行成功率</span><strong>{escape(execution["success_rate"])}%</strong><small>{escape(execution["succeeded"])} / {escape(execution["total"])} 个用例</small></article></section>
 <section class="panel"><h2>本次评测维度</h2><p>{escape(selected_dimension_text)}</p></section>

@@ -320,7 +320,7 @@
       "waiting_environment": "需要补充运行所需的环境变量",
       "deploying": "正在部署临时 Runtime…",
       "executing": "正在执行评测用例…",
-      "judging": "正在分析迁移前后的行为差异…",
+      "judging": "正在执行评测分析…",
       "aggregating": "正在汇总评测结果…",
       "completed": "评测已完成",
       "failed": "评测未完成",
@@ -352,8 +352,8 @@
       "runtimeFallback": "隔离运行环境",
       "executing": "执行用例",
       "executingDetail": "执行 {{count}} 个用例并记录输出",
-      "judging": "分析行为差异",
-      "judgingDetail": "分析 {{cases}} 个用例 · {{dimensions}} 个维度",
+      "judging": "执行评测分析",
+      "judgingDetail": "评测 {{cases}} 个用例 · {{dimensions}} 个维度",
       "aggregating": "生成评测报告",
       "aggregatingDetail": "汇总评分与证据，生成 HTML 报告",
       "waiting": "等待中",
@@ -411,6 +411,7 @@
         "user_criteria": "填写的要求",
         "source_contract": "源项目约束",
         "observed_output": "实际输出",
+        "runtime_observation": "Runtime 原始数据",
         "deterministic_assertion": "确定性断言"
       },
       "listSeparator": "、"

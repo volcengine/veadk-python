@@ -489,6 +489,11 @@ def _report(
     dimensions: list[str] | None = None,
 ) -> dict[str, object]:
     dimensions = dimensions or DIMENSIONS
+    runtime_observation = (
+        '{"type":"custom_tool_started","payload":'
+        '{"name":"get_weather","api_key":"<redacted>"}}\n'
+        '{"type":"custom_tool_completed","payload":{"temperature":20}}'
+    )
     results = [
         {
             "id": dimension,
@@ -524,6 +529,12 @@ def _report(
                     "truncated": False,
                     "original_bytes": 6,
                     "captured_bytes": 6,
+                },
+                "runtime_observation": {
+                    "text": runtime_observation,
+                    "truncated": False,
+                    "original_bytes": len(runtime_observation.encode()),
+                    "captured_bytes": len(runtime_observation.encode()),
                 },
                 "dimensions": results,
             }
@@ -580,6 +591,13 @@ def test_aggregating_report_is_validated_persisted_and_then_completed() -> None:
         original_bytes=len(unsafe_output.encode()),
         captured_bytes=len(unsafe_output.encode()),
     )
+    safe_runtime = report["cases"][0]["runtime_observation"]["text"]  # type: ignore[index]
+    unsafe_runtime = f'{safe_runtime}\n{{"event":"</pre><script>alert(2)</script>"}}'
+    report["cases"][0]["runtime_observation"].update(  # type: ignore[index]
+        text=unsafe_runtime,
+        original_bytes=len(unsafe_runtime.encode()),
+        captured_bytes=len(unsafe_runtime.encode()),
+    )
     gateway.files[EVALUATION_REPORT_PATH] = json.dumps(
         report,
         ensure_ascii=False,
@@ -606,9 +624,16 @@ def test_aggregating_report_is_validated_persisted_and_then_completed() -> None:
     assert "<!doctype html>" in downloaded.decode()
     assert "AgentKit CLI：0.52.16" in downloaded.decode()
     assert "用例结果与证据" in downloaded.decode()
+    assert '<details class="runtime-observation">' in downloaded.decode()
+    assert '<details class="runtime-observation" open>' not in downloaded.decode()
+    assert "Runtime 原始可观察数据" in downloaded.decode()
+    assert "get_weather" in downloaded.decode()
+    assert "model-secret" not in downloaded.decode()
     assert "个问题" not in downloaded.decode()
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in downloaded.decode()
     assert "<script>alert(1)</script>" not in downloaded.decode()
+    assert "&lt;script&gt;alert(2)&lt;/script&gt;" in downloaded.decode()
+    assert "<script>alert(2)</script>" not in downloaded.decode()
     assert "通过" not in downloaded.decode()
     assert migration.get_task_calls == task_reads
     assert migration.artifact_calls == artifact_reads

@@ -125,6 +125,9 @@ def test_uploaded_runner_source_compiles_and_has_bounded_security_contracts() ->
     assert "def load_execution_results" in source
     assert "evidence_sources" in source
     assert "severity" in source
+    assert "RUNTIME_OBSERVATION_LIMIT = 16 * 1024" in source
+    assert "def capture_runtime_observation" in source
+    assert "不得因字段名、事件名或格式不同扣分" in source
     assert 'status(config, "cleaning"' not in source
     assert "MIGRATION_EVALUATION_CLEANUP_UNCONFIRMED" not in source
     assert "import yaml" not in source
@@ -310,6 +313,10 @@ def test_judge_schema_requires_nullable_zero_to_one_raw_scores_and_evidence() ->
         "maximum": 1,
     }
     assert "evidence_sources" in dimension["required"]
+    assert (
+        "runtime_observation"
+        in dimension["properties"]["evidence_sources"]["items"]["enum"]
+    )
     assert "severity" in dimension["required"]
 
 
@@ -406,6 +413,12 @@ def _observation(text: str) -> dict[str, object]:
             "truncated": False,
             "original_bytes": len(encoded),
             "captured_bytes": len(encoded),
+        },
+        "runtime_observation": {
+            "text": '{"output":"' + text + '"}',
+            "truncated": False,
+            "original_bytes": len(text.encode("utf-8")) + 13,
+            "captured_bytes": len(text.encode("utf-8")) + 13,
         },
     }
 
@@ -546,7 +559,156 @@ def test_structured_deploy_and_invoke_use_current_agentkit_cli(tmp_path: Path) -
         project,
         True,
     )
-    assert captured["text"] == "final answer"
+    assert captured["output"]["text"] == "final answer"
+    assert captured["runtime_observation"]["text"] == ('{"output":"final answer"}\n')
+
+
+def test_runtime_observation_preserves_raw_formats_and_redacts_secrets() -> None:
+    namespace = _runner_namespace()
+    raw = b"\n".join(
+        [
+            json.dumps(
+                {
+                    "author": "root_agent",
+                    "content": {
+                        "parts": [
+                            {
+                                "functionCall": {
+                                    "id": "call-1",
+                                    "name": "get_weather",
+                                    "args": {
+                                        "city": "Beijing",
+                                        "api_key": "model-secret",
+                                    },
+                                }
+                            }
+                        ]
+                    },
+                }
+            ).encode(),
+            json.dumps(
+                {
+                    "author": "get_weather",
+                    "content": {
+                        "parts": [
+                            {
+                                "functionResponse": {
+                                    "id": "call-1",
+                                    "name": "get_weather",
+                                    "response": {
+                                        "temperature": 20,
+                                        "token": "model-secret",
+                                    },
+                                }
+                            }
+                        ]
+                    },
+                }
+            ).encode(),
+            b'{"author":"root_agent","content":{"parts":[{"text":"sunny"}]},"partial":false}',
+        ]
+    )
+
+    observation = namespace["capture_runtime_observation"](
+        raw,
+        raw_total=len(raw),
+        sensitive_values=["model-secret"],
+    )
+
+    assert observation["truncated"] is False
+    assert observation["captured_bytes"] == len(observation["text"].encode())
+    assert "functionCall" in observation["text"]
+    assert "functionResponse" in observation["text"]
+    assert "get_weather" in observation["text"]
+    assert "Beijing" in observation["text"]
+    assert "model-secret" not in observation["text"]
+    assert "<redacted>" in observation["text"]
+    assert "steps" not in observation
+    assert "tool_call" not in observation
+
+
+def test_runtime_observation_keeps_head_and_tail_when_truncated() -> None:
+    namespace = _runner_namespace()
+    raw = ("head-event\n" + "x" * (20 * 1024) + "\ntail-event").encode()
+
+    observation = namespace["capture_runtime_observation"](
+        raw,
+        raw_total=len(raw) + 4096,
+        sensitive_values=[],
+    )
+
+    assert observation["truncated"] is True
+    assert observation["captured_bytes"] <= 16 * 1024
+    assert observation["original_bytes"] == len(raw) + 4096
+    assert observation["text"].startswith("head-event")
+    assert observation["text"].endswith("tail-event")
+    assert "Runtime 原始数据已截断" in observation["text"]
+
+
+def test_runtime_observation_preserves_unknown_non_json_content() -> None:
+    namespace = _runner_namespace()
+
+    observation = namespace["capture_runtime_observation"](
+        b"custom event => final answer\x00\n",
+        raw_total=30,
+        sensitive_values=[],
+    )
+
+    assert observation["text"] == "custom event => final answer\n"
+    assert observation["truncated"] is False
+
+
+def test_workflow_tool_score_becomes_na_without_runtime_data_or_judging_standard(
+    tmp_path: Path,
+) -> None:
+    namespace = _runner_namespace()
+    config = _judge_config(tmp_path)
+    config["dimensions"] = ["workflow_tool_fidelity"]
+    case = {
+        "case_id": "case-1",
+        "messages": [{"role": "user", "content": "hello"}],
+        "reference_output": "hello",
+        "criteria": [],
+    }
+    returned = [
+        {
+            "case_id": "case-1",
+            "dimensions": [
+                {
+                    "id": "workflow_tool_fidelity",
+                    "score": 0.9,
+                    "reason": "模型猜测流程正确",
+                    "evidence": ["只有最终输出"],
+                    "evidence_sources": ["observed_output"],
+                    "severity": "none",
+                }
+            ],
+        }
+    ]
+
+    validated = namespace["validate_judged_cases"](
+        config,
+        [case],
+        returned,
+        {
+            "case-1": {
+                **_observation("hello"),
+                "runtime_observation": {
+                    "text": "",
+                    "truncated": False,
+                    "original_bytes": 0,
+                    "captured_bytes": 0,
+                },
+            }
+        },
+        None,
+    )
+
+    result = validated[0]["dimensions"][0]
+    assert result["score"] is None
+    assert result["severity"] == "unknown"
+    assert result["evidence"] == []
+    assert "N/A" in result["reason"]
 
 
 def test_command_diagnostics_redact_all_runtime_and_cloud_secret_values() -> None:
@@ -672,6 +834,7 @@ def test_runner_main_completes_with_python_stdlib_and_fake_cli_boundaries(
     config_path = tmp_path / "runner.json"
     config_path.write_text(json.dumps(config), encoding="utf-8")
     commands: list[list[str]] = []
+    judge_prompts: list[str] = []
     progress: list[tuple[str, str]] = []
 
     def run_capped(args: list[str], **_kwargs: object) -> tuple[int, bytes, int]:
@@ -683,6 +846,7 @@ def test_runner_main_completes_with_python_stdlib_and_fake_cli_boundaries(
         elif args[: len(invoke_prefix)] == invoke_prefix:
             output = b'{"output":"hello"}\n'
         elif args[0] == "codex":
+            judge_prompts.append(str(_kwargs["input_text"]))
             output = _judge_events("thread-1", ["case-1"])
         else:
             raise AssertionError(args)
@@ -716,9 +880,15 @@ def test_runner_main_completes_with_python_stdlib_and_fake_cli_boundaries(
     assert any(command[: len(deploy_prefix)] == deploy_prefix for command in commands)
     assert any(command[: len(invoke_prefix)] == invoke_prefix for command in commands)
     assert any(command[0] == "codex" for command in commands)
+    assert '"runtime_observation"' in judge_prompts[0]
+    assert '\\"output\\":\\"hello\\"' in judge_prompts[0]
+    assert '"steps"' not in judge_prompts[0]
     assert ("executing", "正在执行用例 1/1 · 已完成 0") in progress
     assert ("executing", "已执行 1/1 · 成功 1 · 失败 0") in progress
-    assert ("judging", "正在分析第 1/1 批 · 用例 1–1 · 1 个维度") in progress
+    assert (
+        "judging",
+        "正在执行评测分析 · 第 1/1 批 · 用例 1–1 · 1 个维度",
+    ) in progress
     assert ("aggregating", "正在生成 HTML 评测报告") in progress
 
 
@@ -760,7 +930,7 @@ def test_judge_batches_resume_one_bound_thread_and_reuse_cached_batch(
     batch_record = json.loads(
         (Path(config["batch_root_path"]) / "batch-001-001.json").read_text()
     )
-    assert batch_record["prompt_version"] == 1
+    assert batch_record["prompt_version"] == 2
     assert batch_record["batch_start"] == 0
     assert batch_record["batch_end"] == 1
 
@@ -776,6 +946,7 @@ def test_execution_results_are_persisted_and_bound_for_idempotent_resume(
         "case_id": "case-1",
         "state": "succeeded",
         "output": _observation("one")["output"],
+        "runtime_observation": _observation("one")["runtime_observation"],
         "error": None,
         "created_at": "2026-09-07T10:00:00Z",
     }

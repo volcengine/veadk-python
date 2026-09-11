@@ -27,6 +27,7 @@ from .dimensions import EVALUATION_DIMENSION_IDS
 from .models import (
     EVALUATION_CASES_MAX,
     EVALUATION_DATASET_MAX_BYTES,
+    EVALUATION_RUNTIME_OBSERVATION_MAX_BYTES,
     EvaluationDatasetBody,
 )
 
@@ -42,6 +43,7 @@ EVALUATION_EVIDENCE_SOURCES = frozenset(
         "user_criteria",
         "source_contract",
         "observed_output",
+        "runtime_observation",
         "deterministic_assertion",
     }
 )
@@ -408,7 +410,13 @@ def validate_evaluation_report(
             raise EvaluationContractError("invalid evaluation case result")
         _exact_keys(
             case,
-            required={"case_id", "execution", "output", "dimensions"},
+            required={
+                "case_id",
+                "execution",
+                "output",
+                "runtime_observation",
+                "dimensions",
+            },
         )
         case_id = case.get("case_id")
         if not isinstance(case_id, str) or not case_id or case_id in case_ids:
@@ -428,6 +436,7 @@ def validate_evaluation_report(
                 }
             )
         _validate_captured_output(case.get("output"))
+        _validate_runtime_observation(case.get("runtime_observation"))
         result_dimensions = case.get("dimensions")
         if (
             not isinstance(result_dimensions, list)
@@ -629,6 +638,31 @@ def _validate_captured_output(value: object) -> None:
         or value["truncated"] is not (original > captured)
     ):
         raise EvaluationContractError("invalid captured output")
+
+
+def _validate_runtime_observation(value: object) -> None:
+    if not isinstance(value, dict):
+        raise EvaluationContractError("invalid runtime observation")
+    _exact_keys(
+        value,
+        required={"text", "truncated", "original_bytes", "captured_bytes"},
+    )
+    text = value.get("text")
+    original = value.get("original_bytes")
+    captured = value.get("captured_bytes")
+    if (
+        not isinstance(text, str)
+        or not isinstance(value.get("truncated"), bool)
+        or isinstance(original, bool)
+        or not isinstance(original, int)
+        or isinstance(captured, bool)
+        or not isinstance(captured, int)
+        or not 0 <= captured <= EVALUATION_RUNTIME_OBSERVATION_MAX_BYTES
+        or original < captured
+        or len(text.encode("utf-8")) != captured
+        or value["truncated"] is not (original > captured)
+    ):
+        raise EvaluationContractError("invalid runtime observation")
 
 
 def _validate_dimension_result(value: dict[str, object]) -> int | None:

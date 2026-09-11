@@ -55,6 +55,19 @@ def _dimension(dimension: str, score: int | None) -> dict[str, object]:
     }
 
 
+def _runtime_observation() -> dict[str, object]:
+    text = (
+        '{"type":"custom_tool_started","payload":{"name":"lookup"}}\n'
+        '{"type":"custom_tool_completed","payload":{"items":2}}'
+    )
+    return {
+        "text": text,
+        "truncated": False,
+        "original_bytes": len(text.encode()),
+        "captured_bytes": len(text.encode()),
+    }
+
+
 def _report() -> dict[str, object]:
     return {
         "schema_version": 1,
@@ -81,6 +94,7 @@ def _report() -> dict[str, object]:
                     "original_bytes": 6,
                     "captured_bytes": 6,
                 },
+                "runtime_observation": _runtime_observation(),
                 "dimensions": [
                     _dimension("semantic_fidelity", 80),
                     _dimension("output_contract", None),
@@ -95,6 +109,7 @@ def _report() -> dict[str, object]:
                     "original_bytes": 8,
                     "captured_bytes": 8,
                 },
+                "runtime_observation": _runtime_observation(),
                 "dimensions": [
                     _dimension("semantic_fidelity", 81),
                     _dimension("output_contract", 60),
@@ -324,6 +339,27 @@ def test_report_enforces_output_capture_limit_and_dimension_order() -> None:
         "captured_bytes": 70_000,
     }
     with pytest.raises(EvaluationContractError, match="captured output"):
+        validate_evaluation_report(
+            report,
+            expected_task_id=TASK_ID,
+            expected_attempt=1,
+            expected_dataset_sha256=SHA256,
+            expected_artifact_sha256=ARTIFACT_SHA256,
+            expected_dimensions=DIMENSIONS,
+        )
+
+
+def test_report_enforces_runtime_observation_capture_limit() -> None:
+    report = _report()
+    text = "x" * (16 * 1024 + 1)
+    report["cases"][0]["runtime_observation"] = {  # type: ignore[index]
+        "text": text,
+        "truncated": False,
+        "original_bytes": len(text),
+        "captured_bytes": len(text),
+    }
+
+    with pytest.raises(EvaluationContractError, match="runtime observation"):
         validate_evaluation_report(
             report,
             expected_task_id=TASK_ID,

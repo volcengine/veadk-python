@@ -320,7 +320,7 @@
       "waiting_environment": "Runtime environment variables are required",
       "deploying": "Deploying a temporary Runtime…",
       "executing": "Running evaluation cases…",
-      "judging": "Analyzing behavior differences…",
+      "judging": "Running evaluation analysis…",
       "aggregating": "Aggregating evaluation results…",
       "completed": "Evaluation completed",
       "failed": "Evaluation incomplete",
@@ -352,8 +352,8 @@
       "runtimeFallback": "isolated runtime",
       "executing": "Run cases",
       "executingDetail": "Run {{count}} cases and capture output",
-      "judging": "Analyze behavior differences",
-      "judgingDetail": "Analyze {{cases}} cases · {{dimensions}} dimensions",
+      "judging": "Run evaluation analysis",
+      "judgingDetail": "Evaluate {{cases}} cases · {{dimensions}} dimensions",
       "aggregating": "Generate evaluation report",
       "aggregatingDetail": "Aggregate scores and evidence into an HTML report",
       "waiting": "Waiting",
@@ -411,6 +411,7 @@
         "user_criteria": "Provided requirements",
         "source_contract": "Source contract",
         "observed_output": "Observed output",
+        "runtime_observation": "Raw Runtime data",
         "deterministic_assertion": "Deterministic assertion"
       },
       "listSeparator": ", "
