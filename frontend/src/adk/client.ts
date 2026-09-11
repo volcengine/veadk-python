@@ -3858,7 +3858,7 @@ export async function getUiConfig(): Promise<UiConfig> {
   }
 }
 
-export type StudioRole = "admin" | "developer" | "user";
+export type StudioRole = "super_admin" | "admin" | "developer" | "user";
 export type RuntimeScope = "all" | "mine";
 
 export interface StudioAccess {
@@ -3872,6 +3872,7 @@ export interface StudioAccess {
     createPersonalAgents: boolean;
     manageAgents: boolean;
     runtimeScope: RuntimeScope;
+    manageUsers?: boolean;
   };
 }
 
@@ -3887,6 +3888,7 @@ export const DEFAULT_STUDIO_ACCESS: StudioAccess = {
     createPersonalAgents: false,
     manageAgents: false,
     runtimeScope: "mine",
+    manageUsers: false,
   },
 };
 
@@ -3896,7 +3898,7 @@ export async function getStudioAccess(): Promise<StudioAccess> {
   if (!res.ok) throw new Error(adkT("client.loadPermissionsFailed", { status: res.status }));
   const access = (await res.json()) as StudioAccess;
   if (
-    !["admin", "developer", "user"].includes(access.role) ||
+    !["super_admin", "admin", "developer", "user"].includes(access.role) ||
     typeof access.telemetry?.userId !== "string" ||
     (
       access.telemetry.accountId !== undefined &&
@@ -3905,6 +3907,7 @@ export async function getStudioAccess(): Promise<StudioAccess> {
     typeof access.capabilities?.createAgents !== "boolean" ||
     typeof access.capabilities?.createPersonalAgents !== "boolean" ||
     typeof access.capabilities?.manageAgents !== "boolean" ||
+    (access.capabilities?.manageUsers !== undefined && typeof access.capabilities.manageUsers !== "boolean") ||
     !["all", "mine"].includes(access.capabilities?.runtimeScope)
   ) {
     throw new Error(adkT("client.invalidPermissionResponse"));

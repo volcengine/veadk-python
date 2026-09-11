@@ -11,7 +11,8 @@
     "roles": {
       "admin": "管理员",
       "developer": "开发者",
-      "user": "普通用户"
+      "user": "普通用户",
+      "super_admin": "超级管理员"
     }
   },
   "navigation": {
@@ -24,7 +25,8 @@
     "workspaces": "工作区",
     "library": "资源库",
     "cronjobs": "定时任务",
-    "automations": "自动化"
+    "automations": "自动化",
+    "users": "用户管理"
   },
   "history": {
     "title": "历史会话",

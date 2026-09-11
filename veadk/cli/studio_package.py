@@ -108,6 +108,13 @@ def studio_run_script(
         "HOST=0.0.0.0\n"
         "PORT=${_FAAS_RUNTIME_PORT:-8000}\n"
         'export PYTHONPATH="./site-packages${PYTHONPATH:+:$PYTHONPATH}"\n'
+        'if [ "${VEADK_STUDIO_IDENTITY_ROLES:-}" = "1" ]; then\n'
+        "  python3 -c 'from frontend.server.user_management.policy import StudioAccessPolicy; "
+        "assert StudioAccessPolicy.from_csv(None, None, identity_roles=True).enabled' || {\n"
+        '    echo "This Studio runtime does not support Identity roles; use a compatible release or --from-source" >&2\n'
+        "    exit 1\n"
+        "  }\n"
+        "fi\n"
         'trap \'kill "${COMPANION_PID:-}" "${STUDIO_PID:-}" '
         "2>/dev/null || true' INT TERM\n"
         f"{companion.rstrip()} &\n"

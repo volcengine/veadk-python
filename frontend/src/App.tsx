@@ -1,3 +1,4 @@
+import { UserManagement } from "./users/UserManagement";
 import {
   useCallback,
   useEffect,
@@ -384,8 +385,10 @@ type StudioPageId =
   | "sandbox-agent-detail"
   | "sandbox-agent-workspace"
   | "developer-resources"
-  | "feedback";
+  | "feedback"
+  | "users";
 type StudioStackPage =
+  | "users"
   | "system-info"
   | "agent-detail"
   | "sandbox-agent-detail"
@@ -2159,6 +2162,7 @@ export default function App() {
   const [pageStack, setPageStack] = useState<StudioPageStackEntry[]>([]);
   const activeStackEntry = pageStack[pageStack.length - 1];
   const activeStackPage = activeStackEntry?.page;
+  const userManagementView = activeStackPage === "users";
   const systemInfo = activeStackPage === "system-info";
   const developerResourcesView = activeStackPage === "developer-resources";
   const pushStudioPage = useCallback((entry: StudioPageStackEntry) => {
@@ -3161,7 +3165,7 @@ export default function App() {
     identifyTelemetryUser({
       userUniqueId,
       accountId: access.telemetry.accountId ?? "",
-      userRole: access.role === "admin" ? "admin" : "member",
+      userRole: (access.role === "admin" || access.role === "super_admin") ? "admin" : "member",
       userSource: localMode ? "local" : "sso",
     });
     trackStudioSessionStarted({ agentsSource });
@@ -3191,12 +3195,15 @@ export default function App() {
       setDeploymentTasks([]);
     }
     if (!access.capabilities.manageAgents) setManageAgents(false);
+    if (!access.capabilities.manageUsers) setPageStack((current) => current.filter((entry) => entry.page !== "users"));
   }, [access]);
 
   let documentTitleTarget: StudioDocumentTitleTarget = { kind: "home" };
   if (authStatus === "authenticated") {
     if (platformFeedbackOrigin !== null) {
       documentTitleTarget = { kind: "page", title: t("titles.issueFeedback") };
+    } else if (userManagementView) {
+      documentTitleTarget = { kind: "page", title: t("title", { ns: "users" }) };
     } else if (systemInfo) {
       documentTitleTarget = { kind: "page", title: t("titles.systemInfo") };
     } else if (cronJobsView) {
@@ -6449,7 +6456,7 @@ export default function App() {
       }
     : null;
 
-  const currentStudioPage: StudioPageId = activeStackPage === "system-info"
+  const currentStudioPage: StudioPageId = userManagementView ? "users" : activeStackPage === "system-info"
     ? activeStackEntry?.returnTo ?? "new-chat"
     : developerResourcesView
       ? "developer-resources"
@@ -6481,7 +6488,7 @@ export default function App() {
                           ? "create"
                           : "new-chat";
 
-  const sidebarActivePage: SidebarPage = systemInfo
+  const sidebarActivePage: SidebarPage = userManagementView ? "users" : systemInfo
     ? null
     : developerResourcesView
       ? "developer-resources"
@@ -6635,6 +6642,13 @@ export default function App() {
         onCronJobs={() => requestIntelligentNavigation(openCronJobsPage)}
         onAgentKitCli={() => setAgentKitCliOpen(true)}
         onDeveloperResources={() => requestIntelligentNavigation(openDeveloperResourcesPage)}
+        onUserManagement={() => requestIntelligentNavigation(() => {
+          if (!access.capabilities.manageUsers) return;
+          if (sandboxSession) exitSandboxSession();
+          setCreateView(null);
+          pushStudioPage({ page: "users", returnTo: currentStudioPage });
+          setError("");
+        })}
         onSystemInfo={() => requestIntelligentNavigation(() => {
           pushStudioPage({
             page: "system-info",
@@ -7044,7 +7058,9 @@ export default function App() {
                 }}
               />
             )}
-            {visibleCreateView === "workspace" ? null : systemInfo ? (
+            {userManagementView && access.capabilities.manageUsers ? (
+              <UserManagement onBack={() => popStudioPage("users")} />
+            ) : visibleCreateView === "workspace" ? null : systemInfo ? (
               <SystemInfo
                 version={version}
                 localMode={agentsSource === "local"}
@@ -7699,7 +7715,7 @@ export default function App() {
               >
                 <div className="welcome-primary">
                   <div className="welcome-heading">
-                    <NewChatFeatureNotice canUpdate={access.role === "admin"} />
+                    <NewChatFeatureNotice canUpdate={access.role === "admin" || access.role === "super_admin"} />
                     <h1 className="welcome-title">
                       {sandboxSession
                         ? t("greetings.intelligentDevelopment")

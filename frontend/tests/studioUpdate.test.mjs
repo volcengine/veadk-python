@@ -34,7 +34,7 @@ const releaseNotesSource = readFileSync(
 test("only administrators see an available Studio update as an immediate action", () => {
   assert.match(
     appSource,
-    /<NewChatFeatureNotice canUpdate=\{access\.role === "admin"\} \/>/,
+    /<NewChatFeatureNotice canUpdate=\{access\.role === "admin" \|\| access\.role === "super_admin"\} \/>/,
   );
   assert.match(featureNoticeSource, /canUpdate\?: boolean/);
   assert.match(
