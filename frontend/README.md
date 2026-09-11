@@ -146,6 +146,14 @@ See [deployment and operation](service/studio_release_notifier/README.md).
   Historical names remain compatible; optional display metadata is stored
   separately from immutable versions. Optimization session titles retain the
   existing 40-character limit without shortening the saved project name.
+  An optional migration-effect evaluation is off by default; when enabled,
+  users can enter 1–100 evaluation cases by hand or bulk paste, while expected
+  outcomes and criteria remain optional.
+  Standard evaluation uses three dimensions; users can instead select custom
+  dimensions before upload. The locked dataset and final HTML report are stored
+  as immutable owner-only TOS assets. The report is fetched and rendered in a
+  side drawer only after the user selects “View report,” and remains available
+  for download.
 - **Reasoning & tool calls** shown inline (collapsible "thinking", tool blocks).
 - **Agent context rail** keeps the selected Agent's description, model, tools,
   skills, and optional live multi-Agent topology together in the conversation's
@@ -338,19 +346,22 @@ See [deployment and operation](service/studio_release_notifier/README.md).
   creation, and service publishing as separate deployment stages.
 - **Existing-project migration**: upload one local ZIP of at most 20 MiB from
   the add-Agent menu. Studio creates one user-owned Dev Sandbox Session with a
-  one-hour TTL, then asks the preinstalled Codex to perform read-only framework,
-  entry-point, and migration-boundary analysis. Migration starts only after the
-  user confirms the framework, entry point, and open questions. Structured
-  frameworks run the preinstalled `ak migrate`; Dify and Any projects run
-  `ak migrate --execution in-place` with Codex in the same Session. State,
-  logs, and artifacts remain only under
-  `/home/gem/.studio/migration/v1/` in that Session. Preview, download, and
-  Runtime deployment stop when the Session expires. Runtime deployment resolves
-  and verifies the owned Session artifact on the server instead of trusting
-  browser-provided files or entry points. AgentKit CLI `0.51.1` is only the
-  current baseline; these CLI changes must be released as a new version. The
-  Dev Sandbox image must pin that migration-capable release and its SHA256 at
-  image build time.
+  one-hour TTL, extended to two hours when effect evaluation is enabled, then
+  asks the preinstalled Codex to perform read-only framework, entry-point, and
+  migration-boundary analysis. Migration starts only after the user confirms
+  the framework, entry point, and open questions. Structured frameworks run the
+  preinstalled `ak migrate`; Dify and Any projects run
+  `ak migrate --execution in-place` with Codex in the same Session. Evaluation
+  deploys a temporary Runtime, checkpoints per-case execution as JSONL, judges
+  batches in one fresh resumable Codex thread, and always reconciles Runtime
+  cleanup before completing or cancelling. Reports show 0–100 display scores,
+  execution success, evidence coverage, N/A counts, low-scoring and failed
+  cases, versions, evidence severity, and cleanup status without a pass/fail
+  verdict. Evaluation failure never hides or rolls back the migration artifact.
+  Runtime deployment resolves and verifies the owned Session artifact on the
+  server instead of trusting browser-provided files or entry points. The Dev
+  Sandbox image must pin AgentKit CLI `0.52.16` and its SHA256 at image build
+  time.
 - **Built-in code execution**: selecting `代码执行` adds VeADK's `run_code`
   tool to generated Python and reveals the required `AGENTKIT_TOOL_ID` sandbox
   field and optional `AGENTKIT_TOOL_REGION` field below the built-in tool list.

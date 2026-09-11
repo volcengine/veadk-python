@@ -39,6 +39,17 @@
     "cancelled": "Stopped",
     "expired": "Expired"
   },
+  "historyStatus": {
+    "evaluationPending": "Evaluation pending",
+    "evaluationRunning": "Evaluating",
+    "waitingDataset": "Evaluation cases pending",
+    "waitingEnvironment": "Environment variables required",
+    "evaluationFailed": "Migrated, evaluation incomplete",
+    "evaluationBlocked": "Migrated, evaluation needs attention",
+    "evaluationCancelled": "Migrated, evaluation cancelled",
+    "resultUnavailable": "Result unavailable",
+    "environmentExpired": "Environment expired"
+  },
   "task": {
     "partialReady": "Migration output is ready, but delivery is incomplete. Review the migration notices.",
     "readyWithWarnings": "Migration output is ready. Review the migration notices.",
@@ -158,6 +169,7 @@
   "actions": {
     "stop": "Stop migration",
     "stopping": "Stopping…",
+    "cancel": "Cancel",
     "reload": "Reload",
     "refreshStatus": "Refresh status"
   },
@@ -204,6 +216,210 @@
     "consent": "By selecting “Confirm and start migration,” you confirm the migration scope, exclusions, and key assumptions above.",
     "starting": "Starting migration…",
     "start": "Confirm and start migration"
+  },
+  "evaluation": {
+    "setup": {
+      "title": "Migration effect evaluation",
+      "description": "Evaluation cases run automatically after migration.",
+      "on": "On",
+      "off": "Off",
+      "unavailable": "Migration effect evaluation is unavailable in this environment.",
+      "casesTitle": "Evaluation cases",
+      "casesDescription": "Add at least one case. Expected outcomes and criteria are optional.",
+      "configuredSummary": "{{count}} cases · {{preset}} · {{dimensions}}",
+      "incompleteSummary": "{{count}} cases need content · {{preset}} · {{dimensions}}",
+      "dimensionSummary": "{{count}} dimensions",
+      "editSettings": "Edit settings",
+      "viewSettings": "View settings",
+      "lockedTitle": "Evaluation cases",
+      "lockedDescription": "Cases cannot change after upload starts.",
+      "closeAria": "Close evaluation settings",
+      "done": "Finish setup",
+      "close": "Close"
+    },
+    "tabs": {
+      "label": "Migration task content",
+      "migration": "Migration",
+      "evaluation": "Evaluation",
+      "waitingMigration": "Waiting for migration",
+      "waitingConfiguration": "Setup required",
+      "running": "Running",
+      "completed": "Completed",
+      "issue": "Needs attention"
+    },
+    "bulk": {
+      "open": "Paste multiple",
+      "label": "Enter one case per line",
+      "placeholder": "Check the status of today's orders\nSummarize the result in three points",
+      "preview": "{{count}} cases will be added",
+      "confirm": "Add cases"
+    },
+    "case": {
+      "title": "Case {{index}}",
+      "add": "Add case",
+      "moveUp": "Move case {{index}} up",
+      "moveDown": "Move case {{index}} down",
+      "copy": "Duplicate",
+      "delete": "Delete",
+      "userInput": "User input",
+      "userInputPlaceholder": "For example: Check the status of today's orders",
+      "expectedOutcome": "Expected outcome (optional)",
+      "expectedOutcomePlaceholder": "Describe what the Agent should accomplish; exact wording is not required",
+      "criteria": "Requirements (optional)",
+      "addCriterion": "Add requirement",
+      "criterionLabel": "Requirement {{index}}",
+      "criterionPlaceholder": "For example: Include the order ID and current status",
+      "removeCriterion": "Remove requirement {{index}}"
+    },
+    "advanced": {
+      "title": "Advanced settings",
+      "standard": "Standard evaluation",
+      "standardDescription": "Uses 3 dimensions by default: semantic fidelity, output constraints, and workflow/tool fidelity.",
+      "custom": "Custom dimensions",
+      "customDescription": "Select one or more dimensions based on business risk.",
+      "lockedDescription": "The evaluation method and dimensions cannot change after upload starts."
+    },
+    "dimension": {
+      "semantic_fidelity": "Semantic fidelity",
+      "output_contract": "Output contract",
+      "workflow_tool_fidelity": "Workflow and tool fidelity",
+      "context_memory_fidelity": "Context and memory fidelity",
+      "boundary_error_fidelity": "Boundary and error fidelity",
+      "safety_refusal_fidelity": "Safety and refusal fidelity"
+    },
+    "dimensionDescription": {
+      "semantic_fidelity": "Checks whether intent, conclusions, and key facts remain consistent.",
+      "output_contract": "Checks required fields, structure, language, and formatting constraints.",
+      "workflow_tool_fidelity": "Checks observable workflow branches and tool-driven behavior.",
+      "context_memory_fidelity": "Checks supported multi-turn context and memory behavior.",
+      "boundary_error_fidelity": "Checks invalid input, missing information, and dependency failures.",
+      "safety_refusal_fidelity": "Checks existing authorization, refusal, and sensitive-data boundaries."
+    },
+    "validation": {
+      "caseCount": "Keep between 1 and {{count}} cases.",
+      "dimensionRequired": "Select at least one evaluation dimension.",
+      "userInputRequired": "Enter case input.",
+      "userInputBytes": "A case cannot exceed 32 KiB.",
+      "expectedOutcomeBytes": "The expected outcome cannot exceed 16 KiB.",
+      "criteriaCount": "A case can contain at most {{count}} requirements.",
+      "criterionRequired": "Requirements cannot be empty.",
+      "criterionBytes": "One requirement cannot exceed 2 KiB.",
+      "datasetBytes": "All evaluation cases cannot exceed 10 MiB."
+    },
+  "dataset": {
+    "invalidLockResponse": "The service did not confirm that evaluation cases were saved. Try again.",
+    "loadingSettings": "Loading evaluation settings…",
+    "loadSettingsFailed": "Evaluation settings could not be loaded.",
+    "retryLoadSettings": "Reload",
+    "missing": "No saved evaluation cases were found. Enter and save them again.",
+    "saveWarning": "Evaluation cases were not saved. Migration continues.",
+    "retrySave": "Save evaluation cases again",
+    "saving": "Saving…"
+    },
+    "state": {
+      "disabled": "Evaluation is off",
+      "waiting_dataset": "Waiting for evaluation cases",
+    "pending": "Evaluation starts automatically after migration",
+      "preparing": "Preparing the evaluation environment…",
+      "waiting_environment": "Runtime environment variables are required",
+      "deploying": "Deploying a temporary Runtime…",
+      "executing": "Running evaluation cases…",
+      "judging": "Running evaluation analysis…",
+      "aggregating": "Aggregating evaluation results…",
+      "completed": "Evaluation completed",
+      "failed": "Evaluation incomplete",
+      "blocked": "Evaluation requires attention before it can continue",
+      "cancelled": "Evaluation cancelled"
+    },
+    "progress": {
+      "label": "Migration and migration effect evaluation progress",
+      "migration": "Migration",
+      "evaluation": "Migration effect evaluation",
+      "notStarted": "Not started",
+      "inProgress": "In progress",
+      "completed": "Complete",
+      "waitingConfiguration": "Waiting for setup",
+      "issue": "Needs attention"
+    },
+    "environment": {
+      "description": "Enter the environment variables required by the temporary Runtime.",
+      "security": "Used only for this evaluation.",
+      "optional": "Optional",
+      "submit": "Submit and continue evaluation",
+      "submitting": "Submitting…"
+    },
+    "execution": {
+      "preparing": "Prepare evaluation",
+      "preparingDetail": "Validate migration output and {{count}} evaluation cases",
+      "deploying": "Start Runtime",
+      "deployingDetail": "Prepare {{runtime}}",
+      "runtimeFallback": "isolated runtime",
+      "executing": "Run cases",
+      "executingDetail": "Run {{count}} cases and capture output",
+      "judging": "Run evaluation analysis",
+      "judgingDetail": "Evaluate {{cases}} cases · {{dimensions}} dimensions",
+      "aggregating": "Generate evaluation report",
+      "aggregatingDetail": "Aggregate scores and evidence into an HTML report",
+      "waiting": "Waiting",
+      "running": "Running",
+      "complete": "Completed"
+    },
+    "result": {
+      "title": "Execution progress",
+      "attempt": "Evaluation attempt {{attempt}}",
+      "pending": "Waiting for migration to complete",
+      "retry": "Run evaluation again",
+      "retrying": "Retrying…",
+      "loadingReport": "Loading the evaluation report…",
+      "reportTitle": "HTML evaluation report",
+      "reportHtmlDescription": "View or download the HTML report.",
+      "viewReport": "View report",
+      "reportDrawerDescription": "Scores, differences, and evidence",
+      "closeReport": "Close",
+      "closeReportAria": "Close evaluation report",
+      "reportPreviewTitle": "Migration effect evaluation report preview",
+      "reportSummary": "Evaluation summary",
+      "reportVersion": "Dataset {{version}} · Prompt v{{prompt}}",
+      "downloadReport": "Download full report",
+      "downloadingReport": "Downloading…",
+      "overallScore": "Overall fidelity",
+      "scoreScale": "0–100; N/A when evidence is insufficient",
+      "evidenceCoverage": "Evidence coverage",
+      "coverageDetail": "{{scored}} of {{total}} dimensions evidenced",
+      "executionSuccess": "Execution success",
+      "executionDetail": "{{succeeded}} of {{total}} cases completed",
+      "naCount": "N/A count",
+      "naDescription": "Insufficient evidence; excluded from scores",
+      "gapDescription": "Migration gap summary",
+      "lowestScoringCases": "Lowest-scoring cases",
+      "executionFailures": "Execution issues",
+      "criticalEvidence": "Critical evidence",
+      "limitations": "Evaluation limitations",
+      "viewEvidence": "View results and evidence for {{count}} cases",
+      "outputTruncated": "Long output was truncated",
+      "executionState": {
+        "succeeded": "Execution completed",
+        "failed": "Execution issue"
+      },
+      "severityLabel": "Severity: {{severity}}",
+      "severity": {
+        "none": "None",
+        "low": "Low",
+        "medium": "Medium",
+        "high": "High",
+        "critical": "Critical",
+        "unknown": "Unknown"
+      },
+      "evidenceSource": {
+        "user_reference": "Expected outcome",
+        "user_criteria": "Provided requirements",
+        "source_contract": "Source contract",
+        "observed_output": "Observed output",
+        "runtime_observation": "Raw Runtime data",
+        "deterministic_assertion": "Deterministic assertion"
+      },
+      "listSeparator": ", "
+    }
   },
   "errors": {
     "closeAria": "Dismiss error",

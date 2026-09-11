@@ -14,13 +14,13 @@
 
 import importlib
 import json
-import re
 from unittest.mock import MagicMock, call
 
 import pytest
 
 from frontend.server.runtime_iam import (
     DEFAULT_RUNTIME_POLICY,
+    DEFAULT_RUNTIME_ROLE,
     ensure_runtime_role,
 )
 
@@ -31,6 +31,14 @@ def iam(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     service.list_roles.return_value = {"Result": {"RoleMetadata": [], "Total": 0}}
     service.list_attached_role_policies.return_value = {
         "Result": {"AttachedPolicyMetadata": []}
+    }
+    service.get_role.return_value = {
+        "ResponseMetadata": {
+            "Error": {
+                "Code": "RoleNotExist",
+                "Message": "role does not exist",
+            }
+        }
     }
     service.create_role.return_value = {"ResponseMetadata": {"Action": "CreateRole"}}
     service.attach_role_policy.return_value = {
@@ -107,6 +115,82 @@ def test_reuses_matching_role_on_later_page_without_changing_permissions(
     iam.update_role.assert_not_called()
 
 
+def test_prefers_well_known_legacy_role_without_scanning_account(
+    iam: MagicMock,
+) -> None:
+    iam.get_role.return_value = {"Result": {"Role": {"RoleName": DEFAULT_RUNTIME_ROLE}}}
+    iam.list_attached_role_policies.return_value = {
+        "Result": {
+            "AttachedPolicyMetadata": [
+                {"PolicyName": name, "PolicyType": "System"}
+                for name in (
+                    "CloudControlReadOnlyAccess",
+                    "AgentKitTosAccess",
+                    "TorchlightApiFullAccess",
+                    "LLMShieldProtectSdkAccess",
+                    "AgentKitToolAccess",
+                    "IDReadOnlyAccess",
+                    "Mem0ReadOnlyAccess",
+                    "AgentKitRuntimeAccess",
+                )
+            ]
+        }
+    }
+
+    assert ensure_runtime_role(access_key="ak", secret_key="sk") == (
+        DEFAULT_RUNTIME_ROLE
+    )
+    iam.list_roles.assert_not_called()
+    iam.create_role.assert_not_called()
+    iam.attach_role_policy.assert_not_called()
+
+
+@pytest.mark.parametrize("provider", ["volcengine", "byteplus"])
+def test_reuses_legacy_agentkit_role_when_role_quota_is_exhausted(
+    iam: MagicMock, provider: str
+) -> None:
+    iam.list_roles.return_value = {
+        "Result": {
+            "RoleMetadata": [
+                {"RoleName": "AgentKit_Runtime_Default_ServiceRole_existing"}
+            ],
+            "Total": 1,
+        }
+    }
+    iam.list_attached_role_policies.return_value = {
+        "Result": {
+            "AttachedPolicyMetadata": [
+                {"PolicyName": name, "PolicyType": "System"}
+                for name in (
+                    "CloudControlReadOnlyAccess",
+                    "AgentKitTosAccess",
+                    "TorchlightApiFullAccess",
+                    "LLMShieldProtectSdkAccess",
+                    "AgentKitToolAccess",
+                    "IDReadOnlyAccess",
+                    "Mem0ReadOnlyAccess",
+                    "AgentKitRuntimeAccess",
+                )
+            ]
+        }
+    }
+    iam.create_role.return_value = {
+        "ResponseMetadata": {
+            "Error": {
+                "Code": "LimitExceeded",
+                "Message": "Exceeded RolesPerAccount quota, quota: 1000",
+            }
+        }
+    }
+
+    assert (
+        ensure_runtime_role(access_key="ak", secret_key="sk", provider=provider)
+        == "AgentKit_Runtime_Default_ServiceRole_existing"
+    )
+    iam.create_role.assert_not_called()
+    iam.attach_role_policy.assert_not_called()
+
+
 @pytest.mark.parametrize("provider", ["volcengine", "byteplus"])
 @pytest.mark.parametrize("existing_roles", [False, True])
 def test_creates_only_default_policy_when_no_role_matches(
@@ -127,7 +211,7 @@ def test_creates_only_default_policy_when_no_role_matches(
 
     name = ensure_runtime_role(access_key="ak", secret_key="sk", provider=provider)
 
-    assert re.fullmatch(r"AgentKit_Runtime_Default_ServiceRole_[a-zA-Z0-9]{7}", name)
+    assert name == DEFAULT_RUNTIME_ROLE
     created = iam.create_role.call_args.args[0]
     assert created["RoleName"] == name
     assert json.loads(created["TrustPolicyDocument"]) == {

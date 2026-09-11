@@ -191,6 +191,15 @@
     "loadArtifactFailed": "读取迁移产物失败",
     "loadArtifactFileFailed": "读取迁移产物文件失败",
     "downloadArtifactFailed": "下载迁移产物失败",
+    "evaluation": {
+      "datasetSaveFailed": "保存评测用例失败",
+      "datasetLoadFailed": "读取评测用例失败",
+      "statusLoadFailed": "读取评测状态失败",
+      "resumeFailed": "继续评测失败",
+      "retryFailed": "重新评测失败",
+      "reportLoadFailed": "读取评测报告失败",
+      "reportDownloadFailed": "下载评测报告失败"
+    },
     "labels": {
       "analysisResult": "迁移分析结果",
       "recommendation": "迁移建议",
@@ -235,7 +244,22 @@
       "capabilities": "迁移能力",
       "framework": "迁移框架",
       "modelCapabilities": "迁移模型能力",
-      "taskList": "迁移会话列表"
+      "taskList": "迁移会话列表",
+      "evaluationAsset": "评测资产",
+      "evaluation": "评测状态",
+      "evaluationCapabilities": "评测能力",
+      "evaluationDimension": "评测维度",
+      "evaluationCase": "评测用例",
+      "evaluationCriteria": "评测标准",
+      "evaluationMessage": "评测对话",
+      "evaluationDataset": "评测数据集",
+      "evaluationDimensionResult": "评测维度结果",
+      "evaluationEvidence": "评测证据",
+      "evaluationReport": "评测报告",
+      "evaluationSummary": "评测汇总",
+      "evaluationCaseResult": "评测用例结果",
+      "evaluationOutput": "评测输出",
+      "evaluationLimitations": "评测限制"
     }
   },
   "sandbox": {

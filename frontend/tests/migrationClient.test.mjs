@@ -46,8 +46,11 @@ const {
   getMigrationActivity,
   getMigrationArtifact,
   getMigrationCapabilities,
+  getMigrationEvaluationReport,
+  getMigrationEvaluation,
   getMigrationTask,
   MigrationApiError,
+  putMigrationEvaluationDataset,
 } = await import(moduleUrl);
 
 function migrationTask(overrides = {}) {
@@ -183,6 +186,193 @@ test("sends an optional migration model without changing legacy requests", async
   assert.equal(Object.hasOwn(bodies[1], "modelId"), false);
 });
 
+test("submits only the explicitly selected custom evaluation dimensions", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+  });
+  const selected = ["semantic_fidelity", "safety_refusal_fidelity"];
+  let requestBody;
+  globalThis.fetch = async (_url, init) => {
+    requestBody = JSON.parse(init.body);
+    return new Response(
+      JSON.stringify(
+        migrationTask({
+          sessionTtlSeconds: 7200,
+          evaluation: {
+            enabled: true,
+            preset: "custom",
+            dimensions: selected,
+            state: "waiting_dataset",
+            message: "请添加并锁定评测用例",
+            canResume: false,
+            canRetry: false,
+          },
+        }),
+      ),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+  };
+
+  const created = await createMigrationTask({
+    taskId: `migration-v1-${"1".repeat(32)}`,
+    sourceFileName: "source.zip",
+    instruction: "",
+    evaluation: {
+      enabled: true,
+      preset: "custom",
+      dimensions: selected,
+      locale: "en-US",
+    },
+  });
+
+  assert.deepEqual(requestBody.evaluation, {
+    enabled: true,
+    preset: "custom",
+    dimensions: selected,
+    locale: "en-US",
+  });
+  assert.deepEqual(created.evaluation.dimensions, selected);
+});
+
+test("creates, locks, and reads an HTML migration effect report without expected tools", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+  });
+  const asset = {
+    schemaVersion: 1,
+    kind: "dataset",
+    assetId: `task-1/dataset/${"a".repeat(32)}`,
+    version: "a".repeat(32),
+    versionId: "a".repeat(32),
+    sha256: "a".repeat(64),
+    sizeBytes: 128,
+    size: 128,
+    createdAt: "2026-09-07T08:00:00Z",
+    acl: "owner",
+    viewReady: true,
+    downloadReady: true,
+    caseCount: 1,
+  };
+  const requests = [];
+  const responses = [
+    migrationTask({
+      sessionTtlSeconds: 7200,
+      evaluation: {
+        enabled: true,
+        state: "waiting_dataset",
+        message: "请添加并锁定评测用例",
+        preset: "standard",
+        dimensions: [
+          "semantic_fidelity",
+          "output_contract",
+          "workflow_tool_fidelity",
+        ],
+        canResume: false,
+        canRetry: false,
+      },
+    }),
+    {
+      locked: true,
+      asset,
+      cases: [
+        {
+          caseId: "case-1",
+          userInput: "查询订单状态",
+          expectedOutcome: null,
+          criteria: [],
+          priorMessages: [],
+        },
+      ],
+    },
+    "<!doctype html><html><body><h1>迁移效果评测报告</h1></body></html>",
+  ];
+  globalThis.fetch = async (url, init = {}) => {
+    requests.push({ url: String(url), init });
+    const body = responses.shift();
+    const html = typeof body === "string";
+    return new Response(html ? body : JSON.stringify(body), {
+      status: 200,
+      headers: { "Content-Type": html ? "text/html" : "application/json" },
+    });
+  };
+
+  const created = await createMigrationTask({
+    taskId: `migration-v1-${"1".repeat(32)}`,
+    sourceFileName: "source.zip",
+    instruction: "",
+    evaluation: { enabled: true, preset: "standard" },
+  });
+  const dataset = await putMigrationEvaluationDataset(created.id, [
+    {
+      caseId: "case-1",
+      userInput: "查询订单状态",
+      expectedOutcome: null,
+      criteria: [],
+      priorMessages: [],
+    },
+  ]);
+  const report = await getMigrationEvaluationReport("task-1", "a".repeat(32));
+
+  assert.equal(created.evaluation.state, "waiting_dataset");
+  assert.equal(dataset.locked, true);
+  assert.match(report, /<!doctype html>/);
+  assert.match(report, /迁移效果评测报告/);
+  assert.deepEqual(JSON.parse(requests[0].init.body).evaluation, {
+    enabled: true,
+    preset: "standard",
+  });
+  const datasetBody = JSON.parse(requests[1].init.body);
+  assert.equal(datasetBody.cases[0].userInput, "查询订单状态");
+  assert.equal(Object.hasOwn(datasetBody.cases[0], "expectedTools"), false);
+  assert.match(requests[1].url, /\/evaluation\/dataset$/);
+  assert.match(
+    requests[2].url,
+    /\/evaluation\/report\?versionId=a{32}$/,
+  );
+});
+
+test("preserves required and optional evaluation environment variables", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+  });
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        enabled: true,
+        state: "waiting_environment",
+        message: "请补充环境变量",
+        environment: {
+          required: ["MODEL_AGENT_API_KEY"],
+          optional: ["MODEL_AGENT_API_BASE", "TZ"],
+          defaults: {
+            MODEL_AGENT_API_BASE: "https://ark.example/api/v3",
+            TZ: "Asia/Shanghai",
+          },
+        },
+        canResume: true,
+        canRetry: false,
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+
+  const status = await getMigrationEvaluation("task-1");
+
+  assert.deepEqual(status.environment, {
+    required: ["MODEL_AGENT_API_KEY"],
+    optional: ["MODEL_AGENT_API_BASE", "TZ"],
+    defaults: {
+      MODEL_AGENT_API_BASE: "https://ark.example/api/v3",
+      TZ: "Asia/Shanghai",
+    },
+  });
+});
+
 test("accepts the migration default model while preserving legacy capabilities", async (t) => {
   const previousFetch = globalThis.fetch;
   t.after(() => {
@@ -200,6 +390,29 @@ test("accepts the migration default model while preserving legacy capabilities",
       ...base,
       provider: "volcengine",
       model: { configured: true, id: "doubao-seed-2-1-pro-260628" },
+      evaluation: {
+        available: true,
+        reason: "",
+        maxCases: 100,
+        maxDatasetBytes: 10 * 1024 * 1024,
+        maxMessagesPerCase: 20,
+        maxMessagesBytes: 32 * 1024,
+        maxReferenceOutputBytes: 16 * 1024,
+        maxCriteria: 20,
+        maxCriterionBytes: 2 * 1024,
+        maxCapturedOutputBytes: 64 * 1024,
+        inputMode: "page",
+        pageInputMethods: ["manual", "bulk_paste"],
+        defaultPreset: "standard",
+        maximumSessionTtlSeconds: 7200,
+        dimensions: [
+          {
+            id: "semantic_fidelity",
+            label: "语义一致性",
+            description: "检查语义。",
+          },
+        ],
+      },
     },
     base,
   ];
@@ -216,6 +429,11 @@ test("accepts the migration default model while preserving legacy capabilities",
     configured: true,
     id: "doubao-seed-2-1-pro-260628",
   });
+  assert.equal(current.evaluation.maximumSessionTtlSeconds, 7200);
+  assert.deepEqual(current.evaluation.pageInputMethods, [
+    "manual",
+    "bulk_paste",
+  ]);
   assert.equal(legacy.model, undefined);
 });
 
@@ -280,7 +498,10 @@ test("accepts an actionable unsupported analysis without a fake recommendation",
   const task = await getMigrationTask(`migration-v1-${"1".repeat(32)}`);
 
   assert.equal(task.analysis.recommended, null);
-  assert.equal(task.analysis.summary, "ZIP 中没有足以恢复 Agent 行为的项目材料。");
+  assert.equal(
+    task.analysis.summary,
+    "ZIP 中没有足以恢复 Agent 行为的项目材料。",
+  );
   assert.equal(task.canConfirm, false);
 });
 
@@ -402,24 +623,28 @@ test("rejects malformed optional migration activity fields", async (t) => {
     {
       available: true,
       complete: false,
-      items: [{
-        id: "tool",
-        kind: "command",
-        status: "running",
-        title: "执行工具",
-        tool: { name: 1 },
-      }],
+      items: [
+        {
+          id: "tool",
+          kind: "command",
+          status: "running",
+          title: "执行工具",
+          tool: { name: 1 },
+        },
+      ],
     },
     {
       available: true,
       complete: false,
-      items: [{
-        id: "plan",
-        kind: "plan",
-        status: "running",
-        title: "迁移计划",
-        plan: [{ text: "迁移", status: "done" }],
-      }],
+      items: [
+        {
+          id: "plan",
+          kind: "plan",
+          status: "running",
+          title: "迁移计划",
+          plan: [{ text: "迁移", status: "done" }],
+        },
+      ],
     },
   ];
   globalThis.fetch = async () =>

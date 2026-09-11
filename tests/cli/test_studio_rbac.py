@@ -214,7 +214,7 @@ def _create_studio_app(
     provider: str = "volcengine",
 ) -> FastAPI:
     captured: dict[str, Any] = {}
-    monkeypatch.delenv("VEADK_STUDIO_IDENTITY_ROLES", raising=False)
+    monkeypatch.setenv("VEADK_STUDIO_IDENTITY_ROLES", "")
     # These fixtures exercise resource/SSO routes; isolate the Identity control plane
     from dataclasses import replace
 

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from typing import Any
 
 from veadk.utils.cloud_provider import (
@@ -27,7 +28,21 @@ from veadk.utils.cloud_provider import (
 )
 
 DEFAULT_RUNTIME_POLICY = "AgentKitDefaultRuntimeAccess"
+DEFAULT_RUNTIME_ROLE = "AgentKit_Runtime_Default_ServiceRole"
 _ROLE_PAGE_SIZE = 100
+_ROLE_LOCK = threading.Lock()
+_LEGACY_RUNTIME_POLICIES = frozenset(
+    {
+        "cloudcontrolreadonlyaccess",
+        "agentkittosaccess",
+        "torchlightapifullaccess",
+        "llmshieldprotectsdkaccess",
+        "agentkittoolaccess",
+        "idreadonlyaccess",
+        "mem0readonlyaccess",
+        "agentkitruntimeaccess",
+    }
+)
 
 
 def _result(response: dict[str, Any]) -> dict[str, Any]:
@@ -38,6 +53,53 @@ def _result(response: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(result, dict):
         raise RuntimeError("IAM response is missing Result")
     return result
+
+
+def _role_policies(iam: Any, name: str) -> frozenset[str]:
+    policies = _result(iam.list_attached_role_policies({"RoleName": name})).get(
+        "AttachedPolicyMetadata"
+    )
+    if not isinstance(policies, list):
+        raise RuntimeError("IAM returned an invalid role policy list")
+    return frozenset(
+        str(policy.get("PolicyName") or "").casefold()
+        for policy in policies
+        if policy.get("PolicyType") == "System"
+    )
+
+
+def _is_runtime_role(policies: frozenset[str]) -> bool:
+    return (
+        DEFAULT_RUNTIME_POLICY.casefold() in policies
+        or _LEGACY_RUNTIME_POLICIES <= policies
+    )
+
+
+def _error_code(value: object) -> str:
+    if isinstance(value, dict):
+        return str(
+            ((value.get("ResponseMetadata") or {}).get("Error") or {}).get("Code") or ""
+        )
+    try:
+        parsed = json.loads(str(value))
+    except (TypeError, ValueError):
+        return ""
+    return _error_code(parsed)
+
+
+def _get_role(iam: Any, name: str) -> dict[str, Any] | None:
+    try:
+        response = iam.get_role({"RoleName": name})
+    except Exception as error:
+        if _error_code(error) == "RoleNotExist":
+            return None
+        raise
+    if _error_code(response) == "RoleNotExist":
+        return None
+    role = _result(response).get("Role")
+    if not isinstance(role, dict) or role.get("RoleName") != name:
+        raise RuntimeError("IAM returned an invalid role")
+    return role
 
 
 def _find_reusable_role(iam: Any) -> str | None:
@@ -52,16 +114,7 @@ def _find_reusable_role(iam: Any) -> str | None:
             name = role.get("RoleName")
             if not isinstance(name, str) or not name.strip():
                 raise RuntimeError("IAM role is missing RoleName")
-            policies = _result(iam.list_attached_role_policies({"RoleName": name})).get(
-                "AttachedPolicyMetadata"
-            )
-            if not isinstance(policies, list):
-                raise RuntimeError("IAM returned an invalid role policy list")
-            if any(
-                policy.get("PolicyName") == DEFAULT_RUNTIME_POLICY
-                and policy.get("PolicyType") == "System"
-                for policy in policies
-            ):
+            if _is_runtime_role(_role_policies(iam, name)):
                 return name
         offset += len(roles)
         if offset >= total:
@@ -77,11 +130,27 @@ def ensure_runtime_role(
     session_token: str | None = None,
     provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
 ) -> str:
-    """Reuse a matching role, or create one with only the default runtime policy
+    """Reuse a matching role, or create the shared default Runtime role.
 
-    Called under Studio's deployment lock so concurrent local deployments can
-    reuse the role created by the previous deployment
+    Both current and legacy AgentKit policy layouts are recognized so evaluation
+    attempts never create one IAM role per temporary Runtime.
     """
+    with _ROLE_LOCK:
+        return _ensure_runtime_role(
+            access_key=access_key,
+            secret_key=secret_key,
+            session_token=session_token,
+            provider=provider,
+        )
+
+
+def _ensure_runtime_role(
+    *,
+    access_key: str,
+    secret_key: str,
+    session_token: str | None,
+    provider: CloudProvider,
+) -> str:
     from volcengine.iam.IamService import IamService
 
     iam = IamService()
@@ -92,13 +161,25 @@ def ensure_runtime_role(
     if session_token:
         iam.set_session_token(session_token)
 
+    default = _get_role(iam, DEFAULT_RUNTIME_ROLE)
+    if default is not None:
+        policies = _role_policies(iam, DEFAULT_RUNTIME_ROLE)
+        if not _is_runtime_role(policies):
+            _result(
+                iam.attach_role_policy(
+                    {
+                        "RoleName": DEFAULT_RUNTIME_ROLE,
+                        "PolicyName": DEFAULT_RUNTIME_POLICY,
+                        "PolicyType": "System",
+                    }
+                )
+            )
+        return DEFAULT_RUNTIME_ROLE
+
     existing = _find_reusable_role(iam)
     if existing is not None:
         return existing
 
-    from agentkit.utils.misc import generate_runtime_role_name
-
-    name = generate_runtime_role_name()
     service_code = (
         os.getenv("VOLCENGINE_AGENTKIT_SERVICE")
         or os.getenv("VOLC_AGENTKIT_SERVICE")
@@ -118,16 +199,19 @@ def ensure_runtime_role(
     }
     _result(
         iam.create_role(
-            {"RoleName": name, "TrustPolicyDocument": json.dumps(trust_policy)}
+            {
+                "RoleName": DEFAULT_RUNTIME_ROLE,
+                "TrustPolicyDocument": json.dumps(trust_policy),
+            }
         )
     )
     _result(
         iam.attach_role_policy(
             {
-                "RoleName": name,
+                "RoleName": DEFAULT_RUNTIME_ROLE,
                 "PolicyName": DEFAULT_RUNTIME_POLICY,
                 "PolicyType": "System",
             }
         )
     )
-    return name
+    return DEFAULT_RUNTIME_ROLE

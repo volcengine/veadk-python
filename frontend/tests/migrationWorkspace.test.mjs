@@ -11,6 +11,14 @@ const stylesUrl = new URL(
   "../src/migrations/MigrationWorkspace.css",
   import.meta.url,
 );
+const evaluationUrl = new URL(
+  "../src/migrations/MigrationEvaluation.tsx",
+  import.meta.url,
+);
+const evaluationStylesUrl = new URL(
+  "../src/migrations/MigrationEvaluation.css",
+  import.meta.url,
+);
 const activityBlocksUrl = new URL(
   "../src/migrations/migrationActivityBlocks.ts",
   import.meta.url,
@@ -57,9 +65,141 @@ test("exposes a typed migration API with bounded transfer requests", () => {
   assert.match(source, /export async function getMigrationActivity/);
   assert.match(source, /export async function getMigrationArtifact/);
   assert.match(source, /export async function downloadMigrationArtifact/);
+  assert.match(source, /export async function putMigrationEvaluationDataset/);
+  assert.match(source, /export async function getMigrationEvaluation/);
+  assert.match(source, /export async function getMigrationEvaluationReport/);
+  assert.match(source, /export async function downloadMigrationEvaluationReport/);
+  assert.match(source, /export async function resumeMigrationEvaluation/);
+  assert.match(source, /export async function retryMigrationEvaluation/);
   assert.match(source, /TRANSFER_REQUEST_TIMEOUT_MS/);
   assert.match(source, /withAuth/);
   assert.match(source, /withLocalUser/);
+});
+
+test("configures migration effect evaluation in a drawer with direct user-facing copy", () => {
+  const workspace = readFileSync(workspaceUrl, "utf8");
+  const evaluation = readFileSync(evaluationUrl, "utf8");
+  const styles = readFileSync(evaluationStylesUrl, "utf8");
+  const zhResource = JSON.parse(readFileSync(zhResourceUrl, "utf8"));
+  const enResource = JSON.parse(readFileSync(enResourceUrl, "utf8"));
+
+  assert.match(evaluation, /enabled: false/);
+  assert.match(evaluation, /userInput: ""/);
+  assert.match(evaluation, /expectedOutcome: ""/);
+  assert.match(evaluation, /criteria: \[\]/);
+  assert.doesNotMatch(evaluation, /EvaluationDraftMessage/);
+  assert.doesNotMatch(evaluation, /evaluation\.case\.priorConversation/);
+  assert.doesNotMatch(evaluation, /evaluation\.case\.addMessage/);
+  assert.doesNotMatch(evaluation, /expectedTools|期望工具/);
+  assert.match(evaluation, /t\("evaluation\.case\.userInput"\)/);
+  assert.match(evaluation, /role="switch"/);
+  assert.match(evaluation, /role="dialog"/);
+  assert.match(evaluation, /aria-modal="true"/);
+  assert.match(evaluation, /migration-evaluation-drawer/);
+  assert.match(evaluation, /migration-evaluation-drawer__toolbar/);
+  assert.match(evaluation, /<fieldset className="migration-evaluation-advanced">/);
+  assert.doesNotMatch(
+    evaluation,
+    /<details className="migration-evaluation-advanced">/,
+  );
+  assert.ok(
+    evaluation.indexOf('className="migration-evaluation-advanced"') <
+      evaluation.indexOf('className="migration-evaluation-cases"'),
+    "evaluation method should appear before the question list",
+  );
+  assert.doesNotMatch(evaluation, /migration-evaluation-editor__actions/);
+  assert.match(evaluation, /event\.key === "Escape"/);
+  assert.match(evaluation, /cancelAnimationFrame\(focusFrame\)/);
+  assert.match(evaluation, /onCloseRef/);
+  assert.match(evaluation, /previousFocus/);
+  assert.match(evaluation, /crypto\.randomUUID\(\)/);
+  assert.match(evaluation, /priorMessages: \[\]/);
+  assert.match(evaluation, /MigrationEvaluationResult/);
+  assert.match(evaluation, /EvaluationExecutionProgress/);
+  assert.match(evaluation, /evaluation\.execution\.executingDetail/);
+  assert.match(evaluation, /type="text"/);
+  assert.doesNotMatch(evaluation, /type="password"/);
+  assert.match(evaluation, /environment\?\.optional/);
+  assert.match(evaluation, /srcDoc=\{report \?\? ""\}/);
+  assert.match(evaluation, /sandbox=""/);
+  assert.match(evaluation, /evaluation\.result\.viewReport/);
+  assert.match(evaluation, /reportOpen/);
+  assert.match(evaluation, /onLoadReport/);
+  assert.match(evaluation, /onDownloadReport/);
+  assert.doesNotMatch(evaluation, /from "lucide-react"/);
+  assert.doesNotMatch(evaluation, />[↑↓×]</);
+  assert.doesNotMatch(evaluation, /[\p{Script=Han}]/u);
+
+  const createFlow = workspace.slice(
+    workspace.indexOf("async function createAndUpload"),
+    workspace.indexOf("async function uploadExistingTask"),
+  );
+  assert.ok(
+    createFlow.indexOf("createMigrationTask") <
+      createFlow.indexOf("Promise.allSettled"),
+  );
+  assert.match(
+    createFlow,
+    /Promise\.allSettled\(\[[\s\S]*?uploadMigrationSource[\s\S]*?saveEvaluationDataset/,
+  );
+  const datasetSaveFlow = workspace.slice(
+    workspace.indexOf("async function saveEvaluationDataset"),
+    workspace.indexOf("function applySavedEvaluationDataset"),
+  );
+  assert.doesNotMatch(datasetSaveFlow, /getMigrationTask/);
+  assert.match(workspace, /recordEvaluationDatasetSaveFailure/);
+  assert.match(workspace, /retryEvaluationDatasetSave/);
+  assert.match(workspace, /evaluation\.dataset\.retrySave/);
+  const datasetHydrationEffect = workspace.slice(
+    workspace.indexOf("setEvaluationErrors({});"),
+    workspace.indexOf("setEvaluationReport(null)"),
+  );
+  assert.match(datasetHydrationEffect, /getMigrationEvaluationDataset/);
+  assert.doesNotMatch(
+    datasetHydrationEffect,
+    /if \(!task\.evaluation\.dataset\)/,
+    "opening an evaluation task must load its saved cases even when polling omits the dataset summary",
+  );
+  assert.match(workspace, /evaluationDraftLoadingTaskId/);
+  assert.match(workspace, /evaluation\.dataset\.loadingSettings/);
+  assert.match(workspace, /evaluationSettingsLocked/);
+  assert.match(workspace, /"preparing"/);
+  assert.match(workspace, /"aggregating"/);
+  assert.doesNotMatch(workspace, /"retrying"|"cleaning"/);
+  assert.match(workspace, /<MigrationEvaluationSetup/);
+  assert.match(workspace, /<MigrationEvaluationResult/);
+  assert.match(workspace, /role="tablist"/);
+  assert.match(workspace, /role=\{hasEvaluationTab \? "tabpanel" : "log"\}/);
+  assert.match(workspace, /evaluation\.tabs\.migration/);
+  assert.match(workspace, /evaluation\.tabs\.evaluation/);
+  assert.match(workspace, /isEvaluationPollingState/);
+  assert.match(workspace, /resumeMigrationEvaluation/);
+  assert.match(workspace, /retryMigrationEvaluation/);
+  assert.match(workspace, /downloadMigrationEvaluationReport/);
+  assert.match(workspace, /async function loadEvaluationReport/);
+  assert.match(
+    workspace,
+    /onLoadReport=\{\(\) => void loadEvaluationReport\(\)\}/,
+  );
+  const reportResetEffect = workspace.slice(
+    workspace.indexOf("setEvaluationReport(null)"),
+    workspace.indexOf("setEvaluationReport(null)") + 900,
+  );
+  assert.doesNotMatch(reportResetEffect, /getMigrationEvaluationReport/);
+  assert.match(styles, /@media \(max-width: 760px\)/);
+  assert.equal(zhResource.evaluation.setup.casesTitle, "评测用例");
+  assert.equal(enResource.evaluation.setup.casesTitle, "Evaluation cases");
+  assert.equal(zhResource.evaluation.case.userInput, "用户输入");
+  assert.equal(zhResource.evaluation.case.criteria, "必须满足的要求（可选）");
+  assert.equal(
+    enResource.evaluation.result.evidenceSource.user_criteria,
+    "Provided requirements",
+  );
+  assert.doesNotMatch(
+    JSON.stringify(zhResource.evaluation),
+    /用户会怎么问|真实用户问题|历史对话|前置对话|评测问题|个问题|问题结果/,
+  );
+  assert.match(zhResource.evaluation.result.scoreScale, /0–100/);
 });
 
 test("enables the existing migration entry and renders its workspace", () => {
@@ -158,6 +298,32 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
   assert.match(source, /listMigrationTasks/);
   assert.match(source, /getMigrationTask/);
   assert.match(source, /confirmMigrationTask/);
+  const confirmMigration = source.match(
+    /async function confirmMigration\(\) \{[\s\S]*?\n  \}\n\n  async function stopTask/,
+  )?.[0];
+  assert.ok(confirmMigration);
+  assert.ok(
+    confirmMigration.indexOf("migrationStartingTask") <
+      confirmMigration.indexOf("await confirmMigrationTask"),
+    "the workspace should enter the migration phase before launch confirmation returns",
+  );
+  assert.match(
+    confirmMigration,
+    /catch \(cause\) \{[\s\S]*?await reconcileTaskState\(task\.id\)[\s\S]*?authoritative\.state !== "analysis_ready"[\s\S]*?setError/,
+    "a failed launch should restore the authoritative task before surfacing the error",
+  );
+  assert.match(source, /function migrationStartingTask/);
+  assert.match(source, /state: "migrating"/);
+  assert.match(source, /canConfirm: false/);
+  assert.match(source, /canStop: false/);
+  assert.match(
+    source,
+    /if \(!hasPollableTasks \|\| action === "confirm"\) return;/,
+  );
+  assert.match(
+    source,
+    /if \([\s\S]*?action === "confirm"[\s\S]*?!task \|\|[\s\S]*?taskEnvironmentExpired/,
+  );
   assert.match(source, /stopMigrationTask/);
   assert.match(source, /getMigrationActivity/);
   assert.match(source, /function MigrationActivityFeed/);
@@ -210,8 +376,13 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
   );
   assert.match(source, /artifactErrorRetryable/);
   assert.match(source, /t\("actions\.reload"\)/);
-  assert.match(source, /function expireTasksAtDeadline/);
-  assert.match(source, /setTasks\(\(current\) => expireTasksAtDeadline/);
+  assert.doesNotMatch(source, /function expireTasksAtDeadline/);
+  assert.doesNotMatch(source, /state: "expired" as const/);
+  assert.match(source, /migrationHistoryStatus\(item\)/);
+  assert.match(source, /isMigrationEnvironmentExpired\(item,/);
+  assert.match(source, /className="migration-history__status-label"/);
+  assert.match(source, /className="migration-history__expiry-badge"/);
+  assert.match(source, /t\("historyStatus\.environmentExpired"\)/);
   assert.match(source, /function migrationExpiryCopy/);
   assert.match(source, /migrationText\("expiry\.countdown"/);
   assert.match(source, /migrationText\("expiry\.savedUnaffected"\)/);
@@ -229,7 +400,11 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
     source,
     /artifact\.files\.map\(\(file\) => \(\{[\s\S]*?content: ""/,
   );
-  assert.match(source, /migrationText\("expiry\.expiredSavedMessage"\)/);
+  assert.doesNotMatch(
+    styles,
+    /data-state="expired"[\s\S]*?var\(--destructive\)/,
+  );
+  assert.match(styles, /\.migration-history__expiry-badge/);
   assert.match(source, /function taskDisplayMessage/);
   assert.match(source, /migrationText\("task\.readyWithWarnings"\)/);
   assert.match(
@@ -292,6 +467,10 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
   );
   assert.match(
     source,
+    /evaluation: evaluationDraft\.enabled[\s\S]*?locale: resolveSupportedLocale\(locale\) \?\? DEFAULT_LOCALE/,
+  );
+  assert.match(
+    source,
     /model\.available \|\| model\.lifecycleStatus === "Retiring"/,
   );
   assert.match(source, /!unsupportedModelIds\.has\(model\.id\)/);
@@ -318,8 +497,8 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
     /className="migration-main__header-actions"[\s\S]*?task\?\.canStop[\s\S]*?t\("actions\.stop"\)/,
   );
   assert.doesNotMatch(source, /className="migration-running-actions"/);
-  assert.match(source, /role="log"/);
-  assert.match(source, /aria-live="polite"/);
+  assert.match(source, /role=\{hasEvaluationTab \? "tabpanel" : "log"\}/);
+  assert.match(source, /aria-live=\{activeTaskTab === "migration" \? "polite" : undefined\}/);
   assert.match(source, /ProjectPreview/);
   assert.match(source, /StudioConfirmDialog/);
   assert.doesNotMatch(source, /window\.confirm/);
