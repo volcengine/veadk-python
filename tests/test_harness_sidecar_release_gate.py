@@ -39,7 +39,7 @@ def test_sidecar_release_gate_runs_backend_and_frontend_in_parallel() -> None:
     assert "test_studio_sidecar.py" in backend_run
     assert "test_legacy_runtime_recovery.py" in backend_run
     assert (
-        "test_source_preserving_legacy_ops_update_reuses_exact_image_via_sdk"
+        "test_source_preserving_legacy_ops_update_migrates_output_repository_via_sdk"
         in backend_run
     )
     assert "test_release_server_agentkit_cli_pin_matches_veadk" in backend_run

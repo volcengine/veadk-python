@@ -428,6 +428,34 @@ def _anchor_environment_registry(
     )
 
 
+def _source_preserving_output_repository(
+    *,
+    runtime_id: str,
+    registry: str,
+    namespace: str,
+    source_repository: str,
+    has_build_resource_tags: bool,
+) -> str:
+    """Avoid rebuilding into legacy CR state while preserving the source image.
+
+    Runtimes created before Studio persisted build-resource tags can still use
+    their immutable image as a build input, but their original repository may
+    not be visible to the VeFaaS caller used by AgentKit Platform's BuildKit
+    component. Only that legacy path gets a deterministic Studio-owned output
+    repository in the same Registry/Namespace. Modern tagged Runtimes keep the
+    configured repository unchanged.
+    """
+    normalized = tuple(
+        value.strip() for value in (runtime_id, registry, namespace, source_repository)
+    )
+    if not all(normalized):
+        raise ValueError("Source-preserving repository identity is incomplete")
+    if has_build_resource_tags:
+        return normalized[3]
+    digest = hashlib.sha256("\0".join(normalized).encode("utf-8")).hexdigest()
+    return f"veadk-sp-{digest[:20]}"
+
+
 def _studio_environment_resource_environment(
     *,
     cp_workspace: str | None,
@@ -7351,12 +7379,19 @@ def _run_frontend_server(
                                 "暂时无法执行保留源码更新。"
                             ),
                         )
+                    output_repository = _source_preserving_output_repository(
+                        runtime_id=runtime_id,
+                        registry=source_reference.registry_name,
+                        namespace=namespace,
+                        source_repository=repository,
+                        has_build_resource_tags=tagged_resources is not None,
+                    )
                     _anchor_environment_registry(
                         deployment_resource_config,
                         deployment_resource_tag_values,
                         registry=source_reference.registry_name,
                         namespace=namespace,
-                        repository=repository,
+                        repository=output_repository,
                     )
                 elif canonical_requested_draft is not None:
                     try:

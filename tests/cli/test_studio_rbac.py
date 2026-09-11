@@ -19,6 +19,7 @@ import hashlib
 import itertools
 import json
 import logging
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -45,6 +46,7 @@ from veadk.cli.cli_frontend import (
     _runtime_environment_from_runtime,
     _runtime_environment_from_tags,
     _runtime_environment_tags,
+    _source_preserving_output_repository,
     studio,
 )
 
@@ -200,6 +202,71 @@ def test_environment_registry_overrides_legacy_runtime_build_registry() -> None:
         "veadk:build-resource:cr-namespace": "runtime-environments",
         "veadk:build-resource:cr-repository": "agent-output",
     }
+
+
+def test_source_preserving_output_repository_migrates_only_tagless_runtimes() -> None:
+    identity = (
+        "runtime-legacy",
+        "registry-a",
+        "namespace-a",
+        "repository-a",
+    )
+    expected = (
+        "veadk-sp-" + hashlib.sha256("\0".join(identity).encode()).hexdigest()[:20]
+    )
+
+    assert (
+        _source_preserving_output_repository(
+            runtime_id=identity[0],
+            registry=identity[1],
+            namespace=identity[2],
+            source_repository=identity[3],
+            has_build_resource_tags=False,
+        )
+        == expected
+    )
+    assert (
+        _source_preserving_output_repository(
+            runtime_id=identity[0],
+            registry=identity[1],
+            namespace=identity[2],
+            source_repository=identity[3],
+            has_build_resource_tags=False,
+        )
+        == expected
+    )
+    assert (
+        _source_preserving_output_repository(
+            runtime_id="runtime-other",
+            registry=identity[1],
+            namespace=identity[2],
+            source_repository=identity[3],
+            has_build_resource_tags=False,
+        )
+        != expected
+    )
+    assert (
+        _source_preserving_output_repository(
+            runtime_id=identity[0],
+            registry=identity[1],
+            namespace=identity[2],
+            source_repository="repository-other",
+            has_build_resource_tags=False,
+        )
+        != expected
+    )
+    assert (
+        _source_preserving_output_repository(
+            runtime_id=identity[0],
+            registry=identity[1],
+            namespace=identity[2],
+            source_repository=identity[3],
+            has_build_resource_tags=True,
+        )
+        == identity[3]
+    )
+    assert len(expected) == 29
+    assert re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", expected)
 
 
 def _create_studio_app(
@@ -5048,9 +5115,15 @@ def test_update_deployment_rechecks_runtime_identity_before_update(
     assert update_calls == []
 
 
+@pytest.mark.parametrize(
+    "has_build_resource_tags",
+    [False, True],
+    ids=["legacy-tagless", "modern-tagged"],
+)
 def test_source_preserving_update_ignores_browser_source_and_keeps_secrets_out_of_build(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    has_build_resource_tags: bool,
 ) -> None:
     from agentkit.sdk.runtime.client import AgentkitRuntimeClient
 
@@ -5062,6 +5135,27 @@ def test_source_preserving_update_ignores_browser_source_and_keeps_secrets_out_o
     runtime.status = "Ready"
     runtime.artifact_url = (
         "example-registry-cn-shanghai.cr.volces.com/agentkit/legacy:v9"
+    )
+    runtime.tags = list(runtime.tags or []) + (
+        [
+            SimpleNamespace(key="veadk:build-resource:tos-mode", value="auto"),
+            SimpleNamespace(key="veadk:build-resource:cr-mode", value="create"),
+            SimpleNamespace(
+                key="veadk:build-resource:cr-instance",
+                value="example-registry",
+            ),
+            SimpleNamespace(
+                key="veadk:build-resource:cr-namespace",
+                value="agentkit",
+            ),
+            SimpleNamespace(
+                key="veadk:build-resource:cr-repository",
+                value="legacy",
+            ),
+            SimpleNamespace(key="veadk:build-resource:cp-mode", value="auto"),
+        ]
+        if has_build_resource_tags
+        else []
     )
     runtime.envs = [
         SimpleNamespace(
@@ -5080,12 +5174,19 @@ def test_source_preserving_update_ignores_browser_source_and_keeps_secrets_out_o
     ]
     launched = False
     captured: dict[str, Any] = {}
+    update_requests: list[Any] = []
 
     def get_runtime(_self: Any, _request: Any) -> SimpleNamespace:
         runtime.current_version_number = 10 if launched else 9
         return runtime
 
     monkeypatch.setattr(AgentkitRuntimeClient, "get_runtime", get_runtime)
+
+    def update_runtime(_self: Any, request: Any) -> SimpleNamespace:
+        update_requests.append(request)
+        return SimpleNamespace(runtime_id=runtime.runtime_id)
+
+    monkeypatch.setattr(AgentkitRuntimeClient, "update_runtime", update_runtime)
     monkeypatch.setattr(
         OciImageInspector,
         "extract_skills",
@@ -5144,6 +5245,10 @@ def test_source_preserving_update_ignores_browser_source_and_keeps_secrets_out_o
         captured["mcp"] = (base / ".veadk-studio-overlay/mcp.json").read_text()
         captured["persisted_config"] = Path(config_file).read_text()
         captured["config"] = config_dict
+        AgentkitRuntimeClient.update_runtime(
+            object(),
+            SimpleNamespace(tags=[], apmplus_enable=False),
+        )
         launched = True
         return SimpleNamespace(
             success=True,
@@ -5272,10 +5377,33 @@ def test_source_preserving_update_ignores_browser_source_and_keeps_secrets_out_o
     assert captured["config"]["launch_types"]["cloud"]["cr_namespace_name"] == (
         "agentkit"
     )
-    assert captured["config"]["launch_types"]["cloud"]["cr_repo_name"] == ("legacy")
+    expected_repository = (
+        "legacy"
+        if has_build_resource_tags
+        else "veadk-sp-"
+        + hashlib.sha256(
+            "\0".join(
+                (
+                    runtime.runtime_id,
+                    "example-registry",
+                    "agentkit",
+                    "legacy",
+                )
+            ).encode()
+        ).hexdigest()[:20]
+    )
+    assert captured["config"]["launch_types"]["cloud"]["cr_repo_name"] == (
+        expected_repository
+    )
+    assert len(update_requests) == 1
+    update_tags = {item.key: item.value for item in update_requests[0].tags}
+    assert update_tags["veadk:build-resource:cr-mode"] == "create"
+    assert update_tags["veadk:build-resource:cr-instance"] == "example-registry"
+    assert update_tags["veadk:build-resource:cr-namespace"] == "agentkit"
+    assert update_tags["veadk:build-resource:cr-repository"] == expected_repository
 
 
-def test_source_preserving_legacy_ops_update_reuses_exact_image_via_sdk(
+def test_source_preserving_legacy_ops_update_migrates_output_repository_via_sdk(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -5590,7 +5718,22 @@ def test_source_preserving_legacy_ops_update_reuses_exact_image_via_sdk(
     assert captured["config"]["launch_types"]["cloud"]["cr_namespace_name"] == (
         "agentkit"
     )
-    assert captured["config"]["launch_types"]["cloud"]["cr_repo_name"] == ("sidecar")
+    expected_repository = (
+        "veadk-sp-"
+        + hashlib.sha256(
+            "\0".join(
+                (
+                    runtime.runtime_id,
+                    "example-registry",
+                    "agentkit",
+                    "sidecar",
+                )
+            ).encode()
+        ).hexdigest()[:20]
+    )
+    assert captured["config"]["launch_types"]["cloud"]["cr_repo_name"] == (
+        expected_repository
+    )
 
 
 def test_deployment_status_recovers_completed_update_from_fresh_instance(
