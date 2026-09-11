@@ -4781,6 +4781,7 @@ def _run_frontend_server(
                 env[key] = os.environ[key]
         for key in (
             "PATH",
+            "SYSTEMROOT",  # Windows 下 Python 初始化依赖系统目录。
             "HOME",
             "USER",
             "LOGNAME",
