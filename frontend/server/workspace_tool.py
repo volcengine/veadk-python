@@ -86,7 +86,7 @@ def workspace_tool_request(
     )
     return types.CreateToolRequest(
         Name=name,
-        ToolType="Private",
+        ToolType="StudioEnv" if provider == "byteplus" else "Private",
         EnableSnapshot=True,
         ProjectName="default",
         Description="AgentKit Studio Sandbox",
@@ -129,7 +129,7 @@ def ensure_workspace_tool(
         raise RuntimeError("Multiple workspace tools match the image")
     if matches:
         tool_id = matches[0].tool_id
-        if matches[0].tool_type != "Private" or matches[0].image_url != image:
+        if matches[0].tool_type != request.tool_type or matches[0].image_url != image:
             raise RuntimeError(
                 "Existing workspace tool does not match the requested image"
             )
@@ -178,6 +178,7 @@ def provision_workspace_tool(
     image: str = "",
 ) -> str:
     """Provision the image and model environment during Studio deployment."""
+    from agentkit.platform.context import default_cloud_provider
     from agentkit.sdk.tools.client import AgentkitToolsClient
     from veadk.auth.veauth.ark_veauth import get_ark_token
     from veadk.cli.studio_sandbox_tools import (
@@ -186,12 +187,14 @@ def provision_workspace_tool(
     )
 
     image = image.strip() or resolve_workspace_image(provider, region)
-    client = AgentkitToolsClient(
-        access_key=access_key,
-        secret_key=secret_key,
-        session_token=session_token,
-        region=region,
-    )
+    # Deployment provisions resources in worker threads without inherited context.
+    with default_cloud_provider(provider):
+        client = AgentkitToolsClient(
+            access_key=access_key,
+            secret_key=secret_key,
+            session_token=session_token,
+            region=region,
+        )
     key = get_ark_token(
         cloud_provider=provider,
         region=region,

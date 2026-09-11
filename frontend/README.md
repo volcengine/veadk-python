@@ -1138,7 +1138,12 @@ agent terminology rather than exposing these control-plane resource types.
 ### Studio Sandbox 工作区
 
 `veadk studio deploy` 默认创建或复用启用持久化快照的 Studio Sandbox Tool，
-新建规格为 8 核 CPU、16 GB 内存，更新时自动补建也使用相同规格，
+新建规格为 8 核 CPU、16 GB 内存，更新时自动补建也使用相同规格。
+
+部署、命令行更新和云上 OTA 共用 Studio Sandbox 创建流程：BytePlus 使用内置
+`StudioEnv`，火山引擎继续使用 `Private`。创建时获取模型凭据并配置模型名称、
+地址、API Key、鉴权和快照；已有工作区绑定保持不变。
+
 按云环境和地域选择 `studio-sandbox-1.0.1` 镜像：
 
 | 云环境 | 地域 | 镜像 |

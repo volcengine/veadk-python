@@ -34,7 +34,7 @@ def test_cloud_tool_preserves_native_entrypoint_and_model_configuration(
     assert "STUDIO_EDITOR_BOOTSTRAP" not in env
     assert request.image_url == image
     assert request.command == "/opt/gem/run.sh"
-    assert request.tool_type == "Private"
+    assert request.tool_type == ("StudioEnv" if provider == "byteplus" else "Private")
     assert request.enable_snapshot is True
     assert request.cpu_milli == 8000
     assert request.memory_mb == 16384
@@ -221,6 +221,11 @@ def test_missing_workspace_update_injects_model_credentials(
 
     class Client:
         def __init__(self, **kwargs):
+            from agentkit.platform.context import get_default_cloud_provider
+
+            active_provider = get_default_cloud_provider()
+            assert active_provider is not None
+            assert active_provider.value == provider
             assert kwargs == credentials
 
         def list_tools(self, request):
@@ -245,7 +250,43 @@ def test_missing_workspace_update_injects_model_credentials(
     assert result == {"STUDIO_WORKSPACE_TOOL_ID": "t-configured"}
     request = captured["request"]
     env = {item.key: item.value for item in request.envs}
+    assert request.tool_type == ("StudioEnv" if provider == "byteplus" else "Private")
     assert env["MODEL_AGENT_API_KEY"] == "test-model-token"
     assert env["MODEL_AGENT_NAME"]
     assert env["MODEL_AGENT_BASE_URL"].startswith("https://")
     assert request.enable_snapshot is True
+
+
+@pytest.mark.parametrize("provider", ["byteplus", "volcengine"])
+def test_reuses_matching_workspace_tool(monkeypatch, provider):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from frontend.server import workspace_tool
+
+    model = {
+        "MODEL_AGENT_NAME": "test-model",
+        "MODEL_AGENT_BASE_URL": "https://example.test/v3",
+        "MODEL_AGENT_API_KEY": "test-key",
+    }
+    image = "registry.example/studio:v1"
+    request = workspace_tool.workspace_tool_request(image, provider, model)
+    tool = SimpleNamespace(
+        tool_id="t-existing",
+        name=request.name,
+        tool_type="StudioEnv" if provider == "byteplus" else "Private",
+        image_url=image,
+        enable_snapshot=True,
+        command=request.command,
+        model_agent_name=request.model_agent_name,
+        envs=request.envs,
+        status="Ready",
+    )
+    client = Mock()
+    client.list_tools.return_value = SimpleNamespace(tools=[tool])
+    client.get_tool.return_value = tool
+    assert (
+        workspace_tool.ensure_workspace_tool(client, image, provider, model)
+        == "t-existing"
+    )
+    client.create_tool.assert_not_called()
+    client.update_tool.assert_not_called()
