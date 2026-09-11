@@ -195,7 +195,13 @@ def test_reconcile_studio_update_resources_provisions_missing_resources(
     workspace_models = []
 
     def workspace_tool(client, image, provider, model_environment):
+        from frontend.server.workspace_tool import workspace_tool_request
+
         assert provider == "byteplus"
+        request = workspace_tool_request(image, provider, model_environment)
+        assert request.tool_type == "StudioEnv"
+        assert request.enable_snapshot is True
+        assert request.authorizer_configuration.key_auth.api_key_location == "Header"
         workspace_models.append(model_environment)
         return "workspace-tool"
 
