@@ -114,6 +114,7 @@ import { Applications, type ApplicationId } from "./ui/Applications";
 import { CronJobs } from "./cronjobs/CronJobs";
 import { SystemInfo } from "./ui/SystemInfo";
 import { DeveloperResources } from "./ui/DeveloperResources";
+import { ReviewCenter } from "./reviews/ReviewCenter";
 import { GitHubIntegration } from "./ui/GitHubIntegration";
 import { FeishuBotIntegration } from "./automations/feishu/FeishuBotIntegration";
 import { CodingAgentsIntegration } from "./automations/coding-agents/CodingAgentsIntegration";
@@ -385,6 +386,7 @@ type StudioPageId =
   | "sandbox-agent-detail"
   | "sandbox-agent-workspace"
   | "developer-resources"
+  | "review-center"
   | "feedback"
   | "users";
 type StudioStackPage =
@@ -392,7 +394,8 @@ type StudioStackPage =
   | "system-info"
   | "agent-detail"
   | "sandbox-agent-detail"
-  | "developer-resources";
+  | "developer-resources"
+  | "review-center";
 
 interface StudioPageStackEntry {
   page: StudioStackPage;
@@ -2165,6 +2168,7 @@ export default function App() {
   const userManagementView = activeStackPage === "users";
   const systemInfo = activeStackPage === "system-info";
   const developerResourcesView = activeStackPage === "developer-resources";
+  const reviewCenterView = activeStackPage === "review-center";
   const pushStudioPage = useCallback((entry: StudioPageStackEntry) => {
     setPageStack((current) =>
       current[current.length - 1]?.page === entry.page
@@ -3196,6 +3200,9 @@ export default function App() {
     }
     if (!access.capabilities.manageAgents) setManageAgents(false);
     if (!access.capabilities.manageUsers) setPageStack((current) => current.filter((entry) => entry.page !== "users"));
+    if (access.role !== "admin" && access.role !== "super_admin") {
+      setPageStack((current) => current.filter((entry) => entry.page !== "review-center"));
+    }
   }, [access]);
 
   let documentTitleTarget: StudioDocumentTitleTarget = { kind: "home" };
@@ -3206,6 +3213,8 @@ export default function App() {
       documentTitleTarget = { kind: "page", title: t("title", { ns: "users" }) };
     } else if (systemInfo) {
       documentTitleTarget = { kind: "page", title: t("titles.systemInfo") };
+    } else if (reviewCenterView) {
+      documentTitleTarget = { kind: "page", title: t("titles.reviewCenter") };
     } else if (cronJobsView) {
       documentTitleTarget = { kind: "page", title: t("titles.cronJobs") };
     } else if (applicationsView) {
@@ -6384,7 +6393,8 @@ export default function App() {
     setError("");
   };
 
-  const openDeveloperResourcesPage = () => {
+  const openStandalonePage = (page: "developer-resources" | "review-center") => {
+    if (page === "review-center" && access.role !== "admin" && access.role !== "super_admin") return;
     setPlatformFeedbackOrigin(null);
     if (sandboxSession) exitSandboxSession();
     viewSidRef.current = "";
@@ -6403,9 +6413,12 @@ export default function App() {
     setEnvironmentView(false);
     setApplicationsView(null);
     setCronJobsView(false);
-    setPageStack([{ page: "developer-resources", returnTo: "new-chat" }]);
+    setPageStack([{ page, returnTo: "new-chat" }]);
     setError("");
   };
+
+  const openDeveloperResourcesPage = () => openStandalonePage("developer-resources");
+  const openReviewCenterPage = () => openStandalonePage("review-center");
 
   const talkToWorkspaceAgent = async (agent: AgentEntry) => {
     setFeedbackCaseReturnAgentId("");
@@ -6460,6 +6473,8 @@ export default function App() {
     ? activeStackEntry?.returnTo ?? "new-chat"
     : developerResourcesView
       ? "developer-resources"
+    : reviewCenterView
+      ? "review-center"
     : activeStackPage === "agent-detail" || activeStackPage === "sandbox-agent-detail"
       ? activeStackPage
       : platformFeedbackOrigin !== null
@@ -6490,6 +6505,8 @@ export default function App() {
 
   const sidebarActivePage: SidebarPage = userManagementView ? "users" : systemInfo
     ? null
+    : reviewCenterView
+      ? "review-center"
     : developerResourcesView
       ? "developer-resources"
     : platformFeedbackOrigin !== null
@@ -6649,6 +6666,7 @@ export default function App() {
           pushStudioPage({ page: "users", returnTo: currentStudioPage });
           setError("");
         })}
+        onReviewCenter={() => requestIntelligentNavigation(openReviewCenterPage)}
         onSystemInfo={() => requestIntelligentNavigation(() => {
           pushStudioPage({
             page: "system-info",
@@ -7071,6 +7089,8 @@ export default function App() {
               />
             ) : developerResourcesView ? (
               <DeveloperResources cloudProvider={cloudProvider} />
+            ) : reviewCenterView ? (
+              <ReviewCenter role={access.role} cloudProvider={cloudProvider} />
             ) : platformFeedbackOrigin !== null ? (
               <PlatformFeedback
                 initialModule={issueFeedbackModuleForPage(platformFeedbackOrigin)}

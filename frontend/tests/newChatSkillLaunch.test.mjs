@@ -65,7 +65,7 @@ test("preserves the current Space for creation launched inside Skill Center", ()
   assert.match(skillCenterSource, /initialWorkspace\?: SkillCenterWorkspaceLaunch/);
   assert.match(skillCenterSource, /useState<SkillSpaceRef \| null>\(initialWorkspace\?\.space \?\? null\)/);
   assert.match(skillCenterSource, /space=\{selectedSpace \?\? undefined\}/);
-  assert.match(skillCenterSource, /availableSpaces=\{spaces\}/);
+  assert.match(skillCenterSource, /availableSpaces=\{spaces\.filter\(\(space\) => !space\.isShared\)\}/);
   assert.match(generationSource, /const publishSpace = space \?\? selectedPublishSpace/);
   assert.match(generationSource, /operation === "optimize" \? t\("generation\.overwrite"\) : needsPublishSpace \? t\("generation\.uploadToSelectedSpace"\) : t\("generation\.uploadToCurrentSpace"\)/);
 });

@@ -159,7 +159,7 @@ include-package-data = true
 
 [tool.setuptools.package-data]
 "veadk" = ["**/*"]
-"frontend.server" = ["templates/**/*.tmpl", "templates/**/.*.tmpl"]
+"frontend.server" = ["templates/**/*.tmpl", "templates/**/.*.tmpl", "skills/consts.json"]
 
 # Derive the package version from the latest git tag (e.g. tag "0.5.36"
 # publishes version 0.5.36). No version string is hardcoded anywhere; release

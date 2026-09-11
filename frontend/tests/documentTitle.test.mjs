@@ -78,6 +78,7 @@ test("wires main and nested Studio surfaces into the browser title", () => {
   );
   assert.match(librarySource, /onPageTitleChange\?\.\(activeTitle\)/);
   assert.match(librarySource, /onPageTitleChange=\{setSkillPageTitle\}/);
-  assert.match(skillCenterSource, /workspaceTitle \|\| selectedSpace\?\.name \|\| t\("skillCenter\.library"\)/);
+  assert.match(skillCenterSource, /selectedSpaceName = selectedSpace\?\.isShared \? t\("skillCenter\.sharedSpace"\) : getSkillSpaceDisplayName\(selectedSpace\)/);
+  assert.match(skillCenterSource, /workspaceTitle \|\| selectedSpaceName \|\| t\("skillCenter\.library"\)/);
   assert.match(skillCenterSource, /if \(active\) onPageTitleChange\?\.\(pageTitle\)/);
 });

@@ -15,7 +15,15 @@
 from __future__ import annotations
 
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
+
+
+@pytest.fixture(autouse=True)
+def _stub_skill_score_background_worker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep CLI route tests independent of live Skill recovery scans"""
+    monkeypatch.setattr(
+        "frontend.server.skills.auto_scoring.SkillAutoScoring.start", AsyncMock()
+    )
 
 
 @pytest.fixture(autouse=True)

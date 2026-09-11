@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -27,6 +28,8 @@ class SkillIdentity:
 
     author: str
     is_admin: bool = False
+    owner_id: str = ""
+    identity_uid: str = ""
 
 
 class CreateSkillSpaceBody(BaseModel):
@@ -70,3 +73,33 @@ class UploadSkillQuery(BaseModel):
     project_name: str | None = Field(default=None, alias="projectName", max_length=256)
 
     model_config = {"populate_by_name": True, "extra": "forbid"}
+
+
+class SubmitSkillReviewBody(BaseModel):
+    region: str = Field(min_length=1, max_length=64)
+    version: str = Field(min_length=1, max_length=128)
+
+    model_config = {"extra": "forbid", "str_strip_whitespace": True}
+
+
+class DecideSkillReviewBody(BaseModel):
+    region: str = Field(min_length=1, max_length=64)
+    decision: Literal["approved", "returned"]
+    reason: str = Field(default="", max_length=256)
+    comment: str = Field(default="", max_length=256)
+
+    model_config = {"extra": "forbid", "str_strip_whitespace": True}
+
+    @model_validator(mode="after")
+    def require_return_reason(self) -> DecideSkillReviewBody:
+        if self.decision == "returned" and not self.reason:
+            raise ValueError("请填写退回理由")
+        if self.decision == "approved" and self.reason:
+            raise ValueError("通过申请无需填写退回理由")
+        return self
+
+
+class RetrySkillScoreBody(BaseModel):
+    region: str = Field(min_length=1, max_length=64)
+
+    model_config = {"extra": "forbid", "str_strip_whitespace": True}

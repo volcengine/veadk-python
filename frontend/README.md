@@ -12,6 +12,107 @@ See [deployment and operation](service/studio_release_notifier/README.md).
 
 ## Features
 
+- **Skill publication requests**: Each personal Skill version can be submitted
+  from its action row. Studio copies its archive into an independent Skill in
+  `studio_review_space`, preserving the original name and writing the signed-in
+  submitter's display name to the `author` tag. Source space, Skill, version and
+  submission time are also recorded in tags. Matching names remain separate
+  requests; repeat submissions of the same source Skill version are rejected
+  while pending or approved. Administrators inspect submitted files, approve
+  with an optional comment, or return with a required reason and optional comment.
+  Approval copies that fixed snapshot into `studio_share_space`. A returned
+  version can be submitted again as a new request; earlier decisions remain in
+  history. Personal Skill rows, details and the version dialog show persisted
+  status, reviewer, decision time, comments and return reasons
+
+  Submission verifies source membership and authorship. Review list and file
+  endpoints require an administrator; generic catalog/download routes also block
+  review copies for ordinary users. The workflow requires readable Skill tags
+  from the cloud provider and fails without publishing a request if metadata
+  cannot be verified. Review copies survive Studio restarts. `TagResources`
+  directly updates Skill tags and each write is read back with `GetSkill`;
+  `UpdateSkillSpace` is not used for tags. Cloud tag values reject newlines,
+  some punctuation and values longer than 256 characters. Review text is encoded
+  in bounded tag chunks and restored on read, preserving multiline comments and
+  reasons up to 256 characters. Approval intent is stored before publication;
+  a retry after final metadata failure reuses the existing shared copy.
+  Duplicate checks and decisions are serialized within one server process;
+  multiple server processes do not have a transactional shared lock
+
+  Reviewer identity comes from the authenticated server principal. The configured
+  Identity user pool's `GetUser` resolves the stored stable UID to name, email and
+  avatar, with a short profile cache. Clients cannot supply the reviewer or time.
+  Local users without a pool UID, removed users and directory failures fall back
+  to the recorded name and a placeholder avatar; access checks remain unchanged
+
+- **Automatic Skill assessment**: New review copies are tagged `queued` on
+  submission and assessed in the background using the same provider-specific
+  model as automatic Agent creation. A Pydantic `output_schema` is sent through
+  Ark's structured-output API; the system prompt contains the rubric, not a
+  duplicate JSON schema. Safety (40%), usability (25%), completeness (15%),
+  reliability (10%) and maintainability (10%) each receive a score and reason;
+  Studio calculates the weighted total and includes risks and suggestions
+
+  Assessment reads the fixed submitted snapshot without running its code or
+  tools. At most 100 text files, 40,000 characters per file and 120,000 characters
+  total are included. Omitted, binary and truncated files are disclosed;
+  incomplete coverage leaves safety, completeness and total scores unset
+
+  Private JSON jobs and reports live in the configured Skill archive TOS bucket
+  under `review-scores/`. Conditional ETag writes prevent concurrent workers
+  from claiming the same job. Skill tags hold status, total, time, model, rubric
+  and report location. Startup and periodic scans recover queued or expired
+  running jobs, with up to two attempts and a ten-minute interrupted-job lease.
+  Recovery also reconciles stale status tags without repeating completed model
+  calls. Recorded bucket/key tags locate existing reports after storage config
+  changes; new jobs use the current configuration. Existing unscored requests
+  remain unscored until an administrator requests assessment
+
+  Administrators and the submitting user can read the full JSON report, using
+  the stored identity UID or owner ID for new requests and the recorded author
+  as a fallback for older requests;
+  administrators can retry failed jobs. Completed reports are immutable.
+  Errors preserve the upstream text and request IDs in the report and API
+  response, without translated summaries or truncation into cloud tags.
+  Manual decisions and published versions remain independent of AI scores
+
+- **Skill versions**: Personal Skills expose native version history. Uploading
+  a ZIP with the same Skill name creates a new version under the original Skill
+  ID and updates only its personal space association. Both ZIP uploads and
+  optimized source updates wait for a new ready version instead of reusing an old
+  running version. Users can inspect files and submit reviews for a selected
+  historical version. Shared copies remain independent and read-only in this
+  version dialog; new or pending personal versions do not change published files.
+  Shared rows and details show the source version and author, while file requests
+  retain the copy's native version so an approved source v2 is read correctly
+
+- **SkillSpace display names**: Personal space creation generates a unique cloud
+  name containing only lowercase letters, numbers and underscores. The name the
+  user enters is stored in the `display_name` tag alongside the `author` tag.
+  Library cards, details and selectors prefer that display name and fall back to
+  the cloud name when the tag is missing or blank. Skill lookups and exports keep
+  using the original cloud name. Renaming display names is not included
+
+- **System SkillSpaces**: `studio_share_space` is the enterprise shared space,
+  permanently shown first in the Skill library. `studio_review_space` stores
+  submitted versions for review and is excluded from the library and Skill
+  selectors. The library provisions the shared space; submitting a Skill or opening
+  Skill reviews provisions the review space. Each space
+  is created once per provider region and `VEADK_STUDIO_PROJECT` (or `default`).
+  Definitions live in `server/skills/consts.json`, consumed by `consts.py` and
+  `src/create/skills/consts.ts`, so both ends use the same names. User-facing create
+  and rename operations reject reserved names, and the backend enforces the same
+  restriction even when called directly. System spaces cannot be renamed or
+  deleted; review content can only be changed by the review workflow. Administrators
+  can maintain shared skills. No legacy names are recognized or migrated
+
+  Cloud names must use lowercase letters, numbers and underscores; hyphenated
+  names return `InvalidParameter.skillSpaceName`. Native SkillSpace tag support
+  varies by provider: Volcengine returns creation tags, while BytePlus may omit them.
+  Managed names and description markers identify system spaces independently
+  of tags. Do not change these identities through the cloud console.
+  Creation failures remain visible with a retry action
+
 - **DeepSeek Harness native configuration**: Quick-create now offers VeADK
   Agent or DeepSeek Harness (Beta) through a radio-selection dialog. Continuing closes
   the dialog and opens the selected Agent type’s own configuration page. The
@@ -53,6 +154,17 @@ See [deployment and operation](service/studio_release_notifier/README.md).
   developer, or ordinary-user access. The next page refresh reads current roles;
   protected backend requests also resolve live membership. Only immutable
   subject-to-user-ID mappings are cached
+
+- **Review center**: the sidebar's 管控 group contains 审核中心 and 用户管理,
+  showing only entries allowed by the current role and hiding an empty group.
+  Administrators can open 审核中心 and switch
+  between Skills and Agents. Skill requests and submitted files load from the
+  regional review space, with search, refresh and status filters. Agent requests
+  remain empty. Skill decisions include comments, reviewer details and history.
+  The list shows AI assessment status and total; details and applicant history
+  expose dimension reasons, risks, coverage, model metadata and JSON download.
+  Empty lists and filtered results have distinct messages.
+  Chinese and English, Volcengine and BytePlus are supported
 
 - **Sandbox updates** in System Information compare each Tool's current image
   with `ListToolTypes` for its cloud provider and actual region. Volcengine and
@@ -671,6 +783,16 @@ For code projects, configure `STUDIO_WORKSPACE_TOOL_ID` with a dedicated
 snapshot-enabled Tool in the selected provider and region. The former
 single-project `/web/workspace-preview/session` preview is replaced by the
 personal-workspace project APIs.
+
+### Dependencies in a new worktree
+
+Run `npm ci` inside this worktree's `frontend/` directory before starting Vite or
+running the build. Each worktree needs dependencies matching its own lockfile;
+avoid linking another checkout's older `node_modules` directory. If TypeScript
+reports missing `i18next` or `react-i18next` despite their entries in
+`package.json`, install from the current lockfile with `npm ci`, then rerun the
+check. Do not remove imports or change source types to work around missing
+dependencies
 
 ## Branding
 

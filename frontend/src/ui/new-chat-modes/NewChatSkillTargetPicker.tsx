@@ -8,9 +8,10 @@ import {
   type SVGProps,
 } from "react";
 import { useTranslation } from "react-i18next";
-import type {
-  SkillSpaceRef,
-  SkillSpaceSkill,
+import {
+  getSkillSpaceDisplayName,
+  type SkillSpaceRef,
+  type SkillSpaceSkill,
 } from "../../create/skills/skillspace";
 import "./new-chat-agent-picker.css";
 import "./new-chat-skill-target-picker.css";
@@ -65,7 +66,7 @@ function CheckIcon(props: SVGProps<SVGSVGElement>) {
 }
 
 function spaceLabel(space: SkillSpaceRef, unnamedLabel: string): string {
-  return space.name.trim() || unnamedLabel;
+  return getSkillSpaceDisplayName(space) || unnamedLabel;
 }
 
 export function NewChatSkillTargetPicker({
