@@ -138,6 +138,32 @@ def set_status(cloud, application_id, status):
 
 
 @pytest.mark.asyncio
+async def test_idle_worker_continues_recovery_after_poll_timeout(
+    review_setup, monkeypatch
+):
+    _, repository = review_setup
+    scoring = worker(repository, MemoryStore())
+    loop = asyncio.get_running_loop()
+    recovered = asyncio.Event()
+    scans = 0
+
+    def recover(region):
+        nonlocal scans
+        scans += 1
+        if scans >= 3:
+            loop.call_soon_threadsafe(recovered.set)
+        return []
+
+    monkeypatch.setattr(scoring, "_recover", recover)
+    await scoring.start()
+    try:
+        await asyncio.wait_for(recovered.wait(), timeout=2)
+        assert scoring._task is not None and not scoring._task.done()
+    finally:
+        await scoring.close()
+
+
+@pytest.mark.asyncio
 async def test_scores_fixed_review_copy_and_persists_source_version_after_restart(
     review_setup, monkeypatch
 ):

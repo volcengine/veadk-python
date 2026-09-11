@@ -178,7 +178,7 @@ class SkillAutoScoring:
                 await asyncio.wait_for(
                     self._wake.wait(), timeout=self.recovery_interval
                 )
-            except TimeoutError:
+            except (TimeoutError, asyncio.TimeoutError):
                 pass
 
     def _sync_tags(
