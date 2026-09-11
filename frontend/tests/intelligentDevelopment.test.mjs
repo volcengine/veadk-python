@@ -302,6 +302,43 @@ test("intelligent reconnect parses the restored conversation snapshot", async (t
   );
 });
 
+test("intelligent client preserves its session kind when server metadata is absent or generic", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = previousFetch; });
+  for (const toolName of [undefined, "codex", "intelligent-development"]) {
+    globalThis.fetch = async (url, init) => {
+      const session = { sessionId: "dev-1", status: "Ready", toolName };
+      return Response.json(url.endsWith("/sessions") && init.method === "GET"
+        ? { sessions: [session] }
+        : session);
+    };
+    const created = await intelligentDevelopmentClient.startSession({ displayName: "Agent" });
+    const connected = await intelligentDevelopmentClient.connectSession("dev-1");
+    assert.equal(created.intelligentDevelopment, true);
+    assert.equal(connected.intelligentDevelopment, true);
+    const listed = await intelligentDevelopmentClient.listSessions();
+    assert.equal(listed[0].intelligentDevelopment, true);
+    const ordinary = await sandboxClient.connectSession("dev-1");
+    assert.equal(ordinary.intelligentDevelopment, toolName === "intelligent-development");
+  }
+});
+
+test("SSE heartbeat comments do not create or change visible reply blocks", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = previousFetch; });
+  globalThis.fetch = async () => sseResponse([
+    ": heartbeat",
+    'event: delta\ndata: {"text":"first"}',
+    ": heartbeat",
+    ": heartbeat",
+    'event: delta\ndata: {"text":" second"}',
+    'event: done\ndata: {}',
+  ]);
+  const reply = await intelligentDevelopmentClient.sendMessage({ sessionId: "dev-1", text: "build" });
+  assert.equal(reply.text, "first second");
+  assert.deepEqual(reply.blocks, [{ kind: "text", text: "first second" }]);
+});
+
 test("current intelligent release can be absent or restored", async (t) => {
   const previousFetch = globalThis.fetch;
   t.after(() => {

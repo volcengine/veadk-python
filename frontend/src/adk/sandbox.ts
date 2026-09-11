@@ -646,6 +646,7 @@ async function responseJson(
 function parseSession(
   data: SessionResponse,
   toolName: SandboxSession["toolName"] = "codex",
+  intelligentDevelopment = data.toolName === "intelligent-development",
 ): SandboxSession {
   if (!data.sessionId || !data.status) {
     throw new Error(adkT("sandbox.invalidSession"));
@@ -661,7 +662,7 @@ function parseSession(
     expireAt: data.expireAt ?? "",
     persistent: data.persistent !== false,
     toolType: data.toolType ?? "",
-    intelligentDevelopment: data.toolName === "intelligent-development",
+    intelligentDevelopment,
     createdBy: data.createdBy ?? "",
     region: data.region ?? "",
     isMine: data.isMine === true,
@@ -1200,6 +1201,7 @@ function createSandboxClient(
     textOnly?: boolean;
     messageTimeoutMs?: number;
     interruptTimeoutMs?: number;
+    intelligentDevelopment?: boolean;
   } = {},
 ): AgentKitSandboxClient {
   return {
@@ -1224,7 +1226,8 @@ function createSandboxClient(
       throw new Error(adkT("sandbox.invalidSnapshotList"));
     }
     return [
-      ...data.sessions.map((session) => parseSession(session)),
+      ...data.sessions.map((session) =>
+        parseSession(session, "codex", config.intelligentDevelopment)),
       ...(data.snapshots ?? []).map((snapshot) => parseSnapshot(snapshot)),
     ];
   },
@@ -1260,7 +1263,11 @@ function createSandboxClient(
     if (!response.ok) {
       throw await responseError(response, adkT("sandbox.startFailed"));
     }
-    return parseSession((await response.json()) as SessionResponse);
+    return parseSession(
+      (await response.json()) as SessionResponse,
+      "codex",
+      config.intelligentDevelopment,
+    );
   },
 
   async listAgentSessions(kind, options = {}) {
@@ -1429,7 +1436,11 @@ function createSandboxClient(
     if (!response.ok) {
       throw await responseError(response, adkT("sandbox.connectCodexFailed"));
     }
-    const session = parseSession((await response.json()) as SessionResponse);
+    const session = parseSession(
+      (await response.json()) as SessionResponse,
+      "codex",
+      config.intelligentDevelopment,
+    );
     if (session.status.toLowerCase() !== "ready") {
       throw new Error(adkT("sandbox.sessionNotReady", { status: session.status }));
     }
@@ -1955,6 +1966,7 @@ export const intelligentDevelopmentClient = createSandboxClient(
     textOnly: true,
     messageTimeoutMs: 3_600_000,
     interruptTimeoutMs: 45_000,
+    intelligentDevelopment: true,
   },
 );
 

@@ -1184,6 +1184,7 @@ async def test_custom_turn_timeout_controls_transport_preflight(
 @pytest.mark.asyncio
 async def test_turn_inactivity_raises_specific_timeout_error(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     monkeypatch.setattr(codex_app_server, "_TURN_TIMEOUT_SECONDS", 0.01)
     websocket = _CustomTurnTimeoutWebSocket()
@@ -1196,6 +1197,38 @@ async def test_turn_inactivity_raises_specific_timeout_error(
     with pytest.raises(CodexAppServerTurnTimeoutError):
         _ = [event async for event in session.stream_turn("long-running")]
 
+    assert "reason=inactivity_timeout" in caplog.text
+    assert "thread_id=thread-1" in caplog.text
+    assert "turn_id=" in caplog.text
+    assert "elapsed_seconds=" in caplog.text
+    assert "idle_seconds=" in caplog.text
+    assert "reason=task_cancelled" not in caplog.text
+    assert "Authorization=secret" not in caplog.text
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_turn_logs_cancellation_without_claiming_user_stop(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    websocket = _FakeWebSocket()
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    await session.connect()
+    stream = session.stream_turn("approve")
+    await anext(stream)
+    pending = asyncio.ensure_future(anext(stream))
+    await asyncio.sleep(0)
+    pending.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await pending
+    assert "reason=task_cancelled" in caplog.text
+    assert "reason=user_stop" not in caplog.text
+    assert "reason=inactivity_timeout" not in caplog.text
+    assert "Authorization=secret" not in caplog.text
+    assert sum(m.get("method") == "turn/interrupt" for m in websocket.messages) == 1
     await session.close()
 
 
@@ -1307,7 +1340,10 @@ async def test_aging_transport_rotates_before_starting_a_long_turn() -> None:
 
 
 @pytest.mark.asyncio
-async def test_active_turn_reconnects_without_starting_a_duplicate_turn() -> None:
+async def test_active_turn_reconnects_without_starting_a_duplicate_turn(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level("INFO", logger="veadk.cli.codex_app_server")
     first = _DisconnectingActiveTurnWebSocket()
     second = _ResumedActiveTurnWebSocket()
     sockets = [first, second]
@@ -1329,6 +1365,11 @@ async def test_active_turn_reconnects_without_starting_a_duplicate_turn() -> Non
     assert sum(message.get("method") == "turn/start" for message in first.messages) == 1
     assert not any(message.get("method") == "turn/start" for message in second.messages)
     assert any(message.get("method") == "thread/resume" for message in second.messages)
+    assert "reason=transport_reconnecting" in caplog.text
+    assert "reason=transport_recovered" in caplog.text
+    assert "attempt=1" in caplog.text
+    assert "reason=transport_failed" not in caplog.text
+    assert "Authorization=secret" not in caplog.text
     await session.close()
 
 
@@ -1361,7 +1402,9 @@ async def test_active_turn_reconnect_reads_completion_missed_during_disconnect()
 
 
 @pytest.mark.asyncio
-async def test_active_turn_reconnect_stops_after_bounded_failures() -> None:
+async def test_active_turn_reconnect_stops_after_bounded_failures(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     sockets = [
         _DisconnectingActiveTurnWebSocket(),
         _DisconnectAfterStoredTurnReadWebSocket(),
@@ -1381,6 +1424,38 @@ async def test_active_turn_reconnect_stops_after_bounded_failures() -> None:
         _ = [event async for event in session.stream_turn("long-running")]
 
     assert sockets == []
+    assert "reason=transport_failed" in caplog.text
+    assert "recoveries=2" in caplog.text
+    assert "error_type=CodexAppServerTransportError" in caplog.text
+    assert "Authorization=secret" not in caplog.text
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_reconnect_failure_logs_only_safe_error_metadata(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    first = _DisconnectingActiveTurnWebSocket()
+    connections = 0
+
+    async def factory(_url: str) -> _FakeWebSocket:
+        nonlocal connections
+        connections += 1
+        if connections > 1:
+            raise CodexAppServerTransportError("private-endpoint-and-credential")
+        return first
+
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret", websocket_factory=factory
+    )
+    await session.connect()
+    with pytest.raises(CodexAppServerTransportError):
+        _ = [event async for event in session.stream_turn("private-user-prompt")]
+    assert "reason=transport_failed" in caplog.text
+    assert "error_type=CodexAppServerTransportError" in caplog.text
+    assert "private-endpoint-and-credential" not in caplog.text
+    assert "private-user-prompt" not in caplog.text
+    assert "Authorization=secret" not in caplog.text
     await session.close()
 
 

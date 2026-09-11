@@ -12,6 +12,17 @@ See [deployment and operation](service/studio_release_notifier/README.md).
 
 ## Features
 
+- **Intelligent development stream diagnostics**: Quiet SSE responses send a
+  comment heartbeat every 15 seconds without resetting Codex's inactivity timeout.
+  Logs correlate stream stages and elapsed time with Session/Thread IDs, and
+  Codex interruption and transport recovery with Thread/Turn IDs. Explicit stop
+  requests, inactivity timeouts, task cancellation and transport failures have
+  distinct reasons; cancellation alone does not imply a user stop. Logs exclude
+  prompts, command arguments and credentials. The dedicated client preserves
+  intelligent-development identity when Session metadata is absent or generic.
+  Heartbeats mitigate idle disconnects; request deadlines and process restarts
+  still apply, and this does not add background delivery or stream replay.
+
 - **DeepSeek Harness native configuration**: Quick-create now offers VeADK
   Agent or DeepSeek Harness (Beta) through a radio-selection dialog. Continuing closes
   the dialog and opens the selected Agent type’s own configuration page. The

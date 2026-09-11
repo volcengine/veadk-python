@@ -24,6 +24,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 from httpx import Response
@@ -354,6 +355,193 @@ def _connect(client: TestClient) -> None:
         headers={"X-Test-User": "alice"},
     )
     assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_keeps_one_pending_read_and_preserves_events(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(routes, "_SSE_HEARTBEAT_SECONDS", 0.001, raising=False)
+    ready = asyncio.Event()
+    reads = []
+    closed = []
+
+    async def source():
+        try:
+            reads.append("started")
+            await ready.wait()
+            yield 'event: delta\ndata: {"text":"ready"}\n\n'
+            yield "event: done\ndata: {}\n\n"
+        finally:
+            closed.append(True)
+
+    stream = routes._with_sse_heartbeat(source())
+    assert await asyncio.wait_for(anext(stream), 1) == ": heartbeat\n\n"
+    assert await asyncio.wait_for(anext(stream), 1) == ": heartbeat\n\n"
+    assert reads == ["started"]
+    assert not closed
+    ready.set()
+    events = [frame async for frame in stream if not frame.startswith(":")]
+    assert events == [
+        'event: delta\ndata: {"text":"ready"}\n\n',
+        "event: done\ndata: {}\n\n",
+    ]
+    assert closed == [True]
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_preserves_source_errors() -> None:
+    async def source():
+        yield "event: progress\ndata: {}\n\n"
+        raise ValueError("source failed")
+
+    stream = routes._with_sse_heartbeat(source())
+    assert await anext(stream) == "event: progress\ndata: {}\n\n"
+    with pytest.raises(ValueError, match="source failed"):
+        await anext(stream)
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_closes_source_when_consumer_leaves_between_events() -> None:
+    cleaned = []
+
+    async def source():
+        try:
+            yield "event: progress\ndata: {}\n\n"
+            yield "event: done\ndata: {}\n\n"
+        finally:
+            await asyncio.sleep(0)
+            cleaned.append(True)
+
+    stream = routes._with_sse_heartbeat(source())
+    await anext(stream)
+    await stream.aclose()
+    assert cleaned == [True]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disconnect", [False, True])
+async def test_heartbeat_route_preserves_delivery_and_disconnect_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    disconnect: bool,
+) -> None:
+    monkeypatch.setattr(routes, "_SSE_HEARTBEAT_SECONDS", 0.001, raising=False)
+    caplog.set_level("INFO", logger=routes.__name__)
+    finish = asyncio.Event()
+    codex_finished = asyncio.Event()
+
+    class DelayedCodex(_FakeCodex):
+        async def stream_turn(self, prompt, skill_ids=(), **options):
+            self.calls.append({"prompt": prompt, **options})
+            try:
+                yield CodexAppServerEvent(kind="text", text="working")
+                await finish.wait()
+            finally:
+                codex_finished.set()
+
+    gateway = _FakeGateway()
+    gateway.codex = DelayedCodex()
+    gateway.sessions["dev-session"] = _cloud()
+    lease = _Lease(_Remote(gateway.sessions["dev-session"].endpoint))
+    original_cleanup = lease.cleanup
+
+    async def cleanup_after_yield():
+        await asyncio.sleep(0)
+        await original_cleanup()
+
+    cleanup = AsyncMock(side_effect=cleanup_after_yield)
+    monkeypatch.setattr(lease, "cleanup", cleanup)
+    monkeypatch.setattr(
+        routes, "create_credential_lease", AsyncMock(return_value=lease)
+    )
+    monkeypatch.setattr(routes, "invalidate_current_delivery", AsyncMock())
+    read_contract = AsyncMock(return_value=_verified())
+    monkeypatch.setattr(routes, "read_completion_contract", read_contract)
+    remove = AsyncMock()
+    monkeypatch.setattr(routes, "remove_completion_file", remove)
+    publisher = _publisher_mock(verified=True)
+    monkeypatch.setattr(routes, "DeliveryPublisher", lambda _transport: publisher)
+    projects = _project_service_for_delivery()
+    app = _app(gateway, project_service=projects)
+    incoming = asyncio.Queue()
+    incoming.put_nowait(
+        {
+            "type": "http.request",
+            "body": b'{"message":"private goal"}',
+            "more_body": False,
+        }
+    )
+    bodies = []
+    heartbeat_seen = False
+
+    async def send(message):
+        nonlocal heartbeat_seen
+        if message["type"] != "http.response.body":
+            return
+        body = message.get("body", b"")
+        bodies.append(body)
+        if b": heartbeat" in body and not heartbeat_seen:
+            heartbeat_seen = True
+            if disconnect:
+                incoming.put_nowait({"type": "http.disconnect"})
+            else:
+                finish.set()
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.0"},
+        "method": "POST",
+        "scheme": "http",
+        "http_version": "1.1",
+        "path": "/web/intelligent-development/sessions/dev-session/messages",
+        "query_string": b"",
+        "headers": [(b"x-test-user", b"alice"), (b"content-type", b"application/json")],
+        "server": ("test", 80),
+        "client": ("test", 1),
+        "root_path": "",
+    }
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/web/intelligent-development/sessions/dev-session/connect",
+                headers={"X-Test-User": "alice"},
+            )
+            assert response.status_code == 200
+            try:
+                await asyncio.wait_for(app(scope, incoming.get, send), 2)
+            finally:
+                finish.set()
+                await asyncio.wait_for(codex_finished.wait(), 1)
+            status = await client.get(
+                "/web/intelligent-development/sessions/dev-session/status",
+                headers={"X-Test-User": "alice"},
+            )
+            assert status.json()["busy"] is False
+    assert heartbeat_seen
+    assert len(gateway.codex.calls) == 1
+    cleanup.assert_awaited_once()
+    remove.assert_awaited_once()
+    assert lease.cleaned
+    output = b"".join(bodies)
+    if disconnect:
+        read_contract.assert_not_awaited()
+        publisher.publish.assert_not_awaited()
+        assert "reason=task_cancelled" in caplog.text
+        assert "stage=codex_turn" in caplog.text
+    else:
+        read_contract.assert_awaited_once()
+        publisher.publish.assert_awaited_once()
+        projects.persist_delivery.assert_awaited_once()
+        assert b"event: development.succeeded" in output
+        assert b"event: done" in output
+    assert "session_id=dev-session" in caplog.text
+    assert "thread_id=thread-1" in caplog.text
+    assert "elapsed_seconds=" in caplog.text
+    assert "private goal" not in caplog.text
+    assert "Authorization=secret" not in caplog.text
 
 
 def test_list_is_empty_when_intelligent_development_is_not_configured() -> None:
@@ -2174,7 +2362,9 @@ class _BlockingCleanupLease(_Lease):
 
 def test_interrupt_waits_for_task_cleanup_before_allowing_the_next_turn(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
+    caplog.set_level("INFO", logger=routes.__name__)
     gateway = _FakeGateway()
     gateway.codex = _InterruptibleCodex()
     gateway.sessions["dev-session"] = _cloud()
@@ -2246,6 +2436,10 @@ def test_interrupt_waits_for_task_cleanup_before_allowing_the_next_turn(
     assert connect_while_cleaning.status_code == 200
     assert connect_while_cleaning.json()["busy"] is True
     assert lease.cleaned is True
+
+    assert "reason=interrupt_requested" in caplog.text
+    assert "session_id=dev-session" in caplog.text
+    assert "thread_id=thread-1" in caplog.text
 
 
 def test_verified_contract_emits_typed_delivery_only_after_cleanup(

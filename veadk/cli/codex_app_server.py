@@ -26,6 +26,7 @@ import base64
 import contextlib
 import hashlib
 import json
+import logging
 import math
 import posixpath
 import re
@@ -36,6 +37,8 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import asdict, dataclass
 from typing import Any, Literal, cast
 from urllib.parse import urlsplit, urlunsplit
+
+logger = logging.getLogger(__name__)
 
 ApprovalPolicy = Literal["untrusted", "on-request", "never"]
 ApprovalsReviewer = Literal["user", "auto_review"]
@@ -745,6 +748,9 @@ class CodexAppServerSession:
         self._completed_agent_messages.clear()
         self._turn_final_item_id = ""
         self._reasoning_delta_text.clear()
+        loop = asyncio.get_running_loop()
+        started_at = last_progress_at = loop.time()
+        transport_recoveries = 0
         try:
             result = await self.request(
                 "turn/start",
@@ -776,9 +782,7 @@ class CodexAppServerSession:
             self._workspace_locked = True
 
             try:
-                loop = asyncio.get_running_loop()
                 deadline = loop.time() + turn_timeout
-                transport_recoveries = 0
                 while True:
                     while not (completion.done() and queue.empty()):
                         remaining = deadline - loop.time()
@@ -794,6 +798,7 @@ class CodexAppServerSession:
                                 await event_task
                             raise TimeoutError
                         if event_task in done:
+                            last_progress_at = loop.time()
                             yield event_task.result()
                             # Treat the turn timeout as an inactivity bound, not an
                             # absolute wall-clock limit. Long coding tasks can run
@@ -812,6 +817,13 @@ class CodexAppServerSession:
                         ):
                             raise
                         transport_recoveries += 1
+                        logger.warning(
+                            "Codex turn reason=transport_reconnecting thread_id=%s turn_id=%s attempt=%s elapsed_seconds=%.3f",
+                            self.thread_id,
+                            self._active_turn_id,
+                            transport_recoveries,
+                            loop.time() - started_at,
+                        )
                         completion = loop.create_future()
                         self._turn_completion = completion
                         await self._reconnect_transport()
@@ -819,9 +831,23 @@ class CodexAppServerSession:
                         if stored_turn is not None and _turn_is_terminal(stored_turn):
                             completion.set_result(stored_turn)
                         deadline = loop.time() + turn_timeout
+                        logger.info(
+                            "Codex turn reason=transport_recovered thread_id=%s turn_id=%s attempt=%s",
+                            self.thread_id,
+                            self._active_turn_id,
+                            transport_recoveries,
+                        )
                         continue
                     break
             except TimeoutError as error:
+                logger.warning(
+                    "Codex turn reason=inactivity_timeout thread_id=%s turn_id=%s elapsed_seconds=%.3f idle_seconds=%.3f timeout_seconds=%s",
+                    self.thread_id,
+                    self._active_turn_id,
+                    loop.time() - started_at,
+                    loop.time() - last_progress_at,
+                    turn_timeout,
+                )
                 await self.interrupt()
                 raise CodexAppServerTurnTimeoutError(
                     "Codex 智能体长时间没有新进度，已停止本次任务，请重试。"
@@ -841,7 +867,23 @@ class CodexAppServerSession:
                 if fallback is not None:
                     for event in self._authoritative_agent_events(fallback):
                         yield event
+        except CodexAppServerTransportError as error:
+            logger.warning(
+                "Codex turn reason=transport_failed thread_id=%s turn_id=%s elapsed_seconds=%.3f recoveries=%s error_type=%s",
+                self.thread_id,
+                self._active_turn_id,
+                loop.time() - started_at,
+                transport_recoveries,
+                type(error).__name__,
+            )
+            raise
         except asyncio.CancelledError:
+            logger.warning(
+                "Codex turn reason=task_cancelled thread_id=%s turn_id=%s elapsed_seconds=%.3f",
+                self.thread_id,
+                self._active_turn_id,
+                loop.time() - started_at,
+            )
             await self.interrupt()
             raise
         finally:
