@@ -16,6 +16,7 @@ authors = [
     {name = "Meng Wang", email = "mengwangwm@gmail.com"}
 ]
 dependencies = [
+    "async-timeout>=5,<6; python_version < '3.11'", # asyncio.timeout backport
     "pydantic-settings==2.10.1", # Config management
     "a2a-sdk>=0.3.7,<1.0.0", # For Google Agent2Agent protocol
     "deprecated==1.2.18",

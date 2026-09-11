@@ -35,7 +35,19 @@ def __getattr__(name):
         from veadk.runner import Runner
 
         return Runner
+    if name == "AgentkitRemoteSandboxAgent":
+        from veadk.agents.agentkit_remote_sandbox_agent import (
+            AgentkitRemoteSandboxAgent,
+        )
+
+        return AgentkitRemoteSandboxAgent
     raise AttributeError(f"module 'veadk' has no attribute '{name}'")
 
 
-__all__ = ["Agent", "ModelFallbackEndpoint", "Runner", "VERSION"]
+__all__ = [
+    "Agent",
+    "ModelFallbackEndpoint",
+    "Runner",
+    "AgentkitRemoteSandboxAgent",
+    "VERSION",
+]
