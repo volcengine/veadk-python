@@ -7958,6 +7958,22 @@ def _run_frontend_server(
                 )
             runtime_envs.update(source_preserving_sidecar_env)
             runtime_envs.update(existing_sidecar_binding)
+        if existing_runtime is not None:
+            selected_runtime_role_name = str(
+                getattr(existing_runtime, "role_name", "") or ""
+            ).strip()
+            if not selected_runtime_role_name:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                raise HTTPException(
+                    status_code=409,
+                    detail="当前 Runtime 缺少可沿用的 IAM 角色，请刷新详情后重试。",
+                )
+        else:
+            # Resolve the new Runtime role inside the deployment lock. This
+            # keeps concurrent Studio deployments from racing to create roles;
+            # both SDK and Sidecar CLI paths inject the resolved value before
+            # their first cloud mutation.
+            selected_runtime_role_name = ""
         # TOS build-artifact buckets are region-scoped. The SDK default template
         # ("agentkit-platform-<account_id>") produces a single global name, which
         # collides once a bucket exists in cn-beijing and the user targets
@@ -7976,6 +7992,8 @@ def _run_frontend_server(
             "runtime_envs": runtime_envs,
             "python_version": "3.12",
         }
+        if selected_runtime_role_name:
+            cloud_config["runtime_role_name"] = selected_runtime_role_name
         cloud_config.update(runtime_authentication)
         if existing_runtime is not None:
             cloud_config.update(
@@ -8068,6 +8086,7 @@ def _run_frontend_server(
                 }
             sidecar_agentkit_config = {
                 "name": deployment_runtime_name,
+                "role_name": selected_runtime_role_name,
                 "description": _normalize_runtime_description(data.get("description")),
                 "cloud_provider": "volcengine",
                 "region": region,
@@ -8645,6 +8664,24 @@ def _run_frontend_server(
                 try:
                     cli_env = os.environ.copy()
                     access_key, secret_key, session_token = _resolve_ve_credentials()
+                    if not runtime_id:
+                        from frontend.server.runtime_iam import ensure_runtime_role
+
+                        selected_role = ensure_runtime_role(
+                            access_key=access_key,
+                            secret_key=secret_key,
+                            session_token=session_token,
+                            provider=provider,
+                        )
+                        sidecar_agentkit_config["role_name"] = selected_role
+                        (base / ".agentkit" / "agentkit.yaml").write_text(
+                            _yaml.safe_dump(
+                                sidecar_agentkit_config,
+                                allow_unicode=True,
+                                sort_keys=False,
+                            ),
+                            encoding="utf-8",
+                        )
                     cli_env["VOLCENGINE_ACCESS_KEY"] = access_key
                     cli_env["VOLCENGINE_SECRET_KEY"] = secret_key
                     cli_env["VOLCENGINE_REGION"] = region

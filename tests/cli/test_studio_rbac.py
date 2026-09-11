@@ -6631,6 +6631,9 @@ def test_new_deployment_only_updates_non_default_instance_range(
     assert captured_config["launch_types"]["cloud"]["runtime_name"] == (
         "stable-runtime-name"
     )
+    assert captured_config["launch_types"]["cloud"]["runtime_role_name"] == (
+        "shared-runtime-role"
+    )
     assert create_requests[0].apmplus_enable is True
     assert {
         item.key: item.value
@@ -6668,6 +6671,11 @@ def test_new_deployment_only_updates_non_default_instance_range(
         secret_key="test-sk",
         session_token=None,
         provider=provider,
+    )
+    assert not any(
+        "AgentKitFullAccess" in str(frame.get("message") or "")
+        or "快速模式 Runtime 已具备 AgentKit 资源访问权限" == frame.get("message")
+        for frame in frames
     )
     if expects_update:
         request = update_requests[0]
@@ -6996,7 +7004,12 @@ def test_sidecar_deployment_uses_agentkit_cli_structured_release(
     assert frames[-1]["agentName"] == agent_name
     assert frames[-1]["runtimeName"] == runtime_name
     assert captured["command"] == ["/fake/agentkit", "release", "--json"]
-    _stub_studio_runtime_role.assert_not_called()
+    _stub_studio_runtime_role.assert_called_once_with(
+        access_key="test-ak",
+        secret_key="test-sk",
+        session_token=None,
+        provider="volcengine",
+    )
     assert captured["managed_base_in_env"] is True
     assert captured["create_only"] is True
     assert captured["cli_env"]["AGENTKIT_RUNTIME_READY_TIMEOUT_MS"] == "900000"
@@ -7006,6 +7019,7 @@ def test_sidecar_deployment_uses_agentkit_cli_structured_release(
     assert "agentkit-sdk-python==0.8.4" not in captured["requirements"]
     assert captured["requirements"].splitlines().count("mcp==1.26.0") == 1
     assert captured["config"]["name"] == runtime_name
+    assert captured["config"]["role_name"] == "shared-runtime-role"
     assert captured["config"]["harness_sidecar"]["component_overrides"] == {
         "context_engine": False,
         "compressor": False,
@@ -7263,6 +7277,12 @@ def test_sidecar_update_resolves_or_explicitly_reuses_stored_mcp_credentials(
         lambda **_kwargs: pytest.fail("Sidecar update must use AgentKit CLI"),
     )
     app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+    monkeypatch.setattr(
+        "frontend.server.runtime_iam.ensure_runtime_role",
+        lambda **_kwargs: pytest.fail(
+            "Runtime update must preserve its role without running IAM selection"
+        ),
+    )
     monkeypatch.setattr("subprocess.Popen", FakeProcess)
     headers = {"X-VeADK-Local-User": "developer"}
 
@@ -7343,6 +7363,7 @@ def test_sidecar_update_resolves_or_explicitly_reuses_stored_mcp_credentials(
     ]
     assert frames[-1].get("error") is None
     assert frames[-1]["success"] is True
+    assert captured["config"]["role_name"] == "runtime-role"
     structured_value = captured["config"]["envs"]["MCP_SERVERS_JSON"]
     structured_key = structured_value.removeprefix("${").removesuffix("}")
     assert json.loads(captured["env"][structured_key]) == [
