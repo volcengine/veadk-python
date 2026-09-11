@@ -92,6 +92,10 @@ import {
   validateMigrationEvaluationDraft,
   type MigrationEvaluationDraft,
 } from "./MigrationEvaluation";
+import {
+  evaluationSettingsAreLocked,
+  needsEvaluationDraftHydration,
+} from "./evaluationDraftState";
 import { MigratedProjectsPage } from "./MigratedProjectsPage";
 import { i18n } from "../i18n/runtime";
 import "./MigrationWorkspace.css";
@@ -781,6 +785,13 @@ export function MigrationWorkspace({
     taskId: string;
     message: string;
   } | null>(null);
+  const [evaluationDraftLoadingTaskId, setEvaluationDraftLoadingTaskId] =
+    useState("");
+  const [evaluationDraftLoadError, setEvaluationDraftLoadError] = useState<{
+    taskId: string;
+    message: string;
+  } | null>(null);
+  const [evaluationDraftReloadKey, setEvaluationDraftReloadKey] = useState(0);
   const [evaluationReport, setEvaluationReport] = useState<string | null>(null);
   const [evaluationReportLoading, setEvaluationReportLoading] = useState(false);
   const [evaluationReportError, setEvaluationReportError] = useState("");
@@ -1207,41 +1218,65 @@ export function MigrationWorkspace({
     setEvaluationErrors({});
     if (!task?.evaluation?.enabled) {
       evaluationDraftTaskRef.current = "";
+      setEvaluationDraftLoadingTaskId("");
+      setEvaluationDraftLoadError(null);
       setEvaluationDraft(createMigrationEvaluationDraft());
       return;
     }
-    const firstVisit = evaluationDraftTaskRef.current !== task.id;
-    evaluationDraftTaskRef.current = task.id;
-    if (!task.evaluation.dataset) {
-      if (firstVisit) {
-        const draft = createMigrationEvaluationDraft();
-        setEvaluationDraft({
-          ...draft,
-          enabled: true,
-          preset: task.evaluation.preset ?? "standard",
-          dimensions: task.evaluation.dimensions?.length
-            ? [...task.evaluation.dimensions]
-            : draft.dimensions,
-        });
-      }
+    if (
+      !needsEvaluationDraftHydration(
+        task.id,
+        task.evaluation.enabled,
+        evaluationDraftTaskRef.current,
+      )
+    )
       return;
-    }
+    evaluationDraftTaskRef.current = task.id;
+    const draft = createMigrationEvaluationDraft();
+    const fallbackDraft: MigrationEvaluationDraft = {
+      ...draft,
+      enabled: true,
+      preset: task.evaluation.preset ?? "standard",
+      dimensions: task.evaluation.dimensions?.length
+        ? [...task.evaluation.dimensions]
+        : draft.dimensions,
+    };
+    setEvaluationDraft(fallbackDraft);
+    setEvaluationDraftLoadingTaskId(task.id);
+    setEvaluationDraftLoadError(null);
     const controller = new AbortController();
     void getMigrationEvaluationDataset(task.id, controller.signal)
       .then((dataset) => {
         if (controller.signal.aborted) return;
+        if (!dataset.locked) {
+          if (task.state !== "awaiting_upload") {
+            recordEvaluationDatasetSaveFailure(
+              task.id,
+              new Error(t("evaluation.dataset.missing")),
+            );
+          }
+          return;
+        }
+        if (!dataset.asset) {
+          throw new Error(t("evaluation.dataset.invalidLockResponse"));
+        }
         setEvaluationDraft(
           evaluationDraftFromDataset(dataset, task.evaluation!),
         );
+        applySavedEvaluationDataset(task.id, dataset);
       })
       .catch((cause: unknown) => {
         if (controller.signal.aborted) return;
-        setEvaluationErrors({
-          root: cause instanceof Error ? cause.message : String(cause),
+        setEvaluationDraftLoadError({
+          taskId: task.id,
+          message: cause instanceof Error ? cause.message : String(cause),
         });
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setEvaluationDraftLoadingTaskId("");
       });
     return () => controller.abort();
-  }, [task?.id, task?.evaluation?.dataset?.versionId]);
+  }, [task?.id, task?.evaluation?.enabled, evaluationDraftReloadKey]);
 
   useEffect(() => {
     evaluationReportAbortRef.current?.abort();
@@ -1760,6 +1795,9 @@ export function MigrationWorkspace({
     setEvaluationErrors({});
     setEvaluationAction("");
     setEvaluationDatasetSaveError(null);
+    setEvaluationDraftLoadingTaskId("");
+    setEvaluationDraftLoadError(null);
+    setEvaluationDraftReloadKey(0);
     setEvaluationReport(null);
     setEvaluationReportError("");
     setEvaluationActionError("");
@@ -1899,6 +1937,25 @@ export function MigrationWorkspace({
   const showComposer = !task || (task.canUpload && !taskEnvironmentExpired);
   const expiryCopy = task ? migrationExpiryCopy(task, now) : null;
   const hasEvaluationTab = Boolean(task?.evaluation?.enabled);
+  const evaluationDatasetSaveFailed =
+    evaluationDatasetSaveError?.taskId === task?.id;
+  const evaluationSettingsLocked = Boolean(
+    task?.evaluation?.enabled &&
+      evaluationSettingsAreLocked(
+        task.state,
+        Boolean(task.evaluation.dataset),
+        evaluationDatasetSaveFailed,
+      ),
+  );
+  const evaluationDraftLoading = Boolean(
+    task?.evaluation?.enabled &&
+      (evaluationDraftLoadingTaskId === task.id ||
+        evaluationDraftTaskRef.current !== task.id),
+  );
+  const currentEvaluationDraftLoadError =
+    evaluationDraftLoadError?.taskId === task?.id
+      ? evaluationDraftLoadError
+      : null;
 
   return (
     <>
@@ -2516,16 +2573,42 @@ export function MigrationWorkspace({
             </>
           ) : task?.evaluation?.enabled ? (
             <div className="migration-evaluation-tab">
-              <MigrationEvaluationSetup
-                value={evaluationDraft}
-                onChange={setEvaluationDraft}
-                capability={capability?.evaluation}
-                disabled={Boolean(evaluationAction)}
-                configLocked
-                locked={Boolean(task.evaluation.dataset)}
-                compact
-                errors={evaluationErrors}
-              />
+              {evaluationDraftLoading ? (
+                <div className="migration-system-state" role="status">
+                  <TextShimmer>
+                    {t("evaluation.dataset.loadingSettings")}
+                  </TextShimmer>
+                </div>
+              ) : currentEvaluationDraftLoadError ? (
+                <div className="migration-inline-error" role="alert">
+                  <span>
+                    {t("evaluation.dataset.loadSettingsFailed")} {currentEvaluationDraftLoadError.message}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      evaluationDraftTaskRef.current = "";
+                      setEvaluationDraftReloadKey((current) => current + 1);
+                    }}
+                  >
+                    {t("evaluation.dataset.retryLoadSettings")}
+                  </button>
+                </div>
+              ) : (
+                <MigrationEvaluationSetup
+                  value={evaluationDraft}
+                  onChange={(value) => {
+                    setEvaluationDraft(value);
+                    setEvaluationErrors({});
+                  }}
+                  capability={capability?.evaluation}
+                  disabled={Boolean(evaluationAction || action)}
+                  configLocked
+                  locked={evaluationSettingsLocked}
+                  compact
+                  errors={evaluationErrors}
+                />
+              )}
               {evaluationDatasetSaveError?.taskId === task.id ? (
                 <div className="migration-inline-error" role="alert">
                   <span>

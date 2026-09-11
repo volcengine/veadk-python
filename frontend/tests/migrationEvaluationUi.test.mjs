@@ -257,6 +257,50 @@ test("selects a custom evaluation method before editing questions", async () => 
   }
 });
 
+test("shows the saved case count without marking configured cases incomplete", async () => {
+  const draft = {
+    ...createMigrationEvaluationDraft(),
+    enabled: true,
+    cases: [
+      {
+        id: "case-saved",
+        userInput: "查询今天的订单状态",
+        expectedOutcome: "返回订单号和状态",
+        criteria: [],
+      },
+    ],
+  };
+  const view = await mount((React) =>
+    React.createElement(MigrationEvaluationSetup, {
+      value: draft,
+      onChange() {},
+      capability,
+      disabled: false,
+      configLocked: true,
+      locked: true,
+      compact: true,
+      errors: {},
+    }),
+  );
+  try {
+    await view.render();
+    const summary = view.document.querySelector(
+      ".migration-evaluation-setup__summary",
+    );
+    assert.match(summary.textContent, /1 个用例 · 标准评测 · 3 个维度/);
+    assert.doesNotMatch(summary.textContent, /待填写/);
+
+    const viewSettings = summary.querySelector("button");
+    assert.match(viewSettings.textContent, /查看设置/);
+    await view.act(async () => viewSettings.click());
+    const input = view.document.querySelector("#case-saved-input");
+    assert.equal(input.value, "查询今天的订单状态");
+    assert.equal(input.disabled, true);
+  } finally {
+    await view.cleanup();
+  }
+});
+
 test("loads and renders the HTML report only after the user opens it", async () => {
   let loadCalls = 0;
   const evaluation = {

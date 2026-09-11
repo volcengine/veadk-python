@@ -308,6 +308,10 @@
     },
   "dataset": {
     "invalidLockResponse": "The service did not confirm that evaluation cases were saved. Try again.",
+    "loadingSettings": "Loading evaluation settings…",
+    "loadSettingsFailed": "Evaluation settings could not be loaded.",
+    "retryLoadSettings": "Reload",
+    "missing": "No saved evaluation cases were found. Enter and save them again.",
     "saveWarning": "Evaluation cases were not saved. Migration continues.",
     "retrySave": "Save evaluation cases again",
     "saving": "Saving…"

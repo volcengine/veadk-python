@@ -308,6 +308,10 @@
     },
   "dataset": {
     "invalidLockResponse": "服务未确认评测用例已保存，请重试。",
+    "loadingSettings": "正在读取评测设置…",
+    "loadSettingsFailed": "评测设置读取失败。",
+    "retryLoadSettings": "重新读取",
+    "missing": "未找到已保存的评测用例，请重新填写并保存。",
     "saveWarning": "评测用例暂未保存，不影响迁移。",
     "retrySave": "重新保存评测用例",
     "saving": "正在保存…"

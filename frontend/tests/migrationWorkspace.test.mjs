@@ -150,6 +150,19 @@ test("configures migration effect evaluation in a drawer with direct user-facing
   assert.match(workspace, /recordEvaluationDatasetSaveFailure/);
   assert.match(workspace, /retryEvaluationDatasetSave/);
   assert.match(workspace, /evaluation\.dataset\.retrySave/);
+  const datasetHydrationEffect = workspace.slice(
+    workspace.indexOf("setEvaluationErrors({});"),
+    workspace.indexOf("setEvaluationReport(null)"),
+  );
+  assert.match(datasetHydrationEffect, /getMigrationEvaluationDataset/);
+  assert.doesNotMatch(
+    datasetHydrationEffect,
+    /if \(!task\.evaluation\.dataset\)/,
+    "opening an evaluation task must load its saved cases even when polling omits the dataset summary",
+  );
+  assert.match(workspace, /evaluationDraftLoadingTaskId/);
+  assert.match(workspace, /evaluation\.dataset\.loadingSettings/);
+  assert.match(workspace, /evaluationSettingsLocked/);
   assert.match(workspace, /"preparing"/);
   assert.match(workspace, /"aggregating"/);
   assert.doesNotMatch(workspace, /"retrying"|"cleaning"/);
