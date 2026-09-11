@@ -1104,6 +1104,56 @@ def _generated_debug_app(
     return captured["app"]
 
 
+@pytest.mark.parametrize(
+    "system_root", [r"D:\Custom Windows", "", None], ids=["present", "empty", "absent"]
+)
+def test_generated_debug_runner_preserves_systemroot(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    system_root: str | None,
+) -> None:
+    """调试子进程保留 Windows 系统目录，同时继续过滤无关环境变量。"""
+    app = _generated_debug_app(monkeypatch, tmp_path)
+    if system_root is None:
+        monkeypatch.delenv("SYSTEMROOT", raising=False)
+    else:
+        monkeypatch.setenv("SYSTEMROOT", system_root)
+    monkeypatch.setenv("TEMP", str(tmp_path))
+    monkeypatch.setenv("UNRELATED_SERVICE_SECRET", "unrelated-test-value")
+    _FakeProcess.created.clear()
+    monkeypatch.setattr(_FakeAsyncClient, "listed_apps", ["demo_agent"])
+    monkeypatch.setattr("subprocess.Popen", _FakeProcess)
+    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
+    real_socket = socket.socket
+    monkeypatch.setattr(
+        "socket.socket",
+        lambda *args, **kwargs: (
+            real_socket(*args, **kwargs)
+            if len(args) >= 4 or "fileno" in kwargs
+            else _FakeSocket(*args, **kwargs)
+        ),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/generated-agent-test-runs",
+            json={"draft": {"name": "demo-agent", "instruction": "Answer hello."}},
+        )
+        assert response.status_code == 200
+        process = _FakeProcess.created[-1]
+        run_id = response.json()["runId"]
+        assert (
+            client.delete(f"/web/generated-agent-test-runs/{run_id}").status_code == 200
+        )
+
+    if system_root:
+        assert process.env.get("SYSTEMROOT") == system_root
+    else:
+        assert "SYSTEMROOT" not in process.env
+    assert process.env["TEMP"] == str(tmp_path)
+    assert "UNRELATED_SERVICE_SECRET" not in process.env
+
+
 def test_local_generated_debug_allows_private_mcp(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
