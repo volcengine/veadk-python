@@ -447,7 +447,7 @@ test("leaves feedback evaluation sets off by default in both deployment workbenc
   );
   assert.match(
     projectPreviewSource,
-    /const supportsEvaluationSets = cloudProvider !== "byteplus"/,
+    /const supportsEvaluationSets = showEvaluationSets && cloudProvider !== "byteplus"/,
   );
   assert.match(
     projectPreviewSource,

@@ -147,6 +147,8 @@ import {
 import { IntelligentDeployment } from "./create/IntelligentDeployment";
 import { CustomCreate } from "./create/CustomCreate";
 import { AgentCreationModePicker } from "./create/AgentCreationModePicker";
+import { NativeConfigPage } from "./create/deepseek/NativeConfigPage";
+import { createNativeDraft } from "./create/deepseek/nativeConfig";
 import { WorkspaceCreate, WorkspaceCreateIcon } from "./create/WorkspaceCreate";
 import { CodePackageCreate } from "./create/CodePackageCreate";
 import { MigrationWorkspace } from "./migrations/MigrationWorkspace";
@@ -363,7 +365,7 @@ async function loadHydratedSessions(
   );
 }
 
-type CreateView = "custom" | "package" | "migration" | "workspace" | null;
+type CreateView = "custom" | "deepseek" | "package" | "migration" | "workspace" | null;
 type AppView = CreateView | "intelligent";
 type CustomCreateMode = "custom" | "yaml_import";
 type StudioPageId =
@@ -604,7 +606,7 @@ function loadView(): AppView {
   if (["menu", "custom", "template", "workflow"].includes(v ?? "")) {
     return "custom";
   }
-  return v === "package" || v === "migration" ? v : null;
+  return v === "package" || v === "migration" || v === "deepseek" ? v : null;
 }
 import { TraceDrawer } from "./ui/TraceDrawer";
 import { LoginPage } from "./ui/LoginPage";
@@ -2079,6 +2081,7 @@ export default function App() {
     }
   };
   const [createView, setCreateView] = useState<AppView>(loadView);
+  const [deepseekDraft, setDeepseekDraft] = useState(createNativeDraft);
   const [deploymentTasks, setDeploymentTasks] = useState<
     DeploymentTaskUpdate[]
   >([]);
@@ -3238,6 +3241,8 @@ export default function App() {
           ? runtimeUpdateTarget?.name
             ? t("titles.updateAgent", { name: runtimeUpdateTarget.name })
             : t("titles.createAgent")
+          : createView === "deepseek"
+            ? t("deepseek:pageTitle")
           : createView === "package"
             ? t("titles.addFromPackage")
             : createView === "workspace"
@@ -7363,6 +7368,10 @@ export default function App() {
                   editingDraftBaselineRef.current = null;
                   setCreateView("custom");
                 }}
+                onSelectDeepseek={() => {
+                  setAddMenu(false);
+                  setCreateView("deepseek");
+                }}
                 onSelectTraditional={() => {
                   setAddMenuSurface("traditional");
                 }}
@@ -7554,6 +7563,27 @@ export default function App() {
                   setAddMenu(true);
                 }}
                 onCreate={startIntelligentDevelopment}
+              />
+            ) : visibleCreateView === "deepseek" ? (
+              <NativeConfigPage
+                draft={deepseekDraft}
+                onDraftChange={setDeepseekDraft}
+                cloudProvider={cloudProvider}
+                initialDeployRegion={newRuntimeRegion}
+                onDeploymentTaskChange={updateDeploymentTask}
+                onDeploymentStarted={startDeployment}
+                onDeploymentComplete={(result) => {
+                  invalidateRuntimeAgentCache();
+                  if (result.runtimeId) {
+                    setLibraryRuntimeIds((current) => new Set([...current ?? [], result.runtimeId!]));
+                  }
+                  setAgentInfoRefreshKey((key) => key + 1);
+                }}
+                onBack={() => {
+                  setCreateView(null);
+                  setAddMenuSurface("entry");
+                  setAddMenu(true);
+                }}
               />
             ) : visibleCreateView === "custom" ? (
               <CustomCreate

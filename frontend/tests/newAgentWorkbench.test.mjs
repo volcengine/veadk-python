@@ -150,7 +150,7 @@ test("creation mode picker has exactly the quick and traditional cards", () => {
   assert.match(modePickerSource, /modePicker\.quick\.features\.dynamicSubagents/);
   assert.match(modePickerSource, /modePicker\.traditional\.features\.visualConfig/);
   const vulcanCard = modePickerSource.slice(
-    modePickerSource.indexOf("selectMode(onSelectVulcan)"),
+    modePickerSource.indexOf("setQuickDialogLoaded(true)"),
     modePickerSource.indexOf("selectMode(onSelectTraditional)"),
   );
   const traditionalCard = modePickerSource.slice(

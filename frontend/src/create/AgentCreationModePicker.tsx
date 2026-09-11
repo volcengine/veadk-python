@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { lazy, Suspense, useRef, useState } from "react";
 import { Button } from "@openai/apps-sdk-ui/components/Button";
 import { motion, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
@@ -6,8 +6,11 @@ import { ResourceIdentityMark } from "../ui/ResourceCollection";
 
 import "./AgentCreationModePicker.css";
 
+const QuickAgentCreateDialog = lazy(() => import("./deepseek/QuickAgentCreateDialog"));
+
 export interface AgentCreationModePickerProps {
   onSelectVulcan: () => void;
+  onSelectDeepseek: () => void;
   onSelectTraditional: () => void;
 }
 
@@ -126,11 +129,14 @@ function FeatureIcon({ name }: { name: FeatureIconName }) {
 
 export function AgentCreationModePicker({
   onSelectVulcan,
+  onSelectDeepseek,
   onSelectTraditional,
 }: AgentCreationModePickerProps) {
   const { t } = useTranslation("create");
   const reduceMotion = useReducedMotion();
   const [isLeaving, setIsLeaving] = useState(false);
+  const [quickDialogOpen, setQuickDialogOpen] = useState(false);
+  const [quickDialogLoaded, setQuickDialogLoaded] = useState(false);
   const pendingSelectionRef = useRef<(() => void) | null>(null);
 
   const selectMode = (onSelect: () => void) => {
@@ -178,7 +184,10 @@ export function AgentCreationModePicker({
             variant="outline"
             pill={false}
             block
-            onClick={() => selectMode(onSelectVulcan)}
+            onClick={() => {
+              setQuickDialogLoaded(true);
+              setQuickDialogOpen(true);
+            }}
           >
             <span className="agent-creation-mode-picker__card-header">
               <ResourceIdentityMark
@@ -306,6 +315,19 @@ export function AgentCreationModePicker({
           </Button>
         </div>
       </section>
+      {quickDialogLoaded && (
+        <Suspense fallback={null}>
+          <QuickAgentCreateDialog
+            open={quickDialogOpen}
+            onClose={() => setQuickDialogOpen(false)}
+            onSelect={(kind) => {
+              setQuickDialogOpen(false);
+              if (kind === "deepseek") selectMode(onSelectDeepseek);
+              else selectMode(onSelectVulcan);
+            }}
+          />
+        </Suspense>
+      )}
     </motion.main>
   );
 }
