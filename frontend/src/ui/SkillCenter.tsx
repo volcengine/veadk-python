@@ -6,6 +6,7 @@ import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import {
   getSkillDetail,
+  getSkillSpaceDisplayName,
   listSkillsInSpacePage,
   skillLookupIdentity,
   type SkillDetail,
@@ -18,6 +19,8 @@ import {
   downloadManagedSkillArchive,
   getManagedSkillFiles,
   listManagedSkillSpaces,
+  listSourceSkillReviews,
+  submitSkillReview,
   type ManagedSkillFile,
 } from "../adk/skills";
 import {
@@ -35,6 +38,10 @@ import type {
 import { SkillGenerationWorkspace } from "./skills/SkillGenerationWorkspace";
 import { normalizeSkillError, SkillErrorDetails } from "./skills/SkillErrorDetails";
 import { SkillFileTree } from "./skills/SkillFileTree";
+import { SkillVersionsDialog } from "./skills/SkillVersionsDialog";
+import { latestSourceReviews, type ReviewApplication } from "../reviews/reviewModel";
+import { ReviewHistoryDialog, ReviewHistoryList, ReviewerIdentity, ReviewStatusLabel } from "../reviews/ReviewOutcome";
+import { EnterpriseSkillSpace } from "./skills/EnterpriseSkillSpace";
 import { LibraryResourceCard } from "./LibraryResourceCard";
 import {
   ResourceCreateCard,
@@ -46,6 +53,7 @@ import {
   ResourceResults,
   ResourceSearch,
   ResourceToolbar,
+  ResourceTabs,
 } from "./ResourceCollection";
 import {
   CreateSkillSpaceDialog,
@@ -310,6 +318,9 @@ function SkillDetailDialog({
   loading,
   error,
   canOptimize,
+  reviews,
+  reviewsLoading,
+  reviewsError,
   onOptimize,
   onDownload,
   onClose,
@@ -323,11 +334,15 @@ function SkillDetailDialog({
   loading: boolean;
   error: Error | null;
   canOptimize: boolean;
+  reviews: ReviewApplication[];
+  reviewsLoading: boolean;
+  reviewsError: Error | null;
   onOptimize: () => void;
   onDownload: () => void;
   onClose: () => void;
 }) {
   const { t } = useTranslation("ui");
+  const [section, setSection] = useState<"files" | "reviews">("files");
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
@@ -354,24 +369,27 @@ function SkillDetailDialog({
           </div>
           <div className="skill-detail-actions">
             <button type="button" onClick={onDownload} disabled={files.length === 0}>{t("skillCenter.downloadZip")}</button>
-            <SandboxDisabledAction disabled={!canOptimize} placement="bottom">
+            {!space.isShared ? <SandboxDisabledAction disabled={!canOptimize} placement="bottom">
               <button type="button" onClick={onOptimize} disabled={!canOptimize}>{t("skillCenter.optimize")}</button>
-            </SandboxDisabledAction>
+            </SandboxDisabledAction> : null}
             <button type="button" className="skill-detail-close" onClick={onClose} aria-label={t("skillCenter.closeSkillDetails")}><CloseIcon /></button>
           </div>
         </header>
 
         <dl className="skill-detail-meta">
           <div><dt>{t("skillCenter.skillId")}</dt><dd title={skill.skillId}>{skill.skillId}</dd></div>
-          <div><dt>{t("agentSelector.version")}</dt><dd>{detail?.version || skill.version || "—"}</dd></div>
+          <div><dt>{t("agentSelector.version")}</dt><dd>{skill.sourceVersion || detail?.version || skill.version || "—"}</dd></div>
+          {skill.author ? <div><dt>{t("skillCenter.author")}</dt><dd>{skill.author}</dd></div> : null}
           <div><dt>{t("agentSelector.status")}</dt><dd>{statusLabel(skill.skillStatus, t)}</dd></div>
-          <div><dt>{t("skillCenter.skillSpace")}</dt><dd title={space.name}>{space.name}</dd></div>
+          <div><dt>{t("skillCenter.skillSpace")}</dt><dd title={getSkillSpaceDisplayName(space)}>{space.isShared ? t("skillCenter.sharedSpace") : getSkillSpaceDisplayName(space)}</dd></div>
           <div><dt>{t("myAgents.region")}</dt><dd>{formatCloudRegion(region, cloudProvider)}</dd></div>
         </dl>
 
-        <div className="skill-detail-content skill-detail-content--files">
-          <div className="skill-detail-content-title">{t("skillCenter.allFiles")}</div>
-          {loading ? (
+        <ResourceTabs className="skill-detail-tabs" idPrefix="skill-detail" ariaLabel={t("skillCenter.skillDetailSections")} value={section}
+          items={[{id: "files", label: t("skillCenter.allFiles"), panelId: "skill-detail-panel"}, {id: "reviews", label: t("skillCenter.reviewHistory"), panelId: "skill-detail-panel"}]}
+          onChange={setSection} />
+        <div className={`skill-detail-content${section === "files" ? " skill-detail-content--files" : " skill-detail-content--reviews"}`} id="skill-detail-panel" role="tabpanel" aria-labelledby={`skill-detail-${section}-tab`}>
+          {section === "reviews" ? reviewsLoading ? <ResourceLoadingState /> : reviewsError ? <div role="alert"><SkillErrorDetails error={reviewsError} /></div> : <ReviewHistoryList applications={reviews} /> : loading ? (
             <div className="skillcenter-loading"><LoadingMark />{t("skillCenter.loadingSkillContent")}</div>
           ) : error ? (
             <div className="skillcenter-error"><SkillErrorDetails error={error} /></div>
@@ -420,7 +438,7 @@ function AddSkillDialog({
         <header>
           <div>
             <h2 id="skill-add-dialog-title">{t("skillCenter.addSkill")}</h2>
-            <p title={space.name}>{space.name}</p>
+            <p title={getSkillSpaceDisplayName(space)}>{getSkillSpaceDisplayName(space)}</p>
           </div>
           <button type="button" onClick={onClose}>{t("common.cancel")}</button>
         </header>
@@ -483,10 +501,20 @@ export function SkillCenterView({
     [region],
   );
   const [spaces, setSpaces] = useState<SkillSpaceRef[]>([]);
+  const [submittingReview, setSubmittingReview] = useState<string | null>(null);
+  const [reviewHistory, setReviewHistory] = useState<ReviewApplication[]>([]);
+  const reviewApplications = useMemo(() => latestSourceReviews(reviewHistory), [reviewHistory]);
+  const [reviewHistorySkill, setReviewHistorySkill] = useState<SkillSpaceSkill | null>(null);
+  const [reviewError, setReviewError] = useState<Error | null>(null);
+  const [reviewsLoading, setReviewsLoading] = useState(false);
+  const reviewSource = useRef("");
+  const reviewSubmissionBusy = useRef(false);
   const [spaceRegionState, setSpaceRegionState] = useState<Record<string, SpaceRegionLoadState>>({});
   const [spacesLoading, setSpacesLoading] = useState(false);
   const [spaceQuery, setSpaceQuery] = useState("");
   const [selectedSpace, setSelectedSpace] = useState<SkillSpaceRef | null>(initialWorkspace?.space ?? null);
+  const selectedSpaceRef = useRef(selectedSpace);
+  selectedSpaceRef.current = selectedSpace;
   const [skills, setSkills] = useState<SkillSpaceSkill[]>([]);
   const [skillPage, setSkillPage] = useState(1);
   const [skillTotal, setSkillTotal] = useState(0);
@@ -496,6 +524,7 @@ export function SkillCenterView({
   const [skillQuery, setSkillQuery] = useState("");
   const [detailSection, setDetailSection] = useState<SkillSpaceDetailSection>("overview");
   const [detailSkill, setDetailSkill] = useState<SkillSpaceSkill | null>(null);
+  const [versionSkill, setVersionSkill] = useState<SkillSpaceSkill | null>(null);
   const [detail, setDetail] = useState<SkillDetail | null>(null);
   const [detailFiles, setDetailFiles] = useState<ManagedSkillFile[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -526,7 +555,9 @@ export function SkillCenterView({
           name: workspace.source?.name || t("skillCenter.skill"),
         })
     : "";
-  const pageTitle = workspaceTitle || selectedSpace?.name || t("skillCenter.library");
+  const selectedSpaceName = selectedSpace?.isShared ? t("skillCenter.sharedSpace") : getSkillSpaceDisplayName(selectedSpace);
+  const canWriteSelectedSpace = !selectedSpace?.isShared || selectedSpace.canWrite === true;
+  const pageTitle = workspaceTitle || selectedSpaceName || t("skillCenter.library");
 
   useEffect(() => {
     if (active) onPageTitleChange?.(pageTitle);
@@ -537,9 +568,10 @@ export function SkillCenterView({
   }, [initialWorkspace, onInitialWorkspaceConsumed]);
   const visibleSpaces = useMemo(() => {
     const query = deferredSpaceQuery.trim().toLocaleLowerCase();
-    if (!query) return spaces;
-    return spaces.filter((space) =>
-      `${space.name} ${space.description || ""} ${space.projectName || ""}`
+    const personalSpaces = spaces.filter((space) => !space.isShared);
+    if (!query) return personalSpaces;
+    return personalSpaces.filter((space) =>
+      `${getSkillSpaceDisplayName(space)} ${space.name} ${space.description || ""} ${space.projectName || ""}`
         .toLocaleLowerCase()
         .includes(query),
     );
@@ -554,6 +586,36 @@ export function SkillCenterView({
     );
   }, [deferredSkillQuery, skills]);
   const selectedRegion = selectedSpace?.region || defaultCloudRegion(cloudProvider);
+  useEffect(() => {
+    if (!active || !selectedSpace) return;
+    const refresh = () => setSkillRevision((value) => value + 1);
+    const onVisible = () => { if (document.visibilityState === "visible") refresh(); };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [active, selectedSpace?.id]);
+  useEffect(() => {
+    const sourceKey = selectedSpace ? `${selectedRegion}:${selectedSpace.id}` : "";
+    if (reviewSource.current !== sourceKey) {
+      reviewSource.current = sourceKey;
+      setReviewHistory([]);
+      setReviewHistorySkill(null);
+      setVersionSkill(null);
+    }
+    setReviewError(null);
+    setReviewsLoading(false);
+    if (!active || !selectedSpace || selectedSpace.isShared) return;
+    const controller = new AbortController();
+    setReviewsLoading(true);
+    void listSourceSkillReviews({spaceId: selectedSpace.id, region: selectedRegion, signal: controller.signal})
+      .then((response) => { if (!controller.signal.aborted) setReviewHistory(response.items); })
+      .catch((error: unknown) => { if (!controller.signal.aborted) setReviewError(normalizeSkillError(error, t("skillCenter.reviewStatusFailed"))); })
+      .finally(() => { if (!controller.signal.aborted) setReviewsLoading(false); });
+    return () => controller.abort();
+  }, [selectedSpace?.id, selectedSpace?.isShared, selectedRegion, skillRevision, active, activationRevision, t]);
   const spaceErrors = useMemo(
     () => spaceRegions.flatMap((region) => {
       const error = spaceRegionState[region]?.error;
@@ -621,6 +683,7 @@ export function SkillCenterView({
           error: normalizeSkillError(settled.reason, t("skillCenter.errors.loadSpaces")),
           items: [] as SkillSpaceRef[],
           totalCount: 0,
+          scannedCount: 0,
         };
       }
       return {
@@ -631,12 +694,13 @@ export function SkillCenterView({
           region: space.region || settled.value.region,
         })),
         totalCount: settled.value.result.totalCount || 0,
+        scannedCount: settled.value.result.scannedCount ?? settled.value.result.items.length,
       };
     });
     const incoming = prepared.flatMap((result) => result.items);
     setSpaceRegionState((current) => {
       const next = { ...current };
-      prepared.forEach(({ request, error, items, totalCount }) => {
+      prepared.forEach(({ request, error, scannedCount, totalCount }) => {
         const previous = next[request.region] || {
           nextPage: request.page,
           loadedCount: 0,
@@ -650,11 +714,11 @@ export function SkillCenterView({
           };
           return;
         }
-        const loadedCount = previous.loadedCount + items.length;
+        const loadedCount = previous.loadedCount + scannedCount;
         next[request.region] = {
           nextPage: request.page + 1,
           loadedCount,
-          done: items.length === 0 || loadedCount >= totalCount,
+          done: scannedCount === 0 || loadedCount >= totalCount,
           error: null,
         };
       });
@@ -867,7 +931,7 @@ export function SkillCenterView({
   };
 
   const removeSpace = async (space: SkillSpaceRef) => {
-    if (!window.confirm(t("skillCenter.deleteSpaceConfirm", { name: space.name }))) return;
+    if (!window.confirm(t("skillCenter.deleteSpaceConfirm", { name: getSkillSpaceDisplayName(space) }))) return;
     const key = skillSpaceKey(space);
     setDeletingSpaceId(key);
     setActionError(null);
@@ -885,13 +949,36 @@ export function SkillCenterView({
     }
   };
 
+  const requestPublication = async (skill: SkillSpaceSkill, version = skill.version, inDialog = false) => {
+    if (!selectedSpace || reviewSubmissionBusy.current) return;
+    const sourceSpace = selectedSpace;
+    const requestKey = `${sourceSpace.region}:${sourceSpace.id}:${skill.skillId}:${version}`;
+    reviewSubmissionBusy.current = true;
+    setSubmittingReview(requestKey);
+    setActionError(null);
+    try {
+      const application = await submitSkillReview({ spaceId: sourceSpace.id, skillId: skill.skillId, version, region: sourceSpace.region || selectedRegion });
+      if (selectedSpaceRef.current?.id === sourceSpace.id && selectedSpaceRef.current?.region === sourceSpace.region) {
+        setReviewHistory((current) => [...current.filter((item) => item.id !== application.id), application]);
+      }
+    } catch (error) {
+      if (inDialog) throw normalizeSkillError(error, t("skillCenter.reviewFailed"));
+      if (selectedSpaceRef.current?.id === sourceSpace.id && selectedSpaceRef.current?.region === sourceSpace.region) {
+        setActionError(normalizeSkillError(error, t("skillCenter.reviewFailed")));
+      }
+    } finally {
+      reviewSubmissionBusy.current = false;
+      setSubmittingReview(null);
+    }
+  };
+
   if (workspace && (selectedSpace || workspace.selectPublishSpace)) {
     return (
       <SkillGenerationWorkspace
         operation={workspace.operation}
         cloudProvider={cloudProvider}
         space={selectedSpace ?? undefined}
-        availableSpaces={spaces}
+        availableSpaces={spaces.filter((space) => !space.isShared)}
         spacesLoading={spacesLoading}
         initialIntent={workspace.initialIntent}
         source={workspace.source}
@@ -909,8 +996,8 @@ export function SkillCenterView({
       {selectedSpace ? (
         <ResourceDetailLayout
           className="skillcenter-detail"
-          title={selectedSpace.name}
-          description={selectedSpace.description || t("skillCenter.manageSpaceDescription")}
+          title={selectedSpaceName || selectedSpace.name}
+          description={selectedSpace.isShared ? t("skillCenter.sharedDescription") : selectedSpace.description || t("skillCenter.manageSpaceDescription")}
           identitySeed={selectedSpace.name}
           backLabel={t("skillCenter.backToSpaces")}
           onBack={closeSpace}
@@ -921,6 +1008,7 @@ export function SkillCenterView({
               content: (
                 <>
                   {actionError ? <div className="skillcenter-inline-error" role="alert"><SkillErrorDetails error={actionError} /></div> : null}
+                  {reviewError ? <div className="skillcenter-inline-error" role="alert"><SkillErrorDetails error={reviewError} /><button type="button" onClick={() => setSkillRevision((value) => value + 1)}>{t("common.reload")}</button></div> : null}
                   <section className="skillcenter-overview">
                     <ResourceDetailSummary className="skillcenter-detail-facts">
                       <div><dt>{t("skillCenter.skillCount")}</dt><dd>{skillTotal}</dd></div>
@@ -936,17 +1024,21 @@ export function SkillCenterView({
               content: (
                 <>
                   {actionError ? <div className="skillcenter-inline-error" role="alert"><SkillErrorDetails error={actionError} /></div> : null}
-                  <section className="skillcenter-results" aria-label={t("skillCenter.skillsInSpace", { name: selectedSpace.name })}>
+                  {reviewError ? <div className="skillcenter-inline-error" role="alert"><SkillErrorDetails error={reviewError} /><button type="button" onClick={() => setSkillRevision((value) => value + 1)}>{t("common.reload")}</button></div> : null}
+                  <section className="skillcenter-results" aria-label={t("skillCenter.skillsInSpace", { name: selectedSpaceName || selectedSpace.name })}>
                     <ResourceDetailSectionHeader
                       title={t("skillCenter.skills")}
                       description={t("skillCenter.totalItems", { count: skillTotal })}
                       actions={(
+                        <>
                         <ResourceSearch
                           aria-label={t("skillCenter.searchSkills")}
                           value={skillQuery}
                           onChange={(event) => setSkillQuery(event.target.value)}
                           placeholder={t("skillCenter.searchSkills")}
                         />
+                        <Button color="secondary" variant="outline" size="sm" pill={false} disabled={skillsLoading || reviewsLoading} onClick={() => setSkillRevision((value) => value + 1)}>{t("common.refresh")}</Button>
+                        </>
                       )}
                     />
                     {skillsDegraded ? (
@@ -967,37 +1059,57 @@ export function SkillCenterView({
                       <PageState
                         kind="empty"
                         title={skillQuery.trim() ? t("skillCenter.noMatchingSkills") : t("skillCenter.noSkills")}
-                        description={skillQuery.trim() ? t("skillCenter.tryAnotherName") : t("skillCenter.emptySkillsDescription")}
-                        action={!skillQuery.trim() ? { label: t("skillCenter.localUpload"), onClick: () => setUploadSpace(selectedSpace) } : undefined}
+                        description={skillQuery.trim() ? t("skillCenter.tryAnotherName") : t(selectedSpace.isShared ? "skillCenter.sharedEmpty" : "skillCenter.emptySkillsDescription")}
+                        action={!skillQuery.trim() && canWriteSelectedSpace ? { label: t("skillCenter.localUpload"), onClick: () => setUploadSpace(selectedSpace) } : undefined}
                       />
                     ) : (
                       <div className="skillcenter-table-wrap">
                         <table className="skillcenter-table">
                           <thead><tr><th scope="col">{t("skillCenter.skills")}</th><th scope="col">{t("agentSelector.status")}</th><th scope="col" className="skillcenter-table__actions-heading">{t("skillCenter.actions")}</th></tr></thead>
                           <tbody>
-                            {visibleSkills.map((skill) => (
-                              <tr key={`${skillLookupIdentity(skill)}:${skill.version}`}>
+                            {visibleSkills.map((skill) => {
+                              const review = reviewApplications.get(`${skill.skillId}:${skill.version}`);
+                              return <tr key={`${skillLookupIdentity(skill)}:${skill.version}`}>
                                 <td className="skillcenter-table__skill">
                                   <button type="button" onClick={() => void openDetail(skill)}>
                                     <span className="skillcenter-table__title-row">
                                       <strong title={skill.skillName}>{skill.skillName}</strong>
-                                      {skill.version ? <span className="skillcenter-table__version-badge">{skill.version}</span> : null}
+                                      {skill.version ? <span className="skillcenter-table__version-badge">{skill.sourceVersion || skill.version}</span> : null}
                                     </span>
                                     <span className="skillcenter-table__description">{skillDescriptionLabel(skill.skillDescription, t)}</span>
+                                    {selectedSpace.isShared && skill.author ? <span className="skillcenter-table__author">{t("skillCenter.authorName", {name: skill.author})}</span> : null}
                                   </button>
                                 </td>
-                                <td><span className={`skillcenter-status ${statusTone(skill.skillStatus)}`}>{statusLabel(skill.skillStatus, t)}</span></td>
+                                <td><div className="skillcenter-review-status">
+                                  <span className={`skillcenter-status ${statusTone(skill.skillStatus)}`}>{statusLabel(skill.skillStatus, t)}</span>
+                                  {review ? <ReviewStatusLabel status={review.status} /> : null}
+                                  {review?.reviewer || review?.reviewedBy ? <ReviewerIdentity compact person={review.reviewer} fallback={review.reviewedBy} /> : null}
+                                </div></td>
                                 <td><div className="skillcenter-table__actions">
                                   <button type="button" onClick={() => void openDetail(skill)}>{t("common.view")}</button>
-                                  <SandboxDisabledAction disabled={!capability?.enabled}>
+                                  {!skill.lookupByName && skill.skillId ? <button type="button" onClick={() => setVersionSkill(skill)}>{t("skillCenter.versions.title")}</button> : null}
+                                  {!selectedSpace.isShared && !skill.lookupByName && skill.skillId ? (
+                                    <button
+                                      type="button"
+                                      disabled={reviewsLoading || reviewError !== null || submittingReview !== null || (review !== undefined && review.status !== "returned")}
+                                      onClick={() => void requestPublication(skill)}
+                                    >
+                                      {submittingReview === `${selectedSpace.region}:${selectedSpace.id}:${skill.skillId}:${skill.version}`
+                                        ? t("skillCenter.reviewSubmitting")
+                                        : review ? t({pending: "skillCenter.reviewPending", approving: "skillCenter.reviewApproving", approved: "skillCenter.reviewApproved", returned: "skillCenter.reviewRetry"}[review.status])
+                                          : t("skillCenter.requestPublication")}
+                                    </button>
+                                  ) : null}
+                                  {reviewHistory.some((item) => item.sourceSkillId === skill.skillId) ? <button type="button" onClick={() => setReviewHistorySkill(skill)}>{t("skillCenter.reviewHistory")}</button> : null}
+                                  {!selectedSpace.isShared ? <SandboxDisabledAction disabled={!capability?.enabled}>
                                     <button type="button" disabled={!capability?.enabled} onClick={() => startOptimization(skill)}>{t("skillCenter.optimize")}</button>
-                                  </SandboxDisabledAction>
-                                  {!skill.lookupByName ? (
+                                  </SandboxDisabledAction> : null}
+                                  {!skill.lookupByName && canWriteSelectedSpace ? (
                                     <button type="button" className="is-danger" disabled={deletingSkillId === skill.skillId} onClick={() => void removeSkill(skill)}>{deletingSkillId === skill.skillId ? t("common.deleting") : t("common.delete")}</button>
                                   ) : null}
                                 </div></td>
-                              </tr>
-                            ))}
+                              </tr>;
+                            })}
                           </tbody>
                         </table>
                       </div>
@@ -1016,6 +1128,7 @@ export function SkillCenterView({
           actionsClassName="skillcenter-toolbar-actions"
           actions={(
             <>
+              {!selectedSpace.isShared ? <>
               <Button
                 type="button"
                 color="secondary"
@@ -1037,8 +1150,9 @@ export function SkillCenterView({
               >
                 {deletingSpaceId === skillSpaceKey(selectedSpace) ? t("common.deleting") : t("skillCenter.deleteSpace")}
               </Button>
-              <Button type="button" color="secondary" variant="outline" size="lg" pill={false} onClick={() => setUploadSpace(selectedSpace)}>{t("skillCenter.localUpload")}</Button>
-              <SandboxDisabledAction disabled={!capability?.enabled}>
+              </> : null}
+              {canWriteSelectedSpace ? <Button type="button" color="secondary" variant="outline" size="lg" pill={false} onClick={() => setUploadSpace(selectedSpace)}>{t("skillCenter.localUpload")}</Button> : null}
+              {!selectedSpace.isShared ? <SandboxDisabledAction disabled={!capability?.enabled}>
                 <Button
                   type="button"
                   color="primary"
@@ -1050,7 +1164,7 @@ export function SkillCenterView({
                   <PlusLg18pxAdd aria-hidden="true" />
                   <span>{t("skillCenter.createSkill")}</span>
                 </Button>
-              </SandboxDisabledAction>
+              </SandboxDisabledAction> : null}
             </>
           )}
         />
@@ -1084,23 +1198,14 @@ export function SkillCenterView({
                 onRetry={() => setSpaceRevision((value) => value + 1)}
               />
             ) : null}
-            {spacesLoading && spaces.length === 0 ? (
-              <ResourceLoadingState />
-            ) : allSpaceRegionsFailed && spaces.length === 0 ? (
-              <SpaceLoadErrors
-                errors={spaceErrors}
-                cloudProvider={cloudProvider}
-                fullPage
-                onRetry={() => setSpaceRevision((value) => value + 1)}
-              />
-            ) : visibleSpaces.length === 0 && spaceQuery.trim() ? (
-              <PageState
-                kind="empty"
-                title={t("skillCenter.noMatchingSpaces")}
-                description={t("skillCenter.tryAnotherName")}
-              />
-            ) : (
               <ResourceGrid>
+                <EnterpriseSkillSpace
+                  key={`${cloudProvider}:${region}`}
+                  region={region}
+                  active={active}
+                  revision={spaceRevision + activationRevision}
+                  onOpen={selectSpace}
+                />
                 {!spaceQuery.trim() ? (
                   <ResourceCreateCard
                     aria-label={t("skillCenter.createSpace")}
@@ -1116,7 +1221,7 @@ export function SkillCenterView({
                   <LibraryResourceCard
                     key={spaceKey}
                     className="skillcenter-space-card"
-                    title={space.name}
+                    title={getSkillSpaceDisplayName(space)}
                     description={space.description || t("common.noDescription")}
                     metadata={[
                       { label: t("skillCenter.skillCount"), value: t("skillCenter.skillCountValue", { count: space.skillCount ?? 0 }) },
@@ -1128,7 +1233,18 @@ export function SkillCenterView({
                     );
                   })}
               </ResourceGrid>
-            )}
+            {spacesLoading && spaces.length === 0 ? (
+              <ResourceLoadingState />
+            ) : allSpaceRegionsFailed && spaces.length === 0 ? (
+              <SpaceLoadErrors
+                errors={spaceErrors}
+                cloudProvider={cloudProvider}
+                fullPage
+                onRetry={() => setSpaceRevision((value) => value + 1)}
+              />
+            ) : visibleSpaces.length === 0 && spaceQuery.trim() ? (
+              <PageState kind="empty" title={t("skillCenter.noMatchingSpaces")} description={t("skillCenter.tryAnotherName")} />
+            ) : null}
             {!allSpaceRegionsFailed && spaces.length > 0 ? (
               <div className="my-agent-load-more" ref={spaceLoadMoreRef} aria-live="polite">
                 {spacesLoading ? (
@@ -1149,6 +1265,11 @@ export function SkillCenterView({
         </>
       )}
 
+      {versionSkill && selectedSpace ? <SkillVersionsDialog key={`${selectedRegion}:${selectedSpace.id}:${versionSkill.skillId}`} skill={versionSkill} space={selectedSpace} region={selectedRegion}
+        reviews={reviewHistory.filter((item) => item.sourceSkillId === versionSkill.skillId)}
+        onClose={() => setVersionSkill(null)} onChanged={() => setSkillRevision((value) => value + 1)}
+        onSubmitReview={!selectedSpace.isShared && !reviewsLoading && !reviewError ? (version) => requestPublication(versionSkill, version, true) : undefined} /> : null}
+      {reviewHistorySkill ? <ReviewHistoryDialog name={reviewHistorySkill.skillName} applications={reviewHistory.filter((item) => item.sourceSkillId === reviewHistorySkill.skillId)} onClose={() => setReviewHistorySkill(null)} /> : null}
       {detailSkill && selectedSpace && (
         <SkillDetailDialog
           skill={detailSkill}
@@ -1159,7 +1280,10 @@ export function SkillCenterView({
           files={detailFiles}
           loading={detailLoading}
           error={detailError}
-          canOptimize={capability?.enabled === true}
+          reviews={reviewHistory.filter((item) => item.sourceSkillId === detailSkill.skillId)}
+          reviewsLoading={reviewsLoading}
+          reviewsError={reviewError}
+          canOptimize={!selectedSpace.isShared && capability?.enabled === true}
           onOptimize={() => startOptimization(detailSkill)}
           onDownload={() => void downloadManagedSkillArchive({
             spaceId: selectedSpace.id,

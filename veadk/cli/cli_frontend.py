@@ -2367,6 +2367,8 @@ def _run_frontend_server(
         return SkillIdentity(
             author=author,
             is_admin=access_policy.role_for(principal).is_admin,
+            owner_id=principal.owner_id if principal else "",
+            identity_uid=principal.identity_uid if principal else "",
         )
 
     def _skill_workbench_tools_client(region: str):
@@ -14028,12 +14030,31 @@ def _run_frontend_server(
         resolve_skill_response,
     )
     from frontend.server.skills.routes import _convert_error, mount_skill_routes
+    from frontend.server.skills.auto_scoring import SkillAutoScoring
+    from frontend.server.skills.reviewer_profiles import ReviewerProfileResolver
     from frontend.server.skills.service import SkillService
+    from frontend.server.skills.space_names import skill_space_display_name
+    from frontend.server.skills.system_spaces import (
+        is_review_space,
+        require_review_read,
+    )
 
+    identity_management = getattr(app.state, "studio_user_management", None)
+    skill_repository = AgentKitSkillRepository(
+        _skills_client,
+        reviewer_profiles=ReviewerProfileResolver(
+            identity_management.directory if identity_management else None
+        ),
+    )
     mount_skill_routes(
         app,
-        SkillService(AgentKitSkillRepository(_skills_client)),
+        SkillService(skill_repository),
         _skill_identity,
+        scoring=SkillAutoScoring(
+            skill_repository,
+            provider=provider,
+            regions=_runtime_regions(provider, "all"),
+        ),
     )
 
     @app.get("/web/skill-spaces")
@@ -14075,10 +14096,13 @@ def _run_frontend_server(
                     ),
                 )
                 for s in resp.items or []:
+                    if is_review_space(s):
+                        continue
                     all_items.append(
                         {
                             "id": s.id or "",
                             "name": s.name or "",
+                            "displayName": skill_space_display_name(s),
                             "description": s.description or "",
                             "status": s.status or "",
                             "region": reg,
@@ -14109,6 +14133,7 @@ def _run_frontend_server(
     @app.get("/web/skill-spaces/{space_id}/skills")
     async def _web_list_skills_in_space(
         space_id: str,
+        request: Request,
         region: str = "",
         page: int = Query(default=1, ge=1),
         page_size: int = Query(default=100, ge=1, le=100),
@@ -14122,6 +14147,12 @@ def _run_frontend_server(
         region = _coerce_studio_resource_region(region)
         try:
             client = _skills_client(region)
+            await asyncio.to_thread(
+                require_review_read,
+                client,
+                space_id,
+                is_admin=_skill_identity(request).is_admin,
+            )
             result = await asyncio.to_thread(
                 list_skill_space_items,
                 client,
@@ -14129,6 +14160,7 @@ def _run_frontend_server(
                 space_id=space_id,
                 page=page,
                 page_size=page_size,
+                include_display_metadata=True,
             )
         except HTTPException:
             raise
@@ -14156,6 +14188,7 @@ def _run_frontend_server(
     async def _web_get_skill_detail(
         space_id: str,
         skill_id: str,
+        request: Request,
         version: str | None = None,
         region: str = "",
         skill_space_name: str | None = None,
@@ -14165,6 +14198,13 @@ def _run_frontend_server(
         region = _coerce_studio_resource_region(region)
         try:
             client = _skills_client(region)
+            await asyncio.to_thread(
+                require_review_read,
+                client,
+                space_id,
+                skill_id=skill_id,
+                is_admin=_skill_identity(request).is_admin,
+            )
             resp = await asyncio.to_thread(
                 resolve_skill_response,
                 client,

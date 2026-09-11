@@ -26,8 +26,11 @@ import httpx
 from frontend.server.agentkit_clients import create_agentkit_client
 from frontend.server.skills.repository import (
     DEGRADED_SKILLSPACE_WARNING,
+    SkillRepositoryError,
     list_skill_space_items,
 )
+from frontend.server.skills.system_spaces import is_review_space, require_review_read
+from frontend.server.skills.space_names import skill_space_display_name
 from frontend.server.skills.storage import resolve_skill_publish_credentials
 from frontend.server.storage import StudioProvider
 
@@ -101,10 +104,13 @@ class StudioSkillCatalog:
                     ListSkillSpacesRequest(PageNumber=1, PageSize=100),
                 )
                 for space in response.items or []:
+                    if is_review_space(space):
+                        continue
                     items.append(
                         {
                             "id": space.id or "",
                             "name": space.name or "",
+                            "displayName": skill_space_display_name(space),
                             "description": space.description or "",
                             "status": space.status or "",
                             "region": current_region,
@@ -134,14 +140,19 @@ class StudioSkillCatalog:
             raise StudioSkillCatalogError(400, "invalid Skill Space id")
         resolved_region = self.regions(region)[0]
         try:
+            client = self._client(resolved_region)
+            await asyncio.to_thread(require_review_read, client, space_id)
             result = await asyncio.to_thread(
                 list_skill_space_items,
-                self._client(resolved_region),
+                client,
                 skills_types,
                 space_id=space_id,
                 page=1,
                 page_size=100,
+                include_display_metadata=True,
             )
+        except SkillRepositoryError as error:
+            raise StudioSkillCatalogError(error.status_code, str(error)) from error
         except StudioSkillCatalogError:
             raise
         except Exception as error:

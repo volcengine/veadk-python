@@ -70,7 +70,16 @@
     "validateFailed": "校验 Skill 失败",
     "deleteFailed": "删除 Skill 失败",
     "listFilesFailed": "读取 Skill 文件失败",
-    "downloadFailed": "下载 Skill 失败"
+    "downloadFailed": "下载 Skill 失败",
+    "sharedSpaceFailed": "共享空间加载失败",
+    "reservedSpaceName": "此名称由系统空间保留，请使用其他名称",
+    "reviewSpaceFailed": "待审核空间暂不可用",
+    "submitReviewFailed": "申请公开失败",
+    "listReviewsFailed": "加载审核申请失败",
+    "reviewFilesFailed": "加载提交文件失败",
+    "decideReviewFailed": "审批失败，请重试",
+    "listVersionsFailed": "无法加载技能版本",
+    "uploadVersionFailed": "上传技能新版本失败"
   },
   "sse": {
     "truncatedData": "{{data}}…（已截断，共 {{count}} 个字符）",

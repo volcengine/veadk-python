@@ -2801,6 +2801,22 @@ class SkillWorkbenchService:
             and source_region in supported_regions
             else body.region or self._region
         )
+        from .repository import SkillRepositoryError
+        from .versions import SkillVersionRepository
+        from .system_spaces import require_skill_write, require_space_write
+
+        client = self._skills_client_factory(effective_region)
+        try:
+            for destination in body.skill_space_ids or []:
+                require_space_write(client, destination)
+            if body.disposition == "update-source":
+                require_skill_write(client, source_skill_id)
+        except SkillRepositoryError as error:
+            raise SkillWorkbenchError(
+                error.code,
+                str(error),
+                status_code=error.status_code,
+            ) from error
         storage = resolve_skill_publish_storage(
             region=effective_region,
             config_bucket=config.tos.bucket or "",
@@ -2819,7 +2835,6 @@ class SkillWorkbenchService:
             )
             tos_url = upload_skill_archive(hashed_path, storage, credentials)
         report("registering", "正在写入 AgentKit Skill")
-        client = self._skills_client_factory(effective_region)
         effective_project = (
             body.project_name
             or str(source.get("projectName") or "")
@@ -2829,7 +2844,12 @@ class SkillWorkbenchService:
         effective_skill_id = (
             source_skill_id if body.disposition == "update-source" else ""
         )
+        previous_versions: set[str] = set()
         if effective_skill_id:
+            previous_versions = {
+                item.version
+                for item in SkillVersionRepository._versions(client, effective_skill_id)
+            }
             client.update_skill(
                 skills_types.UpdateSkillRequest(
                     Id=effective_skill_id,
@@ -2857,12 +2877,17 @@ class SkillWorkbenchService:
                 "SKILL_PUBLISH_FAILED", "AgentKit 未返回 Skill ID", status_code=502
             )
         report("activating", "正在等待 Skill 版本生效")
-        latest = _wait_for_running_version(
-            client=client,
-            skill_id=effective_skill_id,
-            timeout_seconds=300,
-            poll_interval_seconds=5,
-        )
+        if body.disposition == "update-source":
+            latest = SkillVersionRepository._wait_for_new_version(
+                client, effective_skill_id, previous_versions, timeout_seconds=300
+            )
+        else:
+            latest = _wait_for_running_version(
+                client=client,
+                skill_id=effective_skill_id,
+                timeout_seconds=300,
+                poll_interval_seconds=5,
+            )
         version = str(latest.version or "")
         if body.skill_space_ids:
             report("publishing", "正在发布到技能空间")

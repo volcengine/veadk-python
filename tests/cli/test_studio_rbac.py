@@ -222,6 +222,7 @@ def _create_studio_app(
     monkeypatch.setattr(
         "frontend.server.user_management.deployment.initialize_runtime_roles",
         lambda **kwargs: SimpleNamespace(
+            directory=None,
             principal_for=lambda principal: replace(
                 principal, role=policy.role_for(principal)
             ),

@@ -26,7 +26,9 @@
     "library": "Library",
     "cronjobs": "Cronjob",
     "automations": "Automations",
-    "users": "User management"
+    "users": "User management",
+    "administration": "Administration",
+    "reviewCenter": "Review center"
   },
   "history": {
     "title": "Chat history",

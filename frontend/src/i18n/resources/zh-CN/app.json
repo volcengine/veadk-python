@@ -233,7 +233,8 @@
     "skillLibrary": "技能库",
     "systemInfo": "系统信息",
     "updateAgent": "更新 {{name}}",
-    "codeProjects": "代码项目"
+    "codeProjects": "代码项目",
+    "reviewCenter": "审核中心"
   },
   "workspaceProjectEntry": {
     "title": "从工作区新建",

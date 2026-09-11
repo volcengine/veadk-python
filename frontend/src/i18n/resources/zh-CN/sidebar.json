@@ -26,7 +26,9 @@
     "library": "资源库",
     "cronjobs": "定时任务",
     "automations": "自动化",
-    "users": "用户管理"
+    "users": "用户管理",
+    "administration": "管控",
+    "reviewCenter": "审核中心"
   },
   "history": {
     "title": "历史会话",

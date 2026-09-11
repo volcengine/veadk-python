@@ -233,7 +233,8 @@
     "skillLibrary": "Skill library",
     "systemInfo": "System information",
     "updateAgent": "Update {{name}}",
-    "codeProjects": "Code projects"
+    "codeProjects": "Code projects",
+    "reviewCenter": "Review center"
   },
   "workspaceProjectEntry": {
     "title": "Create from workspace",

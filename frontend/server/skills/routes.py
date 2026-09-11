@@ -17,21 +17,34 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from contextlib import asynccontextmanager
+from typing import Any, TYPE_CHECKING
 
 from fastapi import HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response
 
 from .archive import SkillArchiveError
-from .models import CreateSkillSpaceBody, SkillIdentity, UpdateSkillSpaceBody
+from .errors import original_skill_error
+from .models import (
+    CreateSkillSpaceBody,
+    DecideSkillReviewBody,
+    SkillIdentity,
+    SubmitSkillReviewBody,
+    UpdateSkillSpaceBody,
+    RetrySkillScoreBody,
+)
 from .repository import SkillRepositoryError
 from .service import SkillService
+
+if TYPE_CHECKING:
+    from .auto_scoring import SkillAutoScoring
 
 _MAX_ARCHIVE_BYTES = 20 * 1024 * 1024
 
 
-def _convert_error(error: Exception) -> HTTPException:
+def _convert_error(error: BaseException) -> HTTPException:
+    error = original_skill_error(error)
     if isinstance(error, HTTPException):
         return error
     if isinstance(error, (SkillArchiveError, SkillRepositoryError)):
@@ -39,20 +52,12 @@ def _convert_error(error: Exception) -> HTTPException:
             status_code=error.status_code,
             detail=error.detail(),
         )
-    error_type = f"{type(error).__module__}.{type(error).__qualname__}"
-    raw_message = str(error).strip() or repr(error)
+    upstream_status = getattr(error, "status_code", None)
     return HTTPException(
-        status_code=502,
-        detail={
-            "code": "SKILL_SERVICE_UNAVAILABLE",
-            "message": "暂时无法访问 AgentKit Skills。",
-            "retryable": True,
-            "originalError": {
-                "type": error_type,
-                "message": raw_message,
-                "repr": repr(error),
-            },
-        },
+        status_code=upstream_status
+        if isinstance(upstream_status, int) and 400 <= upstream_status <= 599
+        else 502,
+        detail=str(error) or repr(error),
     )
 
 
@@ -60,7 +65,23 @@ def mount_skill_routes(
     app: Any,
     service: SkillService,
     identity_resolver: Callable[[Request], SkillIdentity],
+    *,
+    scoring: SkillAutoScoring | None = None,
 ) -> None:
+    if scoring is not None:
+        previous_lifespan = app.router.lifespan_context
+
+        @asynccontextmanager
+        async def scoring_lifespan(application: Any):
+            async with previous_lifespan(application) as state:
+                await scoring.start()
+                try:
+                    yield state
+                finally:
+                    await scoring.close()
+
+        app.router.lifespan_context = scoring_lifespan
+
     async def invoke(call: Callable[[], Any]) -> Any:
         try:
             return await run_in_threadpool(call)
@@ -117,6 +138,12 @@ def mount_skill_routes(
             content.extend(chunk)
         return bytes(content)
 
+    from .version_routes import mount_skill_version_routes
+
+    mount_skill_version_routes(
+        app, service.versions, identity_resolver, invoke, read_archive
+    )
+
     @app.post("/web/skill-management/validate")
     async def validate_archive(request: Request) -> dict[str, object]:
         identity = identity_resolver(request)
@@ -142,6 +169,26 @@ def mount_skill_routes(
             )
         )
 
+    @app.post("/web/skill-management/shared-space/ensure")
+    async def ensure_shared_space(
+        request: Request,
+        region: str = Query(min_length=1, max_length=64),
+    ) -> dict[str, object]:
+        identity = identity_resolver(request)
+        return await invoke(
+            lambda: service.ensure_shared_space(identity, region=region)
+        )
+
+    @app.post("/web/skill-management/review-space/ensure")
+    async def ensure_review_space(
+        request: Request,
+        region: str = Query(min_length=1, max_length=64),
+    ) -> dict[str, object]:
+        identity = identity_resolver(request)
+        return await invoke(
+            lambda: service.ensure_review_space(identity, region=region)
+        )
+
     @app.post("/web/skill-management/spaces")
     async def create_space(
         body: CreateSkillSpaceBody,
@@ -149,6 +196,95 @@ def mount_skill_routes(
     ) -> dict[str, object]:
         identity = identity_resolver(request)
         return await invoke(lambda: service.create_space(identity, body))
+
+    @app.post("/web/skill-management/spaces/{space_id}/skills/{skill_id}/review")
+    async def submit_review(
+        space_id: str, skill_id: str, body: SubmitSkillReviewBody, request: Request
+    ):
+        identity = identity_resolver(request)
+        result = await invoke(
+            lambda: service.reviews.submit(
+                identity,
+                region=body.region,
+                space_id=space_id,
+                skill_id=skill_id,
+                version=body.version,
+            )
+        )
+        if scoring is not None:
+            scoring.notify(body.region, result["id"])
+        return result
+
+    if scoring is not None:
+
+        @app.get("/web/skill-management/reviews/{application_id}/score")
+        async def read_score(
+            application_id: str,
+            request: Request,
+            region: str = Query(min_length=1, max_length=64),
+        ):
+            identity = identity_resolver(request)
+            return await invoke(lambda: scoring.read(identity, region, application_id))
+
+        @app.post("/web/skill-management/reviews/{application_id}/score/retry")
+        async def retry_score(
+            application_id: str, body: RetrySkillScoreBody, request: Request
+        ):
+            identity = identity_resolver(request)
+            result = await invoke(
+                lambda: scoring.retry(identity, body.region, application_id)
+            )
+            scoring.notify(body.region, application_id)
+            return result
+
+    @app.get("/web/skill-management/reviews")
+    async def list_reviews(
+        request: Request, region: str = Query(min_length=1, max_length=64)
+    ):
+        identity = identity_resolver(request)
+        return await invoke(lambda: service.reviews.list(identity, region=region))
+
+    @app.get("/web/skill-management/spaces/{space_id}/reviews")
+    async def source_reviews(
+        space_id: str,
+        request: Request,
+        region: str = Query(min_length=1, max_length=64),
+    ):
+        identity = identity_resolver(request)
+        return await invoke(
+            lambda: service.reviews.list_for_source(
+                identity, region=region, space_id=space_id
+            )
+        )
+
+    @app.post("/web/skill-management/reviews/{application_id}/decision")
+    async def decide_review(
+        application_id: str, body: DecideSkillReviewBody, request: Request
+    ):
+        identity = identity_resolver(request)
+        return await invoke(
+            lambda: service.reviews.decide(
+                identity,
+                region=body.region,
+                application_id=application_id,
+                decision=body.decision,
+                reason=body.reason,
+                comment=body.comment,
+            )
+        )
+
+    @app.get("/web/skill-management/reviews/{application_id}/files")
+    async def review_files(
+        application_id: str,
+        request: Request,
+        region: str = Query(min_length=1, max_length=64),
+    ):
+        identity = identity_resolver(request)
+        return await invoke(
+            lambda: service.reviews.files(
+                identity, region=region, application_id=application_id
+            )
+        )
 
     @app.put("/web/skill-management/spaces/{space_id}")
     async def update_space(

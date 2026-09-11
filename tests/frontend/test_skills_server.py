@@ -222,16 +222,7 @@ def test_unexpected_skill_service_error_preserves_original_error() -> None:
     )
 
     assert converted.status_code == 502
-    assert converted.detail == {
-        "code": "SKILL_SERVICE_UNAVAILABLE",
-        "message": "暂时无法访问 AgentKit Skills。",
-        "retryable": True,
-        "originalError": {
-            "type": "builtins.RuntimeError",
-            "message": "Volcengine credentials not found: missing access key",
-            "repr": "RuntimeError('Volcengine credentials not found: missing access key')",
-        },
-    }
+    assert converted.detail == "Volcengine credentials not found: missing access key"
 
 
 def test_repository_error_preserves_original_error() -> None:
@@ -535,6 +526,9 @@ class _FakeSkillClient:
         self.create_requests: list[object] = []
         self.publish_requests: list[object] = []
 
+    def get_skill_space(self, request: object) -> SimpleNamespace:
+        return SimpleNamespace(tags=[])
+
     def list_skills(self, request: object) -> SimpleNamespace:
         del request
         raise AssertionError(
@@ -558,6 +552,7 @@ class _FakeSkillClient:
 
 def _install_fake_agentkit_modules(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_types = SimpleNamespace(
+        GetSkillSpaceRequest=_FakeSkillRequest,
         ListSkillsBySkillSpaceRequest=_FakeSkillRequest,
         CreateSkillRequest=_FakeSkillRequest,
         PublishSkillToSkillSpaceRequest=_FakeSkillRequest,
@@ -962,3 +957,28 @@ def test_workbench_byteplus_uses_default_and_catalog_models(
     assert result["model"] == "deepseek-v4-flash-260425"
     session_envs = {item.key: item.value for item in client.created[0].envs}
     assert session_envs["CODEX_MODEL"] == "deepseek-v4-flash-260425"
+
+
+def test_cloud_http_status_and_full_text_are_returned_without_summary() -> None:
+    class CloudError(RuntimeError):
+        status_code = 429
+
+    raw = '\n{"Code":"Throttling","RequestId":"request-cloud-429","Message":"retry later"}\n'
+    converted = _convert_error(CloudError(raw))
+    assert converted.status_code == 429
+    assert converted.detail == raw
+
+
+def test_local_storage_and_repository_wrappers_expose_original_cloud_error() -> None:
+    from frontend.server.skills.storage import SkillPublishStorageError
+    from frontend.server.skills.errors import skill_error_text
+
+    raw = "Error code: 503, RequestId: original-request\n" + "cloud detail " * 500
+    original = RuntimeError(raw)
+    storage_error = SkillPublishStorageError("Local upload summary")
+    storage_error.__cause__ = original
+    repository_error = SkillRepositoryError(
+        "LOCAL_WRAPPER", "Local summary", original_error=storage_error
+    )
+    assert _convert_error(repository_error).detail == raw
+    assert skill_error_text(repository_error) == raw
