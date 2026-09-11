@@ -1237,7 +1237,8 @@ class VeFaaS:
         gateway_name: str = "",
         gateway_service_name: str = "",
         gateway_upstream_name: str = "",
-    ) -> tuple[str, str, str]:
+        enable_key_auth: bool = False,
+    ) -> tuple[str, str, str] | tuple[str, str, str, str, str]:
         """Deploy application using container image.
 
         Args:
@@ -1246,9 +1247,14 @@ class VeFaaS:
             gateway_name (str, optional): Gateway name. Defaults to "".
             gateway_service_name (str, optional): Gateway service name. Defaults to "".
             gateway_upstream_name (str, optional): Gateway upstream name. Defaults to "".
+            enable_key_auth (bool, optional): Enable APIG key auth on the created
+                application and resolve the resulting gateway id and key-auth API
+                key. Defaults to False to preserve the original return shape.
 
         Returns:
-            tuple[str, str, str]: (url, app_id, function_id)
+            When ``enable_key_auth`` is False (default): ``(url, app_id, function_id)``.
+            When ``enable_key_auth`` is True: ``(url, app_id, function_id,
+            apig_instance_id, runtime_api_key)``.
         """
         # Validate application name format
         is_ready = self.query_user_cr_vpc_tunnel(registry_name)
@@ -1300,6 +1306,7 @@ class VeFaaS:
             gateway_name,
             gateway_upstream_name,
             gateway_service_name,
+            enable_key_auth=enable_key_auth,
         )
 
         # Release application and get deployment URL
@@ -1327,7 +1334,68 @@ class VeFaaS:
 
         logger.info(f"VeFaaS application {name} with ID {app_id} deployed on {url}.")
 
-        return url, app_id, function_id
+        if not enable_key_auth:
+            return url, app_id, function_id
+
+        # Resolve the APIG gateway id created/reused for this application and the
+        # key-auth API key so callers can wire runtime authentication.
+        route = self.get_application_route(app_id=app_id)
+        if not route:
+            raise ValueError(
+                f"Could not resolve APIG route for application {app_id}; "
+                "key-auth gateway id is unavailable."
+            )
+        apig_instance_id = route[0]
+        api_key = self._get_key_auth_api_key(apig_instance_id)
+        if not api_key:
+            raise ValueError(
+                "Key auth was requested but no key-auth API key was found for "
+                f"gateway {apig_instance_id}."
+            )
+        return url, app_id, function_id, apig_instance_id, api_key
+
+    def _get_key_auth_api_key(self, gateway_id: str) -> str:
+        """Return the first enabled key-auth API key for a gateway's consumers.
+
+        Reads APIG consumers scoped to ``gateway_id`` and returns the first
+        enabled ``KeyAuthCredential`` API key. Returns an empty string when no
+        enabled key-auth credential exists.
+        """
+        from volcenginesdkapig import (
+            FilterForListConsumersInput,
+            ListConsumerCredentialsRequest,
+            ListConsumersRequest,
+        )
+
+        apig = self.apig_client.apig_client
+        consumers = apig.list_consumers(
+            ListConsumersRequest(
+                filter=FilterForListConsumersInput(gateway_id=gateway_id),
+                page_number=1,
+                page_size=100,
+            )
+        )
+        for consumer in getattr(consumers, "items", []) or []:
+            consumer_id = getattr(consumer, "id", "")
+            if not consumer_id:
+                continue
+            creds = apig.list_consumer_credentials(
+                ListConsumerCredentialsRequest(
+                    consumer_id=consumer_id,
+                    credential_type="key-auth",
+                    page_number=1,
+                    page_size=100,
+                )
+            )
+            for item in getattr(creds, "items", []) or []:
+                key_auth = getattr(item, "key_auth_credential", None)
+                if key_auth is None:
+                    continue
+                if getattr(key_auth, "enable", True) and getattr(
+                    key_auth, "api_key", ""
+                ):
+                    return str(key_auth.api_key)
+        return ""
 
     def _get_application_logs(
         self,
