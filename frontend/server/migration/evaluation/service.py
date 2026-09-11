@@ -25,7 +25,9 @@ import shlex
 import time
 from collections.abc import Callable
 from datetime import datetime, timezone
-from typing import Literal, NotRequired, Protocol, TypedDict, cast
+from typing import Literal, Protocol, TypedDict, cast
+
+from typing_extensions import NotRequired
 
 from ..gateway import (
     MigrationGateway,
