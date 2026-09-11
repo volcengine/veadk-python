@@ -2,11 +2,11 @@ import { useEffect, useRef, useState, type ComponentProps, type CSSProperties } 
 import "./ScrollArea.css";
 
 export type ScrollAreaProps = ComponentProps<"div"> & {
-  /** 滚动方向 */
+  /** 原生滚动方向：vertical 纵向、horizontal 横向、both 双向 */
   orientation?: "vertical" | "horizontal" | "both";
   /** 滚动区域最大高度，数字单位为 px */
   maxHeight?: CSSProperties["maxHeight"];
-  /** 隐藏滚动条，保留原生滚动 */
+  /** 完全隐藏滚动条，保留原生滚动；默认随鼠标进入/离开区域淡入淡出 */
   hideScrollbar?: boolean;
   /** 是否还有更多内容，与 onLoadMore 配合使用 */
   hasMore?: boolean;

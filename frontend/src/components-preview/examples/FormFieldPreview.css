@@ -7,3 +7,8 @@
   clip-path: inset(50%);
   white-space: nowrap;
 }
+
+.form-field-preview-with-tip { margin-top: 32px; }
+.form-field-preview-validation { display: flex; flex-direction: column; align-items: flex-start; gap: 24px; }
+.form-field-preview-actions { display: flex; gap: 8px; }
+.form-field-preview-textarea { width: 100%; max-width: 100%; }

@@ -1,13 +1,21 @@
+@property --scroll-area-visible-thumb {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: transparent;
+}
+
 .studio-scroll-area {
   --scroll-area-thumb: rgba(219, 222, 231, .22);
   --scroll-area-thumb-hover: rgba(219, 222, 231, .38);
+  --scroll-area-visible-thumb: transparent;
   box-sizing: border-box;
   min-width: 0;
   min-height: 0;
   overflow: auto;
   overscroll-behavior: auto;
   scrollbar-width: thin;
-  scrollbar-color: var(--scroll-area-thumb) transparent;
+  scrollbar-color: var(--scroll-area-visible-thumb) transparent;
+  transition: --scroll-area-visible-thumb 180ms ease-out;
 }
 [data-theme="light"] .studio-scroll-area {
   --scroll-area-thumb: rgba(91, 80, 119, .22);
@@ -16,6 +24,13 @@
 .studio-scroll-area[data-orientation="vertical"] { overflow-x: hidden; overflow-y: auto; overscroll-behavior-x: none; }
 .studio-scroll-area[data-orientation="horizontal"] { overflow-x: auto; overflow-y: hidden; }
 .studio-scroll-area:focus-visible { outline: 1px solid var(--studio-focus-ring); outline-offset: 2px; }
+.studio-scroll-area:focus-visible { --scroll-area-visible-thumb: var(--scroll-area-thumb); }
+@media (hover: hover) {
+  .studio-scroll-area:hover { --scroll-area-visible-thumb: var(--scroll-area-thumb); }
+}
+@media (hover: none) {
+  .studio-scroll-area { --scroll-area-visible-thumb: var(--scroll-area-thumb); }
+}
 @supports selector(::-webkit-scrollbar) {
   .studio-scroll-area { scrollbar-width: auto; scrollbar-color: auto; }
   .studio-scroll-area::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -23,7 +38,7 @@
   .studio-scroll-area::-webkit-scrollbar-thumb {
     border: 2px solid transparent;
     border-radius: 999px;
-    background: var(--scroll-area-thumb);
+    background: var(--scroll-area-visible-thumb);
     background-clip: padding-box;
   }
   .studio-scroll-area::-webkit-scrollbar-thumb:hover { background-color: var(--scroll-area-thumb-hover); }
@@ -47,6 +62,7 @@
 @keyframes studio-scroll-area-spin { to { transform: rotate(360deg); } }
 
 @media (prefers-reduced-motion: reduce) {
+  .studio-scroll-area { transition: none; }
   .studio-scroll-area__spinner { animation: none; }
   .studio-scroll-area__footer button { transition: none; }
 }

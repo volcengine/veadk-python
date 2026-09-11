@@ -24,6 +24,17 @@ const descriptions: Record<string, string> = {
 };
 
 const componentNotes: Record<string, Record<string, string>> = {
+  Button: {
+    variant: "primary 主按钮、secondary 次按钮、ghost 透明按钮、link 链接样式按钮",
+    iconOnly: "纯图标按钮，28 × 28px；图标通过 startIcon 传入，需提供 aria-label，可组合 primary、secondary 或 ghost 样式",
+    endIcon: "右侧图标；link 样式下尺寸跟随字号，悬停或键盘聚焦时与文字下方虚线一起淡入，移开淡出",
+  },
+  Radio: {
+    name: "同一组 Radio 使用相同 name，只能选中一项",
+    label: "可选文字标签；未提供时需设置 aria-label 或 aria-labelledby",
+    checked: "受控选中状态，与 onChange 配合使用",
+    defaultChecked: "非受控初始选中状态",
+  },
   Textarea: { className: "外层可拉伸容器的 CSS 类名", style: "原生 textarea 的样式，外框高度上限使用 maxHeight", counter: "右下角计数内容，不自动计数或限制字数" },
   Select: { options: "选项数组：value、label 必填；icon、disabled 可选", defaultValue: "非受控初始值，未设置时选择第一个未禁用选项" },
   PillTabs: { items: "选项数组：value、label 必填；panelId 可选" },
@@ -32,8 +43,34 @@ const componentNotes: Record<string, Record<string, string>> = {
   FilterTabs: { options: "选项数组，每项包含 value 和 label" },
   CodeBlock: { lines: "字符串数组或 token 数组的数组，token 包含 text 和可选 color" },
   FormLabel: { required: "显示必填星号，实际表单验证需设置控件的 required" },
-  FormField: { required: "显示必填标签，实际表单验证需设置控件的 required" },
+  FormField: {
+    required: "显示必填标签，实际表单验证需设置控件的 required",
+    htmlFor: "对应输入控件的 id，用于关联标签、提示与错误状态",
+    tip: "显示在控件下方的输入规则或辅助提示",
+    error: "错误时替换 tip，显示红色文字与输入框/文本域边框，并设置 aria-invalid",
+  },
   Divider: { role: "固定为 separator", "aria-orientation": "固定为 horizontal" },
+  ScrollArea: {
+    orientation: "vertical 纵向、horizontal 横向、both 双向滚动，均保留原生滚动行为",
+    hideScrollbar: "始终隐藏滚动条；未隐藏时，鼠标移入区域淡入、移出淡出，键盘聚焦时显示",
+    maxHeight: "滚动区域最大高度，数字单位为 px，超出后纵向滚动",
+  },
+  Table: {
+    columns: "列定义：key、title、render 必填；width 设置宽度，align 控制对齐，overflow 选择 wrap 换行或 ellipsis 省略，fixed 选择 left / right 冻结列；sort 包含 direction（asc / desc / null）和 onChange，filter 包含 value、options 和 onChange；筛选排序后的 data 由调用方提供，render 可返回下拉框、按钮组等 React 内容",
+    maxHeight: "表格滚动区最大高度，数字单位为 px；超出时在区域内纵向滚动",
+    minWidth: "表格最小宽度，空间不足时在区域内横向滚动",
+    layout: "fixed 按列宽分配空间；auto 根据内容自适应列宽",
+    stickyHeader: "设置 maxHeight 后，在纵向滚动时固定表头",
+    hideScrollbar: "隐藏滚动条，保留触控板、触屏和键盘滚动",
+    toolbarStart: "表格上方左侧区域，可放搜索框或筛选条件",
+    toolbarEnd: "表格上方右侧区域，可放主按钮或按钮组",
+  },
+  TableCellText: {
+    title: "主文本，显示在描述上方",
+    description: "次级描述，未设置时只显示主文本",
+    truncate: "主文本超出列宽时单行省略",
+    descriptionLines: "描述的最大行数，超出后省略；未设置时自然换行",
+  },
 };
 
 const commonNative = new Set(["children", "className", "style", "id", "value", "defaultValue", "checked", "defaultChecked", "disabled", "readOnly", "onChange", "onClick", "name", "placeholder", "required", "maxLength", "type", "htmlFor", "aria-label"]);
@@ -43,7 +80,7 @@ export function ComponentApi({ names }: { names: string[] }) {
     {names.map(name => {
       const doc = docs[name];
       if (!doc) return <p key={name} role="alert">{name} 的参数信息未生成</p>;
-      const visibleNative = (prop: (typeof doc.props)[number]) => commonNative.has(prop.name) && (!['defaultChecked', 'checked'].includes(prop.name) || ['Switch', 'Checkbox'].includes(name));
+      const visibleNative = (prop: (typeof doc.props)[number]) => commonNative.has(prop.name) && (!['defaultChecked', 'checked'].includes(prop.name) || ['Switch', 'Checkbox', 'Radio'].includes(name));
       const primary = doc.props.filter(prop => !prop.native || visibleNative(prop)).sort((a, b) => Number(a.native) - Number(b.native));
       const inherited = doc.props.filter(prop => prop.native && !visibleNative(prop));
       const table = (props: typeof primary) => <div className="component-api__scroll"><table>

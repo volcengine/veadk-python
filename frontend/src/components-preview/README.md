@@ -76,9 +76,24 @@ Textarea 支持 maxHeight（数字单位 px 或 CSS 长度），限制外框拖�
 
 ## 滚动、表格与加载
 
-ScrollArea 支持纵向、横向和双向滚动，可隐藏滚动条，通过 hasMore、onLoadMore 和 threshold 开启触底加载；包含加载状态、失败重试、重复请求保护和卸载取消
+ScrollArea 支持纵向、横向和双向滚动，滚动条随鼠标移入淡入、移出淡出，键盘聚焦时显示，也可通过 hideScrollbar 始终隐藏；预览提供纵向加载与横向滚动示例
+通过 hasMore、onLoadMore 和 threshold 开启触底加载；包含加载状态、失败重试、重复请求保护和卸载取消
 LoadMoreArea 复用 ScrollArea 的加载逻辑，资源卡片示例初始 6 张、每批追加 6 张
 Tabs 复用横向 ScrollArea，隐藏滚动条，保持文字单行；网站侧栏和预览区仅纵向滚动
 Table 使用语义化表格，支持列宽、对齐、自定义单元格、空数据内容及窄容器横向滚动；TableStatus 提供 Pass / Fail 图标和文案
 浅色主题使用轻微带紫灰色相的中性色；Card、Item 和 DashedZone 提供轻量 hover 过渡
 原生滚动回弹由浏览器和操作系统控制，组件不模拟橡皮筋动画
+
+Table 的 overflow 列配置支持 wrap（自动换行并撑高行）或 ellipsis（单行省略），layout=fixed 可保持列宽稳定，layout=auto 由内容参与分配列宽
+minWidth 设定横向滚动阈值，maxHeight 限制纵向视口，stickyHeader 控制列标题固定，hideScrollbar 控制滚动条可见性
+TableCellText 提供 title + description，truncate 控制标题单行省略，descriptionLines 控制说明最大行数；纯文本省略时保留原生全文提示
+Table 的 toolbarStart / toolbarEnd 放置搜索和主操作，两端对齐并位于滚动区外，搜索和按钮行为由调用方提供
+列配置 fixed=left / right 可冻结任意列，冻结列偏移按实际列宽计算并随容器变化更新，能与固定表头组合使用
+Table 复用 ScrollArea 的横向、双向滚动和滚动条效果，示例固定首列与 Actions 列
+列配置 sort 接收 direction（asc / desc / null）和 onChange，filter 接收 value、options 和 onChange；表头复用 Button 与 Select，筛选与排序数据由调用方管理，独立示例演示两者组合
+Button 的 iconOnly 提供纯图标按钮，可组合 primary、secondary、ghost 样式，使用 startIcon 和 aria-label；Table 操作列直接复用，不另写按钮样式
+Button 的 link 样式支持 endIcon，图标随字号缩放；悬停或键盘聚焦时文字下方虚线与右侧图标同时淡入，移开淡出，并保留图标占位，示例使用 ExternalLinkIcon
+InputWithHeaderIcon 复用 InputWithTailIcon 的原生输入逻辑，前置图标可替换或绑定点击回调
+SidebarItemWithIcon 的长标题默认尾部渐隐，悬停后缓慢滚到末尾、移开复位；trailing / hoverTrailing 支持尾部图标或按钮组切换，标题宽度自动适配
+Radio 按 Figma 740:296852 内的单选控件实现，16 × 16px，未选中白色圆底，选中深色圆底与 6px 白点；使用原生单选输入，同 name 互斥，支持可选标签与受控值
+FormField 的 tip 显示控件下方输入规则，error 优先替换为红色提示，并为对应输入框或文本域显示红边；htmlFor 与控件 id 关联标签和描述，校验规则由调用方负责

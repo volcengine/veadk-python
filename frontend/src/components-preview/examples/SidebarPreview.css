@@ -24,3 +24,29 @@
 .sidebar-preview-specimen > .studio-sidebar-item + .studio-sidebar-item {
   margin-top: 4px;
 }
+
+.sidebar-preview-with-icon {
+  margin-top: 32px;
+}
+
+.sidebar-preview-icon-specimen {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 320px;
+  max-width: 100%;
+}
+
+.sidebar-preview-icon-specimen .studio-sidebar-item-with-icon,
+.sidebar-preview-icon-specimen .studio-sidebar-group-title {
+  width: 100%;
+}
+
+.sidebar-preview-action {
+  display: block;
+  min-height: 22px;
+  margin-top: 12px;
+  color: var(--studio-text-tertiary, #7a7880);
+  font-size: 13px;
+  line-height: 22px;
+}

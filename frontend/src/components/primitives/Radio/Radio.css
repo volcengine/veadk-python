@@ -1,0 +1,86 @@
+/* Figma 740:296861 / 740:296871: 16px radio with a 6px selected dot */
+.studio-radio {
+  --radio-background: #fff;
+  --radio-border: #b8b7c3;
+  --radio-selected-background: #101013;
+  --radio-selected-border: transparent;
+  --radio-dot: #fff;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 16px;
+  color: var(--studio-text-primary, #dbdee7);
+  font-family: "Century Gothic", sans-serif;
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 400;
+  font-synthesis: none;
+  line-height: normal;
+  letter-spacing: 0;
+  cursor: pointer;
+}
+
+.studio-radio__control {
+  position: relative;
+  display: block;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+}
+
+.studio-radio__input {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: inherit;
+}
+
+.studio-radio__box {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  border: 0.5px solid var(--radio-border);
+  border-radius: 99px;
+  background: var(--radio-background);
+  pointer-events: none;
+}
+
+.studio-radio__dot {
+  display: block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--radio-dot);
+  opacity: 0;
+}
+
+.studio-radio__input:checked + .studio-radio__box {
+  border-color: var(--radio-selected-border);
+  background: var(--radio-selected-background);
+}
+
+.studio-radio__input:checked + .studio-radio__box .studio-radio__dot {
+  opacity: 1;
+}
+
+.studio-radio__input:focus-visible + .studio-radio__box {
+  outline: 2px solid var(--studio-focus-ring, #fff);
+  outline-offset: 2px;
+}
+
+.studio-radio__label { white-space: nowrap; }
+.studio-radio:has(.studio-radio__input:disabled) { cursor: not-allowed; opacity: .45; }
+
+[data-theme="light"] .studio-radio {
+  --radio-background: var(--studio-surface-checkbox, #fff);
+  --radio-border: var(--studio-border-control, rgba(91, 80, 119, .24));
+  --radio-selected-background: var(--studio-surface-checkbox, #fff);
+  --radio-selected-border: var(--studio-border-control, rgba(91, 80, 119, .24));
+  --radio-dot: var(--studio-text-primary, #24242b);
+}

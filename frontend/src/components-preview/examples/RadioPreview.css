@@ -1,0 +1,24 @@
+.radio-preview-states {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.radio-preview-group {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  margin: 24px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.radio-preview-group legend {
+  margin-bottom: 12px;
+  padding: 0;
+  color: var(--studio-text-tertiary, #7a7880);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 22px;
+}

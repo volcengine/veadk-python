@@ -1,4 +1,6 @@
 import { TablePreview } from "./examples/TablePreview";
+import { RadioPreview } from "./examples/RadioPreview";
+import { InputWithHeaderIconPreview } from "./examples/InputWithHeaderIconPreview";
 import { LoadMoreAreaPreview } from "./examples/LoadMoreAreaPreview";
 import { ScrollArea } from "../components/primitives/ScrollArea";
 import { ScrollAreaPreview } from "./examples/ScrollAreaPreview";
@@ -34,9 +36,11 @@ const examples = [
   { id: "button", label: "Button", Preview: ButtonsPreview, group: "primitives" },
   { id: "tabs", label: "Tabs", Preview: TabsPreview, group: "primitives" },
   { id: "input-tail-icon", label: "Input with tail icon", Preview: InputWithTailIconPreview, group: "primitives" },
+  { id: "input-header-icon", label: "Input with header icon", Preview: InputWithHeaderIconPreview, group: "primitives" },
   { id: "label", label: "Label", Preview: LabelPreview, group: "primitives" },
   { id: "switch", label: "Switch", Preview: SwitchPreview, group: "primitives" },
   { id: "checkbox", label: "Checkbox", Preview: CheckboxPreview, group: "primitives" },
+  { id: "radio", label: "Radio", Preview: RadioPreview, group: "primitives" },
   { id: "sidebar", label: "Sidebar", Preview: SidebarPreview, group: "composites" },
   { id: "form-field", label: "Form field", Preview: FormFieldPreview, group: "composites" },
   { id: "dashed-zone", label: "Dashed zone", Preview: DashedZonePreview, group: "composites" },
