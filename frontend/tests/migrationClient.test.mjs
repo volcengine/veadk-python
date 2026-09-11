@@ -225,6 +225,7 @@ test("submits only the explicitly selected custom evaluation dimensions", async 
       enabled: true,
       preset: "custom",
       dimensions: selected,
+      locale: "en-US",
     },
   });
 
@@ -232,6 +233,7 @@ test("submits only the explicitly selected custom evaluation dimensions", async 
     enabled: true,
     preset: "custom",
     dimensions: selected,
+    locale: "en-US",
   });
   assert.deepEqual(created.evaluation.dimensions, selected);
 });

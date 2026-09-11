@@ -7,7 +7,11 @@ import {
   type DragEvent,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { localeCompatibleBackendText } from "../i18n/locales";
+import {
+  DEFAULT_LOCALE,
+  localeCompatibleBackendText,
+  resolveSupportedLocale,
+} from "../i18n/locales";
 import {
   confirmMigrationTask,
   createMigrationTask,
@@ -1443,6 +1447,7 @@ export function MigrationWorkspace({
           ? {
               enabled: true,
               preset: evaluationDraft.preset,
+              locale: resolveSupportedLocale(locale) ?? DEFAULT_LOCALE,
               ...(evaluationDraft.preset === "custom"
                 ? { dimensions: evaluationDraft.dimensions }
                 : {}),

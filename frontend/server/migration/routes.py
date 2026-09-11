@@ -269,6 +269,7 @@ def mount_migration_routes(
                 "enabled": True,
                 "preset": evaluation.get("preset", "standard"),
                 "dimensions": evaluation.get("dimensions", []),
+                "locale": evaluation.get("locale", "zh-CN"),
                 "state": "failed",
                 "message": "评测状态暂时不可用，迁移产物不受影响。",
                 "canResume": False,

@@ -126,6 +126,7 @@ class FakeMigration:
                 "enabled": True,
                 "preset": "standard",
                 "dimensions": DIMENSIONS,
+                "locale": "zh-CN",
             },
         }
         self.required: list[str] = []
@@ -203,6 +204,7 @@ class FakeRunner:
         attempt: int,
         runtime_name: str,
         dimensions: list[str],
+        locale: str,
         dataset_sha256: str,
         artifact_sha256: str,
         secret_path: str | None,
@@ -214,6 +216,7 @@ class FakeRunner:
                 "attempt": attempt,
                 "runtime_name": runtime_name,
                 "dimensions": dimensions,
+                "locale": locale,
                 "dataset_sha256": dataset_sha256,
                 "artifact_sha256": artifact_sha256,
                 "secret_path": secret_path,
@@ -357,6 +360,7 @@ def test_manifest_is_bound_to_task_config_and_persisted_asset() -> None:
         "enabled": True,
         "preset": "standard",
         "dimensions": DIMENSIONS,
+        "locale": "zh-CN",
     }
 
 
@@ -647,6 +651,7 @@ def test_custom_dimensions_remain_exact_from_manifest_to_html_report() -> None:
         "enabled": True,
         "preset": "custom",
         "dimensions": selected,
+        "locale": "zh-CN",
     }
     dataset = service.put_dataset(TASK_ID, "owner", _body())
     manifest = json.loads(gateway.files[EVALUATION_DATASET_MANIFEST_PATH])
@@ -676,6 +681,48 @@ def test_custom_dimensions_remain_exact_from_manifest_to_html_report() -> None:
     assert "语义与任务效果、安全与拒答" in report_html
     assert "输出格式" not in report_html
     assert "工作流与工具效果" not in report_html
+
+
+def test_english_report_uses_english_html_and_dimension_labels() -> None:
+    service, migration, gateway, _repository, _runner = _service()
+    migration.task["evaluation"] = {
+        "enabled": True,
+        "preset": "standard",
+        "dimensions": DIMENSIONS,
+        "locale": "en-US",
+    }
+    dataset = service.put_dataset(TASK_ID, "owner", _body())
+    _ready(migration)
+    service.advance(TASK_ID, "owner")
+    status = json.loads(gateway.files[EVALUATION_STATUS_PATH])
+    status.update(state="aggregating", message="Generating report")
+    gateway.files[EVALUATION_STATUS_PATH] = json.dumps(status).encode()
+    report = _report(dataset["asset"]["sha256"])  # type: ignore[index]
+    report["migration_gap_description"] = "Differences are recorded per case."
+    report["summary"]["dimensions"][0]["reason"] = "Evidence summary"  # type: ignore[index]
+    report["cases"][0]["dimensions"][0]["reason"] = "Evidence matches"  # type: ignore[index]
+    gateway.files[EVALUATION_REPORT_PATH] = json.dumps(
+        report,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode()
+
+    service.advance(TASK_ID, "owner")
+    snapshot = service.snapshot(TASK_ID, "owner")
+    content, _filename = service.download_report(
+        TASK_ID,
+        "owner",
+        snapshot["report"]["versionId"],  # type: ignore[index]
+    )
+    report_html = content.decode()
+
+    assert '<html lang="en-US">' in report_html
+    assert "Migration Effect Evaluation Report" in report_html
+    assert "Overall consistency" in report_html
+    assert "Semantic and task fidelity" in report_html
+    assert "Case results and evidence" in report_html
+    assert "Runtime raw observable data" in report_html
+    assert "迁移效果评测报告" not in report_html
 
 
 def test_cancel_stops_active_runner_without_waiting_for_runtime_cleanup() -> None:

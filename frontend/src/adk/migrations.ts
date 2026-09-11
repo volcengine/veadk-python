@@ -42,6 +42,8 @@ export type MigrationEvaluationDimensionId =
   | "boundary_error_fidelity"
   | "safety_refusal_fidelity";
 
+export type MigrationEvaluationLocale = "zh-CN" | "en-US";
+
 export type MigrationEvaluationState =
   | "disabled"
   | "waiting_dataset"
@@ -80,6 +82,7 @@ export interface MigrationEvaluationStatus {
   message: string;
   preset?: "standard" | "custom";
   dimensions?: MigrationEvaluationDimensionId[];
+  locale?: MigrationEvaluationLocale;
   attempt?: number;
   dataset?: MigrationEvaluationAsset;
   report?: MigrationEvaluationAsset;
@@ -519,6 +522,9 @@ function normalizeEvaluation(value: unknown): MigrationEvaluationStatus {
     normalized.dimensions = evaluation.dimensions.map((item) =>
       evaluationDimension(item, adkT("migrations.labels.evaluationDimension")),
     );
+  }
+  if (evaluation.locale === "zh-CN" || evaluation.locale === "en-US") {
+    normalized.locale = evaluation.locale;
   }
   if (typeof evaluation.attempt === "number")
     normalized.attempt = evaluation.attempt;
@@ -1356,6 +1362,7 @@ export async function createMigrationTask(args: {
     enabled: true;
     preset: "standard" | "custom";
     dimensions?: MigrationEvaluationDimensionId[];
+    locale: MigrationEvaluationLocale;
   };
   signal?: AbortSignal;
 }): Promise<MigrationTask> {

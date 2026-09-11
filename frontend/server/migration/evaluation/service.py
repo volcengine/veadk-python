@@ -107,6 +107,7 @@ _CANCELLABLE_EVALUATION_STATES = _ACTIVE_EVALUATION_STATES | {
 class _EvaluationConfig(TypedDict):
     preset: str
     dimensions: list[str]
+    locale: str
 
 
 class _EvaluationManifest(TypedDict):
@@ -114,6 +115,7 @@ class _EvaluationManifest(TypedDict):
     task_id: str
     preset: str
     dimensions: list[str]
+    locale: str
     asset: dict[str, object]
 
 
@@ -180,6 +182,7 @@ class EvaluationRunner(Protocol):
         attempt: int,
         runtime_name: str,
         dimensions: list[str],
+        locale: str = "zh-CN",
         dataset_sha256: str,
         artifact_sha256: str,
         secret_path: str | None,
@@ -283,6 +286,7 @@ class MigrationEvaluationService:
                 "enabled": True,
                 "preset": evaluation.get("preset", "standard"),
                 "dimensions": evaluation.get("dimensions", []),
+                "locale": evaluation.get("locale", "zh-CN"),
                 "state": state,
                 "message": message,
                 "canResume": False,
@@ -377,6 +381,7 @@ class MigrationEvaluationService:
             "task_id": task_id,
             "preset": config["preset"],
             "dimensions": config["dimensions"],
+            "locale": config["locale"],
             "asset": metadata.public(),
         }
         self._put(
@@ -488,6 +493,7 @@ class MigrationEvaluationService:
             "enabled": True,
             "preset": config["preset"],
             "dimensions": config["dimensions"],
+            "locale": config["locale"],
             "state": state,
             "message": message,
             "canResume": state == "waiting_environment",
@@ -857,6 +863,7 @@ class MigrationEvaluationService:
                 attempt=attempt,
                 runtime_name=runtime_name,
                 dimensions=config["dimensions"],
+                locale=config["locale"],
                 dataset_sha256=str(asset["sha256"]),
                 artifact_sha256=artifact_sha256,
                 secret_path=secret_path,
@@ -989,7 +996,10 @@ class MigrationEvaluationService:
                 status_code=502,
                 retryable=True,
             ) from error
-        report_content = self._report_html(validated_report).encode("utf-8")
+        report_content = self._report_html(
+            validated_report,
+            locale=str(manifest["locale"]),
+        ).encode("utf-8")
         digest = hashlib.sha256(report_content).hexdigest()
         assert self._repository is not None
         try:
@@ -1079,12 +1089,14 @@ class MigrationEvaluationService:
                 "task_id",
                 "preset",
                 "dimensions",
+                "locale",
                 "asset",
             }
             or value.get("schema_version") != 1
             or value.get("task_id") != session.task_id
             or value.get("preset") != expected_config["preset"]
             or value.get("dimensions") != expected_config["dimensions"]
+            or value.get("locale") != expected_config["locale"]
         ):
             raise MigrationError(
                 "MIGRATION_EVALUATION_DATASET_INVALID",
@@ -1205,8 +1217,10 @@ class MigrationEvaluationService:
             )
         dimensions = evaluation.get("dimensions")
         preset = evaluation.get("preset")
+        locale = evaluation.get("locale")
         if (
             preset not in {"standard", "custom"}
+            or locale not in {"zh-CN", "en-US"}
             or not isinstance(dimensions, list)
             or not dimensions
             or any(not isinstance(item, str) for item in dimensions)
@@ -1225,6 +1239,7 @@ class MigrationEvaluationService:
         return {
             "preset": str(preset),
             "dimensions": [str(item) for item in dimensions],
+            "locale": str(locale),
         }
 
     def _artifact_sha256(
@@ -1364,7 +1379,7 @@ class MigrationEvaluationService:
         }
 
     @staticmethod
-    def _report_html(report: dict[str, object]) -> str:
+    def _report_html(report: dict[str, object], *, locale: str) -> str:
         summary = report.get("summary")
         execution = report.get("execution")
         coverage = report.get("evidence_coverage")
@@ -1378,11 +1393,60 @@ class MigrationEvaluationService:
         def escape(value: object) -> str:
             return html.escape(str(value), quote=True)
 
+        copy = (
+            {
+                "title": "Migration Effect Evaluation Report",
+                "attempt": "Evaluation attempt {attempt} · {created_at}",
+                "dataset": "Dataset {version}",
+                "overall": "Overall consistency",
+                "coverage": "Evidence coverage",
+                "coverage_count": "{scored} / {total} dimensions",
+                "execution": "Execution success rate",
+                "execution_count": "{succeeded} / {total} cases",
+                "selected_dimensions": "Evaluation dimensions",
+                "gap": "Migration differences",
+                "limitations": "Evaluation limitations",
+                "case": "Case {index} · {case_id}",
+                "agent_output": "Agent output",
+                "runtime_data": "Runtime raw observable data",
+                "runtime_size": "{captured} / {original} bytes",
+                "truncated": "truncated",
+                "no_runtime_data": "No data captured",
+                "case_results": "Case results and evidence",
+                "model": "Model",
+                "artifact": "Migration artifact",
+                "separator": ": ",
+            }
+            if locale == "en-US"
+            else {
+                "title": "迁移效果评测报告",
+                "attempt": "第 {attempt} 次评测 · {created_at}",
+                "dataset": "评测集 {version}",
+                "overall": "综合一致性",
+                "coverage": "证据覆盖率",
+                "coverage_count": "{scored} / {total} 个维度",
+                "execution": "执行成功率",
+                "execution_count": "{succeeded} / {total} 个用例",
+                "selected_dimensions": "本次评测维度",
+                "gap": "迁移差距说明",
+                "limitations": "评测限制",
+                "case": "用例 {index} · {case_id}",
+                "agent_output": "Agent 输出",
+                "runtime_data": "Runtime 原始可观察数据",
+                "runtime_size": "{captured} / {original} 字节",
+                "truncated": "已截断",
+                "no_runtime_data": "未采集到数据",
+                "case_results": "用例结果与证据",
+                "model": "模型",
+                "artifact": "迁移产物",
+                "separator": "：",
+            }
+        )
         score_text = "N/A" if score is None else f"{score}/100"
-        labels = {item.id: item.label for item in EVALUATION_DIMENSIONS}
+        labels = {item.id: item.localized(locale)[0] for item in EVALUATION_DIMENSIONS}
         report_dimensions = report.get("dimensions")
         assert isinstance(report_dimensions, list)
-        selected_dimension_text = "、".join(
+        selected_dimension_text = (", " if locale == "en-US" else "、").join(
             labels.get(str(item), str(item)) for item in report_dimensions
         )
         dimension_cards: list[str] = []
@@ -1429,41 +1493,55 @@ class MigrationEvaluationService:
             if isinstance(error, dict):
                 error_html = f'<p class="error">{escape(error.get("message", ""))}</p>'
             runtime_text = str(runtime_observation["text"])
-            runtime_size = (
-                f"{escape(runtime_observation['captured_bytes'])} / "
-                f"{escape(runtime_observation['original_bytes'])} 字节"
+            runtime_size = copy["runtime_size"].format(
+                captured=escape(runtime_observation["captured_bytes"]),
+                original=escape(runtime_observation["original_bytes"]),
             )
             if runtime_observation["truncated"] is True:
-                runtime_size += " · 已截断"
+                runtime_size += f" · {copy['truncated']}"
             runtime_html = (
                 '<details class="runtime-observation"><summary>'
-                "<span>Runtime 原始可观察数据</span>"
+                f"<span>{copy['runtime_data']}</span>"
                 f"<small>{runtime_size}</small></summary>"
                 f"<pre>{escape(runtime_text)}</pre></details>"
                 if runtime_text
                 else (
                     '<details class="runtime-observation"><summary>'
-                    "<span>Runtime 原始可观察数据</span>"
-                    "<small>未采集到数据</small></summary></details>"
+                    f"<span>{copy['runtime_data']}</span>"
+                    f"<small>{copy['no_runtime_data']}</small></summary></details>"
                 )
             )
             case_html.append(
-                f'<details class="case"><summary><span>用例 {index} · {escape(case["case_id"])}</span>'
+                '<details class="case"><summary><span>'
+                f"{escape(copy['case'].format(index=index, case_id=case['case_id']))}</span>"
                 f"<b>{escape(execution_result['state'])}</b></summary>{error_html}"
-                f"<h3>Agent 输出</h3><pre>{escape(output['text'])}</pre>"
+                f"<h3>{copy['agent_output']}</h3><pre>{escape(output['text'])}</pre>"
                 f"{runtime_html}"
                 f'<div class="case-dimensions">{"".join(result_html)}</div></details>'
             )
+        attempt_text = copy["attempt"].format(
+            attempt=report["attempt"],
+            created_at=report["created_at"],
+        )
+        dataset_text = copy["dataset"].format(version=report["dataset_version"])
+        coverage_count = copy["coverage_count"].format(
+            scored=coverage["scored"],
+            total=coverage["total"],
+        )
+        execution_count = copy["execution_count"].format(
+            succeeded=execution["succeeded"],
+            total=execution["total"],
+        )
         return f"""<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>迁移效果评测报告</title><style>
+<html lang="{locale}"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{copy["title"]}</title><style>
 :root{{color-scheme:light;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;color:#18212f;background:#f6f8fb}}*{{box-sizing:border-box}}body{{margin:0}}main{{max-width:1080px;margin:auto;padding:32px}}header.hero{{display:flex;justify-content:space-between;gap:24px;align-items:start;margin-bottom:20px}}h1{{font-size:26px;margin:0 0 8px}}.muted,small{{color:#647084}}code{{overflow-wrap:anywhere}}.meta{{display:grid;gap:5px;font-size:12px;color:#647084}}.metrics,.dimensions{{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));margin:16px 0}}.metric,.dimension,.panel,.case{{border:1px solid #dfe4ec;border-radius:12px;background:#fff}}.metric{{padding:16px}}.metric span,.dimension span{{display:block;color:#647084;font-size:12px}}.metric strong{{display:block;font-size:28px;margin-top:6px}}.dimension{{padding:14px}}.dimension strong{{display:block;font-size:20px;margin:5px 0}}p{{line-height:1.6}}.panel{{padding:16px;margin:16px 0}}.panel h2{{font-size:16px;margin:0 0 8px}}.case{{margin:10px 0;padding:0 14px}}.case summary{{display:flex;justify-content:space-between;gap:12px;padding:14px 0;cursor:pointer}}.case h3{{font-size:13px}}pre{{max-height:320px;overflow:auto;padding:12px;border-radius:8px;background:#f2f4f7;white-space:pre-wrap;word-break:break-word}}.runtime-observation{{margin:12px 0;border:1px solid #e6eaf0;border-radius:8px}}.runtime-observation summary{{padding:10px 12px;font-size:12px}}.runtime-observation pre{{max-height:240px;margin:0 10px 10px}}.case-dimensions{{display:grid;gap:8px;margin:12px 0 16px}}.case-dimension{{padding:10px;border:1px solid #e6eaf0;border-radius:8px}}.case-dimension header{{display:flex;justify-content:space-between}}.case-dimension p,.case-dimension li{{font-size:12px;color:#526075}}.error{{color:#b42318}}@media(max-width:600px){{main{{padding:18px}}header.hero{{display:block}}}}
-</style></head><body><main><header class="hero"><div><h1>迁移效果评测报告</h1><p class="muted">第 {escape(report["attempt"])} 次评测 · {escape(report["created_at"])}</p></div><div class="meta"><code>{escape(report["task_id"])}</code><span>评测集 {escape(report["dataset_version"])}</span><span>Prompt v{escape(report["prompt_version"])}</span></div></header>
-<section class="metrics"><article class="metric"><span>综合一致性</span><strong>{escape(score_text)}</strong></article><article class="metric"><span>证据覆盖率</span><strong>{escape(coverage["rate"])}%</strong><small>{escape(coverage["scored"])} / {escape(coverage["total"])} 个维度</small></article><article class="metric"><span>执行成功率</span><strong>{escape(execution["success_rate"])}%</strong><small>{escape(execution["succeeded"])} / {escape(execution["total"])} 个用例</small></article></section>
-<section class="panel"><h2>本次评测维度</h2><p>{escape(selected_dimension_text)}</p></section>
-<section class="dimensions">{"".join(dimension_cards)}</section><section class="panel"><h2>迁移差距说明</h2><p>{escape(report["migration_gap_description"])}</p></section>
-{f'<section class="panel"><h2>评测限制</h2><ul>{limitation_html}</ul></section>' if limitation_html else ""}
-<section><h2>用例结果与证据</h2>{"".join(case_html)}</section><section class="panel meta"><span>模型：{escape(model["id"])}</span><span>Codex：{escape(model["codex_version"])}</span><span>AgentKit CLI：{escape(model["agentkit_cli_version"])}</span><span>迁移产物：<code>{escape(report["artifact_sha256"])}</code></span></section>
+</style></head><body><main><header class="hero"><div><h1>{copy["title"]}</h1><p class="muted">{escape(attempt_text)}</p></div><div class="meta"><code>{escape(report["task_id"])}</code><span>{escape(dataset_text)}</span><span>Prompt v{escape(report["prompt_version"])}</span></div></header>
+<section class="metrics"><article class="metric"><span>{copy["overall"]}</span><strong>{escape(score_text)}</strong></article><article class="metric"><span>{copy["coverage"]}</span><strong>{escape(coverage["rate"])}%</strong><small>{escape(coverage_count)}</small></article><article class="metric"><span>{copy["execution"]}</span><strong>{escape(execution["success_rate"])}%</strong><small>{escape(execution_count)}</small></article></section>
+<section class="panel"><h2>{copy["selected_dimensions"]}</h2><p>{escape(selected_dimension_text)}</p></section>
+<section class="dimensions">{"".join(dimension_cards)}</section><section class="panel"><h2>{copy["gap"]}</h2><p>{escape(report["migration_gap_description"])}</p></section>
+{f'<section class="panel"><h2>{copy["limitations"]}</h2><ul>{limitation_html}</ul></section>' if limitation_html else ""}
+<section><h2>{copy["case_results"]}</h2>{"".join(case_html)}</section><section class="panel meta"><span>{copy["model"]}{copy["separator"]}{escape(model["id"])}</span><span>Codex{copy["separator"]}{escape(model["codex_version"])}</span><span>AgentKit CLI{copy["separator"]}{escape(model["agentkit_cli_version"])}</span><span>{copy["artifact"]}{copy["separator"]}<code>{escape(report["artifact_sha256"])}</code></span></section>
 </main></body></html>"""
 
     @staticmethod

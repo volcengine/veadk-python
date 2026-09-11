@@ -68,6 +68,13 @@ def test_dimension_registry_and_presets_are_stable() -> None:
         dimensions=["safety_refusal_fidelity", "semantic_fidelity"],
     )
     assert custom.dimensions == ["semantic_fidelity", "safety_refusal_fidelity"]
+    assert MigrationEvaluationConfig(enabled=True).locale == "zh-CN"
+    assert MigrationEvaluationConfig(enabled=True, locale="en-US").locale == "en-US"
+
+
+def test_evaluation_locale_rejects_unsupported_languages() -> None:
+    with pytest.raises(ValidationError, match="locale"):
+        MigrationEvaluationConfig(enabled=True, locale="ja-JP")
 
 
 def test_custom_dimensions_require_at_least_one_and_reject_duplicates() -> None:

@@ -467,6 +467,10 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
   );
   assert.match(
     source,
+    /evaluation: evaluationDraft\.enabled[\s\S]*?locale: resolveSupportedLocale\(locale\) \?\? DEFAULT_LOCALE/,
+  );
+  assert.match(
+    source,
     /model\.available \|\| model\.lifecycleStatus === "Retiring"/,
   );
   assert.match(source, /!unsupportedModelIds\.has\(model\.id\)/);

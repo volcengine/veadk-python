@@ -660,7 +660,7 @@ def test_evaluation_enabled_task_uses_two_hour_session_and_locked_config() -> No
         CreateMigrationTaskBody.model_validate(
             {
                 "sourceFileName": "support-agent.zip",
-                "evaluation": {"enabled": True},
+                "evaluation": {"enabled": True, "locale": "en-US"},
             }
         ),
         "owner-1",
@@ -681,6 +681,7 @@ def test_evaluation_enabled_task_uses_two_hour_session_and_locked_config() -> No
             "output_contract",
             "workflow_tool_fidelity",
         ],
+        "locale": "en-US",
     }
     assert request["session_ttl_seconds"] == 7200
     assert request["evaluation"] == created["evaluation"]

@@ -3403,6 +3403,7 @@ def _run_frontend_server(
         runner=SandboxMigrationEvaluationRunner(
             migration_gateway,
             resolve_credentials=_resolve_ve_credentials,
+            provider=provider,
         ),
     )
     if not is_vestack_deployment:

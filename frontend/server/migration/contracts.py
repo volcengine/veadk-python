@@ -208,14 +208,16 @@ def validate_migration_request(
             raise MigrationContractError("invalid evaluation config")
         _exact_keys(
             evaluation,
-            required={"enabled", "preset", "dimensions"},
+            required={"enabled", "preset", "dimensions", "locale"},
         )
         enabled = evaluation.get("enabled")
         preset = evaluation.get("preset")
         dimensions = evaluation.get("dimensions")
+        locale = evaluation.get("locale")
         if (
             enabled is not True
             or preset not in {"standard", "custom"}
+            or locale not in {"zh-CN", "en-US"}
             or not isinstance(dimensions, list)
             or not dimensions
             or len(set(str(item) for item in dimensions)) != len(dimensions)

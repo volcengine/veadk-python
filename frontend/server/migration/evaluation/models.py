@@ -48,6 +48,7 @@ class MigrationEvaluationConfig(BaseModel):
     enabled: bool = False
     preset: Literal["standard", "custom"] = "standard"
     dimensions: list[EvaluationDimensionId] = Field(default_factory=list)
+    locale: Literal["zh-CN", "en-US"] = "zh-CN"
 
     model_config = {"populate_by_name": True, "extra": "forbid"}
 

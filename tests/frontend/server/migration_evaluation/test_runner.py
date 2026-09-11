@@ -40,6 +40,11 @@ from frontend.server.migration.service import MIGRATION_ROOT, MigrationError
 TASK_ID = "migration-v1-" + "1" * 32
 DATASET_SHA256 = "a" * 64
 ARTIFACT_SHA256 = "b" * 64
+SHARED_RUNTIME_ROLE = "AgentKit_Runtime_Default_ServiceRole"
+
+
+def _shared_runtime_role(**_kwargs: object) -> str:
+    return SHARED_RUNTIME_ROLE
 
 
 class FakeGateway:
@@ -137,9 +142,17 @@ def test_uploaded_runner_source_compiles_and_has_bounded_security_contracts() ->
 
 def test_start_uploads_non_secret_assets_and_background_command() -> None:
     gateway = FakeGateway()
+    role_calls: list[dict[str, object]] = []
+
+    def resolve_runtime_role(**kwargs: object) -> str:
+        role_calls.append(kwargs)
+        return SHARED_RUNTIME_ROLE
+
     runner = SandboxMigrationEvaluationRunner(  # type: ignore[arg-type]
         gateway,
         resolve_credentials=lambda: ("cloud-ak", "cloud-sk", "cloud-token"),
+        provider="byteplus",
+        resolve_runtime_role=resolve_runtime_role,
     )
 
     runner.start(
@@ -156,6 +169,7 @@ def test_start_uploads_non_secret_assets_and_background_command() -> None:
     config_path = f"{EVALUATION_ROOT}/control/runner-1.json"
     config = json.loads(gateway.files[config_path])
     assert config["runtime_name"] == "migration-eval-111111111111-a1"
+    assert config["runtime_role_name"] == SHARED_RUNTIME_ROLE
     assert config["artifact_sha256"] == ARTIFACT_SHA256
     assert config["thread_path"].endswith("/attempt-1/thread.json")
     assert config["execution_results_path"].endswith(
@@ -165,6 +179,14 @@ def test_start_uploads_non_secret_assets_and_background_command() -> None:
     assert config["remote_write_not_after"] == 1_788_777_600.0
     assert config["agentkit_config_protocol"] == "legacy"
     assert config["agentkit_config"]["common"]["agent_name"] == "migrated-agent"
+    assert role_calls == [
+        {
+            "access_key": "cloud-ak",
+            "secret_key": "cloud-sk",
+            "session_token": "cloud-token",
+            "provider": "byteplus",
+        }
+    ]
     assert "secret-value" not in json.dumps(config)
     assert "cloud-ak" not in json.dumps(config)
     assert [operation for operation, _, _ in gateway.commands] == [
@@ -178,6 +200,32 @@ def test_start_uploads_non_secret_assets_and_background_command() -> None:
     assert all("cloud-sk" not in command for _, command, _ in gateway.commands)
 
 
+def test_start_localizes_english_judge_configuration() -> None:
+    gateway = FakeGateway()
+    runner = SandboxMigrationEvaluationRunner(  # type: ignore[arg-type]
+        gateway,
+        resolve_credentials=lambda: ("cloud-ak", "cloud-sk", None),
+        resolve_runtime_role=_shared_runtime_role,
+    )
+
+    runner.start(
+        _session(),
+        task_id=TASK_ID,
+        attempt=1,
+        runtime_name="migration-eval-111111111111-a1",
+        dimensions=["semantic_fidelity"],
+        locale="en-US",
+        dataset_sha256=DATASET_SHA256,
+        artifact_sha256=ARTIFACT_SHA256,
+        secret_path=None,
+    )
+
+    config = json.loads(gateway.files[f"{EVALUATION_ROOT}/control/runner-1.json"])
+    assert config["locale"] == "en-US"
+    assert config["dimension_definitions"][0]["name"] == ("Semantic and task fidelity")
+    assert "verifiable evidence" in config["dimension_definitions"][0]["scoring_rule"]
+
+
 def test_start_prefers_root_agentkit_yaml_when_both_protocols_exist() -> None:
     gateway = FakeGateway()
     gateway.files[f"{MIGRATION_ROOT}/output/veadk/.agentkit/agentkit.yaml"] = (
@@ -186,6 +234,7 @@ def test_start_prefers_root_agentkit_yaml_when_both_protocols_exist() -> None:
     runner = SandboxMigrationEvaluationRunner(  # type: ignore[arg-type]
         gateway,
         resolve_credentials=lambda: ("cloud-ak", "cloud-sk", None),
+        resolve_runtime_role=_shared_runtime_role,
     )
 
     runner.start(
@@ -216,6 +265,7 @@ def test_start_uses_structured_protocol_when_only_dot_agentkit_yaml_exists() -> 
     runner = SandboxMigrationEvaluationRunner(  # type: ignore[arg-type]
         gateway,
         resolve_credentials=lambda: ("cloud-ak", "cloud-sk", None),
+        resolve_runtime_role=_shared_runtime_role,
     )
 
     runner.start(
@@ -302,6 +352,34 @@ def test_missing_cloud_credentials_fails_before_remote_start() -> None:
     assert gateway.commands == []
 
 
+def test_runtime_role_failure_stops_before_remote_start() -> None:
+    gateway = FakeGateway()
+
+    def unavailable_role(**_kwargs: object) -> str:
+        raise RuntimeError("Exceeded RolesPerAccount quota, quota: 1000")
+
+    runner = SandboxMigrationEvaluationRunner(  # type: ignore[arg-type]
+        gateway,
+        resolve_credentials=lambda: ("cloud-ak", "cloud-sk", None),
+        resolve_runtime_role=unavailable_role,
+    )
+
+    with pytest.raises(MigrationError) as raised:
+        runner.start(
+            _session(),
+            task_id=TASK_ID,
+            attempt=1,
+            runtime_name="migration-eval-111111111111-a1",
+            dimensions=["semantic_fidelity"],
+            dataset_sha256=DATASET_SHA256,
+            artifact_sha256=ARTIFACT_SHA256,
+            secret_path=None,
+        )
+
+    assert raised.value.code == "MIGRATION_EVALUATION_RUNTIME_ROLE_UNAVAILABLE"
+    assert gateway.commands == []
+
+
 def test_judge_schema_requires_nullable_zero_to_one_raw_scores_and_evidence() -> None:
     schema = judge_schema()
     dimension = schema["properties"]["cases"]["items"]["properties"][  # type: ignore[index]
@@ -358,6 +436,54 @@ def _judge_config(tmp_path: Path) -> dict[str, Any]:
         "diagnostic_path": str(tmp_path / "diagnostics.log"),
         "status_path": str(tmp_path / "status.json"),
     }
+
+
+def test_english_judge_prompt_and_aggregate_text_are_localized(
+    tmp_path: Path,
+) -> None:
+    namespace = _runner_namespace()
+    config = _judge_config(tmp_path)
+    config["locale"] = "en-US"
+    config["dimension_definitions"][0].update(
+        name="Semantic and task fidelity",
+        definition="Preserves intent and task completion.",
+        scoring_rule="Use only verifiable evidence.",
+    )
+    prompts: list[str] = []
+
+    def run_capped(_args: list[str], **kwargs: object) -> tuple[int, bytes, int]:
+        prompts.append(str(kwargs["input_text"]))
+        events = _judge_events("thread-en", ["case-1"])
+        return 0, events, len(events)
+
+    namespace["run_capped"] = run_capped
+    observations = {"case-1": _observation("hello")}
+    judged = namespace["judge_batch"](
+        config,
+        0,
+        [_case("case-1")],
+        observations,
+        None,
+        {},
+    )
+    report = namespace["build_report"](
+        config,
+        [_case("case-1")],
+        observations,
+        judged,
+        {
+            "id": "model",
+            "codex_version": "codex",
+            "agentkit_cli_version": "agentkit",
+        },
+        None,
+    )
+
+    assert "Write all reason and evidence text in English." in prompts[0]
+    assert report["summary"]["dimensions"][0]["reason"].startswith("Aggregated from 1")
+    assert report["migration_gap_description"] == (
+        "Migration differences and limitations are recorded by dimension in the case evidence."
+    )
 
 
 def _case(case_id: str) -> dict[str, object]:
@@ -435,6 +561,25 @@ def test_credential_file_requires_mode_600_and_is_one_shot(tmp_path: Path) -> No
     assert not secret.exists()
 
 
+def test_legacy_config_uses_shared_runtime_role(tmp_path: Path) -> None:
+    namespace = _runner_namespace()
+    config = {
+        "agentkit_config_protocol": "legacy",
+        "agentkit_config": {
+            "common": {"agent_name": "demo", "launch_type": "cloud"},
+            "launch_types": {"cloud": {"region": "cn-beijing"}},
+        },
+        "project_path": str(tmp_path / "project"),
+        "runtime_name": "migration-eval-test-a1",
+        "runtime_role_name": SHARED_RUNTIME_ROLE,
+    }
+
+    deployment = namespace["temporary_config"](config, {}, tmp_path / "work")
+    staged = json.loads(Path(deployment["config_file"]).read_text(encoding="utf-8"))
+
+    assert staged["launch_types"]["cloud"]["runtime_role_name"] == (SHARED_RUNTIME_ROLE)
+
+
 def test_structured_config_is_staged_with_runtime_name_and_environment_refs(
     tmp_path: Path,
 ) -> None:
@@ -462,6 +607,7 @@ def test_structured_config_is_staged_with_runtime_name_and_environment_refs(
         "agentkit_config": original,
         "project_path": str(project),
         "runtime_name": "migration-eval-test-a2",
+        "runtime_role_name": SHARED_RUNTIME_ROLE,
     }
 
     deployment = namespace["temporary_config"](
@@ -481,6 +627,7 @@ def test_structured_config_is_staged_with_runtime_name_and_environment_refs(
         "config_file": staged_project / ".agentkit" / "agentkit.yaml",
     }
     assert staged["name"] == "migration-eval-test-a2"
+    assert staged["role_name"] == SHARED_RUNTIME_ROLE
     assert staged["envs"]["MODEL_AGENT_API_KEY"] == "${MODEL_AGENT_API_KEY}"
     assert staged["envs"]["OPTIONAL_VALUE"] == "${OPTIONAL_VALUE}"
     assert "model-secret" not in json.dumps(staged)
@@ -802,6 +949,7 @@ def test_runner_main_completes_with_python_stdlib_and_fake_cli_boundaries(
         "task_id": TASK_ID,
         "attempt": 1,
         "runtime_name": "migration-eval-111111111111-a1",
+        "runtime_role_name": SHARED_RUNTIME_ROLE,
         "dimensions": ["semantic_fidelity"],
         "dimension_definitions": [
             {
@@ -930,7 +1078,7 @@ def test_judge_batches_resume_one_bound_thread_and_reuse_cached_batch(
     batch_record = json.loads(
         (Path(config["batch_root_path"]) / "batch-001-001.json").read_text()
     )
-    assert batch_record["prompt_version"] == 2
+    assert batch_record["prompt_version"] == 3
     assert batch_record["batch_start"] == 0
     assert batch_record["batch_end"] == 1
 
