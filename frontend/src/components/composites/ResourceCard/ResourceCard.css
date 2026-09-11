@@ -126,3 +126,12 @@
   height: 1px;
   transform: rotate(90deg);
 }
+
+.studio-resource-card { transition: background-color 180ms ease-out, box-shadow 180ms ease-out; }
+@media (hover: hover) {
+  .studio-resource-card:hover {
+    background-color: color-mix(in srgb, var(--studio-bg-panel, #111111) 94%, var(--studio-text-primary, #dbdee7) 6%);
+    box-shadow: inset 0 0 0 1px var(--studio-border-default, rgba(255, 255, 255, .2));
+  }
+}
+@media (prefers-reduced-motion: reduce) { .studio-resource-card { transition: none; } }

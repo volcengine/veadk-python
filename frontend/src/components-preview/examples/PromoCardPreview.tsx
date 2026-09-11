@@ -1,3 +1,4 @@
+import { ComponentApi } from "../api/ComponentApi";
 import { useId } from "react";
 import { PromoCard } from "../../components/composites/PromoCard";
 import "./PromoCardPreview.css";
@@ -10,6 +11,7 @@ export function PromoCardPreview() {
       <div className="promo-card-preview-example">
         <PromoCard />
       </div>
+    <ComponentApi names={["PromoCard"]} />
     </section>
   );
 }

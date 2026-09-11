@@ -1,3 +1,5 @@
+import { ScrollArea } from "../ScrollArea";
+import "../tabs-scroll.css";
 import { useId, useRef, useState, type KeyboardEvent } from "react";
 import "./UnderlineTabs.css";
 import { useTabIndicator } from "../useTabIndicator";
@@ -55,7 +57,7 @@ export function UnderlineTabs({
   }
 
   return (
-    <div ref={indicatorRef} role="tablist" aria-label={ariaLabel} className={`studio-underline-tabs ${className}`.trim()}>
+    <ScrollArea orientation="horizontal" hideScrollbar className="studio-tabs-scroll"><div ref={indicatorRef} role="tablist" aria-label={ariaLabel} className={`studio-underline-tabs ${className}`.trim()}>
       {items.map((item, index) => (
         <button
           key={item.value}
@@ -73,6 +75,6 @@ export function UnderlineTabs({
           <span className="studio-underline-tabs__label">{item.label}</span>
         </button>
       ))}
-    </div>
+    </div></ScrollArea>
   );
 }

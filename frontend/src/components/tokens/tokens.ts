@@ -13,7 +13,7 @@ export const studioTokens: readonly StudioToken[] = [
     "name": "--studio-bg-canvas",
     "label": "画布背景",
     "dark": "#101013",
-    "light": "#ffffff",
+    "light": "#f8f7fb",
     "category": "color"
   },
   {
@@ -34,21 +34,21 @@ export const studioTokens: readonly StudioToken[] = [
     "name": "--studio-bg-sidebar",
     "label": "侧栏背景",
     "dark": "#18181b",
-    "light": "#ffffff",
+    "light": "#f3f2f7",
     "category": "color"
   },
   {
     "name": "--studio-bg-track",
     "label": "分段控件轨道",
     "dark": "#0c0c0d",
-    "light": "#ffffff",
+    "light": "#f0eef5",
     "category": "color"
   },
   {
     "name": "--studio-bg-secondary",
     "label": "次级按钮背景",
     "dark": "#262626",
-    "light": "#ffffff",
+    "light": "#f0eef5",
     "category": "color"
   },
   {
@@ -111,42 +111,42 @@ export const studioTokens: readonly StudioToken[] = [
     "name": "--studio-border-default",
     "label": "常规边框",
     "dark": "rgba(255, 255, 255, 0.2)",
-    "light": "rgba(36, 36, 43, 0.18)",
+    "light": "rgba(91, 80, 119, 0.18)",
     "category": "color"
   },
   {
     "name": "--studio-border-subtle",
     "label": "弱边框",
     "dark": "rgba(219, 222, 231, 0.15)",
-    "light": "rgba(36, 36, 43, 0.12)",
+    "light": "rgba(91, 80, 119, 0.12)",
     "category": "color"
   },
   {
     "name": "--studio-border-input",
     "label": "输入框边框",
     "dark": "rgba(219, 222, 231, 0.21)",
-    "light": "rgba(36, 36, 43, 0.2)",
+    "light": "rgba(91, 80, 119, 0.2)",
     "category": "color"
   },
   {
     "name": "--studio-fill-subtle",
     "label": "弱填充",
     "dark": "rgba(219, 222, 231, 0.05)",
-    "light": "rgba(36, 36, 43, 0.04)",
+    "light": "rgba(116, 99, 151, 0.04)",
     "category": "color"
   },
   {
     "name": "--studio-fill-hover",
     "label": "悬停填充",
     "dark": "rgba(255, 255, 255, 0.06)",
-    "light": "rgba(36, 36, 43, 0.06)",
+    "light": "rgba(116, 99, 151, 0.07)",
     "category": "color"
   },
   {
     "name": "--studio-fill-selected",
     "label": "选中填充",
     "dark": "rgba(170, 163, 225, 0.1)",
-    "light": "rgba(111, 102, 165, 0.12)",
+    "light": "rgba(116, 99, 151, 0.12)",
     "category": "color"
   },
   {

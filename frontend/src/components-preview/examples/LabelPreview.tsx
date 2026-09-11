@@ -1,3 +1,4 @@
+import { ComponentApi } from "../api/ComponentApi";
 import githubIcon from "../../components/primitives/Label/assets/github.svg";
 import { useId, useState } from "react";
 import { Label, LabelAddIcon } from "../../components/primitives/Label";
@@ -33,6 +34,7 @@ export function LabelPreview() {
           <Label className="label-preview-status" variant="status">Control B</Label>
         </section>
       </div>
+    <ComponentApi names={["Label"]} />
     </section>
   );
 }

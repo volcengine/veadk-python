@@ -1,3 +1,5 @@
+import { ScrollArea } from "../ScrollArea";
+import "../tabs-scroll.css";
 import { useId, useRef, type KeyboardEvent } from "react";
 import "./PillTabs.css";
 import { useTabIndicator } from "../useTabIndicator";
@@ -40,7 +42,7 @@ export function PillTabs({ items, value, onValueChange, className, id, "aria-lab
   }
 
   return (
-    <div ref={indicatorRef} className={["studio-pill-tabs", className].filter(Boolean).join(" ")} role="tablist" aria-label={label} id={tabListId}>
+    <ScrollArea orientation="horizontal" hideScrollbar className="studio-tabs-scroll"><div ref={indicatorRef} className={["studio-pill-tabs", className].filter(Boolean).join(" ")} role="tablist" aria-label={label} id={tabListId}>
       {items.map((item, index) => (
         <button
           key={item.value}
@@ -58,6 +60,6 @@ export function PillTabs({ items, value, onValueChange, className, id, "aria-lab
           {item.label}
         </button>
       ))}
-    </div>
+    </div></ScrollArea>
   );
 }

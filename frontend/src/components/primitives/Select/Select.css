@@ -1,4 +1,4 @@
-/* Figma 632:252869: closed select; native menu until an expanded design is supplied */
+/* Figma 632:252869: closed select; custom popup follows the component library theme */
 .studio-select {
   position: relative;
   box-sizing: border-box;
@@ -35,7 +35,6 @@
   position: fixed;
   z-index: 1000;
   box-sizing: border-box;
-  overflow-y: auto;
   padding: 4px;
   border: 1px solid var(--studio-border-subtle, rgba(219,222,231,.15));
   border-radius: 8px;
@@ -50,7 +49,7 @@
   animation: studio-select-open var(--studio-motion-duration-normal, 160ms) var(--studio-motion-easing-standard, ease-out);
 }
 .studio-select-menu__option {
-  display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 7px 8px; border-radius: 6px; cursor: pointer;
+  display: flex; align-items: center; gap: 8px; box-sizing: border-box; height: 28px; min-height: 28px; flex-shrink: 0; padding: 3px 8px; border-radius: 6px; cursor: pointer;
   transition: background-color var(--studio-motion-duration-fast, 140ms) ease;
 }
 .studio-select-menu__option[data-active="true"] { background: var(--studio-fill-hover, rgba(255,255,255,.06)); }
@@ -59,3 +58,5 @@
 .studio-select-menu__check { flex: 0 0 16px; width: 16px; height: 16px; margin-left: auto; }
 @keyframes studio-select-open { from { opacity: 0; transform: translateY(-4px) scaleY(.96); } to { opacity: 1; transform: translateY(0) scaleY(1); } }
 @media (prefers-reduced-motion: reduce) { .studio-select-menu { animation: none; } .studio-select__arrow, .studio-select-menu__option { transition: none; } }
+
+.studio-select-menu__items { display: flex; flex-direction: column; gap: 4px; }

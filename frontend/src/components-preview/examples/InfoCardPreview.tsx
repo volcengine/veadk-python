@@ -1,3 +1,4 @@
+import { ComponentApi } from "../api/ComponentApi";
 import { InfoCard, InfoCardBody } from "../../components/composites/InfoCard";
 
 export function InfoCardPreview() {
@@ -6,5 +7,6 @@ export function InfoCardPreview() {
     <InfoCard title="TOTAL LEADS">
       <InfoCardBody value="12,480" description="+12% vs last quarter" />
     </InfoCard>
-  </section>;
+  <ComponentApi names={["InfoCard", "InfoCardTitle", "InfoCardBody"]} />
+    </section>;
 }

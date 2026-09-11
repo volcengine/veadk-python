@@ -1,3 +1,4 @@
+import { ComponentApi } from "../api/ComponentApi";
 import { useId, useState } from "react";
 import { PillTabs } from "../../components/primitives/PillTabs";
 import "./PillTabsPreview.css";
@@ -25,6 +26,7 @@ export function PillTabsPreview() {
       {items.map((item, index) => (
         <div key={item.value} id={item.panelId} role="tabpanel" aria-labelledby={`${id}-tab-${index}`} hidden={value !== item.value} />
       ))}
+    <ComponentApi names={["PillTabs"]} />
     </section>
   );
 }

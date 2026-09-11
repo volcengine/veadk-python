@@ -43,3 +43,11 @@
 }
 .studio-info-card__value { font-size: 24px; line-height: 36px; letter-spacing: -1.44px; }
 .studio-info-card__description { font-size: 12px; line-height: 16px; color: var(--studio-text-secondary, rgba(219, 222, 231, .6)); }
+
+.studio-info-card { transition: background-color 180ms ease-out, box-shadow 180ms ease-out; }
+@media (hover: hover) {
+  .studio-info-card:hover {
+    background-color: color-mix(in srgb, var(--studio-surface-metric, rgba(32, 33, 36, .39)) 94%, var(--studio-text-primary, #dbdee7) 6%);
+  }
+}
+@media (prefers-reduced-motion: reduce) { .studio-info-card { transition: none; } }

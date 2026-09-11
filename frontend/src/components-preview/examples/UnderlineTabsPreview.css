@@ -6,8 +6,4 @@
   width: 100%;
 }
 
-.underline-tabs-preview-example .studio-underline-tabs__tab:nth-child(1) { width: 62px; }
-.underline-tabs-preview-example .studio-underline-tabs__tab:nth-child(2) { width: 87px; }
-.underline-tabs-preview-example .studio-underline-tabs__tab:nth-child(3) { width: 69px; }
-.underline-tabs-preview-example .studio-underline-tabs__tab:nth-child(4) { width: 66px; }
-.underline-tabs-preview-example .studio-underline-tabs__tab:nth-child(5) { width: 51px; }
+.underline-tabs-preview-overflow-title { margin: 24px 0 16px; font-size: 14px; line-height: 22px; font-weight: 400; }

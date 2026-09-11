@@ -1,3 +1,4 @@
+import { ComponentApi } from "../api/ComponentApi";
 import { Item } from "../../components/composites/Item";
 
 export function ItemPreview() {
@@ -8,6 +9,7 @@ export function ItemPreview() {
       <div style={{ marginTop: 32 }}>
         <Item variant="compact" title="Upload code" description="View and one-click deploy" />
       </div>
+    <ComponentApi names={["Item"]} />
     </section>
   );
 }

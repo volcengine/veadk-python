@@ -1,5 +1,5 @@
+import { ComponentApi } from "../api/ComponentApi";
 import { Dropdown } from "../../components/primitives/Dropdown";
-import { Divider } from "../../components/primitives/Divider";
 
 export function DropdownPreview() {
   return <section aria-labelledby="dropdown-preview-title">
@@ -7,6 +7,6 @@ export function DropdownPreview() {
     <Dropdown label="Execution 8steps 7.2s">
       <div style={{ height: 80 }} />
     </Dropdown>
-    <Divider />
-  </section>;
+  <ComponentApi names={["Dropdown"]} />
+    </section>;
 }

@@ -1,5 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, useImperativeHandle, type ComponentProps, type ReactNode, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
+import { ScrollArea } from "../ScrollArea";
 import downIcon from "./assets/down.svg";
 import "./Select.css";
 
@@ -71,9 +72,9 @@ export function Select({ options, value, defaultValue, onChange, className = "",
       if (!rect) return;
       const below = window.innerHeight - rect.bottom - 12;
       const above = rect.top - 12;
-      const height = Math.min(240, options.length * 36 + 8);
+      const height = Math.min(240, options.length * 28 + Math.max(0, options.length - 1) * 4 + 10);
       const flip = below < height && above > below;
-      const maxHeight = Math.max(36, Math.min(240, flip ? above : below));
+      const maxHeight = Math.max(28, Math.min(240, flip ? above : below));
       setPosition({ left: Math.max(8, Math.min(rect.left, window.innerWidth - rect.width - 8)), top: flip ? rect.top - Math.min(height, maxHeight) - 6 : rect.bottom + 6, width: rect.width, maxHeight });
     }
     place();
@@ -108,12 +109,12 @@ export function Select({ options, value, defaultValue, onChange, className = "",
     }}>
       {options.map(option => <option key={option.value} value={option.value} disabled={option.disabled}>{option.label}</option>)}
     </select>
-    {open && createPortal(<div ref={menu} id={listId} role="listbox" aria-label={ariaLabel ?? "选项"} aria-labelledby={labelledBy} className="studio-select-menu" style={position}>
+    {open && createPortal(<ScrollArea ref={menu} id={listId} role="listbox" aria-label={ariaLabel ?? "选项"} aria-labelledby={labelledBy} className="studio-select-menu" contentClassName="studio-select-menu__items" style={position}>
       {options.map((option, index) => <div key={option.value} id={`${uid}-option-${index}`} role="option" aria-selected={option.value === currentValue} aria-disabled={option.disabled || undefined} data-active={index === active} data-index={index} className="studio-select-menu__option" onPointerMove={() => !option.disabled && setActive(index)} onMouseDown={event => event.preventDefault()} onClick={() => choose(index)}>
         {option.icon && <span className="studio-select__icon" aria-hidden="true">{option.icon}</span>}
         <span className="studio-select__label">{option.label}</span>
         {option.value === currentValue && <svg className="studio-select-menu__check" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m3 8 3 3 7-7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></svg>}
       </div>)}
-    </div>, document.body)}
+    </ScrollArea>, document.body)}
   </span>;
 }

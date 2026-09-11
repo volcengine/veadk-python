@@ -15,3 +15,7 @@ export * from "./Select";
 export * from "./GlassTabs";
 export * from "./Divider";
 export * from "./Dropdown";
+
+export * from "./ScrollArea";
+
+export * from "./Table";

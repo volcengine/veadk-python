@@ -27,7 +27,7 @@
   align-items: flex-start;
   flex: 0 0 auto;
   box-sizing: border-box;
-  max-width: 200px;
+  white-space: nowrap;
   height: 28px;
   margin: 0;
   padding: 0;
@@ -77,5 +77,5 @@
 .studio-underline-tabs__label {
   min-width: 0;
   height: 100%;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
 }

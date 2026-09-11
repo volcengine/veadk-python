@@ -1,3 +1,4 @@
+import { ComponentApi } from "../api/ComponentApi";
 import { DetailPageLayout, DetailPageSidebar } from "../../components/layouts/DetailPageLayout";
 import { Header } from "../../components/composites/Header";
 import { InfoCard, InfoCardBody } from "../../components/composites/InfoCard";
@@ -33,5 +34,6 @@ export function DetailPageLayoutPreview() {
         <section aria-labelledby="detail-performance-title"><h2 className="detail-page-preview__section-title" id="detail-performance-title">PERFORMANCE OVERVIEW</h2><div className="detail-page-preview__performance"><DetailPerformanceChart /><article className="detail-page-preview__performance-card"><div className="detail-page-preview__chart-heading"><h3>Title</h3></div></article></div></section>
       </div>
     </DetailPageLayout>
-  </section>;
+  <ComponentApi names={["DetailPageLayout", "DetailPageSidebar"]} />
+    </section>;
 }

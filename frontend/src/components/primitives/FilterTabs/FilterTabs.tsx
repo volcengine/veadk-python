@@ -1,3 +1,5 @@
+import { ScrollArea } from "../ScrollArea";
+import "../tabs-scroll.css";
 import { useRef, type KeyboardEvent } from "react";
 import "./FilterTabs.css";
 
@@ -27,7 +29,7 @@ export function FilterTabs({ options, value, onValueChange, className = "", "ari
     refs.current[next]?.focus();
   }
   return (
-    <div className={`studio-filter-tabs ${className}`.trim()} role="radiogroup" aria-label={label}>
+    <ScrollArea orientation="horizontal" hideScrollbar className="studio-tabs-scroll"><div className={`studio-filter-tabs ${className}`.trim()} role="radiogroup" aria-label={label}>
       {options.map((option, index) => (
         <button key={option.value} ref={(element) => { refs.current[index] = element; }}
           type="button" role="radio" aria-checked={index === selected} tabIndex={index === selected ? 0 : -1}
@@ -35,6 +37,6 @@ export function FilterTabs({ options, value, onValueChange, className = "", "ari
           {option.label}
         </button>
       ))}
-    </div>
+    </div></ScrollArea>
   );
 }

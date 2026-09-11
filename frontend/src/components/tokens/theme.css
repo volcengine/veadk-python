@@ -29,12 +29,12 @@
 /* Light palette uses the same semantic roles and component geometry */
 [data-theme="light"] {
   color-scheme: light;
-  --studio-bg-canvas: #ffffff;
+  --studio-bg-canvas: #f8f7fb;
   --studio-bg-panel: #ffffff;
   --studio-bg-elevated: #ffffff;
-  --studio-bg-sidebar: #ffffff;
-  --studio-bg-track: #ffffff;
-  --studio-bg-secondary: #ffffff;
+  --studio-bg-sidebar: #f3f2f7;
+  --studio-bg-track: #f0eef5;
+  --studio-bg-secondary: #f0eef5;
   --studio-bg-promo: #ffffff;
   --studio-text-primary: #24242b;
   --studio-text-secondary: rgba(36, 36, 43, 0.65);
@@ -43,12 +43,12 @@
   --studio-text-subtle: #666471;
   --studio-action-primary-bg: #202026;
   --studio-action-primary-text: #ffffff;
-  --studio-border-default: rgba(36, 36, 43, 0.18);
-  --studio-border-subtle: rgba(36, 36, 43, 0.12);
-  --studio-border-input: rgba(36, 36, 43, 0.2);
-  --studio-fill-subtle: rgba(36, 36, 43, 0.04);
-  --studio-fill-hover: rgba(36, 36, 43, 0.06);
-  --studio-fill-selected: rgba(111, 102, 165, 0.12);
+  --studio-border-default: rgba(91, 80, 119, 0.18);
+  --studio-border-subtle: rgba(91, 80, 119, 0.12);
+  --studio-border-input: rgba(91, 80, 119, 0.2);
+  --studio-fill-subtle: rgba(116, 99, 151, 0.04);
+  --studio-fill-hover: rgba(116, 99, 151, 0.07);
+  --studio-fill-selected: rgba(116, 99, 151, 0.12);
   --studio-focus-ring: #47414f;
   --studio-warning: #a74600;
 }

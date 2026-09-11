@@ -1,3 +1,4 @@
+import { ComponentApi } from "../api/ComponentApi";
 import { PromptInput, SingleLinePromptInput } from "../../components/ai-app/PromptInput";
 
 export function PromptInputPreview() {
@@ -8,6 +9,7 @@ export function PromptInputPreview() {
       <div style={{ marginTop: 32 }}>
         <SingleLinePromptInput aria-label="Single line prompt" />
       </div>
+    <ComponentApi names={["PromptInput", "SingleLinePromptInput"]} />
     </section>
   );
 }

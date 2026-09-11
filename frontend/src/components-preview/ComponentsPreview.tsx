@@ -1,3 +1,7 @@
+import { TablePreview } from "./examples/TablePreview";
+import { LoadMoreAreaPreview } from "./examples/LoadMoreAreaPreview";
+import { ScrollArea } from "../components/primitives/ScrollArea";
+import { ScrollAreaPreview } from "./examples/ScrollAreaPreview";
 import { DividerPreview } from "./examples/DividerPreview";
 import { DropdownPreview } from "./examples/DropdownPreview";
 import { PromptInputPreview } from "./examples/PromptInputPreview";
@@ -7,6 +11,9 @@ import { applyPreviewTheme, readPreviewTheme, type PreviewTheme } from "./theme"
 import "./components-preview.css";
 
 const examples = [
+  { id: "table", label: "Table", Preview: TablePreview, group: "primitives" },
+  { id: "load-more", label: "下拉加载", Preview: LoadMoreAreaPreview, group: "composites" },
+  { id: "scroll-area", label: "Scroll Area", Preview: ScrollAreaPreview, group: "primitives" },
   { id: "divider", label: "分割线", Preview: DividerPreview, group: "primitives" },
   { id: "dropdown", label: "Dropdown", Preview: DropdownPreview, group: "primitives" },
   { id: "prompt-input", label: "Prompt Input", Preview: PromptInputPreview, group: "ai-app" },
@@ -70,7 +77,7 @@ export function ComponentsPreview() {
 
   return (
     <div className="components-preview">
-      <aside className="components-preview-sidebar">
+      <ScrollArea role="complementary" aria-label="组件导航" className="components-preview-sidebar">
         <h1>Components Preview</h1>
         <div className="components-preview-theme" role="group" aria-label="外观模式">
           <button type="button" aria-pressed={theme === "dark"} onClick={() => changeTheme("dark")}>深色</button>
@@ -93,10 +100,10 @@ export function ComponentsPreview() {
             </section>
           ))}
         </nav>
-      </aside>
-      <main className="components-preview-canvas" aria-label={`${selected.label}预览`}>
+      </ScrollArea>
+      <ScrollArea role="main" className="components-preview-canvas" aria-label={`${selected.label}预览`}>
         <Preview key={selected.id} />
-      </main>
+      </ScrollArea>
     </div>
   );
 }

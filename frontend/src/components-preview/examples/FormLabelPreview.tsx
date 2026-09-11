@@ -1,3 +1,4 @@
+import { ComponentApi } from "../api/ComponentApi";
 import { FormLabel } from "../../components/primitives/FormLabel";
 
 import { FormLabelRow } from "../../components/composites/FormLabelRow";
@@ -9,5 +10,6 @@ export function FormLabelPreview() {
     <div style={{ marginTop: 32 }}>
       <FormLabelRow label="Knowledge base" />
     </div>
-  </section>;
+  <ComponentApi names={["FormLabel", "FormLabelRow"]} />
+    </section>;
 }

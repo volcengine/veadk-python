@@ -33,6 +33,7 @@
 }
 
 * { box-sizing: border-box; }
+html, body, #root { width: 100%; height: 100%; overflow: hidden; }
 body { margin: 0; }
 
 .components-preview {
@@ -78,7 +79,8 @@ body { margin: 0; }
   flex: 1;
   min-width: 0;
   min-height: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding: 32px;
   background: var(--studio-bg-canvas, #101013);
 }
@@ -86,7 +88,7 @@ body { margin: 0; }
 .components-preview-item {
   display: flex;
   align-items: center;
-  width: 224px;
+  width: 100%;
   height: 36px;
   margin: 0;
   padding: 7px 10px;

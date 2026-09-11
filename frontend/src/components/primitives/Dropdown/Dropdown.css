@@ -21,8 +21,8 @@
 .studio-dropdown__trigger > span { flex: none; white-space: nowrap; }
 .studio-dropdown__trigger:disabled { cursor: default; }
 .studio-dropdown__trigger:focus-visible { outline: 1px solid var(--studio-focus-ring); outline-offset: 2px; }
-.studio-dropdown__arrow { display: block; flex: none; opacity: .4; transition: transform 160ms ease; }
-.studio-dropdown[data-open="true"] .studio-dropdown__arrow { transform: rotate(180deg); }
+.studio-dropdown__arrow { display: block; flex: none; opacity: .4; transform: rotate(-90deg); transition: transform 160ms ease; }
+.studio-dropdown[data-open="true"] .studio-dropdown__arrow { transform: rotate(0deg); }
 .studio-dropdown__content { display: grid; grid-template-rows: 0fr; visibility: hidden; transition: grid-template-rows 160ms ease; }
 .studio-dropdown__inner { min-height: 0; overflow: hidden; }
 .studio-dropdown[data-open="true"] .studio-dropdown__content { grid-template-rows: 1fr; visibility: visible; }

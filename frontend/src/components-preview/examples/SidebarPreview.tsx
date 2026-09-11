@@ -1,3 +1,4 @@
+import { ComponentApi } from "../api/ComponentApi";
 import { SidebarAgentIcon, SidebarGroupTitle, SidebarItem } from "../../components/composites/Sidebar";
 import "./SidebarPreview.css";
 
@@ -16,6 +17,7 @@ export function SidebarPreview() {
           <SidebarItem icon={<SidebarAgentIcon />} data-state="hover">Agents</SidebarItem>
         </section>
       </div>
+    <ComponentApi names={["SidebarGroupTitle", "SidebarItem"]} />
     </section>
   );
 }

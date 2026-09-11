@@ -1,9 +1,11 @@
+import { componentApiPlugin } from "./scripts/componentApiPlugin";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [
     react(),
+    componentApiPlugin(),
     {
       name: "components-preview-entry",
       configureServer(server) {

@@ -9,3 +9,5 @@ export * from "./InfoCard";
 export * from "./Header";
 export * from "./PromoCard";
 export * from "./FormLabelRow";
+
+export * from "./LoadMoreArea";

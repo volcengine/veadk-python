@@ -1,3 +1,4 @@
+import { ComponentApi } from "../api/ComponentApi";
 import { useId, useState } from "react";
 import { FormField } from "../../components/composites/FormField";
 import { InputWithTailIcon } from "../../components/primitives/InputWithTailIcon";
@@ -38,6 +39,7 @@ export function FormFieldPreview() {
         <Textarea id={descriptionId} required />
       </FormField>
       <span className="form-field-preview-status" role="status">{copyStatus}</span>
+    <ComponentApi names={["FormField"]} />
     </section>
   );
 }

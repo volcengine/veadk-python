@@ -1,3 +1,4 @@
+import { ComponentApi } from "../api/ComponentApi";
 import { Header } from "../../components/composites/Header";
 import "./HeaderPreview.css";
 
@@ -11,6 +12,7 @@ export function HeaderPreview() {
           description="Parses multi-format docs, extracts key points and to-dos, and skips page-by-page reading."
         />
       </div>
+    <ComponentApi names={["Header"]} />
     </section>
   );
 }

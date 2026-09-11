@@ -9,6 +9,7 @@
   height: 68px;
   padding: 12px;
   border-radius: 12px;
+  cursor: pointer;
   background: var(--studio-surface-dashed, rgba(255, 255, 255, 0.03));
 }
 
@@ -59,4 +60,22 @@
   flex: 0 0 16px;
   width: 16px;
   height: 16px;
+}
+
+.studio-dashed-zone {
+  transition: background-color 180ms ease-out;
+}
+.studio-dashed-zone__border rect {
+  transition: stroke 180ms ease-out;
+}
+@media (hover: hover) {
+  .studio-dashed-zone:hover {
+    background-color: var(--studio-fill-hover, rgba(255, 255, 255, 0.06));
+  }
+  .studio-dashed-zone:hover .studio-dashed-zone__border rect {
+    stroke: var(--studio-border-default, rgba(255, 255, 255, 0.2));
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .studio-dashed-zone, .studio-dashed-zone__border rect { transition: none; }
 }

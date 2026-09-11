@@ -1,0 +1,16 @@
+.studio-table-scroll { width: 100%; max-width: 100%; }
+.studio-table { width: 100%; border-collapse: collapse; table-layout: fixed; color: var(--studio-text-primary); font: 400 13px/20px var(--studio-font-family-ui, "Century Gothic", sans-serif); }
+.studio-table caption { padding: 0 0 8px; text-align: left; color: var(--studio-text-secondary); font-size: 14px; line-height: 22px; }
+.studio-table th, .studio-table td { height: 34px; padding: 7px 10px; border-bottom: .5px solid var(--studio-fill-subtle); vertical-align: middle; overflow-wrap: anywhere; }
+.studio-table th { color: var(--studio-text-tertiary); font-weight: 400; }
+.studio-table tbody tr { transition: background-color 160ms ease-out; }
+@media (hover: hover) { .studio-table tbody tr:hover { background: var(--studio-fill-hover); } }
+.studio-table .studio-table__empty { height: 102px; text-align: center; color: var(--studio-text-tertiary); }
+.studio-table-status { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.studio-table-status svg { flex: none; }
+.studio-table-status[data-status="pass"] { color: #8cdbab; }
+.studio-table-status[data-status="fail"] { color: #ed9696; }
+[data-theme="light"] .studio-table-status[data-status="pass"] { color: #287b49; }
+[data-theme="light"] .studio-table-status[data-status="fail"] { color: #b34444; }
+@media (prefers-reduced-motion: reduce) { .studio-table tbody tr { transition: none; } }
+.studio-table-scroll[data-orientation="horizontal"] > .studio-scroll-area__content { width: 100%; }

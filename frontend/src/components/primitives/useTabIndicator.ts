@@ -18,6 +18,14 @@ export function useTabIndicator() {
       root.style.setProperty("--tab-indicator-width", `${bounds.width}px`);
       root.dataset.indicatorReady = "true";
     };
+    const selected = root.querySelector<HTMLButtonElement>('[aria-selected="true"]');
+    const viewport = root.closest<HTMLElement>(".studio-tabs-scroll");
+    if (selected && viewport) {
+      const tab = selected.getBoundingClientRect();
+      const visible = viewport.getBoundingClientRect();
+      if (tab.left < visible.left) viewport.scrollLeft += tab.left - visible.left;
+      else if (tab.right > visible.right) viewport.scrollLeft += tab.right - visible.right;
+    }
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(root);

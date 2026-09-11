@@ -1,3 +1,4 @@
+import { ComponentApi } from "../api/ComponentApi";
 import { useState } from "react";
 import { ResourcePageLayout } from "../../components/layouts/ResourcePageLayout";
 import { ResourceCard } from "../../components/composites/ResourceCard";
@@ -64,6 +65,7 @@ export function ResourcePageLayoutPreview() {
   const [query, setQuery] = useState("");
   const matchingResources = resources.filter((resource) => `${resource.title} ${resource.description}`.toLowerCase().includes(query.toLowerCase()));
   return (
+    <div>
     <ResourcePageLayout
       title="Agents"
       banner={<ResourceBanner />}
@@ -84,5 +86,7 @@ export function ResourcePageLayoutPreview() {
         </div>
       ))}
     </ResourcePageLayout>
+    <ComponentApi names={["ResourcePageLayout"]} />
+    </div>
   );
 }

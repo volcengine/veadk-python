@@ -1,3 +1,4 @@
+import { ComponentApi } from "../api/ComponentApi";
 import { PillTag } from "../../components/primitives/PillTag";
 import lark from "../../components/primitives/PillTag/assets/lark.svg";
 import dingtalk from "../../components/primitives/PillTag/assets/dingtalk.svg";
@@ -13,5 +14,6 @@ export function PillTagPreview() {
       <PillTag style={{ width: 121.03899 }} icon={<img src={wecom} alt="" />}>WeCom</PillTag>
       <PillTag style={{ width: 100.03899 }} icon={<img src={slack} alt="" style={{ width: 13, height: 13 }} />}>Slack</PillTag>
     </div>
-  </section>;
+  <ComponentApi names={["PillTag"]} />
+    </section>;
 }

@@ -1,4 +1,5 @@
 import { useId, useState, type ReactNode, type CSSProperties } from "react";
+import { Divider } from "../Divider";
 import "./Dropdown.css";
 
 export interface DropdownProps {
@@ -28,7 +29,10 @@ export function Dropdown({ label, children, open, defaultOpen = false, onOpenCha
       </svg>
     </button>
     <div id={`${id}-content`} role="region" aria-labelledby={`${id}-trigger`} aria-hidden={!expanded} className="studio-dropdown__content">
-      <div className="studio-dropdown__inner">{children}</div>
+      <div className="studio-dropdown__inner">
+        <Divider style={{ width: "100%", marginTop: 1 }} />
+        {children}
+      </div>
     </div>
   </div>;
 }

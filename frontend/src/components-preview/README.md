@@ -32,7 +32,7 @@ Textarea 的 counter 为独立插槽，预览保留原稿计数
 
 ## 主题与动效
 
-侧栏可切换明暗模式，默认浅色并保存选择，浅色基础背景为纯白
+侧栏可切换明暗模式，默认浅色并保存选择，浅色页面背景为微紫灰 #f8f7fb，侧栏为 #f3f2f7，卡片与输入框保留白色
 主题定义位于 `components/tokens/theme.css` 和 `component-themes.css`，通过根元素 `data-theme` 切换
 深色以提供的 Figma 节点为基准，浅色为同风格适配，保留尺寸、字体和品牌资产
 按钮、Tabs、Switch、Checkbox 和 Select 带轻量交互过渡，并支持减少动态效果偏好
@@ -67,3 +67,18 @@ SingleLinePromptInput（779:366073）为 652 × 56，92px 圆角，无外框描�
 Dropdown（855:464896）为 394 × 28，支持点击及键盘激活展开/收起，160ms 过渡和减少动态效果偏好；children 为内容插槽，预览使用空白区域
 
 Label 增加可关闭变体（788:392375），GitHub 示例 97 × 26，16px 图标与关闭按钮，支持 onDismiss 回调
+
+## 参数表
+
+各组件示例下方提供参数、类型、必填项、默认值和说明，原生属性可展开查看
+参数类型与解构默认值由独立预览的 Vite 插件读取 TypeScript 源码，修改组件接口后自动刷新；说明优先使用参数文档注释
+Textarea 支持 maxHeight（数字单位 px 或 CSS 长度），限制外框拖动高度，示例为 240px；默认不限制，初始最小高度为 80px
+
+## 滚动、表格与加载
+
+ScrollArea 支持纵向、横向和双向滚动，可隐藏滚动条，通过 hasMore、onLoadMore 和 threshold 开启触底加载；包含加载状态、失败重试、重复请求保护和卸载取消
+LoadMoreArea 复用 ScrollArea 的加载逻辑，资源卡片示例初始 6 张、每批追加 6 张
+Tabs 复用横向 ScrollArea，隐藏滚动条，保持文字单行；网站侧栏和预览区仅纵向滚动
+Table 使用语义化表格，支持列宽、对齐、自定义单元格、空数据内容及窄容器横向滚动；TableStatus 提供 Pass / Fail 图标和文案
+浅色主题使用轻微带紫灰色相的中性色；Card、Item 和 DashedZone 提供轻量 hover 过渡
+原生滚动回弹由浏览器和操作系统控制，组件不模拟橡皮筋动画

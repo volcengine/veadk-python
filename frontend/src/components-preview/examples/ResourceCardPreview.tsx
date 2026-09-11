@@ -1,3 +1,4 @@
+import { ComponentApi } from "../api/ComponentApi";
 import { useId } from "react";
 import { ResourceCard } from "../../components/composites/ResourceCard";
 import "./ResourceCardPreview.css";
@@ -15,6 +16,7 @@ export function ResourceCardPreview() {
           updatedLabel="Updated 08-12"
         />
       </div>
+    <ComponentApi names={["ResourceCard"]} />
     </section>
   );
 }

@@ -1,0 +1,13 @@
+.scroll-area-preview {
+  width: 372px;
+  max-width: 100%;
+  padding: 4px;
+  border: 1px solid var(--studio-border-subtle);
+  border-radius: 8px;
+  background: var(--studio-bg-panel);
+  color: var(--studio-text-primary);
+}
+.scroll-area-preview__item { flex: none; padding: 3px 8px; font-size: 13px; line-height: 22px; border-radius: 6px; }
+.scroll-area-preview__item:hover { background: var(--studio-fill-hover); }
+
+.scroll-area-preview__items { display: flex; flex-direction: column; gap: 4px; }

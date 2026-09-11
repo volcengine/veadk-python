@@ -1,3 +1,5 @@
+import { ScrollArea } from "../ScrollArea";
+import "../tabs-scroll.css";
 import { useId, useRef, type KeyboardEvent } from "react";
 import type { PillTabsProps } from "../PillTabs";
 import { useTabIndicator } from "../useTabIndicator";
@@ -26,7 +28,7 @@ export function GlassTabs({ items, value, onValueChange, className = "", id, "ar
     tabRefs.current[next]?.focus();
   }
 
-  return <div ref={indicatorRef} className={`studio-glass-tabs ${className}`} role="tablist" aria-label={label} id={tabListId}>
+  return <ScrollArea orientation="horizontal" hideScrollbar className="studio-tabs-scroll"><div ref={indicatorRef} className={`studio-glass-tabs ${className}`} role="tablist" aria-label={label} id={tabListId}>
     {items.map((item, index) => <button
       key={item.value}
       ref={element => { tabRefs.current[index] = element; }}
@@ -40,5 +42,5 @@ export function GlassTabs({ items, value, onValueChange, className = "", id, "ar
       onClick={() => onValueChange(item.value)}
       onKeyDown={event => navigate(event, index)}
     ><span>{item.label}</span></button>)}
-  </div>;
+  </div></ScrollArea>;
 }

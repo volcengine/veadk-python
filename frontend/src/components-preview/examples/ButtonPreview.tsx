@@ -1,3 +1,4 @@
+import { ComponentApi } from "../api/ComponentApi";
 import { Button, PlusIcon, PlayIcon, BackIcon } from "../../components";
 import "./ButtonPreview.css";
 
@@ -23,6 +24,7 @@ export function ButtonPreview() {
           <Button variant="ghost" startIcon={<BackIcon />}>Back</Button>
         </section>
       </div>
+    <ComponentApi names={["Button"]} />
     </section>
   );
 }
