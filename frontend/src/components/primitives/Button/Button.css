@@ -21,13 +21,11 @@
   letter-spacing: 0;
   white-space: nowrap;
   cursor: pointer;
-  transition: background-color 140ms ease, color 140ms ease;
+  transition: background-color var(--studio-motion-duration-fast, 140ms) ease-out, color var(--studio-motion-duration-fast, 140ms) ease-out;
 }
 
 /* Figma: 632:252803 */
 .studio-button--secondary {
-  height: 36px;
-  padding-block: 7px;
   background: #262626;
   color: #ffffff;
 }
@@ -153,17 +151,17 @@
 }
 
 @media (hover: hover) {
-  .studio-button--primary:not(:disabled):hover { background: #e9e9ec; }
-  .studio-button--secondary:not(:disabled):hover { background: #323234; }
-  .studio-button--ghost:not(:disabled):hover { color: #dbdee7; }
+  .studio-button--primary:not(:disabled):hover { background: var(--studio-action-hover, #e9e9ec); }
+  .studio-button--secondary:not(:disabled):hover { background: var(--studio-secondary-hover, #323234); }
+  .studio-button--ghost:not(:disabled):hover { color: var(--studio-text-primary, #dbdee7); }
   .studio-button--icon-only.studio-button--ghost:not(:disabled):hover { background: var(--studio-fill-hover, rgba(255, 255, 255, .06)); }
   .studio-button--link:not(:disabled):hover .studio-button__label::after,
   .studio-button--link:not(:disabled):hover .studio-button__end-icon { opacity: 1; }
 }
 
-.studio-button--primary:not(:disabled):active { background: #dbdee7; }
-.studio-button--secondary:not(:disabled):active { background: #3b3b3e; }
-.studio-button--ghost:not(:disabled):active { color: #ffffff; }
+.studio-button--primary:not(:disabled):active { background: var(--studio-action-active, #dbdee7); }
+.studio-button--secondary:not(:disabled):active { background: var(--studio-secondary-active, #3b3b3e); }
+.studio-button--ghost:not(:disabled):active { color: var(--studio-text-strong, #ffffff); }
 .studio-button--icon-only.studio-button--ghost:not(:disabled):active { background: var(--studio-fill-selected, rgba(170, 163, 225, .1)); }
 
 @media (prefers-reduced-motion: reduce) {

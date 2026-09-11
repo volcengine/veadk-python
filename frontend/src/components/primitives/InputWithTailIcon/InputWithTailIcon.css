@@ -12,6 +12,7 @@
   border-radius: 8px;
   background: var(--studio-surface-input, #111112);
   box-shadow: 0 0 0 1px var(--studio-bg-elevated, #1c1c1e), 0 1px 1px #0000000d;
+  transition: background-color var(--studio-motion-duration-fast, 140ms) ease-out;
 }
 
 .studio-input-with-tail-icon__input {
@@ -49,6 +50,7 @@
   border-radius: 0;
   background: transparent;
   color: var(--studio-text-tertiary, #7a7880);
+  transition: color var(--studio-motion-duration-fast, 140ms) ease-out;
 }
 
 button.studio-input-with-tail-icon__icon:not(:disabled) {
@@ -59,4 +61,16 @@ button.studio-input-with-tail-icon__icon:not(:disabled) {
   display: block;
   width: 16px;
   height: 16px;
+}
+
+@media (hover: hover) {
+  .studio-input-with-tail-icon:has(> input:not(:disabled):not([readonly]):not([aria-invalid="true"])):hover {
+    background-color: color-mix(in srgb, var(--studio-surface-input, #111112) 96%, var(--studio-text-primary, #dbdee7) 4%);
+  }
+  button.studio-input-with-tail-icon__icon:not(:disabled):hover { color: var(--studio-text-primary, #dbdee7); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .studio-input-with-tail-icon,
+  .studio-input-with-tail-icon__icon { transition: none; }
 }

@@ -19,12 +19,13 @@ npm run dev:components
 组件实现在 `src/components/`，预览示例位于本目录的 `examples/`，示例直接使用真实组件
 
 - 设计规范：颜色、字体、尺寸、间距、圆角和动效 Tokens
-- 基础组件：Button、Tabs、Label、FormLabel、InputWithTailIcon、Textarea、Select、Switch、Checkbox、PillTag
+- 基础组件：Button、Tabs、Label、FormLabel、InputWithTailIcon、InputWithHeaderIcon、Textarea、Select、Switch、Checkbox、Radio、RadioCard、PillTag、Divider、Dropdown、ScrollArea、Table
 - 复合组件：Sidebar、Item、卡片、Header、FormField、FormLabelRow、DashedZone、CodeBlock 和玻璃按钮组
 - 布局：CardLayout、ModalLayout、ResourcePageLayout、DetailPageLayout
 - 节点组件：BasicNode、AgentNode、CanvasBackground
 
 Button、Tabs 和 Card 的变体集中展示，旧预览链接仍可访问
+Primary 和 Secondary 普通按钮默认同为 32px 高、上下 5px 内边距，图标按钮保持 28px
 示例按 Figma 画布尺寸展示；示例数据和页面导航不属于组件 API
 ModalLayout 提供 header、空白 body 插槽和 footer，实际遮罩与焦点管理由使用方提供
 FormLabel 的 required 表示必填标记，表单控件需要同时设置原生 required 属性
@@ -32,11 +33,14 @@ Textarea 的 counter 为独立插槽，预览保留原稿计数
 
 ## 主题与动效
 
-侧栏可切换明暗模式，默认浅色并保存选择，浅色页面背景为微紫灰 #f8f7fb，侧栏为 #f3f2f7，卡片与输入框保留白色
+侧栏可切换明暗模式，默认浅色并保存选择，浅色页面背景为极淡冷灰 #f8f9fb，侧栏为 #f3f4f7，卡片与输入框保留白色
+文字与边框沿用 Figma 的轻微冷蓝灰倾向，Token 页面展示 66 个语义颜色及对应的明暗色值
 主题定义位于 `components/tokens/theme.css` 和 `component-themes.css`，通过根元素 `data-theme` 切换
 深色以提供的 Figma 节点为基准，浅色为同风格适配，保留尺寸、字体和品牌资产
-按钮、Tabs、Switch、Checkbox 和 Select 带轻量交互过渡，并支持减少动态效果偏好
+按钮、Tabs、Switch、Checkbox、Radio、卡片、侧栏、输入和节点带轻量交互过渡，并支持减少动态效果偏好
+Hover 主要调整颜色、背景和细边框，保持尺寸、字重与位置稳定；侧栏长标题保留独立滚动行为
 Select 提供同宽矩形下拉面板，支持方向键、Enter、Escape、输入匹配和原生表单值
+SelectOption 的 description 可提供副标题，仅在下拉列表内显示；单行选项高 28px，双行高 48px，项间距为 4px，选中后的输入框只显示 label
 
 ## 字体
 
@@ -57,6 +61,8 @@ Select 展开样式、浅色主题与动效属于基于现有设计的交互扩�
 
 PromptInput（602:44016）为 720 × 150，使用 Didact Gothic、20px 圆角及 CSS 玻璃发送按钮，图标来自原稿 SVG
 支持受控和非受控输入、发送回调、禁用及 sending 状态，发送由按钮触发，文本框保留原生换行行为
+多行和单行 Prompt Input 都支持 placeholders 提示词列表、placeholderInterval 切换间隔，默认每 3000ms 切换一次，使用 700ms 上滑与渐入渐出
+输入内容或使用输入法组合输入时隐藏轮播，清空后从第一条恢复；空列表回退到 placeholder，单条提示静态显示，禁用或只读时暂停切换
 
 Item 合集增加 compact 变体（602:44003），尺寸 229.33 × 68，图标 22px，渐变描边透明度 26% → 13%
 Tabs 合集增加 GlassTabs（607:220149），原稿双选项尺寸 196 × 36，使用独立样式，支持键盘导航与平滑指示器
@@ -81,7 +87,7 @@ ScrollArea 支持纵向、横向和双向滚动，滚动条随鼠标移入淡入
 LoadMoreArea 复用 ScrollArea 的加载逻辑，资源卡片示例初始 6 张、每批追加 6 张
 Tabs 复用横向 ScrollArea，隐藏滚动条，保持文字单行；网站侧栏和预览区仅纵向滚动
 Table 使用语义化表格，支持列宽、对齐、自定义单元格、空数据内容及窄容器横向滚动；TableStatus 提供 Pass / Fail 图标和文案
-浅色主题使用轻微带紫灰色相的中性色；Card、Item 和 DashedZone 提供轻量 hover 过渡
+浅色主题使用轻微带冷蓝灰色相的中性色；Card、Item 和 DashedZone 提供轻量 hover 过渡
 原生滚动回弹由浏览器和操作系统控制，组件不模拟橡皮筋动画
 
 Table 的 overflow 列配置支持 wrap（自动换行并撑高行）或 ellipsis（单行省略），layout=fixed 可保持列宽稳定，layout=auto 由内容参与分配列宽
@@ -96,4 +102,5 @@ Button 的 link 样式支持 endIcon，图标随字号缩放；悬停或键盘�
 InputWithHeaderIcon 复用 InputWithTailIcon 的原生输入逻辑，前置图标可替换或绑定点击回调
 SidebarItemWithIcon 的长标题默认尾部渐隐，悬停后缓慢滚到末尾、移开复位；trailing / hoverTrailing 支持尾部图标或按钮组切换，标题宽度自动适配
 Radio 按 Figma 740:296852 内的单选控件实现，16 × 16px，未选中白色圆底，选中深色圆底与 6px 白点；使用原生单选输入，同 name 互斥，支持可选标签与受控值
+RadioCard 复现该节点的完整卡片，默认 472 × 68px，包含 44px 图标容器、20px 图标、标题、副标题和右侧 Radio，整张卡片可点击；预览三张卡片间距为 12px
 FormField 的 tip 显示控件下方输入规则，error 优先替换为红色提示，并为对应输入框或文本域显示红边；htmlFor 与控件 id 关联标签和描述，校验规则由调用方负责

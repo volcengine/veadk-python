@@ -18,8 +18,8 @@
 .studio-table-status svg { flex: none; }
 .studio-table-status[data-status="pass"] { color: #8cdbab; }
 .studio-table-status[data-status="fail"] { color: #ed9696; }
-[data-theme="light"] .studio-table-status[data-status="pass"] { color: #287b49; }
-[data-theme="light"] .studio-table-status[data-status="fail"] { color: #b34444; }
+[data-theme="light"] .studio-table-status[data-status="pass"] { color: var(--studio-success); }
+[data-theme="light"] .studio-table-status[data-status="fail"] { color: var(--studio-danger); }
 @media (prefers-reduced-motion: reduce) { .studio-table tbody tr { transition: none; } }
 .studio-table-scroll[data-orientation] > .studio-scroll-area__content { width: 100%; }
 

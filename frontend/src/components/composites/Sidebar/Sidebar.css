@@ -23,6 +23,7 @@
   letter-spacing: 0.182px;
   text-align: left;
   cursor: pointer;
+  transition: background-color var(--studio-motion-duration-normal, 160ms) ease-out, color var(--studio-motion-duration-normal, 160ms) ease-out;
 }
 
 .studio-sidebar-item__icon {
@@ -73,4 +74,7 @@
   line-height: 22px;
   letter-spacing: 0.039px;
   white-space: nowrap;
+}
+@media (prefers-reduced-motion: reduce) {
+  .studio-sidebar-item { transition: none; }
 }

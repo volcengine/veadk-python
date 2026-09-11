@@ -58,11 +58,11 @@
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  background: var(--studio-fill-hover, rgba(255,255,255,.06));
-  box-shadow: inset 0 0 0 1px var(--studio-border-default, rgba(255,255,255,.2));
+  background: var(--studio-fill-subtle, rgba(255, 255, 255, .06));
+  box-shadow: inset 0 0 0 .5px var(--studio-border-input, rgba(255, 255, 255, .2));
   opacity: 0;
   pointer-events: none;
-  transition: opacity 180ms ease-out;
+  transition: opacity var(--studio-motion-duration-normal, 160ms) ease-out;
 }
 @media (hover: hover) { .studio-promo-card:hover::after { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .studio-promo-card::after { transition: none; } }

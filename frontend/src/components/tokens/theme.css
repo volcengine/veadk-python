@@ -24,33 +24,41 @@
   --studio-fill-selected: rgba(170, 163, 225, 0.1);
   --studio-focus-ring: #ffffff;
   --studio-warning: #dd6800;
+  --studio-success: #8cdbab;
+  --studio-danger: #ed9696;
+  --studio-scrollbar-thumb: rgba(219, 222, 231, .22);
+  --studio-scrollbar-thumb-hover: rgba(219, 222, 231, .38);
 }
 
-/* Light palette uses the same semantic roles and component geometry */
+/* Light adapts Figma’s cool blue-gray text (#dbdee7) to near-white surfaces */
 [data-theme="light"] {
   color-scheme: light;
-  --studio-bg-canvas: #f8f7fb;
+  --studio-bg-canvas: #f8f9fb;
   --studio-bg-panel: #ffffff;
   --studio-bg-elevated: #ffffff;
-  --studio-bg-sidebar: #f3f2f7;
-  --studio-bg-track: #f0eef5;
-  --studio-bg-secondary: #f0eef5;
+  --studio-bg-sidebar: #f3f4f7;
+  --studio-bg-track: #eceff4;
+  --studio-bg-secondary: #edf0f5;
   --studio-bg-promo: #ffffff;
-  --studio-text-primary: #24242b;
-  --studio-text-secondary: rgba(36, 36, 43, 0.65);
-  --studio-text-tertiary: #777580;
-  --studio-text-strong: #101013;
-  --studio-text-subtle: #666471;
-  --studio-action-primary-bg: #202026;
+  --studio-text-primary: #252934;
+  --studio-text-secondary: #596171;
+  --studio-text-tertiary: #646d7c;
+  --studio-text-strong: #171b24;
+  --studio-text-subtle: #58606f;
+  --studio-action-primary-bg: #282d3a;
   --studio-action-primary-text: #ffffff;
-  --studio-border-default: rgba(91, 80, 119, 0.18);
-  --studio-border-subtle: rgba(91, 80, 119, 0.12);
-  --studio-border-input: rgba(91, 80, 119, 0.2);
-  --studio-fill-subtle: rgba(116, 99, 151, 0.04);
-  --studio-fill-hover: rgba(116, 99, 151, 0.07);
-  --studio-fill-selected: rgba(116, 99, 151, 0.12);
-  --studio-focus-ring: #47414f;
-  --studio-warning: #a74600;
+  --studio-border-default: #d8dde6;
+  --studio-border-subtle: #e3e7ee;
+  --studio-border-input: #cbd2de;
+  --studio-fill-subtle: rgba(66, 84, 122, 0.035);
+  --studio-fill-hover: rgba(66, 84, 122, 0.065);
+  --studio-fill-selected: rgba(85, 99, 149, 0.1);
+  --studio-focus-ring: #626c8a;
+  --studio-warning: #a75008;
+  --studio-success: #287b49;
+  --studio-danger: #b34444;
+  --studio-scrollbar-thumb: rgba(63, 78, 106, .24);
+  --studio-scrollbar-thumb-hover: rgba(63, 78, 106, .4);
 }
 
 :root {

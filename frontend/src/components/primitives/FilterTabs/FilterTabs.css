@@ -21,7 +21,7 @@
   text-overflow: ellipsis;
   opacity: 0.3;
   cursor: pointer;
-  transition: opacity 140ms ease;
+  transition: opacity var(--studio-motion-duration-fast, 140ms) ease-out, color var(--studio-motion-duration-fast, 140ms) ease-out;
 }
 .studio-filter-tabs > button[aria-checked="true"] { opacity: 1; }
 

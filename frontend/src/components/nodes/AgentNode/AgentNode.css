@@ -23,3 +23,12 @@
 .studio-agent-node__glow-pink { left: 70.3px; top: .8px; width: 134.253px; height: 76.4px; }
 .studio-agent-node__glow-white { left: 118.6px; top: 17.6px; width: 100.8px; height: 41.8px; }
 .studio-agent-node__glow-default { left: 59.3px; top: -10.2px; width: 170.618px; height: 96.7164px; }
+
+.studio-agent-node { transition: background-color var(--studio-motion-duration-normal, 160ms) ease-out, box-shadow var(--studio-motion-duration-normal, 160ms) ease-out; }
+@media (hover: hover) {
+  .studio-agent-node:not([data-selected="true"]):not([aria-disabled="true"]):hover {
+    background-color: color-mix(in srgb, var(--studio-surface-node, rgba(38, 38, 46, .37)) 96%, var(--studio-text-primary, #dbdee7) 4%);
+    box-shadow: inset 0 0 0 .5px var(--studio-border-input, rgba(255, 255, 255, .2));
+  }
+}
+@media (prefers-reduced-motion: reduce) { .studio-agent-node { transition: none; } }

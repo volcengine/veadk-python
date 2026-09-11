@@ -16,4 +16,4 @@
   height: .5px;
   background: linear-gradient(90deg, rgba(var(--divider-rgb), 0), rgba(var(--divider-rgb), .2) 25%, rgba(var(--divider-rgb), .2) 75%, rgba(var(--divider-rgb), 0));
 }
-[data-theme="light"] .studio-divider { --divider-rgb: 36, 36, 43; }
+[data-theme="light"] .studio-divider { --divider-rgb: 46, 57, 78; }

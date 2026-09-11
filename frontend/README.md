@@ -1360,5 +1360,6 @@ Sandbox。修改这些模板只需要更新 Studio，不需要重建镜像，也
 共享组件目录见 [组件库说明](src/components/README.md)，预览目录见
 [Components Preview](src/components-preview/README.md)
 
-运行 `npm run dev:components` 打开独立组件预览页，按基础组件、复合组件和布局分组浏览 Figma 组件
-具体组件与 Figma 样式将在设计稿提供后接入
+运行 `npm run dev:components` 打开独立组件预览页，按基础组件、复合组件、布局、节点组件和 AI APP 分组浏览 Figma 组件
+预览包含可复用控件、完整 Radio 卡片、表格、页面布局和 Prompt Input，提供持久化明暗主题、语义 Token 展示及从 TypeScript 接口生成的参数表
+主次按钮默认等高，Select 支持选项副标题，Prompt Input 支持提示词列表轮播；组件交互与使用约定见预览说明

@@ -1,2 +1,2 @@
-export { Radio } from "./Radio";
-export type { RadioProps } from "./Radio";
+export { Radio, RadioCard } from "./Radio";
+export type { RadioProps, RadioCardProps } from "./Radio";

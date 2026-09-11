@@ -63,17 +63,17 @@
 }
 
 .studio-dashed-zone {
-  transition: background-color 180ms ease-out;
+  transition: background-color var(--studio-motion-duration-normal, 160ms) ease-out;
 }
 .studio-dashed-zone__border rect {
-  transition: stroke 180ms ease-out;
+  transition: stroke var(--studio-motion-duration-normal, 160ms) ease-out;
 }
 @media (hover: hover) {
   .studio-dashed-zone:hover {
-    background-color: var(--studio-fill-hover, rgba(255, 255, 255, 0.06));
+    background-color: var(--studio-fill-hover, rgba(255, 255, 255, .06));
   }
   .studio-dashed-zone:hover .studio-dashed-zone__border rect {
-    stroke: var(--studio-border-default, rgba(255, 255, 255, 0.2));
+    stroke: var(--studio-border-input, rgba(255, 255, 255, .2));
   }
 }
 @media (prefers-reduced-motion: reduce) {

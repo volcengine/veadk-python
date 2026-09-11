@@ -36,7 +36,7 @@
   text-align: center;
   white-space: nowrap;
   cursor: pointer;
-  transition: color 140ms ease, background-color 140ms ease;
+  transition: color var(--studio-motion-duration-fast, 140ms) ease-out, background-color var(--studio-motion-duration-fast, 140ms) ease-out;
 }
 
 .studio-pill-tabs__tab[aria-selected="true"] {
@@ -60,8 +60,8 @@
 
 @media (hover: hover) {
   .studio-pill-tabs__tab[aria-selected="false"]:hover {
-    color: #dbdee7;
-    background: rgba(170, 163, 225, 0.05);
+    color: var(--studio-text-primary, #dbdee7);
+    background: var(--studio-fill-subtle, rgba(170, 163, 225, .05));
   }
 }
 

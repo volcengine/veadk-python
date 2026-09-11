@@ -1,7 +1,7 @@
 .studio-sidebar-item-with-icon {
   gap: 0;
   padding: 0;
-  transition: background-color 180ms ease-out, color 180ms ease-out;
+  transition: background-color var(--studio-motion-duration-normal, 160ms) ease-out, color var(--studio-motion-duration-normal, 160ms) ease-out;
 }
 
 .studio-sidebar-item-with-icon[data-active] {
@@ -90,7 +90,7 @@
   color: inherit;
   font: inherit;
   cursor: pointer;
-  transition: background-color 180ms ease-out, color 180ms ease-out;
+  transition: background-color var(--studio-motion-duration-fast, 140ms) ease-out, color var(--studio-motion-duration-fast, 140ms) ease-out;
 }
 
 .studio-sidebar-item-with-icon__tail button:hover:not(:disabled) {

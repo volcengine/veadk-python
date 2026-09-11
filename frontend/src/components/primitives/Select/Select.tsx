@@ -4,7 +4,14 @@ import { ScrollArea } from "../ScrollArea";
 import downIcon from "./assets/down.svg";
 import "./Select.css";
 
-export interface SelectOption { value: string; label: string; icon?: ReactNode; disabled?: boolean }
+export interface SelectOption {
+  value: string;
+  label: string;
+  icon?: ReactNode;
+  /** 下拉选项的副标题，仅在列表中显示 */
+  description?: string;
+  disabled?: boolean;
+}
 export type SelectProps = Omit<ComponentProps<"select">, "children" | "value" | "defaultValue" | "multiple" | "size"> & {
   options: readonly SelectOption[];
   value?: string;
@@ -72,7 +79,8 @@ export function Select({ options, value, defaultValue, onChange, className = "",
       if (!rect) return;
       const below = window.innerHeight - rect.bottom - 12;
       const above = rect.top - 12;
-      const height = Math.min(240, options.length * 28 + Math.max(0, options.length - 1) * 4 + 10);
+      const rowsHeight = options.reduce((height, option) => height + (option.description ? 48 : 28), 0);
+      const height = Math.min(240, rowsHeight + Math.max(0, options.length - 1) * 4 + 10);
       const flip = below < height && above > below;
       const maxHeight = Math.max(28, Math.min(240, flip ? above : below));
       setPosition({ left: Math.max(8, Math.min(rect.left, window.innerWidth - rect.width - 8)), top: flip ? rect.top - Math.min(height, maxHeight) - 6 : rect.bottom + 6, width: rect.width, maxHeight });
@@ -81,7 +89,7 @@ export function Select({ options, value, defaultValue, onChange, className = "",
     window.addEventListener("resize", place);
     window.addEventListener("scroll", place, true);
     return () => { window.removeEventListener("resize", place); window.removeEventListener("scroll", place, true); };
-  }, [open, options.length]);
+  }, [open, options]);
   useEffect(() => {
     if (!open) return;
     function outside(event: PointerEvent) {
@@ -110,9 +118,12 @@ export function Select({ options, value, defaultValue, onChange, className = "",
       {options.map(option => <option key={option.value} value={option.value} disabled={option.disabled}>{option.label}</option>)}
     </select>
     {open && createPortal(<ScrollArea ref={menu} id={listId} role="listbox" aria-label={ariaLabel ?? "选项"} aria-labelledby={labelledBy} className="studio-select-menu" contentClassName="studio-select-menu__items" style={position}>
-      {options.map((option, index) => <div key={option.value} id={`${uid}-option-${index}`} role="option" aria-selected={option.value === currentValue} aria-disabled={option.disabled || undefined} data-active={index === active} data-index={index} className="studio-select-menu__option" onPointerMove={() => !option.disabled && setActive(index)} onMouseDown={event => event.preventDefault()} onClick={() => choose(index)}>
+      {options.map((option, index) => <div key={option.value} id={`${uid}-option-${index}`} role="option" aria-label={option.label} aria-describedby={option.description ? `${uid}-description-${index}` : undefined} aria-selected={option.value === currentValue} aria-disabled={option.disabled || undefined} data-active={index === active} data-index={index} data-description={Boolean(option.description) || undefined} className="studio-select-menu__option" onPointerMove={() => !option.disabled && setActive(index)} onMouseDown={event => event.preventDefault()} onClick={() => choose(index)}>
         {option.icon && <span className="studio-select__icon" aria-hidden="true">{option.icon}</span>}
-        <span className="studio-select__label">{option.label}</span>
+        {option.description ? <span className="studio-select-menu__text">
+          <span className="studio-select__label">{option.label}</span>
+          <span id={`${uid}-description-${index}`} className="studio-select-menu__description" title={option.description}>{option.description}</span>
+        </span> : <span className="studio-select__label">{option.label}</span>}
         {option.value === currentValue && <svg className="studio-select-menu__check" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m3 8 3 3 7-7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></svg>}
       </div>)}
     </ScrollArea>, document.body)}

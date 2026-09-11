@@ -77,3 +77,12 @@
   text-align: center;
   white-space: nowrap;
 }
+
+.studio-basic-node { transition: background-color var(--studio-motion-duration-normal, 160ms) ease-out, box-shadow var(--studio-motion-duration-normal, 160ms) ease-out; }
+@media (hover: hover) {
+  .studio-basic-node:not([aria-disabled="true"]):hover {
+    background-color: color-mix(in srgb, var(--studio-surface-node, rgba(38, 38, 46, .37)) 96%, var(--studio-text-primary, #dbdee7) 4%);
+    box-shadow: inset 0 0 0 .5px var(--studio-border-input, rgba(255, 255, 255, .2));
+  }
+}
+@media (prefers-reduced-motion: reduce) { .studio-basic-node { transition: none; } }

@@ -2,6 +2,7 @@
 .studio-single-line-prompt {
   --prompt-border-rgb: 255, 255, 255;
   --prompt-glass-rgb: 255, 255, 255;
+  position: relative;
   box-sizing: border-box;
   display: flex;
   align-items: center;
@@ -33,6 +34,14 @@
   letter-spacing: 0;
 }
 .studio-single-line-prompt__text::placeholder { color: var(--studio-text-tertiary, #7a7880); opacity: 1; }
+.studio-single-line-prompt__text[data-rotating-placeholder]::placeholder { color: transparent; }
+.studio-single-line-prompt > .studio-prompt-placeholder {
+  top: calc(50% - 13px);
+  left: 16px;
+  right: 46px;
+  font: 400 16px/26px "Century Gothic", sans-serif;
+  font-synthesis: none;
+}
 .studio-single-line-prompt > .studio-prompt-input__send {
   flex: 0 0 36px;
   width: 36px;
@@ -40,7 +49,7 @@
   color: var(--studio-text-primary, #dbdee7);
 }
 [data-theme="light"] .studio-single-line-prompt {
-  --prompt-border-rgb: 36, 36, 43;
-  --prompt-glass-rgb: 36, 36, 43;
+  --prompt-border-rgb: 46, 57, 78;
+  --prompt-glass-rgb: 46, 57, 78;
   background: #ffffff;
 }

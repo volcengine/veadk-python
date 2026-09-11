@@ -51,6 +51,11 @@
   background: transparent;
   opacity: .5;
   cursor: pointer;
+  transition: opacity var(--studio-motion-duration-fast, 140ms) ease-out;
 }
 .studio-card-layout__close img { width: 20px; height: 20px; }
 .studio-card-layout__content { flex: 1; min-height: 0; min-width: 0; }
+@media (hover: hover) {
+  .studio-card-layout__close:not(:disabled):hover { opacity: .8; }
+}
+@media (prefers-reduced-motion: reduce) { .studio-card-layout__close { transition: none; } }

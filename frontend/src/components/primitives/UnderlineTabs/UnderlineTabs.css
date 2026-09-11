@@ -45,7 +45,7 @@
   text-align: left;
   opacity: 0.4;
   cursor: pointer;
-  transition: opacity 140ms ease;
+  transition: opacity var(--studio-motion-duration-fast, 140ms) ease-out, color var(--studio-motion-duration-fast, 140ms) ease-out;
 }
 
 .studio-underline-tabs__tab[aria-selected="true"] {

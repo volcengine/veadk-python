@@ -10,6 +10,7 @@
   resize: both;
   border-radius: 8px;
   background: rgba(0, 0, 0, 0.4);
+  transition: box-shadow var(--studio-motion-duration-fast, 140ms) ease-out;
 }
 
 .studio-textarea__input {
@@ -70,4 +71,14 @@
 
 .studio-textarea::-webkit-resizer {
   background: transparent;
+}
+
+@media (hover: hover) {
+  .studio-textarea:has(> textarea:not(:disabled):not([readonly]):not([aria-invalid="true"])):hover {
+    box-shadow: inset 0 0 0 .5px var(--studio-border-input, rgba(219, 222, 231, .21));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .studio-textarea { transition: none; }
 }

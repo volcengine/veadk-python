@@ -25,7 +25,7 @@ const descriptions: Record<string, string> = {
 
 const componentNotes: Record<string, Record<string, string>> = {
   Button: {
-    variant: "primary 主按钮、secondary 次按钮、ghost 透明按钮、link 链接样式按钮",
+    variant: "primary 主按钮、secondary 次按钮，普通按钮高度统一为 32px；ghost 透明按钮、link 链接样式按钮",
     iconOnly: "纯图标按钮，28 × 28px；图标通过 startIcon 传入，需提供 aria-label，可组合 primary、secondary 或 ghost 样式",
     endIcon: "右侧图标；link 样式下尺寸跟随字号，悬停或键盘聚焦时与文字下方虚线一起淡入，移开淡出",
   },
@@ -35,8 +35,27 @@ const componentNotes: Record<string, Record<string, string>> = {
     checked: "受控选中状态，与 onChange 配合使用",
     defaultChecked: "非受控初始选中状态",
   },
+  RadioCard: {
+    title: "卡片主标题",
+    description: "标题下方的副标题",
+    icon: "左侧图标，20 × 20px，放在 44 × 44px 的容器内",
+    style: "卡片容器样式，默认宽度 472px、最小高度 68px",
+    name: "同一组 RadioCard 使用相同 name，只能选中一项",
+    checked: "受控选中状态，与 onChange 配合使用",
+    defaultChecked: "非受控初始选中状态",
+  },
+  PromptInput: {
+    placeholder: "未设置 placeholders 或列表为空时显示的单条提示",
+    placeholders: "输入为空时向上轮播的提示词列表；输入内容后隐藏，清空后恢复，空列表回退到 placeholder",
+    placeholderInterval: "提示词切换间隔，单位为毫秒，默认 3000",
+  },
+  SingleLinePromptInput: {
+    placeholder: "未设置 placeholders 或列表为空时显示的单条提示",
+    placeholders: "输入为空时向上轮播的提示词列表；输入内容后隐藏，清空后恢复，空列表回退到 placeholder",
+    placeholderInterval: "提示词切换间隔，单位为毫秒，默认 3000",
+  },
   Textarea: { className: "外层可拉伸容器的 CSS 类名", style: "原生 textarea 的样式，外框高度上限使用 maxHeight", counter: "右下角计数内容，不自动计数或限制字数" },
-  Select: { options: "选项数组：value、label 必填；icon、disabled 可选", defaultValue: "非受控初始值，未设置时选择第一个未禁用选项" },
+  Select: { options: "选项数组：value、label 必填；icon、description、disabled 可选；description 在下拉列表中显示为副标题，选中后输入框只显示 label", defaultValue: "非受控初始值，未设置时选择第一个未禁用选项" },
   PillTabs: { items: "选项数组：value、label 必填；panelId 可选" },
   GlassTabs: { items: "选项数组：value、label 必填；panelId 可选" },
   UnderlineTabs: { items: "选项数组，详见 UnderlineTabItem 类型" },
@@ -80,7 +99,7 @@ export function ComponentApi({ names }: { names: string[] }) {
     {names.map(name => {
       const doc = docs[name];
       if (!doc) return <p key={name} role="alert">{name} 的参数信息未生成</p>;
-      const visibleNative = (prop: (typeof doc.props)[number]) => commonNative.has(prop.name) && (!['defaultChecked', 'checked'].includes(prop.name) || ['Switch', 'Checkbox', 'Radio'].includes(name));
+      const visibleNative = (prop: (typeof doc.props)[number]) => commonNative.has(prop.name) && (!['defaultChecked', 'checked'].includes(prop.name) || ['Switch', 'Checkbox', 'Radio', 'RadioCard'].includes(name));
       const primary = doc.props.filter(prop => !prop.native || visibleNative(prop)).sort((a, b) => Number(a.native) - Number(b.native));
       const inherited = doc.props.filter(prop => prop.native && !visibleNative(prop));
       const table = (props: typeof primary) => <div className="component-api__scroll"><table>

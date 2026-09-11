@@ -18,8 +18,8 @@
   transition: --scroll-area-visible-thumb 180ms ease-out;
 }
 [data-theme="light"] .studio-scroll-area {
-  --scroll-area-thumb: rgba(91, 80, 119, .22);
-  --scroll-area-thumb-hover: rgba(91, 80, 119, .38);
+  --scroll-area-thumb: var(--studio-scrollbar-thumb);
+  --scroll-area-thumb-hover: var(--studio-scrollbar-thumb-hover);
 }
 .studio-scroll-area[data-orientation="vertical"] { overflow-x: hidden; overflow-y: auto; overscroll-behavior-x: none; }
 .studio-scroll-area[data-orientation="horizontal"] { overflow-x: auto; overflow-y: hidden; }
