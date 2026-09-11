@@ -573,6 +573,12 @@ Deploy with `--super-admin <existing-user-email-or-uid>` to select the first
 super administrator. This is the only deployment role flag; `deploy --admin`
 and `deploy --developer` are no longer supported
 
+Without `--super-admin`, deployment first warns that user and permission
+management will be inconvenient without a super administrator and asks
+`是否继续? [y/N]`. Press Enter or enter `n` to cancel before cloud operations;
+enter `y` to continue. Setting `VEADK_STUDIO_SUPER_ADMIN` also satisfies this
+check. Read-only `--precheck-only` does not prompt
+
 ```bash
 veadk studio deploy --user-pool-id <pool-uid> \
   --allowed-client-id <client-uid> --vefaas-app-name <app-name> \

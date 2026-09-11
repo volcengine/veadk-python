@@ -14894,6 +14894,13 @@ def frontend_deploy(
     )
     from veadk.config import veadk_environments
 
+    from frontend.server.user_management.deployment import (
+        confirm_super_admin_for_deploy,
+    )
+
+    if not precheck_only:
+        confirm_super_admin_for_deploy(studio_super_admin)
+
     _restore_process_env_on_click_close(_STUDIO_DEPLOY_PROCESS_ENV_KEYS)
     explicit_volcengine_credentials = any(
         _click_param_from_commandline(name)

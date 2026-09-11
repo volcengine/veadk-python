@@ -27,6 +27,19 @@ from .errors import UserManagementError
 from .service import UserManagementService
 
 
+def confirm_super_admin_for_deploy(super_admin: str | None) -> None:
+    """Require explicit consent to deploy without selecting a super administrator"""
+    if (super_admin or "").strip():
+        return
+    click.confirm(
+        "本次部署未指定 --super-admin\n"
+        "未设置超级管理员时，无法便捷地管理用户角色和权限；"
+        "首次部署将默认所有用户为管理员\n是否继续",
+        default=False,
+        abort=True,
+    )
+
+
 def package_supports_identity_roles(package: Path) -> bool:
     """Check the shipped code, not the updating process's installed version"""
     module = "frontend/server/user_management/service.py"
