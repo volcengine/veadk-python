@@ -15660,6 +15660,14 @@ def frontend_deploy(
     default=None,
     help="Replace the snapshot-enabled Hermes AgentKit Tool ID.",
 )
+@click.option(
+    "--skip-cronjob-scheduler",
+    is_flag=True,
+    help=(
+        "Update only the main Studio Application and leave the existing cronjob "
+        "scheduler unchanged."
+    ),
+)
 @click.option("--volcengine-access-key", default=None)
 @click.option("--volcengine-secret-key", default=None)
 @click.option("--volcengine-session-token", default=None)
@@ -15683,6 +15691,7 @@ def frontend_update(
     sandbox_chat_codex_snapshot_tool_id: str | None,
     sandbox_chat_openclaw_snapshot_tool_id: str | None,
     sandbox_chat_hermes_snapshot_tool_id: str | None,
+    skip_cronjob_scheduler: bool,
     volcengine_access_key: str | None,
     volcengine_secret_key: str | None,
     volcengine_session_token: str | None,
@@ -16332,6 +16341,8 @@ def frontend_update(
                 )
         if branding_title is not None:
             environment_overrides["VEADK_SITE_TITLE"] = branding_title
+        environment_overrides.update(_github_app_review_environment(current_env))
+        environment_overrides.update(_gitlab_app_review_environment(current_env))
         if sandbox_dev_tool_id is not None:
             environment_overrides["SANDBOX_DEV"] = sandbox_dev_tool_id
         if sandbox_chat_codex_tool_id is not None:
@@ -16381,23 +16392,26 @@ def frontend_update(
                 ),
             }
         )
-        from frontend.service.studio_scheduler.deploy import (
-            deploy_scheduler_for_studio_update,
-        )
-
-        click.echo("Updating the Studio cronjob scheduler and minute timer…")
         try:
-            _, _, _, _, scheduler_base = deploy_scheduler_for_studio_update(
-                service,
-                studio_function_id=target.function_id,
-                package_root=package_dir,
-                provider=provider_id,
-                project=target.project,
-                environment_overrides=environment_overrides,
-            )
-            environment_overrides["VEADK_STUDIO_CRONJOB_SCHEDULER_BASE"] = (
-                scheduler_base
-            )
+            if skip_cronjob_scheduler:
+                click.echo("Skipping the Studio cronjob scheduler update.")
+            else:
+                from frontend.service.studio_scheduler.deploy import (
+                    deploy_scheduler_for_studio_update,
+                )
+
+                click.echo("Updating the Studio cronjob scheduler and minute timer…")
+                _, _, _, _, scheduler_base = deploy_scheduler_for_studio_update(
+                    service,
+                    studio_function_id=target.function_id,
+                    package_root=package_dir,
+                    provider=provider_id,
+                    project=target.project,
+                    environment_overrides=environment_overrides,
+                )
+                environment_overrides["VEADK_STUDIO_CRONJOB_SCHEDULER_BASE"] = (
+                    scheduler_base
+                )
             url = service.update_application_code_bundle(
                 application_id=target.application_id,
                 function_id=target.function_id,

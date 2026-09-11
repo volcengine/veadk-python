@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import base64
 import json
 import subprocess
 from pathlib import Path
@@ -49,6 +50,24 @@ def _clear_provider_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("BYTEPLUS_SESSION_TOKEN", raising=False)
     monkeypatch.delenv("VOLCENGINE_SESSION_TOKEN", raising=False)
     monkeypatch.delenv("VOLC_SESSIONTOKEN", raising=False)
+    for key in (
+        "VEADK_GITHUB_APP_ID",
+        "VEADK_GITHUB_APP_SLUG",
+        "VEADK_GITHUB_APP_PRIVATE_KEY",
+        "VEADK_GITHUB_APP_PRIVATE_KEY_B64",
+        "VEADK_GITHUB_APP_PRIVATE_KEY_PATH",
+        "VEADK_GITHUB_APP_WEBHOOK_SECRET",
+        "VEADK_GITHUB_APP_REVIEW_OWNER_ID",
+        "VEADK_GITHUB_APP_REVIEW_CREATOR",
+        "VEADK_GITLAB_BASE_URL",
+        "VEADK_GITLAB_TOKEN",
+        "VEADK_GITLAB_WEBHOOK_SECRET",
+        "VEADK_GITLAB_GROUP_ID_OR_PATH",
+        "VEADK_GITLAB_REVIEW_OWNER_ID",
+        "VEADK_GITLAB_REVIEW_CREATOR",
+        "VEADK_STUDIO_PUBLIC_BASE_URL",
+    ):
+        monkeypatch.delenv(key, raising=False)
 
 
 @pytest.fixture
@@ -545,6 +564,162 @@ def test_studio_update_preserves_branding_and_updates_existing_ids(
             "registry.example.com/agentkit/base@sha256:" + "a" * 64
         ),
     }
+
+
+def test_studio_update_propagates_git_review_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    scheduler_deploy: list[dict[str, object]],
+) -> None:
+    target = _target()
+    private_key = "-----BEGIN PRIVATE KEY-----\ntest-key\n-----END PRIVATE KEY-----\n"
+    private_key_path = tmp_path / "github-app.pem"
+    private_key_path.write_text(private_key, encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    monkeypatch.setenv("VEADK_GITHUB_APP_ID", "4830047")
+    monkeypatch.setenv("VEADK_GITHUB_APP_SLUG", "agentkit-veadk-studio")
+    monkeypatch.setenv("VEADK_GITHUB_APP_PRIVATE_KEY_PATH", str(private_key_path))
+    monkeypatch.setenv("VEADK_GITHUB_APP_WEBHOOK_SECRET", "github-secret")
+    monkeypatch.setenv("VEADK_GITHUB_APP_REVIEW_OWNER_ID", "github-owner")
+    monkeypatch.setenv("VEADK_GITHUB_APP_REVIEW_CREATOR", "GitHub App")
+    monkeypatch.setenv("VEADK_GITLAB_BASE_URL", "https://gitlab.com")
+    monkeypatch.setenv("VEADK_GITLAB_TOKEN", "gitlab-token")
+    monkeypatch.setenv("VEADK_GITLAB_WEBHOOK_SECRET", "gitlab-secret")
+    monkeypatch.setenv("VEADK_GITLAB_GROUP_ID_OR_PATH", "example-group")
+    monkeypatch.setenv("VEADK_GITLAB_REVIEW_OWNER_ID", "gitlab-owner")
+    monkeypatch.setenv("VEADK_GITLAB_REVIEW_CREATOR", "GitLab App")
+    monkeypatch.setenv("VEADK_STUDIO_PUBLIC_BASE_URL", "https://studio.example.com")
+
+    monkeypatch.setattr(
+        "veadk.cli.studio_update.find_studio_deployments", lambda **_: [target]
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_update.load_deployed_site_logo", lambda _: None
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.build_frontend_assets", lambda *_: None
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.build_local_studio_requirements",
+        lambda *_a, **_k: "./veadk.whl\n",
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.write_studio_package", lambda *_a, **_k: None
+    )
+
+    class _FakeVeFaaS:
+        def __init__(self, **_: str) -> None:
+            pass
+
+        def update_application_code_bundle(self, **kwargs: object) -> str:
+            captured["update"] = kwargs
+            return target.url
+
+    monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.VeFaaS", _FakeVeFaaS)
+
+    result = CliRunner().invoke(
+        studio,
+        [
+            "update",
+            "--vefaas-app-name",
+            "studio-app",
+            "--path",
+            str(tmp_path),
+            "--volcengine-access-key",
+            "ak",
+            "--volcengine-secret-key",
+            "sk",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    update = cast(dict[str, object], captured["update"])
+    overrides = cast(dict[str, str], update["environment_overrides"])
+    assert overrides["VEADK_GITHUB_APP_ID"] == "4830047"
+    assert overrides["VEADK_GITHUB_APP_SLUG"] == "agentkit-veadk-studio"
+    assert overrides["VEADK_GITHUB_APP_WEBHOOK_SECRET"] == "github-secret"
+    assert overrides["VEADK_GITHUB_APP_REVIEW_OWNER_ID"] == "github-owner"
+    assert overrides["VEADK_GITHUB_APP_REVIEW_CREATOR"] == "GitHub App"
+    assert overrides["VEADK_GITHUB_APP_PRIVATE_KEY_B64"] == (
+        base64.b64encode(private_key.encode("utf-8")).decode("ascii")
+    )
+    assert "VEADK_GITHUB_APP_PRIVATE_KEY_PATH" not in overrides
+    assert "VEADK_GITHUB_APP_PRIVATE_KEY" not in overrides
+    assert overrides["VEADK_GITLAB_BASE_URL"] == "https://gitlab.com"
+    assert overrides["VEADK_GITLAB_TOKEN"] == "gitlab-token"
+    assert overrides["VEADK_GITLAB_WEBHOOK_SECRET"] == "gitlab-secret"
+    assert overrides["VEADK_GITLAB_GROUP_ID_OR_PATH"] == "example-group"
+    assert overrides["VEADK_GITLAB_REVIEW_OWNER_ID"] == "gitlab-owner"
+    assert overrides["VEADK_GITLAB_REVIEW_CREATOR"] == "GitLab App"
+    assert overrides["VEADK_STUDIO_PUBLIC_BASE_URL"] == "https://studio.example.com"
+
+    scheduler_overrides = cast(
+        dict[str, str], scheduler_deploy[0]["environment_overrides"]
+    )
+    assert scheduler_overrides["VEADK_GITHUB_APP_ID"] == "4830047"
+    assert scheduler_overrides["VEADK_GITLAB_TOKEN"] == "gitlab-token"
+
+
+def test_studio_update_can_skip_cronjob_scheduler(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    scheduler_deploy: list[dict[str, object]],
+) -> None:
+    target = _target()
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "veadk.cli.studio_update.find_studio_deployments", lambda **_: [target]
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_update.load_deployed_site_logo", lambda _: None
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.build_frontend_assets", lambda *_: None
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.build_local_studio_requirements",
+        lambda *_a, **_k: "./veadk.whl\n",
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.write_studio_package", lambda *_a, **_k: None
+    )
+
+    class _FakeVeFaaS:
+        def __init__(self, **_: str) -> None:
+            pass
+
+        def update_application_code_bundle(self, **kwargs: object) -> str:
+            captured["update"] = kwargs
+            return target.url
+
+    monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.VeFaaS", _FakeVeFaaS)
+
+    result = CliRunner().invoke(
+        studio,
+        [
+            "update",
+            "--vefaas-app-name",
+            "studio-app",
+            "--path",
+            str(tmp_path),
+            "--skip-cronjob-scheduler",
+            "--volcengine-access-key",
+            "ak",
+            "--volcengine-secret-key",
+            "sk",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Skipping the Studio cronjob scheduler update." in result.output
+    assert scheduler_deploy == []
+    update = cast(dict[str, object], captured["update"])
+    overrides = cast(dict[str, str], update["environment_overrides"])
+    assert update["application_id"] == "app-id"
+    assert update["function_id"] == "function-app-id"
+    assert "VEADK_STUDIO_CRONJOB_SCHEDULER_BASE" not in overrides
 
 
 def test_studio_update_inherits_sidecar_configuration_before_packaging(
