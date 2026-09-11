@@ -11,7 +11,8 @@
     "roles": {
       "admin": "Administrator",
       "developer": "Developer",
-      "user": "User"
+      "user": "User",
+      "super_admin": "Super administrator"
     }
   },
   "navigation": {
@@ -24,7 +25,8 @@
     "workspaces": "Workspaces",
     "library": "Library",
     "cronjobs": "Cronjob",
-    "automations": "Automations"
+    "automations": "Automations",
+    "users": "User management"
   },
   "history": {
     "title": "Chat history",

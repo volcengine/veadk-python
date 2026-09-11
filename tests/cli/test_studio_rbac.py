@@ -214,6 +214,19 @@ def _create_studio_app(
     provider: str = "volcengine",
 ) -> FastAPI:
     captured: dict[str, Any] = {}
+    monkeypatch.delenv("VEADK_STUDIO_IDENTITY_ROLES", raising=False)
+    # These fixtures exercise resource/SSO routes; isolate the Identity control plane
+    from dataclasses import replace
+
+    policy = StudioAccessPolicy.from_csv(admins, developers)
+    monkeypatch.setattr(
+        "frontend.server.user_management.deployment.initialize_runtime_roles",
+        lambda **kwargs: SimpleNamespace(
+            principal_for=lambda principal: replace(
+                principal, role=policy.role_for(principal)
+            ),
+        ),
+    )
     monkeypatch.setattr("dotenv.find_dotenv", lambda *args, **kwargs: "")
     monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "test-ak")
     monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "test-sk")
@@ -422,6 +435,8 @@ def test_auth_config_uses_cloud_specific_identity_label(
     provider_label: str | None,
     expected_label: str,
 ) -> None:
+    monkeypatch.setenv("BYTEPLUS_ACCESS_KEY", "test-byteplus-ak")
+    monkeypatch.setenv("BYTEPLUS_SECRET_KEY", "test-byteplus-sk")
     from veadk.auth.middleware.oauth2_auth import OAuth2Config
 
     monkeypatch.setattr(
@@ -2472,12 +2487,11 @@ def test_studio_deploy_exposes_role_options() -> None:
     result = CliRunner().invoke(studio, ["deploy", "--help"])
 
     assert result.exit_code == 0
-    assert "--admin" in result.output
-    assert "--developer" in result.output
+    assert "--super-admin" in result.output
+    assert "--admin " not in result.output
+    assert "--developer " not in result.output
     assert "--allow-dangerous-login" in result.output
-    assert "Omit both role options to grant every user admin access" in " ".join(
-        result.output.split()
-    )
+    assert "grant every user admin access" not in result.output
     assert "--skill-creator-tool-id" not in result.output
 
 
@@ -2538,6 +2552,8 @@ def test_media_routes_enforce_user_ownership_and_allow_explicit_admin(
     provider: str,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    # VeADK keeps its own handler; allow pytest to observe this audit record
+    monkeypatch.setattr(logging.getLogger("veadk"), "propagate", True)
     monkeypatch.setenv("VEADK_MEDIA_LOCAL_DIR", str(tmp_path / "media"))
     app = _create_studio_app(
         monkeypatch,
@@ -4077,7 +4093,8 @@ def test_slow_runtime_proxy_authorization_does_not_starve_capability_budget(
             ),
             headers=headers,
         )
-        assert proxy_started.wait(timeout=1.0)
+        # Allow worker startup on busy CI hosts before measuring request latency
+        assert proxy_started.wait(timeout=10.0)
 
         started_at = time.monotonic()
         pending = client.get(

@@ -414,6 +414,19 @@ class StudioSelfUpdater:
                     manifest,
                     workspace,
                 )
+                from frontend.server.user_management.deployment import (
+                    package_supports_identity_roles,
+                )
+
+                identity_roles_supported = package_supports_identity_roles(package_dir)
+                if (
+                    os.getenv("VEADK_STUDIO_IDENTITY_ROLES", "").strip().lower()
+                    in {"1", "true", "yes"}
+                    and not identity_roles_supported
+                ):
+                    raise StudioReleaseError(
+                        "所选更新包不支持 Identity 角色管理，请选择包含此功能的版本"
+                    )
                 self._set_progress("preparing", "正在准备 VeFaaS Function 代码")
                 self._prepare_package(package_dir)
                 from veadk.integrations.ve_faas.ve_faas import VeFaaS
@@ -443,6 +456,7 @@ class StudioSelfUpdater:
                     access_key=access_key,
                     secret_key=secret_key,
                     session_token=session_token or "",
+                    migrate_identity_roles=identity_roles_supported,
                 )
                 environment_overrides = {
                     "VEADK_STUDIO_RELEASE_VERSION": manifest.version,

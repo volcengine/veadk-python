@@ -206,10 +206,8 @@ def test_wait_for_function_release_handles_success_failure_and_timeout(
                 "test-client-secret",
                 "--site-title",
                 "Test Studio",
-                "--admin",
+                "--super-admin",
                 "admin@example.com",
-                "--developer",
-                "developer@example.com",
             ),
             "18642",
             "14500",
@@ -223,6 +221,10 @@ def test_vestack_cli_configures_independent_hermes_tools(
     expected_hermes_port: str,
 ) -> None:
     captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        "frontend.server.user_management.deployment.prepare_identity_roles",
+        lambda **kwargs: {"VEADK_STUDIO_IDENTITY_ROLES": "1"},
+    )
 
     monkeypatch.setattr(
         "veadk.cli.cli_frontend._resolve_or_create_studio_identity_resources",
@@ -350,6 +352,10 @@ def test_vestack_cli_rejects_byteplus_provider() -> None:
 def test_vestack_cli_validates_complete_hermes_model_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        "frontend.server.user_management.deployment.prepare_identity_roles",
+        lambda **kwargs: {"VEADK_STUDIO_IDENTITY_ROLES": "1"},
+    )
     monkeypatch.setattr(
         "veadk.cli.cli_frontend._resolve_or_create_studio_identity_resources",
         lambda **_: ("pool-1", "auth.example.com", "client-1"),

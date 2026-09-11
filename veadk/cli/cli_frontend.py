@@ -1630,6 +1630,14 @@ def _serve_options(f):
             "Hermes agents (env: SANDBOX_CHAT_HERMES_SNAPSHOT).",
         ),
         click.option(
+            "--super-admin",
+            "studio_super_admin",
+            default=None,
+            envvar="VEADK_STUDIO_SUPER_ADMIN",
+            help="Initialize Identity-backed Studio roles with this user's email or UID. "
+            "Requires a user pool and client. Existing initialization is preserved.",
+        ),
+        click.option(
             "--admin",
             "studio_admins",
             default=None,
@@ -1692,6 +1700,7 @@ def frontend(
     sandbox_chat_hermes_snapshot_tool_id: str | None,
     studio_admins: str | None,
     studio_developers: str | None,
+    studio_super_admin: str | None,
     open_browser: bool,
 ) -> None:
     """Launch the A2UI web UI backed by the ADK agent API server."""
@@ -1724,6 +1733,7 @@ def frontend(
         sandbox_chat_hermes_snapshot_tool_id=sandbox_chat_hermes_snapshot_tool_id,
         studio_admins=studio_admins,
         studio_developers=studio_developers,
+        studio_super_admin=studio_super_admin,
         open_browser=open_browser,
         studio=False,
     )
@@ -1760,6 +1770,7 @@ def studio(
     sandbox_chat_hermes_snapshot_tool_id: str | None,
     studio_admins: str | None,
     studio_developers: str | None,
+    studio_super_admin: str | None,
     open_browser: bool,
 ) -> None:
     """Launch AgentKit Studio — the frontend trimmed to add & manage agents.
@@ -1797,6 +1808,7 @@ def studio(
         sandbox_chat_hermes_snapshot_tool_id=sandbox_chat_hermes_snapshot_tool_id,
         studio_admins=studio_admins,
         studio_developers=studio_developers,
+        studio_super_admin=studio_super_admin,
         open_browser=open_browser,
         studio=True,
     )
@@ -1829,6 +1841,7 @@ def _run_frontend_server(
     sandbox_chat_hermes_snapshot_tool_id: str | None = None,
     studio_admins: str | None = None,
     studio_developers: str | None = None,
+    studio_super_admin: str | None = None,
     open_browser: bool,
     provider: Literal["volcengine", "byteplus"] | None = None,
     studio: bool = False,
@@ -2041,9 +2054,22 @@ def _run_frontend_server(
     }
 
     generated_agent_test_run_ttl = max(60, generated_agent_test_run_ttl)
+    identity_roles_initialized = os.getenv(
+        "VEADK_STUDIO_IDENTITY_ROLES", ""
+    ).strip().lower() in {"1", "true", "yes"}
+    identity_roles = (
+        identity_roles_initialized
+        or bool(studio_super_admin)
+        or bool(
+            studio
+            and (oauth2_user_pool_uid or oauth2_user_pool)
+            and (oauth2_user_pool_client_uid or oauth2_user_pool_client)
+        )
+    )
     access_policy = StudioAccessPolicy.from_csv(
         studio_admins,
         studio_developers,
+        identity_roles=identity_roles,
     )
     runtime_update_capability_tasks: dict[
         tuple[str, str, str, str, int | None, str, str],
@@ -2061,6 +2087,9 @@ def _run_frontend_server(
         production authentication boundary. It is ignored whenever OAuth or a
         trusted gateway is active.
         """
+        resolved = getattr(request.state, "studio_identity_principal", None)
+        if resolved is not None:
+            return resolved
         if auth_mode == "gateway":
             claims = _claims_from_forwarded_jwt(request.headers.get("authorization"))
             return StudioPrincipal.from_claims(claims) if claims else None
@@ -2104,10 +2133,7 @@ def _run_frontend_server(
             return
         if requested_user_id.casefold() in principal.identifiers:
             return
-        if (
-            access_policy.enabled
-            and access_policy.role_for(principal) == StudioRole.ADMIN
-        ):
+        if access_policy.enabled and access_policy.role_for(principal).is_admin:
             logger.info(
                 "studio media cross-user access actor=%r target_user_id=%r "
                 "method=%s path=%r",
@@ -2163,7 +2189,13 @@ def _run_frontend_server(
             # ``role_for`` intentionally grants legacy admin capabilities when
             # RBAC is unconfigured. Cross-user data access is more sensitive and
             # therefore requires an explicit administrator-list match.
-            if principal.identifiers & access_policy.admins:
+            if (
+                access_policy.identity_roles
+                and access_policy.role_for(principal).is_admin
+            ) or (
+                not access_policy.identity_roles
+                and principal.identifiers & access_policy.admins
+            ):
                 logger.info(
                     "Studio admin cross-user session access %s",
                     json.dumps(
@@ -2334,7 +2366,7 @@ def _run_frontend_server(
         )
         return SkillIdentity(
             author=author,
-            is_admin=access_policy.role_for(principal) == StudioRole.ADMIN,
+            is_admin=access_policy.role_for(principal).is_admin,
         )
 
     def _skill_workbench_tools_client(region: str):
@@ -2534,8 +2566,8 @@ def _run_frontend_server(
         return KnowledgeIdentity(
             owner_id=owner_id,
             owner_label=owner_label,
-            is_admin=role == StudioRole.ADMIN,
-            can_bind_provider=role in (StudioRole.ADMIN, StudioRole.DEVELOPER),
+            is_admin=role.is_admin,
+            can_bind_provider=(role.is_admin or role == StudioRole.DEVELOPER),
         )
 
     def _knowledge_signing_key() -> bytes:
@@ -2699,7 +2731,7 @@ def _run_frontend_server(
     )
 
     def _require_studio_admin(request: Request) -> None:
-        if _request_role(request) != StudioRole.ADMIN:
+        if not _request_role(request).is_admin:
             raise HTTPException(
                 status_code=403,
                 detail="Only Studio administrators can update Studio",
@@ -3306,7 +3338,7 @@ def _run_frontend_server(
         return principal.display_name
 
     def _sandbox_is_admin(request: Request) -> bool:
-        return _request_role(request) == StudioRole.ADMIN
+        return _request_role(request).is_admin
 
     from frontend.server.migration.gateway import MigrationSandboxGateway
     from frontend.server.migration.routes import mount_migration_routes
@@ -4691,7 +4723,7 @@ def _run_frontend_server(
         if run is None:
             raise HTTPException(status_code=404, detail="test run not found")
         principal = _require_agent_management(request)
-        if _request_role(request) != StudioRole.ADMIN and (
+        if not _request_role(request).is_admin and (
             principal is None or run.owner_id != principal.owner_id
         ):
             raise HTTPException(status_code=404, detail="test run not found")
@@ -6341,7 +6373,7 @@ def _run_frontend_server(
             task = _deploy_tasks.get(task_id)
         if task is None:
             raise HTTPException(status_code=404, detail="Deployment task not found")
-        if _request_role(request) != StudioRole.ADMIN and (
+        if not _request_role(request).is_admin and (
             principal is None or task.get("owner_id") != principal.owner_id
         ):
             raise HTTPException(status_code=404, detail="Deployment task not found")
@@ -9350,7 +9382,7 @@ def _run_frontend_server(
         role = _request_role(request)
         runtime = _get_runtime(runtime_id, region)
         tags = _runtime_tags(runtime)
-        if role != StudioRole.ADMIN and not runtime_belongs_to(tags, principal):
+        if not role.is_admin and not runtime_belongs_to(tags, principal):
             raise HTTPException(
                 status_code=404,
                 detail=(
@@ -9387,7 +9419,7 @@ def _run_frontend_server(
         principal = _current_principal(request)
         role = _request_role(request)
         tags = _runtime_tags(runtime)
-        if role != StudioRole.ADMIN and not runtime_belongs_to(tags, principal):
+        if not role.is_admin and not runtime_belongs_to(tags, principal):
             raise HTTPException(
                 status_code=404,
                 detail="runtime_access_denied",
@@ -9460,7 +9492,7 @@ def _run_frontend_server(
         role = _request_role(request)
         return CronjobIdentity(
             ownerId=principal.owner_id if principal is not None else "local",
-            isAdmin=role == StudioRole.ADMIN,
+            isAdmin=role.is_admin,
         )
 
     cronjob_local_dispatcher: Dispatcher | None = None
@@ -9547,9 +9579,7 @@ def _run_frontend_server(
                     tags = _runtime_tags(r)
                     if tags.get("veadk:managed") != "true":
                         continue
-                    if role != StudioRole.ADMIN and not runtime_belongs_to(
-                        tags, principal
-                    ):
+                    if not role.is_admin and not runtime_belongs_to(tags, principal):
                         continue
                     out.append(
                         {
@@ -9786,7 +9816,7 @@ def _run_frontend_server(
         ak, sk, svc_token = _resolve_ve_credentials()
         regions = _runtime_regions(provider, region)
         page_size = max(1, min(page_size, 100))
-        restrict_to_owner = scope == "mine" or role != StudioRole.ADMIN
+        restrict_to_owner = scope == "mine" or not role.is_admin
         principal_key = (
             getattr(principal, "owner_id", ""),
             getattr(principal, "display_name", ""),
@@ -9842,12 +9872,12 @@ def _run_frontend_server(
                 for runtime in resp.agent_kit_runtimes or []:
                     tags = _runtime_tags(runtime)
                     is_mine = runtime_belongs_to(tags, principal)
-                    if (scope == "mine" or role != StudioRole.ADMIN) and not is_mine:
+                    if (scope == "mine" or not role.is_admin) and not is_mine:
                         continue
                     can_delete = (
                         role != StudioRole.USER
                         and tags.get("veadk:managed") == "true"
-                        and (role == StudioRole.ADMIN or is_mine)
+                        and (role.is_admin or is_mine)
                     )
                     out.append(
                         {
@@ -10939,11 +10969,12 @@ def _run_frontend_server(
                         environment_mount=session_environment_mount,
                         environment_mounts=session_environment_mounts_for_run,
                         prepare_environment_mounts=(
-                            lambda mounts,
-                            context: _prepare_execution_environment_mounts(
-                                studio_tool_owner_id,
-                                tuple(mounts),
-                                context,
+                            lambda mounts, context: (
+                                _prepare_execution_environment_mounts(
+                                    studio_tool_owner_id,
+                                    tuple(mounts),
+                                    context,
+                                )
                             )
                         ),
                     )
@@ -11197,6 +11228,43 @@ def _run_frontend_server(
             ),
         )
 
+    if identity_roles:
+        from frontend.server.user_management.deployment import initialize_runtime_roles
+        from frontend.server.user_management.routes import mount_user_management
+
+        pool_uid, client_uid = oauth2_user_pool_uid, oauth2_user_pool_client_uid
+        if not pool_uid or not client_uid:
+            pool_uid, client_uid = _current_studio_identity_ids(_identity_client())
+        if not pool_uid or not client_uid:
+            raise click.ClickException(
+                "Identity role management requires a user pool and client"
+            )
+        user_management = initialize_runtime_roles(
+            pool_uid=pool_uid,
+            client_uid=client_uid,
+            provider=provider,
+            identity_region=_identity_region(),
+            credentials=_resolve_ve_credentials,
+            environment=os.environ,
+            super_admin=studio_super_admin or "",
+            admins=studio_admins or "",
+            developers=studio_developers or "",
+        )
+        os.environ["VEADK_STUDIO_IDENTITY_ROLES"] = "1"
+        for legacy_key in (
+            "VEADK_STUDIO_SUPER_ADMIN",
+            "VEADK_STUDIO_ADMINS",
+            "VEADK_STUDIO_DEVELOPERS",
+        ):
+            os.environ.pop(legacy_key, None)
+        app.state.studio_user_management = user_management
+        mount_user_management(
+            app,
+            user_management,
+            _current_principal,
+            public_url=oauth2_redirect_uri,
+        )
+
     # ---- Auth ----------------------------------------------------------------
     # 'gateway' mode: an upstream API gateway (the AgentKit runtime gateway) has
     # already authenticated the user and forwards the identity as an
@@ -11244,6 +11312,7 @@ def _run_frontend_server(
                 client_name=oauth2_user_pool_client,
                 client_uid=oauth2_user_pool_client_uid,
                 redirect_uri=redirect_uri,
+                identity_client=_identity_client(),
             )
             provider_id = provider_id or "veidentity"
         else:
@@ -14664,19 +14733,13 @@ def _resolve_studio_cloud_credentials(
     help="Studio title, at most 16 characters.",
 )
 @click.option(
-    "--admin",
-    "studio_admins",
+    "--super-admin",
+    "studio_super_admin",
     default=None,
-    envvar="VEADK_STUDIO_ADMINS",
-    help="Comma-separated Studio admin usernames or OAuth emails. Omit both "
-    "role options to grant every user admin access.",
-)
-@click.option(
-    "--developer",
-    "studio_developers",
-    default=None,
-    envvar="VEADK_STUDIO_DEVELOPERS",
-    help="Comma-separated Studio developer usernames or OAuth emails.",
+    envvar="VEADK_STUDIO_SUPER_ADMIN",
+    help="Initial super administrator email or Identity UID. The user must already "
+    "exist in the pool. Omit on first deployment to make everyone an admin; "
+    "later deployments preserve Identity roles.",
 )
 @click.option(
     "--studio-sandbox-tool-id",
@@ -14803,8 +14866,7 @@ def frontend_deploy(
     precheck_only: bool,
     site_logo: str | None,
     site_title: str | None,
-    studio_admins: str | None,
-    studio_developers: str | None,
+    studio_super_admin: str | None,
     studio_sandbox_tool_id: str | None,
     sandbox_dev_tool_id: str | None,
     sandbox_chat_codex_tool_id: str | None,
@@ -14831,6 +14893,13 @@ def frontend_deploy(
         studio_knowledge_signing_namespace,
     )
     from veadk.config import veadk_environments
+
+    from frontend.server.user_management.deployment import (
+        confirm_super_admin_for_deploy,
+    )
+
+    if not precheck_only:
+        confirm_super_admin_for_deploy(studio_super_admin)
 
     _restore_process_env_on_click_close(_STUDIO_DEPLOY_PROCESS_ENV_KEYS)
     explicit_volcengine_credentials = any(
@@ -14960,6 +15029,19 @@ def frontend_deploy(
             )
         )
 
+        from frontend.server.user_management.deployment import prepare_identity_roles
+
+        identity_role_environment = prepare_identity_roles(
+            pool_uid=str(user_pool_id),
+            client_uid=str(allowed_client_id),
+            provider=provider_id,
+            region=identity_region,
+            access_key=ak,
+            secret_key=sk,
+            session_token=session_token or "",
+            super_admin=studio_super_admin,
+        )
+
         if iam_role:
             role_trn = iam_role
             click.echo(f"Using provided IAM role: {role_trn}")
@@ -15045,10 +15127,7 @@ def frontend_deploy(
             vestack_environment["OAUTH2_CLIENT_SECRET"] = client_secret
         if site_title is not None:
             vestack_environment["VEADK_SITE_TITLE"] = branding_title
-        if studio_admins:
-            vestack_environment["VEADK_STUDIO_ADMINS"] = studio_admins
-        if studio_developers:
-            vestack_environment["VEADK_STUDIO_DEVELOPERS"] = studio_developers
+        vestack_environment.update(identity_role_environment)
         configured_sandbox_tools = {
             "SANDBOX_DEV": sandbox_dev_tool_id,
             "SANDBOX_CHAT_CODEX": sandbox_chat_codex_tool_id,
@@ -15226,6 +15305,19 @@ def frontend_deploy(
             f"Identity region {identity_region}.",
             fg="yellow",
         )
+
+    from frontend.server.user_management.deployment import prepare_identity_roles
+
+    identity_role_environment = prepare_identity_roles(
+        pool_uid=str(user_pool_id),
+        client_uid=str(allowed_client_id),
+        provider=provider_id,
+        region=identity_region,
+        access_key=ak,
+        secret_key=sk,
+        session_token=session_token or "",
+        super_admin=studio_super_admin,
+    )
 
     # 1) Ensure VeFaaS has its service role before provisioning cloud resources.
     if provider_id in {"volcengine", "byteplus"}:
@@ -15600,10 +15692,7 @@ def frontend_deploy(
     veadk_environments["VEIDENTITY_REGION"] = identity_region
     if site_title is not None:
         veadk_environments["VEADK_SITE_TITLE"] = branding_title
-    if studio_admins:
-        veadk_environments["VEADK_STUDIO_ADMINS"] = studio_admins
-    if studio_developers:
-        veadk_environments["VEADK_STUDIO_DEVELOPERS"] = studio_developers
+    veadk_environments.update(identity_role_environment)
     veadk_environments["SANDBOX_CHAT_CODEX"] = chat_codex_tool_id
     veadk_environments["SANDBOX_CHAT_CODEX_SNAPSHOT"] = chat_codex_snapshot_tool_id
     veadk_environments["SANDBOX_CHAT_OPENCLAW"] = openclaw_tool_id
@@ -15942,6 +16031,13 @@ def frontend_deploy(
     help="Replace the deployed Studio title, at most 16 characters.",
 )
 @click.option(
+    "--super-admin",
+    "studio_super_admin",
+    default=None,
+    help="Enable Identity user management and migrate the deployed admin/developer "
+    "lists. Use an existing user's email or UID for the initial super administrator.",
+)
+@click.option(
     "--harness-sidecar-base-image",
     default=None,
     envvar="VEADK_STUDIO_HARNESS_SIDECAR_BASE_IMAGE",
@@ -16009,6 +16105,7 @@ def frontend_update(
     path: Path,
     site_logo: str | None,
     site_title: str | None,
+    studio_super_admin: str | None,
     harness_sidecar_base_image: str | None,
     harness_sidecar_regions: str | None,
     sandbox_dev_tool_id: str | None,
@@ -16201,9 +16298,34 @@ def frontend_update(
                 f"Could not assemble the Studio package: {error}"
             ) from error
 
+        identity_role_environment: dict[str, str] = {}
+        if studio_super_admin or (user_pool_id and user_pool_client_id):
+            from frontend.server.user_management.deployment import (
+                package_supports_identity_roles,
+                prepare_identity_roles,
+            )
+
+            if not package_supports_identity_roles(package_dir):
+                raise click.ClickException(
+                    "The target Studio package does not support Identity roles"
+                )
+
+            identity_role_environment = prepare_identity_roles(
+                pool_uid=user_pool_id,
+                client_uid=user_pool_client_id,
+                provider=provider_id,
+                region=current_env.get("VEIDENTITY_REGION") or target.region,
+                access_key=ak,
+                secret_key=sk,
+                session_token=session_token or "",
+                super_admin=studio_super_admin,
+                legacy_environment=current_env,
+            )
+
         click.echo(f"Updating '{vefaas_app_name}' in {target.region}/{target.project}…")
         environment_overrides = {"AGENTKIT_SANDBOX_REGION": target.region}
         environment_overrides.update(sidecar_environment)
+        environment_overrides.update(identity_role_environment)
         if remote_function is not None:
             from veadk.cli.frontend_deploy_iam import (
                 ensure_default_frontend_role_policy,

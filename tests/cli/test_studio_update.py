@@ -40,6 +40,19 @@ _PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 32
 
 @pytest.fixture(autouse=True)
 def _clear_provider_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "frontend.server.user_management.deployment.package_supports_identity_roles",
+        lambda path: True,
+    )
+    monkeypatch.setattr(
+        "frontend.server.user_management.deployment.prepare_identity_roles",
+        lambda **kwargs: {
+            "VEADK_STUDIO_IDENTITY_ROLES": "1",
+            "VEADK_STUDIO_ADMINS": "",
+            "VEADK_STUDIO_DEVELOPERS": "",
+            "VEADK_STUDIO_SUPER_ADMIN": "",
+        },
+    )
     monkeypatch.delenv("AGENTKIT_CLOUD_PROVIDER", raising=False)
     monkeypatch.delenv("CLOUD_PROVIDER", raising=False)
     monkeypatch.delenv("REGION", raising=False)
@@ -1285,6 +1298,10 @@ def test_volcengine_studio_update_repairs_missing_snapshot_tools_and_oauth_callb
     assert {str(call["provider"]) for call in agent_credentials} == {"volcengine"}
     overrides = captured["environment_overrides"]
     assert overrides == {
+        "VEADK_STUDIO_IDENTITY_ROLES": "1",
+        "VEADK_STUDIO_SUPER_ADMIN": "",
+        "VEADK_STUDIO_ADMINS": "",
+        "VEADK_STUDIO_DEVELOPERS": "",
         "STUDIO_WORKSPACE_TOOL_ID": "studio-workspace-tool",
         "AGENTKIT_SANDBOX_REGION": "cn-beijing",
         "VEADK_STUDIO_DEPLOY_ID": "stddep_update",

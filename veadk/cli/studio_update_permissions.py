@@ -40,6 +40,21 @@ def _permission(action: str, purpose_zh: str, purpose_en: str) -> PermissionSpec
 
 
 STUDIO_UPDATE_PERMISSION_SPECS: tuple[PermissionSpec, ...] = (
+    _permission("id:ListUsers", "匹配存量用户", "Match existing Identity users"),
+    _permission("id:GetUser", "校验用户角色", "Verify user roles"),
+    _permission("id:ListGroups", "读取 Studio 角色用户组", "Read Studio role groups"),
+    _permission(
+        "id:CreateGroup", "初始化 Studio 角色用户组", "Initialize Studio role groups"
+    ),
+    _permission(
+        "id:UpdateGroup",
+        "保存初始超级管理员",
+        "Persist the initial super administrator",
+    ),
+    _permission("id:AddUsersToGroup", "迁移 Studio 角色", "Migrate Studio roles"),
+    _permission(
+        "id:RemoveUsersFromGroup", "移除旧角色关系", "Remove previous role memberships"
+    ),
     _permission(
         "tos:GetObject", "读取并校验 Studio 更新包", "Read the Studio update bundle"
     ),

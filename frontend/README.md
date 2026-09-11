@@ -47,6 +47,13 @@ See [deployment and operation](service/studio_release_notifier/README.md).
   and BytePlus; existing Runtime updates and Sidecar deployments keep their
   existing role behavior
 
+- **User management** stores Studio roles in Identity user groups
+  scoped to the configured user pool and client. A super administrator can search
+  all pool users, filter roles, and assign super administrator, administrator,
+  developer, or ordinary-user access. The next page refresh reads current roles;
+  protected backend requests also resolve live membership. Only immutable
+  subject-to-user-ID mappings are cached
+
 - **Sandbox updates** in System Information compare each Tool's current image
   with `ListToolTypes` for its cloud provider and actual region. Volcengine and
   BytePlus use their own credentials and API hosts; catalogs are cached for
@@ -554,6 +561,90 @@ Rebuild the UI from source after changing it:
 ```bash
 cd frontend && npm install && npm run build   # -> veadk/webui
 ```
+
+If an existing checkout reports missing `i18next` or `react-i18next` modules,
+run `npm ci` from `frontend/` to synchronize dependencies with the lockfile
+before rebuilding. Reusing another checkout's `node_modules` can retain older
+dependencies even when the current `package.json` already declares them
+
+### Identity-backed user management
+
+Deploy with `--super-admin <existing-user-email-or-uid>` to select the first
+super administrator. This is the only deployment role flag; `deploy --admin`
+and `deploy --developer` are no longer supported
+
+Without `--super-admin`, deployment first warns that user and permission
+management will be inconvenient without a super administrator and asks
+`是否继续? [y/N]`. Press Enter or enter `n` to cancel before cloud operations;
+enter `y` to continue. Setting `VEADK_STUDIO_SUPER_ADMIN` also satisfies this
+check. Read-only `--precheck-only` does not prompt
+
+```bash
+veadk studio deploy --user-pool-id <pool-uid> \
+  --allowed-client-id <client-uid> --vefaas-app-name <app-name> \
+  --super-admin <existing-user-email-or-uid>
+```
+
+On first deployment, omitting `--super-admin` stores an **admin** default in
+Identity, so existing and future signed-in users are administrators. Specifying
+it stores a **regular-user** default for other users. Existing Identity roles
+and the stored default are preserved on subsequent deployments and updates
+
+Only super administrators can see **User management** or call its APIs. They
+also inherit all administrator capabilities, including visibility into all
+agents and resources available to the Studio. The initial super administrator
+is protected from demotion. If an existing Studio has none, use
+`veadk studio update --vefaas-app-name <app-name> --super-admin <email-or-uid>`
+to assign the first one without resetting other users' roles
+
+Role changes validate the browser Origin against the public OAuth callback URL
+configured by deployment, so HTTPS gateways can forward to an internal HTTP
+server without blocking legitimate changes. Other origins remain blocked, and
+client-supplied forwarding headers cannot change the accepted origin. For a
+custom public domain, set `--oauth2-redirect-uri` to its OAuth callback URL
+
+For local use, pass `--oauth2-user-pool-uid`, `--oauth2-user-pool-client-uid`, and
+optionally `--super-admin` to `veadk studio`, with the selected provider's AK/SK
+available. `VEIDENTITY_REGION` selects the Identity region. Volcengine and
+BytePlus use their respective credentials and API hosts. Local sessions without
+an Identity pool retain the legacy `--admin` / `--developer` options
+
+Four `studio-<client-uid>-<role>` Identity groups store application roles; their
+metadata stores the default role and the protected user's immutable UID. These
+application roles do not assign cloud IAM roles. Each authenticated backend
+request reads current group membership. OIDC subjects map to Identity management
+UIDs; email cannot substitute for an authenticated subject. Refreshing the page
+shows a newly assigned role. Multiple role memberships fail closed to regular
+user access and can be repaired by assigning a role again
+
+Cloud frontend updates automatically migrate `VEADK_STUDIO_ADMINS` and
+`VEADK_STUDIO_DEVELOPERS` into Identity. Each UID, subject, email or username
+must match exactly one pool user before any assignments are written. Admin
+membership takes precedence over developer membership. With either legacy list,
+unlisted users remain regular users; with neither list and no initial super
+administrator, everyone retains admin access. Migration never promotes a legacy
+admin to super administrator automatically
+
+After successful migration, the update clears the old role environment values
+and enables Identity roles. Failures retain the old configuration. Updates and
+restarts preserve subsequent role edits in Identity. When the running updater
+predates this feature, the new runtime performs the migration before accepting
+requests and clears the Function configuration. Existing immutable revisions
+may still contain their original environment snapshot; the new runtime ignores
+those old lists once Identity initialization is complete
+
+Deploy and CLI update provision the required Identity permissions on the
+managed Studio IAM policy. In-app updates check permissions and do not change
+IAM policies. For an older updater that lacks this check, grant Identity
+user/group read and group create/update/add/remove-member permissions before
+upgrading, or use the new `veadk studio update` CLI. Missing permissions stop
+migration instead of falling back to static role lists
+
+Initialize a new pool/client on one instance before starting additional
+instances. Identity membership updates are not transactional across instances;
+conflicting edits are denied or reported for retry, and multiple memberships
+grant no additional privileges. Audit logs include the actor, target, old/new
+roles and operation ID
 
 Dev loop with hot reload (Vite proxies the API):
 

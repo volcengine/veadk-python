@@ -821,7 +821,7 @@ test("reveals the refreshed welcome heading and placeholder after Agent connecti
   );
   assert.match(
     appSource,
-    /<NewChatFeatureNotice canUpdate=\{access\.role === "admin"\} \/>/,
+    /<NewChatFeatureNotice canUpdate=\{access\.role === "admin" \|\| access\.role === "super_admin"\} \/>/,
   );
   assert.match(
     featureNoticeSource,

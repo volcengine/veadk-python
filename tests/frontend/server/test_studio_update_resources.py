@@ -42,6 +42,68 @@ def _client(
 
 
 @pytest.mark.parametrize(
+    "provider,region",
+    [
+        ("volcengine", "cn-beijing"),
+        ("volcengine", "cn-shanghai"),
+        ("byteplus", "ap-southeast-1"),
+    ],
+)
+def test_frontend_update_migrates_the_deployed_role_lists(
+    monkeypatch, provider, region
+):
+    environment = {
+        "OAUTH2_USER_POOL_ID": "pool",
+        "OAUTH2_USER_POOL_CLIENT_ID": "client",
+        "VEADK_STUDIO_ADMINS": "admin@example.com",
+        "VEADK_STUDIO_DEVELOPERS": "dev@example.com",
+        "VEIDENTITY_REGION": region,
+        "VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY": "stable-key",
+        "VEADK_STUDIO_TOS_BUCKET": "bucket",
+        "VEADK_STUDIO_TOS_REGION": region,
+        "SANDBOX_CHAT_CODEX_SNAPSHOT": "code",
+        "SANDBOX_CHAT_OPENCLAW_SNAPSHOT": "claw",
+        "SANDBOX_CHAT_HERMES_SNAPSHOT": "hermes",
+    }
+    calls = []
+
+    def prepare(**kwargs):
+        calls.append(kwargs)
+        return {
+            "VEADK_STUDIO_IDENTITY_ROLES": "1",
+            "VEADK_STUDIO_ADMINS": "",
+            "VEADK_STUDIO_DEVELOPERS": "",
+        }
+
+    monkeypatch.setattr(
+        "frontend.server.user_management.deployment.prepare_identity_roles", prepare
+    )
+    overrides = reconcile_studio_update_resources(
+        provider=provider,
+        region=region,
+        application_id="app",
+        function_id="function",
+        function_client=_client(environment),
+        access_key="ak",
+        secret_key="sk",
+        session_token="token",
+    )
+    assert overrides["VEADK_STUDIO_IDENTITY_ROLES"] == "1"
+    assert (
+        overrides["VEADK_STUDIO_ADMINS"] == overrides["VEADK_STUDIO_DEVELOPERS"] == ""
+    )
+    assert calls[0]["legacy_environment"]["VEADK_STUDIO_ADMINS"] == "admin@example.com"
+    assert (
+        calls[0]["legacy_environment"]["VEADK_STUDIO_DEVELOPERS"] == "dev@example.com"
+    )
+    assert calls[0]["pool_uid"] == "pool"
+    assert calls[0]["client_uid"] == "client"
+    assert calls[0]["provider"] == provider
+    assert calls[0]["region"] == region
+    assert "super_admin" not in calls[0]
+
+
+@pytest.mark.parametrize(
     ("provider", "region"),
     [
         ("volcengine", "cn-beijing"),

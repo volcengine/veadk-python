@@ -137,10 +137,35 @@ def reconcile_studio_update_resources(
     access_key: str,
     secret_key: str,
     session_token: str,
+    migrate_identity_roles: bool = True,
 ) -> dict[str, str]:
     """Return environment overrides for resources missing from an older Studio."""
     function, environment = _function_state(function_client, function_id)
     overrides: dict[str, str] = {}
+    if migrate_identity_roles and (
+        environment.get("OAUTH2_USER_POOL_ID")
+        or environment.get("VEADK_STUDIO_USER_POOL_ID")
+    ):
+        import click
+        from frontend.server.user_management.deployment import prepare_identity_roles
+        from veadk.cli.studio_release import StudioReleaseError
+
+        try:
+            overrides.update(
+                prepare_identity_roles(
+                    pool_uid=environment.get("OAUTH2_USER_POOL_ID")
+                    or environment.get("VEADK_STUDIO_USER_POOL_ID", ""),
+                    client_uid=environment.get("OAUTH2_USER_POOL_CLIENT_ID", ""),
+                    provider=provider,
+                    region=environment.get("VEIDENTITY_REGION") or region,
+                    access_key=access_key,
+                    secret_key=secret_key,
+                    session_token=session_token,
+                    legacy_environment=environment,
+                )
+            )
+        except click.ClickException as error:
+            raise StudioReleaseError(str(error)) from error
 
     from frontend.server.workspace_tool import workspace_update_environment
 

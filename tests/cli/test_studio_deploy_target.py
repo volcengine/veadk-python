@@ -1135,8 +1135,8 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     assert veadk_environments["CLOUD_PROVIDER"] == provider
     assert veadk_environments["AGENTKIT_CLOUD_PROVIDER"] == provider
     assert veadk_environments["VEIDENTITY_REGION"] == expected_identity_region
-    assert "VEADK_STUDIO_ADMINS" not in veadk_environments
-    assert "VEADK_STUDIO_DEVELOPERS" not in veadk_environments
+    assert veadk_environments["VEADK_STUDIO_ADMINS"] == ""
+    assert veadk_environments["VEADK_STUDIO_DEVELOPERS"] == ""
     assert veadk_environments["SANDBOX_CHAT_CODEX"] == "chat-code-env-id"
     assert veadk_environments["SANDBOX_CHAT_CODEX_SNAPSHOT"] == (
         "chat-code-env-snapshot-id"
@@ -2045,16 +2045,24 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
     ("role_args", "expected_environment"),
     [
         (
-            ["--admin", "admin@example.com"],
-            {"VEADK_STUDIO_ADMINS": "admin@example.com"},
+            ["--super-admin", "admin@example.com"],
+            {
+                "VEADK_STUDIO_IDENTITY_ROLES": "1",
+                "VEADK_STUDIO_ADMINS": "",
+                "VEADK_STUDIO_DEVELOPERS": "",
+            },
         ),
         (
-            ["--developer", "dev@example.com"],
-            {"VEADK_STUDIO_DEVELOPERS": "dev@example.com"},
+            [],
+            {
+                "VEADK_STUDIO_IDENTITY_ROLES": "1",
+                "VEADK_STUDIO_ADMINS": "",
+                "VEADK_STUDIO_DEVELOPERS": "",
+            },
         ),
     ],
 )
-def test_studio_deploy_enables_rbac_when_either_role_is_configured(
+def test_studio_deploy_uses_identity_roles_after_initialization(
     monkeypatch: pytest.MonkeyPatch,
     role_args: list[str],
     expected_environment: dict[str, str],
@@ -2112,7 +2120,12 @@ def test_studio_deploy_enables_rbac_when_either_role_is_configured(
     configured_roles = {
         key: value
         for key, value in veadk_environments.items()
-        if key in {"VEADK_STUDIO_ADMINS", "VEADK_STUDIO_DEVELOPERS"}
+        if key
+        in {
+            "VEADK_STUDIO_ADMINS",
+            "VEADK_STUDIO_DEVELOPERS",
+            "VEADK_STUDIO_IDENTITY_ROLES",
+        }
     }
     assert configured_roles == expected_environment
 
@@ -2618,6 +2631,15 @@ def test_studio_deploy_from_source_writes_lf_run_script(
 
 @pytest.fixture(autouse=True)
 def _workspace_tool_provisioning(monkeypatch):
+    monkeypatch.setattr(
+        "frontend.server.user_management.deployment.prepare_identity_roles",
+        lambda **kwargs: {
+            "VEADK_STUDIO_IDENTITY_ROLES": "1",
+            "VEADK_STUDIO_ADMINS": "",
+            "VEADK_STUDIO_DEVELOPERS": "",
+            "VEADK_STUDIO_SUPER_ADMIN": "",
+        },
+    )
     monkeypatch.setattr(
         "frontend.server.workspace_tool.provision_workspace_tool",
         lambda **kwargs: "studio-workspace-tool",

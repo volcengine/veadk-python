@@ -1,3 +1,4 @@
+import { UsersIcon } from "../users/UsersIcon";
 import {
   type CSSProperties,
   type SVGProps,
@@ -100,6 +101,7 @@ export type SidebarPage =
   | "search"
   | "developer-resources"
   | "feedback"
+  | "users"
   | null;
 
 export interface SidebarSandboxHistory {
@@ -179,6 +181,7 @@ export interface SidebarProps {
   onAgentKitCli: () => void;
   onDeveloperResources: () => void;
   onSystemInfo: () => void;
+  onUserManagement?: () => void;
   onIssueFeedback: () => void;
   onPickSession: (id: string) => void;
   onDeleteSession: (id: string) => void;
@@ -204,6 +207,7 @@ function smokeAvatarStyle(seed: string): CSSProperties {
 }
 
 const STUDIO_ROLE_KEYS: Record<StudioAccess["role"], string> = {
+  super_admin: "account.roles.super_admin",
   admin: "account.roles.admin",
   developer: "account.roles.developer",
   user: "account.roles.user",
@@ -394,6 +398,7 @@ export function Sidebar({
   onAgentKitCli,
   onDeveloperResources,
   onSystemInfo,
+  onUserManagement,
   onIssueFeedback,
   onPickSession,
   onDeleteSession,
@@ -554,6 +559,14 @@ export function Sidebar({
             <ApplicationsIcon className="icon" />
             <span className="sidebar-nav-label">{t("navigation.automations")}</span>
           </button>
+          {access.capabilities.manageUsers && onUserManagement ? (
+            <button className={`new-chat${activePage === "users" ? " is-active" : ""}`}
+              onClick={onUserManagement} aria-label={t("navigation.users")}
+              aria-current={activePage === "users" ? "page" : undefined} title={t("navigation.users")}>
+              <UsersIcon className="icon" />
+              <span className="sidebar-nav-label">{t("navigation.users")}</span>
+            </button>
+          ) : null}
         </nav>
       </div>
 
