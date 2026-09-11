@@ -1623,7 +1623,7 @@ def test_tos_dependency_store_populates_and_reuses_cached_wheel(
                         "filename": "agentkit-linux-x64.tar.gz",
                         "url": (
                             "https://agentkit-cli.tos-cn-beijing.volces.com/"
-                            "0.52.18/agentkit-linux-x64.tar.gz"
+                            "0.52.19/agentkit-linux-x64.tar.gz"
                         ),
                         "sha256": digest,
                     }
@@ -1674,7 +1674,7 @@ def test_tos_dependency_store_accepts_manifest_pinned_agentkit_cli_version(
                         "filename": "agentkit-linux-x64.tar.gz",
                         "url": (
                             "https://agentkit-cli.tos-cn-beijing.volces.com/"
-                            "0.52.18/agentkit-linux-x64.tar.gz"
+                            "0.52.19/agentkit-linux-x64.tar.gz"
                         ),
                         "sha256": "b" * 64,
                     }
@@ -1694,7 +1694,7 @@ def test_tos_dependency_store_accepts_manifest_pinned_agentkit_cli_version(
         "agentkit-linux-x64.tar.gz",
         (
             "https://agentkit-cli.tos-cn-beijing.volces.com/"
-            "0.52.18/agentkit-linux-x64.tar.gz"
+            "0.52.19/agentkit-linux-x64.tar.gz"
         ),
         "b" * 64,
     )
@@ -1703,14 +1703,14 @@ def test_tos_dependency_store_accepts_manifest_pinned_agentkit_cli_version(
 @pytest.mark.parametrize(
     "url",
     (
-        "http://agentkit-cli.tos-cn-beijing.volces.com/0.52.18/agentkit-linux-x64.tar.gz",
-        "https://example.com/0.52.18/agentkit-linux-x64.tar.gz",
-        "https://agentkit-cli.tos-cn-beijing.volces.com.evil.invalid/0.52.18/agentkit-linux-x64.tar.gz",
+        "http://agentkit-cli.tos-cn-beijing.volces.com/0.52.19/agentkit-linux-x64.tar.gz",
+        "https://example.com/0.52.19/agentkit-linux-x64.tar.gz",
+        "https://agentkit-cli.tos-cn-beijing.volces.com.evil.invalid/0.52.19/agentkit-linux-x64.tar.gz",
         "https://agentkit-cli.tos-cn-beijing.volces.com/latest/agentkit-linux-x64.tar.gz",
-        "https://agentkit-cli.tos-cn-beijing.volces.com/0.52.18/other.tar.gz",
-        "https://agentkit-cli.tos-cn-beijing.volces.com/0.52.18/nested/agentkit-linux-x64.tar.gz",
-        "https://agentkit-cli.tos-cn-beijing.volces.com/0.52.18/agentkit-linux-x64.tar.gz?download=1",
-        "https://agentkit-cli.tos-cn-beijing.volces.com/0.52.18/agentkit-linux-x64.tar.gz#fragment",
+        "https://agentkit-cli.tos-cn-beijing.volces.com/0.52.19/other.tar.gz",
+        "https://agentkit-cli.tos-cn-beijing.volces.com/0.52.19/nested/agentkit-linux-x64.tar.gz",
+        "https://agentkit-cli.tos-cn-beijing.volces.com/0.52.19/agentkit-linux-x64.tar.gz?download=1",
+        "https://agentkit-cli.tos-cn-beijing.volces.com/0.52.19/agentkit-linux-x64.tar.gz#fragment",
     ),
 )
 def test_tos_dependency_store_rejects_untrusted_agentkit_cli_url(
@@ -1813,7 +1813,7 @@ def test_builder_generates_dependency_manifest_from_release_source(
                             "filename": "agentkit-linux-x64.tar.gz",
                             "url": (
                                 "https://agentkit-cli.tos-cn-beijing.volces.com/"
-                                "0.52.18/agentkit-linux-x64.tar.gz"
+                                "0.52.19/agentkit-linux-x64.tar.gz"
                             ),
                             "sha256": "b" * 64,
                         }
@@ -1863,7 +1863,7 @@ def test_tos_dependency_store_rejects_download_with_wrong_checksum(
                         "filename": "agentkit-linux-x64.tar.gz",
                         "url": (
                             "https://agentkit-cli.tos-cn-beijing.volces.com/"
-                            "0.52.18/agentkit-linux-x64.tar.gz"
+                            "0.52.19/agentkit-linux-x64.tar.gz"
                         ),
                         "sha256": "b" * 64,
                     }
