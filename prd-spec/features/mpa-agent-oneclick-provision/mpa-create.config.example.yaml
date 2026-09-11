@@ -1,0 +1,53 @@
+# Copy to a local file (e.g. mpa-create.config.yaml) and fill in real values.
+# Pass it with: veadk mpa create --config mpa-create.config.yaml
+#
+# SECURITY: the filled-in file contains secrets (pg-password, model-api-key,
+# openviking-api-key, feishu-app-secret). It MUST NOT be committed to git.
+# `.gitignore` already ignores `mpa-create.config*.yaml` (this .example is the
+# only variant allowed in the repo). Explicit CLI options override these values.
+#
+# Keys accept dashes or underscores (pg-host or pg_host).
+
+# --- required ---
+image: agentkit-platform-<account>-cn-beijing.cr.volces.com/agentkit/mpa_agent:<tag>
+registry-name: agentkit-platform-<account>
+# mpa-agent-id is omitted by default; CLI generates mi-<12 lowercase alnum>.
+account-id: "2112682748"
+region: cn-beijing
+
+# --- PostgreSQL (external, pre-created) ---
+pg-host: cp-xxxx.pg7.aidap-global.cn-beijing.volces.com
+pg-port: "5432"
+pg-database: mpa
+pg-user: mpa
+pg-password: "<pg-password>"
+pg-sslmode: require
+pg-channel-binding: require
+
+# --- model ---
+model-provider: openai
+model-api-base: https://ark.cn-beijing.volces.com/api/v3/
+model-api-key: "<ark-api-key>"
+model-name: doubao-seed-2-0-pro-260215
+
+# --- compute plane / per-agent Tool ---
+compute-plane: runtime
+tool-image: agentkit-platform-<account>-cn-beijing.cr.volces.com/agentkit/mpa_codex_worker:<tag>
+# Clone the known-good worker env when the image requires it. This reference
+# Tool is a template only; the CLI creates a new dedicated Tool for the agent.
+tool-reference-id: t-xxxxxxxx
+runtime-role-name: IDRoleForArkClawShareAgent
+# tool-name and runtime-name are omitted: both derive from generated mpa-agent-id.
+# agentkit-tool-id: t-xxxxxxxx  # explicit debug/migration override only
+# AgentKit's shared Runtime endpoint does not expose a customer GatewayId.
+# Set this to the dedicated APIG gateway allocated for mpa-agent IM routing.
+# apig-instance-id: gda-xxxxxxxx
+
+# --- OpenViking (optional; only mounts when a compatible OpenViking Server URL is set) ---
+# openviking-url: https://<openviking-server>
+# openviking-resource-id: ov-xxxx
+# openviking-api-key: "<openviking-api-key>"
+
+# --- Feishu channel (optional) ---
+# feishu-app-id: cli_xxxx
+# feishu-app-secret: "<feishu-app-secret>"

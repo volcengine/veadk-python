@@ -22,6 +22,7 @@ modules so this part stays trivially testable.
 
 from __future__ import annotations
 
+import secrets
 from dataclasses import dataclass, field
 
 # Env keys whose values are secrets and must never be logged or printed in the
@@ -81,6 +82,32 @@ def derive_claw_space_id(claw_space_id: str | None, *, account_id: str) -> str:
     return f"csi-{account}"
 
 
+# Mirror arkclaw-team GenerateTemplateID: lowercase alnum, fixed-length suffix.
+_ID_CHARSET = "abcdefghijklmnopqrstuvwxyz0123456789"
+_ID_SUFFIX_LENGTH = 12
+
+
+def generate_mpa_agent_id() -> str:
+    """Generate a globally-unique ``mi-<12 lowercase alnum>`` instance id.
+
+    Follows the arkclaw-team ``GenerateTemplateID`` strategy (charset + fixed
+    suffix length) but uses ``secrets`` for the random source.
+    """
+    suffix = "".join(secrets.choice(_ID_CHARSET) for _ in range(_ID_SUFFIX_LENGTH))
+    return f"mi-{suffix}"
+
+
+def tool_name_for_agent(mpa_agent_id: str) -> str:
+    """Return the Codex worker Tool name for an agent id.
+
+    Matches the observed convention where a per-agent Tool is named
+    ``mi_<id>`` (underscore form of the ``mi-<id>`` instance id), giving each
+    agent its own dynamically-created Tool while keeping same-id re-runs
+    idempotent (reuse-by-name).
+    """
+    return (mpa_agent_id or "").strip().replace("-", "_")
+
+
 def mask_secret(value: str) -> str:
     """Mask a secret for display: keep the first char, star the rest.
 
@@ -114,6 +141,10 @@ def build_runtime_env(
         "MODEL_AGENT_API_BASE": params.model_api_base,
         "MODEL_AGENT_API_KEY": params.model_api_key,
         "MODEL_AGENT_NAME": params.model_name,
+        # mpa-agent's Codex setting has the non-empty default ``auto`` and is
+        # preferred over MODEL_AGENT_NAME. Set it explicitly so delegated
+        # worker turns use the same CLI-selected model as the primary agent.
+        "MPA_CODEX_WORKER_DEFAULT_MODEL": params.model_name,
         # PostgreSQL session store
         "MPA_SESSION_MEMORY_BACKEND": "postgresql",
         "PGHOST": params.pg_host,
@@ -128,6 +159,10 @@ def build_runtime_env(
         "SCHEDULED_TASK_BACKEND": "postgresql",
         # Identity adaptation (FR-10): no arkclaw identity pools in this scenario.
         "IDENTITY_STARTUP_ENABLED": "false",
+        # Without arkclaw userpool/client/workload resources there is no TIP
+        # issuer for Studio. The Runtime remains protected by APIG key auth;
+        # disable only the inner TIP gate so Studio A2A calls can reach it.
+        "A2A_TIP_VERIFY_ENABLED": "false",
         "CLAW_SPACE_ID": claw_space_id,
         "MPA_AGENT_ID": params.mpa_agent_id,
         "IDENTITY_REGION": params.identity_region,

@@ -2,7 +2,7 @@
 
 > 关联设计：`2026-09-10-mpa-agent-oneclick-provision-design.zh.md`（`approved`）
 > 用途：dev-loop 步骤 2 前置设计、步骤 7 后置执行的可执行验证 Case。
-> 状态：`designed`（尚未执行；执行结果在步骤 7 回填本表 结果列）。
+> 状态：`executed-with-blockers`（单测/CLI 通过；真机结果见 §3.1）。
 
 ## 1. 证据留存约定
 
@@ -18,7 +18,7 @@
 | FR-2 | VC-2, VC-3 | 单测/CLI |
 | FR-3 | VC-4（key-auth 部署）, VC-5（AC-10 兼容守卫） | 单测 |
 | FR-4 | VC-6, VC-7, VC-8, VC-9 | 单测 |
-| FR-5 | VC-10 | 单测 |
+| FR-5 | VC-10, VC-23 | 单测 + 真机 |
 | FR-6 | VC-11, VC-12 | 单测 |
 | FR-7 | VC-13（输出指引）, VC-18（真机 Studio 聊天） | 单测 + 真机 |
 | FR-8 | VC-3（隐藏输入）, VC-14（dry-run 掩码） | 单测/CLI |
@@ -26,8 +26,10 @@
 | FR-10 | VC-10（IDENTITY_STARTUP_ENABLED=false + csi-<account_id>） | 单测 |
 | FR-11 | VC-7（private 镜像 public） | 单测 |
 | 关键回归 | VC-16, VC-19（不同 session 不同沙箱）, VC-20（飞书拉群） | 回归 + 真机 |
+| FR-12/13 | VC-21（生成身份 + 独立 Tool/Runtime）, VC-22（缺 Tool 输入无写入）, VC-24（重试幂等） | 单测/CLI |
+| FR-18 | VC-25（APIG id 解析 fail-closed） | 单测 + 真机 |
 
-每个 P0/P1 需求（FR-1..FR-11）均至少 1 个 Case 覆盖。
+每个 P0/P1 需求（FR-1..FR-19）均至少 1 个 Case 覆盖。
 
 ## 3. Case 明细
 
@@ -51,7 +53,7 @@
 - **VC-10（FR-5/10/11 env 组装）**
   - 命令：`uv run pytest tests/cli/test_cli_mpa.py -k env`
   - 输入：不传 `--claw-space-id`、不传 `IDENTITY_STARTUP_ENABLED`。
-  - 预期：组装 env 含全部 mpa-agent 启动键（`MODEL_AGENT_*`、`PG*`、`MPA_SESSION_MEMORY_BACKEND`、`OPENVIKING_*`(若提供)、`AGENTKIT_TOOL_ID`、`MPA_AGENT_ID`）；`IDENTITY_STARTUP_ENABLED=false`；`CLAW_SPACE_ID=csi-<account_id>`；endpoint 相关键取 public。
+  - 预期：组装 env 含全部 mpa-agent 启动键；`IDENTITY_STARTUP_ENABLED=false`；`A2A_TIP_VERIFY_ENABLED=false`；`MPA_CODEX_WORKER_DEFAULT_MODEL=<model-name>`；`CLAW_SPACE_ID=csi-<account_id>`；endpoint 相关键取 public。
   - 通过标准：键集合等于期望集合；无任一密钥出现在日志字符串。
   - 证据：`evidence/VC-10.log`。
 
@@ -127,15 +129,31 @@
   - 预期：群 session 复用、回复送达。
   - 证据：入站/出站 envelope 摘要（脱敏）。
 
+### 生成身份与独立资源
+
+- **VC-21（FR-12/13 生成身份与每 Agent 资源）**：省略 agent/tool id、提供 `--tool-image`，断言生成合法且唯一 `mi-*`、派生 Tool/Runtime 名，并先 CreateTool 后 CreateRuntime。
+- **VC-22（FR-12 缺 Tool 输入无写入）**：runtime 模式缺少 tool image/id 时，在 SkillSpace、DB、Tool、Runtime 调用前具名失败。
+- **VC-23（FR-5 worker 模型选择）**：真机 `sandbox_task` 使用 CLI 指定模型，模型请求 2xx 且 binding 最终 `completed`。
+- **VC-24（FR-13 重试幂等）**：同名 Tool/Runtime 复用并收敛配置；非 Ready Tool 等待；重名歧义失败；Runtime 更新等待更新版本 Ready。
+- **VC-25（FR-18 APIG id 完整性）**：只接受 endpoint 唯一映射的 gateway id 或显式 `--apig-instance-id`；共享 gateway 无 ID 时 fail-closed，不写入任意 gateway 或 `pending`。
+
+## 3.1 真机 E2E 结果（2026-09-11）
+
+- Runtime `r-yeuugf44qob21078l38i`、Tool `t-yeuugdts00zn6n5iqhin`，mpa-agent 镜像 tag `20260908154102-d34fdab`。
+- VC-23 通过：两个新 context 均使用指定模型、模型 HTTP 200、命令 exit code 0，并持久化 `invocation.completed`。
+- VC-19 在资源层通过：两个 context 映射到不同 worker session。
+- VC-18 在协议结果边界阻断：worker 已完成，但 A2A 均因 PostgreSQL ADK session revision 冲突返回 failed；属所选 mpa-agent 镜像缺陷。
+- VC-20 未执行：未提供飞书凭据/机器人安装；且 Runtime 为 `GatewayMode=Shared`、`GatewayInstanceId` 为空，现有行仍为 `apig_instance_id=pending`。CLI 已 fail-closed 并允许显式传专属 `--apig-instance-id`，客户 gateway 自动分配仍未解决。
+
 ## 4. 验证执行计划
 
 1. 单测级（VC-1..VC-14, VC-17）：桩云 SDK + SQLite/内存 `mpa_meta`，随 TDD 每任务即时执行。
 2. 回归（VC-15, VC-16）：实现完成后统一执行。
-3. 真机（VC-18, VC-19, VC-20）：一次真实 `veadk mpa create` 部署后，在 Studio 与飞书群验证；证据脱敏留存。
+3. 真机（VC-18, VC-19, VC-20, VC-23, VC-25）：一次真实 `veadk mpa create` 部署后，在 Studio 与飞书群验证；证据脱敏留存。
 4. 失败处理：P0/P1 Case 失败回 T-8..T-12 修实现，或回本清单修 Case（并记录原因），重跑受影响 Case。
 
 ## 5. 准出门禁
 
-- 所有映射到 FR-1..FR-11 的 P0/P1 Case 通过。
+- 所有映射到 FR-1..FR-19 的单测/CLI P0/P1 Case 通过。
 - VC-15/VC-16 回归通过（不破坏 mpa-agent 与既有命令）。
-- 真机 VC-18 通过；VC-19/VC-20 通过或有明确风险说明与用户确认。
+- 真机 VC-18、VC-20 按 §3.1 保持 blocked；VC-19、VC-23 通过。

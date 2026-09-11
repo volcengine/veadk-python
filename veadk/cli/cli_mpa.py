@@ -24,17 +24,27 @@ mpa-agent needs no control-plane ``mi-*`` record.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import click
 
-from veadk.integrations.mpa.mpa_meta_seed import MpaMetaSeedError, seed_mpa_meta
+from veadk.integrations.mpa.mpa_meta_seed import (
+    MpaMetaSeedError,
+    overwrite_mpa_meta,
+    seed_mpa_meta,
+)
 from veadk.integrations.mpa.mpa_provision import (
     MpaProvisionParams,
     build_runtime_env,
     derive_claw_space_id,
+    generate_mpa_agent_id,
     redact_env_for_display,
+    tool_name_for_agent,
 )
+from veadk.integrations.mpa.mpa_runtime import provision_runtime
+from veadk.integrations.mpa.mpa_skill_space import ensure_skill_space
+from veadk.integrations.mpa.mpa_tool import ensure_codex_worker_tool
 from veadk.integrations.mpa.mpa_verify import VerificationResult, verify_instance
 
 
@@ -107,17 +117,157 @@ def _deploy_image(
     }
 
 
+def _ve_credentials() -> tuple[str, str, str]:
+    """Resolve Volcengine AK/SK/session-token for management API calls."""
+    from veadk.utils.misc import getenv
+
+    return (
+        getenv("VOLCENGINE_ACCESS_KEY"),
+        getenv("VOLCENGINE_SECRET_KEY"),
+        getenv("VOLCENGINE_SESSION_TOKEN", "", allow_false_values=True),
+    )
+
+
+def _tools_client(region: str):
+    from agentkit.sdk.tools.client import AgentkitToolsClient
+
+    ak, sk, token = _ve_credentials()
+    return AgentkitToolsClient(
+        access_key=ak, secret_key=sk, region=region, session_token=token
+    )
+
+
+def _skills_client(region: str):
+    from agentkit.sdk.skills.client import AgentkitSkillsClient
+
+    ak, sk, token = _ve_credentials()
+    return AgentkitSkillsClient(
+        access_key=ak, secret_key=sk, region=region, session_token=token
+    )
+
+
+def _runtime_client(region: str):
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+    ak, sk, token = _ve_credentials()
+    return AgentkitRuntimeClient(
+        access_key=ak, secret_key=sk, region=region, session_token=token
+    )
+
+
+def _resolve_apig_instance_id(region: str):
+    """Return a callback mapping a public endpoint to its APIG gateway id.
+
+    The gateway is provisioned by AgentKit together with the runtime; its id is
+    read from the APIG gateway list by matching the endpoint host prefix.
+    """
+
+    def _resolve(public_endpoint: str) -> str:
+        from urllib.parse import urlsplit
+
+        from veadk.integrations.ve_apig.ve_apig import APIGateway
+        from veadk.utils.misc import getenv
+
+        host = urlsplit(public_endpoint).hostname or ""
+        prefix = host.split(".", 1)[0] if host else ""
+        gw = APIGateway(
+            getenv("VOLCENGINE_ACCESS_KEY"),
+            getenv("VOLCENGINE_SECRET_KEY"),
+            region,
+            session_token=getenv(
+                "VOLCENGINE_SESSION_TOKEN", "", allow_false_values=True
+            ),
+        )
+        result = gw.list_gateways()
+        return _gateway_id_from_endpoint_prefix(
+            prefix, getattr(result, "items", None) or []
+        )
+
+    return _resolve
+
+
+def _gateway_id_from_endpoint_prefix(prefix: str, gateways: list[Any]) -> str:
+    """Resolve only an endpoint prefix that identifies exactly one gateway.
+
+    AgentKit shared-gateway Runtime endpoints currently do not embed an APIG
+    gateway id. Returning an arbitrary account gateway would corrupt mpa_meta
+    and could make IM setup mutate an unrelated gateway, so fail closed.
+    """
+    matches = []
+    for item in gateways:
+        gateway_id = str(getattr(item, "id", "") or "")
+        if prefix and gateway_id and prefix.startswith(gateway_id):
+            matches.append(gateway_id)
+    unique = list(dict.fromkeys(matches))
+    return unique[0] if len(unique) == 1 else ""
+
+
 @click.group()
 def mpa() -> None:
     """VeADK-version mpa-agent provisioning."""
 
 
+def _load_config_default_map(
+    ctx: click.Context, _param: click.Parameter, value: str | None
+) -> str | None:
+    """Populate ``ctx.default_map`` from a YAML config so options can be omitted.
+
+    Explicit CLI options always win: Click only falls back to ``default_map``
+    for parameters not supplied on the command line. This lets operators fix
+    PG/OpenViking (and any other) settings — including secrets — in a local YAML
+    that must never be committed to git. Keys use the option name with dashes or
+    underscores (e.g. ``pg-host`` or ``pg_host``).
+    """
+    if not value:
+        return value
+    import yaml
+
+    path = Path(value)
+    if not path.exists():
+        raise click.BadParameter(f"config file not found: {value}")
+    try:
+        loaded = yaml.safe_load(path.read_text()) or {}
+    except yaml.YAMLError as exc:
+        raise click.BadParameter(f"invalid YAML config {value}: {exc}") from exc
+    if not isinstance(loaded, dict):
+        raise click.BadParameter(
+            f"config {value} must be a YAML mapping of option names to values"
+        )
+    # Normalize keys to Click's underscored param names.
+    normalized = {
+        str(key).strip().replace("-", "_"): val for key, val in loaded.items()
+    }
+    existing = dict(ctx.default_map or {})
+    existing.update(normalized)
+    ctx.default_map = existing
+    return value
+
+
 @mpa.command("create")
+@click.option(
+    "--config",
+    default="",
+    is_eager=True,
+    expose_value=False,
+    callback=_load_config_default_map,
+    help=(
+        "YAML config supplying option defaults (e.g. PG/OpenViking settings and "
+        "secrets). Explicit CLI options override it. The file must NOT be "
+        "committed to git; see mpa-create.config.example.yaml."
+    ),
+)
 @click.option("--image", required=True, help="Prebuilt mpa-agent container image URL.")
 @click.option(
     "--registry-name", required=True, help="Container registry name for VPC tunnel."
 )
-@click.option("--mpa-agent-id", required=True, help="mpa-agent instance id (mi-*).")
+@click.option(
+    "--mpa-agent-id",
+    default="",
+    help=(
+        "mpa-agent instance id (mi-*). Omit to auto-generate a globally-unique "
+        "mi-<id> per agent (recommended)."
+    ),
+)
 @click.option(
     "--account-id",
     required=True,
@@ -138,10 +288,65 @@ def mpa() -> None:
 @click.option("--model-api-base", required=True)
 @click.option("--model-api-key", required=True)
 @click.option("--model-name", required=True)
-@click.option("--agentkit-tool-id", required=True)
+@click.option(
+    "--compute-plane",
+    type=click.Choice(["runtime", "vefaas"]),
+    default="runtime",
+    help="runtime: AgentKit CreateRuntime (r-*, default); vefaas: deploy_image.",
+)
+@click.option(
+    "--agentkit-tool-id",
+    default="",
+    help="Existing Codex worker tool id (t-*). When set, CreateTool is skipped.",
+)
+@click.option(
+    "--tool-image",
+    default="",
+    help="Codex worker image; create a Tool when set and --agentkit-tool-id is not.",
+)
+@click.option(
+    "--tool-name",
+    default="",
+    help="Debug override; defaults to the agent id with '-' replaced by '_'.",
+)
+@click.option(
+    "--tool-reference-id",
+    default="",
+    help="Reference tool id whose env set is cloned when creating the Tool.",
+)
+@click.option(
+    "--tool-role-name",
+    default="IDRoleForArkClawShareAgent",
+    help="Execution role for the created Codex worker Tool.",
+)
 @click.option("--agentkit-tool-region", default="cn-beijing")
 @click.option("--skill-space-id", default="")
+@click.option(
+    "--skill-space-name",
+    default="",
+    help="Create or select a Skill Space and inject SKILL_SPACE_ID.",
+)
+@click.option(
+    "--runtime-role-name",
+    default="IDRoleForArkClawShareAgent",
+    help="Execution role for the AgentKit runtime (compute-plane runtime).",
+)
+@click.option(
+    "--runtime-name",
+    default="",
+    help="Debug override; defaults to the generated mpa-agent id.",
+)
+@click.option("--min-instance", type=int, default=1)
+@click.option("--max-instance", type=int, default=1)
 @click.option("--identity-region", default="cn-beijing")
+@click.option(
+    "--apig-instance-id",
+    default="",
+    help=(
+        "Dedicated customer APIG gateway id used by mpa-agent IM routing. "
+        "Optional when the compute plane returns an unambiguous gateway id."
+    ),
+)
 @click.option("--openviking-url", default="")
 @click.option("--openviking-resource-id", default="")
 @click.option("--openviking-api-key", default="")
@@ -173,10 +378,21 @@ def create(  # noqa: PLR0913 - explicit CLI options are clearer than a config bl
     model_api_base: str,
     model_api_key: str,
     model_name: str,
+    compute_plane: str,
     agentkit_tool_id: str,
+    tool_image: str,
+    tool_name: str,
+    tool_reference_id: str,
+    tool_role_name: str,
     agentkit_tool_region: str,
     skill_space_id: str,
+    skill_space_name: str,
+    runtime_role_name: str,
+    runtime_name: str,
+    min_instance: int,
+    max_instance: int,
     identity_region: str,
+    apig_instance_id: str,
     openviking_url: str,
     openviking_resource_id: str,
     openviking_api_key: str,
@@ -186,11 +402,28 @@ def create(  # noqa: PLR0913 - explicit CLI options are clearer than a config bl
     gateway_name: str,
     dry_run: bool,
 ) -> None:
-    """Provision one mpa-agent instance from a prebuilt image and wire it up."""
+    """Provision one mpa-agent instance from a prebuilt image and wire it up.
+
+    Orchestration (reference-aligned): ensure Skill Space -> ensure Tool ->
+    pre-seed mpa_meta -> compute plane -> validate/finalize bindings -> verify.
+    """
     # Interactive, optional Feishu secret (FR-8): prompt hidden when id given.
     if feishu_app_id and not feishu_app_secret:
         feishu_app_secret = click.prompt(
             "Feishu app secret (FEISHU_APP_SECRET)", hide_input=True
+        )
+
+    # Auto-generate a globally-unique mi-* id when not supplied, so each agent
+    # gets its own instance id (follows arkclaw-team's id strategy).
+    mpa_agent_id = (mpa_agent_id or "").strip() or generate_mpa_agent_id()
+    click.echo(f"mpa-agent-id: {mpa_agent_id}")
+
+    # Runtime agents require a sandbox Tool. Validate before SkillSpace, Tool,
+    # database, or Runtime calls so an incomplete config has no side effects.
+    if compute_plane == "runtime" and not agentkit_tool_id and not tool_image:
+        raise click.UsageError(
+            "compute-plane runtime requires --tool-image so a dedicated Tool "
+            "can be created (or --agentkit-tool-id as an explicit override)."
         )
 
     params = MpaProvisionParams(
@@ -222,29 +455,43 @@ def create(  # noqa: PLR0913 - explicit CLI options are clearer than a config bl
         feishu_app_secret=feishu_app_secret,
     )
 
-    # The env cannot include the runtime API key until after deploy; it is
-    # injected by the function's own key-auth authorizer, not via env.
     space_id = derive_claw_space_id(params.claw_space_id, account_id=params.account_id)
+    resolved_tool_name = tool_name or tool_name_for_agent(mpa_agent_id)
+    resolved_runtime_name = runtime_name or mpa_agent_id
 
     if dry_run:
-        # Build env against a placeholder endpoint purely for display.
         preview_env = build_runtime_env(
             params, public_endpoint="https://<pending-endpoint>"
         )
         masked = redact_env_for_display(preview_env)
         click.echo("veadk mpa create — dry run plan")
+        click.echo(f"  compute_plane      : {compute_plane}")
         click.echo(f"  app_name           : {app_name}")
         click.echo(f"  image              : {image}")
         click.echo(f"  region             : {region}")
         click.echo(f"  CLAW_SPACE_ID      : {space_id}")
+        if skill_space_name:
+            click.echo(f"  skill_space (name) : {skill_space_name} (create/select)")
+        elif skill_space_id:
+            click.echo(f"  skill_space_id     : {skill_space_id}")
+        if agentkit_tool_id:
+            click.echo(f"  tool               : reuse {agentkit_tool_id}")
+        elif tool_image:
+            click.echo(
+                f"  tool               : create '{resolved_tool_name}' "
+                f"from {tool_image}"
+            )
+        else:
+            click.echo("  tool               : none (sandbox delegation disabled)")
         click.echo("  runtime env (masked):")
         for key in sorted(masked):
             click.echo(f"    {key}={masked[key]}")
         click.echo("  mpa_meta fields to seed:")
+        rid = "runtime_id(r-*)" if compute_plane == "runtime" else "runtime_id(app_id)"
         for field in (
             "account_id",
             "resource_account_id",
-            "runtime_id(app_id)",
+            rid,
             "public_endpoint",
             "private_endpoint(=public)",
             "runtime_api_key(from key-auth)",
@@ -254,45 +501,130 @@ def create(  # noqa: PLR0913 - explicit CLI options are clearer than a config bl
         click.echo("Dry run only: no cloud or database changes were made.")
         return
 
-    # 1) Deploy the image (key auth) and collect resource info.
-    env = build_runtime_env(params, public_endpoint="https://<pending-endpoint>")
-    click.echo(f"Deploying image to VeFaaS application '{app_name}'...")
-    resource = _deploy_image(
-        params=params,
-        env=env,
-        app_name=app_name,
-        gateway_name=gateway_name,
-        enable_key_auth=True,
-    )
-    public_endpoint = resource["public_endpoint"]
-    click.echo(f"Deployed. Public endpoint: {public_endpoint}")
+    # 1) Ensure Skill Space (FR-14) -> SKILL_SPACE_ID.
+    resolved_skill_space_id = skill_space_id
+    if skill_space_name:
+        click.echo(f"Ensuring Skill Space '{skill_space_name}'...")
+        resolved_skill_space_id = ensure_skill_space(
+            _skills_client(region), name=skill_space_name
+        )
+        params.skill_space_id = resolved_skill_space_id
+        click.echo(f"Skill Space id: {resolved_skill_space_id}")
 
-    # 2) Seed mpa_meta so the runtime skips GetMpaInstanceConf.
-    meta_values = {
-        "account_id": params.account_id,
-        "resource_account_id": params.account_id,
-        "runtime_id": resource["app_id"],
+    # 2) Ensure Tool (FR-12/13) -> tool_id.
+    tool_id = agentkit_tool_id
+    if not tool_id and tool_image:
+        click.echo(f"Ensuring Codex worker Tool '{resolved_tool_name}'...")
+        tool_id = ensure_codex_worker_tool(
+            _tools_client(region),
+            name=resolved_tool_name,
+            image=tool_image,
+            reference_tool_id=tool_reference_id,
+            role_name=tool_role_name,
+        )
+        click.echo(f"Tool id: {tool_id}")
+    if tool_id:
+        params.agentkit_tool_id = tool_id
+
+    # 3) Pre-seed mpa_meta (FR-19 phase 1) BEFORE the container starts, so the
+    # runtime skips GetMpaInstanceConf at first start (it returns 403 on
+    # accounts without arkclaw:GetMpaInstanceConf). Real values are finalized in
+    # phase 2 after the endpoint/key are known.
+    engine = _make_seed_engine(params)
+    placeholder = "pending"
+    try:
+        seed_mpa_meta(
+            engine,
+            mpa_agent_id=params.mpa_agent_id,
+            values={
+                "account_id": params.account_id,
+                "resource_account_id": params.account_id,
+                "runtime_id": placeholder,
+                "public_endpoint": placeholder,
+                "private_endpoint": placeholder,
+                "runtime_api_key": placeholder,
+                "apig_instance_id": placeholder,
+            },
+        )
+    except MpaMetaSeedError as exc:
+        raise click.ClickException(f"mpa_meta pre-seed failed: {exc}") from exc
+    click.echo("Pre-seeded mpa_meta; runtime will skip GetMpaInstanceConf.")
+
+    # 4) Compute plane (FR-15/16): CreateRuntime (default) or deploy_image.
+    env = build_runtime_env(params, public_endpoint="https://<pending-endpoint>")
+    if compute_plane == "runtime":
+        click.echo(f"Creating AgentKit runtime '{resolved_runtime_name}'...")
+        resource = provision_runtime(
+            _runtime_client(region),
+            name=resolved_runtime_name,
+            artifact_url=params.image,
+            tool_id=tool_id,
+            role_name=runtime_role_name,
+            envs=env,
+            min_instance=min_instance,
+            max_instance=max_instance,
+            resolve_apig_instance_id=_resolve_apig_instance_id(region),
+            reinject_public_url=True,
+        )
+        if apig_instance_id:
+            resource["apig_instance_id"] = apig_instance_id.strip()
+    else:
+        click.echo(f"Deploying image to VeFaaS application '{app_name}'...")
+        resource = _deploy_image(
+            params=params,
+            env=env,
+            app_name=app_name,
+            gateway_name=gateway_name,
+            enable_key_auth=True,
+        )
+    public_endpoint = resource["public_endpoint"]
+    click.echo(f"Provisioned. Public endpoint: {public_endpoint}")
+
+    # 5) Finalize mpa_meta (FR-19 phase 2): overwrite placeholders with real
+    # deploy-resolved values now that the runtime is Ready.
+    real_runtime_id = resource.get("runtime_id") or resource.get("app_id", "")
+    finalize_values = {
+        "runtime_id": real_runtime_id,
         "public_endpoint": public_endpoint,
         "private_endpoint": public_endpoint,  # FR-11: public authoritative
         "runtime_api_key": resource["runtime_api_key"],
         "apig_instance_id": resource["apig_instance_id"],
     }
-    engine = _make_seed_engine(params)
+    unresolved = [
+        key for key, value in finalize_values.items() if not str(value).strip()
+    ]
+    if unresolved:
+        raise click.ClickException(
+            "cannot finalize mpa_meta; provisioned resources returned no "
+            + ", ".join(unresolved)
+            + f" (runtime_id={real_runtime_id}, tool_id={tool_id or 'n/a'}). "
+            "No arbitrary APIG gateway will be selected."
+        )
     try:
-        seed_mpa_meta(engine, mpa_agent_id=params.mpa_agent_id, values=meta_values)
+        overwrite_mpa_meta(
+            engine,
+            mpa_agent_id=params.mpa_agent_id,
+            values=finalize_values,
+        )
     except MpaMetaSeedError as exc:
-        raise click.ClickException(f"mpa_meta seeding failed: {exc}") from exc
-    click.echo("Seeded mpa_meta; runtime will skip GetMpaInstanceConf.")
+        raise click.ClickException(
+            "mpa_meta finalize failed (resources created: "
+            f"runtime_id={real_runtime_id}, tool_id={tool_id or 'n/a'}): {exc}"
+        ) from exc
+    click.echo("Finalized mpa_meta with real endpoint/key/apig values.")
 
-    # 3) Verify the instance is Studio-connectable.
-    result: VerificationResult = verify_instance(public_endpoint)
+    # 6) Verify the instance is Studio-connectable. Runtimes are key-auth by
+    # default, so pass the runtime API key for the probe to avoid 401.
+    result: VerificationResult = verify_instance(
+        public_endpoint, api_key=resource.get("runtime_api_key", "")
+    )
     if not result.passed:
         raise click.ClickException(
             "Post-deploy verification failed: " + result.summary()
         )
     click.echo("Verification passed: " + result.summary())
 
-    # 4) Studio connection guidance (FR-7). The runtime API key is retrieved on
+    # 6) Studio connection guidance (FR-7). The runtime API key is retrieved on
     # demand from the runtime; it is not printed here.
     agent_card = f"{public_endpoint.rstrip('/')}/.well-known/agent-card.json"
     click.echo("")

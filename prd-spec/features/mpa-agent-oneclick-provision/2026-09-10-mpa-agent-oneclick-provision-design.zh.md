@@ -85,12 +85,12 @@
   - `apig_instance_id`：veadk 随函数一起自动创建/复用的 APIG 网关 id（从 release 的 `CloudResource` `framework.triggers[0].DetailedConfig.GatewayId` 获取，与 `VeFaaS.get_application_route` 一致）。已确认：veadk 会随函数一并创建 APIG，网关 id 不是外部前提。
 
   播种需幂等（fill-empty 语义等价于运行时的 `MpaMetaStore.fill_empty`），不得覆盖非空字段，且写入前必须断言七个字段均非空（否则中止，不留半可用实例）。
-- **FR-5 — 运行时 env 注入。** 将所有解析出的配置设置为 VeFaaS 函数环境变量（创建 + release），键与 `mpa-agent` 启动时读取的一致（`.env.example`、`docs/mpa-agent-api.md` §9）。这包括 `IDENTITY_STARTUP_ENABLED=false`（FR-10）与与 public endpoint 决策一致的 `MPA_CODEX_WORKER_ENDPOINT_PREFERENCE`/endpoint 选择（FR-11）。
+- **FR-5 — 运行时 env 注入。** 将所有解析出的配置设置为 VeFaaS 函数环境变量（创建 + release），键与 `mpa-agent` 启动时读取的一致（`.env.example`、`docs/mpa-agent-api.md` §9）。这包括 `IDENTITY_STARTUP_ENABLED=false`（FR-10）、`MPA_CODEX_WORKER_DEFAULT_MODEL=<model-name>`（避免 Codex 委派回退到字面值 `auto`）以及与 public endpoint 决策一致的 `MPA_CODEX_WORKER_ENDPOINT_PREFERENCE`/endpoint 选择（FR-11）。
 - **FR-6 — 部署后验证。** release 后命令探测 `GET /health` 与 `GET /readiness`，并确认 A2A agent-card 在 `<public_endpoint>/.well-known/agent-card.json` 可达；失败时给出可操作的详情，且日志不含密钥。
 - **FR-7 — Studio 聊天可用。** 命令输出连接实例所需的精确 endpoint、agent-card URL 与 API key 处理方式，以便在 `veadk studio` 中以远端 A2A Agent 方式连接。聊天、多会话/多沙箱、IM 群聊仅依赖运行时，不受本命令门禁限制。
 - **FR-8 — 交互式、可选的飞书密钥。** 当提供 `--feishu-app-id` 但未提供密钥时，CLI 以隐藏输入方式提示 `FEISHU_APP_SECRET`；飞书完全可选；密钥不出现在 stdout 或日志中。
-- **FR-9 — `mpa-agent` 无回归。** 本次变更不要求也不执行对 `mpa-agent` 源码或镜像的修改；运行时既有的 REST 会话 API、A2A 服务器、MCP 服务器、Codex 沙箱委派、定时任务与 IM 渠道，行为与当前镜像完全一致。
-- **FR-10 — 身份适配（不使用 arkclaw 身份资源）。** veadk 场景不使用 `arkclaw-{space}-userpool/-client/-workload`。命令注入 `IDENTITY_STARTUP_ENABLED=false` 使 `initialize_identity_config_startup` 短路（`app/identity/service.py:166`），并通过稳定映射由 account id 派生 `CLAW_SPACE_ID`（如 `csi-<account_id>`），在不创建身份池的情况下满足运行时对 `CLAW_SPACE_ID` 非空的要求。`MPA_AGENT_ID` 仍为必填的 `mi-*` 参数。
+- **FR-9 — `mpa-agent` 无回归。** 本功能不修改 `mpa-agent` 源码或镜像；所选镜像仍需自行保证 REST/A2A 会话一致性、Codex 事件投影、定时任务与 IM 行为。若真实 E2E 暴露镜像级故障，创建流程与验收报告必须记录镜像/tag 及阻断证据，不得宣称完全兼容。
+- **FR-10 — 身份适配（不使用 arkclaw 身份资源）。** veadk 场景不使用 `arkclaw-{space}-userpool/-client/-workload`。命令注入 `IDENTITY_STARTUP_ENABLED=false` 使启动身份初始化短路，由 account id 派生 `CLAW_SPACE_ID`，并设置 `A2A_TIP_VERIFY_ENABLED=false`，因为该拓扑不存在 TIP 签发方。Runtime 仍由强制 APIG key auth 保护；关闭内层 TIP 门禁后，Studio 服务端鉴权代理可以聊天，且 Runtime key 不会暴露给浏览器。
 - **FR-11 — veadk 场景取 public endpoint。** 创建流程以 release 后的 public application URL 作为 `public_endpoint`、`private_endpoint`（镜像同值）、agent-card base 及 Codex worker endpoint 偏好的权威值。不需要任何私网 endpoint。
 
 ## 4. 设计与契约影响
@@ -195,7 +195,7 @@ veadk mpa create \
 | FR-4、FR-11 | T-4 | `AC-4`：播种写入七个必填字段（`private_endpoint` 镜像 `public_endpoint`）；已完整行保持不变；部分行仅填充空字段；任一字段未解析则在写入前中止。 | `uv run pytest tests/cli/test_cli_mpa.py -k seed` | pass（2026-09-11）：test_mpa_meta_seed 6/6 |
 | FR-5、FR-10 | T-5 | `AC-5`：组装的 env 含 `mpa-agent` 启动读取的全部键，含未提供时的 `IDENTITY_STARTUP_ENABLED=false` 与 `CLAW_SPACE_ID=csi-<account_id>`；不记录任何密钥。 | `uv run pytest tests/cli/test_cli_mpa.py -k env` | pass（2026-09-11）：test_mpa_provision_env 6/6 |
 | FR-6 | T-6 | `AC-6`：仅当 `/health`、`/readiness` 与 agent-card 均响应时验证通过；失败报告不含密钥。 | `uv run pytest tests/cli/test_cli_mpa.py -k verify` | pass（2026-09-11）：test_mpa_verify 4/4 |
-| FR-7 | T-7 | `AC-7`：命令输出含 agent-card URL 与 Studio 连接指引；文档化的手动 Studio 聊天对真实实例成功，且不同会话得到不同沙箱、飞书群聊可用。 | 手动：`veadk studio` 连接 + 一条消息 | blocked：输出指引已在单测/dry-run 验证；真机 Studio/沙箱/飞书 E2E 延后（需真实云 + Studio），运行时路径未改动 |
+| FR-7 | T-7 | `AC-7`：命令输出含 agent-card URL 与 Studio 连接指引；文档化的手动 Studio 聊天对真实实例成功，且不同会话得到不同沙箱、飞书群聊可用。 | 手动：`veadk studio` 连接 + 一条消息 | 部分通过/阻断：指引与不同 session→sandbox 映射已验证；所选镜像因 ADK session revision 冲突导致 A2A 最终失败；飞书缺凭据/机器人安装与专属客户 APIG id |
 | FR-9 | T-8 | `AC-8`：本次变更不修改 `mpa-agent` 仓库任何文件；既有 veadk 命令测试通过。 | `git -C ~/workspace/bytedance/mpa/mpa-agent status --porcelain` 为空；`uv run pytest tests/cli` | pass（2026-09-11）：mpa-agent porcelain 为空；tests/cli 1273 passed, 4 skipped |
 | 全部 | T-9 | `AC-9`：仓库门禁通过（pre-commit + 单测）。 | `pre-commit run -a` 与 `uv run pytest` | pass（2026-09-11）：changed files 上 pre-commit（ruff-check/format/gitleaks）Passed；新增套件 25/25 |
 
@@ -216,6 +216,6 @@ veadk mpa create \
 - 评审状态：2026-09-10 经 `review-spec` 评审；P0 结论已回写进 FR-3/FR-4/FR-10/FR-11、AC-10 与 §4.7。2026-09-10 状态推进为 `approved`。
 - 评审中已解决：APIG 实例 id 来源（部署产出）、endpoint 选择（public）、身份适配（`IDENTITY_STARTUP_ENABLED=false` + `csi-<account_id>`）。
 - 用户批准：2026-09-10 已批准 —— 由 CLI 直接下发 `mi-*` 元信息配置（路线 A）；veadk 版 `mpa-agent` 无需控制面记录。OQ-2 已接受；OQ-1 置于范围外。
-- 未决阻塞项：无。
-- 已执行检查：暂无（尚未开始实现）。
-- 剩余范围：实施任务 T-1..T-9（含 T-3b），按 `AGENTS.md` 测试优先。
+- 未决阻塞项：所选镜像的 Studio A2A 最终响应；飞书凭据/机器人安装与专属客户 APIG id。当前细节见 2026-09-11 编排对齐设计。
+- 已执行检查：路线 A 单测/CLI 覆盖通过；后续对齐验证由 2026-09-11 设计与证据报告追踪。
+- 剩余范围：见 2026-09-11 编排对齐设计。

@@ -18,7 +18,9 @@ from veadk.integrations.mpa.mpa_provision import (
     MpaProvisionParams,
     build_runtime_env,
     derive_claw_space_id,
+    generate_mpa_agent_id,
     mask_secret,
+    tool_name_for_agent,
 )
 
 
@@ -52,6 +54,22 @@ def test_derive_claw_space_id_from_account() -> None:
     assert derive_claw_space_id("csi-custom", account_id="2100") == "csi-custom"
 
 
+def test_generate_mpa_agent_id_is_valid_and_unique() -> None:
+    """FR-12: generated ids follow arkclaw's fixed lowercase-alnum shape."""
+    generated = {generate_mpa_agent_id() for _ in range(100)}
+    assert len(generated) == 100
+    for agent_id in generated:
+        assert len(agent_id) == len("mi-") + 12
+        assert agent_id.startswith("mi-")
+        assert agent_id[3:].isalnum()
+        assert agent_id[3:] == agent_id[3:].lower()
+
+
+def test_tool_name_is_derived_from_agent_id() -> None:
+    """FR-13: each agent's default Tool name follows the observed convention."""
+    assert tool_name_for_agent("mi-ab12cd34ef56") == "mi_ab12cd34ef56"
+
+
 def test_env_contains_startup_keys_and_identity_adaptation() -> None:
     """VC-10: env carries all startup keys, identity disabled, space derived."""
     env = build_runtime_env(_params(), public_endpoint="https://app.example.com")
@@ -61,6 +79,10 @@ def test_env_contains_startup_keys_and_identity_adaptation() -> None:
     assert env["MODEL_AGENT_API_BASE"] == "https://ark.example.com/api/v3/"
     assert env["MODEL_AGENT_API_KEY"] == "model-secret"
     assert env["MODEL_AGENT_NAME"] == "doubao-seed"
+    # mpa-agent's Codex setting defaults to the non-empty literal ``auto``,
+    # which otherwise wins over MODEL_AGENT_NAME and makes worker requests use
+    # a nonexistent model. Keep both execution paths on the CLI-selected model.
+    assert env["MPA_CODEX_WORKER_DEFAULT_MODEL"] == "doubao-seed"
     # PostgreSQL session store
     assert env["MPA_SESSION_MEMORY_BACKEND"] == "postgresql"
     assert env["PGHOST"] == "pg.example.com"
@@ -70,6 +92,9 @@ def test_env_contains_startup_keys_and_identity_adaptation() -> None:
     assert env["PGPASSWORD"] == "pg-secret"
     # Identity adaptation (FR-10)
     assert env["IDENTITY_STARTUP_ENABLED"] == "false"
+    # veadk has no arkclaw identity pools/TIP issuer; APIG key-auth remains the
+    # outer access control for Studio and direct Runtime callers.
+    assert env["A2A_TIP_VERIFY_ENABLED"] == "false"
     assert env["CLAW_SPACE_ID"] == "csi-2100000001"
     assert env["MPA_AGENT_ID"] == "mi-abc"
     # AgentKit

@@ -56,6 +56,22 @@ def test_mpa_group_registers_create() -> None:
     assert "create" in result.output
 
 
+def test_gateway_resolution_never_falls_back_to_an_unrelated_gateway() -> None:
+    gateways = [
+        type("Gateway", (), {"id": "gda-unrelated", "type": "standard"})(),
+        type("Gateway", (), {"id": "gdb-unrelated", "type": "serverless"})(),
+    ]
+    assert cli_mpa._gateway_id_from_endpoint_prefix("shared-host", gateways) == ""
+
+
+def test_gateway_resolution_accepts_only_an_exact_embedded_id() -> None:
+    gateways = [type("Gateway", (), {"id": "gda-matching"})()]
+    assert (
+        cli_mpa._gateway_id_from_endpoint_prefix("gda-matching", gateways)
+        == "gda-matching"
+    )
+
+
 def test_top_level_commands_still_resolve() -> None:
     """VC-1: registering mpa does not drop existing top-level commands."""
     from veadk.cli.cli import veadk
@@ -79,6 +95,92 @@ def test_create_missing_required_param_named_error() -> None:
     assert "--image" in result.output
 
 
+def test_create_config_yaml_supplies_defaults(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """--config YAML fills option defaults so they can be omitted on the CLI."""
+    import yaml
+
+    cfg = {
+        "image": "registry.example.com/mpa:latest",
+        "registry-name": "registry",
+        "mpa-agent-id": "mi-abc",
+        "account-id": "2100000001",
+        "pg-host": "pg.example.com",
+        "pg-database": "mpa",
+        "pg-user": "mpauser",
+        "pg-password": "pg-secret",
+        "model-provider": "openai",
+        "model-api-base": "https://ark.example.com/api/v3/",
+        "model-api-key": "model-secret",
+        "model-name": "doubao-seed",
+        "agentkit-tool-id": "tool-1",
+        "compute-plane": "vefaas",
+    }
+    cfg_path = tmp_path / "mpa-create.config.yaml"
+    cfg_path.write_text(yaml.safe_dump(cfg))
+
+    runner = CliRunner()
+    # Only --config + --dry-run; every required option comes from the YAML.
+    result = runner.invoke(
+        cli_mpa.mpa, ["create", "--config", str(cfg_path), "--dry-run"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "pg-secret" not in result.output  # secrets masked
+    assert "MPA_AGENT_ID" in result.output or "mpa_meta" in result.output
+
+
+def test_create_cli_option_overrides_config(tmp_path) -> None:
+    """Explicit CLI options win over --config YAML values."""
+    import yaml
+
+    cfg = {
+        "image": "registry.example.com/from-config:latest",
+        "registry-name": "registry",
+        "mpa-agent-id": "mi-config",
+        "account-id": "2100000001",
+        "pg-host": "pg.example.com",
+        "pg-database": "mpa",
+        "pg-user": "mpauser",
+        "pg-password": "pg-secret",
+        "model-provider": "openai",
+        "model-api-base": "https://ark.example.com/api/v3/",
+        "model-api-key": "model-secret",
+        "model-name": "doubao-seed",
+        "agentkit-tool-id": "tool-1",
+        "compute-plane": "vefaas",
+    }
+    cfg_path = tmp_path / "mpa-create.config.yaml"
+    cfg_path.write_text(yaml.safe_dump(cfg))
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli_mpa.mpa,
+        [
+            "create",
+            "--config",
+            str(cfg_path),
+            "--mpa-agent-id",
+            "mi-override",
+            "--dry-run",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    # Overridden id present; config id absent.
+    assert "mi-override" in result.output
+    assert "mi-config" not in result.output
+
+
+def test_create_config_missing_file_errors() -> None:
+    """A --config path that does not exist fails clearly without side effects."""
+    runner = CliRunner()
+    result = runner.invoke(
+        cli_mpa.mpa, ["create", "--config", "/no/such/file.yaml", "--dry-run"]
+    )
+    assert result.exit_code != 0
+    assert "config file not found" in result.output
+
+
 def test_create_dry_run_masks_secrets_and_no_side_effects(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -97,7 +199,9 @@ def test_create_dry_run_masks_secrets_and_no_side_effects(
     monkeypatch.setattr(cli_mpa, "seed_mpa_meta", _fail_seed)
 
     runner = CliRunner()
-    result = runner.invoke(cli_mpa.mpa, _base_args() + ["--dry-run"])
+    result = runner.invoke(
+        cli_mpa.mpa, _base_args(compute_plane="vefaas") + ["--dry-run"]
+    )
     assert result.exit_code == 0, result.output
     # Secrets masked.
     assert "pg-secret" not in result.output
@@ -132,8 +236,10 @@ def test_create_prompts_hidden_for_feishu_secret(
     assert "fs-secret" not in result.output
 
 
-def test_create_full_flow_orchestration(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Parameters -> deploy -> seed -> verify are wired in order (happy path)."""
+def test_create_full_flow_orchestration_vefaas(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-14: --compute-plane vefaas reproduces route A (deploy->seed->verify)."""
     order: list[str] = []
 
     def _deploy(**kwargs: Any):
@@ -147,9 +253,81 @@ def test_create_full_flow_orchestration(monkeypatch: pytest.MonkeyPatch) -> None
             "runtime_api_key": "rk-1",
         }
 
-    def _seed(engine: Any, *, mpa_agent_id: str, values: dict, **kwargs: Any):
-        order.append("seed")
+    def _pre_seed(engine: Any, *, mpa_agent_id: str, values: dict, **kwargs: Any):
+        order.append("pre_seed")
         assert mpa_agent_id == "mi-abc"
+        # phase 1 placeholders present and complete.
+        assert values["runtime_id"] == "pending"
+        return values
+
+    def _finalize(engine: Any, *, mpa_agent_id: str, values: dict, **kwargs: Any):
+        order.append("finalize")
+        # vefaas plane: runtime_id is the app id.
+        assert values["runtime_id"] == "app-1"
+        assert values["private_endpoint"] == values["public_endpoint"]
+        return values
+
+    def _verify(endpoint: str, **kwargs: Any):
+        order.append("verify")
+        return cli_mpa.VerificationResult(endpoint=endpoint, passed=True)
+
+    monkeypatch.setattr(cli_mpa, "_deploy_image", lambda **kw: _deploy(**kw))
+    monkeypatch.setattr(cli_mpa, "_make_seed_engine", lambda params: object())
+    monkeypatch.setattr(cli_mpa, "seed_mpa_meta", _pre_seed)
+    monkeypatch.setattr(cli_mpa, "overwrite_mpa_meta", _finalize)
+    monkeypatch.setattr(cli_mpa, "verify_instance", _verify)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mpa.mpa, _base_args(compute_plane="vefaas"))
+    assert result.exit_code == 0, result.output
+    assert order == ["pre_seed", "deploy", "finalize", "verify"]
+    # FR-7: Studio guidance in output.
+    assert "agent-card.json" in result.output
+    assert "https://app.example.com" in result.output
+
+
+def test_create_orchestration_order_runtime_plane(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-15/19: order SkillSpace->Tool->pre-seed->runtime->finalize->verify."""
+    order: list[str] = []
+
+    monkeypatch.setattr(cli_mpa, "_skills_client", lambda region: object())
+    monkeypatch.setattr(cli_mpa, "_tools_client", lambda region: object())
+    monkeypatch.setattr(cli_mpa, "_runtime_client", lambda region: object())
+    monkeypatch.setattr(
+        cli_mpa, "_resolve_apig_instance_id", lambda region: (lambda ep: "gw-r")
+    )
+
+    def _ensure_space(client: Any, *, name: str, **kw: Any) -> str:
+        order.append("skill_space")
+        assert name == "my-space"
+        return "ss-1"
+
+    def _ensure_tool(client: Any, *, name: str, image: str, **kw: Any) -> str:
+        order.append("tool")
+        assert name == "mi_generated123"
+        assert image == "registry.example.com/worker:tag"
+        assert kw["role_name"] == "CustomMpaRole"
+        return "t-created"
+
+    def _provision(client: Any, **kwargs: Any):
+        order.append("runtime")
+        assert kwargs["name"] == "mi-generated123"
+        assert kwargs["tool_id"] == "t-created"
+        assert kwargs["artifact_url"] == "registry.example.com/mpa:latest"
+        # SKILL_SPACE_ID injected into runtime env.
+        assert kwargs["envs"].get("SKILL_SPACE_ID") == "ss-1"
+        return {
+            "public_endpoint": "https://rt.example.com",
+            "runtime_id": "r-xyz",
+            "apig_instance_id": "gw-r",
+            "runtime_api_key": "rk-r",
+        }
+
+    def _pre_seed(engine: Any, *, mpa_agent_id: str, values: dict, **kwargs: Any):
+        order.append("pre_seed")
+        # FR-19 phase 1: all seven fields present (placeholders allowed).
         for field in (
             "account_id",
             "resource_account_id",
@@ -160,22 +338,149 @@ def test_create_full_flow_orchestration(monkeypatch: pytest.MonkeyPatch) -> None
             "apig_instance_id",
         ):
             assert values.get(field)
-        assert values["private_endpoint"] == values["public_endpoint"]
+        # runtime_id is still a placeholder at phase 1.
+        assert values["runtime_id"] == "pending"
+        return values
+
+    def _finalize(engine: Any, *, mpa_agent_id: str, values: dict, **kwargs: Any):
+        order.append("finalize")
+        # FR-19 phase 2: real values overwrite placeholders.
+        assert values["runtime_id"] == "r-xyz"
+        assert values["public_endpoint"] == "https://rt.example.com"
+        assert values["private_endpoint"] == "https://rt.example.com"
         return values
 
     def _verify(endpoint: str, **kwargs: Any):
         order.append("verify")
         return cli_mpa.VerificationResult(endpoint=endpoint, passed=True)
 
-    monkeypatch.setattr(cli_mpa, "_deploy_image", lambda **kw: _deploy(**kw))
+    monkeypatch.setattr(cli_mpa, "ensure_skill_space", _ensure_space)
+    monkeypatch.setattr(cli_mpa, "ensure_codex_worker_tool", _ensure_tool)
+    monkeypatch.setattr(cli_mpa, "provision_runtime", _provision)
     monkeypatch.setattr(cli_mpa, "_make_seed_engine", lambda params: object())
-    monkeypatch.setattr(cli_mpa, "seed_mpa_meta", _seed)
+    monkeypatch.setattr(cli_mpa, "seed_mpa_meta", _pre_seed)
+    monkeypatch.setattr(cli_mpa, "overwrite_mpa_meta", _finalize)
     monkeypatch.setattr(cli_mpa, "verify_instance", _verify)
+    monkeypatch.setattr(cli_mpa, "generate_mpa_agent_id", lambda: "mi-generated123")
 
     runner = CliRunner()
-    result = runner.invoke(cli_mpa.mpa, _base_args())
+    result = runner.invoke(
+        cli_mpa.mpa,
+        _base_args(
+            mpa_agent_id="",
+            agentkit_tool_id="",
+            tool_image="registry.example.com/worker:tag",
+            tool_role_name="CustomMpaRole",
+            skill_space_name="my-space",
+        ),
+    )
     assert result.exit_code == 0, result.output
-    assert order == ["deploy", "seed", "verify"]
-    # FR-7: Studio guidance in output.
+    assert order == [
+        "skill_space",
+        "tool",
+        "pre_seed",
+        "runtime",
+        "finalize",
+        "verify",
+    ]
     assert "agent-card.json" in result.output
-    assert "https://app.example.com" in result.output
+    assert "mpa-agent-id: mi-generated123" in result.output
+
+
+def test_runtime_plane_without_gateway_id_fails_before_finalize(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Shared-gateway runtimes must not persist an arbitrary APIG id."""
+    finalized: list[dict[str, Any]] = []
+    monkeypatch.setattr(cli_mpa, "_runtime_client", lambda region: object())
+    monkeypatch.setattr(
+        cli_mpa, "_resolve_apig_instance_id", lambda region: (lambda ep: "")
+    )
+    monkeypatch.setattr(cli_mpa, "_make_seed_engine", lambda params: object())
+    monkeypatch.setattr(cli_mpa, "seed_mpa_meta", lambda *a, **kw: kw["values"])
+    monkeypatch.setattr(
+        cli_mpa, "overwrite_mpa_meta", lambda *a, **kw: finalized.append(kw)
+    )
+    monkeypatch.setattr(
+        cli_mpa,
+        "provision_runtime",
+        lambda *a, **kw: {
+            "public_endpoint": "https://shared.example.com",
+            "runtime_id": "r-shared",
+            "apig_instance_id": "",
+            "runtime_api_key": "rk-shared",
+        },
+    )
+
+    result = CliRunner().invoke(cli_mpa.mpa, _base_args())
+
+    assert result.exit_code != 0
+    assert "returned no apig_instance_id" in result.output
+    assert "No arbitrary APIG gateway" in result.output
+    assert finalized == []
+
+
+def test_explicit_gateway_id_finalizes_shared_gateway_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    finalized: list[dict[str, Any]] = []
+    monkeypatch.setattr(cli_mpa, "_runtime_client", lambda region: object())
+    monkeypatch.setattr(
+        cli_mpa, "_resolve_apig_instance_id", lambda region: (lambda ep: "")
+    )
+    monkeypatch.setattr(cli_mpa, "_make_seed_engine", lambda params: object())
+    monkeypatch.setattr(cli_mpa, "seed_mpa_meta", lambda *a, **kw: kw["values"])
+    monkeypatch.setattr(
+        cli_mpa,
+        "overwrite_mpa_meta",
+        lambda *a, **kw: finalized.append(kw["values"]) or kw["values"],
+    )
+    monkeypatch.setattr(
+        cli_mpa,
+        "provision_runtime",
+        lambda *a, **kw: {
+            "public_endpoint": "https://shared.example.com",
+            "runtime_id": "r-shared",
+            "apig_instance_id": "",
+            "runtime_api_key": "rk-shared",
+        },
+    )
+    monkeypatch.setattr(
+        cli_mpa,
+        "verify_instance",
+        lambda *a, **kw: cli_mpa.VerificationResult(endpoint=a[0], passed=True),
+    )
+
+    result = CliRunner().invoke(
+        cli_mpa.mpa, _base_args(apig_instance_id="gda-dedicated")
+    )
+
+    assert result.exit_code == 0, result.output
+    assert finalized[0]["apig_instance_id"] == "gda-dedicated"
+
+
+def test_generated_identity_missing_tool_input_fails_before_writes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """VC-22: runtime mode requires Tool input before any side effect."""
+    calls: list[str] = []
+
+    monkeypatch.setattr(cli_mpa, "generate_mpa_agent_id", lambda: "mi-generated123")
+    monkeypatch.setattr(cli_mpa, "_make_seed_engine", lambda params: calls.append("db"))
+    monkeypatch.setattr(
+        cli_mpa, "_skills_client", lambda region: calls.append("skills")
+    )
+    monkeypatch.setattr(cli_mpa, "_tools_client", lambda region: calls.append("tools"))
+    monkeypatch.setattr(
+        cli_mpa, "_runtime_client", lambda region: calls.append("runtime")
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli_mpa.mpa,
+        _base_args(mpa_agent_id="", agentkit_tool_id=""),
+    )
+
+    assert result.exit_code != 0
+    assert "--tool-image" in result.output
+    assert calls == []
