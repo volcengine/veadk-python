@@ -19,7 +19,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-import logging
 import re
 import shlex
 import time
@@ -83,6 +82,7 @@ from veadk.cli.frontend_sandbox import (
 )
 from veadk.cli.frontend_skill_creator import _sandbox_model_config
 from veadk.utils.cloud_provider import cloud_provider_from_env
+from veadk.utils.logger import get_logger
 
 INTELLIGENT_DEVELOPMENT_PREFIX = "/web/intelligent-development"
 INTELLIGENT_DEVELOPMENT_TOOL_NAME = "intelligent-development"
@@ -139,7 +139,18 @@ _COMMAND_PROGRESS = (
     ),
     (re.compile(r"(?:^|[\s;&|])(curl|wget)\b[^\n]*?/ping\b"), "正在检查本地服务。"),
 )
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
+
+def _error_types(error: BaseException) -> str:
+    """Keep causal diagnostics bounded and free of exception messages."""
+    names = []
+    for _ in range(5):
+        names.append(type(error).__name__)
+        if error.__cause__ is None:
+            break
+        error = error.__cause__
+    return ">".join(names)
 
 
 async def _with_sse_heartbeat(
@@ -1048,7 +1059,23 @@ def mount_intelligent_development_routes(
         owner = owner_resolver(request)
         try:
             await resolve_intelligent_development_session(service, session_id, owner)
-            await service.delete(session_id, owner, is_admin=False)
+            logger.info(
+                "Intelligent development reason=session_delete_requested trigger=user_request session_id=%s",
+                session_id,
+            )
+            try:
+                await service.delete(session_id, owner, is_admin=False)
+            except Exception as error:
+                logger.error(
+                    "Intelligent development reason=session_delete_failed trigger=user_request session_id=%s error_types=%s",
+                    session_id,
+                    _error_types(error),
+                )
+                raise
+            logger.info(
+                "Intelligent development reason=session_delete_completed trigger=user_request session_id=%s",
+                session_id,
+            )
         except SandboxError as error:
             raise _http_error(error) from error
         if project_service is not None:
@@ -1384,24 +1411,50 @@ def mount_intelligent_development_routes(
                         completion_path = ""
                     except Exception as error:  # noqa: BLE001
                         completion_error = error
+                        logger.warning(
+                            "Intelligent development reason=completion_cleanup_failed stage=%s session_id=%s thread_id=%s error_types=%s",
+                            failure_stage,
+                            session_id,
+                            thread_id,
+                            _error_types(error),
+                        )
                 if lease is not None:
                     try:
                         await lease.cleanup()
                         lease = None
                     except Exception as error:  # noqa: BLE001
                         credential_error = error
+                        logger.warning(
+                            "Intelligent development reason=credential_cleanup_failed stage=%s session_id=%s thread_id=%s error_types=%s",
+                            failure_stage,
+                            session_id,
+                            thread_id,
+                            _error_types(error),
+                        )
                 if credential_error is not None:
+                    logger.warning(
+                        "Intelligent development reason=session_delete_requested trigger=credential_cleanup_failure session_id=%s thread_id=%s",
+                        session_id,
+                        thread_id,
+                    )
                     try:
                         await service.delete(session_id, owner)
-                    except Exception:  # noqa: BLE001
+                    except Exception as error:  # noqa: BLE001
                         logger.error(
-                            "Credential cleanup and environment termination failed for intelligent development session %s",
+                            "Intelligent development reason=session_delete_failed trigger=credential_cleanup_failure session_id=%s thread_id=%s error_types=%s",
                             session_id,
+                            thread_id,
+                            _error_types(error),
                         )
                         raise SandboxError(
                             "临时凭据清理未能确认，开发环境自动终止也失败。"
                             "请勿继续使用当前会话，并联系管理员。"
                         ) from credential_error
+                    logger.warning(
+                        "Intelligent development reason=session_delete_completed trigger=credential_cleanup_failure session_id=%s thread_id=%s",
+                        session_id,
+                        thread_id,
+                    )
                     completion_path = ""
                     lease = None
                     raise SandboxSessionNotFoundError(
@@ -1412,6 +1465,12 @@ def mount_intelligent_development_routes(
                     raise IntelligentDevelopmentCleanupError(
                         "临时交付证据文件未能清理，本轮已停止交付。请重试。"
                     ) from completion_error
+                logger.info(
+                    "Intelligent development reason=task_cleanup_completed stage=%s session_id=%s thread_id=%s",
+                    failure_stage,
+                    session_id,
+                    thread_id,
+                )
 
             try:
                 failure_stage = "task_prepare"

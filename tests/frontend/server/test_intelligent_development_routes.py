@@ -16,6 +16,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import os
+import subprocess
+import sys
 from collections.abc import AsyncIterator, Mapping
 from datetime import datetime, timezone
 from dataclasses import dataclass
@@ -349,6 +353,67 @@ def _remote(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(routes, "SandboxRemoteTransport", _Remote)
 
 
+@pytest.fixture(autouse=True)
+def _capture_veadk_logs(caplog: pytest.LogCaptureFixture):
+    """Observe the production handler hierarchy without changing its levels."""
+    logger = logging.getLogger("veadk")
+    logger.addHandler(caplog.handler)
+    try:
+        yield
+    finally:
+        logger.removeHandler(caplog.handler)
+
+
+def test_route_diagnostics_use_cli_logging_configuration() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from veadk.cli import cli_frontend\n"
+            "from frontend.server.intelligent_development_routes import logger\n"
+            "logger.info('route-info-output-probe')\n"
+            "logger.warning('route-warning-output-probe')\n",
+        ],
+        env={**os.environ, "LOGGING_LEVEL": "INFO"},
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=True,
+    )
+    assert result.stdout.count("route-info-output-probe") == 1
+    assert result.stdout.count("route-warning-output-probe") == 1
+
+
+@pytest.mark.parametrize("delete_fails", [False, True])
+def test_explicit_delete_logs_its_trigger_and_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    delete_fails: bool,
+) -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud()
+    delete = AsyncMock(wraps=gateway.delete_session)
+    if delete_fails:
+        delete.side_effect = routes.SandboxProvisioningError("private deletion detail")
+    monkeypatch.setattr(gateway, "delete_session", delete)
+    with TestClient(_app(gateway)) as client:
+        _connect(client)
+        response = client.delete(
+            "/web/intelligent-development/sessions/dev-session",
+            headers={"X-Test-User": "alice"},
+        )
+    assert response.status_code == (502 if delete_fails else 200)
+    delete.assert_awaited_once()
+    assert ("dev-session" in gateway.sessions) == delete_fails
+    assert "reason=session_delete_requested trigger=user_request" in caplog.text
+    assert (
+        f"reason=session_delete_{'failed' if delete_fails else 'completed'} trigger=user_request"
+        in caplog.text
+    )
+    assert "trigger=credential_cleanup_failure" not in caplog.text
+    assert "private deletion detail" not in caplog.text
+
+
 def _connect(client: TestClient) -> None:
     response = client.post(
         "/web/intelligent-development/sessions/dev-session/connect",
@@ -427,7 +492,6 @@ async def test_heartbeat_route_preserves_delivery_and_disconnect_cleanup(
     disconnect: bool,
 ) -> None:
     monkeypatch.setattr(routes, "_SSE_HEARTBEAT_SECONDS", 0.001, raising=False)
-    caplog.set_level("INFO", logger=routes.__name__)
     finish = asyncio.Event()
     codex_finished = asyncio.Event()
 
@@ -2364,7 +2428,6 @@ def test_interrupt_waits_for_task_cleanup_before_allowing_the_next_turn(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    caplog.set_level("INFO", logger=routes.__name__)
     gateway = _FakeGateway()
     gateway.codex = _InterruptibleCodex()
     gateway.sessions["dev-session"] = _cloud()
@@ -2606,7 +2669,7 @@ def test_unexpected_snapshot_failure_logs_stage_and_type_without_error_detail(
     publisher.publish.side_effect = RuntimeError("private upstream detail")
     monkeypatch.setattr(routes, "DeliveryPublisher", lambda _transport: publisher)
 
-    with caplog.at_level("ERROR", logger=routes.__name__):
+    with caplog.at_level("ERROR", logger=routes.logger.name):
         with TestClient(_app(gateway)) as client:
             _connect(client)
             response = client.post(
@@ -2661,6 +2724,7 @@ def test_builder_response_cannot_replace_a_missing_completion_file(
 
 def test_builder_failure_still_cleans_credentials(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     gateway = _FakeGateway()
     gateway.sessions["dev-session"] = _cloud()
@@ -2685,6 +2749,42 @@ def test_builder_failure_still_cleans_credentials(
     assert internal_error not in response.text
     assert "upstream-secret" not in response.text
     assert lease.cleaned is True
+    assert "reason=task_cleanup_completed" in caplog.text
+    assert "reason=session_delete_requested" not in caplog.text
+    assert "dev-session" in gateway.sessions
+
+
+def test_completion_cleanup_failure_keeps_session_and_logs_only_error_type(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud()
+    gateway.codex.turns = [CodexAppServerError("builder failed")]
+    lease = _Lease(_Remote(gateway.sessions["dev-session"].endpoint))
+    monkeypatch.setattr(
+        routes, "create_credential_lease", AsyncMock(return_value=lease)
+    )
+    monkeypatch.setattr(
+        routes,
+        "remove_completion_file",
+        AsyncMock(side_effect=OSError("private file path")),
+    )
+    with TestClient(_app(gateway)) as client:
+        _connect(client)
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "做一个天气 Agent"},
+        )
+    assert '"code": "INTELLIGENT_DEVELOPMENT_CLEANUP_INCOMPLETE"' in response.text
+    assert lease.cleaned
+    assert "dev-session" in gateway.sessions
+    assert "reason=completion_cleanup_failed" in caplog.text
+    assert "error_types=OSError" in caplog.text
+    assert "reason=session_delete_requested" not in caplog.text
+    assert "private file path" not in caplog.text
+    assert "private file path" not in response.text
 
 
 @pytest.mark.parametrize(
@@ -2719,16 +2819,25 @@ def test_stream_error_payload_distinguishes_codex_failures(
     }
 
 
-def test_cleanup_failure_terminates_session_and_is_not_suppressed(
+@pytest.mark.parametrize("delete_fails", [False, True])
+def test_cleanup_failure_logs_termination_outcome_without_secrets(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    delete_fails: bool,
 ) -> None:
     gateway = _FakeGateway()
     gateway.sessions["dev-session"] = _cloud()
     gateway.codex.turns = [CodexAppServerError("builder failed")]
+    cleanup_error = RuntimeError("private cleanup detail Authorization=private-token")
+    cleanup_error.__cause__ = TimeoutError("private timeout detail")
     lease = _Lease(
         _Remote(gateway.sessions["dev-session"].endpoint),
-        cleanup_error=RuntimeError("cannot remove credentials"),
+        cleanup_error=cleanup_error,
     )
+    delete = AsyncMock(wraps=gateway.delete_session)
+    if delete_fails:
+        delete.side_effect = routes.SandboxProvisioningError("private deletion detail")
+    monkeypatch.setattr(gateway, "delete_session", delete)
     monkeypatch.setattr(
         routes, "create_credential_lease", AsyncMock(return_value=lease)
     )
@@ -2741,10 +2850,46 @@ def test_cleanup_failure_terminates_session_and_is_not_suppressed(
             headers={"X-Test-User": "alice"},
             json={"message": "做一个天气 Agent"},
         )
-    assert "当前开发环境已结束或不可用" in response.text
-    assert "dev-session" not in gateway.sessions
+    if delete_fails:
+        assert "reason=session_delete_failed" in caplog.text
+        assert "reason=session_delete_completed" not in caplog.text
+        assert "dev-session" in gateway.sessions
+    else:
+        assert "当前开发环境已结束或不可用" in response.text
+        assert "dev-session" not in gateway.sessions
+        assert lease.cleanup_attempts == 1
+        assert "reason=session_delete_completed" in caplog.text
+        assert "reason=session_delete_failed" not in caplog.text
     assert gateway.codex.closed is True
-    assert lease.cleanup_attempts == 1
+    messages = [record.getMessage() for record in caplog.records]
+    failed_cleanup = next(
+        i
+        for i, text in enumerate(messages)
+        if "reason=credential_cleanup_failed" in text
+    )
+    requested_delete = next(
+        i
+        for i, text in enumerate(messages)
+        if "reason=session_delete_requested" in text
+    )
+    assert failed_cleanup < requested_delete
+    assert (
+        sum("reason=session_delete_requested" in text for text in messages)
+        == delete.await_count
+    )
+    assert "trigger=credential_cleanup_failure" in caplog.text
+    assert "error_types=RuntimeError>TimeoutError" in caplog.text
+    assert "session_id=dev-session" in caplog.text
+    assert "thread_id=thread-1" in caplog.text
+    assert "reason=task_cleanup_completed" not in caplog.text
+    for private in (
+        "private-token",
+        "private cleanup detail",
+        "private timeout detail",
+        "private deletion detail",
+    ):
+        assert private not in caplog.text
+        assert private not in response.text
 
 
 @pytest.mark.parametrize(
