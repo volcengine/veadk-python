@@ -296,6 +296,10 @@ def test_studio_deploy_checks_serverless_role_with_custom_function_role(
         lambda **_: None,
     )
     workspace_calls = []
+    monkeypatch.setattr(
+        "frontend.server.user_management.deployment.prepare_identity_roles",
+        lambda **kwargs: {"VEADK_STUDIO_IDENTITY_ROLES": "1"},
+    )
 
     def provision_workspace(**kwargs):
         workspace_calls.append(kwargs)

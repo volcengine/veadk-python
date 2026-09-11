@@ -11258,7 +11258,12 @@ def _run_frontend_server(
         ):
             os.environ.pop(legacy_key, None)
         app.state.studio_user_management = user_management
-        mount_user_management(app, user_management, _current_principal)
+        mount_user_management(
+            app,
+            user_management,
+            _current_principal,
+            public_url=oauth2_redirect_uri,
+        )
 
     # ---- Auth ----------------------------------------------------------------
     # 'gateway' mode: an upstream API gateway (the AgentKit runtime gateway) has

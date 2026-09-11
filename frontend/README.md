@@ -591,6 +591,12 @@ is protected from demotion. If an existing Studio has none, use
 `veadk studio update --vefaas-app-name <app-name> --super-admin <email-or-uid>`
 to assign the first one without resetting other users' roles
 
+Role changes validate the browser Origin against the public OAuth callback URL
+configured by deployment, so HTTPS gateways can forward to an internal HTTP
+server without blocking legitimate changes. Other origins remain blocked, and
+client-supplied forwarding headers cannot change the accepted origin. For a
+custom public domain, set `--oauth2-redirect-uri` to its OAuth callback URL
+
 For local use, pass `--oauth2-user-pool-uid`, `--oauth2-user-pool-client-uid`, and
 optionally `--super-admin` to `veadk studio`, with the selected provider's AK/SK
 available. `VEIDENTITY_REGION` selects the Identity region. Volcengine and

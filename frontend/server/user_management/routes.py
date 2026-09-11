@@ -42,6 +42,26 @@ def error_response(error: UserManagementError) -> JSONResponse:
     )
 
 
+def _url_origin(value: str) -> tuple[str, str, int] | None:
+    try:
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            return None
+        port = parsed.port
+        return (
+            parsed.scheme,
+            parsed.hostname,
+            port if port is not None else (443 if parsed.scheme == "https" else 80),
+        )
+    except ValueError:
+        return None
+
+
 class IdentityRoleMiddleware(BaseHTTPMiddleware):
     def __init__(
         self,
@@ -87,7 +107,14 @@ def mount_user_management(
     app: FastAPI,
     service: UserManagementService,
     principal: Callable[[Request], StudioPrincipal | None],
+    *,
+    public_url: str | None = None,
 ) -> None:
+    # The configured callback URL remains public even when a gateway rewrites
+    # the request scheme or host. Forwarded headers are not a trust source
+    configured_origin = _url_origin(public_url) if public_url else None
+    if public_url and configured_origin is None:
+        raise ValueError("Studio public URL must be an absolute HTTP(S) URL")
     app.add_middleware(IdentityRoleMiddleware, service=service, principal=principal)
 
     @app.get("/web/users")
@@ -109,10 +136,10 @@ def mount_user_management(
     async def change_role(user_uid: str, body: RoleChange, request: Request):
         # Browser mutations must originate from this Studio, not another site
         origin = request.headers.get("origin")
+        request_origin = _url_origin(origin) if origin else None
+        expected_origin = configured_origin or _url_origin(str(request.url))
         if request.headers.get("sec-fetch-site") == "cross-site" or (
-            origin
-            and (urlsplit(origin).scheme, urlsplit(origin).netloc)
-            != (request.url.scheme, request.url.netloc)
+            origin and (request_origin is None or request_origin != expected_origin)
         ):
             return error_response(UserManagementError(403, "cross_origin_request"))
         try:

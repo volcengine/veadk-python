@@ -120,6 +120,10 @@ def test_studio_deploy_bundles_logo_and_optional_title(
     logo_path.write_bytes(_PNG)
     captured: dict[str, object] = {}
     environments: dict[str, str] = {}
+    monkeypatch.setattr(
+        "frontend.server.user_management.deployment.prepare_identity_roles",
+        lambda **kwargs: {"VEADK_STUDIO_IDENTITY_ROLES": "1"},
+    )
 
     class _FakeCloudAgentEngine:
         def __init__(self, **kwargs: object) -> None:

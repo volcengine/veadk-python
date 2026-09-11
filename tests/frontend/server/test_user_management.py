@@ -349,7 +349,20 @@ def test_update_bundle_must_contain_role_management_code(tmp_path):
     assert package_supports_identity_roles(tmp_path)
 
 
-def test_http_permissions_refresh_and_cross_origin_mutations_are_blocked(setup_service):
+@pytest.mark.parametrize(
+    "public_url",
+    [
+        None,
+        "https://studio.apigateway-cn-beijing.volceapi.com/oauth2/callback",
+        "https://studio.example:443/oauth2/callback",
+        "https://studio.apigateway-cn-shanghai.volceapi.com/oauth2/callback",
+        "https://studio.apigateway-ap-southeast-1.bytepluses.com/oauth2/callback",
+        "http://127.0.0.1:8010/oauth2/callback",
+    ],
+)
+def test_http_permissions_refresh_and_cross_origin_mutations_are_blocked(
+    setup_service, public_url
+):
     from fastapi import FastAPI, Request
     from fastapi.testclient import TestClient
     from frontend.server.user_management.routes import mount_user_management
@@ -362,7 +375,7 @@ def test_http_permissions_refresh_and_cross_origin_mutations_are_blocked(setup_s
             request.state, "authenticated_principal", None
         )
 
-    mount_user_management(app, service, principal)
+    mount_user_management(app, service, principal, public_url=public_url)
 
     @app.middleware("http")
     async def trusted_auth(request, call_next):
@@ -387,11 +400,55 @@ def test_http_permissions_refresh_and_cross_origin_mutations_are_blocked(setup_s
             headers={"Origin": "https://other.example"},
         )
         assert denied.status_code == 403
+        assert denied.json()["code"] == "cross_origin_request"
+        assert service.principal_for(member).role == StudioRole.USER
+        for headers in [
+            {"Origin": "null"},
+            {"Origin": "http://["},
+            {"Origin": "https://other.example:invalid"},
+            {"Origin": "https://other.example", "Sec-Fetch-Site": "same-site"},
+            {
+                "Origin": "https://other.example",
+                "X-Forwarded-Host": "other.example",
+                "X-Forwarded-Proto": "https",
+            },
+        ]:
+            assert (
+                client.patch(
+                    "/web/users/member/role",
+                    json={"role": "admin", "expectedRole": "user"},
+                    headers=headers,
+                ).status_code
+                == 403
+            )
+        origin = (
+            public_url.removesuffix("/oauth2/callback").replace(":443", "")
+            if public_url
+            else "http://testserver"
+        )
+        assert (
+            client.patch(
+                "/web/users/member/role",
+                json={"role": "admin", "expectedRole": "user"},
+                headers={"Origin": origin, "Sec-Fetch-Site": "cross-site"},
+            ).status_code
+            == 403
+        )
+        if public_url:
+            assert (
+                client.patch(
+                    "/web/users/member/role",
+                    json={"role": "admin", "expectedRole": "user"},
+                    headers={"Origin": "http://testserver"},
+                ).status_code
+                == 403
+            )
         assert (
             client.patch(
                 "/web/users/member/role",
                 json={"role": "developer", "expectedRole": "user"},
-                headers={"Origin": "http://testserver"},
+                # The gateway's internal HTTP URL differs from the public origin
+                headers={"Origin": origin, "Sec-Fetch-Site": "same-origin"},
             ).status_code
             == 200
         )
