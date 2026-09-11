@@ -65,11 +65,11 @@ test("exposes a typed migration API with bounded transfer requests", () => {
 test("enables the existing migration entry and renders its workspace", () => {
   assert.match(
     appSource,
-    /type CreateView = "custom" \| "package" \| "migration" \| "workspace" \| null/,
+    /type CreateView = "custom" \| "deepseek" \| "package" \| "migration" \| "workspace" \| null/,
   );
   assert.match(
     appSource,
-    /return v === "package" \|\| v === "migration" \? v : null/,
+    /return v === "package" \|\| v === "migration" \|\| v === "deepseek" \? v : null/,
   );
   assert.match(
     appSource,

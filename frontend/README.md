@@ -12,6 +12,31 @@ See [deployment and operation](service/studio_release_notifier/README.md).
 
 ## Features
 
+- **DeepSeek Harness native configuration**: Quick-create now offers VeADK
+  Agent or DeepSeek Harness (Beta) through a radio-selection dialog. Continuing closes
+  the dialog and opens the selected Agent type’s own configuration page. The
+  Harness page uses a separate settings form for session
+  defaults, the DeepSeek adapter, custom model providers, command execution,
+  tool concurrency, sub-agent model selection and DeepSeek web search. Catalog
+  fields use dropdowns, with provider-dependent model and reasoning choices;
+  custom presets, DeepSeek model IDs and search settings remain editable. Default
+  values are prefilled and included in the exported configuration. Preview and ZIP
+  export include a Dockerfile, native settings, startup script, Runtime adapter,
+  AgentKit configuration and credential-name placeholders. The image installs the
+  official DSH npm package and runs the web profile privately as a non-root user.
+  The Runtime plugin exposes health checks and JSON invocations through DSH's native
+  session controller, preserving the selected model and Agent preset. The Deploy
+  action opens Studio's shared Runtime deployment page for cloud region, CP/CR
+  resource selection and credentials. Git sync, message channels and evaluation
+  sets are hidden for Harness deployments in both cloud environments. The form supports Chinese and English and
+  custom Volcengine and BytePlus model endpoints. It follows upstream revision
+  [`aa8262ec`](https://github.com/deepseek-ai/deepseek-harness/blob/aa8262ec091698bae9a6b04773a6b5b06ad4aef2/docs/config-catalog.md).
+  Other plugin parameters and preset-file editing are outside this initial form.
+  Harness drafts remain in memory; export before refreshing or closing Studio.
+  The adapter uses the Runtime gateway for authentication and does not implement
+  Studio's ADK chat protocol. Sessions require persistent storage to survive
+  container replacement, and multiple replicas require appropriate session routing.
+
 - **Sandbox updates** in System Information compare each Tool's current image
   with `ListToolTypes` for its cloud provider and actual region. Volcengine and
   BytePlus use their own credentials and API hosts; catalogs are cached for
