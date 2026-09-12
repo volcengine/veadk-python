@@ -83,6 +83,14 @@ class A2AStreamDecoder:
                     continue
                 self._heartbeat_states.add(heartbeat_key)
             if item.get("partial") is not True:
+                parts = item.get("content", {}).get("parts", [])
+                if any(
+                    isinstance(part, Mapping)
+                    and part.get("thought") is not True
+                    and str(part.get("text") or "")
+                    for part in parts
+                ):
+                    self._partial_text["answer"] = ""
                 output.append(item)
                 continue
             parts = item.get("content", {}).get("parts", [])
@@ -113,6 +121,22 @@ class A2AStreamDecoder:
                 self._partial_text[stream] += text
             output.append(item)
         return output
+
+    def finalize_projection(self, *, author: str) -> list[dict[str, Any]]:
+        """Finalize streamed answer deltas when A2A ends without final text."""
+        answer = self._partial_text["answer"]
+        if not answer:
+            return []
+        self._partial_text["answer"] = ""
+        return [
+            _text_event(
+                answer,
+                author=author,
+                event_id="a2a-final-answer",
+                partial=False,
+                turn_complete=True,
+            )
+        ]
 
 
 def _frame_payload(frame: str) -> dict[str, Any] | None:

@@ -17,6 +17,7 @@ Studio 在 30 秒内未收到 SSE 帧时会中止 `/run_sse`。本次真实 Runt
 - 将非终态且不含 Agent 消息的 A2A `submitted`、`working` 状态转换为 Studio metadata-only heartbeat 事件。
 - 保留带可见文本的 `working` 消息现有投影行为。
 - 将 `metadata.adk_thought=true` 的 message 和 artifact part 保留为 Studio `thought=true` 事件，不再丢弃；reasoning 与答案文本分别维护累计 delta 状态。
+- 若上游在发送答案增量后结束但未提供显式最终文本 artifact，则将已累计的原始答案收敛为一个权威 Studio 终态事件；禁止把 reasoning 提升为答案。
 - heartbeat 不显示文本、不创建 transcript block、不结束 turn，也不重新提交请求。
 - 不修改 Runtime 创建、mpa-agent、task 语义、历史持久化或现有 30 秒客户端截止时间。
 
@@ -27,6 +28,7 @@ Studio 在 30 秒内未收到 SSE 帧时会中止 `/run_sse`。本次真实 Runt
 - 单测覆盖 `submitted` 和无消息 `working` heartbeat 投影。
 - 单测覆盖 heartbeat 被 transcript 投影忽略。
 - 单测覆盖实时和 artifact reasoning 投影，以及 reasoning/答案独立累计去重。
+- 单测覆盖从已接收答案增量生成终态、显式终态后不重复，以及纯 reasoning 流不得转成答案。
 - 保持带文本的 working 和终态 status 行为不变。
 - 执行定向 A2A/Studio 测试、前端测试、构建、资产校验和 pre-commit。
 - 真实 Runtime 验收：首个下游 SSE 帧在 30 秒内到达，原始请求只提交一次。
@@ -44,3 +46,4 @@ Studio 在 30 秒内未收到 SSE 帧时会中止 `/run_sse`。本次真实 Runt
 - 重复的无消息 `working` 更新由请求内 decoder 按 `(taskId, state)` 去重。
 - 真实 reasoning 验证：首帧在 0.702 秒到达；单次请求经桥接输出 216 个 `thought=true` 增量、17 个答案文本增量和 5 个工具事件。
 - `npm --prefix frontend test`：1,079 项测试通过，包含 heartbeat 不创建 transcript 的回归用例。
+- 最终化修复后的真实验证：首帧在 1.001 秒到达；桥接同时输出 reasoning、答案、工具事件及非 partial 最终答案，因此 Studio 不再把 HTTP 200 流判定为空。
