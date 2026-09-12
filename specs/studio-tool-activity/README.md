@@ -110,3 +110,4 @@ Tool payloads are untrusted display data. The component does not use raw HTML in
 ## 9. Change Record
 
 - **2026-09-12:** Contract introduced by the approved Studio Tool Activity Visualization PRD. Initial implementation covers unified tool cards, command lifecycle correlation, sandbox flattening, read-only grouping, bounded output, raw-data redaction, and history-safe fallbacks.
+- **2026-09-12:** Non-final A2A `submitted` and message-less `working` updates are forwarded as metadata-only heartbeats. They clear the first-event deadline without creating transcript blocks, completing turns, or resubmitting requests.
