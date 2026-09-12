@@ -234,6 +234,67 @@
       "webSearch": { "running": "Searching the web", "completed": "Web search complete", "failed": "Web search did not complete" },
       "errorDetail": "Codex execution did not complete.",
       "errorTitle": "Codex encountered an error"
+    },
+    "toolActivity": {
+      "status": {
+        "queued": "Queued",
+        "running": "Running",
+        "completed": "Completed",
+        "failed": "Failed"
+      },
+      "command": {
+        "queued": "Waiting to run command",
+        "running": "Running command",
+        "completed": "Ran command",
+        "failed": "Command failed"
+      },
+      "read": {
+        "queued": "Waiting to read",
+        "running": "Reading",
+        "completed": "Read content",
+        "failed": "Read failed"
+      },
+      "search": {
+        "queued": "Waiting to search",
+        "running": "Searching",
+        "completed": "Search complete",
+        "failed": "Search failed"
+      },
+      "file-change": {
+        "queued": "Waiting to change files",
+        "running": "Changing files",
+        "completed": "Changed files",
+        "failed": "File change failed"
+      },
+      "mcp": {
+        "queued": "Waiting to call external tool",
+        "running": "Calling external tool",
+        "completed": "Called external tool",
+        "failed": "External tool call failed"
+      },
+      "authorization": {
+        "queued": "Waiting for authorization",
+        "running": "Waiting for authorization",
+        "completed": "Authorization complete",
+        "failed": "Authorization failed"
+      },
+      "generic": {
+        "queued": "Waiting to call tool",
+        "running": "Calling tool",
+        "completed": "Called tool",
+        "failed": "Tool call failed"
+      },
+      "exitCode": "exit {{code}}",
+      "omittedLines": "… {{count}} lines omitted …",
+      "omittedCharacters": "… {{count}} characters omitted …",
+      "rawData": "View raw data",
+      "callId": "Call ID",
+      "copyCallId": "Copy call ID",
+      "copy": "Copy",
+      "copied": "Copied",
+      "copyFailed": "Copy failed. Try again.",
+      "explored_one": "Explored 1 item",
+      "explored_other": "Explored {{count}} items"
     }
   },
   "tokenUsage": {

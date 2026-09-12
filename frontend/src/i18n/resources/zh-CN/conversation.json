@@ -234,6 +234,67 @@
       "webSearch": { "running": "正在进行网络搜索", "completed": "已完成网络搜索", "failed": "网络搜索未完成" },
       "errorDetail": "Codex 执行未完成。",
       "errorTitle": "Codex 执行遇到错误"
+    },
+    "toolActivity": {
+      "status": {
+        "queued": "等待执行",
+        "running": "正在执行",
+        "completed": "执行成功",
+        "failed": "执行失败"
+      },
+      "command": {
+        "queued": "等待运行命令",
+        "running": "正在运行命令",
+        "completed": "已运行命令",
+        "failed": "命令执行失败"
+      },
+      "read": {
+        "queued": "等待读取",
+        "running": "正在读取",
+        "completed": "已读取内容",
+        "failed": "读取失败"
+      },
+      "search": {
+        "queued": "等待搜索",
+        "running": "正在搜索",
+        "completed": "已完成搜索",
+        "failed": "搜索失败"
+      },
+      "file-change": {
+        "queued": "等待修改文件",
+        "running": "正在修改文件",
+        "completed": "已修改文件",
+        "failed": "文件修改失败"
+      },
+      "mcp": {
+        "queued": "等待调用外部工具",
+        "running": "正在调用外部工具",
+        "completed": "已调用外部工具",
+        "failed": "外部工具调用失败"
+      },
+      "authorization": {
+        "queued": "等待授权",
+        "running": "等待授权",
+        "completed": "授权已完成",
+        "failed": "授权失败"
+      },
+      "generic": {
+        "queued": "等待调用工具",
+        "running": "正在调用工具",
+        "completed": "已调用工具",
+        "failed": "工具调用失败"
+      },
+      "exitCode": "退出码 {{code}}",
+      "omittedLines": "… 省略 {{count}} 行 …",
+      "omittedCharacters": "… 省略 {{count}} 个字符 …",
+      "rawData": "查看原始数据",
+      "callId": "调用 ID",
+      "copyCallId": "复制调用 ID",
+      "copy": "复制",
+      "copied": "已复制",
+      "copyFailed": "复制失败，请重试。",
+      "explored_one": "已探索 1 项",
+      "explored_other": "已探索 {{count}} 项"
     }
   },
   "tokenUsage": {

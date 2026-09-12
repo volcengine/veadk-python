@@ -805,7 +805,7 @@ test("delivery card clears browser download handoff feedback", () => {
   assert.match(blocksUiSource, /const DOWNLOAD_STATUS_DURATION_MS = 3_000/);
   assert.match(
     blocksUiSource,
-    /busyAction === "download" \? t\("blocks\.preparing"\) : t\("blocks\.downloadSource"\)/,
+    /busyAction === "download"[\s\S]*?\? t\("blocks\.preparing"\)[\s\S]*?: t\("blocks\.downloadSource"\)/,
   );
   assert.match(
     blocksUiSource,
