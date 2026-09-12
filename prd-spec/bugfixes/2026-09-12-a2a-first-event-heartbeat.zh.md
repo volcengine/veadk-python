@@ -48,3 +48,4 @@ Studio 在 30 秒内未收到 SSE 帧时会中止 `/run_sse`。本次真实 Runt
 - `npm --prefix frontend test`：1,079 项测试通过，包含 heartbeat 不创建 transcript 的回归用例。
 - 最终化修复后的真实验证：首帧在 1.001 秒到达；桥接输出 122 个 reasoning 增量、20 个答案增量、4 个工具事件，以及包含 `reasoning-check` 的非 partial 最终答案，因此 Studio 不再把 HTTP 200 流判定为空。
 - projected event ID 唯一化后的真实验证：首帧在 0.587 秒到达，经过 130 个 reasoning 增量和 23 个答案增量后，非 partial 最终答案仍被完整保留。
+- 全链路重放验证：将一次新的 176-event 真实 Runtime 流逐条送入 Studio 实际使用的 `createAssistantEventProjector()`，结果为 `completed=true`、最终文本可见且不会触发空回复条件。

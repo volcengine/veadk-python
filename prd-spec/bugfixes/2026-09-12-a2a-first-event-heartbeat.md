@@ -48,3 +48,4 @@ The bridge currently drops A2A `submitted` and message-less `working` status upd
 - `npm --prefix frontend test`: 1,079 tests passed, including the heartbeat no-transcript regression.
 - Live completion verification after the finalization fix: first frame arrived in 1.001 seconds; the bridge emitted 122 reasoning deltas, 20 answer deltas, 4 tool events, and a non-partial final answer containing `reasoning-check`, so Studio no longer classifies the HTTP 200 stream as empty.
 - Live verification after unique projected event IDs: first frame arrived in 0.587 seconds and the final non-partial answer was preserved after 130 reasoning deltas and 23 answer deltas.
+- Full-path replay verification: a fresh 176-event real Runtime stream was passed through Studio's actual `createAssistantEventProjector()`; it produced `completed=true`, visible final text, and no incomplete-response condition.
