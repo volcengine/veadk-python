@@ -3248,7 +3248,20 @@ def test_runtime_proxy_bridges_a2a_only_runtime_for_studio_chat(
                         b'data: {"jsonrpc":"2.0","id":"1","error":{"code":-32601}}\n\n'
                     )
                 elif streaming and payload["method"] == "message/stream":
-                    response_body = b"data: " + response_body + b"\n\n"
+                    submitted = json.dumps(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": payload["id"],
+                            "result": {
+                                "kind": "status-update",
+                                "taskId": "task-1",
+                                "status": {"state": "submitted"},
+                            },
+                        }
+                    ).encode()
+                    response_body = (
+                        b"data: " + submitted + b"\n\ndata: " + response_body + b"\n\n"
+                    )
                 return _FakeUpstreamResponse(
                     status_code=200,
                     body=response_body,
@@ -3304,6 +3317,10 @@ def test_runtime_proxy_bridges_a2a_only_runtime_for_studio_chat(
     assert run_response.status_code == 200
     assert "pong" in run_response.text
     assert "sandbox output" in run_response.text
+    if streaming is True:
+        first_frame = run_response.text.split("\n\n", 1)[0]
+        assert '"a2aStatus": "submitted"' in first_frame
+        assert '"parts": []' in first_frame
     assert (
         restored_session.json()["events"][0]["content"]["parts"][0]["text"]
         == "restored"

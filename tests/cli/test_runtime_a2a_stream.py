@@ -176,6 +176,46 @@ def test_maps_working_status_message_to_partial_text():
     assert events[0]["content"]["parts"][0]["text"] == "streamed answer"
 
 
+@pytest.mark.parametrize("state", ["submitted", "working"])
+def test_maps_non_final_empty_status_to_transport_heartbeat(state):
+    event = {
+        "kind": "status-update",
+        "taskId": "task-1",
+        "status": {"state": state},
+    }
+
+    events = a2a_event_to_studio_events(event, author="default")
+
+    assert events == [
+        {
+            "id": f"a2a-task-1-{state}",
+            "author": "default",
+            "partial": True,
+            "content": {"role": "model", "parts": []},
+            "customMetadata": {"a2aStatus": state},
+        }
+    ]
+
+
+def test_decoder_suppresses_repeated_transport_heartbeats():
+    decoder = A2AStreamDecoder()
+    submitted = {
+        "kind": "status-update",
+        "taskId": "task-1",
+        "status": {"state": "submitted"},
+    }
+    working = {
+        "kind": "status-update",
+        "taskId": "task-1",
+        "status": {"state": "working"},
+    }
+
+    assert len(decoder.project(submitted, author="default")) == 1
+    assert decoder.project(submitted, author="default") == []
+    assert len(decoder.project(working, author="default")) == 1
+    assert decoder.project(working, author="default") == []
+
+
 def test_does_not_map_submitted_user_echo_or_terminal_status_message():
     submitted = {
         "kind": "status-update",
