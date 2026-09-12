@@ -9,7 +9,7 @@
 - [x] `T-7` Map tool progress, output delta, direct answer, and final result into Studio events. (`VC-3`, `VC-4`, `VC-15`)
 - [x] `T-8` Execute disconnect, refresh, concurrency, cancel, and compatibility validation. (`VC-7`, `VC-8`, `VC-11`, `VC-13`, `VC-14`)
 - [x] `T-9` Execute Web, Feishu, scheduled-task, and bot-group regression. (`VC-12`)
-- [ ] `T-10` Run two review rounds, E2E, then commit, tag, and push both repositories. (all cases)
+- [x] `T-10` Run two review rounds and E2E, then commit and push both repositories. Production release tags are intentionally not created because a veadk tag triggers PyPI/docs publication and requires separate release authorization. (all cases)
 
 ## Verification result (2026-09-12)
 
