@@ -36,7 +36,8 @@ import tempfile
 import threading
 import unicodedata
 import zipfile
-from collections.abc import Callable, Iterable, Mapping
+from collections import OrderedDict
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
@@ -54,6 +55,11 @@ from veadk.cli.frontend_branding import normalize_site_title, resolve_site_logo
 from veadk.cli.managed_sidecar_source import (
     ManagedSidecarSourceError,
     stage_managed_sidecar_veadk_source,
+)
+from veadk.cli.runtime_a2a_stream import (
+    A2AStreamDecoder,
+    a2a_error_message,
+    is_method_not_supported,
 )
 from veadk.cli.studio_model_catalog import (
     is_byteplus_model,
@@ -208,6 +214,11 @@ _CP_BUILD_LOG_FINAL_ERROR_RETRIES = 5
 _CP_BUILD_LOG_FINAL_ERROR_RETRY_INTERVAL_SECONDS = 2.0
 _LOCAL_ADK_SESSION_PATH_RE = re.compile(r"^/apps/[^/]+/users/([^/]+)/sessions(?:/|$)")
 _LOCAL_ADK_RUN_PATHS = frozenset({"/run", "/run_sse"})
+_RUNTIME_A2A_VIRTUAL_APP = "a2a-default"
+_RUNTIME_A2A_AGENT_CARD_PATH = "/.well-known/agent-card.json"
+_RUNTIME_A2A_SESSION_PATH_RE = re.compile(
+    r"^apps/(?P<app>[^/]+)/users/(?P<user>[^/]+)/sessions(?:/(?P<session>[^/]+))?$"
+)
 _CP_BUILD_LOG_ERROR_TAIL_CHECK_CHARS = 1024
 _DEPLOY_STREAM_HEARTBEAT_SECONDS = 15.0
 _DEPLOY_STREAM_POLL_SECONDS = 0.1
@@ -10105,6 +10116,29 @@ def _run_frontend_server(
     # Cache resolved (endpoint, apikey, auth type) per runtime so the data-plane
     # proxy does not call GetRuntime on every request. Short TTL; cleared on a 401.
     _rt_conn_cache: dict[tuple[str, str], tuple[str, str, str, str, float]] = {}
+    _a2a_task_by_session: OrderedDict[tuple[str, str, str, str], str] = OrderedDict()
+    _a2a_task_cache_limit = 1_000
+
+    def _remember_a2a_task(
+        *,
+        region: str,
+        runtime_id: str,
+        user_id: str,
+        session_id: str,
+        result: Any,
+    ) -> None:
+        if not session_id or not isinstance(result, Mapping):
+            return
+        task_id = str(result.get("taskId") or "")
+        if not task_id and result.get("kind") == "task":
+            task_id = str(result.get("id") or "")
+        if not task_id:
+            return
+        key = (region, runtime_id, user_id, session_id)
+        _a2a_task_by_session[key] = task_id
+        _a2a_task_by_session.move_to_end(key)
+        while len(_a2a_task_by_session) > _a2a_task_cache_limit:
+            _a2a_task_by_session.popitem(last=False)
 
     def _runtime_endpoint_host(endpoint: str) -> str:
         parsed = urlparse(endpoint or "")
@@ -10151,6 +10185,384 @@ def _run_frontend_server(
                 }
             )
         return items
+
+    async def _runtime_proxy_buffer(upstream: Any) -> bytes:
+        chunks = []
+        async for chunk in upstream.aiter_raw():
+            chunks.append(chunk)
+        return b"".join(chunks)
+
+    async def _runtime_a2a_agent_card(
+        endpoint: str,
+        headers: dict[str, str],
+    ) -> dict[str, Any] | None:
+        """Return an A2A Agent Card when a Runtime is A2A-only, else None."""
+
+        client = httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=4.0))
+        upstream = None
+        try:
+            request = client.build_request(
+                "GET",
+                f"{endpoint.rstrip('/')}{_RUNTIME_A2A_AGENT_CARD_PATH}",
+                params={},
+                headers=headers,
+                content=b"",
+            )
+            upstream = await client.send(request, stream=True)
+            if upstream.status_code != 200:
+                return None
+            body = await _runtime_proxy_buffer(upstream)
+            payload = json.loads(body.decode("utf-8"))
+            if not isinstance(payload, dict):
+                return None
+            card_url = str(payload.get("url") or "").strip()
+            if not card_url:
+                return None
+            return payload
+        except (httpx.HTTPError, UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        finally:
+            if upstream is not None:
+                await upstream.aclose()
+            await client.aclose()
+
+    def _runtime_a2a_session(
+        session_id: str, user_id: str, *, events: list[dict[str, Any]] | None = None
+    ) -> dict[str, Any]:
+        import time as _time
+
+        return {
+            "id": session_id,
+            "userId": user_id,
+            "lastUpdateTime": _time.time(),
+            "events": events or [],
+            "state": {},
+        }
+
+    async def _runtime_a2a_restored_session(
+        *,
+        runtime_id: str,
+        region: str,
+        session_id: str,
+        user_id: str,
+        endpoint: str,
+        headers: dict[str, str],
+    ) -> dict[str, Any]:
+        task_id = _a2a_task_by_session.get((region, runtime_id, user_id, session_id))
+        if not task_id:
+            return _runtime_a2a_session(session_id, user_id)
+        card = await _runtime_a2a_agent_card(endpoint, headers)
+        if card is None:
+            return _runtime_a2a_session(session_id, user_id)
+        rpc_payload = {
+            "jsonrpc": "2.0",
+            "id": str(uuid4()),
+            "method": "tasks/get",
+            "params": {"id": task_id, "historyLength": 20},
+        }
+        client = httpx.AsyncClient(timeout=30.0)
+        response = None
+        try:
+            request = client.build_request(
+                "POST",
+                str(card.get("url") or "").strip(),
+                params={},
+                headers={"Content-Type": "application/json", **headers},
+                content=json.dumps(rpc_payload).encode("utf-8"),
+            )
+            response = await client.send(request, stream=True)
+            if response.status_code >= 400:
+                return _runtime_a2a_session(session_id, user_id)
+            body = await _runtime_proxy_buffer(response)
+            data = json.loads(body.decode("utf-8"))
+        except (httpx.HTTPError, UnicodeDecodeError, json.JSONDecodeError):
+            return _runtime_a2a_session(session_id, user_id)
+        finally:
+            if response is not None:
+                await response.aclose()
+            await client.aclose()
+        result = data.get("result") if isinstance(data, Mapping) else None
+        text = _runtime_a2a_response_text(result)
+        events = (
+            [
+                {
+                    "id": f"{task_id}-restored",
+                    "author": str(card.get("name") or _RUNTIME_A2A_VIRTUAL_APP),
+                    "content": {
+                        "role": "model",
+                        "parts": [{"text": text}],
+                    },
+                    "partial": False,
+                    "turnComplete": True,
+                }
+            ]
+            if text
+            else []
+        )
+        return _runtime_a2a_session(session_id, user_id, events=events)
+
+    def _runtime_a2a_text_parts(parts: Any) -> list[dict[str, str]]:
+        if not isinstance(parts, list):
+            return []
+        text_parts = []
+        for part in parts:
+            if not isinstance(part, Mapping):
+                continue
+            text = str(part.get("text") or "").strip()
+            if text:
+                text_parts.append({"kind": "text", "text": text})
+        return text_parts
+
+    def _runtime_a2a_response_text(result: Any) -> str:
+        def _part_texts(parts: Any) -> list[str]:
+            texts: list[str] = []
+            if not isinstance(parts, list):
+                return texts
+            for part in parts:
+                if not isinstance(part, Mapping):
+                    continue
+                metadata = part.get("metadata")
+                if isinstance(metadata, Mapping) and metadata.get("adk_thought"):
+                    continue
+                text = str(part.get("text") or "").strip()
+                if text:
+                    texts.append(text)
+                    continue
+                data = part.get("data")
+                response = data.get("response") if isinstance(data, Mapping) else None
+                result_text = (
+                    str(response.get("result") or "").strip()
+                    if isinstance(response, Mapping)
+                    else ""
+                )
+                if result_text:
+                    texts.append(result_text)
+            return texts
+
+        if not isinstance(result, Mapping):
+            return ""
+        if result.get("kind") == "message":
+            return "\n".join(_part_texts(result.get("parts")))
+        artifact_texts: list[str] = []
+        for artifact in result.get("artifacts") or []:
+            if isinstance(artifact, Mapping):
+                artifact_texts.extend(_part_texts(artifact.get("parts")))
+        if artifact_texts:
+            return "\n".join(artifact_texts)
+        history_texts: list[str] = []
+        for message in result.get("history") or []:
+            if isinstance(message, Mapping) and message.get("role") == "agent":
+                history_texts.extend(_part_texts(message.get("parts")))
+        return "\n".join(history_texts)
+
+    async def _runtime_a2a_run_sse(
+        *,
+        runtime_id: str,
+        region: str,
+        card: Mapping[str, Any],
+        headers: dict[str, str],
+        payload: Mapping[str, Any],
+    ) -> AsyncIterator[bytes]:
+        new_message = payload.get("new_message")
+        if not isinstance(new_message, Mapping):
+            yield b'data: {"error":"A2A bridge requires a user message."}\n\n'
+            return
+        text_parts = _runtime_a2a_text_parts(new_message.get("parts"))
+        if not text_parts:
+            yield b'data: {"error":"A2A bridge only supports text messages."}\n\n'
+            return
+        session_id = str(payload.get("session_id") or payload.get("sessionId") or "")
+        message = {
+            "kind": "message",
+            "messageId": str(uuid4()),
+            "role": "user",
+            "parts": text_parts,
+        }
+        if session_id:
+            message["contextId"] = session_id
+        rpc_payload = {
+            "jsonrpc": "2.0",
+            "id": str(uuid4()),
+            "method": (
+                "message/stream"
+                if isinstance(card.get("capabilities"), Mapping)
+                and card["capabilities"].get("streaming") is True
+                else "message/send"
+            ),
+            "params": {
+                "message": message,
+                "configuration": {"blocking": True},
+            },
+        }
+        client = httpx.AsyncClient(timeout=None)
+        upstream = None
+        try:
+            request = client.build_request(
+                "POST",
+                str(card.get("url") or "").strip(),
+                params={},
+                headers={"Content-Type": "application/json", **headers},
+                content=json.dumps(rpc_payload).encode("utf-8"),
+            )
+            upstream = await client.send(request, stream=True)
+            if rpc_payload["method"] == "message/stream":
+                if upstream.status_code >= 400:
+                    body = await _runtime_proxy_buffer(upstream)
+                    detail = body.decode("utf-8", errors="replace")[:500]
+                    yield (
+                        "data: "
+                        + json.dumps(
+                            {
+                                "error": f"A2A request failed: {upstream.status_code} {detail}"
+                            },
+                            ensure_ascii=False,
+                        )
+                        + "\n\n"
+                    ).encode("utf-8")
+                    return
+                decoder = A2AStreamDecoder()
+                received_event = False
+                fallback_to_blocking = False
+                async for chunk in upstream.aiter_raw():
+                    for envelope in decoder.feed(chunk):
+                        if not received_event and is_method_not_supported(envelope):
+                            fallback_to_blocking = True
+                            break
+                        error_message = a2a_error_message(envelope)
+                        if error_message:
+                            yield (
+                                "data: "
+                                + json.dumps(
+                                    {"error": f"A2A JSON-RPC error: {error_message}"},
+                                    ensure_ascii=False,
+                                )
+                                + "\n\n"
+                            ).encode("utf-8")
+                            return
+                        received_event = True
+                        result = envelope.get("result")
+                        _remember_a2a_task(
+                            region=region,
+                            runtime_id=runtime_id,
+                            user_id=str(payload.get("user_id") or "user"),
+                            session_id=session_id,
+                            result=result,
+                        )
+                        for event in decoder.project(
+                            result,
+                            author=str(card.get("name") or _RUNTIME_A2A_VIRTUAL_APP),
+                        ):
+                            yield (
+                                "data: "
+                                + json.dumps(event, ensure_ascii=False)
+                                + "\n\n"
+                            ).encode("utf-8")
+                    if fallback_to_blocking:
+                        break
+                if fallback_to_blocking:
+                    await upstream.aclose()
+                    upstream = None
+                    rpc_payload["method"] = "message/send"
+                    rpc_payload["params"]["configuration"] = {"blocking": True}
+                    request = client.build_request(
+                        "POST",
+                        str(card.get("url") or "").strip(),
+                        params={},
+                        headers={"Content-Type": "application/json", **headers},
+                        content=json.dumps(rpc_payload).encode("utf-8"),
+                    )
+                    upstream = await client.send(request, stream=True)
+                else:
+                    for envelope in decoder.finish():
+                        received_event = True
+                        result = envelope.get("result")
+                        _remember_a2a_task(
+                            region=region,
+                            runtime_id=runtime_id,
+                            user_id=str(payload.get("user_id") or "user"),
+                            session_id=session_id,
+                            result=result,
+                        )
+                        for event in decoder.project(
+                            result,
+                            author=str(card.get("name") or _RUNTIME_A2A_VIRTUAL_APP),
+                        ):
+                            yield (
+                                "data: "
+                                + json.dumps(event, ensure_ascii=False)
+                                + "\n\n"
+                            ).encode("utf-8")
+                    return
+            body = await _runtime_proxy_buffer(upstream)
+            if upstream.status_code >= 400:
+                detail = body.decode("utf-8", errors="replace")[:500]
+                yield (
+                    "data: "
+                    + json.dumps(
+                        {
+                            "error": f"A2A request failed: {upstream.status_code} {detail}"
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n\n"
+                ).encode("utf-8")
+                return
+            data = json.loads(body.decode("utf-8"))
+            if isinstance(data, Mapping) and data.get("error"):
+                error = data.get("error")
+                message_text = (
+                    error.get("message") if isinstance(error, Mapping) else str(error)
+                )
+                yield (
+                    "data: "
+                    + json.dumps(
+                        {"error": f"A2A JSON-RPC error: {message_text}"},
+                        ensure_ascii=False,
+                    )
+                    + "\n\n"
+                ).encode("utf-8")
+                return
+            result = data.get("result") if isinstance(data, Mapping) else None
+            _remember_a2a_task(
+                region=region,
+                runtime_id=runtime_id,
+                user_id=str(payload.get("user_id") or "user"),
+                session_id=session_id,
+                result=result,
+            )
+            text = _runtime_a2a_response_text(result)
+            state = ""
+            if isinstance(result, Mapping):
+                status = result.get("status")
+                if isinstance(status, Mapping):
+                    state = str(status.get("state") or "")
+            if not text:
+                text = (
+                    f"A2A task state: {state or 'unknown'}"
+                    if isinstance(result, Mapping) and result.get("kind") == "task"
+                    else "A2A response contained no text."
+                )
+            event = {
+                "id": str(uuid4()),
+                "author": str(card.get("name") or _RUNTIME_A2A_VIRTUAL_APP),
+                "content": {"role": "model", "parts": [{"text": text}]},
+            }
+            yield ("data: " + json.dumps(event, ensure_ascii=False) + "\n\n").encode(
+                "utf-8"
+            )
+        except (httpx.HTTPError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            yield (
+                "data: "
+                + json.dumps(
+                    {"error": f"A2A bridge failed: {error}"},
+                    ensure_ascii=False,
+                )
+                + "\n\n"
+            ).encode("utf-8")
+        finally:
+            if upstream is not None:
+                await upstream.aclose()
+            await client.aclose()
 
     def _resolve_runtime_conn(
         runtime_id: str,
@@ -10632,6 +11044,39 @@ def _run_frontend_server(
         # already-disconnected browser request after the control-plane lookup;
         # detail/list navigation deliberately cancels stale probes.
         body = b"" if upstream_method in {"GET", "HEAD"} else await request.body()
+        session_match = _RUNTIME_A2A_SESSION_PATH_RE.match(path)
+        if session_match and session_match.group("app") == _RUNTIME_A2A_VIRTUAL_APP:
+            user_id = session_match.group("user") or "user"
+            session_id = session_match.group("session") or str(uuid4())
+            if upstream_method == "DELETE":
+                return Response(status_code=200)
+            if upstream_method == "POST" and session_match.group("session") is None:
+                return JSONResponse(_runtime_a2a_session(session_id, user_id))
+            if upstream_method == "GET":
+                if session_match.group("session") is None:
+                    sessions = [
+                        _runtime_a2a_session(stored_session_id, user_id)
+                        for (
+                            stored_region,
+                            stored_runtime_id,
+                            stored_user_id,
+                            stored_session_id,
+                        ) in reversed(_a2a_task_by_session)
+                        if stored_region == region
+                        and stored_runtime_id == runtime_id
+                        and stored_user_id == user_id
+                    ]
+                    return JSONResponse(sessions)
+                return JSONResponse(
+                    await _runtime_a2a_restored_session(
+                        runtime_id=runtime_id,
+                        region=region,
+                        session_id=session_id,
+                        user_id=user_id,
+                        endpoint=endpoint,
+                        headers=headers,
+                    )
+                )
         run_sse_activity: RunSseActivity | None = None
         run_sse_principal: StudioPrincipal | None = None
         run_sse_payload: dict[str, Any] | None = None
@@ -10983,6 +11428,27 @@ def _run_frontend_server(
             else None
         )
 
+        if (
+            request.method == "POST"
+            and path == "run_sse"
+            and run_sse_payload is not None
+            and str(run_sse_payload.get("app_name") or "") == _RUNTIME_A2A_VIRTUAL_APP
+        ):
+            a2a_card = await _runtime_a2a_agent_card(endpoint, headers)
+            if a2a_card is None:
+                raise HTTPException(status_code=404, detail="runtime_a2a_not_found")
+            return StreamingResponse(
+                _runtime_a2a_run_sse(
+                    runtime_id=runtime_id,
+                    region=region,
+                    card=a2a_card,
+                    headers=headers,
+                    payload=run_sse_payload,
+                ),
+                status_code=200,
+                media_type="text/event-stream",
+            )
+
         def _run_sse_completed(activity: RunSseActivity) -> None:
             if evaluation_automation is not None:
                 evaluation_automation.session_completed(activity)
@@ -11240,10 +11706,7 @@ def _run_frontend_server(
         )
         if upstream.status_code >= 400:
             # Buffer error responses so we can log the body and still forward it.
-            body_chunks = []
-            async for chunk in upstream.aiter_raw():
-                body_chunks.append(chunk)
-            body_bytes = b"".join(body_chunks)
+            body_bytes = await _runtime_proxy_buffer(upstream)
             logger.warning(
                 "runtime-proxy %s %s -> %s (%s): %s",
                 upstream_method,
@@ -11257,6 +11720,14 @@ def _run_frontend_server(
             media = upstream.headers.get("content-type", "application/octet-stream")
             await upstream.aclose()
             await client.aclose()
+            if (
+                upstream.status_code == 404
+                and upstream_method == "GET"
+                and path == "list-apps"
+            ):
+                a2a_card = await _runtime_a2a_agent_card(endpoint, headers)
+                if a2a_card is not None:
+                    return JSONResponse([_RUNTIME_A2A_VIRTUAL_APP])
             return _Resp(
                 content=body_bytes,
                 status_code=upstream.status_code,

@@ -3071,6 +3071,262 @@ def test_runtime_proxy_uses_exact_list_item_when_role_get_runtime_is_hidden(
     assert len(list_requests) == 1
 
 
+@pytest.mark.parametrize("streaming", [False, True, "fallback"])
+def test_runtime_proxy_bridges_a2a_only_runtime_for_studio_chat(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    streaming: bool | str,
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+    requests: list[dict[str, Any]] = []
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            del request
+            return SimpleNamespace(
+                runtime_id="runtime-1",
+                name="mpa-agent",
+                project_name="default",
+                network_configurations=[
+                    SimpleNamespace(
+                        endpoint="https://runtime.example",
+                        network_type="public",
+                    )
+                ],
+                authorizer_configuration=SimpleNamespace(
+                    key_auth=SimpleNamespace(api_key="runtime-api-key"),
+                    custom_jwt_authorizer=None,
+                ),
+                tags=[],
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        _FakeRuntimeClient,
+    )
+
+    class _FakeUpstreamResponse:
+        def __init__(
+            self,
+            *,
+            status_code: int,
+            body: bytes,
+            content_type: str = "application/json",
+        ) -> None:
+            self.status_code = status_code
+            self._body = body
+            self.headers = {"content-type": content_type}
+
+        async def aiter_raw(self):
+            yield self._body
+
+        async def aclose(self) -> None:
+            pass
+
+    class _FakeAsyncClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def build_request(
+            self,
+            method: str,
+            url: str,
+            *,
+            params: dict[str, str],
+            headers: dict[str, str],
+            content: bytes,
+        ) -> dict[str, Any]:
+            request = {
+                "method": method,
+                "url": url,
+                "params": params,
+                "headers": headers,
+                "content": content,
+            }
+            requests.append(request)
+            return request
+
+        async def send(self, request: dict[str, Any], *, stream: bool):
+            del stream
+            url = request["url"]
+            if url == "https://runtime.example/list-apps":
+                return _FakeUpstreamResponse(
+                    status_code=404,
+                    body=b'{"detail":"Not Found"}',
+                )
+            if url == "https://runtime.example/.well-known/agent-card.json":
+                return _FakeUpstreamResponse(
+                    status_code=200,
+                    body=json.dumps(
+                        {
+                            "name": "default",
+                            "description": "mpa-agent",
+                            "url": "https://runtime.example/a2a/jsonrpc",
+                            "version": "0.0.1",
+                            "capabilities": {"streaming": bool(streaming)},
+                        }
+                    ).encode(),
+                )
+            if url == "https://runtime.example/a2a/jsonrpc":
+                payload = json.loads(request["content"])
+                if payload["method"] == "tasks/get":
+                    return _FakeUpstreamResponse(
+                        status_code=200,
+                        body=json.dumps(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": payload["id"],
+                                "result": {
+                                    "kind": "task",
+                                    "id": "task-1",
+                                    "status": {"state": "completed"},
+                                    "artifacts": [
+                                        {
+                                            "parts": [
+                                                {"kind": "text", "text": "restored"}
+                                            ]
+                                        }
+                                    ],
+                                },
+                            }
+                        ).encode(),
+                    )
+                runtime_request_count = sum(
+                    item["url"] == url
+                    and json.loads(item["content"])["method"] != "tasks/get"
+                    for item in requests
+                )
+                assert payload["method"] == (
+                    "message/stream"
+                    if streaming and runtime_request_count == 1
+                    else "message/send"
+                )
+                assert payload["params"]["message"]["parts"] == [
+                    {"kind": "text", "text": "hello"}
+                ]
+                response_body = json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": payload["id"],
+                        "result": {
+                            "kind": "task",
+                            "id": "task-1",
+                            "contextId": "ctx-1",
+                            "status": {"state": "completed"},
+                            "artifacts": [
+                                {
+                                    "parts": [
+                                        {
+                                            "kind": "text",
+                                            "metadata": {"adk_thought": True},
+                                            "text": "thinking",
+                                        },
+                                        {"kind": "text", "text": "pong"},
+                                        {
+                                            "kind": "data",
+                                            "metadata": {
+                                                "adk_type": "function_response"
+                                            },
+                                            "data": {
+                                                "name": "sandbox_task",
+                                                "response": {
+                                                    "result": "sandbox output"
+                                                },
+                                            },
+                                        },
+                                    ]
+                                }
+                            ],
+                        },
+                    }
+                ).encode()
+                if streaming == "fallback" and payload["method"] == "message/stream":
+                    response_body = (
+                        b'data: {"jsonrpc":"2.0","id":"1","error":{"code":-32601}}\n\n'
+                    )
+                elif streaming and payload["method"] == "message/stream":
+                    response_body = b"data: " + response_body + b"\n\n"
+                return _FakeUpstreamResponse(
+                    status_code=200,
+                    body=response_body,
+                    content_type=(
+                        "text/event-stream"
+                        if streaming and payload["method"] == "message/stream"
+                        else "application/json"
+                    ),
+                )
+            raise AssertionError(f"unexpected upstream URL: {url}")
+
+        async def aclose(self) -> None:
+            pass
+
+    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
+
+    with TestClient(app) as client:
+        list_response = client.get(
+            "/web/runtime-proxy/runtime-1/list-apps?_runtime_region=cn-beijing"
+        )
+        create_session = client.post(
+            "/web/runtime-proxy/runtime-1/apps/a2a-default/users/user/sessions"
+            "?_runtime_region=cn-beijing"
+        )
+        get_session = client.get(
+            "/web/runtime-proxy/runtime-1/apps/a2a-default/users/user/sessions/sid"
+            "?_runtime_region=cn-beijing"
+        )
+        run_response = client.post(
+            "/web/runtime-proxy/runtime-1/run_sse?_runtime_region=cn-beijing",
+            json={
+                "app_name": "a2a-default",
+                "user_id": "user",
+                "session_id": "sid",
+                "new_message": {"role": "user", "parts": [{"text": "hello"}]},
+            },
+        )
+        restored_session = client.get(
+            "/web/runtime-proxy/runtime-1/apps/a2a-default/users/user/sessions/sid"
+            "?_runtime_region=cn-beijing"
+        )
+        restored_sessions = client.get(
+            "/web/runtime-proxy/runtime-1/apps/a2a-default/users/user/sessions"
+            "?_runtime_region=cn-beijing"
+        )
+
+    assert list_response.status_code == 200
+    assert list_response.json() == ["a2a-default"]
+    assert create_session.status_code == 200
+    assert create_session.json()["id"]
+    assert get_session.status_code == 200
+    assert get_session.json()["events"] == []
+    assert run_response.status_code == 200
+    assert "pong" in run_response.text
+    assert "sandbox output" in run_response.text
+    assert (
+        restored_session.json()["events"][0]["content"]["parts"][0]["text"]
+        == "restored"
+    )
+    assert [session["id"] for session in restored_sessions.json()] == ["sid"]
+    assert '"adk_thought"' not in run_response.text
+    assert any(
+        request["url"] == "https://runtime.example/.well-known/agent-card.json"
+        for request in requests
+    )
+    runtime_requests = [
+        request
+        for request in requests
+        if request["url"] == "https://runtime.example/a2a/jsonrpc"
+        and json.loads(request["content"])["method"]
+        in {
+            "message/send",
+            "message/stream",
+        }
+    ]
+    assert len(runtime_requests) == (2 if streaming == "fallback" else 1)
+
+
 def test_runtime_proxy_resolves_studio_media_before_forwarding(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
