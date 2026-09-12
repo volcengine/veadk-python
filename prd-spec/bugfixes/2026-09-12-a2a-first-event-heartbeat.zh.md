@@ -41,9 +41,10 @@ Studio 在 30 秒内未收到 SSE 帧时会中止 `/run_sse`。本次真实 Runt
 
 ## 5. 验证记录
 
-- `uv run --extra dev pytest tests/cli/test_runtime_a2a_stream.py tests/cli/test_frontend_runtime_proxy.py -q`：增加 reasoning 与终态收敛覆盖后 90 项通过。
+- `uv run --extra dev pytest tests/cli/test_runtime_a2a_stream.py tests/cli/test_frontend_runtime_proxy.py -q`：增加 reasoning、终态收敛和重复 artifact ID 覆盖后 93 项通过。
 - 真实 Runtime `r-yeuujrrcowb21078p9jh`：仅含 metadata 的首个 heartbeat 在 0.737 秒到达，最终回答在 5.999 秒到达，一次请求共产生 9 个下游帧。
 - 重复的无消息 `working` 更新由请求内 decoder 按 `(taskId, state)` 去重。
 - 真实 reasoning 验证：首帧在 0.702 秒到达；单次请求经桥接输出 216 个 `thought=true` 增量、17 个答案文本增量和 5 个工具事件。
 - `npm --prefix frontend test`：1,079 项测试通过，包含 heartbeat 不创建 transcript 的回归用例。
 - 最终化修复后的真实验证：首帧在 1.001 秒到达；桥接输出 122 个 reasoning 增量、20 个答案增量、4 个工具事件，以及包含 `reasoning-check` 的非 partial 最终答案，因此 Studio 不再把 HTTP 200 流判定为空。
+- projected event ID 唯一化后的真实验证：首帧在 0.587 秒到达，经过 130 个 reasoning 增量和 23 个答案增量后，非 partial 最终答案仍被完整保留。

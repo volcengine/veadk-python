@@ -16,6 +16,7 @@ class A2AStreamDecoder:
         self._buffer = ""
         self._utf8_decoder = codecs.getincrementaldecoder("utf-8")()
         self._seen_event_ids: set[tuple[str, str]] = set()
+        self._projected_event_id_counts: dict[str, int] = {}
         self._partial_text = {"answer": "", "thought": ""}
         self._heartbeat_states: set[tuple[str, str]] = set()
         self._terminal_state = ""
@@ -90,6 +91,11 @@ class A2AStreamDecoder:
         )
         output: list[dict[str, Any]] = []
         for item in projected:
+            event_id = str(item.get("id") or uuid4())
+            occurrence = self._projected_event_id_counts.get(event_id, 0)
+            self._projected_event_id_counts[event_id] = occurrence + 1
+            if occurrence:
+                item = {**item, "id": f"{event_id}-{occurrence}"}
             item_metadata = item.get("customMetadata")
             heartbeat_state = (
                 str(item_metadata.get("a2aStatus") or "")
@@ -275,7 +281,8 @@ def _artifact_to_studio_events(
     if not isinstance(artifact, Mapping):
         return []
     events: list[dict[str, Any]] = []
-    for part in artifact.get("parts") or []:
+    artifact_id = str(artifact.get("artifactId") or uuid4())
+    for index, part in enumerate(artifact.get("parts") or []):
         if not isinstance(part, Mapping):
             continue
         metadata = part.get("metadata")
@@ -288,7 +295,7 @@ def _artifact_to_studio_events(
                 _text_event(
                     text,
                     author=author,
-                    event_id=str(artifact.get("artifactId") or uuid4()),
+                    event_id=f"{artifact_id}-{index}",
                     partial=not turn_complete,
                     turn_complete=turn_complete,
                     thought=thought,
@@ -315,7 +322,7 @@ def _artifact_to_studio_events(
                 _text_event(
                     text,
                     author=author,
-                    event_id=str(artifact.get("artifactId") or uuid4()),
+                    event_id=f"{artifact_id}-{index}",
                     partial=False,
                     turn_complete=turn_complete,
                 )
