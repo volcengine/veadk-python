@@ -148,7 +148,32 @@ def test_maps_final_function_response_artifact_to_text_once():
     ]
 
 
-def test_maps_working_status_message_to_partial_text():
+def test_maps_reasoning_artifact_to_thinking_event():
+    event = {
+        "kind": "artifact-update",
+        "taskId": "task-1",
+        "artifact": {
+            "artifactId": "thought-1",
+            "parts": [
+                {
+                    "kind": "text",
+                    "text": "inspect the request",
+                    "metadata": {"adk_thought": True},
+                }
+            ],
+        },
+    }
+
+    events = a2a_event_to_studio_events(event, author="default")
+
+    assert events[0]["partial"] is True
+    assert events[0]["content"]["parts"][0] == {
+        "text": "inspect the request",
+        "thought": True,
+    }
+
+
+def test_maps_working_status_message_to_partial_text_and_reasoning():
     event = {
         "kind": "status-update",
         "taskId": "task-1",
@@ -170,10 +195,46 @@ def test_maps_working_status_message_to_partial_text():
 
     events = a2a_event_to_studio_events(event, author="default")
 
-    assert len(events) == 1
+    assert len(events) == 2
     assert events[0]["partial"] is True
     assert events[0].get("turnComplete") is not True
     assert events[0]["content"]["parts"][0]["text"] == "streamed answer"
+    assert events[1]["partial"] is True
+    assert events[1]["content"]["parts"][0]["text"] == "hidden thought"
+    assert events[1]["content"]["parts"][0]["thought"] is True
+
+
+def test_projection_tracks_cumulative_reasoning_separately_from_answer():
+    decoder = A2AStreamDecoder()
+
+    def working(text, *, thought=False):
+        return {
+            "kind": "status-update",
+            "metadata": {"adk_usage_metadata": {"totalTokenCount": 1}},
+            "status": {
+                "state": "working",
+                "message": {
+                    "role": "agent",
+                    "parts": [
+                        {
+                            "kind": "text",
+                            "text": text,
+                            **({"metadata": {"adk_thought": True}} if thought else {}),
+                        }
+                    ],
+                },
+            },
+        }
+
+    reasoning = decoder.project(working("think", thought=True), author="default")
+    reasoning_delta = decoder.project(
+        working("think-more", thought=True), author="default"
+    )
+    answer = decoder.project(working("answer"), author="default")
+
+    assert reasoning[0]["content"]["parts"][0]["text"] == "think"
+    assert reasoning_delta[0]["content"]["parts"][0]["text"] == "-more"
+    assert answer[0]["content"]["parts"][0]["text"] == "answer"
 
 
 @pytest.mark.parametrize("state", ["submitted", "working"])

@@ -16,7 +16,7 @@ class A2AStreamDecoder:
         self._buffer = ""
         self._utf8_decoder = codecs.getincrementaldecoder("utf-8")()
         self._seen_event_ids: set[tuple[str, str]] = set()
-        self._partial_text = ""
+        self._partial_text = {"answer": "", "thought": ""}
         self._heartbeat_states: set[tuple[str, str]] = set()
 
     def feed(self, chunk: str | bytes) -> list[dict[str, Any]]:
@@ -93,15 +93,13 @@ class A2AStreamDecoder:
             if not text:
                 output.append(item)
                 continue
-            if cumulative_snapshot and text == self._partial_text:
+            stream = "thought" if parts[0].get("thought") is True else "answer"
+            previous_text = self._partial_text[stream]
+            if cumulative_snapshot and text == previous_text:
                 continue
-            if (
-                cumulative_snapshot
-                and self._partial_text
-                and text.startswith(self._partial_text)
-            ):
-                suffix = text[len(self._partial_text) :]
-                self._partial_text = text
+            if cumulative_snapshot and previous_text and text.startswith(previous_text):
+                suffix = text[len(previous_text) :]
+                self._partial_text[stream] = text
                 if not suffix:
                     continue
                 item = {
@@ -112,7 +110,7 @@ class A2AStreamDecoder:
                     },
                 }
             else:
-                self._partial_text += text
+                self._partial_text[stream] += text
             output.append(item)
         return output
 
@@ -212,8 +210,7 @@ def _message_to_partial_events(
         if not isinstance(part, Mapping):
             continue
         metadata = part.get("metadata")
-        if isinstance(metadata, Mapping) and metadata.get("adk_thought"):
-            continue
+        thought = isinstance(metadata, Mapping) and metadata.get("adk_thought") is True
         text = str(part.get("text") or "")[:_MAX_EVENT_TEXT_CHARS]
         if not text:
             continue
@@ -223,6 +220,7 @@ def _message_to_partial_events(
                 author=author,
                 event_id=f"{message_id}-{index}",
                 partial=True,
+                thought=thought,
             )
         )
     return events
@@ -239,7 +237,10 @@ def _artifact_to_studio_events(
             continue
         metadata = part.get("metadata")
         text = str(part.get("text") or "").strip()
-        if text and not (isinstance(metadata, Mapping) and metadata.get("adk_thought")):
+        if text:
+            thought = (
+                isinstance(metadata, Mapping) and metadata.get("adk_thought") is True
+            )
             events.append(
                 _text_event(
                     text,
@@ -247,6 +248,7 @@ def _artifact_to_studio_events(
                     event_id=str(artifact.get("artifactId") or uuid4()),
                     partial=not turn_complete,
                     turn_complete=turn_complete,
+                    thought=thought,
                 )
             )
             continue
@@ -367,6 +369,7 @@ def _text_event(
     event_id: str,
     invocation_id: str = "",
     partial: bool,
+    thought: bool = False,
     turn_complete: bool = False,
     custom_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -374,7 +377,10 @@ def _text_event(
         "id": event_id,
         "author": author,
         "partial": partial,
-        "content": {"role": "model", "parts": [{"text": text}]},
+        "content": {
+            "role": "model",
+            "parts": [{"text": text, **({"thought": True} if thought else {})}],
+        },
     }
     if invocation_id:
         event["invocationId"] = invocation_id
