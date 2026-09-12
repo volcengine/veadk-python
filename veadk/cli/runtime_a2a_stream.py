@@ -17,6 +17,7 @@ class A2AStreamDecoder:
         self._utf8_decoder = codecs.getincrementaldecoder("utf-8")()
         self._seen_event_ids: set[tuple[str, str]] = set()
         self._partial_text = ""
+        self._heartbeat_states: set[tuple[str, str]] = set()
 
     def feed(self, chunk: str | bytes) -> list[dict[str, Any]]:
         text = (
@@ -56,6 +57,11 @@ class A2AStreamDecoder:
     def project(self, event: Any, *, author: str) -> list[dict[str, Any]]:
         """Project one A2A event and suppress cumulative partial replays."""
         projected = a2a_event_to_studio_events(event, author=author)
+        task_id = (
+            str(event.get("taskId") or event.get("id") or "unknown")
+            if isinstance(event, Mapping)
+            else "unknown"
+        )
         metadata = event.get("metadata") if isinstance(event, Mapping) else None
         cumulative_snapshot = (
             isinstance(event, Mapping)
@@ -65,6 +71,17 @@ class A2AStreamDecoder:
         )
         output: list[dict[str, Any]] = []
         for item in projected:
+            item_metadata = item.get("customMetadata")
+            heartbeat_state = (
+                str(item_metadata.get("a2aStatus") or "")
+                if isinstance(item_metadata, Mapping)
+                else ""
+            )
+            if heartbeat_state:
+                heartbeat_key = (task_id, heartbeat_state)
+                if heartbeat_key in self._heartbeat_states:
+                    continue
+                self._heartbeat_states.add(heartbeat_key)
             if item.get("partial") is not True:
                 output.append(item)
                 continue
@@ -140,16 +157,32 @@ def a2a_event_to_studio_events(event: Any, *, author: str) -> list[dict[str, Any
         return []
     if event.get("kind") == "status-update":
         status = event.get("status")
-        if (
-            not isinstance(status, Mapping)
-            or status.get("state") != "working"
-            or event.get("final") is True
-        ):
+        if not isinstance(status, Mapping) or event.get("final") is True:
+            return []
+        state = str(status.get("state") or "")
+        if state not in {"submitted", "working"}:
             return []
         message = status.get("message")
-        if not isinstance(message, Mapping) or message.get("role") != "agent":
+        if isinstance(message, Mapping) and message.get("role") == "user":
             return []
-        return _message_to_partial_events(message, author=author)
+        if state == "working" and isinstance(message, Mapping):
+            projected = (
+                _message_to_partial_events(message, author=author)
+                if message.get("role") == "agent"
+                else []
+            )
+            if projected:
+                return projected
+        task_id = str(event.get("taskId") or event.get("id") or "unknown")
+        return [
+            {
+                "id": f"a2a-{task_id}-{state}",
+                "author": author,
+                "partial": True,
+                "content": {"role": "model", "parts": []},
+                "customMetadata": {"a2aStatus": state},
+            }
+        ]
     if event.get("kind") == "task":
         events: list[dict[str, Any]] = []
         for artifact in event.get("artifacts") or []:
